@@ -144,25 +144,34 @@ public class AbstractLLMAdapterTest {
 	@Test
 	public void testToolResultMessageMap() {
 		AMap<AString, ACell> data = Maps.of(
-			Strings.create("status"), Strings.create("ok"));
+			Strings.create("status"), Strings.create("ok"),
+			Strings.create("nested"), Maps.of(
+				Strings.create("items"), Vectors.of(
+					Maps.of(Strings.create("risk"), Strings.create("high")))));
 		AMap<AString, ACell> msg = AbstractLLMAdapter.toolResultMessage(
 			Strings.create("call_2"), "covia_read", data);
 
 		assertEquals("tool", RT.ensureString(msg.get(AbstractLLMAdapter.K_ROLE)).toString());
-		// Map result goes into structuredContent
-		assertNotNull(msg.get(AbstractLLMAdapter.K_STRUCTURED_CONTENT));
-		assertNull(msg.get(AbstractLLMAdapter.K_CONTENT));
+		AString content = RT.ensureString(msg.get(AbstractLLMAdapter.K_CONTENT));
+		assertNotNull(content, "nested maps must cross the provider boundary as JSON text");
+		assertEquals(data, convex.core.util.JSON.parse(content));
+		assertNull(msg.get(AbstractLLMAdapter.K_STRUCTURED_CONTENT));
 	}
 
 	@Test
 	public void testToolResultMessageVector() {
-		AVector<ACell> data = Vectors.of(Strings.create("a"), Strings.create("b"));
+		AVector<ACell> data = Vectors.of(
+			Maps.of(Strings.create("source"), Maps.of(
+				Strings.create("name"), Strings.create("kyc"))),
+			Maps.of(Strings.create("source"), Maps.of(
+				Strings.create("name"), Strings.create("sanctions"))));
 		AMap<AString, ACell> msg = AbstractLLMAdapter.toolResultMessage(
 			Strings.create("call_3"), "covia_list", data);
 
-		// Vector result goes into structuredContent
-		assertNotNull(msg.get(AbstractLLMAdapter.K_STRUCTURED_CONTENT));
-		assertNull(msg.get(AbstractLLMAdapter.K_CONTENT));
+		AString content = RT.ensureString(msg.get(AbstractLLMAdapter.K_CONTENT));
+		assertNotNull(content, "vectors of maps must cross the provider boundary as JSON text");
+		assertEquals(data, convex.core.util.JSON.parse(content));
+		assertNull(msg.get(AbstractLLMAdapter.K_STRUCTURED_CONTENT));
 	}
 
 	// ========== getLLMOperation ==========

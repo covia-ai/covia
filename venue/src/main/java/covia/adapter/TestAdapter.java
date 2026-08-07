@@ -420,12 +420,25 @@ public class TestAdapter extends AAdapter {
             // the arguments
             String escaped = lastUserMsg.replace("\\", "\\\\").replace("\"", "\\\"")
                 .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t");
+            String toolName = "v/test/ops/echo";
+            String arguments = "{\"echo\":\"" + escaped + "\"}";
+            // #334 regression fixture: exercise real covia collection reads
+            // through the agent tool loop while keeping the L3 provider fully
+            // deterministic. The second call above only accepts textual
+            // role:tool content, just like an external model provider.
+            if (lastUserMsg.contains("issue-334-read")) {
+                toolName = "covia_read";
+                arguments = "{\"path\":\"w/issue-334/signals\"}";
+            } else if (lastUserMsg.contains("issue-334-list")) {
+                toolName = "covia_list";
+                arguments = "{\"path\":\"w/issue-334/sources\",\"fields\":[\"status\"]}";
+            }
             return Maps.of(
                 "role", Strings.create("assistant"),
                 "toolCalls", Vectors.of(Maps.of(
                     "id", Strings.create("call_1"),
-                    "name", Strings.create("v/test/ops/echo"),
-                    "arguments", Strings.create("{\"echo\":\"" + escaped + "\"}")
+                    "name", Strings.create(toolName),
+                    "arguments", Strings.create(arguments)
                 ))
             );
         }

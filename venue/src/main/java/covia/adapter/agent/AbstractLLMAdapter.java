@@ -18,6 +18,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import convex.core.util.JSON;
 import covia.adapter.AAdapter;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
@@ -583,6 +584,14 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 
 	/**
 	 * Creates a tool result message in the Level 3 message format.
+	 *
+	 * <p>Provider tool-result messages have one wire shape: textual
+	 * {@code content}. Structured Covia results are therefore rendered to JSON
+	 * here, at the agent/tool boundary, rather than carried as live Convex
+	 * collections in an MCP-style {@code structuredContent} field. Apart from
+	 * matching the OpenAI/Anthropic message contract, this prevents lazy nested
+	 * collection traversal from being deferred into the next provider call
+	 * (covia-ai/covia#334).</p>
 	 */
 	protected static AMap<AString, ACell> toolResultMessage(
 			AString toolCallId, String toolName, ACell result) {
@@ -590,13 +599,8 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			K_ROLE, ROLE_TOOL,
 			K_ID, toolCallId,
 			K_NAME, Strings.create(toolName));
-		if (result instanceof AMap || result instanceof AVector) {
-			msg = msg.assoc(K_STRUCTURED_CONTENT, result);
-		} else {
-			AString content = RT.ensureString(result);
-			msg = msg.assoc(K_CONTENT, (content != null) ? content : Strings.create(result.toString()));
-		}
-		return msg;
+		AString content = RT.ensureString(result);
+		return msg.assoc(K_CONTENT, (content != null) ? content : JSON.print(result));
 	}
 
 	// ========== Tool-call argument parsing (the LLM wire boundary) ==========

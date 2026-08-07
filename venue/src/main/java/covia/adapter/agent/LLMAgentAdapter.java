@@ -675,9 +675,9 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 						Fields.ERROR, Strings.create(failure)));
 				}
 
-				// Append tool result message via the shared base helper
-				// (parent rule: AMap/AVector → structuredContent, else stringify
-				// into content). Synthesises a stand-in name when the LLM omits
+				// Append tool result message via the shared base helper. All results
+				// cross the provider boundary as textual content; structured values
+				// are JSON-rendered there. Synthesises a stand-in name when the LLM omits
 				// it — the message format requires a non-null name.
 				String toolNameForMsg = (name != null) ? name.toString() : "unknown";
 				newMessages = newMessages.conj(toolResultMessage(id, toolNameForMsg, toolResult));
@@ -706,7 +706,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 	 * Executes a tool call, dispatching to built-in handlers or grid operations.
 	 * Returns ACell — either an AString (for errors/simple text) or a structured
 	 * AMap/AVector. The caller converts structured results to JSON strings for
-	 * the tool message content.
+	 * the provider-compatible tool message content.
 	 */
 	private ACell executeToolCall(String toolName, ACell input, RequestContext ctx, ToolContext toolCtx) {
 		// Built-in task tools (must mutate ToolContext directly) — always allowed
