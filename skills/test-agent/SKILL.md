@@ -79,8 +79,8 @@ The **conversation history** (`state/history`) is the most important diagnostic 
 Delete and recreate an agent to test from clean state:
 
 ```
-agent_delete  agentId=<name>
-agent_create  agentId=<name>  config={...}  overwrite=true
+agent_delete  agentId=<name>  remove=true
+agent_create  agentId=<name>  config={...}
 ```
 
 Or resume a suspended agent:

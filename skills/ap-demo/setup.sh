@@ -8,14 +8,21 @@
 
 set -e
 VENUE="${1:-http://localhost:8080}"
-API="$VENUE/api/v1/invoke"
+API="$VENUE/api/v1/run"
 DIR="$(cd "$(dirname "$0")/assets" && pwd -W 2>/dev/null || pwd)"
 
 # Write a {path, value} JSON file to the lattice
 write() { curl -sf -X POST "$API" -H "Content-Type: application/json" -d "{\"operation\":\"v/ops/covia/write\",\"input\":$(cat "$DIR/$1")}" > /dev/null; }
 
-# Create an agent from a JSON file
-agent() { curl -sf -X POST "$API" -H "Content-Type: application/json" -d "{\"operation\":\"v/ops/agent/create\",\"input\":$(cat "$DIR/$1")}" > /dev/null; }
+# Recreate an agent explicitly: ignore "not found" from delete, then create.
+agent() {
+  local name="$1"
+  local file="$2"
+  curl -s -X POST "$API" -H "Content-Type: application/json" \
+    -d "{\"operation\":\"v/ops/agent/delete\",\"input\":{\"agentId\":\"$name\",\"remove\":true}}" > /dev/null
+  curl -sf -X POST "$API" -H "Content-Type: application/json" \
+    -d "{\"operation\":\"v/ops/agent/create\",\"input\":$(cat "$DIR/$file")}" > /dev/null
+}
 
 echo "=== AP Demo Setup ==="
 echo "Venue: $VENUE"
@@ -37,15 +44,15 @@ echo "Storing pipeline..."
 write pipeline.json
 
 echo "Creating agents..."
-agent alice.json
-agent bob.json
-agent carol.json
-agent dave.json
+agent Alice alice.json
+agent Bob bob.json
+agent Carol carol.json
+agent Dave dave.json
 
 echo ""
 echo "=== Done ==="
 curl -sf -X POST "$API" -H "Content-Type: application/json" -d '{"operation":"v/ops/agent/list","input":{}}' | python -c "
 import json,sys
-for a in json.load(sys.stdin).get('output',{}).get('agents',[]):
+for a in json.load(sys.stdin).get('agents',[]):
     print(f'  {a[\"agentId\"]}: {a[\"status\"]}')
 " 2>/dev/null || echo "  (install python to see agent status)"

@@ -318,7 +318,9 @@ public class AgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "tool-made",
 				Fields.CONFIG, Maps.of("llmOperation", "v/test/ops/llm")),
 			RequestContext.of(ALICE_DID)).get(5, java.util.concurrent.TimeUnit.SECONDS);
-		assertEquals(CVMBool.TRUE, RT.getIn(created, Strings.create("created")));
+		assertEquals(Strings.create("tool-made"), RT.getIn(created, Fields.AGENT_ID));
+		assertNull(RT.getIn(created, Fields.CREATED),
+			"successful create needs no redundant created flag");
 
 		// Job-worthy: the create is on the record as a persisted Job.
 		boolean createJobFound = false;
@@ -709,8 +711,8 @@ public class AgentAdapterTest {
 	}
 
 	@Test
-	public void testCreateIdempotent() {
-		ACell input = Maps.of(Fields.AGENT_ID, "idempotent-agent");
+	public void testCreateRejectsExistingAgent() {
+		ACell input = Maps.of(Fields.AGENT_ID, "exclusive-agent");
 
 		Job job1 = engine.jobs().invokeOperation(
 			"v/ops/agent/create", input, RequestContext.of(ALICE_DID));
@@ -718,10 +720,28 @@ public class AgentAdapterTest {
 
 		Job job2 = engine.jobs().invokeOperation(
 			"v/ops/agent/create", input, RequestContext.of(ALICE_DID));
-		ACell result2 = job2.awaitResult(5000);
+		try {
+			job2.awaitResult(5000);
+			fail("agent:create must fail when the name is already occupied");
+		} catch (covia.exception.JobFailedException expected) {
+			assertTrue(job2.getErrorMessage().contains("already exists"));
+		}
+	}
 
-		assertNotNull(result2);
-		assertEquals(Strings.create("idempotent-agent"), RT.getIn(result2, Fields.AGENT_ID));
+	@Test
+	public void testCreateRejectsRemovedOverwriteParameter() {
+		Job job = engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "legacy-overwrite",
+				Fields.OVERWRITE, CVMBool.TRUE),
+			RequestContext.of(ALICE_DID));
+		try {
+			job.awaitResult(5000);
+			fail("removed overwrite parameter must fail loudly");
+		} catch (covia.exception.JobFailedException expected) {
+			assertTrue(job.getErrorMessage().contains("no longer supports overwrite"));
+		}
+		assertNull(engine.getVenueState().users().get(ALICE_DID).agent("legacy-overwrite"));
 	}
 
 	// ========== agent:fork ==========
@@ -750,7 +770,7 @@ public class AgentAdapterTest {
 
 		assertNotNull(result);
 		assertEquals(Strings.create("fork-agent"), RT.getIn(result, Fields.AGENT_ID));
-		assertEquals(CVMBool.TRUE, RT.getIn(result, Fields.CREATED));
+		assertNull(RT.getIn(result, Fields.CREATED));
 		assertEquals(Strings.create("source-agent"), RT.getIn(result, Strings.create("forkedFrom")));
 		assertEquals(AgentState.SLEEPING, RT.getIn(result, Fields.STATUS));
 
@@ -909,6 +929,26 @@ public class AgentAdapterTest {
 			fail("Should fail when target already exists");
 		} catch (Exception e) {
 			assertEquals(Status.FAILED, job.getStatus());
+		}
+	}
+
+	@Test
+	public void testForkRejectsRemovedOverwriteParameter() {
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "fork-source"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job job = engine.jobs().invokeOperation(
+			"v/ops/agent/fork",
+			Maps.of(Strings.create("sourceId"), "fork-source",
+				Fields.AGENT_ID, "fork-target",
+				Fields.OVERWRITE, CVMBool.TRUE),
+			RequestContext.of(ALICE_DID));
+		try {
+			job.awaitResult(5000);
+			fail("removed overwrite parameter must fail loudly");
+		} catch (covia.exception.JobFailedException expected) {
+			assertTrue(job.getErrorMessage().contains("no longer supports overwrite"));
 		}
 	}
 
@@ -3813,14 +3853,17 @@ public class AgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "reuse-agent"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		// Create again without overwrite — idempotent no-op, created=false
+		// Logical deletion preserves the record and therefore reserves the name.
 		Job job2 = engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "reuse-agent"),
 			RequestContext.of(ALICE_DID));
-		ACell result2 = job2.awaitResult(5000);
-		assertEquals(CVMBool.FALSE, RT.getIn(result2, Fields.CREATED));
-		assertEquals(AgentState.TERMINATED, RT.getIn(result2, Fields.STATUS));
+		try {
+			job2.awaitResult(5000);
+			fail("a TERMINATED record must still block exclusive create");
+		} catch (covia.exception.JobFailedException expected) {
+			assertTrue(job2.getErrorMessage().contains("already exists"));
+		}
 	}
 
 	@Test
@@ -3836,20 +3879,20 @@ public class AgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "clean-agent", Fields.REMOVE, CVMBool.TRUE),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		// Recreate — should succeed with created=true
+		// Physical removal frees the name for a new create.
 		Job job2 = engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "clean-agent"),
 			RequestContext.of(ALICE_DID));
 		ACell result2 = job2.awaitResult(5000);
-		assertEquals(CVMBool.TRUE, RT.getIn(result2, Fields.CREATED));
+		assertNull(RT.getIn(result2, Fields.CREATED));
 		assertEquals(AgentState.SLEEPING, RT.getIn(result2, Fields.STATUS));
 	}
 
-	// ========== agent:create with overwrite ==========
+	// ========== explicit delete + recreate ==========
 
 	@Test
-	public void testCreateOverwriteTerminated() {
+	public void testRemoveTerminatedThenRecreate() {
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "ow-agent",
@@ -3862,16 +3905,20 @@ public class AgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "ow-agent"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		// Overwrite with new config
+		// A logical delete reserves the name; remove it explicitly before reuse.
+		engine.jobs().invokeOperation(
+			"v/ops/agent/delete",
+			Maps.of(Fields.AGENT_ID, "ow-agent", Fields.REMOVE, CVMBool.TRUE),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
 		Job job = engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "ow-agent",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete"),
-				Fields.OVERWRITE, CVMBool.TRUE),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
 			RequestContext.of(ALICE_DID));
 		ACell result = job.awaitResult(5000);
 
-		assertEquals(CVMBool.TRUE, RT.getIn(result, Fields.CREATED));
+		assertNull(RT.getIn(result, Fields.CREATED));
 		assertEquals(AgentState.SLEEPING, RT.getIn(result, Fields.STATUS));
 
 		// Config should be the new one
@@ -3882,9 +3929,9 @@ public class AgentAdapterTest {
 	}
 
 	@Test
-	public void testCreateOverwriteSleepingReplacesRecord() {
-		// Create a SLEEPING agent with old-only config and runtime state. A true
-		// overwrite must discard all of it; agent:update owns merge semantics.
+	public void testRemoveSleepingThenRecreateClearsRecord() {
+		// Create a SLEEPING agent with old-only config and runtime state. Explicit
+		// removal must discard all of it; agent:update owns merge semantics.
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "live-ow",
@@ -3900,17 +3947,21 @@ public class AgentAdapterTest {
 		pre.ensureSession(owSid, ALICE_DID);
 		pre.appendSessionPending(owSid, Strings.create("hello"));
 
-		// Overwrite a SLEEPING agent — delete the old record and create fresh.
+		engine.jobs().invokeOperation(
+			"v/ops/agent/delete",
+			Maps.of(Fields.AGENT_ID, "live-ow", Fields.REMOVE, CVMBool.TRUE),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		// Create a fresh agent in the now-empty slot.
 		Job job = engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "live-ow",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete"),
-				Fields.OVERWRITE, CVMBool.TRUE),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
 			RequestContext.of(ALICE_DID));
 		ACell result = job.awaitResult(5000);
 
-		assertEquals(CVMBool.TRUE, RT.getIn(result, Fields.CREATED));
-		assertEquals(CVMBool.FALSE, RT.getIn(result, Fields.UPDATED));
+		assertNull(RT.getIn(result, Fields.CREATED));
+		assertNull(RT.getIn(result, Fields.UPDATED));
 		assertEquals(AgentState.SLEEPING, RT.getIn(result, Fields.STATUS));
 
 		// Config and runtime record are replacements, not shallow merges.
@@ -3923,7 +3974,7 @@ public class AgentAdapterTest {
 	}
 
 	@Test
-	public void testCreateOverwriteSuspendedRecoversWithNewConfig() {
+	public void testRemoveSuspendedThenRecreateWithNewConfig() {
 		// Reproduce #237: the old transition fails and suspends the agent.
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
@@ -3951,25 +4002,28 @@ public class AgentAdapterTest {
 		long timelineBefore = suspended.getTimeline().count();
 		assertEquals(1, timelineBefore, "failed transition should remain in history");
 
-		// Overwrite with a working transition. This must recover the slot rather
-		// than leave it poisoned by the old provider/configuration.
+		// Remove the failed record, then create a clean replacement.
+		engine.jobs().invokeOperation(
+			"v/ops/agent/delete",
+			Maps.of(Fields.AGENT_ID, "susp-ow", Fields.REMOVE, CVMBool.TRUE),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
 		ACell result = engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "susp-ow",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete"),
-				Fields.OVERWRITE, CVMBool.TRUE),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		assertEquals(CVMBool.TRUE, RT.getIn(result, Fields.CREATED));
-		assertEquals(CVMBool.FALSE, RT.getIn(result, Fields.UPDATED));
+		assertNull(RT.getIn(result, Fields.CREATED));
+		assertNull(RT.getIn(result, Fields.UPDATED));
 		assertEquals(AgentState.SLEEPING, RT.getIn(result, Fields.STATUS));
 
 		AgentState post = user.agent("susp-ow");
 		assertEquals(Strings.create("v/test/ops/taskcomplete"), post.getConfig().get(Fields.OPERATION));
 		assertEquals(AgentState.SLEEPING, post.getStatus());
-		assertNull(post.getError(), "overwrite must clear the stale provider error");
+		assertNull(post.getError(), "replacement must clear the stale provider error");
 		assertEquals(0, post.getTimeline().count(),
-			"overwrite must replace the old runtime record and timeline");
+			"delete + create must replace the old runtime record and timeline");
 
 		// A new request must execute the replacement operation. Replaying the old
 		// error transition here is the original #237 failure mode.
@@ -3987,7 +4041,7 @@ public class AgentAdapterTest {
 	}
 
 	@Test
-	public void testCreateOverwriteRunningHaltsAndReplaces() throws Exception {
+	public void testRemoveRunningThenRecreate() throws Exception {
 		// A never-completing transition makes halt-before-replace observable.
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
@@ -4022,16 +4076,20 @@ public class AgentAdapterTest {
 		assertEquals(Strings.create("v/test/ops/never"),
 			old.getConfig().get(Fields.OPERATION));
 
-		// Overwrite halts and settles the old loop before installing the replacement.
+		// Delete halts and settles the old loop before a replacement is created.
+		engine.jobs().invokeOperation(
+			"v/ops/agent/delete",
+			Maps.of(Fields.AGENT_ID, "run-ow", Fields.REMOVE, CVMBool.TRUE),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
 		Job job = engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "run-ow",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete"),
-				Fields.OVERWRITE, CVMBool.TRUE),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
 			RequestContext.of(ALICE_DID));
 		ACell replaced = job.awaitResult(5000);
-		assertEquals(CVMBool.TRUE, RT.getIn(replaced, Fields.CREATED));
-		assertEquals(CVMBool.FALSE, RT.getIn(replaced, Fields.UPDATED));
+		assertNull(RT.getIn(replaced, Fields.CREATED));
+		assertNull(RT.getIn(replaced, Fields.UPDATED));
 		assertEquals(AgentState.SLEEPING, RT.getIn(replaced, Fields.STATUS));
 		try {
 			stuck.awaitResult(5000);
@@ -4039,7 +4097,7 @@ public class AgentAdapterTest {
 		} catch (covia.exception.JobFailedException expected) {
 			// expected
 		}
-		assertTrue(stuck.getErrorMessage().contains("overwritten"));
+		assertTrue(stuck.getErrorMessage().contains("deleted"));
 
 		AgentState fresh = user.agent("run-ow");
 		assertEquals(Strings.create("v/test/ops/taskcomplete"),
@@ -4053,22 +4111,25 @@ public class AgentAdapterTest {
 	}
 
 	@Test
-	public void testCreateOverwriteFalseIsNoOp() {
+	public void testCreateExistingDoesNotChangeConfig() {
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "no-ow",
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		// Without overwrite — idempotent no-op
+		// Exclusive create fails and leaves the original untouched.
 		Job job = engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "no-ow",
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
 			RequestContext.of(ALICE_DID));
-		ACell result = job.awaitResult(5000);
-
-		assertEquals(CVMBool.FALSE, RT.getIn(result, Fields.CREATED));
+		try {
+			job.awaitResult(5000);
+			fail("duplicate create must fail");
+		} catch (covia.exception.JobFailedException expected) {
+			assertTrue(job.getErrorMessage().contains("already exists"));
+		}
 
 		// Config should still be original
 		User user = engine.getVenueState().users().get(ALICE_DID);
@@ -4370,7 +4431,6 @@ public class AgentAdapterTest {
 		// Create agent with full config — record.config is the single slot (#144)
 		ACell createInput = Maps.of(
 			Fields.AGENT_ID, "merge-test",
-			Strings.create("overwrite"), convex.core.data.prim.CVMBool.TRUE,
 			Fields.CONFIG, Maps.of(
 				Strings.create("model"), Strings.create("gpt-4.1-mini"),
 				Strings.create("systemPrompt"), Strings.create("You are a test agent"),
@@ -4423,11 +4483,10 @@ public class AgentAdapterTest {
 	public void testUpdateNullValueDocumentsCurrentBehaviour() {
 		// Document current behaviour: setting a config field to null via update
 		// stores null at that key — it does NOT remove the key. To remove a field,
-		// recreate the agent with overwrite:true. This test pins down the
-		// behaviour so any change to it shows up in the diff.
+		// explicitly delete the agent with remove=true and create it again. This
+		// test pins down the behaviour so any change shows up in the diff.
 		ACell createInput = Maps.of(
 			Fields.AGENT_ID, "null-test",
-			Strings.create("overwrite"), CVMBool.TRUE,
 			Fields.CONFIG, Maps.of(
 				Strings.create("model"), Strings.create("gpt-4o"),
 				Strings.create("systemPrompt"), Strings.create("Original prompt")));
@@ -4447,7 +4506,7 @@ public class AgentAdapterTest {
 		assertTrue(configMap.containsKey(Strings.create("systemPrompt")),
 			"key should still exist after setting to null (current behaviour)");
 		assertNull(configMap.get(Strings.create("systemPrompt")),
-			"value should be null (current behaviour — to fully remove, recreate with overwrite:true)");
+			"value should be null (current behaviour — delete + create to remove the key)");
 	}
 
 	// ========== Templates as lattice data (v/agents/templates/) ==========

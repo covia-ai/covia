@@ -740,7 +740,8 @@ public class AssetAdapterTest {
 		Job createJob = engine.jobs().invokeOperation("v/ops/agent/create", createInput, RequestContext.of(ALICE_DID));
 		ACell createResult = createJob.awaitResult(5000);
 
-		assertEquals(CVMBool.TRUE, RT.getIn(createResult, Fields.CREATED));
+		assertNull(RT.getIn(createResult, Fields.CREATED));
+		assertEquals(Strings.create("DefAgent"), RT.getIn(createResult, Fields.AGENT_ID));
 		assertEquals(Strings.create("SLEEPING"), RT.getIn(createResult, Fields.STATUS));
 
 		// Query agent and verify config was populated from definition
@@ -780,7 +781,8 @@ public class AssetAdapterTest {
 		Job job = engine.jobs().invokeOperation("v/ops/agent/create", input, RequestContext.of(ALICE_DID));
 		ACell result = job.awaitResult(5000);
 
-		assertEquals(CVMBool.TRUE, RT.getIn(result, Fields.CREATED));
+		assertNull(RT.getIn(result, Fields.CREATED));
+		assertEquals(Strings.create("InlineAgent"), RT.getIn(result, Fields.AGENT_ID));
 	}
 
 	@Test

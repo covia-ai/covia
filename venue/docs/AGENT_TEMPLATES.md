@@ -359,7 +359,7 @@ the handoff caps are mandatory, not optional.
 - Copies config and state from source; optional `includeTimeline: true` copies run history
 - Resets status to SLEEPING; tasks, pending, and sessions are fresh
 - Optional `config` override (inline map or string reference) is merged on top of source config per-field
-- Source must exist and not be TERMINATED; target must not already exist (unless `overwrite: true` and target is TERMINATED)
+- Source must exist and not be TERMINATED; target must not already exist
 - Implementation: `User.forkAgent` + `AgentState.initialiseFromFork`
 
 ### Phase 3a: Ship standard templates ✓ DONE

@@ -471,6 +471,19 @@ public class AgentAdapter extends AAdapter {
 	private void handleCreate(Job job, ACell input, RequestContext ctx) {
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
 		if (agentId == null) { job.fail("agentId is required"); return; }
+		if (RT.getIn(input, Fields.OVERWRITE) != null) {
+			job.fail("agent:create no longer supports overwrite; delete the existing agent "
+				+ "with remove=true, then create it again");
+			return;
+		}
+		Users users = engine.getVenueState().users();
+		User user = users.ensure(ctx.getUserDID());
+		AgentState existing = user.agent(agentId);
+		if (existing != null && existing.exists()) {
+			job.fail("Agent already exists: " + agentId
+				+ "; update it, or delete it with remove=true before creating it again");
+			return;
+		}
 
 		ACell configArg = RT.getIn(input, Fields.CONFIG);
 		AMap<AString, ACell> config;
@@ -569,25 +582,11 @@ public class AgentAdapter extends AAdapter {
 			config = config.assoc(K_LLM_OPERATION, engine.config().getDefaultLlmOperation());
 		}
 
-		boolean overwrite = CVMBool.TRUE.equals(RT.getIn(input, Fields.OVERWRITE));
-		Users users = engine.getVenueState().users();
-		User user = users.ensure(ctx.getUserDID());
-
-		// Resolve what to do with the target slot. See resolveCreateSlot for the
-		// full state machine — overwrite means replacement, while its absence is
-		// an idempotent no-op for an occupied slot.
-		SlotResult slot = resolveCreateSlot(job, user, agentId, overwrite, ctx);
-		if (slot == SlotResult.FAILED) return;
-
-		// ensureAgent is a no-op for NOOP slots; CREATED slots are empty because
-		// resolveCreateSlot removed any record selected for replacement.
 		AgentState agent = user.ensureAgent(agentId, config, initialState);
 
 		AMap<AString, ACell> result = Maps.of(
 			Fields.AGENT_ID, agentId,
-			Fields.STATUS, agent.getStatus(),
-			Fields.CREATED, CVMBool.of(slot == SlotResult.CREATED),
-			Fields.UPDATED, CVMBool.FALSE);
+			Fields.STATUS, agent.getStatus());
 
 		// Advisory only: surface anything that looks misconfigured but doesn't
 		// warrant failing create (#205). Emitted as a vector so several checks can
@@ -766,45 +765,6 @@ public class AgentAdapter extends AAdapter {
 		return null;
 	}
 
-	/** Outcome of resolving the target slot for {@code agent:create}. */
-	private enum SlotResult { CREATED, NOOP, FAILED }
-
-	/**
-	 * State machine for {@code agent:create}'s target slot. Determines whether
-	 * to create a fresh record, replace an existing one, no-op, or fail.
-	 *
-	 * <table>
-	 *   <caption>Slot resolution matrix</caption>
-	 *   <tr><th>{@code overwrite}</th><th>Existing status</th><th>Result</th><th>Side effect</th></tr>
-	 *   <tr><td>any</td>            <td>(empty)</td>      <td>CREATED</td><td>none — caller initialises</td></tr>
-	 *   <tr><td>false</td>          <td>any</td>          <td>NOOP</td>   <td>none — idempotent</td></tr>
-	 *   <tr><td>true</td>           <td>TERMINATED</td>   <td>CREATED</td><td>removeAgent — fresh start</td></tr>
-	 *   <tr><td>true</td>           <td>SLEEPING</td>     <td>CREATED</td><td>removeAgent — fresh start</td></tr>
-	 *   <tr><td>true</td>           <td>SUSPENDED</td>    <td>CREATED</td><td>removeAgent — fresh start</td></tr>
-	 *   <tr><td>true</td>           <td>RUNNING</td>      <td>CREATED</td><td>terminate, cancel and await old loop; then fresh start</td></tr>
-	 * </table>
-	 *
-	 * <p>A running agent is halted before replacement: pending callers are
-	 * failed, status is set to TERMINATED, the active transition is cancelled,
-	 * and the old loop is awaited before its record is removed. Self-overwrite
-	 * from inside that same loop is rejected to avoid waiting on itself.</p>
-	 */
-	private SlotResult resolveCreateSlot(
-			Job job, User user, AString agentId, boolean overwrite, RequestContext ctx) {
-		AgentState existing = user.agent(agentId);
-		if (existing == null || !existing.exists()) return SlotResult.CREATED;
-
-		if (!overwrite) return SlotResult.NOOP;
-
-		if (!haltAgent(job, user, existing, agentId, ctx,
-				"Agent overwritten: " + agentId, "overwrite")) return SlotResult.FAILED;
-		// A true overwrite is delete + create. This deliberately wipes config,
-		// state, timeline, sessions, tasks, pending, inbox and errors (#237).
-		// Callers that need history-preserving mutation use agent:update instead.
-		user.removeAgent(agentId);
-		return SlotResult.CREATED;
-	}
-
 	/** Stops an agent and waits for its run loop before its record may be reused. */
 	private boolean haltAgent(Job job, User user, AgentState agent, AString agentId,
 			RequestContext ctx, String pendingError, String action) {
@@ -843,6 +803,11 @@ public class AgentAdapter extends AAdapter {
 
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
 		if (agentId == null) { job.fail("agentId is required"); return; }
+		if (RT.getIn(input, Fields.OVERWRITE) != null) {
+			job.fail("agent:fork no longer supports overwrite; delete the target agent "
+				+ "with remove=true, then fork it again");
+			return;
+		}
 
 		Users users = engine.getVenueState().users();
 		User user = users.ensure(ctx.getUserDID());
@@ -871,18 +836,19 @@ public class AgentAdapter extends AAdapter {
 		AVector<ACell> sourceTimeline = CVMBool.TRUE.equals(RT.getIn(input, K_INCLUDE_TIMELINE))
 			? source.getTimeline() : null;
 
-		// Fork must write into an empty slot — fail if the target still exists
-		boolean overwrite = CVMBool.TRUE.equals(RT.getIn(input, Fields.OVERWRITE));
-		Boolean stillOccupied = applyOverwrite(job, user, agentId, overwrite);
-		if (stillOccupied == null) return;
-		if (stillOccupied) { job.fail("Target agent already exists: " + agentId); return; }
+		// Fork is an exclusive create: replacement is delete(remove=true) + fork.
+		AgentState existing = user.agent(agentId);
+		if (existing != null && existing.exists()) {
+			job.fail("Target agent already exists: " + agentId
+				+ "; delete it with remove=true before forking into this name");
+			return;
+		}
 
 		AgentState target = user.forkAgent(agentId, forkConfig, sourceState, sourceTimeline);
 
 		AMap<AString, ACell> result = Maps.of(
 			Fields.AGENT_ID, agentId,
 			Fields.STATUS, target.getStatus(),
-			Fields.CREATED, CVMBool.TRUE,
 			K_FORKED_FROM, sourceId);
 
 		job.setStatus(Status.STARTED);
@@ -1558,8 +1524,8 @@ public class AgentAdapter extends AAdapter {
 			// restarts it under the new config. This is the kill-switch pattern —
 			// the caller halts, then updates.
 			job.fail("Cannot update agent " + agentId + ": currently RUNNING. "
-				+ "Suspend it first (agent:suspend) to halt the run, then update and "
-				+ "resume; or replace it with agent:create overwrite=true.");
+				+ "Suspend it first (agent:suspend) to halt the run, then update and resume; "
+				+ "or delete it with remove=true before creating a replacement.");
 			return;
 		}
 
@@ -3274,34 +3240,6 @@ public class AgentAdapter extends AAdapter {
 			throw new IllegalArgumentException("Could not resolve config reference: " + ref);
 		}
 		return resolved;
-	}
-
-	/**
-	 * Processes the {@code overwrite} flag for a target agent slot. If the slot
-	 * is occupied by a TERMINATED agent and {@code overwrite} is true, the
-	 * existing agent is removed. If the slot is occupied by a non-TERMINATED
-	 * agent and {@code overwrite} is true, the job is failed.
-	 *
-	 * <p>When {@code overwrite} is false and the slot is occupied, this method
-	 * does nothing — callers decide whether that's an error (fork) or idempotent
-	 * (create).</p>
-	 *
-	 * @return the slot occupancy AFTER this call — {@link Boolean#TRUE} if still
-	 *         occupied, {@link Boolean#FALSE} if free, or {@code null} if the
-	 *         job was failed by this method
-	 */
-	private Boolean applyOverwrite(Job job, User user, AString agentId, boolean overwrite) {
-		AgentState existing = user.agent(agentId);
-		if (existing == null || !existing.exists()) return Boolean.FALSE;
-
-		if (!overwrite) return Boolean.TRUE;
-
-		if (AgentState.TERMINATED.equals(existing.getStatus())) {
-			user.removeAgent(agentId);
-			return Boolean.FALSE;
-		}
-		job.fail("Cannot overwrite agent that is not TERMINATED (status: " + existing.getStatus() + ")");
-		return null;
 	}
 
 	/**
