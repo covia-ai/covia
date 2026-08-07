@@ -585,13 +585,12 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	/**
 	 * Creates a tool result message in the Level 3 message format.
 	 *
-	 * <p>Provider tool-result messages have one wire shape: textual
-	 * {@code content}. Structured Covia results are therefore rendered to JSON
-	 * here, at the agent/tool boundary, rather than carried as live Convex
-	 * collections in an MCP-style {@code structuredContent} field. Apart from
-	 * matching the OpenAI/Anthropic message contract, this prevents lazy nested
-	 * collection traversal from being deferred into the next provider call
-	 * (covia-ai/covia#334).</p>
+	 * <p>This is the canonical agent turn, and may be persisted under the
+	 * session's {@code g/...} state. Keep collection results as their original
+	 * Convex value in {@code structuredContent}; provider adapters that require
+	 * textual tool results are responsible for rendering a temporary wire copy.
+	 * That boundary is deliberately provider-specific so durable agent state
+	 * does not silently lose types.</p>
 	 */
 	protected static AMap<AString, ACell> toolResultMessage(
 			AString toolCallId, String toolName, ACell result) {
@@ -599,8 +598,12 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			K_ROLE, ROLE_TOOL,
 			K_ID, toolCallId,
 			K_NAME, Strings.create(toolName));
+		if (result instanceof AMap || result instanceof AVector) {
+			return msg.assoc(K_STRUCTURED_CONTENT, result);
+		}
 		AString content = RT.ensureString(result);
-		return msg.assoc(K_CONTENT, (content != null) ? content : JSON.print(result));
+		return msg.assoc(K_CONTENT,
+			(content != null) ? content : Strings.create(result.toString()));
 	}
 
 	// ========== Tool-call argument parsing (the LLM wire boundary) ==========

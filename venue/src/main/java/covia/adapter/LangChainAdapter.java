@@ -239,6 +239,13 @@ public class LangChainAdapter extends AAdapter {
 		@SuppressWarnings("unchecked")
 		AVector<ACell> tools = (AVector<ACell>) ((RT.getIn(input, K_TOOLS) instanceof AVector) ? RT.getIn(input, K_TOOLS) : null);
 
+		// LangChain4j's provider messages require tool results as text. Build a
+		// provider-only copy here, before handing work to the provider worker.
+		// The canonical agent messages retain their exact structuredContent for
+		// session persistence; this narrow conversion also avoids #334's hang
+		// when nested Convex collections reached the Anthropic worker unchanged.
+		final AVector<ACell> providerMessages = serialiseToolResultsForProvider(messages);
+
 		// Response format: "json", "text", or {name, schema} map
 		ACell responseFormatCell = RT.getIn(input, K_RESPONSE_FORMAT);
 
@@ -259,7 +266,7 @@ public class LangChainAdapter extends AAdapter {
 			try {
 				// Resolve asset-referenced image blocks to inline data (covia#198):
 				// the job record keeps the ~tiny reference, not the image bytes.
-				AVector<ACell> resolvedMessages = resolveImageRefs(messages, rctx);
+				AVector<ACell> resolvedMessages = resolveImageRefs(providerMessages, rctx);
 				ACell result;
 				try {
 					result = callModel(provider, chatModel, resolvedMessages, tools, responseFormatCell);
@@ -851,6 +858,38 @@ public class LangChainAdapter extends AAdapter {
 	// ========== Message conversion ==========
 
 	/**
+	 * Returns the LangChain/provider view of a message vector.
+	 *
+	 * <p>LangChain4j models tool results as text, whereas Covia keeps structured
+	 * operation results typed in canonical agent turns. Tool messages carrying
+	 * structured content are copied; absent text is rendered as JSON, and the
+	 * provider copy drops the structured field. The input vector and its maps
+	 * are never mutated. Conversion happens before the provider worker is
+	 * started because handing the nested Convex value to that worker triggered
+	 * the collection-result stall reported in #334.</p>
+	 */
+	@SuppressWarnings("unchecked")
+	static AVector<ACell> serialiseToolResultsForProvider(AVector<ACell> messages) {
+		AVector<ACell> result = messages;
+		for (long i = 0; i < messages.count(); i++) {
+			ACell entry = messages.get(i);
+			if (!(entry instanceof AMap)) continue;
+			AString role = RT.ensureString(RT.getIn(entry, K_ROLE));
+			if (!ROLE_TOOL.equals(role)) continue;
+			ACell structured = RT.getIn(entry, K_STRUCTURED_CONTENT);
+			if (structured == null) continue;
+
+			AMap<AString, ACell> providerEntry = (AMap<AString, ACell>) entry;
+			if (RT.getIn(entry, K_CONTENT) == null) {
+				providerEntry = providerEntry.assoc(K_CONTENT, JSON.print(structured));
+			}
+			providerEntry = providerEntry.dissoc(K_STRUCTURED_CONTENT);
+			result = result.assoc(i, providerEntry);
+		}
+		return result;
+	}
+
+	/**
 	 * Converts a user message's content-block array to LangChain4j contents
 	 * (vision support, covia#198). Recognised blocks:
 	 * <ul>
@@ -1045,14 +1084,7 @@ public class LangChainAdapter extends AAdapter {
 				case "tool": {
 					AString id = RT.ensureString(RT.getIn(entry, K_ID));
 					AString name = RT.ensureString(RT.getIn(entry, K_NAME));
-					// Text content or structured content (serialised to JSON)
 					AString content = RT.ensureString(RT.getIn(entry, K_CONTENT));
-					if (content == null) {
-						ACell structured = RT.getIn(entry, K_STRUCTURED_CONTENT);
-						if (structured != null) {
-							content = Strings.create(JSON.toString(structured));
-						}
-					}
 					if (name != null && content != null) {
 						String idStr = (id != null) ? id.toString() : name.toString();
 						result.add(new ToolExecutionResultMessage(
