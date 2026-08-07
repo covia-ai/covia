@@ -864,6 +864,11 @@ public class A2A extends ACoviaAPI {
 			@SuppressWarnings("unchecked")
 			Map<String, Object> mutable = new LinkedHashMap<>((Map<String, Object>) m);
 			mutable.putIfAbsent("tenant", "");
+			// A2A SDK 1.2 documents CancelTaskParams.metadata as optional, but
+			// its canonical record constructor defensively copies a non-null map.
+			// Gson invokes that constructor directly, so normalise an omitted
+			// wire field to the SDK builder's own empty-map default.
+			if (cls == CancelTaskParams.class) mutable.putIfAbsent("metadata", Map.of());
 			raw = mutable;
 		}
 		String json = JsonUtil.OBJECT_MAPPER.toJson(raw);

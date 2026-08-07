@@ -399,6 +399,10 @@ public class TestAdapter extends AAdapter {
                 if (role != null && "tool".equals(role.toString())) {
                     // Tool results present — return a text response
                     AString toolContent = RT.ensureString(RT.getIn(messages.get(i), "content"));
+					if (toolContent == null) {
+						ACell structured = RT.getIn(messages.get(i), "structuredContent");
+						if (structured != null) toolContent = convex.core.util.JSON.print(structured);
+					}
                     return Maps.of(
                         "role", Strings.create("assistant"),
                         "content", Strings.create("Tool returned: " + toolContent)
@@ -424,8 +428,8 @@ public class TestAdapter extends AAdapter {
             String arguments = "{\"echo\":\"" + escaped + "\"}";
             // #334 regression fixture: exercise real covia collection reads
             // through the agent tool loop while keeping the L3 provider fully
-            // deterministic. The second call above only accepts textual
-            // role:tool content, just like an external model provider.
+            // deterministic. LangChain's provider boundary has separate tests
+            // for its provider-only JSON rendering.
             if (lastUserMsg.contains("issue-334-read")) {
                 toolName = "covia_read";
                 arguments = "{\"path\":\"w/issue-334/signals\"}";

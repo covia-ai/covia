@@ -6,6 +6,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 import org.a2aproject.sdk.jsonrpc.common.json.JsonUtil;
+import org.a2aproject.sdk.spec.StreamingEventKind;
 import org.a2aproject.sdk.spec.Task;
 import org.a2aproject.sdk.spec.TaskStatusUpdateEvent;
 import org.slf4j.Logger;
@@ -132,11 +133,16 @@ public class A2ASseSession {
 	 * gson's type-hierarchy adapter serialises the concrete payload with its
 	 * discriminator ({@code "task"}, {@code "statusUpdate"}, etc.) already.
 	 */
-	private void sendFrame(Object payload) {
+	private void sendFrame(StreamingEventKind payload) {
 		Map<String, Object> envelope = new LinkedHashMap<>();
 		envelope.put("jsonrpc", "2.0");
 		envelope.put("id", rpcRequestId);
-		envelope.put("result", payload);
+		// The 1.2 SDK deliberately registers its streaming union adapter for
+		// the StreamingEventKind interface, not each concrete record. Supplying
+		// the declared type preserves the protocol's {task: ...},
+		// {statusUpdate: ...} discriminator wrapper inside result.
+		envelope.put("result", JsonUtil.OBJECT_MAPPER.toJsonTree(
+			payload, StreamingEventKind.class));
 		String json = JsonUtil.OBJECT_MAPPER.toJson(envelope);
 		sseClient.sendEvent(json);
 	}

@@ -519,11 +519,12 @@ public class LLMAgentAdapterTest {
 		// loop with a deterministic provider. A wall-clock bound makes the
 		// original failure mode an explicit regression, not a suite hang.
 		RequestContext ctx = RequestContext.of(ALICE_DID);
+		AVector<ACell> signals = Vectors.of(
+			Maps.of("kind", "kyc", "score", 8L),
+			Maps.of("kind", "sanctions", "score", 3L));
 		engine.jobs().invokeOperation("v/ops/covia/write", Maps.of(
 			Fields.PATH, "w/issue-334/signals",
-			Fields.VALUE, Vectors.of(
-				Maps.of("kind", "kyc", "score", 8L),
-				Maps.of("kind", "sanctions", "score", 3L))), ctx).awaitResult(5000);
+			Fields.VALUE, signals), ctx).awaitResult(5000);
 		engine.jobs().invokeOperation("v/ops/covia/write", Maps.of(
 			Fields.PATH, "w/issue-334/sources",
 			Fields.VALUE, Maps.of(
@@ -548,8 +549,16 @@ public class LLMAgentAdapterTest {
 			AString response = RT.ensureString(RT.getIn(output, Fields.RESPONSE));
 			assertNotNull(response);
 			assertTrue(response.toString().startsWith("Tool returned: {"),
-				"the provider must receive a JSON text tool result, not deferred structuredContent: "
+				"the provider must be able to consume the nested tool result: "
 					+ response);
+			AVector<ACell> turns = RT.ensureVector(RT.getIn(output, Fields.TURNS));
+			assertNotNull(turns);
+			ACell durableToolTurn = turns.get(1);
+			assertEquals("tool", RT.getIn(durableToolTurn, "role").toString());
+			assertNotNull(RT.getIn(durableToolTurn, "structuredContent"),
+				"the emitted session turn must retain the typed operation result");
+			assertNull(RT.getIn(durableToolTurn, "content"),
+				"provider text rendering must not leak back into the durable turn");
 			if (prompt.endsWith("read")) {
 				assertTrue(response.toString().contains("\"score\":8"),
 					"covia/read must preserve the vector's nested maps: " + response);
@@ -560,6 +569,32 @@ public class LLMAgentAdapterTest {
 					"covia/list projected values must reach the provider intact: " + response);
 			}
 		}
+
+		// Exercise the framework persistence path too: Fields.TURNS is appended
+		// to frames[0].conversation under g/... and must remain typed there.
+		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(
+			Fields.AGENT_ID, "issue-334-persist-agent",
+			Fields.CONFIG, Maps.of(
+				Fields.OPERATION, "v/ops/llmagent/chat",
+				"llmOperation", "v/test/ops/toolllm",
+				"defaultTools", false,
+				"tools", Vectors.of("v/ops/covia/read"))), ctx).awaitResult(5000);
+		ACell chatResult = engine.jobs().invokeOperation("v/ops/agent/chat", Maps.of(
+			Fields.AGENT_ID, "issue-334-persist-agent",
+			Fields.MESSAGE, "issue-334-read"), ctx).awaitResult(10000);
+		AString sid = RT.ensureString(RT.getIn(chatResult, Fields.SESSION_ID));
+		assertNotNull(sid);
+		AgentState persistedAgent = engine.getVenueState().users().get(ALICE_DID)
+			.agent("issue-334-persist-agent");
+		AMap<AString, ACell> session = persistedAgent.getSession(Blob.fromHex(sid.toString()));
+		AVector<ACell> frames = RT.ensureVector(RT.getIn(session, Fields.FRAMES));
+		AVector<ACell> conversation = RT.ensureVector(
+			RT.getIn(frames.get(0), AgentState.KEY_CONVERSATION));
+		ACell persistedToolTurn = conversation.get(2);
+		assertEquals("tool", RT.getIn(persistedToolTurn, "role").toString());
+		assertEquals(signals,
+			RT.getIn(persistedToolTurn, "structuredContent", Fields.VALUE));
+		assertNull(RT.getIn(persistedToolTurn, "content"));
 	}
 
 	// ========== Skills index (config.skills — SKILLS.md §4) ==========

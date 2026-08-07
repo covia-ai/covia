@@ -197,7 +197,7 @@ public class A2ACodec {
 			case TASK_STATE_REJECTED       -> Status.REJECTED;
 			case TASK_STATE_INPUT_REQUIRED -> Status.INPUT_REQUIRED;
 			case TASK_STATE_AUTH_REQUIRED  -> Status.AUTH_REQUIRED;
-			case UNRECOGNIZED              -> Status.FAILED;
+			case TASK_STATE_UNSPECIFIED    -> Status.FAILED;
 		};
 	}
 
@@ -219,7 +219,7 @@ public class A2ACodec {
 		if (Status.INPUT_REQUIRED.equals(coviaStatus)) return TaskState.TASK_STATE_INPUT_REQUIRED;
 		if (Status.AUTH_REQUIRED.equals(coviaStatus)) return TaskState.TASK_STATE_AUTH_REQUIRED;
 		if (Status.PAUSED.equals(coviaStatus)) return TaskState.TASK_STATE_WORKING;
-		return TaskState.UNRECOGNIZED;
+		return TaskState.TASK_STATE_UNSPECIFIED;
 	}
 
 	// ==================== Task construction ====================

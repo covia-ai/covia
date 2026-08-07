@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -311,21 +312,44 @@ public class LangChainAdapterTest {
 	}
 
 	@Test
-	public void testToChatMessagesReadsLegacyStructuredToolResult() {
-		// New agent turns always carry JSON text in content (#334), but sessions
-		// persisted by an older venue may still contain structuredContent. Keep
-		// that read path lossless so an upgrade does not poison the next turn.
+	public void testProviderCopyMakesStructuredToolResultConsumable() {
 		ACell nested = Maps.of("results", Vectors.of(
 			Maps.of("source", Maps.of("name", "kyc")),
 			Maps.of("source", Maps.of("name", "sanctions"))));
-		var messages = Vectors.of(
+		var canonical = Vectors.of(
 			Maps.of("role", "tool", "id", "call_old", "name", "covia_read",
 				"structuredContent", nested));
+		var messages = LangChainAdapter.serialiseToolResultsForProvider(canonical);
 
 		List<ChatMessage> result = LangChainAdapter.toChatMessages(messages);
 		ToolExecutionResultMessage tool = assertInstanceOf(
 			ToolExecutionResultMessage.class, result.get(0));
 		assertEquals(JSON.toString(nested), tool.text());
+	}
+
+	@Test
+	public void testProviderToolResultCopyIsTextWithoutChangingCanonicalTurn() {
+		ACell nested = Maps.of("results", Vectors.of(
+			Maps.of("source", Maps.of("name", "kyc")),
+			Maps.of("source", Maps.of("name", "sanctions"))));
+		AMap<AString, ACell> canonicalTool = Maps.of(
+			"role", "tool", "id", "call_334", "name", "covia_read",
+			"structuredContent", nested);
+		AVector<ACell> canonical = Vectors.of(
+			Maps.of("role", "user", "content", "inspect sources"), canonicalTool);
+
+		AVector<ACell> provider = LangChainAdapter.serialiseToolResultsForProvider(canonical);
+		ACell providerTool = provider.get(1);
+
+		assertSame(canonicalTool, canonical.get(1),
+			"provider preparation must not replace the durable message");
+		assertSame(nested, RT.getIn(canonical.get(1), "structuredContent"),
+			"canonical structured value must retain its exact Convex type and identity");
+		assertNull(RT.getIn(canonical.get(1), "content"));
+		assertNull(RT.getIn(providerTool, "structuredContent"));
+		AString providerText = RT.ensureString(RT.getIn(providerTool, "content"));
+		assertNotNull(providerText);
+		assertEquals(nested, JSON.parse(providerText));
 	}
 
 	// ========== Asset-referenced images (covia#198) ==========

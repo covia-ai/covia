@@ -152,10 +152,9 @@ public class AbstractLLMAdapterTest {
 			Strings.create("call_2"), "covia_read", data);
 
 		assertEquals("tool", RT.ensureString(msg.get(AbstractLLMAdapter.K_ROLE)).toString());
-		AString content = RT.ensureString(msg.get(AbstractLLMAdapter.K_CONTENT));
-		assertNotNull(content, "nested maps must cross the provider boundary as JSON text");
-		assertEquals(data, convex.core.util.JSON.parse(content));
-		assertNull(msg.get(AbstractLLMAdapter.K_STRUCTURED_CONTENT));
+		assertSame(data, msg.get(AbstractLLMAdapter.K_STRUCTURED_CONTENT),
+			"the canonical agent turn must retain the exact operation result");
+		assertNull(msg.get(AbstractLLMAdapter.K_CONTENT));
 	}
 
 	@Test
@@ -168,10 +167,9 @@ public class AbstractLLMAdapterTest {
 		AMap<AString, ACell> msg = AbstractLLMAdapter.toolResultMessage(
 			Strings.create("call_3"), "covia_list", data);
 
-		AString content = RT.ensureString(msg.get(AbstractLLMAdapter.K_CONTENT));
-		assertNotNull(content, "vectors of maps must cross the provider boundary as JSON text");
-		assertEquals(data, convex.core.util.JSON.parse(content));
-		assertNull(msg.get(AbstractLLMAdapter.K_STRUCTURED_CONTENT));
+		assertSame(data, msg.get(AbstractLLMAdapter.K_STRUCTURED_CONTENT),
+			"the canonical agent turn must retain the exact operation result");
+		assertNull(msg.get(AbstractLLMAdapter.K_CONTENT));
 	}
 
 	// ========== getLLMOperation ==========
