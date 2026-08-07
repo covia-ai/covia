@@ -21,6 +21,7 @@ import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.RequestContext;
+import covia.venue.AgentState;
 
 public class TestAdapter extends AAdapter {
 	
@@ -305,6 +306,9 @@ public class TestAdapter extends AAdapter {
     private ACell handleTaskComplete(RequestContext ctx, ACell input) {
         ACell newInput = RT.getIn(input, Fields.NEW_INPUT);
         ACell delayCell = RT.getIn(newInput, Fields.DELAY);
+		// Agent/A2A integration tests can hold a transition open without shaping
+		// the user message around this test adapter's private delay control.
+		if (delayCell == null) delayCell = RT.getIn(input, AgentState.KEY_CONFIG, Fields.DELAY);
         if (delayCell instanceof CVMLong delay && delay.longValue() > 0) {
             try {
                 Thread.sleep(delay.longValue());

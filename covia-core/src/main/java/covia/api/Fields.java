@@ -34,6 +34,8 @@ public class Fields {
 	public static final StringShort INTERNAL = Strings.intern("internal");
 	public static final StringShort DEFAULT = Strings.intern("default");
 	public static final StringShort MESSAGE = Strings.intern("message");
+	/** Stable caller-supplied message identity, used for idempotent A2A intake. */
+	public static final StringShort MESSAGE_ID = Strings.intern("messageId");
 	public static final StringShort DELAY = Strings.intern("delay");
 	public static final StringShort ID = Strings.intern("id");
 	public static final StringShort STATUS = Strings.intern("status");	

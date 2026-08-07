@@ -969,22 +969,52 @@ public class AgentAdapter extends AAdapter {
 		AgentState agent = lookupAgent(job, ctx.getUserDID(), agentId);
 		if (agent == null) return;
 
-		Blob sid = resolveOrMintSession(job, agent, input, ctx.getCallerDID());
-		if (sid == null) return;
-
 		ACell messageContent = RT.getIn(input, Fields.MESSAGE);
+		if (messageContent == null) { job.fail("message is required"); return; }
+
+		AString taskIdHex = RT.ensureString(RT.getIn(input, Fields.TASK_ID));
+		Blob taskId = null;
+		Blob sid;
+		if (taskIdHex != null) {
+			taskId = Blob.fromHex(taskIdHex.toString());
+			if (taskId == null) { job.fail("Invalid taskId format: " + taskIdHex); return; }
+			ACell taskData = agent.getTasks().get(taskId);
+			AString taskSid = (taskData instanceof AMap<?, ?> map)
+				? RT.ensureString(map.get(Fields.SESSION_ID)) : null;
+			sid = (taskSid != null) ? Blob.fromHex(taskSid.toString()) : null;
+			if (sid == null) { job.fail("Task not found: " + taskIdHex); return; }
+			AString suppliedSid = RT.ensureString(RT.getIn(input, Fields.SESSION_ID));
+			if (suppliedSid != null && !taskSid.equals(suppliedSid)) {
+				job.fail("contextId does not match task session");
+				return;
+			}
+		} else {
+			sid = resolveOrMintSession(job, agent, input, ctx.getCallerDID());
+			if (sid == null) return;
+		}
+
+		AString sidHex = Strings.create(sid.toHexString());
 		// Wrap message with caller provenance and the session it belongs to
-		ACell envelope = Maps.of(
+		AMap<AString, ACell> envelope = Maps.of(
 			Fields.CALLER,     ctx.getCallerDID(),
-			Fields.SESSION_ID, Strings.create(sid.toHexString()),
+			Fields.SESSION_ID, sidHex,
 			Fields.MESSAGE,    messageContent);
-		agent.appendSessionPending(sid, envelope);
-		wakeAgent(ctx.getUserDID(), agentId);
+		if (taskId != null) {
+			envelope = envelope.assoc(Fields.TASK_ID, taskIdHex);
+			AString messageId = RT.ensureString(RT.getIn(messageContent, Fields.MESSAGE_ID));
+			if (!agent.appendTaskContinuation(taskId, sid, envelope, messageId)) {
+				job.fail("Task not found or no longer accepts messages: " + taskIdHex);
+				return;
+			}
+		} else {
+			agent.appendSessionPending(sid, envelope);
+		}
+		wakeAgent(ctx.getUserDID(), agentId, true);
 
 		job.setStatus(Status.STARTED);
 		job.completeWith(Maps.of(
 			Fields.AGENT_ID,   agentId,
-			Fields.SESSION_ID, Strings.create(sid.toHexString()),
+			Fields.SESSION_ID, sidHex,
 			Fields.DELIVERED,  CVMBool.TRUE));
 	}
 
@@ -1742,8 +1772,22 @@ public class AgentAdapter extends AAdapter {
 		}
 
 		AgentState agent = requireAgent(ctx.getUserDID(), agentId);
-		ACell task = agent.takeTask(taskId);
-		if (task == null) throw new IllegalArgumentException("Task not found: " + taskId.toHexString());
+		long expectedRevision = ctx.getTaskRevision();
+		ACell task = (expectedRevision >= 0)
+			? agent.takeTask(taskId, expectedRevision) : agent.takeTask(taskId);
+		if (task == null) {
+			ACell current = agent.getTasks().get(taskId);
+			if (current != null && expectedRevision >= 0
+					&& (AgentState.taskRevision(current) != expectedRevision
+						|| AgentState.hasUnpresentedTaskInputs(current))) {
+				return Maps.of(
+					Fields.AGENT_ID, agentId,
+					Fields.TASK_ID, taskIdHex(taskId),
+					Fields.STATUS, Status.STARTED,
+					Fields.REASON, Strings.create("Task received continuation input; process the updated task before completing"));
+			}
+			throw new IllegalArgumentException("Task not found: " + taskId.toHexString());
+		}
 
 		ACell result = RT.getIn(input, Fields.RESULT);
 		parkCompletion(ctx.getUserDID(), agentId, task, taskId, Status.COMPLETE, Fields.OUTPUT, result);
@@ -1778,8 +1822,22 @@ public class AgentAdapter extends AAdapter {
 		}
 
 		AgentState agent = requireAgent(ctx.getUserDID(), agentId);
-		ACell task = agent.takeTask(taskId);
-		if (task == null) throw new IllegalArgumentException("Task not found: " + taskId.toHexString());
+		long expectedRevision = ctx.getTaskRevision();
+		ACell task = (expectedRevision >= 0)
+			? agent.takeTask(taskId, expectedRevision) : agent.takeTask(taskId);
+		if (task == null) {
+			ACell current = agent.getTasks().get(taskId);
+			if (current != null && expectedRevision >= 0
+					&& (AgentState.taskRevision(current) != expectedRevision
+						|| AgentState.hasUnpresentedTaskInputs(current))) {
+					return Maps.of(
+						Fields.AGENT_ID, agentId,
+						Fields.TASK_ID, taskIdHex(taskId),
+						Fields.STATUS, Status.STARTED,
+						Fields.REASON, Strings.create("Task received continuation input; process the updated task before failing"));
+			}
+			throw new IllegalArgumentException("Task not found: " + taskId.toHexString());
+		}
 
 		ACell errorCell = RT.getIn(input, Fields.ERROR);
 		AString errorStr = (errorCell == null) ? Strings.create("Task failed") : Strings.create(errorCell.toString());
@@ -2324,15 +2382,23 @@ public class AgentAdapter extends AAdapter {
 				// agent:completeTask / agent:failTask can identify which
 				// agent + task they're acting on.
 				RequestContext cycleCtx = ctx.withAgentId(agentId);
-				if (pickedTask != null) cycleCtx = cycleCtx.withTaskId(pickedTask.getKey());
-				if (pickedSessionBlob != null) cycleCtx = cycleCtx.withSessionId(pickedSessionBlob);
-
+				long pickedTaskRevision = -1L;
 				ACell pickedTaskInput = null;
 				if (pickedTask != null) {
-					pickedTaskInput = (pickedTask.getValue() instanceof AMap)
-						? ((AMap<AString, ACell>) pickedTask.getValue()).get(Fields.INPUT)
-						: pickedTask.getValue();
+					pickedTaskRevision = AgentState.taskRevision(pickedTask.getValue());
+					pickedTaskInput = agent.claimTaskInput(
+						pickedTask.getKey(), pickedTaskRevision);
+					ACell currentTask = agent.getTasks().get(pickedTask.getKey());
+					if (currentTask == null) continue;
+					if (AgentState.taskRevision(currentTask) != pickedTaskRevision) {
+						// Continuation won the claim race. Re-snapshot so the fresh
+						// revision — and only its next unpresented input — is used.
+						continue;
+					}
+					cycleCtx = cycleCtx.withTaskId(pickedTask.getKey(),
+						pickedTaskRevision);
 				}
+				if (pickedSessionBlob != null) cycleCtx = cycleCtx.withSessionId(pickedSessionBlob);
 
 				AMap<AString, ACell> transitionInput = Maps.of(
 					Fields.AGENT_ID, agentId,

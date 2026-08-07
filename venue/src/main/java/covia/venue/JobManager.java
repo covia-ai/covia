@@ -965,11 +965,8 @@ public class JobManager {
 			throw new IllegalArgumentException("Job not found: " + jobID.toHexString());
 		}
 
-		ACell histCell = current.get(Fields.HISTORY);
-		AVector<ACell> history = (histCell instanceof AVector)
-				? (AVector<ACell>) histCell
-				: convex.core.data.Vectors.empty();
-		AMap<AString, ACell> newData = current.assoc(Fields.HISTORY, history.conj(record));
+		AMap<AString, ACell> newData = appendHistoryRecord(current, record);
+		if (newData == current) return;
 
 		// Write back where the record actually lives: mutate the live job if it
 		// is still active (persisted on completion), otherwise persist the
@@ -977,16 +974,29 @@ public class JobManager {
 		// history still carries the inbound message rather than silently losing it.
 		Job job = getJob(jobID);
 		if (job != null) {
-			job.update(data -> {
-				ACell liveHistCell = data.get(Fields.HISTORY);
-				AVector<ACell> liveHistory = (liveHistCell instanceof AVector)
-					? (AVector<ACell>) liveHistCell : convex.core.data.Vectors.empty();
-				return data.assoc(Fields.HISTORY, liveHistory.conj(record));
-			});
+			job.update(data -> appendHistoryRecord(data, record));
 		} else {
 			// Persisted into the owning user's lattice, not the acting agent's.
 			persistJobRecord(jobID, newData, ctx.getUserDID());
 		}
+	}
+
+	/** Appends unless the same caller-provided messageId is already present. */
+	@SuppressWarnings("unchecked")
+	private static AMap<AString, ACell> appendHistoryRecord(
+			AMap<AString, ACell> data, AMap<AString, ACell> record) {
+		ACell histCell = data.get(Fields.HISTORY);
+		AVector<ACell> history = (histCell instanceof AVector<?> v)
+			? (AVector<ACell>) v : convex.core.data.Vectors.empty();
+		ACell messageId = record.get(Fields.MESSAGE_ID);
+		if (messageId != null) {
+			for (long i = 0; i < history.count(); i++) {
+				ACell item = history.get(i);
+				if (item instanceof AMap<?, ?> map
+						&& messageId.equals(map.get(Fields.MESSAGE_ID))) return data;
+			}
+		}
+		return data.assoc(Fields.HISTORY, history.conj(record));
 	}
 
 	// ========== Job Recovery ==========

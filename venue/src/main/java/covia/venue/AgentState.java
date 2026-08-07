@@ -44,6 +44,16 @@ public class AgentState extends ALatticeComponent<ACell> {
 	/** Handle of this agent's single pending {@code agent:wake} event in the
 	 *  venue grid scheduler, or absent when no wake is armed. */
 	private static final AString K_WAKE_HANDLE = Strings.intern("wakeHandle");
+	/** Monotonic task-row revision. A continuation increments it so a transition
+	 *  that started against an older view cannot complete the task concurrently. */
+	private static final AString K_TASK_REVISION = Strings.intern("revision");
+	/** A2A message IDs already accepted for a task, retained on the task row so
+	 *  retries are idempotent even after the session pending entry is drained. */
+	private static final AString K_CONTINUATION_IDS = Strings.intern("continuationIds");
+	/** Ordered continuation envelopes queued behind the task's original input. */
+	private static final AString K_CONTINUATIONS = Strings.intern("continuations");
+	/** Number of original/continuation inputs already claimed by run cycles. */
+	private static final AString K_PRESENTED_INPUTS = Strings.intern("presentedInputs");
 
 	/** Operation the scheduler fires to wake this agent — a non-forcing,
 	 *  non-blocking {@code agent:trigger}. Package-visible so scheduler tests
@@ -669,6 +679,113 @@ public class AgentState extends ALatticeComponent<ACell> {
 		update(r -> r.assoc(K_TASKS, extractTasks(r).dissoc(taskId)));
 	}
 
+	/** Returns the continuation revision of a task row (legacy rows are zero). */
+	public static long taskRevision(ACell taskData) {
+		if (taskData instanceof AMap<?, ?> map
+				&& map.get(K_TASK_REVISION) instanceof CVMLong revision) {
+			return revision.longValue();
+		}
+		return 0L;
+	}
+
+	/** Whether a task row still has original/continuation input not yet claimed. */
+	@SuppressWarnings("unchecked")
+	public static boolean hasUnpresentedTaskInputs(ACell taskData) {
+		if (!(taskData instanceof AMap<?, ?> map)) return false;
+		long presented = (map.get(K_PRESENTED_INPUTS) instanceof CVMLong count)
+			? count.longValue() : 0L;
+		long continuations = (map.get(K_CONTINUATIONS) instanceof AVector<?> v)
+			? v.count() : 0L;
+		return presented < 1L + continuations;
+	}
+
+	/**
+	 * Atomically accepts a message for an existing task and queues it on that
+	 * task row. Completion or cancellation that removes the task first makes
+	 * this return false. The run loop claims each queued input once and presents
+	 * it as {@code newInput}; the task's session supplies the conversation state.
+	 * Repeated non-null message IDs are accepted idempotently without appending
+	 * a second continuation or incrementing the revision.
+	 */
+	@SuppressWarnings("unchecked")
+	public boolean appendTaskContinuation(Blob taskId, Blob sid, ACell envelope,
+			AString messageId) {
+		java.util.concurrent.atomic.AtomicBoolean accepted =
+			new java.util.concurrent.atomic.AtomicBoolean(false);
+		update(r -> {
+			accepted.set(false);
+			Index<Blob, ACell> tasks = extractTasks(r);
+			ACell rawTask = tasks.get(taskId);
+			if (!(rawTask instanceof AMap<?, ?>)) return r;
+			AMap<AString, ACell> task = (AMap<AString, ACell>) rawTask;
+			AString taskSid = RT.ensureString(task.get(Fields.SESSION_ID));
+			if (taskSid == null || !sid.toHexString().equals(taskSid.toString())) return r;
+
+			AVector<ACell> ids = (task.get(K_CONTINUATION_IDS) instanceof AVector<?> v)
+				? (AVector<ACell>) v : Vectors.empty();
+			if (messageId != null) {
+				for (long i = 0; i < ids.count(); i++) {
+					if (messageId.equals(ids.get(i))) {
+						accepted.set(true);
+						return r;
+					}
+				}
+			}
+
+			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index<?, ?> idx)
+				? (Index<Blob, ACell>) idx : Index.none();
+			ACell rawSession = sessions.get(sid);
+			if (!(rawSession instanceof AMap<?, ?>)) return r;
+			AVector<ACell> continuations = (task.get(K_CONTINUATIONS) instanceof AVector<?> v)
+				? (AVector<ACell>) v : Vectors.empty();
+
+			long revision = taskRevision(task) + 1;
+			task = task
+				.assoc(K_TASK_REVISION, CVMLong.create(revision))
+				.assoc(K_CONTINUATIONS, continuations.conj(envelope));
+			if (messageId != null) task = task.assoc(K_CONTINUATION_IDS, ids.conj(messageId));
+			accepted.set(true);
+			return r.assoc(K_TASKS, tasks.assoc(taskId, task));
+		});
+		return accepted.get();
+	}
+
+	/**
+	 * Claims the next input for a task revision exactly once. Input zero is the
+	 * original {@code input}; later inputs are continuation envelopes' messages.
+	 * Returns null when all inputs were already presented or the revision raced.
+	 */
+	@SuppressWarnings("unchecked")
+	public ACell claimTaskInput(Blob taskId, long expectedRevision) {
+		java.util.concurrent.atomic.AtomicReference<ACell> claimed =
+			new java.util.concurrent.atomic.AtomicReference<>();
+		update(r -> {
+			claimed.set(null);
+			Index<Blob, ACell> tasks = extractTasks(r);
+			ACell rawTask = tasks.get(taskId);
+			if (!(rawTask instanceof AMap<?, ?>) || taskRevision(rawTask) != expectedRevision) return r;
+			AMap<AString, ACell> task = (AMap<AString, ACell>) rawTask;
+			long presented = (task.get(K_PRESENTED_INPUTS) instanceof CVMLong count)
+				? count.longValue() : 0L;
+			ACell input;
+			if (presented == 0) {
+				input = task.get(Fields.INPUT);
+			} else {
+				AVector<ACell> continuations =
+					(task.get(K_CONTINUATIONS) instanceof AVector<?> v)
+						? (AVector<ACell>) v : Vectors.empty();
+				long index = presented - 1;
+				if (index >= continuations.count()) return r;
+				ACell envelope = continuations.get(index);
+				input = RT.getIn(envelope, Fields.MESSAGE);
+			}
+			claimed.set(input);
+			task = task.assoc(K_PRESENTED_INPUTS, CVMLong.create(presented + 1));
+			return r.assoc(K_TASKS, tasks.assoc(taskId, task));
+		});
+		return claimed.get();
+	}
+
 	/**
 	 * Atomically claims a task by removing and returning its row.
 	 *
@@ -683,6 +800,25 @@ public class AgentState extends ALatticeComponent<ACell> {
 			return r.assoc(K_TASKS, tasks.dissoc(taskId));
 		});
 		return (before == null) ? null : extractTasks(before).get(taskId);
+	}
+
+	/**
+	 * Atomically claims a task only if it still has the revision presented to
+	 * the current transition cycle. A continuation arriving mid-cycle bumps the
+	 * revision and therefore leaves the task queued for a fresh cycle.
+	 */
+	public ACell takeTask(Blob taskId, long expectedRevision) {
+		AMap<AString, ACell> before = getAndUpdate(r -> {
+			Index<Blob, ACell> tasks = extractTasks(r);
+			ACell task = tasks.get(taskId);
+			if (task == null || taskRevision(task) != expectedRevision
+					|| hasUnpresentedTaskInputs(task)) return r;
+			return r.assoc(K_TASKS, tasks.dissoc(taskId));
+		});
+		if (before == null) return null;
+		ACell task = extractTasks(before).get(taskId);
+		return (task != null && taskRevision(task) == expectedRevision
+			&& !hasUnpresentedTaskInputs(task)) ? task : null;
 	}
 
 	public void addPending(Blob jobId, ACell snapshot) {
@@ -1126,7 +1262,8 @@ public class AgentState extends ALatticeComponent<ACell> {
 		if (current == null || current.count() == 0) return false;
 		if (presented == null) return current.count() > 0;
 		for (var entry : current.entrySet()) {
-			if (presented.get(entry.getKey()) == null) return true;
+			ACell before = presented.get(entry.getKey());
+			if (before == null || !Objects.equals(before, entry.getValue())) return true;
 		}
 		return false;
 	}

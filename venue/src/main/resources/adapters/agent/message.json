@@ -13,6 +13,10 @@
 				"sessionId": {
 					"type": "string",
 					"description": "Optional session identifier (hex string). Messages sharing a sessionId are treated as part of the same conversation. If omitted, a new session is created and its id returned in the response."
+				},
+				"taskId": {
+					"type": "string",
+					"description": "Optional existing agent task ID. When present, the message is atomically attached to that task's session; terminal or foreign tasks are rejected."
 				}
 			},
 			"required": ["agentId", "message"]

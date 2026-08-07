@@ -55,7 +55,7 @@ public class A2ACodec {
 	/** Internal record field name for an A2A contextId (groups related tasks). */
 	public static final AString CONTEXT_ID = Strings.intern("contextId");
 	/** Internal record field name for an A2A messageId. */
-	public static final AString MESSAGE_ID = Strings.intern("messageId");
+	public static final AString MESSAGE_ID = Fields.MESSAGE_ID;
 	/** Internal record field name for an artifactId. */
 	public static final AString ARTIFACT_ID = Strings.intern("artifactId");
 

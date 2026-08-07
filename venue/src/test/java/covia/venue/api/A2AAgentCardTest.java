@@ -15,6 +15,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 import org.a2aproject.sdk.jsonrpc.common.json.JsonUtil;
 import org.a2aproject.sdk.spec.AgentCard;
@@ -24,6 +25,7 @@ import org.a2aproject.sdk.spec.MessageSendParams;
 import org.a2aproject.sdk.spec.Part;
 import org.a2aproject.sdk.spec.Task;
 import org.a2aproject.sdk.spec.TaskQueryParams;
+import org.a2aproject.sdk.spec.TaskState;
 import org.a2aproject.sdk.spec.TextPart;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -33,15 +35,18 @@ import org.junit.jupiter.api.TestInstance.Lifecycle;
 import convex.auth.ucan.UCAN;
 import convex.core.crypto.AKeyPair;
 import convex.core.data.AString;
+import convex.core.data.Blob;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.auth.VenueAuth;
 import covia.grid.client.VenueHTTP;
 import covia.venue.TestServer;
+import covia.venue.AgentState;
 
 /**
  * #183 — per-agent Agent Card over A2A (COG-14): {@code GET /a2a/<ownerDID>/g/<agentId>}.
@@ -258,6 +263,130 @@ public class A2AAgentCardTest {
 		assertEquals(404, post("/a2a/" + ownerDid + "/g/PubNoCaps", env, null).statusCode());
 	}
 
+	@Test
+	public void taskAndContextContinuation_areDistinctAndIdempotent() throws Exception {
+		AKeyPair kp = AKeyPair.generate();
+		AString ownerDid = didOf(kp);
+		String jwt = bearerFor(kp);
+		VenueHTTP client = VenueHTTP.create(URI.create(BASE_URL), VenueAuth.bearer(jwt));
+		client.setTimeout(5000);
+
+		// The test transition explicitly completes tasks. Its config delay holds
+		// revision 0 open while two identical continuation requests race.
+		Job created = client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
+			Fields.AGENT_ID, Strings.create("Continuer"),
+			Fields.CONFIG, Maps.of(
+				Fields.OPERATION, Strings.create("v/test/ops/taskcomplete"),
+				Fields.DELAY, convex.core.data.prim.CVMLong.create(300))));
+		assertEquals(Status.COMPLETE, created.getStatus(), created.getErrorMessage());
+
+		String endpoint = "/a2a/" + ownerDid + "/g/Continuer";
+		Map<String, Object> initialResponse = parse(post(endpoint,
+			rpcEnvelope("start", "SendMessage",
+				new MessageSendParams(userMessage("first"), null, null)), jwt));
+		Task initial = extractTask(initialResponse);
+		assertNotNull(initial);
+
+		Message continuation = Message.builder()
+			.role(Message.Role.ROLE_USER)
+			.parts(List.<Part<?>>of(new TextPart("second", null)))
+			.messageId("same-continuation")
+			.contextId(initial.contextId())
+			.taskId(initial.id())
+			.build();
+		Object continuationRpc = rpcEnvelope("continue", "SendMessage",
+			new MessageSendParams(continuation, null, null));
+		Message otherContinuation = Message.builder()
+			.role(Message.Role.ROLE_USER)
+			.parts(List.<Part<?>>of(new TextPart("third", null)))
+			.messageId("other-continuation")
+			.contextId(initial.contextId())
+			.taskId(initial.id())
+			.build();
+		Object otherContinuationRpc = rpcEnvelope("continue-other", "SendMessage",
+			new MessageSendParams(otherContinuation, null, null));
+		CompletableFuture<HttpResponse<String>> one = CompletableFuture.supplyAsync(
+			() -> postUnchecked(endpoint, continuationRpc, jwt));
+		CompletableFuture<HttpResponse<String>> two = CompletableFuture.supplyAsync(
+			() -> postUnchecked(endpoint, continuationRpc, jwt));
+		CompletableFuture<HttpResponse<String>> three = CompletableFuture.supplyAsync(
+			() -> postUnchecked(endpoint, otherContinuationRpc, jwt));
+		assertEquals(200, one.join().statusCode());
+		assertEquals(200, two.join().statusCode());
+		assertEquals(200, three.join().statusCode());
+
+		Task completed = awaitTask(endpoint, initial.id(), jwt, TaskState.TASK_STATE_COMPLETED);
+		assertEquals(3, completed.history().size(),
+			"retrying the same messageId must not duplicate Task history");
+		AgentState continued = TestServer.ENGINE.getVenueState().users().get(ownerDid)
+			.agent("Continuer");
+		assertEquals(3, continued.getTimeline().count(),
+			"the stale cycle and both distinct continuations each run exactly once");
+		var session = continued.getSession(Blob.fromHex(initial.contextId()));
+		var frames = (convex.core.data.AVector<?>) session.get(AgentState.KEY_FRAMES);
+		var conversation = (convex.core.data.AVector<?>)
+			((convex.core.data.AMap<?, ?>) frames.get(0)).get(AgentState.KEY_CONVERSATION);
+		assertEquals(6, conversation.count(),
+			"three user turns and three agent turns must be recorded without duplicate frames");
+
+		// The endpoint's caller/publication gate runs before continuation lookup.
+		assertEquals(403, post(endpoint, continuationRpc,
+			bearerFor(AKeyPair.generate())).statusCode());
+
+		Message mismatched = Message.builder()
+			.role(Message.Role.ROLE_USER)
+			.parts(List.<Part<?>>of(new TextPart("mismatch", null)))
+			.messageId("mismatched-context")
+			.contextId("00".repeat(initial.contextId().length() / 2))
+			.taskId(initial.id())
+			.build();
+		Map<String, Object> mismatch = parse(post(endpoint,
+			rpcEnvelope("mismatch", "SendMessage",
+				new MessageSendParams(mismatched, null, null)), jwt));
+		assertEquals(org.a2aproject.sdk.spec.A2AErrorCodes.INVALID_PARAMS.code(),
+			errorCode(mismatch));
+
+		Message unknown = Message.builder()
+			.role(Message.Role.ROLE_USER)
+			.parts(List.<Part<?>>of(new TextPart("unknown", null)))
+			.messageId("unknown-task")
+			.taskId("00".repeat(initial.id().length() / 2))
+			.build();
+		Map<String, Object> unknownResponse = parse(post(endpoint,
+			rpcEnvelope("unknown", "SendMessage",
+				new MessageSendParams(unknown, null, null)), jwt));
+		assertEquals(org.a2aproject.sdk.spec.A2AErrorCodes.TASK_NOT_FOUND.code(),
+			errorCode(unknownResponse));
+
+		// A taskId is bound to its publishing agent, even for the same owner.
+		client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
+			Fields.AGENT_ID, Strings.create("OtherContinuer"),
+			Fields.CONFIG, Maps.of(Fields.OPERATION, Strings.create("v/test/ops/echo"))));
+		Map<String, Object> crossAgent = parse(post(
+			"/a2a/" + ownerDid + "/g/OtherContinuer", continuationRpc, jwt));
+		assertEquals(org.a2aproject.sdk.spec.A2AErrorCodes.TASK_NOT_FOUND.code(),
+			errorCode(crossAgent));
+
+		// Once terminal, taskId continuation is forbidden.
+		Map<String, Object> terminal = parse(post(endpoint, continuationRpc, jwt));
+		assertEquals(org.a2aproject.sdk.spec.A2AErrorCodes.UNSUPPORTED_OPERATION.code(),
+			errorCode(terminal));
+
+		// contextId alone means a new Job/Task in the same conversation.
+		Message nextTurn = Message.builder()
+			.role(Message.Role.ROLE_USER)
+			.parts(List.<Part<?>>of(new TextPart("fourth", null)))
+			.messageId("context-followup")
+			.contextId(initial.contextId())
+			.build();
+		Task next = extractTask(parse(post(endpoint,
+			rpcEnvelope("next", "SendMessage", new MessageSendParams(nextTurn, null, null)), jwt)));
+		assertNotNull(next);
+		assertNotEquals(initial.id(), next.id());
+		assertEquals(initial.contextId(), next.contextId());
+		awaitTask(endpoint, next.id(), jwt, TaskState.TASK_STATE_COMPLETED);
+	}
+
 	// ---- helpers ----
 
 	private static AString didOf(AKeyPair kp) {
@@ -293,6 +422,39 @@ public class A2AAgentCardTest {
 		Object result = rpcResp.get("result");
 		if (result == null) return null;
 		return JsonUtil.OBJECT_MAPPER.fromJson(JsonUtil.OBJECT_MAPPER.toJson(result), Task.class);
+	}
+
+	@SuppressWarnings("unchecked")
+	private static int errorCode(Map<String, Object> rpcResp) {
+		return ((Number) ((Map<String, Object>) rpcResp.get("error")).get("code")).intValue();
+	}
+
+	@SuppressWarnings("unchecked")
+	private static Map<String, Object> parse(HttpResponse<String> response) {
+		return JsonUtil.OBJECT_MAPPER.fromJson(response.body(), Map.class);
+	}
+
+	private Task awaitTask(String endpoint, String taskId, String jwt, TaskState wanted)
+			throws Exception {
+		long deadline = System.currentTimeMillis() + 5000;
+		Task task = null;
+		do {
+			task = extractTask(parse(post(endpoint,
+				rpcEnvelope("poll-" + UUID.randomUUID(), "GetTask",
+					new TaskQueryParams(taskId, null)), jwt)));
+			if (task != null && wanted.equals(task.status().state())) return task;
+			Thread.sleep(20);
+		} while (System.currentTimeMillis() < deadline);
+		throw new AssertionError("Task " + taskId + " did not reach " + wanted
+			+ "; last state=" + (task == null ? null : task.status().state()));
+	}
+
+	private HttpResponse<String> postUnchecked(String path, Object body, String jwt) {
+		try {
+			return post(path, body, jwt);
+		} catch (Exception e) {
+			throw new RuntimeException(e);
+		}
 	}
 
 	private HttpResponse<String> get(String path, String jwt) throws Exception {

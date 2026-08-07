@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletionException;
 
 import org.a2aproject.sdk.jsonrpc.common.json.JsonUtil;
 import org.a2aproject.sdk.spec.A2AError;
@@ -350,8 +351,9 @@ public class A2A extends ACoviaAPI {
 	/**
 	 * Per-agent {@code SendMessage}: a fresh message is submitted to the agent as
 	 * an {@code agent:request} task; the task Job becomes the A2A Task (async — the
-	 * client polls GetTask). The {@code contextId = session} mapping and task
-	 * continuations with an incoming {@code taskId} are tracked in #306.
+	 * client polls GetTask). A {@code contextId} without a task starts a new chat
+	 * Job in the existing session; a {@code taskId} attaches input to that exact
+	 * non-terminal agent task.
 	 */
 	private void doSendMessageToAgent(Context ctx, Object id, MessageSendParams params,
 			A2ACodec.AgentRef ref, RequestContext rctx) {
@@ -361,20 +363,119 @@ public class A2A extends ACoviaAPI {
 		}
 		Message incoming = params.message();
 		if (incoming.taskId() != null) {
-			writeError(ctx, id, A2AErrorCodes.UNSUPPORTED_OPERATION, "Per-agent task continuation not yet implemented");
+			continueAgentTask(ctx, id, incoming, ref, rctx);
 			return;
 		}
 
 		AMap<AString, ACell> record = A2ACodec.toMessageRecord(incoming, false);
 		Job job;
 		try {
-			ACell input = Maps.of(Fields.AGENT_ID, Strings.create(ref.agentId()), Fields.INPUT, record);
-			job = engine().jobs().invokeOperation("v/ops/agent/request", input, rctx);
+			if (incoming.contextId() != null) {
+				ACell input = Maps.of(
+					Fields.AGENT_ID, Strings.create(ref.agentId()),
+					Fields.MESSAGE, record,
+					Fields.SESSION_ID, Strings.create(incoming.contextId()));
+				job = engine().jobs().invokeOperation("v/ops/agent/chat", input, rctx);
+			} else {
+				ACell input = Maps.of(
+					Fields.AGENT_ID, Strings.create(ref.agentId()),
+					Fields.INPUT, record);
+				job = engine().jobs().invokeOperation("v/ops/agent/request", input, rctx);
+			}
 		} catch (IllegalArgumentException e) {
-			writeError(ctx, id, A2AErrorCodes.INVALID_AGENT_RESPONSE, "agent:request failed: " + e.getMessage());
+			writeError(ctx, id, A2AErrorCodes.INVALID_AGENT_RESPONSE,
+				"Agent intake failed: " + e.getMessage());
 			return;
 		}
+		try {
+			engine().jobs().appendToHistory(job.getID(), record, rctx);
+		} catch (Exception e) {
+			log.warn("Failed to append initial per-agent message to Task history", e);
+		}
 		writeResult(ctx, id, A2ACodec.toTask(engine().jobs().getJobData(job.getID(), rctx)));
+	}
+
+	/** Continue one exact non-terminal {@code agent:request} Job. */
+	private void continueAgentTask(Context ctx, Object id, Message incoming,
+			A2ACodec.AgentRef ref, RequestContext rctx) {
+		Blob taskId;
+		try {
+			taskId = Blob.parse(incoming.taskId());
+			if (taskId == null) throw new IllegalArgumentException("not a hex blob");
+		} catch (Exception e) {
+			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, "Invalid taskId");
+			return;
+		}
+
+		AMap<AString, ACell> taskData;
+		try {
+			taskData = engine().jobs().getJobData(taskId, rctx);
+		} catch (AuthException e) {
+			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, "Task not found");
+			return;
+		}
+		if (taskData == null) {
+			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND,
+				"Task not found: " + incoming.taskId());
+			return;
+		}
+
+		AString taskAgent = RT.ensureString(RT.getIn(taskData, Fields.INPUT, Fields.AGENT_ID));
+		if (taskAgent == null || !ref.agentId().equals(taskAgent.toString())) {
+			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, "Task not found for this agent");
+			return;
+		}
+		AString taskSession = RT.ensureString(taskData.get(Fields.SESSION_ID));
+		if (taskSession == null) {
+			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, "Task has no agent session");
+			return;
+		}
+		if (incoming.contextId() != null
+				&& !incoming.contextId().equals(taskSession.toString())) {
+			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS,
+				"contextId does not match taskId");
+			return;
+		}
+		AString status = RT.ensureString(taskData.get(Fields.STATUS));
+		if (isTerminalTaskStatus(status)) {
+			writeError(ctx, id, A2AErrorCodes.UNSUPPORTED_OPERATION,
+				"Task is in terminal state: " + status);
+			return;
+		}
+
+		AMap<AString, ACell> record = A2ACodec.toMessageRecord(incoming, false);
+		try {
+			ACell input = Maps.of(
+				Fields.AGENT_ID, taskAgent,
+				Fields.TASK_ID, Strings.create(taskId.toHexString()),
+				Fields.SESSION_ID, taskSession,
+				Fields.MESSAGE, record);
+			engine().jobs().invokeInternal("v/ops/agent/message", input, rctx).join();
+			engine().jobs().appendToHistory(taskId, record, rctx);
+		} catch (CompletionException e) {
+			Throwable cause = (e.getCause() != null) ? e.getCause() : e;
+			writeError(ctx, id, A2AErrorCodes.UNSUPPORTED_OPERATION,
+				cause.getMessage() != null ? cause.getMessage() : "Task no longer accepts messages");
+			return;
+		} catch (AuthException e) {
+			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, "Task not found");
+			return;
+		} catch (RuntimeException e) {
+			writeError(ctx, id, A2AErrorCodes.UNSUPPORTED_OPERATION,
+				e.getMessage() != null ? e.getMessage() : "Task no longer accepts messages");
+			return;
+		}
+
+		AMap<AString, ACell> after = engine().jobs().getJobData(taskId, rctx);
+		writeResult(ctx, id, A2ACodec.toTask(after != null ? after : taskData));
+	}
+
+	private static boolean isTerminalTaskStatus(AString status) {
+		return covia.grid.Status.COMPLETE.equals(status)
+			|| covia.grid.Status.FAILED.equals(status)
+			|| covia.grid.Status.CANCELLED.equals(status)
+			|| covia.grid.Status.REJECTED.equals(status)
+			|| covia.grid.Status.TIMEOUT.equals(status);
 	}
 
 	// ==================== JSON-RPC dispatch ====================
