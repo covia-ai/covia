@@ -111,7 +111,7 @@ public class A2AAdapter extends AAdapter {
 		requireInvoke(ctx);
 		String subOp = getSubOperation(meta);
 		if ("send".equals(subOp)) {
-			doSendMirrored(job, input);
+			doSendMirrored(job, ctx, input);
 			return;
 		}
 		super.invoke(job, ctx, meta, input);
@@ -126,9 +126,9 @@ public class A2AAdapter extends AAdapter {
 					new IllegalArgumentException("No sub-operation in a2a adapter metadata"));
 		}
 		return switch (subOp) {
-			case "getAgentCard" -> fetchAgentCard(input);
-			case "getTask"      -> rpcCallWithId(input, A2AMethods.GET_TASK_METHOD);
-			case "cancel"       -> rpcCallWithId(input, A2AMethods.CANCEL_TASK_METHOD);
+			case "getAgentCard" -> fetchAgentCard(input, ctx);
+			case "getTask"      -> rpcCallWithId(input, ctx, A2AMethods.GET_TASK_METHOD);
+			case "cancel"       -> rpcCallWithId(input, ctx, A2AMethods.CANCEL_TASK_METHOD);
 			case "send" -> {
 				// Job-worthy (the #85 delegation pattern, caught live by an agent
 				// calling a2a_send as a tool): send exists only in the Job-aware
@@ -145,7 +145,7 @@ public class A2AAdapter extends AAdapter {
 
 	// ==================== getAgentCard ====================
 
-	private CompletableFuture<ACell> fetchAgentCard(ACell input) {
+	private CompletableFuture<ACell> fetchAgentCard(ACell input, RequestContext ctx) {
 		AString urlCell = RT.ensureString(RT.getIn(input, Fields.URL));
 		if (urlCell == null) {
 			return CompletableFuture.failedFuture(new IllegalArgumentException(
@@ -156,11 +156,12 @@ public class A2AAdapter extends AAdapter {
 		try {
 			url = normaliseAgentCardUrl(urlCell.toString());
 			requireSafeUrl(url);
-			req = HttpRequest.newBuilder(URI.create(url))
+			String bearer = resolveBearer(input, ctx);
+			HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url))
 					.GET()
-					.timeout(Duration.ofSeconds(30))
-					.build();
-		} catch (IllegalArgumentException e) {
+					.timeout(Duration.ofSeconds(30));
+			req = withBearer(builder, bearer).build();
+		} catch (RuntimeException e) {
 			return CompletableFuture.failedFuture(e);
 		}
 
@@ -217,10 +218,10 @@ public class A2AAdapter extends AAdapter {
 	}
 
 	/** Keep missing/invalid RPC input on the normal failed-Job path. */
-	private CompletableFuture<ACell> rpcCallWithId(ACell input, String method) {
+	private CompletableFuture<ACell> rpcCallWithId(ACell input, RequestContext ctx, String method) {
 		try {
-			return rpcCall(input, method, idParams(input));
-		} catch (IllegalArgumentException e) {
+			return rpcCall(input, ctx, method, idParams(input));
+		} catch (RuntimeException e) {
 			return CompletableFuture.failedFuture(e);
 		}
 	}
@@ -230,7 +231,7 @@ public class A2AAdapter extends AAdapter {
 	 * agent and return the {@code result} as a Covia ACell. Throws if the
 	 * remote returns an {@code error} — callers get a failed future.
 	 */
-	private CompletableFuture<ACell> rpcCall(ACell input, String method, Map<String, Object> params) {
+	private CompletableFuture<ACell> rpcCall(ACell input, RequestContext ctx, String method, Map<String, Object> params) {
 		AString urlCell = RT.ensureString(RT.getIn(input, Fields.URL));
 		if (urlCell == null) {
 			return CompletableFuture.failedFuture(new IllegalArgumentException("url required"));
@@ -247,13 +248,14 @@ public class A2AAdapter extends AAdapter {
 		try {
 			String url = normaliseRpcUrl(urlCell.toString());
 			requireSafeUrl(url);
-			req = HttpRequest.newBuilder(URI.create(url))
+			String bearer = resolveBearer(input, ctx);
+			HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url))
 					.header("Content-Type", "application/json")
 					.header("Accept", "application/a2a+json, application/json")
 					.timeout(Duration.ofSeconds(30))
-					.POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
-					.build();
-		} catch (IllegalArgumentException e) {
+					.POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8));
+			req = withBearer(builder, bearer).build();
+		} catch (RuntimeException e) {
 			return CompletableFuture.failedFuture(e);
 		}
 
@@ -307,14 +309,16 @@ public class A2AAdapter extends AAdapter {
 	// ==================== a2a:send with mirroring ====================
 
 	@SuppressWarnings("unchecked")
-	private void doSendMirrored(Job job, ACell input) {
+	private void doSendMirrored(Job job, RequestContext ctx, ACell input) {
 		AString urlCell = RT.ensureString(RT.getIn(input, Fields.URL));
 		if (urlCell == null) { job.fail("'url' is required (remote A2A base or RPC URL)"); return; }
 		String rpcUrl;
+		String bearer;
 		try {
 			rpcUrl = normaliseRpcUrl(urlCell.toString());
 			requireSafeUrl(rpcUrl);
-		} catch (IllegalArgumentException e) {
+			bearer = resolveBearer(input, ctx);
+		} catch (RuntimeException e) {
 			job.fail(describeFailure(e));
 			return;
 		}
@@ -346,7 +350,7 @@ public class A2AAdapter extends AAdapter {
 
 		job.setStatus(Status.STARTED);
 
-		HttpRequest req = postEnvelope(rpcUrl, envelope);
+		HttpRequest req = postEnvelope(rpcUrl, envelope, bearer);
 		httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofString())
 				.whenComplete((resp, err) -> {
 					if (err != null) {
@@ -356,11 +360,11 @@ public class A2AAdapter extends AAdapter {
 							+ "; verify 'url' and retry");
 						return;
 					}
-					handleSendResponse(job, rpcUrl, resp);
+					handleSendResponse(job, rpcUrl, bearer, resp);
 				});
 	}
 
-	private void handleSendResponse(Job job, String rpcUrl, HttpResponse<String> resp) {
+	private void handleSendResponse(Job job, String rpcUrl, String bearer, HttpResponse<String> resp) {
 		if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
 			job.fail("Remote SendMessage failed: HTTP " + resp.statusCode() + ": "
 				+ conciseDetail(resp.body(), 512));
@@ -403,7 +407,7 @@ public class A2AAdapter extends AAdapter {
 		String remoteTaskId = remoteTask.id();
 		AMap<AString, ACell> current = job.getData();
 		job.updateData(current.assoc(Fields.REMOTE_TASK_ID, Strings.create(remoteTaskId)));
-		job.setCancelHook(() -> fireAndForgetCancel(rpcUrl, remoteTaskId));
+		job.setCancelHook(() -> fireAndForgetCancel(rpcUrl, remoteTaskId, bearer));
 
 		if (remoteTask.status().state().isFinal()) {
 			finishJobWithRemoteTask(job, remoteTask, rawResultCell);
@@ -413,7 +417,7 @@ public class A2AAdapter extends AAdapter {
 			applyInterruptedState(job, remoteTask, rawResultCell);
 			return;
 		}
-		startPoller(job, rpcUrl, remoteTaskId);
+		startPoller(job, rpcUrl, remoteTaskId, bearer);
 	}
 
 	/**
@@ -421,7 +425,7 @@ public class A2AAdapter extends AAdapter {
 	 * local Job. Exits when the Job is finished locally (e.g. cancelled) or
 	 * the remote reaches a terminal/interrupted state.
 	 */
-	private void startPoller(Job job, String rpcUrl, String remoteTaskId) {
+	private void startPoller(Job job, String rpcUrl, String remoteTaskId, String bearer) {
 		Thread.ofVirtual().name("a2a-mirror-" + remoteTaskId).start(() -> {
 			long deadline = System.currentTimeMillis() + POLL_MAX_LIFETIME.toMillis();
 			while (!job.isFinished() && System.currentTimeMillis() < deadline) {
@@ -435,7 +439,7 @@ public class A2AAdapter extends AAdapter {
 
 				PollResult p;
 				try {
-					p = pollRemote(rpcUrl, remoteTaskId);
+					p = pollRemote(rpcUrl, remoteTaskId, bearer);
 				} catch (Exception e) {
 					log.warn("Mirror poll failed for remote task {}: {}", remoteTaskId, e.getMessage());
 					continue; // transient errors don't fail the Job
@@ -480,10 +484,10 @@ public class A2AAdapter extends AAdapter {
 	/** Remote state + the raw result cell preserving the remote's exact JSON. */
 	private record PollResult(Task task, ACell rawResultCell) {}
 
-	private PollResult pollRemote(String rpcUrl, String remoteTaskId) throws Exception {
+	private PollResult pollRemote(String rpcUrl, String remoteTaskId, String bearer) throws Exception {
 		Map<String, Object> params = Map.of("id", remoteTaskId);
 		Map<String, Object> envelope = rpcEnvelope(A2AMethods.GET_TASK_METHOD, params);
-		HttpRequest req = postEnvelope(rpcUrl, envelope);
+		HttpRequest req = postEnvelope(rpcUrl, envelope, bearer);
 		HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
 		if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
 			throw new RuntimeException("Remote getTask failed: HTTP " + resp.statusCode()
@@ -523,11 +527,11 @@ public class A2AAdapter extends AAdapter {
 				.assoc(Fields.OUTPUT, rawTaskCell));
 	}
 
-	private void fireAndForgetCancel(String rpcUrl, String remoteTaskId) {
+	private void fireAndForgetCancel(String rpcUrl, String remoteTaskId, String bearer) {
 		try {
 			Map<String, Object> params = Map.of("id", remoteTaskId);
 			Map<String, Object> envelope = rpcEnvelope(A2AMethods.CANCEL_TASK_METHOD, params);
-			httpClient.sendAsync(postEnvelope(rpcUrl, envelope), HttpResponse.BodyHandlers.discarding());
+			httpClient.sendAsync(postEnvelope(rpcUrl, envelope, bearer), HttpResponse.BodyHandlers.discarding());
 		} catch (Exception e) {
 			log.warn("Best-effort remote cancel failed for {}: {}", remoteTaskId, e.getMessage());
 		}
@@ -544,14 +548,47 @@ public class A2AAdapter extends AAdapter {
 		return env;
 	}
 
-	private static HttpRequest postEnvelope(String rpcUrl, Map<String, Object> envelope) {
+	static HttpRequest postEnvelope(String rpcUrl, Map<String, Object> envelope, String bearer) {
 		String body = JsonUtil.OBJECT_MAPPER.toJson(envelope);
-		return HttpRequest.newBuilder(URI.create(rpcUrl))
+		HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(rpcUrl))
 				.header("Content-Type", "application/json")
 				.header("Accept", "application/a2a+json, application/json")
 				.timeout(Duration.ofSeconds(30))
-				.POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
-				.build();
+				.POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8));
+		return withBearer(builder, bearer).build();
+	}
+
+	/**
+	 * Resolve standard HTTP Bearer authentication for one outbound A2A
+	 * invocation. A secret reference is resolved in the caller's SecretStore;
+	 * a literal token is accepted for one-off interoperability. These inputs are
+	 * transport credentials only — they are never added to the A2A payload.
+	 */
+	String resolveBearer(ACell input, RequestContext ctx) {
+		AString secret = RT.ensureString(RT.getIn(input, Fields.BEARER_SECRET));
+		AString literal = RT.ensureString(RT.getIn(input, Fields.BEARER_TOKEN));
+		if (secret != null && literal != null) {
+			throw new IllegalArgumentException("Specify only one of 'bearerSecret' or 'bearerToken'");
+		}
+		if (literal != null) {
+			String token = literal.toString();
+			if (token.isBlank()) throw new IllegalArgumentException("'bearerToken' must not be empty");
+			return token;
+		}
+		if (secret == null) return null;
+		String ref = secret.toString();
+		if (ref.isBlank()) throw new IllegalArgumentException("'bearerSecret' must not be empty");
+		String token = engine.resolveSecret(ref, ctx);
+		if (token == null) {
+			throw new IllegalArgumentException("Cannot resolve bearerSecret '" + ref
+				+ "'; store it with secret:set or pass an existing s/<name> reference");
+		}
+		return token;
+	}
+
+	private static HttpRequest.Builder withBearer(HttpRequest.Builder builder, String bearer) {
+		if (bearer != null) builder.setHeader("Authorization", "Bearer " + bearer);
+		return builder;
 	}
 
 	@SuppressWarnings("unused")
