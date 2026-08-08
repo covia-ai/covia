@@ -58,7 +58,7 @@ The agent's value is a plain map. Every write replaces the entire map atomically
 | Field | Type | Description |
 |-------|------|-------------|
 | `ts` | long | Timestamp of the last write. **The merge discriminator.** Set on every write. |
-| `status` | string | `"SLEEPING"` \| `"RUNNING"` \| `"SUSPENDED"` \| `"TERMINATED"` |
+| `status` | string | `"SLEEPING"` \| `"RUNNING"` \| `"SUSPENDED"` \| `"TERMINATED"`. `RUNNING` is a persisted execution marker, validated against the live executor by the hosting venue. |
 | `config` | map | Framework-level configuration. Includes `operation` (default transition op). |
 | `state` | any | User-defined state. Opaque to the framework. Passed to and returned from the transition function. Transition-function-specific configuration (e.g. LLM provider, model) lives here, not in `config`. Set at creation via optional initial state. Conversation content lives on the session record (`session.frames[0].conversation`), not here. |
 | `tasks` | index | `Index<Blob, ACell>` of inbound request Job IDs. Persistent until resolved. Ordered by Job ID. |
@@ -119,10 +119,12 @@ Timeline entries are only appended on success. On error, no timeline entry is
 written — the error is recorded in the agent record's `error` field and all
 queues are preserved for retry.
 
-### 2.5 Status Lifecycle
+### 2.5 Status and execution
 
-The `status` field is the source of truth for what the agent is doing right now
-and which operations may safely act on it. There are four states:
+The lattice `status` field includes a persisted `RUNNING` marker for lattice and
+remote observability. Current execution ownership still comes from the venue's
+live executor registry. A stored `RUNNING` without a matching local executor is
+stale; startup clears it before scheduling durable work.
 
 ```
                     agent:create
@@ -139,7 +141,7 @@ and which operations may safely act on it. There are four states:
         │          └────┬─────┘         │
         │               │               │
         │      ┌────────┴────────┐      │
-        │      │ run loop done   │      │
+        │      │ attempt done    │      │
         │ ok   │                 │ error│
         └──────┘                 └─────▶┌───────────┐
                                         │ SUSPENDED │
@@ -154,16 +156,16 @@ and which operations may safely act on it. There are four states:
 
 | Status | Meaning | Run loop | Mutations allowed |
 |--------|---------|----------|-------------------|
-| `SLEEPING` | Idle, no transition active. Default after create or after a successful run with no remaining work. | Not running. `wakeAgent` triggers it. | All. Safe to update config in place. |
-| `RUNNING` | A transition is currently in flight on a virtual thread. Record mutations go through atomic cursor updates. | Running. New work is appended to `tasks`/`session.pending` and picked up on next iteration. | Task/session appends are allowed. In-place config mutation is rejected because the transition captured the old config; suspend it before updating, or delete it explicitly. |
+| `SLEEPING` | Durable runnable/idle state. | `wakeAgent` may start a live attempt. | All except config mutation while a live attempt exists. |
+| `RUNNING` | Persisted dirty marker: an attempt was launched. The hosting venue validates it against the live launcher slot. | Running when the matching slot is live; otherwise stale until startup cleanup. | Task/session appends are allowed. In-place config mutation is rejected using the live executor check. |
 | `SUSPENDED` | Last run failed with an error. Dormant — does not auto-retry. State, pending messages, sessions, and history are preserved; failed tasks are drained. | Not running. Resume via `tryResume` to keep the record, or delete it with `remove:true` before creating a replacement. | All. |
 | `TERMINATED` | Logically deleted. Slot still occupies the namespace key (so the ID is reserved) but the agent is dead. | Cannot run. `agent:request` / `agent:message` / `agent:trigger` all fail. | None. Remove the record explicitly with `agent:delete remove:true` before reusing the ID. |
 
-**State transitions** are documented in §4: `create` (→SLEEPING), `wakeAgent`
-(SLEEPING→RUNNING via CAS, §4.6), run loop completion (RUNNING→SLEEPING or
-RUNNING→SUSPENDED, §4.4), `agent:resume` (SUSPENDED→SLEEPING, §4.5),
-and `agent:delete` (any→TERMINATED or absent, §4.5). Creating another agent
-with the same ID requires physical removal of the old record first.
+**Durable state transitions** are documented in §4: `create` (→SLEEPING), a
+successful launcher install (SLEEPING→RUNNING), clean completion
+(RUNNING→SLEEPING), run-loop error (RUNNING→SUSPENDED), `agent:resume`
+(SUSPENDED→SLEEPING), and `agent:delete` (any→TERMINATED or absent). Startup
+clears a crash-stale RUNNING marker after confirming there is no live executor.
 
 ---
 
@@ -615,10 +617,9 @@ thread is started only by the winning wake. Mutations to the agent
 record (`addTask`, `appendSessionPending`, run loop writes) use atomic
 cursor updates directly — no shared lock.
 
-The lattice `status` field is a durable hint; `runningLoops` is the
-authoritative liveness signal. Phantom RUNNING (crash remnant or stale
-write past a clean exit) is corrected inside `wakeAgent` before
-installing a fresh slot (#64). `ConcurrentHashMap.remove(key, value)`
+The lattice `status` field supplies remote observability; `runningLoops` is the
+authoritative local liveness signal. Startup clears RUNNING markers that cannot
+have a surviving executor. `ConcurrentHashMap.remove(key, value)`
 ensures a new run's future is never accidentally completed by an old
 run's `finally` block.
 
@@ -651,7 +652,7 @@ run's `finally` block.
      into the picked session's `meta.tokens` running totals in the same
      CAS, stamped on the assistant turn, and attached to the caller's
      task/chat job record. Absent means "not measured", never zero.
-   - Status is set to `RUNNING` if work remains, else `SLEEPING`.
+   - Do not write executor status; the launcher slot remains the liveness truth.
 6. Complete any picked chat Job and drain parked task completions from
    `agent:complete-task` / `agent:fail-task` calls made during the
    transition — both strictly AFTER the merge, so external awaiters see
@@ -715,18 +716,18 @@ mutations is handled by reading the current record inside the merge
 - Once an agent is TERMINATED, it cannot transition to another status. Remove
   the record with `agent:delete remove:true` before creating a new agent with
   the same ID; there is no "un-terminate".
-- RUNNING is a transient state held only while the run loop's transition function
-  is executing or its merge step is pending. It is the only status under which
-  config mutations are rejected.
+- RUNNING is persisted while a launcher future exists, but the stored value is
+  not a concurrency lock or resume checkpoint. Config mutations consult the
+  live future and are rejected while it exists.
 - SUSPENDED preserves session/history state but failed transition tasks and
   cycle claims are settled before suspension. `agent:resume` preserves that
   record; explicit delete with `remove:true` discards it.
 
 ### 4.6 Scheduling — `wakeAgent`
 
-Scheduling is **lattice-native**: the agent's `status` field and the contents
-of `sessions`/`tasks` are the only inputs to the wake decision. There are no
-separate Java-side running/wake flags that could drift from the lattice.
+Scheduling combines durable work (`sessions`/`tasks`) with one process-local
+launcher slot. Stable lattice status gates suspended/terminated agents; the
+launcher slot provides exclusion and observable liveness.
 
 **`wakeAgent(agentId, ctx)`** is the single entry point for all agent wakes.
 It is called by `agent:request`, `agent:message`, and async job completion
@@ -737,15 +738,15 @@ callbacks. The logic (atomic CAS on `runningLoops: ConcurrentHashMap` via
    - If slot already populated → live loop exists; return existing completion
      (caller observes RUNNING; new work is in the lattice and the live loop
      will see it on its next iteration).
-   - Otherwise → read the agent's `status` from the lattice.
-   - If `status == RUNNING` with no live launcher → phantom (#64); correct to
-     SLEEPING under the same atomic update before launching.
+   - Otherwise → read the stable agent status from the lattice.
+   - A stale persisted `RUNNING` is allowed through defensively; normal startup
+     has already cleared it.
    - If no work (no session with pending messages and no tasks) → return null
      (leave slot empty).
    - Resolve `config.operation` → if null, return null.
-   - Set status → RUNNING on the lattice.
-   - Create a fresh `CompletableFuture<ACell>`, put it in the slot, and launch
-     `executeRunLoop` on a `Thread.ofVirtual()`.
+   - Create a fresh `CompletableFuture<ACell>` and atomically put it in the slot.
+   - Persist `RUNNING`, then launch `executeRunLoop` on a
+     `Thread.ofVirtual()`.
 2. The launcher wins the slot atomically; concurrent callers observing the
    populated slot simply return the same completion future.
 
@@ -758,8 +759,8 @@ An agent is eligible to run when any of:
 **No lost wakeups.** `addTask` / `appendSessionPending` write to the lattice
 atomically, then call `wakeAgent`. The loop's top-of-iteration `hasWork` check
 reads the current lattice. If work landed while a loop was running, the next
-iteration sees it. If work landed after the loop wrote SLEEPING and removed
-its slot, the `finally`-block double-check (§4.4) re-launches; failing that,
+iteration sees it. If work landed while the loop removed its slot, the
+`finally`-block double-check (§4.4) re-launches; failing that,
 the next `wakeAgent` from the writer finds the slot empty and launches.
 
 **No double runs.** `ConcurrentHashMap.compute()` serialises the
@@ -814,12 +815,13 @@ is always a state that genuinely existed on the hosting venue.
 
 ## 6. Design Decisions and Open Questions
 
-### 6.1 Recovery (on hold)
+### 6.1 Recovery
 
-An agent in `"RUNNING"` status after a venue restart was mid-transition.
-`RUNNING` may be resumable if the transition function supports it, so no
-automatic recovery to `"SUSPENDED"` for now. Revisit when transition functions
-can declare resumability.
+A venue restart has no live launcher slots, so startup clears every persisted
+RUNNING marker before scheduling remaining work.
+Durable Jobs, queued inputs, stable lifecycle state, and external interaction
+records survive independently. Recovery may start a fresh attempt from a
+durable boundary; it never treats a persisted executor bit as resumable state.
 
 ### 6.2 Effects
 

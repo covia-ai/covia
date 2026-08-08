@@ -128,74 +128,29 @@ public class AgentConcurrencyTest {
 	// ========== Unit: mergeRunResult ==========
 
 	@Test
-	public void testMergeRunResultDetectsNewSessionPending() {
-		// mergeRunResult should detect session pending messages delivered
-		// DURING the transition and stay RUNNING.
+	public void testMergeRunResultDoesNotPersistExecutorStatus() {
+		// Work that arrives during a transition is durable, but executor
+		// liveness is not part of the merge result.
 		Users users = engine.getVenueState().users();
 		User user = users.ensure(ALICE_DID);
 		AgentState agent = user.ensureAgent("merge-msg", Maps.empty(), null);
-		agent.setStatus(AgentState.RUNNING);
 
-		// Set up a session with a pending message
 		Blob sid = Blob.fromHex("66660001666600016666000166660001");
 		agent.ensureSession(sid, ALICE_DID);
 		agent.appendSessionPending(sid, Maps.of("content", "hello"));
+		Blob taskId = Blob.fromHex("0001");
+		agent.addTask(taskId, Strings.create("new work"));
 
-		// mergeRunResult with 0 drain: session.pending still has the message
-		// → hasSessionPendingInRecord = true → status RUNNING
 		AMap<AString, ACell> merged = agent.mergeRunResult(
-			null, null, Index.none(), null,
-			Maps.of("ts", CVMLong.create(1)),
-			sid, null, 0);
+			null, null, Maps.of("ts", CVMLong.create(1)),
+			sid, null, 0, null, null);
 
-		assertEquals(AgentState.RUNNING, RT.ensureString(merged.get(AgentState.KEY_STATUS)),
-			"Should detect session pending and stay RUNNING");
-
-		// Now drain that message: presentedSessionPendingCount=1
-		AMap<AString, ACell> merged2 = agent.mergeRunResult(
-			null, null, Index.none(), null,
-			Maps.of("ts", CVMLong.create(2)),
-			sid, null, 1);
-
-		assertEquals(AgentState.SLEEPING, RT.ensureString(merged2.get(AgentState.KEY_STATUS)),
-			"No pending messages — should go to SLEEPING");
-	}
-
-	@Test
-	public void testMergeRunResultDetectsNewTask() {
-		// mergeRunResult should detect tasks added DURING the transition
-		// via hasNewTasksNotIn(remainingTasks, presentedTasks).
-		Users users = engine.getVenueState().users();
-		User user = users.ensure(ALICE_DID);
-		AgentState agent = user.ensureAgent("merge-task", Maps.empty(), null);
-		agent.setStatus(AgentState.RUNNING);
-
-		// Add task T1
-		Blob t1 = Blob.fromHex("0001");
-		agent.addTask(t1, Strings.create("task-1"));
-
-		// mergeRunResult presenting T1 as already processed
-		AMap<AString, ACell> merged = agent.mergeRunResult(
-			null, null, agent.getTasks(), null,
-			Maps.of("ts", CVMLong.create(1)));
-
-		assertEquals(AgentState.SLEEPING, RT.ensureString(merged.get(AgentState.KEY_STATUS)),
-			"No new tasks beyond what was presented — SLEEPING");
-
-		// Now add T2 while "transition is running"
-		agent.setStatus(AgentState.RUNNING);
-		Blob t2 = Blob.fromHex("0002");
-		agent.addTask(t2, Strings.create("task-2"));
-
-		// mergeRunResult presenting only T1
-		@SuppressWarnings("unchecked")
-		Index<Blob, ACell> presentedTasks = (Index<Blob, ACell>) (Index<?,?>) Index.none().assoc(t1, Strings.create("task-1"));
-		AMap<AString, ACell> merged2 = agent.mergeRunResult(
-			null, null, presentedTasks, null,
-			Maps.of("ts", CVMLong.create(2)));
-
-		assertEquals(AgentState.RUNNING, RT.ensureString(merged2.get(AgentState.KEY_STATUS)),
-			"New task T2 not in presented set — should stay RUNNING");
+		assertEquals(AgentState.SLEEPING,
+			RT.ensureString(merged.get(AgentState.KEY_STATUS)));
+		assertEquals(1, agent.getSessionPending(sid).count(),
+			"pending work remains available to the live loop");
+		assertNotNull(agent.getTasks().get(taskId),
+			"new task remains available to the live loop");
 	}
 
 	// ========== Integration: concurrent triggers ==========
@@ -559,13 +514,9 @@ public class AgentConcurrencyTest {
 			Maps.of(Fields.AGENT_ID, "resume-wake"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		// Wait for the auto-wake run loop to complete
-		for (int i = 0; i < 50; i++) {
-			if (AgentState.SLEEPING.equals(agent.getStatus())) break;
-			try { Thread.sleep(10); } catch (InterruptedException e) { break; }
-		}
-
-		assertEquals(AgentState.SLEEPING, agent.getStatus(),
+		// Wait on the live executor, not the stable lattice status (which stays
+		// SLEEPING throughout the attempt).
+		assertEquals(AgentState.SLEEPING, awaitFinished(agent),
 			"Agent should complete run loop after resume auto-wake");
 		assertFalse(agent.hasSessionPending(),
 			"Messages should be processed by auto-wake");

@@ -56,9 +56,8 @@ All three funnel into one method: `wakeAgent(agentId, ctx, force)`.
 `wakeAgent` starts a loop only when, in order:
 
 1. no live loop already exists for the agent (else attach to it);
-2. phantom-`RUNNING` is corrected to `SLEEPING` (#64 — crash remnant / stale write);
-3. status is `SLEEPING` (suspended / terminated do not start);
-4. **`force || hasWork(agent)`**, where `hasWork` = "any session has non-empty
+2. status is runnable (`SLEEPING`, or a defensively tolerated stale `RUNNING`; suspended / terminated do not start);
+3. **`force || hasWork(agent)`**, where `hasWork` = "any session has non-empty
    `pending`, or any task exists".
 
 `wakeTime` is **not** consulted by the gate. A scheduled wake works by *firing*
@@ -140,7 +139,7 @@ transient-Job fire goes through `invokeFuture` → `doKick`. Both share `wakeAge
 
 ## 6. Invariants
 
-- **One funnel.** Every wake → `wakeAgent` (atomic launcher CAS, phantom recovery,
+- **One funnel.** Every wake → `wakeAgent` (atomic launcher CAS, stale-marker tolerance,
   gate, vthread dispatch).
 - **Write-then-wake (events).** Intake writes `pending`/`tasks` before calling
   `wakeAgent`. A write landing while a loop runs is picked up by the next

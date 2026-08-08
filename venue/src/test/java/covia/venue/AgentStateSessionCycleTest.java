@@ -29,8 +29,8 @@ import convex.core.lang.RT;
  * Stage A): {@link AgentState#beginSessionCycle},
  * {@link AgentState#updateSessionFrames} (epoch-fenced), the shared
  * root-turn-append/pending-drain helpers, the {@code inCycle} clear inside
- * {@link AgentState#mergeRunResult}, and {@code inCycle}-as-work in the
- * session work predicates.
+ * {@link AgentState#mergeRunResult}, and the rule that {@code inCycle} is a
+ * write fence rather than durable queued work.
  */
 public class AgentStateSessionCycleTest {
 
@@ -167,19 +167,18 @@ public class AgentStateSessionCycleTest {
 			"merge must release the cycle claim in the same CAS");
 	}
 
-	// ========== inCycle counts as work ==========
+	// ========== inCycle is not work ==========
 
 	@Test
-	public void testInCycleCountsAsWork() {
-		// Drain everything: pending empty, but the cycle is unfinished — the
-		// session must still register as work (crash-interrupted cycles would
-		// otherwise never re-run, their input already consumed).
+	public void testInCycleDoesNotCountAsWork() {
+		// Drain everything: the epoch remains only as a live write fence. It is
+		// not a durable instruction to resume the interrupted execution.
 		agent.appendSessionPending(sid, envelope("m1"));
 		assertTrue(agent.beginSessionCycle(sid, EPOCH_A, Vectors.of(turn("m1")), 1));
 		assertEquals(0, agent.getSessionPending(sid).count());
 
-		assertTrue(agent.hasSessionPending(), "inCycle session must count as work");
-		assertEquals(sid, agent.pickSessionWithPending(), "inCycle session must be pickable");
+		assertFalse(agent.hasSessionPending(), "inCycle must not count as queued work");
+		assertNull(agent.pickSessionWithPending(), "inCycle session must not be pickable");
 
 		mergeMinimalCycle();
 		assertFalse(agent.hasSessionPending(), "merged cycle with empty pending is quiescent");
@@ -226,7 +225,7 @@ public class AgentStateSessionCycleTest {
 	private void mergeMinimalCycle() {
 		AMap<AString, ACell> timelineEntry = Maps.of(
 			Strings.create("op"), Strings.create("test-cycle"));
-		agent.mergeRunResult(Maps.empty(), null, Index.none(), null,
+		agent.mergeRunResult(Maps.empty(), null,
 			timelineEntry, sid, null, 0, null, null);
 	}
 }

@@ -46,15 +46,15 @@ Everything goes here — nothing lives alongside. Live turns from chat/message i
 
 Chat sessions typically never `complete` the root frame — they run indefinitely, appending turns. One-shot invocations (a single grid operation call on a fresh session) do complete the root frame, and the session's role is the same as a single-turn task.
 
-### Persistence, interruption, and crash resume
+### Persistence and interruption
 
-**Write model.** A sessioned cycle claims the session by writing an `inCycle` epoch; every frame write is fenced on that epoch, so a superseded cycle (cancelled by suspend/delete, session removed, or reclaimed after a crash) cannot corrupt the stack — its writes bounce. The merge at cycle end clears the claim. Terminal frames carry an explicit `status` (`complete` | `failed`), written in the same CAS as their terminal turn, so a clean ending is never mistaken for a crash. Unsessioned and direct-invoke runs keep a local stack and return it in the transition output; sessioned runs emit no copy — the session record is authoritative.
+**Write model.** A sessioned execution attempt claims the session by writing an `inCycle` epoch; every frame write is fenced on that epoch, so a superseded attempt (cancelled by suspend/delete, session removed, or replaced by a later attempt) cannot corrupt the stack — its writes bounce. The merge at attempt end clears the claim. Terminal frames carry an explicit `status` (`complete` | `failed`), written in the same CAS as their terminal turn. Unsessioned and direct-invoke runs keep a local stack and return it in the transition output; sessioned runs emit no copy — the session record is authoritative.
 
-**Durability bound.** Lattice writes reach the store's mmap via the ~100ms sweep and are fsynced every `FLUSH_INTERVAL_MS` (10s default). An unclean kill can therefore lose up to ~10s of the most recent turns — bounded, versus losing the whole in-flight tree before frames were lattice-resident. Cycle semantics are **at-least-once**: a cycle that crashed after its final response but before the merge may re-run, and the model sees its own prior turns.
+**Durability bound.** Lattice writes reach the store's mmap via the ~100ms sweep and are fsynced every `FLUSH_INTERVAL_MS` (10s default). External interactions already written to the conversation therefore remain available for audit. The local execution attempt itself is not a checkpoint and is never resumed.
 
-**Crash resume.** A stale `inCycle` with no live loop means the venue died mid-cycle. The boot scan (`wakeAgentsWithWork`) wakes any agent whose durable state shows work — pending envelopes, queued tasks, or a stale claim; recovery never re-executes intake ops (#214). On the resumed cycle: dangling toolCalls get one synthetic tool-result turn ("venue restarted — effects may or may not have applied; verify before retrying") — nothing is re-executed blindly, the model decides; then the stack settles deepest-first — terminal children pop with their recorded outcome and are never re-run, live children resume their loop, and the root finally consumes any newly arrived input. The caller's side: an in-flight `agent:chat` job fails at boot with the sessionId on the record (the session is intact — re-send); an in-flight `agent:request` job survives as STARTED while its durable task remains queued.
+**Venue restart.** Startup clears persisted `RUNNING` and stale `inCycle` markers after generic Job recovery. PENDING/STARTED request Jobs fail honestly; the agent adapter removes their task/chat intake before considering remaining queued work. A stale epoch alone never wakes an agent. If a later external input starts a fresh attempt on the same session, dangling tool calls are converted to explicit unknown-outcome failures and unfinished child frames are popped un-run; their internal loops are not continued.
 
-**Operator suspend is not a crash.** Suspend settles the claim, so the session reads as quiescent: nothing auto-resumes. Leftover child frames are popped un-run ("interrupted — re-issue if needed") on the next cycle.
+**Operator suspend follows the same attempt boundary.** Suspend settles the claim. Leftover child frames are popped un-run ("interrupted — re-issue if needed") only if a later external input starts a fresh attempt.
 
 ### Per-question bracketing
 
@@ -494,7 +494,7 @@ subgoal("Analyse Delta Corp")
 
 Parent decides: retry, skip, escalate, or fail itself. The failed child frame is popped from the stack; its conversation is kept as a compacted segment in the parent's conversation with `summary` derived from the failure reason — useful for debugging and for the parent's next-inference context.
 
-**Transition atomicity.** All frame-stack changes produced by a transition (pushes, pops, appends, compactions, pending drains) land atomically on the session record. A transition that crashes mid-inference leaves the lattice at its pre-transition state; the run loop retries from there. No partial stack is ever visible to readers. Because the full stack is on the lattice, the failure point is already explorable.
+**Transition atomicity.** Each frame-stack mutation (push, pop, append, compaction, pending drain) lands atomically on the session record. A process failure can leave a valid intermediate frame stack, but never a torn lattice write. That state is retained for audit and may be settled by a later fresh attempt; the failed executor itself is not resumed.
 
 ## Zooming Into History
 
@@ -856,7 +856,7 @@ As goals get more complex, the agent can opt into more tools:
 17. **Existing tools reused.** `context_load`, `context_unload`, all `covia:*` operations, `agent:*` operations — everything from the existing tool palette. Goal tree adds 7 harness tools, not a new tool universe.
 18. **Budget is harness-managed by default.** Agent gets yes/no on loads, not arithmetic. Context map shows numbers for advanced agents.
 19. **Context layout follows attention research.** Reference at top (primacy), conversation in middle, current turn at bottom (recency).
-20. **Frame stack is lattice data on the session record.** Stored in `sessions/<sid>/frames`. Explorable, mergeable, recoverable. Survives across transitions and agent restarts.
+20. **Frame stack is lattice data on the session record.** Stored in `sessions/<sid>/frames`. Explorable and mergeable. It survives transitions and venue restarts as durable conversation state, not as an executor checkpoint.
 21. **Compacted segments accumulate.** Each `compact` appends a segment. Phase boundaries preserved. Per-question bracketing is the primary use in chat sessions.
 22. **Intake queue stays at session level.** `sessions/<sid>/pending` is the pre-transition staging area; envelopes are drained into the root frame as `user` turns atomically with the transition's other writes. Keeps concurrent intake separate from the append path.
 

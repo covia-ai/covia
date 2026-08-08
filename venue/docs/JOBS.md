@@ -146,9 +146,7 @@ Re-execution would double side effects for non-idempotent ops
 |----------------|---------|---------------|
 | `PENDING` | `FAILED` — "restarted before execution began" | retry |
 | `STARTED` (most ops) | `FAILED` — "effects may or may not have applied; verify before retrying" | verify, then retry |
-| `STARTED` `agent:chat` | `FAILED` — session intact; the record's `sessionId` names the conversation | re-send into the same session |
-| `STARTED` `agent:request`, task still queued | restored, stays `STARTED` — the durable task drives completion | keep polling by ID |
-| `STARTED` `agent:request`, task gone | `FAILED` — "task concluded; check the agent timeline" | inspect / retry |
+| `STARTED` agent request/chat | `FAILED`; AgentAdapter removes its queued intake and stale session fence | inspect external interaction records, then retry if safe |
 | `PAUSED` / `INPUT_REQUIRED` / `AUTH_REQUIRED` | restored live | continue as before |
 
 Restored non-terminal jobs **re-occupy their caller's concurrency-cap
@@ -156,9 +154,10 @@ permit** (`JobSemaphore.reserveRecovered`, which may drive permits negative):
 after a restart the cap still holds, and new work admits only as restored
 jobs finish.
 
-Agent-side work (pending session envelopes, queued tasks, interrupted
-`inCycle` cycles) is all durable and resumes independently via the boot scan
-(`AgentAdapter.wakeAgentsWithWork`).
+After generic Job recovery, AgentAdapter reconciles its own queues: intake for
+terminal Jobs is removed, stale execution markers/fences are cleared, and only
+remaining durable queued work can start a fresh attempt. `inCycle` never causes
+a wake by itself.
 
 ## Admission
 

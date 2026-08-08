@@ -1002,28 +1002,20 @@ public class JobManager {
 	// ========== Job Recovery ==========
 
 	/**
-	 * Stabilises jobs from the lattice after a restart. <b>Nothing is ever
-	 * re-executed</b> (#214): recovery leaves every job in a stable, honest
-	 * state so callers can resume, cancel, or retry as they wish.
+	 * Stabilises jobs from the lattice after a restart. Execution attempts do
+	 * not survive the venue process; durable waiting Jobs do.
 	 *
 	 * <ul>
 	 *   <li>PENDING — failed: execution never began; the caller retries.</li>
-	 *   <li>STARTED {@code agent:request} whose task is still in the agent's
-	 *       tasks index — restored as a live Job, still STARTED: the durable
-	 *       task drives completion when the agent's work resumes (long-running
-	 *       jobs survive restarts; callers keep polling by ID).</li>
-	 *   <li>STARTED anything else — failed with a message saying effects may
+	 *   <li>STARTED — failed with a message saying effects may
 	 *       or may not have applied. Re-execution would double side effects
 	 *       (e.g. {@code convex:transact}, {@code http:post}); the caller
-	 *       verifies and retries. A crashed {@code agent:chat} fails too —
-	 *       the session is intact and its id is on the record, so the caller
-	 *       just re-sends.</li>
+	 *       verifies and retries.</li>
 	 *   <li>PAUSED / INPUT_REQUIRED / AUTH_REQUIRED — restored (unchanged).</li>
 	 * </ul>
 	 *
-	 * <p>Agent-side work (pending envelopes, queued tasks, interrupted
-	 * {@code inCycle} cycles) is all durable and resumed separately by the
-	 * boot scan ({@code AgentAdapter.wakeAgentsWithWork}).</p>
+	 * <p>Adapters reconcile their own durable intake after this generic Job
+	 * pass; JobManager has no knowledge of adapter-specific queue structures.</p>
 	 */
 	@SuppressWarnings("unchecked")
 	public void recoverJobs() {
@@ -1053,7 +1045,8 @@ public class JobManager {
 
 				AString status = RT.ensureString(record.get(Fields.STATUS));
 				if (Status.PENDING.equals(status) || Status.STARTED.equals(status)) {
-					if (stabiliseJob(jobID, record, status, did)) kept++; else stabilised++;
+					stabiliseJob(jobID, record, status, did);
+					stabilised++;
 				} else {
 					restoreJob(jobID, record, did);
 					kept++;
@@ -1067,54 +1060,18 @@ public class JobManager {
 	}
 
 	/**
-	 * Stabilises one PENDING/STARTED job found at boot. Returns true when the
-	 * job was restored live (STARTED {@code agent:request} with its durable
-	 * task still queued), false when it was failed with an honest
-	 * interruption message. See {@link #recoverJobs()} for the contract.
+	 * Fails one PENDING/STARTED Job found at boot.
 	 */
-	private boolean stabiliseJob(Blob jobID, AMap<AString, ACell> record, AString status, AString callerDID) {
+	private void stabiliseJob(Blob jobID, AMap<AString, ACell> record, AString status, AString callerDID) {
 		if (Status.PENDING.equals(status)) {
 			markJobFailed(jobID, record,
 				"Venue restarted before execution began — retry if desired", callerDID);
-			return false;
-		}
-
-		// Classify by the op's adapter dispatch string (e.g. "agent:request").
-		AString opRef = RT.ensureString(record.get(Fields.OP));
-		Asset asset = (opRef != null) ? engine.resolveAsset(opRef) : null;
-		String adapterOp = (asset != null) ? AAdapter.getAdapterOperation(asset.meta()) : null;
-
-		if ("agent:request".equals(adapterOp)) {
-			// The task index is the durable work marker (taskId == jobID). If
-			// the task is still queued, the job legitimately outlives the
-			// restart: restore it and let the resumed agent complete it.
-			AString agentId = RT.ensureString(RT.getIn(record, Fields.INPUT, Fields.AGENT_ID));
-			User user = engine.getVenueState().users().get(callerDID);
-			AgentState agent = (user != null && agentId != null) ? user.agent(agentId.toString()) : null;
-			Index<Blob, ACell> tasks = (agent != null) ? agent.getTasks() : null;
-			if (tasks != null && tasks.get(jobID) != null) {
-				restoreJob(jobID, record, callerDID);
-				log.info("Restored in-flight task job {} (task still queued)", jobID);
-				return true;
-			}
-			markJobFailed(jobID, record,
-				"Venue restarted as the task concluded — check the agent timeline/session for the result",
-				callerDID);
-			return false;
-		}
-
-		if ("agent:chat".equals(adapterOp)) {
-			AString sid = RT.ensureString(record.get(Fields.SESSION_ID));
-			markJobFailed(jobID, record,
-				"Venue restarted mid-conversation — the session is intact; re-send your message"
-				+ ((sid != null) ? " (sessionId " + sid + ")" : ""), callerDID);
-			return false;
+			return;
 		}
 
 		markJobFailed(jobID, record,
 			"Venue restarted during execution — effects may or may not have applied;"
 			+ " verify state before retrying", callerDID);
-		return false;
 	}
 
 	/**

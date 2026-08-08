@@ -96,6 +96,13 @@ public class AgentAdapterTest {
 		}
 	}
 
+	/** Current API-visible status, including the live executor overlay. */
+	private AString observableStatus(AgentState agent) {
+		AMap<AString, ACell> info = ((AgentAdapter) engine.getAdapter("agent"))
+			.agentInfo(RequestContext.of(ALICE_DID), agent.getAgentId());
+		return RT.ensureString(info.get(Fields.STATUS));
+	}
+
 	// ========== agent:create ==========
 
 	/**
@@ -1999,8 +2006,7 @@ public class AgentAdapterTest {
 	@Test
 	public void testTriggerWaitFalseReturnsImmediately() {
 		// wait=false → return immediately with status RUNNING. Run loop still
-		// executes in the background; caller polls via agent:info or
-		// covia:read path=g/<agent>/status.
+		// executes in the background; caller observes it via agent:info.
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "async-agent",
@@ -2102,17 +2108,12 @@ public class AgentAdapterTest {
 	}
 
 	/**
-	 * Regression for #64 — phantom RUNNING state. If the agent's lattice status
-	 * shows RUNNING but no live run exists (crash-recovery remnant, stale
-	 * write, or race that slips past clean-exit), a subsequent trigger must
-	 * still be able to start a fresh loop. The runningLoops slot is the source
-	 * of truth for liveness — wakeAgent corrects the lattice inside the atomic
-	 * ConcurrentHashMap.compute() update.
+	 * Legacy persisted RUNNING is not liveness. The API reports SLEEPING when
+	 * no executor exists, and the next wake performs the one-way data migration
+	 * before starting normally.
 	 *
-	 * <p>Deterministic: we force the phantom by writing status=RUNNING
-	 * directly while no run is live (fresh agent, no triggers yet), then
-	 * issue a normal trigger. Without the fix this fails with "Cannot start
-	 * agent"; with the fix the trigger recovers and completes.</p>
+	 * <p>Deterministic: force the old record shape while no run is live, observe
+	 * it through agent:info, then issue a normal trigger.</p>
 	 */
 	@Test
 	public void testPhantomRunningRecovery() {
@@ -2127,7 +2128,9 @@ public class AgentAdapterTest {
 
 		// Force the phantom: status=RUNNING with no runningLoops entry
 		agent.setStatus(AgentState.RUNNING);
-		assertEquals(AgentState.RUNNING, agent.getStatus());
+		assertEquals(AgentState.RUNNING, agent.getStatus()); // raw legacy record
+		assertEquals(AgentState.SLEEPING, observableStatus(agent),
+			"persisted RUNNING without a live executor must not report liveness");
 
 		// Trigger must recover — not fail with "Cannot start agent"
 		Job job = engine.jobs().invokeOperation(
@@ -2136,7 +2139,7 @@ public class AgentAdapterTest {
 			RequestContext.of(ALICE_DID));
 		ACell result = job.awaitResult(5000);
 
-		assertNotNull(result, "Trigger should recover from phantom RUNNING");
+		assertNotNull(result, "Trigger should tolerate stale persisted RUNNING");
 		assertEquals(Status.COMPLETE, job.getStatus(),
 			"Job should complete, not fail with 'Cannot start agent'");
 		assertEquals(AgentState.SLEEPING, RT.getIn(result, Fields.STATUS));
@@ -2540,13 +2543,15 @@ public class AgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "del-wedge", Fields.INPUT, Maps.of("data", "slow")),
 			RequestContext.of(ALICE_DID));
 
-		// Wait until the run loop is live in the never-completing transition
+		// Wait until the live executor reports the never-completing transition.
 		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("del-wedge");
 		long deadline = System.currentTimeMillis() + 5000;
-		while (!AgentState.RUNNING.equals(agent.getStatus())
+		while (!AgentState.RUNNING.equals(observableStatus(agent))
 				&& System.currentTimeMillis() < deadline) Thread.sleep(10);
-		assertEquals(AgentState.RUNNING, agent.getStatus(),
+		assertEquals(AgentState.RUNNING, observableStatus(agent),
 			"agent should be blocked in the never-completing transition");
+		assertEquals(AgentState.RUNNING, agent.getStatus(),
+			"RUNNING is persisted for lattice observers while the executor is live");
 
 		engine.jobs().invokeOperation(
 			"v/ops/agent/delete",
@@ -3066,7 +3071,9 @@ public class AgentAdapterTest {
 				Fields.TIMEOUT, 0),
 			RequestContext.of(ALICE_DID)).get(5000, java.util.concurrent.TimeUnit.MILLISECONDS);
 
-		assertEquals(Status.STARTED, RT.getIn(snapshot, Fields.STATUS));
+		AString snapshotStatus = RT.ensureString(RT.getIn(snapshot, Fields.STATUS));
+		assertTrue(Status.PENDING.equals(snapshotStatus) || Status.STARTED.equals(snapshotStatus),
+			"accepted request is queued or already picked: " + snapshot);
 		Blob taskId = Job.parseID(RT.getIn(snapshot, Fields.ID));
 		assertNotNull(taskId);
 		Job task = engine.jobs().getJob(taskId);
@@ -3269,12 +3276,13 @@ public class AgentAdapterTest {
 
 		// The async pattern: the request returns immediately with a pollable task
 		// Job. The agent runs asynchronously, so the job is legitimately either
-		// STARTED (not yet picked up) or already COMPLETE — a caller must handle
-		// both rather than assume one. Assert only that we got a real, pollable
+		// PENDING (queued), STARTED (picked), or already COMPLETE — a caller must
+		// handle all three rather than assume one. Assert only that we got a pollable
 		// job in a valid state.
 		AString status = job.getStatus();
-		assertTrue(Status.STARTED.equals(status) || Status.COMPLETE.equals(status),
-			"Async request should return a STARTED or COMPLETE job, was: " + status);
+		assertTrue(Status.PENDING.equals(status) || Status.STARTED.equals(status)
+				|| Status.COMPLETE.equals(status),
+			"Async request should return a queued, started or complete job, was: " + status);
 
 		// Poll to completion, then read the output — the normal async retrieval path.
 		job.awaitResult(5000);
@@ -3360,7 +3368,9 @@ public class AgentAdapterTest {
 		long elapsedMs = (System.nanoTime() - start) / 1_000_000L;
 
 		assertTrue(elapsedMs < 500, "timeout=0 should return immediately, took " + elapsedMs + "ms");
-		assertEquals(Status.STARTED, RT.getIn(result, Fields.STATUS));
+		AString status = RT.ensureString(RT.getIn(result, Fields.STATUS));
+		assertTrue(Status.PENDING.equals(status) || Status.STARTED.equals(status),
+			"accepted request is queued or already picked: " + result);
 		assertNotNull(RT.getIn(result, Fields.ID), "Async response must carry Job id");
 	}
 
@@ -4084,8 +4094,9 @@ public class AgentAdapterTest {
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState old = user.agent("run-ow");
 		long deadline = System.currentTimeMillis() + 5000;
-		while (!AgentState.RUNNING.equals(old.getStatus())
+		while (!AgentState.RUNNING.equals(observableStatus(old))
 				&& System.currentTimeMillis() < deadline) Thread.sleep(10);
+		assertEquals(AgentState.RUNNING, observableStatus(old));
 		assertEquals(AgentState.RUNNING, old.getStatus());
 
 		// History-preserving mutation cannot safely swap config under an active
@@ -4425,9 +4436,6 @@ public class AgentAdapterTest {
 		assertTrue(agent.getTs() > 0, "Agent should have a ts after creation");
 		assertEquals(0, agent.getTasks().count(), "New agent should have empty tasks");
 		assertEquals(0, agent.getPending().count(), "New agent should have empty pending");
-
-		agent.setStatus(AgentState.RUNNING);
-		assertEquals(AgentState.RUNNING, agent.getStatus());
 
 		agent.setStatus(AgentState.SUSPENDED);
 		assertEquals(AgentState.SUSPENDED, agent.getStatus());
