@@ -11,11 +11,13 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.a2aproject.sdk.jsonrpc.common.json.JsonUtil;
 import org.a2aproject.sdk.spec.AgentCard;
@@ -24,8 +26,10 @@ import org.a2aproject.sdk.spec.Message;
 import org.a2aproject.sdk.spec.MessageSendParams;
 import org.a2aproject.sdk.spec.Part;
 import org.a2aproject.sdk.spec.Task;
+import org.a2aproject.sdk.spec.TaskIdParams;
 import org.a2aproject.sdk.spec.TaskQueryParams;
 import org.a2aproject.sdk.spec.TaskState;
+import org.a2aproject.sdk.spec.TaskStatusUpdateEvent;
 import org.a2aproject.sdk.spec.TextPart;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -387,6 +391,54 @@ public class A2AAgentCardTest {
 		awaitTask(endpoint, next.id(), jwt, TaskState.TASK_STATE_COMPLETED);
 	}
 
+	/**
+	 * #305 — an A2A turn has no synchronous completion deadline. SendMessage
+	 * returns the ordinary durable task Job immediately; the same id can be
+	 * reattached through polling or SSE, and both views converge on one final
+	 * state. The deterministic transition delay keeps the task live while the
+	 * client disconnects from SendMessage and opens a fresh subscription.
+	 */
+	@Test
+	public void longTurnReattachesAndPollingConvergesWithSse() throws Exception {
+		AKeyPair kp = AKeyPair.generate();
+		AString ownerDid = didOf(kp);
+		String jwt = bearerFor(kp);
+		String agentId = "LongTurn" + Long.toUnsignedString(System.nanoTime());
+		VenueHTTP client = VenueHTTP.create(URI.create(BASE_URL), VenueAuth.bearer(jwt));
+		client.setTimeout(5000);
+
+		Job created = client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
+			Fields.AGENT_ID, Strings.create(agentId),
+			Fields.CONFIG, Maps.of(
+				Fields.OPERATION, Strings.create("v/test/ops/taskcomplete"),
+				Fields.DELAY, convex.core.data.prim.CVMLong.create(3000))));
+		assertEquals(Status.COMPLETE, created.getStatus(), created.getErrorMessage());
+
+		String endpoint = "/a2a/" + ownerDid + "/g/" + agentId;
+		Task submitted = extractTask(parse(post(endpoint,
+			rpcEnvelope("long-send", "SendMessage",
+				new MessageSendParams(userMessage("long turn"), null, null)), jwt)));
+		assertNotNull(submitted);
+		assertNotNull(submitted.id(), "SendMessage must return the durable Job id");
+		assertNotNull(submitted.contextId(), "SendMessage must return the session id");
+		assertTrue(!submitted.status().state().isFinal(),
+			"SendMessage must not wait for or manufacture a terminal timeout");
+
+		TaskStatusUpdateEvent streamed = awaitFinalStatusUpdate(endpoint,
+			submitted.id(), jwt, 7000);
+		assertEquals(submitted.id(), streamed.taskId());
+		assertEquals(submitted.contextId(), streamed.contextId());
+		assertTrue(streamed.isFinal());
+		assertEquals(TaskState.TASK_STATE_COMPLETED, streamed.status().state());
+
+		Task polled = awaitTask(endpoint, submitted.id(), jwt,
+			TaskState.TASK_STATE_COMPLETED);
+		assertEquals(streamed.taskId(), polled.id());
+		assertEquals(streamed.contextId(), polled.contextId());
+		assertEquals(streamed.status().state(), polled.status().state(),
+			"GetTask and SubscribeToTask must converge on the same Job state");
+	}
+
 	// ---- helpers ----
 
 	private static AString didOf(AKeyPair kp) {
@@ -449,6 +501,69 @@ public class A2AAgentCardTest {
 			+ "; last state=" + (task == null ? null : task.status().state()));
 	}
 
+	private TaskStatusUpdateEvent awaitFinalStatusUpdate(String endpoint,
+			String taskId, String jwt, long timeoutMs) throws Exception {
+		HttpResponse<java.util.stream.Stream<String>> response = postStreaming(endpoint,
+			rpcEnvelope("long-subscribe", "SubscribeToTask", new TaskIdParams(taskId)), jwt);
+		assertEquals(200, response.statusCode());
+		assertTrue(response.headers().firstValue("Content-Type").orElse("")
+			.contains("text/event-stream"));
+
+		AtomicReference<TaskStatusUpdateEvent> terminal = new AtomicReference<>();
+		AtomicReference<Throwable> consumerFailure = new AtomicReference<>();
+		List<String> observed = Collections.synchronizedList(new java.util.ArrayList<>());
+		Object signal = new Object();
+		Thread consumer = Thread.ofVirtual().start(() -> {
+			try (java.util.stream.Stream<String> lines = response.body()) {
+				var iterator = lines.iterator();
+				while (iterator.hasNext()) {
+					String line = iterator.next();
+					if (!line.startsWith("data:")) continue;
+					observed.add(line);
+					@SuppressWarnings("unchecked")
+					Map<String, Object> envelope = JsonUtil.OBJECT_MAPPER.fromJson(
+						line.substring(line.indexOf(':') + 1).trim(), Map.class);
+					Map<String, Object> result = castMap(envelope.get("result"));
+					Map<String, Object> update = result == null
+						? null : castMap(result.get("statusUpdate"));
+					if (update == null) continue;
+					TaskStatusUpdateEvent event = JsonUtil.OBJECT_MAPPER.fromJson(
+						JsonUtil.OBJECT_MAPPER.toJson(update), TaskStatusUpdateEvent.class);
+					if (!event.isFinal()) continue;
+					terminal.set(event);
+					synchronized (signal) { signal.notifyAll(); }
+					return;
+				}
+			} catch (RuntimeException failure) {
+				consumerFailure.compareAndSet(null, failure);
+				synchronized (signal) { signal.notifyAll(); }
+			}
+		});
+
+		long deadline = System.currentTimeMillis() + timeoutMs;
+		synchronized (signal) {
+			while (terminal.get() == null && consumerFailure.get() == null
+					&& System.currentTimeMillis() < deadline) {
+				signal.wait(Math.max(1, deadline - System.currentTimeMillis()));
+			}
+		}
+		try { response.body().close(); } catch (Exception ignored) {}
+		if (!consumer.join(Duration.ofMillis(500))) consumer.interrupt();
+		if (terminal.get() == null) {
+			Task current = extractTask(parse(post(endpoint,
+				rpcEnvelope("long-diagnostic", "GetTask", new TaskQueryParams(taskId, null)), jwt)));
+			throw new AssertionError("SubscribeToTask did not emit a final update; failure="
+				+ consumerFailure.get() + "; frames=" + observed + "; current="
+				+ (current == null ? null : current.status().state()));
+		}
+		return terminal.get();
+	}
+
+	@SuppressWarnings("unchecked")
+	private static Map<String, Object> castMap(Object value) {
+		return value instanceof Map<?, ?> ? (Map<String, Object>) value : null;
+	}
+
 	private HttpResponse<String> postUnchecked(String path, Object body, String jwt) {
 		try {
 			return post(path, body, jwt);
@@ -471,5 +586,16 @@ public class A2AAgentCardTest {
 				.timeout(Duration.ofSeconds(10));
 		if (jwt != null) b.header("Authorization", "Bearer " + jwt);
 		return http.send(b.build(), HttpResponse.BodyHandlers.ofString());
+	}
+
+	private HttpResponse<java.util.stream.Stream<String>> postStreaming(
+			String path, Object body, String jwt) throws Exception {
+		HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(BASE_URL + path))
+			.header("Content-Type", "application/json")
+			.header("Accept", "text/event-stream")
+			.POST(HttpRequest.BodyPublishers.ofString(JsonUtil.OBJECT_MAPPER.toJson(body)))
+			.timeout(Duration.ofSeconds(10));
+		if (jwt != null) b.header("Authorization", "Bearer " + jwt);
+		return http.send(b.build(), HttpResponse.BodyHandlers.ofLines());
 	}
 }

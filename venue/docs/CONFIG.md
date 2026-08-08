@@ -805,8 +805,8 @@ LAN-reachable one. The agent-card GET is public and works regardless.
 **Per-agent endpoints (COG-14):** beyond the front door, every hosted agent is
 addressable at `POST /a2a/<ownerDID>/g/<agentId>` (JSON-RPC `SendMessage` →
 `agent:request` task Job = A2A Task; `GetTask`, `CancelTask`,
-`GetExtendedAgentCard`), with its card at the A2A well-known path below that
-base. Private by default: the owner interacts as themselves; anonymous
+`SubscribeToTask`, `GetExtendedAgentCard`), with its card at the A2A well-known
+path below that base. Private by default: the owner interacts as themselves; anonymous
 non-owners get an existence-hiding 404, authenticated non-owners 403.
 Publishing is per-agent config: `a2a: {public: true}` makes the card
 discoverable; adding an explicit `a2a.caps` scope accepts stranger
@@ -848,11 +848,17 @@ The result is an A2A Task. Poll its `id` at the same `AGENT_URL` with
 The `Authorization` header may be omitted only when the agent is explicitly
 published with an `a2a.caps` scope that permits the interaction.
 
-Current boundaries: incoming per-agent `taskId` continuation is not implemented
-(#306); long-running turns still need stable synchronous-boundary reattachment
-(#305); and outbound `v/ops/a2a/*` calls do not yet relay caller authority to a
-remote venue (#304). Outbound calls do pass the HTTP adapter's SSRF checks and
-operator allow/block lists.
+`SendMessage` never waits for the agent turn to finish. It returns the current
+Task snapshot as soon as the durable Job has been submitted: Task `id` is the
+Job id and `contextId` is the session id. A turn may therefore run for minutes,
+days, or longer without crossing a protocol timeout or changing identity.
+Reconnect with `GetTask`, or open `SubscribeToTask` at the same endpoint for
+SSE updates. Both read the same Job record and converge on the same terminal
+state; closing an HTTP request or SSE connection does not fail or cancel it.
+
+Current boundary: outbound `v/ops/a2a/*` calls do not yet relay caller authority
+to a remote venue (#304). Outbound calls do pass the HTTP adapter's SSRF checks
+and operator allow/block lists.
 
 ## Secrets bootstrap
 

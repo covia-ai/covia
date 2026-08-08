@@ -161,8 +161,11 @@ trust branch exists. The task Job records its session under `SESSION_ID` (which
 `Job.completeWith` preserves across completion), so `A2ACodec` surfaces
 `contextId = session` for the task's whole lifecycle — the same on `SendMessage`
 and on a later `GetTask`. `GetTask` / `CancelTask` reuse the front-door by-id
-handlers (a Task id is a global, caller-scoped Job id). Task continuations with
-an incoming `taskId` are not yet implemented (#306).
+handlers (a Task id is a global, caller-scoped Job id). `SubscribeToTask`
+attaches SSE updates directly to that same Job. A fresh `SendMessage` returns
+immediately with its Task and session identifiers; it never imposes a
+synchronous turn deadline. Polling and SSE therefore observe one state machine
+and converge on the same final Task.
 
 ## Relationship to the venue-as-single-agent model
 
@@ -183,6 +186,9 @@ Shipped:
 - Private-by-default cards, explicit public publication, and attenuated
   anonymous interaction scopes alongside UCAN delegation.
 - `GetTask` and `CancelTask` on the per-agent endpoint.
+- `SubscribeToTask` reattachment on the per-agent endpoint, backed by the same
+  durable Job used by polling.
+- Incoming `taskId` continuation, idempotent by A2A `messageId` (#306).
 
 The route, publication and task-mapping contract is covered by
 `A2AAgentCardTest`; common JSON-RPC and codec behavior is covered by `A2ATest`,
@@ -191,5 +197,3 @@ The route, publication and task-mapping contract is covered by
 Open protocol work:
 
 - #304 — relay authenticated caller authority for outbound A2A requests.
-- #305 — define stable reattachment when a turn outlives the synchronous wait.
-- #306 — support per-agent multi-turn continuation with incoming `taskId`.
