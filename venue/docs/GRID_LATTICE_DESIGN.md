@@ -211,7 +211,7 @@ Each agent is a single atomic LWW value — the entire agent record is replaced 
 **What users see.** The user-visible agent surface is:
 
 - **`config`** — the agent's declared behaviour: transition operation, name, description, tags, A2A skills, tool palette, protocol settings. This is what an author writes when creating an agent.
-- **`status`** — high-level lifecycle (`SLEEPING` / `RUNNING` / `SUSPENDED` / `TERMINATED`), observable via `agent:info` or `covia:read`.
+- **`status`** — lifecycle plus persisted execution marker (`SLEEPING` / `RUNNING` / `SUSPENDED` / `TERMINATED`). The hosting venue validates RUNNING against its live launcher and clears stale markers at startup.
 - **Virtual namespaces `n/`, `c/`, `t/`** — user-writable scratch scoped to agent, session, and job. See §4.5.
 
 Internal framework fields (sessions, tasks, pending, timeline, caps, scheduling state) are managed by the runtime and are not a stable user-writable surface. Their structure is documented where it's authoritative:
@@ -1069,7 +1069,7 @@ The venue's Ed25519 keypair signs the venue state at the point of **persistence*
 
 ### A.5 Persistence
 
-**Startup:** Load signed state from Etch store via `store.getRootData()`, verify signature (own keypair), initialise cursors, resume operations. Job recovery walks the `:jobs` index and **stabilises — nothing is ever re-executed** (re-execution would double side effects for non-idempotent ops): PENDING and interrupted STARTED jobs fail with an honest restart message so callers can verify/retry; STARTED `agent:request` jobs whose durable task is still queued are restored live (long-running jobs survive restarts); PAUSED/INPUT_REQUIRED/AUTH_REQUIRED are restored as live in-memory Job objects. Agent work resumes separately via the boot scan (`wakeAgentsWithWork`), driven purely by durable state (pending envelopes, queued tasks, stale `inCycle` claims).
+**Startup:** Load signed state from Etch store via `store.getRootData()`, verify signature (own keypair), and initialise cursors. Job recovery stabilises PENDING/interrupted STARTED Jobs as FAILED and restores the stable waiting family (PAUSED/INPUT_REQUIRED/AUTH_REQUIRED). AgentAdapter then clears stale RUNNING/session fences, removes intake belonging to terminal Jobs, preserves jobless lattice tasks, and wakes only remaining durable queued work. No internal agent execution attempt is resumed.
 
 **Periodic sync:** Sign current venue state, write to Etch via `store.setRootData()`. Frequency is configurable:
 - **On every API request** — Maximum durability, higher IO cost (current default via `app.after("/api/*")`)

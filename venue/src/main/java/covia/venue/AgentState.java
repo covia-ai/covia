@@ -63,14 +63,12 @@ public class AgentState extends ALatticeComponent<ACell> {
 	// Session record field keys (scoped within a single session map)
 	private static final AString K_C        = Strings.intern("c");
 	private static final AString K_FRAMES   = Strings.intern("frames");
-	/** Session cycle epoch: present while a transition cycle owns this session
+	/** Session attempt epoch: present while a transition owns this session
 	 *  (set by {@link #beginSessionCycle}, cleared by {@link #mergeRunResult}).
-	 *  Serves three duties: write fence for {@link #updateSessionFrames} (a
+	 *  Serves as a write fence for {@link #updateSessionFrames} (a
 	 *  cancelled cycle's zombie thread cannot write once a new epoch claims the
-	 *  session), work signal (a session mid-cycle counts as having work, so an
-	 *  interrupted cycle re-runs even though its pending was already drained),
-	 *  and crash detector (a stale epoch with no live loop means the merge
-	 *  never ran — the resume path repairs before continuing). */
+	 *  session). A stale epoch after restart is abandoned executor state; a
+	 *  later attempt may supersede it but boot never wakes solely for it. */
 	private static final AString K_IN_CYCLE = Strings.intern("inCycle");
 	private static final AString K_META     = Strings.intern("meta");
 	private static final AString K_PARTIES  = Strings.intern("parties");
@@ -107,6 +105,7 @@ public class AgentState extends ALatticeComponent<ACell> {
 
 	// Status constants
 	public static final AString SLEEPING   = Strings.intern("SLEEPING");
+	/** Persisted executor marker; live ownership is verified by AgentAdapter. */
 	public static final AString RUNNING    = Strings.intern("RUNNING");
 	public static final AString SUSPENDED  = Strings.intern("SUSPENDED");
 	public static final AString TERMINATED = Strings.intern("TERMINATED");
@@ -374,10 +373,9 @@ public class AgentState extends ALatticeComponent<ACell> {
 	 * ONE CAS, so an envelope is removed from pending only in the write that
 	 * lands its user turn (crash between the two is impossible).
 	 *
-	 * <p>A stale {@code inCycle} left by a crashed cycle is overwritten — the
-	 * run loop is the single live writer per agent, so a differing existing
-	 * epoch can only be a crash remnant, and claiming it is exactly the
-	 * resume case.</p>
+	 * <p>A stale {@code inCycle} left by an abandoned attempt is overwritten.
+	 * The epoch is a write fence, not a checkpoint: claiming it starts a fresh
+	 * attempt and does not restore the former executor.</p>
 	 *
 	 * @return true if the session existed and was claimed; false if the
 	 *         record or session is missing (nothing written)
@@ -411,7 +409,7 @@ public class AgentState extends ALatticeComponent<ACell> {
 	 * Atomically updates {@code sessions[sid].frames}, fenced by the cycle
 	 * epoch: the write applies only while {@code session.inCycle} equals
 	 * {@code expectedEpoch}. A transition whose cycle has been superseded
-	 * (cancelled and resumed, agent deleted and recreated, session claimed by
+	 * (cancelled and superseded, agent deleted and recreated, session claimed by
 	 * a fresh cycle) gets {@code false} and must stop — its view of the
 	 * frames is no longer authoritative.
 	 *
@@ -603,23 +601,42 @@ public class AgentState extends ALatticeComponent<ACell> {
 		return found.get();
 	}
 
-	/**
-	 * Whether a session record represents outstanding work: it has pending
-	 * messages, or it is mid-cycle ({@code inCycle} present — a claimed cycle
-	 * whose merge has not run, i.e. live right now or interrupted by a crash;
-	 * its input was already drained from pending, so the epoch is the only
-	 * remaining work signal). Single shared rule for the wake gate, the
-	 * session picker, and the merge's continue-vs-sleep decision.
-	 */
-	static boolean sessionHasWork(AMap<AString, ACell> session) {
-		ACell pv = session.get(K_PENDING);
-		if (pv instanceof AVector<?> v && v.count() > 0) return true;
-		return session.get(K_IN_CYCLE) != null;
+	/** Removes a queued chat envelope by its external Job id. */
+	@SuppressWarnings("unchecked")
+	public void removeSessionPendingJob(Blob sid, Blob jobId) {
+		AString jobIdHex = Strings.create(jobId.toHexString());
+		update(r -> {
+			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index idx)
+				? (Index<Blob, ACell>) idx : Index.none();
+			ACell sv = sessions.get(sid);
+			if (!(sv instanceof AMap<?, ?>)) return r;
+			AMap<AString, ACell> session = (AMap<AString, ACell>) sv;
+			AVector<ACell> pending = (session.get(K_PENDING) instanceof AVector<?> v)
+				? (AVector<ACell>) v : Vectors.empty();
+			AVector<ACell> kept = Vectors.empty();
+			for (long i = 0; i < pending.count(); i++) {
+				ACell envelope = pending.get(i);
+				if (!jobIdHex.equals(RT.getIn(envelope, Fields.JOB_ID))) {
+					kept = kept.conj(envelope);
+				}
+			}
+			if (kept.count() == pending.count()) return r;
+			return r.assoc(K_SESSIONS,
+				sessions.assoc(sid, session.assoc(K_PENDING, kept)));
+		});
 	}
 
 	/**
-	 * Returns true if any session has outstanding work (pending messages or
-	 * an unfinished cycle — see {@link #sessionHasWork}).
+	 * Whether a session record has durable queued work. {@code inCycle} is an
+	 * executor fence, never a wake signal or a resume checkpoint.
+	 */
+	static boolean sessionHasWork(AMap<AString, ACell> session) {
+		ACell pv = session.get(K_PENDING);
+		return pv instanceof AVector<?> v && v.count() > 0;
+	}
+
+	/**
+	 * Returns true if any session has pending messages.
 	 */
 	public boolean hasSessionPending() {
 		Index<Blob, ACell> sessions = getSessions();
@@ -633,7 +650,7 @@ public class AgentState extends ALatticeComponent<ACell> {
 
 	/**
 	 * Returns the sid (Blob) of the first session with outstanding work
-	 * (pending messages or an unfinished cycle), or null if none.
+	 * (pending messages), or null if none.
 	 */
 	public Blob pickSessionWithPending() {
 		Index<Blob, ACell> sessions = getSessions();
@@ -988,15 +1005,13 @@ public class AgentState extends ALatticeComponent<ACell> {
 	}
 
 	/**
-	 * Sets SLEEPING status, unless the agent has been externally SUSPENDED
-	 * or TERMINATED — in which case the status is preserved.
+	 * Clears the persisted executor marker after a clean exit or at startup.
+	 * Administrative stop/terminal states always win.
 	 */
 	public void sleep() {
 		update(r -> {
 			AString cur = RT.ensureString(r.get(K_STATUS));
-			if (SUSPENDED.equals(cur) || TERMINATED.equals(cur)) {
-				return r;
-			}
+			if (SUSPENDED.equals(cur) || TERMINATED.equals(cur)) return r;
 			return r.assoc(K_STATUS, SLEEPING);
 		});
 	}
@@ -1047,40 +1062,10 @@ public class AgentState extends ALatticeComponent<ACell> {
 	/**
 	 * Atomically merges run loop results into the agent record.
 	 *
-	 * <p>Reconciles concurrent modifications: preserves tasks added during
-	 * the transition. Determines whether new work arrived (session pending
-	 * messages, new tasks, or wake flag) and sets status to RUNNING or
-	 * SLEEPING accordingly.</p>
-	 *
-	 * @return The new record (check status to determine if loop should continue)
+	 * <p>Reconciles concurrent modifications and preserves tasks added during
+	 * the transition. Executor status is deliberately absent from this merge:
+	 * the launcher writes {@code RUNNING} once and clears it on final exit.</p>
 	 */
-	public AMap<AString, ACell> mergeRunResult(
-			ACell newState,
-			AString consumedSession,
-			Index<Blob, ACell> presentedTasks,
-			AMap<AString, ACell> taskResults,
-			AMap<AString, ACell> timelineEntry) {
-		return mergeRunResult(newState, consumedSession,
-			presentedTasks, taskResults, timelineEntry, null, null, 0, null, null);
-	}
-
-	/**
-	 * Back-compat 8-arg overload — no adapter-owned frames. Delegates to the
-	 * full form with {@code newFrames = null}.
-	 */
-	public AMap<AString, ACell> mergeRunResult(
-			ACell newState,
-			AString consumedSession,
-			Index<Blob, ACell> presentedTasks,
-			AMap<AString, ACell> taskResults,
-			AMap<AString, ACell> timelineEntry,
-			Blob historySid,
-			AVector<ACell> turnsToAppend,
-			long presentedSessionPendingCount) {
-		return mergeRunResult(newState, consumedSession, presentedTasks,
-			taskResults, timelineEntry, historySid, turnsToAppend,
-			presentedSessionPendingCount, null, null);
-	}
 
 	/**
 	 * Atomic merge with frame-conversation append + session pending drain.
@@ -1116,8 +1101,6 @@ public class AgentState extends ALatticeComponent<ACell> {
 	@SuppressWarnings("unchecked")
 	public AMap<AString, ACell> mergeRunResult(
 			ACell newState,
-			AString consumedSession,
-			Index<Blob, ACell> presentedTasks,
 			AMap<AString, ACell> taskResults,
 			AMap<AString, ACell> timelineEntry,
 			Blob historySid,
@@ -1197,32 +1180,6 @@ public class AgentState extends ALatticeComponent<ACell> {
 				}
 			}
 
-			// Check whether any session still has work after the drain —
-			// pending messages or an unfinished cycle (same rule as the wake
-			// gate, so the loop never sleeps on a session it would wake for).
-			boolean hasSessionPendingInRecord = false;
-			ACell sessionsCell = updated.get(K_SESSIONS);
-			if (sessionsCell instanceof Index idx) {
-				for (var entry : ((Index<Blob, ACell>) idx).entrySet()) {
-					if (entry.getValue() instanceof AMap m && sessionHasWork(m)) {
-						hasSessionPendingInRecord = true;
-						break;
-					}
-				}
-			}
-
-			boolean hasNew = hasSessionPendingInRecord
-				|| hasNewTasksNotIn(remainingTasks, presentedTasks);
-
-			// Preserve externally-set SUSPENDED/TERMINATED — these are signals
-			// from outside the run loop (e.g. handleSuspend, handleTerminate)
-			// and must not be overwritten here. The CAS-retry inside
-			// updateAndGet guarantees we see the latest status.
-			AString currentStatus = RT.ensureString(r.get(K_STATUS));
-			if (!SUSPENDED.equals(currentStatus) && !TERMINATED.equals(currentStatus)) {
-				updated = updated.assoc(K_STATUS, hasNew ? RUNNING : SLEEPING);
-			}
-
 			return updated;
 		});
 	}
@@ -1258,13 +1215,4 @@ public class AgentState extends ALatticeComponent<ACell> {
 		return remaining;
 	}
 
-	private static boolean hasNewTasksNotIn(Index<Blob, ACell> current, Index<Blob, ACell> presented) {
-		if (current == null || current.count() == 0) return false;
-		if (presented == null) return current.count() > 0;
-		for (var entry : current.entrySet()) {
-			ACell before = presented.get(entry.getKey());
-			if (before == null || !Objects.equals(before, entry.getValue())) return true;
-		}
-		return false;
-	}
 }

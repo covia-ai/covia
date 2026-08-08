@@ -530,10 +530,9 @@ public class VenueServer {
 		engine.provisionConfiguredSecrets();
 		engine.jobs().recoverJobs();
 
-		// Wake agents with durable work (pending envelopes, queued tasks, or a
-		// stale inCycle claim from an interrupted cycle). recoverJobs only
-		// stabilises job records — it never re-executes anything (#214) — so
-		// this scan is the single trigger that restarts agent loops after restart.
+		// Reconcile agent-owned intake after generic Job recovery: clear stale
+		// executor markers/fences, remove intake for terminal Jobs, then wake only
+		// remaining durable queued work. Internal execution is never resumed.
 		if (engine.getAdapter("agent") instanceof covia.adapter.AgentAdapter agentAdapter) {
 			agentAdapter.wakeAgentsWithWork();
 		}
