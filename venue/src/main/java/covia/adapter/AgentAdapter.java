@@ -92,6 +92,8 @@ public class AgentAdapter extends AAdapter {
 
 	/** Maximum run loop iterations before forced exit (safety net) */
 	private static final int MAX_LOOP_ITERATIONS = 20;
+	/** Administrative shutdown must never wait forever on a wedged run loop. */
+	static final long HALT_TIMEOUT_MS = 5_000;
 
 	/**
 	 * Per-agent launcher slot. Presence of a non-done entry means a virtual
@@ -781,13 +783,30 @@ public class AgentAdapter extends AAdapter {
 		cancelActiveTransition(key);
 		if (oldLoop != null && !oldLoop.isDone()) {
 			try {
-				oldLoop.join();
-			} catch (java.util.concurrent.CompletionException
-					| java.util.concurrent.CancellationException ignored) {
+				awaitLoopExit(oldLoop, HALT_TIMEOUT_MS);
+			} catch (TimeoutException e) {
+				job.fail("Agent " + agentId + " did not stop within "
+					+ HALT_TIMEOUT_MS + " ms");
+				return false;
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				job.fail("Interrupted while waiting for agent " + agentId + " to stop");
+				return false;
+			} catch (java.util.concurrent.CancellationException ignored) {
 				// The requested terminal state is already set; only loop exit matters.
 			}
 		}
 		return true;
+	}
+
+	/** Bounded wait seam kept package-visible for deterministic regression tests. */
+	static void awaitLoopExit(CompletableFuture<?> loop, long timeoutMs)
+			throws TimeoutException, InterruptedException {
+		try {
+			loop.get(timeoutMs, TimeUnit.MILLISECONDS);
+		} catch (java.util.concurrent.ExecutionException ignored) {
+			// Exceptional completion still means the run loop exited.
+		}
 	}
 
 	/**
@@ -2415,7 +2434,7 @@ public class AgentAdapter extends AAdapter {
 				// (after the put, so one side always sees the other's write)
 				// and cancel locally rather than blocking on a doomed cycle.
 				AgentState recheck = getAgent(ownerDID, agentId);
-				if (recheck == null || AgentState.SUSPENDED.equals(recheck.getStatus())) {
+				if (shouldCancelRegisteredTransition(recheck)) {
 					cancelToken.set(true);
 					transitionFuture.cancel(true);
 				}
@@ -2510,6 +2529,13 @@ public class AgentAdapter extends AAdapter {
 				wakeAgent(ownerDID, agentId, false);
 			}
 		}
+	}
+
+	/** Close the administrative-stop/transition-registration race. */
+	static boolean shouldCancelRegisteredTransition(AgentState agent) {
+		if (agent == null) return true;
+		AString status = agent.getStatus();
+		return AgentState.SUSPENDED.equals(status) || AgentState.TERMINATED.equals(status);
 	}
 
 	/**

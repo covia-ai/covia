@@ -2,6 +2,9 @@ package covia.adapter;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeoutException;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
@@ -46,6 +49,31 @@ public class AgentAdapterTest {
 	// user namespace within the shared engine.
 	private AString ALICE_DID;
 	private AString BOB_DID;
+
+	@Test
+	public void testAwaitLoopExitIsBoundedAndAcceptsExceptionalExit() throws Exception {
+		CompletableFuture<ACell> wedged = new CompletableFuture<>();
+		assertThrows(TimeoutException.class,
+			() -> AgentAdapter.awaitLoopExit(wedged, 25));
+
+		CompletableFuture<ACell> failed = new CompletableFuture<>();
+		failed.completeExceptionally(new IllegalStateException("loop failed"));
+		assertDoesNotThrow(() -> AgentAdapter.awaitLoopExit(failed, 25),
+			"an exceptional completion is still a completed shutdown");
+	}
+
+	@Test
+	public void testTerminatedAgentCancelsLateRegisteredTransition() {
+		AgentState agent = engine.getVenueState().users().ensure(ALICE_DID)
+			.ensureAgent(Strings.create("late-transition"), Maps.empty(), null);
+		assertFalse(AgentAdapter.shouldCancelRegisteredTransition(agent));
+
+		agent.setStatus(AgentState.TERMINATED);
+		assertTrue(AgentAdapter.shouldCancelRegisteredTransition(agent),
+			"a transition registered after deletion must be cancelled");
+		assertTrue(AgentAdapter.shouldCancelRegisteredTransition(null),
+			"a transition registered after physical removal must be cancelled");
+	}
 
 	@BeforeEach
 	public void setup(TestInfo info) {

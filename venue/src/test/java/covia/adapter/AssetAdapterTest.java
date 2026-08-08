@@ -290,6 +290,7 @@ public class AssetAdapterTest {
 			Maps.of(Fields.ID, id), RequestContext.of(ALICE_DID));
 		ACell contentResult = contentJob.awaitResult(5000);
 		assertEquals(CVMBool.TRUE, RT.getIn(contentResult, Strings.create("exists")));
+		assertEquals(CVMBool.TRUE, RT.getIn(contentResult, "hasContent"));
 
 		ACell value = RT.getIn(contentResult, Fields.VALUE);
 		assertNotNull(value, "Content value should be present");
@@ -463,6 +464,9 @@ public class AssetAdapterTest {
 		ACell result = contentJob.awaitResult(5000);
 
 		assertEquals(CVMBool.TRUE, RT.getIn(result, Strings.create("exists")));
+		assertEquals(CVMBool.FALSE, RT.getIn(result, "hasContent"));
+		assertNotNull(RT.getIn(result, Fields.MESSAGE),
+			"metadata-only assets should explain why no value is present");
 		assertNull(RT.getIn(result, Fields.VALUE), "No content payload should mean no value");
 	}
 
@@ -473,6 +477,7 @@ public class AssetAdapterTest {
 			RequestContext.of(ALICE_DID));
 		ACell result = job.awaitResult(5000);
 		assertEquals(CVMBool.FALSE, RT.getIn(result, Strings.create("exists")));
+		assertEquals(CVMBool.FALSE, RT.getIn(result, "hasContent"));
 	}
 
 	// ========== Content vs metadata identity ==========
@@ -1085,12 +1090,13 @@ public class AssetAdapterTest {
 	public void testContentByVOpsPath() {
 		// /v/ops/json/merge is a CAS-stored asset with no content blob —
 		// resolvePath finds the metadata, derived hash hits the venue CAS
-		// record, and the content payload is null. exists: true, no value.
+		// record, and the content payload is null. exists: true, hasContent: false.
 		Job job = engine.jobs().invokeOperation("v/ops/asset/content",
 			Maps.of(Fields.ID, "v/ops/json/merge"), RequestContext.of(ALICE_DID));
 		ACell result = job.awaitResult(5000);
 
 		assertEquals(CVMBool.TRUE, RT.getIn(result, Strings.create("exists")));
+		assertEquals(CVMBool.FALSE, RT.getIn(result, "hasContent"));
 		assertNull(RT.getIn(result, Fields.VALUE));
 	}
 
@@ -1123,6 +1129,7 @@ public class AssetAdapterTest {
 			Maps.of(Fields.ID, "w/no/such/place"), RequestContext.of(ALICE_DID));
 		ACell result = job.awaitResult(5000);
 		assertEquals(CVMBool.FALSE, RT.getIn(result, Strings.create("exists")));
+		assertEquals(CVMBool.FALSE, RT.getIn(result, "hasContent"));
 	}
 
 	@Test

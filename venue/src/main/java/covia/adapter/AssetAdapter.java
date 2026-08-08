@@ -188,6 +188,7 @@ public class AssetAdapter extends AAdapter {
 	}
 
 	private static final AString K_EXISTS = Strings.intern("exists");
+	private static final AString K_HAS_CONTENT = Strings.intern("hasContent");
 	private static final AString K_CONTENT_TEXT = Strings.intern("contentText");
 	private static final AString K_MAX_SIZE = Strings.intern("maxSize");
 	private static final AString K_TRUNCATED = Strings.intern("truncated");
@@ -276,9 +277,11 @@ public class AssetAdapter extends AAdapter {
 				long sz = resolved.content().getSize();
 				if (sz > maxSz) {
 					return Maps.of(Fields.ID, idStr, K_EXISTS, CVMBool.TRUE,
+						K_HAS_CONTENT, CVMBool.TRUE,
 						K_TRUNCATED, CVMBool.TRUE, K_SIZE, CVMLong.create(sz));
 				}
 				return Maps.of(Fields.ID, idStr, K_EXISTS, CVMBool.TRUE,
+					K_HAS_CONTENT, CVMBool.TRUE,
 					Fields.VALUE, resolved.content().getBlob());
 			}
 		} catch (java.io.IOException e) {
@@ -307,13 +310,18 @@ public class AssetAdapter extends AAdapter {
 		}
 
 		if (record == null) {
-			return Maps.of(Fields.ID, idStr, K_EXISTS, CVMBool.FALSE);
+			return Maps.of(Fields.ID, idStr, K_EXISTS, CVMBool.FALSE,
+				K_HAS_CONTENT, CVMBool.FALSE);
 		}
 
 		ACell content = record.get(AssetStore.POS_CONTENT);
 		if (content == null) {
-			// Asset exists but has no content payload
-			return Maps.of(Fields.ID, idStr, K_EXISTS, CVMBool.TRUE);
+			// The CAS record exists, but callers (especially tool-using models)
+			// need an explicit distinction from a legitimately empty payload.
+			return Maps.of(Fields.ID, idStr, K_EXISTS, CVMBool.TRUE,
+				K_HAS_CONTENT, CVMBool.FALSE,
+				Fields.MESSAGE, Strings.create(
+					"Asset metadata does not specify a content payload"));
 		}
 
 		// Size guard — consistent with covia:read maxSize pattern
@@ -327,6 +335,7 @@ public class AssetAdapter extends AAdapter {
 			return Maps.of(
 				Fields.ID, idStr,
 				K_EXISTS, CVMBool.TRUE,
+				K_HAS_CONTENT, CVMBool.TRUE,
 				K_TRUNCATED, CVMBool.TRUE,
 				K_SIZE, CVMLong.create(size));
 		}
@@ -335,6 +344,7 @@ public class AssetAdapter extends AAdapter {
 		return Maps.of(
 			Fields.ID, idStr,
 			K_EXISTS, CVMBool.TRUE,
+			K_HAS_CONTENT, CVMBool.TRUE,
 			Fields.VALUE, content);
 	}
 
