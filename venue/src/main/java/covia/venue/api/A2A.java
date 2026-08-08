@@ -333,6 +333,11 @@ public class A2A extends ACoviaAPI {
 					CancelTaskParams params = parseParams(paramsRaw, CancelTaskParams.class);
 					doCancelTask(ctx, id, params, dispatch);
 				}
+				case A2AMethods.SUBSCRIBE_TO_TASK_METHOD -> {
+					org.a2aproject.sdk.spec.TaskIdParams params =
+							parseParams(paramsRaw, org.a2aproject.sdk.spec.TaskIdParams.class);
+					doSubscribeToTask(ctx, id, params, dispatch, ref.agentId());
+				}
 				case A2AMethods.GET_EXTENDED_AGENT_CARD_METHOD ->
 					// The access gate already ran; the agent's extended card is
 					// its card — per-agent skills from offered ops are a later pass.
@@ -800,6 +805,18 @@ public class A2A extends ACoviaAPI {
 	}
 
 	private void doSubscribeToTask(Context ctx, Object id, org.a2aproject.sdk.spec.TaskIdParams params) {
+		doSubscribeToTask(ctx, id, params, AuthMiddleware.callerContext(ctx), null);
+	}
+
+	/**
+	 * Subscribe to the ordinary Covia Job backing an A2A Task. A non-null
+	 * {@code expectedAgentId} binds a per-agent endpoint to tasks created for
+	 * that exact agent; the endpoint must not become a general owner-wide Job
+	 * subscription surface.
+	 */
+	private void doSubscribeToTask(Context ctx, Object id,
+			org.a2aproject.sdk.spec.TaskIdParams params, RequestContext rctx,
+			String expectedAgentId) {
 		if (params == null || params.id() == null) {
 			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, "id required");
 			return;
@@ -812,8 +829,6 @@ public class A2A extends ACoviaAPI {
 			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, "Invalid task id");
 			return;
 		}
-		RequestContext rctx = AuthMiddleware.callerContext(ctx);
-
 		AMap<AString, ACell> jobData;
 		try {
 			jobData = engine().jobs().getJobData(taskId, rctx);
@@ -824,6 +839,14 @@ public class A2A extends ACoviaAPI {
 		if (jobData == null) {
 			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, "Task not found: " + params.id());
 			return;
+		}
+		if (expectedAgentId != null) {
+			AString taskAgent = RT.ensureString(RT.getIn(jobData, Fields.INPUT, Fields.AGENT_ID));
+			if (taskAgent == null || !expectedAgentId.equals(taskAgent.toString())) {
+				writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND,
+					"Task not found for this agent");
+				return;
+			}
 		}
 		// Per spec §9.4.6: SubscribeToTask on a terminal task returns
 		// UnsupportedOperationError — there will never be more frames.
