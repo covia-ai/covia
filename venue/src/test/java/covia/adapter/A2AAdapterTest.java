@@ -5,7 +5,15 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.net.InetSocketAddress;
+import java.net.http.HttpRequest;
+import java.nio.charset.StandardCharsets;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
+
 import org.junit.jupiter.api.Test;
+
+import com.sun.net.httpserver.HttpServer;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -20,7 +28,9 @@ import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.client.VenueHTTP;
 import covia.venue.RequestContext;
+import covia.venue.SecretStore;
 import covia.venue.TestServer;
+import covia.venue.User;
 import covia.venue.api.A2ACodec;
 
 /**
@@ -59,6 +69,69 @@ class A2AAdapterTest {
 		assertEquals(agent, A2AAdapter.normaliseRpcUrl(agent + "/"));
 		// A reverse-proxied venue under a subpath keeps its endpoint too.
 		assertEquals("https://host/covia/a2a", A2AAdapter.normaliseRpcUrl("https://host/covia/a2a"));
+	}
+
+	// ==================== standard HTTP Bearer auth ====================
+
+	@Test
+	void bearerToken_isSentAsStandardAuthorizationHeader() {
+		HttpRequest request = A2AAdapter.postEnvelope(
+				"https://agent.example.com/a2a", Map.of("jsonrpc", "2.0"), "token-value");
+		assertEquals("Bearer token-value",
+				request.headers().firstValue("Authorization").orElseThrow());
+	}
+
+	@Test
+	void bearerToken_reachesAgentCardEndpointAndIsRedactedFromJob() throws Exception {
+		AtomicReference<String> authorization = new AtomicReference<>();
+		HttpServer remote = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
+		remote.createContext("/.well-known/agent-card.json", exchange -> {
+			authorization.set(exchange.getRequestHeaders().getFirst("Authorization"));
+			byte[] body = "{\"name\":\"secured external agent\"}".getBytes(StandardCharsets.UTF_8);
+			exchange.getResponseHeaders().set("Content-Type", "application/json");
+			exchange.sendResponseHeaders(200, body.length);
+			exchange.getResponseBody().write(body);
+			exchange.close();
+		});
+		remote.start();
+		try {
+			Job job = TestServer.COVIA.invokeSync("v/ops/a2a/agent-card", Maps.of(
+					Fields.URL, Strings.create("http://localhost:" + remote.getAddress().getPort()),
+					Fields.BEARER_TOKEN, Strings.create("one-off-token")));
+
+			assertEquals(Status.COMPLETE, job.getStatus(), job.getErrorMessage());
+			assertEquals("Bearer one-off-token", authorization.get());
+			assertEquals(Fields.HIDDEN,
+					RT.getIn(job.getData(), Fields.INPUT, Fields.BEARER_TOKEN));
+		} finally {
+			remote.stop(0);
+		}
+	}
+
+	@Test
+	void bearerSecret_resolvesFromCallingUsersSecretStore() {
+		AString caller = Strings.create("did:test:a2a:bearer:" + System.nanoTime());
+		User user = TestServer.ENGINE.getVenueState().users().ensure(caller);
+		user.secrets().store("PARTNER_TOKEN", "stored-token",
+				SecretStore.deriveKey(TestServer.ENGINE.getKeyPair()));
+
+		A2AAdapter adapter = (A2AAdapter) TestServer.ENGINE.getAdapter("a2a");
+		String resolved = adapter.resolveBearer(
+				Maps.of(Fields.BEARER_SECRET, Strings.create("s/PARTNER_TOKEN")),
+				RequestContext.of(caller));
+
+		assertEquals("stored-token", resolved);
+	}
+
+	@Test
+	void bearerInputs_areMutuallyExclusive() {
+		A2AAdapter adapter = (A2AAdapter) TestServer.ENGINE.getAdapter("a2a");
+		IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+				() -> adapter.resolveBearer(Maps.of(
+						Fields.BEARER_SECRET, Strings.create("s/PARTNER_TOKEN"),
+						Fields.BEARER_TOKEN, Strings.create("literal-token")),
+						RequestContext.of(Strings.create("did:test:a2a:conflict"))));
+		assertTrue(error.getMessage().contains("only one"), error.getMessage());
 	}
 
 	// ==================== send via the internal path ====================

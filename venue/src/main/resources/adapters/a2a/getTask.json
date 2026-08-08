@@ -4,6 +4,7 @@
 	"operation": {
 		"adapter": "a2a:getTask",
 		"readOnly": true,
+		"secretFields": ["bearerSecret", "bearerToken"],
 		"input": {
 			"type": "object",
 			"properties": {
@@ -14,6 +15,14 @@
 				"id": {
 					"type": "string",
 					"description": "Remote Task ID to query"
+				},
+				"bearerSecret": {
+					"type": "string",
+					"description": "Optional caller-owned SecretStore reference (for example s/PARTNER_A2A_TOKEN) whose value is sent as a standard HTTP Bearer credential. Mutually exclusive with bearerToken."
+				},
+				"bearerToken": {
+					"type": "string",
+					"description": "Optional literal bearer token for this request. Mutually exclusive with bearerSecret; redacted from Job records."
 				}
 			},
 			"required": ["url", "id"]

@@ -90,6 +90,10 @@ public class Fields {
 	public static final StringShort BODY = Strings.intern("body");
 	public static final StringShort METHOD = Strings.intern("method");
 	public static final StringShort BEARER_SECRET = Strings.intern("bearerSecret");
+	/** Literal bearer credential supplied directly to an outbound protocol
+	 * adapter. Operation metadata must declare this as a secret field so the
+	 * value never persists in a Job record. */
+	public static final StringShort BEARER_TOKEN = Strings.intern("bearerToken");
 	public static final StringShort INLINE = Strings.intern("inline");
 	
 	public static final StringShort PORT = Strings.intern("port");
