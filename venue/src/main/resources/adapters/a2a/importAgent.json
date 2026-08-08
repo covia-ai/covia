@@ -1,0 +1,43 @@
+{
+	"name": "Import A2A Agent",
+	"description": "Import a standard A2A endpoint or a Covia agent as an immutable agent Asset, with a mutable user binding at w/a2a/agents/<name>. Authentication is configured once as a SecretStore reference and never supplied on individual A2A calls.",
+	"operation": {
+		"adapter": "a2a:importAgent",
+		"input": {
+			"type": "object",
+			"properties": {
+				"name": {
+					"type": "string",
+					"description": "Local alias matching [a-z0-9-]{1,64}; creates w/a2a/agents/<name>."
+				},
+				"url": {
+					"type": "string",
+					"description": "Base URL of a standard external A2A agent. Use exactly one of url or coviaAgent."
+				},
+				"coviaAgent": {
+					"type": "string",
+					"description": "Covia grid agent address: local g/<agentId> or full <ownerDID>/g/<agentId>. Requires venue."
+				},
+				"venue": {
+					"type": "string",
+					"description": "Base URL of the Covia venue hosting coviaAgent. Required for a remote/full address; a local g/<agentId> defaults to this venue's configured baseUrl."
+				},
+				"auth": {
+					"type": "object",
+					"description": "Optional stored authentication binding. Use {scheme:<Agent Card scheme name>, secret:'s/NAME'} for card-declared API key or Bearer auth, or {kind:'bearer', secret:'s/NAME'} when Bearer is needed to discover a private card. Literal credentials are not accepted.",
+					"properties": {
+						"scheme": { "type": "string" },
+						"kind": { "type": "string", "enum": ["bearer"] },
+						"secret": { "type": "string" }
+					},
+					"required": ["secret"]
+				}
+			},
+			"required": ["name"]
+		},
+		"output": {
+			"type": "object",
+			"description": "The immutable asset DID URL, mutable workspace binding, and exact agent asset hash."
+		}
+	}
+}

@@ -1,0 +1,19 @@
+{
+	"name": "Raw A2A Agent Card",
+	"description": "Diagnostic escape hatch: fetch an Agent Card directly from a URL with per-call Bearer authentication. Prefer importing an A2A agent asset.",
+	"operation": {
+		"adapter": "a2a:rawAgentCard",
+		"readOnly": true,
+		"secretFields": ["bearerSecret", "bearerToken"],
+		"input": {
+			"type": "object",
+			"properties": {
+				"url": { "type": "string", "description": "Base URL of the remote A2A agent" },
+				"bearerSecret": { "type": "string", "description": "Optional caller-owned SecretStore reference sent as HTTP Bearer auth." },
+				"bearerToken": { "type": "string", "description": "Optional one-off literal Bearer token; redacted from Job records." }
+			},
+			"required": ["url"]
+		},
+		"output": { "type": "object", "description": "A2A Agent Card" }
+	}
+}

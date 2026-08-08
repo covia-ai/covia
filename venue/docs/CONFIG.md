@@ -856,9 +856,15 @@ Reconnect with `GetTask`, or open `SubscribeToTask` at the same endpoint for
 SSE updates. Both read the same Job record and converge on the same terminal
 state; closing an HTTP request or SSE connection does not fail or cancel it.
 
-Current boundary: outbound `v/ops/a2a/*` calls do not yet relay caller authority
-to a remote venue (#304). Outbound calls do pass the HTTP adapter's SSRF checks
-and operator allow/block lists.
+Outbound calls use imported A2A agent Assets. Import with
+`v/ops/a2a/import-agent`, then invoke `agent-card`, `send`, `get-task`, or
+`cancel` with `agent: "w/a2a/agents/<name>"`. The Asset may describe a standard
+A2A URL or a Covia agent at a local/remote venue; the latter still uses the
+standard per-agent A2A endpoint above. Authentication bindings retain only a
+caller-owned `s/NAME` SecretStore reference and support card-declared API-key
+and HTTP-Bearer schemes. UCAN authority is not relayed over A2A; use native Grid
+operations for Covia-to-Covia authority and identity. All outbound URLs pass
+the HTTP adapter's SSRF checks and operator allow/block lists.
 
 ## Secrets bootstrap
 

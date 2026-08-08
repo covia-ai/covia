@@ -1,6 +1,7 @@
 package covia.adapter;
 
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -22,10 +23,13 @@ import org.slf4j.LoggerFactory;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.AVector;
 import convex.core.data.Hash;
+import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
+import covia.api.Abilities;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -37,11 +41,11 @@ import covia.venue.api.A2ACodec;
  *
  * <p>Sub-operations:</p>
  * <ul>
- *   <li>{@code a2a:getAgentCard} — fetch a remote agent's public Agent Card.</li>
- *   <li>{@code a2a:send} — send a message; one Covia Job mirrors one remote A2A Task.
- *       (implemented in a later pass)</li>
- *   <li>{@code a2a:getTask} / {@code a2a:cancel} — one-shot RPCs against a remote Task.
- *       (implemented in a later pass)</li>
+ *   <li>{@code a2a:importAgent} — import a standard endpoint or Covia agent as an Asset.</li>
+ *   <li>{@code a2a:getAgentCard} — read the imported Agent Card snapshot.</li>
+ *   <li>{@code a2a:send} — send a message; one Covia Job mirrors one remote A2A Task.</li>
+ *   <li>{@code a2a:getTask} / {@code a2a:cancel} — one-shot RPCs against a remote Task.</li>
+ *   <li>{@code a2a:raw*} — diagnostic URL/credential-bearing escape hatches.</li>
  * </ul>
  *
  * <p>Uses the SDK's {@link JsonUtil#OBJECT_MAPPER} so polymorphic types
@@ -56,7 +60,26 @@ public class A2AAdapter extends AAdapter {
 
 	private static final String AGENT_CARD_PATH = "/.well-known/agent-card.json";
 	private static final String A2A_RPC_PATH = "/a2a";
+	private static final AString K_AGENT = Strings.intern("agent");
+	private static final AString K_AUTH = Strings.intern("auth");
+	private static final AString K_CARD = Strings.intern("card");
+	private static final AString K_CARD_URL = Strings.intern("cardUrl");
+	private static final AString K_ENDPOINT = Strings.intern("endpoint");
+	private static final AString K_SECRET = Strings.intern("secret");
+	private static final AString K_SCHEME = Strings.intern("scheme");
+	private static final AString K_KIND = Strings.intern("kind");
+	private static final AString K_TARGET = Strings.intern("target");
+	private static final AString K_COVIA_AGENT = Strings.intern("coviaAgent");
+	private static final AString K_VENUE = Strings.intern("venue");
+	private static final AString K_SUPPORTED_INTERFACES = Strings.intern("supportedInterfaces");
+	private static final AString K_SECURITY_SCHEMES = Strings.intern("securitySchemes");
+	private static final AString K_API_KEY_SCHEME = Strings.intern("apiKeySecurityScheme");
+	private static final AString K_HTTP_AUTH_SCHEME = Strings.intern("httpAuthSecurityScheme");
+	private static final AString K_LOCATION = Strings.intern("location");
+	private static final AString K_AGENT_ASSET = Strings.intern("a2aAgentAsset");
+	private static final AString TYPE_A2A_AGENT = Strings.intern("a2a-agent");
 
+	public static Hash IMPORT_AGENT_OPERATION;
 	public static Hash GET_AGENT_CARD_OPERATION;
 	public static Hash GET_TASK_OPERATION;
 	public static Hash CANCEL_OPERATION;
@@ -91,10 +114,18 @@ public class A2AAdapter extends AAdapter {
 
 	@Override
 	protected void installAssets() {
+		IMPORT_AGENT_OPERATION   = installAsset("a2a/import-agent", "/adapters/a2a/importAgent.json");
 		GET_AGENT_CARD_OPERATION = installAsset("a2a/agent-card", "/adapters/a2a/agentCard.json");
 		GET_TASK_OPERATION       = installAsset("a2a/get-task",   "/adapters/a2a/getTask.json");
 		CANCEL_OPERATION         = installAsset("a2a/cancel",     "/adapters/a2a/cancel.json");
 		SEND_OPERATION           = installAsset("a2a/send",       "/adapters/a2a/send.json");
+		// URL/credential-bearing escape hatches for diagnostics and migration.
+		// They are deliberately absent from the A2A skill; normal callers import
+		// an agent Asset once and use the operations above with {agent: ...}.
+		installAsset("a2a/raw/agent-card", "/adapters/a2a/rawAgentCard.json");
+		installAsset("a2a/raw/get-task",   "/adapters/a2a/rawGetTask.json");
+		installAsset("a2a/raw/cancel",     "/adapters/a2a/rawCancel.json");
+		installAsset("a2a/raw/send",       "/adapters/a2a/rawSend.json");
 	}
 
 	// ==================== Job-aware dispatch ====================
@@ -110,8 +141,8 @@ public class A2AAdapter extends AAdapter {
 		// operation capability before it performs any outbound work.
 		requireInvoke(ctx);
 		String subOp = getSubOperation(meta);
-		if ("send".equals(subOp)) {
-			doSendMirrored(job, ctx, input);
+		if ("send".equals(subOp) || "rawSend".equals(subOp)) {
+			doSendMirrored(job, ctx, input, "rawSend".equals(subOp));
 			return;
 		}
 		super.invoke(job, ctx, meta, input);
@@ -126,10 +157,14 @@ public class A2AAdapter extends AAdapter {
 					new IllegalArgumentException("No sub-operation in a2a adapter metadata"));
 		}
 		return switch (subOp) {
-			case "getAgentCard" -> fetchAgentCard(input, ctx);
-			case "getTask"      -> rpcCallWithId(input, ctx, A2AMethods.GET_TASK_METHOD);
-			case "cancel"       -> rpcCallWithId(input, ctx, A2AMethods.CANCEL_TASK_METHOD);
-			case "send" -> {
+			case "importAgent"  -> importAgent(input, ctx);
+			case "getAgentCard" -> fetchAgentCard(input, ctx, false);
+			case "getTask"      -> rpcCallWithId(input, ctx, A2AMethods.GET_TASK_METHOD, false);
+			case "cancel"       -> rpcCallWithId(input, ctx, A2AMethods.CANCEL_TASK_METHOD, false);
+			case "rawAgentCard" -> fetchAgentCard(input, ctx, true);
+			case "rawGetTask"   -> rpcCallWithId(input, ctx, A2AMethods.GET_TASK_METHOD, true);
+			case "rawCancel"    -> rpcCallWithId(input, ctx, A2AMethods.CANCEL_TASK_METHOD, true);
+			case "send", "rawSend" -> {
 				// Job-worthy (the #85 delegation pattern, caught live by an agent
 				// calling a2a_send as a tool): send exists only in the Job-aware
 				// dispatch — the mirror needs a real Job for status propagation,
@@ -143,28 +178,326 @@ public class A2AAdapter extends AAdapter {
 		};
 	}
 
+	// ==================== Imported A2A agent assets ====================
+
+	/** Resolved transport authentication. The secret value exists only in
+	 * process memory; imported assets persist the SecretStore reference. */
+	private record RequestAuth(String location, String name, String value) {
+		static RequestAuth bearer(String value) {
+			return value == null ? null : new RequestAuth("header", "Authorization", "Bearer " + value);
+		}
+
+		URI applyTo(URI uri) {
+			if (!"query".equals(location)) return uri;
+			String encodedName = URLEncoder.encode(name, StandardCharsets.UTF_8);
+			String encodedValue = URLEncoder.encode(value, StandardCharsets.UTF_8);
+			String raw = uri.toString();
+			return URI.create(raw + (uri.getRawQuery() == null ? "?" : "&")
+				+ encodedName + "=" + encodedValue);
+		}
+
+		void applyHeaders(HttpRequest.Builder builder) {
+			if ("header".equals(location)) {
+				builder.setHeader(name, value);
+			} else if ("cookie".equals(location)) {
+				builder.setHeader("Cookie", name + "=" + value);
+			}
+		}
+	}
+
+	/** One resolved immutable agent profile for the lifetime of an invocation. */
+	private record AgentTarget(String rpcUrl, AMap<AString, ACell> card,
+			RequestAuth auth, Hash assetId) {}
+
+	/**
+	 * Import a standard A2A endpoint or a Covia agent endpoint as an immutable
+	 * {@code type:a2a-agent} Asset and publish the same snapshot at the caller's
+	 * mutable {@code w/a2a/agents/<name>} binding.
+	 */
+	@SuppressWarnings("unchecked")
+	private CompletableFuture<ACell> importAgent(ACell input, RequestContext ctx) {
+		AString nameCell = RT.ensureString(RT.getIn(input, Fields.NAME));
+		if (nameCell == null || !nameCell.toString().matches("[a-z0-9-]{1,64}")) {
+			return CompletableFuture.failedFuture(new IllegalArgumentException(
+				"'name' is required and must match [a-z0-9-]{1,64}"));
+		}
+		String alias = nameCell.toString();
+		String bindingPath = "w/a2a/agents/" + alias;
+
+		AString urlCell = RT.ensureString(RT.getIn(input, Fields.URL));
+		AString coviaAgentCell = RT.ensureString(RT.getIn(input, K_COVIA_AGENT));
+		if ((urlCell == null) == (coviaAgentCell == null)) {
+			return CompletableFuture.failedFuture(new IllegalArgumentException(
+				"Specify exactly one of 'url' or 'coviaAgent'"));
+		}
+
+		AMap<AString, ACell> storedAuth;
+		try {
+			engine.requireAuthority(ctx, Strings.create("a/"), Abilities.ASSET_STORE);
+			engine.requireResourceAccess(ctx, Strings.create(bindingPath),
+				convex.auth.ucan.Capability.CRUD_WRITE);
+			storedAuth = parseStoredAuth(input);
+		} catch (RuntimeException e) {
+			return CompletableFuture.failedFuture(e);
+		}
+
+		String cardBase;
+		AMap<AString, ACell> targetMeta;
+		try {
+			if (urlCell != null) {
+				cardBase = stripTrailingSlash(urlCell.toString());
+				targetMeta = Maps.of(K_KIND, Strings.intern("a2a"), Fields.URL, Strings.create(cardBase));
+			} else {
+				boolean localReference = coviaAgentCell.toString().startsWith("g/");
+				AString venueCell = RT.ensureString(RT.getIn(input, K_VENUE));
+				if (venueCell == null && !localReference) throw new IllegalArgumentException(
+					"'venue' is required with a remote coviaAgent address");
+				String address = normaliseCoviaAgentAddress(coviaAgentCell.toString(), ctx);
+				String venue = stripTrailingSlash(venueCell != null
+					? venueCell.toString() : engine.config().getBaseUrl());
+				cardBase = venue + "/a2a/" + address;
+				targetMeta = Maps.of(
+					K_KIND, Strings.intern("covia"),
+					K_VENUE, Strings.create(venue),
+					K_AGENT, Strings.create(address));
+			}
+			requireSafeUrl(normaliseAgentCardUrl(cardBase));
+		} catch (RuntimeException e) {
+			return CompletableFuture.failedFuture(e);
+		}
+
+		// A direct bearer binding can authenticate discovery of a private card.
+		// Card-named schemes are resolved only after the public card is known.
+		RequestAuth discoveryAuth;
+		try {
+			discoveryAuth = directBearerAuth(storedAuth, ctx);
+		} catch (RuntimeException e) {
+			return CompletableFuture.failedFuture(e);
+		}
+
+		return fetchAgentCardUrl(cardBase, discoveryAuth).thenApply(cardCell -> {
+			if (!(cardCell instanceof AMap<?, ?>)) {
+				throw new IllegalArgumentException("Remote Agent Card is not a JSON object");
+			}
+			AMap<AString, ACell> card = (AMap<AString, ACell>) cardCell;
+			String endpoint = endpointFromCard(card);
+			requireSafeUrl(endpoint);
+			// Validate the stored scheme and secret now, while importing, so a bad
+			// binding cannot become a dormant asset that fails only during a task.
+			resolveAssetAuth(storedAuth, card, ctx);
+
+			AMap<AString, ACell> a2a = Maps.of(
+				K_CARD, card,
+				K_CARD_URL, Strings.create(normaliseAgentCardUrl(cardBase)),
+				K_ENDPOINT, Strings.create(endpoint),
+				K_TARGET, targetMeta);
+			if (storedAuth != null) a2a = a2a.assoc(K_AUTH, storedAuth);
+
+			AString displayName = RT.ensureString(card.get(Fields.NAME));
+			AString description = RT.ensureString(card.get(Fields.DESCRIPTION));
+			AMap<AString, ACell> metadata = Maps.of(
+				Fields.NAME, displayName != null ? displayName : nameCell,
+				Fields.TYPE, TYPE_A2A_AGENT,
+				Fields.A2A, a2a);
+			if (description != null) metadata = metadata.assoc(Fields.DESCRIPTION, description);
+
+			Hash id = engine.storeUserAsset(JSON.printPretty(metadata), null, ctx);
+			engine.jobs().invokeInternal(Strings.create("v/ops/covia/write"), Maps.of(
+				Fields.PATH, Strings.create(bindingPath),
+				Fields.VALUE, metadata), ctx).join();
+
+			return Maps.of(
+				Fields.ID, ctx.getUserDID().append("/a/" + id.toHexString()),
+				Fields.PATH, Strings.create(bindingPath),
+				K_AGENT_ASSET, Strings.create(id.toHexString()),
+				Fields.STORED, convex.core.data.prim.CVMBool.TRUE);
+		});
+	}
+
+	@SuppressWarnings("unchecked")
+	private static AMap<AString, ACell> parseStoredAuth(ACell input) {
+		ACell raw = RT.getIn(input, K_AUTH);
+		if (raw == null) return null;
+		if (!(raw instanceof AMap<?, ?>)) throw new IllegalArgumentException("'auth' must be an object");
+		AMap<AString, ACell> auth = (AMap<AString, ACell>) raw;
+		AString secret = RT.ensureString(auth.get(K_SECRET));
+		if (secret == null || !(secret.toString().startsWith("s/") || secret.toString().startsWith("/s/"))) {
+			throw new IllegalArgumentException("auth.secret must be a SecretStore reference such as s/PARTNER_KEY");
+		}
+		AString kind = RT.ensureString(auth.get(K_KIND));
+		AString scheme = RT.ensureString(auth.get(K_SCHEME));
+		if ((kind == null) == (scheme == null)) {
+			throw new IllegalArgumentException("auth must specify exactly one of 'kind' or 'scheme'");
+		}
+		if (kind != null && !"bearer".equalsIgnoreCase(kind.toString())) {
+			throw new IllegalArgumentException("Unsupported direct auth kind '" + kind + "'; supported: bearer");
+		}
+		return auth;
+	}
+
+	private static String normaliseCoviaAgentAddress(String value, RequestContext ctx) {
+		String address = value;
+		if (address.startsWith("g/")) {
+			if (ctx.getUserDID() == null) throw new IllegalArgumentException(
+				"A local g/<agentId> reference requires an authenticated user");
+			address = ctx.getUserDID() + "/" + address;
+		}
+		A2ACodec.AgentRef ref = A2ACodec.parseAgentEndpoint("/a2a/" + address);
+		if (ref == null) throw new IllegalArgumentException(
+			"coviaAgent must be g/<agentId> or <ownerDID>/g/<agentId>");
+		return ref.gridAddress();
+	}
+
+	private static String stripTrailingSlash(String value) {
+		if (value == null || value.isBlank()) throw new IllegalArgumentException("URL must not be empty");
+		return value.endsWith("/") ? value.substring(0, value.length() - 1) : value;
+	}
+
+	@SuppressWarnings("unchecked")
+	private AgentTarget resolveAgentTarget(ACell input, RequestContext ctx, boolean allowRaw) {
+		ACell ref = RT.getIn(input, K_AGENT);
+		if (ref == null) {
+			if (allowRaw) return resolveRawTarget(input, ctx);
+			throw new IllegalArgumentException("'agent' is required; import one with v/ops/a2a/import-agent");
+		}
+
+		ACell value;
+		if (ref instanceof AMap<?, ?>) {
+			value = ref;
+		} else {
+			AString path = RT.ensureString(ref);
+			if (path == null) throw new IllegalArgumentException("'agent' must be an asset reference");
+			value = engine.resolvePath(path, ctx);
+		}
+		if (!(value instanceof AMap<?, ?>)) {
+			throw new IllegalArgumentException("Cannot resolve A2A agent asset: " + ref);
+		}
+		AMap<AString, ACell> metadata = (AMap<AString, ACell>) value;
+		if (!TYPE_A2A_AGENT.equals(RT.ensureString(metadata.get(Fields.TYPE)))) {
+			throw new IllegalArgumentException("Asset is not type 'a2a-agent': " + ref);
+		}
+		AMap<AString, ACell> a2a = RT.ensureMap(metadata.get(Fields.A2A));
+		if (a2a == null) throw new IllegalArgumentException("A2A agent asset has no 'a2a' profile");
+		AString endpoint = RT.ensureString(a2a.get(K_ENDPOINT));
+		AMap<AString, ACell> card = RT.ensureMap(a2a.get(K_CARD));
+		if (endpoint == null || card == null) {
+			throw new IllegalArgumentException("A2A agent asset requires a card and endpoint");
+		}
+		requireSafeUrl(endpoint.toString());
+		AMap<AString, ACell> authBinding = RT.ensureMap(a2a.get(K_AUTH));
+		RequestAuth auth = resolveAssetAuth(authBinding, card, ctx);
+		return new AgentTarget(endpoint.toString(), card, auth, metadata.getHash());
+	}
+
+	private AgentTarget resolveRawTarget(ACell input, RequestContext ctx) {
+		AString url = RT.ensureString(RT.getIn(input, Fields.URL));
+		if (url == null) throw new IllegalArgumentException("'agent' is required (or 'url' on a raw A2A operation)");
+		String rpcUrl = normaliseRpcUrl(url.toString());
+		requireSafeUrl(rpcUrl);
+		return new AgentTarget(rpcUrl, null, RequestAuth.bearer(resolveBearer(input, ctx)), null);
+	}
+
+	private RequestAuth directBearerAuth(AMap<AString, ACell> auth, RequestContext ctx) {
+		if (auth == null) return null;
+		AString kind = RT.ensureString(auth.get(K_KIND));
+		if (kind == null || !"bearer".equalsIgnoreCase(kind.toString())) return null;
+		return RequestAuth.bearer(resolveSecretRef(auth, ctx));
+	}
+
+	@SuppressWarnings("unchecked")
+	private RequestAuth resolveAssetAuth(AMap<AString, ACell> auth,
+			AMap<AString, ACell> card, RequestContext ctx) {
+		if (auth == null) return null;
+		RequestAuth direct = directBearerAuth(auth, ctx);
+		if (direct != null) return direct;
+
+		AString schemeName = RT.ensureString(auth.get(K_SCHEME));
+		AMap<AString, ACell> schemes = RT.ensureMap(card.get(K_SECURITY_SCHEMES));
+		ACell schemeCell = schemes != null ? schemes.get(schemeName) : null;
+		if (!(schemeCell instanceof AMap<?, ?>)) {
+			throw new IllegalArgumentException("Agent Card does not declare security scheme '" + schemeName + "'");
+		}
+		AMap<AString, ACell> scheme = (AMap<AString, ACell>) schemeCell;
+		String secret = resolveSecretRef(auth, ctx);
+
+		AMap<AString, ACell> apiKey = RT.ensureMap(scheme.get(K_API_KEY_SCHEME));
+		if (apiKey != null) {
+			AString location = RT.ensureString(apiKey.get(K_LOCATION));
+			AString name = RT.ensureString(apiKey.get(Fields.NAME));
+			if (location == null || name == null
+					|| !("header".equals(location.toString()) || "query".equals(location.toString())
+						|| "cookie".equals(location.toString()))) {
+				throw new IllegalArgumentException("API-key scheme '" + schemeName
+					+ "' must declare location header, query, or cookie and a name");
+			}
+			return new RequestAuth(location.toString(), name.toString(), secret);
+		}
+
+		AMap<AString, ACell> http = RT.ensureMap(scheme.get(K_HTTP_AUTH_SCHEME));
+		AString httpScheme = http != null ? RT.ensureString(http.get(K_SCHEME)) : null;
+		if (httpScheme != null && "bearer".equalsIgnoreCase(httpScheme.toString())) {
+			return RequestAuth.bearer(secret);
+		}
+		throw new IllegalArgumentException("Unsupported Agent Card security scheme '" + schemeName
+			+ "'; supported: API key and HTTP Bearer");
+	}
+
+	private String resolveSecretRef(AMap<AString, ACell> auth, RequestContext ctx) {
+		AString ref = RT.ensureString(auth.get(K_SECRET));
+		String value = ref != null ? engine.resolveSecret(ref.toString(), ctx) : null;
+		if (value == null) throw new IllegalArgumentException(
+			"Cannot resolve A2A auth secret '" + ref + "' from the caller's SecretStore");
+		return value;
+	}
+
+	@SuppressWarnings("unchecked")
+	private static String endpointFromCard(AMap<AString, ACell> card) {
+		ACell interfacesCell = card.get(K_SUPPORTED_INTERFACES);
+		if (interfacesCell instanceof AVector<?> interfaces && interfaces.count() > 0) {
+			ACell first = interfaces.get(0);
+			if (first instanceof AMap<?, ?> map) {
+				AString url = RT.ensureString(((AMap<AString, ACell>) map).get(Fields.URL));
+				if (url != null) return url.toString();
+			}
+		}
+		// Compatibility with pre-1.0 cards that advertised one top-level URL.
+		AString legacy = RT.ensureString(card.get(Fields.URL));
+		if (legacy != null) return legacy.toString();
+		throw new IllegalArgumentException("Agent Card has no supported interface URL");
+	}
+
 	// ==================== getAgentCard ====================
 
-	private CompletableFuture<ACell> fetchAgentCard(ACell input, RequestContext ctx) {
+	private CompletableFuture<ACell> fetchAgentCard(ACell input, RequestContext ctx, boolean allowRaw) {
+		if (RT.getIn(input, K_AGENT) != null) {
+			try {
+				return CompletableFuture.completedFuture(resolveAgentTarget(input, ctx, false).card());
+			} catch (RuntimeException e) {
+				return CompletableFuture.failedFuture(e);
+			}
+		}
+		if (!allowRaw) return CompletableFuture.failedFuture(new IllegalArgumentException(
+			"'agent' is required; import one with v/ops/a2a/import-agent"));
 		AString urlCell = RT.ensureString(RT.getIn(input, Fields.URL));
 		if (urlCell == null) {
 			return CompletableFuture.failedFuture(new IllegalArgumentException(
 				"'url' is required (remote A2A base or RPC URL)"));
 		}
-		String url;
-		HttpRequest req;
 		try {
-			url = normaliseAgentCardUrl(urlCell.toString());
-			requireSafeUrl(url);
-			String bearer = resolveBearer(input, ctx);
-			HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url))
-					.GET()
-					.timeout(Duration.ofSeconds(30));
-			req = withBearer(builder, bearer).build();
+			return fetchAgentCardUrl(urlCell.toString(), RequestAuth.bearer(resolveBearer(input, ctx)));
 		} catch (RuntimeException e) {
 			return CompletableFuture.failedFuture(e);
 		}
+	}
 
+	private CompletableFuture<ACell> fetchAgentCardUrl(String baseUrl, RequestAuth auth) {
+		String url = normaliseAgentCardUrl(baseUrl);
+		requireSafeUrl(url);
+		HttpRequest.Builder builder = HttpRequest.newBuilder(authUri(url, auth))
+				.GET()
+				.timeout(Duration.ofSeconds(30));
+		applyAuth(builder, auth);
+		HttpRequest req = builder.build();
 		return httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofString())
 				.thenApply(resp -> {
 					int sc = resp.statusCode();
@@ -218,9 +551,10 @@ public class A2AAdapter extends AAdapter {
 	}
 
 	/** Keep missing/invalid RPC input on the normal failed-Job path. */
-	private CompletableFuture<ACell> rpcCallWithId(ACell input, RequestContext ctx, String method) {
+	private CompletableFuture<ACell> rpcCallWithId(ACell input, RequestContext ctx, String method,
+			boolean allowRaw) {
 		try {
-			return rpcCall(input, ctx, method, idParams(input));
+			return rpcCall(input, ctx, method, idParams(input), allowRaw);
 		} catch (RuntimeException e) {
 			return CompletableFuture.failedFuture(e);
 		}
@@ -231,33 +565,21 @@ public class A2AAdapter extends AAdapter {
 	 * agent and return the {@code result} as a Covia ACell. Throws if the
 	 * remote returns an {@code error} — callers get a failed future.
 	 */
-	private CompletableFuture<ACell> rpcCall(ACell input, RequestContext ctx, String method, Map<String, Object> params) {
-		AString urlCell = RT.ensureString(RT.getIn(input, Fields.URL));
-		if (urlCell == null) {
-			return CompletableFuture.failedFuture(new IllegalArgumentException("url required"));
-		}
+	private CompletableFuture<ACell> rpcCall(ACell input, RequestContext ctx, String method,
+			Map<String, Object> params, boolean allowRaw) {
 		Map<String, Object> envelope = new LinkedHashMap<>();
 		envelope.put("jsonrpc", "2.0");
 		envelope.put("id", UUID.randomUUID().toString());
 		envelope.put("method", method);
 		envelope.put("params", params);
 
-		String body = JsonUtil.OBJECT_MAPPER.toJson(envelope);
-
-		HttpRequest req;
+		AgentTarget target;
 		try {
-			String url = normaliseRpcUrl(urlCell.toString());
-			requireSafeUrl(url);
-			String bearer = resolveBearer(input, ctx);
-			HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url))
-					.header("Content-Type", "application/json")
-					.header("Accept", "application/a2a+json, application/json")
-					.timeout(Duration.ofSeconds(30))
-					.POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8));
-			req = withBearer(builder, bearer).build();
+			target = resolveAgentTarget(input, ctx, allowRaw);
 		} catch (RuntimeException e) {
 			return CompletableFuture.failedFuture(e);
 		}
+		HttpRequest req = postEnvelope(target.rpcUrl(), envelope, target.auth());
 
 		return httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofString())
 				.thenApply(resp -> {
@@ -309,18 +631,19 @@ public class A2AAdapter extends AAdapter {
 	// ==================== a2a:send with mirroring ====================
 
 	@SuppressWarnings("unchecked")
-	private void doSendMirrored(Job job, RequestContext ctx, ACell input) {
-		AString urlCell = RT.ensureString(RT.getIn(input, Fields.URL));
-		if (urlCell == null) { job.fail("'url' is required (remote A2A base or RPC URL)"); return; }
-		String rpcUrl;
-		String bearer;
+	private void doSendMirrored(Job job, RequestContext ctx, ACell input, boolean allowRaw) {
+		AgentTarget target;
 		try {
-			rpcUrl = normaliseRpcUrl(urlCell.toString());
-			requireSafeUrl(rpcUrl);
-			bearer = resolveBearer(input, ctx);
+			target = resolveAgentTarget(input, ctx, allowRaw);
 		} catch (RuntimeException e) {
 			job.fail(describeFailure(e));
 			return;
+		}
+		String rpcUrl = target.rpcUrl();
+		RequestAuth auth = target.auth();
+		if (target.assetId() != null) {
+			job.updateData(job.getData().assoc(K_AGENT_ASSET,
+				Strings.create(target.assetId().toHexString())));
 		}
 
 		ACell messageRaw = RT.getIn(input, Fields.MESSAGE);
@@ -350,7 +673,7 @@ public class A2AAdapter extends AAdapter {
 
 		job.setStatus(Status.STARTED);
 
-		HttpRequest req = postEnvelope(rpcUrl, envelope, bearer);
+		HttpRequest req = postEnvelope(rpcUrl, envelope, auth);
 		httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofString())
 				.whenComplete((resp, err) -> {
 					if (err != null) {
@@ -360,11 +683,11 @@ public class A2AAdapter extends AAdapter {
 							+ "; verify 'url' and retry");
 						return;
 					}
-					handleSendResponse(job, rpcUrl, bearer, resp);
+					handleSendResponse(job, rpcUrl, auth, resp);
 				});
 	}
 
-	private void handleSendResponse(Job job, String rpcUrl, String bearer, HttpResponse<String> resp) {
+	private void handleSendResponse(Job job, String rpcUrl, RequestAuth auth, HttpResponse<String> resp) {
 		if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
 			job.fail("Remote SendMessage failed: HTTP " + resp.statusCode() + ": "
 				+ conciseDetail(resp.body(), 512));
@@ -407,7 +730,7 @@ public class A2AAdapter extends AAdapter {
 		String remoteTaskId = remoteTask.id();
 		AMap<AString, ACell> current = job.getData();
 		job.updateData(current.assoc(Fields.REMOTE_TASK_ID, Strings.create(remoteTaskId)));
-		job.setCancelHook(() -> fireAndForgetCancel(rpcUrl, remoteTaskId, bearer));
+		job.setCancelHook(() -> fireAndForgetCancel(rpcUrl, remoteTaskId, auth));
 
 		if (remoteTask.status().state().isFinal()) {
 			finishJobWithRemoteTask(job, remoteTask, rawResultCell);
@@ -417,7 +740,7 @@ public class A2AAdapter extends AAdapter {
 			applyInterruptedState(job, remoteTask, rawResultCell);
 			return;
 		}
-		startPoller(job, rpcUrl, remoteTaskId, bearer);
+		startPoller(job, rpcUrl, remoteTaskId, auth);
 	}
 
 	/**
@@ -425,7 +748,7 @@ public class A2AAdapter extends AAdapter {
 	 * local Job. Exits when the Job is finished locally (e.g. cancelled) or
 	 * the remote reaches a terminal/interrupted state.
 	 */
-	private void startPoller(Job job, String rpcUrl, String remoteTaskId, String bearer) {
+	private void startPoller(Job job, String rpcUrl, String remoteTaskId, RequestAuth auth) {
 		Thread.ofVirtual().name("a2a-mirror-" + remoteTaskId).start(() -> {
 			long deadline = System.currentTimeMillis() + POLL_MAX_LIFETIME.toMillis();
 			while (!job.isFinished() && System.currentTimeMillis() < deadline) {
@@ -439,7 +762,7 @@ public class A2AAdapter extends AAdapter {
 
 				PollResult p;
 				try {
-					p = pollRemote(rpcUrl, remoteTaskId, bearer);
+					p = pollRemote(rpcUrl, remoteTaskId, auth);
 				} catch (Exception e) {
 					log.warn("Mirror poll failed for remote task {}: {}", remoteTaskId, e.getMessage());
 					continue; // transient errors don't fail the Job
@@ -484,10 +807,10 @@ public class A2AAdapter extends AAdapter {
 	/** Remote state + the raw result cell preserving the remote's exact JSON. */
 	private record PollResult(Task task, ACell rawResultCell) {}
 
-	private PollResult pollRemote(String rpcUrl, String remoteTaskId, String bearer) throws Exception {
+	private PollResult pollRemote(String rpcUrl, String remoteTaskId, RequestAuth auth) throws Exception {
 		Map<String, Object> params = Map.of("id", remoteTaskId);
 		Map<String, Object> envelope = rpcEnvelope(A2AMethods.GET_TASK_METHOD, params);
-		HttpRequest req = postEnvelope(rpcUrl, envelope, bearer);
+		HttpRequest req = postEnvelope(rpcUrl, envelope, auth);
 		HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
 		if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
 			throw new RuntimeException("Remote getTask failed: HTTP " + resp.statusCode()
@@ -527,11 +850,11 @@ public class A2AAdapter extends AAdapter {
 				.assoc(Fields.OUTPUT, rawTaskCell));
 	}
 
-	private void fireAndForgetCancel(String rpcUrl, String remoteTaskId, String bearer) {
+	private void fireAndForgetCancel(String rpcUrl, String remoteTaskId, RequestAuth auth) {
 		try {
 			Map<String, Object> params = Map.of("id", remoteTaskId);
 			Map<String, Object> envelope = rpcEnvelope(A2AMethods.CANCEL_TASK_METHOD, params);
-			httpClient.sendAsync(postEnvelope(rpcUrl, envelope, bearer), HttpResponse.BodyHandlers.discarding());
+			httpClient.sendAsync(postEnvelope(rpcUrl, envelope, auth), HttpResponse.BodyHandlers.discarding());
 		} catch (Exception e) {
 			log.warn("Best-effort remote cancel failed for {}: {}", remoteTaskId, e.getMessage());
 		}
@@ -549,13 +872,27 @@ public class A2AAdapter extends AAdapter {
 	}
 
 	static HttpRequest postEnvelope(String rpcUrl, Map<String, Object> envelope, String bearer) {
+		return postEnvelope(rpcUrl, envelope, RequestAuth.bearer(bearer));
+	}
+
+	private static HttpRequest postEnvelope(String rpcUrl, Map<String, Object> envelope, RequestAuth auth) {
 		String body = JsonUtil.OBJECT_MAPPER.toJson(envelope);
-		HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(rpcUrl))
+		HttpRequest.Builder builder = HttpRequest.newBuilder(authUri(rpcUrl, auth))
 				.header("Content-Type", "application/json")
 				.header("Accept", "application/a2a+json, application/json")
 				.timeout(Duration.ofSeconds(30))
 				.POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8));
-		return withBearer(builder, bearer).build();
+		applyAuth(builder, auth);
+		return builder.build();
+	}
+
+	private static URI authUri(String url, RequestAuth auth) {
+		URI uri = URI.create(url);
+		return auth == null ? uri : auth.applyTo(uri);
+	}
+
+	private static void applyAuth(HttpRequest.Builder builder, RequestAuth auth) {
+		if (auth != null) auth.applyHeaders(builder);
 	}
 
 	/**
@@ -584,11 +921,6 @@ public class A2AAdapter extends AAdapter {
 				+ "'; store it with secret:set or pass an existing s/<name> reference");
 		}
 		return token;
-	}
-
-	private static HttpRequest.Builder withBearer(HttpRequest.Builder builder, String bearer) {
-		if (bearer != null) builder.setHeader("Authorization", "Bearer " + bearer);
-		return builder;
 	}
 
 	@SuppressWarnings("unused")
