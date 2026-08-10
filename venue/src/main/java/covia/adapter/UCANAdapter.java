@@ -34,14 +34,6 @@ public class UCANAdapter extends AAdapter {
 	private static final AString K_AUTHORISES = Strings.intern("authorises");
 	private static final AString K_AUDIENCE = Strings.intern("audience");
 
-	/**
-	 * Temporary representation of the UCAN {@code exp: null} (never expires)
-	 * form while convex-core cannot represent nullable expiry (Convex #678).
-	 * Keep this inside issuance so callers can use the spec-shaped API now and
-	 * the workaround can be removed without changing that API later.
-	 */
-	static final long NON_EXPIRING_COMPAT_LIFETIME_SECS = 99L * 365 * 24 * 60 * 60;
-
 	@Override
 	public String getName() {
 		return "ucan";
@@ -118,19 +110,19 @@ public class UCANAdapter extends AAdapter {
 		ACell expValue = inputMap.get(UCAN.EXP);
 		CVMLong expCell = RT.ensureLong(expValue);
 		long now = System.currentTimeMillis() / 1000;
-		long exp;
+		// UCAN v0.10.0 (Convex #678, covia#322): a non-expiring token carries an
+		// explicit exp: null. Tolerant API input treats an omitted exp as null;
+		// the minted claim is always explicit.
+		Long exp;
 		if (expValue == null) {
-			// UCAN v0.10.0 requires explicit null for a non-expiring token. Convex
-			// #678 will make that directly representable; accept omitted input as
-			// null, then mint a deliberately conspicuous far-future finite expiry.
-			exp = now + NON_EXPIRING_COMPAT_LIFETIME_SECS;
+			exp = null;
 		} else if (expCell != null) {
 			exp = expCell.longValue();
+			if (exp <= now) {
+				throw new RuntimeException("exp must be in the future, or null for no expiry");
+			}
 		} else {
 			throw new RuntimeException("exp must be unix seconds or null for no expiry");
-		}
-		if (exp <= now) {
-			throw new RuntimeException("exp must be in the future");
 		}
 
 		// Canonicalise + validate 'with' fields. A bare path names the ISSUER's
@@ -175,10 +167,13 @@ public class UCANAdapter extends AAdapter {
 							+ "resource owner (transport ucans / bearer), or use your own namespace");
 					}
 					// This second check asks only whether the granting chain still
-					// exists at the minted token's expiry horizon. Dynamic gates rule
-					// on the issuance happening now (the check above); they must not
-					// execute a second time against an imaginary future invocation.
-					if (!engine.proofsStructurallyCover(ctx, resource, grantAbility, exp - 1)) {
+					// exists at the minted token's expiry horizon — unbounded for a
+					// non-expiring mint, so exp: null requires the enabling right to
+					// be non-expiring too. Dynamic gates rule on the issuance
+					// happening now (the check above); they must not execute a
+					// second time against an imaginary future invocation.
+					long horizon = (exp == null) ? Long.MAX_VALUE : exp - 1;
+					if (!engine.proofsStructurallyCover(ctx, resource, grantAbility, horizon)) {
 						throw new RuntimeException("att[" + i + "]: exp exceeds the validity of the "
 							+ "granting right enabling this issuance — minted authority must not "
 							+ "outlive the right it was minted under; request a shorter exp");
@@ -224,12 +219,19 @@ public class UCANAdapter extends AAdapter {
 			throw new IllegalArgumentException("aud must be a valid audience DID: " + audDID);
 		}
 		AKeyPair venueKP = engine.getKeyPair();
+		// Mint the Convex UCAN JWT profile (0.8.11): the ucv claim and an
+		// explicit exp key (null = non-expiring) are required for the token to
+		// parse; JWT.signPublic supplies the typ header and kid. Claims are
+		// built directly (not via UCAN.signJWT) because the venue's iss is its
+		// declared identity, which may be did:web (covia#343) — the profile
+		// accepts any DID-shaped issuer.
 		AMap<AString, ACell> claims = Maps.of(
 			UCAN.ISS, venueDID,
 			UCAN.AUD, audDID,
-			UCAN.EXP, CVMLong.create(exp),
+			UCAN.UCV, UCAN.VERSION,
 			UCAN.ATT, att,
 			UCAN.PRF, Vectors.empty());
+		claims = claims.assoc(UCAN.EXP, (exp == null) ? null : CVMLong.create(exp));
 		AString token = JWT.signPublic(claims, venueKP);
 
 		return Maps.of("token", token);
@@ -328,11 +330,12 @@ public class UCANAdapter extends AAdapter {
 			}
 		}
 
+		Long tokenExp = token.getExpiry();
 		AMap<AString, ACell> result = Maps.of(
 			"valid", true,
 			"iss", token.getIssuer(),
 			"aud", token.getAudience(),
-			"exp", CVMLong.create(token.getExpiry()),
+			"exp", (tokenExp == null) ? null : CVMLong.create(tokenExp),
 			"chainDepth", CVMLong.create(depth),
 			"rootIssuer", rootIssuer,
 			"att", verdicts);

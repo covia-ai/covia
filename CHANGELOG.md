@@ -8,7 +8,16 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Added
+- Operator-declared venue identity: the `did` config key is validated
+  fail-closed (did:web must match the public hostname; did:key pins the venue
+  key pair), and did:web principals verify at every ingress seam (#343)
+- Native DLFS move/copy on the `file:` surface via Convex 0.8.11 (#321)
+
 ### Changed
+- Updated Convex to 0.8.11: `ucan:issue` mints genuinely non-expiring tokens
+  (explicit `exp: null`) in the Convex UCAN JWT profile, replacing the 99-year
+  workaround (#322)
 - Updated JUnit to 6.1.3 and the A2A Java SDK to 1.2.0.Final; A2A streaming
   responses use the SDK's declared union serializer and omitted cancel metadata
   is normalised to the SDK's empty-map default
