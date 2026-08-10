@@ -40,7 +40,7 @@ The trio gives a stable federation set for cross-venue work on one host (`35.213
 
 ## Dev Venues
 
-### venue-3.covia.ai (AWS)
+### venue-3.covia.ai (AWS — degraded)
 
 - **URL:** https://venue-3.covia.ai
 - **Status:** https://venue-3.covia.ai/api/v1/status
@@ -50,6 +50,8 @@ The trio gives a stable federation set for cross-venue work on one host (`35.213
 - **Region:** AWS us-east-1 (N. Virginia)
 - **Spec:** 2 vCPU, 4 GB RAM
 - **TLS:** Let's Encrypt (auto-renew)
+- **Availability:** TLS certificate expired as of 2026-08-10; do not use until
+  certificate renewal is restored
 
 ### venue-4.covia.ai (Azure)
 
@@ -72,9 +74,9 @@ Venues within a tier run the same Covia server version. Data (assets, workspace,
 import { Venue, KeyPairAuth } from "@covia/covia-sdk";
 
 const auth = KeyPairAuth.generate();
-const venue = await Venue.connect("https://venue-3.covia.ai", auth);
-// or
-const venue = await Venue.connect("https://venue-4.covia.ai", auth);
+const venueUrl = process.env.COVIA_VENUE_URL;
+if (!venueUrl) throw new Error("Set COVIA_VENUE_URL to a venue listed above");
+const venue = await Venue.connect(venueUrl, auth);
 ```
 
 ### Connecting via MCP
@@ -84,15 +86,14 @@ Use the venue's MCP endpoint as a server URL in your MCP client configuration:
 ```json
 {
   "mcpServers": {
-    "covia-aws": { "url": "https://venue-3.covia.ai/mcp" },
-    "covia-azure": { "url": "https://venue-4.covia.ai/mcp" }
+    "covia": { "url": "https://your-venue.example.com/mcp" }
   }
 }
 ```
 
 ### API Endpoints
 
-Both venues expose the same API surface:
+All venues expose the same API surface:
 
 - `GET  /api/v1/status` — Venue health and stats
 - `GET  /api/v1/operations` — List available operations

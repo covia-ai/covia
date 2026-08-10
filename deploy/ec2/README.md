@@ -1,6 +1,6 @@
 # EC2 Deployment
 
-Docker-based deployment for `venue-3.covia.ai` (`13.213.76.110`).
+Docker-based deployment for `venue-3.covia.ai` on AWS.
 
 ## One-Time EC2 Setup
 
