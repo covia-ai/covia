@@ -12,15 +12,37 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Operator-declared venue identity: the `did` config key is validated
   fail-closed (did:web must match the public hostname; did:key pins the venue
   key pair), and did:web principals verify at every ingress seam (#343)
-- Native DLFS move/copy on the `file:` surface via Convex 0.8.11 (#321)
+- `file:move` / `file:copy` with provider-native dispatch — fully native on
+  DLFS-backed roots with Convex 0.8.11 (#321)
+- Outbound A2A agents modelled as assets (#340)
+- Result-oriented run execution (#316)
+- Agent session titles
+- DLFS roots scoped to subpaths (#326)
+- Venue admission documented and exposed (#318)
+- Venue authentication design agreed (`venue/docs/AUTH.md`, #297)
 
 ### Changed
 - Updated Convex to 0.8.11: `ucan:issue` mints genuinely non-expiring tokens
   (explicit `exp: null`) in the Convex UCAN JWT profile, replacing the 99-year
   workaround (#322)
+- HITL grant expiry policy configurable (#314)
+- Agent creation exclusive (#329)
+- Structured admission errors (#327)
 - Updated JUnit to 6.1.3 and the A2A Java SDK to 1.2.0.Final; A2A streaming
   responses use the SDK's declared union serializer and omitted cancel metadata
   is normalised to the SDK's empty-map default
+
+### Fixed
+- Standard bearer auth for outbound A2A (#339)
+- A2A long-turn reattachment (#338)
+- Typed and nested collection tool results preserved in agent loops (#334)
+- Unavailable configured agent tools surfaced (#317)
+- Forbidden returned for denied CORS origins (#320)
+- MCP connection failures made actionable
+- Orchestrator strict schemas resolved at the target venue
+- Agent session title updates hardened
+- Asset content semantics and bound agent shutdown (#331, #333)
+- Agent execution durability boundary clarified (#332)
 
 ## [0.8.0] - 2026-07-31
 
