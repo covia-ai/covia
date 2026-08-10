@@ -1,6 +1,6 @@
 {
 	"name": "Issue UCAN Token",
-	"description": "Creates a venue-signed UCAN capability token for resources controlled by this venue or one of its managed custodial users. The venue is the issuer. Self-sovereign DID owners must sign UCANs with their own key using a client SDK. The token grants the audience (aud) the specified capabilities (att) until expiry (exp).",
+	"description": "Creates a venue-signed UCAN capability token for resources controlled by this venue or one of its managed custodial users. The venue is the issuer. Self-sovereign DID owners must sign UCANs with their own key using a client SDK. The token grants the audience (aud) the specified capabilities (att) until expiry (exp). Omitted exp and explicit exp:null request no expiry; until Convex #678 ships this is represented by a 99-year finite expiry.",
 	"dateCreated": "2026-03-25T00:00:00Z",
 	"operation": {
 		"adapter": "ucan:issue",
@@ -25,11 +25,10 @@
 					}
 				},
 				"exp": {
-					"type": "integer",
-					"description": "Expiry time in unix seconds"
+					"description": "Expiry time as integer unix seconds, or null for no expiry (temporarily encoded as 99 years until Convex #678)"
 				}
 			},
-			"required": ["aud", "att", "exp"]
+			"required": ["aud", "att"]
 		},
 		"output": {
 			"type": "object",

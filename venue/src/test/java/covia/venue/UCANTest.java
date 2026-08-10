@@ -134,6 +134,43 @@ public class UCANTest {
 	}
 
 	@Test
+	public void testIssueExplicitNullExpiryMintsNonExpiringToken() {
+		long before = System.currentTimeMillis() / 1000;
+		Job job = engine.jobs().invokeOperation("v/ops/ucan/issue",
+			Maps.of(
+				UCAN.AUD, BOB_DID,
+				UCAN.ATT, Vectors.of(Capability.create(
+					Strings.create(CUSTODIAL_DID + "/w/"), Capability.CRUD_READ)),
+				UCAN.EXP, null),
+			CUSTODIAL);
+
+		AString jwt = RT.ensureString(RT.getIn(job.awaitResult(5000), "token"));
+		UCAN parsed = UCAN.fromJWT(jwt);
+		assertNotNull(parsed);
+		assertNull(parsed.getExpiry(),
+			"exp:null must mint a genuinely non-expiring token (Convex #678, covia#322)");
+		assertNotNull(UCANValidator.validateJWT(jwt, before),
+			"a non-expiring token must validate now");
+		assertNotNull(UCANValidator.validateJWT(jwt, Long.MAX_VALUE - 1),
+			"a non-expiring token must validate at any future horizon");
+	}
+
+	@Test
+	public void testIssueMissingExpiryDefaultsToNoExpiry() {
+		Job job = engine.jobs().invokeOperation("v/ops/ucan/issue",
+			Maps.of(
+				UCAN.AUD, BOB_DID,
+				UCAN.ATT, Vectors.of(Capability.create(
+					Strings.create(CUSTODIAL_DID + "/w/"), Capability.CRUD_READ))),
+			CUSTODIAL);
+		AString jwt = RT.ensureString(RT.getIn(job.awaitResult(5000), "token"));
+		UCAN parsed = UCAN.fromJWT(jwt);
+		assertNotNull(parsed);
+		assertNull(parsed.getExpiry(),
+			"omitted API input mints the same explicit exp: null as an explicit null");
+	}
+
+	@Test
 	public void testIssueRejectsOtherUserNamespace() {
 		// Alice cannot issue a token for Bob's namespace
 		long exp = (System.currentTimeMillis() / 1000) + 3600;

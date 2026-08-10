@@ -2,8 +2,9 @@
   "name": "Get Asset Content",
   "description": "Retrieve the binary content payload of an asset by any resolvable address. Returned as hex-encoded Blob. Returns {truncated: true, size} if it exceeds maxSize (default 1MB). Use asset_get for metadata. Only assets stored with a content payload have content.",
   "dateCreated": "2026-03-31T00:00:00Z",
-  "operation": {
-    "adapter": "asset:content",
+	"operation": {
+		"adapter": "asset:content",
+		"readOnly": true,
     "toolName": "asset_content",
     "input": {
       "type": "object",
@@ -18,7 +19,9 @@
       "properties": {
         "id": { "type": "string", "description": "Asset reference (echoed)" },
         "exists": { "type": "boolean", "description": "True if a CAS record was found for the resolved asset" },
-        "value": { "type": "string", "description": "Content as hex-encoded Blob (0x...). Present when exists is true and not truncated." },
+        "hasContent": { "type": "boolean", "description": "True if the resolved address has a content payload. An existing metadata-only asset returns exists: true and hasContent: false." },
+        "value": { "type": "string", "description": "Content as hex-encoded Blob (0x...). Present when hasContent is true and not truncated." },
+        "message": { "type": "string", "description": "Diagnostic explaining why an existing asset has no content payload." },
         "truncated": { "type": "boolean", "description": "True if content exceeds maxSize" },
         "size": { "type": "integer", "description": "Content size in bytes (present when truncated)" }
       }

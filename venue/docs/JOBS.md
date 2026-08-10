@@ -128,8 +128,9 @@ inbound messages durably in `session.pending` — see AGENT_SESSIONS.md).
   `redactJobSecrets` — both `input` and `output` redacted per the
   operation's `secretFields` — on **every durable write**, since adapters
   may update records after submission.
-- **Private jobs** (#192, `private: true` + `enablePrivateJobs`) are never
-  persisted: memory-only, no recovery, gone on restart.
+- Transient Job wrappers used by result-oriented read-only runs and ordinary
+  internal composition are never persisted: memory-only, no recovery, gone
+  when terminal or on restart. Public invoke always persists.
 - `VenueJob.completeWith` runs output-schema validation first; in strict
   mode a violation fails the job instead of completing it. This covers every
   completion path, including job-aware adapter overrides.
@@ -145,9 +146,7 @@ Re-execution would double side effects for non-idempotent ops
 |----------------|---------|---------------|
 | `PENDING` | `FAILED` — "restarted before execution began" | retry |
 | `STARTED` (most ops) | `FAILED` — "effects may or may not have applied; verify before retrying" | verify, then retry |
-| `STARTED` `agent:chat` | `FAILED` — session intact; the record's `sessionId` names the conversation | re-send into the same session |
-| `STARTED` `agent:request`, task still queued | restored, stays `STARTED` — the durable task drives completion | keep polling by ID |
-| `STARTED` `agent:request`, task gone | `FAILED` — "task concluded; check the agent timeline" | inspect / retry |
+| `STARTED` agent request/chat | `FAILED`; AgentAdapter removes its queued intake and stale session fence | inspect external interaction records, then retry if safe |
 | `PAUSED` / `INPUT_REQUIRED` / `AUTH_REQUIRED` | restored live | continue as before |
 
 Restored non-terminal jobs **re-occupy their caller's concurrency-cap
@@ -155,9 +154,10 @@ permit** (`JobSemaphore.reserveRecovered`, which may drive permits negative):
 after a restart the cap still holds, and new work admits only as restored
 jobs finish.
 
-Agent-side work (pending session envelopes, queued tasks, interrupted
-`inCycle` cycles) is all durable and resumes independently via the boot scan
-(`AgentAdapter.wakeAgentsWithWork`).
+After generic Job recovery, AgentAdapter reconciles its own queues: intake for
+terminal Jobs is removed, stale execution markers/fences are cleared, and only
+remaining durable queued work can start a fresh attempt. `inCycle` never causes
+a wake by itself.
 
 ## Admission
 
@@ -168,13 +168,21 @@ Agent-side work (pending session envelopes, queued tasks, interrupted
 - **Per-caller concurrency cap**: see `venue/CLAUDE.md` § Rate limiting.
   Sub-jobs (carrying a parent job id) are exempt.
 
-## invokeOperation vs invokeInternal
+## invokeOperation, runOperation, and invokeInternal
 
-Two dispatch paths with **identical trust, capability, defaults, and gate
-handling** — they differ only in Job creation:
+Three dispatch paths with **identical trust, capability, defaults, and gate
+handling**. All execute through a Job; they differ in audience, admission, and
+whether the Job is durable:
 
 - `invokeOperation` — creates and persists a tracked Job (the caller-facing
-  accountability unit).
-- `invokeInternal` — zero-Job dispatch for framework composition: agent
-  transitions, LLM calls, tool calls, capability gates. Returns the
-  adapter's future directly (so cancellation propagates to the executor).
+  accountability unit), even for read-only operations.
+- `runOperation` — public result-oriented dispatch. Returns the operation
+  result rather than a Job handle and applies normal top-level admission.
+- `invokeInternal` — in-process framework composition for agent transitions,
+  LLM calls, tool calls, and capability gates. Returns the operation result
+  future and is exempt from top-level admission.
+
+`runOperation` uses a transient, non-persisted Job only when the operation
+declares `operation.readOnly: true`. `invokeInternal` is transient by default.
+`operation.internal: false` forces a durable Job on either result-oriented
+path; `recordReadOnlyOperations: true` forces read-only Jobs to be durable too.

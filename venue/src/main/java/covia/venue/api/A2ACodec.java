@@ -55,7 +55,7 @@ public class A2ACodec {
 	/** Internal record field name for an A2A contextId (groups related tasks). */
 	public static final AString CONTEXT_ID = Strings.intern("contextId");
 	/** Internal record field name for an A2A messageId. */
-	public static final AString MESSAGE_ID = Strings.intern("messageId");
+	public static final AString MESSAGE_ID = Fields.MESSAGE_ID;
 	/** Internal record field name for an artifactId. */
 	public static final AString ARTIFACT_ID = Strings.intern("artifactId");
 
@@ -197,7 +197,7 @@ public class A2ACodec {
 			case TASK_STATE_REJECTED       -> Status.REJECTED;
 			case TASK_STATE_INPUT_REQUIRED -> Status.INPUT_REQUIRED;
 			case TASK_STATE_AUTH_REQUIRED  -> Status.AUTH_REQUIRED;
-			case UNRECOGNIZED              -> Status.FAILED;
+			case TASK_STATE_UNSPECIFIED    -> Status.FAILED;
 		};
 	}
 
@@ -219,7 +219,7 @@ public class A2ACodec {
 		if (Status.INPUT_REQUIRED.equals(coviaStatus)) return TaskState.TASK_STATE_INPUT_REQUIRED;
 		if (Status.AUTH_REQUIRED.equals(coviaStatus)) return TaskState.TASK_STATE_AUTH_REQUIRED;
 		if (Status.PAUSED.equals(coviaStatus)) return TaskState.TASK_STATE_WORKING;
-		return TaskState.UNRECOGNIZED;
+		return TaskState.TASK_STATE_UNSPECIFIED;
 	}
 
 	// ==================== Task construction ====================

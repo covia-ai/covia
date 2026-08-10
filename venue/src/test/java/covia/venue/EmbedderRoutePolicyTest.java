@@ -30,6 +30,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import covia.api.Fields;
+import covia.exception.AuthException;
 import covia.grid.auth.VenueAuth;
 import covia.venue.server.AuthMiddleware;
 import covia.venue.server.VenueServer;
@@ -56,6 +57,7 @@ class EmbedderRoutePolicyTest {
 	private static final String METHOD_REJECTED = "/api/getmine/method-rejected";
 	private static final String CUSTOM_FAILURE = "/api/getmine/custom-failure";
 	private static final String CUSTOM_AUTH = "/api/getmine/custom-auth";
+	private static final String API_KEY_AUTH = "/api/getmine/api-key-auth";
 	private static final String AUTHENTICATED_IDENTITY_HEADER =
 		"X-GetMine-Authenticated-Identity";
 	private static final String VENUE_USER_HEADER = "X-GetMine-Venue-User";
@@ -155,6 +157,20 @@ class EmbedderRoutePolicyTest {
 			"publishing extender-owned auth context must not admit a venue user");
 		assertEquals(401,
 			get(strictServer, CUSTOM_AUTH, null).statusCode());
+	}
+
+	@Test
+	void extenderCanAuthenticateAlternateCredentialCarrier() throws Exception {
+		String token = VenueAuth.namedKeyPair(
+			operatorKey,
+			operatorDID.toString(),
+			"did:web:embedder.example",
+			300).mintToken();
+
+		assertResponse(200, operatorKeyDID + "|" + operatorDID,
+			getWithApiKey(strictServer, API_KEY_AUTH, token));
+		assertEquals(401,
+			getWithApiKey(strictServer, API_KEY_AUTH, "not-a-jwt").statusCode());
 	}
 
 	@Test
@@ -306,6 +322,18 @@ class EmbedderRoutePolicyTest {
 			AuthMiddleware.getAuthenticatedIdentity(ctx)
 				+ "|" + AuthMiddleware.getVenueUserDID(ctx)),
 			GetMineRole.ADMIN);
+
+		routes.get(API_KEY_AUTH, ctx -> {
+			String token = ctx.header("x-api-key");
+			try {
+				strictServer.authenticator().authenticate(ctx,
+					token == null ? null : Strings.create(token));
+				ctx.result(strictServer.authenticator().authenticatedIdentity(ctx)
+					+ "|" + strictServer.authenticator().authenticatedUser(ctx));
+			} catch (AuthException e) {
+				ctx.status(401).result(e.getMessage());
+			}
+		}, GetMineRole.ADMIN);
 	}
 
 	private HttpResponse<String> get(VenueServer server, String path,
@@ -329,6 +357,17 @@ class EmbedderRoutePolicyTest {
 			.header(AUTHENTICATED_IDENTITY_HEADER,
 				authenticatedIdentity.toString())
 			.header(VENUE_USER_HEADER, venueUser.toString())
+			.GET()
+			.build();
+		return http.send(request, HttpResponse.BodyHandlers.ofString());
+	}
+
+	private HttpResponse<String> getWithApiKey(VenueServer server,
+			String path, String token) throws Exception {
+		HttpRequest request = HttpRequest.newBuilder(
+				URI.create(base(server) + path))
+			.timeout(Duration.ofSeconds(10))
+			.header("x-api-key", token)
 			.GET()
 			.build();
 		return http.send(request, HttpResponse.BodyHandlers.ofString());

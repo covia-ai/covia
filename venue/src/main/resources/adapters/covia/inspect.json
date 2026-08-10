@@ -4,6 +4,7 @@
 	"dateCreated": "2026-04-07T00:00:00Z",
 	"operation": {
 		"adapter": "covia:inspect",
+		"readOnly": true,
 		"toolName": "covia_inspect",
 		"input": {
 			"type": "object",

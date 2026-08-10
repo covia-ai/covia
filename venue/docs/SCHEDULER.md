@@ -56,9 +56,8 @@ All three funnel into one method: `wakeAgent(agentId, ctx, force)`.
 `wakeAgent` starts a loop only when, in order:
 
 1. no live loop already exists for the agent (else attach to it);
-2. phantom-`RUNNING` is corrected to `SLEEPING` (#64 — crash remnant / stale write);
-3. status is `SLEEPING` (suspended / terminated do not start);
-4. **`force || hasWork(agent)`**, where `hasWork` = "any session has non-empty
+2. status is runnable (`SLEEPING`, or a defensively tolerated stale `RUNNING`; suspended / terminated do not start);
+3. **`force || hasWork(agent)`**, where `hasWork` = "any session has non-empty
    `pending`, or any task exists".
 
 `wakeTime` is **not** consulted by the gate. A scheduled wake works by *firing*
@@ -101,9 +100,9 @@ carries a stale `wakeTime` (from the wake just serviced), it clears it. Intake o
 (`agent:request` / `agent:chat` / `agent:message`) write `pending` / `tasks`, not
 `wakeTime` — new work runs ASAP via `hasWork`, not via the scheduler.
 
-**Firing.** The grid scheduler fires `agent:trigger` through the engine's zero-Job
-`invokeFuture` path (`AgentAdapter.doKick`), so it **mints no session and creates
-no Job** — it just calls `wakeAgent(force:false)`. The run loop processes every
+**Firing.** The grid scheduler fires `agent:trigger` through the engine's
+transient internal Job path (`AgentAdapter.doKick`), so it **mints no session and
+persists no Job** — it just calls `wakeAgent(force:false)`. The run loop processes every
 thread whose work is ready and, on merge, re-arms for the next earliest `wakeTime`
 (or clears the handle).
 
@@ -134,13 +133,13 @@ via `agent:request` (task Job) or `agent:chat` (chat Job) and await that Job.
   result-await. Cancelling the trigger Job ends only that caller's wait.
 
 User-facing calls go through the Job-aware `handleTrigger`; the scheduler's
-zero-Job fire goes through `invokeFuture` → `doKick`. Both share `wakeAgent`.
+transient-Job fire goes through `invokeFuture` → `doKick`. Both share `wakeAgent`.
 
 ---
 
 ## 6. Invariants
 
-- **One funnel.** Every wake → `wakeAgent` (atomic launcher CAS, phantom recovery,
+- **One funnel.** Every wake → `wakeAgent` (atomic launcher CAS, stale-marker tolerance,
   gate, vthread dispatch).
 - **Write-then-wake (events).** Intake writes `pending`/`tasks` before calling
   `wakeAgent`. A write landing while a loop runs is picked up by the next

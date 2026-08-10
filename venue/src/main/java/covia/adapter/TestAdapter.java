@@ -21,6 +21,7 @@ import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.RequestContext;
+import covia.venue.AgentState;
 
 public class TestAdapter extends AAdapter {
 	
@@ -305,6 +306,9 @@ public class TestAdapter extends AAdapter {
     private ACell handleTaskComplete(RequestContext ctx, ACell input) {
         ACell newInput = RT.getIn(input, Fields.NEW_INPUT);
         ACell delayCell = RT.getIn(newInput, Fields.DELAY);
+		// Agent/A2A integration tests can hold a transition open without shaping
+		// the user message around this test adapter's private delay control.
+		if (delayCell == null) delayCell = RT.getIn(input, AgentState.KEY_CONFIG, Fields.DELAY);
         if (delayCell instanceof CVMLong delay && delay.longValue() > 0) {
             try {
                 Thread.sleep(delay.longValue());
@@ -395,6 +399,10 @@ public class TestAdapter extends AAdapter {
                 if (role != null && "tool".equals(role.toString())) {
                     // Tool results present — return a text response
                     AString toolContent = RT.ensureString(RT.getIn(messages.get(i), "content"));
+					if (toolContent == null) {
+						ACell structured = RT.getIn(messages.get(i), "structuredContent");
+						if (structured != null) toolContent = convex.core.util.JSON.print(structured);
+					}
                     return Maps.of(
                         "role", Strings.create("assistant"),
                         "content", Strings.create("Tool returned: " + toolContent)
@@ -416,12 +424,25 @@ public class TestAdapter extends AAdapter {
             // the arguments
             String escaped = lastUserMsg.replace("\\", "\\\\").replace("\"", "\\\"")
                 .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t");
+            String toolName = "v/test/ops/echo";
+            String arguments = "{\"echo\":\"" + escaped + "\"}";
+            // #334 regression fixture: exercise real covia collection reads
+            // through the agent tool loop while keeping the L3 provider fully
+            // deterministic. LangChain's provider boundary has separate tests
+            // for its provider-only JSON rendering.
+            if (lastUserMsg.contains("issue-334-read")) {
+                toolName = "covia_read";
+                arguments = "{\"path\":\"w/issue-334/signals\"}";
+            } else if (lastUserMsg.contains("issue-334-list")) {
+                toolName = "covia_list";
+                arguments = "{\"path\":\"w/issue-334/sources\",\"fields\":[\"status\"]}";
+            }
             return Maps.of(
                 "role", Strings.create("assistant"),
                 "toolCalls", Vectors.of(Maps.of(
                     "id", Strings.create("call_1"),
-                    "name", Strings.create("v/test/ops/echo"),
-                    "arguments", Strings.create("{\"echo\":\"" + escaped + "\"}")
+                    "name", Strings.create(toolName),
+                    "arguments", Strings.create(arguments)
                 ))
             );
         }

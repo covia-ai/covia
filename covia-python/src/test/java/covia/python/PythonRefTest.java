@@ -38,6 +38,7 @@ class PythonRefTest {
 		@Override public Object evaluate(String expression, Object globals) { return expression; }
 		@Override public Object get(Object container, String name) { return name; }
 		@Override public Object call(Object callable, List<Object> arguments) { return callable; }
+		@Override public boolean interruptCurrentCall() { return false; }
 		@Override public Object fromConvex(ACell value) { return value; }
 		@Override public ACell toConvex(Object value) { return (ACell) value; }
 		@Override public void retain(Object value) { retains.incrementAndGet(); }

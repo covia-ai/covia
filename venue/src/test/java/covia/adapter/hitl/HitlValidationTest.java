@@ -86,6 +86,19 @@ public class HitlValidationTest {
 			Hitl.checkboxes("a", "p").option("x", "X", Hitl.grant("w/x", "crud/read")).build())).count());
 	}
 
+	@Test
+	public void testNullableGrantExpiryShape() {
+		assertEquals(1, HitlValidation.validateAsks(Vectors.of((ACell)
+			Hitl.approval("a", "p")
+				.grant(Hitl.grant("w/x", "crud/read", (Long) null)).build())).count(),
+			"explicit exp:null is a valid non-expiring grant offer");
+
+		assertThrows(IllegalArgumentException.class, () -> HitlValidation.validateAsks(
+			Vectors.of((ACell) Hitl.approval("a", "p")
+				.grant(Hitl.grant("w/x", "crud/read")
+					.assoc(Hitl.EXP, Strings.create("tomorrow"))).build())));
+	}
+
 	// ========== validateAnswers ==========
 
 	private static AVector<ACell> sampleAsks() {

@@ -68,6 +68,9 @@ public class HITLAdapter extends AAdapter {
 	/** Default lifetime for grants offered without an explicit {@code exp} (7 days). */
 	static final long DEFAULT_GRANT_LIFETIME_SECS = 7 * 24 * 3600L;
 
+	/** Optional adapter-config ceiling. Absent/null means no venue maximum. */
+	static final AString CONFIG_MAX_GRANT_LIFETIME_SECS = Strings.intern("maxGrantLifetimeSecs");
+
 	/** Expiry timers — daemon; lost on restart and re-armed by {@link #rearmExpiries()}. */
 	private static final ScheduledExecutorService EXPIRY = Executors.newSingleThreadScheduledExecutor(r -> {
 		Thread t = new Thread(r, "hitl-expiry");
@@ -144,6 +147,7 @@ public class HITLAdapter extends AAdapter {
 		AString title = RT.ensureString(RT.getIn(input, Hitl.TITLE));
 		if (title == null) throw new IllegalArgumentException("title is required");
 		AVector<ACell> asks = HitlValidation.validateAsks(RT.getIn(input, Hitl.ASKS));
+		validateOfferedGrantExpiries(asks, System.currentTimeMillis() / 1000);
 		Long timeoutSecs = parseTimeout(RT.getIn(input, Hitl.TIMEOUT));
 
 		requireDeliverable(ctx, caller, target);
@@ -395,20 +399,45 @@ public class HITLAdapter extends AAdapter {
 
 	/** Issues the approved grants as a single token via the granting surface
 	 *  (ucan:issue under the RESPONDER's authority — bare paths canonicalise to
-	 *  the responder's namespace). Token exp = earliest grant exp, defaulted. */
+	 *  the responder's namespace). Token exp = earliest grant exp, defaulted;
+	 *  explicit null is unbounded and mints a genuinely non-expiring token
+	 *  (exp: null, Convex #678) — permitted only when no venue ceiling is set. */
 	private AString issueGrants(AString responder, AString requester, AVector<ACell> approved) {
 		if (requester == null) throw new IllegalStateException("record has no requester identity");
 		long now = System.currentTimeMillis() / 1000;
-		long exp = now + DEFAULT_GRANT_LIFETIME_SECS;
+		Long maxLifetime = configuredMaxGrantLifetimeSecs();
+		Long exp = null; // null sorts as infinity and means an explicitly unbounded token
 		for (long i = 0; i < approved.count(); i++) {
-			CVMLong g = RT.ensureLong(RT.getIn(approved.get(i), Hitl.EXP));
-			if (g != null && g.longValue() > now && g.longValue() < exp) exp = g.longValue();
+			AMap<AString, ACell> grant = RT.castMap(approved.get(i));
+			Long grantExp;
+			if (grant != null && grant.containsKey(Hitl.EXP)) {
+				ACell value = grant.get(Hitl.EXP);
+				CVMLong g = RT.ensureLong(value);
+				if (value == null) {
+					grantExp = null;
+				} else if (g != null) {
+					grantExp = g.longValue();
+					if (grantExp <= now) {
+						throw new IllegalArgumentException("approved grant " + i + " has expired");
+					}
+				} else {
+					throw new IllegalArgumentException("approved grant " + i
+						+ " exp must be unix seconds or null");
+				}
+			} else {
+				long defaultLifetime = (maxLifetime == null)
+					? DEFAULT_GRANT_LIFETIME_SECS
+					: Math.min(DEFAULT_GRANT_LIFETIME_SECS, maxLifetime);
+				grantExp = now + defaultLifetime;
+			}
+			validateExpiryAgainstMaximum(grantExp, maxLifetime, now, "approved grant " + i);
+			if (grantExp != null && (exp == null || grantExp < exp)) exp = grantExp;
 		}
 		try {
 			ACell result = engine.jobs().invokeInternal("v/ops/ucan/issue",
 				Maps.of(Strings.intern("aud"), requester,
 					Strings.intern("att"), approved,
-					Hitl.EXP, CVMLong.create(exp)),
+					Hitl.EXP, (exp == null) ? null : CVMLong.create(exp)),
 				RequestContext.of(responder)).get(30, TimeUnit.SECONDS);
 			AString token = RT.ensureString(RT.getIn(result, Hitl.TOKEN));
 			if (token == null) throw new IllegalStateException("ucan:issue returned no token");
@@ -419,6 +448,76 @@ public class HITLAdapter extends AAdapter {
 			Throwable cause = (e.getCause() != null) ? e.getCause() : e;
 			throw new IllegalStateException("Grant issuance failed: " + cause.getMessage(), cause);
 		}
+	}
+
+	/** Validate policy before delivery, so the human never approves an expiry
+	 *  that this venue would silently shorten or refuse only after consent. */
+	@SuppressWarnings("unchecked")
+	private void validateOfferedGrantExpiries(AVector<ACell> asks, long now) {
+		Long maxLifetime = configuredMaxGrantLifetimeSecs();
+		for (long i = 0; i < asks.count(); i++) {
+			AMap<AString, ACell> ask = RT.castMap(asks.get(i));
+			validateGrantListExpiries(ask.get(Hitl.GRANTS), maxLifetime, now,
+				"asks[" + i + "]");
+			ACell optionsCell = ask.get(Hitl.OPTIONS);
+			if (!(optionsCell instanceof AVector)) continue;
+			AVector<ACell> options = (AVector<ACell>) optionsCell;
+			for (long j = 0; j < options.count(); j++) {
+				AMap<AString, ACell> option = RT.castMap(options.get(j));
+				validateGrantListExpiries(option.get(Hitl.GRANTS), maxLifetime, now,
+					"asks[" + i + "].options[" + j + "]");
+			}
+		}
+	}
+
+	@SuppressWarnings("unchecked")
+	private static void validateGrantListExpiries(ACell grantsCell, Long maxLifetime,
+			long now, String where) {
+		if (!(grantsCell instanceof AVector)) return;
+		AVector<ACell> grants = (AVector<ACell>) grantsCell;
+		for (long i = 0; i < grants.count(); i++) {
+			AMap<AString, ACell> grant = RT.castMap(grants.get(i));
+			if (grant == null || !grant.containsKey(Hitl.EXP)) continue;
+			ACell value = grant.get(Hitl.EXP);
+			CVMLong exp = RT.ensureLong(value);
+			if (value != null && exp == null) {
+				throw new IllegalArgumentException(where + ".grants[" + i
+					+ "].exp must be unix seconds or null");
+			}
+			Long expiry = (exp == null) ? null : exp.longValue();
+			if (expiry != null && expiry <= now) {
+				throw new IllegalArgumentException(where + ".grants[" + i + "].exp is expired");
+			}
+			validateExpiryAgainstMaximum(expiry, maxLifetime, now,
+				where + ".grants[" + i + "]");
+		}
+	}
+
+	private static void validateExpiryAgainstMaximum(Long expiry, Long maxLifetime,
+			long now, String where) {
+		if (maxLifetime == null) return;
+		if (expiry == null) {
+			throw new IllegalArgumentException(where + " requests no expiry, exceeding this venue's "
+				+ maxLifetime + "-second HITL grant ceiling");
+		}
+		if (expiry - now > maxLifetime) {
+			throw new IllegalArgumentException(where + ".exp exceeds this venue's "
+				+ maxLifetime + "-second HITL grant ceiling");
+		}
+	}
+
+	/** Returns the configured positive ceiling, or null when absent/explicitly null. */
+	private Long configuredMaxGrantLifetimeSecs() {
+		AMap<AString, ACell> config = engine.config().getAdapterConfig(getName());
+		if (!config.containsKey(CONFIG_MAX_GRANT_LIFETIME_SECS)) return null;
+		ACell value = config.get(CONFIG_MAX_GRANT_LIFETIME_SECS);
+		if (value == null) return null;
+		CVMLong seconds = RT.ensureLong(value);
+		if (seconds == null || seconds.longValue() <= 0) {
+			throw new IllegalStateException("adapters.hitl.maxGrantLifetimeSecs must be "
+				+ "a positive number of seconds or null");
+		}
+		return seconds.longValue();
 	}
 
 	// ========== hitl:list ==========

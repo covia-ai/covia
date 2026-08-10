@@ -222,6 +222,7 @@ public class Engine {
 			AKeyPair keyPair, PersistenceHandler persistHandler) throws IOException {
 		this.config=java.util.Objects.requireNonNull(config, "config");
 		this.keyPair=keyPair;
+		validateDeclaredIdentity();
 		this.lattice=cursor;
 		this.persistHandler = (persistHandler != null) ? persistHandler : PersistenceHandler.NOOP;
 		this.lastFlushMillis = System.currentTimeMillis();
@@ -1995,6 +1996,58 @@ public class Engine {
 	}
 
 	/**
+	 * Fail-closed check that an operator-declared identity (config {@code did},
+	 * covia#343) is one this venue can actually prove: a declared did:key must
+	 * match the venue key pair — an explicit identity pin, so a venue started
+	 * with the wrong seed or keystore refuses to run rather than silently
+	 * assuming a new identity — and a declared did:web must match the public
+	 * hostname's derived form. Shape validation lives in {@link Config}.
+	 */
+	private void validateDeclaredIdentity() {
+		AString declared = config.getDID();
+		if (declared == null) return;
+		String d = declared.toString();
+		if (d.startsWith("did:key:")) {
+			AString derived = Strings.create("did:key:"
+				+ Multikey.encodePublicKey(keyPair.getAccountKey()));
+			if (!derived.equals(declared)) {
+				throw new IllegalStateException("Declared venue identity " + declared
+					+ " does not match the venue key pair (" + derived
+					+ ") — wrong seed or keystore?");
+			}
+		} else if (d.startsWith("did:web:")) {
+			AString web = config.getWebDID();
+			if (!declared.equals(web)) {
+				throw new IllegalStateException("Declared venue identity " + declared
+					+ " does not match the venue's did:web form ("
+					+ (web == null ? "no public hostname" : web) + ")");
+			}
+		}
+	}
+
+	private volatile covia.venue.auth.VenueDIDVerifier didVerifier;
+
+	/**
+	 * The venue's DID signature verifier (covia#343): did:key statelessly, the
+	 * venue's own identity and locally managed users from venue state, remote
+	 * did:web via cached DID-document resolution. Ingress seams use this in
+	 * place of {@link convex.auth.did.DIDVerifier#CONVEX} so did:web-identified
+	 * principals verify exactly like did:key ones.
+	 */
+	public covia.venue.auth.VenueDIDVerifier didVerifier() {
+		covia.venue.auth.VenueDIDVerifier v = didVerifier;
+		if (v == null) {
+			synchronized (this) {
+				if (didVerifier == null) {
+					didVerifier = new covia.venue.auth.VenueDIDVerifier(this);
+				}
+				v = didVerifier;
+			}
+		}
+		return v;
+	}
+
+	/**
 	 * Converts a venue-managed username to its canonical user DID. Publicly
 	 * named venues use their did:web alias (for example
 	 * {@code did:web:venue-1.covia.ai:u:alice}). A public hostname is required
@@ -2132,13 +2185,14 @@ public class Engine {
 	 *
 	 * <p>The document {@code id} must equal the DID a resolver asked for (DID
 	 * Core), so when the venue has a public hostname configured the document is
-	 * presented under its <b>did:web alias</b> ({@code did:web:<hostname>}) with
-	 * the canonical did:key in {@code alsoKnownAs} — making strict did:web
-	 * resolution work (covia#167). The alias is a derived, per-request view and
-	 * is discovery only: the venue's identity remains its did:key (the same
-	 * ed25519 key material verifies in both presentations), and nothing durable
-	 * references the did:web form. Without a public hostname the document is
-	 * served under the did:key directly, unchanged.</p>
+	 * presented under {@code did:web:<hostname>}, with the did:key in
+	 * {@code alsoKnownAs} — making strict did:web resolution work (covia#167).
+	 * Consumers respect the presented identity as-is: {@code alsoKnownAs} is
+	 * the DID spec's informational same-subject cross-reference, never a
+	 * canonical identity to re-bind to (covia#343 — the did:key is key
+	 * material, published as a verification method; the identity a persistent
+	 * venue presents is its did:web). Without a public hostname the document
+	 * is served under the did:key directly, unchanged.</p>
 	 *
 	 * @param endpoint Service endpoint URL for the CoviaGrid service entry
 	 * @return DID document map
@@ -2176,8 +2230,8 @@ public class Engine {
 					))
 		);
 
-		// Bind the alias to the canonical identity: consumers resolving
-		// did:web re-bind to the did:key for anything they store or pin.
+		// Informational same-subject cross-reference (non-authoritative, DID
+		// Core): consumers keep the identity they resolved — no rebinding.
 		if (aliased) {
 			ddo=ddo.assoc(Strings.intern("alsoKnownAs"), Vectors.create(canonicalDID));
 		}

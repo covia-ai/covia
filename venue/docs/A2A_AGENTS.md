@@ -161,8 +161,11 @@ trust branch exists. The task Job records its session under `SESSION_ID` (which
 `Job.completeWith` preserves across completion), so `A2ACodec` surfaces
 `contextId = session` for the task's whole lifecycle — the same on `SendMessage`
 and on a later `GetTask`. `GetTask` / `CancelTask` reuse the front-door by-id
-handlers (a Task id is a global, caller-scoped Job id). Task continuations with
-an incoming `taskId` are not yet implemented (#306).
+handlers (a Task id is a global, caller-scoped Job id). `SubscribeToTask`
+attaches SSE updates directly to that same Job. A fresh `SendMessage` returns
+immediately with its Task and session identifiers; it never imposes a
+synchronous turn deadline. Polling and SSE therefore observe one state machine
+and converge on the same final Task.
 
 ## Relationship to the venue-as-single-agent model
 
@@ -170,6 +173,36 @@ The current single-agent behaviour stays as the **front-door** case: an operator
 who configures one public agent keeps exactly today's well-known card. Per-agent
 exposure is additive — new endpoints and the authenticated catalogue — and does
 not change the front door.
+
+## Outbound agent assets
+
+Outbound A2A treats the remote agent as an entity with several protocol
+functions, not as an operation. `v/ops/a2a/import-agent` resolves its Agent
+Card and creates one immutable `type: "a2a-agent"` Asset, plus a mutable
+caller-owned binding at `w/a2a/agents/<name>`. The normal `agent-card`, `send`,
+`get-task`, and `cancel` operations all take that Asset through their `agent`
+input. Raw URL/credential-bearing variants remain under `v/ops/a2a/raw/*` for
+diagnostics and migration, but are not advertised to agents as normal tools.
+
+An imported profile may point to either:
+
+- a standard A2A base URL (`url`); or
+- a Covia agent (`coviaAgent`) at a specified local or remote `venue`.
+
+The Covia form accepts the local shorthand `g/<agentId>` or a complete
+`<ownerDID>/g/<agentId>` grid address, and derives the standard per-agent A2A
+endpoint described above. A local shorthand defaults to the venue's configured
+`baseUrl`; a full/remote address requires an explicit `venue`. This does not
+introduce a Covia-specific A2A wire extension. Native Grid calls remain
+preferable for Covia-to-Covia work; the profile form allows the same agent Asset
+to participate when standard A2A interop is specifically required.
+
+Authentication is also part of the imported profile. Assets retain only a
+caller-owned SecretStore reference (`s/NAME`), never the secret value. The
+binding can select a card-declared API-key or HTTP-Bearer security scheme, or
+direct Bearer authentication for private-card discovery. The secret is resolved
+once for an invocation and reused for send, polling, and cancellation. UCAN
+proofs are deliberately not projected onto A2A.
 
 ## Implementation status and follow-ups
 
@@ -183,13 +216,12 @@ Shipped:
 - Private-by-default cards, explicit public publication, and attenuated
   anonymous interaction scopes alongside UCAN delegation.
 - `GetTask` and `CancelTask` on the per-agent endpoint.
+- `SubscribeToTask` reattachment on the per-agent endpoint, backed by the same
+  durable Job used by polling.
+- Incoming `taskId` continuation, idempotent by A2A `messageId` (#306).
+- Outbound imported agent Assets, including standard endpoints and local or
+  remote Covia agents through their standard A2A facades (#304).
 
 The route, publication and task-mapping contract is covered by
 `A2AAgentCardTest`; common JSON-RPC and codec behavior is covered by `A2ATest`,
 `A2ACodecTest` and `A2AExtendedCardTest`.
-
-Open protocol work:
-
-- #304 — relay authenticated caller authority for outbound A2A requests.
-- #305 — define stable reattachment when a turn outlives the synchronous wait.
-- #306 — support per-agent multi-turn continuation with incoming `taskId`.

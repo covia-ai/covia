@@ -151,6 +151,7 @@ Session ids are always venue-minted — callers never supply their own. Per-op r
 |----|---------|
 | `agent:sessionList` | List sessions for an agent (filter by type, counterparty, status) |
 | `agent:sessionInfo` | Get metadata + summary for a session |
+| `agent:renameSession` | Set or clear a session's human-facing title |
 | `agent:sessionArchive` | Mark a session archived (no longer active) |
 | `agent:sessionDelete` | Permanently remove (rare; audit-sensitive) |
 
@@ -309,7 +310,7 @@ There is no `agent:yield` op — yield is the natural state when no completion o
 |-------|--------|------|
 | `pending` | intake (`appendSessionPending`) appends; the presenting cycle drains | drain happens in the same CAS that lands the drained envelopes' user turns — at cycle start for `FramesOwning` adapters (goaltree, via `beginSessionCycle`), at merge for framework-managed conversations (llmagent) |
 | `frames` | the owning cycle | live epoch-fenced writes for `FramesOwning` adapters; the merge's turn-append for framework-managed conversations. The framework merge never touches frames for `FramesOwning` transitions |
-| `inCycle` | the owning cycle sets it at claim; the merge clears it; the suspend settle clears it | a stale value = crashed cycle (see GOAL_TREE.md §Persistence) — it counts as work for the wake gate and triggers resume |
+| `inCycle` | the owning attempt sets it at claim; merge/suspend/startup clear it | write fence only; it is never a wake signal or resume checkpoint |
 | `loads` | the merge (session-tier working set) | unchanged |
 | `meta.turns` | whoever appends root turns (shared helper) | bumped in the same CAS as the append |
 
@@ -376,7 +377,7 @@ The chat adapter is parameterised by two flags:
 | `framed` | Multi-frame mode. `subgoal` allowed; child frames summarise on return. When false, the session has a single flat frame and `subgoal` is disallowed. |
 | `persistent` | Persist the frame stack across transitions. When false, a fresh root is built each transition. |
 
-Flat + persistent is a chatbot. Framed + persistent is a resumable goal tree. Framed + non-persistent is a one-shot decomposition.
+Flat + persistent is a chatbot. Framed + persistent is a durable goal history across completed attempts. Framed + non-persistent is a one-shot decomposition.
 
 Harness tools (`more_tools`, `context_load`, `context_unload`, typed `complete`/`fail`) are available in both modes. Harness tools that depend on the frame model (`subgoal`, `compact`) are only meaningful under `framed: true`.
 
@@ -400,8 +401,8 @@ Sessions are **never deleted by the framework** (audit). Archived sessions can b
 
 ### 7.1 Session vs agent lifecycle
 
-- Agent SLEEPING ↔ no active sessions running (but sessions persist)
-- Agent RUNNING ↔ one or more sessions executing transitions
+- Agent SLEEPING ↔ runnable stable state (sessions persist)
+- Agent RUNNING ↔ persisted execution marker, validated by the hosting venue's live attempt
 - Agent SUSPENDED ↔ all sessions paused
 - Agent TERMINATED ↔ sessions still readable (audit) but no new transitions
 
@@ -465,7 +466,7 @@ A snapshot is the **full agent state at the transition boundary**, including eve
     "conv-mike":  { "meta": {...}, "state": {...}, "history": [...] },
     "support-01HXYZ": { "meta": {...}, "state": {...}, "history": [...] }
   },
-  "status": "RUNNING"
+  "status": "SLEEPING"
 }
 ```
 

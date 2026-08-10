@@ -17,6 +17,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
+import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
@@ -332,6 +333,75 @@ public class HITLAdapterTest {
 		assertEquals(ALICE_DID, token.getAudience(), "audience is the requester");
 		assertEquals(Strings.create(ALICE_DID + "/w/reports/"),
 			RT.getIn(token.getCapabilities().get(0), Capability.WITH));
+	}
+
+	@Test
+	public void testExplicitGrantExpiryIsNotSilentlyCapped() {
+		long offeredExp = (System.currentTimeMillis() / 1000) + 14 * 24 * 3600L;
+		Job job = request(ALICE, Hitl.request("g")
+			.ask(Hitl.approval("access", "Grant?")
+				.grant(Hitl.grant("w/reports/", "crud/read", offeredExp)))
+			.build());
+		respond(ALICE, Hitl.answer(job.getID().toHexString())
+			.answer("access", true)
+			.echo("w/reports/", "crud/read")
+			.build());
+
+		UCAN token = UCAN.fromJWT(RT.ensureString(RT.getIn(job.getOutput(), Hitl.TOKEN)));
+		assertEquals(offeredExp, token.getExpiry(),
+			"without an operator ceiling, the venue must honour the offered expiry exactly");
+	}
+
+	@Test
+	public void testExplicitNullGrantExpiryMintsNonExpiringToken() {
+		Job job = request(ALICE, Hitl.request("g")
+			.ask(Hitl.approval("access", "Grant?")
+				.grant("w/reports/", "crud/read", (Long) null))
+			.build());
+		respond(ALICE, Hitl.answer(job.getID().toHexString())
+			.answer("access", true)
+			.echo("w/reports/", "crud/read")
+			.build());
+
+		UCAN token = UCAN.fromJWT(RT.ensureString(RT.getIn(job.getOutput(), Hitl.TOKEN)));
+		assertNull(token.getExpiry(),
+			"an explicit no-expiry grant mints a genuinely non-expiring token (Convex #678)");
+		assertNull(RT.getIn(job.getOutput(), Hitl.GRANTS, 0L, Hitl.EXP),
+			"the consent record retains the caller's explicit no-expiry intent");
+	}
+
+	@Test
+	public void testConfiguredGrantCeilingRejectsBeforeDelivery() {
+		Engine limited = Engine.createTemp(Maps.of(
+			Config.HOSTNAME, Strings.create("hitl-limit.test.covia.example"),
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
+			Config.ADAPTERS, Maps.of(Strings.create("hitl"), Maps.of(
+				HITLAdapter.CONFIG_MAX_GRANT_LIFETIME_SECS, CVMLong.create(HOUR)))));
+		try {
+			Engine.addDemoAssets(limited);
+			AString user = limited.managedUserDID(Strings.create("hitl-limit-user"));
+			limited.getVenueState().users().ensure(user);
+			RequestContext ctx = RequestContext.of(user);
+			long now = System.currentTimeMillis() / 1000;
+
+			Exception excessive = assertThrows(Exception.class, () -> limited.jobs().invokeOperation(
+				"v/ops/hitl/request",
+				Hitl.request("too long").ask(Hitl.approval("a", "Approve?")
+					.grant(Hitl.grant("w/x", "crud/read", now + 2 * HOUR))).build(),
+				ctx));
+			assertTrue(excessive.getMessage().contains("3600-second HITL grant ceiling"));
+
+			Exception permanent = assertThrows(Exception.class, () -> limited.jobs().invokeOperation(
+				"v/ops/hitl/request",
+				Hitl.request("permanent").ask(Hitl.approval("a", "Approve?")
+					.grant("w/x", "crud/read", (Long) null)).build(),
+				ctx));
+			assertTrue(permanent.getMessage().contains("requests no expiry"));
+			assertEquals(0, limited.getVenueState().users().get(user).getHitlRequests().count(),
+				"invalid offers must be rejected before entering the human's inbox");
+		} finally {
+			limited.close();
+		}
 	}
 
 	// ========== Cross-user delivery ==========

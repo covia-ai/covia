@@ -79,7 +79,7 @@ public class Hitl {
 	public static final AString CAN  = Strings.intern("can");
 	public static final AString EXP  = Strings.intern("exp");
 
-	// ===== Token-ask (COG-18) — self-sovereign cross-venue token transport =====
+	// ===== Token-ask (COG-19) — self-sovereign cross-venue token transport =====
 	/** Token-ask request spec: requested capabilities, {@code [{with, can}]}. */
 	public static final AString CAPS     = Strings.intern("caps");
 	/** Token-ask request spec: intended audience DID of the signed token
@@ -105,7 +105,7 @@ public class Hitl {
 	public static final AString APPROVAL   = Strings.intern("approval");
 	public static final AString CHOICE     = Strings.intern("choice");
 	public static final AString CHECKBOXES = Strings.intern("checkboxes");
-	/** COG-18: a request for a self-sovereign access token. The human signs a
+	/** COG-19: a request for a self-sovereign access token. The human signs a
 	 *  UCAN with their own key client-side; the answer is that signed JWT, which
 	 *  the venue verifies and TRANSPORTS (never mints). Its request spec lives
 	 *  under the ask's {@code token} field ({@link #TOKEN}). */
@@ -138,6 +138,13 @@ public class Hitl {
 	/** A grant offer with an explicit expiry (unix seconds). */
 	public static AMap<AString, ACell> grant(String with, String can, long exp) {
 		return grant(with, can).assoc(EXP, CVMLong.create(exp));
+	}
+
+	/** A grant offer with an explicit nullable expiry. A null value means the
+	 *  grant is intended not to expire; it is distinct from omitting exp, which
+	 *  asks the venue to apply its default lifetime. */
+	public static AMap<AString, ACell> grant(String with, String can, Long exp) {
+		return grant(with, can).assoc(EXP, (exp == null) ? null : CVMLong.create(exp));
 	}
 
 	/** Starts an {@code answer} response for a request in the caller's inbox. */
@@ -220,6 +227,11 @@ public class Hitl {
 		/** Offers a grant conferred if this (approval) ask is approved. */
 		public AskBuilder grant(String with, String can) {
 			return grant(Hitl.grant(with, can));
+		}
+
+		/** Offers a grant with an explicit expiry, or null for no expiry. */
+		public AskBuilder grant(String with, String can, Long exp) {
+			return grant(Hitl.grant(with, can, exp));
 		}
 
 		public AskBuilder grant(AMap<AString, ACell> grant) {

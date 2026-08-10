@@ -4,6 +4,7 @@
 	"dateCreated": "2026-07-03T00:00:00Z",
 	"operation": {
 		"adapter": "covia:aggregate",
+		"readOnly": true,
 		"toolName": "covia_aggregate",
 		"input": {
 			"type": "object",

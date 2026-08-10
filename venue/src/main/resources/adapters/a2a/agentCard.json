@@ -1,17 +1,18 @@
 {
 	"name": "A2A Agent Card",
-	"description": "Fetch a remote agent's public Agent Card via the .well-known/agent-card.json endpoint",
+	"description": "Read the immutable Agent Card snapshot from an imported A2A agent Asset",
 	"operation": {
 		"adapter": "a2a:getAgentCard",
+		"readOnly": true,
 		"input": {
 			"type": "object",
 			"properties": {
-				"url": {
+				"agent": {
 					"type": "string",
-					"description": "Base URL of the remote A2A agent (e.g. https://agent.example.com)"
+					"description": "Imported A2A agent Asset reference, normally w/a2a/agents/<name> or its immutable did:.../a/<hash> ID."
 				}
 			},
-			"required": ["url"]
+			"required": ["agent"]
 		},
 		"output": {
 			"type": "object",

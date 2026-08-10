@@ -6,16 +6,16 @@
 		"input": {
 			"type": "object",
 			"properties": {
-				"url": {
+				"agent": {
 					"type": "string",
-					"description": "Base URL of the remote A2A agent"
+					"description": "Imported A2A agent Asset reference."
 				},
 				"id": {
 					"type": "string",
 					"description": "Remote Task ID to cancel"
 				}
 			},
-			"required": ["url", "id"]
+			"required": ["agent", "id"]
 		},
 		"output": {
 			"type": "object",

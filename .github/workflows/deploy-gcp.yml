@@ -65,6 +65,7 @@ jobs:
                 "hostname": "venue-test.covia.ai",
                 "port": 8080,
                 "store": "/data/covia-test-data/venue.etch",
+                "users": { "autoCreate": true },
                 "mcp": {}
               },
               {
@@ -85,6 +86,30 @@ jobs:
           }
           CONF
           fi
+
+          # venue-test is deliberately open to any successfully authenticated
+          # DID on first use. Reconcile the persisted config as well as the
+          # first-install template, without replacing unrelated operator edits.
+          sudo python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("/srv/covia/config.json")
+          config = json.loads(path.read_text(encoding="utf-8"))
+          for venue in config.get("venues", []):
+              if venue.get("hostname") == "venue-test.covia.ai":
+                  users = venue.setdefault("users", {})
+                  if not isinstance(users, dict):
+                      raise TypeError("venue-test users config must be an object")
+                  users["autoCreate"] = True
+                  break
+          else:
+              raise ValueError("venue-test.covia.ai is missing from config")
+
+          temporary = path.with_suffix(".json.tmp")
+          temporary.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+          temporary.replace(path)
+          PY
           sudo chown -R 1001:1001 /srv/covia
 
           # Stop and remove existing container

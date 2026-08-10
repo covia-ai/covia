@@ -255,6 +255,7 @@ java -jar target/covia.jar [config.json]
 
 ## Related Documentation
 
+- `docs/AUTH.md` — authentication design (#297): method contract, central sessions, assurance policy
 - `docs/CONFIG.md` — operator configuration reference
 - `docs/JOBS.md` — job implementation semantics (COG-8 companion)
 - `docs/UCAN.md` — capabilities, granting surface, proof channels

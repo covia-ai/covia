@@ -17,9 +17,13 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
+import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Maps;
+import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -32,6 +36,7 @@ public class FileAdapterTest {
 
 	@TempDir static Path workspace;
 	@TempDir static Path readonly;
+	@TempDir static Path other;
 
 	private static Engine engine;
 	private static final String DID = "did:key:z6Mk-test-FileAdapterTest";
@@ -43,6 +48,7 @@ public class FileAdapterTest {
 			"file", Maps.of(
 				"roots", Maps.of(
 					"work", workspace.toAbsolutePath().toString(),
+					"other", other.toAbsolutePath().toString(),
 					"ro", Maps.of(
 						"path", readonly.toAbsolutePath().toString(),
 						"readOnly", true
@@ -126,9 +132,10 @@ public class FileAdapterTest {
 		ACell result = run("v/ops/file/roots", Maps.empty());
 		AVector<?> roots = RT.ensureVector(RT.getIn(result, "roots"));
 		assertNotNull(roots);
-		assertEquals(2, roots.count());
+		assertEquals(3, roots.count());
 		String dump = roots.toString();
 		assertTrue(dump.contains("work"));
+		assertTrue(dump.contains("other"));
 		assertTrue(dump.contains("ro"));
 	}
 
@@ -288,6 +295,146 @@ public class FileAdapterTest {
 
 		ACell stat2 = run("v/ops/file/stat", Maps.of("root", "work", "path", "doomed.txt"));
 		assertFalse(RT.bool(RT.getIn(stat2, "exists")));
+	}
+
+	@Test
+	public void testMoveUsesNativeFilesystemOperation() throws IOException {
+		Files.createDirectories(workspace.resolve("move/from"));
+		Files.createDirectories(workspace.resolve("move/to"));
+		byte[] content = new byte[] {0, 1, 2, 3, 4};
+		Files.write(workspace.resolve("move/from/report.bin"), content);
+
+		ACell result = run("v/ops/file/move", Maps.of(
+			"root", "work",
+			"from", "move/from/report.bin",
+			"to", "move/to/renamed.bin"));
+
+		assertTrue(RT.bool(RT.getIn(result, "moved")));
+		assertFalse(Files.exists(workspace.resolve("move/from/report.bin")));
+		assertTrue(java.util.Arrays.equals(content,
+			Files.readAllBytes(workspace.resolve("move/to/renamed.bin"))));
+	}
+
+	@Test
+	public void testCopyUsesNativeFilesystemOperation() throws IOException {
+		Files.createDirectories(workspace.resolve("copy/from"));
+		Files.createDirectories(workspace.resolve("copy/to"));
+		byte[] content = new byte[] {5, 6, 7, 8};
+		Files.write(workspace.resolve("copy/from/scan.bin"), content);
+
+		ACell result = run("v/ops/file/copy", Maps.of(
+			"root", "work",
+			"from", "copy/from/scan.bin",
+			"to", "copy/to/scan-copy.bin"));
+
+		assertTrue(RT.bool(RT.getIn(result, "copied")));
+		assertTrue(java.util.Arrays.equals(content,
+			Files.readAllBytes(workspace.resolve("copy/from/scan.bin"))));
+		assertTrue(java.util.Arrays.equals(content,
+			Files.readAllBytes(workspace.resolve("copy/to/scan-copy.bin"))));
+	}
+
+	@Test
+	public void testMoveAcrossConfiguredRoots() throws IOException {
+		Files.writeString(workspace.resolve("cross-root-source.txt"), "cross-root");
+
+		ACell result = run("v/ops/file/move", Maps.of(
+			"root", "work",
+			"toRoot", "other",
+			"from", "cross-root-source.txt",
+			"to", "cross-root-target.txt"));
+
+		assertTrue(RT.bool(RT.getIn(result, "moved")));
+		assertEquals("file://work/cross-root-source.txt",
+			RT.ensureString(RT.getIn(result, "from")).toString());
+		assertEquals("file://other/cross-root-target.txt",
+			RT.ensureString(RT.getIn(result, "to")).toString());
+		assertFalse(Files.exists(workspace.resolve("cross-root-source.txt")));
+		assertEquals("cross-root", Files.readString(other.resolve("cross-root-target.txt")));
+	}
+
+	@Test
+	public void testQualifiedEndpointsAllowRootOmission() throws IOException {
+		Files.writeString(workspace.resolve("qualified-source.txt"), "qualified");
+
+		ACell result = run("v/ops/file/copy", Maps.of(
+			"from", "file://work/qualified-source.txt",
+			"to", "file://other/qualified-target.txt"));
+
+		assertTrue(RT.bool(RT.getIn(result, "copied")));
+		assertEquals("file://work/qualified-source.txt",
+			RT.ensureString(RT.getIn(result, "from")).toString());
+		assertEquals("file://other/qualified-target.txt",
+			RT.ensureString(RT.getIn(result, "to")).toString());
+		assertEquals("qualified", Files.readString(workspace.resolve("qualified-source.txt")));
+		assertEquals("qualified", Files.readString(other.resolve("qualified-target.txt")));
+	}
+
+	@Test
+	public void testQualifiedSourceDefaultsRelativeDestinationToSourceRoot() throws IOException {
+		Files.writeString(workspace.resolve("qualified-default-source.txt"), "defaulted");
+
+		run("v/ops/file/copy", Maps.of(
+			"from", "file://work/qualified-default-source.txt",
+			"to", "qualified-default-target.txt"));
+
+		assertEquals("defaulted",
+			Files.readString(workspace.resolve("qualified-default-target.txt")));
+	}
+
+	@Test
+	public void testQualifiedEndpointRejectsConflictingExplicitRoot() throws IOException {
+		Files.writeString(workspace.resolve("qualified-conflict.txt"), "conflict");
+		Job job = runRaw("v/ops/file/copy", Maps.of(
+			"root", "other",
+			"from", "file://work/qualified-conflict.txt",
+			"to", "target.txt"));
+		assertEquals(Status.FAILED, job.getStatus());
+		assertTrue(job.getErrorMessage().contains("conflicts"));
+		assertFalse(Files.exists(other.resolve("target.txt")));
+	}
+
+	@Test
+	public void testMoveAndCopyRefuseReplacement() throws IOException {
+		Files.createDirectories(workspace.resolve("no-replace"));
+		Path source = workspace.resolve("no-replace/source.txt");
+		Path target = workspace.resolve("no-replace/target.txt");
+		Files.writeString(source, "source");
+		Files.writeString(target, "target");
+
+		for (String operation : new String[] {"move", "copy"}) {
+			Job job = runRaw("v/ops/file/" + operation, Maps.of(
+				"root", "work",
+				"from", "no-replace/source.txt",
+				"to", "no-replace/target.txt"));
+			assertEquals(Status.FAILED, job.getStatus(), operation);
+			assertEquals("source", Files.readString(source), operation);
+			assertEquals("target", Files.readString(target), operation);
+		}
+	}
+
+	@Test
+	public void testMoveAndCopyRejectReadOnlyRoot() throws IOException {
+		Files.writeString(readonly.resolve("source.txt"), "source");
+		for (String operation : new String[] {"move", "copy"}) {
+			Job job = runRaw("v/ops/file/" + operation, Maps.of(
+				"root", "ro", "from", "source.txt", "to", operation + ".txt"));
+			assertEquals(Status.FAILED, job.getStatus(), operation);
+			assertTrue(job.getErrorMessage().contains("read-only"), operation);
+		}
+	}
+
+	@Test
+	public void testCopyAllowsReadOnlySourceWithWritableDestination() throws IOException {
+		Files.writeString(readonly.resolve("copy-source.txt"), "read-only source");
+		ACell result = run("v/ops/file/copy", Maps.of(
+			"root", "ro",
+			"toRoot", "work",
+			"from", "copy-source.txt",
+			"to", "copy-from-read-only.txt"));
+		assertTrue(RT.bool(RT.getIn(result, "copied")));
+		assertEquals("read-only source", Files.readString(readonly.resolve("copy-source.txt")));
+		assertEquals("read-only source", Files.readString(workspace.resolve("copy-from-read-only.txt")));
 	}
 
 	@Test
@@ -618,6 +765,85 @@ public class FileAdapterTest {
 			"expected capability denial, got: " + denied);
 	}
 
+	@Test
+	public void testMoveRequiresWriteOnBothEndpointsButNotDelete() throws IOException {
+		Files.createDirectories(workspace.resolve("cap-move/source"));
+		Files.createDirectories(workspace.resolve("cap-move/target"));
+		Files.writeString(workspace.resolve("cap-move/source/item.txt"), "item");
+
+		var sourceWrite = convex.auth.ucan.Capability.create(
+			convex.core.data.Strings.create("file://work/cap-move/source/item.txt"),
+			convex.auth.ucan.Capability.CRUD_WRITE);
+		var targetWrite = convex.auth.ucan.Capability.create(
+			convex.core.data.Strings.create("file://work/cap-move/target/item.txt"),
+			convex.auth.ucan.Capability.CRUD_WRITE);
+		RequestContext both = RequestContext.of(convex.core.data.Strings.create(DID))
+			.withCaps(convex.core.data.Vectors.of(sourceWrite, targetWrite));
+
+		Job moved = engine.jobs().invokeOperation("v/ops/file/move", Maps.of(
+			"root", "work",
+			"from", "cap-move/source/item.txt",
+			"to", "cap-move/target/item.txt"), both);
+		moved.awaitResult(5000);
+		assertEquals(Status.COMPLETE, moved.getStatus());
+		assertEquals("item", Files.readString(workspace.resolve("cap-move/target/item.txt")));
+
+		Files.writeString(workspace.resolve("cap-move/source/denied.txt"), "denied");
+		RequestContext sourceOnly = RequestContext.of(convex.core.data.Strings.create(DID))
+			.withCaps(convex.core.data.Vectors.of(
+				convex.auth.ucan.Capability.create(
+					convex.core.data.Strings.create("file://work/cap-move/source/denied.txt"),
+					convex.auth.ucan.Capability.CRUD_WRITE)));
+		String denied = capDenialOf(() -> engine.jobs().invokeOperation(
+			"v/ops/file/move", Maps.of(
+				"root", "work",
+				"from", "cap-move/source/denied.txt",
+				"to", "cap-move/target/denied.txt"), sourceOnly));
+		assertNotNull(denied);
+		assertTrue(denied.contains("Capability denied"));
+		assertTrue(Files.exists(workspace.resolve("cap-move/source/denied.txt")));
+	}
+
+	@Test
+	public void testCopyRequiresReadSourceAndWriteDestination() throws IOException {
+		Files.createDirectories(workspace.resolve("cap-copy/source"));
+		Files.createDirectories(workspace.resolve("cap-copy/target"));
+		Files.writeString(workspace.resolve("cap-copy/source/item.txt"), "item");
+
+		var sourceRead = convex.auth.ucan.Capability.create(
+			convex.core.data.Strings.create("file://work/cap-copy/source/item.txt"),
+			convex.auth.ucan.Capability.CRUD_READ);
+		var targetWrite = convex.auth.ucan.Capability.create(
+			convex.core.data.Strings.create("file://work/cap-copy/target/item.txt"),
+			convex.auth.ucan.Capability.CRUD_WRITE);
+		RequestContext allowed = RequestContext.of(convex.core.data.Strings.create(DID))
+			.withCaps(convex.core.data.Vectors.of(sourceRead, targetWrite));
+
+		Job copied = engine.jobs().invokeOperation("v/ops/file/copy", Maps.of(
+			"root", "work",
+			"from", "cap-copy/source/item.txt",
+			"to", "cap-copy/target/item.txt"), allowed);
+		copied.awaitResult(5000);
+		assertEquals(Status.COMPLETE, copied.getStatus());
+		assertEquals("item", Files.readString(workspace.resolve("cap-copy/source/item.txt")));
+		assertEquals("item", Files.readString(workspace.resolve("cap-copy/target/item.txt")));
+
+		Files.writeString(workspace.resolve("cap-copy/source/no-read.txt"), "secret");
+		RequestContext writeOnly = RequestContext.of(convex.core.data.Strings.create(DID))
+			.withCaps(convex.core.data.Vectors.of(
+				convex.auth.ucan.Capability.create(
+					convex.core.data.Strings.create("file://work/cap-copy/"),
+					convex.auth.ucan.Capability.CRUD_WRITE)));
+		String denied = capDenialOf(() -> engine.jobs().invokeOperation(
+			"v/ops/file/copy", Maps.of(
+				"root", "work",
+				"from", "cap-copy/source/no-read.txt",
+				"to", "cap-copy/target/no-read.txt"), writeOnly));
+		assertNotNull(denied);
+		assertTrue(denied.contains("Capability denied"));
+		assertFalse(Files.exists(workspace.resolve("cap-copy/target/no-read.txt")));
+	}
+
 	// =========================================================
 	// Default (no config) inertness
 
@@ -669,6 +895,164 @@ public class FileAdapterTest {
 			RequestContext.of(did));
 		dlfsRead.awaitResult(2000);
 		assertEquals("via file", RT.ensureString(RT.getIn(dlfsRead.getOutput(), "content")).toString());
+	}
+
+	@Test
+	public void testDLFSBackedRootMoveAndCopyAreNative() {
+		// Convex 0.8.11 (#675/#677) implements DLFSProvider.move/copy, so the
+		// file: surface's direct NIO dispatch works natively on a DLFS root — a
+		// rename is a drive metadata operation, never a byte round-trip through
+		// the caller (covia#321).
+		Engine eng = Engine.createTemp(Maps.of(
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
+			"file", Maps.of("roots", Maps.of(
+				"docs", Maps.of("dlfs", "docs-drive")
+			))
+		));
+		Engine.addDemoAssets(eng);
+		RequestContext ctx = RequestContext.of(convex.core.data.Strings.create(
+			"did:key:z6Mk-test-FileAdapterTest-dlfs-move"));
+
+		Job write = eng.jobs().invokeOperation("v/ops/file/write",
+			Maps.of("root", "docs", "path", "draft.txt", "content", "final text"), ctx);
+		write.awaitResult(2000);
+		assertEquals(Status.COMPLETE, write.getStatus());
+		eng.jobs().invokeOperation("v/ops/file/mkdir",
+			Maps.of("root", "docs", "path", "filed"), ctx).awaitResult(2000);
+
+		// Native move: source gone, destination carries the content.
+		Job move = eng.jobs().invokeOperation("v/ops/file/move",
+			Maps.of("root", "docs", "from", "draft.txt", "to", "filed/letter.txt"), ctx);
+		move.awaitResult(2000);
+		assertEquals(Status.COMPLETE, move.getStatus());
+		assertTrue(RT.bool(RT.getIn(move.getOutput(), "moved")));
+
+		Job readMoved = eng.jobs().invokeOperation("v/ops/file/read",
+			Maps.of("root", "docs", "path", "filed/letter.txt"), ctx);
+		readMoved.awaitResult(2000);
+		assertEquals("final text",
+			RT.ensureString(RT.getIn(readMoved.getOutput(), "content")).toString());
+
+		Job listRoot = eng.jobs().invokeOperation("v/ops/file/list",
+			Maps.of("root", "docs", "path", ""), ctx);
+		listRoot.awaitResult(2000);
+		AVector<?> entries = RT.ensureVector(RT.getIn(listRoot.getOutput(), "entries"));
+		assertEquals(1, entries.count(), "the moved source must be gone: " + entries);
+
+		// Native copy: both endpoints carry the content afterwards.
+		Job copy = eng.jobs().invokeOperation("v/ops/file/copy",
+			Maps.of("root", "docs", "from", "filed/letter.txt",
+				"to", "filed/letter-backup.txt"), ctx);
+		copy.awaitResult(2000);
+		assertEquals(Status.COMPLETE, copy.getStatus());
+		assertTrue(RT.bool(RT.getIn(copy.getOutput(), "copied")));
+		for (String p : new String[] {"filed/letter.txt", "filed/letter-backup.txt"}) {
+			Job read = eng.jobs().invokeOperation("v/ops/file/read",
+				Maps.of("root", "docs", "path", p), ctx);
+			read.awaitResult(2000);
+			assertEquals("final text",
+				RT.ensureString(RT.getIn(read.getOutput(), "content")).toString());
+		}
+	}
+
+	@Test
+	public void testDLFSSubpathRootConfinesPathsAndUsesLogicalCapabilities() {
+		Engine eng = Engine.createTemp(Maps.of(
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
+			"file", Maps.of("roots", Maps.of(
+				"mina", Maps.of(
+					"dlfs", "vault-drive",
+					"subpath", "Made by Mina")
+			))
+		));
+		Engine.addDemoAssets(eng);
+
+		AString did = Strings.create("did:key:z6Mk-test-FileAdapterTest-subpath");
+		RequestContext free = RequestContext.of(did);
+		try {
+			Job rootsJob = eng.jobs().invokeOperation(
+				"v/ops/file/roots", Maps.empty(), free);
+			rootsJob.awaitResult(2000);
+			AVector<?> roots = RT.ensureVector(RT.getIn(rootsJob.getOutput(), "roots"));
+			assertEquals(1, roots.count());
+			assertEquals("dlfs:vault-drive/Made by Mina",
+				RT.ensureString(RT.getIn(roots.get(0), "path")).toString());
+
+			// Logical paths are resolved underneath the configured physical subtree.
+			eng.jobs().invokeOperation("v/ops/file/mkdir", Maps.of(
+				"root", "mina", "path", "notes", "parents", true), free)
+				.awaitResult(2000);
+			eng.jobs().invokeOperation("v/ops/file/write", Maps.of(
+				"root", "mina", "path", "notes/hello.txt", "content", "scoped"), free)
+				.awaitResult(2000);
+			Job physicalRead = eng.jobs().invokeOperation("v/ops/dlfs/read", Maps.of(
+				"drive", "vault-drive",
+				"path", "/Made by Mina/notes/hello.txt"), free);
+			physicalRead.awaitResult(2000);
+			assertEquals("scoped",
+				RT.ensureString(RT.getIn(physicalRead.getOutput(), "content")).toString());
+
+			// The logical jail is applied before capability construction and dispatch.
+			Job escaped = eng.jobs().invokeOperation("v/ops/file/read", Maps.of(
+				"root", "mina", "path", "../outside.txt"), free);
+			try { escaped.awaitResult(2000); } catch (RuntimeException ignored) {}
+			assertEquals(Status.FAILED, escaped.getStatus());
+			assertTrue(escaped.getErrorMessage().contains("escapes root"),
+				escaped::getErrorMessage);
+
+			AVector<ACell> logicalCaps = Vectors.of(Capability.create(
+				Strings.create("file://mina/allowed/"), Capability.CRUD_WRITE));
+			RequestContext logical = RequestContext.of(did).withCaps(logicalCaps);
+			Job allowedDir = eng.jobs().invokeOperation("v/ops/file/mkdir", Maps.of(
+				"root", "mina", "path", "allowed", "parents", true), logical);
+			allowedDir.awaitResult(2000);
+			assertEquals(Status.COMPLETE, allowedDir.getStatus());
+			Job allowedWrite = eng.jobs().invokeOperation("v/ops/file/write", Maps.of(
+				"root", "mina", "path", "allowed/ok.txt", "content", "ok"), logical);
+			allowedWrite.awaitResult(2000);
+			assertEquals(Status.COMPLETE, allowedWrite.getStatus());
+
+			// A grant naming the physical prefix does not accidentally match the
+			// logical API namespace exposed by the configured root.
+			RequestContext physicalCap = RequestContext.of(did).withCaps(Vectors.of(
+				Capability.create(Strings.create("file://mina/Made by Mina/"),
+					Capability.CRUD_WRITE)));
+			String denied = capDenialOf(() -> eng.jobs().invokeOperation(
+				"v/ops/file/write", Maps.of(
+					"root", "mina", "path", "physical.txt", "content", "denied"),
+				physicalCap));
+			assertNotNull(denied);
+			assertTrue(denied.contains("file://mina/physical.txt"), denied);
+		} finally {
+			eng.close();
+		}
+	}
+
+	@Test
+	public void testInvalidDLFSSubpathRootsAreSkipped() {
+		Engine eng = Engine.createTemp(Maps.of(
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
+			"file", Maps.of("roots", Maps.of(
+				"safe", Maps.of("dlfs", "drive", "subpath", "safe/nested"),
+				"escape", Maps.of("dlfs", "drive", "subpath", "../outside"),
+				"absolute", Maps.of("dlfs", "drive", "subpath", "/outside"),
+				"host", Maps.of(
+					"path", workspace.toAbsolutePath().toString(),
+					"subpath", "misleading")
+			))
+		));
+		Engine.addDemoAssets(eng);
+		try {
+			Job rootsJob = eng.jobs().invokeOperation("v/ops/file/roots", Maps.empty(),
+				RequestContext.of(Strings.create(DID)));
+			rootsJob.awaitResult(2000);
+			AVector<?> roots = RT.ensureVector(RT.getIn(rootsJob.getOutput(), "roots"));
+			assertEquals(1, roots.count());
+			assertEquals("safe",
+				RT.ensureString(RT.getIn(roots.get(0), "name")).toString());
+		} finally {
+			eng.close();
+		}
 	}
 
 	@Test

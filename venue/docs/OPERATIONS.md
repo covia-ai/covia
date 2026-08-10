@@ -353,6 +353,21 @@ covia:write path=o/merge value={
 
 This is a regular orchestration. When invoked, the orchestrator dispatches to whatever `v/ops/json/merge` currently is, so the user gets live tracking. There is no special "alias" concept in the resolver — aliasing is just a small orchestration pattern.
 
+### Strict step-output validation
+
+Set `operation.strict: true` to validate every step result against the output
+schema declared by that step's operation. A step may instead opt in alone with
+`strict: true`. The orchestration-level flag also retains the normal operation
+meaning of validating the orchestration's own input against its input schema.
+
+Strict step validation resolves the target operation metadata before submitting
+the child job. Resolution and invocation use the same target: the local venue
+when the step omits `venue`, or the connected remote venue when it supplies one.
+The caller therefore needs `asset/read` as well as `invoke` authority for each
+strict step. Missing, unreadable, or operationally unresolvable metadata fails
+the step before it can apply side effects. If the resolved operation declares no
+output schema, there is no output constraint to enforce.
+
 ### Ordered foreach steps
 
 A step may invoke the same operation once for every element in a Convex

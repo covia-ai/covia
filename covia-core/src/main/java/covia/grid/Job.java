@@ -39,6 +39,14 @@ public class Job {
 
 	/** Lazy result future — atomic for safe publication */
 	private final AtomicReference<CompletableFuture<ACell>> resultFuture = new AtomicReference<>();
+	/** Optional in-process failure cause. Never appears in Job data. */
+	private volatile Throwable failureCause;
+	/** Whether this Job has a durable venue record. Transient invocation wrappers
+	 * still use the complete Job lifecycle, but disappear when execution ends. */
+	private final boolean recorded;
+	/** Result-oriented callers may request the original typed failure instead of
+	 * the transport-safe {@link JobFailedException}. */
+	private volatile boolean preserveFailureCause;
 
 	/**
 	 * Optional cancellation hook. Invoked by {@link #cancel()} so the work can
@@ -78,7 +86,25 @@ public class Job {
 	private final CopyOnWriteArrayList<Consumer<Job>> listeners = new CopyOnWriteArrayList<>();
 
 	public Job(AMap<AString, ACell> status) {
+		this(status, true);
+	}
+
+	/**
+	 * Creates a Job with an explicit recording policy. Venue implementations use
+	 * this for transient result-oriented invocation wrappers; ordinary client and
+	 * server Jobs are recorded by default.
+	 */
+	protected Job(AMap<AString, ACell> status, boolean recorded) {
 		this.data = new AtomicReference<>(status);
+		this.recorded = recorded;
+	}
+
+	/**
+	 * Whether this Job has a durable record that can be queried after execution.
+	 * False means it is an in-memory invocation wrapper only.
+	 */
+	public boolean isRecorded() {
+		return recorded;
 	}
 
 	public static boolean isFinished(AMap<AString, ACell> jobData) {
@@ -236,9 +262,17 @@ public class Job {
 		if (f == null) return;
 		if (isComplete()) {
 			f.complete(getOutput());
+		} else if (preserveFailureCause && failureCause != null) {
+			f.completeExceptionally(failureCause);
 		} else {
 			f.completeExceptionally(new JobFailedException(this));
 		}
+	}
+
+	/** Controls whether {@link #future()} exposes an original in-process failure
+	 * cause. Durable invoke callers retain the stable JobFailedException contract. */
+	public void setPreserveFailureCause(boolean preserve) {
+		this.preserveFailureCause = preserve;
 	}
 
 	/**
@@ -557,6 +591,18 @@ public class Job {
 			job = job.assoc(Fields.ERROR, Strings.create(message));
 			return job;
 		});
+	}
+
+	/** Fail this Job while retaining a non-persisted typed cause for
+	 * result-oriented in-process callers. */
+	public void fail(Throwable cause) {
+		if (cause == null) {
+			fail("Operation failed");
+			return;
+		}
+		this.failureCause = cause;
+		String message = cause.getMessage();
+		fail((message != null && !message.isBlank()) ? message : cause.toString());
 	}
 
 	/**

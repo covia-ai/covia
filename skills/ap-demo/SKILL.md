@@ -38,7 +38,7 @@ Run all setup steps — secret, reference data, artifacts, orchestration, agents
 2. **Seed reference data** — three vendors (Acme Corp, Globex Ltd, Initech Systems) and their purchase orders (see [setup.md](setup.md)). Initech is suspended/sanctioned to enable rejection demos.
 3. **Write shared documents** — read `assets/ap-policy-rules.md` and `assets/ap-data-guide.md`, write each to its workspace path with `covia_write`: `w/docs/policy-rules` and `w/docs/data-guide`.
 4. **Pin the pipeline orchestration** — read `assets/ap-pipeline.json` and `covia_write path=o/ap-pipeline value=<contents>`. The pipeline is now invokable by name as `grid_run operation=o/ap-pipeline` — no hash dereferencing.
-5. **Create all four agents** in parallel (see [setup.md](setup.md) for full config). Agent prompts are short — reference material loads from context. Each agent has `caps` scoping their workspace access.
+5. **Create all four agents** in parallel (see [setup.md](setup.md) for full config). If a named demo agent already exists, delete it first with `remove=true`; create is exclusive and never overwrites. Agent prompts are short — reference material loads from context. Each agent has `caps` scoping their workspace access.
 6. **Verify** with `agent_list` — Alice, Bob, Carol, Dave all SLEEPING
 7. **Confirm context and caps** — query Bob or Carol and verify `config.context` and `config.caps` are present
 

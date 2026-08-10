@@ -1,9 +1,10 @@
 {
 	"name": "Update Agent",
-	"description": "Update a non-running agent's configuration and/or runtime state while preserving its history. `config` and `state` are each shallow-merged into their existing values, so partial updates preserve sibling fields. Agent configuration has one home: pass model, tools, caps, outputs, and systemPrompt under `config`; `state.config` is rejected. Framework-managed fields (status, tasks, inbox, timeline) are never affected. RUNNING is rejected because its active transition already captured the old config; wait for it to finish or use agent:create overwrite=true to halt and replace it.",
+	"description": "Update a non-running agent's configuration and/or runtime state while preserving its history. `config` and `state` are each shallow-merged into their existing values, so partial updates preserve sibling fields. Agent configuration has one home: pass model, tools, caps, outputs, and systemPrompt under `config`; `state.config` is rejected. Framework-managed fields (status, tasks, inbox, timeline) are never affected. RUNNING is rejected because its active transition already captured the old config; suspend it before updating, or explicitly delete it with remove=true and create a replacement.",
 	"dateCreated": "2026-03-07T00:00:00Z",
 	"operation": {
 		"adapter": "agent:update",
+		"internal": false,
 		"input": {
 			"type": "object",
 			"properties": {

@@ -136,6 +136,13 @@ public class HitlValidation {
 					|| RT.ensureString(g.get(Hitl.CAN)) == null) {
 				throw new IllegalArgumentException(where + ".grants[" + i + "] must be {with, can, exp?}");
 			}
+			if (g.containsKey(Hitl.EXP)) {
+				ACell exp = g.get(Hitl.EXP);
+				if (exp != null && RT.ensureLong(exp) == null) {
+					throw new IllegalArgumentException(where + ".grants[" + i
+						+ "].exp must be unix seconds or null");
+				}
+			}
 		}
 	}
 

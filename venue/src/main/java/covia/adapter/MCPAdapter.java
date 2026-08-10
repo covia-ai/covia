@@ -158,6 +158,8 @@ public class MCPAdapter extends AAdapter {
 						// List the MCP tools
 						return listMCPTools(serverUrl, accessToken);
 
+					} catch (JobFailedException e) {
+						throw e;
 					} catch (Exception e) {
 						throw new JobFailedException(e);
 					}
@@ -282,8 +284,9 @@ public class MCPAdapter extends AAdapter {
 	 * Get or create a persistent session for the given server URL and token.
 	 */
 	private McpClientSession getOrConnect(String serverUrl, String accessToken) {
-		String key = serverUrl + "|" + (accessToken != null ? accessToken : "");
-		return clientSessions.computeIfAbsent(key, k -> new McpClientSession(serverUrl, accessToken));
+		String endpointUrl = McpClientSession.endpointUrl(serverUrl);
+		String key = endpointUrl + "|" + (accessToken != null ? accessToken : "");
+		return clientSessions.computeIfAbsent(key, k -> new McpClientSession(endpointUrl, accessToken));
 	}
 
 	/**
@@ -493,8 +496,17 @@ public class MCPAdapter extends AAdapter {
 	 */
 	public ACell listMCPTools(AString serverUrl, String accessToken) throws Exception {
 		McpClientSession session = getOrConnect(serverUrl.toString(), accessToken);
+		McpSyncClient client;
 		try {
-			McpSyncClient client = session.getClient();
+			client = session.getClient();
+		} catch (Exception e) {
+			session.invalidate();
+			throw new JobFailedException("Cannot initialize MCP client for server " + serverUrl
+				+ ": " + rootCauseMessage(e)
+				+ " — check that the server is reachable at an HTTP(S) base URL or /mcp endpoint, "
+				+ "and that its credentials and MCP protocol version are valid");
+		}
+		try {
 			ListToolsResult result = client.listTools();
 			List<Tool> tools = result.tools();
 
@@ -515,7 +527,9 @@ public class MCPAdapter extends AAdapter {
 			);
 		} catch (Exception e) {
 			session.invalidate();
-			throw e;
+			throw new JobFailedException("MCP tools/list failed for server " + serverUrl
+				+ ": " + rootCauseMessage(e)
+				+ " — the MCP session initialized, but the server did not return its tool catalog");
 		}
 	}
 

@@ -6,6 +6,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 import org.a2aproject.sdk.jsonrpc.common.json.JsonUtil;
+import org.a2aproject.sdk.spec.StreamingEventKind;
 import org.a2aproject.sdk.spec.Task;
 import org.a2aproject.sdk.spec.TaskStatusUpdateEvent;
 import org.slf4j.Logger;
@@ -68,13 +69,18 @@ public class A2ASseSession {
 	}
 
 	/**
-	 * Emit the initial Task frame and attach the listener. Returns immediately
+	 * Attach the listener and emit the initial Task frame. Returns immediately
 	 * — subsequent frames are driven by Job updates.
 	 *
 	 * <p>If the Job is already in a terminal state, emits the initial Task
 	 * plus one {@code final:true} statusUpdate, then closes.</p>
 	 */
-	public void start() {
+	public synchronized void start() {
+		// Javalin completes an SSE response when the handler returns unless the
+		// client is explicitly kept alive. Without this, subscribers receive the
+		// initial Task snapshot but never any later Job transition (#305).
+		sseClient.keepAlive();
+
 		// Disconnect hook before anything else — Javalin closes idle SSE
 		// connections after a timeout and the peer may abort at any time.
 		sseClient.onClose(this::close);
@@ -89,6 +95,14 @@ public class A2ASseSession {
 
 		Job job = engine.jobs().getJob(taskId);
 		if (job == null) {
+			// The Job may have completed and been evicted between the authorised
+			// lookup above and this active-cache lookup. Re-read the durable record
+			// so the stream cannot finish on a stale non-terminal snapshot.
+			data = engine.jobs().getJobData(taskId, rctx);
+			if (data == null) {
+				close();
+				return;
+			}
 			// Job already evicted (terminal). Emit snapshot + final frame and close.
 			sendFrame(A2ACodec.toTask(data));
 			if (Job.isFinished(data)) {
@@ -97,6 +111,14 @@ public class A2ASseSession {
 			close();
 			return;
 		}
+
+		// Subscribe before taking the emitted snapshot. start() and
+		// onJobUpdate() share the same monitor: an update that commits in this
+		// window either appears in the snapshot below or waits and is emitted as
+		// the next status frame. Fast completion can therefore never be lost.
+		this.subscribedJob = job;
+		job.subscribe(listener);
+		data = job.getData();
 
 		// Frame 1: Task snapshot
 		sendFrame(A2ACodec.toTask(data));
@@ -107,12 +129,9 @@ public class A2ASseSession {
 			return;
 		}
 
-		// Attach directly to the Job — no taskId filtering, no global dispatch.
-		this.subscribedJob = job;
-		job.subscribe(listener);
 	}
 
-	private void onJobUpdate(Job job) {
+	private synchronized void onJobUpdate(Job job) {
 		if (closed.get()) return;
 		AMap<AString, ACell> data = job.getData();
 		try {
@@ -132,11 +151,16 @@ public class A2ASseSession {
 	 * gson's type-hierarchy adapter serialises the concrete payload with its
 	 * discriminator ({@code "task"}, {@code "statusUpdate"}, etc.) already.
 	 */
-	private void sendFrame(Object payload) {
+	private void sendFrame(StreamingEventKind payload) {
 		Map<String, Object> envelope = new LinkedHashMap<>();
 		envelope.put("jsonrpc", "2.0");
 		envelope.put("id", rpcRequestId);
-		envelope.put("result", payload);
+		// The 1.2 SDK deliberately registers its streaming union adapter for
+		// the StreamingEventKind interface, not each concrete record. Supplying
+		// the declared type preserves the protocol's {task: ...},
+		// {statusUpdate: ...} discriminator wrapper inside result.
+		envelope.put("result", JsonUtil.OBJECT_MAPPER.toJsonTree(
+			payload, StreamingEventKind.class));
 		String json = JsonUtil.OBJECT_MAPPER.toJson(envelope);
 		sseClient.sendEvent(json);
 	}

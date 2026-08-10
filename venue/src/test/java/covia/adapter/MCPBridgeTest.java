@@ -6,7 +6,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
+import java.net.InetSocketAddress;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
+
+import com.sun.net.httpserver.HttpServer;
 
 import convex.core.data.ACell;
 import convex.core.data.AString;
@@ -181,6 +185,35 @@ public class MCPBridgeTest {
 		AString warn = MCPAdapter.rawAuthWarning(Strings.create("raw-token-value"));
 		assertNotNull(warn, "a raw auth credential must carry a warning");
 		assertTrue(warn.toString().contains("v/ops/secret/set"));
+	}
+
+	@Test
+	public void testToolsListInitializationFailureIsActionable() throws Exception {
+		HttpServer rejecting = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+		AtomicReference<String> requestedPath = new AtomicReference<>();
+		rejecting.createContext("/mcp", exchange -> {
+			requestedPath.set(exchange.getRequestURI().getPath());
+			exchange.sendResponseHeaders(401, -1);
+			exchange.close();
+		});
+		rejecting.start();
+		try {
+			String server = "http://127.0.0.1:" + rejecting.getAddress().getPort() + "/mcp/";
+			Job job = engine.jobs().invokeOperation("v/ops/mcp/tools-list",
+				Maps.of(Fields.SERVER, server), RequestContext.of(ALICE_DID));
+			assertThrows(Exception.class, () -> job.awaitResult(15000));
+			assertEquals(Status.FAILED, job.getStatus());
+
+			String error = job.getErrorMessage();
+			assertTrue(error.contains("Cannot initialize MCP client for server " + server), error);
+			assertTrue(error.contains("Authorization error"), error);
+			assertTrue(error.contains("HTTP(S) base URL or /mcp endpoint"), error);
+			assertTrue(error.contains("credentials") && error.contains("protocol version"), error);
+			assertEquals("/mcp", requestedPath.get(),
+				"a trailing slash on an explicit MCP endpoint must not append another /mcp");
+		} finally {
+			rejecting.stop(0);
+		}
 	}
 
 	// ========== Tool-level curation (#80 — the tool is the entity) ==========

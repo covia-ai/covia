@@ -1,0 +1,18 @@
+{
+	"name": "users",
+	"description": "Inspect and manage venue users and their authentication keys. Load for user admission, account lookup, or managed-key rotation.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Users\nA venue user is identified by a DID. Authentication proves control of a DID; admission decides whether that DID has an account on this venue. The venue's admission policy is operator-configured.\n\nInspect:\n- info `{did?}` returns the caller's registration, or another user's when authorised.\n- list `{}` lists registered users; this is venue-administrative.\n\nAdmit:\n- create `{did}` admits an existing external DID such as `did:key:...`.\n- create `{username, authenticationKeys?}` creates a venue-managed `did:web:<venue>:u:<username>` identity. Specify exactly ONE of `did` or `username`; initial authentication keys apply only to a username. Repeating the same create is safe: `created: false` means it was already registered.\n- create requires `user/create` on `<venueDID>/users` from the venue. An ordinary authenticated user cannot self-admit. Venue-owned code or an operator-installed adapter can invoke it with venue authority; a remote provisioner can present a venue-issued delegation.\n\nManage a venue-managed user's public authenticators:\n- authentication-list `{did?}` shows active and revoked records.\n- authentication-add `{did?, key, label?}` adds a public `did:key` authenticator.\n- authentication-revoke `{did?, key}` revokes it permanently while retaining an audit tombstone.\n- Omitting `did` targets the caller. Self-management is allowed only for the named user itself; cross-user changes require venue user authority. These operations do not apply to external self-sovereign DIDs.\n\nLoading this skill exposes the operations but grants no authority. Capability checks still run at each operation."
+	},
+	"skill": {
+		"tools": [
+			"v/ops/user/info",
+			"v/ops/user/list",
+			"v/ops/user/create",
+			"v/ops/user/authentication-list",
+			"v/ops/user/authentication-add",
+			"v/ops/user/authentication-revoke"
+		]
+	}
+}

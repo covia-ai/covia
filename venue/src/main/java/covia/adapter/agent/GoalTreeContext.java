@@ -55,12 +55,12 @@ public class GoalTreeContext {
 	/** Frame lifecycle status: absent while live; {@link #STATUS_COMPLETE} /
 	 *  {@link #STATUS_FAILED} written in the same CAS as the terminal turn,
 	 *  {@link #STATUS_INTERRUPTED} by an operator-suspend settle. Explicit
-	 *  markers, not structural inference — a clean complete() tail is
-	 *  otherwise indistinguishable from a crash tail (crash resume). */
+	 *  markers, not structural inference — interruption cleanup must distinguish
+	 *  a committed terminal child from abandoned execution. */
 	static final AString K_STATUS = Strings.intern("status");
 
 	/** The toolCall id of the subgoal call that spawned this (child) frame —
-	 *  stamped at push so crash resume can match a live child back to its
+	 *  stamped at push so interruption cleanup can match a child back to its
 	 *  parent's dangling toolCall unambiguously (identical descriptions are
 	 *  legal in one batch). */
 	static final AString K_CALL_ID = Strings.intern("callId");
@@ -84,10 +84,10 @@ public class GoalTreeContext {
 		return (frame.get(K_CALL_ID) instanceof AString s) ? s : null;
 	}
 
-	// ========== Crash-resume repair (pure) ==========
+	// ========== Interrupted-conversation repair (pure) ==========
 
 	/**
-	 * Repairs a crash-interrupted frame stack: every dangling toolCall — an
+	 * Repairs an interrupted frame stack: every dangling toolCall — an
 	 * entry of an assistant turn's {@code toolCalls} with no later tool-result
 	 * turn for its id — gets a synthetic tool-result turn appended, so the
 	 * conversation is provider-valid again (tool results must follow their
@@ -96,7 +96,7 @@ public class GoalTreeContext {
 	 * or may not have applied, and the agent decides (autonomy principle).
 	 *
 	 * <p>A dangling call whose id matches a deeper frame's {@code callId} is
-	 * an in-flight subgoal — skipped here; the resume driver pops it with the
+	 * an unfinished subgoal — skipped here; the interruption cleanup pops it with the
 	 * child's own outcome. Null-id calls are matched positionally within
 	 * their batch. At most one synthetic result per call, ever.</p>
 	 */
@@ -143,7 +143,7 @@ public class GoalTreeContext {
 
 	/**
 	 * True if the frame's conversation contains a tool-result turn with the
-	 * given id — the resume driver's pop-dedupe: never synthesise a second
+	 * given id — the frame-settling pop-dedupe: never synthesise a second
 	 * result for a call the parent already has one for.
 	 */
 	@SuppressWarnings("unchecked")
@@ -183,7 +183,7 @@ public class GoalTreeContext {
 
 	/**
 	 * Best-effort result value of a terminal frame, for a pop that must be
-	 * synthesised after a crash: a text-completed frame's value is its final
+	 * synthesised while settling an interrupted stack: a text-completed frame's value is its final
 	 * assistant turn's content. Returns null when unrecoverable (e.g. the
 	 * complete() tool's input was the value and is not stored) — the caller
 	 * substitutes an honest "result may be lost" note.

@@ -200,9 +200,11 @@ public class Asset {
 	@SuppressWarnings("unchecked")
 	public <T extends ACell> T run(ACell input) {
 		try {
-			Job job = invoke(input).get();
-			return (T) job.getOutput();
+			Venue v = getVenue();
+			if (v == null) throw new IllegalStateException("Cannot run asset with no attached Venue");
+			return (T) v.run(getID(), input).get();
 		} catch (InterruptedException | ExecutionException e) {
+			if (e instanceof InterruptedException) Thread.currentThread().interrupt();
 			throw new JobFailedException(e);
 		}
 	}

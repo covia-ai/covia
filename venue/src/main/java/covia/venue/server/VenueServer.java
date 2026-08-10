@@ -34,6 +34,7 @@ import convex.core.data.Blob;
 import convex.core.lang.RT;
 import convex.core.util.FileUtils;
 import convex.core.store.AStore;
+import convex.etch.EtchConfig;
 import convex.etch.EtchStore;
 import convex.core.data.prim.CVMLong;
 import convex.core.util.Utils;
@@ -53,6 +54,7 @@ import covia.venue.api.CoviaAPI;
 import covia.venue.api.MCP;
 import covia.venue.api.UserAPI;
 import covia.venue.auth.LoginProviders;
+import covia.venue.auth.VenueAuthenticator;
 import io.javalin.Javalin;
 import io.javalin.config.JavalinConfig;
 import io.javalin.config.RoutesConfig;
@@ -104,6 +106,7 @@ public class VenueServer {
 	protected A2A a2a;
 	protected UserAPI userApi;
 	protected LoginProviders loginProviders;
+	protected VenueAuthenticator authenticator;
 
 	/**
 	 * Extra Javalin route registrars contributed by an embedder — e.g. a service
@@ -219,6 +222,7 @@ public class VenueServer {
 		api=new CoviaAPI(localVenue);
 		userApi=new UserAPI(localVenue);
 		loginProviders=engine.getAuth().getLoginProviders();
+		authenticator=new VenueAuthenticator(engine);
 
 		AMap<AString,ACell> mcpConfig=this.config.getMCPConfig();
 		if (mcpConfig!=null) {
@@ -240,24 +244,39 @@ public class VenueServer {
 	 * </ul>
 	 */
 	private static AStore createStore(Config config) throws IOException {
+		EtchConfig etchConfig = config.getEtchConfig();
+		if (etchConfig != null && etchConfig.getCipherMode() != EtchConfig.CipherMode.NONE
+				&& "file".equals(String.valueOf(config.getStorageType()))) {
+			log.warn("Encrypted Etch store with 'storage.content: file' — asset content bytes "
+				+ "are written OUTSIDE the encrypted store as plaintext files. Use lattice "
+				+ "content storage for an encrypted vault, or encrypt the content directory "
+				+ "separately.");
+		}
 		if (!config.isStoreConfigured()) {
 			log.warn("No 'store' configured — falling back to ephemeral temp Etch store; data will be deleted on JVM exit. Set 'store' to a file path for persistence, or to \"temp\"/\"memory\" to silence this warning.");
-			return EtchStore.createTemp();
+			return (etchConfig != null) ? EtchStore.createTemp(etchConfig) : EtchStore.createTemp();
 		}
 		String storePath = config.getStore();
 		if ("memory".equals(storePath)) {
+			if (etchConfig != null) {
+				// An operator asking for encryption must never silently get an
+				// unencrypted (or non-Etch) store.
+				throw new IllegalArgumentException(
+					"'etch' configuration requires an Etch store; 'store: memory' is not one");
+			}
 			log.info("Using in-memory store (no persistence)");
 			return new convex.core.store.MemoryStore();
 		}
 		if ("temp".equals(storePath)) {
 			log.info("Using temporary Etch store (deleted on exit)");
-			return EtchStore.createTemp();
+			return (etchConfig != null) ? EtchStore.createTemp(etchConfig) : EtchStore.createTemp();
 		}
 		// Persistent file store
 		File f = new File(storePath).getAbsoluteFile();
 		f.getParentFile().mkdirs();
-		log.info("Using persistent Etch store: {}", f);
-		return EtchStore.create(f);
+		log.info("Using persistent Etch store: {}{}", f,
+			(etchConfig != null) ? " (configured Etch policy)" : "");
+		return (etchConfig != null) ? EtchStore.create(f, etchConfig) : EtchStore.create(f);
 	}
 
 	/**
@@ -300,6 +319,7 @@ public class VenueServer {
 			Path keyFile = Path.of(storePath).resolveSibling("venue.key");
 			if (Files.exists(keyFile)) {
 				restrictVenueKeyPermissions(keyFile);
+				warnIfPlaintextKeyBesideEncryptedStore(config, keyFile);
 				String hex = Files.readString(keyFile).trim();
 				AKeyPair kp = AKeyPair.create(Blob.fromHex(hex));
 				log.info("Using venue identity from key file: {}", kp.getAccountKey());
@@ -320,6 +340,7 @@ public class VenueServer {
 			// First launch of a new persistent store: generate and save.
 			AKeyPair kp = AKeyPair.generate();
 			writeVenueKey(keyFile, kp.getSeed().toHexString());
+			warnIfPlaintextKeyBesideEncryptedStore(config, keyFile);
 			log.info("Generated venue identity (saved to {}): {}", keyFile, kp.getAccountKey());
 			return kp;
 		}
@@ -330,6 +351,21 @@ public class VenueServer {
 		AKeyPair kp = AKeyPair.generate();
 		log.info("Generated ephemeral venue identity: {}", kp.getAccountKey());
 		return kp;
+	}
+
+	/**
+	 * An encrypted Etch store with a plaintext {@code venue.key} beside it
+	 * protects the data but hands the venue <b>identity</b> to anyone holding
+	 * the disk — an inconsistent threat posture. Call it out so the operator
+	 * moves the identity seed to config/env or a keystore.
+	 */
+	private static void warnIfPlaintextKeyBesideEncryptedStore(Config config, Path keyFile) {
+		EtchConfig ec = config.getEtchConfig();
+		if (ec != null && ec.getCipherMode() != EtchConfig.CipherMode.NONE) {
+			log.warn("Venue identity seed sits in plaintext at {} beside an ENCRYPTED Etch store — "
+				+ "disk theft still yields the venue identity. Prefer 'seed' or a 'keystore' "
+				+ "in configuration, and remove the key file.", keyFile);
+		}
 	}
 
 	/** Creates a raw venue seed with owner-only POSIX permissions from birth. */
@@ -527,10 +563,9 @@ public class VenueServer {
 		engine.provisionConfiguredSecrets();
 		engine.jobs().recoverJobs();
 
-		// Wake agents with durable work (pending envelopes, queued tasks, or a
-		// stale inCycle claim from an interrupted cycle). recoverJobs only
-		// stabilises job records — it never re-executes anything (#214) — so
-		// this scan is the single trigger that restarts agent loops after restart.
+		// Reconcile agent-owned intake after generic Job recovery: clear stale
+		// executor markers/fences, remove intake for terminal Jobs, then wake only
+		// remaining durable queued work. Internal execution is never resumed.
 		if (engine.getAdapter("agent") instanceof covia.adapter.AgentAdapter agentAdapter) {
 			agentAdapter.wakeAgentsWithWork();
 		}
@@ -579,6 +614,15 @@ public class VenueServer {
 	 */
 	public Engine getEngine() {
 		return engine;
+	}
+
+	/**
+	 * Returns the venue's public credential authentication service. Embedders may
+	 * use it from contributed Javalin routes, including routes carrying tokens in
+	 * headers other than {@code Authorization}.
+	 */
+	public VenueAuthenticator authenticator() {
+		return authenticator;
 	}
 
 	public AStore getStore() {
@@ -847,7 +891,7 @@ public class VenueServer {
 		});
 
 		// Auth middleware: endpoint roles, not URL prefixes, select policy.
-		AuthMiddleware.register(routes, engine);
+		AuthMiddleware.register(routes, engine, authenticator);
 
 		// Rate limiting: per-caller token bucket, keyed on the identity the auth
 		// middleware just resolved (all anonymous callers share the venue :public
@@ -934,7 +978,7 @@ public class VenueServer {
 
 		String allowed = policy.allowedOriginHeader(origin);
 		if (allowed == null) {
-			ctx.status(400).result("CORS origin denied");
+			ctx.status(403).result("CORS origin denied");
 			ctx.skipRemainingHandlers();
 			return;
 		}

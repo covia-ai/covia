@@ -2,6 +2,9 @@ package covia.adapter;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeoutException;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
@@ -47,6 +50,31 @@ public class AgentAdapterTest {
 	private AString ALICE_DID;
 	private AString BOB_DID;
 
+	@Test
+	public void testAwaitLoopExitIsBoundedAndAcceptsExceptionalExit() throws Exception {
+		CompletableFuture<ACell> wedged = new CompletableFuture<>();
+		assertThrows(TimeoutException.class,
+			() -> AgentAdapter.awaitLoopExit(wedged, 25));
+
+		CompletableFuture<ACell> failed = new CompletableFuture<>();
+		failed.completeExceptionally(new IllegalStateException("loop failed"));
+		assertDoesNotThrow(() -> AgentAdapter.awaitLoopExit(failed, 25),
+			"an exceptional completion is still a completed shutdown");
+	}
+
+	@Test
+	public void testTerminatedAgentCancelsLateRegisteredTransition() {
+		AgentState agent = engine.getVenueState().users().ensure(ALICE_DID)
+			.ensureAgent(Strings.create("late-transition"), Maps.empty(), null);
+		assertFalse(AgentAdapter.shouldCancelRegisteredTransition(agent));
+
+		agent.setStatus(AgentState.TERMINATED);
+		assertTrue(AgentAdapter.shouldCancelRegisteredTransition(agent),
+			"a transition registered after deletion must be cancelled");
+		assertTrue(AgentAdapter.shouldCancelRegisteredTransition(null),
+			"a transition registered after physical removal must be cancelled");
+	}
+
 	@BeforeEach
 	public void setup(TestInfo info) {
 		ALICE_DID = TestEngine.uniqueDID(info);
@@ -66,6 +94,13 @@ public class AgentAdapterTest {
 			throw new AssertionError("Agent '" + agent.getAgentId()
 				+ "' did not reach a rest state in 10s", e);
 		}
+	}
+
+	/** Current API-visible status, including the live executor overlay. */
+	private AString observableStatus(AgentState agent) {
+		AMap<AString, ACell> info = ((AgentAdapter) engine.getAdapter("agent"))
+			.agentInfo(RequestContext.of(ALICE_DID), agent.getAgentId());
+		return RT.ensureString(info.get(Fields.STATUS));
 	}
 
 	// ========== agent:create ==========
@@ -311,14 +346,16 @@ public class AgentAdapterTest {
 	@Test
 	public void testAgentLifecycleOpsInvokableInternally() throws Exception {
 		// Regression (#85 fall-out, caught live by an agent calling agent_create
-		// as a tool): lifecycle ops reached via the zero-Job internal path must
+		// as a tool): lifecycle ops reached via the transient-Job internal path must
 		// delegate to the Job-aware dispatch — a real, owner-attributed Job —
 		// not throw UnsupportedOperationException.
 		ACell created = engine.jobs().invokeInternal("v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "tool-made",
 				Fields.CONFIG, Maps.of("llmOperation", "v/test/ops/llm")),
 			RequestContext.of(ALICE_DID)).get(5, java.util.concurrent.TimeUnit.SECONDS);
-		assertEquals(CVMBool.TRUE, RT.getIn(created, Strings.create("created")));
+		assertEquals(Strings.create("tool-made"), RT.getIn(created, Fields.AGENT_ID));
+		assertNull(RT.getIn(created, Fields.CREATED),
+			"successful create needs no redundant created flag");
 
 		// Job-worthy: the create is on the record as a persisted Job.
 		boolean createJobFound = false;
@@ -445,6 +482,90 @@ public class AgentAdapterTest {
 		String w = RT.ensureString(warnings.get(0)).toString();
 		assertTrue(w.contains("v/ops/nope"), "warning names the unresolved op");
 		assertFalse(w.contains("v/ops/covia/list"), "warning omits the op that resolves");
+	}
+
+	@Test
+	public void testConfiguredToolWithoutMetadataReadIsVisibleEverywhere() {
+		String toolPath = "w/ops/risk/issue-limit";
+		AMap<AString, ACell> operation = Maps.of(
+			Fields.NAME, Strings.create("Issue risk limit"),
+			Fields.OPERATION, Maps.of(
+				Fields.ADAPTER, Strings.create("test:echo"),
+				Fields.INPUT, Maps.of("type", "object")));
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, toolPath, Fields.VALUE, operation),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		AMap<AString, ACell> config = Maps.of(
+			Fields.OPERATION, Strings.create("v/ops/llmagent/chat"),
+			"llmOperation", Strings.create("v/ops/langchain/openai"),
+			Fields.TOOLS, Vectors.of(Strings.create(toolPath)),
+			"caps", Vectors.of(Capability.create(
+				Strings.create(toolPath), Strings.create("invoke"))));
+
+		ACell created = engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "metadata-blind", Fields.CONFIG, config),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		AVector<ACell> warnings = RT.ensureVector(RT.getIn(created, Fields.WARNINGS));
+		assertNotNull(warnings, "create must warn when configured caps cannot read tool metadata");
+		assertTrue(warnings.toString().contains(toolPath), warnings.toString());
+		assertTrue(warnings.toString().contains("crud/read"), warnings.toString());
+
+		ACell info = engine.jobs().invokeOperation("v/ops/agent/info",
+			Maps.of(Fields.AGENT_ID, "metadata-blind"), RequestContext.of(ALICE_DID))
+			.awaitResult(5000);
+		AVector<ACell> unavailable = RT.ensureVector(
+			RT.getIn(info, Fields.UNAVAILABLE_TOOLS));
+		assertNotNull(unavailable, "agent:info must expose configured tools omitted at runtime");
+		assertEquals(1, unavailable.count());
+		assertEquals(Strings.create(toolPath),
+			RT.getIn(unavailable.get(0), Fields.OPERATION));
+		assertTrue(RT.getIn(unavailable.get(0), Fields.REASON).toString().contains("crud/read"));
+
+		ACell context = engine.jobs().invokeOperation("v/ops/agent/context",
+			Maps.of(Fields.AGENT_ID, "metadata-blind"), RequestContext.of(ALICE_DID))
+			.awaitResult(5000);
+		String rendered = context.toString();
+		assertTrue(rendered.contains("Configured tools unavailable"), rendered);
+		assertTrue(rendered.contains(toolPath), rendered);
+		assertTrue(rendered.contains("Do not claim"), rendered);
+	}
+
+	@Test
+	public void testConfiguredToolWithMetadataReadIsOffered() {
+		String toolPath = "w/ops/risk/readable-limit";
+		AMap<AString, ACell> operation = Maps.of(
+			Fields.NAME, Strings.create("Readable risk limit"),
+			Fields.OPERATION, Maps.of(
+				Fields.ADAPTER, Strings.create("test:echo"),
+				Fields.INPUT, Maps.of("type", "object")));
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, toolPath, Fields.VALUE, operation),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		AMap<AString, ACell> config = Maps.of(
+			Fields.OPERATION, Strings.create("v/ops/llmagent/chat"),
+			"llmOperation", Strings.create("v/ops/langchain/openai"),
+			Fields.TOOLS, Vectors.of(Strings.create(toolPath)),
+			"caps", Vectors.of(
+				Capability.create(Strings.create(toolPath), Strings.create("invoke")),
+				Capability.create(Strings.create(toolPath), Strings.create("crud/read"))));
+
+		ACell created = engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "metadata-reader", Fields.CONFIG, config),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		assertNull(RT.getIn(created, Fields.WARNINGS));
+
+		ACell info = engine.jobs().invokeOperation("v/ops/agent/info",
+			Maps.of(Fields.AGENT_ID, "metadata-reader"), RequestContext.of(ALICE_DID))
+			.awaitResult(5000);
+		assertNull(RT.getIn(info, Fields.UNAVAILABLE_TOOLS));
+
+		String context = engine.jobs().invokeOperation("v/ops/agent/context",
+			Maps.of(Fields.AGENT_ID, "metadata-reader"), RequestContext.of(ALICE_DID))
+			.awaitResult(5000).toString();
+		assertTrue(context.contains("Operation: " + toolPath), context);
+		assertFalse(context.contains("Configured tools unavailable"), context);
 	}
 
 	@Test
@@ -625,8 +746,8 @@ public class AgentAdapterTest {
 	}
 
 	@Test
-	public void testCreateIdempotent() {
-		ACell input = Maps.of(Fields.AGENT_ID, "idempotent-agent");
+	public void testCreateRejectsExistingAgent() {
+		ACell input = Maps.of(Fields.AGENT_ID, "exclusive-agent");
 
 		Job job1 = engine.jobs().invokeOperation(
 			"v/ops/agent/create", input, RequestContext.of(ALICE_DID));
@@ -634,10 +755,28 @@ public class AgentAdapterTest {
 
 		Job job2 = engine.jobs().invokeOperation(
 			"v/ops/agent/create", input, RequestContext.of(ALICE_DID));
-		ACell result2 = job2.awaitResult(5000);
+		try {
+			job2.awaitResult(5000);
+			fail("agent:create must fail when the name is already occupied");
+		} catch (covia.exception.JobFailedException expected) {
+			assertTrue(job2.getErrorMessage().contains("already exists"));
+		}
+	}
 
-		assertNotNull(result2);
-		assertEquals(Strings.create("idempotent-agent"), RT.getIn(result2, Fields.AGENT_ID));
+	@Test
+	public void testCreateRejectsRemovedOverwriteParameter() {
+		Job job = engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "legacy-overwrite",
+				Fields.OVERWRITE, CVMBool.TRUE),
+			RequestContext.of(ALICE_DID));
+		try {
+			job.awaitResult(5000);
+			fail("removed overwrite parameter must fail loudly");
+		} catch (covia.exception.JobFailedException expected) {
+			assertTrue(job.getErrorMessage().contains("no longer supports overwrite"));
+		}
+		assertNull(engine.getVenueState().users().get(ALICE_DID).agent("legacy-overwrite"));
 	}
 
 	// ========== agent:fork ==========
@@ -666,7 +805,7 @@ public class AgentAdapterTest {
 
 		assertNotNull(result);
 		assertEquals(Strings.create("fork-agent"), RT.getIn(result, Fields.AGENT_ID));
-		assertEquals(CVMBool.TRUE, RT.getIn(result, Fields.CREATED));
+		assertNull(RT.getIn(result, Fields.CREATED));
 		assertEquals(Strings.create("source-agent"), RT.getIn(result, Strings.create("forkedFrom")));
 		assertEquals(AgentState.SLEEPING, RT.getIn(result, Fields.STATUS));
 
@@ -825,6 +964,26 @@ public class AgentAdapterTest {
 			fail("Should fail when target already exists");
 		} catch (Exception e) {
 			assertEquals(Status.FAILED, job.getStatus());
+		}
+	}
+
+	@Test
+	public void testForkRejectsRemovedOverwriteParameter() {
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "fork-source"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job job = engine.jobs().invokeOperation(
+			"v/ops/agent/fork",
+			Maps.of(Strings.create("sourceId"), "fork-source",
+				Fields.AGENT_ID, "fork-target",
+				Fields.OVERWRITE, CVMBool.TRUE),
+			RequestContext.of(ALICE_DID));
+		try {
+			job.awaitResult(5000);
+			fail("removed overwrite parameter must fail loudly");
+		} catch (covia.exception.JobFailedException expected) {
+			assertTrue(job.getErrorMessage().contains("no longer supports overwrite"));
 		}
 	}
 
@@ -1847,8 +2006,7 @@ public class AgentAdapterTest {
 	@Test
 	public void testTriggerWaitFalseReturnsImmediately() {
 		// wait=false → return immediately with status RUNNING. Run loop still
-		// executes in the background; caller polls via agent:info or
-		// covia:read path=g/<agent>/status.
+		// executes in the background; caller observes it via agent:info.
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "async-agent",
@@ -1950,17 +2108,12 @@ public class AgentAdapterTest {
 	}
 
 	/**
-	 * Regression for #64 — phantom RUNNING state. If the agent's lattice status
-	 * shows RUNNING but no live run exists (crash-recovery remnant, stale
-	 * write, or race that slips past clean-exit), a subsequent trigger must
-	 * still be able to start a fresh loop. The runningLoops slot is the source
-	 * of truth for liveness — wakeAgent corrects the lattice inside the atomic
-	 * ConcurrentHashMap.compute() update.
+	 * Legacy persisted RUNNING is not liveness. The API reports SLEEPING when
+	 * no executor exists, and the next wake performs the one-way data migration
+	 * before starting normally.
 	 *
-	 * <p>Deterministic: we force the phantom by writing status=RUNNING
-	 * directly while no run is live (fresh agent, no triggers yet), then
-	 * issue a normal trigger. Without the fix this fails with "Cannot start
-	 * agent"; with the fix the trigger recovers and completes.</p>
+	 * <p>Deterministic: force the old record shape while no run is live, observe
+	 * it through agent:info, then issue a normal trigger.</p>
 	 */
 	@Test
 	public void testPhantomRunningRecovery() {
@@ -1975,7 +2128,9 @@ public class AgentAdapterTest {
 
 		// Force the phantom: status=RUNNING with no runningLoops entry
 		agent.setStatus(AgentState.RUNNING);
-		assertEquals(AgentState.RUNNING, agent.getStatus());
+		assertEquals(AgentState.RUNNING, agent.getStatus()); // raw legacy record
+		assertEquals(AgentState.SLEEPING, observableStatus(agent),
+			"persisted RUNNING without a live executor must not report liveness");
 
 		// Trigger must recover — not fail with "Cannot start agent"
 		Job job = engine.jobs().invokeOperation(
@@ -1984,7 +2139,7 @@ public class AgentAdapterTest {
 			RequestContext.of(ALICE_DID));
 		ACell result = job.awaitResult(5000);
 
-		assertNotNull(result, "Trigger should recover from phantom RUNNING");
+		assertNotNull(result, "Trigger should tolerate stale persisted RUNNING");
 		assertEquals(Status.COMPLETE, job.getStatus(),
 			"Job should complete, not fail with 'Cannot start agent'");
 		assertEquals(AgentState.SLEEPING, RT.getIn(result, Fields.STATUS));
@@ -2388,13 +2543,15 @@ public class AgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "del-wedge", Fields.INPUT, Maps.of("data", "slow")),
 			RequestContext.of(ALICE_DID));
 
-		// Wait until the run loop is live in the never-completing transition
+		// Wait until the live executor reports the never-completing transition.
 		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("del-wedge");
 		long deadline = System.currentTimeMillis() + 5000;
-		while (!AgentState.RUNNING.equals(agent.getStatus())
+		while (!AgentState.RUNNING.equals(observableStatus(agent))
 				&& System.currentTimeMillis() < deadline) Thread.sleep(10);
-		assertEquals(AgentState.RUNNING, agent.getStatus(),
+		assertEquals(AgentState.RUNNING, observableStatus(agent),
 			"agent should be blocked in the never-completing transition");
+		assertEquals(AgentState.RUNNING, agent.getStatus(),
+			"RUNNING is persisted for lattice observers while the executor is live");
 
 		engine.jobs().invokeOperation(
 			"v/ops/agent/delete",
@@ -2914,7 +3071,9 @@ public class AgentAdapterTest {
 				Fields.TIMEOUT, 0),
 			RequestContext.of(ALICE_DID)).get(5000, java.util.concurrent.TimeUnit.MILLISECONDS);
 
-		assertEquals(Status.STARTED, RT.getIn(snapshot, Fields.STATUS));
+		AString snapshotStatus = RT.ensureString(RT.getIn(snapshot, Fields.STATUS));
+		assertTrue(Status.PENDING.equals(snapshotStatus) || Status.STARTED.equals(snapshotStatus),
+			"accepted request is queued or already picked: " + snapshot);
 		Blob taskId = Job.parseID(RT.getIn(snapshot, Fields.ID));
 		assertNotNull(taskId);
 		Job task = engine.jobs().getJob(taskId);
@@ -3117,12 +3276,13 @@ public class AgentAdapterTest {
 
 		// The async pattern: the request returns immediately with a pollable task
 		// Job. The agent runs asynchronously, so the job is legitimately either
-		// STARTED (not yet picked up) or already COMPLETE — a caller must handle
-		// both rather than assume one. Assert only that we got a real, pollable
+		// PENDING (queued), STARTED (picked), or already COMPLETE — a caller must
+		// handle all three rather than assume one. Assert only that we got a pollable
 		// job in a valid state.
 		AString status = job.getStatus();
-		assertTrue(Status.STARTED.equals(status) || Status.COMPLETE.equals(status),
-			"Async request should return a STARTED or COMPLETE job, was: " + status);
+		assertTrue(Status.PENDING.equals(status) || Status.STARTED.equals(status)
+				|| Status.COMPLETE.equals(status),
+			"Async request should return a queued, started or complete job, was: " + status);
 
 		// Poll to completion, then read the output — the normal async retrieval path.
 		job.awaitResult(5000);
@@ -3208,7 +3368,9 @@ public class AgentAdapterTest {
 		long elapsedMs = (System.nanoTime() - start) / 1_000_000L;
 
 		assertTrue(elapsedMs < 500, "timeout=0 should return immediately, took " + elapsedMs + "ms");
-		assertEquals(Status.STARTED, RT.getIn(result, Fields.STATUS));
+		AString status = RT.ensureString(RT.getIn(result, Fields.STATUS));
+		assertTrue(Status.PENDING.equals(status) || Status.STARTED.equals(status),
+			"accepted request is queued or already picked: " + result);
 		assertNotNull(RT.getIn(result, Fields.ID), "Async response must carry Job id");
 	}
 
@@ -3729,14 +3891,17 @@ public class AgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "reuse-agent"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		// Create again without overwrite — idempotent no-op, created=false
+		// Logical deletion preserves the record and therefore reserves the name.
 		Job job2 = engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "reuse-agent"),
 			RequestContext.of(ALICE_DID));
-		ACell result2 = job2.awaitResult(5000);
-		assertEquals(CVMBool.FALSE, RT.getIn(result2, Fields.CREATED));
-		assertEquals(AgentState.TERMINATED, RT.getIn(result2, Fields.STATUS));
+		try {
+			job2.awaitResult(5000);
+			fail("a TERMINATED record must still block exclusive create");
+		} catch (covia.exception.JobFailedException expected) {
+			assertTrue(job2.getErrorMessage().contains("already exists"));
+		}
 	}
 
 	@Test
@@ -3752,20 +3917,20 @@ public class AgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "clean-agent", Fields.REMOVE, CVMBool.TRUE),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		// Recreate — should succeed with created=true
+		// Physical removal frees the name for a new create.
 		Job job2 = engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "clean-agent"),
 			RequestContext.of(ALICE_DID));
 		ACell result2 = job2.awaitResult(5000);
-		assertEquals(CVMBool.TRUE, RT.getIn(result2, Fields.CREATED));
+		assertNull(RT.getIn(result2, Fields.CREATED));
 		assertEquals(AgentState.SLEEPING, RT.getIn(result2, Fields.STATUS));
 	}
 
-	// ========== agent:create with overwrite ==========
+	// ========== explicit delete + recreate ==========
 
 	@Test
-	public void testCreateOverwriteTerminated() {
+	public void testRemoveTerminatedThenRecreate() {
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "ow-agent",
@@ -3778,16 +3943,20 @@ public class AgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "ow-agent"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		// Overwrite with new config
+		// A logical delete reserves the name; remove it explicitly before reuse.
+		engine.jobs().invokeOperation(
+			"v/ops/agent/delete",
+			Maps.of(Fields.AGENT_ID, "ow-agent", Fields.REMOVE, CVMBool.TRUE),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
 		Job job = engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "ow-agent",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete"),
-				Fields.OVERWRITE, CVMBool.TRUE),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
 			RequestContext.of(ALICE_DID));
 		ACell result = job.awaitResult(5000);
 
-		assertEquals(CVMBool.TRUE, RT.getIn(result, Fields.CREATED));
+		assertNull(RT.getIn(result, Fields.CREATED));
 		assertEquals(AgentState.SLEEPING, RT.getIn(result, Fields.STATUS));
 
 		// Config should be the new one
@@ -3798,9 +3967,9 @@ public class AgentAdapterTest {
 	}
 
 	@Test
-	public void testCreateOverwriteSleepingReplacesRecord() {
-		// Create a SLEEPING agent with old-only config and runtime state. A true
-		// overwrite must discard all of it; agent:update owns merge semantics.
+	public void testRemoveSleepingThenRecreateClearsRecord() {
+		// Create a SLEEPING agent with old-only config and runtime state. Explicit
+		// removal must discard all of it; agent:update owns merge semantics.
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "live-ow",
@@ -3816,17 +3985,21 @@ public class AgentAdapterTest {
 		pre.ensureSession(owSid, ALICE_DID);
 		pre.appendSessionPending(owSid, Strings.create("hello"));
 
-		// Overwrite a SLEEPING agent — delete the old record and create fresh.
+		engine.jobs().invokeOperation(
+			"v/ops/agent/delete",
+			Maps.of(Fields.AGENT_ID, "live-ow", Fields.REMOVE, CVMBool.TRUE),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		// Create a fresh agent in the now-empty slot.
 		Job job = engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "live-ow",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete"),
-				Fields.OVERWRITE, CVMBool.TRUE),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
 			RequestContext.of(ALICE_DID));
 		ACell result = job.awaitResult(5000);
 
-		assertEquals(CVMBool.TRUE, RT.getIn(result, Fields.CREATED));
-		assertEquals(CVMBool.FALSE, RT.getIn(result, Fields.UPDATED));
+		assertNull(RT.getIn(result, Fields.CREATED));
+		assertNull(RT.getIn(result, Fields.UPDATED));
 		assertEquals(AgentState.SLEEPING, RT.getIn(result, Fields.STATUS));
 
 		// Config and runtime record are replacements, not shallow merges.
@@ -3839,7 +4012,7 @@ public class AgentAdapterTest {
 	}
 
 	@Test
-	public void testCreateOverwriteSuspendedRecoversWithNewConfig() {
+	public void testRemoveSuspendedThenRecreateWithNewConfig() {
 		// Reproduce #237: the old transition fails and suspends the agent.
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
@@ -3867,25 +4040,28 @@ public class AgentAdapterTest {
 		long timelineBefore = suspended.getTimeline().count();
 		assertEquals(1, timelineBefore, "failed transition should remain in history");
 
-		// Overwrite with a working transition. This must recover the slot rather
-		// than leave it poisoned by the old provider/configuration.
+		// Remove the failed record, then create a clean replacement.
+		engine.jobs().invokeOperation(
+			"v/ops/agent/delete",
+			Maps.of(Fields.AGENT_ID, "susp-ow", Fields.REMOVE, CVMBool.TRUE),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
 		ACell result = engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "susp-ow",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete"),
-				Fields.OVERWRITE, CVMBool.TRUE),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		assertEquals(CVMBool.TRUE, RT.getIn(result, Fields.CREATED));
-		assertEquals(CVMBool.FALSE, RT.getIn(result, Fields.UPDATED));
+		assertNull(RT.getIn(result, Fields.CREATED));
+		assertNull(RT.getIn(result, Fields.UPDATED));
 		assertEquals(AgentState.SLEEPING, RT.getIn(result, Fields.STATUS));
 
 		AgentState post = user.agent("susp-ow");
 		assertEquals(Strings.create("v/test/ops/taskcomplete"), post.getConfig().get(Fields.OPERATION));
 		assertEquals(AgentState.SLEEPING, post.getStatus());
-		assertNull(post.getError(), "overwrite must clear the stale provider error");
+		assertNull(post.getError(), "replacement must clear the stale provider error");
 		assertEquals(0, post.getTimeline().count(),
-			"overwrite must replace the old runtime record and timeline");
+			"delete + create must replace the old runtime record and timeline");
 
 		// A new request must execute the replacement operation. Replaying the old
 		// error transition here is the original #237 failure mode.
@@ -3903,7 +4079,7 @@ public class AgentAdapterTest {
 	}
 
 	@Test
-	public void testCreateOverwriteRunningHaltsAndReplaces() throws Exception {
+	public void testRemoveRunningThenRecreate() throws Exception {
 		// A never-completing transition makes halt-before-replace observable.
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
@@ -3918,8 +4094,9 @@ public class AgentAdapterTest {
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState old = user.agent("run-ow");
 		long deadline = System.currentTimeMillis() + 5000;
-		while (!AgentState.RUNNING.equals(old.getStatus())
+		while (!AgentState.RUNNING.equals(observableStatus(old))
 				&& System.currentTimeMillis() < deadline) Thread.sleep(10);
+		assertEquals(AgentState.RUNNING, observableStatus(old));
 		assertEquals(AgentState.RUNNING, old.getStatus());
 
 		// History-preserving mutation cannot safely swap config under an active
@@ -3938,16 +4115,20 @@ public class AgentAdapterTest {
 		assertEquals(Strings.create("v/test/ops/never"),
 			old.getConfig().get(Fields.OPERATION));
 
-		// Overwrite halts and settles the old loop before installing the replacement.
+		// Delete halts and settles the old loop before a replacement is created.
+		engine.jobs().invokeOperation(
+			"v/ops/agent/delete",
+			Maps.of(Fields.AGENT_ID, "run-ow", Fields.REMOVE, CVMBool.TRUE),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
 		Job job = engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "run-ow",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete"),
-				Fields.OVERWRITE, CVMBool.TRUE),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
 			RequestContext.of(ALICE_DID));
 		ACell replaced = job.awaitResult(5000);
-		assertEquals(CVMBool.TRUE, RT.getIn(replaced, Fields.CREATED));
-		assertEquals(CVMBool.FALSE, RT.getIn(replaced, Fields.UPDATED));
+		assertNull(RT.getIn(replaced, Fields.CREATED));
+		assertNull(RT.getIn(replaced, Fields.UPDATED));
 		assertEquals(AgentState.SLEEPING, RT.getIn(replaced, Fields.STATUS));
 		try {
 			stuck.awaitResult(5000);
@@ -3955,7 +4136,7 @@ public class AgentAdapterTest {
 		} catch (covia.exception.JobFailedException expected) {
 			// expected
 		}
-		assertTrue(stuck.getErrorMessage().contains("overwritten"));
+		assertTrue(stuck.getErrorMessage().contains("deleted"));
 
 		AgentState fresh = user.agent("run-ow");
 		assertEquals(Strings.create("v/test/ops/taskcomplete"),
@@ -3969,22 +4150,25 @@ public class AgentAdapterTest {
 	}
 
 	@Test
-	public void testCreateOverwriteFalseIsNoOp() {
+	public void testCreateExistingDoesNotChangeConfig() {
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "no-ow",
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		// Without overwrite — idempotent no-op
+		// Exclusive create fails and leaves the original untouched.
 		Job job = engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "no-ow",
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
 			RequestContext.of(ALICE_DID));
-		ACell result = job.awaitResult(5000);
-
-		assertEquals(CVMBool.FALSE, RT.getIn(result, Fields.CREATED));
+		try {
+			job.awaitResult(5000);
+			fail("duplicate create must fail");
+		} catch (covia.exception.JobFailedException expected) {
+			assertTrue(job.getErrorMessage().contains("already exists"));
+		}
 
 		// Config should still be original
 		User user = engine.getVenueState().users().get(ALICE_DID);
@@ -4253,9 +4437,6 @@ public class AgentAdapterTest {
 		assertEquals(0, agent.getTasks().count(), "New agent should have empty tasks");
 		assertEquals(0, agent.getPending().count(), "New agent should have empty pending");
 
-		agent.setStatus(AgentState.RUNNING);
-		assertEquals(AgentState.RUNNING, agent.getStatus());
-
 		agent.setStatus(AgentState.SUSPENDED);
 		assertEquals(AgentState.SUSPENDED, agent.getStatus());
 
@@ -4286,7 +4467,6 @@ public class AgentAdapterTest {
 		// Create agent with full config — record.config is the single slot (#144)
 		ACell createInput = Maps.of(
 			Fields.AGENT_ID, "merge-test",
-			Strings.create("overwrite"), convex.core.data.prim.CVMBool.TRUE,
 			Fields.CONFIG, Maps.of(
 				Strings.create("model"), Strings.create("gpt-4.1-mini"),
 				Strings.create("systemPrompt"), Strings.create("You are a test agent"),
@@ -4339,11 +4519,10 @@ public class AgentAdapterTest {
 	public void testUpdateNullValueDocumentsCurrentBehaviour() {
 		// Document current behaviour: setting a config field to null via update
 		// stores null at that key — it does NOT remove the key. To remove a field,
-		// recreate the agent with overwrite:true. This test pins down the
-		// behaviour so any change to it shows up in the diff.
+		// explicitly delete the agent with remove=true and create it again. This
+		// test pins down the behaviour so any change shows up in the diff.
 		ACell createInput = Maps.of(
 			Fields.AGENT_ID, "null-test",
-			Strings.create("overwrite"), CVMBool.TRUE,
 			Fields.CONFIG, Maps.of(
 				Strings.create("model"), Strings.create("gpt-4o"),
 				Strings.create("systemPrompt"), Strings.create("Original prompt")));
@@ -4363,7 +4542,7 @@ public class AgentAdapterTest {
 		assertTrue(configMap.containsKey(Strings.create("systemPrompt")),
 			"key should still exist after setting to null (current behaviour)");
 		assertNull(configMap.get(Strings.create("systemPrompt")),
-			"value should be null (current behaviour — to fully remove, recreate with overwrite:true)");
+			"value should be null (current behaviour — delete + create to remove the key)");
 	}
 
 	// ========== Templates as lattice data (v/agents/templates/) ==========
@@ -4819,6 +4998,158 @@ public class AgentAdapterTest {
 		} finally {
 			disabled.close();
 		}
+	}
+
+	// ========== agent:renameSession ==========
+
+	/**
+	 * Happy path: renaming a session sets {@code meta.title}; renaming again
+	 * with a blank title clears it back to unset.
+	 */
+	@Test
+	public void testRenameSessionSetsAndClearsTitle() {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "rename-agent"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job msg = engine.jobs().invokeOperation(
+			"v/ops/agent/message",
+			Maps.of(Fields.AGENT_ID, "rename-agent",
+				Fields.MESSAGE, Maps.of("content", "hello")),
+			RequestContext.of(ALICE_DID));
+		AString sidHex = RT.ensureString(RT.getIn(msg.awaitResult(5000), Fields.SESSION_ID));
+
+		Job rename = engine.jobs().invokeOperation(
+			"v/ops/agent/rename-session",
+			Maps.of(Fields.AGENT_ID, "rename-agent", Fields.SESSION_ID, sidHex,
+				Fields.TITLE, "Planning the launch"),
+			RequestContext.of(ALICE_DID));
+		ACell result = rename.awaitResult(5000);
+		assertEquals(Strings.create("Planning the launch"), RT.getIn(result, Fields.TITLE));
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AMap<AString, ACell> session = user.agent("rename-agent").getSession(Blob.fromHex(sidHex.toString()));
+		assertEquals(Strings.create("Planning the launch"), RT.getIn(session, "meta", "title"));
+
+		Job clear = engine.jobs().invokeOperation(
+			"v/ops/agent/rename-session",
+			Maps.of(Fields.AGENT_ID, "rename-agent", Fields.SESSION_ID, sidHex, Fields.TITLE, ""),
+			RequestContext.of(ALICE_DID));
+		ACell clearResult = clear.awaitResult(5000);
+		assertNull(RT.getIn(clearResult, Fields.TITLE), "blank title should not round-trip in the result");
+
+		session = user.agent("rename-agent").getSession(Blob.fromHex(sidHex.toString()));
+		assertNull(RT.getIn(session, "meta", "title"), "title should be cleared, not left blank");
+	}
+
+	@Test
+	public void testRenameSessionRejectsNonStringWithoutClearingTitle() {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "rename-type-agent"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job msg = engine.jobs().invokeOperation(
+			"v/ops/agent/message",
+			Maps.of(Fields.AGENT_ID, "rename-type-agent",
+				Fields.MESSAGE, Maps.of("content", "hello")),
+			RequestContext.of(ALICE_DID));
+		AString sidHex = RT.ensureString(RT.getIn(msg.awaitResult(5000), Fields.SESSION_ID));
+
+		engine.jobs().invokeOperation(
+			"v/ops/agent/rename-session",
+			Maps.of(Fields.AGENT_ID, "rename-type-agent", Fields.SESSION_ID, sidHex,
+				Fields.TITLE, "Keep me"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job invalid = engine.jobs().invokeOperation(
+			"v/ops/agent/rename-session",
+			Maps.of(Fields.AGENT_ID, "rename-type-agent", Fields.SESSION_ID, sidHex,
+				Fields.TITLE, CVMLong.create(42)),
+			RequestContext.of(ALICE_DID));
+		assertThrows(Exception.class, () -> invalid.awaitResult(5000));
+		assertEquals(Status.FAILED, invalid.getStatus());
+		assertTrue(String.valueOf(RT.getIn(invalid.getData(), Fields.ERROR))
+			.contains("title must be a string"));
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AMap<AString, ACell> session = user.agent("rename-type-agent")
+			.getSession(Blob.fromHex(sidHex.toString()));
+		assertEquals(Strings.create("Keep me"), RT.getIn(session, "meta", "title"),
+			"invalid input must not clear an existing title");
+	}
+
+	@Test
+	public void testRenameSessionUnknownSessionFails() {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "rename-unknown-agent"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job rename = engine.jobs().invokeOperation(
+			"v/ops/agent/rename-session",
+			Maps.of(Fields.AGENT_ID, "rename-unknown-agent",
+				Fields.SESSION_ID, Strings.create("eeee0003eeee0003eeee0003eeee0003"),
+				Fields.TITLE, "x"),
+			RequestContext.of(ALICE_DID));
+		try {
+			rename.awaitResult(5000);
+			fail("renameSession should fail for an unknown session");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, rename.getStatus());
+			assertTrue(String.valueOf(RT.getIn(rename.getData(), Fields.ERROR)).contains("Session not found"));
+		}
+	}
+
+	@Test
+	public void testRenameSessionRequiresSessionId() {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "rename-noarg-agent"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job rename = engine.jobs().invokeOperation(
+			"v/ops/agent/rename-session",
+			Maps.of(Fields.AGENT_ID, "rename-noarg-agent", Fields.TITLE, "x"),
+			RequestContext.of(ALICE_DID));
+		try {
+			rename.awaitResult(5000);
+			fail("renameSession should fail without a sessionId");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, rename.getStatus());
+		}
+	}
+
+	/** The read-only public scope denies renameSession (agent/write). */
+	@Test
+	public void testRenameSessionDeniedUnderReadOnlyScope() {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "rename-cap-agent"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		Job msg = engine.jobs().invokeOperation(
+			"v/ops/agent/message",
+			Maps.of(Fields.AGENT_ID, "rename-cap-agent",
+				Fields.MESSAGE, Maps.of("content", "hi")),
+			RequestContext.of(ALICE_DID));
+		AString sidHex = RT.ensureString(RT.getIn(msg.awaitResult(5000), Fields.SESSION_ID));
+
+		RequestContext readOnly = RequestContext.of(ALICE_DID)
+			.withCaps(covia.lattice.CapabilityChecker.readOnlyScope(ALICE_DID));
+		Job rename = engine.jobs().invokeOperation(
+			"v/ops/agent/rename-session",
+			Maps.of(Fields.AGENT_ID, "rename-cap-agent", Fields.SESSION_ID, sidHex, Fields.TITLE, "nope"),
+			readOnly);
+		try {
+			rename.awaitResult(5000);
+			fail("read-only scope should deny renameSession");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, rename.getStatus());
+		}
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AMap<AString, ACell> session = user.agent("rename-cap-agent").getSession(Blob.fromHex(sidHex.toString()));
+		assertNull(RT.getIn(session, "meta", "title"), "title must not be set by a denied attempt");
 	}
 
 	/** Builds the L3 input via the same code path as agent:context and returns tool names. */

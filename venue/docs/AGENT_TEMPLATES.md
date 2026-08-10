@@ -85,6 +85,15 @@ All fields are optional. Missing fields get platform defaults.
 
 > **Tool references are operation lattice paths, not adapter shorthand.** Use `v/ops/covia/read`, not `covia:read` — the latter names an *adapter* and will not resolve. The same applies to `operation` and `llmOperation` (e.g. `v/ops/llmagent/chat`, `v/ops/langchain/openai`). The exception is harness tools (`subgoal`, `complete`, `fail`, `compact`, `context_load`, `context_unload`, `more_tools`) — those are bare names, not operations.
 
+> **Private tool definitions need metadata read access.** Adding a user-scoped
+> operation such as `w/ops/risk/issue-limit` to `tools` requires both `invoke`
+> authority for the operation and `crud/read` authority for its definition path.
+> The runtime must read the operation metadata to build the provider tool name,
+> description, and input schema. A definition that is missing or unreadable is
+> omitted from the provider palette and reported in `agent:create` warnings,
+> `agent:info.unavailableTools`, and the model's assembled context. Shared
+> `v/ops/...` catalog metadata remains publicly discoverable.
+
 ### Example templates
 
 **Minimal reader:**
@@ -350,7 +359,7 @@ the handoff caps are mandatory, not optional.
 - Copies config and state from source; optional `includeTimeline: true` copies run history
 - Resets status to SLEEPING; tasks, pending, and sessions are fresh
 - Optional `config` override (inline map or string reference) is merged on top of source config per-field
-- Source must exist and not be TERMINATED; target must not already exist (unless `overwrite: true` and target is TERMINATED)
+- Source must exist and not be TERMINATED; target must not already exist
 - Implementation: `User.forkAgent` + `AgentState.initialiseFromFork`
 
 ### Phase 3a: Ship standard templates ✓ DONE

@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.function.Supplier;
 
 import convex.core.data.ABlob;
@@ -47,6 +48,11 @@ public final class FFMPythonBackend implements PythonBackend {
 	private static final int PY_EVAL_INPUT = 258;
 	private static final int MAX_CONVERSION_DEPTH = 64;
 	private static final Object INIT_LOCK = new Object();
+	private static final boolean WINDOWS = System.getProperty("os.name", "")
+		.toLowerCase(Locale.ROOT).contains("win");
+	private static final boolean MACOS = System.getProperty("os.name", "")
+		.toLowerCase(Locale.ROOT).contains("mac");
+	private static final MemoryLayout C_UNSIGNED_LONG = WINDOWS ? JAVA_INT : JAVA_LONG;
 
 	private record Library(SymbolLookup symbols, String description) {}
 
@@ -59,6 +65,8 @@ public final class FFMPythonBackend implements PythonBackend {
 	private final MethodHandle pyEvalSaveThread;
 	private final MethodHandle pyGilEnsure;
 	private final MethodHandle pyGilRelease;
+	private final MethodHandle pyThreadGetIdent;
+	private final MethodHandle pyThreadStateSetAsyncExc;
 	private final MethodHandle pyGetVersion;
 	private final MethodHandle pyIncRef;
 	private final MethodHandle pyDecRef;
@@ -104,6 +112,8 @@ public final class FFMPythonBackend implements PythonBackend {
 	private final MemorySegment listType;
 	private final MemorySegment tupleType;
 	private final MemorySegment dictType;
+	private final MemorySegment keyboardInterrupt;
+	private final ConcurrentLinkedDeque<Long> activeCalls = new ConcurrentLinkedDeque<>();
 	private final String description;
 
 	private FFMPythonBackend(Library loaded) {
@@ -115,6 +125,9 @@ public final class FFMPythonBackend implements PythonBackend {
 		pyEvalSaveThread = fn("PyEval_SaveThread", ADDRESS);
 		pyGilEnsure = fn("PyGILState_Ensure", JAVA_INT);
 		pyGilRelease = fn("PyGILState_Release", null, JAVA_INT);
+		pyThreadGetIdent = fn("PyThread_get_thread_ident", C_UNSIGNED_LONG);
+		pyThreadStateSetAsyncExc = fn("PyThreadState_SetAsyncExc", JAVA_INT,
+			C_UNSIGNED_LONG, ADDRESS);
 		pyGetVersion = fn("Py_GetVersion", ADDRESS);
 		pyIncRef = fn("Py_IncRef", null, ADDRESS);
 		pyDecRef = fn("Py_DecRef", null, ADDRESS);
@@ -162,6 +175,8 @@ public final class FFMPythonBackend implements PythonBackend {
 		dictType = symbol("PyDict_Type");
 
 		initialise();
+		keyboardInterrupt = symbol("PyExc_KeyboardInterrupt")
+			.reinterpret(ADDRESS.byteSize()).get(ADDRESS, 0);
 		String version = withGil(() -> cString(ptr(pyGetVersion)));
 		description = "CPython " + version.lines().findFirst().orElse(version)
 			+ " via FFM (" + library + ")";
@@ -260,24 +275,44 @@ public final class FFMPythonBackend implements PythonBackend {
 	@Override
 	public Object call(Object callableHandle, List<Object> arguments) {
 		return withGil(() -> {
+			long thread = pythonThreadIdent();
+			activeCalls.addLast(thread);
 			MemorySegment callable = segment(callableHandle);
-			if (integer(pyCallableCheck, callable) == 0) {
-				throw new PythonException("Python object is not callable");
-			}
-			MemorySegment tuple = checked(ptr(pyTupleNew, (long) arguments.size()),
-				"allocate arguments");
 			try {
-				for (int i = 0; i < arguments.size(); i++) {
-					MemorySegment value = segment(arguments.get(i));
-					incref(value); // tuple steals this additional reference
-					if (integer(pyTupleSetItem, tuple, (long) i, value) != 0) {
-						throw pythonError("build argument tuple");
-					}
+				if (integer(pyCallableCheck, callable) == 0) {
+					throw new PythonException("Python object is not callable");
 				}
-				return checked(ptr(pyObjectCallObject, callable, tuple), "call Python function");
+				MemorySegment tuple = checked(ptr(pyTupleNew, (long) arguments.size()),
+					"allocate arguments");
+				try {
+					for (int i = 0; i < arguments.size(); i++) {
+						MemorySegment value = segment(arguments.get(i));
+						incref(value); // tuple steals this additional reference
+						if (integer(pyTupleSetItem, tuple, (long) i, value) != 0) {
+							throw pythonError("build argument tuple");
+						}
+					}
+					return checked(ptr(pyObjectCallObject, callable, tuple), "call Python function");
+				} finally {
+					decref(tuple);
+				}
 			} finally {
-				decref(tuple);
+				activeCalls.removeLastOccurrence(thread);
 			}
+		});
+	}
+
+	@Override
+	public boolean interruptCurrentCall() {
+		return withGil(() -> {
+			Long thread = activeCalls.peekLast();
+			if (thread == null) return false;
+			int changed = setAsyncException(thread, keyboardInterrupt);
+			if (changed > 1) {
+				setAsyncException(thread, MemorySegment.NULL);
+				throw new PythonException("CPython interrupt matched multiple thread states");
+			}
+			return changed == 1;
 		});
 	}
 
@@ -478,6 +513,20 @@ public final class FFMPythonBackend implements PythonBackend {
 		}
 	}
 
+	private long pythonThreadIdent() {
+		long thread = WINDOWS
+			? Integer.toUnsignedLong(integer(pyThreadGetIdent))
+			: longNumber(pyThreadGetIdent);
+		if (thread == 0) throw new PythonException("CPython returned no current thread identity");
+		return thread;
+	}
+
+	private int setAsyncException(long thread, MemorySegment exception) {
+		return WINDOWS
+			? integer(pyThreadStateSetAsyncExc, (int) thread, exception)
+			: integer(pyThreadStateSetAsyncExc, thread, exception);
+	}
+
 	private MemorySegment compile(String source, String filename, int mode) {
 		try (Arena arena = Arena.ofConfined()) {
 			return checked(ptr(pyCompileString, arena.allocateFrom(source),
@@ -554,8 +603,9 @@ public final class FFMPythonBackend implements PythonBackend {
 			MemorySegment value = valueOut.get(ADDRESS, 0);
 			MemorySegment traceback = tracebackOut.get(ADDRESS, 0);
 			try {
-				String detail = !isNull(value) ? objectString(value)
-					: !isNull(type) ? objectString(type) : "unknown Python error";
+				String detail = !isNull(value) ? objectString(value) : "";
+				if (detail.isBlank() && !isNull(type)) detail = objectString(type);
+				if (detail.isBlank()) detail = "unknown Python error";
 				return new PythonException(action + ": " + detail);
 			} finally {
 				decrefNullable(traceback);
@@ -657,7 +707,7 @@ public final class FFMPythonBackend implements PythonBackend {
 		for (Path candidate : candidatePaths()) {
 			if (!Files.isRegularFile(candidate)) continue;
 			try {
-				return new Library(SymbolLookup.libraryLookup(candidate, Arena.global()),
+				return new Library(loadLibrarySymbols(candidate),
 					candidate.toAbsolutePath().toString());
 			} catch (RuntimeException e) {
 				attempts.add(candidate + " (" + e.getMessage() + ")");
@@ -665,7 +715,7 @@ public final class FFMPythonBackend implements PythonBackend {
 		}
 		for (String name : libraryNames()) {
 			try {
-				return new Library(SymbolLookup.libraryLookup(name, Arena.global()), name);
+				return new Library(loadLibrarySymbols(name), name);
 			} catch (RuntimeException e) {
 				attempts.add(name);
 			}
@@ -679,14 +729,58 @@ public final class FFMPythonBackend implements PythonBackend {
 		Path path = Path.of(configured);
 		try {
 			if (Files.isRegularFile(path)) {
-				return new Library(SymbolLookup.libraryLookup(path.toAbsolutePath(), Arena.global()),
+				return new Library(loadLibrarySymbols(path),
 					path.toAbsolutePath().toString());
 			}
-			return new Library(SymbolLookup.libraryLookup(configured, Arena.global()), configured);
+			return new Library(loadLibrarySymbols(configured), configured);
 		} catch (RuntimeException e) {
 			attempts.add(configured);
 			throw new PythonException("Cannot load configured CPython library '"
 				+ configured + "': " + e.getMessage(), e);
+		}
+	}
+
+	/**
+	 * Load CPython for direct FFM calls. On POSIX, extension modules loaded later
+	 * by CPython resolve C-API symbols from the process-wide namespace. The FFM
+	 * library lookup itself uses local visibility, so promote the same library
+	 * with {@code dlopen(..., RTLD_GLOBAL)} first. Without this, imports of native
+	 * standard-library modules such as {@code _struct} fail with undefined Python
+	 * symbols even though direct calls through the lookup work.
+	 */
+	private static SymbolLookup loadLibrarySymbols(Path path) {
+		Path absolute = path.toAbsolutePath();
+		promoteLibrarySymbols(absolute.toString());
+		return SymbolLookup.libraryLookup(absolute, Arena.global());
+	}
+
+	private static SymbolLookup loadLibrarySymbols(String name) {
+		promoteLibrarySymbols(WINDOWS ? name : System.mapLibraryName(name));
+		return SymbolLookup.libraryLookup(name, Arena.global());
+	}
+
+	private static void promoteLibrarySymbols(String library) {
+		if (WINDOWS) return;
+		Linker linker = Linker.nativeLinker();
+		MemorySegment address = linker.defaultLookup().find("dlopen").orElseThrow(() ->
+			new PythonException("Cannot expose CPython symbols globally: dlopen is unavailable"));
+		MethodHandle dlopen = linker.downcallHandle(address,
+			FunctionDescriptor.of(ADDRESS, ADDRESS, JAVA_INT));
+		// RTLD_NOW is 0x2 on supported POSIX platforms. RTLD_GLOBAL is 0x8 on
+		// macOS and 0x100 on Linux/BSD/Solaris.
+		int flags = 0x2 | (MACOS ? 0x8 : 0x100);
+		try (Arena arena = Arena.ofConfined()) {
+			MemorySegment handle = (MemorySegment) dlopen.invokeWithArguments(
+				arena.allocateFrom(library), flags);
+			if (isNull(handle)) {
+				throw new PythonException("Cannot expose CPython symbols globally from '"
+					+ library + "'");
+			}
+		} catch (PythonException e) {
+			throw e;
+		} catch (Throwable e) {
+			throw new PythonException("Cannot expose CPython symbols globally from '"
+				+ library + "'", e);
 		}
 	}
 

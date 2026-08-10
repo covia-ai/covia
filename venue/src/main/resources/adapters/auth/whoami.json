@@ -1,8 +1,9 @@
 {
   "name": "Whoami",
   "description": "Returns the caller's authenticated DID as resolved by the venue. Useful for verifying authentication and diagnosing identity issues.",
-  "operation": {
-    "adapter": "auth:whoami",
+	"operation": {
+		"adapter": "auth:whoami",
+		"readOnly": true,
     "input": {
       "type": "object",
       "properties": {}

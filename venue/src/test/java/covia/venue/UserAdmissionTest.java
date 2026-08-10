@@ -11,6 +11,10 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
 import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
 
 import org.junit.jupiter.api.Test;
 
@@ -44,6 +48,47 @@ class UserAdmissionTest {
 			assertInstanceOf(ResponseException.class, failure.getCause());
 			assertTrue(failure.getCause().getMessage().contains("403"));
 			assertTrue(failure.getCause().getMessage().contains("user:create"));
+			assertNull(server.getEngine().getVenueState().users().get(did));
+		} finally {
+			server.close();
+		}
+	}
+
+	@Test
+	void admissionDenialHasStructuredBodyBeforeJobCreation() throws Exception {
+		VenueServer server = VenueServer.launch(Maps.of(Config.PORT, 0));
+		try {
+			AKeyPair keyPair = AKeyPair.generate();
+			AString did = UCAN.toDIDKey(keyPair.getAccountKey());
+			String token = VenueAuth.keyPair(keyPair,
+				server.getEngine().getDIDString().toString(), 300).mintToken();
+			HttpClient http = HttpClient.newBuilder()
+				.connectTimeout(Duration.ofSeconds(5)).build();
+			String requestBody = "{\"operation\":\"v/test/ops/echo\",\"input\":{}}";
+
+			for (String path : new String[] { "/api/v1/invoke", "/api/v1/run" }) {
+				HttpRequest request = HttpRequest.newBuilder(URI.create(
+						"http://localhost:" + server.port() + path))
+					.timeout(Duration.ofSeconds(5))
+					.header("Authorization", "Bearer " + token)
+					.header("Content-Type", "application/json")
+					.header("Accept", "application/json")
+					.POST(HttpRequest.BodyPublishers.ofString(requestBody))
+					.build();
+				HttpResponse<String> response = http.send(request,
+					HttpResponse.BodyHandlers.ofString());
+
+				assertEquals(403, response.statusCode(), path + ": " + response.body());
+				assertTrue(response.headers().firstValue("Content-Type")
+					.orElse("").startsWith("application/json"),
+					path + ": " + response.headers());
+				assertTrue(response.body().contains("\"error\""), response.body());
+				assertTrue(response.body().contains("User is not registered"),
+					response.body());
+				assertTrue(response.body().contains("user:create"), response.body());
+				assertTrue(response.body().contains(did.toString()), response.body());
+			}
+
 			assertNull(server.getEngine().getVenueState().users().get(did));
 		} finally {
 			server.close();

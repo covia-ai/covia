@@ -21,7 +21,6 @@ public class TestServer {
 	static {
 		SERVER=VenueServer.launch(Maps.of(
 				Strings.create("port"),0, // ephemeral port
-				Config.ENABLE_PRIVATE_JOBS, true,
 				Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 				Fields.MCP,Maps.of(
 					Strings.create("includePathPrefixes"),

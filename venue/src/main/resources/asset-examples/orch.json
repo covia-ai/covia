@@ -4,6 +4,8 @@
 	"dateCreated":"2025-07-09T07:22:59Z",
 	"operation": {
 		"adapter": "orchestrator",
+		"internal": false,
+		"strict": true,
 		"input": {
 			"type": "object",
 			"properties": {

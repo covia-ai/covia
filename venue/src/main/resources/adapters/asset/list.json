@@ -2,8 +2,9 @@
   "name": "List Assets",
   "description": "List your own pinned assets (the per-user a/ namespace), with pagination. Returns summary info (id is the asset hash, plus name, type, description) per asset; use asset_get for full metadata. Filter by type for narrow searches (e.g. type='agent-definition'). Venue operations are not listed here — discover those with covia_functions / covia_adapters.",
   "dateCreated": "2026-03-31T00:00:00Z",
-  "operation": {
-    "adapter": "asset:list",
+	"operation": {
+		"adapter": "asset:list",
+		"readOnly": true,
     "toolName": "asset_list",
     "input": {
       "type": "object",

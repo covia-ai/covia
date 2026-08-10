@@ -11,10 +11,13 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.a2aproject.sdk.jsonrpc.common.json.JsonUtil;
 import org.a2aproject.sdk.spec.AgentCard;
@@ -23,7 +26,10 @@ import org.a2aproject.sdk.spec.Message;
 import org.a2aproject.sdk.spec.MessageSendParams;
 import org.a2aproject.sdk.spec.Part;
 import org.a2aproject.sdk.spec.Task;
+import org.a2aproject.sdk.spec.TaskIdParams;
 import org.a2aproject.sdk.spec.TaskQueryParams;
+import org.a2aproject.sdk.spec.TaskState;
+import org.a2aproject.sdk.spec.TaskStatusUpdateEvent;
 import org.a2aproject.sdk.spec.TextPart;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -33,15 +39,18 @@ import org.junit.jupiter.api.TestInstance.Lifecycle;
 import convex.auth.ucan.UCAN;
 import convex.core.crypto.AKeyPair;
 import convex.core.data.AString;
+import convex.core.data.Blob;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.auth.VenueAuth;
 import covia.grid.client.VenueHTTP;
 import covia.venue.TestServer;
+import covia.venue.AgentState;
 
 /**
  * #183 — per-agent Agent Card over A2A (COG-14): {@code GET /a2a/<ownerDID>/g/<agentId>}.
@@ -258,6 +267,178 @@ public class A2AAgentCardTest {
 		assertEquals(404, post("/a2a/" + ownerDid + "/g/PubNoCaps", env, null).statusCode());
 	}
 
+	@Test
+	public void taskAndContextContinuation_areDistinctAndIdempotent() throws Exception {
+		AKeyPair kp = AKeyPair.generate();
+		AString ownerDid = didOf(kp);
+		String jwt = bearerFor(kp);
+		VenueHTTP client = VenueHTTP.create(URI.create(BASE_URL), VenueAuth.bearer(jwt));
+		client.setTimeout(5000);
+
+		// The test transition explicitly completes tasks. Its config delay holds
+		// revision 0 open while two identical continuation requests race.
+		Job created = client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
+			Fields.AGENT_ID, Strings.create("Continuer"),
+			Fields.CONFIG, Maps.of(
+				Fields.OPERATION, Strings.create("v/test/ops/taskcomplete"),
+				Fields.DELAY, convex.core.data.prim.CVMLong.create(300))));
+		assertEquals(Status.COMPLETE, created.getStatus(), created.getErrorMessage());
+
+		String endpoint = "/a2a/" + ownerDid + "/g/Continuer";
+		Map<String, Object> initialResponse = parse(post(endpoint,
+			rpcEnvelope("start", "SendMessage",
+				new MessageSendParams(userMessage("first"), null, null)), jwt));
+		Task initial = extractTask(initialResponse);
+		assertNotNull(initial);
+
+		Message continuation = Message.builder()
+			.role(Message.Role.ROLE_USER)
+			.parts(List.<Part<?>>of(new TextPart("second", null)))
+			.messageId("same-continuation")
+			.contextId(initial.contextId())
+			.taskId(initial.id())
+			.build();
+		Object continuationRpc = rpcEnvelope("continue", "SendMessage",
+			new MessageSendParams(continuation, null, null));
+		Message otherContinuation = Message.builder()
+			.role(Message.Role.ROLE_USER)
+			.parts(List.<Part<?>>of(new TextPart("third", null)))
+			.messageId("other-continuation")
+			.contextId(initial.contextId())
+			.taskId(initial.id())
+			.build();
+		Object otherContinuationRpc = rpcEnvelope("continue-other", "SendMessage",
+			new MessageSendParams(otherContinuation, null, null));
+		CompletableFuture<HttpResponse<String>> one = CompletableFuture.supplyAsync(
+			() -> postUnchecked(endpoint, continuationRpc, jwt));
+		CompletableFuture<HttpResponse<String>> two = CompletableFuture.supplyAsync(
+			() -> postUnchecked(endpoint, continuationRpc, jwt));
+		CompletableFuture<HttpResponse<String>> three = CompletableFuture.supplyAsync(
+			() -> postUnchecked(endpoint, otherContinuationRpc, jwt));
+		assertEquals(200, one.join().statusCode());
+		assertEquals(200, two.join().statusCode());
+		assertEquals(200, three.join().statusCode());
+
+		Task completed = awaitTask(endpoint, initial.id(), jwt, TaskState.TASK_STATE_COMPLETED);
+		assertEquals(3, completed.history().size(),
+			"retrying the same messageId must not duplicate Task history");
+		AgentState continued = TestServer.ENGINE.getVenueState().users().get(ownerDid)
+			.agent("Continuer");
+		assertEquals(3, continued.getTimeline().count(),
+			"the stale cycle and both distinct continuations each run exactly once");
+		var session = continued.getSession(Blob.fromHex(initial.contextId()));
+		var frames = (convex.core.data.AVector<?>) session.get(AgentState.KEY_FRAMES);
+		var conversation = (convex.core.data.AVector<?>)
+			((convex.core.data.AMap<?, ?>) frames.get(0)).get(AgentState.KEY_CONVERSATION);
+		assertEquals(6, conversation.count(),
+			"three user turns and three agent turns must be recorded without duplicate frames");
+
+		// The endpoint's caller/publication gate runs before continuation lookup.
+		assertEquals(403, post(endpoint, continuationRpc,
+			bearerFor(AKeyPair.generate())).statusCode());
+
+		Message mismatched = Message.builder()
+			.role(Message.Role.ROLE_USER)
+			.parts(List.<Part<?>>of(new TextPart("mismatch", null)))
+			.messageId("mismatched-context")
+			.contextId("00".repeat(initial.contextId().length() / 2))
+			.taskId(initial.id())
+			.build();
+		Map<String, Object> mismatch = parse(post(endpoint,
+			rpcEnvelope("mismatch", "SendMessage",
+				new MessageSendParams(mismatched, null, null)), jwt));
+		assertEquals(org.a2aproject.sdk.spec.A2AErrorCodes.INVALID_PARAMS.code(),
+			errorCode(mismatch));
+
+		Message unknown = Message.builder()
+			.role(Message.Role.ROLE_USER)
+			.parts(List.<Part<?>>of(new TextPart("unknown", null)))
+			.messageId("unknown-task")
+			.taskId("00".repeat(initial.id().length() / 2))
+			.build();
+		Map<String, Object> unknownResponse = parse(post(endpoint,
+			rpcEnvelope("unknown", "SendMessage",
+				new MessageSendParams(unknown, null, null)), jwt));
+		assertEquals(org.a2aproject.sdk.spec.A2AErrorCodes.TASK_NOT_FOUND.code(),
+			errorCode(unknownResponse));
+
+		// A taskId is bound to its publishing agent, even for the same owner.
+		client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
+			Fields.AGENT_ID, Strings.create("OtherContinuer"),
+			Fields.CONFIG, Maps.of(Fields.OPERATION, Strings.create("v/test/ops/echo"))));
+		Map<String, Object> crossAgent = parse(post(
+			"/a2a/" + ownerDid + "/g/OtherContinuer", continuationRpc, jwt));
+		assertEquals(org.a2aproject.sdk.spec.A2AErrorCodes.TASK_NOT_FOUND.code(),
+			errorCode(crossAgent));
+
+		// Once terminal, taskId continuation is forbidden.
+		Map<String, Object> terminal = parse(post(endpoint, continuationRpc, jwt));
+		assertEquals(org.a2aproject.sdk.spec.A2AErrorCodes.UNSUPPORTED_OPERATION.code(),
+			errorCode(terminal));
+
+		// contextId alone means a new Job/Task in the same conversation.
+		Message nextTurn = Message.builder()
+			.role(Message.Role.ROLE_USER)
+			.parts(List.<Part<?>>of(new TextPart("fourth", null)))
+			.messageId("context-followup")
+			.contextId(initial.contextId())
+			.build();
+		Task next = extractTask(parse(post(endpoint,
+			rpcEnvelope("next", "SendMessage", new MessageSendParams(nextTurn, null, null)), jwt)));
+		assertNotNull(next);
+		assertNotEquals(initial.id(), next.id());
+		assertEquals(initial.contextId(), next.contextId());
+		awaitTask(endpoint, next.id(), jwt, TaskState.TASK_STATE_COMPLETED);
+	}
+
+	/**
+	 * #305 — an A2A turn has no synchronous completion deadline. SendMessage
+	 * returns the ordinary durable task Job immediately; the same id can be
+	 * reattached through polling or SSE, and both views converge on one final
+	 * state. The deterministic transition delay keeps the task live while the
+	 * client disconnects from SendMessage and opens a fresh subscription.
+	 */
+	@Test
+	public void longTurnReattachesAndPollingConvergesWithSse() throws Exception {
+		AKeyPair kp = AKeyPair.generate();
+		AString ownerDid = didOf(kp);
+		String jwt = bearerFor(kp);
+		String agentId = "LongTurn" + Long.toUnsignedString(System.nanoTime());
+		VenueHTTP client = VenueHTTP.create(URI.create(BASE_URL), VenueAuth.bearer(jwt));
+		client.setTimeout(5000);
+
+		Job created = client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
+			Fields.AGENT_ID, Strings.create(agentId),
+			Fields.CONFIG, Maps.of(
+				Fields.OPERATION, Strings.create("v/test/ops/taskcomplete"),
+				Fields.DELAY, convex.core.data.prim.CVMLong.create(3000))));
+		assertEquals(Status.COMPLETE, created.getStatus(), created.getErrorMessage());
+
+		String endpoint = "/a2a/" + ownerDid + "/g/" + agentId;
+		Task submitted = extractTask(parse(post(endpoint,
+			rpcEnvelope("long-send", "SendMessage",
+				new MessageSendParams(userMessage("long turn"), null, null)), jwt)));
+		assertNotNull(submitted);
+		assertNotNull(submitted.id(), "SendMessage must return the durable Job id");
+		assertNotNull(submitted.contextId(), "SendMessage must return the session id");
+		assertTrue(!submitted.status().state().isFinal(),
+			"SendMessage must not wait for or manufacture a terminal timeout");
+
+		TaskStatusUpdateEvent streamed = awaitFinalStatusUpdate(endpoint,
+			submitted.id(), jwt, 7000);
+		assertEquals(submitted.id(), streamed.taskId());
+		assertEquals(submitted.contextId(), streamed.contextId());
+		assertTrue(streamed.isFinal());
+		assertEquals(TaskState.TASK_STATE_COMPLETED, streamed.status().state());
+
+		Task polled = awaitTask(endpoint, submitted.id(), jwt,
+			TaskState.TASK_STATE_COMPLETED);
+		assertEquals(streamed.taskId(), polled.id());
+		assertEquals(streamed.contextId(), polled.contextId());
+		assertEquals(streamed.status().state(), polled.status().state(),
+			"GetTask and SubscribeToTask must converge on the same Job state");
+	}
+
 	// ---- helpers ----
 
 	private static AString didOf(AKeyPair kp) {
@@ -295,6 +476,102 @@ public class A2AAgentCardTest {
 		return JsonUtil.OBJECT_MAPPER.fromJson(JsonUtil.OBJECT_MAPPER.toJson(result), Task.class);
 	}
 
+	@SuppressWarnings("unchecked")
+	private static int errorCode(Map<String, Object> rpcResp) {
+		return ((Number) ((Map<String, Object>) rpcResp.get("error")).get("code")).intValue();
+	}
+
+	@SuppressWarnings("unchecked")
+	private static Map<String, Object> parse(HttpResponse<String> response) {
+		return JsonUtil.OBJECT_MAPPER.fromJson(response.body(), Map.class);
+	}
+
+	private Task awaitTask(String endpoint, String taskId, String jwt, TaskState wanted)
+			throws Exception {
+		long deadline = System.currentTimeMillis() + 5000;
+		Task task = null;
+		do {
+			task = extractTask(parse(post(endpoint,
+				rpcEnvelope("poll-" + UUID.randomUUID(), "GetTask",
+					new TaskQueryParams(taskId, null)), jwt)));
+			if (task != null && wanted.equals(task.status().state())) return task;
+			Thread.sleep(20);
+		} while (System.currentTimeMillis() < deadline);
+		throw new AssertionError("Task " + taskId + " did not reach " + wanted
+			+ "; last state=" + (task == null ? null : task.status().state()));
+	}
+
+	private TaskStatusUpdateEvent awaitFinalStatusUpdate(String endpoint,
+			String taskId, String jwt, long timeoutMs) throws Exception {
+		HttpResponse<java.util.stream.Stream<String>> response = postStreaming(endpoint,
+			rpcEnvelope("long-subscribe", "SubscribeToTask", new TaskIdParams(taskId)), jwt);
+		assertEquals(200, response.statusCode());
+		assertTrue(response.headers().firstValue("Content-Type").orElse("")
+			.contains("text/event-stream"));
+
+		AtomicReference<TaskStatusUpdateEvent> terminal = new AtomicReference<>();
+		AtomicReference<Throwable> consumerFailure = new AtomicReference<>();
+		List<String> observed = Collections.synchronizedList(new java.util.ArrayList<>());
+		Object signal = new Object();
+		Thread consumer = Thread.ofVirtual().start(() -> {
+			try (java.util.stream.Stream<String> lines = response.body()) {
+				var iterator = lines.iterator();
+				while (iterator.hasNext()) {
+					String line = iterator.next();
+					if (!line.startsWith("data:")) continue;
+					observed.add(line);
+					@SuppressWarnings("unchecked")
+					Map<String, Object> envelope = JsonUtil.OBJECT_MAPPER.fromJson(
+						line.substring(line.indexOf(':') + 1).trim(), Map.class);
+					Map<String, Object> result = castMap(envelope.get("result"));
+					Map<String, Object> update = result == null
+						? null : castMap(result.get("statusUpdate"));
+					if (update == null) continue;
+					TaskStatusUpdateEvent event = JsonUtil.OBJECT_MAPPER.fromJson(
+						JsonUtil.OBJECT_MAPPER.toJson(update), TaskStatusUpdateEvent.class);
+					if (!event.isFinal()) continue;
+					terminal.set(event);
+					synchronized (signal) { signal.notifyAll(); }
+					return;
+				}
+			} catch (RuntimeException failure) {
+				consumerFailure.compareAndSet(null, failure);
+				synchronized (signal) { signal.notifyAll(); }
+			}
+		});
+
+		long deadline = System.currentTimeMillis() + timeoutMs;
+		synchronized (signal) {
+			while (terminal.get() == null && consumerFailure.get() == null
+					&& System.currentTimeMillis() < deadline) {
+				signal.wait(Math.max(1, deadline - System.currentTimeMillis()));
+			}
+		}
+		try { response.body().close(); } catch (Exception ignored) {}
+		if (!consumer.join(Duration.ofMillis(500))) consumer.interrupt();
+		if (terminal.get() == null) {
+			Task current = extractTask(parse(post(endpoint,
+				rpcEnvelope("long-diagnostic", "GetTask", new TaskQueryParams(taskId, null)), jwt)));
+			throw new AssertionError("SubscribeToTask did not emit a final update; failure="
+				+ consumerFailure.get() + "; frames=" + observed + "; current="
+				+ (current == null ? null : current.status().state()));
+		}
+		return terminal.get();
+	}
+
+	@SuppressWarnings("unchecked")
+	private static Map<String, Object> castMap(Object value) {
+		return value instanceof Map<?, ?> ? (Map<String, Object>) value : null;
+	}
+
+	private HttpResponse<String> postUnchecked(String path, Object body, String jwt) {
+		try {
+			return post(path, body, jwt);
+		} catch (Exception e) {
+			throw new RuntimeException(e);
+		}
+	}
+
 	private HttpResponse<String> get(String path, String jwt) throws Exception {
 		HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(BASE_URL + path))
 				.GET().timeout(Duration.ofSeconds(10));
@@ -309,5 +586,16 @@ public class A2AAgentCardTest {
 				.timeout(Duration.ofSeconds(10));
 		if (jwt != null) b.header("Authorization", "Bearer " + jwt);
 		return http.send(b.build(), HttpResponse.BodyHandlers.ofString());
+	}
+
+	private HttpResponse<java.util.stream.Stream<String>> postStreaming(
+			String path, Object body, String jwt) throws Exception {
+		HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(BASE_URL + path))
+			.header("Content-Type", "application/json")
+			.header("Accept", "text/event-stream")
+			.POST(HttpRequest.BodyPublishers.ofString(JsonUtil.OBJECT_MAPPER.toJson(body)))
+			.timeout(Duration.ofSeconds(10));
+		if (jwt != null) b.header("Authorization", "Bearer " + jwt);
+		return http.send(b.build(), HttpResponse.BodyHandlers.ofLines());
 	}
 }

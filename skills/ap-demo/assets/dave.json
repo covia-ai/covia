@@ -1,6 +1,5 @@
 {
   "agentId": "Dave",
-  "overwrite": true,
   "config": {
     "operation": "v/ops/goaltree/chat",
     "llmOperation": "v/ops/langchain/openai",

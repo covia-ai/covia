@@ -6,10 +6,17 @@ import java.net.URI;
 
 import org.junit.jupiter.api.Test;
 
+import convex.auth.jwt.JWT;
+import convex.auth.ucan.UCAN;
 import convex.core.crypto.AKeyPair;
 import covia.api.Fields;
+import convex.core.data.ACell;
+import convex.core.data.AMap;
+import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.prim.CVMLong;
+import convex.core.lang.RT;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.auth.VenueAuth;
@@ -62,5 +69,67 @@ public class AudienceBoundAuthTest {
 		for (Throwable c = t; c != null; c = c.getCause()) chain.append(c.getMessage()).append(" | ");
 		assertTrue(chain.toString().contains("401") || chain.toString().toLowerCase().contains("audience"),
 			"wrong-audience token must be rejected (401), got: " + chain);
+	}
+
+	@Test
+	public void signingAnotherSubjectDoesNotGrantItsWorkspace() throws Exception {
+		String venueDID = TestServer.ENGINE.getDIDString().toString();
+		AKeyPair victimKey = AKeyPair.generate();
+		AString victimDID = UCAN.toDIDKey(victimKey.getAccountKey());
+		String path = "w/auth-subject-private";
+		AString secret = Strings.create("victim-only");
+
+		VenueHTTP victim = VenueHTTP.create(URI.create(TestServer.BASE_URL),
+			VenueAuth.keyPair(victimKey, venueDID));
+		victim.setTimeout(5000);
+		victim.invokeAndWait(Strings.create("v/ops/covia/write"),
+			Maps.of(Fields.PATH, path, Fields.VALUE, secret));
+		ACell ownRead = victim.invokeAndWait(Strings.create("v/ops/covia/read"),
+			Maps.of(Fields.PATH, path)).awaitResult(5000);
+		assertEquals(secret, RT.getIn(ownRead, Fields.VALUE));
+
+		// The attacker genuinely signs this JWT and accurately identifies itself
+		// as issuer, but merely naming the victim as sub conveys no authority over
+		// the victim or its resources.
+		AKeyPair attackerKey = AKeyPair.generate();
+		AString attackerDID = UCAN.toDIDKey(attackerKey.getAccountKey());
+		long now = System.currentTimeMillis() / 1000;
+		AMap<AString, ACell> claims = Maps.of(
+			JWT.ISS, attackerDID,
+			JWT.SUB, victimDID,
+			JWT.AUD, Strings.create(venueDID),
+			JWT.IAT, CVMLong.create(now),
+			JWT.EXP, CVMLong.create(now + 300));
+		String token = JWT.signPublic(claims, attackerKey).toString();
+		VenueHTTP attacker = VenueHTTP.create(URI.create(TestServer.BASE_URL),
+			VenueAuth.bearer(token));
+		attacker.setTimeout(5000);
+
+		assertThrows(Throwable.class, () -> attacker.invokeAndWait(
+			Strings.create("v/ops/covia/read"),
+			Maps.of(Fields.PATH, victimDID + "/" + path)),
+			"a signed sub claim alone must not grant access to that subject's workspace");
+	}
+
+	@Test
+	public void absentIssuerClaimIsAccepted() throws Exception {
+		// `iss` is OPTIONAL (RFC 7519): a did:key token without it still
+		// verifies — the subject's own key is the proof. (Note #323, closed by
+		// design: a mismatched `iss` is likewise not grounds for rejection —
+		// identity binds to the signing key, and admission is a separate gate.)
+		String venueDID = TestServer.ENGINE.getDIDString().toString();
+		AKeyPair kp = AKeyPair.generate();
+		AString subDID = UCAN.toDIDKey(kp.getAccountKey());
+		long now = System.currentTimeMillis() / 1000;
+		String token = JWT.signPublic(Maps.of(
+			JWT.SUB, subDID,
+			JWT.AUD, Strings.create(venueDID),
+			JWT.IAT, CVMLong.create(now),
+			JWT.EXP, CVMLong.create(now + 300)), kp).toString();
+		VenueHTTP client = VenueHTTP.create(
+			URI.create(TestServer.BASE_URL), VenueAuth.bearer(token));
+		Job job = client.invokeAndWait(Strings.create("v/test/ops/echo"),
+			Maps.of(Fields.VALUE, Strings.create("no-iss")));
+		assertEquals(Status.COMPLETE, job.getStatus());
 	}
 }

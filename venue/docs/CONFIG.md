@@ -76,6 +76,69 @@ Venue state (lattice, agents, secrets, DLFS) is persisted via Etch store:
 - `store`: `"temp"` (default, deleted on exit), `"memory"`, or file path
 - `seed`: Ed25519 hex seed for stable venue identity. If omitted with a persistent store, auto-generated and saved to `venue.key` alongside the store file. On POSIX filesystems this raw seed is created with owner-only permissions (`0600`), and existing key-file permissions are repaired on each launch. On non-POSIX filesystems it inherits the platform ACL policy.
 
+### Etch store policy (`etch`)
+
+An optional `etch` block (Convex 0.8.11+) sets the Etch creation policy for
+the venue's store — including **encrypted Etch v3**:
+
+```json
+{
+  "store": "/data/venue.etch",
+  "etch": {
+    "version": 3,
+    "cipher": "aes-256-ctr",
+    "encryptIndex": true,
+    "key": { "env": "COVIA_ETCH_KEY" }
+  }
+}
+```
+
+- `version` / `mapping` / `buildChains` / `publicKeyHint` / `cipher`
+  (`none`, `aes-256-ctr`, `chacha20`) / `encryptIndex` pass through to
+  Convex's `EtchConfig` unchanged.
+- `key` is Covia-side: the 32-byte store encryption key as hex, sourced from
+  `{"env": "VAR"}`, `{"file": "path"}` (operator-secured file), or an inline
+  hex string (dev/test only — never commit key material).
+- **Key identity** (consistent with venue key management): the master key is
+  treated as an Ed25519 seed and identified by its derived public key — the
+  same identifier scheme as venue identity keys and keystore aliases. New
+  files stamp that identity as the Etch v3 `publicKeyHint` automatically
+  (set `publicKeyHint` explicitly to pin your own label), and opening
+  verifies the file's hint against the configured key, so a wrong key fails
+  with a precise identification error, never a decrypt failure.
+- The store key is **independent of the venue identity `seed`** — rotate and
+  guard them separately. For an encrypted store, configure the identity via
+  `seed`/`keystore` rather than relying on the auto-generated plaintext
+  `venue.key` beside the store (the venue warns about that combination:
+  encrypted data with the identity readable off the same disk).
+- For an encrypted **vault**, keep content in the store: with
+  `storage.content: file`, asset content bytes are written outside the
+  encrypted store as plaintext files (the venue warns). The lattice default
+  keeps everything — workspace, DLFS drives, secrets, content — inside the
+  encrypted Etch file.
+
+**Embedders** hold vault key material in their own code (KMS, passphrase
+derivation, HSM) rather than config: compile the policy with a key
+*function* and adopt a caller-opened store —
+
+```java
+EtchConfig policy = config.getEtchConfig(hint -> myKms.vaultKey());
+VenueServer server = VenueServer.launch(venueConfig,
+    EtchStore.create(vaultFile, policy));
+```
+
+No key material touches config, environment, or disk on this path; hint
+management is the embedder's concern. The key function and the config `key`
+field are mutually exclusive. A keyless encrypted policy constructs (so
+embedder configs validate) but fails closed on an operator launch.
+- The policy applies to file stores and `"temp"` stores; `"memory"` is not an
+  Etch store and rejects an `etch` block.
+- Fail-closed: an invalid field, unresolvable key, wrong-sized key, an
+  encrypted cipher without a key source, or the wrong key for an existing
+  encrypted file are all startup errors — never a silently-unencrypted or
+  empty store. The store encryption key is independent of the venue identity
+  `seed`; rotate and guard them separately.
+
 ## Venue identity
 
 Identity resolution order: `seed` → `keystore` → `venue.key` next to a
@@ -152,7 +215,7 @@ Supported forms:
   but no `Access-Control-Allow-Origin` header is emitted.
 
 Specific-origin and loopback responses echo the accepted request origin and
-emit `Vary: Origin`; a denied browser origin receives HTTP 400 without an
+emit `Vary: Origin`; a denied browser origin receives HTTP 403 without an
 allow-origin header. Entries should be origins only (`scheme://host[:port]`),
 not URLs with paths. For compatibility with the previous Javalin setting, a
 bare configured host defaults to HTTPS. Invalid or ambiguous configuration
@@ -498,8 +561,11 @@ venue-managed `username`. A username requires a public `hostname` and derives
 `did:web:venue-1.covia.ai:u:alice`. `user:create` and `user:list` are
 venue-administrative operations: invoke directly as the venue, or present a
 venue-issued UCAN covering `<venueDID>/users` with `user/create` or
-`user/read`. OAuth callbacks are trusted venue provisioners and create the
-same did:web-managed account explicitly.
+`user/read`. Operator code can use `engine.venueContext()` to invoke the
+built-in adapter; the [deployment guide](../../deploy/README.md#admit-users-at-runtime)
+shows the recorded-job path. An operator-installed adapter may use the same
+mechanism. OAuth callbacks are trusted venue provisioners and create the same
+did:web-managed account explicitly.
 
 A venue-managed named user may authenticate with any active public key bound
 to its authentication-directory record. The self-issued JWT uses the stable
@@ -531,6 +597,42 @@ own UCAN roots. For username-created
 controller and may issue venue sessions, while registered user-held keys
 provide direct self-sovereign authentication as the stable named DID.
 
+## File roots
+
+The `file` adapter exposes operator-configured logical roots. A root may be a
+host directory, an ephemeral temporary directory, or a caller-owned DLFS
+drive. DLFS roots may be clamped to a provider-relative subtree:
+
+```json
+{
+  "file": {
+    "roots": {
+      "workspace": "/srv/agent-workspace",
+      "reference": {
+        "path": "/srv/reference",
+        "readOnly": true
+      },
+      "mina": {
+        "dlfs": "vault",
+        "subpath": "Made by Mina",
+        "readOnly": false,
+        "description": "Files created and maintained by Mina"
+      }
+    }
+  }
+}
+```
+
+`subpath` is valid only with `dlfs`. It must be a non-empty relative path and
+cannot contain `..`; invalid roots are skipped rather than broadened to the
+whole drive. The subtree is created lazily on first file access. It is an
+implementation boundary, not part of the client path: callers use
+`{ "root": "mina", "path": "report.pdf" }`, and capabilities name
+`file://mina/report.pdf`, while the provider stores the file at
+`vault/Made by Mina/report.pdf`. Adding a subpath to an existing root therefore
+changes its logical capability addresses; issue replacement grants as part of
+that configuration migration.
+
 ## Adapter configuration
 
 ```json
@@ -551,6 +653,11 @@ Currently defined:
 - `agent.sessionDelete` — whether `agent:deleteSession` is available
   (default `true`). Set `false` to disable user-initiated session deletion
   venue-wide; the op then fails with "disabled on this venue".
+- `hitl.maxGrantLifetimeSecs` — optional positive lifetime ceiling for grants
+  minted after HITL approval. It is absent by default, so the venue imposes no
+  maximum and permits an explicit `exp: null`. With a finite ceiling, null and
+  later expiries are rejected before the request reaches the approver. A grant
+  that omits `exp` uses the shorter of the seven-day default and this ceiling.
 - `orchestrator.maxItems` — maximum number of elements accepted by one
   `foreach` step (default `50`). The complete input is rejected before any
   iteration starts when this limit is exceeded. Set explicitly to `null` for no
@@ -562,7 +669,7 @@ Currently defined:
   orchestrator resolves inputs and issues child invocations serially; only
   waiting for the issued jobs is concurrent.
 
-## Private jobs
+## Legacy private invoke setting
 
 ```json
 {
@@ -570,23 +677,36 @@ Currently defined:
 }
 ```
 
-Off by default. When enabled, an invoke with `private: true` (body field)
-creates a **memory-only job** (#192): never persisted — no record in the
-caller's job index, no lattice write, no recovery, gone on venue restart.
-Use `wait` to collect the result; a completed private job is immediately
-forgotten. A private request against a venue without this flag is an error —
-never a silent downgrade to a persisted job. A private conversation is agent
-intake (`agent:chat` / `agent:request`) invoked private; the session record
-remains the (deletable, `agent:deleteSession`) conversation store.
+Deprecated compatibility setting; it no longer enables `private: true` on
+`/invoke`. Invoke now always creates a durable Job. Use `/api/v1/run` (or the
+SDK's `run`) when only the result is required. Whether run's internal Job is
+transient is controlled by operation metadata and
+`recordReadOnlyOperations`, not by a caller-selected privacy flag.
 
-**Operator telemetry is unaffected**: private controls the durable lattice
-record, not operational visibility. The venue still logs job events (ID,
-operation, status transitions, timings) per its logging config, live
-job-update listeners (SSE, MCP notifications) still fire to authorized
-subscribers, and stats counters still count. Note that log lines are
-ID-and-status shaped as a rule, but failure messages can quote content
-fragments — operators wanting content-clean logs address that via logging
-policy (levels, appender redaction), not the job system.
+## Result-oriented operation runs
+
+`POST /api/v1/run` waits for an operation and returns its output directly. It
+is distinct from `POST /api/v1/invoke`: invoke always creates a durable Job and
+returns that Job, even when `wait` is used. Run still executes through a Job
+internally, but does not expose the Job handle to the caller.
+
+Operations explicitly declaring `operation.readOnly: true` use a transient,
+non-persisted Job for `run` and `invokeInternal` by default. Mutating or
+unclassified operations invoked through `run` remain durable. An operation can
+declare `operation.internal: false` when its lifecycle itself must be recorded
+(for example, a human-in-the-loop request); this forces a durable Job on both
+result-oriented paths.
+
+Operators can force read-only runs and internal calls to be recorded:
+
+```json
+{
+  "recordReadOnlyOperations": true
+}
+```
+
+This option is off by default. It does not change `/invoke`, which is always
+recorded.
 
 ## DLFS WebDAV
 
@@ -748,8 +868,8 @@ LAN-reachable one. The agent-card GET is public and works regardless.
 **Per-agent endpoints (COG-14):** beyond the front door, every hosted agent is
 addressable at `POST /a2a/<ownerDID>/g/<agentId>` (JSON-RPC `SendMessage` →
 `agent:request` task Job = A2A Task; `GetTask`, `CancelTask`,
-`GetExtendedAgentCard`), with its card at the A2A well-known path below that
-base. Private by default: the owner interacts as themselves; anonymous
+`SubscribeToTask`, `GetExtendedAgentCard`), with its card at the A2A well-known
+path below that base. Private by default: the owner interacts as themselves; anonymous
 non-owners get an existence-hiding 404, authenticated non-owners 403.
 Publishing is per-agent config: `a2a: {public: true}` makes the card
 discoverable; adding an explicit `a2a.caps` scope accepts stranger
@@ -791,11 +911,23 @@ The result is an A2A Task. Poll its `id` at the same `AGENT_URL` with
 The `Authorization` header may be omitted only when the agent is explicitly
 published with an `a2a.caps` scope that permits the interaction.
 
-Current boundaries: incoming per-agent `taskId` continuation is not implemented
-(#306); long-running turns still need stable synchronous-boundary reattachment
-(#305); and outbound `v/ops/a2a/*` calls do not yet relay caller authority to a
-remote venue (#304). Outbound calls do pass the HTTP adapter's SSRF checks and
-operator allow/block lists.
+`SendMessage` never waits for the agent turn to finish. It returns the current
+Task snapshot as soon as the durable Job has been submitted: Task `id` is the
+Job id and `contextId` is the session id. A turn may therefore run for minutes,
+days, or longer without crossing a protocol timeout or changing identity.
+Reconnect with `GetTask`, or open `SubscribeToTask` at the same endpoint for
+SSE updates. Both read the same Job record and converge on the same terminal
+state; closing an HTTP request or SSE connection does not fail or cancel it.
+
+Outbound calls use imported A2A agent Assets. Import with
+`v/ops/a2a/import-agent`, then invoke `agent-card`, `send`, `get-task`, or
+`cancel` with `agent: "w/a2a/agents/<name>"`. The Asset may describe a standard
+A2A URL or a Covia agent at a local/remote venue; the latter still uses the
+standard per-agent A2A endpoint above. Authentication bindings retain only a
+caller-owned `s/NAME` SecretStore reference and support card-declared API-key
+and HTTP-Bearer schemes. UCAN authority is not relayed over A2A; use native Grid
+operations for Covia-to-Covia authority and identity. All outbound URLs pass
+the HTTP adapter's SSRF checks and operator allow/block lists.
 
 ## Secrets bootstrap
 

@@ -11,6 +11,7 @@ import java.net.http.HttpResponse;
 
 import org.junit.jupiter.api.Test;
 
+import convex.core.data.ACell;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
@@ -70,6 +71,26 @@ public class InvokeWaitTest {
 			.POST(HttpRequest.BodyPublishers.ofString(body))
 			.build();
 		return HttpClient.newHttpClient().send(req, HttpResponse.BodyHandlers.ofString());
+	}
+
+	private static HttpResponse<String> run(String body) throws Exception {
+		HttpRequest req = HttpRequest.newBuilder()
+			.uri(URI.create(TestServer.BASE_URL + "/api/v1/run"))
+			.header("Content-Type", "application/json")
+			.POST(HttpRequest.BodyPublishers.ofString(body))
+			.build();
+		return HttpClient.newHttpClient().send(req, HttpResponse.BodyHandlers.ofString());
+	}
+
+	@Test
+	public void testRunReturnsRawOperationResult() throws Exception {
+		HttpResponse<String> resp = run(
+			"{\"operation\":\"v/test/ops/echo\",\"input\":{\"answer\":42}}");
+		assertEquals(200, resp.statusCode());
+		ACell body = JSON.parse(resp.body());
+		assertEquals(CVMLong.create(42), RT.getIn(body, "answer"));
+		assertEquals(null, RT.getIn(body, "status"),
+			"run returns the operation output, not a Job record");
 	}
 
 	@Test

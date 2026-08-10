@@ -2,8 +2,9 @@
   "name": "Get Asset",
   "description": "Read asset metadata from any resolvable address (a/<hash>, o/<name>, v/ops/..., DID URL). Returns {id, exists, value}. Use asset_content for the binary payload, or covia_read if you just want the raw value without asset semantics.",
   "dateCreated": "2026-03-31T00:00:00Z",
-  "operation": {
-    "adapter": "asset:get",
+	"operation": {
+		"adapter": "asset:get",
+		"readOnly": true,
     "toolName": "asset_get",
     "input": {
       "type": "object",

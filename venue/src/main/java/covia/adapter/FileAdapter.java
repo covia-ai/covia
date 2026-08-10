@@ -43,10 +43,12 @@ import covia.venue.RequestContext;
  * Filesystem adapter — exposes the venue host's local filesystem to operations.
  *
  * <p>Access is restricted to a set of named roots configured by the venue
- * operator. Each root maps a name to an absolute host path; agents reference
- * files by {@code root} + relative {@code path}. Without configured roots the
- * adapter is inert — every operation fails with a clear error. This keeps
- * agents on a leash without making the adapter conditionally registered.
+ * operator. Each root maps a name to a host path, temp directory, or DLFS view;
+ * agents reference files by {@code root} + relative {@code path}. Without
+ * configured roots the adapter creates an ephemeral temp root. A DLFS root may
+ * select a relative {@code subpath}; this becomes the root's logical boundary,
+ * so callers never include the physical subtree in operation paths or
+ * capability resources.
  *
  * <h3>Configuration</h3>
  * <pre>
@@ -54,7 +56,8 @@ import covia.venue.RequestContext;
  *   "file": {
  *     "roots": {
  *       "workspace": "/srv/agent-workspace",
- *       "data":      { "path": "/srv/data", "readOnly": true }
+ *       "data":      { "path": "/srv/data", "readOnly": true },
+ *       "mina":      { "dlfs": "vault", "subpath": "Made by Mina" }
  *     }
  *   }
  * }
@@ -67,6 +70,8 @@ import covia.venue.RequestContext;
  *   <li>{@code file:read}   — read a file (text/bytes/json)</li>
  *   <li>{@code file:write}  — write a file (text/value/bytes)</li>
  *   <li>{@code file:append} — append text to a file</li>
+ *   <li>{@code file:move}   — rename or relocate within one root</li>
+ *   <li>{@code file:copy}   — copy within one root</li>
  *   <li>{@code file:delete} — delete a file or empty directory</li>
  *   <li>{@code file:mkdir}  — create a directory</li>
  *   <li>{@code file:stat}   — file metadata</li>
@@ -85,7 +90,10 @@ public class FileAdapter extends AAdapter {
 	private static final String ASSETS_PATH = "/adapters/file/";
 
 	private static final AString FIELD_ROOT = Strings.intern("root");
+	private static final AString FIELD_TO_ROOT = Strings.intern("toRoot");
 	private static final AString FIELD_PATH = Strings.intern("path");
+	private static final AString FIELD_FROM = Strings.intern("from");
+	private static final AString FIELD_TO = Strings.intern("to");
 	private static final AString FIELD_CONTENT = Strings.intern("content");
 	private static final AString FIELD_VALUE = Strings.intern("value");
 	private static final AString FIELD_BYTES = Strings.intern("bytes");
@@ -97,6 +105,7 @@ public class FileAdapter extends AAdapter {
 	private static final AString FIELD_TEMP = Strings.intern("temp");
 	private static final AString FIELD_PREFIX = Strings.intern("prefix");
 	private static final AString FIELD_DLFS = Strings.intern("dlfs");
+	private static final AString FIELD_SUBPATH = Strings.intern("subpath");
 	private static final AString FIELD_DESCRIPTION = Strings.intern("description");
 
 	/**
@@ -136,13 +145,16 @@ public class FileAdapter extends AAdapter {
 
 	private static final class DLFSRoot extends Root {
 		final String driveName;
+		final String subpath;
 		final Engine engine;
-		DLFSRoot(String driveName, boolean readOnly, Engine engine, AString description) {
+		DLFSRoot(String driveName, String subpath, boolean readOnly, Engine engine,
+				AString description) {
 			super(readOnly, description);
 			this.driveName = driveName;
+			this.subpath = subpath;
 			this.engine = engine;
 		}
-		@Override Path baseFor(RequestContext ctx) {
+		@Override Path baseFor(RequestContext ctx) throws IOException {
 			if (ctx == null || ctx.getCallerDID() == null) {
 				throw new IllegalArgumentException(
 					"DLFS-backed root '" + driveName + "' requires authenticated caller");
@@ -154,9 +166,35 @@ public class FileAdapter extends AAdapter {
 					"DLFS-backed root '" + driveName + "' requires the DLFS adapter to be registered");
 			}
 			// Drives auto-create on first connect; cheap cursor view per call.
-			return dlfs.getDrive(ctx, driveName).getRootDirectories().iterator().next();
+			Path driveRoot = dlfs.getDrive(ctx, driveName)
+				.getRootDirectories().iterator().next();
+			if (subpath == null) return driveRoot;
+
+			// Resolve against the provider itself, then re-check confinement before
+			// touching state. loadRoot performs the same lexical validation early,
+			// but this keeps the security boundary local to path materialisation.
+			Path relative = driveRoot.getFileSystem().getPath(subpath);
+			if (relative.isAbsolute() || relative.getRoot() != null) {
+				throw new IllegalArgumentException(
+					"DLFS root subpath must be relative: " + subpath);
+			}
+			Path base = driveRoot.resolve(relative).normalize();
+			if (!base.startsWith(driveRoot)) {
+				throw new IllegalArgumentException(
+					"DLFS root subpath escapes drive: " + subpath);
+			}
+			// The drive itself is lazy-created; its configured subtree follows the
+			// same rule. This setup is independent of the root's API-level readOnly
+			// policy, which still rejects caller-requested mutations.
+			Files.createDirectories(base);
+			if (!Files.isDirectory(base)) {
+				throw new IOException("DLFS root subpath is not a directory: " + subpath);
+			}
+			return base;
 		}
-		@Override String displayPath() { return "dlfs:" + driveName; }
+		@Override String displayPath() {
+			return "dlfs:" + driveName + (subpath == null ? "" : "/" + subpath);
+		}
 		@Override String kind() { return "dlfs"; }
 	}
 
@@ -191,6 +229,8 @@ public class FileAdapter extends AAdapter {
 		installAsset("file/read",   ASSETS_PATH + "read.json");
 		installAsset("file/write",  ASSETS_PATH + "write.json");
 		installAsset("file/append", ASSETS_PATH + "append.json");
+		installAsset("file/move",   ASSETS_PATH + "move.json");
+		installAsset("file/copy",   ASSETS_PATH + "copy.json");
 		installAsset("file/delete", ASSETS_PATH + "delete.json");
 		installAsset("file/mkdir",  ASSETS_PATH + "mkdir.json");
 		installAsset("file/stat",   ASSETS_PATH + "stat.json");
@@ -231,8 +271,17 @@ public class FileAdapter extends AAdapter {
 				AMap<AString, ACell> rm = (AMap<AString, ACell>) m;
 				boolean isTemp = RT.bool(rm.get(FIELD_TEMP));
 				AString dlfsCell = RT.ensureString(rm.get(FIELD_DLFS));
+				ACell subpathRaw = rm.get(FIELD_SUBPATH);
+				AString subpathCell = RT.ensureString(subpathRaw);
 				boolean readOnly = RT.bool(rm.get(Config.READ_ONLY));
 				AString description = RT.ensureString(rm.get(FIELD_DESCRIPTION));
+				if (subpathRaw != null && subpathCell == null) {
+					throw new IllegalArgumentException("'subpath' must be a string");
+				}
+				if (subpathCell != null && dlfsCell == null) {
+					throw new IllegalArgumentException(
+						"'subpath' is only valid for a DLFS-backed root");
+				}
 				int variants = (isTemp ? 1 : 0) + (dlfsCell != null ? 1 : 0)
 					+ (rm.containsKey(FIELD_PATH) && !isTemp ? 1 : 0);
 				if (variants > 1) {
@@ -246,7 +295,9 @@ public class FileAdapter extends AAdapter {
 					String prefix = (prefixCell != null) ? prefixCell.toString() : null;
 					addTempRoot(name, prefix, parent, readOnly, description);
 				} else if (dlfsCell != null) {
-					addDLFSRoot(name, dlfsCell.toString(), readOnly, description);
+					String subpath = (subpathCell == null) ? null
+						: normaliseDLFSSubpath(subpathCell.toString());
+					addDLFSRoot(name, dlfsCell.toString(), subpath, readOnly, description);
 				} else {
 					AString p = RT.ensureString(rm.get(FIELD_PATH));
 					if (p == null) {
@@ -258,9 +309,33 @@ public class FileAdapter extends AAdapter {
 			} else {
 				log.warn("FileAdapter: root '{}' must be string or map — skipped", name);
 			}
-		} catch (IOException e) {
+		} catch (IOException | IllegalArgumentException e) {
 			log.warn("FileAdapter: root '{}' failed: {}", name, e.getMessage());
 		}
+	}
+
+	/** Normalises a portable provider-relative DLFS subtree path. */
+	private static String normaliseDLFSSubpath(String configured) {
+		if (configured == null || configured.isBlank()) {
+			throw new IllegalArgumentException("'subpath' must not be empty");
+		}
+		String portable = configured.replace('\\', '/');
+		if (portable.startsWith("/") || portable.matches("^[A-Za-z]:.*")) {
+			throw new IllegalArgumentException("'subpath' must be relative: " + configured);
+		}
+		java.util.ArrayList<String> segments = new java.util.ArrayList<>();
+		for (String segment : portable.split("/")) {
+			if (segment.isEmpty() || ".".equals(segment)) continue;
+			if ("..".equals(segment)) {
+				throw new IllegalArgumentException(
+					"'subpath' must not contain '..': " + configured);
+			}
+			segments.add(segment);
+		}
+		if (segments.isEmpty()) {
+			throw new IllegalArgumentException("'subpath' must name a directory");
+		}
+		return String.join("/", segments);
 	}
 
 	private void addPathRoot(String name, String pathStr, boolean readOnly, AString description) throws IOException {
@@ -300,10 +375,13 @@ public class FileAdapter extends AAdapter {
 			name, real, readOnly ? " (read-only)" : "");
 	}
 
-	private void addDLFSRoot(String name, String driveName, boolean readOnly, AString description) {
+	private void addDLFSRoot(String name, String driveName, String subpath,
+			boolean readOnly, AString description) {
 		// Lookup is deferred — DLFSAdapter may register after FileAdapter.
-		roots.put(name, new DLFSRoot(driveName, readOnly, engine, description));
-		log.info("FileAdapter: root '{}' -> dlfs:{}{}", name, driveName, readOnly ? " (read-only)" : "");
+		roots.put(name, new DLFSRoot(driveName, subpath, readOnly, engine, description));
+		log.info("FileAdapter: root '{}' -> dlfs:{}{}{}", name, driveName,
+			subpath == null ? "" : "/" + subpath,
+			readOnly ? " (read-only)" : "");
 	}
 
 	// ==================== Path resolution ====================
@@ -329,7 +407,16 @@ public class FileAdapter extends AAdapter {
 				+ "'. Configured: " + roots.keySet());
 		}
 
-		Path base = root.baseFor(ctx);
+		return resolvePath(rootName, userPath, mustExist, root.baseFor(ctx));
+	}
+
+	/**
+	 * Resolves against an already-open root view. Multi-path operations use this
+	 * overload so both endpoints belong to the exact same filesystem instance —
+	 * important for provider-native DLFS move/copy once those operations land.
+	 */
+	private Path resolvePath(String rootName, String userPath, boolean mustExist,
+			Path base) throws IOException {
 
 		if (userPath == null || userPath.isEmpty()) {
 			return base;
@@ -590,6 +677,8 @@ public class FileAdapter extends AAdapter {
 			case "read"   -> handleRead(ctx, input);
 			case "write"  -> handleWrite(ctx, input);
 			case "append" -> handleAppend(ctx, input);
+			case "move"   -> handleMove(ctx, input);
+			case "copy"   -> handleCopy(ctx, input);
 			case "delete" -> handleDelete(ctx, input);
 			case "mkdir"  -> handleMkdir(ctx, input);
 			case "stat"   -> handleStat(ctx, input);
@@ -604,6 +693,9 @@ public class FileAdapter extends AAdapter {
 	 * and deletes pin {@code crud/read}/{@code crud/write}/{@code crud/delete}.
 	 */
 	private void requireFileCap(RequestContext ctx, String subOp, AMap<AString, ACell> input) {
+		// Multi-endpoint operations check their distinct resources in the handler,
+		// after both paths have been normalised against one root view.
+		if ("move".equals(subOp) || "copy".equals(subOp)) return;
 		AString ability = switch (subOp) {
 			case "list", "tree", "read", "stat", "roots" -> Capability.CRUD_READ;
 			case "write", "append", "mkdir" -> Capability.CRUD_WRITE;
@@ -615,6 +707,21 @@ public class FileAdapter extends AAdapter {
 			RT.ensureString(RT.getIn(input, FIELD_ROOT)),
 			RT.ensureString(RT.getIn(input, FIELD_PATH)));
 		engine.requireAuthority(ctx, Strings.create(resource), ability);
+	}
+
+	/** Require an ability on the normalised path relative to its configured root. */
+	private void requireFileCap(RequestContext ctx, String rootName, Path base,
+			Path target, AString ability) {
+		engine.requireAuthority(ctx, Strings.create(fileResource(rootName, base, target)), ability);
+	}
+
+	/** Canonical capability/result reference for a resolved file endpoint. */
+	private static String fileResource(String rootName, Path base, Path target) {
+		String relative = base.relativize(target).toString();
+		String separator = base.getFileSystem().getSeparator();
+		if (!"/".equals(separator)) relative = relative.replace(separator, "/");
+		return schemeResource("file", Strings.create(rootName),
+			Strings.create(relative));
 	}
 
 	// ==================== Handlers ====================
@@ -863,6 +970,132 @@ public class FileAdapter extends AAdapter {
 		);
 	}
 
+	private ACell handleMove(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
+		String fromArg = requiredStringArg(input, FIELD_FROM);
+		String toArg = requiredStringArg(input, FIELD_TO);
+		FileEndpoint sourceRef = parseEndpoint(fromArg,
+			stringArg(input, FIELD_ROOT), null, "root", "from");
+		FileEndpoint targetRef = parseEndpoint(toArg,
+			stringArg(input, FIELD_TO_ROOT), sourceRef.rootName(), "toRoot", "to");
+		Root sourceRoot = requireRoot(sourceRef.rootName());
+		Root targetRoot = requireRoot(targetRef.rootName());
+		requireWritable(sourceRef.rootName());
+		requireWritable(targetRef.rootName());
+		rejectArchiveEntry(fromArg, "move");
+		rejectArchiveEntry(toArg, "move to");
+
+		Path sourceBase = sourceRoot.baseFor(ctx);
+		Path targetBase = sourceRef.rootName().equals(targetRef.rootName())
+			? sourceBase : targetRoot.baseFor(ctx);
+		Path source = resolvePath(sourceRef.rootName(), sourceRef.path(), false, sourceBase);
+		Path target = resolvePath(targetRef.rootName(), targetRef.path(), false, targetBase);
+		requireFileCap(ctx, sourceRef.rootName(), sourceBase, source, Capability.CRUD_WRITE);
+		requireFileCap(ctx, targetRef.rootName(), targetBase, target, Capability.CRUD_WRITE);
+		requireRelocatableEndpoints(sourceBase, targetBase, source, target, fromArg, toArg);
+
+		// Direct NIO dispatch: same-provider implementations keep their native fast
+		// path; cross-provider behavior (including atomicity) belongs to the providers.
+		Files.move(source, target);
+		return Maps.of(
+			"moved", CVMBool.TRUE,
+			"from", fileResource(sourceRef.rootName(), sourceBase, source),
+			"to", fileResource(targetRef.rootName(), targetBase, target)
+		);
+	}
+
+	private ACell handleCopy(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
+		String fromArg = requiredStringArg(input, FIELD_FROM);
+		String toArg = requiredStringArg(input, FIELD_TO);
+		FileEndpoint sourceRef = parseEndpoint(fromArg,
+			stringArg(input, FIELD_ROOT), null, "root", "from");
+		FileEndpoint targetRef = parseEndpoint(toArg,
+			stringArg(input, FIELD_TO_ROOT), sourceRef.rootName(), "toRoot", "to");
+		Root sourceRoot = requireRoot(sourceRef.rootName());
+		Root targetRoot = requireRoot(targetRef.rootName());
+		// A read-only source is valid for copy; only the destination is mutated.
+		requireWritable(targetRef.rootName());
+		rejectArchiveEntry(fromArg, "copy");
+		rejectArchiveEntry(toArg, "copy to");
+
+		Path sourceBase = sourceRoot.baseFor(ctx);
+		Path targetBase = sourceRef.rootName().equals(targetRef.rootName())
+			? sourceBase : targetRoot.baseFor(ctx);
+		Path source = resolvePath(sourceRef.rootName(), sourceRef.path(), false, sourceBase);
+		Path target = resolvePath(targetRef.rootName(), targetRef.path(), false, targetBase);
+		requireFileCap(ctx, sourceRef.rootName(), sourceBase, source, Capability.CRUD_READ);
+		requireFileCap(ctx, targetRef.rootName(), targetBase, target, Capability.CRUD_WRITE);
+		requireRelocatableEndpoints(sourceBase, targetBase, source, target, fromArg, toArg);
+
+		// Direct NIO dispatch, never a Covia/model-context byte round-trip.
+		Files.copy(source, target);
+		return Maps.of(
+			"copied", CVMBool.TRUE,
+			"from", fileResource(sourceRef.rootName(), sourceBase, source),
+			"to", fileResource(targetRef.rootName(), targetBase, target)
+		);
+	}
+
+	/** Shared validation for move/copy before invoking the filesystem provider. */
+	private static void requireRelocatableEndpoints(Path sourceBase, Path targetBase,
+			Path source, Path target,
+			String fromArg, String toArg) throws IOException {
+		if (source.equals(sourceBase) || target.equals(targetBase)) {
+			throw new IllegalArgumentException("Refusing to move or copy the root itself");
+		}
+		if (source.equals(target)) {
+			throw new IllegalArgumentException("Source and destination are the same path: " + fromArg);
+		}
+		if (!Files.exists(source)) {
+			throw new NoSuchFileException(fromArg);
+		}
+		Path parent = target.getParent();
+		if (parent == null || !Files.isDirectory(parent)) {
+			throw new NoSuchFileException("Destination parent does not exist: " + toArg);
+		}
+		if (source.getFileSystem() == target.getFileSystem()
+				&& Files.isDirectory(source) && target.startsWith(source)) {
+			throw new IllegalArgumentException(
+				"Cannot move or copy a directory into itself: " + toArg);
+		}
+	}
+
+	/** A parsed endpoint: configured root name plus path relative to that root. */
+	private record FileEndpoint(String rootName, String path) {}
+
+	/**
+	 * Parses a relative endpoint or {@code file://<root>/<path>} reference.
+	 * An explicitly supplied root must agree with a qualified reference; a
+	 * fallback is used only for an unqualified value.
+	 */
+	private static FileEndpoint parseEndpoint(String value, String explicitRoot,
+			String fallbackRoot, String rootField, String endpointField) {
+		if (value.startsWith("file://")) {
+			String rest = value.substring("file://".length());
+			int slash = rest.indexOf('/');
+			String qualifiedRoot = (slash >= 0) ? rest.substring(0, slash) : rest;
+			String path = (slash >= 0) ? rest.substring(slash + 1) : "";
+			if (qualifiedRoot.isEmpty()) {
+				throw new IllegalArgumentException(
+					"'" + endpointField + "' file reference is missing a root");
+			}
+			if (explicitRoot != null && !explicitRoot.equals(qualifiedRoot)) {
+				throw new IllegalArgumentException("'" + rootField + "' (" + explicitRoot
+					+ ") conflicts with '" + endpointField + "' root " + qualifiedRoot);
+			}
+			return new FileEndpoint(qualifiedRoot, path);
+		}
+		if (value.contains("://")) {
+			throw new IllegalArgumentException(
+				"'" + endpointField + "' must be relative or use file://<root>/<path>");
+		}
+		String root = (explicitRoot != null) ? explicitRoot : fallbackRoot;
+		if (root == null || root.isEmpty()) {
+			throw new IllegalArgumentException("'" + rootField + "' is required when '"
+				+ endpointField + "' is not a file:// reference");
+		}
+		return new FileEndpoint(root, value);
+	}
+
 	private ACell handleDelete(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
 		String rootName = stringArg(input, FIELD_ROOT);
 		String pathArg = stringArg(input, FIELD_PATH);
@@ -951,6 +1184,14 @@ public class FileAdapter extends AAdapter {
 	private static String stringArg(AMap<AString, ACell> input, AString key) {
 		AString v = RT.ensureString(input.get(key));
 		return (v == null) ? null : v.toString();
+	}
+
+	private static String requiredStringArg(AMap<AString, ACell> input, AString key) {
+		String value = stringArg(input, key);
+		if (value == null || value.isEmpty()) {
+			throw new IllegalArgumentException("'" + key + "' is required");
+		}
+		return value;
 	}
 
 	/**

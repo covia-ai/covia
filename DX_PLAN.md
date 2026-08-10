@@ -38,7 +38,7 @@ An honest snapshot, so newcomers know what to expect and contributors know where
 | README / first impression | ✅ Done | Rewritten for developers: quickstart, badges, architecture, SDK examples |
 | Onboarding / quickstart (docs) | ✅ Done | README quickstart and the docs "Getting Started" page both go zero-to-first-operation |
 | Published artifacts up to date | ✅ Done | Platform `0.6.0` on GitHub, GHCR, and Maven Central; TS SDK 1.7.3 on npm; Python SDK 0.6.0 on PyPI |
-| Build reproducibility | ✅ Done | Depends on released Convex 0.8.10 from Maven Central; a clean clone builds in one command |
+| Build reproducibility | ✅ Done | Depends on released Convex 0.8.11 from Maven Central; a clean clone builds in one command |
 | CI quality gate | ✅ Done | `test.yml` runs the full reactor (with tests) on every PR and push to `develop`/`master`; its first run caught three latent flaky tests |
 | Client/auth test coverage | 🔨 In progress | `VenueHTTP` has contract tests against a real venue; dedicated auth-strategy tests remain |
 | Community scaffolding | 🔨 In progress | `CONTRIBUTING`, `SECURITY`, `CHANGELOG`, and issue/PR templates in place; a governance note remains |
@@ -68,7 +68,7 @@ _Goal: every clone builds reproducibly, every PR is validated automatically, and
 
 - [x] **Add a CI quality gate.** `.github/workflows/test.yml` runs `mvn clean install` (full reactor, with tests) on every pull request and on pushes to `develop`/`master`. Running and green; its first run surfaced three latent flaky tests (now fixed) — exactly the job it's there to do.
 - [x] **Make the gate a required check and fix the build badge.** Branch protection on `develop` and `master` now requires the `build-and-test` check for merges (admin direct pushes exempt), and the README "build" badge points at the `Test` workflow.
-- [x] **Make the build reproducible.** Covia now depends on released **Convex 0.8.10** from Maven Central — a clean clone builds with `mvn clean install`, no Convex source build. CI conditionally builds Convex from source only when `convex.version` deliberately names a snapshot. Restore a released pin before shipping. See [Convex ↔ Covia dependency](#a-note-on-the-convex-dependency).
+- [x] **Make the build reproducible.** Covia now depends on released **Convex 0.8.11** from Maven Central — a clean clone builds with `mvn clean install`, no Convex source build. CI conditionally builds Convex from source only when `convex.version` deliberately names a snapshot. Restore a released pin before shipping. See [Convex ↔ Covia dependency](#a-note-on-the-convex-dependency).
 - [x] **Add a `CHANGELOG.md`** — in Keep a Changelog format. Keep it current per release, and make the release-notes link point at it for real.
 - [x] **Coherent versioning across the product — and ship a current artifact.** The versioning story is agreed (see _Resolved_ under _Open questions_) and shipped: **platform `0.6.0`** on GitHub, GHCR, and Maven Central, TypeScript SDK **1.7.3** on npm, and Python SDK **0.6.0** on PyPI. Remaining follow-ons live under _Consolidate the SDK story_.
 - [x] **Decouple the public Docker image from deployment.** `publish-docker.yml` is the single source of `ghcr.io/covia-ai/covia` tags. It publishes the exact commit that passed the full `Test` workflow; Azure/EC2/GCP deploy only after that publish succeeds.
@@ -110,7 +110,7 @@ Related: the platform is licensed under the **Eclipse Public License 2.0** (inhe
 
 ## A note on the Convex dependency
 
-Covia is built on the [Convex](https://github.com/Convex-Dev/convex) lattice platform and tends to track its latest capabilities. Covia depends on **released Convex artifacts from Maven Central** (currently 0.8.10), so a clean clone always builds. When development genuinely needs an unreleased Convex capability, the coupling is deliberate and temporary: build Convex from source, point `convex.version` at its snapshot locally, and restore the release pin (bumping to the next Convex release) before the work merges.
+Covia is built on the [Convex](https://github.com/Convex-Dev/convex) lattice platform and tends to track its latest capabilities. Covia depends on **released Convex artifacts from Maven Central** (currently 0.8.11), so a clean clone always builds. When development genuinely needs an unreleased Convex capability, the coupling is deliberate and temporary: build Convex from source, point `convex.version` at its snapshot locally, and restore the release pin (bumping to the next Convex release) before the work merges.
 
 ---
 

@@ -1,0 +1,21 @@
+{
+	"name": "Raw A2A Send Message",
+	"description": "Diagnostic escape hatch: send directly to an A2A URL with per-call Bearer authentication. Prefer importing an A2A agent asset.",
+	"operation": {
+		"adapter": "a2a:rawSend",
+		"internal": false,
+		"secretFields": ["bearerSecret", "bearerToken"],
+		"input": {
+			"type": "object",
+			"properties": {
+				"url": { "type": "string", "description": "Base URL of the remote A2A agent" },
+				"message": { "type": "object", "description": "A2A Message — {role, parts, messageId?}." },
+				"taskId": { "type": "string", "description": "Optional remote Task ID for continuation." },
+				"bearerSecret": { "type": "string", "description": "Optional caller-owned SecretStore reference sent as HTTP Bearer auth." },
+				"bearerToken": { "type": "string", "description": "Optional one-off literal Bearer token; redacted from Job records." }
+			},
+			"required": ["url", "message"]
+		},
+		"output": { "type": "object", "description": "The final or interrupted remote A2A Task" }
+	}
+}

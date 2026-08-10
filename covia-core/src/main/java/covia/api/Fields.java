@@ -13,6 +13,11 @@ public class Fields {
 	/** Non-fatal advisories attached to an operation result (a vector of message
 	 *  strings, e.g. config sanity warnings). Absent when there are none. */
 	public static final StringShort WARNINGS = Strings.intern("warnings");
+	/** Configured operation tools that could not be offered in the current
+	 *  capability context. Vector entries have {@code operation} and
+	 *  {@code reason} fields. */
+	public static final StringShort UNAVAILABLE_TOOLS = Strings.intern("unavailableTools");
+	public static final StringShort REASON = Strings.intern("reason");
 	public static final StringShort INPUT = Strings.intern("input");
 	public static final StringShort OUTPUT = Strings.intern("output");
 	/** Optional destination for structurally handing off an operation result. */
@@ -21,8 +26,16 @@ public class Fields {
 	public static final StringShort BYTES = Strings.intern("bytes");
 	public static final StringShort RESULT = Strings.intern("result");
 	public static final StringShort OPERATION = Strings.intern("operation");
+	/** Operation may execute through result-oriented/internal paths without a
+	 * durable Job record. Only an explicit true opts in. */
+	public static final StringShort READ_ONLY = Strings.intern("readOnly");
+	/** Whether an operation may use internal/result-only execution. An explicit
+	 * false forces a durable Job even when the caller uses run/invokeInternal. */
+	public static final StringShort INTERNAL = Strings.intern("internal");
 	public static final StringShort DEFAULT = Strings.intern("default");
 	public static final StringShort MESSAGE = Strings.intern("message");
+	/** Stable caller-supplied message identity, used for idempotent A2A intake. */
+	public static final StringShort MESSAGE_ID = Strings.intern("messageId");
 	public static final StringShort DELAY = Strings.intern("delay");
 	public static final StringShort ID = Strings.intern("id");
 	public static final StringShort STATUS = Strings.intern("status");	
@@ -77,6 +90,10 @@ public class Fields {
 	public static final StringShort BODY = Strings.intern("body");
 	public static final StringShort METHOD = Strings.intern("method");
 	public static final StringShort BEARER_SECRET = Strings.intern("bearerSecret");
+	/** Literal bearer credential supplied directly to an outbound protocol
+	 * adapter. Operation metadata must declare this as a secret field so the
+	 * value never persists in a Job record. */
+	public static final StringShort BEARER_TOKEN = Strings.intern("bearerToken");
 	public static final StringShort INLINE = Strings.intern("inline");
 	
 	public static final StringShort PORT = Strings.intern("port");

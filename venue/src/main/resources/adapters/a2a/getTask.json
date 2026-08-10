@@ -3,19 +3,20 @@
 	"description": "Retrieve the current state of a Task on a remote A2A agent via the GetTask JSON-RPC method",
 	"operation": {
 		"adapter": "a2a:getTask",
+		"readOnly": true,
 		"input": {
 			"type": "object",
 			"properties": {
-				"url": {
+				"agent": {
 					"type": "string",
-					"description": "Base URL of the remote A2A agent (e.g. https://agent.example.com)"
+					"description": "Imported A2A agent Asset reference."
 				},
 				"id": {
 					"type": "string",
 					"description": "Remote Task ID to query"
 				}
 			},
-			"required": ["url", "id"]
+			"required": ["agent", "id"]
 		},
 		"output": {
 			"type": "object",

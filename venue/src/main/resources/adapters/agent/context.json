@@ -4,6 +4,7 @@
 	"dateCreated": "2026-04-12T00:00:00Z",
 	"operation": {
 		"adapter": "agent:context",
+		"internal": false,
 		"toolName": "agent_context",
 		"input": {
 			"type": "object",

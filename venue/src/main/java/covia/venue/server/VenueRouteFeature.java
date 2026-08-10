@@ -2,6 +2,7 @@ package covia.venue.server;
 
 import java.util.Set;
 
+import covia.venue.auth.VenueAuthenticator;
 import io.javalin.security.RouteRole;
 
 /**
@@ -15,7 +16,7 @@ import io.javalin.security.RouteRole;
  * be combined with an embedder's own {@link RouteRole} values; Covia ignores
  * roles it does not recognise. Extenders may instead own authentication
  * end-to-end and publish its result with
- * {@link AuthMiddleware#setRequestIdentity}.</p>
+ * {@link VenueAuthenticator#bindIdentity}.</p>
  *
  * <p>Example:</p>
  * <pre>{@code
@@ -38,10 +39,9 @@ public enum VenueRouteFeature implements RouteRole {
 
 	/**
 	 * Require a bearer credential accepted by the venue and expose its verified
-	 * identity and mapped venue user through
-	 * {@link AuthMiddleware#getAuthenticatedIdentity} and
-	 * {@link AuthMiddleware#getVenueUserDID}. Does not admit or create a Covia
-	 * user, even when {@code users.autoCreate} is enabled.
+	 * identity and mapped venue user through the venue's
+	 * {@link VenueAuthenticator}. Does not admit or create a Covia user, even
+	 * when {@code users.autoCreate} is enabled.
 	 */
 	AUTHENTICATED_IDENTITY,
 

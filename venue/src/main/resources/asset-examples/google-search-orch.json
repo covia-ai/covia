@@ -4,6 +4,7 @@
 	"dateCreated": "2025-01-27T10:00:00Z",
 	"operation": {
 		"adapter": "orchestrator",
+		"internal": false,
 		"input": {
 			"type": "object",
 			"properties": {
@@ -62,4 +63,4 @@
 			"search-url": [0, "url"]
 		}
 	}
-} 
+}

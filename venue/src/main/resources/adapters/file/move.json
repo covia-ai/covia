@@ -1,0 +1,36 @@
+{
+  "name": "Move File",
+  "description": "Rename or relocate a file or directory between configured filesystem roots. Endpoints may be relative paths plus root/toRoot, or file://<root>/<path> references. The destination must not exist and its parent must exist. Dispatches directly through Java NIO: same-provider moves retain the provider's native fast path; cross-provider atomicity and efficiency are provider-dependent. Both roots must be writable.",
+  "creator": "Covia",
+  "mcp": {
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  "operation": {
+    "adapter": "file:move",
+    "toolName": "file_move",
+    "input": {
+      "type": "object",
+      "properties": {
+        "root": { "type": "string", "description": "Source root and default destination root; optional when from is a file:// reference" },
+        "toRoot": { "type": "string", "description": "Optional destination root override; a qualified to reference may name it instead" },
+        "from": { "type": "string", "description": "Existing relative source path or file://<root>/<path> reference" },
+        "to": { "type": "string", "description": "New relative destination path or file://<root>/<path> reference" }
+      },
+      "required": ["from", "to"]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "moved": { "type": "boolean" },
+        "from": { "type": "string", "description": "Canonical file:// source reference" },
+        "to": { "type": "string", "description": "Canonical file:// destination reference" }
+      },
+      "required": ["moved", "from", "to"]
+    }
+  }
+}

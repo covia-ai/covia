@@ -24,6 +24,7 @@ import convex.core.lang.RT;
 import convex.core.util.JSON;
 import convex.core.util.ThreadUtils;
 import convex.core.util.Utils;
+import covia.api.Abilities;
 import covia.api.Fields;
 import covia.grid.Asset;
 import covia.grid.Grid;
@@ -428,22 +429,15 @@ public class Orchestrator extends AAdapter {
 		 * Validates step output against the operation's declared output schema.
 		 * Throws on validation failure with a clear error naming the step.
 		 */
-		private void validateStepOutput(AString opId, ACell output, int stepNum) {
+		private void validateStepOutput(Asset asset, AString opId, ACell output, int stepNum) {
 			if (output == null) return;
-			try {
-				Asset asset = engine.resolveAsset(opId, ctx);
-				if (asset == null) return;
-				AMap<AString, ACell> outputSchema = getMap(RT.getIn(asset.meta(), Fields.OPERATION, Fields.OUTPUT));
-				if (outputSchema == null || outputSchema.isEmpty()) return;
-				String err = JsonSchema.validate(outputSchema, output);
-				if (err != null) {
-					throw new RuntimeException(
-						"Step " + stepNum + " (" + opId + ") output schema violation: " + err);
-				}
-			} catch (RuntimeException e) {
-				throw e;
-			} catch (Exception e) {
-				// Schema resolution failed — skip validation
+			AMap<AString, ACell> outputSchema = getMap(
+				RT.getIn(asset.meta(), Fields.OPERATION, Fields.OUTPUT));
+			if (outputSchema == null || outputSchema.isEmpty()) return;
+			String err = JsonSchema.validate(outputSchema, output);
+			if (err != null) {
+				throw new RuntimeException(
+					"Step " + stepNum + " (" + opId + ") output schema violation: " + err);
 			}
 		}
 
@@ -462,6 +456,8 @@ public class Orchestrator extends AAdapter {
 			AMap<AString, ACell> statusData=null;
 			String failure=null;
 			AMap<AString, ACell> foreach=null;
+			Venue remoteVenue=null;
+			Asset validationAsset=null;
 
 			public SubTask(int i, AMap<AString, ACell> step) {
 				this.step=step;
@@ -532,13 +528,12 @@ public class Orchestrator extends AAdapter {
 
 			private void runSingle() {
 				AString opId=RT.getIn(step, Fields.OP);
+				validationAsset=resolveValidationAsset(opId);
 				input=computeInput(RT.get(step, Fields.INPUT),Vectors.empty(),null);
 				subJob=invokeChild(opId,input);
 				output=subJob.awaitResult();
 
-				if (strict || CVMBool.TRUE.equals(step.get(K_STRICT))) {
-					validateStepOutput(opId,output,stepNum);
-				}
+				if (validationAsset != null) validateStepOutput(validationAsset,opId,output,stepNum);
 				statusData=subJob.getData();
 			}
 
@@ -550,6 +545,7 @@ public class Orchestrator extends AAdapter {
 			 */
 			private void runForeach() {
 				AString opId=RT.getIn(step, Fields.OP);
+				validationAsset=resolveValidationAsset(opId);
 				ACell source=computeInput(
 					foreach.get(Fields.IN),Vectors.of(Fields.FOREACH,Fields.IN),null);
 				if (!(source instanceof ADataStructure<?> data)) {
@@ -666,8 +662,8 @@ public class Orchestrator extends AAdapter {
 			private IterationResult awaitIteration(int index, AString opId, Job child) {
 				try {
 					ACell iterationOutput=child.awaitResult();
-					if (strict || CVMBool.TRUE.equals(step.get(K_STRICT))) {
-						validateStepOutput(opId,iterationOutput,stepNum);
+					if (validationAsset != null) {
+						validateStepOutput(validationAsset,opId,iterationOutput,stepNum);
 					}
 					return new IterationResult(index,iterationOutput,child,null);
 				} catch (Exception e) {
@@ -676,15 +672,58 @@ public class Orchestrator extends AAdapter {
 			}
 
 			private Job invokeChild(AString opId, ACell childInput) {
-				AString venueSpec=RT.ensureString(step.get(Fields.VENUE));
-				if (venueSpec != null) {
-					Venue venue=Grid.connect(venueSpec.toString());
-					return venue.invoke(opId.toString(),childInput).join();
-				}
+				Venue venue=targetVenue();
+				if (venue != null) return venue.invoke(opId.toString(),childInput).join();
 				// Deliberately use JobManager for every item. This preserves job
 				// tracking and runs the common point-of-action authorization gate
 				// against the actual per-item input.
 				return engine.jobs().invokeOperation(opId,childInput,ctx);
+			}
+
+			/** Returns the connected remote venue for this step, or null locally. */
+			private Venue targetVenue() {
+				AString venueSpec=RT.ensureString(step.get(Fields.VENUE));
+				if (venueSpec == null) return null;
+				if (remoteVenue == null) remoteVenue=Grid.connect(venueSpec.toString());
+				return remoteVenue;
+			}
+
+			/**
+			 * Resolves the exact operation metadata used for strict step-output
+			 * validation before any child is submitted. Resolution uses the same
+			 * venue namespace as invocation: local engine when {@code venue} is
+			 * absent, the connected remote venue otherwise. Strict execution
+			 * therefore requires asset/read authority over the operation definition;
+			 * an unreadable or missing definition fails closed instead of silently
+			 * skipping validation.
+			 */
+			private Asset resolveValidationAsset(AString opId) {
+				if (!(strict || CVMBool.TRUE.equals(step.get(K_STRICT)))) return null;
+				Venue venue=targetVenue();
+				String target=(venue == null)
+					? "the local venue"
+					: "venue " + RT.ensureString(step.get(Fields.VENUE));
+				try {
+					Asset asset;
+					if (venue == null) {
+						engine.requireAuthority(ctx,opId,Abilities.ASSET_READ);
+						asset=engine.resolveAsset(opId,ctx);
+					} else {
+						asset=venue.resolveAsset(opId.toString());
+					}
+					if (asset == null) {
+						throw new IllegalArgumentException(
+							"Strict step " + stepNum + " (" + opId + ") requires readable "
+								+ "operation metadata on " + target);
+					}
+					return asset;
+				} catch (RuntimeException e) {
+					throw e;
+				} catch (Exception e) {
+					throw new IllegalStateException(
+						"Strict step " + stepNum + " (" + opId + ") could not resolve "
+							+ "operation metadata on " + target + ": " + describeFailure(e),e);
+				}
 			}
 
 			private int foreachConcurrency() {

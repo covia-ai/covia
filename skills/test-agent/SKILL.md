@@ -57,7 +57,8 @@ covia_read  path=w/<expected-path>
 Read the agent's full state to understand behaviour:
 
 ```
-covia_read  path=g/<name>/status          → SLEEPING, RUNNING, SUSPENDED
+agent_info  agentId=<name>                → validated SLEEPING, RUNNING, or SUSPENDED
+covia_read  path=g/<name>/status          → persisted marker (RUNNING may be stale if venue is offline)
 covia_read  path=g/<name>/error           → error message if SUSPENDED
 covia_read  path=g/<name>/config          → framework config (caps, tools, model)
 covia_read  path=g/<name>/state/history   → full LLM conversation with tool calls
@@ -79,8 +80,8 @@ The **conversation history** (`state/history`) is the most important diagnostic 
 Delete and recreate an agent to test from clean state:
 
 ```
-agent_delete  agentId=<name>
-agent_create  agentId=<name>  config={...}  overwrite=true
+agent_delete  agentId=<name>  remove=true
+agent_create  agentId=<name>  config={...}
 ```
 
 Or resume a suspended agent:

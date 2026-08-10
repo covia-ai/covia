@@ -118,14 +118,14 @@ public class JobManager {
 	 * Admission control for a top-level invoke: bounds concurrent (non-terminal)
 	 * jobs per caller. Returns {@code true} if a permit was acquired (the caller
 	 * must release it on job terminal via {@link #releaseJobPermit}); returns
-	 * {@code false} when the cap does not apply — disabled, a sub-job (carries a
-	 * parent {@code jobId}, e.g. orchestrator / agent fan-out), or an internal /
+	 * {@code false} when the cap does not apply — disabled, a sub-job (the context
+	 * carries a current Job or inherited {@code jobId}), or an internal /
 	 * unattributed caller. Blocks up to {@code jobBlockMs} to absorb bursts, then
 	 * sheds with {@link RateLimitException} (→ HTTP 429).
 	 */
 	private boolean acquireJobPermit(RequestContext ctx, AString callerDID) {
 		if (!jobCapEnabled) return false;
-		if (ctx.getJobId() != null) return false; // sub-job — exempt, no self-deadlock
+		if (ctx.getJob() != null || ctx.getJobId() != null) return false;
 		if (callerDID == null) return false;       // internal / unattributed — exempt
 		JobSemaphore sem = jobPermits.computeIfAbsent(callerDID, k -> new JobSemaphore(maxConcurrentJobs));
 		try {
@@ -167,18 +167,6 @@ public class JobManager {
 	}
 
 	public Job invokeOperation(AString ref, ACell input, RequestContext ctx) {
-		return invokeOperation(ref, input, ctx, false);
-	}
-
-	/**
-	 * Invoke with an optional private (memory-only) job (#192): never
-	 * persisted — no record in the caller's job index, no recovery, gone on
-	 * restart. The live Job serves the caller normally (wait, or polling
-	 * while active); on completion it is evicted and forgotten. Requires
-	 * {@code enablePrivateJobs} on the venue — a private request against a
-	 * venue without it is an error, never a silent downgrade.
-	 */
-	public Job invokeOperation(AString ref, ACell input, RequestContext ctx, boolean privateJob) {
 		if (ref == null) throw new IllegalArgumentException("Operation must be specified");
 
 		Asset asset = engine.resolveAsset(ref, ctx);
@@ -198,7 +186,7 @@ public class JobManager {
 		// Scope the context to the caller-supplied reference — the only point
 		// the human path form still exists — so requireInvoke can check a
 		// resource-precise invoke capability (#211).
-		return invokeOperation(op.meta(), input, ctx.withOp(ref), privateJob);
+		return invokeOperation(op.meta(), input, ctx.withOp(ref));
 	}
 
 	/**
@@ -211,10 +199,21 @@ public class JobManager {
 	 * @return Job tracking the execution
 	 */
 	public Job invokeOperation(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
-		return invokeOperation(meta, input, ctx, false);
+		return dispatchOperation(meta, input, ctx, false, true, false);
 	}
 
-	public Job invokeOperation(AMap<AString, ACell> meta, ACell input, RequestContext ctx, boolean privateJob) {
+	/**
+	 * Executes an operation through the canonical Job machinery.
+	 *
+	 * @param memoryOnly true for a transient, non-persisted Job wrapper
+	 * @param applyAdmission whether this is a public top-level entry point subject
+	 *        to concurrent-job admission; internal composition passes false
+	 * @param resultOriented whether the caller receives only a result future and
+	 *        therefore needs original typed in-process failures preserved
+	 */
+	private Job dispatchOperation(AMap<AString, ACell> meta, ACell input,
+			RequestContext ctx, boolean memoryOnly, boolean applyAdmission,
+			boolean resultOriented) {
 		requireAccepting();
 		// Advance the lattice write clock for this dispatch — the harness owns
 		// write time (see Engine.refreshWriteClock).
@@ -248,8 +247,8 @@ public class JobManager {
 
 		// Admission control: bound concurrent top-level jobs per user. Blocks up
 		// to jobBlockMs to absorb bursts, then sheds with RateLimitException (429).
-		// Sub-jobs (parent jobId set) and internal callers are exempt.
-		boolean permit = acquireJobPermit(ctx, ownerDID);
+		// Sub-jobs (current Job or inherited jobId set) and internal callers are exempt.
+		boolean permit = applyAdmission && acquireJobPermit(ctx, ownerDID);
 
 		// Persist the bare hex hash of the metadata as the op reference.
 		// Hex hashes are universally resolvable via the resolvePath bare-hex
@@ -257,7 +256,8 @@ public class JobManager {
 		AString opID = Strings.create(meta.getHash().toHexString());
 		Job job;
 		try {
-			job = submitJob(opID, meta, input, ownerDID, ctx.getCallerDID(), privateJob);
+			job = submitJob(opID, meta, input, ownerDID, ctx.getCallerDID(),
+				memoryOnly, resultOriented);
 		} catch (RuntimeException e) {
 			// Never obtained a jobID to track — release the permit directly.
 			if (permit && ownerDID != null) {
@@ -271,10 +271,15 @@ public class JobManager {
 		// before dispatch so a synchronously-completing adapter still finds it.
 		if (permit) permitHolders.put(job.getID(), ownerDID);
 
-		// Set jobId on context so adapters can use t/ (job-scoped temp).
-		// Preserve existing jobId if already set — parent scope takes precedence
-		// (e.g. GoalTreeAdapter sets root job ID for all tool calls).
-		RequestContext jobCtx = (ctx.getJobId() != null) ? ctx : ctx.withJobId(job.getID());
+		// Every adapter sees the immediate Job wrapper, including a transient one.
+		// jobId is narrower: it names a durable t/ temp scope. Preserve an inherited
+		// parent scope for internal composition, and establish a new scope only for
+		// a recorded Job. Giving a transient wrapper a jobId would let a t/ write
+		// accidentally materialise a partial persistent Job record.
+		RequestContext jobCtx = ctx.withJob(job);
+		if (jobCtx.getJobId() == null && job.isRecorded()) {
+			jobCtx = jobCtx.withJobId(job.getID());
+		}
 		try {
 			adapter.invoke(job, jobCtx, meta, input);
 		} catch (covia.exception.AuthException e) {
@@ -283,30 +288,77 @@ public class JobManager {
 			// already produce (a denied request was authenticated and dispatched,
 			// so the denial is a FAILED Job, not a thrown exception). Other
 			// synchronous failures (bad input, schema) propagate as before.
-			job.fail(e.getMessage() != null ? e.getMessage() : e.toString());
+			job.fail(e);
 		} catch (RuntimeException e) {
 			// Once a Job has been created, every adapter failure must become a
 			// terminal record. Preserve the existing synchronous API error surface
 			// after recording the failure, rather than stranding a PENDING/STARTED
 			// job that no worker can ever complete.
-			job.fail(e.getMessage() != null ? e.getMessage() : e.toString());
+			job.fail(e);
 			throw e;
 		}
 		return job;
 	}
 
-	// ========== Internal Invocation (no Job) ==========
+	// ========== Result-oriented invocation ==========
 
 	/**
-	 * Invokes an operation without creating a Job. Used for adapter-to-adapter
-	 * dispatch inside a single external interaction: the caller's Job is the
-	 * only audit-relevant record, and creating sub-Jobs for transition /
-	 * LLM / tool calls just adds persistence and lifecycle overhead.
+	 * Runs an operation and returns only its result. This is the public,
+	 * result-oriented counterpart to {@link #invokeOperation}: it still uses a
+	 * Job wrapper and the normal admission/auth/adapter lifecycle, but does not
+	 * expose the Job to its caller.
+	 *
+	 * <p>A declared {@code operation.readOnly:true} runs with a transient Job by
+	 * default. Mutating or unclassified operations are recorded. An explicit
+	 * {@code operation.internal:false}, or the venue's
+	 * {@code recordReadOnlyOperations} policy, forces recording.</p>
+	 */
+	public CompletableFuture<ACell> runOperation(String ref, ACell input, RequestContext ctx) {
+		return runOperation(Strings.create(ref), input, ctx);
+	}
+
+	public CompletableFuture<ACell> runOperation(AString ref, ACell input, RequestContext ctx) {
+		if (ref == null) return CompletableFuture.failedFuture(
+			new IllegalArgumentException("Operation must be specified"));
+		try {
+			Asset asset = engine.resolveAsset(ref, ctx);
+			if (asset == null) return CompletableFuture.failedFuture(
+				new IllegalArgumentException("Cannot resolve operation: " + ref));
+			Operation op = Operation.from(asset);
+			if (op == null) return CompletableFuture.failedFuture(
+				new IllegalArgumentException("Asset is not an operation: " + asset.getID()));
+			return runOperation(op.meta(), input, ctx.withOp(ref));
+		} catch (Exception e) {
+			return CompletableFuture.failedFuture(e);
+		}
+	}
+
+	public CompletableFuture<ACell> runOperation(AMap<AString, ACell> meta,
+			ACell input, RequestContext ctx) {
+		try {
+			boolean memoryOnly = isReadOnly(meta)
+				&& allowsInternal(meta)
+				&& !engine.config().isRecordReadOnlyOperations();
+			Job job = dispatchOperation(meta, input, ctx, memoryOnly, true, true);
+			return operationResultFuture(job, meta, input);
+		} catch (Exception e) {
+			return CompletableFuture.failedFuture(e);
+		}
+	}
+
+	// ========== Internal Invocation ==========
+
+	/**
+	 * Invokes an operation for trusted in-process composition and returns only
+	 * its result. A transient Job wrapper provides the complete adapter lifecycle
+	 * without adding a durable sub-Job to the caller's history.
 	 *
 	 * <p>Performs the same resolve / caps / schema / adapter-lookup plumbing
-	 * as {@link #invokeOperation(AString, ACell, RequestContext)}, but skips
-	 * Job creation, activeJobs tracking, persistence, and update listeners.
-	 * Calls {@link AAdapter#invokeFuture} directly and returns its future.</p>
+	 * as {@link #invokeOperation(AString, ACell, RequestContext)}, but is exempt
+	 * from top-level admission and normally skips persistence and venue-wide Job
+	 * notifications. An explicit {@code operation.internal:false} forces a
+	 * durable Job. Read-only operations are also recorded when the venue sets
+	 * {@code recordReadOnlyOperations:true}.</p>
 	 *
 	 *
 	 * <p>Cancellation is cooperative: the returned future's
@@ -354,39 +406,38 @@ public class JobManager {
 	}
 
 	public CompletableFuture<ACell> invokeInternal(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
-		if (!accepting.get()) {
-			return CompletableFuture.failedFuture(
-				new IllegalStateException("Venue is shutting down; new operations are not accepted"));
-		}
-		// Advance the lattice write clock — internal dispatch (agent transitions,
-		// tool calls) is high-frequency, so long cycles keep stamping fresh time.
-		engine.refreshWriteClock();
-		// Argument defaults, exactly as invokeOperation — the two paths differ
-		// only in Job creation, never in the effective input.
-		input = applyDefaults(meta, input);
-		// Arm capability gates (#216) — see invokeOperation. The agent tool loop
-		// dispatches through here, so gated config caps rule on each tool call.
-		RequestContext authorityCtx = ctx;
-		ctx = ctx.isGateEvaluation()
-			? ctx.withInvocation(input, null)
-			: ctx.withInvocation(input, (gateOp, opRef, gateInput, caller) ->
-				evaluateGate(gateOp, opRef, gateInput, caller, authorityCtx));
-		AAdapter adapter;
 		try {
-			// Enforcement is the adapter's responsibility (see invokeOperation):
-			// the op asserts its cap at its enforcement point; a denial surfaces
-			// as a failed future. invokeInternal differs from invokeOperation only
-			// in Job creation.
-			adapter = prepareInvocation(meta, input, ctx);
+			boolean memoryOnly = allowsInternal(meta)
+				&& !(isReadOnly(meta) && engine.config().isRecordReadOnlyOperations());
+			Job job = dispatchOperation(meta, input, ctx, memoryOnly, false, true);
+			return operationResultFuture(job, meta, input);
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
 		}
-		try {
-			CompletableFuture<ACell> f = adapter.invokeFuture(ctx, meta, input);
-			return (f != null) ? f : CompletableFuture.completedFuture(null);
-		} catch (Exception e) {
-			return CompletableFuture.failedFuture(e);
-		}
+	}
+
+	/** Only an explicit true marks an operation as safe for unrecorded public run. */
+	static boolean isReadOnly(AMap<AString, ACell> meta) {
+		return CVMBool.TRUE.equals(RT.getIn(meta, Fields.OPERATION, Fields.READ_ONLY));
+	}
+
+	/** Only an explicit false opts an operation out of transient/internal execution. */
+	static boolean allowsInternal(AMap<AString, ACell> meta) {
+		return !CVMBool.FALSE.equals(RT.getIn(meta, Fields.OPERATION, Fields.INTERNAL));
+	}
+
+	/** Return the Job result while preserving cooperative cancellation. */
+	private CompletableFuture<ACell> operationResultFuture(Job job,
+			AMap<AString, ACell> meta, ACell input) {
+		String adapterName = AAdapter.getAdapterName(meta);
+		AAdapter adapter = (adapterName != null) ? engine.getAdapter(adapterName) : null;
+		CompletableFuture<ACell> future = (adapter != null)
+			? adapter.resultFuture(job, meta, input)
+			: job.future();
+		future.whenComplete((result, error) -> {
+			if (future.isCancelled() && !job.isFinished()) job.cancel();
+		});
+		return future;
 	}
 
 	/**
@@ -432,7 +483,8 @@ public class JobManager {
 	 * it may invoke the gate definition itself and use ordinary ungated grants,
 	 * but it receives neither unrestricted scope nor additive UCAN proofs.
 	 * Nested gated grants are disabled structurally by the gate-evaluation flag.
-	 * No Job is created (invokeInternal), so checks never bloat the etch.</p>
+	 * {@code invokeInternal} uses a transient Job wrapper, so checks retain the
+	 * normal execution context without bloating the etch.</p>
 	 */
 	String evaluateGate(AString gateOp, AString opRef, ACell input, AString caller,
 			RequestContext authorityCtx) {
@@ -480,9 +532,9 @@ public class JobManager {
 
 	/**
 	 * Shared invocation prelude: validates metadata, auth, caps, schema;
-	 * returns the adapter ready to invoke. Used by both
-	 * {@link #invokeOperation(AMap, ACell, RequestContext)} (Job path) and
-	 * {@link #invokeInternal(AMap, ACell, RequestContext)} (no-Job path).
+	 * returns the adapter ready to invoke. Used by both recorded
+	 * {@link #invokeOperation(AMap, ACell, RequestContext)} and result-oriented
+	 * {@link #invokeInternal(AMap, ACell, RequestContext)} dispatch.
 	 *
 	 * @throws IllegalArgumentException invalid meta or schema violation
 	 * @throws AuthException caller not authenticated
@@ -594,12 +646,8 @@ public class JobManager {
 	 *        job record answers "who did this" and not merely "whose account".
 	 */
 	private Job submitJob(AString opID, AMap<AString, ACell> meta, ACell input, AString callerDID,
-			AString actorDID, boolean privateJob) {
+			AString actorDID, boolean memoryOnly, boolean resultOriented) {
 		if (callerDID == null) throw new AuthException("Authentication required");
-		if (privateJob && !engine.config().isPrivateJobsEnabled()) {
-			throw new IllegalArgumentException(
-				"Private jobs are not enabled on this venue (set enablePrivateJobs in venue config)");
-		}
 
 		long ts = Utils.getCurrentTimestamp();
 		Blob jobID = generateJobID(ts);
@@ -623,13 +671,16 @@ public class JobManager {
 			status = status.assoc(Fields.NAME, name);
 		}
 
-		VenueJob job = new VenueJob(status, meta, callerDID, this, privateJob);
+		VenueJob job = new VenueJob(status, meta, callerDID, this, memoryOnly,
+			!memoryOnly);
+		job.setPreserveFailureCause(resultOriented);
 		activeJobs.put(jobID, job);
 
-		// Persist initial job record (no-op for a private job, #192)
+		// Persist initial record (a no-op for a transient Job wrapper).
 		persistJobRecord(jobID, status, callerDID);
 
-		log.info("Submitted job: {}", jobID);
+		if (memoryOnly) log.debug("Started transient job: {}", jobID);
+		else log.info("Submitted job: {}", jobID);
 		return job;
 	}
 
@@ -914,11 +965,8 @@ public class JobManager {
 			throw new IllegalArgumentException("Job not found: " + jobID.toHexString());
 		}
 
-		ACell histCell = current.get(Fields.HISTORY);
-		AVector<ACell> history = (histCell instanceof AVector)
-				? (AVector<ACell>) histCell
-				: convex.core.data.Vectors.empty();
-		AMap<AString, ACell> newData = current.assoc(Fields.HISTORY, history.conj(record));
+		AMap<AString, ACell> newData = appendHistoryRecord(current, record);
+		if (newData == current) return;
 
 		// Write back where the record actually lives: mutate the live job if it
 		// is still active (persisted on completion), otherwise persist the
@@ -926,43 +974,48 @@ public class JobManager {
 		// history still carries the inbound message rather than silently losing it.
 		Job job = getJob(jobID);
 		if (job != null) {
-			job.update(data -> {
-				ACell liveHistCell = data.get(Fields.HISTORY);
-				AVector<ACell> liveHistory = (liveHistCell instanceof AVector)
-					? (AVector<ACell>) liveHistCell : convex.core.data.Vectors.empty();
-				return data.assoc(Fields.HISTORY, liveHistory.conj(record));
-			});
+			job.update(data -> appendHistoryRecord(data, record));
 		} else {
 			// Persisted into the owning user's lattice, not the acting agent's.
 			persistJobRecord(jobID, newData, ctx.getUserDID());
 		}
 	}
 
+	/** Appends unless the same caller-provided messageId is already present. */
+	@SuppressWarnings("unchecked")
+	private static AMap<AString, ACell> appendHistoryRecord(
+			AMap<AString, ACell> data, AMap<AString, ACell> record) {
+		ACell histCell = data.get(Fields.HISTORY);
+		AVector<ACell> history = (histCell instanceof AVector<?> v)
+			? (AVector<ACell>) v : convex.core.data.Vectors.empty();
+		ACell messageId = record.get(Fields.MESSAGE_ID);
+		if (messageId != null) {
+			for (long i = 0; i < history.count(); i++) {
+				ACell item = history.get(i);
+				if (item instanceof AMap<?, ?> map
+						&& messageId.equals(map.get(Fields.MESSAGE_ID))) return data;
+			}
+		}
+		return data.assoc(Fields.HISTORY, history.conj(record));
+	}
+
 	// ========== Job Recovery ==========
 
 	/**
-	 * Stabilises jobs from the lattice after a restart. <b>Nothing is ever
-	 * re-executed</b> (#214): recovery leaves every job in a stable, honest
-	 * state so callers can resume, cancel, or retry as they wish.
+	 * Stabilises jobs from the lattice after a restart. Execution attempts do
+	 * not survive the venue process; durable waiting Jobs do.
 	 *
 	 * <ul>
 	 *   <li>PENDING — failed: execution never began; the caller retries.</li>
-	 *   <li>STARTED {@code agent:request} whose task is still in the agent's
-	 *       tasks index — restored as a live Job, still STARTED: the durable
-	 *       task drives completion when the agent's work resumes (long-running
-	 *       jobs survive restarts; callers keep polling by ID).</li>
-	 *   <li>STARTED anything else — failed with a message saying effects may
+	 *   <li>STARTED — failed with a message saying effects may
 	 *       or may not have applied. Re-execution would double side effects
 	 *       (e.g. {@code convex:transact}, {@code http:post}); the caller
-	 *       verifies and retries. A crashed {@code agent:chat} fails too —
-	 *       the session is intact and its id is on the record, so the caller
-	 *       just re-sends.</li>
+	 *       verifies and retries.</li>
 	 *   <li>PAUSED / INPUT_REQUIRED / AUTH_REQUIRED — restored (unchanged).</li>
 	 * </ul>
 	 *
-	 * <p>Agent-side work (pending envelopes, queued tasks, interrupted
-	 * {@code inCycle} cycles) is all durable and resumed separately by the
-	 * boot scan ({@code AgentAdapter.wakeAgentsWithWork}).</p>
+	 * <p>Adapters reconcile their own durable intake after this generic Job
+	 * pass; JobManager has no knowledge of adapter-specific queue structures.</p>
 	 */
 	@SuppressWarnings("unchecked")
 	public void recoverJobs() {
@@ -992,7 +1045,8 @@ public class JobManager {
 
 				AString status = RT.ensureString(record.get(Fields.STATUS));
 				if (Status.PENDING.equals(status) || Status.STARTED.equals(status)) {
-					if (stabiliseJob(jobID, record, status, did)) kept++; else stabilised++;
+					stabiliseJob(jobID, record, status, did);
+					stabilised++;
 				} else {
 					restoreJob(jobID, record, did);
 					kept++;
@@ -1006,54 +1060,18 @@ public class JobManager {
 	}
 
 	/**
-	 * Stabilises one PENDING/STARTED job found at boot. Returns true when the
-	 * job was restored live (STARTED {@code agent:request} with its durable
-	 * task still queued), false when it was failed with an honest
-	 * interruption message. See {@link #recoverJobs()} for the contract.
+	 * Fails one PENDING/STARTED Job found at boot.
 	 */
-	private boolean stabiliseJob(Blob jobID, AMap<AString, ACell> record, AString status, AString callerDID) {
+	private void stabiliseJob(Blob jobID, AMap<AString, ACell> record, AString status, AString callerDID) {
 		if (Status.PENDING.equals(status)) {
 			markJobFailed(jobID, record,
 				"Venue restarted before execution began — retry if desired", callerDID);
-			return false;
-		}
-
-		// Classify by the op's adapter dispatch string (e.g. "agent:request").
-		AString opRef = RT.ensureString(record.get(Fields.OP));
-		Asset asset = (opRef != null) ? engine.resolveAsset(opRef) : null;
-		String adapterOp = (asset != null) ? AAdapter.getAdapterOperation(asset.meta()) : null;
-
-		if ("agent:request".equals(adapterOp)) {
-			// The task index is the durable work marker (taskId == jobID). If
-			// the task is still queued, the job legitimately outlives the
-			// restart: restore it and let the resumed agent complete it.
-			AString agentId = RT.ensureString(RT.getIn(record, Fields.INPUT, Fields.AGENT_ID));
-			User user = engine.getVenueState().users().get(callerDID);
-			AgentState agent = (user != null && agentId != null) ? user.agent(agentId.toString()) : null;
-			Index<Blob, ACell> tasks = (agent != null) ? agent.getTasks() : null;
-			if (tasks != null && tasks.get(jobID) != null) {
-				restoreJob(jobID, record, callerDID);
-				log.info("Restored in-flight task job {} (task still queued)", jobID);
-				return true;
-			}
-			markJobFailed(jobID, record,
-				"Venue restarted as the task concluded — check the agent timeline/session for the result",
-				callerDID);
-			return false;
-		}
-
-		if ("agent:chat".equals(adapterOp)) {
-			AString sid = RT.ensureString(record.get(Fields.SESSION_ID));
-			markJobFailed(jobID, record,
-				"Venue restarted mid-conversation — the session is intact; re-send your message"
-				+ ((sid != null) ? " (sessionId " + sid + ")" : ""), callerDID);
-			return false;
+			return;
 		}
 
 		markJobFailed(jobID, record,
 			"Venue restarted during execution — effects may or may not have applied;"
 			+ " verify state before retrying", callerDID);
-		return false;
 	}
 
 	/**
@@ -1095,13 +1113,13 @@ public class JobManager {
 	 * This is the single source of truth for all jobs.
 	 */
 	void persistJobRecord(Blob jobID, AMap<AString, ACell> record, AString callerDID) {
-		// Private (memory-only) job (#192): the single persistence choke point
+		// Transient (memory-only) Job: the single persistence choke point
 		// is a no-op — nothing about the job ever touches the lattice. The job
 		// is still in the active cache here for every persist trigger (initial
 		// submit, status updates, history appends): terminal eviction happens
 		// AFTER the final persist call.
 		Job j = activeJobs.get(jobID);
-		if (j instanceof VenueJob vj && vj.isPrivate()) return;
+		if (j instanceof VenueJob vj && vj.isMemoryOnly()) return;
 		User user = engine.getVenueState().users().ensure(callerDID);
 		user.persistJob(jobID, record);
 	}

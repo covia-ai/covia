@@ -424,7 +424,7 @@ public abstract class AAdapter {
      * Adapters use {@link #getSubOperation(AMap)} to extract their sub-operation
      * from the metadata rather than parsing a raw operation string.
      *
-     * @param ctx Request context (caller identity, internal flag)
+     * @param ctx Request context, including caller and current Job
      * @param meta The operation metadata (never null)
      * @param input The input parameters
      * @return A CompletableFuture that will complete with the result
@@ -448,7 +448,7 @@ public abstract class AAdapter {
      * hangs, but must not impose blanket timeouts on the job lifecycle.
      *
      * @param job The Job prepared to run
-     * @param ctx Request context (caller identity, internal flag)
+     * @param ctx Request context, including caller and current Job
      * @param meta The operation metadata (never null)
      * @param input The input parameters
      */
@@ -460,11 +460,23 @@ public abstract class AAdapter {
 			invocation = invokeFuture(ctx, meta, input);
 			if (invocation == null) invocation = CompletableFuture.completedFuture(null);
 		} catch (RuntimeException e) {
-			job.fail(describeFailure(e));
+			job.fail(e);
 			throw e;
 		}
 		bridgeToJob(job, invocation);
-    }
+	}
+
+	/**
+	 * Selects the result future exposed by {@code run}/{@code invokeInternal}
+	 * after this adapter has been invoked with a Job. Most operations expose the
+	 * Job's eventual output directly. Adapters may override when the operation's
+	 * declared result contract includes an earlier snapshot (for example,
+	 * {@code agent:request} with a bounded wait).
+	 */
+	public CompletableFuture<ACell> resultFuture(Job job,
+			AMap<AString, ACell> meta, ACell input) {
+		return job.future();
+	}
 
 	// ===== Shared future -> Job completion bridge =====
 
@@ -499,7 +511,7 @@ public abstract class AAdapter {
 		} else if (unwrap(error) instanceof CancellationException) {
 			job.cancel();
 		} else {
-			job.fail(describeFailure(error));
+			job.fail(unwrap(error));
 		}
 	}
 

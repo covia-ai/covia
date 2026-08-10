@@ -45,7 +45,7 @@ Agent configs are standalone JSON files in `assets/`. Each is a complete `agent_
 | Carol | [carol.json](assets/carol.json) | gpt-5.4-mini | covia_read, covia_write | read all w/, write decisions only | typed complete (decision schema) |
 | Dave | [dave.json](assets/dave.json) | gpt-5.4-mini | 8 ops + subgoal, compact, more_tools | read w/, agent message/request, invoke | none (conversational) |
 
-All use `goaltree:chat` transition with `defaultTools: false`. Typed `outputs` auto-inject `complete`/`fail` tools with schema enforcement. `overwrite: true` allows re-running setup to update configs without losing timelines.
+All use `goaltree:chat` transition with `defaultTools: false`. Typed `outputs` auto-inject `complete`/`fail` tools with schema enforcement. Re-running `setup.sh` explicitly removes and recreates these demo agents, so their runtime state and timelines start clean.
 
 ### Design principles
 

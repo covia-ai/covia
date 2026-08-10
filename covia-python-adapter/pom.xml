@@ -5,14 +5,16 @@
 	<parent>
 		<groupId>ai.covia</groupId>
 		<artifactId>covia</artifactId>
-		<version>0.8.0</version>
+		<version>0.9.0</version>
 	</parent>
 	<artifactId>covia-python-adapter</artifactId>
 	<name>Covia Python Adapter Module</name>
 	<description>Optional loadable venue module for operator-configured in-process Python operations.</description>
 
 	<properties>
-		<!-- Distributed as the shaded module jar, not as a Maven library. -->
+		<!-- Skip ordinary deploy-plugin publication. The Central publishing
+		     extension bundles reactor artifacts independently, including the
+		     signed shaded module classifier used by venue operators. -->
 		<maven.deploy.skip>true</maven.deploy.skip>
 	</properties>
 

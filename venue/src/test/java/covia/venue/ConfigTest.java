@@ -21,6 +21,16 @@ import convex.core.data.prim.CVMBool;
 public class ConfigTest {
 
 	@Test
+	public void testReadOnlyRecordingDefaultsOffAndCanBeForced() {
+		assertFalse(new Config(null).isRecordReadOnlyOperations());
+		assertTrue(new Config(Maps.of(
+			Config.RECORD_READ_ONLY_OPERATIONS, CVMBool.TRUE))
+			.isRecordReadOnlyOperations());
+		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+			Config.RECORD_READ_ONLY_OPERATIONS, Strings.create("yes"))));
+	}
+
+	@Test
 	public void testUserAutoCreateDefaultsOffAndCanBeEnabled() {
 		assertFalse(new Config(null).isUserAutoCreate());
 		assertTrue(new Config(Maps.of(

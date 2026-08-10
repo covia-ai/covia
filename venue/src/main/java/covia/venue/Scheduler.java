@@ -303,7 +303,7 @@ public class Scheduler {
 			}));
 	}
 
-	/** Build the owner+proofs+caps context and dispatch the operation (zero-Job, cap-enforced). */
+	/** Build the owner+proofs+caps context and dispatch with a transient Job wrapper. */
 	private CompletableFuture<ACell> invokeFor(AMap<AString, ACell> rec) {
 		AString opRef = RT.ensureString(rec.get(K_OP));
 		ACell input = rec.get(K_INPUT);
