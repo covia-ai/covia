@@ -2132,13 +2132,14 @@ public class Engine {
 	 *
 	 * <p>The document {@code id} must equal the DID a resolver asked for (DID
 	 * Core), so when the venue has a public hostname configured the document is
-	 * presented under its <b>did:web alias</b> ({@code did:web:<hostname>}) with
-	 * the canonical did:key in {@code alsoKnownAs} — making strict did:web
-	 * resolution work (covia#167). The alias is a derived, per-request view and
-	 * is discovery only: the venue's identity remains its did:key (the same
-	 * ed25519 key material verifies in both presentations), and nothing durable
-	 * references the did:web form. Without a public hostname the document is
-	 * served under the did:key directly, unchanged.</p>
+	 * presented under {@code did:web:<hostname>}, with the did:key in
+	 * {@code alsoKnownAs} — making strict did:web resolution work (covia#167).
+	 * Consumers respect the presented identity as-is: {@code alsoKnownAs} is
+	 * the DID spec's informational same-subject cross-reference, never a
+	 * canonical identity to re-bind to (covia#343 — the did:key is key
+	 * material, published as a verification method; the identity a persistent
+	 * venue presents is its did:web). Without a public hostname the document
+	 * is served under the did:key directly, unchanged.</p>
 	 *
 	 * @param endpoint Service endpoint URL for the CoviaGrid service entry
 	 * @return DID document map
@@ -2176,8 +2177,8 @@ public class Engine {
 					))
 		);
 
-		// Bind the alias to the canonical identity: consumers resolving
-		// did:web re-bind to the did:key for anything they store or pin.
+		// Informational same-subject cross-reference (non-authoritative, DID
+		// Core): consumers keep the identity they resolved — no rebinding.
 		if (aliased) {
 			ddo=ddo.assoc(Strings.intern("alsoKnownAs"), Vectors.create(canonicalDID));
 		}
