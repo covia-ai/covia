@@ -42,7 +42,7 @@ The implementation is further along than #297/#296 suggest:
 | Key enrolment surface (#296) | `UserAdapter` (`user:create` keys, add/revoke ops), `Engine` creation path | Venue-authorised, audited (`addedBy`/`revokedBy`) |
 | Session minting | `LoginProviders` OAuth callback | Inline `JWT.signPublic` — no session id, no revocation, no amr/auth_time |
 | Audience policy | `Auth` config + `requireAudience` | `verify`/`require`, `acceptedAudiences`, did:web alias |
-| Public ceiling | `auth.public.*` (COG-10) | Unchanged by this design |
+| Public capability scope | `auth.public.*` (COG-10) | Unchanged by this design |
 
 **Gaps this design closes:** per-method enable/disable and policy
 config; a common method result (method reference, `amr`, assurance,
@@ -397,5 +397,5 @@ venue-auth state.
 
 - `UCAN.md` — capabilities and the proof channel (authorisation layer)
 - `CONFIG.md` — operator configuration reference (gains §6 on landing)
-- COG-3 / COG-10 — token classes, self-issued rules, public ceiling
+- COG-3 / COG-10 — token classes, self-issued rules, public capability scope
 - covia#297 (this design), #296, #298, #299, #300, #301, #323, #269

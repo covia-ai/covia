@@ -49,8 +49,9 @@ sudo caddy start --config /etc/caddy/Caddyfile
 Download `covia.jar` from the GitHub releases on the server:
 
 ```bash
-# A specific version (recommended for production — upgrade deliberately)
-curl -fLo covia.jar https://github.com/covia-ai/covia/releases/download/0.1.0/covia.jar
+# A specific version (recommended for production — set deliberately when upgrading)
+COVIA_VERSION=X.Y.Z
+curl -fLo covia.jar https://github.com/covia-ai/covia/releases/download/${COVIA_VERSION}/covia.jar
 
 # Latest stable release
 curl -fLo covia.jar https://github.com/covia-ai/covia/releases/download/latest/covia.jar

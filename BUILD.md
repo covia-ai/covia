@@ -33,11 +33,13 @@ covia/
 │       ├── main/resources/ # Resources and assets
 │       └── test/java/     # Test source code
 ├── workbench/             # GUI workbench module
-    ├── pom.xml            # Workbench module POM
-    └── src/
-        ├── main/java/     # GUI source code
-        └── main/resources/ # GUI resources
-└── covia-sql/              # Optional loadable SQL adapter module
+│   ├── pom.xml            # Workbench module POM
+│   └── src/
+│       ├── main/java/     # GUI source code
+│       └── main/resources/ # GUI resources
+└── covia-sql/             # Optional loadable SQL adapter module
+    ├── pom.xml            # Venue SPI provided; shaded module classifier
+    └── src/               # SQL operation adapter and tests
 ```
 
 The standard venue does not depend on either Python module. A Java 21 reactor

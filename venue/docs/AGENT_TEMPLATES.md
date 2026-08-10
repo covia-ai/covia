@@ -335,7 +335,7 @@ So for a pipeline of *capped* workers, provision the handoff area explicitly:
 
 Every stage can read the shared `w/pipeline/` area. With structural handoff the
 **manager** needs `crud/write` on each `outputPath`, because the framework writes
-under the requester's captured ceiling; each consumer needs `crud/read` on its
+under the requester's captured capability scope; each consumer needs `crud/read` on its
 input path. The producing worker does not need write authority merely to return
 its result. Uncapped agents need none of these explicit grants — but capping is
 the least-privilege posture for untrusted or externally-facing work, and there

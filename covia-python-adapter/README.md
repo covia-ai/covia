@@ -9,7 +9,7 @@ the shaded module jar:
 ```json
 {
   "modules": [{
-    "path": "modules/covia-python-adapter-0.8.0-module.jar",
+    "path": "modules/covia-python-adapter-<version>-module.jar",
     "config": {
       "library": "/usr/lib/libpython3.13.so",
       "operations": {

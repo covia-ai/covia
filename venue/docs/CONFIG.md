@@ -340,7 +340,7 @@ code execution.
 ```json
 {
   "modules": [{
-    "path": "modules/covia-python-adapter-0.8.0-module.jar",
+    "path": "modules/covia-python-adapter-<version>-module.jar",
     "sha256": "<optional 64-hex module digest>",
     "config": {
       "library": "/usr/lib/libpython3.13.so",
@@ -799,7 +799,7 @@ Agent-side bounds: each level-3 LLM call is bounded by the agent's
 ```json
 {
   "modules": [
-    "modules/covia-sql-0.6.0-module.jar",
+    "modules/covia-sql-<version>-module.jar",
     { "path": "modules/other.jar", "sha256": "9f2a...", "config": { } }
   ]
 }

@@ -21,8 +21,8 @@ venue/
 │   │   ├── VenueState.java      # Lattice state wrapper (assets, jobs, users, auth)
 │   │   ├── Users.java / User.java  # Per-user lattice state (jobs, agents, workspace, h/ inbox)
 │   │   ├── AccessControl.java   # Job ownership enforcement
-│   │   ├── Auth.java            # Auth config, public ceiling, login providers
-│   │   ├── RequestContext.java  # Caller identity, proofs, capability ceiling
+│   │   ├── Auth.java            # Auth config, public capability scope, login providers
+│   │   ├── RequestContext.java  # Caller identity, proofs, capability scope
 │   │   ├── api/                 # REST (CoviaAPI), MCP, A2A, UserAPI
 │   │   ├── server/              # HTTP server, AuthMiddleware, SSE
 │   │   └── storage/             # Content storage backends
@@ -147,14 +147,6 @@ in [`docs/A2A_AGENTS.md`](docs/A2A_AGENTS.md), the implementation companion to
 COG-14. Operator configuration and a minimal request example are in
 [`docs/CONFIG.md`](docs/CONFIG.md#a2a-protocol); the non-owner authority model
 is in [`docs/A2A_INTERACTION_AUTHORITY.md`](docs/A2A_INTERACTION_AUTHORITY.md).
-
-Current boundaries:
-
-- Per-agent continuation with an incoming `taskId` is not implemented (#306).
-- Turns exceeding the synchronous wait boundary need stable reattachment
-  semantics (#305).
-- Outbound `a2a` adapter calls do not yet relay authenticated caller authority
-  to a remote venue (#304); anonymous publication remains usable.
 
 ## Development Guidelines
 

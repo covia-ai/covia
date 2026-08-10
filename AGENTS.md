@@ -16,6 +16,9 @@ covia/                          # ai.covia:covia (parent POM)
 │       ├── grid/auth/          #   Auth strategies: NoAuth, BearerAuth, KeyPairAuth, LocalAuth
 │       ├── grid/client/        #   HTTP client implementation (VenueHTTP)
 │       └── grid/impl/          #   Content implementations (BlobContent, LatticeContent)
+├── covia-python/               # Dependency-light Java FFM bridge to embedded CPython
+├── covia-python-adapter/       # Optional Python operations venue module
+│                               #   (shaded "module" jar, not in covia.jar)
 ├── venue/                      # Main venue server runtime (produces covia.jar)
 │   └── src/main/java/covia/
 │       ├── adapter/            #   Adapter framework and implementations
@@ -96,7 +99,7 @@ mvn test -pl covia-core
 | MCP SDK | 2.0.0 | Model Context Protocol |
 | A2A | 1.2.0.Final | Agent-to-Agent protocol |
 | JUnit | 6.1.3 | Testing |
-| SLF4J/Logback | 2.0.18/1.6.0 | Logging |
+| SLF4J/Logback | 2.0.18/1.6.1 | Logging |
 
 ## Architecture Overview
 
@@ -220,16 +223,17 @@ The list below tracks engineering tasks. For the developer-experience and open-s
 - [ ] **Wire LatticeContent into pinned content-addressable storage** — the `AContent` view over content pinned in the lattice `:data` region (content rides state replication, addressed by hash; pairs with `asset:pin`). Implemented and unit-tested; awaiting its consumer in the storage backend / client SDK.
   - File: `covia-core/.../grid/impl/LatticeContent.java`
 
-- [ ] **Add VenueHTTP test coverage** — HTTP client layer has zero tests. Cover invoke, polling, content upload/download, error handling.
+- [x] **Add VenueHTTP test coverage** — real-venue contract tests cover direct run, status, polling and caller-side timeouts, content round-trips, concurrent use, authentication, and error paths. Deterministic client tests cover 429 retry/backoff behavior.
+  - Files: `venue/src/test/java/covia/grid/client/VenueHTTPTest.java`, `covia-core/src/test/java/covia/grid/client/VenueHTTPRetryTest.java`
+
+- [ ] **Complete auth strategy tests** — `KeyPairAuth` has deterministic claim/signing tests, bearer authentication and rejection paths run against real venues, and unsupported token minting is covered. Remaining: focused constructor/header tests for `NoAuth` and `BearerAuth`, plus `LocalAuth` DID propagation and no-header behavior (the local strategy is in-process and should not be tested as HTTP authentication).
   - Directory: `covia-core/src/test/java/`
 
-- [ ] **Add auth strategy tests** — No tests for BearerAuth, KeyPairAuth, NoAuth, LocalAuth.
-  - Directory: `covia-core/src/test/java/`
+- [x] **Add SSRF and CORS regression coverage** — HTTPAdapter allow/block policy, private/loopback targets, invalid schemes, configured CORS origins, loopback/PNA behavior, and disabled CORS are covered.
+  - Files: `venue/src/test/java/covia/adapter/http/HTTPTest.java`, `venue/src/test/java/covia/venue/VenueServerTest.java`
 
-- [ ] **Add missing test coverage** — Several implemented features lack dedicated tests:
-  - SSRF protection in HTTPAdapter (URL allowlist/blocklist validation)
-  - CORS configuration (`Config.CORS`)
-  - /config endpoint redaction (public info only)
+- [ ] **Add remaining focused test coverage**:
+  - `/config` page redaction (public info only)
   - LangChainAdapter IO timeout
   - Thread safety of `Asset.meta()` (concurrent access)
 
@@ -245,7 +249,7 @@ The list below tracks engineering tasks. For the developer-experience and open-s
 - [ ] **Capability negotiation** — Discovery endpoint for venue capabilities via DID documents
 - [ ] **Signed operations** — Cryptographic attribution for every job submission
 - [ ] **Compliance reporting** — Data lineage tracking and audit log queries
-- [ ] **Workbench expansion** — Currently 3 files / 180 LOC demo; add configuration, multi-operation support, proper logging
+- [ ] **Workbench expansion** — Currently a 3-file / ~155-line demo; add configuration, multi-operation support, proper logging
 - [ ] **Job restart API** — Consider `PUT /api/v1/jobs/{id}/restart` for re-running failed/cancelled/completed jobs. Semantics need thought: new job with same input? Same job ID? How to handle operations that have changed since original invocation? May be better as a client-side convenience (re-invoke with original params) rather than a server primitive.
 
 ## Module-Specific Guides

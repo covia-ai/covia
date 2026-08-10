@@ -104,10 +104,8 @@ back, run the manual deploy with `ghcr.io/covia-ai/covia:<sha>` instead of
 
 ## Notes
 
-- **Bootstrap image:** the initial `:stable` tag on the host was built
-  on-box from the public `latest-snapshot` release JAR (GHCR is private
-  and the last tagged release, 0.0.1, predates the current API). The
-  first Actions deploy after these workflows reach `master` replaces it
-  with the real `:stable` channel.
+- The `:stable` image is published by the image-publication workflow and deployment
+  consumes that registry artifact; hosts do not build a bootstrap image
+  on-box.
 - The host is an `e2-medium` (2 vCPU / 4 GB) — one shared 2 GB heap for
   all three venues. Raise it only if the machine type grows.
