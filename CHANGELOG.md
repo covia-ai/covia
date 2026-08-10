@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Covia is pre-1.0, so minor versions may include breaking changes.
 
+## [Unreleased]
+
+### Changed
+
+- Reconciled the engineering and DX roadmaps with the 0.9.0 codebase: current
+  artifact versions, shipped VenueHTTP/SSRF/CORS test coverage, narrowed auth
+  and focused-test gaps, resolved Java baseline, and per-caller rate limiting.
+- Made deployment and optional-module examples version-neutral, refreshed the
+  module maps and contribution link, and removed obsolete A2A limitations that
+  shipped in 0.9.0.
+
 ## [0.9.0] - 2026-08-10
 
 Breaking: UCAN JWTs now use the versioned Convex profile (Convex 0.8.11) —
@@ -368,6 +379,7 @@ Initial public release: venue server with the adapter framework, lattice-backed
 content-addressed assets, the async job model with SSE, multi-protocol surface
 (REST / MCP / A2A / DID), and strategy-based authentication.
 
+[Unreleased]: https://github.com/covia-ai/covia/compare/0.9.0...HEAD
 [0.9.0]: https://github.com/covia-ai/covia/compare/0.8.0...0.9.0
 [0.8.0]: https://github.com/covia-ai/covia/compare/0.7.0...0.8.0
 [0.7.0]: https://github.com/covia-ai/covia/compare/0.6.0...0.7.0

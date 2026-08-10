@@ -2,7 +2,7 @@
 
 This is our shared, public roadmap for making Covia a joy to **adopt, build on, self-host, and contribute to**. It's deliberately open: if something here resonates, pick it up; if you think we've got a priority wrong, [open a discussion](https://github.com/orgs/covia-ai/discussions) or say so on [Discord](https://discord.gg/fywdrKd8QT). Nothing in this document is set in stone — it's a conversation.
 
-> **TL;DR for the impatient:** the Covia *engine* is in good shape — clean adapter architecture, a real lattice foundation, multi-protocol surface (REST / MCP / A2A / DID), 2,000+ passing tests gating every PR, and published Java, TypeScript, and Python SDKs. What we're focused on now is the *experience around* that engine: getting a newcomer from `git clone` to "I ran my first federated operation" in minutes, and shipping current, coherently-versioned artifacts.
+> **TL;DR for the impatient:** the Covia *engine* is in good shape — clean adapter architecture, a real lattice foundation, multi-protocol surface (REST / MCP / A2A / DID), 2,000+ passing tests gating every PR, and published Java, TypeScript, and Python SDKs. What we're focused on now is the *experience around* that engine: getting a newcomer from `git clone` to "I ran my first federated operation" in minutes, and keeping independently published clients aligned with the platform.
 
 ---
 
@@ -30,19 +30,19 @@ An honest snapshot, so newcomers know what to expect and contributors know where
 
 | Area | State | Notes |
 |------|-------|-------|
-| Core engine & adapters | 💪 Solid | Clean `AAdapter` abstraction, ~20 adapters, lattice-backed state |
+| Core engine & adapters | 💪 Solid | Clean `AAdapter` abstraction, ~25 adapters, lattice-backed state |
 | Test suite (engine) | 💪 Solid | 2,000+ tests, fast in-JVM parallel run |
 | REST API reference docs | 💪 Solid | Comprehensive, hand-written, examples throughout |
 | TypeScript SDK | 💪 Solid | Published to npm, typed, tested |
 | Python SDK | 🔨 Good (alpha) | Published to PyPI, async mirror, well documented |
 | README / first impression | ✅ Done | Rewritten for developers: quickstart, badges, architecture, SDK examples |
 | Onboarding / quickstart (docs) | ✅ Done | README quickstart and the docs "Getting Started" page both go zero-to-first-operation |
-| Published artifacts up to date | ✅ Done | Platform `0.6.0` on GitHub, GHCR, and Maven Central; TS SDK 1.7.3 on npm; Python SDK 0.6.0 on PyPI |
+| Published artifact alignment | ✅ Done | Platform `0.9.0` on GitHub/GHCR; `covia-core` `0.9.0` on Maven Central; TS SDK `1.8.0` on npm; Python SDK `0.9.0` on PyPI. Python mirrors the published `covia-core` release line. |
 | Build reproducibility | ✅ Done | Depends on released Convex 0.8.11 from Maven Central; a clean clone builds in one command |
 | CI quality gate | ✅ Done | `test.yml` runs the full reactor (with tests) on every PR and push to `develop`/`master`; its first run caught three latent flaky tests |
-| Client/auth test coverage | 🔨 In progress | `VenueHTTP` has contract tests against a real venue; dedicated auth-strategy tests remain |
+| Client/auth test coverage | 🔨 In progress | `VenueHTTP`, `KeyPairAuth`, and bearer integration are covered; focused `NoAuth`, `BearerAuth`, and `LocalAuth` strategy tests remain |
 | Community scaffolding | 🔨 In progress | `CONTRIBUTING`, `SECURITY`, `CHANGELOG`, and issue/PR templates in place; a governance note remains |
-| Operability (metrics, health, rate limits) | 🌱 Planned | Tracked below and in `AGENTS.md` |
+| Operability (metrics, health, rate limits) | 🔨 In progress | Per-caller request and concurrent-job limits are shipped; health/readiness, per-operation limits, structured logs, and metrics remain |
 
 **Legend:** 💪 solid · 🔨 in progress · 🌱 good area to contribute · ✅ done
 
@@ -58,7 +58,7 @@ _Goal: a developer who has never seen Covia can understand it, run it, and invok
 
 - [x] **Rewrite the repository `README.md` for developers.** The front page now leads with a copy-paste Quickstart (call a live venue, invoke an operation, run your own via Docker/JAR), badges, an architecture diagram, and links into the docs.
 - [x] **Provide a true five-minute quickstart in the docs.** The docs' "Getting Started" page now mirrors the README quickstart: curl a live venue, invoke an operation from TypeScript or Python, run your own venue — zero to first operation on one page.
-- [ ] 🌱 **Pick one frictionless install and document it end-to-end.** The README now documents a `docker run` one-liner against `ghcr.io/covia-ai/covia:latest`, and the image has its own publish workflow; the JAR download points at the `latest` release (current since `0.1.0`). What remains is choosing the lead path and documenting it end-to-end. (A thin `covia` CLI or a `curl | sh` installer is a stretch goal — see _Open questions_.)
+- [ ] 🌱 **Pick one frictionless install and document it end-to-end.** The README now documents a `docker run` one-liner against `ghcr.io/covia-ai/covia:latest`, and the image has its own publish workflow; the JAR download points at the moving `latest` stable release. What remains is choosing the lead path and documenting it end-to-end. (A thin `covia` CLI or a `curl | sh` installer is a stretch goal — see _Open questions_.)
 - [x] **Fill in or hide the documentation stubs.** The Venues and Grid overviews and the A2A adapter page are now real content; no core-concept page reads as "coming soon" any more.
 - [ ] 🌱 **Add a `troubleshooting` / debugging guide.** "My job failed — how do I inspect it?", "How do I read a venue's logs?", common setup pitfalls.
 
@@ -70,12 +70,12 @@ _Goal: every clone builds reproducibly, every PR is validated automatically, and
 - [x] **Make the gate a required check and fix the build badge.** Branch protection on `develop` and `master` now requires the `build-and-test` check for merges (admin direct pushes exempt), and the README "build" badge points at the `Test` workflow.
 - [x] **Make the build reproducible.** Covia now depends on released **Convex 0.8.11** from Maven Central — a clean clone builds with `mvn clean install`, no Convex source build. CI conditionally builds Convex from source only when `convex.version` deliberately names a snapshot. Restore a released pin before shipping. See [Convex ↔ Covia dependency](#a-note-on-the-convex-dependency).
 - [x] **Add a `CHANGELOG.md`** — in Keep a Changelog format. Keep it current per release, and make the release-notes link point at it for real.
-- [x] **Coherent versioning across the product — and ship a current artifact.** The versioning story is agreed (see _Resolved_ under _Open questions_) and shipped: **platform `0.6.0`** on GitHub, GHCR, and Maven Central, TypeScript SDK **1.7.3** on npm, and Python SDK **0.6.0** on PyPI. Remaining follow-ons live under _Consolidate the SDK story_.
+- [x] **Coherent versioning across the product — and ship a current artifact.** Independent SemVer and the platform-generation model are agreed (see _Resolved_ under _Open questions_), and platform **`0.9.0`** is live on GitHub/GHCR. Current clients are `covia-core` **`0.9.0`** on Maven Central, TypeScript SDK **`1.8.0`** on npm, and Python SDK **`0.9.0`** on PyPI. Python now mirrors the published `covia-core` release line; broader SDK presentation work remains under _Consolidate the SDK story_.
 - [x] **Decouple the public Docker image from deployment.** `publish-docker.yml` is the single source of `ghcr.io/covia-ai/covia` tags. It publishes the exact commit that passed the full `Test` workflow; Azure/EC2/GCP deploy only after that publish succeeds.
-- [x] **Reconcile documentation drift.** `BUILD.md` now lists `covia-core`, uses version-agnostic JAR names, and documents the released-Convex dependency (with the snapshot-override escape hatch); `deploy/README.md`'s truncated Caddy command and leaked local path are fixed (JARs now download from GitHub releases). JDK facts are stated consistently (build target 21; published image runs 25) — picking a single baseline remains an _Open question_.
-- [ ] **Test the client-side auth strategies.** `VenueHTTP` now has contract tests against a real venue (`VenueHTTPTest`); the remaining gap is dedicated coverage for the auth strategies (`NoAuth`, `BearerAuth`, `KeyPairAuth`, `LocalAuth`) — signing round-trips and failure paths against a real `VenueServer`.
+- [x] **Reconcile documentation drift.** `BUILD.md` lists the reactor modules, uses version-agnostic JAR names, and documents the released-Convex dependency (with the snapshot-override escape hatch); deployment downloads use GitHub releases. The Java baseline is resolved and stated consistently: source targets 21 and published containers run the current LTS (25).
+- [ ] **Complete the client-side auth strategy tests.** `VenueHTTP` has real-venue contract tests; `KeyPairAuth` has deterministic signing/claim tests; bearer success and rejection paths are integration-tested. Remaining: focused constructor/header behavior for `NoAuth` and `BearerAuth`, and `LocalAuth` DID propagation/no-header behavior through the in-process path.
 - [x] **Add `Dependabot` and dependency/code scanning.** Dependabot watches Maven and GitHub Actions weekly (Convex excluded — managed manually); CodeQL analyses `develop` pushes and runs weekly.
-- [ ] **Consolidate the SDK story.** Make the supported SDKs obvious and deprecate or redirect older clients. `covia-core` is now published to Maven Central; it still needs a focused client README and an explicit SDK-side licensing decision. Keep the docs compatibility matrix current (platform 0.6.0 ↔ TS SDK 1.7.3 ↔ Python SDK 0.6.0).
+- [ ] **Consolidate the SDK story.** Make the supported SDKs obvious and deprecate or redirect older clients. `covia-core` is published to Maven Central but still needs a focused client README and the resolved Apache-2.0 SDK licensing applied to its publication metadata. Keep the Python/`covia-core` mirror-version policy and compatibility matrix current (platform `0.9.0` ↔ Java `0.9.0` ↔ TS `1.8.0` ↔ Python `0.9.0`).
 
 ### Milestone 3 — Confident Self-Hosting & Ecosystem
 
@@ -85,7 +85,7 @@ _Goal: an operator can run a venue in production, and the surrounding ecosystem 
 
 - [ ] **Health & readiness endpoints** (`/health`, `/ready`) so orchestrators and load balancers can probe a venue meaningfully.
 - [ ] **Structured (JSON) logging and request-ID propagation** for production observability. (Tracked in `AGENTS.md` P2.)
-- [ ] **Rate limiting** — per-user and per-operation. (Tracked in `AGENTS.md` P1.)
+- [ ] **Per-operation rate limiting.** Per-caller HTTP request and concurrent-job caps are shipped; operation-specific limits remain. (Tracked in `AGENTS.md` P1.)
 - [ ] **Metrics export** — Prometheus-compatible counters for operations, jobs, adapters, and storage. (Tracked in `AGENTS.md` P2.)
 - [ ] 🌱 **A runnable `examples/` collection.** Hello-world per SDK, plus the AP-invoice demo as real, clonable code rather than only a tooling skill. Working examples are some of the best documentation we can offer — and because they directly serve Milestone 1's "first success", consider pulling a single hello-world example forward rather than waiting for the full collection. The `ap-demo` skill already contains content to lift from.
 - [ ] **A hardening checklist for operators** — UCAN capabilities, secret management, SSRF protection, CORS — consolidated into one practical page.

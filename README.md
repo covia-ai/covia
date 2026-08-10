@@ -271,7 +271,7 @@ Covia is built in the open, and contributions are very welcome. We've written do
 - 🐛 **Found a bug or want a feature:** open an issue
 - 📚 **Documentation:** [docs.covia.ai](https://docs.covia.ai)
 
-A dedicated `CONTRIBUTING` guide is on the way; until then, jump into Discussions or Discord and we'll help you get started.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the build, test, branch, and pull-request workflow. Discussions and Discord are the best places for early questions or help scoping a contribution.
 
 ---
 
