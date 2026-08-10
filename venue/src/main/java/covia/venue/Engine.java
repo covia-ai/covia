@@ -222,6 +222,7 @@ public class Engine {
 			AKeyPair keyPair, PersistenceHandler persistHandler) throws IOException {
 		this.config=java.util.Objects.requireNonNull(config, "config");
 		this.keyPair=keyPair;
+		validateDeclaredIdentity();
 		this.lattice=cursor;
 		this.persistHandler = (persistHandler != null) ? persistHandler : PersistenceHandler.NOOP;
 		this.lastFlushMillis = System.currentTimeMillis();
@@ -1992,6 +1993,58 @@ public class Engine {
 			s=Strings.create("did:key:"+key);
 		}
 		return s;
+	}
+
+	/**
+	 * Fail-closed check that an operator-declared identity (config {@code did},
+	 * covia#343) is one this venue can actually prove: a declared did:key must
+	 * match the venue key pair — an explicit identity pin, so a venue started
+	 * with the wrong seed or keystore refuses to run rather than silently
+	 * assuming a new identity — and a declared did:web must match the public
+	 * hostname's derived form. Shape validation lives in {@link Config}.
+	 */
+	private void validateDeclaredIdentity() {
+		AString declared = config.getDID();
+		if (declared == null) return;
+		String d = declared.toString();
+		if (d.startsWith("did:key:")) {
+			AString derived = Strings.create("did:key:"
+				+ Multikey.encodePublicKey(keyPair.getAccountKey()));
+			if (!derived.equals(declared)) {
+				throw new IllegalStateException("Declared venue identity " + declared
+					+ " does not match the venue key pair (" + derived
+					+ ") — wrong seed or keystore?");
+			}
+		} else if (d.startsWith("did:web:")) {
+			AString web = config.getWebDID();
+			if (!declared.equals(web)) {
+				throw new IllegalStateException("Declared venue identity " + declared
+					+ " does not match the venue's did:web form ("
+					+ (web == null ? "no public hostname" : web) + ")");
+			}
+		}
+	}
+
+	private volatile covia.venue.auth.VenueDIDVerifier didVerifier;
+
+	/**
+	 * The venue's DID signature verifier (covia#343): did:key statelessly, the
+	 * venue's own identity and locally managed users from venue state, remote
+	 * did:web via cached DID-document resolution. Ingress seams use this in
+	 * place of {@link convex.auth.did.DIDVerifier#CONVEX} so did:web-identified
+	 * principals verify exactly like did:key ones.
+	 */
+	public covia.venue.auth.VenueDIDVerifier didVerifier() {
+		covia.venue.auth.VenueDIDVerifier v = didVerifier;
+		if (v == null) {
+			synchronized (this) {
+				if (didVerifier == null) {
+					didVerifier = new covia.venue.auth.VenueDIDVerifier(this);
+				}
+				v = didVerifier;
+			}
+		}
+		return v;
 	}
 
 	/**

@@ -262,8 +262,8 @@ public class UCANAdapter extends AAdapter {
 		String failure = null;
 		try {
 			token = (tokenStr != null)
-				? convex.auth.ucan.UCANValidator.validateJWT(tokenStr, now, convex.auth.did.DIDVerifier.CONVEX)
-				: convex.auth.ucan.UCANValidator.validate(UCAN.parse(tokenMap), now, convex.auth.did.DIDVerifier.CONVEX);
+				? convex.auth.ucan.UCANValidator.validateJWT(tokenStr, now, engine.didVerifier())
+				: convex.auth.ucan.UCANValidator.validate(UCAN.parse(tokenMap), now, engine.didVerifier());
 		} catch (Exception e) {
 			failure = e.getMessage();
 		}

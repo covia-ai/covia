@@ -54,7 +54,7 @@ public class GridForwardingFilterTest {
 		RequestContext ctx = ctxWith(BOB, grantToBob, identityForTarget);
 
 		List<String> out = GridAdapter.admissibleTokens(ctx,
-			GridAdapter.parsedRawUcans(ctx), BOB);
+			GridAdapter.parsedRawUcans(ctx, convex.auth.did.DIDVerifier.CONVEX), BOB);
 		assertNotNull(out);
 		assertEquals(2, out.size(), "both tokens are admissible in passthrough mode");
 	}
@@ -69,7 +69,7 @@ public class GridForwardingFilterTest {
 		RequestContext ctx = ctxWith(BOB, grantToBob, chainToVenue);
 
 		List<String> out = GridAdapter.admissibleTokens(ctx,
-			GridAdapter.parsedRawUcans(ctx), VENUE);
+			GridAdapter.parsedRawUcans(ctx, convex.auth.did.DIDVerifier.CONVEX), VENUE);
 		assertNotNull(out);
 		assertEquals(List.of(chainToVenue), out,
 			"only the venue-audienced token is relayed when the venue is the principal");
@@ -80,7 +80,7 @@ public class GridForwardingFilterTest {
 		String expired = token(aliceKP, BOB, ALICE + "/w/", "crud/read", -3600);
 		RequestContext ctx = ctxWith(BOB, expired, "not-a-jwt");
 		assertNull(GridAdapter.admissibleTokens(ctx,
-			GridAdapter.parsedRawUcans(ctx), BOB),
+			GridAdapter.parsedRawUcans(ctx, convex.auth.did.DIDVerifier.CONVEX), BOB),
 			"expired and unparseable tokens are provably inert — nothing to relay");
 	}
 
@@ -90,12 +90,12 @@ public class GridForwardingFilterTest {
 		// Bob presenting his own instruction → recognised.
 		RequestContext bobCtx = ctxWith(BOB, bobRelay);
 		assertTrue(GridAdapter.hasRelayInstruction(
-			GridAdapter.parsedRawUcans(bobCtx), BOB, VENUE));
+			GridAdapter.parsedRawUcans(bobCtx, convex.auth.did.DIDVerifier.CONVEX), BOB, VENUE));
 		// Carol presenting Bob's instruction → issuer != caller → not an instruction.
 		AString CAROL = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
 		RequestContext carolCtx = ctxWith(CAROL, bobRelay);
 		assertFalse(GridAdapter.hasRelayInstruction(
-			GridAdapter.parsedRawUcans(carolCtx), CAROL, VENUE));
+			GridAdapter.parsedRawUcans(carolCtx, convex.auth.did.DIDVerifier.CONVEX), CAROL, VENUE));
 	}
 
 	@Test
@@ -105,6 +105,6 @@ public class GridForwardingFilterTest {
 		String grantOnly = token(bobKP, VENUE, ALICE + "/w/", "crud/read", 3600);
 		RequestContext ctx = ctxWith(BOB, grantOnly);
 		assertFalse(GridAdapter.hasRelayInstruction(
-			GridAdapter.parsedRawUcans(ctx), BOB, VENUE));
+			GridAdapter.parsedRawUcans(ctx, convex.auth.did.DIDVerifier.CONVEX), BOB, VENUE));
 	}
 }

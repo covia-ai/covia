@@ -475,7 +475,7 @@ public class MCP extends McpServer {
 				// bearer UCAN.
 				AVector<ACell> ucans = RT.getIn(arguments, Fields.UCANS);
 				AString bearer = (ctx != null) ? ctx.attribute(AuthMiddleware.UCAN_BEARER_ATTR) : null;
-				rctx = AuthMiddleware.withTransportAuth(rctx, bearer, ucans, engine().getDIDString());
+				rctx = AuthMiddleware.withTransportAuth(rctx, bearer, ucans, engine().getDIDString(), engine().didVerifier());
 				// `ucans` is transport authority, not operation input. Never let
 				// raw proof JWTs enter durable Job records, adapter logs, or agent
 				// timelines merely because MCP carries them inside tool arguments.

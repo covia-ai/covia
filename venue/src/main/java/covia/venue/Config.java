@@ -426,6 +426,7 @@ public class Config {
 		optionalString(config, NAME, "name");
 		optionalString(config, Strings.intern("description"), "description");
 		optionalString(config, DID, "did");
+		validateDeclaredDID();
 		optionalString(config, HOSTNAME, "hostname");
 		optionalString(config, DEFAULT_LLM_OPERATION, "defaultLlmOperation");
 		optionalString(config, DEFAULT_TRANSITION_OP, "defaultTransitionOp");
@@ -900,10 +901,47 @@ public class Config {
 	}
 
 	/**
+	 * Validates an operator-declared venue identity (covia#343): the {@code did}
+	 * key takes the DID this venue presents as its identity. A {@code did:web}
+	 * declaration must be the bare venue form naming the configured public
+	 * hostname (so the identity resolves to this venue's DID document); a
+	 * {@code did:key} declaration must carry a valid multikey — its match
+	 * against the venue key pair is enforced at Engine construction, where the
+	 * key is known (an explicit identity pin). Absent means the venue's
+	 * key-derived did:key, unchanged.
+	 */
+	private void validateDeclaredDID() {
+		AString did = RT.ensureString(config.get(DID));
+		if (did == null) return;
+		String d = did.toString();
+		if (d.startsWith("did:web:")) {
+			String host = d.substring("did:web:".length());
+			if (host.contains(":")) {
+				throw malformed("did", "a declared did:web identity must be the bare venue "
+					+ "form (did:web:<hostname>, no path segments)");
+			}
+			if (!isPublicHostname(host)) {
+				throw malformed("did", "did:web requires a public DNS hostname, got: " + host);
+			}
+			if (!host.equals(getHostname())) {
+				throw malformed("did", "did:web host must equal the configured hostname ("
+					+ getHostname() + "), got: " + host);
+			}
+		} else if (d.startsWith("did:key:")) {
+			if (convex.core.crypto.util.Multikey.decodePublicKey(
+					d.substring("did:key:".length())) == null) {
+				throw malformed("did", "did:key must carry a valid Ed25519 multikey");
+			}
+		} else {
+			throw malformed("did", "supported identity methods are did:key and did:web");
+		}
+	}
+
+	/**
 	 * True iff {@code host} is a plausible public DNS name: contains a dot,
 	 * no port/IPv6 colon, not "localhost", and not an IPv4 literal.
 	 */
-	static boolean isPublicHostname(String host) {
+	public static boolean isPublicHostname(String host) {
 		if (host == null || host.isEmpty()) return false;
 		if (host.indexOf(':') >= 0) return false;        // port or IPv6 literal
 		if (host.indexOf('.') < 0) return false;          // bare names (localhost, myhost)

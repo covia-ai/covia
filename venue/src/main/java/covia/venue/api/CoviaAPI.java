@@ -328,7 +328,7 @@ public class CoviaAPI extends ACoviaAPI {
 		// proof for cross-DID reads, per the IETF UCAN-HTTP convention).
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 		AString bearer = ctx.attribute(AuthMiddleware.UCAN_BEARER_ATTR);
-		rctx = AuthMiddleware.withTransportAuth(rctx, bearer, null);
+		rctx = AuthMiddleware.withTransportAuth(rctx, bearer, null, null, engine().didVerifier());
 
 		try {
 			Asset asset=resolveAssetReference(ref, rctx);
@@ -557,7 +557,7 @@ public class CoviaAPI extends ACoviaAPI {
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 		AVector<ACell> ucans = RT.getIn(req, Fields.UCANS);
 		AString bearer = ctx.attribute(AuthMiddleware.UCAN_BEARER_ATTR);
-		rctx = AuthMiddleware.withTransportAuth(rctx, bearer, ucans, engine().getDIDString());
+		rctx = AuthMiddleware.withTransportAuth(rctx, bearer, ucans, engine().getDIDString(), engine().didVerifier());
 
 		try {
 			ACell result = engine().jobs().runOperation(op, input, rctx).join();
@@ -663,7 +663,7 @@ public class CoviaAPI extends ACoviaAPI {
 		// venueDID enables identity-from-ucans: an anonymous transport carrying a
 		// verified identity token audienced to this venue authenticates as its
 		// issuer (relayed cross-venue callers, covia#100 C3a).
-		rctx = AuthMiddleware.withTransportAuth(rctx, bearer, ucans, engine().getDIDString());
+		rctx = AuthMiddleware.withTransportAuth(rctx, bearer, ucans, engine().getDIDString(), engine().didVerifier());
 
 		try {
 			// Wait window: `wait` (query param or body field) is boolean or an
@@ -792,7 +792,7 @@ public class CoviaAPI extends ACoviaAPI {
 		// this is how a grid hop observes the remote job it created.
 		AString bearer = ctx.attribute(AuthMiddleware.UCAN_BEARER_ATTR);
 		rctx = AuthMiddleware.withTransportAuth(rctx, bearer,
-			AuthMiddleware.headerUcans(ctx), engine().getDIDString());
+			AuthMiddleware.headerUcans(ctx), engine().getDIDString(), engine().didVerifier());
 
 		try {
 			AMap<AString,ACell> status=engine().jobs().getJobData(id, rctx);
@@ -1319,7 +1319,7 @@ public class CoviaAPI extends ACoviaAPI {
 
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 		AString bearer = ctx.attribute(AuthMiddleware.UCAN_BEARER_ATTR);
-		rctx = AuthMiddleware.withTransportAuth(rctx, bearer, null);
+		rctx = AuthMiddleware.withTransportAuth(rctx, bearer, null, null, engine().didVerifier());
 
 		AMap<AString, ACell> input;
 		try {

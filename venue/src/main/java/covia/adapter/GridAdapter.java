@@ -232,7 +232,7 @@ public class GridAdapter extends AAdapter {
 
     private Venue connectRemote(RequestContext ctx, AString venueSpec) {
         AString venueDID = engine.getDIDString();
-        java.util.List<UCAN> tokens = parsedRawUcans(ctx);
+        java.util.List<UCAN> tokens = parsedRawUcans(ctx, engine.didVerifier());
 
         boolean relayAsSelf = hasRelayInstruction(tokens, ctx.getCallerDID(), venueDID);
         VenueAuth auth = relayAsSelf
@@ -335,7 +335,8 @@ public class GridAdapter extends AAdapter {
     /** Parses the caller's raw transport tokens (already signature-verified at
      *  ingress) for audience/issuer inspection; null-padded on parse failure so
      *  indices align with {@link RequestContext#getRawUcans()}. */
-    static java.util.List<UCAN> parsedRawUcans(RequestContext ctx) {
+    static java.util.List<UCAN> parsedRawUcans(RequestContext ctx,
+            convex.auth.did.DIDVerifier verifier) {
         AVector<ACell> raw = ctx.getRawUcans();
         if (raw == null || raw.isEmpty()) return null;
         java.util.List<UCAN> out = new java.util.ArrayList<>();
@@ -345,7 +346,7 @@ public class GridAdapter extends AAdapter {
             AString jwt = RT.ensureString(raw.get(i));
             if (jwt != null) {
                 try {
-                    token = UCANValidator.validateJWT(jwt, now, convex.auth.did.DIDVerifier.CONVEX);
+                    token = UCANValidator.validateJWT(jwt, now, verifier);
                 } catch (Exception e) {
                     // defective token: null slot, grants nothing
                 }
