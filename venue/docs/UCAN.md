@@ -144,6 +144,8 @@ Abilities follow UCAN's slash-delimited convention with no leading slash. `*` is
 
 **Attenuation rule:** An ability is a valid attenuation of a parent if it is equal to or has the parent as a prefix. `crud/read` attenuates `crud`. `*` proves any ability.
 
+**Time bounds are not attenuation.** Resource and ability scope narrow structurally through a chain; time bounds deliberately do not. Each link carries its own `exp`/`nbf` on its own timescale, and validation requires every link to be valid at evaluation time — UCAN 1.0 execution-time semantics ("proofs MAY have different validity periods, but MUST all be valid at execution-time"), adopted in preference to the v0.10.0 §6.1 containment rule that required a delegation's window to fit inside its proofs' (do not "fix" validation back to that). A chain is therefore usable in the window [latest `nbf`, earliest finite `exp`] across its links; a link with `exp: null` never expires, but the chain still stops when any other link does. The one place temporal containment *does* apply is at granting surfaces: authority minted under an enabling right must not outlive that right (§4.1), because the right is consumed at issuance and is not part of the minted token's chain — use-time validation can never see it.
+
 ### 3.3 Constraints (`nb`)
 
 Optional per-capability constraints as a map:
@@ -260,7 +262,8 @@ Resource rules at issuance (`UCANAdapter.handleIssue`):
   proofs must cover `grant/<can>` on the resource (proofs travel in the
   proof channel, never in operation input), and the minted `exp` must not
   outlive the enabling right (coverage is re-evaluated at the minted
-  expiry), and the resource must still be controlled by this venue (the
+  expiry — so a non-expiring mint requires a non-expiring enabling
+  right), and the resource must still be controlled by this venue (the
   venue's own DID or a local custodial user). A granting right cannot turn
   the venue into root authority for an external DID. This makes `ucan:issue`
   a *granting surface* — the `grant/…` rule binds token production; chain
