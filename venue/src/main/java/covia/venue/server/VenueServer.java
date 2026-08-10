@@ -34,6 +34,7 @@ import convex.core.data.Blob;
 import convex.core.lang.RT;
 import convex.core.util.FileUtils;
 import convex.core.store.AStore;
+import convex.etch.EtchConfig;
 import convex.etch.EtchStore;
 import convex.core.data.prim.CVMLong;
 import convex.core.util.Utils;
@@ -243,7 +244,7 @@ public class VenueServer {
 	 * </ul>
 	 */
 	private static AStore createStore(Config config) throws IOException {
-		convex.etch.EtchConfig etchConfig = config.getEtchConfig();
+		EtchConfig etchConfig = config.getEtchConfig();
 		if (!config.isStoreConfigured()) {
 			log.warn("No 'store' configured — falling back to ephemeral temp Etch store; data will be deleted on JVM exit. Set 'store' to a file path for persistence, or to \"temp\"/\"memory\" to silence this warning.");
 			return (etchConfig != null) ? EtchStore.createTemp(etchConfig) : EtchStore.createTemp();
@@ -311,6 +312,7 @@ public class VenueServer {
 			Path keyFile = Path.of(storePath).resolveSibling("venue.key");
 			if (Files.exists(keyFile)) {
 				restrictVenueKeyPermissions(keyFile);
+				warnIfPlaintextKeyBesideEncryptedStore(config, keyFile);
 				String hex = Files.readString(keyFile).trim();
 				AKeyPair kp = AKeyPair.create(Blob.fromHex(hex));
 				log.info("Using venue identity from key file: {}", kp.getAccountKey());
@@ -331,6 +333,7 @@ public class VenueServer {
 			// First launch of a new persistent store: generate and save.
 			AKeyPair kp = AKeyPair.generate();
 			writeVenueKey(keyFile, kp.getSeed().toHexString());
+			warnIfPlaintextKeyBesideEncryptedStore(config, keyFile);
 			log.info("Generated venue identity (saved to {}): {}", keyFile, kp.getAccountKey());
 			return kp;
 		}
@@ -341,6 +344,21 @@ public class VenueServer {
 		AKeyPair kp = AKeyPair.generate();
 		log.info("Generated ephemeral venue identity: {}", kp.getAccountKey());
 		return kp;
+	}
+
+	/**
+	 * An encrypted Etch store with a plaintext {@code venue.key} beside it
+	 * protects the data but hands the venue <b>identity</b> to anyone holding
+	 * the disk — an inconsistent threat posture. Call it out so the operator
+	 * moves the identity seed to config/env or a keystore.
+	 */
+	private static void warnIfPlaintextKeyBesideEncryptedStore(Config config, Path keyFile) {
+		EtchConfig ec = config.getEtchConfig();
+		if (ec != null && ec.getCipherMode() != EtchConfig.CipherMode.NONE) {
+			log.warn("Venue identity seed sits in plaintext at {} beside an ENCRYPTED Etch store — "
+				+ "disk theft still yields the venue identity. Prefer 'seed' or a 'keystore' "
+				+ "in configuration, and remove the key file.", keyFile);
+		}
 	}
 
 	/** Creates a raw venue seed with owner-only POSIX permissions from birth. */

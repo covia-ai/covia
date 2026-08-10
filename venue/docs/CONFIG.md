@@ -99,6 +99,18 @@ the venue's store — including **encrypted Etch v3**:
 - `key` is Covia-side: the 32-byte store encryption key as hex, sourced from
   `{"env": "VAR"}`, `{"file": "path"}` (operator-secured file), or an inline
   hex string (dev/test only — never commit key material).
+- **Key identity** (consistent with venue key management): the master key is
+  treated as an Ed25519 seed and identified by its derived public key — the
+  same identifier scheme as venue identity keys and keystore aliases. New
+  files stamp that identity as the Etch v3 `publicKeyHint` automatically
+  (set `publicKeyHint` explicitly to pin your own label), and opening
+  verifies the file's hint against the configured key, so a wrong key fails
+  with a precise identification error, never a decrypt failure.
+- The store key is **independent of the venue identity `seed`** — rotate and
+  guard them separately. For an encrypted store, configure the identity via
+  `seed`/`keystore` rather than relying on the auto-generated plaintext
+  `venue.key` beside the store (the venue warns about that combination:
+  encrypted data with the identity readable off the same disk).
 - The policy applies to file stores and `"temp"` stores; `"memory"` is not an
   Etch store and rejects an `etch` block.
 - Fail-closed: an invalid field, unresolvable key, wrong-sized key, an

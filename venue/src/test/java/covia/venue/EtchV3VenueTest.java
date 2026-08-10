@@ -94,10 +94,14 @@ public class EtchV3VenueTest {
 			server.close();
 		}
 
-		// Wrong key must never open the store as if empty or corrupt it.
-		assertThrows(Exception.class,
+		// Wrong key must never open the store as if empty or corrupt it — and
+		// the failure is at key IDENTIFICATION (the file's public-key hint vs
+		// the configured key's derived identity), not a decrypt failure.
+		Exception wrongKey = assertThrows(Exception.class,
 			() -> VenueServer.launch(config(storePath, WRONG_KEY_HEX)).close(),
 			"a wrong Etch encryption key must fail the launch");
+		assertTrue(failureContains(wrongKey, "encrypted under key"),
+			"wrong key must fail at hint identification with a diagnostic, got: " + wrongKey);
 
 		// Opening without any etch policy must not succeed either — the file
 		// is encrypted, and a silent plain open would be a downgrade.
@@ -111,6 +115,36 @@ public class EtchV3VenueTest {
 		// The right key still works after the failed attempts.
 		VenueServer again = VenueServer.launch(config(storePath, KEY_HEX));
 		again.close();
+	}
+
+	private static boolean failureContains(Throwable failure, String text) {
+		for (Throwable current = failure; current != null; current = current.getCause()) {
+			if (String.valueOf(current.getMessage()).contains(text)) return true;
+		}
+		return false;
+	}
+
+	@Test
+	public void operatorPinnedHintOverridesTheDerivedIdentity() throws Exception {
+		// An explicit publicKeyHint passes through as-is: the file is stamped
+		// with the operator's label and the key function verifies against it,
+		// so create → reopen round-trips under the pinned hint.
+		File dir = Files.createTempDirectory("etch-v3-hint").toFile();
+		String storePath = new File(dir, "venue.etch").getAbsolutePath().replace('\\', '/');
+		String pinnedHint =
+			"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+		java.util.function.Function<String, AMap<AString, ACell>> cfg = path -> Maps.of(
+			Config.PORT, 0,
+			Config.STORE, Strings.create(path),
+			Config.SEED, Strings.create(SEED_HEX),
+			Config.ETCH, Maps.of(
+				Strings.intern("version"), CVMLong.create(3),
+				Strings.intern("cipher"), Strings.create("aes-256-ctr"),
+				Strings.intern("publicKeyHint"), Strings.create(pinnedHint),
+				Strings.intern("key"), Strings.create(KEY_HEX)));
+		VenueServer.launch(cfg.apply(storePath)).close();
+		VenueServer reopened = VenueServer.launch(cfg.apply(storePath));
+		reopened.close();
 	}
 
 	@Test

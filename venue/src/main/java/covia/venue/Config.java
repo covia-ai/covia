@@ -1182,7 +1182,30 @@ public class Config {
 		java.util.function.Function<convex.core.data.AccountKey, byte[]> keyFn = null;
 		if (keySource != null) {
 			byte[] key = resolveEtchKey(keySource);
-			keyFn = ignoredHint -> key;
+			// Key identity convention, consistent with venue key management: the
+			// 32-byte master key is treated as an Ed25519 seed and identified by
+			// its derived public key — the same identifier scheme as venue
+			// identity keys and keystore aliases. New files stamp that identity
+			// as the Etch v3 public-key hint (unless the operator pins one
+			// explicitly), and the key function verifies the file's hint before
+			// releasing key material — a wrong key fails at identification with
+			// a precise diagnostic, never as a downstream decrypt failure.
+			convex.core.data.AccountKey keyId = convex.core.crypto.AKeyPair
+				.create(convex.core.data.Blob.wrap(key)).getAccountKey();
+			convex.core.data.AccountKey explicit =
+				convex.core.data.AccountKey.parse(convexMap.get(Strings.intern("publicKeyHint")));
+			convex.core.data.AccountKey expectedHint = (explicit != null) ? explicit : keyId;
+			if (explicit == null) {
+				convexMap = convexMap.assoc(Strings.intern("publicKeyHint"), keyId);
+			}
+			keyFn = hint -> {
+				if (hint != null && !hint.equals(expectedHint)) {
+					throw new IllegalStateException("Etch store is encrypted under key "
+						+ hint + " but the configured etch key has identity " + expectedHint
+						+ " — wrong key material for this store");
+				}
+				return key;
+			};
 		}
 		try {
 			return convex.etch.EtchConfig.fromMap(convexMap, keyFn);
