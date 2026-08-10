@@ -38,7 +38,7 @@ class UserAdapterTest {
 	@BeforeAll
 	static void setup() {
 		engine = Engine.createTemp(Maps.of(
-			Config.HOSTNAME, Strings.create("venue-1.covia.ai")));
+			Config.HOSTNAME, Strings.create("venue.example.com")));
 		Engine.addDemoAssets(engine);
 	}
 
@@ -76,7 +76,7 @@ class UserAdapterTest {
 		assertEquals(external, RT.getIn(create(Maps.of(Fields.DID, external)), Fields.DID));
 
 		ACell managed = create(Maps.of("username", "alice"));
-		AString expected = Strings.create("did:web:venue-1.covia.ai:u:alice");
+		AString expected = Strings.create("did:web:venue.example.com:u:alice");
 		assertEquals(expected, RT.getIn(managed, Fields.DID));
 		assertNotNull(engine.getVenueState().users().get(expected));
 		assertEquals(expected,
@@ -100,7 +100,7 @@ class UserAdapterTest {
 	void venueRootAuthorityIsLimitedToItsManagedUsers() {
 		RootAuthorityPolicy policy = engine.rootAuthorityPolicy();
 		AString venue = engine.getDIDString();
-		AString managed = Strings.create("did:web:venue-1.covia.ai:u:alice");
+		AString managed = Strings.create("did:web:venue.example.com:u:alice");
 		AString self = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
 		AString external = Strings.create("did:web:identity.example:u:bob");
 
@@ -111,7 +111,7 @@ class UserAdapterTest {
 		assertFalse(policy.acceptsRoot(venue, Strings.create(external + "/w/notes")),
 			"a similarly shaped DID on another domain is not locally custodial");
 		assertFalse(policy.acceptsRoot(venue,
-			Strings.create("did:web:venue-1.covia.ai.evil:u:alice/w/notes")),
+			Strings.create("did:web:venue.example.com.evil:u:alice/w/notes")),
 			"a hostname-prefix lookalike must not enter the managed namespace");
 		assertFalse(policy.acceptsRoot(venue,
 			Strings.create(managed + ":admin/w/notes")),

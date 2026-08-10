@@ -223,8 +223,8 @@ public class ConfigTest {
 
 	@Test
 	public void testWebDIDForPublicDomain() {
-		Config c = new Config(Maps.of(Config.HOSTNAME, Strings.create("venue-1.covia.ai")));
-		assertEquals("did:web:venue-1.covia.ai", c.getWebDID().toString());
+		Config c = new Config(Maps.of(Config.HOSTNAME, Strings.create("venue.example.com")));
+		assertEquals("did:web:venue.example.com", c.getWebDID().toString());
 	}
 
 	@Test

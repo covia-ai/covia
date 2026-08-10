@@ -16,6 +16,10 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Made deployment and optional-module examples version-neutral, refreshed the
   module maps and contribution link, and removed obsolete A2A limitations that
   shipped in 0.9.0.
+- Centralized the hosted quickstart on a configurable stable-venue URL and
+  replaced deployment-specific hostnames in generic examples and test fixtures
+  with RFC-reserved domains. The venue inventory now flags venue-3's expired
+  TLS certificate and avoids duplicating dev-host coordinates in usage examples.
 
 ## [0.9.0] - 2026-08-10
 

@@ -39,19 +39,25 @@ It's built on the [Convex](https://github.com/Convex-Dev/convex) lattice platfor
 ## Quickstart
 
 The fastest way to try Covia is against a hosted venue — no install required.
+Choose a current stable endpoint from [`VENUES.md`](VENUES.md) and keep it in
+one environment variable. This example uses the first stable venue:
+
+```bash
+COVIA_VENUE_URL=https://venue-1.covia.ai
+```
 
 ### 1. Call a live venue
 
 Every venue exposes the same REST API. List the operations it offers:
 
 ```bash
-curl https://venue-3.covia.ai/api/v1/operations
+curl "$COVIA_VENUE_URL/api/v1/operations"
 ```
 
 Invoke one and wait for the result inline. `v/ops/schema/infer` derives a JSON Schema from an example value — one of many built-in operations:
 
 ```bash
-curl -X POST https://venue-3.covia.ai/api/v1/invoke \
+curl -X POST "$COVIA_VENUE_URL/api/v1/invoke" \
   -H "Content-Type: application/json" \
   -d '{
         "operation": "v/ops/schema/infer",
@@ -79,7 +85,8 @@ The venue returns a job record whose `output` carries the result:
 }
 ```
 
-Browse the full API interactively at [`/swagger`](https://venue-3.covia.ai/swagger) or [`/redoc`](https://venue-3.covia.ai/redoc).
+Browse the full API interactively at `$COVIA_VENUE_URL/swagger` or
+`$COVIA_VENUE_URL/redoc`.
 
 ### 2. Invoke from your code
 
@@ -92,7 +99,9 @@ npm install @covia/covia-sdk
 ```typescript
 import { Grid } from "@covia/covia-sdk";
 
-const venue = await Grid.connect("https://venue-3.covia.ai");
+const venueUrl = process.env.COVIA_VENUE_URL;
+if (!venueUrl) throw new Error("Set COVIA_VENUE_URL to a current venue URL");
+const venue = await Grid.connect(venueUrl);
 const result = await venue.operations.run("v/ops/schema/infer", {
   value: { name: "Ada", age: 36, admin: true },
 });
@@ -107,9 +116,11 @@ pip install covia
 ```
 
 ```python
+import os
+
 from covia import Grid
 
-venue = Grid.connect("https://venue-3.covia.ai")
+venue = Grid.connect(os.environ["COVIA_VENUE_URL"])
 result = venue.run("v/ops/schema/infer", {"value": {"name": "Ada", "age": 36, "admin": True}})
 print(result)  # {'schema': {'type': 'object', ...}}
 ```
@@ -210,7 +221,7 @@ A venue exposes the same capabilities over multiple protocols:
 ```json
 {
   "mcpServers": {
-    "covia": { "url": "https://venue-3.covia.ai/mcp" }
+    "covia": { "url": "https://your-venue.example.com/mcp" }
   }
 }
 ```

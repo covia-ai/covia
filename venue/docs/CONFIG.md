@@ -558,7 +558,7 @@ A runtime user ID is always a DID and may use any DID method. `user:create`
 accepts a full DID directly (for example a self-sovereign `did:key`) or a
 venue-managed `username`. A username requires a public `hostname` and derives
 `did:web:<hostname>:u:<username>` — for example
-`did:web:venue-1.covia.ai:u:alice`. `user:create` and `user:list` are
+`did:web:venue.example.com:u:alice`. `user:create` and `user:list` are
 venue-administrative operations: invoke directly as the venue, or present a
 venue-issued UCAN covering `<venueDID>/users` with `user/create` or
 `user/read`. Operator code can use `engine.venueContext()` to invoke the

@@ -2050,7 +2050,7 @@ public class Engine {
 	/**
 	 * Converts a venue-managed username to its canonical user DID. Publicly
 	 * named venues use their did:web alias (for example
-	 * {@code did:web:venue-1.covia.ai:u:alice}). A public hostname is required
+	 * {@code did:web:venue.example.com:u:alice}). A public hostname is required
 	 * because a did:key identifies one key and is not a namespace for managed
 	 * usernames.
 	 */
