@@ -898,6 +898,64 @@ public class FileAdapterTest {
 	}
 
 	@Test
+	public void testDLFSBackedRootMoveAndCopyAreNative() {
+		// Convex 0.8.11 (#675/#677) implements DLFSProvider.move/copy, so the
+		// file: surface's direct NIO dispatch works natively on a DLFS root — a
+		// rename is a drive metadata operation, never a byte round-trip through
+		// the caller (covia#321).
+		Engine eng = Engine.createTemp(Maps.of(
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
+			"file", Maps.of("roots", Maps.of(
+				"docs", Maps.of("dlfs", "docs-drive")
+			))
+		));
+		Engine.addDemoAssets(eng);
+		RequestContext ctx = RequestContext.of(convex.core.data.Strings.create(
+			"did:key:z6Mk-test-FileAdapterTest-dlfs-move"));
+
+		Job write = eng.jobs().invokeOperation("v/ops/file/write",
+			Maps.of("root", "docs", "path", "draft.txt", "content", "final text"), ctx);
+		write.awaitResult(2000);
+		assertEquals(Status.COMPLETE, write.getStatus());
+		eng.jobs().invokeOperation("v/ops/file/mkdir",
+			Maps.of("root", "docs", "path", "filed"), ctx).awaitResult(2000);
+
+		// Native move: source gone, destination carries the content.
+		Job move = eng.jobs().invokeOperation("v/ops/file/move",
+			Maps.of("root", "docs", "from", "draft.txt", "to", "filed/letter.txt"), ctx);
+		move.awaitResult(2000);
+		assertEquals(Status.COMPLETE, move.getStatus());
+		assertTrue(RT.bool(RT.getIn(move.getOutput(), "moved")));
+
+		Job readMoved = eng.jobs().invokeOperation("v/ops/file/read",
+			Maps.of("root", "docs", "path", "filed/letter.txt"), ctx);
+		readMoved.awaitResult(2000);
+		assertEquals("final text",
+			RT.ensureString(RT.getIn(readMoved.getOutput(), "content")).toString());
+
+		Job listRoot = eng.jobs().invokeOperation("v/ops/file/list",
+			Maps.of("root", "docs", "path", ""), ctx);
+		listRoot.awaitResult(2000);
+		AVector<?> entries = RT.ensureVector(RT.getIn(listRoot.getOutput(), "entries"));
+		assertEquals(1, entries.count(), "the moved source must be gone: " + entries);
+
+		// Native copy: both endpoints carry the content afterwards.
+		Job copy = eng.jobs().invokeOperation("v/ops/file/copy",
+			Maps.of("root", "docs", "from", "filed/letter.txt",
+				"to", "filed/letter-backup.txt"), ctx);
+		copy.awaitResult(2000);
+		assertEquals(Status.COMPLETE, copy.getStatus());
+		assertTrue(RT.bool(RT.getIn(copy.getOutput(), "copied")));
+		for (String p : new String[] {"filed/letter.txt", "filed/letter-backup.txt"}) {
+			Job read = eng.jobs().invokeOperation("v/ops/file/read",
+				Maps.of("root", "docs", "path", p), ctx);
+			read.awaitResult(2000);
+			assertEquals("final text",
+				RT.ensureString(RT.getIn(read.getOutput(), "content")).toString());
+		}
+	}
+
+	@Test
 	public void testDLFSSubpathRootConfinesPathsAndUsesLogicalCapabilities() {
 		Engine eng = Engine.createTemp(Maps.of(
 			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
