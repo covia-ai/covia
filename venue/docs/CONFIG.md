@@ -76,6 +76,37 @@ Venue state (lattice, agents, secrets, DLFS) is persisted via Etch store:
 - `store`: `"temp"` (default, deleted on exit), `"memory"`, or file path
 - `seed`: Ed25519 hex seed for stable venue identity. If omitted with a persistent store, auto-generated and saved to `venue.key` alongside the store file. On POSIX filesystems this raw seed is created with owner-only permissions (`0600`), and existing key-file permissions are repaired on each launch. On non-POSIX filesystems it inherits the platform ACL policy.
 
+### Etch store policy (`etch`)
+
+An optional `etch` block (Convex 0.8.11+) sets the Etch creation policy for
+the venue's store — including **encrypted Etch v3**:
+
+```json
+{
+  "store": "/data/venue.etch",
+  "etch": {
+    "version": 3,
+    "cipher": "aes-256-ctr",
+    "encryptIndex": true,
+    "key": { "env": "COVIA_ETCH_KEY" }
+  }
+}
+```
+
+- `version` / `mapping` / `buildChains` / `publicKeyHint` / `cipher`
+  (`none`, `aes-256-ctr`, `chacha20`) / `encryptIndex` pass through to
+  Convex's `EtchConfig` unchanged.
+- `key` is Covia-side: the 32-byte store encryption key as hex, sourced from
+  `{"env": "VAR"}`, `{"file": "path"}` (operator-secured file), or an inline
+  hex string (dev/test only — never commit key material).
+- The policy applies to file stores and `"temp"` stores; `"memory"` is not an
+  Etch store and rejects an `etch` block.
+- Fail-closed: an invalid field, unresolvable key, wrong-sized key, an
+  encrypted cipher without a key source, or the wrong key for an existing
+  encrypted file are all startup errors — never a silently-unencrypted or
+  empty store. The store encryption key is independent of the venue identity
+  `seed`; rotate and guard them separately.
+
 ## Venue identity
 
 Identity resolution order: `seed` → `keystore` → `venue.key` next to a

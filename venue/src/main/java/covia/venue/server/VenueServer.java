@@ -243,24 +243,32 @@ public class VenueServer {
 	 * </ul>
 	 */
 	private static AStore createStore(Config config) throws IOException {
+		convex.etch.EtchConfig etchConfig = config.getEtchConfig();
 		if (!config.isStoreConfigured()) {
 			log.warn("No 'store' configured — falling back to ephemeral temp Etch store; data will be deleted on JVM exit. Set 'store' to a file path for persistence, or to \"temp\"/\"memory\" to silence this warning.");
-			return EtchStore.createTemp();
+			return (etchConfig != null) ? EtchStore.createTemp(etchConfig) : EtchStore.createTemp();
 		}
 		String storePath = config.getStore();
 		if ("memory".equals(storePath)) {
+			if (etchConfig != null) {
+				// An operator asking for encryption must never silently get an
+				// unencrypted (or non-Etch) store.
+				throw new IllegalArgumentException(
+					"'etch' configuration requires an Etch store; 'store: memory' is not one");
+			}
 			log.info("Using in-memory store (no persistence)");
 			return new convex.core.store.MemoryStore();
 		}
 		if ("temp".equals(storePath)) {
 			log.info("Using temporary Etch store (deleted on exit)");
-			return EtchStore.createTemp();
+			return (etchConfig != null) ? EtchStore.createTemp(etchConfig) : EtchStore.createTemp();
 		}
 		// Persistent file store
 		File f = new File(storePath).getAbsoluteFile();
 		f.getParentFile().mkdirs();
-		log.info("Using persistent Etch store: {}", f);
-		return EtchStore.create(f);
+		log.info("Using persistent Etch store: {}{}", f,
+			(etchConfig != null) ? " (configured Etch policy)" : "");
+		return (etchConfig != null) ? EtchStore.create(f, etchConfig) : EtchStore.create(f);
 	}
 
 	/**

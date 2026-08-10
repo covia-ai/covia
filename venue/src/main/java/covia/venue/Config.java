@@ -358,7 +358,7 @@ public class Config {
 		"defaultLlmOperation", "defaultTransitionOp", "maxToolIterations",
 		"port", "bindAddress", "baseUrl", "rateLimit", "acceptQueueSize",
 		"httpSelectors", "httpAcceptors", "mcp", "a2a", "adapters",
-		"modules", "users", "store", "seed", "keystore", "storage",
+		"modules", "users", "store", "seed", "keystore", "storage", "etch",
 		"maxContentSize", "auth", "webdav", "file", "corsOrigins",
 		"allowPrivateNetwork", "enablePrivateJobs", "recordReadOnlyOperations", "fixMcpStrings",
 		"outputValidation", "secrets", "strictAssets", "strictConfig");
@@ -432,6 +432,7 @@ public class Config {
 		optionalString(config, DEFAULT_TRANSITION_OP, "defaultTransitionOp");
 		optionalString(config, BIND_ADDRESS, "bindAddress");
 		optionalString(config, STORE, "store");
+		getEtchConfig(); // compile the etch block now — fail closed at construction
 		optionalString(config, SEED, "seed");
 
 		optionalLong(config, MAX_TOOL_ITERATIONS, "maxToolIterations", 1, Integer.MAX_VALUE);
@@ -1145,6 +1146,83 @@ public class Config {
 	 */
 	public boolean isStoreConfigured() {
 		return config.get(STORE) != null;
+	}
+
+	/**
+	 * Config key for the optional Etch store creation policy (Convex 0.8.11+):
+	 * a map passed through to {@link convex.etch.EtchConfig#fromMap} —
+	 * {@code version}, {@code mapping}, {@code buildChains},
+	 * {@code publicKeyHint}, {@code cipher} ({@code none}, {@code aes-256-ctr},
+	 * {@code chacha20}), {@code encryptIndex} — plus the Covia-side {@code key}
+	 * field naming the 32-byte encryption key source for encrypted stores: a
+	 * hex string (dev/test only), {@code {"env": "VAR"}} (hex in an environment
+	 * variable), or {@code {"file": "path"}} (hex in an operator-secured file).
+	 * Applies wherever the venue creates an Etch store ({@code store} = file
+	 * path or {@code "temp"}).
+	 */
+	public static final AString ETCH = Strings.intern("etch");
+	private static final AString ETCH_KEY = Strings.intern("key");
+
+	/**
+	 * Compiles the optional Etch creation policy, resolving the {@code key}
+	 * source into the key function Convex requires for encrypted stores.
+	 * Fail-closed: an invalid field, unresolvable key source, or wrong-sized
+	 * key is a configuration error, never a silently-unencrypted store.
+	 *
+	 * @return compiled Etch configuration, or null when no {@code etch} block
+	 *         is configured
+	 */
+	public convex.etch.EtchConfig getEtchConfig() {
+		ACell raw = config.get(ETCH);
+		if (raw == null) return null;
+		AMap<AString, ACell> etch = RT.castMap(raw);
+		if (etch == null) throw malformed("etch", "must be an object");
+		ACell keySource = etch.get(ETCH_KEY);
+		AMap<AString, ACell> convexMap = etch.dissoc(ETCH_KEY);
+		java.util.function.Function<convex.core.data.AccountKey, byte[]> keyFn = null;
+		if (keySource != null) {
+			byte[] key = resolveEtchKey(keySource);
+			keyFn = ignoredHint -> key;
+		}
+		try {
+			return convex.etch.EtchConfig.fromMap(convexMap, keyFn);
+		} catch (IllegalArgumentException e) {
+			throw malformed("etch", e.getMessage());
+		}
+	}
+
+	/** Resolves the {@code etch.key} source to the raw 32-byte encryption key. */
+	private byte[] resolveEtchKey(ACell keySource) {
+		String hex;
+		if (keySource instanceof AString s) {
+			hex = s.toString();
+		} else {
+			AMap<AString, ACell> m = RT.castMap(keySource);
+			AString env = (m != null) ? RT.ensureString(m.get(Strings.intern("env"))) : null;
+			AString file = (m != null) ? RT.ensureString(m.get(Strings.intern("file"))) : null;
+			if (env != null) {
+				hex = System.getenv(env.toString());
+				if (hex == null) {
+					throw malformed("etch.key", "environment variable " + env + " is not set");
+				}
+			} else if (file != null) {
+				try {
+					hex = java.nio.file.Files.readString(
+						java.nio.file.Path.of(file.toString())).trim();
+				} catch (java.io.IOException e) {
+					throw malformed("etch.key",
+						"cannot read key file " + file + ": " + e.getMessage());
+				}
+			} else {
+				throw malformed("etch.key",
+					"must be a 32-byte hex string, {\"env\": name} or {\"file\": path}");
+			}
+		}
+		convex.core.data.Blob key = convex.core.data.Blob.fromHex(hex.trim());
+		if (key == null || key.count() != 32) {
+			throw malformed("etch.key", "must resolve to exactly 32 bytes of hex");
+		}
+		return key.getBytes();
 	}
 
 	/**
