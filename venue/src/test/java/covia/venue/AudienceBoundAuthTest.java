@@ -110,4 +110,26 @@ public class AudienceBoundAuthTest {
 			Maps.of(Fields.PATH, victimDID + "/" + path)),
 			"a signed sub claim alone must not grant access to that subject's workspace");
 	}
+
+	@Test
+	public void absentIssuerClaimIsAccepted() throws Exception {
+		// `iss` is OPTIONAL (RFC 7519): a did:key token without it still
+		// verifies — the subject's own key is the proof. (Note #323, closed by
+		// design: a mismatched `iss` is likewise not grounds for rejection —
+		// identity binds to the signing key, and admission is a separate gate.)
+		String venueDID = TestServer.ENGINE.getDIDString().toString();
+		AKeyPair kp = AKeyPair.generate();
+		AString subDID = UCAN.toDIDKey(kp.getAccountKey());
+		long now = System.currentTimeMillis() / 1000;
+		String token = JWT.signPublic(Maps.of(
+			JWT.SUB, subDID,
+			JWT.AUD, Strings.create(venueDID),
+			JWT.IAT, CVMLong.create(now),
+			JWT.EXP, CVMLong.create(now + 300)), kp).toString();
+		VenueHTTP client = VenueHTTP.create(
+			URI.create(TestServer.BASE_URL), VenueAuth.bearer(token));
+		Job job = client.invokeAndWait(Strings.create("v/test/ops/echo"),
+			Maps.of(Fields.VALUE, Strings.create("no-iss")));
+		assertEquals(Status.COMPLETE, job.getStatus());
+	}
 }

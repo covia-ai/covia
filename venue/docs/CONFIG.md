@@ -76,6 +76,69 @@ Venue state (lattice, agents, secrets, DLFS) is persisted via Etch store:
 - `store`: `"temp"` (default, deleted on exit), `"memory"`, or file path
 - `seed`: Ed25519 hex seed for stable venue identity. If omitted with a persistent store, auto-generated and saved to `venue.key` alongside the store file. On POSIX filesystems this raw seed is created with owner-only permissions (`0600`), and existing key-file permissions are repaired on each launch. On non-POSIX filesystems it inherits the platform ACL policy.
 
+### Etch store policy (`etch`)
+
+An optional `etch` block (Convex 0.8.11+) sets the Etch creation policy for
+the venue's store — including **encrypted Etch v3**:
+
+```json
+{
+  "store": "/data/venue.etch",
+  "etch": {
+    "version": 3,
+    "cipher": "aes-256-ctr",
+    "encryptIndex": true,
+    "key": { "env": "COVIA_ETCH_KEY" }
+  }
+}
+```
+
+- `version` / `mapping` / `buildChains` / `publicKeyHint` / `cipher`
+  (`none`, `aes-256-ctr`, `chacha20`) / `encryptIndex` pass through to
+  Convex's `EtchConfig` unchanged.
+- `key` is Covia-side: the 32-byte store encryption key as hex, sourced from
+  `{"env": "VAR"}`, `{"file": "path"}` (operator-secured file), or an inline
+  hex string (dev/test only — never commit key material).
+- **Key identity** (consistent with venue key management): the master key is
+  treated as an Ed25519 seed and identified by its derived public key — the
+  same identifier scheme as venue identity keys and keystore aliases. New
+  files stamp that identity as the Etch v3 `publicKeyHint` automatically
+  (set `publicKeyHint` explicitly to pin your own label), and opening
+  verifies the file's hint against the configured key, so a wrong key fails
+  with a precise identification error, never a decrypt failure.
+- The store key is **independent of the venue identity `seed`** — rotate and
+  guard them separately. For an encrypted store, configure the identity via
+  `seed`/`keystore` rather than relying on the auto-generated plaintext
+  `venue.key` beside the store (the venue warns about that combination:
+  encrypted data with the identity readable off the same disk).
+- For an encrypted **vault**, keep content in the store: with
+  `storage.content: file`, asset content bytes are written outside the
+  encrypted store as plaintext files (the venue warns). The lattice default
+  keeps everything — workspace, DLFS drives, secrets, content — inside the
+  encrypted Etch file.
+
+**Embedders** hold vault key material in their own code (KMS, passphrase
+derivation, HSM) rather than config: compile the policy with a key
+*function* and adopt a caller-opened store —
+
+```java
+EtchConfig policy = config.getEtchConfig(hint -> myKms.vaultKey());
+VenueServer server = VenueServer.launch(venueConfig,
+    EtchStore.create(vaultFile, policy));
+```
+
+No key material touches config, environment, or disk on this path; hint
+management is the embedder's concern. The key function and the config `key`
+field are mutually exclusive. A keyless encrypted policy constructs (so
+embedder configs validate) but fails closed on an operator launch.
+- The policy applies to file stores and `"temp"` stores; `"memory"` is not an
+  Etch store and rejects an `etch` block.
+- Fail-closed: an invalid field, unresolvable key, wrong-sized key, an
+  encrypted cipher without a key source, or the wrong key for an existing
+  encrypted file are all startup errors — never a silently-unencrypted or
+  empty store. The store encryption key is independent of the venue identity
+  `seed`; rotate and guard them separately.
+
 ## Venue identity
 
 Identity resolution order: `seed` → `keystore` → `venue.key` next to a

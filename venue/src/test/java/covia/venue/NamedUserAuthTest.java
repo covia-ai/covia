@@ -167,6 +167,35 @@ public class NamedUserAuthTest {
 		assertTrue(duplicate.getCause().getMessage().contains("already bound"));
 	}
 
+	@Test
+	void expiredAndNotYetValidTokensAreRejected() {
+		AString venueDID = server.getEngine().getDIDString();
+		long now = System.currentTimeMillis() / 1000;
+		// Expired, beyond the clock-skew leeway.
+		assertRejected(JWT.signPublic(Maps.of(
+			JWT.SUB, aliceDID, JWT.ISS, aliceDID, JWT.AUD, venueDID,
+			JWT.IAT, CVMLong.create(now - 900),
+			JWT.EXP, CVMLong.create(now - 300)), aliceKey).toString());
+		// Not yet valid: nbf in the future.
+		assertRejected(JWT.signPublic(Maps.of(
+			JWT.SUB, aliceDID, JWT.ISS, aliceDID, JWT.AUD, venueDID,
+			JWT.NBF, CVMLong.create(now + 300),
+			JWT.IAT, CVMLong.create(now),
+			JWT.EXP, CVMLong.create(now + 600)), aliceKey).toString());
+	}
+
+	@Test
+	void namedTokenWithoutIssuerIsRejected() {
+		// A named-user self-issued token REQUIRES iss == sub (#296); iss is
+		// optional only for did:key subjects.
+		long now = System.currentTimeMillis() / 1000;
+		assertRejected(JWT.signPublic(Maps.of(
+			JWT.SUB, aliceDID,
+			JWT.AUD, server.getEngine().getDIDString(),
+			JWT.IAT, CVMLong.create(now),
+			JWT.EXP, CVMLong.create(now + 300)), aliceKey).toString());
+	}
+
 	private String namedToken(AKeyPair key, AString sub, AString iss, AString audience) {
 		long now = System.currentTimeMillis() / 1000;
 		return JWT.signPublic(Maps.of(

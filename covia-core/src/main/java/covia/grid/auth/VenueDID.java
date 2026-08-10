@@ -19,9 +19,11 @@ import convex.core.util.JSON;
  * self-issued tokens ({@link VenueAuth#keyPair(convex.core.crypto.AKeyPair, String)})
  * without hand-rolling discovery.
  *
- * <p>The returned DID is the document's {@code id} — the did:web alias when the
- * venue has a public hostname, else its canonical did:key. Venues accept tokens
- * audienced to either form.</p>
+ * <p>The returned DID is the document's {@code id} — the identity the venue
+ * presents: did:web when it has a public hostname, else its did:key. Consumers
+ * use it as-is (store, pin, audience-bind) — {@code alsoKnownAs} entries are
+ * informational cross-references, never a canonical identity to re-bind to
+ * (covia#343). Venues accept tokens audienced to either published form.</p>
  *
  * <p>Results are cached <b>on success only</b> (a venue's DID is stable for its
  * lifetime); failures are never cached, so a venue that was briefly unreachable

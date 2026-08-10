@@ -358,7 +358,7 @@ public class Config {
 		"defaultLlmOperation", "defaultTransitionOp", "maxToolIterations",
 		"port", "bindAddress", "baseUrl", "rateLimit", "acceptQueueSize",
 		"httpSelectors", "httpAcceptors", "mcp", "a2a", "adapters",
-		"modules", "users", "store", "seed", "keystore", "storage",
+		"modules", "users", "store", "seed", "keystore", "storage", "etch",
 		"maxContentSize", "auth", "webdav", "file", "corsOrigins",
 		"allowPrivateNetwork", "enablePrivateJobs", "recordReadOnlyOperations", "fixMcpStrings",
 		"outputValidation", "secrets", "strictAssets", "strictConfig");
@@ -426,11 +426,13 @@ public class Config {
 		optionalString(config, NAME, "name");
 		optionalString(config, Strings.intern("description"), "description");
 		optionalString(config, DID, "did");
+		validateDeclaredDID();
 		optionalString(config, HOSTNAME, "hostname");
 		optionalString(config, DEFAULT_LLM_OPERATION, "defaultLlmOperation");
 		optionalString(config, DEFAULT_TRANSITION_OP, "defaultTransitionOp");
 		optionalString(config, BIND_ADDRESS, "bindAddress");
 		optionalString(config, STORE, "store");
+		validateEtch();
 		optionalString(config, SEED, "seed");
 
 		optionalLong(config, MAX_TOOL_ITERATIONS, "maxToolIterations", 1, Integer.MAX_VALUE);
@@ -900,10 +902,47 @@ public class Config {
 	}
 
 	/**
+	 * Validates an operator-declared venue identity (covia#343): the {@code did}
+	 * key takes the DID this venue presents as its identity. A {@code did:web}
+	 * declaration must be the bare venue form naming the configured public
+	 * hostname (so the identity resolves to this venue's DID document); a
+	 * {@code did:key} declaration must carry a valid multikey — its match
+	 * against the venue key pair is enforced at Engine construction, where the
+	 * key is known (an explicit identity pin). Absent means the venue's
+	 * key-derived did:key, unchanged.
+	 */
+	private void validateDeclaredDID() {
+		AString did = RT.ensureString(config.get(DID));
+		if (did == null) return;
+		String d = did.toString();
+		if (d.startsWith("did:web:")) {
+			String host = d.substring("did:web:".length());
+			if (host.contains(":")) {
+				throw malformed("did", "a declared did:web identity must be the bare venue "
+					+ "form (did:web:<hostname>, no path segments)");
+			}
+			if (!isPublicHostname(host)) {
+				throw malformed("did", "did:web requires a public DNS hostname, got: " + host);
+			}
+			if (!host.equals(getHostname())) {
+				throw malformed("did", "did:web host must equal the configured hostname ("
+					+ getHostname() + "), got: " + host);
+			}
+		} else if (d.startsWith("did:key:")) {
+			if (convex.core.crypto.util.Multikey.decodePublicKey(
+					d.substring("did:key:".length())) == null) {
+				throw malformed("did", "did:key must carry a valid Ed25519 multikey");
+			}
+		} else {
+			throw malformed("did", "supported identity methods are did:key and did:web");
+		}
+	}
+
+	/**
 	 * True iff {@code host} is a plausible public DNS name: contains a dot,
 	 * no port/IPv6 colon, not "localhost", and not an IPv4 literal.
 	 */
-	static boolean isPublicHostname(String host) {
+	public static boolean isPublicHostname(String host) {
 		if (host == null || host.isEmpty()) return false;
 		if (host.indexOf(':') >= 0) return false;        // port or IPv6 literal
 		if (host.indexOf('.') < 0) return false;          // bare names (localhost, myhost)
@@ -1107,6 +1146,163 @@ public class Config {
 	 */
 	public boolean isStoreConfigured() {
 		return config.get(STORE) != null;
+	}
+
+	/**
+	 * Config key for the optional Etch store creation policy (Convex 0.8.11+):
+	 * a map passed through to {@link convex.etch.EtchConfig#fromMap} —
+	 * {@code version}, {@code mapping}, {@code buildChains},
+	 * {@code publicKeyHint}, {@code cipher} ({@code none}, {@code aes-256-ctr},
+	 * {@code chacha20}), {@code encryptIndex} — plus the Covia-side {@code key}
+	 * field naming the 32-byte encryption key source for encrypted stores: a
+	 * hex string (dev/test only), {@code {"env": "VAR"}} (hex in an environment
+	 * variable), or {@code {"file": "path"}} (hex in an operator-secured file).
+	 * Applies wherever the venue creates an Etch store ({@code store} = file
+	 * path or {@code "temp"}).
+	 */
+	public static final AString ETCH = Strings.intern("etch");
+	private static final AString ETCH_KEY = Strings.intern("key");
+
+	/**
+	 * Compiles the optional Etch creation policy, resolving the {@code key}
+	 * source into the key function Convex requires for encrypted stores.
+	 * Fail-closed: an invalid field, unresolvable key source, or wrong-sized
+	 * key is a configuration error, never a silently-unencrypted store.
+	 *
+	 * @return compiled Etch configuration, or null when no {@code etch} block
+	 *         is configured
+	 */
+	public convex.etch.EtchConfig getEtchConfig() {
+		return getEtchConfig(null);
+	}
+
+	/**
+	 * Compiles the optional Etch creation policy with an embedder-supplied key
+	 * resolver, mirroring Convex's {@code PeerConfig.getEtchConfig(fn)}: the
+	 * function receives the store's public-key hint and returns the 32-byte
+	 * master key — sourced however the embedder holds keys (KMS, passphrase
+	 * derivation, HSM). No key material touches config, environment, or disk
+	 * on this path, and hint stamping/verification is the caller's concern.
+	 * Mutually exclusive with the config {@code key} field. With a null
+	 * function, the config {@code key} field is resolved under Covia's
+	 * conventions (derived key identity auto-stamped as the hint, verified on
+	 * open); an encrypted cipher with neither source is then an error at store
+	 * creation.
+	 *
+	 * @param keyFunction embedder key resolver, or null to resolve the config
+	 *                    {@code key} field
+	 * @return compiled Etch configuration, or null when no {@code etch} block
+	 *         is configured
+	 */
+	public convex.etch.EtchConfig getEtchConfig(
+			java.util.function.Function<convex.core.data.AccountKey, byte[]> keyFunction) {
+		ACell raw = config.get(ETCH);
+		if (raw == null) return null;
+		AMap<AString, ACell> etch = RT.castMap(raw);
+		if (etch == null) throw malformed("etch", "must be an object");
+		ACell keySource = etch.get(ETCH_KEY);
+		if (keyFunction != null && keySource != null) {
+			throw malformed("etch.key", "both a config key source and an embedder "
+				+ "key function were supplied — use exactly one");
+		}
+		AMap<AString, ACell> convexMap = etch.dissoc(ETCH_KEY);
+		java.util.function.Function<convex.core.data.AccountKey, byte[]> keyFn = keyFunction;
+		if (keyFunction == null && keySource != null) {
+			byte[] key = resolveEtchKey(keySource);
+			// Key identity convention, consistent with venue key management: the
+			// 32-byte master key is treated as an Ed25519 seed and identified by
+			// its derived public key — the same identifier scheme as venue
+			// identity keys and keystore aliases. New files stamp that identity
+			// as the Etch v3 public-key hint (unless the operator pins one
+			// explicitly), and the key function verifies the file's hint before
+			// releasing key material — a wrong key fails at identification with
+			// a precise diagnostic, never as a downstream decrypt failure.
+			convex.core.data.AccountKey keyId = convex.core.crypto.AKeyPair
+				.create(convex.core.data.Blob.wrap(key)).getAccountKey();
+			convex.core.data.AccountKey explicit =
+				convex.core.data.AccountKey.parse(convexMap.get(Strings.intern("publicKeyHint")));
+			convex.core.data.AccountKey expectedHint = (explicit != null) ? explicit : keyId;
+			CVMLong version = RT.ensureLong(convexMap.get(Strings.intern("version")));
+			if (explicit == null && version != null && version.longValue() == 3) {
+				// Hints exist only in the v3 header; stamping is gated on an
+				// explicit v3 policy so other version errors keep their own
+				// accurate diagnostics.
+				convexMap = convexMap.assoc(Strings.intern("publicKeyHint"), keyId);
+			}
+			keyFn = hint -> {
+				if (hint != null && !hint.equals(expectedHint)) {
+					throw new IllegalStateException("Etch store is encrypted under key "
+						+ hint + " but the configured etch key has identity " + expectedHint
+						+ " — wrong key material for this store");
+				}
+				return key;
+			};
+		}
+		try {
+			return convex.etch.EtchConfig.fromMap(convexMap, keyFn);
+		} catch (IllegalArgumentException e) {
+			throw malformed("etch", e.getMessage()
+				+ ((keyFn == null) ? " (configure etch.key, or supply a key function "
+					+ "via getEtchConfig(fn) when embedding)" : ""));
+		}
+	}
+
+	/**
+	 * Shape-validates the etch block at construction with a placeholder
+	 * resolver, so embedder configs that supply the key function at runtime
+	 * ({@link #getEtchConfig(java.util.function.Function)}) still construct.
+	 * When the config carries its own {@code key} source, the full compile —
+	 * including key resolution — runs now, fail-closed. An encrypted policy
+	 * with neither source fails at store creation instead.
+	 */
+	private void validateEtch() {
+		ACell raw = config.get(ETCH);
+		if (raw == null) return;
+		AMap<AString, ACell> etch = RT.castMap(raw);
+		if (etch == null) throw malformed("etch", "must be an object");
+		if (etch.get(ETCH_KEY) != null) {
+			getEtchConfig();
+			return;
+		}
+		try {
+			convex.etch.EtchConfig.fromMap(etch.dissoc(ETCH_KEY), ignored -> null);
+		} catch (IllegalArgumentException e) {
+			throw malformed("etch", e.getMessage());
+		}
+	}
+
+	/** Resolves the {@code etch.key} source to the raw 32-byte encryption key. */
+	private byte[] resolveEtchKey(ACell keySource) {
+		String hex;
+		if (keySource instanceof AString s) {
+			hex = s.toString();
+		} else {
+			AMap<AString, ACell> m = RT.castMap(keySource);
+			AString env = (m != null) ? RT.ensureString(m.get(Strings.intern("env"))) : null;
+			AString file = (m != null) ? RT.ensureString(m.get(Strings.intern("file"))) : null;
+			if (env != null) {
+				hex = System.getenv(env.toString());
+				if (hex == null) {
+					throw malformed("etch.key", "environment variable " + env + " is not set");
+				}
+			} else if (file != null) {
+				try {
+					hex = java.nio.file.Files.readString(
+						java.nio.file.Path.of(file.toString())).trim();
+				} catch (java.io.IOException e) {
+					throw malformed("etch.key",
+						"cannot read key file " + file + ": " + e.getMessage());
+				}
+			} else {
+				throw malformed("etch.key",
+					"must be a 32-byte hex string, {\"env\": name} or {\"file\": path}");
+			}
+		}
+		convex.core.data.Blob key = convex.core.data.Blob.fromHex(hex.trim());
+		if (key == null || key.count() != 32) {
+			throw malformed("etch.key", "must resolve to exactly 32 bytes of hex");
+		}
+		return key.getBytes();
 	}
 
 	/**

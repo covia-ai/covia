@@ -400,8 +400,8 @@ public class HITLAdapter extends AAdapter {
 	/** Issues the approved grants as a single token via the granting surface
 	 *  (ucan:issue under the RESPONDER's authority — bare paths canonicalise to
 	 *  the responder's namespace). Token exp = earliest grant exp, defaulted;
-	 *  explicit null is unbounded and is temporarily encoded by ucan:issue as a
-	 *  99-year finite expiry until Convex #678 ships. */
+	 *  explicit null is unbounded and mints a genuinely non-expiring token
+	 *  (exp: null, Convex #678) — permitted only when no venue ceiling is set. */
 	private AString issueGrants(AString responder, AString requester, AVector<ACell> approved) {
 		if (requester == null) throw new IllegalStateException("record has no requester identity");
 		long now = System.currentTimeMillis() / 1000;

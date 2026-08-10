@@ -47,7 +47,7 @@ A UCAN is a CVM map with the following fields:
 | `iss` | AString (DID) | Yes | Issuer. The DID of the principal signing this UCAN. Resolves to an Ed25519 public key for signature verification. |
 | `aud` | AString (DID/DID URL) | Yes | Audience. The DID (or DID URL for agent-scoped grants) of the intended recipient. |
 | `att` | AVector of maps | Yes | Attenuations. Each entry is a `{with, can}` capability pair, optionally with `nb` constraints. |
-| `exp` | CVMLong or null | Yes | Expiry. Unix timestamp in seconds, or explicit null for no expiry. While Convex #678 is pending, Covia issuance represents null as a 99-year finite expiry; `0` is expired, not permanent. |
+| `exp` | CVMLong or null | Yes | Expiry. Unix timestamp in seconds, or explicit null for no expiry (Convex #678). The key must be present — an absent `exp` is malformed; `0` is expired, not permanent. |
 | `nbf` | CVMLong | No | Not Before. Token is invalid before this time. Omit for immediate validity. |
 | `nnc` | AString | No | Nonce. Unique value for replay prevention. |
 | `fct` | AVector of maps | No | Facts. Additional signed metadata (grid version, venue context, etc.). |
@@ -144,6 +144,8 @@ Abilities follow UCAN's slash-delimited convention with no leading slash. `*` is
 
 **Attenuation rule:** An ability is a valid attenuation of a parent if it is equal to or has the parent as a prefix. `crud/read` attenuates `crud`. `*` proves any ability.
 
+**Time bounds are not attenuation.** Resource and ability scope narrow structurally through a chain; time bounds deliberately do not. Each link carries its own `exp`/`nbf` on its own timescale, and validation requires every link to be valid at evaluation time — UCAN 1.0 execution-time semantics ("proofs MAY have different validity periods, but MUST all be valid at execution-time"), adopted in preference to the v0.10.0 §6.1 containment rule that required a delegation's window to fit inside its proofs' (do not "fix" validation back to that). A chain is therefore usable in the window [latest `nbf`, earliest finite `exp`] across its links; a link with `exp: null` never expires, but the chain still stops when any other link does. The one place temporal containment *does* apply is at granting surfaces: authority minted under an enabling right must not outlive that right (§4.1), because the right is consumed at issuance and is not part of the minted token's chain — use-time validation can never see it.
+
 ### 3.3 Constraints (`nb`)
 
 Optional per-capability constraints as a map:
@@ -235,9 +237,12 @@ ucan:issue {
 ```
 
 `exp` may be explicitly `null` to request a non-expiring UCAN. For tolerant API
-input, `ucan:issue` also treats an omitted `exp` as null. Until Convex #678 adds
-nullable expiry to the core UCAN model and validator, issuance encodes either
-form as a 99-year finite expiry, so the emitted UCAN always has a valid `exp`.
+input, `ucan:issue` also treats an omitted `exp` as null. Either form mints a
+genuinely non-expiring token: the emitted UCAN carries an explicit `exp: null`
+per UCAN v0.10.0 (Convex #678), in the Convex UCAN JWT profile (`ucv` claim +
+`typ` header — required for the token to parse from 0.8.11 on). A non-expiring
+mint under a granting right requires the enabling right to be non-expiring too
+(the §4.1 horizon check evaluates at an unbounded horizon).
 
 The venue signs the token with the **venue key pair** (the venue is the
 issuer — custodial attestation on the authenticated caller's instruction)
@@ -260,7 +265,8 @@ Resource rules at issuance (`UCANAdapter.handleIssue`):
   proofs must cover `grant/<can>` on the resource (proofs travel in the
   proof channel, never in operation input), and the minted `exp` must not
   outlive the enabling right (coverage is re-evaluated at the minted
-  expiry), and the resource must still be controlled by this venue (the
+  expiry — so a non-expiring mint requires a non-expiring enabling
+  right), and the resource must still be controlled by this venue (the
   venue's own DID or a local custodial user). A granting right cannot turn
   the venue into root authority for an external DID. This makes `ucan:issue`
   a *granting surface* — the `grant/…` rule binds token production; chain

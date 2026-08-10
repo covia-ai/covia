@@ -99,6 +99,12 @@ public final class VenueAuthenticator {
 		audienceStrings.addAll(venueAuth.getConfiguredAudiences());
 		AString webDID = venueAuth.getWebDID();
 		if (webDID != null) audienceStrings.add(webDID.toString());
+		// The key-derived did:key is always an accepted audience: a declared
+		// did:web identity (covia#343) must not orphan clients that
+		// audience-bind to the venue's key form.
+		if (venueKey != null) {
+			audienceStrings.add("did:key:" + Multikey.encodePublicKey(venueKey));
+		}
 		this.acceptedAudienceStrings = Set.copyOf(audienceStrings);
 
 		Set<AString> audiences = new HashSet<>();
@@ -237,10 +243,11 @@ public final class VenueAuthenticator {
 		if (claims == null || claims.get(UCAN.ATT) == null) return null;
 
 		AString issuer = token.getIssuer();
-		AccountKey issuerKey = UCAN.fromDIDKey(issuer);
-		if (issuerKey == null || JWT.verifyPublic(jwt, issuerKey) == null) return null;
+		if (issuer == null) return null;
 		long now = System.currentTimeMillis() / 1000;
-		if (!UCANValidator.checkTemporalBounds(token, now)) return null;
+		// Signature + temporal bounds under the venue's DID verifier, so a
+		// did:web-identified issuer (covia#343) verifies exactly like did:key.
+		if (UCANValidator.validateJWT(jwt, now, engine.didVerifier()) == null) return null;
 		requireAudience(token.getAudience());
 		return new VerifiedPrincipal(issuer, issuer, true);
 	}

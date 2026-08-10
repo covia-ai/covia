@@ -134,7 +134,7 @@ public class UCANTest {
 	}
 
 	@Test
-	public void testIssueExplicitNullExpiryUsesTemporaryFarFutureEncoding() {
+	public void testIssueExplicitNullExpiryMintsNonExpiringToken() {
 		long before = System.currentTimeMillis() / 1000;
 		Job job = engine.jobs().invokeOperation("v/ops/ucan/issue",
 			Maps.of(
@@ -147,18 +147,16 @@ public class UCANTest {
 		AString jwt = RT.ensureString(RT.getIn(job.awaitResult(5000), "token"));
 		UCAN parsed = UCAN.fromJWT(jwt);
 		assertNotNull(parsed);
-		long lifetime = parsed.getExpiry() - before;
-		assertTrue(lifetime >= 98L * 365 * 24 * 60 * 60,
-			"exp:null must produce a practically non-expiring token during the Convex #678 workaround");
-		assertTrue(lifetime <= 100L * 365 * 24 * 60 * 60,
-			"the workaround must remain an intentional 99-year approximation, not an arbitrary sentinel");
+		assertNull(parsed.getExpiry(),
+			"exp:null must mint a genuinely non-expiring token (Convex #678, covia#322)");
 		assertNotNull(UCANValidator.validateJWT(jwt, before),
-			"the temporary encoding must remain usable by the current Convex validator");
+			"a non-expiring token must validate now");
+		assertNotNull(UCANValidator.validateJWT(jwt, Long.MAX_VALUE - 1),
+			"a non-expiring token must validate at any future horizon");
 	}
 
 	@Test
 	public void testIssueMissingExpiryDefaultsToNoExpiry() {
-		long before = System.currentTimeMillis() / 1000;
 		Job job = engine.jobs().invokeOperation("v/ops/ucan/issue",
 			Maps.of(
 				UCAN.AUD, BOB_DID,
@@ -167,10 +165,9 @@ public class UCANTest {
 			CUSTODIAL);
 		AString jwt = RT.ensureString(RT.getIn(job.awaitResult(5000), "token"));
 		UCAN parsed = UCAN.fromJWT(jwt);
-		long lifetime = parsed.getExpiry() - before;
-		assertTrue(lifetime >= 98L * 365 * 24 * 60 * 60);
-		assertTrue(lifetime <= 100L * 365 * 24 * 60 * 60,
-			"omitted API input must emit the same strict 99-year compatibility expiry as null");
+		assertNotNull(parsed);
+		assertNull(parsed.getExpiry(),
+			"omitted API input mints the same explicit exp: null as an explicit null");
 	}
 
 	@Test

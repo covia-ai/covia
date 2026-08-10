@@ -50,7 +50,7 @@ covia/                          # ai.covia:covia (parent POM)
 
 - **Java 21+** (JDK; the published Docker image runs on Java 25)
 - **Maven 3.7+** (enforced by maven-enforcer-plugin)
-- **Convex 0.8.10** — pinned to the Maven Central release. A clean clone builds in one command (`mvn clean install`); no local Convex build is needed. To track an unreleased Convex, build it locally (`mvn install -DskipTests` from `../convex`) and point `convex.version` at its `-SNAPSHOT`; CI compiles Convex from source automatically whenever `convex.version` ends in `-SNAPSHOT`.
+- **Convex 0.8.11** — pinned to the Maven Central release. A clean clone builds in one command (`mvn clean install`); no local Convex build is needed. To track an unreleased Convex, build it locally (`mvn install -DskipTests` from `../convex`) and point `convex.version` at its `-SNAPSHOT`; CI compiles Convex from source automatically whenever `convex.version` ends in `-SNAPSHOT`.
 
 ## Build & Run
 
@@ -90,7 +90,7 @@ mvn test -pl covia-core
 
 | Dependency | Version | Purpose |
 |------------|---------|---------|
-| Convex | 0.8.10 | Lattice platform, immutable data, cryptography |
+| Convex | 0.8.11 | Lattice platform, immutable data, cryptography |
 | Javalin | 7.2.2 | HTTP server with OpenAPI/Swagger/ReDoc |
 | LangChain4j | 1.18.1 | LLM orchestration (OpenAI, Ollama, Gemini, DeepSeek) |
 | MCP SDK | 2.0.0 | Model Context Protocol |
@@ -140,7 +140,7 @@ Defined in code at `venue/src/main/java/covia/lattice/Covia.java`. Full design i
 - **SSE** — Server-sent events for real-time job updates (`/api/v1/jobs/{id}/sse`)
 - **MCP** — Model Context Protocol JSON-RPC endpoint
 - **A2A** — Agent-to-Agent federated protocol
-- **DID** — Decentralized identifiers for venue discovery (`/.well-known/did.json`). Identity is always the venue's `did:key`; a venue with a public `hostname` also publishes a spec-compliant `did:web:<hostname>` alias (`id` = did:web, canonical did:key in `alsoKnownAs`) so strict resolvers work — did:web is discovery, the did:key is identity (#167)
+- **DID** — Decentralized identifiers for venue discovery (`/.well-known/did.json`). A venue with a public `hostname` presents `did:web:<hostname>` as its identity (`id` = did:web, the did:key in `alsoKnownAs` as an informational cross-reference — never a canonical identity to re-bind to); without one, the did:key is the identity. Consumers respect the presented identity as-is (#167, #343). Internally, durable state still roots in the did:key pending the operator-declared identity flip (#343 Phase B)
 
 ## Development Conventions
 

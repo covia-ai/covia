@@ -353,8 +353,7 @@ public class HITLAdapterTest {
 	}
 
 	@Test
-	public void testExplicitNullGrantExpiryUsesTemporaryFarFutureEncoding() {
-		long before = System.currentTimeMillis() / 1000;
+	public void testExplicitNullGrantExpiryMintsNonExpiringToken() {
 		Job job = request(ALICE, Hitl.request("g")
 			.ask(Hitl.approval("access", "Grant?")
 				.grant("w/reports/", "crud/read", (Long) null))
@@ -365,9 +364,8 @@ public class HITLAdapterTest {
 			.build());
 
 		UCAN token = UCAN.fromJWT(RT.ensureString(RT.getIn(job.getOutput(), Hitl.TOKEN)));
-		long lifetime = token.getExpiry() - before;
-		assertTrue(lifetime >= 98L * 365 * 24 * 60 * 60);
-		assertTrue(lifetime <= 100L * 365 * 24 * 60 * 60);
+		assertNull(token.getExpiry(),
+			"an explicit no-expiry grant mints a genuinely non-expiring token (Convex #678)");
 		assertNull(RT.getIn(job.getOutput(), Hitl.GRANTS, 0L, Hitl.EXP),
 			"the consent record retains the caller's explicit no-expiry intent");
 	}

@@ -370,10 +370,22 @@ public class AuthMiddleware {
 	 */
 	public static RequestContext withTransportAuth(RequestContext rctx, AString bearer,
 			AVector<ACell> ucans, AString venueDID) {
-		// Verify signatures at ingress with an explicit DID verifier. DIDVerifier.CONVEX
-		// handles did:key; swap to DIDVerifier.forState(state) to also verify did:convex
-		// issuers when those arrive (covia#100).
-		AVector<ACell> proofs = UCANValidator.parseTransportUCANsWithBearer(bearer, ucans, DIDVerifier.CONVEX);
+		return withTransportAuth(rctx, bearer, ucans, venueDID, DIDVerifier.CONVEX);
+	}
+
+	/**
+	 * As {@link #withTransportAuth(RequestContext, AString, AVector, AString)},
+	 * verifying token signatures with the supplied DID verifier. Venue call
+	 * sites pass {@code engine.didVerifier()} so did:web-identified issuers
+	 * (covia#343) verify at ingress exactly like did:key ones; the
+	 * {@link DIDVerifier#CONVEX} default of the shorter overloads remains
+	 * did:key-only.
+	 */
+	public static RequestContext withTransportAuth(RequestContext rctx, AString bearer,
+			AVector<ACell> ucans, AString venueDID, DIDVerifier verifier) {
+		// Verify signatures at ingress with an explicit DID verifier.
+		AVector<ACell> proofs = UCANValidator.parseTransportUCANsWithBearer(bearer, ucans,
+			(verifier != null) ? verifier : DIDVerifier.CONVEX);
 		if (proofs == null) return rctx;
 
 		// Identity from the proof channel: only for an unauthenticated transport
