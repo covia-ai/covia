@@ -6,7 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Covia is pre-1.0, so minor versions may include breaking changes.
 
-## [Unreleased]
+## [0.9.0] - 2026-08-10
+
+Breaking: UCAN JWTs now use the versioned Convex profile (Convex 0.8.11) —
+tokens minted by pre-0.9 venues or older SDKs no longer verify. Re-issue
+outstanding grants and update to covia-sdk / covia-sdk-py releases that emit
+the profile (`ucv` claim, always-present `prf`).
 
 ### Added
 - Operator-declared venue identity: the `did` config key is validated
@@ -363,7 +368,7 @@ Initial public release: venue server with the adapter framework, lattice-backed
 content-addressed assets, the async job model with SSE, multi-protocol surface
 (REST / MCP / A2A / DID), and strategy-based authentication.
 
-[Unreleased]: https://github.com/covia-ai/covia/compare/0.8.0...develop
+[0.9.0]: https://github.com/covia-ai/covia/compare/0.8.0...0.9.0
 [0.8.0]: https://github.com/covia-ai/covia/compare/0.7.0...0.8.0
 [0.7.0]: https://github.com/covia-ai/covia/compare/0.6.0...0.7.0
 [0.6.0]: https://github.com/covia-ai/covia/compare/0.5.0...0.6.0
