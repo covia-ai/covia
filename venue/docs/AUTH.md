@@ -180,25 +180,31 @@ not the method.
 
 ### 5.1 Finishing #296 (self-sovereign named users)
 
-The core is implemented (§2). The remaining delta:
+The core is implemented and the acceptance-test sweep is in place
+(`NamedUserAuthTest`, `UserAPITest`, `AudienceBoundAuthTest`): multiple
+keys, rotation with immediate revocation, tombstone audit, last-key
+guard, wrong key/subject/issuer/audience and foreign-`did:web`
+rejections, temporal negatives, DID-document publication. #296 is
+closed.
 
-1. **covia#323** — the `did:key` branch of `tryVerifySelfIssued` never
-   reads `iss`, so a present-but-mismatched `iss` verifies (RFC 8725
-   §3.8 non-conformant). Reject `iss` present-and-≠-`sub` in both
-   branches; keep `iss` optional for `did:key` subjects.
-2. **Acceptance-test sweep** per the #296 criteria: multiple keys,
-   rotation, revoked-key rejection (stale key after removal), foreign
-   `did:web` rejection, `kid` belonging to another user, audience and
-   temporal negatives.
-3. **Enrolment authorisation** (decided): add/revoke ops require the
+Two notes:
+
+1. **Mismatched `iss` on `did:key` tokens is accepted by design**
+   (covia#323, closed): identity binds to the *signing key* — a signed
+   `sub` claim conveys no authority by itself, and a distinct named
+   subject requires an explicitly registered authentication key.
+   Enforcing `iss == sub` would conflate JWT claim semantics with
+   Covia's separate subject-admission policy. (COG-3 §5's
+   "MUST equal `sub` when present" wording is stricter than enforced
+   behaviour — a docs follow-up may reconcile them.)
+2. **Enrolment authorisation** (decided): add/revoke ops require the
    venue operator, or the user themselves meeting `policy.enrolment`
    via step-up (§9) — a live session alone is never enough to change
    the key set, since an enrolled authenticator outlives any stolen
-   credential. `user:create` continues to install keys at creation
-   under the creating authority.
-
-With those, #296 closes. Nothing in this design blocks it; the method
-registry (§6) treats it as the already-working `key` method.
+   credential. Lands with Phase 1 policy machinery; until then the
+   existing gate (the named user themselves, or a venue-rooted
+   delegation) applies. `user:create` continues to install keys at
+   creation under the creating authority.
 
 ## 6. Configuration
 
@@ -359,7 +365,7 @@ venue-auth state.
    existing verifiers and the OAuth callback through the contract and
    the central session issuer (sessions become opaque `covia_…` tokens
    backed by per-user records; outstanding venue-signed JWTs honoured
-   until expiry). Fix #323. Land the #296 test sweep and close #296.
+   until expiry), plus the enrolment step-up gate (§5.1).
 2. **Phase 2 — #298 OIDC hardening** on the new plumbing: PKCE,
    server-bound single-use `state`, OIDC `nonce`, exact redirect
    allowlist, back-channel token delivery, `(iss, sub)` binding (§7),
