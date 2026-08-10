@@ -178,9 +178,6 @@ public class EtchV3VenueTest {
 		// Unknown cipher
 		assertThrows(RuntimeException.class, () -> new Config(Maps.of(
 			Config.ETCH, Maps.of(Strings.intern("cipher"), Strings.create("rot13")))));
-		// Encryption without a key source
-		assertThrows(RuntimeException.class, () -> new Config(Maps.of(
-			Config.ETCH, Maps.of(Strings.intern("cipher"), Strings.create("aes-256-ctr")))));
 		// Key of the wrong size
 		assertThrows(RuntimeException.class, () -> new Config(Maps.of(
 			Config.ETCH, Maps.of(
@@ -191,5 +188,81 @@ public class EtchV3VenueTest {
 			Config.ETCH, Maps.of(
 				Strings.intern("cipher"), Strings.create("aes-256-ctr"),
 				Strings.intern("key"), Maps.of(Strings.intern("wat"), Strings.create("x"))))));
+	}
+
+	@Test
+	public void encryptionWithoutAnyKeySourceConstructsButFailsOperatorLaunch() {
+		// An embedder may supply the key function at runtime, so construction
+		// tolerates a keyless encrypted policy — but an operator launch (no
+		// adopted store, no function) still fails closed at store creation.
+		AMap<AString, ACell> keyless = Maps.of(
+			Config.PORT, 0,
+			Config.STORE, Strings.create("temp"),
+			Config.ETCH, Maps.of(
+				Strings.intern("version"), CVMLong.create(3),
+				Strings.intern("cipher"), Strings.create("aes-256-ctr")));
+		new Config(keyless); // constructs — embedder path stays open
+		assertThrows(Exception.class, () -> VenueServer.launch(keyless).close(),
+			"an encrypted policy with no key source must fail an operator launch");
+	}
+
+	@Test
+	public void configKeyAndEmbedderFunctionAreMutuallyExclusive() {
+		Config cfg = new Config(Maps.of(Config.ETCH, Maps.of(
+			Strings.intern("version"), CVMLong.create(3),
+			Strings.intern("cipher"), Strings.create("aes-256-ctr"),
+			Strings.intern("key"), Strings.create(KEY_HEX))));
+		assertThrows(RuntimeException.class,
+			() -> cfg.getEtchConfig(hint -> new byte[32]),
+			"two key sources is an ambiguity, not a fallback chain");
+	}
+
+	@Test
+	public void embedderSuppliedKeyFunctionAndAdoptedStoreWork() throws Exception {
+		// The embedder vault shape (e.g. GetMine): key material lives in the
+		// embedder's code (KMS / passphrase-derived), the etch policy compiles
+		// with a key FUNCTION, the embedder opens the store itself and adopts
+		// it into the venue. No key ever touches config, env, or disk.
+		File dir = Files.createTempDirectory("etch-v3-embedder").toFile();
+		File storeFile = new File(dir, "vault.etch");
+		byte[] vaultKey = convex.core.data.Blob.fromHex(KEY_HEX).getBytes();
+
+		AMap<AString, ACell> etchPolicy = Maps.of(
+			Strings.intern("version"), CVMLong.create(3),
+			Strings.intern("cipher"), Strings.create("chacha20"),
+			Strings.intern("encryptIndex"), true);
+		AMap<AString, ACell> venueConfig = Maps.of(
+			Config.PORT, 0,
+			Config.SEED, Strings.create(SEED_HEX),
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true));
+		AString userDID = Strings.create("did:key:z6Mk-test-embedder-vault");
+		AString value = Strings.create("vault contents");
+
+		convex.etch.EtchConfig policy = new Config(Maps.of(Config.ETCH, etchPolicy))
+			.getEtchConfig(hint -> vaultKey);
+		VenueServer first = VenueServer.launch(venueConfig,
+			convex.etch.EtchStore.create(storeFile, policy));
+		try {
+			first.getEngine().jobs().invokeInternal("v/ops/covia/write",
+				Maps.of(Fields.PATH, "w/vault-entry", Fields.VALUE, value),
+				RequestContext.of(userDID)).get(5, TimeUnit.SECONDS);
+			first.getEngine().flush();
+		} finally {
+			first.close();
+		}
+
+		convex.etch.EtchConfig reopenPolicy = new Config(Maps.of(Config.ETCH, etchPolicy))
+			.getEtchConfig(hint -> vaultKey);
+		VenueServer second = VenueServer.launch(venueConfig,
+			convex.etch.EtchStore.create(storeFile, reopenPolicy));
+		try {
+			ACell read = second.getEngine().jobs().invokeInternal("v/ops/covia/read",
+				Maps.of(Fields.PATH, "w/vault-entry"),
+				RequestContext.of(userDID)).get(5, TimeUnit.SECONDS);
+			assertEquals(value, RT.getIn(read, Fields.VALUE),
+				"the embedder-keyed encrypted vault must persist across venue restarts");
+		} finally {
+			second.close();
+		}
 	}
 }

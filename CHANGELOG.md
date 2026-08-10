@@ -21,7 +21,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Venue admission documented and exposed (#318)
 - Venue authentication design agreed (`venue/docs/AUTH.md`, #297)
 - Etch store policy pass-through (`etch` config block): venues can run on
-  encrypted Etch v3 stores, with fail-closed key sourcing (env/file/hex)
+  encrypted Etch v3 stores, with fail-closed key sourcing (env/file/hex),
+  auto-stamped and verified key-identity hints, and an embedder-supplied
+  key function for caller-opened vault stores
 
 ### Changed
 - Updated Convex to 0.8.11: `ucan:issue` mints genuinely non-expiring tokens

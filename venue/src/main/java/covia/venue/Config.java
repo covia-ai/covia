@@ -432,7 +432,7 @@ public class Config {
 		optionalString(config, DEFAULT_TRANSITION_OP, "defaultTransitionOp");
 		optionalString(config, BIND_ADDRESS, "bindAddress");
 		optionalString(config, STORE, "store");
-		getEtchConfig(); // compile the etch block now — fail closed at construction
+		validateEtch();
 		optionalString(config, SEED, "seed");
 
 		optionalLong(config, MAX_TOOL_ITERATIONS, "maxToolIterations", 1, Integer.MAX_VALUE);
@@ -1173,14 +1173,41 @@ public class Config {
 	 *         is configured
 	 */
 	public convex.etch.EtchConfig getEtchConfig() {
+		return getEtchConfig(null);
+	}
+
+	/**
+	 * Compiles the optional Etch creation policy with an embedder-supplied key
+	 * resolver, mirroring Convex's {@code PeerConfig.getEtchConfig(fn)}: the
+	 * function receives the store's public-key hint and returns the 32-byte
+	 * master key — sourced however the embedder holds keys (KMS, passphrase
+	 * derivation, HSM). No key material touches config, environment, or disk
+	 * on this path, and hint stamping/verification is the caller's concern.
+	 * Mutually exclusive with the config {@code key} field. With a null
+	 * function, the config {@code key} field is resolved under Covia's
+	 * conventions (derived key identity auto-stamped as the hint, verified on
+	 * open); an encrypted cipher with neither source is then an error at store
+	 * creation.
+	 *
+	 * @param keyFunction embedder key resolver, or null to resolve the config
+	 *                    {@code key} field
+	 * @return compiled Etch configuration, or null when no {@code etch} block
+	 *         is configured
+	 */
+	public convex.etch.EtchConfig getEtchConfig(
+			java.util.function.Function<convex.core.data.AccountKey, byte[]> keyFunction) {
 		ACell raw = config.get(ETCH);
 		if (raw == null) return null;
 		AMap<AString, ACell> etch = RT.castMap(raw);
 		if (etch == null) throw malformed("etch", "must be an object");
 		ACell keySource = etch.get(ETCH_KEY);
+		if (keyFunction != null && keySource != null) {
+			throw malformed("etch.key", "both a config key source and an embedder "
+				+ "key function were supplied — use exactly one");
+		}
 		AMap<AString, ACell> convexMap = etch.dissoc(ETCH_KEY);
-		java.util.function.Function<convex.core.data.AccountKey, byte[]> keyFn = null;
-		if (keySource != null) {
+		java.util.function.Function<convex.core.data.AccountKey, byte[]> keyFn = keyFunction;
+		if (keyFunction == null && keySource != null) {
 			byte[] key = resolveEtchKey(keySource);
 			// Key identity convention, consistent with venue key management: the
 			// 32-byte master key is treated as an Ed25519 seed and identified by
@@ -1195,7 +1222,11 @@ public class Config {
 			convex.core.data.AccountKey explicit =
 				convex.core.data.AccountKey.parse(convexMap.get(Strings.intern("publicKeyHint")));
 			convex.core.data.AccountKey expectedHint = (explicit != null) ? explicit : keyId;
-			if (explicit == null) {
+			CVMLong version = RT.ensureLong(convexMap.get(Strings.intern("version")));
+			if (explicit == null && version != null && version.longValue() == 3) {
+				// Hints exist only in the v3 header; stamping is gated on an
+				// explicit v3 policy so other version errors keep their own
+				// accurate diagnostics.
 				convexMap = convexMap.assoc(Strings.intern("publicKeyHint"), keyId);
 			}
 			keyFn = hint -> {
@@ -1209,6 +1240,32 @@ public class Config {
 		}
 		try {
 			return convex.etch.EtchConfig.fromMap(convexMap, keyFn);
+		} catch (IllegalArgumentException e) {
+			throw malformed("etch", e.getMessage()
+				+ ((keyFn == null) ? " (configure etch.key, or supply a key function "
+					+ "via getEtchConfig(fn) when embedding)" : ""));
+		}
+	}
+
+	/**
+	 * Shape-validates the etch block at construction with a placeholder
+	 * resolver, so embedder configs that supply the key function at runtime
+	 * ({@link #getEtchConfig(java.util.function.Function)}) still construct.
+	 * When the config carries its own {@code key} source, the full compile —
+	 * including key resolution — runs now, fail-closed. An encrypted policy
+	 * with neither source fails at store creation instead.
+	 */
+	private void validateEtch() {
+		ACell raw = config.get(ETCH);
+		if (raw == null) return;
+		AMap<AString, ACell> etch = RT.castMap(raw);
+		if (etch == null) throw malformed("etch", "must be an object");
+		if (etch.get(ETCH_KEY) != null) {
+			getEtchConfig();
+			return;
+		}
+		try {
+			convex.etch.EtchConfig.fromMap(etch.dissoc(ETCH_KEY), ignored -> null);
 		} catch (IllegalArgumentException e) {
 			throw malformed("etch", e.getMessage());
 		}

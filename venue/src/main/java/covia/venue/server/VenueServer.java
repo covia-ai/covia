@@ -245,6 +245,13 @@ public class VenueServer {
 	 */
 	private static AStore createStore(Config config) throws IOException {
 		EtchConfig etchConfig = config.getEtchConfig();
+		if (etchConfig != null && etchConfig.getCipherMode() != EtchConfig.CipherMode.NONE
+				&& "file".equals(String.valueOf(config.getStorageType()))) {
+			log.warn("Encrypted Etch store with 'storage.content: file' — asset content bytes "
+				+ "are written OUTSIDE the encrypted store as plaintext files. Use lattice "
+				+ "content storage for an encrypted vault, or encrypt the content directory "
+				+ "separately.");
+		}
 		if (!config.isStoreConfigured()) {
 			log.warn("No 'store' configured — falling back to ephemeral temp Etch store; data will be deleted on JVM exit. Set 'store' to a file path for persistence, or to \"temp\"/\"memory\" to silence this warning.");
 			return (etchConfig != null) ? EtchStore.createTemp(etchConfig) : EtchStore.createTemp();

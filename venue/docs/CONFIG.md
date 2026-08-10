@@ -111,6 +111,26 @@ the venue's store — including **encrypted Etch v3**:
   `seed`/`keystore` rather than relying on the auto-generated plaintext
   `venue.key` beside the store (the venue warns about that combination:
   encrypted data with the identity readable off the same disk).
+- For an encrypted **vault**, keep content in the store: with
+  `storage.content: file`, asset content bytes are written outside the
+  encrypted store as plaintext files (the venue warns). The lattice default
+  keeps everything — workspace, DLFS drives, secrets, content — inside the
+  encrypted Etch file.
+
+**Embedders** hold vault key material in their own code (KMS, passphrase
+derivation, HSM) rather than config: compile the policy with a key
+*function* and adopt a caller-opened store —
+
+```java
+EtchConfig policy = config.getEtchConfig(hint -> myKms.vaultKey());
+VenueServer server = VenueServer.launch(venueConfig,
+    EtchStore.create(vaultFile, policy));
+```
+
+No key material touches config, environment, or disk on this path; hint
+management is the embedder's concern. The key function and the config `key`
+field are mutually exclusive. A keyless encrypted policy constructs (so
+embedder configs validate) but fails closed on an operator launch.
 - The policy applies to file stores and `"temp"` stores; `"memory"` is not an
   Etch store and rejects an `etch` block.
 - Fail-closed: an invalid field, unresolvable key, wrong-sized key, an
