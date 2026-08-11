@@ -27,8 +27,9 @@ import convex.auth.jwt.JWT;
  *   <li>{@code exp} — current time + token lifetime</li>
  * </ul>
  *
- * <p>The JWT's {@code kid} header is set automatically by
- * {@link JWT#signPublic} to the Multikey-encoded public key.
+ * <p>For a key-derived identity the JWT's {@code kid} header is the bare
+ * Multikey. For a stable named identity it is the verification-method DID URL
+ * {@code <subject>#<multikey>} published by that identity's DID document.
  */
 class KeyPairAuth extends VenueAuth {
 
@@ -40,6 +41,8 @@ class KeyPairAuth extends VenueAuth {
 	private final String didKey;
 	/** Identity asserted in {@code iss}/{@code sub}; normally {@link #didKey}. */
 	private final String subject;
+	/** JOSE key identifier: bare Multikey, or the named subject's DID URL. */
+	private final AString keyID;
 	/** Target venue DID for the {@code aud} claim; null = no audience binding. */
 	private final String audience;
 
@@ -74,6 +77,9 @@ class KeyPairAuth extends VenueAuth {
 		AString multikey = Multikey.encodePublicKey(keyPair.getAccountKey());
 		this.didKey = "did:key:" + multikey;
 		this.subject = (subject != null) ? subject : didKey;
+		this.keyID = (subject != null)
+			? Strings.create(this.subject + "#" + multikey)
+			: multikey;
 	}
 
 	@Override
@@ -102,7 +108,7 @@ class KeyPairAuth extends VenueAuth {
 			JWT.EXP, nowSecs + tokenLifetime
 		);
 		if (audience != null) claims = claims.assoc(JWT.AUD, Strings.create(audience));
-		return JWT.signPublic(claims, keyPair);
+		return JWT.signPublic(claims, keyPair, keyID);
 	}
 
 	/**

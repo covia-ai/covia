@@ -10,6 +10,10 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Changed
 
+- Named-user key-pair authentication now emits the verification-method DID URL
+  published by the user's DID document as the JWT `kid`; ordinary `did:key`
+  authentication retains its bare-Multikey header. Covia temporarily tracks
+  Convex `0.8.12-SNAPSHOT` for the explicit-key-ID signing API (#352).
 - Restored compatibility with correctly signed legacy UCAN JWTs that omit the
   `ucv` profile marker and empty `prf` claim. Venues still emit the explicit
   UCAN 0.10.0 profile, reject explicit unsupported versions, advertise the
