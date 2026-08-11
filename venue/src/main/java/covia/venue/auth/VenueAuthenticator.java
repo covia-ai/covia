@@ -11,7 +11,6 @@ import org.slf4j.LoggerFactory;
 import convex.auth.did.DID;
 import convex.auth.jwt.JWT;
 import convex.auth.ucan.UCAN;
-import convex.auth.ucan.UCANValidator;
 import convex.core.crypto.util.Multikey;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -25,6 +24,7 @@ import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.venue.Auth;
 import covia.venue.Engine;
+import covia.venue.UcanJwtValidator;
 import covia.venue.server.AuthMiddleware;
 import io.javalin.http.Context;
 
@@ -236,18 +236,17 @@ public final class VenueAuthenticator {
 	}
 
 	private VerifiedPrincipal tryVerifyUCAN(AString jwt) {
-		UCAN token = UCAN.fromJWT(jwt);
-		if (token == null) return null;
 		JWT parsed = JWT.parse(jwt);
 		AMap<AString, ACell> claims = parsed == null ? null : parsed.getClaims();
 		if (claims == null || claims.get(UCAN.ATT) == null) return null;
 
-		AString issuer = token.getIssuer();
-		if (issuer == null) return null;
 		long now = System.currentTimeMillis() / 1000;
 		// Signature + temporal bounds under the venue's DID verifier, so a
 		// did:web-identified issuer (covia#343) verifies exactly like did:key.
-		if (UCANValidator.validateJWT(jwt, now, engine.didVerifier()) == null) return null;
+		UCAN token = UcanJwtValidator.validateJWT(jwt, now, engine.didVerifier());
+		if (token == null) return null;
+		AString issuer = token.getIssuer();
+		if (issuer == null) return null;
 		requireAudience(token.getAudience());
 		return new VerifiedPrincipal(issuer, issuer, true);
 	}

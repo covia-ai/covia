@@ -244,6 +244,15 @@ per UCAN v0.10.0 (Convex #678), in the Convex UCAN JWT profile (`ucv` claim +
 mint under a granting right requires the enabling right to be non-expiring too
 (the §4.1 horizon check evaluates at an unbounded horizon).
 
+Venues always emit `ucv: "0.10.0"` and an explicit `prf` array, and advertise
+that emitted profile as `ucanProfile` in `GET /api/v1/status`. At verification
+the venue remains compatible with correctly signed older client tokens: an
+absent `ucv` defaults to the current profile and an absent `prf` defaults to an
+empty proof chain. An explicitly different `ucv`, malformed claim, invalid
+signature, or invalid proof chain still fails closed with a specific diagnostic.
+Defaults are applied only after the signature over the original JWT bytes has
+been verified.
+
 The venue signs the token with the **venue key pair** (the venue is the
 issuer — custodial attestation on the authenticated caller's instruction)
 and returns the complete signed token. A self-sovereign owner (`did:key`, or

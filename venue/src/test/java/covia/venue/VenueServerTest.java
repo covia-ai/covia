@@ -28,6 +28,7 @@ import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestInstance.Lifecycle;
 import org.junit.jupiter.api.io.TempDir;
 
+import convex.auth.ucan.UCAN;
 import convex.core.crypto.Hashing;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -422,6 +423,8 @@ public class VenueServerTest {
 		ACell version = status.get(Fields.VERSION);
 		assertNotNull(version, "status must include a non-null version");
 		assertFalse(version.toString().isEmpty(), "version must not be empty");
+		assertEquals(UCAN.VERSION, status.get(Fields.UCAN_PROFILE),
+			"status must advertise the UCAN JWT profile emitted by the venue");
 	}
 	
 	@Test

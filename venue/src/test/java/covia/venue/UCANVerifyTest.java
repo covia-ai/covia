@@ -7,16 +7,19 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
+import convex.auth.jwt.JWT;
 import convex.auth.ucan.Capability;
 import convex.auth.ucan.UCAN;
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
+import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
+import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.grid.auth.UcanTokens;
 
@@ -116,6 +119,24 @@ public class UCANVerifyTest {
 	}
 
 	@Test
+	public void testLegacyJWTWithoutVersionOrProofsVerifies() {
+		long exp = (System.currentTimeMillis() / 1000) + 3600;
+		AMap<AString, ACell> legacyClaims = Maps.of(
+			UCAN.ISS, ALICE_DID,
+			UCAN.AUD, BOB_DID,
+			UCAN.EXP, CVMLong.create(exp),
+			UCAN.ATT, Vectors.of(Capability.create(
+				Strings.create(ALICE_DID + "/w/shared/"), Capability.CRUD_READ)));
+		AString jwt = JWT.signPublic(legacyClaims, ALICE_KP);
+
+		ACell r = verify(Maps.of("token", jwt));
+		assertEquals(CVMBool.TRUE, RT.getIn(r, "valid"));
+		assertEquals(ALICE_DID, RT.getIn(r, "iss"));
+		assertEquals(0L, RT.ensureLong(RT.getIn(r, "chainDepth")).longValue(),
+			"an omitted legacy prf claim means an empty proof chain");
+	}
+
+	@Test
 	public void testChainDepthAndRoot() {
 		// Alice → Bob (root), Bob → Carol (leaf, narrowed). In JWT transport the
 		// prf entries are the parents' JWT strings (validateJWT recurses on them).
@@ -202,6 +223,55 @@ public class UCANVerifyTest {
 		assertEquals(CVMBool.FALSE, RT.getIn(r, "valid"));
 		assertTrue(RT.ensureString(RT.getIn(r, "reason")).toString().contains("unparseable"),
 			"reason should say unparseable: " + RT.getIn(r, "reason"));
+	}
+
+	@Test
+	public void testBadSignatureExplained() {
+		String jwt = UcanTokens.grant(ALICE_KP, BOB_DID.toString(),
+			ALICE_DID + "/w/", "crud/read", 3600);
+		int signatureStart = jwt.lastIndexOf('.') + 1;
+		char first = jwt.charAt(signatureStart);
+		String tampered = jwt.substring(0, signatureStart)
+			+ ((first == 'A') ? 'B' : 'A') + jwt.substring(signatureStart + 1);
+
+		ACell r = verify(Maps.of("token", tampered));
+		assertEquals(CVMBool.FALSE, RT.getIn(r, "valid"));
+		String reason = RT.ensureString(RT.getIn(r, "reason")).toString();
+		assertTrue(reason.contains("bad signature"), reason);
+	}
+
+	@Test
+	public void testExplicitUnsupportedVersionExplained() {
+		long exp = (System.currentTimeMillis() / 1000) + 3600;
+		AMap<AString, ACell> claims = Maps.of(
+			UCAN.ISS, ALICE_DID,
+			UCAN.AUD, BOB_DID,
+			UCAN.UCV, Strings.create("0.9.0"),
+			UCAN.EXP, CVMLong.create(exp),
+			UCAN.ATT, Vectors.empty(),
+			UCAN.PRF, Vectors.empty());
+		AString jwt = JWT.signPublic(claims, ALICE_KP);
+
+		ACell r = verify(Maps.of("token", jwt));
+		assertEquals(CVMBool.FALSE, RT.getIn(r, "valid"));
+		String reason = RT.ensureString(RT.getIn(r, "reason")).toString();
+		assertTrue(reason.contains("unsupported UCAN version"), reason);
+		assertTrue(reason.contains(UCAN.VERSION.toString()), reason);
+	}
+
+	@Test
+	public void testMissingRequiredClaimExplained() {
+		long exp = (System.currentTimeMillis() / 1000) + 3600;
+		AMap<AString, ACell> claims = Maps.of(
+			UCAN.ISS, ALICE_DID,
+			UCAN.AUD, BOB_DID,
+			UCAN.EXP, CVMLong.create(exp));
+		AString jwt = JWT.signPublic(claims, ALICE_KP);
+
+		ACell r = verify(Maps.of("token", jwt));
+		assertEquals(CVMBool.FALSE, RT.getIn(r, "valid"));
+		String reason = RT.ensureString(RT.getIn(r, "reason")).toString();
+		assertTrue(reason.contains("required claim \"att\""), reason);
 	}
 
 	// ========== UcanTokens helpers (shape) ==========

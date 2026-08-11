@@ -20,6 +20,7 @@ import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.lattice.CapabilityChecker;
 import covia.venue.RequestContext;
+import covia.venue.UcanJwtValidator;
 
 /**
  * Adapter for UCAN token operations.
@@ -260,12 +261,20 @@ public class UCANAdapter extends AAdapter {
 		AString venueDID = engine.getDIDString();
 
 		// Full verification (signature at every hop, temporal bounds, chain structure).
+		// JWTs pass through the same narrow legacy-profile compatibility boundary
+		// used by transport enforcement, so diagnostics and real calls agree.
 		UCAN token = null;
 		String failure = null;
 		try {
-			token = (tokenStr != null)
-				? convex.auth.ucan.UCANValidator.validateJWT(tokenStr, now, engine.didVerifier())
-				: convex.auth.ucan.UCANValidator.validate(UCAN.parse(tokenMap), now, engine.didVerifier());
+			if (tokenStr != null) {
+				UcanJwtValidator.Validation validation =
+					UcanJwtValidator.validate(tokenStr, now, engine.didVerifier());
+				token = validation.token();
+				failure = validation.reason();
+			} else {
+				token = convex.auth.ucan.UCANValidator.validate(
+					UCAN.parse(tokenMap), now, engine.didVerifier());
+			}
 		} catch (Exception e) {
 			failure = e.getMessage();
 		}
@@ -277,8 +286,10 @@ public class UCANAdapter extends AAdapter {
 				unverified = (tokenStr != null) ? UCAN.parseJWT(tokenStr) : UCAN.parse(tokenMap);
 			} catch (Exception ignored) {}
 			String reason;
-			if (unverified == null) {
-				reason = "unparseable: not a well-formed UCAN" + (failure != null ? " (" + failure + ")" : "");
+			if (failure != null) {
+				reason = failure;
+			} else if (unverified == null) {
+				reason = "unparseable: not a well-formed UCAN";
 			} else if (!convex.auth.ucan.UCANValidator.checkTemporalBounds(unverified, now)) {
 				reason = "expired or not yet valid (exp/nbf out of bounds)";
 			} else {
@@ -299,7 +310,7 @@ public class UCANAdapter extends AAdapter {
 			UCAN parent = null;
 			AString parentJwt = RT.ensureString(entry);
 			if (parentJwt != null) {
-				parent = UCAN.parseJWT(parentJwt);
+				parent = UcanJwtValidator.validateJWT(parentJwt, now, engine.didVerifier());
 			} else {
 				AMap<AString, ACell> parentMap = RT.castMap(entry);
 				if (parentMap != null) parent = UCAN.parse(parentMap);
