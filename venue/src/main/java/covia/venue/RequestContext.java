@@ -185,7 +185,7 @@ public class RequestContext {
 	 * bounds and policy (audience, issuer, attenuation) at use time.</p>
 	 *
 	 * <p>The canonical way to obtain a verified proof vector is via
-	 * {@code UCANValidator.parseTransportUCANs(...)}, which is the single
+	 * {@link UcanJwtValidator#parseTransportUCANs}, which is the single
 	 * trust boundary for inbound transport tokens. Tests that fabricate
 	 * CAD3-signed tokens directly are implicitly trusted by construction.</p>
 	 */

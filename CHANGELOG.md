@@ -10,6 +10,11 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Changed
 
+- Restored compatibility with correctly signed legacy UCAN JWTs that omit the
+  `ucv` profile marker and empty `prf` claim. Venues still emit the explicit
+  UCAN 0.10.0 profile, reject explicit unsupported versions, advertise the
+  emitted profile in `/api/v1/status`, and return claim-specific verification
+  diagnostics (#353).
 - Reconciled the engineering and DX roadmaps with the 0.9.0 codebase: current
   artifact versions, shipped VenueHTTP/SSRF/CORS test coverage, narrowed auth
   and focused-test gaps, resolved Java baseline, and per-caller rate limiting.

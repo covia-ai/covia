@@ -19,6 +19,7 @@ import convex.auth.did.DID;
 import convex.auth.did.DIDURL;
 import convex.auth.ucan.Capability;
 import convex.auth.ucan.RootAuthorityPolicy;
+import convex.auth.ucan.UCAN;
 import convex.core.crypto.AKeyPair;
 import convex.core.crypto.Hashing;
 import convex.core.crypto.util.Multikey;
@@ -1928,6 +1929,7 @@ public class Engine {
 		// jarVersion() reads the (shaded) jar's Implementation-Version and falls
 		// back to "dev" when running from classes — never null. See #139.
 		status=status.assoc(Fields.VERSION, Strings.create(jarVersion()));
+		status=status.assoc(Fields.UCAN_PROFILE, UCAN.VERSION);
 
 		return status;
 	}

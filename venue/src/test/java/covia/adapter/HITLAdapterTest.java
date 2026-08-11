@@ -7,6 +7,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
+import convex.auth.jwt.JWT;
 import convex.auth.ucan.Capability;
 import convex.auth.ucan.UCAN;
 import convex.core.crypto.AKeyPair;
@@ -184,6 +185,27 @@ public class HITLAdapterTest {
 		assertNotEquals(Strings.create(jwt),
 			RT.getIn(rec, Hitl.RESPONSE, Hitl.ANSWERS, Strings.create("b-access")),
 			"the raw token must not be persisted in the durable inbox record");
+	}
+
+	@Test
+	public void testTokenAskAcceptsLegacyTokenWithoutVersionOrProofs() {
+		engine.getVenueState().users().ensure(BOB_DID);
+		AString agentDID = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
+		Job job = request(BOB, tokenRequest(agentDID));
+		String id = job.getID().toHexString();
+
+		long exp = (System.currentTimeMillis() / 1000) + HOUR;
+		AMap<AString, ACell> legacyClaims = Maps.of(
+			UCAN.ISS, BOB_DID,
+			UCAN.AUD, agentDID,
+			UCAN.EXP, CVMLong.create(exp),
+			UCAN.ATT, Vectors.of(Capability.create(
+				Strings.create(BOB_DID + "/w/invoices/"), Capability.CRUD_READ)));
+		AString jwt = JWT.signPublic(legacyClaims, BOB_KP);
+
+		respond(BOB, tokenAnswer(id, jwt.toString()));
+		assertEquals(Status.COMPLETE, job.getStatus());
+		assertEquals(jwt, RT.getIn(job.getOutput(), Hitl.TOKENS, Strings.create("b-access")));
 	}
 
 	@Test

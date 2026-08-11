@@ -29,6 +29,7 @@ import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.hitl.Hitl;
 import covia.venue.RequestContext;
+import covia.venue.UcanJwtValidator;
 import covia.venue.User;
 
 /**
@@ -361,9 +362,12 @@ public class HITLAdapter extends AAdapter {
 	 * @throws AuthException / IllegalArgumentException on any failure
 	 */
 	private void verifyTransportedToken(AString jwt, AString responder, AString expectedAud, long now) {
-		UCAN token = UCAN.fromJWT(jwt);
+		UcanJwtValidator.Validation validation =
+			UcanJwtValidator.validate(jwt, now, engine.didVerifier());
+		UCAN token = validation.token();
 		if (token == null) {
-			throw new IllegalArgumentException("token answer is not a valid UCAN JWT");
+			throw new IllegalArgumentException(
+				"token answer is not a valid UCAN JWT: " + validation.reason());
 		}
 		// iss must be the answering human — not something an agent slipped in.
 		AString issuer = token.getIssuer();
