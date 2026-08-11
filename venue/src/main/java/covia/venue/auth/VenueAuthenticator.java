@@ -305,12 +305,16 @@ public final class VenueAuthenticator {
 			if (kid == null) return null;
 			String value = kid.toString();
 			String multikey;
-			if (value.startsWith("did:key:")) {
+			// A DID-URL kid is meaningful only in the asserted subject's DID
+			// document. Its fragment is the Multikey published by UserAPI.
+			int fragment = value.lastIndexOf('#');
+			if (fragment >= 0) {
+				if (!value.substring(0, fragment).equals(subject.toString())) return null;
+				multikey = value.substring(fragment + 1);
+			} else if (value.startsWith("did:key:")) {
 				multikey = value.substring("did:key:".length());
 			} else {
-				String namedPrefix = subject + "#";
-				multikey = value.startsWith(namedPrefix)
-					? value.substring(namedPrefix.length()) : value;
+				multikey = value;
 			}
 			if (Multikey.decodePublicKey(multikey) == null) return null;
 			return Strings.create("did:key:" + multikey);

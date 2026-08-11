@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 
 import convex.auth.jwt.JWT;
 import convex.core.crypto.AKeyPair;
+import convex.core.crypto.util.Multikey;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -24,24 +25,37 @@ import convex.core.lang.RT;
  */
 public class KeyPairAuthTest {
 
-	/** Applies the auth to a request and returns the verified JWT claims. */
-	private static AMap<AString, ACell> claimsFor(VenueAuth auth) {
+	/** Applies the auth and returns the raw bearer JWT. */
+	private static AString tokenFor(VenueAuth auth) {
 		HttpRequest.Builder b = HttpRequest.newBuilder(URI.create("http://localhost:1/x")).GET();
 		auth.apply(b);
 		Optional<String> header = b.build().headers().firstValue("Authorization");
 		assertTrue(header.isPresent(), "auth must set an Authorization header");
-		String jwt = header.get().substring("Bearer ".length());
-		AMap<AString, ACell> claims = JWT.verifyPublic(Strings.create(jwt));
+		return Strings.create(header.get().substring("Bearer ".length()));
+	}
+
+	/** Applies the auth to a request and returns the verified JWT claims. */
+	private static AMap<AString, ACell> claimsFor(VenueAuth auth) {
+		AMap<AString, ACell> claims = JWT.verifyPublic(tokenFor(auth));
 		assertNotNull(claims, "self-issued JWT must verify against its embedded key");
 		return claims;
+	}
+
+	private static AString kidFor(VenueAuth auth) {
+		JWT jwt = JWT.parse(tokenFor(auth));
+		assertNotNull(jwt);
+		return RT.ensureString(jwt.getHeader().get(JWT.KID));
 	}
 
 	@Test
 	public void testDefaultHasNoAudience() {
 		AKeyPair kp = AKeyPair.generate();
-		AMap<AString, ACell> claims = claimsFor(VenueAuth.keyPair(kp));
+		VenueAuth auth = VenueAuth.keyPair(kp);
+		AMap<AString, ACell> claims = claimsFor(auth);
 		assertNull(claims.get(Strings.intern("aud")), "plain keyPair auth carries no aud");
 		assertEquals(RT.getIn(claims, "iss"), RT.getIn(claims, "sub"), "self-issued: iss == sub");
+		assertEquals(Multikey.encodePublicKey(kp.getAccountKey()), kidFor(auth),
+			"ordinary did:key auth keeps the bare Multikey kid");
 	}
 
 	@Test
@@ -82,6 +96,9 @@ public class KeyPairAuthTest {
 		assertEquals(Strings.create(subject), RT.getIn(claims, "iss"));
 		assertEquals(Strings.create(audience), RT.getIn(claims, "aud"));
 		assertEquals(subject, auth.getDID());
+		AString multikey = Multikey.encodePublicKey(kp.getAccountKey());
+		assertEquals(Strings.create(subject + "#" + multikey), kidFor(auth),
+			"named auth kid must match the verification-method DID URL");
 
 		AMap<AString, ACell> minted =
 			JWT.verifyPublic(Strings.create(auth.mintToken()));

@@ -53,7 +53,7 @@ covia/                          # ai.covia:covia (parent POM)
 
 - **Java 21+** (JDK; the published Docker image runs on Java 25)
 - **Maven 3.7+** (enforced by maven-enforcer-plugin)
-- **Convex 0.8.11** — pinned to the Maven Central release. A clean clone builds in one command (`mvn clean install`); no local Convex build is needed. To track an unreleased Convex, build it locally (`mvn install -DskipTests` from `../convex`) and point `convex.version` at its `-SNAPSHOT`; CI compiles Convex from source automatically whenever `convex.version` ends in `-SNAPSHOT`.
+- **Convex 0.8.12-SNAPSHOT** — temporarily tracks unreleased Convex for the explicit JWT `kid` API required by #352. Build it locally first (`mvn install -DskipTests` from `../convex`); CI compiles Convex from `develop` automatically whenever `convex.version` ends in `-SNAPSHOT`. Pin the next Maven Central release before a Covia release.
 
 ## Build & Run
 

@@ -66,8 +66,7 @@ jobs:
         if [[ "$CONVEX_VERSION" == *-SNAPSHOT ]]; then
           echo "convex.version=$CONVEX_VERSION — building convex develop from source"
           git clone --depth 1 --branch develop https://github.com/Convex-Dev/convex.git /tmp/convex
-          mvn -f /tmp/convex/pom.xml install -DskipTests -q \
-            -pl convex-core,convex-peer,convex-dlfs,convex-java,convex-restapi -am
+          mvn -f /tmp/convex/pom.xml install -DskipTests -q
         else
           echo "convex.version=$CONVEX_VERSION (released) — skipping source build"
         fi
