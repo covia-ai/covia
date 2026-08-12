@@ -1177,6 +1177,21 @@ public class Config {
 	}
 
 	/**
+	 * Whether venue configuration declares an Etch policy that encrypts stored
+	 * values. This is a configuration signal for operator warnings; it does not
+	 * resolve or expose key material.
+	 *
+	 * @return true when {@code etch.cipher} is configured to a non-{@code none}
+	 *         cipher
+	 */
+	public boolean hasEncryptedEtchPolicy() {
+		AMap<AString, ACell> etch = RT.castMap(config.get(ETCH));
+		if (etch == null) return false;
+		AString cipher = RT.ensureString(etch.get(Strings.intern("cipher")));
+		return cipher != null && !"none".equalsIgnoreCase(cipher.toString());
+	}
+
+	/**
 	 * Compiles the optional Etch creation policy with an embedder-supplied key
 	 * resolver, mirroring Convex's {@code PeerConfig.getEtchConfig(fn)}: the
 	 * function receives the store's public-key hint and returns the 32-byte

@@ -566,7 +566,7 @@ naturally:
 | `file://scratch/` | every path inside the `scratch` root |
 | `file://scratch/agent-output/` | one subtree of one root |
 | `dlfs/` | every drive of the owner |
-| `dlfs/health-vault/medications/` | one subtree of one drive |
+| `dlfs/vault/documents/` | one subtree of one drive |
 
 Granting `crud` (without a verb suffix) covers read+write+delete uniformly;
 trailing-slash on the resource is the conventional way to cover a subtree.
@@ -576,7 +576,7 @@ checks (a *grant* of access to someone else's resource). A caller running under
 a **narrower Authority** — an agent started with `config.caps` (§5.4) — has the
 same capability check applied to its **own** operations as a *scope*: the op's
 resource and each grant's `with` are canonicalised to absolute owner-scoped form
-(a bare `w/health/bp` → `<callerDID>/w/health/bp`; DID-URL and `file://`/`dlfs://`
+(a bare `w/records/item` → `<callerDID>/w/records/item`; DID-URL and `file://`/`dlfs://`
 left as-is), then matched with `Capability.covers`. Own and cross-user resources
 thus match by one rule. A caller with no scope (the null-caps fast path) holds
 the full implicit grant and is unaffected.

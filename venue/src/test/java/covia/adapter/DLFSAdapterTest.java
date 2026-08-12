@@ -58,18 +58,18 @@ public class DLFSAdapterTest {
 		assertNotNull(drives);
 		long initialCount = drives.count();
 
-		// Create health-vault drive
-		result = run("v/ops/dlfs/create-drive", Maps.of("name", "health-vault"));
+		// Create test-drive drive
+		result = run("v/ops/dlfs/create-drive", Maps.of("name", "test-drive"));
 		assertEquals(true, RT.bool(RT.getIn(result, "created")));
 
 		// List should show it
 		result = run("v/ops/dlfs/list-drives", Maps.empty());
 		drives = RT.ensureVector(RT.getIn(result, "drives"));
 		assertEquals(initialCount + 1, drives.count());
-		assertTrue(drives.toString().contains("health-vault"));
+		assertTrue(drives.toString().contains("test-drive"));
 
 		// Creating same drive again is idempotent (lattice-backed)
-		result = run("v/ops/dlfs/create-drive", Maps.of("name", "health-vault"));
+		result = run("v/ops/dlfs/create-drive", Maps.of("name", "test-drive"));
 		assertTrue(RT.bool(RT.getIn(result, "created")));
 	}
 
@@ -99,14 +99,14 @@ public class DLFSAdapterTest {
 		run("v/ops/dlfs/create-drive", Maps.of("name", "test-dir"));
 
 		// Create directory
-		ACell result = run("v/ops/dlfs/mkdir", Maps.of("drive", "test-dir", "path", "medications"));
+		ACell result = run("v/ops/dlfs/mkdir", Maps.of("drive", "test-dir", "path", "documents"));
 		assertTrue(RT.bool(RT.getIn(result, "created")));
 
 		// Write file inside
 		run("v/ops/dlfs/write", Maps.of(
 			"drive", "test-dir",
-			"path", "medications/levothyroxine.json",
-			"content", "{\"dose\": \"75mcg\"}"
+			"path", "documents/report.json",
+			"content", "{\"status\": \"complete\"}"
 		));
 
 		// List root
@@ -114,14 +114,14 @@ public class DLFSAdapterTest {
 		AVector<?> entries = RT.ensureVector(RT.getIn(result, "entries"));
 		assertNotNull(entries);
 		assertEquals(1, entries.count());
-		assertEquals("medications", RT.getIn(entries.get(0), "name").toString());
+		assertEquals("documents", RT.getIn(entries.get(0), "name").toString());
 		assertEquals("directory", RT.getIn(entries.get(0), "type").toString());
 
-		// List medications dir
-		result = run("v/ops/dlfs/list", Maps.of("drive", "test-dir", "path", "medications"));
+		// List documents dir
+		result = run("v/ops/dlfs/list", Maps.of("drive", "test-dir", "path", "documents"));
 		entries = RT.ensureVector(RT.getIn(result, "entries"));
 		assertEquals(1, entries.count());
-		assertEquals("levothyroxine.json", RT.getIn(entries.get(0), "name").toString());
+		assertEquals("report.json", RT.getIn(entries.get(0), "name").toString());
 		assertEquals("file", RT.getIn(entries.get(0), "type").toString());
 	}
 

@@ -102,7 +102,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		return "Decentralised Lattice File System — self-sovereign file storage with CRDT merge semantics. " +
 			   "Manage per-user drives, read and write files, list directories. " +
 			   "DLFS drives exist as an independent lattice region signed by the user's own key, " +
-			   "enabling private, portable health vaults and document storage.";
+			   "enabling private, portable file vaults and document storage.";
 	}
 
 	@Override

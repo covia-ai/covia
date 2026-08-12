@@ -126,7 +126,7 @@ public class SoftKillPersistenceTest {
 		// === Phase 1: write, flush, close ===
 		VenueServer server = VenueServer.launch(testConfig(storePath, seedHex));
 		try {
-			writeDLFS(server, "health-vault", "hello.txt", "soft-content");
+			writeDLFS(server, "test-drive", "hello.txt", "soft-content");
 			server.getEngine().flush();
 
 			// Etch should already be on disk at the configured path
@@ -155,7 +155,7 @@ public class SoftKillPersistenceTest {
 				readerEtch.getCanonicalPath(),
 				"reader's etch store path must match the configured store path");
 
-			String content = readDLFS(reader, "health-vault", "hello.txt");
+			String content = readDLFS(reader, "test-drive", "hello.txt");
 			assertEquals("soft-content", content,
 				"flushed write must round-trip exactly after soft-restart");
 		} finally {
@@ -176,7 +176,7 @@ public class SoftKillPersistenceTest {
 
 		VenueServer server = VenueServer.launch(testConfig(storePath, seedHex));
 		try {
-			writeDLFS(server, "health-vault", "rely-on-close.txt", "no-flush-content");
+			writeDLFS(server, "test-drive", "rely-on-close.txt", "no-flush-content");
 			// Deliberately do NOT call engine.flush() — server.close() must
 			// run a final flush internally per §5.3.
 		} finally {
@@ -190,7 +190,7 @@ public class SoftKillPersistenceTest {
 
 		VenueServer reader = VenueServer.launch(testConfig(storePath, seedHex));
 		try {
-			String content = readDLFS(reader, "health-vault", "rely-on-close.txt");
+			String content = readDLFS(reader, "test-drive", "rely-on-close.txt");
 			assertEquals("no-flush-content", content,
 				"Engine.close() must run a final flush — write was not flushed explicitly");
 		} finally {
@@ -211,7 +211,7 @@ public class SoftKillPersistenceTest {
 
 		VenueServer server = VenueServer.launch(testConfig(storePath, seedHex));
 		try {
-			writeDLFS(server, "health-vault", "idem.txt", "double-close-content");
+			writeDLFS(server, "test-drive", "idem.txt", "double-close-content");
 			// No explicit flush — rely on close's final flush.
 		} finally {
 			server.close();
@@ -224,7 +224,7 @@ public class SoftKillPersistenceTest {
 		VenueServer reader = VenueServer.launch(testConfig(storePath, seedHex));
 		try {
 			assertEquals("double-close-content",
-				readDLFS(reader, "health-vault", "idem.txt"),
+				readDLFS(reader, "test-drive", "idem.txt"),
 				"write must survive a double close (second close is a no-op)");
 		} finally {
 			reader.close();
@@ -245,7 +245,7 @@ public class SoftKillPersistenceTest {
 		VenueServer server = VenueServer.launch(testConfig(storePath, seedHex));
 		try {
 			for (int i = 0; i < N; i++) {
-				writeDLFS(server, "health-vault", "item-" + i + ".txt", "value-" + i);
+				writeDLFS(server, "test-drive", "item-" + i + ".txt", "value-" + i);
 			}
 			server.getEngine().flush();
 		} finally {
@@ -259,7 +259,7 @@ public class SoftKillPersistenceTest {
 		VenueServer reader = VenueServer.launch(testConfig(storePath, seedHex));
 		try {
 			for (int i = 0; i < N; i++) {
-				String content = readDLFS(reader, "health-vault", "item-" + i + ".txt");
+				String content = readDLFS(reader, "test-drive", "item-" + i + ".txt");
 				assertEquals("value-" + i, content,
 					"burst entry #" + i + " must survive soft-restart");
 			}
@@ -282,7 +282,7 @@ public class SoftKillPersistenceTest {
 
 		VenueServer server = VenueServer.launch(testConfig(storePath, seedHex));
 		try {
-			writeDLFS(server, "health-vault", "x.txt", "v");
+			writeDLFS(server, "test-drive", "x.txt", "v");
 			server.getEngine().flush();
 		} finally {
 			server.close();
@@ -338,7 +338,7 @@ public class SoftKillPersistenceTest {
 			assertTrue(Files.exists(expectedKeyFile),
 				"venue.key must be auto-created next to store when no seed in config: " + expectedKeyFile);
 			assertTrue(Files.size(expectedKeyFile) > 0, "venue.key must contain a hex seed");
-			writeDLFS(server1, "health-vault", "identity-test.txt", "stable");
+			writeDLFS(server1, "test-drive", "identity-test.txt", "stable");
 			server1.getEngine().flush();
 		} finally {
 			server1.close();
@@ -350,7 +350,7 @@ public class SoftKillPersistenceTest {
 		try {
 			assertEquals(firstDID, server2.getEngine().getDIDString(),
 				"DID must be stable across restart via auto-saved venue.key");
-			assertEquals("stable", readDLFS(server2, "health-vault", "identity-test.txt"),
+			assertEquals("stable", readDLFS(server2, "test-drive", "identity-test.txt"),
 				"data must round-trip when identity is restored from key file");
 		} finally {
 			server2.close();
@@ -378,11 +378,11 @@ public class SoftKillPersistenceTest {
 				// Every prior cycle's file must still be readable
 				for (int prior = 0; prior < cycle; prior++) {
 					assertEquals("cycle-" + prior,
-						readDLFS(server, "health-vault", "cycle-" + prior + ".txt"),
+						readDLFS(server, "test-drive", "cycle-" + prior + ".txt"),
 						"writes from cycle " + prior + " must survive into cycle " + cycle);
 				}
 				// And this cycle adds its own
-				writeDLFS(server, "health-vault", "cycle-" + cycle + ".txt", "cycle-" + cycle);
+				writeDLFS(server, "test-drive", "cycle-" + cycle + ".txt", "cycle-" + cycle);
 				server.getEngine().flush();
 			} finally {
 				server.close();
@@ -400,7 +400,7 @@ public class SoftKillPersistenceTest {
 		try {
 			for (int cycle = 0; cycle < CYCLES; cycle++) {
 				assertEquals("cycle-" + cycle,
-					readDLFS(reader, "health-vault", "cycle-" + cycle + ".txt"),
+					readDLFS(reader, "test-drive", "cycle-" + cycle + ".txt"),
 					"cycle " + cycle + " write missing after " + CYCLES + " restart cycles");
 			}
 		} finally {
@@ -428,7 +428,7 @@ public class SoftKillPersistenceTest {
 			try {
 				result = server.getEngine().jobs().invokeOperation(
 					"v/ops/dlfs/read",
-					Maps.of("drive", "health-vault", "path", "never-written.txt"),
+					Maps.of("drive", "test-drive", "path", "never-written.txt"),
 					RequestContext.of(ALICE_DID)
 				).awaitResult(5000);
 			} catch (Exception expected) {

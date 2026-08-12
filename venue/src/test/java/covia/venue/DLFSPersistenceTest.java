@@ -57,7 +57,7 @@ public class DLFSPersistenceTest {
 			// Write via DLFS adapter
 			ACell result = engine.jobs().invokeOperation(
 				"v/ops/dlfs/write",
-				Maps.of("drive", "health-vault", "path", "test.txt", "content", "persistent!"),
+				Maps.of("drive", "test-drive", "path", "test.txt", "content", "persistent!"),
 				RequestContext.of(ALICE_DID)
 			).awaitResult(5000);
 			assertNotNull(result, "DLFS write should succeed");
@@ -71,7 +71,7 @@ public class DLFSPersistenceTest {
 			// Verify we can read the file back immediately (same session)
 			ACell readResult = engine.jobs().invokeOperation(
 				"v/ops/dlfs/read",
-				Maps.of("drive", "health-vault", "path", "test.txt"),
+				Maps.of("drive", "test-drive", "path", "test.txt"),
 				RequestContext.of(ALICE_DID)
 			).awaitResult(5000);
 			assertEquals("persistent!", RT.ensureString(RT.getIn(readResult, "content")).toString(),
@@ -83,7 +83,7 @@ public class DLFSPersistenceTest {
 			// (NOOP persist handler) so engine.flush() is a no-op here; we
 			// drive persistence directly through the local node.
 			DLFSAdapter dlfsAdapter1 = (DLFSAdapter) engine.getAdapter("dlfs");
-			var drive1 = dlfsAdapter1.getDriveForIdentity(ALICE_DID.toString(), "health-vault");
+			var drive1 = dlfsAdapter1.getDriveForIdentity(ALICE_DID.toString(), "test-drive");
 			drive1.sync();
 			node.persistSnapshot(node.getCursor().get());
 
@@ -127,7 +127,7 @@ public class DLFSPersistenceTest {
 
 			// Get the DLFSAdapter and check drive access
 			DLFSAdapter dlfsAdapter = (DLFSAdapter) engine.getAdapter("dlfs");
-			var drive = dlfsAdapter.getDriveForIdentity(ALICE_DID.toString(), "health-vault");
+			var drive = dlfsAdapter.getDriveForIdentity(ALICE_DID.toString(), "test-drive");
 			assertNotNull(drive, "Drive should be accessible after restore");
 
 			// Check root node of the drive
@@ -141,7 +141,7 @@ public class DLFSPersistenceTest {
 			// Read via adapter
 			ACell result = engine.jobs().invokeOperation(
 				"v/ops/dlfs/read",
-				Maps.of("drive", "health-vault", "path", "test.txt"),
+				Maps.of("drive", "test-drive", "path", "test.txt"),
 				RequestContext.of(ALICE_DID)
 			).awaitResult(5000);
 			String content = RT.ensureString(RT.getIn(result, "content")).toString();

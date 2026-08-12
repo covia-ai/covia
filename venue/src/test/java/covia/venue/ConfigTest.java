@@ -213,6 +213,15 @@ public class ConfigTest {
 			c.getAdapterConfig("agent").get(Strings.create("sessionDelete")));
 	}
 
+	@Test
+	public void testEncryptedEtchPolicySignal() {
+		assertFalse(new Config(null).hasEncryptedEtchPolicy());
+		assertFalse(new Config(Maps.of(Config.ETCH,
+			Maps.of("version", 3, "cipher", "none"))).hasEncryptedEtchPolicy());
+		assertTrue(new Config(Maps.of(Config.ETCH,
+			Maps.of("version", 3, "cipher", "aes-256-ctr"))).hasEncryptedEtchPolicy());
+	}
+
 	// ========== did:web alias derivation (covia#167) ==========
 
 	@Test

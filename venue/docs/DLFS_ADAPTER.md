@@ -96,8 +96,9 @@ This is the contract agents see. Target surface:
 | `dlfs:createDrive` | `name` | `{ created }` |
 | `dlfs:deleteDrive` | `name` | `{ deleted }` |
 
-`VaultAdapter` wraps the file operations with a hardcoded `drive:
-"health-vault"`. No behavioural differences beyond the drive binding.
+`VaultAdapter` wraps the file operations with a configured drive binding. It
+defaults to `drive: "vault"`; operators can set `adapters.vault.drive`. There
+are no behavioural differences beyond the drive binding.
 
 ### 3.2 Read — always returns a useful value
 
@@ -203,7 +204,7 @@ Small, ordered, each step independently testable:
      authenticated modes).
 
 5. **Rewire the UI.**
-   - `VaultView.tsx` upload: `PUT /dlfs/health-vault/{path}` with the raw
+   - `VaultView.tsx` upload: `PUT /dlfs/vault/{path}` with the raw
      `File` as body. Drop base64 and `readAsBase64`.
    - `VaultView.tsx` viewer: for binaries, `<img src="/dlfs/..." />` or an
      `<a href download>` link. Keep text/JSON rendering via `dlfs:read`
