@@ -228,23 +228,23 @@ public class HardKillPersistenceTest {
 			assertTrue(ready.startsWith("READY "), "child should announce READY: got '" + ready + "'");
 
 			// Flushed write — the strongest guarantee flush() advertises.
-			assertEquals("OK", child.send("WRITE health-vault hello.txt persistent-content"));
+			assertEquals("OK", child.send("WRITE test-drive hello.txt persistent-content"));
 
 			// Burst of flushed writes — coalescing path, no lost-update between flushes.
 			for (int i = 0; i < BURST; i++) {
-				assertEquals("OK", child.send("WRITE health-vault burst-" + i + ".txt value-" + i),
+				assertEquals("OK", child.send("WRITE test-drive burst-" + i + ".txt value-" + i),
 					"burst write #" + i + " should succeed");
 			}
 
 			// Unflushed write, then wait out several sweep cycles (100ms interval)
 			// so the background sweep + propagator persist it before the kill.
-			assertEquals("OK", child.send("WRITE_NOFLUSH health-vault sweep.txt swept-content"));
+			assertEquals("OK", child.send("WRITE_NOFLUSH test-drive sweep.txt swept-content"));
 			assertEquals("OK", child.send("SLEEP 2000"));
 
 			// Unflushed write with NO sleep before the kill — races the sweep, so
 			// survival is not asserted; this is the corruption probe (cycle 2's
 			// restore below proves the store is not corrupted by an aborted write).
-			assertEquals("OK", child.send("WRITE_NOFLUSH health-vault race.txt maybe-survives"));
+			assertEquals("OK", child.send("WRITE_NOFLUSH test-drive race.txt maybe-survives"));
 
 			child.stdin.println("HALT");
 			child.stdin.flush();
@@ -260,7 +260,7 @@ public class HardKillPersistenceTest {
 
 			// A successful flushed write here proves the restore loaded the prior
 			// store cleanly (no corruption from cycle 1's aborted race.txt write).
-			assertEquals("OK", child.send("WRITE health-vault cycle2.txt second"));
+			assertEquals("OK", child.send("WRITE test-drive cycle2.txt second"));
 
 			child.stdin.println("HALT");
 			child.stdin.flush();
@@ -271,26 +271,26 @@ public class HardKillPersistenceTest {
 		// ---- Reader: every durable file from BOTH cycles must survive ----
 		VenueServer reader = VenueServer.launch(readerConfig(storePath, seedHex));
 		try {
-			assertEquals("persistent-content", readDLFS(reader, "health-vault", "hello.txt"),
+			assertEquals("persistent-content", readDLFS(reader, "test-drive", "hello.txt"),
 				"flushed write must survive both hard-kills");
 			for (int i = 0; i < BURST; i++) {
-				assertEquals("value-" + i, readDLFS(reader, "health-vault", "burst-" + i + ".txt"),
+				assertEquals("value-" + i, readDLFS(reader, "test-drive", "burst-" + i + ".txt"),
 					"burst write #" + i + " must survive both hard-kills");
 			}
-			assertEquals("swept-content", readDLFS(reader, "health-vault", "sweep.txt"),
+			assertEquals("swept-content", readDLFS(reader, "test-drive", "sweep.txt"),
 				"swept (unflushed) write must survive — sweep had 2s to propagate before the kill");
-			assertEquals("second", readDLFS(reader, "health-vault", "cycle2.txt"),
+			assertEquals("second", readDLFS(reader, "test-drive", "cycle2.txt"),
 				"cycle-2 write must survive its hard-kill (accumulation across cycles)");
 
 			// A fresh write after restart must work — proves the etch is uncorrupted
 			// (subsumes the old standalone corruption test).
 			reader.getEngine().jobs().invokeOperation(
 				"v/ops/dlfs/write",
-				Maps.of("drive", "health-vault", "path", "after-restart.txt", "content", "ok"),
+				Maps.of("drive", "test-drive", "path", "after-restart.txt", "content", "ok"),
 				RequestContext.of(ALICE_DID)
 			).awaitResult(5000);
 			reader.getEngine().flush();
-			assertEquals("ok", readDLFS(reader, "health-vault", "after-restart.txt"),
+			assertEquals("ok", readDLFS(reader, "test-drive", "after-restart.txt"),
 				"writes after restart must still work — etch must not be corrupted");
 		} finally {
 			reader.close();

@@ -639,6 +639,7 @@ that configuration migration.
 {
   "adapters": {
     "agent": { "sessionDelete": false },
+    "vault": { "drive": "vault" },
     "orchestrator": {
       "maxItems": 50,
       "maxConcurrency": 8
@@ -650,6 +651,11 @@ that configuration migration.
 Per-adapter settings, keyed by adapter name (`Config.getAdapterConfig(name)`).
 Currently defined:
 
+- `vault.drive` — DLFS drive targeted by the drive-free `vault:*` convenience
+  operations (default `vault`). It must be a single non-empty drive name without
+  `/`, `\\`, or `:`. Because vault content is held in the venue lattice, startup
+  warns if the adapter is active without an encrypted Etch policy; configure
+  `etch.cipher` and key management before storing sensitive data.
 - `agent.sessionDelete` — whether `agent:deleteSession` is available
   (default `true`). Set `false` to disable user-initiated session deletion
   venue-wide; the op then fails with "disabled on this venue".

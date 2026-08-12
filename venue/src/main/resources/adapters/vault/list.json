@@ -1,6 +1,6 @@
 {
   "name": "List Vault Directory",
-  "description": "List files and directories in the user's health vault. Omit path to list the vault root.",
+  "description": "List files and directories in the user's personal vault. Omit path to list the vault root.",
   "creator": "Covia",
   "operation": {
     "adapter": "vault:list",

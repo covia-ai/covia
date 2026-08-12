@@ -10,6 +10,10 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Changed
 
+- Generalised the `vault` adapter: it now targets the neutral `vault` DLFS
+  drive by default, supports `adapters.vault.drive` for application-specific
+  bindings, and no longer exposes health-specific descriptions or examples.
+  Startup warns when the adapter is active without an encrypted Etch policy.
 - Named-user key-pair authentication now emits the verification-method DID URL
   published by the user's DID document as the JWT `kid`; ordinary `did:key`
   authentication retains its bare-Multikey header. Covia temporarily tracks

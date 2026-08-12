@@ -8,7 +8,7 @@
     "input": {
       "type": "object",
       "properties": {
-        "name": { "type": "string", "description": "Drive name (e.g. 'health-vault')" }
+        "name": { "type": "string", "description": "Drive name (e.g. 'documents')" }
       },
       "required": ["name"]
     },

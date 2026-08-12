@@ -13,10 +13,12 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
 import convex.core.data.ACell;
+import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.lang.RT;
+import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
@@ -44,28 +46,54 @@ public class VaultAdapterTest {
 		// Write to vault — no drive parameter needed
 		ACell result = run("v/ops/vault/write", Maps.of(
 			"path", "profile.json",
-			"content", "{\"name\": \"Sarah Smith\", \"nhsNumber\": \"485 777 3456\"}"
+			"content", "{\"name\": \"Example User\", \"theme\": \"dark\"}"
 		));
 		assertTrue(RT.bool(RT.getIn(result, "created")));
 
 		// Read back
 		result = run("v/ops/vault/read", Maps.of("path", "profile.json"));
 		String content = RT.ensureString(RT.getIn(result, "content")).toString();
-		assertTrue(content.contains("Sarah Smith"));
+		assertTrue(content.contains("Example User"));
 		assertEquals("utf-8", RT.ensureString(RT.getIn(result, "encoding")).toString());
+
+		// The convenience adapter's neutral default is the DLFS drive "vault".
+		result = run("v/ops/dlfs/read", Maps.of("drive", "vault", "path", "profile.json"));
+		assertTrue(RT.ensureString(RT.getIn(result, "content")).toString()
+			.contains("Example User"));
 	}
 
 	@Test
 	public void testMkdirAndList() {
-		run("v/ops/vault/mkdir", Maps.of("path", "lab-results"));
-		run("v/ops/vault/write", Maps.of("path", "lab-results/panel-q4.json", "content", "{\"tsh\": 2.8}"));
+		run("v/ops/vault/mkdir", Maps.of("path", "reports"));
+		run("v/ops/vault/write", Maps.of("path", "reports/q4.json", "content", "{\"score\": 2.8}"));
 
-		// List lab-results dir
-		ACell result = run("v/ops/vault/list", Maps.of("path", "lab-results"));
+		ACell result = run("v/ops/vault/list", Maps.of("path", "reports"));
 		AVector<?> entries = RT.ensureVector(RT.getIn(result, "entries"));
 		assertNotNull(entries);
 		assertEquals(1, entries.count());
-		assertEquals("panel-q4.json", RT.getIn(entries.get(0), "name").toString());
+		assertEquals("q4.json", RT.getIn(entries.get(0), "name").toString());
+	}
+
+	@Test
+	public void testConfiguredDriveBinding() {
+		AMap<AString, ACell> config = Maps.of(
+			Config.ADAPTERS, Maps.of("vault", Maps.of("drive", "documents")),
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true));
+		Engine configured = Engine.createTemp(config);
+		try {
+			Engine.addDemoAssets(configured);
+			AString did = TestEngine.uniqueDID("configured-vault");
+			RequestContext ctx = RequestContext.of(did);
+			configured.jobs().invokeOperation("v/ops/vault/write",
+				Maps.of("path", "note.txt", "content", "configured"), ctx)
+				.awaitResult(5000);
+			ACell result = configured.jobs().invokeOperation("v/ops/dlfs/read",
+				Maps.of("drive", "documents", "path", "note.txt"), ctx)
+				.awaitResult(5000);
+			assertEquals("configured", RT.getIn(result, "content").toString());
+		} finally {
+			configured.close();
+		}
 	}
 
 	@Test

@@ -61,11 +61,11 @@ public class DLFSWebDAVTest {
 	@Test
 	public void testPutAndGetTextFile() throws Exception {
 		// PUT a text file
-		HttpResponse<String> putRes = request("PUT", "health-vault/test.txt", "Hello DLFS!");
+		HttpResponse<String> putRes = request("PUT", "test-drive/test.txt", "Hello DLFS!");
 		assertEquals(201, putRes.statusCode(), "PUT should return 201 Created");
 
 		// GET it back
-		HttpResponse<String> getRes = request("GET", "health-vault/test.txt", null);
+		HttpResponse<String> getRes = request("GET", "test-drive/test.txt", null);
 		assertEquals(200, getRes.statusCode());
 		assertEquals("Hello DLFS!", getRes.body());
 	}
@@ -74,12 +74,12 @@ public class DLFSWebDAVTest {
 	public void testPutAndGetBinaryFile() throws Exception {
 		// PUT binary content
 		byte[] binary = new byte[] { 0x00, 0x50, 0x44, 0x46, (byte) 0xFF, (byte) 0xD8, 0x01, 0x02, 0x03 };
-		HttpResponse<byte[]> putRes = requestBytes("PUT", "health-vault/binary.bin", binary);
+		HttpResponse<byte[]> putRes = requestBytes("PUT", "test-drive/binary.bin", binary);
 		assertTrue(putRes.statusCode() == 201 || putRes.statusCode() == 204,
 			"PUT binary should succeed, got " + putRes.statusCode());
 
 		// GET it back as bytes
-		HttpResponse<byte[]> getRes = requestBytes("GET", "health-vault/binary.bin", null);
+		HttpResponse<byte[]> getRes = requestBytes("GET", "test-drive/binary.bin", null);
 		assertEquals(200, getRes.statusCode());
 		assertArrayEquals(binary, getRes.body());
 	}
@@ -87,50 +87,50 @@ public class DLFSWebDAVTest {
 	@Test
 	public void testMkdirAndWriteInDir() throws Exception {
 		// Create directory via MKCOL
-		HttpResponse<String> mkRes = request("MKCOL", "health-vault/records/", null);
+		HttpResponse<String> mkRes = request("MKCOL", "test-drive/records/", null);
 		assertEquals(201, mkRes.statusCode(), "MKCOL should return 201");
 
 		// PUT file in directory
-		HttpResponse<String> putRes = request("PUT", "health-vault/records/report.json", "{\"status\": \"ok\"}");
+		HttpResponse<String> putRes = request("PUT", "test-drive/records/report.json", "{\"status\": \"ok\"}");
 		assertEquals(201, putRes.statusCode());
 
 		// Read it back
-		HttpResponse<String> getRes = request("GET", "health-vault/records/report.json", null);
+		HttpResponse<String> getRes = request("GET", "test-drive/records/report.json", null);
 		assertEquals(200, getRes.statusCode());
 		assertEquals("{\"status\": \"ok\"}", getRes.body());
 	}
 
 	@Test
 	public void testDeleteFile() throws Exception {
-		request("PUT", "health-vault/to-delete.txt", "temporary");
+		request("PUT", "test-drive/to-delete.txt", "temporary");
 
-		HttpResponse<String> delRes = request("DELETE", "health-vault/to-delete.txt", null);
+		HttpResponse<String> delRes = request("DELETE", "test-drive/to-delete.txt", null);
 		assertEquals(204, delRes.statusCode());
 
 		// GET should now 404
-		HttpResponse<String> getRes = request("GET", "health-vault/to-delete.txt", null);
+		HttpResponse<String> getRes = request("GET", "test-drive/to-delete.txt", null);
 		assertEquals(404, getRes.statusCode());
 	}
 
 	@Test
 	public void testOverwrite() throws Exception {
-		request("PUT", "health-vault/overwrite.txt", "version 1");
-		request("PUT", "health-vault/overwrite.txt", "version 2");
+		request("PUT", "test-drive/overwrite.txt", "version 1");
+		request("PUT", "test-drive/overwrite.txt", "version 2");
 
-		HttpResponse<String> getRes = request("GET", "health-vault/overwrite.txt", null);
+		HttpResponse<String> getRes = request("GET", "test-drive/overwrite.txt", null);
 		assertEquals(200, getRes.statusCode());
 		assertEquals("version 2", getRes.body());
 	}
 
 	@Test
 	public void testGetNonexistent() throws Exception {
-		HttpResponse<String> res = request("GET", "health-vault/does-not-exist.txt", null);
+		HttpResponse<String> res = request("GET", "test-drive/does-not-exist.txt", null);
 		assertEquals(404, res.statusCode());
 	}
 
 	@Test
 	public void testOptionsReturnsDAVHeaders() throws Exception {
-		HttpResponse<String> res = request("OPTIONS", "health-vault/", null);
+		HttpResponse<String> res = request("OPTIONS", "test-drive/", null);
 		assertEquals(200, res.statusCode());
 
 		String dav = res.headers().firstValue("DAV").orElse("");
@@ -161,7 +161,7 @@ public class DLFSWebDAVTest {
 	@Test
 	public void testWriteReachesRootCursor() throws Exception {
 		// Write via WebDAV
-		HttpResponse<String> putRes = request("PUT", "health-vault/sync-verify.txt", "verify sync");
+		HttpResponse<String> putRes = request("PUT", "test-drive/sync-verify.txt", "verify sync");
 		assertEquals(201, putRes.statusCode());
 
 		// The root cursor should have DLFS data with the file content
@@ -174,9 +174,9 @@ public class DLFSWebDAVTest {
 	@Test
 	public void testPropfindReturnsMultistatus() throws Exception {
 		// Ensure at least one file exists
-		request("PUT", "health-vault/propfind-test.txt", "content");
+		request("PUT", "test-drive/propfind-test.txt", "content");
 
-		HttpResponse<String> res = request("PROPFIND", "health-vault/", null);
+		HttpResponse<String> res = request("PROPFIND", "test-drive/", null);
 		assertEquals(207, res.statusCode(), "PROPFIND should return 207 Multi-Status");
 		assertTrue(res.body().contains("multistatus"), "Response should be WebDAV multistatus XML");
 		assertTrue(res.body().contains("propfind-test.txt"), "Response should list the test file");

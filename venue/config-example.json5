@@ -25,7 +25,7 @@
 
 			// Configure adapters
 			"adapters":{
-
+				// "vault": { "drive": "vault" }, // warns unless Etch encryption is configured
 			},
 
 			// Configure authentication and access control

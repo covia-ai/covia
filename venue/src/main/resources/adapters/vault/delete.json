@@ -1,6 +1,6 @@
 {
   "name": "Delete Vault File",
-  "description": "Delete a file or empty directory from the user's health vault.",
+  "description": "Delete a file or empty directory from the user's personal vault.",
   "creator": "Covia",
   "operation": {
     "adapter": "vault:delete",
