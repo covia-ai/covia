@@ -73,6 +73,7 @@ public class CoviaAPI extends ACoviaAPI {
 	public static final String ADD_ASSET="addAsset";
 
 	private static final String GET_CONTENT = "getContent";
+	private static final String GET_CONTENT_REF = "getContentByRef";
 
 	private static final String PUT_CONTENT = "putContent";
 	public static final String CANCEL_JOB = "cancelJob";
@@ -104,9 +105,14 @@ public class CoviaAPI extends ACoviaAPI {
 	public void addRoutes(RoutesConfig routes) {
 		routes.get(ROUTE+"status", this::getStatus, COVIA_API);
 		// <id> matches slashes, so the asset metadata route accepts any lattice
-		// address (a/<hash>, w/…, o/…, <DID>/…) as well as a bare hash. The more
-		// specific {id}/content route below is registered too; Javalin prefers
-		// the more specific match (covered by CoviaAssetRefTest).
+		// address (a/<hash>, w/…, o/…, <DID>/…) as well as a bare hash. Content
+		// puts its selector BEFORE the ref (assets/content/<ref>) so the
+		// variable-length ref is always the tail wildcard: "content" is not a
+		// ref namespace prefix, so the selector can never collide with a valid
+		// metadata ref — unlike a trailing /content, which any workspace path
+		// can end in (#368). The single-segment {id}/content route survives for
+		// hash-form compatibility (covered by CoviaAssetRefTest).
+		routes.get(ROUTE+"assets/content/<id>", this::getContentByRef, COVIA_API);
 		routes.get(ROUTE+"assets/{id}/content", this::getContent, COVIA_API);
 		routes.get(ROUTE+"assets/<id>", this::getAsset, COVIA_API);
 		routes.put(ROUTE+"assets/{id}/content", this::putContent, COVIA_API);
@@ -355,6 +361,16 @@ public class CoviaAPI extends ACoviaAPI {
 			return;
 		}
 
+		serveAssetMeta(ctx, ref);
+	}
+
+	/**
+	 * Serves the metadata for an asset reference (any lattice address form).
+	 * The body of {@link #getAsset}, shared with the legacy content route's
+	 * disambiguation path (a non-hash {@code {id}} there is really a metadata
+	 * ref whose final segment is {@code content}, #368).
+	 */
+	private void serveAssetMeta(Context ctx, String ref) {
 		// Caller identity + transport UCAN authority (a bearer UCAN supplies the
 		// proof for cross-DID reads, per the IETF UCAN-HTTP convention).
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
@@ -440,33 +456,88 @@ public class CoviaAPI extends ACoviaAPI {
 		return Hash.parse(ref);
 	}
 	
-	@OpenApi(path = ROUTE + "assets/{id}/content", 
-			methods = HttpMethod.GET, 
+	@OpenApi(path = ROUTE + "assets/{id}/content",
+			methods = HttpMethod.GET,
 			tags = { "Covia"},
-			summary = "Get the content of a Covia data asset", 
+			summary = "Get the content of a Covia data asset by content-addressed hash. "
+					+ "Legacy single-segment route: prefer assets/content/{id}, which accepts any asset reference.",
+			deprecated = true,
 			operationId = CoviaAPI.GET_CONTENT,
 			queryParams = {
 					@OpenApiParam(
-							name = "inline", 
-							description = "Add if the Content-Disposition should be set to inline", 
-							required = false, 
-							type = String.class, 
+							name = "inline",
+							description = "Add if the Content-Disposition should be set to inline",
+							required = false,
+							type = String.class,
 							example = "true")
 			},
 			pathParams = {
 					@OpenApiParam(
-							name = "id", 
-							description = "Asset ID, as a hex string.", 
-							required = true, 
-							type = String.class, 
+							name = "id",
+							description = "Asset ID, as a hex string.",
+							required = true,
+							type = String.class,
 							example = "0x1234567812345678123456781234567812345678123456781234567812345678") },
 			responses = {
 					@OpenApiResponse(
-							status = "200", 
+							status = "200",
 							description = "Content returned")
-					})	
+					})
 	protected void getContent(Context ctx) {
 		String id=ctx.pathParam("id");
+		// {id} is single-segment, so only hash forms (bare hex, a/<hash>) ever
+		// worked here. A non-hash id means this route's suffix grammar mis-ate a
+		// metadata read for a ref whose final segment is "content" (e.g.
+		// /assets/w/content is the metadata of w/content). Hash and path grammars
+		// cannot collide, so the disambiguation is exact (#368).
+		if (parseCallerAssetId(id)==null && !"venue".equals(ctx.queryParam("namespace"))) {
+			serveAssetMeta(ctx, id+"/content");
+			return;
+		}
+		serveContent(ctx, id);
+	}
+
+	@OpenApi(path = ROUTE + "assets/content/{id}",
+			methods = HttpMethod.GET,
+			tags = { "Covia"},
+			summary = "Get the content of a Covia data asset given any asset reference.",
+			operationId = CoviaAPI.GET_CONTENT_REF,
+			queryParams = {
+					@OpenApiParam(
+							name = "inline",
+							description = "Add if the Content-Disposition should be set to inline",
+							required = false,
+							type = String.class,
+							example = "true")
+			},
+			pathParams = {
+					@OpenApiParam(
+							name = "id",
+							description = "Asset reference: a bare CAD3 hash, a content-addressed "
+									+ "address (a/<hash>), a workspace/operation path (w/…, o/…), "
+									+ "or a DID URL — every form the metadata route accepts.",
+							required = true,
+							type = String.class,
+							example = "w/skills/reviewer") },
+			responses = {
+					@OpenApiResponse(
+							status = "200",
+							description = "Content returned")
+					})
+	protected void getContentByRef(Context ctx) {
+		serveContent(ctx, ctx.pathParam("id"));
+	}
+
+	/**
+	 * Serves asset content for any reference form: the canonical
+	 * {@code assets/content/<ref>} route and the hash-form legacy route both
+	 * land here. Hash-form refs read the caller's asset record directly
+	 * (byte-identical to the historical route); every other lattice address
+	 * resolves through the same universal resolver as the metadata route and
+	 * serves whatever content the resolved value carries — inline, CAS blob,
+	 * or provider-backed (DLFS), with a declared sha256 pin verified (#368).
+	 */
+	private void serveContent(Context ctx, String id) {
 		try {
 			if ("venue".equals(ctx.queryParam("namespace"))) {
 				Hash venueAssetID=Hash.parse(id);
@@ -489,20 +560,8 @@ public class CoviaAPI extends ACoviaAPI {
 					buildError(ctx,404,"Asset did not have any content available: "+id);
 					return;
 				}
-				ACell contentMeta=meta.get(Fields.CONTENT);
-				ACell contentType=RT.getIn(contentMeta,Fields.CONTENT_TYPE);
-				if (contentType instanceof AString ct) ctx.contentType(ct.toString());
-				if (ctx.queryParam("inline")!=null) ctx.header("Content-Disposition","inline");
-				ACell fileName=RT.getIn(contentMeta,Fields.FILE_NAME);
-				if (fileName instanceof AString fn) ctx.header("filename",fn.toString());
-				ctx.result(content.getInputStream());
-				ctx.status(200);
-				return;
-			}
-
-			Hash assetID=parseCallerAssetId(id);
-			if (assetID==null) {
-				buildError(ctx,400,"Invalid caller asset reference: "+id);
+				sendContent(ctx, meta.get(Fields.CONTENT),
+					new covia.venue.storage.ContentProvider.Resolved(content, null));
 				return;
 			}
 
@@ -510,53 +569,81 @@ public class CoviaAPI extends ACoviaAPI {
 			AString bearer = ctx.attribute(AuthMiddleware.UCAN_BEARER_ATTR);
 			rctx = AuthMiddleware.withTransportAuth(rctx, bearer, null, null, engine().didVerifier());
 			AString ref = Strings.create(id);
-			AString readAs = engine().requireLocalAccess(rctx, ref, Abilities.ASSET_READ);
-			AVector<?> record = engine().getAssetRecord(assetID, readAs);
-			if (record==null) {
-				buildError(ctx,404,"Asset not found: "+id);
+
+			Hash assetID=parseCallerAssetId(id);
+			if (assetID!=null) {
+				AString readAs = engine().requireLocalAccess(rctx, ref, Abilities.ASSET_READ);
+				AVector<?> record = engine().getAssetRecord(assetID, readAs);
+				if (record==null) {
+					buildError(ctx,404,"Asset not found: "+id);
+					return;
+				}
+
+				AMap<AString,ACell> meta=RT.ensureMap(record.get(AssetStore.POS_META));
+				if (meta==null) {
+					buildError(ctx,500,"Stored asset metadata is invalid: "+id);
+					return;
+				}
+				if (!meta.containsKey(Fields.CONTENT)) {
+					buildError(ctx,404,"Asset metadata does not specify any content object: "+id);
+					return;
+				}
+
+				covia.venue.storage.ContentProvider.Resolved resolved =
+					engine().resolveContent(ref, rctx);
+				if (resolved==null) {
+					buildError(ctx,404,"Asset did not have any content available: "+id);
+					return;
+				}
+				sendContent(ctx, meta.get(Fields.CONTENT), resolved);
 				return;
 			}
 
-			AMap<AString,ACell> meta=RT.ensureMap(record.get(AssetStore.POS_META));
-			if (meta==null) {
-				buildError(ctx,500,"Stored asset metadata is invalid: "+id);
-				return;
-			}
-			if (!meta.containsKey(Fields.CONTENT)) {
-				buildError(ctx,404,"Asset metadata does not specify any content object: "+id);
-				return;
-			}
-
-			ACell contentMeta=meta.get(Fields.CONTENT);
+			// Any other lattice address (w/…, v/…, o/…, DID URL): the same gate
+			// and resolver as the metadata route, then serve whatever content the
+			// resolved value carries. Metadata is resolved separately only for
+			// error specificity and the content.contentType / fileName headers —
+			// a ref may also resolve to a raw blob with no metadata at all.
+			engine().requireResourceAccess(rctx, ref, Abilities.ASSET_READ);
+			AMap<AString,ACell> meta = RT.ensureMap(engine().resolvePath(ref, rctx));
 			covia.venue.storage.ContentProvider.Resolved resolved =
 				engine().resolveContent(ref, rctx);
 			if (resolved==null) {
-				buildError(ctx,404,"Asset did not have any content available: "+id);
+				if (meta==null) buildError(ctx,404,"Asset not found: "+id);
+				else if (!meta.containsKey(Fields.CONTENT)) buildError(ctx,404,"Asset metadata does not specify any content object: "+id);
+				else buildError(ctx,404,"Asset did not have any content available: "+id);
 				return;
 			}
-			AContent content = resolved.content();
-			ACell contentType=RT.getIn(contentMeta,Fields.CONTENT_TYPE);
-			if (contentType instanceof AString ct) {
-				ctx.contentType(ct.toString());
-			} else if (resolved.contentType()!=null) {
-				ctx.contentType(resolved.contentType());
-			}
-			if (ctx.queryParam("inline")!=null) {
-				ctx.header("Content-Disposition","inline");
-			}
-
-			ACell fileName=RT.getIn(contentMeta,Fields.FILE_NAME);
-			if (fileName instanceof AString ct) {
-				ctx.header("filename",ct.toString());
-			}
-
-			ctx.result(content.getInputStream());
-			ctx.status(200);
+			sendContent(ctx, (meta!=null)?meta.get(Fields.CONTENT):null, resolved);
 		} catch (AuthException e) {
 			buildError(ctx,403,"Not authorised to read asset content: "+id);
 		} catch (IOException e) {
 			buildError(ctx,500,"Error retrieving asset content: "+e.getMessage());
 		}
+	}
+
+	/**
+	 * Sets the content headers — {@code content.contentType} (falling back to
+	 * the resolver's declared type), optional inline disposition and filename —
+	 * and streams the resolved content.
+	 */
+	private static void sendContent(Context ctx, ACell contentMeta,
+			covia.venue.storage.ContentProvider.Resolved resolved) throws IOException {
+		ACell contentType=(contentMeta==null)?null:RT.getIn(contentMeta,Fields.CONTENT_TYPE);
+		if (contentType instanceof AString ct) {
+			ctx.contentType(ct.toString());
+		} else if (resolved.contentType()!=null) {
+			ctx.contentType(resolved.contentType());
+		}
+		if (ctx.queryParam("inline")!=null) {
+			ctx.header("Content-Disposition","inline");
+		}
+		ACell fileName=(contentMeta==null)?null:RT.getIn(contentMeta,Fields.FILE_NAME);
+		if (fileName instanceof AString fn) {
+			ctx.header("filename",fn.toString());
+		}
+		ctx.result(resolved.content().getInputStream());
+		ctx.status(200);
 	}
 	
 	@OpenApi(path = ROUTE + "assets/{id}/content", 

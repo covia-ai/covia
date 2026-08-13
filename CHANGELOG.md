@@ -8,6 +8,14 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- Asset content retrieval by any asset reference: `GET /api/v1/assets/content/<ref>` (#368)
+
+### Fixed
+
+- Metadata reads for asset refs whose final segment is `content` no longer misroute (#368)
+
 ## [0.9.1] - 2026-08-13
 
 ### Changed

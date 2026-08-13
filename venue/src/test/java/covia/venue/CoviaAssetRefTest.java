@@ -173,4 +173,87 @@ public class CoviaAssetRefTest {
 		assertNotNull(byBareHash, "client must resolve a bare hash");
 		assertEquals(h, byBareHash.getID());
 	}
+
+	// ---------------------------------------------------------------- #368
+	// Content by any reference: assets/content/<ref> puts the selector BEFORE
+	// the ref, so the variable-length ref is always the tail wildcard and a ref
+	// whose own final segment is "content" stays unambiguous.
+
+	private static final String CONTENT_META =
+		"{\"name\":\"Ref Content Asset\",\"content\":{\"inline\":\"ref content bytes\",\"contentType\":\"text/plain\"}}";
+
+	/** Registers CONTENT_META and writes its canonical (as-served) metadata to
+	 *  the given workspace path, so the path resolves to the pinned asset. */
+	private Hash pinContentAssetAt(String wsPath) throws Exception {
+		Hash h = client.addAsset(CONTENT_META).join();
+		ACell canonicalMeta = JSON.parse(get("/api/v1/assets/" + h.toHexString()).body());
+		client.invokeAndWait(Strings.create("v/ops/covia/write"), Maps.of(
+			Strings.create("path"), Strings.create(wsPath),
+			Strings.create("value"), canonicalMeta));
+		return h;
+	}
+
+	@Test
+	public void canonicalContentRouteAcceptsHashForms() throws Exception {
+		Hash h = client.addAsset(CONTENT_META).join();
+		String legacy = get("/api/v1/assets/" + h.toHexString() + "/content").body();
+		assertEquals("ref content bytes", legacy, "legacy hash route must keep working");
+
+		HttpResponse<String> bare = get("/api/v1/assets/content/" + h.toHexString());
+		assertEquals(200, bare.statusCode());
+		assertEquals(legacy, bare.body(), "canonical route must serve identical bytes for a bare hash");
+
+		HttpResponse<String> aForm = get("/api/v1/assets/content/a/" + h.toHexString());
+		assertEquals(200, aForm.statusCode());
+		assertEquals(legacy, aForm.body(), "canonical route must serve identical bytes for a/<hash>");
+	}
+
+	@Test
+	public void canonicalContentRouteResolvesWorkspacePath() throws Exception {
+		pinContentAssetAt("w/asset-ref-test/inline-src");
+		HttpResponse<String> r = get("/api/v1/assets/content/w/asset-ref-test/inline-src");
+		assertEquals(200, r.statusCode());
+		assertEquals("ref content bytes", r.body());
+		assertTrue(r.headers().firstValue("Content-Type").orElse("").startsWith("text/plain"),
+			"content.contentType must drive the media type");
+	}
+
+	@Test
+	public void refEndingInContentServesMetadata() throws Exception {
+		// /assets/w/content lands on the legacy {id}/content route with id="w";
+		// a non-hash id there is really a metadata read for w/content (#368).
+		Hash h = pinContentAssetAt("w/content");
+		HttpResponse<String> meta = get("/api/v1/assets/w/content");
+		assertEquals(200, meta.statusCode());
+		assertTrue(meta.body().contains("Ref Content Asset"),
+			"a ref whose final segment is 'content' must read as metadata, got: " + meta.body());
+		assertTrue(etagHash(meta).contains(h.toHexString()));
+
+		// The same ref's CONTENT is reachable only via the canonical route.
+		HttpResponse<String> content = get("/api/v1/assets/content/w/content");
+		assertEquals(200, content.statusCode());
+		assertEquals("ref content bytes", content.body());
+	}
+
+	@Test
+	public void deepRefEndingInContentServesMetadata() throws Exception {
+		// A >=3-segment ref ending in "content" reaches the <id> metadata
+		// wildcard directly — the canonical content route must not shadow it.
+		Hash h = pinContentAssetAt("w/asset-ref-test/content");
+		HttpResponse<String> meta = get("/api/v1/assets/w/asset-ref-test/content");
+		assertEquals(200, meta.statusCode());
+		assertTrue(meta.body().contains("Ref Content Asset"));
+		assertTrue(etagHash(meta).contains(h.toHexString()));
+
+		HttpResponse<String> content = get("/api/v1/assets/content/w/asset-ref-test/content");
+		assertEquals(200, content.statusCode());
+		assertEquals("ref content bytes", content.body());
+	}
+
+	@Test
+	public void canonicalContentRouteUnknownRefIs404() throws Exception {
+		HttpResponse<String> r = get("/api/v1/assets/content/w/does/not/exist");
+		assertEquals(404, r.statusCode());
+		assertTrue(r.body().contains("not found"), "unknown ref must be a clean 404, got: " + r.body());
+	}
 }
