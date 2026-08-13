@@ -1,6 +1,6 @@
 {
 	"name": "xAI Chat",
-	"description": "Chat with xAI Grok models via the OpenAI-compatible xAI API. Supports messages-based and prompt-based input, system prompts, tools, and structured output.",
+	"description": "Chat with current xAI Grok models via the OpenAI-compatible xAI API. Grok 4.3 is the balanced default, 4.5 targets highest-quality work, and Grok Build is coding-specific.",
 	"creator": "Covia",
 	"dateCreated": "2026-04-15T00:00:00Z",
 	"keywords": ["LLM", "model", "xai", "grok"],
@@ -21,8 +21,8 @@
 				},
 				"model": {
 					"type": "string",
-					"description": "Model name (e.g. grok-4, grok-3, grok-3-mini).",
-					"default": "grok-4"
+					"description": "Model name (grok-4.3 balanced, grok-4.5 quality, grok-build-0.1 coding).",
+					"default": "grok-4.3"
 				},
 				"systemPrompt": {
 					"type": "string",

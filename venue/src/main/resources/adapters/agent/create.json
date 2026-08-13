@@ -1,6 +1,6 @@
 {
 	"name": "Create Agent",
-	"description": "Creates a new agent at g/<agentId> in the caller's namespace. The name must be unused; an existing agent is an error. To replace an agent, explicitly call agent:delete with remove=true and then create the new agent. Use agent:update for history-preserving config or state changes.\n\nOmit config for the recommended skilled default: read/list tools plus skills loaded on demand, using the venue's default transition and LLM provider. Pass config={} only when you intentionally want an explicit minimal configuration.\n\nCustom example: agent_create(agentId='Helper', config={operation: 'v/ops/llmagent/chat', systemPrompt: 'You summarise documents.'}). The 'operation' field must be a resolvable lattice path (e.g. 'v/ops/llmagent/chat' for plain persona chat, 'v/ops/goaltree/chat' for goal-decomposing planners) — bare adapter shorthand like 'llmagent:chat' will not resolve. To use a different provider, set llmOperation in config (e.g. 'v/ops/langchain/anthropic' for Claude, 'v/ops/langchain/ollama' for local models); each provider op resolves its API key from the user's secret store via its own default secretKey, or you can override with apiKey='s/<SECRET_NAME>'. After creation, send work via agent_request and inspect via agent_info.",
+	"description": "Creates a new agent at g/<agentId> in the caller's namespace. The name must be unused; an existing agent is an error. To replace an agent, explicitly call agent:delete with remove=true and then create the new agent. Use agent:update for history-preserving config or state changes.\n\nOmit config for the recommended skilled default: bounded inspect plus read/list tools and skills loaded on demand, using the venue's default transition and LLM provider. Pass config={} only when you intentionally want an explicit minimal configuration.\n\nConfig may be one inline map, one reference, or an ordered array of either. Ordered layers merge left-to-right: nested maps merge recursively and every later scalar/array value overrides the earlier value. Example: config=['v/agents/templates/worker', 'w/agent-config/providers/anthropic', {model:'claude-sonnet-5'}]. References may point to flat config maps or canonical Covia assets carrying an agent.config facet.\n\nThe 'operation' field must be a resolvable lattice path (e.g. 'v/ops/llmagent/chat' for plain persona chat, 'v/ops/goaltree/chat' for goal-decomposing planners) — bare adapter shorthand like 'llmagent:chat' will not resolve. To use a different provider, set llmOperation in a later config layer (e.g. 'v/ops/langchain/anthropic' for Claude, 'v/ops/langchain/ollama' for local models); each provider op resolves its API key from the user's secret store via its own default secretKey, or you can override with apiKey='s/<SECRET_NAME>'. After creation, send work via agent_request and inspect via agent_info.",
 	"dateCreated": "2026-02-27T00:00:00Z",
 	"operation": {
 		"adapter": "agent:create",
@@ -10,24 +10,41 @@
 			"properties": {
 				"agentId": { "type": "string", "description": "Human-readable agent name (e.g. 'Alice', 'DataChecker')" },
 				"config": {
-					"description": "Agent configuration. Either an inline map or a string reference that resolves to one — workspace path (e.g. 'w/templates/reader'), asset ref (/a/<hash>), DID URL, or venue operation name. Key fields: operation (transition op as a full lattice path, e.g. 'v/ops/llmagent/chat'), systemPrompt (what the agent does), llmOperation (LLM provider op path, default 'v/ops/langchain/openai'; set to 'v/ops/langchain/anthropic' for Claude, etc.), model (LLM model id, default gpt-5.4-mini), apiKey (optional 's/<SECRET_NAME>' reference; otherwise the provider op's default secretKey is used), tools (array of operation lattice paths it can call, e.g. 'v/ops/covia/read' — not adapter shorthand like 'covia:read'), caps (capability restrictions). A resolved template may also include a 'state' field which is used as the agent's initial state.",
+					"description": "One config layer, or an ordered array of additive layers. A layer is an inline map or a string reference resolving to a flat config map or an asset with agent.config. Later layers override earlier values; nested maps merge recursively, arrays replace. Null is not a layer; put null inside a map to clear an inherited field. References include workspace paths, asset refs, DID URLs, and venue templates. A resolved composition may include state, used as initial agent state.",
 					"oneOf": [
 						{
 							"type": "object",
 							"properties": {
 								"operation": { "type": "string", "description": "Transition operation for the agent — must be a resolvable lattice path (e.g. 'v/ops/llmagent/chat' for persona chat, 'v/ops/goaltree/chat' for goal-decomposing planners). Bare adapter shorthand like 'llmagent:chat' will NOT resolve. Determines how the agent processes tasks." },
 								"systemPrompt": { "type": "string", "description": "System prompt defining the agent's role and behaviour" },
-								"tools": { "type": "array", "description": "Tool operations the agent can call, given as resolvable operation lattice paths (e.g. ['v/ops/covia/read', 'v/ops/covia/write']) — these reference operations, not adapters, so bare adapter shorthand like 'covia:read' will NOT resolve. (Harness tools such as 'subgoal' and 'context_load' are the exception: bare names, not operations.) This is the agent's exact allowlist — it is advertised only these tools unless defaultTools is true." },
+								"llmOperation": { "type": "string", "description": "LLM provider operation path, e.g. v/ops/langchain/anthropic. Prefer a separate provider config layer so behavioural templates remain provider-neutral." },
+								"apiKey": { "type": "string", "description": "Optional secret reference such as s/ANTHROPIC_API_KEY; the provider operation's default secret is used when absent." },
+								"tools": { "type": "array", "description": "Exact tool selector. Entries are operation paths or {operation,name?,description?} maps; harness tools such as subgoal and context_load use bare names. A later tools array replaces an earlier one." },
 								"defaultTools": { "type": "boolean", "description": "Opt into the built-in default tool pack — deliberately minimal, read-only workspace access (covia read/list) — on top of the declared tools. Defaults to false: the agent sees only its own 'tools' list. Capability tools (writes, agents, assets, grid, schema) arrive via skills (skill_load) or explicit 'tools' entries." },
-								"model": { "type": "string", "description": "LLM model name (default: gpt-5.4-mini)" },
-								"caps": { "type": "array", "description": "Capability restrictions — array of {with, can} objects limiting what the agent can access" }
+								"model": { "type": "string", "description": "Optional LLM model name; the selected provider's default applies when absent." },
+								"caps": { "type": "array", "description": "Capability restrictions — array of {with, can} objects limiting what the agent can access" },
+								"context": { "type": "array", "description": "Operator-pinned context entries: inline text, refs, job results, or read-only operation results." },
+								"loads": { "type": "object", "description": "Operator-pinned live loads keyed by reference path; each value may include label, budget, required, and contributed tools." },
+								"skills": { "type": "array", "description": "Skill directory/reference sources used to build the live skills index." },
+								"responseFormat": { "description": "Provider-neutral structured response format." },
+								"outputs": { "type": "object", "description": "Typed agent lifecycle output declarations." }
 							},
 							"additionalProperties": true
 						},
-						{ "type": "string", "description": "Reference to a config map stored in workspace, assets, or elsewhere" }
+						{ "type": "string", "description": "Reference to a config map or canonical agent asset stored in workspace, assets, or elsewhere" },
+						{
+							"type": "array",
+							"description": "Ordered config layers, merged left-to-right with later values winning.",
+							"items": {
+								"oneOf": [
+									{ "type": "object" },
+									{ "type": "string" }
+								]
+							}
+						}
 					]
 				},
-				"definition": { "type": "string", "description": "Asset ID of an agent definition using the legacy nested format (meta.agent.config). For the unified approach, pass the reference directly in 'config'." }
+				"definition": { "type": "string", "description": "Asset ID of an agent definition carrying the canonical agent.config facet. Retained for compatibility; new callers normally pass the asset reference as a config layer." }
 			},
 			"required": ["agentId"]
 		},

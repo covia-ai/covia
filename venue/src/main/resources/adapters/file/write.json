@@ -1,6 +1,6 @@
 {
   "name": "Write File",
-  "description": "Write a file under a configured filesystem root. Creates the file if it does not exist; truncates and overwrites otherwise. Parent directories must already exist — call file:mkdir first if needed. Supply exactly one of 'content' (UTF-8 text), 'value' (JSON-serialised), 'bytes' (base64 inline), or 'asset' (CAS reference, streamed). Read-only roots reject writes.",
+  "description": "Write a file under a configured filesystem root or to an authorised DLFS path. Creates the file if absent and overwrites it otherwise. Parent directories must exist. Supply exactly one of content, value, bytes, or asset.",
   "creator": "Covia",
   "operation": {
     "adapter": "file:write",
@@ -8,14 +8,14 @@
     "input": {
       "type": "object",
       "properties": {
-        "root": { "type": "string", "description": "Configured root name" },
-        "path": { "type": "string", "description": "File path relative to the root" },
+        "root": { "type": "string", "description": "Configured root name; omit for a canonical DLFS path" },
+        "path": { "type": "string", "description": "Path relative to root, dlfs/<drive>/<path>, or <ownerDID>/dlfs/<drive>/<path>" },
         "content": { "type": "string", "description": "UTF-8 text to write" },
         "value": { "description": "JSON-serialisable value to write as UTF-8 JSON" },
         "bytes": { "type": "string", "description": "Base64-encoded bytes to write" },
         "asset": { "type": "string", "description": "Asset reference to stream as file content (e.g. '/a/0x1234...', DID URL)" }
       },
-      "required": ["root", "path"]
+      "required": ["path"]
     },
     "output": {
       "type": "object",

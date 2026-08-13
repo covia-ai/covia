@@ -1,6 +1,6 @@
 {
   "name": "Append to File",
-  "description": "Append bytes to a file under a configured filesystem root, creating the file if it does not exist. Supply exactly one of 'content' (UTF-8 text), 'value' (JSON-serialised), 'bytes' (base64 inline), or 'asset' (CAS reference, streamed). Read-only roots reject writes.",
+  "description": "Append to a file under a configured filesystem root or at an authorised DLFS path, creating it if absent. Supply exactly one of content, value, bytes, or asset.",
   "creator": "Covia",
   "operation": {
     "adapter": "file:append",
@@ -8,14 +8,14 @@
     "input": {
       "type": "object",
       "properties": {
-        "root": { "type": "string", "description": "Configured root name" },
-        "path": { "type": "string", "description": "File path relative to the root" },
+        "root": { "type": "string", "description": "Configured root name; omit for a canonical DLFS path" },
+        "path": { "type": "string", "description": "Path relative to root or a canonical DLFS file path" },
         "content": { "type": "string", "description": "UTF-8 text to append" },
         "value": { "description": "JSON-serialisable value to append as UTF-8 JSON" },
         "bytes": { "type": "string", "description": "Base64-encoded bytes to append" },
         "asset": { "type": "string", "description": "Asset reference to stream as appended content" }
       },
-      "required": ["root", "path"]
+      "required": ["path"]
     },
     "output": {
       "type": "object",

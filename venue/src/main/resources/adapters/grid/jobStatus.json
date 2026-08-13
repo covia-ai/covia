@@ -1,6 +1,6 @@
 {
 	"name": "Grid Job Status",
-	"description": "Fetch the current status of a Covia grid job by ID",
+	"description": "Fetch the current status of an EXISTING Covia Job. Call this operation directly with the exact id returned by a delegated request or asynchronous invocation; do not wrap it in the generic operation runner. This polls state without waiting for completion or starting new work.",
 	"operation": {
 		"adapter": "grid:jobStatus",
 		"toolName": "grid_job_status",

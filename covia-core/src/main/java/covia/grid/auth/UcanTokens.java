@@ -2,8 +2,10 @@ package covia.grid.auth;
 
 import convex.auth.ucan.Capability;
 import convex.auth.ucan.UCAN;
+import convex.auth.did.DID;
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
+import convex.core.data.AMap;
 import convex.core.data.AVector;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -53,9 +55,7 @@ public final class UcanTokens {
 	 */
 	public static String identityToken(AKeyPair kp, String venueDID, long ttlSeconds) {
 		long exp = (System.currentTimeMillis() / 1000) + ttlSeconds;
-		UCAN token = UCAN.create(kp, UCAN.fromDIDKey(Strings.create(venueDID)), exp,
-			Vectors.empty(), Vectors.empty());
-		return token.toJWT(kp).toString();
+		return mint(kp, venueDID, exp, Vectors.empty());
 	}
 
 	/**
@@ -74,10 +74,8 @@ public final class UcanTokens {
 	public static String grant(AKeyPair ownerKP, String audienceDID,
 			String with, String can, long ttlSeconds) {
 		long exp = (System.currentTimeMillis() / 1000) + ttlSeconds;
-		UCAN token = UCAN.create(ownerKP, UCAN.fromDIDKey(Strings.create(audienceDID)), exp,
-			Vectors.of(Capability.create(Strings.create(with), Strings.create(can))),
-			Vectors.empty());
-		return token.toJWT(ownerKP).toString();
+		return mint(ownerKP, audienceDID, exp,
+			Vectors.of(Capability.create(Strings.create(with), Strings.create(can))));
 	}
 
 	/**
@@ -106,8 +104,25 @@ public final class UcanTokens {
 		for (int i = 0; i < caps.length; i += 2) {
 			att = att.conj(Capability.create(Strings.create(caps[i]), Strings.create(caps[i + 1])));
 		}
-		UCAN token = UCAN.create(kp, UCAN.fromDIDKey(Strings.create(venueDID)), exp,
-			att, Vectors.empty());
-		return token.toJWT(kp).toString();
+		return mint(kp, venueDID, exp, att);
+	}
+
+	/** Uses Convex's any-DID payload API; no helper assumes the audience method. */
+	private static String mint(AKeyPair kp, String audienceDID, long exp,
+			AVector<ACell> att) {
+		if (kp == null) throw new IllegalArgumentException("key pair is required");
+		try {
+			if (audienceDID == null || audienceDID.isBlank()
+					|| DID.fromString(audienceDID) == null) {
+				throw new IllegalArgumentException();
+			}
+		} catch (RuntimeException e) {
+			throw new IllegalArgumentException("audienceDID must be a valid DID: "
+				+ audienceDID, e);
+		}
+		AMap<convex.core.data.AString, ACell> payload = UCAN.buildPayload(
+			kp.getAccountKey(), Strings.create(audienceDID), exp, null,
+			att, Vectors.empty(), null);
+		return UCAN.signJWT(payload, kp).toString();
 	}
 }

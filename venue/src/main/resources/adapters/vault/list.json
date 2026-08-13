@@ -4,6 +4,7 @@
   "creator": "Covia",
   "operation": {
     "adapter": "vault:list",
+    "toolName": "vault_list",
     "input": {
       "type": "object",
       "properties": {
@@ -20,7 +21,8 @@
             "properties": {
               "name": { "type": "string" },
               "type": { "type": "string" },
-              "size": { "type": "integer" }
+              "size": { "type": "integer" },
+              "modified": { "type": "integer", "description": "Last-modified epoch milliseconds" }
             }
           }
         }

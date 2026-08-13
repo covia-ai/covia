@@ -1,6 +1,6 @@
 {
 	"name": "Update Agent",
-	"description": "Update a non-running agent's configuration and/or runtime state while preserving its history. `config` and `state` are each shallow-merged into their existing values, so partial updates preserve sibling fields. Agent configuration has one home: pass model, tools, caps, outputs, and systemPrompt under `config`; `state.config` is rejected. Framework-managed fields (status, tasks, inbox, timeline) are never affected. RUNNING is rejected because its active transition already captured the old config; suspend it before updating, or explicitly delete it with remove=true and create a replacement.",
+	"description": "Update a non-running agent's configuration and/or runtime state while preserving its history. Config accepts an inline map, a reference, or ordered layers; it is recursively merged over existing config with later values winning (vectors replace). State remains shallow-merged. Agent configuration has one home: pass model, tools, caps, outputs, and systemPrompt under config; state.config is rejected. Framework-managed fields (status, tasks, inbox, timeline) are never affected. RUNNING is rejected because its active transition already captured the old config; suspend it before updating and resume afterward.",
 	"dateCreated": "2026-03-07T00:00:00Z",
 	"operation": {
 		"adapter": "agent:update",
@@ -9,7 +9,17 @@
 			"type": "object",
 			"properties": {
 				"agentId": { "type": "string", "description": "Agent name to update" },
-				"config": { "type": "object", "description": "Framework config fields to merge. Top-level keys override existing; unspecified keys are preserved." },
+				"config": {
+					"description": "Config override layer(s): inline map, lattice/asset reference, or ordered array. Nested maps merge recursively over existing config; later scalar/vector/null field values replace earlier ones. Array entries must each be a map or string reference; null is not a layer.",
+					"oneOf": [
+						{ "type": "object" },
+						{ "type": "string" },
+						{
+							"type": "array",
+							"items": { "oneOf": [{ "type": "object" }, { "type": "string" }] }
+						}
+					]
+				},
 				"state": { "description": "State fields to merge (runtime data only). A 'config' key inside state is rejected (#144), as is a 'loads' key — loads live on the context scope chain: config.loads (operator pins) and per-session loads (#142)." }
 			},
 			"required": ["agentId"]

@@ -8,13 +8,16 @@
     "input": {
       "type": "object",
       "properties": {
-        "root": { "type": "string", "description": "Configured root name" },
-        "path": { "type": "string", "description": "Directory path relative to the root (omit for the root itself)" },
+        "root": { "type": "string", "description": "Configured root name; omit for a canonical DLFS path" },
+        "path": { "type": "string", "description": "Directory relative to root or dlfs/<drive>[/<path>]" },
         "maxDepth": { "type": "integer", "description": "Max depth to descend (default 3, max 10)" },
         "maxEntries": { "type": "integer", "description": "Max total entries before truncation (default 500, max 5000)" },
         "info": { "type": "string", "enum": ["size"], "description": "Optional per-line annotation. 'size' appends a human-readable size to file lines." }
       },
-      "required": ["root"]
+      "anyOf": [
+        { "required": ["root"] },
+        { "required": ["path"] }
+      ]
     },
     "output": {
       "type": "object",

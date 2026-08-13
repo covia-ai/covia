@@ -1,7 +1,7 @@
 {
-	"name":"Deepseek chat",
+	"name":"DeepSeek Chat",
 	"creator":"Mike Anderson",
-	"description":"Example operation that chats with a DeepSeek endpoint via LangChainAdapter (OpenAI-compatible route)",
+	"description":"Chat with DeepSeek V4 through its OpenAI-compatible endpoint. V4 Flash is the balanced/economical default; V4 Pro targets harder work.",
 	"dateCreated":"2025-09-16T00:00:00Z",
 	"dateModified": "2025-09-16T00:00:00Z",
 	"keywords":["LLM", "model", "deepseek"],
@@ -19,8 +19,8 @@
 				},
 				"model":{
 					"type":"string",
-					"description":"Optional model name (defaults to deepseek-chat)",
-					"default":"deepseek-chat"
+					"description":"Optional model name (defaults to deepseek-v4-flash)",
+					"default":"deepseek-v4-flash"
 				},
 				"systemPrompt":{
 					"type":"string",

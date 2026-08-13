@@ -12,7 +12,9 @@ Manage agents on a connected Covia venue via MCP.
 
 ## Key Config Rules
 
-These are critical — getting them wrong produces silent failures:
+These are critical — the venue rejects malformed stable shapes and reports
+unavailable operation tools, but a semantically poor config can still create an
+agent that cannot do the intended work:
 
 1. **`config.operation` must be a plain string** — e.g. `"v/ops/llmagent/chat"`, never `{"name": "v/ops/llmagent/chat"}`. The agent runner calls `RT.ensureString()` on this field.
 
@@ -20,9 +22,9 @@ These are critical — getting them wrong produces silent failures:
 
 3. **`config` is the single home for ALL agent settings (#144)** — `operation`, `llmOperation`, `model`, `systemPrompt`, `tools`, `caps` all live in the top-level `config` map. Passing a `config` key inside `state` is rejected with an error.
 
-4. **Reset state when changing prompts** — use `agent_update` to clear conversation history, otherwise the LLM carries forward context from previous runs.
+4. **Conversation history is session-scoped** — updating a prompt changes later turns but does not erase existing sessions. Omit `sessionId` to start a new conversation; delete/recreate the agent only when you explicitly need a completely fresh identity and audit record.
 
-5. **Operation references are lattice paths, not adapter shorthand** — `config.operation`, `llmOperation`, and every entry in `tools` must be a resolvable `v/ops/...` path (e.g. `v/ops/covia/write`), never the `adapter:op` form (`covia:write`). Adapter shorthand does **not** resolve — the agent silently ends up without that tool (you'll see `ContextBuilder -- Config tool: cannot resolve operation 'covia:write'` in the venue log). Harness tools (`subgoal`, `complete`, `fail`, `compact`, `context_load`, `context_unload`, `more_tools`) are the lone exception — they're bare names, not operations. A custom agent that must read/write the workspace has to list those ops explicitly (e.g. `"tools": ["v/ops/covia/read", "v/ops/covia/write"]`) or start from a template such as `worker`.
+5. **Operation references are lattice paths, not adapter shorthand** — `config.operation`, `llmOperation`, and operation entries in `tools` must be resolvable paths such as `v/ops/covia/write`, never `covia:write`. Create returns warnings for unavailable configured tools. Harness tools (`subgoal`, `complete`, `fail`, `compact`, `context_load`, `context_unload`, `more_tools`) are bare names. A custom read/write agent must declare those operations or start from `worker`.
 
 ## Commands
 
@@ -31,15 +33,15 @@ These are critical — getting them wrong produces silent failures:
 ```
 agent_create
   agentId: "<name>"
-  config: { "operation": "v/ops/llmagent/chat" }
-  state: { "config": {
-    "llmOperation": "v/ops/langchain/openai",
-    "model": "gpt-5.4-mini",
-    "systemPrompt": "<prompt>"
-  }}
+  config: [
+    "v/agents/templates/skilled",
+    {"systemPrompt": "<prompt>"}
+  ]
 ```
 
-Ask the user for the system prompt if not provided. Ensure an OpenAI API key is stored (`secret_set`).
+Ask for the system prompt if not provided. Call `langchain_models` first when
+provider readiness matters; the template is provider-neutral and otherwise uses
+the venue default.
 
 ### Create from a template
 
@@ -49,22 +51,27 @@ Pre-built agent configs ship at **`v/agents/templates/<name>`** (browse with `co
 agent_create  agentId="Bob"  config="v/agents/templates/worker"
 ```
 
-Available: `minimal` (pure reasoning, no tools), `reader` (read-only covia), `worker` (covia CRUD), `analyst` (covia + schema), `manager` / `goaltree` (goal-tree planners), `full` (full default toolset).
+Available: `minimal` (on-demand only), `skilled` (recommended lean default),
+`reader` (capability-enforced read-only), `worker` (data processing), `analyst`
+(evidence + schema), `manager` / `goaltree` (goal-tree planners), and `full`
+(broad, context-heavy core palette).
 
-Templates default to `llmOperation: v/ops/langchain/openai` + `model: gpt-5.4-mini`. To run on another provider, override after creating — for template-made agents the LLM settings live in the **top-level `config`**:
+Templates are provider-neutral. Compose the provider at create time so the agent
+never starts under an unintended backend:
 
 ```
-agent_update  agentId="Bob"  config={ "llmOperation": "v/ops/langchain/anthropic", "model": "claude-sonnet-4-6" }
+agent_create agentId="Bob" config=[
+  "v/agents/templates/worker",
+  {"llmOperation": "v/ops/langchain/anthropic", "model": "claude-sonnet-5"}
+]
 ```
 
 **Tool-capable models (agents with `tools`).** An agent that has `tools` needs a
 model that supports function calling, or every run fails when it first tries a
-tool (`Transition failed: … does not support tools`) — there is no check at
-`agent:create` time. For local **ollama** models: `qwen2.5` works well; the
-Gemma family does **not** (Gemma 3 has no usable tool calling; Gemma 4 returns
-tool calls but is far too slow, ~34s/call). A tools-free agent (e.g. the
-`minimal` template) runs on any model. OpenAI/Anthropic frontier models all
-support tools.
+tool. `agent:create` emits an advisory when Ollama tool support cannot be
+confirmed. Use the capabilities returned by `langchain_models` rather than
+assuming support from a model family. Hosted provider capabilities still depend
+on the selected model.
 
 ### `list` — List all agents
 
@@ -82,16 +89,11 @@ agent_info  agentId=<name>
 
 Show status, config, pending tasks, timeline length, and last run result.
 
-### `reset <name>` — Reset an agent (clear history, keep config)
+### `reset <name>` — Start a fresh conversation or replace the agent
 
-Config lives on the record and survives state changes (#144) — reset by
-replacing state only:
-
-```
-agent_update  agentId=<name>  state={}
-```
-
-This clears conversation working state while keeping config untouched.
+For a fresh conversation with the same agent, omit `sessionId` on the next chat
+or request. To erase the complete runtime record and audit history, explicitly
+`agent_delete remove=true` and recreate it; create never overwrites.
 
 ## Available Transition Operations
 

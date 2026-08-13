@@ -4,17 +4,20 @@
   "creator": "Covia",
   "operation": {
     "adapter": "vault:mkdir",
+    "toolName": "vault_mkdir",
     "input": {
       "type": "object",
       "properties": {
-        "path": { "type": "string", "description": "Directory path to create (e.g. 'documents', 'reports/2026')" }
+        "path": { "type": "string", "description": "Directory path to create (e.g. 'documents', 'reports/2026')" },
+        "parents": { "type": "boolean", "description": "Create missing parent directories" }
       },
       "required": ["path"]
     },
     "output": {
       "type": "object",
       "properties": {
-        "created": { "type": "boolean" }
+        "created": { "type": "boolean" },
+        "path": { "type": "string", "description": "Provider path of the directory" }
       }
     }
   }

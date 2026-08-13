@@ -1,6 +1,6 @@
 {
 	"name": "Fork Agent",
-	"description": "Forks an existing agent — creates a new agent with the same config and state as the source. The forked agent starts SLEEPING with fresh tasks, pending, and inbox collections; timeline is copied only if includeTimeline is true. Use for branching exploration (try different prompts from a common starting point), scaling (spawn parallel workers from a trained agent), or snapshots before risky operations. Optional config overrides are merged on top of the source config.",
+	"description": "Forks an existing agent — creates a new agent with the same config and state as the source. The forked agent starts SLEEPING with fresh tasks, pending, and inbox collections; timeline is copied only if includeTimeline is true. Use for branching exploration (try different prompts from a common starting point), scaling (spawn parallel workers from a trained agent), or snapshots before risky operations. Optional config accepts one layer or an ordered layer array; it is resolved first, then recursively merged over the source config with later values winning.",
 	"dateCreated": "2026-04-05T00:00:00Z",
 	"operation": {
 		"adapter": "agent:fork",
@@ -11,7 +11,15 @@
 				"sourceId": { "type": "string", "description": "Agent ID to fork from (must exist and not be TERMINATED)" },
 				"agentId": { "type": "string", "description": "New agent ID for the fork; must not already exist" },
 				"config": {
-					"description": "Optional config overrides — inline map or string reference (workspace path, asset ref, DID URL). Merged on top of the source agent's config."
+					"description": "Optional config override layer(s): inline map, reference, or ordered array of both. Resolved and recursively merged on top of the source agent's config. Array entries must each be a map or string reference; null is not a layer (put null inside a map to clear an inherited field).",
+					"oneOf": [
+						{ "type": "object" },
+						{ "type": "string" },
+						{
+							"type": "array",
+							"items": { "oneOf": [{ "type": "object" }, { "type": "string" }] }
+						}
+					]
 				},
 				"includeTimeline": { "type": "boolean", "description": "If true, copy the source agent's timeline (run history). Default false." }
 			},

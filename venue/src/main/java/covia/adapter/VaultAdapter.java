@@ -80,9 +80,6 @@ public class VaultAdapter extends AAdapter {
 			&& name.indexOf('/') < 0 && name.indexOf('\\') < 0 && name.indexOf(':') < 0;
 	}
 
-	private static final AString OP_KEY = Strings.intern("operation");
-	private static final AString ADAPTER_KEY = Strings.intern("adapter");
-
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		// Map vault:X → dlfs:X with drive injected
@@ -96,17 +93,12 @@ public class VaultAdapter extends AAdapter {
 		if (inputMap == null) inputMap = Maps.empty();
 		inputMap = inputMap.assoc(FIELD_DRIVE, driveName);
 
-		// Delegate to DLFS adapter with synthetic dlfs:X metadata
+		// Delegate to the typed DLFS operation boundary.
 		DLFSAdapter dlfs = (DLFSAdapter) engine.getAdapter("dlfs");
 		if (dlfs == null) {
 			return CompletableFuture.failedFuture(new IllegalStateException("DLFS adapter not available"));
 		}
 
-		// Build minimal metadata so DLFSAdapter.getSubOperation() resolves correctly
-		AMap<AString, ACell> dlfsMeta = Maps.of(
-			OP_KEY, Maps.of(ADAPTER_KEY, Strings.create("dlfs:" + subOp))
-		);
-
-		return dlfs.invokeFuture(ctx, dlfsMeta, inputMap);
+		return dlfs.invokeBoundOperation(ctx, subOp, inputMap);
 	}
 }

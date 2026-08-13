@@ -100,7 +100,7 @@ public class AbstractLLMAdapterTest {
 
 	@Test
 	public void testParseToolArgumentsJsonString() {
-		// The spec wire format: arguments as a JSON-encoded string.
+		// OpenAI-style and legacy wire format: arguments as JSON text.
 		ACell result = AbstractLLMAdapter.parseToolArguments(Strings.create("{\"key\":\"value\"}"));
 		assertTrue(result instanceof AMap);
 		assertEquals("value", RT.ensureString(RT.getIn(result, "key")).toString());
@@ -187,13 +187,13 @@ public class AbstractLLMAdapterTest {
 		AMap<AString, ACell> config = Maps.of(
 			Strings.create("model"), Strings.create("gpt-4o"));
 		AString op = AbstractLLMAdapter.getLLMOperation(config);
-		assertEquals("v/ops/langchain/openai", op.toString());
+		assertEquals("v/ops/langchain/anthropic", op.toString());
 	}
 
 	@Test
 	public void testGetLLMOperationNullConfig() {
 		AString op = AbstractLLMAdapter.getLLMOperation(null);
-		assertEquals("v/ops/langchain/openai", op.toString());
+		assertEquals("v/ops/langchain/anthropic", op.toString());
 	}
 
 	// ========== copyIfPresent ==========

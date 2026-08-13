@@ -20,7 +20,7 @@
         "input": {
           "agentId": ["const", "Alice"],
           "input": ["input"],
-          "wait": ["const", true]
+          "timeout": ["const", 30000]
         }
       },
       {
@@ -31,7 +31,7 @@
             "source_agent": ["const", "Alice"],
             "extraction": [0, "output"]
           },
-          "wait": ["const", true]
+          "timeout": ["const", 30000]
         }
       },
       {
@@ -43,7 +43,7 @@
             "extraction": [0, "output"],
             "enrichment": [1, "output"]
           },
-          "wait": ["const", true]
+          "timeout": ["const", 30000]
         }
       }
     ],

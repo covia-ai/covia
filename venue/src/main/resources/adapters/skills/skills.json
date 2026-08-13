@@ -1,6 +1,6 @@
 {
 	"name": "Skills",
-	"description": "Discover agent skills — named bundles of instructions, context, and tools. Pick the action with `command`: 'list' renders the skill index, one '- name — description' line per skill (or null when no skills exist; also usable as a config.context assemble-op); 'read' returns one skill in full. Skills live in workspace directories (w/skills), the venue catalog (v/skills), or content-addressed assets. Read-only — author skills with covia:write or asset:store.",
+	"description": "Discover agent skills — named bundles of instructions, context, and tools. Pick command='list' to render an index, or command='read' for one full skill. Sources may be directories such as w/skills or v/skills, individual named paths such as v/skills/models, or content-addressed assets. Read-only — author with covia_write or asset_store.",
 	"dateCreated": "2026-07-17T00:00:00Z",
 	"operation": {
 		"adapter": "skills:manage",
@@ -9,7 +9,7 @@
 			"type": "object",
 			"properties": {
 				"command": { "type": "string", "enum": ["list", "read"], "description": "Action to perform." },
-				"sources": { "type": "array", "items": { "type": "string" }, "description": "Skill sources — directory paths (w/skills, v/skills) or asset refs (a/<hash>). Default: [\"w/skills\", \"v/skills\"]." },
+				"sources": { "type": "array", "items": { "type": "string" }, "description": "Skill sources — directory paths, individual skill paths, or asset refs. Default: [\"w/skills\", \"v/skills\"]. Earlier sources shadow same-named later skills." },
 				"name": { "type": "string", "description": "read only: a skill name from the index, looked up across sources." },
 				"ref": { "type": "string", "description": "read only: direct skill address (a/<hash>, v/skills/<x>, w/skills/<x>) — alternative to name." }
 			},

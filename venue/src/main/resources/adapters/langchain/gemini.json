@@ -1,7 +1,7 @@
 {
 	"name":"Gemini model chat",
 	"creator":"Mike Anderson",
-	"description":"Example operation that chats with a Gemini endpoint via LangChainAdapter (OpenAI-compatible route)",
+	"description":"Chat with current Gemini models through Google's OpenAI-compatible endpoint.",
 	"dateCreated":"2025-09-16T00:00:00Z",
 	"dateModified": "2025-09-16T00:00:00Z",
 	"keywords":["LLM", "model", "gemini"],
@@ -22,8 +22,8 @@
 				},
 				"model":{
 					"type":"string",
-					"description":"Optional model name (defaults to gemini-1.5-flash)",
-					"default":"gemini-2.5-flash"
+					"description":"Optional model name. Gemini 3.6 Flash is the balanced default; 3.5 Flash-Lite is the economical high-throughput option.",
+					"default":"gemini-3.6-flash"
 				},
 				"systemPrompt":{
 					"type":"string",

@@ -181,6 +181,25 @@ public abstract class VenueAuth {
 		return new KeyPairAuth(keyPair, subjectDID, lifetimeSeconds, audienceDID);
 	}
 
+	/**
+	 * Self-issued authentication for a DID whose signing key is resolved by the
+	 * target's DID-method verifier. Unlike {@link #namedKeyPair}, the subject
+	 * need not be a user registered at the target; this is how a venue presents
+	 * its declared DID to another venue. The credential is always audience-bound.
+	 *
+	 * @param keyPair private key authorised by the subject DID
+	 * @param subjectDID identity asserted in {@code iss}/{@code sub}
+	 * @param audienceDID target venue's declared DID
+	 * @return a DID-resolved, audience-bound authentication strategy
+	 */
+	public static VenueAuth identityKeyPair(AKeyPair keyPair, String subjectDID,
+			String audienceDID) {
+		requireDID(subjectDID, "subjectDID");
+		requireDID(audienceDID, "audienceDID");
+		return new KeyPairAuth(keyPair, subjectDID,
+			KeyPairAuth.DEFAULT_TOKEN_LIFETIME, audienceDID);
+	}
+
 	private static void requireDID(String value, String label) {
 		try {
 			if (value == null || value.isBlank() || DID.fromString(value) == null) {

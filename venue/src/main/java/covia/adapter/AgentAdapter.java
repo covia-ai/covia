@@ -1,6 +1,8 @@
 package covia.adapter;
 
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -78,6 +80,16 @@ public class AgentAdapter extends AAdapter {
 	private static final AString K_SYSTEM_PROMPT    = Strings.intern("systemPrompt");
 	private static final AString K_LLM_OPERATION    = Strings.intern("llmOperation");
 	private static final AString K_MODEL            = Strings.intern("model");
+	private static final AString K_TOOLS            = Strings.intern("tools");
+	private static final AString K_DEFAULT_TOOLS    = Strings.intern("defaultTools");
+	private static final AString K_CAPS             = Strings.intern("caps");
+	private static final AString K_CONTEXT          = Strings.intern("context");
+	private static final AString K_OUTPUTS          = Strings.intern("outputs");
+	private static final AString K_RESPONSE_FORMAT  = Strings.intern("responseFormat");
+	private static final AString K_API_KEY          = Strings.intern("apiKey");
+	private static final AString K_PROVIDER_OPTIONS = Strings.intern("providerOptions");
+	private static final AString K_AGENT_FACET      = Strings.intern("agent");
+	private static final int MAX_CONFIG_LAYER_DEPTH = 32;
 	/** Persisted, non-secret requester scope used to reconstruct an output
 	 * handoff after a venue restart. Live requests use the complete immutable
 	 * RequestContext held in {@link #outputContexts}; raw bearer UCANs are never
@@ -515,10 +527,9 @@ public class AgentAdapter extends AAdapter {
 			job.fail(describeFailure(e)); return;
 		}
 		// A genuinely omitted config means "give me the useful platform
-		// default", not a tool-less shell. Reuse the installed skilled template
-		// for its prompt/read-list/skills policy, but leave provider and model to
-		// this venue: templates are portable examples and their pinned provider
-		// defaults must not override operator configuration.
+		// default", not a tool-less shell. Reuse the provider-neutral installed
+		// skilled template for its prompt/read-list/skills policy, then apply this
+		// venue's transition and LLM provider defaults explicitly.
 		if (configArg == null) {
 			config = resolveConfigRef(DEFAULT_AGENT_TEMPLATE, ctx);
 			if (config == null) {
@@ -533,41 +544,41 @@ public class AgentAdapter extends AAdapter {
 
 		ACell initialState = RT.getIn(input, AgentState.KEY_STATE);
 
-		// Templates may embed initial state — extract if caller didn't provide one
-		if (config != null && initialState == null) {
-			ACell embeddedState = config.get(AgentState.KEY_STATE);
-			if (embeddedState != null) {
-				initialState = embeddedState;
-				config = config.dissoc(AgentState.KEY_STATE);
-			}
-		}
-
 		// Resolve agent definition asset if provided
 		AString definitionRef = RT.ensureString(RT.getIn(input, Fields.DEFINITION));
 		if (definitionRef != null) {
 			Asset defAsset = engine.resolveAsset(definitionRef, ctx);
+			// resolveAsset is intentionally operation-oriented for local catalog
+			// paths. An agent definition is a non-operation functional asset, so
+			// accept its literal metadata through the general path/CAS resolver.
+			if (defAsset == null) {
+				ACell definitionValue = engine.resolvePath(definitionRef, ctx);
+				if (definitionValue instanceof AMap<?,?> dm) {
+					@SuppressWarnings("unchecked")
+					AMap<AString, ACell> definitionMeta = (AMap<AString, ACell>) dm;
+					defAsset = Asset.fromMeta(definitionMeta);
+				}
+			}
 			if (defAsset == null) { job.fail("Definition asset not found: " + definitionRef); return; }
 
 			AMap<AString, ACell> defMeta = defAsset.meta();
 
-			// Extract agent config from definition metadata.
-			// NB: use instanceof (not RT.castMap) because RT.castMap(null) returns
-			// an empty map, which would wrap an empty state.config even when the
-			// definition has no nested agent.config.
-			AString defOp = RT.ensureString(RT.getIn(defMeta, Strings.intern("agent"), Fields.OPERATION));
-			@SuppressWarnings("unchecked")
-			AMap<AString, ACell> defConfig =
-				(RT.getIn(defMeta, Strings.intern("agent"), Fields.CONFIG) instanceof AMap<?,?> dm)
-					? (AMap<AString, ACell>) dm : null;
+			// Agent definitions and templates use the same functional asset facet.
+			// Resolve its config through the ordinary ordered-layer machinery so a
+			// definition may itself compose reusable config assets.
+			AMap<AString, ACell> defConfig;
+			try {
+				defConfig = resolveConfigValue(defMeta, ctx, new ArrayList<>(), 0,
+					"definition '" + definitionRef + "'");
+			} catch (IllegalArgumentException e) {
+				job.fail("Invalid agent definition " + definitionRef + ": " + e.getMessage());
+				return;
+			}
 
 			// Definition provides defaults; explicit params override. Everything
 			// goes into record.config — the single canonical config slot (#144).
 			if (defConfig != null) {
-				config = (config == null) ? defConfig : defConfig.merge(config);
-			}
-			if (defOp != null && (config == null || !config.containsKey(Fields.OPERATION))) {
-				if (config == null) config = Maps.empty();
-				config = config.assoc(Fields.OPERATION, defOp);
+				config = (config == null) ? defConfig : mergeConfigMaps(defConfig, config);
 			}
 
 			// Store resolved asset ID in config for provenance (full DID URL)
@@ -577,6 +588,15 @@ public class AgentAdapter extends AAdapter {
 				AString defID = ctx.getUserDID().append("/a/" + defAsset.getID().toHexString());
 				config = config.assoc(Fields.DEFINITION, defID);
 			}
+		}
+
+		// Config assets may embed initial state. Explicit operation input wins,
+		// but the construction-only field is never retained in runtime config.
+		// This runs after the compatibility definition layer has been composed.
+		if (config != null && config.containsKey(AgentState.KEY_STATE)) {
+			ACell embeddedState = config.get(AgentState.KEY_STATE);
+			if (initialState == null) initialState = embeddedState;
+			config = config.dissoc(AgentState.KEY_STATE);
 		}
 
 		// Config has exactly one home: record.config, written by the principal;
@@ -602,6 +622,12 @@ public class AgentAdapter extends AAdapter {
 		// systemPrompt present implies an LLM agent — ensure llmOperation is set
 		if (config.containsKey(K_SYSTEM_PROMPT) && !config.containsKey(K_LLM_OPERATION)) {
 			config = config.assoc(K_LLM_OPERATION, engine.config().getDefaultLlmOperation());
+		}
+		try {
+			validateComposedConfig(config);
+		} catch (IllegalArgumentException e) {
+			job.fail(describeFailure(e));
+			return;
 		}
 
 		AgentState agent = user.ensureAgent(agentId, config, initialState);
@@ -869,7 +895,13 @@ public class AgentAdapter extends AAdapter {
 		}
 		AMap<AString, ACell> sourceConfig = source.getConfig();
 		AMap<AString, ACell> forkConfig = (overrideConfig == null) ? sourceConfig
-			: (sourceConfig != null ? sourceConfig.merge(overrideConfig) : overrideConfig);
+			: (sourceConfig != null ? mergeConfigMaps(sourceConfig, overrideConfig) : overrideConfig);
+		try {
+			validateComposedConfig(forkConfig);
+		} catch (IllegalArgumentException e) {
+			job.fail(describeFailure(e));
+			return;
+		}
 
 		ACell sourceState = source.getState();
 		AVector<ACell> sourceTimeline = CVMBool.TRUE.equals(RT.getIn(input, K_INCLUDE_TIMELINE))
@@ -1311,7 +1343,11 @@ public class AgentAdapter extends AAdapter {
 		}
 
 		ACell taskInput = RT.getIn(input, Strings.intern("task"));
-		AString rendered = inspectable.inspectContext(recordConfig, state, taskInput, session, ctx);
+		// Inspection must resolve n/ paths and capability-scoped loads exactly as
+		// the live transition does. The caller identity remains the owner; the
+		// agent id selects the same private namespace/cursor view as execution.
+		AString rendered = inspectable.inspectContext(
+			recordConfig, state, taskInput, session, ctx.withAgentId(agentId));
 
 		// Session token totals (#217): measured usage accumulated on
 		// meta.tokens, appended so an inspector sees real counts instead of
@@ -1562,11 +1598,29 @@ public class AgentAdapter extends AAdapter {
 			return;
 		}
 
-		AMap<AString, ACell> newConfig = (AMap<AString, ACell>) RT.getIn(input, Fields.CONFIG);
+		ACell configInput = RT.getIn(input, Fields.CONFIG);
+		AMap<AString, ACell> newConfig = null;
+		if (configInput != null) {
+			try {
+				AMap<AString, ACell> resolved = parseConfigArg(configInput, ctx);
+				newConfig = mergeConfigMaps(agent.getConfig(), resolved);
+			} catch (IllegalArgumentException e) {
+				job.fail(describeFailure(e));
+				return;
+			}
+		}
 		ACell newState = RT.getIn(input, AgentState.KEY_STATE);
 		if (newConfig == null && newState == null) {
 			job.fail("At least one of 'config' or 'state' must be provided");
 			return;
+		}
+		if (newConfig != null) {
+			try {
+				validateComposedConfig(newConfig);
+			} catch (IllegalArgumentException e) {
+				job.fail(describeFailure(e));
+				return;
+			}
 		}
 		// Config's single home is record.config (#144), and loads live on the
 		// context scope chain (#142) — see handleCreate.
@@ -3322,30 +3376,17 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Parses the {@code config} input argument to an {@link AMap}, accepting
-	 * either an inline map or a string reference (workspace path, asset ref,
-	 * DID URL, or standard template name).
+	 * Resolves agent configuration from one layer or an ordered vector of layers.
+	 * A layer is an inline config map or any lattice reference resolving to one.
+	 * Layers merge left-to-right: maps merge recursively, while every other value
+	 * (including vectors and {@code null}) is replaced by the later layer.
 	 *
-	 * @throws IllegalArgumentException if a string reference cannot be resolved
-	 * @return the resolved config map, or {@code null} if no config was provided
+	 * <p>A referenced asset may expose config canonically under
+	 * {@code agent.config}; flat config maps remain valid for compatibility.</p>
 	 */
-	@SuppressWarnings("unchecked")
 	private AMap<AString, ACell> parseConfigArg(ACell configArg, RequestContext ctx) {
 		if (configArg == null) return null;
-		if (configArg instanceof AMap<?,?> m) return (AMap<AString, ACell>) m;
-		AString ref = RT.ensureString(configArg);
-		if (ref == null) return null;
-		// MCP oneOf may deliver a JSON object as a string — parse it
-		String s = ref.toString();
-		if (s.startsWith("{")) {
-			ACell parsed = JSON.parse(s);
-			if (parsed instanceof AMap<?,?> pm) return (AMap<AString, ACell>) pm;
-		}
-		AMap<AString, ACell> resolved = resolveConfigRef(ref, ctx);
-		if (resolved == null) {
-			throw new IllegalArgumentException("Could not resolve config reference: " + ref);
-		}
-		return resolved;
+		return resolveConfigValue(configArg, ctx, new ArrayList<>(), 0, "config");
 	}
 
 	/**
@@ -3355,11 +3396,247 @@ public class AgentAdapter extends AAdapter {
 	 * pinned operations ({@code o/my-config}), asset hashes, DID URLs, etc.
 	 * Returns the resolved value if it's a map, or {@code null} otherwise.
 	 */
-	@SuppressWarnings("unchecked")
 	private AMap<AString, ACell> resolveConfigRef(AString ref, RequestContext ctx) {
-		ACell value = engine.resolvePath(ref, ctx);
-		if (value instanceof AMap<?,?> m) return (AMap<AString, ACell>) m;
-		return null;
+		return resolveConfigReference(ref, ctx, new ArrayList<>(), 0, "default config");
+	}
+
+	@SuppressWarnings("unchecked")
+	private AMap<AString, ACell> resolveConfigValue(ACell value, RequestContext ctx,
+			List<String> resolving, int depth, String location) {
+		if (depth > MAX_CONFIG_LAYER_DEPTH) {
+			throw new IllegalArgumentException(
+				location + " exceeds the maximum config composition depth of "
+					+ MAX_CONFIG_LAYER_DEPTH + "; simplify the layer/reference chain");
+		}
+		if (value == null) {
+			throw new IllegalArgumentException(location + " is null; remove this layer. "
+				+ "To clear an inherited field, set that field to null inside a config map");
+		}
+
+		if (value instanceof AVector<?> layers) {
+			AMap<AString, ACell> merged = Maps.empty();
+			for (long i = 0; i < layers.count(); i++) {
+				AMap<AString, ACell> layer = resolveConfigValue(
+					(ACell) layers.get(i), ctx, resolving, depth + 1,
+					location + "[" + i + "]");
+				merged = mergeConfigMaps(merged, layer);
+			}
+			return merged;
+		}
+
+		if (value instanceof AString ref) {
+			String text = ref.toString().trim();
+			// MCP transports sometimes stringify an inline map/vector.
+			if (text.startsWith("{") || text.startsWith("[")) {
+				ACell parsed;
+				try {
+					parsed = JSON.parse(text);
+				} catch (RuntimeException e) {
+					throw new IllegalArgumentException(location
+						+ " looks like inline JSON but could not be parsed: "
+						+ describeFailure(e));
+				}
+				return resolveConfigValue(parsed, ctx, resolving, depth + 1, location);
+			}
+			return resolveConfigReference(ref, ctx, resolving, depth + 1, location);
+		}
+
+		if (!(value instanceof AMap<?,?> rawMap)) {
+			throw invalidConfigShape(location, value);
+		}
+		AMap<AString, ACell> map = (AMap<AString, ACell>) rawMap;
+
+		// Canonical functional asset form: ordinary metadata at the top level,
+		// with reusable agent construction data under the agent facet.
+		ACell facetCell = map.get(K_AGENT_FACET);
+		if (map.containsKey(K_AGENT_FACET)) {
+			if (!(facetCell instanceof AMap<?,?> rawFacet)) {
+				throw new IllegalArgumentException(location
+					+ ".agent must be a map containing config and optionally operation/state; got "
+					+ configValueType(facetCell));
+			}
+			AMap<AString, ACell> facet = (AMap<AString, ACell>) rawFacet;
+			if (!facet.containsKey(Fields.CONFIG) && !facet.containsKey(Fields.OPERATION)
+					&& !facet.containsKey(AgentState.KEY_STATE)) {
+				throw new IllegalArgumentException(location
+					+ ".agent must contain at least one of config, operation, or state");
+			}
+			AMap<AString, ACell> config = facet.containsKey(Fields.CONFIG)
+				? resolveConfigValue(facet.get(Fields.CONFIG), ctx, resolving, depth + 1,
+					location + ".agent.config")
+				: Maps.empty();
+			ACell operationCell = facet.get(Fields.OPERATION);
+			if (operationCell != null && !(operationCell instanceof AString)) {
+				throw new IllegalArgumentException(location
+					+ ".agent.operation must be a string operation path; got "
+					+ configValueType(operationCell));
+			}
+			AString operation = (AString) operationCell;
+			if (operation != null && !config.containsKey(Fields.OPERATION)) {
+				config = config.assoc(Fields.OPERATION, operation);
+			}
+			if (facet.containsKey(AgentState.KEY_STATE)) {
+				ACell incomingState = facet.get(AgentState.KEY_STATE);
+				ACell existingState = config.get(AgentState.KEY_STATE);
+				if (existingState instanceof AMap<?,?> em && incomingState instanceof AMap<?,?> im) {
+					config = config.assoc(AgentState.KEY_STATE,
+						mergeConfigMaps((AMap<AString, ACell>) em, (AMap<AString, ACell>) im));
+				} else {
+					config = config.assoc(AgentState.KEY_STATE, incomingState);
+				}
+			}
+			return config;
+		}
+		return map;
+	}
+
+	private AMap<AString, ACell> resolveConfigReference(AString ref, RequestContext ctx,
+			List<String> resolving, int depth, String location) {
+		String key = ref.toString();
+		int cycleStart = resolving.indexOf(key);
+		if (cycleStart >= 0) {
+			List<String> cycle = new ArrayList<>(resolving.subList(cycleStart, resolving.size()));
+			cycle.add(key);
+			throw new IllegalArgumentException(location + " has a cyclic config reference: "
+				+ String.join(" -> ", cycle));
+		}
+		resolving.add(key);
+		try {
+			ACell resolved;
+			try {
+				resolved = engine.resolvePath(ref, ctx);
+			} catch (RuntimeException e) {
+				throw new IllegalArgumentException(location + " could not resolve config reference '"
+					+ key + "': " + describeFailure(e));
+			}
+			// Pure path resolution intentionally does not fetch remote DID assets.
+			// Config assets are definitions, so a remote content-addressed or named
+			// DID reference uses the standard verified asset-fetch path.
+			if (resolved == null && ref.startsWith(Strings.intern("did:"))) {
+				Asset remote;
+				try {
+					remote = engine.resolveAsset(ref, ctx);
+				} catch (RuntimeException e) {
+					throw new IllegalArgumentException(location + " could not fetch remote config asset '"
+						+ key + "': " + describeFailure(e));
+				}
+				if (remote != null) resolved = remote.meta();
+			}
+			if (resolved == null) {
+				throw new IllegalArgumentException(location + " references '" + key
+					+ "', but it was not found; check the path and the caller's read capability. "
+					+ "String config layers are references; put prompt text inside {systemPrompt: ...}");
+			}
+			return resolveConfigValue(resolved, ctx, resolving, depth + 1,
+				location + " (from '" + key + "')");
+		} finally {
+			resolving.remove(resolving.size() - 1);
+		}
+	}
+
+	private static IllegalArgumentException invalidConfigShape(String location, ACell value) {
+		return new IllegalArgumentException(location
+			+ " must be a config map or a string reference (for example "
+			+ "'v/agents/templates/worker'); got " + configValueType(value));
+	}
+
+	private static String configValueType(ACell value) {
+		if (value == null) return "null";
+		if (value instanceof AMap<?,?>) return "map";
+		if (value instanceof AVector<?>) return "array";
+		if (value instanceof AString) return "string";
+		return value.getClass().getSimpleName();
+	}
+
+	/**
+	 * Validates the provider-neutral agent config surface after all layers have
+	 * merged. Provider-specific keys remain intentionally open-ended, but common
+	 * selector mistakes must fail at author time instead of being silently ignored
+	 * on the agent's first turn.
+	 */
+	@SuppressWarnings("unchecked")
+	private static void validateComposedConfig(AMap<AString, ACell> config) {
+		if (config == null) return;
+		requireConfigType(config, Fields.OPERATION, AString.class, "a string transition operation path");
+		requireConfigType(config, K_LLM_OPERATION, AString.class, "a string LLM operation path");
+		requireConfigType(config, K_SYSTEM_PROMPT, AString.class, "a string");
+		requireConfigType(config, K_MODEL, AString.class, "a string model name");
+		requireConfigType(config, K_API_KEY, AString.class, "a string secret reference");
+		requireConfigType(config, K_DEFAULT_TOOLS, CVMBool.class, "a boolean");
+		requireConfigType(config, K_CAPS, AVector.class, "an array of capability objects");
+		requireConfigType(config, K_CONTEXT, AVector.class, "an array of context entries");
+		requireConfigType(config, Fields.LOADS, AMap.class, "a map of path to load options");
+		requireConfigType(config, K_OUTPUTS, AMap.class, "a map of output declarations");
+		requireConfigType(config, K_PROVIDER_OPTIONS, AMap.class, "a map");
+
+		ACell responseFormat = config.get(K_RESPONSE_FORMAT);
+		if (responseFormat != null && !(responseFormat instanceof AString)
+				&& !(responseFormat instanceof AMap<?,?>)) {
+			throw new IllegalArgumentException("config.responseFormat must be a string or map; got "
+				+ configValueType(responseFormat));
+		}
+
+		ACell toolsCell = config.get(K_TOOLS);
+		if (toolsCell == null) return;
+		if (!(toolsCell instanceof AVector<?> tools)) {
+			throw new IllegalArgumentException("config.tools must be an array of string operation paths "
+				+ "or {operation, name?, description?} maps; got " + configValueType(toolsCell));
+		}
+		for (long i = 0; i < tools.count(); i++) {
+			ACell entry = (ACell) tools.get(i);
+			if (entry instanceof AString) continue;
+			if (!(entry instanceof AMap<?,?> rawTool)) {
+				throw new IllegalArgumentException("config.tools[" + i + "] must be a string operation "
+					+ "path/harness tool name or an {operation, name?, description?} map; got "
+					+ configValueType(entry));
+			}
+			AMap<AString, ACell> tool = (AMap<AString, ACell>) rawTool;
+			ACell operation = tool.get(Fields.OPERATION);
+			if (!(operation instanceof AString)) {
+				throw new IllegalArgumentException("config.tools[" + i
+					+ "].operation is required and must be a string operation path; got "
+					+ configValueType(operation));
+			}
+			requireToolText(tool, Strings.intern("name"), i);
+			requireToolText(tool, Strings.intern("description"), i);
+		}
+	}
+
+	private static void requireConfigType(AMap<AString, ACell> config, AString key,
+			Class<?> expected, String expectedDescription) {
+		ACell value = config.get(key);
+		// Null is the merge model's explicit "clear inherited optional value".
+		if (value == null || expected.isInstance(value)) return;
+		throw new IllegalArgumentException("config." + key + " must be "
+			+ expectedDescription + "; got " + configValueType(value));
+	}
+
+	private static void requireToolText(AMap<AString, ACell> tool, AString key, long index) {
+		ACell value = tool.get(key);
+		if (value != null && !(value instanceof AString)) {
+			throw new IllegalArgumentException("config.tools[" + index + "]." + key
+				+ " must be a string when present; got " + configValueType(value));
+		}
+	}
+
+	/** Recursive later-wins merge used only for ordered config composition. */
+	@SuppressWarnings("unchecked")
+	private static AMap<AString, ACell> mergeConfigMaps(
+			AMap<AString, ACell> earlier, AMap<AString, ACell> later) {
+		if (earlier == null || earlier.isEmpty()) return (later != null) ? later : Maps.empty();
+		if (later == null || later.isEmpty()) return earlier;
+		AMap<AString, ACell> merged = earlier;
+		for (var entry : later.entrySet()) {
+			AString key = (AString) entry.getKey();
+			ACell incoming = entry.getValue();
+			ACell existing = merged.get(key);
+			if (existing instanceof AMap<?,?> em && incoming instanceof AMap<?,?> im) {
+				incoming = mergeConfigMaps(
+					(AMap<AString, ACell>) em, (AMap<AString, ACell>) im);
+			}
+			merged = merged.assoc(key, incoming);
+		}
+		return merged;
 	}
 
 	// ========== ID generation ==========
@@ -3423,7 +3700,7 @@ public class AgentAdapter extends AAdapter {
 	private static AMap<AString, ACell> mintLoads(ACell input) {
 		ACell raw = RT.getIn(input, Fields.LOADS);
 		if (raw == null) return null;
-		return covia.adapter.agent.ContextChain.declaredLoads(raw, "loads");
+		return covia.adapter.agent.ContextChain.declaredLoads(raw, "loads", true);
 	}
 
 	/**

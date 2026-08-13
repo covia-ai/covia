@@ -11,10 +11,12 @@ import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 
 import dev.langchain4j.agent.tool.ToolSpecification;
+import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
@@ -27,6 +29,10 @@ import dev.langchain4j.model.chat.request.ResponseFormatType;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.output.FinishReason;
 import dev.langchain4j.model.output.TokenUsage;
+import dev.langchain4j.model.anthropic.internal.api.AnthropicMessage;
+import dev.langchain4j.model.anthropic.internal.api.AnthropicRole;
+import dev.langchain4j.model.anthropic.internal.api.AnthropicToolResultContent;
+import dev.langchain4j.model.anthropic.internal.mapper.AnthropicMapper;
 import dev.langchain4j.model.chat.request.json.JsonArraySchema;
 import dev.langchain4j.model.chat.request.json.JsonBooleanSchema;
 import dev.langchain4j.model.chat.request.json.JsonEnumSchema;
@@ -46,6 +52,17 @@ import covia.venue.RequestContext;
  * Unit tests for LangChainAdapter conversion methods.
  */
 public class LangChainAdapterTest {
+
+	@Test
+	public void testProviderKeyPrefersSecretStoreThenProcessEnvironment() {
+		assertEquals("caller-key",
+			LangChainAdapter.preferStoredSecret("caller-key", "operator-key"));
+		assertEquals("operator-key",
+			LangChainAdapter.preferStoredSecret(null, "operator-key"));
+		assertEquals("operator-key",
+			LangChainAdapter.preferStoredSecret("  ", "operator-key"));
+		assertNull(LangChainAdapter.preferStoredSecret(null, "  "));
+	}
 
 	// ========== #91 regression: silent fallback when secret resolution fails ==========
 
@@ -224,6 +241,32 @@ public class LangChainAdapterTest {
 	}
 
 	@Test
+	public void testToAssistantMessageCanonicalisesOpenAiStyleArguments() {
+		AiMessage ai = new AiMessage(null, List.of(ToolExecutionRequest.builder()
+			.id("toolu_1")
+			.name("agent_create")
+			.arguments("{\"agentId\":\"Worker1\",\"config\":\"v/agents/templates/worker\"}")
+			.build()));
+
+		ACell msg = LangChainAdapter.toAssistantMessage(ai);
+		ACell arguments = RT.getIn(msg, "toolCalls", 0L, "arguments");
+		assertInstanceOf(AMap.class, arguments,
+			"provider JSON text must not leak into the canonical conversation");
+		assertEquals("Worker1", RT.getIn(arguments, "agentId").toString());
+		assertEquals("v/agents/templates/worker", RT.getIn(arguments, "config").toString());
+	}
+
+	@Test
+	public void testToAssistantMessageRetainsMalformedArgumentsForAudit() {
+		AiMessage ai = new AiMessage(null, List.of(ToolExecutionRequest.builder()
+			.id("toolu_bad").name("agent_create").arguments("{broken").build()));
+
+		ACell msg = LangChainAdapter.toAssistantMessage(ai);
+		assertEquals(Strings.create("{broken"), RT.getIn(msg, "toolCalls", 0L, "arguments"),
+			"the tool loop needs the exact provider output to report a useful error");
+	}
+
+	@Test
 	public void testToAssistantMessageWithTokens() {
 		ChatResponse response = ChatResponse.builder()
 			.aiMessage(AiMessage.from("Hi"))
@@ -301,6 +344,17 @@ public class LangChainAdapterTest {
 	}
 
 	@Test
+	public void testToChatMessagesRendersStructuredAgentRequestAsJson() {
+		ACell request = Maps.of("task", "echo marker", "marker", "COVIA-349");
+		var messages = Vectors.of(Maps.of(
+			"role", "user", "content", request));
+
+		List<ChatMessage> result = LangChainAdapter.toChatMessages(messages);
+		UserMessage user = assertInstanceOf(UserMessage.class, result.get(0));
+		assertEquals(JSON.print(request).toString(), user.singleText());
+	}
+
+	@Test
 	public void testToChatMessagesToolResult() {
 		var messages = Vectors.of(
 			Maps.of("role", "tool", "id", "call_1", "name", "search", "content", "{\"results\": []}")
@@ -309,6 +363,74 @@ public class LangChainAdapterTest {
 		List<ChatMessage> result = LangChainAdapter.toChatMessages(messages);
 		assertEquals(1, result.size());
 		assertInstanceOf(ToolExecutionResultMessage.class, result.get(0));
+	}
+
+	@Test
+	public void testToChatMessagesSerialisesStructuredArgumentsAtProviderBoundary() {
+		ACell arguments = Maps.of(
+			"agentId", "Worker1",
+			"config", "v/agents/templates/worker");
+		var messages = Vectors.of(Maps.of(
+			"role", "assistant",
+			"toolCalls", Vectors.of(Maps.of(
+				"id", "toolu_1", "name", "agent_create", "arguments", arguments))));
+
+		List<ChatMessage> result = LangChainAdapter.toChatMessages(messages);
+		AiMessage assistant = assertInstanceOf(AiMessage.class, result.get(0));
+		assertEquals(JSON.print(arguments).toString(),
+			assistant.toolExecutionRequests().get(0).arguments());
+	}
+
+	@Test
+	public void testToChatMessagesAcceptsLegacyStringArguments() {
+		String legacy = "{\"path\":\"w/report\"}";
+		var messages = Vectors.of(Maps.of(
+			"role", "assistant",
+			"toolCalls", Vectors.of(Maps.of(
+				"id", "call_old", "name", "covia_read", "arguments", legacy))));
+
+		List<ChatMessage> result = LangChainAdapter.toChatMessages(messages);
+		AiMessage assistant = assertInstanceOf(AiMessage.class, result.get(0));
+		assertEquals(legacy, assistant.toolExecutionRequests().get(0).arguments());
+	}
+
+	@Test
+	public void testToChatMessagesPreservesAnthropicToolErrorFlag() {
+		var messages = Vectors.of(Maps.of(
+			"role", "tool", "id", "call_bad", "name", "search",
+			"content", "Error: unavailable", "isError", CVMBool.TRUE));
+
+		List<ChatMessage> result = LangChainAdapter.toChatMessages(messages);
+		ToolExecutionResultMessage tool = assertInstanceOf(
+			ToolExecutionResultMessage.class, result.get(0));
+		assertEquals(Boolean.TRUE, tool.isError());
+	}
+
+	@Test
+	public void testAnthropicWireMapperGroupsParallelToolResultsAfterToolUse() {
+		var canonical = Vectors.of(
+			Maps.of("role", "assistant", "content", "", "toolCalls", Vectors.of(
+				Maps.of("id", "call_ok", "name", "complete", "arguments", Maps.of("answer", "42")),
+				Maps.of("id", "call_skip", "name", "search", "arguments", Maps.empty()))),
+			Maps.of("role", "tool", "id", "call_ok", "name", "complete",
+				"content", "{\"status\":\"complete\"}"),
+			Maps.of("role", "tool", "id", "call_skip", "name", "search",
+				"content", "Error: skipped", "isError", CVMBool.TRUE));
+
+		List<AnthropicMessage> wire = AnthropicMapper.toAnthropicMessages(
+			LangChainAdapter.toChatMessages(canonical));
+		assertEquals(2, wire.size());
+		assertEquals(AnthropicRole.ASSISTANT, wire.get(0).role);
+		assertEquals(AnthropicRole.USER, wire.get(1).role);
+		assertEquals(2, wire.get(1).content.size(),
+			"parallel results must share the immediately following Anthropic user turn");
+		AnthropicToolResultContent ok = assertInstanceOf(
+			AnthropicToolResultContent.class, wire.get(1).content.get(0));
+		AnthropicToolResultContent skipped = assertInstanceOf(
+			AnthropicToolResultContent.class, wire.get(1).content.get(1));
+		assertEquals("call_ok", ok.toolUseId);
+		assertEquals("call_skip", skipped.toolUseId);
+		assertEquals(Boolean.TRUE, skipped.isError);
 	}
 
 	@Test
@@ -1261,7 +1383,8 @@ public class LangChainAdapterTest {
 		assertNull(request.responseFormat(), "no response_format on the forced-tool path");
 
 		// Response: exactly what native response_format would have produced
-		assertEquals("{\"answer\": 42}", RT.getIn(result, "content").toString());
+		assertEquals("{\"answer\":42}", RT.getIn(result, "content").toString(),
+			"structured arguments are canonically encoded for the synthetic output");
 		assertNull(RT.getIn(result, "toolCalls"));
 		assertEquals(15L, RT.ensureLong(RT.getIn(result, "tokens", "total")).longValue(),
 			"usage must be measured on the forced-tool path too");
@@ -1284,7 +1407,7 @@ public class LangChainAdapterTest {
 		assertEquals(0.9, openai.defaultRequestParameters().topP());
 
 		var anthropic = LangChainAdapter.buildAnthropicModel("key", "https://api.anthropic.com/v1/",
-			"claude-sonnet-4-6", java.time.Duration.ofSeconds(5), tuning);
+			"claude-sonnet-5", java.time.Duration.ofSeconds(5), tuning);
 		assertEquals(0.0, anthropic.defaultRequestParameters().temperature());
 		assertEquals(0.9, anthropic.defaultRequestParameters().topP());
 
@@ -1352,10 +1475,17 @@ public class LangChainAdapterTest {
 
 	@Test
 	public void testModelsForConfigOverrideAndBuiltins() {
-		// Built-ins: conservative hints
-		assertTrue(LangChainAdapter.modelsFor("anthropic", null).toString().contains("claude-opus-4-8"));
-		assertTrue(LangChainAdapter.modelsFor("openai", null).toString().contains("gpt-5.4-mini"));
-		assertEquals(0, LangChainAdapter.modelsFor("gemini", null).count());
+		// Built-ins: current supported selections across workload tiers.
+		assertTrue(LangChainAdapter.modelsFor("anthropic", null).toString().contains("claude-opus-5"));
+		assertTrue(LangChainAdapter.modelsFor("anthropic", null).toString().contains("claude-sonnet-5"));
+		assertTrue(LangChainAdapter.modelsFor("openai", null).toString().contains("gpt-5.6-terra"));
+		assertTrue(LangChainAdapter.modelsFor("openai", null).toString().contains("gpt-5.4-nano"));
+		assertTrue(LangChainAdapter.modelsFor("gemini", null).toString().contains("gemini-3.6-flash"));
+		assertTrue(LangChainAdapter.modelsFor("deepseek", null).toString().contains("deepseek-v4-flash"));
+		assertTrue(LangChainAdapter.modelsFor("xai", null).toString().contains("grok-build-0.1"));
+		assertEquals("claude-sonnet-5", LangChainAdapter.defaultModelFor("anthropic"));
+		assertEquals("gpt-5.6-terra", LangChainAdapter.defaultModelFor("openai"));
+		assertEquals("grok-4.3", LangChainAdapter.defaultModelFor("xai"));
 
 		// Venue config override wins wholesale
 		AMap<AString, ACell> cfg = Maps.of(
@@ -1380,6 +1510,9 @@ public class LangChainAdapterTest {
 			RT.ensureVector(RT.getIn(before, "providers")).get(0));
 		assertEquals("anthropic", RT.getIn(entry, "provider").toString());
 		assertEquals("ANTHROPIC_API_KEY", RT.getIn(entry, "keySecret").toString());
+		assertEquals("claude-sonnet-5", RT.getIn(entry, "defaultModel").toString());
+		assertEquals("claude-haiku-4-5-20251001",
+			RT.getIn(entry, "recommendations", "economical").toString());
 		assertEquals(convex.core.data.prim.CVMBool.FALSE, RT.getIn(entry, "ready"));
 
 		// Store the key → ready flips, for this caller only. The VALUE never

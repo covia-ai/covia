@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -898,6 +899,51 @@ public class FileAdapterTest {
 	}
 
 	@Test
+	public void testCanonicalDLFSPathsThroughFileSurface() {
+		Engine eng = Engine.createTemp(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
+		Engine.addDemoAssets(eng);
+		AString did = Strings.create("did:key:z6Mk-test-FileAdapterTest-direct-dlfs");
+		RequestContext free = RequestContext.of(did);
+		try {
+			eng.jobs().invokeOperation("v/ops/dlfs/create-drive",
+				Maps.of("name", "direct"), free).awaitResult(2000);
+			eng.jobs().invokeOperation("v/ops/file/mkdir",
+				Maps.of("path", "dlfs/direct/docs"), free).awaitResult(2000);
+			eng.jobs().invokeOperation("v/ops/file/write", Maps.of(
+				"path", "dlfs/direct/docs/note.txt", "content", "canonical"), free)
+				.awaitResult(2000);
+
+			ACell read = eng.jobs().invokeOperation("v/ops/file/read",
+				Maps.of("path", "dlfs/direct/docs/note.txt"), free).awaitResult(2000);
+			assertEquals("canonical", RT.getIn(read, "content").toString());
+			ACell list = eng.jobs().invokeOperation("v/ops/file/list",
+				Maps.of("path", "dlfs/direct/docs"), free).awaitResult(2000);
+			assertEquals(1, RT.ensureVector(RT.getIn(list, "entries")).count());
+
+			ACell moved = eng.jobs().invokeOperation("v/ops/file/move", Maps.of(
+				"from", "dlfs/direct/docs/note.txt",
+				"to", "dlfs/direct/docs/moved.txt"), free).awaitResult(2000);
+			assertEquals("dlfs/direct/docs/moved.txt", RT.getIn(moved, "to").toString());
+			eng.jobs().invokeOperation("v/ops/file/copy", Maps.of(
+				"from", "dlfs/direct/docs/moved.txt",
+				"to", "dlfs/direct/docs/copy.txt"), free).awaitResult(2000);
+
+			RequestContext scoped = RequestContext.of(did).withCaps(Vectors.of(
+				Capability.create(Strings.create("dlfs/direct/docs/"), Capability.CRUD_READ)));
+			ACell scopedRead = eng.jobs().invokeOperation("v/ops/file/read",
+				Maps.of("path", "dlfs/direct/docs/copy.txt"), scoped).awaitResult(2000);
+			assertEquals("canonical", RT.getIn(scopedRead, "content").toString());
+
+			Job escaped = eng.jobs().invokeOperation("v/ops/file/read",
+				Maps.of("path", "dlfs/direct/../other.txt"), free);
+			assertThrows(Exception.class, () -> escaped.awaitResult(2000));
+			assertTrue(escaped.getErrorMessage().contains("escapes DLFS drive"));
+		} finally {
+			eng.close();
+		}
+	}
+
+	@Test
 	public void testDLFSBackedRootMoveAndCopyAreNative() {
 		// Convex 0.8.11 (#675/#677) implements DLFSProvider.move/copy, so the
 		// file: surface's direct NIO dispatch works natively on a DLFS root — a
@@ -956,13 +1002,13 @@ public class FileAdapterTest {
 	}
 
 	@Test
-	public void testDLFSSubpathRootConfinesPathsAndUsesLogicalCapabilities() {
+	public void testDLFSSubpathRootConfinesPathsAndUsesCanonicalCapabilities() {
 		Engine eng = Engine.createTemp(Maps.of(
 			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 			"file", Maps.of("roots", Maps.of(
-				"mina", Maps.of(
+			"documents", Maps.of(
 					"dlfs", "vault-drive",
-					"subpath", "Made by Mina")
+					"subpath", "agent-output")
 			))
 		));
 		Engine.addDemoAssets(eng);
@@ -975,54 +1021,54 @@ public class FileAdapterTest {
 			rootsJob.awaitResult(2000);
 			AVector<?> roots = RT.ensureVector(RT.getIn(rootsJob.getOutput(), "roots"));
 			assertEquals(1, roots.count());
-			assertEquals("dlfs:vault-drive/Made by Mina",
+			assertEquals("dlfs:vault-drive/agent-output",
 				RT.ensureString(RT.getIn(roots.get(0), "path")).toString());
 
 			// Logical paths are resolved underneath the configured physical subtree.
 			eng.jobs().invokeOperation("v/ops/file/mkdir", Maps.of(
-				"root", "mina", "path", "notes", "parents", true), free)
+				"root", "documents", "path", "notes", "parents", true), free)
 				.awaitResult(2000);
 			eng.jobs().invokeOperation("v/ops/file/write", Maps.of(
-				"root", "mina", "path", "notes/hello.txt", "content", "scoped"), free)
+				"root", "documents", "path", "notes/hello.txt", "content", "scoped"), free)
 				.awaitResult(2000);
 			Job physicalRead = eng.jobs().invokeOperation("v/ops/dlfs/read", Maps.of(
 				"drive", "vault-drive",
-				"path", "/Made by Mina/notes/hello.txt"), free);
+				"path", "/agent-output/notes/hello.txt"), free);
 			physicalRead.awaitResult(2000);
 			assertEquals("scoped",
 				RT.ensureString(RT.getIn(physicalRead.getOutput(), "content")).toString());
 
 			// The logical jail is applied before capability construction and dispatch.
 			Job escaped = eng.jobs().invokeOperation("v/ops/file/read", Maps.of(
-				"root", "mina", "path", "../outside.txt"), free);
+				"root", "documents", "path", "../outside.txt"), free);
 			try { escaped.awaitResult(2000); } catch (RuntimeException ignored) {}
 			assertEquals(Status.FAILED, escaped.getStatus());
 			assertTrue(escaped.getErrorMessage().contains("escapes root"),
 				escaped::getErrorMessage);
 
 			AVector<ACell> logicalCaps = Vectors.of(Capability.create(
-				Strings.create("file://mina/allowed/"), Capability.CRUD_WRITE));
+				Strings.create("dlfs/vault-drive/agent-output/allowed/"), Capability.CRUD_WRITE));
 			RequestContext logical = RequestContext.of(did).withCaps(logicalCaps);
 			Job allowedDir = eng.jobs().invokeOperation("v/ops/file/mkdir", Maps.of(
-				"root", "mina", "path", "allowed", "parents", true), logical);
+				"root", "documents", "path", "allowed", "parents", true), logical);
 			allowedDir.awaitResult(2000);
 			assertEquals(Status.COMPLETE, allowedDir.getStatus());
 			Job allowedWrite = eng.jobs().invokeOperation("v/ops/file/write", Maps.of(
-				"root", "mina", "path", "allowed/ok.txt", "content", "ok"), logical);
+				"root", "documents", "path", "allowed/ok.txt", "content", "ok"), logical);
 			allowedWrite.awaitResult(2000);
 			assertEquals(Status.COMPLETE, allowedWrite.getStatus());
 
-			// A grant naming the physical prefix does not accidentally match the
-			// logical API namespace exposed by the configured root.
+			// The old logical file:// alias must not authorise the underlying DLFS
+			// data. A capability always names the actual DID-scoped resource.
 			RequestContext physicalCap = RequestContext.of(did).withCaps(Vectors.of(
-				Capability.create(Strings.create("file://mina/Made by Mina/"),
+				Capability.create(Strings.create("file://documents/"),
 					Capability.CRUD_WRITE)));
 			String denied = capDenialOf(() -> eng.jobs().invokeOperation(
 				"v/ops/file/write", Maps.of(
-					"root", "mina", "path", "physical.txt", "content", "denied"),
+					"root", "documents", "path", "physical.txt", "content", "denied"),
 				physicalCap));
 			assertNotNull(denied);
-			assertTrue(denied.contains("file://mina/physical.txt"), denied);
+			assertTrue(denied.contains("dlfs/vault-drive/agent-output/physical.txt"), denied);
 		} finally {
 			eng.close();
 		}

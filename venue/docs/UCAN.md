@@ -536,11 +536,12 @@ Venue:
 |-------|-------------------|
 | `covia:read` / `covia:list` / `covia:slice` (cross-user) | `{ with: "<path>", can: "crud/read" }` |
 | `covia:write` / `covia:delete` / `covia:append` (cross-user) | `{ with: "<path>", can: "crud/write" }` |
-| `file:read` / `file:list` / `file:stat` / `file:roots` | `{ with: "file://<root>/<path>", can: "crud/read" }` |
-| `file:write` / `file:append` / `file:mkdir` | `{ with: "file://<root>/<path>", can: "crud/write" }` |
-| `file:move` | `crud/write` on both resolved `file://<source-root>/<from>` and `file://<destination-root>/<to>` |
+| `file:read` / `file:list` / `file:stat` | `crud/read` on the resolved resource: `file://<root>/<path>` for host/temp roots, canonical `dlfs/<drive>/<path>` for DLFS targets |
+| `file:roots` | `{ with: "file://", can: "crud/read" }` |
+| `file:write` / `file:append` / `file:mkdir` | `crud/write` on the resolved file or DLFS resource |
+| `file:move` | `crud/write` on both resolved source and destination resources |
 | `file:copy` | `crud/read` on the resolved source and `crud/write` on the resolved destination |
-| `file:delete` | `{ with: "file://<root>/<path>", can: "crud/delete" }` |
+| `file:delete` | `crud/delete` on the resolved file or DLFS resource |
 | `dlfs:read` / `dlfs:list` / `dlfs:stat` / `dlfs:listDrives` | `{ with: "dlfs/<drive>/<path>", can: "crud/read" }` |
 | `dlfs:write` / `dlfs:append` / `dlfs:mkdir` / `dlfs:createDrive` | `{ with: "dlfs/<drive>/<path>", can: "crud/write" }` |
 | `dlfs:delete` / `dlfs:deleteDrive` | `{ with: "dlfs/<drive>/<path>", can: "crud/delete" }` |
@@ -567,6 +568,11 @@ naturally:
 | `file://scratch/agent-output/` | one subtree of one root |
 | `dlfs/` | every drive of the owner |
 | `dlfs/vault/documents/` | one subtree of one drive |
+
+A configured File root backed by DLFS is only an addressing alias and subtree
+jail. It does not create a second `file://` authority for the same data: File
+operations enforce the underlying canonical DLFS resource. File operations can
+also consume canonical own-drive and owner-DID DLFS references directly.
 
 Granting `crud` (without a verb suffix) covers read+write+delete uniformly;
 trailing-slash on the resource is the conventional way to cover a subtree.
@@ -1098,7 +1104,7 @@ attenuation, temporal, revocation) is shared with the single-venue path.
 | Transport encoding | DAG-JSON or JWT | JWT (interop transport); CVM JSON for lattice-native exchange |
 | Storage | Application-specific | Lattice `/a/` namespace (content-addressable, replicated) |
 | Key types | Ed25519, P-256, secp256k1 | Ed25519 (Convex native) |
-| DID methods | Any | `did:key` (primary), `did:web`, `did:convex` |
+| DID methods | Any | Built in: `did:key`, `did:web`; method resolvers are extensible (for example future `did:convex`) |
 | Revocation | Application-specific | Lattice-native signed records |
 | Merge semantics | None (tokens are immutable) | CAS lattice merge (immutable, union) |
 

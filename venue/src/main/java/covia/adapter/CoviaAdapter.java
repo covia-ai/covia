@@ -327,6 +327,34 @@ public class CoviaAdapter extends AAdapter {
 	}
 
 	/**
+	 * Resolves one exact lattice value for framework context assembly.
+	 * Unlike the public read operation this returns the value itself (no
+	 * {@code {exists,value}} envelope and no response-size guard), while using
+	 * the identical namespace semantics: physical user paths plus cursor-based
+	 * {@code n/}, job-scoped {@code t/}, and session-scoped {@code c/} views.
+	 * The caller must hold {@code crud/read} on the path.
+	 */
+	public ACell readContextValue(RequestContext ctx, AString path) {
+		if (path == null) return null;
+		engine.requireResourceAccess(ctx, path, Capability.CRUD_READ);
+		ACell[] pathKeys = parseStringPath(path.toString());
+		NamespaceResolver.ResolvedNamespace vns = resolveVirtual(ctx, pathKeys);
+		if (vns != null) {
+			if (vns.jobId() != null || vns.sessionId() != null) {
+				ACell root = scopedRoot(vns);
+				ACell[] remaining = vns.remainingKeys();
+				return (remaining.length == 0) ? root : deepGet(root, remaining, 0);
+			}
+			ACell[] remaining = vns.remainingKeys();
+			return (remaining.length == 0)
+				? vns.cursor().get() : readPath(vns.cursor(), remaining);
+		}
+
+		// Physical namespaces and universal asset/op references.
+		return engine.resolvePath(path, ctx);
+	}
+
+	/**
 	 * The {@code maxSize} cap (CAD3 encoding bytes) for the exact-value read ops
 	 * ({@code covia:read}, {@code covia:slice}). This is CVM storage size — a hard
 	 * cap on the exact return value — and is a distinct concern from

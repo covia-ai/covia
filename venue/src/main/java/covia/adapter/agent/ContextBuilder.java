@@ -72,6 +72,7 @@ public class ContextBuilder {
 	private static final AString K_ROLE          = Strings.intern("role");
 	private static final AString K_CONTENT       = Strings.intern("content");
 	private static final AString K_NAME          = Strings.intern("name");
+	private static final AString K_IS_ERROR      = Strings.intern("isError");
 	private static final AString K_DESCRIPTION   = Strings.intern("description");
 	private static final AString K_PARAMETERS    = Strings.intern("parameters");
 	private static final AString K_TYPE          = Strings.intern("type");
@@ -121,7 +122,7 @@ public class ContextBuilder {
 		+ "  v/ops/covia/read              Venue operation\n"
 		+ "  a/<hash>                      Asset by content hash\n"
 		+ "  did:key:<id>/w/...            Cross-user (requires capability)\n"
-		+ "  did:web:<venue>/v/ops/...     Cross-venue (federated)");
+		+ "  <venue-did>/v/ops/...         Cross-venue (use the presented DID)");
 
 	/**
 	 * Per-engine cache of resolved default tool definitions.
@@ -347,8 +348,8 @@ public class ContextBuilder {
 		// string content and ignore extra fields like ts/source).
 		ACell activeCell = frames.get(frames.count() - 1);
 		if (!(activeCell instanceof AMap)) return this;
-		AVector<ACell> rendered = covia.adapter.agent.GoalTreeContext
-			.renderConversationFor((AMap<AString, ACell>) activeCell, config);
+		AVector<ACell> rendered = ConversationRenderer
+			.renderFor((AMap<AString, ACell>) activeCell, config);
 
 		for (long i = 0; i < rendered.count(); i++) {
 			ACell entry = rendered.get(i);
@@ -410,9 +411,9 @@ public class ContextBuilder {
 	 *  block is and how to act on it (see venue/docs/SKILLS.md §4.2). */
 	private static final String SKILLS_PREAMBLE =
 		"[Skills]\n"
-		+ "Named skill packs you can load with skill_load({name: \"...\"}). Loading injects the\n"
-		+ "skill's instructions into your context (persists across turns; unload with\n"
-		+ "context_unload) and adds its tools to your palette.\n";
+		+ "Named skill packs available through the advertised skill-loading control. Loading injects\n"
+		+ "the skill's instructions into your context across turns and adds its operations to your\n"
+		+ "palette. Use the advertised context-removal control when a loaded skill is no longer useful.\n";
 
 	/**
 	 * Injects the skills index — one compact system message listing the
@@ -496,6 +497,50 @@ public class ContextBuilder {
 	}
 
 	/**
+	 * One provider-facing, freshly resolved view of the effective loads for a
+	 * single LLM inference. Loaded values, contributed tool definitions, and
+	 * their dispatch routes are deliberately assembled together so a caller
+	 * cannot refresh the palette while accidentally retaining stale routes (or
+	 * refresh routes without refreshing the values the model sees).
+	 *
+	 * <p>The snapshot is ephemeral. Callers resolve it once immediately before
+	 * <em>every</em> provider call and never persist its rendered messages.</p>
+	 */
+	public record LoadSnapshot(
+			AVector<ACell> messages,
+			AVector<ACell> tools,
+			Map<String, AString> routes) {
+		public LoadSnapshot {
+			messages = (messages != null) ? messages : Vectors.empty();
+			tools = (tools != null) ? tools : Vectors.empty();
+			routes = (routes != null) ? Map.copyOf(routes) : Map.of();
+		}
+	}
+
+	/** Resolves a complete live-load snapshot under the supplied authority. */
+	public static LoadSnapshot resolveLoadSnapshot(Engine engine, RequestContext ctx,
+			AMap<AString, ACell> effectiveLoads, java.util.Set<String> excludeNames) {
+		ContextBuilder loadBuilder = new ContextBuilder(engine, ctx)
+			.withLoadedPaths(effectiveLoads, ctx)
+			.withContextMap(effectiveLoads);
+		Map<String, AString> routes = new HashMap<>();
+		AVector<ACell> tools = loadsToolDefs(engine, ctx, effectiveLoads,
+			excludeNames, routes);
+		return new LoadSnapshot(loadBuilder.build().history(), tools, routes);
+	}
+
+	/** Appends already-resolved ephemeral messages while preserving accounting. */
+	public ContextBuilder withResolvedMessages(AVector<ACell> resolved) {
+		if (resolved == null) return this;
+		for (long i = 0; i < resolved.count(); i++) {
+			ACell msg = resolved.get(i);
+			messages = messages.conj(msg);
+			trackMessage(msg);
+		}
+		return this;
+	}
+
+	/**
 	 * Resolves dynamically loaded paths from the loads scope chain.
 	 * Each entry is resolved fresh using ContextLoader with per-entry CellExplorer budget.
 	 * Data entries that exceed remaining budget or fail to resolve are silently
@@ -526,18 +571,6 @@ public class ContextBuilder {
 			ACell budgetCell = meta.get(Strings.intern("budget"));
 			if (budgetCell instanceof convex.core.data.prim.CVMLong l) {
 				entryBudget = (int) Math.max(MIN_ENTRY_BUDGET, Math.min(l.longValue(), 10_000));
-			}
-
-			if (entryBudget > getRemaining()) {
-				// Data loads skip silently under budget pressure; a skill the
-				// agent loaded must not silently vanish — it changes behaviour.
-				if (Skills.isSkillEntry(meta)) {
-					ACell notice = Skills.skillErrorMessage(loadLabel(path, meta),
-						"context budget exhausted — unload something or raise the budget");
-					messages = messages.conj(notice);
-					trackMessage(notice);
-				}
-				continue;
 			}
 
 			loader.setCellExplorer(new CellExplorer(entryBudget));
@@ -697,42 +730,18 @@ public class ContextBuilder {
 	}
 
 	/**
-	 * Safety valve: if budget usage exceeds 90%, auto-prune loaded paths (LIFO — newest first)
-	 * until usage drops below 70%. Returns the pruned loads map for persistence.
+	 * Advisory safety check. Byte accounting is useful for diagnostics, but is
+	 * not a reliable provider-token bound across models. It therefore never
+	 * silently removes context.
 	 */
-	@SuppressWarnings("unchecked")
 	public AMap<AString, ACell> applySafetyValve(AMap<AString, ACell> loads) {
 		if (loads == null || loads.count() == 0) return loads;
 		double usageRatio = (double) consumed / totalBudget;
-		if (usageRatio < PRUNE_THRESHOLD) return loads;
-
-		// Sort by ts descending (newest first for LIFO eviction)
-		java.util.List<java.util.Map.Entry<AString, ACell>> sorted = new java.util.ArrayList<>();
-		for (var entry : loads.entrySet()) sorted.add(entry);
-		sorted.sort((a, b) -> {
-			long tsA = extractTs((AMap<AString, ACell>) a.getValue());
-			long tsB = extractTs((AMap<AString, ACell>) b.getValue());
-			return Long.compare(tsB, tsA);
-		});
-
-		AMap<AString, ACell> pruned = loads;
-		for (var e : sorted) {
-			if ((double) consumed / totalBudget < WARN_THRESHOLD) break;
-			AString path = e.getKey();
-			AMap<AString, ACell> meta = (AMap<AString, ACell>) e.getValue();
-			int entryBudget = 500;
-			ACell budgetCell = meta.get(Strings.intern("budget"));
-			if (budgetCell instanceof convex.core.data.prim.CVMLong l) entryBudget = (int) l.longValue();
-			pruned = pruned.dissoc(path);
-			consumed -= entryBudget;
-			log.info("Safety valve: auto-pruned loaded path {} ({} bytes)", path, entryBudget);
+		if (usageRatio >= PRUNE_THRESHOLD) {
+			log.warn("Context accounting is at {}% of the advisory byte budget; retaining all {} loads",
+				Math.round(usageRatio * 100), loads.count());
 		}
-		return pruned;
-	}
-
-	private static long extractTs(AMap<AString, ACell> meta) {
-		ACell v = meta.get(Strings.intern("ts"));
-		return (v instanceof convex.core.data.prim.CVMLong l) ? l.longValue() : 0;
+		return loads;
 	}
 
 	static final double WARN_THRESHOLD = 0.70;
@@ -829,7 +838,7 @@ public class ContextBuilder {
 		// metadata. Attribution has already been folded into user content above.
 		for (AString key : java.util.List.of(
 				Strings.intern("toolCalls"), Strings.intern("id"),
-				K_NAME, Fields.STRUCTURED_CONTENT)) {
+				K_NAME, Fields.STRUCTURED_CONTENT, K_IS_ERROR)) {
 			ACell fieldValue = source.get(key);
 			if (fieldValue != null) message = message.assoc(key, fieldValue);
 		}
@@ -1118,6 +1127,13 @@ public class ContextBuilder {
 		ACell message = Maps.of(K_ROLE, ROLE_SYSTEM, K_CONTENT, Strings.create(sb.toString()));
 		messages = messages.conj(message);
 		trackMessage(message);
+	}
+
+	/** Appends a previously resolved unavailable-tool diagnostic set. */
+	public ContextBuilder withUnavailableTools(AVector<ACell> unavailable) {
+		this.unavailableTools = (unavailable != null) ? unavailable : Vectors.empty();
+		appendUnavailableToolsMessage();
+		return this;
 	}
 
 	/**

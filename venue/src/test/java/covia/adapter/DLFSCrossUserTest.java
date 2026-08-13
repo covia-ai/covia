@@ -212,6 +212,12 @@ public class DLFSCrossUserTest {
 		ACell result = read.awaitResult(5000);
 
 		assertEquals("quarterly numbers", RT.getIn(result, "content").toString());
+
+		Job fileRead = engine.jobs().invokeOperation("v/ops/file/read",
+			Maps.of("path", ALICE_DID + "/dlfs/docs/shared/report.md"),
+			withProofs(BOB, token));
+		assertEquals("quarterly numbers",
+			RT.getIn(fileRead.awaitResult(5000), "content").toString());
 	}
 
 	@Test

@@ -10,6 +10,7 @@ import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
+import convex.core.lang.RT;
 
 /**
  * The context scope chain's lexical semantics (#142): union outer→inner,
@@ -108,6 +109,14 @@ public class ContextChainTest {
 		assertEquals(0, ContextChain.declaredLoads(null, "config.loads").count());
 		AMap<AString, ACell> ok = ContextChain.declaredLoads(Maps.of(A, spec(100)), "config.loads");
 		assertEquals(1, ok.count());
+		assertEquals(256L, ((CVMLong) RT.getIn(ok.get(A), "budget")).longValue(),
+			"declared and dynamic loads use the same advisory normalisation");
+		assertNull(RT.getIn(ok.get(A), "ts"),
+			"rendering a stable config declaration must not invent a fresh timestamp");
+		AMap<AString, ACell> minted = ContextChain.declaredLoads(
+			Maps.of(A, Maps.empty()), "loads", true);
+		assertNotNull(RT.getIn(minted.get(A), "ts"),
+			"persistence boundaries stamp missing timestamps once");
 
 		// Non-map declaration or non-map spec: loud, never silently dropped.
 		assertThrows(IllegalArgumentException.class,

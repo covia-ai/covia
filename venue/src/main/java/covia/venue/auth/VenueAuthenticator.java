@@ -1,5 +1,6 @@
 package covia.venue.auth;
 
+import java.nio.charset.StandardCharsets;
 import java.security.interfaces.RSAPublicKey;
 import java.util.HashSet;
 import java.util.Map;
@@ -17,6 +18,7 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.AccountKey;
+import convex.core.data.Blob;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
@@ -258,26 +260,51 @@ public final class VenueAuthenticator {
 
 		AString sub = RT.ensureString(claims.get(SUB));
 		if (sub == null) return null;
-		AString keyDID = authenticationKeyDID(jwt, sub);
-		if (keyDID == null) return null;
-		AccountKey signingKey = Multikey.decodePublicKey(
-			keyDID.toString().substring("did:key:".length()));
-		if (signingKey == null || JWT.verifyPublic(jwt, signingKey) == null) return null;
 
 		String subject = sub.toString();
 		if (subject.startsWith("did:key:")) {
-			if (!sub.equals(keyDID)) return null;
-		} else {
-			AString userId = engine.managedUserName(sub);
-			if (userId == null || !sub.equals(RT.ensureString(claims.get(ISS)))) return null;
+			AString keyDID = authenticationKeyDID(jwt, sub);
+			if (keyDID == null || !sub.equals(keyDID)) return null;
+			AccountKey signingKey = Multikey.decodePublicKey(
+				keyDID.toString().substring("did:key:".length()));
+			if (signingKey == null || JWT.verifyPublic(jwt, signingKey) == null) return null;
+			if (!temporalValid(claims, System.currentTimeMillis() / 1000)) return null;
+			requireAudience(claims.get(AUD));
+			return new VerifiedPrincipal(keyDID, sub, false);
+		}
+
+		AString userId = engine.managedUserName(sub);
+		if (userId != null) {
+			if (!sub.equals(RT.ensureString(claims.get(ISS)))) return null;
+			AString keyDID = authenticationKeyDID(jwt, sub);
+			if (keyDID == null) return null;
+			AccountKey signingKey = Multikey.decodePublicKey(
+				keyDID.toString().substring("did:key:".length()));
+			if (signingKey == null || JWT.verifyPublic(jwt, signingKey) == null) return null;
 			AMap<AString, ACell> record = venueAuth.getUser(userId);
 			if (record == null || !sub.equals(record.get(Fields.DID))) return null;
 			if (!venueAuth.isAuthenticationKeyActive(userId, keyDID)) return null;
+			if (!temporalValid(claims, System.currentTimeMillis() / 1000)) return null;
+			requireAudience(claims.get(AUD));
+			return new VerifiedPrincipal(keyDID, sub, false);
 		}
 
+		// A non-local DID is authenticated by its method resolver. No caller in
+		// this layer assumes did:web, did:key, or any future DID method. Unlike a
+		// self-certifying did:key subject or a locally registered key, this path
+		// also requires the issuer claim to name the resolved identity explicitly.
+		if (!sub.equals(RT.ensureString(claims.get(ISS)))) return null;
+		try {
+			if (DID.fromString(subject) == null) return null;
+			Blob message = Blob.wrap(parsed.getSigningInput().getBytes(StandardCharsets.UTF_8));
+			Blob signature = Blob.wrap(parsed.getSignatureBytes());
+			if (!engine.didVerifier().verifies(sub, message, signature)) return null;
+		} catch (RuntimeException e) {
+			return null;
+		}
 		if (!temporalValid(claims, System.currentTimeMillis() / 1000)) return null;
 		requireAudience(claims.get(AUD));
-		return new VerifiedPrincipal(keyDID, sub, false);
+		return new VerifiedPrincipal(sub, sub, false);
 	}
 
 	private VerifiedPrincipal tryVerifyVenueSigned(AString jwt) {

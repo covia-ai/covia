@@ -1,20 +1,28 @@
 {
 	"name": "Analyst Agent Template",
-	"description": "Data analyst with schema awareness. Reads data, infers schemas from examples, and validates structures. Useful for investigating unknown data shapes or enforcing data contracts.",
-	"systemPrompt": "You are a data analyst. Browse data with covia_list and covia_read, derive schemas from examples with schema_infer, and check data against known schemas with schema_validate. Workflow: (1) read or list the data; (2) infer its shape or validate against expectations; (3) summarise findings with specific evidence (paths, sample values, schema details). Report what tools actually returned; if a tool errored or returned exists:false, quote it — never fabricate results. If a schema op cannot run on the data you have, say so explicitly.",
-	"tools": [
-		"v/ops/covia/read",
-		"v/ops/covia/list",
-		"v/ops/covia/slice",
-		"v/ops/schema/validate",
-		"v/ops/schema/infer",
-		"v/ops/schema/coerce"
-	],
-	"llmOperation": "v/ops/langchain/openai",
-	"model": "gpt-5.4-mini",
-	"defaultTools": false,
-	"skills": [
-		"w/skills",
-		"v/skills"
-	]
+	"description": "Evidence-focused data analyst with bounded inspection, aggregation, pagination, schema inference, validation, and coercion. Use to investigate data shape, quality, and contract conformance.",
+	"agent": {
+		"config": {
+			"systemPrompt": "You are an evidence-focused data analyst. Begin with bounded structural inspection; for collections prefer key listing, pagination, and aggregation, and read full exact values only when necessary. Infer schemas to describe examples, validate data against a contract, and coerce values only when the task asks for conversion—never present coercion as validation. Choose among the operations actually advertised in your tool palette from their descriptions and schemas; do not construct callable names or operation paths from prose. Summarise findings with paths, samples, counts, and schema details from actual results. Report missing data and errors plainly; never fabricate evidence or mutate source data unless the task explicitly expands your role.",
+			"tools": [
+				"v/ops/covia/inspect",
+				"v/ops/covia/read",
+				"v/ops/covia/list",
+				"v/ops/covia/slice",
+				"v/ops/covia/aggregate",
+				"v/ops/schema/validate",
+				"v/ops/schema/infer",
+				"v/ops/schema/coerce"
+			],
+			"defaultTools": false,
+			"skills": [
+				"w/skills",
+				"v/skills/workspace",
+				"v/skills/discovery",
+				"v/skills/provenance",
+				"v/skills/orchestration",
+				"v/skills/assets"
+			]
+		}
+	}
 }

@@ -55,7 +55,7 @@ import covia.venue.RequestContext;
  * <p>All messages in history use a common map format:</p>
  * <ul>
  *   <li>{@code {role: "system"|"user", content: "..."}}</li>
- *   <li>{@code {role: "assistant", content: "...", toolCalls?: [{id, name, arguments}]}}</li>
+	 *   <li>{@code {role: "assistant", content: "...", toolCalls?: [{id, name, arguments: {...}}]}}</li>
  *   <li>{@code {role: "tool", id: "...", name: "...", content: "..."}}</li>
  * </ul>
  *
@@ -180,7 +180,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		K_DESCRIPTION, Strings.create(
 			"Load a skill from the [Skills] index by name (or any skill by direct ref). "
 			+ "The result includes the skill's full instructions for immediate use; they "
-			+ "also stay in your context each turn until you context_unload the skill's "
+			+ "also stay in your context each turn until you remove the skill's loaded "
 			+ "path. The skill's tools join your palette from your next step."),
 		K_PARAMETERS, SKILL_LOAD_PARAMS);
 
@@ -236,6 +236,19 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		AMap<AString, ACell> sessionTier = (sessLoads instanceof AMap)
 			? (AMap<AString, ACell>) sessLoads : null;
 		AMap<AString, ACell> effectiveLoads = ContextChain.effective(configLoads, sessionTier);
+		AVector<ACell> configuredCaps = RT.ensureVector(
+			recordConfig != null ? recordConfig.get(Strings.intern("caps")) : null);
+		RequestContext loadCtx = (configuredCaps != null) ? ctx.withCaps(configuredCaps) : ctx;
+		ContextBuilder.ContextResult preliminaryPalette = new ContextBuilder(engine, ctx)
+			.withConfig(recordConfig).withTools().build();
+		AVector<ACell> preliminaryTools = (AVector<ACell>) CONTEXT_TOOLS.concat(
+			preliminaryPalette.tools());
+		if (Skills.sourcesOf(recordConfig).count() > 0) {
+			preliminaryTools = (AVector<ACell>) Vectors.of(
+				(ACell) TOOL_DEF_SKILL_LOAD).concat(preliminaryTools);
+		}
+		ContextBuilder.LoadSnapshot loads = ContextBuilder.resolveLoadSnapshot(
+			engine, loadCtx, effectiveLoads, fixedToolNames(preliminaryTools));
 
 		ContextBuilder builder = new ContextBuilder(engine, ctx)
 			.withConfig(recordConfig)
@@ -243,7 +256,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 			.withSystemPrompt()
 			.withContextEntries()
 			.withSkillsIndex(effectiveLoads)
-			.withLoadedPaths(effectiveLoads);
+			.withResolvedMessages(loads.messages());
 		// Session in scope: render its conversation exactly as a live
 		// transition would (same withFrameStack step as processChat), so the
 		// inspected context includes prior turns and tool-failure diagnostics.
@@ -253,8 +266,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		}
 		ContextBuilder.ContextResult context = builder
 			.withCurrentDate()
-			.withContextMap(effectiveLoads)
-			.withTools()
+			.withUnavailableTools(preliminaryPalette.unavailableTools())
 			.build();
 
 		AVector<ACell> history = context.history();
@@ -267,14 +279,12 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		// Mirror the live llmagent first iteration, including runtime-owned
 		// context tools, optional skill_load, and tools contributed by loads.
 		// ContextBuilder only resolves catalog operations; harness tools live here.
-		AVector<ACell> tools = (AVector<ACell>) CONTEXT_TOOLS.concat(context.tools());
+		AVector<ACell> tools = (AVector<ACell>) CONTEXT_TOOLS.concat(
+			preliminaryPalette.tools());
 		if (Skills.sourcesOf(context.config()).count() > 0) {
 			tools = (AVector<ACell>) Vectors.of((ACell) TOOL_DEF_SKILL_LOAD).concat(tools);
 		}
-		Map<String, AString> ignoredRoutes = new java.util.HashMap<>();
-		AVector<ACell> loadTools = ContextBuilder.loadsToolDefs(engine, ctx,
-			effectiveLoads, fixedToolNames(tools), ignoredRoutes);
-		tools = (AVector<ACell>) tools.concat(loadTools);
+		tools = (AVector<ACell>) tools.concat(loads.tools());
 
 		return buildL3Input(context.config(), history, tools);
 	}
@@ -332,26 +342,28 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		// pending/inbox → empty signal. System prompt goes first for
 		// primacy, new input goes last for recency.
 		AVector<ACell> sessionFrames = AgentAdapter.sessionFrames(input);
-		AVector<ACell> configuredCaps = RT.ensureVector(
-			recordConfig != null ? recordConfig.get(Strings.intern("caps")) : null);
-		RequestContext loadCtx = ((configuredCaps != null)
-			? ctx.withCaps(configuredCaps) : ctx).withAgentId(agentId);
 		ChatContext chatContext = new ChatContext(
 			recordConfig,
 			RT.getIn(input, Fields.SESSION, Fields.ID),
 			sessionFrames,
 			pending,
 			messages,
-			hasInput);
-		ContextBuilder builder = buildChatContext(chatContext, effectiveLoads, ctx, loadCtx)
-			.withTools();
-		ContextBuilder.ContextResult context = builder.build();
+			hasInput,
+			Vectors.empty());
+		ContextBuilder.ContextResult context = new ContextBuilder(engine, ctx)
+			.withConfig(recordConfig).withTools().build();
+		chatContext = new ChatContext(
+			recordConfig,
+			RT.getIn(input, Fields.SESSION, Fields.ID),
+			sessionFrames,
+			pending,
+			messages,
+			hasInput,
+			context.unavailableTools());
 
-		// Safety valve — prunes the SESSION tier only (the agent tier is
-		// operator-pinned and never pruned; #142).
-		AMap<AString, ACell> activeSessionTier = builder.applySafetyValve(sessionTier);
+		// Budgets are advisory; loads are removed only by explicit unload.
+		AMap<AString, ACell> activeSessionTier = sessionTier;
 
-		AVector<ACell> llmMessages = context.history();
 		AVector<ACell> baseTools = context.tools();
 		Map<String, AString> configToolMap = context.configToolMap();
 		AMap<AString, ACell> config = context.config();
@@ -387,15 +399,8 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 
 		// Invoke level 3 with tool call loop — returns all messages to append
 		// ctx (uncapped) for the L3 LLM call; capsCtx flows through toolCtx for tool dispatch
-		// The first history was rendered from sessionTier. Normally the safety
-		// valve returns that same immutable map and toolCtx starts with an
-		// equivalent empty map when no tier exists. If it pruned, retain the old
-		// key so the loop detects the mismatch and refreshes before inference.
-		AMap<AString, ACell> renderedLoadsKey =
-			(activeSessionTier == sessionTier) ? toolCtx.loads : sessionTier;
 		AVector<ACell> newMessages = invokeWithToolLoop(
-			llmOperation, config, llmMessages, baseTools, ctx, toolCtx,
-			chatContext, renderedLoadsKey);
+			llmOperation, config, baseTools, ctx, toolCtx, chatContext);
 
 		// Filter out empty assistant messages (e.g. when LLM produces only <think> tags)
 		// to avoid polluting the transcript with useless entries
@@ -494,7 +499,8 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		AVector<ACell> sessionFrames,
 		AVector<ACell> pending,
 		AVector<ACell> messages,
-		boolean hasInput) {}
+		boolean hasInput,
+		AVector<ACell> unavailableTools) {}
 
 	/**
 	 * Builds the provider-facing history for the current load scope. Keeping
@@ -504,22 +510,23 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 	 */
 	private ContextBuilder buildChatContext(
 			ChatContext chat,
+			ContextBuilder.LoadSnapshot loadSnapshot,
 			AMap<AString, ACell> effectiveLoads,
-			RequestContext ctx,
-			RequestContext loadCtx) {
+			RequestContext ctx) {
 		return new ContextBuilder(engine, ctx)
 			.withConfig(chat.config())
 			.withSessionId(chat.sessionId())
 			.withSystemPrompt()                        // stable — cached prefix head
 			.withContextEntries()                      // stable config.context
 			.withSkillsIndex(effectiveLoads)           // refresh loaded markers
-			.withLoadedPaths(effectiveLoads, loadCtx)  // agent-capability authority
+			.withResolvedMessages((loadSnapshot != null)
+				? loadSnapshot.messages() : Vectors.empty())
 			.withFrameStack(chat.sessionFrames())      // persistent conversation
 			.withPendingResults(chat.pending())        // this transition
 			.withInboxMessages(chat.messages())        // current user input
 			.withEmptyStateSignal(chat.hasInput())
 			.withCurrentDate()                         // volatile tail
-			.withContextMap(effectiveLoads);           // always last
+			.withUnavailableTools(chat.unavailableTools());
 	}
 
 	/**
@@ -539,30 +546,25 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 	@SuppressWarnings("unchecked")
 	private AVector<ACell> invokeWithToolLoop(
 			AString llmOperation, AMap<AString, ACell> config,
-			AVector<ACell> history, AVector<ACell> baseTools, RequestContext ctx,
-			ToolContext toolCtx, ChatContext chatContext,
-			AMap<AString, ACell> renderedLoadsKey) {
+			AVector<ACell> baseTools, RequestContext ctx,
+			ToolContext toolCtx, ChatContext chatContext) {
 
 		AVector<ACell> newMessages = Vectors.empty();
-		AVector<ACell> loopHistory = history;
 
 		// Runaway-loop backstop: venue default (maxToolIterations, 30),
 		// overridable per agent via config.maxToolIterations.
 		int maxToolIterations = resolveMaxToolIterations(config);
 
 		for (int iteration = 0; iteration < maxToolIterations; iteration++) {
-			// context_load/context_unload/skill_load mutate the immutable
-			// session-tier map. Rebuild the complete ephemeral history before the
-			// very next model invocation so the requesting agent sees the new
-			// content immediately. The rendered messages never enter newMessages,
-			// and therefore never pollute the persisted conversation transcript.
-			if (toolCtx.loads != renderedLoadsKey) {
-				AMap<AString, ACell> effectiveLoads =
-					ContextChain.effective(toolCtx.outerLoads, toolCtx.loads);
-				loopHistory = buildChatContext(
-					chatContext, effectiveLoads, ctx, toolCtx.ctx).build().history();
-				renderedLoadsKey = toolCtx.loads;
-			}
+			// Loaded references are live views, not cached tool results. Resolve
+			// values, contributed tools, and routes together immediately before
+			// every provider call — including when the loads map itself did not
+			// change but a tool mutated a loaded workspace value.
+			AMap<AString, ACell> effectiveLoads =
+				ContextChain.effective(toolCtx.outerLoads, toolCtx.loads);
+			ContextBuilder.LoadSnapshot loadSnapshot = toolCtx.refreshLoadSnapshot(engine);
+			AVector<ACell> loopHistory = buildChatContext(
+				chatContext, loadSnapshot, effectiveLoads, ctx).build().history();
 
 			// Build level 3 input (fresh ephemeral context plus this loop's
 			// assistant/tool exchange).
@@ -580,7 +582,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 			// tools" rule) recompute when the loads tier changes, so a
 			// skill_load mid-loop activates its tools on the NEXT iteration of
 			// this same transition, and an unload retracts them.
-			AVector<ACell> loadTools = toolCtx.loadTools(engine);
+			AVector<ACell> loadTools = loadSnapshot.tools();
 			AVector<ACell> tools = (taskMsg != null)
 				? (AVector<ACell>) TASK_TOOLS.concat(CONTEXT_TOOLS).concat(baseTools).concat(loadTools)
 				: (AVector<ACell>) CONTEXT_TOOLS.concat(baseTools).concat(loadTools);
@@ -632,11 +634,20 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 			// Tool call response — record assistant message and execute tools
 			newMessages = newMessages.conj(l3Result);
 			AVector<ACell> toolCalls = (AVector<ACell>) toolCallsCell;
+			ToolBatchState batch = new ToolBatchState();
 
 			for (long i = 0; i < toolCalls.count(); i++) {
 				ACell tc = toolCalls.get(i);
 				AString id = RT.ensureString(RT.getIn(tc, K_ID));
 				AString name = RT.ensureString(RT.getIn(tc, K_NAME));
+				String toolNameForMsg = (name != null) ? name.toString() : "unknown";
+
+				// A provider may return a terminal task call alongside later side
+				// effects. Pair every id, but do not execute after completion/failure.
+				if (batch.isTerminal()) {
+					newMessages = newMessages.conj(batch.skippedResult(id, toolNameForMsg));
+					continue;
+				}
 
 				// Unwrap tool arguments at the LLM wire boundary (the one
 				// tolerant parse). Broken arguments fail THIS tool call with a
@@ -654,6 +665,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 				}
 
 				// Execute the tool — built-in or grid dispatch
+				long taskResultsBefore = toolCtx.taskResultCount();
 				if (toolResult == null) {
 					try {
 						String toolName = (name != null) ? name.toString() : "";
@@ -675,11 +687,18 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 						Fields.ERROR, Strings.create(failure)));
 				}
 
+				// The task wrappers only record a result after their venue operation
+				// succeeds. Use that state change—not merely the tool name—as the
+				// terminal signal, so a malformed/failed completion remains retryable.
+				if (toolCtx.taskResultCount() > taskResultsBefore) {
+					if (TOOL_COMPLETE_TASK.equals(toolNameForMsg)) batch.markTerminal("complete_task");
+					if (TOOL_FAIL_TASK.equals(toolNameForMsg)) batch.markTerminal("fail_task");
+				}
+
 				// Append tool result message via the shared base helper. All results
 				// cross the provider boundary as textual content; structured values
 				// are JSON-rendered there. Synthesises a stand-in name when the LLM omits
 				// it — the message format requires a non-null name.
-				String toolNameForMsg = (name != null) ? name.toString() : "unknown";
 				newMessages = newMessages.conj(toolResultMessage(id, toolNameForMsg, toolResult));
 			}
 
@@ -720,7 +739,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 
 		// Cap-checked, timeout-bounded dispatch via the shared base path.
 		// Resolves config tools, falls through to grid dispatch for unknown names.
-		return dispatchTool(toolName, input, toolCtx.configToolMap,
+		return dispatchTool(toolName, input, toolCtx.dispatchRoutes(),
 			toolCtx.ctx, toolCtx.toolCallTimeoutMs);
 	}
 
@@ -1024,26 +1043,31 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		/** Tool names offered outside the loads mechanism (harness + config
 		 *  tools) — loads-contributed tools dedup against these. */
 		java.util.Set<String> fixedToolNames = java.util.Set.of();
-		private AMap<AString, ACell> loadToolsKey;
-		private AVector<ACell> loadToolsCache;
+		private Map<String, AString> currentLoadRoutes = Map.of();
 
 		/**
 		 * Tools contributed by the effective loads — the generic "a loads
 		 * entry may declare tools" rule ({@link ContextBuilder#loadsToolDefs}).
-		 * Recomputed only when the writable tier changes (the maps are
-		 * immutable, so a reference compare suffices): a load activates its
-		 * tools on the next loop iteration, an unload retracts them. Dispatch
-		 * routes accumulate into {@link #configToolMap}.
+		 * Resolved fresh for every inference together with loaded values. The
+		 * route set is replaced atomically, so unloading a source retracts both
+		 * its advertised definition and its name-to-operation dispatch route.
 		 */
 		AVector<ACell> loadTools(Engine engine) {
-			if (loads == loadToolsKey && loadToolsCache != null) return loadToolsCache;
-			java.util.Map<String, AString> routes = new java.util.HashMap<>();
-			AVector<ACell> defs = ContextBuilder.loadsToolDefs(engine, ctx,
-				ContextChain.effective(outerLoads, loads), fixedToolNames, routes);
-			configToolMap.putAll(routes);
-			loadToolsKey = loads;
-			loadToolsCache = defs;
-			return defs;
+			return refreshLoadSnapshot(engine).tools();
+		}
+
+		ContextBuilder.LoadSnapshot refreshLoadSnapshot(Engine engine) {
+			ContextBuilder.LoadSnapshot snapshot = ContextBuilder.resolveLoadSnapshot(
+				engine, ctx, ContextChain.effective(outerLoads, loads), fixedToolNames);
+			currentLoadRoutes = snapshot.routes();
+			return snapshot;
+		}
+
+		Map<String, AString> dispatchRoutes() {
+			if (currentLoadRoutes.isEmpty()) return configToolMap;
+			Map<String, AString> effective = new java.util.HashMap<>(configToolMap);
+			effective.putAll(currentLoadRoutes);
+			return effective;
 		}
 
 		ToolContext(AString agentId, RequestContext ctx, AVector<ACell> tasks, AVector<ACell> pending,
@@ -1058,7 +1082,8 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 			this.ctx = ctx;
 			this.tasks = tasks;
 			this.pending = pending;
-			// Mutable default: loadTools accumulates dispatch routes here.
+			// Mutable base routes may grow through runtime mechanisms; live-load
+			// routes are held separately and replaced every inference.
 			this.configToolMap = (configToolMap != null) ? configToolMap : new java.util.HashMap<>();
 			this.loads = (loads != null) ? loads : Maps.empty();
 			this.toolCallTimeoutMs = toolCallTimeoutMs;
@@ -1067,6 +1092,10 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		void recordTaskResult(AString jobId, AMap<AString, ACell> result) {
 			if (taskResults == null) taskResults = Maps.empty();
 			taskResults = taskResults.assoc(jobId, result);
+		}
+
+		long taskResultCount() {
+			return (taskResults != null) ? taskResults.count() : 0;
 		}
 
 		void addLoad(AString path, AMap<AString, ACell> meta) {

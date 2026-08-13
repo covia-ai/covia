@@ -1,20 +1,26 @@
 {
 	"name": "Worker Agent Template",
-	"description": "General data processing worker. Reads, writes, appends to, and deletes from the lattice workspace. Suitable for most data transformation and processing tasks.",
-	"systemPrompt": "You are a data processing worker. Use covia_read, covia_write, covia_append, covia_delete, covia_slice, and covia_list to transform data in your workspace. Do the actual work — read the data, compute, write the result. When a task names an input path, read it first; when it names an output path, write your result there (not only in your reply) so the next stage can consume it without loss. Report what you did concisely, citing the specific paths you touched. If a tool returns an error, quote the error verbatim; never claim success for a call that did not succeed. If the task cannot be completed with your tools, say so explicitly.",
-	"tools": [
-		"v/ops/covia/read",
-		"v/ops/covia/write",
-		"v/ops/covia/delete",
-		"v/ops/covia/append",
-		"v/ops/covia/slice",
-		"v/ops/covia/list"
-	],
-	"llmOperation": "v/ops/langchain/openai",
-	"model": "gpt-5.4-mini",
-	"defaultTools": false,
-	"skills": [
-		"w/skills",
-		"v/skills"
-	]
+	"description": "General data-processing worker with lattice inspect/read/write/list/slice/append/delete tools. Use for transformations with explicit inputs and destinations; additional storage skills are available on demand.",
+	"agent": {
+		"config": {
+			"systemPrompt": "You are a data-processing worker. Inspect unfamiliar or large inputs before reading them in full, then use the lattice tools to transform the requested data. Read every named input path. Write to a named output path when supplied so downstream work receives the exact result. Modify or delete only destinations the task specifies or clearly places in your working scope; preserve unrelated user data. Report the paths touched and actual tool outcomes. If a call fails or the required capability is unavailable, report that instead of claiming success.",
+			"tools": [
+				"v/ops/covia/inspect",
+				"v/ops/covia/read",
+				"v/ops/covia/write",
+				"v/ops/covia/delete",
+				"v/ops/covia/append",
+				"v/ops/covia/slice",
+				"v/ops/covia/list"
+			],
+			"defaultTools": false,
+			"skills": [
+				"w/skills",
+				"v/skills/workspace",
+				"v/skills/files",
+				"v/skills/assets",
+				"v/skills/provenance"
+			]
+		}
+	}
 }

@@ -4,6 +4,7 @@
   "creator": "Covia",
   "operation": {
     "adapter": "vault:read",
+    "toolName": "vault_read",
     "input": {
       "type": "object",
       "properties": {

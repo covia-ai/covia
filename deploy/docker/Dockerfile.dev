@@ -1,14 +1,10 @@
 ################################################
-# Build stage — compile Convex + Covia from source
+# Build stage — compile Covia using released dependencies from Maven Central
 FROM maven:3.9-eclipse-temurin-21 AS build
 
 WORKDIR /build
 
-# Copy Convex source and install to local repo
-COPY convex/ /build/convex/
-RUN cd /build/convex && mvn clean install -DskipTests -q
-
-# Copy Covia source
+# This development image expects a parent build context containing covia/.
 COPY covia/ /build/covia/
 
 # Build Covia

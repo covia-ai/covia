@@ -4,6 +4,8 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Maps;
+import convex.core.data.Strings;
+import convex.core.data.prim.CVMLong;
 import convex.core.data.type.Types;
 import convex.core.lang.RT;
 
@@ -86,20 +88,58 @@ public class ContextChain {
 	 */
 	@SuppressWarnings("unchecked")
 	public static AMap<AString, ACell> declaredLoads(ACell raw, String which) {
+		return declaredLoads(raw, which, false);
+	}
+
+	/**
+	 * Parses and normalises a declared loads tier. Budgets use the same
+	 * advisory range/default as runtime context_load; labels and timestamps
+	 * are type-checked. A missing timestamp is stamped only at a persistence
+	 * boundary (for example session mint), never during ordinary rendering —
+	 * otherwise a stable declaration would appear newest on every inference.
+	 */
+	@SuppressWarnings("unchecked")
+	public static AMap<AString, ACell> declaredLoads(ACell raw, String which,
+			boolean stampMissingTimestamp) {
 		if (raw == null) return Maps.empty();
 		if (!(raw instanceof AMap)) {
 			throw new IllegalArgumentException(which + " must be a map of path → {budget?}, got "
 				+ Types.get(raw));
 		}
 		AMap<AString, ACell> loads = (AMap<AString, ACell>) raw;
+		AMap<AString, ACell> normalised = Maps.empty();
+		AString budgetKey = Strings.intern("budget");
+		AString labelKey = Strings.intern("label");
+		AString tsKey = Strings.intern("ts");
 		for (var entry : loads.entrySet()) {
 			ACell spec = entry.getValue();
-			if (spec != null && !(spec instanceof AMap)) {
+			if (spec == null) {
+				normalised = normalised.assoc(entry.getKey(), null);
+				continue;
+			}
+			if (!(spec instanceof AMap)) {
 				throw new IllegalArgumentException(which + " entry '" + entry.getKey()
 					+ "' must be a map (e.g. {budget: 500}), got " + Types.get(spec));
 			}
+			AMap<AString, ACell> meta = (AMap<AString, ACell>) spec;
+			ACell label = meta.get(labelKey);
+			if (label != null && !(label instanceof AString)) {
+				throw new IllegalArgumentException(which + " entry '" + entry.getKey()
+					+ "' label must be a string, got " + Types.get(label));
+			}
+			ACell ts = meta.get(tsKey);
+			if (ts != null && !(ts instanceof CVMLong)) {
+				throw new IllegalArgumentException(which + " entry '" + entry.getKey()
+					+ "' ts must be an integer, got " + Types.get(ts));
+			}
+			long budget = AbstractLLMAdapter.clampLoadBudget(meta.get(budgetKey));
+			meta = meta.assoc(budgetKey, CVMLong.create(budget));
+			if (ts == null && stampMissingTimestamp) {
+				meta = meta.assoc(tsKey, CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()));
+			}
+			normalised = normalised.assoc(entry.getKey(), meta);
 		}
-		return loads;
+		return normalised;
 	}
 
 	/** The session tier from a transition input's session map, or empty. */

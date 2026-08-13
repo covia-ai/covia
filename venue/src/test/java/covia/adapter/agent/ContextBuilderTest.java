@@ -20,6 +20,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.agent.ContextBuilder;
 import covia.api.Fields;
+import covia.grid.Job;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
@@ -259,7 +260,10 @@ public class ContextBuilderTest {
 		String all = allContent(result);
 		assertTrue(all.contains("[Skills]"), all);
 		assertTrue(all.contains("- alpha — Alpha skill"), all);
-		assertTrue(all.contains("skill_load"), "preamble should name the load tool");
+		assertTrue(all.contains("advertised skill-loading control"),
+			"preamble should explain the capability without coupling to an alias");
+		assertFalse(all.contains("skill_load"),
+			"durable preamble should not hard-code a provider-facing alias");
 		assertFalse(all.contains("(loaded)"), all);
 
 		// Budget-tracked: the same build without the index consumes less.
@@ -379,14 +383,15 @@ public class ContextBuilderTest {
 
 	@Test
 	public void testOverBudgetSkillRendersVisibly() {
-		// Data loads skip silently under budget pressure; skill entries warn.
+		// Byte budgets are advisory across providers: do not silently drop a
+		// behaviour-changing skill based on an imprecise token proxy.
 		AMap<AString, ACell> loads = alphaSkillLoads();
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx, 300)
 			.withLoadedPaths(loads)
 			.build();
 		String all = allContent(result);
-		assertTrue(all.contains("[Skill: alpha — unavailable: context budget exhausted"), all);
-		assertFalse(all.contains("Do the thing."), all);
+		assertTrue(all.contains("[Skill: alpha]"), all);
+		assertTrue(all.contains("Do the thing."), all);
 	}
 
 	@Test
@@ -1121,7 +1126,7 @@ public class ContextBuilderTest {
 		assertEquals(1, result.count(), "Should not prune below 90%");
 	}
 
-	@Test public void testSafetyValvePrunesLIFO() {
+	@Test public void testSafetyValveIsAdvisoryAbove90Percent() {
 		// Inflate the system prompt past 90% of budget; defaultTools=false
 		// suppresses the lattice reference so size is dominated by systemPrompt.
 		AMap<AString, ACell> bigConfig = Maps.of(
@@ -1140,7 +1145,22 @@ public class ContextBuilderTest {
 				Strings.create("ts"), CVMLong.create(2000)));
 
 		AMap<AString, ACell> result = builder.applySafetyValve(loads);
-		// Should prune newest first (w/new has ts=2000)
-		assertTrue(result.count() < loads.count(), "Should prune at least one entry");
+		assertEquals(loads, result, "Advisory accounting must not silently remove loads");
+	}
+
+	@Test public void testJobTemporaryPathLoadsThroughVirtualNamespace() {
+		Job scope = engine.jobs().invokeOperation("v/test/ops/echo",
+			Maps.of("scope", "temp-load"), ctx);
+		scope.awaitResult(5000);
+		RequestContext jobCtx = ctx.withJobId(scope.getID());
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of("path", "t/live-note", "value", "TEMP_LOAD_VISIBLE"),
+			jobCtx).awaitResult(5000);
+
+		AMap<AString, ACell> loads = Maps.of(
+			Strings.create("t/live-note"), Maps.of("budget", 500L));
+		String rendered = allContent(new ContextBuilder(engine, jobCtx)
+			.withLoadedPaths(loads).build());
+		assertTrue(rendered.contains("TEMP_LOAD_VISIBLE"), rendered);
 	}
 }

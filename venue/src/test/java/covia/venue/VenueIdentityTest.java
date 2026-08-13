@@ -13,6 +13,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestInstance.Lifecycle;
 
+import convex.auth.ucan.Capability;
+import convex.auth.ucan.UCAN;
 import convex.core.crypto.AKeyPair;
 import convex.core.crypto.util.Multikey;
 import convex.core.data.ACell;
@@ -20,6 +22,7 @@ import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.grid.Job;
@@ -153,10 +156,9 @@ public class VenueIdentityTest {
 
 	// ========== Verification through the identity ==========
 
-	// NOTE: the ucan:issue → ucan:verify roundtrip under a did:web identity is
-	// deliberately not tested here — venue minting still hand-rolls its JWTs,
-	// and migrating it to the Convex UCAN profile API is covia#322. These tests
-	// pin the Phase A surface: the verifier resolves did:web principals.
+	// Convex 0.8.12 supplies the released UCAN profile and explicit JWT key-ID
+	// APIs needed by covia#322/#352. Pin both signature resolution and the
+	// ucan:issue → ucan:verify round-trip under the declared did:web identity.
 
 	@Test
 	void venueWebIdentityVerifiesVenueSignatures() {
@@ -173,6 +175,28 @@ public class VenueIdentityTest {
 		// A foreign key's signature must not verify as the venue.
 		convex.core.data.Blob forged = AKeyPair.generate().sign(message).toFlatBlob();
 		assertTrue(!verifier.verifies(WEB_DID, message, forged));
+	}
+
+	@Test
+	void venueWebIdentityIssuesAndVerifiesUcan() {
+		AString managedUser = server.getEngine().managedUserDID(Strings.create("sabine"));
+		AString audience = Strings.create("did:key:"
+			+ Multikey.encodePublicKey(AKeyPair.generate().getAccountKey()));
+		long exp = (System.currentTimeMillis() / 1000) + 3600;
+
+		ACell issued = server.getEngine().jobs().invokeOperation("v/ops/ucan/issue",
+			Maps.of(
+				UCAN.AUD, audience,
+				UCAN.ATT, Vectors.of(Capability.create(
+					Strings.create(managedUser + "/w/"), Capability.CRUD_READ)),
+				UCAN.EXP, CVMLong.create(exp)),
+			RequestContext.of(managedUser)).awaitResult(5000);
+		AString token = RT.ensureString(RT.getIn(issued, "token"));
+
+		ACell verified = server.getEngine().jobs().invokeOperation("v/ops/ucan/verify",
+			Maps.of("token", token), RequestContext.of(audience)).awaitResult(5000);
+		assertTrue(RT.bool(RT.getIn(verified, "valid")));
+		assertEquals(WEB_DID, RT.getIn(verified, "rootIssuer"));
 	}
 
 	@Test
@@ -222,9 +246,20 @@ public class VenueIdentityTest {
 	@Test
 	void verifierFailsClosedOnUnknownMethods() {
 		VenueDIDVerifier verifier = server.getEngine().didVerifier();
-		assertTrue(!verifier.verifies(Strings.create("did:example:zzz"),
+		assertTrue(!verifier.verifies(Strings.create("did:unknown:zzz"),
 			convex.core.data.Blob.wrap(new byte[] {1}),
 			convex.core.data.Blob.wrap(new byte[64])));
 		assertTrue(!verifier.verifies(null, null, null));
+	}
+
+	@Test
+	void additionalDidMethodsPlugIntoSignatureResolution() {
+		VenueDIDVerifier verifier = server.getEngine().didVerifier();
+		AString identity = Strings.create("did:exampletest:venue-7");
+		var message = convex.core.data.Blob.wrap(new byte[] {1, 2, 3});
+		var signature = convex.core.data.Blob.wrap(new byte[64]);
+		verifier.registerMethod("exampletest", (did, msg, sig) ->
+			identity.equals(did) && message.equals(msg) && signature.equals(sig));
+		assertTrue(verifier.verifies(identity, message, signature));
 	}
 }

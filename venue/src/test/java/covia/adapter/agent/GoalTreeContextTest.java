@@ -169,7 +169,7 @@ public class GoalTreeContextTest {
 	@Test
 	public void testRenderConversationEmpty() {
 		AMap<AString, ACell> frame = GoalTreeContext.createFrame("test");
-		AVector<ACell> messages = GoalTreeContext.renderConversation(frame);
+		AVector<ACell> messages = ConversationRenderer.renderFull(frame);
 		assertEquals(0, messages.count());
 	}
 
@@ -181,7 +181,7 @@ public class GoalTreeContextTest {
 		frame = GoalTreeContext.appendTurn(frame, turn1);
 		frame = GoalTreeContext.appendTurn(frame, turn2);
 
-		AVector<ACell> messages = GoalTreeContext.renderConversation(frame);
+		AVector<ACell> messages = ConversationRenderer.renderFull(frame);
 		assertEquals(2, messages.count());
 		assertEquals("assistant", RT.ensureString(RT.getIn(messages.get(0), "role")).toString());
 		assertEquals("user", RT.ensureString(RT.getIn(messages.get(1), "role")).toString());
@@ -200,7 +200,7 @@ public class GoalTreeContextTest {
 			(ACell) Maps.of("role", "assistant", "content", "step 3"));
 		frame = frame.assoc(GoalTreeContext.K_CONVERSATION, conv);
 
-		AVector<ACell> messages = GoalTreeContext.renderConversation(frame);
+		AVector<ACell> messages = ConversationRenderer.renderFull(frame);
 		assertEquals(2, messages.count());
 		// First message is the segment rendered as system
 		assertEquals("system", RT.ensureString(RT.getIn(messages.get(0), "role")).toString());
@@ -242,7 +242,7 @@ public class GoalTreeContextTest {
 	@Test
 	public void testElideEmptyConversation() {
 		AMap<AString, ACell> frame = GoalTreeContext.createFrame("test");
-		assertEquals(0, GoalTreeContext.renderConversationElidingPriorScratch(frame).count());
+		assertEquals(0, ConversationRenderer.renderElidingPriorScratch(frame).count());
 	}
 
 	@Test
@@ -252,7 +252,7 @@ public class GoalTreeContextTest {
 			userTurn("do X"),
 			assistantToolCall("file_read"),
 			toolResult("contents..."));
-		AVector<ACell> rendered = GoalTreeContext.renderConversationElidingPriorScratch(frame);
+		AVector<ACell> rendered = ConversationRenderer.renderElidingPriorScratch(frame);
 		assertEquals(3, rendered.count());
 		assertEquals("user", RT.ensureString(RT.getIn(rendered.get(0), "role")).toString());
 		assertEquals("assistant", RT.ensureString(RT.getIn(rendered.get(1), "role")).toString());
@@ -274,7 +274,7 @@ public class GoalTreeContextTest {
 			// Cycle 2 — in flight
 			userTurn("now summarise the note"),
 			assistantToolCall("covia_read"));
-		AVector<ACell> rendered = GoalTreeContext.renderConversationElidingPriorScratch(frame);
+		AVector<ACell> rendered = ConversationRenderer.renderElidingPriorScratch(frame);
 
 		// Expect: user(req1), assistant("Done..."), user(req2), assistant(toolCalls)
 		assertEquals(4, rendered.count());
@@ -300,7 +300,7 @@ public class GoalTreeContextTest {
 			assistantText("Done."),
 			userTurn("now Y"));
 		long before = ((AVector<?>) frame.get(GoalTreeContext.K_CONVERSATION)).count();
-		GoalTreeContext.renderConversationElidingPriorScratch(frame);
+		ConversationRenderer.renderElidingPriorScratch(frame);
 		long after = ((AVector<?>) frame.get(GoalTreeContext.K_CONVERSATION)).count();
 		assertEquals(before, after, "render must not mutate the conversation field");
 		assertEquals(5, after);
@@ -319,7 +319,7 @@ public class GoalTreeContextTest {
 			assistantText("second done"),
 			// Cycle 3 in flight
 			userTurn("third"));
-		AVector<ACell> rendered = GoalTreeContext.renderConversationElidingPriorScratch(frame);
+		AVector<ACell> rendered = ConversationRenderer.renderElidingPriorScratch(frame);
 		// user(1), asst("first done"), user(2), asst("second done"), user(3)
 		assertEquals(5, rendered.count());
 		assertEquals("first", RT.ensureString(RT.getIn(rendered.get(0), "content")).toString());
@@ -327,6 +327,48 @@ public class GoalTreeContextTest {
 		assertEquals("second", RT.ensureString(RT.getIn(rendered.get(2), "content")).toString());
 		assertEquals("second done", RT.ensureString(RT.getIn(rendered.get(3), "content")).toString());
 		assertEquals("third", RT.ensureString(RT.getIn(rendered.get(4), "content")).toString());
+	}
+
+	@Test
+	public void testElidePriorExplicitCompleteBatchAtNextUserTurn() {
+		// Explicit complete has no provider-generated text response. The next
+		// user turn is therefore the reliable cycle boundary: the old tool pair
+		// must disappear together while its persisted assistant projection stays.
+		AMap<AString, ACell> frame = withConversation(
+			userTurn("produce structured output"),
+			assistantToolCall("complete"),
+			toolResult("{status: complete}"),
+			assistantText("{\"answer\":\"42\"}"),
+			userTurn("use that answer again"));
+
+		AVector<ACell> rendered = ConversationRenderer.renderElidingPriorScratch(frame);
+		assertEquals(3, rendered.count());
+		assertEquals("produce structured output",
+			RT.ensureString(RT.getIn(rendered.get(0), "content")).toString());
+		assertEquals("{\"answer\":\"42\"}",
+			RT.ensureString(RT.getIn(rendered.get(1), "content")).toString());
+		assertEquals("use that answer again",
+			RT.ensureString(RT.getIn(rendered.get(2), "content")).toString());
+		for (long i = 0; i < rendered.count(); i++) {
+			assertNull(RT.getIn(rendered.get(i), "toolCalls"));
+			assertNotEquals("tool", String.valueOf(RT.getIn(rendered.get(i), "role")));
+		}
+	}
+
+	@Test
+	public void testElideCompletedLatestCycleWithoutWaitingForNextUser() {
+		AMap<AString, ACell> frame = withConversation(
+			userTurn("produce structured output"),
+			assistantToolCall("complete"),
+			toolResult("{status: complete}"),
+			assistantText("{\"answer\":\"42\"}"));
+
+		AVector<ACell> rendered = ConversationRenderer.renderElidingPriorScratch(frame);
+		assertEquals(2, rendered.count());
+		assertEquals("user", String.valueOf(RT.getIn(rendered.get(0), "role")));
+		assertEquals("assistant", String.valueOf(RT.getIn(rendered.get(1), "role")));
+		assertEquals("{\"answer\":\"42\"}",
+			RT.ensureString(RT.getIn(rendered.get(1), "content")).toString());
 	}
 
 	@Test
@@ -341,7 +383,7 @@ public class GoalTreeContextTest {
 			assistantToolCall("a"), toolResult("r"),
 			assistantText("done"),
 			userTurn("after"));
-		AVector<ACell> rendered = GoalTreeContext.renderConversationElidingPriorScratch(frame);
+		AVector<ACell> rendered = ConversationRenderer.renderElidingPriorScratch(frame);
 		// segment(system), user, asst("done"), user
 		assertEquals(4, rendered.count());
 		assertEquals("system", RT.ensureString(RT.getIn(rendered.get(0), "role")).toString());
@@ -355,8 +397,8 @@ public class GoalTreeContextTest {
 			assistantToolCall("a"), toolResult("r"),
 			assistantText("Done."),
 			userTurn("now Y"));
-		AVector<ACell> defaultRender = GoalTreeContext.renderConversationFor(frame, null);
-		AVector<ACell> elideRender = GoalTreeContext.renderConversationElidingPriorScratch(frame);
+		AVector<ACell> defaultRender = ConversationRenderer.renderFor(frame, null);
+		AVector<ACell> elideRender = ConversationRenderer.renderElidingPriorScratch(frame);
 		assertEquals(elideRender.count(), defaultRender.count());
 	}
 
@@ -368,8 +410,8 @@ public class GoalTreeContextTest {
 			assistantText("Done."),
 			userTurn("now Y"));
 		AMap<AString, ACell> config = Maps.of("renderHistory", "full");
-		AVector<ACell> fullRender = GoalTreeContext.renderConversationFor(frame, config);
-		AVector<ACell> legacyRender = GoalTreeContext.renderConversation(frame);
+		AVector<ACell> fullRender = ConversationRenderer.renderFor(frame, config);
+		AVector<ACell> legacyRender = ConversationRenderer.renderFull(frame);
 		assertEquals(legacyRender.count(), fullRender.count());
 		assertEquals(5, fullRender.count());
 	}
@@ -638,7 +680,7 @@ public class GoalTreeContextTest {
 		assertNull(GoalTreeContext.renderAncestors(frames));
 
 		// Conversation renders the live turn
-		AVector<ACell> conv = GoalTreeContext.renderConversation(root);
+		AVector<ACell> conv = ConversationRenderer.renderFull(root);
 		assertEquals(1, conv.count());
 
 		// Goal renders the description
@@ -671,7 +713,7 @@ public class GoalTreeContextTest {
 		assertTrue(ancestorContent.contains("Competitive analysis"));
 
 		// Conversation should render child's live turns
-		AVector<ACell> conv = GoalTreeContext.renderConversation(child);
+		AVector<ACell> conv = ConversationRenderer.renderFull(child);
 		assertEquals(1, conv.count());
 		assertTrue(RT.ensureString(RT.getIn(conv.get(0), "content")).toString()
 			.contains("products"));
