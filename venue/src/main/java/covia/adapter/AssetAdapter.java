@@ -305,7 +305,10 @@ public class AssetAdapter extends AAdapter {
 			ACell value = engine.resolvePath(idStr, ctx);
 			if (value instanceof AMap) {
 				Hash derived = ((AMap<AString, ACell>) value).getHash();
-				record = engine.getAssetRecord(derived, readAs);
+				String source = idStr.toString();
+				AString recordOwner = (source.startsWith("v/") || source.startsWith("/v/"))
+					? engine.getDIDString() : readAs;
+				record = engine.getAssetRecord(derived, recordOwner);
 			}
 		}
 

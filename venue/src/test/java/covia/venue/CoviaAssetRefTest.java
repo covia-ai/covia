@@ -14,9 +14,12 @@ import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestInstance.Lifecycle;
 
 import convex.core.data.ACell;
+import convex.core.crypto.AKeyPair;
+import convex.auth.ucan.UCAN;
 import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.util.JSON;
 import covia.grid.Asset;
 import covia.grid.client.VenueHTTP;
@@ -49,6 +52,20 @@ public class CoviaAssetRefTest {
 		return http.send(
 			HttpRequest.newBuilder().uri(new URI(base + path)).GET().build(),
 			HttpResponse.BodyHandlers.ofString());
+	}
+
+	private HttpResponse<String> get(String path, String bearer) throws Exception {
+		return http.send(
+			HttpRequest.newBuilder().uri(new URI(base + path))
+				.header("Authorization", "Bearer " + bearer).GET().build(),
+			HttpResponse.BodyHandlers.ofString());
+	}
+
+	private static String identityToken(AKeyPair keyPair) {
+		long exp = (System.currentTimeMillis() / 1000) + 3600;
+		UCAN token = UCAN.create(keyPair, TestServer.ENGINE.getAccountKey(), exp,
+			Vectors.empty(), Vectors.empty());
+		return token.toJWT(keyPair).toString();
 	}
 
 	private static String etagHash(HttpResponse<String> r) {
@@ -102,6 +119,36 @@ public class CoviaAssetRefTest {
 		assertEquals(404, r.statusCode());
 		assertTrue(r.body().contains("does not specify any content"),
 			"the /content route must take precedence over the <id> wildcard, got: " + r.body());
+	}
+
+	@Test
+	public void bareHashContentIsScopedToCurrentUsersAssetStore() throws Exception {
+		AKeyPair aliceKey = AKeyPair.generate();
+		AKeyPair bobKey = AKeyPair.generate();
+		var aliceDID = UCAN.toDIDKey(aliceKey.getAccountKey());
+		String metadata = """
+			{"name":"Private content","content":{"inline":"alice only","contentType":"text/plain"}}
+			""";
+
+		Hash id = TestServer.ENGINE.storeUserAsset(
+			Strings.create(metadata), null, RequestContext.of(aliceDID));
+		// A matching venue-catalog record makes this a strong regression test:
+		// the old caller-aware lookup silently fell through to this shared store.
+		assertEquals(id, TestServer.ENGINE.storeAsset(Strings.create(metadata), null));
+
+		String path = "/api/v1/assets/" + id.toHexString();
+		HttpResponse<String> aliceMeta = get(path, identityToken(aliceKey));
+		assertEquals(200, aliceMeta.statusCode());
+		HttpResponse<String> aliceContent = get(path + "/content", identityToken(aliceKey));
+		assertEquals(200, aliceContent.statusCode());
+		assertEquals("alice only", aliceContent.body());
+
+		HttpResponse<String> bobMeta = get(path, identityToken(bobKey));
+		assertEquals(404, bobMeta.statusCode(),
+			"a bare hash must mean Bob's /a, not Alice's or the venue catalog");
+		HttpResponse<String> bobContent = get(path + "/content", identityToken(bobKey));
+		assertEquals(404, bobContent.statusCode(),
+			"content lookup must not fall through to another asset namespace");
 	}
 
 	@Test

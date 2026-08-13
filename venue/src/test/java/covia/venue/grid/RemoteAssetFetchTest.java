@@ -45,9 +45,9 @@ import covia.venue.TwoVenueTestServer;
  *   <li>An asset is identified by the CAD3 value hash of its metadata.
  *       The same metadata held on any venue has the same id — location is
  *       not part of identity.</li>
- *   <li>{@code Venue.getAsset(hash)} over HTTP returns the published
- *       metadata for an asset the remote venue holds, and null for one it
- *       does not hold.</li>
+	 *   <li>Federated fetch uses the remote venue's explicitly named published
+	 *       catalog. An ordinary HTTP {@code getAsset(hash)} remains relative to
+	 *       the authenticated caller's asset namespace.</li>
  *   <li>{@code Engine.fetchRemoteAsset} verifies that fetched metadata
  *       hashes to the requested id. Content addressing is the trust
  *       boundary: a remote venue is purely an availability provider and
@@ -253,9 +253,9 @@ public class RemoteAssetFetchTest {
 		Hash id = TwoVenueTestServer.ENGINE_B.storeAsset(meta, null);
 		TwoVenueTestServer.ENGINE_B.putContent(id, new ByteArrayInputStream(content.getBytes()));
 
-		Asset fetched = TwoVenueTestServer.COVIA_B.getAsset(id);
+		Asset fetched = TwoVenueTestServer.COVIA_B.getVenueAsset(id);
 		assertNotNull(fetched);
-		AContent fetchedContent = fetched.getContent();
+		AContent fetchedContent = TwoVenueTestServer.COVIA_B.getVenueContent(id).join();
 		assertNotNull(fetchedContent, "Stored content must be retrievable over HTTP");
 		assertEquals(content, fetchedContent.getBlob().toFlatBlob(),
 			"Content bytes must round-trip unchanged");

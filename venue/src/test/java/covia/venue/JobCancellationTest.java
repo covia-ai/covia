@@ -244,8 +244,10 @@ public class JobCancellationTest {
 
 	@Test
 	public void testCancelledRequestJobNotCompletedByAgent() {
-		// Agent picks a cancelled task Job — should not overwrite CANCELLED status
-		createChatAgent("req-cancel-agent2");
+		// Hold the transition open so cancellation deterministically wins before
+		// the agent's completion/error path. A fast chat transition made this test
+		// race: it could legitimately fail before cancel() committed.
+		createNeverAgent("req-cancel-agent2");
 
 		Job reqJob = engine.jobs().invokeOperation(
 			"v/ops/agent/request",
@@ -255,11 +257,18 @@ public class JobCancellationTest {
 
 		pollUntilStatus(reqJob, "STARTED", 5000);
 		reqJob.cancel();
+		assertEquals("CANCELLED", reqJob.getStatus().toString(),
+			"the explicit cancellation must win before the worker is released");
 
-		// Wait for the agent to complete its cycle
-		pollUntilFinished(reqJob, 5000);
-		// The Job should stay CANCELLED — the agent's completeWith should
-		// be a no-op because isFinished() is already true
+		// Suspending cancels the never-ending transition and drives the agent's
+		// late error/queue-drain path, which will attempt to settle the task.
+		// That path must not replace the already-committed terminal state.
+		engine.jobs().invokeOperation(
+			"v/ops/agent/suspend",
+			Maps.of(Fields.AGENT_ID, "req-cancel-agent2"),
+			ctx).awaitResult(5000);
+		pollUntilTaskRemoved("req-cancel-agent2", reqJob.getID(), 5000);
+
 		assertEquals("CANCELLED", reqJob.getStatus().toString(),
 			"Cancelled request should stay CANCELLED even after agent processes it");
 	}
@@ -474,5 +483,17 @@ public class JobCancellationTest {
 		while (!job.isFinished() && System.currentTimeMillis() < deadline) {
 			Thread.yield();
 		}
+	}
+
+	private void pollUntilTaskRemoved(String agentId, Blob taskId, long timeoutMs) {
+		long deadline = System.currentTimeMillis() + timeoutMs;
+		while (System.currentTimeMillis() < deadline) {
+			User user = engine.getVenueState().users().get(ALICE_DID);
+			AgentState agent = (user != null) ? user.agent(agentId) : null;
+			if (agent == null || agent.getTasks() == null
+					|| agent.getTasks().get(taskId) == null) return;
+			Thread.yield();
+		}
+		fail("Timed out waiting for agent to remove cancelled task " + taskId);
 	}
 }

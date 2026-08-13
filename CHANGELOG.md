@@ -33,13 +33,17 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   replaced deployment-specific hostnames in generic examples and test fixtures
   with RFC-reserved domains. The venue inventory now flags venue-3's expired
   TLS certificate and avoids duplicating dev-host coordinates in usage examples.
+- Strengthened DLFS regression coverage for long sibling names and concurrent
+  staged-file promotion, directory listing, lattice sync, and encrypted Etch v3
+  restart. The reported corruption does not reproduce locally on either Convex
+  0.8.11 or 0.8.12, so no dependency-level fix is claimed (#342).
 
 ### Fixed
 
-- DLFS sibling filenames that share their first 32 characters now remain
-  distinct instead of the second write silently replacing the first. Convex
-  0.8.12 supplies the fix; Covia pins the reported write/read/list regression
-  through its DLFS adapter (#342).
+- Scoped caller-facing asset hashes to the current caller's `/a` namespace,
+  including metadata and content reads and writes. Venue catalog access is now
+  explicit for federation and no longer acts as an authorization-bypassing
+  fallback for user requests (#368).
 
 ## [0.9.0] - 2026-08-10
 

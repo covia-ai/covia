@@ -81,6 +81,7 @@ import covia.grid.Asset;
 import covia.grid.Grid;
 import covia.grid.Operation;
 import covia.grid.Venue;
+import covia.grid.client.VenueHTTP;
 import covia.lattice.Covia;
 import covia.venue.api.CoviaAPI;
 import covia.venue.storage.AStorage;
@@ -966,38 +967,39 @@ public class Engine {
 	}
 
 	/**
-	 * Get an asset record by Hash — checks user namespace first, then venue.
-	 * This is the single resolution point for all asset lookups by hash.
+	 * Compatibility lookup for internal hash-based operation resolution.
+	 *
+	 * <p>Checks the caller first, then the venue catalog because installed
+	 * operations have historically been invoked by hash. User-facing asset APIs,
+	 * where a bare hash means {@code <callerDID>/a/<hash>}, use the exact-DID
+	 * overload and never enter this compatibility fallback.</p>
 	 */
 	public AVector<?> getAssetRecord(Hash assetID, RequestContext ctx) {
-		// Check user's /a/ first
-		if (ctx != null && ctx.getUserDID() != null) {
-			User user = getVenueState().users().get(ctx.getUserDID());
-			if (user != null) {
-				AVector<?> arec = user.assets().getRecord(assetID);
-				if (arec != null) return arec;
-			}
-		}
-		// Fall back to venue-level assets
+		AString callerDID = (ctx != null) ? ctx.getUserDID() : null;
+		AVector<?> callerRecord = getAssetRecord(assetID, callerDID);
+		if (callerRecord != null) return callerRecord;
+		// Compatibility for internal operation resolution: many installed
+		// definitions are invoked by their hash. User-facing REST resolution does
+		// not use this fallback; it calls the exact-DID overload above.
 		return venueState.assets().getRecord(assetID);
 	}
 
 	/**
-	 * Get an asset record by Hash — checks a specific user, then venue.
+	 * Get an asset record by Hash from one explicitly named DID namespace.
+	 * The venue DID names the venue catalog; every other DID names exactly that
+	 * user's {@code /a} store. There is deliberately no cross-namespace fallback.
 	 */
 	public AVector<?> getAssetRecord(Hash assetID, AString userDID) {
-		if (userDID != null) {
-			User user = getVenueState().users().get(userDID);
-			if (user != null) {
-				AVector<?> arec = user.assets().getRecord(assetID);
-				if (arec != null) return arec;
-			}
-		}
-		return venueState.assets().getRecord(assetID);
+		if (assetID == null || userDID == null) return null;
+		if (userDID.equals(getDIDString())) return venueState.assets().getRecord(assetID);
+		AString webDID = config.getWebDID();
+		if (webDID != null && userDID.equals(webDID)) return venueState.assets().getRecord(assetID);
+		User user = getVenueState().users().get(userDID);
+		return (user != null) ? user.assets().getRecord(assetID) : null;
 	}
 
 	/**
-	 * Get an Asset by its Hash ID — checks user namespace first, then venue.
+	 * Compatibility Asset lookup: caller namespace first, then venue catalog.
 	 */
 	public Asset getAsset(Hash assetID, RequestContext ctx) {
 		AVector<?> arec = getAssetRecord(assetID, ctx);
@@ -1352,13 +1354,7 @@ public class Engine {
 		return null;
 	}
 
-	/**
-	 * Looks up a parsed asset reference in local stores: the named
-	 * principal's asset records first, then the venue store. Content
-	 * addressing makes any local copy authoritative — the hash alone
-	 * identifies the value, so WHO the reference names cannot change
-	 * what is returned, only where we look first.
-	 */
+	/** Looks up a parsed asset reference in exactly the named DID's store. */
 	private Asset lookupLocalAsset(AssetRef r) {
 		AVector<?> rec = getAssetRecord(r.hash(), Strings.create(r.didString()));
 		if (rec == null) return null;
@@ -1537,10 +1533,16 @@ public class Engine {
 			ACell contentMeta = RT.getIn(def.meta(), Fields.CONTENT);
 			if (contentMeta == null) return null;   // metadata declares no content — genuine
 
-			// Venue-bound handle for the content stream itself.
-			Asset handle = Asset.create(id, def.getMetadata());
-			handle.setVenue(remote);
-			AContent content = handle.getContent();
+			// HTTP federation names the publisher's explicit venue catalog; a bare
+			// hash on the normal user API would instead mean the remote caller's /a/.
+			AContent content;
+			if (remote instanceof VenueHTTP http) {
+				content = http.getVenueContent(id).join();
+			} else {
+				Asset handle = Asset.create(id, def.getMetadata());
+				handle.setVenue(remote);
+				content = handle.getContent();
+			}
 			if (content == null) return null;
 			ABlob blob = content.getBlob().toFlatBlob();
 
@@ -1584,7 +1586,8 @@ public class Engine {
 	public Asset fetchRemoteAsset(Venue remote, Hash id) {
 		String venue = venueLabel(remote);
 		try {
-			Asset fetched = remote.getAsset(id);
+			Asset fetched = (remote instanceof VenueHTTP http)
+				? http.getVenueAsset(id) : remote.getAsset(id);
 			if (fetched == null) return null;   // genuine absence: the remote answered but has no such asset
 			// getID() recomputes the CAD3 hash from the returned metadata —
 			// equality with the requested id IS the integrity check. (Also
@@ -1772,7 +1775,8 @@ public class Engine {
 				if (hop != null) record = getAssetRecord(hop, ctx);
 				if (record != null) meta = record.get(AssetStore.POS_META);
 			} else if (value instanceof AMap) {
-				record = getAssetRecord(((AMap<?, ?>) value).getHash(), ctx);
+				RequestContext recordContext = isVenuePath(ref) ? venueContext() : ctx;
+				record = getAssetRecord(((AMap<?, ?>) value).getHash(), recordContext);
 				meta = (record != null) ? record.get(AssetStore.POS_META) : value;
 			} else if (value instanceof convex.core.data.ABlob b) {
 				return new covia.venue.storage.ContentProvider.Resolved(
@@ -1834,6 +1838,12 @@ public class Engine {
 			return new covia.venue.storage.ContentProvider.Resolved(r.content(), type);
 		}
 		return null;
+	}
+
+	private static boolean isVenuePath(AString ref) {
+		if (ref == null) return false;
+		String s = ref.toString();
+		return s.startsWith("v/") || s.startsWith("/v/");
 	}
 
 	/** Consults adapter-registered content providers for a reference; null when
@@ -2393,13 +2403,11 @@ public class Engine {
 	 */
 	public boolean crossUserAllows(RequestContext ctx, AString resource, AString ability) {
 		if (ctx == null || resource == null || ability == null) return false;
-		// The venue's own asset catalog is public. getAssetRecord resolves every
-		// caller's bare-hash reads through the venue store, so the venue's own
-		// <venueDID>/a/<hash> assets are readable by anyone; the DID-scoped form of
-		// the same read is therefore allowed too. This is NOT true of another
-		// user's /a/ — that is their private asset store, reached (covia:read →
-		// resolveLocalDIDURL) via the named DID, and needs a proof: knowing a hash
-		// is not authorisation to read someone else's asset.
+		// The venue's explicitly addressed asset catalog is public. This is NOT
+		// true of another user's /a/: knowing a hash is not authorisation to read
+		// someone else's asset. On user-facing APIs a bare hash names the caller's
+		// own /a/; internal operation resolution retains a documented compatibility
+		// fallback for installed venue operations.
 		if (isVenueCatalogRead(resource, ability)) return true;
 		if (auth.isPublicAccessEnabled()) {
 			String publicDIDStr = getDIDString().toString() + ":public";
@@ -2417,10 +2425,9 @@ public class Engine {
 		return proofsCover(ctx, resource, ability, System.currentTimeMillis() / 1000);
 	}
 
-	/** A read of the venue's OWN content-addressed catalog ({@code <venueDID>/a/…}).
-	 *  These assets live in the shared venue store that every caller's bare-hash
-	 *  read already falls back to, so the catalog is public — but only for reads,
-	 *  and only for the venue's own DID (another user's {@code /a/} is private). */
+	/** A read of the venue's explicitly addressed content catalog
+	 *  ({@code <venueDID>/a/…}). It is public only for reads and only for the
+	 *  venue's own DID; bare hashes and another user's {@code /a/} are private. */
 	private boolean isVenueCatalogRead(AString resource, AString ability) {
 		if (!Capability.CRUD_READ.equals(ability) && !Abilities.ASSET_READ.equals(ability)) return false;
 		return resource.toString().startsWith(getDIDString().toString() + "/a/");
