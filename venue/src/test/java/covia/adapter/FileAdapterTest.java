@@ -573,7 +573,8 @@ public class FileAdapterTest {
 		try {
 			Job job = runRaw("v/ops/file/read", Maps.of("root", "work", "path", "escape-link"));
 			assertEquals(Status.FAILED, job.getStatus());
-			assertTrue(job.getErrorMessage().toLowerCase().contains("symlink"),
+			String error = job.getErrorMessage().toLowerCase();
+			assertTrue(error.contains("symlink") || error.contains("symbolic link"),
 				"unexpected error: " + job.getErrorMessage());
 		} finally {
 			Files.deleteIfExists(link);
