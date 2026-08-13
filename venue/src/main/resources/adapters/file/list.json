@@ -8,10 +8,13 @@
     "input": {
       "type": "object",
       "properties": {
-        "root": { "type": "string", "description": "Configured root name (see file:roots)" },
-        "path": { "type": "string", "description": "Directory path relative to the root (omit for root)" }
+        "root": { "type": "string", "description": "Configured root name; omit for a canonical DLFS path" },
+        "path": { "type": "string", "description": "Directory relative to root or dlfs/<drive>[/<path>]" }
       },
-      "required": ["root"]
+      "anyOf": [
+        { "required": ["root"] },
+        { "required": ["path"] }
+      ]
     },
     "output": {
       "type": "object",

@@ -53,7 +53,7 @@ covia/                          # ai.covia:covia (parent POM)
 
 - **Java 21+** (JDK; the published Docker image runs on Java 25)
 - **Maven 3.7+** (enforced by maven-enforcer-plugin)
-- **Convex 0.8.12-SNAPSHOT** — temporarily tracks unreleased Convex for the explicit JWT `kid` API required by #352. Build it locally first (`mvn install -DskipTests` from `../convex`); CI compiles Convex from `develop` automatically whenever `convex.version` ends in `-SNAPSHOT`. Pin the next Maven Central release before a Covia release.
+- **Convex 0.8.12** — released artifacts resolve directly from Maven Central, including the explicit JWT `kid` API required by #352. No sibling Convex checkout or source build is required.
 
 ## Build & Run
 
@@ -93,7 +93,7 @@ mvn test -pl covia-core
 
 | Dependency | Version | Purpose |
 |------------|---------|---------|
-| Convex | 0.8.11 | Lattice platform, immutable data, cryptography |
+| Convex | 0.8.12 | Lattice platform, immutable data, cryptography |
 | Javalin | 7.2.2 | HTTP server with OpenAPI/Swagger/ReDoc |
 | LangChain4j | 1.18.1 | LLM orchestration (OpenAI, Ollama, Gemini, DeepSeek) |
 | MCP SDK | 2.0.0 | Model Context Protocol |
@@ -143,7 +143,7 @@ Defined in code at `venue/src/main/java/covia/lattice/Covia.java`. Full design i
 - **SSE** — Server-sent events for real-time job updates (`/api/v1/jobs/{id}/sse`)
 - **MCP** — Model Context Protocol JSON-RPC endpoint
 - **A2A** — Agent-to-Agent federated protocol
-- **DID** — Decentralized identifiers for venue discovery (`/.well-known/did.json`). A venue with a public `hostname` presents `did:web:<hostname>` as its identity (`id` = did:web, the did:key in `alsoKnownAs` as an informational cross-reference — never a canonical identity to re-bind to); without one, the did:key is the identity. Consumers respect the presented identity as-is (#167, #343). Internally, durable state still roots in the did:key pending the operator-declared identity flip (#343 Phase B)
+- **DID** — Decentralized identifiers for venue discovery (`/.well-known/did.json`). A venue may declare `did:web:<hostname>` as its stable identity; otherwise its key-derived `did:key` remains the identity. Consumers preserve the presented DID as-is (`alsoKnownAs` is informational, never a rebinding instruction). Remote routing and signature verification dispatch by DID method: `did:key` and `did:web` are built in, while future methods such as `did:convex` plug in without changing federation or UCAN code (#167, #343).
 
 ## Development Conventions
 

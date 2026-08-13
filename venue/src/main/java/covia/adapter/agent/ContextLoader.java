@@ -17,12 +17,9 @@ import covia.adapter.AssetAdapter;
 import covia.adapter.CoviaAdapter;
 import covia.api.Abilities;
 import covia.api.Fields;
-import convex.lattice.cursor.ALatticeCursor;
 import covia.grid.Asset;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
-import covia.venue.User;
-import covia.venue.Users;
 
 /**
  * Resolves context entries into system messages for agent LLM context.
@@ -212,7 +209,7 @@ public class ContextLoader {
 		String s = ref.startsWith("/") ? ref.substring(1) : ref;
 		return s.startsWith("w/") || s.startsWith("g/") || s.startsWith("o/")
 			|| s.startsWith("j/") || s.startsWith("s/") || s.startsWith("h/")
-			|| s.startsWith("n/") || s.startsWith("c/");
+			|| s.startsWith("n/") || s.startsWith("t/") || s.startsWith("c/");
 	}
 
 	/**
@@ -244,15 +241,9 @@ public class ContextLoader {
 	String resolveWorkspacePath(String path, RequestContext ctx) {
 		try {
 			requireReadAccess(Strings.create(path), ctx);
-			Users users = engine.getVenueState().users();
-			User user = users.get(ctx.getUserDID());
-			if (user == null) return null;
-
-			ALatticeCursor<ACell> cursor = user.cursor();
-			ACell[] pathKeys = CoviaAdapter.parseStringPath(path);
-			if (pathKeys.length == 0) return null;
-
-			ACell value = CoviaAdapter.readPath(cursor, pathKeys);
+			CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
+			if (covia == null) return null;
+			ACell value = covia.readContextValue(ctx, Strings.create(path));
 			if (value == null) return null;              // path absent → caller skips
 			return renderValue(value);
 		} catch (RuntimeException e) {

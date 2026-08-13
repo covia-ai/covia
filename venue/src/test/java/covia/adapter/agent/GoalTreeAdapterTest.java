@@ -13,6 +13,7 @@ import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.adapter.AAdapter;
 import covia.adapter.TestAdapter;
@@ -31,6 +32,14 @@ import covia.venue.TestEngine;
  * <p>Uses the shared {@link TestEngine#ENGINE} with per-test ALICE_DID.</p>
  */
 public class GoalTreeAdapterTest {
+	private static boolean hasNamedTool(AVector<ACell> tools, String expected) {
+		if (tools == null) return false;
+		for (long i = 0; i < tools.count(); i++) {
+			AString name = RT.ensureString(RT.getIn(tools.get(i), Fields.NAME));
+			if (name != null && expected.equals(name.toString())) return true;
+		}
+		return false;
+	}
 
 	private final Engine engine = TestEngine.ENGINE;
 	private AString ALICE_DID;
@@ -148,6 +157,14 @@ public class GoalTreeAdapterTest {
 		assertEquals(0, childEffective.count());
 		assertEquals(0, ContextBuilder.loadsToolDefs(engine, ALICE,
 			childEffective, java.util.Set.of(), new java.util.HashMap<>()).count());
+		ContextBuilder.LoadSnapshot unloaded = ContextBuilder.resolveLoadSnapshot(
+			engine, ALICE, childEffective, java.util.Set.of());
+		ACell hallucinated = ((GoalTreeAdapter) engine.getAdapter("goaltree")).dispatchTool(
+			"covia_read", Maps.of("path", "w/probe"), unloaded.routes(), ALICE,
+			AbstractLLMAdapter.DEFAULT_TOOL_CALL_TIMEOUT_MS);
+		assertTrue(String.valueOf(hallucinated).startsWith("Error:"),
+			"a manually supplied call after unload must not retain a dispatch route: "
+				+ hallucinated);
 		assertTrue(Skills.isSkillEntry(
 			GoalTreeContext.getLoads(parent).get(Strings.create("w/skills/alpha"))),
 			"parent tier untouched by the child's mask");
@@ -438,22 +455,195 @@ public class GoalTreeAdapterTest {
 
 	@Test
 	public void testExplicitComplete() {
-		// Use test:toolllm which calls test:echo — but we want to test complete()
-		// Instead, create a mock input where the LLM would call complete
-		// For now, test that FrameResult.complete works correctly
-		GoalTreeAdapter.FrameResult result = GoalTreeAdapter.FrameResult.complete(
-			Maps.of(Strings.create("answer"), Strings.create("42")),
-			Vectors.empty());
-		assertEquals("complete", result.status());
-		assertNotNull(result.value());
+		// Anthropic requires every tool_use in an assistant batch to receive a
+		// corresponding tool_result immediately afterwards. The fixture emits
+		// complete plus a second call: complete wins, the later call is skipped
+		// with an error result, and a plain assistant projection closes history.
+		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "explicit-complete-agent",
+			AgentState.KEY_CONFIG, Maps.of(
+				"llmOperation", "v/test/ops/llm",
+				"model", "parallel-complete-test",
+				"tools", Vectors.of(
+					(ACell) Strings.create("complete"),
+					(ACell) Strings.create("v/test/ops/echo"))),
+			Fields.MESSAGES, Vectors.of((ACell) Maps.of(
+				Fields.MESSAGE, Strings.create("return 42"))));
+
+		ACell output = adapter.processGoal(null, ALICE, input);
+		assertEquals("42", RT.ensureString(RT.getIn(output, Fields.RESPONSE, "answer")).toString());
+
+		AVector<ACell> frames = RT.ensureVector(RT.getIn(output, Fields.FRAMES));
+		AVector<ACell> conv = RT.ensureVector(RT.getIn(frames.get(0), "conversation"));
+		java.util.Set<String> resultIds = new java.util.HashSet<>();
+		long callTurn = -1;
+		ACell finalTurn = conv.get(conv.count() - 1);
+		for (long i = 0; i < conv.count(); i++) {
+			if (RT.getIn(conv.get(i), "toolCalls") != null) callTurn = i;
+			if ("tool".equals(String.valueOf(RT.getIn(conv.get(i), "role")))) {
+				resultIds.add(String.valueOf(RT.getIn(conv.get(i), "id")));
+			}
+		}
+		assertTrue(callTurn >= 0);
+		AVector<ACell> retainedCalls = RT.ensureVector(RT.getIn(conv.get(callTurn), "toolCalls"));
+		assertInstanceOf(AMap.class, RT.getIn(retainedCalls.get(0), "arguments"));
+		assertInstanceOf(AMap.class, RT.getIn(retainedCalls.get(1), "arguments"),
+			"goal-tree state must retain provider-neutral structured arguments");
+		assertEquals("call_complete", String.valueOf(RT.getIn(conv.get(callTurn + 1), "id")));
+		assertEquals("call_after_complete", String.valueOf(RT.getIn(conv.get(callTurn + 2), "id")));
+		assertEquals(CVMBool.TRUE, RT.getIn(conv.get(callTurn + 2), "isError"),
+			"skipped tool calls must be explicit Anthropic error results");
+		assertEquals(java.util.Set.of("call_complete", "call_after_complete"), resultIds,
+			"every tool call in the batch must receive a result");
+		assertEquals("assistant", String.valueOf(RT.getIn(finalTurn, "role")));
+		assertNull(RT.getIn(finalTurn, "toolCalls"));
+		assertTrue(String.valueOf(RT.getIn(finalTurn, "content")).contains("42"));
+
+		ACell followup = adapter.processGoal(null, ALICE, Maps.of(
+			Fields.AGENT_ID, "explicit-complete-agent",
+			AgentState.KEY_CONFIG, Maps.of(
+				"llmOperation", "v/test/ops/llm",
+				"model", "parallel-complete-test",
+				"tools", Vectors.of(
+					(ACell) Strings.create("complete"),
+					(ACell) Strings.create("v/test/ops/echo"))),
+			Fields.SESSION, Maps.of(AgentState.KEY_FRAMES, frames),
+			Fields.MESSAGES, Vectors.of((ACell) Maps.of(
+				Fields.MESSAGE, Strings.create("same session followup")))));
+		assertEquals("NEXT_TURN_OK", RT.getIn(followup, Fields.RESPONSE).toString(),
+			"a settled terminal batch must not poison the next turn on the same frames");
+	}
+
+	@Test
+	public void testInspectionIncludesLiveLoadsContextMapAndContributedTools() {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of("path", "w/goal-inspection-load", "value", "GOAL_LOAD_VISIBLE"),
+			ALICE).awaitResult(5000);
+
+		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
+		AMap<AString, ACell> config = Maps.of(
+			"llmOperation", "v/test/ops/llm",
+			Fields.LOADS, Maps.of("w/goal-inspection-load", Maps.of(
+				"budget", 500L,
+				"tools", Vectors.of(Strings.create("v/ops/covia/read")))));
+
+		AMap<AString, ACell> l3 = adapter.buildFirstIterationL3Input(
+			config, null, null, ALICE);
+		String rendered = convex.core.util.JSON.print(
+			RT.getIn(l3, Fields.MESSAGES)).toString();
+		assertTrue(rendered.contains("GOAL_LOAD_VISIBLE"), rendered);
+		assertTrue(rendered.contains("[Context Map]"), rendered);
+		assertTrue(rendered.contains("w/goal-inspection-load"), rendered);
+
+		AVector<ACell> tools = RT.ensureVector(RT.getIn(l3, Fields.TOOLS));
+		assertTrue(hasNamedTool(tools, "covia_read"), tools.toString());
+	}
+
+	@Test
+	public void testLoadedValueRefreshesAfterToolWriteWithinSameFrame() {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of("path", "w/live-load", "value", "LOAD_VALUE_OLD"),
+			ALICE).awaitResult(5000);
+
+		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "live-load-goaltree",
+			AgentState.KEY_STATE, null,
+			AgentState.KEY_CONFIG, Maps.of(
+				"llmOperation", "v/test/ops/skillllm",
+				"model", "load-refresh-test",
+				"tools", Vectors.of(Strings.create("v/ops/covia/write")),
+				Fields.LOADS, Maps.of("w/live-load", Maps.of("budget", 500L))),
+			Fields.MESSAGES, Vectors.of(
+				(ACell) Maps.of("content", "refresh the loaded value")));
+
+		ACell output = adapter.processGoal(null, ALICE, input);
+		assertEquals("LIVE_LOAD_REFRESHED",
+			RT.ensureString(RT.getIn(output, Fields.RESPONSE)).toString());
 	}
 
 	@Test
 	public void testExplicitFail() {
-		GoalTreeAdapter.FrameResult result = GoalTreeAdapter.FrameResult.failed(
-			Strings.create("Something went wrong"), Vectors.empty());
-		assertEquals("failed", result.status());
-		assertEquals("Something went wrong", RT.ensureString(result.value()).toString());
+		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
+		ACell output = adapter.processGoal(null, ALICE, Maps.of(
+			Fields.AGENT_ID, "explicit-fail-agent",
+			AgentState.KEY_CONFIG, Maps.of(
+				"llmOperation", "v/test/ops/llm",
+				"model", "parallel-fail-test",
+				"tools", Vectors.of(
+					(ACell) Strings.create("fail"),
+					(ACell) Strings.create("v/ops/covia/write"))),
+			Fields.MESSAGES, Vectors.of((ACell) Maps.of(
+				Fields.MESSAGE, Strings.create("fail deliberately")))));
+
+		assertEquals("failed deliberately", RT.getIn(output, Fields.ERROR, "error").toString());
+		ACell read = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of("path", "w/parallel-fail-should-not-write"), ALICE).awaitResult(5000);
+		assertEquals(CVMBool.FALSE, RT.getIn(read, "exists"),
+			"a mutating sibling after fail must not execute");
+
+		AVector<ACell> frames = RT.ensureVector(RT.getIn(output, Fields.FRAMES));
+		AVector<ACell> conv = RT.ensureVector(RT.getIn(frames.get(0), "conversation"));
+		long callTurn = -1;
+		for (long i = 0; i < conv.count(); i++) {
+			if (RT.getIn(conv.get(i), "toolCalls") != null) callTurn = i;
+		}
+		assertTrue(callTurn >= 0);
+		assertEquals("call_fail", RT.getIn(conv.get(callTurn + 1), "id").toString());
+		assertEquals("call_after_fail", RT.getIn(conv.get(callTurn + 2), "id").toString());
+		assertEquals(CVMBool.TRUE, RT.getIn(conv.get(callTurn + 2), "isError"));
+	}
+
+	@Test
+	public void testMalformedTerminalCallDoesNotSuppressLaterSibling() {
+		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
+		ACell output = adapter.processGoal(null, ALICE, Maps.of(
+			Fields.AGENT_ID, "malformed-terminal-agent",
+			AgentState.KEY_CONFIG, Maps.of(
+				"llmOperation", "v/test/ops/llm",
+				"model", "malformed-complete-test",
+				"tools", Vectors.of(
+					(ACell) Strings.create("complete"),
+					(ACell) Strings.create("v/test/ops/echo"))),
+			Fields.MESSAGES, Vectors.of((ACell) Maps.of(
+				Fields.MESSAGE, Strings.create("recover from malformed complete")))));
+
+		assertEquals("BATCH_RECOVERED", RT.getIn(output, Fields.RESPONSE).toString());
+		AVector<ACell> frames = RT.ensureVector(RT.getIn(output, Fields.FRAMES));
+		AVector<ACell> conv = RT.ensureVector(RT.getIn(frames.get(0), "conversation"));
+		long callTurn = -1;
+		for (long i = 0; i < conv.count(); i++) {
+			if (RT.getIn(conv.get(i), "toolCalls") != null) callTurn = i;
+		}
+		assertTrue(callTurn >= 0);
+		assertEquals(CVMBool.TRUE, RT.getIn(conv.get(callTurn + 1), "isError"));
+		assertNull(RT.getIn(conv.get(callTurn + 2), "isError"),
+			"the sibling after a failed terminal-looking call must execute normally");
+	}
+
+	@Test
+	public void testParallelNonTerminalCallsEachReceiveAResult() {
+		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
+		ACell output = adapter.processGoal(null, ALICE, Maps.of(
+			Fields.AGENT_ID, "parallel-nonterminal-agent",
+			AgentState.KEY_CONFIG, Maps.of(
+				"llmOperation", "v/test/ops/llm",
+				"model", "parallel-nonterminal-test",
+				"tools", Vectors.of((ACell) Strings.create("v/test/ops/echo"))),
+			Fields.MESSAGES, Vectors.of((ACell) Maps.of(
+				Fields.MESSAGE, Strings.create("run both calls")))));
+
+		assertEquals("BATCH_RECOVERED", RT.getIn(output, Fields.RESPONSE).toString());
+		AVector<ACell> frames = RT.ensureVector(RT.getIn(output, Fields.FRAMES));
+		AVector<ACell> conv = RT.ensureVector(RT.getIn(frames.get(0), "conversation"));
+		java.util.Set<String> ids = new java.util.HashSet<>();
+		for (long i = 0; i < conv.count(); i++) {
+			if ("tool".equals(String.valueOf(RT.getIn(conv.get(i), "role")))) {
+				ids.add(String.valueOf(RT.getIn(conv.get(i), "id")));
+			}
+		}
+		assertEquals(java.util.Set.of("call_echo_one", "call_echo_two"), ids);
 	}
 
 	// ========== Subgoal test (using test:toolllm) ==========

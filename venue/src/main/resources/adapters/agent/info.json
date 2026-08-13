@@ -1,6 +1,6 @@
 {
 	"name": "Agent Info",
-	"description": "Get a lightweight summary of an agent: status, config, capabilities, task count, timeline length, and any error. For more detail use covia_read: g/{agentId}/state/config (LLM settings, caps, context), g/{agentId}/state/history (conversation), g/{agentId}/timeline (run records), g/{agentId}/inbox (pending messages).",
+	"description": "Get a lightweight summary of an agent: status, canonical config, pending-task count, timeline length, unavailable configured tools, and any suspension error. For durable detail inspect g/{agentId}: config is at g/{agentId}/config, audit runs at g/{agentId}/timeline, and conversations at g/{agentId}/sessions/<sessionId>/frames. Framework-managed records are read-only; use agent:update for config changes and agent:context for the exact next provider input.",
 	"dateCreated": "2026-04-01T00:00:00Z",
 	"operation": {
 		"adapter": "agent:info",
@@ -18,10 +18,10 @@
 			"properties": {
 				"agentId": { "type": "string" },
 				"status": { "type": "string", "description": "SLEEPING, RUNNING, SUSPENDED, or TERMINATED" },
-				"config": { "type": "object", "description": "Framework config (operation, definition)" },
-				"stateConfig": { "type": "object", "description": "Agent's LLM config: model, systemPrompt, caps, context, responseFormat" },
+				"config": { "type": "object", "description": "Canonical merged agent config: transition/provider selection, prompt, tools, skills, context, loads, caps, outputs, and definition provenance where present" },
 				"timelineLength": { "type": "integer", "description": "Number of completed runs" },
 				"tasks": { "type": "integer", "description": "Number of pending tasks" },
+				"unavailableTools": { "type": "array", "description": "Configured operation tools currently missing or unreadable, with a reason for each" },
 				"error": { "type": "string", "description": "Last error message, if suspended" }
 			}
 		}

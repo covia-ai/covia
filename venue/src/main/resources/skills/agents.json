@@ -3,7 +3,7 @@
 	"description": "Create, configure and delegate to other agents on this venue. Load when work should be done by a separate agent, or to manage existing agents.",
 	"content": {
 		"contentType": "text/markdown",
-		"inline": "## Agents\nCreate:\n- create `{agentId, config}`. Config fields: `operation` (transition op, a PLAIN STRING like `v/ops/llmagent/chat`), `llmOperation`, `model`, `systemPrompt`, `tools` (FULL `v/ops/...` paths), `skills` (skill source refs), `context`, `caps`. Returns `created: false` if the id exists.\n- Templates: pass `config: \"v/agents/templates/<name>\"` — minimal, reader, worker, analyst, manager, goaltree, full.\n- update `{agentId, config}` merges changes; fork `{agentId, sourceId, config?}` copies an existing agent.\n\nDelegate work:\n- request `{agentId, input, sessionId?, wait?}` — a tracked task Job, async by default; await that Job for the result. With a `sessionId` the task runs IN that conversation — its turns join the session history (this is how deferred work reports back into a chat; your own current session shows as `Session:` in your context).\n- chat `{agentId, message, sessionId?}` — conversational; a session is minted on first contact, pass `sessionId` to continue it.\n- list / info `{agentId}` inspect; cancel-task `{agentId, taskId}` drops a queued task.\n\nRules:\n- ALL settings live in top-level `config` — never inside `state`.\n- `tools` entries must resolve as catalog paths or the agent silently lacks them (create warns).\n- `v/ops/agent/trigger` is a wake-up kick, not a result-getter — submit real work via request or chat.\n- Also available: message, suspend, resume, delete, context (inspection) under `v/ops/agent/`.\n- For the flow of work — chaining, fan-out, tracking, receiving and completing tasks — load the `tasks` skill.\n- Before picking `llmOperation`/`model` for a new agent, load the `models` skill — provider readiness is caller-relative, and template defaults may not work on this venue."
+		"inline": "## Agents\nCreate:\n- Use the creation operation with `{agentId, config?}`. Omit config for the skilled default using the venue's transition and provider defaults. An existing id is an ERROR: update it, or explicitly delete it before replacement.\n- Templates are functional assets: `config: \"v/agents/templates/<name>\"` — minimal, skilled, reader, worker, analyst, manager, goaltree, full.\n- Compose behavior additively with an ordered config array: `[templateRef, providerRef, promptRef, {final overrides}]`. Layers merge left-to-right; nested maps merge and later arrays/scalars replace.\n- Stable fields live in top-level config: operation (a full transition path), llmOperation, model, systemPrompt, tools, skills, context, loads, caps, outputs. Never put config inside state.\n- The update operation merges config over a stopped agent; suspend a RUNNING agent first. Forking copies config/state into a new id.\n\nDelegate:\n- Use the request operation with `{agentId, input, sessionId?, timeout?, outputPath?, responseSchema?}` to create a tracked task. Input must be self-contained and non-empty. Default timeout is 5000ms; timeout=0 returns immediately. A slow call returns `{id, status: STARTED, ...}`—pass that exact id to the directly advertised Job-status or Job-result operation.\n- outputPath makes the framework write the exact completed result and return a small receipt; pass the path, not a copied payload, to dependent workers.\n- Conversational chat reuses the returned sessionId; a message is fire-and-forget and has no reply. Listing and info inspect agents; cancellation removes queued work.\n\nRules:\n- Choose callable operations only from the current advertised palette. Full `v/ops/...` references belong in config and metadata, not reconstructed call names. Creation reports unavailable configured paths as warnings.\n- Loading a skill adds tools but never authority.\n- Load tasks for fan-out/chaining and models before choosing a provider/model. Templates are provider-neutral: a later provider layer or the venue default supplies llmOperation/model."
 	},
 	"skill": {
 		"tools": [
@@ -12,9 +12,12 @@
 			"v/ops/agent/fork",
 			"v/ops/agent/request",
 			"v/ops/agent/chat",
+			"v/ops/agent/message",
 			"v/ops/agent/list",
 			"v/ops/agent/info",
-			"v/ops/agent/cancel-task"
+			"v/ops/agent/cancel-task",
+			"v/ops/grid/job-status",
+			"v/ops/grid/job-result"
 		]
 	}
 }

@@ -3,14 +3,15 @@
 	"description": "Find out what a venue can do: adapters, operations and their schemas, published assets. Load on an unfamiliar venue or when no current tool fits.",
 	"content": {
 		"contentType": "text/markdown",
-		"inline": "## Discovery\nWhat a venue offers, broad to narrow:\n- read `{path: \"v/info/adapters\"}` — every adapter with its description and full operation paths (`v/info` also holds name, did, version, protocols).\n- list `{path: \"v/ops/<adapter>\"}` browses one adapter's catalog; users publish their own ops under `o/`.\n- asset-get `{id: \"v/ops/...\"}` returns an operation's full metadata — its `operation.input`/`output` JSON Schemas ARE the calling contract; read them before invoking an unfamiliar op.\n- asset-list `{type?, offset?, limit?}` pages your own pinned assets.\n\nUse what you find:\n- Any discovered op is directly callable: give its full catalog path (or asset ref) as the tool name — dispatch resolves references, capability-gated as usual.\n- On a REMOTE venue the same reads travel over grid: run `{operation: \"v/ops/covia/read\", input: {path: \"v/info/adapters\"}, venue: <did>}` (load the grid skill).\n- Skills a venue offers: the skills op over its `v/skills` (see the skills skill).\n\nRules:\n- `Capability denied` means permissions, not absence — an op can exist and be closed to you.\n- Absence from a listing is not proof of absence either: explicit paths (e.g. `v/test/ops/...`) may still resolve."
+		"inline": "## Discovery\nWhat a venue offers, broad to narrow:\n- Read `{path: \"v/info/adapters\"}` for every adapter with its description and operation paths (`v/info` also holds name, DID, version and protocols).\n- List `{path: \"v/ops/<adapter>\"}` to browse one adapter's catalog; users publish their own operations under `o/`.\n- Retrieve an operation asset by `{id: \"v/ops/...\"}` for its full metadata. Its `operation.input` and `operation.output` JSON Schemas are the calling contract. Page your own pinned assets when looking for user-published definitions.\n\nUsing what you find:\n- Call only operations actually present in the advertised palette, using the exact current callable name and schema. To acquire a discovered operation, load the skill that contributes it, use the runtime's dynamic operation-acquisition control when available, or invoke it through an advertised generic dispatcher. Never derive a callable name or a catalog path from prose.\n- For a remote venue, use the grid skill and its discovery operations.\n- Use the skills-management operation to inspect sources beyond your current index.\n\nRules:\n- `Capability denied` means insufficient authority, not absence.\n- Absence from a listing is not conclusive: explicit paths may still resolve. Inspect metadata before invoking unfamiliar or mutating operations."
 	},
 	"skill": {
 		"tools": [
 			"v/ops/covia/read",
 			"v/ops/covia/list",
 			"v/ops/asset/get",
-			"v/ops/asset/list"
+			"v/ops/asset/list",
+			"v/ops/skills"
 		]
 	}
 }

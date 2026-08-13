@@ -16,8 +16,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   Startup warns when the adapter is active without an encrypted Etch policy.
 - Named-user key-pair authentication now emits the verification-method DID URL
   published by the user's DID document as the JWT `kid`; ordinary `did:key`
-  authentication retains its bare-Multikey header. Covia temporarily tracks
-  Convex `0.8.12-SNAPSHOT` for the explicit-key-ID signing API (#352).
+  authentication retains its bare-Multikey header. Covia now uses the released
+  Convex `0.8.12` artifacts for the explicit-key-ID signing API (#352).
 - Restored compatibility with correctly signed legacy UCAN JWTs that omit the
   `ucv` profile marker and empty `prf` claim. Venues still emit the explicit
   UCAN 0.10.0 profile, reject explicit unsupported versions, advertise the
@@ -34,6 +34,13 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   with RFC-reserved domains. The venue inventory now flags venue-3's expired
   TLS certificate and avoids duplicating dev-host coordinates in usage examples.
 
+### Fixed
+
+- DLFS sibling filenames that share their first 32 characters now remain
+  distinct instead of the second write silently replacing the first. Convex
+  0.8.12 supplies the fix; Covia pins the reported write/read/list regression
+  through its DLFS adapter (#342).
+
 ## [0.9.0] - 2026-08-10
 
 Breaking: UCAN JWTs now use the versioned Convex profile (Convex 0.8.11) —
@@ -44,7 +51,8 @@ the profile (`ucv` claim, always-present `prf`).
 ### Added
 - Operator-declared venue identity: the `did` config key is validated
   fail-closed (did:web must match the public hostname; did:key pins the venue
-  key pair), and did:web principals verify at every ingress seam (#343)
+  key pair); DID-method resolvers now separate identity, signature verification,
+  and transport routing, and did:web federation is covered end to end (#343)
 - `file:move` / `file:copy` with provider-native dispatch — fully native on
   DLFS-backed roots with Convex 0.8.11 (#321)
 - Outbound A2A agents modelled as assets (#340)

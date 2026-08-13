@@ -2030,11 +2030,10 @@ public class Engine {
 	private volatile covia.venue.auth.VenueDIDVerifier didVerifier;
 
 	/**
-	 * The venue's DID signature verifier (covia#343): did:key statelessly, the
-	 * venue's own identity and locally managed users from venue state, remote
-	 * did:web via cached DID-document resolution. Ingress seams use this in
-	 * place of {@link convex.auth.did.DIDVerifier#CONVEX} so did:web-identified
-	 * principals verify exactly like did:key ones.
+	 * The venue's DID signature verifier (covia#343): its own identity and local
+	 * users from venue state, then remote identities through a method-keyed
+	 * resolver registry. Built-ins support did:key and did:web; future methods
+	 * can register without changing ingress, UCAN, or federation code.
 	 */
 	public covia.venue.auth.VenueDIDVerifier didVerifier() {
 		covia.venue.auth.VenueDIDVerifier v = didVerifier;
@@ -2168,10 +2167,9 @@ public class Engine {
 	 * record. Keeping that invariant at the admission boundary is what makes the
 	 * name safe to parse everywhere else.</p>
 	 *
-	 * <p>No current authentication path can produce such a DID (a self-issued
-	 * subject must be a {@code did:key} whose multikey decodes to the presented
-	 * key, and venue-minted usernames admit no colon), so this is defence in
-	 * depth against a future path — or an operator registering one by hand.</p>
+	 * <p>Self-issued subjects may use any installed DID method, so this check is
+	 * an intentional method-independent admission invariant rather than an
+	 * assumption about how the subject's signing key is represented.</p>
 	 */
 	public void requireNotSubPrincipal(AString did) {
 		if (covia.grid.Principals.isAgentDID(did)) {
@@ -2202,8 +2200,9 @@ public class Engine {
 	public AMap<AString, ACell> getDIDDocument(String endpoint) {
 		AString canonicalDID=getDIDString();
 
-		// Presentation identity: the did:web alias when a public hostname is
-		// configured (and isn't already the canonical DID), else the did:key.
+		// Presentation identity: the declared DID when it is did:web; otherwise
+		// the discoverable did:web form when a public hostname exists, else the
+		// key-derived DID. Consumers retain docID exactly as presented.
 		AString webDID=config.getWebDID();
 		boolean aliased=(webDID!=null) && !webDID.equals(canonicalDID);
 		AString docID=aliased ? webDID : canonicalDID;

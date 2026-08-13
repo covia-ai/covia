@@ -12,13 +12,23 @@
 			"v/ops/file/tree",
 			"v/ops/file/read",
 			"v/ops/file/write",
+			"v/ops/file/append",
 			"v/ops/file/move",
 			"v/ops/file/copy",
 			"v/ops/file/mkdir",
+			"v/ops/file/delete",
+			"v/ops/file/stat",
 			"v/ops/dlfs/list-drives",
 			"v/ops/dlfs/create-drive",
+			"v/ops/dlfs/delete-drive",
+			"v/ops/dlfs/list",
+			"v/ops/dlfs/tree",
 			"v/ops/dlfs/read",
-			"v/ops/dlfs/write"
+			"v/ops/dlfs/write",
+			"v/ops/dlfs/append",
+			"v/ops/dlfs/mkdir",
+			"v/ops/dlfs/delete",
+			"v/ops/dlfs/stat"
 		]
 	}
 }

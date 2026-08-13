@@ -3,14 +3,16 @@
 	"description": "Bridge external MCP servers' tools into the catalog as ordinary operations — curated one-by-one or mirrored wholesale. Load to connect outside tool servers.",
 	"content": {
 		"contentType": "text/markdown",
-		"inline": "## MCP bridging\nBridged tools become ORDINARY catalog operations — capability grants, job records and schema validation all apply. The tool is the entity; the server is just where it lives.\n\n- add-tool `{server, tool, path, auth?, name?, description?, default?}` — curate ONE remote tool at a catalog path you choose (e.g. `o/research/search_papers`). `default` pre-fills arguments to purpose-shape it (a generic 5-field create_issue becomes a 2-field report_bug). Remove with covia delete on the path.\n- add-server `{name, url, auth?, scope?}` — mirror ALL of a server's tools under `o/mcp/<name>/` (venue scope needs the mcp/manage capability). remove-server takes it away.\n- refresh `{name}` reconciles a mirror (vanished tools deleted); refresh `{path}` updates a curated tool in place (your name/description kept; vanished reported, never deleted).\n- tools-list `{server, auth?}` previews a server's tools before bridging.\n\nRules:\n- `auth` must be a secret ref (`s/<name>`) — raw tokens warn and should be re-stored.\n- Server URLs pass the venue's SSRF/allowlist checks.\n- Once bridged, call the op like any other. If an offered tool NAME does not match what you expect, you can always call an op by its full catalog path or asset ref as the tool name — dispatch resolves references directly (capability-gated as usual)."
+		"inline": "## MCP bridging\nBridged tools become ordinary catalog operations: capability checks, job records and schema validation still apply. The operation is the durable entity; the server is its execution endpoint.\n\n- Curate one remote tool with `{server, tool, path, auth?, name?, description?, default?}`. default pre-fills arguments to expose a smaller, purpose-shaped contract. Delete the curated path to remove it.\n- Mirror a server with `{name, url, auth?, scope?}` under `o/mcp/<name>/`; venue scope requires mcp/manage. The corresponding removal operation deletes a mirror.\n- Refresh by `{name}` to reconcile a mirror or `{path}` to update a curated operation. Preview definitions with `{server, auth?}` before bridging.\n\nRules:\n- auth must be `s/<name>`; never store raw tokens in bridge metadata.\n- Server URLs pass the venue's SSRF and allowlist policy.\n- Creating a catalog operation does not automatically add its schema to the current provider call. Load a skill that contributes the bridged operation, acquire the known operation dynamically when the runtime offers that control, or invoke it through an advertised dispatcher. Select the resulting callable from the current palette; never rely on a name copied from durable prose."
 	},
 	"skill": {
 		"tools": [
 			"v/ops/mcp/add-tool",
 			"v/ops/mcp/add-server",
+			"v/ops/mcp/remove-server",
 			"v/ops/mcp/refresh",
-			"v/ops/mcp/tools-list"
+			"v/ops/mcp/tools-list",
+			"v/ops/covia/delete"
 		]
 	}
 }

@@ -7,6 +7,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import convex.core.data.ACell;
@@ -92,6 +94,33 @@ public class DLFSAdapterTest {
 		String content = RT.ensureString(RT.getIn(result, "content")).toString();
 		assertEquals("{\"name\": \"Sarah Smith\"}", content);
 		assertEquals("utf-8", RT.ensureString(RT.getIn(result, "encoding")).toString());
+	}
+
+	/** Regression for covia#342 / Convex 0.8.12: directory entries must use the
+	 * complete sibling name, not only its first 32 characters. */
+	@Test
+	public void testSiblingNamesSharingThirtyTwoCharacterPrefixRemainDistinct() {
+		String drive = "prefix-collision";
+		String first = "x".repeat(32) + ".txt";
+		String second = "x".repeat(32) + " (2).txt";
+		run("v/ops/dlfs/create-drive", Maps.of("name", drive));
+
+		run("v/ops/dlfs/write", Maps.of(
+			"drive", drive, "path", first, "content", "one"));
+		run("v/ops/dlfs/write", Maps.of(
+			"drive", drive, "path", second, "content", "two"));
+
+		ACell firstRead = run("v/ops/dlfs/read", Maps.of("drive", drive, "path", first));
+		ACell secondRead = run("v/ops/dlfs/read", Maps.of("drive", drive, "path", second));
+		assertEquals("one", RT.ensureString(RT.getIn(firstRead, "content")).toString());
+		assertEquals("two", RT.ensureString(RT.getIn(secondRead, "content")).toString());
+
+		AVector<?> entries = RT.ensureVector(RT.getIn(
+			run("v/ops/dlfs/list", Maps.of("drive", drive)), "entries"));
+		assertEquals(2, entries.count());
+		Set<String> names = new HashSet<>();
+		for (ACell entry : entries) names.add(RT.getIn(entry, "name").toString());
+		assertEquals(Set.of(first, second), names);
 	}
 
 	@Test

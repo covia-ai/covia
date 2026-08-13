@@ -41,7 +41,7 @@ Two options — manual step-by-step (better for narration) or orchestration (sho
 #### Step 1: Alice — Extract
 
 ```
-agent_request  agentId="Alice"  input={"invoice_text": "<text>"}  wait=true
+agent_request  agentId="Alice"  input={"invoice_text": "<text>"}  timeout=30000
 ```
 
 **Default invoice** (use if the user doesn't provide one):
@@ -52,7 +52,7 @@ Summarise Alice's `InvoiceExtraction`: vendor, amount, PO number, any flags.
 #### Step 2: Bob — Enrich
 
 ```
-agent_request  agentId="Bob"  wait=true
+agent_request  agentId="Bob"  timeout=30000
   input={"extraction": <Alice's output>, "source_agent": "Alice"}
 ```
 
@@ -66,7 +66,7 @@ covia_read  path=w/enrichments/{invoice_number}
 #### Step 3: Carol — Approve
 
 ```
-agent_request  agentId="Carol"  wait=true
+agent_request  agentId="Carol"  timeout=30000
   input={"enrichment": <Bob's output>, "extraction": <Alice's output>, "source_pipeline": "Alice -> Bob -> Carol"}
 ```
 

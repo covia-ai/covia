@@ -363,6 +363,75 @@ public class TestAdapter extends AAdapter {
      */
     @SuppressWarnings("unchecked")
     private ACell handleLlm(ACell input) {
+		AString model = RT.ensureString(RT.getIn(input, "model"));
+		AVector<ACell> modelMessages = (RT.getIn(input, "messages") instanceof AVector<?> v)
+			? (AVector<ACell>) v : Vectors.empty();
+		boolean hasToolResult = false;
+		boolean sameSessionFollowup = false;
+		for (long i = 0; i < modelMessages.count(); i++) {
+			AString role = RT.ensureString(RT.getIn(modelMessages.get(i), "role"));
+			AString content = RT.ensureString(RT.getIn(modelMessages.get(i), "content"));
+			hasToolResult |= role != null && "tool".equals(role.toString());
+			sameSessionFollowup |= role != null && "user".equals(role.toString())
+				&& content != null && content.toString().contains("same session followup");
+		}
+		if (sameSessionFollowup) {
+			return Maps.of("role", Strings.create("assistant"),
+				"content", Strings.create("NEXT_TURN_OK"));
+		}
+		if (model != null && ("malformed-complete-test".equals(model.toString())
+				|| "parallel-nonterminal-test".equals(model.toString())) && hasToolResult) {
+			return Maps.of("role", Strings.create("assistant"),
+				"content", Strings.create("BATCH_RECOVERED"));
+		}
+		if (model != null && "parallel-complete-test".equals(model.toString())) {
+			// Anthropic-compatibility fixture: a terminal harness call can arrive
+			// in a parallel tool_use batch. The harness must return one result per
+			// id before terminating, even though calls after complete are skipped.
+			return Maps.of(
+				"role", Strings.create("assistant"),
+				"toolCalls", Vectors.of(
+					Maps.of(
+						"id", Strings.create("call_complete"),
+						"name", Strings.create("complete"),
+						"arguments", Strings.create("{\"answer\":\"42\"}")),
+					Maps.of(
+						"id", Strings.create("call_after_complete"),
+						"name", Strings.create("test_echo"),
+						"arguments", Strings.create("{\"echo\":\"must not execute\"}"))));
+		}
+		if (model != null && "parallel-fail-test".equals(model.toString())) {
+			return Maps.of(
+				"role", Strings.create("assistant"),
+				"toolCalls", Vectors.of(
+					Maps.of(
+						"id", Strings.create("call_fail"),
+						"name", Strings.create("fail"),
+						"arguments", Strings.create("{\"error\":\"failed deliberately\"}")),
+					Maps.of(
+						"id", Strings.create("call_after_fail"),
+						"name", Strings.create("covia_write"),
+						"arguments", Strings.create(
+							"{\"path\":\"w/parallel-fail-should-not-write\",\"value\":true}"))));
+		}
+		if (model != null && "malformed-complete-test".equals(model.toString())) {
+			return Maps.of(
+				"role", Strings.create("assistant"),
+				"toolCalls", Vectors.of(
+					Maps.of("id", "call_bad_complete", "name", "complete",
+						"arguments", "{broken"),
+					Maps.of("id", "call_after_bad_complete", "name", "test_echo",
+						"arguments", "{\"echo\":\"still executes\"}")));
+		}
+		if (model != null && "parallel-nonterminal-test".equals(model.toString())) {
+			return Maps.of(
+				"role", Strings.create("assistant"),
+				"toolCalls", Vectors.of(
+					Maps.of("id", "call_echo_one", "name", "test_echo",
+						"arguments", "{\"echo\":\"one\"}"),
+					Maps.of("id", "call_echo_two", "name", "test_echo",
+						"arguments", "{\"echo\":\"two\"}")));
+		}
         String text = "(no user message)";
         ACell messagesCell = RT.getIn(input, "messages");
         if (messagesCell instanceof AVector) {
@@ -474,6 +543,32 @@ public class TestAdapter extends AAdapter {
             ? (AVector<ACell>) v : Vectors.empty();
         AVector<ACell> tools = (RT.getIn(input, "tools") instanceof AVector<?> v)
             ? (AVector<ACell>) v : Vectors.empty();
+
+		AString model = RT.ensureString(RT.getIn(input, "model"));
+		if (model != null && "load-refresh-test".equals(model.toString())) {
+			boolean oldValue = false;
+			boolean newValue = false;
+			for (long i = 0; i < messages.count(); i++) {
+				AString content = RT.ensureString(RT.getIn(messages.get(i), "content"));
+				if (content == null) continue;
+				oldValue |= content.toString().contains("LOAD_VALUE_OLD");
+				newValue |= content.toString().contains("LOAD_VALUE_NEW");
+			}
+			if (newValue) {
+				return Maps.of("role", Strings.create("assistant"),
+					"content", Strings.create("LIVE_LOAD_REFRESHED"));
+			}
+			if (oldValue) {
+				return Maps.of("role", Strings.create("assistant"),
+					"toolCalls", Vectors.of(Maps.of(
+						"id", Strings.create("call_refresh_write"),
+						"name", Strings.create("covia_write"),
+						"arguments", Strings.create(
+							"{\"path\":\"w/live-load\",\"value\":\"LOAD_VALUE_NEW\"}"))));
+			}
+			return Maps.of("role", Strings.create("assistant"),
+				"content", Strings.create("LIVE_LOAD_MISSING"));
+		}
 
         boolean coviaReadOffered = false;
         for (long i = 0; i < tools.count(); i++) {
@@ -893,6 +988,15 @@ public class TestAdapter extends AAdapter {
             return Maps.of("role", Strings.create("assistant"), "content", Strings.create("(no messages)"));
         }
         AVector<ACell> messages = (AVector<ACell>) messagesCell;
+		for (long i = messages.count() - 1; i >= 0; i--) {
+			AString role = RT.ensureString(RT.getIn(messages.get(i), "role"));
+			AString content = RT.ensureString(RT.getIn(messages.get(i), "content"));
+			if (role != null && "user".equals(role.toString()) && content != null
+					&& content.toString().contains("same session followup")) {
+				return Maps.of("role", Strings.create("assistant"),
+					"content", Strings.create("NEXT_TURN_OK"));
+			}
+		}
 
         // Check if tool results already present — return text summary
         for (long i = 0; i < messages.count(); i++) {
@@ -906,6 +1010,47 @@ public class TestAdapter extends AAdapter {
                 );
             }
         }
+
+		AString model = RT.ensureString(RT.getIn(input, "model"));
+		if (model != null && "parallel-task-complete-test".equals(model.toString())) {
+			// Standard llmagent parity fixture: completion and a later write arrive
+			// in one provider batch. The write must be paired but never executed.
+			return Maps.of(
+				"role", Strings.create("assistant"),
+				"toolCalls", Vectors.of(
+					Maps.of(
+						"id", Strings.create("call_complete_task"),
+						"name", Strings.create("complete_task"),
+						"arguments", Strings.create("{\"result\":{\"answer\":\"done\"}}")),
+					Maps.of(
+						"id", Strings.create("call_after_complete_task"),
+						"name", Strings.create("covia_write"),
+						"arguments", Strings.create(
+							"{\"path\":\"w/parallel-task-should-not-write\",\"value\":true}"))));
+		}
+		if (model != null && "parallel-task-fail-test".equals(model.toString())) {
+			return Maps.of(
+				"role", Strings.create("assistant"),
+				"toolCalls", Vectors.of(
+					Maps.of(
+						"id", Strings.create("call_fail_task"),
+						"name", Strings.create("fail_task"),
+						"arguments", Strings.create("{\"error\":\"failed deliberately\"}")),
+					Maps.of(
+						"id", Strings.create("call_after_fail_task"),
+						"name", Strings.create("covia_write"),
+						"arguments", Strings.create(
+							"{\"path\":\"w/parallel-fail-task-should-not-write\",\"value\":true}"))));
+		}
+		if (model != null && "failed-terminal-looking-test".equals(model.toString())) {
+			return Maps.of(
+				"role", Strings.create("assistant"),
+				"toolCalls", Vectors.of(
+					Maps.of("id", "call_invalid_complete_task", "name", "complete_task",
+						"arguments", "{}"),
+					Maps.of("id", "call_after_invalid_complete_task", "name", "test_echo",
+						"arguments", "{\"echo\":\"still executes\"}")));
+		}
 
         // If a task context is present, call complete_task. The in-scope task
         // is read from the framework-populated RequestContext — no jobId arg.

@@ -11,7 +11,7 @@ Test and diagnose agents on a running venue via MCP tools or REST API.
 ## Prerequisites
 
 - Venue running on `localhost:8080` with MCP connected, OR use REST fallback
-- OpenAI API key set: `secret_set name=OPENAI_API_KEY value=sk-...`
+- At least one provider reported ready by `langchain_models`; store its key with `secret_set` when needed
 - If MCP tools are unavailable, all operations work via REST: `curl -s http://localhost:8080/api/v1/invoke -H "Content-Type: application/json" -d '{"operation": "...", "input": {...}}'`
 
 ## Commands
@@ -28,21 +28,22 @@ Create an agent with a specific configuration. Prompt for:
 Example:
 
 ```
-agent_create  agentId=TestBot  config={
-  "operation": "v/ops/llmagent/chat",
-  "llmOperation": "v/ops/langchain/openai",
-  "model": "gpt-5.4-mini",
-  "systemPrompt": "You are TestBot. ...",
-  "tools": ["v/ops/covia/read", "v/ops/covia/write"],
-  "caps": [{"with": "w/output/", "can": "crud/write"}, {"with": "w/", "can": "crud/read"}]
-}
+agent_create  agentId=TestBot  config=[
+  "v/agents/templates/worker",
+  {
+    "llmOperation": "v/ops/langchain/anthropic",
+    "model": "claude-sonnet-5",
+    "systemPrompt": "You are TestBot. ...",
+    "caps": [{"with": "w/output/", "can": "crud/write"}, {"with": "w/", "can": "crud/read"}]
+  }
+]
 ```
 
 ### `test <name>` — Send a task and observe
 
 1. Send a task:
 ```
-agent_request  agentId=<name>  input={"task": "..."}  wait=true
+agent_request  agentId=<name>  input={"task": "..."}  timeout=30000
 ```
 
 2. Check the result — did it complete? What output?
@@ -61,13 +62,15 @@ agent_info  agentId=<name>                → validated SLEEPING, RUNNING, or SU
 covia_read  path=g/<name>/status          → persisted marker (RUNNING may be stale if venue is offline)
 covia_read  path=g/<name>/error           → error message if SUSPENDED
 covia_read  path=g/<name>/config          → framework config (caps, tools, model)
-covia_read  path=g/<name>/state/history   → full LLM conversation with tool calls
+covia_read  path=g/<name>/sessions/<sid>/frames   → session conversation and tool calls
 covia_read  path=g/<name>/timeline        → all run records with timing
 covia_read  path=g/<name>/tasks           → pending tasks
 covia_read  path=g/<name>/inbox           → unread messages
 ```
 
-The **conversation history** (`state/history`) is the most important diagnostic — it shows every LLM turn, every tool call with arguments, and every tool result. Look for:
+The session's **frames** are the conversation record. Use the sessionId returned
+by chat/request, or inspect `g/<name>/sessions` to find it. Frames show LLM turns,
+tool calls, results, and GoalTree child frames. Look for:
 
 - **Missing tool calls** — LLM was supposed to call a tool but didn't
 - **Wrong arguments** — LLM called the right tool with wrong params
@@ -99,7 +102,8 @@ covia_read  path=g/<name>/error
 ```
 
 Common causes:
-- `invalid_request_error` — API key not set (`secret_set name=OPENAI_API_KEY`)
+- authentication / `invalid_request_error` — the selected provider key is not set
+  (for example `secret_set name=ANTHROPIC_API_KEY` or `OPENAI_API_KEY`)
 - `model_not_found` — wrong model name in config
 - `rate_limit_exceeded` — too many requests, wait and retry
 
@@ -108,7 +112,7 @@ Common causes:
 Read the conversation history to see what the LLM decided:
 
 ```
-covia_read  path=g/<name>/state/history
+covia_read  path=g/<name>/sessions/<sid>/frames
 ```
 
 Walk through tool calls:
@@ -162,7 +166,7 @@ To test strict mode in orchestrations:
 
 **`agent:trigger`** — Run the agent's transition loop. Always runs, even with no pending work — the agent may act proactively. When no tasks/messages are pending, the LLM receives a clear signal: "[No pending tasks, messages, or job results. You may act proactively or report idle.]"
 
-**`agent:request`** — Send a specific task and (optionally) wait for the result. Preferred for most interactions since it gives the agent concrete input.
+**`agent:request`** — Send a specific task and wait up to `timeout` milliseconds for the result. Preferred for most interactions since it gives the agent concrete input. A timeout returns a STARTED Job snapshot; fetch that Job rather than submitting the task again.
 
 **System prompt guidance:** Agent prompts should say what to do with no work:
 - Monitoring agent: "If no tasks are pending, check workspace for anomalies."
@@ -190,7 +194,7 @@ curl ... -d '{"operation": "v/ops/agent/list"}'
 curl ... -d '{"operation": "v/ops/agent/create", "input": {"agentId": "...", "config": {...}}}'
 
 # Send request
-curl ... -d '{"operation": "v/ops/agent/request", "input": {"agentId": "...", "input": {...}, "wait": true}}'
+curl ... -d '{"operation": "v/ops/agent/request", "input": {"agentId": "...", "input": {...}, "timeout": 30000}}'
 
 # Read workspace
 curl ... -d '{"operation": "v/ops/covia/read", "input": {"path": "..."}}'

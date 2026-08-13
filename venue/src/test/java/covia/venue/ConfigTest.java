@@ -41,7 +41,7 @@ public class ConfigTest {
 	@Test
 	public void testDefaultLlmOperationFallback() {
 		// Unset → the built-in default provider op.
-		assertEquals("v/ops/langchain/openai",
+		assertEquals("v/ops/langchain/anthropic",
 			new Config(null).getDefaultLlmOperation().toString());
 	}
 

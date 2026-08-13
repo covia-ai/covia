@@ -1,20 +1,23 @@
 {
   "name": "Delete Vault File",
-  "description": "Delete a file or empty directory from the user's personal vault.",
+  "description": "Delete a file or directory from the user's personal vault. Set recursive=true for a non-empty directory.",
   "creator": "Covia",
   "operation": {
     "adapter": "vault:delete",
+    "toolName": "vault_delete",
     "input": {
       "type": "object",
       "properties": {
-        "path": { "type": "string", "description": "File or directory path to delete" }
+        "path": { "type": "string", "description": "File or directory path to delete" },
+        "recursive": { "type": "boolean", "description": "Recursively delete a non-empty directory" }
       },
       "required": ["path"]
     },
     "output": {
       "type": "object",
       "properties": {
-        "deleted": { "type": "boolean" }
+        "deleted": { "type": "boolean" },
+        "existed": { "type": "boolean" }
       }
     }
   }

@@ -197,8 +197,8 @@ public class AgentAdapterTest {
 		assertEquals(engine.config().getDefaultTransitionOp(), config.get(Fields.OPERATION));
 		assertEquals(engine.config().getDefaultLlmOperation(),
 			config.get(Strings.intern("llmOperation")));
-		assertEquals(2, RT.ensureVector(config.get(Strings.intern("tools"))).count(),
-			"no-config agent should start with skilled read/list tools");
+		assertEquals(3, RT.ensureVector(config.get(Strings.intern("tools"))).count(),
+			"no-config agent should start with skilled inspect/read/list tools");
 		assertEquals(2, RT.ensureVector(config.get(Strings.intern("skills"))).count(),
 			"no-config agent should discover workspace and venue skills");
 		assertNull(config.get(Strings.intern("model")),
@@ -569,6 +569,27 @@ public class AgentAdapterTest {
 	}
 
 	@Test
+	public void testContextInspectionUsesAgentPrivateNamespace() {
+		AString agentId = Strings.create("private-context-inspection");
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, agentId,
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/llmagent/chat",
+					"llmOperation", "v/test/ops/llm",
+					Fields.LOADS, Maps.of("n/inspection-note", Maps.of("budget", 500L)))),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		RequestContext agentCtx = RequestContext.of(ALICE_DID).withAgentId(agentId);
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "n/inspection-note", Fields.VALUE, "PRIVATE_LOAD_VISIBLE"),
+			agentCtx).awaitResult(5000);
+
+		String rendered = engine.jobs().invokeOperation("v/ops/agent/context",
+			Maps.of(Fields.AGENT_ID, agentId), RequestContext.of(ALICE_DID))
+			.awaitResult(5000).toString();
+		assertTrue(rendered.contains("PRIVATE_LOAD_VISIBLE"), rendered);
+	}
+
+	@Test
 	public void testCreateHarnessToolsNotFlagged() {
 		// Bare harness names (subgoal, complete, …) aren't operation paths — they
 		// must not be reported as unresolvable.
@@ -677,6 +698,77 @@ public class AgentAdapterTest {
 	}
 
 	@Test
+	public void testCreateAgentFromOrderedConfigLayers() {
+		RequestContext alice = RequestContext.of(ALICE_DID);
+
+		// Flat maps remain valid layers (useful for small workspace selectors).
+		engine.jobs().invokeOperation("v/ops/covia/write", Maps.of(
+			Fields.PATH, "w/agent-config/providers/anthropic",
+			Fields.VALUE, Maps.of(
+				"llmOperation", "v/ops/langchain/anthropic",
+				"providerOptions", Maps.of(
+					"thinking", Maps.of("enabled", CVMBool.TRUE, "budget", 1000L)))),
+			alice).awaitResult(5000);
+
+		// Canonical functional asset shape: metadata + agent.config facet.
+		engine.jobs().invokeOperation("v/ops/covia/write", Maps.of(
+			Fields.PATH, "w/agent-config/prompts/invoice-review",
+			Fields.VALUE, Maps.of(
+				"name", "Invoice Review Prompt",
+				"description", "Reusable invoice review behaviour",
+				"agent", Maps.of("config", Maps.of(
+					"systemPrompt", "You review invoices using supplied evidence.")))),
+			alice).awaitResult(5000);
+
+		AVector<ACell> layers = Vectors.of(
+			Strings.create("v/agents/templates/worker"),
+			Strings.create("w/agent-config/providers/anthropic"),
+			Strings.create("w/agent-config/prompts/invoice-review"),
+			Maps.of(
+				"model", "claude-test-model",
+				"providerOptions", Maps.of(
+					"thinking", Maps.of("budget", 2000L))));
+
+		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(
+			Fields.AGENT_ID, "layered-agent",
+			Fields.CONFIG, layers), alice).awaitResult(5000);
+
+		AMap<AString, ACell> config = engine.getVenueState().users().get(ALICE_DID)
+			.agent("layered-agent").getConfig();
+		assertEquals(Strings.create("v/ops/langchain/anthropic"),
+			config.get(Strings.create("llmOperation")));
+		assertEquals(Strings.create("claude-test-model"), config.get(Strings.create("model")));
+		assertEquals(Strings.create("You review invoices using supplied evidence."),
+			config.get(Strings.create("systemPrompt")));
+		assertEquals(CVMBool.TRUE,
+			RT.getIn(config, Strings.create("providerOptions"), Strings.create("thinking"), Strings.create("enabled")));
+		assertEquals(CVMLong.create(2000),
+			RT.getIn(config, Strings.create("providerOptions"), Strings.create("thinking"), Strings.create("budget")));
+
+		// Later layers did not mention tools, so the worker selector survives.
+		AVector<ACell> tools = RT.ensureVector(config.get(Strings.create("tools")));
+		assertTrue(tools.contains(Strings.create("v/ops/covia/write")));
+	}
+
+	@Test
+	public void testLaterConfigVectorReplacesEarlierVector() {
+		AVector<ACell> layers = Vectors.of(
+			Strings.create("v/agents/templates/reader"),
+			Maps.of("caps", Vectors.empty(), "tools", Vectors.of(
+				Strings.create("v/ops/covia/list"))));
+
+		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(
+			Fields.AGENT_ID, "layer-vector-override",
+			Fields.CONFIG, layers), RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		AMap<AString, ACell> config = engine.getVenueState().users().get(ALICE_DID)
+			.agent("layer-vector-override").getConfig();
+		assertTrue(RT.ensureVector(config.get(Strings.create("caps"))).isEmpty());
+		assertEquals(Vectors.of(Strings.create("v/ops/covia/list")),
+			RT.ensureVector(config.get(Strings.create("tools"))));
+	}
+
+	@Test
 	public void testCreateAgentWithConfigRefFailsIfMissing() {
 		Job job = engine.jobs().invokeOperation(
 			"v/ops/agent/create",
@@ -690,6 +782,142 @@ public class AgentAdapterTest {
 			fail("Should fail when config reference cannot be resolved");
 		} catch (Exception e) {
 			assertEquals(Status.FAILED, job.getStatus());
+			assertTrue(job.getErrorMessage().contains("config references 'w/templates/does-not-exist'"),
+				job.getErrorMessage());
+			assertTrue(job.getErrorMessage().contains("String config layers are references"),
+				job.getErrorMessage());
+		}
+	}
+
+	@Test
+	public void testConfigLayerShapeErrorIdentifiesArrayIndex() {
+		Job job = engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(
+				Fields.AGENT_ID, "bad-layer-shape",
+				Fields.CONFIG, Vectors.of(Maps.of("model", "test"), CVMLong.ONE)),
+			RequestContext.of(ALICE_DID));
+
+		try {
+			job.awaitResult(5000);
+			fail("Should reject a non-map, non-reference config layer");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, job.getStatus());
+			assertTrue(job.getErrorMessage().contains("config[1]"), job.getErrorMessage());
+			assertTrue(job.getErrorMessage().contains("config map or a string reference"),
+				job.getErrorMessage());
+		}
+	}
+
+	@Test
+	public void testMalformedAgentFacetHasActionableError() {
+		Job job = engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(
+				Fields.AGENT_ID, "bad-agent-facet",
+				Fields.CONFIG, Maps.of(
+					"name", "Broken agent asset",
+					"agent", "this should be a map")),
+			RequestContext.of(ALICE_DID));
+
+		try {
+			job.awaitResult(5000);
+			fail("Should reject a malformed canonical agent facet");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, job.getStatus());
+			assertTrue(job.getErrorMessage().contains("config.agent must be a map"),
+				job.getErrorMessage());
+			assertTrue(job.getErrorMessage().contains("config"), job.getErrorMessage());
+		}
+	}
+
+	@Test
+	public void testComposedConfigRejectsMalformedToolSelector() {
+		AVector<ACell> layers = Vectors.of(
+			Strings.create("v/agents/templates/reader"),
+			Maps.of("tools", Vectors.of(
+				Maps.of("name", "missing-operation"))));
+		Job job = engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "bad-tool-selector", Fields.CONFIG, layers),
+			RequestContext.of(ALICE_DID));
+
+		try {
+			job.awaitResult(5000);
+			fail("Should reject a tool selector map without operation");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, job.getStatus());
+			assertTrue(job.getErrorMessage().contains("config.tools[0].operation is required"),
+				job.getErrorMessage());
+			assertTrue(job.getErrorMessage().contains("string operation path"),
+				job.getErrorMessage());
+		}
+	}
+
+	@Test
+	public void testComposedConfigRejectsMalformedProviderSelector() {
+		Job job = engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(
+				Fields.AGENT_ID, "bad-provider-selector",
+				Fields.CONFIG, Maps.of("llmOperation", Maps.of("provider", "anthropic"))),
+			RequestContext.of(ALICE_DID));
+
+		try {
+			job.awaitResult(5000);
+			fail("Should reject a non-string LLM operation selector");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, job.getStatus());
+			assertTrue(job.getErrorMessage().contains(
+				"config.llmOperation must be a string LLM operation path"),
+				job.getErrorMessage());
+		}
+	}
+
+	@Test
+	public void testJsonEncodedLayersKeepResolutionErrorInsteadOfReportingInvalidJson() {
+		Job job = engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(
+				Fields.AGENT_ID, "json-layer-missing-ref",
+				Fields.CONFIG, Strings.create(
+					"[{\"model\":\"test\"},\"w/templates/json-missing\"]")),
+			RequestContext.of(ALICE_DID));
+
+		try {
+			job.awaitResult(5000);
+			fail("Should fail on the unresolved reference in parsed JSON layers");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, job.getStatus());
+			assertTrue(job.getErrorMessage().contains("config[1] references 'w/templates/json-missing'"),
+				job.getErrorMessage());
+			assertFalse(job.getErrorMessage().contains("could not be parsed"), job.getErrorMessage());
+		}
+	}
+
+	@Test
+	public void testCyclicConfigReferencesReportReferenceChain() {
+		RequestContext alice = RequestContext.of(ALICE_DID);
+		engine.jobs().invokeOperation("v/ops/covia/write", Maps.of(
+			Fields.PATH, "w/templates/cycle-a",
+			Fields.VALUE, Maps.of("agent", Maps.of("config", Vectors.of(
+				Strings.create("w/templates/cycle-b"))))), alice).awaitResult(5000);
+		engine.jobs().invokeOperation("v/ops/covia/write", Maps.of(
+			Fields.PATH, "w/templates/cycle-b",
+			Fields.VALUE, Maps.of("agent", Maps.of("config", Vectors.of(
+				Strings.create("w/templates/cycle-a"))))), alice).awaitResult(5000);
+
+		Job job = engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(
+			Fields.AGENT_ID, "cyclic-config",
+			Fields.CONFIG, Strings.create("w/templates/cycle-a")), alice);
+		try {
+			job.awaitResult(5000);
+			fail("Should reject cyclic config references");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, job.getStatus());
+			assertTrue(job.getErrorMessage().contains(
+				"w/templates/cycle-a -> w/templates/cycle-b -> w/templates/cycle-a"),
+				job.getErrorMessage());
 		}
 	}
 
@@ -4492,6 +4720,43 @@ public class AgentAdapterTest {
 		assertNotNull(RT.getIn(config, Strings.create("caps")), "caps should survive model update");
 	}
 
+	@Test
+	public void testUpdateAcceptsOrderedConfigLayersAndDeepMerges() {
+		RequestContext alice = RequestContext.of(ALICE_DID);
+		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(
+			Fields.AGENT_ID, "layer-update",
+			Fields.CONFIG, Maps.of(
+				"systemPrompt", "Original",
+				"providerOptions", Maps.of(
+					"thinking", Maps.of("enabled", CVMBool.TRUE, "budget", 1000L)))),
+			alice).awaitResult(5000);
+
+		engine.jobs().invokeOperation("v/ops/covia/write", Maps.of(
+			Fields.PATH, "w/agent-config/update-provider",
+			Fields.VALUE, Maps.of("llmOperation", "v/ops/langchain/anthropic")),
+			alice).awaitResult(5000);
+
+		engine.jobs().invokeOperation("v/ops/agent/update", Maps.of(
+			Fields.AGENT_ID, "layer-update",
+			Fields.CONFIG, Vectors.of(
+				Strings.create("w/agent-config/update-provider"),
+				Maps.of(
+					"systemPrompt", "Updated",
+					"providerOptions", Maps.of(
+						"thinking", Maps.of("budget", 2000L))))),
+			alice).awaitResult(5000);
+
+		AMap<AString, ACell> config = engine.getVenueState().users().get(ALICE_DID)
+			.agent("layer-update").getConfig();
+		assertEquals(Strings.create("Updated"), config.get(Strings.create("systemPrompt")));
+		assertEquals(Strings.create("v/ops/langchain/anthropic"),
+			config.get(Strings.create("llmOperation")));
+		assertEquals(CVMBool.TRUE,
+			RT.getIn(config, Strings.create("providerOptions"), Strings.create("thinking"), Strings.create("enabled")));
+		assertEquals(CVMLong.create(2000),
+			RT.getIn(config, Strings.create("providerOptions"), Strings.create("thinking"), Strings.create("budget")));
+	}
+
 	/** Config has a single home (#144): agent:update rejects state.config loudly. */
 	@Test
 	public void testUpdateRejectsStateConfig() {
@@ -4563,6 +4828,16 @@ public class AgentAdapterTest {
 		for (long i = 0; i < keys.count(); i++) names.add(keys.get(i).toString());
 		assertTrue(names.containsAll(java.util.List.of(
 			"minimal", "skilled", "reader", "worker", "manager", "analyst", "full", "goaltree")));
+
+		// The catalog pin exposes ordinary metadata with a functional agent facet;
+		// it is not merely a flat anonymous config map.
+		ACell reader = engine.resolvePath(Strings.create("v/agents/templates/reader"),
+			RequestContext.of(ALICE_DID));
+		assertNotNull(RT.getIn(reader, Strings.create("agent"), Fields.CONFIG));
+		assertTrue(reader instanceof AMap);
+		var templateId = ((AMap<?,?>) reader).getHash();
+		assertNotNull(engine.getAsset(templateId, RequestContext.of(ALICE_DID)),
+			"catalog metadata hash should resolve to the installed Covia asset");
 	}
 
 	@Test
@@ -4580,6 +4855,7 @@ public class AgentAdapterTest {
 		assertTrue(names.contains("agent_create"), "manager should have agent_create");
 		assertTrue(names.contains("agent_request"), "manager should have agent_request");
 		assertTrue(names.contains("grid_run"), "manager should have grid_run");
+		assertTrue(names.contains("grid_job_result"), "manager should retrieve async results");
 		assertTrue(names.contains("covia_read"), "manager should have covia_read");
 		// Harness tools resolved by name
 		assertTrue(names.contains("subgoal"), "manager should have subgoal");
@@ -5193,7 +5469,9 @@ public class AgentAdapterTest {
 
 		User u = engine.getVenueState().users().get(ALICE_DID);
 		ACell sessionLoads = RT.getIn(u.agent("mint-loads-agent").getSession(sid), Fields.LOADS);
-		assertEquals(loads, sessionLoads, "mint loads seed the session tier and survive the cycle");
+		assertEquals(400L, ((CVMLong) RT.getIn(sessionLoads, "w/brief", "budget")).longValue());
+		assertNotNull(RT.getIn(sessionLoads, "w/brief", "ts"),
+			"mint loads are normalised and timestamped once at persistence");
 
 		// Same session again WITH loads → error (mint-only).
 		Job again = engine.jobs().invokeOperation("v/ops/agent/chat",
@@ -5234,8 +5512,10 @@ public class AgentAdapterTest {
 			RT.getIn(chatB.awaitResult(5000), Fields.SESSION_ID)).toString());
 
 		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("iso-agent");
-		assertEquals(loads, RT.getIn(agent.getSession(sidA), Fields.LOADS),
+		ACell loadsA = RT.getIn(agent.getSession(sidA), Fields.LOADS);
+		assertEquals(400L, ((CVMLong) RT.getIn(loadsA, "w/acme", "budget")).longValue(),
 			"session A keeps its loads");
+		assertNotNull(RT.getIn(loadsA, "w/acme", "ts"));
 		ACell loadsB = RT.getIn(agent.getSession(sidB), Fields.LOADS);
 		assertTrue(loadsB == null || ((AMap<?, ?>) loadsB).count() == 0,
 			"session B must not see session A's loads, got: " + loadsB);

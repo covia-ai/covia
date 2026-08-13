@@ -1,19 +1,11 @@
 package covia.adapter;
 
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
 import java.nio.file.FileSystem;
 import java.nio.file.Files;
-import java.nio.file.InvalidPathException;
-import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
-import java.nio.file.attribute.BasicFileAttributes;
-import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -30,11 +22,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
-import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
-import convex.core.util.JSON;
-import covia.grid.Asset;
-import covia.utils.MimeUtils;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -47,8 +35,8 @@ import covia.venue.RequestContext;
  * agents reference files by {@code root} + relative {@code path}. Without
  * configured roots the adapter creates an ephemeral temp root. A DLFS root may
  * select a relative {@code subpath}; this becomes the root's logical boundary,
- * so callers never include the physical subtree in operation paths or
- * capability resources.
+ * so callers never include the physical subtree in operation paths. Access is
+ * still authorised against the canonical DID-scoped DLFS resource.
  *
  * <h3>Configuration</h3>
  * <pre>
@@ -57,7 +45,7 @@ import covia.venue.RequestContext;
  *     "roots": {
  *       "workspace": "/srv/agent-workspace",
  *       "data":      { "path": "/srv/data", "readOnly": true },
- *       "mina":      { "dlfs": "vault", "subpath": "Made by Mina" }
+ *       "documents": { "dlfs": "vault", "subpath": "agent-output" }
  *     }
  *   }
  * }
@@ -94,13 +82,7 @@ public class FileAdapter extends AAdapter {
 	private static final AString FIELD_PATH = Strings.intern("path");
 	private static final AString FIELD_FROM = Strings.intern("from");
 	private static final AString FIELD_TO = Strings.intern("to");
-	private static final AString FIELD_CONTENT = Strings.intern("content");
-	private static final AString FIELD_VALUE = Strings.intern("value");
-	private static final AString FIELD_BYTES = Strings.intern("bytes");
-	private static final AString FIELD_ASSET = Strings.intern("asset");
 	private static final AString FIELD_MODE = Strings.intern("mode");
-	private static final AString FIELD_PARENTS = Strings.intern("parents");
-	private static final AString FIELD_RECURSIVE = Strings.intern("recursive");
 	private static final AString FIELD_READ_ONLY = Strings.intern("readOnly");
 	private static final AString FIELD_TEMP = Strings.intern("temp");
 	private static final AString FIELD_PREFIX = Strings.intern("prefix");
@@ -417,70 +399,84 @@ public class FileAdapter extends AAdapter {
 	 */
 	private Path resolvePath(String rootName, String userPath, boolean mustExist,
 			Path base) throws IOException {
+		return FileOperations.resolve(base, userPath, "root '" + rootName + "'", mustExist);
+	}
 
-		if (userPath == null || userPath.isEmpty()) {
-			return base;
+	/** A resolved and authorised operation target. */
+	private record FileTarget(Path base, Path path, String resource,
+			boolean readOnly, String binaryUrl, String rootName) {}
+
+	private DLFSAdapter requireDLFSAdapter() {
+		AAdapter raw = engine.getAdapter("dlfs");
+		if (!(raw instanceof DLFSAdapter dlfs)) {
+			throw new IllegalStateException("DLFS adapter is not available");
 		}
+		return dlfs;
+	}
 
-		// Accept a leading "/" (or "\") as "relative to the root" — matches
-		// DLFS convention where "/foo.txt" is the canonical drive-rooted form.
-		// Strip it before delegating to getPath so the result isn't classed
-		// as absolute. Multiple leading separators collapse to one.
-		String stripped = userPath;
-		while (!stripped.isEmpty() && (stripped.charAt(0) == '/' || stripped.charAt(0) == '\\')) {
-			stripped = stripped.substring(1);
-		}
-		if (stripped.isEmpty()) return base;
-
-		Path candidate;
-		try {
-			candidate = base.getFileSystem().getPath(stripped);
-		} catch (InvalidPathException e) {
-			throw new IllegalArgumentException("Invalid path '" + userPath + "': " + e.getReason());
-		}
-
-		// Reject any path with a root component. After leading-slash strip,
-		// this catches Windows drive-rooted paths ("C:\foo", "C:/foo"),
-		// drive-relative paths ("C:foo"), and UNC paths ("\\server\share").
-		if (candidate.isAbsolute() || candidate.getRoot() != null) {
-			throw new IllegalArgumentException(
-				"Path must be relative to root '" + rootName + "': " + userPath);
-		}
-
-		Path target = base.resolve(candidate).normalize();
-
-		// Lexical escape check after normalize() has collapsed any '..'
-		// segments. Catches the common case before we touch the filesystem.
-		if (!target.startsWith(base)) {
-			throw new IllegalArgumentException(
-				"Path escapes root '" + rootName + "': " + userPath);
-		}
-
-		// Symlink-escape check only on default-FS roots. DLFS and friends
-		// don't model symlinks, so toRealPath() walks would be a no-op or
-		// fail unhelpfully there.
-		if (base.getFileSystem() == java.nio.file.FileSystems.getDefault()) {
-			Path probe = target;
-			while (probe != null && !Files.exists(probe, LinkOption.NOFOLLOW_LINKS)) {
-				probe = probe.getParent();
+	/**
+	 * Resolve and authorise either a configured root path or a canonical DLFS
+	 * reference. DLFS-backed aliases retain their logical jail/read-only policy,
+	 * but capabilities always name the underlying DID-scoped DLFS resource.
+	 */
+	private FileTarget resolveTarget(RequestContext ctx, String rootName, String userPath,
+			AString ability, boolean mustExist) throws IOException {
+		if (rootName == null || rootName.isEmpty()) {
+			DLFSAdapter.AuthorisedPath target = requireDLFSAdapter()
+				.resolveAuthorisedPath(ctx, userPath, ability);
+			if (target == null) {
+				throw new IllegalArgumentException(
+					"'root' is required unless 'path' is a dlfs/<drive>/... or DID-scoped DLFS reference");
 			}
-			if (probe != null) {
-				try {
-					if (!probe.toRealPath().startsWith(base)) {
-						throw new IllegalArgumentException(
-							"Path escapes root via symlink: " + userPath);
-					}
-				} catch (NoSuchFileException dangling) {
-					throw new IllegalArgumentException(
-						"Path resolves through dangling symlink: " + userPath);
-				}
-			}
+			if (mustExist && !Files.exists(target.path())) throw new NoSuchFileException(userPath);
+			return new FileTarget(target.root(), target.path(), target.resource(),
+				false, target.binaryUrl(), null);
 		}
 
-		if (mustExist && !Files.exists(target)) {
-			throw new NoSuchFileException(rootName + ":" + userPath);
+		Root root = roots.get(rootName);
+		if (root == null) {
+			// Authorise before reporting root configuration. Besides keeping the
+			// point-of-action contract uniform, this avoids exposing configured root
+			// names to callers whose scope cannot address the requested file resource.
+			String requested = schemeResource("file", Strings.create(rootName),
+				userPath != null ? Strings.create(userPath) : null);
+			engine.requireAuthority(ctx, Strings.create(requested), ability);
+			throw new IllegalArgumentException("Unknown root '" + rootName + "'");
 		}
-		return target;
+		if (root instanceof DLFSRoot dr) {
+			String relative = joinDLFSPath(dr.subpath, userPath);
+			String ref = "dlfs/" + dr.driveName + (relative.isEmpty() ? "" : "/" + relative);
+			DLFSAdapter.AuthorisedPath target = requireDLFSAdapter()
+				.resolveAuthorisedPath(ctx, ref, ability);
+			Path logicalBase = FileOperations.resolve(target.root(), dr.subpath,
+				"DLFS root '" + rootName + "'", false);
+			if (!Files.exists(logicalBase) && Capability.CRUD_WRITE.equals(ability)) {
+				Files.createDirectories(logicalBase);
+			}
+			if (!target.path().startsWith(logicalBase)) {
+				throw new IllegalArgumentException("Path escapes root '" + rootName + "': " + userPath);
+			}
+			if (mustExist && !Files.exists(target.path())) throw new NoSuchFileException(userPath);
+			return new FileTarget(logicalBase, target.path(), target.resource(),
+				root.readOnly, target.binaryUrl(), rootName);
+		}
+
+		Path base = root.baseFor(ctx);
+		// Resolve the lexical/jail target without observing target existence, then
+		// authorise the canonical resource. Existence errors must not precede the
+		// capability gate (or leak whether an inaccessible path exists).
+		Path path = resolvePath(rootName, userPath, false, base);
+		String resource = fileResource(rootName, base, path);
+		engine.requireAuthority(ctx, Strings.create(resource), ability);
+		if (mustExist && !Files.exists(path)) throw new NoSuchFileException(userPath);
+		return new FileTarget(base, path, resource, root.readOnly, null, rootName);
+	}
+
+	private static String joinDLFSPath(String prefix, String path) {
+		String p = path == null ? "" : path;
+		while (p.startsWith("/")) p = p.substring(1);
+		if (prefix == null || prefix.isEmpty()) return p;
+		return p.isEmpty() ? prefix : prefix + "/" + p;
 	}
 
 	private Root requireRoot(String name) {
@@ -496,8 +492,9 @@ public class FileAdapter extends AAdapter {
 	/** A resolved target: a plain filesystem path, or an entry inside a mounted
 	 *  archive. {@link #close} releases the archive filesystem and its per-archive
 	 *  lock when present; a plain path closes to nothing. */
-	private record Resolved(Path path, FileSystem archiveFs,
+	private record Resolved(FileTarget target, Path entryPath, FileSystem archiveFs,
 			java.util.concurrent.locks.ReentrantLock lock) implements java.io.Closeable {
+		Path path() { return entryPath != null ? entryPath : target.path(); }
 		@Override public void close() throws IOException {
 			try { if (archiveFs != null) archiveFs.close(); }
 			finally { if (lock != null) lock.unlock(); }
@@ -523,16 +520,19 @@ public class FileAdapter extends AAdapter {
 	 * <p>Read-only: writing into an archive is not a {@code file:} side effect
 	 * (see {@link #rejectArchiveEntry}); use the {@code archive} adapter.</p>
 	 */
-	private Resolved resolveEntry(RequestContext ctx, String rootName, String userPath, boolean mustExist) throws IOException {
+	private Resolved resolveEntry(RequestContext ctx, String rootName, String userPath,
+			AString ability, boolean mustExist) throws IOException {
 		int bang = archiveBang(userPath);
 		if (bang < 0) {
-			return new Resolved(resolvePath(ctx, rootName, userPath, mustExist), null, null);
+			FileTarget target = resolveTarget(ctx, rootName, userPath, ability, mustExist);
+			return new Resolved(target, null, null, null);
 		}
 		String archivePart = userPath.substring(0, bang);
 		String entryPart = userPath.substring(bang + 1);
 
 		// The archive must exist and be a regular file — never created here.
-		Path archive = resolvePath(ctx, rootName, archivePart, true);
+		FileTarget target = resolveTarget(ctx, rootName, archivePart, ability, true);
+		Path archive = target.path();
 		if (!Files.isRegularFile(archive)) {
 			throw new IllegalArgumentException("Not an archive file: " + archivePart);
 		}
@@ -563,7 +563,7 @@ public class FileAdapter extends AAdapter {
 			if (mustExist && !Files.exists(entry)) {
 				throw new NoSuchFileException(rootName + ":" + userPath);
 			}
-			return new Resolved(entry, fs, lock);
+			return new Resolved(target, entry, fs, lock);
 		} catch (RuntimeException | IOException e) {
 			try { fs.close(); } catch (IOException ignored) { }
 			lock.unlock();
@@ -608,6 +608,12 @@ public class FileAdapter extends AAdapter {
 	private void requireWritable(String rootName) {
 		if (requireRoot(rootName).readOnly) {
 			throw new IllegalArgumentException("Root '" + rootName + "' is read-only");
+		}
+	}
+
+	private static void requireWritable(FileTarget target) {
+		if (target.readOnly()) {
+			throw new IllegalArgumentException("Root '" + target.rootName() + "' is read-only");
 		}
 	}
 
@@ -660,15 +666,11 @@ public class FileAdapter extends AAdapter {
 
 	private ACell dispatch(RequestContext ctx, String subOp, AMap<AString, ACell> input) throws IOException {
 		if (input == null) input = Maps.empty();
-		requireFileCap(ctx, subOp, input);
 
 		// roots is the only op that does not require a root parameter.
-		if ("roots".equals(subOp)) return handleRoots();
-
-		// For everything else, refuse early if no roots are configured at all.
-		if (roots.isEmpty()) {
-			throw new IllegalArgumentException(
-				"FileAdapter has no roots configured — set 'file.roots' in venue config");
+		if ("roots".equals(subOp)) {
+			engine.requireAuthority(ctx, Strings.create("file://"), Capability.CRUD_READ);
+			return handleRoots();
 		}
 
 		return switch (subOp) {
@@ -684,35 +686,6 @@ public class FileAdapter extends AAdapter {
 			case "stat"   -> handleStat(ctx, input);
 			default       -> throw new IllegalArgumentException("Unknown file operation: " + subOp);
 		};
-	}
-
-	/**
-	 * Capability enforcement co-located with the file op dispatch. The resource
-	 * is the {@code file://<root>/<path>} form the grant taxonomy uses; a null
-	 * grant scope (authenticated/internal) is unrestricted (no-op). Reads, writes,
-	 * and deletes pin {@code crud/read}/{@code crud/write}/{@code crud/delete}.
-	 */
-	private void requireFileCap(RequestContext ctx, String subOp, AMap<AString, ACell> input) {
-		// Multi-endpoint operations check their distinct resources in the handler,
-		// after both paths have been normalised against one root view.
-		if ("move".equals(subOp) || "copy".equals(subOp)) return;
-		AString ability = switch (subOp) {
-			case "list", "tree", "read", "stat", "roots" -> Capability.CRUD_READ;
-			case "write", "append", "mkdir" -> Capability.CRUD_WRITE;
-			case "delete" -> Capability.CRUD_DELETE;
-			default -> null;
-		};
-		if (ability == null) return;
-		String resource = schemeResource("file",
-			RT.ensureString(RT.getIn(input, FIELD_ROOT)),
-			RT.ensureString(RT.getIn(input, FIELD_PATH)));
-		engine.requireAuthority(ctx, Strings.create(resource), ability);
-	}
-
-	/** Require an ability on the normalised path relative to its configured root. */
-	private void requireFileCap(RequestContext ctx, String rootName, Path base,
-			Path target, AString ability) {
-		engine.requireAuthority(ctx, Strings.create(fileResource(rootName, base, target)), ability);
 	}
 
 	/** Canonical capability/result reference for a resolved file endpoint. */
@@ -747,116 +720,17 @@ public class FileAdapter extends AAdapter {
 	private ACell handleList(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
 		String rootName = stringArg(input, FIELD_ROOT);
 		String pathArg = stringArg(input, FIELD_PATH);
-		try (Resolved r = resolveEntry(ctx, rootName, pathArg, true)) {
-			Path dir = r.path();
-			if (!Files.isDirectory(dir)) {
-				throw new IllegalArgumentException("Not a directory: " + pathArg);
-			}
-
-			AVector<ACell> entries = Vectors.empty();
-			try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
-				for (Path child : stream) {
-					BasicFileAttributes attrs = Files.readAttributes(child, BasicFileAttributes.class);
-					String type = attrs.isDirectory() ? "directory"
-						: attrs.isRegularFile() ? "file"
-						: attrs.isSymbolicLink() ? "symlink"
-						: "other";
-					entries = entries.conj(Maps.of(
-						"name", child.getFileName().toString(),
-						"type", type,
-						"size", CVMLong.create(attrs.size()),
-						"modified", CVMLong.create(attrs.lastModifiedTime().toMillis())
-					));
-				}
-			}
-			return Maps.of("entries", entries);
+		try (Resolved r = resolveEntry(ctx, rootName, pathArg, Capability.CRUD_READ, true)) {
+			return FileOperations.list(r.path());
 		}
 	}
-
-	/** Tree-walk state shared across the recursion. */
-	private static final class TreeState {
-		final StringBuilder out = new StringBuilder();
-		int entries = 0;
-		boolean truncated = false;
-	}
-
-	private static final int MAX_DEPTH_CAP = 10;
-	private static final int MAX_ENTRIES_CAP = 5000;
 
 	private ACell handleTree(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
 		String rootName = stringArg(input, FIELD_ROOT);
 		String pathArg = stringArg(input, FIELD_PATH);
-		int maxDepth = boundedInt(input, "maxDepth", 3, 1, MAX_DEPTH_CAP);
-		int maxEntries = boundedInt(input, "maxEntries", 500, 1, MAX_ENTRIES_CAP);
-		AString infoCell = RT.ensureString(input.get(Strings.create("info")));
-		String info = (infoCell != null) ? infoCell.toString() : null;
-
-		try (Resolved r = resolveEntry(ctx, rootName, pathArg, true)) {
-			Path dir = r.path();
-			if (!Files.isDirectory(dir)) {
-				throw new IllegalArgumentException("Not a directory: " + pathArg);
-			}
-
-			TreeState state = new TreeState();
-			walkTree(dir, 0, maxDepth, maxEntries, info, state);
-
-			return Maps.of(
-				"tree", state.out.toString(),
-				"truncated", CVMBool.create(state.truncated)
-			);
+		try (Resolved r = resolveEntry(ctx, rootName, pathArg, Capability.CRUD_READ, true)) {
+			return FileOperations.tree(r.path(), input);
 		}
-	}
-
-	private static void walkTree(Path dir, int depth, int maxDepth, int maxEntries,
-			String info, TreeState state) throws IOException {
-		// Snapshot + sort so output is stable and not invalidated by concurrent
-		// directory mutation during the walk.
-		java.util.List<Path> children = new java.util.ArrayList<>();
-		try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
-			for (Path c : stream) children.add(c);
-		}
-		children.sort((a, b) -> a.getFileName().toString().compareToIgnoreCase(
-			b.getFileName().toString()));
-
-		for (Path child : children) {
-			if (state.entries >= maxEntries) {
-				state.truncated = true;
-				return;
-			}
-			state.entries++;
-
-			BasicFileAttributes attrs = Files.readAttributes(child, BasicFileAttributes.class);
-			for (int i = 0; i < depth; i++) state.out.append('\t');
-			state.out.append(child.getFileName().toString());
-
-			if (attrs.isDirectory()) {
-				state.out.append("/\n");
-				if (depth + 1 < maxDepth) {
-					walkTree(child, depth + 1, maxDepth, maxEntries, info, state);
-					if (state.truncated) return;
-				}
-			} else {
-				if ("size".equals(info) && attrs.isRegularFile()) {
-					state.out.append(" (").append(humanSize(attrs.size())).append(')');
-				}
-				state.out.append('\n');
-			}
-		}
-	}
-
-	private static int boundedInt(AMap<AString, ACell> input, String key, int defaultVal, int min, int max) {
-		ACell v = input.get(Strings.create(key));
-		if (v == null) return defaultVal;
-		Long l = (v instanceof CVMLong cl) ? cl.longValue() : null;
-		if (l == null) return defaultVal;
-		return (int) Math.max(min, Math.min(max, l));
-	}
-
-	private static String humanSize(long bytes) {
-		if (bytes < 1024) return bytes + " B";
-		if (bytes < 1024L * 1024) return String.format("%.1f KB", bytes / 1024.0);
-		if (bytes < 1024L * 1024 * 1024) return String.format("%.1f MB", bytes / (1024.0 * 1024));
-		return String.format("%.1f GB", bytes / (1024.0 * 1024 * 1024));
 	}
 
 	private ACell handleRead(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
@@ -865,109 +739,28 @@ public class FileAdapter extends AAdapter {
 		String mode = stringArg(input, FIELD_MODE);
 		if (mode == null || mode.isEmpty()) mode = "auto";
 
-		byte[] bytes;
-		String mime;
-		try (Resolved r = resolveEntry(ctx, rootName, pathArg, true)) {
-			Path file = r.path();
-			if (!Files.isRegularFile(file)) {
-				throw new IllegalArgumentException("Not a regular file: " + pathArg);
-			}
-			bytes = Files.readAllBytes(file);
-			mime = MimeUtils.guess(file.getFileName() != null
-				? file.getFileName().toString() : "", bytes);
-		}
-		CVMLong size = CVMLong.create(bytes.length);
-
-		switch (mode) {
-			case "text": {
-				if (!looksLikeText(bytes)) {
-					throw new IllegalArgumentException("File is not valid UTF-8 text");
-				}
-				return Maps.of(
-					"content", new String(bytes, StandardCharsets.UTF_8),
-					"encoding", "utf-8",
-					"size", size,
-					"mime", mime
-				);
-			}
-			case "bytes": {
-				return Maps.of(
-					"content", Base64.getEncoder().encodeToString(bytes),
-					"encoding", "base64",
-					"size", size,
-					"mime", mime
-				);
-			}
-			case "json": {
-				ACell parsed;
-				try {
-					parsed = JSON.parse(new String(bytes, StandardCharsets.UTF_8));
-				} catch (Exception e) {
-					throw new IllegalArgumentException("File is not valid JSON: " + e.getMessage());
-				}
-				return Maps.of(
-					"value", parsed,
-					"size", size,
-					"mime", mime
-				);
-			}
-			case "auto": {
-				if (looksLikeText(bytes)) {
-					return Maps.of(
-						"content", new String(bytes, StandardCharsets.UTF_8),
-						"encoding", "utf-8",
-						"size", size,
-						"mime", mime
-					);
-				}
-				return Maps.of(
-					"content", Base64.getEncoder().encodeToString(bytes),
-					"encoding", "base64",
-					"size", size,
-					"mime", mime
-				);
-			}
-			default:
-				throw new IllegalArgumentException(
-					"Unknown mode '" + mode + "'. Expected: auto, text, bytes, json");
+		try (Resolved r = resolveEntry(ctx, rootName, pathArg, Capability.CRUD_READ, true)) {
+			String binaryUrl = r.entryPath() == null ? r.target().binaryUrl() : null;
+			return FileOperations.read(r.path(), mode, binaryUrl);
 		}
 	}
 
 	private ACell handleWrite(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
 		String rootName = stringArg(input, FIELD_ROOT);
 		String pathArg = stringArg(input, FIELD_PATH);
-		requireWritable(rootName);
 		rejectArchiveEntry(pathArg, "write");
-
-		Path file = resolvePath(ctx, rootName, pathArg, false);
-		Path parent = file.getParent();
-		if (parent != null && !Files.exists(parent)) {
-			throw new NoSuchFileException("Parent directory does not exist: " + parent);
-		}
-
-		boolean existed = fileExists(file);
-		long written = writeInputTo(ctx, input, file, false);
-
-		return Maps.of(
-			"written", CVMLong.create(written),
-			"created", CVMBool.create(!existed)
-		);
+		FileTarget target = resolveTarget(ctx, rootName, pathArg, Capability.CRUD_WRITE, false);
+		requireWritable(target);
+		return FileOperations.write(target.path(), input, engine, ctx, false);
 	}
 
 	private ACell handleAppend(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
 		String rootName = stringArg(input, FIELD_ROOT);
 		String pathArg = stringArg(input, FIELD_PATH);
-		requireWritable(rootName);
 		rejectArchiveEntry(pathArg, "append to");
-
-		Path file = resolvePath(ctx, rootName, pathArg, false);
-		boolean existed = fileExists(file);
-		long appended = writeInputTo(ctx, input, file, true);
-
-		return Maps.of(
-			"appended", CVMLong.create(appended),
-			"created", CVMBool.create(!existed)
-		);
+		FileTarget target = resolveTarget(ctx, rootName, pathArg, Capability.CRUD_WRITE, false);
+		requireWritable(target);
+		return FileOperations.write(target.path(), input, engine, ctx, true);
 	}
 
 	private ACell handleMove(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
@@ -977,29 +770,29 @@ public class FileAdapter extends AAdapter {
 			stringArg(input, FIELD_ROOT), null, "root", "from");
 		FileEndpoint targetRef = parseEndpoint(toArg,
 			stringArg(input, FIELD_TO_ROOT), sourceRef.rootName(), "toRoot", "to");
-		Root sourceRoot = requireRoot(sourceRef.rootName());
-		Root targetRoot = requireRoot(targetRef.rootName());
-		requireWritable(sourceRef.rootName());
-		requireWritable(targetRef.rootName());
 		rejectArchiveEntry(fromArg, "move");
 		rejectArchiveEntry(toArg, "move to");
 
-		Path sourceBase = sourceRoot.baseFor(ctx);
-		Path targetBase = sourceRef.rootName().equals(targetRef.rootName())
-			? sourceBase : targetRoot.baseFor(ctx);
-		Path source = resolvePath(sourceRef.rootName(), sourceRef.path(), false, sourceBase);
-		Path target = resolvePath(targetRef.rootName(), targetRef.path(), false, targetBase);
-		requireFileCap(ctx, sourceRef.rootName(), sourceBase, source, Capability.CRUD_WRITE);
-		requireFileCap(ctx, targetRef.rootName(), targetBase, target, Capability.CRUD_WRITE);
-		requireRelocatableEndpoints(sourceBase, targetBase, source, target, fromArg, toArg);
+		FileTarget sourceTarget = resolveTarget(ctx, sourceRef.rootName(), sourceRef.path(),
+			Capability.CRUD_WRITE, false);
+		FileTarget destinationTarget = resolveTarget(ctx, targetRef.rootName(), targetRef.path(),
+			Capability.CRUD_WRITE, false);
+		destinationTarget = rebindDestinationIfSameFilesystem(
+			sourceRef, targetRef, sourceTarget, destinationTarget);
+		requireWritable(sourceTarget);
+		requireWritable(destinationTarget);
+		Path source = sourceTarget.path();
+		Path target = destinationTarget.path();
+		requireRelocatableEndpoints(sourceTarget.base(), destinationTarget.base(),
+			source, target, fromArg, toArg);
 
 		// Direct NIO dispatch: same-provider implementations keep their native fast
 		// path; cross-provider behavior (including atomicity) belongs to the providers.
 		Files.move(source, target);
 		return Maps.of(
 			"moved", CVMBool.TRUE,
-			"from", fileResource(sourceRef.rootName(), sourceBase, source),
-			"to", fileResource(targetRef.rootName(), targetBase, target)
+			"from", sourceTarget.resource(),
+			"to", destinationTarget.resource()
 		);
 	}
 
@@ -1010,28 +803,28 @@ public class FileAdapter extends AAdapter {
 			stringArg(input, FIELD_ROOT), null, "root", "from");
 		FileEndpoint targetRef = parseEndpoint(toArg,
 			stringArg(input, FIELD_TO_ROOT), sourceRef.rootName(), "toRoot", "to");
-		Root sourceRoot = requireRoot(sourceRef.rootName());
-		Root targetRoot = requireRoot(targetRef.rootName());
-		// A read-only source is valid for copy; only the destination is mutated.
-		requireWritable(targetRef.rootName());
 		rejectArchiveEntry(fromArg, "copy");
 		rejectArchiveEntry(toArg, "copy to");
 
-		Path sourceBase = sourceRoot.baseFor(ctx);
-		Path targetBase = sourceRef.rootName().equals(targetRef.rootName())
-			? sourceBase : targetRoot.baseFor(ctx);
-		Path source = resolvePath(sourceRef.rootName(), sourceRef.path(), false, sourceBase);
-		Path target = resolvePath(targetRef.rootName(), targetRef.path(), false, targetBase);
-		requireFileCap(ctx, sourceRef.rootName(), sourceBase, source, Capability.CRUD_READ);
-		requireFileCap(ctx, targetRef.rootName(), targetBase, target, Capability.CRUD_WRITE);
-		requireRelocatableEndpoints(sourceBase, targetBase, source, target, fromArg, toArg);
+		FileTarget sourceTarget = resolveTarget(ctx, sourceRef.rootName(), sourceRef.path(),
+			Capability.CRUD_READ, false);
+		FileTarget destinationTarget = resolveTarget(ctx, targetRef.rootName(), targetRef.path(),
+			Capability.CRUD_WRITE, false);
+		destinationTarget = rebindDestinationIfSameFilesystem(
+			sourceRef, targetRef, sourceTarget, destinationTarget);
+		// A read-only source is valid for copy; only the destination is mutated.
+		requireWritable(destinationTarget);
+		Path source = sourceTarget.path();
+		Path target = destinationTarget.path();
+		requireRelocatableEndpoints(sourceTarget.base(), destinationTarget.base(),
+			source, target, fromArg, toArg);
 
 		// Direct NIO dispatch, never a Covia/model-context byte round-trip.
 		Files.copy(source, target);
 		return Maps.of(
 			"copied", CVMBool.TRUE,
-			"from", fileResource(sourceRef.rootName(), sourceBase, source),
-			"to", fileResource(targetRef.rootName(), targetBase, target)
+			"from", sourceTarget.resource(),
+			"to", destinationTarget.resource()
 		);
 	}
 
@@ -1062,6 +855,29 @@ public class FileAdapter extends AAdapter {
 	/** A parsed endpoint: configured root name plus path relative to that root. */
 	private record FileEndpoint(String rootName, String path) {}
 
+	/** Keep same-root DLFS moves/copies on one connected provider view. */
+	private static FileTarget rebindDestinationIfSameFilesystem(FileEndpoint sourceRef,
+			FileEndpoint targetRef, FileTarget source, FileTarget target) throws IOException {
+		if (sourceRef.rootName() != null
+				&& sourceRef.rootName().equals(targetRef.rootName())) {
+			Path rebound = FileOperations.resolve(source.base(), targetRef.path(),
+				"root '" + sourceRef.rootName() + "'", false);
+			return new FileTarget(source.base(), rebound, target.resource(),
+				target.readOnly(), target.binaryUrl(), target.rootName());
+		}
+		DLFSAdapter.DlfsFileRef sourceDlfs = DLFSAdapter.parseDlfsFileRef(source.resource());
+		DLFSAdapter.DlfsFileRef targetDlfs = DLFSAdapter.parseDlfsFileRef(target.resource());
+		if (sourceDlfs != null && targetDlfs != null
+				&& java.util.Objects.equals(sourceDlfs.ownerDID(), targetDlfs.ownerDID())
+				&& sourceDlfs.drive().equals(targetDlfs.drive())) {
+			Path rebound = FileOperations.resolve(source.base(), targetDlfs.path(),
+				"DLFS drive '" + sourceDlfs.drive() + "'", false);
+			return new FileTarget(source.base(), rebound, target.resource(),
+				target.readOnly(), target.binaryUrl(), target.rootName());
+		}
+		return target;
+	}
+
 	/**
 	 * Parses a relative endpoint or {@code file://<root>/<path>} reference.
 	 * An explicitly supplied root must agree with a qualified reference; a
@@ -1084,6 +900,14 @@ public class FileAdapter extends AAdapter {
 			}
 			return new FileEndpoint(qualifiedRoot, path);
 		}
+		if (value.startsWith("dlfs/") || value.startsWith("dlfs://")
+				|| (value.startsWith("did:") && value.contains("/dlfs/"))) {
+			if (explicitRoot != null) {
+				throw new IllegalArgumentException("'" + rootField
+					+ "' cannot be combined with a canonical DLFS reference in '" + endpointField + "'");
+			}
+			return new FileEndpoint(null, value);
+		}
 		if (value.contains("://")) {
 			throw new IllegalArgumentException(
 				"'" + endpointField + "' must be relative or use file://<root>/<path>");
@@ -1099,83 +923,27 @@ public class FileAdapter extends AAdapter {
 	private ACell handleDelete(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
 		String rootName = stringArg(input, FIELD_ROOT);
 		String pathArg = stringArg(input, FIELD_PATH);
-		boolean recursive = RT.bool(input.get(FIELD_RECURSIVE));
-		requireWritable(rootName);
 		rejectArchiveEntry(pathArg, "delete");
-
-		Path target = resolvePath(ctx, rootName, pathArg, false);
-		if (!Files.exists(target)) {
-			return Maps.of("deleted", CVMBool.FALSE, "existed", CVMBool.FALSE);
-		}
-
-		// Refuse to delete the root itself.
-		if (target.equals(requireRoot(rootName).baseFor(ctx))) {
-			throw new IllegalArgumentException("Refusing to delete the root itself");
-		}
-
-		if (Files.isDirectory(target)) {
-			if (recursive) {
-				deleteRecursive(target);
-			} else {
-				Files.delete(target); // throws if non-empty
-			}
-		} else {
-			Files.delete(target);
-		}
-		return Maps.of("deleted", CVMBool.TRUE, "existed", CVMBool.TRUE);
+		FileTarget target = resolveTarget(ctx, rootName, pathArg, Capability.CRUD_DELETE, false);
+		requireWritable(target);
+		return FileOperations.delete(target.path(), target.base(), input);
 	}
 
 	private ACell handleMkdir(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
 		String rootName = stringArg(input, FIELD_ROOT);
 		String pathArg = stringArg(input, FIELD_PATH);
-		boolean parents = RT.bool(input.get(FIELD_PARENTS));
-		requireWritable(rootName);
 		rejectArchiveEntry(pathArg, "create");
-
-		Path target = resolvePath(ctx, rootName, pathArg, false);
-		boolean existed = Files.exists(target);
-		if (existed) {
-			if (!Files.isDirectory(target)) {
-				throw new IllegalArgumentException("Path exists and is not a directory: " + pathArg);
-			}
-		} else if (parents) {
-			Files.createDirectories(target);
-		} else {
-			Files.createDirectory(target);
-		}
-		return Maps.of(
-			"created", CVMBool.create(!existed),
-			"path", target.toString()
-		);
+		FileTarget target = resolveTarget(ctx, rootName, pathArg, Capability.CRUD_WRITE, false);
+		requireWritable(target);
+		return FileOperations.mkdir(target.path(), input);
 	}
 
 	private ACell handleStat(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
 		String rootName = stringArg(input, FIELD_ROOT);
 		String pathArg = stringArg(input, FIELD_PATH);
 
-		try (Resolved r = resolveEntry(ctx, rootName, pathArg, false)) {
-			Path target = r.path();
-			if (!Files.exists(target)) {
-				return Maps.of("exists", CVMBool.FALSE);
-			}
-			BasicFileAttributes attrs = Files.readAttributes(target, BasicFileAttributes.class);
-			String type = attrs.isDirectory() ? "directory"
-				: attrs.isRegularFile() ? "file"
-				: attrs.isSymbolicLink() ? "symlink"
-				: "other";
-			AMap<AString, ACell> out = Maps.of(
-				"exists", CVMBool.TRUE,
-				"type", type,
-				"size", CVMLong.create(attrs.size()),
-				"modified", CVMLong.create(attrs.lastModifiedTime().toMillis()),
-				"readOnly", CVMBool.create(requireRoot(rootName).readOnly)
-			);
-			if (attrs.isRegularFile()) {
-				String mime = MimeUtils.guess(target.getFileName() != null
-					? target.getFileName().toString() : "", null);
-				out = out.assoc(Strings.create("mime"), Strings.create(mime));
-			}
-			return out;
+		try (Resolved r = resolveEntry(ctx, rootName, pathArg, Capability.CRUD_READ, false)) {
+			return FileOperations.stat(r.path(), r.target().readOnly());
 		}
 	}
 
@@ -1192,104 +960,6 @@ public class FileAdapter extends AAdapter {
 			throw new IllegalArgumentException("'" + key + "' is required");
 		}
 		return value;
-	}
-
-	/**
-	 * Writes a write/append input to the target file. Exactly one of
-	 * {@code content} (UTF-8 text), {@code value} (JSON-serialised cell),
-	 * {@code bytes} (base64 inline), or {@code asset} (CAS reference, streamed)
-	 * must be supplied.
-	 *
-	 * @param append true to append, false to truncate
-	 * @return number of bytes written
-	 */
-	private long writeInputTo(RequestContext ctx, AMap<AString, ACell> input,
-			Path target, boolean append) throws IOException {
-		AString content = RT.ensureString(input.get(FIELD_CONTENT));
-		boolean hasValue = input.containsKey(FIELD_VALUE);
-		AString bytesB64 = RT.ensureString(input.get(FIELD_BYTES));
-		AString assetRef = RT.ensureString(input.get(FIELD_ASSET));
-
-		int provided = (content != null ? 1 : 0) + (hasValue ? 1 : 0)
-			+ (bytesB64 != null ? 1 : 0) + (assetRef != null ? 1 : 0);
-		if (provided == 0) {
-			throw new IllegalArgumentException(
-				"Exactly one of 'content' (UTF-8 text), 'value' (JSON), 'bytes' (base64), or 'asset' (reference) is required");
-		}
-		if (provided > 1) {
-			throw new IllegalArgumentException(
-				"Only one of 'content', 'value', 'bytes', or 'asset' may be supplied");
-		}
-
-		StandardOpenOption mode = append
-			? StandardOpenOption.APPEND
-			: StandardOpenOption.TRUNCATE_EXISTING;
-
-		java.nio.file.OpenOption[] options = writeOptions(target, mode);
-
-		if (assetRef != null) {
-			// Universal resolver under the caller's authority: serves every content
-			// form (inline, content-store blob, POS_CONTENT, dlfs), not just hashed
-			// blobs (covia#289).
-			covia.venue.storage.ContentProvider.Resolved resolved = engine.resolveContent(assetRef, ctx);
-			if (resolved == null) throw new IllegalArgumentException("Asset has no content: " + assetRef);
-			try (InputStream is = resolved.content().getInputStream();
-			     OutputStream os = Files.newOutputStream(target, options)) {
-				return is.transferTo(os);
-			}
-		}
-
-		byte[] data;
-		if (content != null) data = content.toString().getBytes(StandardCharsets.UTF_8);
-		else if (bytesB64 != null) data = Base64.getDecoder().decode(bytesB64.toString());
-		else data = JSON.print(input.get(FIELD_VALUE)).toString().getBytes(StandardCharsets.UTF_8);
-
-		Files.write(target, data, options);
-		return data.length;
-	}
-
-	/**
-	 * Returns the open-options array for a write/append. NOFOLLOW_LINKS is
-	 * only added for default-FS targets — DLFS and other lattice-backed
-	 * providers don't model symlinks and would refuse the option.
-	 */
-	private static java.nio.file.OpenOption[] writeOptions(Path target, StandardOpenOption mode) {
-		boolean defaultFs = target.getFileSystem() == java.nio.file.FileSystems.getDefault();
-		if (defaultFs) {
-			return new java.nio.file.OpenOption[] {
-				StandardOpenOption.CREATE, mode, StandardOpenOption.WRITE,
-				LinkOption.NOFOLLOW_LINKS
-			};
-		}
-		return new java.nio.file.OpenOption[] {
-			StandardOpenOption.CREATE, mode, StandardOpenOption.WRITE
-		};
-	}
-
-	/** Files.exists with NOFOLLOW_LINKS only on default FS. */
-	private static boolean fileExists(Path p) {
-		return p.getFileSystem() == java.nio.file.FileSystems.getDefault()
-			? Files.exists(p, LinkOption.NOFOLLOW_LINKS)
-			: Files.exists(p);
-	}
-
-	/** Heuristic: bytes parse as valid UTF-8 with no NULs and few control chars. */
-	private static boolean looksLikeText(byte[] bytes) {
-		if (bytes.length == 0) return true;
-		try {
-			String s = new String(bytes, StandardCharsets.UTF_8);
-			byte[] roundtrip = s.getBytes(StandardCharsets.UTF_8);
-			if (roundtrip.length != bytes.length) return false;
-			int suspicious = 0;
-			for (int i = 0; i < s.length(); i++) {
-				char c = s.charAt(i);
-				if (c == 0) return false;
-				if (c < 0x20 && c != '\n' && c != '\r' && c != '\t') suspicious++;
-			}
-			return suspicious * 32 < bytes.length;
-		} catch (Exception e) {
-			return false;
-		}
 	}
 
 	private static void deleteRecursive(Path dir) throws IOException {

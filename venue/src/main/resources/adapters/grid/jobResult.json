@@ -1,6 +1,6 @@
 {
 	"name": "Grid Job Result",
-	"description": "Wait for a Covia grid job to finish and return its output. Use after agent_request (or any async invocation) to retrieve the result. With no timeout, blocks until the job completes. With timeout, errors if the job hasn't completed in time — callers wanting a result treat missing-result as failure. Retry (with a longer timeout) or fall back to alternative work if a timeout occurs.",
+	"description": "Wait for an EXISTING Covia Job to finish and return its output. Call this operation directly with the exact id returned by a delegated request or asynchronous invocation; do not wrap it in the generic operation runner. With no timeout, blocks until the Job completes. With timeout, errors if it has not completed in time—callers wanting a result treat missing-result as failure. Retry with a longer timeout or fall back to alternative work if a timeout occurs.",
 	"operation": {
 		"adapter": "grid:jobResult",
 		"toolName": "grid_job_result",

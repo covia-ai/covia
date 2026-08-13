@@ -19,7 +19,7 @@
           "input": {
             "invoice_text": ["input", "invoice_text"]
           },
-          "wait": ["const", true]
+          "timeout": ["const", 30000]
         }
       },
       {
@@ -30,7 +30,7 @@
             "invoice": [0, "output"],
             "source_agent": ["const", "Alice"]
           },
-          "wait": ["const", true]
+          "timeout": ["const", 30000]
         }
       },
       {
@@ -45,7 +45,7 @@
               {"agent": "Bob"}
             ]]
           },
-          "wait": ["const", true]
+          "timeout": ["const", 30000]
         }
       }
     ],

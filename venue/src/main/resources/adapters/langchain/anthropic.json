@@ -1,6 +1,6 @@
 {
 	"name": "Anthropic Chat",
-	"description": "Chat with Anthropic Claude models using the native Anthropic API. API key resolved from user's secret store (ANTHROPIC_API_KEY by default; override by passing apiKey explicitly or as 's/<SECRET_NAME>'). Supports system prompts, tools, and structured output.",
+	"description": "Chat with Anthropic Claude models using the native Anthropic API. API key resolution prefers the caller/public secret store (ANTHROPIC_API_KEY by default), then the venue process environment; override by passing apiKey explicitly or as 's/<SECRET_NAME>'. Supports system prompts, tools, and structured output.",
 	"creator": "Covia",
 	"operation": {
 		"adapter": "langchain:anthropic",
@@ -21,12 +21,13 @@
 				},
 				"model": {
 					"type": "string",
-					"description": "Model name (default: claude-sonnet-4-6)"
+					"description": "Model name. Sonnet 5 is the balanced default; Opus 5 targets complex agentic work, Fable 5 the longest and hardest work, and Haiku 4.5 economical or latency-sensitive work.",
+					"default": "claude-sonnet-5"
 				},
 				"apiKey": {
 					"type": "string",
 					"secret": true,
-					"description": "Anthropic API key (resolved from secret store by default — see operation.secretKey)"
+					"description": "Anthropic API key (resolved from the secret store, then process environment, by default — see operation.secretKey)"
 				},
 				"url": {
 					"type": "string",

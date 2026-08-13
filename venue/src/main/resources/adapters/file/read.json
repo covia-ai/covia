@@ -1,6 +1,6 @@
 {
   "name": "Read File",
-  "description": "Read a file from a configured filesystem root. The 'mode' parameter controls decoding: 'auto' (default) returns UTF-8 text for text files and base64 for binary; 'text' forces UTF-8; 'bytes' returns base64; 'json' parses as JSON and returns the value. The encoding field on the response indicates which path was taken. Path may be either relative ('foo.txt') or rooted ('/foo.txt'); both refer to the same file inside the root.",
+  "description": "Read a file from a configured filesystem root or an authorised DLFS path. The mode controls decoding: auto (default), text, bytes, or json. Binary auto reads return a WebDAV URL when one is available, otherwise inline base64.",
   "creator": "Covia",
   "operation": {
     "adapter": "file:read",
@@ -8,20 +8,21 @@
     "input": {
       "type": "object",
       "properties": {
-        "root": { "type": "string", "description": "Configured root name" },
-        "path": { "type": "string", "description": "File path relative to the root" },
+        "root": { "type": "string", "description": "Configured root name; omit for a canonical DLFS path" },
+        "path": { "type": "string", "description": "Path relative to root, dlfs/<drive>/<path>, or <ownerDID>/dlfs/<drive>/<path>" },
         "mode": { "type": "string", "enum": ["auto", "text", "bytes", "json"], "description": "Decoding mode (default 'auto')" }
       },
-      "required": ["root", "path"]
+      "required": ["path"]
     },
     "output": {
       "type": "object",
       "properties": {
         "content": { "type": "string", "description": "File content for modes auto/text/bytes (text or base64)" },
         "value": { "description": "Parsed JSON value (mode=json only)" },
-        "encoding": { "type": "string", "description": "'utf-8' or 'base64' (absent for mode=json)" },
+        "encoding": { "type": "string", "description": "'utf-8', 'base64', or 'binary' (absent for mode=json)" },
         "size": { "type": "integer", "description": "File size in bytes" },
-        "mime": { "type": "string", "description": "Best-guess MIME type from extension and content sniffing" }
+        "mime": { "type": "string", "description": "Best-guess MIME type from extension and content sniffing" },
+        "url": { "type": "string", "description": "WebDAV URL when auto mode returns a binary reference" }
       }
     }
   }

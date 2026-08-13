@@ -54,8 +54,8 @@ public class SkillsAdapter extends AAdapter {
 		return "Discover agent skills — named bundles of instructions, context, and tools. "
 			+ "Pick the action with `command`: 'list' renders the skill index, one '- name — description' "
 			+ "line per skill (also usable as a config.context assemble-op); 'read' returns one skill in "
-			+ "full (name, description, body, tools, context, path). Skills live in workspace directories "
-			+ "(w/skills), the venue catalog (v/skills), or content-addressed assets. Read-only — author "
+			+ "full (name, description, body, tools, context, path). Sources may be workspace/catalog "
+			+ "directories, one named skill path, or a content-addressed asset. Read-only — author "
 			+ "skills with covia:write or asset:store.";
 	}
 

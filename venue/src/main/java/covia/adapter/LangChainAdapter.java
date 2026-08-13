@@ -62,15 +62,18 @@ import dev.langchain4j.model.openai.OpenAiChatModel;
  * <p>When input contains a {@code messages} array, each entry is a message map:</p>
  * <ul>
  *   <li>{@code {role: "system"|"user", content: "..."}}</li>
- *   <li>{@code {role: "assistant", content: "...", toolCalls?: [{id, name, arguments}]}}</li>
- *   <li>{@code {role: "tool", id: "...", name: "...", content: "..."}}</li>
+ *   <li>{@code {role: "assistant", content: "...", toolCalls?: [{id, name, arguments: {...}}]}}</li>
+ *   <li>{@code {role: "tool", id: "...", name: "...", content: "...", isError?: boolean}}</li>
  * </ul>
  *
  * <p>Optional {@code tools} array defines available tools:</p>
  * <pre>{@code [{name: "search", description: "...", parameters: {type: "object", properties: {...}}}]}</pre>
  *
  * <p>Output is an assistant message map:</p>
- * <pre>{@code {role: "assistant", content: "Hello!", toolCalls?: [{id, name, arguments}]}}</pre>
+ * <pre>{@code {role: "assistant", content: "Hello!", toolCalls?: [{id, name, arguments: {...}}]}}</pre>
+ * <p>Tool arguments are structured ACell values in Covia messages. JSON-text
+ * argument formats used by some providers are converted only at this adapter
+ * boundary.</p>
  *
  * <h3>Legacy prompt-based input</h3>
  * <p>When input contains {@code prompt} (string), returns {@code {response: "...", think?: "..."}}.</p>
@@ -96,6 +99,7 @@ public class LangChainAdapter extends AAdapter {
 	static final AString K_ROLE       = Strings.intern("role");
 	static final AString K_CONTENT    = Strings.intern("content");
 	static final AString K_STRUCTURED_CONTENT = Strings.intern("structuredContent");
+	static final AString K_IS_ERROR   = Strings.intern("isError");
 	static final AString K_TOOL_CALLS = Strings.intern("toolCalls");
 	static final AString K_ID         = Strings.intern("id");
 	static final AString K_NAME       = Strings.intern("name");
@@ -406,23 +410,23 @@ public class LangChainAdapter extends AAdapter {
 			return buildOllamaModel(baseUrl, model, IO_TIMEOUT, tuning);
 		} else if ("openai".equals(provider)) {
 			String baseUrl = (urlParam != null) ? urlParam.toString() : "https://api.openai.com/v1";
-			String model = (modelName != null) ? modelName : "gpt-5.4-mini";
+			String model = (modelName != null) ? modelName : defaultModelFor(provider);
 			return buildOpenAiModel(apiKey, baseUrl, model, IO_TIMEOUT, tuning);
 		} else if ("anthropic".equals(provider)) {
 			String baseUrl = (urlParam != null) ? urlParam.toString() : "https://api.anthropic.com/v1/";
-			String model = (modelName != null) ? modelName : "claude-sonnet-4-6";
+			String model = (modelName != null) ? modelName : defaultModelFor(provider);
 			return buildAnthropicModel(apiKey, baseUrl, model, IO_TIMEOUT, tuning);
 		} else if ("gemini".equals(provider)) {
 			String baseUrl = (urlParam != null) ? urlParam.toString() : "https://generativelanguage.googleapis.com/v1beta/openai/";
-			String model = (modelName != null) ? modelName : "gemini-2.5-flash";
+			String model = (modelName != null) ? modelName : defaultModelFor(provider);
 			return buildOpenAiModel(apiKey, baseUrl, model, IO_TIMEOUT, tuning);
 		} else if ("xai".equals(provider)) {
 			String baseUrl = (urlParam != null) ? urlParam.toString() : "https://api.x.ai/v1";
-			String model = (modelName != null) ? modelName : "grok-4";
+			String model = (modelName != null) ? modelName : defaultModelFor(provider);
 			return buildOpenAiModel(apiKey, baseUrl, model, IO_TIMEOUT, tuning);
 		} else if ("deepseek".equals(provider)) {
 			String baseUrl = (urlParam != null) ? urlParam.toString() : "https://api.deepseek.com/v1";
-			String model = (modelName != null) ? modelName : "deepseek-chat";
+			String model = (modelName != null) ? modelName : defaultModelFor(provider);
 			return buildOpenAiModel(apiKey, baseUrl, model, IO_TIMEOUT, tuning);
 		}
 		return null;
@@ -495,26 +499,63 @@ public class LangChainAdapter extends AAdapter {
 
 	// ========== Provider/model discovery (langchain:models) ==========
 
-	/** Hosted providers and their conventional secret names — matching each
-	 *  provider op's {@code operation.secretKey} exactly. */
-	private static final String[][] HOSTED_PROVIDERS = {
-		{"openai",    "OPENAI_API_KEY"},
-		{"anthropic", "ANTHROPIC_API_KEY"},
-		{"gemini",    "GOOGLE_API_KEY"},
-		{"deepseek",  "DEEPSEEK_API_KEY"},
-		{"xai",       "XAI_API_KEY"},
+	/** One source for hosted-provider discovery, runtime defaults and usage
+	 *  recommendations. Model IDs are supported production choices current at
+	 *  release time; venue config may replace the advertised list. */
+	private record HostedProvider(String name, String keySecret, String defaultModel,
+			AVector<ACell> models, AMap<AString, ACell> recommendations) {}
+
+	private static AVector<ACell> modelList(String... names) {
+		AVector<ACell> out = Vectors.empty();
+		for (String name : names) out = out.conj(Strings.intern(name));
+		return out;
+	}
+
+	private static AMap<AString, ACell> recommendations(String... pairs) {
+		AMap<AString, ACell> out = Maps.empty();
+		for (int i = 0; i < pairs.length; i += 2) {
+			out = out.assoc(Strings.intern(pairs[i]), Strings.intern(pairs[i + 1]));
+		}
+		return out;
+	}
+
+	private static final HostedProvider[] HOSTED_PROVIDERS = {
+		new HostedProvider("openai", "OPENAI_API_KEY", "gpt-5.6-terra",
+			modelList("gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.6-luna",
+				"gpt-5.4-mini", "gpt-5.4-nano"),
+			recommendations("balanced", "gpt-5.6-terra", "quality", "gpt-5.6-sol",
+				"highVolume", "gpt-5.6-luna", "coding", "gpt-5.4-mini",
+				"economical", "gpt-5.4-nano")),
+		new HostedProvider("anthropic", "ANTHROPIC_API_KEY", "claude-sonnet-5",
+			modelList("claude-sonnet-5", "claude-opus-5", "claude-fable-5",
+				"claude-haiku-4-5-20251001"),
+			recommendations("balanced", "claude-sonnet-5", "quality", "claude-opus-5",
+				"longRunning", "claude-fable-5", "economical", "claude-haiku-4-5-20251001")),
+		new HostedProvider("gemini", "GOOGLE_API_KEY", "gemini-3.6-flash",
+			modelList("gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"),
+			recommendations("balanced", "gemini-3.6-flash", "quality", "gemini-3.6-flash",
+				"coding", "gemini-3.5-flash", "economical", "gemini-3.5-flash-lite")),
+		new HostedProvider("deepseek", "DEEPSEEK_API_KEY", "deepseek-v4-flash",
+			modelList("deepseek-v4-flash", "deepseek-v4-pro"),
+			recommendations("balanced", "deepseek-v4-flash", "economical", "deepseek-v4-flash",
+				"quality", "deepseek-v4-pro")),
+		new HostedProvider("xai", "XAI_API_KEY", "grok-4.3",
+			modelList("grok-4.3", "grok-4.5", "grok-build-0.1"),
+			recommendations("balanced", "grok-4.3", "quality", "grok-4.5",
+				"coding", "grok-build-0.1")),
 	};
 
-	/** Built-in model hints per provider — deliberately conservative (only
-	 *  ids known-good at release). The operator overrides per venue via
-	 *  config {@code adapters.langchain.models.<provider>}, so drift is a
-	 *  config edit, not a code release. */
-	private static final AMap<AString, ACell> BUILTIN_MODELS = Maps.of(
-		Strings.intern("openai"), Vectors.of((ACell) Strings.intern("gpt-5.4-mini")),
-		Strings.intern("anthropic"), Vectors.of(
-			(ACell) Strings.intern("claude-opus-4-8"),
-			(ACell) Strings.intern("claude-sonnet-5"),
-			(ACell) Strings.intern("claude-haiku-4-5-20251001")));
+	private static HostedProvider hostedProvider(String provider) {
+		for (HostedProvider spec : HOSTED_PROVIDERS) {
+			if (spec.name().equals(provider)) return spec;
+		}
+		return null;
+	}
+
+	static String defaultModelFor(String provider) {
+		HostedProvider spec = hostedProvider(provider);
+		return (spec != null) ? spec.defaultModel() : null;
+	}
 
 	/**
 	 * {@code langchain:models} — provider/model discovery with
@@ -531,21 +572,24 @@ public class LangChainAdapter extends AAdapter {
 			? engine.config().getAdapterConfig("langchain") : null;
 
 		AVector<ACell> providers = Vectors.empty();
-		for (String[] hp : HOSTED_PROVIDERS) {
-			if (filter != null && !filter.toString().equals(hp[0])) continue;
+		for (HostedProvider hp : HOSTED_PROVIDERS) {
+			if (filter != null && !filter.toString().equals(hp.name())) continue;
 			boolean ready = false;
 			try {
 				// Presence check only — the value is never returned.
-				ready = engine.resolveSecret(hp[1], ctx) != null;
+				ready = preferStoredSecret(
+					engine.resolveSecret(hp.keySecret(), ctx), System.getenv(hp.keySecret())) != null;
 			} catch (Exception e) {
 				// No store / anonymous caller → not ready.
 			}
 			providers = providers.conj(Maps.of(
-				Strings.intern("op"), Strings.create("v/ops/langchain/" + hp[0]),
-				Strings.intern("provider"), Strings.intern(hp[0]),
-				Strings.intern("keySecret"), Strings.intern(hp[1]),
+				Strings.intern("op"), Strings.create("v/ops/langchain/" + hp.name()),
+				Strings.intern("provider"), Strings.intern(hp.name()),
+				Strings.intern("keySecret"), Strings.intern(hp.keySecret()),
 				Strings.intern("ready"), ready ? CVMBool.TRUE : CVMBool.FALSE,
-				Strings.intern("models"), modelsFor(hp[0], adapterCfg)));
+				Strings.intern("defaultModel"), Strings.intern(hp.defaultModel()),
+				Strings.intern("models"), modelsFor(hp.name(), adapterCfg),
+				Strings.intern("recommendations"), hp.recommendations()));
 		}
 
 		if (filter == null || "ollama".equals(filter.toString())) {
@@ -560,8 +604,8 @@ public class LangChainAdapter extends AAdapter {
 	static AVector<ACell> modelsFor(String provider, AMap<AString, ACell> adapterConfig) {
 		AVector<ACell> configured = RT.ensureVector(RT.getIn(adapterConfig, "models", provider));
 		if (configured != null) return configured;
-		AVector<ACell> builtin = RT.ensureVector(BUILTIN_MODELS.get(Strings.create(provider)));
-		return (builtin != null) ? builtin : Vectors.empty();
+		HostedProvider spec = hostedProvider(provider);
+		return (spec != null) ? spec.models() : Vectors.empty();
 	}
 
 	/** Live ollama entry: reachability of the resolved base URL (#224 chain)
@@ -600,6 +644,7 @@ public class LangChainAdapter extends AAdapter {
 			Strings.intern("provider"), Strings.intern("ollama"),
 			Strings.intern("url"), Strings.create(url),
 			Strings.intern("ready"), ready ? CVMBool.TRUE : CVMBool.FALSE,
+			Strings.intern("defaultModel"), Strings.intern("qwen"),
 			Strings.intern("models"), models);
 		if (note != null) entry = entry.assoc(Strings.intern("note"), Strings.create(note));
 		return entry;
@@ -620,9 +665,21 @@ public class LangChainAdapter extends AAdapter {
 		}
 		AString secretName = RT.ensureString(RT.getIn(meta, "operation", "secretKey"));
 		if (secretName != null) {
-			return engine.resolveSecret(secretName.toString(), ctx);
+			String name = secretName.toString();
+			// Caller/public SecretStore remains authoritative. An operator may
+			// alternatively inject the conventional provider variable into the
+			// venue process (for example ANTHROPIC_API_KEY in local development or
+			// a container secret) without writing it to Covia config or agent state.
+			return preferStoredSecret(
+				engine.resolveSecret(name, ctx), System.getenv(name));
 		}
 		return null;
+	}
+
+	/** Selects the caller/public store before the venue-wide process fallback. */
+	static String preferStoredSecret(String stored, String environment) {
+		if (stored != null && !stored.isBlank()) return stored;
+		return (environment != null && !environment.isBlank()) ? environment : null;
 	}
 
 	// ========== LLM invocation ==========
@@ -830,7 +887,8 @@ public class LangChainAdapter extends AAdapter {
 			for (ToolExecutionRequest req : ai.toolExecutionRequests()) {
 				AMap<AString, ACell> tc = Maps.of(
 					K_NAME, Strings.create(req.name()),
-					K_ARGUMENTS, Strings.create(req.arguments())
+					K_ARGUMENTS, ToolCallArguments.canonicalOrRaw(
+						req.arguments() == null ? null : Strings.create(req.arguments()))
 				);
 				if (req.id() != null) {
 					tc = tc.assoc(K_ID, Strings.create(req.id()));
@@ -1047,9 +1105,15 @@ public class LangChainAdapter extends AAdapter {
 						//   source:{type:"base64", mediaType:"image/jpeg", data:"…"}}]
 						result.add(UserMessage.from(
 							toUserContents((AVector<ACell>) contentCell)));
-					} else {
+					} else if (contentCell != null) {
+						// Agent requests are commonly structured objects. Preserve that
+						// information as readable JSON just like ContextBuilder's persisted
+						// history renderer; dropping the turn leaves Anthropic with a
+						// system-only request, which its Messages API rejects.
 						AString content = RT.ensureString(contentCell);
-						if (content != null) result.add(UserMessage.from(content.toString()));
+						String text = (content != null)
+							? content.toString() : JSON.print(contentCell).toString();
+						result.add(UserMessage.from(text));
 					}
 					break;
 				}
@@ -1062,7 +1126,7 @@ public class LangChainAdapter extends AAdapter {
 						for (long j = 0; j < toolCalls.count(); j++) {
 							ACell tc = toolCalls.get(j);
 							AString name = RT.ensureString(RT.getIn(tc, K_NAME));
-							AString args = RT.ensureString(RT.getIn(tc, K_ARGUMENTS));
+							ACell args = RT.getIn(tc, K_ARGUMENTS);
 							AString id = RT.ensureString(RT.getIn(tc, K_ID));
 							if (name != null) {
 								// Synthetic ID if LLM didn't provide one (e.g. Ollama)
@@ -1070,7 +1134,7 @@ public class LangChainAdapter extends AAdapter {
 								reqs.add(ToolExecutionRequest.builder()
 									.id(idStr)
 									.name(name.toString())
-									.arguments(args != null ? args.toString() : "{}")
+									.arguments(ToolCallArguments.toProviderJson(args))
 									.build());
 							}
 						}
@@ -1087,8 +1151,15 @@ public class LangChainAdapter extends AAdapter {
 					AString content = RT.ensureString(RT.getIn(entry, K_CONTENT));
 					if (name != null && content != null) {
 						String idStr = (id != null) ? id.toString() : name.toString();
-						result.add(new ToolExecutionResultMessage(
-							idStr, name.toString(), content.toString()));
+						var builder = ToolExecutionResultMessage.builder()
+							.id(idStr)
+							.toolName(name.toString())
+							.text(content.toString());
+						ACell rawIsError = RT.getIn(entry, K_IS_ERROR);
+						if (rawIsError instanceof CVMBool) {
+							builder.isError(CVMBool.TRUE.equals(rawIsError));
+						}
+						result.add(builder.build());
 					}
 					break;
 				}

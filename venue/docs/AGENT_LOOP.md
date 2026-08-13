@@ -236,7 +236,8 @@ swap the level 3 operation to change provider, use a remote venue via federation
 or a test mock.
 
 The level 3 operation to invoke is specified in `config.llmOperation`
-(default: `langchain:openai`). The agent creator picks both the agent loop
+(built-in fallback: `v/ops/langchain/anthropic`; venues may override it with
+`defaultLlmOperation`). The agent creator picks both the agent loop
 strategy (level 2) and the LLM backend (level 3).
 
 The other level 2 adapter, `goaltree:chat`, is documented separately in
@@ -256,7 +257,7 @@ definitions if applicable), calls a specific LLM API, returns the response.
 **Output:** An assistant message map:
 ```json
 {"role": "assistant", "content": "Hello!"}
-{"role": "assistant", "toolCalls": [{"id": "call_1", "name": "search", "arguments": "{...}"}]}
+{"role": "assistant", "toolCalls": [{"id": "call_1", "name": "search", "arguments": {"query": "..."}}]}
 ```
 
 **Message types in the `messages` array:**
@@ -267,6 +268,11 @@ definitions if applicable), calls a specific LLM API, returns the response.
 Level 3 is a standard grid operation (e.g. `langchain:openai`, `langchain:ollama`).
 It knows about HTTP clients, API serialisation, authentication, and provider
 quirks. It does not know about agents, conversation history, or tool execution.
+Its Covia-facing message contract uses structured `arguments` values. Provider
+JSON strings are parsed on ingress and generated again only at the provider
+boundary; legacy JSON-string history remains replayable. If a model emits
+malformed JSON text, Covia retains that exact text long enough to record and
+return a useful tool error instead of silently replacing it.
 
 ### 3.4 Transition Function Contract
 

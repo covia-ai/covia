@@ -1,17 +1,12 @@
 package covia.adapter;
 
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.DirectoryStream;
 import java.nio.file.FileSystem;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
-import java.nio.file.attribute.BasicFileAttributes;
-import java.util.Base64;
 import java.util.concurrent.CompletableFuture;
 
 import org.slf4j.Logger;
@@ -34,12 +29,9 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
-import convex.core.util.Utils;
-import covia.grid.Asset;
 import convex.lattice.LatticeContext;
 import convex.lattice.cursor.ALatticeCursor;
 import convex.lattice.fs.DLFS;
-import convex.lattice.fs.DLFileSystem;
 import convex.lattice.fs.impl.DLFSLocal;
 import covia.api.Fields;
 import covia.lattice.CapabilityChecker;
@@ -83,14 +75,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	private static final AString FIELD_DRIVE = Strings.intern("drive");
 	private static final AString FIELD_PATH = Strings.intern("path");
 	private static final AString FIELD_NAME = Strings.intern("name");
-	private static final AString FIELD_CONTENT = Strings.intern("content");
-	private static final AString FIELD_VALUE = Strings.intern("value");
-	private static final AString FIELD_BYTES = Strings.intern("bytes");
-	private static final AString FIELD_ASSET = Strings.intern("asset");
 	private static final AString FIELD_MODE = Strings.intern("mode");
-	private static final AString FIELD_MIME = Strings.intern("mime");
-	private static final AString FIELD_PARENTS = Strings.intern("parents");
-	private static final AString FIELD_RECURSIVE = Strings.intern("recursive");
 
 	@Override
 	public String getName() {
@@ -210,6 +195,10 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	 * adapter operations themselves use.</p>
 	 */
 	public DLFSLocal getDrive(RequestContext ctx, String driveName) {
+		if (!isValidDriveName(driveName)) {
+			throw new IllegalArgumentException(
+				"DLFS drive name must be non-empty and contain no '/', '\\', or ':'");
+		}
 		AKeyPair dlfsKey = ensureUserKeyPair(ctx);
 		ALatticeCursor<?> userCursor = getUserDLFSCursor(dlfsKey);
 		return DLFS.connect(userCursor, Strings.create(driveName));
@@ -235,12 +224,9 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	/**
 	 * Resolves a path within a drive's filesystem.
 	 */
-	private Path resolvePath(FileSystem fs, String filePath) {
-		if (filePath == null || filePath.isEmpty()) {
-			return fs.getRootDirectories().iterator().next();
-		}
-		String p = filePath.startsWith("/") ? filePath : "/" + filePath;
-		return fs.getPath(p);
+	private Path resolvePath(FileSystem fs, String filePath) throws IOException {
+		Path root = fs.getRootDirectories().iterator().next();
+		return FileOperations.resolve(root, filePath, "DLFS drive", false);
 	}
 
 	// ==================== Invocation ====================
@@ -251,10 +237,15 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		if (subOp == null) {
 			return CompletableFuture.failedFuture(new IllegalArgumentException("No DLFS sub-operation specified"));
 		}
+		return invokeBoundOperation(ctx, subOp, RT.castMap(input));
+	}
 
+	/** Typed delegation point for adapters such as Vault that bind a drive. */
+	CompletableFuture<ACell> invokeBoundOperation(RequestContext ctx, String subOp,
+			AMap<AString, ACell> input) {
 		return CompletableFuture.supplyAsync(() -> {
 			try {
-				return dispatch(ctx, subOp, RT.castMap(input));
+				return dispatch(ctx, subOp, input);
 			} catch (Exception e) {
 				throw new RuntimeException(e.getMessage(), e);
 			}
@@ -320,6 +311,9 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	 */
 	record DlfsFileRef(AString ownerDID, String drive, String path) {}
 
+	/** An authorised DLFS path, exposed package-locally to FileAdapter. */
+	record AuthorisedPath(Path root, Path path, String resource, String binaryUrl) {}
+
 	/**
 	 * Parses a DID-scoped DLFS file reference, or returns null when {@code ref}
 	 * is not DLFS-shaped (callers fall through to other resolution).
@@ -340,8 +334,36 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		if (!rest.startsWith("dlfs/")) return null;
 		rest = rest.substring("dlfs/".length());
 		int slash = rest.indexOf('/');
-		if (slash <= 0 || slash == rest.length() - 1) return null; // need drive AND file path
-		return new DlfsFileRef(owner, rest.substring(0, slash), rest.substring(slash + 1));
+		String drive = (slash < 0) ? rest : rest.substring(0, slash);
+		String path = (slash < 0 || slash == rest.length() - 1)
+			? "" : rest.substring(slash + 1);
+		if (!isValidDriveName(drive)) return null;
+		return new DlfsFileRef(owner, drive, normaliseRelativePath(path));
+	}
+
+	private static boolean isValidDriveName(String name) {
+		return name != null && !name.isBlank()
+			&& name.indexOf('/') < 0 && name.indexOf('\\') < 0 && name.indexOf(':') < 0;
+	}
+
+	private static String normaliseRelativePath(String path) {
+		if (path == null || path.isEmpty()) return "";
+		String p = path;
+		while (p.startsWith("/")) p = p.substring(1);
+		if (p.indexOf('\\') >= 0) {
+			throw new IllegalArgumentException("DLFS paths must use '/' separators: " + path);
+		}
+		java.util.ArrayDeque<String> parts = new java.util.ArrayDeque<>();
+		for (String part : p.split("/", -1)) {
+			if (part.isEmpty() || ".".equals(part)) continue;
+			if ("..".equals(part)) {
+				if (parts.isEmpty()) throw new IllegalArgumentException("Path escapes DLFS drive: " + path);
+				parts.removeLast();
+			} else {
+				parts.addLast(part);
+			}
+		}
+		return String.join("/", parts);
 	}
 
 	/**
@@ -353,7 +375,8 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	 * null when {@code ref} is not DLFS-shaped; throws (never degrades) on
 	 * denial.
 	 */
-	private Path resolveAuthorisedFile(RequestContext ctx, String ref, AString ability) {
+	AuthorisedPath resolveAuthorisedPath(RequestContext ctx, String ref, AString ability)
+			throws IOException {
 		DlfsFileRef fr = parseDlfsFileRef(ref);
 		if (fr == null) return null;
 
@@ -373,7 +396,12 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		}
 
 		FileSystem fs = getDrive(driveCtx, fr.drive());
-		return resolvePath(fs, fr.path());
+		Path root = fs.getRootDirectories().iterator().next();
+		Path path = resolvePath(fs, fr.path());
+		String resource = dlfsResource(fr.ownerDID(), Strings.create(fr.drive()),
+			fr.path().isEmpty() ? null : Strings.create(fr.path()));
+		String binaryUrl = cross ? null : buildWebDAVUrl(fr.drive(), fr.path());
+		return new AuthorisedPath(root, path, resource, binaryUrl);
 	}
 
 	// ========== ContentProvider: DLFS as reference-addressed content storage ==========
@@ -391,8 +419,9 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	public covia.venue.storage.ContentProvider.Resolved getContent(AString ref,
 			RequestContext ctx) throws IOException {
 		if (ref == null) return null;
-		Path path = resolveAuthorisedFile(ctx, ref.toString(), Capability.CRUD_READ);
-		if (path == null) return null;
+		AuthorisedPath target = resolveAuthorisedPath(ctx, ref.toString(), Capability.CRUD_READ);
+		if (target == null) return null;
+		Path path = target.path();
 		if (!Files.exists(path) || Files.isDirectory(path)) {
 			throw new IllegalArgumentException("No file at DLFS path: " + ref);
 		}
@@ -411,8 +440,9 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	public boolean putContent(AString ref, java.io.InputStream data, String contentType,
 			RequestContext ctx) throws IOException {
 		if (ref == null) return false;
-		Path path = resolveAuthorisedFile(ctx, ref.toString(), Capability.CRUD_WRITE);
-		if (path == null) return false;
+		AuthorisedPath target = resolveAuthorisedPath(ctx, ref.toString(), Capability.CRUD_WRITE);
+		if (target == null) return false;
+		Path path = target.path();
 		try (java.io.OutputStream os = Files.newOutputStream(path,
 				StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
 				StandardOpenOption.WRITE)) {
@@ -447,6 +477,10 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 			throw new IllegalArgumentException(
 				"DLFS DID-URL drive reference must name a drive, e.g. did:key:.../<drive>");
 		}
+		if (!isValidDriveName(drive)) {
+			throw new IllegalArgumentException(
+				"DLFS DID-URL drive reference must name exactly one valid drive");
+		}
 		boolean cross = !ownerDID.equals(ctx.getUserDID());
 		return new DriveTarget(ownerDID, drive, cross);
 	}
@@ -479,7 +513,15 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 
 	private ACell dispatch(RequestContext ctx, String subOp, AMap<AString, ACell> input) throws IOException {
 		if (input == null) input = Maps.empty();
+		AString rawPath = RT.ensureString(input.get(FIELD_PATH));
+		if (rawPath != null) {
+			input = input.assoc(FIELD_PATH, Strings.create(normaliseRelativePath(rawPath.toString())));
+		}
 		DriveTarget target = parseDriveRef(ctx, input);
+		if (target.driveName() != null && !isValidDriveName(target.driveName())) {
+			throw new IllegalArgumentException(
+				"DLFS drive name must be non-empty and contain no '/', '\\', or ':'");
+		}
 		RequestContext driveCtx = ctx;
 		if (target.ownerDID() != null) {
 			// Drive named as a DID-URL (did:key:.../<drive>). Rewrite to the bare
@@ -504,7 +546,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 			case "deleteDrive" -> handleDeleteDrive(driveCtx, input);
 			case "list" -> handleList(driveCtx, input);
 			case "tree" -> handleTree(driveCtx, input);
-			case "read" -> handleRead(driveCtx, input);
+			case "read" -> handleRead(driveCtx, input, target.crossUser());
 			// handleWrite takes BOTH contexts: the drive opens under driveCtx (the
 			// owner, for a cross-user write), but a caller-supplied `asset` ref is
 			// resolved under the CALLER's own context — resolving caller input under
@@ -543,6 +585,10 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		AString name = RT.ensureString(input.get(FIELD_NAME));
 		if (name == null) name = RT.ensureString(input.get(FIELD_DRIVE));
 		if (name == null) throw new IllegalArgumentException("'name' or 'drive' is required");
+		if (!isValidDriveName(name.toString())) {
+			throw new IllegalArgumentException(
+				"DLFS drive name must be non-empty and contain no '/', '\\', or ':'");
+		}
 
 		AKeyPair dlfsKey = ensureUserKeyPair(ctx);
 		ALatticeCursor<?> userCursor = getUserDLFSCursor(dlfsKey);
@@ -564,130 +610,19 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		FileSystem fs = requireDrive(ctx, input);
 		AString pathCell = RT.ensureString(input.get(FIELD_PATH));
 		Path dir = resolvePath(fs, pathCell != null ? pathCell.toString() : null);
-
-		BasicFileAttributes attrs = Files.readAttributes(dir, BasicFileAttributes.class);
-		if (!attrs.isDirectory()) {
-			throw new IllegalArgumentException("Not a directory: " + pathCell);
-		}
-
-		AVector<ACell> entries = Vectors.empty();
-		try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
-			for (Path child : stream) {
-				BasicFileAttributes childAttrs = Files.readAttributes(child, BasicFileAttributes.class);
-				Path fileName = child.getFileName();
-				String name = (fileName != null) ? fileName.toString() : child.toString();
-				AMap<AString, ACell> entry = Maps.of(
-					"name", name,
-					"type", childAttrs.isDirectory() ? "directory" : "file",
-					"size", CVMLong.create(childAttrs.size()),
-					"modified", CVMLong.create(childAttrs.lastModifiedTime().toMillis())
-				);
-				entries = entries.conj(entry);
-			}
-		}
-		return Maps.of("entries", entries);
+		return FileOperations.list(dir);
 	}
-
-	/** Tree-walk state shared across the recursion (mirrors FileAdapter). */
-	private static final class TreeState {
-		final StringBuilder out = new StringBuilder();
-		int entries = 0;
-		boolean truncated = false;
-	}
-
-	private static final int MAX_DEPTH_CAP = 10;
-	private static final int MAX_ENTRIES_CAP = 5000;
 
 	private ACell handleTree(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
 		FileSystem fs = requireDrive(ctx, input);
 		AString pathCell = RT.ensureString(input.get(FIELD_PATH));
 		Path dir = resolvePath(fs, pathCell != null ? pathCell.toString() : null);
 
-		BasicFileAttributes attrs = Files.readAttributes(dir, BasicFileAttributes.class);
-		if (!attrs.isDirectory()) {
-			throw new IllegalArgumentException("Not a directory: " + pathCell);
-		}
-
-		int maxDepth = boundedInt(input, "maxDepth", 3, 1, MAX_DEPTH_CAP);
-		int maxEntries = boundedInt(input, "maxEntries", 500, 1, MAX_ENTRIES_CAP);
-		String info = stringField(input, "info");
-
-		TreeState state = new TreeState();
-		walkTree(dir, 0, maxDepth, maxEntries, info, state);
-
-		return Maps.of(
-			"tree", state.out.toString(),
-			"truncated", CVMBool.create(state.truncated)
-		);
+		return FileOperations.tree(dir, input);
 	}
 
-	private static void walkTree(Path dir, int depth, int maxDepth, int maxEntries,
-			String info, TreeState state) throws IOException {
-		// Snapshot children first — DLFS DirectoryStream isn't iteration-safe
-		// against concurrent mutation and tombstone semantics make order
-		// dependent on insertion. Sort for stable output.
-		java.util.List<Path> children = new java.util.ArrayList<>();
-		try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
-			for (Path c : stream) children.add(c);
-		}
-		children.sort((a, b) -> {
-			Path af = a.getFileName();
-			Path bf = b.getFileName();
-			String an = (af != null) ? af.toString() : a.toString();
-			String bn = (bf != null) ? bf.toString() : b.toString();
-			return an.compareToIgnoreCase(bn);
-		});
-
-		for (Path child : children) {
-			if (state.entries >= maxEntries) {
-				state.truncated = true;
-				return;
-			}
-			state.entries++;
-
-			BasicFileAttributes attrs = Files.readAttributes(child, BasicFileAttributes.class);
-			Path fname = child.getFileName();
-			String name = (fname != null) ? fname.toString() : child.toString();
-			for (int i = 0; i < depth; i++) state.out.append('\t');
-			state.out.append(name);
-
-			if (attrs.isDirectory()) {
-				state.out.append("/\n");
-				if (depth + 1 < maxDepth) {
-					walkTree(child, depth + 1, maxDepth, maxEntries, info, state);
-					if (state.truncated) return;
-				}
-			} else {
-				if ("size".equals(info) && attrs.isRegularFile()) {
-					state.out.append(" (").append(humanSize(attrs.size())).append(')');
-				}
-				state.out.append('\n');
-			}
-		}
-	}
-
-	private static int boundedInt(AMap<AString, ACell> input, String key, int defaultVal, int min, int max) {
-		ACell v = input.get(Strings.create(key));
-		if (v instanceof CVMLong cl) {
-			long l = cl.longValue();
-			return (int) Math.max(min, Math.min(max, l));
-		}
-		return defaultVal;
-	}
-
-	private static String stringField(AMap<AString, ACell> input, String key) {
-		AString v = RT.ensureString(input.get(Strings.create(key)));
-		return (v == null) ? null : v.toString();
-	}
-
-	private static String humanSize(long bytes) {
-		if (bytes < 1024) return bytes + " B";
-		if (bytes < 1024L * 1024) return String.format("%.1f KB", bytes / 1024.0);
-		if (bytes < 1024L * 1024 * 1024) return String.format("%.1f MB", bytes / (1024.0 * 1024));
-		return String.format("%.1f GB", bytes / (1024.0 * 1024 * 1024));
-	}
-
-	private ACell handleRead(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
+	private ACell handleRead(RequestContext ctx, AMap<AString, ACell> input,
+			boolean crossUser) throws IOException {
 		AString driveCell = RT.ensureString(input.get(FIELD_DRIVE));
 		if (driveCell == null) throw new IllegalArgumentException("'drive' is required");
 		String driveName = driveCell.toString();
@@ -700,63 +635,8 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		String mode = modeCell != null ? modeCell.toString() : "auto";
 
 		Path path = resolvePath(fs, pathCell.toString());
-		byte[] bytes = Files.readAllBytes(path);
-		String mime = MimeUtils.guess(pathCell.toString(), bytes);
-		CVMLong size = CVMLong.create(bytes.length);
-
-		switch (mode) {
-			case "auto": {
-				if (isLikelyText(bytes)) {
-					return Maps.of(
-						"content", new String(bytes, StandardCharsets.UTF_8),
-						"encoding", "utf-8",
-						"size", size,
-						"mime", mime
-					);
-				}
-				// Binary: return a reference to the WebDAV URL — caller fetches bytes there
-				return Maps.of(
-					"encoding", "binary",
-					"size", size,
-					"mime", mime,
-					"url", buildWebDAVUrl(driveName, pathCell.toString())
-				);
-			}
-			case "text": {
-				if (!isLikelyText(bytes)) {
-					throw new IllegalArgumentException("File is not valid UTF-8 text");
-				}
-				return Maps.of(
-					"content", new String(bytes, StandardCharsets.UTF_8),
-					"encoding", "utf-8",
-					"size", size,
-					"mime", mime
-				);
-			}
-			case "bytes": {
-				return Maps.of(
-					"content", Base64.getEncoder().encodeToString(bytes),
-					"encoding", "base64",
-					"size", size,
-					"mime", mime
-				);
-			}
-			case "json": {
-				ACell value;
-				try {
-					value = convex.core.util.JSON.parse(new String(bytes, StandardCharsets.UTF_8));
-				} catch (Exception e) {
-					throw new IllegalArgumentException("File is not valid JSON: " + e.getMessage());
-				}
-				return Maps.of(
-					"value", value,
-					"size", size,
-					"mime", mime
-				);
-			}
-			default:
-				throw new IllegalArgumentException("Unknown mode '" + mode + "'. Expected: auto, text, bytes, json");
-		}
+		return FileOperations.read(path, mode,
+			crossUser ? null : buildWebDAVUrl(driveName, pathCell.toString()));
 	}
 
 	/**
@@ -771,113 +651,25 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		AString pathCell = RT.ensureString(input.get(FIELD_PATH));
 		if (pathCell == null) throw new IllegalArgumentException("'path' is required");
 
-		AString contentCell = RT.ensureString(input.get(FIELD_CONTENT));
-		boolean hasValue = input.containsKey(FIELD_VALUE);
-		AString bytesB64 = RT.ensureString(input.get(FIELD_BYTES));
-		AString assetRef = RT.ensureString(input.get(FIELD_ASSET));
-
-		int supplied = (contentCell != null ? 1 : 0) + (hasValue ? 1 : 0)
-			+ (bytesB64 != null ? 1 : 0) + (assetRef != null ? 1 : 0);
-		if (supplied == 0) {
-			throw new IllegalArgumentException(
-				"Exactly one of 'content' (UTF-8 text), 'value' (JSON), 'bytes' (base64), or 'asset' (reference) is required");
-		}
-		if (supplied > 1) {
-			throw new IllegalArgumentException(
-				"Only one of 'content', 'value', 'bytes', or 'asset' may be supplied");
-		}
-
 		Path path = resolvePath(fs, pathCell.toString());
-		boolean isNew = !Files.exists(path);
-		StandardOpenOption mode = append
-			? StandardOpenOption.APPEND
-			: StandardOpenOption.TRUNCATE_EXISTING;
-		long written;
-
-		if (assetRef != null) {
-			// Caller-supplied ref → caller's authority, never the drive owner's.
-			// resolveContent spans every storage mechanism: CAS assets (including
-			// plain content assets, not just operation-shaped ones), lattice
-			// values, and other DLFS paths.
-			covia.venue.storage.ContentProvider.Resolved resolved =
-				engine.resolveContent(assetRef, assetCtx);
-			if (resolved == null) throw new IllegalArgumentException("No content at ref: " + assetRef);
-			try (InputStream is = resolved.content().getInputStream();
-			     OutputStream os = Files.newOutputStream(path,
-			         StandardOpenOption.CREATE, mode, StandardOpenOption.WRITE)) {
-				written = is.transferTo(os);
-			}
-		} else {
-			byte[] bytes;
-			if (contentCell != null) bytes = contentCell.toString().getBytes(StandardCharsets.UTF_8);
-			else if (bytesB64 != null) bytes = Base64.getDecoder().decode(bytesB64.toString());
-			else bytes = convex.core.util.JSON.print(input.get(FIELD_VALUE)).toString().getBytes(StandardCharsets.UTF_8);
-			Files.write(path, bytes, StandardOpenOption.CREATE, mode, StandardOpenOption.WRITE);
-			written = bytes.length;
-		}
-
-		return Maps.of(
-			append ? "appended" : "written", CVMLong.create(written),
-			"created", isNew ? CVMBool.TRUE : CVMBool.FALSE
-		);
+		return FileOperations.write(path, input, engine, assetCtx, append);
 	}
 
 	private ACell handleMkdir(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
 		FileSystem fs = requireDrive(ctx, input);
 		AString pathCell = RT.ensureString(input.get(FIELD_PATH));
 		if (pathCell == null) throw new IllegalArgumentException("'path' is required");
-		boolean parents = RT.bool(input.get(FIELD_PARENTS));
-
 		Path path = resolvePath(fs, pathCell.toString());
-		boolean existed = Files.exists(path);
-		if (existed) {
-			if (!Files.isDirectory(path)) {
-				throw new IllegalArgumentException("Path exists and is not a directory: " + pathCell);
-			}
-		} else if (parents) {
-			Files.createDirectories(path);
-		} else {
-			Files.createDirectory(path);
-		}
-		return Maps.of(
-			"created", CVMBool.create(!existed),
-			"path", path.toString()
-		);
+		return FileOperations.mkdir(path, input);
 	}
 
 	private ACell handleDelete(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
 		FileSystem fs = requireDrive(ctx, input);
 		AString pathCell = RT.ensureString(input.get(FIELD_PATH));
 		if (pathCell == null) throw new IllegalArgumentException("'path' is required");
-		boolean recursive = RT.bool(input.get(FIELD_RECURSIVE));
-
 		Path path = resolvePath(fs, pathCell.toString());
-		if (!Files.exists(path)) {
-			return Maps.of("deleted", CVMBool.FALSE, "existed", CVMBool.FALSE);
-		}
-		if (Files.isDirectory(path) && recursive) {
-			deleteRecursive(path);
-		} else {
-			Files.delete(path);
-		}
-		return Maps.of("deleted", CVMBool.TRUE, "existed", CVMBool.TRUE);
-	}
-
-	private static void deleteRecursive(Path dir) throws IOException {
-		// Snapshot children before mutating — DLFS's DirectoryStream skips
-		// tombstones, but iterating while mutating is still risky.
-		java.util.List<Path> children = new java.util.ArrayList<>();
-		try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
-			for (Path child : stream) children.add(child);
-		}
-		for (Path child : children) {
-			if (Files.isDirectory(child)) {
-				deleteRecursive(child);
-			} else {
-				Files.delete(child);
-			}
-		}
-		Files.delete(dir);
+		Path root = fs.getRootDirectories().iterator().next();
+		return FileOperations.delete(path, root, input);
 	}
 
 	private ACell handleStat(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
@@ -886,33 +678,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		if (pathCell == null) throw new IllegalArgumentException("'path' is required");
 
 		Path path = resolvePath(fs, pathCell.toString());
-		if (!Files.exists(path)) {
-			return Maps.of("exists", CVMBool.FALSE);
-		}
-		BasicFileAttributes attrs = Files.readAttributes(path, BasicFileAttributes.class);
-		String type = attrs.isDirectory() ? "directory"
-			: attrs.isRegularFile() ? "file"
-			: "other";
-		AMap<AString, ACell> out = Maps.of(
-			"exists", CVMBool.TRUE,
-			"type", type,
-			"size", CVMLong.create(attrs.size()),
-			"modified", CVMLong.create(attrs.lastModifiedTime().toMillis())
-		);
-		if (attrs.isRegularFile()) {
-			String mime = MimeUtils.guessByName(path.getFileName() != null
-				? path.getFileName().toString() : "");
-			out = out.assoc(FIELD_MIME, Strings.create(mime));
-		}
-		return out;
-	}
-
-
-	private static boolean isLikelyText(byte[] bytes) {
-		for (byte b : bytes) {
-			if (b == 0) return false;
-		}
-		return true;
+		return FileOperations.stat(path, null);
 	}
 
 	/**

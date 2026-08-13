@@ -148,7 +148,7 @@ Agent definitions have an `agent` object:
     "operation": "v/ops/llmagent/chat",
     "config": {
       "llmOperation": "v/ops/langchain/openai",
-      "model": "gpt-5.4-mini",
+      "model": "gpt-5.6-terra",
       "systemPrompt": "You are Alice...",
       "responseFormat": { "name": "InvoiceExtraction", "schema": { ... } },
       "tools": ["v/ops/covia/read", "v/ops/covia/write"]
@@ -195,4 +195,4 @@ See `/orchestrate` skill for full orchestration documentation.
 - **Include `type`** in metadata for discoverability — `asset_list type=orchestration` only works if the field is present.
 - **Asset IDs are deterministic** — storing identical metadata on different venues produces the same ID. This enables federated asset verification.
 - **Metadata is immutable** — to update, store new metadata (which gets a new ID). Use `/o/` namespace aliases to point a stable name at the latest version.
-- **Agents can store assets** — `asset:store`, `asset:get`, and `asset:list` are in the default agent tool palette, so agents can autonomously create orchestrations, definitions, and artifacts.
+- **Agents can store assets when exposed** — load the venue `assets` skill or use a template/config that declares `asset_store`, `asset_get`, and `asset_list`. The lean default does not advertise mutation tools up front, and loading tools never grants authority.
