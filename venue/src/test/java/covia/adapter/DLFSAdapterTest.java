@@ -7,6 +7,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -105,11 +107,20 @@ public class DLFSAdapterTest {
 		String second = "x".repeat(32) + " (2).txt";
 		run("v/ops/dlfs/create-drive", Maps.of("name", drive));
 
-		run("v/ops/dlfs/write", Maps.of(
-			"drive", drive, "path", first, "content", "one"));
-		run("v/ops/dlfs/write", Maps.of(
-			"drive", drive, "path", second, "content", "two"));
+		// Use the exact NIO shape from #342/GetMine rather than two adapter
+		// invocations. The old Convex provider truncated the directory-entry
+		// lookup key on this long-lived filesystem view, so a fresh cursor per
+		// adapter call could accidentally miss the original reproducer.
+		DLFSAdapter adapter = (DLFSAdapter) engine.getAdapter("dlfs");
+		Path dir = adapter.getDriveForIdentity(ALICE_DID.toString(), drive).getPath("/");
+		assertDoesNotThrow(() -> {
+			Files.writeString(dir.resolve(first), "one");
+			Files.writeString(dir.resolve(second), "two");
+		});
+		assertDoesNotThrow(() -> assertEquals("one", Files.readString(dir.resolve(first))));
+		assertDoesNotThrow(() -> assertEquals("two", Files.readString(dir.resolve(second))));
 
+		// A separate adapter/cursor view must observe both values as well.
 		ACell firstRead = run("v/ops/dlfs/read", Maps.of("drive", drive, "path", first));
 		ACell secondRead = run("v/ops/dlfs/read", Maps.of("drive", drive, "path", second));
 		assertEquals("one", RT.ensureString(RT.getIn(firstRead, "content")).toString());

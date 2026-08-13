@@ -865,6 +865,21 @@ public class VenueHTTP extends Venue {
 			return BlobContent.of(blob);
 		});
 	}
+
+	/** Fetches content explicitly from the connected venue's published catalog. */
+	public CompletableFuture<AContent> getVenueContent(Hash assetID) {
+		HttpRequest req = requestBuilder(
+			"assets/" + assetID.toHexString() + "/content?namespace=venue")
+			.GET().build();
+		return dispatch(req, HttpResponse.BodyHandlers.ofByteArray()).thenApply(response -> {
+			int code=response.statusCode();
+			if (code != 200) {
+				throw new ResponseException("Venue content get failed with status: " +code
+					+" -- asset ID: "+assetID);
+			}
+			return BlobContent.of(convex.core.data.Blob.wrap(response.body()));
+		});
+	}
 	
 	@Override
 	protected AContent getAssetContent(Hash assetID) {
@@ -1029,7 +1044,13 @@ public class VenueHTTP extends Venue {
 
 	@Override
 	public Asset getAsset(Hash id) throws IOException {
-		HttpRequest request=requestBuilder("assets/"+id.toHexString())
+		return getAsset(id, false);
+	}
+
+	private Asset getAsset(Hash id, boolean venueCatalog) throws IOException {
+		String path="assets/"+id.toHexString();
+		if (venueCatalog) path += "?namespace=venue";
+		HttpRequest request=requestBuilder(path)
 				.GET()
 				.build();
 			
@@ -1047,6 +1068,11 @@ public class VenueHTTP extends Venue {
 			return null;
 		}
 		
+	}
+
+	/** Fetches a definition explicitly from the connected venue's catalog. */
+	public Asset getVenueAsset(Hash id) throws IOException {
+		return getAsset(id, true);
 	}
 
 	/**

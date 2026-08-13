@@ -1,12 +1,21 @@
 package covia.venue;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.junit.jupiter.api.Test;
 
@@ -17,6 +26,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import covia.adapter.DLFSAdapter;
 import covia.api.Fields;
 import covia.venue.server.VenueServer;
 
@@ -263,6 +273,123 @@ public class EtchV3VenueTest {
 				"the embedder-keyed encrypted vault must persist across venue restarts");
 		} finally {
 			second.close();
+		}
+	}
+
+	/**
+	 * Release regression for GetMine #303. The product writes staged files via
+	 * short-lived DLFS views while unrelated venue traffic synchronises the root
+	 * lattice and the UI lists the same directory. The field report was a fresh
+	 * encrypted-v3 store whose directory nodes became unreadable without any
+	 * reported write failure.
+	 *
+	 * <p>All ordering in this test is explicit: writers rendezvous before the
+	 * concurrent sync loop starts, every future is joined, and verification runs
+	 * only after the syncer has stopped. Concurrency is the behaviour under test,
+	 * not a timing assumption.</p>
+	 */
+	@Test
+	public void concurrentDlfsPromotionsRemainReadableAcrossSyncAndRestart() throws Exception {
+		File dir = Files.createTempDirectory("etch-v3-dlfs-promotions").toFile();
+		String storePath = new File(dir, "venue.etch").getAbsolutePath().replace('\\', '/');
+		AString userDID = Strings.create("did:key:z6Mk-test-dlfs-promotions");
+		String driveName = "drive";
+		int writerCount = 6;
+		int filesPerWriter = 20;
+		Map<String, byte[]> expected = new LinkedHashMap<>();
+		String commonPrefix = "2026-08-13 - NHS health document "; // >32 shared chars
+		for (int writer = 0; writer < writerCount; writer++) {
+			for (int item = 0; item < filesPerWriter; item++) {
+				String name = commonPrefix + writer + "-" + item + ".pdf";
+				expected.put(name, ("writer=" + writer + ",item=" + item)
+					.getBytes(StandardCharsets.UTF_8));
+			}
+		}
+
+		VenueServer first = VenueServer.launch(config(storePath, KEY_HEX));
+		try {
+			Engine engine = first.getEngine();
+			DLFSAdapter dlfs = (DLFSAdapter) engine.getAdapter("dlfs");
+			Path uploads = driveRoot(dlfs, userDID, driveName).resolve("Uploads");
+			Files.createDirectories(uploads);
+
+			CountDownLatch ready = new CountDownLatch(writerCount);
+			CountDownLatch start = new CountDownLatch(1);
+			AtomicBoolean syncing = new AtomicBoolean(true);
+			try (var tasks = Executors.newVirtualThreadPerTaskExecutor()) {
+				var writers = new java.util.ArrayList<java.util.concurrent.Future<?>>();
+				for (int writer = 0; writer < writerCount; writer++) {
+					int writerId = writer;
+					writers.add(tasks.submit(() -> {
+						ready.countDown();
+						start.await();
+						for (int item = 0; item < filesPerWriter; item++) {
+							String name = commonPrefix + writerId + "-" + item + ".pdf";
+							byte[] content = expected.get(name);
+							// Fresh cursor/filesystem per request, as in DLFSAdapter dispatch.
+							Path freshUploads = driveRoot(dlfs, userDID, driveName).resolve("Uploads");
+							Path target = freshUploads.resolve(name);
+							Path staged = freshUploads.resolve(name + ".part");
+							Files.write(staged, content);
+							Files.move(staged, target, StandardCopyOption.ATOMIC_MOVE);
+							assertArrayEquals(content, Files.readAllBytes(target));
+							try (var listing = Files.list(
+									driveRoot(dlfs, userDID, driveName).resolve("Uploads"))) {
+								listing.count();
+							}
+						}
+						return null;
+					}));
+				}
+				ready.await();
+				var syncer = tasks.submit(() -> {
+					start.countDown();
+					while (syncing.get()) {
+						engine.syncState();
+						Thread.yield();
+					}
+					return null;
+				});
+				try {
+					for (var writer : writers) writer.get();
+				} finally {
+					syncing.set(false);
+				}
+				syncer.get();
+			}
+
+			assertDlfsContents(dlfs, userDID, driveName, expected);
+			engine.flush();
+		} finally {
+			first.close();
+		}
+
+		VenueServer reopened = VenueServer.launch(config(storePath, KEY_HEX));
+		try {
+			DLFSAdapter dlfs = (DLFSAdapter) reopened.getEngine().getAdapter("dlfs");
+			assertDlfsContents(dlfs, userDID, driveName, expected);
+		} finally {
+			reopened.close();
+		}
+	}
+
+	private static Path driveRoot(DLFSAdapter dlfs, AString userDID, String driveName) {
+		return dlfs.getDriveForIdentity(userDID.toString(), driveName).getPath("/");
+	}
+
+	private static void assertDlfsContents(DLFSAdapter dlfs, AString userDID,
+			String driveName, Map<String, byte[]> expected) throws Exception {
+		Path uploads = driveRoot(dlfs, userDID, driveName).resolve("Uploads");
+		try (var listing = Files.list(uploads)) {
+			var paths = listing.toList();
+			assertEquals(expected.size(), paths.size(),
+				"every promoted sibling must remain reachable");
+			assertTrue(paths.stream().noneMatch(path -> path.toString().endsWith(".part")),
+				"no staged file may remain after promotion");
+		}
+		for (var entry : expected.entrySet()) {
+			assertArrayEquals(entry.getValue(), Files.readAllBytes(uploads.resolve(entry.getKey())),
+				"content mismatch for " + entry.getKey());
 		}
 	}
 }

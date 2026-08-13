@@ -314,26 +314,23 @@ public class OperationResolutionTest {
 		assertNull(engine.resolveAsset(Strings.create("w/config/internal-test")));
 	}
 
-	// ========== DID URL self-reference round-trip ==========
+	// ========== DID URL namespace isolation ==========
 	//
-	// asset_store returns the venue's own DID URL form (e.g.
-	// did:key:VENUE:public/a/<hash>). Feeding that back into resolveAsset
-	// must work without crashing — it used to fall through to Grid.connect
-	// which only handles did:web.
+	// The venue catalog and its public user's /a are distinct namespaces even
+	// when an identical content hash exists in both.
 
 	@Test
-	public void testResolveLocalDidKeyUrlForVenueAsset() {
+	public void testPublicUserDidDoesNotFallThroughToVenueAsset() {
 		// Pick any venue-installed asset hash
 		Hash echoHash = engine.resolveAsset(Strings.create("v/test/ops/echo")).getID();
 		assertNotNull(echoHash);
 
-		// Construct the DID URL form: <venue-did>:public/a/<hash>
-		// (matches what asset_store returns when called by an anonymous user)
+		// Construct a URL in the public user's namespace, not the venue catalog.
 		String didUrl = engine.getDIDString().toString() + ":public/a/" + echoHash.toHexString();
 
 		Asset asset = engine.resolveAsset(Strings.create(didUrl), alice);
-		assertNotNull(asset, "did:key:VENUE:public/a/<hash> should resolve as local");
-		assertEquals(echoHash, asset.getID());
+		assertNull(asset,
+			"the public user's /a must not fall through to an identically hashed venue asset");
 	}
 
 	@Test
