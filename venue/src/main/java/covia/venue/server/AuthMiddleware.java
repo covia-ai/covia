@@ -20,6 +20,7 @@ import covia.venue.Auth;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.UcanJwtValidator;
 import covia.venue.api.ACoviaAPI;
 import covia.venue.auth.VenueAuthenticator;
 import io.javalin.config.RoutesConfig;
@@ -59,7 +60,7 @@ public class AuthMiddleware {
 	 * {@code Authorization: Bearer ...} header, when the bearer is a valid
 	 * UCAN (and so also serves as caller authentication). Downstream handlers
 	 * merge this into their transport {@code ucans} vector via
-	 * {@link UCANValidator#parseTransportUCANsWithBearer}. Null when the
+	 * {@link UcanJwtValidator#parseTransportUCANsWithBearer}. Null when the
 	 * request has no bearer token or the bearer is not a UCAN.
 	 */
 	public static final String UCAN_BEARER_ATTR = "ucanBearer";
@@ -384,7 +385,7 @@ public class AuthMiddleware {
 	public static RequestContext withTransportAuth(RequestContext rctx, AString bearer,
 			AVector<ACell> ucans, AString venueDID, DIDVerifier verifier) {
 		// Verify signatures at ingress with an explicit DID verifier.
-		AVector<ACell> proofs = UCANValidator.parseTransportUCANsWithBearer(bearer, ucans,
+		AVector<ACell> proofs = UcanJwtValidator.parseTransportUCANsWithBearer(bearer, ucans,
 			(verifier != null) ? verifier : DIDVerifier.CONVEX);
 		if (proofs == null) return rctx;
 

@@ -384,7 +384,7 @@ Rules (implemented in `ContextChain`, pure functions):
 - **Assembly = union down the chain, inner shadows outer** on a path collision.
 - **Masking**: `context_unload` of a path supplied by an outer tier writes a **nil tombstone** at the innermost tier — excluded from that tier inward; the outer entry and every other session/frame are untouched. A later `context_load` overwrites the tombstone (local un-mask). Goaltree's copy-on-push frame inheritance copies tombstones too, so masks propagate to child frames.
 - **Inner tiers read outer tiers but never mutate them** — one writer per tier, recursively (the ownership model of #144 applied to scope).
-- **Budget & safety valve respect the hierarchy**: the agent tier (operator-pinned) is never pruned; dynamic tiers prune innermost-first, LIFO by timestamp.
+- **Budgets are advisory**: byte accounting and per-entry structured-render budgets guide the model and diagnostics, but the runtime never silently evicts a load based on a guessed provider token ratio.
 - **No session in scope** → no writable tier: `context_load`/`unload` fail with a diagnosable tool result.
 - Agent-level `state.loads` and `state.context` are retired; `agent:create`/`update` reject a `loads` (or `config`) key inside `state`.
 
@@ -393,9 +393,9 @@ The two roles below remain the ends of the chain; the session and frame tiers si
 ### 8.1 The two roles
 
 - **Configured context** — entries in `config.context` (rendered entries) and `config.loads` (pinned loads). Owned by whoever configured the agent; the agent's standing knowledge. **Pinned**: the agent cannot remove it (only mask it per-conversation); it changes only through configuration (`agent_create` / `agent_update`).
-- **Agent-managed context** — the working set the agent curates while pursuing a goal via `context_load` / `context_unload`, scoped to the session (llmagent) or frame (goaltree) tier. Mutable and evictable per conversation.
+- **Agent-managed context** — the working set the agent curates while pursuing a goal via `context_load` / `context_unload`, scoped to the session (llmagent) or frame (goaltree) tier. Mutable per conversation.
 
-Both are *the same kind of thing*: a set of context entries, each resolved fresh every turn and injected as a labelled system message ahead of the conversation. The distinction is ownership, not mechanism.
+Both are *the same kind of thing*: a set of context entries. The effective scope chain is resolved immediately before **every LLM call**, including successive calls in one tool loop, so a tool write to an already-loaded path is visible on the next inference without reloading. Entries are labelled system messages ahead of the conversation. They are deliberately not fabricated as assistant tool calls: Anthropic and standard chat protocols define `tool_use` as model-authored intent, so synthetic calls misrepresent conversation state even when their wire shape is valid. The distinction between configured and managed loads is ownership, not resolution machinery.
 
 ### 8.2 Shared entry grammar and capabilities
 
@@ -406,8 +406,8 @@ The capability this unification adds: **agent-managed entries are no longer path
 ### 8.3 Shared resolution, rendering, and budget
 
 - **Resolver & rendering** — identical for both roles: the contract in §3.6 (skip-absent, fail-visible, required-throws; string verbatim, structured value as budget-bounded JSON5).
-- **One budget** — a single per-agent context budget. Each entry, in either role, carries a per-entry byte budget (declared or derived) that bounds its rendering and is accounted against the total.
-- **Context map** — one live inventory lists every loaded entry with its role, label, and budget, plus total usage and a near-scope warning. Configured entries become visible and accounted consistently — today they consume budget but appear in neither the context map nor the safety valve, so a heavy pinned entry can silently starve the working set with no signal.
+- **One advisory budget vocabulary** — each entry carries a normalised per-entry byte budget. It bounds structured-value exploration and is reported as an approximation; it is not treated as a provider-independent token limit. String/markdown content remains verbatim.
+- **Context map** — one live inventory lists every effective loaded entry with its label and advisory budget, plus approximate rendered usage and a near-scope warning. Configured, session, and frame entries are visible consistently after shadowing and tombstones are applied.
 
 ### 8.4 What differs — role semantics only
 
@@ -416,21 +416,21 @@ The capability this unification adds: **agent-managed entries are no longer path
 | Declared by | operator / configuration | the agent, at run time |
 | Mutated via | `agent_create` / `agent_update` | `context_load` / `context_unload` (or `agent_update`) |
 | Agent may remove it | No — pinned | Yes |
-| Eviction under budget pressure | Never auto-evicted | LIFO safety-valve eviction (newest first) until back under the warn threshold |
+| Eviction under budget pressure | Never auto-evicted | Never auto-evicted; the model/operator unloads explicitly |
 | Goaltree lifetime | Inherited down the whole frame stack | Scoped to the active frame |
 
-If configured context alone exceeds the budget, that is a configuration error to surface — not something the safety valve silently prunes.
+If a provider rejects an oversized request, the transition surfaces a diagnostic with the approximate encoded size and directs the operator/agent to inspect the context map and unload explicitly. It does not guess a safe truncation from byte counts.
 
 ### 8.5 Tool surface
 
-- **`context_load(entry)`** — `entry` is the full §3 entry model (a path string, or a map with `ref` / `text` / `op`+`input` / `job`+`path`, plus `label`, `budget`, `required`). Adds or replaces an entry in the agent-managed set. Takes effect next turn.
+- **`context_load(entry)`** — `entry` is the full §3 entry model (a path string, or a map with `ref` / `text` / `op`+`input` / `job`+`path`, plus `label`, `budget`, `required`). Adds or replaces an entry in the agent-managed set. Takes effect on the next inference in the current loop.
 - **`context_unload(ref)`** — removes an agent-managed entry by its reference/label. Removing a configured (pinned) entry is **rejected** — pinned context belongs to the operator, not the agent.
 
 (A future `context_pin` could promote an agent-managed entry to configured; out of scope here.)
 
 ### 8.6 Load order
 
-System prompt → configured context → agent-managed context → conversation history → current work (outstanding tasks / pending results). Configured precedes agent-managed so baseline knowledge frames the working set.
+System prompt → configured context → skills index → effective loads snapshot → conversation history → current work (outstanding tasks / pending results).
 
 ### 8.7 Goaltree frame scoping
 
@@ -442,7 +442,7 @@ At the design level the unified model collapses the parallel structures that gre
 
 - The dynamic `state.context` layer and the agent-managed `loads` store become **one agent-managed context set** with a single shape.
 - The separate resolution paths (one for configured entries, one for loaded paths, plus a near-duplicate used by the goaltree assembler) become **one resolver** invoked identically for every entry.
-- Budget accounting, the context map, and the safety valve apply **uniformly** to all entries, scoped by role (evict agent-managed only).
+- Budget accounting and the context map apply **uniformly** to all entries. They are advisory; removal is always explicit.
 
 The user-facing distinction — *a configured baseline the agent can't drop* vs *a working set the agent curates* — is preserved deliberately; only the duplicated machinery behind it is merged.
 

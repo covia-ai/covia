@@ -14,7 +14,8 @@
 			"v/ops/covia/append",
 			"v/ops/covia/delete",
 			"v/ops/covia/inspect",
-			"v/ops/covia/aggregate"
+			"v/ops/covia/aggregate",
+			"v/ops/covia/copy"
 		]
 	}
 }

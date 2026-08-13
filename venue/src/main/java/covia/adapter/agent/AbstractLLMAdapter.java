@@ -13,13 +13,16 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Cells;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.adapter.AAdapter;
+import covia.adapter.ToolCallArguments;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
 import covia.grid.Status;
@@ -37,7 +40,7 @@ import covia.venue.RequestContext;
  * <ul>
  *   <li>Level 3 invocation — dispatch to LLM via grid operation</li>
  *   <li>Tool dispatch — config tool resolution, capability checking, grid fallthrough</li>
- *   <li>Input parsing — LLM JSON-as-string handling</li>
+ *   <li>Input parsing — canonical structured tool arguments with provider compatibility</li>
  *   <li>Config constants — field keys shared across both adapters</li>
  * </ul>
  */
@@ -87,6 +90,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	public static final AString K_NAME       = Strings.intern("name");
 	public static final AString K_ARGUMENTS  = Strings.intern("arguments");
 	public static final AString K_STRUCTURED_CONTENT = Strings.intern("structuredContent");
+	public static final AString K_IS_ERROR   = Strings.intern("isError");
 
 	// ========== Tool definition (JSON Schema) keys ==========
 
@@ -212,7 +216,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 
 	// ========== Defaults ==========
 
-	public static final AString DEFAULT_LLM_OPERATION = Strings.create("v/ops/langchain/openai");
+	public static final AString DEFAULT_LLM_OPERATION = Strings.create("v/ops/langchain/anthropic");
 
 	// ========== Inspection (template method) ==========
 
@@ -354,6 +358,13 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			throw new JobFailedException("Interrupted while waiting for LLM call (" + llmOperation + ")");
 		} catch (ExecutionException e) {
 			Throwable cause = (e.getCause() != null) ? e.getCause() : e;
+			if (isContextSizeFailure(cause)) {
+				throw new JobFailedException("LLM provider rejected the context as too large ("
+					+ llmOperation + ", approximately " + Cells.storageSize(messages)
+					+ " encoded bytes). Loaded references are not truncated automatically because "
+					+ "provider tokenisation varies; inspect agent:context and context_unload unused "
+					+ "paths, then retry. Provider detail: " + describeFailure(cause));
+			}
 			if (cause instanceof RuntimeException re) throw re;
 			throw new JobFailedException("LLM call failed (" + llmOperation + "): " + cause.getMessage());
 		}
@@ -367,13 +378,43 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		// (An op that throws already propagates exceptionally via join().)
 		if (result instanceof AMap && Status.FAILED.equals(RT.getIn(result, Fields.STATUS))) {
 			AString message = RT.ensureString(RT.getIn(result, Fields.MESSAGE));
+			if (message != null && isContextSizeFailure(
+					new IllegalArgumentException(message.toString()))) {
+				throw new JobFailedException("LLM provider rejected the context as too large ("
+					+ llmOperation + ", approximately " + Cells.storageSize(messages)
+					+ " encoded bytes). Loaded references are not truncated automatically because "
+					+ "provider tokenisation varies; inspect agent:context and context_unload unused "
+					+ "paths, then retry. Provider detail: " + message);
+			}
 			throw new JobFailedException("LLM call failed (" + llmOperation + "): "
 				+ (message != null ? message.toString() : "no message"));
 		}
+		// Keep the persisted agent protocol provider-neutral even when a custom
+		// Level 3 operation returns OpenAI-style JSON text. Malformed text remains
+		// intact so executeToolCall can produce a visible, correctable error.
+		result = ToolCallArguments.canonicaliseAssistantMessage(result);
+
 		// Provider-reported usage rides the assistant message (tokens
 		// {input, output, total}); add it to this transition's tally (#217).
 		tallyTokens(result);
 		return result;
+	}
+
+	/** Recognises common provider context-window failures without guessing tokens. */
+	private static boolean isContextSizeFailure(Throwable failure) {
+		for (Throwable t = failure; t != null; t = t.getCause()) {
+			String message = t.getMessage();
+			if (message == null) continue;
+			String m = message.toLowerCase(java.util.Locale.ROOT);
+			if (m.contains("context_length_exceeded")
+					|| m.contains("maximum context length")
+					|| m.contains("prompt is too long")
+					|| m.contains("input is too long")
+					|| m.contains("too many input tokens")
+					|| m.contains("request too large")
+					|| m.contains("context window")) return true;
+		}
+		return false;
 	}
 
 	/**
@@ -598,6 +639,13 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			K_ROLE, ROLE_TOOL,
 			K_ID, toolCallId,
 			K_NAME, Strings.create(toolName));
+		// Preserve failure semantics separately from display text. Anthropic maps
+		// this to tool_result.is_error; other providers may safely ignore it.
+		boolean isError = (result instanceof AString s
+				&& s.toString().startsWith("Error:"))
+			|| (result instanceof AMap<?, ?>
+				&& CVMBool.TRUE.equals(RT.getIn(result, K_IS_ERROR)));
+		if (isError) msg = msg.assoc(K_IS_ERROR, CVMBool.TRUE);
 		if (result instanceof AMap || result instanceof AVector) {
 			return msg.assoc(K_STRUCTURED_CONTENT, result);
 		}
@@ -606,18 +654,44 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			(content != null) ? content : Strings.create(result.toString()));
 	}
 
-	// ========== Tool-call argument parsing (the LLM wire boundary) ==========
+	/**
+	 * Tracks terminal control calls within one provider tool-call batch.
+	 * Later side effects are skipped, but every call still receives an ordered
+	 * result as required by Anthropic and other tool-use protocols.
+	 */
+	protected static final class ToolBatchState {
+		private String terminalStatus;
+
+		public boolean isTerminal() {
+			return terminalStatus != null;
+		}
+
+		public String terminalStatus() {
+			return terminalStatus;
+		}
+
+		public void markTerminal(String status) {
+			if (terminalStatus == null) terminalStatus = status;
+		}
+
+		public AMap<AString, ACell> skippedResult(AString toolCallId, String toolName) {
+			if (!isTerminal()) throw new IllegalStateException("tool batch is not terminal");
+			return toolResultMessage(toolCallId, toolName, Strings.create(
+				"Error: not executed because " + terminalStatus
+				+ " was already requested in this tool batch."));
+		}
+	}
+
+	// ========== Tool-call argument parsing ==========
 
 	/**
-	 * Parses LLM tool-call {@code arguments} at the wire boundary. Per the
-	 * OpenAI/Anthropic specs {@code arguments} is a JSON-encoded string, and
-	 * LLMs are external systems whose output we cannot force to be well-formed,
-	 * so this is deliberately generous: absent/empty → empty map;
-	 * already-structured values pass through; a JSON string is parsed; a
-	 * double-encoded string (a parse yielding another JSON-shaped string) gets
-	 * one more pass. Outright garbage <b>throws</b> — callers turn that into a
-	 * structured tool error the LLM sees and can correct on its next turn,
-	 * never a silent {@code Maps.empty()} substitution.
+	 * Accepts canonical structured tool-call {@code arguments}, plus JSON text
+	 * from OpenAI-style provider boundaries and legacy conversation history.
+	 * Parsing is deliberately generous: absent/empty → empty map; structured
+	 * values pass through; a JSON string is parsed; a double-encoded object or
+	 * array gets one more pass. Outright garbage <b>throws</b> — callers turn
+	 * that into a structured tool error the LLM sees and can correct on its next
+	 * turn, never a silent {@code Maps.empty()} substitution.
 	 *
 	 * <p>This is the ONE place tolerant parsing is allowed. Everything
 	 * downstream is internal dispatch and must preserve types exactly — no
@@ -628,33 +702,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * @throws IllegalArgumentException if the arguments are not valid JSON
 	 */
 	public static ACell parseToolArguments(ACell rawArguments) {
-		if (rawArguments == null) return Maps.empty();
-		if (!(rawArguments instanceof AString)) return rawArguments; // already structured
-		String s = rawArguments.toString().trim();
-		if (s.isEmpty()) return Maps.empty();
-		ACell parsed;
-		try {
-			parsed = convex.core.util.JSON.parse(s);
-		} catch (Exception e) {
-			throw new IllegalArgumentException("Tool arguments are not valid JSON: " + snippet(s));
-		}
-		// Double-encoded tolerance: a parse that yields a JSON-shaped string
-		// gets one more pass; if the inner parse fails, keep the outer value
-		// (the op's own input validation reports the precise mismatch).
-		if (parsed instanceof AString inner) {
-			String is = inner.toString().trim();
-			if (!is.isEmpty() && (is.charAt(0) == '{' || is.charAt(0) == '[')) {
-				try {
-					return convex.core.util.JSON.parse(is);
-				} catch (Exception ignored) { /* keep the single-parsed value */ }
-			}
-		}
-		return parsed;
-	}
-
-	/** Truncates a value for inclusion in an error message. */
-	private static String snippet(String s) {
-		return (s.length() <= 80) ? s : s.substring(0, 77) + "...";
+		return ToolCallArguments.parse(rawArguments);
 	}
 
 	// ========== Config helpers ==========

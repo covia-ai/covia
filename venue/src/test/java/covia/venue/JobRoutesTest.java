@@ -14,12 +14,19 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.Test;
 
+import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
+import convex.core.data.Maps;
+import convex.core.data.Strings;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
+import covia.api.Fields;
+import covia.grid.Job;
+import covia.grid.auth.VenueAuth;
 
 /**
  * #200 — the job SSE route must be reachable.
@@ -152,6 +159,65 @@ public class JobRoutesTest {
 		}
 	}
 
+	private void awaitHttpStatus(String id, String wanted) {
+		AtomicReference<String> lastBody = new AtomicReference<>();
+		TestEngine.awaitCondition(() -> {
+			try {
+				HttpResponse<String> status = http.send(
+					HttpRequest.newBuilder().uri(URI.create(base + "/api/v1/jobs/" + id)).GET().build(),
+					HttpResponse.BodyHandlers.ofString());
+				lastBody.set(status.body());
+				return status.statusCode() == 200 && status.body().contains(wanted);
+			} catch (IOException e) {
+				lastBody.set(e.toString());
+				return false;
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				throw new AssertionError("interrupted while polling job " + id, e);
+			}
+		}, 5000, () -> "job " + id + " did not reach " + wanted
+			+ "; last response=" + lastBody.get());
+	}
+
+	/**
+	 * Authenticated browser clients can stream by using fetch/ReadableStream,
+	 * which permits the same Authorization header as every other API request.
+	 * Native EventSource cannot set that header; that is a client API limitation,
+	 * not a separate venue authentication mode.
+	 */
+	@Test
+	public void jobSseAcceptsBearerAuthenticationAndUsesCallerOwnership() throws Exception {
+		AKeyPair keyPair = AKeyPair.generate();
+		VenueAuth auth = VenueAuth.keyPair(keyPair, TestServer.ENGINE.getDIDString().toString());
+		RequestContext owner = RequestContext.of(Strings.create(auth.getDID()));
+		Job job = TestServer.ENGINE.jobs().invokeOperation("v/test/ops/never",
+			Maps.of(Fields.MESSAGE, "authenticated-sse"), owner);
+		String id = job.getID().toHexString();
+		String token = auth.mintToken();
+
+		try {
+			HttpResponse<String> anonymous = http.send(HttpRequest.newBuilder()
+				.uri(new URI(base + "/api/v1/jobs/" + id + "/sse"))
+				.header("Accept", "text/event-stream")
+				.GET().build(), HttpResponse.BodyHandlers.ofString());
+			assertEquals(403, anonymous.statusCode(),
+				"the public caller must not see another caller's job");
+
+			HttpResponse<InputStream> sse = http.send(HttpRequest.newBuilder()
+				.uri(new URI(base + "/api/v1/jobs/" + id + "/sse"))
+				.header("Accept", "text/event-stream")
+				.header("Authorization", "Bearer " + token)
+				.GET().build(), HttpResponse.BodyHandlers.ofInputStream());
+			try (InputStream in = sse.body()) {
+				assertEquals(200, sse.statusCode());
+				assertTrue(!readUntil(in, "status").get(10, TimeUnit.SECONDS).isEmpty(),
+					"authenticated stream must deliver its initial job record");
+			}
+		} finally {
+			job.cancel();
+		}
+	}
+
 	/** #222 — an explicitly non-SSE Accept fails loudly with 406 and a
 	 *  remedy, never a silent empty 200. */
 	@Test
@@ -172,14 +238,7 @@ public class JobRoutesTest {
 	@Test
 	public void jobSseFinishedJobDeliversTerminalFrame() throws Exception {
 		String id = invoke("v/test/ops/echo");
-		// Wait until terminal via polling
-		for (int i = 0; i < 100; i++) {
-			HttpResponse<String> status = http.send(
-				HttpRequest.newBuilder().uri(new URI(base + "/api/v1/jobs/" + id)).GET().build(),
-				HttpResponse.BodyHandlers.ofString());
-			if (status.body().contains("COMPLETE")) break;
-			Thread.sleep(50);
-		}
+		awaitHttpStatus(id, "COMPLETE");
 
 		HttpResponse<InputStream> sse = http.send(
 			HttpRequest.newBuilder()

@@ -352,8 +352,8 @@ public class A2ACodecTest {
 
 	@Test
 	public void agentEndpoint_buildUsesExternalBaseUrl() {
-		String url = A2ACodec.agentEndpointUrl("https://venue-3.covia.ai", "did:key:z6MkX", "Bob");
-		assertEquals("https://venue-3.covia.ai/a2a/did:key:z6MkX/g/Bob", url);
+		String url = A2ACodec.agentEndpointUrl("https://venue.example.com", "did:key:z6MkX", "Bob");
+		assertEquals("https://venue.example.com/a2a/did:key:z6MkX/g/Bob", url);
 	}
 
 	@Test
@@ -383,7 +383,7 @@ public class A2ACodecTest {
 	@Test
 	public void agentCard_buildsFromNameDescriptionProviderAndEndpoint() {
 		AgentProvider provider = new AgentProvider("Covia", "https://covia.ai");
-		String endpoint = "https://venue-3.covia.ai/a2a/did:key:z6MkX/g/Alice";
+		String endpoint = "https://venue.example.com/a2a/did:key:z6MkX/g/Alice";
 		AgentCard card = A2ACodec.agentCard("Alice", "A test agent", "0.3.0", provider, endpoint);
 
 		assertEquals("Alice", card.name());

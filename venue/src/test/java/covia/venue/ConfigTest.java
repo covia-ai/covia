@@ -41,7 +41,7 @@ public class ConfigTest {
 	@Test
 	public void testDefaultLlmOperationFallback() {
 		// Unset → the built-in default provider op.
-		assertEquals("v/ops/langchain/openai",
+		assertEquals("v/ops/langchain/anthropic",
 			new Config(null).getDefaultLlmOperation().toString());
 	}
 
@@ -213,6 +213,15 @@ public class ConfigTest {
 			c.getAdapterConfig("agent").get(Strings.create("sessionDelete")));
 	}
 
+	@Test
+	public void testEncryptedEtchPolicySignal() {
+		assertFalse(new Config(null).hasEncryptedEtchPolicy());
+		assertFalse(new Config(Maps.of(Config.ETCH,
+			Maps.of("version", 3, "cipher", "none"))).hasEncryptedEtchPolicy());
+		assertTrue(new Config(Maps.of(Config.ETCH,
+			Maps.of("version", 3, "cipher", "aes-256-ctr"))).hasEncryptedEtchPolicy());
+	}
+
 	// ========== did:web alias derivation (covia#167) ==========
 
 	@Test
@@ -223,8 +232,8 @@ public class ConfigTest {
 
 	@Test
 	public void testWebDIDForPublicDomain() {
-		Config c = new Config(Maps.of(Config.HOSTNAME, Strings.create("venue-1.covia.ai")));
-		assertEquals("did:web:venue-1.covia.ai", c.getWebDID().toString());
+		Config c = new Config(Maps.of(Config.HOSTNAME, Strings.create("venue.example.com")));
+		assertEquals("did:web:venue.example.com", c.getWebDID().toString());
 	}
 
 	@Test

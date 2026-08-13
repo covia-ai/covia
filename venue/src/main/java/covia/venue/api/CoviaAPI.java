@@ -41,6 +41,7 @@ import covia.grid.Venue;
 import covia.venue.api.model.ErrorResponse;
 import covia.venue.api.model.InvokeRequest;
 import covia.venue.api.model.InvokeResult;
+import covia.venue.AssetStore;
 import covia.venue.RequestContext;
 import covia.venue.SecretStore;
 import covia.venue.User;
@@ -295,10 +296,20 @@ public class CoviaAPI extends ACoviaAPI {
 					})	
 	protected void addAsset(Context ctx) {
 		try {
+			// Enforces the asset-store capability (consistent with the asset:store
+			// operation, AssetAdapter.handleStore) — registering new metadata is a
+			// write and must not be reachable by the default read-only public scope.
+			RequestContext rctx = AuthMiddleware.callerContext(ctx);
+			engine().requireAuthority(rctx, Strings.create(""), Abilities.ASSET_STORE);
+
 			AString meta=Strings.fromStream(ctx.bodyInputStream());
-			Hash id=venue.registerAsset(meta);
+			// A caller-created asset belongs to that caller's /a namespace. Venue
+			// catalog assets are installed internally and addressed explicitly.
+			Hash id=engine().storeUserAsset(meta, null, rctx);
 			buildResult(ctx,201,id.toHexString());
 			ctx.header("Location",ROUTE+"assets/"+id.toHexString());
+		} catch (AuthException e) {
+			buildError(ctx,403,"Not authorised to register asset metadata");
 		} catch (ClassCastException | IOException | ParseException e) {
 			throw new BadRequestResponse("Unable to parse asset metadata: "+e.getMessage());
 		}
@@ -323,6 +334,26 @@ public class CoviaAPI extends ACoviaAPI {
 	protected void getAsset(Context ctx) {
 		String ref=ctx.pathParam("id");
 		if (ref==null || ref.isEmpty()) throw new BadRequestResponse("Missing asset reference");
+		if ("venue".equals(ctx.queryParam("namespace"))) {
+			Hash hash = Hash.parse(ref);
+			if (hash == null) {
+				buildError(ctx,400,"Venue catalog lookup requires a bare asset hash");
+				return;
+			}
+			try {
+				Asset asset = venue.getAsset(hash);
+				if (asset == null) {
+					buildError(ctx,404,"Venue asset not found: "+ref);
+					return;
+				}
+				ctx.header("ETag","\"0x"+hash.toHexString()+"\"");
+				ctx.result(asset.getMetadata().toString());
+				ctx.status(200);
+			} catch (IOException e) {
+				buildError(ctx,500,"Error retrieving venue asset: "+e.getMessage());
+			}
+			return;
+		}
 
 		// Caller identity + transport UCAN authority (a bearer UCAN supplies the
 		// proof for cross-DID reads, per the IETF UCAN-HTTP convention).
@@ -366,14 +397,18 @@ public class CoviaAPI extends ACoviaAPI {
 	 */
 	private Asset resolveAssetReference(String ref, RequestContext ctx) throws IOException {
 		AString refStr = Strings.create(ref);
-		engine().requireAuthority(ctx,refStr, Abilities.ASSET_READ);
+		engine().requireResourceAccess(ctx,refStr, Abilities.ASSET_READ);
 
-		// Content-addressed forms (bare hex, a/<hash>, did:.../a/<hash>) — fetch
+		// Caller-relative content-addressed forms (bare hex and a/<hash>) — fetch
 		// the stored record so the returned bytes are byte-identical to the legacy
 		// assets/<hash> route, keeping content-addressed lookups self-verifying.
-		Hash hash = parseContentAddressedId(ref);
+		Hash hash = parseCallerAssetId(ref);
 		if (hash != null) {
-			return venue.getAsset(hash);
+			AString owner = engine().requireLocalAccess(ctx, refStr, Abilities.ASSET_READ);
+			AVector<?> record = engine().getAssetRecord(hash, owner);
+			if (record == null) return null;
+			AString metadata = RT.ensureString(record.get(AssetStore.POS_JSON));
+			return (metadata != null) ? Asset.create(hash, metadata) : null;
 		}
 
 		// Any other lattice address — resolve via the universal resolver (the same
@@ -393,15 +428,15 @@ public class CoviaAPI extends ACoviaAPI {
 	}
 
 	/**
-	 * Strict parse of a content-addressed asset id: a bare hex CAD3 hash,
-	 * {@code a/<hash>}, or a DID URL ending in {@code /a/<hash>}. Returns null
-	 * for mutable lattice paths ({@code w/…}, {@code o/…}), which are resolved
-	 * through the lattice instead.
+	 * Strict parse of a caller-relative content-addressed asset id: a bare hex
+	 * CAD3 hash or {@code a/<hash>}. DID URLs and mutable lattice paths return
+	 * null and are resolved with their explicit owner/path semantics.
 	 */
-	private static Hash parseContentAddressedId(String ref) {
-		int aPos = ref.indexOf("/a/");
-		if (aPos >= 0) return Hash.parse(ref.substring(aPos + 3));
+	private static Hash parseCallerAssetId(String ref) {
+		if (ref == null) return null;
+		if (ref.startsWith("/a/")) return Hash.parse(ref.substring(3));
 		if (ref.startsWith("a/")) return Hash.parse(ref.substring(2));
+		if (ref.startsWith("did:")) return null;
 		return Hash.parse(ref);
 	}
 	
@@ -432,30 +467,79 @@ public class CoviaAPI extends ACoviaAPI {
 					})	
 	protected void getContent(Context ctx) {
 		String id=ctx.pathParam("id");
-		Hash assetID=Hash.parse(id);
-
 		try {
-			Asset asset=venue.getAsset(assetID);
-			if (asset==null) {
+			if ("venue".equals(ctx.queryParam("namespace"))) {
+				Hash venueAssetID=Hash.parse(id);
+				if (venueAssetID==null) {
+					buildError(ctx,400,"Venue catalog lookup requires a bare asset hash");
+					return;
+				}
+				Asset asset=venue.getAsset(venueAssetID);
+				if (asset==null) {
+					buildError(ctx,404,"Venue asset not found: "+id);
+					return;
+				}
+				AMap<AString,ACell> meta=asset.meta();
+				if (!meta.containsKey(Fields.CONTENT)) {
+					buildError(ctx,404,"Asset metadata does not specify any content object: "+id);
+					return;
+				}
+				AContent content=asset.getContent();
+				if (content==null) {
+					buildError(ctx,404,"Asset did not have any content available: "+id);
+					return;
+				}
+				ACell contentMeta=meta.get(Fields.CONTENT);
+				ACell contentType=RT.getIn(contentMeta,Fields.CONTENT_TYPE);
+				if (contentType instanceof AString ct) ctx.contentType(ct.toString());
+				if (ctx.queryParam("inline")!=null) ctx.header("Content-Disposition","inline");
+				ACell fileName=RT.getIn(contentMeta,Fields.FILE_NAME);
+				if (fileName instanceof AString fn) ctx.header("filename",fn.toString());
+				ctx.result(content.getInputStream());
+				ctx.status(200);
+				return;
+			}
+
+			Hash assetID=parseCallerAssetId(id);
+			if (assetID==null) {
+				buildError(ctx,400,"Invalid caller asset reference: "+id);
+				return;
+			}
+
+			RequestContext rctx = AuthMiddleware.callerContext(ctx);
+			AString bearer = ctx.attribute(AuthMiddleware.UCAN_BEARER_ATTR);
+			rctx = AuthMiddleware.withTransportAuth(rctx, bearer, null, null, engine().didVerifier());
+			AString ref = Strings.create(id);
+			AString readAs = engine().requireLocalAccess(rctx, ref, Abilities.ASSET_READ);
+			AVector<?> record = engine().getAssetRecord(assetID, readAs);
+			if (record==null) {
 				buildError(ctx,404,"Asset not found: "+id);
 				return;
 			}
 
-			AMap<AString,ACell> meta=asset.meta();
+			AMap<AString,ACell> meta=RT.ensureMap(record.get(AssetStore.POS_META));
+			if (meta==null) {
+				buildError(ctx,500,"Stored asset metadata is invalid: "+id);
+				return;
+			}
 			if (!meta.containsKey(Fields.CONTENT)) {
 				buildError(ctx,404,"Asset metadata does not specify any content object: "+id);
 				return;
 			}
 
 			ACell contentMeta=meta.get(Fields.CONTENT);
-			AContent content = asset.getContent();
-			if (content==null) {
+			covia.venue.storage.ContentProvider.Resolved resolved =
+				engine().resolveContent(ref, rctx);
+			if (resolved==null) {
 				buildError(ctx,404,"Asset did not have any content available: "+id);
 				return;
 			}
+			AContent content = resolved.content();
 			ACell contentType=RT.getIn(contentMeta,Fields.CONTENT_TYPE);
 			if (contentType instanceof AString ct) {
 				ctx.contentType(ct.toString());
+			} else if (resolved.contentType()!=null) {
+				ctx.contentType(resolved.contentType());
 			}
 			if (ctx.queryParam("inline")!=null) {
 				ctx.header("Content-Disposition","inline");
@@ -468,8 +552,10 @@ public class CoviaAPI extends ACoviaAPI {
 
 			ctx.result(content.getInputStream());
 			ctx.status(200);
+		} catch (AuthException e) {
+			buildError(ctx,403,"Not authorised to read asset content: "+id);
 		} catch (IOException e) {
-			ctx.status(500);
+			buildError(ctx,500,"Error retrieving asset content: "+e.getMessage());
 		}
 	}
 	
@@ -492,14 +578,29 @@ public class CoviaAPI extends ACoviaAPI {
 					})	
 	protected void putContent(Context ctx) {
 		String idString=ctx.pathParam("id");
-		Hash assetID=Hash.parse(idString);
-
 		try {
-			Asset asset=venue.getAsset(assetID);
-			if (asset==null) {
+			Hash assetID=parseCallerAssetId(idString);
+			if (assetID==null) {
+				buildError(ctx,400,"Invalid caller asset reference: "+idString);
+				return;
+			}
+
+			RequestContext rctx = AuthMiddleware.callerContext(ctx);
+			AString bearer = ctx.attribute(AuthMiddleware.UCAN_BEARER_ATTR);
+			rctx = AuthMiddleware.withTransportAuth(rctx, bearer, null, null, engine().didVerifier());
+			AString ref = Strings.create(idString);
+			AString writeAs=engine().requireLocalAccess(rctx, ref, Abilities.ASSET_STORE);
+			AVector<?> record=engine().getAssetRecord(assetID, writeAs);
+			if (record==null) {
 				buildError(ctx,404,"Asset not found: "+idString);
 				return;
 			}
+			AString metadata=RT.ensureString(record.get(AssetStore.POS_JSON));
+			if (metadata==null) {
+				buildError(ctx,500,"Stored asset metadata is invalid: "+idString);
+				return;
+			}
+			Asset asset=Asset.create(assetID, metadata);
 
 			AMap<AString,ACell> meta=asset.meta();
 			if (!meta.containsKey(Fields.CONTENT)) {
@@ -508,9 +609,11 @@ public class CoviaAPI extends ACoviaAPI {
 			}
 
 			InputStream is=ctx.bodyInputStream();
-			Hash contentHash= venue.putAssetContent(asset,is);
+			Hash contentHash= engine().putContent(asset,is);
 			buildResult(ctx,200,contentHash);
 
+		} catch (AuthException e) {
+			buildError(ctx,403,"Not authorised to store asset content: "+idString);
 		} catch (IllegalArgumentException e) {
 			this.buildError(ctx, 400, "Cannot PUT asset content: "+e.getMessage());
 		} catch (IOException | OutOfMemoryError e) {
@@ -1003,6 +1106,8 @@ public class CoviaAPI extends ACoviaAPI {
 			description = "Streams the job's status record as SSE frames on every status change until "
 					+ "the job reaches a terminal state (the final record is the last frame; the stream "
 					+ "then closes). Poll-free alternative to GET /jobs/{id} for watching a running job. "
+					+ "Authenticated clients send the normal Authorization header; browser clients should "
+					+ "consume the stream with fetch/ReadableStream because native EventSource cannot set headers. "
 					+ "A missing or */* Accept header is treated as text/event-stream — the /sse path is "
 					+ "unambiguous; an explicit non-SSE Accept is rejected with 406.",
 			pathParams = { @OpenApiParam(name = "id", description = "Job ID (hex)") },
@@ -1016,8 +1121,15 @@ public class CoviaAPI extends ACoviaAPI {
 		// Ownership applies to the stream exactly as to GET /jobs/{id}: the
 		// record resolves under the caller's context or not at all.
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
-		if (engine().jobs().getJobData(id, rctx) == null) {
-			buildError(ctx, 404, "Job not found: " + id);
+		try {
+			if (engine().jobs().getJobData(id, rctx) == null) {
+				buildError(ctx, 404, "Job not found: " + id);
+				return;
+			}
+		} catch (AuthException e) {
+			// Match GET /jobs/{id}: ownership denials are ordinary API errors,
+			// never unhandled exceptions after an SSE client probes a foreign id.
+			buildError(ctx, 403, e.getMessage());
 			return;
 		}
 

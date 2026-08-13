@@ -16,6 +16,9 @@ covia/                          # ai.covia:covia (parent POM)
 │       ├── grid/auth/          #   Auth strategies: NoAuth, BearerAuth, KeyPairAuth, LocalAuth
 │       ├── grid/client/        #   HTTP client implementation (VenueHTTP)
 │       └── grid/impl/          #   Content implementations (BlobContent, LatticeContent)
+├── covia-python/               # Dependency-light Java FFM bridge to embedded CPython
+├── covia-python-adapter/       # Optional Python operations venue module
+│                               #   (shaded "module" jar, not in covia.jar)
 ├── venue/                      # Main venue server runtime (produces covia.jar)
 │   └── src/main/java/covia/
 │       ├── adapter/            #   Adapter framework and implementations
@@ -50,7 +53,7 @@ covia/                          # ai.covia:covia (parent POM)
 
 - **Java 21+** (JDK; the published Docker image runs on Java 25)
 - **Maven 3.7+** (enforced by maven-enforcer-plugin)
-- **Convex 0.8.11** — pinned to the Maven Central release. A clean clone builds in one command (`mvn clean install`); no local Convex build is needed. To track an unreleased Convex, build it locally (`mvn install -DskipTests` from `../convex`) and point `convex.version` at its `-SNAPSHOT`; CI compiles Convex from source automatically whenever `convex.version` ends in `-SNAPSHOT`.
+- **Convex 0.8.12** — released artifacts resolve directly from Maven Central, including the explicit JWT `kid` API required by #352. No sibling Convex checkout or source build is required.
 
 ## Build & Run
 
@@ -90,13 +93,13 @@ mvn test -pl covia-core
 
 | Dependency | Version | Purpose |
 |------------|---------|---------|
-| Convex | 0.8.11 | Lattice platform, immutable data, cryptography |
+| Convex | 0.8.12 | Lattice platform, immutable data, cryptography |
 | Javalin | 7.2.2 | HTTP server with OpenAPI/Swagger/ReDoc |
 | LangChain4j | 1.18.1 | LLM orchestration (OpenAI, Ollama, Gemini, DeepSeek) |
 | MCP SDK | 2.0.0 | Model Context Protocol |
 | A2A | 1.2.0.Final | Agent-to-Agent protocol |
 | JUnit | 6.1.3 | Testing |
-| SLF4J/Logback | 2.0.18/1.6.0 | Logging |
+| SLF4J/Logback | 2.0.18/1.6.1 | Logging |
 
 ## Architecture Overview
 
@@ -140,7 +143,7 @@ Defined in code at `venue/src/main/java/covia/lattice/Covia.java`. Full design i
 - **SSE** — Server-sent events for real-time job updates (`/api/v1/jobs/{id}/sse`)
 - **MCP** — Model Context Protocol JSON-RPC endpoint
 - **A2A** — Agent-to-Agent federated protocol
-- **DID** — Decentralized identifiers for venue discovery (`/.well-known/did.json`). A venue with a public `hostname` presents `did:web:<hostname>` as its identity (`id` = did:web, the did:key in `alsoKnownAs` as an informational cross-reference — never a canonical identity to re-bind to); without one, the did:key is the identity. Consumers respect the presented identity as-is (#167, #343). Internally, durable state still roots in the did:key pending the operator-declared identity flip (#343 Phase B)
+- **DID** — Decentralized identifiers for venue discovery (`/.well-known/did.json`). A venue may declare `did:web:<hostname>` as its stable identity; otherwise its key-derived `did:key` remains the identity. Consumers preserve the presented DID as-is (`alsoKnownAs` is informational, never a rebinding instruction). Remote routing and signature verification dispatch by DID method: `did:key` and `did:web` are built in, while future methods such as `did:convex` plug in without changing federation or UCAN code (#167, #343).
 
 ## Development Conventions
 
@@ -220,16 +223,17 @@ The list below tracks engineering tasks. For the developer-experience and open-s
 - [ ] **Wire LatticeContent into pinned content-addressable storage** — the `AContent` view over content pinned in the lattice `:data` region (content rides state replication, addressed by hash; pairs with `asset:pin`). Implemented and unit-tested; awaiting its consumer in the storage backend / client SDK.
   - File: `covia-core/.../grid/impl/LatticeContent.java`
 
-- [ ] **Add VenueHTTP test coverage** — HTTP client layer has zero tests. Cover invoke, polling, content upload/download, error handling.
+- [x] **Add VenueHTTP test coverage** — real-venue contract tests cover direct run, status, polling and caller-side timeouts, content round-trips, concurrent use, authentication, and error paths. Deterministic client tests cover 429 retry/backoff behavior.
+  - Files: `venue/src/test/java/covia/grid/client/VenueHTTPTest.java`, `covia-core/src/test/java/covia/grid/client/VenueHTTPRetryTest.java`
+
+- [x] **Complete auth strategy tests** — `KeyPairAuth` has deterministic claim/signing tests, bearer authentication and rejection paths run against real venues, and unsupported token minting is covered. Focused tests also cover constructor/header behavior for `NoAuth` and `BearerAuth`, plus `LocalAuth` DID propagation and no-header behavior through the in-process path.
   - Directory: `covia-core/src/test/java/`
 
-- [ ] **Add auth strategy tests** — No tests for BearerAuth, KeyPairAuth, NoAuth, LocalAuth.
-  - Directory: `covia-core/src/test/java/`
+- [x] **Add SSRF and CORS regression coverage** — HTTPAdapter allow/block policy, private/loopback targets, invalid schemes, configured CORS origins, loopback/PNA behavior, and disabled CORS are covered.
+  - Files: `venue/src/test/java/covia/adapter/http/HTTPTest.java`, `venue/src/test/java/covia/venue/VenueServerTest.java`
 
-- [ ] **Add missing test coverage** — Several implemented features lack dedicated tests:
-  - SSRF protection in HTTPAdapter (URL allowlist/blocklist validation)
-  - CORS configuration (`Config.CORS`)
-  - /config endpoint redaction (public info only)
+- [x] **Add remaining focused test coverage**:
+  - `/config` page redaction (public info only)
   - LangChainAdapter IO timeout
   - Thread safety of `Asset.meta()` (concurrent access)
 
@@ -245,7 +249,7 @@ The list below tracks engineering tasks. For the developer-experience and open-s
 - [ ] **Capability negotiation** — Discovery endpoint for venue capabilities via DID documents
 - [ ] **Signed operations** — Cryptographic attribution for every job submission
 - [ ] **Compliance reporting** — Data lineage tracking and audit log queries
-- [ ] **Workbench expansion** — Currently 3 files / 180 LOC demo; add configuration, multi-operation support, proper logging
+- [ ] **Workbench expansion** — Currently a 3-file / ~155-line demo; add configuration, multi-operation support, proper logging
 - [ ] **Job restart API** — Consider `PUT /api/v1/jobs/{id}/restart` for re-running failed/cancelled/completed jobs. Semantics need thought: new job with same input? Same job ID? How to handle operations that have changed since original invocation? May be better as a client-side convenience (re-invoke with original params) rather than a server primitive.
 
 ## Module-Specific Guides

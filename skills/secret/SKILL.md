@@ -42,7 +42,7 @@ Removes the caller's own secret — whole records only (`s/<NAME>`; deeper paths
 
 | Secret Name | Used By | Required For |
 |-------------|---------|-------------|
-| `OPENAI_API_KEY` | `langchain:openai` | LLM agents using OpenAI (gpt-4o, etc.) |
+| `OPENAI_API_KEY` | `langchain:openai` | LLM agents using OpenAI (GPT-5.6 family, etc.) |
 | `DEEPSEEK_API_KEY` | `langchain:openai` (with custom url) | DeepSeek models |
 | `GEMINI_API_KEY` | `langchain:openai` (with custom url) | Google Gemini models |
 

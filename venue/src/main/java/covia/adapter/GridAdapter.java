@@ -22,8 +22,10 @@ import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.Venue;
 import covia.grid.auth.VenueAuth;
+import covia.grid.auth.VenueDID;
 import covia.venue.LocalVenue;
 import covia.venue.RequestContext;
+import covia.venue.UcanJwtValidator;
 
 /**
  * Adapter that proxies Covia grid operations to the local engine or a remote venue.
@@ -236,7 +238,8 @@ public class GridAdapter extends AAdapter {
 
         boolean relayAsSelf = hasRelayInstruction(tokens, ctx.getCallerDID(), venueDID);
         VenueAuth auth = relayAsSelf
-            ? VenueAuth.keyPair(engine.getKeyPair())
+            ? VenueAuth.identityKeyPair(engine.getKeyPair(), venueDID.toString(),
+				targetVenueDID(venueSpec))
             : VenueAuth.none();
 
         // The principal acting at the target: this venue when relaying as itself
@@ -247,6 +250,13 @@ public class GridAdapter extends AAdapter {
         venue.setUcans(admissibleTokens(ctx, tokens, principal));
         return venue;
     }
+
+	/** Resolve the target identity once for audience-bound venue authentication. */
+	private static String targetVenueDID(AString venueSpec) {
+		String target = venueSpec.toString();
+		if (target.startsWith("did:")) return target;
+		return VenueDID.discover(target);
+	}
 
 	/**
 	 * Writes a value at a mutable path hosted by another venue.
@@ -346,7 +356,7 @@ public class GridAdapter extends AAdapter {
             AString jwt = RT.ensureString(raw.get(i));
             if (jwt != null) {
                 try {
-                    token = UCANValidator.validateJWT(jwt, now, verifier);
+                    token = UcanJwtValidator.validateJWT(jwt, now, verifier);
                 } catch (Exception e) {
                     // defective token: null slot, grants nothing
                 }

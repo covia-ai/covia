@@ -887,11 +887,11 @@ public class Config {
 	 * {@code did:web:<hostname>} when the hostname is a genuine public domain,
 	 * null otherwise (default/localhost, IP literals, host:port forms).
 	 *
-	 * <p>The alias is <b>discovery only</b> (covia#167): it makes the document
-	 * at {@code /.well-known/did.json} strictly did:web-resolvable. The venue's
-	 * canonical identity remains its did:key — nothing durable (lattice keys,
-	 * UCAN issuer, signatures, asset DID URLs) ever references the did:web
-	 * form, so a domain change or lapse cannot break stored state.</p>
+	 * <p>When {@code did} explicitly declares this value it is the venue's
+	 * identity. Otherwise it is the DID document's discovery identity and the
+	 * key-derived {@code did:key} remains the configured identity. Consumers
+	 * always retain whichever DID the venue actually presents; they never
+	 * re-bind through {@code alsoKnownAs}.</p>
 	 *
 	 * @return {@code did:web:<hostname>}, or null if the hostname is not public
 	 */
@@ -956,11 +956,11 @@ public class Config {
 	 * venue can default to a different provider (e.g. Anthropic) without code
 	 * changes. Per-provider default <em>models</em> remain in the provider
 	 * adapter — a single venue model default cannot be right across providers.
-	 * @return configured op, or {@code "v/ops/langchain/openai"} if unset
+	 * @return configured op, or {@code "v/ops/langchain/anthropic"} if unset
 	 */
 	public AString getDefaultLlmOperation() {
 		AString v = RT.ensureString(config.get(DEFAULT_LLM_OPERATION));
-		return (v != null) ? v : Strings.intern("v/ops/langchain/openai");
+		return (v != null) ? v : Strings.intern("v/ops/langchain/anthropic");
 	}
 
 	/**
@@ -1174,6 +1174,21 @@ public class Config {
 	 */
 	public convex.etch.EtchConfig getEtchConfig() {
 		return getEtchConfig(null);
+	}
+
+	/**
+	 * Whether venue configuration declares an Etch policy that encrypts stored
+	 * values. This is a configuration signal for operator warnings; it does not
+	 * resolve or expose key material.
+	 *
+	 * @return true when {@code etch.cipher} is configured to a non-{@code none}
+	 *         cipher
+	 */
+	public boolean hasEncryptedEtchPolicy() {
+		AMap<AString, ACell> etch = RT.castMap(config.get(ETCH));
+		if (etch == null) return false;
+		AString cipher = RT.ensureString(etch.get(Strings.intern("cipher")));
+		return cipher != null && !"none".equalsIgnoreCase(cipher.toString());
 	}
 
 	/**
@@ -1405,7 +1420,7 @@ public class Config {
 	 *     "roots": {
 	 *       "workspace": "/srv/agent-workspace",
 	 *       "data":      { "path": "/srv/data", "readOnly": true },
-	 *       "mina":      { "dlfs": "vault", "subpath": "Made by Mina" }
+ *       "documents": { "dlfs": "vault", "subpath": "agent-output" }
 	 *     }
 	 *   }
 	 * }

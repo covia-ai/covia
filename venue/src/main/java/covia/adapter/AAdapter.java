@@ -190,9 +190,10 @@ public abstract class AAdapter {
 
 	/**
 	 * Installs an agent template under {@code /v/agents/templates/<catalogPath>}.
-	 * Templates are flat config maps (systemPrompt, tools, caps, etc.) used by
-	 * {@code agent:create} via {@code config="v/agents/templates/<name>"} —
-	 * just standard lattice path resolution, no special-case lookup.
+	 * Templates are ordinary content-addressed assets with reusable construction
+	 * data under their {@code agent.config} facet. {@code agent:create} accepts
+	 * the catalog path as one ordered config layer; resolution uses the standard
+	 * lattice/asset path machinery, with no template-only lookup subsystem.
 	 *
 	 * @param catalogPath The template name (e.g. {@code "manager"})
 	 * @param resourcePath Resource path of the template JSON

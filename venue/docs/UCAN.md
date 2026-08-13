@@ -244,6 +244,15 @@ per UCAN v0.10.0 (Convex #678), in the Convex UCAN JWT profile (`ucv` claim +
 mint under a granting right requires the enabling right to be non-expiring too
 (the §4.1 horizon check evaluates at an unbounded horizon).
 
+Venues always emit `ucv: "0.10.0"` and an explicit `prf` array, and advertise
+that emitted profile as `ucanProfile` in `GET /api/v1/status`. At verification
+the venue remains compatible with correctly signed older client tokens: an
+absent `ucv` defaults to the current profile and an absent `prf` defaults to an
+empty proof chain. An explicitly different `ucv`, malformed claim, invalid
+signature, or invalid proof chain still fails closed with a specific diagnostic.
+Defaults are applied only after the signature over the original JWT bytes has
+been verified.
+
 The venue signs the token with the **venue key pair** (the venue is the
 issuer — custodial attestation on the authenticated caller's instruction)
 and returns the complete signed token. A self-sovereign owner (`did:key`, or
@@ -527,11 +536,12 @@ Venue:
 |-------|-------------------|
 | `covia:read` / `covia:list` / `covia:slice` (cross-user) | `{ with: "<path>", can: "crud/read" }` |
 | `covia:write` / `covia:delete` / `covia:append` (cross-user) | `{ with: "<path>", can: "crud/write" }` |
-| `file:read` / `file:list` / `file:stat` / `file:roots` | `{ with: "file://<root>/<path>", can: "crud/read" }` |
-| `file:write` / `file:append` / `file:mkdir` | `{ with: "file://<root>/<path>", can: "crud/write" }` |
-| `file:move` | `crud/write` on both resolved `file://<source-root>/<from>` and `file://<destination-root>/<to>` |
+| `file:read` / `file:list` / `file:stat` | `crud/read` on the resolved resource: `file://<root>/<path>` for host/temp roots, canonical `dlfs/<drive>/<path>` for DLFS targets |
+| `file:roots` | `{ with: "file://", can: "crud/read" }` |
+| `file:write` / `file:append` / `file:mkdir` | `crud/write` on the resolved file or DLFS resource |
+| `file:move` | `crud/write` on both resolved source and destination resources |
 | `file:copy` | `crud/read` on the resolved source and `crud/write` on the resolved destination |
-| `file:delete` | `{ with: "file://<root>/<path>", can: "crud/delete" }` |
+| `file:delete` | `crud/delete` on the resolved file or DLFS resource |
 | `dlfs:read` / `dlfs:list` / `dlfs:stat` / `dlfs:listDrives` | `{ with: "dlfs/<drive>/<path>", can: "crud/read" }` |
 | `dlfs:write` / `dlfs:append` / `dlfs:mkdir` / `dlfs:createDrive` | `{ with: "dlfs/<drive>/<path>", can: "crud/write" }` |
 | `dlfs:delete` / `dlfs:deleteDrive` | `{ with: "dlfs/<drive>/<path>", can: "crud/delete" }` |
@@ -557,7 +567,12 @@ naturally:
 | `file://scratch/` | every path inside the `scratch` root |
 | `file://scratch/agent-output/` | one subtree of one root |
 | `dlfs/` | every drive of the owner |
-| `dlfs/health-vault/medications/` | one subtree of one drive |
+| `dlfs/vault/documents/` | one subtree of one drive |
+
+A configured File root backed by DLFS is only an addressing alias and subtree
+jail. It does not create a second `file://` authority for the same data: File
+operations enforce the underlying canonical DLFS resource. File operations can
+also consume canonical own-drive and owner-DID DLFS references directly.
 
 Granting `crud` (without a verb suffix) covers read+write+delete uniformly;
 trailing-slash on the resource is the conventional way to cover a subtree.
@@ -567,7 +582,7 @@ checks (a *grant* of access to someone else's resource). A caller running under
 a **narrower Authority** — an agent started with `config.caps` (§5.4) — has the
 same capability check applied to its **own** operations as a *scope*: the op's
 resource and each grant's `with` are canonicalised to absolute owner-scoped form
-(a bare `w/health/bp` → `<callerDID>/w/health/bp`; DID-URL and `file://`/`dlfs://`
+(a bare `w/records/item` → `<callerDID>/w/records/item`; DID-URL and `file://`/`dlfs://`
 left as-is), then matched with `Capability.covers`. Own and cross-user resources
 thus match by one rule. A caller with no scope (the null-caps fast path) holds
 the full implicit grant and is unaffected.
@@ -1089,7 +1104,7 @@ attenuation, temporal, revocation) is shared with the single-venue path.
 | Transport encoding | DAG-JSON or JWT | JWT (interop transport); CVM JSON for lattice-native exchange |
 | Storage | Application-specific | Lattice `/a/` namespace (content-addressable, replicated) |
 | Key types | Ed25519, P-256, secp256k1 | Ed25519 (Convex native) |
-| DID methods | Any | `did:key` (primary), `did:web`, `did:convex` |
+| DID methods | Any | Built in: `did:key`, `did:web`; method resolvers are extensible (for example future `did:convex`) |
 | Revocation | Application-specific | Lattice-native signed records |
 | Merge semantics | None (tokens are immutable) | CAS lattice merge (immutable, union) |
 

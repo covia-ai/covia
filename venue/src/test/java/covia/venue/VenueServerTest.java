@@ -13,6 +13,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
@@ -28,6 +29,7 @@ import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestInstance.Lifecycle;
 import org.junit.jupiter.api.io.TempDir;
 
+import convex.auth.ucan.UCAN;
 import convex.core.crypto.Hashing;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -44,6 +46,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
+import covia.exception.ResponseException;
 import covia.grid.AContent;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -119,6 +122,54 @@ public class VenueServerTest {
 			assertTrue(root.headers().firstValue("content-type").orElse("")
 				.startsWith("text/html"));
 			assertTrue(root.body().contains("<h1>Mine</h1>"));
+		} finally {
+			server.close();
+		}
+	}
+
+	private void awaitClientStatus(Job job, AString expected, long timeoutMs) {
+		TestEngine.awaitCondition(() -> {
+			try {
+				covia.updateJobStatus(job);
+				return expected.equals(job.getStatus());
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				throw new AssertionError("interrupted while polling remote job", e);
+			} catch (ExecutionException | TimeoutException e) {
+				return false;
+			} catch (RuntimeException e) {
+				return false;
+			}
+		}, timeoutMs, () -> "remote job did not reach " + expected
+			+ " (status=" + job.getStatus() + ")");
+	}
+
+	@Test
+	public void testConfigPageExposesOnlyPublicSummary() throws Exception {
+		String clientId = "oauth-client-id-marker";
+		String clientSecret = "oauth-client-secret-marker";
+		VenueServer server = VenueServer.launch(Maps.of(
+			Config.PORT, 0,
+			Config.BIND_ADDRESS, "127.0.0.1",
+			Config.NAME, "redaction-test-venue",
+			Config.AUTH, Maps.of(
+				Config.OAUTH, Maps.of(
+					"github", Maps.of(
+						Config.CLIENT_ID, clientId,
+						Config.CLIENT_SECRET, clientSecret)))));
+		try {
+			HttpResponse<String> response = HttpClient.newHttpClient().send(
+				HttpRequest.newBuilder()
+					.uri(new URI("http://127.0.0.1:" + server.port() + "/config"))
+					.GET().timeout(Duration.ofSeconds(5)).build(),
+				HttpResponse.BodyHandlers.ofString());
+			assertEquals(200, response.statusCode());
+			assertTrue(response.body().contains("redaction-test-venue"),
+				"the public venue name should remain useful");
+			assertFalse(response.body().contains(clientId),
+				"the page must not dump OAuth configuration");
+			assertFalse(response.body().contains(clientSecret),
+				"the page must never expose OAuth secrets");
 		} finally {
 			server.close();
 		}
@@ -402,7 +453,9 @@ public class VenueServerTest {
 		);
 		
 		// Invoke the operation via the client
-		assertThrows(Exception.class,()->covia.invokeAndWait(Hash.get(CVMLong.ONE),input));
+		CompletionException error = assertThrows(CompletionException.class,
+				() -> covia.invokeAndWait(Hash.get(CVMLong.ONE), input));
+		assertTrue(error.getCause() instanceof ResponseException);
 
 	}
 	
@@ -422,6 +475,8 @@ public class VenueServerTest {
 		ACell version = status.get(Fields.VERSION);
 		assertNotNull(version, "status must include a non-null version");
 		assertFalse(version.toString().isEmpty(), "version must not be empty");
+		assertEquals(UCAN.VERSION, status.get(Fields.UCAN_PROFILE),
+			"status must advertise the UCAN JWT profile emitted by the venue");
 	}
 	
 	@Test
@@ -433,8 +488,6 @@ public class VenueServerTest {
 		
 		// Start the operation via the client. Should start but not complete
 		Job job = covia.startJob(TestOps.NEVER, input);
-		Thread.sleep(50);
-		covia.updateJobStatus(job);
 		AString status=job.getStatus();
 		assertEquals(Status.STARTED,status);
 		assertFalse(job.isFinished());
@@ -451,10 +504,9 @@ public class VenueServerTest {
 		Job job=covia.startJob(TestOps.NEVER, input);
 		assertEquals(Status.STARTED,job.getStatus());
 		
-		// Step 2: Check the status again after a brief pause
-		Thread.sleep(50);
-		covia.updateJobStatus(job);
-	
+		// Step 2: Re-read the durable status without relying on timing.
+		awaitClientStatus(job, Status.STARTED, 5000);
+
 		Blob jobId = job.getID();
 		assertNotNull(jobId, "Job ID should be returned");
 		String jobIdStr = jobId.toHexString();
@@ -488,8 +540,6 @@ public class VenueServerTest {
 	public void testPauseAndResumeNeverOp() throws Exception {
 		// Start a never-completing job
 		Job job = covia.startJob(TestOps.NEVER, Maps.of(Fields.MESSAGE, "pause test"));
-		Thread.sleep(50);
-		covia.updateJobStatus(job);
 		assertEquals(Status.STARTED, job.getStatus(), "Job should be STARTED");
 		String jobId = job.getID().toHexString();
 
@@ -515,15 +565,14 @@ public class VenueServerTest {
 	public void testPauseOpResumeViaAPI() throws Exception {
 		// Start the auto-pausing operation
 		Job job = covia.startJob(TestOps.PAUSE, Maps.of(Fields.MESSAGE, "pause op test"));
-		Thread.sleep(50);
-		covia.updateJobStatus(job);
+		awaitClientStatus(job, Status.PAUSED, 5000);
 		assertEquals(Status.PAUSED, job.getStatus(), "Pause op should auto-pause");
 		String jobId = job.getID().toHexString();
 
 		// Generic resume must not re-invoke an operation from persisted input:
 		// that could duplicate effects. This adapter exposes message-based resume
 		// for the pause op instead, so the generic endpoint rejects it.
-		assertThrows(Exception.class,
+		assertThrows(ExecutionException.class,
 				() -> covia.resumeJob(jobId).get(5, TimeUnit.SECONDS));
 
 		// Cancel to clean up

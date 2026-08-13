@@ -22,6 +22,7 @@ import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.auth.VenueAuth;
+import covia.grid.auth.UcanTokens;
 import covia.grid.client.VenueHTTP;
 import covia.venue.TwoVenueTestServer;
 
@@ -45,6 +46,8 @@ public class CrossVenueTest {
 	public void venuesHaveDistinctDIDs() {
 		assertNotEquals(TwoVenueTestServer.DID_A, TwoVenueTestServer.DID_B,
 			"Each venue must have its own DID — distinct seeds in TwoVenueTestServer");
+		assertTrue(TwoVenueTestServer.DID_A.startsWith("did:web:"));
+		assertTrue(TwoVenueTestServer.DID_B.startsWith("did:web:"));
 	}
 
 	@Test
@@ -231,7 +234,7 @@ public class CrossVenueTest {
 	 * Alice ({@code did:key}, holding data on venue B) signs a delegation to Bob
 	 * herself; Bob presents it to venue B over HTTP (the request-body {@code ucans}
 	 * channel) while authenticating as himself (self-issued did:key JWT). Venue B
-	 * verifies the token's signature at ingress ({@code DIDVerifier.CONVEX}) and
+	 * verifies the token's signature at ingress through its DID-method resolver and
 	 * the chain root against the resource owner ({@code RootAuthorityPolicy
 	 * .SELF_SOVEREIGN}) — <b>no venue ever issued or attested anything</b>: the
 	 * whole trust path is Alice's own key. This was the pinned spec gap of
@@ -292,9 +295,7 @@ public class CrossVenueTest {
 	/** Mints an identity token: a UCAN with EMPTY att, audienced to {@code venueDID}
 	 *  — pure proof of identity for that venue, unusable anywhere else. */
 	private static String identityToken(AKeyPair kp, String venueDID) {
-		long exp = (System.currentTimeMillis() / 1000) + 300;
-		return UCAN.create(kp, UCAN.fromDIDKey(Strings.create(venueDID)), exp,
-			Vectors.empty(), Vectors.empty()).toJWT(kp).toString();
+		return UcanTokens.identityToken(kp, venueDID, 300);
 	}
 
 	/**
@@ -370,13 +371,9 @@ public class CrossVenueTest {
 
 		// One token: Alice → venue A, granting read over her namespace AND the
 		// relay instruction (venue/relay over her own DID).
-		long exp = (System.currentTimeMillis() / 1000) + 3600;
-		String toVenueA = UCAN.create(aliceKP,
-			UCAN.fromDIDKey(Strings.create(TwoVenueTestServer.DID_A)), exp,
-			Vectors.of(
-				Capability.create(Strings.create(aliceDID + "/w/"), Capability.CRUD_READ),
-				Capability.create(aliceDID, Strings.create("venue/relay"))),
-			Vectors.empty()).toJWT(aliceKP).toString();
+		String toVenueA = UcanTokens.relayDelegation(aliceKP,
+			TwoVenueTestServer.DID_A, 3600,
+			aliceDID + "/w/", Capability.CRUD_READ.toString());
 
 		VenueHTTP aliceOnA = VenueHTTP.create(
 			URI.create(TwoVenueTestServer.BASE_URL_A), VenueAuth.keyPair(aliceKP));
@@ -407,12 +404,8 @@ public class CrossVenueTest {
 		AKeyPair carolKP = AKeyPair.generate();
 
 		// Bob (not Carol) mints a venue/relay token for venue A.
-		long exp = (System.currentTimeMillis() / 1000) + 3600;
-		String bobRelay = UCAN.create(bobKP,
-			UCAN.fromDIDKey(Strings.create(TwoVenueTestServer.DID_A)), exp,
-			Vectors.of(Capability.create(
-				UCAN.toDIDKey(bobKP.getAccountKey()), Strings.create("venue/relay"))),
-			Vectors.empty()).toJWT(bobKP).toString();
+		String bobRelay = UcanTokens.relayDelegation(bobKP,
+			TwoVenueTestServer.DID_A, 3600);
 
 		// Carol presents Bob's token: issuer != caller → not an instruction from
 		// Carol → anonymous hop → denied at B.

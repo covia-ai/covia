@@ -1,13 +1,14 @@
 {
   "name": "Read Vault File",
-  "description": "Read a file from the user's health vault. The 'mode' parameter controls how the file is returned: 'auto' (default) returns UTF-8 text for text files, or a reference with a WebDAV URL for binaries; 'text' forces UTF-8 decoding; 'bytes' returns base64-encoded bytes; 'json' parses the file as JSON and returns the value. For binary files, prefer fetching via the WebDAV GET transport at /dlfs/health-vault/{path} rather than using 'bytes' mode.",
+  "description": "Read a file from the user's personal vault. The 'mode' parameter controls how the file is returned: 'auto' (default) returns UTF-8 text for text files, or a reference with a WebDAV URL for binaries; 'text' forces UTF-8 decoding; 'bytes' returns base64-encoded bytes; 'json' parses the file as JSON and returns the value. For binary files, prefer the returned WebDAV URL rather than using 'bytes' mode.",
   "creator": "Covia",
   "operation": {
     "adapter": "vault:read",
+    "toolName": "vault_read",
     "input": {
       "type": "object",
       "properties": {
-        "path": { "type": "string", "description": "File path within the vault (e.g. 'documents/blood-panel-q4.json')" },
+        "path": { "type": "string", "description": "File path within the vault (e.g. 'documents/report-q4.json')" },
         "mode": { "type": "string", "enum": ["auto", "text", "bytes", "json"], "description": "How to decode the file. Default 'auto'." }
       },
       "required": ["path"]

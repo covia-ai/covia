@@ -158,7 +158,7 @@ Input specs can be nested in maps to build structured inputs:
     "invoice": ["input", "invoice_text"],
     "metadata": ["const", {"source": "email"}]
   },
-  "wait": ["const", true]
+  "timeout": ["const", 30000]
 }
 ```
 
@@ -193,7 +193,7 @@ The `result` field assembles the orchestration's final output using the same ref
   { "op": "v/ops/agent/request", "input": {
       "agentId": ["const", "Analyser"],
       "input": {"vendors": [0, "value"], "orders": [1, "value"]},
-      "wait": ["const", true]
+      "timeout": ["const", 30000]
   }}
 ]
 ```
@@ -322,7 +322,7 @@ accidentally validating against a same-named local operation.
 
 ## Tips
 
-- **Use `wait: true`** on `agent:request` steps — without it the step completes immediately with just the task ID, and the next step won't have the agent's output.
+- **Set an appropriate `timeout` or use `outputPath`** on `agent:request` steps. The default waits about 5s; slow work otherwise returns a STARTED snapshot. Dependent steps must wait for/fetch the Job result, or read the successful `outputPath` receipt, before consuming it.
 - **Keep step count reasonable** — each step is a separate job invocation. For simple data transforms, consider doing them in a single agent prompt rather than adding orchestration steps.
 - **Name your orchestrations** clearly — the name and description appear in asset listings and help agents discover reusable pipelines.
 - **Test with `test:echo`** first — wire up your input/result specs using the echo adapter to verify data flow before switching to real operations.

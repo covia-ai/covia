@@ -108,7 +108,8 @@ public class UserAPITest {
 		AMap<AString, ACell> userMethod = RT.ensureMap(methods.get(1));
 		AString multikey = Strings.create(userKey.toString().substring("did:key:".length()));
 		assertEquals(Strings.create(userDID + "#" + multikey),
-			userMethod.get(Strings.create("id")));
+			userMethod.get(Strings.create("id")),
+			"named-token kid must be able to match this verification-method DID URL (#352)");
 		assertEquals(Strings.create(userDID), userMethod.get(Strings.create("controller")));
 		assertEquals(multikey, userMethod.get(Strings.create("publicKeyMultibase")));
 		assertEquals(keyID, RT.ensureVector(doc.get(Strings.create("assertionMethod"))).get(0));

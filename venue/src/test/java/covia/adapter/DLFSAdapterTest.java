@@ -7,6 +7,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import convex.core.data.ACell;
@@ -58,18 +62,18 @@ public class DLFSAdapterTest {
 		assertNotNull(drives);
 		long initialCount = drives.count();
 
-		// Create health-vault drive
-		result = run("v/ops/dlfs/create-drive", Maps.of("name", "health-vault"));
+		// Create test-drive drive
+		result = run("v/ops/dlfs/create-drive", Maps.of("name", "test-drive"));
 		assertEquals(true, RT.bool(RT.getIn(result, "created")));
 
 		// List should show it
 		result = run("v/ops/dlfs/list-drives", Maps.empty());
 		drives = RT.ensureVector(RT.getIn(result, "drives"));
 		assertEquals(initialCount + 1, drives.count());
-		assertTrue(drives.toString().contains("health-vault"));
+		assertTrue(drives.toString().contains("test-drive"));
 
 		// Creating same drive again is idempotent (lattice-backed)
-		result = run("v/ops/dlfs/create-drive", Maps.of("name", "health-vault"));
+		result = run("v/ops/dlfs/create-drive", Maps.of("name", "test-drive"));
 		assertTrue(RT.bool(RT.getIn(result, "created")));
 	}
 
@@ -94,19 +98,55 @@ public class DLFSAdapterTest {
 		assertEquals("utf-8", RT.ensureString(RT.getIn(result, "encoding")).toString());
 	}
 
+	/** Regression for covia#342 / Convex 0.8.12: directory entries must use the
+	 * complete sibling name, not only its first 32 characters. */
+	@Test
+	public void testSiblingNamesSharingThirtyTwoCharacterPrefixRemainDistinct() {
+		String drive = "prefix-collision";
+		String first = "x".repeat(32) + ".txt";
+		String second = "x".repeat(32) + " (2).txt";
+		run("v/ops/dlfs/create-drive", Maps.of("name", drive));
+
+		// Use the exact NIO shape from #342/GetMine rather than two adapter
+		// invocations. The old Convex provider truncated the directory-entry
+		// lookup key on this long-lived filesystem view, so a fresh cursor per
+		// adapter call could accidentally miss the original reproducer.
+		DLFSAdapter adapter = (DLFSAdapter) engine.getAdapter("dlfs");
+		Path dir = adapter.getDriveForIdentity(ALICE_DID.toString(), drive).getPath("/");
+		assertDoesNotThrow(() -> {
+			Files.writeString(dir.resolve(first), "one");
+			Files.writeString(dir.resolve(second), "two");
+		});
+		assertDoesNotThrow(() -> assertEquals("one", Files.readString(dir.resolve(first))));
+		assertDoesNotThrow(() -> assertEquals("two", Files.readString(dir.resolve(second))));
+
+		// A separate adapter/cursor view must observe both values as well.
+		ACell firstRead = run("v/ops/dlfs/read", Maps.of("drive", drive, "path", first));
+		ACell secondRead = run("v/ops/dlfs/read", Maps.of("drive", drive, "path", second));
+		assertEquals("one", RT.ensureString(RT.getIn(firstRead, "content")).toString());
+		assertEquals("two", RT.ensureString(RT.getIn(secondRead, "content")).toString());
+
+		AVector<?> entries = RT.ensureVector(RT.getIn(
+			run("v/ops/dlfs/list", Maps.of("drive", drive)), "entries"));
+		assertEquals(2, entries.count());
+		Set<String> names = new HashSet<>();
+		for (ACell entry : entries) names.add(RT.getIn(entry, "name").toString());
+		assertEquals(Set.of(first, second), names);
+	}
+
 	@Test
 	public void testMkdirAndList() {
 		run("v/ops/dlfs/create-drive", Maps.of("name", "test-dir"));
 
 		// Create directory
-		ACell result = run("v/ops/dlfs/mkdir", Maps.of("drive", "test-dir", "path", "medications"));
+		ACell result = run("v/ops/dlfs/mkdir", Maps.of("drive", "test-dir", "path", "documents"));
 		assertTrue(RT.bool(RT.getIn(result, "created")));
 
 		// Write file inside
 		run("v/ops/dlfs/write", Maps.of(
 			"drive", "test-dir",
-			"path", "medications/levothyroxine.json",
-			"content", "{\"dose\": \"75mcg\"}"
+			"path", "documents/report.json",
+			"content", "{\"status\": \"complete\"}"
 		));
 
 		// List root
@@ -114,14 +154,14 @@ public class DLFSAdapterTest {
 		AVector<?> entries = RT.ensureVector(RT.getIn(result, "entries"));
 		assertNotNull(entries);
 		assertEquals(1, entries.count());
-		assertEquals("medications", RT.getIn(entries.get(0), "name").toString());
+		assertEquals("documents", RT.getIn(entries.get(0), "name").toString());
 		assertEquals("directory", RT.getIn(entries.get(0), "type").toString());
 
-		// List medications dir
-		result = run("v/ops/dlfs/list", Maps.of("drive", "test-dir", "path", "medications"));
+		// List documents dir
+		result = run("v/ops/dlfs/list", Maps.of("drive", "test-dir", "path", "documents"));
 		entries = RT.ensureVector(RT.getIn(result, "entries"));
 		assertEquals(1, entries.count());
-		assertEquals("levothyroxine.json", RT.getIn(entries.get(0), "name").toString());
+		assertEquals("report.json", RT.getIn(entries.get(0), "name").toString());
 		assertEquals("file", RT.getIn(entries.get(0), "type").toString());
 	}
 

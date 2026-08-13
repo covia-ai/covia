@@ -8,6 +8,7 @@ import org.junit.jupiter.api.TestInfo;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -802,10 +803,18 @@ public class LLMAgentAdapterTest {
 		AVector<ACell> active = ctx.loadTools(engine);
 		assertEquals(1, active.count());
 		assertEquals("covia_read", RT.getIn(active.get(0), Fields.NAME).toString());
-		assertEquals("v/ops/covia/read", ctx.configToolMap.get("covia_read").toString());
+		assertEquals("v/ops/covia/read", ctx.dispatchRoutes().get("covia_read").toString());
 
 		adapter.handleContextUnload(Maps.of("path", "w/skills/alpha"), ctx);
 		assertEquals(0, ctx.loadTools(engine).count());
+		assertNull(ctx.dispatchRoutes().get("covia_read"),
+			"unload must retract the dispatch route as well as the visible tool");
+		ACell hallucinated = adapter.dispatchTool("covia_read",
+			Maps.of("path", "w/probe"), ctx.dispatchRoutes(), ctx.ctx,
+			ctx.toolCallTimeoutMs);
+		assertTrue(String.valueOf(hallucinated).startsWith("Error:"),
+			"a manually supplied call after unload must not use the former route: "
+				+ hallucinated);
 	}
 
 	@Test public void testSkillToolDedupAgainstFixedPalette() {
@@ -1065,6 +1074,190 @@ public class LLMAgentAdapterTest {
 	}
 
 	@Test
+	public void testLoadedValueRefreshesAfterToolWriteWithinSameTransition() {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of("path", "w/live-load", "value", "LOAD_VALUE_OLD"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "live-load-agent",
+			AgentState.KEY_CONFIG, Maps.of(
+				"llmOperation", "v/test/ops/skillllm",
+				"model", "load-refresh-test",
+				"tools", Vectors.of(Strings.create("v/ops/covia/write")),
+				Fields.LOADS, Maps.of("w/live-load", Maps.of("budget", 500L))),
+			Fields.MESSAGES, Vectors.of(Maps.of("content", "refresh the loaded value")),
+			Fields.SESSION, Maps.of(Fields.ID, Strings.create("live-load-session")));
+
+		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
+		assertEquals("LIVE_LOAD_REFRESHED",
+			RT.ensureString(RT.getIn(output, Fields.RESPONSE)).toString());
+	}
+
+	@Test
+	@SuppressWarnings("unchecked")
+	public void testParallelCompleteTaskPairsAllResultsAndSkipsLaterSideEffects() {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(
+				Fields.AGENT_ID, "parallel-task-agent",
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/llmagent/chat",
+					"llmOperation", "v/test/ops/taskllm",
+					"model", "parallel-task-complete-test",
+					"tools", Vectors.of(Strings.create("v/ops/covia/write")))),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job taskJob = engine.jobs().invokeOperation(
+			"v/ops/agent/request",
+			Maps.of(
+				Fields.AGENT_ID, "parallel-task-agent",
+				Fields.INPUT, Maps.of("task", "complete without the later write")),
+			RequestContext.of(ALICE_DID));
+		ACell taskResult = taskJob.awaitResult(10000);
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("parallel-task-agent");
+		TestEngine.awaitTimelineCount(agent, 1, 10000);
+		assertEquals(Status.COMPLETE, taskJob.getStatus());
+
+		ACell read = engine.jobs().invokeOperation(
+			"v/ops/covia/read",
+			Maps.of("path", "w/parallel-task-should-not-write"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		assertEquals(CVMBool.FALSE, RT.getIn(read, "exists"),
+			"a call after complete_task in the same batch must not execute");
+
+		AString sid = RT.ensureString(RT.getIn(taskResult, Fields.SESSION_ID));
+		assertNotNull(sid);
+		AMap<AString, ACell> session = agent.getSession(Blob.fromHex(sid.toString()));
+		AVector<ACell> frames = RT.ensureVector(session.get(Fields.FRAMES));
+		AVector<ACell> conversation = RT.ensureVector(
+			RT.getIn(frames.get(0), AgentState.KEY_CONVERSATION));
+
+		long callTurn = -1;
+		for (long i = 0; i < conversation.count(); i++) {
+			ACell calls = RT.getIn(conversation.get(i), "toolCalls");
+			if (calls instanceof AVector<?> v && v.count() == 2) {
+				callTurn = i;
+				break;
+			}
+		}
+		assertTrue(callTurn >= 0, "the parallel provider batch must be retained for audit");
+		AVector<ACell> retainedCalls = RT.ensureVector(
+			RT.getIn(conversation.get(callTurn), "toolCalls"));
+		assertInstanceOf(AMap.class, RT.getIn(retainedCalls.get(0), "arguments"));
+		assertInstanceOf(AMap.class, RT.getIn(retainedCalls.get(1), "arguments"),
+			"custom Level 3 JSON strings must be canonicalised before persistence");
+		ACell firstResult = conversation.get(callTurn + 1);
+		ACell secondResult = conversation.get(callTurn + 2);
+		assertEquals("tool", RT.getIn(firstResult, "role").toString());
+		assertEquals("call_complete_task", RT.getIn(firstResult, "id").toString());
+		assertEquals("tool", RT.getIn(secondResult, "role").toString());
+		assertEquals("call_after_complete_task", RT.getIn(secondResult, "id").toString());
+		assertEquals(CVMBool.TRUE, RT.getIn(secondResult, "isError"));
+
+		ACell followup = engine.jobs().invokeOperation(
+			"v/ops/agent/chat",
+			Maps.of(
+				Fields.AGENT_ID, "parallel-task-agent",
+				Fields.MESSAGE, "same session followup",
+				Fields.SESSION_ID, sid),
+			RequestContext.of(ALICE_DID)).awaitResult(10000);
+		assertEquals("NEXT_TURN_OK", RT.getIn(followup, Fields.RESPONSE).toString(),
+			"a fully paired terminal batch must leave the session reusable");
+	}
+
+	@Test
+	public void testParallelFailTaskPairsAllResultsAndSkipsLaterSideEffects() {
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+		AString agentId = Strings.create("parallel-fail-task-agent");
+		AMap<AString, ACell> config = Maps.of(
+			"llmOperation", "v/test/ops/taskllm",
+			"model", "parallel-task-fail-test",
+			"tools", Vectors.of(Strings.create("v/ops/covia/write")));
+		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(
+			Fields.AGENT_ID, agentId,
+			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		AgentState agent = engine.getVenueState().users().get(ALICE_DID)
+			.agent(agentId.toString());
+		Blob taskId = Blob.createRandom(new java.util.Random(), 16);
+		agent.addTask(taskId, Maps.of("task", "fail deliberately"));
+		ACell output = adapter.processChat(
+			RequestContext.of(ALICE_DID).withAgentId(agentId).withTaskId(taskId),
+			Maps.of(
+				Fields.AGENT_ID, agentId,
+				AgentState.KEY_CONFIG, config,
+				Fields.TASKS, Vectors.of(Maps.of(
+					Fields.JOB_ID, taskId.toHexString(),
+					Fields.INPUT, Maps.of("task", "fail deliberately"))),
+				Fields.MESSAGES, Vectors.empty()));
+
+		assertEquals("failed deliberately", RT.getIn(output, Fields.ERROR).toString());
+		assertNull(agent.getTasks().get(taskId));
+		ACell read = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of("path", "w/parallel-fail-task-should-not-write"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		assertEquals(CVMBool.FALSE, RT.getIn(read, "exists"));
+
+		AVector<ACell> turns = RT.ensureVector(RT.getIn(output, Fields.TURNS));
+		assertEquals("call_fail_task", RT.getIn(turns.get(1), "id").toString());
+		assertEquals("call_after_fail_task", RT.getIn(turns.get(2), "id").toString());
+		assertEquals(CVMBool.TRUE, RT.getIn(turns.get(2), "isError"));
+	}
+
+	@Test
+	public void testFailedTerminalLookingTaskCallDoesNotSuppressSibling() {
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), Maps.of(
+			Fields.AGENT_ID, "failed-terminal-looking-agent",
+			AgentState.KEY_CONFIG, Maps.of(
+				"llmOperation", "v/test/ops/taskllm",
+				"model", "failed-terminal-looking-test",
+				"tools", Vectors.of(Strings.create("v/test/ops/echo"))),
+			Fields.MESSAGES, Vectors.of(Maps.of("content", "continue after failure"))));
+
+		assertNotNull(RT.getIn(output, Fields.RESPONSE));
+		AVector<ACell> turns = RT.ensureVector(RT.getIn(output, Fields.TURNS));
+		assertEquals("call_invalid_complete_task", RT.getIn(turns.get(1), "id").toString());
+		assertEquals(CVMBool.TRUE, RT.getIn(turns.get(1), "isError"));
+		assertEquals("call_after_invalid_complete_task", RT.getIn(turns.get(2), "id").toString());
+		assertNull(RT.getIn(turns.get(2), "isError"),
+			"a failed complete_task must not suppress later calls in the batch");
+	}
+
+	@Test
+	public void testFlatAgentContextUsesSharedConversationElision() {
+		AMap<AString, ACell> frame = GoalTreeContext.createFrame("flat session");
+		frame = GoalTreeContext.appendTurn(frame, Maps.of("role", "user", "content", "first"));
+		frame = GoalTreeContext.appendTurn(frame, Maps.of(
+			"role", "assistant", "toolCalls", Vectors.of(
+				Maps.of("id", "old-call", "name", "covia_read", "arguments", "{}"))));
+		frame = GoalTreeContext.appendTurn(frame, Maps.of(
+			"role", "tool", "id", "old-call", "name", "covia_read", "content", "old"));
+		frame = GoalTreeContext.appendTurn(frame, Maps.of("role", "assistant", "content", "first done"));
+		frame = GoalTreeContext.appendTurn(frame, Maps.of("role", "user", "content", "second"));
+		frame = GoalTreeContext.appendTurn(frame, Maps.of(
+			"role", "assistant", "toolCalls", Vectors.of(
+				Maps.of("id", "live-call", "name", "covia_read", "arguments", "{}"))));
+
+		AVector<ACell> history = new ContextBuilder(engine, RequestContext.of(ALICE_DID))
+			.withConfig(Maps.empty())
+			.withFrameStack(Vectors.of((ACell) frame))
+			.build().history();
+
+		assertEquals(4, history.count());
+		assertEquals("first", RT.getIn(history.get(0), "content").toString());
+		assertEquals("first done", RT.getIn(history.get(1), "content").toString());
+		assertEquals("second", RT.getIn(history.get(2), "content").toString());
+		assertNotNull(RT.getIn(history.get(3), "toolCalls"),
+			"the active tool cycle must remain intact for the provider");
+	}
+
+	@Test
 	public void testCappedAgentCanCompleteTask() {
 		// Regression (covia#71 live testing): the task-lifecycle ops are
 		// self-scoped (agentId/taskId from the RequestContext) and must stay
@@ -1223,13 +1416,14 @@ public class LLMAgentAdapterTest {
 
 		// Poll the persisted record, not the active cache — a finished job is
 		// evicted from the cache and lives on as its lattice record.
-		AMap<AString, ACell> record = null;
-		long deadline = System.currentTimeMillis() + 15000;
-		while (System.currentTimeMillis() < deadline) {
-			record = engine.jobs().getJobData(taskJobId, RequestContext.of(ALICE_DID));
-			if (record != null && Job.isFinished(record)) break;
-			Thread.sleep(25);
-		}
+		AtomicReference<AMap<AString, ACell>> observed = new AtomicReference<>();
+		TestEngine.awaitCondition(() -> {
+			AMap<AString, ACell> current = engine.jobs().getJobData(
+				taskJobId, RequestContext.of(ALICE_DID));
+			observed.set(current);
+			return current != null && Job.isFinished(current);
+		}, 15000, () -> "task job did not finish; last record=" + observed.get());
+		AMap<AString, ACell> record = observed.get();
 		assertNotNull(record, "task job record must exist");
 		assertEquals(Status.COMPLETE, RT.getIn(record, Fields.STATUS));
 		ACell jobTokens = RT.getIn(record, Fields.TOKENS);
@@ -1443,6 +1637,7 @@ public class LLMAgentAdapterTest {
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("scoped-deny-agent");
+		TestEngine.awaitAgentStatus(agent, AgentState.SLEEPING, 2000);
 		assertEquals(AgentState.SLEEPING, agent.getStatus(),
 			"a handled denial is not an agent failure — no suspension, no loop");
 	}

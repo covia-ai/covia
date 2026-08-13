@@ -35,14 +35,14 @@ import covia.venue.RequestContext;
  * {@code budget}) — mirroring how invocability sits under the {@code operation}
  * facet. The body is the asset's content, resolved through the venue's
  * universal content resolution ({@link Engine#resolveContent}), falling back
- * to the {@code description}. Nothing is a skill by shape — something is
- * treated as a skill because it is referenced as one (a {@code config.skills}
- * source, a value in a skills directory, or the target of {@code skill_load}).</p>
- *
- * <p>Skill sources are positional: a <b>path</b> source is a directory whose
- * keys are skill names; an <b>asset ref</b> source is a single skill. Directory
- * values are asset metadata maps or string references to skill assets (the
- * template string-ref idiom, one hop). Inline bodies use the standard
+	 * to the {@code description}. A value is interpreted as a skill only through
+	 * an explicit skill surface: a {@code config.skills} source, an entry in a
+	 * skills directory, or the target of {@code skill_load}.</p>
+	 *
+	 * <p>Skill sources are positional: a path may resolve to a directory whose
+	 * keys are skill names or directly to one skill; an asset ref is also one
+	 * skill. Directory values are asset metadata maps or string references to
+	 * skill assets (the template string-ref idiom, one hop). Inline bodies use the standard
  * {@code content.inline} metadata declaration; SKILL.md YAML frontmatter in
  * any content supplies name/description when the metadata lacks them.</p>
  *
@@ -135,6 +135,14 @@ public final class Skills {
 				} else {
 					ACell value = engine.resolvePath(source, ctx);
 					if (value == null) continue;                     // absent → skip quietly
+					if (isSkillMetadata(value)) {
+						// A stable path to one skill (for example
+						// v/skills/workspace) is a first-class source. This lets
+						// templates curate a compact role-specific index without
+						// embedding content hashes or manufacturing directories.
+						addEntry(out, seen, describe(engine, ctx, source, value, source));
+						continue;
+					}
 					if (!(value instanceof AMap)) {
 						out.add(new SkillIndexEntry(null, null, source,
 							"not a skill directory (resolves to " + value.getClass().getSimpleName() + ")", null));
@@ -244,6 +252,16 @@ public final class Skills {
 				}
 				requireRead(engine, ctx, source);
 				ACell value = engine.resolvePath(source, ctx);
+				if (isSkillMetadata(value)) {
+					try {
+						ResolvedSkill s = resolveValue(engine, ctx, source, source, value, true);
+						if (name.equals(s.name())) return s;
+					} catch (RuntimeException e) {
+						// A broken single-skill source cannot match by name. Keep
+						// looking so later sources retain first-valid-match semantics.
+					}
+					continue;
+				}
 				if (!(value instanceof AMap)) continue;
 				ACell entry = ((AMap<?, ?>) value).get(Strings.create(name));
 				if (entry != null) {
@@ -254,6 +272,19 @@ public final class Skills {
 		}
 		throw new RuntimeException("skill '" + name + "' not found in skill sources"
 			+ (sources != null ? " " + sources : ""));
+	}
+
+	/** True when a resolved map is one skill rather than a directory of skills. */
+	private static boolean isSkillMetadata(ACell value) {
+		if (!(value instanceof AMap<?,?> map)) return false;
+		// The facet/content keys are unambiguous. name+description covers a
+		// contentless pure-toolset or instruction-only skill while avoiding
+		// misclassifying an ordinary directory containing a coincidentally named
+		// entry such as "description".
+		return map.containsKey(K_SKILL)
+			|| map.containsKey(Fields.CONTENT)
+			|| map.containsKey(Fields.OPERATION)
+			|| (map.containsKey(Fields.NAME) && map.containsKey(Fields.DESCRIPTION));
 	}
 
 	/**

@@ -1,9 +1,10 @@
 {
   "name": "List Vault Directory",
-  "description": "List files and directories in the user's health vault. Omit path to list the vault root.",
+  "description": "List files and directories in the user's personal vault. Omit path to list the vault root.",
   "creator": "Covia",
   "operation": {
     "adapter": "vault:list",
+    "toolName": "vault_list",
     "input": {
       "type": "object",
       "properties": {
@@ -20,7 +21,8 @@
             "properties": {
               "name": { "type": "string" },
               "type": { "type": "string" },
-              "size": { "type": "integer" }
+              "size": { "type": "integer" },
+              "modified": { "type": "integer", "description": "Last-modified epoch milliseconds" }
             }
           }
         }

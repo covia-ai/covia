@@ -13,7 +13,7 @@
 				"server": {
 					"type": "string",
 					"description": "HTTP(S) base URL or explicit /mcp endpoint for the MCP server; trailing slashes are accepted",
-					"examples":["https://venue-3.covia.ai","https://venue-3.covia.ai/mcp"]
+					"examples":["https://mcp.example.com","https://mcp.example.com/mcp"]
 				},
 				"token": {
 					"type": "string",

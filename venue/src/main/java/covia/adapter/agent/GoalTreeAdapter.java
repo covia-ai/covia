@@ -33,9 +33,10 @@ import covia.venue.RequestContext;
  * <p>Registered as operation {@code goaltree:chat}. Selected via agent config:</p>
  * <pre>{@code {"operation": "v/ops/goaltree/chat"}}</pre>
  *
- * <p>Each transition creates a fresh root frame from the incoming work. The frame
- * stack is in-memory during execution; between transitions only the root frame's
- * conversation is persisted in agent state.</p>
+ * <p>A session owns one persistent root frame. Each transition appends its
+ * incoming work to that frame; child frames are pushed temporarily for
+ * subgoals. For sessioned runs every mutation is written live to the lattice
+ * through an epoch-fenced frame store.</p>
  *
  * <h3>Why this design exists — read before "simplifying"</h3>
  *
@@ -191,14 +192,15 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			+ "Use for rules, schemas, or reference material you need to consult "
 			+ "repeatedly. The data is visible on the next model invocation and "
 			+ "refreshed automatically thereafter. Subgoals "
-			+ "inherit your loaded data. For data you only need once, use covia_read "
-			+ "instead. Call context_unload with the same path to remove it."),
+			+ "inherit your loaded data. For data needed once, use an advertised "
+			+ "bounded inspection or exact-read operation instead. Remove a loaded path "
+			+ "with the context-removal control when finished."),
 		K_PARAMETERS, CONTEXT_LOAD_PARAMS);
 
 	static final AMap<AString, ACell> TOOL_DEF_CONTEXT_UNLOAD = Maps.of(
 		K_NAME, Strings.create(TOOL_CONTEXT_UNLOAD),
 		K_DESCRIPTION, Strings.create(
-			"Remove a path previously added with context_load. Pass the same "
+			"Remove a path previously added to persistent context. Pass the same "
 			+ "path string you used when loading. Frees context space for other "
 			+ "work or data."),
 		K_PARAMETERS, CONTEXT_UNLOAD_PARAMS);
@@ -207,8 +209,8 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		K_NAME, Strings.create(TOOL_MORE_TOOLS),
 		K_DESCRIPTION, Strings.create(
 			"Add operations to your tool set for the rest of this run. "
-			+ "Use covia_list to discover available operations first "
-			+ "(e.g. covia_list path=v/ops), then call this with the paths "
+			+ "Use an advertised catalog-listing operation to discover available operations first "
+			+ "(for example, list path=v/ops), then call this with the exact paths "
 			+ "you need. Added tools appear on your next turn."),
 		K_PARAMETERS, Maps.of(
 			K_TYPE, Strings.create("object"),
@@ -224,7 +226,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		K_DESCRIPTION, Strings.create(
 			"Load a skill from the [Skills] index by name (or any skill by direct ref). "
 			+ "The result includes the skill's full instructions for immediate use; they "
-			+ "also stay in your context each turn until you context_unload the skill's "
+			+ "also stay in your context each turn until you remove the skill's loaded "
 			+ "path. The skill's tools join your palette from your next step. Subgoals "
 			+ "inherit your loaded skills."),
 		K_PARAMETERS, SKILL_LOAD_PARAMS);
@@ -327,7 +329,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 
 	/** Session-aware variant: when {@code session} is non-null, the session's
 	 *  frames conversation is rendered for inspection via {@code withFrameStack},
-	 *  using the same {@code renderConversationFor} policy as the live driver
+	 *  using the same {@link ConversationRenderer#renderFor} policy as the live driver
 	 *  without duplicating the live driver's frame assembly (#211). */
 	public AMap<AString, ACell> buildFirstIterationL3Input(
 			AMap<AString, ACell> recordConfig, ACell state, ACell task,
@@ -374,9 +376,6 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			.withSystemPrompt()
 			.withContextEntries()
 			.withSkillsIndex(indexLoads);
-		if (sessionFrames != null && sessionFrames.count() > 0) {
-			builder = builder.withFrameStack(sessionFrames);
-		}
 		ContextBuilder.ContextResult context = builder
 			.withCurrentDate()                    // volatile (daily) → tail, cache-stable prefix
 			.withTools()
@@ -389,8 +388,19 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		AVector<ACell> allTools = (typedTools != null)
 			? (AVector<ACell>) typedTools.concat(harnessTools).concat(baseTools)
 			: (AVector<ACell>) harnessTools.concat(baseTools);
+		ContextBuilder.LoadSnapshot loadSnapshot = ContextBuilder.resolveLoadSnapshot(
+			engine, context.capsCtx(), indexLoads, fixedToolNames(allTools));
+		allTools = (AVector<ACell>) allTools.concat(loadSnapshot.tools());
 
-		AVector<ACell> fullHistory = context.history();
+		AVector<ACell> fullHistory = (AVector<ACell>) context.history().concat(
+			loadSnapshot.messages());
+		if (sessionFrames != null && sessionFrames.count() > 0
+				&& sessionFrames.get(0) instanceof AMap) {
+			@SuppressWarnings("unchecked")
+			AMap<AString, ACell> rootFrame = (AMap<AString, ACell>) sessionFrames.get(0);
+			fullHistory = (AVector<ACell>) fullHistory.concat(
+				ConversationRenderer.renderFor(rootFrame, l3Config));
+		}
 
 		// Synthesise goal from task (same as GoalTreeContext.describeTransitionInput
 		// + renderGoal + appendTurn in the real path)
@@ -431,8 +441,9 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 	/**
 	 * Processes a single agent transition using the goal tree model.
 	 *
-	 * <p>Creates a fresh root frame from incoming work, runs the frame's tool loop,
-	 * and returns the transition output ({@code {state, result}}).</p>
+	 * <p>Resumes the session's root frame (or creates a local root for an
+	 * unsessioned invocation), runs the frame's tool loop, and returns the
+	 * transition output ({@code {state, result}}).</p>
 	 *
 	 * @param ctx request context (caller identity, capabilities)
 	 * @param input transition input: {@code {agentId, state, tasks, pending, messages, config, newInput, session?}}
@@ -627,15 +638,6 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			ContextChain.declaredLoads(RT.getIn(recordConfig, Fields.LOADS), "config.loads"),
 			ContextChain.sessionLoads(input));
 
-		// The skills index marks (loaded) against the cycle-start effective
-		// view — outer tiers plus the root frame's tier.
-		AMap<AString, ACell> indexLoads = outerLoads;
-		if (frames.count() > 0 && frames.get(0) instanceof AMap) {
-			@SuppressWarnings("unchecked")
-			AMap<AString, ACell> rootFrame = (AMap<AString, ACell>) frames.get(0);
-			indexLoads = ContextChain.effective(outerLoads, GoalTreeContext.getLoads(rootFrame));
-		}
-
 		// Build context (system prompt, tools, caps) via ContextBuilder.
 		// Harness tool names in config.tools are skipped here — they're
 		// resolved separately by resolveHarnessTools / buildTypedRootHarnessTools.
@@ -646,7 +648,6 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			.withSessionId(RT.getIn(input, Fields.SESSION, Fields.ID))
 			.withSystemPrompt()
 			.withContextEntries()
-			.withSkillsIndex(indexLoads)
 			.withCurrentDate()                    // volatile (daily) → tail, cache-stable prefix
 			.withTools()
 			.build();
@@ -657,7 +658,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		AString llmOperation = getLLMOperation(l3Config);
 
 		// Set up capability-scoped context for tool dispatch
-		RequestContext capsCtx = context.capsCtx();
+		RequestContext capsCtx = context.capsCtx().withAgentId(agentId);
 
 		// Per-tool-call timeout — bounds any single grid op invoked as a tool
 		// so a stuck sub-job cannot hang this loop. Resolved once and shared
@@ -880,22 +881,6 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// tool result to follow its assistant tool_calls message)
 		String pendingCompactSummary = null;
 
-		// Cache for resolved loads — re-rendered only when the loads map
-		// reference changes (which only happens when the agent calls
-		// context-load, context-unload or skill_load). Saves resolving the
-		// same paths fresh every iteration of the tool loop, which can be
-		// ~50 reads per loaded path per frame for long-running goals.
-		AMap<AString, ACell> cachedLoadsKey = null;
-		AVector<ACell> cachedLoadsRendered = Vectors.empty();
-		// Loads-contributed tools (the generic "a loads entry may declare
-		// tools" rule) — recomputed when the frame's loads change (a
-		// skill_load activates its tools on the next iteration; an unload
-		// retracts them) or when baseTools grew (more_tools), which shifts
-		// the dedup baseline.
-		AMap<AString, ACell> cachedLoadToolsKey = null;
-		AVector<ACell> cachedLoadToolsBase = null;
-		AVector<ACell> cachedLoadTools = Vectors.empty();
-
 		for (int iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
 			// Stop promptly when this cycle no longer owns the frames — the
 			// transition was cancelled (suspend/delete flips the ctx token),
@@ -938,42 +923,31 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			// Loaded data: the context scope chain (#142) — outer tiers
 			// (config.loads + session.loads, constant within a cycle) composed
 			// with the active frame's tier; frame tombstones mask outer entries.
-			// The frame map is immutable and only changes via context-load /
-			// context-unload, so reference compare against the cached key tells
-			// us whether to re-render.
 			AMap<AString, ACell> frameLoads = GoalTreeContext.getLoads(activeFrame);
-			if (frameLoads != cachedLoadsKey) {
-				AMap<AString, ACell> effectiveLoads = ContextChain.effective(outerLoads, frameLoads);
-				cachedLoadsRendered = (effectiveLoads.count() > 0)
-					? new ContextBuilder(engine, ctx).resolveLoads(effectiveLoads)
-					: Vectors.empty();
-				cachedLoadsKey = frameLoads;
+			AMap<AString, ACell> effectiveLoads = ContextChain.effective(outerLoads, frameLoads);
+			java.util.Set<String> exclude = new java.util.HashSet<>(HARNESS_TOOL_REGISTRY.keySet());
+			for (long j = 0; j < baseTools.count(); j++) {
+				ACell n = RT.getIn(baseTools.get(j), K_NAME);
+				if (n != null) exclude.add(n.toString());
 			}
-			if (cachedLoadsRendered.count() > 0) {
-				fullHistory = (AVector<ACell>) fullHistory.concat(cachedLoadsRendered);
-			}
-
-			// Loads-contributed tools (generic rule, shared with llmagent):
-			// derived from the same effective view, recomputed on a loads or
-			// baseTools reference change (both maps/vectors are immutable).
-			if (frameLoads != cachedLoadToolsKey || baseTools != cachedLoadToolsBase) {
-				java.util.Set<String> exclude = new java.util.HashSet<>(HARNESS_TOOL_REGISTRY.keySet());
-				for (long j = 0; j < baseTools.count(); j++) {
-					ACell n = RT.getIn(baseTools.get(j), K_NAME);
-					if (n != null) exclude.add(n.toString());
-				}
-				java.util.Map<String, AString> routes = new java.util.HashMap<>();
-				cachedLoadTools = ContextBuilder.loadsToolDefs(engine, ctx,
-					ContextChain.effective(outerLoads, frameLoads), exclude, routes);
-				configToolMap.putAll(routes);
-				cachedLoadToolsKey = frameLoads;
-				cachedLoadToolsBase = baseTools;
-			}
+			// Loaded values are live views. Resolve their content, contributed
+			// tools, and dispatch routes as one snapshot immediately before every
+			// provider call, even when the loads map itself is unchanged.
+			ContextBuilder.LoadSnapshot loadSnapshot = ContextBuilder.resolveLoadSnapshot(
+				engine, ctx, effectiveLoads, exclude);
+			AVector<ACell> liveLoadMessages = new ContextBuilder(engine, ctx)
+				.withConfig(frameL3Config)
+				.withSkillsIndex(effectiveLoads)
+				.withResolvedMessages(loadSnapshot.messages())
+				.build().history();
+			fullHistory = (AVector<ACell>) fullHistory.concat(liveLoadMessages);
+			Map<String, AString> iterationToolMap = mergeRoutes(
+				configToolMap, loadSnapshot.routes());
 
 			// Assemble tools = harness + base + loads-contributed (recomputed
 			// each iteration so more_tools and skill_load additions are picked up)
 			AVector<ACell> tools = (AVector<ACell>) harnessForFrame.concat(baseTools)
-				.concat(cachedLoadTools);
+				.concat(loadSnapshot.tools());
 
 			// Conversation (segments + live turns — includes goal as first user message).
 			// Default render elides prior cycles' tool scratch (assistant.toolCalls
@@ -981,7 +955,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			// the LLM no longer needs. Opt out with config.renderHistory = "full".
 			// The frame's raw conversation field is unchanged — full history remains
 			// for audit / replay.
-			AVector<ACell> convMessages = GoalTreeContext.renderConversationFor(activeFrame, frameL3Config);
+			AVector<ACell> convMessages = ConversationRenderer.renderFor(activeFrame, frameL3Config);
 			fullHistory = (AVector<ACell>) fullHistory.concat(convMessages);
 
 			// Auto-compact nudge: when conversation grows large, inject a
@@ -1050,12 +1024,25 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 
 			// Process each tool call
 			AVector<ACell> toolCalls = getToolCalls(l3Result);
+			ToolBatchState batch = new ToolBatchState();
+			ACell terminalValue = null;
 			log.info("Frame[{}] iter={} tools={}", frameIndex, iteration,
 				toolCalls.count() > 0 ? toolCalls.toString().substring(0, Math.min(200, toolCalls.toString().length())) : "0");
 			for (long t = 0; t < toolCalls.count(); t++) {
 				ACell tc = toolCalls.get(t);
 				AString toolCallId = RT.ensureString(RT.getIn(tc, K_ID));
 				String toolName = RT.ensureString(RT.getIn(tc, K_NAME)).toString();
+
+				// A provider may return parallel tool calls in one assistant turn.
+				// Once complete/fail has requested a terminal outcome, do not execute
+				// later side effects, but DO return one result for every remaining
+				// call. Anthropic rejects a tool_use batch unless every id receives a
+				// corresponding tool_result immediately after the assistant turn.
+				if (batch.isTerminal()) {
+					activeFrame = GoalTreeContext.appendTurn(activeFrame,
+						batch.skippedResult(toolCallId, toolName));
+					continue;
+				}
 
 				// Unwrap tool arguments at the LLM wire boundary (the one
 				// tolerant parse). Broken arguments fail THIS tool call with a
@@ -1073,29 +1060,26 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 					continue;
 				}
 
-				ACell toolResult;
+				ACell toolResult = null;
 
 				if (TOOL_COMPLETE.equals(toolName)) {
 					// Flattened: the entire tool input IS the result.
 					// With typed outputs, OpenAI strictTools enforces schema
 					// conformance at the API level — by the time we see the
 					// call, toolInput already matches the declared schema.
-					// Terminal turn + lifecycle marker in one CAS.
-					AMap<AString, ACell> done = GoalTreeContext.withStatus(
-						GoalTreeContext.appendTurn(activeFrame,
-							toolResultMessage(toolCallId, toolName, Maps.of(Strings.create("status"), Strings.create("complete")))),
-						GoalTreeContext.STATUS_COMPLETE);
-					if (!persist(store, frameIndex, done)) return abortedResult(store);
-					return FrameResult.complete(toolInput, store.frames());
+					activeFrame = GoalTreeContext.appendTurn(activeFrame,
+						toolResultMessage(toolCallId, toolName,
+							Maps.of(Strings.create("status"), Strings.create("complete"))));
+					batch.markTerminal("complete");
+					terminalValue = toolInput;
 
 				} else if (TOOL_FAIL.equals(toolName)) {
 					// Flattened: the entire tool input IS the error.
-					AMap<AString, ACell> done = GoalTreeContext.withStatus(
-						GoalTreeContext.appendTurn(activeFrame,
-							toolResultMessage(toolCallId, toolName, Maps.of(Strings.create("status"), Strings.create("failed")))),
-						GoalTreeContext.STATUS_FAILED);
-					if (!persist(store, frameIndex, done)) return abortedResult(store);
-					return FrameResult.failed(toolInput, store.frames());
+					activeFrame = GoalTreeContext.appendTurn(activeFrame,
+						toolResultMessage(toolCallId, toolName,
+							Maps.of(Strings.create("status"), Strings.create("failed"))));
+					batch.markTerminal("failed");
+					terminalValue = toolInput;
 
 				} else if (TOOL_COMPACT.equals(toolName)) {
 					String summary = RT.ensureString(RT.getIn(toolInput, Strings.create("summary"))).toString();
@@ -1298,7 +1282,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 
 				} else {
 					// Config tool or grid dispatch
-					toolResult = dispatchTool(toolName, toolInput, configToolMap, ctx, toolCallTimeoutMs);
+					toolResult = dispatchTool(toolName, toolInput, iterationToolMap, ctx, toolCallTimeoutMs);
 				}
 
 				// Record tool result in conversation (subgoal already recorded
@@ -1307,6 +1291,24 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 					activeFrame = GoalTreeContext.appendTurn(activeFrame,
 						toolResultMessage(toolCallId, toolName, toolResult));
 				}
+			}
+
+			if (batch.isTerminal()) {
+				// complete/fail are harness control calls, not a provider's final
+				// natural-language response. Persist a plain assistant projection of
+				// the returned value after all tool results. Future cycles can then
+				// elide the entire tool-use batch while retaining the answer as normal
+				// user/assistant history. The raw calls/results remain in the frame for
+				// audit and renderHistory=full.
+				activeFrame = GoalTreeContext.appendTurn(activeFrame,
+					terminalAssistantMessage(terminalValue, "failed".equals(batch.terminalStatus())));
+				AString status = "failed".equals(batch.terminalStatus())
+					? GoalTreeContext.STATUS_FAILED : GoalTreeContext.STATUS_COMPLETE;
+				AMap<AString, ACell> done = GoalTreeContext.withStatus(activeFrame, status);
+				if (!persist(store, frameIndex, done)) return abortedResult(store);
+				return "failed".equals(batch.terminalStatus())
+					? FrameResult.failed(terminalValue, store.frames())
+					: FrameResult.complete(terminalValue, store.frames());
 			}
 
 			// Persist frame for next iteration
@@ -1455,6 +1457,44 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			}
 		}
 		return false;
+	}
+
+	/** Names already owned by a fixed palette, for load-tool deduplication. */
+	private static java.util.Set<String> fixedToolNames(AVector<ACell> tools) {
+		java.util.Set<String> names = new java.util.HashSet<>();
+		if (tools == null) return names;
+		for (long i = 0; i < tools.count(); i++) {
+			ACell name = RT.getIn(tools.get(i), K_NAME);
+			if (name != null) names.add(name.toString());
+		}
+		return names;
+	}
+
+	/** Base/dynamic routes plus only this inference's live-load routes. */
+	private static Map<String, AString> mergeRoutes(Map<String, AString> base,
+			Map<String, AString> liveLoads) {
+		if (liveLoads == null || liveLoads.isEmpty()) return base;
+		Map<String, AString> effective = new java.util.HashMap<>();
+		if (base != null) effective.putAll(base);
+		effective.putAll(liveLoads);
+		return effective;
+	}
+
+	/** Provider-neutral history projection for an explicit complete/fail call. */
+	private static AMap<AString, ACell> terminalAssistantMessage(ACell value, boolean failed) {
+		AString content;
+		if (value instanceof AString s) {
+			content = s;
+		} else if (value == null) {
+			content = Strings.EMPTY;
+		} else {
+			content = convex.core.util.JSON.print(value);
+		}
+		if (failed) content = Strings.create("Goal failed: " + content);
+		return Maps.of(
+			K_ROLE, ROLE_ASSISTANT,
+			K_CONTENT, content,
+			AgentState.K_SOURCE, AgentState.SOURCE_TRANSITION);
 	}
 
 	/** Updates a frame at the given index in the frame stack. */

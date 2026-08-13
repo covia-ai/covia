@@ -35,7 +35,6 @@ import covia.venue.TestEngine;
  * case: amount 840 executes, amount 4820 is denied by the runtime.
  */
 public class CapabilityGateTest {
-
 	private final Engine engine = TestEngine.ENGINE;
 	private AString ALICE_DID;
 
@@ -386,6 +385,7 @@ public class CapabilityGateTest {
 
 		covia.venue.User user = engine.getVenueState().users().get(ALICE_DID);
 		covia.venue.AgentState agent = user.agent("gated-agent");
+		TestEngine.awaitAgentStatus(agent, covia.venue.AgentState.SLEEPING, 2000);
 		assertEquals(covia.venue.AgentState.SLEEPING, agent.getStatus(),
 			"a handled gate denial is not an agent failure");
 	}

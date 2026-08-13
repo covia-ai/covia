@@ -98,6 +98,8 @@ Found all three. I'll research vendor A first.
 
 From the parent's perspective, `subgoal` is just a tool call that branches to the child and returns structured data. The child's 15 turns of work are invisible.
 
+**Provider-shaped working history.** During the active cycle, every assistant tool-call turn and all of its matching results are sent back together. This is required by Anthropic, which rejects an orphaned or separated `tool_use`/`tool_result`. Once a later user turn begins a new cycle, the default renderer removes prior tool calls and results as whole pairs and keeps the user/final-assistant exchange. The full raw transcript remains on the lattice. An explicit `complete` or `fail` call therefore also records a plain assistant projection of its returned value; future turns see that final answer, not the old control-tool exchange.
+
 **Tool name convention:** Operations use colons internally (`covia:inspect`) but LLMs see underscores (`covia_inspect`) because MCP and most tool-calling APIs don't permit colons in tool names. The harness handles the mapping.
 
 ## Conversation Structure
@@ -479,7 +481,7 @@ When `pending` drains while a child frame is active, the harness injects a short
 
 ### Parallel tool calls including subgoal
 
-An LLM can emit multiple tool calls in one assistant turn. If two or more are `subgoal`, the harness processes them **sequentially**: push frame 1, run to completion, pop, then push frame 2. This keeps the stack invariant intact (only one active frame) and preserves the "later subgoals see earlier results in ancestor context" guarantee. Non-subgoal tool calls in the same assistant turn execute in parallel as usual; subgoals are the exception.
+An LLM can emit multiple tool calls in one assistant turn. The current harness processes the batch **sequentially** and records one result for every call id before invoking the model again. If two or more are `subgoal`, it pushes frame 1, runs it to completion, pops it, then pushes frame 2. This keeps the stack invariant intact (only one active frame) and preserves the "later subgoals see earlier results in ancestor context" guarantee. If `complete` or `fail` occurs in a batch, that first terminal call wins; later calls are not executed, but receive explicit error results so Anthropic's tool-result completeness rule remains satisfied.
 
 ### Cancellation
 

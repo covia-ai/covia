@@ -2,6 +2,11 @@ package covia.venue;
 
 import java.net.URI;
 
+import convex.auth.did.DIDVerifier;
+import convex.core.crypto.ASignature;
+import convex.core.data.AString;
+import convex.core.data.AccountKey;
+import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import covia.adapter.HTTPAdapter;
@@ -62,6 +67,15 @@ public class TwoVenueTestServer {
 		DID_A = ENGINE_A.getDIDString().toString();
 		DID_B = ENGINE_B.getDIDString().toString();
 
+		// The RFC-reserved .example names intentionally have no public DNS. Give
+		// each venue the same method-resolver boundary production uses, backed by
+		// the other test venue's published key, so federation exercises canonical
+		// did:web identities rather than silently falling back to did:key.
+		ENGINE_A.didVerifier().registerMethod("web",
+			fixedVerifier(DID_B, ENGINE_B.getAccountKey()));
+		ENGINE_B.didVerifier().registerMethod("web",
+			fixedVerifier(DID_A, ENGINE_A.getAccountKey()));
+
 		// HTTPAdapter SSRF allowlist — needed only by http:get/http:post,
 		// not by grid:* federation (VenueHTTP makes its own requests).
 		// Allow both forms because some libs canonicalise differently.
@@ -88,6 +102,7 @@ public class TwoVenueTestServer {
 			Strings.create("port"), 0, // ephemeral
 			Strings.create("seed"), Strings.create(seedHex),
 			Config.HOSTNAME, Strings.create(hostname),
+			Config.DID, Strings.create("did:web:" + hostname),
 			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 			Fields.MCP, Maps.of(),
 			Fields.A2A, Maps.of(),
@@ -100,5 +115,13 @@ public class TwoVenueTestServer {
 					Config.CAPS, Strings.create("unrestricted"))
 			)
 		));
+	}
+
+	private static DIDVerifier fixedVerifier(String expectedDID, AccountKey key) {
+		return (AString did, Blob message, Blob signature) -> {
+			if (did == null || !expectedDID.equals(did.toString())) return false;
+			ASignature sig = ASignature.fromBlob(signature);
+			return sig != null && sig.verify(message, key);
+		};
 	}
 }

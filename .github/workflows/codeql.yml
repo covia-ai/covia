@@ -1,8 +1,8 @@
 name: CodeQL
 
 # Static security analysis. Runs on develop pushes and a weekly schedule
-# rather than on every PR — the Java analysis needs a full build (including
-# the Convex-from-source step), and test.yml already gates PRs.
+# rather than on every PR — the Java analysis needs a full build, and
+# test.yml already gates PRs.
 
 on:
   push:
@@ -32,23 +32,6 @@ jobs:
         java-version: '25'
         distribution: 'temurin'
         cache: 'maven'
-
-    # convex.version may pin an unreleased -SNAPSHOT while validating
-    # convex-side changes (see AGENTS.md). Snapshots are not on Maven
-    # Central, so build the needed modules from convex develop source.
-    # Skips itself when the pin is a release version. Runs BEFORE CodeQL
-    # init so the dependency build isn't traced into the analysis.
-    - name: Build Convex from source (snapshot pin only)
-      run: |
-        CONVEX_VERSION=$(sed -n 's/.*<convex.version>\(.*\)<\/convex.version>.*/\1/p' pom.xml | head -1)
-        if [[ "$CONVEX_VERSION" == *-SNAPSHOT ]]; then
-          echo "convex.version=$CONVEX_VERSION — building convex develop from source"
-          git clone --depth 1 --branch develop https://github.com/Convex-Dev/convex.git /tmp/convex
-          mvn -f /tmp/convex/pom.xml install -DskipTests -q \
-            -pl convex-core,convex-peer,convex-dlfs,convex-java,convex-restapi -am
-        else
-          echo "convex.version=$CONVEX_VERSION (released) — skipping source build"
-        fi
 
     - name: Initialize CodeQL
       uses: github/codeql-action/init@v4

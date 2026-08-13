@@ -182,10 +182,8 @@ public class SchedulerTest {
 	public void testAlarmFiresImmediatelyDueEvent() throws Exception {
 		sched.schedule(s("v/test/ops/echo"), s("tick"), ctx, System.currentTimeMillis());
 
-		long deadline = System.currentTimeMillis() + 5_000;
-		while (!sched.list(ctx).isEmpty() && System.currentTimeMillis() < deadline) {
-			Thread.sleep(20);
-		}
+		TestEngine.awaitCondition(() -> sched.list(ctx).isEmpty(), 5_000,
+			() -> "immediately-due event remained scheduled: " + sched.list(ctx));
 		assertTrue(sched.list(ctx).isEmpty(),
 			"the alarm should fire and remove an immediately-due event");
 	}

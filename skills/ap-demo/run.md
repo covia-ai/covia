@@ -12,7 +12,7 @@
 agent_request
   agentId: "Alice"
   input: { "invoice_text": "<invoice text>" }
-  wait: true
+  timeout: 30000
 ```
 
 **Expected:** `InvoiceExtraction` JSON with all fields populated. Key fields to highlight: `vendor_name`, `total_amount`, `po_number`, `flags` (should be empty for clean invoices).
@@ -39,7 +39,7 @@ agent_request
     "source_agent": "Alice",
     "source_job": "<Alice's job ID>"
   }
-  wait: true
+  timeout: 30000
 ```
 
 **Expected:** `InvoiceEnrichment` JSON with vendor validation, PO match, duplicate check, currency match, confidence score, and source references.
@@ -84,7 +84,7 @@ agent_request
       { "agent": "Bob", "job": "<Bob's job ID>" }
     ]
   }
-  wait: true
+  timeout: 30000
 ```
 
 **Expected for $15,600:** `ApprovalDecision` with `decision: "ESCALATED"`, 6 policy rules evaluated, `escalation_target` naming J. Martinez.
@@ -261,7 +261,7 @@ INV-2024-1300  Nexus Dynamics    $12,000   UNKNOWN        UNKNOWN    NO        R
 | Bob's confidence score is unexpectedly low | Invoice fields don't match seeded data | Check Alice's output — `vendor_name` must be exactly "Acme Corp", `po_number` must be "PO-2024-0456". |
 | Carol rejects instead of escalating | Policy interpretation varies between runs | Reset Carol (`/agent reset Carol`) and re-submit. Carol's structured output should cite the specific rule — check which one she flags. |
 | Any agent stuck in RUNNING | LLM call hanging (network, rate limit) | Wait 30–60 seconds. If still stuck, check venue logs. Reset the agent and retry. |
-| `agent_request` returns immediately with no result | Forgot `wait: true` | Re-submit with `wait: true`. Without it, you get a job ID and need to poll. |
+| `agent_request` returns a STARTED snapshot | Work exceeded the selected timeout | Call `grid_job_result` with the returned Job id, or retry the workflow with a longer `timeout`. |
 | Enrichment not in workspace | Bob didn't execute `covia_write` | Check Bob's timeline for tool calls. Reset Bob and re-run — the system prompt instructs the write. |
 
 ## Presentation Tips

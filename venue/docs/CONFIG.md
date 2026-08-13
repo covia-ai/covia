@@ -340,7 +340,7 @@ code execution.
 ```json
 {
   "modules": [{
-    "path": "modules/covia-python-adapter-0.8.0-module.jar",
+    "path": "modules/covia-python-adapter-<version>-module.jar",
     "sha256": "<optional 64-hex module digest>",
     "config": {
       "library": "/usr/lib/libpython3.13.so",
@@ -558,7 +558,7 @@ A runtime user ID is always a DID and may use any DID method. `user:create`
 accepts a full DID directly (for example a self-sovereign `did:key`) or a
 venue-managed `username`. A username requires a public `hostname` and derives
 `did:web:<hostname>:u:<username>` — for example
-`did:web:venue-1.covia.ai:u:alice`. `user:create` and `user:list` are
+`did:web:venue.example.com:u:alice`. `user:create` and `user:list` are
 venue-administrative operations: invoke directly as the venue, or present a
 venue-issued UCAN covering `<venueDID>/users` with `user/create` or
 `user/read`. Operator code can use `engine.venueContext()` to invoke the
@@ -612,11 +612,11 @@ drive. DLFS roots may be clamped to a provider-relative subtree:
         "path": "/srv/reference",
         "readOnly": true
       },
-      "mina": {
+      "agent-documents": {
         "dlfs": "vault",
-        "subpath": "Made by Mina",
+        "subpath": "agent-output",
         "readOnly": false,
-        "description": "Files created and maintained by Mina"
+        "description": "Files created by document-processing agents"
       }
     }
   }
@@ -627,11 +627,15 @@ drive. DLFS roots may be clamped to a provider-relative subtree:
 cannot contain `..`; invalid roots are skipped rather than broadened to the
 whole drive. The subtree is created lazily on first file access. It is an
 implementation boundary, not part of the client path: callers use
-`{ "root": "mina", "path": "report.pdf" }`, and capabilities name
-`file://mina/report.pdf`, while the provider stores the file at
-`vault/Made by Mina/report.pdf`. Adding a subpath to an existing root therefore
-changes its logical capability addresses; issue replacement grants as part of
-that configuration migration.
+`{ "root": "agent-documents", "path": "report.pdf" }`, while the provider
+stores the file at `vault/agent-output/report.pdf`. Because this is DLFS data,
+capabilities name the canonical DID-scoped resource
+`dlfs/vault/agent-output/report.pdf`, not the configured `file://` alias.
+
+File operations may also address an authorised DLFS path directly without a
+configured root: use `dlfs/<drive>/<path>` for the caller's own drive, or
+`<ownerDID>/dlfs/<drive>/<path>` with an appropriate cross-user proof. The
+same forms are accepted by `file:move` and `file:copy` endpoints.
 
 ## Adapter configuration
 
@@ -639,6 +643,7 @@ that configuration migration.
 {
   "adapters": {
     "agent": { "sessionDelete": false },
+    "vault": { "drive": "vault" },
     "orchestrator": {
       "maxItems": 50,
       "maxConcurrency": 8
@@ -650,6 +655,11 @@ that configuration migration.
 Per-adapter settings, keyed by adapter name (`Config.getAdapterConfig(name)`).
 Currently defined:
 
+- `vault.drive` — DLFS drive targeted by the drive-free `vault:*` convenience
+  operations (default `vault`). It must be a single non-empty drive name without
+  `/`, `\\`, or `:`. Because vault content is held in the venue lattice, startup
+  warns if the adapter is active without an encrypted Etch policy; configure
+  `etch.cipher` and key management before storing sensitive data.
 - `agent.sessionDelete` — whether `agent:deleteSession` is available
   (default `true`). Set `false` to disable user-initiated session deletion
   venue-wide; the op then fails with "disabled on this venue".
@@ -782,6 +792,17 @@ pass through to every provider (#218 — accepts integer or double, so
 `temperature: 0` works for deterministic extraction); `maxTokens` is
 honoured by the anthropic provider (its API requires it).
 
+`defaultLlmOperation` selects the provider used when an agent config does not
+name one; the built-in fallback is `v/ops/langchain/anthropic`. Standard agent
+templates are provider-neutral, so a later config layer can choose any provider
+without copying the template. `v/ops/langchain/models` reports caller-relative
+provider readiness, each release-time model list, its balanced default, and
+workload recommendations (for example `economical`, `quality`, or `coding`).
+The built-in balanced defaults are Sonnet 5, GPT-5.6 Terra, Gemini 3.6 Flash,
+DeepSeek V4 Flash, and Grok 4.3. Operators may replace an advertised hosted list
+with `adapters.langchain.models.<provider>`; this is discovery metadata, not an
+allowlist, so other provider-supported model IDs remain usable.
+
 Ollama base URL resolution (#224): explicit input `url`, then venue config
 `adapters.langchain.ollamaUrl`, then the `OLLAMA_BASE_URL` environment
 variable, then `http://localhost:11434`. Keep agents topology-agnostic —
@@ -799,7 +820,7 @@ Agent-side bounds: each level-3 LLM call is bounded by the agent's
 ```json
 {
   "modules": [
-    "modules/covia-sql-0.6.0-module.jar",
+    "modules/covia-sql-<version>-module.jar",
     { "path": "modules/other.jar", "sha256": "9f2a...", "config": { } }
   ]
 }
@@ -953,5 +974,13 @@ Each named secret overwrites any existing value under that name for that user �
 Secret resolution at invocation time checks the caller's own store first,
 then falls back to the public store (covia#254, use-only — `secret:extract`
 stays closed).
+
+For LangChain hosted providers, if the operation's named secret is absent from
+both stores, the venue process environment is the final fallback using that
+same conventional name (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.). Store
+values take precedence. This supports process/container secret injection
+without persisting a credential in Covia config or agent state; the environment
+credential is venue-wide, so use a per-user SecretStore when tenant-specific
+provider credentials are required.
 
 **Never commit production secrets here.** Intended for personal dev configs in gitignored locations (e.g. `dev/local.json`).

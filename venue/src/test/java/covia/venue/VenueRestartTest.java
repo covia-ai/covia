@@ -112,14 +112,16 @@ public class VenueRestartTest {
 			// Run test:never → should stay STARTED (never completes)
 			Job neverJob = engine.jobs().invokeOperation(neverOpId.toCVMHexString(),
 					Maps.of(Fields.MESSAGE, "never finishes"), engine.venueContext());
-			Thread.sleep(50); // Give it a moment to start
+			TestEngine.awaitCondition(() -> Status.STARTED.equals(neverJob.getStatus()), 5000,
+				() -> "never job did not start (status=" + neverJob.getStatus() + ")");
 			assertEquals(Status.STARTED, neverJob.getStatus(), "Never job should be STARTED");
 			neverJobId = neverJob.getID().toHexString();
 
 			// Run test:pause → should auto-pause itself
 			Job pauseJob = engine.jobs().invokeOperation(pauseOpId.toCVMHexString(),
 					Maps.of(Fields.MESSAGE, "pause me"), engine.venueContext());
-			Thread.sleep(50); // Give it a moment to pause
+			TestEngine.awaitCondition(() -> Status.PAUSED.equals(pauseJob.getStatus()), 5000,
+				() -> "pause job did not pause (status=" + pauseJob.getStatus() + ")");
 			assertEquals(Status.PAUSED, pauseJob.getStatus(), "Pause job should be PAUSED");
 			pauseJobId = pauseJob.getID().toHexString();
 
@@ -201,7 +203,11 @@ public class VenueRestartTest {
 
 			// 4i: Unpause the job by delivering a message → should complete
 			engine2.jobs().deliverMessage(Blob.parse(pauseJobId), Maps.of("content", "resume"), engine2.getDIDString());
-			Thread.sleep(50); // Give it a moment to process
+			TestEngine.awaitCondition(() -> {
+				AMap<AString, ACell> data = engine2.jobs().getJobData(
+					Blob.parse(pauseJobId), engine2.venueContext());
+				return data != null && Status.COMPLETE.equals(RT.ensureString(data.get(Fields.STATUS)));
+			}, 5000, () -> "resumed pause job did not complete");
 			// Job completes and is evicted from activeJobs — use lattice fallback
 			AMap<AString, ACell> unpausedData = engine2.jobs().getJobData(Blob.parse(pauseJobId), engine2.venueContext());
 			assertNotNull(unpausedData, "Unpaused job data should exist in lattice");

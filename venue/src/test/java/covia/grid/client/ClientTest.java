@@ -47,7 +47,7 @@ public class ClientTest {
 	}
 	
 	@Test
-	public void testAddAsset() throws InterruptedException, ExecutionException, TimeoutException {
+	public void testAddAsset() throws InterruptedException, ExecutionException, TimeoutException, IOException {
 		// Create test metadata
 		ACell metadata = Maps.of(
 			Keyword.intern("name"), Strings.create("Test Asset"),
@@ -61,6 +61,8 @@ public class ClientTest {
 		// Verify the asset was created
 		assertNotNull(assetId, "Asset ID should be returned");
 		assertTrue(assetId instanceof Hash, "Asset ID should be a Hash");
+		assertNotNull(client.getAsset(assetId),
+			"A bare hash should resolve from the authenticated caller's asset store");
 	}
 	
 	@Test
@@ -198,6 +200,12 @@ public class ClientTest {
 		
 		String retrievedContentString = new String(retrievedBlob.getBytes());
 		assertEquals(testContent, retrievedContentString, "Retrieved content should match original content");
+
+		// Asset.getContent follows the same caller-relative hash semantics as the
+		// direct content API; it must not switch to the venue catalog internally.
+		Asset retrievedAsset = client.getAsset(assetId);
+		assertNotNull(retrievedAsset);
+		assertEquals(contentBlob, retrievedAsset.getContent().getBlob().toFlatBlob());
 	}
 	
 	@Test
@@ -279,7 +287,7 @@ public class ClientTest {
 	@Test 
 	public void testGridConnect() throws IOException {
 		Venue v= Grid.connect(TestServer.BASE_URL);
-		Asset a = v.getAsset(TestOps.ECHO);
+		Asset a = v.resolveAsset("v/test/ops/echo");
 		assertNotNull(a);
 		
 		Job job=a.invoke(Vectors.empty()).join();
@@ -288,4 +296,4 @@ public class ClientTest {
 		
 		assertEquals(Maps.empty(),a.run(Maps.empty()));
 	}
-} 
+}

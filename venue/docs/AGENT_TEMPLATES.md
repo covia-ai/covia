@@ -2,7 +2,8 @@
 
 Templates for creating, sharing, and forking agents on the Covia grid.
 
-**Status:** Draft — April 2026. Phases 1, 2, and 3a implemented — `config` accepts string references, `agent:fork` operation exists, standard templates shipped at `v/agents/templates/<name>`.
+**Status:** Current — ordered config composition, functional template assets,
+`agent:fork`, and standard templates are implemented.
 
 ---
 
@@ -16,29 +17,57 @@ Templates solve this by making agent configurations reusable, discoverable, and 
 
 ## 2. Core Principles
 
-### Templates are config
+### Configuration is an ordered stack
 
-There is no separate "template" concept or field — a template **is** agent config. `agent:create`'s `config` field accepts either:
+`agent:create.config` accepts one layer or an ordered vector of layers. Each
+layer is either an inline map or a reference to a map/asset: a workspace path
+(`w/templates/reader`), asset ref (`a/<hash>`), DID URL, or venue path.
 
-1. An inline map (current behaviour), or
-2. A **string reference** that resolves to a map: a workspace path (`w/templates/reader`), asset ref (`/a/<hash>`), DID URL, or venue operation name.
+Layers merge left-to-right. Nested maps merge recursively; later scalar,
+vector, and null values replace earlier values. This lets independent assets
+select a behavioural template, provider, system prompt, tool palette, output
+contract, or final local override without any one asset owning the whole agent:
 
-The framework resolves the reference to a map and uses it as config. This unifies "template" and "config" — anywhere you can store a map, you can store a template.
+```json
+[
+  "v/agents/templates/worker",
+  "w/agent-config/providers/anthropic",
+  "w/agent-config/prompts/invoice-review",
+  {"model": "claude-sonnet-5", "temperature": 0}
+]
+```
 
-A template is a CVM map with the same structure as `agent:create` config. It may optionally include a `state` field, which is extracted and used as the agent's initial state. No special type, no schema enforcement, no registration step. If it has the right fields, it's a template.
+Arrays are deliberately atomic. A later `tools`, `skills`, `context`, or
+`caps` vector is an explicit replacement, avoiding surprising implicit union
+semantics (especially for security-sensitive caps). A selector asset can
+publish the complete desired vector.
+
+### A template is a functional Covia asset
+
+The canonical immutable form is ordinary asset metadata with an `agent` facet,
+mirroring `operation` and `skill` facets:
 
 ```json
 {
   "name": "Convex Query Worker",
-  "systemPrompt": "You query the Convex blockchain and report results...",
-  "tools": ["v/ops/convex/query", "v/ops/covia/read", "v/ops/covia/write"],
-  "model": "gpt-5.4-mini",
-  "caps": [
-    {"with": "w/results/", "can": "crud/write"},
-    {"with": "w/", "can": "crud/read"}
-  ]
+  "description": "Queries Convex and writes evidence-backed results.",
+  "agent": {
+    "config": {
+      "systemPrompt": "You query the Convex blockchain and report results...",
+      "tools": ["v/ops/convex/query", "v/ops/covia/read", "v/ops/covia/write"],
+      "caps": [
+        {"with": "w/results/", "can": "crud/write"},
+        {"with": "w/", "can": "crud/read"}
+      ]
+    }
+  }
 }
 ```
+
+The asset is content-addressed, shareable, and directly usable as a config
+layer. `agent.config` may itself be a map, a reference, or an ordered layer
+vector. For compatibility, flat config maps remain valid in workspace and as
+inline layers. An optional `agent.state` supplies initial state.
 
 ### Templates live where data lives
 
@@ -51,7 +80,9 @@ Templates are stored in the same places as all other user data:
 | Venue assets | Registered at startup | Pre-installed standard templates |
 | Inline | Passed directly in `agent:create` | One-off agent creation |
 
-No special namespace — templates are maps that happen to describe agent config.
+The venue catalog path is a discoverable pin, not the identity: the underlying
+asset remains addressable by its content hash and may be used from any grid
+location that resolves it.
 
 ### Fork, don't copy
 
@@ -65,7 +96,8 @@ No special namespace — templates are maps that happen to describe agent config
 
 ## 3. Template Format
 
-A template is any CVM map. The following fields are recognised:
+The following fields are recognised inside canonical `agent.config` (or at the
+top level of a legacy flat config map):
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -73,8 +105,8 @@ A template is any CVM map. The following fields are recognised:
 | `description` | string | What this agent does (useful for LLM discovery) |
 | `systemPrompt` | string | System prompt defining the agent's role |
 | `tools` | array | Tool operation lattice paths the agent can call (e.g. `v/ops/covia/read`) |
-| `model` | string | LLM model name (default: gpt-5.4-mini) |
-| `llmOperation` | string | LLM backend operation path (default: `v/ops/langchain/openai`) |
+| `model` | string | Optional provider model name; provider default when absent |
+| `llmOperation` | string | Optional LLM backend operation path; venue default when absent |
 | `caps` | array | Capability restrictions (array of {with, can} objects) |
 | `context` | array | Context loading entries (asset hashes, workspace paths) |
 | `responseFormat` | object | Structured output schema ({name, schema}) |
@@ -84,6 +116,16 @@ A template is any CVM map. The following fields are recognised:
 All fields are optional. Missing fields get platform defaults.
 
 > **Tool references are operation lattice paths, not adapter shorthand.** Use `v/ops/covia/read`, not `covia:read` — the latter names an *adapter* and will not resolve. The same applies to `operation` and `llmOperation` (e.g. `v/ops/llmagent/chat`, `v/ops/langchain/openai`). The exception is harness tools (`subgoal`, `complete`, `fail`, `compact`, `context_load`, `context_unload`, `more_tools`) — those are bare names, not operations.
+
+> **Keep provider-facing callable names out of durable prompts.** Put canonical
+> operation references in `config.tools` and describe the intended capability,
+> decision rule, arguments, result, and failure handling in `systemPrompt`. The
+> runtime resolves those references on every inference and advertises the exact
+> name, description, and input schema accepted by that provider. A template must
+> tell the model to choose from that live palette, never to reconstruct a name or
+> path from examples in prompt prose. Bare harness names belong only in the
+> configuration that enables them and in implementation documentation such as
+> this page.
 
 > **Private tool definitions need metadata read access.** Adding a user-scoped
 > operation such as `w/ops/risk/issue-limit` to `tools` requires both `invoke`
@@ -95,6 +137,10 @@ All fields are optional. Missing fields get platform defaults.
 > `v/ops/...` catalog metadata remains publicly discoverable.
 
 ### Example templates
+
+For brevity these examples show config layer maps. When publishing one as an
+immutable asset, place the map under `agent.config` with `name` and
+`description` as ordinary top-level metadata.
 
 **Minimal reader:**
 ```json
@@ -136,7 +182,8 @@ All fields are optional. Missing fields get platform defaults.
 
 ## 4. Using Templates
 
-`agent:create`'s `config` field is overloaded: it accepts either an inline map or a string reference that resolves to one. Resolution is tried in this order:
+`agent:create.config` accepts an inline map, a string reference, or an ordered
+vector containing either. References use ordinary lattice resolution:
 
 1. **Asset ref** — bare hash, `/a/<hash>`, `/o/<name>`, DID URL, or venue operation name (via `engine.resolveAsset`)
 2. **Workspace path** — any relative path in the caller's own lattice namespace (e.g. `w/templates/reader`)
@@ -172,21 +219,27 @@ agent_create  agentId=MyReader  config={"systemPrompt":"You read data.","tools":
 
 Direct inline config — no indirection. Current behaviour, unchanged.
 
-### Piping through LLMs
+### Composition without copying
 
-Because templates are just maps, an agent creating another agent can read a template, mutate specific fields, then pass the modified map directly:
+Callers pass references and a small final override; the framework performs the
+deterministic merge. The LLM never has to copy or rewrite a large template:
 
+```json
+{
+  "agentId": "CustomReader",
+  "config": [
+    "v/agents/templates/reader",
+    "w/agent-config/providers/anthropic",
+    {"systemPrompt": "You read only sales data."}
+  ]
+}
 ```
-template = covia_read path=w/templates/reader          // get map
-template.systemPrompt = "You read ONLY sales data."    // tweak
-agent_create agentId=CustomReader config=<template>    // pass modified map
-```
-
-No server-side merging logic is needed — LLMs handle the "read, modify, pass" pattern natively via JSON. Override semantics live in the caller, not the framework.
 
 ### Legacy: `definition` field
 
-The existing `definition` field still works for agent assets in the nested `meta.agent.config` format. For new templates, prefer the unified `config` reference approach.
+The existing `definition` field still works. It now resolves the same canonical
+`agent` facet and ordered layers as `config`; new callers should normally put
+the asset reference directly in the `config` stack.
 
 ---
 
@@ -249,29 +302,38 @@ If the migration goes wrong, the backup fork preserves the pre-migration state.
 
 ## 6. Pre-installed Templates
 
-The venue ships with standard templates registered as venue-level assets at startup. Agents can discover them via `asset:list type=agent-template`.
+The venue ships with standard templates registered as venue-level assets at
+startup. Each has ordinary metadata plus the canonical `agent.config` facet.
 
 ### Standard templates (shipped)
 
 Installed at venue startup by `AgentAdapter.installAssets` via `installAgentTemplate(name, path)`. Materialised to the venue lattice at `v/agents/templates/<name>`. Discoverable via `covia_list path=v/agents/templates`. Resolvable via `config="v/agents/templates/<name>"` — standard lattice path resolution, no special-case lookup.
 
+The shipped behavioural templates are provider-neutral: they do not select an
+LLM operation or model. Explicit use therefore inherits venue defaults unless
+a later config layer selects a provider/model. Their system prompts are also
+tool-name-neutral: operation references and harness controls live in the
+configuration, while the prompt describes workflows against the live tool
+palette assembled for the current provider call.
+
 | Path | Tools | Purpose |
 |------|-------|---------|
-| `v/agents/templates/minimal` | (none, `defaultTools: false`) | Pure reasoning, no side effects |
-| `v/agents/templates/reader` | `v/ops/covia/read`, `v/ops/covia/list`, `v/ops/covia/slice` | Read-only data analysis |
-| `v/agents/templates/worker` | `v/ops/covia/{read,write,delete,append,slice,list}` | General data processing |
-| `v/agents/templates/manager` | `v/ops/agent/*` CRUD ops, `v/ops/covia/{read,list}`, `v/ops/grid/run`, **subgoal/compact/more_tools** | Agent coordination with goal decomposition |
-| `v/agents/templates/analyst` | `v/ops/covia/{read,list,slice}`, `v/ops/schema/{validate,infer,coerce}` | Data analysis with schema awareness |
+| `v/agents/templates/minimal` | No operation tools; complete skill index | Lean on-demand general agent |
+| `v/agents/templates/skilled` | `v/ops/covia/{inspect,read,list}`; complete skill index | Recommended lean default |
+| `v/agents/templates/reader` | `v/ops/covia/{inspect,read,list,slice}`; curated read-oriented skills; enforced read caps | Read-only data analysis |
+| `v/agents/templates/worker` | `v/ops/covia/{inspect,read,write,delete,append,slice,list}`; storage/provenance skills | General data processing |
+| `v/agents/templates/manager` | Agent coordination, local reads, grid run/status/result, **subgoal/compact/more_tools**; management skills | Multi-agent coordination |
+| `v/agents/templates/analyst` | `v/ops/covia/{inspect,read,list,slice,aggregate}`, schema ops; analysis skills | Evidence and schema analysis |
 | `v/agents/templates/goaltree` | Curated covia + grid + asset ops + all 7 harness tools | Goal-tree agent with full decomposition support |
-| `v/agents/templates/full` | All default tools + all 7 harness tools (`defaultTools: true`) | Development and exploration |
+| `v/agents/templates/full` | Broad agent/asset/covia/schema/grid palette plus context tools and complete skill index | Context-heavy development and exploration |
 
-**Tools are opt-in.** Each template explicitly lists the tools it needs in `config.tools`. Set `defaultTools: false` to disable the legacy 18-tool default set. Harness tools (`subgoal`, `complete`, `fail`, `compact`, `context_load`, `context_unload`, `more_tools`) are also opt-in — include their names in `config.tools`. Typed outputs (`config.outputs`) auto-inject `complete`/`fail` regardless of the tools list.
+**Tools are opt-in.** Each template explicitly lists the tools it needs in `config.tools`; `defaultTools: true` adds only the deliberately small read/list pack. GoalTree harness tools (`subgoal`, `complete`, `fail`, `compact`, `context_load`, `context_unload`, `more_tools`) are opt-in by name. The plain LLM runtime always supplies its session context load/unload tools. `skill_load` appears whenever `config.skills` is non-empty. Typed GoalTree outputs auto-inject `complete`/`fail` regardless of the tools list.
 
 Template JSON files live in `venue/src/main/resources/agent-templates/`.
 
 ### Default template
 
-`agent:create` with no `config` starts from `v/agents/templates/skilled`: a lean read/list base plus skills loaded on demand. The venue's configured transition and LLM provider replace the portable template defaults, and the provider chooses its own default model. Passing an explicit map—including `{}`—continues to mean exactly that configuration and does not acquire template capabilities implicitly.
+`agent:create` with no `config` starts from `v/agents/templates/skilled`: a lean inspect/read/list base plus skills loaded on demand. The venue supplies its configured transition and LLM provider, and the provider chooses its own default model. Passing an explicit map—including `{}`—continues to mean exactly that configuration and does not acquire template capabilities implicitly.
 
 ---
 
@@ -283,7 +345,7 @@ An agent creating another agent can:
 2. **Browse standard templates:** `covia_list path=v/agents/templates`
 3. **Read a workspace template:** `covia_read path=w/templates/my-worker`
 4. **Create from workspace reference:** `agent_create agentId=Worker config=w/templates/my-worker`
-5. **Customise:** Read a template, modify the returned map, pass the modified map inline as config
+5. **Compose:** Pass an ordered config vector of template/provider/prompt/tool-selector references plus a final inline override
 6. **Fork existing:** `agent_fork sourceId=TrainedWorker agentId=Worker-2`
 
 This is a fully data-driven workflow — no special APIs, just reading templates and passing them to `agent:create`. The same `config` field handles standard template names, workspace paths, asset references, DID URLs, and inline maps.
@@ -335,7 +397,7 @@ So for a pipeline of *capped* workers, provision the handoff area explicitly:
 
 Every stage can read the shared `w/pipeline/` area. With structural handoff the
 **manager** needs `crud/write` on each `outputPath`, because the framework writes
-under the requester's captured ceiling; each consumer needs `crud/read` on its
+under the requester's captured capability scope; each consumer needs `crud/read` on its
 input path. The producing worker does not need write authority merely to return
 its result. Uncapped agents need none of these explicit grants — but capping is
 the least-privilege posture for untrusted or externally-facing work, and there
@@ -345,13 +407,15 @@ the handoff caps are mandatory, not optional.
 
 ## 9. Implementation
 
-### Phase 1: `config` accepts string references ✓ DONE
+### Phase 1: `config` accepts references and ordered layers ✓ DONE
 
-- `agent:create`'s `config` field accepts an inline map *or* a string reference
+- `agent:create`'s `config` field accepts an inline map, a string reference, or an ordered vector of either
 - Resolution: `AgentAdapter.resolveConfigRef` calls `engine.resolvePath(ref, ctx)` which handles every form (venue paths, workspace paths, asset hashes, DID URLs, pinned ops)
-- Embedded `state` field in the resolved map is extracted and used as initial state
-- Schema in `create.json` uses `oneOf` to document both forms
-- The legacy `definition` field continues to work for nested `meta.agent.config` format
+- Layers merge left-to-right; nested maps merge recursively and later non-map values replace earlier values
+- Canonical assets expose configuration and optional initial state under the `agent` facet; flat maps remain compatible
+- Embedded `state` is extracted and used as initial state
+- Schema in `create.json` documents all three forms
+- The compatibility `definition` field resolves the same canonical `agent.config` facet and ordered layers
 
 ### Phase 2: `agent:fork` ✓ DONE
 
@@ -364,10 +428,10 @@ the handoff caps are mandatory, not optional.
 
 ### Phase 3a: Ship standard templates ✓ DONE
 
-- Template JSONs in `venue/src/main/resources/agent-templates/` (minimal, reader, worker, manager, analyst, full, goaltree)
+- Provider-neutral template assets in `venue/src/main/resources/agent-templates/` (minimal, skilled, reader, worker, manager, analyst, full, goaltree)
 - `AgentAdapter.installAgentTemplate(name, path)` materialises each to `v/agents/templates/<name>` at venue startup
 - No special-case lookup — `resolveConfigRef` uses standard `engine.resolvePath` which handles `v/agents/templates/<name>` like any other venue path
-- Templates are discoverable via `covia_list path=v/agents/templates`
+- Templates are content-addressed assets and discoverable pins via `covia_list path=v/agents/templates`
 
 ### Phase 3b: Swap default
 
@@ -383,7 +447,7 @@ minimal read-only base (`covia/read`, `covia/list`) is extended on demand via
 |---------|----------|
 | `agent:create config` (inline map) | Unchanged — same as before |
 | `agent:create config` (string reference) | New in Phase 1 — resolves workspace paths, asset refs, DID URLs |
-| `agent:create definition` | Legacy nested format (`meta.agent.config`) — still works, but prefer unified `config` reference |
+| `agent:create definition` | Compatibility entry point for an asset with `agent.config`; prefer placing that asset reference in the ordered `config` stack |
 | `DEFAULT_TOOL_OPS` | Replaced by default template in Phase 3 |
 | `agent:delete` + recreate | `agent:fork` is cleaner for "reset with modifications" |
 | Context loading | Templates can include `context` array — same mechanism |

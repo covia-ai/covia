@@ -148,6 +148,9 @@ public class Fields {
 
 	// Venue status
 	public static final StringShort VERSION = Strings.intern("version");
+	/** UCAN JWT profile emitted by this venue. Older tokens without an explicit
+	 * profile marker may still be accepted through the compatibility boundary. */
+	public static final StringShort UCAN_PROFILE = Strings.intern("ucanProfile");
 
 	// Lattice navigation
 	public static final StringShort PATH = Strings.intern("path");

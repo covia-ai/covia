@@ -8,17 +8,17 @@
     "input": {
       "type": "object",
       "properties": {
-        "root": { "type": "string", "description": "Configured root name" },
-        "path": { "type": "string", "description": "Directory path relative to the root" },
+        "root": { "type": "string", "description": "Configured root name; omit for a canonical DLFS path" },
+        "path": { "type": "string", "description": "Directory relative to root or a canonical DLFS directory path" },
         "parents": { "type": "boolean", "description": "Create intermediate parents if missing (default false)" }
       },
-      "required": ["root", "path"]
+      "required": ["path"]
     },
     "output": {
       "type": "object",
       "properties": {
         "created": { "type": "boolean", "description": "True if a new directory was created" },
-        "path": { "type": "string", "description": "Absolute host path of the directory" }
+        "path": { "type": "string", "description": "Provider path of the directory" }
       }
     }
   }

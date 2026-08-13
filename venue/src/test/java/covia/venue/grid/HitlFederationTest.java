@@ -22,9 +22,12 @@ import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.auth.VenueAuth;
+import covia.grid.auth.UcanTokens;
 import covia.grid.client.VenueHTTP;
 import covia.grid.hitl.Hitl;
+import covia.venue.RequestContext;
 import covia.venue.TwoVenueTestServer;
+import covia.venue.UcanJwtValidator;
 
 /**
  * Cross-venue HITL (COG-16 §Cross-Venue Requests): the requester on venue A
@@ -54,9 +57,7 @@ public class HitlFederationTest {
 	/** Identity token: empty att, audienced to {@code venueDID} — pure proof
 	 *  of the caller's identity at that venue, unusable anywhere else. */
 	private static String identityToken(AKeyPair kp, String venueDID) {
-		long exp = (System.currentTimeMillis() / 1000) + 300;
-		return UCAN.create(kp, UCAN.fromDIDKey(Strings.create(venueDID)), exp,
-			Vectors.empty(), Vectors.empty()).toJWT(kp).toString();
+		return UcanTokens.identityToken(kp, venueDID, 300);
 	}
 
 	/** Polls the remote job through venue A until it reaches {@code wanted}
@@ -108,13 +109,18 @@ public class HitlFederationTest {
 		// delivery is not an account-provisioning side effect.
 		TwoVenueTestServer.ENGINE_B.getVenueState().users().create(aliceDID);
 
-		// Alice delegates hitl/request over her inbox to Bob (self-sovereign).
+		// Venue B, as custodian of Alice's managed identity, delegates
+		// hitl/request over her inbox to Bob using its declared did:web issuer.
 		long exp = (System.currentTimeMillis() / 1000) + 3600;
-		String hitlGrant = UCAN.create(TwoVenueTestServer.ENGINE_B.getKeyPair(),
-			UCAN.fromDIDKey(bobDID), exp,
-			Vectors.of(Capability.create(
-				Strings.create(aliceDID + "/h/"), HITLAdapter.ABILITY_HITL_REQUEST)),
-			Vectors.empty()).toJWT(TwoVenueTestServer.ENGINE_B.getKeyPair()).toString();
+		ACell grantResult = TwoVenueTestServer.ENGINE_B.jobs().invokeOperation(
+			"v/ops/ucan/issue",
+			Maps.of(
+				UCAN.AUD, bobDID,
+				UCAN.ATT, Vectors.of(Capability.create(
+					Strings.create(aliceDID + "/h/"), HITLAdapter.ABILITY_HITL_REQUEST)),
+				UCAN.EXP, exp),
+			RequestContext.of(aliceDID)).awaitResult(5000);
+		String hitlGrant = RT.ensureString(RT.getIn(grantResult, "token")).toString();
 
 		// Bob calls VENUE A; his ucans carry the delegation plus his identity
 		// token for venue B. The grid op input carries data only (COG-15).
@@ -170,7 +176,10 @@ public class HitlFederationTest {
 
 		AString jwt = RT.ensureString(output.get(Hitl.TOKEN));
 		assertNotNull(jwt, "the granted token flows back in the job output");
-		UCAN token = UCAN.fromJWT(jwt);
+		UcanJwtValidator.Validation validation = UcanJwtValidator.validate(jwt,
+			System.currentTimeMillis() / 1000, TwoVenueTestServer.ENGINE_B.didVerifier());
+		assertNotNull(validation.token(), "the did:web-issued grant must verify: " + validation.reason());
+		UCAN token = validation.token();
 		assertEquals(bobDID, token.getAudience(), "token is audienced to the requester");
 		assertEquals(Strings.create(aliceDID + "/w/reports/"),
 			RT.getIn(token.getCapabilities().get(0), Capability.WITH),

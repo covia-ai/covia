@@ -150,8 +150,13 @@ public class LocalVenue extends Venue {
 		// /assets/{id}/content endpoint and the client Asset.getContent() reach
 		// here, so routing through it (rather than the blob-only getContent) is
 		// what makes inline content fetchable over HTTP (covia#289).
+		// A LocalVenue with no caller context represents the venue's published
+		// catalog (used by the explicit HTTP namespace=venue path). A caller-bound
+		// LocalVenue continues to resolve the same bare hash in that caller's /a/.
+		RequestContext rctx = (requestContext == null && getUser() == null)
+			? engine.venueContext() : context();
 		covia.venue.storage.ContentProvider.Resolved resolved =
-			engine.resolveContent(convex.core.data.Strings.create(id.toHexString()), context());
+			engine.resolveContent(convex.core.data.Strings.create(id.toHexString()), rctx);
 		return (resolved == null) ? null : resolved.content();
 	}
 

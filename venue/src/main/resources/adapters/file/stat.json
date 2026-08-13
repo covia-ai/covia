@@ -8,10 +8,10 @@
     "input": {
       "type": "object",
       "properties": {
-        "root": { "type": "string", "description": "Configured root name" },
-        "path": { "type": "string", "description": "Path relative to the root" }
+        "root": { "type": "string", "description": "Configured root name; omit for a canonical DLFS path" },
+        "path": { "type": "string", "description": "Path relative to root or a canonical DLFS path" }
       },
-      "required": ["root", "path"]
+      "required": ["path"]
     },
     "output": {
       "type": "object",

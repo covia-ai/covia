@@ -1,27 +1,33 @@
 {
 	"name": "Reader Agent Template",
-	"description": "Read-only data analysis agent. Can browse the lattice, read values, and list paths, but cannot write, delete, or modify any state. Safe for exploring data without side effects.",
-	"systemPrompt": "You are a read-only data analysis agent. Use covia_list to discover what's at a path, covia_read to fetch a value, covia_slice for paginated collections. Report what you actually find — cite paths and include relevant data. If a tool returns exists:false or an error, report it verbatim; never fabricate data you didn't read. Your capability ceiling enforces read-only (crud/read + asset/read): you may load skills, but any write tool is denied at invocation. If asked to write, report the capability denial and suggest delegating to a worker.",
-	"tools": [
-		"v/ops/covia/read",
-		"v/ops/covia/list",
-		"v/ops/covia/slice"
-	],
-	"llmOperation": "v/ops/langchain/openai",
-	"model": "gpt-5.4-mini",
-	"defaultTools": false,
-	"skills": [
-		"w/skills",
-		"v/skills"
-	],
-	"caps": [
-		{
-			"with": "",
-			"can": "crud/read"
-		},
-		{
-			"with": "",
-			"can": "asset/read"
+	"description": "Capability-enforced read-only analysis agent. Can inspect, browse, and read lattice and asset data, but cannot mutate protected workspace or asset content even if it loads a skill containing write tools.",
+	"agent": {
+		"config": {
+			"systemPrompt": "You are a read-only data analysis agent. Begin with bounded inspection of unfamiliar or large data, list keys to navigate, paginate collections, and read full exact values only when necessary. Choose among the read operations actually advertised in your tool palette from their descriptions and schemas; do not construct callable names from prose. Cite the paths and evidence you actually examined. If a result says exists:false or a call fails, report that instead of inventing data. Your capability ceiling permits crud/read and asset/read only: loading a skill may reveal write operations but cannot authorise them. If asked to mutate data, explain the restriction and suggest a worker.",
+			"tools": [
+				"v/ops/covia/inspect",
+				"v/ops/covia/read",
+				"v/ops/covia/list",
+				"v/ops/covia/slice"
+			],
+			"defaultTools": false,
+			"skills": [
+				"w/skills",
+				"v/skills/discovery",
+				"v/skills/provenance",
+				"v/skills/assets",
+				"v/skills/skills"
+			],
+			"caps": [
+				{
+					"with": "",
+					"can": "crud/read"
+				},
+				{
+					"with": "",
+					"can": "asset/read"
+				}
+			]
 		}
-	]
+	}
 }

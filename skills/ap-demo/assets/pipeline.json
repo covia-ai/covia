@@ -32,9 +32,9 @@
                 "invoice_text"
               ]
             },
-            "wait": [
+            "timeout": [
               "const",
-              true
+              30000
             ]
           }
         },
@@ -55,9 +55,9 @@
                 "Alice"
               ]
             },
-            "wait": [
+            "timeout": [
               "const",
-              true
+              30000
             ]
           }
         },
@@ -89,9 +89,9 @@
                 ]
               ]
             },
-            "wait": [
+            "timeout": [
               "const",
-              true
+              30000
             ]
           }
         }

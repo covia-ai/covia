@@ -102,7 +102,7 @@ Resident agents get HITL from the venue skill library (`v/skills/hitl`) — ever
 
 3. **Or instruct per-task** — include "confirm with me via a HITL request before X" in an `agent_request` task; a skills-capable agent will load the skill and ask.
 4. **Timing** — an agent's HITL tool call blocks up to its `toolCallTimeoutMs` (default 5 min). If the human answers within that window the agent continues in the same cycle; otherwise the tool returns the job id and the agent should park the work and re-check the job (`covia_read path=j/<id>`) on a later wake — this is normal, not an error.
-5. **Authority** — the ask goes to the agent's **owner** by default (omit `user`); that needs no delegation. Asking anyone else requires the `hitl/request` token above, and a caps-pinned agent additionally needs its ceiling to permit the op (skill loading grants no authority).
+5. **Authority** — the ask goes to the agent's **owner** by default (omit `user`); that needs no delegation. Asking anyone else requires the `hitl/request` token above, and a caps-pinned agent additionally needs its capability scope to permit the op (skill loading grants no authority).
 
 ### `test` — smoke-test the full loop
 

@@ -6,6 +6,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Covia is pre-1.0, so minor versions may include breaking changes.
 
+## [Unreleased]
+
+## [0.9.1] - 2026-08-13
+
+### Changed
+
+- Generalised the `vault` adapter: it now targets the neutral `vault` DLFS
+  drive by default, supports `adapters.vault.drive` for application-specific
+  bindings, and no longer exposes health-specific descriptions or examples.
+  Startup warns when the adapter is active without an encrypted Etch policy.
+- Named-user key-pair authentication now emits the verification-method DID URL
+  published by the user's DID document as the JWT `kid`; ordinary `did:key`
+  authentication retains its bare-Multikey header. Covia now uses the released
+  Convex `0.8.12` artifacts for the explicit-key-ID signing API (#352).
+- Restored compatibility with correctly signed legacy UCAN JWTs that omit the
+  `ucv` profile marker and empty `prf` claim. Venues still emit the explicit
+  UCAN 0.10.0 profile, reject explicit unsupported versions, advertise the
+  emitted profile in `/api/v1/status`, and return claim-specific verification
+  diagnostics (#353).
+- Reconciled the engineering and DX roadmaps with the 0.9.0 codebase: current
+  artifact versions, shipped VenueHTTP/SSRF/CORS test coverage, narrowed auth
+  and focused-test gaps, resolved Java baseline, and per-caller rate limiting.
+- Made deployment and optional-module examples version-neutral, refreshed the
+  module maps and contribution link, and removed obsolete A2A limitations that
+  shipped in 0.9.0.
+- Centralized the hosted quickstart on a configurable stable-venue URL and
+  replaced deployment-specific hostnames in generic examples and test fixtures
+  with RFC-reserved domains. The venue inventory now flags venue-3's expired
+  TLS certificate and avoids duplicating dev-host coordinates in usage examples.
+- Strengthened DLFS regression coverage for long sibling names and concurrent
+  staged-file promotion, directory listing, lattice sync, and encrypted Etch v3
+  restart. The reported corruption does not reproduce locally on either Convex
+  0.8.11 or 0.8.12, so no dependency-level fix is claimed (#342).
+
+### Fixed
+
+- Scoped caller-facing asset hashes to the current caller's `/a` namespace,
+  including metadata and content reads and writes. Venue catalog access is now
+  explicit for federation and no longer acts as an authorization-bypassing
+  fallback for user requests (#368).
+
 ## [0.9.0] - 2026-08-10
 
 Breaking: UCAN JWTs now use the versioned Convex profile (Convex 0.8.11) —
@@ -16,7 +57,8 @@ the profile (`ucv` claim, always-present `prf`).
 ### Added
 - Operator-declared venue identity: the `did` config key is validated
   fail-closed (did:web must match the public hostname; did:key pins the venue
-  key pair), and did:web principals verify at every ingress seam (#343)
+  key pair); DID-method resolvers now separate identity, signature verification,
+  and transport routing, and did:web federation is covered end to end (#343)
 - `file:move` / `file:copy` with provider-native dispatch — fully native on
   DLFS-backed roots with Convex 0.8.11 (#321)
 - Outbound A2A agents modelled as assets (#340)
@@ -368,6 +410,8 @@ Initial public release: venue server with the adapter framework, lattice-backed
 content-addressed assets, the async job model with SSE, multi-protocol surface
 (REST / MCP / A2A / DID), and strategy-based authentication.
 
+[Unreleased]: https://github.com/covia-ai/covia/compare/0.9.1...HEAD
+[0.9.1]: https://github.com/covia-ai/covia/compare/0.9.0...0.9.1
 [0.9.0]: https://github.com/covia-ai/covia/compare/0.8.0...0.9.0
 [0.8.0]: https://github.com/covia-ai/covia/compare/0.7.0...0.8.0
 [0.7.0]: https://github.com/covia-ai/covia/compare/0.6.0...0.7.0

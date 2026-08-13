@@ -101,6 +101,24 @@ public class UCANBearerTransportTest {
 			"Bearer UCAN's iss must become the caller DID");
 	}
 
+	@Test
+	public void testLegacyBearerWithoutVersionOrProofsIsAccepted() throws Exception {
+		long exp = (System.currentTimeMillis() / 1000) + 3600;
+		AMap<AString, ACell> legacyClaims = Maps.of(
+			UCAN.ISS, ALICE_DID,
+			UCAN.AUD, engine.getDIDString(),
+			UCAN.EXP, CVMLong.create(exp),
+			UCAN.ATT, Vectors.empty());
+		AString invocation = JWT.signPublic(legacyClaims, ALICE_KP);
+
+		HttpResponse<String> resp = postInvoke(
+			"{\"operation\":\"v/test/ops/echo\",\"input\":{\"message\":\"legacy\"}}",
+			invocation.toString());
+		assertTrue(resp.statusCode() == 200 || resp.statusCode() == 201,
+			() -> "Legacy UCAN bearer should verify: " + resp.statusCode() + " / " + resp.body());
+		assertEquals(ALICE_DID, callerDIDOf(resp));
+	}
+
 	/**
 	 * A tampered bearer token is a hard 401 — presenting credentials is an
 	 * explicit identity claim, and failing that claim must be visible. It is

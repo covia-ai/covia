@@ -8,7 +8,7 @@ This document describes how to build the Covia project using Maven.
 - **Maven 3.7+**: Minimum Maven version required (enforced by maven-enforcer-plugin)
 - **Git**: For cloning the repository
 
-All dependencies resolve from Maven Central, including [Convex](https://github.com/Convex-Dev/convex) (`0.8.11`) — the lattice layers the venue state model is built on. A clean clone builds with no extra steps (`mvn clean install`). To track an unreleased Convex, build it from source (`mvn install -DskipTests` in a `develop` checkout of the Convex repo) and point `convex.version` at its `-SNAPSHOT`; CI compiles Convex from source automatically whenever `convex.version` ends in `-SNAPSHOT`, and the step skips itself for a released pin.
+All dependencies, including Convex 0.8.12, resolve from Maven Central. A clean Covia checkout therefore builds directly with Maven; no sibling Convex checkout or source build is required.
 
 ## Project Structure
 
@@ -33,11 +33,13 @@ covia/
 │       ├── main/resources/ # Resources and assets
 │       └── test/java/     # Test source code
 ├── workbench/             # GUI workbench module
-    ├── pom.xml            # Workbench module POM
-    └── src/
-        ├── main/java/     # GUI source code
-        └── main/resources/ # GUI resources
-└── covia-sql/              # Optional loadable SQL adapter module
+│   ├── pom.xml            # Workbench module POM
+│   └── src/
+│       ├── main/java/     # GUI source code
+│       └── main/resources/ # GUI resources
+└── covia-sql/             # Optional loadable SQL adapter module
+    ├── pom.xml            # Venue SPI provided; shaded module classifier
+    └── src/               # SQL operation adapter and tests
 ```
 
 The standard venue does not depend on either Python module. A Java 21 reactor
