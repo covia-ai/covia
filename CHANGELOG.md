@@ -8,6 +8,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-08-13
+
 ### Changed
 
 - Generalised the `vault` adapter: it now targets the neutral `vault` DLFS
@@ -408,7 +410,8 @@ Initial public release: venue server with the adapter framework, lattice-backed
 content-addressed assets, the async job model with SSE, multi-protocol surface
 (REST / MCP / A2A / DID), and strategy-based authentication.
 
-[Unreleased]: https://github.com/covia-ai/covia/compare/0.9.0...HEAD
+[Unreleased]: https://github.com/covia-ai/covia/compare/0.9.1...HEAD
+[0.9.1]: https://github.com/covia-ai/covia/compare/0.9.0...0.9.1
 [0.9.0]: https://github.com/covia-ai/covia/compare/0.8.0...0.9.0
 [0.8.0]: https://github.com/covia-ai/covia/compare/0.7.0...0.8.0
 [0.7.0]: https://github.com/covia-ai/covia/compare/0.6.0...0.7.0
