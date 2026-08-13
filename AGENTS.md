@@ -226,13 +226,13 @@ The list below tracks engineering tasks. For the developer-experience and open-s
 - [x] **Add VenueHTTP test coverage** — real-venue contract tests cover direct run, status, polling and caller-side timeouts, content round-trips, concurrent use, authentication, and error paths. Deterministic client tests cover 429 retry/backoff behavior.
   - Files: `venue/src/test/java/covia/grid/client/VenueHTTPTest.java`, `covia-core/src/test/java/covia/grid/client/VenueHTTPRetryTest.java`
 
-- [ ] **Complete auth strategy tests** — `KeyPairAuth` has deterministic claim/signing tests, bearer authentication and rejection paths run against real venues, and unsupported token minting is covered. Remaining: focused constructor/header tests for `NoAuth` and `BearerAuth`, plus `LocalAuth` DID propagation and no-header behavior (the local strategy is in-process and should not be tested as HTTP authentication).
+- [x] **Complete auth strategy tests** — `KeyPairAuth` has deterministic claim/signing tests, bearer authentication and rejection paths run against real venues, and unsupported token minting is covered. Focused tests also cover constructor/header behavior for `NoAuth` and `BearerAuth`, plus `LocalAuth` DID propagation and no-header behavior through the in-process path.
   - Directory: `covia-core/src/test/java/`
 
 - [x] **Add SSRF and CORS regression coverage** — HTTPAdapter allow/block policy, private/loopback targets, invalid schemes, configured CORS origins, loopback/PNA behavior, and disabled CORS are covered.
   - Files: `venue/src/test/java/covia/adapter/http/HTTPTest.java`, `venue/src/test/java/covia/venue/VenueServerTest.java`
 
-- [ ] **Add remaining focused test coverage**:
+- [x] **Add remaining focused test coverage**:
   - `/config` page redaction (public info only)
   - LangChainAdapter IO timeout
   - Thread safety of `Asset.meta()` (concurrent access)

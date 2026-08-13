@@ -111,12 +111,7 @@ public class JobTest {
 		Job job = Job.create(data);
 
 		// Complete the job asynchronously
-		CompletableFuture.runAsync(() -> {
-			try {
-				Thread.sleep(50);
-			} catch (InterruptedException e) {}
-			job.completeWith(Strings.create("result"));
-		});
+		CompletableFuture.runAsync(() -> job.completeWith(Strings.create("result")));
 
 		// awaitResult should return the result
 		ACell result = job.awaitResult();
@@ -134,12 +129,7 @@ public class JobTest {
 		Job job = Job.create(data);
 
 		// Fail the job asynchronously
-		CompletableFuture.runAsync(() -> {
-			try {
-				Thread.sleep(50);
-			} catch (InterruptedException e) {}
-			job.fail("Test failure");
-		});
+		CompletableFuture.runAsync(() -> job.fail("Test failure"));
 
 		// awaitResult should throw JobFailedException
 		assertThrows(JobFailedException.class, () -> job.awaitResult());

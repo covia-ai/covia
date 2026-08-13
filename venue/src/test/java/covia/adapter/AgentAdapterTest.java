@@ -2773,9 +2773,8 @@ public class AgentAdapterTest {
 
 		// Wait until the live executor reports the never-completing transition.
 		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("del-wedge");
-		long deadline = System.currentTimeMillis() + 5000;
-		while (!AgentState.RUNNING.equals(observableStatus(agent))
-				&& System.currentTimeMillis() < deadline) Thread.sleep(10);
+		TestEngine.awaitCondition(() -> AgentState.RUNNING.equals(observableStatus(agent)), 5000,
+			() -> "agent did not enter RUNNING (status=" + observableStatus(agent) + ")");
 		assertEquals(AgentState.RUNNING, observableStatus(agent),
 			"agent should be blocked in the never-completing transition");
 		assertEquals(AgentState.RUNNING, agent.getStatus(),
@@ -4321,9 +4320,8 @@ public class AgentAdapterTest {
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState old = user.agent("run-ow");
-		long deadline = System.currentTimeMillis() + 5000;
-		while (!AgentState.RUNNING.equals(observableStatus(old))
-				&& System.currentTimeMillis() < deadline) Thread.sleep(10);
+		TestEngine.awaitCondition(() -> AgentState.RUNNING.equals(observableStatus(old)), 5000,
+			() -> "agent did not enter RUNNING (status=" + observableStatus(old) + ")");
 		assertEquals(AgentState.RUNNING, observableStatus(old));
 		assertEquals(AgentState.RUNNING, old.getStatus());
 
@@ -5174,10 +5172,8 @@ public class AgentAdapterTest {
 		// record (poll briefly — intake is synchronous but dispatch may not be)
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("del-chat-agent");
-		long deadline = System.currentTimeMillis() + 5000;
-		while (agent.getSessions().count() == 0 && System.currentTimeMillis() < deadline) {
-			Thread.sleep(5);
-		}
+		TestEngine.awaitCondition(() -> agent.getSessions().count() > 0, 5000,
+			() -> "chat did not mint a session");
 		assertEquals(1, agent.getSessions().count(), "chat should have minted a session");
 		Blob sid = agent.getSessions().entrySet().iterator().next().getKey();
 

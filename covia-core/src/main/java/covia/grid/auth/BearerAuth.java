@@ -11,8 +11,8 @@ class BearerAuth extends VenueAuth {
 	private final String token;
 
 	BearerAuth(String token) {
-		if (token == null || token.isEmpty()) {
-			throw new IllegalArgumentException("Bearer token must not be null or empty");
+		if (token == null || token.isBlank()) {
+			throw new IllegalArgumentException("Bearer token must not be blank");
 		}
 		this.token = token;
 	}

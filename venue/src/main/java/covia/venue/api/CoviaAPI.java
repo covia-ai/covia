@@ -1011,6 +1011,8 @@ public class CoviaAPI extends ACoviaAPI {
 			description = "Streams the job's status record as SSE frames on every status change until "
 					+ "the job reaches a terminal state (the final record is the last frame; the stream "
 					+ "then closes). Poll-free alternative to GET /jobs/{id} for watching a running job. "
+					+ "Authenticated clients send the normal Authorization header; browser clients should "
+					+ "consume the stream with fetch/ReadableStream because native EventSource cannot set headers. "
 					+ "A missing or */* Accept header is treated as text/event-stream — the /sse path is "
 					+ "unambiguous; an explicit non-SSE Accept is rejected with 406.",
 			pathParams = { @OpenApiParam(name = "id", description = "Job ID (hex)") },
@@ -1024,8 +1026,15 @@ public class CoviaAPI extends ACoviaAPI {
 		// Ownership applies to the stream exactly as to GET /jobs/{id}: the
 		// record resolves under the caller's context or not at all.
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
-		if (engine().jobs().getJobData(id, rctx) == null) {
-			buildError(ctx, 404, "Job not found: " + id);
+		try {
+			if (engine().jobs().getJobData(id, rctx) == null) {
+				buildError(ctx, 404, "Job not found: " + id);
+				return;
+			}
+		} catch (AuthException e) {
+			// Match GET /jobs/{id}: ownership denials are ordinary API errors,
+			// never unhandled exceptions after an SSE client probes a foreign id.
+			buildError(ctx, 403, e.getMessage());
 			return;
 		}
 

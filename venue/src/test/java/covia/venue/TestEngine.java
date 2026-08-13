@@ -1,5 +1,8 @@
 package covia.venue;
 
+import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
+
 import convex.core.data.Strings;
 import convex.core.data.Maps;
 import convex.core.data.AString;
@@ -48,6 +51,8 @@ import convex.core.data.ACell;
  */
 public class TestEngine {
 
+	private static final long POLL_INTERVAL_MS = 5;
+
 	/**
 	 * Shared Engine instance for venue unit tests. Lazily initialised on
 	 * first access. Static — survives the JVM, no per-test setup cost.
@@ -89,6 +94,40 @@ public class TestEngine {
 	}
 
 	/**
+	 * Waits for an asynchronous post-condition without relying on a blind sleep.
+	 * The condition is checked immediately and then at a short fixed interval.
+	 * Interruptions fail the test instead of being mistaken for success.
+	 *
+	 * @param condition condition that becomes true on success
+	 * @param timeoutMs maximum wait in milliseconds
+	 * @param timeoutMessage diagnostic constructed only on timeout/interruption
+	 * @throws AssertionError if interrupted or the deadline expires
+	 */
+	public static void awaitCondition(BooleanSupplier condition, long timeoutMs,
+			Supplier<String> timeoutMessage) {
+		if (timeoutMs < 0) throw new IllegalArgumentException("timeoutMs must be non-negative");
+		long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(timeoutMs);
+		do {
+			if (condition.getAsBoolean()) return;
+			if (System.nanoTime() >= deadline) break;
+			try {
+				Thread.sleep(POLL_INTERVAL_MS);
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				throw new AssertionError("Interrupted while waiting: " + timeoutMessage.get(), e);
+			}
+		} while (true);
+		throw new AssertionError(timeoutMessage.get());
+	}
+
+	/** Waits until an agent reaches the requested persisted status. */
+	public static void awaitAgentStatus(AgentState agent, AString expected, long timeoutMs) {
+		awaitCondition(() -> expected.equals(agent.getStatus()), timeoutMs,
+			() -> "Agent did not reach " + expected + " within " + timeoutMs
+				+ "ms (status=" + agent.getStatus() + ")");
+	}
+
+	/**
 	 * Polls until the agent is idle (status {@code SLEEPING} with no
 	 * session pending and no tasks) or the timeout elapses. Tests should
 	 * wait on task/chat/request Jobs for results; this helper is for cases
@@ -98,20 +137,13 @@ public class TestEngine {
 	 * @throws AssertionError if the agent is not idle within the timeout.
 	 */
 	public static void awaitAgentIdle(AgentState agent, long timeoutMs) {
-		long deadline = System.currentTimeMillis() + timeoutMs;
-		while (System.currentTimeMillis() < deadline) {
+		awaitCondition(() -> {
 			AString status = agent.getStatus();
 			Index<Blob, ACell> tasks = agent.getTasks();
-			boolean idle = AgentState.SLEEPING.equals(status)
+			return AgentState.SLEEPING.equals(status)
 				&& !agent.hasSessionPending()
 				&& (tasks == null || tasks.count() == 0);
-			if (idle) return;
-			try { Thread.sleep(5); } catch (InterruptedException ie) {
-				Thread.currentThread().interrupt();
-				return;
-			}
-		}
-		throw new AssertionError("Agent did not become idle within "
+		}, timeoutMs, () -> "Agent did not become idle within "
 			+ timeoutMs + "ms (status=" + agent.getStatus()
 			+ ", hasSessionPending=" + agent.hasSessionPending()
 			+ ", tasks=" + (agent.getTasks() == null ? 0 : agent.getTasks().count()) + ")");
@@ -129,18 +161,14 @@ public class TestEngine {
 	 *                        within the timeout.
 	 */
 	public static void awaitTimelineCount(AgentState agent, int minCount, long timeoutMs) {
-		long deadline = System.currentTimeMillis() + timeoutMs;
-		while (System.currentTimeMillis() < deadline) {
+		awaitCondition(() -> {
 			convex.core.data.AVector<?> tl = agent.getTimeline();
-			if (tl != null && tl.count() >= minCount) return;
-			try { Thread.sleep(5); } catch (InterruptedException ie) {
-				Thread.currentThread().interrupt();
-				return;
-			}
-		}
-		convex.core.data.AVector<?> tl = agent.getTimeline();
-		throw new AssertionError("Agent timeline did not reach " + minCount
+			return tl != null && tl.count() >= minCount;
+		}, timeoutMs, () -> {
+			convex.core.data.AVector<?> tl = agent.getTimeline();
+			return "Agent timeline did not reach " + minCount
 			+ " entries within " + timeoutMs + "ms (current="
-			+ (tl == null ? 0 : tl.count()) + ", status=" + agent.getStatus() + ")");
+			+ (tl == null ? 0 : tl.count()) + ", status=" + agent.getStatus() + ")";
+		});
 	}
 }

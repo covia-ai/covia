@@ -40,16 +40,8 @@ public class GoalTreeCrashResumeTest {
 	private static final AString ALICE = Strings.create("did:key:z6MkCrashBoundaryAlice");
 
 	private static void await(BooleanSupplier condition, long timeoutMs, String description) {
-		long deadline = System.currentTimeMillis() + timeoutMs;
-		while (!condition.getAsBoolean()) {
-			if (System.currentTimeMillis() > deadline) fail("timeout waiting for: " + description);
-			try {
-				Thread.sleep(20);
-			} catch (InterruptedException e) {
-				Thread.currentThread().interrupt();
-				fail("interrupted");
-			}
-		}
+		TestEngine.awaitCondition(condition, timeoutMs,
+			() -> "timeout waiting for: " + description);
 	}
 
 	private static AMap<AString, ACell> config(AKeyPair keyPair) {

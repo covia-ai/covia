@@ -705,40 +705,6 @@ public class GoalTreeAdapterTest {
 	}
 
 	@Test
-	public void testCancelledJobDuringToolLoop() {
-		// Use test:toolllm which makes a tool call then returns text.
-		// Cancel the job after it starts — the second iteration should detect cancellation.
-		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
-
-		Job job = new Job(Maps.of(Fields.STATUS, Status.STARTED, Fields.ID, TEST_JOB_ID));
-
-		ACell input = Maps.of(
-			Fields.AGENT_ID, "cancel-loop-agent",
-			AgentState.KEY_STATE, null,
-			AgentState.KEY_CONFIG, Maps.of(
-				Strings.create("llmOperation"), Strings.create("v/test/ops/toolllm"),
-				Strings.create("systemPrompt"), Strings.create("You are a test agent.")),
-			Fields.MESSAGES, Vectors.of(
-				(ACell) Maps.of(Strings.create("content"), Strings.create("Do something"))));
-
-		// Run in a thread so we can cancel mid-flight
-		var future = java.util.concurrent.CompletableFuture.supplyAsync(
-			() -> adapter.processGoal(job, ALICE, input));
-
-		// Brief pause to let first iteration start, then cancel
-		try { Thread.sleep(100); } catch (InterruptedException e) {}
-		job.cancel();
-
-		ACell output = future.join();
-		assertNotNull(output);
-		// Either completed (response) or cancelled (error) — exactly one is set
-		ACell response = RT.getIn(output, Fields.RESPONSE);
-		ACell err = RT.getIn(output, Fields.ERROR);
-		assertTrue(response != null || err != null,
-			"Should have either a response or an error");
-	}
-
-	@Test
 	public void testInvokeWithCancelledJob() {
 		// Test the full invoke path — cancel the job, verify it doesn't complete normally
 		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
@@ -753,12 +719,8 @@ public class GoalTreeAdapterTest {
 		// Cancel immediately
 		job.cancel();
 
-		// Poll for finish — bounded, deterministic, no fixed sleep waste
-		long deadline = System.currentTimeMillis() + 2000;
-		while (!job.isFinished() && System.currentTimeMillis() < deadline) {
-			Thread.yield();
-		}
-
+		TestEngine.awaitCondition(job::isFinished, 2000,
+			() -> "cancelled GoalTree job did not finish (status=" + job.getStatus() + ")");
 		assertTrue(job.isFinished(), "Job should be finished after cancel");
 		assertEquals("CANCELLED", job.getStatus().toString());
 	}

@@ -1,6 +1,10 @@
 package covia.grid;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
+
+import java.util.concurrent.CompletableFuture;
+import java.util.stream.IntStream;
 
 import org.junit.jupiter.api.Test;
 
@@ -28,5 +32,18 @@ public class AssetTest {
 		
 		assertEquals(a,Asset.fromMeta(meta));
 		assertEquals(meta,a.meta());
+	}
+
+	@Test public void testMetaConcurrentAccessReturnsOneImmutableValue() {
+		Asset asset = Asset.forString("{\"name\":\"Concurrent Asset\",\"rank\":7}");
+		var reads = IntStream.range(0, 200)
+			.mapToObj(i -> CompletableFuture.supplyAsync(asset::meta))
+			.toList();
+
+		AMap<AString, ACell> first = reads.get(0).join();
+		for (CompletableFuture<AMap<AString, ACell>> read : reads) {
+			assertSame(first, read.join(), "metadata should be parsed and cached once");
+		}
+		assertEquals("Concurrent Asset", first.get(Strings.create("name")).toString());
 	}
 }

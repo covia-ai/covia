@@ -16,8 +16,8 @@ class LocalAuth extends VenueAuth {
 	private final String did;
 
 	LocalAuth(String did) {
-		if (did == null || did.isEmpty()) {
-			throw new IllegalArgumentException("DID must not be null or empty");
+		if (did == null || did.isBlank()) {
+			throw new IllegalArgumentException("DID must not be blank");
 		}
 		this.did = did;
 	}

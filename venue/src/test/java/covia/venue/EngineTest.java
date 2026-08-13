@@ -367,8 +367,8 @@ public class EngineTest {
 		ACell input = Maps.of("message", "Fail fast");
 		Job job = venue.jobs().invokeOperation("v/test/ops/error", input, venue.venueContext());
 
-		Thread.sleep(100);
-
+		TestEngine.awaitCondition(job::isFinished, 5000,
+			() -> "error job did not reach a terminal state");
 		assertTrue(job.isFinished(), "Job should be finished");
 
 		assertThrows(JobFailedException.class, () -> job.awaitResult(5000));
