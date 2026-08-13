@@ -35,23 +35,6 @@ import covia.venue.TestEngine;
  * case: amount 840 executes, amount 4820 is denied by the runtime.
  */
 public class CapabilityGateTest {
-	private static void awaitAgentStatus(covia.venue.AgentState agent,
-			AString expected, long timeoutMs) {
-		long deadline = System.currentTimeMillis() + timeoutMs;
-		while (!expected.equals(agent.getStatus())) {
-			if (System.currentTimeMillis() >= deadline) {
-				fail("timeout waiting for agent status " + expected
-					+ "; current status is " + agent.getStatus());
-			}
-			try {
-				Thread.sleep(10);
-			} catch (InterruptedException e) {
-				Thread.currentThread().interrupt();
-				fail("interrupted while waiting for agent status " + expected, e);
-			}
-		}
-	}
-
 	private final Engine engine = TestEngine.ENGINE;
 	private AString ALICE_DID;
 
@@ -402,7 +385,7 @@ public class CapabilityGateTest {
 
 		covia.venue.User user = engine.getVenueState().users().get(ALICE_DID);
 		covia.venue.AgentState agent = user.agent("gated-agent");
-		awaitAgentStatus(agent, covia.venue.AgentState.SLEEPING, 2000);
+		TestEngine.awaitAgentStatus(agent, covia.venue.AgentState.SLEEPING, 2000);
 		assertEquals(covia.venue.AgentState.SLEEPING, agent.getStatus(),
 			"a handled gate denial is not an agent failure");
 	}

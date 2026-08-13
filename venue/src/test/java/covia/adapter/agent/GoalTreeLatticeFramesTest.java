@@ -108,14 +108,7 @@ public class GoalTreeLatticeFramesTest {
 	}
 
 	private static void await(BooleanSupplier cond, long ms, String desc) {
-		long deadline = System.currentTimeMillis() + ms;
-		while (!cond.getAsBoolean()) {
-			if (System.currentTimeMillis() > deadline) fail("timeout waiting for: " + desc);
-			try { Thread.sleep(20); } catch (InterruptedException e) {
-				Thread.currentThread().interrupt();
-				fail("interrupted");
-			}
-		}
+		TestEngine.awaitCondition(cond, ms, () -> "timeout waiting for: " + desc);
 	}
 
 	// ========== I3: the lattice is the single authoritative copy ==========
@@ -327,8 +320,13 @@ public class GoalTreeLatticeFramesTest {
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		await(() -> AgentState.SUSPENDED.equals(ag.getStatus()), 5000, "agent suspended");
-		await(() -> ag.getSessionCycleEpoch(sid) == null, 5000,
-			"suspend settle releases the cycle claim");
+		// The full suite runs these agent tests concurrently, so let the cancelled
+		// run-loop vthread get scheduled under load. This is a correctness wait,
+		// not a latency assertion; the narrow test normally settles in under 1s.
+		TestEngine.awaitCondition(() -> ag.getSessionCycleEpoch(sid) == null, 15000,
+			() -> "suspend settle did not release the cycle claim"
+				+ " (status=" + ag.getStatus()
+				+ ", epoch=" + ag.getSessionCycleEpoch(sid) + ")");
 
 		AVector<ACell> atSuspend = frames("zombie-agent", sid);
 

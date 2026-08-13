@@ -96,24 +96,14 @@ public class JobCancellationTest {
 	@Test
 	public void testAwaitResultThrowsOnCancel() {
 		Job job = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), ctx);
-
-		CompletableFuture.runAsync(() -> {
-			try { Thread.sleep(50); } catch (InterruptedException e) {}
-			job.cancel();
-		});
-
+		job.cancel();
 		assertThrows(JobFailedException.class, () -> job.awaitResult(5000));
 	}
 
 	@Test
 	public void testAwaitResultWithTimeoutThrowsOnCancel() {
 		Job job = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), ctx);
-
-		CompletableFuture.runAsync(() -> {
-			try { Thread.sleep(50); } catch (InterruptedException e) {}
-			job.cancel();
-		});
-
+		job.cancel();
 		assertThrows(JobFailedException.class, () -> job.awaitResult(5000));
 		assertEquals("CANCELLED", job.getStatus().toString());
 	}

@@ -8,6 +8,7 @@ import org.junit.jupiter.api.TestInfo;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -54,25 +55,6 @@ public class LLMAgentAdapterTest {
 	@BeforeEach
 	public void setup(TestInfo info) {
 		ALICE_DID = TestEngine.uniqueDID(info);
-	}
-
-	/** A completed chat result can become visible just before the run-loop
-	 *  future publishes its final rest state. Await that state instead of
-	 *  racing the executor teardown in assertions that care about quiescence. */
-	private static void awaitStatus(AgentState agent, AString expected, long timeoutMs) {
-		long deadline = System.currentTimeMillis() + timeoutMs;
-		while (!expected.equals(agent.getStatus())) {
-			if (System.currentTimeMillis() >= deadline) {
-				fail("timeout waiting for agent status " + expected
-					+ "; current status is " + agent.getStatus());
-			}
-			try {
-				Thread.sleep(10);
-			} catch (InterruptedException e) {
-				Thread.currentThread().interrupt();
-				fail("interrupted while waiting for agent status " + expected, e);
-			}
-		}
 	}
 
 	// ========== L3 LLM timeout ==========
@@ -1434,13 +1416,14 @@ public class LLMAgentAdapterTest {
 
 		// Poll the persisted record, not the active cache — a finished job is
 		// evicted from the cache and lives on as its lattice record.
-		AMap<AString, ACell> record = null;
-		long deadline = System.currentTimeMillis() + 15000;
-		while (System.currentTimeMillis() < deadline) {
-			record = engine.jobs().getJobData(taskJobId, RequestContext.of(ALICE_DID));
-			if (record != null && Job.isFinished(record)) break;
-			Thread.sleep(25);
-		}
+		AtomicReference<AMap<AString, ACell>> observed = new AtomicReference<>();
+		TestEngine.awaitCondition(() -> {
+			AMap<AString, ACell> current = engine.jobs().getJobData(
+				taskJobId, RequestContext.of(ALICE_DID));
+			observed.set(current);
+			return current != null && Job.isFinished(current);
+		}, 15000, () -> "task job did not finish; last record=" + observed.get());
+		AMap<AString, ACell> record = observed.get();
 		assertNotNull(record, "task job record must exist");
 		assertEquals(Status.COMPLETE, RT.getIn(record, Fields.STATUS));
 		ACell jobTokens = RT.getIn(record, Fields.TOKENS);
@@ -1654,7 +1637,7 @@ public class LLMAgentAdapterTest {
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("scoped-deny-agent");
-		awaitStatus(agent, AgentState.SLEEPING, 2000);
+		TestEngine.awaitAgentStatus(agent, AgentState.SLEEPING, 2000);
 		assertEquals(AgentState.SLEEPING, agent.getStatus(),
 			"a handled denial is not an agent failure — no suspension, no loop");
 	}

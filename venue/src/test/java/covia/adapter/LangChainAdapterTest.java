@@ -26,6 +26,7 @@ import dev.langchain4j.data.message.TextContent;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.request.ResponseFormat;
 import dev.langchain4j.model.chat.request.ResponseFormatType;
+import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.output.FinishReason;
 import dev.langchain4j.model.output.TokenUsage;
@@ -42,7 +43,15 @@ import dev.langchain4j.model.chat.request.json.JsonObjectSchema;
 import dev.langchain4j.model.chat.request.json.JsonSchemaElement;
 import dev.langchain4j.model.chat.request.json.JsonStringSchema;
 
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+
+import com.sun.net.httpserver.HttpServer;
 
 import covia.grid.Status;
 import covia.venue.Engine;
@@ -1415,6 +1424,56 @@ public class LangChainAdapterTest {
 		var plain = LangChainAdapter.buildOllamaModel("http://localhost:11434", "qwen",
 			java.time.Duration.ofSeconds(5), LangChainAdapter.ModelTuning.NONE);
 		assertNull(plain.defaultRequestParameters().temperature());
+	}
+
+	@Test
+	public void testHostedProviderIoTimeoutBoundsStalledResponse() throws Exception {
+		HttpServer stalled = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+		CountDownLatch requestEntered = new CountDownLatch(1);
+		CountDownLatch releaseResponse = new CountDownLatch(1);
+		var executor = Executors.newVirtualThreadPerTaskExecutor();
+		stalled.setExecutor(executor);
+		stalled.createContext("/", exchange -> {
+			requestEntered.countDown();
+			try {
+				releaseResponse.await(10, TimeUnit.SECONDS);
+				byte[] body = "{\"choices\":[]}".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+				exchange.sendResponseHeaders(200, body.length);
+				exchange.getResponseBody().write(body);
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+			} catch (IOException ignored) {
+				// The timed-out client normally closes before the fixture responds.
+			} finally {
+				exchange.close();
+			}
+		});
+		stalled.start();
+
+		try {
+			String baseUrl = "http://127.0.0.1:" + stalled.getAddress().getPort() + "/v1";
+			var model = LangChainAdapter.buildOpenAiModel("test-key", baseUrl, "test-model",
+				Duration.ofMillis(150), LangChainAdapter.ModelTuning.NONE);
+			ChatRequest request = ChatRequest.builder()
+				.messages(UserMessage.from("timeout contract"))
+				.build();
+
+			long started = System.nanoTime();
+			assertThrows(RuntimeException.class, () -> model.chat(request));
+			long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+			assertTrue(requestEntered.await(1, TimeUnit.SECONDS),
+				"the timeout must cover an actual in-flight provider request");
+			// The provider client retries transport failures, so the wall-clock
+			// bound is the per-attempt timeout plus its bounded retry/backoff policy.
+			// The fixture itself remains stalled for ten seconds: returning well
+			// before that proves the configured IO timeout is actually effective.
+			assertTrue(elapsedMs < 8_000,
+				"configured IO timeout should bound retries, elapsed=" + elapsedMs + "ms");
+		} finally {
+			releaseResponse.countDown();
+			stalled.stop(0);
+			executor.close();
+		}
 	}
 
 	@Test
