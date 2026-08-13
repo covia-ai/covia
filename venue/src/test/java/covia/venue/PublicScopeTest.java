@@ -1,10 +1,13 @@
 package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URI;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -16,6 +19,7 @@ import convex.auth.ucan.Capability;
 import convex.auth.ucan.UCAN;
 import convex.core.crypto.AKeyPair;
 import convex.core.data.AString;
+import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -141,6 +145,20 @@ public class PublicScopeTest {
 	}
 
 	@Test
+	public void anonymousAssetRegistrationDeniedByDefault() throws Exception {
+		// covia#360 — POST /api/v1/assets (registerAsset) bypassed the capability
+		// check entirely, so an anonymous caller could register asset metadata
+		// under the nominally read-only default. It must require asset/store,
+		// same as the asset:store operation (AssetAdapter.handleStore).
+		VenueHTTP pub = anon(secureBase);
+		ExecutionException ex = assertThrows(ExecutionException.class, () ->
+			pub.addAsset(Maps.of(Strings.create("name"), Strings.create("probe")))
+				.get(5, TimeUnit.SECONDS));
+		assertTrue(causeChain(ex).contains("403") || causeChain(ex).contains("Not authorised"),
+			"anonymous asset registration must be denied, got: " + causeChain(ex));
+	}
+
+	@Test
 	public void authenticatedMutationAllowed() throws Exception {
 		VenueHTTP client = authed(secureServer);
 		Job job = client.invokeAndWait(OP_WRITE, Maps.of(
@@ -160,5 +178,13 @@ public class PublicScopeTest {
 			Strings.create("value"), Strings.create("ok")));
 		assertEquals(Status.COMPLETE, job.getStatus(),
 			"auth.public.caps=unrestricted re-opens public mutation");
+	}
+
+	@Test
+	public void unrestrictedConfigAllowsAnonymousAssetRegistration() throws Exception {
+		VenueHTTP pub = anon(openBase);
+		Hash id = pub.addAsset(Maps.of(Strings.create("name"), Strings.create("probe")))
+			.get(5, TimeUnit.SECONDS);
+		assertNotNull(id, "auth.public.caps=unrestricted re-opens anonymous asset registration");
 	}
 }

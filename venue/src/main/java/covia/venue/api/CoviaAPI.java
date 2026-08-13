@@ -295,10 +295,18 @@ public class CoviaAPI extends ACoviaAPI {
 					})	
 	protected void addAsset(Context ctx) {
 		try {
+			// Enforces the asset-store capability (consistent with the asset:store
+			// operation, AssetAdapter.handleStore) — registering new metadata is a
+			// write and must not be reachable by the default read-only public scope.
+			RequestContext rctx = AuthMiddleware.callerContext(ctx);
+			engine().requireAuthority(rctx, Strings.create(""), Abilities.ASSET_STORE);
+
 			AString meta=Strings.fromStream(ctx.bodyInputStream());
 			Hash id=venue.registerAsset(meta);
 			buildResult(ctx,201,id.toHexString());
 			ctx.header("Location",ROUTE+"assets/"+id.toHexString());
+		} catch (AuthException e) {
+			buildError(ctx,403,"Not authorised to register asset metadata");
 		} catch (ClassCastException | IOException | ParseException e) {
 			throw new BadRequestResponse("Unable to parse asset metadata: "+e.getMessage());
 		}
