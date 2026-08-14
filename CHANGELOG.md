@@ -19,6 +19,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 ### Fixed
 
 - Metadata reads for asset refs whose final segment is `content` no longer misroute (#368)
+- An empty `complete_task` now delivers the turn's message text as the task result instead of looping to rejection; built-in agent tool errors state the expected call shape
 
 ## [0.9.1] - 2026-08-13
 

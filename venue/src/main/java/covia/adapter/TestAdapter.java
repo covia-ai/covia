@@ -1051,6 +1051,16 @@ public class TestAdapter extends AAdapter {
 					Maps.of("id", "call_after_invalid_complete_task", "name", "test_echo",
 						"arguments", "{\"echo\":\"still executes\"}")));
 		}
+		if (model != null && "empty-complete-with-text-test".equals(model.toString())) {
+			// The LadyByron shape: the answer written as message text, the
+			// control call issued empty — the harness honours the text.
+			return Maps.of(
+				"role", Strings.create("assistant"),
+				"content", Strings.create("The full review: a triumph of form over feeling."),
+				"toolCalls", Vectors.of(
+					Maps.of("id", "call_empty_complete_task", "name", "complete_task",
+						"arguments", "{}")));
+		}
 
         // If a task context is present, call complete_task. The in-scope task
         // is read from the framework-populated RequestContext — no jobId arg.

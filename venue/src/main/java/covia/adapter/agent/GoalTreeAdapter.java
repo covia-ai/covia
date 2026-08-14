@@ -1093,7 +1093,9 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 				} else if (TOOL_CONTEXT_LOAD.equals(toolName)) {
 					AString path = RT.ensureString(RT.getIn(toolInput, K_PATH));
 					if (path == null) {
-						toolResult = Strings.create("Error: path is required");
+						toolResult = Strings.create(
+							"Error: path is required — context_load pins a lattice path into your context. "
+							+ "Call with {\"path\": \"w/...\"} (optional: \"budget\" in bytes, \"label\").");
 					} else {
 						try {
 							new ContextLoader(engine).requireReadAccess(path, ctx);
@@ -1116,7 +1118,9 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 				} else if (TOOL_CONTEXT_UNLOAD.equals(toolName)) {
 					AString path = RT.ensureString(RT.getIn(toolInput, K_PATH));
 					if (path == null) {
-						toolResult = Strings.create("Error: path is required");
+						toolResult = Strings.create(
+							"Error: path is required — context_unload removes a loaded path from your context. "
+							+ "Call with {\"path\": \"...\"} naming a currently loaded entry.");
 					} else {
 						// Lexical unload (#142): removes the frame-tier entry, or
 						// masks an outer-tier load (config/session) with a nil

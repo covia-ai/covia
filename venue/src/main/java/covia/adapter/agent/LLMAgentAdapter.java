@@ -104,17 +104,18 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		K_NAME, Strings.create(TOOL_COMPLETE_TASK),
 		K_DESCRIPTION, Strings.create(
 			"Deliver the final result for the in-scope task and end it. "
-			+ "This is TERMINAL: `result` is the only channel back to the caller — "
-			+ "any chat text you write on this turn is NOT seen by them. "
+			+ "This is TERMINAL: the caller receives `result` and nothing else. "
+			+ "For a long prose answer, write the complete answer as your message text "
+			+ "and call complete_task with no arguments in the same turn — the text is "
+			+ "delivered as the result. Otherwise pass the answer in `result`. "
 			+ "Only call this once you have the actual answer to deliver. "
 			+ "The agent and task are determined from the current request context — you do not pass an id."),
 		K_PARAMETERS, Maps.of(
 			K_TYPE, Strings.create("object"),
 			K_PROPERTIES, Maps.of(
 				Fields.RESULT, Maps.of(
-					K_DESCRIPTION, Strings.create("The result to return to the requester. Any JSON value — string, object, array, etc. Required: omitting this delivers null to the caller."))
-			),
-			K_REQUIRED, Vectors.of(Strings.create("result"))
+					K_DESCRIPTION, Strings.create("The result to return to the requester. Any JSON value — string, object, array, etc. May be omitted only when this turn's message text is the complete answer."))
+			)
 		)
 	);
 
@@ -631,8 +632,12 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 				return newMessages;
 			}
 
-			// Tool call response — record assistant message and execute tools
+			// Tool call response — record assistant message and execute tools.
+			// The turn's text rides along as the fallback payload for an empty
+			// complete_task: a model that has just written its answer as prose
+			// routinely calls complete with no result.
 			newMessages = newMessages.conj(l3Result);
+			toolCtx.turnText = RT.ensureString(RT.getIn(l3Result, K_CONTENT));
 			AVector<ACell> toolCalls = (AVector<ACell>) toolCallsCell;
 			ToolBatchState batch = new ToolBatchState();
 
@@ -759,9 +764,23 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 	 */
 	private ACell handleCompleteTask(ACell input, ToolContext toolCtx) {
 		ACell result = RT.getIn(input, Fields.RESULT);
-		if (result == null) return Strings.create(
-			"Error: result is required — complete_task delivers `result` to the caller as the task output. "
-			+ "Call again with the actual answer in `result`, or use fail_task if you cannot complete the task.");
+		if (isBlankResult(result)) {
+			// The dual of #215 (a control call emitted as text): the answer
+			// emitted as text alongside an empty control call. The model has
+			// already delivered the payload as its message content — honour it
+			// rather than demanding a re-marshalled copy of prose it just
+			// wrote, which long answers reliably fail to produce.
+			AString text = toolCtx.turnText;
+			if (text != null && !text.toString().isBlank()) {
+				result = text;
+			} else {
+				return Strings.create(
+					"Error: result is required — complete_task delivers `result` to the caller as the task "
+					+ "output, and this turn carried no message text to use instead. Call again with the "
+					+ "actual answer in `result` (or write the answer as your message text and call "
+					+ "complete_task in the same turn), or use fail_task if you cannot complete the task.");
+			}
+		}
 		AMap<AString, ACell> opInput = Maps.of(Fields.RESULT, result);
 		ACell opResult;
 		try {
@@ -784,6 +803,14 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		return (opResult != null) ? opResult : Maps.empty();
 	}
 
+	/** A completion payload the model plainly didn't fill: absent, or a blank
+	 *  string. Structured values (maps, vectors, numbers) are never blank. */
+	private static boolean isBlankResult(ACell result) {
+		if (result == null) return true;
+		AString s = RT.ensureString(result);
+		return s != null && s.toString().isBlank();
+	}
+
 	/**
 	 * Fails the in-scope task by invoking the {@code agent:failTask} venue op.
 	 * The op reads {@code agentId} and {@code taskId} from the
@@ -798,7 +825,9 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 	 */
 	private ACell handleFailTask(ACell input, ToolContext toolCtx) {
 		AString error = RT.ensureString(RT.getIn(input, Fields.ERROR));
-		if (error == null) return Strings.create("Error: error is required");
+		if (error == null) return Strings.create(
+			"Error: error is required — fail_task reports why the task cannot be completed. "
+			+ "Call again with the reason in `error`, e.g. {\"error\": \"why it failed\"}.");
 
 		AMap<AString, ACell> opInput = Maps.of(Fields.ERROR, error);
 		ACell opResult;
@@ -824,7 +853,9 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 
 	ACell handleContextLoad(ACell input, ToolContext toolCtx) {
 		AString path = RT.ensureString(RT.getIn(input, K_PATH));
-		if (path == null) return Strings.create("Error: path is required");
+		if (path == null) return Strings.create(
+			"Error: path is required — context_load pins a lattice path into your context. "
+			+ "Call with {\"path\": \"w/...\"} (optional: \"budget\" in bytes, \"label\").");
 		if (!toolCtx.sessionInScope) {
 			return Strings.create("Error: no session in scope — context loads are per-conversation (#142)");
 		}
@@ -875,7 +906,9 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 
 	ACell handleContextUnload(ACell input, ToolContext toolCtx) {
 		AString path = RT.ensureString(RT.getIn(input, K_PATH));
-		if (path == null) return Strings.create("Error: path is required");
+		if (path == null) return Strings.create(
+			"Error: path is required — context_unload removes a loaded path from your context. "
+			+ "Call with {\"path\": \"...\"} naming a currently loaded entry.");
 		if (!toolCtx.sessionInScope) {
 			return Strings.create("Error: no session in scope — context loads are per-conversation (#142)");
 		}
@@ -1037,6 +1070,11 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		 *  the transition output under {@code Fields.TOOL_FAILURES} so the
 		 *  framework can persist them (timeline + session turns, #211). */
 		AVector<ACell> toolFailures = Vectors.empty();
+		/** Text content of the assistant message whose tool batch is currently
+		 *  executing — the fallback payload for an empty {@code complete_task}
+		 *  (the dual of #215: control emitted as a tool, answer emitted as
+		 *  text). Null when the turn carried no text. */
+		AString turnText;
 		/** Skill sources from {@code config.skills} — opaque to this runtime
 		 *  ({@link Skills} owns the semantics). */
 		AVector<ACell> skillSources = Vectors.empty();

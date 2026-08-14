@@ -1074,6 +1074,42 @@ public class LLMAgentAdapterTest {
 	}
 
 	@Test
+	public void testEmptyCompleteTaskFallsBackToTurnText() {
+		// The LadyByron failure shape: the model writes its answer as message
+		// text and calls complete_task with no result. The harness honours the
+		// text as the result (the dual of #215) instead of rejecting the call.
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(
+				Fields.AGENT_ID, "text-complete-agent",
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/llmagent/chat",
+					"llmOperation", "v/test/ops/taskllm",
+					"model", "empty-complete-with-text-test")
+			),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("text-complete-agent");
+		Blob taskId = Blob.createRandom(new java.util.Random(), 16);
+		agent.addTask(taskId, Maps.of("task", "review the poems"));
+
+		Job runJob = engine.jobs().invokeOperation(
+			"v/ops/agent/trigger",
+			Maps.of(Fields.AGENT_ID, "text-complete-agent"),
+			RequestContext.of(ALICE_DID));
+		runJob.awaitResult(5000);
+		TestEngine.awaitTimelineCount(agent, 1, 10000);
+
+		assertEquals(0, agent.getTasks().count(), "empty complete_task with turn text must complete the task");
+		ACell timelineEntry = agent.getTimeline().get(0);
+		ACell taskResults = RT.getIn(timelineEntry, Fields.TASK_RESULTS);
+		assertNotNull(taskResults, "timeline should record the completion");
+		assertTrue(taskResults.toString().contains("The full review: a triumph of form over feeling."),
+			"the turn's text must be delivered as the task result, got: " + taskResults);
+	}
+
+	@Test
 	public void testLoadedValueRefreshesAfterToolWriteWithinSameTransition() {
 		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of("path", "w/live-load", "value", "LOAD_VALUE_OLD"),
