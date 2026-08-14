@@ -399,9 +399,9 @@ public class AgentAdapterTest {
 	}
 
 	@Test
-	public void testCreateWarnsOnUnresolvableSkillsSource() {
-		// A skills source that resolves to nothing is only an advisory —
-		// sources resolve live each turn, so creating the source later just works.
+	public void testCreateEmptyUserSkillsSourceIsNotNoise() {
+		// Every standard template declares w/skills, and an empty user skills
+		// dir is the designed default — a live extension point, never a warning.
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "skills-nothing-agent",
 			Fields.CONFIG, Maps.of(
@@ -412,10 +412,28 @@ public class AgentAdapterTest {
 		ACell result = engine.jobs().invokeOperation(
 			"v/ops/agent/create", input, RequestContext.of(ALICE_DID)).awaitResult(5000);
 
+		assertNull(RT.getIn(result, Fields.WARNINGS),
+			"empty w/skills is normal — no advisory");
+	}
+
+	@Test
+	public void testCreateWarnsOnUnresolvableVenueSkillsSource() {
+		// Venue skills are installed at startup, so an unresolvable v/ source
+		// is almost certainly a typo — that one keeps its advisory.
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "skills-venue-typo-agent",
+			Fields.CONFIG, Maps.of(
+				"operation", "v/ops/llmagent/chat",
+				"llmOperation", "v/ops/langchain/openai",
+				"model", "gpt-5.4-mini",
+				"skills", Vectors.of(Strings.create("v/skills/definitely-not-real"))));
+		ACell result = engine.jobs().invokeOperation(
+			"v/ops/agent/create", input, RequestContext.of(ALICE_DID)).awaitResult(5000);
+
 		AVector<ACell> warnings = RT.ensureVector(RT.getIn(result, Fields.WARNINGS));
-		assertNotNull(warnings, "unresolvable skills source should carry a warning");
+		assertNotNull(warnings, "unresolvable venue skills source should carry a warning");
 		String w = RT.ensureString(warnings.get(0)).toString();
-		assertTrue(w.contains("w/skills"), w);
+		assertTrue(w.contains("v/skills/definitely-not-real"), w);
 		assertTrue(w.contains("only a warning"), w);
 	}
 

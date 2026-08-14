@@ -12,6 +12,10 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 - Asset content retrieval by any asset reference: `GET /api/v1/assets/content/<ref>` (#368)
 
+### Changed
+
+- Agent create no longer warns about empty user skills sources (`w/…`); only unresolvable venue (`v/…`) sources get an advisory
+
 ### Fixed
 
 - Metadata reads for asset refs whose final segment is `content` no longer misroute (#368)

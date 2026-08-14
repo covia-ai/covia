@@ -674,9 +674,14 @@ public class AgentAdapter extends AAdapter {
 	 * Advisory for {@code config.skills} (see venue/docs/SKILLS.md). Two cases:
 	 * a malformed shape (non-array, non-string entry) — which will THROW at
 	 * transition time, so it's flagged here at the moment it's fixable — and
-	 * sources that resolve to nothing right now. The latter is only a warning:
-	 * sources resolve live each turn, so a source created later simply starts
-	 * appearing in the skills index — no recreate needed.
+	 * an unresolvable <b>venue-library</b> source ({@code v/…}), which is
+	 * almost certainly a typo since venue skills are installed at startup.
+	 *
+	 * <p>User-mutable sources ({@code w/…}, DID-qualified paths) are live
+	 * extension points: every standard template declares {@code w/skills}, and
+	 * an empty one is the designed default, not noise. Sources resolve live
+	 * each turn, so anything written there later simply starts appearing in
+	 * the skills index — never warn about those.</p>
 	 */
 	private AString skillSourcesWarning(AMap<AString, ACell> config, RequestContext ctx) {
 		if (config == null) return null;
@@ -692,16 +697,19 @@ public class AgentAdapter extends AAdapter {
 		java.util.List<String> unresolved = new java.util.ArrayList<>();
 		for (long i = 0; i < sources.count(); i++) {
 			AString source = RT.ensureString(sources.get(i));
+			if (source == null) continue;
+			String s = source.toString();
+			if (!(s.startsWith("v/") || s.startsWith("/v/"))) continue;
 			try {
-				if (engine.resolvePath(source, ctx) == null) unresolved.add(source.toString());
+				if (engine.resolvePath(source, ctx) == null) unresolved.add(s);
 			} catch (RuntimeException e) {
 				// Transient resolution errors aren't config errors — don't over-warn.
 			}
 		}
 		if (unresolved.isEmpty()) return null;
-		return Strings.create("agent declares skills source(s) that resolve to nothing right now: "
-			+ String.join(", ", unresolved) + ". Sources resolve live each turn, so a source"
-			+ " created later starts appearing in the skills index automatically — this is"
+		return Strings.create("agent declares venue skills source(s) that resolve to nothing: "
+			+ String.join(", ", unresolved) + ". Venue skills are installed at startup, so this"
+			+ " is usually a mistyped path — browse v/skills for the available library. This is"
 			+ " only a warning.");
 	}
 
