@@ -663,7 +663,7 @@ public class AgentAdapter extends AAdapter {
 		if (toolWarn != null) warnings = warnings.conj(toolWarn);
 		AString unavailableWarn = unavailableToolsWarning(config, ctx);
 		if (unavailableWarn != null) warnings = warnings.conj(unavailableWarn);
-		AString skillsWarn = skillSourcesWarning(config, ctx);
+		AString skillsWarn = skillSourcesWarning(config);
 		if (skillsWarn != null) warnings = warnings.conj(skillsWarn);
 		AString keyWarn = rawApiKeyWarning(config);
 		if (keyWarn != null) warnings = warnings.conj(keyWarn);
@@ -671,46 +671,29 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Advisory for {@code config.skills} (see venue/docs/SKILLS.md). Two cases:
-	 * a malformed shape (non-array, non-string entry) — which will THROW at
-	 * transition time, so it's flagged here at the moment it's fixable — and
-	 * an unresolvable <b>venue-library</b> source ({@code v/…}), which is
-	 * almost certainly a typo since venue skills are installed at startup.
+	 * Advisory for {@code config.skills} (see venue/docs/SKILLS.md): a
+	 * malformed shape (non-array, non-string entry) THROWS at transition time,
+	 * so it's flagged here at the moment it's fixable.
 	 *
-	 * <p>User-mutable sources ({@code w/…}, DID-qualified paths) are live
-	 * extension points: every standard template declares {@code w/skills}, and
-	 * an empty one is the designed default, not noise. Sources resolve live
-	 * each turn, so anything written there later simply starts appearing in
-	 * the skills index — never warn about those.</p>
+	 * <p>Unresolved sources are deliberately NOT warned about. Sources are
+	 * maybe-style paths resolved live each turn — absence is a normal value
+	 * (an empty {@code w/skills} is the designed default in every standard
+	 * template), and a venue without some {@code v/skills/*} entry is a
+	 * legitimate target for a portable config. Source diagnostics live on the
+	 * inspection surface ({@code skills:list}) for whoever configured the
+	 * sources, never in the create response or the agent's own context.</p>
 	 */
-	private AString skillSourcesWarning(AMap<AString, ACell> config, RequestContext ctx) {
+	private AString skillSourcesWarning(AMap<AString, ACell> config) {
 		if (config == null) return null;
 		ACell raw = config.get(Strings.intern("skills"));
 		if (raw == null) return null;
-		AVector<ACell> sources;
 		try {
-			sources = ContextBuilder.skillSources(raw);
+			ContextBuilder.skillSources(raw);
 		} catch (RuntimeException e) {
 			return Strings.create(describeFailure(e)
 				+ " (the agent will fail at transition time until this is fixed)");
 		}
-		java.util.List<String> unresolved = new java.util.ArrayList<>();
-		for (long i = 0; i < sources.count(); i++) {
-			AString source = RT.ensureString(sources.get(i));
-			if (source == null) continue;
-			String s = source.toString();
-			if (!(s.startsWith("v/") || s.startsWith("/v/"))) continue;
-			try {
-				if (engine.resolvePath(source, ctx) == null) unresolved.add(s);
-			} catch (RuntimeException e) {
-				// Transient resolution errors aren't config errors — don't over-warn.
-			}
-		}
-		if (unresolved.isEmpty()) return null;
-		return Strings.create("agent declares venue skills source(s) that resolve to nothing: "
-			+ String.join(", ", unresolved) + ". Venue skills are installed at startup, so this"
-			+ " is usually a mistyped path — browse v/skills for the available library. This is"
-			+ " only a warning.");
+		return null;
 	}
 
 	/**

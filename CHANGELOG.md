@@ -14,7 +14,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Changed
 
-- Agent create no longer warns about empty user skills sources (`w/…`); only unresolvable venue (`v/…`) sources get an advisory
+- Skills sources are maybe-style: unresolved sources no longer produce create-response warnings or agent-context noise; source diagnostics render only on the `skills:list` inspection surface
 
 ### Fixed
 

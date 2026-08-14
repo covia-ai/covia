@@ -112,7 +112,7 @@ public class SkillsAdapter extends AAdapter {
 	private ACell handleList(RequestContext ctx, ACell input) {
 		AVector<ACell> sources = sourcesOf(input);
 		requireReadCaps(ctx, sources);
-		String index = Skills.renderIndex(engine, ctx, sources, null);
+		String index = Skills.renderIndex(engine, ctx, sources, null, true);
 		// Null when no skills exist — the assemble-op contract (entry skipped).
 		return (index != null) ? Strings.create(index) : null;
 	}

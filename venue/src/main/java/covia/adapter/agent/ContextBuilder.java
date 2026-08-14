@@ -433,7 +433,9 @@ public class ContextBuilder {
 		AVector<ACell> sources = skillSources(config.get(K_SKILLS));
 		if (sources.count() == 0) return this;
 
-		String index = Skills.renderIndex(engine, ctx, sources, effectiveLoads);
+		// No source diagnostics in agent context — setup problems belong to
+		// whoever configured the sources (skills:list), not the running agent.
+		String index = Skills.renderIndex(engine, ctx, sources, effectiveLoads, false);
 		if (index == null) return this;                      // nothing anywhere → no block
 
 		ACell msg = Maps.of(K_ROLE, ROLE_SYSTEM, K_CONTENT,

@@ -298,7 +298,7 @@ public class SkillsTest {
 		List<Skills.SkillIndexEntry> entries = Skills.listSkills(engine, ctx,
 			Vectors.of(Strings.create("w/no-such-dir")));
 		assertTrue(entries.isEmpty());
-		assertNull(Skills.renderIndex(engine, ctx, Vectors.of(Strings.create("w/no-such-dir")), null));
+		assertNull(Skills.renderIndex(engine, ctx, Vectors.of(Strings.create("w/no-such-dir")), null, true));
 	}
 
 	@Test
@@ -324,12 +324,32 @@ public class SkillsTest {
 
 		AVector<ACell> sources = Vectors.of(
 			Strings.create("w/skills"), Strings.create("w/notadir"));
-		String index = Skills.renderIndex(engine, ctx, sources, null);
+		String index = Skills.renderIndex(engine, ctx, sources, null, true);
 		assertNotNull(index);
 		assertTrue(index.contains("- alpha — Alpha skill"), index);
 		assertTrue(index.contains("- broken — INVALID: missing description"), index);
 		assertTrue(index.contains("[skills source w/notadir — unavailable:"), index);
 		assertFalse(index.contains("(loaded)"), index);
+	}
+
+	@Test
+	public void testRenderIndexAgentViewOmitsSourceDiagnostics() {
+		// Source failures are setup diagnostics for whoever configured the
+		// sources (skills:list, above) — the agent's own context never
+		// carries them: it can't act on them, only be distracted by them.
+		write("w/skills/alpha", Maps.of(Fields.DESCRIPTION, Strings.create("Alpha skill")));
+		write("w/notadir", Strings.create("just a text value with spaces"));
+
+		AVector<ACell> sources = Vectors.of(
+			Strings.create("w/skills"), Strings.create("w/notadir"));
+		String index = Skills.renderIndex(engine, ctx, sources, null, false);
+		assertNotNull(index);
+		assertTrue(index.contains("- alpha — Alpha skill"), index);
+		assertFalse(index.contains("unavailable"), index);
+
+		// Failure-only sources render as nothing at all for the agent.
+		assertNull(Skills.renderIndex(engine, ctx,
+			Vectors.of(Strings.create("w/notadir")), null, false));
 	}
 
 	@Test
@@ -340,7 +360,7 @@ public class SkillsTest {
 			Strings.create("w/skills/alpha"), Skills.buildSkillLoadMeta(2000, s));
 
 		String index = Skills.renderIndex(engine, ctx,
-			Vectors.of(Strings.create("w/skills")), loads);
+			Vectors.of(Strings.create("w/skills")), loads, false);
 		assertTrue(index.contains("- alpha — Alpha skill (loaded)"), index);
 	}
 
@@ -390,7 +410,7 @@ public class SkillsTest {
 
 		// ... and the index (loaded) marker matches by identity, not path
 		String index = Skills.renderIndex(engine, ctx,
-			Vectors.of(Strings.create("w/skills")), loads);
+			Vectors.of(Strings.create("w/skills")), loads, false);
 		assertTrue(index.contains("- shared — A shared skill (loaded)"), index);
 	}
 

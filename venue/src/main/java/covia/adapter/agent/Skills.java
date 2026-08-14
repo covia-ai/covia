@@ -190,15 +190,23 @@ public final class Skills {
 	/**
 	 * Renders the compact skills index — one {@code - <name> — <description>}
 	 * line per skill, {@code (loaded)} marking skills already in effective
-	 * context, INVALID lines for broken skills, and a visible unavailable line
-	 * per failed source. Returns null when the sources yield nothing at all
-	 * (the assemble-op contract: null → skipped).
+	 * context, and INVALID lines for broken skills. Returns null when the
+	 * sources yield nothing at all (the assemble-op contract: null → skipped).
+	 *
+	 * <p>Source-level failures ({@code [skills source X — unavailable: …]})
+	 * render only when {@code sourceDiagnostics} is set — the inspection
+	 * surface ({@code skills:list}) for whoever configured the sources. Agent
+	 * context passes false: an agent cannot act on setup diagnostics, and
+	 * sources are maybe-style paths, so their absence or failure is not the
+	 * agent's concern.</p>
 	 *
 	 * @param effectiveLoads Effective loads map for the {@code (loaded)}
 	 *        marker; null when no loads tier is in scope (e.g. the venue op)
+	 * @param sourceDiagnostics include per-source failure lines (inspection
+	 *        surface only)
 	 */
 	public static String renderIndex(Engine engine, RequestContext ctx,
-			AVector<ACell> sources, AMap<AString, ACell> effectiveLoads) {
+			AVector<ACell> sources, AMap<AString, ACell> effectiveLoads, boolean sourceDiagnostics) {
 		List<SkillIndexEntry> entries = listSkills(engine, ctx, sources);
 		if (entries.isEmpty()) return null;
 		// Live identities of loaded skills, once per render — the (loaded)
@@ -207,17 +215,20 @@ public final class Skills {
 			loadedSkillIds(engine, ctx, effectiveLoads);
 		StringBuilder sb = new StringBuilder();
 		for (SkillIndexEntry e : entries) {
-			if (sb.length() > 0) sb.append('\n');
 			if (e.name() == null) {
+				if (!sourceDiagnostics) continue;
+				if (sb.length() > 0) sb.append('\n');
 				sb.append("[skills source ").append(e.path()).append(" — unavailable: ").append(e.error()).append(']');
 			} else if (e.error() != null) {
+				if (sb.length() > 0) sb.append('\n');
 				sb.append("- ").append(e.name()).append(" — INVALID: ").append(e.error());
 			} else {
+				if (sb.length() > 0) sb.append('\n');
 				sb.append("- ").append(e.name()).append(" — ").append(e.description());
 				if (isLoaded(effectiveLoads, e.path(), e.id(), loadedIds)) sb.append(" (loaded)");
 			}
 		}
-		return sb.toString();
+		return (sb.length() == 0) ? null : sb.toString();
 	}
 
 	/** Loaded by path, or by content identity under any other path. */

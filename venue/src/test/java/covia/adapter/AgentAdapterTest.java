@@ -417,9 +417,10 @@ public class AgentAdapterTest {
 	}
 
 	@Test
-	public void testCreateWarnsOnUnresolvableVenueSkillsSource() {
-		// Venue skills are installed at startup, so an unresolvable v/ source
-		// is almost certainly a typo — that one keeps its advisory.
+	public void testCreateUnresolvedSkillsSourceNotWarned() {
+		// Sources are maybe-style paths resolved live each turn — absence is a
+		// normal value, never create-response noise. Diagnostics live on the
+		// inspection surface (skills:list), for whoever configured the sources.
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "skills-venue-typo-agent",
 			Fields.CONFIG, Maps.of(
@@ -430,11 +431,8 @@ public class AgentAdapterTest {
 		ACell result = engine.jobs().invokeOperation(
 			"v/ops/agent/create", input, RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		AVector<ACell> warnings = RT.ensureVector(RT.getIn(result, Fields.WARNINGS));
-		assertNotNull(warnings, "unresolvable venue skills source should carry a warning");
-		String w = RT.ensureString(warnings.get(0)).toString();
-		assertTrue(w.contains("v/skills/definitely-not-real"), w);
-		assertTrue(w.contains("only a warning"), w);
+		assertNull(RT.getIn(result, Fields.WARNINGS),
+			"unresolved skills sources are maybe-style — no advisory");
 	}
 
 	@Test

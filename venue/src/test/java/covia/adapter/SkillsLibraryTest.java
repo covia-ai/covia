@@ -82,7 +82,7 @@ public class SkillsLibraryTest {
 	@Test
 	public void testIndexRendersAllAndCompact() {
 		String index = Skills.renderIndex(engine, ctx,
-			Vectors.of((ACell) Strings.create("v/skills")), null);
+			Vectors.of((ACell) Strings.create("v/skills")), null, true);
 		assertNotNull(index);
 		for (String name : SkillsAdapter.LIBRARY) {
 			assertTrue(index.contains("- " + name + " — "), "index missing " + name + ":\n" + index);
@@ -268,7 +268,7 @@ public class SkillsLibraryTest {
 		AVector<ACell> sources = Vectors.of(
 			(ACell) Strings.create("v/skills/models"),
 			(ACell) Strings.create("v/skills/tasks"));
-		String index = Skills.renderIndex(engine, ctx, sources, null);
+		String index = Skills.renderIndex(engine, ctx, sources, null, true);
 		assertTrue(index.contains("- models — "), index);
 		assertTrue(index.contains("- tasks — "), index);
 		assertFalse(index.contains("- workspace — "), index);
@@ -278,7 +278,7 @@ public class SkillsLibraryTest {
 	@Test
 	public void testSpecialistTemplateIndexesStayCurated() {
 		String fullIndex = Skills.renderIndex(engine, ctx,
-			Vectors.of((ACell) Strings.create("v/skills")), null);
+			Vectors.of((ACell) Strings.create("v/skills")), null, true);
 		java.util.Map<String, java.util.Set<String>> expected = java.util.Map.of(
 			"reader", java.util.Set.of("discovery", "provenance", "assets", "skills"),
 			"worker", java.util.Set.of("workspace", "files", "assets", "provenance"),
@@ -290,7 +290,7 @@ public class SkillsLibraryTest {
 				Strings.create("v/agents/templates/" + entry.getKey()), ctx);
 			AVector<ACell> sources = RT.ensureVector(
 				RT.getIn(asset, "agent", "config", "skills"));
-			String index = Skills.renderIndex(engine, ctx, sources, null);
+			String index = Skills.renderIndex(engine, ctx, sources, null, true);
 			for (String skill : entry.getValue()) {
 				assertTrue(index.contains("- " + skill + " — "),
 					entry.getKey() + " missing " + skill + ":\n" + index);
