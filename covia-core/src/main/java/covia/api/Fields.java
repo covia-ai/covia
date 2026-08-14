@@ -182,6 +182,8 @@ public class Fields {
 	public static final StringShort CANCELLED = Strings.intern("cancelled");
 	public static final StringShort DELETED = Strings.intern("deleted");
 	public static final StringShort RESPONSE_SCHEMA = Strings.intern("responseSchema");
+	/** Requester opt-in: enforce {@link #RESPONSE_SCHEMA} at task completion (#376). */
+	public static final StringShort STRICT = Strings.intern("strict");
 	public static final StringShort T = Strings.intern("t");
 
 	// Session related

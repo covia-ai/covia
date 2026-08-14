@@ -11,6 +11,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 ### Added
 
 - Asset content retrieval by any asset reference: `GET /api/v1/assets/content/<ref>` (#368)
+- Optional `responseSchema` on `agent:request` with requester-controlled `strict` enforcement at task completion (#376)
 
 ### Changed
 

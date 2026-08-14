@@ -781,6 +781,38 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 					+ "complete_task in the same turn), or use fail_task if you cannot complete the task.");
 			}
 		}
+
+		// Requester-declared response schema with strict enforcement (#376):
+		// the contract is checked at the completion boundary; what the agent
+		// does about a rejection is its own business. Non-strict schemas are
+		// guidance only — never validated here.
+		AMap<AString, ACell> task = inScopeTask(toolCtx);
+		if (task != null && CVMBool.TRUE.equals(task.get(Fields.STRICT))) {
+			AMap<AString, ACell> schema = RT.ensureMap(task.get(Fields.RESPONSE_SCHEMA));
+			if (schema != null) {
+				// A string result (typed or the text fallback) often carries the
+				// JSON as text — parse it before judging, so a text-emitted
+				// object satisfies an object schema.
+				ACell candidate = result;
+				AString s = RT.ensureString(result);
+				if (s != null) {
+					try {
+						ACell parsed = convex.core.util.JSON.parse(s.toString());
+						if (JsonSchema.validate(schema, parsed) == null) candidate = parsed;
+					} catch (Exception e) {
+						// Not JSON — the raw string is judged against the schema.
+					}
+				}
+				String schemaErr = JsonSchema.validate(schema, candidate);
+				if (schemaErr != null) {
+					return Strings.create(
+						"Error: result does not conform to this task's response schema — " + schemaErr
+						+ ". The requester requires: " + convex.core.util.JSON.print(schema)
+						+ ". Correct the result and call complete_task again, or use fail_task if you cannot.");
+				}
+				result = candidate;
+			}
+		}
 		AMap<AString, ACell> opInput = Maps.of(Fields.RESULT, result);
 		ACell opResult;
 		try {
@@ -809,6 +841,23 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		if (result == null) return true;
 		AString s = RT.ensureString(result);
 		return s != null && s.toString().isBlank();
+	}
+
+	/** The wire-shape task entry matching the request context's in-scope task
+	 *  id, or null. Task entries carry {jobId, input, caller?, responseSchema?,
+	 *  strict?} (AgentAdapter.formatTask). */
+	@SuppressWarnings("unchecked")
+	private static AMap<AString, ACell> inScopeTask(ToolContext toolCtx) {
+		Blob taskId = toolCtx.ctx.getTaskId();
+		if (taskId == null || toolCtx.tasks == null) return null;
+		String hex = taskId.toHexString();
+		for (long i = 0; i < toolCtx.tasks.count(); i++) {
+			ACell t = toolCtx.tasks.get(i);
+			if (!(t instanceof AMap)) continue;
+			AString jobId = RT.ensureString(RT.getIn(t, Fields.JOB_ID));
+			if (jobId != null && hex.equals(jobId.toString())) return (AMap<AString, ACell>) t;
+		}
+		return null;
 	}
 
 	/**
@@ -947,6 +996,16 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 			sb.append("- Task ").append(jobId);
 			if (caller != null) sb.append(" (from: ").append(caller).append(")");
 			sb.append(": ").append(renderTaskText(taskInput)).append("\n");
+			// The requester's declared result shape (#376) — advisory unless
+			// the requester opted into enforcement.
+			ACell schema = RT.getIn(task, Fields.RESPONSE_SCHEMA);
+			if (schema != null) {
+				boolean strict = CVMBool.TRUE.equals(RT.getIn(task, Fields.STRICT));
+				sb.append("  Response schema").append(strict
+						? " (enforced — complete_task results must conform)"
+						: " (guidance)")
+					.append(": ").append(convex.core.util.JSON.print(schema)).append("\n");
+			}
 		}
 		if (outstanding == 0) return null;
 		sb.append("Use complete_task or fail_task to resolve each task.");

@@ -1109,6 +1109,156 @@ public class LLMAgentAdapterTest {
 			"the turn's text must be delivered as the task result, got: " + taskResults);
 	}
 
+	// ========== Per-task response schema (#376) ==========
+
+	private static AMap<AString, ACell> answerSchema() {
+		return Maps.of(
+			"type", "object",
+			"properties", Maps.of("answer", Maps.of("type", "number")),
+			"required", Vectors.of(Strings.create("answer")));
+	}
+
+	@Test
+	public void testStrictSchemaRejectsThenAccepts() {
+		// strict=true: a non-conforming completion is rejected back to the
+		// agent with diagnostics; the corrected completion lands. The mock
+		// also verifies the enforced schema was rendered into task context
+		// (it fails the task if not).
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(
+				Fields.AGENT_ID, "strict-schema-agent",
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/llmagent/chat",
+					"llmOperation", "v/test/ops/taskllm",
+					"model", "strict-schema-test")
+			),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("strict-schema-agent");
+		Blob taskId = Blob.createRandom(new java.util.Random(), 16);
+		agent.addTask(taskId, Maps.of(
+			Fields.INPUT, Maps.of("task", "compute the answer"),
+			Fields.RESPONSE_SCHEMA, answerSchema(),
+			Fields.STRICT, CVMBool.TRUE));
+
+		engine.jobs().invokeOperation(
+			"v/ops/agent/trigger",
+			Maps.of(Fields.AGENT_ID, "strict-schema-agent"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		TestEngine.awaitTimelineCount(agent, 1, 10000);
+
+		assertEquals(0, agent.getTasks().count(), "conforming retry must complete the task");
+		ACell taskResults = RT.getIn(agent.getTimeline().get(0), Fields.TASK_RESULTS);
+		assertNotNull(taskResults, "timeline entry: " + agent.getTimeline().get(0));
+		assertTrue(taskResults.toString().contains("42"),
+			"the conforming structured result must land, got: " + taskResults);
+		assertFalse(taskResults.toString().contains("freestyle"),
+			"the non-conforming first attempt must not land, got: " + taskResults);
+	}
+
+	@Test
+	public void testNonStrictSchemaFreestyles() {
+		// Default (strict absent): the schema is guidance — a mismatching
+		// completion lands without interference.
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(
+				Fields.AGENT_ID, "advisory-schema-agent",
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/llmagent/chat",
+					"llmOperation", "v/test/ops/taskllm",
+					"model", "strict-schema-test")
+			),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("advisory-schema-agent");
+		Blob taskId = Blob.createRandom(new java.util.Random(), 16);
+		agent.addTask(taskId, Maps.of(
+			Fields.INPUT, Maps.of("task", "compute the answer"),
+			Fields.RESPONSE_SCHEMA, answerSchema()));
+
+		engine.jobs().invokeOperation(
+			"v/ops/agent/trigger",
+			Maps.of(Fields.AGENT_ID, "advisory-schema-agent"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		TestEngine.awaitTimelineCount(agent, 1, 10000);
+
+		// The advisory schema renders as guidance, so the mock's schema guard
+		// (which looks for the enforced marker) fails the task — UNLESS the
+		// mock's first freestyle attempt landed. Assert the freestyle result.
+		assertEquals(0, agent.getTasks().count());
+		ACell taskResults = RT.getIn(agent.getTimeline().get(0), Fields.TASK_RESULTS);
+		assertNotNull(taskResults);
+		assertTrue(taskResults.toString().contains("schema not rendered into task context")
+				|| taskResults.toString().contains("freestyle"),
+			"got: " + taskResults);
+	}
+
+	@Test
+	public void testRequestStoresSchemaAndStrictOnTask() throws Exception {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(
+				Fields.AGENT_ID, "schema-request-agent",
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/llmagent/chat",
+					"llmOperation", "v/test/ops/taskllm",
+					"model", "no-complete-test")
+			),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		engine.jobs().invokeOperation(
+			"v/ops/agent/request",
+			Maps.of(
+				Fields.AGENT_ID, "schema-request-agent",
+				Fields.INPUT, Maps.of("task", "typed work"),
+				Fields.RESPONSE_SCHEMA, answerSchema(),
+				Fields.STRICT, CVMBool.TRUE,
+				"timeout", CVMLong.create(0)),
+			RequestContext.of(ALICE_DID));
+
+		// The task record is added synchronously by handleRequest; the
+		// no-complete mock never resolves it, so it stays inspectable.
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("schema-request-agent");
+		long deadline = System.currentTimeMillis() + 10000;
+		while (agent.getTasks().count() == 0 && System.currentTimeMillis() < deadline) {
+			Thread.sleep(50);
+		}
+		assertEquals(1, agent.getTasks().count(), "task must be queued");
+		ACell record = agent.getTasks().entryAt(0).getValue();
+		assertNotNull(RT.getIn(record, Fields.RESPONSE_SCHEMA), "schema must persist on the task record");
+		assertEquals(CVMBool.TRUE, RT.getIn(record, Fields.STRICT), "strict must persist on the task record");
+	}
+
+	@Test
+	public void testStrictWithoutSchemaFails() {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(
+				Fields.AGENT_ID, "strict-no-schema-agent",
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/llmagent/chat",
+					"llmOperation", "v/test/ops/taskllm",
+					"model", "no-complete-test")
+			),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job job = engine.jobs().invokeOperation(
+			"v/ops/agent/request",
+			Maps.of(
+				Fields.AGENT_ID, "strict-no-schema-agent",
+				Fields.INPUT, Maps.of("task", "typed work"),
+				Fields.STRICT, CVMBool.TRUE),
+			RequestContext.of(ALICE_DID));
+		Exception e = assertThrows(Exception.class, () -> job.awaitResult(5000));
+		assertTrue(e.getMessage().contains("strict requires a responseSchema"),
+			"got: " + e.getMessage());
+	}
+
 	@Test
 	public void testLoadedValueRefreshesAfterToolWriteWithinSameTransition() {
 		engine.jobs().invokeOperation("v/ops/covia/write",

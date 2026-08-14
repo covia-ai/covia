@@ -23,7 +23,11 @@
 				},
 				"responseSchema": {
 					"type": "object",
-					"description": "Optional JSON Schema. When provided, the agent's response is constrained to match this schema (server-side enforcement via OpenAI structured outputs). Use to get typed structured output from any agent. Overrides the agent's default output schema if it has one."
+					"description": "Optional JSON Schema for the task result. Shown to the agent as the target shape; advisory unless strict is set. Overrides the agent's config-level responseFormat for this task."
+				},
+				"strict": {
+					"type": "boolean",
+					"description": "Enforce responseSchema at task completion (default false). When true, a complete_task result that does not conform is rejected back to the agent with the validation diagnostics; the agent corrects it or fails the task. Requires responseSchema."
 				},
 				"loads": { "type": "object", "description": "Optional context to pre-load for the NEW session (the session tier of the context scope chain, #142): map of lattice path to {budget} bytes. Only valid when this call creates the session — an error if the session already exists." },
 				"sessionId": {

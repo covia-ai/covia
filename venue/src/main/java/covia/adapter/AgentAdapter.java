@@ -959,6 +959,15 @@ public class AgentAdapter extends AAdapter {
 		Blob taskId = job.getID();
 		ACell taskInput = RT.getIn(input, Fields.INPUT);
 		ACell responseSchema = RT.getIn(input, Fields.RESPONSE_SCHEMA);
+		// strict is the requester's opt-in to completion-time schema
+		// enforcement (#376). Default (absent/false) keeps the schema
+		// advisory so agents can freestyle.
+		ACell strictCell = RT.getIn(input, Fields.STRICT);
+		boolean strict = CVMBool.TRUE.equals(strictCell);
+		if (strict && !(responseSchema instanceof AMap)) {
+			job.fail("strict requires a responseSchema to enforce");
+			return;
+		}
 		AMap<AString, ACell> taskData = Maps.of(
 			Fields.INPUT,      taskInput,
 			Fields.CALLER,     ctx.getCallerDID(),
@@ -966,6 +975,7 @@ public class AgentAdapter extends AAdapter {
 			Fields.SESSION_ID, Strings.create(sid.toHexString()));
 		if (responseSchema instanceof AMap) {
 			taskData = taskData.assoc(Fields.RESPONSE_SCHEMA, responseSchema);
+			if (strict) taskData = taskData.assoc(Fields.STRICT, CVMBool.TRUE);
 		}
 		if (outputPath != null) {
 			taskData = taskData
@@ -3048,8 +3058,8 @@ public class AgentAdapter extends AAdapter {
 
 	/**
 	 * Formats one canonical taskdata entry — {input, caller, created,
-	 * responseSchema?, t, sessionId?, goals?} — into the transition wire
-	 * shape {jobId, input, caller?, responseSchema?}.
+	 * responseSchema?, strict?, t, sessionId?, goals?} — into the transition
+	 * wire shape {jobId, input, caller?, responseSchema?, strict?}.
 	 */
 	@SuppressWarnings("unchecked")
 	private static AMap<AString, ACell> formatTask(Blob jobId, ACell raw) {
@@ -3057,11 +3067,13 @@ public class AgentAdapter extends AAdapter {
 		ACell taskInput = (taskMap != null) ? taskMap.get(Fields.INPUT) : raw;
 		ACell caller = (taskMap != null) ? taskMap.get(Fields.CALLER) : null;
 		ACell responseSchema = (taskMap != null) ? taskMap.get(Fields.RESPONSE_SCHEMA) : null;
+		ACell strict = (taskMap != null) ? taskMap.get(Fields.STRICT) : null;
 		AMap<AString, ACell> task = Maps.of(
 			Fields.JOB_ID, taskIdHex(jobId),
 			Fields.INPUT, taskInput);
 		if (caller != null) task = task.assoc(Fields.CALLER, caller);
 		if (responseSchema != null) task = task.assoc(Fields.RESPONSE_SCHEMA, responseSchema);
+		if (strict != null) task = task.assoc(Fields.STRICT, strict);
 		return task;
 	}
 

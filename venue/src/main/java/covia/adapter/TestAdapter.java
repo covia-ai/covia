@@ -998,6 +998,39 @@ public class TestAdapter extends AAdapter {
 			}
 		}
 
+		AString model = RT.ensureString(RT.getIn(input, "model"));
+
+		if (model != null && "strict-schema-test".equals(model.toString())) {
+			// Guard: the enforced schema must have been rendered into the task
+			// message. First attempt: a non-conforming prose result. After the
+			// harness rejects it with schema diagnostics, a conforming object.
+			boolean sawSchema = false, sawRejection = false;
+			for (long i = 0; i < messages.count(); i++) {
+				AString c = RT.ensureString(RT.getIn(messages.get(i), "content"));
+				if (c == null) continue;
+				if (c.toString().contains("Response schema (enforced")) sawSchema = true;
+				if (c.toString().contains("does not conform")) sawRejection = true;
+			}
+			if (!sawSchema) {
+				return Maps.of(
+					"role", Strings.create("assistant"),
+					"toolCalls", Vectors.of(
+						Maps.of("id", "call_no_schema_rendered", "name", "fail_task",
+							"arguments", "{\"error\":\"schema not rendered into task context\"}")));
+			}
+			if (sawRejection) {
+				return Maps.of(
+					"role", Strings.create("assistant"),
+					"toolCalls", Vectors.of(
+						Maps.of("id", "call_conforming_complete", "name", "complete_task",
+							"arguments", "{\"result\":{\"answer\":42}}")));
+			}
+			return Maps.of(
+				"role", Strings.create("assistant"),
+				"toolCalls", Vectors.of(
+					Maps.of("id", "call_freestyle_complete", "name", "complete_task",
+						"arguments", "{\"result\":\"a freestyle prose answer\"}")));
+		}
         // Check if tool results already present — return text summary
         for (long i = 0; i < messages.count(); i++) {
             AString role = RT.ensureString(RT.getIn(messages.get(i), "role"));
@@ -1011,7 +1044,6 @@ public class TestAdapter extends AAdapter {
             }
         }
 
-		AString model = RT.ensureString(RT.getIn(input, "model"));
 		if (model != null && "parallel-task-complete-test".equals(model.toString())) {
 			// Standard llmagent parity fixture: completion and a later write arrive
 			// in one provider batch. The write must be paired but never executed.
@@ -1050,6 +1082,13 @@ public class TestAdapter extends AAdapter {
 						"arguments", "{}"),
 					Maps.of("id", "call_after_invalid_complete_task", "name", "test_echo",
 						"arguments", "{\"echo\":\"still executes\"}")));
+		}
+		if (model != null && "no-complete-test".equals(model.toString())) {
+			// Text-only reply: never resolves tasks, leaving the queue
+			// inspectable by tests.
+			return Maps.of(
+				"role", Strings.create("assistant"),
+				"content", Strings.create("thinking..."));
 		}
 		if (model != null && "empty-complete-with-text-test".equals(model.toString())) {
 			// The LadyByron shape: the answer written as message text, the
