@@ -1682,7 +1682,7 @@ public class AgentAdapter extends AAdapter {
 
 	/** Whether agent:deleteSession is enabled on this venue (default true). */
 	private boolean isSessionDeleteEnabled() {
-		ACell v = engine.config().getAdapterConfig(getName()).get(CONFIG_SESSION_DELETE);
+		ACell v = engine.adapterConfig(getName()).get(CONFIG_SESSION_DELETE);
 		return (v == null) || RT.bool(v);
 	}
 

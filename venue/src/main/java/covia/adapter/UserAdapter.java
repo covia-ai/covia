@@ -248,12 +248,6 @@ public class UserAdapter extends AAdapter {
 	 * venue-rooted delegation over {@code <venue DID>/users} can authorise them.
 	 */
 	private void requireVenueUserAuthority(RequestContext ctx, AString ability) {
-		AString caller = (ctx != null) ? ctx.getCallerDID() : null;
-		if (engine.getDIDString().equals(caller) && ctx.getAgentId() == null) return;
-		AString resource = Strings.create(engine.getDIDString() + "/users");
-		if (engine.crossUserAllows(ctx, resource, ability)) return;
-		throw new AuthException("User administration denied: requires " + ability
-			+ " on " + resource + " from the venue (call as the venue or present "
-			+ "a venue-issued delegation)");
+		engine.requireVenueAuthority(ctx, "users", ability);
 	}
 }

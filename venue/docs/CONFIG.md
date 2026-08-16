@@ -652,7 +652,20 @@ same forms are accepted by `file:move` and `file:copy` endpoints.
 }
 ```
 
-Per-adapter settings, keyed by adapter name (`Config.getAdapterConfig(name)`).
+Per-adapter settings, keyed by adapter name. Adapters read their *effective*
+configuration through `Engine.adapterConfig(name)` — this static block
+overlaid by any runtime reconfiguration (see
+[Runtime adapter lifecycle](#runtime-adapter-lifecycle)).
+
+The reserved key `enabled: false` parks a non-kernel adapter as disabled at
+boot: it is not installed, publishes nothing to `v/ops/` or `v/info/adapters/`,
+and does not dispatch. `{"adapters": {"test": {"enabled": false}}}` hides the
+test operations; `{"adapters": {"convex": {"enabled": false}}}` removes the
+Convex ops. A disabled adapter can be switched on later without a restart
+with `v/ops/venue/adapter/enable`. Kernel adapters (`covia`, `agent`, `dlfs`,
+`hitl`, `http`, `file`, `grid`, `venue`) cannot be disabled — the venue does
+not function without them — and `enabled: false` on one is a boot error.
+
 Currently defined:
 
 - `vault.drive` — DLFS drive targeted by the drive-free `vault:*` convenience
@@ -833,13 +846,18 @@ compiled against `venue` (provided scope) declaring its adapters via
 adapters (catalog, `/v/info/adapters`, caps/gates/defaults all apply). Each
 module gets a split-delegation classloader: parent-first for
 `covia.*`/`convex.*`/JDK/SLF4J (shared cell types + logging), child-first
-for everything else (dependency isolation). Loading is an OPERATOR act —
-no runtime module-load op exists, deliberately. `sha256` pins content;
-boot fails fast on any load error; no hot-unload (restart to remove).
+for everything else (dependency isolation). `sha256` pins content; boot
+fails fast on any load error. Loaded modules are listed at
+`v/info/modules/<name>` (`{name, path, sha256?, adapters}`), and each module
+adapter's `v/info/adapters/<name>` summary names its owning `module`.
 The optional `config` object is passed unchanged to every adapter discovered
 in that module before registration. An adapter may reject malformed settings
 or remain inactive when an optional runtime is unavailable. Module-specific
 unknown-field handling receives the venue's `strictConfig` mode.
+
+Modules can also be loaded and unloaded on a running venue — see
+[Runtime adapter lifecycle](#runtime-adapter-lifecycle). Off by default;
+`modules` remains the boot-time, restart-surviving declaration.
 
 First module: **covia-sql** (#227) — `v/ops/sql/query` / `v/ops/sql/execute`
 over venue-local convex-db databases (per-user, lattice-backed, created on
@@ -849,6 +867,60 @@ param) and operator-registered JDBC connections
 `sql/<db>` × `sql/query`|`sql/execute`. The module ships its own `sql`
 agent skill from its jar (materialises at `v/skills/sql` exactly when the
 module is loaded — the module-shipped-skill pattern, see `docs/SKILLS.md`).
+
+## Runtime adapter lifecycle
+
+```json
+{
+  "dynamicModules": {
+    "enabled": true,
+    "dir": "modules",
+    "anyPath": false
+  }
+}
+```
+
+The `venue` adapter exposes venue-owned operations that change the adapter
+set of a *running* venue without a restart:
+
+| Operation | Effect |
+|-----------|--------|
+| `v/ops/venue/adapters` | Registry view: every registered adapter (active **and** disabled) with `enabled`, `kernel`, owning `module`, effective `config` and `operations`, plus loaded `modules` |
+| `v/ops/venue/adapter/disable {name}` | Retract a non-kernel adapter's catalog paths and `v/info/adapters/<name>`, stop dispatch. Instance retained; in-flight jobs finish |
+| `v/ops/venue/adapter/enable {name}` | Restore it (installing on first enable if it was boot-disabled) |
+| `v/ops/venue/adapter/configure {name, config, merge?}` | Apply a new effective configuration (`adapters.<name>` shape) — the adapter's `configure` hook may reject it, in which case nothing changes |
+| `v/ops/venue/module/load {module, sha256?, config?}` | Load a module jar and publish its adapters |
+| `v/ops/venue/module/unload {name}` | Remove a module's adapters (catalog + introspection retracted, resources closed) and close its classloader |
+
+**Authority.** All of these are venue administration: a null capability
+scope is deliberately not enough. They run only as the venue identity itself
+or with a venue-issued delegation covering `<venue DID>/adapters` ×
+`adapter/manage` — the same model as `user:create`. Ordinary authenticated
+users get `AuthException`.
+
+**Module policy.** `module/load` and `module/unload` require
+`dynamicModules.enabled` (default **off**). By default `module` must be a jar
+*name* inside the staging directory `dynamicModules.dir` (default `modules`,
+relative to the working directory): no absolute paths, no `..` segments, and
+the resolved real path must stay inside the directory. An operator who wants
+to install any adapter from anywhere sets `dynamicModules.anyPath: true`,
+after which `module` may be any filesystem path (a relative one still
+resolves against `dir`). `sha256` pins content exactly as for boot modules.
+Loading in-process code is total compromise of the venue; this policy exists
+so that the decision stays with the operator.
+
+**Semantics.** Enable, disable, load and unload each publish as one lattice
+transaction, so the catalog never shows a half-applied adapter. Kernel
+adapters cannot be disabled or unloaded. In-flight jobs keep their adapter
+reference and finish; anything that re-resolves the adapter by name
+(multi-turn messages, restart recovery) fails at that point of use — the
+same rule as `mcp:remove-server`. Unloading closes `AutoCloseable` adapters
+and the module classloader, but JVM class unloading is best-effort (JDBC
+`DriverManager`, JNI and lingering references can pin a loader); "unload"
+means deregistered and released, not guaranteed collected. Runtime changes
+are **not persisted**: after a restart the venue config (`adapters.*`,
+`modules`) is authoritative again. A persisted live configuration is a
+later step.
 
 ## A2A protocol
 

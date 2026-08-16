@@ -1,0 +1,24 @@
+{
+  "name": "Configure adapter",
+  "description": "Applies a new effective configuration to a registered adapter (active or disabled) on the running venue — the same shape as the adapters.<name> config block. Replaces the effective config unless merge is true. The adapter may reject the settings, in which case nothing changes. Not persisted across restarts. Venue-owned: requires adapter/manage on <venue DID>/adapters.",
+  "operation": {
+    "adapter": "venue:adapter-configure",
+    "input": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Adapter name" },
+        "config": { "type": "object", "description": "New adapter configuration (adapters.<name> shape)" },
+        "merge": { "type": "boolean", "description": "Merge over the current effective config instead of replacing it (default false)" }
+      },
+      "required": ["name", "config"]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "config": { "type": "object", "description": "The effective configuration now in force" }
+      },
+      "required": ["name", "config"]
+    }
+  }
+}

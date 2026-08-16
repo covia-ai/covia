@@ -14,6 +14,7 @@ import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.util.JSON;
 import convex.lattice.cursor.ALatticeCursor;
@@ -29,12 +30,23 @@ import covia.api.Fields;
  * run synchronises that fork into the Engine's live fork once; a failure simply
  * discards it. No operation dispatch, Job records, or parallel catalog model is
  * involved.</p>
+ *
+ * <p>Besides the whole-venue bootstrap snapshot, the same machinery publishes
+ * and retracts <em>single</em> adapters and modules for the runtime adapter
+ * lifecycle ({@link Engine#enableAdapter}, {@link Engine#disableAdapter},
+ * {@link Modules#load}, {@link Modules#unload}) — each change is one fork
+ * sync, so the catalog never shows a half-applied adapter.</p>
  */
 final class VenueBootstrapMaterializer {
 
 	private static final AString K_W = Strings.intern("w");
 	private static final AString K_GLOBAL = Strings.intern("global");
 	private static final AString K_OPERATIONS = Strings.intern("operations");
+	private static final AString K_KERNEL = Strings.intern("kernel");
+	private static final AString K_MODULE = Strings.intern("module");
+	private static final AString K_ADAPTERS = Strings.intern("adapters");
+	private static final AString K_PATH = Strings.intern("path");
+	private static final AString K_SHA256 = Strings.intern("sha256");
 
 	private final Engine engine;
 	private final VenueState bootstrapFork;
@@ -72,6 +84,59 @@ final class VenueBootstrapMaterializer {
 	static void materialiseVenueInformation(Engine engine) {
 		VenueBootstrapMaterializer materializer = new VenueBootstrapMaterializer(engine);
 		materializer.writeVenueInformation();
+		materializer.publish();
+	}
+
+	/**
+	 * Incrementally publishes ONE adapter after the bootstrap snapshot exists —
+	 * the runtime {@code enable} / module-load path. Its catalog declarations
+	 * and {@code v/info/adapters/<name>} summary land in one fork sync. A
+	 * catalog path already occupied on the live catalog is a conflict and
+	 * aborts the whole publication (nothing partial becomes visible).
+	 */
+	static void materialiseAdapter(Engine engine, AAdapter adapter) {
+		VenueBootstrapMaterializer materializer = new VenueBootstrapMaterializer(engine);
+		for (var declaration : adapter.pendingCatalogEntries.entrySet()) {
+			String path = declaration.getKey();
+			if (materializer.readVenuePath(path) != null) {
+				throw new IllegalStateException("Catalog path /" + path
+					+ " is already occupied; cannot enable adapter '" + adapter.getName() + "'");
+			}
+			materializer.writeCatalogDeclaration(adapter, path, declaration.getValue());
+		}
+		materializer.writeAndValidateVenuePath(
+			"v/info/adapters/" + adapter.getName(), materializer.adapterSummary(adapter));
+		materializer.publish();
+	}
+
+	/**
+	 * Incrementally retracts ONE adapter — the runtime {@code disable} /
+	 * module-unload path. Deletes exactly the catalog paths the adapter
+	 * declared and its {@code v/info/adapters/<name>} summary, in one fork
+	 * sync. Content-addressed assets stay in the venue CAS (they are inert
+	 * without a dispatch target and may be re-materialised on enable).
+	 */
+	static void dematerialiseAdapter(Engine engine, AAdapter adapter) {
+		VenueBootstrapMaterializer materializer = new VenueBootstrapMaterializer(engine);
+		for (String path : adapter.pendingCatalogEntries.keySet()) {
+			materializer.deleteVenuePath(path);
+		}
+		materializer.deleteVenuePath("v/info/adapters/" + adapter.getName());
+		materializer.publish();
+	}
+
+	/** Publishes (or refreshes) one module's {@code v/info/modules/<name>} entry. */
+	static void materialiseModule(Engine engine, Modules.LoadedModule module) {
+		VenueBootstrapMaterializer materializer = new VenueBootstrapMaterializer(engine);
+		materializer.writeAndValidateVenuePath(
+			"v/info/modules/" + module.name(), moduleSummary(module));
+		materializer.publish();
+	}
+
+	/** Retracts one module's {@code v/info/modules/<name>} entry. */
+	static void dematerialiseModule(Engine engine, String moduleName) {
+		VenueBootstrapMaterializer materializer = new VenueBootstrapMaterializer(engine);
+		materializer.deleteVenuePath("v/info/modules/" + moduleName);
 		materializer.publish();
 	}
 
@@ -139,17 +204,38 @@ final class VenueBootstrapMaterializer {
 			writeAndValidateVenuePath(
 				"v/info/adapters/" + adapterName, adapterSummary(adapter));
 		}
+
+		// Loaded venue modules — same complete-snapshot discipline.
+		writeAndValidateVenuePath("v/info/modules", Maps.empty());
+		for (Modules.LoadedModule module : engine.getModules()) {
+			writeAndValidateVenuePath("v/info/modules/" + module.name(), moduleSummary(module));
+		}
 	}
 
-	private static AMap<AString, ACell> adapterSummary(AAdapter adapter) {
+	private AMap<AString, ACell> adapterSummary(AAdapter adapter) {
 		List<String> paths = new ArrayList<>(adapter.getOperationPaths());
 		paths.sort(String::compareTo);
 		AVector<ACell> operations = Vectors.empty();
 		for (String path : paths) operations = operations.conj(Strings.create(path));
-		return Maps.of(
+		AMap<AString, ACell> summary = Maps.of(
 			Fields.NAME, Strings.create(adapter.getName()),
 			Fields.DESCRIPTION, Strings.create(adapter.getDescription()),
-			K_OPERATIONS, operations);
+			K_OPERATIONS, operations,
+			K_KERNEL, CVMBool.of(engine.isKernelAdapter(adapter.getName())));
+		Modules.LoadedModule module = engine.moduleOf(adapter.getName());
+		if (module != null) summary = summary.assoc(K_MODULE, Strings.create(module.name()));
+		return summary;
+	}
+
+	static AMap<AString, ACell> moduleSummary(Modules.LoadedModule module) {
+		AVector<ACell> adapters = Vectors.empty();
+		for (String name : module.adapterNames()) adapters = adapters.conj(Strings.create(name));
+		AMap<AString, ACell> summary = Maps.of(
+			Fields.NAME, Strings.create(module.name()),
+			K_PATH, Strings.create(module.jar().toString()),
+			K_ADAPTERS, adapters);
+		if (module.sha256() != null) summary = summary.assoc(K_SHA256, Strings.create(module.sha256()));
+		return summary;
 	}
 
 	/** Writes through the child cursor, then verifies the child view immediately. */
@@ -164,6 +250,15 @@ final class VenueBootstrapMaterializer {
 
 	private ACell readVenuePath(String virtualPath) {
 		return CoviaAdapter.readPath(venueUserCursor, toVenueUserPath(virtualPath));
+	}
+
+	/** Deletes through the child cursor, then verifies the path is gone. */
+	private void deleteVenuePath(String virtualPath) {
+		CoviaAdapter.deletePathFromCursor(venueUserCursor, toVenueUserPath(virtualPath));
+		if (readVenuePath(virtualPath) != null) {
+			throw new IllegalStateException(
+				"Bootstrap lattice delete validation failed at /" + virtualPath);
+		}
 	}
 
 	/** Rewrites v/x to the venue user's physical w/global/x path. */

@@ -227,4 +227,27 @@ public class MCPRegistryTest {
 		assertEquals(annotations, tool.get(Strings.create("annotations")),
 			"MCP safety annotations must reach tools/list unchanged");
 	}
+
+	// ==================== Runtime adapter lifecycle ====================
+
+	/** The registry follows the live adapter set: disabling / enabling an
+	 *  adapter changes tools/list without a restart. Throwaway engine — this
+	 *  mutates the adapter set, so the shared TestEngine is off limits. */
+	@Test public void testRegistryFollowsAdapterLifecycle() {
+		Engine engine = Engine.createTemp(null);
+		Engine.addDemoAssets(engine);
+		try {
+			MCP mcp = mcp(engine, Maps.of(K_INCLUDE_ADAPTERS, Vectors.of(Strings.create("*"))));
+			assertTrue(toolNames(mcp).contains("json_merge"), "json exposed while enabled");
+
+			engine.disableAdapter("json");
+			assertFalse(toolNames(mcp).contains("json_merge"), "disabled adapter's tools vanish");
+			assertTrue(toolNames(mcp).contains("http_get"), "other adapters unaffected");
+
+			engine.enableAdapter("json");
+			assertTrue(toolNames(mcp).contains("json_merge"), "re-enabled adapter's tools return");
+		} finally {
+			engine.close();
+		}
+	}
 }

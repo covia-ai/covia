@@ -7,6 +7,9 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 import java.util.jar.JarOutputStream;
 import java.util.zip.ZipEntry;
 
@@ -20,6 +23,7 @@ import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.adapter.AAdapter;
 import covia.grid.Job;
@@ -162,6 +166,204 @@ public class ModuleLoaderTest {
 			IllegalStateException e = assertThrows(IllegalStateException.class,
 				() -> Engine.addDemoAssets(engine));
 			assertTrue(e.getMessage().contains("Module jar not found"), e.getMessage());
+		} finally {
+			engine.close();
+		}
+	}
+
+	// ========== Runtime module lifecycle (v/ops/venue/module/*) ==========
+
+	private static Engine bootDynamic(Path dir, boolean anyPath) {
+		AMap<AString, ACell> dyn = Maps.of(
+			Config.ENABLED, true,
+			Strings.create("dir"), Strings.create(dir.toString()));
+		if (anyPath) dyn = dyn.assoc(Strings.create("anyPath"), CVMBool.TRUE);
+		Engine engine = Engine.createTemp(Maps.of(Config.DYNAMIC_MODULES, dyn,
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
+		Engine.addDemoAssets(engine);
+		return engine;
+	}
+
+	private static ACell asVenue(Engine engine, String op, AMap<AString, ACell> input) throws Exception {
+		return engine.jobs().invokeInternal(op, input, engine.venueContext())
+			.get(15, TimeUnit.SECONDS);
+	}
+
+	private static Throwable rootCause(ExecutionException e) {
+		Throwable t = e.getCause();
+		while (t instanceof CompletionException && t.getCause() != null && t.getCause() != t) t = t.getCause();
+		return t;
+	}
+
+	@Test
+	public void testRuntimeLoadAndUnloadViaOps(@TempDir Path dir) throws Exception {
+		Path jar = buildModuleJar(dir);
+		Engine engine = bootDynamic(dir, false);
+		try {
+			RequestContext ctx = RequestContext.of(Strings.create("did:test:runtimeload"));
+			assertNull(engine.getAdapter("modtest"));
+			assertNull(engine.resolveAsset(Strings.create("v/ops/modtest/echo"), ctx));
+
+			// Load by jar NAME inside the staging directory
+			ACell loaded = asVenue(engine, "v/ops/venue/module/load", Maps.of(
+				Strings.create("module"), Strings.create(jar.getFileName().toString()),
+				Strings.create("config"), Maps.of("label", "runtime")));
+			assertEquals(Strings.create("modtest-module"), RT.getIn(loaded, "name"));
+			AAdapter adapter = engine.getAdapter("modtest");
+			assertNotNull(adapter, "module adapter must register at runtime");
+			assertTrue(adapter.getDescription().contains("runtime"), "module config reaches the adapter");
+			assertNotNull(engine.getModule("modtest-module"));
+			assertEquals("modtest-module", engine.moduleOf("modtest").name());
+
+			// Catalog + introspection published incrementally into the LIVE venue
+			assertNotNull(engine.resolveAsset(Strings.create("v/ops/modtest/echo"), ctx));
+			ACell info = engine.resolvePath(Strings.create("v/info/adapters/modtest"), engine.venueContext());
+			assertNotNull(info);
+			assertEquals(Strings.create("modtest-module"), RT.getIn(info, "module"));
+			ACell modInfo = engine.resolvePath(Strings.create("v/info/modules/modtest-module"), engine.venueContext());
+			assertNotNull(modInfo);
+			assertEquals(Strings.create("modtest"), RT.getIn(modInfo, "adapters", 0));
+
+			// Invocable end-to-end
+			Job job = engine.jobs().invokeOperation("v/ops/modtest/echo",
+				Maps.of(Strings.create("value"), Strings.create("hot")), ctx);
+			assertEquals(Strings.create("hot"), RT.getIn(job.awaitResult(15000), "value"));
+
+			// Loading the same module twice is refused
+			ExecutionException dup = assertThrows(ExecutionException.class,
+				() -> asVenue(engine, "v/ops/venue/module/load",
+					Maps.of(Strings.create("module"), Strings.create(jar.getFileName().toString()))));
+			assertTrue(rootCause(dup).getMessage().contains("already loaded"), rootCause(dup).getMessage());
+
+			// Unload: adapter, catalog, introspection and module record all go
+			ACell unloaded = asVenue(engine, "v/ops/venue/module/unload",
+				Maps.of(Strings.create("name"), Strings.create("modtest-module")));
+			assertEquals(CVMBool.TRUE, RT.getIn(unloaded, "unloaded"));
+			assertNull(engine.getAdapter("modtest"));
+			assertNull(engine.getModule("modtest-module"));
+			assertNull(engine.resolveAsset(Strings.create("v/ops/modtest/echo"), ctx));
+			assertNull(engine.resolvePath(Strings.create("v/info/adapters/modtest"), engine.venueContext()));
+			assertNull(engine.resolvePath(Strings.create("v/info/modules/modtest-module"), engine.venueContext()));
+
+			// And it can come back (fresh loader, fresh instance)
+			asVenue(engine, "v/ops/venue/module/load",
+				Maps.of(Strings.create("module"), Strings.create(jar.getFileName().toString())));
+			assertNotNull(engine.getAdapter("modtest"));
+			assertNotSame(adapter, engine.getAdapter("modtest"));
+			assertNotNull(engine.resolveAsset(Strings.create("v/ops/modtest/echo"), ctx));
+		} finally {
+			engine.close();
+		}
+	}
+
+	@Test
+	public void testRuntimeLoadDisabledByDefault(@TempDir Path dir) throws Exception {
+		Path jar = buildModuleJar(dir);
+		Engine engine = Engine.createTemp(null);
+		Engine.addDemoAssets(engine);
+		try {
+			ExecutionException e = assertThrows(ExecutionException.class,
+				() -> asVenue(engine, "v/ops/venue/module/load",
+					Maps.of(Strings.create("module"), Strings.create(jar.toString()))));
+			assertTrue(rootCause(e).getMessage().contains("dynamicModules.enabled"), rootCause(e).getMessage());
+			assertNull(engine.getAdapter("modtest"));
+			// Unload is gated by the same switch
+			e = assertThrows(ExecutionException.class,
+				() -> asVenue(engine, "v/ops/venue/module/unload",
+					Maps.of(Strings.create("name"), Strings.create("whatever"))));
+			assertTrue(rootCause(e).getMessage().contains("dynamicModules.enabled"), rootCause(e).getMessage());
+		} finally {
+			engine.close();
+		}
+	}
+
+	@Test
+	public void testRuntimeLoadPathPolicy(@TempDir Path staging, @TempDir Path elsewhere) throws Exception {
+		Path outsideJar = buildModuleJar(elsewhere);
+
+		// Default policy: staging directory only
+		Engine strict = bootDynamic(staging, false);
+		try {
+			for (String bad : new String[] {
+					outsideJar.toString(),                                            // absolute path
+					"../" + elsewhere.getFileName() + "/" + outsideJar.getFileName(), // traversal
+					"no-such.jar" }) {                                                // missing
+				ExecutionException e = assertThrows(ExecutionException.class,
+					() -> asVenue(strict, "v/ops/venue/module/load",
+						Maps.of(Strings.create("module"), Strings.create(bad))), bad);
+				assertInstanceOf(IllegalArgumentException.class, rootCause(e), bad + ": " + rootCause(e));
+				assertNull(strict.getAdapter("modtest"), bad);
+			}
+			// A relative sub-path inside the staging dir is fine
+			Files.createDirectories(staging.resolve("sub"));
+			Path subJar = buildModuleJar(staging.resolve("sub"));
+			asVenue(strict, "v/ops/venue/module/load",
+				Maps.of(Strings.create("module"), Strings.create("sub/" + subJar.getFileName())));
+			assertNotNull(strict.getAdapter("modtest"));
+		} finally {
+			strict.close();
+		}
+
+		// anyPath: absolute paths anywhere are accepted
+		Engine open = bootDynamic(staging, true);
+		try {
+			ACell loaded = asVenue(open, "v/ops/venue/module/load",
+				Maps.of(Strings.create("module"), Strings.create(outsideJar.toString())));
+			assertEquals(Strings.create(outsideJar.toString()), RT.getIn(loaded, "path"));
+			assertNotNull(open.getAdapter("modtest"));
+		} finally {
+			open.close();
+		}
+	}
+
+	@Test
+	public void testRuntimeSha256PinAndRollback(@TempDir Path dir) throws Exception {
+		Path jar = buildModuleJar(dir);
+		Engine engine = bootDynamic(dir, false);
+		try {
+			ExecutionException e = assertThrows(ExecutionException.class,
+				() -> asVenue(engine, "v/ops/venue/module/load", Maps.of(
+					Strings.create("module"), Strings.create(jar.getFileName().toString()),
+					Strings.create("sha256"), Strings.create("00".repeat(32)))));
+			assertTrue(rootCause(e).getMessage().contains("integrity check FAILED"), rootCause(e).getMessage());
+			assertNull(engine.getAdapter("modtest"));
+			assertNull(engine.getModule("modtest-module"));
+
+			String goodHash = Blob.wrap(MessageDigest.getInstance("SHA-256")
+				.digest(Files.readAllBytes(jar))).toHexString();
+			ACell loaded = asVenue(engine, "v/ops/venue/module/load", Maps.of(
+				Strings.create("module"), Strings.create(jar.getFileName().toString()),
+				Strings.create("sha256"), Strings.create(goodHash)));
+			assertEquals(Strings.create(goodHash), RT.getIn(loaded, "sha256"));
+		} finally {
+			engine.close();
+		}
+	}
+
+	@Test
+	public void testBootModuleCanBeUnloadedAtRuntime(@TempDir Path dir) throws Exception {
+		Path jar = buildModuleJar(dir);
+		AMap<AString, ACell> config = Maps.of(
+			Config.MODULES, Vectors.of(Strings.create(jar.toString())),
+			Config.DYNAMIC_MODULES, Maps.of(Config.ENABLED, true,
+				Strings.create("dir"), Strings.create(dir.toString())),
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true));
+		Engine engine = Engine.createTemp(config);
+		Engine.addDemoAssets(engine);
+		try {
+			RequestContext ctx = RequestContext.of(Strings.create("did:test:bootunload"));
+			assertNotNull(engine.getAdapter("modtest"));
+			assertNotNull(engine.resolvePath(Strings.create("v/info/modules/modtest-module"), engine.venueContext()),
+				"boot snapshot lists loaded modules");
+			// The admin listing shows the module and its adapter's owner
+			ACell listing = asVenue(engine, "v/ops/venue/adapters", Maps.empty());
+			assertEquals(Strings.create("modtest-module"), RT.getIn(listing, "modules", 0, "name"));
+
+			asVenue(engine, "v/ops/venue/module/unload",
+				Maps.of(Strings.create("name"), Strings.create("modtest-module")));
+			assertNull(engine.getAdapter("modtest"));
+			assertNull(engine.resolveAsset(Strings.create("v/ops/modtest/echo"), ctx));
+			assertTrue(engine.getModules().isEmpty());
 		} finally {
 			engine.close();
 		}

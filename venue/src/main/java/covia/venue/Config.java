@@ -176,6 +176,12 @@ public class Config {
 	/** Key for venue modules — external adapter jars loaded at boot (see {@link Modules}) */
 	public static final AString MODULES = Strings.intern("modules");
 
+	/** Key for the runtime module lifecycle policy block
+	 *  ({@code enabled}, {@code dir}, {@code anyPath}). */
+	public static final AString DYNAMIC_MODULES = Strings.intern("dynamicModules");
+	/** Default staging directory for runtime-loadable module jars. */
+	public static final String DEFAULT_MODULES_DIR = "modules";
+
 	/** User admission and registration configuration block. */
 	public static final AString USERS = Strings.intern("users");
 	public static final AString BOOTSTRAP = Strings.intern("bootstrap");
@@ -188,6 +194,12 @@ public class Config {
 	 * {@code adapters} section, or an empty map when absent. Example venue
 	 * config: {@code {"adapters": {"agent": {"sessionDelete": false}}}} —
 	 * {@code getAdapterConfig("agent")} returns {@code {"sessionDelete": false}}.
+	 * The reserved key {@code enabled: false} parks a non-kernel adapter as
+	 * disabled at boot (see {@link Engine#registerAdapter}).
+	 *
+	 * <p>This is the <em>static</em> configuration. Adapters should read their
+	 * effective configuration via {@link Engine#adapterConfig(String)}, which
+	 * overlays runtime reconfiguration on top of this.</p>
 	 *
 	 * @param name The adapter name (as returned by {@code AAdapter.getName()})
 	 * @return The adapter's config map, empty if not configured
@@ -358,7 +370,7 @@ public class Config {
 		"defaultLlmOperation", "defaultTransitionOp", "maxToolIterations",
 		"port", "bindAddress", "baseUrl", "rateLimit", "acceptQueueSize",
 		"httpSelectors", "httpAcceptors", "mcp", "a2a", "adapters",
-		"modules", "users", "store", "seed", "keystore", "storage", "etch",
+		"modules", "dynamicModules", "users", "store", "seed", "keystore", "storage", "etch",
 		"maxContentSize", "auth", "webdav", "file", "corsOrigins",
 		"allowPrivateNetwork", "enablePrivateJobs", "recordReadOnlyOperations", "fixMcpStrings",
 		"outputValidation", "secrets", "strictAssets", "strictConfig");
@@ -462,6 +474,7 @@ public class Config {
 		validateMapField(ADAPTERS, "adapters");
 		validateMapField(SECRETS, "secrets");
 		validateModules(strict);
+		validateDynamicModules(strict);
 
 		// Reuse the canonical parser so malformed CORS never silently widens.
 		getCorsPolicy();
@@ -717,6 +730,16 @@ public class Config {
 			optionalString(module, Strings.intern("sha256"), "modules[" + i + "].sha256");
 			optionalMap(module, Strings.intern("config"), "modules[" + i + "].config");
 		}
+	}
+
+	private void validateDynamicModules(boolean strict) {
+		AMap<AString, ACell> dyn = optionalMap(config, DYNAMIC_MODULES, "dynamicModules");
+		if (dyn == null) return;
+		validateUnknownFields(dyn, Set.of("enabled", "dir", "anyPath"), "dynamicModules", strict);
+		optionalBoolean(dyn, ENABLED, "dynamicModules.enabled", false);
+		AString dir = optionalString(dyn, Strings.intern("dir"), "dynamicModules.dir");
+		if (dir != null && dir.isEmpty()) throw malformed("dynamicModules.dir", "must not be empty");
+		optionalBoolean(dyn, Strings.intern("anyPath"), "dynamicModules.anyPath", false);
 	}
 
 	private void validateMapField(AString key, String path) {
@@ -1558,6 +1581,38 @@ public class Config {
 	 */
 	public ACell getModules() {
 		return config.get(MODULES);
+	}
+
+	/**
+	 * Whether the runtime module lifecycle operations
+	 * ({@code v/ops/venue/module/load} / {@code unload}) are permitted.
+	 * Default <b>off</b>: loading code into the venue process is an operator
+	 * decision, so it must be switched on explicitly.
+	 */
+	public boolean isDynamicModulesEnabled() {
+		AMap<AString, ACell> dyn = optionalMap(config, DYNAMIC_MODULES, "dynamicModules");
+		return dyn != null && optionalBoolean(dyn, ENABLED, "dynamicModules.enabled", false);
+	}
+
+	/**
+	 * Staging directory for runtime module loads. A runtime {@code module}
+	 * reference is resolved inside this directory unless
+	 * {@link #isDynamicModulesAnyPath()} widens the policy.
+	 * Default {@value #DEFAULT_MODULES_DIR}.
+	 */
+	public String getDynamicModulesDir() {
+		AMap<AString, ACell> dyn = optionalMap(config, DYNAMIC_MODULES, "dynamicModules");
+		AString dir = (dyn != null) ? optionalString(dyn, Strings.intern("dir"), "dynamicModules.dir") : null;
+		return (dir != null) ? dir.toString() : DEFAULT_MODULES_DIR;
+	}
+
+	/**
+	 * Whether a runtime module load may name ANY filesystem path rather than
+	 * only a jar inside the staging directory. Default off.
+	 */
+	public boolean isDynamicModulesAnyPath() {
+		AMap<AString, ACell> dyn = optionalMap(config, DYNAMIC_MODULES, "dynamicModules");
+		return dyn != null && optionalBoolean(dyn, Strings.intern("anyPath"), "dynamicModules.anyPath", false);
 	}
 
 	/**

@@ -1248,6 +1248,31 @@ public class CoviaAdapter extends AAdapter {
 		updatePath(baseCursor, keys, (current, from) -> deepSet(current, keys, from, value));
 	}
 
+	/**
+	 * Deletes the value at a path through an already-authorised lattice cursor
+	 * using the same wrapped-namespace and deep-path semantics as
+	 * {@code covia:delete}. The cursor-level twin of
+	 * {@link #writePathToCursor} for framework-owned state transactions (venue
+	 * catalog maintenance); no capability check, no Job — possession of the
+	 * cursor is the authority boundary.
+	 *
+	 * @param baseCursor cursor at a user namespace root
+	 * @param keys path keys relative to that root
+	 * @return true if a value was present and removed; false if already absent
+	 */
+	public static boolean deletePathFromCursor(ALatticeCursor<ACell> baseCursor, ACell[] keys) {
+		if (baseCursor == null) throw new IllegalArgumentException("baseCursor is required");
+		if (keys == null || keys.length == 0) {
+			throw new IllegalArgumentException("A non-empty cursor-relative path is required");
+		}
+		final boolean[] deleted = {false};
+		updatePath(baseCursor, keys, (current, from) -> {
+			deleted[0] = leafExisted(current, keys, from);
+			return deepDelete(current, keys, from);
+		});
+		return deleted[0];
+	}
+
 	/** True if {@code key} names a {@code {updated, data}}-wrapped namespace. */
 	private static boolean isWrappedNamespace(ACell key) {
 		return (key != null) && WRAPPED_NAMESPACES.contains(key.toString());

@@ -98,6 +98,7 @@ AUTH_REQUIRED).
 | `scheduler` | Deferred grid-op invocation | `schedule`, `cancel`, `trigger`, `list` |
 | `auth` | Authentication ops | login/token flows |
 | `user` | Explicit user registration and discovery (arbitrary DIDs; venue-managed did:web usernames) | `create`, `info`, `list` |
+| `venue` | Venue administration — runtime adapter/module lifecycle (venue-owned; `docs/CONFIG.md` "Runtime adapter lifecycle") | `adapters`, `adapter/enable`, `adapter/disable`, `adapter/configure`, `module/load`, `module/unload` |
 | `test` | Testing | `echo`, `delay`, `fail`, `never`, `random`, `chat`, `pause`, `taskComplete` |
 
 ## API Endpoints
@@ -159,6 +160,13 @@ is in [`docs/A2A_INTERACTION_AUTHORITY.md`](docs/A2A_INTERACTION_AUTHORITY.md).
 4. Override `installAssets()` to register default operations
 5. Create JSON asset definitions in `src/main/resources/adapters/{name}/`
 6. Register in `Engine.addDemoAssets()`
+
+Read settings through `engine.adapterConfig(getName())` (static
+`adapters.<name>` config overlaid by runtime reconfiguration), never
+`engine.config().getAdapterConfig()`. Override `configure(config, strict)`
+only if you cache derived state or want to validate settings up front — it
+runs at registration and again on `v/ops/venue/adapter/configure`. Adapters
+are enable/disable-able at runtime unless listed in `Engine.KERNEL_ADAPTERS`.
 
 The engine always resolves operation references to metadata before dispatch —
 adapters never receive null metadata. For adapters that need direct job

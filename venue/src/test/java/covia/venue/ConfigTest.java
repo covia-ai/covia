@@ -71,6 +71,34 @@ public class ConfigTest {
 	}
 
 	@Test
+	public void testDynamicModulesPolicy() {
+		// Off by default, staging dir "modules", staging-only.
+		Config none = new Config(null);
+		assertFalse(none.isDynamicModulesEnabled());
+		assertEquals("modules", none.getDynamicModulesDir());
+		assertFalse(none.isDynamicModulesAnyPath());
+
+		Config on = new Config(Maps.of(Config.DYNAMIC_MODULES, Maps.of(
+			Config.ENABLED, CVMBool.TRUE,
+			Strings.create("dir"), Strings.create("/opt/covia/modules"),
+			Strings.create("anyPath"), CVMBool.TRUE)));
+		assertTrue(on.isDynamicModulesEnabled());
+		assertEquals("/opt/covia/modules", on.getDynamicModulesDir());
+		assertTrue(on.isDynamicModulesAnyPath());
+
+		// Malformed known fields always fail; unknown fields fail under strictConfig.
+		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+			Config.DYNAMIC_MODULES, Maps.of(Config.ENABLED, Strings.create("yes")))));
+		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+			Config.DYNAMIC_MODULES, Maps.of(Strings.create("dir"), Strings.create("")))));
+		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+			Config.DYNAMIC_MODULES, Strings.create("true"))));
+		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+			Config.STRICT_CONFIG, CVMBool.TRUE,
+			Config.DYNAMIC_MODULES, Maps.of(Strings.create("anypath"), CVMBool.TRUE))));
+	}
+
+	@Test
 	public void testUnknownFieldsWarnUnlessStrict() {
 		// Compatibility default: a field from a newer runtime is retained and ignored.
 		Config compatible = new Config(Maps.of(

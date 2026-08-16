@@ -738,7 +738,7 @@ public class Orchestrator extends AAdapter {
 			 * configured JSON null to remove the orchestrator-level cap.
 			 */
 			private Long configuredForeachMaxItems() {
-				AMap<AString,ACell> config=engine.config().getAdapterConfig(getName());
+				AMap<AString,ACell> config=engine.adapterConfig(getName());
 				if (!config.containsKey(K_MAX_ITEMS)) {
 					return (long)DEFAULT_FOREACH_MAX_ITEMS;
 				}
@@ -751,7 +751,7 @@ public class Orchestrator extends AAdapter {
 			}
 
 			private int configuredForeachLimit(AString key, int defaultValue) {
-				ACell configured=engine.config().getAdapterConfig(getName()).get(key);
+				ACell configured=engine.adapterConfig(getName()).get(key);
 				if (configured instanceof CVMLong l
 						&& l.longValue() >= 1
 						&& l.longValue() <= Integer.MAX_VALUE) {

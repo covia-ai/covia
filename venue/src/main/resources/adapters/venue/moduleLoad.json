@@ -1,0 +1,26 @@
+{
+  "name": "Load module",
+  "description": "Loads an adapter module jar into the running venue and publishes its adapters. Requires dynamicModules.enabled; by default the module must be a jar name inside the staging directory dynamicModules.dir (no absolute paths or '..'); dynamicModules.anyPath widens this to any filesystem path. Optional sha256 pins the jar content. Not persisted across restarts. Venue-owned: requires adapter/manage on <venue DID>/adapters.",
+  "operation": {
+    "adapter": "venue:module-load",
+    "input": {
+      "type": "object",
+      "properties": {
+        "module": { "type": "string", "description": "Jar name inside the staging directory (or a path when anyPath is enabled)" },
+        "sha256": { "type": "string", "description": "Optional hex SHA-256 the jar must match" },
+        "config": { "type": "object", "description": "Optional module-level settings passed to the module's adapters (modules[].config shape)" }
+      },
+      "required": ["module"]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "path": { "type": "string" },
+        "sha256": { "type": "string" },
+        "adapters": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["name", "path", "adapters"]
+    }
+  }
+}

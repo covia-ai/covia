@@ -113,9 +113,15 @@ public class MCP extends McpServer {
 	 *
 	 * <p>Built lazily on first access — MCP is constructed before
 	 * {@code addDemoAssets} populates adapter catalogs, so eager construction
-	 * would always see an empty engine.</p>
+	 * would always see an empty engine. Rebuilt whenever the engine's adapter
+	 * set changes ({@link Engine#adapterRegistryVersion()}): adapters enabled,
+	 * disabled, loaded or unloaded at runtime appear in / vanish from
+	 * {@code tools/list} without a restart.</p>
 	 */
 	private volatile java.util.Map<AString, AString> toolRegistry;
+
+	/** Adapter-set version the current {@link #toolRegistry} was built from. */
+	private volatile long toolRegistryVersion = -1;
 
 	public MCP(Venue venue, AMap<AString, ACell> mcpConfig) {
 		super(buildServerInfo(venue, mcpConfig));
@@ -145,10 +151,12 @@ public class MCP extends McpServer {
 	/** Returns the tool registry, building it on first access. */
 	private java.util.Map<AString, AString> registry() {
 		java.util.Map<AString, AString> r = toolRegistry;
-		if (r != null) return r;
+		long version = engine().adapterRegistryVersion();
+		if (r != null && toolRegistryVersion == version) return r;
 		synchronized (this) {
-			if (toolRegistry == null) {
+			if (toolRegistry == null || toolRegistryVersion != version) {
 				toolRegistry = buildToolRegistry(engine(), includePathPrefixes, includedAdapters);
+				toolRegistryVersion = version;
 			}
 			return toolRegistry;
 		}

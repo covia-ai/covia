@@ -1,0 +1,47 @@
+{
+  "name": "Venue adapters",
+  "description": "Lists every registered adapter on this venue — active and disabled — with its kernel flag, owning module, effective configuration and operations, plus the loaded modules. Venue-owned: requires adapter/manage on <venue DID>/adapters.",
+  "operation": {
+    "adapter": "venue:adapters",
+    "readOnly": true,
+    "input": {
+      "type": "object",
+      "properties": {}
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "adapters": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "description": { "type": "string" },
+              "enabled": { "type": "boolean" },
+              "kernel": { "type": "boolean" },
+              "module": { "type": "string" },
+              "config": { "type": "object" },
+              "operations": { "type": "array", "items": { "type": "string" } }
+            },
+            "required": ["name", "enabled", "kernel"]
+          }
+        },
+        "modules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "path": { "type": "string" },
+              "sha256": { "type": "string" },
+              "adapters": { "type": "array", "items": { "type": "string" } }
+            },
+            "required": ["name", "path", "adapters"]
+          }
+        }
+      },
+      "required": ["adapters", "modules"]
+    }
+  }
+}

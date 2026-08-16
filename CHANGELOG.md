@@ -12,6 +12,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 - Asset content retrieval by any asset reference: `GET /api/v1/assets/content/<ref>` (#368)
 - Optional `responseSchema` on `agent:request` with requester-controlled `strict` enforcement at task completion (#376)
+- Runtime adapter lifecycle: `v/ops/venue/adapter/{enable,disable,configure}` and `v/ops/venue/module/{load,unload}` (venue-owned, `adapter/manage`); `adapters.<name>.enabled` boot switch; `dynamicModules` policy; `v/info/modules`
+- `AAdapter.configure(config, strict)` hook and `Engine.adapterConfig(name)` effective-config overlay
 
 ### Changed
 

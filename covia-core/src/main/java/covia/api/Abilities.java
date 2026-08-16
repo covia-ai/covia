@@ -29,6 +29,9 @@ public final class Abilities {
 	public static final AString USER_READ     = Strings.intern("user/read");
 	public static final AString USER_AUTH_MANAGE =
 		Strings.intern("user/authentication-manage");
+	/** Venue-owned adapter and module lifecycle (enable/disable/configure,
+	 *  module load/unload) — guarded on {@code <venue DID>/adapters}. */
+	public static final AString ADAPTER_MANAGE = Strings.intern("adapter/manage");
 
 	/** The venue-scoped MCP management resource guarded by {@link #MCP_MANAGE}. */
 	public static final AString V_MCP = Strings.intern("v/mcp");

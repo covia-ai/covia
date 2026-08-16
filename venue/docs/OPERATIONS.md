@@ -93,7 +93,8 @@ Semantics, access control, and pin-to-`/a/`-on-invoke behaviour are as already s
 | `/v/info/version` | string | jar manifest / `pom.properties` |
 | `/v/info/started` | long (epoch ms) | `System.currentTimeMillis()` at boot |
 | `/v/info/protocols` | array of strings | enabled protocol handlers (e.g. `["rest","mcp","a2a","dlfs-webdav"]`) |
-| `/v/info/adapters/<name>` | map | per-adapter summary: `{name, description, operations: [catalog paths]}` — invocable operations only (`v/ops/`, `v/test/ops/`); non-operation catalog entries such as agent templates are excluded |
+| `/v/info/adapters/<name>` | map | per-adapter summary: `{name, description, kernel, module?, operations: [catalog paths]}` — invocable operations only (`v/ops/`, `v/test/ops/`); non-operation catalog entries such as agent templates are excluded. Only *enabled* adapters appear |
+| `/v/info/modules/<name>` | map | per-module summary for loaded venue modules: `{name, path, sha256?, adapters: [names]}` |
 
 A single `covia:slice v/info` round trip gives an agent or tool a complete venue introspection view.
 
@@ -604,7 +605,9 @@ User `/o/` capability semantics are unchanged from GRID_LATTICE_DESIGN §6.
 
 ## 9. Refresh semantics
 
-Registered catalog declarations are re-materialised on every startup. The materialiser replaces `/v/info/adapters/` with a complete snapshot, so summaries for removed adapters cannot survive a restart.
+Registered catalog declarations are re-materialised on every startup. The materialiser replaces `/v/info/adapters/` and `/v/info/modules/` with complete snapshots, so summaries for removed adapters cannot survive a restart.
+
+After the bootstrap snapshot, the same materialiser publishes and retracts *single* adapters and modules for the runtime lifecycle (`v/ops/venue/adapter/enable|disable`, `v/ops/venue/module/load|unload` — see `CONFIG.md`, "Runtime adapter lifecycle"). Enabling writes exactly the adapter's declared catalog paths plus its `/v/info/adapters/<name>` summary; disabling deletes exactly those. Each change is one child-fork sync. A declared path already occupied on the live catalog is a conflict that aborts the whole publication.
 
 The operation and skill catalog namespaces are intentionally updated in place rather than cleared wholesale. Those namespaces may also contain dynamically bridged MCP tools or operator-managed entries that are not adapter bootstrap declarations. Removing such entries requires an owner-aware garbage-collection policy; the bootstrap transaction does not guess ownership.
 

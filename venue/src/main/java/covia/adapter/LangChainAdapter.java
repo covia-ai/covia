@@ -329,7 +329,7 @@ public class LangChainAdapter extends AAdapter {
 	 *  config {@code adapters.langchain.ollamaUrl}, then the
 	 *  {@code OLLAMA_BASE_URL} environment variable, then localhost. */
 	String resolveOllamaUrl(AString urlParam) {
-		AMap<AString, ACell> cfg = (engine != null) ? engine.config().getAdapterConfig("langchain") : null;
+		AMap<AString, ACell> cfg = (engine != null) ? engine.adapterConfig("langchain") : null;
 		return resolveOllamaUrl(urlParam, cfg, System.getenv("OLLAMA_BASE_URL"));
 	}
 
@@ -569,7 +569,7 @@ public class LangChainAdapter extends AAdapter {
 	private ACell handleModels(RequestContext ctx, ACell input) {
 		AString filter = RT.ensureString(RT.getIn(input, "provider"));
 		AMap<AString, ACell> adapterCfg = (engine != null)
-			? engine.config().getAdapterConfig("langchain") : null;
+			? engine.adapterConfig("langchain") : null;
 
 		AVector<ACell> providers = Vectors.empty();
 		for (HostedProvider hp : HOSTED_PROVIDERS) {

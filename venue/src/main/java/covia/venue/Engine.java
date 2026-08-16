@@ -36,6 +36,7 @@ import convex.core.cvm.Keywords;
 import convex.core.data.Keyword;
 import convex.core.data.MapEntry;
 import convex.core.data.Maps;
+import convex.core.data.prim.CVMBool;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
@@ -134,10 +135,51 @@ public class Engine {
 	protected final ConcurrentHashMap<String, AAdapter> adapters = new ConcurrentHashMap<>();
 
 	/**
-	 * Classloaders of venue modules loaded into this engine (see {@link Modules}) —
-	 * held for the engine's lifetime, closed on {@link #close()}.
+	 * Adapters that are registered but <em>disabled</em> — parked at boot by
+	 * {@code adapters.<name>.enabled: false} (or by declining
+	 * {@link AAdapter#configure}), or retracted at runtime via
+	 * {@link #disableAdapter}. Not dispatchable, absent from the catalog and
+	 * {@code v/info/adapters}; re-activated by {@link #enableAdapter}.
 	 */
-	final java.util.List<AutoCloseable> moduleLoaders = new java.util.ArrayList<>();
+	private final ConcurrentHashMap<String, AAdapter> disabledAdapters = new ConcurrentHashMap<>();
+
+	/**
+	 * Runtime adapter configuration overrides ({@code v/ops/venue/adapter/configure}),
+	 * overlaid on the static {@code adapters.<name>} config by
+	 * {@link #adapterConfig(String)}. Not persisted: config is authoritative
+	 * again after a restart.
+	 */
+	private final ConcurrentHashMap<String, AMap<AString, ACell>> runtimeAdapterConfig = new ConcurrentHashMap<>();
+
+	/**
+	 * Venue modules loaded into this engine (see {@link Modules}), in load
+	 * order. Classloaders are closed on unload or {@link #close()}.
+	 */
+	private final java.util.LinkedHashMap<String, Modules.LoadedModule> modules = new java.util.LinkedHashMap<>();
+
+	/**
+	 * Set once the venue catalog and {@code v/info} snapshot have been
+	 * published (see {@link #materialiseBootstrapState()}). Before that,
+	 * registrations accumulate for the bulk bootstrap write; after it, every
+	 * registration change is published incrementally.
+	 */
+	private volatile boolean catalogPublished = false;
+
+	/**
+	 * Monotonic version of the active adapter set — bumped on every activate,
+	 * disable and remove. Cheap staleness signal for consumers that snapshot
+	 * the adapter set (e.g. the MCP tool registry) without a listener
+	 * mechanism.
+	 */
+	private final java.util.concurrent.atomic.AtomicLong adapterRegistryVersion = new java.util.concurrent.atomic.AtomicLong();
+
+	/**
+	 * Adapters the venue itself dereferences by name (Engine, API surfaces,
+	 * server wiring, or other adapters via {@code getAdapter}). They can be
+	 * neither disabled nor removed — the venue does not function without them.
+	 */
+	public static final java.util.Set<String> KERNEL_ADAPTERS = java.util.Set.of(
+		"covia", "agent", "dlfs", "hitl", "http", "file", "grid", "venue");
 
 	/**
 	 * Persistence callback supplied at construction. Wired by VenueServer to
@@ -657,16 +699,27 @@ public class Engine {
 					"Failed to close adapter " + adapter.getName(), e);
 			}
 		}
+		// Disabled adapters may still hold resources acquired at install time.
+		for (AAdapter adapter : disabledAdapters.values()) {
+			if (!(adapter instanceof AutoCloseable closeable)) continue;
+			try {
+				closeable.close();
+			} catch (Exception e) {
+				recordCloseFailure(startupFailure,
+					"Failed to close disabled adapter " + adapter.getName(), e);
+			}
+		}
 		// Module loaders are installed after core Engine startup, so release
 		// their classloaders before unwinding the core resources.
-		for (int i = moduleLoaders.size() - 1; i >= 0; i--) {
+		java.util.List<Modules.LoadedModule> loaded = new java.util.ArrayList<>(modules.values());
+		for (int i = loaded.size() - 1; i >= 0; i--) {
 			try {
-				moduleLoaders.get(i).close();
+				loaded.get(i).loader().close();
 			} catch (Exception e) {
 				recordCloseFailure(startupFailure, "Failed to close module classloader", e);
 			}
 		}
-		moduleLoaders.clear();
+		modules.clear();
 
 		// Persistence sweep is acquired last, so it is stopped first.
 		ScheduledExecutorService sweepExecutor = persistenceSweep;
@@ -755,6 +808,7 @@ public class Engine {
 		venue.registerAdapter(new LLMAgentAdapter());
 		venue.registerAdapter(new covia.adapter.agent.GoalTreeAdapter());
 		venue.registerAdapter(new covia.adapter.HITLAdapter());
+		venue.registerAdapter(new covia.adapter.VenueAdapter());
 		// Load operator-declared venue modules (external adapter jars) BEFORE
 		// materialisation, so module ops enter the catalog with everyone
 		// else's. Fail-fast on any load error — explicit config is explicit
@@ -786,6 +840,7 @@ public class Engine {
 	 */
 	public void materialiseVOps() {
 		VenueBootstrapMaterializer.materialiseAdapterCatalog(this);
+		catalogPublished = true;
 	}
 
 	/**
@@ -796,6 +851,7 @@ public class Engine {
 	 */
 	public void materialiseBootstrapState() {
 		VenueBootstrapMaterializer.materialiseBootstrapState(this);
+		catalogPublished = true;
 	}
 
 	/**
@@ -867,58 +923,265 @@ public class Engine {
 		return (v != null) ? v : "dev";
 	}
 
+	// ========== Adapter lifecycle ==========
+	//
+	// An adapter is REGISTERED once (configure → install → active or parked),
+	// may be DISABLED / ENABLED any number of times (deregistered from
+	// dispatch, catalog and v/info, instance retained), RECONFIGURED while
+	// live, and REMOVED for good (module unload). Kernel adapters are exempt
+	// from everything but reconfiguration. Every mutation that touches the
+	// published catalog is one lattice transaction via the materialiser.
+
 	/**
-	 * Register an adapter
+	 * Register an adapter: applies its effective configuration
+	 * ({@link #adapterConfig}), installs it and makes it active. A non-kernel
+	 * adapter whose config says {@code enabled: false}, or whose
+	 * {@link AAdapter#configure} declines, is parked as disabled instead
+	 * (installed lazily on {@link #enableAdapter}). After the bootstrap
+	 * catalog has been published, an active registration is materialised
+	 * immediately.
+	 *
 	 * @param adapter The adapter instance to register
+	 * @throws IllegalStateException if an adapter of that name is already registered
 	 */
 	public synchronized void registerAdapter(AAdapter adapter) {
 		String name = adapter.getName();
-		if (adapters.containsKey(name) ) {
+		if (adapters.containsKey(name) || disabledAdapters.containsKey(name)) {
 			throw new IllegalStateException("Trying to install same adapter twice: "+name);
 		}
-		adapter.install(this);
+		AMap<AString, ACell> cfg = adapterConfig(name);
+		if (CVMBool.FALSE.equals(cfg.get(Config.ENABLED))) {
+			if (isKernelAdapter(name)) {
+				throw new IllegalStateException("Kernel adapter '" + name
+					+ "' cannot be disabled (adapters." + name + ".enabled)");
+			}
+			disabledAdapters.put(name, adapter);
+			log.info("Adapter '{}' is disabled by configuration", name);
+			return;
+		}
+		if (!adapter.configure(cfg, config.isStrictConfig())) {
+			if (isKernelAdapter(name)) {
+				throw new IllegalStateException("Kernel adapter '" + name + "' declined its configuration");
+			}
+			disabledAdapters.put(name, adapter);
+			log.info("Adapter '{}' declined its configuration and is disabled", name);
+			return;
+		}
+		activate(adapter);
+	}
+
+	/** Install (once) and publish an adapter. Caller holds the engine monitor. */
+	private void activate(AAdapter adapter) {
+		String name = adapter.getName();
+		if (adapter.engine == null) adapter.install(this);
+		if (catalogPublished) VenueBootstrapMaterializer.materialiseAdapter(this, adapter);
 		adapters.put(name, adapter);
+		adapterRegistryVersion.incrementAndGet();
 		log.info("Registered adapter: {} ({} primitives)", name,
 			adapter.pendingCatalogEntries.size());
 	}
 
 	/**
-	 * Get an adapter by name
+	 * Version of the active adapter set: changes whenever an adapter is
+	 * activated, disabled or removed. Consumers holding a derived snapshot
+	 * compare against this to know when to rebuild.
+	 */
+	public long adapterRegistryVersion() {
+		return adapterRegistryVersion.get();
+	}
+
+	/**
+	 * Disable an active adapter: retract its catalog paths and
+	 * {@code v/info/adapters/<name>}, and stop dispatching to it. The instance
+	 * is retained (not closed) so {@link #enableAdapter} restores it exactly.
+	 * In-flight jobs keep their adapter reference and finish; anything that
+	 * re-resolves the adapter by name (multi-turn messages, recovery) fails at
+	 * that point of use.
+	 *
+	 * @param name Adapter name
+	 * @return true if the adapter was active and is now disabled; false if it
+	 *         was already disabled
+	 * @throws IllegalArgumentException if the adapter is unknown or a kernel adapter
+	 */
+	public synchronized boolean disableAdapter(String name) {
+		if (isKernelAdapter(name)) {
+			throw new IllegalArgumentException("Kernel adapter '" + name + "' cannot be disabled");
+		}
+		AAdapter adapter = adapters.get(name);
+		if (adapter == null) {
+			if (disabledAdapters.containsKey(name)) return false;
+			throw new IllegalArgumentException("Unknown adapter: " + name);
+		}
+		if (catalogPublished) VenueBootstrapMaterializer.dematerialiseAdapter(this, adapter);
+		adapters.remove(name);
+		disabledAdapters.put(name, adapter);
+		adapterRegistryVersion.incrementAndGet();
+		log.info("Disabled adapter: {}", name);
+		return true;
+	}
+
+	/**
+	 * Enable a disabled adapter: install it if it never was, publish its
+	 * catalog paths and {@code v/info/adapters/<name>}, and resume dispatch.
+	 *
+	 * @param name Adapter name
+	 * @return true if the adapter was disabled and is now active; false if it
+	 *         was already active
+	 * @throws IllegalArgumentException if the adapter is unknown
+	 * @throws IllegalStateException if the adapter declines its configuration
+	 *         or a catalog path it declares is occupied
+	 */
+	public synchronized boolean enableAdapter(String name) {
+		AAdapter adapter = disabledAdapters.get(name);
+		if (adapter == null) {
+			if (adapters.containsKey(name)) return false;
+			throw new IllegalArgumentException("Unknown adapter: " + name);
+		}
+		if (adapter.engine == null && !adapter.configure(adapterConfig(name), config.isStrictConfig())) {
+			throw new IllegalStateException("Adapter '" + name + "' declined its configuration");
+		}
+		activate(adapter);
+		disabledAdapters.remove(name);
+		return true;
+	}
+
+	/**
+	 * Apply a new effective configuration to a registered adapter (active or
+	 * disabled) and record it as the runtime override returned by
+	 * {@link #adapterConfig}. The adapter sees the change through
+	 * {@link AAdapter#configure}; if it declines, nothing changes.
+	 *
+	 * @param name Adapter name
+	 * @param cfg The complete new effective configuration
+	 * @throws IllegalArgumentException if the adapter is unknown or rejects the config
+	 */
+	public synchronized void configureAdapter(String name, AMap<AString, ACell> cfg) {
+		AAdapter adapter = adapters.get(name);
+		if (adapter == null) adapter = disabledAdapters.get(name);
+		if (adapter == null) throw new IllegalArgumentException("Unknown adapter: " + name);
+		if (cfg == null) cfg = Maps.empty();
+		if (!adapter.configure(cfg, config.isStrictConfig())) {
+			throw new IllegalArgumentException("Adapter '" + name + "' rejected the configuration");
+		}
+		runtimeAdapterConfig.put(name, cfg);
+		log.info("Reconfigured adapter: {}", name);
+	}
+
+	/**
+	 * The effective configuration for an adapter: the runtime override set by
+	 * {@link #configureAdapter} if any, else the static
+	 * {@code adapters.<name>} block. Never null. Adapters should read their
+	 * settings through this rather than {@code config().getAdapterConfig()}
+	 * so runtime reconfiguration reaches them.
+	 */
+	public AMap<AString, ACell> adapterConfig(String name) {
+		AMap<AString, ACell> override = runtimeAdapterConfig.get(name);
+		return (override != null) ? override : config.getAdapterConfig(name);
+	}
+
+	/** True if the adapter is one the venue itself depends on (see {@link #KERNEL_ADAPTERS}). */
+	public boolean isKernelAdapter(String name) {
+		return KERNEL_ADAPTERS.contains(name);
+	}
+
+	/**
+	 * Get an active adapter by name
 	 * @param name The name of the adapter to retrieve
-	 * @return The adapter instance, or null if not found
+	 * @return The adapter instance, or null if not found or disabled
 	 */
 	public AAdapter getAdapter(String name) {
 		return adapters.get(name);
 	}
 
 	/**
-	 * Check if an adapter with the given name exists
+	 * Check if an active adapter with the given name exists
 	 * @param name The name of the adapter to check
-	 * @return true if the adapter exists, false otherwise
+	 * @return true if the adapter exists and is enabled, false otherwise
 	 */
 	public boolean hasAdapter(String name) {
 		return adapters.containsKey(name);
 	}
 
 	/**
-	 * Remove an adapter by name
+	 * Remove an adapter for good (active or disabled): retract its catalog
+	 * and introspection entries, close it if {@link AutoCloseable}, and forget
+	 * it. Used by module unload; kernel adapters cannot be removed.
+	 *
 	 * @param name The name of the adapter to remove
 	 * @return The removed adapter, or null if not found
+	 * @throws IllegalArgumentException if the adapter is a kernel adapter
 	 */
-	public AAdapter removeAdapter(String name) {
-		AAdapter removed = adapters.remove(name);
-		if (removed != null) {
-			log.info("Removed adapter: {}", name);
+	public synchronized AAdapter removeAdapter(String name) {
+		if (isKernelAdapter(name)) {
+			throw new IllegalArgumentException("Kernel adapter '" + name + "' cannot be removed");
 		}
+		AAdapter removed = adapters.get(name);
+		if (removed != null) {
+			if (catalogPublished) VenueBootstrapMaterializer.dematerialiseAdapter(this, removed);
+			adapters.remove(name);
+			adapterRegistryVersion.incrementAndGet();
+		} else {
+			removed = disabledAdapters.remove(name);
+		}
+		if (removed == null) return null;
+		runtimeAdapterConfig.remove(name);
+		if (removed instanceof AutoCloseable closeable) {
+			try {
+				closeable.close();
+			} catch (Exception e) {
+				log.warn("Failed to close removed adapter {}", name, e);
+			}
+		}
+		log.info("Removed adapter: {}", name);
 		return removed;
 	}
 
 	/**
-	 * Get all adapter names
-	 * @return Set of all registered adapter names
+	 * Get all active adapter names
+	 * @return Set of all registered, enabled adapter names
 	 */
 	public java.util.Set<String> getAdapterNames() {
 		return adapters.keySet();
+	}
+
+	/**
+	 * Get the names of registered adapters that are currently disabled.
+	 * @return Set of disabled adapter names
+	 */
+	public java.util.Set<String> getDisabledAdapterNames() {
+		return disabledAdapters.keySet();
+	}
+
+	// ========== Modules ==========
+
+	/** Records a loaded module; publishes its {@code v/info/modules} entry once the catalog exists. */
+	synchronized void addModule(Modules.LoadedModule module) {
+		modules.put(module.name(), module);
+		if (catalogPublished) VenueBootstrapMaterializer.materialiseModule(this, module);
+	}
+
+	/** Forgets a module and retracts its {@code v/info/modules} entry. */
+	synchronized void dropModule(Modules.LoadedModule module) {
+		if (modules.remove(module.name()) == null) return;
+		if (catalogPublished) VenueBootstrapMaterializer.dematerialiseModule(this, module.name());
+	}
+
+	/** A loaded module by name, or null. */
+	public synchronized Modules.LoadedModule getModule(String name) {
+		return modules.get(name);
+	}
+
+	/** Loaded modules in load order (snapshot). */
+	public synchronized java.util.List<Modules.LoadedModule> getModules() {
+		return java.util.List.copyOf(modules.values());
+	}
+
+	/** The module that registered the named adapter, or null for a built-in. */
+	public synchronized Modules.LoadedModule moduleOf(String adapterName) {
+		for (Modules.LoadedModule module : modules.values()) {
+			if (module.adapterNames().contains(adapterName)) return module;
+		}
+		return null;
 	}
 
 	/**
@@ -2591,6 +2854,28 @@ public class Engine {
 			: "Capability denied: requires " + (ability != null ? ability : "(any ability)")
 				+ " on " + (resource != null ? resource : "(any)")
 				+ (ctx == null || ctx.getCallerDID() == null ? " (authenticate to act as an identity)" : ""));
+	}
+
+	/**
+	 * Venue-administration gate. Administrative operations (user provisioning,
+	 * adapter and module lifecycle) are venue-owned: a null capability scope is
+	 * deliberately NOT enough. Only direct execution as the venue identity, or
+	 * a presented venue-rooted delegation covering
+	 * {@code <venue DID>/<resource>} for {@code ability}, authorises them.
+	 *
+	 * @param ctx Request context
+	 * @param resource Venue-relative resource segment (e.g. {@code "users"}, {@code "adapters"})
+	 * @param ability Required ability
+	 * @throws covia.exception.AuthException when the caller lacks the authority
+	 */
+	public void requireVenueAuthority(RequestContext ctx, String resource, AString ability) {
+		AString caller = (ctx != null) ? ctx.getCallerDID() : null;
+		if (getDIDString().equals(caller) && ctx.getAgentId() == null) return;
+		AString full = Strings.create(getDIDString() + "/" + resource);
+		if (crossUserAllows(ctx, full, ability)) return;
+		throw new covia.exception.AuthException("Venue administration denied: requires " + ability
+			+ " on " + full + " from the venue (call as the venue or present "
+			+ "a venue-issued delegation)");
 	}
 
 	/**

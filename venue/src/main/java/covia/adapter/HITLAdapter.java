@@ -512,7 +512,7 @@ public class HITLAdapter extends AAdapter {
 
 	/** Returns the configured positive ceiling, or null when absent/explicitly null. */
 	private Long configuredMaxGrantLifetimeSecs() {
-		AMap<AString, ACell> config = engine.config().getAdapterConfig(getName());
+		AMap<AString, ACell> config = engine.adapterConfig(getName());
 		if (!config.containsKey(CONFIG_MAX_GRANT_LIFETIME_SECS)) return null;
 		ACell value = config.get(CONFIG_MAX_GRANT_LIFETIME_SECS);
 		if (value == null) return null;

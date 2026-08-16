@@ -181,7 +181,7 @@ public class SQLAdapter extends AAdapter {
 	 * namespaced by caller DID (created on first use).
 	 */
 	private Connection openConnection(RequestContext ctx, String db) throws Exception {
-		AMap<AString, ACell> cfg = engine.config().getAdapterConfig("sql");
+		AMap<AString, ACell> cfg = engine.adapterConfig("sql");
 		ACell external = RT.getIn(cfg, "databases", db);
 		if (external != null) {
 			AString url = RT.ensureString(RT.getIn(external, "url"));

@@ -52,7 +52,7 @@ public class VaultAdapter extends AAdapter {
 
 	@Override
 	protected void installAssets() {
-		AMap<AString, ACell> config = engine.config().getAdapterConfig(getName());
+		AMap<AString, ACell> config = engine.adapterConfig(getName());
 		if (config.containsKey(CONFIG_DRIVE)) {
 			AString configured = RT.ensureString(config.get(CONFIG_DRIVE));
 			if (configured == null || !isValidDriveName(configured.toString())) {

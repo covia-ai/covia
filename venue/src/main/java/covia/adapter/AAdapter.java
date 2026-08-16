@@ -54,6 +54,35 @@ public abstract class AAdapter {
 	}
 
 	/**
+	 * Applies this adapter's <em>effective adapter configuration</em> — the
+	 * venue's {@code adapters.<name>} block, overlaid by any runtime
+	 * reconfiguration ({@code v/ops/venue/adapter/configure}). Called by
+	 * {@link Engine#registerAdapter} before {@link #install(Engine)}, and again
+	 * whenever the configuration changes while the adapter is live.
+	 *
+	 * <p>Adapters that read their config lazily via
+	 * {@link Engine#adapterConfig(String)} at each call need not override this
+	 * — they see new settings automatically. Override to validate settings up
+	 * front or to rebuild cached derived state (clients, connection pools,
+	 * allow-lists). Return {@code false} to decline: at registration the
+	 * adapter is parked as disabled; at reconfiguration the new settings are
+	 * rejected and the previous configuration stays in force. Malformed known
+	 * settings should throw {@link IllegalArgumentException} with an
+	 * actionable message.</p>
+	 *
+	 * <p>Distinct from {@link #configureModule}: that receives the module-level
+	 * bootstrap settings ({@code modules[].config}) exactly once, before
+	 * registration, and answers "can this module run here at all?".</p>
+	 *
+	 * @param config effective adapter configuration, empty when none
+	 * @param strict whether venue {@code strictConfig} is enabled
+	 * @return true to accept the configuration; false to decline it
+	 */
+	public boolean configure(AMap<AString, ACell> config, boolean strict) {
+		return true;
+	}
+
+	/**
 	 * Index of assets installed by this adapter.
 	 * Maps asset Hash to asset metadata (AString).
 	 */
