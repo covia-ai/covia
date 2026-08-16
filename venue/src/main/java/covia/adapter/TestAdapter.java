@@ -384,6 +384,42 @@ public class TestAdapter extends AAdapter {
 			return Maps.of("role", Strings.create("assistant"),
 				"content", Strings.create("BATCH_RECOVERED"));
 		}
+		if (model != null && "textual-goal-complete-test".equals(model.toString())) {
+			return Maps.of(
+				"role", Strings.create("assistant"),
+				"content", Strings.create("complete {\"answer\":\"done-via-text\"}"));
+		}
+		if (model != null && "empty-goal-complete-test".equals(model.toString())) {
+			return Maps.of(
+				"role", Strings.create("assistant"),
+				"content", Strings.create("answer carried by the assistant turn"),
+				"toolCalls", Vectors.of(Maps.of(
+					"id", "call_empty_complete", "name", "complete", "arguments", "{}")));
+		}
+		if (model != null && "goal-tool-failure-test".equals(model.toString())) {
+			if (hasToolResult) {
+				return Maps.of("role", Strings.create("assistant"),
+					"content", Strings.create("recovered from tool failure"));
+			}
+			return Maps.of(
+				"role", Strings.create("assistant"),
+				"toolCalls", Vectors.of(Maps.of(
+					"id", "call_bad_load", "name", "context_load", "arguments", "{}")));
+		}
+		if (model != null && "strict-goal-schema-test".equals(model.toString())) {
+			boolean sawRejection = false;
+			for (long i = 0; i < modelMessages.count(); i++) {
+				AString content = RT.ensureString(RT.getIn(modelMessages.get(i), "content"));
+				sawRejection |= content != null && content.toString().contains("does not conform");
+			}
+			return Maps.of(
+				"role", Strings.create("assistant"),
+				"toolCalls", Vectors.of(Maps.of(
+					"id", sawRejection ? "call_valid_complete" : "call_invalid_complete",
+					"name", "complete",
+					"arguments", sawRejection
+						? "{\"answer\":\"corrected\"}" : "{\"answer\":42}")));
+		}
 		if (model != null && "parallel-complete-test".equals(model.toString())) {
 			// Anthropic-compatibility fixture: a terminal harness call can arrive
 			// in a parallel tool_use batch. The harness must return one result per

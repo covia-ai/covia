@@ -17,6 +17,7 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import convex.core.json.schema.JsonSchema;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.venue.AgentState;
@@ -489,7 +490,8 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// changes nothing here.
 		AMap<AString, ACell> outputs = resolveOutputs(config);
 		AMap<AString, ACell> defaultSchema = outputsCompleteSchema(outputs);
-		AMap<AString, ACell> perRequestSchema = extractPerRequestResponseSchema(tasks);
+		AMap<AString, ACell> perRequestSchema = hasStrictPerRequestSchema(tasks)
+			? extractPerRequestResponseSchema(tasks) : null;
 		AMap<AString, ACell> activeSchema = (perRequestSchema != null) ? perRequestSchema : defaultSchema;
 		boolean typedOutputs = (activeSchema != null);
 
@@ -670,13 +672,14 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// tools, supporting providers that prefer tool calls over response_format.
 		// An interrupted stack first settles child frames deepest-first without
 		// resuming their internal execution, then starts the root afresh.
+		ToolCycleEngine.Diagnostics diagnostics = new ToolCycleEngine.Diagnostics();
 		FrameResult result = tidyInterrupted
 			? settleInterruptedFrames(job, store, l3Config, llmOperation, baseTools,
 				configToolMap, capsCtx, context.history(), typedHarnessTools, toolCallTimeoutMs,
-				outerLoads)
+				outerLoads, diagnostics)
 			: runFrame(job, store, 0, l3Config, llmOperation, baseTools,
 				configToolMap, capsCtx, context.history(), typedHarnessTools, toolCallTimeoutMs,
-				outerLoads);
+				outerLoads, diagnostics);
 
 		// No per-adapter state is persisted here: the frame stack lives on the
 		// session record, and config's single home is record.config (#144) —
@@ -707,6 +710,9 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			output = output.assoc(Fields.ERROR, result.value());
 		} else {
 			output = output.assoc(Fields.RESPONSE, result.value());
+		}
+		if (diagnostics.failures().count() > 0) {
+			output = output.assoc(Fields.TOOL_FAILURES, diagnostics.failures());
 		}
 		// Cycle token totals (#217) — measured only; absent means the
 		// provider reported nothing, never zero. Per-call usage additionally
@@ -765,6 +771,232 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		}
 	}
 
+	/** Mutable policy state used by the shared tool-batch engine for one frame. */
+	private final class FrameToolContext {
+		final Job job;
+		final FrameStore store;
+		final int frameIndex;
+		final AMap<AString, ACell> config;
+		final AString llmOperation;
+		final RequestContext ctx;
+		final AVector<ACell> systemMessages;
+		final long toolCallTimeoutMs;
+		final AMap<AString, ACell> outerLoads;
+		final ToolCycleEngine.Diagnostics diagnostics;
+		AVector<ACell> baseTools;
+		final Map<String, AString> configToolMap;
+		Map<String, AString> iterationToolMap = Map.of();
+		AMap<AString, ACell> activeFrame;
+		String pendingCompactSummary;
+		AString turnText;
+
+		FrameToolContext(Job job, FrameStore store, int frameIndex,
+				AMap<AString, ACell> config, AString llmOperation,
+				AVector<ACell> baseTools, Map<String, AString> configToolMap,
+				RequestContext ctx, AVector<ACell> systemMessages,
+				long toolCallTimeoutMs, AMap<AString, ACell> outerLoads,
+				ToolCycleEngine.Diagnostics diagnostics) {
+			this.job = job;
+			this.store = store;
+			this.frameIndex = frameIndex;
+			this.config = config;
+			this.llmOperation = llmOperation;
+			this.baseTools = baseTools;
+			this.configToolMap = configToolMap;
+			this.ctx = ctx;
+			this.systemMessages = systemMessages;
+			this.toolCallTimeoutMs = toolCallTimeoutMs;
+			this.outerLoads = outerLoads;
+			this.diagnostics = diagnostics;
+		}
+
+		ToolCycleEngine.Registry<FrameToolContext> registry() {
+			return new ToolCycleEngine.Registry<FrameToolContext>()
+				.register(TOOL_COMPLETE, (call, ignored) -> complete(call, false))
+				.register(TOOL_FAIL, (call, ignored) -> complete(call, true))
+				.register(TOOL_COMPACT, (call, ignored) -> compact(call))
+				.register(TOOL_CONTEXT_LOAD, (call, ignored) -> contextLoad(call))
+				.register(TOOL_CONTEXT_UNLOAD, (call, ignored) -> contextUnload(call))
+				.register(TOOL_SKILL_LOAD, (call, ignored) -> skillLoad(call))
+				.register(TOOL_MORE_TOOLS, (call, ignored) -> moreTools(call))
+				.register(TOOL_SUBGOAL, (call, ignored) -> subgoal(call))
+				.fallback((call, ignored) -> ToolCycleEngine.ToolOutcome.result(
+					dispatchTool(call.name(), call.input(), iterationToolMap,
+						ctx, toolCallTimeoutMs)));
+		}
+
+		private ToolCycleEngine.ToolOutcome complete(
+				ToolCycleEngine.ToolCall call, boolean failed) {
+			ACell value = call.input();
+			// Same empty-completion fallback as llmagent: models commonly write
+			// the answer as assistant text and emit an empty control call beside it.
+			if (value instanceof AMap<?, ?> map && map.isEmpty()
+					&& turnText != null && !turnText.toString().isBlank()) {
+				value = turnText;
+			}
+			if (!failed && frameIndex == 0) {
+				AMap<AString, ACell> schema = RT.ensureMap(
+					RT.getIn(config, K_RESPONSE_FORMAT, K_SCHEMA));
+				if (schema != null) {
+					ACell candidate = value;
+					AString stringValue = RT.ensureString(value);
+					if (stringValue != null) {
+						try {
+							ACell parsed = convex.core.util.JSON.parse(stringValue.toString());
+							if (JsonSchema.validate(schema, parsed) == null) candidate = parsed;
+						} catch (Exception ignored) {
+							// Validate the raw string below.
+						}
+					}
+					String schemaError = JsonSchema.validate(schema, candidate);
+					if (schemaError != null) {
+						return ToolCycleEngine.ToolOutcome.result(Strings.create(
+							"Error: result does not conform to the required response schema — "
+							+ schemaError + ". Correct the result and call complete again."));
+					}
+					value = candidate;
+				}
+			}
+			ACell result = Maps.of(Strings.create("status"),
+				Strings.create(failed ? "failed" : "complete"));
+			return ToolCycleEngine.ToolOutcome.terminal(result,
+				failed ? "failed" : "complete", value);
+		}
+
+		private ToolCycleEngine.ToolOutcome compact(
+				ToolCycleEngine.ToolCall call) {
+			AString summary = RT.ensureString(RT.getIn(call.input(), Strings.create("summary")));
+			if (summary == null || summary.toString().isBlank()) {
+				return ToolCycleEngine.ToolOutcome.result(Strings.create(
+					"Error: summary is required — compact must preserve the important work so far."));
+			}
+			long turnsBefore = GoalTreeContext.countLiveTurns(activeFrame);
+			pendingCompactSummary = summary.toString();
+			return ToolCycleEngine.ToolOutcome.result(Strings.create(
+				"Compacted " + turnsBefore + " turns into segment. Context freed."));
+		}
+
+		private ToolCycleEngine.ToolOutcome contextLoad(
+				ToolCycleEngine.ToolCall call) {
+			HarnessTools.LoadScope scope = loadScope();
+			ACell result = HarnessTools.contextLoad(call.input(), scope);
+			activeFrame = activeFrame.assoc(GoalTreeContext.K_LOADS, scope.loads);
+			return ToolCycleEngine.ToolOutcome.result(result);
+		}
+
+		private ToolCycleEngine.ToolOutcome contextUnload(
+				ToolCycleEngine.ToolCall call) {
+			HarnessTools.LoadScope scope = loadScope();
+			ACell result = HarnessTools.contextUnload(call.input(), scope);
+			activeFrame = activeFrame.assoc(GoalTreeContext.K_LOADS, scope.loads);
+			return ToolCycleEngine.ToolOutcome.result(result);
+		}
+
+		private ToolCycleEngine.ToolOutcome skillLoad(
+				ToolCycleEngine.ToolCall call) {
+			HarnessTools.LoadScope scope = loadScope();
+			ACell result = HarnessTools.skillLoad(call.input(), scope);
+			activeFrame = activeFrame.assoc(GoalTreeContext.K_LOADS, scope.loads);
+			return ToolCycleEngine.ToolOutcome.result(result);
+		}
+
+		private HarnessTools.LoadScope loadScope() {
+			return new HarnessTools.LoadScope(engine, ctx,
+				GoalTreeContext.getLoads(activeFrame), outerLoads, true, "", Skills.sourcesOf(config));
+		}
+
+		@SuppressWarnings("unchecked")
+		private ToolCycleEngine.ToolOutcome moreTools(
+				ToolCycleEngine.ToolCall call) {
+			ACell opsCell = RT.getIn(call.input(), Strings.create("operations"));
+			if (!(opsCell instanceof AVector<?>)) {
+				return ToolCycleEngine.ToolOutcome.result(Strings.create(
+					"Error: operations must be an array of operation paths"));
+			}
+			AVector<ACell> operations = (AVector<ACell>) opsCell;
+			ContextBuilder resolver = new ContextBuilder(engine, ctx);
+			Map<String, AString> newRoutes = new java.util.HashMap<>();
+			AVector<ACell> newTools = resolver.buildConfigTools(operations, newRoutes);
+			java.util.Set<String> existing = fixedToolNames(baseTools);
+			AVector<ACell> added = Vectors.empty();
+			for (long i = 0; i < newTools.count(); i++) {
+				ACell tool = newTools.get(i);
+				AString name = RT.ensureString(RT.getIn(tool, K_NAME));
+				if (name != null && existing.add(name.toString())) {
+					baseTools = baseTools.conj(tool);
+					configToolMap.put(name.toString(), newRoutes.get(name.toString()));
+					added = added.conj(name);
+				}
+			}
+			log.info("more_tools: added {} tools", added.count());
+			return ToolCycleEngine.ToolOutcome.result(Maps.of(
+				Strings.create("added"), added,
+				Strings.create("total_tools"), CVMLong.create(baseTools.count()),
+				Strings.create("note"), Strings.create("Tools available on your next turn.")));
+		}
+
+		@SuppressWarnings("unchecked")
+		private ToolCycleEngine.ToolOutcome subgoal(
+				ToolCycleEngine.ToolCall call) {
+			AString description = RT.ensureString(RT.getIn(call.input(), Strings.create("description")));
+			if (description == null || description.toString().isBlank()) {
+				return ToolCycleEngine.ToolOutcome.result(Strings.create(
+					"Error: description is required for a subgoal"));
+			}
+			log.info("Subgoal pushed: {}", description);
+			if (frameIndex + 1 >= MAX_SUBGOAL_DEPTH) {
+				return ToolCycleEngine.ToolOutcome.result(Maps.of(
+					Strings.create("status"), Strings.create("error"),
+					Strings.create("error"), Strings.create(
+						"Maximum subgoal depth (" + MAX_SUBGOAL_DEPTH + ") reached. Complete or "
+						+ "fail the current goal at this level instead of decomposing further.")));
+			}
+
+			AMap<AString, ACell> childLoads = GoalTreeContext.getLoads(activeFrame);
+			AMap<AString, ACell> declared;
+			try {
+				ACell declaredCell = RT.getIn(call.input(), Fields.LOADS);
+				declared = (declaredCell != null)
+					? ContextChain.declaredLoads(declaredCell, "subgoal loads") : Maps.empty();
+			} catch (IllegalArgumentException e) {
+				return ToolCycleEngine.ToolOutcome.result(Strings.create("Error: " + e.getMessage()));
+			}
+			for (var entry : declared.entrySet()) {
+				long budget = clampLoadBudget(RT.getIn(entry.getValue(), K_BUDGET));
+				childLoads = childLoads.assoc(entry.getKey(), buildLoadEntryMeta(budget, null));
+			}
+
+			AMap<AString, ACell> childFrame = GoalTreeContext.createFrame(
+				description.toString(), childLoads);
+			if (call.id() != null) childFrame = childFrame.assoc(GoalTreeContext.K_CALL_ID, call.id());
+			final AMap<AString, ACell> parentSnapshot = activeFrame;
+			final AMap<AString, ACell> childToPush = childFrame;
+			if (!store.update(frames ->
+					updateFrame(frames, frameIndex, parentSnapshot).conj(childToPush))) {
+				return ToolCycleEngine.ToolOutcome.abort();
+			}
+
+			FrameResult childResult = runFrame(job, store, frameIndex + 1,
+				config, llmOperation, baseTools, configToolMap, ctx, systemMessages, null,
+				toolCallTimeoutMs, outerLoads, diagnostics);
+			if (store.aborted()) return ToolCycleEngine.ToolOutcome.abort();
+
+			AMap<AString, ACell> result = Maps.of(
+				Strings.create("status"), Strings.create(childResult.status()));
+			if (childResult.value() != null) {
+				result = result.assoc(Strings.create("result"), childResult.value());
+			}
+			AMap<AString, ACell> withResult = GoalTreeContext.appendTurn(activeFrame,
+				toolResultMessage(call.id(), call.name(), result));
+			if (!store.update(frames -> updateFrame(
+					(AVector<ACell>) frames.slice(0, frameIndex + 1), frameIndex, withResult))) {
+				return ToolCycleEngine.ToolOutcome.abort();
+			}
+			activeFrame = withResult;
+			return ToolCycleEngine.ToolOutcome.recorded();
+		}
+	}
+
 	/**
 	 * Runs a single frame's tool call loop. Recursively invokes child frames
 	 * when subgoal is called.
@@ -790,7 +1022,8 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			AVector<ACell> baseToolsParam, Map<String, AString> configToolMap,
 			RequestContext ctx, AVector<ACell> systemMessages,
 			AVector<ACell> typedRootHarnessTools, long toolCallTimeoutMs,
-			AMap<AString, ACell> outerLoads) {
+			AMap<AString, ACell> outerLoads,
+			ToolCycleEngine.Diagnostics diagnostics) {
 
 		// Mutable copy — more_tools can append to this mid-run
 		AVector<ACell> baseTools = baseToolsParam;
@@ -879,453 +1112,166 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// Deferred compact: applied at the start of the next iteration so we never
 		// split an assistant message from its tool results (OpenAI requires every
 		// tool result to follow its assistant tool_calls message)
-		String pendingCompactSummary = null;
+		FrameToolContext frameTools = new FrameToolContext(job, store, frameIndex,
+			config, llmOperation, baseTools, configToolMap, ctx, systemMessages,
+			toolCallTimeoutMs, outerLoads, diagnostics);
+		frameTools.activeFrame = activeFrame;
+		ToolCycleEngine.Registry<FrameToolContext> toolRegistry = frameTools.registry();
 
-		for (int iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
-			// Stop promptly when this cycle no longer owns the frames — the
-			// transition was cancelled (suspend/delete flips the ctx token),
-			// the session vanished, or a newer cycle claimed it. Frames are
-			// lattice-resident: a superseded cycle must not keep writing.
+		int maxIterations = (frameL3Config != null
+				&& frameL3Config.get(K_MAX_TOOL_ITERATIONS) != null)
+			? resolveMaxToolIterations(frameL3Config) : MAX_ITERATIONS;
+		ToolCycleEngine.BatchSink sink = new ToolCycleEngine.BatchSink() {
+			@Override
+			public void append(AMap<AString, ACell> message) {
+				frameTools.activeFrame = GoalTreeContext.appendTurn(
+					frameTools.activeFrame, message);
+			}
+
+			@Override
+			public void recordFailure(AString name, String failure) {
+				diagnostics.record(name, failure);
+			}
+		};
+
+		for (int iteration = 0; iteration < maxIterations; iteration++) {
 			if (store.aborted()) return abortedResult(store);
 			if (job != null && job.isFinished()) {
 				return FrameResult.failed(Strings.create("Job cancelled"), store.frames());
 			}
 
-			frames = store.frames();
-			if (frameIndex >= frames.count()) {
+			AVector<ACell> currentFrames = store.frames();
+			if (frameIndex >= currentFrames.count()) {
 				return FrameResult.failed(Strings.create(
-					"Frame stack no longer holds frame " + frameIndex + " — cycle superseded"), frames);
+					"Frame stack no longer holds frame " + frameIndex
+					+ " — cycle superseded"), currentFrames);
 			}
-			activeFrame = (AMap<AString, ACell>) frames.get(frameIndex);
-
-			// Apply deferred compaction before assembling context
-			if (pendingCompactSummary != null) {
-				activeFrame = GoalTreeContext.compactFrame(activeFrame, pendingCompactSummary);
-				// Re-inject goal as user message so the LLM retains frame context
-				AMap<AString, ACell> goalMsg = GoalTreeContext.renderGoal(activeFrame);
-				if (goalMsg != null) {
-					activeFrame = GoalTreeContext.appendTurn(activeFrame, goalMsg);
+			frameTools.activeFrame = (AMap<AString, ACell>) currentFrames.get(frameIndex);
+			if (frameTools.pendingCompactSummary != null) {
+				frameTools.activeFrame = GoalTreeContext.compactFrame(
+					frameTools.activeFrame, frameTools.pendingCompactSummary);
+				AMap<AString, ACell> goal = GoalTreeContext.renderGoal(frameTools.activeFrame);
+				if (goal != null) {
+					frameTools.activeFrame = GoalTreeContext.appendTurn(frameTools.activeFrame, goal);
 				}
-				if (!persist(store, frameIndex, activeFrame)) return abortedResult(store);
-				pendingCompactSummary = null;
+				if (!persist(store, frameIndex, frameTools.activeFrame)) return abortedResult(store);
+				frameTools.pendingCompactSummary = null;
 			}
 
-			// Assemble full context for this inference
-			AVector<ACell> fullHistory = systemMessages;
+			AVector<ACell> history = systemMessages;
+			if (frameIndex > 0) history = history.conj(CHILD_FRAME_NOTE);
+			AMap<AString, ACell> ancestors = GoalTreeContext.renderAncestors(currentFrames);
+			if (ancestors != null) history = history.conj(ancestors);
 
-			// Child frame note (if not root)
-			if (frameIndex > 0) fullHistory = fullHistory.conj(CHILD_FRAME_NOTE);
-
-			// Ancestor context (if not root)
-			AMap<AString, ACell> ancestorMsg = GoalTreeContext.renderAncestors(frames);
-			if (ancestorMsg != null) fullHistory = fullHistory.conj(ancestorMsg);
-
-			// Loaded data: the context scope chain (#142) — outer tiers
-			// (config.loads + session.loads, constant within a cycle) composed
-			// with the active frame's tier; frame tombstones mask outer entries.
-			AMap<AString, ACell> frameLoads = GoalTreeContext.getLoads(activeFrame);
+			AMap<AString, ACell> frameLoads = GoalTreeContext.getLoads(frameTools.activeFrame);
 			AMap<AString, ACell> effectiveLoads = ContextChain.effective(outerLoads, frameLoads);
 			java.util.Set<String> exclude = new java.util.HashSet<>(HARNESS_TOOL_REGISTRY.keySet());
-			for (long j = 0; j < baseTools.count(); j++) {
-				ACell n = RT.getIn(baseTools.get(j), K_NAME);
-				if (n != null) exclude.add(n.toString());
+			for (long i = 0; i < frameTools.baseTools.count(); i++) {
+				AString name = RT.ensureString(RT.getIn(frameTools.baseTools.get(i), K_NAME));
+				if (name != null) exclude.add(name.toString());
 			}
-			// Loaded values are live views. Resolve their content, contributed
-			// tools, and dispatch routes as one snapshot immediately before every
-			// provider call, even when the loads map itself is unchanged.
-			ContextBuilder.LoadSnapshot loadSnapshot = ContextBuilder.resolveLoadSnapshot(
+			ContextBuilder.LoadSnapshot loads = ContextBuilder.resolveLoadSnapshot(
 				engine, ctx, effectiveLoads, exclude);
-			AVector<ACell> liveLoadMessages = new ContextBuilder(engine, ctx)
+			AVector<ACell> loadMessages = new ContextBuilder(engine, ctx)
 				.withConfig(frameL3Config)
 				.withSkillsIndex(effectiveLoads)
-				.withResolvedMessages(loadSnapshot.messages())
+				.withResolvedMessages(loads.messages())
 				.build().history();
-			fullHistory = (AVector<ACell>) fullHistory.concat(liveLoadMessages);
-			Map<String, AString> iterationToolMap = mergeRoutes(
-				configToolMap, loadSnapshot.routes());
+			history = (AVector<ACell>) history.concat(loadMessages);
+			frameTools.iterationToolMap = mergeRoutes(configToolMap, loads.routes());
 
-			// Assemble tools = harness + base + loads-contributed (recomputed
-			// each iteration so more_tools and skill_load additions are picked up)
-			AVector<ACell> tools = (AVector<ACell>) harnessForFrame.concat(baseTools)
-				.concat(loadSnapshot.tools());
-
-			// Conversation (segments + live turns — includes goal as first user message).
-			// Default render elides prior cycles' tool scratch (assistant.toolCalls
-			// + tool results) so successive chat requests don't re-send working data
-			// the LLM no longer needs. Opt out with config.renderHistory = "full".
-			// The frame's raw conversation field is unchanged — full history remains
-			// for audit / replay.
-			AVector<ACell> convMessages = ConversationRenderer.renderFor(activeFrame, frameL3Config);
-			fullHistory = (AVector<ACell>) fullHistory.concat(convMessages);
-
-			// Auto-compact nudge: when conversation grows large, inject a
-			// system hint so the LLM calls compact() before running out of
-			// context. Only fires if the agent has compact in its tool set.
-			long liveTurns = GoalTreeContext.countLiveTurns(activeFrame);
+			AVector<ACell> tools = (AVector<ACell>) harnessForFrame
+				.concat(frameTools.baseTools).concat(loads.tools());
+			history = (AVector<ACell>) history.concat(
+				ConversationRenderer.renderFor(frameTools.activeFrame, frameL3Config));
+			long liveTurns = GoalTreeContext.countLiveTurns(frameTools.activeFrame);
 			if (liveTurns > AUTO_COMPACT_THRESHOLD && hasCompactTool(harnessForFrame)) {
-				fullHistory = fullHistory.conj(Maps.of(
+				history = history.conj(Maps.of(
 					K_ROLE, ROLE_SYSTEM,
-					K_CONTENT, Strings.create(
-						"Your conversation has " + liveTurns + " turns. "
-						+ "Call compact(summary) now to free context space before continuing.")));
+					K_CONTENT, Strings.create("Your conversation has " + liveTurns
+						+ " turns. Call compact(summary) now to free context space before continuing.")));
 			}
 
-			// Invoke L3
-			ACell l3Result = invokeLevel3(llmOperation, frameL3Config, fullHistory, tools, ctx);
+			ACell assistant = invokeLevel3(llmOperation, frameL3Config, history, tools, ctx);
+			AVector<ACell> calls = RT.ensureVector(RT.getIn(assistant, K_TOOL_CALLS));
+			boolean hasCalls = calls != null && calls.count() > 0;
+			if (!hasCalls) {
+				java.util.Set<String> controls = new java.util.HashSet<>();
+				if (hasToolNamed(harnessForFrame, TOOL_COMPLETE)) controls.add(TOOL_COMPLETE);
+				if (hasToolNamed(harnessForFrame, TOOL_FAIL)) controls.add(TOOL_FAIL);
+				AMap<AString, ACell> rewritten = ToolCycleEngine.recogniseTextualControlCall(
+					assistant, iteration, controls);
+				if (rewritten != null) {
+					log.warn("Assistant emitted a harness control tool as text — honouring it (#215)");
+					assistant = rewritten;
+					calls = RT.ensureVector(RT.getIn(assistant, K_TOOL_CALLS));
+					hasCalls = true;
+				}
+			}
 
-			if (!hasToolCalls(l3Result)) {
-				// Text-only response — this completes the goal.
-				AString content = RT.ensureString(RT.getIn(l3Result, K_CONTENT));
-
-				// Typed outputs: parse the response as JSON (response_format
-				// strict mode guarantees the LLM produces valid JSON matching
-				// the schema). Return the parsed structured value.
+			if (!hasCalls) {
+				AString content = RT.ensureString(RT.getIn(assistant, K_CONTENT));
+				ACell value = content;
 				if (typedOutputs && content != null) {
 					try {
 						ACell parsed = convex.core.util.JSON.parse(content.toString());
-						// Terminal turn + lifecycle marker in one CAS: a clean
-						// completion is never mistaken for a crash tail.
-						AMap<AString, ACell> terminal = GoalTreeContext.withStatus(
-							GoalTreeContext.appendTurn(activeFrame, l3Result),
-							GoalTreeContext.STATUS_COMPLETE);
-						if (!persist(store, frameIndex, terminal)) return abortedResult(store);
-						return FrameResult.complete(parsed, store.frames());
+						AMap<AString, ACell> schema = RT.ensureMap(
+							RT.getIn(frameL3Config, K_RESPONSE_FORMAT, K_SCHEMA));
+						String schemaError = (schema != null)
+							? JsonSchema.validate(schema, parsed) : null;
+						if (schemaError != null) throw new IllegalArgumentException(schemaError);
+						value = parsed;
 					} catch (Exception e) {
-						// Schema enforcement should prevent this, but if the LLM
-						// somehow bails to non-JSON text, nudge it to retry.
-						log.warn("Frame[{}] iter={} typed output did not parse as JSON: {}",
+						log.warn("Frame[{}] iter={} typed output was invalid: {}",
 							frameIndex, iteration, e.getMessage());
-						activeFrame = GoalTreeContext.appendTurn(activeFrame, l3Result);
-						AMap<AString, ACell> nudge = Maps.of(
-							K_ROLE, ROLE_USER,
-							K_CONTENT, Strings.create(
-								"Your response did not parse as JSON. The output must conform "
-								+ "to the declared schema. Respond again with valid JSON."));
-						activeFrame = GoalTreeContext.appendTurn(activeFrame, nudge);
-						if (!persist(store, frameIndex, activeFrame)) return abortedResult(store);
+						frameTools.activeFrame = GoalTreeContext.appendTurn(
+							frameTools.activeFrame, assistant);
+						frameTools.activeFrame = GoalTreeContext.appendTurn(
+							frameTools.activeFrame, Maps.of(
+								K_ROLE, ROLE_USER,
+								K_CONTENT, Strings.create(
+									"Your response did not conform to the declared output schema. "
+									+ "Respond again with valid JSON matching that schema.")));
+						if (!persist(store, frameIndex, frameTools.activeFrame)) return abortedResult(store);
 						continue;
 					}
 				}
-
-				// Untyped: text is the result
 				AMap<AString, ACell> terminal = GoalTreeContext.withStatus(
-					GoalTreeContext.appendTurn(activeFrame, l3Result),
+					GoalTreeContext.appendTurn(frameTools.activeFrame, assistant),
 					GoalTreeContext.STATUS_COMPLETE);
 				if (!persist(store, frameIndex, terminal)) return abortedResult(store);
-				return FrameResult.complete(content, store.frames());
+				return FrameResult.complete(value, store.frames());
 			}
 
-			// Record assistant message (with tool calls) in conversation —
-			// persisted immediately so each LLM response is durable before its
-			// tools execute. An interruption therefore leaves an auditable
-			// dangling call that a later fresh attempt can settle explicitly.
-			activeFrame = GoalTreeContext.appendTurn(activeFrame, l3Result);
-			if (!persist(store, frameIndex, activeFrame)) return abortedResult(store);
+			frameTools.activeFrame = GoalTreeContext.appendTurn(frameTools.activeFrame, assistant);
+			frameTools.turnText = RT.ensureString(RT.getIn(assistant, K_CONTENT));
+			if (!persist(store, frameIndex, frameTools.activeFrame)) return abortedResult(store);
+			log.info("Frame[{}] iter={} tools={}", frameIndex, iteration, calls.count());
 
-			// Process each tool call
-			AVector<ACell> toolCalls = getToolCalls(l3Result);
-			ToolBatchState batch = new ToolBatchState();
-			ACell terminalValue = null;
-			log.info("Frame[{}] iter={} tools={}", frameIndex, iteration,
-				toolCalls.count() > 0 ? toolCalls.toString().substring(0, Math.min(200, toolCalls.toString().length())) : "0");
-			for (long t = 0; t < toolCalls.count(); t++) {
-				ACell tc = toolCalls.get(t);
-				AString toolCallId = RT.ensureString(RT.getIn(tc, K_ID));
-				String toolName = RT.ensureString(RT.getIn(tc, K_NAME)).toString();
-
-				// A provider may return parallel tool calls in one assistant turn.
-				// Once complete/fail has requested a terminal outcome, do not execute
-				// later side effects, but DO return one result for every remaining
-				// call. Anthropic rejects a tool_use batch unless every id receives a
-				// corresponding tool_result immediately after the assistant turn.
-				if (batch.isTerminal()) {
-					activeFrame = GoalTreeContext.appendTurn(activeFrame,
-						batch.skippedResult(toolCallId, toolName));
-					continue;
-				}
-
-				// Unwrap tool arguments at the LLM wire boundary (the one
-				// tolerant parse). Broken arguments fail THIS tool call with a
-				// visible error the LLM can correct next turn — never a silent
-				// empty-map substitution (#89).
-				ACell toolInput;
-				try {
-					toolInput = parseToolArguments(RT.getIn(tc, K_ARGUMENTS));
-				} catch (IllegalArgumentException e) {
-					String detail = describeFailure(e);
-					log.warn("Frame[{}] tool call {} has malformed arguments: {}",
-						frameIndex, toolName, detail);
-					activeFrame = GoalTreeContext.appendTurn(activeFrame,
-						toolResultMessage(toolCallId, toolName, Strings.create("Error: " + detail)));
-					continue;
-				}
-
-				ACell toolResult = null;
-
-				if (TOOL_COMPLETE.equals(toolName)) {
-					// Flattened: the entire tool input IS the result.
-					// With typed outputs, OpenAI strictTools enforces schema
-					// conformance at the API level — by the time we see the
-					// call, toolInput already matches the declared schema.
-					activeFrame = GoalTreeContext.appendTurn(activeFrame,
-						toolResultMessage(toolCallId, toolName,
-							Maps.of(Strings.create("status"), Strings.create("complete"))));
-					batch.markTerminal("complete");
-					terminalValue = toolInput;
-
-				} else if (TOOL_FAIL.equals(toolName)) {
-					// Flattened: the entire tool input IS the error.
-					activeFrame = GoalTreeContext.appendTurn(activeFrame,
-						toolResultMessage(toolCallId, toolName,
-							Maps.of(Strings.create("status"), Strings.create("failed"))));
-					batch.markTerminal("failed");
-					terminalValue = toolInput;
-
-				} else if (TOOL_COMPACT.equals(toolName)) {
-					String summary = RT.ensureString(RT.getIn(toolInput, Strings.create("summary"))).toString();
-					long turnsBefore = GoalTreeContext.countLiveTurns(activeFrame);
-					// Defer compaction to the start of the next iteration — compacting
-					// now would archive the current assistant message, orphaning any
-					// remaining tool results in this batch
-					pendingCompactSummary = summary;
-					toolResult = Strings.create("Compacted " + turnsBefore + " turns into segment. Context freed.");
-
-				} else if (TOOL_CONTEXT_LOAD.equals(toolName)) {
-					AString path = RT.ensureString(RT.getIn(toolInput, K_PATH));
-					if (path == null) {
-						toolResult = Strings.create(
-							"Error: path is required — context_load pins a lattice path into your context. "
-							+ "Call with {\"path\": \"w/...\"} (optional: \"budget\" in bytes, \"label\").");
-					} else {
-						try {
-							new ContextLoader(engine).requireReadAccess(path, ctx);
-							long budget = clampLoadBudget(RT.getIn(toolInput, K_BUDGET));
-							AString label = RT.ensureString(RT.getIn(toolInput, K_LABEL));
-							activeFrame = GoalTreeContext.addLoad(activeFrame, path,
-								buildLoadEntryMeta(budget, label));
-							toolResult = Maps.of(
-								K_PATH, path,
-								Strings.create("loaded"), CVMBool.TRUE,
-								K_BUDGET, CVMLong.create(budget),
-								Strings.create("note"), Strings.create(
-									"Path is loaded and will be visible on the next model invocation."));
-						} catch (RuntimeException e) {
-							toolResult = Strings.create(
-								"Error: context_load denied: " + describeFailure(e));
-						}
-					}
-
-				} else if (TOOL_CONTEXT_UNLOAD.equals(toolName)) {
-					AString path = RT.ensureString(RT.getIn(toolInput, K_PATH));
-					if (path == null) {
-						toolResult = Strings.create(
-							"Error: path is required — context_unload removes a loaded path from your context. "
-							+ "Call with {\"path\": \"...\"} naming a currently loaded entry.");
-					} else {
-						// Lexical unload (#142): removes the frame-tier entry, or
-						// masks an outer-tier load (config/session) with a nil
-						// tombstone for this frame and its children only.
-						AMap<AString, ACell> updated = ContextChain.unload(
-							GoalTreeContext.getLoads(activeFrame), outerLoads, path);
-						if (updated == null) {
-							toolResult = Strings.create("Error: path not in context: " + path);
-						} else {
-							activeFrame = activeFrame.assoc(GoalTreeContext.K_LOADS, updated);
-							toolResult = Maps.of(
-								K_PATH, path,
-								Strings.create("unloaded"), CVMBool.TRUE);
-						}
-					}
-
-				} else if (TOOL_SKILL_LOAD.equals(toolName)) {
-					// Thin glue only, mirroring llmagent: all skill semantics
-					// live in Skills.load; this runtime just writes the entry
-					// to its innermost tier — the active FRAME (inherited
-					// copy-on-push by subgoals, unloadable per frame).
-					try {
-						Skills.LoadOutcome out = Skills.load(engine, ctx,
-							Skills.sourcesOf(config), toolInput,
-							ContextChain.effective(outerLoads, GoalTreeContext.getLoads(activeFrame)));
-						if (out.entryMeta() != null) {
-							activeFrame = GoalTreeContext.addLoad(activeFrame, out.path(), out.entryMeta());
-						}
-						toolResult = out.result();
-					} catch (RuntimeException e) {
-						toolResult = Strings.create("Error: skill_load failed: " + describeFailure(e));
-					}
-
-				} else if (TOOL_MORE_TOOLS.equals(toolName)) {
-					ACell opsCell = RT.getIn(toolInput, Strings.create("operations"));
-					if (!(opsCell instanceof AVector)) {
-						toolResult = Strings.create("Error: operations must be an array of operation paths");
-					} else {
-						AVector<ACell> ops = (AVector<ACell>) opsCell;
-						// Resolve operations into tool definitions using the
-						// same pipeline as ContextBuilder.withTools
-						ContextBuilder resolver = new ContextBuilder(engine, ctx);
-						java.util.Map<String, AString> newToolMap = new java.util.HashMap<>();
-						AVector<ACell> newTools = resolver.buildConfigTools(ops, newToolMap);
-
-						// Deduplicate against existing tools
-						java.util.Set<String> existing = new java.util.HashSet<>();
-						for (long j = 0; j < baseTools.count(); j++) {
-							ACell et = baseTools.get(j);
-							if (et instanceof AMap) {
-								ACell n = ((AMap<?,?>) et).get(K_NAME);
-								if (n != null) existing.add(n.toString());
-							}
-						}
-
-						AVector<ACell> added = Vectors.empty();
-						for (long j = 0; j < newTools.count(); j++) {
-							ACell et = newTools.get(j);
-							String n = null;
-							if (et instanceof AMap) {
-								ACell nc = ((AMap<?,?>) et).get(K_NAME);
-								if (nc != null) n = nc.toString();
-							}
-							if (n != null && !existing.contains(n)) {
-								baseTools = baseTools.conj(et);
-								configToolMap.put(n, newToolMap.get(n));
-								added = added.conj(Strings.create(n));
-							}
-						}
-
-						toolResult = Maps.of(
-							Strings.create("added"), added,
-							Strings.create("total_tools"), CVMLong.create(baseTools.count()),
-							Strings.create("note"), Strings.create("Tools available on your next turn."));
-						log.info("more_tools: added {} tools", added.count());
-					}
-
-				} else if (TOOL_SUBGOAL.equals(toolName)) {
-					String desc = RT.ensureString(RT.getIn(toolInput, Strings.create("description"))).toString();
-					log.info("Subgoal pushed: {}", desc);
-
-					if (frameIndex + 1 >= MAX_SUBGOAL_DEPTH) {
-						// Refuse to nest deeper — subgoal recursion is otherwise
-						// unbounded, and each frame can run up to MAX_ITERATIONS
-						// LLM calls. The model receives this as the tool result and
-						// must make progress (complete/fail) at the current depth.
-						log.warn("Subgoal depth limit ({}) reached — refusing further nesting", MAX_SUBGOAL_DEPTH);
-						toolResult = Maps.of(
-							Strings.create("status"), Strings.create("error"),
-							Strings.create("error"), Strings.create(
-								"Maximum subgoal depth (" + MAX_SUBGOAL_DEPTH + ") reached. Complete or "
-								+ "fail the current goal at this level instead of decomposing further."));
-					} else {
-						// Push child frame with inherited loads (copy-on-push —
-						// including any tombstones, so masks propagate to children),
-						// overlaid with the subgoal's declared loads (#142): the
-						// frame tier's automatic loads, authored by the parent.
-						AMap<AString, ACell> childLoads = GoalTreeContext.getLoads(activeFrame);
-						AMap<AString, ACell> declared;
-						IllegalArgumentException loadsError = null;
-						try {
-							ACell declaredCell = RT.getIn(toolInput, Fields.LOADS);
-							declared = (declaredCell != null)
-								? ContextChain.declaredLoads(declaredCell, "subgoal loads")
-								: Maps.empty();
-						} catch (IllegalArgumentException e) {
-							loadsError = e;
-							declared = Maps.empty();
-						}
-						if (loadsError != null) {
-							toolResult = Strings.create("Error: " + loadsError.getMessage());
-						} else {
-							for (var d : declared.entrySet()) {
-								long budget = clampLoadBudget(RT.getIn(d.getValue(), K_BUDGET));
-								childLoads = childLoads.assoc(d.getKey(),
-									buildLoadEntryMeta(budget, null));
-							}
-							// Push: parent snapshot + child frame in one CAS. The
-							// child is stamped with the spawning toolCall id so a
-							// interruption cleanup can match it back to the parent's
-							// dangling call unambiguously (identical descriptions
-							// are legal in one batch).
-							AMap<AString, ACell> childFrame = GoalTreeContext.createFrame(desc, childLoads);
-							if (toolCallId != null) {
-								childFrame = childFrame.assoc(GoalTreeContext.K_CALL_ID, toolCallId);
-							}
-							final AMap<AString, ACell> parentSnapshot = activeFrame;
-							final AMap<AString, ACell> childToPush = childFrame;
-							if (!store.update(f ->
-									updateFrame(f, frameIndex, parentSnapshot).conj(childToPush))) {
-								return abortedResult(store);
-							}
-
-							// Recurse into child. Child frames don't inherit typed
-							// outputs — a subgoal's contract is "return any value to
-							// the parent", not the parent's typed output schema. The
-							// child also gets responseFormat stripped from its L3
-							// config (handled inside the recursive runFrame).
-							FrameResult childResult = runFrame(job, store, frameIndex + 1,
-								config, llmOperation, baseTools, configToolMap, ctx, systemMessages, null,
-								toolCallTimeoutMs, outerLoads);
-							if (store.aborted()) return abortedResult(store);
-
-							// Pop: record the child's result as the parent's tool
-							// result AND truncate the child — one CAS, so no
-							// observable state has one without the other (I4).
-							AMap<AString, ACell> resultMap = Maps.of(
-								Strings.create("status"), Strings.create(childResult.status()));
-							if (childResult.value() != null) {
-								resultMap = resultMap.assoc(Strings.create("result"), childResult.value());
-							}
-							AMap<AString, ACell> withResult = GoalTreeContext.appendTurn(activeFrame,
-								toolResultMessage(toolCallId, toolName, resultMap));
-							if (!store.update(f -> updateFrame(
-									(AVector<ACell>) f.slice(0, frameIndex + 1),
-									frameIndex, withResult))) {
-								return abortedResult(store);
-							}
-							activeFrame = withResult;
-							toolResult = null;   // recorded atomically with the pop
-						}
-					}
-
-				} else {
-					// Config tool or grid dispatch
-					toolResult = dispatchTool(toolName, toolInput, iterationToolMap, ctx, toolCallTimeoutMs);
-				}
-
-				// Record tool result in conversation (subgoal already recorded
-				// its result inside the atomic pop above)
-				if (toolResult != null) {
-					activeFrame = GoalTreeContext.appendTurn(activeFrame,
-						toolResultMessage(toolCallId, toolName, toolResult));
-				}
-			}
-
+			ToolCycleEngine.BatchResult batch = ToolCycleEngine.executeBatch(
+				calls, iteration, toolRegistry, frameTools, sink, log);
+			if (batch.isAborted()) return abortedResult(store);
 			if (batch.isTerminal()) {
-				// complete/fail are harness control calls, not a provider's final
-				// natural-language response. Persist a plain assistant projection of
-				// the returned value after all tool results. Future cycles can then
-				// elide the entire tool-use batch while retaining the answer as normal
-				// user/assistant history. The raw calls/results remain in the frame for
-				// audit and renderHistory=full.
-				activeFrame = GoalTreeContext.appendTurn(activeFrame,
-					terminalAssistantMessage(terminalValue, "failed".equals(batch.terminalStatus())));
-				AString status = "failed".equals(batch.terminalStatus())
-					? GoalTreeContext.STATUS_FAILED : GoalTreeContext.STATUS_COMPLETE;
-				AMap<AString, ACell> done = GoalTreeContext.withStatus(activeFrame, status);
-				if (!persist(store, frameIndex, done)) return abortedResult(store);
-				return "failed".equals(batch.terminalStatus())
-					? FrameResult.failed(terminalValue, store.frames())
-					: FrameResult.complete(terminalValue, store.frames());
+				boolean failed = "failed".equals(batch.terminalStatus());
+				frameTools.activeFrame = GoalTreeContext.appendTurn(
+					frameTools.activeFrame,
+					terminalAssistantMessage(batch.terminalValue(), failed));
+				AMap<AString, ACell> terminal = GoalTreeContext.withStatus(
+					frameTools.activeFrame,
+					failed ? GoalTreeContext.STATUS_FAILED : GoalTreeContext.STATUS_COMPLETE);
+				if (!persist(store, frameIndex, terminal)) return abortedResult(store);
+				return failed
+					? FrameResult.failed(batch.terminalValue(), store.frames())
+					: FrameResult.complete(batch.terminalValue(), store.frames());
 			}
-
-			// Persist frame for next iteration
-			if (!persist(store, frameIndex, activeFrame)) return abortedResult(store);
+			if (!persist(store, frameIndex, frameTools.activeFrame)) return abortedResult(store);
 		}
 
-		log.warn("GoalTreeAdapter: max iterations reached for frame");
-		// Terminal marker lands in the same CAS as the give-up, so a later
-		// fresh attempt does not mistake this frame for unfinished work.
-		store.update(f -> (frameIndex < f.count())
-			? updateFrame(f, frameIndex, GoalTreeContext.withStatus(
-				(AMap<AString, ACell>) f.get(frameIndex), GoalTreeContext.STATUS_FAILED))
-			: f);
+		log.warn("GoalTreeAdapter: max iterations reached for frame ({})", maxIterations);
+		store.update(current -> (frameIndex < current.count())
+			? updateFrame(current, frameIndex, GoalTreeContext.withStatus(
+				(AMap<AString, ACell>) current.get(frameIndex),
+				GoalTreeContext.STATUS_FAILED)) : current);
 		return FrameResult.failed(Strings.create("Max iterations reached"), store.frames());
 	}
 
@@ -1348,7 +1294,8 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			AVector<ACell> baseTools, Map<String, AString> configToolMap,
 			RequestContext ctx, AVector<ACell> systemMessages,
 			AVector<ACell> typedRootHarnessTools, long toolCallTimeoutMs,
-			AMap<AString, ACell> outerLoads) {
+			AMap<AString, ACell> outerLoads,
+			ToolCycleEngine.Diagnostics diagnostics) {
 		while (true) {
 			if (store.aborted()) return abortedResult(store);
 			AVector<ACell> fs = store.frames();
@@ -1398,7 +1345,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 
 		return runFrame(job, store, 0, config, llmOperation, baseTools,
 			configToolMap, ctx, systemMessages, typedRootHarnessTools, toolCallTimeoutMs,
-			outerLoads);
+			outerLoads, diagnostics);
 	}
 
 	/** Transition output for a cycle that lost frame ownership mid-flight. */
@@ -1444,6 +1391,16 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			}
 		}
 		return null;
+	}
+
+	private static boolean hasStrictPerRequestSchema(AVector<ACell> tasks) {
+		if (tasks == null) return false;
+		for (long i = 0; i < tasks.count(); i++) {
+			ACell task = tasks.get(i);
+			if (RT.getIn(task, Fields.RESPONSE_SCHEMA) instanceof AMap
+					&& CVMBool.TRUE.equals(RT.getIn(task, Fields.STRICT))) return true;
+		}
+		return false;
 	}
 
 	/** Returns true if the tool set includes the compact tool. */

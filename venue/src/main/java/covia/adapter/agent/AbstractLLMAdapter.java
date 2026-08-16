@@ -654,34 +654,6 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			(content != null) ? content : Strings.create(result.toString()));
 	}
 
-	/**
-	 * Tracks terminal control calls within one provider tool-call batch.
-	 * Later side effects are skipped, but every call still receives an ordered
-	 * result as required by Anthropic and other tool-use protocols.
-	 */
-	protected static final class ToolBatchState {
-		private String terminalStatus;
-
-		public boolean isTerminal() {
-			return terminalStatus != null;
-		}
-
-		public String terminalStatus() {
-			return terminalStatus;
-		}
-
-		public void markTerminal(String status) {
-			if (terminalStatus == null) terminalStatus = status;
-		}
-
-		public AMap<AString, ACell> skippedResult(AString toolCallId, String toolName) {
-			if (!isTerminal()) throw new IllegalStateException("tool batch is not terminal");
-			return toolResultMessage(toolCallId, toolName, Strings.create(
-				"Error: not executed because " + terminalStatus
-				+ " was already requested in this tool batch."));
-		}
-	}
-
 	// ========== Tool-call argument parsing ==========
 
 	/**

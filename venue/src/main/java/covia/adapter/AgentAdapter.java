@@ -28,6 +28,7 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import convex.core.json.schema.JsonSchema;
 import convex.core.util.Utils;
 import covia.adapter.agent.AbstractLLMAdapter;
 import covia.adapter.agent.ContextBuilder;
@@ -1827,6 +1828,51 @@ public class AgentAdapter extends AAdapter {
 
 		AgentState agent = requireAgent(ctx.getUserDID(), agentId);
 		long expectedRevision = ctx.getTaskRevision();
+		ACell currentTask = agent.getTasks().get(taskId);
+		if (currentTask == null) {
+			throw new IllegalArgumentException("Task not found: " + taskId.toHexString());
+		}
+		if (expectedRevision >= 0
+				&& (AgentState.taskRevision(currentTask) != expectedRevision
+					|| AgentState.hasUnpresentedTaskInputs(currentTask))) {
+			return Maps.of(
+				Fields.AGENT_ID, agentId,
+				Fields.TASK_ID, taskIdHex(taskId),
+				Fields.STATUS, Status.STARTED,
+				Fields.REASON, Strings.create(
+					"Task received continuation input; process the updated task before completing"));
+		}
+
+		// Runtime-independent completion seam (#380): strict requester schemas
+		// are authoritative here, so every harness and any future non-LLM runtime
+		// gets identical enforcement. A JSON string is promoted to its structured
+		// value when that is what the schema describes.
+		ACell result = RT.getIn(input, Fields.RESULT);
+		if (CVMBool.TRUE.equals(RT.getIn(currentTask, Fields.STRICT))) {
+			AMap<AString, ACell> schema = RT.ensureMap(
+				RT.getIn(currentTask, Fields.RESPONSE_SCHEMA));
+			if (schema == null) {
+				throw new IllegalArgumentException(
+					"Strict task has no response schema: " + taskId.toHexString());
+			}
+			ACell candidate = result;
+			AString stringResult = RT.ensureString(result);
+			if (stringResult != null) {
+				try {
+					ACell parsed = JSON.parse(stringResult.toString());
+					if (JsonSchema.validate(schema, parsed) == null) candidate = parsed;
+				} catch (Exception ignored) {
+					// The raw string may itself be the schema-conforming value.
+				}
+			}
+			String schemaError = JsonSchema.validate(schema, candidate);
+			if (schemaError != null) {
+				throw new IllegalArgumentException(
+					"Result does not conform to this task's response schema — " + schemaError);
+			}
+			result = candidate;
+		}
+
 		ACell task = (expectedRevision >= 0)
 			? agent.takeTask(taskId, expectedRevision) : agent.takeTask(taskId);
 		if (task == null) {
@@ -1843,7 +1889,6 @@ public class AgentAdapter extends AAdapter {
 			throw new IllegalArgumentException("Task not found: " + taskId.toHexString());
 		}
 
-		ACell result = RT.getIn(input, Fields.RESULT);
 		parkCompletion(ctx.getUserDID(), agentId, task, taskId, Status.COMPLETE, Fields.OUTPUT, result);
 
 		return Maps.of(

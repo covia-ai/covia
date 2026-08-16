@@ -549,204 +549,118 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 			AString llmOperation, AMap<AString, ACell> config,
 			AVector<ACell> baseTools, RequestContext ctx,
 			ToolContext toolCtx, ChatContext chatContext) {
-
-		AVector<ACell> newMessages = Vectors.empty();
-
-		// Runaway-loop backstop: venue default (maxToolIterations, 30),
-		// overridable per agent via config.maxToolIterations.
+		AVector<ACell> messages = Vectors.empty();
 		int maxToolIterations = resolveMaxToolIterations(config);
-
-		for (int iteration = 0; iteration < maxToolIterations; iteration++) {
-			// Loaded references are live views, not cached tool results. Resolve
-			// values, contributed tools, and routes together immediately before
-			// every provider call — including when the loads map itself did not
-			// change but a tool mutated a loaded workspace value.
-			AMap<AString, ACell> effectiveLoads =
-				ContextChain.effective(toolCtx.outerLoads, toolCtx.loads);
-			ContextBuilder.LoadSnapshot loadSnapshot = toolCtx.refreshLoadSnapshot(engine);
-			AVector<ACell> loopHistory = buildChatContext(
-				chatContext, loadSnapshot, effectiveLoads, ctx).build().history();
-
-			// Build level 3 input (fresh ephemeral context plus this loop's
-			// assistant/tool exchange).
-			AVector<ACell> fullHistory =
-				(AVector<ACell>) loopHistory.concat(newMessages);
-
-			// Inject dynamic task context — only outstanding (unresolved) tasks
-			ACell taskMsg = buildOutstandingTaskMessage(toolCtx);
-			if (taskMsg != null) {
-				fullHistory = fullHistory.conj(taskMsg);
+		ToolCycleEngine.Registry<ToolContext> registry = toolRegistry();
+		@SuppressWarnings("unchecked")
+		final AVector<ACell>[] sinkMessages = new AVector[] { messages };
+		ToolCycleEngine.BatchSink sink = new ToolCycleEngine.BatchSink() {
+			@Override
+			public void append(AMap<AString, ACell> message) {
+				sinkMessages[0] = sinkMessages[0].conj(message);
 			}
 
-			// Include task tools when tasks remain; context tools always available.
-			// Loads-contributed tools (the generic "a loads entry may declare
-			// tools" rule) recompute when the loads tier changes, so a
-			// skill_load mid-loop activates its tools on the NEXT iteration of
-			// this same transition, and an unload retracts them.
-			AVector<ACell> loadTools = loadSnapshot.tools();
-			AVector<ACell> tools = (taskMsg != null)
-				? (AVector<ACell>) TASK_TOOLS.concat(CONTEXT_TOOLS).concat(baseTools).concat(loadTools)
-				: (AVector<ACell>) CONTEXT_TOOLS.concat(baseTools).concat(loadTools);
+			@Override
+			public void recordFailure(AString name, String failure) {
+				toolCtx.toolFailures = toolCtx.toolFailures.conj(Maps.of(
+					K_NAME, name, Fields.ERROR, Strings.create(failure)));
+			}
+		};
 
-			// Dispatch to level 3 — internal, no sub-Job created
-			ACell l3Result = invokeLevel3(llmOperation, config, fullHistory, tools, ctx);
+		for (int iteration = 0; iteration < maxToolIterations; iteration++) {
+			AMap<AString, ACell> effectiveLoads =
+				ContextChain.effective(toolCtx.outerLoads, toolCtx.loads);
+			ContextBuilder.LoadSnapshot loads = toolCtx.refreshLoadSnapshot(engine);
+			AVector<ACell> history = buildChatContext(
+				chatContext, loads, effectiveLoads, ctx).build().history();
+			history = (AVector<ACell>) history.concat(messages);
 
-			// Level 3 returns an assistant message: {role, content?, toolCalls?}
-			ACell toolCallsCell = RT.getIn(l3Result, K_TOOL_CALLS);
-			boolean hasToolCalls = (toolCallsCell instanceof AVector) && ((AVector<ACell>) toolCallsCell).count() > 0;
+			ACell taskMessage = buildOutstandingTaskMessage(toolCtx);
+			if (taskMessage != null) history = history.conj(taskMessage);
+			AVector<ACell> tools = (taskMessage != null)
+				? (AVector<ACell>) TASK_TOOLS.concat(CONTEXT_TOOLS)
+					.concat(baseTools).concat(loads.tools())
+				: (AVector<ACell>) CONTEXT_TOOLS.concat(baseTools).concat(loads.tools());
 
-			// Textual control-tool fallback (#215): only when task tools are
-			// actually on offer this iteration — outside a task cycle the same
-			// text is ordinary chat.
-			if (!hasToolCalls && taskMsg != null) {
-				AMap<AString, ACell> rewritten = recogniseTextualControlCall(l3Result, iteration);
+			ACell assistant = invokeLevel3(llmOperation, config, history, tools, ctx);
+			AVector<ACell> calls = RT.ensureVector(RT.getIn(assistant, K_TOOL_CALLS));
+			boolean hasCalls = calls != null && calls.count() > 0;
+			if (!hasCalls && taskMessage != null) {
+				AMap<AString, ACell> rewritten = ToolCycleEngine.recogniseTextualControlCall(
+					assistant, iteration,
+					java.util.Set.of(TOOL_COMPLETE_TASK, TOOL_FAIL_TASK));
 				if (rewritten != null) {
-					log.warn("Assistant emitted a control tool as text — honouring it (#215)");
-					l3Result = rewritten;
-					toolCallsCell = RT.getIn(l3Result, K_TOOL_CALLS);
-					hasToolCalls = true;
+					log.warn("Assistant emitted a harness control tool as text — honouring it (#215)");
+					assistant = rewritten;
+					calls = RT.ensureVector(RT.getIn(assistant, K_TOOL_CALLS));
+					hasCalls = true;
 				}
 			}
 
-			if (!hasToolCalls) {
-				// Text-only response — validate against responseFormat schema if present
+			if (!hasCalls) {
 				if (config != null) {
-					AMap<AString, ACell> rfSchema = getResponseFormatSchema(config);
-					if (rfSchema != null) {
-						// Parse the content as JSON and validate against the schema
-						AString content = RT.ensureString(RT.getIn(l3Result, K_CONTENT));
-						if (content != null) {
-							try {
-								ACell parsed = convex.core.util.JSON.parse(content.toString());
-								String schemaErr = JsonSchema.validate(rfSchema, parsed);
-								if (schemaErr != null) {
-									log.warn("LLM response schema violation: {}", schemaErr);
-								}
-							} catch (Exception e) {
-								log.warn("LLM response not valid JSON despite responseFormat: {}", e.getMessage());
-							}
+					AMap<AString, ACell> schema = getResponseFormatSchema(config);
+					AString content = RT.ensureString(RT.getIn(assistant, K_CONTENT));
+					if (schema != null && content != null) {
+						try {
+							ACell parsed = convex.core.util.JSON.parse(content.toString());
+							String error = JsonSchema.validate(schema, parsed);
+							if (error != null) log.warn("LLM response schema violation: {}", error);
+						} catch (Exception e) {
+							log.warn("LLM response not valid JSON despite responseFormat: {}", e.getMessage());
 						}
 					}
 				}
-				newMessages = newMessages.conj(l3Result);
-				return newMessages;
+				return messages.conj(assistant);
 			}
 
-			// Tool call response — record assistant message and execute tools.
-			// The turn's text rides along as the fallback payload for an empty
-			// complete_task: a model that has just written its answer as prose
-			// routinely calls complete with no result.
-			newMessages = newMessages.conj(l3Result);
-			toolCtx.turnText = RT.ensureString(RT.getIn(l3Result, K_CONTENT));
-			AVector<ACell> toolCalls = (AVector<ACell>) toolCallsCell;
-			ToolBatchState batch = new ToolBatchState();
-
-			for (long i = 0; i < toolCalls.count(); i++) {
-				ACell tc = toolCalls.get(i);
-				AString id = RT.ensureString(RT.getIn(tc, K_ID));
-				AString name = RT.ensureString(RT.getIn(tc, K_NAME));
-				String toolNameForMsg = (name != null) ? name.toString() : "unknown";
-
-				// A provider may return a terminal task call alongside later side
-				// effects. Pair every id, but do not execute after completion/failure.
-				if (batch.isTerminal()) {
-					newMessages = newMessages.conj(batch.skippedResult(id, toolNameForMsg));
-					continue;
-				}
-
-				// Unwrap tool arguments at the LLM wire boundary (the one
-				// tolerant parse). Broken arguments fail THIS tool call with a
-				// visible error the LLM can correct on its next turn — never a
-				// silent Maps.empty() substitution (#89). Structured (non-string)
-				// arguments pass through unchanged.
-				ACell toolInput = null;
-				ACell toolResult = null;
-				try {
-					toolInput = parseToolArguments(RT.getIn(tc, K_ARGUMENTS));
-				} catch (IllegalArgumentException e) {
-					String detail = describeFailure(e);
-					toolResult = Strings.create("Error: " + detail);
-					log.warn("Tool call {} has malformed arguments: {}", name, detail);
-				}
-
-				// Execute the tool — built-in or grid dispatch
-				long taskResultsBefore = toolCtx.taskResultCount();
-				if (toolResult == null) {
-					try {
-						String toolName = (name != null) ? name.toString() : "";
-						toolResult = executeToolCall(toolName, toolInput, ctx, toolCtx);
-					} catch (Exception e) {
-						String detail = describeFailure(e);
-						toolResult = Strings.create("Error: " + detail);
-						log.warn("Tool execution failed: {} — {}", name, detail);
-					}
-				}
-
-				// Record failures for the transition output — the framework
-				// persists them to the timeline and session so they are
-				// visible after the cycle, not just to the live model (#211).
-				String failure = toolFailureMessage(toolResult);
-				if (failure != null) {
-					toolCtx.toolFailures = toolCtx.toolFailures.conj(Maps.of(
-						K_NAME, (name != null) ? name : Strings.create("unknown"),
-						Fields.ERROR, Strings.create(failure)));
-				}
-
-				// The task wrappers only record a result after their venue operation
-				// succeeds. Use that state change—not merely the tool name—as the
-				// terminal signal, so a malformed/failed completion remains retryable.
-				if (toolCtx.taskResultCount() > taskResultsBefore) {
-					if (TOOL_COMPLETE_TASK.equals(toolNameForMsg)) batch.markTerminal("complete_task");
-					if (TOOL_FAIL_TASK.equals(toolNameForMsg)) batch.markTerminal("fail_task");
-				}
-
-				// Append tool result message via the shared base helper. All results
-				// cross the provider boundary as textual content; structured values
-				// are JSON-rendered there. Synthesises a stand-in name when the LLM omits
-				// it — the message format requires a non-null name.
-				newMessages = newMessages.conj(toolResultMessage(id, toolNameForMsg, toolResult));
-			}
-
+			messages = messages.conj(assistant);
+			toolCtx.turnText = RT.ensureString(RT.getIn(assistant, K_CONTENT));
+			sinkMessages[0] = messages;
+			ToolCycleEngine.executeBatch(calls, iteration, registry, toolCtx, sink, log);
+			messages = sinkMessages[0];
 		}
 
-		// Iteration limit reached — the agent gave up. Fail the transition so the
-		// task resolves to FAILED instead of hanging STARTED forever behind a
-		// fake-success apology (covia-ai/covia#138). A transition failure also
-		// suspends the agent with the error recorded — appropriate here: an agent
-		// that loops to the tool-call safety limit is misbehaving, so parking it
-		// for inspection (recoverable via agent:resume) is the right reaction, not
-		// silently continuing. The iteration cap already bounds CPU/IO; this makes
-		// the give-up an honest, terminal outcome. (Failing only the task while
-		// keeping the agent SLEEPING would need run-loop changes to distinguish a
-		// task failure from an agent failure — a separate enhancement.)
 		log.warn("Tool call loop reached iteration limit ({}) — failing the transition", maxToolIterations);
 		throw new JobFailedException("Agent reached the tool-call iteration limit ("
 			+ maxToolIterations + ") without completing the task.");
 	}
 
-	// ========== Built-in tool execution ==========
-
 	/**
-	 * Executes a tool call, dispatching to built-in handlers or grid operations.
-	 * Returns ACell — either an AString (for errors/simple text) or a structured
-	 * AMap/AVector. The caller converts structured results to JSON strings for
-	 * the provider-compatible tool message content.
+	 * Per-cycle harness registry. Completion becomes terminal only after the
+	 * lifecycle venue operation succeeds; a rejected completion remains
+	 * retryable and does not fence later calls in the provider batch.
 	 */
-	private ACell executeToolCall(String toolName, ACell input, RequestContext ctx, ToolContext toolCtx) {
-		// Built-in task tools (must mutate ToolContext directly) — always allowed
-		if (TOOL_COMPLETE_TASK.equals(toolName)) return handleCompleteTask(input, toolCtx);
-		if (TOOL_FAIL_TASK.equals(toolName)) return handleFailTask(input, toolCtx);
-
-		// Built-in context tools (harness-level, like task tools)
-		if (TOOL_CONTEXT_LOAD.equals(toolName)) return handleContextLoad(input, toolCtx);
-		if (TOOL_CONTEXT_UNLOAD.equals(toolName)) return handleContextUnload(input, toolCtx);
-		if (TOOL_SKILL_LOAD.equals(toolName)) return handleSkillLoad(input, toolCtx);
-
-		// Cap-checked, timeout-bounded dispatch via the shared base path.
-		// Resolves config tools, falls through to grid dispatch for unknown names.
-		return dispatchTool(toolName, input, toolCtx.dispatchRoutes(),
-			toolCtx.ctx, toolCtx.toolCallTimeoutMs);
+	private ToolCycleEngine.Registry<ToolContext> toolRegistry() {
+		return new ToolCycleEngine.Registry<ToolContext>()
+			.register(TOOL_COMPLETE_TASK, (call, toolCtx) -> {
+				long before = toolCtx.taskResultCount();
+				ACell result = handleCompleteTask(call.input(), toolCtx);
+				return (toolCtx.taskResultCount() > before)
+					? ToolCycleEngine.ToolOutcome.terminal(result, TOOL_COMPLETE_TASK,
+						RT.getIn(call.input(), Fields.RESULT))
+					: ToolCycleEngine.ToolOutcome.result(result);
+			})
+			.register(TOOL_FAIL_TASK, (call, toolCtx) -> {
+				long before = toolCtx.taskResultCount();
+				ACell result = handleFailTask(call.input(), toolCtx);
+				return (toolCtx.taskResultCount() > before)
+					? ToolCycleEngine.ToolOutcome.terminal(result, TOOL_FAIL_TASK,
+						RT.getIn(call.input(), Fields.ERROR))
+					: ToolCycleEngine.ToolOutcome.result(result);
+			})
+			.register(TOOL_CONTEXT_LOAD, (call, toolCtx) ->
+				ToolCycleEngine.ToolOutcome.result(handleContextLoad(call.input(), toolCtx)))
+			.register(TOOL_CONTEXT_UNLOAD, (call, toolCtx) ->
+				ToolCycleEngine.ToolOutcome.result(handleContextUnload(call.input(), toolCtx)))
+			.register(TOOL_SKILL_LOAD, (call, toolCtx) ->
+				ToolCycleEngine.ToolOutcome.result(handleSkillLoad(call.input(), toolCtx)))
+			.fallback((call, toolCtx) -> ToolCycleEngine.ToolOutcome.result(
+				dispatchTool(call.name(), call.input(), toolCtx.dispatchRoutes(),
+					toolCtx.ctx, toolCtx.toolCallTimeoutMs)));
 	}
+
+	// ========== Built-in tool execution ==========
 
 	/**
 	 * Completes the in-scope task with a result by invoking the
@@ -901,30 +815,11 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 	// ========== Built-in context tools ==========
 
 	ACell handleContextLoad(ACell input, ToolContext toolCtx) {
-		AString path = RT.ensureString(RT.getIn(input, K_PATH));
-		if (path == null) return Strings.create(
-			"Error: path is required — context_load pins a lattice path into your context. "
-			+ "Call with {\"path\": \"w/...\"} (optional: \"budget\" in bytes, \"label\").");
-		if (!toolCtx.sessionInScope) {
-			return Strings.create("Error: no session in scope — context loads are per-conversation (#142)");
-		}
-		try {
-			new ContextLoader(engine).requireReadAccess(path, toolCtx.ctx);
-		} catch (RuntimeException e) {
-			return Strings.create("Error: context_load denied: " + describeFailure(e));
-		}
-
-		// Writes to the innermost tier; overwriting a tombstone un-masks locally.
-		long budget = clampLoadBudget(RT.getIn(input, K_BUDGET));
-		AString label = RT.ensureString(RT.getIn(input, K_LABEL));
-		toolCtx.addLoad(path, buildLoadEntryMeta(budget, label));
-
-		return Maps.of(
-			K_PATH, path,
-			Strings.create("loaded"), CVMBool.TRUE,
-			K_BUDGET, CVMLong.create(budget),
-			Strings.create("note"), Strings.create(
-				"Path is loaded and will be visible on the next model invocation."));
+		HarnessTools.LoadScope scope = loadScope(toolCtx,
+			"Error: no session in scope — context loads are per-conversation (#142)");
+		ACell result = HarnessTools.contextLoad(input, scope);
+		toolCtx.loads = scope.loads;
+		return result;
 	}
 
 	/**
@@ -936,43 +831,25 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 	 * this runtime carries no knowledge of what a skill IS.
 	 */
 	ACell handleSkillLoad(ACell input, ToolContext toolCtx) {
-		if (!toolCtx.sessionInScope) {
-			return Strings.create("Error: no session in scope — skill loads are per-conversation (#142)");
-		}
-		try {
-			// The effective view feeds content-identity dedup: the same skill
-			// reached via a different address must not load twice.
-			Skills.LoadOutcome out = Skills.load(engine, toolCtx.ctx, toolCtx.skillSources, input,
-				ContextChain.effective(toolCtx.outerLoads, toolCtx.loads));
-			if (out.entryMeta() != null) {
-				toolCtx.addLoad(out.path(), out.entryMeta());
-			}
-			return out.result();
-		} catch (RuntimeException e) {
-			return Strings.create("Error: skill_load failed: " + describeFailure(e));
-		}
+		HarnessTools.LoadScope scope = loadScope(toolCtx,
+			"Error: no session in scope — skill loads are per-conversation (#142)");
+		ACell result = HarnessTools.skillLoad(input, scope);
+		toolCtx.loads = scope.loads;
+		return result;
 	}
 
 	ACell handleContextUnload(ACell input, ToolContext toolCtx) {
-		AString path = RT.ensureString(RT.getIn(input, K_PATH));
-		if (path == null) return Strings.create(
-			"Error: path is required — context_unload removes a loaded path from your context. "
-			+ "Call with {\"path\": \"...\"} naming a currently loaded entry.");
-		if (!toolCtx.sessionInScope) {
-			return Strings.create("Error: no session in scope — context loads are per-conversation (#142)");
-		}
+		HarnessTools.LoadScope scope = loadScope(toolCtx,
+			"Error: no session in scope — context loads are per-conversation (#142)");
+		ACell result = HarnessTools.contextUnload(input, scope);
+		toolCtx.loads = scope.loads;
+		return result;
+	}
 
-		// Lexical unload: removes the local entry; masks an outer-tier entry
-		// with a nil tombstone (this conversation only) — see ContextChain.
-		AMap<AString, ACell> updated = ContextChain.unload(toolCtx.loads, toolCtx.outerLoads, path);
-		if (updated == null) {
-			return Strings.create("Error: path not in context: " + path);
-		}
-		toolCtx.loads = updated;
-
-		return Maps.of(
-			K_PATH, path,
-			Strings.create("unloaded"), CVMBool.TRUE);
+	private HarnessTools.LoadScope loadScope(ToolContext toolCtx, String unavailableMessage) {
+		return new HarnessTools.LoadScope(engine, toolCtx.ctx, toolCtx.loads,
+			toolCtx.outerLoads, toolCtx.sessionInScope, unavailableMessage,
+			toolCtx.skillSources);
 	}
 
 	/**
@@ -1041,35 +918,8 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 	 *         recognisable control-tool emission
 	 */
 	static AMap<AString, ACell> recogniseTextualControlCall(ACell assistantMsg, int iteration) {
-		AString content = RT.ensureString(RT.getIn(assistantMsg, K_CONTENT));
-		if (content == null) return null;
-		String text = content.toString().strip();
-		String tool = null;
-		if (text.startsWith(TOOL_COMPLETE_TASK)) tool = TOOL_COMPLETE_TASK;
-		else if (text.startsWith(TOOL_FAIL_TASK)) tool = TOOL_FAIL_TASK;
-		if (tool == null) return null;
-		String rest = text.substring(tool.length()).strip();
-		if (rest.startsWith(":")) rest = rest.substring(1).strip();
-		ACell args;
-		if (rest.isEmpty()) {
-			args = Maps.empty();
-		} else if (rest.startsWith("{")) {
-			try {
-				args = convex.core.util.JSON.parse(rest);
-			} catch (Exception e) {
-				return null; // not a parseable call — leave the text alone
-			}
-		} else {
-			return null; // prose mentioning the tool name — not a call
-		}
-		AMap<AString, ACell> toolCall = Maps.of(
-			K_ID, Strings.create("text-fallback-" + iteration),
-			K_NAME, Strings.create(tool),
-			K_ARGUMENTS, args);
-		return Maps.of(
-			K_ROLE, ROLE_ASSISTANT,
-			K_CONTENT, content,
-			K_TOOL_CALLS, Vectors.of(toolCall));
+		return ToolCycleEngine.recogniseTextualControlCall(assistantMsg, iteration,
+			java.util.Set.of(TOOL_COMPLETE_TASK, TOOL_FAIL_TASK));
 	}
 
 	static AString getConfigValue(AMap<AString, ACell> config, AString key, AString defaultValue) {

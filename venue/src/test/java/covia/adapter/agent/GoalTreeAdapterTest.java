@@ -516,6 +516,76 @@ public class GoalTreeAdapterTest {
 	}
 
 	@Test
+	public void testTextualCompleteUsesSharedControlRecognition() {
+		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
+		ACell output = adapter.processGoal(null, ALICE, Maps.of(
+			Fields.AGENT_ID, "textual-goal-complete-agent",
+			AgentState.KEY_CONFIG, Maps.of(
+				"llmOperation", "v/test/ops/llm",
+				"model", "textual-goal-complete-test",
+				"tools", Vectors.of((ACell) Strings.create("complete"))),
+			Fields.MESSAGES, Vectors.of((ACell) Maps.of(
+				Fields.MESSAGE, Strings.create("return structured textually")))));
+
+		assertEquals("done-via-text",
+			RT.getIn(output, Fields.RESPONSE, "answer").toString());
+	}
+
+	@Test
+	public void testEmptyCompleteUsesAssistantTurnText() {
+		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
+		ACell output = adapter.processGoal(null, ALICE, Maps.of(
+			Fields.AGENT_ID, "empty-goal-complete-agent",
+			AgentState.KEY_CONFIG, Maps.of(
+				"llmOperation", "v/test/ops/llm",
+				"model", "empty-goal-complete-test",
+				"tools", Vectors.of((ACell) Strings.create("complete"))),
+			Fields.MESSAGES, Vectors.of((ACell) Maps.of(
+				Fields.MESSAGE, Strings.create("answer in prose")))));
+
+		assertEquals("answer carried by the assistant turn",
+			RT.getIn(output, Fields.RESPONSE).toString());
+	}
+
+	@Test
+	public void testToolFailuresUseSharedCycleDiagnostics() {
+		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
+		ACell output = adapter.processGoal(null, ALICE, Maps.of(
+			Fields.AGENT_ID, "goal-tool-failure-agent",
+			AgentState.KEY_CONFIG, Maps.of(
+				"llmOperation", "v/test/ops/llm",
+				"model", "goal-tool-failure-test",
+				"tools", Vectors.of((ACell) Strings.create("context_load"))),
+			Fields.MESSAGES, Vectors.of((ACell) Maps.of(
+				Fields.MESSAGE, Strings.create("recover from a bad tool call")))));
+
+		assertEquals("recovered from tool failure", RT.getIn(output, Fields.RESPONSE).toString());
+		AVector<ACell> failures = RT.ensureVector(RT.getIn(output, Fields.TOOL_FAILURES));
+		assertNotNull(failures);
+		assertEquals(1, failures.count());
+		assertEquals("context_load", RT.getIn(failures.get(0), Fields.NAME).toString());
+		assertTrue(RT.getIn(failures.get(0), Fields.ERROR).toString().contains("path is required"));
+	}
+
+	@Test
+	public void testStrictTaskSchemaRejectsThenAccepts() {
+		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
+		ACell output = adapter.processGoal(null, ALICE, Maps.of(
+			Fields.AGENT_ID, "strict-goal-schema-agent",
+			AgentState.KEY_CONFIG, Maps.of(
+				"llmOperation", "v/test/ops/llm",
+				"model", "strict-goal-schema-test"),
+			Fields.TASKS, Vectors.of((ACell) Maps.of(
+				Fields.JOB_ID, "strict-goal-job",
+				Fields.INPUT, "return a typed answer",
+				Fields.RESPONSE_SCHEMA, simpleSchema(),
+				Fields.STRICT, CVMBool.TRUE))));
+
+		assertEquals("corrected", RT.getIn(output, Fields.RESPONSE, "answer").toString(),
+			"the invalid first completion must be rejected and retried against the task schema");
+	}
+
+	@Test
 	public void testInspectionIncludesLiveLoadsContextMapAndContributedTools() {
 		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of("path", "w/goal-inspection-load", "value", "GOAL_LOAD_VISIBLE"),
