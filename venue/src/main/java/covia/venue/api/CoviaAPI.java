@@ -28,6 +28,7 @@ import convex.core.exceptions.ParseException;
 import convex.core.lang.RT;
 import covia.adapter.AAdapter;
 import covia.adapter.AgentAdapter;
+import covia.adapter.AssetAdapter;
 import covia.adapter.CoviaAdapter;
 import convex.core.util.JSON;
 import covia.api.Abilities;
@@ -156,6 +157,11 @@ public class CoviaAPI extends ACoviaAPI {
 		routes.get(ROUTE+"agents", this::getAgents, COVIA_API);
 		routes.get(ROUTE+"agents/{id}", this::getAgentInfo, COVIA_API);
 
+		// Schedules — job-free read of the caller's pending scheduled events
+		// (#369), so a Scheduler UI can page/refresh without persisting a Job
+		// per read. scheduler:list remains the operation form.
+		routes.get(ROUTE+"schedules", this::getSchedules, COVIA_API);
+
 		// Secrets
 		routes.get(ROUTE+"secrets", this::listSecrets, COVIA_API);
 		routes.put(ROUTE+"secrets/{name}", this::putSecret, COVIA_API);
@@ -234,6 +240,14 @@ public class CoviaAPI extends ACoviaAPI {
 		            )
 		        })
 	protected void getAssets(Context ctx) {
+		// scope=own|mine lists the authenticated caller's own a/ assets (populated
+		// by asset:store / asset:pin), job-free (#382) — distinct from the default,
+		// which lists the venue-level asset catalog.
+		String scope = ctx.queryParam("scope");
+		if ("own".equals(scope) || "mine".equals(scope)) {
+			getOwnAssets(ctx);
+			return;
+		}
 		long offset=-1;
 		long limit=-1;
 		Map<Object,Object> result=new HashMap<>();
@@ -279,9 +293,33 @@ public class CoviaAPI extends ACoviaAPI {
 
 		buildResult(ctx,result);
 	}
-	
-	@OpenApi(path = ROUTE + "assets", 
-			methods = HttpMethod.POST, 
+
+	/** {@code GET /assets?scope=own}: the authenticated caller's own a/ assets,
+	 *  the asset:list read exposed job-free (#382). */
+	protected void getOwnAssets(Context ctx) {
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		if (rctx.getCallerDID() == null) {
+			buildError(ctx, 401, "Authentication required");
+			return;
+		}
+		AMap<AString, ACell> input = Maps.empty();
+		try {
+			String off = ctx.queryParam("offset");
+			if (off != null) input = input.assoc(Fields.OFFSET, CVMLong.create(Long.parseLong(off)));
+			String lim = ctx.queryParam("limit");
+			if (lim != null) input = input.assoc(Fields.LIMIT, CVMLong.create(Long.parseLong(lim)));
+		} catch (NumberFormatException e) {
+			buildError(ctx, 400, "Invalid offset or limit");
+			return;
+		}
+		String type = ctx.queryParam("type");
+		if (type != null) input = input.assoc(Fields.TYPE, Strings.create(type));
+		AssetAdapter asset = (AssetAdapter) engine().getAdapter("asset");
+		buildResult(ctx, 200, asset.listOwnAssets(rctx, input));
+	}
+
+	@OpenApi(path = ROUTE + "assets",
+			methods = HttpMethod.POST,
 			tags = { "Covia"},
 			summary = "Add a Covia asset", 
 			requestBody = @OpenApiRequestBody(
@@ -1776,6 +1814,22 @@ public class CoviaAPI extends ACoviaAPI {
 		boolean includeTerminated = "true".equals(ctx.queryParam("includeTerminated"));
 		AgentAdapter agent = (AgentAdapter) engine().getAdapter("agent");
 		buildResult(ctx, 200, agent.listAgents(rctx, includeTerminated, annotated));
+	}
+
+	@OpenApi(path = ROUTE + "schedules",
+			methods = HttpMethod.GET,
+			tags = { "Covia" },
+			summary = "List the authenticated caller's pending scheduled events, each {handle, op, time}, "
+				+ "time-ordered (job-free, #369). Includes events queued by the caller's agents.",
+			operationId = "getSchedules")
+	protected void getSchedules(Context ctx) {
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		if (rctx.getCallerDID() == null) {
+			buildError(ctx, 401, "Authentication required");
+			return;
+		}
+		buildResult(ctx, 200, Maps.of(
+			Strings.intern("events"), engine().gridScheduler().list(rctx)));
 	}
 
 	@OpenApi(path = ROUTE + "agents/{id}",

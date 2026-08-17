@@ -354,6 +354,17 @@ public class AssetAdapter extends AAdapter {
 	}
 
 	@SuppressWarnings("unchecked")
+	/**
+	 * The caller's own {@code a/} assets as a job-free listing
+	 * ({@code {items, total, offset, limit}}, each item {@code {id, name, type,
+	 * description}}) — the same read as {@code asset:list}, exposed for the REST
+	 * read surface so a client can list its assets without persisting a Job
+	 * (#382). Honours {@code offset}/{@code limit}/{@code type} in {@code input}.
+	 */
+	public ACell listOwnAssets(RequestContext ctx, ACell input) {
+		return handleList(input, ctx);
+	}
+
 	private ACell handleList(ACell input, RequestContext ctx) {
 		engine.requireAuthority(ctx,Strings.create(""), Abilities.ASSET_READ);
 		long offset = 0, limit = 100;
