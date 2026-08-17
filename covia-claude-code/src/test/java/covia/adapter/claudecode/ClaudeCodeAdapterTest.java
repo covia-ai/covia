@@ -15,7 +15,9 @@ import java.util.function.BooleanSupplier;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -42,6 +44,10 @@ import covia.venue.RequestContext;
  * {@code --resume} continues them). Real jobs, real cancellation, real
  * process lifecycle; no mocks of our own code.
  */
+@Tag("integration")
+@EnabledIfSystemProperty(named = "covia.tests.integration", matches = "true",
+	disabledReason = "drives real Claude Code CLI subprocesses (timing/environment-sensitive); "
+		+ "enable with -Dcovia.tests.integration=true")
 public class ClaudeCodeAdapterTest {
 
 	private static final AString OWNER = Strings.create("did:test:claudecode:owner");
