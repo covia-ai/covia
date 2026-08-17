@@ -62,7 +62,7 @@ public class EtchV3VenueTest {
 
 	@Test
 	public void encryptedEtchV3VenuePersistsAcrossRestart() throws Exception {
-		File dir = Files.createTempDirectory("etch-v3-venue").toFile();
+		File dir = TestTemp.dir("etch-v3-venue").toFile();
 		String storePath = new File(dir, "venue.etch").getAbsolutePath().replace('\\', '/');
 		AString value = Strings.create("survives encrypted restart");
 		AString userDID = Strings.create("did:key:z6Mk-test-etch-v3");
@@ -94,7 +94,7 @@ public class EtchV3VenueTest {
 
 	@Test
 	public void wrongKeyAndPlainOpenFailClosed() throws Exception {
-		File dir = Files.createTempDirectory("etch-v3-keys").toFile();
+		File dir = TestTemp.dir("etch-v3-keys").toFile();
 		String storePath = new File(dir, "venue.etch").getAbsolutePath().replace('\\', '/');
 
 		VenueServer server = VenueServer.launch(config(storePath, KEY_HEX));
@@ -139,7 +139,7 @@ public class EtchV3VenueTest {
 		// An explicit publicKeyHint passes through as-is: the file is stamped
 		// with the operator's label and the key function verifies against it,
 		// so create → reopen round-trips under the pinned hint.
-		File dir = Files.createTempDirectory("etch-v3-hint").toFile();
+		File dir = TestTemp.dir("etch-v3-hint").toFile();
 		String storePath = new File(dir, "venue.etch").getAbsolutePath().replace('\\', '/');
 		String pinnedHint =
 			"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -233,7 +233,7 @@ public class EtchV3VenueTest {
 		// embedder's code (KMS / passphrase-derived), the etch policy compiles
 		// with a key FUNCTION, the embedder opens the store itself and adopts
 		// it into the venue. No key ever touches config, env, or disk.
-		File dir = Files.createTempDirectory("etch-v3-embedder").toFile();
+		File dir = TestTemp.dir("etch-v3-embedder").toFile();
 		File storeFile = new File(dir, "vault.etch");
 		byte[] vaultKey = convex.core.data.Blob.fromHex(KEY_HEX).getBytes();
 
@@ -290,7 +290,7 @@ public class EtchV3VenueTest {
 	 */
 	@Test
 	public void concurrentDlfsPromotionsRemainReadableAcrossSyncAndRestart() throws Exception {
-		File dir = Files.createTempDirectory("etch-v3-dlfs-promotions").toFile();
+		File dir = TestTemp.dir("etch-v3-dlfs-promotions").toFile();
 		String storePath = new File(dir, "venue.etch").getAbsolutePath().replace('\\', '/');
 		AString userDID = Strings.create("did:key:z6Mk-test-dlfs-promotions");
 		String driveName = "drive";

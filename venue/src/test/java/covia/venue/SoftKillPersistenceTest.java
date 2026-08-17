@@ -87,8 +87,9 @@ public class SoftKillPersistenceTest {
 	 * the venue did not splatter unexpected sibling files alongside the etch.
 	 */
 	private static Path freshEtchPath(String testName) throws IOException {
-		Path dir = Files.createTempDirectory("soft-kill-" + testName + "-");
-		dir.toFile().deleteOnExit();
+		// TestTemp: removed recursively at JVM exit (deleteOnExit on a directory
+		// only works once it is empty, and the etch inside kept it alive).
+		Path dir = TestTemp.dir("soft-kill-" + testName + "-");
 		Path etch = dir.resolve("venue.etch");
 		// EtchStore.create requires the file not to exist — don't create it ahead of time.
 		return etch;
