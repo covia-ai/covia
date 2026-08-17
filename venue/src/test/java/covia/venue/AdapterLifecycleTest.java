@@ -107,6 +107,39 @@ public class AdapterLifecycleTest {
 		}
 	}
 
+	@Test
+	public void testAdapterOwnedSubtreeFollowsLifecycleAndRedactsConfig() throws Exception {
+		Engine engine = Engine.createTemp(Maps.of(
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
+			Config.ADAPTERS, Maps.of("fact", Maps.of(
+				"colour", "blue", "token", "literal-secret", "ref", "s/MY_TOKEN",
+				"nested", Maps.of("apiKey", "k123", "size", 3L)))));
+		try {
+			engine.registerAdapter(new FactAdapter());
+			Engine.addDemoAssets(engine);
+			ACell cfg = venueRead(engine, "v/adapters/fact/config");
+			assertEquals(Strings.create("blue"), RT.getIn(cfg, "colour"));
+			assertEquals(Strings.create("***"), RT.getIn(cfg, "token"), "credential-looking values are redacted");
+			assertEquals(Strings.create("s/MY_TOKEN"), RT.getIn(cfg, "ref"), "secret references are names, kept");
+			assertEquals(Strings.create("***"), RT.getIn(cfg, "nested", "apiKey"));
+			assertEquals(convex.core.data.prim.CVMLong.create(3), RT.getIn(cfg, "nested", "size"));
+			assertEquals(venueRead(engine, "v/info/adapters/fact"), venueRead(engine, "v/adapters/fact/info"));
+
+			engine.configureAdapter("fact", Maps.of("colour", "red"));
+			assertEquals(Strings.create("red"), RT.getIn(venueRead(engine, "v/adapters/fact/config"), "colour"),
+				"config record follows reconfigure");
+			assertEquals(Strings.create("red"), RT.getIn(venueRead(engine, "v/adapters/fact/info"), "colour"));
+
+			assertNotNull(venueRead(engine, "v/adapters/mcp/ops/tools-list"), "an adapter's ops under its subtree");
+			engine.disableAdapter("mcp");
+			assertNull(venueRead(engine, "v/adapters/mcp"), "disabling retracts the whole owned subtree");
+			engine.enableAdapter("mcp");
+			assertNotNull(venueRead(engine, "v/adapters/mcp/skills/mcp"), "enabling republishes it");
+		} finally {
+			engine.close();
+		}
+	}
+
 	// ========== Engine-level ==========
 
 	@Test

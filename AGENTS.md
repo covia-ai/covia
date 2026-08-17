@@ -169,6 +169,7 @@ Defined in code at `venue/src/main/java/covia/lattice/Covia.java`. Full design i
 4. Override `installAssets()` to register default operations
    - Override `info()` to publish adapter-owned facts (mount points, enabled features — anything a client needs to know that is not an operation) into `v/info/adapters/<name>`; it is re-read after every `configure`
    - Ship the adapter's agent skill with it: `installSkill("<name>", "/skills/<name>.json")` in `installAssets()` (resource under `src/main/resources/skills/`), so `v/skills/<name>` is present exactly when the adapter is active
+   - Everything an adapter installs or publishes also appears under its own subtree `v/adapters/<name>/` (`info`, `config` via `publicConfig()` — credentials redacted by default, `ops/`, `skills/`, `templates/`), published and retracted with the adapter
 5. Create JSON asset definitions in `venue/src/main/resources/adapters/{name}/`
 6. Register in `Engine.addDemoAssets()` or via configuration
 

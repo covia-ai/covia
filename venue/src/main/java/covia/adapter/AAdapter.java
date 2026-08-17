@@ -9,6 +9,7 @@ import org.slf4j.LoggerFactory;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
+import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.util.ThreadUtils;
 import convex.core.data.AString;
@@ -206,7 +207,7 @@ public abstract class AAdapter {
 		if (!isValidCatalogPath(catalogPath)) {
 			throw new IllegalArgumentException("Invalid catalog path: " + catalogPath);
 		}
-		pendingCatalogEntries.put("v/ops/" + catalogPath, hash);
+		declare("v/ops/", catalogPath, hash);
 		return hash;
 	}
 
@@ -283,7 +284,7 @@ public abstract class AAdapter {
 			return hash;
 		}
 
-		pendingCatalogEntries.put(prefix + catalogPath, hash);
+		declare(prefix, catalogPath, hash);
 		return hash;
 	}
 
@@ -295,6 +296,86 @@ public abstract class AAdapter {
 	 * {@code "v/test/ops/echo"}) to the asset hash.
 	 */
 	public final java.util.Map<String, Hash> pendingCatalogEntries = new java.util.LinkedHashMap<>();
+
+	/**
+	 * The adapter-owned mirror of everything this adapter installs, keyed by
+	 * its {@code v/adapters/<name>/…} path: operations under {@code ops/}
+	 * (with the adapter's own name prefix dropped — {@code v/ops/telegram/send}
+	 * → {@code v/adapters/telegram/ops/send}), skills under {@code skills/},
+	 * agent templates under {@code templates/}. Same asset hashes as
+	 * {@link #pendingCatalogEntries} — the lattice shares the values — so an
+	 * adapter's subtree is a complete, invocable view of what it offers, and
+	 * it is published and retracted with the adapter as one unit alongside
+	 * {@code info} and {@code config}.
+	 */
+	public final java.util.Map<String, Hash> ownedCatalogEntries = new java.util.LinkedHashMap<>();
+
+	/** Records a catalog declaration at its canonical path and in this adapter's own subtree. */
+	private void declare(String prefix, String catalogPath, Hash hash) {
+		pendingCatalogEntries.put(prefix + catalogPath, hash);
+		ownedCatalogEntries.put(ownedPath(prefix, catalogPath), hash);
+	}
+
+	/** {@code v/adapters/<name>/<kind>/<rel>} for a canonical catalog declaration. */
+	String ownedPath(String prefix, String catalogPath) {
+		String kind = switch (prefix) {
+			case "v/ops/", "v/test/ops/" -> "ops";
+			case "v/skills/" -> "skills";
+			case "v/agents/templates/" -> "templates";
+			default -> prefix.substring("v/".length(), prefix.length() - 1).replace('/', '-');
+		};
+		String name = getName();
+		String rel = catalogPath;
+		if (rel.startsWith(name + "/")) rel = rel.substring(name.length() + 1);
+		return "v/adapters/" + name + "/" + kind + "/" + rel;
+	}
+
+	/** Configuration keys whose string values are credentials or endpoints and must not be published. */
+	private static final java.util.regex.Pattern SENSITIVE_KEY = java.util.regex.Pattern.compile(
+		"(?i)token|secret|password|passwd|pwd|key|auth|credential|cookie|url|uri|dsn|connection");
+
+	/**
+	 * This adapter's effective configuration as it is safe to publish at
+	 * {@code v/adapters/<name>/config}: by default {@link Engine#adapterConfig}
+	 * with every string under a credential- or endpoint-looking key (token,
+	 * secret, password, key, auth, url, …) replaced by {@code "***"} — except
+	 * {@code s/} secret references, which are names, not values. Override to
+	 * publish more precisely; never publish a raw credential.
+	 *
+	 * @return the publishable configuration, never null
+	 */
+	public AMap<AString, ACell> publicConfig() {
+		AMap<AString, ACell> cfg = (engine != null) ? engine.adapterConfig(getName()) : null;
+		if (cfg == null) return Maps.empty();
+		ACell redacted = redact(cfg, false);
+		return (redacted instanceof AMap) ? RT.castMap(redacted) : Maps.empty();
+	}
+
+	/** Recursively replaces credential-looking string values with {@code "***"}. */
+	@SuppressWarnings("unchecked")
+	static ACell redact(ACell value, boolean sensitive) {
+		if (value instanceof AString s) {
+			if (!sensitive) return value;
+			String v = s.toString();
+			return (v.startsWith("s/") || v.startsWith("/s/")) ? value : Strings.create("***");
+		}
+		if (value instanceof AMap<?, ?> m) {
+			AMap<ACell, ACell> out = (AMap<ACell, ACell>) m;
+			for (long i = 0; i < m.count(); i++) {
+				var e = m.entryAt(i);
+				boolean keySensitive = sensitive || (e.getKey() instanceof AString ks && SENSITIVE_KEY.matcher(ks.toString()).find());
+				out = out.assoc(e.getKey(), redact(e.getValue(), keySensitive));
+			}
+			return out;
+		}
+		if (value instanceof convex.core.data.AVector<?> v) {
+			convex.core.data.AVector<ACell> out = convex.core.data.Vectors.empty();
+			for (long i = 0; i < v.count(); i++) out = out.conj(redact(v.get(i), sensitive));
+			return out;
+		}
+		return value;
+	}
+
 
 	/**
 	 * Returns the catalog paths of this adapter's installed <em>operations</em>

@@ -104,10 +104,9 @@ final class VenueBootstrapMaterializer {
 				throw new IllegalStateException("Catalog path /" + path
 					+ " is already occupied; cannot enable adapter '" + adapter.getName() + "'");
 			}
-			materializer.writeCatalogDeclaration(adapter, path, declaration.getValue());
 		}
-		materializer.writeAndValidateVenuePath(
-			"v/info/adapters/" + adapter.getName(), materializer.adapterSummary(adapter));
+		materializer.writeAdapterDeclarations(adapter);
+		materializer.writeAdapterOwnedRecords(adapter);
 		materializer.publish();
 	}
 
@@ -124,6 +123,7 @@ final class VenueBootstrapMaterializer {
 			materializer.deleteVenuePath(path);
 		}
 		materializer.deleteVenuePath("v/info/adapters/" + adapter.getName());
+		materializer.deleteVenuePath(ADAPTERS_ROOT + adapter.getName());
 		materializer.publish();
 	}
 
@@ -144,14 +144,49 @@ final class VenueBootstrapMaterializer {
 
 	/** Writes every adapter declaration through ordinary cursors on the child fork. */
 	private void writeAdapterCatalog() {
+		// v/adapters/<name>/ is the adapter-owned subtree (ops/skills/templates
+		// mirrored here, info and config added by writeVenueInformation). Reset it
+		// with the same complete-snapshot rule as v/info/adapters, before the
+		// declarations land in it.
+		writeAndValidateVenuePath("v/adapters", Maps.empty());
 		for (String adapterName : adapterNames) {
 			AAdapter adapter = engine.getAdapter(adapterName);
 			if (adapter == null) continue;
-			for (var declaration : adapter.pendingCatalogEntries.entrySet()) {
-				writeCatalogDeclaration(adapter, declaration.getKey(), declaration.getValue());
-			}
+			writeAdapterDeclarations(adapter);
 		}
 	}
+
+	/** An adapter's catalog declarations at their canonical paths and in its own {@code v/adapters/<name>/} subtree. */
+	private void writeAdapterDeclarations(AAdapter adapter) {
+		for (var declaration : adapter.pendingCatalogEntries.entrySet()) {
+			writeCatalogDeclaration(adapter, declaration.getKey(), declaration.getValue());
+		}
+		for (var declaration : adapter.ownedCatalogEntries.entrySet()) {
+			writeCatalogDeclaration(adapter, declaration.getKey(), declaration.getValue());
+		}
+	}
+
+	/**
+	 * The adapter-owned records at {@code v/adapters/<name>/info} (the same
+	 * record as {@code v/info/adapters/<name>}) and {@code …/config}
+	 * ({@link AAdapter#publicConfig()}).
+	 */
+	private void writeAdapterOwnedRecords(AAdapter adapter) {
+		AMap<AString, ACell> summary = adapterSummary(adapter);
+		writeAndValidateVenuePath("v/info/adapters/" + adapter.getName(), summary);
+		writeAndValidateVenuePath(ADAPTERS_ROOT + adapter.getName() + "/info", summary);
+		AMap<AString, ACell> config;
+		try {
+			config = adapter.publicConfig();
+		} catch (RuntimeException e) {
+			log.warn("Adapter '{}' publicConfig() failed; publishing nothing: {}", adapter.getName(), e.toString());
+			config = Maps.empty();
+		}
+		writeAndValidateVenuePath(ADAPTERS_ROOT + adapter.getName() + "/config", config == null ? Maps.empty() : config);
+	}
+
+	/** Root of the adapter-owned subtrees. */
+	static final String ADAPTERS_ROOT = "v/adapters/";
 
 	private void writeCatalogDeclaration(AAdapter adapter, String path, Hash assetHash) {
 		validateCatalogPath(path);
@@ -179,7 +214,8 @@ final class VenueBootstrapMaterializer {
 		if (path == null || !(path.startsWith("v/ops/")
 				|| path.startsWith("v/test/ops/")
 				|| path.startsWith("v/agents/templates/")
-				|| path.startsWith("v/skills/"))) {
+				|| path.startsWith("v/skills/")
+				|| path.startsWith(ADAPTERS_ROOT))) {
 			throw new IllegalStateException("Unsupported bootstrap catalog path: " + path);
 		}
 	}
@@ -209,11 +245,11 @@ final class VenueBootstrapMaterializer {
 		// subtree on the transaction fork so adapters removed since the previous
 		// boot cannot leave stale introspection entries.
 		writeAndValidateVenuePath("v/info/adapters", Maps.empty());
+		// Each adapter's info (mirrored at v/adapters/<name>/info) and config.
 		for (String adapterName : adapterNames) {
 			AAdapter adapter = engine.getAdapter(adapterName);
 			if (adapter == null) continue;
-			writeAndValidateVenuePath(
-				"v/info/adapters/" + adapterName, adapterSummary(adapter));
+			writeAdapterOwnedRecords(adapter);
 		}
 
 		// Loaded venue modules — same complete-snapshot discipline.
@@ -258,8 +294,7 @@ final class VenueBootstrapMaterializer {
 	 */
 	static void materialiseAdapterInfo(Engine engine, AAdapter adapter) {
 		VenueBootstrapMaterializer materializer = new VenueBootstrapMaterializer(engine);
-		materializer.writeAndValidateVenuePath(
-			"v/info/adapters/" + adapter.getName(), materializer.adapterSummary(adapter));
+		materializer.writeAdapterOwnedRecords(adapter);
 		materializer.publish();
 	}
 

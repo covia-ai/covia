@@ -764,6 +764,28 @@ public class OperationResolutionTest {
 	}
 
 	@Test
+	public void testAdapterOwnedSubtreeMirrorsCatalog() {
+		// The adapter's own subtree is a first-class address for the same values
+		assertEquals(engine.resolvePath(Strings.create("v/ops/json/merge"), alice),
+			engine.resolvePath(Strings.create("v/adapters/json/ops/merge"), alice),
+			"v/adapters/<name>/ops/<op> holds the same metadata as v/ops/<name>/<op>");
+		assertEquals(engine.resolvePath(Strings.create("v/test/ops/echo"), alice),
+			engine.resolvePath(Strings.create("v/adapters/test/ops/echo"), alice));
+		assertEquals(engine.resolvePath(Strings.create("v/info/adapters/dlfs"), alice),
+			engine.resolvePath(Strings.create("v/adapters/dlfs/info"), alice));
+		assertNotNull(engine.resolvePath(Strings.create("v/adapters/agent/templates/worker"), alice), "templates mirror");
+		assertNotNull(engine.resolvePath(Strings.create("v/adapters/grid/skills/grid"), alice), "an adapter's skill under its subtree");
+		assertNotNull(engine.resolvePath(Strings.create("v/adapters/skills/skills/covia"), alice), "platform skills under the skills adapter");
+		assertNotNull(engine.resolvePath(Strings.create("v/adapters/dlfs/config"), alice), "config is always present");
+		// ...and invocable by that address
+		Job job = engine.jobs().invokeOperation("v/adapters/test/ops/echo", Maps.of("ping", "pong"), alice);
+		assertEquals(Maps.of("ping", "pong"), job.awaitResult(5000));
+		// The canonical listings do not double-count the mirror
+		ACell adaptersInfo = engine.resolvePath(Strings.create("v/info/adapters/json"), alice);
+		assertFalse(adaptersInfo.toString().contains("v/adapters/"), "operations list stays canonical: " + adaptersInfo);
+	}
+
+	@Test
 	public void testVenueInfoUrlAndWebdavArePublished() {
 		ACell url = engine.resolvePath(Strings.create("v/info/url"), alice);
 		assertEquals(Strings.create(engine.config().getBaseUrl()), url,
