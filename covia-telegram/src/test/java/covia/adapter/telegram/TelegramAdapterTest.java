@@ -158,6 +158,12 @@ public class TelegramAdapterTest {
 		assertNotNull(reply, "the bot must answer an allowed user");
 		assertEquals(chat, reply.chatId());
 		assertTrue(reply.text().contains("hello from telegram"), "echo agent reply: " + reply.text());
+		// The echo LLM returns the message it received: the agent sees who is on
+		// the other end as structure (Telegram's from/chat), not just the text.
+		assertTrue(reply.text().contains("\"username\":\"alice\"") || reply.text().contains("\"username\": \"alice\""),
+			"agent message carries the Telegram sender: " + reply.text());
+		assertTrue(reply.text().contains("\"channel\":\"telegram\"") || reply.text().contains("\"channel\": \"telegram\""), reply.text());
+		assertTrue(reply.text().contains("\"access\":\"allow\"") || reply.text().contains("\"access\": \"allow\""), reply.text());
 		assertNull(reply.parseMode(), "plain text by default");
 		assertNotNull(reply.replyTo(), "answers reply to the inbound message");
 

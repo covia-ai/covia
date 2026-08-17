@@ -921,7 +921,12 @@ Per bot:
 - `agent` **or** `operation` — the **inbound handler**. With `agent`, each
   Telegram chat is one `agent:chat` session, persisted at
   `w/telegram/sessions/<bot>/<chatId>` in the user's workspace so
-  conversations survive restarts; `/new` starts a fresh one. With
+  conversations survive restarts; `/new` starts a fresh one. The agent
+  receives each turn as `{text, via: {channel: "telegram", bot, access:
+  "allow" | "open", from, chat, message_id}}` — Telegram's authenticated
+  `from`/`chat` verbatim — so it knows who is on the other end without
+  trusting anything typed; the venue's own "[Authenticated sender: …]" line
+  still names the bot's Covia identity. With
   `operation`, every update invokes that reference with the **Telegram
   `Update` exactly as sent** — snake_case, `message` / `edited_message` /
   `callback_query` / … nested as Telegram nests them (a photo arrives as

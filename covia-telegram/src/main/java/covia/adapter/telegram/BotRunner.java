@@ -94,6 +94,12 @@ final class BotRunner {
 	static final AString K_FAILED = Strings.intern("failed");
 	static final AString K_MANAGED = Strings.intern("managed");
 	private static final AString K_BOT = Strings.intern("bot");
+	private static final AString K_VIA = Strings.intern("via");
+	private static final AString K_CHANNEL = Strings.intern("channel");
+	private static final AString K_ACCESS = Strings.intern("access");
+	private static final AString K_FROM = Strings.intern("from");
+	private static final AString K_CHAT = Strings.intern("chat");
+	private static final AString K_MESSAGE_ID = Strings.intern("message_id");
 
 	enum State { STARTING, PENDING, RUNNING, STOPPED }
 
@@ -479,7 +485,7 @@ final class BotRunner {
 		Long chatId = m.chat().id();
 		try {
 			typing(chatId, m);
-			String reply = TelegramAdapter.renderText(chatAgent(chatId, text));
+			String reply = TelegramAdapter.renderText(chatAgent(chatId, agentMessage(m, text)));
 			if (reply == null || reply.isBlank()) reply = "(no response)";
 			send(chatId, reply, spec.parseMode(), m.messageId(), threadOf(m), false);
 		} catch (Throwable t) {
@@ -515,12 +521,36 @@ final class BotRunner {
 		return record.assoc(K_BOT, Strings.create(spec.name()));
 	}
 
-	private ACell chatAgent(Long chatId, String text) {
+	/**
+	 * The chat message an agent receives: the text plus, as structure it cannot
+	 * mistake for typed text, who is on the other end — Telegram's own {@code from}
+	 * and {@code chat} objects (authenticated by Telegram, admitted by this bot's
+	 * allow-list or its {@code open} setting), the bot, and the message id. The
+	 * framework's own "[Authenticated sender: …]" line names the bot's Covia
+	 * identity; this names the human.
+	 */
+	AMap<AString, ACell> agentMessage(Message m, String text) {
+		AMap<AString, ACell> via = Maps.of(
+			K_CHANNEL, Strings.create("telegram"),
+			K_BOT, Strings.create(spec.name()),
+			K_ACCESS, Strings.create(spec.open() ? "open" : "allow"));
+		if (m.from() != null) via = via.assoc(K_FROM, telegramCell(m.from()));
+		if (m.chat() != null) via = via.assoc(K_CHAT, telegramCell(m.chat()));
+		if (m.messageId() != null) via = via.assoc(K_MESSAGE_ID, CVMLong.create(m.messageId()));
+		return Maps.of(Fields.TEXT, Strings.create(text), K_VIA, via);
+	}
+
+	/** A pengrad model object as Telegram's JSON (snake_case), as a cell. */
+	private static ACell telegramCell(Object model) {
+		return JSON.parse(BotUtils.toJson(model));
+	}
+
+	private ACell chatAgent(Long chatId, ACell message) {
 		RequestContext ctx = context();
 		String sid = sessionFor(chatId, ctx);
 		AMap<AString, ACell> input = Maps.of(
 			Fields.AGENT_ID, Strings.create(spec.agent()),
-			Fields.MESSAGE, Strings.create(text));
+			Fields.MESSAGE, message);
 		if (sid != null) input = input.assoc(Fields.SESSION_ID, Strings.create(sid));
 		ACell result;
 		try {
