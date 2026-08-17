@@ -117,6 +117,7 @@ The module ships the `telegram` agent skill at `v/skills/telegram` (present exac
 | Bot silent in a group | BotFather privacy mode: `/setprivacy` → Disable, or mention the bot / use commands. |
 | Operation bot replies with raw JSON | That is the result rendered; set `reply` to a fixed string or `false`, or have the mapping op return `{text: …}`. |
 | Reply says *Unknown session* once, then works | The persisted session was deleted (agent recreated) — the bot recovers by starting a new one. |
+| Bot replies *⚠️ … Agent is suspended* (after a *Transition failed* notice) | The agent tripped on an internal error and the framework suspended it (persisted — survives restarts). Fix the cause if there is one, then `agent_resume agentId=<id>` (`v/ops/agent/resume`); the bot works again at once. |
 | `send` fails with *Access denied* | Caller is not the bot's user; use that identity or a `telegram/send` delegation. |
 | Replies stop after `adapter/disable` | By design — a disabled adapter is offline; Telegram redelivers the backlog on enable. |
 | Bot vanished after restart | A config bot added with `adapter/configure` is not persisted — put it in the venue config. Created bots do come back (`w/telegram/bots`); if one did not, the venue log says why it was skipped. |
