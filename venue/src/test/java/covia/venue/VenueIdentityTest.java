@@ -156,7 +156,7 @@ public class VenueIdentityTest {
 
 	// ========== Verification through the identity ==========
 
-	// Convex 0.8.12 supplies the released UCAN profile and explicit JWT key-ID
+	// Convex 0.8.13 supplies the released UCAN profile and explicit JWT key-ID
 	// APIs needed by covia#322/#352. Pin both signature resolution and the
 	// ucan:issue → ucan:verify round-trip under the declared did:web identity.
 

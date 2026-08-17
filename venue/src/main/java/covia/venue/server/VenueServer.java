@@ -47,6 +47,7 @@ import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.LocalVenue;
 import convex.dlfs.DLFSDriveManager;
+import convex.dlfs.DLFSDrives;
 import convex.dlfs.DLFSWebDAV;
 import covia.adapter.DLFSAdapter;
 import covia.venue.api.A2A;
@@ -647,7 +648,10 @@ public class VenueServer {
 		// Unauthenticated requests use the venue's public DID (must match
 		// AuthMiddleware's ":public" suffix so WebDAV and REST share a drive).
 		String publicDID = engine.getDIDString().toString() + ":public";
-		DLFSDriveManager webdavManager = new DLFSDriveManager() {
+		// Convex 0.8.13 removed the no-arg DLFSDriveManager (router) constructor;
+		// give the base an empty in-memory registry — every drive access is
+		// overridden below to delegate to the dlfs adapter, so the base store is unused.
+		DLFSDriveManager webdavManager = new DLFSDriveManager(DLFSDrives.create()) {
 			private String resolveIdentity(String identity) {
 				return (identity != null) ? identity : publicDID;
 			}

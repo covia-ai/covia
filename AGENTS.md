@@ -59,7 +59,7 @@ covia/                          # ai.covia:covia (parent POM)
 
 - **Java 21+** (JDK; the published Docker image runs on Java 25)
 - **Maven 3.7+** (enforced by maven-enforcer-plugin)
-- **Convex 0.8.12** — released artifacts resolve directly from Maven Central, including the explicit JWT `kid` API required by #352. No sibling Convex checkout or source build is required.
+- **Convex 0.8.13** — released artifacts resolve directly from Maven Central, including the explicit JWT `kid` API required by #352. No sibling Convex checkout or source build is required.
 
 ## Build & Run
 
@@ -99,7 +99,7 @@ mvn test -pl covia-core
 
 | Dependency | Version | Purpose |
 |------------|---------|---------|
-| Convex | 0.8.12 | Lattice platform, immutable data, cryptography |
+| Convex | 0.8.13 | Lattice platform, immutable data, cryptography |
 | Javalin | 7.2.2 | HTTP server with OpenAPI/Swagger/ReDoc |
 | LangChain4j | 1.18.1 | LLM orchestration (OpenAI, Ollama, Gemini, DeepSeek) |
 | MCP SDK | 2.0.0 | Model Context Protocol |

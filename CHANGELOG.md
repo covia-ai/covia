@@ -25,6 +25,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Changed
 
+- Convex dependency bumped to `0.8.13`. Adapts to its removal of the no-arg `DLFSDriveManager` constructor: the WebDAV manager now passes an empty `DLFSDrives.create()` registry to `super(…)` (every drive access is already overridden to delegate to the `dlfs` adapter, so the base store is unused)
 - Skills sources are maybe-style: unresolved sources no longer produce create-response warnings or agent-context noise; source diagnostics render only on the `skills:list` inspection surface
 
 ### Fixed
