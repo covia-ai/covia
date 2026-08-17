@@ -465,7 +465,7 @@ public class TelegramAdapterTest {
 			"mirrored in the adapter's own subtree");
 		ACell cfg = RT.getIn(template, "agent", "config");
 		assertTrue(RT.getIn(cfg, "systemPrompt").toString().contains("via.from"), "the prompt teaches via");
-		assertTrue(RT.getIn(cfg, "skills").toString().contains("v/skills/telegram"));
+		assertTrue(RT.getIn(cfg, "skills").toString().contains("v/skills"), "the whole venue index, so nothing is invisible");
 		assertTrue(RT.getIn(cfg, "tools").toString().contains("v/ops/memory"), "memory is a base tool");
 		assertNotNull(RT.getIn(cfg, "context"), "memory is pinned into context");
 
