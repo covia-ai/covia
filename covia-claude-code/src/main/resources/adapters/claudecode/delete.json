@@ -1,0 +1,30 @@
+{
+	"name": "Delete a Claude Code project",
+	"description": "Removes a runtime-created project (its live processes are stopped; Claude Code's session transcripts on disk are untouched). Venue authority (claudecode/manage). Config-declared projects are removed in the venue config or with v/ops/venue/adapter/configure, not here.",
+	"operation": {
+		"adapter": "claudecode:delete",
+		"input": {
+			"type": "object",
+			"properties": {
+				"name": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"name"
+			],
+			"additionalProperties": false
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"name": {
+					"type": "string"
+				},
+				"deleted": {
+					"type": "boolean"
+				}
+			}
+		}
+	}
+}

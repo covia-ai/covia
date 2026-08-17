@@ -998,6 +998,127 @@ with state (`STARTING`, `PENDING`, `RUNNING`, `STOPPED`), Telegram username,
 last error and counters, tokens never included. The module ships a
 `telegram` agent skill (`v/skills/telegram`).
 
+### Claude Code (covia-claude-code)
+
+The **covia-claude-code** module (`claudecode` adapter) lets agents and jobs
+drive the [Claude Code](https://claude.com/claude-code) CLI in
+operator-authorised directories. It runs the `claude` executable of the
+venue's own OS user, so it authenticates exactly as that user's `claude`
+does — a Claude subscription login (Max/Pro), a `claude setup-token`
+long-lived token, or an API key. Executing a coding agent on the host is a
+serious capability, so the module is opt-in (not in `covia.jar`) and every
+run is pinned to a **project**: a directory the operator has named.
+
+```json
+{
+  "modules": ["modules/covia-claude-code-<version>-module.jar"],
+  "adapters": {
+    "claudecode": {
+      "command": "claude",
+      "env": { "CLAUDE_CODE_OAUTH_TOKEN": "s/CLAUDE_CODE_OAUTH_TOKEN" },
+      "maxSessions": 4,
+      "idleSeconds": 900,
+      "defaults": { "model": "sonnet", "permissionMode": "acceptEdits", "maxTurns": 40 },
+      "projects": {
+        "covia": {
+          "path": "/srv/projects/covia",
+          "user": "did:key:z6Mk...",
+          "description": "The Covia monorepo",
+          "options": { "allowedTools": ["Read", "Edit", "Bash(git *)", "Bash(mvn *)"] }
+        },
+        "docs": { "path": "/srv/projects/docs", "user": "public" }
+      }
+    }
+  }
+}
+```
+
+Adapter settings:
+
+- `command` — the `claude` executable (a string) or a full argv array
+  (default `"claude"`). The module always appends the headless
+  stream-json flags; a run's options add the rest.
+- `env` — environment for every `claude` process, values may be `s/NAME`
+  secret references (resolved in the venue store). This is where a headless
+  venue provides `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) or an
+  `ANTHROPIC_API_KEY`. On a machine with an interactive `claude` login,
+  nothing is needed — the subscription login is used. `ANTHROPIC_API_KEY`
+  takes precedence over a subscription login, so set it only when API
+  billing is intended. `COVIA_VENUE_DID` and `COVIA_PROJECT` are always
+  exported.
+- `defaults` — Claude Code options applied to every run (a project and then
+  the call override them); see the option list below.
+- `maxSessions` — the cap on live `claude` processes (each ≈400 MB). When a
+  new session needs a slot and the cap is reached, the least-recently-used
+  idle process is stopped; if all are busy, the new run waits. Default `4`.
+- `idleSeconds` — a warm process with no activity for this long is stopped
+  (its session stays resumable). `0` keeps processes until explicitly
+  stopped. Default `900`.
+
+Per project:
+
+- `path` — an existing directory; Claude Code's working directory. A caller
+  never chooses a directory, only a project name.
+- `user` — the DID that owns the project: that user and their agents may run
+  in it (`<owner>/claudecode/<project>` × `claudecode/run`), anyone else
+  needs a delegation from them. `"public"` names the venue's public
+  principal (a local dev venue's default identity); `"venue"` (the default)
+  the venue identity itself.
+- `description`, `options` — a human/agent-facing description and
+  project-level Claude Code options overlaying the adapter defaults.
+
+Sessions and processes are distinct. A **session** is a Claude Code
+conversation; Claude Code writes every turn to its own transcript on disk,
+so a session outlives its process and is continued with `--resume`. A
+**process** is a warm cache kept between turns (unless a run sets
+`keepAlive: false`), reaped by the pool, and respawned transparently on the
+session's next turn — so a caller only ever sees a slightly slower reply,
+never lost context, even across a venue restart.
+
+Operations:
+
+- `v/ops/claudecode/run {project?, prompt, session?, …options}` — one turn
+  as one Job. Completes with `{result, structured?, session, project,
+  subtype, isError, turns, costUsd, durationMs, model, permissionDenials}`.
+  Pass `session` (from a previous result) to continue that conversation.
+  While running, the job carries `progress {toolCalls, lastTool, text,
+  session, model}`. A turn Claude Code reports as an error (`error_max_turns`,
+  `error_max_budget_usd`, `error_during_execution`) **fails** the Job with
+  the reason and the session id to resume. `project` may be omitted when the
+  caller can use exactly one project or `session` names a known one.
+- `v/ops/claudecode/session {project?, prompt?, session?, …options}` — a
+  long-lived conversation as one Job (for clients that hold a job handle:
+  REST/SSE, A2A). It runs the optional first `prompt`, then waits in
+  `INPUT_REQUIRED` with the latest reply as its output; each message posted
+  to the job (`{content}` / `{prompt}`) is the next turn, `{end: true}`
+  finishes it. Restored after a restart, it resumes from the session id on
+  its job record.
+- `v/ops/claudecode/sessions {project?}` — the sessions this venue knows in
+  projects the caller may use (live and recently stopped; all resumable).
+- `v/ops/claudecode/stop {session}` — stop a session's live process (the
+  conversation is kept on disk).
+- `v/ops/claudecode/projects` — the projects the caller may run in.
+- `v/ops/claudecode/create {name, path, user?, description?, options?}` /
+  `v/ops/claudecode/delete {name}` — the runtime project registry. Both need
+  **venue authority** (`<venueDID>/claudecode/projects` × `claudecode/manage`
+  — call as the venue or present a venue-issued delegation), because naming a
+  directory the venue's OS user may execute code in is an operator decision.
+  Runtime projects are recorded at `w/claudecode/projects/<name>` in the
+  venue workspace and re-armed at every start; config-declared projects are
+  the operator's (create/delete refuse them).
+
+Per-call / project / default options (all optional): `model`,
+`fallbackModel`, `effort`, `permissionMode` (`default` denies anything that
+would prompt — there is nobody to answer in a headless run; `acceptEdits`,
+`plan`, …; `bypassPermissions` is only allowed in a project configured with
+it), `allowedTools`, `disallowedTools`, `tools`, `maxTurns`, `maxBudgetUsd`,
+`appendSystemPrompt`, `systemPrompt`, `jsonSchema` (→ validated `structured`
+output), `agent`, `keepAlive`. **Operator-only** options (a project or the
+adapter, never a call): `addDirs`, `mcpConfig`, `strictMcpConfig`,
+`settings`, `env`. The module ships a `claudecode` agent skill
+(`v/skills/claudecode`). Jobs have no framework timeout — a Claude Code run
+may take many minutes; clients poll and reconnect by job id.
+
 ## Runtime adapter lifecycle
 
 ```json

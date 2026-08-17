@@ -31,6 +31,8 @@ covia/                          # ai.covia:covia (parent POM)
 │                               #   shaded "module" jar loaded via config, not in covia.jar)
 ├── covia-telegram/             # Telegram bot venue module (operator-declared bots →
 │                               #   agents/operations, telegram:send; shaded "module" jar)
+├── covia-claude-code/          # Claude Code CLI venue module (runs/resumable sessions in
+│                               #   authorised project dirs; shaded "module" jar, not in covia.jar)
 ├── workbench/                  # Minimal Swing GUI REPL for demo/testing
 │   └── src/main/java/covia/gui/  Bench, ReplPanel, LAF
 ├── .claude/                    # Claude Code config (settings.json tracked; rest gitignored)

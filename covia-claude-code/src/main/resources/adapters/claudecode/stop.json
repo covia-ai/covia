@@ -1,0 +1,38 @@
+{
+	"name": "Stop a Claude Code process",
+	"description": "Stops the live process behind a session (freeing its ~400 MB). The conversation is kept by Claude Code on disk: the next claudecode:run with this 'session' resumes it on a fresh process. If a turn is running it is interrupted (its job fails). Same authorisation as claudecode:run for the session's project.",
+	"operation": {
+		"adapter": "claudecode:stop",
+		"input": {
+			"type": "object",
+			"properties": {
+				"session": {
+					"type": "string",
+					"description": "Session id"
+				}
+			},
+			"required": [
+				"session"
+			],
+			"additionalProperties": false
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"session": {
+					"type": "string"
+				},
+				"project": {
+					"type": "string"
+				},
+				"state": {
+					"type": "string"
+				},
+				"stopped": {
+					"type": "boolean",
+					"description": "Whether a live process was actually stopped"
+				}
+			}
+		}
+	}
+}

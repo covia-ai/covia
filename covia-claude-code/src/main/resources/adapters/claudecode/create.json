@@ -1,0 +1,53 @@
+{
+	"name": "Create a Claude Code project",
+	"description": "Registers a directory as a Claude Code project at runtime. Venue authority is required (claudecode/manage on <venueDID>/claudecode/projects — call as the venue or present a venue-issued delegation): naming a directory the venue's own OS user may execute code in is an operator decision. 'user' names who owns the project (that user and their agents may run in it; others need a delegation from them) — a DID, 'public' (the venue's public principal) or 'venue'; it defaults to the caller. The project is recorded at w/claudecode/projects/<name> in the venue workspace and re-armed at every start. Config-declared projects cannot be created or replaced this way.",
+	"operation": {
+		"adapter": "claudecode:create",
+		"input": {
+			"type": "object",
+			"properties": {
+				"name": {
+					"type": "string",
+					"description": "Project name [A-Za-z0-9_-]+"
+				},
+				"path": {
+					"type": "string",
+					"description": "Absolute path of an existing directory — Claude Code's working directory"
+				},
+				"user": {
+					"type": "string",
+					"description": "Owner: a DID, 'public' or 'venue' (default: the caller)"
+				},
+				"description": {
+					"type": "string"
+				},
+				"options": {
+					"type": "object",
+					"description": "Project-level Claude Code options (model, permissionMode, allowedTools, disallowedTools, tools, maxTurns, maxBudgetUsd, appendSystemPrompt, systemPrompt, effort, addDirs, mcpConfig, strictMcpConfig, settings, keepAlive, env) overlaying the adapter defaults; env values may be s/NAME secret references"
+				}
+			},
+			"required": [
+				"name",
+				"path"
+			],
+			"additionalProperties": false
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"name": {
+					"type": "string"
+				},
+				"path": {
+					"type": "string"
+				},
+				"user": {
+					"type": "string"
+				},
+				"managed": {
+					"type": "string"
+				}
+			}
+		}
+	}
+}

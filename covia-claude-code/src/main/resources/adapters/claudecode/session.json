@@ -1,0 +1,163 @@
+{
+	"name": "Claude Code session",
+	"description": "Opens a long-lived conversation with Claude Code in a project as one Job. The job runs the optional first 'prompt', then waits in INPUT_REQUIRED with the reply as its output; every message sent to the job ({\"content\": \"...\"} — or {\"prompt\": ...}) is the next turn, and {\"end\": true} finishes it (completing with a summary). Between turns the process stays warm (subject to the pool's idle timeout and live cap) and is respawned transparently — the conversation lives in Claude Code's own session on disk, so it survives reaps and even venue restarts. Use this from clients that hold a job handle (REST/SSE, A2A); an agent using Claude Code as a tool should call claudecode:run with 'session' instead. Same authorisation as claudecode:run.",
+	"operation": {
+		"adapter": "claudecode:session",
+		"input": {
+			"type": "object",
+			"properties": {
+				"prompt": {
+					"type": "string",
+					"description": "First turn (optional: without it the job opens the session and waits for input)"
+				},
+				"project": {
+					"type": "string",
+					"description": "Project name. Optional when you can use exactly one project, or when 'session' names a known session."
+				},
+				"session": {
+					"type": "string",
+					"description": "Resume an existing Claude Code session in this job"
+				},
+				"model": {
+					"type": "string",
+					"description": "Model alias or full name (e.g. sonnet, opus, fable, claude-fable-5). Defaults to the project's / adapter's default, else Claude Code's own."
+				},
+				"fallbackModel": {
+					"type": "string",
+					"description": "Model to fall back to when the primary is overloaded or unavailable"
+				},
+				"effort": {
+					"type": "string",
+					"enum": [
+						"low",
+						"medium",
+						"high",
+						"xhigh",
+						"max"
+					],
+					"description": "Effort level for the session"
+				},
+				"permissionMode": {
+					"type": "string",
+					"enum": [
+						"default",
+						"acceptEdits",
+						"auto",
+						"dontAsk",
+						"manual",
+						"plan",
+						"bypassPermissions"
+					],
+					"description": "Claude Code permission mode. Headless runs have nobody to answer prompts, so 'default' denies anything that would ask; 'acceptEdits' auto-approves file edits; 'plan' is read-only planning. 'bypassPermissions' is only allowed when the project itself is configured with it."
+				},
+				"allowedTools": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"description": "Tools pre-approved without prompting, e.g. [\"Read\", \"Edit\", \"Bash(git *)\"]"
+				},
+				"disallowedTools": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"description": "Tools denied, e.g. [\"WebSearch\", \"Bash(rm *)\"]"
+				},
+				"tools": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"description": "Restrict the built-in tool set, e.g. [\"Read\", \"Grep\", \"Glob\"] for a read-only run; [] disables all tools"
+				},
+				"maxTurns": {
+					"type": "integer",
+					"minimum": 1,
+					"description": "Maximum agentic turns for the run; when reached the job fails with error_max_turns and a resumable session id"
+				},
+				"maxBudgetUsd": {
+					"type": "number",
+					"description": "Maximum API spend for the run in USD (informational under a subscription login)"
+				},
+				"appendSystemPrompt": {
+					"type": "string",
+					"description": "Text appended to Claude Code's default system prompt — instructions, conventions, constraints"
+				},
+				"systemPrompt": {
+					"type": "string",
+					"description": "Replace Claude Code's system prompt entirely (rarely wanted; prefer appendSystemPrompt)"
+				},
+				"jsonSchema": {
+					"type": "object",
+					"description": "JSON Schema for structured output; the result then carries 'structured' (the validated object) as well as 'result' (its JSON text). Needs at least 2 turns."
+				},
+				"agent": {
+					"type": "string",
+					"description": "A Claude Code agent (from the project's .claude/agents) to run as"
+				},
+				"keepAlive": {
+					"type": "boolean",
+					"description": "Keep the process warm after the turn for fast follow-ups (default true; the pool reaps idle processes after idleSeconds and caps live ones at maxSessions). false: the process exits after this turn; the session is still resumable."
+				},
+				"options": {
+					"type": "object",
+					"description": "The same per-call options as an object"
+				}
+			},
+			"required": [],
+			"additionalProperties": false
+		},
+		"output": {
+			"type": "object",
+			"description": "While waiting for input: the latest turn's result (as claudecode:run). When ended: {project, session, turns, ended: true}.",
+			"properties": {
+				"result": {
+					"type": "string",
+					"description": "Claude Code's final text for the turn"
+				},
+				"structured": {
+					"type": "object",
+					"description": "Validated structured output when jsonSchema was given"
+				},
+				"session": {
+					"type": "string",
+					"description": "Claude Code session id — pass as 'session' to continue this conversation"
+				},
+				"project": {
+					"type": "string"
+				},
+				"subtype": {
+					"type": "string",
+					"description": "success, or an error kind (error_max_turns, error_max_budget_usd, error_during_execution)"
+				},
+				"isError": {
+					"type": "boolean"
+				},
+				"turns": {
+					"type": "integer",
+					"description": "Agentic turns used"
+				},
+				"costUsd": {
+					"type": "number"
+				},
+				"durationMs": {
+					"type": "integer"
+				},
+				"model": {
+					"type": "string"
+				},
+				"stopReason": {
+					"type": "string"
+				},
+				"permissionDenials": {
+					"type": "array",
+					"description": "Tool uses Claude Code refused under the permission mode — if a task could not be finished because of these, widen allowedTools or the mode"
+				},
+				"ended": {
+					"type": "boolean"
+				}
+			}
+		}
+	}
+}

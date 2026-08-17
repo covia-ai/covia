@@ -1,0 +1,57 @@
+{
+	"name": "List Claude Code sessions",
+	"description": "The Claude Code sessions this venue knows about (live processes and recently stopped ones) in projects you may use: session id, project, state (NEW, BUSY, IDLE, STOPPED), whether a process is live, turns completed, idle time, model, who started it. Any stopped session can be continued by passing its id as 'session' to claudecode:run.",
+	"operation": {
+		"adapter": "claudecode:sessions",
+		"input": {
+			"type": "object",
+			"properties": {
+				"project": {
+					"type": "string",
+					"description": "Only this project's sessions"
+				}
+			},
+			"additionalProperties": false
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"sessions": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"properties": {
+							"session": {
+								"type": "string"
+							},
+							"project": {
+								"type": "string"
+							},
+							"state": {
+								"type": "string"
+							},
+							"live": {
+								"type": "boolean"
+							},
+							"turns": {
+								"type": "integer"
+							},
+							"idleSeconds": {
+								"type": "integer"
+							},
+							"model": {
+								"type": "string"
+							},
+							"startedBy": {
+								"type": "string"
+							},
+							"pid": {
+								"type": "integer"
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}

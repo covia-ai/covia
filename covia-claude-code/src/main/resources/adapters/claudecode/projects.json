@@ -1,0 +1,51 @@
+{
+	"name": "List Claude Code projects",
+	"description": "The projects (directories Claude Code may run in) you are allowed to use, with path, owner, description, effective options and how many live sessions each has. Projects are declared by the venue operator (adapters.claudecode.projects) or created with claudecode:create by a caller with venue authority — you cannot choose a directory yourself.",
+	"operation": {
+		"adapter": "claudecode:projects",
+		"input": {
+			"type": "object",
+			"properties": {},
+			"additionalProperties": false
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"projects": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"properties": {
+							"name": {
+								"type": "string"
+							},
+							"path": {
+								"type": "string"
+							},
+							"user": {
+								"type": "string",
+								"description": "Owner DID"
+							},
+							"description": {
+								"type": "string"
+							},
+							"managed": {
+								"type": "string",
+								"enum": [
+									"config",
+									"runtime"
+								]
+							},
+							"options": {
+								"type": "object"
+							},
+							"liveSessions": {
+								"type": "integer"
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}

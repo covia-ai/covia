@@ -1,0 +1,16 @@
+{
+	"name": "claudecode",
+	"description": "Delegate coding and repository work to Claude Code — a full coding agent that reads and edits files, runs commands and git in a venue-authorised project directory — and continue its conversations across turns. Load when a task involves changing, building, testing, reviewing or exploring code in a project the venue hosts.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Claude Code\nThe venue can run Claude Code (Anthropic's coding agent) in named **projects** — directories the operator has authorised. You never pick a directory: `projects {}` lists what you may use.\n\nOps:\n- run `{project?, prompt, session?, model?, maxTurns?, allowedTools?, appendSystemPrompt?, jsonSchema?, keepAlive?}` — one turn; returns `{result, session, turns, costUsd, permissionDenials, structured?}`. Omit `project` when you have exactly one.\n- run with `session: <id from a previous result>` — continue that conversation with full context (files it read, what it changed, what it concluded). Use this for multi-step work instead of re-explaining.\n- sessions `{project?}` — conversations this venue knows (live or stopped; all resumable). stop `{session}` — free a live process (the conversation is kept).\n\nHow to prompt it:\n- Give one complete, self-contained task per turn with the acceptance criterion: \"Add a unit test for the retry path in Foo.java, run the module's tests, and report the outcome and the diff.\" It cannot ask you questions mid-turn.\n- Ask for what you need back in the answer (a summary, a diff, a file list, a yes/no) — `result` is its final message. For machine-readable answers pass `jsonSchema` and read `structured`.\n- Long jobs are normal (minutes). Set `maxTurns` for bounded exploration; if the job fails with error_max_turns the message carries the session id — resume it to let it finish.\n- `permissionDenials` non-empty means it wanted a tool the permission mode did not allow — say so, or retry with a wider `allowedTools` if the project permits.\n\nRules:\n- Do not paste large file contents into prompts; Claude Code reads the project itself. Point it at paths.\n- Report its `result` faithfully to your user, including anything it says it could not do; do not claim work was done that its result does not confirm.\n- Prefer resuming a session over starting a new one for follow-ups on the same task; start fresh for unrelated tasks."
+	},
+	"skill": {
+		"tools": [
+			"v/ops/claudecode/run",
+			"v/ops/claudecode/sessions",
+			"v/ops/claudecode/stop",
+			"v/ops/claudecode/projects"
+		]
+	}
+}

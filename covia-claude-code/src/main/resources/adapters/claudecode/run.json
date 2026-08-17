@@ -1,0 +1,161 @@
+{
+	"name": "Run Claude Code",
+	"description": "Runs one Claude Code turn in a venue-authorised project directory and returns its result. Claude Code is a full coding agent: it reads and edits files, runs commands, uses git and its own tools in that directory, so a prompt should be a complete, self-contained task ('add a unit test for X and run it', 'summarise what changed in the last 5 commits', 'fix the failing build and report the diff'). Pass 'session' (from a previous result) to continue the same conversation with full context — Claude Code keeps every session on disk, so a session outlives its process. While running, the job carries 'progress' {toolCalls, lastTool, text, session, model} so watchers see what Claude Code is doing. A turn Claude Code reports as an error (max turns, budget, execution error) fails the job with the reason and the session id to resume. Requires claudecode/run on <project owner>/claudecode/<project>: the project's user (and their agents, within scope) may run; others need a delegation from that user.",
+	"operation": {
+		"adapter": "claudecode:run",
+		"input": {
+			"type": "object",
+			"properties": {
+				"prompt": {
+					"type": "string",
+					"description": "What Claude Code should do — a complete, self-contained instruction for this turn"
+				},
+				"project": {
+					"type": "string",
+					"description": "Project name (see claudecode:projects). Optional when you can use exactly one project, or when 'session' names a session this venue knows."
+				},
+				"session": {
+					"type": "string",
+					"description": "Session id from a previous result — continue that conversation (Claude Code resumes it with full context, spawning a process if it is no longer warm)"
+				},
+				"model": {
+					"type": "string",
+					"description": "Model alias or full name (e.g. sonnet, opus, fable, claude-fable-5). Defaults to the project's / adapter's default, else Claude Code's own."
+				},
+				"fallbackModel": {
+					"type": "string",
+					"description": "Model to fall back to when the primary is overloaded or unavailable"
+				},
+				"effort": {
+					"type": "string",
+					"enum": [
+						"low",
+						"medium",
+						"high",
+						"xhigh",
+						"max"
+					],
+					"description": "Effort level for the session"
+				},
+				"permissionMode": {
+					"type": "string",
+					"enum": [
+						"default",
+						"acceptEdits",
+						"auto",
+						"dontAsk",
+						"manual",
+						"plan",
+						"bypassPermissions"
+					],
+					"description": "Claude Code permission mode. Headless runs have nobody to answer prompts, so 'default' denies anything that would ask; 'acceptEdits' auto-approves file edits; 'plan' is read-only planning. 'bypassPermissions' is only allowed when the project itself is configured with it."
+				},
+				"allowedTools": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"description": "Tools pre-approved without prompting, e.g. [\"Read\", \"Edit\", \"Bash(git *)\"]"
+				},
+				"disallowedTools": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"description": "Tools denied, e.g. [\"WebSearch\", \"Bash(rm *)\"]"
+				},
+				"tools": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"description": "Restrict the built-in tool set, e.g. [\"Read\", \"Grep\", \"Glob\"] for a read-only run; [] disables all tools"
+				},
+				"maxTurns": {
+					"type": "integer",
+					"minimum": 1,
+					"description": "Maximum agentic turns for the run; when reached the job fails with error_max_turns and a resumable session id"
+				},
+				"maxBudgetUsd": {
+					"type": "number",
+					"description": "Maximum API spend for the run in USD (informational under a subscription login)"
+				},
+				"appendSystemPrompt": {
+					"type": "string",
+					"description": "Text appended to Claude Code's default system prompt — instructions, conventions, constraints"
+				},
+				"systemPrompt": {
+					"type": "string",
+					"description": "Replace Claude Code's system prompt entirely (rarely wanted; prefer appendSystemPrompt)"
+				},
+				"jsonSchema": {
+					"type": "object",
+					"description": "JSON Schema for structured output; the result then carries 'structured' (the validated object) as well as 'result' (its JSON text). Needs at least 2 turns."
+				},
+				"agent": {
+					"type": "string",
+					"description": "A Claude Code agent (from the project's .claude/agents) to run as"
+				},
+				"keepAlive": {
+					"type": "boolean",
+					"description": "Keep the process warm after the turn for fast follow-ups (default true; the pool reaps idle processes after idleSeconds and caps live ones at maxSessions). false: the process exits after this turn; the session is still resumable."
+				},
+				"options": {
+					"type": "object",
+					"description": "The same per-call options as an object (alternative to passing them at the top level)"
+				}
+			},
+			"required": [
+				"prompt"
+			],
+			"additionalProperties": false
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"result": {
+					"type": "string",
+					"description": "Claude Code's final text for the turn"
+				},
+				"structured": {
+					"type": "object",
+					"description": "Validated structured output when jsonSchema was given"
+				},
+				"session": {
+					"type": "string",
+					"description": "Claude Code session id — pass as 'session' to continue this conversation"
+				},
+				"project": {
+					"type": "string"
+				},
+				"subtype": {
+					"type": "string",
+					"description": "success, or an error kind (error_max_turns, error_max_budget_usd, error_during_execution)"
+				},
+				"isError": {
+					"type": "boolean"
+				},
+				"turns": {
+					"type": "integer",
+					"description": "Agentic turns used"
+				},
+				"costUsd": {
+					"type": "number"
+				},
+				"durationMs": {
+					"type": "integer"
+				},
+				"model": {
+					"type": "string"
+				},
+				"stopReason": {
+					"type": "string"
+				},
+				"permissionDenials": {
+					"type": "array",
+					"description": "Tool uses Claude Code refused under the permission mode — if a task could not be finished because of these, widen allowedTools or the mode"
+				}
+			}
+		}
+	}
+}

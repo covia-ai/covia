@@ -40,9 +40,12 @@ covia/
 ├── covia-sql/             # Optional loadable SQL adapter module
 │   ├── pom.xml            # Venue SPI provided; shaded module classifier
 │   └── src/               # SQL operation adapter and tests
-└── covia-telegram/        # Optional loadable Telegram bot module
-    ├── pom.xml            # Venue SPI provided; Telegram client shaded
-    └── src/               # Telegram bot adapter and tests (fake Bot API)
+├── covia-telegram/        # Optional loadable Telegram bot module
+│   ├── pom.xml            # Venue SPI provided; Telegram client shaded
+│   └── src/               # Telegram bot adapter and tests (fake Bot API)
+└── covia-claude-code/     # Optional loadable Claude Code module
+    ├── pom.xml            # Venue SPI provided; no third-party deps
+    └── src/               # Claude Code CLI adapter and tests (fake CLI)
 ```
 
 The standard venue does not depend on either Python module. A Java 21 reactor
@@ -287,7 +290,7 @@ The reactor modules are published to Maven Central under the `ai.covia`
 groupId. `ai.covia:covia-core`, `ai.covia:covia-python`, `ai.covia:venue`, and
 `ai.covia:workbench` are ordinary library artifacts (along with the
 `ai.covia:covia` parent POM). The operator-facing `covia-python-adapter`,
-`covia-sql` and `covia-telegram` artifacts are loadable venue modules rather than dependencies of
+`covia-sql`, `covia-telegram` and `covia-claude-code` artifacts are loadable venue modules rather than dependencies of
 the standard venue; their shaded `module` classifier jars are also published
 and signed. GitHub Releases remain the canonical operator download, pairing
 each module jar with its checksum. The executable `covia.jar` is an unattached
@@ -364,6 +367,8 @@ Both snapshot and stable releases include:
 - `covia-sql-<version>-module.jar.sha256` - SHA-256 checksum
 - `covia-telegram-<version>-module.jar` - Optional Telegram bot venue module
 - `covia-telegram-<version>-module.jar.sha256` - SHA-256 checksum
+- `covia-claude-code-<version>-module.jar` - Optional Claude Code venue module
+- `covia-claude-code-<version>-module.jar.sha256` - SHA-256 checksum
 
 ### Download Links
 

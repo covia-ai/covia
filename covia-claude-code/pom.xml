@@ -1,0 +1,116 @@
+<project xmlns="https://maven.apache.org/POM/4.0.0"
+	xmlns:xsi="https://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+	<parent>
+		<groupId>ai.covia</groupId>
+		<artifactId>covia</artifactId>
+		<version>0.9.2-SNAPSHOT</version>
+	</parent>
+	<artifactId>covia-claude-code</artifactId>
+
+	<name>Covia Claude Code Module</name>
+	<description>Claude Code adapter for Covia venues — lets agents and jobs drive the Claude Code CLI in operator-authorised project directories: one-shot runs, long-lived resumable sessions, and a bounded pool of live processes. Packaged as a loadable venue module (the shaded "module" classifier jar), not part of covia.jar.</description>
+
+	<properties>
+		<!-- Skip ordinary deploy-plugin publication. The Central publishing
+		     extension bundles reactor artifacts independently, including the
+		     signed shaded module classifier used by venue operators. -->
+		<maven.deploy.skip>true</maven.deploy.skip>
+	</properties>
+
+	<dependencies>
+		<!-- The venue SPI — provided by the loading venue, never bundled -->
+		<dependency>
+			<groupId>ai.covia</groupId>
+			<artifactId>venue</artifactId>
+			<version>${project.version}</version>
+			<scope>provided</scope>
+		</dependency>
+
+		<!-- Testing -->
+		<dependency>
+			<groupId>org.junit.jupiter</groupId>
+			<artifactId>junit-jupiter-api</artifactId>
+			<version>${junit.version}</version>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.junit.jupiter</groupId>
+			<artifactId>junit-jupiter-engine</artifactId>
+			<version>${junit.version}</version>
+			<scope>test</scope>
+		</dependency>
+	</dependencies>
+
+	<build>
+		<plugins>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-failsafe-plugin</artifactId>
+				<version>3.5.6</version>
+				<configuration>
+					<systemPropertyVariables>
+						<covia.module.jar>${project.build.directory}/${project.build.finalName}-module.jar</covia.module.jar>
+						<covia.venue.jar>${project.parent.basedir}/venue/target/covia.jar</covia.venue.jar>
+						<covia.test.classes>${project.build.testOutputDirectory}</covia.test.classes>
+					</systemPropertyVariables>
+				</configuration>
+				<executions>
+					<execution>
+						<goals>
+							<goal>integration-test</goal>
+							<goal>verify</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
+			<!-- The loadable module jar, attached with the "module" classifier.
+			     The module has no third-party dependencies; shading keeps the
+			     packaging identical to the other venue modules. -->
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-shade-plugin</artifactId>
+				<version>3.6.2</version>
+				<executions>
+					<execution>
+						<phase>package</phase>
+						<goals>
+							<goal>shade</goal>
+						</goals>
+						<configuration>
+							<shadedArtifactAttached>true</shadedArtifactAttached>
+							<shadedClassifierName>module</shadedClassifierName>
+							<artifactSet>
+								<excludes>
+									<!-- Host API and Convex cell/runtime identity are parent-first. -->
+									<exclude>ai.covia:venue</exclude>
+									<exclude>ai.covia:covia-core</exclude>
+									<exclude>world.convex:*</exclude>
+									<!-- Logging resolves parent-first from the venue -->
+									<exclude>org.slf4j:*</exclude>
+									<exclude>ch.qos.logback:*</exclude>
+								</excludes>
+							</artifactSet>
+							<filters>
+								<filter>
+									<artifact>*:*</artifact>
+									<excludes>
+										<exclude>module-info.class</exclude>
+										<exclude>META-INF/*.SF</exclude>
+										<exclude>META-INF/*.DSA</exclude>
+										<exclude>META-INF/*.RSA</exclude>
+										<exclude>META-INF/versions/9/module-info.class</exclude>
+									</excludes>
+								</filter>
+							</filters>
+							<transformers>
+								<transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+							</transformers>
+						</configuration>
+					</execution>
+				</executions>
+			</plugin>
+		</plugins>
+	</build>
+</project>
