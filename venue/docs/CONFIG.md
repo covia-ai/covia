@@ -925,8 +925,9 @@ Per bot:
   receives each turn as `{text, via: {channel: "telegram", bot, access:
   "allow" | "open", from, chat, message_id}}` — Telegram's authenticated
   `from`/`chat` verbatim — so it knows who is on the other end without
-  trusting anything typed; the venue's own "[Authenticated sender: …]" line
-  still names the bot's Covia identity. With
+  trusting anything typed; the venue's own "Venue attribution" system note
+  still names the bot's Covia identity (the principal that submitted the
+  turn). With
   `operation`, every update invokes that reference with the **Telegram
   `Update` exactly as sent** — snake_case, `message` / `edited_message` /
   `callback_query` / … nested as Telegram nests them (a photo arrives as

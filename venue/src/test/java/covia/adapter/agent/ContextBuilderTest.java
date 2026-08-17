@@ -532,10 +532,15 @@ public class ContextBuilderTest {
 			.withTools()
 			.build();
 
-		ACell last = result.history().get(result.history().count() - 1);
+		AVector<ACell> history = result.history();
+		ACell last = history.get(history.count() - 1);
 		String content = RT.ensureString(RT.getIn(last, K_CONTENT)).toString();
-		assertTrue(content.contains("[Authenticated sender: did:key:z6MkBob]"));
-		assertTrue(content.contains("Please review the report"));
+		assertEquals("Please review the report", content, "the user's text is never touched");
+		// Attribution is a venue-authored SYSTEM message right before the foreign turn
+		ACell before = history.get(history.count() - 2);
+		assertEquals("system", RT.getIn(before, K_ROLE).toString());
+		String note = RT.ensureString(RT.getIn(before, K_CONTENT)).toString();
+		assertTrue(note.startsWith("Venue attribution:") && note.contains("did:key:z6MkBob"), note);
 	}
 
 	@Test
@@ -568,8 +573,35 @@ public class ContextBuilderTest {
 			storedTurn, null, ALICE_DID);
 
 		assertEquals(live, persisted);
-		assertEquals("[Authenticated sender: did:key:z6MkBob]\nPlease review the report",
-			RT.getIn(live, K_CONTENT).toString());
+		assertEquals("Please review the report", RT.getIn(live, K_CONTENT).toString(),
+			"attribution is no longer spliced into user text (it is a system message from the builder)");
+	}
+
+
+	@Test
+	public void testAttributionNoteOncePerPrincipalChange() {
+		AString bob = Strings.create("did:key:z6MkBob");
+		AVector<ACell> inbox = Vectors.of(
+			(ACell) Maps.of(Fields.CALLER, bob, Fields.MESSAGE, Strings.create("first from bob")),
+			(ACell) Maps.of(Fields.CALLER, bob, Fields.MESSAGE, Strings.create("second from bob")),
+			(ACell) Maps.of(Fields.CALLER, ALICE_DID, Fields.MESSAGE, Strings.create("alice herself")),
+			(ACell) Maps.of(Fields.CALLER, bob, Fields.MESSAGE, Strings.create("bob again")));
+		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
+			.withConfig(null).withSystemPrompt().withInboxMessages(inbox).withTools().build();
+		AVector<ACell> h = result.history();
+		int notes = 0, bobNotes = 0, ownNotes = 0;
+		for (long i = 0; i < h.count(); i++) {
+			ACell m = h.get(i);
+			if (!"system".equals(RT.getIn(m, K_ROLE).toString())) continue;
+			String c = RT.ensureString(RT.getIn(m, K_CONTENT)).toString();
+			if (!c.startsWith("Venue attribution:")) continue;
+			notes++;
+			if (c.contains("z6MkBob")) bobNotes++;
+			if (c.contains("agent's own principal")) ownNotes++;
+		}
+		assertEquals(3, notes, "one note per change of submitting principal: bob, back to alice, bob again");
+		assertEquals(2, bobNotes);
+		assertEquals(1, ownNotes);
 	}
 
 	// ========== Empty state signal ==========

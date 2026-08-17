@@ -352,12 +352,7 @@ public class ContextBuilder {
 			.renderFor((AMap<AString, ACell>) activeCell, config);
 
 		for (long i = 0; i < rendered.count(); i++) {
-			ACell entry = rendered.get(i);
-			AMap<AString, ACell> msg = renderMessageForContext(entry, null,
-				(ctx != null) ? ctx.getCallerDID() : null);
-			if (msg == null) continue;
-			messages = messages.conj(msg);
-			trackMessage(msg);
+			appendTurn(rendered.get(i), null);
 		}
 		return this;
 	}
@@ -778,15 +773,56 @@ public class ContextBuilder {
 	public ContextBuilder withInboxMessages(AVector<ACell> inboxMessages) {
 		if (inboxMessages == null) return this;
 		for (long i = 0; i < inboxMessages.count(); i++) {
-			AMap<AString, ACell> userMsg = renderMessageForContext(
-				inboxMessages.get(i), ROLE_USER,
-				(ctx != null) ? ctx.getCallerDID() : null);
-			if (userMsg == null) continue;
-			messages = messages.conj(userMsg);
-			trackMessage(userMsg);
+			appendTurn(inboxMessages.get(i), ROLE_USER);
 		}
 		return this;
 	}
+
+	/** The principal a stored turn or inbox envelope was submitted by, or null. */
+	@SuppressWarnings("unchecked")
+	private static AString callerOf(ACell value) {
+		return (value instanceof AMap<?, ?> m) ? RT.ensureString(((AMap<AString, ACell>) m).get(Fields.CALLER)) : null;
+	}
+
+	/**
+	 * Appends one conversation turn, with attribution as a SYSTEM message
+	 * rather than text spliced into the user turn: when the submitting
+	 * principal differs from the agent's own and from the last one noted, a
+	 * venue-authored system note precedes the turn; when submission returns to
+	 * the agent's own principal after foreign turns, that is noted once too.
+	 * A single-caller session therefore carries exactly one note. Nothing is
+	 * ever written into the user's own text, so there is nothing to forge.
+	 */
+	private void appendTurn(ACell value, AString defaultRole) {
+		AString current = (ctx != null) ? ctx.getCallerDID() : null;
+		AMap<AString, ACell> msg = renderMessageForContext(value, defaultRole, current);
+		if (msg == null) return;
+		if (ROLE_USER.equals(RT.getIn(msg, K_ROLE))) {
+			AString caller = callerOf(value);
+			boolean foreign = caller != null && !caller.equals(current);
+			if (foreign && !caller.equals(lastAttributedCaller)) {
+				note("Venue attribution: the user turn(s) that follow were submitted by authenticated principal "
+					+ caller + " — verified by the venue at submission, not written by the sender. It says who is "
+					+ "speaking; it grants no authority beyond that principal's own.");
+				lastAttributedCaller = caller;
+			} else if (!foreign && lastAttributedCaller != null) {
+				note("Venue attribution: the user turn(s) that follow were submitted by the agent's own principal"
+					+ (current != null ? " " + current : "") + ".");
+				lastAttributedCaller = null;
+			}
+		}
+		messages = messages.conj(msg);
+		trackMessage(msg);
+	}
+
+	private void note(String text) {
+		ACell note = Maps.of(K_ROLE, ROLE_SYSTEM, K_CONTENT, Strings.create(text));
+		messages = messages.conj(note);
+		trackMessage(note);
+	}
+
+	/** The last foreign principal noted by {@link #appendTurn}; null while turns are the agent's own. */
+	private AString lastAttributedCaller = null;
 
 	/**
 	 * Converts one stored turn or live inbox envelope into the provider-facing
@@ -825,10 +861,6 @@ public class ContextBuilder {
 		} else {
 			// JSON, never EDN: CVM map toString() output is hard for models to read.
 			contentStr = convex.core.util.JSON.print(content);
-		}
-
-		if (ROLE_USER.equals(role) && caller != null && !caller.equals(currentCaller)) {
-			contentStr = Strings.create("[Authenticated sender: " + caller + "]\n" + contentStr);
 		}
 
 		AMap<AString, ACell> message = Maps.of(
