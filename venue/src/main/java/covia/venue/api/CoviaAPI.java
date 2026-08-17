@@ -12,6 +12,7 @@ import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import convex.core.data.ABlob;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -114,6 +115,10 @@ public class CoviaAPI extends ACoviaAPI {
 		// hash-form compatibility (covered by CoviaAssetRefTest).
 		routes.get(ROUTE+"assets/content/<id>", this::getContentByRef, COVIA_API);
 		routes.get(ROUTE+"assets/{id}/content", this::getContent, COVIA_API);
+		// "mine" is never a valid asset ref (hash/DID/workspace path), so — same
+		// trick as assets/content above — the static segment goes before the
+		// <id> tail wildcard, which would otherwise swallow it as id="mine".
+		routes.get(ROUTE+"assets/mine", this::getMyAssets, COVIA_API);
 		routes.get(ROUTE+"assets/<id>", this::getAsset, COVIA_API);
 		routes.put(ROUTE+"assets/{id}/content", this::putContent, COVIA_API);
 
@@ -279,9 +284,132 @@ public class CoviaAPI extends ACoviaAPI {
 
 		buildResult(ctx,result);
 	}
-	
-	@OpenApi(path = ROUTE + "assets", 
-			methods = HttpMethod.POST, 
+
+	@OpenApi(path = ROUTE + "assets/mine",
+			methods = HttpMethod.GET,
+			tags = { "Covia" },
+			summary = "List the authenticated caller's own assets — the per-user a/ namespace "
+					+ "populated by asset:store/asset:pin. Job-free (mirrors asset:list without "
+					+ "invoking an operation).",
+			operationId = "getMyAssets",
+			queryParams = {
+				@OpenApiParam(
+					name = "offset",
+					type = Long.class,
+					description = "The starting index of the assets to retrieve (0-based). Defaults to 0 if not specified.",
+					required = false,
+					example = "0"
+				),
+				@OpenApiParam(
+					name = "limit",
+					type = Long.class,
+					description = "The maximum number of assets to return. Must be non-negative and not exceed 1000. If not specified, returns the first page (up to 1000 assets).",
+					required = false,
+					example = "100"
+				)
+			},
+			responses = {
+				@OpenApiResponse(
+					status = "200",
+					description = "A JSON object with total, offset, limit, and an items array of {id, name, type, description} summaries.",
+					content = {
+						@OpenApiContent(
+							type = "application/json",
+							from = Object.class
+						)
+					}
+				),
+				@OpenApiResponse(
+					status = "401",
+					description = "Authentication required.",
+					content = {
+						@OpenApiContent(
+							type = "application/json",
+							from = ErrorResponse.class
+						)
+					}
+				)
+			})
+	protected void getMyAssets(Context ctx) {
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		AString callerDID = rctx.getCallerDID();
+		if (callerDID == null) {
+			buildError(ctx, 401, "Authentication required");
+			return;
+		}
+
+		long offset;
+		long limit;
+		try {
+			String off = ctx.queryParam("offset");
+			offset = (off != null) ? Math.max(0, Long.parseLong(off)) : 0;
+			String lim = ctx.queryParam("limit");
+			if (lim != null) {
+				limit = Long.parseLong(lim);
+				if (limit < 0) throw new BadRequestResponse("Negative limit");
+				if (limit > 1000) throw new BadRequestResponse("Too many assets requested: " + limit);
+			} else {
+				limit = 1000;
+			}
+		} catch (NumberFormatException e) {
+			buildError(ctx, 400, "Invalid offset or limit");
+			return;
+		}
+
+		try {
+			// Same capability asset:list enforces (AssetAdapter.handleList) — read
+			// authority on the caller's own namespace, not the venue-wide one.
+			engine().requireAuthority(rctx, Strings.create(""), Abilities.ASSET_READ);
+		} catch (AuthException e) {
+			buildError(ctx, 403, "Not authorised to list your assets");
+			return;
+		}
+
+		User user = engine().getVenueState().users().get(callerDID);
+		@SuppressWarnings("unchecked")
+		AMap<ABlob, AVector<?>> userAssets = (user != null) ? user.assets().getAll() : null;
+		long rawTotal = (userAssets != null) ? userAssets.count() : 0;
+
+		ArrayList<Object> items = new ArrayList<>();
+		long matched = 0;
+		long emitted = 0;
+		if (userAssets != null) {
+			for (long i = 0; i < rawTotal; i++) {
+				var entry = userAssets.entryAt(i);
+				if (entry == null) continue;
+				@SuppressWarnings("unchecked")
+				AVector<ACell> record = (AVector<ACell>) entry.getValue();
+				AMap<AString, ACell> meta = RT.ensureMap(record.get(AssetStore.POS_META));
+				if (meta == null) continue;
+
+				matched++;
+				if (matched <= offset) continue;
+				if (emitted >= limit) continue;
+
+				Hash h = Hash.wrap(entry.getKey().getBytes());
+				Map<Object, Object> summary = new HashMap<>();
+				summary.put(Fields.ID, h.toHexString());
+				AString name = RT.ensureString(meta.get(Fields.NAME));
+				summary.put(Fields.NAME, name != null ? name.toString() : null);
+				AString type = RT.ensureString(meta.get(Fields.TYPE));
+				summary.put(Fields.TYPE, type != null ? type.toString() : null);
+				AString description = RT.ensureString(meta.get(Fields.DESCRIPTION));
+				summary.put(Fields.DESCRIPTION, description != null ? description.toString() : null);
+				items.add(summary);
+				emitted++;
+			}
+		}
+
+		Map<Object, Object> result = new HashMap<>();
+		result.put(Fields.TOTAL, matched);
+		result.put(Fields.OFFSET, offset);
+		result.put(Fields.LIMIT, limit);
+		result.put(Fields.ITEMS, items);
+		buildResult(ctx, result);
+	}
+
+	@OpenApi(path = ROUTE + "assets",
+			methods = HttpMethod.POST,
 			tags = { "Covia"},
 			summary = "Add a Covia asset", 
 			requestBody = @OpenApiRequestBody(
