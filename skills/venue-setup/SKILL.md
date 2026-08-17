@@ -1,7 +1,7 @@
 ---
 name: venue-setup
 description: Set up and run a Covia venue — locally for development, on a VM for testing, or containerised for production. Covers build, config, deployment, and troubleshooting.
-argument-hint: [local|vm|docker|config]
+argument-hint: "<local|vm|docker|config>"
 ---
 
 # Venue Setup

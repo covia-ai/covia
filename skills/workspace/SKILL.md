@@ -1,7 +1,7 @@
 ---
 name: workspace
 description: Explore and manage workspace data on a Covia venue — browse paths, read/write values, understand namespace structure. Use when inspecting or manipulating venue state.
-argument-hint: [browse|read|write] [path]
+argument-hint: "<browse|read|write> <path>"
 ---
 
 # Workspace Explorer

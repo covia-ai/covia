@@ -1,7 +1,7 @@
 ---
 name: archive
 description: Work with zip and jar archive files on a Covia venue — list, extract, and create archives, and read files inside archives without unpacking. Use when an agent needs to inspect, unpack, or bundle archive files.
-argument-hint: [list|extract|zip|peek] [args]
+argument-hint: "<list|extract|zip|peek> <args>"
 ---
 
 # Archive Files (zip / jar)

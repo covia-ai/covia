@@ -1,7 +1,7 @@
 ---
 name: test-agent
 description: Create, test, and diagnose Covia agents on a live venue. Runs the full feedback loop — create agent, send task, inspect timeline, diagnose issues, propose fixes. Use for developing and debugging agent behaviour.
-argument-hint: [create|test|diagnose|reset] [agent-name]
+argument-hint: "<create|test|diagnose|reset> <agent-name>"
 ---
 
 # Agent Testing
@@ -164,7 +164,7 @@ To test strict mode in orchestrations:
 
 ## Trigger vs Request
 
-**`agent:trigger`** — Run the agent's transition loop. Always runs, even with no pending work — the agent may act proactively. When no tasks/messages are pending, the LLM receives a clear signal: "[No pending tasks, messages, or job results. You may act proactively or report idle.]"
+**`agent:trigger`** — Run the agent's transition loop. Always runs, even with no pending work — the agent may act proactively. When no tasks/messages are pending, the LLM receives a clear signal: `[No pending tasks, messages, or job results. You may act proactively or report idle.]`
 
 **`agent:request`** — Send a specific task and wait up to `timeout` milliseconds for the result. Preferred for most interactions since it gives the agent concrete input. A timeout returns a STARTED Job snapshot; fetch that Job rather than submitting the task again.
 

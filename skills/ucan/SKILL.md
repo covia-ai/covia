@@ -1,7 +1,7 @@
 ---
 name: ucan
 description: Issue and manage UCAN capability tokens — delegate access to workspace, agents, secrets, and operations. Use for demonstrating or configuring Covia's authorisation model.
-argument-hint: [issue|verify|explain]
+argument-hint: "<issue|verify|explain>"
 ---
 
 # UCAN Capability Management

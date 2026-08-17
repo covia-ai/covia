@@ -1,7 +1,7 @@
 ---
 name: asset
 description: Store, retrieve, list, and manage content-addressed assets on a Covia venue. Assets are immutable resources — operations, artifacts, agent definitions, orchestrations — identified by the SHA3-256 hash of their metadata. Use when working with any venue asset.
-argument-hint: [store|get|list|explain] [id-or-file]
+argument-hint: "<store|get|list|explain> <id-or-file>"
 ---
 
 # Assets

@@ -1,7 +1,7 @@
 ---
 name: orchestrate
 description: Create, store, and run multi-step orchestrations on a Covia venue. Chain operations with dependency management, parallel execution, and result aggregation. Use when building pipelines, workflows, or coordinating multiple agents/operations.
-argument-hint: [create|run|explain|ap-pipeline] [name]
+argument-hint: "<create|run|explain|ap-pipeline> <name>"
 ---
 
 # Orchestrations

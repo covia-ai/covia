@@ -1,7 +1,7 @@
 ---
 name: agent
 description: Create, configure, and manage Covia agents. Handles config gotchas, system prompts, LLM backend setup, and lifecycle operations. Use when working with agents on a venue.
-argument-hint: [create|list|query|reset] [agent-name]
+argument-hint: "<create|list|query|reset> <agent-name>"
 ---
 
 # Agent Management

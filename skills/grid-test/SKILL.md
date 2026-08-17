@@ -1,7 +1,7 @@
 ---
 name: grid-test
 description: Smoke test a Covia venue by running basic operations — echo, LLM, grid. Use to verify a venue is healthy and adapters are working.
-argument-hint: [quick|full]
+argument-hint: "<quick|full>"
 ---
 
 # Venue Smoke Test

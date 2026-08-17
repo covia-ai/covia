@@ -1,7 +1,7 @@
 ---
 name: secret
 description: Manage secrets on a Covia venue — store API keys and credentials. Use when setting up LLM providers or other integrations that need secrets.
-argument-hint: [set|list|delete] [name]
+argument-hint: "<set|list|delete> <name>"
 ---
 
 # Secret Management

@@ -1,7 +1,7 @@
 ---
 name: federation
 description: Demo cross-venue federated operations — invoke operations on remote venues, show distributed audit trails. Use for demonstrating Covia's federation capabilities.
-argument-hint: [demo|invoke] [venue-url]
+argument-hint: "<demo|invoke> <venue-url>"
 ---
 
 # Federation Demo

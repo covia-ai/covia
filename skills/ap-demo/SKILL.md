@@ -1,7 +1,7 @@
 ---
 name: ap-demo
 description: Set up and run the AP Invoice Audit Trail demo. Creates three agents (Alice, Bob, Carol) on a Covia venue, seeds reference data, and runs an invoice through the pipeline. Use when the user wants to demo or test the AP workflow.
-argument-hint: [setup|run|run bad|run batch|trace|reset|status|setup-desktop]
+argument-hint: "<setup|run|run bad|run batch|trace|reset|status|setup-desktop>"
 ---
 
 # AP Invoice Audit Trail Demo
