@@ -793,9 +793,22 @@ public class OperationResolutionTest {
 			assertEquals(convex.core.data.prim.CVMBool.TRUE, RT.getIn(webdav, "enabled"));
 			assertEquals(Strings.create("https://venue.example.com/dlfs/"), RT.getIn(webdav, "url"));
 			assertEquals(Strings.create("/dlfs/"), RT.getIn(webdav, "path"));
+			assertEquals(Strings.create("\\\\venue.example.com@SSL\\DavWWWRoot\\dlfs\\"), RT.getIn(webdav, "windows"),
+				"the Windows redirector UNC form");
 			assertTrue(dav.resolvePath(Strings.create("v/info/protocols"), ctx).toString().contains("dlfs-webdav"));
 		} finally {
 			dav.close();
 		}
+	}
+	@Test
+	public void testWindowsWebdavPathForms() {
+		assertEquals("\\\\localhost@8080\\DavWWWRoot\\dlfs\\",
+			VenueBootstrapMaterializer.windowsWebdavPath("http://localhost:8080", "/dlfs/"));
+		assertEquals("\\\\venue.example.com@SSL\\DavWWWRoot\\dlfs\\",
+			VenueBootstrapMaterializer.windowsWebdavPath("https://venue.example.com", "/dlfs/"));
+		assertEquals("\\\\venue.example.com@SSL@8443\\DavWWWRoot\\dlfs\\",
+			VenueBootstrapMaterializer.windowsWebdavPath("https://venue.example.com:8443", "/dlfs/"));
+		assertEquals("\\\\venue.example.com\\DavWWWRoot\\dlfs\\",
+			VenueBootstrapMaterializer.windowsWebdavPath("http://venue.example.com", "/dlfs/"));
 	}
 }

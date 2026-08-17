@@ -182,6 +182,29 @@ final class VenueBootstrapMaterializer {
 		}
 	}
 
+	private static final AString K_WINDOWS = Strings.intern("windows");
+
+	/**
+	 * The UNC form the Windows WebDAV redirector wants for a WebDAV URL —
+	 * {@code \host[@SSL][@port]DavWWWRootpath} — the one piece of client
+	 * knowledge people never remember: {@code @SSL} for https, {@code @port}
+	 * for a non-default port, {@code DavWWWRoot} always. Append the drive name
+	 * to mount one drive.
+	 */
+	static String windowsWebdavPath(String baseUrl, String path) {
+		java.net.URI uri = java.net.URI.create(baseUrl);
+		boolean https = "https".equalsIgnoreCase(uri.getScheme());
+		int port = uri.getPort();
+		StringBuilder sb = new StringBuilder("\\\\").append(uri.getHost());
+		if (https) sb.append("@SSL");
+		if (port > 0 && port != (https ? 443 : 80)) sb.append('@').append(port);
+		sb.append("\\DavWWWRoot");
+		for (String seg : path.split("/")) {
+			if (!seg.isEmpty()) sb.append('\\').append(seg);
+		}
+		return sb.append('\\').toString();
+	}
+
 	/** Writes the complete introspection snapshot into the same child fork. */
 	private void writeVenueInformation() {
 		AString name = engine.config().getName();
@@ -200,7 +223,8 @@ final class VenueBootstrapMaterializer {
 		if (webdav) {
 			webdavInfo = webdavInfo
 				.assoc(Fields.URL, Strings.create(baseUrl + Config.WEBDAV_PATH))
-				.assoc(Fields.PATH, Strings.create(Config.WEBDAV_PATH));
+				.assoc(Fields.PATH, Strings.create(Config.WEBDAV_PATH))
+				.assoc(K_WINDOWS, Strings.create(windowsWebdavPath(baseUrl, Config.WEBDAV_PATH)));
 		}
 		writeAndValidateVenuePath("v/info/webdav", webdavInfo);
 
