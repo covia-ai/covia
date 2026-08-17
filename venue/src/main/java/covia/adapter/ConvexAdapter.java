@@ -55,6 +55,8 @@ public class ConvexAdapter extends AAdapter {
 
 	@Override
 	protected void installAssets() {
+		// The adapter's own skill: v/skills/convex lives and dies with this adapter.
+		installSkill("convex", "/skills/convex.json");
 		QUERY_OPERATION    = installAsset("convex/query",    "/adapters/convex/query.json");
 		TRANSACT_OPERATION = installAsset("convex/transact", "/adapters/convex/transact.json");
 	}

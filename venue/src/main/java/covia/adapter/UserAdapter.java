@@ -52,6 +52,8 @@ public class UserAdapter extends AAdapter {
 
 	@Override
 	protected void installAssets() {
+		// The adapter's own skill: v/skills/users lives and dies with this adapter.
+		installSkill("users", "/skills/users.json");
 		installAsset("user/create", "/adapters/user/create.json");
 		installAsset("user/info", "/adapters/user/info.json");
 		installAsset("user/list", "/adapters/user/list.json");

@@ -205,6 +205,8 @@ public class CoviaAdapter extends AAdapter {
 
 	@Override
 	protected void installAssets() {
+		// The adapter's own skill: v/skills/workspace lives and dies with this adapter.
+		installSkill("workspace", "/skills/workspace.json");
 		String BASE = "/adapters/covia/";
 		installAsset("covia/read",    BASE + "read.json");
 		installAsset("covia/write",   BASE + "write.json");

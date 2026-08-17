@@ -39,14 +39,48 @@ public class SkillsLibraryTest {
 	private final Engine engine = TestEngine.ENGINE;
 	private RequestContext ctx;
 
+	/**
+	 * Every skill shipped in covia.jar: the platform skills
+	 * ({@link SkillsAdapter#LIBRARY}) plus each adapter's own, found by what
+	 * the active adapters declared under {@code v/skills/}. Adapter-owned so
+	 * that a skill lives and dies with its adapter — this enumeration is what
+	 * keeps that honest.
+	 */
+	private java.util.List<String> shippedSkills() {
+		java.util.List<String> names = new java.util.ArrayList<>();
+		for (String adapterName : engine.getAdapterNames()) {
+			AAdapter adapter = engine.getAdapter(adapterName);
+			if (adapter == null) continue;
+			for (String path : adapter.pendingCatalogEntries.keySet()) {
+				if (path.startsWith("v/skills/")) names.add(path.substring("v/skills/".length()));
+			}
+		}
+		java.util.Collections.sort(names);
+		return names;
+	}
+
 	@BeforeEach
 	public void setup(TestInfo info) {
 		ctx = RequestContext.of(TestEngine.uniqueDID(info));
 	}
 
 	@Test
+	public void testEveryAdapterSkillIsOwnedByItsAdapterAndPlatformSetIsSmall() {
+		java.util.List<String> all = shippedSkills();
+		assertTrue(all.size() >= 24, "expected the full shipped set, got " + all);
+		// Adapter skills belong to their adapters, not to SkillsAdapter
+		AAdapter skills = engine.getAdapter("skills");
+		for (String platform : SkillsAdapter.LIBRARY) {
+			assertTrue(skills.pendingCatalogEntries.containsKey("v/skills/" + platform), platform + " is a platform skill");
+		}
+		assertTrue(engine.getAdapter("grid").pendingCatalogEntries.containsKey("v/skills/grid"), "grid owns its skill");
+		assertTrue(engine.getAdapter("hitl").pendingCatalogEntries.containsKey("v/skills/hitl"), "hitl owns its skill");
+		assertFalse(skills.pendingCatalogEntries.containsKey("v/skills/grid"), "SkillsAdapter no longer carries adapter skills");
+	}
+
+	@Test
 	public void testLibraryMaterialised() {
-		for (String name : SkillsAdapter.LIBRARY) {
+		for (String name : shippedSkills()) {
 			ACell value = engine.resolvePath(Strings.create("v/skills/" + name), ctx);
 			assertTrue(value instanceof AMap, "v/skills/" + name + " should materialise: " + value);
 		}
@@ -54,7 +88,7 @@ public class SkillsLibraryTest {
 
 	@Test
 	public void testEverySkillResolvesWithBody() {
-		for (String name : SkillsAdapter.LIBRARY) {
+		for (String name : shippedSkills()) {
 			Skills.ResolvedSkill s = Skills.resolveRef(engine, ctx, Strings.create("v/skills/" + name));
 			assertEquals(name, s.name());
 			assertNotNull(s.description());
@@ -69,7 +103,7 @@ public class SkillsLibraryTest {
 	public void testEveryDeclaredToolResolves() {
 		// The drift guard: renaming or removing a catalog op must fail this
 		// test, not silently strip a tool from a shipped skill.
-		for (String name : SkillsAdapter.LIBRARY) {
+		for (String name : shippedSkills()) {
 			Skills.ResolvedSkill s = Skills.resolveRef(engine, ctx, Strings.create("v/skills/" + name));
 			for (long i = 0; i < s.toolOps().count(); i++) {
 				AString op = RT.ensureString(s.toolOps().get(i));
@@ -84,7 +118,7 @@ public class SkillsLibraryTest {
 		String index = Skills.renderIndex(engine, ctx,
 			Vectors.of((ACell) Strings.create("v/skills")), null, true);
 		assertNotNull(index);
-		for (String name : SkillsAdapter.LIBRARY) {
+		for (String name : shippedSkills()) {
 			assertTrue(index.contains("- " + name + " — "), "index missing " + name + ":\n" + index);
 		}
 		assertFalse(index.contains("INVALID"), index);
@@ -95,14 +129,14 @@ public class SkillsLibraryTest {
 		// write extra venue skills; their lines must not fail the library's
 		// budget, nor mask real description creep).
 		StringBuilder libIndex = new StringBuilder();
-		for (String name : SkillsAdapter.LIBRARY) {
+		for (String name : shippedSkills()) {
 			ACell meta = convex.core.util.JSON.parse(readResource("/skills/" + name + ".json"));
 			libIndex.append("- ").append(name).append(" — ")
 				.append(RT.ensureString(RT.getIn(meta, "description"))).append('\n');
 		}
 		// Per-skill budget: the bound scales with deliberate library growth
 		// while still catching description creep on individual skills.
-		int budget = SkillsAdapter.LIBRARY.length * 170;
+		int budget = shippedSkills().size() * 170;
 		assertTrue(libIndex.length() < budget,
 			"library index should stay compact (" + libIndex.length() + "/" + budget
 				+ " chars):\n" + libIndex);
@@ -194,7 +228,7 @@ public class SkillsLibraryTest {
 			"context_load", "context_unload", "skill_load", "more_tools",
 			"complete_task", "fail_task"));
 
-		for (String name : SkillsAdapter.LIBRARY) {
+		for (String name : shippedSkills()) {
 			Skills.ResolvedSkill skill = Skills.resolveRef(
 				engine, ctx, Strings.create("v/skills/" + name));
 			for (long i = 0; i < skill.toolOps().count(); i++) {
@@ -219,7 +253,7 @@ public class SkillsLibraryTest {
 			}
 		}
 
-		for (String name : SkillsAdapter.LIBRARY) {
+		for (String name : shippedSkills()) {
 			assertNoProviderAlias("skill '" + name + "'", skillBody(name), aliases);
 		}
 		for (String template : templates) {

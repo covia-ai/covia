@@ -51,6 +51,8 @@ public class SchedulerAdapter extends AAdapter {
 
 	@Override
 	protected void installAssets() {
+		// The adapter's own skill: v/skills/scheduling lives and dies with this adapter.
+		installSkill("scheduling", "/skills/scheduling.json");
 		installAsset("scheduler/schedule", "/adapters/scheduler/schedule.json");
 		installAsset("scheduler/cancel",   "/adapters/scheduler/cancel.json");
 		installAsset("scheduler/trigger",  "/adapters/scheduler/trigger.json");

@@ -41,6 +41,12 @@ public class Orchestrator extends AAdapter {
 	}
 	
 	@Override
+	protected void installAssets() {
+		// The adapter's own skill: v/skills/orchestration lives and dies with this adapter.
+		installSkill("orchestration", "/skills/orchestration.json");
+	}
+
+	@Override
 	public String getDescription() {
 		return "Enables complex multi-step orchestration operations with dependency management and parallel execution. " +
 			   "Supports sophisticated job orchestration with step dependencies, result aggregation, and error handling across multiple operations. " +

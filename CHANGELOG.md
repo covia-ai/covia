@@ -11,6 +11,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 ### Added
 
 - Agent skills `covia` (what Covia is) and `venue` (what a venue is, its identity/URL, how clients connect, what it offers, namespaces); `discovery`/`files` point at adapter-published facts (`v/info/adapters/dlfs/webdav`)
+- Adapters own their skills: each built-in adapter installs its own `v/skills/<name>` via `installSkill`, so a skill is published exactly when its adapter is active (retracted on disable/unload); `SkillsAdapter.LIBRARY` keeps only the platform skills (`covia`, `venue`, `discovery`, `provenance`, `skills`, `skill-authoring`)
 - Asset content retrieval by any asset reference: `GET /api/v1/assets/content/<ref>` (#368)
 - Optional `responseSchema` on `agent:request` with requester-controlled `strict` enforcement at task completion (#376)
 - Runtime adapter lifecycle: `v/ops/venue/adapter/{enable,disable,configure}` and `v/ops/venue/module/{load,unload}` (venue-owned, `adapter/manage`); `adapters.<name>.enabled` boot switch; `dynamicModules` policy; `v/info/modules`

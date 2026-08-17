@@ -60,24 +60,24 @@ public class SkillsAdapter extends AAdapter {
 	}
 
 	/**
-	 * The venue skill library — one skill per covia mechanism, materialised at
-	 * {@code v/skills/<name>} on boot. Bodies ship in {@code content.inline}
-	 * (one JSON resource per skill, no separate content upload). Agent
-	 * templates declare {@code skills: ["w/skills", "v/skills"]}, so
-	 * out-of-the-box agents see the whole library in their [Skills] index —
-	 * and a user's own {@code w/skills/<name>} shadows the venue skill of the
-	 * same name (first source wins).
+	 * The platform skills — the ones about Covia and the venue as a whole rather
+	 * than any one adapter: orientation ({@code covia}, {@code venue}), how to
+	 * find things ({@code discovery}, {@code provenance}) and the skills system
+	 * itself. Materialised at {@code v/skills/<name>} on boot; bodies ship in
+	 * {@code content.inline} (one JSON resource per skill).
 	 *
-	 * <p>This list covers only covia.jar built-ins. Module adapters ship
-	 * their own skills from their own jars via {@code installSkill} (e.g.
-	 * covia-sql's {@code sql} skill) — present exactly when the module is
-	 * loaded, never listed here.</p>
+	 * <p>Every other skill belongs to its adapter: each adapter calls
+	 * {@link #installSkill} for its own {@code /skills/<name>.json} in
+	 * {@code installAssets()}, so the skill is published exactly when the
+	 * adapter is active — disable or unload the adapter and its skill goes with
+	 * it — and modules ship theirs from their own jars (covia-sql's {@code sql},
+	 * covia-telegram's {@code telegram}). Agent templates declare
+	 * {@code skills: ["w/skills", "v/skills"]}, so out-of-the-box agents see
+	 * everything present in their [Skills] index; a user's own
+	 * {@code w/skills/<name>} shadows the venue skill of the same name.</p>
 	 */
 	static final String[] LIBRARY = {
-		"covia", "venue", "workspace", "assets", "discovery", "provenance", "agents", "tasks",
-		"models", "orchestration", "grid", "a2a", "files", "secrets",
-		"scheduling", "memory", "convex", "mcp", "http", "auth", "users", "skills",
-		"skill-authoring", "hitl"
+		"covia", "venue", "discovery", "provenance", "skills", "skill-authoring"
 	};
 
 	@Override

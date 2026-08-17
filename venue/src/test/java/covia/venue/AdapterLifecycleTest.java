@@ -92,6 +92,21 @@ public class AdapterLifecycleTest {
 		}
 	}
 
+	@Test
+	public void testAdapterSkillFollowsAdapterLifecycle() throws Exception {
+		Engine engine = boot(null);
+		try {
+			assertNotNull(venueRead(engine, "v/skills/mcp"), "an active adapter's skill is published");
+			engine.disableAdapter("mcp");
+			assertNull(venueRead(engine, "v/skills/mcp"), "disabling the adapter retracts its skill");
+			assertNotNull(venueRead(engine, "v/skills/covia"), "platform skills stay");
+			engine.enableAdapter("mcp");
+			assertNotNull(venueRead(engine, "v/skills/mcp"), "enabling republishes it");
+		} finally {
+			engine.close();
+		}
+	}
+
 	// ========== Engine-level ==========
 
 	@Test

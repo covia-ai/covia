@@ -95,6 +95,8 @@ public class HITLAdapter extends AAdapter {
 
 	@Override
 	protected void installAssets() {
+		// The adapter's own skill: v/skills/hitl lives and dies with this adapter.
+		installSkill("hitl", "/skills/hitl.json");
 		installAsset("hitl/request", "/adapters/hitl/request.json");
 		installAsset("hitl/respond", "/adapters/hitl/respond.json");
 		installAsset("hitl/list",    "/adapters/hitl/list.json");

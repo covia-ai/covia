@@ -45,6 +45,8 @@ public class AssetAdapter extends AAdapter {
 
 	@Override
 	protected void installAssets() {
+		// The adapter's own skill: v/skills/assets lives and dies with this adapter.
+		installSkill("assets", "/skills/assets.json");
 		String BASE = "/adapters/asset/";
 		installAsset("asset/store",   BASE + "store.json");
 		installAsset("asset/get",     BASE + "get.json");

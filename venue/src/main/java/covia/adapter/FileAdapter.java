@@ -205,6 +205,8 @@ public class FileAdapter extends AAdapter {
 
 	@Override
 	protected void installAssets() {
+		// The adapter's own skill: v/skills/files lives and dies with this adapter.
+		installSkill("files", "/skills/files.json");
 		installAsset("file/roots",  ASSETS_PATH + "roots.json");
 		installAsset("file/list",   ASSETS_PATH + "list.json");
 		installAsset("file/tree",   ASSETS_PATH + "tree.json");
