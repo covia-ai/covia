@@ -3,7 +3,6 @@ package covia.adapter;
 import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
 
@@ -20,12 +19,13 @@ import covia.venue.AgentState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.User;
+import covia.test.IntegrationTest;
 
 /**
  * Integration test: LLMAgentAdapter against local Ollama.
  * Skipped automatically when Ollama is not running on localhost:11434.
  */
-@Tag("integration")
+@IntegrationTest
 @EnabledIf("isOllamaAvailable")
 public class LLMAgentOllamaIT {
 

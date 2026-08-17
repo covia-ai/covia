@@ -6,7 +6,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.concurrent.TimeUnit;
 
-import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import convex.core.crypto.AKeyPair;
@@ -29,6 +28,7 @@ import covia.grid.Job;
 import covia.grid.Status;
 import covia.lattice.Covia;
 import covia.venue.RequestContext;
+import covia.test.DurabilityTest;
 
 /**
  * Tests that a Venue can persist its entire lattice state to an Etch store,
@@ -38,7 +38,7 @@ import covia.venue.RequestContext;
 // Durability guarantee: forks real JVMs / relaunches venues to prove crash
 // and restart survival. Slow and unavoidably so — excluded from the default
 // `mvn test` inner loop, run on every push via CI (-DexcludedGroups=integration).
-@Tag("durability")
+@DurabilityTest
 public class VenueRestartTest {
 
 	@Test

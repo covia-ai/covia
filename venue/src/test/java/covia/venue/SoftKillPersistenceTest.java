@@ -11,7 +11,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import convex.core.crypto.AKeyPair;
@@ -25,6 +24,7 @@ import convex.core.store.AStore;
 import convex.etch.EtchStore;
 import covia.api.Fields;
 import covia.venue.server.VenueServer;
+import covia.test.DurabilityTest;
 
 /**
  * Soft-kill resilience tests — the same write/restart matrix as
@@ -53,7 +53,7 @@ import covia.venue.server.VenueServer;
 // Durability guarantee: forks real JVMs / relaunches venues to prove crash
 // and restart survival. Slow and unavoidably so — excluded from the default
 // `mvn test` inner loop, run on every push via CI (-DexcludedGroups=integration).
-@Tag("durability")
+@DurabilityTest
 public class SoftKillPersistenceTest {
 
 	private static final AString ALICE_DID = Strings.create("did:key:z6MkSoftKillAlice");

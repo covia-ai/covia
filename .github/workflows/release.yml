@@ -68,9 +68,9 @@ jobs:
         fi
 
     - name: Build and test with Maven
-      # Include the crash/restart durability group. Only integration tests that
-      # require external services remain excluded.
-      run: mvn clean install -Dcovia.excludedTestGroups=integration
+      # Opt into the @DurabilityTest crash/restart group. @IntegrationTest
+      # (external services) stays off.
+      run: mvn clean install -Dcovia.tests.durability=true
 
     - name: Verify optional module boundaries
       run: |

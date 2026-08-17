@@ -12,7 +12,6 @@ import java.nio.file.Files;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.time.Duration;
 
-import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import convex.core.crypto.AKeyPair;
@@ -26,6 +25,7 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import covia.api.Fields;
 import covia.venue.server.VenueServer;
+import covia.test.DurabilityTest;
 
 /**
  * End-to-end persistence test using the full VenueServer stack.
@@ -40,7 +40,7 @@ import covia.venue.server.VenueServer;
 // Durability guarantee: forks real JVMs / relaunches venues to prove crash
 // and restart survival. Slow and unavoidably so — excluded from the default
 // `mvn test` inner loop, run on every push via CI (-DexcludedGroups=integration).
-@Tag("durability")
+@DurabilityTest
 public class VenueServerPersistenceTest {
 
 	private HttpClient http = HttpClient.newBuilder()

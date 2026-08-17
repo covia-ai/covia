@@ -49,11 +49,11 @@ jobs:
         restore-keys: ${{ runner.os }}-m2
 
     - name: Build and test (full reactor)
-      # Override the default exclusions to RUN the durability group (crash/restart
-      # survival tests) — they are excluded from the local `mvn test` inner loop
-      # for speed but must gate every push. `integration` stays excluded (external
-      # services: network/Ollama).
-      run: mvn clean install -Dcovia.excludedTestGroups=integration
+      # Opt into the durability group (@DurabilityTest — crash/restart survival
+      # tests that fork real JVMs): off in the local `mvn test` inner loop for
+      # speed, but must gate every push. @IntegrationTest (external services:
+      # network/Ollama) stays off — enable with -Dcovia.tests.integration=true.
+      run: mvn clean install -Dcovia.tests.durability=true
 
     - name: Verify optional module boundaries
       run: |

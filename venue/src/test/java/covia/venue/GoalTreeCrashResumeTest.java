@@ -4,7 +4,6 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.function.BooleanSupplier;
 
-import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import convex.core.crypto.AKeyPair;
@@ -28,13 +27,14 @@ import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.lattice.Covia;
+import covia.test.DurabilityTest;
 
 /**
  * Restart boundary for agent execution. Jobs and external interaction records
  * are durable; a live GoalTree execution attempt is not resumed after its venue
  * process disappears.
  */
-@Tag("durability")
+@DurabilityTest
 public class GoalTreeCrashResumeTest {
 
 	private static final AString ALICE = Strings.create("did:key:z6MkCrashBoundaryAlice");

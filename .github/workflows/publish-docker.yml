@@ -62,7 +62,7 @@ jobs:
 
     - name: Build and test manual dispatch
       if: github.event_name == 'workflow_dispatch'
-      run: mvn clean install -Dcovia.excludedTestGroups=integration
+      run: mvn clean install -Dcovia.tests.durability=true
 
     - name: Get short SHA
       id: sha

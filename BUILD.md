@@ -102,6 +102,20 @@ To compile without packaging:
 mvn clean compile
 ```
 
+### Opt-in test groups
+
+Two heavy test groups are **off by default** and opt in via a flag — the gate
+is on the test (`@IntegrationTest` / `@DurabilityTest` in `covia.test`), so a
+default `mvn test` runs the fast suite and skips these with a reason:
+
+```bash
+mvn test -Dcovia.tests.durability=true    # crash/restart survival (forks JVMs); CI runs this on every push
+mvn test -Dcovia.tests.integration=true   # external services (real network, a local Ollama)
+```
+
+A single heavy test still needs its flag, e.g.
+`mvn test -pl venue -Dtest=HardKillPersistenceTest -Dcovia.tests.durability=true`.
+
 ## Build Artifacts
 
 ### Venue Module

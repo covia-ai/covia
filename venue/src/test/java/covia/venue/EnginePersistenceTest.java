@@ -12,7 +12,6 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import convex.core.crypto.AKeyPair;
@@ -29,6 +28,7 @@ import convex.core.store.AStore;
 import covia.api.Fields;
 import covia.lattice.Covia;
 import covia.venue.server.VenueServer;
+import covia.test.DurabilityTest;
 
 /**
  * Tests for Engine persistence semantics — sweep, flush, close ordering.
@@ -59,7 +59,7 @@ import covia.venue.server.VenueServer;
 // Durability guarantee: forks real JVMs / relaunches venues to prove crash
 // and restart survival. Slow and unavoidably so — excluded from the default
 // `mvn test` inner loop, run on every push via CI (-DexcludedGroups=integration).
-@Tag("durability")
+@DurabilityTest
 public class EnginePersistenceTest {
 
 	private static final AString ALICE_DID = Strings.create("did:key:z6MkAlicePersistTest");
