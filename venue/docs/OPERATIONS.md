@@ -93,9 +93,8 @@ Semantics, access control, and pin-to-`/a/`-on-invoke behaviour are as already s
 | `/v/info/version` | string | jar manifest / `pom.properties` |
 | `/v/info/started` | long (epoch ms) | `System.currentTimeMillis()` at boot |
 | `/v/info/url` | string | the venue base URL (`baseUrl`, else derived from `hostname`/`port`; no trailing slash) — so an agent can tell a human where the venue is |
-| `/v/info/webdav` | map | `{enabled: true, url: "<base>/dlfs/", path: "/dlfs/", windows: "\\<host>[@SSL][@port]\DavWWWRoot\dlfs\"}` when the DLFS WebDAV mount is on (`windows` is the UNC form the Windows WebDAV redirector wants — append the drive name to map one drive), `{enabled: false}` otherwise |
 | `/v/info/protocols` | array of strings | enabled protocol handlers (e.g. `["rest","mcp","a2a","dlfs-webdav"]`) |
-| `/v/info/adapters/<name>` | map | per-adapter summary: `{name, description, kernel, module?, operations: [catalog paths]}` — invocable operations only (`v/ops/`, `v/test/ops/`); non-operation catalog entries such as agent templates are excluded. Only *enabled* adapters appear |
+| `/v/info/adapters/<name>` | map | per-adapter record: the framework's `{name, description, kernel, module?, operations: [catalog paths]}` (invocable operations only — `v/ops/`, `v/test/ops/`; agent templates etc. excluded) merged with whatever the adapter publishes through `AAdapter.info()` — its own facts in its own shape, refreshed after every reconfigure. E.g. `dlfs` publishes `webdav: {enabled, url?, path?, windows?}` (`windows` = the UNC form the Windows WebDAV redirector wants — append a drive name to map one drive). Only *enabled* adapters appear |
 | `/v/info/modules/<name>` | map | per-module summary for loaded venue modules: `{name, path, sha256?, adapters: [names]}` |
 
 A single `covia:slice v/info` round trip gives an agent or tool a complete venue introspection view.

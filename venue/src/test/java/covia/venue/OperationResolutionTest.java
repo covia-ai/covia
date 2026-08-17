@@ -768,8 +768,8 @@ public class OperationResolutionTest {
 		ACell url = engine.resolvePath(Strings.create("v/info/url"), alice);
 		assertEquals(Strings.create(engine.config().getBaseUrl()), url,
 			"/v/info/url is the venue base URL, so agents can tell humans where the venue is");
-		ACell webdav = engine.resolvePath(Strings.create("v/info/webdav"), alice);
-		assertNotNull(webdav, "/v/info/webdav is always present");
+		ACell webdav = engine.resolvePath(Strings.create("v/info/adapters/dlfs/webdav"), alice);
+		assertNotNull(webdav, "dlfs publishes its webdav facts via AAdapter.info()");
 		// This test engine does not enable WebDAV: an explicit disabled marker, no URL
 		assertEquals(convex.core.data.prim.CVMBool.FALSE, RT.getIn(webdav, "enabled"));
 		assertNull(RT.getIn(webdav, "url"));
@@ -789,7 +789,7 @@ public class OperationResolutionTest {
 			RequestContext ctx = dav.venueContext();
 			assertEquals(Strings.create("https://venue.example.com"),
 				dav.resolvePath(Strings.create("v/info/url"), ctx));
-			ACell webdav = dav.resolvePath(Strings.create("v/info/webdav"), ctx);
+			ACell webdav = dav.resolvePath(Strings.create("v/info/adapters/dlfs/webdav"), ctx);
 			assertEquals(convex.core.data.prim.CVMBool.TRUE, RT.getIn(webdav, "enabled"));
 			assertEquals(Strings.create("https://venue.example.com/dlfs/"), RT.getIn(webdav, "url"));
 			assertEquals(Strings.create("/dlfs/"), RT.getIn(webdav, "path"));
@@ -803,12 +803,12 @@ public class OperationResolutionTest {
 	@Test
 	public void testWindowsWebdavPathForms() {
 		assertEquals("\\\\localhost@8080\\DavWWWRoot\\dlfs\\",
-			VenueBootstrapMaterializer.windowsWebdavPath("http://localhost:8080", "/dlfs/"));
+			covia.adapter.DLFSAdapter.windowsWebdavPath("http://localhost:8080", "/dlfs/"));
 		assertEquals("\\\\venue.example.com@SSL\\DavWWWRoot\\dlfs\\",
-			VenueBootstrapMaterializer.windowsWebdavPath("https://venue.example.com", "/dlfs/"));
+			covia.adapter.DLFSAdapter.windowsWebdavPath("https://venue.example.com", "/dlfs/"));
 		assertEquals("\\\\venue.example.com@SSL@8443\\DavWWWRoot\\dlfs\\",
-			VenueBootstrapMaterializer.windowsWebdavPath("https://venue.example.com:8443", "/dlfs/"));
+			covia.adapter.DLFSAdapter.windowsWebdavPath("https://venue.example.com:8443", "/dlfs/"));
 		assertEquals("\\\\venue.example.com\\DavWWWRoot\\dlfs\\",
-			VenueBootstrapMaterializer.windowsWebdavPath("http://venue.example.com", "/dlfs/"));
+			covia.adapter.DLFSAdapter.windowsWebdavPath("http://venue.example.com", "/dlfs/"));
 	}
 }

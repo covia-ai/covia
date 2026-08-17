@@ -1064,6 +1064,10 @@ public class Engine {
 			throw new IllegalArgumentException("Adapter '" + name + "' rejected the configuration");
 		}
 		runtimeAdapterConfig.put(name, cfg);
+		// The adapter's published facts (AAdapter.info) follow its effective config.
+		if (catalogPublished && adapters.containsKey(name)) {
+			VenueBootstrapMaterializer.materialiseAdapterInfo(this, adapter);
+		}
 		log.info("Reconfigured adapter: {}", name);
 	}
 

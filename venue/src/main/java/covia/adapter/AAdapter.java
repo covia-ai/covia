@@ -83,6 +83,26 @@ public abstract class AAdapter {
 	}
 
 	/**
+	 * Adapter-owned introspection, merged into this adapter's
+	 * {@code v/info/adapters/<name>} record — the one place an adapter tells
+	 * agents and clients facts about itself that are not operations: where
+	 * its protocol is mounted, which optional feature is on, what a client
+	 * needs to know to connect. Published when the adapter is materialised and
+	 * again after every {@link #configure} so it reflects the effective
+	 * configuration; keep it to facts that hold until the next reconfigure —
+	 * live state (counts, connections, sessions) belongs in an operation.
+	 *
+	 * <p>The framework keys {@code name}, {@code description}, {@code kernel},
+	 * {@code module} and {@code operations} are reserved and win over anything
+	 * returned here.</p>
+	 *
+	 * @return extra fields for the adapter's info record, or null for none
+	 */
+	public AMap<AString, ACell> info() {
+		return null;
+	}
+
+	/**
 	 * Index of assets installed by this adapter.
 	 * Maps asset Hash to asset metadata (AString).
 	 */

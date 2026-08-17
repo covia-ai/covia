@@ -39,6 +39,8 @@ import covia.api.Fields;
  */
 final class VenueBootstrapMaterializer {
 
+	private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(VenueBootstrapMaterializer.class);
+
 	private static final AString K_W = Strings.intern("w");
 	private static final AString K_GLOBAL = Strings.intern("global");
 	private static final AString K_OPERATIONS = Strings.intern("operations");
@@ -182,29 +184,6 @@ final class VenueBootstrapMaterializer {
 		}
 	}
 
-	private static final AString K_WINDOWS = Strings.intern("windows");
-
-	/**
-	 * The UNC form the Windows WebDAV redirector wants for a WebDAV URL —
-	 * {@code \host[@SSL][@port]DavWWWRootpath} — the one piece of client
-	 * knowledge people never remember: {@code @SSL} for https, {@code @port}
-	 * for a non-default port, {@code DavWWWRoot} always. Append the drive name
-	 * to mount one drive.
-	 */
-	static String windowsWebdavPath(String baseUrl, String path) {
-		java.net.URI uri = java.net.URI.create(baseUrl);
-		boolean https = "https".equalsIgnoreCase(uri.getScheme());
-		int port = uri.getPort();
-		StringBuilder sb = new StringBuilder("\\\\").append(uri.getHost());
-		if (https) sb.append("@SSL");
-		if (port > 0 && port != (https ? 443 : 80)) sb.append('@').append(port);
-		sb.append("\\DavWWWRoot");
-		for (String seg : path.split("/")) {
-			if (!seg.isEmpty()) sb.append('\\').append(seg);
-		}
-		return sb.append('\\').toString();
-	}
-
 	/** Writes the complete introspection snapshot into the same child fork. */
 	private void writeVenueInformation() {
 		AString name = engine.config().getName();
@@ -214,19 +193,10 @@ final class VenueBootstrapMaterializer {
 		writeAndValidateVenuePath("v/info/started", CVMLong.create(startedAt));
 
 		// Where this venue is reachable, so an agent can tell a human "open
-		// <url>/…" instead of guessing: the configured base URL and, when the
-		// DLFS WebDAV mount is on, its URL (else an explicit disabled marker).
-		String baseUrl = engine.config().getBaseUrl();
-		writeAndValidateVenuePath("v/info/url", Strings.create(baseUrl));
+		// <url>/…" instead of guessing. Protocol- and feature-specific facts
+		// (WebDAV mount, …) are published by their adapters via AAdapter.info().
+		writeAndValidateVenuePath("v/info/url", Strings.create(engine.config().getBaseUrl()));
 		boolean webdav = engine.config().isWebDAVEnabled();
-		AMap<AString, ACell> webdavInfo = Maps.of(Config.ENABLED, CVMBool.of(webdav));
-		if (webdav) {
-			webdavInfo = webdavInfo
-				.assoc(Fields.URL, Strings.create(baseUrl + Config.WEBDAV_PATH))
-				.assoc(Fields.PATH, Strings.create(Config.WEBDAV_PATH))
-				.assoc(K_WINDOWS, Strings.create(windowsWebdavPath(baseUrl, Config.WEBDAV_PATH)));
-		}
-		writeAndValidateVenuePath("v/info/webdav", webdavInfo);
 
 		AVector<ACell> protocols = Vectors.of(
 			(ACell) Strings.create("rest"),
@@ -253,19 +223,44 @@ final class VenueBootstrapMaterializer {
 		}
 	}
 
+	/**
+	 * The adapter's {@code v/info/adapters/<name>} record: the framework's
+	 * fields plus whatever the adapter publishes through {@link AAdapter#info()}
+	 * (framework fields win on collision).
+	 */
 	private AMap<AString, ACell> adapterSummary(AAdapter adapter) {
 		List<String> paths = new ArrayList<>(adapter.getOperationPaths());
 		paths.sort(String::compareTo);
 		AVector<ACell> operations = Vectors.empty();
 		for (String path : paths) operations = operations.conj(Strings.create(path));
-		AMap<AString, ACell> summary = Maps.of(
-			Fields.NAME, Strings.create(adapter.getName()),
-			Fields.DESCRIPTION, Strings.create(adapter.getDescription()),
-			K_OPERATIONS, operations,
-			K_KERNEL, CVMBool.of(engine.isKernelAdapter(adapter.getName())));
+		AMap<AString, ACell> summary = null;
+		try {
+			summary = adapter.info();
+		} catch (RuntimeException e) {
+			log.warn("Adapter '{}' info() failed; publishing framework fields only: {}",
+				adapter.getName(), e.toString());
+		}
+		if (summary == null) summary = Maps.empty();
+		summary = summary
+			.assoc(Fields.NAME, Strings.create(adapter.getName()))
+			.assoc(Fields.DESCRIPTION, Strings.create(adapter.getDescription()))
+			.assoc(K_OPERATIONS, operations)
+			.assoc(K_KERNEL, CVMBool.of(engine.isKernelAdapter(adapter.getName())));
 		Modules.LoadedModule module = engine.moduleOf(adapter.getName());
 		if (module != null) summary = summary.assoc(K_MODULE, Strings.create(module.name()));
 		return summary;
+	}
+
+	/**
+	 * Refreshes ONE adapter's {@code v/info/adapters/<name>} record — the
+	 * reconfigure path — so {@link AAdapter#info()} reflects the effective
+	 * configuration. Catalog declarations are untouched.
+	 */
+	static void materialiseAdapterInfo(Engine engine, AAdapter adapter) {
+		VenueBootstrapMaterializer materializer = new VenueBootstrapMaterializer(engine);
+		materializer.writeAndValidateVenuePath(
+			"v/info/adapters/" + adapter.getName(), materializer.adapterSummary(adapter));
+		materializer.publish();
 	}
 
 	static AMap<AString, ACell> moduleSummary(Modules.LoadedModule module) {

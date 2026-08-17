@@ -37,6 +37,7 @@ import covia.api.Fields;
 import covia.lattice.CapabilityChecker;
 import covia.lattice.Covia;
 import covia.utils.MimeUtils;
+import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.SecretStore;
@@ -76,6 +77,50 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	private static final AString FIELD_PATH = Strings.intern("path");
 	private static final AString FIELD_NAME = Strings.intern("name");
 	private static final AString FIELD_MODE = Strings.intern("mode");
+
+	private static final AString K_WEBDAV = Strings.intern("webdav");
+	private static final AString K_WINDOWS = Strings.intern("windows");
+
+	/**
+	 * DLFS's own facts for {@code v/info/adapters/dlfs}: whether the WebDAV
+	 * mount is on and, if so, where — the URL, the mount path, and the UNC
+	 * form the Windows WebDAV redirector wants ({@code \\host[@SSL][@port]\DavWWWRoot\dlfs\}).
+	 * The venue base URL itself is venue-level ({@code v/info/url}).
+	 */
+	@Override
+	public AMap<AString, ACell> info() {
+		Config config = engine.config();
+		boolean enabled = config.isWebDAVEnabled();
+		AMap<AString, ACell> webdav = Maps.of(Config.ENABLED, CVMBool.of(enabled));
+		if (enabled) {
+			String baseUrl = config.getBaseUrl();
+			webdav = webdav
+				.assoc(Fields.URL, Strings.create(baseUrl + Config.WEBDAV_PATH))
+				.assoc(Fields.PATH, Strings.create(Config.WEBDAV_PATH))
+				.assoc(K_WINDOWS, Strings.create(windowsWebdavPath(baseUrl, Config.WEBDAV_PATH)));
+		}
+		return Maps.of(K_WEBDAV, webdav);
+	}
+
+	/**
+	 * The UNC form the Windows WebDAV redirector wants for a WebDAV URL —
+	 * {@code \\host[@SSL][@port]\DavWWWRoot\path\}: {@code @SSL} for https,
+	 * {@code @port} for a non-default port, {@code DavWWWRoot} always. Append
+	 * the drive name to mount one drive.
+	 */
+	public static String windowsWebdavPath(String baseUrl, String path) {
+		java.net.URI uri = java.net.URI.create(baseUrl);
+		boolean https = "https".equalsIgnoreCase(uri.getScheme());
+		int port = uri.getPort();
+		StringBuilder sb = new StringBuilder("\\\\").append(uri.getHost());
+		if (https) sb.append("@SSL");
+		if (port > 0 && port != (https ? 443 : 80)) sb.append('@').append(port);
+		sb.append("\\DavWWWRoot");
+		for (String seg : path.split("/")) {
+			if (!seg.isEmpty()) sb.append('\\').append(seg);
+		}
+		return sb.append('\\').toString();
+	}
 
 	@Override
 	public String getName() {

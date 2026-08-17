@@ -49,6 +49,49 @@ public class AdapterLifecycleTest {
 		return engine.jobs().invokeInternal(op, input, engine.venueContext()).get(10, TimeUnit.SECONDS);
 	}
 
+	/** An adapter that publishes a fact derived from its effective configuration. */
+	static final class FactAdapter extends AAdapter {
+		private volatile String colour = "unset";
+		@Override public String getName() { return "fact"; }
+		@Override public String getDescription() { return "publishes a configured fact"; }
+		@Override public boolean configure(AMap<AString, ACell> config, boolean strict) {
+			AString c = RT.ensureString(config.get(Strings.create("colour")));
+			colour = (c == null) ? "unset" : c.toString();
+			return true;
+		}
+		@Override public AMap<AString, ACell> info() {
+			// The reserved framework key is ignored; the adapter's own fact is published.
+			return Maps.of("colour", colour, "name", "not-me");
+		}
+		@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+			return CompletableFuture.completedFuture(input);
+		}
+	}
+
+	@Test
+	public void testAdapterInfoIsPublishedAndFollowsReconfigure() throws Exception {
+		Engine engine = Engine.createTemp(Maps.of(
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
+			Config.ADAPTERS, Maps.of("fact", Maps.of("colour", "blue"))));
+		try {
+			engine.registerAdapter(new FactAdapter());
+			Engine.addDemoAssets(engine);
+			ACell rec = venueRead(engine, "v/info/adapters/fact");
+			assertEquals(Strings.create("blue"), RT.getIn(rec, "colour"), "info() merged into the adapter record: " + rec);
+			assertEquals(Strings.create("fact"), RT.getIn(rec, "name"), "framework keys win over info()");
+			assertNotNull(RT.getIn(rec, "kernel"));
+
+			engine.configureAdapter("fact", Maps.of("colour", "red"));
+			assertEquals(Strings.create("red"), RT.getIn(venueRead(engine, "v/info/adapters/fact"), "colour"),
+				"info() is republished after reconfigure");
+
+			// DLFS publishes its WebDAV facts the same way; this engine has WebDAV off
+			assertEquals(CVMBool.FALSE, RT.getIn(venueRead(engine, "v/info/adapters/dlfs"), "webdav", "enabled"));
+		} finally {
+			engine.close();
+		}
+	}
+
 	// ========== Engine-level ==========
 
 	@Test

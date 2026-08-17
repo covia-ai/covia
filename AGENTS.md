@@ -167,6 +167,7 @@ Defined in code at `venue/src/main/java/covia/lattice/Covia.java`. Full design i
 2. Implement `getName()`, `getDescription()`, and the invocation method (receives `RequestContext`, resolved metadata, and input)
 3. Use `getSubOperation(meta)` to extract the adapter-specific operation name from metadata
 4. Override `installAssets()` to register default operations
+   - Override `info()` to publish adapter-owned facts (mount points, enabled features — anything a client needs to know that is not an operation) into `v/info/adapters/<name>`; it is re-read after every `configure`
 5. Create JSON asset definitions in `venue/src/main/resources/adapters/{name}/`
 6. Register in `Engine.addDemoAssets()` or via configuration
 
