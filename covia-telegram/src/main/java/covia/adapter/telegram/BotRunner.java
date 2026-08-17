@@ -786,7 +786,9 @@ final class BotRunner {
 			Long thread = threadOf(m);
 			if (thread != null) action.messageThreadId(thread);
 			b.execute(action);
-		} catch (RuntimeException e) {
+		} catch (RuntimeException | LinkageError e) {
+			// Best-effort: a typing indicator must never cost the reply — including
+			// when its classes cannot be loaded (jar replaced under the venue).
 			log.debug("Telegram bot '{}': typing indicator failed: {}", spec.name(), concise(e));
 		}
 	}
