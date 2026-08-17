@@ -42,12 +42,18 @@ public class MainVenue {
 		
 		// First argument is config file path, if specified
 		if (args.length>0) try {
+			// Resolve the CLI argument the way a shell user expects: relative to the
+			// working directory, ~ expanded. (FileUtils.getPath treats bare relative
+			// names as root-relative — Convex-Dev/convex#701 — so it is not used here.)
 			String configPath=args[0];
-			Path cPath=FileUtils.getPath(configPath);
+			Path cPath = configPath.startsWith("~")
+				? Path.of(System.getProperty("user.home") + configPath.substring(1))
+				: Path.of(configPath);
+			cPath = cPath.toAbsolutePath().normalize();
 			if (!Files.exists(cPath)) {
 				log.error("Config file does not exist: "+cPath);
 			}
-			config =(AMap<AString, ACell>) JSON.parseJSON5(FileUtils.loadFileAsString(configPath));
+			config =(AMap<AString, ACell>) JSON.parseJSON5(Files.readString(cPath));
 			log.info("Server startup config loaded from "+cPath);
 		} catch (Exception ex) {
 			log.error("Error loading config",ex);
