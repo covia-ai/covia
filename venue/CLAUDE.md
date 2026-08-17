@@ -107,7 +107,7 @@ Module adapters (shaded module jars, not in covia.jar — `docs/CONFIG.md` "Venu
 |---------|--------|---------|------------|
 | `sql` | covia-sql | Venue-local convex-db and operator-registered JDBC databases | `query`, `execute` |
 | `python` | covia-python-adapter | Operator-configured Python operations and stateful instances | configured ops, `instances/*` |
-| `telegram` | covia-telegram | Operator-declared Telegram bots routing chats to agents or handing Updates to operations; Bot API access in Telegram's own shapes | `send`, `call`, `bots` |
+| `telegram` | covia-telegram | Telegram bots (operator-declared or user-created) routing chats to agents or handing Updates to operations; Bot API access in Telegram's own shapes | `send`, `call`, `create`, `delete`, `bots` |
 
 ## API Endpoints
 

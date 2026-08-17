@@ -278,7 +278,7 @@ public class TelegramAdapterTest {
 		long chat = 1005L;
 		// A persisted session id the agent has never heard of (e.g. the agent was recreated).
 		run(RequestContext.of(OWNER), "v/ops/covia/write", Maps.of(
-			Fields.PATH, "w/telegram/echo/sessions/" + chat,
+			Fields.PATH, BotRunner.sessionsPath("echo") + "/" + chat,
 			Fields.VALUE, "deadbeefdeadbeefdeadbeefdeadbeef"));
 		long jobsBefore = engine.jobs().getJobs(RequestContext.of(OWNER)).count();
 		telegram.push(chat, ALLOWED_ID, "alice", "are you there");
@@ -375,6 +375,80 @@ public class TelegramAdapterTest {
 		FakeTelegramServer.Sent reply = telegram.awaitSent(15_000);
 		assertNotNull(reply);
 		assertTrue(reply.text().contains(text), "inbound text must survive the round trip: " + reply.text());
+	}
+
+	@Test
+	public void testCreateAndDeleteRuntimeBots() throws Exception {
+		String token = "777:CREATED-BOT";
+		telegram.registerBot(token, "created_bot");
+		run(RequestContext.of(OWNER), "v/ops/secret/set", Maps.of("name", "TG_CREATED", "value", token));
+
+		// Validation first: literal token, explicit user, no handler
+		assertFailsWith(engine.jobs().invokeOperation("v/ops/telegram/create", Maps.of(
+			"name", "mine", "token", token, "agent", AGENT), RequestContext.of(OWNER)), "secret reference");
+		assertFailsWith(engine.jobs().invokeOperation("v/ops/telegram/create", Maps.of(
+			"name", "mine", "token", "s/TG_CREATED", "agent", AGENT, "user", OTHER), RequestContext.of(OWNER)), "implicit");
+		assertFailsWith(engine.jobs().invokeOperation("v/ops/telegram/create", Maps.of(
+			"name", "mine", "token", "s/TG_CREATED"), RequestContext.of(OWNER)), "exactly one of agent");
+
+		ACell created = run(RequestContext.of(OWNER), "v/ops/telegram/create", Maps.of(
+			"name", "mine", "token", "s/TG_CREATED", "agent", AGENT,
+			"allow", Vectors.of(CVMLong.create(ALLOWED_ID))));
+		assertEquals(Strings.create("runtime"), RT.getIn(created, BotRunner.K_MANAGED));
+		assertEquals(OWNER, RT.getIn(created, BotSpec.K_USER), "a created bot acts as its creator");
+		BotRunner mine = adapter.runner(OWNER, "mine");
+		assertNotNull(mine);
+		await(() -> mine.state() == BotRunner.State.RUNNING, 10_000, () -> "created bot did not start: " + mine.error());
+		assertEquals("created_bot", mine.username());
+
+		// Recorded in the owner's workspace (settings only — no user, no literal token)
+		ACell record = RT.getIn(run(RequestContext.of(OWNER), "v/ops/covia/read",
+			Maps.of(Fields.PATH, TelegramAdapter.REGISTRY_PATH + "/mine")), Fields.VALUE);
+		assertNotNull(record, "registry record");
+		assertEquals(Strings.create("s/TG_CREATED"), RT.getIn(record, BotSpec.K_TOKEN));
+		assertNull(RT.getIn(record, BotSpec.K_USER));
+
+		// Same name again is refused; another user may use the name; bots lists it as runtime
+		assertFailsWith(engine.jobs().invokeOperation("v/ops/telegram/create", Maps.of(
+			"name", "mine", "token", "s/TG_CREATED", "agent", AGENT), RequestContext.of(OWNER)), "already have");
+		ACell listing = run(RequestContext.of(OWNER), "v/ops/telegram/bots", Maps.empty());
+		assertTrue(listing.toString().contains("runtime") && listing.toString().contains("\"mine\""), listing.toString());
+
+		// It works: an inbound message reaches the agent through it, and it can send
+		telegram.push(token, 8001L, "private", ALLOWED_ID, "alice", "via created bot");
+		FakeTelegramServer.Sent reply = telegram.awaitSent(token, 15_000);
+		assertNotNull(reply);
+		assertTrue(reply.text().contains("via created bot"), reply.text());
+		run(RequestContext.of(OWNER), "v/ops/telegram/send", Maps.of("bot", "mine", "chat_id", CVMLong.create(8001L), "text", "out"));
+		assertEquals("out", telegram.awaitSent(token, 10_000).text());
+
+		// Simulated restart: forget the live runner, re-arm from the lattice registry
+		adapter.forgetForTest(OWNER, "mine");
+		assertNull(adapter.runner(OWNER, "mine"));
+		adapter.rearmForTest();
+		BotRunner rearmed = adapter.runner(OWNER, "mine");
+		assertNotNull(rearmed, "a created bot is re-armed from w/telegram/bots at install");
+		await(() -> rearmed.state() == BotRunner.State.RUNNING, 10_000, () -> "re-armed bot did not start: " + rearmed.error());
+
+		// Delete: stops it, removes the record and sessions; config bots are refused
+		assertFailsWith(engine.jobs().invokeOperation("v/ops/telegram/delete", Maps.of("name", "echo"),
+			RequestContext.of(OWNER)), "venue config");
+		assertFailsWith(engine.jobs().invokeOperation("v/ops/telegram/delete", Maps.of("name", "nope"),
+			RequestContext.of(OWNER)), "no Telegram bot named");
+		ACell deleted = run(RequestContext.of(OWNER), "v/ops/telegram/delete", Maps.of("name", "mine"));
+		assertEquals(convex.core.data.prim.CVMBool.TRUE, RT.getIn(deleted, TelegramAdapter.K_DELETED));
+		assertNull(adapter.runner(OWNER, "mine"));
+		assertEquals(BotRunner.State.STOPPED, rearmed.state());
+		assertNull(RT.getIn(run(RequestContext.of(OWNER), "v/ops/covia/read",
+			Maps.of(Fields.PATH, TelegramAdapter.REGISTRY_PATH + "/mine")), Fields.VALUE), "record removed");
+		assertNull(readSession("mine", 8001L), "sessions removed");
+	}
+
+	private static void assertFailsWith(Job job, String fragment) {
+		try { job.awaitResult(10_000); } catch (Exception ignored) {}
+		assertEquals(Status.FAILED, job.getStatus(), "expected failure mentioning '" + fragment + "'");
+		assertTrue(String.valueOf(job.getErrorMessage()).contains(fragment),
+			"expected '" + fragment + "' in: " + job.getErrorMessage());
 	}
 
 	@Test
@@ -604,7 +678,7 @@ public class TelegramAdapterTest {
 
 	private static String readSession(String bot, long chatId) {
 		ACell read = run(RequestContext.of(OWNER), "v/ops/covia/read",
-			Maps.of(Fields.PATH, "w/telegram/" + bot + "/sessions/" + chatId));
+			Maps.of(Fields.PATH, BotRunner.sessionsPath(bot) + "/" + chatId));
 		ACell v = RT.getIn(read, Fields.VALUE);
 		return (v == null) ? null : v.toString();
 	}

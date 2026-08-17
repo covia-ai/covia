@@ -1,0 +1,27 @@
+{
+	"name": "Create Telegram bot",
+	"description": "Creates a Telegram bot that acts as you and starts it immediately. Get a token from @BotFather, store it as a secret (v/ops/secret/set, e.g. TELEGRAM_BOT_TOKEN) and pass it as token \"s/TELEGRAM_BOT_TOKEN\" — literal tokens are refused. Choose exactly one inbound handler: agent (one agent:chat conversation per Telegram chat with an agent you own) or operation (every Telegram Update is handed to that operation, with reply true|false|\"fixed text\"). Access is fail-closed: list Telegram user ids / @usernames in allow, or set open: true. The bot is recorded at w/telegram/bots/<name> in your workspace and comes back after a venue restart; delete it with v/ops/telegram/delete. Requires telegram/manage on <you>/telegram/<name>. Bots that act as another identity are declared by the operator in venue config, not here.",
+	"operation": {
+		"adapter": "telegram:create",
+		"input": {
+			"type": "object",
+			"properties": {
+				"name": { "type": "string", "description": "Bot name, unique among your bots ([A-Za-z0-9_-]+)" },
+				"token": { "type": "string", "description": "Secret reference to the BotFather token, e.g. s/TELEGRAM_BOT_TOKEN" },
+				"agent": { "type": "string", "description": "Agent id to converse with (one session per Telegram chat). Exclusive with operation." },
+				"operation": { "type": "string", "description": "Operation reference invoked with each Telegram Update. Exclusive with agent." },
+				"reply": { "type": ["boolean", "string"], "description": "For operation handlers: true (send the result, default), false (silent), or a fixed acknowledgement" },
+				"allow": { "type": "array", "items": { "type": ["integer", "string"] }, "description": "Telegram user ids and/or @usernames allowed to talk to the bot" },
+				"open": { "type": "boolean", "description": "Allow anyone (default false)" },
+				"parseMode": { "type": "string", "enum": ["Markdown", "MarkdownV2", "HTML"], "description": "Reply formatting; omit for plain text" },
+				"greeting": { "type": "string", "description": "Reply to /start" }
+			},
+			"required": ["name", "token"]
+		},
+		"output": {
+			"type": "object",
+			"description": "The bot's status record (as in telegram:bots): name, user, target, state, managed: runtime, ...",
+			"additionalProperties": true
+		}
+	}
+}

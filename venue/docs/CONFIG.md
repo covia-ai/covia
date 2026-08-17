@@ -920,7 +920,7 @@ Per bot:
   agents are owned by.
 - `agent` **or** `operation` — the **inbound handler**. With `agent`, each
   Telegram chat is one `agent:chat` session, persisted at
-  `w/telegram/<bot>/sessions/<chatId>` in the user's workspace so
+  `w/telegram/sessions/<bot>/<chatId>` in the user's workspace so
   conversations survive restarts; `/new` starts a fresh one. With
   `operation`, every update invokes that reference with the **Telegram
   `Update` exactly as sent** — snake_case, `message` / `edited_message` /
@@ -957,6 +957,18 @@ long-poll (`getUpdates`); no inbound port or webhook is required. Disabling
 the adapter (`adapters.telegram.enabled: false` or `adapter/disable`) takes
 its bots offline without confirming updates, so Telegram redelivers the
 backlog when it is enabled again.
+
+Bots can also be **created at runtime by their user**: `v/ops/telegram/create
+{name, token: "s/…", agent | operation, reply?, allow?, open?, parseMode?,
+greeting?}` makes a bot that acts as the caller (no `user` — a user cannot
+create a bot acting as someone else; the token must be a secret reference),
+records it at `w/telegram/bots/<name>` in the caller's workspace, starts it,
+and re-arms it on every venue start or module load; `v/ops/telegram/delete
+{name}` stops and removes it (record and sessions). Both are gated on
+`<caller>/telegram/<name>` × `telegram/manage`. Config-declared bots stay
+the operator's (delete refuses them); `telegram:bots` reports `managed:
+config | runtime`. Bot names are per user for created bots; `send`/`call`
+resolve `bot` against the caller's own bots first, then config bots.
 
 Operations — all in Telegram's own field names, so the Bot API reference is
 the reference: `v/ops/telegram/send {bot?, chat_id, text, parse_mode?,

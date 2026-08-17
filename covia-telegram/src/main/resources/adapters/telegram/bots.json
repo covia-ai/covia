@@ -20,6 +20,7 @@
 							"user": { "type": "string", "description": "DID the bot acts as (or \"public\")" },
 							"target": { "type": "string", "description": "agent <id> or operation <ref>" },
 							"state": { "type": "string" },
+							"managed": { "type": "string", "enum": ["config", "runtime"], "description": "Declared in venue config, or created at runtime with telegram:create" },
 							"username": { "type": "string", "description": "Telegram @username (without @) once getMe has succeeded" },
 							"error": { "type": "string", "description": "Why the bot is not running, when PENDING" },
 							"received": { "type": "integer" },

@@ -1,18 +1,18 @@
 ---
 name: telegram
-description: Connect a Covia venue to Telegram — declare a bot whose inbound handler is an agent conversation or any operation (via a mapping op for deterministic targets like a SQL write); allow-list who may talk to it, send Telegram messages from agents and workflows, and diagnose a bot that is not answering. Use when the user wants to talk to an agent from Telegram or notify people on Telegram.
-argument-hint: "<setup|status|send|allow|test|teach> <bot-name>"
+description: Connect a Covia venue to Telegram — create a bot (over MCP, or operator-declared in config) whose inbound handler is an agent conversation or any operation (via a mapping op for deterministic targets like a SQL write); allow-list who may talk to it, send Telegram messages from agents and workflows, and diagnose a bot that is not answering. Use when the user wants to talk to an agent from Telegram or notify people on Telegram.
+argument-hint: "<setup|create|delete|status|send|allow|test|teach> <bot-name>"
 ---
 
 # Telegram
 
 **Prerequisite:** The venue must be running and connected as an MCP server (`http://localhost:8080/mcp`). If MCP tools are not available, tell the user to run `/venue-setup local` first. Telegram support comes from the **covia-telegram** module (`telegram` adapter) — it is not in `covia.jar`; `setup` covers loading it.
 
-Everything about a bot is operator configuration: `adapters.telegram.bots.<name>` in the venue config (full reference: `venue/docs/CONFIG.md` "Telegram bots"). Users and agents cannot create bots; they use the ones the operator declared. `/adapters` explains the module and runtime-lifecycle mechanics this skill relies on.
+A bot is either **created by its user** with `v/ops/telegram/create` (acts as that user, persisted in their workspace at `w/telegram/bots/<name>`, survives restarts, removed with `v/ops/telegram/delete`) or **declared by the operator** in `adapters.telegram.bots.<name>` (needed when a bot must act as a different identity, e.g. `"user": "public"` on a shared dev venue). Full reference: `venue/docs/CONFIG.md` "Telegram bots". `/adapters` explains the module and runtime-lifecycle mechanics this skill relies on.
 
 ## `setup <bot-name>` — Bring a bot up
 
-Walk the user through these steps; each is idempotent.
+Walk the user through these steps; each is idempotent. Steps 1–3 are common; step 4 is the fork: `create` over MCP (default), or config declaration.
 
 1. **Get a token from Telegram.** In Telegram, talk to `@BotFather`: `/newbot`, choose a display name and a username ending in `bot`. Copy the token (`123456789:AA…`). Optional but useful for group chats: `/setprivacy` → Disable, so the bot sees all group messages, not only commands and mentions.
 
@@ -24,7 +24,13 @@ Walk the user through these steps; each is idempotent.
 
 3. **Load the module.** Build once — `mvn -pl covia-telegram -am package -DskipTests` produces `covia-telegram/target/covia-telegram-<ver>-module.jar` — then either declare it in the venue config (`"modules": ["modules/covia-telegram-<ver>-module.jar"]`, copying the jar into `modules/`), or load it at runtime with `v/ops/venue/module/load` (venue authority + `dynamicModules.enabled`; see `/adapters load`). Verify: `covia_read path=v/info/adapters/telegram`.
 
-4. **Declare the bot** in the venue config and restart (or apply live with `v/ops/venue/adapter/configure`, which needs venue authority and is not persisted):
+4. **Create the bot.** Preferred — one op, no restart, persisted in your workspace:
+   ```
+   grid_run  operation=v/ops/telegram/create  input={"name": "<bot-name>", "token": "s/TELEGRAM_BOT_TOKEN", "agent": "<agentId>", "allow": []}
+   ```
+   The bot acts as **you** (the MCP caller — the public user on a local dev venue). Use `"operation": "<ref>"` instead of `agent` for a deterministic handler (see below), `"open": true` to admit anyone, `"reply"`, `"parseMode"`, `"greeting"` as documented on the op. Needs `telegram/manage` in your scope (unrestricted on `dev/local-open.json`-style venues; the committed `local-dev.json` public scope is read-only — use `/venue-setup` guidance to widen it or authenticate).
+
+   Operator alternative — declare it in the venue config and restart (or apply live with `v/ops/venue/adapter/configure`, venue authority, not persisted); required when the bot must act as an identity other than the caller:
    ```json
    "adapters": {
      "telegram": {
@@ -39,7 +45,7 @@ Walk the user through these steps; each is idempotent.
      }
    }
    ```
-   - `user` is the identity the bot acts as — the **owner of the agent**. `"public"` is right for a local dev venue whose agents were created over MCP; on a real venue name the owner's DID. The bot has that user's full authority, so choose deliberately.
+   - `user` (config only) is the identity the bot acts as — the **owner of the agent**. `"public"` is right for a local dev venue whose agents were created over MCP; on a real venue name the owner's DID. The bot has that user's full authority, so choose deliberately. Created bots always act as their creator.
    - **Pick the inbound handler** (ask the user which they want; exactly one). Every inbound message runs as a Job in the bot user's job index — that is the record of the interaction; the module keeps no log of its own:
      - `"agent": "<agentId>"` — each Telegram chat is one `agent:chat` conversation with that agent (create it first with `/agent create`). Always replies.
      - `"operation": "<ref>"` — every update invokes that operation with the **Telegram `Update` exactly as sent** (snake_case: `update.message.text`, `update.message.photo[].file_id`, `update.callback_query.data`, …) plus `bot`. For a deterministic target whose input is *not* an Update (a `sql/execute` insert, an HTTP webhook, a classify-then-store step) point it at a small **mapping op the user owns** — an orchestration (`/orchestrate create`), a pinned op — that takes the record and does the work; the same goes for logging messages somewhere (an op that appends to the path its metadata names). The Telegram module never reshapes or logs messages. `"reply": true` (default) sends the result rendered as text, `false` sends nothing, `"Recorded."` sends that fixed acknowledgement.
@@ -48,7 +54,16 @@ Walk the user through these steps; each is idempotent.
 
 5. **Check it came up:** `grid_run operation=v/ops/telegram/bots` → the bot should be `RUNNING` with its Telegram `username`. `PENDING` means it could not start — the `error` field says why (secret missing, bad token/401, API unreachable); it retries (2 s, then every 30 s), so fixing the cause is enough, no restart needed.
 
-6. **Allow yourself.** Send the bot any message in Telegram. Because `allow` is empty it answers *"Not authorised … Your Telegram user id is N"*. Put that id (or your `@username`) into `allow`, re-apply the config, and message it again — this time the handler runs. `/id` in the chat shows chat and user ids at any time.
+6. **Allow yourself.** Send the bot any message in Telegram. Because `allow` is empty it answers *"Not authorised … Your Telegram user id is N"*. For a created bot: `v/ops/telegram/delete {name}` then `create` again with `"allow": [N]` (there is no update op yet); for a config bot edit `allow` and re-apply. Message it again — this time the handler runs. `/id` in the chat shows chat and user ids at any time.
+
+## `create <bot-name>` / `delete <bot-name>` — Manage your own bots
+
+```
+grid_run  operation=v/ops/telegram/create  input={"name": "<bot-name>", "token": "s/<SECRET>", "agent": "<agentId>" | "operation": "<ref>", "allow": [<ids or "@names">] | "open": true, "reply"?: true|false|"text", "parseMode"?: "Markdown", "greeting"?: "…"}
+grid_run  operation=v/ops/telegram/delete  input={"name": "<bot-name>"}
+```
+
+`create` refuses literal tokens (store the token as a secret first), refuses a `user` field (a created bot acts as you), and refuses a name you already use (delete first — replace = delete + create). Two users may each own a bot with the same name. `delete` stops the bot and removes its record and per-chat sessions; the Telegram-side bot and the secret are untouched. Config-declared bots are the operator's and cannot be deleted here.
 
 ## `status` — What bots exist and how they are doing
 
@@ -56,7 +71,7 @@ Walk the user through these steps; each is idempotent.
 grid_run  operation=v/ops/telegram/bots
 ```
 
-Shows the bots the caller may use (all bots for the venue identity): `state`, Telegram `username`, `target` (`agent X` / `operation Y`), `error` when pending, and `received`/`sent`/`failed` counters. Files are separate Telegram messages (a `Message` carries text *or* one media item with a caption; albums share a `media_group_id`), so a photo sent to an operation bot arrives as its own Update with `message.photo`. Tokens are never shown. `covia_read path=v/info/adapters/telegram` confirms the module is loaded at all.
+Shows the bots the caller may use (all bots for the venue identity): `state`, `managed` (`config` | `runtime`), Telegram `username`, `target` (`agent X` / `operation Y`), `error` when pending, and `received`/`sent`/`failed` counters. Files are separate Telegram messages (a `Message` carries text *or* one media item with a caption; albums share a `media_group_id`), so a photo sent to an operation bot arrives as its own Update with `message.photo`. Tokens are never shown. `covia_read path=v/info/adapters/telegram` confirms the module is loaded at all.
 
 ## `send <bot-name>` — Send a message, media, buttons
 
@@ -73,7 +88,7 @@ grid_run  operation=v/ops/telegram/call  input={"method": "editMessageText", "pa
 
 ## `allow <bot-name>` — Manage who may talk to the bot
 
-Access is fail-closed and lives in config: `allow` is a list of Telegram user ids and/or `@usernames`; `open: true` admits everyone. Edit the config and restart, or apply live:
+Access is fail-closed: `allow` is a list of Telegram user ids and/or `@usernames`; `open: true` admits everyone. For a created bot, `delete` and `create` again with the new list. For a config bot, edit the config and restart, or apply live:
 ```
 grid_run  operation=v/ops/venue/adapter/configure
           input={"name": "telegram", "config": {"bots": {"<bot-name>": {…full bot entry…}}}, "merge": true}
@@ -83,7 +98,7 @@ grid_run  operation=v/ops/venue/adapter/configure
 ## `test <bot-name>` — Smoke-test the loop
 
 1. `status` shows `RUNNING`.
-2. From Telegram: `/start` (greeting), then a message. Agent bot: the reply arrives (typing indicator while it works); `/new` starts a fresh conversation (the persisted session at `w/telegram/<bot>/sessions/<chatId>` is cleared). Operation bot: the result / acknowledgement per `reply`. Either way the turn is a Job in the bot user's `j/` index (`covia_list path=j` as that user).
+2. From Telegram: `/start` (greeting), then a message. Agent bot: the reply arrives (typing indicator while it works); `/new` starts a fresh conversation (the persisted session at `w/telegram/sessions/<bot>/<chatId>` is cleared). Operation bot: the result / acknowledgement per `reply`. Either way the turn is a Job in the bot user's `j/` index (`covia_list path=j` as that user).
 3. From the venue: `send` a message to your own chat id and confirm it arrives.
 4. `status` again: `received` and `sent` advanced, `failed` did not.
 
@@ -104,4 +119,5 @@ The module ships the `telegram` agent skill at `v/skills/telegram` (present exac
 | Reply says *Unknown session* once, then works | The persisted session was deleted (agent recreated) — the bot recovers by starting a new one. |
 | `send` fails with *Access denied* | Caller is not the bot's user; use that identity or a `telegram/send` delegation. |
 | Replies stop after `adapter/disable` | By design — a disabled adapter is offline; Telegram redelivers the backlog on enable. |
-| Bot vanished after restart | It was added with `adapter/configure` (not persisted) — put it in the venue config. |
+| Bot vanished after restart | A config bot added with `adapter/configure` is not persisted — put it in the venue config. Created bots do come back (`w/telegram/bots`); if one did not, the venue log says why it was skipped. |
+| `create` fails with *Capability denied* | Your scope lacks `telegram/manage` — on a public dev venue that means the public scope is read-only; use a config with `auth.public.caps: unrestricted` or authenticate. |

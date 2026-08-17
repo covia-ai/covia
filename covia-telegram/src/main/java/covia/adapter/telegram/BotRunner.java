@@ -92,13 +92,18 @@ final class BotRunner {
 	static final AString K_RECEIVED = Strings.intern("received");
 	static final AString K_SENT = Strings.intern("sent");
 	static final AString K_FAILED = Strings.intern("failed");
+	static final AString K_MANAGED = Strings.intern("managed");
 	private static final AString K_BOT = Strings.intern("bot");
 
 	enum State { STARTING, PENDING, RUNNING, STOPPED }
 
+	/** How the bot came to exist: declared in venue config, or created at runtime by its user. */
+	enum Managed { CONFIG, RUNTIME }
+
 	private final TelegramAdapter adapter;
 	final BotSpec spec;
 	final String apiUrl;
+	final Managed managed;
 
 	private volatile TelegramBot bot;
 	private volatile OkHttpClient http;
@@ -124,10 +129,11 @@ final class BotRunner {
 	/** chatId → agent session id (hex); mirrors the persisted mapping. */
 	private final ConcurrentHashMap<Long, String> sessions = new ConcurrentHashMap<>();
 
-	BotRunner(TelegramAdapter adapter, BotSpec spec, String apiUrl) {
+	BotRunner(TelegramAdapter adapter, BotSpec spec, String apiUrl, Managed managed) {
 		this.adapter = adapter;
 		this.spec = spec;
 		this.apiUrl = apiUrl;
+		this.managed = managed;
 	}
 
 	// ---------------------------------------------------------------- lifecycle
@@ -257,6 +263,7 @@ final class BotRunner {
 			BotSpec.K_USER, Strings.create(spec.userRef()),
 			K_TARGET, Strings.create(spec.target()),
 			K_STATE, Strings.create(state.name()),
+			K_MANAGED, Strings.create(managed.name().toLowerCase(Locale.ROOT)),
 			K_RECEIVED, CVMLong.create(received.get()),
 			K_SENT, CVMLong.create(sent.get()),
 			K_FAILED, CVMLong.create(failed.get()));
@@ -572,8 +579,13 @@ final class BotRunner {
 
 	// ----------------------------------------------------------- session state
 
+	/** Per-chat agent sessions live beside the bot registry: {@code w/telegram/sessions/<bot>/<chatId>}. */
+	static String sessionsPath(String bot) {
+		return "w/telegram/sessions/" + bot;
+	}
+
 	private String sessionPath(Long chatId) {
-		return "w/telegram/" + spec.name() + "/sessions/" + chatId;
+		return sessionsPath(spec.name()) + "/" + chatId;
 	}
 
 	private String sessionFor(Long chatId, RequestContext ctx) {

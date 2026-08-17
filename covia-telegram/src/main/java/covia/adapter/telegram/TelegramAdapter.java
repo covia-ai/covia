@@ -21,6 +21,7 @@ import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.adapter.AAdapter;
@@ -33,9 +34,12 @@ import covia.venue.RequestContext;
  * venue, and operations for sending messages through them.
  *
  * <p><b>Bots</b> are declared under {@code adapters.telegram.bots.<name>}
- * (see {@link BotSpec}). Each runs as its configured {@code user} with one
+ * (see {@link BotSpec}) by the operator, or created at runtime by a user with
+ * {@code telegram:create} (acting as that user, recorded at
+ * {@code w/telegram/bots/<name>} in their workspace and re-armed at boot;
+ * {@code telegram:delete} removes them). Each runs as its {@code user} with one
  * <b>inbound handler</b>: an agent — one {@code agent:chat} session per
- * Telegram chat, persisted at {@code w/telegram/<bot>/sessions/<chatId>} in
+ * Telegram chat, persisted at {@code w/telegram/sessions/<bot>/<chatId>} in
  * the user's workspace so conversations survive restarts — or an operation,
  * invoked per update with the Telegram {@code Update} exactly as sent
  * (snake_case, {@code message}/{@code callback_query}/… nested as Telegram
@@ -65,8 +69,11 @@ import covia.venue.RequestContext;
  *       with its documented parameters (media by file_id/URL, edits, callback
  *       answers, keyboards…), gated on {@code telegram/call}; the methods that
  *       drive the update stream are refused.</li>
+ *   <li>{@code telegram:create} / {@code telegram:delete} — the caller's own
+ *       bots, gated on {@code telegram/manage}.</li>
  *   <li>{@code telegram:bots} — status of the caller's bots (all bots for the
- *       venue identity). Tokens are never returned.</li>
+ *       venue identity), with {@code managed: config | runtime}. Tokens are
+ *       never returned.</li>
  * </ul>
  *
  * <p>Tokens are {@code s/NAME} secret references resolved in the bot user's
@@ -87,6 +94,9 @@ public class TelegramAdapter extends AAdapter implements AutoCloseable {
 	static final AString K_BOT = Strings.intern("bot");
 	static final AString K_METHOD = Strings.intern("method");
 	static final AString K_PARAMS = Strings.intern("params");
+	static final AString K_DELETED = Strings.intern("deleted");
+	/** Registry of a user's created bots, in their workspace: {@code w/telegram/bots/<name>} → settings. */
+	static final String REGISTRY_PATH = "w/telegram/bots";
 	static final String K_PARSE_MODE_PARAM = "parse_mode";
 	private static final AString K_ENABLED = Strings.intern("enabled");
 
@@ -94,6 +104,8 @@ public class TelegramAdapter extends AAdapter implements AutoCloseable {
 	public static final AString ABILITY_SEND = Strings.intern("telegram/send");
 	/** Ability required to call arbitrary Bot API methods through a bot (a superset of send). */
 	public static final AString ABILITY_CALL = Strings.intern("telegram/call");
+	/** Ability required to create or delete one's own bots; resource {@code <owner>/telegram/<bot>}. */
+	public static final AString ABILITY_MANAGE = Strings.intern("telegram/manage");
 
 	/** Methods that belong to the venue's own update loop for a bot; refused by {@code telegram:call}. */
 	static final Set<String> MANAGED_METHODS = Set.of("getUpdates", "setWebhook", "deleteWebhook", "logOut", "close");
@@ -130,6 +142,8 @@ public class TelegramAdapter extends AAdapter implements AutoCloseable {
 	protected void installAssets() {
 		installAsset("telegram/send", "/adapters/telegram/send.json");
 		installAsset("telegram/call", "/adapters/telegram/call.json");
+		installAsset("telegram/create", "/adapters/telegram/create.json");
+		installAsset("telegram/delete", "/adapters/telegram/delete.json");
 		installAsset("telegram/bots", "/adapters/telegram/bots.json");
 		// The skill travels with the capability: v/skills/telegram exists
 		// exactly when this module is loaded.
@@ -182,27 +196,76 @@ public class TelegramAdapter extends AAdapter implements AutoCloseable {
 	public void install(Engine engine) {
 		super.install(engine);
 		reconcile();
+		rearmRuntimeBots();
 	}
 
-	/** Bring the running bots in line with the configured specs. */
+	/** Bring the config-declared bots in line with the configured specs; runtime bots are untouched. */
 	private synchronized void reconcile() {
 		String url = apiUrl;
 		Map<String, BotSpec> wanted = specs;
 		List<String> stale = new ArrayList<>();
 		for (var e : runners.entrySet()) {
 			BotRunner r = e.getValue();
+			if (r.managed != BotRunner.Managed.CONFIG) continue;
 			BotSpec want = wanted.get(e.getKey());
 			if (want == null || !want.equals(r.spec) || !url.equals(r.apiUrl)) stale.add(e.getKey());
 		}
-		for (String name : stale) {
-			runners.remove(name).stop();
+		for (String key : stale) {
+			runners.remove(key).stop();
 		}
 		for (BotSpec spec : wanted.values()) {
 			if (runners.containsKey(spec.name())) continue;
-			BotRunner r = new BotRunner(this, spec, url);
+			BotRunner r = new BotRunner(this, spec, url, BotRunner.Managed.CONFIG);
 			runners.put(spec.name(), r);
 			r.start();
 		}
+	}
+
+	/**
+	 * Start every bot users created at runtime ({@code w/telegram/bots/<name>}
+	 * in each user's workspace). Read straight from the lattice, not through
+	 * the ops catalog, because at boot a module installs before the catalog is
+	 * materialised. A record that no longer parses is logged and skipped —
+	 * one bad bot must not keep the others down.
+	 */
+	private synchronized void rearmRuntimeBots() {
+		AMap<AString, ACell> users = engine.getVenueState().users().getAll();
+		if (users == null || users.isEmpty()) return;
+		int count = 0;
+		for (var userEntry : users.entrySet()) {
+			AString owner = (AString) userEntry.getKey();
+			AMap<AString, ACell> registry;
+			try {
+				registry = RT.castMap(engine.resolvePath(Strings.create(REGISTRY_PATH), RequestContext.of(owner)));
+			} catch (RuntimeException e) {
+				log.warn("Telegram: could not read bot registry of {}: {}", owner, e.getMessage());
+				continue;
+			}
+			if (registry == null || registry.isEmpty()) continue;
+			for (var botEntry : registry.entrySet()) {
+				String name = String.valueOf(botEntry.getKey());
+				String key = runtimeKey(owner, name);
+				if (runners.containsKey(key)) continue;
+				try {
+					BotSpec spec = runtimeSpec(owner, name, botEntry.getValue());
+					BotRunner r = new BotRunner(this, spec, apiUrl, BotRunner.Managed.RUNTIME);
+					runners.put(key, r);
+					r.start();
+					count++;
+				} catch (RuntimeException e) {
+					log.warn("Telegram: skipping bot '{}' of {}: {}", name, owner, e.getMessage());
+				}
+			}
+		}
+		if (count > 0) log.info("Telegram: re-armed {} user-created bot(s) from the lattice", count);
+	}
+
+	/** A registry record ({@code w/telegram/bots/<name>}) as a spec acting as its owner. */
+	private static BotSpec runtimeSpec(AString owner, String name, ACell record) {
+		AMap<AString, ACell> settings = RT.castMap(record);
+		if (settings == null) throw new IllegalArgumentException("registry record is not an object");
+		if (settings.containsKey(BotSpec.K_USER)) settings = settings.dissoc(BotSpec.K_USER);
+		return BotSpec.parse(name, settings.assoc(BotSpec.K_USER, owner), true);
 	}
 
 	@Override
@@ -237,12 +300,33 @@ public class TelegramAdapter extends AAdapter implements AutoCloseable {
 		return value;
 	}
 
+	/** A config-declared bot by name. */
 	synchronized BotRunner runner(String name) {
 		return runners.get(name);
 	}
 
+	/** A runtime-created bot by owner and name. */
+	synchronized BotRunner runner(AString owner, String name) {
+		return runners.get(runtimeKey(owner, name));
+	}
+
+	private static String runtimeKey(AString owner, String name) {
+		return owner + "#" + name;
+	}
+
 	private synchronized List<BotRunner> runnerList() {
 		return new ArrayList<>(runners.values());
+	}
+
+	/** Test hook: drop a runtime bot's live runner without touching its record (simulates a restart). */
+	synchronized void forgetForTest(AString owner, String name) {
+		BotRunner r = runners.remove(runtimeKey(owner, name));
+		if (r != null) r.stop();
+	}
+
+	/** Test hook: the boot re-arm of created bots. */
+	void rearmForTest() {
+		rearmRuntimeBots();
 	}
 
 	// --------------------------------------------------------------- operations
@@ -255,6 +339,8 @@ public class TelegramAdapter extends AAdapter implements AutoCloseable {
 		return switch (subOp) {
 			case "send" -> CompletableFuture.supplyAsync(() -> handleSend(ctx, input), VIRTUAL_EXECUTOR);
 			case "call" -> CompletableFuture.supplyAsync(() -> handleCall(ctx, input), VIRTUAL_EXECUTOR);
+			case "create" -> CompletableFuture.supplyAsync(() -> handleCreate(ctx, input), VIRTUAL_EXECUTOR);
+			case "delete" -> CompletableFuture.supplyAsync(() -> handleDelete(ctx, input), VIRTUAL_EXECUTOR);
 			case "bots" -> CompletableFuture.supplyAsync(() -> handleBots(ctx), VIRTUAL_EXECUTOR);
 			default -> throw new UnsupportedOperationException("Unsupported telegram operation: " + subOp);
 		};
@@ -332,14 +418,110 @@ public class TelegramAdapter extends AAdapter implements AutoCloseable {
 		return Maps.of(K_BOTS, out);
 	}
 
-	/** The named bot, or the caller's only bot when unnamed. */
+	/**
+	 * {@code telegram:create}: a bot acting as the caller, persisted at
+	 * {@code w/telegram/bots/<name>} in the caller's workspace and started at
+	 * once. The token must be an {@code s/} secret reference — a literal in
+	 * the workspace is the wrong place for a credential. {@code user} is
+	 * implicit (the caller): a user cannot create a bot that acts as someone
+	 * else. Gated on {@code <caller>/telegram/<name>} × {@code telegram/manage}.
+	 */
+	ACell handleCreate(RequestContext ctx, ACell input) {
+		AString owner = ctx.getUserDID();
+		if (owner == null) throw new covia.exception.AuthException("telegram:create requires an authenticated caller");
+		AMap<AString, ACell> in = RT.castMap(input);
+		if (in == null) throw new IllegalArgumentException("create expects an object of bot settings");
+		AString nameCell = RT.ensureString(in.get(Fields.NAME));
+		if (nameCell == null || nameCell.isEmpty()) throw new IllegalArgumentException("name is required");
+		String name = nameCell.toString();
+		if (in.containsKey(BotSpec.K_USER)) {
+			throw new IllegalArgumentException("user is implicit for a created bot — it acts as you; "
+				+ "bots acting as another identity are declared by the operator in venue config");
+		}
+		AString token = RT.ensureString(in.get(BotSpec.K_TOKEN));
+		if (token == null || !(token.toString().startsWith("s/") || token.toString().startsWith("/s/"))) {
+			throw new IllegalArgumentException("token must be an s/NAME secret reference (store the BotFather "
+				+ "token with v/ops/secret/set first) — literal tokens are not accepted for created bots");
+		}
+		AMap<AString, ACell> settings = in.dissoc(Fields.NAME);
+		BotSpec spec = BotSpec.parse(name, settings.assoc(BotSpec.K_USER, owner), true);
+		engine.requireAuthority(ctx, Strings.create(owner + "/telegram/" + name), ABILITY_MANAGE);
+
+		String key = runtimeKey(owner, name);
+		BotRunner runner;
+		synchronized (this) {
+			if (runners.containsKey(key)) {
+				throw new IllegalArgumentException("You already have a Telegram bot named '" + name
+					+ "' — delete it first (v/ops/telegram/delete) to replace it");
+			}
+			// Persist first: a bot that starts but is not on record would vanish at restart.
+			writePath(ctx, REGISTRY_PATH + "/" + name, settings);
+			runner = new BotRunner(this, spec, apiUrl, BotRunner.Managed.RUNTIME);
+			runners.put(key, runner);
+		}
+		runner.start();
+		log.info("Telegram bot '{}' created by {} -> {}", name, owner, spec.target());
+		return runner.status();
+	}
+
+	/**
+	 * {@code telegram:delete}: stop and forget one of the caller's created bots
+	 * (record and per-chat sessions removed). Config-declared bots are the
+	 * operator's: change the venue config or use adapter/configure.
+	 */
+	ACell handleDelete(RequestContext ctx, ACell input) {
+		AString owner = ctx.getUserDID();
+		if (owner == null) throw new covia.exception.AuthException("telegram:delete requires an authenticated caller");
+		AString nameCell = RT.ensureString(RT.getIn(input, Fields.NAME));
+		if (nameCell == null || nameCell.isEmpty()) throw new IllegalArgumentException("name is required");
+		String name = nameCell.toString();
+		engine.requireAuthority(ctx, Strings.create(owner + "/telegram/" + name), ABILITY_MANAGE);
+		BotRunner runner;
+		synchronized (this) {
+			runner = runners.remove(runtimeKey(owner, name));
+			if (runner == null) {
+				BotRunner config = runners.get(name);
+				if (config != null && owner.equals(config.spec.userDID(engine))) {
+					throw new IllegalArgumentException("Telegram bot '" + name + "' is declared in the venue "
+						+ "config; remove it there (or with v/ops/venue/adapter/configure), not with delete");
+				}
+				throw new IllegalArgumentException("You have no Telegram bot named '" + name + "'");
+			}
+		}
+		runner.stop();
+		deletePath(ctx, REGISTRY_PATH + "/" + name);
+		deletePath(ctx, BotRunner.sessionsPath(name));
+		log.info("Telegram bot '{}' deleted by {}", name, owner);
+		return Maps.of(Fields.NAME, Strings.create(name), K_DELETED, CVMBool.TRUE);
+	}
+
+	private void writePath(RequestContext ctx, String path, ACell value) {
+		try {
+			engine.jobs().invokeInternal("v/ops/covia/write",
+				Maps.of(Fields.PATH, Strings.create(path), Fields.VALUE, value), ctx).get(10, TimeUnit.SECONDS);
+		} catch (Exception e) {
+			throw new covia.exception.JobFailedException("Could not persist " + path + ": " + BotRunner.concise(e));
+		}
+	}
+
+	private void deletePath(RequestContext ctx, String path) {
+		try {
+			engine.jobs().invokeInternal("v/ops/covia/delete",
+				Maps.of(Fields.PATH, Strings.create(path)), ctx).get(10, TimeUnit.SECONDS);
+		} catch (Exception e) {
+			log.warn("Telegram: could not delete {}: {}", path, BotRunner.concise(e));
+		}
+	}
+
+	/** The named bot — the caller's own first, then a config-declared one — or the caller's only bot when unnamed. */
 	private BotRunner selectBot(RequestContext ctx, AString name) {
+		AString callerUser = ctx.getUserDID();
 		if (name != null && !name.isEmpty()) {
-			BotRunner r = runner(name.toString());
+			BotRunner r = (callerUser != null) ? runner(callerUser, name.toString()) : null;
+			if (r == null) r = runner(name.toString());
 			if (r == null) throw new IllegalArgumentException("Unknown Telegram bot: " + name);
 			return r;
 		}
-		AString callerUser = ctx.getUserDID();
 		List<BotRunner> mine = new ArrayList<>();
 		for (BotRunner r : runnerList()) {
 			if (callerUser != null && callerUser.equals(r.spec.userDID(engine))) mine.add(r);
@@ -347,7 +529,7 @@ public class TelegramAdapter extends AAdapter implements AutoCloseable {
 		if (mine.size() == 1) return mine.get(0);
 		if (mine.isEmpty()) {
 			throw new IllegalArgumentException("No Telegram bot is configured for " + callerUser
-				+ " — name one with 'bot' or declare it under adapters.telegram.bots");
+				+ " — name one with 'bot', create one with v/ops/telegram/create, or declare it under adapters.telegram.bots");
 		}
 		List<String> names = new ArrayList<>();
 		for (BotRunner r : mine) names.add(r.spec.name());

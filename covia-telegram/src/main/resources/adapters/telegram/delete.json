@@ -1,0 +1,22 @@
+{
+	"name": "Delete Telegram bot",
+	"description": "Stops and removes one of the bots you created with telegram:create — its record (w/telegram/bots/<name>) and its per-chat conversation sessions are deleted; the Telegram-side bot and its token are untouched. Bots declared in the venue config cannot be deleted here (change the config or use v/ops/venue/adapter/configure). Requires telegram/manage on <you>/telegram/<name>.",
+	"operation": {
+		"adapter": "telegram:delete",
+		"input": {
+			"type": "object",
+			"properties": {
+				"name": { "type": "string", "description": "Bot name" }
+			},
+			"required": ["name"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"name": { "type": "string" },
+				"deleted": { "type": "boolean" }
+			},
+			"required": ["name", "deleted"]
+		}
+	}
+}
