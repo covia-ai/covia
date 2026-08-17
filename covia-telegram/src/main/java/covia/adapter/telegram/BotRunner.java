@@ -484,7 +484,7 @@ final class BotRunner {
 			send(chatId, reply, spec.parseMode(), m.messageId(), threadOf(m), false);
 		} catch (Throwable t) {
 			failed.incrementAndGet();
-			log.warn("Telegram bot '{}': failed to respond in chat {}: {}", spec.name(), chatId, concise(t));
+			logFailure("failed to respond", chatId, t);
 			sendQuietly(chatId, "⚠️ " + concise(t), m);
 		}
 	}
@@ -503,8 +503,7 @@ final class BotRunner {
 			if (chatId != null) replyAfter(chatId, m, result);
 		} catch (Throwable t) {
 			failed.incrementAndGet();
-			log.warn("Telegram bot '{}': handler failed for update {} in chat {}: {}",
-				spec.name(), update.updateId(), chatId, concise(t));
+			logFailure("handler failed for update " + update.updateId(), chatId, t);
 			if (chatId != null) sendQuietly(chatId, "⚠️ " + concise(t), m);
 		}
 	}
@@ -849,13 +848,24 @@ final class BotRunner {
 		return r.errorCode() + " " + r.description();
 	}
 
+	/** What a person should read about a failure: the venue's shared rendering (type named unless self-describing). */
 	static String concise(Throwable t) {
 		Throwable c = t;
 		while ((c instanceof CompletionException || c instanceof ExecutionException) && c.getCause() != null) {
 			c = c.getCause();
 		}
-		String msg = c.getMessage();
-		if (msg == null || msg.isBlank()) msg = c.getClass().getSimpleName();
+		String msg = AAdapter.describeFailure(c);
 		return (msg.length() > 400) ? msg.substring(0, 400) + "…" : msg;
+	}
+
+	/** Log a handler failure: one line for expected, self-describing errors; the stack trace for anything else. */
+	private void logFailure(String what, Long chatId, Throwable t) {
+		Throwable c = t;
+		while ((c instanceof CompletionException || c instanceof ExecutionException) && c.getCause() != null) c = c.getCause();
+		if (AAdapter.isSelfDescribing(c)) {
+			log.warn("Telegram bot '{}': {} in chat {}: {}", spec.name(), what, chatId, concise(c));
+		} else {
+			log.warn("Telegram bot '{}': {} in chat {}: {}", spec.name(), what, chatId, concise(c), c);
+		}
 	}
 }

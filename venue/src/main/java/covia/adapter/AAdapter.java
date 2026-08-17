@@ -651,11 +651,38 @@ public abstract class AAdapter {
 	 * unwrap async wrappers, use the message when present, else fall back to the
 	 * exception's {@code toString()} so a failure never surfaces as a blank error.
 	 */
-	protected static String describeFailure(Throwable t) {
+	public static String describeFailure(Throwable t) {
 		if (t == null) return "Operation failed without an error detail";
 		Throwable cause = unwrap(t);
 		String msg = cause.getMessage();
-		return conciseDetail((msg != null && !msg.isBlank()) ? msg : cause.toString(), MAX_FAILURE_CHARS);
+		String text;
+		if (msg == null || msg.isBlank()) {
+			text = cause.getClass().getSimpleName() + " (no detail)";
+		} else if (isSelfDescribing(cause)) {
+			text = msg;
+		} else {
+			// A JVM error's or library exception's message alone can be opaque —
+			// NoClassDefFoundError's is just a class name — so name the type.
+			text = cause.getClass().getSimpleName() + ": " + msg;
+		}
+		if (cause instanceof LinkageError) {
+			text += " — a class could not be loaded; if a jar was rebuilt or replaced while the venue "
+				+ "was running, restart the venue";
+		}
+		return conciseDetail(text, MAX_FAILURE_CHARS);
+	}
+
+	/**
+	 * Whether a throwable's message reads as a complete diagnostic on its own:
+	 * Covia's own exceptions and the standard argument/state/unsupported
+	 * families are written for humans; everything else is named by type too.
+	 */
+	public static boolean isSelfDescribing(Throwable t) {
+		return t instanceof covia.exception.CoviaException
+			|| t.getClass() == RuntimeException.class      // used as a plain message carrier throughout
+			|| t instanceof IllegalArgumentException
+			|| t instanceof IllegalStateException
+			|| t instanceof UnsupportedOperationException;
 	}
 
 	/**

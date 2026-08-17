@@ -39,7 +39,7 @@ public class AAdapterInstallTest {
 
 	@Test
 	public void testFailureDescriptionIsNonBlankSingleLineAndBounded() {
-		assertEquals("java.lang.RuntimeException",
+		assertEquals("RuntimeException (no detail)",
 			ProbeAdapter.probeFailure(new RuntimeException()));
 		String detail = ProbeAdapter.probeFailure(
 			new RuntimeException("first line\n" + "x".repeat(2000)));
