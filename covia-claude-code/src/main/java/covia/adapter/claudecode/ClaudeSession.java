@@ -216,17 +216,29 @@ final class ClaudeSession {
 			if (process != null && process.isAlive()) state = State.IDLE;
 			return;
 		}
+		current = next;
+		state = State.BUSY;
+		boolean warm = (process != null && process.isAlive());
 		try {
-			if (process == null || !process.isAlive()) spawn();
-			current = next;
-			state = State.BUSY;
-			AMap<AString, ACell> msg = Maps.of(
-				J_TYPE, Strings.create("user"),
-				J_MESSAGE, Maps.of(J_ROLE, Strings.create("user"), J_CONTENT, Strings.create(next.prompt)));
-			stdin.write(JSON.print(msg).toString());
-			stdin.write('\n');
-			stdin.flush();
+			if (!warm) spawn();
+			writeTurn(next);
 		} catch (Exception e) {
+			// A warm process can die or close its stdin between turns (a slow or
+			// loaded host may have reaped it, or it exited on its own). The
+			// conversation lives in Claude Code's on-disk session, so discard the
+			// dead process and respawn a fresh one for the same session, retrying
+			// the turn once — the caller never sees the blip.
+			if (warm) {
+				log.debug("Claude Code warm process write failed ({}); respawning to resume", e.toString());
+				try {
+					discardProcess();
+					spawn();
+					writeTurn(next);
+					return;
+				} catch (Exception retry) {
+					e = retry;
+				}
+			}
 			current = null;
 			next.future.completeExceptionally(new RuntimeException("Could not start Claude Code turn: " + AAdapter.describeFailure(e), e));
 			stopLocked("start failed");
@@ -234,6 +246,28 @@ final class ClaudeSession {
 			failQueue("Claude Code session could not start: " + AAdapter.describeFailure(e));
 			adapter.onSlotFreed(this);
 		}
+	}
+
+	/** Send one prompt to the running process as a stream-json user message. */
+	private void writeTurn(Turn next) throws IOException {
+		AMap<AString, ACell> msg = Maps.of(
+			J_TYPE, Strings.create("user"),
+			J_MESSAGE, Maps.of(J_ROLE, Strings.create("user"), J_CONTENT, Strings.create(next.prompt)));
+		stdin.write(JSON.print(msg).toString());
+		stdin.write('\n');
+		stdin.flush();
+	}
+
+	/** Forcibly drop the current process for an immediate respawn — the session
+	 *  (its on-disk conversation) is untouched, so a resume continues it. */
+	private void discardProcess() {
+		Process p = process;
+		if (p == null) return;
+		closeStdin();
+		p.descendants().forEach(ProcessHandle::destroyForcibly);
+		p.destroyForcibly();
+		process = null;
+		stdin = null;
 	}
 
 	private void failQueue(String reason) {
