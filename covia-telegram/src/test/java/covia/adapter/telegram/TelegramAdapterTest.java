@@ -458,6 +458,41 @@ public class TelegramAdapterTest {
 	}
 
 	@Test
+	public void testTelegramAgentTemplate() throws Exception {
+		ACell template = engine.resolvePath(Strings.create("v/agents/templates/telegram"), RequestContext.of(OWNER));
+		assertNotNull(template, "the module ships an agent template");
+		assertEquals(template, engine.resolvePath(Strings.create("v/adapters/telegram/templates/telegram"), RequestContext.of(OWNER)),
+			"mirrored in the adapter's own subtree");
+		ACell cfg = RT.getIn(template, "agent", "config");
+		assertTrue(RT.getIn(cfg, "systemPrompt").toString().contains("via.from"), "the prompt teaches via");
+		assertTrue(RT.getIn(cfg, "skills").toString().contains("v/skills/telegram"));
+		assertTrue(RT.getIn(cfg, "tools").toString().contains("v/ops/memory"), "memory is a base tool");
+		assertNotNull(RT.getIn(cfg, "context"), "memory is pinned into context");
+
+		// An assistant from the template, provider composed at create time (the echoing test LLM)
+		run(RequestContext.of(OWNER), "v/ops/agent/create", Maps.of(
+			Fields.AGENT_ID, "tg-templated",
+			Fields.CONFIG, Vectors.of(Strings.create("v/agents/templates/telegram"),
+				Maps.of("llmOperation", "v/test/ops/llm"))));
+		String token = "888:TEMPLATE-BOT";
+		telegram.registerBot(token, "templated_bot");
+		run(RequestContext.of(OWNER), "v/ops/secret/set", Maps.of("name", "TG_TEMPLATE", "value", token));
+		run(RequestContext.of(OWNER), "v/ops/telegram/create", Maps.of(
+			"name", "templated", "token", "s/TG_TEMPLATE", "agent", "tg-templated",
+			"allow", Vectors.of(CVMLong.create(ALLOWED_ID))));
+		try {
+			BotRunner r = adapter.runner(OWNER, "templated");
+			await(() -> r != null && r.state() == BotRunner.State.RUNNING, 10_000, () -> "templated bot did not start");
+			telegram.push(token, 9001L, "private", ALLOWED_ID, "alice", "hello template");
+			FakeTelegramServer.Sent reply = telegram.awaitSent(token, 20_000);
+			assertNotNull(reply, "an agent built from the template answers through its bot");
+			assertTrue(reply.text().contains("hello template"), reply.text());
+		} finally {
+			run(RequestContext.of(OWNER), "v/ops/telegram/delete", Maps.of("name", "templated"));
+		}
+	}
+
+	@Test
 	public void testDisabledAdapterIsOfflineUntilReenabled() throws Exception {
 		long chat = 1004L;
 		engine.disableAdapter("telegram");

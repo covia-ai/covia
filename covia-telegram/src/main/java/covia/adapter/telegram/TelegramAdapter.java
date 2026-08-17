@@ -154,6 +154,9 @@ public class TelegramAdapter extends AAdapter implements AutoCloseable {
 		// The skill travels with the capability: v/skills/telegram exists
 		// exactly when this module is loaded.
 		installSkill("telegram", "/skills/telegram.json");
+		// …and the agent template for a bot-facing assistant: v/agents/templates/telegram
+		// (mirrored at v/adapters/telegram/templates/telegram), gone with the module.
+		installAgentTemplate("telegram", "/agent-templates/telegram.json");
 	}
 
 	// ------------------------------------------------------------ configuration

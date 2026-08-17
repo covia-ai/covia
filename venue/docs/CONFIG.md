@@ -927,7 +927,11 @@ Per bot:
   `from`/`chat` verbatim — so it knows who is on the other end without
   trusting anything typed; the venue's own "Venue attribution" system note
   still names the bot's Covia identity (the principal that submitted the
-  turn). With
+  turn). The module ships an agent template for exactly this role,
+  `v/agents/templates/telegram` (phone-chat register, `via`, per-chat
+  sessions, memory pinned into context, telegram/venue/covia skills;
+  provider composed at create time): `agent:create {agentId, config:
+  ["v/agents/templates/telegram", {llmOperation, model}]}`. With
   `operation`, every update invokes that reference with the **Telegram
   `Update` exactly as sent** — snake_case, `message` / `edited_message` /
   `callback_query` / … nested as Telegram nests them (a photo arrives as
