@@ -81,7 +81,7 @@ Semantics, access control, and pin-to-`/a/`-on-invoke behaviour are as already s
 |------|---------|
 | `/v/ops/` | Venue-provided operations catalog |
 | `/v/info/` | Venue identity, version, adapters, protocols |
-| `/v/adapters/<name>/` | The adapter-owned subtree: `info` (same record as `/v/info/adapters/<name>`), `config` (effective configuration, secret-safe — `AAdapter.publicConfig()`), and its `ops/…`, `skills/…`, `templates/…` mirrored from the canonical catalog (same values; a mirror path resolves and invokes exactly like the canonical one). Published and retracted with the adapter as one unit; `info`/`config` refreshed on reconfigure |
+| `/v/adapters/<name>/` | The adapter-owned subtree: `info` (same record as `/v/info/adapters/<name>`), `config` (only what the adapter explicitly publishes via `AAdapter.publicConfig()` — an allow-list of its own settings, nothing by default; e.g. `orchestrator` publishes `maxItems`/`maxConcurrency`), and its `ops/…`, `skills/…`, `templates/…` mirrored from the canonical catalog (same values; a mirror path resolves and invokes exactly like the canonical one). Published and retracted with the adapter as one unit; `info`/`config` refreshed on reconfigure |
 | `/v/test/` | Test-only operations and fixtures (separate from `/v/ops/`) |
 | `/v/config/` | Public venue configuration (reserved; not yet populated) |
 

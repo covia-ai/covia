@@ -330,50 +330,39 @@ public abstract class AAdapter {
 		return "v/adapters/" + name + "/" + kind + "/" + rel;
 	}
 
-	/** Configuration keys whose string values are credentials or endpoints and must not be published. */
-	private static final java.util.regex.Pattern SENSITIVE_KEY = java.util.regex.Pattern.compile(
-		"(?i)token|secret|password|passwd|pwd|key|auth|credential|cookie|url|uri|dsn|connection");
-
 	/**
-	 * This adapter's effective configuration as it is safe to publish at
-	 * {@code v/adapters/<name>/config}: by default {@link Engine#adapterConfig}
-	 * with every string under a credential- or endpoint-looking key (token,
-	 * secret, password, key, auth, url, …) replaced by {@code "***"} — except
-	 * {@code s/} secret references, which are names, not values. Override to
-	 * publish more precisely; never publish a raw credential.
+	 * This adapter's configuration as it is safe to publish at
+	 * {@code v/adapters/<name>/config}. Nothing is published unless the adapter
+	 * says so: the default is null (no record). An adapter that has public
+	 * settings overrides this and returns exactly the keys it wants seen —
+	 * {@link #publicConfig(String...)} picks named top-level keys from the
+	 * effective configuration ({@link Engine#adapterConfig}) — and never a
+	 * credential, endpoint or anything else an operator would not put on the
+	 * venue's public bulletin board.
 	 *
-	 * @return the publishable configuration, never null
+	 * @return the publishable configuration, or null for none
 	 */
 	public AMap<AString, ACell> publicConfig() {
-		AMap<AString, ACell> cfg = (engine != null) ? engine.adapterConfig(getName()) : null;
-		if (cfg == null) return Maps.empty();
-		ACell redacted = redact(cfg, false);
-		return (redacted instanceof AMap) ? RT.castMap(redacted) : Maps.empty();
+		return null;
 	}
 
-	/** Recursively replaces credential-looking string values with {@code "***"}. */
-	@SuppressWarnings("unchecked")
-	static ACell redact(ACell value, boolean sensitive) {
-		if (value instanceof AString s) {
-			if (!sensitive) return value;
-			String v = s.toString();
-			return (v.startsWith("s/") || v.startsWith("/s/")) ? value : Strings.create("***");
+	/**
+	 * The named top-level keys of this adapter's effective configuration, for
+	 * {@link #publicConfig()} overrides: an explicit allow-list, no guessing.
+	 *
+	 * @param keys top-level configuration keys that are public
+	 * @return those keys that are present, in order; empty when none are
+	 */
+	protected AMap<AString, ACell> publicConfig(String... keys) {
+		AMap<AString, ACell> cfg = (engine != null) ? engine.adapterConfig(getName()) : null;
+		AMap<AString, ACell> out = Maps.empty();
+		if (cfg == null) return out;
+		for (String key : keys) {
+			AString k = Strings.create(key);
+			ACell v = cfg.get(k);
+			if (v != null) out = out.assoc(k, v);
 		}
-		if (value instanceof AMap<?, ?> m) {
-			AMap<ACell, ACell> out = (AMap<ACell, ACell>) m;
-			for (long i = 0; i < m.count(); i++) {
-				var e = m.entryAt(i);
-				boolean keySensitive = sensitive || (e.getKey() instanceof AString ks && SENSITIVE_KEY.matcher(ks.toString()).find());
-				out = out.assoc(e.getKey(), redact(e.getValue(), keySensitive));
-			}
-			return out;
-		}
-		if (value instanceof convex.core.data.AVector<?> v) {
-			convex.core.data.AVector<ACell> out = convex.core.data.Vectors.empty();
-			for (long i = 0; i < v.count(); i++) out = out.conj(redact(v.get(i), sensitive));
-			return out;
-		}
-		return value;
+		return out;
 	}
 
 

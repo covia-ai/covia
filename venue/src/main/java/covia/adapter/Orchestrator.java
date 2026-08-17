@@ -46,6 +46,12 @@ public class Orchestrator extends AAdapter {
 		installSkill("orchestration", "/skills/orchestration.json");
 	}
 
+	/** Public settings: maxItems, maxConcurrency — plain operating parameters, nothing an operator would keep private. */
+	@Override
+	public AMap<AString, ACell> publicConfig() {
+		return publicConfig("maxItems", "maxConcurrency");
+	}
+
 	@Override
 	public String getDescription() {
 		return "Enables complex multi-step orchestration operations with dependency management and parallel execution. " +

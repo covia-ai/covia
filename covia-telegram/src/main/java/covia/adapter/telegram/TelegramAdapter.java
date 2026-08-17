@@ -138,6 +138,12 @@ public class TelegramAdapter extends AAdapter implements AutoCloseable {
 			+ "and telegram:call let agents and users use the Bot API through a bot they own.";
 	}
 
+	/** Public settings: the effective Bot API base URL. Bots themselves (tokens, allow-lists) are not published — telegram:bots shows each user their own. */
+	@Override
+	public AMap<AString, ACell> publicConfig() {
+		return Maps.of(K_API_URL, Strings.create(apiUrl));
+	}
+
 	@Override
 	protected void installAssets() {
 		installAsset("telegram/send", "/adapters/telegram/send.json");

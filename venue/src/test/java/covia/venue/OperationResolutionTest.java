@@ -776,7 +776,7 @@ public class OperationResolutionTest {
 		assertNotNull(engine.resolvePath(Strings.create("v/adapters/agent/templates/worker"), alice), "templates mirror");
 		assertNotNull(engine.resolvePath(Strings.create("v/adapters/grid/skills/grid"), alice), "an adapter's skill under its subtree");
 		assertNotNull(engine.resolvePath(Strings.create("v/adapters/skills/skills/covia"), alice), "platform skills under the skills adapter");
-		assertNotNull(engine.resolvePath(Strings.create("v/adapters/dlfs/config"), alice), "config is always present");
+		assertNull(engine.resolvePath(Strings.create("v/adapters/dlfs/config"), alice), "no public settings, no config record");
 		// ...and invocable by that address
 		Job job = engine.jobs().invokeOperation("v/adapters/test/ops/echo", Maps.of("ping", "pong"), alice);
 		assertEquals(Maps.of("ping", "pong"), job.awaitResult(5000));

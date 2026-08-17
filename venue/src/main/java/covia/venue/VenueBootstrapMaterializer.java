@@ -175,14 +175,21 @@ final class VenueBootstrapMaterializer {
 		AMap<AString, ACell> summary = adapterSummary(adapter);
 		writeAndValidateVenuePath("v/info/adapters/" + adapter.getName(), summary);
 		writeAndValidateVenuePath(ADAPTERS_ROOT + adapter.getName() + "/info", summary);
-		AMap<AString, ACell> config;
+		// config only when the adapter explicitly publishes one (AAdapter.publicConfig
+		// is an allow-list, null by default); a reconfigure that stops publishing
+		// removes the record.
+		AMap<AString, ACell> config = null;
 		try {
 			config = adapter.publicConfig();
 		} catch (RuntimeException e) {
 			log.warn("Adapter '{}' publicConfig() failed; publishing nothing: {}", adapter.getName(), e.toString());
-			config = Maps.empty();
 		}
-		writeAndValidateVenuePath(ADAPTERS_ROOT + adapter.getName() + "/config", config == null ? Maps.empty() : config);
+		String configPath = ADAPTERS_ROOT + adapter.getName() + "/config";
+		if (config != null) {
+			writeAndValidateVenuePath(configPath, config);
+		} else if (readVenuePath(configPath) != null) {
+			deleteVenuePath(configPath);
+		}
 	}
 
 	/** Root of the adapter-owned subtrees. */

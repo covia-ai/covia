@@ -42,6 +42,12 @@ public class VaultAdapter extends AAdapter {
 		return "vault";
 	}
 
+	/** Public settings: drive — plain operating parameters, nothing an operator would keep private. */
+	@Override
+	public AMap<AString, ACell> publicConfig() {
+		return publicConfig("drive");
+	}
+
 	@Override
 	public String getDescription() {
 		return "Personal vault — read and write files in the user's configured '" + driveName

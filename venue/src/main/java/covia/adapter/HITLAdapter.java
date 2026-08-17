@@ -84,6 +84,12 @@ public class HITLAdapter extends AAdapter {
 		return "hitl";
 	}
 
+	/** Public settings: maxGrantLifetimeSecs — plain operating parameters, nothing an operator would keep private. */
+	@Override
+	public AMap<AString, ACell> publicConfig() {
+		return publicConfig("maxGrantLifetimeSecs");
+	}
+
 	@Override
 	public String getDescription() {
 		return "Human-in-the-Loop requests (COG-16): ask a human for decisions, approvals or "

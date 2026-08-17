@@ -219,6 +219,12 @@ public class AgentAdapter extends AAdapter {
 
 	@Override public String getName() { return "agent"; }
 
+	/** Public settings: sessionDelete — plain operating parameters, nothing an operator would keep private. */
+	@Override
+	public AMap<AString, ACell> publicConfig() {
+		return publicConfig("sessionDelete");
+	}
+
 	@Override
 	public String getDescription() {
 		return "Manages agent lifecycle: create agents, submit requests, deliver messages, "

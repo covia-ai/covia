@@ -63,6 +63,9 @@ public class AdapterLifecycleTest {
 			// The reserved framework key is ignored; the adapter's own fact is published.
 			return Maps.of("colour", colour, "name", "not-me");
 		}
+		@Override public AMap<AString, ACell> publicConfig() {
+			return publicConfig("colour", "nested");   // an explicit allow-list: token is not on it
+		}
 		@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 			return CompletableFuture.completedFuture(input);
 		}
@@ -119,10 +122,12 @@ public class AdapterLifecycleTest {
 			Engine.addDemoAssets(engine);
 			ACell cfg = venueRead(engine, "v/adapters/fact/config");
 			assertEquals(Strings.create("blue"), RT.getIn(cfg, "colour"));
-			assertEquals(Strings.create("***"), RT.getIn(cfg, "token"), "credential-looking values are redacted");
-			assertEquals(Strings.create("s/MY_TOKEN"), RT.getIn(cfg, "ref"), "secret references are names, kept");
-			assertEquals(Strings.create("***"), RT.getIn(cfg, "nested", "apiKey"));
-			assertEquals(convex.core.data.prim.CVMLong.create(3), RT.getIn(cfg, "nested", "size"));
+			assertNull(RT.getIn(cfg, "token"), "only allow-listed keys are published — no guessing, no redaction");
+			assertNull(RT.getIn(cfg, "ref"));
+			assertEquals(convex.core.data.prim.CVMLong.create(3), RT.getIn(cfg, "nested", "size"),
+				"an allow-listed key is published whole");
+			assertNull(venueRead(engine, "v/adapters/mcp/config"), "adapters that publish nothing have no config record");
+			assertNotNull(venueRead(engine, "v/adapters/orchestrator/config"), "documented public settings are published");
 			assertEquals(venueRead(engine, "v/info/adapters/fact"), venueRead(engine, "v/adapters/fact/info"));
 
 			engine.configureAdapter("fact", Maps.of("colour", "red"));
