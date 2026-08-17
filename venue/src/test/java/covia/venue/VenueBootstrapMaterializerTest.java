@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.Cells;
 import convex.core.data.Strings;
 import covia.adapter.AAdapter;
 
@@ -33,6 +34,26 @@ public class VenueBootstrapMaterializerTest {
 				Strings.create("v/ops/covia/write"), engine.venueContext()));
 			assertEquals(engine.getDIDString(), engine.resolvePath(
 				Strings.create("v/info/did"), engine.venueContext()));
+		} finally {
+			engine.close();
+		}
+	}
+
+	@Test
+	public void catalogHashReverseIndexResolvesBackToItsPath() {
+		Engine engine = Engine.createTemp(null);
+		try {
+			Engine.addDemoAssets(engine);
+
+			String path = "v/ops/covia/write";
+			ACell metadata = engine.resolvePath(Strings.create(path), engine.venueContext());
+			assertNotNull(metadata, "sanity: the operation itself must resolve");
+			String hash = Cells.getHash(metadata).toHexString();
+
+			ACell reversed = engine.resolvePath(
+				Strings.create("v/info/catalog/" + hash), engine.venueContext());
+			assertEquals(Strings.create(path), reversed,
+				"the reverse index must map the operation's own metadata hash back to its catalog path");
 		} finally {
 			engine.close();
 		}

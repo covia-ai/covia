@@ -106,6 +106,16 @@ final class VenueBootstrapMaterializer {
 		}
 
 		writeAndValidateVenuePath(path, metadata);
+
+		// Reverse index: the catalog store (venueState.assets(), what GET
+		// /api/v1/assets iterates) is keyed purely by content hash, with no
+		// path recorded — so once a caller resolves one of these assets by
+		// hash alone, its catalog name is otherwise unrecoverable. This is an
+		// independent write of the same (path, hash) pair already computed
+		// above, not derived from the hashed metadata itself — the metadata
+		// body must stay exactly what its hash certifies, so this lives
+		// outside it, the same way ETag does.
+		writeAndValidateVenuePath("v/info/catalog/" + assetHash.toHexString(), Strings.create(path));
 	}
 
 	private static void validateCatalogPath(String path) {
