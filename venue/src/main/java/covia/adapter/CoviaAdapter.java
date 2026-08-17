@@ -1642,24 +1642,39 @@ public class CoviaAdapter extends AAdapter {
 	}
 
 	/**
-	 * Parses the {@code fields} parameter: a comma-separated string (the GET
-	 * form) or a vector of strings (the op form). Blank names are rejected and
-	 * the count is capped — loudly, never silently.
+	 * Parses the {@code fields} parameter: a vector of strings (the op form),
+	 * the documented array form serialised as a JSON string (some MCP clients
+	 * stringify nested arguments, and this schema declares no {@code type} so
+	 * the MCP layer cannot coerce it — #379), or a comma-separated string (the
+	 * GET form). Blank names are rejected and the count is capped — loudly,
+	 * never silently.
 	 */
 	private static AString[] parseFieldsParam(ACell fieldsCell) {
 		java.util.List<AString> out = new java.util.ArrayList<>();
 		if (fieldsCell instanceof AString s) {
-			for (String part : s.toString().split(",")) {
-				String trimmed = part.trim();
-				if (trimmed.isEmpty()) throw new IllegalArgumentException("fields contains a blank field name");
-				out.add(Strings.create(trimmed));
+			String str = s.toString().trim();
+			if (str.startsWith("[")) {
+				// A JSON-array string — parse it, rather than comma-splitting the
+				// brackets and quotes into mangled field names (#379).
+				ACell parsed;
+				try {
+					parsed = JSON.parse(str);
+				} catch (Exception e) {
+					throw new IllegalArgumentException("fields looks like a JSON array but is not valid JSON: " + str);
+				}
+				if (!(parsed instanceof AVector<?> pv)) {
+					throw new IllegalArgumentException("fields must be an array of strings or a comma-separated string");
+				}
+				addFieldVector(pv, out);
+			} else {
+				for (String part : str.split(",")) {
+					String trimmed = part.trim();
+					if (trimmed.isEmpty()) throw new IllegalArgumentException("fields contains a blank field name");
+					out.add(Strings.create(trimmed));
+				}
 			}
 		} else if (fieldsCell instanceof AVector<?> v) {
-			for (long i = 0; i < v.count(); i++) {
-				AString f = RT.ensureString((ACell) v.get(i));
-				if (f == null || f.isEmpty()) throw new IllegalArgumentException("fields entries must be non-empty strings");
-				out.add(f);
-			}
+			addFieldVector(v, out);
 		} else {
 			throw new IllegalArgumentException("fields must be a comma-separated string or an array of strings");
 		}
@@ -1669,6 +1684,15 @@ public class CoviaAdapter extends AAdapter {
 				+ " subpaths; the maximum is " + MAX_PROJECT_FIELDS);
 		}
 		return out.toArray(new AString[0]);
+	}
+
+	/** Appends each entry of a field-name vector, rejecting non-string or empty names. */
+	private static void addFieldVector(AVector<?> v, java.util.List<AString> out) {
+		for (long i = 0; i < v.count(); i++) {
+			AString f = RT.ensureString((ACell) v.get(i));
+			if (f == null || f.isEmpty()) throw new IllegalArgumentException("fields entries must be non-empty strings");
+			out.add(f);
+		}
 	}
 
 	// ========== covia:aggregate — count entries at a depth, optionally grouped ==========

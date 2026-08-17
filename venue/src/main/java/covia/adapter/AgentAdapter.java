@@ -2571,6 +2571,13 @@ public class AgentAdapter extends AAdapter {
 					Fields.PENDING, resolvedPending);
 				if (pickedTaskInput != null) {
 					transitionInput = transitionInput.assoc(Fields.NEW_INPUT, pickedTaskInput);
+					// The task is keyed by the delegating agent:request Job id; carry it
+					// so a frame-owning harness can tie the request turn back to the
+					// calling job, exactly as chat turns record their job id (#378).
+					if (pickedTask != null) {
+						transitionInput = transitionInput.assoc(Fields.JOB_ID,
+							Strings.create(pickedTask.getKey().toHexString()));
+					}
 				}
 				if (pickedSessionRecord != null) {
 					AMap<AString, ACell> sessionMap = pickedSessionRecord
@@ -2839,6 +2846,12 @@ public class AgentAdapter extends AAdapter {
 					AgentState.K_CONTENT, pickedTaskInput,
 					AgentState.K_TURN_TS, CVMLong.create(startTs),
 					AgentState.K_SOURCE,  AgentState.SOURCE_REQUEST);
+				// The task is keyed by the delegating agent:request Job id — record it
+				// so the target agent's turn ties back to the calling job, as chat
+				// turns do (#378).
+				if (pickedTask != null) {
+					turn = turn.assoc(Fields.JOB_ID, Strings.create(pickedTask.getKey().toHexString()));
+				}
 				ACell taskCaller = (pickedTask != null && pickedTask.getValue() instanceof AMap)
 					? ((AMap<AString, ACell>) pickedTask.getValue()).get(Fields.CALLER) : null;
 				turnsToAppend = turnsToAppend.conj(withCaller(turn, recordCaller, taskCaller));

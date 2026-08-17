@@ -1707,6 +1707,10 @@ public class AgentAdapterTest {
 		assertEquals(AgentState.ROLE_USER, userTurn.get(AgentState.K_ROLE));
 		assertEquals(AgentState.SOURCE_REQUEST, userTurn.get(AgentState.K_SOURCE));
 		assertEquals(Strings.create("do thing"), userTurn.get(AgentState.K_CONTENT));
+		// The request turn records the delegating agent:request Job id, so the
+		// target agent's session ties back to the calling job as chat turns do (#378).
+		assertEquals(Strings.create(reqJob.getID().toHexString()), userTurn.get(Fields.JOB_ID),
+			"request turn records the calling agent:request job id");
 
 		AMap<AString, ACell> assistantTurn = (AMap<AString, ACell>) history.get(1);
 		assertEquals(AgentState.ROLE_ASSISTANT, assistantTurn.get(AgentState.K_ROLE));

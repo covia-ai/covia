@@ -486,6 +486,32 @@ public class CoviaAdapterTest {
 	}
 
 	@Test
+	public void testListFieldsAcceptsJsonArrayString() {
+		// Two children, each a map with 'status' and 'name' subfields.
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/things", Fields.VALUE, Maps.of(
+				"a", Maps.of("status", "ok", "name", "Alpha"),
+				"b", Maps.of("status", "bad", "name", "Beta"))), ALICE).awaitResult(5000);
+
+		// The documented array form must project correctly whether it arrives as a
+		// vector (op form), a comma string (GET form), or a JSON-array string — the
+		// last is how some MCP clients serialise it, and it must be parsed, not
+		// comma-split into mangled keys that all read exists:false (#379).
+		for (ACell fields : new ACell[] {
+				Vectors.of("status", "name"),
+				Strings.create("status,name"),
+				Strings.create("[\"status\", \"name\"]") }) {
+			ACell result = engine.jobs().invokeOperation("v/ops/covia/list",
+				Maps.of(Fields.PATH, "w/things", Strings.create("fields"), fields), ALICE).awaitResult(5000);
+			ACell values = RT.getIn(result, "values");
+			assertNotNull(values, "projection present for fields=" + fields);
+			assertEquals(CVMBool.TRUE, RT.getIn(values, "a", "status", "exists"), "status read for fields=" + fields);
+			assertEquals(Strings.create("ok"), RT.getIn(values, "a", "status", "value"), "status value for fields=" + fields);
+			assertEquals(Strings.create("Beta"), RT.getIn(values, "b", "name", "value"), "name value for fields=" + fields);
+		}
+	}
+
+	@Test
 	public void testListTopLevel() {
 		// No path — list top-level namespaces
 		Job job = engine.jobs().invokeOperation("v/ops/covia/list",

@@ -1528,11 +1528,16 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 
 		ACell newInput = RT.getIn(input, Fields.NEW_INPUT);
 		if (newInput != null) {
-			turns = turns.conj(Maps.of(
+			AMap<AString, ACell> turn = Maps.of(
 				covia.venue.AgentState.K_ROLE,    covia.venue.AgentState.ROLE_USER,
 				covia.venue.AgentState.K_CONTENT, newInput,
 				covia.venue.AgentState.K_TURN_TS, tsCell,
-				covia.venue.AgentState.K_SOURCE,  covia.venue.AgentState.SOURCE_REQUEST));
+				covia.venue.AgentState.K_SOURCE,  covia.venue.AgentState.SOURCE_REQUEST);
+			// The delegating agent:request Job id, carried on the transition input,
+			// ties this request turn back to the calling job as chat turns do (#378).
+			ACell reqJobId = RT.getIn(input, Fields.JOB_ID);
+			if (reqJobId != null) turn = turn.assoc(Fields.JOB_ID, reqJobId);
+			turns = turns.conj(turn);
 		}
 
 		return turns;

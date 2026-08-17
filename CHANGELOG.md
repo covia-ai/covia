@@ -30,6 +30,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Fixed
 
+- MCP `covia_list` `fields` projection accepts the documented array form when a client serialises it as a JSON string (as some MCP clients do): the string is JSON-parsed rather than comma-split into mangled keys that all read `exists:false` (#379)
+- `agent:request` delegation turns record the calling Job id (`jobId`), like chat turns already do, so a task delivered to another agent is traceable back to the `agent:request` job — the task is keyed by that job id (#378)
 - `java -jar covia.jar <relative-config-path>` works: MainVenue resolves the config argument against the working directory (`~` expanded) instead of Convex `FileUtils.getPath`, which treats bare relative names as root-relative (Convex-Dev/convex#701)
 - Metadata reads for asset refs whose final segment is `content` no longer misroute (#368)
 - An empty `complete_task` now delivers the turn's message text as the task result instead of looping to rejection; built-in agent tool errors state the expected call shape
