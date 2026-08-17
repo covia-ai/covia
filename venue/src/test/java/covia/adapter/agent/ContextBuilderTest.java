@@ -597,11 +597,46 @@ public class ContextBuilderTest {
 			if (!c.startsWith("Venue attribution:")) continue;
 			notes++;
 			if (c.contains("z6MkBob")) bobNotes++;
-			if (c.contains("agent's own principal")) ownNotes++;
+			if (c.contains("your own principal")) ownNotes++;
 		}
 		assertEquals(3, notes, "one note per change of submitting principal: bob, back to alice, bob again");
 		assertEquals(2, bobNotes);
 		assertEquals(1, ownNotes);
+	}
+
+
+	@Test
+	public void testAttributionNotesSpeakToTheRelationship() {
+		// The agent's own transition context: a sub-principal of Alice
+		RequestContext agentCtx = RequestContext.ofAuthority(covia.grid.Authority.ofAgent(ALICE_DID, Strings.create("helper")));
+		ContextBuilder b = new ContextBuilder(engine, agentCtx).withConfig(null);
+
+		String owner = b.attributionNote(ALICE_DID);
+		assertTrue(owner.contains("from your owner") && owner.contains("with confidence"), owner);
+
+		String sibling = b.attributionNote(covia.grid.Principals.agentDID(ALICE_DID, Strings.create("scout")));
+		assertTrue(sibling.contains("scout") && sibling.contains("colleague"), sibling);
+
+		String venue = b.attributionNote(engine.getDIDString());
+		assertTrue(venue.contains("the venue itself") && venue.contains("trusted operator"), venue);
+
+		String stranger = b.attributionNote(Strings.create(engine.getDIDString() + ":public"));
+		assertTrue(stranger.contains("anonymous public principal") && stranger.contains("untrusted"), stranger);
+
+		String other = b.attributionNote(Strings.create("did:key:z6MkBob"));
+		assertTrue(other.contains("another user of this venue") && other.contains("no authority beyond"), other);
+
+		// A public-owned agent (open dev venue) hears its owner addressed as its owner, not as a stranger
+		AString publicDID = Strings.create(engine.getDIDString() + ":public");
+		ContextBuilder pb = new ContextBuilder(engine,
+			RequestContext.ofAuthority(covia.grid.Authority.ofAgent(publicDID, Strings.create("Assistant")))).withConfig(null);
+		String publicOwner = pb.attributionNote(publicDID);
+		assertTrue(publicOwner.contains("from your owner") && publicOwner.contains("with confidence"), publicOwner);
+
+		// Every note says it is the venue's verified word, not the sender's text
+		for (String n : new String[] {owner, sibling, venue, stranger, other, publicOwner}) {
+			assertTrue(n.startsWith("Venue attribution:") && n.contains("Verified by the venue"), n);
+		}
 	}
 
 	// ========== Empty state signal ==========
