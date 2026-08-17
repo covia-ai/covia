@@ -74,7 +74,7 @@ public class SkillsAdapter extends AAdapter {
 	 * loaded, never listed here.</p>
 	 */
 	static final String[] LIBRARY = {
-		"workspace", "assets", "discovery", "provenance", "agents", "tasks",
+		"covia", "venue", "workspace", "assets", "discovery", "provenance", "agents", "tasks",
 		"models", "orchestration", "grid", "a2a", "files", "secrets",
 		"scheduling", "memory", "convex", "mcp", "http", "auth", "users", "skills",
 		"skill-authoring", "hitl"

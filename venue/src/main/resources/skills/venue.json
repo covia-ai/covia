@@ -1,0 +1,15 @@
+{
+	"name": "venue",
+	"description": "What a venue is and how to learn about the one you are on: identity (name, DID, URL), how clients connect, what it offers, its namespaces and records. Load when asked about 'this venue'.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Venue\nA venue is one Covia grid node: a running server with its own DID that hosts operations, agents, assets and users' data, and federates with other venues. Everything about it is readable under `v/` (public, read-only) — never guess, read.\n\nIdentity and address (`read {path}`):\n- `v/info/name`, `v/info/did` (canonical identity; a `did:web` alias may be declared), `v/info/url` (base URL — the address to give a human), `v/info/version`, `v/info/started`, `v/info/protocols` (rest, mcp, a2a; `dlfs-webdav` when mounted).\n\nHow a human or client connects, relative to `v/info/url`: REST `<url>/api/v1/…` (OpenAPI at `<url>/swagger`), MCP `<url>/mcp`, A2A card `<url>/.well-known/agent-card.json`, DID document `<url>/.well-known/did.json`. WebDAV: `v/info/adapters/dlfs/webdav` gives `enabled`, the mount `url`, and `windows` — the UNC path for mapping a drive on Windows (append the drive name).\n\nWhat it offers:\n- `v/info/adapters` — every active adapter with description and operation paths; `v/info/adapters/<name>` also carries the adapter's own published facts (mounts, endpoints, features).\n- `v/info/modules` — loaded modules (optional adapters such as sql, python, telegram).\n- `v/ops/<adapter>/<op>` — the operation catalog (schemas are the calling contract); `v/skills`, `v/agents/templates`. The discovery skill goes deeper.\n\nNamespaces (paths you will see): `v/` venue globals · `w/` your workspace · `o/` your pinned operations · `a/` content-addressed assets · `s/` your secrets (names only, values never readable) · `g/` your agents · `j/` your jobs, the record of everything invoked · `h/` your human-in-the-loop inbox · `n/`, `t/` scratch. Another user's data needs a delegated capability.\n\nRules: the venue's DID identifies it; its URL locates it — a `did:key` alone has no address. Other venues: grid skill. Who you are here: auth skill."
+	},
+	"skill": {
+		"tools": [
+			"v/ops/covia/read",
+			"v/ops/covia/list",
+			"v/ops/covia/slice"
+		]
+	}
+}
