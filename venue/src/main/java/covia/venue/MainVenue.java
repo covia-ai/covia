@@ -43,8 +43,10 @@ public class MainVenue {
 		// First argument is config file path, if specified
 		if (args.length>0) try {
 			// Resolve the CLI argument the way a shell user expects: relative to the
-			// working directory, ~ expanded. (FileUtils.getPath treats bare relative
-			// names as root-relative — Convex-Dev/convex#701 — so it is not used here.)
+			// working directory, ~ expanded. Resolved explicitly rather than via
+			// Convex FileUtils.getPath — that treated bare relative names as
+			// root-relative until Convex-Dev/convex#701 (fixed in 0.8.13); explicit
+			// resolution also handles ~ expansion, which getPath does not.
 			String configPath=args[0];
 			Path cPath = configPath.startsWith("~")
 				? Path.of(System.getProperty("user.home") + configPath.substring(1))

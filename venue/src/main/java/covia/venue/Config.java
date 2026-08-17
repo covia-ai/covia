@@ -289,8 +289,11 @@ public class Config {
 
 	/** Key for DLFS WebDAV configuration section */
 	public static final AString WEBDAV = Strings.intern("webdav");
-	/** Where the DLFS WebDAV mount lives under the base URL when enabled (fixed by {@code convex.dlfs.DLFSWebDAV}). */
-	public static final String WEBDAV_PATH = "/dlfs/";
+	/** Where the DLFS WebDAV mount lives under the base URL when enabled. Tracks
+	 *  the canonical mount path {@code convex.dlfs.DLFSWebDAV} serves, exposed for
+	 *  embedders in Convex 0.8.13 (Convex-Dev/convex#699), so the advertised URL
+	 *  cannot drift from where DLFS actually mounts. */
+	public static final String WEBDAV_PATH = convex.dlfs.DLFSWebDAV.MOUNT_PATH;
 
 	// ========== File adapter config keys ==========
 
