@@ -8,6 +8,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-08-17
+
 ### Added
 
 - LangChain providers `mistral` (`MISTRAL_API_KEY`, `mistral-medium-latest` default) and `openrouter` (`OPENROUTER_API_KEY`, `openrouter/auto` default, any vendor-prefixed model id) — OpenAI-compatible endpoints; listed by `langchain:models`
@@ -439,7 +441,8 @@ Initial public release: venue server with the adapter framework, lattice-backed
 content-addressed assets, the async job model with SSE, multi-protocol surface
 (REST / MCP / A2A / DID), and strategy-based authentication.
 
-[Unreleased]: https://github.com/covia-ai/covia/compare/0.9.1...HEAD
+[Unreleased]: https://github.com/covia-ai/covia/compare/0.9.2...HEAD
+[0.9.2]: https://github.com/covia-ai/covia/compare/0.9.1...0.9.2
 [0.9.1]: https://github.com/covia-ai/covia/compare/0.9.0...0.9.1
 [0.9.0]: https://github.com/covia-ai/covia/compare/0.8.0...0.9.0
 [0.8.0]: https://github.com/covia-ai/covia/compare/0.7.0...0.8.0
