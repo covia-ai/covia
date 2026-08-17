@@ -364,6 +364,20 @@ public class TelegramAdapterTest {
 	}
 
 	@Test
+	public void testNonAsciiSurvivesBothDirections() throws Exception {
+		String text = "em dash — ✅ ❌ £ é 日本語 🚀";
+		run(RequestContext.of(OWNER), "v/ops/telegram/send", Maps.of("chat_id", CVMLong.create(3006L), "text", text));
+		FakeTelegramServer.Sent sent = telegram.awaitSent(10_000);
+		assertNotNull(sent);
+		assertEquals(text, sent.text(), "outbound text must reach Telegram byte-for-byte as UTF-8");
+
+		telegram.push(1007L, ALLOWED_ID, "alice", "inbound " + text);
+		FakeTelegramServer.Sent reply = telegram.awaitSent(15_000);
+		assertNotNull(reply);
+		assertTrue(reply.text().contains(text), "inbound text must survive the round trip: " + reply.text());
+	}
+
+	@Test
 	public void testDisabledAdapterIsOfflineUntilReenabled() throws Exception {
 		long chat = 1004L;
 		engine.disableAdapter("telegram");
