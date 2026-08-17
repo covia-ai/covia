@@ -1456,10 +1456,14 @@ public class AgentAdapterTest {
 		Blob sid = Blob.fromHex("11111111111111111111111111111111");
 		agent.ensureSession(sid, ALICE_DID);
 		AgentAdapter agentAdapter = (AgentAdapter) engine.getAdapter("agent");
-		// A never-completing placeholder Job holds the slot.
+		// A never-completing placeholder Job holds the slot, and its envelope is
+		// still queued on the session — a genuinely busy session (a chat that
+		// was accepted and not yet drained), which intake must refuse.
 		Job placeholder = Job.create(Maps.of(Fields.STATUS, Status.STARTED));
 		agentAdapter.reserveChatSlotForTest(
 			ALICE_DID, Strings.create("chat-busy-agent"), sid, placeholder);
+		agent.appendSessionPending(sid, Maps.of(
+			Fields.CALLER, ALICE_DID, Fields.MESSAGE, Strings.create("first, still queued")));
 
 		// Now an agent_chat on the same session must fail fast
 		Job chatJob = engine.jobs().invokeOperation(
@@ -1475,7 +1479,46 @@ public class AgentAdapterTest {
 			fail("Concurrent chat on same session must be rejected");
 		} catch (Exception e) {
 			assertEquals(Status.FAILED, chatJob.getStatus());
+			assertTrue(String.valueOf(chatJob.getErrorMessage()).contains("already has an in-flight chat"),
+				chatJob.getErrorMessage());
 		}
+		assertFalse(placeholder.isFinished(), "a busy holder is left alone");
+	}
+
+	/**
+	 * Regression for #377: a chat whose cycle never completed (a transition
+	 * that died, a lost wake) used to hold the session's slot for ever — every
+	 * later chat was rejected as "already in flight" although nothing could
+	 * ever finish the holder. Intake now recognises that state (agent idle,
+	 * nothing pending) and self-heals: the stale holder is failed with the
+	 * reason and the new chat proceeds.
+	 */
+	@Test
+	public void testChatSelfHealsAWedgedSession() {
+		createChatAgent("chat-wedged-agent");
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("chat-wedged-agent");
+		Blob sid = Blob.fromHex("22222222222222222222222222222222");
+		agent.ensureSession(sid, ALICE_DID);
+		AgentAdapter agentAdapter = (AgentAdapter) engine.getAdapter("agent");
+		// The wedge: an unfinished holder, agent idle, session pending empty.
+		Job stale = Job.create(Maps.of(Fields.STATUS, Status.STARTED));
+		agentAdapter.reserveChatSlotForTest(ALICE_DID, Strings.create("chat-wedged-agent"), sid, stale);
+
+		Job chatJob = engine.jobs().invokeOperation(
+			"v/ops/agent/chat",
+			Maps.of(
+				Fields.AGENT_ID,   "chat-wedged-agent",
+				Fields.SESSION_ID, Strings.create(sid.toHexString()),
+				Fields.MESSAGE,    Strings.create("are you there?")),
+			RequestContext.of(ALICE_DID));
+		ACell result = chatJob.awaitResult(10000);
+		assertEquals(Status.COMPLETE, chatJob.getStatus(), "the new chat proceeds: " + chatJob.getErrorMessage());
+		assertNotNull(RT.getIn(result, Fields.RESPONSE));
+		assertTrue(stale.isFinished() && Status.FAILED.equals(stale.getStatus()), "the stale holder is failed, not left dangling");
+		assertTrue(String.valueOf(stale.getErrorMessage()).contains("did not complete"), stale.getErrorMessage());
+		assertNull(agentAdapter.getActiveChatForTest(ALICE_DID, Strings.create("chat-wedged-agent"), sid),
+			"slot released after the healed chat completed");
 	}
 
 	@Test

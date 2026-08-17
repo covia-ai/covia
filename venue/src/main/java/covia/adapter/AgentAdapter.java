@@ -171,6 +171,18 @@ public class AgentAdapter extends AAdapter {
 	private record AgentKey(AString owner, AString id) {}
 
 	/** True only while this venue process owns a live run-loop attempt. */
+	/** A job's id for messages; a job without one (test placeholders) renders as "?". */
+	private static String jobIdOf(Job job) {
+		Blob id = (job != null) ? job.getID() : null;
+		return (id != null) ? id.toHexString() : "?";
+	}
+
+	/** Whether a session still has queued (undrained) chat/message envelopes. */
+	private static boolean hasPendingEnvelopes(AgentState agent, Blob sid) {
+		AVector<ACell> pending = agent.getSessionPending(sid);
+		return pending != null && pending.count() > 0;
+	}
+
 	private boolean isRunning(AgentKey key) {
 		CompletableFuture<ACell> loop = runningLoops.get(key);
 		return loop != null && !loop.isDone();
@@ -1102,19 +1114,44 @@ public class AgentAdapter extends AAdapter {
 		if (sid == null) return;
 		AString sidHex = Strings.create(sid.toHexString());
 
-		// Reserve the per-session chat slot (in-memory). Fails fast if a
-		// live chat is already in flight — but a previous caller whose Job
-		// has since finished (completed or cancelled) no longer holds the
-		// slot. Register a cancel hook so the caller cancelling their own
-		// Job immediately frees the slot for a retry.
+		// Reserve the per-session chat slot (in-memory), atomically: two chats
+		// arriving together must not both pass a check-then-put and both queue
+		// envelopes (the cycle would complete only one and the other would hang
+		// STARTED for ever). A previous caller whose Job has since finished
+		// (completed or cancelled) no longer holds the slot. Register a cancel
+		// hook so the caller cancelling their own Job immediately frees the
+		// slot for a retry.
+		AgentKey chatKey = new AgentKey(ctx.getUserDID(), agentId);
 		ConcurrentHashMap<Blob, Job> agentChats = activeChats
-			.computeIfAbsent(new AgentKey(ctx.getUserDID(), agentId), k -> new ConcurrentHashMap<>());
-		Job existing = agentChats.get(sid);
-		if (existing != null && !existing.isFinished()) {
-			job.fail("Session " + sidHex + " already has an in-flight chat");
+			.computeIfAbsent(chatKey, k -> new ConcurrentHashMap<>());
+		Job[] displaced = new Job[1];
+		Job holder = agentChats.compute(sid, (k, existing) -> {
+			if (existing == null || existing.isFinished()) return job;
+			// An unfinished holder that nothing can ever complete — the agent
+			// loop is not running and the session has no queued work — is a
+			// wedge (a transition that died, a lost wake), not a busy session
+			// (#377). Self-heal: fail it with the reason and take the slot.
+			// A genuinely busy session always has the loop running or an
+			// envelope pending, so this cannot misfire on it.
+			if (!isRunning(chatKey) && !hasPendingEnvelopes(agent, sid)) {
+				displaced[0] = existing;
+				return job;
+			}
+			return existing;
+		});
+		if (holder != job) {
+			job.fail("Session " + sidHex + " already has an in-flight chat (job "
+				+ jobIdOf(holder) + ", " + holder.getStatus()
+				+ ") — wait for it or cancel it before sending another message");
 			return;
 		}
-		agentChats.put(sid, job);
+		if (displaced[0] != null) {
+			log.warn("Session {} of agent {}: chat job {} was left unfinished with the agent idle and "
+				+ "nothing pending — failing it and accepting a new chat", sidHex, agentId,
+				jobIdOf(displaced[0]));
+			displaced[0].fail("Chat cycle did not complete: the agent went idle with this chat still "
+				+ "in flight and no queued work — the session was released for the next message");
+		}
 		final ConcurrentHashMap<Blob, Job> chatsRef = agentChats;
 		final Blob sidRef = sid;
 		final Job jobRef = job;
