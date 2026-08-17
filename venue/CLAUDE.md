@@ -101,6 +101,14 @@ AUTH_REQUIRED).
 | `venue` | Venue administration — runtime adapter/module lifecycle (venue-owned; `docs/CONFIG.md` "Runtime adapter lifecycle") | `adapters`, `adapter/enable`, `adapter/disable`, `adapter/configure`, `module/load`, `module/unload` |
 | `test` | Testing | `echo`, `delay`, `fail`, `never`, `random`, `chat`, `pause`, `taskComplete` |
 
+Module adapters (shaded module jars, not in covia.jar — `docs/CONFIG.md` "Venue modules"):
+
+| Adapter | Module | Purpose | Operations |
+|---------|--------|---------|------------|
+| `sql` | covia-sql | Venue-local convex-db and operator-registered JDBC databases | `query`, `execute` |
+| `python` | covia-python-adapter | Operator-configured Python operations and stateful instances | configured ops, `instances/*` |
+| `telegram` | covia-telegram | Operator-declared Telegram bots routing chats to agents/operations; outbound messaging | `send`, `bots` |
+
 ## API Endpoints
 
 Base path: `/api/v1/`

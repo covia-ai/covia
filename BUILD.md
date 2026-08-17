@@ -37,9 +37,12 @@ covia/
 │   └── src/
 │       ├── main/java/     # GUI source code
 │       └── main/resources/ # GUI resources
-└── covia-sql/             # Optional loadable SQL adapter module
-    ├── pom.xml            # Venue SPI provided; shaded module classifier
-    └── src/               # SQL operation adapter and tests
+├── covia-sql/             # Optional loadable SQL adapter module
+│   ├── pom.xml            # Venue SPI provided; shaded module classifier
+│   └── src/               # SQL operation adapter and tests
+└── covia-telegram/        # Optional loadable Telegram bot module
+    ├── pom.xml            # Venue SPI provided; Telegram client shaded
+    └── src/               # Telegram bot adapter and tests (fake Bot API)
 ```
 
 The standard venue does not depend on either Python module. A Java 21 reactor
@@ -283,8 +286,8 @@ To create a stable release:
 The reactor modules are published to Maven Central under the `ai.covia`
 groupId. `ai.covia:covia-core`, `ai.covia:covia-python`, `ai.covia:venue`, and
 `ai.covia:workbench` are ordinary library artifacts (along with the
-`ai.covia:covia` parent POM). The operator-facing `covia-python-adapter` and
-`covia-sql` artifacts are loadable venue modules rather than dependencies of
+`ai.covia:covia` parent POM). The operator-facing `covia-python-adapter`,
+`covia-sql` and `covia-telegram` artifacts are loadable venue modules rather than dependencies of
 the standard venue; their shaded `module` classifier jars are also published
 and signed. GitHub Releases remain the canonical operator download, pairing
 each module jar with its checksum. The executable `covia.jar` is an unattached
@@ -359,6 +362,8 @@ Both snapshot and stable releases include:
 - `covia-python-adapter-<version>-module.jar.sha256` - SHA-256 checksum
 - `covia-sql-<version>-module.jar` - Optional SQL venue module
 - `covia-sql-<version>-module.jar.sha256` - SHA-256 checksum
+- `covia-telegram-<version>-module.jar` - Optional Telegram bot venue module
+- `covia-telegram-<version>-module.jar.sha256` - SHA-256 checksum
 
 ### Download Links
 

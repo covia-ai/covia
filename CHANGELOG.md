@@ -14,6 +14,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Optional `responseSchema` on `agent:request` with requester-controlled `strict` enforcement at task completion (#376)
 - Runtime adapter lifecycle: `v/ops/venue/adapter/{enable,disable,configure}` and `v/ops/venue/module/{load,unload}` (venue-owned, `adapter/manage`); `adapters.<name>.enabled` boot switch; `dynamicModules` policy; `v/info/modules`
 - `AAdapter.configure(config, strict)` hook and `Engine.adapterConfig(name)` effective-config overlay
+- `/adapters` skill — discover, invoke and manage adapters, including runtime lifecycle and module load/unload
+- covia-telegram module: `telegram` adapter — operator-declared Telegram bots with a configurable inbound handler (agent conversation with persistent per-chat sessions, or any operation fed the message record — every inbound message a Job in the bot user's job index), `reply` control; `telegram:send` / `telegram:bots`; module-shipped `telegram` agent skill
 
 ### Changed
 

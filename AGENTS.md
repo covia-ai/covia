@@ -29,10 +29,13 @@ covia/                          # ai.covia:covia (parent POM)
 │       └── venue/storage/      #   Storage backends (Lattice, File, Memory)
 ├── covia-sql/                  # SQL adapter venue module (convex-db + Calcite;
 │                               #   shaded "module" jar loaded via config, not in covia.jar)
+├── covia-telegram/             # Telegram bot venue module (operator-declared bots →
+│                               #   agents/operations, telegram:send; shaded "module" jar)
 ├── workbench/                  # Minimal Swing GUI REPL for demo/testing
 │   └── src/main/java/covia/gui/  Bench, ReplPanel, LAF
 ├── .claude/                    # Claude Code config (settings.json tracked; rest gitignored)
 ├── skills/                     # Claude Code skills (junction .claude/skills → skills/)
+│   ├── adapters/               #   Adapter discovery, invocation, runtime enable/disable/configure, module load/unload
 │   ├── ap-demo/                #   AP invoice audit trail demo (Alice/Bob/Carol)
 │   ├── agent/                  #   Agent creation and management
 │   ├── venue-setup/            #   Build and run a venue (local/VM/Docker)
@@ -40,6 +43,7 @@ covia/                          # ai.covia:covia (parent POM)
 │   ├── grid-test/              #   Smoke test venue operations
 │   ├── workspace/              #   Browse/read/write lattice data
 │   ├── secret/                 #   Manage API keys and credentials
+│   ├── telegram/               #   Connect a venue to Telegram (bots → agents, send, allow-list)
 │   ├── federation/             #   Cross-venue grid operations
 │   ├── hitl/                   #   Human-in-the-Loop requests (send, respond, teach agents, test)
 │   └── ucan/                   #   Capability token management

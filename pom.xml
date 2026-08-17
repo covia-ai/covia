@@ -63,6 +63,7 @@
 		<module>covia-python-adapter</module>
 		<module>workbench</module>
 		<module>covia-sql</module>
+		<module>covia-telegram</module>
 	</modules>
 
 	<build>

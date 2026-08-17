@@ -76,8 +76,9 @@ jobs:
       run: |
         test -f covia-python-adapter/target/covia-python-adapter-*-module.jar
         test -f covia-sql/target/covia-sql-*-module.jar
-        if jar tf venue/target/covia.jar | grep -Eq '^(covia/python/|covia/adapter/python/|covia/adapter/sql/)'; then
-          echo "::error::Optional Python or SQL module classes leaked into covia.jar"
+        test -f covia-telegram/target/covia-telegram-*-module.jar
+        if jar tf venue/target/covia.jar | grep -Eq '^(covia/python/|covia/adapter/python/|covia/adapter/sql/|covia/adapter/telegram/)'; then
+          echo "::error::Optional Python, SQL or Telegram module classes leaked into covia.jar"
           exit 1
         fi
 
@@ -87,7 +88,7 @@ jobs:
 
     - name: Create optional module checksums
       run: |
-        for jar in covia-python-adapter/target/*-module.jar covia-sql/target/*-module.jar; do
+        for jar in covia-python-adapter/target/*-module.jar covia-sql/target/*-module.jar covia-telegram/target/*-module.jar; do
           sha256sum "$jar" > "$jar.sha256"
         done
 
@@ -115,7 +116,9 @@ jobs:
           covia-python-adapter/target/*-module.jar \
           covia-python-adapter/target/*-module.jar.sha256 \
           covia-sql/target/*-module.jar \
-          covia-sql/target/*-module.jar.sha256
+          covia-sql/target/*-module.jar.sha256 \
+          covia-telegram/target/*-module.jar \
+          covia-telegram/target/*-module.jar.sha256
 
     - name: Update latest release
       env:
@@ -139,4 +142,6 @@ jobs:
           covia-python-adapter/target/*-module.jar \
           covia-python-adapter/target/*-module.jar.sha256 \
           covia-sql/target/*-module.jar \
-          covia-sql/target/*-module.jar.sha256
+          covia-sql/target/*-module.jar.sha256 \
+          covia-telegram/target/*-module.jar \
+          covia-telegram/target/*-module.jar.sha256

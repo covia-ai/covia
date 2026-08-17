@@ -1,0 +1,36 @@
+{
+	"name": "Telegram bots",
+	"description": "Lists the Telegram bots the caller may use — those configured to act as the caller's identity (all bots for the venue identity) — with their routing target, state (STARTING, PENDING, RUNNING, STOPPED), Telegram username once validated, last error when pending, and message counters. Bot tokens are never returned.",
+	"operation": {
+		"adapter": "telegram:bots",
+		"readOnly": true,
+		"input": {
+			"type": "object",
+			"properties": {}
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"bots": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"properties": {
+							"name": { "type": "string" },
+							"user": { "type": "string", "description": "DID the bot acts as (or \"public\")" },
+							"target": { "type": "string", "description": "agent <id> or operation <ref>" },
+							"state": { "type": "string" },
+							"username": { "type": "string", "description": "Telegram @username (without @) once getMe has succeeded" },
+							"error": { "type": "string", "description": "Why the bot is not running, when PENDING" },
+							"received": { "type": "integer" },
+							"sent": { "type": "integer" },
+							"failed": { "type": "integer" }
+						},
+						"required": ["name", "user", "target", "state"]
+					}
+				}
+			},
+			"required": ["bots"]
+		}
+	}
+}

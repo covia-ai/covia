@@ -868,6 +868,101 @@ param) and operator-registered JDBC connections
 agent skill from its jar (materialises at `v/skills/sql` exactly when the
 module is loaded — the module-shipped-skill pattern, see `docs/SKILLS.md`).
 
+### Telegram bots (covia-telegram)
+
+The **covia-telegram** module (`telegram` adapter) runs operator-declared
+Telegram bots that connect chats to the venue, and gives agents a way to
+message people on Telegram. Bots live in the adapter's *effective*
+configuration, so they follow the runtime adapter lifecycle: a
+`v/ops/venue/adapter/configure` call adds, removes or changes bots on a
+running venue (only changed bots restart), and the venue config is
+authoritative again after a restart.
+
+```json
+{
+  "modules": ["modules/covia-telegram-<version>-module.jar"],
+  "adapters": {
+    "telegram": {
+      "bots": {
+        "assistant": {
+          "token": "s/TELEGRAM_BOT_TOKEN",
+          "user": "did:key:z6Mk...",
+          "agent": "Assistant",
+          "allow": [123456789, "@mike"],
+          "parseMode": "Markdown",
+          "greeting": "Hi — I'm the venue assistant."
+        },
+        "orders": {
+          "token": "s/ORDERS_BOT_TOKEN",
+          "user": "did:key:z6Mk...",
+          "operation": "o/telegram-to-orders-db",
+          "reply": "Recorded, thanks.",
+          "allow": ["@warehouse_lead"]
+        }
+      },
+      "apiUrl": "https://api.telegram.org/bot"
+    }
+  }
+}
+```
+
+Per bot:
+
+- `token` — the token from @BotFather, as an `s/NAME` secret reference
+  (resolved in the bot user's store, then the venue's; a literal is accepted
+  but never logged or listed). A bot whose secret is absent parks as
+  `PENDING` and retries (once after 2 s, then every 30 s), so provisioning the secret later brings it
+  up without a restart.
+- `user` — the DID the bot acts as; every invocation runs with that user's
+  full authority, so it should be the owner of the agent it routes to.
+  `"public"` names the venue's public principal (the same identity as an
+  anonymous MCP client on a public venue), which is what a local dev venue's
+  agents are owned by.
+- `agent` **or** `operation` — the **inbound handler**. With `agent`, each
+  Telegram chat is one `agent:chat` session, persisted at
+  `w/telegram/<bot>/sessions/<chatId>` in the user's workspace so
+  conversations survive restarts; `/new` starts a fresh one. With
+  `operation`, every message invokes that reference with the message record
+  `{bot, chatId, messageId, text, from: {id, username, firstName, lastName},
+  chat: {id, type, title}, date}` as its input. The module never reshapes
+  messages: for a target whose input is not that record — a deterministic
+  SQL write, a webhook, a log to some location — point `operation` at a
+  small **mapping operation you own** (an orchestration, a pinned op…) that
+  takes the record and does the work. Either way each inbound message runs
+  as a **Job in the bot user's job index**, which is the canonical record of
+  the interaction; the module keeps no log of its own.
+- `reply` — for an `operation` handler: `true` (default: the result
+  rendered as text — a string as-is, a map's
+  `text`/`response`/`content`/`message`/`result`, else pretty JSON),
+  `false` (never reply), or a fixed acknowledgement string. Agent
+  conversations always reply. Handler failures are always reported to the
+  sender.
+- `allow` — Telegram user ids and/or `@usernames` permitted to talk to the
+  bot. **Fail-closed**: with no `allow` and no `open: true`, everyone is
+  refused (in private chats they are told their user id, so an operator can
+  add it). `open: true` admits anyone — appropriate only for a bot whose
+  target is safe for the public.
+- `parseMode` — `Markdown`, `MarkdownV2` or `HTML` for replies; omit for
+  plain text. Markup Telegram rejects is resent as plain text.
+- `greeting` — the `/start` reply (default names the agent and venue).
+
+`apiUrl` overrides the Bot API base (a proxy, or a test double); it defaults
+to Telegram's. Built-in commands: `/start`, `/help`, `/new`, `/id`. Messages
+are answered in order per chat, with a typing indicator while the agent
+works; long replies are split at Telegram's 4096-character limit. Polling is
+long-poll (`getUpdates`); no inbound port or webhook is required. Disabling
+the adapter (`adapters.telegram.enabled: false` or `adapter/disable`) takes
+its bots offline without confirming updates, so Telegram redelivers the
+backlog when it is enabled again.
+
+Operations: `v/ops/telegram/send {bot?, chatId, text, parseMode?, replyTo?,
+silent?}` — gated on `<bot user>/telegram/<bot>` × `telegram/send`, so the
+bot's user and their agents (within scope) may send and anyone else needs a
+delegation from that user; and `v/ops/telegram/bots` — the caller's bots
+with state (`STARTING`, `PENDING`, `RUNNING`, `STOPPED`), Telegram username,
+last error and counters, tokens never included. The module ships a
+`telegram` agent skill (`v/skills/telegram`).
+
 ## Runtime adapter lifecycle
 
 ```json
