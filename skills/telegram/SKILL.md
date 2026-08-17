@@ -42,7 +42,7 @@ Walk the user through these steps; each is idempotent.
    - `user` is the identity the bot acts as — the **owner of the agent**. `"public"` is right for a local dev venue whose agents were created over MCP; on a real venue name the owner's DID. The bot has that user's full authority, so choose deliberately.
    - **Pick the inbound handler** (ask the user which they want; exactly one). Every inbound message runs as a Job in the bot user's job index — that is the record of the interaction; the module keeps no log of its own:
      - `"agent": "<agentId>"` — each Telegram chat is one `agent:chat` conversation with that agent (create it first with `/agent create`). Always replies.
-     - `"operation": "<ref>"` — every message invokes that operation with the record `{bot, chatId, messageId, text, from: {id, username, firstName, lastName}, chat: {id, type, title}, date}` as input. For a deterministic target whose input is *not* that record (a `sql/execute` insert, an HTTP webhook, a classify-then-store step) point it at a small **mapping op the user owns** — an orchestration (`/orchestrate create`), a pinned op — that takes the record and does the work; the same goes for logging messages somewhere (an op that appends to the path its metadata names). The Telegram module never reshapes or logs messages. `"reply": true` (default) sends the result rendered as text, `false` sends nothing, `"Recorded."` sends that fixed acknowledgement.
+     - `"operation": "<ref>"` — every update invokes that operation with the **Telegram `Update` exactly as sent** (snake_case: `update.message.text`, `update.message.photo[].file_id`, `update.callback_query.data`, …) plus `bot`. For a deterministic target whose input is *not* an Update (a `sql/execute` insert, an HTTP webhook, a classify-then-store step) point it at a small **mapping op the user owns** — an orchestration (`/orchestrate create`), a pinned op — that takes the record and does the work; the same goes for logging messages somewhere (an op that appends to the path its metadata names). The Telegram module never reshapes or logs messages. `"reply": true` (default) sends the result rendered as text, `false` sends nothing, `"Recorded."` sends that fixed acknowledgement.
    - Leave `allow` empty for now; step 6 fills it. Do **not** set `"open": true` unless anyone on Telegram should be able to reach this handler (defensible for a bot whose operation is safe for strangers; dangerous for an agent with authority).
    - Optional: `"parseMode": "Markdown"` for formatted replies, `"greeting": "…"` for `/start`.
 
@@ -56,15 +56,20 @@ Walk the user through these steps; each is idempotent.
 grid_run  operation=v/ops/telegram/bots
 ```
 
-Shows the bots the caller may use (all bots for the venue identity): `state`, Telegram `username`, `target` (`agent X` / `operation Y`), `error` when pending, and `received`/`sent`/`failed` counters. Tokens are never shown. `covia_read path=v/info/adapters/telegram` confirms the module is loaded at all.
+Shows the bots the caller may use (all bots for the venue identity): `state`, Telegram `username`, `target` (`agent X` / `operation Y`), `error` when pending, and `received`/`sent`/`failed` counters. Files are separate Telegram messages (a `Message` carries text *or* one media item with a caption; albums share a `media_group_id`), so a photo sent to an operation bot arrives as its own Update with `message.photo`. Tokens are never shown. `covia_read path=v/info/adapters/telegram` confirms the module is loaded at all.
 
-## `send <bot-name>` — Send a message
+## `send <bot-name>` — Send a message, media, buttons
+
+All ops speak the Telegram Bot API's own field names — the Bot API reference (https://core.telegram.org/bots/api) is the reference.
 
 ```
-grid_run  operation=v/ops/telegram/send  input={"bot": "<bot-name>", "chatId": <id>, "text": "…"}
+grid_run  operation=v/ops/telegram/send  input={"bot": "<bot-name>", "chat_id": <id>, "text": "…"}
+grid_run  operation=v/ops/telegram/send  input={"chat_id": <id>, "text": "Approve?", "reply_markup": {"inline_keyboard": [[{"text": "Yes", "callback_data": "yes"}, {"text": "No", "callback_data": "no"}]]}}
+grid_run  operation=v/ops/telegram/call  input={"method": "sendPhoto", "params": {"chat_id": <id>, "photo": "https://…/pic.jpg", "caption": "…"}}
+grid_run  operation=v/ops/telegram/call  input={"method": "editMessageText", "params": {"chat_id": <id>, "message_id": <mid>, "text": "updated"}}
 ```
 
-`bot` may be omitted when the caller owns exactly one. `chatId` is a numeric Telegram chat id — a person's private chat is their user id, groups are negative (`/id` in the chat prints it) — or an `@channelusername` the bot administers. Optional `parseMode` (`Markdown`|`MarkdownV2`|`HTML`, falls back to plain text if Telegram rejects the markup), `replyTo` (message id), `silent`. Long text is split at 4096 chars. Sending is gated on `<bot user>/telegram/<bot>` × `telegram/send`: the bot's user and their agents may send; another user gets *Access denied* unless the owner delegated it (`/ucan`).
+`send` takes the `sendMessage` parameters as-is (`chat_id`, `text`, `parse_mode`, `reply_parameters`, `reply_markup`, `disable_notification`, `message_thread_id`, …) and returns the sent `Message`; text over 4096 chars is split and rejected markup falls back to plain. `call` runs any other Bot API method (`sendPhoto`/`sendDocument`/`sendVoice` by `file_id` or public URL, `sendMediaGroup`, `editMessageText`, `deleteMessage`, `answerCallbackQuery`, `getChat`, …) and returns Telegram's result; `getUpdates`/`setWebhook`/`deleteWebhook`/`logOut`/`close` are refused. `bot` may be omitted when the caller owns exactly one. `chat_id` is a numeric chat id — a person's private chat is their user id, groups are negative (`/id` in the chat prints it) — or an `@channelusername` the bot administers. Gates: `telegram/send` for `send`, the broader `telegram/call` for `call`, both on `<bot user>/telegram/<bot>`: the bot's user and their agents may use them; another user gets *Access denied* unless the owner delegated it (`/ucan`).
 
 ## `allow <bot-name>` — Manage who may talk to the bot
 

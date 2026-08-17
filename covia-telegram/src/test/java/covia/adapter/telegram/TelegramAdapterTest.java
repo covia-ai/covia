@@ -223,12 +223,15 @@ public class TelegramAdapterTest {
 				.assoc(BotSpec.K_OPEN, convex.core.data.prim.CVMBool.TRUE)));
 		awaitState("op", BotRunner.State.RUNNING, 10_000);
 		try {
-			// open bot: a stranger is answered; echo returns the inbound record, whose
-			// text field becomes the reply
+			// open bot: a stranger is answered; echo returns its input — the Telegram
+			// Update as sent, plus bot — which is rendered as JSON for the reply
 			telegram.push(token, 2001L, "group", STRANGER_ID, null, "ping the op");
 			FakeTelegramServer.Sent reply = telegram.awaitSent(token, 15_000);
 			assertNotNull(reply);
-			assertEquals("ping the op", reply.text());
+			assertTrue(reply.text().contains("\"update_id\"") && reply.text().contains("\"message\"")
+				&& reply.text().contains("ping the op") && reply.text().contains("\"bot\""), reply.text());
+			assertTrue(reply.text().contains("\"message_id\"") && reply.text().contains("\"first_name\""),
+				"Telegram snake_case shape, not a translation: " + reply.text());
 			assertEquals(BotRunner.State.RUNNING, adapter.runner("echo").state(),
 				"unchanged bots keep running across a reconfigure");
 		} finally {
@@ -290,6 +293,77 @@ public class TelegramAdapterTest {
 	}
 
 	@Test
+	public void testCallOperationSendsMediaAndRefusesManagedMethods() throws Exception {
+		ACell out = run(RequestContext.of(OWNER), "v/ops/telegram/call", Maps.of(
+			"method", "sendPhoto",
+			"params", Maps.of("chat_id", CVMLong.create(3005L), "photo", "https://example.org/cat.jpg",
+				"caption", "a cat", "disable_notification", convex.core.data.prim.CVMBool.TRUE)));
+		FakeTelegramServer.Sent sent = telegram.awaitSent(10_000);
+		assertNotNull(sent);
+		assertEquals("sendPhoto", sent.method());
+		assertEquals("https://example.org/cat.jpg", sent.form().get("photo"));
+		assertEquals("a cat", sent.text());
+		assertTrue(sent.silent());
+		assertEquals(Strings.create("a cat"), RT.getIn(out, "caption"), "Telegram's Message result: " + out);
+
+		// A method answering `true` comes back as true
+		ACell ack = run(RequestContext.of(OWNER), "v/ops/telegram/call", Maps.of(
+			"method", "answerCallbackQuery", "params", Maps.of("callback_query_id", "cq1", "text", "Done")));
+		assertEquals(convex.core.data.prim.CVMBool.TRUE, ack);
+
+		// The venue's own update loop owns getUpdates & co.
+		Job managed = engine.jobs().invokeOperation("v/ops/telegram/call", Maps.of(
+			"method", "getUpdates", "params", Maps.empty()), RequestContext.of(OWNER));
+		try { managed.awaitResult(10_000); } catch (Exception ignored) {}
+		assertEquals(Status.FAILED, managed.getStatus());
+		assertTrue(String.valueOf(managed.getErrorMessage()).contains("managed"), managed.getErrorMessage());
+
+		// Other users are denied
+		Job denied = engine.jobs().invokeOperation("v/ops/telegram/call", Maps.of(
+			"bot", "echo", "method", "sendPhoto", "params", Maps.of("chat_id", 1, "photo", "x")), RequestContext.of(OTHER));
+		try { denied.awaitResult(10_000); } catch (Exception ignored) {}
+		assertEquals(Status.FAILED, denied.getStatus());
+		assertTrue(String.valueOf(denied.getErrorMessage()).contains("denied"), denied.getErrorMessage());
+	}
+
+	@Test
+	public void testOperationBotReceivesPhotosAndCallbackQueriesVerbatim() throws Exception {
+		String token = "666:UPDATES-BOT";
+		telegram.registerBot(token, "updates_bot");
+		AMap<AString, ACell> echoCfg = echoBotConfig();
+		configureBots(Maps.of(Strings.create("echo"), echoCfg,
+			Strings.create("upd"), botConfig(token, OWNER.toString(), "operation", "v/test/ops/echo", null)
+				.assoc(BotSpec.K_OPEN, convex.core.data.prim.CVMBool.TRUE)));
+		awaitState("upd", BotRunner.State.RUNNING, 10_000);
+		try {
+			// A photo message: no text, a caption, photo sizes with file_ids — all passed through
+			telegram.pushPhoto(token, 7001L, STRANGER_ID, "pat", "look at this");
+			FakeTelegramServer.Sent reply = telegram.awaitSent(token, 15_000);
+			assertNotNull(reply, "operation bots receive non-text messages");
+			assertTrue(reply.text().contains("\"photo\"") && reply.text().contains("AgACbig")
+				&& reply.text().contains("look at this"), reply.text());
+
+			// A button tap: callback_query, sender = the tapper, chat = the message's chat
+			telegram.pushCallback(token, 7001L, STRANGER_ID, "pat", "approve:42");
+			FakeTelegramServer.Sent cb = telegram.awaitSent(token, 15_000);
+			assertNotNull(cb, "operation bots receive callback queries");
+			assertTrue(cb.text().contains("\"callback_query\"") && cb.text().contains("approve:42"), cb.text());
+			assertEquals(7001L, cb.chatId(), "replies go to the chat the tapped message is in");
+		} finally {
+			configureBots(Maps.of(Strings.create("echo"), echoCfg));
+		}
+	}
+
+	@Test
+	public void testAgentBotIgnoresNonTextInPrivateWithNotice() throws Exception {
+		telegram.pushPhoto(FakeTelegramServer.TOKEN, 1006L, ALLOWED_ID, "alice", null);
+		FakeTelegramServer.Sent notice = telegram.awaitSent(10_000);
+		assertNotNull(notice);
+		assertTrue(notice.text().startsWith("I can only read text"), notice.text());
+		assertNull(readSession("echo", 1006L), "no conversation turn for a photo without caption");
+	}
+
+	@Test
 	public void testDisabledAdapterIsOfflineUntilReenabled() throws Exception {
 		long chat = 1004L;
 		engine.disableAdapter("telegram");
@@ -314,24 +388,30 @@ public class TelegramAdapterTest {
 	@Test
 	public void testSendOperationByOwner() throws Exception {
 		ACell out = run(RequestContext.of(OWNER), "v/ops/telegram/send", Maps.of(
-			TelegramAdapter.K_CHAT_ID, CVMLong.create(3001L),
-			Fields.TEXT, "hello there",
-			TelegramAdapter.K_SILENT, convex.core.data.prim.CVMBool.TRUE));
+			"chat_id", CVMLong.create(3001L),
+			"text", "hello there",
+			"disable_notification", convex.core.data.prim.CVMBool.TRUE,
+			"reply_parameters", Maps.of("message_id", 77),
+			"reply_markup", Maps.of("inline_keyboard", Vectors.of(Vectors.of(
+				Maps.of("text", "Yes", "callback_data", "yes"), Maps.of("text", "No", "callback_data", "no"))))));
 		FakeTelegramServer.Sent sent = telegram.awaitSent(10_000);
 		assertNotNull(sent);
 		assertEquals("hello there", sent.text());
 		assertEquals(3001L, sent.chatId());
 		assertTrue(sent.silent());
-		assertEquals(Strings.create("echo"), RT.getIn(out, TelegramAdapter.K_BOT), "single owned bot is the default");
-		assertEquals(CVMLong.create(sent.messageId()), RT.getIn(out, Fields.MESSAGE_ID));
+		assertEquals(77, sent.replyTo(), "reply_parameters passed through as JSON");
+		assertTrue(sent.form().get("reply_markup").contains("callback_data"), "reply_markup passed through as JSON: " + sent.form());
+		// The result is Telegram's Message, not a translation (single owned bot was the default)
+		assertEquals(CVMLong.create(sent.messageId()), RT.getIn(out, "message_id"));
+		assertEquals(CVMLong.create(3001L), RT.getIn(out, "chat", "id"));
 	}
 
 	@Test
 	public void testSendIsDeniedToOtherUsers() {
 		Job job = engine.jobs().invokeOperation("v/ops/telegram/send", Maps.of(
 			TelegramAdapter.K_BOT, "echo",
-			TelegramAdapter.K_CHAT_ID, CVMLong.create(3002L),
-			Fields.TEXT, "sneaky"), RequestContext.of(OTHER));
+			"chat_id", CVMLong.create(3002L),
+			"text", "sneaky"), RequestContext.of(OTHER));
 		try {
 			job.awaitResult(10_000);
 		} catch (Exception ignored) {
@@ -345,14 +425,14 @@ public class TelegramAdapterTest {
 	@Test
 	public void testSendUnknownBotAndNoDefaultBot() {
 		Job unknown = engine.jobs().invokeOperation("v/ops/telegram/send", Maps.of(
-			TelegramAdapter.K_BOT, "nope", TelegramAdapter.K_CHAT_ID, CVMLong.create(1), Fields.TEXT, "x"),
+			TelegramAdapter.K_BOT, "nope", "chat_id", CVMLong.create(1), "text", "x"),
 			RequestContext.of(OWNER));
 		try { unknown.awaitResult(10_000); } catch (Exception ignored) {}
 		assertEquals(Status.FAILED, unknown.getStatus());
 		assertTrue(String.valueOf(unknown.getErrorMessage()).contains("Unknown Telegram bot"), unknown.getErrorMessage());
 
 		Job none = engine.jobs().invokeOperation("v/ops/telegram/send", Maps.of(
-			TelegramAdapter.K_CHAT_ID, CVMLong.create(1), Fields.TEXT, "x"), RequestContext.of(OTHER));
+			"chat_id", CVMLong.create(1), "text", "x"), RequestContext.of(OTHER));
 		try { none.awaitResult(10_000); } catch (Exception ignored) {}
 		assertEquals(Status.FAILED, none.getStatus());
 		assertTrue(String.valueOf(none.getErrorMessage()).contains("No Telegram bot is configured"), none.getErrorMessage());
@@ -361,9 +441,9 @@ public class TelegramAdapterTest {
 	@Test
 	public void testSendFallsBackToPlainTextWhenMarkupRejected() throws Exception {
 		run(RequestContext.of(OWNER), "v/ops/telegram/send", Maps.of(
-			TelegramAdapter.K_CHAT_ID, CVMLong.create(3003L),
-			Fields.TEXT, "*unbalanced " + FakeTelegramServer.BAD_MARKUP,
-			BotSpec.K_PARSE_MODE, "Markdown"));
+			"chat_id", CVMLong.create(3003L),
+			"text", "*unbalanced " + FakeTelegramServer.BAD_MARKUP,
+			"parse_mode", "Markdown"));
 		FakeTelegramServer.Sent sent = telegram.awaitSent(10_000);
 		assertNotNull(sent);
 		assertNull(sent.parseMode(), "resent as plain text after Telegram rejected the markup");
@@ -377,7 +457,7 @@ public class TelegramAdapterTest {
 		String text = sb.toString();
 		assertTrue(text.length() > 2 * BotRunner.MAX_MESSAGE_LENGTH);
 		run(RequestContext.of(OWNER), "v/ops/telegram/send", Maps.of(
-			TelegramAdapter.K_CHAT_ID, CVMLong.create(3004L), Fields.TEXT, text));
+			"chat_id", CVMLong.create(3004L), "text", text));
 		StringBuilder received = new StringBuilder();
 		int chunks = 0;
 		FakeTelegramServer.Sent s;

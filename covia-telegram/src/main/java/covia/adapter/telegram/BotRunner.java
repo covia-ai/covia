@@ -1,8 +1,10 @@
 package covia.adapter.telegram;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
@@ -15,24 +17,27 @@ import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.pengrad.telegrambot.TelegramBot;
 import com.pengrad.telegrambot.model.Chat;
 import com.pengrad.telegrambot.model.Message;
 import com.pengrad.telegrambot.model.Update;
 import com.pengrad.telegrambot.model.User;
 import com.pengrad.telegrambot.model.request.ChatAction;
-import com.pengrad.telegrambot.model.request.ParseMode;
-import com.pengrad.telegrambot.model.request.ReplyParameters;
 import com.pengrad.telegrambot.request.GetMe;
 import com.pengrad.telegrambot.request.GetUpdates;
 import com.pengrad.telegrambot.request.SendChatAction;
-import com.pengrad.telegrambot.request.SendMessage;
 import com.pengrad.telegrambot.response.BaseResponse;
 import com.pengrad.telegrambot.response.GetMeResponse;
 import com.pengrad.telegrambot.response.GetUpdatesResponse;
-import com.pengrad.telegrambot.response.SendResponse;
+import com.pengrad.telegrambot.utility.BotUtils;
 
+import okhttp3.FormBody;
 import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -41,6 +46,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import convex.core.util.JSON;
 import covia.adapter.AAdapter;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
@@ -87,15 +93,6 @@ final class BotRunner {
 	static final AString K_SENT = Strings.intern("sent");
 	static final AString K_FAILED = Strings.intern("failed");
 	private static final AString K_BOT = Strings.intern("bot");
-	private static final AString K_CHAT_ID = Strings.intern("chatId");
-	private static final AString K_CHAT = Strings.intern("chat");
-	private static final AString K_FROM = Strings.intern("from");
-	private static final AString K_ID = Strings.intern("id");
-	private static final AString K_TYPE = Strings.intern("type");
-	private static final AString K_TITLE = Strings.intern("title");
-	private static final AString K_FIRST_NAME = Strings.intern("firstName");
-	private static final AString K_LAST_NAME = Strings.intern("lastName");
-	private static final AString K_DATE = Strings.intern("date");
 
 	enum State { STARTING, PENDING, RUNNING, STOPPED }
 
@@ -105,6 +102,8 @@ final class BotRunner {
 
 	private volatile TelegramBot bot;
 	private volatile OkHttpClient http;
+	/** The live token — held only for raw method calls; never logged or listed. */
+	private volatile String token;
 	private volatile String username;
 	private volatile State state = State.STARTING;
 	private volatile String error;
@@ -179,6 +178,7 @@ final class BotRunner {
 		username = me.user().username();
 		bot = candidate;
 		http = client;
+		this.token = token;
 		error = null;
 		state = State.RUNNING;
 		pollThread = Thread.ofVirtual().name("telegram-poll-" + spec.name()).start(this::pollLoop);
@@ -209,6 +209,7 @@ final class BotRunner {
 		OkHttpClient c = http;
 		bot = null;
 		http = null;
+		token = null;
 		if (b != null) release(b, c);
 		// Let the poll thread unwind its cancelled call before the caller (an
 		// unload) closes the module classloader under it.
@@ -283,8 +284,11 @@ final class BotRunner {
 				continue;
 			}
 			try {
-				GetUpdatesResponse r = b.execute(
-					new GetUpdates().offset(offset).timeout(POLL_TIMEOUT_SECS).allowedUpdates("message"));
+				GetUpdates req = new GetUpdates().offset(offset).timeout(POLL_TIMEOUT_SECS);
+				// A conversation only needs messages; an operation handler gets every
+				// update type Telegram delivers by default (callback queries, edits…).
+				if (spec.routesToAgent()) req.allowedUpdates("message");
+				GetUpdatesResponse r = b.execute(req);
 				if (stopped) return;
 				if (r == null || !r.isOk()) {
 					pollError(describe(r));
@@ -336,30 +340,54 @@ final class BotRunner {
 
 	// ------------------------------------------------------------------ inbound
 
+	/**
+	 * Route one Telegram {@code Update}. Access is checked against the update's
+	 * sender; the built-in commands are answered here for text messages; then an
+	 * agent bot gets the message text as a conversation turn, and an operation
+	 * bot gets the whole Update exactly as Telegram sent it (plus {@code bot}) —
+	 * photos, documents, callback queries and all — so the handler sees what a
+	 * webhook would.
+	 */
 	private void handle(Update update) {
-		Message m = update.message();
-		if (m == null || m.chat() == null) return;
-		String text = (m.text() != null) ? m.text() : m.caption();
-		if (text == null || text.isBlank()) return;
 		received.incrementAndGet();
-		Long chatId = m.chat().id();
-		User from = m.from();
+		Message m = update.message();
+		User from = senderOf(update);
+		Long chatId = chatOf(update);
 		Long fromId = (from != null) ? from.id() : null;
 		String fromName = (from != null) ? from.username() : null;
 		if (!spec.allows(fromId, fromName)) {
-			log.info("Telegram bot '{}': unauthorised message from user {} (@{}) in chat {}",
-				spec.name(), fromId, fromName, chatId);
-			if (m.chat().type() == Chat.Type.Private) {
+			log.info("Telegram bot '{}': unauthorised update {} from user {} (@{}) in chat {}",
+				spec.name(), update.updateId(), fromId, fromName, chatId);
+			if (isPrivate(m)) {
 				sendQuietly(chatId, "Not authorised to use this bot. Your Telegram user id is " + fromId
 					+ (fromName != null ? " (@" + fromName + ")" : "")
 					+ " — ask the venue operator to add it to the bot's allow list.", m);
 			}
 			return;
 		}
-		text = stripMention(text.trim());
-		if (addressedToAnotherBot(text)) return;   // /cmd@otherbot in a group
-		String command = commandOf(text);
-		switch (command) {
+		String text = (m == null) ? null : (m.text() != null) ? m.text() : m.caption();
+		if (text != null && !text.isBlank()) {
+			text = stripMention(text.trim());
+			if (addressedToAnotherBot(text)) return;   // /cmd@otherbot in a group
+			if (handleCommand(m, chatId, fromId, fromName, text)) return;
+		}
+		if (spec.routesToAgent()) {
+			// A conversation needs words: anything else in a private chat gets a
+			// short notice; in groups (and for non-message updates) stay silent.
+			if (m == null || text == null || text.isBlank()) {
+				if (isPrivate(m)) sendQuietly(chatId, "I can only read text messages and captions.", m);
+				return;
+			}
+			final String body = text;
+			enqueue(chatId, () -> respondAgent(m, body));
+		} else {
+			enqueue((chatId != null) ? chatId : 0L, () -> respondOperation(update));
+		}
+	}
+
+	/** The built-in commands; true when the message was one and has been answered. */
+	private boolean handleCommand(Message m, Long chatId, Long fromId, String fromName, String text) {
+		switch (commandOf(text)) {
 			case "/start" -> sendQuietly(chatId, greeting(), m);
 			case "/help" -> sendQuietly(chatId, greeting() + "\n\nCommands:\n/new — start a new conversation\n"
 				+ "/id — show this chat's id and your user id\n/help — this message", m);
@@ -374,10 +402,40 @@ final class BotRunner {
 				}
 			}
 			default -> {
-				String body = text;
-				enqueue(chatId, () -> respond(m, body));
+				return false;
 			}
 		}
+		return true;
+	}
+
+	/** The user behind an update, for the allow-list; null when it has none (channel posts, polls…). */
+	private static User senderOf(Update u) {
+		if (u.message() != null) return u.message().from();
+		if (u.editedMessage() != null) return u.editedMessage().from();
+		if (u.callbackQuery() != null) return u.callbackQuery().from();
+		if (u.channelPost() != null) return u.channelPost().from();
+		if (u.editedChannelPost() != null) return u.editedChannelPost().from();
+		if (u.inlineQuery() != null) return u.inlineQuery().from();
+		if (u.myChatMember() != null) return u.myChatMember().from();
+		if (u.chatMember() != null) return u.chatMember().from();
+		return null;
+	}
+
+	/** The chat an update belongs to, for serialisation and replies; null when there is none. */
+	private static Long chatOf(Update u) {
+		Message m = (u.message() != null) ? u.message()
+			: (u.editedMessage() != null) ? u.editedMessage()
+			: (u.channelPost() != null) ? u.channelPost()
+			: (u.editedChannelPost() != null) ? u.editedChannelPost()
+			: (u.callbackQuery() != null) ? u.callbackQuery().message() : null;
+		if (m != null && m.chat() != null) return m.chat().id();
+		if (u.myChatMember() != null && u.myChatMember().chat() != null) return u.myChatMember().chat().id();
+		if (u.chatMember() != null && u.chatMember().chat() != null) return u.chatMember().chat().id();
+		return null;
+	}
+
+	private static boolean isPrivate(Message m) {
+		return m != null && m.chat() != null && m.chat().type() == Chat.Type.Private;
 	}
 
 	private String greeting() {
@@ -406,29 +464,49 @@ final class BotRunner {
 	}
 
 	/**
-	 * One inbound message through the bot's handler — an agent conversation
-	 * turn or an operation invocation — as a durable Job in the bot user's job
-	 * index, which is the canonical record of the interaction (nothing else is
-	 * logged by this module). Replies follow {@code reply}.
+	 * One conversation turn: {@code agent:chat} as a durable Job in the bot
+	 * user's job index (the canonical record of the interaction), the response
+	 * sent back as a reply.
 	 */
-	private void respond(Message m, String text) {
+	private void respondAgent(Message m, String text) {
 		Long chatId = m.chat().id();
 		try {
-			if (spec.routesToAgent()) {
-				typing(chatId, m);
-				String reply = TelegramAdapter.renderText(chatAgent(chatId, text));
-				if (reply == null || reply.isBlank()) reply = "(no response)";
-				send(chatId, reply, spec.parseMode(), m.messageId(), threadOf(m), false);
-			} else {
-				if (!spec.silent() && spec.fixedReply() == null) typing(chatId, m);
-				ACell result = runJob(spec.operation(), inboundRecord(m, text), context());
-				replyAfter(m, result);
-			}
+			typing(chatId, m);
+			String reply = TelegramAdapter.renderText(chatAgent(chatId, text));
+			if (reply == null || reply.isBlank()) reply = "(no response)";
+			send(chatId, reply, spec.parseMode(), m.messageId(), threadOf(m), false);
 		} catch (Throwable t) {
 			failed.incrementAndGet();
 			log.warn("Telegram bot '{}': failed to respond in chat {}: {}", spec.name(), chatId, concise(t));
 			sendQuietly(chatId, "⚠️ " + concise(t), m);
 		}
+	}
+
+	/**
+	 * One operation invocation for an Update, as a durable Job in the bot user's
+	 * job index; the reply (if any) follows {@code reply}. Updates without a chat
+	 * (polls, inline queries) run but cannot be replied to.
+	 */
+	private void respondOperation(Update update) {
+		Message m = update.message();
+		Long chatId = chatOf(update);
+		try {
+			if (chatId != null && !spec.silent() && spec.fixedReply() == null) typing(chatId, m);
+			ACell result = runJob(spec.operation(), updateRecord(update), context());
+			if (chatId != null) replyAfter(chatId, m, result);
+		} catch (Throwable t) {
+			failed.incrementAndGet();
+			log.warn("Telegram bot '{}': handler failed for update {} in chat {}: {}",
+				spec.name(), update.updateId(), chatId, concise(t));
+			if (chatId != null) sendQuietly(chatId, "⚠️ " + concise(t), m);
+		}
+	}
+
+	/** The Update exactly as Telegram sent it (snake_case, nested objects), plus {@code bot}. */
+	AMap<AString, ACell> updateRecord(Update update) {
+		AMap<AString, ACell> record = RT.castMap(JSON.parse(BotUtils.toJson(update)));
+		if (record == null) record = Maps.empty();
+		return record.assoc(K_BOT, Strings.create(spec.name()));
 	}
 
 	private ACell chatAgent(Long chatId, String text) {
@@ -475,41 +553,17 @@ final class BotRunner {
 	}
 
 	/** The configured reply after the operation handler ran. */
-	private void replyAfter(Message m, ACell result) {
+	private void replyAfter(Long chatId, Message m, ACell result) {
 		if (spec.silent()) return;
-		Long chatId = m.chat().id();
+		Integer replyTo = (m != null) ? m.messageId() : null;
 		String fixed = spec.fixedReply();
 		if (fixed != null) {
-			send(chatId, fixed, spec.parseMode(), m.messageId(), threadOf(m), false);
+			send(chatId, fixed, spec.parseMode(), replyTo, threadOf(m), false);
 			return;
 		}
 		String reply = TelegramAdapter.renderText(result);
 		if (reply == null || reply.isBlank()) reply = "(no response)";
-		send(chatId, reply, spec.parseMode(), m.messageId(), threadOf(m), false);
-	}
-
-
-	/** The message as an operation input: {@code {bot, chatId, messageId, text, from, chat, date}}. */
-	private AMap<AString, ACell> inboundRecord(Message m, String text) {
-		AMap<AString, ACell> chat = Maps.of(K_ID, CVMLong.create(m.chat().id()));
-		if (m.chat().type() != null) chat = chat.assoc(K_TYPE, Strings.create(m.chat().type().name().toLowerCase(Locale.ROOT)));
-		if (m.chat().title() != null) chat = chat.assoc(K_TITLE, Strings.create(m.chat().title()));
-		AMap<AString, ACell> record = Maps.of(
-			K_BOT, Strings.create(spec.name()),
-			K_CHAT_ID, CVMLong.create(m.chat().id()),
-			Fields.TEXT, Strings.create(text),
-			K_CHAT, chat);
-		if (m.messageId() != null) record = record.assoc(Fields.MESSAGE_ID, CVMLong.create(m.messageId()));
-		if (m.date() != null) record = record.assoc(K_DATE, CVMLong.create(m.date()));
-		User from = m.from();
-		if (from != null) {
-			AMap<AString, ACell> f = Maps.of(K_ID, CVMLong.create(from.id()));
-			if (from.username() != null) f = f.assoc(K_USERNAME, Strings.create(from.username()));
-			if (from.firstName() != null) f = f.assoc(K_FIRST_NAME, Strings.create(from.firstName()));
-			if (from.lastName() != null) f = f.assoc(K_LAST_NAME, Strings.create(from.lastName()));
-			record = record.assoc(K_FROM, f);
-		}
-		return record;
+		send(chatId, reply, spec.parseMode(), replyTo, threadOf(m), false);
 	}
 
 	RequestContext context() {
@@ -576,58 +630,136 @@ final class BotRunner {
 	// ----------------------------------------------------------------- outbound
 
 	/**
-	 * Sends {@code text} to a chat, splitting at Telegram's length limit. When
-	 * a parse mode is requested and Telegram rejects the formatting (HTTP 400,
-	 * typically unbalanced markup), the chunk is resent as plain text — a
-	 * garbled asterisk must not lose the message.
+	 * Execute any Bot API method with Telegram-form parameters and return its
+	 * {@code result} as a cell (a {@code Message} for the send methods,
+	 * {@code true} for most others).
 	 *
-	 * @param chatId   Numeric chat id or {@code @channelusername}
-	 * @param text     Message text
-	 * @param parseMode {@code Markdown}, {@code MarkdownV2}, {@code HTML} or null
-	 * @param replyTo  Message id to reply to (first chunk only), or null
-	 * @param threadId Forum topic thread id, or null
-	 * @param silent   Send without notification
-	 * @return the last chunk's response
-	 * @throws JobFailedException when Telegram rejects the send
+	 * @throws JobFailedException when Telegram answers {@code ok: false}
 	 * @throws IllegalStateException when the bot is not running
 	 */
-	SendResponse send(Object chatId, String text, String parseMode, Integer replyTo, Long threadId, boolean silent) {
-		TelegramBot b = bot;
-		if (b == null) {
-			throw new IllegalStateException("Telegram bot '" + spec.name() + "' is not running"
-				+ (error != null ? ": " + error : ""));
+	ACell call(String method, Map<String, Object> params) {
+		ApiResponse r = execute(method, params);
+		if (!r.ok()) {
+			failed.incrementAndGet();
+			throw new JobFailedException("Telegram " + method + " failed: " + r.describe());
 		}
-		SendResponse last = null;
+		if (method.startsWith("send")) sent.incrementAndGet();
+		return r.resultCell();
+	}
+
+	/**
+	 * {@code sendMessage} with the module's two conveniences on top of
+	 * Telegram's own parameters: text longer than the 4096-character limit is
+	 * split (line breaks preferred; {@code reply_parameters} apply to the first
+	 * chunk only), and when a {@code parse_mode} is set and Telegram rejects the
+	 * formatting (HTTP 400, typically unbalanced markup) the chunk is resent as
+	 * plain text — a garbled asterisk must not lose the message.
+	 *
+	 * @param params Telegram {@code sendMessage} parameters ({@code chat_id} and
+	 *               {@code text} required)
+	 * @return the last sent {@code Message} as Telegram returned it
+	 */
+	ACell sendMessage(Map<String, Object> params) {
+		if (params.get("chat_id") == null) {
+			throw new IllegalArgumentException("chat_id is required: a Telegram chat id or @channelusername");
+		}
+		Object textObj = params.get("text");
+		String text = (textObj == null) ? "" : String.valueOf(textObj);
+		if (text.isBlank()) throw new IllegalArgumentException("text is required");
+		ACell last = null;
+		boolean first = true;
 		for (String chunk : split(text, MAX_MESSAGE_LENGTH)) {
-			SendResponse r = b.execute(request(chatId, chunk, parseMode, replyTo, threadId, silent));
-			if (!r.isOk() && parseMode != null && r.errorCode() == 400) {
+			Map<String, Object> p = new LinkedHashMap<>(params);
+			p.put("text", chunk);
+			if (!first) p.remove("reply_parameters");
+			ApiResponse r = execute("sendMessage", p);
+			if (!r.ok() && r.errorCode() == 400 && p.containsKey("parse_mode")) {
 				log.debug("Telegram bot '{}': {} formatting rejected ({}), resending as plain text",
-					spec.name(), parseMode, r.description());
-				r = b.execute(request(chatId, chunk, null, replyTo, threadId, silent));
+					spec.name(), p.get("parse_mode"), r.description());
+				p.remove("parse_mode");
+				r = execute("sendMessage", p);
 			}
-			if (!r.isOk()) {
+			if (!r.ok()) {
 				failed.incrementAndGet();
-				throw new JobFailedException("Telegram sendMessage failed: " + describe(r));
+				throw new JobFailedException("Telegram sendMessage failed: " + r.describe());
 			}
 			sent.incrementAndGet();
-			last = r;
-			replyTo = null;
+			last = r.resultCell();
+			first = false;
 		}
 		return last;
 	}
 
-	private static SendMessage request(Object chatId, String text, String parseMode, Integer replyTo,
-			Long threadId, boolean silent) {
-		SendMessage req = new SendMessage(chatId, text);
-		if (parseMode != null) req.parseMode(ParseMode.valueOf(parseMode));
-		if (replyTo != null) req.replyParameters(new ReplyParameters(replyTo).allowSendingWithoutReply(true));
-		if (threadId != null) req.messageThreadId(threadId);
-		if (silent) req.disableNotification(true);
-		return req;
+	/** Telegram's response envelope: {@code {ok, result?, error_code?, description?}}. */
+	record ApiResponse(boolean ok, int errorCode, String description, JsonElement result) {
+		String describe() {
+			return errorCode + " " + description;
+		}
+
+		ACell resultCell() {
+			return (result == null || result.isJsonNull()) ? null : JSON.parse(result.toString());
+		}
+	}
+
+	/**
+	 * POST a Bot API method as Telegram expects it: form fields, scalars as
+	 * text and maps/lists as JSON (the same encoding the pengrad client uses).
+	 */
+	private ApiResponse execute(String method, Map<String, Object> params) {
+		OkHttpClient c = http;
+		String tok = token;
+		if (c == null || tok == null) {
+			throw new IllegalStateException("Telegram bot '" + spec.name() + "' is not running"
+				+ (error != null ? ": " + error : ""));
+		}
+		FormBody.Builder form = new FormBody.Builder();
+		if (params != null) {
+			for (Map.Entry<String, Object> e : params.entrySet()) {
+				if (e.getValue() != null) form.add(e.getKey(), paramValue(e.getValue()));
+			}
+		}
+		Request request = new Request.Builder().url(apiUrl + tok + "/" + method).post(form.build()).build();
+		try (Response response = c.newCall(request).execute()) {
+			String body = (response.body() != null) ? response.body().string() : "";
+			JsonObject o = JsonParser.parseString(body.isBlank() ? "{}" : body).getAsJsonObject();
+			boolean ok = o.has("ok") && o.get("ok").getAsBoolean();
+			int code = o.has("error_code") ? o.get("error_code").getAsInt() : (ok ? 200 : response.code());
+			String description = o.has("description") ? o.get("description").getAsString()
+				: (ok ? "" : "HTTP " + response.code());
+			return new ApiResponse(ok, code, description, o.get("result"));
+		} catch (java.io.IOException | RuntimeException e) {
+			throw new JobFailedException("Telegram " + method + " failed: " + concise(e));
+		}
+	}
+
+	private static String paramValue(Object v) {
+		if (v instanceof String s) return s;
+		if (v instanceof Number || v instanceof Boolean || v instanceof Character || v.getClass().isEnum()) {
+			return String.valueOf(v);
+		}
+		return BotUtils.GSON.toJson(v);
+	}
+
+	/** The runner's own chatter: a text message built the Telegram way. */
+	ACell send(Object chatId, String text, String parseMode, Integer replyTo, Long threadId, boolean silent) {
+		Map<String, Object> p = new LinkedHashMap<>();
+		p.put("chat_id", chatId);
+		p.put("text", text);
+		if (parseMode != null) p.put("parse_mode", parseMode);
+		if (replyTo != null) {
+			Map<String, Object> rp = new LinkedHashMap<>();
+			rp.put("message_id", replyTo);
+			rp.put("allow_sending_without_reply", true);
+			p.put("reply_parameters", rp);
+		}
+		if (threadId != null) p.put("message_thread_id", threadId);
+		if (silent) p.put("disable_notification", true);
+		return sendMessage(p);
 	}
 
 	/** Best-effort plain-text reply used for bot chatter and error notices. */
 	private void sendQuietly(Long chatId, String text, Message inReplyTo) {
+		if (chatId == null) return;
 		try {
 			send(chatId, text, null, null, threadOf(inReplyTo), false);
 		} catch (RuntimeException e) {
@@ -637,7 +769,7 @@ final class BotRunner {
 
 	private void typing(Long chatId, Message m) {
 		TelegramBot b = bot;
-		if (b == null) return;
+		if (b == null || chatId == null) return;
 		try {
 			SendChatAction action = new SendChatAction(chatId, ChatAction.typing);
 			Long thread = threadOf(m);

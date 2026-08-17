@@ -14,8 +14,6 @@ import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.pengrad.telegrambot.response.SendResponse;
-
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -23,8 +21,6 @@ import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
-import convex.core.data.prim.CVMBool;
-import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.adapter.AAdapter;
@@ -41,8 +37,9 @@ import covia.venue.RequestContext;
  * <b>inbound handler</b>: an agent — one {@code agent:chat} session per
  * Telegram chat, persisted at {@code w/telegram/<bot>/sessions/<chatId>} in
  * the user's workspace so conversations survive restarts — or an operation,
- * invoked per message with the record {@code {bot, chatId, messageId, text,
- * from, chat, date}} as its input, the reply governed by {@code reply}
+ * invoked per update with the Telegram {@code Update} exactly as sent
+ * (snake_case, {@code message}/{@code callback_query}/… nested as Telegram
+ * nests them) plus {@code bot}, the reply governed by {@code reply}
  * (result, silent, or a fixed acknowledgement). Every inbound message runs
  * as a Job in the bot user's job index — the canonical record of the
  * interaction; the module keeps no log of its own and never reshapes
@@ -59,10 +56,15 @@ import covia.venue.RequestContext;
  *
  * <p><b>Operations</b>:</p>
  * <ul>
- *   <li>{@code telegram:send} {@code {bot?, chatId, text, parseMode?, replyTo?,
- *       silent?}} — send a message. Gated on {@code <owner>/telegram/<bot>}
- *       × {@code telegram/send}: the bot's user (and their agents, within
- *       scope) may send; anyone else needs a delegation from that user.</li>
+ *   <li>{@code telegram:send} — Telegram's {@code sendMessage} parameters as-is
+ *       plus {@code bot}, returning the sent {@code Message}. Gated on
+ *       {@code <owner>/telegram/<bot>} × {@code telegram/send}: the bot's user
+ *       (and their agents, within scope) may send; anyone else needs a
+ *       delegation from that user.</li>
+ *   <li>{@code telegram:call} {@code {bot?, method, params}} — any Bot API method
+ *       with its documented parameters (media by file_id/URL, edits, callback
+ *       answers, keyboards…), gated on {@code telegram/call}; the methods that
+ *       drive the update stream are refused.</li>
  *   <li>{@code telegram:bots} — status of the caller's bots (all bots for the
  *       venue identity). Tokens are never returned.</li>
  * </ul>
@@ -83,16 +85,20 @@ public class TelegramAdapter extends AAdapter implements AutoCloseable {
 	static final AString K_BOTS = Strings.intern("bots");
 	static final AString K_API_URL = Strings.intern("apiUrl");
 	static final AString K_BOT = Strings.intern("bot");
-	static final AString K_CHAT_ID = Strings.intern("chatId");
-	static final AString K_REPLY_TO = Strings.intern("replyTo");
-	static final AString K_SILENT = Strings.intern("silent");
+	static final AString K_METHOD = Strings.intern("method");
+	static final AString K_PARAMS = Strings.intern("params");
+	static final String K_PARSE_MODE_PARAM = "parse_mode";
 	private static final AString K_ENABLED = Strings.intern("enabled");
 
-	/** Ability required to send through a bot; resource {@code <owner>/telegram/<bot>}. */
+	/** Ability required to send messages through a bot; resource {@code <owner>/telegram/<bot>}. */
 	public static final AString ABILITY_SEND = Strings.intern("telegram/send");
+	/** Ability required to call arbitrary Bot API methods through a bot (a superset of send). */
+	public static final AString ABILITY_CALL = Strings.intern("telegram/call");
+
+	/** Methods that belong to the venue's own update loop for a bot; refused by {@code telegram:call}. */
+	static final Set<String> MANAGED_METHODS = Set.of("getUpdates", "setWebhook", "deleteWebhook", "logOut", "close");
 
 	private static final Set<AString> KNOWN_KEYS = Set.of(K_BOTS, K_API_URL, K_ENABLED);
-	private static final Set<String> PARSE_MODES = Set.of("Markdown", "MarkdownV2", "HTML");
 	private static final AString[] TEXT_KEYS = {
 		Fields.TEXT, Fields.RESPONSE, Strings.intern("content"), Fields.MESSAGE, Fields.RESULT };
 
@@ -116,13 +122,14 @@ public class TelegramAdapter extends AAdapter implements AutoCloseable {
 	@Override
 	public String getDescription() {
 		return "Telegram bots as a venue front door: operator-declared bots route Telegram chats to "
-			+ "agents (one conversation per chat) or to any operation, and telegram:send lets agents "
-			+ "and users message Telegram chats through a bot they own.";
+			+ "agents (one conversation per chat) or hand each Update to an operation, while telegram:send "
+			+ "and telegram:call let agents and users use the Bot API through a bot they own.";
 	}
 
 	@Override
 	protected void installAssets() {
 		installAsset("telegram/send", "/adapters/telegram/send.json");
+		installAsset("telegram/call", "/adapters/telegram/call.json");
 		installAsset("telegram/bots", "/adapters/telegram/bots.json");
 		// The skill travels with the capability: v/skills/telegram exists
 		// exactly when this module is loaded.
@@ -247,44 +254,68 @@ public class TelegramAdapter extends AAdapter implements AutoCloseable {
 		if (subOp == null) throw new IllegalArgumentException("Insufficient specification for telegram operation");
 		return switch (subOp) {
 			case "send" -> CompletableFuture.supplyAsync(() -> handleSend(ctx, input), VIRTUAL_EXECUTOR);
+			case "call" -> CompletableFuture.supplyAsync(() -> handleCall(ctx, input), VIRTUAL_EXECUTOR);
 			case "bots" -> CompletableFuture.supplyAsync(() -> handleBots(ctx), VIRTUAL_EXECUTOR);
 			default -> throw new UnsupportedOperationException("Unsupported telegram operation: " + subOp);
 		};
 	}
 
+	/**
+	 * {@code telegram:send}: Telegram's own {@code sendMessage} parameters
+	 * ({@code chat_id}, {@code text}, {@code parse_mode}, {@code reply_parameters},
+	 * {@code reply_markup}, …) plus {@code bot}; returns the sent {@code Message}
+	 * as Telegram describes it. Long text is split and rejected markup falls
+	 * back to plain text (see {@link BotRunner#sendMessage}).
+	 */
 	ACell handleSend(RequestContext ctx, ACell input) {
+		AMap<AString, ACell> in = RT.castMap(input);
+		if (in == null) throw new IllegalArgumentException("send expects an object of sendMessage parameters");
+		BotRunner runner = selectBot(ctx, RT.ensureString(in.get(K_BOT)));
+		requireBotAccess(ctx, runner, ABILITY_SEND);
+		Map<String, Object> params = telegramParams(in.dissoc(K_BOT));
+		if (!params.containsKey(K_PARSE_MODE_PARAM) && runner.spec.parseMode() != null) {
+			params.put(K_PARSE_MODE_PARAM, runner.spec.parseMode());
+		}
+		return runner.sendMessage(params);
+	}
+
+	/**
+	 * {@code telegram:call}: any Bot API method by name with its Telegram-form
+	 * {@code params}, answering with the raw {@code result}. The methods that
+	 * would interfere with the venue's own update stream are refused.
+	 */
+	ACell handleCall(RequestContext ctx, ACell input) {
 		BotRunner runner = selectBot(ctx, RT.ensureString(RT.getIn(input, K_BOT)));
+		requireBotAccess(ctx, runner, ABILITY_CALL);
+		AString methodCell = RT.ensureString(RT.getIn(input, K_METHOD));
+		if (methodCell == null || methodCell.isEmpty()) {
+			throw new IllegalArgumentException("method is required: a Bot API method name such as sendPhoto");
+		}
+		String method = methodCell.toString().trim();
+		if (!method.matches("[A-Za-z]+")) throw new IllegalArgumentException("method must be a Bot API method name: " + method);
+		if (MANAGED_METHODS.contains(method)) {
+			throw new IllegalArgumentException("Bot API method " + method + " is managed by the venue's own "
+				+ "update loop for this bot and cannot be called");
+		}
+		ACell paramsCell = RT.getIn(input, K_PARAMS);
+		AMap<AString, ACell> paramsMap = (paramsCell == null) ? Maps.empty() : RT.castMap(paramsCell);
+		if (paramsMap == null) throw new IllegalArgumentException("params must be an object of Bot API parameters");
+		return runner.call(method, telegramParams(paramsMap));
+	}
+
+	/** Gate on {@code <bot user>/telegram/<bot>} × ability: the bot's user and their agents, or a delegation. */
+	private void requireBotAccess(RequestContext ctx, BotRunner runner, AString ability) {
 		AString owner = runner.spec.userDID(engine);
-		engine.requireLocalAccess(ctx, Strings.create(owner + "/telegram/" + runner.spec.name()), ABILITY_SEND);
+		engine.requireLocalAccess(ctx, Strings.create(owner + "/telegram/" + runner.spec.name()), ability);
+	}
 
-		ACell chatCell = RT.getIn(input, K_CHAT_ID);
-		Object chatId;
-		CVMLong chatLong = RT.ensureLong(chatCell);
-		if (chatLong != null) {
-			chatId = chatLong.longValue();
-		} else if (chatCell instanceof AString s && !s.isEmpty()) {
-			String str = s.toString().trim();
-			chatId = str.matches("-?\\d+") ? (Object) Long.parseLong(str) : str;
-		} else {
-			throw new IllegalArgumentException("chatId is required: a numeric Telegram chat id or @channelusername");
-		}
-		AString text = RT.ensureString(RT.getIn(input, Fields.TEXT));
-		if (text == null || text.isEmpty()) throw new IllegalArgumentException("text is required");
-		AString pm = RT.ensureString(RT.getIn(input, BotSpec.K_PARSE_MODE));
-		String parseMode = (pm != null) ? pm.toString() : runner.spec.parseMode();
-		if (parseMode != null && !PARSE_MODES.contains(parseMode)) {
-			throw new IllegalArgumentException("parseMode must be one of Markdown, MarkdownV2, HTML: " + parseMode);
-		}
-		CVMLong replyTo = RT.ensureLong(RT.getIn(input, K_REPLY_TO));
-		boolean silent = CVMBool.TRUE.equals(RT.getIn(input, K_SILENT));
-
-		SendResponse resp = runner.send(chatId, text.toString(), parseMode,
-			(replyTo != null) ? (int) replyTo.longValue() : null, null, silent);
-		AMap<AString, ACell> out = Maps.of(
-			K_BOT, Strings.create(runner.spec.name()),
-			K_CHAT_ID, (chatId instanceof Long l) ? CVMLong.create(l) : Strings.create(chatId.toString()));
-		if (resp != null && resp.message() != null && resp.message().messageId() != null) {
-			out = out.assoc(Fields.MESSAGE_ID, CVMLong.create(resp.message().messageId()));
+	/** Cells → the plain Java values the HTTP layer encodes (scalars as text, maps/lists as JSON). */
+	private static Map<String, Object> telegramParams(AMap<AString, ACell> cells) {
+		Map<String, Object> out = new LinkedHashMap<>();
+		if (cells == null) return out;
+		for (long i = 0; i < cells.count(); i++) {
+			var e = cells.entryAt(i);
+			out.put(String.valueOf(e.getKey()), JSON.json(e.getValue()));
 		}
 		return out;
 	}

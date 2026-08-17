@@ -61,14 +61,14 @@ public final class TelegramModuleSmokeMain {
 				// Inbound: an open bot answers a stranger via the echo operation.
 				telegram.push(4242L, 99L, "smoker", "round trip");
 				FakeTelegramServer.Sent reply = telegram.awaitSent(30_000);
-				if (reply == null || !"round trip".equals(reply.text())) {
+				if (reply == null || !reply.text().contains("round trip")) {
 					throw new AssertionError("Bad inbound reply: " + reply);
 				}
 
 				// Outbound: the owner sends through the bot.
 				RequestContext user = RequestContext.of(owner);
 				ACell out = run(engine, user, "v/ops/telegram/send", Maps.of(
-					"chatId", CVMLong.create(4242L), Fields.TEXT, "outbound"));
+					"chat_id", CVMLong.create(4242L), "text", "outbound"));
 				FakeTelegramServer.Sent sent = telegram.awaitSent(10_000);
 				if (sent == null || !"outbound".equals(sent.text())) {
 					throw new AssertionError("Bad outbound send: " + sent + " / " + out);

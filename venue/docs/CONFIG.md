@@ -922,13 +922,16 @@ Per bot:
   Telegram chat is one `agent:chat` session, persisted at
   `w/telegram/<bot>/sessions/<chatId>` in the user's workspace so
   conversations survive restarts; `/new` starts a fresh one. With
-  `operation`, every message invokes that reference with the message record
-  `{bot, chatId, messageId, text, from: {id, username, firstName, lastName},
-  chat: {id, type, title}, date}` as its input. The module never reshapes
-  messages: for a target whose input is not that record — a deterministic
-  SQL write, a webhook, a log to some location — point `operation` at a
-  small **mapping operation you own** (an orchestration, a pinned op…) that
-  takes the record and does the work. Either way each inbound message runs
+  `operation`, every update invokes that reference with the **Telegram
+  `Update` exactly as sent** — snake_case, `message` / `edited_message` /
+  `callback_query` / … nested as Telegram nests them (a photo arrives as
+  `message.photo[]` with `file_id`s and `message.caption`; a button tap as
+  `callback_query.data`) — plus `bot`. The module never reshapes messages:
+  for a target whose input is not an Update — a deterministic SQL write, a
+  webhook, a log to some location — point `operation` at a small **mapping
+  operation you own** (an orchestration, a pinned op…) that takes the Update
+  and does the work. Agent bots receive only text messages (captions count);
+  operation bots receive every update type Telegram delivers. Either way each inbound message runs
   as a **Job in the bot user's job index**, which is the canonical record of
   the interaction; the module keeps no log of its own.
 - `reply` — for an `operation` handler: `true` (default: the result
@@ -955,10 +958,19 @@ the adapter (`adapters.telegram.enabled: false` or `adapter/disable`) takes
 its bots offline without confirming updates, so Telegram redelivers the
 backlog when it is enabled again.
 
-Operations: `v/ops/telegram/send {bot?, chatId, text, parseMode?, replyTo?,
-silent?}` — gated on `<bot user>/telegram/<bot>` × `telegram/send`, so the
-bot's user and their agents (within scope) may send and anyone else needs a
-delegation from that user; and `v/ops/telegram/bots` — the caller's bots
+Operations — all in Telegram's own field names, so the Bot API reference is
+the reference: `v/ops/telegram/send {bot?, chat_id, text, parse_mode?,
+reply_parameters?, reply_markup?, …}` (the `sendMessage` parameters as-is;
+returns the sent `Message`; text over 4096 characters is split and rejected
+markup is resent plain) — gated on `<bot user>/telegram/<bot>` ×
+`telegram/send`, so the bot's user and their agents (within scope) may send
+and anyone else needs a delegation from that user; `v/ops/telegram/call
+{bot?, method, params}` — any other Bot API method with its documented
+parameters (`sendPhoto`/`sendDocument` by `file_id` or URL, `editMessageText`,
+`deleteMessage`, `answerCallbackQuery`, `getChat`, …; `getUpdates`,
+`setWebhook`, `deleteWebhook`, `logOut`, `close` are refused as the venue's
+own update loop owns them) — gated on `telegram/call`; and
+`v/ops/telegram/bots` — the caller's bots
 with state (`STARTING`, `PENDING`, `RUNNING`, `STOPPED`), Telegram username,
 last error and counters, tokens never included. The module ships a
 `telegram` agent skill (`v/skills/telegram`).

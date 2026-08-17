@@ -40,8 +40,9 @@ final class FakeTelegramServer implements AutoCloseable {
 	/** Text that makes {@code sendMessage} fail with a 400 when a parse_mode is set. */
 	static final String BAD_MARKUP = "BAD_MARKUP";
 
-	/** One outbound sendMessage as observed by the fake. */
-	record Sent(long chatId, String text, String parseMode, Integer replyTo, boolean silent, int messageId) {}
+	/** One outbound send* call as observed by the fake ({@code form} holds every parameter as sent). */
+	record Sent(String method, long chatId, String text, String parseMode, Integer replyTo, boolean silent,
+			int messageId, Map<String, String> form) {}
 
 	/** Per-token state: the fake serves any number of bots at once. */
 	private static final class Bot {
@@ -90,12 +91,70 @@ final class FakeTelegramServer implements AutoCloseable {
 	}
 
 	int push(String token, long chatId, String chatType, long fromId, String fromUsername, String text) {
+		Map<String, Object> message = message(chatId, chatType, fromId, fromUsername);
+		message.put("text", text);
+		Map<String, Object> update = new HashMap<>();
+		update.put("message", message);
+		return pushUpdate(token, update);
+	}
+
+	/** Queue an inbound photo (two sizes) with a caption — a message with no {@code text}. */
+	int pushPhoto(String token, long chatId, long fromId, String fromUsername, String caption) {
+		Map<String, Object> message = message(chatId, "private", fromId, fromUsername);
+		List<Map<String, Object>> sizes = new ArrayList<>();
+		for (String id : new String[] {"AgACsmall", "AgACbig"}) {
+			Map<String, Object> size = new HashMap<>();
+			size.put("file_id", id);
+			size.put("file_unique_id", id + "u");
+			size.put("width", id.endsWith("big") ? 800 : 90);
+			size.put("height", id.endsWith("big") ? 600 : 67);
+			sizes.add(size);
+		}
+		message.put("photo", sizes);
+		if (caption != null) message.put("caption", caption);
+		Map<String, Object> update = new HashMap<>();
+		update.put("message", message);
+		return pushUpdate(token, update);
+	}
+
+	/** Queue an inline-keyboard tap: a callback_query on a message in the chat. */
+	int pushCallback(String token, long chatId, long fromId, String fromUsername, String data) {
+		Map<String, Object> from = user(fromId, fromUsername);
+		Map<String, Object> message = message(chatId, "private", 42L, BOT_USERNAME);
+		message.put("text", "Approve?");
+		Map<String, Object> cq = new HashMap<>();
+		cq.put("id", "cq" + updateIds.get());
+		cq.put("from", from);
+		cq.put("message", message);
+		cq.put("chat_instance", "ci1");
+		cq.put("data", data);
+		Map<String, Object> update = new HashMap<>();
+		update.put("callback_query", cq);
+		return pushUpdate(token, update);
+	}
+
+	/** Queue any Telegram Update object (without {@code update_id}, which is assigned here). */
+	int pushUpdate(String token, Map<String, Object> update) {
 		int updateId = updateIds.incrementAndGet();
+		update.put("update_id", updateId);
+		Bot b = bot(token);
+		synchronized (b.updates) {
+			b.updates.add(update);
+			b.updates.notifyAll();
+		}
+		return updateId;
+	}
+
+	private static Map<String, Object> user(long id, String username) {
 		Map<String, Object> from = new HashMap<>();
-		from.put("id", fromId);
+		from.put("id", id);
 		from.put("is_bot", false);
 		from.put("first_name", "Test");
-		if (fromUsername != null) from.put("username", fromUsername);
+		if (username != null) from.put("username", username);
+		return from;
+	}
+
+	private Map<String, Object> message(long chatId, String chatType, long fromId, String fromUsername) {
 		Map<String, Object> chat = new HashMap<>();
 		chat.put("id", chatId);
 		chat.put("type", chatType);
@@ -103,17 +162,8 @@ final class FakeTelegramServer implements AutoCloseable {
 		message.put("message_id", messageIds.incrementAndGet());
 		message.put("date", System.currentTimeMillis() / 1000);
 		message.put("chat", chat);
-		message.put("from", from);
-		message.put("text", text);
-		Map<String, Object> update = new HashMap<>();
-		update.put("update_id", updateId);
-		update.put("message", message);
-		Bot b = bot(token);
-		synchronized (b.updates) {
-			b.updates.add(update);
-			b.updates.notifyAll();
-		}
-		return updateId;
+		message.put("from", user(fromId, fromUsername));
+		return message;
 	}
 
 	/** Next outbound message of the default bot, waiting up to {@code timeoutMs}; null on timeout. */
@@ -207,7 +257,7 @@ final class FakeTelegramServer implements AutoCloseable {
 					}
 					boolean silent = "true".equals(form.get("disable_notification"));
 					int messageId = messageIds.incrementAndGet();
-					bot.sent.add(new Sent(chatId, text, parseMode, replyTo, silent, messageId));
+					bot.sent.add(new Sent("sendMessage", chatId, text, parseMode, replyTo, silent, messageId, form));
 					Map<String, Object> chat = new HashMap<>();
 					chat.put("id", chatId);
 					chat.put("type", "private");
@@ -218,8 +268,28 @@ final class FakeTelegramServer implements AutoCloseable {
 					message.put("text", text);
 					reply(ex, 200, ok(message));
 				}
-				case "sendChatAction", "deleteWebhook" -> reply(ex, 200, ok(Boolean.TRUE));
-				default -> reply(ex, 404, error(404, "Not Found: method " + method));
+				case "sendChatAction", "deleteWebhook", "answerCallbackQuery", "deleteMessage" -> reply(ex, 200, ok(Boolean.TRUE));
+				default -> {
+					if (method.startsWith("send") && form.containsKey("chat_id")) {
+						// Any other send* method (sendPhoto, sendDocument…): record it and
+						// answer with a Message carrying the caption as text.
+						long chatId = Long.parseLong(form.get("chat_id"));
+						int messageId = messageIds.incrementAndGet();
+						bot.sent.add(new Sent(method, chatId, form.get("caption"), form.get("parse_mode"), null,
+							"true".equals(form.get("disable_notification")), messageId, form));
+						Map<String, Object> chat = new HashMap<>();
+						chat.put("id", chatId);
+						chat.put("type", "private");
+						Map<String, Object> message = new HashMap<>();
+						message.put("message_id", messageId);
+						message.put("date", System.currentTimeMillis() / 1000);
+						message.put("chat", chat);
+						if (form.get("caption") != null) message.put("caption", form.get("caption"));
+						reply(ex, 200, ok(message));
+					} else {
+						reply(ex, 404, error(404, "Not Found: method " + method));
+					}
+				}
 			}
 		} catch (Exception e) {
 			reply(ex, 500, error(500, e.toString()));
