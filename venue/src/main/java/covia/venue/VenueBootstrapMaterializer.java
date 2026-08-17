@@ -189,10 +189,27 @@ final class VenueBootstrapMaterializer {
 		writeAndValidateVenuePath("v/info/did", engine.getDIDString());
 		writeAndValidateVenuePath("v/info/version", Strings.create(Engine.jarVersion()));
 		writeAndValidateVenuePath("v/info/started", CVMLong.create(startedAt));
-		writeAndValidateVenuePath("v/info/protocols", Vectors.of(
+
+		// Where this venue is reachable, so an agent can tell a human "open
+		// <url>/…" instead of guessing: the configured base URL and, when the
+		// DLFS WebDAV mount is on, its URL (else an explicit disabled marker).
+		String baseUrl = engine.config().getBaseUrl();
+		writeAndValidateVenuePath("v/info/url", Strings.create(baseUrl));
+		boolean webdav = engine.config().isWebDAVEnabled();
+		AMap<AString, ACell> webdavInfo = Maps.of(Config.ENABLED, CVMBool.of(webdav));
+		if (webdav) {
+			webdavInfo = webdavInfo
+				.assoc(Fields.URL, Strings.create(baseUrl + Config.WEBDAV_PATH))
+				.assoc(Fields.PATH, Strings.create(Config.WEBDAV_PATH));
+		}
+		writeAndValidateVenuePath("v/info/webdav", webdavInfo);
+
+		AVector<ACell> protocols = Vectors.of(
 			(ACell) Strings.create("rest"),
 			(ACell) Strings.create("mcp"),
-			(ACell) Strings.create("a2a")));
+			(ACell) Strings.create("a2a"));
+		if (webdav) protocols = protocols.conj(Strings.create("dlfs-webdav"));
+		writeAndValidateVenuePath("v/info/protocols", protocols);
 
 		// Adapter summaries are a complete bootstrap-owned snapshot. Reset this
 		// subtree on the transaction fork so adapters removed since the previous

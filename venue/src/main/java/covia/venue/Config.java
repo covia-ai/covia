@@ -289,6 +289,8 @@ public class Config {
 
 	/** Key for DLFS WebDAV configuration section */
 	public static final AString WEBDAV = Strings.intern("webdav");
+	/** Where the DLFS WebDAV mount lives under the base URL when enabled (fixed by {@code convex.dlfs.DLFSWebDAV}). */
+	public static final String WEBDAV_PATH = "/dlfs/";
 
 	// ========== File adapter config keys ==========
 

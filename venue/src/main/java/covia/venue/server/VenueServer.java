@@ -677,7 +677,7 @@ public class VenueServer {
 		DLFSWebDAV webdav = new DLFSWebDAV(webdavManager);
 		webdav.addRoutes(routes);
 
-		log.info("DLFS WebDAV mounted at /dlfs/");
+		log.info("DLFS WebDAV mounted at {}", Config.WEBDAV_PATH);
 	}
 
 	private void addAPIRoutes(RoutesConfig routes) {

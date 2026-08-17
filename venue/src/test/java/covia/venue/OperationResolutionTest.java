@@ -762,4 +762,40 @@ public class OperationResolutionTest {
 		assertNotNull(engine.resolveAsset(Strings.create("/o/slash-echo"), alice),
 			"/o/slash-echo should resolve identically with a leading slash");
 	}
+
+	@Test
+	public void testVenueInfoUrlAndWebdavArePublished() {
+		ACell url = engine.resolvePath(Strings.create("v/info/url"), alice);
+		assertEquals(Strings.create(engine.config().getBaseUrl()), url,
+			"/v/info/url is the venue base URL, so agents can tell humans where the venue is");
+		ACell webdav = engine.resolvePath(Strings.create("v/info/webdav"), alice);
+		assertNotNull(webdav, "/v/info/webdav is always present");
+		// This test engine does not enable WebDAV: an explicit disabled marker, no URL
+		assertEquals(convex.core.data.prim.CVMBool.FALSE, RT.getIn(webdav, "enabled"));
+		assertNull(RT.getIn(webdav, "url"));
+		ACell protocols = engine.resolvePath(Strings.create("v/info/protocols"), alice);
+		assertFalse(protocols.toString().contains("dlfs-webdav"));
+	}
+
+	@Test
+	public void testVenueInfoWebdavWhenEnabled() throws Exception {
+		Engine dav = Engine.createTemp(Maps.of(
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
+			Config.WEBDAV, Maps.of(Config.ENABLED, true),
+			Strings.create("hostname"), Strings.create("venue.example.com"),
+			Strings.create("port"), 443L));
+		try {
+			Engine.addDemoAssets(dav);
+			RequestContext ctx = dav.venueContext();
+			assertEquals(Strings.create("https://venue.example.com"),
+				dav.resolvePath(Strings.create("v/info/url"), ctx));
+			ACell webdav = dav.resolvePath(Strings.create("v/info/webdav"), ctx);
+			assertEquals(convex.core.data.prim.CVMBool.TRUE, RT.getIn(webdav, "enabled"));
+			assertEquals(Strings.create("https://venue.example.com/dlfs/"), RT.getIn(webdav, "url"));
+			assertEquals(Strings.create("/dlfs/"), RT.getIn(webdav, "path"));
+			assertTrue(dav.resolvePath(Strings.create("v/info/protocols"), ctx).toString().contains("dlfs-webdav"));
+		} finally {
+			dav.close();
+		}
+	}
 }
