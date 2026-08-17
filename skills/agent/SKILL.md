@@ -115,6 +115,8 @@ Set via `llmOperation` (a `v/ops/langchain/...` path):
 | `v/ops/langchain/openai` | OpenAI | Requires `OPENAI_API_KEY` secret |
 | `v/ops/langchain/anthropic` | Anthropic (Claude) | Requires `ANTHROPIC_API_KEY` secret |
 | `v/ops/langchain/ollama` | Ollama (local) | Requires Ollama running locally |
+| `v/ops/langchain/mistral` | Mistral | Requires `MISTRAL_API_KEY` secret (`mistral-medium-latest` default) |
+| `v/ops/langchain/openrouter` | OpenRouter (many vendors, one key) | Requires `OPENROUTER_API_KEY` secret; model ids like `anthropic/claude-sonnet-5`, default `openrouter/auto` |
 
 Run `covia_list path=v/ops/langchain` to see every provider installed on the venue (e.g. `xai`).
 

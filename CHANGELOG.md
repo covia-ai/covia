@@ -10,6 +10,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Added
 
+- LangChain providers `mistral` (`MISTRAL_API_KEY`, `mistral-medium-latest` default) and `openrouter` (`OPENROUTER_API_KEY`, `openrouter/auto` default, any vendor-prefixed model id) — OpenAI-compatible endpoints; listed by `langchain:models`
 - Agent skills `covia` (what Covia is) and `venue` (what a venue is, its identity/URL, how clients connect, what it offers, namespaces); `discovery`/`files` point at adapter-published facts (`v/info/adapters/dlfs/webdav`)
 - Adapters own their skills: each built-in adapter installs its own `v/skills/<name>` via `installSkill`, so a skill is published exactly when its adapter is active (retracted on disable/unload); `SkillsAdapter.LIBRARY` keeps only the platform skills (`covia`, `venue`, `discovery`, `provenance`, `skills`, `skill-authoring`)
 - `v/adapters/<name>/` — the adapter-owned subtree: `info`, `config` (only what `AAdapter.publicConfig()` explicitly allow-lists — nothing by default; e.g. `orchestrator` maxItems/maxConcurrency, `vault` drive, `agent` sessionDelete, `hitl` maxGrantLifetimeSecs, `telegram` apiUrl), and its `ops/`, `skills/`, `templates/` mirrored from the canonical catalog (same values, equally invocable), published/retracted with the adapter and refreshed on reconfigure

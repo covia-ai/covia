@@ -1299,7 +1299,7 @@ public class LangChainAdapterTest {
 	@Test
 	public void testProviderCapabilityMap() {
 		assertTrue(LangChainAdapter.lacksSchemaResponseFormat("anthropic"));
-		for (String p : new String[] {"openai", "ollama", "gemini", "xai", "deepseek"}) {
+		for (String p : new String[] {"openai", "ollama", "gemini", "xai", "deepseek", "mistral", "openrouter"}) {
 			assertFalse(LangChainAdapter.lacksSchemaResponseFormat(p),
 				p + " keeps the native response_format path");
 		}
@@ -1545,6 +1545,11 @@ public class LangChainAdapterTest {
 		assertEquals("claude-sonnet-5", LangChainAdapter.defaultModelFor("anthropic"));
 		assertEquals("gpt-5.6-terra", LangChainAdapter.defaultModelFor("openai"));
 		assertEquals("grok-4.3", LangChainAdapter.defaultModelFor("xai"));
+		assertTrue(LangChainAdapter.modelsFor("mistral", null).toString().contains("mistral-large-latest"));
+		assertEquals("mistral-medium-latest", LangChainAdapter.defaultModelFor("mistral"));
+		assertTrue(LangChainAdapter.modelsFor("openrouter", null).toString().contains("anthropic/claude-sonnet-5"));
+		assertEquals("openrouter/auto", LangChainAdapter.defaultModelFor("openrouter"));
+		assertTrue(LangChainAdapter.providerNeedsApiKey("mistral") && LangChainAdapter.providerNeedsApiKey("openrouter"));
 
 		// Venue config override wins wholesale
 		AMap<AString, ACell> cfg = Maps.of(
@@ -1604,8 +1609,8 @@ public class LangChainAdapterTest {
 			covia.venue.RequestContext.of(Strings.create("did:key:z6Mk-test-models-full")))
 			.get(15, java.util.concurrent.TimeUnit.SECONDS);
 		var providers = RT.ensureVector(RT.getIn(result, "providers"));
-		assertEquals(6, providers.count(), "5 hosted + ollama");
-		AMap<AString, ACell> ollama = RT.castMap(providers.get(5));
+		assertEquals(8, providers.count(), "7 hosted + ollama");
+		AMap<AString, ACell> ollama = RT.castMap(providers.get(7));
 		assertEquals("ollama", RT.getIn(ollama, "provider").toString());
 		assertNotNull(RT.getIn(ollama, "url"), "ollama entry always names its resolved url");
 		assertNotNull(RT.getIn(ollama, "ready"));

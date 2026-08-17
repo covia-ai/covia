@@ -76,7 +76,7 @@ AUTH_REQUIRED).
 | `grid` | Federated grid operations | `run`, `invoke`, `jobStatus`, `jobResult` |
 | `convex` | Convex blockchain | `query`, `transact` |
 | `mcp` | Model Context Protocol | `toolList`, `toolCall`, bridging ops |
-| `langchain` | AI/LLM models | `openai`, `ollama`, `anthropic`, `gemini`, `deepseek`, `models` |
+| `langchain` | AI/LLM models | `openai`, `ollama`, `anthropic`, `gemini`, `xai`, `deepseek`, `mistral`, `openrouter`, `models` |
 | `http` | HTTP requests (SSRF-protected) | `get`, `post` |
 | `jvm` | JVM utilities | `stringConcat`, `urlEncode`, `urlDecode` |
 | `file` | Filesystem (root-jailed); reads see into archives via `x.zip!/entry` | `roots`, `list`, `tree`, `read`, `write`, `append`, `delete`, `mkdir`, `stat` |

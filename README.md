@@ -161,7 +161,7 @@ Operations are provided by pluggable **adapters**. Out of the box a venue can:
 
 | Capability | Adapter | Examples |
 |------------|---------|----------|
-| Call LLMs | `langchain` | OpenAI, Anthropic, Gemini, Ollama, DeepSeek |
+| Call LLMs | `langchain` | OpenAI, Anthropic, Gemini, xAI, DeepSeek, Mistral, OpenRouter, Ollama |
 | Run agents | `agent`, `llmagent`, `goaltree` | Stateful, tool-using agents with sessions and planning |
 | Orchestrate workflows | `orchestrator` | Multi-step DAGs with dependencies and result composition |
 | Federate across venues | `grid` | Invoke operations on remote venues (`grid:run`, `grid:invoke`) |

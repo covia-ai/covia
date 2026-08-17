@@ -44,6 +44,8 @@ Removes the caller's own secret — whole records only (`s/<NAME>`; deeper paths
 |-------------|---------|-------------|
 | `OPENAI_API_KEY` | `langchain:openai` | LLM agents using OpenAI (GPT-5.6 family, etc.) |
 | `DEEPSEEK_API_KEY` | `langchain:openai` (with custom url) | DeepSeek models |
+| `MISTRAL_API_KEY` | `langchain:mistral` | Mistral models |
+| `OPENROUTER_API_KEY` | `langchain:openrouter` | Any OpenRouter model |
 | `GEMINI_API_KEY` | `langchain:openai` (with custom url) | Google Gemini models |
 
 ## Notes

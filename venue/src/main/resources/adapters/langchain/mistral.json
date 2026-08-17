@@ -1,0 +1,68 @@
+{
+	"name": "Mistral Chat",
+	"creator": "Mike Anderson",
+	"description": "Chat with Mistral models through Mistral's OpenAI-compatible endpoint. mistral-medium-latest is the balanced default; mistral-large-latest for quality, mistral-small-latest for economy, codestral-latest for code, magistral-medium-latest for reasoning. The -latest aliases track Mistral's current release of each family.",
+	"dateCreated": "2026-08-17T00:00:00Z",
+	"dateModified": "2026-08-17T00:00:00Z",
+	"keywords": [
+		"LLM",
+		"model",
+		"mistral"
+	],
+	"operation": {
+		"adapter": "langchain:mistral",
+		"secretKey": "MISTRAL_API_KEY",
+		"secretFields": [
+			"apiKey"
+		],
+		"input": {
+			"type": "object",
+			"properties": {
+				"prompt": {
+					"type": "string",
+					"description": "The prompt for the model."
+				},
+				"model": {
+					"type": "string",
+					"description": "Optional model name (defaults to mistral-medium-latest)",
+					"default": "mistral-medium-latest"
+				},
+				"systemPrompt": {
+					"type": "string",
+					"description": "System prompt to set the AI's behaviour and context"
+				},
+				"apiKey": {
+					"type": "string",
+					"secret": true,
+					"description": "API key for authentication"
+				},
+				"url": {
+					"type": "string",
+					"description": "Base URL (defaults to https://api.mistral.ai/v1)",
+					"default": "https://api.mistral.ai/v1"
+				},
+				"temperature": {
+					"type": "number",
+					"description": "Sampling temperature (e.g. 0 for deterministic extraction); provider default when omitted"
+				},
+				"topP": {
+					"type": "number",
+					"description": "Nucleus sampling top_p; provider default when omitted"
+				}
+			}
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"response": {
+					"type": "string",
+					"description": "The LLM response"
+				},
+				"think": {
+					"type": "string",
+					"description": "Model thought process"
+				}
+			}
+		}
+	}
+}

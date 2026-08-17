@@ -812,7 +812,8 @@ without copying the template. `v/ops/langchain/models` reports caller-relative
 provider readiness, each release-time model list, its balanced default, and
 workload recommendations (for example `economical`, `quality`, or `coding`).
 The built-in balanced defaults are Sonnet 5, GPT-5.6 Terra, Gemini 3.6 Flash,
-DeepSeek V4 Flash, and Grok 4.3. Operators may replace an advertised hosted list
+DeepSeek V4 Flash, Grok 4.3, Mistral Medium (`mistral-medium-latest`) and, for
+OpenRouter, `openrouter/auto` (any vendor-prefixed OpenRouter model id works). Operators may replace an advertised hosted list
 with `adapters.langchain.models.<provider>`; this is discovery metadata, not an
 allowlist, so other provider-supported model IDs remain usable.
 

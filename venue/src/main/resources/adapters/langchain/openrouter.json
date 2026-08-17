@@ -1,0 +1,68 @@
+{
+	"name": "OpenRouter Chat",
+	"creator": "Mike Anderson",
+	"description": "Chat with any model behind OpenRouter's OpenAI-compatible endpoint — one API key, many vendors. Model ids are vendor-prefixed (anthropic/…, openai/…, google/…, deepseek/…, mistralai/…); openrouter/auto (the default) lets the router choose. Any OpenRouter model id is accepted, not only the advertised list.",
+	"dateCreated": "2026-08-17T00:00:00Z",
+	"dateModified": "2026-08-17T00:00:00Z",
+	"keywords": [
+		"LLM",
+		"model",
+		"openrouter"
+	],
+	"operation": {
+		"adapter": "langchain:openrouter",
+		"secretKey": "OPENROUTER_API_KEY",
+		"secretFields": [
+			"apiKey"
+		],
+		"input": {
+			"type": "object",
+			"properties": {
+				"prompt": {
+					"type": "string",
+					"description": "The prompt for the model."
+				},
+				"model": {
+					"type": "string",
+					"description": "Optional model name (defaults to openrouter/auto)",
+					"default": "openrouter/auto"
+				},
+				"systemPrompt": {
+					"type": "string",
+					"description": "System prompt to set the AI's behaviour and context"
+				},
+				"apiKey": {
+					"type": "string",
+					"secret": true,
+					"description": "API key for authentication"
+				},
+				"url": {
+					"type": "string",
+					"description": "Base URL (defaults to https://openrouter.ai/api/v1)",
+					"default": "https://openrouter.ai/api/v1"
+				},
+				"temperature": {
+					"type": "number",
+					"description": "Sampling temperature (e.g. 0 for deterministic extraction); provider default when omitted"
+				},
+				"topP": {
+					"type": "number",
+					"description": "Nucleus sampling top_p; provider default when omitted"
+				}
+			}
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"response": {
+					"type": "string",
+					"description": "The LLM response"
+				},
+				"think": {
+					"type": "string",
+					"description": "Model thought process"
+				}
+			}
+		}
+	}
+}

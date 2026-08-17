@@ -146,6 +146,8 @@ public class LangChainAdapter extends AAdapter {
 		installAsset("langchain/gemini",    "/adapters/langchain/gemini.json");
 		installAsset("langchain/xai",       "/adapters/langchain/xai.json");
 		installAsset("langchain/deepseek",  "/adapters/langchain/deepseek.json");
+		installAsset("langchain/mistral",   "/adapters/langchain/mistral.json");
+		installAsset("langchain/openrouter", "/adapters/langchain/openrouter.json");
 		installAsset("langchain/models",    "/adapters/langchain/models.json");
 
 		// Example configurations — stored in CAS, not in /v/ops/.
@@ -219,7 +221,7 @@ public class LangChainAdapter extends AAdapter {
 		final ChatModel chatModel = buildProviderModel(provider, finalModelName, apiKey, effectiveUrl, tuning);
 		if (chatModel == null) {
 			return CompletableFuture.completedFuture(
-				Status.failure("Unknown provider: '" + provider + "'. Supported: 'ollama', 'openai', 'anthropic'")
+				Status.failure("Unknown provider: '" + provider + "'. Supported: ollama, openai, anthropic, gemini, xai, deepseek, mistral, openrouter")
 			);
 		}
 
@@ -367,7 +369,8 @@ public class LangChainAdapter extends AAdapter {
 
 	static boolean providerNeedsApiKey(String provider) {
 		return "openai".equals(provider) || "anthropic".equals(provider) || "gemini".equals(provider)
-			|| "xai".equals(provider) || "deepseek".equals(provider);
+			|| "xai".equals(provider) || "deepseek".equals(provider)
+			|| "mistral".equals(provider) || "openrouter".equals(provider);
 	}
 
 	/**
@@ -428,6 +431,18 @@ public class LangChainAdapter extends AAdapter {
 			return buildOpenAiModel(apiKey, baseUrl, model, IO_TIMEOUT, tuning);
 		} else if ("deepseek".equals(provider)) {
 			String baseUrl = (urlParam != null) ? urlParam.toString() : "https://api.deepseek.com/v1";
+			String model = (modelName != null) ? modelName : defaultModelFor(provider);
+			return buildOpenAiModel(apiKey, baseUrl, model, IO_TIMEOUT, tuning);
+		} else if ("mistral".equals(provider)) {
+			// Mistral's API is OpenAI-compatible (chat completions, tools, JSON mode).
+			String baseUrl = (urlParam != null) ? urlParam.toString() : "https://api.mistral.ai/v1";
+			String model = (modelName != null) ? modelName : defaultModelFor(provider);
+			return buildOpenAiModel(apiKey, baseUrl, model, IO_TIMEOUT, tuning);
+		} else if ("openrouter".equals(provider)) {
+			// OpenRouter fronts many vendors behind one OpenAI-compatible endpoint;
+			// model ids are vendor-prefixed (anthropic/…, openai/…) and
+			// openrouter/auto lets the router choose.
+			String baseUrl = (urlParam != null) ? urlParam.toString() : "https://openrouter.ai/api/v1";
 			String model = (modelName != null) ? modelName : defaultModelFor(provider);
 			return buildOpenAiModel(apiKey, baseUrl, model, IO_TIMEOUT, tuning);
 		}
@@ -545,6 +560,21 @@ public class LangChainAdapter extends AAdapter {
 			modelList("grok-4.3", "grok-4.5", "grok-build-0.1"),
 			recommendations("balanced", "grok-4.3", "quality", "grok-4.5",
 				"coding", "grok-build-0.1")),
+		// Mistral publishes stable "-latest" aliases per family; they track the
+		// current release without a rename here.
+		new HostedProvider("mistral", "MISTRAL_API_KEY", "mistral-medium-latest",
+			modelList("mistral-medium-latest", "mistral-large-latest", "mistral-small-latest",
+				"magistral-medium-latest", "codestral-latest", "ministral-8b-latest"),
+			recommendations("balanced", "mistral-medium-latest", "quality", "mistral-large-latest",
+				"economical", "mistral-small-latest", "coding", "codestral-latest",
+				"reasoning", "magistral-medium-latest")),
+		// OpenRouter: any of its vendor-prefixed model ids works; the list is a
+		// starting point and openrouter/auto delegates the choice to the router.
+		new HostedProvider("openrouter", "OPENROUTER_API_KEY", "openrouter/auto",
+			modelList("openrouter/auto", "anthropic/claude-sonnet-5", "openai/gpt-5.4-mini",
+				"google/gemini-3.5-flash", "deepseek/deepseek-v4-flash", "mistralai/mistral-medium-latest"),
+			recommendations("balanced", "openrouter/auto", "quality", "anthropic/claude-sonnet-5",
+				"economical", "google/gemini-3.5-flash")),
 	};
 
 	private static HostedProvider hostedProvider(String provider) {
