@@ -136,8 +136,9 @@ public class AgentState extends ALatticeComponent<ACell> {
 
 	private final AString agentId;
 
-	AgentState(ALatticeCursor<ACell> cursor, AString agentId) {
-		super(cursor);
+	AgentState(ALatticeComponent<?> parent, ALatticeCursor<ACell> cursor,
+			AString agentId) {
+		super(parent, cursor);
 		this.agentId = agentId;
 	}
 

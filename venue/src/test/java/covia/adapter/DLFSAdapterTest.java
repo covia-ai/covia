@@ -102,6 +102,43 @@ public class DLFSAdapterTest {
 		assertEquals("utf-8", RT.ensureString(RT.getIn(result, "encoding")).toString());
 	}
 
+	@Test
+	public void testCreateFromStandardContentDescriptor() {
+		run("v/ops/dlfs/create-drive", Maps.of("name", "descriptor-create"));
+		ACell created = run("v/ops/dlfs/create", Maps.of(
+			"drive", "descriptor-create",
+			"content", Maps.of(
+				"inline", "new dlfs content",
+				"contentType", "text/plain",
+				"fileName", "created.txt")));
+		assertTrue(RT.bool(RT.getIn(created, "created")));
+		assertEquals("dlfs/descriptor-create/created.txt",
+			RT.ensureString(RT.getIn(created, "ref")).toString());
+
+		ACell read = run("v/ops/dlfs/read", Maps.of(
+			"drive", "descriptor-create", "path", "created.txt"));
+		assertEquals("new dlfs content", RT.getIn(read, "content").toString());
+
+		assertThrows(Exception.class, () -> run("v/ops/dlfs/create", Maps.of(
+			"drive", "descriptor-create",
+			"path", "created.txt",
+			"content", Maps.of("inline", "replacement"))));
+		read = run("v/ops/dlfs/read", Maps.of(
+			"drive", "descriptor-create", "path", "created.txt"));
+		assertEquals("new dlfs content", RT.getIn(read, "content").toString());
+	}
+
+	@Test
+	public void testCreateEmptyFileWithoutContent() {
+		run("v/ops/dlfs/create-drive", Maps.of("name", "empty-create"));
+		ACell created = run("v/ops/dlfs/create", Maps.of(
+			"drive", "empty-create", "path", "empty.bin"));
+		assertEquals(0L, RT.ensureLong(RT.getIn(created, "written")).longValue());
+		ACell stat = run("v/ops/dlfs/stat", Maps.of(
+			"drive", "empty-create", "path", "empty.bin"));
+		assertEquals(0L, RT.ensureLong(RT.getIn(stat, "size")).longValue());
+	}
+
 	/** Regression for covia#342 / Convex 0.8.12: directory entries must use the
 	 * complete sibling name, not only its first 32 characters. */
 	@Test

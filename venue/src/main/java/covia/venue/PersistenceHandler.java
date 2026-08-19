@@ -5,7 +5,7 @@ import java.io.IOException;
 import convex.core.data.ACell;
 
 /**
- * Synchronous persistence callback handed to {@link Engine} at construction.
+ * Compatibility persistence callback for raw-cursor {@link Engine} embedders.
  *
  * <p>The handler is invoked by {@link Engine#flush()} (and by the close-time
  * final flush) to make the venue's current lattice value durable on the
@@ -25,12 +25,10 @@ import convex.core.data.ACell;
  *       persistence sweep and on every {@link Engine#flush()}.</li>
  * </ul>
  *
- * <p>Engine is intentionally agnostic about WHERE persistence happens —
- * the callback is wired by whoever constructs the Engine (typically
- * {@code VenueServer}, which calls {@code NodeServer.persistSnapshot} and
- * {@code EtchStore.flush()}). Engine has no compile-time dependency on
- * convex-peer, NodeServer, or EtchStore. Tests and in-memory venues pass a
- * no-op handler.</p>
+ * <p>New integrations should connect a {@link CoviaApplication} to a hosted
+ * {@code RootComponent}; publication and durability then flow through
+ * application {@code sync()} and {@code flush()}. This interface remains for
+ * source-compatible embedders that supply only a raw cursor.</p>
  *
  * <p>See {@code venue/docs/PERSISTENCE.md} for the architectural rationale.</p>
  */

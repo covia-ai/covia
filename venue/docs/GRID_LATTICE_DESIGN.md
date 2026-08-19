@@ -1117,7 +1117,7 @@ Selective sharing is implemented by constructing a partial lattice value contain
 | `LWWLattice<V>` | **Whole-value** last-writer-wins merge layer by extracted timestamp (non-recursive; tie → own); delegates navigation to an inner lattice |
 | `StampingLattice<V>` | Stamp-on-write boundary — inserts a `StampedCursor` that re-stamps a value on write, sourcing the timestamp from `LatticeContext`; delegates merge and navigation to an inner lattice |
 | `FunctionLattice<V>` | Custom merge function (e.g. first-writer-wins) |
-| `LatticeContext` | Carries the write-clock timestamp, signing key, and owner verifier; the single write clock for stamp-on-write and signing |
+| `LatticeContext` | Live application policy for clock, signing and owner verification; installed once at the hosted root and resolved per logical write |
 | `ACursor<V>` | Mutable reference with atomic get/set/update/fork/sync |
 
 ### Covia Definitions

@@ -20,6 +20,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
+import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Maps;
@@ -163,6 +164,68 @@ public class FileAdapterTest {
 		assertEquals("hello world", RT.ensureString(RT.getIn(read, "content")).toString());
 		assertEquals("utf-8", RT.ensureString(RT.getIn(read, "encoding")).toString());
 		assertEquals(11L, RT.ensureLong(RT.getIn(read, "size")).longValue());
+	}
+
+	@Test
+	public void testCreateUsesAssetContentDescriptorAndNeverReplaces() throws IOException {
+		byte[] bytes = "descriptor bytes".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+		String sha = convex.core.crypto.Hashing.sha256(bytes).toHexString();
+		AMap<AString, ACell> descriptor = Maps.of(
+			"inline", "descriptor bytes",
+			"sha256", sha,
+			"contentType", "text/plain",
+			"fileName", "descriptor-create.txt");
+
+		ACell created = run("v/ops/file/create", Maps.of(
+			"root", "work", "content", descriptor));
+		assertTrue(RT.bool(RT.getIn(created, "created")));
+		assertEquals("file://work/descriptor-create.txt",
+			RT.ensureString(RT.getIn(created, "ref")).toString());
+		assertEquals("text/plain", RT.getIn(created, "contentType").toString());
+		assertEquals("descriptor bytes",
+			Files.readString(workspace.resolve("descriptor-create.txt")));
+
+		Job duplicate = runRaw("v/ops/file/create", Maps.of(
+			"root", "work",
+			"path", "descriptor-create.txt",
+			"content", Maps.of("inline", "replacement")));
+		assertEquals(Status.FAILED, duplicate.getStatus());
+		assertEquals("descriptor bytes",
+			Files.readString(workspace.resolve("descriptor-create.txt")));
+	}
+
+	@Test
+	public void testCreateEmptyFileWithoutContent() throws IOException {
+		ACell created = run("v/ops/file/create", Maps.of(
+			"root", "work", "path", "empty-create.bin"));
+		assertTrue(RT.bool(RT.getIn(created, "created")));
+		assertEquals(0L, RT.ensureLong(RT.getIn(created, "written")).longValue());
+		assertEquals(0L, Files.size(workspace.resolve("empty-create.bin")));
+	}
+
+	@Test
+	public void testAssetMetadataAndCreateShareGenericContentRef() throws IOException {
+		run("v/ops/file/write", Maps.of(
+			"root", "work", "path", "descriptor-ref-source.txt", "content", "from ref"));
+		ACell asset = run("v/ops/asset/store", Maps.of(
+			"metadata", Maps.of(
+				"name", "referenced file",
+				"content", Maps.of(
+					"ref", "file://work/descriptor-ref-source.txt",
+					"contentType", "text/plain"))));
+		AString assetRef = RT.ensureString(RT.getIn(asset, "ref"));
+
+		ACell served = run("v/ops/asset/content", Maps.of("ref", assetRef));
+		assertEquals("from ref", new String(
+			((convex.core.data.ABlob) RT.getIn(served, "value")).getBytes(),
+			java.nio.charset.StandardCharsets.UTF_8));
+
+		run("v/ops/file/create", Maps.of(
+			"root", "work",
+			"path", "descriptor-ref-copy.txt",
+			"content", Maps.of("ref", assetRef)));
+		assertEquals("from ref",
+			Files.readString(workspace.resolve("descriptor-ref-copy.txt")));
 	}
 
 	@Test

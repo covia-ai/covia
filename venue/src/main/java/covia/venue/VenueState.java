@@ -15,14 +15,10 @@ import convex.core.data.AccountKey;
 import convex.core.data.Index;
 import convex.core.data.Keyword;
 import convex.core.data.MapEntry;
-import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.store.AStore;
-import convex.core.util.Utils;
 import convex.lattice.ALatticeComponent;
-import convex.lattice.LatticeContext;
 import convex.lattice.cursor.ALatticeCursor;
-import convex.lattice.cursor.Cursors;
 import covia.lattice.Covia;
 import covia.venue.storage.LatticeStorage;
 
@@ -78,7 +74,14 @@ public class VenueState extends ALatticeComponent<ACell> {
 
 	private final AccountKey ownerKey;
 
-	VenueState(ALatticeCursor<ACell> cursor, AccountKey ownerKey) {
+	VenueState(ALatticeComponent<?> parent, ALatticeCursor<ACell> cursor,
+			AccountKey ownerKey) {
+		super(parent, cursor);
+		this.ownerKey = ownerKey;
+	}
+
+	/** Compatibility constructor for a standalone raw-cursor component. */
+	private VenueState(ALatticeCursor<ACell> cursor, AccountKey ownerKey) {
 		super(cursor);
 		this.ownerKey = ownerKey;
 	}
@@ -91,13 +94,25 @@ public class VenueState extends ALatticeComponent<ACell> {
 	 * @return New VenueState instance
 	 */
 	public static VenueState create(AKeyPair kp) {
-		LatticeContext ctx = LatticeContext.create(CVMLong.create(Utils.getCurrentTimestamp()), kp);
-		ALatticeCursor<Index<Keyword, ACell>> root = Cursors.createLattice(Covia.ROOT);
-		root.setContext(ctx);
-		AccountKey ownerKey = kp.getAccountKey();
-		ALatticeCursor<ACell> venueCursor = root.path(
+		return CoviaApplication.create(kp).venue(kp.getAccountKey());
+	}
+
+	/**
+	 * Connects a venue component beneath a containing Covia application.
+	 * Component policy (including persistence) delegates through the parent,
+	 * while cursor navigation crosses the owner-signing boundary normally.
+	 */
+	public static VenueState connect(ALatticeComponent<?> parent,
+			AccountKey ownerKey) {
+		if (parent == null) {
+			throw new IllegalArgumentException("Parent component must not be null");
+		}
+		if (ownerKey == null) {
+			throw new IllegalArgumentException("Venue owner key must not be null");
+		}
+		ALatticeCursor<ACell> venueCursor = parent.cursor().path(
 			Covia.GRID, Covia.VENUES, ownerKey, Keywords.VALUE);
-		return new VenueState(venueCursor, ownerKey);
+		return new VenueState(parent, venueCursor, ownerKey);
 	}
 
 	/**
@@ -155,7 +170,7 @@ public class VenueState extends ALatticeComponent<ACell> {
 	 * @return AssetStore cursor wrapper
 	 */
 	public AssetStore assets() {
-		return new AssetStore(cursor.path(Covia.ASSETS));
+		return new AssetStore(this, cursor.path(Covia.ASSETS));
 	}
 
 	/**
@@ -164,7 +179,7 @@ public class VenueState extends ALatticeComponent<ACell> {
 	 * @return Users cursor wrapper
 	 */
 	public Users users() {
-		return new Users(cursor.path(Covia.USER_DATA));
+		return new Users(this, cursor.path(Covia.USER_DATA));
 	}
 
 	/**
@@ -251,7 +266,7 @@ public class VenueState extends ALatticeComponent<ACell> {
 	 * @return A new VenueState backed by a forked cursor
 	 */
 	public VenueState fork() {
-		return new VenueState(cursor.fork(), ownerKey);
+		return new VenueState(parent(), cursor.fork(), ownerKey);
 	}
 
 }

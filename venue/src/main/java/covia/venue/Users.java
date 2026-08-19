@@ -23,8 +23,8 @@ import convex.lattice.cursor.ALatticeCursor;
  */
 public class Users extends ALatticeComponent<AMap<AString, ACell>> {
 
-	Users(ALatticeCursor<AMap<AString, ACell>> cursor) {
-		super(cursor);
+	Users(ALatticeComponent<?> parent, ALatticeCursor<AMap<AString, ACell>> cursor) {
+		super(parent, cursor);
 	}
 
 	/**
@@ -41,7 +41,7 @@ public class Users extends ALatticeComponent<AMap<AString, ACell>> {
 	public User get(AString did) {
 		ALatticeCursor<ACell> userCursor = cursor.path(did);
 		if (userCursor.get() == null) return null;
-		return new User(userCursor, did);
+		return new User(this, userCursor, did);
 	}
 
 	/**
@@ -62,7 +62,7 @@ public class Users extends ALatticeComponent<AMap<AString, ACell>> {
 		// a late reader could observe null and set(zero), clobbering an earlier
 		// writer's committed user data (jobs, secrets, agents).
 		userCursor.updateAndGet(current -> current != null ? current : Maps.empty());
-		return new User(userCursor, did);
+		return new User(this, userCursor, did);
 	}
 
 	/**

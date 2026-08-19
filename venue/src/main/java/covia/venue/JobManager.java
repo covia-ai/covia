@@ -215,9 +215,6 @@ public class JobManager {
 			RequestContext ctx, boolean memoryOnly, boolean applyAdmission,
 			boolean resultOriented) {
 		requireAccepting();
-		// Advance the lattice write clock for this dispatch — the harness owns
-		// write time (see Engine.refreshWriteClock).
-		engine.refreshWriteClock();
 		// Fill in the operation's declared argument defaults BEFORE gate
 		// arming and job creation, so gates, job records and the adapter all
 		// see the one effective input.

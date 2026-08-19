@@ -7,6 +7,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -45,8 +47,6 @@ import convex.core.util.JSON;
 import convex.core.util.Utils;
 import convex.lattice.LatticeContext;
 import convex.lattice.cursor.ALatticeCursor;
-import convex.lattice.cursor.Cursors;
-import convex.lattice.cursor.RootLatticeCursor;
 import convex.lattice.fs.DLFS;
 import convex.lattice.fs.DLFileSystem;
 import covia.adapter.AAdapter;
@@ -96,6 +96,9 @@ public class Engine {
 
 
 	protected final Config config;
+
+	/** Hosted Covia application, or null for the legacy raw-cursor embedding path. */
+	private final CoviaApplication application;
 
 	protected AKeyPair keyPair=AKeyPair.generate();
 
@@ -186,9 +189,8 @@ public class Engine {
 		"covia", "agent", "dlfs", "hitl", "http", "file", "grid", "venue");
 
 	/**
-	 * Persistence callback supplied at construction. Wired by VenueServer to
-	 * NodeServer.persistSnapshot for the production stack; no-op for tests
-	 * and in-memory engines. See {@link PersistenceHandler}.
+	 * Compatibility persistence callback for legacy raw-cursor embedders.
+	 * Hosted applications publish and flush through {@link CoviaApplication}.
 	 */
 	private final PersistenceHandler persistHandler;
 
@@ -208,7 +210,7 @@ public class Engine {
 
 	/**
 	 * How often the sweep forces a store-level fsync. The sweep runs every
-	 * {@link #SWEEP_INTERVAL_MS} but only calls {@link PersistenceHandler#flush()}
+	 * {@link #SWEEP_INTERVAL_MS} but only crosses the host's durability barrier
 	 * if at least this many ms have elapsed since the last flush. Bounds the
 	 * data-loss window on unclean shutdown (kernel panic, power loss, hard
 	 * VM stop) to roughly this interval. App-requested {@link #flush()} resets
@@ -239,10 +241,9 @@ public class Engine {
 	 * Use when the venue identity must be
 	 * stable across restarts (same AccountKey = same OwnerLattice slot).
 	 *
-	 * <p>Uses a no-op persistence handler — appropriate for in-memory venues
-	 * and tests that don't need synchronous flush. For a production venue,
-	 * use the four-arg constructor and pass a real {@link PersistenceHandler}
-	 * (typically wired to {@code NodeServer.persistSnapshot}).</p>
+	 * <p>This raw-cursor overload is retained for compatibility. New hosted
+	 * integrations should construct a {@link CoviaApplication} from their
+	 * {@code RootComponent} and use the application constructor.</p>
 	 */
 	public Engine(AMap<AString, ACell> config, ALatticeCursor<Index<Keyword,ACell>> cursor, AKeyPair keyPair) throws IOException {
 		this(config, cursor, keyPair, PersistenceHandler.NOOP);
@@ -258,7 +259,7 @@ public class Engine {
 	 */
 	public Engine(AMap<AString, ACell> config, ALatticeCursor<Index<Keyword,ACell>> cursor,
 			AKeyPair keyPair, PersistenceHandler persistHandler) throws IOException {
-		this(new Config(config), cursor, keyPair, persistHandler);
+		this(new Config(config), null, cursor, keyPair, persistHandler);
 	}
 
 	/**
@@ -268,10 +269,34 @@ public class Engine {
 	 */
 	public Engine(Config config, ALatticeCursor<Index<Keyword,ACell>> cursor,
 			AKeyPair keyPair, PersistenceHandler persistHandler) throws IOException {
+		this(config, null, cursor, keyPair, persistHandler);
+	}
+
+	/**
+	 * Canonical hosted-application constructor. Publication and durability flow
+	 * through the application's {@code RootComponent}; the engine does not need
+	 * to know whether that host is local or networked.
+	 */
+	public Engine(Config config, CoviaApplication application, AKeyPair keyPair)
+			throws IOException {
+		this(config, java.util.Objects.requireNonNull(application, "application"),
+			application.cursor(), keyPair, PersistenceHandler.NOOP);
+	}
+
+	/** Hosted-application constructor accepting the external JSON config form. */
+	public Engine(AMap<AString, ACell> config, CoviaApplication application,
+			AKeyPair keyPair) throws IOException {
+		this(new Config(config), application, keyPair);
+	}
+
+	private Engine(Config config, CoviaApplication application,
+			ALatticeCursor<Index<Keyword,ACell>> cursor, AKeyPair keyPair,
+			PersistenceHandler persistHandler) throws IOException {
 		this.config=java.util.Objects.requireNonNull(config, "config");
+		this.application=application;
 		this.keyPair=keyPair;
 		validateDeclaredIdentity();
-		this.lattice=cursor;
+		this.lattice=java.util.Objects.requireNonNull(cursor, "cursor");
 		this.persistHandler = (persistHandler != null) ? persistHandler : PersistenceHandler.NOOP;
 		this.lastFlushMillis = System.currentTimeMillis();
 		this.jobManager = new JobManager(this);
@@ -297,8 +322,10 @@ public class Engine {
 		lifecycle = Lifecycle.STARTING;
 		try {
 			// Set signing context only when active startup begins.
-			LatticeContext ctx = LatticeContext.create(
-				CVMLong.create(Utils.getCurrentTimestamp()), this.keyPair);
+			// Preserve host policy (future-skew checks, owner verification, custom
+			// clock) and override only Covia's signing capability.
+			LatticeContext ctx = this.lattice.getContext()
+				.withSigningKey(this.keyPair);
 			this.lattice.setContext(ctx);
 			initialiseFromCursor();
 
@@ -407,7 +434,8 @@ public class Engine {
 
 	private void startPersistenceSweep() {
 		// In-memory engines have nothing external to flush and get no daemon.
-		if (this.persistHandler == PersistenceHandler.NOOP) return;
+		if (this.application != null && this.application.isEphemeral()) return;
+		if (this.application == null && this.persistHandler == PersistenceHandler.NOOP) return;
 		this.persistenceSweep = Executors.newSingleThreadScheduledExecutor(r -> {
 			Thread t = new Thread(r, "covia-persistence-sweep");
 			t.setDaemon(true);
@@ -494,18 +522,19 @@ public class Engine {
 
 		// Bootstrap with connected VenueState (writes signed immediately).
 		// DID initialisation must be signed so other peers accept it.
-		VenueState connected = VenueState.fromRoot(lattice, getAccountKey());
+		VenueState connected = (application != null)
+			? application.venue(getAccountKey())
+			: VenueState.fromRoot(lattice, getAccountKey());
 		connected.initialise(getDIDString());
 
 		// Fork: subsequent writes accumulate locally (unsigned).
 		// Engine.syncState() calls venueState.sync() to merge + sign once.
-		// NB a fork never inherits its parent's context live (it captures the
-		// fork-time context — ForkedLatticeCursor.getInheritedContext), so
-		// refreshWriteClock must advance this long-lived fork's clock
-		// explicitly alongside the root's.
+		// The fork captures the root's LatticeContext policy. That policy is
+		// dynamic, so its clock and signer remain live without per-request
+		// context replacement.
 		this.venueState = connected.fork();
 
-		this.auth = new Auth(this, venueState.authCursor());
+		this.auth = new Auth(this, venueState, venueState.authCursor());
 		this.accessControl = new AccessControl();
 	}
 
@@ -552,9 +581,8 @@ public class Engine {
 	 *   <li>{@code venueState.sync()} — merges forked (unsigned) writes into
 	 *       the parent cursor chain, triggering a single sign through the
 	 *       SignedCursor boundary.</li>
-	 *   <li>{@code lattice.sync()} — triggers persistence and broadcast via
-	 *       NodeServer callbacks. What sync does depends on the cursor's
-	 *       configuration; Engine is agnostic.</li>
+	 *   <li>{@code application.sync()} — crosses the hosted root publication
+	 *       boundary. The host decides whether publication is local or networked.</li>
 	 * </ol>
 	 *
 	 * <p>Called by VenueServer's role-selected {@code afterMatched} handler, so
@@ -563,48 +591,30 @@ public class Engine {
 	 * persist.</p>
 	 */
 	public void syncState() {
-		refreshWriteClock();
 		venueState.sync();
-		lattice.sync();
+		publishApplicationRoot();
 	}
 
-	/** Last write-clock refresh, epoch millis. Volatile: refreshers race benignly. */
-	private volatile long lastClockRefresh = 0;
-
 	/**
-	 * Advances the lattice write clock: installs a fresh {@link LatticeContext}
-	 * (current wall time + the venue signing key) on the root and venue-state
-	 * cursors, so cursors derived from them stamp writes with current time.
+	 * Compatibility hook retained for callers built against the former fixed
+	 * timestamp context model.
 	 *
-	 * <p>Time is the harness's responsibility — convex lattice code reads the
-	 * timestamp from the context it is given and deliberately never consults
-	 * the system clock itself (determinism, convex#561). A context set once at
-	 * boot therefore freezes the write clock: the venue-level LWW
-	 * {@code :timestamp} and every {@code StampingLattice} field (namespace
-	 * {@code updated}, user {@code meta.updated}) would carry engine start
-	 * time forever. The engine's policy: refresh at every operation dispatch
-	 * ({@code JobManager}) and at every state sync, throttled to at most once
-	 * per few milliseconds.</p>
-	 *
-	 * <p>Two refresh points, no more: since Convex 0.8.9 (convex#640)
-	 * derived cursors inherit their parent's current effective context live,
-	 * so refreshing the root reaches every derived view — including
-	 * long-held ones — without per-cursor re-stamping. FORKED cursors are
-	 * the deliberate exception: a fork captures its fork-time context and
-	 * never inherits live (its {@code sync} still merges under the parent's
-	 * current context), so the engine's long-lived venue-state fork is
-	 * refreshed explicitly alongside the root. Per-cycle forks elsewhere
-	 * keep their captured context — the stamp ratchet and directional merge
-	 * make mixed-age contexts safe.</p>
+	 * <p>The current Convex context is a live application policy. Covia installs
+	 * it once at startup with a dynamic runtime clock, and forks retain that live
+	 * policy, so there is no timestamp snapshot to refresh.</p>
 	 */
+	@Deprecated
 	public void refreshWriteClock() {
-		long now = Utils.getCurrentTimestamp();
-		if (now - lastClockRefresh < 2) return;   // throttle context churn
-		lastClockRefresh = now;
-		LatticeContext fresh = LatticeContext.create(
-			convex.core.data.prim.CVMLong.create(now), this.keyPair);
-		lattice.setContext(fresh);
-		if (venueState != null) venueState.cursor().setContext(fresh);
+		// Dynamic LatticeContext resolves time at each logical write.
+	}
+
+	/** Publishes through the hosted application policy or the legacy root cursor. */
+	private void publishApplicationRoot() {
+		if (application != null) {
+			application.sync();
+		} else {
+			lattice.sync();
+		}
 	}
 
 	// ========================================================================
@@ -626,7 +636,7 @@ public class Engine {
 		if (lifecycle != Lifecycle.STARTED) return;
 		try {
 			venueState.sync();   // pull fork writes into the root
-			lattice.sync();      // fire NodeServer.onSync → propagator
+			publishApplicationRoot();
 			// Periodic durability barrier. The propagator's setRootData
 			// writes new root data to the mmap'd Etch but does not fsync;
 			// the OS may take minutes to write dirty pages out on its own.
@@ -634,7 +644,7 @@ public class Engine {
 			// shutdown data-loss window. Cheap on idle venues — fsync of
 			// an unchanged file is a no-op below the kernel.
 			if (System.currentTimeMillis() - lastFlushMillis >= FLUSH_INTERVAL_MS) {
-				persistHandler.flush();
+				flushStore();
 				lastFlushMillis = System.currentTimeMillis();
 			}
 		} catch (Exception e) {
@@ -643,16 +653,9 @@ public class Engine {
 	}
 
 	/**
-	 * Synchronously syncs venueState into the root and persists the current
-	 * value through the propagator on the caller's thread. Returns when the
-	 * write set is on disk.
-	 *
-	 * <p>Bypasses the propagator's background queue by calling the
-	 * {@link PersistenceHandler} (typically wired to
-	 * {@code NodeServer.persistSnapshot}). This is the correct primitive for
-	 * "make this write durable before I return" — there is no
-	 * "wait for the background drain queue to flush" API on a running
-	 * propagator (this is a known upstream gap).</p>
+	 * Synchronises venue state, publishes the complete hosted root and invokes
+	 * the host store's physical durability barrier. Legacy raw-cursor embedders
+	 * use their supplied {@link PersistenceHandler} for the same boundary.
 	 *
 	 * <p>Use sparingly — most writes don't need this. Default eventual
 	 * durability via the background sweep is fine for in-flight job state,
@@ -660,14 +663,27 @@ public class Engine {
 	 * audit records, secret rotation, agent TERMINATED, OAuth login.</p>
 	 */
 	public void flush() {
-		venueState.sync();                   // pull fork into root
-		persistHandler.persist(lattice.get()); // synchronous persist (mmap)
+		venueState.sync(); // pull fork into root
 		try {
-			persistHandler.flush();            // fsync — durable on disk
+			if (application != null) {
+				application.sync();  // host publication selects the retained root
+				application.flush(); // physical durability barrier
+			} else {
+				persistHandler.persist(lattice.get());
+				persistHandler.flush();
+			}
 		} catch (java.io.IOException e) {
 			throw new RuntimeException("flush failed", e);
 		}
 		lastFlushMillis = System.currentTimeMillis();
+	}
+
+	private void flushStore() throws IOException {
+		if (application != null) {
+			application.flush();
+		} else {
+			persistHandler.flush();
+		}
 	}
 
 	/**
@@ -1265,8 +1281,9 @@ public class Engine {
 
 	public static Engine createTemp(AMap<AString,ACell> config) {
 		try {
-			RootLatticeCursor<Index<Keyword,ACell>> cursor = Cursors.createLattice(Covia.ROOT);
-			return new Engine(config, cursor).start();
+			AKeyPair keyPair = AKeyPair.generate();
+			CoviaApplication application = CoviaApplication.create(keyPair);
+			return new Engine(config, application, keyPair).start();
 		} catch (IOException e) {
 			throw new Error(e);
 		}
@@ -1973,11 +1990,9 @@ public class Engine {
 	 * {@code PUT /content} upload path). No asset record ({@code POS_CONTENT}) or
 	 * caller authority ({@code content.dlfs}) is needed.
 	 *
-	 * <p>This is the single place both content forms are decoded.
-	 * {@link #resolveContent} composes it with the record and provider lookups, so
-	 * the metadata-only path ({@link #getContent(AMap)}) and the universal
-	 * reference path can never diverge on inline vs blob content — the split that
-	 * left {@code GET /assets/{id}/content} throwing on inline (covia#289).</p>
+	 * <p>This helper is deliberately limited to forms that require no caller
+	 * authority. The universal path uses {@link #resolveContentBlock} for the
+	 * complete standard descriptor, including generic references.</p>
 	 *
 	 * @return the content, or {@code null} when the metadata declares neither form
 	 */
@@ -2049,7 +2064,20 @@ public class Engine {
 	 */
 	public covia.venue.storage.ContentProvider.Resolved resolveContent(
 			AString ref, RequestContext ctx) throws IOException {
+		return resolveContent(ref, ctx, new HashSet<>());
+	}
+
+	private covia.venue.storage.ContentProvider.Resolved resolveContent(
+			AString ref, RequestContext ctx, Set<String> resolving) throws IOException {
 		if (ref == null) return null;
+		String refString = ref.toString();
+		if (resolving.size() >= 32) {
+			throw new IllegalArgumentException("Content reference chain exceeds 32 hops at: " + refString);
+		}
+		if (!resolving.add(refString)) {
+			throw new IllegalArgumentException("Cyclic content reference: " + refString);
+		}
+		try {
 
 		// Alternative storage mechanisms (e.g. DLFS drive paths).
 		covia.venue.storage.ContentProvider.Resolved provided = providerContent(ref, ctx);
@@ -2091,12 +2119,10 @@ public class Engine {
 		} else {
 			ACell value = resolvePath(ref, ctx);
 			if (value instanceof AString s) {
-				Hash hop = covia.adapter.AssetAdapter.parseAssetId(s);
-				if (hop != null) {
-					AString owner = requireLocalAccess(ctx, s, Abilities.ASSET_READ);
-					record = getAssetRecord(hop, owner);
-				}
-				if (record != null) meta = record.get(AssetStore.POS_META);
+				// A lattice binding may point at any content reference, not just an
+				// asset hash. Re-enter the universal resolver so file://, DLFS, DID,
+				// workspace and future provider references all compose uniformly.
+				return resolveContent(s, ctx, resolving);
 			} else if (value instanceof AMap) {
 				RequestContext recordContext = isVenuePath(ref) ? venueContext() : ctx;
 				record = getAssetRecord(((AMap<?, ?>) value).getHash(), recordContext);
@@ -2116,51 +2142,118 @@ public class Engine {
 			}
 		}
 
-		// Content the metadata carries directly: content.inline bytes, or a
-		// content.sha256 blob in the global content store (the PUT /content upload
-		// path). Decoded by the shared contentFromMeta helper, so this universal
-		// path and the metadata-only getContent(meta) never diverge (covia#289).
-		// A dlfs-PINNED asset also declares content.sha256 for verification but
-		// keeps its bytes in the drive, so a content-store miss here falls through
-		// to the dlfs branch below.
+		// Asset metadata and file create operations use this exact same content
+		// descriptor resolver. The canonical pointer is content.ref; content.dlfs
+		// remains a compatibility alias for existing metadata.
 		AMap<AString,ACell> metaMap = RT.ensureMap(meta);
-		AContent metaContent = contentFromMeta(metaMap);
-		if (metaContent != null) {
+		covia.venue.storage.ContentProvider.Resolved declared = resolveContentBlock(
+			metaMap != null ? metaMap.get(Fields.CONTENT) : null, ctx, resolving);
+		if (declared != null && contentType != null
+				&& !contentType.equals(declared.contentType())) {
 			return new covia.venue.storage.ContentProvider.Resolved(
-				metaContent, contentType);
+				declared.content(), contentType);
+		}
+		return declared;
+		} finally {
+			resolving.remove(refString);
+		}
+	}
+
+	/**
+	 * Resolves the standard asset {@code content} descriptor. The same method is
+	 * used when serving asset metadata and when a file-style create operation
+	 * consumes a descriptor, keeping all content forms identical at both seams.
+	 *
+	 * <p>Supported locators are {@code inline} (UTF-8 text), {@code ref} (any
+	 * universally resolvable content reference), and {@code sha256} (a blob in
+	 * the content-addressed store). The historical {@code dlfs} pointer is an
+	 * alias for {@code ref}. A sha256 alongside inline/ref is an integrity pin.</p>
+	 */
+	public covia.venue.storage.ContentProvider.Resolved resolveContentBlock(
+			ACell block, RequestContext ctx) throws IOException {
+		return resolveContentBlock(block, ctx, new HashSet<>());
+	}
+
+	@SuppressWarnings("unchecked")
+	private covia.venue.storage.ContentProvider.Resolved resolveContentBlock(
+			ACell block, RequestContext ctx, Set<String> resolving) throws IOException {
+		if (block == null) return null;
+		if (!(block instanceof AMap<?, ?>)) {
+			throw new IllegalArgumentException("content must be an object");
+		}
+		AMap<AString, ACell> descriptor = (AMap<AString, ACell>) block;
+		AString inline = descriptorString(descriptor, Fields.INLINE);
+		AString ref = descriptorString(descriptor, Fields.REF);
+		AString dlfs = descriptorString(descriptor, Strings.intern("dlfs"));
+		if (ref != null && dlfs != null && !ref.equals(dlfs)) {
+			throw new IllegalArgumentException("content.ref conflicts with legacy content.dlfs");
+		}
+		if (ref == null) ref = dlfs;
+		if (inline != null && ref != null) {
+			throw new IllegalArgumentException("content must specify only one of inline or ref");
 		}
 
-		// Metadata-declared alternative storage: content.dlfs names a drive path.
-		// With content.sha256 present the asset is PINNED — fetched bytes are
-		// verified against the declared hash (drift after minting fails loudly,
-		// never serves silently-different bytes). Without sha256 the asset is a
-		// LIVE binding: content is whatever the file currently holds, served
-		// lazily, no verification possible (the asset identity covers the
-		// pointer, not the bytes).
-		AString altPath = RT.ensureString(RT.getIn(meta, Fields.CONTENT, "dlfs"));
-		if (altPath != null) {
-			covia.venue.storage.ContentProvider.Resolved r = providerContent(altPath, ctx);
-			if (r == null) {
-				throw new IllegalArgumentException(
-					"Asset declares content at '" + altPath + "' but no storage mechanism resolves it");
+		AString shaString = descriptorString(descriptor, Fields.SHA256);
+		Hash declaredHash = null;
+		if (shaString != null) {
+			declaredHash = Hash.parse(shaString);
+			if (declaredHash == null) {
+				throw new IllegalArgumentException("content.sha256 must be a valid SHA-256 hash");
 			}
-			String type = (contentType != null) ? contentType : r.contentType();
-			AString declaredSha = RT.ensureString(RT.getIn(meta, Fields.CONTENT, Fields.SHA256));
-			if (declaredSha != null) {
-				convex.core.data.ABlob bytes = r.content().getBlob();
-				Hash actual = Hashing.sha256(bytes.getBytes());
-				if (!actual.toHexString().equals(declaredSha.toString())) {
-					throw new IllegalStateException(
-						"Content hash mismatch for asset content at '" + altPath
-						+ "': stored file has changed since the asset was minted (expected "
-						+ declaredSha + ", got " + actual.toHexString() + ") — re-mint the asset");
-				}
-				return new covia.venue.storage.ContentProvider.Resolved(
-					covia.grid.impl.BlobContent.of(bytes), type);
-			}
-			return new covia.venue.storage.ContentProvider.Resolved(r.content(), type);
 		}
-		return null;
+		AString typeString = descriptorString(descriptor, Fields.CONTENT_TYPE);
+		String declaredType = typeString != null ? typeString.toString() : null;
+
+		covia.venue.storage.ContentProvider.Resolved resolved;
+		String source;
+		if (inline != null) {
+			resolved = new covia.venue.storage.ContentProvider.Resolved(
+				covia.grid.impl.BlobContent.of(Blob.wrap(
+					inline.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8))),
+				declaredType);
+			source = "inline content";
+		} else if (ref != null) {
+			resolved = resolveContent(ref, ctx, resolving);
+			if (resolved == null) {
+				throw new IllegalArgumentException("No content at ref: " + ref);
+			}
+			source = "content at '" + ref + "'";
+		} else if (declaredHash != null) {
+			AContent stored = contentStorage.getContent(declaredHash);
+			if (stored == null) return null;
+			resolved = new covia.venue.storage.ContentProvider.Resolved(stored, declaredType);
+			source = "content store blob " + declaredHash;
+		} else {
+			return null;
+		}
+
+		if (declaredHash != null && (inline != null || ref != null)) {
+			ABlob bytes = resolved.content().getBlob();
+			Hash actual = Hashing.sha256(bytes.getBytes());
+			if (!actual.equals(declaredHash)) {
+				throw new IllegalStateException("Content hash mismatch for " + source
+					+ ": expected " + declaredHash + ", got " + actual);
+			}
+			resolved = new covia.venue.storage.ContentProvider.Resolved(
+				covia.grid.impl.BlobContent.of(bytes), resolved.contentType());
+		}
+
+		String effectiveType = declaredType != null ? declaredType : resolved.contentType();
+		if (effectiveType != null && !effectiveType.equals(resolved.contentType())) {
+			return new covia.venue.storage.ContentProvider.Resolved(
+				resolved.content(), effectiveType);
+		}
+		return resolved;
+	}
+
+	private static AString descriptorString(AMap<AString, ACell> descriptor,
+			AString field) {
+		if (!descriptor.containsKey(field)) return null;
+		AString value = RT.ensureString(descriptor.get(field));
+		if (value == null) {
+			throw new IllegalArgumentException("content." + field + " must be a string");
+		}
+		return value;
 	}
 
 	/** Declared MIME type: content.contentType is canonical; the historical

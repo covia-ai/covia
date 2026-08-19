@@ -136,15 +136,14 @@ public final class Covia {
 
 	/**
 	 * One-way ratchet for stamp timestamps: never below the stamp the value
-	 * already carries. Derived cursors inherit the engine's current write
-	 * clock live (Convex 0.8.9, convex#640), but forked cursors deliberately
-	 * capture their fork-time context, so a long agent cycle can still write
-	 * under an older clock than the engine's current one — a plain assoc
-	 * would REGRESS the stamp, and under whole-value LWW a regressed
+	 * already carries. Derived and forked cursors retain the application's live
+	 * context policy, but fixed test contexts, explicit timestamp overrides or a
+	 * backwards host-clock step can still present a timestamp older than the
+	 * value already stored. A plain assoc would REGRESS the stamp, and under
+	 * whole-value LWW a regressed
 	 * {@code :timestamp} makes the merge discard the newer write wholesale
 	 * (observed as lost content/appends). The ratchet makes mixed-age
-	 * contexts safe by construction, and also guards against backwards
-	 * system-clock steps.
+	 * contexts safe by construction.
 	 *
 	 * <p>Timestamps are never inflated past the write clock (no {@code +1}
 	 * Lamport-style bumps): a stamp is real wall-clock time. Equal stamps on
@@ -189,9 +188,9 @@ public final class Covia {
 	 * identity-lifecycle policy (TTL/reaping). Idempotent under CAS retry.
 	 * See {@code GRID_LATTICE_DESIGN.md} §"User meta record".
 	 *
-	 * <p><b>Clock source:</b> the context write clock ({@code ts}), which the
-	 * harness keeps fresh ({@code Engine.refreshWriteClock} — time is the
-	 * harness's responsibility, convex#561). Pure: safe under CAS retry.</p>
+	 * <p><b>Clock source:</b> the context write policy ({@code ts}). Covia
+	 * installs one live application context whose runtime clock is resolved once
+	 * per logical write. Pure: safe under CAS retry.</p>
 	 *
 	 * <p><b>Semantics:</b> only writes <em>into</em> the record pass the
 	 * boundary — the bare record-init write in {@code Users.ensure} does not,

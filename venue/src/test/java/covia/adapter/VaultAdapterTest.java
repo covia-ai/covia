@@ -63,6 +63,33 @@ public class VaultAdapterTest {
 	}
 
 	@Test
+	public void testCreateUsesContentDescriptor() {
+		ACell created = run("v/ops/vault/create", Maps.of(
+			"content", Maps.of(
+				"inline", "vault document",
+				"contentType", "text/plain",
+				"fileName", "created-note.txt")));
+		assertTrue(RT.bool(RT.getIn(created, "created")));
+		assertEquals("dlfs/vault/created-note.txt",
+			RT.ensureString(RT.getIn(created, "ref")).toString());
+
+		ACell read = run("v/ops/vault/read", Maps.of("path", "created-note.txt"));
+		assertEquals("vault document", RT.getIn(read, "content").toString());
+		assertThrows(Exception.class, () -> run("v/ops/vault/create", Maps.of(
+			"path", "created-note.txt",
+			"content", Maps.of("inline", "replacement"))));
+	}
+
+	@Test
+	public void testCreateEmptyFileWithoutContent() {
+		ACell created = run("v/ops/vault/create", Maps.of("path", "empty.bin"));
+		assertEquals(0L, RT.ensureLong(RT.getIn(created, "written")).longValue());
+		ACell read = run("v/ops/vault/read", Maps.of(
+			"path", "empty.bin", "mode", "bytes"));
+		assertEquals(0L, RT.ensureLong(RT.getIn(read, "size")).longValue());
+	}
+
+	@Test
 	public void testMkdirAndList() {
 		run("v/ops/vault/mkdir", Maps.of("path", "reports"));
 		run("v/ops/vault/write", Maps.of("path", "reports/q4.json", "content", "{\"score\": 2.8}"));

@@ -84,8 +84,9 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 	 * @param cursor Lattice cursor at the :users level
 	 */
 	@SuppressWarnings("unchecked")
-	Auth(Engine engine, ALatticeCursor<?> cursor) {
-		super((ALatticeCursor<AMap<AString, AMap<AString, ACell>>>) cursor);
+	Auth(Engine engine, ALatticeComponent<?> parent, ALatticeCursor<?> cursor) {
+		super(parent,
+			(ALatticeCursor<AMap<AString, AMap<AString, ACell>>>) cursor);
 
 		Config config = engine.config();
 		this.tokenExpiry = config.getTokenExpiry();

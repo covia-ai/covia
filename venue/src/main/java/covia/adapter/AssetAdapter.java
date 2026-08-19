@@ -165,7 +165,7 @@ public class AssetAdapter extends AAdapter {
 		AString didUrl = ctx.getUserDID().append("/a/" +id.toHexString());
 		return Maps.of(
 			Fields.ID, didUrl,
-			K_REF, didUrl,
+			Fields.REF, didUrl,
 			Fields.STORED, CVMBool.TRUE);
 	}
 
@@ -196,14 +196,13 @@ public class AssetAdapter extends AAdapter {
 	private static final AString K_MAX_SIZE = Strings.intern("maxSize");
 	private static final AString K_TRUNCATED = Strings.intern("truncated");
 	private static final AString K_SIZE = Strings.intern("size");
-	private static final AString K_REF = Strings.intern("ref");
 
 	/** Default max content size: 1 MB */
 	private static final long DEFAULT_MAX_SIZE = 1_000_000;
 
 	/** Canonical operation input is ref; older field names remain aliases. */
 	private static AString referenceArg(ACell input, AString... aliases) {
-		AString ref = RT.ensureString(RT.getIn(input, K_REF));
+		AString ref = RT.ensureString(RT.getIn(input, Fields.REF));
 		for (AString alias : aliases) {
 			AString value = RT.ensureString(RT.getIn(input, alias));
 			if (value == null) continue;
@@ -268,11 +267,11 @@ public class AssetAdapter extends AAdapter {
 		}
 
 		if (meta == null) {
-			return Maps.of(K_REF, idStr, Fields.ID, idStr, K_EXISTS, CVMBool.FALSE);
+			return Maps.of(Fields.REF, idStr, Fields.ID, idStr, K_EXISTS, CVMBool.FALSE);
 		}
 
 		return Maps.of(
-			K_REF, idStr,
+			Fields.REF, idStr,
 			Fields.ID, idStr,
 			K_EXISTS, CVMBool.TRUE,
 			Fields.VALUE, meta);
@@ -293,13 +292,13 @@ public class AssetAdapter extends AAdapter {
 				long sz = resolved.content().getSize();
 				if (sz > maxSz) {
 					AMap<AString, ACell> result = Maps.of(
-						K_REF, idStr, Fields.ID, idStr, K_EXISTS, CVMBool.TRUE,
+						Fields.REF, idStr, Fields.ID, idStr, K_EXISTS, CVMBool.TRUE,
 						K_HAS_CONTENT, CVMBool.TRUE,
 						K_TRUNCATED, CVMBool.TRUE, K_SIZE, CVMLong.create(sz));
 					return withContentType(result, resolved.contentType());
 				}
 				AMap<AString, ACell> result = Maps.of(
-					K_REF, idStr, Fields.ID, idStr, K_EXISTS, CVMBool.TRUE,
+					Fields.REF, idStr, Fields.ID, idStr, K_EXISTS, CVMBool.TRUE,
 					K_HAS_CONTENT, CVMBool.TRUE,
 					Fields.VALUE, resolved.content().getBlob());
 				return withContentType(result, resolved.contentType());
@@ -333,7 +332,7 @@ public class AssetAdapter extends AAdapter {
 		}
 
 		if (record == null) {
-			return Maps.of(K_REF, idStr, Fields.ID, idStr, K_EXISTS, CVMBool.FALSE,
+			return Maps.of(Fields.REF, idStr, Fields.ID, idStr, K_EXISTS, CVMBool.FALSE,
 				K_HAS_CONTENT, CVMBool.FALSE);
 		}
 
@@ -341,7 +340,7 @@ public class AssetAdapter extends AAdapter {
 		if (content == null) {
 			// The CAS record exists, but callers (especially tool-using models)
 			// need an explicit distinction from a legitimately empty payload.
-			return Maps.of(K_REF, idStr, Fields.ID, idStr, K_EXISTS, CVMBool.TRUE,
+			return Maps.of(Fields.REF, idStr, Fields.ID, idStr, K_EXISTS, CVMBool.TRUE,
 				K_HAS_CONTENT, CVMBool.FALSE,
 				Fields.MESSAGE, Strings.create(
 					"Asset metadata does not specify a content payload"));
@@ -356,7 +355,7 @@ public class AssetAdapter extends AAdapter {
 		long size = (content instanceof ABlob b) ? b.count() : content.getMemorySize();
 		if (size > maxSize) {
 			return Maps.of(
-				K_REF, idStr,
+				Fields.REF, idStr,
 				Fields.ID, idStr,
 				K_EXISTS, CVMBool.TRUE,
 				K_HAS_CONTENT, CVMBool.TRUE,
@@ -366,7 +365,7 @@ public class AssetAdapter extends AAdapter {
 
 		// Returns Blob, which JSON-serialises to "0x..." hex string
 		return Maps.of(
-			K_REF, idStr,
+			Fields.REF, idStr,
 			Fields.ID, idStr,
 			K_EXISTS, CVMBool.TRUE,
 			K_HAS_CONTENT, CVMBool.TRUE,
@@ -431,7 +430,7 @@ public class AssetAdapter extends AAdapter {
 				Hash h = Hash.wrap(entry.getKey().getBytes());
 				AMap<AString, ACell> summary = Maps.of(
 					Fields.ID, Strings.create(h.toHexString()),
-					K_REF, ctx.getUserDID().append("/a/" + h.toHexString()),
+					Fields.REF, ctx.getUserDID().append("/a/" + h.toHexString()),
 					Fields.NAME, meta.get(Fields.NAME),
 					Fields.TYPE, meta.get(Fields.TYPE),
 					Fields.DESCRIPTION, meta.get(Fields.DESCRIPTION));
@@ -524,7 +523,7 @@ public class AssetAdapter extends AAdapter {
 		// convenient for version comparison.
 		AString didUrl = ctx.getUserDID().append("/a/" +hash.toHexString());
 		return Maps.of(
-			K_REF, didUrl,
+			Fields.REF, didUrl,
 			Fields.PATH, didUrl,
 			Fields.ID, Strings.create(hash.toHexString()),
 			Strings.intern("hash"), Strings.create(hash.toHexString()));

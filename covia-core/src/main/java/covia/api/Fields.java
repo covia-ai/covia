@@ -57,6 +57,8 @@ public class Fields {
 	public static final StringShort NAME =  Strings.intern("name");
 	public static final StringShort DESCRIPTION = Strings.intern("description");
 	public static final StringShort CONTENT = Strings.intern("content");
+	/** Canonical reference field used by content descriptors and reference-addressed APIs. */
+	public static final StringShort REF = Strings.intern("ref");
 	public static final StringShort CONTENT_TYPE = Strings.intern("contentType");
 	public static final StringShort FILE_NAME = Strings.intern("fileName");
 	public static final StringShort SHA256 =  Strings.intern("sha256");

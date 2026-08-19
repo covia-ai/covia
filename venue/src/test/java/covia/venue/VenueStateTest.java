@@ -16,6 +16,9 @@ import convex.core.data.Index;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
+import convex.core.store.MemoryStore;
+import convex.lattice.LatticeContext;
+import convex.lattice.RootComponent;
 import convex.lattice.cursor.Cursors;
 import covia.api.Fields;
 import covia.grid.Status;
@@ -52,6 +55,28 @@ public class VenueStateTest {
 
 		assertNotNull(vs);
 		assertEquals(kp.getAccountKey(), vs.getOwnerKey());
+	}
+
+	@Test
+	public void testHostedComponentTreeUsesRootPolicy() throws Exception {
+		AKeyPair kp = AKeyPair.generate();
+		try (MemoryStore store = new MemoryStore()) {
+			RootComponent<Index<convex.core.data.Keyword, ACell>> root =
+				RootComponent.create(Covia.ROOT, store);
+			root.cursor().setContext(LatticeContext.create(null, kp));
+			CoviaApplication application = CoviaApplication.connect(root);
+			VenueState venue = application.venue(kp.getAccountKey());
+
+			venue.initialise(Strings.create("did:key:test"));
+			AssetStore assets = venue.assets();
+			assets.store(Strings.create("{\"name\":\"Hosted\"}"), null);
+
+			assertNotNull(assets.persist(),
+				"nested component persistence must delegate to the root host");
+			application.sync();
+			assertEquals(application.cursor().get(), store.getRootData(),
+				"application sync must publish the complete hosted root");
+		}
 	}
 
 	// ========== Asset Store ==========

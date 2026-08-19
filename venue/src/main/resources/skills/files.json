@@ -3,7 +3,7 @@
 	"description": "File-style storage: root-jailed host/temp filesystems and per-user DLFS drives (decentralised, signed, WebDAV-mountable). Load for reading or writing file content rather than structured lattice values.",
 	"content": {
 		"contentType": "text/markdown",
-		"inline": "## Files\nTwo mechanisms; pick by need:\n\n**file** — venue-configured roots (host directories, temp scratch, or DLFS-backed drives), root-jailed:\n- roots lists what this venue offers; list/tree `{root, path}` browse; read `{root, path}` / write `{root, path, content}` transfer content; mkdir creates directories.\n- move `{root?, toRoot?, from, to}` renames or relocates; copy uses the same shape. A qualified endpoint `file://<root>/<path>` supplies its own root, so `root` can be omitted; an unqualified `to` defaults to the source root. Conflicting explicit and qualified roots fail.\n- Both refuse replacement and dispatch directly through Java NIO. Same-provider operations retain its native fast path; cross-provider efficiency and atomicity depend on those providers. Covia never routes the bytes through model context.\n- Also under `v/ops/file/`: append, delete, stat.\n\n**dlfs** — YOUR decentralised drives: per-user, signed, replicated lattice filesystems (also mountable over WebDAV when the venue enables it — mount URL and Windows UNC path at `v/info/adapters/dlfs/webdav`):\n- list-drives shows yours; create-drive `{name}` makes one; read/write `{drive, path, content}` transfer file content; also under `v/ops/dlfs/`: list, tree, mkdir, append, delete, stat, delete-drive.\n\nChoosing storage:\n- Structured queryable state -> workspace (`w/`). Immutable shared values -> assets. File-shaped content, external tools, WebDAV access -> dlfs. Host-machine file exchange -> file roots.\n- An asset can bind its content to a DLFS file (`content: {dlfs: path}`) — live document, stable identity.\n- File ops act on the caller's authority: `file://` roots need explicit capability grants; move needs `crud/write` on both endpoints, while copy needs `crud/read` on the source and `crud/write` on the destination. A copy source may be read-only; move requires both roots writable. Loading this skill grants neither."
+		"inline": "## Files\nTwo mechanisms; pick by need:\n\n**file** — venue-configured roots (host directories, temp scratch, or DLFS-backed drives), root-jailed:\n- roots lists what this venue offers; list/tree `{root, path}` browse; read `{root, path}` reads. create `{root, path}` makes an empty file, or add `content: {inline|ref|sha256, contentType?, fileName?}`; it never replaces. path may come from content.fileName. write retains the compact legacy input and explicitly creates-or-overwrites. mkdir creates directories.\n- move `{root?, toRoot?, from, to}` renames or relocates; copy uses the same shape. A qualified endpoint `file://<root>/<path>` supplies its own root, so `root` can be omitted; an unqualified `to` defaults to the source root. Conflicting explicit and qualified roots fail.\n- Both refuse replacement and dispatch directly through Java NIO. Same-provider operations retain its native fast path; cross-provider efficiency and atomicity depend on those providers. Covia never routes the bytes through model context.\n- Also under `v/ops/file/`: append, delete, stat.\n\n**dlfs** — YOUR decentralised drives: per-user, signed, replicated lattice filesystems (also mountable over WebDAV when the venue enables it — mount URL and Windows UNC path at `v/info/adapters/dlfs/webdav`):\n- list-drives shows yours; create-drive `{name}` makes one. create works the same way as file:create and uses the same optional content descriptor as assets; read/write transfer file content. Also under `v/ops/dlfs/`: list, tree, mkdir, append, delete, stat, delete-drive.\n\nChoosing storage:\n- Structured queryable state -> workspace (`w/`). Immutable shared values -> assets. File-shaped content, external tools, WebDAV access -> dlfs. Host-machine file exchange -> file roots.\n- Standard content descriptors use `content.ref` for any resolvable source; `content.dlfs` remains compatible for existing metadata. Add sha256 to pin and verify referenced bytes.\n- File ops act on the caller's authority: `file://` roots need explicit capability grants; move needs `crud/write` on both endpoints, while copy needs `crud/read` on the source and `crud/write` on the destination. A copy source may be read-only; move requires both roots writable. Loading this skill grants neither."
 	},
 	"skill": {
 		"tools": [
@@ -11,6 +11,7 @@
 			"v/ops/file/list",
 			"v/ops/file/tree",
 			"v/ops/file/read",
+			"v/ops/file/create",
 			"v/ops/file/write",
 			"v/ops/file/append",
 			"v/ops/file/move",
@@ -24,6 +25,7 @@
 			"v/ops/dlfs/list",
 			"v/ops/dlfs/tree",
 			"v/ops/dlfs/read",
+			"v/ops/dlfs/create",
 			"v/ops/dlfs/write",
 			"v/ops/dlfs/append",
 			"v/ops/dlfs/mkdir",

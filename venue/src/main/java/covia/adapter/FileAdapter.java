@@ -23,6 +23,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
+import covia.api.Fields;
 import covia.utils.MimeUtils;
 import covia.venue.Config;
 import covia.venue.Engine;
@@ -57,6 +58,7 @@ import covia.venue.RequestContext;
  *   <li>{@code file:roots}  — list configured roots</li>
  *   <li>{@code file:list}   — list directory entries</li>
  *   <li>{@code file:read}   — read a file (text/bytes/json)</li>
+ *   <li>{@code file:create} — create a new file from a content descriptor</li>
  *   <li>{@code file:write}  — write a file (text/value/bytes)</li>
  *   <li>{@code file:append} — append text to a file</li>
  *   <li>{@code file:move}   — rename or relocate within one root</li>
@@ -212,6 +214,7 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 		installAsset("file/list",   ASSETS_PATH + "list.json");
 		installAsset("file/tree",   ASSETS_PATH + "tree.json");
 		installAsset("file/read",   ASSETS_PATH + "read.json");
+		installAsset("file/create", ASSETS_PATH + "create.json");
 		installAsset("file/write",  ASSETS_PATH + "write.json");
 		installAsset("file/append", ASSETS_PATH + "append.json");
 		installAsset("file/move",   ASSETS_PATH + "move.json");
@@ -680,6 +683,7 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 			case "list"   -> handleList(ctx, input);
 			case "tree"   -> handleTree(ctx, input);
 			case "read"   -> handleRead(ctx, input);
+			case "create" -> handleCreate(ctx, input);
 			case "write"  -> handleWrite(ctx, input);
 			case "append" -> handleAppend(ctx, input);
 			case "move"   -> handleMove(ctx, input);
@@ -805,6 +809,17 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 		FileTarget target = resolveTarget(ctx, rootName, pathArg, Capability.CRUD_WRITE, false);
 		requireWritable(target);
 		return FileOperations.write(target.path(), input, engine, ctx, false);
+	}
+
+	private ACell handleCreate(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
+		String rootName = stringArg(input, FIELD_ROOT);
+		String pathArg = FileOperations.createPath(input);
+		rejectArchiveEntry(pathArg, "create");
+		FileTarget target = resolveTarget(ctx, rootName, pathArg, Capability.CRUD_WRITE, false);
+		requireWritable(target);
+		AMap<AString, ACell> result = RT.ensureMap(
+			FileOperations.create(target.path(), input, engine, ctx));
+		return result.assoc(Fields.REF, Strings.create(target.resource()));
 	}
 
 	private ACell handleAppend(RequestContext ctx, AMap<AString, ACell> input) throws IOException {

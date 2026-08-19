@@ -36,8 +36,8 @@ public class User extends ALatticeComponent<ACell> {
 
 	private final AString did;
 
-	User(ALatticeCursor<ACell> cursor, AString did) {
-		super(cursor);
+	User(ALatticeComponent<?> parent, ALatticeCursor<ACell> cursor, AString did) {
+		super(parent, cursor);
 		this.did = did;
 	}
 
@@ -121,7 +121,7 @@ public class User extends ALatticeComponent<ACell> {
 	 */
 	@SuppressWarnings("unchecked")
 	public AssetStore assets() {
-		return new AssetStore(cursor.path(Namespace.A));
+		return new AssetStore(this, cursor.path(Namespace.A));
 	}
 
 	/**
@@ -130,7 +130,7 @@ public class User extends ALatticeComponent<ACell> {
 	 * @return SecretStore wrapping the user's "s" cursor
 	 */
 	public SecretStore secrets() {
-		return new SecretStore(cursor.path(Namespace.S));
+		return new SecretStore(this, cursor.path(Namespace.S));
 	}
 
 	/**
@@ -146,7 +146,7 @@ public class User extends ALatticeComponent<ACell> {
 	public AgentState agent(AString agentId) {
 		ALatticeCursor<ACell> c = cursor.path(Namespace.G, agentId);
 		if (c.get() == null) return null;
-		return new AgentState(c, agentId);
+		return new AgentState(this, c, agentId);
 	}
 
 	/**
@@ -163,7 +163,7 @@ public class User extends ALatticeComponent<ACell> {
 
 	public AgentState ensureAgent(AString agentId, AMap<AString, ACell> config, ACell initialState) {
 		ALatticeCursor<ACell> c = cursor.path(Namespace.G, agentId);
-		AgentState state = new AgentState(c, agentId);
+		AgentState state = new AgentState(this, c, agentId);
 		if (!state.exists()) state.initialise(config, initialState);
 		return state;
 	}
@@ -182,7 +182,7 @@ public class User extends ALatticeComponent<ACell> {
 	public AgentState forkAgent(AString agentId, AMap<AString, ACell> config,
 			ACell state, convex.core.data.AVector<ACell> timeline) {
 		ALatticeCursor<ACell> c = cursor.path(Namespace.G, agentId);
-		AgentState fork = new AgentState(c, agentId);
+		AgentState fork = new AgentState(this, c, agentId);
 		if (!fork.exists()) fork.initialiseFromFork(config, state, timeline);
 		return fork;
 	}

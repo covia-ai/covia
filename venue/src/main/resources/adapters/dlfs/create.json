@@ -1,0 +1,38 @@
+{
+  "name": "Create DLFS File",
+  "description": "Create a new file in a DLFS drive. Fails if the target already exists. Omit content to create an empty file. When supplied, content is the standard asset content descriptor: inline UTF-8 text, any resolvable ref, or a sha256 blob from content storage; sha256 alongside inline/ref verifies integrity. Parent directories must exist.",
+  "creator": "Covia",
+  "operation": {
+    "adapter": "dlfs:create",
+    "toolName": "dlfs_create",
+    "input": {
+      "type": "object",
+      "properties": {
+        "drive": { "type": "string", "description": "Drive name or authorised DID-scoped drive reference" },
+        "path": { "type": "string", "description": "Destination within the drive. May be omitted when content.fileName supplies it." },
+        "content": {
+          "type": "object",
+          "description": "Optional standard asset content descriptor. Omit it, or supply only fileName/contentType, for an empty file. Add inline, ref, or sha256 for content bytes. content.dlfs remains a compatibility alias for ref.",
+          "properties": {
+            "inline": { "type": "string", "description": "UTF-8 text held directly in the descriptor" },
+            "ref": { "type": "string", "description": "Any resolvable content reference, including assets, lattice paths, file:// paths, DLFS paths, and DID URLs" },
+            "dlfs": { "type": "string", "deprecated": true, "description": "Compatibility alias for ref used by existing asset metadata" },
+            "sha256": { "type": "string", "description": "Content-store hash when used alone, or an integrity pin for inline/ref content" },
+            "contentType": { "type": "string", "description": "Declared media type" },
+            "fileName": { "type": "string", "description": "Original file name; also supplies the destination when path is omitted" }
+          }
+        }
+      },
+      "required": ["drive"]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "ref": { "type": "string", "description": "Canonical DLFS reference to the created file" },
+        "written": { "type": "integer", "description": "Bytes written" },
+        "created": { "type": "boolean", "const": true },
+        "contentType": { "type": "string", "description": "Declared or resolved media type, when known" }
+      }
+    }
+  }
+}

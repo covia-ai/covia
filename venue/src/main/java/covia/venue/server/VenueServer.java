@@ -36,7 +36,6 @@ import convex.core.util.FileUtils;
 import convex.core.store.AStore;
 import convex.etch.EtchConfig;
 import convex.etch.EtchStore;
-import convex.core.data.prim.CVMLong;
 import convex.core.util.Utils;
 import convex.lattice.LatticeContext;
 import convex.node.NodeConfig;
@@ -44,6 +43,7 @@ import convex.node.NodeServer;
 import covia.api.Fields;
 import covia.lattice.Covia;
 import covia.venue.Config;
+import covia.venue.CoviaApplication;
 import covia.venue.Engine;
 import covia.venue.LocalVenue;
 import convex.dlfs.DLFSDriveManager;
@@ -156,36 +156,11 @@ public class VenueServer {
 			}
 			AKeyPair keyPair = resolveKeyPair(this.config, storePreexisted);
 			this.nodeServer = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
-			nodeServer.setMergeContext(LatticeContext.create(
-				CVMLong.create(Utils.getCurrentTimestamp()), keyPair));
+			nodeServer.setMergeContext(LatticeContext.create(null, keyPair));
 			nodeServer.launch(); // restore from store BEFORE Engine init
-			// Wire the synchronous persistence handler — used by Engine.flush(),
-			// the periodic flush sweep, and the close-time final flush. See
-			// venue/docs/PERSISTENCE.md §5.0.
-			//
-			// persist() pushes the snapshot through the propagator's
-			// setRootData (mmap write); flush() forces fsync so the bytes are
-			// actually on disk before the call returns. Only EtchStore has a
-			// real fsync to call — for other store types (memory, etc.) the
-			// flush is implicitly a no-op.
-			final AStore wiredStore = this.store;
-			covia.venue.PersistenceHandler persistHandler = new covia.venue.PersistenceHandler() {
-				@Override
-				public void persist(ACell value) {
-					try {
-						nodeServer.persistSnapshot(value);
-					} catch (java.io.IOException e) {
-						throw new RuntimeException("persistSnapshot failed", e);
-					}
-				}
-				@Override
-				public void flush() throws java.io.IOException {
-					if (wiredStore instanceof EtchStore es) {
-						es.flush();
-					}
-				}
-			};
-			engine = new Engine(this.config, nodeServer.getCursor(), keyPair, persistHandler);
+			CoviaApplication application =
+				CoviaApplication.connect(nodeServer.getRootComponent());
+			engine = new Engine(this.config, application, keyPair);
 			engine.start();
 		} catch (Exception e) {
 			// Engine construction is inert; start() owns and rolls back its active
