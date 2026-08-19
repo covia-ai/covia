@@ -30,7 +30,6 @@ import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import convex.lattice.LatticeContext;
 import convex.lattice.cursor.ALatticeCursor;
-import convex.lattice.fs.DLFS;
 import convex.lattice.fs.impl.DLFSLocal;
 import covia.api.Fields;
 import covia.lattice.CapabilityChecker;
@@ -212,9 +211,10 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		ALatticeCursor<Index<Keyword, ACell>> rootCursor = engine.getRootCursor();
 		ALatticeCursor<?> dlfsCursor = rootCursor.path(Covia.DLFS);
 
-		// Local signing-key override only. A fixed timestamp here would freeze
-		// every long-lived WebDAV/embedder view at its connection time (#387).
-		LatticeContext lctx = LatticeContext.create(null, dlfsKey);
+		// Override only the signer. Delegating from the host policy preserves its
+		// live clock, owner verifier and future-timestamp-skew limit (Convex
+		// 0.8.14); constructing a fresh context here would silently discard them.
+		LatticeContext lctx = dlfsCursor.getContext().withSigningKey(dlfsKey);
 		dlfsCursor.setContext(lctx);
 
 		AccountKey ak = dlfsKey.getAccountKey();
@@ -246,9 +246,9 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		AKeyPair dlfsKey = ensureUserKeyPair(ctx);
 		ALatticeCursor<?> userCursor = getUserDLFSCursor(dlfsKey);
 		// Convex 0.8.14 resolves each DLFS mutation timestamp through the cursor's
-		// live LatticeContext. The null timestamp installed above therefore uses
-		// the latest canonical runtime timestamp on every write (#387).
-		return DLFS.connect(userCursor, Strings.create(driveName));
+		// inherited live policy, so long-lived views see the current application
+		// clock on every write (#387).
+		return engine.connectDLFSDrive(userCursor, Strings.create(driveName));
 	}
 
 	/**

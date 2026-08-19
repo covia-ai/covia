@@ -16,17 +16,22 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiPredicate;
 
+import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.AccountKey;
 import convex.core.data.AVector;
 import convex.core.data.Index;
 import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.lang.RT;
+import convex.lattice.LatticeContext;
 import convex.lattice.cursor.ALatticeCursor;
 import covia.lattice.Covia;
+import covia.venue.CoviaApplication;
 import covia.venue.Engine;
 import covia.venue.Config;
 import covia.venue.RequestContext;
@@ -343,6 +348,35 @@ public class DLFSAdapterTest {
 		Thread.sleep(3);
 		long after = drive.getCursor().getContext().currentTimestamp().longValue();
 		assertTrue(after > before, "long-lived drive timestamp must advance with the venue clock");
+	}
+
+	@Test
+	public void testDriveSignerOverridePreservesHostPolicy() throws Exception {
+		AKeyPair venueKey = AKeyPair.generate();
+		CoviaApplication application = CoviaApplication.create(venueKey);
+		BiPredicate<ACell, AccountKey> ownerVerifier = (owner, signer) -> false;
+		application.cursor().setContext(LatticeContext.EMPTY
+			.withOwnerVerifier(ownerVerifier)
+			.withMaxFutureTimestampSkew(1234)
+			.withSigningKey(venueKey));
+
+		Engine isolated = new Engine(Maps.of(
+				Config.USERS, Maps.of(Config.AUTO_CREATE, true)),
+				application, venueKey).start();
+		try {
+			Engine.addDemoAssets(isolated);
+			DLFSAdapter adapter = (DLFSAdapter) isolated.getAdapter("dlfs");
+			LatticeContext driveContext = adapter.getDriveForIdentity(
+				TestEngine.uniqueDID("dlfs-host-policy").toString(), "policy")
+				.getCursor().getContext();
+
+			assertSame(ownerVerifier, driveContext.getOwnerVerifier());
+			assertEquals(1234, driveContext.getMaxFutureTimestampSkew(-1));
+			assertNotEquals(venueKey.getAccountKey(),
+				driveContext.getSigningKey().getAccountKey());
+		} finally {
+			isolated.close();
+		}
 	}
 
 	@Test

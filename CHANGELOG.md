@@ -18,10 +18,12 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 ### Fixed
 
 - Fixed #387: long-lived DLFS views now use the venue's current write clock per
-  mutation instead of freezing their timestamp at connect time. Convex
-  0.8.14-SNAPSHOT also preserves the current side of equal-timestamp
-  live/tombstone merges, preventing stale sync callbacks from erasing a
-  recreated path.
+  mutation instead of freezing their timestamp at connect time. Per-user DLFS
+  signer overrides now retain the host's owner-verification and future-skew
+  policies, and hosted drives use Convex 0.8.14's store-aware connection so
+  streamed blobs are persisted incrementally instead of remaining heap-backed.
+  Convex 0.8.14 also preserves the current side of equal-timestamp live/tombstone
+  merges, preventing stale sync callbacks from erasing a recreated path.
 
 - Venue-authorised adapter and module loads are last-write-wins: reloading a module replaces existing adapter names and catalog declarations instead of failing on occupied paths. Disable/unload removes live dispatch and introspection while leaving durable catalog metadata available for later replacement or explicit operator deletion (#386).
 

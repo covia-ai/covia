@@ -49,6 +49,7 @@ import convex.lattice.LatticeContext;
 import convex.lattice.cursor.ALatticeCursor;
 import convex.lattice.fs.DLFS;
 import convex.lattice.fs.DLFileSystem;
+import convex.lattice.fs.impl.DLFSLocal;
 import covia.adapter.AAdapter;
 import covia.adapter.AgentAdapter;
 import covia.adapter.AssetAdapter;
@@ -2725,6 +2726,18 @@ public class Engine {
 	 */
 	public ALatticeCursor<Index<Keyword, ACell>> getRootCursor() {
 		return lattice;
+	}
+
+	/**
+	 * Connects a DLFS drive to the hosted lattice, enabling incremental blob
+	 * persistence when this engine has a store-backed application host.
+	 *
+	 * <p>Legacy raw-cursor embedders have no store policy available here and
+	 * retain the heap-backed behaviour of the two-argument Convex API.</p>
+	 */
+	public DLFSLocal connectDLFSDrive(ALatticeCursor<?> parent, AString driveName) {
+		if (application == null) return DLFS.connect(parent, driveName);
+		return DLFS.connect(parent, driveName, application.hostStore());
 	}
 
 	public AString getName() {

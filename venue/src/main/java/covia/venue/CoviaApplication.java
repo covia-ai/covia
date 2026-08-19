@@ -69,6 +69,11 @@ public final class CoviaApplication
 		return VenueState.connect(this, ownerKey);
 	}
 
+	/** Returns the caller-owned host store for internal adapter integration. */
+	AStore hostStore() {
+		return host().store();
+	}
+
 	/** Whether this application was created as an in-memory ephemeral host. */
 	boolean isEphemeral() {
 		return ephemeral;
