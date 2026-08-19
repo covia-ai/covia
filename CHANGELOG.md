@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Covia is pre-1.0, so minor versions may include breaking changes.
 
-## [Unreleased]
+## [0.9.3] - 2026-08-19
 
 ### Added
 
@@ -466,7 +466,8 @@ Initial public release: venue server with the adapter framework, lattice-backed
 content-addressed assets, the async job model with SSE, multi-protocol surface
 (REST / MCP / A2A / DID), and strategy-based authentication.
 
-[Unreleased]: https://github.com/covia-ai/covia/compare/0.9.2...HEAD
+[Unreleased]: https://github.com/covia-ai/covia/compare/0.9.3...HEAD
+[0.9.3]: https://github.com/covia-ai/covia/compare/0.9.2...0.9.3
 [0.9.2]: https://github.com/covia-ai/covia/compare/0.9.1...0.9.2
 [0.9.1]: https://github.com/covia-ai/covia/compare/0.9.0...0.9.1
 [0.9.0]: https://github.com/covia-ai/covia/compare/0.8.0...0.9.0
