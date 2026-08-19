@@ -69,7 +69,10 @@ public class LocalVenue extends Venue {
 	@Override
 	public Asset getAsset(Hash assetID) {
 		Asset asset = engine.getAsset(assetID);
-		if (asset!=null) asset.setVenue(this);
+		if (asset!=null) {
+			asset.setVenue(this);
+			asset.setReference(engine.assetDIDURL(assetID).toString());
+		}
 		return asset;
 	}
 
@@ -149,14 +152,20 @@ public class LocalVenue extends Venue {
 		// content-store blob, per-record POS_CONTENT, dlfs. Both the REST
 		// /assets/{id}/content endpoint and the client Asset.getContent() reach
 		// here, so routing through it (rather than the blob-only getContent) is
-		// what makes inline content fetchable over HTTP (covia#289).
-		// A LocalVenue with no caller context represents the venue's published
-		// catalog (used by the explicit HTTP namespace=venue path). A caller-bound
-		// LocalVenue continues to resolve the same bare hash in that caller's /a/.
+		// what makes inline content fetchable over HTTP (covia#289). The Hash
+		// overload denotes LocalVenue.getAsset(Hash), i.e. the published venue
+		// catalog, so qualify it explicitly instead of inheriting a caller context.
+		covia.venue.storage.ContentProvider.Resolved resolved =
+			engine.resolveContent(engine.assetDIDURL(id), engine.venueContext());
+		return (resolved == null) ? null : resolved.content();
+	}
+
+	@Override
+	protected AContent getAssetContent(String ref) throws IOException {
 		RequestContext rctx = (requestContext == null && getUser() == null)
 			? engine.venueContext() : context();
 		covia.venue.storage.ContentProvider.Resolved resolved =
-			engine.resolveContent(convex.core.data.Strings.create(id.toHexString()), rctx);
+			engine.resolveContent(Strings.create(ref), rctx);
 		return (resolved == null) ? null : resolved.content();
 	}
 
@@ -166,8 +175,11 @@ public class LocalVenue extends Venue {
 
 	@Override
 	public Asset resolveAsset(String ref) {
-		Asset asset = engine.resolveAsset(Strings.create(ref));
-		if (asset != null) asset.setVenue(this);
+		Asset asset = engine.resolveAsset(Strings.create(ref), context());
+		if (asset != null) {
+			asset.setVenue(this);
+			asset.setReference(ref);
+		}
 		return asset;
 	}
 

@@ -59,7 +59,7 @@ covia/                          # ai.covia:covia (parent POM)
 
 - **Java 21+** (JDK; the published Docker image runs on Java 25)
 - **Maven 3.7+** (enforced by maven-enforcer-plugin)
-- **Convex 0.8.13** — released artifacts resolve directly from Maven Central, including the explicit JWT `kid` API required by #352. No sibling Convex checkout or source build is required.
+- **Convex 0.8.14-SNAPSHOT** — install the current local Convex development snapshot before building Covia.
 
 ## Build & Run
 
@@ -99,7 +99,7 @@ mvn test -pl covia-core
 
 | Dependency | Version | Purpose |
 |------------|---------|---------|
-| Convex | 0.8.13 | Lattice platform, immutable data, cryptography |
+| Convex | 0.8.14-SNAPSHOT | Lattice platform, immutable data, cryptography |
 | Javalin | 7.2.2 | HTTP server with OpenAPI/Swagger/ReDoc |
 | LangChain4j | 1.18.1 | LLM orchestration (OpenAI, Ollama, Gemini, DeepSeek) |
 | MCP SDK | 2.0.0 | Model Context Protocol |
@@ -170,7 +170,7 @@ Defined in code at `venue/src/main/java/covia/lattice/Covia.java`. Full design i
 3. Use `getSubOperation(meta)` to extract the adapter-specific operation name from metadata
 4. Override `installAssets()` to register default operations
    - Override `info()` to publish adapter-owned facts (mount points, enabled features — anything a client needs to know that is not an operation) into `v/info/adapters/<name>`; it is re-read after every `configure`
-   - Ship the adapter's agent skill with it: `installSkill("<name>", "/skills/<name>.json")` in `installAssets()` (resource under `src/main/resources/skills/`), so `v/skills/<name>` is present exactly when the adapter is active
+   - Ship the adapter's agent skill with it: `installSkill("<name>", "/skills/<name>.json")` in `installAssets()` (resource under `src/main/resources/skills/`); loading overwrites `v/skills/<name>`, while disable/unload leaves the durable canonical metadata in place
    - Everything an adapter installs or publishes also appears under its own subtree `v/adapters/<name>/` (`info`, `config` — only what `publicConfig()` explicitly allow-lists (`publicConfig("maxItems", …)`), nothing by default, `ops/`, `skills/`, `templates/`), published and retracted with the adapter
 5. Create JSON asset definitions in `venue/src/main/resources/adapters/{name}/`
 6. Register in `Engine.addDemoAssets()` or via configuration

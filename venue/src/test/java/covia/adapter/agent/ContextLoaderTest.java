@@ -81,6 +81,9 @@ public class ContextLoaderTest {
 
 		// DID URLs
 		assertTrue(ContextLoader.isAssetReference("did:key:z6MkAlice/a/abc123"));
+		assertTrue(ContextLoader.isAssetReference("file://tmp/rules.md"));
+		assertTrue(ContextLoader.isAssetReference("file:/tmp/rules.md"));
+		assertTrue(ContextLoader.isAssetReference("dlfs/docs/rules.md"));
 
 		// Adapter:op pattern
 		assertTrue(ContextLoader.isAssetReference("v/test/ops/echo"));
@@ -216,6 +219,18 @@ public class ContextLoaderTest {
 		assertNotNull(msg, "Should resolve asset with content");
 		String content = RT.ensureString(RT.getIn(msg, Strings.intern("content"))).toString();
 		assertTrue(content.contains("Section 1: All invoices require approval."));
+	}
+
+	@Test
+	public void testFileProviderContentAsContext() {
+		String name = "context-" + Integer.toUnsignedString(ALICE_DID.hashCode()) + ".md";
+		Job write = engine.jobs().invokeOperation("v/ops/file/write", Maps.of(
+			"root", "tmp", "path", name, "content", "# Provider context\nUse this rule."), ctx);
+		write.awaitResult(5000);
+
+		ACell msg = loader.resolveEntry(Strings.create("file://tmp/" + name), ctx);
+		assertNotNull(msg);
+		assertTrue(RT.getIn(msg, "content").toString().contains("Use this rule."));
 	}
 
 	@Test

@@ -1,6 +1,6 @@
 {
   "name": "Append to File",
-  "description": "Append to a file under a configured filesystem root or at an authorised DLFS path, creating it if absent. Supply exactly one of content, value, bytes, or asset.",
+  "description": "Append to a file under a configured filesystem root or at an authorised DLFS path, creating it if absent. Supply exactly one of content, value, bytes, or contentRef.",
   "creator": "Covia",
   "operation": {
     "adapter": "file:append",
@@ -13,7 +13,8 @@
         "content": { "type": "string", "description": "UTF-8 text to append" },
         "value": { "description": "JSON-serialisable value to append as UTF-8 JSON" },
         "bytes": { "type": "string", "description": "Base64-encoded bytes to append" },
-        "asset": { "type": "string", "description": "Asset reference to stream as appended content" }
+        "contentRef": { "type": "string", "description": "Resolvable content reference to stream, including an asset, file:// root path, or DLFS path" },
+        "asset": { "type": "string", "deprecated": true, "description": "Legacy alias for contentRef" }
       },
       "required": ["path"]
     },

@@ -9,14 +9,16 @@
     "input": {
       "type": "object",
       "properties": {
-        "id": { "type": "string", "description": "Asset reference. Any resolvable address: hex hash, /a/<hash>, /o/<name>, /v/<path>, DID URL, or workspace path (w/, g/, j/, etc.)." }
+        "ref": { "type": "string", "description": "Metadata reference. Any resolvable asset address: hex hash, a/<hash>, o/<name>, v/<path>, DID URL, or workspace path." },
+        "id": { "type": "string", "deprecated": true, "description": "Deprecated alias for ref." }
       },
-      "required": ["id"]
+      "anyOf": [{ "required": ["ref"] }, { "required": ["id"] }]
     },
     "output": {
       "type": "object",
       "properties": {
-        "id": { "type": "string", "description": "Asset reference (echoed)" },
+        "ref": { "type": "string", "description": "Asset reference (echoed)" },
+        "id": { "type": "string", "deprecated": true, "description": "Compatibility alias for ref" },
         "exists": { "type": "boolean", "description": "True if a metadata map was found at the address" },
         "value": { "type": "object", "description": "The resolved metadata object (present when exists is true)" }
       }

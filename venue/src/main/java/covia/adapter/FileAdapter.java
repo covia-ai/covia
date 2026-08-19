@@ -23,6 +23,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
+import covia.utils.MimeUtils;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -71,7 +72,7 @@ import covia.venue.RequestContext;
  * root are rejected when the target exists; for missing targets (e.g. write,
  * mkdir) the parent's real path is checked.
  */
-public class FileAdapter extends AAdapter {
+public class FileAdapter extends AAdapter implements covia.venue.storage.ContentProvider {
 
 	private static final Logger log = LoggerFactory.getLogger(FileAdapter.class);
 
@@ -699,6 +700,56 @@ public class FileAdapter extends AAdapter {
 			Strings.create(relative));
 	}
 
+	// ==================== ContentProvider ====================
+
+	/** Resolves the same canonical file://root/path reference emitted by file
+	 * operations and used by capability resources. DLFS references deliberately
+	 * remain owned by DLFSAdapter, including configured DLFS-backed aliases after
+	 * this method resolves the alias through the normal file boundary. The compact
+	 * file:/root/path spelling is an HTTP-safe input alias; results and capability
+	 * resources remain canonical file:// references. */
+	@Override
+	public covia.venue.storage.ContentProvider.Resolved getContent(AString ref,
+			RequestContext ctx) throws IOException {
+		if (ref == null || !ref.toString().startsWith("file:/")) return null;
+		FileEndpoint endpoint = parseEndpoint(ref.toString(), null, null, "root", "ref");
+		try (Resolved resolved = resolveEntry(ctx, endpoint.rootName(), endpoint.path(),
+				Capability.CRUD_READ, true)) {
+			Path path = resolved.path();
+			if (!Files.isRegularFile(path)) {
+				throw new IllegalArgumentException("No file at reference: " + ref);
+			}
+			covia.grid.AContent content;
+			if (resolved.entryPath() != null) {
+				// A zipfs entry cannot outlive the mounted filesystem.
+				content = covia.grid.impl.BlobContent.of(
+					convex.core.data.Blob.wrap(Files.readAllBytes(path)));
+			} else {
+				content = covia.grid.impl.PathContent.of(path);
+			}
+			return new covia.venue.storage.ContentProvider.Resolved(
+				content, MimeUtils.guessByName(endpoint.path()));
+		}
+	}
+
+	@Override
+	public boolean putContent(AString ref, java.io.InputStream data, String contentType,
+			RequestContext ctx) throws IOException {
+		if (ref == null || !ref.toString().startsWith("file:/")) return false;
+		FileEndpoint endpoint = parseEndpoint(ref.toString(), null, null, "root", "ref");
+		rejectArchiveEntry(endpoint.path(), "write");
+		FileTarget target = resolveTarget(ctx, endpoint.rootName(), endpoint.path(),
+			Capability.CRUD_WRITE, false);
+		requireWritable(target);
+		try (java.io.OutputStream out = Files.newOutputStream(target.path(),
+				java.nio.file.StandardOpenOption.CREATE,
+				java.nio.file.StandardOpenOption.TRUNCATE_EXISTING,
+				java.nio.file.StandardOpenOption.WRITE)) {
+			data.transferTo(out);
+		}
+		return true;
+	}
+
 	// ==================== Handlers ====================
 
 	private ACell handleRoots() {
@@ -881,14 +932,17 @@ public class FileAdapter extends AAdapter {
 	}
 
 	/**
-	 * Parses a relative endpoint or {@code file://<root>/<path>} reference.
+	 * Parses a relative endpoint or {@code file://<root>/<path>} reference. The
+	 * compact {@code file:/<root>/<path>} HTTP transport spelling is equivalent.
 	 * An explicitly supplied root must agree with a qualified reference; a
 	 * fallback is used only for an unqualified value.
 	 */
 	private static FileEndpoint parseEndpoint(String value, String explicitRoot,
 			String fallbackRoot, String rootField, String endpointField) {
-		if (value.startsWith("file://")) {
-			String rest = value.substring("file://".length());
+		if (value.startsWith("file:/")) {
+			int prefixLength = value.startsWith("file://")
+				? "file://".length() : "file:/".length();
+			String rest = value.substring(prefixLength);
 			int slash = rest.indexOf('/');
 			String qualifiedRoot = (slash >= 0) ? rest.substring(0, slash) : rest;
 			String path = (slash >= 0) ? rest.substring(slash + 1) : "";

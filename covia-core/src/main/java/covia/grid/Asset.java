@@ -25,6 +25,9 @@ public class Asset {
 
 	/** The immutable asset ID */
 	protected Hash id;
+
+	/** The address used to resolve this asset, if it was resolved by reference. */
+	protected String reference;
 	
 	/** The asset metadata string. May be null. */
 	AString metaString;
@@ -107,6 +110,20 @@ public class Asset {
 		id = meta().getHash();
 		return id;
 	}
+
+	/**
+	 * Gets the exact address used to resolve this asset. A mutable path remains a
+	 * path; the immutable value it currently resolves to is available from
+	 * {@link #getID()}.
+	 */
+	public String getReference() {
+		return (reference != null) ? reference : getID().toHexString();
+	}
+
+	/** Records the address used by a venue resolver. */
+	public void setReference(String ref) {
+		this.reference = ref;
+	}
 	
 	/**
 	 * Get the DID URL for this asset
@@ -157,7 +174,7 @@ public class Asset {
 		Venue v=getVenue();		
 		if (v==null) throw new IllegalStateException("Cannot get content asset with no Venue"); 
 		
-		return v.getAssetContent(getID());
+		return v.getAssetContent(getReference());
 	}
 
 	/**

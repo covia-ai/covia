@@ -55,14 +55,15 @@ public abstract class Venue {
 	}
 
 	/**
-	 * Gets the asset from the connected Venue
-	 * @param assetID
+	 * Resolves an asset reference at the connected Venue. This string overload
+	 * accepts the complete reference vocabulary; use {@link #getAsset(Hash)}
+	 * only when caller-relative hash semantics are specifically intended.
+	 * @param assetRef asset reference (hash, lattice path, or DID URL)
 	 * @return Asset instance
 	 * @throws IOException
 	 */
-	public Asset getAsset(String assetID) throws IOException {
-		Hash h=Assets.parseAssetID(assetID);
-		return getAsset(h);
+	public Asset getAsset(String assetRef) throws IOException {
+		return resolveAsset(assetRef);
 	}
 
 	/**
@@ -161,6 +162,15 @@ public abstract class Venue {
 	}
 
 	protected abstract AContent getAssetContent(Hash id) throws IOException;
+
+	/**
+	 * Gets asset content through the same general reference vocabulary as
+	 * {@link #resolveAsset(String)}. Implementations with a general resolver
+	 * override this; the default retains hash-only compatibility.
+	 */
+	protected AContent getAssetContent(String ref) throws IOException {
+		return getAssetContent(Assets.parseAssetID(ref));
+	}
 
 	// ------------------------------------------------------------------
 	// Asset resolution and registration

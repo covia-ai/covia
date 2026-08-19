@@ -216,6 +216,27 @@ public class VenueHTTP extends Venue {
 		return requestBuilder(getBaseURI().resolve(path));
 	}
 
+	/** Builds a request with a complete lattice reference as the wildcard path tail. */
+	private HttpRequest.Builder referenceRequestBuilder(String endpoint, String ref) {
+		if (ref == null || ref.isBlank()) throw new IllegalArgumentException("Missing asset reference");
+		String normalized = ref.startsWith("/") ? ref.substring(1) : ref;
+		if (normalized.isBlank()) throw new IllegalArgumentException("Missing asset reference");
+		// Jetty intentionally rejects an empty URI path segment. file://root/path
+		// contains one after the encoded "file:" segment, so use the server's
+		// equivalent compact transport spelling while retaining file:// internally.
+		if (normalized.startsWith("file://")) {
+			normalized = "file:/" + normalized.substring("file://".length());
+		}
+		StringBuilder encoded = new StringBuilder();
+		String[] segments = normalized.split("/", -1);
+		for (int i = 0; i < segments.length; i++) {
+			if (i > 0) encoded.append('/');
+			encoded.append(java.net.URLEncoder.encode(segments[i], java.nio.charset.StandardCharsets.UTF_8)
+				.replace("+", "%20"));
+		}
+		return requestBuilder(endpoint + "/" + encoded);
+	}
+
 	/**
 	 * Sends a request, mapping a low-level connection failure to a clear
 	 * {@link ResponseException} that names the venue. A bare
@@ -356,10 +377,7 @@ public class VenueHTTP extends Venue {
 	 * @return Asset metadata as a String, or null if asset is not found
 	 */
 	public CompletableFuture<String> getMeta(String asset) {
-		Hash h=Assets.parseAssetID(asset);
-		if (h==null) throw new IllegalArgumentException("Bad asset ID format");
-		
-		HttpRequest request=requestBuilder("assets/"+h.toHexString())
+		HttpRequest request=referenceRequestBuilder("assets", asset)
 			.GET()
 			.build();
 		
@@ -663,10 +681,12 @@ public class VenueHTTP extends Venue {
 	}
 	
 	/**
-	 * Invokes an operation on the connected venue
-	 * @return Future containing the operation execution result
+	 * Lists the connected venue's content-addressed asset references. Every item
+	 * can be passed unchanged to {@link #resolveAsset(String)}.
+	 *
+	 * @return future containing fully-qualified {@code <venue-DID>/a/<hash>} references
 	 */
-	public CompletableFuture<List<Hash>> getAssets() {
+	public CompletableFuture<List<String>> getAssetReferences() {
 		HttpRequest req = requestBuilder("assets")
 			.GET()
 			.build();
@@ -689,16 +709,32 @@ public class VenueHTTP extends Venue {
 				throw new ConversionException("assets API did not return a list of assets");
 			}
 			
-			ArrayList<Hash> al=new ArrayList<>();
+			ArrayList<String> al=new ArrayList<>();
 			long n=items.count();
 			for (int i=0; i<n; i++) {
-				al.add(Hash.parse(items.get(i)));
+				AString ref=RT.ensureString(items.get(i));
+				if (ref==null) throw new ConversionException("assets API returned a non-string reference");
+				al.add(ref.toString());
 			}
 			return al;
 			
 		});
 		
 
+	}
+
+	/**
+	 * Lists venue asset hashes for compatibility with the original client API.
+	 * This intentionally discards the owner-qualified reference; use
+	 * {@link #getAssetReferences()} with {@link #resolveAsset(String)} for a
+	 * lossless, round-trippable listing.
+	 */
+	public CompletableFuture<List<Hash>> getAssets() {
+		return getAssetReferences().thenApply(refs -> {
+			ArrayList<Hash> hashes=new ArrayList<>(refs.size());
+			for (String ref : refs) hashes.add(Assets.parseAssetID(ref));
+			return hashes;
+		});
 	}
 	
 	/**
@@ -838,8 +874,18 @@ public class VenueHTTP extends Venue {
 	 * @return Future containing the content as an AContent, or null if not found
 	 */
 	public CompletableFuture<AContent> getContent(String assetID) {
-		Hash id = Assets.parseAssetID(assetID);
-		return getContent(id);
+		HttpRequest req = referenceRequestBuilder("content", assetID)
+			.GET()
+			.build();
+
+		return dispatch(req, HttpResponse.BodyHandlers.ofByteArray()).thenApply(response -> {
+			int code=response.statusCode();
+			if (code != 200) {
+				throw new ResponseException("Content get failed with status: " + code
+					+ " -- asset reference: " + assetID);
+			}
+			return BlobContent.of(convex.core.data.Blob.wrap(response.body()));
+		});
 	}
 	
 	/**
@@ -875,7 +921,8 @@ public class VenueHTTP extends Venue {
 			int code=response.statusCode();
 			if (code != 200) {
 				throw new ResponseException("Venue content get failed with status: " +code
-					+" -- asset ID: "+assetID);
+					+" -- asset ID: "+assetID+" -- "
+					+new String(response.body(), java.nio.charset.StandardCharsets.UTF_8));
 			}
 			return BlobContent.of(convex.core.data.Blob.wrap(response.body()));
 		});
@@ -884,6 +931,11 @@ public class VenueHTTP extends Venue {
 	@Override
 	protected AContent getAssetContent(Hash assetID) {
 		return getContent(assetID).join();
+	}
+
+	@Override
+	protected AContent getAssetContent(String ref) {
+		return getContent(ref).join();
 	}
 
 	/**
@@ -1089,7 +1141,7 @@ public class VenueHTTP extends Venue {
 	@Override
 	public Asset resolveAsset(String ref) throws IOException {
 		if (ref==null) return null;
-		HttpRequest request=requestBuilder("assets/"+ref)
+		HttpRequest request=referenceRequestBuilder("assets", ref)
 				.GET()
 				.build();
 		try {
@@ -1097,6 +1149,7 @@ public class VenueHTTP extends Venue {
 			if (response.statusCode()!=200) return null;
 			Asset asset=Asset.forString(Strings.create(response.body()));
 			asset.setVenue(this);
+			asset.setReference(ref);
 			return asset;
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();

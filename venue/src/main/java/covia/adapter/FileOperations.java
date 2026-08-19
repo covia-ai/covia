@@ -48,6 +48,7 @@ final class FileOperations {
 	private static final AString FIELD_VALUE = Strings.intern("value");
 	private static final AString FIELD_BYTES = Strings.intern("bytes");
 	private static final AString FIELD_ASSET = Strings.intern("asset");
+	private static final AString FIELD_CONTENT_REF = Strings.intern("contentRef");
 	private static final AString FIELD_PARENTS = Strings.intern("parents");
 	private static final AString FIELD_RECURSIVE = Strings.intern("recursive");
 
@@ -242,22 +243,27 @@ final class FileOperations {
 		AString content = RT.ensureString(input.get(FIELD_CONTENT));
 		boolean hasValue = input.containsKey(FIELD_VALUE);
 		AString bytesB64 = RT.ensureString(input.get(FIELD_BYTES));
-		AString assetRef = RT.ensureString(input.get(FIELD_ASSET));
+		AString contentRef = RT.ensureString(input.get(FIELD_CONTENT_REF));
+		AString legacyAssetRef = RT.ensureString(input.get(FIELD_ASSET));
+		if (contentRef != null && legacyAssetRef != null && !contentRef.equals(legacyAssetRef)) {
+			throw new IllegalArgumentException("contentRef conflicts with legacy 'asset'");
+		}
+		if (contentRef == null) contentRef = legacyAssetRef;
 		int supplied = (content != null ? 1 : 0) + (hasValue ? 1 : 0)
-			+ (bytesB64 != null ? 1 : 0) + (assetRef != null ? 1 : 0);
+			+ (bytesB64 != null ? 1 : 0) + (contentRef != null ? 1 : 0);
 		if (supplied != 1) {
 			throw new IllegalArgumentException(supplied == 0
-				? "Exactly one of 'content' (UTF-8 text), 'value' (JSON), 'bytes' (base64), or 'asset' (reference) is required"
-				: "Only one of 'content', 'value', 'bytes', or 'asset' may be supplied");
+				? "Exactly one of 'content' (UTF-8 text), 'value' (JSON), 'bytes' (base64), or 'contentRef' is required"
+				: "Only one of 'content', 'value', 'bytes', or 'contentRef' may be supplied");
 		}
 
 		StandardOpenOption mode = append
 			? StandardOpenOption.APPEND : StandardOpenOption.TRUNCATE_EXISTING;
 		java.nio.file.OpenOption[] options = writeOptions(target, mode);
-		if (assetRef != null) {
+		if (contentRef != null) {
 			covia.venue.storage.ContentProvider.Resolved resolved =
-				engine.resolveContent(assetRef, assetCtx);
-			if (resolved == null) throw new IllegalArgumentException("No content at ref: " + assetRef);
+				engine.resolveContent(contentRef, assetCtx);
+			if (resolved == null) throw new IllegalArgumentException("No content at ref: " + contentRef);
 			try (InputStream is = resolved.content().getInputStream();
 				 OutputStream os = Files.newOutputStream(target, options)) {
 				return is.transferTo(os);

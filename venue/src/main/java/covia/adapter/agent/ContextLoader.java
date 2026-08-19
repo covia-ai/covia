@@ -28,7 +28,7 @@ import covia.venue.RequestContext;
  * <ul>
  *   <li>Literal text strings</li>
  *   <li>Workspace path references ({@code w/docs/rules})</li>
- *   <li>Asset references (hex hash, {@code /a/}, {@code /o/}, DID URL, registered name)</li>
+ *   <li>Content references (assets, file roots, DLFS paths, DID URLs)</li>
  *   <li>Job result references ({@code {"job": "0x..."}}</li>
  *   <li>Grid operation calls ({@code {"op": "v/ops/covia/read", "input": {...}}})</li>
  *   <li>Map entries with {@code ref}, {@code text}, {@code label}, {@code required} fields</li>
@@ -193,7 +193,7 @@ public class ContextLoader {
 			return resolveWorkspacePath(refStr, ctx);
 		}
 
-		// Try as asset reference (hash, /a/, /o/, DID URL, registered name)
+		// Try as a content/asset reference (hash, lattice path, file, DLFS, DID URL)
 		return resolveAssetContent(ref, ctx);
 	}
 
@@ -215,7 +215,8 @@ public class ContextLoader {
 	/**
 	 * Returns true if the string looks like an asset reference rather than literal text.
 	 *
-	 * <p>References include hex hashes, /a/ and /o/ paths, DID URLs, lattice
+	 * <p>References include hex hashes, /a/ and /o/ paths, DID URLs, file/DLFS
+	 * content references, lattice
 	 * namespace paths (w/, g/, j/, s/, h/, n/, t/, o/), and venue catalog
 	 * paths under /v/. Strings with spaces are treated as literal text.</p>
 	 */
@@ -223,6 +224,7 @@ public class ContextLoader {
 		if (ref == null || ref.isEmpty() || ref.contains(" ")) return false;
 		if (ref.startsWith("/a/") || ref.startsWith("/o/")) return true;
 		if (ref.startsWith("did:")) return true;
+		if (ref.startsWith("file:/") || ref.startsWith("dlfs/") || ref.startsWith("dlfs://")) return true;
 		if (ref.length() == 64 && ref.matches("[0-9a-fA-F]+")) return true; // hex hash
 		// Lattice namespace paths — leading slash optional (mirrors resolvePath).
 		// a/ is the bare asset-ref form (matches AssetAdapter.parseAssetId).
@@ -270,8 +272,9 @@ public class ContextLoader {
 		if (!isAssetReference(ref.toString())) return ref.toString();
 
 		try {
-			requireReadAccess(ref, ctx);
-			// 1. Content, via the universal resolution chain (UTF-8 decode).
+			// 1. Content, via the universal resolution chain (UTF-8 decode). The
+			// resolver owns the point-of-action check: provider refs use crud/read,
+			// while asset/lattice content uses asset/read.
 			covia.venue.storage.ContentProvider.Resolved resolved = engine.resolveContent(ref, ctx);
 			if (resolved != null && resolved.content() != null) {
 				ABlob blob = resolved.content().getBlob();

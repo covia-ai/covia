@@ -87,8 +87,11 @@ may otherwise be stored unencrypted at rest.
 
 `DLFSAdapter` is also a `ContentProvider`, so canonical DLFS file references can
 be used wherever Covia resolves content. Reads are lazy `PathContent`; writes
-stream directly. A caller-supplied `asset` reference in a cross-user write is
-resolved under the caller's authority, never the drive owner's authority.
+stream directly. This includes `GET /api/v1/content/<ref>`, `asset:content
+{ref}`, and every operation with a `contentRef` input. A caller-supplied
+`contentRef` in a cross-user write is resolved under the caller's authority,
+never the drive owner's authority. The historical `asset` input name remains
+an alias for compatibility.
 
 DLFS is not a replacement for immutable content-addressed assets and should not
 contain format-specific parsing logic. Those concerns belong to asset storage

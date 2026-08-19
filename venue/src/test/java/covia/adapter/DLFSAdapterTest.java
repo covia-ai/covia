@@ -11,7 +11,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -233,6 +237,77 @@ public class DLFSAdapterTest {
 			"but syncCount went from " + beforeSync + " to " + syncCount.get());
 	}
 
+	/** Regression for covia#387 / convex#703: a stale sync callback carrying a
+	 * tombstone must not erase a same-timestamp recreation from a long-lived
+	 * drive view. */
+	@Test
+	public void testRecreateSurvivesConcurrentStaleSync() throws Exception {
+		Engine isolated = Engine.createTemp(Maps.of(
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
+		CountDownLatch syncEntered = new CountDownLatch(1);
+		CountDownLatch releaseSync = new CountDownLatch(1);
+		AtomicBoolean blockNextSync = new AtomicBoolean();
+		AtomicReference<Throwable> syncFailure = new AtomicReference<>();
+		Thread syncThread = null;
+		try {
+			Engine.addDemoAssets(isolated);
+			DLFSAdapter adapter = (DLFSAdapter) isolated.getAdapter("dlfs");
+			Path file = adapter.getDriveForIdentity(
+				ALICE_DID.toString(), "recreate-under-sync").getPath("/entry.txt");
+
+			Files.writeString(file, "first");
+			Files.delete(file);
+
+			var root = isolated.getRootCursor();
+			assertInstanceOf(convex.lattice.cursor.RootLatticeCursor.class, root);
+			((convex.lattice.cursor.RootLatticeCursor<?>) root).onSync(value -> {
+				if (blockNextSync.compareAndSet(true, false)) {
+					syncEntered.countDown();
+					try {
+						if (!releaseSync.await(5, TimeUnit.SECONDS)) {
+							throw new IllegalStateException("Timed out waiting to release stale sync");
+						}
+					} catch (InterruptedException e) {
+						Thread.currentThread().interrupt();
+						throw new IllegalStateException(e);
+					}
+				}
+				return value;
+			});
+
+			blockNextSync.set(true);
+			syncThread = Thread.startVirtualThread(() -> {
+				try {
+					isolated.syncState();
+				} catch (Throwable t) {
+					syncFailure.set(t);
+				}
+			});
+			assertTrue(syncEntered.await(5, TimeUnit.SECONDS), "sync callback did not start");
+
+			Files.writeString(file, "second");
+			releaseSync.countDown();
+			syncThread.join(5000);
+			assertFalse(syncThread.isAlive(), "sync thread did not finish");
+			assertNull(syncFailure.get(), "sync failed");
+			assertEquals("second", Files.readString(file));
+		} finally {
+			releaseSync.countDown();
+			if (syncThread != null) syncThread.join(5000);
+			isolated.close();
+		}
+	}
+
+	@Test
+	public void testLongLivedDriveUsesCurrentVenueClock() throws Exception {
+		DLFSAdapter adapter = (DLFSAdapter) engine.getAdapter("dlfs");
+		var drive = adapter.getDriveForIdentity(ALICE_DID.toString(), "live-clock");
+		long before = drive.getCursor().getContext().currentTimestamp().longValue();
+		Thread.sleep(3);
+		long after = drive.getCursor().getContext().currentTimestamp().longValue();
+		assertTrue(after > before, "long-lived drive timestamp must advance with the venue clock");
+	}
+
 	@Test
 	public void testDriveNotFound() {
 		assertThrows(Exception.class, () ->
@@ -413,8 +488,10 @@ public class DLFSAdapterTest {
 		run("v/ops/dlfs/write", Maps.of("drive", "cp", "path", "pic.png",
 			"bytes", java.util.Base64.getEncoder().encodeToString(bytes)));
 
-		ACell r = run("v/ops/asset/content", Maps.of("id", "dlfs/cp/pic.png"));
+		ACell r = run("v/ops/asset/content", Maps.of("ref", "dlfs/cp/pic.png"));
 		assertEquals(convex.core.data.prim.CVMBool.TRUE, RT.getIn(r, "exists"));
+		assertEquals("dlfs/cp/pic.png", RT.getIn(r, "ref").toString());
+		assertEquals("image/png", RT.getIn(r, "contentType").toString());
 		var value = RT.getIn(r, "value");
 		assertTrue(value instanceof convex.core.data.ABlob, "content should be a Blob");
 		assertArrayEquals(bytes, ((convex.core.data.ABlob) value).getBytes());
@@ -445,7 +522,8 @@ public class DLFSAdapterTest {
 		run("v/ops/dlfs/create-drive", Maps.of("name", "src"));
 		run("v/ops/dlfs/create-drive", Maps.of("name", "dst"));
 		run("v/ops/dlfs/write", Maps.of("drive", "src", "path", "a.txt", "content", "across drives"));
-		run("v/ops/dlfs/write", Maps.of("drive", "dst", "path", "b.txt", "asset", "dlfs/src/a.txt"));
+		run("v/ops/dlfs/write", Maps.of(
+			"drive", "dst", "path", "b.txt", "contentRef", "dlfs/src/a.txt"));
 		ACell read = run("v/ops/dlfs/read", Maps.of("drive", "dst", "path", "b.txt"));
 		assertEquals("across drives", RT.getIn(read, "content").toString());
 	}

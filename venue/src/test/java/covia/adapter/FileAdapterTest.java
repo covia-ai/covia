@@ -166,6 +166,43 @@ public class FileAdapterTest {
 	}
 
 	@Test
+	public void testFileReferenceWorksAcrossResolverAndOperations() throws Exception {
+		run("v/ops/file/write", Maps.of(
+			"root", "work", "path", "content-ref-source.txt", "content", "shared bytes"));
+		AString ref = Strings.create("file://work/content-ref-source.txt");
+		RequestContext ctx = RequestContext.of(Strings.create(DID));
+
+		var resolved = engine.resolveContent(ref, ctx);
+		assertNotNull(resolved);
+		assertEquals("shared bytes", new String(resolved.content().getBlob().getBytes(),
+			java.nio.charset.StandardCharsets.UTF_8));
+		assertEquals("text/plain", resolved.contentType());
+
+		ACell content = run("v/ops/asset/content", Maps.of("ref", ref));
+		assertTrue(RT.bool(RT.getIn(content, "exists")));
+		assertEquals(ref, RT.getIn(content, "ref"));
+		assertEquals("text/plain", RT.getIn(content, "contentType").toString());
+		assertEquals("shared bytes", new String(
+			((convex.core.data.ABlob) RT.getIn(content, "value")).getBytes(),
+			java.nio.charset.StandardCharsets.UTF_8));
+
+		run("v/ops/file/write", Maps.of(
+			"root", "work", "path", "content-ref-copy.txt", "contentRef", ref));
+		assertEquals("shared bytes", Files.readString(workspace.resolve("content-ref-copy.txt")));
+	}
+
+	@Test
+	public void testEnginePutContentToFileReference() throws Exception {
+		byte[] bytes = "provider write".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+		boolean handled = engine.putContent(
+			Strings.create("file://work/provider-write.txt"),
+			new java.io.ByteArrayInputStream(bytes), "text/plain",
+			RequestContext.of(Strings.create(DID)));
+		assertTrue(handled);
+		assertEquals("provider write", Files.readString(workspace.resolve("provider-write.txt")));
+	}
+
+	@Test
 	public void testAppend() throws IOException {
 		run("v/ops/file/write", Maps.of("root", "work", "path", "log.txt", "content", "line1\n"));
 		ACell appended = run("v/ops/file/append", Maps.of(

@@ -133,13 +133,16 @@ public class Engine {
 	 * Map of named adapters that can handle different types of operations or resources
 	 */
 	protected final ConcurrentHashMap<String, AAdapter> adapters = new ConcurrentHashMap<>();
+	/** Active adapter precedence, oldest to newest. Later registrations win catalog paths. */
+	private final java.util.LinkedHashSet<String> adapterRegistrationOrder = new java.util.LinkedHashSet<>();
 
 	/**
 	 * Adapters that are registered but <em>disabled</em> — parked at boot by
 	 * {@code adapters.<name>.enabled: false} (or by declining
 	 * {@link AAdapter#configure}), or retracted at runtime via
-	 * {@link #disableAdapter}. Not dispatchable, absent from the catalog and
-	 * {@code v/info/adapters}; re-activated by {@link #enableAdapter}.
+	 * {@link #disableAdapter}. Not dispatchable and absent from
+	 * {@code v/info/adapters}; durable catalog metadata may remain and is
+	 * overwritten on a later registration.
 	 */
 	private final ConcurrentHashMap<String, AAdapter> disabledAdapters = new ConcurrentHashMap<>();
 
@@ -174,9 +177,10 @@ public class Engine {
 	private final java.util.concurrent.atomic.AtomicLong adapterRegistryVersion = new java.util.concurrent.atomic.AtomicLong();
 
 	/**
-	 * Adapters the venue itself dereferences by name (Engine, API surfaces,
-	 * server wiring, or other adapters via {@code getAdapter}). They can be
-	 * neither disabled nor removed — the venue does not function without them.
+	 * Adapters the venue itself commonly dereferences by name (Engine, API
+	 * surfaces, server wiring, or other adapters via {@code getAdapter}). This
+	 * marker is informational; venue-authorised configuration and module loads
+	 * may still replace, disable or remove them.
 	 */
 	public static final java.util.Set<String> KERNEL_ADAPTERS = java.util.Set.of(
 		"covia", "agent", "dlfs", "hitl", "http", "file", "grid", "venue");
@@ -928,9 +932,10 @@ public class Engine {
 	// An adapter is REGISTERED once (configure → install → active or parked),
 	// may be DISABLED / ENABLED any number of times (deregistered from
 	// dispatch, catalog and v/info, instance retained), RECONFIGURED while
-	// live, and REMOVED for good (module unload). Kernel adapters are exempt
-	// from everything but reconfiguration. Every mutation that touches the
-	// published catalog is one lattice transaction via the materialiser.
+	// live, and REMOVED for good (module unload). The kernel marker is
+	// informational; venue-authorised lifecycle operations remain decisive.
+	// Every mutation that touches published introspection or catalog metadata
+	// is one lattice transaction via the materialiser.
 
 	/**
 	 * Register an adapter: applies its effective configuration
@@ -942,43 +947,68 @@ public class Engine {
 	 * immediately.
 	 *
 	 * @param adapter The adapter instance to register
-	 * @throws IllegalStateException if an adapter of that name is already registered
 	 */
 	public synchronized void registerAdapter(AAdapter adapter) {
 		String name = adapter.getName();
-		if (adapters.containsKey(name) || disabledAdapters.containsKey(name)) {
-			throw new IllegalStateException("Trying to install same adapter twice: "+name);
-		}
+		AAdapter previous = adapters.get(name);
+		if (previous == null) previous = disabledAdapters.get(name);
 		AMap<AString, ACell> cfg = adapterConfig(name);
 		if (CVMBool.FALSE.equals(cfg.get(Config.ENABLED))) {
-			if (isKernelAdapter(name)) {
-				throw new IllegalStateException("Kernel adapter '" + name
-					+ "' cannot be disabled (adapters." + name + ".enabled)");
+			if (previous != null && adapters.get(name) == previous && catalogPublished) {
+				VenueBootstrapMaterializer.dematerialiseAdapter(this, previous);
 			}
+			adapters.remove(name);
+			adapterRegistrationOrder.remove(name);
 			disabledAdapters.put(name, adapter);
+			if (previous != null) adapterRegistryVersion.incrementAndGet();
+			closeReplacedAdapter(previous);
 			log.info("Adapter '{}' is disabled by configuration", name);
 			return;
 		}
 		if (!adapter.configure(cfg, config.isStrictConfig())) {
-			if (isKernelAdapter(name)) {
-				throw new IllegalStateException("Kernel adapter '" + name + "' declined its configuration");
+			if (previous != null && adapters.get(name) == previous && catalogPublished) {
+				VenueBootstrapMaterializer.dematerialiseAdapter(this, previous);
 			}
+			adapters.remove(name);
+			adapterRegistrationOrder.remove(name);
 			disabledAdapters.put(name, adapter);
+			if (previous != null) adapterRegistryVersion.incrementAndGet();
+			closeReplacedAdapter(previous);
 			log.info("Adapter '{}' declined its configuration and is disabled", name);
 			return;
 		}
-		activate(adapter);
+		activate(adapter, previous);
 	}
 
 	/** Install (once) and publish an adapter. Caller holds the engine monitor. */
-	private void activate(AAdapter adapter) {
+	private void activate(AAdapter adapter, AAdapter previous) {
 		String name = adapter.getName();
 		if (adapter.engine == null) adapter.install(this);
-		if (catalogPublished) VenueBootstrapMaterializer.materialiseAdapter(this, adapter);
+		if (catalogPublished) {
+			if (previous == null) {
+				VenueBootstrapMaterializer.materialiseAdapter(this, adapter);
+			} else {
+				VenueBootstrapMaterializer.replaceAdapter(this, previous, adapter);
+			}
+		}
 		adapters.put(name, adapter);
+		disabledAdapters.remove(name);
+		adapterRegistrationOrder.remove(name);
+		adapterRegistrationOrder.add(name);
 		adapterRegistryVersion.incrementAndGet();
+		closeReplacedAdapter(previous);
 		log.info("Registered adapter: {} ({} primitives)", name,
 			adapter.pendingCatalogEntries.size());
+	}
+
+	private void closeReplacedAdapter(AAdapter previous) {
+		if (previous == null) return;
+		if (!(previous instanceof AutoCloseable closeable)) return;
+		try {
+			closeable.close();
+		} catch (Exception e) {
+			log.warn("Failed to close replaced adapter {}", previous.getName(), e);
+		}
 	}
 
 	/**
@@ -991,8 +1021,8 @@ public class Engine {
 	}
 
 	/**
-	 * Disable an active adapter: retract its catalog paths and
-	 * {@code v/info/adapters/<name>}, and stop dispatching to it. The instance
+	 * Disable an active adapter: retract its {@code v/info/adapters/<name>}
+	 * record and stop dispatching to it. Durable catalog metadata remains. The instance
 	 * is retained (not closed) so {@link #enableAdapter} restores it exactly.
 	 * In-flight jobs keep their adapter reference and finish; anything that
 	 * re-resolves the adapter by name (multi-turn messages, recovery) fails at
@@ -1001,12 +1031,9 @@ public class Engine {
 	 * @param name Adapter name
 	 * @return true if the adapter was active and is now disabled; false if it
 	 *         was already disabled
-	 * @throws IllegalArgumentException if the adapter is unknown or a kernel adapter
+	 * @throws IllegalArgumentException if the adapter is unknown
 	 */
 	public synchronized boolean disableAdapter(String name) {
-		if (isKernelAdapter(name)) {
-			throw new IllegalArgumentException("Kernel adapter '" + name + "' cannot be disabled");
-		}
 		AAdapter adapter = adapters.get(name);
 		if (adapter == null) {
 			if (disabledAdapters.containsKey(name)) return false;
@@ -1014,6 +1041,7 @@ public class Engine {
 		}
 		if (catalogPublished) VenueBootstrapMaterializer.dematerialiseAdapter(this, adapter);
 		adapters.remove(name);
+		adapterRegistrationOrder.remove(name);
 		disabledAdapters.put(name, adapter);
 		adapterRegistryVersion.incrementAndGet();
 		log.info("Disabled adapter: {}", name);
@@ -1021,15 +1049,14 @@ public class Engine {
 	}
 
 	/**
-	 * Enable a disabled adapter: install it if it never was, publish its
-	 * catalog paths and {@code v/info/adapters/<name>}, and resume dispatch.
+	 * Enable a disabled adapter: install it if it never was, overwrite its
+	 * catalog paths, publish {@code v/info/adapters/<name>}, and resume dispatch.
 	 *
 	 * @param name Adapter name
 	 * @return true if the adapter was disabled and is now active; false if it
 	 *         was already active
 	 * @throws IllegalArgumentException if the adapter is unknown
 	 * @throws IllegalStateException if the adapter declines its configuration
-	 *         or a catalog path it declares is occupied
 	 */
 	public synchronized boolean enableAdapter(String name) {
 		AAdapter adapter = disabledAdapters.get(name);
@@ -1040,7 +1067,7 @@ public class Engine {
 		if (adapter.engine == null && !adapter.configure(adapterConfig(name), config.isStrictConfig())) {
 			throw new IllegalStateException("Adapter '" + name + "' declined its configuration");
 		}
-		activate(adapter);
+		activate(adapter, null);
 		disabledAdapters.remove(name);
 		return true;
 	}
@@ -1097,6 +1124,12 @@ public class Engine {
 		return adapters.get(name);
 	}
 
+	/** Active or parked adapter, for module lifecycle bookkeeping. */
+	synchronized AAdapter getRegisteredAdapter(String name) {
+		AAdapter adapter = adapters.get(name);
+		return (adapter != null) ? adapter : disabledAdapters.get(name);
+	}
+
 	/**
 	 * Check if an active adapter with the given name exists
 	 * @param name The name of the adapter to check
@@ -1107,22 +1140,19 @@ public class Engine {
 	}
 
 	/**
-	 * Remove an adapter for good (active or disabled): retract its catalog
-	 * and introspection entries, close it if {@link AutoCloseable}, and forget
-	 * it. Used by module unload; kernel adapters cannot be removed.
+	 * Remove an adapter for good (active or disabled): retract its live
+	 * introspection, close it if {@link AutoCloseable}, and forget it. Canonical
+	 * catalog metadata remains until overwritten or explicitly deleted.
 	 *
 	 * @param name The name of the adapter to remove
 	 * @return The removed adapter, or null if not found
-	 * @throws IllegalArgumentException if the adapter is a kernel adapter
 	 */
 	public synchronized AAdapter removeAdapter(String name) {
-		if (isKernelAdapter(name)) {
-			throw new IllegalArgumentException("Kernel adapter '" + name + "' cannot be removed");
-		}
 		AAdapter removed = adapters.get(name);
 		if (removed != null) {
 			if (catalogPublished) VenueBootstrapMaterializer.dematerialiseAdapter(this, removed);
 			adapters.remove(name);
+			adapterRegistrationOrder.remove(name);
 			adapterRegistryVersion.incrementAndGet();
 		} else {
 			removed = disabledAdapters.remove(name);
@@ -1148,6 +1178,11 @@ public class Engine {
 		return adapters.keySet();
 	}
 
+	/** Active adapters in operator precedence order, oldest to newest. */
+	public synchronized java.util.List<String> getAdapterNamesInRegistrationOrder() {
+		return java.util.List.copyOf(adapterRegistrationOrder);
+	}
+
 	/**
 	 * Get the names of registered adapters that are currently disabled.
 	 * @return Set of disabled adapter names
@@ -1160,13 +1195,15 @@ public class Engine {
 
 	/** Records a loaded module; publishes its {@code v/info/modules} entry once the catalog exists. */
 	synchronized void addModule(Modules.LoadedModule module) {
+		modules.remove(module.name());
 		modules.put(module.name(), module);
 		if (catalogPublished) VenueBootstrapMaterializer.materialiseModule(this, module);
 	}
 
 	/** Forgets a module and retracts its {@code v/info/modules} entry. */
 	synchronized void dropModule(Modules.LoadedModule module) {
-		if (modules.remove(module.name()) == null) return;
+		if (modules.get(module.name()) != module) return;
+		modules.remove(module.name());
 		if (catalogPublished) VenueBootstrapMaterializer.dematerialiseModule(this, module.name());
 	}
 
@@ -1182,7 +1219,9 @@ public class Engine {
 
 	/** The module that registered the named adapter, or null for a built-in. */
 	public synchronized Modules.LoadedModule moduleOf(String adapterName) {
-		for (Modules.LoadedModule module : modules.values()) {
+		java.util.ArrayList<Modules.LoadedModule> loaded = new java.util.ArrayList<>(modules.values());
+		for (int i = loaded.size() - 1; i >= 0; i--) {
+			Modules.LoadedModule module = loaded.get(i);
 			if (module.adapterNames().contains(adapterName)) return module;
 		}
 		return null;
@@ -1340,7 +1379,6 @@ public class Engine {
 
 	/** Namespace prefix for immutable content-addressed assets (leading slash optional: a/ or /a/) */
 	private static final AString NS_ASSET = Strings.intern("a/");
-	private static final AString NS_OPS   = Strings.intern("/o/");
 	/** Namespace prefix for DID URLs */
 	private static final AString NS_DID   = Strings.intern("did:");
 	/** Optional leading-slash sugar, stripped before virtual/workspace resolution */
@@ -1385,39 +1423,33 @@ public class Engine {
 		}
 
 		// 2. a/<hash> or /a/<hash> → look up in CAS (leading slash optional)
-		AString assetRef = stripLeadingSlash(ref);
-		if (assetRef.startsWith(NS_ASSET)) {
-			Hash ah = Hash.parse(assetRef.slice(2));
+		AString localRef = stripLeadingSlash(ref);
+		if (localRef.startsWith(NS_ASSET)) {
+			Hash ah = Hash.parse(localRef.slice(2));
 			if (ah == null) return null;
 			Asset asset = getAsset(ah, ctx);
 			return (asset != null) ? asset.meta() : null;
 		}
 
-		// 3. /o/<name> → caller's own /o/, return literal value
-		if (ref.startsWith(NS_OPS)) {
-			return readUserOpValue(ref.slice(3), ctx);
-		}
-
-		// 4. DID URL — local cases only; remote is handled by resolveAsset
+		// 3. DID URL — local cases only; remote is handled by resolveAsset
 		if (ref.startsWith(NS_DID)) {
-			Asset local = resolveLocalDIDURL(ref);
+			Asset local = resolveLocalDIDURL(ref, ctx);
 			return (local != null) ? local.meta() : null;
 		}
 
-		// Steps 5–6 cover the virtual and workspace namespaces, where a
-		// leading slash is optional sugar (it is already accepted for /a/ and
-		// /o/ above). Normalise it away once so "/w/notes" resolves exactly
+		// Steps 4–5 cover the virtual and workspace namespaces, where a
+		// leading slash is optional sugar. Normalise it away once so "/w/notes" resolves exactly
 		// like "w/notes" and "/v/ops/x" like "v/ops/x".
-		AString navRef = stripLeadingSlash(ref);
+		AString navRef = localRef;
 
-		// 5. Virtual namespace prefix (n/, v/, ...) — delegate to the
+		// 4. Virtual namespace prefix (n/, v/, ...) — delegate to the
 		// registered resolver via CoviaAdapter. Handles cursor-based
 		// virtual namespaces uniformly. (t/ — job-scoped temp — is not
 		// handled here; covia:read has its own t/ branch.)
 		ACell virtualValue = resolveVirtualNamespace(navRef, ctx);
 		if (virtualValue != null) return virtualValue;
 
-		// 6. Workspace path (w/, g/, o/, j/, s/, h/) → caller's lattice
+		// 5. Workspace path (w/, g/, o/, j/, s/, h/) → caller's lattice
 		if (isUserNamespacePath(navRef)) {
 			return readWorkspacePathValue(navRef, ctx);
 		}
@@ -1516,22 +1548,6 @@ public class Engine {
 	}
 
 	/**
-	 * Reads the literal value at the caller's {@code /o/<name>} namespace.
-	 * Returns whatever's stored — a map, string, vector, or null if absent.
-	 * No interpretation, no asset wrapping, no reference chasing.
-	 */
-	private ACell readUserOpValue(AString name, RequestContext ctx) {
-		if (ctx == null || ctx.getUserDID() == null) return null;
-		Users users = venueState.users();
-		User user = users.get(ctx.getUserDID());
-		if (user == null) return null;
-		// Pre-split keys: the name is a single literal /o/ key (it may
-		// contain slashes). readPath handles the namespace wrapper.
-		return covia.adapter.CoviaAdapter.readPath(user.cursor(),
-			new ACell[] { Strings.create("o"), name });
-	}
-
-	/**
 	 * Reads the literal value at a workspace path through the caller's
 	 * lattice cursor. Returns whatever's there, with no interpretation.
 	 */
@@ -1557,10 +1573,25 @@ public class Engine {
 	 * Remote definition FETCH happens only on the invocation path, via
 	 * {@link #resolveAsset} → {@link #resolveDIDURL}.
 	 */
-	private Asset resolveLocalDIDURL(AString ref) {
+	private Asset resolveLocalDIDURL(AString ref, RequestContext ctx) {
 		AssetRef r = parseAssetRef(ref);
-		// Named refs have no local copy (bindings are publisher-scoped).
-		return (r == null || r.hash() == null) ? null : lookupLocalAsset(r);
+		if (r == null) return null;
+		if (r.hash() != null) return lookupLocalAsset(r);
+
+		// A fully-qualified name owned by this venue is the same local binding as
+		// its relative v/... form. Previously all named DID refs were treated as
+		// remote, which made did:key:<this-venue>/v/... impossible to resolve and
+		// made a did:web self-reference perform an unnecessary network fetch.
+		if (!isVenueIdentity(r.didString())) return null;
+		ACell value = resolvePath(Strings.create(r.name()), ctx);
+		return (value instanceof AMap) ? Asset.fromMeta(value) : null;
+	}
+
+	/** Whether a DID names this venue, including its discoverable did:web alias. */
+	private boolean isVenueIdentity(String did) {
+		if (getDIDString().toString().equals(did)) return true;
+		AString web = config.getWebDID();
+		return web != null && web.toString().equals(did);
 	}
 
 	/**
@@ -2024,6 +2055,27 @@ public class Engine {
 		covia.venue.storage.ContentProvider.Resolved provided = providerContent(ref, ctx);
 		if (provided != null) return provided;
 
+		// Everything below is asset/lattice content. Providers above own their
+		// namespace and enforce the native ability for it (for example crud/read on
+		// file:// and dlfs/); imposing asset/read on those references would make the
+		// same file behave differently through the content API and its native op.
+		requireResourceAccess(ctx, ref, Abilities.ASSET_READ);
+
+		// An explicit remote DID URL is a fetch address, just as it is for asset
+		// metadata. Keep the fetch transient: asset:pin remains the operation that
+		// adopts metadata + bytes into the caller's local CAS. did:key references
+		// with no locally held owner cannot be fetched and resolve as absent.
+		if (ref.startsWith(NS_DID) && !isLocalDIDResource(ref)) {
+			Asset remoteAsset = resolveDIDURL(ref, ctx);
+			if (remoteAsset == null) return null;
+			ACell remoteContent = fetchRemoteContent(ref);
+			if (remoteContent instanceof convex.core.data.ABlob b) {
+				return new covia.venue.storage.ContentProvider.Resolved(
+					covia.grid.impl.BlobContent.of(b), declaredContentType(remoteAsset.meta()));
+			}
+			return null;
+		}
+
 		// Content-addressed store: locate the CAS record. Hash-form refs name it
 		// directly; other refs resolve first (a lattice slot may hold a reference
 		// string — followed one hop — asset metadata, or a raw blob). A metadata
@@ -2033,13 +2085,17 @@ public class Engine {
 		ACell meta = null;
 		Hash hash = covia.adapter.AssetAdapter.parseAssetId(ref);
 		if (hash != null) {
-			record = getAssetRecord(hash, ctx);
+			AString owner = requireLocalAccess(ctx, ref, Abilities.ASSET_READ);
+			record = getAssetRecord(hash, owner);
 			if (record != null) meta = record.get(AssetStore.POS_META);
 		} else {
 			ACell value = resolvePath(ref, ctx);
 			if (value instanceof AString s) {
 				Hash hop = covia.adapter.AssetAdapter.parseAssetId(s);
-				if (hop != null) record = getAssetRecord(hop, ctx);
+				if (hop != null) {
+					AString owner = requireLocalAccess(ctx, s, Abilities.ASSET_READ);
+					record = getAssetRecord(hop, owner);
+				}
 				if (record != null) meta = record.get(AssetStore.POS_META);
 			} else if (value instanceof AMap) {
 				RequestContext recordContext = isVenuePath(ref) ? venueContext() : ctx;
@@ -2051,12 +2107,12 @@ public class Engine {
 			}
 		}
 		if (meta == null) return null;
-		AString ct = RT.ensureString(RT.getIn(meta, Fields.CONTENT_TYPE));
+		String contentType = declaredContentType(meta);
 		if (record != null) {
 			ACell content = record.get(AssetStore.POS_CONTENT);
 			if (content instanceof convex.core.data.ABlob b) {
 				return new covia.venue.storage.ContentProvider.Resolved(
-					covia.grid.impl.BlobContent.of(b), (ct != null) ? ct.toString() : null);
+					covia.grid.impl.BlobContent.of(b), contentType);
 			}
 		}
 
@@ -2071,7 +2127,7 @@ public class Engine {
 		AContent metaContent = contentFromMeta(metaMap);
 		if (metaContent != null) {
 			return new covia.venue.storage.ContentProvider.Resolved(
-				metaContent, (ct != null) ? ct.toString() : null);
+				metaContent, contentType);
 		}
 
 		// Metadata-declared alternative storage: content.dlfs names a drive path.
@@ -2088,7 +2144,7 @@ public class Engine {
 				throw new IllegalArgumentException(
 					"Asset declares content at '" + altPath + "' but no storage mechanism resolves it");
 			}
-			String type = (ct != null) ? ct.toString() : r.contentType();
+			String type = (contentType != null) ? contentType : r.contentType();
 			AString declaredSha = RT.ensureString(RT.getIn(meta, Fields.CONTENT, Fields.SHA256));
 			if (declaredSha != null) {
 				convex.core.data.ABlob bytes = r.content().getBlob();
@@ -2105,6 +2161,15 @@ public class Engine {
 			return new covia.venue.storage.ContentProvider.Resolved(r.content(), type);
 		}
 		return null;
+	}
+
+	/** Declared MIME type: content.contentType is canonical; the historical
+	 * top-level contentType remains a compatibility fallback. */
+	private static String declaredContentType(ACell meta) {
+		AString nested = RT.ensureString(RT.getIn(meta, Fields.CONTENT, Fields.CONTENT_TYPE));
+		if (nested != null) return nested.toString();
+		AString legacy = RT.ensureString(RT.getIn(meta, Fields.CONTENT_TYPE));
+		return (legacy != null) ? legacy.toString() : null;
 	}
 
 	private static boolean isVenuePath(AString ref) {
@@ -2697,7 +2762,14 @@ public class Engine {
 	 *  venue's own DID; bare hashes and another user's {@code /a/} are private. */
 	private boolean isVenueCatalogRead(AString resource, AString ability) {
 		if (!Capability.CRUD_READ.equals(ability) && !Abilities.ASSET_READ.equals(ability)) return false;
-		return resource.toString().startsWith(getDIDString().toString() + "/a/");
+		String value = resource.toString();
+		if (isVenueReference(value, getDIDString().toString())) return true;
+		AString web = config.getWebDID();
+		return web != null && isVenueReference(value, web.toString());
+	}
+
+	private static boolean isVenueReference(String resource, String did) {
+		return resource.startsWith(did + "/a/") || resource.startsWith(did + "/v/");
 	}
 
 	/**

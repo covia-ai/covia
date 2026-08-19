@@ -8,6 +8,23 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- General asset-reference resolution across HTTP and the Java client. The
+  canonical `assets/<ref>` metadata and `content/<ref>` byte endpoints accept
+  hashes, `a/`, `v/`, `w/`, `o/`, leading-slash forms, and DID URLs. Venue asset listings return
+  owner-qualified references that round-trip without changing namespace.
+
+### Fixed
+
+- Fixed #387: long-lived DLFS views now use the venue's current write clock per
+  mutation instead of freezing their timestamp at connect time. Convex
+  0.8.14-SNAPSHOT also preserves the current side of equal-timestamp
+  live/tombstone merges, preventing stale sync callbacks from erasing a
+  recreated path.
+
+- Venue-authorised adapter and module loads are last-write-wins: reloading a module replaces existing adapter names and catalog declarations instead of failing on occupied paths. Disable/unload removes live dispatch and introspection while leaving durable catalog metadata available for later replacement or explicit operator deletion (#386).
+
 ## [0.9.2] - 2026-08-17
 
 ### Added

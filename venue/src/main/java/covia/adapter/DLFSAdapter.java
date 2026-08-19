@@ -27,7 +27,6 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
-import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.lattice.LatticeContext;
 import convex.lattice.cursor.ALatticeCursor;
@@ -203,19 +202,17 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	 * Gets the DLFS cursor for a user's signed region in the :dlfs lattice.
 	 * Navigates root → :dlfs → OwnerLattice(AccountKey) → :value (signed drives map).
 	 *
-	 * <p>The returned cursor carries a {@link LatticeContext} with the caller's
-	 * DLFS signing key and a wall-clock timestamp. The timestamp is propagated
-	 * to all DLFS node writes via {@code DLFSLocal.getTimestamp()} and used as
-	 * the merge timestamp where applicable.</p>
+	 * <p>The returned cursor carries only the caller's DLFS signing key. Its
+	 * timestamp remains live; connected drive views obtain the venue's current
+	 * write timestamp for every mutation.</p>
 	 */
 	private ALatticeCursor<?> getUserDLFSCursor(AKeyPair dlfsKey) {
 		ALatticeCursor<Index<Keyword, ACell>> rootCursor = engine.getRootCursor();
 		ALatticeCursor<?> dlfsCursor = rootCursor.path(Covia.DLFS);
 
-		// Deliberate LOCAL override on this per-request view: DLFS writes sign
-		// with the USER's drive key, not the venue key the root context carries.
-		LatticeContext lctx = LatticeContext.create(
-			CVMLong.create(System.currentTimeMillis()), dlfsKey);
+		// Local signing-key override only. A fixed timestamp here would freeze
+		// every long-lived WebDAV/embedder view at its connection time (#387).
+		LatticeContext lctx = LatticeContext.create(null, dlfsKey);
 		dlfsCursor.setContext(lctx);
 
 		AccountKey ak = dlfsKey.getAccountKey();
@@ -232,8 +229,8 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 
 	/**
 	 * Connects a DLFS drive view for the caller. Cheap — just a cursor view, no
-	 * caching. A fresh {@link DLFSLocal} per request keeps the per-request
-	 * {@link LatticeContext} (timestamp, signing key) isolated.
+	 * caching. The view keeps the caller's signing key isolated while reading
+	 * the shared venue write clock for every mutation.
 	 *
 	 * <p>Public so other adapters (e.g. {@code FileAdapter} routing a
 	 * {@code dlfs}-backed root) can obtain the same drive view the DLFS
@@ -246,6 +243,9 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		}
 		AKeyPair dlfsKey = ensureUserKeyPair(ctx);
 		ALatticeCursor<?> userCursor = getUserDLFSCursor(dlfsKey);
+		// Convex 0.8.14 resolves each DLFS mutation timestamp through the cursor's
+		// live LatticeContext. The null timestamp installed above therefore uses
+		// the latest canonical runtime timestamp on every write (#387).
 		return DLFS.connect(userCursor, Strings.create(driveName));
 	}
 

@@ -117,7 +117,7 @@ Base path: `/api/v1/`
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/status` | GET | Venue status and health |
-| `/assets/{ref}` | GET | Asset metadata for any ref form; `/assets/content/{ref}` GET returns content for any ref (#368); `/assets` POST registers; `/{id}/content` GET/PUT (hash-only, deprecated GET) |
+| `/assets/{ref}` | GET | Asset metadata for any ref form; `/content/{ref}` GET returns content (#368); `/assets` POST registers; `/assets/{id}/content` GET/PUT (hash-only, deprecated GET) |
 | `/invoke` | POST | Execute an operation — async by default (201 + job record); `?wait=true` blocks up to the 120s cap, `?wait=<ms>` up to that many ms |
 | `/values/{read,list,slice,inspect,aggregate,count}` | GET | Job-free lattice reads (#177) — synchronous, capability-checked, no job persisted. See `docs/READ_API.md` |
 | `/agents`, `/agents/{id}` | GET | Job-free agent listings (#180, #233) |

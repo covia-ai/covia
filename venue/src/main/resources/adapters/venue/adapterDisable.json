@@ -1,6 +1,6 @@
 {
   "name": "Disable adapter",
-  "description": "Disables an active adapter on the running venue: retracts its catalog operations and v/info/adapters entry and stops dispatch. Kernel adapters (covia, agent, dlfs, hitl, http, file, grid, venue) cannot be disabled. In-flight jobs finish on the retained instance. Idempotent; not persisted across restarts. Venue-owned: requires adapter/manage on <venue DID>/adapters.",
+  "description": "Disables an active adapter on the running venue: removes its v/info/adapters entry and stops dispatch while leaving durable catalog metadata in place. The kernel marker is informational and does not restrict venue authority. In-flight jobs finish on the retained instance. Idempotent; not persisted across restarts. Venue-owned: requires adapter/manage on <venue DID>/adapters.",
   "operation": {
     "adapter": "venue:adapter-disable",
     "input": {

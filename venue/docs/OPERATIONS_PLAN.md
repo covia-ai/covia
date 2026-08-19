@@ -75,16 +75,16 @@ No recursion. No `MAX_RESOLVE_DEPTH`. If a `/o/<name>` entry isn't a map with an
 
 The existing `asset:pin` op (`venue/src/main/java/covia/adapter/AssetAdapter.java`) currently takes a `source` arg that copies an existing asset by hash into the user's `/a/`. Generalise it to accept any resolvable address:
 
-- **`asset:pin path=<any resolvable address>`** — resolves the source value via `Engine.resolvePath`, computes its CAD3 hash, writes to caller's `/a/<hash>`, returns `{ hash: "<hex>" }`. Idempotent — same value re-pinned produces the same hash. Activates per-user `/a/` (currently marked "future" in `Namespace.java:31`).
+- **`asset:pin ref=<any resolvable address>`** — resolves the source value via `Engine.resolvePath`, computes its CAD3 hash, writes to caller's `/a/<hash>`, and returns `{ref, id}` (with historical `{path, hash}` aliases). Idempotent — same value re-pinned produces the same hash. Activates per-user `/a/` (currently marked "future" in `Namespace.java:31`).
 
 The generalisation widens the input from "an existing asset reference" to "any resolvable lattice address". The internal storage (writes to caller's `/a/`) and return shape (a hash) are unchanged.
 
-The `source` arg is renamed to `path` for consistency with other read-side ops; the old name stays as a deprecated alias for one cycle.
+The canonical argument is now `ref`; `path` and `id` remain deprecated compatibility aliases.
 
 ### `asset:get` and `asset:content` generalisation
 
-- **`asset:get id=<any resolvable address>`** — currently takes a hex hash. Generalise to accept any resolvable address by delegating to `Engine.resolvePath`. The semantic ("get the metadata for an asset") is preserved; the input is widened.
-- **`asset:content id=<any resolvable address>`** — same generalisation. The op then checks that the resolved value has a content payload and returns it.
+- **`asset:get ref=<any resolvable address>`** — accepts any metadata address by delegating to `Engine.resolvePath`; `id` remains an alias.
+- **`asset:content ref=<any content reference>`** — delegates to `Engine.resolveContent`, which additionally accepts file and DLFS provider references; `id` remains an alias.
 
 These are backwards-compatible (hex hashes continue to work) and additive (paths and DID URLs newly work).
 

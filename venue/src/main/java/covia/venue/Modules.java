@@ -52,9 +52,9 @@ import covia.adapter.AAdapter;
  * on a live venue. In-process code is total compromise, so the policy is
  * operator-owned: by default a runtime load may only name a jar inside the
  * staging directory {@code dynamicModules.dir} (relative name, no {@code ..},
- * no symlink escape); {@code dynamicModules.anyPath} widens that to any
- * filesystem path. Unload deregisters the module's adapters (catalog +
- * introspection retracted, {@link AutoCloseable} adapters closed) and closes
+	 * no symlink escape); {@code dynamicModules.anyPath} widens that to any
+	 * filesystem path. Unload deregisters the module's adapters (live
+	 * introspection retracted, {@link AutoCloseable} adapters closed) and closes
  * the classloader — but JVM class unloading is best-effort (JDBC
  * {@code DriverManager}, JNI, lingering job references can pin a loader), so
  * "unload" means <em>deregistered and released</em>, not <em>guaranteed
@@ -152,9 +152,7 @@ public class Modules {
 		if (config == null) config = Maps.empty();
 
 		String name = moduleName(jarPath);
-		if (engine.getModule(name) != null) {
-			throw new IllegalStateException("Module already loaded: " + name);
-		}
+		LoadedModule previous = engine.getModule(name);
 
 		ModuleClassLoader loader;
 		try {
@@ -192,9 +190,20 @@ public class Modules {
 				registered.add(adapter.getName());
 				log.info("Loaded adapter '{}' from module {}", adapter.getName(), jar.getName());
 			}
+			if (previous != null) {
+				for (String oldName : previous.adapterNames()) {
+					if (names.contains(oldName)) continue;
+					AAdapter old = engine.getRegisteredAdapter(oldName);
+					if (old != null && old.getClass().getClassLoader() == previous.loader()) {
+						engine.removeAdapter(oldName);
+					}
+				}
+				closeQuietly(previous.loader(), null);
+			}
 			return module;
 		} catch (RuntimeException | Error e) {
-			// Roll back: nothing from a failed module stays registered.
+			// Remove live registrations from the failed load. Catalog metadata is
+			// durable venue state and deliberately remains.
 			for (String adapterName : registered) {
 				try {
 					engine.removeAdapter(adapterName);
@@ -209,6 +218,19 @@ public class Modules {
 					e.addSuppressed(suppressed);
 				}
 			}
+			if (previous != null && module != null) {
+				for (String oldName : previous.adapterNames()) {
+					AAdapter old = engine.getRegisteredAdapter(oldName);
+					if (old != null && old.getClass().getClassLoader() == previous.loader()) {
+						try {
+							engine.removeAdapter(oldName);
+						} catch (Exception suppressed) {
+							e.addSuppressed(suppressed);
+						}
+					}
+				}
+				closeQuietly(previous.loader(), e);
+			}
 			closeQuietly(loader, e);
 			if (e instanceof IllegalStateException ise) throw ise;
 			throw new IllegalStateException("Failed to load module: " + jarPath, e);
@@ -216,8 +238,8 @@ public class Modules {
 	}
 
 	/**
-	 * Unloads a module: removes every adapter it registered (catalog and
-	 * introspection retracted, {@link AutoCloseable} adapters closed),
+	 * Unloads a module: removes every adapter it registered (live introspection
+	 * retracted, durable catalog metadata retained, {@link AutoCloseable} adapters closed),
 	 * retracts its {@code v/info/modules} entry, closes its classloader and
 	 * forgets it. In-flight jobs on its adapters fail at their next point of
 	 * use; class unloading itself is best-effort (see class doc).
@@ -231,7 +253,7 @@ public class Modules {
 		LoadedModule module = engine.getModule(name);
 		if (module == null) throw new IllegalArgumentException("Module not loaded: " + name);
 		for (String adapterName : module.adapterNames()) {
-			engine.removeAdapter(adapterName);
+			if (engine.moduleOf(adapterName) == module) engine.removeAdapter(adapterName);
 		}
 		engine.dropModule(module);
 		try {
@@ -321,7 +343,8 @@ public class Modules {
 		try {
 			loader.close();
 		} catch (IOException e) {
-			primary.addSuppressed(e);
+			if (primary != null) primary.addSuppressed(e);
+			else log.warn("Failed to close replaced module classloader", e);
 		}
 	}
 }

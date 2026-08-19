@@ -252,18 +252,20 @@ public class ClientTest {
 	}
 	
 	@Test
-	public void testInvalidAssetId() {
-		// Test with invalid asset ID
-		assertThrows(IllegalArgumentException.class, () -> {
-			client.getMeta("invalid-asset-id");
-		});
+	public void testUnresolvedAssetReference() throws InterruptedException, ExecutionException, TimeoutException {
+		// Arbitrary strings are valid references for the general resolver. An unknown
+		// reference is reported by the venue, not rejected by the client as a bad hash.
+		String meta = client.getMeta("invalid-asset-id").get(5, TimeUnit.SECONDS);
+		assertEquals(null, meta);
 		
+		// Adding content remains a content-addressed, hash-specific operation.
 		assertThrows(IllegalArgumentException.class, () -> {
 			client.addContent("invalid-asset-id", BlobContent.of(Blob.EMPTY));
 		});
 		
-		assertThrows(IllegalArgumentException.class, () -> {
-			client.getContent("invalid-asset-id");
+		CompletableFuture<AContent> contentFuture = client.getContent("invalid-asset-id");
+		assertThrows(ExecutionException.class, () -> {
+			contentFuture.get(5, TimeUnit.SECONDS);
 		});
 	}
 	

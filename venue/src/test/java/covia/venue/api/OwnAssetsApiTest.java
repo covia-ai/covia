@@ -98,6 +98,16 @@ public class OwnAssetsApiTest {
 		assertNotNull(RT.getIn(body, "items"), r.body());
 		assertNotNull(RT.getIn(body, "total"), "own listing carries a total");
 		assertTrue(listHasName(body, storedName), "own listing includes the stored asset: " + r.body());
+		AVector<?> items = (AVector<?>) RT.getIn(body, "items");
+		for (long i = 0; i < items.count(); i++) {
+			ACell item = items.get(i);
+			if (!Strings.create(storedName).equals(RT.getIn(item, "name"))) continue;
+			AString ref = RT.ensureString(RT.getIn(item, "ref"));
+			assertNotNull(ref, item.toString());
+			assertTrue(ref.toString().startsWith(callerDID + "/a/"), ref.toString());
+			return;
+		}
+		throw new AssertionError("stored asset summary not found");
 	}
 
 	@Test

@@ -1075,10 +1075,11 @@ public class LangChainAdapter extends AAdapter {
 	 * content — under the <b>caller's</b> authority. This is the preferred way
 	 * to pass images: the venue persists operation input in the job record, so
 	 * an inline base64 image would land (multi-MB, possibly sensitive) in
-	 * durable lattice history, while an asset reference keeps the record tiny
-	 * and content-address deduped. The ref accepts any resolvable form — an
+	 * durable lattice history, while a content reference keeps the record tiny.
+	 * Asset references remain content-address deduped. The ref accepts any
+	 * resolvable content form — an
 	 * asset hash ({@code a/<hash>}), a workspace path ({@code w/…}) holding
-	 * either asset metadata or a reference string, or a DID URL.
+	 * either asset metadata or a reference string, a file/DLFS path, or a DID URL.
 	 * Messages without asset image blocks pass through unchanged.
 	 */
 	@SuppressWarnings("unchecked")
@@ -1108,12 +1109,12 @@ public class LangChainAdapter extends AAdapter {
 		return out;
 	}
 
-	/** Resolves one asset-image block to an inline base64 block. Fail-loud: an
+	/** Resolves one referenced-image block to an inline base64 block. Fail-loud: an
 	 *  unresolvable image is a wrong answer, not a degraded one. */
 	private ACell resolveImageAsset(ACell block, RequestContext ctx) {
 		AString ref = RT.ensureString(RT.getIn(block, "source", "ref"));
 		if (ref == null) throw new IllegalArgumentException(
-			"image asset source requires a 'ref' (asset hash, workspace path, or DID URL)");
+			"image asset source requires a content 'ref' (asset, workspace, file, DLFS, or DID URL)");
 		try {
 			// Unified reference-addressed content resolution (Engine.resolveContent):
 			// CAS assets, lattice values, and DLFS drive paths — every storage
@@ -1124,7 +1125,7 @@ public class LangChainAdapter extends AAdapter {
 			String mime = (resolved != null) ? resolved.contentType() : null;
 			if (bytes == null || bytes.length == 0) {
 				throw new IllegalArgumentException(
-					"image ref '" + ref + "' did not resolve to asset content");
+					"image ref '" + ref + "' did not resolve to content");
 			}
 
 			// Explicit mediaType on the block wins; else asset contentType; else sniff.

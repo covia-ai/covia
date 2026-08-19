@@ -101,7 +101,7 @@ public class AdapterLifecycleTest {
 		try {
 			assertNotNull(venueRead(engine, "v/skills/mcp"), "an active adapter's skill is published");
 			engine.disableAdapter("mcp");
-			assertNull(venueRead(engine, "v/skills/mcp"), "disabling the adapter retracts its skill");
+			assertNotNull(venueRead(engine, "v/skills/mcp"), "catalog metadata survives adapter removal");
 			assertNotNull(venueRead(engine, "v/skills/covia"), "platform skills stay");
 			engine.enableAdapter("mcp");
 			assertNotNull(venueRead(engine, "v/skills/mcp"), "enabling republishes it");
@@ -161,8 +161,8 @@ public class AdapterLifecycleTest {
 			assertFalse(engine.disableAdapter("test"), "second disable is a no-op");
 			assertNull(engine.getAdapter("test"));
 			assertTrue(engine.getDisabledAdapterNames().contains("test"));
-			assertNull(engine.resolveAsset(Strings.create(ECHO), ctx),
-				"catalog path must be retracted while disabled");
+			assertNotNull(engine.resolveAsset(Strings.create(ECHO), ctx),
+				"catalog metadata remains while dispatch is unavailable");
 			assertNull(venueRead(engine, "v/info/adapters/test"),
 				"introspection entry must be retracted while disabled");
 			// Other adapters' catalog entries are untouched
@@ -184,15 +184,15 @@ public class AdapterLifecycleTest {
 	}
 
 	@Test
-	public void testKernelAdaptersAreProtected() {
+	public void testKernelMarkerDoesNotOverrideOperatorLifecycle() {
 		Engine engine = boot(null);
 		try {
 			for (String kernel : Engine.KERNEL_ADAPTERS) {
 				assertTrue(engine.isKernelAdapter(kernel));
-				assertThrows(IllegalArgumentException.class, () -> engine.disableAdapter(kernel), kernel);
-				assertThrows(IllegalArgumentException.class, () -> engine.removeAdapter(kernel), kernel);
-				assertNotNull(engine.getAdapter(kernel), kernel + " must still be registered");
 			}
+			assertTrue(engine.disableAdapter("grid"));
+			assertNull(engine.getAdapter("grid"));
+			assertTrue(engine.enableAdapter("grid"));
 			assertThrows(IllegalArgumentException.class, () -> engine.disableAdapter("no-such-adapter"));
 			assertThrows(IllegalArgumentException.class, () -> engine.enableAdapter("no-such-adapter"));
 		} finally {
@@ -225,13 +225,13 @@ public class AdapterLifecycleTest {
 	}
 
 	@Test
-	public void testKernelCannotBeDisabledByConfig() {
+	public void testOperatorMayDisableKernelByConfig() {
 		Engine engine = Engine.createTemp(Maps.of(Config.ADAPTERS,
 			Maps.of(Strings.create("covia"), Maps.of(Config.ENABLED, false))));
 		try {
-			IllegalStateException e = assertThrows(IllegalStateException.class,
-				() -> Engine.addDemoAssets(engine));
-			assertTrue(e.getMessage().contains("Kernel adapter 'covia'"), e.getMessage());
+			Engine.addDemoAssets(engine);
+			assertNull(engine.getAdapter("covia"));
+			assertTrue(engine.getDisabledAdapterNames().contains("covia"));
 		} finally {
 			engine.close();
 		}
@@ -331,14 +331,15 @@ public class AdapterLifecycleTest {
 				Maps.of(Strings.create("name"), Strings.create("test")));
 			assertEquals(CVMBool.FALSE, RT.getIn(disabled, "enabled"));
 			assertEquals(CVMBool.TRUE, RT.getIn(disabled, "changed"));
-			assertNull(engine.resolveAsset(Strings.create(ECHO), ctx));
+			assertNotNull(engine.resolveAsset(Strings.create(ECHO), ctx));
 			assertTrue(hasAdapterEntry(asVenue(engine, "v/ops/venue/adapters", Maps.empty()), "test", false),
 				"disabled adapters remain in the admin listing");
 
-			// The retracted catalog path no longer resolves; direct metadata
-			// dispatch to the disabled adapter fails at the point of use.
-			assertThrows(IllegalArgumentException.class, () -> engine.jobs().invokeOperation(
-				"v/test/ops/echo", Maps.of(Strings.create("value"), Strings.create("x")), ctx));
+			// Catalog metadata remains; dispatch fails because the adapter is gone.
+			IllegalStateException stale = assertThrows(IllegalStateException.class,
+				() -> engine.jobs().invokeOperation("v/test/ops/echo",
+					Maps.of(Strings.create("value"), Strings.create("x")), ctx));
+			assertTrue(stale.getMessage().contains("Adapter not available"), stale.getMessage());
 			AMap<AString, ACell> echoMeta = Maps.of(
 				Strings.create("name"), Strings.create("direct echo"),
 				Strings.create("operation"), Maps.of(Strings.create("adapter"), Strings.create("test:echo")));
@@ -367,11 +368,10 @@ public class AdapterLifecycleTest {
 			assertEquals(Strings.create("http://ollama:11434"), RT.getIn(merged, "config", "ollamaUrl"));
 			assertEquals(Strings.create("y"), RT.getIn(merged, "config", "other"));
 
-			// Kernel refusal surfaces as a failed op
-			ExecutionException kernel = assertThrows(ExecutionException.class,
-				() -> asVenue(engine, "v/ops/venue/adapter/disable",
-					Maps.of(Strings.create("name"), Strings.create("covia"))));
-			assertTrue(kernel.getCause().getMessage().contains("Kernel adapter"), kernel.getCause().getMessage());
+			// The kernel marker is informational; venue authority may still disable it.
+			ACell kernel = asVenue(engine, "v/ops/venue/adapter/disable",
+				Maps.of(Strings.create("name"), Strings.create("covia")));
+			assertEquals(CVMBool.FALSE, RT.getIn(kernel, "enabled"));
 		} finally {
 			engine.close();
 		}
