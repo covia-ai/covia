@@ -1306,6 +1306,31 @@ public class LangChainAdapterTest {
 	}
 
 	@Test
+	public void testIsOpenAiReasoningModel() {
+		for (String m : new String[] {"gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.4-mini", "gpt-5.4-nano", "GPT-5.6-Terra"}) {
+			assertTrue(LangChainAdapter.isOpenAiReasoningModel(m), m + " is a gpt-5.x reasoning model");
+		}
+		for (String m : new String[] {"gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo", "o1", "o3-mini", null}) {
+			assertFalse(LangChainAdapter.isOpenAiReasoningModel(m), m + " is not gpt-5.x");
+		}
+	}
+
+	/**
+	 * Regression for the actual root cause behind the reasoning_effort fix:
+	 * a caller that omits "model" (e.g. the frontend's "Venue default" option)
+	 * relies on {@code defaultModelFor} to resolve it — that resolved name,
+	 * not the raw null input, is what must reach the reasoning-model check,
+	 * or the whole fix silently never fires for the default configuration.
+	 */
+	@Test
+	public void testDefaultOpenAiModelIsARecognisedReasoningModel() {
+		String resolved = LangChainAdapter.defaultModelFor("openai");
+		assertTrue(LangChainAdapter.isOpenAiReasoningModel(resolved),
+			"openai's default model (" + resolved + ") must be recognised as a reasoning model, "
+			+ "since every catalogued openai model is gpt-5.x");
+	}
+
+	@Test
 	public void testSyntheticOutputToolCarriesSchema() {
 		AMap<AString, ACell> tool = LangChainAdapter.syntheticOutputTool(
 			"agent_output", RF_SCHEMA);
