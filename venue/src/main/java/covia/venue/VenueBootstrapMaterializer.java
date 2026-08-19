@@ -1,9 +1,7 @@
 package covia.venue;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 
 import convex.core.data.ACell;
@@ -31,8 +29,8 @@ import covia.api.Fields;
  * discards it. No operation dispatch, Job records, or parallel catalog model is
  * involved.</p>
  *
- * <p>Besides the whole-venue bootstrap snapshot, the same machinery publishes
- * and retracts <em>single</em> adapters and modules for the runtime adapter
+	 * <p>Besides the whole-venue bootstrap snapshot, the same machinery publishes
+	 * and updates <em>single</em> adapters and modules for the runtime adapter
  * lifecycle ({@link Engine#enableAdapter}, {@link Engine#disableAdapter},
  * {@link Modules#load}, {@link Modules#unload}) — each change is one fork
  * sync, so the catalog never shows a half-applied adapter.</p>
@@ -54,16 +52,13 @@ final class VenueBootstrapMaterializer {
 	private final VenueState bootstrapFork;
 	private final ALatticeCursor<ACell> venueUserCursor;
 	private final List<String> adapterNames;
-	private final Map<String, String> catalogOwners = new HashMap<>();
 	private final long startedAt;
 
 	private VenueBootstrapMaterializer(Engine engine) {
 		this.engine = engine;
 		this.bootstrapFork = engine.getVenueState().fork();
 		this.venueUserCursor = bootstrapFork.users().ensure(engine.getDIDString()).cursor();
-		ArrayList<String> names = new ArrayList<>(engine.getAdapterNames());
-		names.sort(String::compareTo);
-		this.adapterNames = List.copyOf(names);
+		this.adapterNames = engine.getAdapterNamesInRegistrationOrder();
 		this.startedAt = System.currentTimeMillis();
 	}
 
@@ -93,35 +88,34 @@ final class VenueBootstrapMaterializer {
 	 * Incrementally publishes ONE adapter after the bootstrap snapshot exists —
 	 * the runtime {@code enable} / module-load path. Its catalog declarations
 	 * and {@code v/info/adapters/<name>} summary land in one fork sync. A
-	 * catalog path already occupied on the live catalog is a conflict and
-	 * aborts the whole publication (nothing partial becomes visible).
+	 * Existing catalog paths are deliberately replaced: reaching this method
+	 * is already an operator-authorised registration decision, and the most
+	 * recently registered adapter wins.
 	 */
 	static void materialiseAdapter(Engine engine, AAdapter adapter) {
 		VenueBootstrapMaterializer materializer = new VenueBootstrapMaterializer(engine);
-		for (var declaration : adapter.pendingCatalogEntries.entrySet()) {
-			String path = declaration.getKey();
-			if (materializer.readVenuePath(path) != null) {
-				throw new IllegalStateException("Catalog path /" + path
-					+ " is already occupied; cannot enable adapter '" + adapter.getName() + "'");
-			}
-		}
 		materializer.writeAdapterDeclarations(adapter);
 		materializer.writeAdapterOwnedRecords(adapter);
 		materializer.publish();
 	}
 
+	/** Atomically replaces one adapter's declarations and introspection. */
+	static void replaceAdapter(Engine engine, AAdapter previous, AAdapter replacement) {
+		VenueBootstrapMaterializer materializer = new VenueBootstrapMaterializer(engine);
+		materializer.deleteVenuePath(ADAPTERS_ROOT + previous.getName());
+		materializer.writeAdapterDeclarations(replacement);
+		materializer.writeAdapterOwnedRecords(replacement);
+		materializer.publish();
+	}
+
 	/**
-	 * Incrementally retracts ONE adapter — the runtime {@code disable} /
-	 * module-unload path. Deletes exactly the catalog paths the adapter
-	 * declared and its {@code v/info/adapters/<name>} summary, in one fork
-	 * sync. Content-addressed assets stay in the venue CAS (they are inert
-	 * without a dispatch target and may be re-materialised on enable).
+	 * Removes one adapter's live introspection — the runtime {@code disable} /
+	 * module-unload path. Canonical catalog declarations deliberately remain:
+	 * they are durable venue metadata and may be overwritten by a later load or
+	 * deleted explicitly by the operator.
 	 */
 	static void dematerialiseAdapter(Engine engine, AAdapter adapter) {
 		VenueBootstrapMaterializer materializer = new VenueBootstrapMaterializer(engine);
-		for (String path : adapter.pendingCatalogEntries.keySet()) {
-			materializer.deleteVenuePath(path);
-		}
 		materializer.deleteVenuePath("v/info/adapters/" + adapter.getName());
 		materializer.deleteVenuePath(ADAPTERS_ROOT + adapter.getName());
 		materializer.publish();
@@ -197,12 +191,10 @@ final class VenueBootstrapMaterializer {
 
 	private void writeCatalogDeclaration(AAdapter adapter, String path, Hash assetHash) {
 		validateCatalogPath(path);
-		String previousOwner = catalogOwners.putIfAbsent(path, adapter.getName());
-		if (previousOwner != null) {
-			throw new IllegalStateException("Duplicate bootstrap catalog path /" + path
-				+ " declared by adapters '" + previousOwner + "' and '" + adapter.getName() + "'");
-		}
+		writeAndValidateVenuePath(path, catalogMetadata(adapter, path, assetHash));
+	}
 
+	private static ACell catalogMetadata(AAdapter adapter, String path, Hash assetHash) {
 		AString metadataJson = adapter.getInstalledAssets().get(assetHash);
 		if (metadataJson == null) {
 			throw new IllegalStateException("Adapter '" + adapter.getName()
@@ -213,8 +205,7 @@ final class VenueBootstrapMaterializer {
 			throw new IllegalStateException("Adapter '" + adapter.getName()
 				+ "' catalog metadata at /" + path + " is not a JSON object");
 		}
-
-		writeAndValidateVenuePath(path, metadata);
+		return metadata;
 	}
 
 	private static void validateCatalogPath(String path) {

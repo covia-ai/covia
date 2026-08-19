@@ -34,8 +34,9 @@ public class AssetStore extends ALatticeComponent<Index<AString, AVector<ACell>>
 	/** Position of parsed metadata map in asset record vector */
 	public static final long POS_META = 2;
 
-	AssetStore(ALatticeCursor<Index<AString, AVector<ACell>>> cursor) {
-		super(cursor);
+	AssetStore(ALatticeComponent<?> parent,
+			ALatticeCursor<Index<AString, AVector<ACell>>> cursor) {
+		super(parent, cursor);
 	}
 
 	/**

@@ -105,17 +105,14 @@ public class CoviaAPI extends ACoviaAPI {
 
 	public void addRoutes(RoutesConfig routes) {
 		routes.get(ROUTE+"status", this::getStatus, COVIA_API);
-		// <id> matches slashes, so the asset metadata route accepts any lattice
-		// address (a/<hash>, w/…, o/…, <DID>/…) as well as a bare hash. Content
-		// puts its selector BEFORE the ref (assets/content/<ref>) so the
-		// variable-length ref is always the tail wildcard: "content" is not a
-		// ref namespace prefix, so the selector can never collide with a valid
-		// metadata ref — unlike a trailing /content, which any workspace path
-		// can end in (#368). The single-segment {id}/content route survives for
-		// hash-form compatibility (covered by CoviaAssetRefTest).
-		routes.get(ROUTE+"assets/content/<id>", this::getContentByRef, COVIA_API);
+		// assets/<ref> is metadata; content/<ref> is bytes. Do not reserve
+		// assets/content/<ref>: that would make "content/..." impossible to
+		// address as metadata.
+		routes.get(ROUTE+"content/<ref>", this::getContentByRef, COVIA_API);
+		// The single-segment {id}/content route survives for hash-form
+		// compatibility. Non-hash matches are disambiguated as metadata (#368).
 		routes.get(ROUTE+"assets/{id}/content", this::getContent, COVIA_API);
-		routes.get(ROUTE+"assets/<id>", this::getAsset, COVIA_API);
+		routes.get(ROUTE+"assets/<ref>", this::getAsset, COVIA_API);
 		routes.put(ROUTE+"assets/{id}/content", this::putContent, COVIA_API);
 
 		routes.get(ROUTE+"assets", this::getAssets, COVIA_API);
@@ -220,7 +217,7 @@ public class CoviaAPI extends ACoviaAPI {
 		        responses = {
 		            @OpenApiResponse(
 		                status = "200",
-		                description = "A JSON object with total, offset, limit, and an items array of asset ID hashes (hex strings).",
+			            description = "A JSON object with total, offset, limit, and an items array of fully-qualified venue asset references.",
 		                content = {
 		                    @OpenApiContent(
 		                        type = "application/json",
@@ -285,9 +282,10 @@ public class CoviaAPI extends ACoviaAPI {
 		List<Hash> assetIDs = venue.listAssetIDs(start, actualLimit);
 		ArrayList<Object> assetsList=new ArrayList<>();
 		for (Hash h : assetIDs) {
-			// Bare hex (no 0x prefix) — consistent with asset:list and the jobs
-			// endpoints; Hash.parse accepts it on the client (0x optional).
-			assetsList.add(h.toHexString());
+			// A venue-CAS listing must round-trip through the general resolver.
+			// A bare hash is caller-relative (the caller's a/), so returning one
+			// here would silently change namespace when passed to GET assets/<ref>.
+			assetsList.add(engine().assetDIDURL(h).toString());
 		}
 		result.put(Fields.ITEMS, assetsList);
 
@@ -360,14 +358,14 @@ public class CoviaAPI extends ACoviaAPI {
 	}
 	
 
-	@OpenApi(path = ROUTE + "assets/{id}",
+	@OpenApi(path = ROUTE + "assets/{ref}",
 			methods = HttpMethod.GET,
 			tags = { "Covia"},
 			summary = "Get Covia asset metadata given an asset reference.",
 			operationId = CoviaAPI.GET_ASSET,
 			pathParams = {
 					@OpenApiParam(
-							name = "id",
+							name = "ref",
 							description = "Asset reference: a bare CAD3 hash, a content-addressed "
 									+ "address (a/<hash>), a workspace/operation path (w/…, o/…), "
 									+ "or a DID URL. Resolved the same way invoke resolves "
@@ -376,7 +374,7 @@ public class CoviaAPI extends ACoviaAPI {
 							type = String.class,
 							example = "a/1234567812345678123456781234567812345678123456781234567812345678") })
 	protected void getAsset(Context ctx) {
-		String ref=ctx.pathParam("id");
+		String ref=ctx.pathParam("ref");
 		if (ref==null || ref.isEmpty()) throw new BadRequestResponse("Missing asset reference");
 		if ("venue".equals(ctx.queryParam("namespace"))) {
 			Hash hash = Hash.parse(ref);
@@ -498,7 +496,7 @@ public class CoviaAPI extends ACoviaAPI {
 			methods = HttpMethod.GET,
 			tags = { "Covia"},
 			summary = "Get the content of a Covia data asset by content-addressed hash. "
-					+ "Legacy single-segment route: prefer assets/content/{id}, which accepts any asset reference.",
+					+ "Legacy single-segment route: prefer content/{id}, which accepts any asset reference.",
 			deprecated = true,
 			operationId = CoviaAPI.GET_CONTENT,
 			queryParams = {
@@ -535,10 +533,10 @@ public class CoviaAPI extends ACoviaAPI {
 		serveContent(ctx, id);
 	}
 
-	@OpenApi(path = ROUTE + "assets/content/{id}",
+	@OpenApi(path = ROUTE + "content/{ref}",
 			methods = HttpMethod.GET,
 			tags = { "Covia"},
-			summary = "Get the content of a Covia data asset given any asset reference.",
+			summary = "Get bytes for any resolvable content reference.",
 			operationId = CoviaAPI.GET_CONTENT_REF,
 			queryParams = {
 					@OpenApiParam(
@@ -550,10 +548,10 @@ public class CoviaAPI extends ACoviaAPI {
 			},
 			pathParams = {
 					@OpenApiParam(
-							name = "id",
-							description = "Asset reference: a bare CAD3 hash, a content-addressed "
-									+ "address (a/<hash>), a workspace/operation path (w/…, o/…), "
-									+ "or a DID URL — every form the metadata route accepts.",
+							name = "ref",
+							description = "Content reference: an asset hash/path/DID URL, a workspace "
+									+ "path, file:/<root>/<path>, dlfs/<drive>/<path>, or an "
+									+ "owner-scoped DID/DLFS path.",
 							required = true,
 							type = String.class,
 							example = "w/skills/reviewer") },
@@ -563,17 +561,17 @@ public class CoviaAPI extends ACoviaAPI {
 							description = "Content returned")
 					})
 	protected void getContentByRef(Context ctx) {
-		serveContent(ctx, ctx.pathParam("id"));
+		serveContent(ctx, ctx.pathParam("ref"));
 	}
 
 	/**
 	 * Serves asset content for any reference form: the canonical
-	 * {@code assets/content/<ref>} route and the hash-form legacy route both
+	 * {@code content/<ref>} route and the hash-form legacy route both
 	 * land here. Hash-form refs read the caller's asset record directly
 	 * (byte-identical to the historical route); every other lattice address
 	 * resolves through the same universal resolver as the metadata route and
 	 * serves whatever content the resolved value carries — inline, CAS blob,
-	 * or provider-backed (DLFS), with a declared sha256 pin verified (#368).
+	 * or provider-backed (file/DLFS), with a declared sha256 pin verified (#368).
 	 */
 	private void serveContent(Context ctx, String id) {
 		try {
@@ -637,12 +635,12 @@ public class CoviaAPI extends ACoviaAPI {
 				return;
 			}
 
-			// Any other lattice address (w/…, v/…, o/…, DID URL): the same gate
-			// and resolver as the metadata route, then serve whatever content the
-			// resolved value carries. Metadata is resolved separately only for
-			// error specificity and the content.contentType / fileName headers —
-			// a ref may also resolve to a raw blob with no metadata at all.
-			engine().requireResourceAccess(rctx, ref, Abilities.ASSET_READ);
+			// Any other lattice or provider address (w/…, v/…, o/…, file://,
+			// dlfs/…, DID URL): resolve through the shared content seam. Providers
+			// enforce their native capability; asset/lattice refs enforce asset/read
+			// inside Engine.resolveContent. Metadata is resolved separately only for
+			// content.contentType / fileName headers; a provider ref may have no
+			// asset metadata at all.
 			AMap<AString,ACell> meta = RT.ensureMap(engine().resolvePath(ref, rctx));
 			covia.venue.storage.ContentProvider.Resolved resolved =
 				engine().resolveContent(ref, rctx);

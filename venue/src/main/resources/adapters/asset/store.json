@@ -25,7 +25,8 @@
     "output": {
       "type": "object",
       "properties": {
-        "id": { "type": "string", "description": "Content-addressed asset ID (hex hash)" },
+        "ref": { "type": "string", "description": "Fully-qualified DID/a reference for the stored asset" },
+        "id": { "type": "string", "deprecated": true, "description": "Compatibility alias for ref" },
         "stored": { "type": "boolean" }
       }
     }

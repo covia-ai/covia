@@ -1,6 +1,6 @@
 {
   "name": "Get Asset Content",
-  "description": "Retrieve the binary content payload of an asset by any resolvable address. Returned as hex-encoded Blob. Returns {truncated: true, size} if it exceeds maxSize (default 1MB). Use asset_get for metadata. Only assets stored with a content payload have content.",
+  "description": "Retrieve bytes by any content reference: an asset address, workspace path, file:// root path, or DLFS path. Returned as a hex-encoded Blob with contentType when known. Returns {truncated: true, size} if it exceeds maxSize (default 1MB). Use asset_get for metadata; raw file/DLFS references have content but no asset metadata.",
   "dateCreated": "2026-03-31T00:00:00Z",
 	"operation": {
 		"adapter": "asset:content",
@@ -9,17 +9,20 @@
     "input": {
       "type": "object",
       "properties": {
-        "id": { "type": "string", "description": "Asset reference. Any resolvable address: hex hash, /a/<hash>, /o/<name>, /v/<path>, DID URL, or workspace path (w/, g/, j/, etc.)." },
+        "ref": { "type": "string", "description": "Content reference: asset hash/path/DID URL, workspace path, file://<root>/<path> (file:/<root>/<path> is the HTTP-safe equivalent), dlfs/<drive>/<path>, or owner DID /dlfs/ path." },
+        "id": { "type": "string", "deprecated": true, "description": "Deprecated alias for ref." },
         "maxSize": { "type": "integer", "description": "Maximum content size in bytes (default 1000000). If exceeded, returns truncated: true with the size." }
       },
-      "required": ["id"]
+      "anyOf": [{ "required": ["ref"] }, { "required": ["id"] }]
     },
     "output": {
       "type": "object",
       "properties": {
-        "id": { "type": "string", "description": "Asset reference (echoed)" },
-        "exists": { "type": "boolean", "description": "True if a CAS record was found for the resolved asset" },
+        "ref": { "type": "string", "description": "Content reference (echoed)" },
+        "id": { "type": "string", "deprecated": true, "description": "Compatibility alias for ref" },
+        "exists": { "type": "boolean", "description": "True if the reference resolved" },
         "hasContent": { "type": "boolean", "description": "True if the resolved address has a content payload. An existing metadata-only asset returns exists: true and hasContent: false." },
+        "contentType": { "type": "string", "description": "Declared or provider-inferred MIME type, when known" },
         "value": { "type": "string", "description": "Content as hex-encoded Blob (0x...). Present when hasContent is true and not truncated." },
         "message": { "type": "string", "description": "Diagnostic explaining why an existing asset has no content payload." },
         "truncated": { "type": "boolean", "description": "True if content exceeds maxSize" },

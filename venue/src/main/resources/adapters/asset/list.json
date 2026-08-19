@@ -1,6 +1,6 @@
 {
   "name": "List Assets",
-  "description": "List your own pinned assets (the per-user a/ namespace), with pagination. Returns summary info (id is the asset hash, plus name, type, description) per asset; use asset_get for full metadata. Filter by type for narrow searches (e.g. type='agent-definition'). Venue operations are not listed here — discover those with covia_functions / covia_adapters.",
+  "description": "List your own pinned assets (the per-user a/ namespace), with pagination. Returns summary info (id is the asset hash; ref is the fully qualified DID/a address; plus name, type, description) per asset; use asset_get for full metadata. Filter by type for narrow searches (e.g. type='agent-definition'). Venue operations are not listed here — discover those with covia_functions / covia_adapters.",
   "dateCreated": "2026-03-31T00:00:00Z",
 	"operation": {
 		"adapter": "asset:list",
@@ -17,7 +17,7 @@
     "output": {
       "type": "object",
       "properties": {
-        "items": { "type": "array", "description": "Asset summaries with id, name, type, description" },
+        "items": { "type": "array", "description": "Asset summaries with id, ref, name, type, description" },
         "total": { "type": "integer", "description": "Total number of matching assets" },
         "offset": { "type": "integer" },
         "limit": { "type": "integer" }

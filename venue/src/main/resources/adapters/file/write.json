@@ -1,6 +1,6 @@
 {
   "name": "Write File",
-  "description": "Write a file under a configured filesystem root or to an authorised DLFS path. Creates the file if absent and overwrites it otherwise. Parent directories must exist. Supply exactly one of content, value, bytes, or asset.",
+  "description": "Write a file under a configured filesystem root or to an authorised DLFS path. Creates the file if absent and overwrites it otherwise. Parent directories must exist. Supply exactly one of content, value, bytes, or contentRef.",
   "creator": "Covia",
   "operation": {
     "adapter": "file:write",
@@ -13,7 +13,8 @@
         "content": { "type": "string", "description": "UTF-8 text to write" },
         "value": { "description": "JSON-serialisable value to write as UTF-8 JSON" },
         "bytes": { "type": "string", "description": "Base64-encoded bytes to write" },
-        "asset": { "type": "string", "description": "Asset reference to stream as file content (e.g. '/a/0x1234...', DID URL)" }
+        "contentRef": { "type": "string", "description": "Resolvable content reference to stream, including an asset, file:// root path, or DLFS path" },
+        "asset": { "type": "string", "deprecated": true, "description": "Legacy alias for contentRef" }
       },
       "required": ["path"]
     },

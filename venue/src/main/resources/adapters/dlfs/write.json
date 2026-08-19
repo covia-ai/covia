@@ -1,6 +1,6 @@
 {
   "name": "Write DLFS File",
-  "description": "Write content to a file in a DLFS drive. Creates the file if it does not exist; overwrites if it does. Parent directories must already exist — use dlfs:mkdir first if needed. Supply exactly one of 'content' (UTF-8 text), 'value' (JSON-serialisable), 'bytes' (base64 inline), or 'asset' (content-addressed reference, streamed). Large binary uploads from clients should use the WebDAV PUT transport at /dlfs/{drive}/{path} directly.",
+  "description": "Write content to a file in a DLFS drive. Creates the file if it does not exist; overwrites if it does. Parent directories must already exist — use dlfs:mkdir first if needed. Supply exactly one of 'content' (UTF-8 text), 'value' (JSON-serialisable), 'bytes' (base64 inline), or 'contentRef' (resolvable content, streamed). Large binary uploads from clients should use the WebDAV PUT transport at /dlfs/{drive}/{path} directly.",
   "creator": "Covia",
   "operation": {
     "adapter": "dlfs:write",
@@ -13,7 +13,8 @@
         "content": { "type": "string", "description": "UTF-8 text to write" },
         "value": { "description": "JSON-serialisable value to write as UTF-8 JSON" },
         "bytes": { "type": "string", "description": "Base64-encoded bytes to write" },
-        "asset": { "type": "string", "description": "Asset reference to write as file content (e.g. '/a/0x1234...', DID URL). Streams binary directly — no size limit." }
+        "contentRef": { "type": "string", "description": "Resolvable content reference to stream, including an asset, file:// root path, or DLFS path. No size limit." },
+        "asset": { "type": "string", "deprecated": true, "description": "Legacy alias for contentRef" }
       },
       "required": ["drive", "path"]
     },

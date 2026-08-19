@@ -657,14 +657,14 @@ configuration through `Engine.adapterConfig(name)` — this static block
 overlaid by any runtime reconfiguration (see
 [Runtime adapter lifecycle](#runtime-adapter-lifecycle)).
 
-The reserved key `enabled: false` parks a non-kernel adapter as disabled at
+The reserved key `enabled: false` parks an adapter as disabled at
 boot: it is not installed, publishes nothing to `v/ops/` or `v/info/adapters/`,
 and does not dispatch. `{"adapters": {"test": {"enabled": false}}}` hides the
 test operations; `{"adapters": {"convex": {"enabled": false}}}` removes the
 Convex ops. A disabled adapter can be switched on later without a restart
-with `v/ops/venue/adapter/enable`. Kernel adapters (`covia`, `agent`, `dlfs`,
-`hitl`, `http`, `file`, `grid`, `venue`) cannot be disabled — the venue does
-not function without them — and `enabled: false` on one is a boot error.
+with `v/ops/venue/adapter/enable`. The `kernel` marker identifies adapters the
+standard venue commonly depends on; it is informational, not a restriction on
+the venue operator's configuration.
 
 Currently defined:
 
@@ -1137,11 +1137,11 @@ set of a *running* venue without a restart:
 | Operation | Effect |
 |-----------|--------|
 | `v/ops/venue/adapters` | Registry view: every registered adapter (active **and** disabled) with `enabled`, `kernel`, owning `module`, effective `config` and `operations`, plus loaded `modules` |
-| `v/ops/venue/adapter/disable {name}` | Retract a non-kernel adapter's catalog paths and `v/info/adapters/<name>`, stop dispatch. Instance retained; in-flight jobs finish |
+| `v/ops/venue/adapter/disable {name}` | Remove an adapter from live dispatch and `v/info/adapters/<name>`. Durable catalog metadata remains; the instance is retained and in-flight jobs finish |
 | `v/ops/venue/adapter/enable {name}` | Restore it (installing on first enable if it was boot-disabled) |
 | `v/ops/venue/adapter/configure {name, config, merge?}` | Apply a new effective configuration (`adapters.<name>` shape) — the adapter's `configure` hook may reject it, in which case nothing changes |
-| `v/ops/venue/module/load {module, sha256?, config?}` | Load a module jar and publish its adapters |
-| `v/ops/venue/module/unload {name}` | Remove a module's adapters (catalog + introspection retracted, resources closed) and close its classloader |
+| `v/ops/venue/module/load {module, sha256?, config?}` | Load a module jar; its adapters and declarations overwrite existing names and paths |
+| `v/ops/venue/module/unload {name}` | Remove a module's live adapters and introspection, close resources and its classloader; catalog metadata remains |
 
 **Authority.** All of these are venue administration: a null capability
 scope is deliberately not enough. They run only as the venue identity itself
@@ -1160,18 +1160,20 @@ resolves against `dir`). `sha256` pins content exactly as for boot modules.
 Loading in-process code is total compromise of the venue; this policy exists
 so that the decision stays with the operator.
 
-**Semantics.** Enable, disable, load and unload each publish as one lattice
-transaction, so the catalog never shows a half-applied adapter. Kernel
-adapters cannot be disabled or unloaded. In-flight jobs keep their adapter
+**Semantics.** An authorised load is an operator decision: the most recently
+loaded adapter and catalog declaration wins, including existing adapter names
+and paths. Disable and unload remove live dispatch and introspection but leave
+durable catalog metadata in place; invoking it fails if no adapter is live,
+and a later load overwrites it. In-flight jobs keep their adapter
 reference and finish; anything that re-resolves the adapter by name
 (multi-turn messages, restart recovery) fails at that point of use — the
 same rule as `mcp:remove-server`. Unloading closes `AutoCloseable` adapters
 and the module classloader, but JVM class unloading is best-effort (JDBC
 `DriverManager`, JNI and lingering references can pin a loader); "unload"
-means deregistered and released, not guaranteed collected. Runtime changes
-are **not persisted**: after a restart the venue config (`adapters.*`,
-`modules`) is authoritative again. A persisted live configuration is a
-later step.
+means deregistered and released, not guaranteed collected. The live runtime
+adapter set is **not persisted**: after a restart the venue config
+(`adapters.*`, `modules`) is authoritative again. Catalog metadata is lattice
+state and may remain until overwritten or explicitly deleted.
 
 ## A2A protocol
 

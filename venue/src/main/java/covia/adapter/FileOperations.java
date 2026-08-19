@@ -28,6 +28,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
+import covia.api.Fields;
 import covia.utils.MimeUtils;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -48,6 +49,7 @@ final class FileOperations {
 	private static final AString FIELD_VALUE = Strings.intern("value");
 	private static final AString FIELD_BYTES = Strings.intern("bytes");
 	private static final AString FIELD_ASSET = Strings.intern("asset");
+	private static final AString FIELD_CONTENT_REF = Strings.intern("contentRef");
 	private static final AString FIELD_PARENTS = Strings.intern("parents");
 	private static final AString FIELD_RECURSIVE = Strings.intern("recursive");
 
@@ -237,27 +239,100 @@ final class FileOperations {
 			"created", CVMBool.create(!existed));
 	}
 
+	/**
+	 * Creates a new file from the standard asset content descriptor. Unlike
+	 * {@link #write}, this is atomic create-only: an existing target is never
+	 * replaced. The descriptor is resolved by {@link Engine#resolveContentBlock}
+	 * so inline, content-addressed and referenced content behave exactly as they
+	 * do on asset metadata.
+	 */
+	static ACell create(Path file, AMap<AString, ACell> input, Engine engine,
+			RequestContext ctx) throws IOException {
+		Path parent = file.getParent();
+		if (parent != null && !Files.isDirectory(parent)) {
+			throw new NoSuchFileException("Parent directory does not exist: " + parent);
+		}
+		ACell block = input.get(FIELD_CONTENT);
+		covia.venue.storage.ContentProvider.Resolved resolved =
+			engine.resolveContentBlock(block, ctx);
+		if (resolved == null && contentBlockHasLocator(block)) {
+			throw new IllegalArgumentException("Content descriptor did not resolve any data");
+		}
+
+		java.nio.file.OpenOption[] options = createOptions(file);
+		long count;
+		try (InputStream is = resolved != null
+				? resolved.content().getInputStream() : InputStream.nullInputStream();
+			 OutputStream os = Files.newOutputStream(file, options)) {
+			count = is.transferTo(os);
+		}
+		AMap<AString, ACell> result = Maps.of(
+			"written", CVMLong.create(count), "created", CVMBool.TRUE);
+		String contentType = resolved != null ? resolved.contentType()
+			: stringAt(block, Fields.CONTENT_TYPE);
+		if (contentType != null) {
+			result = result.assoc(Fields.CONTENT_TYPE,
+				Strings.create(contentType));
+		}
+		return result;
+	}
+
+	private static boolean contentBlockHasLocator(ACell block) {
+		if (block == null) return false;
+		return RT.getIn(block, Fields.INLINE) != null
+			|| RT.getIn(block, Fields.REF) != null
+			|| RT.getIn(block, Strings.intern("dlfs")) != null
+			|| RT.getIn(block, Fields.SHA256) != null;
+	}
+
+	private static String stringAt(ACell value, AString field) {
+		if (value == null) return null;
+		AString string = RT.ensureString(RT.getIn(value, field));
+		return string != null ? string.toString() : null;
+	}
+
+	/** Explicit path wins; otherwise content.fileName supplies the target name. */
+	static String createPath(AMap<AString, ACell> input) {
+		ACell pathCell = input.get(Fields.PATH);
+		if (pathCell != null) {
+			AString path = RT.ensureString(pathCell);
+			if (path == null) throw new IllegalArgumentException("path must be a string");
+			return path.toString();
+		}
+		AString fileName = RT.ensureString(RT.getIn(input, Fields.CONTENT, Fields.FILE_NAME));
+		if (fileName == null || fileName.isEmpty()) {
+			throw new IllegalArgumentException(
+				"path is required unless content.fileName supplies it");
+		}
+		return fileName.toString();
+	}
+
 	private static long writeInput(Path target, AMap<AString, ACell> input,
 			Engine engine, RequestContext assetCtx, boolean append) throws IOException {
 		AString content = RT.ensureString(input.get(FIELD_CONTENT));
 		boolean hasValue = input.containsKey(FIELD_VALUE);
 		AString bytesB64 = RT.ensureString(input.get(FIELD_BYTES));
-		AString assetRef = RT.ensureString(input.get(FIELD_ASSET));
+		AString contentRef = RT.ensureString(input.get(FIELD_CONTENT_REF));
+		AString legacyAssetRef = RT.ensureString(input.get(FIELD_ASSET));
+		if (contentRef != null && legacyAssetRef != null && !contentRef.equals(legacyAssetRef)) {
+			throw new IllegalArgumentException("contentRef conflicts with legacy 'asset'");
+		}
+		if (contentRef == null) contentRef = legacyAssetRef;
 		int supplied = (content != null ? 1 : 0) + (hasValue ? 1 : 0)
-			+ (bytesB64 != null ? 1 : 0) + (assetRef != null ? 1 : 0);
+			+ (bytesB64 != null ? 1 : 0) + (contentRef != null ? 1 : 0);
 		if (supplied != 1) {
 			throw new IllegalArgumentException(supplied == 0
-				? "Exactly one of 'content' (UTF-8 text), 'value' (JSON), 'bytes' (base64), or 'asset' (reference) is required"
-				: "Only one of 'content', 'value', 'bytes', or 'asset' may be supplied");
+				? "Exactly one of 'content' (UTF-8 text), 'value' (JSON), 'bytes' (base64), or 'contentRef' is required"
+				: "Only one of 'content', 'value', 'bytes', or 'contentRef' may be supplied");
 		}
 
 		StandardOpenOption mode = append
 			? StandardOpenOption.APPEND : StandardOpenOption.TRUNCATE_EXISTING;
 		java.nio.file.OpenOption[] options = writeOptions(target, mode);
-		if (assetRef != null) {
+		if (contentRef != null) {
 			covia.venue.storage.ContentProvider.Resolved resolved =
-				engine.resolveContent(assetRef, assetCtx);
-			if (resolved == null) throw new IllegalArgumentException("No content at ref: " + assetRef);
+				engine.resolveContent(contentRef, assetCtx);
+			if (resolved == null) throw new IllegalArgumentException("No content at ref: " + contentRef);
 			try (InputStream is = resolved.content().getInputStream();
 				 OutputStream os = Files.newOutputStream(target, options)) {
 				return is.transferTo(os);
@@ -282,6 +357,18 @@ final class FileOperations {
 		}
 		return new java.nio.file.OpenOption[] {
 			StandardOpenOption.CREATE, mode, StandardOpenOption.WRITE
+		};
+	}
+
+	private static java.nio.file.OpenOption[] createOptions(Path target) {
+		if (target.getFileSystem() == java.nio.file.FileSystems.getDefault()) {
+			return new java.nio.file.OpenOption[] {
+				StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE,
+				LinkOption.NOFOLLOW_LINKS
+			};
+		}
+		return new java.nio.file.OpenOption[] {
+			StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE
 		};
 	}
 

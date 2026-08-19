@@ -845,7 +845,7 @@ public class AssetAdapterTest {
 		String hex = hashFromPath(didUrl);
 
 		Job pinJob = engine.jobs().invokeOperation("v/ops/asset/pin",
-			Maps.of(K_PATH, Strings.create(hex)), RequestContext.of(ALICE_DID));
+			Maps.of("ref", Strings.create(hex)), RequestContext.of(ALICE_DID));
 		ACell result = pinJob.awaitResult(5000);
 
 		assertNotNull(result);
@@ -856,6 +856,8 @@ public class AssetAdapterTest {
 		assertEquals(hex, returnedHash.toString(), "Pinning a CAS asset preserves its hash");
 		assertTrue(returnedPath.toString().endsWith("/a/" + hex),
 			"Returned path should be the caller's DID URL for the pinned hash");
+		assertEquals(returnedPath, RT.getIn(result, "ref"));
+		assertEquals(returnedHash, RT.getIn(result, "id"));
 	}
 
 	@Test
@@ -1027,7 +1029,7 @@ public class AssetAdapterTest {
 	public void testGetByVOpsPath() {
 		// asset:get accepts /v/ops/<path> — non-hash form goes through resolvePath.
 		Job job = engine.jobs().invokeOperation("v/ops/asset/get",
-			Maps.of(Fields.ID, "v/ops/json/merge"), RequestContext.of(ALICE_DID));
+			Maps.of("ref", "v/ops/json/merge"), RequestContext.of(ALICE_DID));
 		ACell result = job.awaitResult(5000);
 
 		assertEquals(CVMBool.TRUE, RT.getIn(result, Strings.create("exists")));
@@ -1035,6 +1037,7 @@ public class AssetAdapterTest {
 		assertNotNull(meta);
 		// json:merge has an "operation" field
 		assertNotNull(meta.get(Fields.OPERATION));
+		assertEquals("v/ops/json/merge", RT.getIn(result, "ref").toString());
 	}
 
 	@Test
@@ -1092,7 +1095,7 @@ public class AssetAdapterTest {
 		// resolvePath finds the metadata, derived hash hits the venue CAS
 		// record, and the content payload is null. exists: true, hasContent: false.
 		Job job = engine.jobs().invokeOperation("v/ops/asset/content",
-			Maps.of(Fields.ID, "v/ops/json/merge"), RequestContext.of(ALICE_DID));
+			Maps.of("ref", "v/ops/json/merge"), RequestContext.of(ALICE_DID));
 		ACell result = job.awaitResult(5000);
 
 		assertEquals(CVMBool.TRUE, RT.getIn(result, Strings.create("exists")));

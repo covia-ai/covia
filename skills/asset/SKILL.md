@@ -1,7 +1,7 @@
 ---
 name: asset
 description: Store, retrieve, list, and manage content-addressed assets on a Covia venue. Assets are immutable resources — operations, artifacts, agent definitions, orchestrations — identified by the SHA3-256 hash of their metadata. Use when working with any venue asset.
-argument-hint: "<store|get|list|explain> <id-or-file>"
+argument-hint: "<store|get|content|list|explain> <ref-or-file>"
 ---
 
 # Assets
@@ -24,17 +24,17 @@ Additional categorisation via the `type` field (e.g. `"type": "orchestration"`, 
 
 ## Asset Resolution
 
-Asset references are resolved universally across the platform. Anywhere an asset ID is accepted (operations, agent definitions, orchestrations), these forms all work:
+Asset metadata references are resolved consistently across the platform. Anywhere an asset `ref` is accepted (operations, agent definitions, orchestrations), these forms all work:
 
 | Form | Example | Description |
 |------|---------|-------------|
 | Hex hash | `7a8b9c0d...` | Direct content-addressed ID (64 hex chars) |
 | `/a/<hash>` | `/a/7a8b9c0d...` | Explicit asset namespace path |
 | `/o/<name>` | `/o/my-pipeline` | User's operations namespace (per-user) |
-| Operation name | `agent:create` | Registered venue operation |
+| Venue catalog path | `v/ops/agent/create` | Registered venue operation metadata |
 | DID URL | `did:web:venue.example.com/a/7a8b...` | Fully qualified federated reference |
 
-This means `agent:create definition="my-pipeline-agent"` works if that name is registered, as does passing a raw hash or a `/o/` path.
+Content lookup is a wider seam: `asset_content ref=...` additionally accepts `file://<root>/<path>`, `dlfs/<drive>/<path>`, and owner-scoped DID/DLFS paths. A raw file has content but not asset metadata, so `asset_content` can succeed where `asset_get` correctly reports no asset.
 
 ## Common Metadata Fields
 
@@ -55,8 +55,8 @@ Per [COG-5](https://docs.covia.ai/protocol/cogs/COG-005), these fields are recom
 
 | Tool | Purpose |
 |------|---------|
-| `asset_store` | Store metadata (+ optional content) -> returns content-addressed ID |
-| `asset_get` | Retrieve full metadata by ID |
+| `asset_store` | Store metadata (+ optional content) -> returns `{ref, id}` |
+| `asset_get` | Retrieve full metadata by reference |
 | `asset_list` | List assets with optional `type` filter and pagination |
 | `asset_content` | Retrieve binary content payload |
 
@@ -85,15 +85,23 @@ asset_store  metadata={"name": "My Document", "content": {"contentType": "text/p
 
 The `content.sha256` field is automatically computed and injected if not provided.
 
-Returns `{id: "<hex hash>", stored: true}`.
+Returns `{ref: "<DID URL>", id: "<DID URL>", stored: true}`; `id` is retained as a compatibility alias for `ref`.
 
-### `get <id>` — Retrieve asset metadata
+### `get <ref>` — Retrieve asset metadata
 
 ```
-asset_get  id=<hash>
+asset_get  ref=<hash-or-path-or-DID-URL>
 ```
 
 Returns `{exists: true, value: <full metadata>}` or `{exists: false}`.
+
+### `content <ref>` — Retrieve bytes
+
+```
+asset_content  ref=<asset-or-file-or-DLFS-reference>
+```
+
+Returns Blob `value` plus `contentType` when known. Use `contentRef` to stream the same bytes into `file_write`, `dlfs_write`, `vault_write`, `archive_list`, or `archive_extract` without base64 conversion.
 
 ### `list [type]` — List stored assets
 
@@ -111,7 +119,7 @@ Returns summaries: id, name, type, description.
 Fetch the asset and present a human-readable breakdown:
 
 ```
-asset_get  id=<hash>
+asset_get  ref=<hash-or-path-or-DID-URL>
 ```
 
 For **operations**: show adapter, input/output schemas, any step dependencies.
@@ -160,8 +168,8 @@ Agent definitions have an `agent` object:
 Create an agent from a stored definition:
 
 ```
-asset_store  metadata=<definition json>   -> returns hash
-agent_create  agentId=Alice  definition=<hash>
+asset_store  metadata=<definition json>   -> returns ref
+agent_create  agentId=Alice  definition=<ref>
 ```
 
 The `definition` field accepts any asset reference (hash, name, `/o/` path, DID URL).

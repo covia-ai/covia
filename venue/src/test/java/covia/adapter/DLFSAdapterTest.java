@@ -11,18 +11,27 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiPredicate;
 
+import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.AccountKey;
 import convex.core.data.AVector;
 import convex.core.data.Index;
 import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.lang.RT;
+import convex.lattice.LatticeContext;
 import convex.lattice.cursor.ALatticeCursor;
 import covia.lattice.Covia;
+import covia.venue.CoviaApplication;
 import covia.venue.Engine;
 import covia.venue.Config;
 import covia.venue.RequestContext;
@@ -96,6 +105,43 @@ public class DLFSAdapterTest {
 		String content = RT.ensureString(RT.getIn(result, "content")).toString();
 		assertEquals("{\"name\": \"Sarah Smith\"}", content);
 		assertEquals("utf-8", RT.ensureString(RT.getIn(result, "encoding")).toString());
+	}
+
+	@Test
+	public void testCreateFromStandardContentDescriptor() {
+		run("v/ops/dlfs/create-drive", Maps.of("name", "descriptor-create"));
+		ACell created = run("v/ops/dlfs/create", Maps.of(
+			"drive", "descriptor-create",
+			"content", Maps.of(
+				"inline", "new dlfs content",
+				"contentType", "text/plain",
+				"fileName", "created.txt")));
+		assertTrue(RT.bool(RT.getIn(created, "created")));
+		assertEquals("dlfs/descriptor-create/created.txt",
+			RT.ensureString(RT.getIn(created, "ref")).toString());
+
+		ACell read = run("v/ops/dlfs/read", Maps.of(
+			"drive", "descriptor-create", "path", "created.txt"));
+		assertEquals("new dlfs content", RT.getIn(read, "content").toString());
+
+		assertThrows(Exception.class, () -> run("v/ops/dlfs/create", Maps.of(
+			"drive", "descriptor-create",
+			"path", "created.txt",
+			"content", Maps.of("inline", "replacement"))));
+		read = run("v/ops/dlfs/read", Maps.of(
+			"drive", "descriptor-create", "path", "created.txt"));
+		assertEquals("new dlfs content", RT.getIn(read, "content").toString());
+	}
+
+	@Test
+	public void testCreateEmptyFileWithoutContent() {
+		run("v/ops/dlfs/create-drive", Maps.of("name", "empty-create"));
+		ACell created = run("v/ops/dlfs/create", Maps.of(
+			"drive", "empty-create", "path", "empty.bin"));
+		assertEquals(0L, RT.ensureLong(RT.getIn(created, "written")).longValue());
+		ACell stat = run("v/ops/dlfs/stat", Maps.of(
+			"drive", "empty-create", "path", "empty.bin"));
+		assertEquals(0L, RT.ensureLong(RT.getIn(stat, "size")).longValue());
 	}
 
 	/** Regression for covia#342 / Convex 0.8.12: directory entries must use the
@@ -231,6 +277,106 @@ public class DLFSAdapterTest {
 		assertTrue(syncCount.get() > beforeSync,
 			"DLFSLocal.sync() should trigger root cursor onSync callback, " +
 			"but syncCount went from " + beforeSync + " to " + syncCount.get());
+	}
+
+	/** Regression for covia#387 / convex#703: a stale sync callback carrying a
+	 * tombstone must not erase a same-timestamp recreation from a long-lived
+	 * drive view. */
+	@Test
+	public void testRecreateSurvivesConcurrentStaleSync() throws Exception {
+		Engine isolated = Engine.createTemp(Maps.of(
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
+		CountDownLatch syncEntered = new CountDownLatch(1);
+		CountDownLatch releaseSync = new CountDownLatch(1);
+		AtomicBoolean blockNextSync = new AtomicBoolean();
+		AtomicReference<Throwable> syncFailure = new AtomicReference<>();
+		Thread syncThread = null;
+		try {
+			Engine.addDemoAssets(isolated);
+			DLFSAdapter adapter = (DLFSAdapter) isolated.getAdapter("dlfs");
+			Path file = adapter.getDriveForIdentity(
+				ALICE_DID.toString(), "recreate-under-sync").getPath("/entry.txt");
+
+			Files.writeString(file, "first");
+			Files.delete(file);
+
+			var root = isolated.getRootCursor();
+			assertInstanceOf(convex.lattice.cursor.RootLatticeCursor.class, root);
+			((convex.lattice.cursor.RootLatticeCursor<?>) root).onSync(value -> {
+				if (blockNextSync.compareAndSet(true, false)) {
+					syncEntered.countDown();
+					try {
+						if (!releaseSync.await(5, TimeUnit.SECONDS)) {
+							throw new IllegalStateException("Timed out waiting to release stale sync");
+						}
+					} catch (InterruptedException e) {
+						Thread.currentThread().interrupt();
+						throw new IllegalStateException(e);
+					}
+				}
+				return value;
+			});
+
+			blockNextSync.set(true);
+			syncThread = Thread.startVirtualThread(() -> {
+				try {
+					isolated.syncState();
+				} catch (Throwable t) {
+					syncFailure.set(t);
+				}
+			});
+			assertTrue(syncEntered.await(5, TimeUnit.SECONDS), "sync callback did not start");
+
+			Files.writeString(file, "second");
+			releaseSync.countDown();
+			syncThread.join(5000);
+			assertFalse(syncThread.isAlive(), "sync thread did not finish");
+			assertNull(syncFailure.get(), "sync failed");
+			assertEquals("second", Files.readString(file));
+		} finally {
+			releaseSync.countDown();
+			if (syncThread != null) syncThread.join(5000);
+			isolated.close();
+		}
+	}
+
+	@Test
+	public void testLongLivedDriveUsesCurrentVenueClock() throws Exception {
+		DLFSAdapter adapter = (DLFSAdapter) engine.getAdapter("dlfs");
+		var drive = adapter.getDriveForIdentity(ALICE_DID.toString(), "live-clock");
+		long before = drive.getCursor().getContext().currentTimestamp().longValue();
+		Thread.sleep(3);
+		long after = drive.getCursor().getContext().currentTimestamp().longValue();
+		assertTrue(after > before, "long-lived drive timestamp must advance with the venue clock");
+	}
+
+	@Test
+	public void testDriveSignerOverridePreservesHostPolicy() throws Exception {
+		AKeyPair venueKey = AKeyPair.generate();
+		CoviaApplication application = CoviaApplication.create(venueKey);
+		BiPredicate<ACell, AccountKey> ownerVerifier = (owner, signer) -> false;
+		application.cursor().setContext(LatticeContext.EMPTY
+			.withOwnerVerifier(ownerVerifier)
+			.withMaxFutureTimestampSkew(1234)
+			.withSigningKey(venueKey));
+
+		Engine isolated = new Engine(Maps.of(
+				Config.USERS, Maps.of(Config.AUTO_CREATE, true)),
+				application, venueKey).start();
+		try {
+			Engine.addDemoAssets(isolated);
+			DLFSAdapter adapter = (DLFSAdapter) isolated.getAdapter("dlfs");
+			LatticeContext driveContext = adapter.getDriveForIdentity(
+				TestEngine.uniqueDID("dlfs-host-policy").toString(), "policy")
+				.getCursor().getContext();
+
+			assertSame(ownerVerifier, driveContext.getOwnerVerifier());
+			assertEquals(1234, driveContext.getMaxFutureTimestampSkew(-1));
+			assertNotEquals(venueKey.getAccountKey(),
+				driveContext.getSigningKey().getAccountKey());
+		} finally {
+			isolated.close();
+		}
 	}
 
 	@Test
@@ -413,8 +559,10 @@ public class DLFSAdapterTest {
 		run("v/ops/dlfs/write", Maps.of("drive", "cp", "path", "pic.png",
 			"bytes", java.util.Base64.getEncoder().encodeToString(bytes)));
 
-		ACell r = run("v/ops/asset/content", Maps.of("id", "dlfs/cp/pic.png"));
+		ACell r = run("v/ops/asset/content", Maps.of("ref", "dlfs/cp/pic.png"));
 		assertEquals(convex.core.data.prim.CVMBool.TRUE, RT.getIn(r, "exists"));
+		assertEquals("dlfs/cp/pic.png", RT.getIn(r, "ref").toString());
+		assertEquals("image/png", RT.getIn(r, "contentType").toString());
 		var value = RT.getIn(r, "value");
 		assertTrue(value instanceof convex.core.data.ABlob, "content should be a Blob");
 		assertArrayEquals(bytes, ((convex.core.data.ABlob) value).getBytes());
@@ -445,7 +593,8 @@ public class DLFSAdapterTest {
 		run("v/ops/dlfs/create-drive", Maps.of("name", "src"));
 		run("v/ops/dlfs/create-drive", Maps.of("name", "dst"));
 		run("v/ops/dlfs/write", Maps.of("drive", "src", "path", "a.txt", "content", "across drives"));
-		run("v/ops/dlfs/write", Maps.of("drive", "dst", "path", "b.txt", "asset", "dlfs/src/a.txt"));
+		run("v/ops/dlfs/write", Maps.of(
+			"drive", "dst", "path", "b.txt", "contentRef", "dlfs/src/a.txt"));
 		ACell read = run("v/ops/dlfs/read", Maps.of("drive", "dst", "path", "b.txt"));
 		assertEquals("across drives", RT.getIn(read, "content").toString());
 	}

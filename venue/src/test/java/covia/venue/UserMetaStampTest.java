@@ -39,12 +39,10 @@ public class UserMetaStampTest {
 		return (v instanceof CVMLong l) ? l.longValue() : -1;
 	}
 
-	/** Advances the harness write clock past the current stamp. This test
-	 *  mutates the lattice directly (no JobManager dispatch), so it drives
-	 *  the clock policy explicitly — real traffic gets this per dispatch. */
+	/** Advances wall time past the current stamp. The application's live
+	 *  LatticeContext resolves this clock at the next logical write. */
 	private void tick() {
 		try { Thread.sleep(3); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
-		engine.refreshWriteClock();
 	}
 
 	@Test
@@ -62,16 +60,14 @@ public class UserMetaStampTest {
 
 	@Test
 	public void testDeepAgentWriteBumpsUpdatedNotCreated() {
-		user.ensureAgent("meta-agent", Maps.empty(), null);
+		AgentState agent = user.ensureAgent("meta-agent", Maps.empty(), null);
 		long created = metaField("created");
 		long before = metaField("updated");
 		assertTrue(created > 0);
 		tick();
 
-		// Wrappers capture the write clock when derived — mint one AFTER the
-		// clock advance, exactly as real traffic does (per-access derivation
-		// after the dispatch refresh).
-		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("meta-agent");
+		// The existing long-lived wrapper shares the application's live policy;
+		// it does not need to be reconstructed with a fresh context snapshot.
 		agent.setStatus(AgentState.SUSPENDED);
 
 		assertTrue(metaField("updated") > before,

@@ -117,12 +117,17 @@ public class ArchiveAdapterTest {
 	public void testZipToAssetThenExtractRoundTrips() throws IOException {
 		ACell zipped = run("v/ops/archive/zip", Maps.of(
 			"root", "work", "paths", Vectors.of(Strings.create("data"))));
-		String assetRef = RT.ensureString(RT.getIn(zipped, "asset")).toString();
+		String assetRef = RT.ensureString(RT.getIn(zipped, "ref")).toString();
 		assertNotNull(assetRef);
 		assertTrue(assetRef.contains("/a/"), "zip must return a CAS asset ref: " + assetRef);
+		assertEquals(assetRef, RT.getIn(zipped, "asset").toString(),
+			"the legacy asset output remains an alias for ref");
+
+		ACell content = run("v/ops/asset/content", Maps.of("ref", assetRef));
+		assertEquals("application/zip", RT.getIn(content, "contentType").toString());
 
 		run("v/ops/archive/extract", Maps.of(
-			"asset", assetRef, "destRoot", "work", "destPath", "restored"));
+			"contentRef", assetRef, "destRoot", "work", "destPath", "restored"));
 		assertEquals("alpha", Files.readString(workspace.resolve("restored/data/a.txt")));
 		assertEquals("bravo", Files.readString(workspace.resolve("restored/data/sub/b.txt")));
 	}

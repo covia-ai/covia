@@ -165,6 +165,7 @@ public class AssetAdapter extends AAdapter {
 		AString didUrl = ctx.getUserDID().append("/a/" +id.toHexString());
 		return Maps.of(
 			Fields.ID, didUrl,
+			Fields.REF, didUrl,
 			Fields.STORED, CVMBool.TRUE);
 	}
 
@@ -199,6 +200,27 @@ public class AssetAdapter extends AAdapter {
 	/** Default max content size: 1 MB */
 	private static final long DEFAULT_MAX_SIZE = 1_000_000;
 
+	/** Canonical operation input is ref; older field names remain aliases. */
+	private static AString referenceArg(ACell input, AString... aliases) {
+		AString ref = RT.ensureString(RT.getIn(input, Fields.REF));
+		for (AString alias : aliases) {
+			AString value = RT.ensureString(RT.getIn(input, alias));
+			if (value == null) continue;
+			if (ref != null && !ref.equals(value)) {
+				throw new IllegalArgumentException("ref conflicts with legacy '" + alias + "'");
+			}
+			ref = value;
+		}
+		if (ref == null) throw new IllegalArgumentException("ref is required");
+		return ref;
+	}
+
+	private static AMap<AString, ACell> withContentType(
+			AMap<AString, ACell> result, String contentType) {
+		return (contentType == null) ? result
+			: result.assoc(Fields.CONTENT_TYPE, Strings.create(contentType));
+	}
+
 	/**
 	 * Parses an asset hash from an ID string. Accepts bare hash, a/<hash>,
 	 * /a/<hash>, or did:key:.../a/<hash> formats.
@@ -223,8 +245,7 @@ public class AssetAdapter extends AAdapter {
 
 	@SuppressWarnings("unchecked")
 	private ACell handleGet(ACell input, RequestContext ctx) {
-		AString idStr = RT.ensureString(RT.getIn(input, Fields.ID));
-		if (idStr == null) throw new IllegalArgumentException("id is required");
+		AString idStr = referenceArg(input, Fields.ID);
 		// An asset (a/) is per-DID exactly like a workspace path (w/): reading
 		// another user's asset needs read rights — a cross-user ref the caller
 		// can't cover is a denial, not a silent miss. readAs is the store to read
@@ -246,10 +267,11 @@ public class AssetAdapter extends AAdapter {
 		}
 
 		if (meta == null) {
-			return Maps.of(Fields.ID, idStr, K_EXISTS, CVMBool.FALSE);
+			return Maps.of(Fields.REF, idStr, Fields.ID, idStr, K_EXISTS, CVMBool.FALSE);
 		}
 
 		return Maps.of(
+			Fields.REF, idStr,
 			Fields.ID, idStr,
 			K_EXISTS, CVMBool.TRUE,
 			Fields.VALUE, meta);
@@ -257,19 +279,10 @@ public class AssetAdapter extends AAdapter {
 
 	@SuppressWarnings("unchecked")
 	private ACell handleContent(ACell input, RequestContext ctx) {
-		AString idStr = RT.ensureString(RT.getIn(input, Fields.ID));
-		if (idStr == null) throw new IllegalArgumentException("id is required");
-		// Own-scope enforcement for the content-provider path (a restricted scope
-		// must grant asset/read); permissive for null scope. The cross-user gate is
-		// on the CAS fallback below, and DLFS providers gate themselves (crud/read).
-		engine.requireAuthority(ctx, idStr, Abilities.ASSET_READ);
+		AString idStr = referenceArg(input, Fields.ID);
 
-		// Unified reference-addressed resolution first: DLFS is an alternative
-		// content storage mechanism, so a drive path (dlfs/<drive>/<path>, or
-		// owner-prefixed cross-user) serves content through the same op as a
-		// CAS asset. Providers enforce their own access checks (their own
-		// crud/read cross-user gate), so the CAS gate below is applied only to the
-		// CAS fallback, which needs asset/read.
+		// Unified reference-addressed resolution first: CAS, lattice paths and
+		// providers such as file:// and DLFS all enter through the same seam.
 		try {
 			covia.venue.storage.ContentProvider.Resolved resolved = engine.resolveContent(idStr, ctx);
 			if (resolved != null) {
@@ -278,13 +291,17 @@ public class AssetAdapter extends AAdapter {
 				if (maxSzCell instanceof CVMLong l) maxSz = Math.max(1, l.longValue());
 				long sz = resolved.content().getSize();
 				if (sz > maxSz) {
-					return Maps.of(Fields.ID, idStr, K_EXISTS, CVMBool.TRUE,
+					AMap<AString, ACell> result = Maps.of(
+						Fields.REF, idStr, Fields.ID, idStr, K_EXISTS, CVMBool.TRUE,
 						K_HAS_CONTENT, CVMBool.TRUE,
 						K_TRUNCATED, CVMBool.TRUE, K_SIZE, CVMLong.create(sz));
+					return withContentType(result, resolved.contentType());
 				}
-				return Maps.of(Fields.ID, idStr, K_EXISTS, CVMBool.TRUE,
+				AMap<AString, ACell> result = Maps.of(
+					Fields.REF, idStr, Fields.ID, idStr, K_EXISTS, CVMBool.TRUE,
 					K_HAS_CONTENT, CVMBool.TRUE,
 					Fields.VALUE, resolved.content().getBlob());
+				return withContentType(result, resolved.contentType());
 			}
 		} catch (java.io.IOException e) {
 			throw new IllegalArgumentException("Failed to read content at " + idStr + ": " + e.getMessage(), e);
@@ -315,7 +332,7 @@ public class AssetAdapter extends AAdapter {
 		}
 
 		if (record == null) {
-			return Maps.of(Fields.ID, idStr, K_EXISTS, CVMBool.FALSE,
+			return Maps.of(Fields.REF, idStr, Fields.ID, idStr, K_EXISTS, CVMBool.FALSE,
 				K_HAS_CONTENT, CVMBool.FALSE);
 		}
 
@@ -323,7 +340,7 @@ public class AssetAdapter extends AAdapter {
 		if (content == null) {
 			// The CAS record exists, but callers (especially tool-using models)
 			// need an explicit distinction from a legitimately empty payload.
-			return Maps.of(Fields.ID, idStr, K_EXISTS, CVMBool.TRUE,
+			return Maps.of(Fields.REF, idStr, Fields.ID, idStr, K_EXISTS, CVMBool.TRUE,
 				K_HAS_CONTENT, CVMBool.FALSE,
 				Fields.MESSAGE, Strings.create(
 					"Asset metadata does not specify a content payload"));
@@ -338,6 +355,7 @@ public class AssetAdapter extends AAdapter {
 		long size = (content instanceof ABlob b) ? b.count() : content.getMemorySize();
 		if (size > maxSize) {
 			return Maps.of(
+				Fields.REF, idStr,
 				Fields.ID, idStr,
 				K_EXISTS, CVMBool.TRUE,
 				K_HAS_CONTENT, CVMBool.TRUE,
@@ -347,6 +365,7 @@ public class AssetAdapter extends AAdapter {
 
 		// Returns Blob, which JSON-serialises to "0x..." hex string
 		return Maps.of(
+			Fields.REF, idStr,
 			Fields.ID, idStr,
 			K_EXISTS, CVMBool.TRUE,
 			K_HAS_CONTENT, CVMBool.TRUE,
@@ -411,6 +430,7 @@ public class AssetAdapter extends AAdapter {
 				Hash h = Hash.wrap(entry.getKey().getBytes());
 				AMap<AString, ACell> summary = Maps.of(
 					Fields.ID, Strings.create(h.toHexString()),
+					Fields.REF, ctx.getUserDID().append("/a/" + h.toHexString()),
 					Fields.NAME, meta.get(Fields.NAME),
 					Fields.TYPE, meta.get(Fields.TYPE),
 					Fields.DESCRIPTION, meta.get(Fields.DESCRIPTION));
@@ -433,10 +453,7 @@ public class AssetAdapter extends AAdapter {
 
 	@SuppressWarnings("unchecked")
 	private ACell handlePin(ACell input, RequestContext ctx) {
-		// Accept `path` (preferred) or `id` (deprecated alias) for one cycle.
-		AString pathStr = RT.ensureString(RT.getIn(input, Fields.PATH));
-		if (pathStr == null) pathStr = RT.ensureString(RT.getIn(input, Fields.ID));
-		if (pathStr == null) throw new IllegalArgumentException("path is required");
+		AString pathStr = referenceArg(input, Fields.PATH, Fields.ID);
 		// Pin has two distinct authority questions: may the caller read the
 		// source, and may it create a durable asset in its own store? Do not ask
 		// for asset/store on the source path — that both misses private-read
@@ -455,7 +472,10 @@ public class AssetAdapter extends AAdapter {
 		// generic path resolver would only return the metadata.
 		Hash existingHash = parseAssetId(pathStr);
 		if (existingHash != null) {
-			AVector<?> record = engine.getAssetRecord(existingHash, ctx);
+			boolean local = !pathStr.startsWith("did:") || engine.isLocalDIDResource(pathStr);
+			AString owner = local
+				? engine.requireLocalAccess(ctx, pathStr, Abilities.ASSET_READ) : null;
+			AVector<?> record = local ? engine.getAssetRecord(existingHash, owner) : null;
 			if (record != null) {
 				metaString = RT.ensureString(record.get(AssetStore.POS_JSON));
 				content = record.get(AssetStore.POS_CONTENT);
@@ -503,7 +523,9 @@ public class AssetAdapter extends AAdapter {
 		// convenient for version comparison.
 		AString didUrl = ctx.getUserDID().append("/a/" +hash.toHexString());
 		return Maps.of(
+			Fields.REF, didUrl,
 			Fields.PATH, didUrl,
+			Fields.ID, Strings.create(hash.toHexString()),
 			Strings.intern("hash"), Strings.create(hash.toHexString()));
 	}
 }

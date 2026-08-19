@@ -8,7 +8,7 @@ This document describes how to build the Covia project using Maven.
 - **Maven 3.7+**: Minimum Maven version required (enforced by maven-enforcer-plugin)
 - **Git**: For cloning the repository
 
-All dependencies, including Convex 0.8.13, resolve from Maven Central. A clean Covia checkout therefore builds directly with Maven; no sibling Convex checkout or source build is required.
+Covia targets Convex 0.8.14. Maven resolves the release from the local repository or configured remote repositories in the normal way.
 
 ## Project Structure
 

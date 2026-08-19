@@ -54,6 +54,7 @@ import dev.langchain4j.model.ollama.OllamaChatModel;
 import dev.langchain4j.model.ollama.OllamaModelCard;
 import dev.langchain4j.model.ollama.OllamaModels;
 import dev.langchain4j.model.openai.OpenAiChatModel;
+import dev.langchain4j.model.openai.OpenAiChatRequestParameters;
 
 /**
  * LLM adapter providing level 3 (single LLM call) operations.
@@ -218,6 +219,12 @@ public class LangChainAdapter extends AAdapter {
 		final AString effectiveUrl = (ollamaUrl != null) ? Strings.create(ollamaUrl) : urlParam;
 
 		// Build the ChatModel
+		// buildProviderModel() applies its own defaultModelFor(provider) fallback
+		// internally when finalModelName is null (e.g. the frontend's "Venue
+		// default" option omits "model" entirely) — that resolved name is local
+		// to that method, so it's recomputed here for callers downstream (like
+		// callModel's reasoning-model check) that need the model actually in use.
+		final String resolvedModelName = (finalModelName != null) ? finalModelName : defaultModelFor(provider);
 		final ChatModel chatModel = buildProviderModel(provider, finalModelName, apiKey, effectiveUrl, tuning);
 		if (chatModel == null) {
 			return CompletableFuture.completedFuture(
@@ -277,7 +284,7 @@ public class LangChainAdapter extends AAdapter {
 				AVector<ACell> resolvedMessages = resolveImageRefs(providerMessages, rctx);
 				ACell result;
 				try {
-					result = callModel(provider, chatModel, resolvedMessages, tools, responseFormatCell);
+					result = callModel(provider, resolvedModelName, chatModel, resolvedMessages, tools, responseFormatCell);
 				} catch (RuntimeException e) {
 					// A connect failure against Ollama is almost always topology
 					// (Docker vs host) — turn the bare ConnectException into a
@@ -730,7 +737,7 @@ public class LangChainAdapter extends AAdapter {
 	 * @param responseFormatCell Response format: null (default text), "json" or "text" string,
 	 *        or a map {@code {name: "...", schema: {type: "object", ...}}} for strict schema mode
 	 */
-	private static ACell callModel(String provider, ChatModel model, AVector<ACell> messages,
+	private static ACell callModel(String provider, String modelName, ChatModel model, AVector<ACell> messages,
 			AVector<ACell> tools, ACell responseFormatCell) {
 		List<ChatMessage> chatMessages = toChatMessages(messages);
 		ResponseFormat responseFormat = toResponseFormat(responseFormatCell);
@@ -751,15 +758,35 @@ public class LangChainAdapter extends AAdapter {
 			log.debug("  msg[{}]: {}", i, chatMessages.get(i));
 		}
 
-		boolean needsRequest = (tools != null && tools.count() > 0) || responseFormat != null;
+		boolean hasTools = tools != null && tools.count() > 0;
+		boolean needsRequest = hasTools || responseFormat != null;
 		ChatResponse response;
 		if (needsRequest) {
 			ChatRequest.Builder builder = ChatRequest.builder().messages(chatMessages);
-			if (tools != null && tools.count() > 0) {
-				builder.toolSpecifications(toToolSpecifications(tools));
-			}
-			if (responseFormat != null) {
-				builder.responseFormat(responseFormat);
+			if (hasTools && "openai".equals(provider) && isOpenAiReasoningModel(modelName)) {
+				// OpenAI rejects function tools together with a reasoning
+				// effort on /v1/chat/completions for the gpt-5.x family
+				// ("Function tools with reasoning_effort are not supported
+				// for <model> in /v1/chat/completions. To use function
+				// tools, use /v1/responses or set reasoning_effort to
+				// 'none'.") langchain4j's OpenAiChatModel never sets
+				// reasoning_effort itself, but the API defaults it to a
+				// non-'none' value server-side whenever it's omitted — so an
+				// explicit 'none' here is required, not just a fallback.
+				// Scoped to hasTools: a tool-free turn keeps the provider's
+				// default reasoning effort.
+				OpenAiChatRequestParameters.Builder paramsBuilder = OpenAiChatRequestParameters.builder()
+					.toolSpecifications(toToolSpecifications(tools))
+					.reasoningEffort("none");
+				if (responseFormat != null) paramsBuilder.responseFormat(responseFormat);
+				builder.parameters(paramsBuilder.build());
+			} else {
+				if (hasTools) {
+					builder.toolSpecifications(toToolSpecifications(tools));
+				}
+				if (responseFormat != null) {
+					builder.responseFormat(responseFormat);
+				}
 			}
 			response = model.chat(builder.build());
 		} else {
@@ -784,6 +811,22 @@ public class LangChainAdapter extends AAdapter {
 	 */
 	static boolean lacksSchemaResponseFormat(String provider) {
 		return "anthropic".equals(provider);
+	}
+
+	/**
+	 * OpenAI's gpt-5.x family are reasoning models: {@code /v1/chat/completions}
+	 * defaults their reasoning effort to a non-'none' value whenever the
+	 * request omits it, which OpenAI rejects together with function tools
+	 * (see the {@code reasoningEffort("none")} call site in {@link #callModel}).
+	 * Every model this adapter's catalog recommends for {@code provider:
+	 * "openai"} is gpt-5.x (openai.json / HostedProvider "openai"); this check
+	 * is deliberately scoped to that prefix rather than applied to every
+	 * openai-compatible provider, since {@code reasoning_effort} is an
+	 * OpenAI-specific field an arbitrary compatible endpoint (or an older,
+	 * non-reasoning model a caller names explicitly) may reject outright.
+	 */
+	static boolean isOpenAiReasoningModel(String modelName) {
+		return modelName != null && modelName.toLowerCase(java.util.Locale.ROOT).startsWith("gpt-5");
 	}
 
 	/**
@@ -1032,10 +1075,11 @@ public class LangChainAdapter extends AAdapter {
 	 * content — under the <b>caller's</b> authority. This is the preferred way
 	 * to pass images: the venue persists operation input in the job record, so
 	 * an inline base64 image would land (multi-MB, possibly sensitive) in
-	 * durable lattice history, while an asset reference keeps the record tiny
-	 * and content-address deduped. The ref accepts any resolvable form — an
+	 * durable lattice history, while a content reference keeps the record tiny.
+	 * Asset references remain content-address deduped. The ref accepts any
+	 * resolvable content form — an
 	 * asset hash ({@code a/<hash>}), a workspace path ({@code w/…}) holding
-	 * either asset metadata or a reference string, or a DID URL.
+	 * either asset metadata or a reference string, a file/DLFS path, or a DID URL.
 	 * Messages without asset image blocks pass through unchanged.
 	 */
 	@SuppressWarnings("unchecked")
@@ -1065,12 +1109,12 @@ public class LangChainAdapter extends AAdapter {
 		return out;
 	}
 
-	/** Resolves one asset-image block to an inline base64 block. Fail-loud: an
+	/** Resolves one referenced-image block to an inline base64 block. Fail-loud: an
 	 *  unresolvable image is a wrong answer, not a degraded one. */
 	private ACell resolveImageAsset(ACell block, RequestContext ctx) {
 		AString ref = RT.ensureString(RT.getIn(block, "source", "ref"));
 		if (ref == null) throw new IllegalArgumentException(
-			"image asset source requires a 'ref' (asset hash, workspace path, or DID URL)");
+			"image asset source requires a content 'ref' (asset, workspace, file, DLFS, or DID URL)");
 		try {
 			// Unified reference-addressed content resolution (Engine.resolveContent):
 			// CAS assets, lattice values, and DLFS drive paths — every storage
@@ -1081,7 +1125,7 @@ public class LangChainAdapter extends AAdapter {
 			String mime = (resolved != null) ? resolved.contentType() : null;
 			if (bytes == null || bytes.length == 0) {
 				throw new IllegalArgumentException(
-					"image ref '" + ref + "' did not resolve to asset content");
+					"image ref '" + ref + "' did not resolve to content");
 			}
 
 			// Explicit mediaType on the block wins; else asset contentType; else sniff.

@@ -18,7 +18,7 @@ import covia.venue.RequestContext;
  * operations to one configured drive. The default drive name is {@code vault};
  * operators can override it with {@code adapters.vault.drive}.
  *
- * <p>Provides {@code vault:read}, {@code vault:write}, {@code vault:list},
+ * <p>Provides {@code vault:read}, {@code vault:create}, {@code vault:write}, {@code vault:list},
  * {@code vault:mkdir}, and {@code vault:delete} operations. The user never
  * needs to specify a drive name — operations always target their personal
  * vault.</p>
@@ -74,6 +74,7 @@ public class VaultAdapter extends AAdapter {
 				driveName);
 		}
 		installAsset("vault/read",   ASSETS_PATH + "read.json");
+		installAsset("vault/create", ASSETS_PATH + "create.json");
 		installAsset("vault/write",  ASSETS_PATH + "write.json");
 		installAsset("vault/list",   ASSETS_PATH + "list.json");
 		installAsset("vault/mkdir",  ASSETS_PATH + "mkdir.json");

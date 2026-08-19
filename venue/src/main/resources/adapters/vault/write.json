@@ -1,6 +1,6 @@
 {
   "name": "Write Vault File",
-  "description": "Write a file to the user's personal vault. Creates the file if it does not exist; overwrites if it does. Use vault:mkdir first to create parent directories. Supply exactly one of content, value, bytes (base64), or asset. Large binary uploads should use WebDAV PUT.",
+  "description": "Write a file to the user's personal vault. Creates the file if it does not exist; overwrites if it does. Use vault:mkdir first to create parent directories. Supply exactly one of content, value, bytes (base64), or contentRef. Large binary uploads should use WebDAV PUT.",
   "creator": "Covia",
   "operation": {
     "adapter": "vault:write",
@@ -12,7 +12,8 @@
         "content": { "type": "string", "description": "UTF-8 text to write" },
         "value": { "description": "JSON-serialisable value to write as UTF-8 JSON" },
         "bytes": { "type": "string", "description": "Base64-encoded bytes to write" },
-        "asset": { "type": "string", "description": "Asset reference to write as file content (e.g. '/a/0x1234...', DID URL). Streams binary directly." }
+        "contentRef": { "type": "string", "description": "Resolvable content reference to stream, including an asset, file:// root path, or DLFS path" },
+        "asset": { "type": "string", "deprecated": true, "description": "Legacy alias for contentRef" }
       },
       "required": ["path"]
     },

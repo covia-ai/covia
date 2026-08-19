@@ -22,7 +22,7 @@ The canonical adapter table lives in `venue/CLAUDE.md` ("Adapter Reference"). Gr
 | Modules (not in covia.jar) | `sql` (covia-sql), `python` (covia-python-adapter), `telegram` (covia-telegram), `claudecode` (covia-claude-code) |
 | Testing | `test` |
 
-**Kernel adapters** — `covia`, `agent`, `dlfs`, `hitl`, `http`, `file`, `grid`, `venue` — can never be disabled or unloaded; the venue does not function without them.
+**Kernel adapters** — `covia`, `agent`, `dlfs`, `hitl`, `http`, `file`, `grid`, `venue` — are adapters the standard venue commonly depends on. The marker is informational: venue-authorised configuration and module lifecycle operations may still replace, disable or remove them.
 
 ## Commands
 
@@ -35,7 +35,7 @@ covia_list  path=v/info/adapters      # active adapters
 covia_list  path=v/info/modules       # loaded module jars
 ```
 
-Only **active** adapters appear under `v/info/adapters` — a disabled adapter is retracted from `v/info` and the catalog. To see disabled ones too, use `status` (needs venue authority, below).
+Only **active** adapters appear under `v/info/adapters`. A disabled adapter is removed from live dispatch and `v/info`, while its durable catalog metadata may remain. To see disabled ones too, use `status` (needs venue authority, below).
 
 ### `inspect <name>` — One adapter and its operations
 
@@ -111,11 +111,11 @@ A module jar is a shaded jar compiled against `venue` (provided scope) that decl
 
 ### Semantics to relay to the user
 
-- Enable, disable, load and unload each publish as **one lattice transaction** — the catalog never shows a half-applied adapter. The MCP tool registry rebuilds automatically on change; if the connected MCP client's tool list looks stale, reconnect with `/mcp`.
+- An authorised module load is last-write-wins: its adapters and catalog declarations replace existing names and paths. Disable/unload removes live dispatch and introspection but leaves durable catalog metadata until it is overwritten or explicitly deleted.
 - **In-flight jobs finish** on the retained adapter instance; anything that re-resolves the adapter by name later (multi-turn messages, restart recovery) fails at that point of use.
 - `configure` runs the adapter's `configure` hook — it may **reject** the settings, in which case nothing changes and the error says why.
 - Unload closes `AutoCloseable` adapters and the module classloader; JVM class unloading is best-effort (JDBC `DriverManager`, JNI can pin a loader). "Unloaded" means deregistered and released, not guaranteed collected.
-- **Runtime changes are not persisted.** After a restart the venue config (`adapters.*`, `modules`) is authoritative again. A persisted live configuration is a later step — say so if the user expects the change to survive a restart.
+- The **live runtime adapter set is not persisted.** After a restart the venue config (`adapters.*`, `modules`) is authoritative again; catalog metadata is lattice state and may remain.
 
 ## Boot-time configuration (persistent)
 
@@ -124,7 +124,7 @@ For changes that must survive restarts, edit the venue config instead (see `venu
 ```json
 {
   "adapters": {
-    "test":         { "enabled": false },          // park a non-kernel adapter (enable later at runtime)
+    "test":         { "enabled": false },          // park an adapter (enable later at runtime)
     "orchestrator": { "maxItems": 50, "maxConcurrency": 8 },
     "vault":        { "drive": "vault" },
     "agent":        { "sessionDelete": false }
@@ -137,7 +137,7 @@ For changes that must survive restarts, edit the venue config instead (see `venu
 }
 ```
 
-- `adapters.<name>` — per-adapter settings; adapters read the *effective* config (this block overlaid by any runtime `configure`). `enabled: false` on a kernel adapter is a boot error.
+- `adapters.<name>` — per-adapter settings; adapters read the *effective* config (this block overlaid by any runtime `configure`).
 - `modules` — jars loaded at boot; boot fails fast on any load error; `sha256` pins content.
 - `dynamicModules` — the runtime load/unload policy described above.
 
@@ -150,8 +150,7 @@ Follow "Adding a New Adapter" in `AGENTS.md`: extend `AAdapter` in `covia.adapte
 | Symptom | Cause / fix |
 |---------|-------------|
 | `Venue administration denied: requires adapter/manage …` | Caller is not the venue and holds no venue-issued delegation — see Authority above. Expected for the public MCP user. |
-| `Cannot resolve operation` | Wrong path, or the adapter is disabled/unloaded. `covia_read path=v/info/adapters/<name>`; note test ops are `v/test/ops/…`. |
-| Kernel adapter "cannot be disabled/unloaded" | By design — `covia`, `agent`, `dlfs`, `hitl`, `http`, `file`, `grid`, `venue`. |
-| `module/load` policy error | `dynamicModules.enabled` is off, the jar is outside `dynamicModules.dir`, the name has `..`/an absolute path without `anyPath`, or the `sha256` pin mismatched. Failed loads roll back completely. |
+| Operation metadata resolves but invocation fails | Its adapter is disabled/unloaded. Reload a module to overwrite it, or delete the catalog path explicitly. |
+| `module/load` policy error | `dynamicModules.enabled` is off, the jar is outside `dynamicModules.dir`, the name has `..`/an absolute path without `anyPath`, or the `sha256` pin mismatched. |
 | Change vanished after restart | Runtime changes are not persisted — put it in `adapters.*` / `modules` in the config. |
 | Newly enabled adapter's tools missing in the MCP client | Registry rebuilt server-side; reconnect the client (`/mcp`). |

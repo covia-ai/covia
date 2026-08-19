@@ -1,21 +1,25 @@
 {
 	"name": "Pin Asset",
-	"description": "Snapshot any resolvable value into your a/ content-addressed store. Idempotent — same value produces the same hash. Use to freeze a venue op or workspace value at a specific version. Returns {path, hash} where path is your DID URL for the pinned asset.",
+	"description": "Snapshot any resolvable metadata value into your a/ content-addressed store. Idempotent — the same value produces the same hash. Use to freeze a venue op or workspace value at a specific version. Returns {ref, id}; historical {path, hash} aliases are also included.",
 	"operation": {
 		"adapter": "asset:pin",
 		"toolName": "asset_pin",
 		"input": {
 			"type": "object",
 			"properties": {
-				"path": { "type": "string", "description": "Source address. Any resolvable form: hex hash, /a/<hash>, /o/<name>, /v/<path>, DID URL, or workspace path (w/, g/, j/, etc.)." }
+				"ref": { "type": "string", "description": "Source metadata reference. Any resolvable asset address." },
+				"path": { "type": "string", "deprecated": true, "description": "Deprecated alias for ref." },
+				"id": { "type": "string", "deprecated": true, "description": "Deprecated alias for ref." }
 			},
-			"required": ["path"]
+			"anyOf": [{ "required": ["ref"] }, { "required": ["path"] }, { "required": ["id"] }]
 		},
 		"output": {
 			"type": "object",
 			"properties": {
-				"path": { "type": "string", "description": "Caller's DID URL for the pinned asset (did:.../a/<hash>)" },
-				"hash": { "type": "string", "description": "Hex CAD3 hash of the pinned metadata — version identifier" }
+				"ref": { "type": "string", "description": "Caller's DID URL for the pinned asset" },
+				"id": { "type": "string", "description": "Hex CAD3 hash of the pinned metadata" },
+				"path": { "type": "string", "deprecated": true, "description": "Compatibility alias for ref" },
+				"hash": { "type": "string", "deprecated": true, "description": "Compatibility alias for id" }
 			}
 		}
 	}

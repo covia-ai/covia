@@ -198,6 +198,8 @@ public class ModuleLoaderTest {
 	@Test
 	public void testRuntimeLoadAndUnloadViaOps(@TempDir Path dir) throws Exception {
 		Path jar = buildModuleJar(dir);
+		Path overrideJar = dir.resolve("override-module.jar");
+		Files.copy(jar, overrideJar);
 		Engine engine = bootDynamic(dir, false);
 		try {
 			RequestContext ctx = RequestContext.of(Strings.create("did:test:runtimeload"));
@@ -229,19 +231,35 @@ public class ModuleLoaderTest {
 				Maps.of(Strings.create("value"), Strings.create("hot")), ctx);
 			assertEquals(Strings.create("hot"), RT.getIn(job.awaitResult(15000), "value"));
 
-			// Loading the same module twice is refused
-			ExecutionException dup = assertThrows(ExecutionException.class,
-				() -> asVenue(engine, "v/ops/venue/module/load",
-					Maps.of(Strings.create("module"), Strings.create(jar.getFileName().toString()))));
-			assertTrue(rootCause(dup).getMessage().contains("already loaded"), rootCause(dup).getMessage());
+			// Loading the same module again is an operator-directed replacement.
+			asVenue(engine, "v/ops/venue/module/load", Maps.of(
+				Strings.create("module"), Strings.create(jar.getFileName().toString()),
+				Strings.create("config"), Maps.of("label", "replacement")));
+			AAdapter replacement = engine.getAdapter("modtest");
+			assertNotSame(adapter, replacement);
+			assertTrue(replacement.getDescription().contains("replacement"));
 
-			// Unload: adapter, catalog, introspection and module record all go
+			// A differently named module may overwrite the same adapter name too.
+			asVenue(engine, "v/ops/venue/module/load", Maps.of(
+				Strings.create("module"), Strings.create(overrideJar.getFileName().toString()),
+				Strings.create("config"), Maps.of("label", "override")));
+			AAdapter override = engine.getAdapter("modtest");
+			assertNotSame(replacement, override);
+			assertTrue(override.getDescription().contains("override"));
+
+			// Unloading the shadowed module does not remove the newer live adapter.
 			ACell unloaded = asVenue(engine, "v/ops/venue/module/unload",
 				Maps.of(Strings.create("name"), Strings.create("modtest-module")));
 			assertEquals(CVMBool.TRUE, RT.getIn(unloaded, "unloaded"));
-			assertNull(engine.getAdapter("modtest"));
+			assertSame(override, engine.getAdapter("modtest"));
 			assertNull(engine.getModule("modtest-module"));
-			assertNull(engine.resolveAsset(Strings.create("v/ops/modtest/echo"), ctx));
+
+			// Unloading the current provider removes dispatch but retains metadata.
+			asVenue(engine, "v/ops/venue/module/unload",
+				Maps.of(Strings.create("name"), Strings.create("override-module")));
+			assertNull(engine.getAdapter("modtest"));
+			assertNotNull(engine.resolveAsset(Strings.create("v/ops/modtest/echo"), ctx),
+				"catalog metadata remains after the adapter is unloaded");
 			assertNull(engine.resolvePath(Strings.create("v/info/adapters/modtest"), engine.venueContext()));
 			assertNull(engine.resolvePath(Strings.create("v/info/modules/modtest-module"), engine.venueContext()));
 
@@ -249,7 +267,7 @@ public class ModuleLoaderTest {
 			asVenue(engine, "v/ops/venue/module/load",
 				Maps.of(Strings.create("module"), Strings.create(jar.getFileName().toString())));
 			assertNotNull(engine.getAdapter("modtest"));
-			assertNotSame(adapter, engine.getAdapter("modtest"));
+			assertNotSame(override, engine.getAdapter("modtest"));
 			assertNotNull(engine.resolveAsset(Strings.create("v/ops/modtest/echo"), ctx));
 		} finally {
 			engine.close();
@@ -362,7 +380,8 @@ public class ModuleLoaderTest {
 			asVenue(engine, "v/ops/venue/module/unload",
 				Maps.of(Strings.create("name"), Strings.create("modtest-module")));
 			assertNull(engine.getAdapter("modtest"));
-			assertNull(engine.resolveAsset(Strings.create("v/ops/modtest/echo"), ctx));
+			assertNotNull(engine.resolveAsset(Strings.create("v/ops/modtest/echo"), ctx),
+				"unloading leaves catalog metadata for possible later replacement");
 			assertTrue(engine.getModules().isEmpty());
 		} finally {
 			engine.close();

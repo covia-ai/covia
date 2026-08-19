@@ -71,7 +71,7 @@ Everything above the facet is standard asset metadata, unchanged:
 |-------|------|
 | `name` | Standard asset field. In a directory source the **key is canonical** and an inner `name` is ignored for identity. |
 | `description` | Standard asset field, required for skills: one line for the index — what the skill does and when to load it. Never the documentation. |
-| `content` | The standard content descriptor (`contentType`, `sha256`, `inline`, `dlfs`, …) describing where the body lives — exactly as for any other asset. |
+| `content` | The standard content descriptor (`contentType`, `fileName`, `inline`, `ref`, `sha256`) describing where the body lives — exactly as for any other asset. Existing `dlfs` pointers remain a compatibility alias for `ref`. |
 
 The **`skill` facet** carries the loadable extras, mirroring how `operation` carries invocability. All fields optional; an empty facet (or none at all) is valid — the skill is then pure instructions:
 
@@ -96,7 +96,7 @@ Body resolution is the venue's **universal content resolution** (`Engine.resolve
 
 - the CAS content blob;
 - **`content.inline`** — small textual content declared directly in the metadata map. The bytes are part of the metadata, so the asset's own identity hash covers them — no separate verification exists or is needed;
-- a `content.dlfs` binding (pinned when `content.sha256` is declared — hash-verified, drift fails loudly; live when not);
+- a `content.ref` binding to any resolvable asset, lattice path, file, DLFS path, or DID URL (pinned when `content.sha256` is declared — hash-verified, drift fails loudly; live when not). Existing `content.dlfs` bindings remain compatible;
 - a DLFS drive ref, or a raw blob value at the path.
 
 Nothing skill-specific here: `content.inline` is an asset-model feature, served by the same resolution for every content consumer (`asset:content`, context entries, skills). A metadata map that is not itself stored in the CAS (e.g. hand-written in a workspace) still serves its metadata-declared content.

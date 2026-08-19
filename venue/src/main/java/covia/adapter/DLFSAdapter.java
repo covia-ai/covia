@@ -27,11 +27,9 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
-import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.lattice.LatticeContext;
 import convex.lattice.cursor.ALatticeCursor;
-import convex.lattice.fs.DLFS;
 import convex.lattice.fs.impl.DLFSLocal;
 import covia.api.Fields;
 import covia.lattice.CapabilityChecker;
@@ -61,6 +59,7 @@ import covia.venue.User;
  *   <li>{@code dlfs:deleteDrive} — delete a drive</li>
  *   <li>{@code dlfs:list} — list directory contents</li>
  *   <li>{@code dlfs:read} — read file content</li>
+ *   <li>{@code dlfs:create} — create a new file from a content descriptor</li>
  *   <li>{@code dlfs:write} — write file content</li>
  *   <li>{@code dlfs:mkdir} — create directory</li>
  *   <li>{@code dlfs:delete} — delete file or directory</li>
@@ -143,6 +142,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		installAsset("dlfs/list",         ASSETS_PATH + "list.json");
 		installAsset("dlfs/tree",         ASSETS_PATH + "tree.json");
 		installAsset("dlfs/read",         ASSETS_PATH + "read.json");
+		installAsset("dlfs/create",       ASSETS_PATH + "create.json");
 		installAsset("dlfs/write",        ASSETS_PATH + "write.json");
 		installAsset("dlfs/append",       ASSETS_PATH + "append.json");
 		installAsset("dlfs/mkdir",        ASSETS_PATH + "mkdir.json");
@@ -203,19 +203,18 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	 * Gets the DLFS cursor for a user's signed region in the :dlfs lattice.
 	 * Navigates root → :dlfs → OwnerLattice(AccountKey) → :value (signed drives map).
 	 *
-	 * <p>The returned cursor carries a {@link LatticeContext} with the caller's
-	 * DLFS signing key and a wall-clock timestamp. The timestamp is propagated
-	 * to all DLFS node writes via {@code DLFSLocal.getTimestamp()} and used as
-	 * the merge timestamp where applicable.</p>
+	 * <p>The returned cursor carries only the caller's DLFS signing key. Its
+	 * timestamp remains live; connected drive views obtain the venue's current
+	 * write timestamp for every mutation.</p>
 	 */
 	private ALatticeCursor<?> getUserDLFSCursor(AKeyPair dlfsKey) {
 		ALatticeCursor<Index<Keyword, ACell>> rootCursor = engine.getRootCursor();
 		ALatticeCursor<?> dlfsCursor = rootCursor.path(Covia.DLFS);
 
-		// Deliberate LOCAL override on this per-request view: DLFS writes sign
-		// with the USER's drive key, not the venue key the root context carries.
-		LatticeContext lctx = LatticeContext.create(
-			CVMLong.create(System.currentTimeMillis()), dlfsKey);
+		// Override only the signer. Delegating from the host policy preserves its
+		// live clock, owner verifier and future-timestamp-skew limit (Convex
+		// 0.8.14); constructing a fresh context here would silently discard them.
+		LatticeContext lctx = dlfsCursor.getContext().withSigningKey(dlfsKey);
 		dlfsCursor.setContext(lctx);
 
 		AccountKey ak = dlfsKey.getAccountKey();
@@ -232,8 +231,8 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 
 	/**
 	 * Connects a DLFS drive view for the caller. Cheap — just a cursor view, no
-	 * caching. A fresh {@link DLFSLocal} per request keeps the per-request
-	 * {@link LatticeContext} (timestamp, signing key) isolated.
+	 * caching. The view keeps the caller's signing key isolated while reading
+	 * the shared venue write clock for every mutation.
 	 *
 	 * <p>Public so other adapters (e.g. {@code FileAdapter} routing a
 	 * {@code dlfs}-backed root) can obtain the same drive view the DLFS
@@ -246,7 +245,10 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		}
 		AKeyPair dlfsKey = ensureUserKeyPair(ctx);
 		ALatticeCursor<?> userCursor = getUserDLFSCursor(dlfsKey);
-		return DLFS.connect(userCursor, Strings.create(driveName));
+		// Convex 0.8.14 resolves each DLFS mutation timestamp through the cursor's
+		// inherited live policy, so long-lived views see the current application
+		// clock on every write (#387).
+		return engine.connectDLFSDrive(userCursor, Strings.create(driveName));
 	}
 
 	/**
@@ -304,7 +306,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	private static AString abilityFor(String subOp) {
 		return switch (subOp) {
 			case "list", "tree", "read", "stat", "listDrives" -> Capability.CRUD_READ;
-			case "write", "append", "mkdir", "createDrive" -> Capability.CRUD_WRITE;
+			case "create", "write", "append", "mkdir", "createDrive" -> Capability.CRUD_WRITE;
 			case "delete", "deleteDrive" -> Capability.CRUD_DELETE;
 			default -> null;
 		};
@@ -558,6 +560,12 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 
 	private ACell dispatch(RequestContext ctx, String subOp, AMap<AString, ACell> input) throws IOException {
 		if (input == null) input = Maps.empty();
+		// content.fileName is a destination shorthand for create. Materialise it
+		// before capability resolution so the authorised resource is the actual
+		// file, not the drive root.
+		if ("create".equals(subOp) && input.get(FIELD_PATH) == null) {
+			input = input.assoc(FIELD_PATH, Strings.create(FileOperations.createPath(input)));
+		}
 		AString rawPath = RT.ensureString(input.get(FIELD_PATH));
 		if (rawPath != null) {
 			input = input.assoc(FIELD_PATH, Strings.create(normaliseRelativePath(rawPath.toString())));
@@ -592,6 +600,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 			case "list" -> handleList(driveCtx, input);
 			case "tree" -> handleTree(driveCtx, input);
 			case "read" -> handleRead(driveCtx, input, target.crossUser());
+			case "create" -> handleCreate(driveCtx, ctx, input, target);
 			// handleWrite takes BOTH contexts: the drive opens under driveCtx (the
 			// owner, for a cross-user write), but a caller-supplied `asset` ref is
 			// resolved under the CALLER's own context — resolving caller input under
@@ -698,6 +707,18 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 
 		Path path = resolvePath(fs, pathCell.toString());
 		return FileOperations.write(path, input, engine, assetCtx, append);
+	}
+
+	private ACell handleCreate(RequestContext ctx, RequestContext contentCtx,
+			AMap<AString, ACell> input, DriveTarget target) throws IOException {
+		FileSystem fs = requireDrive(ctx, input);
+		String pathArg = FileOperations.createPath(input);
+		Path path = resolvePath(fs, pathArg);
+		AMap<AString, ACell> result = RT.ensureMap(
+			FileOperations.create(path, input, engine, contentCtx));
+		AString drive = RT.ensureString(input.get(FIELD_DRIVE));
+		String ref = dlfsResource(target.ownerDID(), drive, Strings.create(pathArg));
+		return result.assoc(Fields.REF, Strings.create(ref));
 	}
 
 	private ACell handleMkdir(RequestContext ctx, AMap<AString, ACell> input) throws IOException {

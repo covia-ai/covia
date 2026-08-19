@@ -7,6 +7,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -45,10 +47,9 @@ import convex.core.util.JSON;
 import convex.core.util.Utils;
 import convex.lattice.LatticeContext;
 import convex.lattice.cursor.ALatticeCursor;
-import convex.lattice.cursor.Cursors;
-import convex.lattice.cursor.RootLatticeCursor;
 import convex.lattice.fs.DLFS;
 import convex.lattice.fs.DLFileSystem;
+import convex.lattice.fs.impl.DLFSLocal;
 import covia.adapter.AAdapter;
 import covia.adapter.AgentAdapter;
 import covia.adapter.AssetAdapter;
@@ -97,6 +98,9 @@ public class Engine {
 
 	protected final Config config;
 
+	/** Hosted Covia application, or null for the legacy raw-cursor embedding path. */
+	private final CoviaApplication application;
+
 	protected AKeyPair keyPair=AKeyPair.generate();
 
 	/**
@@ -133,13 +137,16 @@ public class Engine {
 	 * Map of named adapters that can handle different types of operations or resources
 	 */
 	protected final ConcurrentHashMap<String, AAdapter> adapters = new ConcurrentHashMap<>();
+	/** Active adapter precedence, oldest to newest. Later registrations win catalog paths. */
+	private final java.util.LinkedHashSet<String> adapterRegistrationOrder = new java.util.LinkedHashSet<>();
 
 	/**
 	 * Adapters that are registered but <em>disabled</em> — parked at boot by
 	 * {@code adapters.<name>.enabled: false} (or by declining
 	 * {@link AAdapter#configure}), or retracted at runtime via
-	 * {@link #disableAdapter}. Not dispatchable, absent from the catalog and
-	 * {@code v/info/adapters}; re-activated by {@link #enableAdapter}.
+	 * {@link #disableAdapter}. Not dispatchable and absent from
+	 * {@code v/info/adapters}; durable catalog metadata may remain and is
+	 * overwritten on a later registration.
 	 */
 	private final ConcurrentHashMap<String, AAdapter> disabledAdapters = new ConcurrentHashMap<>();
 
@@ -174,17 +181,17 @@ public class Engine {
 	private final java.util.concurrent.atomic.AtomicLong adapterRegistryVersion = new java.util.concurrent.atomic.AtomicLong();
 
 	/**
-	 * Adapters the venue itself dereferences by name (Engine, API surfaces,
-	 * server wiring, or other adapters via {@code getAdapter}). They can be
-	 * neither disabled nor removed — the venue does not function without them.
+	 * Adapters the venue itself commonly dereferences by name (Engine, API
+	 * surfaces, server wiring, or other adapters via {@code getAdapter}). This
+	 * marker is informational; venue-authorised configuration and module loads
+	 * may still replace, disable or remove them.
 	 */
 	public static final java.util.Set<String> KERNEL_ADAPTERS = java.util.Set.of(
 		"covia", "agent", "dlfs", "hitl", "http", "file", "grid", "venue");
 
 	/**
-	 * Persistence callback supplied at construction. Wired by VenueServer to
-	 * NodeServer.persistSnapshot for the production stack; no-op for tests
-	 * and in-memory engines. See {@link PersistenceHandler}.
+	 * Compatibility persistence callback for legacy raw-cursor embedders.
+	 * Hosted applications publish and flush through {@link CoviaApplication}.
 	 */
 	private final PersistenceHandler persistHandler;
 
@@ -204,7 +211,7 @@ public class Engine {
 
 	/**
 	 * How often the sweep forces a store-level fsync. The sweep runs every
-	 * {@link #SWEEP_INTERVAL_MS} but only calls {@link PersistenceHandler#flush()}
+	 * {@link #SWEEP_INTERVAL_MS} but only crosses the host's durability barrier
 	 * if at least this many ms have elapsed since the last flush. Bounds the
 	 * data-loss window on unclean shutdown (kernel panic, power loss, hard
 	 * VM stop) to roughly this interval. App-requested {@link #flush()} resets
@@ -235,10 +242,9 @@ public class Engine {
 	 * Use when the venue identity must be
 	 * stable across restarts (same AccountKey = same OwnerLattice slot).
 	 *
-	 * <p>Uses a no-op persistence handler — appropriate for in-memory venues
-	 * and tests that don't need synchronous flush. For a production venue,
-	 * use the four-arg constructor and pass a real {@link PersistenceHandler}
-	 * (typically wired to {@code NodeServer.persistSnapshot}).</p>
+	 * <p>This raw-cursor overload is retained for compatibility. New hosted
+	 * integrations should construct a {@link CoviaApplication} from their
+	 * {@code RootComponent} and use the application constructor.</p>
 	 */
 	public Engine(AMap<AString, ACell> config, ALatticeCursor<Index<Keyword,ACell>> cursor, AKeyPair keyPair) throws IOException {
 		this(config, cursor, keyPair, PersistenceHandler.NOOP);
@@ -254,7 +260,7 @@ public class Engine {
 	 */
 	public Engine(AMap<AString, ACell> config, ALatticeCursor<Index<Keyword,ACell>> cursor,
 			AKeyPair keyPair, PersistenceHandler persistHandler) throws IOException {
-		this(new Config(config), cursor, keyPair, persistHandler);
+		this(new Config(config), null, cursor, keyPair, persistHandler);
 	}
 
 	/**
@@ -264,10 +270,34 @@ public class Engine {
 	 */
 	public Engine(Config config, ALatticeCursor<Index<Keyword,ACell>> cursor,
 			AKeyPair keyPair, PersistenceHandler persistHandler) throws IOException {
+		this(config, null, cursor, keyPair, persistHandler);
+	}
+
+	/**
+	 * Canonical hosted-application constructor. Publication and durability flow
+	 * through the application's {@code RootComponent}; the engine does not need
+	 * to know whether that host is local or networked.
+	 */
+	public Engine(Config config, CoviaApplication application, AKeyPair keyPair)
+			throws IOException {
+		this(config, java.util.Objects.requireNonNull(application, "application"),
+			application.cursor(), keyPair, PersistenceHandler.NOOP);
+	}
+
+	/** Hosted-application constructor accepting the external JSON config form. */
+	public Engine(AMap<AString, ACell> config, CoviaApplication application,
+			AKeyPair keyPair) throws IOException {
+		this(new Config(config), application, keyPair);
+	}
+
+	private Engine(Config config, CoviaApplication application,
+			ALatticeCursor<Index<Keyword,ACell>> cursor, AKeyPair keyPair,
+			PersistenceHandler persistHandler) throws IOException {
 		this.config=java.util.Objects.requireNonNull(config, "config");
+		this.application=application;
 		this.keyPair=keyPair;
 		validateDeclaredIdentity();
-		this.lattice=cursor;
+		this.lattice=java.util.Objects.requireNonNull(cursor, "cursor");
 		this.persistHandler = (persistHandler != null) ? persistHandler : PersistenceHandler.NOOP;
 		this.lastFlushMillis = System.currentTimeMillis();
 		this.jobManager = new JobManager(this);
@@ -293,8 +323,10 @@ public class Engine {
 		lifecycle = Lifecycle.STARTING;
 		try {
 			// Set signing context only when active startup begins.
-			LatticeContext ctx = LatticeContext.create(
-				CVMLong.create(Utils.getCurrentTimestamp()), this.keyPair);
+			// Preserve host policy (future-skew checks, owner verification, custom
+			// clock) and override only Covia's signing capability.
+			LatticeContext ctx = this.lattice.getContext()
+				.withSigningKey(this.keyPair);
 			this.lattice.setContext(ctx);
 			initialiseFromCursor();
 
@@ -403,7 +435,8 @@ public class Engine {
 
 	private void startPersistenceSweep() {
 		// In-memory engines have nothing external to flush and get no daemon.
-		if (this.persistHandler == PersistenceHandler.NOOP) return;
+		if (this.application != null && this.application.isEphemeral()) return;
+		if (this.application == null && this.persistHandler == PersistenceHandler.NOOP) return;
 		this.persistenceSweep = Executors.newSingleThreadScheduledExecutor(r -> {
 			Thread t = new Thread(r, "covia-persistence-sweep");
 			t.setDaemon(true);
@@ -490,18 +523,19 @@ public class Engine {
 
 		// Bootstrap with connected VenueState (writes signed immediately).
 		// DID initialisation must be signed so other peers accept it.
-		VenueState connected = VenueState.fromRoot(lattice, getAccountKey());
+		VenueState connected = (application != null)
+			? application.venue(getAccountKey())
+			: VenueState.fromRoot(lattice, getAccountKey());
 		connected.initialise(getDIDString());
 
 		// Fork: subsequent writes accumulate locally (unsigned).
 		// Engine.syncState() calls venueState.sync() to merge + sign once.
-		// NB a fork never inherits its parent's context live (it captures the
-		// fork-time context — ForkedLatticeCursor.getInheritedContext), so
-		// refreshWriteClock must advance this long-lived fork's clock
-		// explicitly alongside the root's.
+		// The fork captures the root's LatticeContext policy. That policy is
+		// dynamic, so its clock and signer remain live without per-request
+		// context replacement.
 		this.venueState = connected.fork();
 
-		this.auth = new Auth(this, venueState.authCursor());
+		this.auth = new Auth(this, venueState, venueState.authCursor());
 		this.accessControl = new AccessControl();
 	}
 
@@ -548,9 +582,8 @@ public class Engine {
 	 *   <li>{@code venueState.sync()} — merges forked (unsigned) writes into
 	 *       the parent cursor chain, triggering a single sign through the
 	 *       SignedCursor boundary.</li>
-	 *   <li>{@code lattice.sync()} — triggers persistence and broadcast via
-	 *       NodeServer callbacks. What sync does depends on the cursor's
-	 *       configuration; Engine is agnostic.</li>
+	 *   <li>{@code application.sync()} — crosses the hosted root publication
+	 *       boundary. The host decides whether publication is local or networked.</li>
 	 * </ol>
 	 *
 	 * <p>Called by VenueServer's role-selected {@code afterMatched} handler, so
@@ -559,48 +592,30 @@ public class Engine {
 	 * persist.</p>
 	 */
 	public void syncState() {
-		refreshWriteClock();
 		venueState.sync();
-		lattice.sync();
+		publishApplicationRoot();
 	}
 
-	/** Last write-clock refresh, epoch millis. Volatile: refreshers race benignly. */
-	private volatile long lastClockRefresh = 0;
-
 	/**
-	 * Advances the lattice write clock: installs a fresh {@link LatticeContext}
-	 * (current wall time + the venue signing key) on the root and venue-state
-	 * cursors, so cursors derived from them stamp writes with current time.
+	 * Compatibility hook retained for callers built against the former fixed
+	 * timestamp context model.
 	 *
-	 * <p>Time is the harness's responsibility — convex lattice code reads the
-	 * timestamp from the context it is given and deliberately never consults
-	 * the system clock itself (determinism, convex#561). A context set once at
-	 * boot therefore freezes the write clock: the venue-level LWW
-	 * {@code :timestamp} and every {@code StampingLattice} field (namespace
-	 * {@code updated}, user {@code meta.updated}) would carry engine start
-	 * time forever. The engine's policy: refresh at every operation dispatch
-	 * ({@code JobManager}) and at every state sync, throttled to at most once
-	 * per few milliseconds.</p>
-	 *
-	 * <p>Two refresh points, no more: since Convex 0.8.9 (convex#640)
-	 * derived cursors inherit their parent's current effective context live,
-	 * so refreshing the root reaches every derived view — including
-	 * long-held ones — without per-cursor re-stamping. FORKED cursors are
-	 * the deliberate exception: a fork captures its fork-time context and
-	 * never inherits live (its {@code sync} still merges under the parent's
-	 * current context), so the engine's long-lived venue-state fork is
-	 * refreshed explicitly alongside the root. Per-cycle forks elsewhere
-	 * keep their captured context — the stamp ratchet and directional merge
-	 * make mixed-age contexts safe.</p>
+	 * <p>The current Convex context is a live application policy. Covia installs
+	 * it once at startup with a dynamic runtime clock, and forks retain that live
+	 * policy, so there is no timestamp snapshot to refresh.</p>
 	 */
+	@Deprecated
 	public void refreshWriteClock() {
-		long now = Utils.getCurrentTimestamp();
-		if (now - lastClockRefresh < 2) return;   // throttle context churn
-		lastClockRefresh = now;
-		LatticeContext fresh = LatticeContext.create(
-			convex.core.data.prim.CVMLong.create(now), this.keyPair);
-		lattice.setContext(fresh);
-		if (venueState != null) venueState.cursor().setContext(fresh);
+		// Dynamic LatticeContext resolves time at each logical write.
+	}
+
+	/** Publishes through the hosted application policy or the legacy root cursor. */
+	private void publishApplicationRoot() {
+		if (application != null) {
+			application.sync();
+		} else {
+			lattice.sync();
+		}
 	}
 
 	// ========================================================================
@@ -622,7 +637,7 @@ public class Engine {
 		if (lifecycle != Lifecycle.STARTED) return;
 		try {
 			venueState.sync();   // pull fork writes into the root
-			lattice.sync();      // fire NodeServer.onSync → propagator
+			publishApplicationRoot();
 			// Periodic durability barrier. The propagator's setRootData
 			// writes new root data to the mmap'd Etch but does not fsync;
 			// the OS may take minutes to write dirty pages out on its own.
@@ -630,7 +645,7 @@ public class Engine {
 			// shutdown data-loss window. Cheap on idle venues — fsync of
 			// an unchanged file is a no-op below the kernel.
 			if (System.currentTimeMillis() - lastFlushMillis >= FLUSH_INTERVAL_MS) {
-				persistHandler.flush();
+				flushStore();
 				lastFlushMillis = System.currentTimeMillis();
 			}
 		} catch (Exception e) {
@@ -639,16 +654,9 @@ public class Engine {
 	}
 
 	/**
-	 * Synchronously syncs venueState into the root and persists the current
-	 * value through the propagator on the caller's thread. Returns when the
-	 * write set is on disk.
-	 *
-	 * <p>Bypasses the propagator's background queue by calling the
-	 * {@link PersistenceHandler} (typically wired to
-	 * {@code NodeServer.persistSnapshot}). This is the correct primitive for
-	 * "make this write durable before I return" — there is no
-	 * "wait for the background drain queue to flush" API on a running
-	 * propagator (this is a known upstream gap).</p>
+	 * Synchronises venue state, publishes the complete hosted root and invokes
+	 * the host store's physical durability barrier. Legacy raw-cursor embedders
+	 * use their supplied {@link PersistenceHandler} for the same boundary.
 	 *
 	 * <p>Use sparingly — most writes don't need this. Default eventual
 	 * durability via the background sweep is fine for in-flight job state,
@@ -656,14 +664,27 @@ public class Engine {
 	 * audit records, secret rotation, agent TERMINATED, OAuth login.</p>
 	 */
 	public void flush() {
-		venueState.sync();                   // pull fork into root
-		persistHandler.persist(lattice.get()); // synchronous persist (mmap)
+		venueState.sync(); // pull fork into root
 		try {
-			persistHandler.flush();            // fsync — durable on disk
+			if (application != null) {
+				application.sync();  // host publication selects the retained root
+				application.flush(); // physical durability barrier
+			} else {
+				persistHandler.persist(lattice.get());
+				persistHandler.flush();
+			}
 		} catch (java.io.IOException e) {
 			throw new RuntimeException("flush failed", e);
 		}
 		lastFlushMillis = System.currentTimeMillis();
+	}
+
+	private void flushStore() throws IOException {
+		if (application != null) {
+			application.flush();
+		} else {
+			persistHandler.flush();
+		}
 	}
 
 	/**
@@ -928,9 +949,10 @@ public class Engine {
 	// An adapter is REGISTERED once (configure → install → active or parked),
 	// may be DISABLED / ENABLED any number of times (deregistered from
 	// dispatch, catalog and v/info, instance retained), RECONFIGURED while
-	// live, and REMOVED for good (module unload). Kernel adapters are exempt
-	// from everything but reconfiguration. Every mutation that touches the
-	// published catalog is one lattice transaction via the materialiser.
+	// live, and REMOVED for good (module unload). The kernel marker is
+	// informational; venue-authorised lifecycle operations remain decisive.
+	// Every mutation that touches published introspection or catalog metadata
+	// is one lattice transaction via the materialiser.
 
 	/**
 	 * Register an adapter: applies its effective configuration
@@ -942,43 +964,68 @@ public class Engine {
 	 * immediately.
 	 *
 	 * @param adapter The adapter instance to register
-	 * @throws IllegalStateException if an adapter of that name is already registered
 	 */
 	public synchronized void registerAdapter(AAdapter adapter) {
 		String name = adapter.getName();
-		if (adapters.containsKey(name) || disabledAdapters.containsKey(name)) {
-			throw new IllegalStateException("Trying to install same adapter twice: "+name);
-		}
+		AAdapter previous = adapters.get(name);
+		if (previous == null) previous = disabledAdapters.get(name);
 		AMap<AString, ACell> cfg = adapterConfig(name);
 		if (CVMBool.FALSE.equals(cfg.get(Config.ENABLED))) {
-			if (isKernelAdapter(name)) {
-				throw new IllegalStateException("Kernel adapter '" + name
-					+ "' cannot be disabled (adapters." + name + ".enabled)");
+			if (previous != null && adapters.get(name) == previous && catalogPublished) {
+				VenueBootstrapMaterializer.dematerialiseAdapter(this, previous);
 			}
+			adapters.remove(name);
+			adapterRegistrationOrder.remove(name);
 			disabledAdapters.put(name, adapter);
+			if (previous != null) adapterRegistryVersion.incrementAndGet();
+			closeReplacedAdapter(previous);
 			log.info("Adapter '{}' is disabled by configuration", name);
 			return;
 		}
 		if (!adapter.configure(cfg, config.isStrictConfig())) {
-			if (isKernelAdapter(name)) {
-				throw new IllegalStateException("Kernel adapter '" + name + "' declined its configuration");
+			if (previous != null && adapters.get(name) == previous && catalogPublished) {
+				VenueBootstrapMaterializer.dematerialiseAdapter(this, previous);
 			}
+			adapters.remove(name);
+			adapterRegistrationOrder.remove(name);
 			disabledAdapters.put(name, adapter);
+			if (previous != null) adapterRegistryVersion.incrementAndGet();
+			closeReplacedAdapter(previous);
 			log.info("Adapter '{}' declined its configuration and is disabled", name);
 			return;
 		}
-		activate(adapter);
+		activate(adapter, previous);
 	}
 
 	/** Install (once) and publish an adapter. Caller holds the engine monitor. */
-	private void activate(AAdapter adapter) {
+	private void activate(AAdapter adapter, AAdapter previous) {
 		String name = adapter.getName();
 		if (adapter.engine == null) adapter.install(this);
-		if (catalogPublished) VenueBootstrapMaterializer.materialiseAdapter(this, adapter);
+		if (catalogPublished) {
+			if (previous == null) {
+				VenueBootstrapMaterializer.materialiseAdapter(this, adapter);
+			} else {
+				VenueBootstrapMaterializer.replaceAdapter(this, previous, adapter);
+			}
+		}
 		adapters.put(name, adapter);
+		disabledAdapters.remove(name);
+		adapterRegistrationOrder.remove(name);
+		adapterRegistrationOrder.add(name);
 		adapterRegistryVersion.incrementAndGet();
+		closeReplacedAdapter(previous);
 		log.info("Registered adapter: {} ({} primitives)", name,
 			adapter.pendingCatalogEntries.size());
+	}
+
+	private void closeReplacedAdapter(AAdapter previous) {
+		if (previous == null) return;
+		if (!(previous instanceof AutoCloseable closeable)) return;
+		try {
+			closeable.close();
+		} catch (Exception e) {
+			log.warn("Failed to close replaced adapter {}", previous.getName(), e);
+		}
 	}
 
 	/**
@@ -991,8 +1038,8 @@ public class Engine {
 	}
 
 	/**
-	 * Disable an active adapter: retract its catalog paths and
-	 * {@code v/info/adapters/<name>}, and stop dispatching to it. The instance
+	 * Disable an active adapter: retract its {@code v/info/adapters/<name>}
+	 * record and stop dispatching to it. Durable catalog metadata remains. The instance
 	 * is retained (not closed) so {@link #enableAdapter} restores it exactly.
 	 * In-flight jobs keep their adapter reference and finish; anything that
 	 * re-resolves the adapter by name (multi-turn messages, recovery) fails at
@@ -1001,12 +1048,9 @@ public class Engine {
 	 * @param name Adapter name
 	 * @return true if the adapter was active and is now disabled; false if it
 	 *         was already disabled
-	 * @throws IllegalArgumentException if the adapter is unknown or a kernel adapter
+	 * @throws IllegalArgumentException if the adapter is unknown
 	 */
 	public synchronized boolean disableAdapter(String name) {
-		if (isKernelAdapter(name)) {
-			throw new IllegalArgumentException("Kernel adapter '" + name + "' cannot be disabled");
-		}
 		AAdapter adapter = adapters.get(name);
 		if (adapter == null) {
 			if (disabledAdapters.containsKey(name)) return false;
@@ -1014,6 +1058,7 @@ public class Engine {
 		}
 		if (catalogPublished) VenueBootstrapMaterializer.dematerialiseAdapter(this, adapter);
 		adapters.remove(name);
+		adapterRegistrationOrder.remove(name);
 		disabledAdapters.put(name, adapter);
 		adapterRegistryVersion.incrementAndGet();
 		log.info("Disabled adapter: {}", name);
@@ -1021,15 +1066,14 @@ public class Engine {
 	}
 
 	/**
-	 * Enable a disabled adapter: install it if it never was, publish its
-	 * catalog paths and {@code v/info/adapters/<name>}, and resume dispatch.
+	 * Enable a disabled adapter: install it if it never was, overwrite its
+	 * catalog paths, publish {@code v/info/adapters/<name>}, and resume dispatch.
 	 *
 	 * @param name Adapter name
 	 * @return true if the adapter was disabled and is now active; false if it
 	 *         was already active
 	 * @throws IllegalArgumentException if the adapter is unknown
 	 * @throws IllegalStateException if the adapter declines its configuration
-	 *         or a catalog path it declares is occupied
 	 */
 	public synchronized boolean enableAdapter(String name) {
 		AAdapter adapter = disabledAdapters.get(name);
@@ -1040,7 +1084,7 @@ public class Engine {
 		if (adapter.engine == null && !adapter.configure(adapterConfig(name), config.isStrictConfig())) {
 			throw new IllegalStateException("Adapter '" + name + "' declined its configuration");
 		}
-		activate(adapter);
+		activate(adapter, null);
 		disabledAdapters.remove(name);
 		return true;
 	}
@@ -1097,6 +1141,12 @@ public class Engine {
 		return adapters.get(name);
 	}
 
+	/** Active or parked adapter, for module lifecycle bookkeeping. */
+	synchronized AAdapter getRegisteredAdapter(String name) {
+		AAdapter adapter = adapters.get(name);
+		return (adapter != null) ? adapter : disabledAdapters.get(name);
+	}
+
 	/**
 	 * Check if an active adapter with the given name exists
 	 * @param name The name of the adapter to check
@@ -1107,22 +1157,19 @@ public class Engine {
 	}
 
 	/**
-	 * Remove an adapter for good (active or disabled): retract its catalog
-	 * and introspection entries, close it if {@link AutoCloseable}, and forget
-	 * it. Used by module unload; kernel adapters cannot be removed.
+	 * Remove an adapter for good (active or disabled): retract its live
+	 * introspection, close it if {@link AutoCloseable}, and forget it. Canonical
+	 * catalog metadata remains until overwritten or explicitly deleted.
 	 *
 	 * @param name The name of the adapter to remove
 	 * @return The removed adapter, or null if not found
-	 * @throws IllegalArgumentException if the adapter is a kernel adapter
 	 */
 	public synchronized AAdapter removeAdapter(String name) {
-		if (isKernelAdapter(name)) {
-			throw new IllegalArgumentException("Kernel adapter '" + name + "' cannot be removed");
-		}
 		AAdapter removed = adapters.get(name);
 		if (removed != null) {
 			if (catalogPublished) VenueBootstrapMaterializer.dematerialiseAdapter(this, removed);
 			adapters.remove(name);
+			adapterRegistrationOrder.remove(name);
 			adapterRegistryVersion.incrementAndGet();
 		} else {
 			removed = disabledAdapters.remove(name);
@@ -1148,6 +1195,11 @@ public class Engine {
 		return adapters.keySet();
 	}
 
+	/** Active adapters in operator precedence order, oldest to newest. */
+	public synchronized java.util.List<String> getAdapterNamesInRegistrationOrder() {
+		return java.util.List.copyOf(adapterRegistrationOrder);
+	}
+
 	/**
 	 * Get the names of registered adapters that are currently disabled.
 	 * @return Set of disabled adapter names
@@ -1160,13 +1212,15 @@ public class Engine {
 
 	/** Records a loaded module; publishes its {@code v/info/modules} entry once the catalog exists. */
 	synchronized void addModule(Modules.LoadedModule module) {
+		modules.remove(module.name());
 		modules.put(module.name(), module);
 		if (catalogPublished) VenueBootstrapMaterializer.materialiseModule(this, module);
 	}
 
 	/** Forgets a module and retracts its {@code v/info/modules} entry. */
 	synchronized void dropModule(Modules.LoadedModule module) {
-		if (modules.remove(module.name()) == null) return;
+		if (modules.get(module.name()) != module) return;
+		modules.remove(module.name());
 		if (catalogPublished) VenueBootstrapMaterializer.dematerialiseModule(this, module.name());
 	}
 
@@ -1182,7 +1236,9 @@ public class Engine {
 
 	/** The module that registered the named adapter, or null for a built-in. */
 	public synchronized Modules.LoadedModule moduleOf(String adapterName) {
-		for (Modules.LoadedModule module : modules.values()) {
+		java.util.ArrayList<Modules.LoadedModule> loaded = new java.util.ArrayList<>(modules.values());
+		for (int i = loaded.size() - 1; i >= 0; i--) {
+			Modules.LoadedModule module = loaded.get(i);
 			if (module.adapterNames().contains(adapterName)) return module;
 		}
 		return null;
@@ -1226,8 +1282,9 @@ public class Engine {
 
 	public static Engine createTemp(AMap<AString,ACell> config) {
 		try {
-			RootLatticeCursor<Index<Keyword,ACell>> cursor = Cursors.createLattice(Covia.ROOT);
-			return new Engine(config, cursor).start();
+			AKeyPair keyPair = AKeyPair.generate();
+			CoviaApplication application = CoviaApplication.create(keyPair);
+			return new Engine(config, application, keyPair).start();
 		} catch (IOException e) {
 			throw new Error(e);
 		}
@@ -1340,7 +1397,6 @@ public class Engine {
 
 	/** Namespace prefix for immutable content-addressed assets (leading slash optional: a/ or /a/) */
 	private static final AString NS_ASSET = Strings.intern("a/");
-	private static final AString NS_OPS   = Strings.intern("/o/");
 	/** Namespace prefix for DID URLs */
 	private static final AString NS_DID   = Strings.intern("did:");
 	/** Optional leading-slash sugar, stripped before virtual/workspace resolution */
@@ -1385,39 +1441,33 @@ public class Engine {
 		}
 
 		// 2. a/<hash> or /a/<hash> → look up in CAS (leading slash optional)
-		AString assetRef = stripLeadingSlash(ref);
-		if (assetRef.startsWith(NS_ASSET)) {
-			Hash ah = Hash.parse(assetRef.slice(2));
+		AString localRef = stripLeadingSlash(ref);
+		if (localRef.startsWith(NS_ASSET)) {
+			Hash ah = Hash.parse(localRef.slice(2));
 			if (ah == null) return null;
 			Asset asset = getAsset(ah, ctx);
 			return (asset != null) ? asset.meta() : null;
 		}
 
-		// 3. /o/<name> → caller's own /o/, return literal value
-		if (ref.startsWith(NS_OPS)) {
-			return readUserOpValue(ref.slice(3), ctx);
-		}
-
-		// 4. DID URL — local cases only; remote is handled by resolveAsset
+		// 3. DID URL — local cases only; remote is handled by resolveAsset
 		if (ref.startsWith(NS_DID)) {
-			Asset local = resolveLocalDIDURL(ref);
+			Asset local = resolveLocalDIDURL(ref, ctx);
 			return (local != null) ? local.meta() : null;
 		}
 
-		// Steps 5–6 cover the virtual and workspace namespaces, where a
-		// leading slash is optional sugar (it is already accepted for /a/ and
-		// /o/ above). Normalise it away once so "/w/notes" resolves exactly
+		// Steps 4–5 cover the virtual and workspace namespaces, where a
+		// leading slash is optional sugar. Normalise it away once so "/w/notes" resolves exactly
 		// like "w/notes" and "/v/ops/x" like "v/ops/x".
-		AString navRef = stripLeadingSlash(ref);
+		AString navRef = localRef;
 
-		// 5. Virtual namespace prefix (n/, v/, ...) — delegate to the
+		// 4. Virtual namespace prefix (n/, v/, ...) — delegate to the
 		// registered resolver via CoviaAdapter. Handles cursor-based
 		// virtual namespaces uniformly. (t/ — job-scoped temp — is not
 		// handled here; covia:read has its own t/ branch.)
 		ACell virtualValue = resolveVirtualNamespace(navRef, ctx);
 		if (virtualValue != null) return virtualValue;
 
-		// 6. Workspace path (w/, g/, o/, j/, s/, h/) → caller's lattice
+		// 5. Workspace path (w/, g/, o/, j/, s/, h/) → caller's lattice
 		if (isUserNamespacePath(navRef)) {
 			return readWorkspacePathValue(navRef, ctx);
 		}
@@ -1516,22 +1566,6 @@ public class Engine {
 	}
 
 	/**
-	 * Reads the literal value at the caller's {@code /o/<name>} namespace.
-	 * Returns whatever's stored — a map, string, vector, or null if absent.
-	 * No interpretation, no asset wrapping, no reference chasing.
-	 */
-	private ACell readUserOpValue(AString name, RequestContext ctx) {
-		if (ctx == null || ctx.getUserDID() == null) return null;
-		Users users = venueState.users();
-		User user = users.get(ctx.getUserDID());
-		if (user == null) return null;
-		// Pre-split keys: the name is a single literal /o/ key (it may
-		// contain slashes). readPath handles the namespace wrapper.
-		return covia.adapter.CoviaAdapter.readPath(user.cursor(),
-			new ACell[] { Strings.create("o"), name });
-	}
-
-	/**
 	 * Reads the literal value at a workspace path through the caller's
 	 * lattice cursor. Returns whatever's there, with no interpretation.
 	 */
@@ -1557,10 +1591,25 @@ public class Engine {
 	 * Remote definition FETCH happens only on the invocation path, via
 	 * {@link #resolveAsset} → {@link #resolveDIDURL}.
 	 */
-	private Asset resolveLocalDIDURL(AString ref) {
+	private Asset resolveLocalDIDURL(AString ref, RequestContext ctx) {
 		AssetRef r = parseAssetRef(ref);
-		// Named refs have no local copy (bindings are publisher-scoped).
-		return (r == null || r.hash() == null) ? null : lookupLocalAsset(r);
+		if (r == null) return null;
+		if (r.hash() != null) return lookupLocalAsset(r);
+
+		// A fully-qualified name owned by this venue is the same local binding as
+		// its relative v/... form. Previously all named DID refs were treated as
+		// remote, which made did:key:<this-venue>/v/... impossible to resolve and
+		// made a did:web self-reference perform an unnecessary network fetch.
+		if (!isVenueIdentity(r.didString())) return null;
+		ACell value = resolvePath(Strings.create(r.name()), ctx);
+		return (value instanceof AMap) ? Asset.fromMeta(value) : null;
+	}
+
+	/** Whether a DID names this venue, including its discoverable did:web alias. */
+	private boolean isVenueIdentity(String did) {
+		if (getDIDString().toString().equals(did)) return true;
+		AString web = config.getWebDID();
+		return web != null && web.toString().equals(did);
 	}
 
 	/**
@@ -1942,11 +1991,9 @@ public class Engine {
 	 * {@code PUT /content} upload path). No asset record ({@code POS_CONTENT}) or
 	 * caller authority ({@code content.dlfs}) is needed.
 	 *
-	 * <p>This is the single place both content forms are decoded.
-	 * {@link #resolveContent} composes it with the record and provider lookups, so
-	 * the metadata-only path ({@link #getContent(AMap)}) and the universal
-	 * reference path can never diverge on inline vs blob content — the split that
-	 * left {@code GET /assets/{id}/content} throwing on inline (covia#289).</p>
+	 * <p>This helper is deliberately limited to forms that require no caller
+	 * authority. The universal path uses {@link #resolveContentBlock} for the
+	 * complete standard descriptor, including generic references.</p>
 	 *
 	 * @return the content, or {@code null} when the metadata declares neither form
 	 */
@@ -2018,11 +2065,45 @@ public class Engine {
 	 */
 	public covia.venue.storage.ContentProvider.Resolved resolveContent(
 			AString ref, RequestContext ctx) throws IOException {
+		return resolveContent(ref, ctx, new HashSet<>());
+	}
+
+	private covia.venue.storage.ContentProvider.Resolved resolveContent(
+			AString ref, RequestContext ctx, Set<String> resolving) throws IOException {
 		if (ref == null) return null;
+		String refString = ref.toString();
+		if (resolving.size() >= 32) {
+			throw new IllegalArgumentException("Content reference chain exceeds 32 hops at: " + refString);
+		}
+		if (!resolving.add(refString)) {
+			throw new IllegalArgumentException("Cyclic content reference: " + refString);
+		}
+		try {
 
 		// Alternative storage mechanisms (e.g. DLFS drive paths).
 		covia.venue.storage.ContentProvider.Resolved provided = providerContent(ref, ctx);
 		if (provided != null) return provided;
+
+		// Everything below is asset/lattice content. Providers above own their
+		// namespace and enforce the native ability for it (for example crud/read on
+		// file:// and dlfs/); imposing asset/read on those references would make the
+		// same file behave differently through the content API and its native op.
+		requireResourceAccess(ctx, ref, Abilities.ASSET_READ);
+
+		// An explicit remote DID URL is a fetch address, just as it is for asset
+		// metadata. Keep the fetch transient: asset:pin remains the operation that
+		// adopts metadata + bytes into the caller's local CAS. did:key references
+		// with no locally held owner cannot be fetched and resolve as absent.
+		if (ref.startsWith(NS_DID) && !isLocalDIDResource(ref)) {
+			Asset remoteAsset = resolveDIDURL(ref, ctx);
+			if (remoteAsset == null) return null;
+			ACell remoteContent = fetchRemoteContent(ref);
+			if (remoteContent instanceof convex.core.data.ABlob b) {
+				return new covia.venue.storage.ContentProvider.Resolved(
+					covia.grid.impl.BlobContent.of(b), declaredContentType(remoteAsset.meta()));
+			}
+			return null;
+		}
 
 		// Content-addressed store: locate the CAS record. Hash-form refs name it
 		// directly; other refs resolve first (a lattice slot may hold a reference
@@ -2033,14 +2114,16 @@ public class Engine {
 		ACell meta = null;
 		Hash hash = covia.adapter.AssetAdapter.parseAssetId(ref);
 		if (hash != null) {
-			record = getAssetRecord(hash, ctx);
+			AString owner = requireLocalAccess(ctx, ref, Abilities.ASSET_READ);
+			record = getAssetRecord(hash, owner);
 			if (record != null) meta = record.get(AssetStore.POS_META);
 		} else {
 			ACell value = resolvePath(ref, ctx);
 			if (value instanceof AString s) {
-				Hash hop = covia.adapter.AssetAdapter.parseAssetId(s);
-				if (hop != null) record = getAssetRecord(hop, ctx);
-				if (record != null) meta = record.get(AssetStore.POS_META);
+				// A lattice binding may point at any content reference, not just an
+				// asset hash. Re-enter the universal resolver so file://, DLFS, DID,
+				// workspace and future provider references all compose uniformly.
+				return resolveContent(s, ctx, resolving);
 			} else if (value instanceof AMap) {
 				RequestContext recordContext = isVenuePath(ref) ? venueContext() : ctx;
 				record = getAssetRecord(((AMap<?, ?>) value).getHash(), recordContext);
@@ -2051,60 +2134,136 @@ public class Engine {
 			}
 		}
 		if (meta == null) return null;
-		AString ct = RT.ensureString(RT.getIn(meta, Fields.CONTENT_TYPE));
+		String contentType = declaredContentType(meta);
 		if (record != null) {
 			ACell content = record.get(AssetStore.POS_CONTENT);
 			if (content instanceof convex.core.data.ABlob b) {
 				return new covia.venue.storage.ContentProvider.Resolved(
-					covia.grid.impl.BlobContent.of(b), (ct != null) ? ct.toString() : null);
+					covia.grid.impl.BlobContent.of(b), contentType);
 			}
 		}
 
-		// Content the metadata carries directly: content.inline bytes, or a
-		// content.sha256 blob in the global content store (the PUT /content upload
-		// path). Decoded by the shared contentFromMeta helper, so this universal
-		// path and the metadata-only getContent(meta) never diverge (covia#289).
-		// A dlfs-PINNED asset also declares content.sha256 for verification but
-		// keeps its bytes in the drive, so a content-store miss here falls through
-		// to the dlfs branch below.
+		// Asset metadata and file create operations use this exact same content
+		// descriptor resolver. The canonical pointer is content.ref; content.dlfs
+		// remains a compatibility alias for existing metadata.
 		AMap<AString,ACell> metaMap = RT.ensureMap(meta);
-		AContent metaContent = contentFromMeta(metaMap);
-		if (metaContent != null) {
+		covia.venue.storage.ContentProvider.Resolved declared = resolveContentBlock(
+			metaMap != null ? metaMap.get(Fields.CONTENT) : null, ctx, resolving);
+		if (declared != null && contentType != null
+				&& !contentType.equals(declared.contentType())) {
 			return new covia.venue.storage.ContentProvider.Resolved(
-				metaContent, (ct != null) ? ct.toString() : null);
+				declared.content(), contentType);
+		}
+		return declared;
+		} finally {
+			resolving.remove(refString);
+		}
+	}
+
+	/**
+	 * Resolves the standard asset {@code content} descriptor. The same method is
+	 * used when serving asset metadata and when a file-style create operation
+	 * consumes a descriptor, keeping all content forms identical at both seams.
+	 *
+	 * <p>Supported locators are {@code inline} (UTF-8 text), {@code ref} (any
+	 * universally resolvable content reference), and {@code sha256} (a blob in
+	 * the content-addressed store). The historical {@code dlfs} pointer is an
+	 * alias for {@code ref}. A sha256 alongside inline/ref is an integrity pin.</p>
+	 */
+	public covia.venue.storage.ContentProvider.Resolved resolveContentBlock(
+			ACell block, RequestContext ctx) throws IOException {
+		return resolveContentBlock(block, ctx, new HashSet<>());
+	}
+
+	@SuppressWarnings("unchecked")
+	private covia.venue.storage.ContentProvider.Resolved resolveContentBlock(
+			ACell block, RequestContext ctx, Set<String> resolving) throws IOException {
+		if (block == null) return null;
+		if (!(block instanceof AMap<?, ?>)) {
+			throw new IllegalArgumentException("content must be an object");
+		}
+		AMap<AString, ACell> descriptor = (AMap<AString, ACell>) block;
+		AString inline = descriptorString(descriptor, Fields.INLINE);
+		AString ref = descriptorString(descriptor, Fields.REF);
+		AString dlfs = descriptorString(descriptor, Strings.intern("dlfs"));
+		if (ref != null && dlfs != null && !ref.equals(dlfs)) {
+			throw new IllegalArgumentException("content.ref conflicts with legacy content.dlfs");
+		}
+		if (ref == null) ref = dlfs;
+		if (inline != null && ref != null) {
+			throw new IllegalArgumentException("content must specify only one of inline or ref");
 		}
 
-		// Metadata-declared alternative storage: content.dlfs names a drive path.
-		// With content.sha256 present the asset is PINNED — fetched bytes are
-		// verified against the declared hash (drift after minting fails loudly,
-		// never serves silently-different bytes). Without sha256 the asset is a
-		// LIVE binding: content is whatever the file currently holds, served
-		// lazily, no verification possible (the asset identity covers the
-		// pointer, not the bytes).
-		AString altPath = RT.ensureString(RT.getIn(meta, Fields.CONTENT, "dlfs"));
-		if (altPath != null) {
-			covia.venue.storage.ContentProvider.Resolved r = providerContent(altPath, ctx);
-			if (r == null) {
-				throw new IllegalArgumentException(
-					"Asset declares content at '" + altPath + "' but no storage mechanism resolves it");
+		AString shaString = descriptorString(descriptor, Fields.SHA256);
+		Hash declaredHash = null;
+		if (shaString != null) {
+			declaredHash = Hash.parse(shaString);
+			if (declaredHash == null) {
+				throw new IllegalArgumentException("content.sha256 must be a valid SHA-256 hash");
 			}
-			String type = (ct != null) ? ct.toString() : r.contentType();
-			AString declaredSha = RT.ensureString(RT.getIn(meta, Fields.CONTENT, Fields.SHA256));
-			if (declaredSha != null) {
-				convex.core.data.ABlob bytes = r.content().getBlob();
-				Hash actual = Hashing.sha256(bytes.getBytes());
-				if (!actual.toHexString().equals(declaredSha.toString())) {
-					throw new IllegalStateException(
-						"Content hash mismatch for asset content at '" + altPath
-						+ "': stored file has changed since the asset was minted (expected "
-						+ declaredSha + ", got " + actual.toHexString() + ") — re-mint the asset");
-				}
-				return new covia.venue.storage.ContentProvider.Resolved(
-					covia.grid.impl.BlobContent.of(bytes), type);
-			}
-			return new covia.venue.storage.ContentProvider.Resolved(r.content(), type);
 		}
-		return null;
+		AString typeString = descriptorString(descriptor, Fields.CONTENT_TYPE);
+		String declaredType = typeString != null ? typeString.toString() : null;
+
+		covia.venue.storage.ContentProvider.Resolved resolved;
+		String source;
+		if (inline != null) {
+			resolved = new covia.venue.storage.ContentProvider.Resolved(
+				covia.grid.impl.BlobContent.of(Blob.wrap(
+					inline.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8))),
+				declaredType);
+			source = "inline content";
+		} else if (ref != null) {
+			resolved = resolveContent(ref, ctx, resolving);
+			if (resolved == null) {
+				throw new IllegalArgumentException("No content at ref: " + ref);
+			}
+			source = "content at '" + ref + "'";
+		} else if (declaredHash != null) {
+			AContent stored = contentStorage.getContent(declaredHash);
+			if (stored == null) return null;
+			resolved = new covia.venue.storage.ContentProvider.Resolved(stored, declaredType);
+			source = "content store blob " + declaredHash;
+		} else {
+			return null;
+		}
+
+		if (declaredHash != null && (inline != null || ref != null)) {
+			ABlob bytes = resolved.content().getBlob();
+			Hash actual = Hashing.sha256(bytes.getBytes());
+			if (!actual.equals(declaredHash)) {
+				throw new IllegalStateException("Content hash mismatch for " + source
+					+ ": expected " + declaredHash + ", got " + actual);
+			}
+			resolved = new covia.venue.storage.ContentProvider.Resolved(
+				covia.grid.impl.BlobContent.of(bytes), resolved.contentType());
+		}
+
+		String effectiveType = declaredType != null ? declaredType : resolved.contentType();
+		if (effectiveType != null && !effectiveType.equals(resolved.contentType())) {
+			return new covia.venue.storage.ContentProvider.Resolved(
+				resolved.content(), effectiveType);
+		}
+		return resolved;
+	}
+
+	private static AString descriptorString(AMap<AString, ACell> descriptor,
+			AString field) {
+		if (!descriptor.containsKey(field)) return null;
+		AString value = RT.ensureString(descriptor.get(field));
+		if (value == null) {
+			throw new IllegalArgumentException("content." + field + " must be a string");
+		}
+		return value;
+	}
+
+	/** Declared MIME type: content.contentType is canonical; the historical
+	 * top-level contentType remains a compatibility fallback. */
+	private static String declaredContentType(ACell meta) {
+		AString nested = RT.ensureString(RT.getIn(meta, Fields.CONTENT, Fields.CONTENT_TYPE));
+		if (nested != null) return nested.toString();
+		AString legacy = RT.ensureString(RT.getIn(meta, Fields.CONTENT_TYPE));
+		return (legacy != null) ? legacy.toString() : null;
 	}
 
 	private static boolean isVenuePath(AString ref) {
@@ -2569,6 +2728,18 @@ public class Engine {
 		return lattice;
 	}
 
+	/**
+	 * Connects a DLFS drive to the hosted lattice, enabling incremental blob
+	 * persistence when this engine has a store-backed application host.
+	 *
+	 * <p>Legacy raw-cursor embedders have no store policy available here and
+	 * retain the heap-backed behaviour of the two-argument Convex API.</p>
+	 */
+	public DLFSLocal connectDLFSDrive(ALatticeCursor<?> parent, AString driveName) {
+		if (application == null) return DLFS.connect(parent, driveName);
+		return DLFS.connect(parent, driveName, application.hostStore());
+	}
+
 	public AString getName() {
 		return config.getName();
 	}
@@ -2697,7 +2868,14 @@ public class Engine {
 	 *  venue's own DID; bare hashes and another user's {@code /a/} are private. */
 	private boolean isVenueCatalogRead(AString resource, AString ability) {
 		if (!Capability.CRUD_READ.equals(ability) && !Abilities.ASSET_READ.equals(ability)) return false;
-		return resource.toString().startsWith(getDIDString().toString() + "/a/");
+		String value = resource.toString();
+		if (isVenueReference(value, getDIDString().toString())) return true;
+		AString web = config.getWebDID();
+		return web != null && isVenueReference(value, web.toString());
+	}
+
+	private static boolean isVenueReference(String resource, String did) {
+		return resource.startsWith(did + "/a/") || resource.startsWith(did + "/v/");
 	}
 
 	/**

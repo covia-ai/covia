@@ -137,7 +137,7 @@ User `/o/` capability semantics are unchanged from GRID_LATTICE_DESIGN §6.
 
 ### Universal resolution principle
 
-Any operation argument that accepts a lattice address — `path`, `from`, `id`, `source`, `operation` — accepts every resolvable form. Resolution is performed by a single canonical resolver (`Engine.resolvePath`) used by all read-side ops. The accepted input forms are:
+Any operation argument that accepts a lattice address — `path`, `from`, `ref`, `source`, `operation` — accepts every resolvable lattice form. Resolution is performed by a single canonical resolver (`Engine.resolvePath`) used by all lattice read-side ops. Content arguments use the related `Engine.resolveContent` seam described below; it adds file and DLFS providers to these forms.
 
 | Form | Example | Meaning |
 |------|---------|---------|
@@ -165,7 +165,8 @@ Op arguments fall into two classes:
 
 | Class | Acceptable forms | Used by |
 |-------|------------------|---------|
-| **Resolvable address** (read-side) | Any of the forms above | `covia:read path`, `covia:list path`, `covia:slice path`, `covia:inspect path`, `covia:copy from`, `asset:get id`, `asset:content id`, `asset:pin path`, `grid:run operation` |
+| **Resolvable address** (read-side) | Any of the lattice forms above | `covia:read path`, `covia:list path`, `covia:slice path`, `covia:inspect path`, `covia:copy from`, `asset:get ref`, `asset:pin ref`, `grid:run operation` |
+| **Content reference** (read-side bytes) | Any asset/lattice form above, plus `file://<root>/<path>`, `dlfs/<drive>/<path>`, and `<ownerDID>/dlfs/<drive>/<path>` | `asset:content ref`; `file:write`, `file:append`, `dlfs:write`, `dlfs:append`, and `vault:write` `contentRef`; `archive:list` and `archive:extract` `contentRef` |
 | **Mutable target** (write-side) | Writable lattice paths only: `o/...`, `w/...`, `g/<own-agent>/...`, `s/...`, virtual writable namespaces (`n/`, `t/`); or an owner-scoped DID-URL form of one (`did:key:zOwner.../w/...`) when a UCAN proof grants the mutation | `covia:write path`, `covia:append path`, `covia:delete path`, `covia:copy to` |
 
 A write-side argument is constrained because you can't write to a content-addressed location (`/a/` is hash-determined), to a read-only namespace (`/v/` from non-venue callers), or to another user's namespace without UCAN delegation.
@@ -184,6 +185,36 @@ A write-side argument is constrained because you can't write to a content-addres
 The resolver returns the **literal value** at the resolved location. It does NOT chase references, follow indirections, or interpret the value in any way. It is a single-step navigation primitive.
 
 **A leading slash is optional sugar.** Every form above resolves identically with or without a leading slash: `/v/ops/json/merge` is the same as `v/ops/json/merge`, and `/w/notes` the same as `w/notes`. The slash is normalised away before resolution, so the `/v/`, `/o/`, `/a/` notation used throughout this document and the bare `v/`, `o/`, `a/` forms are interchangeable.
+
+### HTTP and SDK asset resolution
+
+One exact asset reference is resolved through one API, regardless of its form:
+
+```text
+GET /api/v1/assets/<ref>   metadata
+GET /api/v1/content/<ref>  content bytes
+```
+
+The reference is the complete wildcard tail and may contain any number of path segments. SDKs URL-encode each segment and remove only the optional leading slash (`/w/x` and `w/x` are the same lattice address). `assets/content/<ref>` is intentionally not an alias because it collides with metadata lookup for a reference beginning `content/`. Metadata responses carry the resolved immutable CAD3 hash in `ETag`; the reference remains the address the caller supplied. Thus an SDK asset has two distinct facts: its `reference` (for example `v/ops/json/merge`) and its immutable `id`/hash for the value currently found there.
+
+`GET /api/v1/assets` is a venue-CAS listing, not a named-catalog listing. Its `items` are fully qualified `<venue-DID>/a/<hash>` references so every returned item can be passed directly to the resolver without changing owner. `GET /api/v1/assets?scope=own` lists the caller's CAS and supplies both the bare hash (`id`) and fully qualified owner address (`ref`). Named catalogs are enumerated by their lattice paths (`v/ops`, `v/skills`, `v/agents/templates`, and adapter-owned views), retaining those paths through detail lookup. No hash-to-path reverse lookup exists: one immutable value may be mounted at zero, one, or many paths.
+
+Metadata and bytes deliberately have different domains. `assets/<ref>` requires the reference to resolve to asset metadata. `content/<ref>` calls `Engine.resolveContent` and accepts either an asset reference or a raw storage-provider reference. Consequently a `file://tmp/report.pdf` or `dlfs/docs/report.pdf` content request can succeed while the corresponding `assets/...` request returns 404: the file has bytes, but it is not an asset until metadata points to or snapshots it.
+
+Because strict HTTP servers reject the empty URI path segment in the literal text `file://`, its path-safe spelling is `file:/<root>/<path>` (for example `GET /api/v1/content/file:/tmp/report.pdf`). It resolves identically to canonical `file://<root>/<path>`; the Java SDK performs this transport conversion automatically. Operations and returned capability/resource references continue to use canonical `file://`.
+
+The operation surface follows the same split:
+
+```text
+asset:get      {ref}         -> metadata
+asset:content  {ref}         -> Blob bytes + contentType when known
+file/dlfs/vault write|append  {contentRef} -> stream those bytes
+archive:list|extract          {contentRef} -> consume those bytes as an archive
+```
+
+`id` remains a compatibility alias for `asset:get` and `asset:content`; `path`/`id` remain compatibility aliases for `asset:pin`; `asset` remains a compatibility alias for the content-consuming file, DLFS, Vault, and archive operations. New callers should always use `ref` and `contentRef`.
+
+Content type is carried independently of the bytes. For assets, `metadata.content.contentType` is canonical, with the historical top-level `metadata.contentType` accepted as a fallback. File and DLFS providers infer a MIME type from the filename. The HTTP content API writes it to `Content-Type`; `asset:content` returns it as `contentType`. Unknown types remain valid binary content and use the HTTP fallback `application/octet-stream`.
 
 `Engine.resolveAsset(ref, ctx)` is a thin composition: `Asset.fromMeta(resolvePath(ref, ctx))`, plus one invocation-side addition: a remote DID URL reference whose definition is not held locally is **fetched** from the publishing venue — metadata only. For a hash reference (`did:web:…/a/<hash>`) the fetch is verified to hash to the requested id; for a named catalog reference (`did:web:…/v/ops/…`) the name is first resolved to an id *at the publisher* (the one step taken on the namer's word — names are mutable bindings), then the definition travels over the same hash-verified path. It returns an `Asset` if the resolved value is a map with an `operation` field, and `null` otherwise. Op-invocation paths (`grid:run`, agent loop) call `resolveAsset` and expect a non-null result; if the resolved value isn't asset-shaped, the op fails explicitly with "operation not found".
 
@@ -418,7 +449,7 @@ A user who wants a specific version of a venue op (one that doesn't change if th
 
 ```
 covia:copy from=v/ops/json/merge to=o/merge
-hash = asset:pin path=o/merge        # returns the CAD3 hash of the copied metadata
+{ref, id} = asset:pin ref=o/merge    # returns the DID URL and CAD3 hash
 ```
 
 The hash is the version identifier. If the user wants to confirm they have a specific version, they compare the returned hash against an expected value.
@@ -450,10 +481,10 @@ A small fixed set of primitives covers all interaction with operations and the c
 
 | Op | Args | Reads from | Writes to | Returns | Purpose |
 |----|------|-----------|-----------|---------|---------|
-| `asset:pin` | `path` | Any resolvable path | `/a/` (caller's CAS) | `{ path, hash }` | Snapshot a value into the content-addressed namespace; returns the caller's DID URL and the CAD3 hash |
-| `asset:store` | `metadata`, `content?` | — | `/a/` (caller's CAS) | `{ path, hash }` | Create a new asset from raw metadata + optional content blob |
-| `asset:get` | `id` | Any resolvable path | — | The metadata | Read asset metadata (alias for `covia:read` with asset semantics) |
-| `asset:content` | `id`, `maxSize?` | Any resolvable path | — | The content blob | Read the binary content payload of an asset |
+| `asset:pin` | `ref` | Any resolvable metadata path | `/a/` (caller's CAS) | `{ ref, id }` | Snapshot a value into the content-addressed namespace; returns the caller's DID URL and CAD3 hash |
+| `asset:store` | `metadata`, `content?`, `contentText?` | — | `/a/` (caller's CAS) | `{ ref, id, stored }` | Create an asset from raw metadata plus optional content bytes |
+| `asset:get` | `ref` | Any resolvable metadata path | — | `{ ref, exists, value }` | Read asset metadata |
+| `asset:content` | `ref`, `maxSize?` | Any content reference | — | `{ ref, exists, hasContent, contentType?, value? }` | Read bytes from an asset, file, DLFS path, or other content provider |
 | `asset:list` | `limit?`, `offset?` | Caller's `/a/` | — | Asset summaries | List assets in the caller's CAS |
 
 #### `grid:` — operation invocation
@@ -490,8 +521,8 @@ covia:read path=v/info/adapters/json
 # Snapshot a venue op into your own /o/
 covia:copy from=v/ops/json/merge to=o/merge
 
-# Get the content hash of what you just copied (version identifier)
-{path, hash} = asset:pin path=o/merge
+# Get the immutable reference and hash of what you just copied
+{ref, id} = asset:pin ref=o/merge
 
 # What about a remote venue?
 covia:list path=did:web:other.venue:v/ops
@@ -499,8 +530,8 @@ covia:list path=did:web:other.venue:v/ops
 # Snapshot a remote venue op
 covia:copy from=did:web:other.venue:v/ops/some-op to=o/their-op
 
-# Snapshot a remote asset by hash into your own CAS
-hash = asset:pin path=did:web:other.venue:v/ops/some-op
+# Snapshot remote metadata into your own CAS
+{ref, id} = asset:pin ref=did:web:other.venue:v/ops/some-op
 
 # What about another user on this venue?
 covia:list path=did:web:this.venue:u:alice/o
@@ -609,9 +640,9 @@ User `/o/` capability semantics are unchanged from GRID_LATTICE_DESIGN §6.
 
 Registered catalog declarations are re-materialised on every startup. The materialiser replaces `/v/info/adapters/` and `/v/info/modules/` with complete snapshots, so summaries for removed adapters cannot survive a restart.
 
-After the bootstrap snapshot, the same materialiser publishes and retracts *single* adapters and modules for the runtime lifecycle (`v/ops/venue/adapter/enable|disable`, `v/ops/venue/module/load|unload` — see `CONFIG.md`, "Runtime adapter lifecycle"). Enabling writes exactly the adapter's declared catalog paths plus its `/v/info/adapters/<name>` summary; disabling deletes exactly those. Each change is one child-fork sync. A declared path already occupied on the live catalog is a conflict that aborts the whole publication.
+After the bootstrap snapshot, the same materialiser publishes *single* adapters and modules for the runtime lifecycle (`v/ops/venue/adapter/enable|disable`, `v/ops/venue/module/load|unload` — see `CONFIG.md`, "Runtime adapter lifecycle"). Loading or enabling overwrites existing adapter names and catalog paths: venue authority is the operator's decision. Disabling or unloading removes live introspection and dispatch but deliberately leaves canonical catalog metadata; it may fail at invocation until a later load overwrites it or the operator explicitly deletes it.
 
-The operation and skill catalog namespaces are intentionally updated in place rather than cleared wholesale. Those namespaces may also contain dynamically bridged MCP tools or operator-managed entries that are not adapter bootstrap declarations. Removing such entries requires an owner-aware garbage-collection policy; the bootstrap transaction does not guess ownership.
+The operation and skill catalog namespaces are intentionally updated in place rather than cleared wholesale. Those namespaces may also contain dynamically bridged MCP tools or operator-managed entries that are not adapter bootstrap declarations. Removing an entry is an explicit operator action; bootstrap does not guess what should be deleted.
 
 The refresh does **not** touch `/o/` — user pins are sacred, and a user can pin a stale reference if they want to. If the referenced asset still exists in `/a/` (which content addressing guarantees as long as it is not garbage-collected), the pin still resolves.
 

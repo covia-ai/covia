@@ -39,9 +39,9 @@ import covia.venue.RequestContext;
  * Archive adapter — lets agents work with common archive files (zip and jar).
  *
  * <p>Operations run over the {@link FileAdapter}'s configured roots (one source
- * of truth for the file jail) and, where useful, content-addressed assets.
+	 * of truth for the file jail) and, where useful, general content references.
  * Nothing here escapes a root: an archive source is a jailed root+path file (or
- * a CAS asset / inline bytes), and extraction targets a jailed directory with
+	 * a resolved content reference / inline bytes), and extraction targets a jailed directory with
  * per-entry zip-slip checks.</p>
  *
  * <h3>Operations</h3>
@@ -62,6 +62,7 @@ public class ArchiveAdapter extends AAdapter {
 	private static final AString FIELD_PATH = Strings.intern("path");
 	private static final AString FIELD_PATHS = Strings.intern("paths");
 	private static final AString FIELD_ASSET = Strings.intern("asset");
+	private static final AString FIELD_CONTENT_REF = Strings.intern("contentRef");
 	private static final AString FIELD_BYTES = Strings.intern("bytes");
 	private static final AString FIELD_DEST_ROOT = Strings.intern("destRoot");
 	private static final AString FIELD_DEST_PATH = Strings.intern("destPath");
@@ -84,7 +85,7 @@ public class ArchiveAdapter extends AAdapter {
 	public String getDescription() {
 		return "Work with archive files (zip and jar). List entries, extract archives into a "
 			+ "filesystem root, or build a zip from files/directories — output to a root path or a "
-			+ "content-addressed asset. Sources may be a root+path file, a CAS asset, or inline base64 "
+			+ "content-addressed asset. Sources may be a root+path file, any content reference, or inline base64 "
 			+ "bytes. All paths stay inside the FileAdapter's configured roots; extraction is zip-slip "
 			+ "protected and capped against zip bombs.";
 	}
@@ -146,25 +147,30 @@ public class ArchiveAdapter extends AAdapter {
 
 	/**
 	 * Resolves the archive source — exactly one of {@code root}+{@code path} (a
-	 * jailed file, read-checked), {@code asset} (a CAS reference), or {@code bytes}
-	 * (inline base64). Asset/bytes sources are spooled to a temp file so every op
+	 * jailed file, read-checked), {@code contentRef} (any resolvable content), or
+	 * {@code bytes} (inline base64). Reference/bytes sources are spooled to a temp file so every op
 	 * reads via {@link ZipFile} (existing-only — a source is never created here).
 	 */
 	private Source resolveSource(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
 		AString root = RT.ensureString(input.get(FIELD_ROOT));
 		AString path = RT.ensureString(input.get(FIELD_PATH));
-		AString assetRef = RT.ensureString(input.get(FIELD_ASSET));
+		AString contentRef = RT.ensureString(input.get(FIELD_CONTENT_REF));
+		AString legacyAssetRef = RT.ensureString(input.get(FIELD_ASSET));
+		if (contentRef != null && legacyAssetRef != null && !contentRef.equals(legacyAssetRef)) {
+			throw new IllegalArgumentException("contentRef conflicts with legacy 'asset'");
+		}
+		if (contentRef == null) contentRef = legacyAssetRef;
 		AString bytesB64 = RT.ensureString(input.get(FIELD_BYTES));
 
 		int provided = ((root != null && path != null) ? 1 : 0)
-			+ (assetRef != null ? 1 : 0) + (bytesB64 != null ? 1 : 0);
+			+ (contentRef != null ? 1 : 0) + (bytesB64 != null ? 1 : 0);
 		if (provided == 0) {
 			throw new IllegalArgumentException(
-				"Provide an archive source: 'root'+'path', 'asset', or 'bytes'");
+				"Provide an archive source: 'root'+'path', 'contentRef', or 'bytes'");
 		}
 		if (provided > 1) {
 			throw new IllegalArgumentException(
-				"Provide only one archive source: 'root'+'path', 'asset', or 'bytes'");
+				"Provide only one archive source: 'root'+'path', 'contentRef', or 'bytes'");
 		}
 
 		if (root != null && path != null) {
@@ -178,13 +184,13 @@ public class ArchiveAdapter extends AAdapter {
 
 		Path tmp = Files.createTempFile("covia-archive-", ".zip");
 		try {
-			if (assetRef != null) {
+			if (contentRef != null) {
 				// resolveContent spans every storage mechanism (CAS record, DLFS,
 				// provider) under the caller's authority — unlike getContentStream,
 				// which only serves metadata-declared content.
-				covia.venue.storage.ContentProvider.Resolved resolved = engine.resolveContent(assetRef, ctx);
+				covia.venue.storage.ContentProvider.Resolved resolved = engine.resolveContent(contentRef, ctx);
 				if (resolved == null || resolved.content() == null) {
-					throw new IllegalArgumentException("Asset not found or has no content: " + assetRef);
+					throw new IllegalArgumentException("Content reference not found: " + contentRef);
 				}
 				Files.write(tmp, resolved.content().getBlob().getBytes());
 			} else {
@@ -383,9 +389,8 @@ public class ArchiveAdapter extends AAdapter {
 			AString sha = Strings.create(Hashing.sha256(zipBytes).toHexString());
 			AMap<AString, ACell> meta = Maps.of(
 				FIELD_NAME, Strings.create(name),
-				Strings.create("mediaType"), Strings.create(ZIP_MEDIA_TYPE),
 				Fields.CONTENT, Maps.of(
-					Strings.create("mediaType"), Strings.create(ZIP_MEDIA_TYPE),
+					Fields.CONTENT_TYPE, Strings.create(ZIP_MEDIA_TYPE),
 					Fields.SHA256, sha)
 			);
 			var hash = engine.storeUserAsset(JSON.printPretty(meta), content, ctx);
@@ -394,6 +399,7 @@ public class ArchiveAdapter extends AAdapter {
 			return Maps.of(
 				"entries", CVMLong.create(entryCount[0]),
 				"bytes", CVMLong.create(size),
+				"ref", didUrl,
 				"asset", didUrl
 			);
 		} finally {

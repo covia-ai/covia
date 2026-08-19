@@ -1,6 +1,7 @@
 package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -39,26 +40,18 @@ public class VenueBootstrapMaterializerTest {
 	}
 
 	@Test
-	public void failedBootstrapDiscardsAllWritesMadeOnChildFork() {
+	public void duplicateBootstrapCatalogPathsDoNotFail() {
 		Engine engine = Engine.createTemp(null);
 		try {
 			engine.registerAdapter(new CatalogCollisionAdapter("collision-a"));
 			engine.registerAdapter(new CatalogCollisionAdapter("collision-b"));
 			long jobsBefore = venueJobCount(engine);
 
-			IllegalStateException failure = assertThrows(IllegalStateException.class,
-				engine::materialiseBootstrapState);
+			engine.materialiseBootstrapState();
 
-			assertTrue(failure.getMessage().contains("collision-a"), failure.getMessage());
-			assertTrue(failure.getMessage().contains("collision-b"), failure.getMessage());
-			assertNull(engine.resolvePath(
-				Strings.create("v/ops/bootstrap-collision/echo"), engine.venueContext()),
-				"the first adapter's child-fork write must not leak into live state");
-			assertNull(engine.resolvePath(
-				Strings.create("v/info/did"), engine.venueContext()),
-				"venue information must not be partially published");
+			assertNotNull(engine.getAdapter("collision-b"));
 			assertEquals(jobsBefore, venueJobCount(engine),
-				"a failed direct-lattice transaction must not create Jobs");
+				"direct-lattice publication must not create Jobs");
 		} finally {
 			engine.close();
 		}
@@ -83,6 +76,23 @@ public class VenueBootstrapMaterializerTest {
 				"venue-info fields written before the failure must remain private to the child fork");
 			assertEquals(jobsBefore, venueJobCount(engine),
 				"late bootstrap validation failure must not create Jobs");
+		} finally {
+			engine.close();
+		}
+	}
+
+	@Test
+	public void postBootstrapRegistrationReplacesOccupiedDeclaration() {
+		Engine engine = Engine.createTemp(null);
+		try {
+			Engine.addDemoAssets(engine);
+			engine.registerAdapter(new CatalogCollisionAdapter("late-module"));
+			assertNotNull(engine.resolvePath(
+				Strings.create("v/ops/bootstrap-collision/echo"), engine.venueContext()));
+
+			assertDoesNotThrow(() ->
+				engine.registerAdapter(new CatalogCollisionAdapter("late-module")));
+			assertNotNull(engine.getAdapter("late-module"));
 		} finally {
 			engine.close();
 		}

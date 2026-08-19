@@ -230,7 +230,7 @@ Returns summaries (id, name, type, description) with pagination (offset/limit).
 ### Retrieving full definition
 
 ```
-asset_get  id=<hash>
+asset_get  ref=<hash-or-path>
 ```
 
 Returns `{exists: true, value: <full metadata>}` — inspect steps, result spec, and input schema.
@@ -275,7 +275,7 @@ Fetch the asset and display:
 - Result assembly
 
 ```
-asset_get  id=<hash>
+asset_get  ref=<hash-or-path>
 ```
 
 Then parse and present the steps, dependencies, and result mapping in a readable format.

@@ -1,6 +1,7 @@
 package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -20,6 +21,7 @@ import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.grid.Asset;
 import covia.grid.client.VenueHTTP;
@@ -70,6 +72,35 @@ public class CoviaAssetRefTest {
 
 	private static String etagHash(HttpResponse<String> r) {
 		return r.headers().firstValue("ETag").orElse("");
+	}
+
+	private HttpResponse<byte[]> getBytes(String path) throws Exception {
+		return http.send(
+			HttpRequest.newBuilder().uri(new URI(base + path)).GET().build(),
+			HttpResponse.BodyHandlers.ofByteArray());
+	}
+
+	private HttpResponse<String> resolve(String ref) throws Exception {
+		return get("/api/v1/assets/" + encodeRefPath(ref));
+	}
+
+	private HttpResponse<String> resolve(String ref, String bearer) throws Exception {
+		return get("/api/v1/assets/" + encodeRefPath(ref), bearer);
+	}
+
+	private static String encodeRefPath(String ref) {
+		String normalized = ref.startsWith("/") ? ref.substring(1) : ref;
+		if (normalized.startsWith("file://")) {
+			normalized = "file:/" + normalized.substring("file://".length());
+		}
+		StringBuilder encoded = new StringBuilder();
+		String[] segments = normalized.split("/", -1);
+		for (int i = 0; i < segments.length; i++) {
+			if (i > 0) encoded.append('/');
+			encoded.append(java.net.URLEncoder.encode(segments[i], java.nio.charset.StandardCharsets.UTF_8)
+				.replace("+", "%20"));
+		}
+		return encoded.toString();
 	}
 
 	@Test
@@ -174,10 +205,89 @@ public class CoviaAssetRefTest {
 		assertEquals(h, byBareHash.getID());
 	}
 
+	@Test
+	public void canonicalResolverAcceptsEveryAddressFamily() throws Exception {
+		Hash own = client.addAsset(META).join();
+		ACell canonicalMeta = JSON.parse(get("/api/v1/assets/" + own.toHexString()).body());
+		client.invokeAndWait(Strings.create("v/ops/covia/write"), Maps.of(
+			Strings.create("path"), Strings.create("w/asset-ref-test/general"),
+			Strings.create("value"), canonicalMeta));
+
+		String[] callerRefs = {
+			own.toHexString(),
+			"a/" + own.toHexString(),
+			"/a/" + own.toHexString(),
+			"w/asset-ref-test/general",
+			"/w/asset-ref-test/general"
+		};
+		for (String ref : callerRefs) {
+			HttpResponse<String> r = resolve(ref);
+			assertEquals(200, r.statusCode(), ref + " -> " + r.body());
+			assertTrue(etagHash(r).contains(own.toHexString()), ref);
+		}
+
+		Asset echoAsset = TestServer.ENGINE.resolveAsset(
+			Strings.create("v/test/ops/echo"), TestServer.ENGINE.venueContext());
+		Hash echo = echoAsset.getID();
+
+		AKeyPair aliceKey = AKeyPair.generate();
+		RequestContext alice = RequestContext.of(UCAN.toDIDKey(aliceKey.getAccountKey()));
+		TestServer.ENGINE.storeUserAsset(Strings.create(META), null, alice);
+		TestServer.ENGINE.jobs().invokeOperation("v/ops/covia/write", Maps.of(
+			Strings.create("path"), Strings.create("o/asset-ref-test/general"),
+			Strings.create("value"), echoAsset.meta()), alice).awaitResult(5000);
+		String aliceToken = identityToken(aliceKey);
+		for (String ref : new String[] {"o/asset-ref-test/general", "/o/asset-ref-test/general"}) {
+			HttpResponse<String> r = resolve(ref, aliceToken);
+			assertEquals(200, r.statusCode(), ref + " -> " + r.body());
+			assertTrue(etagHash(r).contains(echo.toHexString()), ref);
+		}
+
+		String venueDid = TestServer.ENGINE.getDIDString().toString();
+
+		String[] refs = {
+			"v/test/ops/echo",
+			"/v/test/ops/echo",
+			venueDid + "/v/test/ops/echo",
+			venueDid + "/a/" + echo.toHexString()
+		};
+		for (String ref : refs) {
+			HttpResponse<String> r = resolve(ref);
+			assertEquals(200, r.statusCode(), ref + " -> " + r.body());
+			assertTrue(etagHash(r).contains(echo.toHexString()), ref);
+		}
+	}
+
+	@Test
+	public void javaClientPreservesReferenceSeparatelyFromHash() throws Exception {
+		String ref = "/v/test/ops/echo";
+		Asset asset = client.getAsset(ref);
+		assertNotNull(asset);
+		assertEquals(ref, asset.getReference());
+		assertEquals(TestServer.ENGINE.resolveAsset(
+			Strings.create("v/test/ops/echo"), TestServer.ENGINE.venueContext()).getID(), asset.getID());
+	}
+
+	@Test
+	public void venueAssetListingReturnsRoundTrippableReferences() throws Exception {
+		HttpResponse<String> listed = get("/api/v1/assets?limit=1");
+		assertEquals(200, listed.statusCode(), listed.body());
+		var items = RT.ensureVector(RT.getIn(JSON.parse(listed.body()), "items"));
+		assertNotNull(items, listed.body());
+		ACell first = items.get(0);
+		assertTrue(first instanceof convex.core.data.AString, listed.body());
+		String ref = first.toString();
+		assertTrue(ref.startsWith(TestServer.ENGINE.getDIDString() + "/a/"), ref);
+		assertEquals(200, resolve(ref).statusCode(), "listed references must resolve directly");
+
+		String clientRef = client.getAssetReferences().join().get(0);
+		assertNotNull(client.resolveAsset(clientRef),
+			"the Java reference listing must round-trip through the general resolver");
+	}
+
 	// ---------------------------------------------------------------- #368
-	// Content by any reference: assets/content/<ref> puts the selector BEFORE
-	// the ref, so the variable-length ref is always the tail wildcard and a ref
-	// whose own final segment is "content" stays unambiguous.
+	// Content by any reference is a separate top-level resource. This keeps
+	// assets/<ref> unambiguously metadata even when the ref ends in "content".
 
 	private static final String CONTENT_META =
 		"{\"name\":\"Ref Content Asset\",\"content\":{\"inline\":\"ref content bytes\",\"contentType\":\"text/plain\"}}";
@@ -199,11 +309,11 @@ public class CoviaAssetRefTest {
 		String legacy = get("/api/v1/assets/" + h.toHexString() + "/content").body();
 		assertEquals("ref content bytes", legacy, "legacy hash route must keep working");
 
-		HttpResponse<String> bare = get("/api/v1/assets/content/" + h.toHexString());
+		HttpResponse<String> bare = get("/api/v1/content/" + h.toHexString());
 		assertEquals(200, bare.statusCode());
 		assertEquals(legacy, bare.body(), "canonical route must serve identical bytes for a bare hash");
 
-		HttpResponse<String> aForm = get("/api/v1/assets/content/a/" + h.toHexString());
+		HttpResponse<String> aForm = get("/api/v1/content/a/" + h.toHexString());
 		assertEquals(200, aForm.statusCode());
 		assertEquals(legacy, aForm.body(), "canonical route must serve identical bytes for a/<hash>");
 	}
@@ -211,11 +321,21 @@ public class CoviaAssetRefTest {
 	@Test
 	public void canonicalContentRouteResolvesWorkspacePath() throws Exception {
 		pinContentAssetAt("w/asset-ref-test/inline-src");
-		HttpResponse<String> r = get("/api/v1/assets/content/w/asset-ref-test/inline-src");
+		HttpResponse<String> r = get("/api/v1/content/w/asset-ref-test/inline-src");
 		assertEquals(200, r.statusCode());
 		assertEquals("ref content bytes", r.body());
 		assertTrue(r.headers().firstValue("Content-Type").orElse("").startsWith("text/plain"),
 			"content.contentType must drive the media type");
+	}
+
+	@Test
+	public void javaAssetContentUsesItsOriginalPathReference() throws Exception {
+		pinContentAssetAt("w/asset-ref-test/java-content");
+		Asset asset = client.resolveAsset("w/asset-ref-test/java-content");
+		assertNotNull(asset);
+		assertEquals("w/asset-ref-test/java-content", asset.getReference());
+		assertEquals("ref content bytes", new String(asset.getContent().getBlob().getBytes(),
+			java.nio.charset.StandardCharsets.UTF_8));
 	}
 
 	@Test
@@ -230,7 +350,7 @@ public class CoviaAssetRefTest {
 		assertTrue(etagHash(meta).contains(h.toHexString()));
 
 		// The same ref's CONTENT is reachable only via the canonical route.
-		HttpResponse<String> content = get("/api/v1/assets/content/w/content");
+		HttpResponse<String> content = get("/api/v1/content/w/content");
 		assertEquals(200, content.statusCode());
 		assertEquals("ref content bytes", content.body());
 	}
@@ -245,15 +365,48 @@ public class CoviaAssetRefTest {
 		assertTrue(meta.body().contains("Ref Content Asset"));
 		assertTrue(etagHash(meta).contains(h.toHexString()));
 
-		HttpResponse<String> content = get("/api/v1/assets/content/w/asset-ref-test/content");
+		HttpResponse<String> content = get("/api/v1/content/w/asset-ref-test/content");
 		assertEquals(200, content.statusCode());
 		assertEquals("ref content bytes", content.body());
 	}
 
 	@Test
 	public void canonicalContentRouteUnknownRefIs404() throws Exception {
-		HttpResponse<String> r = get("/api/v1/assets/content/w/does/not/exist");
+		HttpResponse<String> r = get("/api/v1/content/w/does/not/exist");
 		assertEquals(404, r.statusCode());
 		assertTrue(r.body().contains("not found"), "unknown ref must be a clean 404, got: " + r.body());
+	}
+
+	@Test
+	public void canonicalContentRouteServesFileProviderReference() throws Exception {
+		String name = "http-content-" + java.util.UUID.randomUUID() + ".txt";
+		String ref = "file://tmp/" + name;
+		client.invokeAndWait(Strings.create("v/ops/file/write"), Maps.of(
+			"root", "tmp", "path", name, "content", "file provider bytes"));
+
+		HttpResponse<String> content = get("/api/v1/content/" + encodeRefPath(ref));
+		assertEquals(200, content.statusCode(), content.body());
+		assertEquals("file provider bytes", content.body());
+		assertTrue(content.headers().firstValue("Content-Type").orElse("").startsWith("text/plain"));
+
+		HttpResponse<String> metadata = resolve(ref);
+		assertEquals(404, metadata.statusCode(),
+			"a raw file reference has content but is not itself asset metadata");
+	}
+
+	@Test
+	public void canonicalContentRouteServesDlfsProviderReference() throws Exception {
+		String drive = "http-content-" + java.util.UUID.randomUUID();
+		byte[] bytes = new byte[] {(byte) 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a};
+		client.invokeAndWait(Strings.create("v/ops/dlfs/create-drive"), Maps.of("name", drive));
+		client.invokeAndWait(Strings.create("v/ops/dlfs/write"), Maps.of(
+			"drive", drive, "path", "image.png",
+			"bytes", java.util.Base64.getEncoder().encodeToString(bytes)));
+
+		String ref = "dlfs/" + drive + "/image.png";
+		HttpResponse<byte[]> content = getBytes("/api/v1/content/" + encodeRefPath(ref));
+		assertEquals(200, content.statusCode());
+		assertArrayEquals(bytes, content.body());
+		assertTrue(content.headers().firstValue("Content-Type").orElse("").startsWith("image/png"));
 	}
 }

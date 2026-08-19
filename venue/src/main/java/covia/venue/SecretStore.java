@@ -37,8 +37,9 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> {
 	private static final AString ENCRYPTED_KEY = Strings.intern("encrypted");
 	private static final AString UPDATED_KEY = Strings.intern("updated");
 
-	SecretStore(ALatticeCursor<AMap<AString, ACell>> cursor) {
-		super(cursor);
+	SecretStore(ALatticeComponent<?> parent,
+			ALatticeCursor<AMap<AString, ACell>> cursor) {
+		super(parent, cursor);
 	}
 
 	/**

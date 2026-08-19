@@ -252,6 +252,10 @@ public class RemoteAssetFetchTest {
 			""".formatted(contentHash.toHexString()));
 		Hash id = TwoVenueTestServer.ENGINE_B.storeAsset(meta, null);
 		TwoVenueTestServer.ENGINE_B.putContent(id, new ByteArrayInputStream(content.getBytes()));
+		var localResolved = TwoVenueTestServer.ENGINE_B.resolveContent(
+			TwoVenueTestServer.ENGINE_B.assetDIDURL(id),
+			TwoVenueTestServer.ENGINE_B.venueContext());
+		assertNotNull(localResolved, "Publishing venue must resolve its own catalog content");
 
 		Asset fetched = TwoVenueTestServer.COVIA_B.getVenueAsset(id);
 		assertNotNull(fetched);
@@ -259,6 +263,39 @@ public class RemoteAssetFetchTest {
 		assertNotNull(fetchedContent, "Stored content must be retrievable over HTTP");
 		assertEquals(content, fetchedContent.getBlob().toFlatBlob(),
 			"Content bytes must round-trip unchanged");
+	}
+
+	@Test
+	public void universalContentResolverFetchesRemoteDidReference() throws IOException {
+		Blob content = Blob.wrap("remote reference bytes".getBytes());
+		Hash contentHash = Hashing.sha256(content.getBytes());
+		AString meta = Strings.create("""
+			{
+			  "name": "Remote content reference artifact",
+			  "content": {
+			    "sha256": "%s",
+			    "contentType": "text/plain"
+			  }
+			}
+			""".formatted(contentHash.toHexString()));
+		Hash id = TwoVenueTestServer.ENGINE_B.storeAsset(meta, null);
+		TwoVenueTestServer.ENGINE_B.putContent(id, new ByteArrayInputStream(content.getBytes()));
+		AString didRef = Strings.create("did:web:localhost%3A" + TwoVenueTestServer.PORT_B
+			+ "/a/" + id.toHexString());
+
+		var resolved = TwoVenueTestServer.ENGINE_A.resolveContent(didRef,
+			RequestContext.of(Strings.create("did:key:zRemoteContentReader")));
+		assertNotNull(resolved);
+		assertEquals(content, resolved.content().getBlob().toFlatBlob());
+		assertEquals("text/plain", resolved.contentType());
+
+		Job job = TwoVenueTestServer.ENGINE_A.jobs().invokeOperation(
+			"v/ops/asset/content", Maps.of("ref", didRef),
+			RequestContext.of(Strings.create("did:key:zRemoteContentReader")));
+		ACell result = job.awaitResult(10_000);
+		assertEquals(Status.COMPLETE, job.getStatus());
+		assertEquals("text/plain", RT.getIn(result, "contentType").toString());
+		assertEquals(content, RT.getIn(result, Fields.VALUE));
 	}
 
 	// ============== Named catalog fetch (bindings, not hashes) ==============
