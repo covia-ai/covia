@@ -48,11 +48,11 @@
 		<maven.compiler.target>21</maven.compiler.target>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 		
-		<logback.version>1.6.1</logback.version>
+		<logback.version>1.6.3</logback.version>
 		<slf4j.version>2.0.18</slf4j.version>
-		<javalin.version>7.2.2</javalin.version>
-		<langchain.version>1.18.1</langchain.version>
-		<mcp.version>2.0.0</mcp.version>
+		<javalin.version>7.2.3</javalin.version>
+		<langchain.version>1.19.0</langchain.version>
+		<mcp.version>2.0.1</mcp.version>
 		<a2a.version>1.2.0.Final</a2a.version>
 	</properties>
 

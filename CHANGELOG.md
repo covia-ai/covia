@@ -15,6 +15,12 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   hashes, `a/`, `v/`, `w/`, `o/`, leading-slash forms, and DID URLs. Venue asset listings return
   owner-qualified references that round-trip without changing namespace.
 
+### Changed
+
+- Updated Javalin to 7.2.3, LangChain4j to 1.19.0, MCP Java SDK to 2.0.1,
+  and Logback to 1.6.3. The MCP update bounds transport reads, while the
+  Logback update includes the `MDCBasedDiscriminator` path-sanitisation fix.
+
 ### Fixed
 
 - Fixed #387: long-lived DLFS views now use the venue's current write clock per
