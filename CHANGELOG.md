@@ -16,7 +16,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Boot warnings for a malformed venue skill library, and an `agent:create` warning for a skillset pointing at a directory of skillsets
 - `adapters.skills.defaultSkillsets` / `defaultSkills` configure the `skills` op's entry point, published at `v/info/adapters/skills`
 - `skills:list` degrades on an unreadable source (visible diagnostic) while `skills:read` still fails
-- `agent:create` reports skill source problems as terse agent-facing lines (`skill missing:`, `skillset missing:`, `skillset empty:`, `no access capability:`), each naming the skill to load next
+- `agent:create` reports skill source problems as terse agent-facing facts (`skill missing:`, `skillset missing:`, `skillset empty:`, `no access capability:`); the vocabulary is defined in the `skills` and `capabilities` skills
 - A failed `skill_load` by name now names the skills that are available, so an agent can correct itself
 
 - Optional `covia-discord` venue module: operator-declared or user-created

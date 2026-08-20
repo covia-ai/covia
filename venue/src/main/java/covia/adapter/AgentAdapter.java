@@ -703,12 +703,14 @@ public class AgentAdapter extends AAdapter {
 	 * Advisories for {@code config.skills} / {@code config.skillsets}, one
 	 * terse line per category (see venue/docs/SKILLS.md).
 	 *
-	 * <p>These are read by <b>agents</b>, so each line is minimal and uses the
-	 * same words the skills system itself uses — {@code skill} and
-	 * {@code skillset} are distinct kinds, and "access capability" is what the
-	 * capabilities skill calls the thing that is missing. Each line ends with
-	 * the skill to load to go further, so a reader can act without being told
-	 * the whole model up front. Refs are listed together rather than one per
+	 * <p>Each line states a fact and nothing more: {@code <category>: <refs>}.
+	 * No guidance, because guidance costs context on every create for a reader
+	 * that mostly does not need it — what these words MEAN, and what to do about
+	 * them, belongs in the tool descriptions and in the {@code skills} and
+	 * {@code capabilities} skills, which name these exact phrases. The
+	 * vocabulary is the link: {@code skill} and {@code skillset} are distinct
+	 * kinds, and "access capability" is what the capabilities skill calls the
+	 * thing that is missing. Refs are listed together rather than one per
 	 * attempt.</p>
 	 *
 	 * <p>A malformed shape THROWS at transition time, so it is flagged first
@@ -723,30 +725,24 @@ public class AgentAdapter extends AAdapter {
 		try {
 			sources = Skills.sourcesOf(config);
 		} catch (RuntimeException e) {
-			return out.conj(Strings.create("skills config invalid: " + describeFailure(e)
-				+ " — the agent cannot run until this is fixed"));
+			return out.conj(Strings.create("skills config invalid: " + describeFailure(e)));
 		}
 		AString misdirected = Skills.misdirectedSkillset(engine, ctx, sources.skillsets());
 		if (misdirected != null) {
-			out = out.conj(Strings.create("skillset holds skillsets, not skills: " + misdirected
-				+ " — try " + misdirected + "/root"));
+			out = out.conj(Strings.create("skillset holds skillsets, not skills: " + misdirected));
 		}
 		Skills.SourceReport report = Skills.inspectSources(engine, ctx, sources);
 		if (!report.missingSkills().isEmpty()) {
-			out = out.conj(Strings.create("skill missing: " + refs(report.missingSkills())
-				+ " — load skill 'skills' to discover what exists"));
+			out = out.conj(Strings.create("skill missing: " + refs(report.missingSkills())));
 		}
 		if (!report.missingSkillsets().isEmpty()) {
-			out = out.conj(Strings.create("skillset missing: " + refs(report.missingSkillsets())
-				+ " — load skill 'skills' to discover what exists"));
+			out = out.conj(Strings.create("skillset missing: " + refs(report.missingSkillsets())));
 		}
 		if (!report.emptySkillsets().isEmpty()) {
-			out = out.conj(Strings.create("skillset empty: " + refs(report.emptySkillsets())
-				+ " — load skill 'skill-authoring' to add your own"));
+			out = out.conj(Strings.create("skillset empty: " + refs(report.emptySkillsets())));
 		}
 		if (!report.denied().isEmpty()) {
-			out = out.conj(Strings.create("no access capability: " + refs(report.denied())
-				+ " — load skill 'capabilities'"));
+			out = out.conj(Strings.create("no access capability: " + refs(report.denied())));
 		}
 		return out;
 	}

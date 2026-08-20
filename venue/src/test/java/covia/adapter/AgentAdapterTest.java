@@ -416,8 +416,8 @@ public class AgentAdapterTest {
 		ACell warnings = RT.getIn(result, Fields.WARNINGS);
 		assertNotNull(warnings, "expected the empty-own-skills note: " + result);
 		assertTrue(warnings.toString().contains("skillset empty: w/skills"), warnings.toString());
-		// Points at the skill that says what to do about it.
-		assertTrue(warnings.toString().contains("skill-authoring"), warnings.toString());
+		// A fact, nothing more — what to do about it lives in the skills skill.
+		assertFalse(warnings.toString().contains("load skill"), warnings.toString());
 	}
 
 	/**
@@ -441,7 +441,7 @@ public class AgentAdapterTest {
 		assertNotNull(warnings, "a missing venue skill source should be flagged: " + result);
 		assertTrue(warnings.toString().contains(
 			"skillset missing: v/skills/definitely-not-real"), warnings.toString());
-		assertTrue(warnings.toString().contains("load skill 'skills'"), warnings.toString());
+		assertFalse(warnings.toString().contains("load skill"), warnings.toString());
 	}
 
 	@Test
@@ -5656,7 +5656,7 @@ public class AgentAdapterTest {
 		assertNotNull(warnings, "expected a warning about the unreadable source: " + result);
 		assertTrue(warnings.toString().contains("no access capability: w/other-place"),
 			warnings.toString());
-		assertTrue(warnings.toString().contains("load skill 'capabilities'"), warnings.toString());
+		assertFalse(warnings.toString().contains("load skill"), warnings.toString());
 	}
 
 	/** A source that exists and is readable raises nothing at all. */

@@ -196,13 +196,15 @@ A non-empty declaration of either kind activates both halves of the feature: the
 - `agent:create` reports source problems as one terse line per category, aggregating refs:
 
   ```
-  skill missing: w/skills/typo, w/skills/foo — load skill 'skills' to discover what exists
-  skillset missing: w/imaginary — load skill 'skills' to discover what exists
-  skillset empty: w/skills — load skill 'skill-authoring' to add your own
-  no access capability: did:some-other-user/s/FOO — load skill 'capabilities'
+  skill missing: w/skills/typo, w/skills/foo
+  skillset missing: w/imaginary
+  skillset empty: w/skills
+  no access capability: did:some-other-user/s/FOO
   ```
 
-  These are read by **agents**, so they are minimal, they distinguish the two kinds (a missing skill and a missing skillset are different mistakes), and each names the skill to load to go further. The vocabulary is deliberate: `skill` and `skillset` are defined in the `skills` skill, and "access capability" in `capabilities`, so a reader can resolve any term by loading the skill the line names.
+  Each line states a fact and nothing more. No guidance: that would cost context on every create for a reader that mostly does not need it. What these words mean, and what to do about them, lives in the tool descriptions and in the `skills` and `capabilities` skills, which name these exact phrases — the vocabulary is the link, so a reader who needs more loads the skill that defines the term.
+
+  Reported per kind, because a missing skill and a missing skillset are different mistakes, and collected rather than short-circuited so a caller sees everything at once.
 
   `skillset empty` is not a fault. `w/skills` ships in every standard template precisely so an agent has somewhere to author personal skills, and it is empty until one does — so the caller's own `w/skills` reads as empty rather than missing even when it does not exist yet. Any other absent path is missing.
 
