@@ -26,6 +26,8 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import convex.auth.ucan.Capability;
+import covia.exception.AuthException;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -326,5 +328,70 @@ public class SkillsAdapterTest {
 		} finally {
 			own.close();
 		}
+	}
+
+	// ========== capability gating ==========
+
+	/**
+	 * The op has no authentication precondition — {@code v/skills} is publicly
+	 * discoverable — so the per-source capability pins ARE the gating. A caller
+	 * with no read grant gets a denial, not a quietly empty index.
+	 */
+	@Test
+	public void testListDeniedWithoutReadCapability() {
+		write("w/skills/private", Maps.of(
+			Fields.DESCRIPTION, Strings.create("Owner-only")), ctx);
+		RequestContext denied = ctx.withCaps(Vectors.empty());
+
+		assertThrows(AuthException.class, () -> invoke(Maps.of(
+			Strings.create("command"), Strings.create("list"),
+			K_SOURCES, Vectors.of(Strings.create("w/skills"))), denied),
+			"listing a skillset is a read action and is pinned as one");
+	}
+
+	@Test
+	public void testReadDeniedWithoutReadCapability() {
+		write("w/skills/private2", Maps.of(
+			Fields.DESCRIPTION, Strings.create("Owner-only"),
+			Strings.create("content"), Maps.of(
+				Strings.create("inline"), Strings.create("Do not expose"))), ctx);
+		RequestContext denied = ctx.withCaps(Vectors.empty());
+
+		// By direct ref...
+		assertThrows(AuthException.class, () -> invoke(Maps.of(
+			Strings.create("command"), Strings.create("read"),
+			K_REF, Strings.create("w/skills/private2")), denied));
+
+		// ...and by name across sources: the body must not leak either way.
+		assertThrows(AuthException.class, () -> invoke(Maps.of(
+			Strings.create("command"), Strings.create("read"),
+			Fields.NAME, Strings.create("private2"),
+			K_SOURCES, Vectors.of(Strings.create("w/skills"))), denied));
+	}
+
+	/** The pins are per source, so a grant covering one still denies another. */
+	@Test
+	public void testCapabilityPinsArePerSource() {
+		// Declares `name`, so the index pass reads metadata only. A skill
+		// WITHOUT a name falls back to its path segment, but only after
+		// attempting a content read for frontmatter — which pins asset/read.
+		write("w/skills/mine", Maps.of(
+			Fields.NAME, Strings.create("mine"),
+			Fields.DESCRIPTION, Strings.create("Readable")), ctx);
+		// A scope covering only the caller's own w/skills subtree.
+		RequestContext scoped = ctx.withCaps(Vectors.of(
+			Maps.of(Strings.create("with"), Strings.create(did + "/w/skills"),
+				Strings.create("can"), Capability.CRUD_READ)));
+
+		ACell ok = invoke(Maps.of(
+			Strings.create("command"), Strings.create("list"),
+			K_SOURCES, Vectors.of(Strings.create("w/skills"))), scoped);
+		assertNotNull(ok);
+		assertTrue(ok.toString().contains("- mine — Readable"), ok.toString());
+
+		assertThrows(AuthException.class, () -> invoke(Maps.of(
+			Strings.create("command"), Strings.create("list"),
+			K_SOURCES, Vectors.of(Strings.create("w/elsewhere"))), scoped),
+			"a source outside the granted scope is denied even when another is allowed");
 	}
 }
