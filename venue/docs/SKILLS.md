@@ -193,12 +193,20 @@ A non-empty declaration of either kind activates both halves of the feature: the
 **Diagnostics.** Merely absent refs are not warned about in a user's agent config: they are maybe-style paths resolved live, and an empty `w/skills` is the designed default. Two things *are* reported:
 
 - `agent:create` warns when a `config.skillsets` entry resolves to a directory of **directories** — the classic `v/skills` instead of `v/skills/root` mistake, which would silently yield an empty index. Resolution uses the caller's namespace, since `w/` paths are user-relative.
-- `agent:create` also warns when a declared source does not **resolve**, or is **denied** to the creator. Either way the agent finds no skills there and nothing says so at run time, so both are indistinguishable from an empty source once it is running. These advisories are read by agents, which can act on them.
+- `agent:create` reports source problems as one terse line per category, aggregating refs:
 
-  The caller's own `w/` workspace is handled differently rather than reported as a problem. `w/skills` ships in every standard template precisely so an agent has somewhere to author personal skills, and it is empty until one does — so an empty own-workspace source gets a brief note (`w/skills empty — the agent can author its own skills there`), a prompt to use the space rather than a warning about broken configuration. A `v/` path is different: published at boot or by a module, so one resolving to nothing is most likely a name that never will, and that IS reported as a problem.
+  ```
+  skill missing: w/skills/typo, w/skills/foo — load skill 'skills' to discover what exists
+  skillset missing: w/imaginary — load skill 'skills' to discover what exists
+  skillset empty: w/skills — load skill 'skill-authoring' to add your own
+  no access capability: did:some-other-user/s/FOO — load skill 'capabilities'
+  ```
+
+  These are read by **agents**, so they are minimal, they distinguish the two kinds (a missing skill and a missing skillset are different mistakes), and each names the skill to load to go further. The vocabulary is deliberate: `skill` and `skillset` are defined in the `skills` skill, and "access capability" in `capabilities`, so a reader can resolve any term by loading the skill the line names.
+
+  `skillset empty` is not a fault. `w/skills` ships in every standard template precisely so an agent has somewhere to author personal skills, and it is empty until one does — so the caller's own `w/skills` reads as empty rather than missing even when it does not exist yet. Any other absent path is missing.
 
   The denial check is the creator's own access. An ordinary user is null-scope and unrestricted over their own namespace, so it fires for a capability-scoped creator; a clean result is never a guarantee that the agent — which runs under its own `config.caps` — will be able to read it.
-- At boot, after catalog materialisation, the venue validates its **own** library and logs a warning per problem: a skill installed at skillset level, a skillset holding a nested directory, a child ref that does not resolve, or a child ref declared under the wrong kind. Unlike a user's config, everything here was installed by this venue, so an unresolvable ref is a packaging bug worth surfacing at boot rather than at an agent's first turn.
 
 ### 4.2 Hierarchical skill contribution
 

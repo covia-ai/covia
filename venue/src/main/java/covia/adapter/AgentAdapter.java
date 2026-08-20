@@ -692,90 +692,73 @@ public class AgentAdapter extends AAdapter {
 		if (toolWarn != null) warnings = warnings.conj(toolWarn);
 		AString unavailableWarn = unavailableToolsWarning(config, ctx);
 		if (unavailableWarn != null) warnings = warnings.conj(unavailableWarn);
-		AString skillsWarn = skillSourcesWarning(ctx, config);
-		if (skillsWarn != null) warnings = warnings.conj(skillsWarn);
-		AString ownSkillsNote = emptyOwnSkillsNote(ctx, config);
-		if (ownSkillsNote != null) warnings = warnings.conj(ownSkillsNote);
+		warnings = warnings.concat(skillSourceWarnings(ctx, config));
 		AString keyWarn = rawApiKeyWarning(config);
 		if (keyWarn != null) warnings = warnings.conj(keyWarn);
 		return warnings;
 	}
 
-	/**
-	 * A one-line reminder that the agent's own skill space is empty.
-	 *
-	 * <p>Not a problem report: {@code w/skills} ships in every standard
-	 * template precisely so an agent has somewhere to author personal skills,
-	 * and it is empty until one does. Saying so is a prompt to use it — which
-	 * is why it reads as a plain statement rather than a warning about broken
-	 * configuration.</p>
-	 */
-	private AString emptyOwnSkillsNote(RequestContext ctx, AMap<AString, ACell> config) {
-		if (config == null) return null;
-		try {
-			AVector<ACell> empty = Skills.emptyOwnSources(engine, ctx, Skills.sourcesOf(config));
-			if (empty.count() == 0) return null;
-			StringBuilder sb = new StringBuilder();
-			for (long i = 0; i < empty.count(); i++) {
-				if (i > 0) sb.append(", ");
-				sb.append(empty.get(i));
-			}
-			return Strings.create(sb + " empty — the agent can author its own skills there");
-		} catch (RuntimeException e) {
-			return null;                       // shape problems are the other check's job
-		}
-	}
 
 	/**
-	 * Advisory for {@code config.skills} / {@code config.skillsets} (see
-	 * venue/docs/SKILLS.md): a malformed shape (non-array, non-string entry)
-	 * THROWS at transition time, so it's flagged here at the moment it's
-	 * fixable.
+	 * Advisories for {@code config.skills} / {@code config.skillsets}, one
+	 * terse line per category (see venue/docs/SKILLS.md).
 	 *
-	 * <p>A source that does not resolve, and one that is <b>denied</b>, are both
-	 * reported: either way the agent finds no skills there, and neither renders
-	 * a diagnostic anywhere at run time, so both are indistinguishable from an
-	 * empty source once the agent is running. These advisories are read by
-	 * agents, which can act on them.</p>
+	 * <p>These are read by <b>agents</b>, so each line is minimal and uses the
+	 * same words the skills system itself uses — {@code skill} and
+	 * {@code skillset} are distinct kinds, and "access capability" is what the
+	 * capabilities skill calls the thing that is missing. Each line ends with
+	 * the skill to load to go further, so a reader can act without being told
+	 * the whole model up front. Refs are listed together rather than one per
+	 * attempt.</p>
 	 *
-	 * <p>The caller's own {@code w/} workspace is excluded from the missing
-	 * check: every standard template ships {@code w/skills}, legitimately empty
-	 * until its owner authors a personal skill, so reporting it would fire on
-	 * almost every create and teach the reader to ignore the field.</p>
-	 *
-	 * <p>A skillset that resolves to a directory of <b>directories</b> is a
-	 * different matter: that is a definite misconfiguration (classically
-	 * {@code v/skills} instead of {@code v/skills/root}) which would silently
-	 * yield an empty index, so it is called out.</p>
+	 * <p>A malformed shape THROWS at transition time, so it is flagged first
+	 * and on its own. An empty {@code w/skills} is not a fault: it is the
+	 * agent's own space, shipped by every standard template, and saying so is a
+	 * prompt to use it.</p>
 	 */
-	private AString skillSourcesWarning(RequestContext ctx, AMap<AString, ACell> config) {
-		if (config == null) return null;
+	private AVector<ACell> skillSourceWarnings(RequestContext ctx, AMap<AString, ACell> config) {
+		AVector<ACell> out = Vectors.empty();
+		if (config == null) return out;
+		Skills.SkillSources sources;
 		try {
-			Skills.SkillSources sources = Skills.sourcesOf(config);
-			AString misdirected = Skills.misdirectedSkillset(engine, ctx, sources.skillsets());
-			if (misdirected != null) {
-				return Strings.create("config.skillsets entry '" + misdirected
-					+ "' is a directory of skillsets, not of skills — it will contribute no skills"
-					+ " (did you mean " + misdirected + "/root?)");
-			}
-			AString missing = Skills.missingSource(engine, ctx, sources);
-			if (missing != null) {
-				return Strings.create("skill source '" + missing
-					+ "' does not resolve — the agent will find no skills there"
-					+ " (check the path, or the module that publishes it)");
-			}
-			AString denied = Skills.unreadableSource(engine, ctx, sources);
-			if (denied != null) {
-				return Strings.create("skill source '" + denied
-					+ "' is not readable with your capabilities — it will contribute no skills,"
-					+ " and an unreadable source looks exactly like an empty one in the agent's"
-					+ " index (grant read on it, or point at a source you can read)");
-			}
+			sources = Skills.sourcesOf(config);
 		} catch (RuntimeException e) {
-			return Strings.create(describeFailure(e)
-				+ " (the agent will fail at transition time until this is fixed)");
+			return out.conj(Strings.create("skills config invalid: " + describeFailure(e)
+				+ " — the agent cannot run until this is fixed"));
 		}
-		return null;
+		AString misdirected = Skills.misdirectedSkillset(engine, ctx, sources.skillsets());
+		if (misdirected != null) {
+			out = out.conj(Strings.create("skillset holds skillsets, not skills: " + misdirected
+				+ " — try " + misdirected + "/root"));
+		}
+		Skills.SourceReport report = Skills.inspectSources(engine, ctx, sources);
+		if (!report.missingSkills().isEmpty()) {
+			out = out.conj(Strings.create("skill missing: " + refs(report.missingSkills())
+				+ " — load skill 'skills' to discover what exists"));
+		}
+		if (!report.missingSkillsets().isEmpty()) {
+			out = out.conj(Strings.create("skillset missing: " + refs(report.missingSkillsets())
+				+ " — load skill 'skills' to discover what exists"));
+		}
+		if (!report.emptySkillsets().isEmpty()) {
+			out = out.conj(Strings.create("skillset empty: " + refs(report.emptySkillsets())
+				+ " — load skill 'skill-authoring' to add your own"));
+		}
+		if (!report.denied().isEmpty()) {
+			out = out.conj(Strings.create("no access capability: " + refs(report.denied())
+				+ " — load skill 'capabilities'"));
+		}
+		return out;
+	}
+
+	/** Comma-separated refs for a one-line advisory. */
+	private static String refs(AVector<ACell> values) {
+		StringBuilder sb = new StringBuilder();
+		for (long i = 0; i < values.count(); i++) {
+			if (i > 0) sb.append(", ");
+			sb.append(values.get(i));
+		}
+		return sb.toString();
 	}
 
 	/**

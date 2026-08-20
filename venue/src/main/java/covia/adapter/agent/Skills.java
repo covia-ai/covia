@@ -870,119 +870,107 @@ public final class Skills {
 		return null;
 	}
 
-	/**
-	 * The first declared source the caller cannot READ, or null when every one
-	 * is readable or merely absent.
-	 *
-	 * <p>Absence is normal and stays undiagnosed — sources are maybe-style
-	 * paths. A denial is not: it renders nothing in the agent's index and
-	 * nothing in its logs, so a skillset the agent has no grant for looks
-	 * exactly like an empty one. That is the single case worth telling the
-	 * operator about, at the moment the config is set.</p>
-	 *
-	 * <p>Checked as {@code ctx}, so it catches the common setup mistakes — a
-	 * typo, or another user's namespace. An agent later runs under its own
-	 * {@code config.caps}, which can be narrower still, so a clean result here
-	 * is not a guarantee.</p>
-	 */
-	public static AString unreadableSource(Engine engine, RequestContext ctx, SkillSources sources) {
-		if (engine == null || ctx == null || sources == null) return null;
-		AString denied = firstDenied(engine, ctx, sources.skills());
-		return (denied != null) ? denied : firstDenied(engine, ctx, sources.skillsets());
-	}
 
-	private static AString firstDenied(Engine engine, RequestContext ctx, AVector<ACell> refs) {
-		if (refs == null) return null;
-		for (long i = 0; i < refs.count(); i++) {
-			AString ref = RT.ensureString(refs.get(i));
-			if (ref == null) continue;
-			try {
-				requireRead(engine, ctx, ref);
-			} catch (covia.exception.AuthException denied) {
-				return ref;
-			} catch (RuntimeException e) {
-				// Not a capability problem — absence and resolution errors are
-				// not this check's business.
-			}
+
+
+
+
+
+	/**
+	 * What is wrong with an agent's declared sources, by category, in one pass.
+	 *
+	 * <p>Reported per KIND, because a missing skill and a missing skillset are
+	 * different mistakes with different fixes. Categories are collected rather
+	 * than short-circuited so a caller sees everything at once instead of
+	 * fixing one thing per attempt.</p>
+	 *
+	 * @param missingSkills declared {@code config.skills} that do not resolve
+	 * @param missingSkillsets declared {@code config.skillsets} that do not resolve
+	 * @param emptySkillsets skillsets that resolve but hold no skills, plus the
+	 *        caller's own conventional {@code w/skills} when it does not exist
+	 *        yet — that is their space to fill, not a broken reference
+	 * @param denied sources the caller has no read capability for
+	 */
+	public record SourceReport(AVector<ACell> missingSkills, AVector<ACell> missingSkillsets,
+			AVector<ACell> emptySkillsets, AVector<ACell> denied) {
+
+		public boolean isClean() {
+			return missingSkills.isEmpty() && missingSkillsets.isEmpty()
+				&& emptySkillsets.isEmpty() && denied.isEmpty();
 		}
-		return null;
 	}
+
+	/** The conventional personal skills path, shipped by every standard template. */
+	public static final String OWN_SKILLS = "w/skills";
 
 	/**
-	 * The first declared source that does not resolve, or null when every one
-	 * does. Absent and denied are distinct problems: {@link #unreadableSource}
-	 * reports the latter.
-	 *
-	 * <p><b>The caller's own workspace is excluded.</b> Every standard template
-	 * ships {@code w/skills}, which is legitimately empty until its owner
-	 * authors a personal skill — reporting that would fire on almost every
-	 * agent ever created and teach the reader to ignore the field. A venue path
-	 * is different: {@code v/skills/...} is published at boot or by a module, so
-	 * one that resolves to nothing is a name that will most likely never
-	 * resolve.</p>
+	 * Inspects declared sources and categorises what an agent would not find.
+	 * Never throws for a resolution problem — that is what it reports.
 	 */
-	public static AString missingSource(Engine engine, RequestContext ctx, SkillSources sources) {
-		if (engine == null || ctx == null || sources == null) return null;
-		AString gone = firstMissing(engine, ctx, sources.skills());
-		return (gone != null) ? gone : firstMissing(engine, ctx, sources.skillsets());
-	}
-
-	private static AString firstMissing(Engine engine, RequestContext ctx, AVector<ACell> refs) {
-		if (refs == null) return null;
-		for (long i = 0; i < refs.count(); i++) {
-			AString ref = RT.ensureString(refs.get(i));
-			if (ref == null || isOwnWorkspace(ctx, ref)) continue;
-			try {
-				requireRead(engine, ctx, ref);
-				if (engine.resolvePath(ref, ctx) == null) return ref;
-			} catch (RuntimeException e) {
-				// Denied or broken — a different check's business.
-			}
-		}
-		return null;
-	}
-
-	/**
-	 * The caller's own workspace sources that hold nothing yet — reported
-	 * separately from {@link #missingSource} because they are not a problem.
-	 * {@code w/skills} ships in every standard template precisely so an agent
-	 * has somewhere to author personal skills; that it is empty is worth a
-	 * one-line reminder, not a warning about broken configuration.
-	 */
-	public static AVector<ACell> emptyOwnSources(Engine engine, RequestContext ctx,
+	public static SourceReport inspectSources(Engine engine, RequestContext ctx,
 			SkillSources sources) {
-		AVector<ACell> out = Vectors.empty();
-		if (engine == null || ctx == null || sources == null) return out;
-		out = appendEmptyOwn(engine, ctx, sources.skills(), out);
-		return appendEmptyOwn(engine, ctx, sources.skillsets(), out);
-	}
-
-	private static AVector<ACell> appendEmptyOwn(Engine engine, RequestContext ctx,
-			AVector<ACell> refs, AVector<ACell> out) {
-		if (refs == null) return out;
-		for (long i = 0; i < refs.count(); i++) {
-			AString ref = RT.ensureString(refs.get(i));
-			if (ref == null || !isOwnWorkspace(ctx, ref)) continue;
-			try {
-				requireRead(engine, ctx, ref);
-				ACell value = engine.resolvePath(ref, ctx);
-				if (value == null || (value instanceof AMap<?, ?> m && m.isEmpty())) {
-					out = out.conj(ref);
-				}
-			} catch (RuntimeException e) {
-				// Denied or broken — reported by the checks that own those cases.
+		AVector<ACell> missingSkills = Vectors.empty();
+		AVector<ACell> missingSets = Vectors.empty();
+		AVector<ACell> emptySets = Vectors.empty();
+		AVector<ACell> denied = Vectors.empty();
+		if (engine == null || ctx == null || sources == null) {
+			return new SourceReport(missingSkills, missingSets, emptySets, denied);
+		}
+		for (long i = 0; i < sources.skills().count(); i++) {
+			AString ref = RT.ensureString(sources.skills().get(i));
+			if (ref == null) continue;
+			switch (probe(engine, ctx, ref)) {
+				case DENIED -> denied = denied.conj(ref);
+				case MISSING -> missingSkills = missingSkills.conj(ref);
+				default -> { }
 			}
 		}
-		return out;
+		for (long i = 0; i < sources.skillsets().count(); i++) {
+			AString ref = RT.ensureString(sources.skillsets().get(i));
+			if (ref == null) continue;
+			switch (probe(engine, ctx, ref)) {
+				case DENIED -> denied = denied.conj(ref);
+				case EMPTY -> emptySets = emptySets.conj(ref);
+				// The caller's own conventional skills path is their space to
+				// fill: absent and empty are the same thing to them.
+				case MISSING -> {
+					if (isOwnSkillsPath(ctx, ref)) emptySets = emptySets.conj(ref);
+					else missingSets = missingSets.conj(ref);
+				}
+				default -> { }
+			}
+		}
+		return new SourceReport(missingSkills, missingSets, emptySets, denied);
 	}
 
-	/** A path in the caller's own workspace, bare or DID-qualified. */
-	private static boolean isOwnWorkspace(RequestContext ctx, AString ref) {
-		String r = ref.toString();
-		if (r.startsWith("w/")) return true;
-		AString owner = (ctx != null) ? ctx.getUserDID() : null;
-		return owner != null && r.startsWith(owner + "/w/");
+	private enum Probe { OK, MISSING, EMPTY, DENIED }
+
+	private static Probe probe(Engine engine, RequestContext ctx, AString ref) {
+		try {
+			requireRead(engine, ctx, ref);
+		} catch (covia.exception.AuthException denied) {
+			return Probe.DENIED;
+		} catch (RuntimeException e) {
+			return Probe.OK;                   // not a source problem we classify
+		}
+		try {
+			ACell value = engine.resolvePath(ref, ctx);
+			if (value == null) return Probe.MISSING;
+			if (value instanceof AMap<?, ?> m && m.isEmpty()) return Probe.EMPTY;
+			return Probe.OK;
+		} catch (RuntimeException e) {
+			return Probe.OK;
+		}
 	}
+
+	/** The caller's own {@code w/skills}, bare or DID-qualified. */
+	private static boolean isOwnSkillsPath(RequestContext ctx, AString ref) {
+		String r = ref.toString();
+		if (r.equals(OWN_SKILLS)) return true;
+		AString owner = (ctx != null) ? ctx.getUserDID() : null;
+		return owner != null && r.equals(owner + "/" + OWN_SKILLS);
+	}
+
 
 	/**
 	 * Validates the venue's own skill library after catalog materialisation and

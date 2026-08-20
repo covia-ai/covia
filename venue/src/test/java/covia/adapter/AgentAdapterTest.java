@@ -415,9 +415,9 @@ public class AgentAdapterTest {
 
 		ACell warnings = RT.getIn(result, Fields.WARNINGS);
 		assertNotNull(warnings, "expected the empty-own-skills note: " + result);
-		assertTrue(warnings.toString().contains("w/skills empty"), warnings.toString());
-		// Reads as an affordance, not a misconfiguration.
-		assertTrue(warnings.toString().contains("can author"), warnings.toString());
+		assertTrue(warnings.toString().contains("skillset empty: w/skills"), warnings.toString());
+		// Points at the skill that says what to do about it.
+		assertTrue(warnings.toString().contains("skill-authoring"), warnings.toString());
 	}
 
 	/**
@@ -439,7 +439,9 @@ public class AgentAdapterTest {
 
 		ACell warnings = RT.getIn(result, Fields.WARNINGS);
 		assertNotNull(warnings, "a missing venue skill source should be flagged: " + result);
-		assertTrue(warnings.toString().contains("does not resolve"), warnings.toString());
+		assertTrue(warnings.toString().contains(
+			"skillset missing: v/skills/definitely-not-real"), warnings.toString());
+		assertTrue(warnings.toString().contains("load skill 'skills'"), warnings.toString());
 	}
 
 	@Test
@@ -460,7 +462,7 @@ public class AgentAdapterTest {
 		assertNotNull(warnings, "malformed config.skills should carry a warning");
 		String w = RT.ensureString(warnings.get(0)).toString();
 		assertTrue(w.contains("config.skills"), w);
-		assertTrue(w.contains("fail at transition time"), w);
+		assertTrue(warnings.toString().contains("skills config invalid"), warnings.toString());
 	}
 
 	@Test
@@ -5652,7 +5654,9 @@ public class AgentAdapterTest {
 
 		ACell warnings = RT.getIn(result, Fields.WARNINGS);
 		assertNotNull(warnings, "expected a warning about the unreadable source: " + result);
-		assertTrue(warnings.toString().contains("not readable"), warnings.toString());
+		assertTrue(warnings.toString().contains("no access capability: w/other-place"),
+			warnings.toString());
+		assertTrue(warnings.toString().contains("load skill 'capabilities'"), warnings.toString());
 	}
 
 	/** A source that exists and is readable raises nothing at all. */

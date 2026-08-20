@@ -743,26 +743,6 @@ public class SkillsTest {
 		assertTrue(message.contains("No skills are currently available"), message);
 	}
 
-	/**
-	 * A DENIED source is reportable; an absent one is not. That split is what
-	 * lets agent:create warn about a real misconfiguration without crying wolf
-	 * over the maybe-style paths every standard template ships.
-	 */
-	@Test
-	public void testUnreadableSourceDetection() {
-		write("w/denied/secret", Maps.of(Fields.DESCRIPTION, Strings.create("Hidden")));
-		Skills.SkillSources sources =
-			Skills.SkillSources.ofSkillsets(Vectors.of(Strings.create("w/denied")));
-
-		assertNull(Skills.unreadableSource(engine, ctx, sources),
-			"the owner can read their own source");
-		assertEquals("w/denied", Skills.unreadableSource(
-			engine, ctx.withCaps(Vectors.empty()), sources).toString());
-
-		// Absent is not denied.
-		assertNull(Skills.unreadableSource(engine, ctx,
-			Skills.SkillSources.ofSkillsets(Vectors.of(Strings.create("w/not-here")))));
-	}
 
 	/**
 	 * The index names a skillset member by its KEY, which is what skill_load
@@ -786,27 +766,58 @@ public class SkillsTest {
 	}
 
 	/**
-	 * Missing and denied are separate problems, and the caller's own workspace
-	 * is exempt from the missing check: every standard template ships
-	 * w/skills, legitimately empty until its owner authors a personal skill.
+	 * Source problems are categorised by KIND, because a missing skill and a
+	 * missing skillset are different mistakes with different fixes, and all are
+	 * collected so a caller sees everything at once.
 	 */
 	@Test
-	public void testMissingSourceDetectionExemptsOwnWorkspace() {
+	public void testInspectSourcesCategorisesByKind() {
 		write("w/present/skill-here", Maps.of(Fields.DESCRIPTION, Strings.create("Here")));
 
-		// A venue path that resolves to nothing is reported.
-		assertEquals("v/skills/no-such-set", Skills.missingSource(engine, ctx,
-			Skills.SkillSources.ofSkillsets(
-				Vectors.of(Strings.create("v/skills/no-such-set")))).toString());
+		Skills.SourceReport report = Skills.inspectSources(engine, ctx, new Skills.SkillSources(
+			Vectors.of(Strings.create("w/present/skill-here"), Strings.create("w/present/gone")),
+			Vectors.of(Strings.create("w/present"), Strings.create("w/imaginary"))));
 
-		// The caller's own empty workspace is not.
-		assertNull(Skills.missingSource(engine, ctx,
-			Skills.SkillSources.ofSkillsets(Vectors.of(Strings.create("w/skills")))));
-		assertNull(Skills.missingSource(engine, ctx,
-			Skills.SkillSources.ofSkillsets(Vectors.of(Strings.create("w/anything-at-all")))));
+		assertEquals("w/present/gone", refsOf(report.missingSkills()));
+		assertEquals("w/imaginary", refsOf(report.missingSkillsets()));
+		assertTrue(report.emptySkillsets().isEmpty(), refsOf(report.emptySkillsets()));
+		assertTrue(report.denied().isEmpty(), refsOf(report.denied()));
+		assertFalse(report.isClean());
+	}
 
-		// A source that exists is not missing either.
-		assertNull(Skills.missingSource(engine, ctx,
-			Skills.SkillSources.ofSkillsets(Vectors.of(Strings.create("w/present")))));
+	/**
+	 * The caller's own w/skills is their space to fill, so absent reads as
+	 * EMPTY rather than missing — any other absent path is missing.
+	 */
+	@Test
+	public void testOwnSkillsPathReadsAsEmptyNotMissing() {
+		Skills.SourceReport report = Skills.inspectSources(engine, ctx,
+			Skills.SkillSources.ofSkillsets(Vectors.of(
+				Strings.create("w/skills"), Strings.create("w/somewhere-else"))));
+		assertEquals("w/skills", refsOf(report.emptySkillsets()));
+		assertEquals("w/somewhere-else", refsOf(report.missingSkillsets()));
+	}
+
+	@Test
+	public void testInspectSourcesReportsDenied() {
+		write("w/denied/secret", Maps.of(Fields.DESCRIPTION, Strings.create("Hidden")));
+		Skills.SkillSources sources =
+			Skills.SkillSources.ofSkillsets(Vectors.of(Strings.create("w/denied")));
+
+		assertTrue(Skills.inspectSources(engine, ctx, sources).isClean());
+		Skills.SourceReport denied =
+			Skills.inspectSources(engine, ctx.withCaps(Vectors.empty()), sources);
+		assertEquals("w/denied", refsOf(denied.denied()));
+		// A denial is not also reported as missing — one problem, one category.
+		assertTrue(denied.missingSkillsets().isEmpty(), refsOf(denied.missingSkillsets()));
+	}
+
+	private static String refsOf(AVector<ACell> refs) {
+		StringBuilder sb = new StringBuilder();
+		for (long i = 0; i < refs.count(); i++) {
+			if (i > 0) sb.append(", ");
+			sb.append(refs.get(i));
+		}
+		return sb.toString();
 	}
 }
