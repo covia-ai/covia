@@ -8,6 +8,9 @@
 	"skill": {
 		"tools": [
 			"v/ops/covia/read"
+		],
+		"skillsets": [
+			"v/skills/convex"
 		]
 	}
 }

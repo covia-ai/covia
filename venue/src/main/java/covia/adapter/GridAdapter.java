@@ -56,7 +56,8 @@ public class GridAdapter extends AAdapter {
     @Override
     protected void installAssets() {
     	// The adapter's own skill: v/skills/grid lives and dies with this adapter.
-    	installSkill("grid", "/skills/grid.json");
+    	installSkill("grid/grid", "/skills/grid.json");
+		installSkill("root/grid", "/skills/grid.json");
         RUN_OPERATION        = installAsset("grid/run",        "/adapters/grid/run.json");
         INVOKE_OPERATION     = installAsset("grid/invoke",     "/adapters/grid/invoke.json");
         JOB_STATUS_OPERATION = installAsset("grid/job-status", "/adapters/grid/jobStatus.json");

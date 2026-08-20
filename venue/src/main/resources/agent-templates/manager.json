@@ -27,14 +27,14 @@
 				"w/skills"
 			],
 			"skills": [
-				"v/skills/agents",
-				"v/skills/tasks",
-				"v/skills/models",
-				"v/skills/grid",
-				"v/skills/scheduling",
-				"v/skills/hitl",
-				"v/skills/auth",
-				"v/skills/provenance"
+				"v/skills/root/agents",
+				"v/skills/agents/tasks",
+				"v/skills/ops-tools/models",
+				"v/skills/root/grid",
+				"v/skills/ops-tools/scheduling",
+				"v/skills/agents/hitl",
+				"v/skills/root/auth",
+				"v/skills/ops-tools/provenance"
 			]
 		}
 	}

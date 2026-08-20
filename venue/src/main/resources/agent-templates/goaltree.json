@@ -26,7 +26,7 @@
 			"defaultTools": false,
 			"skillsets": [
 				"w/skills",
-				"v/skills"
+				"v/skills/root"
 			]
 		}
 	}

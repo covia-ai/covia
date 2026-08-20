@@ -8,6 +8,9 @@
 	"skill": {
 		"tools": [
 			"v/ops/skills"
+		],
+		"skillsets": [
+			"v/skills/building"
 		]
 	}
 }

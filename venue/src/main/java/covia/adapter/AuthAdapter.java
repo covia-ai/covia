@@ -37,7 +37,8 @@ public class AuthAdapter extends AAdapter {
 	@Override
 	protected void installAssets() {
 		// The adapter's own skill: v/skills/auth lives and dies with this adapter.
-		installSkill("auth", "/skills/auth.json");
+		installSkill("auth/auth", "/skills/auth.json");
+		installSkill("root/auth", "/skills/auth.json");
 		installAsset("auth/whoami", "/adapters/auth/whoami.json");
 	}
 

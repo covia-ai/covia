@@ -40,7 +40,7 @@ public class SecretAdapter extends AAdapter {
 	@Override
 	protected void installAssets() {
 		// The adapter's own skill: v/skills/secrets lives and dies with this adapter.
-		installSkill("secrets", "/skills/secrets.json");
+		installSkill("auth/secrets", "/skills/secrets.json");
 		installAsset("secret/set",     "/adapters/secret/set.json");
 		installAsset("secret/extract", "/adapters/secret/extract.json");
 	}

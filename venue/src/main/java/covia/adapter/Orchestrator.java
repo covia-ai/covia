@@ -43,7 +43,7 @@ public class Orchestrator extends AAdapter {
 	@Override
 	protected void installAssets() {
 		// The adapter's own skill: v/skills/orchestration lives and dies with this adapter.
-		installSkill("orchestration", "/skills/orchestration.json");
+		installSkill("building/orchestration", "/skills/orchestration.json");
 	}
 
 	/** Public settings: maxItems, maxConcurrency — plain operating parameters, nothing an operator would keep private. */

@@ -155,7 +155,7 @@ public class HTTPAdapter extends AAdapter {
 	@Override
 	protected void installAssets() {
 		// The adapter's own skill: v/skills/http lives and dies with this adapter.
-		installSkill("http", "/skills/http.json");
+		installSkill("ops-tools/http", "/skills/http.json");
 		String BASE = "/asset-examples/";
 
 		// HTTP primitives — registered in /v/ops/.

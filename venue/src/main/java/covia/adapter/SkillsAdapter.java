@@ -36,7 +36,7 @@ public class SkillsAdapter extends AAdapter {
 
 	/** Default sources when the caller names none. */
 	static final AVector<ACell> DEFAULT_SOURCES = Vectors.of(
-		Strings.intern("w/skills"), Strings.intern("v/skills"));
+		Strings.intern("w/skills"), Strings.intern("v/skills/root"));
 
 	private static final AString ASSET_READ = Abilities.ASSET_READ;
 	private static final AString K_SOURCES  = Strings.intern("sources");
@@ -65,29 +65,53 @@ public class SkillsAdapter extends AAdapter {
 	 * The platform skills — the ones about Covia and the venue as a whole rather
 	 * than any one adapter: orientation ({@code covia}, {@code venue}), how to
 	 * find things ({@code discovery}, {@code provenance}) and the skills system
-	 * itself. Materialised at {@code v/skills/<name>} on boot; bodies ship in
-	 * {@code content.inline} (one JSON resource per skill).
+	 * itself. Materialised under {@code v/skills/<skillset>/} on boot (see
+	 * {@link #LIBRARY_PATHS}); bodies ship in {@code content.inline} (one JSON
+	 * resource per skill).
 	 *
 	 * <p>Every other skill belongs to its adapter: each adapter calls
 	 * {@link #installSkill} for its own {@code /skills/<name>.json} in
 	 * {@code installAssets()}, so the skill is published exactly when the
 	 * adapter is active — disable or unload the adapter and its skill goes with
 	 * it — and modules ship theirs from their own jars (covia-sql's {@code sql},
-	 * covia-telegram's {@code telegram}). Agent templates declare
-	 * {@code skills: ["w/skills", "v/skills"]}, so out-of-the-box agents see
-	 * everything present in their [Skills] index; a user's own
-	 * {@code w/skills/<name>} shadows the venue skill of the same name.</p>
+	 * covia-telegram's {@code telegram}). Because grouping is decided by the
+	 * owning adapter, a skillset only ever lists what is actually active.</p>
+	 *
+	 * <p>{@code v/skills} holds SKILLSETS, never skills. Agent templates declare
+	 * {@code skillsets: ["w/skills", "v/skills/root"]}, so out-of-the-box agents
+	 * see a compact entry-point index and reach the rest by loading a root skill
+	 * that opens its family. A user's own {@code w/skills/<name>} shadows the
+	 * venue skill of the same name.</p>
 	 */
 	static final String[] LIBRARY = {
 		"covia", "venue", "discovery", "provenance", "skills", "skill-authoring"
+	};
+
+	/**
+	 * Where each platform skill is installed: {@code <skillset>/<name>}, plus a
+	 * {@code root/} mirror for the ones that are entry points into a family.
+	 * Mirroring installs the SAME resource at both paths, so both addresses
+	 * resolve to identical metadata and content-identity dedup treats them as
+	 * one skill — never two entries in an agent's context.
+	 */
+	private static final String[][] LIBRARY_PATHS = {
+		{"covia",           "root/covia"},
+		{"skills",          "root/skills"},
+		{"venue",           "venue/venue",          "root/venue"},
+		{"discovery",       "ops-tools/discovery",  "root/discovery"},
+		{"provenance",      "ops-tools/provenance"},
+		{"skill-authoring", "building/skill-authoring"},
 	};
 
 	@Override
 	protected void installAssets() {
 		// A single op/tool (v/ops/skills) dispatched by the `command` input.
 		installAsset("skills", "/adapters/skills/skills.json");
-		for (String name : LIBRARY) {
-			installSkill(name, "/skills/" + name + ".json");
+		for (String[] entry : LIBRARY_PATHS) {
+			String resource = "/skills/" + entry[0] + ".json";
+			for (int i = 1; i < entry.length; i++) {
+				installSkill(entry[i], resource);
+			}
 		}
 	}
 

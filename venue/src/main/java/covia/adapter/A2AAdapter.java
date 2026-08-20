@@ -115,7 +115,7 @@ public class A2AAdapter extends AAdapter {
 	@Override
 	protected void installAssets() {
 		// The adapter's own skill: v/skills/a2a lives and dies with this adapter.
-		installSkill("a2a", "/skills/a2a.json");
+		installSkill("grid/a2a", "/skills/a2a.json");
 		IMPORT_AGENT_OPERATION   = installAsset("a2a/import-agent", "/adapters/a2a/importAgent.json");
 		GET_AGENT_CARD_OPERATION = installAsset("a2a/agent-card", "/adapters/a2a/agentCard.json");
 		GET_TASK_OPERATION       = installAsset("a2a/get-task",   "/adapters/a2a/getTask.json");

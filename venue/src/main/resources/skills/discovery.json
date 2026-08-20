@@ -12,6 +12,9 @@
 			"v/ops/asset/get",
 			"v/ops/asset/list",
 			"v/ops/skills"
+		],
+		"skillsets": [
+			"v/skills/ops-tools"
 		]
 	}
 }

@@ -669,4 +669,47 @@ public class SkillsTest {
 		assertNull(Skills.misdirectedSkillset(engine, ctx, Vectors.of(Strings.create("w/tree/group"))));
 		assertNull(Skills.misdirectedSkillset(engine, ctx, Vectors.of(Strings.create("w/nothing-here"))));
 	}
+
+	// ========== library validation diagnostics ==========
+
+	@Test
+	public void testLibraryValidationCountsEachProblemKind() {
+		// A well-formed library reports nothing.
+		write("w/lib/data/workspace", Maps.of(Fields.DESCRIPTION, Strings.create("Workspace")));
+		assertEquals(0, Skills.validateLibrary(engine, ctx, "w/lib"));
+
+		// A skill sitting where a skillset belongs — assets mixed with directories.
+		write("w/lib/loose", Maps.of(Fields.DESCRIPTION, Strings.create("Loose skill")));
+		assertEquals(1, Skills.validateLibrary(engine, ctx, "w/lib"));
+
+		// A skillset holding a nested directory.
+		write("w/lib/data/nested/inner", Maps.of(Fields.DESCRIPTION, Strings.create("Inner")));
+		assertEquals(2, Skills.validateLibrary(engine, ctx, "w/lib"));
+	}
+
+	@Test
+	public void testLibraryValidationCatchesBadChildRefs() {
+		write("w/lib2/set/ghost-set", Maps.of(
+			Fields.DESCRIPTION, Strings.create("Points at nothing"),
+			Skills.K_SKILL, Maps.of(Skills.K_SKILLSETS,
+				Vectors.of(Strings.create("w/nowhere")))));
+		assertEquals(1, Skills.validateLibrary(engine, ctx, "w/lib2"),
+			"a skillset ref that does not resolve is a packaging bug");
+
+		// Declared under the wrong kind: a directory listed as an individual skill.
+		write("w/other/member", Maps.of(Fields.DESCRIPTION, Strings.create("A member")));
+		write("w/lib3/set/wrong-kind", Maps.of(
+			Fields.DESCRIPTION, Strings.create("Wrong kind"),
+			Skills.K_SKILL, Maps.of(Skills.K_SKILLS,
+				Vectors.of(Strings.create("w/other")))));
+		assertEquals(1, Skills.validateLibrary(engine, ctx, "w/lib3"),
+			"a directory declared under skill.skills is a kind mismatch");
+
+		// The same refs, declared correctly, are clean.
+		write("w/lib4/set/right-kind", Maps.of(
+			Fields.DESCRIPTION, Strings.create("Right kind"),
+			Skills.K_SKILL, Maps.of(Skills.K_SKILLSETS,
+				Vectors.of(Strings.create("w/other")))));
+		assertEquals(0, Skills.validateLibrary(engine, ctx, "w/lib4"));
+	}
 }

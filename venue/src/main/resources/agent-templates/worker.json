@@ -18,10 +18,10 @@
 				"w/skills"
 			],
 			"skills": [
-				"v/skills/workspace",
-				"v/skills/files",
-				"v/skills/assets",
-				"v/skills/provenance"
+				"v/skills/root/workspace",
+				"v/skills/data/files",
+				"v/skills/data/assets",
+				"v/skills/ops-tools/provenance"
 			]
 		}
 	}

@@ -63,7 +63,7 @@ public class DiscordAdapter extends AAdapter implements AutoCloseable {
 		installAsset("discord/create","/adapters/discord/create.json");
 		installAsset("discord/delete","/adapters/discord/delete.json");
 		installAsset("discord/bots","/adapters/discord/bots.json");
-		installSkill("discord","/skills/discord.json");
+		installSkill("adapters/discord", "/skills/discord.json");
 		installAgentTemplate("discord","/agent-templates/discord.json");
 	}
 

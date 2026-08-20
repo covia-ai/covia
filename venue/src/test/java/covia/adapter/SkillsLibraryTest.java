@@ -59,6 +59,39 @@ public class SkillsLibraryTest {
 		return names;
 	}
 
+	/** The skill's own name — the last segment of its {@code <skillset>/<name>} path. */
+	private static String skillName(String relPath) {
+		return relPath.substring(relPath.lastIndexOf('/') + 1);
+	}
+
+	/**
+	 * Every shipped skill once, keyed by name. An entry-point skill is
+	 * installed twice (its family and the {@code root/} mirror) from the same
+	 * resource, so both addresses hold the same content — deduping by name
+	 * here mirrors what the index itself does.
+	 */
+	private java.util.List<String> shippedSkillNames() {
+		java.util.Set<String> unique = new java.util.TreeSet<>();
+		for (String rel : shippedSkills()) unique.add(skillName(rel));
+		return new java.util.ArrayList<>(unique);
+	}
+
+	/** Every skillset the active adapters declare. */
+	private java.util.List<String> shippedSkillsets() {
+		java.util.Set<String> sets = new java.util.TreeSet<>();
+		for (String rel : shippedSkills()) {
+			sets.add("v/skills/" + rel.substring(0, rel.lastIndexOf('/')));
+		}
+		return new java.util.ArrayList<>(sets);
+	}
+
+	/** A source over the whole shipped library — every skillset at once. */
+	private Skills.SkillSources everySkillset() {
+		AVector<ACell> sets = Vectors.empty();
+		for (String set : shippedSkillsets()) sets = sets.conj(Strings.create(set));
+		return Skills.SkillSources.ofSkillsets(sets);
+	}
+
 	@BeforeEach
 	public void setup(TestInfo info) {
 		ctx = RequestContext.of(TestEngine.uniqueDID(info));
@@ -70,26 +103,33 @@ public class SkillsLibraryTest {
 		assertTrue(all.size() >= 24, "expected the full shipped set, got " + all);
 		// Adapter skills belong to their adapters, not to SkillsAdapter
 		AAdapter skills = engine.getAdapter("skills");
-		for (String platform : SkillsAdapter.LIBRARY) {
-			assertTrue(skills.pendingCatalogEntries.containsKey("v/skills/" + platform), platform + " is a platform skill");
+		java.util.Set<String> platformNames = new java.util.HashSet<>();
+		for (String path : skills.pendingCatalogEntries.keySet()) {
+			if (path.startsWith("v/skills/")) platformNames.add(skillName(path));
 		}
-		assertTrue(engine.getAdapter("grid").pendingCatalogEntries.containsKey("v/skills/grid"), "grid owns its skill");
-		assertTrue(engine.getAdapter("hitl").pendingCatalogEntries.containsKey("v/skills/hitl"), "hitl owns its skill");
-		assertFalse(skills.pendingCatalogEntries.containsKey("v/skills/grid"), "SkillsAdapter no longer carries adapter skills");
+		for (String platform : SkillsAdapter.LIBRARY) {
+			assertTrue(platformNames.contains(platform), platform + " is a platform skill");
+		}
+		assertTrue(engine.getAdapter("grid").pendingCatalogEntries.containsKey("v/skills/grid/grid"),
+			"grid owns its skill, inside its skillset");
+		assertTrue(engine.getAdapter("hitl").pendingCatalogEntries.containsKey("v/skills/agents/hitl"),
+			"hitl owns its skill");
+		assertFalse(platformNames.contains("grid"), "SkillsAdapter no longer carries adapter skills");
 	}
 
 	@Test
 	public void testLibraryMaterialised() {
-		for (String name : shippedSkills()) {
-			ACell value = engine.resolvePath(Strings.create("v/skills/" + name), ctx);
-			assertTrue(value instanceof AMap, "v/skills/" + name + " should materialise: " + value);
+		for (String rel : shippedSkills()) {
+			ACell value = engine.resolvePath(Strings.create("v/skills/" + rel), ctx);
+			assertTrue(value instanceof AMap, "v/skills/" + rel + " should materialise: " + value);
 		}
 	}
 
 	@Test
 	public void testEverySkillResolvesWithBody() {
-		for (String name : shippedSkills()) {
-			Skills.ResolvedSkill s = Skills.resolveRef(engine, ctx, Strings.create("v/skills/" + name));
+		for (String rel : shippedSkills()) {
+			Skills.ResolvedSkill s = Skills.resolveRef(engine, ctx, Strings.create("v/skills/" + rel));
+			String name = skillName(rel);
 			assertEquals(name, s.name());
 			assertNotNull(s.description());
 			assertFalse(s.description().isBlank(), name);
@@ -103,23 +143,21 @@ public class SkillsLibraryTest {
 	public void testEveryDeclaredToolResolves() {
 		// The drift guard: renaming or removing a catalog op must fail this
 		// test, not silently strip a tool from a shipped skill.
-		for (String name : shippedSkills()) {
-			Skills.ResolvedSkill s = Skills.resolveRef(engine, ctx, Strings.create("v/skills/" + name));
+		for (String rel : shippedSkills()) {
+			Skills.ResolvedSkill s = Skills.resolveRef(engine, ctx, Strings.create("v/skills/" + rel));
 			for (long i = 0; i < s.toolOps().count(); i++) {
 				AString op = RT.ensureString(s.toolOps().get(i));
 				assertNotNull(engine.resolveAsset(op, ctx),
-					"skill '" + name + "' declares unresolvable tool: " + op);
+					"skill '" + rel + "' declares unresolvable tool: " + op);
 			}
 		}
 	}
 
 	@Test
 	public void testIndexRendersAllAndCompact() {
-		String index = Skills.renderIndex(engine, ctx,
-			Skills.SkillSources.ofSkillsets(Vectors.of((ACell) Strings.create("v/skills"))),
-			null, true);
+		String index = Skills.renderIndex(engine, ctx, everySkillset(), null, true);
 		assertNotNull(index);
-		for (String name : shippedSkills()) {
+		for (String name : shippedSkillNames()) {
 			assertTrue(index.contains("- " + name + " — "), "index missing " + name + ":\n" + index);
 		}
 		assertFalse(index.contains("INVALID"), index);
@@ -130,14 +168,14 @@ public class SkillsLibraryTest {
 		// write extra venue skills; their lines must not fail the library's
 		// budget, nor mask real description creep).
 		StringBuilder libIndex = new StringBuilder();
-		for (String name : shippedSkills()) {
+		for (String name : shippedSkillNames()) {
 			ACell meta = convex.core.util.JSON.parse(readResource("/skills/" + name + ".json"));
 			libIndex.append("- ").append(name).append(" — ")
 				.append(RT.ensureString(RT.getIn(meta, "description"))).append('\n');
 		}
 		// Per-skill budget: the bound scales with deliberate library growth
 		// while still catching description creep on individual skills.
-		int budget = shippedSkills().size() * 170;
+		int budget = shippedSkillNames().size() * 170;
 		assertTrue(libIndex.length() < budget,
 			"library index should stay compact (" + libIndex.length() + "/" + budget
 				+ " chars):\n" + libIndex);
@@ -166,7 +204,7 @@ public class SkillsLibraryTest {
 			AVector<ACell> named = RT.ensureVector(RT.getIn(config, "skills"));
 			if (java.util.Set.of("minimal", "skilled", "goaltree", "full").contains(t)) {
 				assertEquals(2, sets.count(), t);
-				assertEquals("v/skills", sets.get(1).toString());
+				assertEquals("v/skills/root", sets.get(1).toString());
 				assertNull(named, t + " general template curates nothing individually");
 			} else {
 				assertEquals(1, sets.count(), t + " specialists take only user skills wholesale");
@@ -258,7 +296,7 @@ public class SkillsLibraryTest {
 			}
 		}
 
-		for (String name : shippedSkills()) {
+		for (String name : shippedSkillNames()) {
 			assertNoProviderAlias("skill '" + name + "'", skillBody(name), aliases);
 		}
 		for (String template : templates) {
@@ -305,8 +343,8 @@ public class SkillsLibraryTest {
 	@Test
 	public void testNamedSkillPathIsAFirstClassSource() {
 		Skills.SkillSources sources = Skills.SkillSources.ofSkills(Vectors.of(
-			(ACell) Strings.create("v/skills/models"),
-			(ACell) Strings.create("v/skills/tasks")));
+			(ACell) Strings.create("v/skills/ops-tools/models"),
+			(ACell) Strings.create("v/skills/agents/tasks")));
 		String index = Skills.renderIndex(engine, ctx, sources, null, true);
 		assertTrue(index.contains("- models — "), index);
 		assertTrue(index.contains("- tasks — "), index);
@@ -316,9 +354,7 @@ public class SkillsLibraryTest {
 
 	@Test
 	public void testSpecialistTemplateIndexesStayCurated() {
-		String fullIndex = Skills.renderIndex(engine, ctx,
-			Skills.SkillSources.ofSkillsets(Vectors.of((ACell) Strings.create("v/skills"))),
-			null, true);
+		String fullIndex = Skills.renderIndex(engine, ctx, everySkillset(), null, true);
 		java.util.Map<String, java.util.Set<String>> expected = java.util.Map.of(
 			"reader", java.util.Set.of("discovery", "provenance", "assets", "skills"),
 			"worker", java.util.Set.of("workspace", "files", "assets", "provenance"),
@@ -372,20 +408,54 @@ public class SkillsLibraryTest {
 	}
 
 	/**
-	 * Boot validation diagnoses the venue's own library. Today {@code v/skills}
-	 * is still FLAT — skills sit where skillsets belong — so every entry is
-	 * reported. Re-homing the library into skillsets is the follow-up; when
-	 * that lands this assertion becomes {@code 0} and stays there, guarding
-	 * against a packaging mistake reaching an operator's log.
+	 * The venue's own library must validate clean at boot: {@code v/skills}
+	 * holds only skillsets, every installed skill resolves, and every declared
+	 * child ref resolves and matches its declared kind. This is the guard that
+	 * a packaging mistake in the shipped skills is caught here rather than in
+	 * an operator's log.
 	 */
 	@Test
-	public void testVenueSkillLibraryIsValidated() {
-		int problems = Skills.validateVenueLibrary(engine);
-		assertTrue(problems > 0,
-			"the flat library should currently be diagnosed as needing re-homing");
-		// One problem per top-level entry: each is a skill at skillset level.
-		ACell root = engine.resolvePath(Strings.create(Skills.VENUE_SKILLS), ctx);
-		assertEquals(RT.ensureMap(root).count(), problems,
-			"every flat entry should be reported exactly once");
+	public void testVenueSkillLibraryValidatesClean() {
+		assertEquals(0, Skills.validateVenueLibrary(engine),
+			"the shipped venue skill library should report no problems");
+	}
+
+	/** Every skillset a root skill opens must exist and hold skills. */
+	@Test
+	public void testRootSkillsOpenRealSkillsets() {
+		ACell root = engine.resolvePath(Strings.create("v/skills/root"), ctx);
+		assertNotNull(root, "v/skills/root should be the default entry skillset");
+		java.util.Set<String> opened = new java.util.HashSet<>();
+		for (var e : RT.ensureMap(root).entrySet()) {
+			Skills.ResolvedSkill s = Skills.resolveRef(engine, ctx,
+				Strings.create("v/skills/root/" + e.getKey()));
+			for (long i = 0; i < s.skillsets().count(); i++) {
+				String set = s.skillsets().get(i).toString();
+				opened.add(set);
+				ACell value = engine.resolvePath(Strings.create(set), ctx);
+				assertNotNull(value, s.name() + " opens missing skillset " + set);
+				assertTrue(RT.ensureMap(value).count() > 0, set + " should not be empty");
+			}
+		}
+		assertTrue(opened.size() >= 8, "root should reach the whole taxonomy: " + opened);
+	}
+
+	/** Mirroring a skill into root must not double it in an agent's context. */
+	@Test
+	public void testRootMirrorDedupsAgainstItsFamily() {
+		Skills.ResolvedSkill viaRoot =
+			Skills.resolveRef(engine, ctx, Strings.create("v/skills/root/workspace"));
+		Skills.ResolvedSkill viaFamily =
+			Skills.resolveRef(engine, ctx, Strings.create("v/skills/data/workspace"));
+		assertEquals(viaRoot.id(), viaFamily.id(),
+			"a mirrored skill must be the SAME content at both addresses");
+
+		// Both sources in scope → the index lists it once.
+		Skills.SkillSources both = Skills.SkillSources.ofSkillsets(Vectors.of(
+			(ACell) Strings.create("v/skills/root"), (ACell) Strings.create("v/skills/data")));
+		String index = Skills.renderIndex(engine, ctx, both, null, true);
+		int first = index.indexOf("- workspace — ");
+		assertTrue(first >= 0, index);
+		assertEquals(first, index.lastIndexOf("- workspace — "), "workspace listed twice: " + index);
 	}
 }

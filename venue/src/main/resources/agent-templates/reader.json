@@ -15,10 +15,10 @@
 				"w/skills"
 			],
 			"skills": [
-				"v/skills/discovery",
-				"v/skills/provenance",
-				"v/skills/assets",
-				"v/skills/skills"
+				"v/skills/root/discovery",
+				"v/skills/ops-tools/provenance",
+				"v/skills/data/assets",
+				"v/skills/root/skills"
 			],
 			"caps": [
 				{

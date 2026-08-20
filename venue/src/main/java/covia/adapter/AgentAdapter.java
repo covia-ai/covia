@@ -248,9 +248,10 @@ public class AgentAdapter extends AAdapter {
 	@Override
 	protected void installAssets() {
 		// The adapter's own skill: v/skills/tasks lives and dies with this adapter.
-		installSkill("tasks", "/skills/tasks.json");
+		installSkill("agents/tasks", "/skills/tasks.json");
 		// The adapter's own skill: v/skills/agents lives and dies with this adapter.
-		installSkill("agents", "/skills/agents.json");
+		installSkill("agents/agents", "/skills/agents.json");
+		installSkill("root/agents", "/skills/agents.json");
 		String BASE = "/adapters/agent/";
 		installAsset("agent/create",      BASE + "create.json");
 		installAsset("agent/fork",        BASE + "fork.json");

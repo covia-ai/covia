@@ -54,7 +54,7 @@ public class MCPAdapter extends AAdapter {
 	@Override
 	protected void installAssets() {
 		// The adapter's own skill: v/skills/mcp lives and dies with this adapter.
-		installSkill("mcp", "/skills/mcp.json");
+		installSkill("ops-tools/mcp", "/skills/mcp.json");
 		TOOL_CALL  = installAsset("mcp/tools-call", "/adapters/mcp/toolCall.json");
 		TOOLS_LIST = installAsset("mcp/tools-list", "/adapters/mcp/toolList.json");
 		installAsset("mcp/add-server",    "/adapters/mcp/addServer.json");

@@ -845,22 +845,30 @@ public final class Skills {
 	 */
 	public static int validateVenueLibrary(Engine engine) {
 		if (engine == null) return 0;
+		return validateLibrary(engine, RequestContext.of(engine.getDIDString()), VENUE_SKILLS);
+	}
+
+	/**
+	 * {@link #validateVenueLibrary} against an arbitrary library root, so the
+	 * same rules can be exercised over a workspace tree in tests.
+	 */
+	public static int validateLibrary(Engine engine, RequestContext ctx, String libraryRoot) {
+		if (engine == null || ctx == null) return 0;
 		int problems = 0;
 		try {
-			RequestContext ctx = RequestContext.of(engine.getDIDString());
-			ACell root = engine.resolvePath(Strings.create(VENUE_SKILLS), ctx);
+			ACell root = engine.resolvePath(Strings.create(libraryRoot), ctx);
 			if (!(root instanceof AMap<?, ?> sets)) return 0;
 			for (var setEntry : sets.entrySet()) {
 				AString setName = RT.ensureString(setEntry.getKey());
 				if (setName == null) continue;
-				String setPath = VENUE_SKILLS + "/" + setName;
+				String setPath = libraryRoot + "/" + setName;
 				if (isSkillValue(setEntry.getValue())) {
 					// A skill sitting where a skillset belongs. Mixing assets and
 					// directories at one level is what the kind split exists to
 					// prevent, so name the fix rather than the symptom.
 					log.warn("Venue skills: {} is a skill at skillset level — {} holds skillsets, "
 						+ "so move it into one (e.g. {}/root/{})",
-						setPath, VENUE_SKILLS, VENUE_SKILLS, setName);
+						setPath, libraryRoot, libraryRoot, setName);
 					problems++;
 					continue;
 				}

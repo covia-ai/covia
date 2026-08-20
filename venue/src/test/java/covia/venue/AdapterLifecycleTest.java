@@ -99,12 +99,15 @@ public class AdapterLifecycleTest {
 	public void testAdapterSkillFollowsAdapterLifecycle() throws Exception {
 		Engine engine = boot(null);
 		try {
-			assertNotNull(venueRead(engine, "v/skills/mcp"), "an active adapter's skill is published");
+			// Skills live in skillsets: v/skills holds directories, never skills.
+			assertNotNull(venueRead(engine, "v/skills/ops-tools/mcp"),
+				"an active adapter's skill is published");
 			engine.disableAdapter("mcp");
-			assertNotNull(venueRead(engine, "v/skills/mcp"), "catalog metadata survives adapter removal");
-			assertNotNull(venueRead(engine, "v/skills/covia"), "platform skills stay");
+			assertNotNull(venueRead(engine, "v/skills/ops-tools/mcp"),
+				"catalog metadata survives adapter removal");
+			assertNotNull(venueRead(engine, "v/skills/root/covia"), "platform skills stay");
 			engine.enableAdapter("mcp");
-			assertNotNull(venueRead(engine, "v/skills/mcp"), "enabling republishes it");
+			assertNotNull(venueRead(engine, "v/skills/ops-tools/mcp"), "enabling republishes it");
 		} finally {
 			engine.close();
 		}

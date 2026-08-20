@@ -98,7 +98,7 @@ public class SQLAdapter extends AAdapter {
 		// The skill travels with the capability: readResource resolves against
 		// the module jar's own classloader, so v/skills/sql exists exactly when
 		// this module is loaded.
-		installSkill("sql", "/skills/sql.json");
+		installSkill("data/sql", "/skills/sql.json");
 	}
 
 	@Override

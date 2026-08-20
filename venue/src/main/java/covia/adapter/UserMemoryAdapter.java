@@ -87,7 +87,7 @@ public class UserMemoryAdapter extends AAdapter {
 	@Override
 	protected void installAssets() {
 		// The adapter's own skill: v/skills/memory lives and dies with this adapter.
-		installSkill("memory", "/skills/memory.json");
+		installSkill("data/memory", "/skills/memory.json");
 		// A single op/tool (v/ops/memory) dispatched by the `command` input —
 		// one tool definition is far less agent tool-context than four.
 		installAsset("memory", "/adapters/memory/memory.json");

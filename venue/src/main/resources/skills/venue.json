@@ -10,6 +10,10 @@
 			"v/ops/covia/read",
 			"v/ops/covia/list",
 			"v/ops/covia/slice"
+		],
+		"skillsets": [
+			"v/skills/venue",
+			"v/skills/admin"
 		]
 	}
 }

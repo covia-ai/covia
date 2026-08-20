@@ -11,6 +11,9 @@
 			"v/ops/grid/invoke",
 			"v/ops/grid/job-status",
 			"v/ops/grid/job-result"
+		],
+		"skillsets": [
+			"v/skills/grid"
 		]
 	}
 }

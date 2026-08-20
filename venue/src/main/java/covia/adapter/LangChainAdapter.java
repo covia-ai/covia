@@ -139,7 +139,7 @@ public class LangChainAdapter extends AAdapter {
 	@Override
 	public void installAssets() {
 		// The adapter's own skill: v/skills/models lives and dies with this adapter.
-		installSkill("models", "/skills/models.json");
+		installSkill("ops-tools/models", "/skills/models.json");
 		// Canonical operations — one per adapter route
 		installAsset("langchain/openai",    "/adapters/langchain/openai.json");
 		installAsset("langchain/ollama",    "/adapters/langchain/ollama.json");

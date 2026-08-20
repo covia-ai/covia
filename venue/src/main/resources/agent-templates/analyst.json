@@ -19,11 +19,11 @@
 				"w/skills"
 			],
 			"skills": [
-				"v/skills/workspace",
-				"v/skills/discovery",
-				"v/skills/provenance",
-				"v/skills/orchestration",
-				"v/skills/assets"
+				"v/skills/root/workspace",
+				"v/skills/root/discovery",
+				"v/skills/ops-tools/provenance",
+				"v/skills/building/orchestration",
+				"v/skills/data/assets"
 			]
 		}
 	}

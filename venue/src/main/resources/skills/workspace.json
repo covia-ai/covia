@@ -16,6 +16,9 @@
 			"v/ops/covia/inspect",
 			"v/ops/covia/aggregate",
 			"v/ops/covia/copy"
+		],
+		"skillsets": [
+			"v/skills/data"
 		]
 	}
 }
