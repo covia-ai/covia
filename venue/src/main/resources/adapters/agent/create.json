@@ -116,7 +116,7 @@
 					"items": {
 						"type": "string"
 					},
-					"description": "Non-fatal advisories. Present, and non-empty, only when something about the config looks wrong; the agent WAS created either way, so this never indicates failure. Each entry is a human-readable message, in a fixed order: LLM tool-calling support that could not be confirmed for the configured model; configured tool operations that do not currently resolve; a skill source problem (a malformed config.skills/config.skillsets shape, a skillset pointing at a directory of skillsets rather than of skills, or a source the creator cannot read); and a raw credential in config.apiKey. Everything flagged here is live-resolved at run time, so fixing the config, grant or model makes it take effect without recreating the agent. Absent when there is nothing to flag."
+					"description": "Warnings relevant to agent creation. The agent WAS created — these are advisories about configuration that looks wrong, each a human-readable message to act on. Everything flagged is resolved live at run time, so fixing it takes effect without recreating the agent. Absent when there is nothing to flag."
 				}
 			}
 		}

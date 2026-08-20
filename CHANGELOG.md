@@ -15,7 +15,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - SKILL.md frontmatter accepts `tools`, `skills` and `skillsets` lists
 - Boot warnings for a malformed venue skill library, and an `agent:create` warning for a skillset pointing at a directory of skillsets
 - `adapters.skills.defaultSkillsets` / `defaultSkills` configure the `skills` op's entry point, published at `v/info/adapters/skills`
-- `skills:list` degrades on an unreadable source (visible diagnostic) while `skills:read` still fails; `agent:create` warns when a declared skill source is denied to the creator
+- `skills:list` degrades on an unreadable source (visible diagnostic) while `skills:read` still fails; `agent:create` warns when a declared skill source is missing or denied (the caller's own `w/` workspace exempt)
 - A failed `skill_load` by name now names the skills that are available, so an agent can correct itself
 
 - Optional `covia-discord` venue module: operator-declared or user-created

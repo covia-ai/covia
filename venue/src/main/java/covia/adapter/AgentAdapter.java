@@ -682,11 +682,9 @@ public class AgentAdapter extends AAdapter {
 	 * flagged. New sanity checks append here — the result field ({@code warnings})
 	 * is already a list, so adding one is additive.
 	 *
-	 * <p>The order below is the order callers see. When adding a check, also
-	 * widen the {@code warnings} description in
-	 * {@code /adapters/agent/create.json}: it states what an advisory can be
-	 * about, and a check that is not described there is invisible to anyone
-	 * reading the operation's schema.</p>
+	 * <p>The order below is the order callers see. The operation's schema
+	 * describes the field generically rather than listing these, so a new check
+	 * needs no schema change — and cannot silently fall out of step with one.</p>
 	 */
 	private AVector<ACell> collectCreateWarnings(AMap<AString, ACell> config, RequestContext ctx) {
 		AVector<ACell> warnings = Vectors.empty();
@@ -707,16 +705,16 @@ public class AgentAdapter extends AAdapter {
 	 * THROWS at transition time, so it's flagged here at the moment it's
 	 * fixable.
 	 *
-	 * <p>Merely <i>absent</i> sources are deliberately NOT warned about.
-	 * Sources are maybe-style paths resolved live each turn — absence is a
-	 * normal value (an empty {@code w/skills} is the designed default in every
-	 * standard template), and a venue without some {@code v/skills/*} entry is
-	 * a legitimate target for a portable config.</p>
+	 * <p>A source that does not resolve, and one that is <b>denied</b>, are both
+	 * reported: either way the agent finds no skills there, and neither renders
+	 * a diagnostic anywhere at run time, so both are indistinguishable from an
+	 * empty source once the agent is running. These advisories are read by
+	 * agents, which can act on them.</p>
 	 *
-	 * <p>A source that is <b>denied</b> is different, and is reported: it
-	 * contributes nothing to the agent's index and renders no diagnostic
-	 * anywhere the operator would see, so it is indistinguishable from an
-	 * empty source at runtime.</p>
+	 * <p>The caller's own {@code w/} workspace is excluded from the missing
+	 * check: every standard template ships {@code w/skills}, legitimately empty
+	 * until its owner authors a personal skill, so reporting it would fire on
+	 * almost every create and teach the reader to ignore the field.</p>
 	 *
 	 * <p>A skillset that resolves to a directory of <b>directories</b> is a
 	 * different matter: that is a definite misconfiguration (classically
@@ -732,6 +730,12 @@ public class AgentAdapter extends AAdapter {
 				return Strings.create("config.skillsets entry '" + misdirected
 					+ "' is a directory of skillsets, not of skills — it will contribute no skills"
 					+ " (did you mean " + misdirected + "/root?)");
+			}
+			AString missing = Skills.missingSource(engine, ctx, sources);
+			if (missing != null) {
+				return Strings.create("skill source '" + missing
+					+ "' does not resolve — the agent will find no skills there"
+					+ " (check the path, or the module that publishes it)");
 			}
 			AString denied = Skills.unreadableSource(engine, ctx, sources);
 			if (denied != null) {

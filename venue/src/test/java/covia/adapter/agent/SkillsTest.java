@@ -784,4 +784,29 @@ public class SkillsTest {
 		assertEquals("w/keyed/actual-key",
 			Skills.resolveByName(engine, ctx, sources, "actual-key").path().toString());
 	}
+
+	/**
+	 * Missing and denied are separate problems, and the caller's own workspace
+	 * is exempt from the missing check: every standard template ships
+	 * w/skills, legitimately empty until its owner authors a personal skill.
+	 */
+	@Test
+	public void testMissingSourceDetectionExemptsOwnWorkspace() {
+		write("w/present/skill-here", Maps.of(Fields.DESCRIPTION, Strings.create("Here")));
+
+		// A venue path that resolves to nothing is reported.
+		assertEquals("v/skills/no-such-set", Skills.missingSource(engine, ctx,
+			Skills.SkillSources.ofSkillsets(
+				Vectors.of(Strings.create("v/skills/no-such-set")))).toString());
+
+		// The caller's own empty workspace is not.
+		assertNull(Skills.missingSource(engine, ctx,
+			Skills.SkillSources.ofSkillsets(Vectors.of(Strings.create("w/skills")))));
+		assertNull(Skills.missingSource(engine, ctx,
+			Skills.SkillSources.ofSkillsets(Vectors.of(Strings.create("w/anything-at-all")))));
+
+		// A source that exists is not missing either.
+		assertNull(Skills.missingSource(engine, ctx,
+			Skills.SkillSources.ofSkillsets(Vectors.of(Strings.create("w/present")))));
+	}
 }

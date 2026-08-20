@@ -416,11 +416,13 @@ public class AgentAdapterTest {
 			"empty w/skills is normal — no advisory");
 	}
 
+	/**
+	 * A venue source that does not resolve IS reported: these advisories are
+	 * read by agents, and a v/ path is published at boot or by a module, so one
+	 * resolving to nothing is a name that will most likely never resolve.
+	 */
 	@Test
-	public void testCreateUnresolvedSkillsSourceNotWarned() {
-		// Sources are maybe-style paths resolved live each turn — absence is a
-		// normal value, never create-response noise. Diagnostics live on the
-		// inspection surface (skills:list), for whoever configured the sources.
+	public void testCreateWarnsOnMissingVenueSkillsSource() {
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "skills-venue-typo-agent",
 			Fields.CONFIG, Maps.of(
@@ -431,8 +433,9 @@ public class AgentAdapterTest {
 		ACell result = engine.jobs().invokeOperation(
 			"v/ops/agent/create", input, RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		assertNull(RT.getIn(result, Fields.WARNINGS),
-			"unresolved skills sources are maybe-style — no advisory");
+		ACell warnings = RT.getIn(result, Fields.WARNINGS);
+		assertNotNull(warnings, "a missing venue skill source should be flagged: " + result);
+		assertTrue(warnings.toString().contains("does not resolve"), warnings.toString());
 	}
 
 	@Test

@@ -193,7 +193,11 @@ A non-empty declaration of either kind activates both halves of the feature: the
 **Diagnostics.** Merely absent refs are not warned about in a user's agent config: they are maybe-style paths resolved live, and an empty `w/skills` is the designed default. Two things *are* reported:
 
 - `agent:create` warns when a `config.skillsets` entry resolves to a directory of **directories** — the classic `v/skills` instead of `v/skills/root` mistake, which would silently yield an empty index. Resolution uses the caller's namespace, since `w/` paths are user-relative.
-- `agent:create` also warns when a declared source is **denied** to the creator. Absence stays undiagnosed, but a denial renders nothing in the agent's index and nothing in any log, so at runtime it is indistinguishable from an empty source. The check is the creator's own access: an ordinary user is null-scope and unrestricted over their own namespace, so it fires for a capability-scoped creator, and a clean result is never a guarantee that the agent — which runs under its own `config.caps` — will be able to read it.
+- `agent:create` also warns when a declared source does not **resolve**, or is **denied** to the creator. Either way the agent finds no skills there and nothing says so at run time, so both are indistinguishable from an empty source once it is running. These advisories are read by agents, which can act on them.
+
+  The caller's own `w/` workspace is exempt from the missing check: every standard template ships `w/skills`, legitimately empty until its owner authors a personal skill, so reporting it would fire on almost every create and teach the reader to ignore the field. A `v/` path is different — published at boot or by a module, so one resolving to nothing is most likely a name that never will.
+
+  The denial check is the creator's own access. An ordinary user is null-scope and unrestricted over their own namespace, so it fires for a capability-scoped creator; a clean result is never a guarantee that the agent — which runs under its own `config.caps` — will be able to read it.
 - At boot, after catalog materialisation, the venue validates its **own** library and logs a warning per problem: a skill installed at skillset level, a skillset holding a nested directory, a child ref that does not resolve, or a child ref declared under the wrong kind. Unlike a user's config, everything here was installed by this venue, so an unresolvable ref is a packaging bug worth surfacing at boot rather than at an agent's first turn.
 
 ### 4.2 Hierarchical skill contribution

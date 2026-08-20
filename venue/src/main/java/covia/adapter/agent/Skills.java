@@ -909,6 +909,48 @@ public final class Skills {
 	}
 
 	/**
+	 * The first declared source that does not resolve, or null when every one
+	 * does. Absent and denied are distinct problems: {@link #unreadableSource}
+	 * reports the latter.
+	 *
+	 * <p><b>The caller's own workspace is excluded.</b> Every standard template
+	 * ships {@code w/skills}, which is legitimately empty until its owner
+	 * authors a personal skill — reporting that would fire on almost every
+	 * agent ever created and teach the reader to ignore the field. A venue path
+	 * is different: {@code v/skills/...} is published at boot or by a module, so
+	 * one that resolves to nothing is a name that will most likely never
+	 * resolve.</p>
+	 */
+	public static AString missingSource(Engine engine, RequestContext ctx, SkillSources sources) {
+		if (engine == null || ctx == null || sources == null) return null;
+		AString gone = firstMissing(engine, ctx, sources.skills());
+		return (gone != null) ? gone : firstMissing(engine, ctx, sources.skillsets());
+	}
+
+	private static AString firstMissing(Engine engine, RequestContext ctx, AVector<ACell> refs) {
+		if (refs == null) return null;
+		for (long i = 0; i < refs.count(); i++) {
+			AString ref = RT.ensureString(refs.get(i));
+			if (ref == null || isOwnWorkspace(ctx, ref)) continue;
+			try {
+				requireRead(engine, ctx, ref);
+				if (engine.resolvePath(ref, ctx) == null) return ref;
+			} catch (RuntimeException e) {
+				// Denied or broken — a different check's business.
+			}
+		}
+		return null;
+	}
+
+	/** A path in the caller's own workspace, bare or DID-qualified. */
+	private static boolean isOwnWorkspace(RequestContext ctx, AString ref) {
+		String r = ref.toString();
+		if (r.startsWith("w/")) return true;
+		AString owner = (ctx != null) ? ctx.getUserDID() : null;
+		return owner != null && r.startsWith(owner + "/w/");
+	}
+
+	/**
 	 * Validates the venue's own skill library after catalog materialisation and
 	 * logs a warning per problem. Unlike a user's agent config — whose sources
 	 * are deliberately maybe-style — everything here was installed by this
