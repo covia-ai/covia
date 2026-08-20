@@ -1,0 +1,19 @@
+{
+	"name": "List Skills",
+	"description": "Lists the skills in a skillset — a directory whose entries are skills. Returns a map from each skill's resolved path to its index information, so a caller sees where a skill lives next to what it is; read one in full with the skill-read operation. Entries that are not skills (nested directories, unrelated data) are omitted. Omit 'skillset' to list this venue's configured entry skillsets (see v/info/adapters/skills). Read-only.",
+	"dateCreated": "2026-08-20T00:00:00Z",
+	"operation": {
+		"adapter": "skills:list",
+		"toolName": "skills_list",
+		"input": {
+			"type": "object",
+			"properties": {
+				"skillset": { "type": "string", "description": "The skillset to list: a directory path whose entries are skills, e.g. 'w/skills' or 'v/skills/data'. Omit to use this venue's configured entry skillsets." }
+			}
+		},
+		"output": {
+			"type": "object",
+			"description": "A map from each skill's resolved path to its index information: {name, description, id}. 'id' is the skill's content identity — two paths with the same id are the same skill. Empty when the skillset holds no skills. A skillset that does not resolve, or that the caller may not read, yields an empty map rather than an error: listing is a survey."
+		}
+	}
+}

@@ -1,12 +1,11 @@
 package covia.adapter;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.fail;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -15,11 +14,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
-import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -27,7 +26,6 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Abilities;
 import covia.api.Fields;
-import convex.auth.ucan.Capability;
 import covia.exception.AuthException;
 import covia.venue.Config;
 import covia.venue.Engine;
@@ -35,9 +33,9 @@ import covia.venue.RequestContext;
 import covia.venue.TestEngine;
 
 /**
- * Tests for the {@code skills} venue op ({@code v/ops/skills}) — read-only
- * skill discovery, end-to-end through the catalog (resolution, schema,
- * dispatch) via {@code invokeInternal}.
+ * Tests for the skills venue ops — {@code v/ops/skills/list} and
+ * {@code v/ops/skills/read} — end-to-end through the catalog (resolution,
+ * schema, dispatch) via {@code invokeInternal}.
  */
 public class SkillsAdapterTest {
 
@@ -45,11 +43,11 @@ public class SkillsAdapterTest {
 	private AString did;
 	private RequestContext ctx;
 
-	private static final AString K_CONTENT_TEXT = Strings.intern("contentText");
-	private static final AString K_SOURCES = Strings.intern("sources");
-	private static final AString K_REF = Strings.intern("ref");
-	private static final AString K_BODY = Strings.intern("body");
-	private static final AString K_SKILLS = Strings.intern("skills");
+	private static final AString K_SKILL    = Strings.intern("skill");
+	private static final AString K_SKILLSET = Strings.intern("skillset");
+	private static final AString K_BODY     = Strings.intern("body");
+	private static final AString K_SKILLS   = Strings.intern("skills");
+	private static final AString K_SKILLSETS = Strings.intern("skillsets");
 
 	@BeforeEach
 	public void setup(TestInfo info) {
@@ -59,14 +57,24 @@ public class SkillsAdapterTest {
 
 	// ========== helpers ==========
 
-	private ACell invoke(AMap<AString, ACell> input, RequestContext c) {
+	private ACell call(String op, AMap<AString, ACell> input, RequestContext c) {
 		try {
-			return engine.jobs().invokeInternal("v/ops/skills", input, c).get(5, TimeUnit.SECONDS);
+			return engine.jobs().invokeInternal(op, input, c).get(5, TimeUnit.SECONDS);
 		} catch (ExecutionException e) {
 			throw (e.getCause() instanceof RuntimeException re) ? re : new RuntimeException(e.getCause());
 		} catch (Exception e) {
 			throw new RuntimeException(e);
 		}
+	}
+
+	private ACell list(String skillset, RequestContext c) {
+		AMap<AString, ACell> input = (skillset == null) ? Maps.empty()
+			: Maps.of(K_SKILLSET, Strings.create(skillset));
+		return call("v/ops/skills/list", input, c);
+	}
+
+	private ACell read(String skill, RequestContext c) {
+		return call("v/ops/skills/read", Maps.of(K_SKILL, Strings.create(skill)), c);
 	}
 
 	private void write(String path, ACell value, RequestContext c) {
@@ -79,205 +87,226 @@ public class SkillsAdapterTest {
 		}
 	}
 
+	private void write(String path, ACell value) {
+		write(path, value, ctx);
+	}
+
+	/** The listing entry at one path, or null when absent. */
+	private static ACell at(ACell listing, String path) {
+		return RT.getIn(listing, path);
+	}
+
 	// ========== list ==========
 
 	@Test
-	public void testListEmptyReturnsNull() {
-		ACell result = invoke(Maps.of(
-			Strings.create("command"), Strings.create("list"),
-			K_SOURCES, Vectors.of(Strings.create("w/skills"))), ctx);
-		assertNull(result, "no skills → null (the assemble-op contract)");
+	public void testListPairsPathWithMetadata() {
+		write("w/skills/alpha", Maps.of(
+			Fields.NAME, Strings.create("alpha"),
+			Fields.DESCRIPTION, Strings.create("Alpha skill")));
+		write("w/skills/beta", Maps.of(Fields.DESCRIPTION, Strings.create("Beta skill")));
+
+		ACell listing = list("w/skills", ctx);
+		assertNotNull(listing);
+		// Keyed by RESOLVED PATH: a name alone does not say where to read it from.
+		assertEquals("alpha", RT.getIn(at(listing, "w/skills/alpha"), "name").toString());
+		assertEquals("Alpha skill",
+			RT.getIn(at(listing, "w/skills/alpha"), "description").toString());
+		// name falls back to the path segment when metadata omits it
+		assertEquals("beta", RT.getIn(at(listing, "w/skills/beta"), "name").toString());
+		// content identity travels with the entry
+		assertNotNull(RT.getIn(at(listing, "w/skills/alpha"), "id"));
 	}
 
 	@Test
-	public void testListWorkspaceSkills() {
-		write("w/skills/alpha", Maps.of(Fields.DESCRIPTION, Strings.create("Alpha skill")), ctx);
-		ACell result = invoke(Maps.of(
-			Strings.create("command"), Strings.create("list"),
-			K_SOURCES, Vectors.of(Strings.create("w/skills"))), ctx);
-		assertNotNull(result);
-		assertTrue(result.toString().contains("- alpha — Alpha skill"), result.toString());
+	public void testListOmitsNonSkills() {
+		write("w/mixed/real", Maps.of(Fields.DESCRIPTION, Strings.create("A real skill")));
+		write("w/mixed/nested/inner", Maps.of(Fields.DESCRIPTION, Strings.create("Nested")));
+		write("w/mixed/junk", Vectors.of(CVMLong.create(1), CVMLong.create(2)));
+
+		ACell listing = list("w/mixed", ctx);
+		assertNotNull(at(listing, "w/mixed/real"));
+		// A listing answers "what can I load here" — not what else is lying around.
+		assertNull(at(listing, "w/mixed/nested"));
+		assertNull(at(listing, "w/mixed/junk"));
+		assertEquals(1, RT.ensureMap(listing).count());
 	}
 
 	@Test
-	public void testListDefaultSources() {
-		// Omitted sources default to ["w/skills", "v/skills"].
-		write("w/skills/alpha", Maps.of(Fields.DESCRIPTION, Strings.create("Alpha skill")), ctx);
-		ACell result = invoke(Maps.of(Strings.create("command"), Strings.create("list")), ctx);
-		assertNotNull(result);
-		assertTrue(result.toString().contains("- alpha — Alpha skill"), result.toString());
+	public void testListEmptySkillsetIsEmptyMap() {
+		ACell listing = list("w/no-such-skillset", ctx);
+		assertNotNull(listing, "a survey returns an empty map, not null");
+		assertEquals(0, RT.ensureMap(listing).count());
 	}
 
 	@Test
-	public void testListVenueSkills() {
-		// Venue skills are written under the venue's own identity (the
-		// VenueGlobalsResolver write gate) and publicly discoverable.
-		RequestContext venueCtx = RequestContext.of(engine.getDIDString());
-		// A skill goes INSIDE a skillset: v/skills holds directories, never
-		// skills, and SkillsLibraryTest enforces that repo-wide.
-		write("v/skills/demo/venue-demo", Maps.of(
-			Fields.DESCRIPTION, Strings.create("A venue-installed skill")), venueCtx);
-		try {
-			ACell result = invoke(Maps.of(
-				Strings.create("command"), Strings.create("list"),
-				K_SOURCES, Vectors.of(Strings.create("v/skills/demo"))), ctx);
-			assertNotNull(result);
-			assertTrue(result.toString().contains("- venue-demo — A venue-installed skill"), result.toString());
-		} finally {
-			// Shared-engine hygiene: leave v/skills as shipped.
-			try {
-				engine.jobs().invokeInternal("v/ops/covia/delete",
-					Maps.of(Fields.PATH, Strings.create("v/skills/demo")), venueCtx)
-					.get(5, TimeUnit.SECONDS);
-			} catch (Exception e) {
-				throw new RuntimeException(e);
-			}
-		}
+	public void testListDefaultsToConfiguredSkillsets() {
+		// Omitting skillset lists the venue's entry skillsets; the shipped
+		// default includes v/skills/root, so its skills show with full paths.
+		ACell listing = list(null, ctx);
+		assertNotNull(listing);
+		assertNotNull(at(listing, "v/skills/root/covia"),
+			"the venue entry skillset should be listed by default: " + listing);
+		assertEquals("covia", RT.getIn(at(listing, "v/skills/root/covia"), "name").toString());
+	}
+
+	@Test
+	public void testListRejectsNonStringSkillset() {
+		// Single arity: the error says what to pass instead.
+		String message = assertThrows(RuntimeException.class,
+			() -> call("v/ops/skills/list",
+				Maps.of(K_SKILLSET, Vectors.of(Strings.create("w/skills"))), ctx)).getMessage();
+		assertTrue(message.contains("skillset") || message.contains("string"), message);
 	}
 
 	// ========== read ==========
 
 	@Test
-	public void testReadByName() {
+	public void testReadByPath() {
 		write("w/skills/reader", Maps.of(
 			Fields.DESCRIPTION, Strings.create("Reads things"),
-			Strings.create("skill"), Maps.of(
-				Fields.TOOLS, Vectors.of(Strings.create("v/ops/covia/read")))), ctx);
+			Strings.create("content"), Maps.of(
+				Strings.create("inline"), Strings.create("Read carefully.")),
+			K_SKILL, Maps.of(
+				Fields.TOOLS, Vectors.of(Strings.create("v/ops/covia/read")),
+				K_SKILLSETS, Vectors.of(Strings.create("w/specialists")))));
 
-		ACell result = invoke(Maps.of(
-			Strings.create("command"), Strings.create("read"),
-			Fields.NAME, Strings.create("reader"),
-			K_SOURCES, Vectors.of(Strings.create("w/skills"))), ctx);
-
-		assertEquals("reader", RT.getIn(result, Fields.NAME).toString());
-		assertEquals("Reads things", RT.getIn(result, Fields.DESCRIPTION).toString());
-		assertNull(RT.getIn(result, K_BODY), "contentless skill (a pure toolset) has no body");
-		assertEquals("w/skills/reader", RT.getIn(result, Fields.PATH).toString());
-		AVector<?> tools = (AVector<?>) RT.getIn(result, Fields.TOOLS);
-		assertEquals(1, tools.count());
+		ACell result = read("w/skills/reader", ctx);
+		assertEquals("reader", RT.getIn(result, "name").toString());
+		assertEquals("Reads things", RT.getIn(result, "description").toString());
+		assertEquals("Read carefully.", RT.getIn(result, K_BODY).toString());
+		assertEquals("w/skills/reader", RT.getIn(result, "path").toString());
+		assertNotNull(RT.getIn(result, "id"));
+		assertEquals(Vectors.of(Strings.create("v/ops/covia/read")), RT.getIn(result, "tools"));
+		assertEquals(Vectors.of(Strings.create("w/specialists")), RT.getIn(result, K_SKILLSETS));
+		assertNull(RT.getIn(result, K_SKILLS), "no individual child skills declared");
 	}
 
 	@Test
-	public void testReadReportsContributedSkillSources() {
-		write("w/skills/router", Maps.of(
-			Fields.DESCRIPTION, Strings.create("Find specialist skills"),
-			Strings.create("skill"), Maps.of(
-				K_SKILLS, Vectors.of(Strings.create("w/specialists")))), ctx);
-
-		ACell result = invoke(Maps.of(
-			Strings.create("command"), Strings.create("read"),
-			Fields.NAME, Strings.create("router"),
-			K_SOURCES, Vectors.of(Strings.create("w/skills"))), ctx);
-
-		assertEquals(Vectors.of(Strings.create("w/specialists")), RT.getIn(result, K_SKILLS));
+	public void testReadContentlessSkillHasNoBody() {
+		write("w/skills/toolset", Maps.of(
+			Fields.DESCRIPTION, Strings.create("A pure toolset"),
+			K_SKILL, Maps.of(Fields.TOOLS, Vectors.of(Strings.create("v/ops/covia/read")))));
+		ACell result = read("w/skills/toolset", ctx);
+		assertNull(RT.getIn(result, K_BODY), "a contentless skill is a pure toolset");
+		assertEquals("A pure toolset", RT.getIn(result, "description").toString());
 	}
 
 	@Test
-	public void testReadInlineContentBody() {
-		write("w/skills/notes", Maps.of(
-			Fields.DESCRIPTION, Strings.create("House notes"),
-			Fields.CONTENT, Maps.of(Strings.create("inline"),
-				Strings.create("Always write results to w/analysis."))), ctx);
-
-		ACell result = invoke(Maps.of(
-			Strings.create("command"), Strings.create("read"),
-			Fields.NAME, Strings.create("notes"),
-			K_SOURCES, Vectors.of(Strings.create("w/skills"))), ctx);
-
-		assertEquals("Always write results to w/analysis.", RT.getIn(result, K_BODY).toString());
+	public void testReadRequiresASkillRef() {
+		String message = assertThrows(RuntimeException.class,
+			() -> call("v/ops/skills/read", Maps.empty(), ctx)).getMessage();
+		// The error has to say what to pass, since there is no name lookup.
+		assertTrue(message.contains("skill"), message);
 	}
 
 	@Test
-	public void testReadByRefWithContentBody() {
-		AMap<AString, ACell> storeInput = Maps.of(
-			Fields.METADATA, Maps.of(
-				Fields.NAME, Strings.create("asset-skill"),
-				Fields.DESCRIPTION, Strings.create("From an asset")),
-			K_CONTENT_TEXT, Strings.create("The full body text"));
-		ACell stored;
-		try {
-			stored = engine.jobs().invokeInternal("v/ops/asset/store", storeInput, ctx)
-				.get(5, TimeUnit.SECONDS);
-		} catch (Exception e) {
-			throw new RuntimeException(e);
-		}
-		Hash h = AssetAdapter.parseAssetId(RT.ensureString(RT.getIn(stored, Fields.ID)));
-		String ref = "a/" + h.toHexString();
+	public void testReadFailsOnMissingSkill() {
+		assertThrows(RuntimeException.class, () -> read("w/skills/not-there", ctx),
+			"a read is a specific request: absence is an error, not an omission");
+	}
 
-		ACell result = invoke(Maps.of(
-			Strings.create("command"), Strings.create("read"),
-			K_REF, Strings.create(ref)), ctx);
+	// ========== capability gating ==========
 
-		assertEquals("asset-skill", RT.getIn(result, Fields.NAME).toString());
-		assertEquals("The full body text", RT.getIn(result, K_BODY).toString());
-		assertEquals(ref, RT.getIn(result, Fields.PATH).toString());
+	@Test
+	public void testListDegradesOnUnreadableSkillset() {
+		write("w/skills/private", Maps.of(
+			Fields.NAME, Strings.create("private"),
+			Fields.DESCRIPTION, Strings.create("Owner-only")), ctx);
+		RequestContext denied = ctx.withCaps(Vectors.empty());
+
+		ACell listing = list("w/skills", denied);
+		assertEquals(0, RT.ensureMap(listing).count(),
+			"a denied skillset contributes nothing: " + listing);
+		assertFalse(String.valueOf(listing).contains("Owner-only"), String.valueOf(listing));
 	}
 
 	@Test
-	public void testReadRequiresExactlyOneOfNameAndRef() {
-		try {
-			invoke(Maps.of(Strings.create("command"), Strings.create("read")), ctx);
-			fail("neither name nor ref should be rejected");
-		} catch (RuntimeException e) {
-			assertTrue(e.getMessage().contains("exactly one"), e.getMessage());
-		}
-		try {
-			invoke(Maps.of(
-				Strings.create("command"), Strings.create("read"),
-				Fields.NAME, Strings.create("x"),
-				K_REF, Strings.create("w/skills/x")), ctx);
-			fail("both name and ref should be rejected");
-		} catch (RuntimeException e) {
-			assertTrue(e.getMessage().contains("exactly one"), e.getMessage());
-		}
+	public void testReadDeniedWithoutReadCapability() {
+		write("w/skills/private2", Maps.of(
+			Fields.DESCRIPTION, Strings.create("Owner-only"),
+			Strings.create("content"), Maps.of(
+				Strings.create("inline"), Strings.create("Do not expose"))), ctx);
+
+		assertThrows(AuthException.class,
+			() -> read("w/skills/private2", ctx.withCaps(Vectors.empty())),
+			"read is a specific request, so a denial is an error");
 	}
 
 	@Test
-	public void testUnknownCommandRejected() {
-		try {
-			invoke(Maps.of(Strings.create("command"), Strings.create("write")), ctx);
-			fail("unknown command should be rejected");
-		} catch (RuntimeException e) {
-			assertTrue(e.getMessage().contains("list | read"), e.getMessage());
-		}
+	public void testCapabilityPinsArePerSkillset() {
+		write("w/skills/mine", Maps.of(
+			Fields.NAME, Strings.create("mine"),
+			Fields.DESCRIPTION, Strings.create("Readable")), ctx);
+		RequestContext scoped = ctx.withCaps(Vectors.of(
+			Maps.of(Strings.create("with"), Strings.create(did + "/w/skills"),
+				Strings.create("can"), Capability.CRUD_READ)));
+
+		assertNotNull(at(list("w/skills", scoped), "w/skills/mine"));
+		assertEquals(0, RT.ensureMap(list("w/elsewhere", scoped)).count(),
+			"a skillset outside the granted scope contributes nothing");
+	}
+
+	/**
+	 * Indexing a skill needs only {@code crud/read} over its path — including a
+	 * skill that omits {@code name}, which used to force a content read and so
+	 * demand {@code asset/read}.
+	 */
+	@Test
+	public void testListingNamelessSkillNeedsOnlyCrudRead() {
+		write("w/eithercap/nameless", Maps.of(
+			Fields.DESCRIPTION, Strings.create("No name field")), ctx);
+		RequestContext crudOnly = ctx.withCaps(Vectors.of(
+			Maps.of(Strings.create("with"), Strings.create(did + "/w/eithercap"),
+				Strings.create("can"), Capability.CRUD_READ)));
+
+		ACell entry = at(list("w/eithercap", crudOnly), "w/eithercap/nameless");
+		assertNotNull(entry, "a name-less skill should list under crud/read alone");
+		assertEquals("nameless", RT.getIn(entry, "name").toString());
+	}
+
+	/**
+	 * A PATH is namespace-scoped: {@code asset/read} does not substitute. The
+	 * public read-only scope grants it UNSCOPED, so honouring it against a path
+	 * would license reading any user's workspace.
+	 */
+	@Test
+	public void testAssetReadDoesNotSubstituteForPathRead() {
+		write("w/pathscope/skill", Maps.of(
+			Fields.NAME, Strings.create("skill"),
+			Fields.DESCRIPTION, Strings.create("Path-scoped")), ctx);
+		RequestContext assetOnly = ctx.withCaps(Vectors.of(
+			Maps.of(Strings.create("with"), Strings.create(did + "/w/pathscope"),
+				Strings.create("can"), Abilities.ASSET_READ)));
+
+		assertEquals(0, RT.ensureMap(list("w/pathscope", assetOnly)).count());
+		assertThrows(AuthException.class, () -> read("w/pathscope/skill", assetOnly));
 	}
 
 	// ========== operator configuration ==========
 
-	/**
-	 * The shipped defaults are what an unconfigured venue answers from, and
-	 * they are published so a client can discover the entry point rather than
-	 * hardcoding {@code v/skills/root}.
-	 */
 	@Test
 	public void testDefaultSourcesArePublished() {
 		SkillsAdapter adapter = (SkillsAdapter) engine.getAdapter("skills");
 		AMap<AString, ACell> info = adapter.info();
 		assertEquals(SkillsAdapter.DEFAULT_SKILLSETS, info.get(SkillsAdapter.K_DEFAULT_SKILLSETS));
-		// No individually-named defaults to publish, so the key stays absent.
 		assertNull(info.get(SkillsAdapter.K_DEFAULT_SKILLS));
 
-		ACell published = engine.resolvePath(
-			Strings.create("v/info/adapters/skills"), ctx);
-		assertEquals(SkillsAdapter.DEFAULT_SKILLSETS,
-			RT.getIn(published, "defaultSkillsets"),
+		ACell published = engine.resolvePath(Strings.create("v/info/adapters/skills"), ctx);
+		assertEquals(SkillsAdapter.DEFAULT_SKILLSETS, RT.getIn(published, "defaultSkillsets"),
 			"the entry point should be discoverable at v/info/adapters/skills");
 	}
 
 	@Test
 	public void testMalformedDefaultsAreRejectedAtConfigureTime() {
 		SkillsAdapter adapter = (SkillsAdapter) engine.getAdapter("skills");
-		// Not an array.
 		assertTrue(assertThrows(IllegalArgumentException.class,
 			() -> adapter.configure(Maps.of(
 				SkillsAdapter.K_DEFAULT_SKILLSETS, Strings.create("v/skills/root")), true))
 			.getMessage().contains("must be an array"));
-		// Array of the wrong element type.
 		assertTrue(assertThrows(IllegalArgumentException.class,
 			() -> adapter.configure(Maps.of(
 				SkillsAdapter.K_DEFAULT_SKILLS, Vectors.of(CVMLong.create(42))), true))
 			.getMessage().contains("ref strings"));
-		// Well-formed settings are accepted, and an empty config is fine.
 		assertTrue(adapter.configure(Maps.of(
 			SkillsAdapter.K_DEFAULT_SKILLSETS, Vectors.of(Strings.create("v/skills/root"))), true));
 		assertTrue(adapter.configure(Maps.empty(), true));
@@ -285,12 +314,9 @@ public class SkillsAdapterTest {
 	}
 
 	/**
-	 * A venue that curates its own library answers {@code list} from it with
-	 * no caller changes — the point of making the default configurable.
-	 *
-	 * <p>Uses its OWN engine: adapter configuration is venue-global state, and
-	 * this suite runs methods in parallel, so reconfiguring the shared
-	 * TestEngine would change what every other test sees.</p>
+	 * A venue that curates its own library answers a default listing from it.
+	 * Uses its OWN engine: adapter configuration is venue-global and this suite
+	 * runs methods in parallel.
 	 */
 	@Test
 	public void testConfiguredDefaultSkillsetIsUsed() throws Exception {
@@ -308,154 +334,21 @@ public class SkillsAdapterTest {
 						Strings.create("The house way of doing things"))), venueCtx)
 				.get(5, TimeUnit.SECONDS);
 
-			ACell result = own.jobs().invokeInternal("v/ops/skills",
-				Maps.of(Strings.create("command"), Strings.create("list")),
+			ACell listing = own.jobs().invokeInternal("v/ops/skills/list", Maps.empty(),
 				RequestContext.of(TestEngine.uniqueDID("skills-cfg"))).get(5, TimeUnit.SECONDS);
-			assertNotNull(result);
-			assertTrue(result.toString().contains("- house-rules — The house way of doing things"),
-				result.toString());
-			assertFalse(result.toString().contains("- covia — "),
-				"the shipped root skillset is no longer the default: " + result);
+			assertNotNull(at(listing, "v/skills/house/house-rules"), String.valueOf(listing));
+			assertNull(at(listing, "v/skills/root/covia"),
+				"the shipped root skillset is no longer the default: " + listing);
 
-			// info() follows the effective configuration, not the shipped default.
 			SkillsAdapter adapter = (SkillsAdapter) own.getAdapter("skills");
 			assertEquals(Vectors.of(Strings.create("v/skills/house")),
 				adapter.info().get(SkillsAdapter.K_DEFAULT_SKILLSETS));
 
-			// Runtime reconfiguration reaches the same read path.
 			own.configureAdapter("skills", Maps.empty());
 			assertEquals(SkillsAdapter.DEFAULT_SKILLSETS,
 				adapter.info().get(SkillsAdapter.K_DEFAULT_SKILLSETS));
 		} finally {
 			own.close();
 		}
-	}
-
-	// ========== capability gating ==========
-
-	/**
-	 * Listing DEGRADES: an unreadable source renders a visible diagnostic line
-	 * rather than failing the call, so a caller sees what they can see. The
-	 * denial is still real — no name, description or body leaks through it.
-	 */
-	@Test
-	public void testListDegradesOnUnreadableSource() {
-		write("w/skills/private", Maps.of(
-			Fields.NAME, Strings.create("private"),
-			Fields.DESCRIPTION, Strings.create("Owner-only")), ctx);
-		RequestContext denied = ctx.withCaps(Vectors.empty());
-
-		ACell result = invoke(Maps.of(
-			Strings.create("command"), Strings.create("list"),
-			K_SOURCES, Vectors.of(Strings.create("w/skills"))), denied);
-		String index = String.valueOf(result);
-		assertTrue(index.contains("[skills source w/skills — unavailable:"), index);
-		assertFalse(index.contains("Owner-only"), "a denied source must not leak: " + index);
-		assertFalse(index.contains("- private —"), "a denied source must not leak: " + index);
-	}
-
-	@Test
-	public void testReadDeniedWithoutReadCapability() {
-		write("w/skills/private2", Maps.of(
-			Fields.DESCRIPTION, Strings.create("Owner-only"),
-			Strings.create("content"), Maps.of(
-				Strings.create("inline"), Strings.create("Do not expose"))), ctx);
-		RequestContext denied = ctx.withCaps(Vectors.empty());
-
-		// By direct ref...
-		assertThrows(AuthException.class, () -> invoke(Maps.of(
-			Strings.create("command"), Strings.create("read"),
-			K_REF, Strings.create("w/skills/private2")), denied));
-
-		// ...and by name across sources: the body must not leak either way.
-		assertThrows(AuthException.class, () -> invoke(Maps.of(
-			Strings.create("command"), Strings.create("read"),
-			Fields.NAME, Strings.create("private2"),
-			K_SOURCES, Vectors.of(Strings.create("w/skills"))), denied));
-	}
-
-	/** The pins are per source, so a grant covering one still denies another. */
-	@Test
-	public void testCapabilityPinsArePerSource() {
-		// Declares `name`, so the index pass reads metadata only. A skill
-		// WITHOUT a name falls back to its path segment, but only after
-		// attempting a content read for frontmatter — which pins asset/read.
-		write("w/skills/mine", Maps.of(
-			Fields.NAME, Strings.create("mine"),
-			Fields.DESCRIPTION, Strings.create("Readable")), ctx);
-		// A scope covering only the caller's own w/skills subtree.
-		RequestContext scoped = ctx.withCaps(Vectors.of(
-			Maps.of(Strings.create("with"), Strings.create(did + "/w/skills"),
-				Strings.create("can"), Capability.CRUD_READ)));
-
-		// Both sources at once: the granted one lists, the other degrades to a
-		// diagnostic — the pin is per source, not per call.
-		ACell result = invoke(Maps.of(
-			Strings.create("command"), Strings.create("list"),
-			K_SOURCES, Vectors.of(
-				Strings.create("w/skills"), Strings.create("w/elsewhere"))), scoped);
-		String index = String.valueOf(result);
-		assertTrue(index.contains("- mine — Readable"), index);
-		assertTrue(index.contains("[skills source w/elsewhere — unavailable:"), index);
-
-		// read is a specific request, so the same denial is an error there.
-		assertThrows(AuthException.class, () -> invoke(Maps.of(
-			Strings.create("command"), Strings.create("read"),
-			Fields.NAME, Strings.create("whatever"),
-			K_SOURCES, Vectors.of(Strings.create("w/elsewhere"))), scoped),
-			"read fails on a source outside the granted scope");
-	}
-
-	/**
-	 * Indexing a skill needs only {@code crud/read} over its path — including a
-	 * skill that omits {@code name}. That used to differ: a name-less skill
-	 * forced a content read during the index pass and so demanded
-	 * {@code asset/read}, making the same skillset readable or not depending on
-	 * what its author happened to write.
-	 */
-	@Test
-	public void testIndexingNamelessSkillNeedsOnlyCrudRead() {
-		// No `name`: resolution falls back to the path segment.
-		write("w/eithercap/nameless", Maps.of(
-			Fields.DESCRIPTION, Strings.create("No name field")), ctx);
-
-		RequestContext crudOnly = ctx.withCaps(Vectors.of(
-			Maps.of(Strings.create("with"), Strings.create(did + "/w/eithercap"),
-				Strings.create("can"), Capability.CRUD_READ)));
-		ACell listed = invoke(Maps.of(
-			Strings.create("command"), Strings.create("list"),
-			K_SOURCES, Vectors.of(Strings.create("w/eithercap"))), crudOnly);
-		assertTrue(String.valueOf(listed).contains("- nameless — No name field"),
-			String.valueOf(listed));
-
-		// No read grant at all still degrades to a diagnostic, leaking nothing.
-		ACell none = invoke(Maps.of(
-			Strings.create("command"), Strings.create("list"),
-			K_SOURCES, Vectors.of(Strings.create("w/eithercap"))), ctx.withCaps(Vectors.empty()));
-		assertTrue(String.valueOf(none).contains("unavailable:"), String.valueOf(none));
-		assertFalse(String.valueOf(none).contains("No name field"), String.valueOf(none));
-	}
-
-	/**
-	 * A PATH is namespace-scoped: {@code crud/read} over it is required, and an
-	 * {@code asset/read} grant does not substitute. The public read-only scope
-	 * grants {@code asset/read} UNSCOPED ({@code with: ""}) — safe for content
-	 * addressing, where you must hold the hash to ask — so honouring it against
-	 * a path would turn it into a licence to read any user's workspace.
-	 */
-	@Test
-	public void testAssetReadDoesNotSubstituteForPathRead() {
-		write("w/pathscope/skill", Maps.of(
-			Fields.NAME, Strings.create("skill"),
-			Fields.DESCRIPTION, Strings.create("Path-scoped")), ctx);
-
-		RequestContext assetOnly = ctx.withCaps(Vectors.of(
-			Maps.of(Strings.create("with"), Strings.create(did + "/w/pathscope"),
-				Strings.create("can"), Abilities.ASSET_READ)));
-		ACell result = invoke(Maps.of(
-			Strings.create("command"), Strings.create("list"),
-			K_SOURCES, Vectors.of(Strings.create("w/pathscope"))), assetOnly);
-		assertTrue(String.valueOf(result).contains("unavailable:"), String.valueOf(result));
-		assertFalse(String.valueOf(result).contains("Path-scoped"), String.valueOf(result));
 	}
 }

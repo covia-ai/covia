@@ -18,9 +18,10 @@ import covia.venue.RequestContext;
  * Read-only discovery of agent skills — named bundles of instructions,
  * context, and tools (see {@code venue/docs/SKILLS.md}).
  *
- * <p>A single op/tool ({@code v/ops/skills}) dispatched by the {@code command}
- * input, following the memory adapter idiom — one tool definition is far less
- * agent tool-context than two. All resolution logic lives in
+ * <p>Two ops with precise schemas: {@code v/ops/skills/list} (the skills in a
+ * skillset) and {@code v/ops/skills/read} (one skill in full). They answer
+ * different questions and a union input could only express which arguments
+ * belong to which in prose. All resolution logic lives in
  * {@link covia.adapter.agent.Skills}, shared with the agent runtimes'
  * skills index and {@code skill_load} tool so the surfaces can never drift.</p>
  *
@@ -49,7 +50,8 @@ public class SkillsAdapter extends AAdapter {
 	static final AString K_DEFAULT_SKILLSETS = Strings.intern("defaultSkillsets");
 	static final AString K_DEFAULT_SKILLS    = Strings.intern("defaultSkills");
 
-	private static final AString K_SOURCES  = Strings.intern("sources");
+	private static final AString K_SKILL     = Strings.intern("skill");
+	private static final AString K_SKILLSET  = Strings.intern("skillset");
 	private static final AString K_REF      = Strings.intern("ref");
 	private static final AString K_BODY     = Strings.intern("body");
 	private static final AString K_CONTEXT  = Strings.intern("context");
@@ -122,13 +124,13 @@ public class SkillsAdapter extends AAdapter {
 
 	@Override
 	public String getDescription() {
-		return "Discover agent skills — named bundles of instructions, context, tools, and further skills. "
-			+ "Pick the action with `command`: 'list' renders the skill index, one '- name — description' "
-			+ "line per skill (also usable as a config.context assemble-op); 'read' returns one skill in "
-			+ "full (name, description, body, tools, skills, skillsets, context, path). `sources` names "
-			+ "skillsets (directories of skills such as w/skills or v/skills/root) and `skills` names "
-			+ "individual skills or asset refs; both default to this venue's configured entry point. "
-			+ "Read-only — author skills with covia:write or asset:store.";
+		return "Discover agent skills — named bundles of instructions, context, tools, and further "
+			+ "skills. Two read-only operations: list the skills in a skillset (a directory of "
+			+ "skills, such as w/skills or v/skills/data), and read one skill in full by its "
+			+ "resolved path or asset ref. Listing returns each skill's path alongside its name "
+			+ "and description, so a caller knows where to read it from. Skills are authored with "
+			+ "the ordinary lattice write and asset store operations — there is no write surface "
+			+ "here.";
 	}
 
 	/**
@@ -175,8 +177,10 @@ public class SkillsAdapter extends AAdapter {
 
 	@Override
 	protected void installAssets() {
-		// A single op/tool (v/ops/skills) dispatched by the `command` input.
-		installAsset("skills", "/adapters/skills/skills.json");
+		// Two ops with precise schemas rather than one command-dispatched union:
+		// a skillset listing and a single-skill read are different questions.
+		installAsset("skills/list", "/adapters/skills/list.json");
+		installAsset("skills/read", "/adapters/skills/read.json");
 		for (String[] entry : LIBRARY_PATHS) {
 			String resource = "/skills/" + entry[0] + ".json";
 			for (int i = 1; i < entry.length; i++) {
@@ -188,58 +192,91 @@ public class SkillsAdapter extends AAdapter {
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		// No authentication precondition: v/skills is publicly discoverable.
-		// The per-source capability pins below do the gating (an anonymous
-		// caller's read-only grant scope covers own-namespace reads + asset/read).
-		String command = strInput(input, "command");
+		// The per-source capability pins do the gating (an anonymous caller's
+		// read-only grant scope covers own-namespace reads + asset/read).
 		try {
-			return switch (command) {
+			return switch (getSubOperation(meta)) {
 				case "list" -> CompletableFuture.completedFuture(handleList(ctx, input));
 				case "read" -> CompletableFuture.completedFuture(handleRead(ctx, input));
 				default -> CompletableFuture.failedFuture(new IllegalArgumentException(
-					"skills requires command: list | read"));
+					"Unknown skills operation: " + getSubOperation(meta)));
 			};
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
 		}
 	}
 
-	// ========== list — render the skill index ==========
+	// ========== list — the skills in a skillset ==========
 
 	/**
-	 * Listing is a survey, so it <b>degrades</b>: each source is still pinned
-	 * as a read inside the resolver, but one the caller cannot read renders a
-	 * visible {@code [skills source X — unavailable: …]} line instead of
-	 * failing the whole call. A caller asking what is available should see
-	 * what they can see — and, since the default sources are venue-configured,
-	 * a default they lack access to must not make every list call fail.
+	 * Lists one skillset, or this venue's configured entry skillsets when none
+	 * is named, as a map from each skill's resolved <b>path</b> to its index
+	 * information. Pairing the two is the point: a name alone does not say
+	 * where a skill lives, and where it lives is what you need to read it, to
+	 * see which skillset won a name collision, or to fix a source.
+	 *
+	 * <p>Only actual skills appear. A skillset may sit beside nested
+	 * directories or unrelated data, and those are omitted rather than
+	 * reported — a listing answers "what can I load here".</p>
+	 *
+	 * <p>Listing is a survey and <b>degrades</b>: a skillset that does not
+	 * resolve, or that the caller may not read, contributes nothing instead of
+	 * failing the call. The read is still pinned per skillset, so nothing from
+	 * a denied one appears.</p>
 	 */
 	private ACell handleList(RequestContext ctx, ACell input) {
-		Skills.SkillSources sources = sourcesOf(input);
-		String index = Skills.renderIndex(engine, ctx, sources, null, true);
-		// Null when no skills exist — the assemble-op contract (entry skipped).
-		return (index != null) ? Strings.create(index) : null;
+		AString named = RT.ensureString(RT.getIn(input, K_SKILLSET));
+		if (named == null && RT.getIn(input, K_SKILLSET) != null) {
+			throw new IllegalArgumentException("skillset must be a single path string,"
+				+ " e.g. 'v/skills/data' — list one skillset per call");
+		}
+		AVector<ACell> skillsets = (named != null)
+			? Vectors.of(named)
+			: defaultRefs(K_DEFAULT_SKILLSETS, DEFAULT_SKILLSETS);
+
+		AMap<ACell, ACell> out = Maps.empty();
+		for (long i = 0; i < skillsets.count(); i++) {
+			AString set = RT.ensureString(skillsets.get(i));
+			if (set == null) continue;
+			for (Skills.SkillIndexEntry e : Skills.listSkills(engine, ctx,
+					Skills.SkillSources.ofSkillsets(Vectors.of(set)))) {
+				// Source failures and unreadable skills carry no name; a survey
+				// reports what IS there.
+				if (e.name() == null || e.error() != null) continue;
+				AMap<AString, ACell> info = Maps.of(
+					Fields.NAME, Strings.create(e.name()),
+					Fields.DESCRIPTION, Strings.create(e.description()));
+				if (e.id() != null) {
+					info = info.assoc(Fields.ID, Strings.create(e.id().toHexString()));
+				}
+				// First skillset wins a name collision, matching resolution order.
+				if (out.get(e.path()) == null) out = out.assoc(e.path(), info);
+			}
+		}
+		return out;
 	}
 
 	// ========== read — one skill in full ==========
 
+	/**
+	 * Reads one skill by resolved path or asset ref. Deliberately NOT by name:
+	 * a name is only meaningful against a declared set of skillsets, resolved
+	 * first-wins at the moment of the call — there is no index to look one up
+	 * in. Callers list a skillset to obtain the path, and an agent's own
+	 * by-name lookup is {@code skill_load}, which has its sources in scope.
+	 *
+	 * <p>Unlike list, a read is a specific request: an unreadable or absent
+	 * skill is an error, not an omission.</p>
+	 */
 	private ACell handleRead(RequestContext ctx, ACell input) {
-		AString name = RT.ensureString(RT.getIn(input, "name"));
-		AString ref = RT.ensureString(RT.getIn(input, K_REF));
-		if ((name == null) == (ref == null)) {
-			throw new IllegalArgumentException("skills:read requires exactly one of 'name' or 'ref'");
+		AString ref = RT.ensureString(RT.getIn(input, K_SKILL));
+		if (ref == null) {
+			throw new IllegalArgumentException("skill must be a single path or asset ref,"
+				+ " e.g. 'v/skills/data/workspace' or 'a/<hash>' — read one skill per call"
+				+ " (list a skillset to find its path)");
 		}
-
-		// Unlike list, read is a specific request for one skill: a source the
-		// caller cannot read is an error to report, not a line to omit.
-		Skills.ResolvedSkill skill;
-		if (ref != null) {
-			requireReadCap(ctx, ref);
-			skill = Skills.resolveRef(engine, ctx, ref);
-		} else {
-			Skills.SkillSources sources = sourcesOf(input);
-			requireReadCaps(ctx, sources);
-			skill = Skills.resolveByName(engine, ctx, sources, name.toString());
-		}
+		requireReadCap(ctx, ref);
+		Skills.ResolvedSkill skill = Skills.resolveRef(engine, ctx, ref);
 
 		AMap<AString, ACell> out = Maps.of(
 			Fields.NAME, Strings.create(skill.name()),
@@ -264,41 +301,6 @@ public class SkillsAdapter extends AAdapter {
 	}
 
 	// ========== helpers ==========
-
-	/**
-	 * The caller's discovery surface: {@code sources} names skillsets
-	 * (directories, the common case), while the optional {@code skills} input
-	 * names individual skills. Either falls back to this venue's configured
-	 * default, so a venue that curates its own library answers from it without
-	 * every caller having to know the path.
-	 */
-	private Skills.SkillSources sourcesOf(ACell input) {
-		return new Skills.SkillSources(
-			refVector(input, "skills", defaultRefs(K_DEFAULT_SKILLS, DEFAULT_SKILLS)),
-			refVector(input, "sources", defaultRefs(K_DEFAULT_SKILLSETS, DEFAULT_SKILLSETS)));
-	}
-
-	private static AVector<ACell> refVector(ACell input, String key, AVector<ACell> fallback) {
-		ACell v = RT.getIn(input, key);
-		if (v == null) return fallback;
-		AVector<ACell> refs = RT.ensureVector(v);
-		if (refs == null) throw new IllegalArgumentException(key + " must be an array of refs");
-		return refs;
-	}
-
-	private void requireReadCaps(RequestContext ctx, Skills.SkillSources sources) {
-		requireReadCaps(ctx, sources.skills());
-		requireReadCaps(ctx, sources.skillsets());
-	}
-
-	private void requireReadCaps(RequestContext ctx, AVector<ACell> sources) {
-		for (long i = 0; i < sources.count(); i++) {
-			AString source = RT.ensureString(sources.get(i));
-			if (source == null) throw new IllegalArgumentException(
-				"sources must be strings — got: " + sources.get(i));
-			requireReadCap(ctx, source);
-		}
-	}
 
 	/** Pins the read capability for one source. A skill is an asset, so
 	 *  either {@code crud/read} or {@code asset/read} over it is enough

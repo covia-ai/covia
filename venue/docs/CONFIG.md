@@ -694,7 +694,7 @@ Currently defined:
   `foreach.maxConcurrency`, but cannot exceed this venue ceiling. The
   orchestrator resolves inputs and issues child invocations serially; only
   waiting for the issued jobs is concurrent.
-- `skills.defaultSkillsets` — the skillsets `v/ops/skills` searches when a
+- `skills.defaultSkillsets` — the skillsets `v/ops/skills/list` searches when a
   caller names none (default `["w/skills", "v/skills/root"]`: the caller's own
   skills first, so they shadow venue skills of the same name, then the venue's
   entry skillset). Point this at your own curated skillset — say

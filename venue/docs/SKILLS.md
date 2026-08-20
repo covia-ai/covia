@@ -348,26 +348,30 @@ A subgoal therefore starts with its parent's loaded skills and may load/unload i
 
 ---
 
-## 8. The `skills` Operation — Discovery for Everyone
+## 8. The Skills Operations — Discovery for Everyone
 
-One command-dispatched op at `v/ops/skills` (tool name `skills`), following the `memory` adapter idiom. Read-only; usable by agents, humans, MCP clients, and as a `config.context` assemble-op.
+Two read-only ops, because listing a skillset and reading a skill are different questions and a single command-dispatched union could only say which arguments belong to which in prose:
 
-| Command | Input | Output |
-|---------|-------|--------|
-| `list` | `sources?` (skillsets, default `["w/skills", "v/skills/root"]`), `skills?` (individual skills) | The rendered index text — a string, or null when no skills exist (the assemble-op contract: null → entry skipped) |
-| `read` | exactly one of `name` (looked up across the declared sources) / `ref` | `{name, description, body?, tools, skills?, skillsets?, context?, path}` — `body` present when the skill has content |
+| Op | Tool | Input | Output |
+|----|------|-------|--------|
+| `v/ops/skills/list` | `skills_list` | `skillset?` — one directory of skills; omitted → the venue's configured entry skillsets | A map from each skill's resolved **path** to `{name, description, id}` |
+| `v/ops/skills/read` | `skills_read` | `skill` — one resolved path or asset ref | `{name, description, path, id, tools, body?, skills?, skillsets?, context?}` |
 
-Capability pins, per source actually read: workspace/venue/DID paths → `crud/read`; content-addressed refs → `asset/read`. Both sit inside the anonymous read-only scope, so venue skills are publicly discoverable. There is **no write surface** — skills are authored with `covia:write` and `asset:store`.
+**Single arity.** One skillset per list, one skill per read. That removes partial failure entirely — there is no "three of five worked" to represent — and the error says what to pass instead. The one plural case is the default: omit `skillset` and the venue's configured entry skillsets are listed, because "where should I start" is inherently a set.
 
-The defaults are venue-configurable (`adapters.skills.defaultSkillsets` / `defaultSkills`, see [CONFIG.md](CONFIG.md#adapter-configuration)) and published at `v/info/adapters/skills`, so a venue curating its own library answers discovery from it and clients read the entry point rather than assuming `v/skills/root`. They govern this operation only: agents declare their own sources, and an agent declaring none has skills off deliberately.
+**Listing pairs path with metadata.** A name alone does not say where a skill lives, and where it lives is what you need in order to read it, to see which skillset won a name collision, or to fix a source. Only actual skills appear: a skillset may sit beside nested directories or unrelated data, and a listing answers "what can I load here".
 
-Because `list` honours the assemble-op contract, an operator can pin the index into any agent the data-driven way instead of declaring sources:
+**`read` takes a path or asset ref, never a name.** A name is only meaningful against a declared set of skillsets, resolved first-wins at the moment of the call — there is no index to look one up in. Callers list a skillset to obtain the path; an agent's own by-name lookup is `skill_load`, which has its sources in scope.
 
-```json
-"context": [{"op": "v/ops/skills", "input": {"command": "list"}, "label": "Available skills"}]
-```
+**List degrades, read does not.** A skillset that does not resolve, or that the caller may not read, contributes nothing to a listing rather than failing it; the read pin still applies per skillset, so nothing from a denied one appears. A read is a specific request, so the same denial is an error.
 
-(This injects the index only — a first-class source declaration is what also activates `skill_load`.)
+Capability pins per resource read: a path needs `crud/read`; a content-addressed ref accepts either `asset/read` or `crud/read` over that hash. Both sit inside the anonymous read-only scope, so venue skills are publicly discoverable.
+
+There is **no write surface**. Skills are ordinary assets: create and update them with the lattice write and asset store operations, and remove them with the lattice delete operation.
+
+The defaults are venue-configurable (`adapters.skills.defaultSkillsets` / `defaultSkills`, see [CONFIG.md](CONFIG.md#adapter-configuration)) and published at `v/info/adapters/skills`, so a venue curating its own library answers discovery from it and clients read the entry point rather than assuming `v/skills/root`. They govern these operations only: agents declare their own sources, and an agent declaring none has skills off deliberately.
+
+**Rendering is not an operation.** The per-turn `[Skills]` index is built by `ContextBuilder` calling `Skills.renderIndex` directly — it never goes through an op. There is deliberately no callable render: it would exist only to pin an index into `config.context` as an assemble-op, which nothing ships and which a first-class source declaration does better, since that also activates `skill_load`. Add one if a real consumer appears.
 
 ---
 
@@ -412,7 +416,7 @@ Venue-installed skills ship as classpath resources registered by an adapter via 
 | **Assets** | A skill *is* an asset: standard metadata, body as content via the universal content resolution (CAS, `content.inline`, `content.dlfs` pinned/live), extras under a `skill` facet exactly as invocability sits under `operation`. |
 | **Operations** | Facets compose: an asset with both `operation` and `skill` is a self-documenting tool — loading it injects its manual and offers the op itself (§3.4). |
 | **Context loads / scope chain** | Skills are loads entries with a `skill` flag — the scope chain, budgets, eviction, and `context_unload` are reused, not duplicated. |
-| **`config.context`** | Pinned baseline knowledge, always loaded. Skills are the on-demand complement; the `skills:list` assemble-op bridges the two. |
+| **`config.context`** | Pinned baseline knowledge, always loaded. Skills are the on-demand complement, declared with `config.skills` / `config.skillsets`. |
 | **Agent templates** | Same philosophy (config is data), same string-reference idiom. A template declares what an agent *is*; a skill declares what an agent *can pick up*. Templates may ship `config.skills` / `config.skillsets`. |
 | **`more_tools` (goaltree)** | Skill tool activation reuses its mechanics. `more_tools` remains for raw op paths; skills add the instructions half and cross-runtime persistence. |
 | **Toolsets (#79)** | A skill facet with only `tools` + a description *is* a toolset — this design subsumes the #79 sketch. |

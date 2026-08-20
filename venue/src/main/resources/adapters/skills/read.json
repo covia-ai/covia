@@ -1,0 +1,20 @@
+{
+	"name": "Read Skill",
+	"description": "Reads one skill in full without loading it: its instructions, the operations it contributes, and the further skills and skillsets it makes discoverable. Takes a resolved path or asset ref — find one with the skill-list operation, since a skill name is only meaningful against declared sources. Read-only; author skills with the lattice write and asset store operations.",
+	"dateCreated": "2026-08-20T00:00:00Z",
+	"operation": {
+		"adapter": "skills:read",
+		"toolName": "skills_read",
+		"input": {
+			"type": "object",
+			"properties": {
+				"skill": { "type": "string", "description": "The skill to read: a resolved path such as 'v/skills/data/workspace' or 'w/skills/my-notes', or a content-addressed asset ref ('a/<hash>')." }
+			},
+			"required": ["skill"]
+		},
+		"output": {
+			"type": "object",
+			"description": "{name, description, path, id, tools, body?, skills?, skillsets?, context?}. 'id' is the content identity (the value hash of the resolved metadata) — two paths with the same id are the same skill. 'tools' are operation refs added to the palette while the skill is loaded. 'skills' and 'skillsets' are the individual skills and directories of skills it makes discoverable while loaded. 'body' is present when the skill has content; a contentless skill is a pure toolset. 'context' is its bundled context entries. Fails when the skill does not resolve, is not a skill, or the caller may not read it."
+		}
+	}
+}

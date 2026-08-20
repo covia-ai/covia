@@ -11,7 +11,8 @@
 			"v/ops/covia/list",
 			"v/ops/asset/get",
 			"v/ops/asset/list",
-			"v/ops/skills"
+			"v/ops/skills/list",
+			"v/ops/skills/read"
 		],
 		"skillsets": [
 			"v/skills/ops-tools",

@@ -9,7 +9,8 @@
 		"tools": [
 			"v/ops/covia/write",
 			"v/ops/asset/store",
-			"v/ops/skills"
+			"v/ops/skills/list",
+			"v/ops/skills/read"
 		]
 	}
 }

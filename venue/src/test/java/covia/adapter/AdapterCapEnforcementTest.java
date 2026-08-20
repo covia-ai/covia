@@ -1,5 +1,6 @@
 package covia.adapter;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -131,36 +132,32 @@ public class AdapterCapEnforcementTest {
 	// ===================== skills (read-only discovery) =====================
 
 	@Test public void skillsListAllowedUnderReadOnly() {
-		// Default sources (w/skills + v/skills) sit inside the owner-scoped
-		// read grant — venue skills are publicly discoverable.
-		assertFalse(capDenied(direct("skills", "manage", m("command", "list"), readOnly)));
+		// The configured default skillsets sit inside the owner-scoped read
+		// grant — venue skills are publicly discoverable.
+		assertFalse(capDenied(direct("skills", "list", Maps.empty(), readOnly)));
 	}
 	@Test public void skillsReadByAssetRefAllowedUnderReadOnly() {
 		// asset/read is in the scope; a missing asset errors but is not a denial.
-		assertFalse(capDenied(direct("skills", "manage",
-			m("command", "read", "ref", "a/" + "00".repeat(32)), readOnly)));
+		assertFalse(capDenied(direct("skills", "read",
+			m("skill", "a/" + "00".repeat(32)), readOnly)));
 	}
-	@Test public void skillsListCrossUserSourceDegradesUnderReadOnly() {
-		// list is a survey and DEGRADES: the denial is still enforced per source
-		// inside the resolver, but it renders as a visible diagnostic instead of
-		// failing the whole call, so a caller sees what they can see.
-		AMap<AString, ACell> input = m("command", "list").assoc(
-			Strings.create("sources"),
-			convex.core.data.Vectors.of(Strings.create("did:key:zSomeoneElse/w/skills")));
-		assertFalse(capDenied(direct("skills", "manage", input, readOnly)));
+	@Test public void skillsListCrossUserSkillsetDegradesUnderReadOnly() {
+		// list is a survey and DEGRADES: the pin is still enforced per skillset
+		// inside the resolver, but a denied one contributes nothing rather than
+		// failing the call, so a caller sees what they can see.
+		AMap<AString, ACell> input = m("skillset", "did:key:zSomeoneElse/w/skills");
+		assertFalse(capDenied(direct("skills", "list", input, readOnly)));
 
-		ACell index = directResult("skills", "manage", input, readOnly);
-		assertNotNull(index, "the denied source should render a diagnostic line");
-		assertTrue(index.toString().contains("did:key:zSomeoneElse/w/skills"), index.toString());
-		assertTrue(index.toString().contains("unavailable:"), index.toString());
+		ACell listing = directResult("skills", "list", input, readOnly);
+		assertNotNull(listing);
+		assertEquals(0, convex.core.lang.RT.ensureMap(listing).count(),
+			"nothing from a denied skillset may appear: " + listing);
 	}
 
-	@Test public void skillsReadCrossUserSourceDeniedUnderReadOnly() {
+	@Test public void skillsReadCrossUserSkillDeniedUnderReadOnly() {
 		// read is a specific request, so the same denial IS an error.
-		AMap<AString, ACell> input = m("command", "read", "name", "anything").assoc(
-			Strings.create("sources"),
-			convex.core.data.Vectors.of(Strings.create("did:key:zSomeoneElse/w/skills")));
-		assertTrue(capDenied(direct("skills", "manage", input, readOnly)));
+		assertTrue(capDenied(direct("skills", "read",
+			m("skill", "did:key:zSomeoneElse/w/skills/whatever"), readOnly)));
 	}
 
 	// ===================== file (scheme-qualified) =====================
