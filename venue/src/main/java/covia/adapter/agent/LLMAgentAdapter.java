@@ -244,7 +244,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 			.withConfig(recordConfig).withTools().build();
 		AVector<ACell> preliminaryTools = (AVector<ACell>) CONTEXT_TOOLS.concat(
 			preliminaryPalette.tools());
-		if (Skills.sourcesOf(recordConfig).count() > 0) {
+		if (!Skills.sourcesOf(recordConfig).isEmpty()) {
 			preliminaryTools = (AVector<ACell>) Vectors.of(
 				(ACell) TOOL_DEF_SKILL_LOAD).concat(preliminaryTools);
 		}
@@ -282,7 +282,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		// ContextBuilder only resolves catalog operations; harness tools live here.
 		AVector<ACell> tools = (AVector<ACell>) CONTEXT_TOOLS.concat(
 			preliminaryPalette.tools());
-		if (Skills.sourcesOf(context.config()).count() > 0) {
+		if (!Skills.sourcesOf(context.config()).isEmpty()) {
 			tools = (AVector<ACell>) Vectors.of((ACell) TOOL_DEF_SKILL_LOAD).concat(tools);
 		}
 		tools = (AVector<ACell>) tools.concat(loads.tools());
@@ -382,8 +382,8 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		// Offer skill_load only when the agent declares skill sources. The
 		// sources ride on the tool context as an opaque vector — all skills
 		// semantics live in Skills / the context assembly, not this adapter.
-		AVector<ACell> skillSources = Skills.sourcesOf(config);
-		if (skillSources.count() > 0) {
+		Skills.SkillSources skillSources = Skills.sourcesOf(config);
+		if (!skillSources.isEmpty()) {
 			baseTools = (AVector<ACell>) Vectors.of((ACell) TOOL_DEF_SKILL_LOAD).concat(baseTools);
 		}
 
@@ -984,9 +984,9 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		 *  (the dual of #215: control emitted as a tool, answer emitted as
 		 *  text). Null when the turn carried no text. */
 		AString turnText;
-		/** Skill sources from {@code config.skills} — opaque to this runtime
-		 *  ({@link Skills} owns the semantics). */
-		AVector<ACell> skillSources = Vectors.empty();
+		/** Skill sources from {@code config.skills} + {@code config.skillsets} —
+		 *  opaque to this runtime ({@link Skills} owns the semantics). */
+		Skills.SkillSources skillSources = Skills.SkillSources.EMPTY;
 		/** Tool names offered outside the loads mechanism (harness + config
 		 *  tools) — loads-contributed tools dedup against these. */
 		java.util.Set<String> fixedToolNames = java.util.Set.of();

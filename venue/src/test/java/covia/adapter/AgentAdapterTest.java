@@ -199,7 +199,7 @@ public class AgentAdapterTest {
 			config.get(Strings.intern("llmOperation")));
 		assertEquals(3, RT.ensureVector(config.get(Strings.intern("tools"))).count(),
 			"no-config agent should start with skilled inspect/read/list tools");
-		assertEquals(2, RT.ensureVector(config.get(Strings.intern("skills"))).count(),
+		assertEquals(2, RT.ensureVector(config.get(Strings.intern("skillsets"))).count(),
 			"no-config agent should discover workspace and venue skills");
 		assertNull(config.get(Strings.intern("model")),
 			"venue/provider should choose the default model");
@@ -408,7 +408,7 @@ public class AgentAdapterTest {
 				"operation", "v/ops/llmagent/chat",
 				"llmOperation", "v/ops/langchain/openai",
 				"model", "gpt-5.4-mini",
-				"skills", Vectors.of(Strings.create("w/skills"))));
+				"skillsets", Vectors.of(Strings.create("w/skills"))));
 		ACell result = engine.jobs().invokeOperation(
 			"v/ops/agent/create", input, RequestContext.of(ALICE_DID)).awaitResult(5000);
 
@@ -427,7 +427,7 @@ public class AgentAdapterTest {
 				"operation", "v/ops/llmagent/chat",
 				"llmOperation", "v/ops/langchain/openai",
 				"model", "gpt-5.4-mini",
-				"skills", Vectors.of(Strings.create("v/skills/definitely-not-real"))));
+				"skillsets", Vectors.of(Strings.create("v/skills/definitely-not-real"))));
 		ACell result = engine.jobs().invokeOperation(
 			"v/ops/agent/create", input, RequestContext.of(ALICE_DID)).awaitResult(5000);
 
@@ -445,7 +445,7 @@ public class AgentAdapterTest {
 				"operation", "v/ops/llmagent/chat",
 				"llmOperation", "v/ops/langchain/openai",
 				"model", "gpt-5.4-mini",
-				"skills", "w/skills"));
+				"skillsets", "w/skills"));
 		ACell result = engine.jobs().invokeOperation(
 			"v/ops/agent/create", input, RequestContext.of(ALICE_DID)).awaitResult(5000);
 
@@ -469,7 +469,7 @@ public class AgentAdapterTest {
 				"operation", "v/ops/llmagent/chat",
 				"llmOperation", "v/ops/langchain/openai",
 				"model", "gpt-5.4-mini",
-				"skills", Vectors.of(Strings.create("w/skills"))));
+				"skillsets", Vectors.of(Strings.create("w/skills"))));
 		ACell result = engine.jobs().invokeOperation(
 			"v/ops/agent/create", input, RequestContext.of(ALICE_DID)).awaitResult(5000);
 

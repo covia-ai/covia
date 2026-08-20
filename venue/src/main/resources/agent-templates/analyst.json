@@ -15,8 +15,10 @@
 				"v/ops/schema/coerce"
 			],
 			"defaultTools": false,
+			"skillsets": [
+				"w/skills"
+			],
 			"skills": [
-				"w/skills",
 				"v/skills/workspace",
 				"v/skills/discovery",
 				"v/skills/provenance",

@@ -94,7 +94,7 @@ public class SkillsTest {
 
 		RequestContext denied = ctx.withCaps(Vectors.empty());
 		assertThrows(covia.exception.AuthException.class, () ->
-			Skills.load(engine, denied, Vectors.of(Strings.create("w/skills")),
+			Skills.load(engine, denied, Skills.SkillSources.ofSkillsets(Vectors.of(Strings.create("w/skills"))),
 				Maps.of("ref", Strings.create("w/skills/private")), Maps.empty()),
 			"skill_load is a read action even though it is implemented by the harness");
 	}
@@ -114,7 +114,7 @@ public class SkillsTest {
 		assertEquals("Does X", s.displayBody());
 		assertEquals(0, s.toolOps().count());
 		assertEquals(0, s.contextEntries().count());
-		assertEquals(0, s.skillSources().count());
+		assertEquals(0, s.skills().count());
 	}
 
 	@Test
@@ -251,7 +251,7 @@ public class SkillsTest {
 		Skills.ResolvedSkill s = resolve("w/skills/rich");
 		assertEquals(5000, s.budget());
 		assertEquals(1, s.contextEntries().count());
-		assertEquals(Vectors.of(Strings.create("w/specialists")), s.skillSources());
+		assertEquals(Vectors.of(Strings.create("w/specialists")), s.skills());
 	}
 
 	@Test
@@ -284,7 +284,7 @@ public class SkillsTest {
 			Fields.DESCRIPTION, Strings.create("Bad"),
 			Skills.K_SKILL, Maps.of(Skills.K_SKILLS, Vectors.of(CVMLong.create(42)))));
 		assertTrue(assertThrows(RuntimeException.class, () -> resolve("w/skills/badskillentry"))
-			.getMessage().contains("skill source ref strings"));
+			.getMessage().contains("skill ref strings"));
 	}
 
 	@Test
@@ -292,12 +292,14 @@ public class SkillsTest {
 		write("w/root", Maps.of(
 			Fields.NAME, Strings.create("root"),
 			Fields.DESCRIPTION, Strings.create("Find specialist skills"),
-			Skills.K_SKILL, Maps.of(Skills.K_SKILLS, Vectors.of(
+			Skills.K_SKILL, Maps.of(Skills.K_SKILLSETS, Vectors.of(
 				Strings.create("w/specialists"), Strings.create("w/specialists")))));
 		write("w/specialists/reviewer", Maps.of(
 			Fields.DESCRIPTION, Strings.create("Review a result")));
 
-		AVector<ACell> configured = Vectors.of(Strings.create("w/root"));
+		// The router itself is an individual skill, not a directory.
+		Skills.SkillSources configured =
+			Skills.SkillSources.ofSkills(Vectors.of(Strings.create("w/root")));
 		assertThrows(RuntimeException.class,
 			() -> Skills.resolveByName(engine, ctx, configured, "reviewer"));
 
@@ -306,16 +308,19 @@ public class SkillsTest {
 		AVector<ACell> declared = Vectors.of(
 			Strings.create("w/specialists"), Strings.create("w/specialists"));
 		assertEquals(declared,
-			RT.getIn(root.result(), Skills.K_SKILLS));
+			RT.getIn(root.result(), Skills.K_SKILLSETS));
 		assertTrue(RT.getIn(root.result(), "skillIndex").toString()
 			.contains("- reviewer — Review a result"), root.result().toString());
 		assertEquals(declared,
-			root.entryMeta().get(Skills.K_SKILLS));
+			root.entryMeta().get(Skills.K_SKILLSETS));
 
 		AMap<AString, ACell> loads = Maps.of(root.path(), root.entryMeta());
-		AVector<ACell> effective = Skills.effectiveSources(configured, loads);
+		Skills.SkillSources effective = Skills.effectiveSources(configured, loads);
 		assertEquals(2, effective.count(), "duplicate child source refs are first-wins deduplicated");
-		assertEquals("w/root", effective.get(0).toString(), "configured sources retain priority");
+		assertEquals("w/root", effective.skills().get(0).toString(),
+			"the configured router stays an individual skill");
+		assertEquals("w/specialists", effective.skillsets().get(0).toString(),
+			"the contributed skillset joins the surface exactly once");
 
 		Skills.LoadOutcome child = Skills.load(engine, ctx, configured,
 			Maps.of(Fields.NAME, Strings.create("reviewer")), loads);
@@ -330,7 +335,8 @@ public class SkillsTest {
 		write("w/sk1/solo", Maps.of(Fields.DESCRIPTION, Strings.create("Only in sk1")));
 		write("w/sk2/dup", Maps.of(Fields.DESCRIPTION, Strings.create("Second")));
 
-		AVector<ACell> sources = Vectors.of(Strings.create("w/sk1"), Strings.create("w/sk2"));
+		Skills.SkillSources sources = Skills.SkillSources.ofSkillsets(
+			Vectors.of(Strings.create("w/sk1"), Strings.create("w/sk2")));
 		List<Skills.SkillIndexEntry> entries = Skills.listSkills(engine, ctx, sources);
 		assertEquals(2, entries.size());   // dup deduped first-wins, solo
 
@@ -345,22 +351,25 @@ public class SkillsTest {
 
 	@Test
 	public void testAbsentSourceSkippedQuietly() {
-		List<Skills.SkillIndexEntry> entries = Skills.listSkills(engine, ctx,
-			Vectors.of(Strings.create("w/no-such-dir")));
+		Skills.SkillSources missing =
+			Skills.SkillSources.ofSkillsets(Vectors.of(Strings.create("w/no-such-dir")));
+		List<Skills.SkillIndexEntry> entries = Skills.listSkills(engine, ctx, missing);
 		assertTrue(entries.isEmpty());
-		assertNull(Skills.renderIndex(engine, ctx, Vectors.of(Strings.create("w/no-such-dir")), null, true));
+		assertNull(Skills.renderIndex(engine, ctx, missing, null, true));
 	}
 
 	@Test
 	public void testNonStringSourceThrows() {
 		assertThrows(IllegalArgumentException.class, () ->
-			Skills.listSkills(engine, ctx, Vectors.of(CVMLong.create(1))));
+			Skills.listSkills(engine, ctx,
+				Skills.SkillSources.ofSkillsets(Vectors.of(CVMLong.create(1)))));
 	}
 
 	@Test
 	public void testResolveByNameNotFound() {
 		RuntimeException e = assertThrows(RuntimeException.class, () ->
-			Skills.resolveByName(engine, ctx, Vectors.of(Strings.create("w/skills")), "ghost"));
+			Skills.resolveByName(engine, ctx,
+				Skills.SkillSources.ofSkillsets(Vectors.of(Strings.create("w/skills"))), "ghost"));
 		assertTrue(e.getMessage().contains("ghost"));
 	}
 
@@ -372,8 +381,8 @@ public class SkillsTest {
 		write("w/skills/broken", Maps.of(Fields.NAME, Strings.create("broken")));  // no description
 		write("w/notadir", Strings.create("just a text value with spaces"));
 
-		AVector<ACell> sources = Vectors.of(
-			Strings.create("w/skills"), Strings.create("w/notadir"));
+		Skills.SkillSources sources = Skills.SkillSources.ofSkillsets(Vectors.of(
+			Strings.create("w/skills"), Strings.create("w/notadir")));
 		String index = Skills.renderIndex(engine, ctx, sources, null, true);
 		assertNotNull(index);
 		assertTrue(index.contains("- alpha — Alpha skill"), index);
@@ -390,8 +399,8 @@ public class SkillsTest {
 		write("w/skills/alpha", Maps.of(Fields.DESCRIPTION, Strings.create("Alpha skill")));
 		write("w/notadir", Strings.create("just a text value with spaces"));
 
-		AVector<ACell> sources = Vectors.of(
-			Strings.create("w/skills"), Strings.create("w/notadir"));
+		Skills.SkillSources sources = Skills.SkillSources.ofSkillsets(Vectors.of(
+			Strings.create("w/skills"), Strings.create("w/notadir")));
 		String index = Skills.renderIndex(engine, ctx, sources, null, false);
 		assertNotNull(index);
 		assertTrue(index.contains("- alpha — Alpha skill"), index);
@@ -399,7 +408,7 @@ public class SkillsTest {
 
 		// Failure-only sources render as nothing at all for the agent.
 		assertNull(Skills.renderIndex(engine, ctx,
-			Vectors.of(Strings.create("w/notadir")), null, false));
+			Skills.SkillSources.ofSkillsets(Vectors.of(Strings.create("w/notadir"))), null, false));
 	}
 
 	@Test
@@ -410,7 +419,7 @@ public class SkillsTest {
 			Strings.create("w/skills/alpha"), Skills.buildSkillLoadMeta(2000, s));
 
 		String index = Skills.renderIndex(engine, ctx,
-			Vectors.of(Strings.create("w/skills")), loads, false);
+			Skills.SkillSources.ofSkillsets(Vectors.of(Strings.create("w/skills"))), loads, false);
 		assertTrue(index.contains("- alpha — Alpha skill (loaded)"), index);
 	}
 
@@ -420,7 +429,8 @@ public class SkillsTest {
 	public void testBuildSkillLoadMetaAndIsSkillEntry() {
 		Hash id = Strings.create("skill-id-test").getHash();
 		Skills.ResolvedSkill s = new Skills.ResolvedSkill("pdf", "Extracts PDFs", "body",
-			Vectors.of(Strings.create("v/ops/covia/read")), Vectors.empty(), Vectors.empty(), 0,
+			Vectors.of(Strings.create("v/ops/covia/read")), Vectors.empty(), Vectors.empty(),
+			Vectors.empty(), 0,
 			Strings.create("w/skills/pdf"), id);
 		AMap<AString, ACell> meta = Skills.buildSkillLoadMeta(2000, s);
 
@@ -461,7 +471,7 @@ public class SkillsTest {
 
 		// ... and the index (loaded) marker matches by identity, not path
 		String index = Skills.renderIndex(engine, ctx,
-			Vectors.of(Strings.create("w/skills")), loads, false);
+			Skills.SkillSources.ofSkillsets(Vectors.of(Strings.create("w/skills"))), loads, false);
 		assertTrue(index.contains("- shared — A shared skill (loaded)"), index);
 	}
 
@@ -470,7 +480,8 @@ public class SkillsTest {
 		// The generic "a loads entry may declare tools" rule — skill entries
 		// are the first producer, but the mechanism is kind-agnostic.
 		Skills.ResolvedSkill s = new Skills.ResolvedSkill("x", "d", "b",
-			Vectors.of(Strings.create("v/ops/covia/read")), Vectors.empty(), Vectors.empty(), 0,
+			Vectors.of(Strings.create("v/ops/covia/read")), Vectors.empty(), Vectors.empty(),
+			Vectors.empty(), 0,
 			Strings.create("w/skills/x"), Strings.create("x-id").getHash());
 		AMap<AString, ACell> loads = Maps.of(
 			Strings.create("w/skills/x"), Skills.buildSkillLoadMeta(2000, s));
@@ -520,5 +531,142 @@ public class SkillsTest {
 
 		// Delimiter must open the text
 		assertNull(Skills.parseFrontmatter("\n---\nname: x\n---\nBody"));
+	}
+
+
+	@Test
+	public void testParseFrontmatterLists() {
+		// Flow sequences.
+		Skills.Frontmatter flow = Skills.parseFrontmatter("""
+			---
+			name: r
+			description: d
+			tools: [v/ops/a, "v/ops/b"]
+			skills: [w/s/one]
+			skillsets: [v/skills/data, v/skills/grid]
+			---
+			Body""");
+		assertEquals(Vectors.of(Strings.create("v/ops/a"), Strings.create("v/ops/b")), flow.tools());
+		assertEquals(Vectors.of(Strings.create("w/s/one")), flow.skills());
+		assertEquals(Vectors.of(Strings.create("v/skills/data"), Strings.create("v/skills/grid")),
+			flow.skillsets());
+		assertEquals("Body", flow.body());
+
+		// Block sequences — the form hand-written SKILL.md files usually take.
+		Skills.Frontmatter block = Skills.parseFrontmatter("""
+			---
+			description: d
+			skillsets:
+			  - v/skills/data
+			  - v/skills/grid
+			tools:
+			  - v/ops/a
+			---
+			Body""");
+		assertEquals(Vectors.of(Strings.create("v/skills/data"), Strings.create("v/skills/grid")),
+			block.skillsets());
+		assertEquals(Vectors.of(Strings.create("v/ops/a")), block.tools());
+		assertEquals("Body", block.body());
+
+		// A bare scalar is a one-element list; absent keys stay empty.
+		Skills.Frontmatter scalar = Skills.parseFrontmatter("""
+			---
+			description: d
+			skillsets: v/skills/data
+			---
+			Body""");
+		assertEquals(Vectors.of(Strings.create("v/skills/data")), scalar.skillsets());
+		assertEquals(0, scalar.skills().count());
+		assertEquals(0, scalar.tools().count());
+	}
+
+	@Test
+	public void testMarkdownSkillDeclaresChildSourcesInFrontmatter() {
+		// A self-contained SKILL.md router: no metadata facet at all.
+		write("w/md/router", Maps.of(
+			Fields.CONTENT, Maps.of(Strings.create("inline"), Strings.create("""
+				---
+				name: router
+				description: Opens the data family
+				skillsets: [w/specialists]
+				---
+				Use the specialists."""))));
+		write("w/specialists/reviewer", Maps.of(
+			Fields.DESCRIPTION, Strings.create("Review a result")));
+
+		Skills.ResolvedSkill s = resolve("w/md/router");
+		assertEquals("router", s.name());
+		assertEquals("Opens the data family", s.description());
+		assertEquals("Use the specialists.", s.body());
+		assertEquals(Vectors.of(Strings.create("w/specialists")), s.skillsets());
+
+		// And it works end-to-end: loading it reveals the child by name.
+		Skills.SkillSources configured =
+			Skills.SkillSources.ofSkills(Vectors.of(Strings.create("w/md/router")));
+		Skills.LoadOutcome root = Skills.load(engine, ctx, configured,
+			Maps.of(Fields.NAME, Strings.create("router")), Maps.empty());
+		AMap<AString, ACell> loads = Maps.of(root.path(), root.entryMeta());
+		assertEquals("w/specialists/reviewer",
+			Skills.load(engine, ctx, configured,
+				Maps.of(Fields.NAME, Strings.create("reviewer")), loads).path().toString());
+	}
+
+	@Test
+	public void testMetadataFacetBeatsFrontmatter() {
+		write("w/md/pinned", Maps.of(
+			Skills.K_SKILL, Maps.of(Skills.K_SKILLSETS, Vectors.of(Strings.create("w/from-metadata"))),
+			Fields.CONTENT, Maps.of(Strings.create("inline"), Strings.create("""
+				---
+				description: d
+				skillsets: [w/from-frontmatter]
+				---
+				Body"""))));
+		assertEquals(Vectors.of(Strings.create("w/from-metadata")),
+			resolve("w/md/pinned").skillsets());
+	}
+
+	@Test
+	public void testSkillsetsAndSkillsAreDistinctKinds() {
+		write("w/sets/alpha", Maps.of(Fields.DESCRIPTION, Strings.create("Alpha skill")));
+
+		// A directory declared as an individual skill is not walked as one.
+		Skills.SkillSources asSkill =
+			Skills.SkillSources.ofSkills(Vectors.of(Strings.create("w/sets")));
+		assertThrows(RuntimeException.class,
+			() -> Skills.resolveByName(engine, ctx, asSkill, "alpha"),
+			"a skillset declared under skills must not be walked as a directory");
+
+		// Declared correctly, the member is found.
+		Skills.SkillSources asSet =
+			Skills.SkillSources.ofSkillsets(Vectors.of(Strings.create("w/sets")));
+		assertEquals("alpha", Skills.resolveByName(engine, ctx, asSet, "alpha").name());
+	}
+
+	@Test
+	public void testNestedDirectoryInsideSkillsetIsNotAnInvalidSkill() {
+		write("w/lib/top", Maps.of(Fields.DESCRIPTION, Strings.create("A top-level skill")));
+		write("w/lib/nested/inner", Maps.of(Fields.DESCRIPTION, Strings.create("Inner skill")));
+
+		Skills.SkillSources sources =
+			Skills.SkillSources.ofSkillsets(Vectors.of(Strings.create("w/lib")));
+		String agentView = Skills.renderIndex(engine, ctx, sources, null, false);
+		assertTrue(agentView.contains("- top — A top-level skill"), agentView);
+		assertFalse(agentView.contains("nested"), "a nested directory is not an agent's concern");
+		assertFalse(agentView.contains("INVALID"), agentView);
+
+		// The operator surface names it, so a mis-shaped library is diagnosable.
+		String operatorView = Skills.renderIndex(engine, ctx, sources, null, true);
+		assertTrue(operatorView.contains("w/lib/nested"), operatorView);
+	}
+
+	@Test
+	public void testMisdirectedSkillsetDetection() {
+		write("w/tree/group/reader", Maps.of(Fields.DESCRIPTION, Strings.create("Deep skill")));
+		// w/tree holds skillsets, not skills — the classic v/skills mistake.
+		assertEquals("w/tree", Skills.misdirectedSkillset(engine, ctx,
+			Vectors.of(Strings.create("w/tree"))).toString());
+		// A real skillset, and an absent path, are both fine.
+		assertNull(Skills.misdirectedSkillset(engine, ctx, Vectors.of(Strings.create("w/tree/group"))));
+		assertNull(Skills.misdirectedSkillset(engine, ctx, Vectors.of(Strings.create("w/nothing-here"))));
 	}
 }

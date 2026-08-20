@@ -116,7 +116,8 @@ public class SkillsLibraryTest {
 	@Test
 	public void testIndexRendersAllAndCompact() {
 		String index = Skills.renderIndex(engine, ctx,
-			Vectors.of((ACell) Strings.create("v/skills")), null, true);
+			Skills.SkillSources.ofSkillsets(Vectors.of((ACell) Strings.create("v/skills"))),
+			null, true);
 		assertNotNull(index);
 		for (String name : shippedSkills()) {
 			assertTrue(index.contains("- " + name + " — "), "index missing " + name + ":\n" + index);
@@ -159,17 +160,21 @@ public class SkillsLibraryTest {
 				"manager", "goaltree", "full"}) {
 			ACell asset = engine.resolvePath(Strings.create("v/agents/templates/" + t), ctx);
 			ACell config = RT.getIn(asset, "agent", "config");
-			AVector<ACell> sources = RT.ensureVector(RT.getIn(config, "skills"));
-			assertNotNull(sources, t + " template should declare skills sources");
-			assertEquals("w/skills", sources.get(0).toString());   // user skills shadow venue skills
+			AVector<ACell> sets = RT.ensureVector(RT.getIn(config, "skillsets"));
+			assertNotNull(sets, t + " template should declare skillsets");
+			assertEquals("w/skills", sets.get(0).toString());   // user skills shadow venue skills
+			AVector<ACell> named = RT.ensureVector(RT.getIn(config, "skills"));
 			if (java.util.Set.of("minimal", "skilled", "goaltree", "full").contains(t)) {
-				assertEquals(2, sources.count(), t);
-				assertEquals("v/skills", sources.get(1).toString());
+				assertEquals(2, sets.count(), t);
+				assertEquals("v/skills", sets.get(1).toString());
+				assertNull(named, t + " general template curates nothing individually");
 			} else {
-				assertTrue(sources.count() > 2, t + " should have a curated venue subset");
-				for (long i = 1; i < sources.count(); i++) {
-					assertTrue(sources.get(i).toString().startsWith("v/skills/"),
-						t + " source should be one named venue skill: " + sources.get(i));
+				assertEquals(1, sets.count(), t + " specialists take only user skills wholesale");
+				assertNotNull(named, t + " should curate individual venue skills");
+				assertTrue(named.count() >= 4, t + " should have a curated venue subset");
+				for (long i = 0; i < named.count(); i++) {
+					assertTrue(named.get(i).toString().startsWith("v/skills/"),
+						t + " should name one venue skill: " + named.get(i));
 				}
 			}
 		}
@@ -299,9 +304,9 @@ public class SkillsLibraryTest {
 
 	@Test
 	public void testNamedSkillPathIsAFirstClassSource() {
-		AVector<ACell> sources = Vectors.of(
+		Skills.SkillSources sources = Skills.SkillSources.ofSkills(Vectors.of(
 			(ACell) Strings.create("v/skills/models"),
-			(ACell) Strings.create("v/skills/tasks"));
+			(ACell) Strings.create("v/skills/tasks")));
 		String index = Skills.renderIndex(engine, ctx, sources, null, true);
 		assertTrue(index.contains("- models — "), index);
 		assertTrue(index.contains("- tasks — "), index);
@@ -312,7 +317,8 @@ public class SkillsLibraryTest {
 	@Test
 	public void testSpecialistTemplateIndexesStayCurated() {
 		String fullIndex = Skills.renderIndex(engine, ctx,
-			Vectors.of((ACell) Strings.create("v/skills")), null, true);
+			Skills.SkillSources.ofSkillsets(Vectors.of((ACell) Strings.create("v/skills"))),
+			null, true);
 		java.util.Map<String, java.util.Set<String>> expected = java.util.Map.of(
 			"reader", java.util.Set.of("discovery", "provenance", "assets", "skills"),
 			"worker", java.util.Set.of("workspace", "files", "assets", "provenance"),
@@ -322,8 +328,9 @@ public class SkillsLibraryTest {
 		for (var entry : expected.entrySet()) {
 			ACell asset = engine.resolvePath(
 				Strings.create("v/agents/templates/" + entry.getKey()), ctx);
-			AVector<ACell> sources = RT.ensureVector(
-				RT.getIn(asset, "agent", "config", "skills"));
+			Skills.SkillSources sources = new Skills.SkillSources(
+				RT.ensureVector(RT.getIn(asset, "agent", "config", "skills")),
+				RT.ensureVector(RT.getIn(asset, "agent", "config", "skillsets")));
 			String index = Skills.renderIndex(engine, ctx, sources, null, true);
 			for (String skill : entry.getValue()) {
 				assertTrue(index.contains("- " + skill + " — "),
@@ -362,5 +369,23 @@ public class SkillsLibraryTest {
 		ACell minimalAsset = engine.resolvePath(Strings.create("v/agents/templates/minimal"), ctx);
 		ACell minimal = RT.getIn(minimalAsset, "agent", "config");
 		assertNull(RT.getIn(minimal, "tools"));
+	}
+
+	/**
+	 * Boot validation diagnoses the venue's own library. Today {@code v/skills}
+	 * is still FLAT — skills sit where skillsets belong — so every entry is
+	 * reported. Re-homing the library into skillsets is the follow-up; when
+	 * that lands this assertion becomes {@code 0} and stays there, guarding
+	 * against a packaging mistake reaching an operator's log.
+	 */
+	@Test
+	public void testVenueSkillLibraryIsValidated() {
+		int problems = Skills.validateVenueLibrary(engine);
+		assertTrue(problems > 0,
+			"the flat library should currently be diagnosed as needing re-homing");
+		// One problem per top-level entry: each is a skill at skillset level.
+		ACell root = engine.resolvePath(Strings.create(Skills.VENUE_SKILLS), ctx);
+		assertEquals(RT.ensureMap(root).count(), problems,
+			"every flat entry should be reported exactly once");
 	}
 }

@@ -611,7 +611,7 @@ public class LLMAgentAdapterTest {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		AMap<AString, ACell> config = Maps.of(
 			"llmOperation", "v/test/ops/llm",
-			"skills", Vectors.of(Strings.create("w/skills")));
+			"skillsets", Vectors.of(Strings.create("w/skills")));
 
 		// Inspection uses the same builder chain as processChat — the index
 		// must appear as a system message in the assembled L3 input.
@@ -692,7 +692,7 @@ public class LLMAgentAdapterTest {
 			Fields.AGENT_ID, "bad-skills-agent",
 			AgentState.KEY_CONFIG, Maps.of(
 				"llmOperation", "v/test/ops/llm",
-				"skills", "w/skills"),
+				"skillsets", "w/skills"),
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "hello")));
 
 		RuntimeException e = assertThrows(RuntimeException.class,
@@ -720,7 +720,8 @@ public class LLMAgentAdapterTest {
 	private ToolContext skillToolCtx() {
 		ToolContext ctx = new ToolContext(Strings.create("agent"),
 			RequestContext.of(ALICE_DID), null, null, null, null);
-		ctx.skillSources = Vectors.of((ACell) Strings.create("w/skills"));
+		ctx.skillSources = Skills.SkillSources.ofSkillsets(
+			Vectors.of((ACell) Strings.create("w/skills")));
 		return ctx;
 	}
 
@@ -880,7 +881,7 @@ public class LLMAgentAdapterTest {
 			Fields.AGENT_ID, "skill-agent",
 			AgentState.KEY_CONFIG, Maps.of(
 				"llmOperation", "v/test/ops/skillllm",
-				"skills", Vectors.of(Strings.create("w/skills"))),
+				"skillsets", Vectors.of(Strings.create("w/skills"))),
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "use the alpha skill")),
 			Fields.SESSION, Maps.of(Fields.ID, Strings.create("s1")));
 
@@ -937,7 +938,7 @@ public class LLMAgentAdapterTest {
 				Fields.CONFIG, Maps.of(
 					Fields.OPERATION, "v/ops/llmagent/chat",
 					"llmOperation", "v/test/ops/skillllm",
-					"skills", Vectors.of(Strings.create("w/skills")))),
+					"skillsets", Vectors.of(Strings.create("w/skills")))),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		User user = engine.getVenueState().users().get(ALICE_DID);

@@ -348,6 +348,12 @@ public abstract class AAdapter {
 		String name = getName();
 		String rel = catalogPath;
 		if (rel.startsWith(name + "/")) rel = rel.substring(name.length() + 1);
+		// Skills flatten: the adapter's own skills/ directory must be a usable
+		// SKILLSET (a flat directory of skills), so a grouped canonical path
+		// such as "data/workspace" mirrors as "workspace" rather than nesting a
+		// directory inside it. Skills and directories are separate kinds and
+		// must not be mixed — see venue/docs/SKILLS.md §4.1.
+		if ("skills".equals(kind)) rel = rel.substring(rel.lastIndexOf('/') + 1);
 		return "v/adapters/" + name + "/" + kind + "/" + rel;
 	}
 

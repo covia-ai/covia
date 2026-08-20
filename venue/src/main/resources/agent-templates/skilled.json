@@ -9,7 +9,7 @@
 				"v/ops/covia/read",
 				"v/ops/covia/list"
 			],
-			"skills": [
+			"skillsets": [
 				"w/skills",
 				"v/skills"
 			],

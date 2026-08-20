@@ -34,7 +34,7 @@
 				"context_load",
 				"context_unload"
 			],
-			"skills": [
+			"skillsets": [
 				"w/skills",
 				"v/skills"
 			]

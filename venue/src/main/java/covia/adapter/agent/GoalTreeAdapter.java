@@ -1081,7 +1081,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// (config.skills) — same rule as llmagent; bare-name opt-in via
 		// config.tools also works through the registry. Skills semantics live
 		// in Skills/ContextBuilder; this runtime only offers and glues.
-		if (Skills.sourcesOf(config).count() > 0
+		if (!Skills.sourcesOf(config).isEmpty()
 				&& !hasToolNamed(harnessForFrame, TOOL_SKILL_LOAD)) {
 			harnessForFrame = harnessForFrame.conj(TOOL_DEF_SKILL_LOAD);
 		}

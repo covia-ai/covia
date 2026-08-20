@@ -68,6 +68,7 @@ final class VenueBootstrapMaterializer {
 		materializer.writeAdapterCatalog();
 		materializer.writeVenueInformation();
 		materializer.publish();
+		covia.adapter.agent.Skills.validateVenueLibrary(engine);
 	}
 
 	/** Backward-compatible catalog-only entry point, committed as one fork sync. */
@@ -75,6 +76,7 @@ final class VenueBootstrapMaterializer {
 		VenueBootstrapMaterializer materializer = new VenueBootstrapMaterializer(engine);
 		materializer.writeAdapterCatalog();
 		materializer.publish();
+		covia.adapter.agent.Skills.validateVenueLibrary(engine);
 	}
 
 	/** Backward-compatible venue-info-only entry point, committed as one fork sync. */

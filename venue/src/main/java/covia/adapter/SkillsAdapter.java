@@ -44,6 +44,7 @@ public class SkillsAdapter extends AAdapter {
 	private static final AString K_BODY     = Strings.intern("body");
 	private static final AString K_CONTEXT  = Strings.intern("context");
 	private static final AString K_SKILLS   = Strings.intern("skills");
+	private static final AString K_SKILLSETS = Strings.intern("skillsets");
 
 	@Override
 	public String getName() {
@@ -111,7 +112,7 @@ public class SkillsAdapter extends AAdapter {
 	// ========== list — render the skill index ==========
 
 	private ACell handleList(RequestContext ctx, ACell input) {
-		AVector<ACell> sources = sourcesOf(input);
+		Skills.SkillSources sources = sourcesOf(input);
 		requireReadCaps(ctx, sources);
 		String index = Skills.renderIndex(engine, ctx, sources, null, true);
 		// Null when no skills exist — the assemble-op contract (entry skipped).
@@ -132,7 +133,7 @@ public class SkillsAdapter extends AAdapter {
 			requireReadCap(ctx, ref);
 			skill = Skills.resolveRef(engine, ctx, ref);
 		} else {
-			AVector<ACell> sources = sourcesOf(input);
+			Skills.SkillSources sources = sourcesOf(input);
 			requireReadCaps(ctx, sources);
 			skill = Skills.resolveByName(engine, ctx, sources, name.toString());
 		}
@@ -150,21 +151,39 @@ public class SkillsAdapter extends AAdapter {
 		if (skill.contextEntries().count() > 0) {
 			out = out.assoc(K_CONTEXT, skill.contextEntries());
 		}
-		if (skill.skillSources().count() > 0) {
-			out = out.assoc(K_SKILLS, skill.skillSources());
+		if (skill.skills().count() > 0) {
+			out = out.assoc(K_SKILLS, skill.skills());
+		}
+		if (skill.skillsets().count() > 0) {
+			out = out.assoc(K_SKILLSETS, skill.skillsets());
 		}
 		return out;
 	}
 
 	// ========== helpers ==========
 
-	/** The caller's sources, defaulting to {@code ["w/skills", "v/skills"]}. */
-	private static AVector<ACell> sourcesOf(ACell input) {
-		ACell v = RT.getIn(input, "sources");
-		if (v == null) return DEFAULT_SOURCES;
-		AVector<ACell> sources = RT.ensureVector(v);
-		if (sources == null) throw new IllegalArgumentException("sources must be an array of refs");
-		return sources;
+	/**
+	 * The caller's discovery surface: {@code sources} names skillsets
+	 * (directories, the common case — default {@link #DEFAULT_SOURCES}), while
+	 * the optional {@code skills} input names individual skills.
+	 */
+	private static Skills.SkillSources sourcesOf(ACell input) {
+		return new Skills.SkillSources(
+			refVector(input, "skills", Vectors.empty()),
+			refVector(input, "sources", DEFAULT_SOURCES));
+	}
+
+	private static AVector<ACell> refVector(ACell input, String key, AVector<ACell> fallback) {
+		ACell v = RT.getIn(input, key);
+		if (v == null) return fallback;
+		AVector<ACell> refs = RT.ensureVector(v);
+		if (refs == null) throw new IllegalArgumentException(key + " must be an array of refs");
+		return refs;
+	}
+
+	private void requireReadCaps(RequestContext ctx, Skills.SkillSources sources) {
+		requireReadCaps(ctx, sources.skills());
+		requireReadCaps(ctx, sources.skillsets());
 	}
 
 	private void requireReadCaps(RequestContext ctx, AVector<ACell> sources) {

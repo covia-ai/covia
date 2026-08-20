@@ -14,8 +14,10 @@
 				"v/ops/covia/list"
 			],
 			"defaultTools": false,
+			"skillsets": [
+				"w/skills"
+			],
 			"skills": [
-				"w/skills",
 				"v/skills/workspace",
 				"v/skills/files",
 				"v/skills/assets",

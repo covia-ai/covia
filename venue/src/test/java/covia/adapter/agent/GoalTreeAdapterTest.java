@@ -103,7 +103,7 @@ public class GoalTreeAdapterTest {
 			AgentState.KEY_STATE, null,
 			AgentState.KEY_CONFIG, Maps.of(
 				Strings.create("llmOperation"), Strings.create("v/test/ops/skillllm"),
-				Strings.create("skills"), Vectors.of(Strings.create("w/skills"))),
+				Strings.create("skillsets"), Vectors.of(Strings.create("w/skills"))),
 			Fields.MESSAGES, Vectors.of(
 				(ACell) Maps.of(Strings.create("content"), Strings.create("use the alpha skill"))));
 
@@ -206,7 +206,7 @@ public class GoalTreeAdapterTest {
 		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
 		AMap<AString, ACell> config = Maps.of(
 			"llmOperation", "v/test/ops/llm",
-			"skills", Vectors.of(Strings.create("w/skills")));
+			"skillsets", Vectors.of(Strings.create("w/skills")));
 
 		AMap<AString, ACell> l3 = adapter.buildFirstIterationL3Input(config, null, null, ALICE);
 		AVector<ACell> messages = RT.ensureVector(RT.getIn(l3, Fields.MESSAGES));

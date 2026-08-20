@@ -11,8 +11,10 @@
 				"v/ops/covia/slice"
 			],
 			"defaultTools": false,
+			"skillsets": [
+				"w/skills"
+			],
 			"skills": [
-				"w/skills",
 				"v/skills/discovery",
 				"v/skills/provenance",
 				"v/skills/assets",

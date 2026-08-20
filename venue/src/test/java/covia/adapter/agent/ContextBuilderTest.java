@@ -246,7 +246,7 @@ public class ContextBuilderTest {
 	public void testSkillsIndexInjected() {
 		writeSkill("w/skills/alpha", "Alpha skill");
 		AMap<AString, ACell> config = Maps.of(
-			Strings.intern("skills"), Vectors.of((ACell) Strings.create("w/skills")));
+			Strings.intern("skillsets"), Vectors.of((ACell) Strings.create("w/skills")));
 
 		ContextBuilder builder = new ContextBuilder(engine, ctx);
 		ContextBuilder.ContextResult result = builder
@@ -281,7 +281,7 @@ public class ContextBuilderTest {
 	public void testSkillsIndexLoadedMarker() {
 		writeSkill("w/skills/alpha", "Alpha skill");
 		AMap<AString, ACell> config = Maps.of(
-			Strings.intern("skills"), Vectors.of((ACell) Strings.create("w/skills")));
+			Strings.intern("skillsets"), Vectors.of((ACell) Strings.create("w/skills")));
 		AMap<AString, ACell> effectiveLoads = Maps.of(
 			Strings.create("w/skills/alpha"), Maps.of(
 				Strings.create("skill"), CVMBool.TRUE,
@@ -301,7 +301,7 @@ public class ContextBuilderTest {
 			Maps.of(Fields.PATH, Strings.create("w/root-skill"), Fields.VALUE, Maps.of(
 				Fields.NAME, Strings.create("root-skill"),
 				Fields.DESCRIPTION, Strings.create("Reveals specialists"),
-				Skills.K_SKILL, Maps.of(Skills.K_SKILLS,
+				Skills.K_SKILL, Maps.of(Skills.K_SKILLSETS,
 					Vectors.of(Strings.create("w/specialists"))))), ctx).awaitResult(5000);
 		writeSkill("w/specialists/reviewer", "Review a result");
 		Skills.ResolvedSkill root = Skills.resolveRef(engine, ctx, Strings.create("w/root-skill"));
@@ -331,13 +331,13 @@ public class ContextBuilderTest {
 
 		// Empty sources / sources that resolve to nothing → no block either.
 		ContextBuilder.ContextResult empty = new ContextBuilder(engine, ctx)
-			.withConfig(Maps.of(Strings.intern("skills"), Vectors.empty()))
+			.withConfig(Maps.of(Strings.intern("skillsets"), Vectors.empty()))
 			.withSkillsIndex(null)
 			.build();
 		assertFalse(allContent(empty).contains("[Skills]"));
 
 		ContextBuilder.ContextResult absent = new ContextBuilder(engine, ctx)
-			.withConfig(Maps.of(Strings.intern("skills"),
+			.withConfig(Maps.of(Strings.intern("skillsets"),
 				Vectors.of((ACell) Strings.create("w/no-skills-here"))))
 			.withSkillsIndex(null)
 			.build();
@@ -348,13 +348,13 @@ public class ContextBuilderTest {
 	public void testInvalidConfigSkillsThrows() {
 		// Malformed config.skills fails loudly — same rule as config.context.
 		ContextBuilder notArray = new ContextBuilder(engine, ctx)
-			.withConfig(Maps.of(Strings.intern("skills"), Strings.create("w/skills")));
+			.withConfig(Maps.of(Strings.intern("skillsets"), Strings.create("w/skills")));
 		RuntimeException e1 = assertThrows(RuntimeException.class,
 			() -> notArray.withSkillsIndex(null));
 		assertTrue(e1.getMessage().contains("config.skills"), e1.getMessage());
 
 		ContextBuilder badEntry = new ContextBuilder(engine, ctx)
-			.withConfig(Maps.of(Strings.intern("skills"), Vectors.of(CVMLong.create(42))));
+			.withConfig(Maps.of(Strings.intern("skillsets"), Vectors.of(CVMLong.create(42))));
 		RuntimeException e2 = assertThrows(RuntimeException.class,
 			() -> badEntry.withSkillsIndex(null));
 		assertTrue(e2.getMessage().contains("config.skills"), e2.getMessage());

@@ -33,6 +33,7 @@ import convex.core.util.Utils;
 import covia.adapter.agent.AbstractLLMAdapter;
 import covia.adapter.agent.ContextBuilder;
 import covia.adapter.agent.ContextInspectable;
+import covia.adapter.agent.Skills;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -686,7 +687,7 @@ public class AgentAdapter extends AAdapter {
 		if (toolWarn != null) warnings = warnings.conj(toolWarn);
 		AString unavailableWarn = unavailableToolsWarning(config, ctx);
 		if (unavailableWarn != null) warnings = warnings.conj(unavailableWarn);
-		AString skillsWarn = skillSourcesWarning(config);
+		AString skillsWarn = skillSourcesWarning(ctx, config);
 		if (skillsWarn != null) warnings = warnings.conj(skillsWarn);
 		AString keyWarn = rawApiKeyWarning(config);
 		if (keyWarn != null) warnings = warnings.conj(keyWarn);
@@ -694,24 +695,32 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Advisory for {@code config.skills} (see venue/docs/SKILLS.md): a
-	 * malformed shape (non-array, non-string entry) THROWS at transition time,
-	 * so it's flagged here at the moment it's fixable.
+	 * Advisory for {@code config.skills} / {@code config.skillsets} (see
+	 * venue/docs/SKILLS.md): a malformed shape (non-array, non-string entry)
+	 * THROWS at transition time, so it's flagged here at the moment it's
+	 * fixable.
 	 *
-	 * <p>Unresolved sources are deliberately NOT warned about. Sources are
-	 * maybe-style paths resolved live each turn — absence is a normal value
-	 * (an empty {@code w/skills} is the designed default in every standard
-	 * template), and a venue without some {@code v/skills/*} entry is a
-	 * legitimate target for a portable config. Source diagnostics live on the
-	 * inspection surface ({@code skills:list}) for whoever configured the
-	 * sources, never in the create response or the agent's own context.</p>
+	 * <p>Merely <i>unresolved</i> sources are deliberately NOT warned about.
+	 * Sources are maybe-style paths resolved live each turn — absence is a
+	 * normal value (an empty {@code w/skills} is the designed default in every
+	 * standard template), and a venue without some {@code v/skills/*} entry is
+	 * a legitimate target for a portable config.</p>
+	 *
+	 * <p>A skillset that resolves to a directory of <b>directories</b> is a
+	 * different matter: that is a definite misconfiguration (classically
+	 * {@code v/skills} instead of {@code v/skills/root}) which would silently
+	 * yield an empty index, so it is called out.</p>
 	 */
-	private AString skillSourcesWarning(AMap<AString, ACell> config) {
+	private AString skillSourcesWarning(RequestContext ctx, AMap<AString, ACell> config) {
 		if (config == null) return null;
-		ACell raw = config.get(Strings.intern("skills"));
-		if (raw == null) return null;
 		try {
-			ContextBuilder.skillSources(raw);
+			Skills.SkillSources sources = Skills.sourcesOf(config);
+			AString misdirected = Skills.misdirectedSkillset(engine, ctx, sources.skillsets());
+			if (misdirected != null) {
+				return Strings.create("config.skillsets entry '" + misdirected
+					+ "' is a directory of skillsets, not of skills — it will contribute no skills"
+					+ " (did you mean " + misdirected + "/root?)");
+			}
 		} catch (RuntimeException e) {
 			return Strings.create(describeFailure(e)
 				+ " (the agent will fail at transition time until this is fixed)");

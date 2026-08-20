@@ -412,13 +412,13 @@ public class ContextBuilder {
 		+ "loaded skill is no longer useful.\n";
 
 	/**
-	 * Injects the skills index — one compact system message listing the
-	 * skills discoverable from the agent's {@code config.skills} sources plus
-	 * child sources contributed by loaded skills,
+	 * Injects the skills index — one compact system message listing the skills
+	 * discoverable from the agent's {@code config.skills} and
+	 * {@code config.skillsets} plus the refs contributed by loaded skills,
 	 * with a {@code (loaded)} marker against skills already in effective
 	 * context (see venue/docs/SKILLS.md §4). Resolved fresh each turn, like
 	 * every other ephemeral section. No-op when the agent declares no skill
-	 * sources or the sources yield nothing; a malformed {@code config.skills}
+	 * sources or the sources yield nothing; a malformed declaration
 	 * throws (same rule as {@code config.context} — a configuration error
 	 * must fail loudly, not vanish).
 	 *
@@ -426,9 +426,9 @@ public class ContextBuilder {
 	 *        null when no loads tier is in scope
 	 */
 	public ContextBuilder withSkillsIndex(AMap<AString, ACell> effectiveLoads) {
-		AVector<ACell> configured = skillSources(config == null ? null : config.get(K_SKILLS));
-		AVector<ACell> sources = Skills.effectiveSources(configured, effectiveLoads);
-		if (sources.count() == 0) return this;
+		Skills.SkillSources sources =
+			Skills.effectiveSources(Skills.sourcesOf(config), effectiveLoads);
+		if (sources.isEmpty()) return this;
 
 		// No source diagnostics in agent context — setup problems belong to
 		// whoever configured the sources (skills:list), not the running agent.
@@ -443,23 +443,26 @@ public class ContextBuilder {
 	}
 
 	/**
-	 * Coerces a {@code config.skills} value to a vector of source ref strings.
-	 * Absent → empty (no skills for this agent). A non-vector value or a
-	 * non-string entry is a configuration error and throws — mirroring
-	 * {@link #contextVector}'s malformed-shape rule.
+	 * Coerces a {@code config.skills} / {@code config.skillsets} value to a
+	 * vector of refs. Absent → empty. A non-vector value or a non-string entry
+	 * is a configuration error and throws — mirroring {@link #contextVector}'s
+	 * malformed-shape rule.
+	 *
+	 * @param key which declaration is being read, for the error message
 	 */
 	@SuppressWarnings("unchecked")
-	public static AVector<ACell> skillSources(ACell raw) {
+	public static AVector<ACell> skillSources(ACell raw, AString key) {
 		if (raw == null) return Vectors.empty();
+		String kind = Skills.K_SKILLSETS.equals(key) ? "skillset" : "skill";
 		if (!(raw instanceof AVector)) {
-			throw new RuntimeException("config.skills must be an array of skill source refs, got "
-				+ Types.get(raw) + " — fix the agent config");
+			throw new RuntimeException("config." + key + " must be an array of " + kind
+				+ " refs, got " + Types.get(raw) + " — fix the agent config");
 		}
 		AVector<ACell> sources = (AVector<ACell>) raw;
 		for (long i = 0; i < sources.count(); i++) {
 			if (RT.ensureString(sources.get(i)) == null) {
-				throw new RuntimeException("config.skills entries must be source ref strings, got "
-					+ Types.get(sources.get(i)) + " — fix the agent config");
+				throw new RuntimeException("config." + key + " entries must be " + kind
+					+ " ref strings, got " + Types.get(sources.get(i)) + " — fix the agent config");
 			}
 		}
 		return sources;

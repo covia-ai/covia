@@ -25,6 +25,9 @@ import covia.api.Fields;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 /**
  * The single resolver for agent skills — named, discoverable bundles of
  * instructions, context, and tools that an agent loads on demand.
@@ -32,19 +35,24 @@ import covia.venue.RequestContext;
  * <p>A skill is an <b>asset</b>: ordinary asset metadata ({@code name},
  * {@code description}, the standard {@code content} descriptor) with the
  * loadable extras under a {@code skill} facet ({@code tools}, {@code skills},
- * {@code context}, {@code budget}) — mirroring how invocability sits under
- * the {@code operation} facet. The body is the asset's content, resolved
+ * {@code skillsets}, {@code context}, {@code budget}) — mirroring how
+ * invocability sits under the {@code operation} facet. The body is the asset's content, resolved
  * through the venue's universal content resolution ({@link Engine#resolveContent}),
  * falling back to the {@code description}. A value is interpreted as a skill
  * only through an explicit skill surface: a {@code config.skills} source, an
  * entry in a skills directory, or the target of {@code skill_load}.</p>
  *
- * <p>Skill sources are positional: a path may resolve to a directory whose
- * keys are skill names or directly to one skill; an asset ref is also one
- * skill. Directory values are asset metadata maps or string references to
- * skill assets (the template string-ref idiom, one hop). Inline bodies use the standard
- * {@code content.inline} metadata declaration; SKILL.md YAML frontmatter in
- * any content supplies name/description when the metadata lacks them.</p>
+ * <p>Discovery has two <b>declared</b> kinds, never sniffed: a
+ * <b>skill</b> ref addresses one skill (a path or an {@code a/<hash>} asset
+ * ref), and a <b>skillset</b> ref addresses a directory whose keys are skill
+ * names. Assets and directories are never mixed at one level, so
+ * {@code v/skills} holds skillsets while {@code v/skills/root} holds skills.
+ * Skillset members are asset metadata maps or string references to skill
+ * assets (the template string-ref idiom, one hop). Inline bodies use the
+ * standard {@code content.inline} metadata declaration; SKILL.md YAML
+ * frontmatter supplies {@code name}/{@code description} and may declare
+ * {@code tools}/{@code skills}/{@code skillsets} when the metadata facet
+ * leaves them empty.</p>
  *
  * <p>Used by the {@code skills} venue op, the {@code skill_load} harness tool,
  * and {@link ContextBuilder}'s per-turn index/rendering — one resolver, so the
@@ -54,10 +62,17 @@ public final class Skills {
 
 	private Skills() {}
 
+	private static final Logger log = LoggerFactory.getLogger(Skills.class);
+
+	/** The venue's skill library root — a directory of skillsets, never of skills. */
+	public static final String VENUE_SKILLS = "v/skills";
+
 	/** The skill facet key on asset metadata, and the flag key on loads entries. */
 	public static final AString K_SKILL = Strings.intern("skill");
-	/** Child skill-source refs contributed while a skill is loaded. */
+	/** Individual child skill refs contributed while a skill is loaded. */
 	public static final AString K_SKILLS = Strings.intern("skills");
+	/** Child skillset refs — directories of skills — contributed while loaded. */
+	public static final AString K_SKILLSETS = Strings.intern("skillsets");
 
 	private static final AString K_CONTEXT = Strings.intern("context");
 	private static final AString K_BUDGET  = Strings.intern("budget");
@@ -80,7 +95,10 @@ public final class Skills {
 	 *        {@code skill.tools} entries, plus the skill's own ref when its
 	 *        metadata carries an {@code operation} facet
 	 * @param contextEntries {@code skill.context} entries (standard entry grammar)
-	 * @param skillSources {@code skill.skills} source refs made discoverable while loaded
+	 * @param skills {@code skill.skills} — individual skill refs made
+	 *        discoverable while this skill is loaded
+	 * @param skillsets {@code skill.skillsets} — skillset (directory) refs made
+	 *        discoverable while this skill is loaded
 	 * @param budget Facet-declared default load budget, 0 when unset
 	 * @param path Canonical loads key — the address the skill re-resolves from each turn
 	 * @param id Content identity — the value hash of the resolved metadata map,
@@ -94,13 +112,52 @@ public final class Skills {
 	 */
 	public record ResolvedSkill(String name, String description, String body,
 			AVector<ACell> toolOps, AVector<ACell> contextEntries,
-			AVector<ACell> skillSources, long budget, AString path,
+			AVector<ACell> skills, AVector<ACell> skillsets, long budget, AString path,
 			convex.core.data.Hash id) {
 
 		/** What a renderer shows for this skill: the body, else the
 		 *  description one-liner (a contentless skill still announces itself). */
 		public String displayBody() {
 			return (body != null) ? body : description;
+		}
+
+		/** True when loading this skill widens the discovery surface. */
+		public boolean contributesSources() {
+			return skills.count() > 0 || skillsets.count() > 0;
+		}
+	}
+
+	/**
+	 * The discovery surface: {@code skills} are refs to individual skills,
+	 * {@code skillsets} are refs to directories of skills. The kind is
+	 * <b>declared</b>, never sniffed from the resolved value — a skillset is a
+	 * directory and a skill is an asset, and the two are not interchangeable
+	 * (SKILLS.md §4.1).
+	 *
+	 * <p>Listing walks {@code skills} before {@code skillsets}, and name
+	 * collisions are first-wins, so an explicitly named skill always beats a
+	 * same-named member of a skillset.</p>
+	 */
+	public record SkillSources(AVector<ACell> skills, AVector<ACell> skillsets) {
+		public static final SkillSources EMPTY =
+			new SkillSources(Vectors.empty(), Vectors.empty());
+
+		/** A surface of skillsets (directories) only — the common case. */
+		public static SkillSources ofSkillsets(AVector<ACell> skillsets) {
+			return new SkillSources(Vectors.empty(), skillsets);
+		}
+
+		/** A surface of individually named skills only. */
+		public static SkillSources ofSkills(AVector<ACell> skills) {
+			return new SkillSources(skills, Vectors.empty());
+		}
+
+		public long count() {
+			return skills.count() + skillsets.count();
+		}
+
+		public boolean isEmpty() {
+			return count() == 0;
 		}
 	}
 
@@ -122,55 +179,99 @@ public final class Skills {
 	 * malformed sources value (non-string entry) — that is a configuration
 	 * error, not a resolution failure.
 	 */
-	public static List<SkillIndexEntry> listSkills(Engine engine, RequestContext ctx, AVector<ACell> sources) {
+	public static List<SkillIndexEntry> listSkills(Engine engine, RequestContext ctx,
+			SkillSources sources) {
 		List<SkillIndexEntry> out = new ArrayList<>();
 		if (sources == null) return out;
 		Set<String> seen = new HashSet<>();
-		for (long i = 0; i < sources.count(); i++) {
-			AString source = RT.ensureString(sources.get(i));
-			if (source == null) {
-				throw new IllegalArgumentException("skills sources must be strings — got: " + sources.get(i));
-			}
+		// Individual skills first: an explicitly named skill wins a name
+		// collision against a same-named member of a skillset.
+		for (long i = 0; i < sources.skills().count(); i++) {
+			AString source = sourceRef(sources.skills().get(i));
 			try {
 				requireRead(engine, ctx, source);
-				if (AssetAdapter.parseAssetId(source) != null) {
-					// Asset ref source → a single skill
-					addEntry(out, seen, describe(engine, ctx, source, engine.resolvePath(source, ctx), source));
-				} else {
-					ACell value = engine.resolvePath(source, ctx);
-					if (value == null) continue;                     // absent → skip quietly
-					if (isSkillMetadata(value)) {
-						// A stable path to one skill (for example
-						// v/skills/workspace) is a first-class source. This lets
-						// templates curate a compact role-specific index without
-						// embedding content hashes or manufacturing directories.
-						addEntry(out, seen, describe(engine, ctx, source, value, source));
+				ACell value = engine.resolvePath(source, ctx);
+				if (value == null) continue;                          // absent → skip quietly
+				addEntry(out, seen, describe(engine, ctx, source, value, source));
+			} catch (RuntimeException e) {
+				out.add(new SkillIndexEntry(null, null, source, rootMessage(e), null));
+			}
+		}
+		for (long i = 0; i < sources.skillsets().count(); i++) {
+			AString source = sourceRef(sources.skillsets().get(i));
+			try {
+				requireRead(engine, ctx, source);
+				ACell value = engine.resolvePath(source, ctx);
+				if (value == null) continue;                          // absent → skip quietly
+				if (!(value instanceof AMap)) {
+					out.add(new SkillIndexEntry(null, null, source,
+						"not a skillset (resolves to " + value.getClass().getSimpleName() + ")", null));
+					continue;
+				}
+				@SuppressWarnings("unchecked")
+				AMap<ACell, ACell> dir = (AMap<ACell, ACell>) value;
+				// Sort keys for a stable, readable index order.
+				List<String> keys = new ArrayList<>();
+				for (var entry : dir.entrySet()) {
+					AString k = RT.ensureString(entry.getKey());
+					if (k != null) keys.add(k.toString());
+				}
+				keys.sort(String::compareTo);
+				for (String key : keys) {
+					AString path = Strings.create(source + "/" + key);
+					ACell member = dir.get(Strings.create(key));
+					if (!isSkillValue(member)) {
+						// A nested directory (or junk) inside a skillset. Not an
+						// invalid skill — skills and directories are separate
+						// kinds — so it renders only on the operator surface.
+						out.add(new SkillIndexEntry(null, null, path,
+							"not a skill — declare a nested directory as a skillset, not a skillset member",
+							null));
 						continue;
 					}
-					if (!(value instanceof AMap)) {
-						out.add(new SkillIndexEntry(null, null, source,
-							"not a skill directory (resolves to " + value.getClass().getSimpleName() + ")", null));
-						continue;
-					}
-					@SuppressWarnings("unchecked")
-					AMap<ACell, ACell> dir = (AMap<ACell, ACell>) value;
-					// Sort keys for a stable, readable index order.
-					List<String> keys = new ArrayList<>();
-					for (var entry : dir.entrySet()) {
-						AString k = RT.ensureString(entry.getKey());
-						if (k != null) keys.add(k.toString());
-					}
-					keys.sort(String::compareTo);
-					for (String key : keys) {
-						AString path = Strings.create(source + "/" + key);
-						addEntry(out, seen, describe(engine, ctx, path, dir.get(Strings.create(key)), path));
-					}
+					addEntry(out, seen, describe(engine, ctx, path, member, path));
 				}
 			} catch (RuntimeException e) {
 				out.add(new SkillIndexEntry(null, null, source, rootMessage(e), null));
 			}
 		}
 		return out;
+	}
+
+	/** A source ref must be a string; anything else is a configuration error. */
+	private static AString sourceRef(ACell raw) {
+		AString source = RT.ensureString(raw);
+		if (source == null) {
+			throw new IllegalArgumentException("skills sources must be strings — got: " + raw);
+		}
+		return source;
+	}
+
+	/**
+	 * True when a skillset member is a skill rather than a nested directory.
+	 *
+	 * <p>Deliberately permissive: a skill needs only a {@code description}
+	 * (name falls back to the path segment), and a <i>broken</i> skill must
+	 * still reach {@link #describe} so it renders INVALID rather than being
+	 * silently skipped. Only a map carrying none of the skill-shaped keys is
+	 * treated as a nested directory — the one case that must not be reported
+	 * as a broken skill.</p>
+	 *
+	 * <p>This heuristic applies ONLY to members of an already-declared
+	 * skillset, never to a source: kinds are declared, so a directory is only
+	 * ever guessed at one level down. It can still be fooled by a directory
+	 * whose own key set happens to look skill-shaped (a member literally named
+	 * {@code skill}); keep skillset members named after what they do.</p>
+	 */
+	private static boolean isSkillValue(ACell value) {
+		if (value instanceof AString) return true;                   // string ref → one skill
+		if (!(value instanceof AMap<?, ?> map)) return false;
+		if (map.isEmpty()) return false;
+		return map.containsKey(Fields.DESCRIPTION)
+			|| map.containsKey(Fields.NAME)
+			|| map.containsKey(K_SKILL)
+			|| map.containsKey(Fields.CONTENT)
+			|| map.containsKey(Fields.OPERATION);
 	}
 
 	/** First-wins dedup by name; source-error entries always pass through. */
@@ -210,7 +311,7 @@ public final class Skills {
 	 *        surface only)
 	 */
 	public static String renderIndex(Engine engine, RequestContext ctx,
-			AVector<ACell> sources, AMap<AString, ACell> effectiveLoads, boolean sourceDiagnostics) {
+			SkillSources sources, AMap<AString, ACell> effectiveLoads, boolean sourceDiagnostics) {
 		List<SkillIndexEntry> entries = listSkills(engine, ctx, sources);
 		if (entries.isEmpty()) return null;
 		// Live identities of loaded skills, once per render — the (loaded)
@@ -251,42 +352,35 @@ public final class Skills {
 	 * index dedup. Throws with a diagnosable message when not found.
 	 */
 	public static ResolvedSkill resolveByName(Engine engine, RequestContext ctx,
-			AVector<ACell> sources, String name) {
+			SkillSources sources, String name) {
 		if (sources != null) {
-			for (long i = 0; i < sources.count(); i++) {
-				AString source = RT.ensureString(sources.get(i));
+			// Individual skills first — same precedence as the index.
+			for (long i = 0; i < sources.skills().count(); i++) {
+				AString source = RT.ensureString(sources.skills().get(i));
 				if (source == null) continue;
-				if (AssetAdapter.parseAssetId(source) != null) {
-					try {
-						ResolvedSkill s = resolveRef(engine, ctx, source);
-						if (name.equals(s.name())) return s;
-					} catch (RuntimeException e) {
-						// A broken single-skill source can't match by name — keep looking.
-					}
-					continue;
+				try {
+					ResolvedSkill s = resolveRef(engine, ctx, source);
+					if (name.equals(s.name())) return s;
+				} catch (RuntimeException e) {
+					// A broken single-skill source cannot match by name. Keep
+					// looking so later sources retain first-valid-match semantics.
 				}
+			}
+			for (long i = 0; i < sources.skillsets().count(); i++) {
+				AString source = RT.ensureString(sources.skillsets().get(i));
+				if (source == null) continue;
 				requireRead(engine, ctx, source);
 				ACell value = engine.resolvePath(source, ctx);
-				if (isSkillMetadata(value)) {
-					try {
-						ResolvedSkill s = resolveValue(engine, ctx, source, source, value, true);
-						if (name.equals(s.name())) return s;
-					} catch (RuntimeException e) {
-						// A broken single-skill source cannot match by name. Keep
-						// looking so later sources retain first-valid-match semantics.
-					}
-					continue;
-				}
 				if (!(value instanceof AMap)) continue;
 				ACell entry = ((AMap<?, ?>) value).get(Strings.create(name));
-				if (entry != null) {
+				if (entry != null && isSkillValue(entry)) {
 					AString path = Strings.create(source + "/" + name);
 					return resolveValue(engine, ctx, path, path, entry, true);
 				}
 			}
 		}
 		throw new RuntimeException("skill '" + name + "' not found in skill sources"
-			+ (sources != null ? " " + sources : ""));
+			+ (sources != null ? " skills=" + sources.skills() + " skillsets=" + sources.skillsets() : ""));
 	}
 
 	/** True when a resolved map is one skill rather than a directory of skills. */
@@ -361,22 +455,16 @@ public final class Skills {
 			AMap<AString, ACell> facet = (AMap<AString, ACell>) facetCell;
 			AVector<ACell> tools = facetVector(facet, Fields.TOOLS, path);
 			AVector<ACell> context = facetVector(facet, K_CONTEXT, path);
-			AVector<ACell> skillSources = facetVector(facet, K_SKILLS, path);
+			AVector<ACell> childSkills = facetVector(facet, K_SKILLS, path);
+			AVector<ACell> childSkillsets = facetVector(facet, K_SKILLSETS, path);
 			long budget = (facet != null && facet.get(K_BUDGET) instanceof CVMLong l) ? l.longValue() : 0;
 			for (long i = 0; i < tools.count(); i++) {
 				if (RT.ensureString(tools.get(i)) == null) {
 					throw new RuntimeException("skill.tools entries at " + path + " must be operation ref strings");
 				}
 			}
-			for (long i = 0; i < skillSources.count(); i++) {
-				if (RT.ensureString(skillSources.get(i)) == null) {
-					throw new RuntimeException("skill.skills entries at " + path + " must be skill source ref strings");
-				}
-			}
-			// An operation skill offers itself as a tool.
-			if (meta.get(Fields.OPERATION) != null) {
-				tools = tools.conj(opRef);
-			}
+			requireRefStrings(childSkills, K_SKILLS, path);
+			requireRefStrings(childSkillsets, K_SKILLSETS, path);
 
 			String body = null;
 			if (needBody || name == null || description == null) {
@@ -388,16 +476,27 @@ public final class Skills {
 					if (fm != null) {
 						if (name == null) name = fm.name();
 						if (description == null) description = fm.description();
+						// Metadata wins: frontmatter only fills what the facet
+						// left empty, so a stored facet is never overridden by
+						// the content it points at.
+						if (tools.count() == 0) tools = fm.tools();
+						if (childSkills.count() == 0) childSkills = fm.skills();
+						if (childSkillsets.count() == 0) childSkillsets = fm.skillsets();
 						body = fm.body();
 					}
 				}
+			}
+			// An operation skill offers itself as a tool. Applied after the
+			// frontmatter merge so the merge sees whether tools were declared.
+			if (meta.get(Fields.OPERATION) != null) {
+				tools = tools.conj(opRef);
 			}
 			if (description == null) throw missingDescription(path);
 			if (name == null) name = lastSegment(path.toString());
 			// A null body is valid: a contentless skill is a pure toolset.
 			// Identity is the metadata's value hash — content equality, not path.
-			return new ResolvedSkill(name, description, body, tools, context, skillSources, budget, path,
-				meta.getHash());
+			return new ResolvedSkill(name, description, body, tools, context,
+				childSkills, childSkillsets, budget, path, meta.getHash());
 		}
 
 		throw new RuntimeException("skill at " + path
@@ -442,19 +541,28 @@ public final class Skills {
 
 	// ========== SKILL.md frontmatter ==========
 
-	record Frontmatter(String name, String description, String body) {}
+	record Frontmatter(String name, String description, String body,
+			AVector<ACell> tools, AVector<ACell> skills, AVector<ACell> skillsets) {}
 
 	/**
-	 * Parses Anthropic-style SKILL.md YAML frontmatter: a leading
-	 * {@code ---} block with simple {@code key: value} lines. Only
-	 * {@code name} and {@code description} are read; other keys are ignored.
-	 * Returns null when the text has no frontmatter.
+	 * Parses Anthropic-style SKILL.md YAML frontmatter: a leading {@code ---}
+	 * block of {@code key: value} lines. {@code name} and {@code description}
+	 * are scalars; {@code tools}, {@code skills} and {@code skillsets} are
+	 * lists in either YAML form — flow ({@code tools: [a, b]}) or block
+	 * (subsequent {@code  - a} lines). Other keys are ignored. Returns null
+	 * when the text has no frontmatter.
+	 *
+	 * <p>Declaring these in metadata is equivalent and takes precedence; the
+	 * frontmatter path exists so a self-contained SKILL.md file is a complete
+	 * skill — including a router that contributes skillsets.</p>
 	 */
 	static Frontmatter parseFrontmatter(String text) {
 		if (text == null) return null;
 		if (!(text.startsWith("---\n") || text.startsWith("---\r\n"))) return null;
 		int start = text.indexOf('\n') + 1;
 		String name = null, description = null;
+		AVector<ACell> tools = Vectors.empty(), skills = Vectors.empty(), skillsets = Vectors.empty();
+		String listKey = null;                                       // open block-sequence key
 		int pos = start;
 		while (pos < text.length()) {
 			int eol = text.indexOf('\n', pos);
@@ -467,28 +575,90 @@ public final class Skills {
 				String body = text.substring(pos);
 				if (body.startsWith("\r\n")) body = body.substring(2);
 				else if (body.startsWith("\n")) body = body.substring(1);
-				return new Frontmatter(name, description, body);
+				return new Frontmatter(name, description, body, tools, skills, skillsets);
 			}
+			// A block-sequence item continues the most recent list key.
+			String stripped = line.strip();
+			if (listKey != null && stripped.startsWith("-")) {
+				String item = unquote(stripped.substring(1).strip());
+				if (!item.isEmpty()) {
+					switch (listKey) {
+						case "tools" -> tools = tools.conj(Strings.create(item));
+						case "skills" -> skills = skills.conj(Strings.create(item));
+						case "skillsets" -> skillsets = skillsets.conj(Strings.create(item));
+						default -> { }
+					}
+				}
+				continue;
+			}
+			listKey = null;
 			int colon = line.indexOf(':');
 			if (colon > 0) {
 				String key = line.substring(0, colon).strip();
 				String val = line.substring(colon + 1).strip();
-				if ("name".equals(key)) name = val;
-				else if ("description".equals(key)) description = val;
+				switch (key) {
+					case "name" -> name = unquote(val);
+					case "description" -> description = unquote(val);
+					case "tools" -> { tools = parseList(val); listKey = val.isEmpty() ? key : null; }
+					case "skills" -> { skills = parseList(val); listKey = val.isEmpty() ? key : null; }
+					case "skillsets" -> { skillsets = parseList(val); listKey = val.isEmpty() ? key : null; }
+					default -> { }
+				}
 			}
 		}
 		return null;
 	}
 
+	/**
+	 * A YAML flow sequence ({@code [a, b]}) or a bare scalar treated as a
+	 * one-element list. An empty value opens a block sequence instead.
+	 */
+	private static AVector<ACell> parseList(String value) {
+		AVector<ACell> out = Vectors.empty();
+		if (value == null || value.isEmpty()) return out;
+		String body = value;
+		if (body.startsWith("[") && body.endsWith("]")) {
+			body = body.substring(1, body.length() - 1);
+		} else {
+			// A bare scalar is a single entry — tolerant of `skills: v/skills/x`.
+			String single = unquote(body);
+			return single.isEmpty() ? out : out.conj(Strings.create(single));
+		}
+		for (String part : body.split(",")) {
+			String item = unquote(part.strip());
+			if (!item.isEmpty()) out = out.conj(Strings.create(item));
+		}
+		return out;
+	}
+
+	/** Strips one layer of matching YAML quotes. */
+	private static String unquote(String s) {
+		if (s.length() >= 2
+			&& ((s.startsWith("\"") && s.endsWith("\"")) || (s.startsWith("'") && s.endsWith("'")))) {
+			return s.substring(1, s.length() - 1);
+		}
+		return s;
+	}
+
 	// ========== Loads-entry integration ==========
+
+	/** Every entry of a declared ref list must be a string ref. */
+	private static void requireRefStrings(AVector<ACell> refs, AString key, AString path) {
+		for (long i = 0; i < refs.count(); i++) {
+			if (RT.ensureString(refs.get(i)) == null) {
+				throw new RuntimeException("skill." + key + " entries at " + path
+					+ " must be " + (K_SKILLSETS.equals(key) ? "skillset" : "skill") + " ref strings");
+			}
+		}
+	}
 
 	/**
 	 * Builds the loads-entry spec for a loaded skill:
-	 * {@code {skill: true, budget, ts, label, tools?, skills?}}. A plain map — fully
-	 * compatible with ContextChain (tombstones, masking), context_unload,
-	 * the Context Map, and safety-valve eviction. The body is NOT
-	 * denormalised (re-resolved each turn via the entry key); tool and child
-	 * skill-source refs ARE (their targets still resolve fresh each turn).
+	 * {@code {skill: true, budget, ts, label, tools?, skills?, skillsets?}}. A
+	 * plain map — fully compatible with ContextChain (tombstones, masking),
+	 * context_unload, the Context Map, and safety-valve eviction. The body is
+	 * NOT denormalised (re-resolved each turn via the entry key); tool and
+	 * child refs ARE (their targets still resolve fresh each turn).
 	 */
 	public static AMap<AString, ACell> buildSkillLoadMeta(long budget, ResolvedSkill skill) {
 		AMap<AString, ACell> meta = Maps.of(
@@ -499,46 +669,64 @@ public final class Skills {
 		if (skill.toolOps().count() > 0) {
 			meta = meta.assoc(Fields.TOOLS, skill.toolOps());
 		}
-		if (skill.skillSources().count() > 0) {
-			meta = meta.assoc(K_SKILLS, skill.skillSources());
+		if (skill.skills().count() > 0) {
+			meta = meta.assoc(K_SKILLS, skill.skills());
+		}
+		if (skill.skillsets().count() > 0) {
+			meta = meta.assoc(K_SKILLSETS, skill.skillsets());
 		}
 		return meta;
 	}
 
 	/**
-	 * Combines configured sources with sources contributed by currently loaded
-	 * skills. Configured sources retain priority; exact duplicate refs are
-	 * removed first-wins. Only the immediate sources on loaded entries are
-	 * considered: children are discoverable, never recursively auto-loaded.
+	 * Combines configured sources with those contributed by currently loaded
+	 * skills, per kind. Configured sources retain priority; exact duplicate
+	 * refs are removed first-wins. Only the immediate refs on loaded entries
+	 * are considered: children are discoverable, never recursively auto-loaded,
+	 * so an unloaded subtree is never walked and cycles are inert.
 	 */
-	public static AVector<ACell> effectiveSources(AVector<ACell> configuredSources,
+	public static SkillSources effectiveSources(SkillSources configured,
 			AMap<AString, ACell> effectiveLoads) {
-		AVector<ACell> out = Vectors.empty();
-		Set<String> seen = new HashSet<>();
-		out = appendSources(out, configuredSources, seen, "config.skills");
-		if (effectiveLoads == null) return out;
+		AVector<ACell> skills = Vectors.empty();
+		AVector<ACell> skillsets = Vectors.empty();
+		Set<String> seenSkills = new HashSet<>();
+		Set<String> seenSets = new HashSet<>();
+		if (configured != null) {
+			skills = appendSources(skills, configured.skills(), seenSkills, "config.skills", K_SKILLS);
+			skillsets = appendSources(skillsets, configured.skillsets(), seenSets,
+				"config.skillsets", K_SKILLSETS);
+		}
+		if (effectiveLoads == null) return new SkillSources(skills, skillsets);
 		for (var entry : effectiveLoads.entrySet()) {
 			if (!isSkillEntry(entry.getValue())) continue;
 			@SuppressWarnings("unchecked")
 			AMap<AString, ACell> spec = (AMap<AString, ACell>) entry.getValue();
-			ACell raw = spec.get(K_SKILLS);
-			if (raw == null) continue;
-			AVector<ACell> sources = RT.ensureVector(raw);
-			if (sources == null) {
-				throw new RuntimeException("loaded skill.skills at " + entry.getKey() + " must be an array");
-			}
-			out = appendSources(out, sources, seen, "loaded skill.skills at " + entry.getKey());
+			skills = appendContributed(skills, spec, K_SKILLS, seenSkills, entry.getKey());
+			skillsets = appendContributed(skillsets, spec, K_SKILLSETS, seenSets, entry.getKey());
 		}
-		return out;
+		return new SkillSources(skills, skillsets);
+	}
+
+	/** Appends one kind of contributed refs from a loaded skill's entry. */
+	private static AVector<ACell> appendContributed(AVector<ACell> out,
+			AMap<AString, ACell> spec, AString key, Set<String> seen, AString entryKey) {
+		ACell raw = spec.get(key);
+		if (raw == null) return out;
+		AVector<ACell> refs = RT.ensureVector(raw);
+		if (refs == null) {
+			throw new RuntimeException("loaded skill." + key + " at " + entryKey + " must be an array");
+		}
+		return appendSources(out, refs, seen, "loaded skill." + key + " at " + entryKey, key);
 	}
 
 	private static AVector<ACell> appendSources(AVector<ACell> out, AVector<ACell> sources,
-			Set<String> seen, String label) {
+			Set<String> seen, String label, AString kind) {
 		if (sources == null) return out;
 		for (long i = 0; i < sources.count(); i++) {
 			AString source = RT.ensureString(sources.get(i));
 			if (source == null) {
-				throw new RuntimeException(label + " entries must be skill source ref strings");
+				throw new RuntimeException(label + " entries must be "
+					+ (K_SKILLSETS.equals(kind) ? "skillset" : "skill") + " ref strings");
 			}
 			if (seen.add(source.toString())) out = out.conj(source);
 		}
@@ -603,6 +791,151 @@ public final class Skills {
 		return CVMBool.TRUE.equals(((AMap<?, ?>) spec).get(K_SKILL));
 	}
 
+	// ========== Venue-side configuration diagnostics ==========
+
+	/**
+	 * The first declared skillset that resolves to a directory of
+	 * <b>directories</b> rather than of skills, or null when every skillset is
+	 * either absent (normal — maybe-style paths) or genuinely a skillset.
+	 *
+	 * <p>This catches the one shape that is silently useless: pointing at a
+	 * level of the tree that holds skillsets, classically {@code v/skills}
+	 * instead of {@code v/skills/root}. Read failures are not diagnosed here —
+	 * an unreadable source is a capability matter, not a shape mistake.</p>
+	 *
+	 * <p>Resolves in {@code ctx}'s namespace: {@code w/} paths are
+	 * user-relative, so the CALLER's context must be used, never the
+	 * venue's.</p>
+	 */
+	public static AString misdirectedSkillset(Engine engine, RequestContext ctx,
+			AVector<ACell> skillsets) {
+		if (engine == null || ctx == null || skillsets == null) return null;
+		for (long i = 0; i < skillsets.count(); i++) {
+			AString ref = RT.ensureString(skillsets.get(i));
+			if (ref == null) continue;
+			try {
+				ACell value = engine.resolvePath(ref, ctx);
+				if (!(value instanceof AMap<?, ?> dir) || dir.isEmpty()) continue;
+				boolean anySkill = false;
+				for (var entry : dir.entrySet()) {
+					if (isSkillValue(entry.getValue())) { anySkill = true; break; }
+				}
+				if (!anySkill) return ref;
+			} catch (RuntimeException e) {
+				// Unreadable or absent — not a shape problem. Skip.
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Validates the venue's own skill library after catalog materialisation and
+	 * logs a warning per problem. Unlike a user's agent config — whose sources
+	 * are deliberately maybe-style — everything here was installed by this
+	 * venue, so a ref that does not resolve is a packaging bug worth surfacing
+	 * at boot rather than at an agent's first turn.
+	 *
+	 * <p>Checks each installed skill's declared {@code skill.skills} and
+	 * {@code skill.skillsets} refs resolve and are of the declared kind, and
+	 * that no skillset directly holds a nested directory (skills and
+	 * directories are separate kinds — SKILLS.md §4.1). Never throws: a
+	 * diagnostic must not take down a venue's boot.</p>
+	 *
+	 * @return the number of problems found (0 when the library is clean)
+	 */
+	public static int validateVenueLibrary(Engine engine) {
+		if (engine == null) return 0;
+		int problems = 0;
+		try {
+			RequestContext ctx = RequestContext.of(engine.getDIDString());
+			ACell root = engine.resolvePath(Strings.create(VENUE_SKILLS), ctx);
+			if (!(root instanceof AMap<?, ?> sets)) return 0;
+			for (var setEntry : sets.entrySet()) {
+				AString setName = RT.ensureString(setEntry.getKey());
+				if (setName == null) continue;
+				String setPath = VENUE_SKILLS + "/" + setName;
+				if (isSkillValue(setEntry.getValue())) {
+					// A skill sitting where a skillset belongs. Mixing assets and
+					// directories at one level is what the kind split exists to
+					// prevent, so name the fix rather than the symptom.
+					log.warn("Venue skills: {} is a skill at skillset level — {} holds skillsets, "
+						+ "so move it into one (e.g. {}/root/{})",
+						setPath, VENUE_SKILLS, VENUE_SKILLS, setName);
+					problems++;
+					continue;
+				}
+				if (!(setEntry.getValue() instanceof AMap<?, ?> members)) {
+					log.warn("Venue skills: {} is not a skillset (a directory of skills)", setPath);
+					problems++;
+					continue;
+				}
+				for (var member : members.entrySet()) {
+					AString skillName = RT.ensureString(member.getKey());
+					if (skillName == null) continue;
+					String skillPath = setPath + "/" + skillName;
+					if (!isSkillValue(member.getValue())) {
+						log.warn("Venue skills: {} is a nested directory inside a skillset — "
+							+ "declare it as its own skillset", skillPath);
+						problems++;
+						continue;
+					}
+					problems += validateSkillRefs(engine, ctx, skillPath);
+				}
+			}
+		} catch (RuntimeException e) {
+			log.warn("Venue skills validation failed: {}", rootMessage(e));
+		}
+		return problems;
+	}
+
+	/** Warns for each unresolvable or wrong-kind child ref on one venue skill. */
+	private static int validateSkillRefs(Engine engine, RequestContext ctx, String skillPath) {
+		ResolvedSkill skill;
+		try {
+			skill = resolveRefLight(engine, ctx, Strings.create(skillPath));
+		} catch (RuntimeException e) {
+			log.warn("Venue skills: {} does not resolve as a skill: {}", skillPath, rootMessage(e));
+			return 1;
+		}
+		int problems = 0;
+		for (long i = 0; i < skill.skills().count(); i++) {
+			AString ref = RT.ensureString(skill.skills().get(i));
+			ACell value = safeResolve(engine, ctx, ref);
+			if (value == null) {
+				log.warn("Venue skills: {} declares skill.skills '{}' which does not resolve",
+					skillPath, ref);
+				problems++;
+			} else if (!isSkillValue(value)) {
+				log.warn("Venue skills: {} declares skill.skills '{}' which is not a skill "
+					+ "(declare a directory under skill.skillsets)", skillPath, ref);
+				problems++;
+			}
+		}
+		for (long i = 0; i < skill.skillsets().count(); i++) {
+			AString ref = RT.ensureString(skill.skillsets().get(i));
+			ACell value = safeResolve(engine, ctx, ref);
+			if (value == null) {
+				log.warn("Venue skills: {} declares skill.skillsets '{}' which does not resolve",
+					skillPath, ref);
+				problems++;
+			} else if (!(value instanceof AMap)) {
+				log.warn("Venue skills: {} declares skill.skillsets '{}' which is not a directory",
+					skillPath, ref);
+				problems++;
+			}
+		}
+		return problems;
+	}
+
+	private static ACell safeResolve(Engine engine, RequestContext ctx, AString ref) {
+		if (ref == null) return null;
+		try {
+			return engine.resolvePath(ref, ctx);
+		} catch (RuntimeException e) {
+			return null;
+		}
+	}
+
 	/** The {@code [Skill: <name>]}-labelled system message carrying a skill body. */
 	static ACell renderSkillMessage(String name, String body) {
 		return Maps.of(K_ROLE, ROLE_SYSTEM, K_CONTENT,
@@ -618,12 +951,16 @@ public final class Skills {
 	// ========== skill_load (harness-tool semantics) ==========
 
 	/**
-	 * The skill sources declared on an agent config ({@code config.skills}),
-	 * validated. Empty when the agent declares none. Adapters treat the result
-	 * as opaque — all skills semantics live here and in {@link ContextBuilder}.
+	 * The discovery surface declared on an agent config — {@code config.skills}
+	 * (individual skills) and {@code config.skillsets} (directories), validated.
+	 * Empty when the agent declares neither. Adapters treat the result as
+	 * opaque — all skills semantics live here and in {@link ContextBuilder}.
 	 */
-	public static AVector<ACell> sourcesOf(AMap<AString, ACell> config) {
-		return ContextBuilder.skillSources(config == null ? null : config.get(K_SKILLS));
+	public static SkillSources sourcesOf(AMap<AString, ACell> config) {
+		if (config == null) return SkillSources.EMPTY;
+		return new SkillSources(
+			ContextBuilder.skillSources(config.get(K_SKILLS), K_SKILLS),
+			ContextBuilder.skillSources(config.get(K_SKILLSETS), K_SKILLSETS));
 	}
 
 	/**
@@ -652,7 +989,7 @@ public final class Skills {
 	 * overwrites (budget updates).</p>
 	 */
 	public static LoadOutcome load(Engine engine, RequestContext ctx,
-			AVector<ACell> sources, ACell toolInput, AMap<AString, ACell> effectiveLoads) {
+			SkillSources sources, ACell toolInput, AMap<AString, ACell> effectiveLoads) {
 		AString name = RT.ensureString(RT.getIn(toolInput, Fields.NAME));
 		AString ref = RT.ensureString(RT.getIn(toolInput, AbstractLLMAdapter.K_REF));
 		if ((name == null) == (ref == null)) {
@@ -713,8 +1050,9 @@ public final class Skills {
 				"Skill instructions stay in context each turn (unload with context_unload). "
 				+ "Tools and contributed skills are active from your next step."));
 		if (toolNames.count() > 0) result = result.assoc(Fields.TOOLS, toolNames);
-		if (skill.skillSources().count() > 0) {
-			result = result.assoc(K_SKILLS, skill.skillSources());
+		if (skill.contributesSources()) {
+			if (skill.skills().count() > 0) result = result.assoc(K_SKILLS, skill.skills());
+			if (skill.skillsets().count() > 0) result = result.assoc(K_SKILLSETS, skill.skillsets());
 			AMap<AString, ACell> prospectiveLoads = (effectiveLoads == null)
 				? Maps.of(skill.path(), entryMeta)
 				: effectiveLoads.assoc(skill.path(), entryMeta);

@@ -25,19 +25,19 @@ final class HarnessTools {
 		final AMap<AString, ACell> outerLoads;
 		final boolean writable;
 		final String unavailableMessage;
-		final AVector<ACell> skillSources;
+		final Skills.SkillSources skillSources;
 		AMap<AString, ACell> loads;
 
 		LoadScope(Engine engine, RequestContext context,
 				AMap<AString, ACell> loads, AMap<AString, ACell> outerLoads,
-				boolean writable, String unavailableMessage, AVector<ACell> skillSources) {
+				boolean writable, String unavailableMessage, Skills.SkillSources skillSources) {
 			this.engine = engine;
 			this.context = context;
 			this.loads = (loads != null) ? loads : Maps.empty();
 			this.outerLoads = (outerLoads != null) ? outerLoads : Maps.empty();
 			this.writable = writable;
 			this.unavailableMessage = unavailableMessage;
-			this.skillSources = (skillSources != null) ? skillSources : Vectors.empty();
+			this.skillSources = (skillSources != null) ? skillSources : Skills.SkillSources.EMPTY;
 		}
 	}
 

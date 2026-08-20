@@ -23,8 +23,10 @@
 				"more_tools"
 			],
 			"defaultTools": false,
+			"skillsets": [
+				"w/skills"
+			],
 			"skills": [
-				"w/skills",
 				"v/skills/agents",
 				"v/skills/tasks",
 				"v/skills/models",
