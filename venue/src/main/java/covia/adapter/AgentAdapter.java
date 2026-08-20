@@ -681,6 +681,12 @@ public class AgentAdapter extends AAdapter {
 	 * is a human-readable message string; the vector is empty when nothing is
 	 * flagged. New sanity checks append here — the result field ({@code warnings})
 	 * is already a list, so adding one is additive.
+	 *
+	 * <p>The order below is the order callers see. When adding a check, also
+	 * widen the {@code warnings} description in
+	 * {@code /adapters/agent/create.json}: it states what an advisory can be
+	 * about, and a check that is not described there is invisible to anyone
+	 * reading the operation's schema.</p>
 	 */
 	private AVector<ACell> collectCreateWarnings(AMap<AString, ACell> config, RequestContext ctx) {
 		AVector<ACell> warnings = Vectors.empty();

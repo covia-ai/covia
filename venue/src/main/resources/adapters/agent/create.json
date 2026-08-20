@@ -8,52 +8,116 @@
 		"input": {
 			"type": "object",
 			"properties": {
-				"agentId": { "type": "string", "description": "Human-readable agent name (e.g. 'Alice', 'DataChecker')" },
+				"agentId": {
+					"type": "string",
+					"description": "Human-readable agent name (e.g. 'Alice', 'DataChecker')"
+				},
 				"config": {
 					"description": "One config layer, or an ordered array of additive layers. A layer is an inline map or a string reference resolving to a flat config map or an asset with agent.config. Later layers override earlier values; nested maps merge recursively, arrays replace. Null is not a layer; put null inside a map to clear an inherited field. References include workspace paths, asset refs, DID URLs, and venue templates. A resolved composition may include state, used as initial agent state.",
 					"oneOf": [
 						{
 							"type": "object",
 							"properties": {
-								"operation": { "type": "string", "description": "Transition operation for the agent — must be a resolvable lattice path (e.g. 'v/ops/llmagent/chat' for persona chat, 'v/ops/goaltree/chat' for goal-decomposing planners). Bare adapter shorthand like 'llmagent:chat' will NOT resolve. Determines how the agent processes tasks." },
-								"systemPrompt": { "type": "string", "description": "System prompt defining the agent's role and behaviour" },
-								"llmOperation": { "type": "string", "description": "LLM provider operation path, e.g. v/ops/langchain/anthropic. Prefer a separate provider config layer so behavioural templates remain provider-neutral." },
-								"apiKey": { "type": "string", "description": "Optional secret reference such as s/ANTHROPIC_API_KEY; the provider operation's default secret is used when absent." },
-								"tools": { "type": "array", "description": "Exact tool selector. Entries are operation paths or {operation,name?,description?} maps; harness tools such as subgoal and context_load use bare names. A later tools array replaces an earlier one." },
-								"defaultTools": { "type": "boolean", "description": "Opt into the built-in default tool pack — deliberately minimal, read-only workspace access (covia read/list) — on top of the declared tools. Defaults to false: the agent sees only its own 'tools' list. Capability tools (writes, agents, assets, grid, schema) arrive via skills (skill_load) or explicit 'tools' entries." },
-								"model": { "type": "string", "description": "Optional LLM model name; the selected provider's default applies when absent." },
-								"caps": { "type": "array", "description": "Capability restrictions — array of {with, can} objects limiting what the agent can access" },
-								"context": { "type": "array", "description": "Operator-pinned context entries: inline text, refs, job results, or read-only operation results." },
-								"loads": { "type": "object", "description": "Operator-pinned live loads keyed by reference path; each value may include label, budget, required, and contributed tools." },
-								"skills": { "type": "array", "description": "Skill directory/reference sources used to build the live skills index." },
-								"responseFormat": { "description": "Provider-neutral structured response format." },
-								"outputs": { "type": "object", "description": "Typed agent lifecycle output declarations." }
+								"operation": {
+									"type": "string",
+									"description": "Transition operation for the agent — must be a resolvable lattice path (e.g. 'v/ops/llmagent/chat' for persona chat, 'v/ops/goaltree/chat' for goal-decomposing planners). Bare adapter shorthand like 'llmagent:chat' will NOT resolve. Determines how the agent processes tasks."
+								},
+								"systemPrompt": {
+									"type": "string",
+									"description": "System prompt defining the agent's role and behaviour"
+								},
+								"llmOperation": {
+									"type": "string",
+									"description": "LLM provider operation path, e.g. v/ops/langchain/anthropic. Prefer a separate provider config layer so behavioural templates remain provider-neutral."
+								},
+								"apiKey": {
+									"type": "string",
+									"description": "Optional secret reference such as s/ANTHROPIC_API_KEY; the provider operation's default secret is used when absent."
+								},
+								"tools": {
+									"type": "array",
+									"description": "Exact tool selector. Entries are operation paths or {operation,name?,description?} maps; harness tools such as subgoal and context_load use bare names. A later tools array replaces an earlier one."
+								},
+								"defaultTools": {
+									"type": "boolean",
+									"description": "Opt into the built-in default tool pack — deliberately minimal, read-only workspace access (covia read/list) — on top of the declared tools. Defaults to false: the agent sees only its own 'tools' list. Capability tools (writes, agents, assets, grid, schema) arrive via skills (skill_load) or explicit 'tools' entries."
+								},
+								"model": {
+									"type": "string",
+									"description": "Optional LLM model name; the selected provider's default applies when absent."
+								},
+								"caps": {
+									"type": "array",
+									"description": "Capability restrictions — array of {with, can} objects limiting what the agent can access"
+								},
+								"context": {
+									"type": "array",
+									"description": "Operator-pinned context entries: inline text, refs, job results, or read-only operation results."
+								},
+								"loads": {
+									"type": "object",
+									"description": "Operator-pinned live loads keyed by reference path; each value may include label, budget, required, and contributed tools."
+								},
+								"skills": {
+									"type": "array",
+									"description": "Skill directory/reference sources used to build the live skills index."
+								},
+								"responseFormat": {
+									"description": "Provider-neutral structured response format."
+								},
+								"outputs": {
+									"type": "object",
+									"description": "Typed agent lifecycle output declarations."
+								}
 							},
 							"additionalProperties": true
 						},
-						{ "type": "string", "description": "Reference to a config map or canonical agent asset stored in workspace, assets, or elsewhere" },
+						{
+							"type": "string",
+							"description": "Reference to a config map or canonical agent asset stored in workspace, assets, or elsewhere"
+						},
 						{
 							"type": "array",
 							"description": "Ordered config layers, merged left-to-right with later values winning.",
 							"items": {
 								"oneOf": [
-									{ "type": "object" },
-									{ "type": "string" }
+									{
+										"type": "object"
+									},
+									{
+										"type": "string"
+									}
 								]
 							}
 						}
 					]
 				},
-				"definition": { "type": "string", "description": "Asset ID of an agent definition carrying the canonical agent.config facet. Retained for compatibility; new callers normally pass the asset reference as a config layer." }
+				"definition": {
+					"type": "string",
+					"description": "Asset ID of an agent definition carrying the canonical agent.config facet. Retained for compatibility; new callers normally pass the asset reference as a config layer."
+				}
 			},
-			"required": ["agentId"]
+			"required": [
+				"agentId"
+			]
 		},
 		"output": {
 			"type": "object",
 			"properties": {
-				"agentId": { "type": "string" },
-				"status": { "type": "string", "description": "Current status of the agent: SLEEPING, RUNNING, SUSPENDED, or TERMINATED" },
-				"warnings": { "type": "array", "items": { "type": "string" }, "description": "Optional non-fatal advisories; present and non-empty only when the config looks misconfigured but create still succeeded. Each entry is a human-readable message. Currently the only advisory: the agent declares tools on an Ollama model whose tool-calling support could not be confirmed (no 'tools' capability, or the model is not installed/reachable). Absent when there is nothing to flag." }
+				"agentId": {
+					"type": "string"
+				},
+				"status": {
+					"type": "string",
+					"description": "Current status of the agent: SLEEPING, RUNNING, SUSPENDED, or TERMINATED"
+				},
+				"warnings": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"description": "Non-fatal advisories. Present, and non-empty, only when something about the config looks wrong; the agent WAS created either way, so this never indicates failure. Each entry is a human-readable message, in a fixed order: LLM tool-calling support that could not be confirmed for the configured model; configured tool operations that do not currently resolve; a skill source problem (a malformed config.skills/config.skillsets shape, a skillset pointing at a directory of skillsets rather than of skills, or a source the creator cannot read); and a raw credential in config.apiKey. Everything flagged here is live-resolved at run time, so fixing the config, grant or model makes it take effect without recreating the agent. Absent when there is nothing to flag."
+				}
 			}
 		}
 	}
