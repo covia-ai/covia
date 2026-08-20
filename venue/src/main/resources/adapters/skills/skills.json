@@ -1,6 +1,6 @@
 {
 	"name": "Skills",
-	"description": "Discover agent skills — named bundles of instructions, context, and tools. Pick command='list' to render an index, or command='read' for one full skill. Sources may be directories such as w/skills or v/skills, individual named paths such as v/skills/models, or content-addressed assets. Read-only — author with covia_write or asset_store.",
+	"description": "Discover agent skills — named bundles of instructions, context, and tools. Pick command='list' to render an index, or command='read' for one full skill. Sources are skillsets (directories such as w/skills or v/skills/root); name individual skills with the skills input instead. Read-only — author with covia_write or asset_store.",
 	"dateCreated": "2026-07-17T00:00:00Z",
 	"operation": {
 		"adapter": "skills:manage",
@@ -9,8 +9,9 @@
 			"type": "object",
 			"properties": {
 				"command": { "type": "string", "enum": ["list", "read"], "description": "Action to perform." },
-				"sources": { "type": "array", "items": { "type": "string" }, "description": "Skill sources — directory paths, individual skill paths, or asset refs. Default: [\"w/skills\", \"v/skills\"]. Earlier sources shadow same-named later skills." },
-				"name": { "type": "string", "description": "read only: a skill name from the index, looked up across sources." },
+				"sources": { "type": "array", "items": { "type": "string" }, "description": "Skillsets to search — directory paths whose keys are skill names. Defaults to this venue's configured entry skillsets (see v/info/adapters/skills), normally [\"w/skills\", \"v/skills/root\"]. Earlier sources shadow same-named later skills." },
+				"skills": { "type": "array", "items": { "type": "string" }, "description": "Individual skills to include — paths to one skill, or content-addressed asset refs. Distinct from sources, which names directories." },
+				"name": { "type": "string", "description": "read only: a skill name from the index, looked up across the sources and skills given." },
 				"ref": { "type": "string", "description": "read only: direct skill address (a/<hash>, v/skills/<x>, w/skills/<x>) — alternative to name." }
 			},
 			"required": ["command"]

@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.fail;
 
 import java.util.concurrent.ExecutionException;
@@ -21,8 +23,10 @@ import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
@@ -232,6 +236,95 @@ public class SkillsAdapterTest {
 			fail("unknown command should be rejected");
 		} catch (RuntimeException e) {
 			assertTrue(e.getMessage().contains("list | read"), e.getMessage());
+		}
+	}
+
+	// ========== operator configuration ==========
+
+	/**
+	 * The shipped defaults are what an unconfigured venue answers from, and
+	 * they are published so a client can discover the entry point rather than
+	 * hardcoding {@code v/skills/root}.
+	 */
+	@Test
+	public void testDefaultSourcesArePublished() {
+		SkillsAdapter adapter = (SkillsAdapter) engine.getAdapter("skills");
+		AMap<AString, ACell> info = adapter.info();
+		assertEquals(SkillsAdapter.DEFAULT_SKILLSETS, info.get(SkillsAdapter.K_DEFAULT_SKILLSETS));
+		// No individually-named defaults to publish, so the key stays absent.
+		assertNull(info.get(SkillsAdapter.K_DEFAULT_SKILLS));
+
+		ACell published = engine.resolvePath(
+			Strings.create("v/info/adapters/skills"), ctx);
+		assertEquals(SkillsAdapter.DEFAULT_SKILLSETS,
+			RT.getIn(published, "defaultSkillsets"),
+			"the entry point should be discoverable at v/info/adapters/skills");
+	}
+
+	@Test
+	public void testMalformedDefaultsAreRejectedAtConfigureTime() {
+		SkillsAdapter adapter = (SkillsAdapter) engine.getAdapter("skills");
+		// Not an array.
+		assertTrue(assertThrows(IllegalArgumentException.class,
+			() -> adapter.configure(Maps.of(
+				SkillsAdapter.K_DEFAULT_SKILLSETS, Strings.create("v/skills/root")), true))
+			.getMessage().contains("must be an array"));
+		// Array of the wrong element type.
+		assertTrue(assertThrows(IllegalArgumentException.class,
+			() -> adapter.configure(Maps.of(
+				SkillsAdapter.K_DEFAULT_SKILLS, Vectors.of(CVMLong.create(42))), true))
+			.getMessage().contains("ref strings"));
+		// Well-formed settings are accepted, and an empty config is fine.
+		assertTrue(adapter.configure(Maps.of(
+			SkillsAdapter.K_DEFAULT_SKILLSETS, Vectors.of(Strings.create("v/skills/root"))), true));
+		assertTrue(adapter.configure(Maps.empty(), true));
+		assertTrue(adapter.configure(null, true));
+	}
+
+	/**
+	 * A venue that curates its own library answers {@code list} from it with
+	 * no caller changes — the point of making the default configurable.
+	 *
+	 * <p>Uses its OWN engine: adapter configuration is venue-global state, and
+	 * this suite runs methods in parallel, so reconfiguring the shared
+	 * TestEngine would change what every other test sees.</p>
+	 */
+	@Test
+	public void testConfiguredDefaultSkillsetIsUsed() throws Exception {
+		Engine own = Engine.createTemp(Maps.of(
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
+			Config.ADAPTERS, Maps.of("skills", Maps.of(
+				SkillsAdapter.K_DEFAULT_SKILLSETS,
+				Vectors.of(Strings.create("v/skills/house"))))));
+		Engine.addDemoAssets(own);
+		try {
+			RequestContext venueCtx = own.venueContext();
+			own.jobs().invokeInternal("v/ops/covia/write",
+				Maps.of(Fields.PATH, Strings.create("v/skills/house/house-rules"),
+					Fields.VALUE, Maps.of(Fields.DESCRIPTION,
+						Strings.create("The house way of doing things"))), venueCtx)
+				.get(5, TimeUnit.SECONDS);
+
+			ACell result = own.jobs().invokeInternal("v/ops/skills",
+				Maps.of(Strings.create("command"), Strings.create("list")),
+				RequestContext.of(TestEngine.uniqueDID("skills-cfg"))).get(5, TimeUnit.SECONDS);
+			assertNotNull(result);
+			assertTrue(result.toString().contains("- house-rules — The house way of doing things"),
+				result.toString());
+			assertFalse(result.toString().contains("- covia — "),
+				"the shipped root skillset is no longer the default: " + result);
+
+			// info() follows the effective configuration, not the shipped default.
+			SkillsAdapter adapter = (SkillsAdapter) own.getAdapter("skills");
+			assertEquals(Vectors.of(Strings.create("v/skills/house")),
+				adapter.info().get(SkillsAdapter.K_DEFAULT_SKILLSETS));
+
+			// Runtime reconfiguration reaches the same read path.
+			own.configureAdapter("skills", Maps.empty());
+			assertEquals(SkillsAdapter.DEFAULT_SKILLSETS,
+				adapter.info().get(SkillsAdapter.K_DEFAULT_SKILLSETS));
+		} finally {
+			own.close();
 		}
 	}
 }

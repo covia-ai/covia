@@ -34,9 +34,21 @@ import covia.venue.RequestContext;
  */
 public class SkillsAdapter extends AAdapter {
 
-	/** Default sources when the caller names none. */
-	static final AVector<ACell> DEFAULT_SOURCES = Vectors.of(
+	/**
+	 * Default skillsets when the caller names none: the user's own skills
+	 * first (so they shadow venue skills of the same name), then the venue's
+	 * entry skillset. Overridable per venue with
+	 * {@code adapters.skills.defaultSkillsets}.
+	 */
+	static final AVector<ACell> DEFAULT_SKILLSETS = Vectors.of(
 		Strings.intern("w/skills"), Strings.intern("v/skills/root"));
+
+	/** Default individually-named skills: none — the entry skillset is enough. */
+	static final AVector<ACell> DEFAULT_SKILLS = Vectors.empty();
+
+	/** Operator-configurable defaults for the two kinds ({@code docs/CONFIG.md}). */
+	static final AString K_DEFAULT_SKILLSETS = Strings.intern("defaultSkillsets");
+	static final AString K_DEFAULT_SKILLS    = Strings.intern("defaultSkills");
 
 	private static final AString ASSET_READ = Abilities.ASSET_READ;
 	private static final AString K_SOURCES  = Strings.intern("sources");
@@ -51,14 +63,74 @@ public class SkillsAdapter extends AAdapter {
 		return "skills";
 	}
 
+	/**
+	 * Validates the operator-configured defaults up front. Both settings are
+	 * read lazily at each call, but a malformed value would otherwise surface
+	 * as an opaque failure on every {@code list}/{@code read} rather than as
+	 * an actionable message at the moment it is set.
+	 */
+	@Override
+	public boolean configure(AMap<AString, ACell> config, boolean strict) {
+		if (config == null) return true;
+		validateRefs(config.get(K_DEFAULT_SKILLSETS), K_DEFAULT_SKILLSETS);
+		validateRefs(config.get(K_DEFAULT_SKILLS), K_DEFAULT_SKILLS);
+		return true;
+	}
+
+	private static void validateRefs(ACell raw, AString key) {
+		if (raw == null) return;
+		AVector<ACell> refs = RT.ensureVector(raw);
+		if (refs == null) {
+			throw new IllegalArgumentException("adapters.skills." + key
+				+ " must be an array of refs");
+		}
+		for (long i = 0; i < refs.count(); i++) {
+			if (RT.ensureString(refs.get(i)) == null) {
+				throw new IllegalArgumentException("adapters.skills." + key
+					+ " entries must be ref strings, got: " + refs.get(i));
+			}
+		}
+	}
+
+	/**
+	 * The configured defaults are public: they are lattice paths, not secrets,
+	 * and a client benefits from seeing what this venue actually reads.
+	 */
+	@Override
+	public AMap<AString, ACell> publicConfig() {
+		return publicConfig("defaultSkillsets", "defaultSkills");
+	}
+
+	/**
+	 * This venue's skill entry point, for {@code v/info/adapters/skills}.
+	 * Always the EFFECTIVE defaults, so a client discovers where to start
+	 * rather than hardcoding {@code v/skills/root} — which a venue that
+	 * curates its own library may not use.
+	 */
+	@Override
+	public AMap<AString, ACell> info() {
+		AMap<AString, ACell> out = Maps.of(K_DEFAULT_SKILLSETS, defaultRefs(K_DEFAULT_SKILLSETS, DEFAULT_SKILLSETS));
+		AVector<ACell> skills = defaultRefs(K_DEFAULT_SKILLS, DEFAULT_SKILLS);
+		if (skills.count() > 0) out = out.assoc(K_DEFAULT_SKILLS, skills);
+		return out;
+	}
+
+	/** One configured default ref list, falling back to the shipped default. */
+	private AVector<ACell> defaultRefs(AString key, AVector<ACell> fallback) {
+		if (engine == null) return fallback;
+		AVector<ACell> configured = RT.ensureVector(engine.adapterConfig(getName()).get(key));
+		return (configured != null) ? configured : fallback;
+	}
+
 	@Override
 	public String getDescription() {
-		return "Discover agent skills — named bundles of instructions, context, tools, and child skill sources. "
+		return "Discover agent skills — named bundles of instructions, context, tools, and further skills. "
 			+ "Pick the action with `command`: 'list' renders the skill index, one '- name — description' "
 			+ "line per skill (also usable as a config.context assemble-op); 'read' returns one skill in "
-			+ "full (name, description, body, tools, context, path). Sources may be workspace/catalog "
-			+ "directories, one named skill path, or a content-addressed asset. Read-only — author "
-			+ "skills with covia:write or asset:store.";
+			+ "full (name, description, body, tools, skills, skillsets, context, path). `sources` names "
+			+ "skillsets (directories of skills such as w/skills or v/skills/root) and `skills` names "
+			+ "individual skills or asset refs; both default to this venue's configured entry point. "
+			+ "Read-only — author skills with covia:write or asset:store.";
 	}
 
 	/**
@@ -188,13 +260,15 @@ public class SkillsAdapter extends AAdapter {
 
 	/**
 	 * The caller's discovery surface: {@code sources} names skillsets
-	 * (directories, the common case — default {@link #DEFAULT_SOURCES}), while
-	 * the optional {@code skills} input names individual skills.
+	 * (directories, the common case), while the optional {@code skills} input
+	 * names individual skills. Either falls back to this venue's configured
+	 * default, so a venue that curates its own library answers from it without
+	 * every caller having to know the path.
 	 */
-	private static Skills.SkillSources sourcesOf(ACell input) {
+	private Skills.SkillSources sourcesOf(ACell input) {
 		return new Skills.SkillSources(
-			refVector(input, "skills", Vectors.empty()),
-			refVector(input, "sources", DEFAULT_SOURCES));
+			refVector(input, "skills", defaultRefs(K_DEFAULT_SKILLS, DEFAULT_SKILLS)),
+			refVector(input, "sources", defaultRefs(K_DEFAULT_SKILLSETS, DEFAULT_SKILLSETS)));
 	}
 
 	private static AVector<ACell> refVector(ACell input, String key, AVector<ACell> fallback) {

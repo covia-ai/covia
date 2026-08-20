@@ -340,6 +340,8 @@ One command-dispatched op at `v/ops/skills` (tool name `skills`), following the 
 
 Capability pins, per source actually read: workspace/venue/DID paths → `crud/read`; content-addressed refs → `asset/read`. Both sit inside the anonymous read-only scope, so venue skills are publicly discoverable. There is **no write surface** — skills are authored with `covia:write` and `asset:store`.
 
+The defaults are venue-configurable (`adapters.skills.defaultSkillsets` / `defaultSkills`, see [CONFIG.md](CONFIG.md#adapter-configuration)) and published at `v/info/adapters/skills`, so a venue curating its own library answers discovery from it and clients read the entry point rather than assuming `v/skills/root`. They govern this operation only: agents declare their own sources, and an agent declaring none has skills off deliberately.
+
 Because `list` honours the assemble-op contract, an operator can pin the index into any agent the data-driven way instead of declaring sources:
 
 ```json

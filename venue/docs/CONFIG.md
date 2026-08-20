@@ -644,6 +644,7 @@ same forms are accepted by `file:move` and `file:copy` endpoints.
   "adapters": {
     "agent": { "sessionDelete": false },
     "vault": { "drive": "vault" },
+    "skills": { "defaultSkillsets": ["w/skills", "v/skills/root"] },
     "orchestrator": {
       "maxItems": 50,
       "maxConcurrency": 8
@@ -693,6 +694,28 @@ Currently defined:
   `foreach.maxConcurrency`, but cannot exceed this venue ceiling. The
   orchestrator resolves inputs and issues child invocations serially; only
   waiting for the issued jobs is concurrent.
+- `skills.defaultSkillsets` — the skillsets `v/ops/skills` searches when a
+  caller names none (default `["w/skills", "v/skills/root"]`: the caller's own
+  skills first, so they shadow venue skills of the same name, then the venue's
+  entry skillset). Point this at your own curated skillset — say
+  `["w/skills", "v/skills/house"]` — to make a venue answer discovery from its
+  own library. Entries must be paths to *directories of skills*; see
+  [SKILLS.md](SKILLS.md) for the skill/skillset distinction.
+- `skills.defaultSkills` — individually named skills added to that default
+  (empty by default). Entries are paths to *one skill*, or content-addressed
+  asset refs.
+
+  Both are validated when set, so a malformed value is rejected with an
+  actionable message rather than failing every later `skills` call, and both
+  are published at `v/info/adapters/skills` so a client can discover the
+  venue's entry point instead of assuming `v/skills/root`.
+
+  These settings govern the `skills` **operation** only. Agents declare their
+  own `config.skills` / `config.skillsets` and are unaffected — an agent that
+  declares neither has skills switched off deliberately, and a venue default
+  must not silently turn them on. A venue that re-curates its library and wants
+  new agents to follow should also update the `config.skillsets` in its agent
+  templates (`v/agents/templates/*`).
 
 ## Legacy private invoke setting
 

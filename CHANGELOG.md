@@ -14,6 +14,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Venue skill library grouped into skillsets under `v/skills/<set>/`, with `v/skills/root` as the entry index (24 always-on lines down to 8)
 - SKILL.md frontmatter accepts `tools`, `skills` and `skillsets` lists
 - Boot warnings for a malformed venue skill library, and an `agent:create` warning for a skillset pointing at a directory of skillsets
+- `adapters.skills.defaultSkillsets` / `defaultSkills` configure the `skills` op's entry point, published at `v/info/adapters/skills`
 
 - Optional `covia-discord` venue module: operator-declared or user-created
   Discord bots route DMs and mentioned guild messages to agents (durable
