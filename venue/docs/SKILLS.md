@@ -369,6 +369,8 @@ Capability pins per resource read: a path needs `crud/read`; a content-addressed
 
 There is **no write surface**. Skills are ordinary assets: create and update them with the lattice write and asset store operations, and remove them with the lattice delete operation.
 
+**There is no operation that enumerates skillsets, deliberately.** A skillset is not a registered thing — it is any lattice path that happens to contain skill assets. Listing the skillsets this venue ships is therefore an ordinary lattice read (`v/ops/covia/list` on `v/skills`, whose keys are the skillsets), and a skillset anywhere else is found the same way you would find any other path. Adding a skills-specific enumeration would imply a registry that does not exist.
+
 The defaults are venue-configurable (`adapters.skills.defaultSkillsets` / `defaultSkills`, see [CONFIG.md](CONFIG.md#adapter-configuration)) and published at `v/info/adapters/skills`, so a venue curating its own library answers discovery from it and clients read the entry point rather than assuming `v/skills/root`. They govern these operations only: agents declare their own sources, and an agent declaring none has skills off deliberately.
 
 **Rendering is not an operation.** The per-turn `[Skills]` index is built by `ContextBuilder` calling `Skills.renderIndex` directly — it never goes through an op. There is deliberately no callable render: it would exist only to pin an index into `config.context` as an assemble-op, which nothing ships and which a first-class source declaration does better, since that also activates `skill_load`. Add one if a real consumer appears.
