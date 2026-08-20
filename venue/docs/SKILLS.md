@@ -202,7 +202,7 @@ A non-empty declaration of either kind activates both halves of the feature: the
   no access capability: did:some-other-user/s/FOO
   ```
 
-  Each line states a fact and nothing more. No guidance: that would cost context on every create for a reader that mostly does not need it. What these words mean, and what to do about them, lives in the tool descriptions and in the `skills` and `capabilities` skills, which name these exact phrases — the vocabulary is the link, so a reader who needs more loads the skill that defines the term.
+  Each line states a fact and nothing more. No guidance: that would cost context on every create for a reader that mostly does not need it. What these words mean, and what to do about them, lives in the **`agents`** skill — the one an agent creating an agent already has loaded — with `skills` there for a deeper dive into discovery and authoring, and `capabilities` for what an access capability is. The vocabulary is the link.
 
   Reported per kind, because a missing skill and a missing skillset are different mistakes, and collected rather than short-circuited so a caller sees everything at once.
 
