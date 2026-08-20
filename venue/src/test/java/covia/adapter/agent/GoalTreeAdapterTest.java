@@ -603,7 +603,8 @@ public class GoalTreeAdapterTest {
 		String rendered = convex.core.util.JSON.print(
 			RT.getIn(l3, Fields.MESSAGES)).toString();
 		assertTrue(rendered.contains("GOAL_LOAD_VISIBLE"), rendered);
-		assertTrue(rendered.contains("[Context Map]"), rendered);
+		// Loads render with their own headers; there is no separate inventory.
+		assertFalse(rendered.contains("[Context Map]"), rendered);
 		assertTrue(rendered.contains("w/goal-inspection-load"), rendered);
 
 		AVector<ACell> tools = RT.ensureVector(RT.getIn(l3, Fields.TOOLS));

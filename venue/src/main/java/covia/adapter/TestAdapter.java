@@ -567,7 +567,7 @@ public class TestAdapter extends AAdapter {
      *   <li>covia_read result seen → respond
      *       {@code SKILL_TOOL_RESULT: <content>} — proves load → palette →
      *       dispatch all worked inside one chat transition</li>
-     *   <li>later turns ({@code [Skill: alpha]} system message present) →
+     *   <li>later turns ({@code [Skill: alpha — <path>]} system message present) →
      *       respond {@code SKILL_BODY_PRESENT} plus
      *       {@code SKILL_TOOLS_ACTIVE}/{@code SKILL_TOOLS_MISSING} for the
      *       persisted palette</li>
@@ -620,7 +620,7 @@ public class TestAdapter extends AAdapter {
             AString content = RT.ensureString(RT.getIn(msg, "content"));
             if (role == null) continue;
             if ("system".equals(role.toString()) && content != null
-                    && content.toString().contains("[Skill: alpha]")) {
+                    && content.toString().contains("[Skill: alpha")) {
                 skillBodyPresent = true;
             }
             if ("tool".equals(role.toString())) {

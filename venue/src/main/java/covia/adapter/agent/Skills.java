@@ -1088,16 +1088,27 @@ public final class Skills {
 		}
 	}
 
-	/** The {@code [Skill: <name>]}-labelled system message carrying a skill body. */
-	static ACell renderSkillMessage(String name, String body) {
+	/**
+	 * The {@code [Skill: <name> — <path>]}-labelled system message carrying a
+	 * skill body.
+	 *
+	 * <p>The path is the <b>unload key</b>: {@code context_unload} takes a
+	 * path, while a skill is otherwise only ever named. Carrying it in the
+	 * element header puts the key on the thing it acts on, rather than in a
+	 * separate inventory the reader has to cross-reference — which is how a
+	 * non-skill load already reads, since its label IS its ref.</p>
+	 */
+	static ACell renderSkillMessage(String name, AString path, String body) {
 		return Maps.of(K_ROLE, ROLE_SYSTEM, K_CONTENT,
-			Strings.create("[Skill: " + name + "]\n" + body));
+			Strings.create("[Skill: " + name + " — " + path + "]\n" + body));
 	}
 
-	/** The visible element for a loaded skill that no longer resolves. */
-	static ACell skillErrorMessage(String label, String reason) {
+	/** The visible element for a loaded skill that no longer resolves. Keeps
+	 *  the path: a dead entry is exactly the one you want to unload. */
+	static ACell skillErrorMessage(String label, AString path, String reason) {
 		return Maps.of(K_ROLE, ROLE_SYSTEM, K_CONTENT,
-			Strings.create("[Skill: " + label + " — unavailable: " + reason + "]"));
+			Strings.create("[Skill: " + label + " — " + path
+				+ " — unavailable: " + reason + "]"));
 	}
 
 	// ========== skill_load (harness-tool semantics) ==========

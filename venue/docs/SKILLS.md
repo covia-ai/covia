@@ -26,7 +26,7 @@ Skills solve this with **progressive disclosure**: a compact index (one line per
 
 1. **A skill is an asset.** Skill metadata is ordinary asset metadata — `name`, `description`, and the standard `content` descriptor. The **body is the asset's content**, resolved through the venue's universal content resolution (CAS blob, `content.inline`, `content.dlfs` pinned or live bindings, DLFS drive refs — `Engine.resolveContent`). There is no description-as-body fallback: the description is the index one-liner, never the documentation, and a contentless skill is simply a pure toolset. Skill-specific extras live under a **`skill` facet**, exactly as invocability lives under the `operation` facet. No new type, no schema registration: something is treated as a skill because it is *referenced as one* (declared in `config.skills`, a member of a declared skillset, or the target of `skill_load`).
 
-2. **Built on the loads scope chain — no parallel machinery.** Loading a skill writes an ordinary, skill-flagged entry into the existing context loads tier (session for llmagent, frame for goaltree). Persistence across turns, advisory per-entry budgets, the Context Map inventory, tombstone masking, and unloading via `context_unload` all come from the existing machinery unchanged.
+2. **Built on the loads scope chain — no parallel machinery.** Loading a skill writes an ordinary, skill-flagged entry into the existing context loads tier (session for llmagent, frame for goaltree). Persistence across turns, advisory per-entry budgets, tombstone masking, and unloading via `context_unload` all come from the existing machinery unchanged.
 
 3. **Compatibility with established idioms.** LLMs must see familiar shapes — unfamiliar surface confuses models and wastes their pretraining:
    - Skill metadata is asset metadata; the `skill` facet mirrors the `operation` facet; body-as-content is the asset content model.
@@ -38,7 +38,7 @@ Skills solve this with **progressive disclosure**: a compact index (one line per
 
 4. **Progressive disclosure, resolved fresh.** The index and every loaded body are re-resolved each turn from their sources — skills stay live, the same freshness contract as every other context entry. Nothing is snapshotted at load except the skill's tool paths and contributed skill-source refs (§5.3).
 
-5. **Fail-visible.** Absent sources and skills are skipped quietly; resolution *errors* render a visible diagnosable line; malformed shapes (a non-vector `config.skills`/`config.skillsets`, a non-string tools or child-ref entry) throw. A loaded skill that vanishes renders a visible `[Skill: <name> — unavailable: …]` element rather than silently disappearing — a missing skill changes behaviour too much to hide.
+5. **Fail-visible.** Absent sources and skills are skipped quietly; resolution *errors* render a visible diagnosable line; malformed shapes (a non-vector `config.skills`/`config.skillsets`, a non-string tools or child-ref entry) throw. A loaded skill that vanishes renders a visible `[Skill: <name> — <path> — unavailable: …]` element rather than silently disappearing — a missing skill changes behaviour too much to hide.
 
 6. **Additive and opt-in.** An agent declaring neither `config.skills` nor `config.skillsets` behaves exactly as before skills existed. Skills are read-only surface: authoring uses the existing `covia:write` / `asset:store`; there is no skill-write op.
 
@@ -310,7 +310,7 @@ Key = the skill's canonical path (what the index shows). Value:
 
 - The **body is not denormalised** — it re-resolves from the path each turn through the §3.2 chain, staying live like every other load.
 - The **tool paths and child skill-source refs are denormalised** onto the entry (including the skill's own path as a tool when it is an operation); their targets still resolve fresh each turn. Trade-off: editing either list after load requires unload/reload to take effect; body and context edits apply on the next turn. This keeps the per-turn cost one resolution per skill and the entry a plain map.
-- Because the entry is a plain loads-map entry, everything in the scope chain applies unchanged: tombstone masking, advisory budget accounting, Context Map listing (with a `(skill)` marker), and explicit unloading.
+- Because the entry is a plain loads-map entry, everything in the scope chain applies unchanged: tombstone masking, advisory budget accounting, and explicit unloading.
 - **Skills dedup by content identity, not path.** A skill's identity is its resolved metadata's value hash — the asset identity Convex already computes and memoises on every cell (and which pins the body: `content.sha256`/`content.inline` live inside the metadata). Nothing is persisted for this: identities are compared **live** (entries re-resolve, consistent with the body/tools liveness contract) and accumulated in a transient set per pass. Loading the same skill from a second address (a directory ref vs the asset hash, mirrored directories) is a no-op naming the existing entry; rendering skips a second entry with an already-seen identity (e.g. across tiers); and the index's `(loaded)` marker matches by identity, so a skill loaded via `a/<hash>` still marks its directory line. Reloading under the *same* path overwrites (budget updates).
 - **The agent runtimes carry no skill knowledge.** Rendering dispatches on the entry inside the context assembly (`ContextBuilder`), and tool contribution is the generic rule *"a loads entry may declare `tools`"* — kind-agnostic, applied per loop iteration so the palette always mirrors effective loads (load activates mid-transition; unload retracts). Skills are the first producer of such entries; future additions (memory packs, op bundles) ride the same mechanism. The runtime's only skill surface is the `skill_load` harness tool, whose handler delegates wholesale to the skills resolver.
 
@@ -325,14 +325,14 @@ Key = the skill's canonical path (what the index shows). Value:
 Each skill-flagged entry in effective loads, per turn:
 
 1. Re-resolve the skill from its path.
-2. Inject one system message: `[Skill: <name>]` followed by the body **verbatim** (markdown preserved — the §3.6 rendering contract of AGENT_CONTEXT.md); a contentless (toolset) skill shows its description one-liner instead.
+2. Inject one system message: `[Skill: <name> — <path>]` followed by the body **verbatim** (markdown preserved — the §3.6 rendering contract of AGENT_CONTEXT.md); a contentless (toolset) skill shows its description one-liner instead.
 3. Resolve the skill's `skill.context` entries through the standard context loader and inject each as a labelled `[Context: …]` message.
 4. Contribute the skill's tools to the turn's palette (deduplicated against existing tool names).
 5. Contribute its immediate `skill.skills` refs to the next skills index and named lookup scope.
 
-A skill that fails to resolve renders a visible `[Skill: <name> — unavailable: <reason>]` element. Advisory aggregate budget pressure never makes a loaded skill silently disappear.
+A skill that fails to resolve renders a visible `[Skill: <name> — <path> — unavailable: <reason>]` element. Advisory aggregate budget pressure never makes a loaded skill silently disappear.
 
-Load order for each inference: system prompt → `config.context` → **skills index** → a freshly resolved loads snapshot (including skill bodies and Context Map) → conversation.
+Load order for each inference: system prompt → `config.context` → **skills index** → a freshly resolved loads snapshot (skill bodies and other loaded entries) → conversation.
 
 ---
 

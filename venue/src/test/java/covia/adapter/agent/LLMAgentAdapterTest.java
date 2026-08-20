@@ -670,7 +670,8 @@ public class LLMAgentAdapterTest {
 		String renderedMessages = convex.core.util.JSON.print(
 			RT.getIn(l3, Fields.MESSAGES)).toString();
 		assertTrue(renderedMessages.contains("probe-visible"), renderedMessages);
-		assertTrue(renderedMessages.contains("[Context Map]"), renderedMessages);
+		// Loads render with their own headers; there is no separate inventory.
+		assertFalse(renderedMessages.contains("[Context Map]"), renderedMessages);
 		assertTrue(renderedMessages.contains("w/inspection-probe"), renderedMessages);
 
 		AVector<ACell> tools = RT.ensureVector(RT.getIn(l3, Fields.TOOLS));

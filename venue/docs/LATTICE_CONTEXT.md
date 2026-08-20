@@ -230,6 +230,15 @@ The `t/` shorthand resolves to the **focused Covia task's** scratch — not the 
 
 ## Context Map
 
+**Not implemented, and not planned in this form.** A per-turn inventory did
+ship in a simpler shape and was removed: it restated the loaded elements
+rendered immediately above it, and its byte counts changed on every build, so
+it invalidated the prefix cache for everything after it. Each loaded element
+now carries its own unload key in its header, and the budget speaks only when
+it is under pressure. The sketch below is retained for the accounting model
+it describes, not as a specification of current behaviour.
+
+
 ```json5
 {
   budget: {

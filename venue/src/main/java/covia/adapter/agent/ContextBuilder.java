@@ -524,7 +524,7 @@ public class ContextBuilder {
 			AMap<AString, ACell> effectiveLoads, java.util.Set<String> excludeNames) {
 		ContextBuilder loadBuilder = new ContextBuilder(engine, ctx)
 			.withLoadedPaths(effectiveLoads, ctx)
-			.withContextMap(effectiveLoads);
+			.withBudgetWarning();
 		Map<String, AString> routes = new HashMap<>();
 		AVector<ACell> tools = loadsToolDefs(engine, ctx, effectiveLoads,
 			excludeNames, routes);
@@ -594,7 +594,7 @@ public class ContextBuilder {
 	 * <ul>
 	 *   <li><b>Skill entries</b> ({@code skill: true} — SKILLS.md §6): the
 	 *       skill re-resolves from the entry key and renders as
-	 *       {@code [Skill: <name>]} + body verbatim, followed by the skill's
+	 *       {@code [Skill: <name> — <path>]} + body verbatim, followed by the skill's
 	 *       own context entries. Failures are <b>visible</b> — a skill the
 	 *       agent loaded must not silently disappear.</li>
 	 *   <li><b>Everything else</b>: the standard context-entry resolution of
@@ -617,13 +617,13 @@ public class ContextBuilder {
 					return Vectors.empty();
 				}
 				AVector<ACell> msgs = Vectors.of(
-					Skills.renderSkillMessage(skill.name(), skill.displayBody()));
+					Skills.renderSkillMessage(skill.name(), path, skill.displayBody()));
 				if (skill.contextEntries().count() > 0) {
 					msgs = msgs.concat(loader.resolve(skill.contextEntries(), resolutionCtx));
 				}
 				return msgs;
 			} catch (RuntimeException e) {
-				return Vectors.of(Skills.skillErrorMessage(loadLabel(path, meta),
+				return Vectors.of(Skills.skillErrorMessage(loadLabel(path, meta), path,
 					ContextLoader.rootMessage(e)));
 			}
 		}
@@ -690,42 +690,35 @@ public class ContextBuilder {
 		return this;
 	}
 
+	/** Loads-budget usage at which the agent is told to consider unloading. */
+	private static final int BUDGET_WARN_PCT = 70;
+
 	/**
-	 * Appends a compact context map showing budget status and loaded paths.
+	 * Appends a loads-budget warning — <b>only under pressure</b>.
 	 *
-	 * <p><b>Call this LAST among message sections</b>: the budget numbers
-	 * change on every build, so anything after this message is uncacheable by
-	 * prefix-cached providers. At the tail it busts only itself — and reports
-	 * the most accurate totals.</p>
+	 * <p>This was a full inventory printed every turn: total bytes, then every
+	 * loaded path with its label and byte budget. It was removed because it
+	 * restated what the reader could already see — each loaded element renders
+	 * immediately above with its own header, and now carries its unload key
+	 * there too, so the inventory was a second copy of the same list.</p>
+	 *
+	 * <p>It also cost more than a message. Its byte counts changed on every
+	 * build, so it invalidated the prefix cache for everything after it — and
+	 * in the one production path it sat <em>before</em> the conversation
+	 * history and the current input, which is the largest cacheable region
+	 * there is. Its own javadoc said to call it last; nothing did.</p>
+	 *
+	 * <p>What remains is the part that is not derivable by reading: that the
+	 * budget is filling up. Silence is the normal case, so the message costs
+	 * nothing until it means something.</p>
 	 */
-	@SuppressWarnings("unchecked")
-	public ContextBuilder withContextMap(AMap<AString, ACell> loads) {
-		StringBuilder sb = new StringBuilder("[Context Map]\n");
-		sb.append("budget: ").append(consumed).append("/").append(totalBudget)
-		  .append(" bytes (").append(getRemaining()).append(" remaining)\n");
-
+	public ContextBuilder withBudgetWarning() {
+		if (totalBudget <= 0) return this;
 		int pct = (int) (100 * consumed / totalBudget);
-		if (pct >= 70) {
-			sb.append("WARNING: ").append(pct).append("% budget used. Consider unloading unused paths.\n");
-		}
-
-		if (loads != null && loads.count() > 0) {
-			sb.append("loaded:\n");
-			for (var entry : loads.entrySet()) {
-				AString path = entry.getKey();
-				AMap<AString, ACell> meta = (AMap<AString, ACell>) entry.getValue();
-				ACell budgetCell = meta.get(Strings.intern("budget"));
-				int budget = (budgetCell instanceof convex.core.data.prim.CVMLong l) ? (int) l.longValue() : 500;
-				AString label = RT.ensureString(meta.get(Strings.intern("label")));
-				sb.append("  ").append(path);
-				if (label != null) sb.append(" — ").append(label);
-				sb.append(" [").append(budget).append("B]");
-				if (Skills.isSkillEntry(meta)) sb.append(" (skill)");
-				sb.append('\n');
-			}
-		}
-
-		ACell msg = Maps.of(K_ROLE, ROLE_SYSTEM, K_CONTENT, Strings.create(sb.toString()));
+		if (pct < BUDGET_WARN_PCT) return this;
+		ACell msg = Maps.of(K_ROLE, ROLE_SYSTEM, K_CONTENT, Strings.create(
+			"[Context budget] " + pct + "% of the loads budget used — unload paths you no"
+			+ " longer need. Each loaded element shows its path in its header."));
 		messages = messages.conj(msg);
 		trackMessage(msg);
 		return this;

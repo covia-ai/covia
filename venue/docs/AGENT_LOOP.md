@@ -217,8 +217,8 @@ For LLM agents (`llmagent:chat`), level 2:
 - Builds a **per-turn LLM context** with FRESH ephemeral additions every turn:
   - System message (identity prompt + lattice cheat sheet, rebuilt fresh)
   - Resolved context entries
-  - Resolved loaded paths
-  - `[Context Map]` budget summary
+  - Resolved loaded paths, each headed with its own unload key
+  - A loads-budget warning, only when the budget is under pressure
   - Then appends the rendered frame conversation
   - Then appends pending job results and new messages
 - Invokes level 3 (LLM call) as a grid operation
@@ -227,7 +227,7 @@ For LLM agents (`llmagent:chat`), level 2:
 - The assistant's final response is returned to the framework, which appends
   it as a turn to `session.frames[0].conversation`
 - The session frame stack is the canonical conversation record. The system
-  prompt, context entries, and `[Context Map]` are ephemeral — they rebuild
+  prompt, context entries, and loaded paths are ephemeral — they rebuild
   fresh each turn so config updates apply immediately to existing agents.
 
 Level 2 does not import or depend on any LLM library. It invokes level 3 as a

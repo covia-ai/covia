@@ -384,7 +384,7 @@ public class ContextBuilderTest {
 			.withLoadedPaths(alphaSkillLoads())
 			.build();
 		String all = allContent(result);
-		assertTrue(all.contains("[Skill: alpha]\n## Alpha\nDo the thing."),
+		assertTrue(all.contains("[Skill: alpha — w/skills/alpha]\n## Alpha\nDo the thing."),
 			"body renders verbatim under the [Skill:] label: " + all);
 		assertTrue(all.contains("[Context: Alpha notes]"), all);
 		assertTrue(all.contains("Alpha extra context"), all);
@@ -402,7 +402,7 @@ public class ContextBuilderTest {
 			.withLoadedPaths(loads)
 			.build();
 		String all = allContent(result);
-		assertTrue(all.contains("[Skill: ghost — unavailable:"), all);
+		assertTrue(all.contains("[Skill: ghost — w/skills/ghost — unavailable:"), all);
 	}
 
 	@Test
@@ -414,7 +414,7 @@ public class ContextBuilderTest {
 			.withLoadedPaths(loads)
 			.build();
 		String all = allContent(result);
-		assertTrue(all.contains("[Skill: alpha]"), all);
+		assertTrue(all.contains("[Skill: alpha — w/skills/alpha]"), all);
 		assertTrue(all.contains("Do the thing."), all);
 	}
 
@@ -448,13 +448,20 @@ public class ContextBuilderTest {
 			"one [Skill:] block for one content identity: " + all);
 	}
 
+	/**
+	 * A skill announces itself and its unload key in its own header. The
+	 * separate inventory that used to carry "(skill)" and a byte budget is
+	 * gone: it restated the elements rendered above it, and its per-build byte
+	 * counts broke the prefix cache for everything that followed.
+	 */
 	@Test
-	public void testContextMapSkillMarker() {
-		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
-			.withContextMap(alphaSkillLoads())
-			.build();
-		String all = allContent(result);
-		assertTrue(all.contains("w/skills/alpha — alpha [2000B] (skill)"), all);
+	public void testSkillElementCarriesNameAndUnloadKey() {
+		String all = allContent(new ContextBuilder(engine, ctx)
+			.withConfig(null)
+			.withLoadedPaths(alphaSkillLoads(), ctx)
+			.build());
+		assertTrue(all.contains("[Skill: alpha — w/skills/alpha]"), all);
+		assertFalse(all.contains("[Context Map]"), all);
 	}
 
 	@Test
@@ -781,32 +788,37 @@ public class ContextBuilderTest {
 			"the date rides the tail message: " + tail);
 	}
 
+	/**
+	 * The loads budget is SILENT until it matters. A per-turn inventory used to
+	 * print here; it restated the loaded elements rendered immediately above
+	 * and its byte counts broke the prefix cache for everything after it.
+	 */
 	@Test
-	public void testCachePrefixStability() {
-		// Two identical builds must produce IDENTICAL message sequences —
-		// prefix-cached providers (OpenAI automatic, Anthropic cache_control)
-		// only reuse a byte-stable prefix. Any per-build variation here is a
-		// cache buster and a regression.
-		AMap<AString, ACell> config = Maps.of(Strings.intern("defaultTools"), CVMBool.TRUE);
-		ContextBuilder.ContextResult r1 = new ContextBuilder(engine, ctx)
-			.withConfig(config).withSystemPrompt().withContextEntries()
-			.withCurrentDate().withTools().build();
-		ContextBuilder.ContextResult r2 = new ContextBuilder(engine, ctx)
-			.withConfig(config).withSystemPrompt().withContextEntries()
-			.withCurrentDate().withTools().build();
-		assertEquals(r1.history(), r2.history(),
-			"identical inputs must assemble identical messages (cache-stable)");
-		assertEquals(r1.tools(), r2.tools(),
-			"tool definitions must be build-stable (part of the cached prefix)");
+	public void testBudgetWarningIsSilentWhenQuiet() {
+		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
+			.withConfig(null)
+			.withSystemPrompt()
+			.withBudgetWarning()
+			.withTools().build();
+		assertFalse(allContent(result).contains("Context budget"),
+			"no budget message below the warning threshold");
+	}
 
-		// The volatile context map must be the LAST message when present.
-		ContextBuilder.ContextResult mapped = new ContextBuilder(engine, ctx)
-			.withConfig(config).withSystemPrompt().withCurrentDate()
-			.withContextMap(null).withTools().build();
-		AString last = RT.ensureString(RT.getIn(
-			mapped.history().get(mapped.history().count() - 1), K_CONTENT));
-		assertTrue(last.toString().startsWith("[Context Map]"),
-			"the per-build-volatile context map must sit at the tail: " + last);
+	/** Each loaded element carries its own unload key, so no inventory is needed. */
+	@Test
+	public void testLoadedElementsCarryTheirUnloadKey() {
+		writeSkill("w/skills/keyed", "Body of keyed");
+		AMap<AString, ACell> loads = Maps.of(
+			Strings.create("w/skills/keyed"),
+			Maps.of(Skills.K_SKILL, CVMBool.TRUE,
+				Strings.create("budget"), CVMLong.create(2000),
+				Strings.create("label"), Strings.create("keyed")));
+
+		String all = allContent(new ContextBuilder(engine, ctx)
+			.withConfig(null).withLoadedPaths(loads, ctx).build());
+		// The path is what context_unload takes, so it rides in the header.
+		assertTrue(all.contains("[Skill: keyed — w/skills/keyed]"), all);
+		assertFalse(all.contains("[Context Map]"), all);
 	}
 
 	@Test
@@ -1154,56 +1166,40 @@ public class ContextBuilderTest {
 			.build();
 	}
 
-	@Test public void testContextMapContent() {
+	@Test public void testNonSkillLoadShowsItsPath() {
+		// A non-skill load already labelled itself with its ref, which IS the
+		// unload key — the inventory was a second copy of that.
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Strings.create("path"), Strings.create("w/data"),
+				Strings.create("value"), Strings.create("payload-here")), ctx).awaitResult(5000);
 		AMap<AString, ACell> loads = Maps.of(
 			Strings.create("w/data"), Maps.of(
 				Strings.create("budget"), CVMLong.create(800),
 				Strings.create("label"), Strings.create("Test Data")));
 
-		ContextBuilder builder = new ContextBuilder(engine, ctx);
-		ContextBuilder.ContextResult result = builder
-			.withConfig(null)
-			.withSystemPrompt()
-			.withContextMap(loads)
-			.withTools()
-			.build();
-
-		// Find the context map message
-		boolean foundMap = false;
-		for (long i = 0; i < result.history().count(); i++) {
-			AString content = RT.ensureString(RT.getIn(result.history().get(i), "content"));
-			if (content != null && content.toString().contains("[Context Map]")) {
-				foundMap = true;
-				String text = content.toString();
-				assertTrue(text.contains("budget:"), "Should show budget");
-				assertTrue(text.contains("w/data"), "Should list loaded path");
-				assertTrue(text.contains("Test Data"), "Should show label");
-				assertTrue(text.contains("800B"), "Should show path budget");
-			}
-		}
-		assertTrue(foundMap, "Should have context map message");
+		String all = allContent(new ContextBuilder(engine, ctx)
+			.withConfig(null).withLoadedPaths(loads, ctx).build());
+		assertTrue(all.contains("w/data"), all);
+		assertTrue(all.contains("payload-here"), all);
+		assertFalse(all.contains("[Context Map]"), all);
 	}
 
-	@Test public void testContextMapWarningAt70Pct() {
+	@Test public void testBudgetWarningAt70Pct() {
 		// Inflate the system prompt to push budget usage past 70%.
 		// defaultTools=false suppresses the lattice reference so the message
 		// size is dominated by the configured systemPrompt.
 		AMap<AString, ACell> bigConfig = Maps.of(
 			Strings.intern("systemPrompt"), Strings.create("x".repeat(800)),
 			Strings.intern("defaultTools"), CVMBool.FALSE);
-		ContextBuilder builder = new ContextBuilder(engine, ctx, 1000);
-		ContextBuilder.ContextResult result = builder
+		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx, 1000)
 			.withConfig(bigConfig)
 			.withSystemPrompt()
-			.withContextMap(null)
+			.withBudgetWarning()
 			.build();
 
-		boolean foundWarning = false;
-		for (long i = 0; i < result.history().count(); i++) {
-			AString content = RT.ensureString(RT.getIn(result.history().get(i), "content"));
-			if (content != null && content.toString().contains("WARNING")) foundWarning = true;
-		}
-		assertTrue(foundWarning, "Should warn when budget > 70%");
+		String all = allContent(result);
+		assertTrue(all.contains("Context budget"), "should warn when budget > 70%: " + all);
+		assertTrue(all.contains("unload"), all);
 	}
 
 	@Test public void testSafetyValveNoPruneBelow90() {
