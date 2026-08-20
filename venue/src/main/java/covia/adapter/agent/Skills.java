@@ -1116,6 +1116,34 @@ public final class Skills {
 	}
 
 	/**
+	 * The skill names discoverable AFTER a load that were not discoverable
+	 * before — the answer to "what did this get me", without the caller having
+	 * to compare two indexes.
+	 *
+	 * <p>Compared by name, because a name is what {@code skill_load} takes.
+	 * Never throws: this decorates a successful load, and a diagnostic that
+	 * fails must not turn one into an error.</p>
+	 */
+	private static AVector<ACell> newlyDiscoverable(Engine engine, RequestContext ctx,
+			SkillSources before, SkillSources after) {
+		AVector<ACell> out = Vectors.empty();
+		try {
+			Set<String> had = new HashSet<>();
+			for (SkillIndexEntry e : listSkills(engine, ctx, before)) {
+				if (e.name() != null) had.add(e.name());
+			}
+			for (SkillIndexEntry e : listSkills(engine, ctx, after)) {
+				if (e.name() != null && e.error() == null && !had.contains(e.name())) {
+					out = out.conj(Strings.create(e.name()));
+				}
+			}
+		} catch (RuntimeException e) {
+			return Vectors.empty();
+		}
+		return out;
+	}
+
+	/**
 	 * The outcome of a {@code skill_load}: the loads entry to write (path +
 	 * spec) and the tool result for the model. The caller (a harness-tool
 	 * handler) glues the entry into its innermost loads tier — the one thing
@@ -1129,9 +1157,9 @@ public final class Skills {
 	 * Executes the {@code skill_load} semantics: resolve the skill (by
 	 * {@code name} across the agent's sources, or by direct {@code ref}),
 	 * build its loads entry, and assemble the tool result — including the
-	 * body for immediate same-turn use, the activated tool names, the refreshed
-	 * skill index when it contributes sources, and any declared-but-unresolvable
-	 * tools. Throws with a diagnosable message on
+	 * body for immediate same-turn use, the activated tool names, the skills a
+	 * contributing load newly revealed (plus the refreshed index), and any
+	 * declared-but-unresolvable tools. Throws with a diagnosable message on
 	 * any failure (the handler renders it as an {@code Error:} tool result).
 	 *
 	 * <p><b>Content-identity dedup</b>: when {@code effectiveLoads} already
@@ -1208,8 +1236,17 @@ public final class Skills {
 			AMap<AString, ACell> prospectiveLoads = (effectiveLoads == null)
 				? Maps.of(skill.path(), entryMeta)
 				: effectiveLoads.assoc(skill.path(), entryMeta);
-			String index = renderIndex(engine, ctx,
-				effectiveSources(sources, prospectiveLoads), prospectiveLoads, false);
+			SkillSources widened = effectiveSources(sources, prospectiveLoads);
+			// What is NEW, named outright. The refreshed index alone made the
+			// reader diff it against the [Skills] block from the start of the
+			// turn — it has both lists, but has to notice they differ, and a
+			// live agent observably did not: it reported "no new skills" while
+			// listing the revealed ones. Naming them removes the inference.
+			AVector<ACell> revealed = newlyDiscoverable(engine, ctx, sources, widened);
+			if (revealed.count() > 0) {
+				result = result.assoc(Strings.intern("revealed"), revealed);
+			}
+			String index = renderIndex(engine, ctx, widened, prospectiveLoads, false);
 			if (index != null) result = result.assoc(Strings.intern("skillIndex"), Strings.create(index));
 		}
 		if (unresolved.count() > 0) result = result.assoc(Strings.intern("unresolved"), unresolved);

@@ -820,4 +820,46 @@ public class SkillsTest {
 		}
 		return sb.toString();
 	}
+
+	/**
+	 * A contributing load names what it revealed. Returning only the refreshed
+	 * index left the reader to diff it against the index from the start of the
+	 * turn — a live agent observably failed to, reporting "no new skills" while
+	 * listing the revealed ones.
+	 */
+	@Test
+	public void testLoadNamesNewlyRevealedSkills() {
+		write("w/root2", Maps.of(
+			Fields.NAME, Strings.create("router2"),
+			Fields.DESCRIPTION, Strings.create("Opens specialists"),
+			Skills.K_SKILL, Maps.of(Skills.K_SKILLSETS,
+				Vectors.of(Strings.create("w/specialists2")))));
+		write("w/specialists2/reviewer2", Maps.of(
+			Fields.DESCRIPTION, Strings.create("Reviews")));
+		write("w/specialists2/auditor2", Maps.of(
+			Fields.DESCRIPTION, Strings.create("Audits")));
+
+		Skills.SkillSources configured =
+			Skills.SkillSources.ofSkills(Vectors.of(Strings.create("w/root2")));
+		Skills.LoadOutcome out = Skills.load(engine, ctx, configured,
+			Maps.of(Fields.NAME, Strings.create("router2")), Maps.empty());
+
+		AVector<ACell> revealed = RT.ensureVector(RT.getIn(out.result(), "revealed"));
+		assertNotNull(revealed, out.result().toString());
+		java.util.Set<String> names = new java.util.HashSet<>();
+		for (long i = 0; i < revealed.count(); i++) names.add(revealed.get(i).toString());
+		assertEquals(java.util.Set.of("reviewer2", "auditor2"), names);
+		// The router itself was already discoverable, so it is not "new".
+		assertFalse(names.contains("router2"), names.toString());
+	}
+
+	/** A load that contributes nothing reveals nothing — no empty noise. */
+	@Test
+	public void testLoadWithoutContributionRevealsNothing() {
+		write("w/plain/solo", Maps.of(Fields.DESCRIPTION, Strings.create("Just a skill")));
+		Skills.LoadOutcome out = Skills.load(engine, ctx,
+			Skills.SkillSources.ofSkillsets(Vectors.of(Strings.create("w/plain"))),
+			Maps.of(Fields.NAME, Strings.create("solo")), Maps.empty());
+		assertNull(RT.getIn(out.result(), "revealed"));
+	}
 }

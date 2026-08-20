@@ -276,7 +276,9 @@ A `name` that matches nothing fails with a message naming the skills that ARE av
 1. Resolves the skill (§3) — failure returns a diagnosable `Error:` tool result naming the skill and reason.
 2. Writes a **skill-flagged entry** into the innermost loads tier (session for llmagent, frame for goaltree).
 3. Resolves the skill's tools — `skill.tools`, plus the asset itself when it carries an `operation` facet (§3.4) — into LLM tool definitions and activates them **within the same transition**, available from the next tool-loop iteration, exactly like `more_tools`.
-4. Adds the skill's `skill.skills` refs to the effective discovery sources and returns the refreshed effective index as `skillIndex`, so named children are visible immediately, can be loaded from the next tool-loop iteration, and appear in the next per-turn index.
+4. Adds the skill's contributed refs to the effective discovery sources and reports what that gained: `revealed` names the skills that were not discoverable before, alongside the refreshed `skillIndex`. Named children can be loaded from the next tool-loop iteration and appear in the next per-turn index.
+
+   `revealed` exists because the index alone was not enough: the reader already has the turn-start `[Skills]` block and the refreshed index, but must notice they differ. A live agent observably did not — it reported "no new skills" while listing the revealed ones. Naming them removes the inference.
 5. Loads the skill's `skill.context` entries into the same tier alongside the body.
 6. Returns the body immediately, so the instructions are usable in the same turn without waiting for the next context build:
 

@@ -15,6 +15,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - SKILL.md frontmatter accepts `tools`, `skills` and `skillsets` lists
 - Boot warnings for a malformed venue skill library, and an `agent:create` warning for a skillset pointing at a directory of skillsets
 - `adapters.skills.defaultSkillsets` / `defaultSkills` configure the `skills` op's entry point, published at `v/info/adapters/skills`
+- `skill_load` reports `revealed` — the skills a contributing load newly made discoverable — so a reader is told what it gained instead of diffing two indexes
+- `/agent-test-drive` skill: launches a venue, creates a fleet from the standard templates, runs a task matrix against a real LLM, and reports what broke
 - **Breaking:** the command-dispatched `v/ops/skills` is replaced by `v/ops/skills/list` (the skills in one skillset) and `v/ops/skills/read` (one skill by path or asset ref). Single arity; listing returns a map from each skill's resolved path to `{name, description, id}`
 - `agent:create` reports skill source problems as terse agent-facing facts (`skill missing:`, `skillset missing:`, `skillset empty:`, `no access capability:`); the vocabulary is defined in the `skills` and `capabilities` skills
 - A failed `skill_load` by name now names the skills that are available, so an agent can correct itself
