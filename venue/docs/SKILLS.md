@@ -81,7 +81,7 @@ The **`skill` facet** carries the loadable extras, mirroring how `operation` car
 | `tools` | array | Operation catalog paths (`v/ops/...`, `o/...`) added to the agent's tool palette while the skill is loaded. Same form as `config.tools`. |
 | `skills` | array | Individual skill refs made discoverable while this skill is loaded (a path to one skill, or an asset ref). |
 | `skillsets` | array | Skillset refs — directories of skills — made discoverable while this skill is loaded. |
-| `context` | array | Context entries loaded alongside the body — the standard entry grammar of AGENT_CONTEXT.md §3, unchanged. |
+| `context` | array | Context entries loaded alongside the body — the standard entry grammar of AGENT_CONTEXT.md §6, unchanged. |
 | `budget` | integer | Default accounting budget for `skill_load` (caller may override; clamped as usual). |
 
 Skill bodies describe capabilities, not generated callable aliases. Keep stable
@@ -325,7 +325,7 @@ Key = the skill's canonical path (what the index shows). Value:
 Each skill-flagged entry in effective loads, per turn:
 
 1. Re-resolve the skill from its path.
-2. Inject one system message: `[Skill: <name> — <path>]` followed by the body **verbatim** (markdown preserved — the §3.6 rendering contract of AGENT_CONTEXT.md); a contentless (toolset) skill shows its description one-liner instead.
+2. Inject one system message: `[Skill: <name> — <path>]` followed by the body **verbatim** (markdown preserved — the §6.4 rendering contract of AGENT_CONTEXT.md); a contentless (toolset) skill shows its description one-liner instead.
 3. Resolve the skill's `skill.context` entries through the standard context loader and inject each as a labelled `[Context: …]` message.
 4. Contribute the skill's tools to the turn's palette (deduplicated against existing tool names).
 5. Contribute its immediate `skill.skills` refs to the next skills index and named lookup scope.

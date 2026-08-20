@@ -376,11 +376,12 @@ Context entries can be:
 - **Asset references** — hashes, `/a/` paths, `/o/` names, DID URLs resolved via `engine.resolveAsset()`
 - **Grid operation results** — the output of any grid operation, resolved at load time
 
-Two layers: `config.context` (stable baseline, loaded every run) and
-`state.context` (dynamic, mutable between runs). Config context loads first.
+Two roles: `config.context` (operator-pinned, loaded every turn) and the
+agent-managed working set curated with `context_load` / `context_unload`. The
+retired `state.context` layer is gone — dynamic context is the loads scope chain.
 
-See [AGENT_CONTEXT.md](./AGENT_CONTEXT.md) for the full design: entry format, resolution
-rules, load order, size considerations, and phasing.
+See [AGENT_CONTEXT.md](./AGENT_CONTEXT.md) for the full design: the output
+contract, the banded section sequence, entry grammar, and the scope chain.
 
 ### 3.6 Tool Palette
 
