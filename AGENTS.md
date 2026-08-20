@@ -255,21 +255,28 @@ The list below tracks engineering tasks. For the developer-experience and open-s
 
 ## Skills
 
-Reusable Claude Code skills live in `skills/` (tracked in git). Claude Code reads them from `.claude/skills/`, which is a local junction to `skills/`.
+Reusable agent skills live in `skills/` (tracked in git). Claude Code reads
+them from `.claude/skills/`; Codex reads them from `.agents/skills/`. Both are
+local junctions to the same canonical directory.
 
 ### Setup
 
-The junction must be created once per checkout (it's gitignored):
+The junctions must be created once per checkout (they are gitignored):
 
 ```bash
 # Windows (from covia root)
 cmd /c "mklink /J .claude\skills skills"
+cmd /c "mklink /J .agents\skills skills"
 
 # macOS / Linux
 ln -s ../skills .claude/skills
+ln -s ../skills .agents/skills
 ```
 
-Skills then work as `/skill-name` in **CLI**, **Desktop Chat**, and **IDE Cowork** modes. Example: `/ap-demo setup`, `/venue-setup local`, `/agent create MyAgent`.
+In Claude Code, invoke them as `/skill-name`. In Codex CLI or the IDE
+extension, use `/skills` to browse them or `$skill-name` to invoke one
+explicitly. They can also trigger implicitly from their descriptions.
+Examples: `/ap-demo setup` in Claude or `$venue-setup` in Codex.
 
 ### Shared Configuration
 

@@ -16,7 +16,7 @@
 			"required": ["command"]
 		},
 		"output": {
-			"description": "list → the skill index text (one '- name — description' line per skill), or null when no skills exist. read → {name, description, body?, tools, context?, path} — body present when the skill has content (a contentless skill is a pure toolset)."
+			"description": "list → the skill index text (one '- name — description' line per skill), or null when no skills exist. read → {name, description, body?, tools, skills?, context?, path} — skills contains child source refs contributed while loaded; body is present when the skill has content (a contentless skill is a pure toolset)."
 		}
 	}
 }

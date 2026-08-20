@@ -114,6 +114,7 @@ public class SkillsTest {
 		assertEquals("Does X", s.displayBody());
 		assertEquals(0, s.toolOps().count());
 		assertEquals(0, s.contextEntries().count());
+		assertEquals(0, s.skillSources().count());
 	}
 
 	@Test
@@ -238,17 +239,19 @@ public class SkillsTest {
 	// ========== the skill facet ==========
 
 	@Test
-	public void testFacetBudgetAndContext() {
+	public void testFacetBudgetContextAndSkills() {
 		write("w/skills/rich", Maps.of(
 			Fields.DESCRIPTION, Strings.create("Rich skill"),
 			Skills.K_SKILL, Maps.of(
 				Strings.create("budget"), CVMLong.create(5000),
+				Skills.K_SKILLS, Vectors.of(Strings.create("w/specialists")),
 				Strings.create("context"), Vectors.of(
 					Maps.of(Strings.create("ref"), Strings.create("w/docs/x"),
 						Strings.create("label"), Strings.create("X"))))));
 		Skills.ResolvedSkill s = resolve("w/skills/rich");
 		assertEquals(5000, s.budget());
 		assertEquals(1, s.contextEntries().count());
+		assertEquals(Vectors.of(Strings.create("w/specialists")), s.skillSources());
 	}
 
 	@Test
@@ -270,6 +273,53 @@ public class SkillsTest {
 			Skills.K_SKILL, Maps.of(Fields.TOOLS, Vectors.of(CVMLong.create(42)))));
 		assertTrue(assertThrows(RuntimeException.class, () -> resolve("w/skills/badtoolentry"))
 			.getMessage().contains("operation ref strings"));
+
+		write("w/skills/badskills", Maps.of(
+			Fields.DESCRIPTION, Strings.create("Bad"),
+			Skills.K_SKILL, Maps.of(Skills.K_SKILLS, Strings.create("w/specialists"))));
+		assertTrue(assertThrows(RuntimeException.class, () -> resolve("w/skills/badskills"))
+			.getMessage().contains("must be an array"));
+
+		write("w/skills/badskillentry", Maps.of(
+			Fields.DESCRIPTION, Strings.create("Bad"),
+			Skills.K_SKILL, Maps.of(Skills.K_SKILLS, Vectors.of(CVMLong.create(42)))));
+		assertTrue(assertThrows(RuntimeException.class, () -> resolve("w/skills/badskillentry"))
+			.getMessage().contains("skill source ref strings"));
+	}
+
+	@Test
+	public void testLoadedSkillContributesDiscoverableChildSources() {
+		write("w/root", Maps.of(
+			Fields.NAME, Strings.create("root"),
+			Fields.DESCRIPTION, Strings.create("Find specialist skills"),
+			Skills.K_SKILL, Maps.of(Skills.K_SKILLS, Vectors.of(
+				Strings.create("w/specialists"), Strings.create("w/specialists")))));
+		write("w/specialists/reviewer", Maps.of(
+			Fields.DESCRIPTION, Strings.create("Review a result")));
+
+		AVector<ACell> configured = Vectors.of(Strings.create("w/root"));
+		assertThrows(RuntimeException.class,
+			() -> Skills.resolveByName(engine, ctx, configured, "reviewer"));
+
+		Skills.LoadOutcome root = Skills.load(engine, ctx, configured,
+			Maps.of(Fields.NAME, Strings.create("root")), Maps.empty());
+		AVector<ACell> declared = Vectors.of(
+			Strings.create("w/specialists"), Strings.create("w/specialists"));
+		assertEquals(declared,
+			RT.getIn(root.result(), Skills.K_SKILLS));
+		assertTrue(RT.getIn(root.result(), "skillIndex").toString()
+			.contains("- reviewer — Review a result"), root.result().toString());
+		assertEquals(declared,
+			root.entryMeta().get(Skills.K_SKILLS));
+
+		AMap<AString, ACell> loads = Maps.of(root.path(), root.entryMeta());
+		AVector<ACell> effective = Skills.effectiveSources(configured, loads);
+		assertEquals(2, effective.count(), "duplicate child source refs are first-wins deduplicated");
+		assertEquals("w/root", effective.get(0).toString(), "configured sources retain priority");
+
+		Skills.LoadOutcome child = Skills.load(engine, ctx, configured,
+			Maps.of(Fields.NAME, Strings.create("reviewer")), loads);
+		assertEquals("w/specialists/reviewer", child.path().toString());
 	}
 
 	// ========== directories, listing, first-wins ==========
@@ -370,7 +420,7 @@ public class SkillsTest {
 	public void testBuildSkillLoadMetaAndIsSkillEntry() {
 		Hash id = Strings.create("skill-id-test").getHash();
 		Skills.ResolvedSkill s = new Skills.ResolvedSkill("pdf", "Extracts PDFs", "body",
-			Vectors.of(Strings.create("v/ops/covia/read")), Vectors.empty(), 0,
+			Vectors.of(Strings.create("v/ops/covia/read")), Vectors.empty(), Vectors.empty(), 0,
 			Strings.create("w/skills/pdf"), id);
 		AMap<AString, ACell> meta = Skills.buildSkillLoadMeta(2000, s);
 
@@ -379,6 +429,7 @@ public class SkillsTest {
 		assertTrue(((CVMLong) meta.get(Strings.create("ts"))).longValue() > 0);
 		assertEquals("pdf", meta.get(Strings.create("label")).toString());
 		assertEquals(s.toolOps(), meta.get(Fields.TOOLS));
+		assertNull(meta.get(Skills.K_SKILLS));
 		// Nothing identity-shaped persists on the entry — dedup is live.
 		assertNull(meta.get(Strings.create("id")));
 
@@ -419,7 +470,7 @@ public class SkillsTest {
 		// The generic "a loads entry may declare tools" rule — skill entries
 		// are the first producer, but the mechanism is kind-agnostic.
 		Skills.ResolvedSkill s = new Skills.ResolvedSkill("x", "d", "b",
-			Vectors.of(Strings.create("v/ops/covia/read")), Vectors.empty(), 0,
+			Vectors.of(Strings.create("v/ops/covia/read")), Vectors.empty(), Vectors.empty(), 0,
 			Strings.create("w/skills/x"), Strings.create("x-id").getHash());
 		AMap<AString, ACell> loads = Maps.of(
 			Strings.create("w/skills/x"), Skills.buildSkillLoadMeta(2000, s));

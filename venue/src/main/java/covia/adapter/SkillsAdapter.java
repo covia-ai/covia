@@ -43,6 +43,7 @@ public class SkillsAdapter extends AAdapter {
 	private static final AString K_REF      = Strings.intern("ref");
 	private static final AString K_BODY     = Strings.intern("body");
 	private static final AString K_CONTEXT  = Strings.intern("context");
+	private static final AString K_SKILLS   = Strings.intern("skills");
 
 	@Override
 	public String getName() {
@@ -51,7 +52,7 @@ public class SkillsAdapter extends AAdapter {
 
 	@Override
 	public String getDescription() {
-		return "Discover agent skills — named bundles of instructions, context, and tools. "
+		return "Discover agent skills — named bundles of instructions, context, tools, and child skill sources. "
 			+ "Pick the action with `command`: 'list' renders the skill index, one '- name — description' "
 			+ "line per skill (also usable as a config.context assemble-op); 'read' returns one skill in "
 			+ "full (name, description, body, tools, context, path). Sources may be workspace/catalog "
@@ -148,6 +149,9 @@ public class SkillsAdapter extends AAdapter {
 		}
 		if (skill.contextEntries().count() > 0) {
 			out = out.assoc(K_CONTEXT, skill.contextEntries());
+		}
+		if (skill.skillSources().count() > 0) {
+			out = out.assoc(K_SKILLS, skill.skillSources());
 		}
 		return out;
 	}

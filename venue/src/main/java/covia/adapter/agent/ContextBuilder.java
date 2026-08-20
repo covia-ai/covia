@@ -408,11 +408,13 @@ public class ContextBuilder {
 		"[Skills]\n"
 		+ "Named skill packs available through the advertised skill-loading control. Loading injects\n"
 		+ "the skill's instructions into your context across turns and adds its operations to your\n"
-		+ "palette. Use the advertised context-removal control when a loaded skill is no longer useful.\n";
+		+ "palette; it may also reveal more skills. Use the advertised context-removal control when a\n"
+		+ "loaded skill is no longer useful.\n";
 
 	/**
 	 * Injects the skills index — one compact system message listing the
-	 * skills discoverable from the agent's {@code config.skills} sources,
+	 * skills discoverable from the agent's {@code config.skills} sources plus
+	 * child sources contributed by loaded skills,
 	 * with a {@code (loaded)} marker against skills already in effective
 	 * context (see venue/docs/SKILLS.md §4). Resolved fresh each turn, like
 	 * every other ephemeral section. No-op when the agent declares no skill
@@ -424,8 +426,8 @@ public class ContextBuilder {
 	 *        null when no loads tier is in scope
 	 */
 	public ContextBuilder withSkillsIndex(AMap<AString, ACell> effectiveLoads) {
-		if (config == null) return this;
-		AVector<ACell> sources = skillSources(config.get(K_SKILLS));
+		AVector<ACell> configured = skillSources(config == null ? null : config.get(K_SKILLS));
+		AVector<ACell> sources = Skills.effectiveSources(configured, effectiveLoads);
 		if (sources.count() == 0) return this;
 
 		// No source diagnostics in agent context — setup problems belong to

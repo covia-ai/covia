@@ -42,6 +42,7 @@ public class SkillsAdapterTest {
 	private static final AString K_SOURCES = Strings.intern("sources");
 	private static final AString K_REF = Strings.intern("ref");
 	private static final AString K_BODY = Strings.intern("body");
+	private static final AString K_SKILLS = Strings.intern("skills");
 
 	@BeforeEach
 	public void setup(TestInfo info) {
@@ -145,6 +146,21 @@ public class SkillsAdapterTest {
 		assertEquals("w/skills/reader", RT.getIn(result, Fields.PATH).toString());
 		AVector<?> tools = (AVector<?>) RT.getIn(result, Fields.TOOLS);
 		assertEquals(1, tools.count());
+	}
+
+	@Test
+	public void testReadReportsContributedSkillSources() {
+		write("w/skills/router", Maps.of(
+			Fields.DESCRIPTION, Strings.create("Find specialist skills"),
+			Strings.create("skill"), Maps.of(
+				K_SKILLS, Vectors.of(Strings.create("w/specialists")))), ctx);
+
+		ACell result = invoke(Maps.of(
+			Strings.create("command"), Strings.create("read"),
+			Fields.NAME, Strings.create("router"),
+			K_SOURCES, Vectors.of(Strings.create("w/skills"))), ctx);
+
+		assertEquals(Vectors.of(Strings.create("w/specialists")), RT.getIn(result, K_SKILLS));
 	}
 
 	@Test

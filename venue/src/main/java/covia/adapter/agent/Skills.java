@@ -31,18 +31,18 @@ import covia.venue.RequestContext;
  *
  * <p>A skill is an <b>asset</b>: ordinary asset metadata ({@code name},
  * {@code description}, the standard {@code content} descriptor) with the
- * loadable extras under a {@code skill} facet ({@code tools}, {@code context},
- * {@code budget}) — mirroring how invocability sits under the {@code operation}
- * facet. The body is the asset's content, resolved through the venue's
- * universal content resolution ({@link Engine#resolveContent}), falling back
-	 * to the {@code description}. A value is interpreted as a skill only through
-	 * an explicit skill surface: a {@code config.skills} source, an entry in a
-	 * skills directory, or the target of {@code skill_load}.</p>
-	 *
-	 * <p>Skill sources are positional: a path may resolve to a directory whose
-	 * keys are skill names or directly to one skill; an asset ref is also one
-	 * skill. Directory values are asset metadata maps or string references to
-	 * skill assets (the template string-ref idiom, one hop). Inline bodies use the standard
+ * loadable extras under a {@code skill} facet ({@code tools}, {@code skills},
+ * {@code context}, {@code budget}) — mirroring how invocability sits under
+ * the {@code operation} facet. The body is the asset's content, resolved
+ * through the venue's universal content resolution ({@link Engine#resolveContent}),
+ * falling back to the {@code description}. A value is interpreted as a skill
+ * only through an explicit skill surface: a {@code config.skills} source, an
+ * entry in a skills directory, or the target of {@code skill_load}.</p>
+ *
+ * <p>Skill sources are positional: a path may resolve to a directory whose
+ * keys are skill names or directly to one skill; an asset ref is also one
+ * skill. Directory values are asset metadata maps or string references to
+ * skill assets (the template string-ref idiom, one hop). Inline bodies use the standard
  * {@code content.inline} metadata declaration; SKILL.md YAML frontmatter in
  * any content supplies name/description when the metadata lacks them.</p>
  *
@@ -56,6 +56,8 @@ public final class Skills {
 
 	/** The skill facet key on asset metadata, and the flag key on loads entries. */
 	public static final AString K_SKILL = Strings.intern("skill");
+	/** Child skill-source refs contributed while a skill is loaded. */
+	public static final AString K_SKILLS = Strings.intern("skills");
 
 	private static final AString K_CONTEXT = Strings.intern("context");
 	private static final AString K_BUDGET  = Strings.intern("budget");
@@ -78,6 +80,7 @@ public final class Skills {
 	 *        {@code skill.tools} entries, plus the skill's own ref when its
 	 *        metadata carries an {@code operation} facet
 	 * @param contextEntries {@code skill.context} entries (standard entry grammar)
+	 * @param skillSources {@code skill.skills} source refs made discoverable while loaded
 	 * @param budget Facet-declared default load budget, 0 when unset
 	 * @param path Canonical loads key — the address the skill re-resolves from each turn
 	 * @param id Content identity — the value hash of the resolved metadata map,
@@ -90,7 +93,8 @@ public final class Skills {
 	 *        transient set per pass
 	 */
 	public record ResolvedSkill(String name, String description, String body,
-			AVector<ACell> toolOps, AVector<ACell> contextEntries, long budget, AString path,
+			AVector<ACell> toolOps, AVector<ACell> contextEntries,
+			AVector<ACell> skillSources, long budget, AString path,
 			convex.core.data.Hash id) {
 
 		/** What a renderer shows for this skill: the body, else the
@@ -357,10 +361,16 @@ public final class Skills {
 			AMap<AString, ACell> facet = (AMap<AString, ACell>) facetCell;
 			AVector<ACell> tools = facetVector(facet, Fields.TOOLS, path);
 			AVector<ACell> context = facetVector(facet, K_CONTEXT, path);
+			AVector<ACell> skillSources = facetVector(facet, K_SKILLS, path);
 			long budget = (facet != null && facet.get(K_BUDGET) instanceof CVMLong l) ? l.longValue() : 0;
 			for (long i = 0; i < tools.count(); i++) {
 				if (RT.ensureString(tools.get(i)) == null) {
 					throw new RuntimeException("skill.tools entries at " + path + " must be operation ref strings");
+				}
+			}
+			for (long i = 0; i < skillSources.count(); i++) {
+				if (RT.ensureString(skillSources.get(i)) == null) {
+					throw new RuntimeException("skill.skills entries at " + path + " must be skill source ref strings");
 				}
 			}
 			// An operation skill offers itself as a tool.
@@ -386,7 +396,7 @@ public final class Skills {
 			if (name == null) name = lastSegment(path.toString());
 			// A null body is valid: a contentless skill is a pure toolset.
 			// Identity is the metadata's value hash — content equality, not path.
-			return new ResolvedSkill(name, description, body, tools, context, budget, path,
+			return new ResolvedSkill(name, description, body, tools, context, skillSources, budget, path,
 				meta.getHash());
 		}
 
@@ -474,11 +484,11 @@ public final class Skills {
 
 	/**
 	 * Builds the loads-entry spec for a loaded skill:
-	 * {@code {skill: true, budget, ts, label, tools?}}. A plain map — fully
+	 * {@code {skill: true, budget, ts, label, tools?, skills?}}. A plain map — fully
 	 * compatible with ContextChain (tombstones, masking), context_unload,
 	 * the Context Map, and safety-valve eviction. The body is NOT
-	 * denormalised (re-resolved each turn via the entry key); the tool refs
-	 * ARE (their LLM defs still resolve fresh each turn).
+	 * denormalised (re-resolved each turn via the entry key); tool and child
+	 * skill-source refs ARE (their targets still resolve fresh each turn).
 	 */
 	public static AMap<AString, ACell> buildSkillLoadMeta(long budget, ResolvedSkill skill) {
 		AMap<AString, ACell> meta = Maps.of(
@@ -489,7 +499,50 @@ public final class Skills {
 		if (skill.toolOps().count() > 0) {
 			meta = meta.assoc(Fields.TOOLS, skill.toolOps());
 		}
+		if (skill.skillSources().count() > 0) {
+			meta = meta.assoc(K_SKILLS, skill.skillSources());
+		}
 		return meta;
+	}
+
+	/**
+	 * Combines configured sources with sources contributed by currently loaded
+	 * skills. Configured sources retain priority; exact duplicate refs are
+	 * removed first-wins. Only the immediate sources on loaded entries are
+	 * considered: children are discoverable, never recursively auto-loaded.
+	 */
+	public static AVector<ACell> effectiveSources(AVector<ACell> configuredSources,
+			AMap<AString, ACell> effectiveLoads) {
+		AVector<ACell> out = Vectors.empty();
+		Set<String> seen = new HashSet<>();
+		out = appendSources(out, configuredSources, seen, "config.skills");
+		if (effectiveLoads == null) return out;
+		for (var entry : effectiveLoads.entrySet()) {
+			if (!isSkillEntry(entry.getValue())) continue;
+			@SuppressWarnings("unchecked")
+			AMap<AString, ACell> spec = (AMap<AString, ACell>) entry.getValue();
+			ACell raw = spec.get(K_SKILLS);
+			if (raw == null) continue;
+			AVector<ACell> sources = RT.ensureVector(raw);
+			if (sources == null) {
+				throw new RuntimeException("loaded skill.skills at " + entry.getKey() + " must be an array");
+			}
+			out = appendSources(out, sources, seen, "loaded skill.skills at " + entry.getKey());
+		}
+		return out;
+	}
+
+	private static AVector<ACell> appendSources(AVector<ACell> out, AVector<ACell> sources,
+			Set<String> seen, String label) {
+		if (sources == null) return out;
+		for (long i = 0; i < sources.count(); i++) {
+			AString source = RT.ensureString(sources.get(i));
+			if (source == null) {
+				throw new RuntimeException(label + " entries must be skill source ref strings");
+			}
+			if (seen.add(source.toString())) out = out.conj(source);
+		}
+		return out;
 	}
 
 	/**
@@ -570,10 +623,8 @@ public final class Skills {
 	 * as opaque — all skills semantics live here and in {@link ContextBuilder}.
 	 */
 	public static AVector<ACell> sourcesOf(AMap<AString, ACell> config) {
-		return ContextBuilder.skillSources(config == null ? null : config.get(K_SKILLS_CONFIG));
+		return ContextBuilder.skillSources(config == null ? null : config.get(K_SKILLS));
 	}
-
-	private static final AString K_SKILLS_CONFIG = Strings.intern("skills");
 
 	/**
 	 * The outcome of a {@code skill_load}: the loads entry to write (path +
@@ -589,8 +640,9 @@ public final class Skills {
 	 * Executes the {@code skill_load} semantics: resolve the skill (by
 	 * {@code name} across the agent's sources, or by direct {@code ref}),
 	 * build its loads entry, and assemble the tool result — including the
-	 * body for immediate same-turn use, the activated tool names, and any
-	 * declared-but-unresolvable tools. Throws with a diagnosable message on
+	 * body for immediate same-turn use, the activated tool names, the refreshed
+	 * skill index when it contributes sources, and any declared-but-unresolvable
+	 * tools. Throws with a diagnosable message on
 	 * any failure (the handler renders it as an {@code Error:} tool result).
 	 *
 	 * <p><b>Content-identity dedup</b>: when {@code effectiveLoads} already
@@ -608,7 +660,7 @@ public final class Skills {
 		}
 		ResolvedSkill skill = (ref != null)
 			? resolveRef(engine, ctx, ref)
-			: resolveByName(engine, ctx, sources, name.toString());
+			: resolveByName(engine, ctx, effectiveSources(sources, effectiveLoads), name.toString());
 
 		// Same content already loaded under another address → no-op naming it.
 		AString existing = findLoadedDuplicate(engine, ctx, effectiveLoads, skill.id());
@@ -659,8 +711,17 @@ public final class Skills {
 			Strings.intern("body"), Strings.create(skill.displayBody()),
 			Strings.intern("note"), Strings.create(
 				"Skill instructions stay in context each turn (unload with context_unload). "
-				+ "Tools are active from your next step."));
+				+ "Tools and contributed skills are active from your next step."));
 		if (toolNames.count() > 0) result = result.assoc(Fields.TOOLS, toolNames);
+		if (skill.skillSources().count() > 0) {
+			result = result.assoc(K_SKILLS, skill.skillSources());
+			AMap<AString, ACell> prospectiveLoads = (effectiveLoads == null)
+				? Maps.of(skill.path(), entryMeta)
+				: effectiveLoads.assoc(skill.path(), entryMeta);
+			String index = renderIndex(engine, ctx,
+				effectiveSources(sources, prospectiveLoads), prospectiveLoads, false);
+			if (index != null) result = result.assoc(Strings.intern("skillIndex"), Strings.create(index));
+		}
 		if (unresolved.count() > 0) result = result.assoc(Strings.intern("unresolved"), unresolved);
 
 		return new LoadOutcome(skill.path(), entryMeta, result);

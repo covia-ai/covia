@@ -296,6 +296,30 @@ public class ContextBuilderTest {
 	}
 
 	@Test
+	public void testLoadedSkillContributesToSkillsIndex() {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, Strings.create("w/root-skill"), Fields.VALUE, Maps.of(
+				Fields.NAME, Strings.create("root-skill"),
+				Fields.DESCRIPTION, Strings.create("Reveals specialists"),
+				Skills.K_SKILL, Maps.of(Skills.K_SKILLS,
+					Vectors.of(Strings.create("w/specialists"))))), ctx).awaitResult(5000);
+		writeSkill("w/specialists/reviewer", "Review a result");
+		Skills.ResolvedSkill root = Skills.resolveRef(engine, ctx, Strings.create("w/root-skill"));
+		AMap<AString, ACell> loads = Maps.of(root.path(), Skills.buildSkillLoadMeta(2000, root));
+
+		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
+			.withConfig(null)
+			.withSkillsIndex(loads)
+			.build();
+
+		String all = allContent(result);
+		assertTrue(all.contains("- reviewer — Review a result"), all);
+		assertTrue(all.contains("may also reveal more skills"), all);
+		assertFalse(all.contains("- root-skill —"),
+			"a direct-ref bootstrap need not make itself a configured source");
+	}
+
+	@Test
 	public void testSkillsIndexAbsentOrEmpty() {
 		// No config.skills → no block.
 		ContextBuilder.ContextResult none = new ContextBuilder(engine, ctx)

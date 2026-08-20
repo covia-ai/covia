@@ -10,6 +10,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Added
 
+- Hierarchical agent skills: a loaded skill contributes further skill sources via `skill.skills` — discovered, never auto-loaded
+
 - Optional `covia-discord` venue module: operator-declared or user-created
   Discord bots route DMs and mentioned guild messages to agents (durable
   per-channel sessions) or operations. Includes capability-gated
