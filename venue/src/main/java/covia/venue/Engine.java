@@ -2942,6 +2942,52 @@ public class Engine {
 	}
 
 	/**
+	 * Point-of-action gate for reading an <b>asset's metadata</b>: either
+	 * {@code crud/read} or {@code asset/read} over that resource is enough.
+	 *
+	 * <p>Metadata is one thing whichever way it is addressed, so which ability
+	 * happens to fit the ref's <i>shape</i> must not decide whether a holder
+	 * can read it. Without this, the same skill is readable or not depending on
+	 * whether it was reached by path or by hash — and, worse, on whether its
+	 * author wrote a {@code name} field, since that decides whether resolution
+	 * needs the content too.</p>
+	 *
+	 * <p><b>The alternative is only ever accepted in the narrowing
+	 * direction.</b> For a content-addressed ref, {@code crud/read} over that
+	 * same hash also suffices — a caller holding it was granted something
+	 * strictly narrower than the public {@code asset/read}. The reverse is NOT
+	 * true: the public read-only scope grants {@code asset/read} <i>unscoped</i>
+	 * ({@code with: ""}), because content addressing means you must already
+	 * hold the hash to ask for it. Honouring that grant against a PATH would
+	 * turn it into a licence to read every user's workspace metadata, so a path
+	 * still requires {@code crud/read} over that path and nothing else.</p>
+	 *
+	 * <p>Content bytes are not covered here — {@link #resolveContent} keeps its
+	 * own {@code asset/read} pin.</p>
+	 *
+	 * @param resource the asset ref or path whose metadata is being read
+	 * @throws covia.exception.AuthException when no accepted ability is held
+	 */
+	public void requireMetadataRead(RequestContext ctx, AString resource) {
+		if (resource == null) return;
+		if (AssetAdapter.parseAssetId(resource) == null) {
+			// A path: namespace-scoped read only.
+			requireResourceAccess(ctx, resource, Capability.CRUD_READ);
+			return;
+		}
+		// Content-addressed: either ability over this hash is enough.
+		try {
+			requireResourceAccess(ctx, resource, Abilities.ASSET_READ);
+		} catch (covia.exception.AuthException denied) {
+			try {
+				requireResourceAccess(ctx, resource, Capability.CRUD_READ);
+			} catch (covia.exception.AuthException alsoDenied) {
+				throw denied;                     // report the expected ability
+			}
+		}
+	}
+
+	/**
 	 * Whether an absolute DID resource is hosted by this venue.
 	 *
 	 * <p>An existing user record is authoritative. The venue's canonical DID,

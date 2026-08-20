@@ -701,11 +701,16 @@ public class AgentAdapter extends AAdapter {
 	 * THROWS at transition time, so it's flagged here at the moment it's
 	 * fixable.
 	 *
-	 * <p>Merely <i>unresolved</i> sources are deliberately NOT warned about.
+	 * <p>Merely <i>absent</i> sources are deliberately NOT warned about.
 	 * Sources are maybe-style paths resolved live each turn — absence is a
 	 * normal value (an empty {@code w/skills} is the designed default in every
 	 * standard template), and a venue without some {@code v/skills/*} entry is
 	 * a legitimate target for a portable config.</p>
+	 *
+	 * <p>A source that is <b>denied</b> is different, and is reported: it
+	 * contributes nothing to the agent's index and renders no diagnostic
+	 * anywhere the operator would see, so it is indistinguishable from an
+	 * empty source at runtime.</p>
 	 *
 	 * <p>A skillset that resolves to a directory of <b>directories</b> is a
 	 * different matter: that is a definite misconfiguration (classically
@@ -721,6 +726,13 @@ public class AgentAdapter extends AAdapter {
 				return Strings.create("config.skillsets entry '" + misdirected
 					+ "' is a directory of skillsets, not of skills — it will contribute no skills"
 					+ " (did you mean " + misdirected + "/root?)");
+			}
+			AString denied = Skills.unreadableSource(engine, ctx, sources);
+			if (denied != null) {
+				return Strings.create("skill source '" + denied
+					+ "' is not readable with your capabilities — it will contribute no skills,"
+					+ " and an unreadable source looks exactly like an empty one in the agent's"
+					+ " index (grant read on it, or point at a source you can read)");
 			}
 		} catch (RuntimeException e) {
 			return Strings.create(describeFailure(e)

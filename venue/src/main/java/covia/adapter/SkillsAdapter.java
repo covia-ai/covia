@@ -2,7 +2,6 @@ package covia.adapter;
 
 import java.util.concurrent.CompletableFuture;
 
-import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -12,7 +11,6 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import covia.adapter.agent.Skills;
-import covia.api.Abilities;
 import covia.api.Fields;
 import covia.venue.RequestContext;
 
@@ -28,8 +26,9 @@ import covia.venue.RequestContext;
  *
  * <p>There is deliberately <b>no write surface</b>: skills are authored with
  * the existing {@code covia:write} (workspace) and {@code asset:store}
- * (immutable assets). Reads pin {@code crud/read} on path sources and
- * {@code asset/read} on content-addressed refs — both inside the anonymous
+ * (immutable assets). A skill is an asset, so reads are pinned as metadata
+ * reads — either {@code crud/read} or {@code asset/read} over the resource
+ * suffices, whichever way it was addressed. Both sit inside the anonymous
  * read-only grant scope, so venue skills are publicly discoverable.</p>
  */
 public class SkillsAdapter extends AAdapter {
@@ -50,7 +49,6 @@ public class SkillsAdapter extends AAdapter {
 	static final AString K_DEFAULT_SKILLSETS = Strings.intern("defaultSkillsets");
 	static final AString K_DEFAULT_SKILLS    = Strings.intern("defaultSkills");
 
-	private static final AString ASSET_READ = Abilities.ASSET_READ;
 	private static final AString K_SOURCES  = Strings.intern("sources");
 	private static final AString K_REF      = Strings.intern("ref");
 	private static final AString K_BODY     = Strings.intern("body");
@@ -207,9 +205,16 @@ public class SkillsAdapter extends AAdapter {
 
 	// ========== list — render the skill index ==========
 
+	/**
+	 * Listing is a survey, so it <b>degrades</b>: each source is still pinned
+	 * as a read inside the resolver, but one the caller cannot read renders a
+	 * visible {@code [skills source X — unavailable: …]} line instead of
+	 * failing the whole call. A caller asking what is available should see
+	 * what they can see — and, since the default sources are venue-configured,
+	 * a default they lack access to must not make every list call fail.
+	 */
 	private ACell handleList(RequestContext ctx, ACell input) {
 		Skills.SkillSources sources = sourcesOf(input);
-		requireReadCaps(ctx, sources);
 		String index = Skills.renderIndex(engine, ctx, sources, null, true);
 		// Null when no skills exist — the assemble-op contract (entry skipped).
 		return (index != null) ? Strings.create(index) : null;
@@ -224,6 +229,8 @@ public class SkillsAdapter extends AAdapter {
 			throw new IllegalArgumentException("skills:read requires exactly one of 'name' or 'ref'");
 		}
 
+		// Unlike list, read is a specific request for one skill: a source the
+		// caller cannot read is an error to report, not a line to omit.
 		Skills.ResolvedSkill skill;
 		if (ref != null) {
 			requireReadCap(ctx, ref);
@@ -293,15 +300,12 @@ public class SkillsAdapter extends AAdapter {
 		}
 	}
 
-	/** Pins the read capability for one source: {@code asset/read} for
-	 *  content-addressed refs, {@code crud/read} for paths — mirroring
-	 *  AssetAdapter and CoviaAdapter's read pins exactly. */
+	/** Pins the read capability for one source. A skill is an asset, so
+	 *  either {@code crud/read} or {@code asset/read} over it is enough
+	 *  ({@link covia.venue.Engine#requireMetadataRead}) — the ref's shape
+	 *  must not decide which grant a caller needs. */
 	private void requireReadCap(RequestContext ctx, AString source) {
-		if (AssetAdapter.parseAssetId(source) != null) {
-			engine.requireResourceAccess(ctx, source, ASSET_READ);
-		} else {
-			engine.requireResourceAccess(ctx, source, Capability.CRUD_READ);
-		}
+		engine.requireMetadataRead(ctx, source);
 	}
 
 	private static String strInput(ACell input, String key) {

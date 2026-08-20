@@ -178,7 +178,11 @@ Discovery has two **declared kinds**. A **skill** ref addresses one skill; a **s
   A value that is neither is a nested directory, not a broken skill: it is skipped in agent context and reported only on the operator surface (`skills:list`), because skills and directories are separate kinds.
 - **`config.skills`** — each ref is exactly one skill: a stable human-readable path (`v/skills/ops-tools/models`), or an asset ref (`a/<hash>`, `/a/<hash>`, bare hex). This is the form role-specific templates use to curate a compact index. A skillset ref declared here is **not** walked as a directory — the kinds do not interchange.
 - A ref that resolves to **null** is skipped quietly (absent — sources are maybe-style paths).
-- A ref whose resolution **throws** renders one visible line: `[skills source <ref> — unavailable: <reason>]`, on the operator surface only.
+- A ref whose resolution **throws** — including a capability denial — renders one visible line: `[skills source <ref> — unavailable: <reason>]`, on the operator surface only.
+
+**Reads are per source, and `list` degrades where `read` does not.** Listing is a survey: a source the caller cannot read renders that diagnostic line instead of failing the call, so a caller sees what they can see and a venue-configured default they lack access to does not break every call. Reading one named skill is a specific request, so the same denial is an error. Either way the pin is real and per source — nothing from a denied source reaches the caller.
+
+A skill is an asset, and indexing one needs only `crud/read` over its path. An `asset/read` grant does **not** substitute for a path read: the public read-only scope grants `asset/read` unscoped (`with: ""`), which is safe for content addressing — you must already hold the hash to ask — but against a path would become a licence to read any user's workspace. For a content-addressed ref, either ability over that hash is enough.
 
 **Assets and directories are never mixed at one level.** `v/skills` holds skillsets; `v/skills/root` holds the skills an agent starts with. This is what lets a level be walked without guessing what its entries are.
 
@@ -189,6 +193,7 @@ A non-empty declaration of either kind activates both halves of the feature: the
 **Diagnostics.** Merely absent refs are not warned about in a user's agent config: they are maybe-style paths resolved live, and an empty `w/skills` is the designed default. Two things *are* reported:
 
 - `agent:create` warns when a `config.skillsets` entry resolves to a directory of **directories** — the classic `v/skills` instead of `v/skills/root` mistake, which would silently yield an empty index. Resolution uses the caller's namespace, since `w/` paths are user-relative.
+- `agent:create` also warns when a declared source is **denied** to the creator. Absence stays undiagnosed, but a denial renders nothing in the agent's index and nothing in any log, so at runtime it is indistinguishable from an empty source. The check is the creator's own access: an ordinary user is null-scope and unrestricted over their own namespace, so it fires for a capability-scoped creator, and a clean result is never a guarantee that the agent — which runs under its own `config.caps` — will be able to read it.
 - At boot, after catalog materialisation, the venue validates its **own** library and logs a warning per problem: a skill installed at skillset level, a skillset holding a nested directory, a child ref that does not resolve, or a child ref declared under the wrong kind. Unlike a user's config, everything here was installed by this venue, so an unresolvable ref is a packaging bug worth surfacing at boot rather than at an agent's first turn.
 
 ### 4.2 Hierarchical skill contribution
@@ -250,7 +255,7 @@ skill_load {
 }
 ```
 
-Exactly one of `name` / `ref`. `name` is an index lookup across the agent's effective sources (the configured skills and skillsets, plus what loaded skills contribute); `ref` resolves directly — an asset ref, or a path whose value is a single skill in any §4.1 form — and is how an agent loads a skill outside its discovered sources, e.g. one it was just told about. No session/frame in scope → diagnosable error, same rule as `context_load`.
+A `name` that matches nothing fails with a message naming the skills that ARE available, so an agent can correct itself from the error rather than guessing again. Exactly one of `name` / `ref`. `name` is an index lookup across the agent's effective sources (the configured skills and skillsets, plus what loaded skills contribute); `ref` resolves directly — an asset ref, or a path whose value is a single skill in any §4.1 form — and is how an agent loads a skill outside its discovered sources, e.g. one it was just told about. No session/frame in scope → diagnosable error, same rule as `context_load`.
 
 ### 5.2 What loading does
 

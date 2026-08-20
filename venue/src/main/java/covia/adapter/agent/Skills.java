@@ -7,7 +7,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import convex.auth.ucan.Capability;
 import convex.core.data.ABlob;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -20,7 +19,6 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.AssetAdapter;
-import covia.api.Abilities;
 import covia.api.Fields;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -379,8 +377,41 @@ public final class Skills {
 				}
 			}
 		}
-		throw new RuntimeException("skill '" + name + "' not found in skill sources"
-			+ (sources != null ? " skills=" + sources.skills() + " skillsets=" + sources.skillsets() : ""));
+		throw new RuntimeException("skill '" + name + "' not found. " + availability(engine, ctx, sources));
+	}
+
+	/** How many names a not-found error lists before it stops being useful. */
+	private static final int MAX_SUGGESTED = 40;
+
+	/**
+	 * What the caller could have asked for instead — the whole point of the
+	 * message. An agent that names a skill wrongly should be able to correct
+	 * itself from the error alone rather than guessing again, so this lists the
+	 * names actually in scope rather than echoing the source refs it searched.
+	 *
+	 * <p>Never throws: this runs on an error path, and a diagnostic that fails
+	 * would replace a useful message with a confusing one.</p>
+	 */
+	private static String availability(Engine engine, RequestContext ctx, SkillSources sources) {
+		List<String> names = new ArrayList<>();
+		try {
+			for (SkillIndexEntry e : listSkills(engine, ctx, sources)) {
+				if (e.name() != null && e.error() == null) names.add(e.name());
+			}
+		} catch (RuntimeException e) {
+			return "The available skills could not be listed: " + rootMessage(e);
+		}
+		if (names.isEmpty()) {
+			return "No skills are currently available to you"
+				+ (sources != null && sources.count() > 0
+					? " from " + sources.skillsets() + sources.skills() : "")
+				+ ".";
+		}
+		boolean truncated = names.size() > MAX_SUGGESTED;
+		if (truncated) names = names.subList(0, MAX_SUGGESTED);
+		return "Available: " + String.join(", ", names)
+			+ (truncated ? ", …" : "")
+			+ ". Load one of these by name, or use a direct ref.";
 	}
 
 	/** True when a resolved map is one skill rather than a directory of skills. */
@@ -466,8 +497,15 @@ public final class Skills {
 			requireRefStrings(childSkills, K_SKILLS, path);
 			requireRefStrings(childSkillsets, K_SKILLSETS, path);
 
+			// The index pass reads content ONLY when it still needs the
+			// description: a missing name falls back to the path segment, which
+			// is also the key skill_load matches inside a skillset, so probing
+			// content for a frontmatter name would make the index show a name
+			// that cannot be loaded. It also kept the "light" pass from being
+			// light, and made a name-less skill demand asset/read to appear in
+			// an index its named neighbours needed only crud/read for.
 			String body = null;
-			if (needBody || name == null || description == null) {
+			if (needBody || description == null) {
 				body = contentOf(engine, ctx, opRef);
 				if (body != null) {
 					// SKILL.md frontmatter is metadata's compatibility fallback;
@@ -503,12 +541,16 @@ public final class Skills {
 			+ " is not a skill (expected asset metadata, a reference, or markdown text)");
 	}
 
-	/** Shared read pin for every skill source/ref, including harness skill_load. */
+	/**
+	 * Shared read pin for every skill source/ref, including harness
+	 * {@code skill_load}. A skill is an asset, so either {@code crud/read} or
+	 * {@code asset/read} over it is enough — see
+	 * {@link Engine#requireMetadataRead}. Whether a skill was reached by path
+	 * or by hash, and whether it declares a {@code name} (which decides
+	 * whether resolution reads content), must not change what a caller needs.
+	 */
 	private static void requireRead(Engine engine, RequestContext ctx, AString ref) {
-		if (ref == null) return;
-		AString ability = (AssetAdapter.parseAssetId(ref) != null)
-			? Abilities.ASSET_READ : Capability.CRUD_READ;
-		engine.requireResourceAccess(ctx, ref, ability);
+		engine.requireMetadataRead(ctx, ref);
 	}
 
 	private static AVector<ACell> facetVector(AMap<AString, ACell> facet, AString key, AString path) {
@@ -823,6 +865,44 @@ public final class Skills {
 				if (!anySkill) return ref;
 			} catch (RuntimeException e) {
 				// Unreadable or absent — not a shape problem. Skip.
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * The first declared source the caller cannot READ, or null when every one
+	 * is readable or merely absent.
+	 *
+	 * <p>Absence is normal and stays undiagnosed — sources are maybe-style
+	 * paths. A denial is not: it renders nothing in the agent's index and
+	 * nothing in its logs, so a skillset the agent has no grant for looks
+	 * exactly like an empty one. That is the single case worth telling the
+	 * operator about, at the moment the config is set.</p>
+	 *
+	 * <p>Checked as {@code ctx}, so it catches the common setup mistakes — a
+	 * typo, or another user's namespace. An agent later runs under its own
+	 * {@code config.caps}, which can be narrower still, so a clean result here
+	 * is not a guarantee.</p>
+	 */
+	public static AString unreadableSource(Engine engine, RequestContext ctx, SkillSources sources) {
+		if (engine == null || ctx == null || sources == null) return null;
+		AString denied = firstDenied(engine, ctx, sources.skills());
+		return (denied != null) ? denied : firstDenied(engine, ctx, sources.skillsets());
+	}
+
+	private static AString firstDenied(Engine engine, RequestContext ctx, AVector<ACell> refs) {
+		if (refs == null) return null;
+		for (long i = 0; i < refs.count(); i++) {
+			AString ref = RT.ensureString(refs.get(i));
+			if (ref == null) continue;
+			try {
+				requireRead(engine, ctx, ref);
+			} catch (covia.exception.AuthException denied) {
+				return ref;
+			} catch (RuntimeException e) {
+				// Not a capability problem — absence and resolution errors are
+				// not this check's business.
 			}
 		}
 		return null;

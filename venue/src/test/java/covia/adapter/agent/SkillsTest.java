@@ -712,4 +712,76 @@ public class SkillsTest {
 				Vectors.of(Strings.create("w/other")))));
 		assertEquals(0, Skills.validateLibrary(engine, ctx, "w/lib4"));
 	}
+
+	// ========== agent-facing diagnostics ==========
+
+	/**
+	 * A wrong skill name must leave the agent able to correct itself from the
+	 * error alone — so the message names what IS loadable, rather than echoing
+	 * the source refs that were searched.
+	 */
+	@Test
+	public void testNotFoundNamesWhatIsAvailable() {
+		write("w/diag/alpha", Maps.of(Fields.DESCRIPTION, Strings.create("Alpha")));
+		write("w/diag/beta", Maps.of(Fields.DESCRIPTION, Strings.create("Beta")));
+		Skills.SkillSources sources =
+			Skills.SkillSources.ofSkillsets(Vectors.of(Strings.create("w/diag")));
+
+		String message = assertThrows(RuntimeException.class,
+			() -> Skills.resolveByName(engine, ctx, sources, "gamma")).getMessage();
+		assertTrue(message.contains("gamma"), message);
+		assertTrue(message.contains("alpha"), message);
+		assertTrue(message.contains("beta"), message);
+	}
+
+	@Test
+	public void testNotFoundSaysSoWhenNothingIsAvailable() {
+		Skills.SkillSources empty =
+			Skills.SkillSources.ofSkillsets(Vectors.of(Strings.create("w/nothing-at-all")));
+		String message = assertThrows(RuntimeException.class,
+			() -> Skills.resolveByName(engine, ctx, empty, "anything")).getMessage();
+		assertTrue(message.contains("No skills are currently available"), message);
+	}
+
+	/**
+	 * A DENIED source is reportable; an absent one is not. That split is what
+	 * lets agent:create warn about a real misconfiguration without crying wolf
+	 * over the maybe-style paths every standard template ships.
+	 */
+	@Test
+	public void testUnreadableSourceDetection() {
+		write("w/denied/secret", Maps.of(Fields.DESCRIPTION, Strings.create("Hidden")));
+		Skills.SkillSources sources =
+			Skills.SkillSources.ofSkillsets(Vectors.of(Strings.create("w/denied")));
+
+		assertNull(Skills.unreadableSource(engine, ctx, sources),
+			"the owner can read their own source");
+		assertEquals("w/denied", Skills.unreadableSource(
+			engine, ctx.withCaps(Vectors.empty()), sources).toString());
+
+		// Absent is not denied.
+		assertNull(Skills.unreadableSource(engine, ctx,
+			Skills.SkillSources.ofSkillsets(Vectors.of(Strings.create("w/not-here")))));
+	}
+
+	/**
+	 * The index names a skillset member by its KEY, which is what skill_load
+	 * matches — so a listed name is always a loadable one, even for a skill
+	 * whose content declares a different frontmatter name.
+	 */
+	@Test
+	public void testIndexNameMatchesLoadableKey() {
+		write("w/keyed/actual-key", Maps.of(
+			Fields.DESCRIPTION, Strings.create("Described in metadata"),
+			Fields.CONTENT, Maps.of(Strings.create("inline"), Strings.create(
+				"---\nname: some-other-name\ndescription: from frontmatter\n---\nBody"))));
+		Skills.SkillSources sources =
+			Skills.SkillSources.ofSkillsets(Vectors.of(Strings.create("w/keyed")));
+
+		String index = Skills.renderIndex(engine, ctx, sources, null, false);
+		assertTrue(index.contains("- actual-key — Described in metadata"), index);
+		assertFalse(index.contains("some-other-name"), index);
+		assertEquals("w/keyed/actual-key",
+			Skills.resolveByName(engine, ctx, sources, "actual-key").path().toString());
+	}
 }

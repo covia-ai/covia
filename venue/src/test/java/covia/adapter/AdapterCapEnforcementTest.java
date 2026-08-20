@@ -1,6 +1,7 @@
 package covia.adapter;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -72,6 +73,19 @@ public class AdapterCapEnforcementTest {
 		}
 	}
 
+	/** As {@link #direct} but returns the successful result, for behaviour that
+	 *  degrades rather than throwing. */
+	private static ACell directResult(String adapter, String op,
+			AMap<AString, ACell> input, RequestContext ctx) {
+		AMap<AString, ACell> meta = Maps.of(Fields.OPERATION,
+			Maps.of(Fields.ADAPTER, Strings.create(adapter + ":" + op)));
+		try {
+			return engine.getAdapter(adapter).invokeFuture(ctx, meta, input).get(5, TimeUnit.SECONDS);
+		} catch (Exception e) {
+			throw new RuntimeException(e);
+		}
+	}
+
 	private static boolean capDenied(String msg) {
 		return msg.contains("Capability denied");
 	}
@@ -126,8 +140,24 @@ public class AdapterCapEnforcementTest {
 		assertFalse(capDenied(direct("skills", "manage",
 			m("command", "read", "ref", "a/" + "00".repeat(32)), readOnly)));
 	}
-	@Test public void skillsListCrossUserSourceDeniedUnderReadOnly() {
+	@Test public void skillsListCrossUserSourceDegradesUnderReadOnly() {
+		// list is a survey and DEGRADES: the denial is still enforced per source
+		// inside the resolver, but it renders as a visible diagnostic instead of
+		// failing the whole call, so a caller sees what they can see.
 		AMap<AString, ACell> input = m("command", "list").assoc(
+			Strings.create("sources"),
+			convex.core.data.Vectors.of(Strings.create("did:key:zSomeoneElse/w/skills")));
+		assertFalse(capDenied(direct("skills", "manage", input, readOnly)));
+
+		ACell index = directResult("skills", "manage", input, readOnly);
+		assertNotNull(index, "the denied source should render a diagnostic line");
+		assertTrue(index.toString().contains("did:key:zSomeoneElse/w/skills"), index.toString());
+		assertTrue(index.toString().contains("unavailable:"), index.toString());
+	}
+
+	@Test public void skillsReadCrossUserSourceDeniedUnderReadOnly() {
+		// read is a specific request, so the same denial IS an error.
+		AMap<AString, ACell> input = m("command", "read", "name", "anything").assoc(
 			Strings.create("sources"),
 			convex.core.data.Vectors.of(Strings.create("did:key:zSomeoneElse/w/skills")));
 		assertTrue(capDenied(direct("skills", "manage", input, readOnly)));

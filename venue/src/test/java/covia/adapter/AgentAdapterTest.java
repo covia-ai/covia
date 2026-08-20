@@ -5615,4 +5615,56 @@ public class AgentAdapterTest {
 				update.getErrorMessage());
 		}
 	}
+
+	/**
+	 * A skill source the creator cannot read is warned about at create time:
+	 * at runtime it contributes nothing and renders no diagnostic anywhere the
+	 * operator would see, so it is indistinguishable from an empty source.
+	 *
+	 * <p>The check is the CREATOR's own access. An ordinary user is null-scope
+	 * — unrestricted over their own namespace — so this fires for a
+	 * capability-scoped creator (an agent creating an agent, or a UCAN-narrowed
+	 * caller), which is also the case where the mistake is easiest to make.</p>
+	 */
+	@Test
+	public void testCreateWarnsOnUnreadableSkillSource() {
+		RequestContext scoped = RequestContext.of(ALICE_DID).withCaps(Vectors.of(
+			Maps.of(Strings.create("with"), Strings.create(ALICE_DID + "/v/ops/agent/create"),
+				Strings.create("can"), Strings.create("invoke")),
+			Maps.of(Strings.create("with"), Strings.create(ALICE_DID + "/g/"),
+				Strings.create("can"), Strings.create("agent/create")),
+			Maps.of(Strings.create("with"), Strings.create(ALICE_DID + "/w/skills"),
+				Strings.create("can"), convex.auth.ucan.Capability.CRUD_READ)));
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "skills-unreadable-source-agent",
+			Fields.CONFIG, Maps.of(
+				"operation", "v/ops/llmagent/chat",
+				"skillsets", Vectors.of(Strings.create("w/other-place"))));
+		ACell result = engine.jobs().invokeOperation(
+			"v/ops/agent/create", input, scoped).awaitResult(5000);
+
+		ACell warnings = RT.getIn(result, Fields.WARNINGS);
+		assertNotNull(warnings, "expected a warning about the unreadable source: " + result);
+		assertTrue(warnings.toString().contains("not readable"), warnings.toString());
+	}
+
+	/** A source the creator CAN read raises nothing. */
+	@Test
+	public void testCreateSilentOnReadableSkillSource() {
+		RequestContext scoped = RequestContext.of(ALICE_DID).withCaps(Vectors.of(
+			Maps.of(Strings.create("with"), Strings.create(ALICE_DID + "/v/ops/agent/create"),
+				Strings.create("can"), Strings.create("invoke")),
+			Maps.of(Strings.create("with"), Strings.create(ALICE_DID + "/g/"),
+				Strings.create("can"), Strings.create("agent/create")),
+			Maps.of(Strings.create("with"), Strings.create(ALICE_DID + "/w/skills"),
+				Strings.create("can"), convex.auth.ucan.Capability.CRUD_READ)));
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "skills-readable-source-agent",
+			Fields.CONFIG, Maps.of(
+				"operation", "v/ops/llmagent/chat",
+				"skillsets", Vectors.of(Strings.create("w/skills"))));
+		ACell result = engine.jobs().invokeOperation(
+			"v/ops/agent/create", input, scoped).awaitResult(5000);
+		assertNull(RT.getIn(result, Fields.WARNINGS), String.valueOf(result));
+	}
 }

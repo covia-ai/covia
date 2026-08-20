@@ -25,6 +25,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import covia.api.Abilities;
 import covia.api.Fields;
 import convex.auth.ucan.Capability;
 import covia.exception.AuthException;
@@ -333,20 +334,24 @@ public class SkillsAdapterTest {
 	// ========== capability gating ==========
 
 	/**
-	 * The op has no authentication precondition — {@code v/skills} is publicly
-	 * discoverable — so the per-source capability pins ARE the gating. A caller
-	 * with no read grant gets a denial, not a quietly empty index.
+	 * Listing DEGRADES: an unreadable source renders a visible diagnostic line
+	 * rather than failing the call, so a caller sees what they can see. The
+	 * denial is still real — no name, description or body leaks through it.
 	 */
 	@Test
-	public void testListDeniedWithoutReadCapability() {
+	public void testListDegradesOnUnreadableSource() {
 		write("w/skills/private", Maps.of(
+			Fields.NAME, Strings.create("private"),
 			Fields.DESCRIPTION, Strings.create("Owner-only")), ctx);
 		RequestContext denied = ctx.withCaps(Vectors.empty());
 
-		assertThrows(AuthException.class, () -> invoke(Maps.of(
+		ACell result = invoke(Maps.of(
 			Strings.create("command"), Strings.create("list"),
-			K_SOURCES, Vectors.of(Strings.create("w/skills"))), denied),
-			"listing a skillset is a read action and is pinned as one");
+			K_SOURCES, Vectors.of(Strings.create("w/skills"))), denied);
+		String index = String.valueOf(result);
+		assertTrue(index.contains("[skills source w/skills — unavailable:"), index);
+		assertFalse(index.contains("Owner-only"), "a denied source must not leak: " + index);
+		assertFalse(index.contains("- private —"), "a denied source must not leak: " + index);
 	}
 
 	@Test
@@ -383,15 +388,74 @@ public class SkillsAdapterTest {
 			Maps.of(Strings.create("with"), Strings.create(did + "/w/skills"),
 				Strings.create("can"), Capability.CRUD_READ)));
 
-		ACell ok = invoke(Maps.of(
+		// Both sources at once: the granted one lists, the other degrades to a
+		// diagnostic — the pin is per source, not per call.
+		ACell result = invoke(Maps.of(
 			Strings.create("command"), Strings.create("list"),
-			K_SOURCES, Vectors.of(Strings.create("w/skills"))), scoped);
-		assertNotNull(ok);
-		assertTrue(ok.toString().contains("- mine — Readable"), ok.toString());
+			K_SOURCES, Vectors.of(
+				Strings.create("w/skills"), Strings.create("w/elsewhere"))), scoped);
+		String index = String.valueOf(result);
+		assertTrue(index.contains("- mine — Readable"), index);
+		assertTrue(index.contains("[skills source w/elsewhere — unavailable:"), index);
 
+		// read is a specific request, so the same denial is an error there.
 		assertThrows(AuthException.class, () -> invoke(Maps.of(
-			Strings.create("command"), Strings.create("list"),
+			Strings.create("command"), Strings.create("read"),
+			Fields.NAME, Strings.create("whatever"),
 			K_SOURCES, Vectors.of(Strings.create("w/elsewhere"))), scoped),
-			"a source outside the granted scope is denied even when another is allowed");
+			"read fails on a source outside the granted scope");
+	}
+
+	/**
+	 * Indexing a skill needs only {@code crud/read} over its path — including a
+	 * skill that omits {@code name}. That used to differ: a name-less skill
+	 * forced a content read during the index pass and so demanded
+	 * {@code asset/read}, making the same skillset readable or not depending on
+	 * what its author happened to write.
+	 */
+	@Test
+	public void testIndexingNamelessSkillNeedsOnlyCrudRead() {
+		// No `name`: resolution falls back to the path segment.
+		write("w/eithercap/nameless", Maps.of(
+			Fields.DESCRIPTION, Strings.create("No name field")), ctx);
+
+		RequestContext crudOnly = ctx.withCaps(Vectors.of(
+			Maps.of(Strings.create("with"), Strings.create(did + "/w/eithercap"),
+				Strings.create("can"), Capability.CRUD_READ)));
+		ACell listed = invoke(Maps.of(
+			Strings.create("command"), Strings.create("list"),
+			K_SOURCES, Vectors.of(Strings.create("w/eithercap"))), crudOnly);
+		assertTrue(String.valueOf(listed).contains("- nameless — No name field"),
+			String.valueOf(listed));
+
+		// No read grant at all still degrades to a diagnostic, leaking nothing.
+		ACell none = invoke(Maps.of(
+			Strings.create("command"), Strings.create("list"),
+			K_SOURCES, Vectors.of(Strings.create("w/eithercap"))), ctx.withCaps(Vectors.empty()));
+		assertTrue(String.valueOf(none).contains("unavailable:"), String.valueOf(none));
+		assertFalse(String.valueOf(none).contains("No name field"), String.valueOf(none));
+	}
+
+	/**
+	 * A PATH is namespace-scoped: {@code crud/read} over it is required, and an
+	 * {@code asset/read} grant does not substitute. The public read-only scope
+	 * grants {@code asset/read} UNSCOPED ({@code with: ""}) — safe for content
+	 * addressing, where you must hold the hash to ask — so honouring it against
+	 * a path would turn it into a licence to read any user's workspace.
+	 */
+	@Test
+	public void testAssetReadDoesNotSubstituteForPathRead() {
+		write("w/pathscope/skill", Maps.of(
+			Fields.NAME, Strings.create("skill"),
+			Fields.DESCRIPTION, Strings.create("Path-scoped")), ctx);
+
+		RequestContext assetOnly = ctx.withCaps(Vectors.of(
+			Maps.of(Strings.create("with"), Strings.create(did + "/w/pathscope"),
+				Strings.create("can"), Abilities.ASSET_READ)));
+		ACell result = invoke(Maps.of(
+			Strings.create("command"), Strings.create("list"),
+			K_SOURCES, Vectors.of(Strings.create("w/pathscope"))), assetOnly);
+		assertTrue(String.valueOf(result).contains("unavailable:"), String.valueOf(result));
+		assertFalse(String.valueOf(result).contains("Path-scoped"), String.valueOf(result));
 	}
 }
