@@ -694,9 +694,36 @@ public class AgentAdapter extends AAdapter {
 		if (unavailableWarn != null) warnings = warnings.conj(unavailableWarn);
 		AString skillsWarn = skillSourcesWarning(ctx, config);
 		if (skillsWarn != null) warnings = warnings.conj(skillsWarn);
+		AString ownSkillsNote = emptyOwnSkillsNote(ctx, config);
+		if (ownSkillsNote != null) warnings = warnings.conj(ownSkillsNote);
 		AString keyWarn = rawApiKeyWarning(config);
 		if (keyWarn != null) warnings = warnings.conj(keyWarn);
 		return warnings;
+	}
+
+	/**
+	 * A one-line reminder that the agent's own skill space is empty.
+	 *
+	 * <p>Not a problem report: {@code w/skills} ships in every standard
+	 * template precisely so an agent has somewhere to author personal skills,
+	 * and it is empty until one does. Saying so is a prompt to use it — which
+	 * is why it reads as a plain statement rather than a warning about broken
+	 * configuration.</p>
+	 */
+	private AString emptyOwnSkillsNote(RequestContext ctx, AMap<AString, ACell> config) {
+		if (config == null) return null;
+		try {
+			AVector<ACell> empty = Skills.emptyOwnSources(engine, ctx, Skills.sourcesOf(config));
+			if (empty.count() == 0) return null;
+			StringBuilder sb = new StringBuilder();
+			for (long i = 0; i < empty.count(); i++) {
+				if (i > 0) sb.append(", ");
+				sb.append(empty.get(i));
+			}
+			return Strings.create(sb + " empty — the agent can author its own skills there");
+		} catch (RuntimeException e) {
+			return null;                       // shape problems are the other check's job
+		}
 	}
 
 	/**

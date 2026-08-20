@@ -399,9 +399,10 @@ public class AgentAdapterTest {
 	}
 
 	@Test
-	public void testCreateEmptyUserSkillsSourceIsNotNoise() {
-		// Every standard template declares w/skills, and an empty user skills
-		// dir is the designed default — a live extension point, never a warning.
+	public void testCreateNotesEmptyOwnSkillsSpace() {
+		// Not a problem report: w/skills ships in every standard template
+		// precisely so an agent has somewhere to author personal skills, and it
+		// is empty until one does. The note is a prompt to use it.
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "skills-nothing-agent",
 			Fields.CONFIG, Maps.of(
@@ -412,8 +413,11 @@ public class AgentAdapterTest {
 		ACell result = engine.jobs().invokeOperation(
 			"v/ops/agent/create", input, RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		assertNull(RT.getIn(result, Fields.WARNINGS),
-			"empty w/skills is normal — no advisory");
+		ACell warnings = RT.getIn(result, Fields.WARNINGS);
+		assertNotNull(warnings, "expected the empty-own-skills note: " + result);
+		assertTrue(warnings.toString().contains("w/skills empty"), warnings.toString());
+		// Reads as an affordance, not a misconfiguration.
+		assertTrue(warnings.toString().contains("can author"), warnings.toString());
 	}
 
 	/**
@@ -5651,7 +5655,7 @@ public class AgentAdapterTest {
 		assertTrue(warnings.toString().contains("not readable"), warnings.toString());
 	}
 
-	/** A source the creator CAN read raises nothing. */
+	/** A source that exists and is readable raises nothing at all. */
 	@Test
 	public void testCreateSilentOnReadableSkillSource() {
 		RequestContext scoped = RequestContext.of(ALICE_DID).withCaps(Vectors.of(
@@ -5660,12 +5664,14 @@ public class AgentAdapterTest {
 			Maps.of(Strings.create("with"), Strings.create(ALICE_DID + "/g/"),
 				Strings.create("can"), Strings.create("agent/create")),
 			Maps.of(Strings.create("with"), Strings.create(ALICE_DID + "/w/skills"),
+				Strings.create("can"), convex.auth.ucan.Capability.CRUD_READ),
+			Maps.of(Strings.create("with"), Strings.create("v/skills"),
 				Strings.create("can"), convex.auth.ucan.Capability.CRUD_READ)));
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "skills-readable-source-agent",
 			Fields.CONFIG, Maps.of(
 				"operation", "v/ops/llmagent/chat",
-				"skillsets", Vectors.of(Strings.create("w/skills"))));
+				"skillsets", Vectors.of(Strings.create("v/skills/root"))));
 		ACell result = engine.jobs().invokeOperation(
 			"v/ops/agent/create", input, scoped).awaitResult(5000);
 		assertNull(RT.getIn(result, Fields.WARNINGS), String.valueOf(result));

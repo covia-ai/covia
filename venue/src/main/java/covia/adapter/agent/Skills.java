@@ -942,6 +942,40 @@ public final class Skills {
 		return null;
 	}
 
+	/**
+	 * The caller's own workspace sources that hold nothing yet — reported
+	 * separately from {@link #missingSource} because they are not a problem.
+	 * {@code w/skills} ships in every standard template precisely so an agent
+	 * has somewhere to author personal skills; that it is empty is worth a
+	 * one-line reminder, not a warning about broken configuration.
+	 */
+	public static AVector<ACell> emptyOwnSources(Engine engine, RequestContext ctx,
+			SkillSources sources) {
+		AVector<ACell> out = Vectors.empty();
+		if (engine == null || ctx == null || sources == null) return out;
+		out = appendEmptyOwn(engine, ctx, sources.skills(), out);
+		return appendEmptyOwn(engine, ctx, sources.skillsets(), out);
+	}
+
+	private static AVector<ACell> appendEmptyOwn(Engine engine, RequestContext ctx,
+			AVector<ACell> refs, AVector<ACell> out) {
+		if (refs == null) return out;
+		for (long i = 0; i < refs.count(); i++) {
+			AString ref = RT.ensureString(refs.get(i));
+			if (ref == null || !isOwnWorkspace(ctx, ref)) continue;
+			try {
+				requireRead(engine, ctx, ref);
+				ACell value = engine.resolvePath(ref, ctx);
+				if (value == null || (value instanceof AMap<?, ?> m && m.isEmpty())) {
+					out = out.conj(ref);
+				}
+			} catch (RuntimeException e) {
+				// Denied or broken — reported by the checks that own those cases.
+			}
+		}
+		return out;
+	}
+
 	/** A path in the caller's own workspace, bare or DID-qualified. */
 	private static boolean isOwnWorkspace(RequestContext ctx, AString ref) {
 		String r = ref.toString();
