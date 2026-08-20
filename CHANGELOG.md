@@ -10,7 +10,10 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Added
 
-- Hierarchical agent skills: a loaded skill contributes further skill sources via `skill.skills` — discovered, never auto-loaded
+- Hierarchical agent skills: skills and skillsets are separate declared kinds; a loaded skill contributes further sources — discovered, never auto-loaded
+- Venue skill library grouped into skillsets under `v/skills/<set>/`, with `v/skills/root` as the entry index (24 always-on lines down to 8)
+- SKILL.md frontmatter accepts `tools`, `skills` and `skillsets` lists
+- Boot warnings for a malformed venue skill library, and an `agent:create` warning for a skillset pointing at a directory of skillsets
 
 - Optional `covia-discord` venue module: operator-declared or user-created
   Discord bots route DMs and mentioned guild messages to agents (durable
@@ -21,6 +24,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   a shaded JDA 6.5.0 runtime isolated from the venue classpath.
 
 ### Changed
+
+- **Breaking:** `config.skills` now means individual skills only; directories move to `config.skillsets`. Standard templates are migrated
 
 - Adapter-global durable state now has a shared venue-private convention at
   `<venue-did>/w/adapters/<adapter>/`. Telegram and Discord use matching

@@ -49,6 +49,7 @@ public class UCANAdapter extends AAdapter {
 	protected void installAssets() {
 		installAsset("ucan/issue", "/adapters/ucan/issue.json");
 		installAsset("ucan/verify", "/adapters/ucan/verify.json");
+		installSkill("caps-permissions/capabilities", "/skills/capabilities.json");
 	}
 
 	@Override

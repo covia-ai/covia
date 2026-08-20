@@ -80,6 +80,7 @@ public class VenueAdapter extends AAdapter {
 		installAsset("venue/adapter/configure", "/adapters/venue/adapterConfigure.json");
 		installAsset("venue/module/load", "/adapters/venue/moduleLoad.json");
 		installAsset("venue/module/unload", "/adapters/venue/moduleUnload.json");
+		installSkill("adapters/adapters", "/skills/adapters.json");
 	}
 
 	@Override

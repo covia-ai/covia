@@ -413,6 +413,10 @@ public class SkillsLibraryTest {
 	 * child ref resolves and matches its declared kind. This is the guard that
 	 * a packaging mistake in the shipped skills is caught here rather than in
 	 * an operator's log.
+	 *
+	 * <p>Deliberately runs against the SHARED engine, so it also catches any
+	 * test that leaves a stray skill directly under {@code v/skills} — the
+	 * invariant holds repo-wide, not just for the shipped resources.</p>
 	 */
 	@Test
 	public void testVenueSkillLibraryValidatesClean() {

@@ -14,7 +14,8 @@
 			"v/ops/skills"
 		],
 		"skillsets": [
-			"v/skills/ops-tools"
+			"v/skills/ops-tools",
+			"v/skills/adapters"
 		]
 	}
 }

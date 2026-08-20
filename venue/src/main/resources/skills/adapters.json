@@ -1,0 +1,18 @@
+{
+	"name": "adapters",
+	"description": "How adapters work: what they publish, how to see what this venue has, and how an operator enables, configures or loads one. Load to understand or change what a venue can do.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Adapters\nAn adapter is what makes a venue able to do something. Each one publishes operations under `v/ops/<adapter>/`, an optional skill, agent templates, and a summary at `v/info/adapters/<name>` — all appearing exactly when the adapter is active and retracted when it is not.\n\nSee what exists:\n- `v/ops/venue/adapters` lists every registered adapter with its enabled state.\n- `v/adapters/<name>/` is that adapter's own subtree: `info` (facts it publishes), `config` (only what it explicitly allow-lists — nothing by default), and mirrors of its `ops/`, `skills/` and `templates/`. The mirror holds the same assets as the canonical catalog, so `v/adapters/<name>/skills` is a skillset you can point an agent at to get everything that adapter offers.\n- Read an operation's metadata to get its input/output schema before calling it; never guess a callable name from prose.\n\nOperator lifecycle (venue authority — these change what the whole venue can do):\n- `enable` / `disable` a registered adapter by name. Disabling removes live dispatch and its published records; the catalog metadata stays for later replacement.\n- `configure` applies a config map to a running adapter. Validation is the adapter's own; a strict apply rejects unknown keys.\n- `module/load` and `module/unload` add or remove a shaded module jar (covia-sql, covia-telegram, covia-discord, covia-claude-code, covia-python-adapter), each bringing its own adapters, operations and skills. Loading is last-write-wins: it replaces occupied names rather than failing.\n\nRuntime changes are runtime-only unless the venue config is edited too, so a restart returns to what the config declares. An adapter that ships a skill contributes it to a skillset the moment it is active — so a newly loaded module can widen an agent's discoverable skills without any agent being reconfigured."
+	},
+	"skill": {
+		"tools": [
+			"v/ops/venue/adapters",
+			"v/ops/venue/adapter/enable",
+			"v/ops/venue/adapter/disable",
+			"v/ops/venue/adapter/configure",
+			"v/ops/venue/module/load",
+			"v/ops/venue/module/unload"
+		]
+	}
+}

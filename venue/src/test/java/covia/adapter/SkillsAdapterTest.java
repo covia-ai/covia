@@ -106,19 +106,21 @@ public class SkillsAdapterTest {
 		// Venue skills are written under the venue's own identity (the
 		// VenueGlobalsResolver write gate) and publicly discoverable.
 		RequestContext venueCtx = RequestContext.of(engine.getDIDString());
-		write("v/skills/venue-demo", Maps.of(
+		// A skill goes INSIDE a skillset: v/skills holds directories, never
+		// skills, and SkillsLibraryTest enforces that repo-wide.
+		write("v/skills/demo/venue-demo", Maps.of(
 			Fields.DESCRIPTION, Strings.create("A venue-installed skill")), venueCtx);
 		try {
 			ACell result = invoke(Maps.of(
 				Strings.create("command"), Strings.create("list"),
-				K_SOURCES, Vectors.of(Strings.create("v/skills"))), ctx);
+				K_SOURCES, Vectors.of(Strings.create("v/skills/demo"))), ctx);
 			assertNotNull(result);
 			assertTrue(result.toString().contains("- venue-demo — A venue-installed skill"), result.toString());
 		} finally {
 			// Shared-engine hygiene: leave v/skills as shipped.
 			try {
 				engine.jobs().invokeInternal("v/ops/covia/delete",
-					Maps.of(Fields.PATH, Strings.create("v/skills/venue-demo")), venueCtx)
+					Maps.of(Fields.PATH, Strings.create("v/skills/demo")), venueCtx)
 					.get(5, TimeUnit.SECONDS);
 			} catch (Exception e) {
 				throw new RuntimeException(e);
