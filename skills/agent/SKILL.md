@@ -1,6 +1,6 @@
 ---
 name: agent
-description: Create, configure, and manage Covia agents. Handles config gotchas, system prompts, LLM backend setup, and lifecycle operations. Use when working with agents on a venue.
+description: Create, configure, and manage Covia agents. Handles config gotchas, system prompts, LLM backend setup, skills and hierarchical skill discovery, and lifecycle operations. Use when working with agents on a venue.
 argument-hint: "<create|list|query|reset> <agent-name>"
 ---
 
@@ -24,7 +24,7 @@ agent that cannot do the intended work:
 
 4. **Conversation history is session-scoped** — updating a prompt changes later turns but does not erase existing sessions. Omit `sessionId` to start a new conversation; delete/recreate the agent only when you explicitly need a completely fresh identity and audit record.
 
-5. **Operation references are lattice paths, not adapter shorthand** — `config.operation`, `llmOperation`, and operation entries in `tools` must be resolvable paths such as `v/ops/covia/write`, never `covia:write`. Create returns warnings for unavailable configured tools. Harness tools (`subgoal`, `complete`, `fail`, `compact`, `context_load`, `context_unload`, `more_tools`) are bare names. A custom read/write agent must declare those operations or start from `worker`.
+5. **Operation references are lattice paths, not adapter shorthand** — `config.operation`, `llmOperation`, and operation entries in `tools` must be resolvable paths such as `v/ops/covia/write`, never `covia:write`. Create returns warnings for unavailable configured tools. Harness tools (`subgoal`, `complete`, `fail`, `compact`, `context_load`, `context_unload`, `more_tools`, and `skill_load` when `config.skills` is non-empty) are bare names. A custom read/write agent must declare those operations or start from `worker`.
 
 ## Commands
 
@@ -94,6 +94,72 @@ Show status, config, pending tasks, timeline length, and last run result.
 For a fresh conversation with the same agent, omit `sessionId` on the next chat
 or request. To erase the complete runtime record and audit history, explicitly
 `agent_delete remove=true` and recreate it; create never overwrites.
+
+## Skills — What an Agent Can Pick Up
+
+Skills are named bundles of instructions, context, and tools that an agent
+loads **on demand**, so a lean agent stays lean until a task needs more. Full
+reference: **`venue/docs/SKILLS.md`**.
+
+**`config.skills` lists sources, not skills.** A source is a skills directory,
+a single skill path, or a content-addressed asset ref:
+
+```
+agent_create agentId="Bob" config=[
+  "v/agents/templates/skilled",
+  {"skills": ["w/skills", "v/skills/workspace", "a/<hash>"]}
+]
+```
+
+Every standard template already declares sources: `skilled`, `minimal`,
+`goaltree` and `full` take the whole library (`["w/skills", "v/skills"]`),
+while `reader`, `worker`, `analyst` and `manager` curate a role-specific list.
+`w/skills` comes first in all of them, so a personal skill shadows a
+same-named venue skill — **first source wins**.
+
+A non-empty `config.skills` switches on both halves of the feature: the
+`[Skills]` index injected each turn (one `- name — description` line per
+skill) and the `skill_load` harness tool. An agent with no sources has
+neither, and behaves exactly as it did before skills existed.
+
+### Hierarchical discovery
+
+A loaded skill can contribute **further sources** through its own
+`skill.skills` facet, so a short index opens onto a deeper library:
+
+```
+{"description": "Find data-engineering specialists",
+ "skill": {"skills": ["v/skills/data", "w/team-skills/sql-review"]}}
+```
+
+Children are **discovered, not auto-loaded**. Loading the parent returns a
+refreshed `skillIndex`, makes its children loadable by name from the next
+step, and lists them in the following turn's index; loading a child may reveal
+another layer. The resolver never walks an unloaded subtree, so cycles are
+inert and a broad hierarchy never floods the prompt.
+
+Effective sources are `config.skills` first, then the sources contributed by
+loaded skills, deduplicated first-wins — configured sources keep precedence.
+Unloading a parent (`context_unload`) retracts its contributed sources;
+children already loaded stay loaded independently.
+
+Contributing a ref grants no authority to read it — every source is
+capability-checked as usual, and a skill's tools are still checked at
+invocation. A skill's instructions enter the prompt verbatim and its tools
+join the palette, so point `config.skills` only at sources you trust.
+
+### Inspecting and authoring
+
+| Want | Do |
+|------|-----|
+| See what a venue offers | `skills command=list` (optionally `sources=[...]`) |
+| Read one without loading it | `skills command=read name=<name>` (or `ref=<path>`) |
+| See what an agent actually gets | `agent_context agentId=<name>` — the `[Skills]` block, plus `(loaded)` markers |
+| Write a personal skill | `covia_write path=w/skills/<name>` with `{description, content: {inline: "..."}, skill: {tools: [...], skills: [...]}}` |
+
+A skill with no content is a pure toolset; one carrying an `operation` facet
+offers itself as a tool. For the full authoring recipe, load the venue's own
+`v/skills/skill-authoring`.
 
 ## Available Transition Operations
 
