@@ -144,6 +144,9 @@ public class TelegramAdapterTest {
 		assertThrows(IllegalArgumentException.class, () -> fresh.configure(Maps.of("bots", "nope"), false));
 		assertThrows(IllegalArgumentException.class, () -> fresh.configure(Maps.of("unknown", true), true));
 		assertTrue(fresh.configure(Maps.of("unknown", true), false), "lenient mode tolerates unknown keys");
+		assertThrows(IllegalArgumentException.class,
+			() -> fresh.configure(Maps.of("statePath", "w/elsewhere"), false),
+			"adapter-global state has one well-known venue-private root even in lenient mode");
 		assertTrue(fresh.configure(Maps.empty(), true));
 		fresh.close();
 	}
@@ -283,9 +286,8 @@ public class TelegramAdapterTest {
 	public void testAgentChatIsAJobAndRecoversFromAStaleSession() throws Exception {
 		long chat = 1005L;
 		// A persisted session id the agent has never heard of (e.g. the agent was recreated).
-		run(RequestContext.of(OWNER), "v/ops/covia/write", Maps.of(
-			Fields.PATH, BotRunner.sessionsPath("echo") + "/" + chat,
-			Fields.VALUE, "deadbeefdeadbeefdeadbeefdeadbeef"));
+		adapter.state().write("config/echo/sessions/" + chat,
+			Strings.create("deadbeefdeadbeefdeadbeefdeadbeef"));
 		long jobsBefore = engine.jobs().getJobs(RequestContext.of(OWNER)).count();
 		telegram.push(chat, ALLOWED_ID, "alice", "are you there");
 		FakeTelegramServer.Sent reply = telegram.awaitSent(15_000);
@@ -407,12 +409,14 @@ public class TelegramAdapterTest {
 		await(() -> mine.state() == BotRunner.State.RUNNING, 10_000, () -> "created bot did not start: " + mine.error());
 		assertEquals("created_bot", mine.username());
 
-		// Recorded in the owner's workspace (settings only — no user, no literal token)
-		ACell record = RT.getIn(run(RequestContext.of(OWNER), "v/ops/covia/read",
-			Maps.of(Fields.PATH, TelegramAdapter.REGISTRY_PATH + "/mine")), Fields.VALUE);
+		// Recorded in venue-private adapter state (settings only — no user, no literal token).
+		String recordPath = adapter.runtimeBotPath(OWNER, "mine");
+		ACell record = engine.resolvePath(Strings.create(recordPath), engine.venueContext());
 		assertNotNull(record, "registry record");
 		assertEquals(Strings.create("s/TG_CREATED"), RT.getIn(record, BotSpec.K_TOKEN));
 		assertNull(RT.getIn(record, BotSpec.K_USER));
+		assertNull(engine.resolvePath(Strings.create(recordPath), RequestContext.of(OWNER)),
+			"user association does not make adapter-owned state part of that user's workspace");
 
 		// Same name again is refused; another user may use the name; bots lists it as runtime
 		assertFailsWith(engine.jobs().invokeOperation("v/ops/telegram/create", Maps.of(
@@ -433,7 +437,7 @@ public class TelegramAdapterTest {
 		assertNull(adapter.runner(OWNER, "mine"));
 		adapter.rearmForTest();
 		BotRunner rearmed = adapter.runner(OWNER, "mine");
-		assertNotNull(rearmed, "a created bot is re-armed from w/telegram/bots at install");
+		assertNotNull(rearmed, "a created bot is re-armed from the venue adapter workspace at install");
 		await(() -> rearmed.state() == BotRunner.State.RUNNING, 10_000, () -> "re-armed bot did not start: " + rearmed.error());
 
 		// Delete: stops it, removes the record and sessions; config bots are refused
@@ -445,9 +449,31 @@ public class TelegramAdapterTest {
 		assertEquals(convex.core.data.prim.CVMBool.TRUE, RT.getIn(deleted, TelegramAdapter.K_DELETED));
 		assertNull(adapter.runner(OWNER, "mine"));
 		assertEquals(BotRunner.State.STOPPED, rearmed.state());
-		assertNull(RT.getIn(run(RequestContext.of(OWNER), "v/ops/covia/read",
-			Maps.of(Fields.PATH, TelegramAdapter.REGISTRY_PATH + "/mine")), Fields.VALUE), "record removed");
-		assertNull(readSession("mine", 8001L), "sessions removed");
+		assertNull(engine.resolvePath(Strings.create(recordPath), engine.venueContext()), "record removed");
+		assertNull(engine.resolvePath(Strings.create(adapter.state().path(
+			adapter.userStatePath(OWNER, "sessions/mine/8001"))), engine.venueContext()), "sessions removed");
+	}
+
+	@Test
+	public void testLegacyRuntimeBotRegistryMigratesAndDeleteCleansBothRoots() throws Exception {
+		String token="779:LEGACY-BOT";
+		telegram.registerBot(token,"legacy_bot");
+		run(RequestContext.of(OTHER),"v/ops/secret/set",Maps.of("name","TG_LEGACY","value",token));
+		AMap<AString,ACell> settings=Maps.of("token","s/TG_LEGACY","operation","v/test/ops/echo","open",true);
+		run(RequestContext.of(OTHER),"v/ops/covia/write",Maps.of(
+			Fields.PATH,TelegramAdapter.LEGACY_REGISTRY_PATH+"/legacy",Fields.VALUE,settings));
+
+		adapter.rearmForTest();
+		BotRunner legacy=adapter.runner(OTHER,"legacy");
+		assertNotNull(legacy);
+		await(()->legacy.state()==BotRunner.State.RUNNING,10_000,()->"legacy bot did not start: "+legacy.error());
+		assertEquals(settings,engine.resolvePath(Strings.create(adapter.runtimeBotPath(OTHER,"legacy")),engine.venueContext()),
+			"legacy record is copied into the canonical venue-private adapter workspace");
+
+		run(RequestContext.of(OTHER),"v/ops/telegram/delete",Maps.of("name","legacy"));
+		assertNull(engine.resolvePath(Strings.create(adapter.runtimeBotPath(OTHER,"legacy")),engine.venueContext()));
+		assertNull(RT.getIn(run(RequestContext.of(OTHER),"v/ops/covia/read",Maps.of(
+			Fields.PATH,TelegramAdapter.LEGACY_REGISTRY_PATH+"/legacy")),Fields.VALUE));
 	}
 
 	private static void assertFailsWith(Job job, String fragment) {
@@ -718,9 +744,10 @@ public class TelegramAdapterTest {
 	}
 
 	private static String readSession(String bot, long chatId) {
-		ACell read = run(RequestContext.of(OWNER), "v/ops/covia/read",
-			Maps.of(Fields.PATH, BotRunner.sessionsPath(bot) + "/" + chatId));
-		ACell v = RT.getIn(read, Fields.VALUE);
+		BotRunner runner=adapter.runner(OWNER,bot);
+		if(runner==null)runner=adapter.runner(bot);
+		if(runner==null)return null;
+		ACell v=engine.resolvePath(Strings.create(runner.sessionsPath()+"/"+chatId),engine.venueContext());
 		return (v == null) ? null : v.toString();
 	}
 

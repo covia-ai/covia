@@ -329,6 +329,17 @@ Mutable data space for agents and users. Persistent storage for user and agent d
 - Any CAD3 type is valid, but JSON-like structures get the best tooling support
 - Non-JSON structures will store and hash correctly but won't render nicely in UIs or chain through operations cleanly
 
+User-managed data may live at any writable path the user chooses, with
+operation-specific defaults such as `w/memory`. Framework adapters instead
+keep adapter-global durable state in the venue principal's well-known private
+subtree: `<venue-did>/w/adapters/<adapter>/`. Adapter-owned records associated
+with a user are conventionally keyed below `users/<did>/`; that association is
+not an access grant, and the adapter owns and validates the schema. Credentials
+never belong there: records hold `s/NAME` references and secret material stays
+in `/s/`. Public adapter declarations and facts remain separately discoverable
+under `v/adapters/<adapter>/`. The complete adapter storage and publication
+contract is in [ADAPTERS.md](ADAPTERS.md#private-state-and-user-managed-storage).
+
 #### `/s/` — Secrets
 
 Encrypted, capability-gated data. Different encryption and access semantics from all other namespaces.

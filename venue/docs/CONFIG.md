@@ -656,6 +656,8 @@ Per-adapter settings, keyed by adapter name. Adapters read their *effective*
 configuration through `Engine.adapterConfig(name)` — this static block
 overlaid by any runtime reconfiguration (see
 [Runtime adapter lifecycle](#runtime-adapter-lifecycle)).
+Adapter implementers should follow the validation, publication, and private
+state contract in [ADAPTERS.md](ADAPTERS.md#lifecycle-and-configuration).
 
 The reserved key `enabled: false` parks an adapter as disabled at
 boot: it is not installed, publishes nothing to `v/ops/` or `v/info/adapters/`,
@@ -921,7 +923,7 @@ Per bot:
   agents are owned by.
 - `agent` **or** `operation` — the **inbound handler**. With `agent`, each
   Telegram chat is one `agent:chat` session, persisted at
-  `w/telegram/sessions/<bot>/<chatId>` in the user's workspace so
+  `<venue-did>/w/adapters/telegram/config/<bot>/sessions/<chatId>` so
   conversations survive restarts; `/new` starts a fresh one. The agent
   receives each turn as `{text, via: {channel: "telegram", bot, access:
   "allow" | "open", from, chat, message_id}}` — Telegram's authenticated
@@ -973,13 +975,19 @@ Bots can also be **created at runtime by their user**: `v/ops/telegram/create
 {name, token: "s/…", agent | operation, reply?, allow?, open?, parseMode?,
 greeting?}` makes a bot that acts as the caller (no `user` — a user cannot
 create a bot acting as someone else; the token must be a secret reference),
-records it at `w/telegram/bots/<name>` in the caller's workspace, starts it,
+records it at
+`<venue-did>/w/adapters/telegram/users/<caller-did>/bots/<name>`, starts it,
 and re-arms it on every venue start or module load; `v/ops/telegram/delete
 {name}` stops and removes it (record and sessions). Both are gated on
 `<caller>/telegram/<name>` × `telegram/manage`. Config-declared bots stay
 the operator's (delete refuses them); `telegram:bots` reports `managed:
 config | runtime`. Bot names are per user for created bots; `send`/`call`
 resolve `bot` against the caller's own bots first, then config bots.
+The adapter owns this private schema; user association does not grant direct
+workspace access. User-managed content stays wherever the user chooses (for
+example `w/memory`), and bot tokens remain `s/` references. The adapter's
+global state root is fixed and is not a configurable `statePath`. Upgrades
+migrate pre-0.9 Telegram records from `w/telegram/bots` as they are found.
 
 Operations — all in Telegram's own field names, so the Bot API reference is
 the reference: `v/ops/telegram/send {bot?, chat_id, text, parse_mode?,
@@ -997,6 +1005,70 @@ own update loop owns them) — gated on `telegram/call`; and
 with state (`STARTING`, `PENDING`, `RUNNING`, `STOPPED`), Telegram username,
 last error and counters, tokens never included. The module ships a
 `telegram` agent skill (`v/skills/telegram`).
+
+### Discord bots (covia-discord)
+
+The optional **covia-discord** module connects Discord bots over the Gateway
+and exposes Discord REST operations. It follows the same identity, Job,
+capability, persistence, and runtime lifecycle model as `covia-telegram`, but
+uses Discord channel snowflakes and Discord's 2000-character message limit.
+
+```json
+{
+  "modules": ["modules/covia-discord-<version>-module.jar"],
+  "adapters": {
+    "discord": {
+      "bots": {
+        "assistant": {
+          "token": "s/DISCORD_BOT_TOKEN",
+          "user": "did:key:z6Mk...",
+          "agent": "Assistant",
+          "allow": ["123456789012345678", "@mike"],
+          "mentionOnly": true,
+          "greeting": "Hi — I'm the venue assistant."
+        }
+      },
+      "apiUrl": "https://discord.com/api/v10"
+    }
+  }
+}
+```
+
+Create the application and bot in the Discord Developer Portal, enable the
+**Message Content Intent**, invite it with permissions to view channels, read
+message history, and send messages, then store its token as a venue/user
+secret. `MESSAGE_CONTENT` is required for ordinary guild message content;
+DMs and direct mentions alone are not a substitute for enabling it when the
+bot is expected to process guild text.
+
+Each bot has exactly one `agent` or `operation` handler. Agent conversations
+persist under `<venue-did>/w/adapters/discord/config/<bot>/sessions/<channelId>`
+and receive
+`{text, via: {channel: "discord", bot, access, from, chat, guild?,
+message_id}, attachments}`. Operation handlers receive a normalized Discord
+message record including attachment ids, filenames, URLs, sizes and types.
+Every inbound turn runs as a Job for the configured `user`. `allow` accepts
+Discord user snowflakes or usernames and fails closed unless `open: true`.
+DMs are handled directly; guild messages require a bot mention by default.
+Set `mentionOnly: false` only when the bot should process every allowed
+message it can see. Built-in text commands are `!start`, `!help`, `!new`, and
+`!id` (slash-shaped `/...` text is also recognized; these are not registered
+Discord application commands).
+
+`v/ops/discord/send {bot?, channel_id, content, reply_to?,
+suppress_embeds?, allowed_mentions?, embeds?, components?}` sends messages,
+splitting long content, and requires `<owner>/discord/<bot>` ×
+`discord/send`. `v/ops/discord/call {bot?, method, route, body?}` calls a
+relative Discord API v10 REST route and requires `discord/call`; Gateway,
+OAuth, absolute, and traversal routes are refused. HTTP 429 responses honor
+Discord's `retry_after` once. `discord:bots` reports state/counters without
+tokens. Runtime `discord:create` requires an `s/NAME` token reference and
+persists at
+`<venue-did>/w/adapters/discord/users/<caller-did>/bots/<name>`;
+`discord:delete` removes it and its sessions. The adapter owns this private,
+fixed schema; tokens remain in `s/`, and user-managed content is not moved
+into it. These require `discord/manage`. The module also publishes
+`v/skills/discord` and `v/agents/templates/discord`.
 
 ### Claude Code (covia-claude-code)
 
@@ -1120,6 +1192,9 @@ adapter, never a call): `addDirs`, `mcpConfig`, `strictMcpConfig`,
 may take many minutes; clients poll and reconnect by job id.
 
 ## Runtime adapter lifecycle
+
+This section is the operator reference. Adapter implementation and lifecycle
+contracts are documented in [ADAPTERS.md](ADAPTERS.md#lifecycle-and-configuration).
 
 ```json
 {

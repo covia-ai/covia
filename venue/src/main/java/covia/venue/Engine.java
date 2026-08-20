@@ -2418,6 +2418,16 @@ public class Engine {
 	}
 
 	/**
+	 * Returns a durable venue-principal workspace scoped to one adapter at
+	 * {@code w/adapters/<name>/}. Trusted adapter code uses this for private,
+	 * schema-owned operational state; user-managed storage continues to use
+	 * caller-selected paths through ordinary operations.
+	 */
+	public AdapterWorkspace adapterWorkspace(String adapterName) {
+		return new AdapterWorkspace(this, adapterName);
+	}
+
+	/**
 	 * Builds a DID URL for an asset: {@code <venue-did>/a/<hex-hash>}
 	 */
 	public AString assetDIDURL(Hash hash) {

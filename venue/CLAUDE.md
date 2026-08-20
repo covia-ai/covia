@@ -108,6 +108,7 @@ Module adapters (shaded module jars, not in covia.jar — `docs/CONFIG.md` "Venu
 | `sql` | covia-sql | Venue-local convex-db and operator-registered JDBC databases | `query`, `execute` |
 | `python` | covia-python-adapter | Operator-configured Python operations and stateful instances | configured ops, `instances/*` |
 | `telegram` | covia-telegram | Telegram bots (operator-declared or user-created) routing chats to agents or handing Updates to operations; Bot API access in Telegram's own shapes | `send`, `call`, `create`, `delete`, `bots` |
+| `discord` | covia-discord | Discord bots (operator-declared or user-created) routing DMs and mentioned guild messages to agents or operations; Discord REST API access | `send`, `call`, `create`, `delete`, `bots` |
 | `claudecode` | covia-claude-code | Drives the Claude Code CLI in venue-authorised project directories: one-shot runs and long-lived resumable sessions over a bounded warm-process pool | `run`, `session`, `sessions`, `stop`, `projects`, `create`, `delete` |
 
 ## API Endpoints
@@ -164,44 +165,14 @@ is in [`docs/A2A_INTERACTION_AUTHORITY.md`](docs/A2A_INTERACTION_AUTHORITY.md).
 
 ### Adding a New Adapter
 
-1. Create a class extending `AAdapter` in `covia.adapter`
-2. Implement `getName()`, `getDescription()`, and the invocation method
-   (receives `RequestContext`, resolved metadata, and input)
-3. Use `getSubOperation(meta)` to extract the adapter-specific op name
-4. Override `installAssets()` to register default operations
-5. Create JSON asset definitions in `src/main/resources/adapters/{name}/`
-6. Register in `Engine.addDemoAssets()`
+See **[`docs/ADAPTERS.md`](docs/ADAPTERS.md)**, the canonical adapter-system
+and authoring contract. It covers invocation, configuration, catalog
+publication, private state, capabilities, lifecycle, module packaging, and
+the required tests.
 
-Read settings through `engine.adapterConfig(getName())` (static
-`adapters.<name>` config overlaid by runtime reconfiguration), never
-`engine.config().getAdapterConfig()`. Override `configure(config, strict)`
-only if you cache derived state or want to validate settings up front — it
-runs at registration and again on `v/ops/venue/adapter/configure`. Adapters
-are enable/disable-able at runtime unless listed in `Engine.KERNEL_ADAPTERS`.
-
-The engine always resolves operation references to metadata before dispatch —
-adapters never receive null metadata. For adapters that need direct job
-control (multi-turn, orchestration), override the job-aware `invoke` method
-instead of the future-returning one, and enforce capabilities at the point of
-action with `ctx.requireCapability(resource, ability)`.
-
-### Asset Metadata
-
-```json
-{
-  "name": "Human-readable name",
-  "description": "LLM-friendly description",
-  "operation": {
-    "adapter": "adaptername:operation",
-    "toolName": "mcpToolName",
-    "input":  { "type": "object", "properties": {"param1": {"type": "string"}}, "required": ["param1"] },
-    "output": { "type": "object", "properties": {"result": {"type": "string"}} }
-  }
-}
-```
-
-Optional: `secretFields` (redacted in persisted job records), `default`
-(argument defaults, `docs/OPERATIONS.md` §5).
+Operation metadata examples and rules, including `secretFields` and defaults,
+are in [`docs/ADAPTERS.md`](docs/ADAPTERS.md#writing-an-adapter) and
+[`docs/OPERATIONS.md`](docs/OPERATIONS.md).
 
 ### Working with Jobs
 
@@ -235,7 +206,11 @@ Hash id = engine.storeAsset(metadataString, contentBlob);
 // Per-user access (jobs, agents, secrets, workspace, h/ inbox)
 User user = engine.getVenueState().users().ensure(callerDID);
 Index<Blob, ACell> userJobs = user.getJobs();
+
 ```
+
+Adapter-owned state uses `AdapterWorkspace`; see
+[`docs/ADAPTERS.md`](docs/ADAPTERS.md#private-state-and-user-managed-storage).
 
 ### Testing
 
@@ -267,6 +242,7 @@ java -jar target/covia.jar [config.json]
 ## Related Documentation
 
 - `docs/AUTH.md` — authentication design (#297): method contract, central sessions, assurance policy
+- `docs/ADAPTERS.md` — canonical adapter system, state, lifecycle, authoring, and module contract
 - `docs/CONFIG.md` — operator configuration reference
 - `docs/JOBS.md` — job implementation semantics (COG-8 companion)
 - `docs/UCAN.md` — capabilities, granting surface, proof channels

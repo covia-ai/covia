@@ -1,0 +1,18 @@
+{
+  "name": "Send Discord message",
+  "description": "Sends a message through a venue Discord bot. Content over Discord's 2000-character limit is split. Requires discord/send on <bot user>/discord/<bot>.",
+  "operation": {
+    "adapter": "discord:send",
+    "input": {"type":"object","properties":{
+      "bot":{"type":"string","description":"Bot name; optional when the caller owns exactly one."},
+      "channel_id":{"type":"string","description":"Discord channel snowflake."},
+      "content":{"type":"string"},
+      "reply_to":{"type":"string","description":"Message snowflake to reply to."},
+      "suppress_embeds":{"type":"boolean"},
+      "allowed_mentions":{"type":"object"},
+      "embeds":{"type":"array"},
+      "components":{"type":"array"}
+    },"required":["channel_id","content"],"additionalProperties":true},
+    "output":{"type":"object","description":"The last Discord Message returned by the API.","additionalProperties":true}
+  }
+}

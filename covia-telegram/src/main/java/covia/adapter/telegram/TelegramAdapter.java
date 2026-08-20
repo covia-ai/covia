@@ -26,6 +26,7 @@ import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.adapter.AAdapter;
 import covia.api.Fields;
+import covia.venue.AdapterWorkspace;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 
@@ -36,11 +37,12 @@ import covia.venue.RequestContext;
  * <p><b>Bots</b> are declared under {@code adapters.telegram.bots.<name>}
  * (see {@link BotSpec}) by the operator, or created at runtime by a user with
  * {@code telegram:create} (acting as that user, recorded at
- * {@code w/telegram/bots/<name>} in their workspace and re-armed at boot;
+ * {@code w/adapters/telegram/users/<did>/bots/<name>} in the venue's private
+ * adapter workspace and re-armed at boot;
  * {@code telegram:delete} removes them). Each runs as its {@code user} with one
  * <b>inbound handler</b>: an agent — one {@code agent:chat} session per
- * Telegram chat, persisted at {@code w/telegram/sessions/<bot>/<chatId>} in
- * the user's workspace so conversations survive restarts — or an operation,
+ * Telegram chat, persisted in the same private adapter workspace so
+ * conversations survive restarts — or an operation,
  * invoked per update with the Telegram {@code Update} exactly as sent
  * (snake_case, {@code message}/{@code callback_query}/… nested as Telegram
  * nests them) plus {@code bot}, the reply governed by {@code reply}
@@ -95,8 +97,9 @@ public class TelegramAdapter extends AAdapter implements AutoCloseable {
 	static final AString K_METHOD = Strings.intern("method");
 	static final AString K_PARAMS = Strings.intern("params");
 	static final AString K_DELETED = Strings.intern("deleted");
-	/** Registry of a user's created bots, in their workspace: {@code w/telegram/bots/<name>} → settings. */
-	static final String REGISTRY_PATH = "w/telegram/bots";
+	/** Pre-adapter-workspace location, read and cleaned up for compatibility. */
+	static final String LEGACY_REGISTRY_PATH = "w/telegram/bots";
+	private static final AString K_STATE_PATH = Strings.intern("statePath");
 	static final String K_PARSE_MODE_PARAM = "parse_mode";
 	private static final AString K_ENABLED = Strings.intern("enabled");
 
@@ -164,6 +167,9 @@ public class TelegramAdapter extends AAdapter implements AutoCloseable {
 	@Override
 	public boolean configure(AMap<AString, ACell> config, boolean strict) {
 		if (config == null) config = Maps.empty();
+		if (config.containsKey(K_STATE_PATH)) {
+			throw new IllegalArgumentException("adapters.telegram.statePath is fixed at w/adapters/telegram");
+		}
 		if (strict) {
 			for (long i = 0; i < config.count(); i++) {
 				ACell k = config.entryAt(i).getKey();
@@ -231,45 +237,58 @@ public class TelegramAdapter extends AAdapter implements AutoCloseable {
 	}
 
 	/**
-	 * Start every bot users created at runtime ({@code w/telegram/bots/<name>}
-	 * in each user's workspace). Read straight from the lattice, not through
-	 * the ops catalog, because at boot a module installs before the catalog is
-	 * materialised. A record that no longer parses is logged and skipped —
-	 * one bad bot must not keep the others down.
+	 * Start every user-created bot from the venue-private adapter workspace.
+	 * Legacy per-user registries are copied on first boot after upgrade; the
+	 * old record is retained until the bot is deleted, so migration is safe if
+	 * startup is interrupted. A valid new record always wins.
 	 */
 	private synchronized void rearmRuntimeBots() {
-		AMap<AString, ACell> users = engine.getVenueState().users().getAll();
-		if (users == null || users.isEmpty()) return;
-		int count = 0;
-		for (var userEntry : users.entrySet()) {
-			AString owner = (AString) userEntry.getKey();
-			AMap<AString, ACell> registry;
-			try {
-				registry = RT.castMap(engine.resolvePath(Strings.create(REGISTRY_PATH), RequestContext.of(owner)));
-			} catch (RuntimeException e) {
-				log.warn("Telegram: could not read bot registry of {}: {}", owner, e.getMessage());
-				continue;
-			}
-			if (registry == null || registry.isEmpty()) continue;
-			for (var botEntry : registry.entrySet()) {
-				String name = String.valueOf(botEntry.getKey());
-				String key = runtimeKey(owner, name);
-				if (runners.containsKey(key)) continue;
-				try {
-					BotSpec spec = runtimeSpec(owner, name, botEntry.getValue());
-					BotRunner r = new BotRunner(this, spec, apiUrl, BotRunner.Managed.RUNTIME);
-					runners.put(key, r);
-					r.start();
-					count++;
-				} catch (RuntimeException e) {
-					log.warn("Telegram: skipping bot '{}' of {}: {}", name, owner, e.getMessage());
+		AMap<AString, ACell> adapterUsers = RT.castMap(state().read("users"));
+		if (adapterUsers != null) {
+			for (var userEntry : adapterUsers.entrySet()) {
+				if (!(userEntry.getKey() instanceof AString owner) || !owner.toString().startsWith("did:")) {
+					log.warn("Telegram: skipping invalid adapter-state user key {}", userEntry.getKey());
+					continue;
 				}
+				startRegistry(owner, RT.castMap(RT.getIn(userEntry.getValue(), K_BOTS)), false);
 			}
 		}
-		if (count > 0) log.info("Telegram: re-armed {} user-created bot(s) from the lattice", count);
+
+		AMap<AString, ACell> users = engine.getVenueState().users().getAll();
+		if (users == null || users.isEmpty()) return;
+		for (var userEntry : users.entrySet()) {
+			if (!(userEntry.getKey() instanceof AString owner)) continue;
+			AMap<AString, ACell> registry;
+			try {
+				registry = RT.castMap(engine.resolvePath(Strings.create(LEGACY_REGISTRY_PATH), RequestContext.of(owner)));
+			} catch (RuntimeException e) {
+				log.warn("Telegram: could not read legacy bot registry of {}: {}", owner, e.getMessage());
+				continue;
+			}
+			startRegistry(owner, registry, true);
+		}
 	}
 
-	/** A registry record ({@code w/telegram/bots/<name>}) as a spec acting as its owner. */
+	private void startRegistry(AString owner, AMap<AString, ACell> registry, boolean migrate) {
+		if (registry == null || registry.isEmpty()) return;
+		for (var botEntry : registry.entrySet()) {
+			String name = String.valueOf(botEntry.getKey());
+			String key = runtimeKey(owner, name);
+			if (runners.containsKey(key)) continue;
+			try {
+				BotSpec spec = runtimeSpec(owner, name, botEntry.getValue());
+				if (migrate) state().write(userStatePath(owner, "bots/" + name), botEntry.getValue());
+				BotRunner r = new BotRunner(this, spec, apiUrl, BotRunner.Managed.RUNTIME);
+				runners.put(key, r);
+				r.start();
+				if (migrate) log.info("Telegram: migrated bot '{}' of {} to {}", name, owner, runtimeBotPath(owner, name));
+			} catch (RuntimeException e) {
+				log.warn("Telegram: skipping bot '{}' of {}: {}", name, owner, e.getMessage());
+			}
+		}
+	}
+
+	/** A durable runtime record as a spec acting as its associated user. */
 	private static BotSpec runtimeSpec(AString owner, String name, ACell record) {
 		AMap<AString, ACell> settings = RT.castMap(record);
 		if (settings == null) throw new IllegalArgumentException("registry record is not an object");
@@ -336,6 +355,18 @@ public class TelegramAdapter extends AAdapter implements AutoCloseable {
 	/** Test hook: the boot re-arm of created bots. */
 	void rearmForTest() {
 		rearmRuntimeBots();
+	}
+
+	AdapterWorkspace state() {
+		return adapterWorkspace();
+	}
+
+	String userStatePath(AString owner, String relative) {
+		return state().userPath(owner, relative);
+	}
+
+	String runtimeBotPath(AString owner, String name) {
+		return state().path(userStatePath(owner, "bots/" + name));
 	}
 
 	// --------------------------------------------------------------- operations
@@ -429,7 +460,7 @@ public class TelegramAdapter extends AAdapter implements AutoCloseable {
 
 	/**
 	 * {@code telegram:create}: a bot acting as the caller, persisted at
-	 * {@code w/telegram/bots/<name>} in the caller's workspace and started at
+	 * the venue-private adapter workspace and started at
 	 * once. The token must be an {@code s/} secret reference — a literal in
 	 * the workspace is the wrong place for a credential. {@code user} is
 	 * implicit (the caller): a user cannot create a bot that acts as someone
@@ -464,7 +495,7 @@ public class TelegramAdapter extends AAdapter implements AutoCloseable {
 					+ "' — delete it first (v/ops/telegram/delete) to replace it");
 			}
 			// Persist first: a bot that starts but is not on record would vanish at restart.
-			writePath(ctx, REGISTRY_PATH + "/" + name, settings);
+			state().write(userStatePath(owner, "bots/" + name), settings);
 			runner = new BotRunner(this, spec, apiUrl, BotRunner.Managed.RUNTIME);
 			runners.put(key, runner);
 		}
@@ -498,22 +529,15 @@ public class TelegramAdapter extends AAdapter implements AutoCloseable {
 			}
 		}
 		runner.stop();
-		deletePath(ctx, REGISTRY_PATH + "/" + name);
-		deletePath(ctx, BotRunner.sessionsPath(name));
+		state().delete(userStatePath(owner, "bots/" + name));
+		state().delete(userStatePath(owner, "sessions/" + name));
+		deleteLegacyPath(ctx, LEGACY_REGISTRY_PATH + "/" + name);
+		deleteLegacyPath(ctx, BotRunner.legacySessionsPath(name));
 		log.info("Telegram bot '{}' deleted by {}", name, owner);
 		return Maps.of(Fields.NAME, Strings.create(name), K_DELETED, CVMBool.TRUE);
 	}
 
-	private void writePath(RequestContext ctx, String path, ACell value) {
-		try {
-			engine.jobs().invokeInternal("v/ops/covia/write",
-				Maps.of(Fields.PATH, Strings.create(path), Fields.VALUE, value), ctx).get(10, TimeUnit.SECONDS);
-		} catch (Exception e) {
-			throw new covia.exception.JobFailedException("Could not persist " + path + ": " + BotRunner.concise(e));
-		}
-	}
-
-	private void deletePath(RequestContext ctx, String path) {
+	void deleteLegacyPath(RequestContext ctx, String path) {
 		try {
 			engine.jobs().invokeInternal("v/ops/covia/delete",
 				Maps.of(Fields.PATH, Strings.create(path)), ctx).get(10, TimeUnit.SECONDS);

@@ -82,9 +82,6 @@ final class BotRunner {
 	static final int POLL_TIMEOUT_SECS = 30;
 
 	private static final String AGENT_CHAT = "v/ops/agent/chat";
-	private static final String COVIA_READ = "v/ops/covia/read";
-	private static final String COVIA_WRITE = "v/ops/covia/write";
-	private static final String COVIA_DELETE = "v/ops/covia/delete";
 
 	static final AString K_STATE = Strings.intern("state");
 	static final AString K_USERNAME = Strings.intern("username");
@@ -608,54 +605,55 @@ final class BotRunner {
 
 	// ----------------------------------------------------------- session state
 
-	/** Per-chat agent sessions live beside the bot registry: {@code w/telegram/sessions/<bot>/<chatId>}. */
-	static String sessionsPath(String bot) {
+	/** Pre-adapter-workspace session location, retained for upgrade reads and cleanup. */
+	static String legacySessionsPath(String bot) {
 		return "w/telegram/sessions/" + bot;
 	}
 
-	private String sessionPath(Long chatId) {
-		return sessionsPath(spec.name()) + "/" + chatId;
+	String sessionsPath() {
+		return adapter.state().path(sessionsRelativePath());
+	}
+
+	private String sessionsRelativePath() {
+		return managed == Managed.CONFIG
+			? "config/" + spec.name() + "/sessions"
+			: adapter.userStatePath(spec.userDID(adapter.engine), "sessions/" + spec.name());
+	}
+
+	private String sessionRelativePath(Long chatId) {
+		return sessionsRelativePath() + "/" + chatId;
 	}
 
 	private String sessionFor(Long chatId, RequestContext ctx) {
 		String sid = sessions.get(chatId);
 		if (sid != null) return sid;
-		try {
-			ACell v = adapter.engine.jobs().invokeInternal(COVIA_READ,
-				Maps.of(Fields.PATH, Strings.create(sessionPath(chatId))), ctx).get(10, TimeUnit.SECONDS);
-			AString s = RT.ensureString(RT.getIn(v, Fields.VALUE));   // {exists, value, valueBytes}
-			if (s != null && !s.isEmpty()) {
-				sessions.put(chatId, s.toString());
-				return s.toString();
+		AString s = RT.ensureString(adapter.state().read(sessionRelativePath(chatId)));
+		if (s == null && managed == Managed.RUNTIME) {
+			try {
+				s = RT.ensureString(adapter.engine.resolvePath(
+					Strings.create(legacySessionsPath(spec.name()) + "/" + chatId), ctx));
+				if (s != null && !s.isEmpty()) adapter.state().write(sessionRelativePath(chatId), s);
+			} catch (RuntimeException e) {
+				log.debug("Telegram bot '{}': could not migrate persisted session for chat {}: {}",
+					spec.name(), chatId, concise(e));
 			}
-		} catch (Exception e) {
-			log.debug("Telegram bot '{}': could not read persisted session for chat {}: {}",
-				spec.name(), chatId, concise(e));
+		}
+		if (s != null && !s.isEmpty()) {
+			sessions.put(chatId, s.toString());
+			return s.toString();
 		}
 		return null;
 	}
 
 	private void rememberSession(Long chatId, String sid, RequestContext ctx) {
 		sessions.put(chatId, sid);
-		try {
-			adapter.engine.jobs().invokeInternal(COVIA_WRITE, Maps.of(
-				Fields.PATH, Strings.create(sessionPath(chatId)),
-				Fields.VALUE, Strings.create(sid)), ctx).get(10, TimeUnit.SECONDS);
-		} catch (Exception e) {
-			log.warn("Telegram bot '{}': could not persist session for chat {}: {}",
-				spec.name(), chatId, concise(e));
-		}
+		adapter.state().write(sessionRelativePath(chatId), Strings.create(sid));
 	}
 
 	private void forgetSession(Long chatId, RequestContext ctx) {
 		sessions.remove(chatId);
-		try {
-			adapter.engine.jobs().invokeInternal(COVIA_DELETE,
-				Maps.of(Fields.PATH, Strings.create(sessionPath(chatId))), ctx).get(10, TimeUnit.SECONDS);
-		} catch (Exception e) {
-			log.debug("Telegram bot '{}': could not delete persisted session for chat {}: {}",
-				spec.name(), chatId, concise(e));
-		}
+		adapter.state().delete(sessionRelativePath(chatId));
+		if (managed == Managed.RUNTIME) adapter.deleteLegacyPath(ctx, legacySessionsPath(spec.name()) + "/" + chatId);
 	}
 
 	private static boolean isUnknownSession(Throwable t) {

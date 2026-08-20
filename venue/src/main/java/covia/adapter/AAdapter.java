@@ -20,6 +20,7 @@ import convex.core.util.JSON;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Engine;
+import covia.venue.AdapterWorkspace;
 import covia.venue.RequestContext;
 
 public abstract class AAdapter {
@@ -34,6 +35,7 @@ public abstract class AAdapter {
 	public static final ExecutorService VIRTUAL_EXECUTOR = ThreadUtils.getVirtualExecutor();
 
 	public Engine engine;
+	private AdapterWorkspace adapterWorkspace;
 
 	/**
 	 * Configures an adapter discovered from a venue module before it is
@@ -112,7 +114,26 @@ public abstract class AAdapter {
 
 	public void install(Engine engine) {
 		this.engine=engine;
+		this.adapterWorkspace=engine.adapterWorkspace(getName());
 		installAssets();
+	}
+
+	/**
+	 * Durable state owned by this adapter in the venue principal's private
+	 * workspace at {@code w/adapters/<name>/}. The returned handle is permanently
+	 * bound to both this adapter name and the venue identity; invocation contexts
+	 * cannot redirect it into a caller's workspace.
+	 *
+	 * <p>User-managed content does not belong here. Adapters should accept an
+	 * ordinary caller-authorised path for that data (with a sane {@code w/...}
+	 * default). Credentials remain in {@code s/}; this workspace stores secret
+	 * references only.</p>
+	 */
+	protected final AdapterWorkspace adapterWorkspace() {
+		AdapterWorkspace workspace=adapterWorkspace;
+		if (workspace==null) throw new IllegalStateException(
+			"Adapter workspace is unavailable before install: "+getName());
+		return workspace;
 	}
 
 	/**

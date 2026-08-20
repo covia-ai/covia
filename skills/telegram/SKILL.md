@@ -8,7 +8,7 @@ argument-hint: "<setup|create|delete|status|send|allow|test|teach> <bot-name>"
 
 **Prerequisite:** The venue must be running and connected as an MCP server (`http://localhost:8080/mcp`). If MCP tools are not available, tell the user to run `/venue-setup local` first. Telegram support comes from the **covia-telegram** module (`telegram` adapter) — it is not in `covia.jar`; `setup` covers loading it.
 
-A bot is either **created by its user** with `v/ops/telegram/create` (acts as that user, persisted in their workspace at `w/telegram/bots/<name>`, survives restarts, removed with `v/ops/telegram/delete`) or **declared by the operator** in `adapters.telegram.bots.<name>` (needed when a bot must act as a different identity, e.g. `"user": "public"` on a shared dev venue). Full reference: `venue/docs/CONFIG.md` "Telegram bots". `/adapters` explains the module and runtime-lifecycle mechanics this skill relies on.
+A bot is either **created by its user** with `v/ops/telegram/create` (acts as that user, persisted in the venue-private adapter workspace under `users/<did>/bots/<name>`, survives restarts, removed with `v/ops/telegram/delete`) or **declared by the operator** in `adapters.telegram.bots.<name>` (needed when a bot must act as a different identity, e.g. `"user": "public"` on a shared dev venue). Full reference: `venue/docs/CONFIG.md` "Telegram bots". `/adapters` explains the module and runtime-lifecycle mechanics this skill relies on.
 
 ## `setup <bot-name>` — Bring a bot up
 
@@ -102,7 +102,7 @@ grid_run  operation=v/ops/venue/adapter/configure
 ## `test <bot-name>` — Smoke-test the loop
 
 1. `status` shows `RUNNING`.
-2. From Telegram: `/start` (greeting), then a message. Agent bot: the reply arrives (typing indicator while it works); `/new` starts a fresh conversation (the persisted session at `w/telegram/sessions/<bot>/<chatId>` is cleared). Operation bot: the result / acknowledgement per `reply`. Either way the turn is a Job in the bot user's `j/` index (`covia_list path=j` as that user).
+2. From Telegram: `/start` (greeting), then a message. Agent bot: the reply arrives (typing indicator while it works); `/new` starts a fresh conversation (the adapter-owned persisted session is cleared). Operation bot: the result / acknowledgement per `reply`. Either way the turn is a Job in the bot user's `j/` index (`covia_list path=j` as that user).
 3. From the venue: `send` a message to your own chat id and confirm it arrives.
 4. `status` again: `received` and `sent` advanced, `failed` did not.
 
@@ -124,5 +124,5 @@ The module ships the `telegram` agent skill at `v/skills/telegram` (present exac
 | Bot replies *⚠️ … Agent is suspended* (after a *Transition failed* notice) | The agent tripped on an internal error and the framework suspended it (persisted — survives restarts). Fix the cause if there is one, then `agent_resume agentId=<id>` (`v/ops/agent/resume`); the bot works again at once. |
 | `send` fails with *Access denied* | Caller is not the bot's user; use that identity or a `telegram/send` delegation. |
 | Replies stop after `adapter/disable` | By design — a disabled adapter is offline; Telegram redelivers the backlog on enable. |
-| Bot vanished after restart | A config bot added with `adapter/configure` is not persisted — put it in the venue config. Created bots do come back (`w/telegram/bots`); if one did not, the venue log says why it was skipped. |
+| Bot vanished after restart | A config bot added with `adapter/configure` is not persisted — put it in the venue config. Created bots do come back from the venue-private `w/adapters/telegram` state; if one did not, the venue log says why it was skipped. |
 | `create` fails with *Capability denied* | Your scope lacks `telegram/manage` — on a public dev venue that means the public scope is read-only; use a config with `auth.public.caps: unrestricted` or authenticate. |

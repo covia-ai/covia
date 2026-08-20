@@ -64,6 +64,7 @@
 		<module>workbench</module>
 		<module>covia-sql</module>
 		<module>covia-telegram</module>
+		<module>covia-discord</module>
 		<module>covia-claude-code</module>
 	</modules>
 

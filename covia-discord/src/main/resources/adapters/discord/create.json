@@ -1,0 +1,10 @@
+{
+  "name":"Create Discord bot",
+  "description":"Creates and persists a caller-owned Discord bot in the venue-private adapter workspace. The token must be an s/NAME secret reference. Requires discord/manage.",
+  "operation":{"adapter":"discord:create","input":{"type":"object","properties":{
+    "name":{"type":"string"},"token":{"type":"string","pattern":"^/?s/"},
+    "agent":{"type":"string"},"operation":{"type":"string"},"reply":{"type":["boolean","string"]},
+    "allow":{"type":"array","items":{"type":["string","integer"]}},"open":{"type":"boolean"},
+    "mentionOnly":{"type":"boolean"},"greeting":{"type":"string"}
+  },"required":["name","token"],"oneOf":[{"required":["agent"]},{"required":["operation"]}],"additionalProperties":false},"output":{"type":"object"}}
+}

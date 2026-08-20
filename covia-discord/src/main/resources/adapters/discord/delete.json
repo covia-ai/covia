@@ -1,0 +1,4 @@
+{
+  "name":"Delete Discord bot","description":"Stops and deletes one of the caller's runtime-created Discord bots and its channel sessions.",
+  "operation":{"adapter":"discord:delete","input":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"],"additionalProperties":false},"output":{"type":"object"}}
+}

@@ -43,6 +43,9 @@ covia/
 ├── covia-telegram/        # Optional loadable Telegram bot module
 │   ├── pom.xml            # Venue SPI provided; Telegram client shaded
 │   └── src/               # Telegram bot adapter and tests (fake Bot API)
+├── covia-discord/         # Optional loadable Discord bot module
+│   ├── pom.xml            # Venue SPI provided; JDA shaded
+│   └── src/               # Discord Gateway/REST adapter and deterministic tests
 └── covia-claude-code/     # Optional loadable Claude Code module
     ├── pom.xml            # Venue SPI provided; no third-party deps
     └── src/               # Claude Code CLI adapter and tests (fake CLI)
@@ -300,11 +303,15 @@ To create a stable release:
 
 ### Publishing to Maven Central
 
+The adapter/module implementation contract is documented in
+[`venue/docs/ADAPTERS.md`](venue/docs/ADAPTERS.md); this section covers release
+packaging and publication.
+
 The reactor modules are published to Maven Central under the `ai.covia`
 groupId. `ai.covia:covia-core`, `ai.covia:covia-python`, `ai.covia:venue`, and
 `ai.covia:workbench` are ordinary library artifacts (along with the
 `ai.covia:covia` parent POM). The operator-facing `covia-python-adapter`,
-`covia-sql`, `covia-telegram` and `covia-claude-code` artifacts are loadable venue modules rather than dependencies of
+`covia-sql`, `covia-telegram`, `covia-discord` and `covia-claude-code` artifacts are loadable venue modules rather than dependencies of
 the standard venue; their shaded `module` classifier jars are also published
 and signed. GitHub Releases remain the canonical operator download, pairing
 each module jar with its checksum. The executable `covia.jar` is an unattached
@@ -381,6 +388,8 @@ Both snapshot and stable releases include:
 - `covia-sql-<version>-module.jar.sha256` - SHA-256 checksum
 - `covia-telegram-<version>-module.jar` - Optional Telegram bot venue module
 - `covia-telegram-<version>-module.jar.sha256` - SHA-256 checksum
+- `covia-discord-<version>-module.jar` - Optional Discord bot venue module
+- `covia-discord-<version>-module.jar.sha256` - SHA-256 checksum
 - `covia-claude-code-<version>-module.jar` - Optional Claude Code venue module
 - `covia-claude-code-<version>-module.jar.sha256` - SHA-256 checksum
 

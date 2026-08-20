@@ -31,6 +31,8 @@ covia/                          # ai.covia:covia (parent POM)
 │                               #   shaded "module" jar loaded via config, not in covia.jar)
 ├── covia-telegram/             # Telegram bot venue module (operator-declared bots →
 │                               #   agents/operations, telegram:send; shaded "module" jar)
+├── covia-discord/              # Discord bot venue module (Gateway inbound + REST outbound;
+│                               #   agents/operations, discord:send; shaded "module" jar)
 ├── covia-claude-code/          # Claude Code CLI venue module (runs/resumable sessions in
 │                               #   authorised project dirs; shaded "module" jar, not in covia.jar)
 ├── workbench/                  # Minimal Swing GUI REPL for demo/testing
@@ -160,38 +162,19 @@ Defined in code at `venue/src/main/java/covia/lattice/Covia.java`. Full design i
 - **Immutability:** Use Convex ACell hierarchy for persistent data (AMap, AVector, Index)
 - **Content addressing:** Assets identified by CAD3 value hash (SHA3-256 of canonical encoding)
 - **Jobs:** Use `engine.jobs()` accessor for all job operations (submit, query, cancel, etc.)
+- **Adapters:** Follow `venue/docs/ADAPTERS.md`, including its publication, configuration, private-state, capability, module, and test invariants.
 - **Tests:** JUnit 6, use `Engine.createTemp()` for test instances
 - **Prefer editing** existing files over creating new ones
 
 ### Adding a New Adapter
 
-1. Create class extending `AAdapter` in `covia.adapter`
-2. Implement `getName()`, `getDescription()`, and the invocation method (receives `RequestContext`, resolved metadata, and input)
-3. Use `getSubOperation(meta)` to extract the adapter-specific operation name from metadata
-4. Override `installAssets()` to register default operations
-   - Override `info()` to publish adapter-owned facts (mount points, enabled features — anything a client needs to know that is not an operation) into `v/info/adapters/<name>`; it is re-read after every `configure`
-   - Ship the adapter's agent skill with it: `installSkill("<name>", "/skills/<name>.json")` in `installAssets()` (resource under `src/main/resources/skills/`); loading overwrites `v/skills/<name>`, while disable/unload leaves the durable canonical metadata in place
-   - Everything an adapter installs or publishes also appears under its own subtree `v/adapters/<name>/` (`info`, `config` — only what `publicConfig()` explicitly allow-lists (`publicConfig("maxItems", …)`), nothing by default, `ops/`, `skills/`, `templates/`), published and retracted with the adapter
-5. Create JSON asset definitions in `venue/src/main/resources/adapters/{name}/`
-6. Register in `Engine.addDemoAssets()` or via configuration
+The canonical authoring and system contract is
+**`venue/docs/ADAPTERS.md`**. It covers `AAdapter`, configuration hooks,
+catalog publication, `AdapterWorkspace`, capability enforcement, lifecycle,
+optional module packaging, and required tests.
 
-The engine always resolves operation references to metadata before dispatching — adapters never receive null metadata. For adapters that need direct job control (multi-turn, orchestration), override the job-aware invocation method instead.
-
-### Asset Metadata Format
-
-```json
-{
-  "name": "Operation Name",
-  "description": "LLM-friendly description",
-  "creator": "Author",
-  "dateCreated": "ISO8601",
-  "operation": {
-    "adapter": "adaptername:operation",
-    "input": { "type": "object", "properties": {...}, "required": [...] },
-    "output": { "type": "object", "properties": {...} }
-  }
-}
-```
+Operation metadata examples and rules are in `venue/docs/ADAPTERS.md` and
+`venue/docs/OPERATIONS.md`.
 
 ## Current State
 
@@ -265,6 +248,7 @@ The list below tracks engineering tasks. For the developer-experience and open-s
 ## Module-Specific Guides
 
 - **DX_PLAN.md** — Public developer-experience roadmap: onboarding, packaging, build reproducibility, CI quality gate, versioning, docs, community scaffolding, open-core boundary, operability
+- **venue/docs/ADAPTERS.md** — Canonical adapter system and authoring contract
 - **venue/docs/GRID_LATTICE_DESIGN.md** — Grid lattice design: addressing, namespaces, UCAN capabilities, federation, agents, lattice mechanics, implementation phases
 - **venue/CLAUDE.md** — Detailed venue module architecture, design objectives, adapter reference, API endpoints, and development guidelines
 - **venue/CLAUDE.local.md** — Working notes on lattice persistence implementation progress

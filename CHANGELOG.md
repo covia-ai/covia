@@ -10,7 +10,22 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Added
 
+- Optional `covia-discord` venue module: operator-declared or user-created
+  Discord bots route DMs and mentioned guild messages to agents (durable
+  per-channel sessions) or operations. Includes capability-gated
+  `discord:send`, `discord:call`, `discord:create`, `discord:delete`, and
+  `discord:bots`, fail-closed Discord account allow-lists, Gateway reconnect
+  parking, REST rate-limit retry, a module-shipped agent skill/template, and
+  a shaded JDA 6.5.0 runtime isolated from the venue classpath.
+
 ### Changed
+
+- Adapter-global durable state now has a shared venue-private convention at
+  `<venue-did>/w/adapters/<adapter>/`. Telegram and Discord use matching
+  `config/<bot>/sessions` and `users/<did>/{bots,sessions}` schemas while
+  leaving user-managed storage paths user-selectable and credentials in `s/`.
+  Telegram discovers and copies its legacy `w/telegram` runtime records on
+  upgrade; deletion cleans both locations.
 
 ### Fixed
 

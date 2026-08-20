@@ -50,7 +50,7 @@ jobs:
 
     - name: Create optional module checksums
       run: |
-        for jar in covia-python-adapter/target/*-module.jar covia-sql/target/*-module.jar covia-telegram/target/*-module.jar covia-claude-code/target/*-module.jar; do
+        for jar in covia-python-adapter/target/*-module.jar covia-sql/target/*-module.jar covia-telegram/target/*-module.jar covia-discord/target/*-module.jar covia-claude-code/target/*-module.jar; do
           sha256sum "$jar" > "$jar.sha256"
         done
 
@@ -91,5 +91,7 @@ jobs:
           covia-sql/target/*-module.jar.sha256 \
           covia-telegram/target/*-module.jar \
           covia-telegram/target/*-module.jar.sha256 \
+          covia-discord/target/*-module.jar \
+          covia-discord/target/*-module.jar.sha256 \
           covia-claude-code/target/*-module.jar \
           covia-claude-code/target/*-module.jar.sha256

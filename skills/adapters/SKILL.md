@@ -143,7 +143,7 @@ For changes that must survive restarts, edit the venue config instead (see `venu
 
 ## Writing a new adapter
 
-Follow "Adding a New Adapter" in `AGENTS.md`: extend `AAdapter` in `covia.adapter`, implement `getName()` / `getDescription()` / the invocation method, register default operations via `installAssets()` with JSON definitions under `venue/src/main/resources/adapters/<name>/`, and register it in `Engine`. Override `configure(config, strict)` to validate effective config, and implement `AutoCloseable` if it holds resources (unload closes them). Ship it in covia.jar or as a module jar (`META-INF/services/covia.adapter.AAdapter`, shaded, `venue` provided-scope) — covia-sql is the reference module.
+Follow the canonical developer contract in `venue/docs/ADAPTERS.md`: it covers `AAdapter` invocation, configuration validation, catalog and introspection publication, private `AdapterWorkspace` state versus user-managed storage, capability enforcement, lifecycle, tests, and optional module packaging. Ship it in `covia.jar` or as a module jar (`META-INF/services/covia.adapter.AAdapter`, shaded, `venue` provided-scope).
 
 ## Troubleshooting
 

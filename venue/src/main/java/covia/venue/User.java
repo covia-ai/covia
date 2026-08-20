@@ -10,6 +10,7 @@ import convex.lattice.ALatticeComponent;
 import convex.lattice.cursor.ALatticeCursor;
 import covia.lattice.Covia;
 import covia.lattice.Namespace;
+import covia.adapter.CoviaAdapter;
 
 /**
  * Cursor wrapper for a single user's state within a venue.
@@ -35,6 +36,21 @@ import covia.lattice.Namespace;
 public class User extends ALatticeComponent<ACell> {
 
 	private final AString did;
+
+	/** Framework-internal navigation for trusted venue-owned workspace state. */
+	ACell readInternalPath(ACell[] keys) {
+		return CoviaAdapter.readPath(cursor, keys);
+	}
+
+	/** Framework-internal atomic write; authority is possession of this user cursor. */
+	void writeInternalPath(ACell[] keys, ACell value) {
+		CoviaAdapter.writePathToCursor(cursor, keys, value);
+	}
+
+	/** Framework-internal atomic delete; authority is possession of this user cursor. */
+	boolean deleteInternalPath(ACell[] keys) {
+		return CoviaAdapter.deletePathFromCursor(cursor, keys);
+	}
 
 	User(ALatticeComponent<?> parent, ALatticeCursor<ACell> cursor, AString did) {
 		super(parent, cursor);
