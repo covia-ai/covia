@@ -1098,17 +1098,15 @@ public final class Skills {
 	 * separate inventory the reader has to cross-reference — which is how a
 	 * non-skill load already reads, since its label IS its ref.</p>
 	 */
-	static ACell renderSkillMessage(String name, AString path, String body) {
-		return Maps.of(K_ROLE, ROLE_SYSTEM, K_CONTENT,
-			Strings.create("[Skill: " + name + " — " + path + "]\n" + body));
+	static ACell renderSkillMessage(AString dialect, String name, AString path, String body) {
+		return Labels.message(ROLE_SYSTEM, dialect, Labels.Kind.SKILL, body, name, path.toString());
 	}
 
 	/** The visible element for a loaded skill that no longer resolves. Keeps
 	 *  the path: a dead entry is exactly the one you want to unload. */
-	static ACell skillErrorMessage(String label, AString path, String reason) {
-		return Maps.of(K_ROLE, ROLE_SYSTEM, K_CONTENT,
-			Strings.create("[Skill: " + label + " — " + path
-				+ " — unavailable: " + reason + "]"));
+	static ACell skillErrorMessage(AString dialect, String label, AString path, String reason) {
+		return Maps.of(K_ROLE, ROLE_SYSTEM, K_CONTENT, Strings.create(
+			Labels.renderUnavailable(dialect, Labels.Kind.SKILL, reason, label, path.toString())));
 	}
 
 	// ========== skill_load (harness-tool semantics) ==========
@@ -1122,8 +1120,33 @@ public final class Skills {
 	public static SkillSources sourcesOf(AMap<AString, ACell> config) {
 		if (config == null) return SkillSources.EMPTY;
 		return new SkillSources(
-			ContextBuilder.skillSources(config.get(K_SKILLS), K_SKILLS),
-			ContextBuilder.skillSources(config.get(K_SKILLSETS), K_SKILLSETS));
+			sourceRefs(config.get(K_SKILLS), K_SKILLS),
+			sourceRefs(config.get(K_SKILLSETS), K_SKILLSETS));
+	}
+
+	/**
+	 * Coerces a {@code config.skills} / {@code config.skillsets} value to a
+	 * vector of refs. Absent → empty. A non-vector value or a non-string entry
+	 * is a configuration error and throws — a malformed declaration must fail
+	 * loudly, not vanish.
+	 */
+	@SuppressWarnings("unchecked")
+	public static AVector<ACell> sourceRefs(ACell raw, AString key) {
+		if (raw == null) return Vectors.empty();
+		String kind = K_SKILLSETS.equals(key) ? "skillset" : "skill";
+		if (!(raw instanceof AVector)) {
+			throw new RuntimeException("config." + key + " must be an array of " + kind
+				+ " refs, got " + convex.core.data.type.Types.get(raw) + " — fix the agent config");
+		}
+		AVector<ACell> sources = (AVector<ACell>) raw;
+		for (long i = 0; i < sources.count(); i++) {
+			if (RT.ensureString(sources.get(i)) == null) {
+				throw new RuntimeException("config." + key + " entries must be " + kind
+					+ " ref strings, got " + convex.core.data.type.Types.get(sources.get(i))
+					+ " — fix the agent config");
+			}
+		}
+		return sources;
 	}
 
 	/**
@@ -1217,7 +1240,7 @@ public final class Skills {
 		AVector<ACell> unresolved = Vectors.empty();
 		if (skill.toolOps().count() > 0) {
 			Map<String, AString> routes = new java.util.HashMap<>();
-			AVector<ACell> defs = new ContextBuilder(engine, ctx).buildConfigTools(skill.toolOps(), routes);
+			AVector<ACell> defs = ToolPalette.forOperations(engine, ctx, skill.toolOps(), routes);
 			for (long i = 0; i < defs.count(); i++) {
 				ACell n = RT.getIn(defs.get(i), Fields.NAME);
 				if (n != null) toolNames = toolNames.conj(n);

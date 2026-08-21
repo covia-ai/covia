@@ -108,12 +108,12 @@ public class ContextLoaderTest {
 
 	@Test
 	public void testSystemMessage() {
-		ACell msg = ContextLoader.systemMessage("AP Rules", "Rule 1: do stuff");
+		ACell msg = loader.systemMessage("AP Rules", "Rule 1: do stuff");
 		AString content = RT.ensureString(RT.getIn(msg, Strings.intern("content")));
 		assertEquals("[Context: AP Rules]\nRule 1: do stuff", content.toString());
 
 		// Null label — no prefix
-		ACell msg2 = ContextLoader.systemMessage(null, "Plain text");
+		ACell msg2 = loader.systemMessage(null, "Plain text");
 		AString content2 = RT.ensureString(RT.getIn(msg2, Strings.intern("content")));
 		assertEquals("Plain text", content2.toString());
 	}

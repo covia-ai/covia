@@ -124,9 +124,8 @@ public final class ConversationRenderer {
 		AMap<AString, ACell> segment = (AMap<AString, ACell>) entry;
 		AString summary = RT.ensureString(segment.get(GoalTreeContext.K_SUMMARY));
 		ACell turns = segment.get(GoalTreeContext.K_TURNS);
-		String text = "[Compacted: " + (turns != null ? turns : "?") + " turns] "
-			+ (summary != null ? summary.toString() : "");
-		return Maps.of(GoalTreeContext.K_ROLE, GoalTreeContext.ROLE_SYSTEM,
-			GoalTreeContext.K_CONTENT, Strings.create(text));
+		return Labels.message(GoalTreeContext.ROLE_SYSTEM, Labels.BRACKET, Labels.Kind.COMPACTED,
+			(summary != null) ? summary.toString() : "",
+			(turns != null) ? turns.toString() : "?");
 	}
 }

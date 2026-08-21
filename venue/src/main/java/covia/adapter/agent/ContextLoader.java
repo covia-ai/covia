@@ -52,10 +52,17 @@ public class ContextLoader {
 	private static final AString K_PATH     = Strings.intern("path");
 
 	private final Engine engine;
+	private final AString dialect;
 	private CellExplorer explorer;
 
 	public ContextLoader(Engine engine) {
+		this(engine, Labels.BRACKET);
+	}
+
+	/** A loader whose elements are labelled in the given dialect (AGENT_CONTEXT.md §1.1). */
+	public ContextLoader(Engine engine, AString dialect) {
 		this.engine = engine;
+		this.dialect = (dialect != null) ? dialect : Labels.BRACKET;
 	}
 
 	/**
@@ -392,11 +399,9 @@ public class ContextLoader {
 		}
 	}
 
-	/**
-	 * Creates a system message map with optional label prefix.
-	 */
-	static ACell systemMessage(String label, String content) {
-		String text = (label != null) ? "[Context: " + label + "]\n" + content : content;
+	/** A context element: the labelled content, or bare content when unlabelled. */
+	ACell systemMessage(String label, String content) {
+		String text = (label != null) ? Labels.render(dialect, Labels.Kind.CONTEXT, content, label) : content;
 		return Maps.of(K_ROLE, ROLE_SYSTEM, K_CONTENT, Strings.create(text));
 	}
 
@@ -408,11 +413,10 @@ public class ContextLoader {
 	 * silently operating without it. A merely absent/empty source is skipped,
 	 * not reported here.
 	 */
-	static ACell errorMessage(String label, String reason) {
+	ACell errorMessage(String label, String reason) {
 		String l = (label != null && !label.isEmpty()) ? label : "context";
-		String r = (reason != null && !reason.isEmpty()) ? reason : "resolution failed";
 		return Maps.of(K_ROLE, ROLE_SYSTEM, K_CONTENT,
-			Strings.create("[Context: " + l + " — unavailable: " + r + "]"));
+			Strings.create(Labels.renderUnavailable(dialect, Labels.Kind.CONTEXT, reason, l)));
 	}
 
 	/** Unwraps the most useful message from a (possibly wrapped) throwable. */

@@ -6,23 +6,18 @@ import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Cells;
-import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
-import convex.core.data.prim.CVMBool;
-import convex.core.data.type.Types;
 import convex.core.data.util.CellExplorer;
+import convex.core.data.type.Types;
 import convex.core.lang.RT;
-import covia.api.Abilities;
 import covia.api.Fields;
-import covia.grid.Asset;
 import covia.venue.AgentState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -124,50 +119,8 @@ public class ContextBuilder {
 		+ "  did:key:<id>/w/...            Cross-user (requires capability)\n"
 		+ "  <venue-did>/v/ops/...         Cross-venue (use the presented DID)");
 
-	/**
-	 * Per-engine cache of resolved default tool definitions.
-	 *
-	 * <p>The default tool list ({@link #DEFAULT_TOOL_OPS}) resolves to the
-	 * same {@code (tools, toolMap)} pair on every call, since all default
-	 * ops live under {@code v/ops/} which is venue-scoped and independent
-	 * of the calling user. Building it costs ~18 lattice lookups + JSON
-	 * parses per turn. This static cache eliminates that work after the
-	 * first call per Engine instance.</p>
-	 *
-	 * <p>Keyed on {@link Engine} identity (the default
-	 * {@code ConcurrentHashMap} equality semantics, which fall through to
-	 * {@code Object.equals} for {@code Engine} since it doesn't override
-	 * it). Different test engines and the production engine each get
-	 * their own cache entry.</p>
-	 *
-	 * <p>The cache is populated lazily on first {@link #withTools()} call
-	 * and never invalidated — adapters install their assets at engine
-	 * startup and don't change them, so cached results stay valid for
-	 * the life of the JVM. Restart to refresh.</p>
-	 */
-	private static final java.util.concurrent.ConcurrentHashMap<Engine, DefaultToolsCacheEntry>
-		DEFAULT_TOOL_CACHE = new java.util.concurrent.ConcurrentHashMap<>();
-
-	/** Cached resolved default tools for one Engine instance. */
-	private static final class DefaultToolsCacheEntry {
-		final AVector<ACell> tools;
-		final Map<String, AString> toolMap;
-		DefaultToolsCacheEntry(AVector<ACell> tools, Map<String, AString> toolMap) {
-			this.tools = tools;
-			// Defensive copy so callers can mutate their own configToolMap
-			this.toolMap = Map.copyOf(toolMap);
-		}
-	}
-
-	/** Default tool operations — deliberately minimal: read-only situational
-	 *  awareness (inspect the workspace and catalog, discover what exists).
-	 *  Everything with side effects arrives via skills — {@code skill_load}
-	 *  activates a skill's tool bundle mid-transition — or the agent's explicit
-	 *  config {@code tools} allowlist. */
-	static final AVector<ACell> DEFAULT_TOOL_OPS = (AVector<ACell>) Vectors.of(
-		(ACell) Strings.create("v/ops/covia/read"),
-		(ACell) Strings.create("v/ops/covia/list")
-	);
+	/** The opt-in default tool pack — see {@link ToolPalette#DEFAULT_TOOL_OPS}. */
+	static final AVector<ACell> DEFAULT_TOOL_OPS = ToolPalette.DEFAULT_TOOL_OPS;
 
 	// Instance state
 	private final Engine engine;
@@ -405,8 +358,7 @@ public class ContextBuilder {
 	/** Preamble ahead of the skills index lines — tells the model what the
 	 *  block is and how to act on it (see venue/docs/SKILLS.md §4.2). */
 	private static final String SKILLS_PREAMBLE =
-		"[Skills]\n"
-		+ "Named skill packs available through the advertised skill-loading control. Loading injects\n"
+		"Named skill packs available through the advertised skill-loading control. Loading injects\n"
 		+ "the skill's instructions into your context across turns and adds its operations to your\n"
 		+ "palette; it may also reveal more skills. Use the advertised context-removal control when a\n"
 		+ "loaded skill is no longer useful.\n";
@@ -435,78 +387,25 @@ public class ContextBuilder {
 		String index = Skills.renderIndex(engine, ctx, sources, effectiveLoads, false);
 		if (index == null) return this;                      // nothing anywhere → no block
 
-		ACell msg = Maps.of(K_ROLE, ROLE_SYSTEM, K_CONTENT,
-			Strings.create(SKILLS_PREAMBLE + index));
+		ACell msg = Labels.message(ROLE_SYSTEM, Labels.BRACKET, Labels.Kind.SKILLS, SKILLS_PREAMBLE + index);
 		messages = messages.conj(msg);
 		trackMessage(msg);
 		return this;
 	}
 
-	/**
-	 * Coerces a {@code config.skills} / {@code config.skillsets} value to a
-	 * vector of refs. Absent → empty. A non-vector value or a non-string entry
-	 * is a configuration error and throws — mirroring {@link #contextVector}'s
-	 * malformed-shape rule.
-	 *
-	 * @param key which declaration is being read, for the error message
-	 */
-	@SuppressWarnings("unchecked")
+	/** @see Skills#sourceRefs */
 	public static AVector<ACell> skillSources(ACell raw, AString key) {
-		if (raw == null) return Vectors.empty();
-		String kind = Skills.K_SKILLSETS.equals(key) ? "skillset" : "skill";
-		if (!(raw instanceof AVector)) {
-			throw new RuntimeException("config." + key + " must be an array of " + kind
-				+ " refs, got " + Types.get(raw) + " — fix the agent config");
-		}
-		AVector<ACell> sources = (AVector<ACell>) raw;
-		for (long i = 0; i < sources.count(); i++) {
-			if (RT.ensureString(sources.get(i)) == null) {
-				throw new RuntimeException("config." + key + " entries must be " + kind
-					+ " ref strings, got " + Types.get(sources.get(i)) + " — fix the agent config");
-			}
-		}
-		return sources;
+		return Skills.sourceRefs(raw, key);
 	}
 
-	/**
-	 * Resolves loaded paths and returns them as a vector of messages.
-	 * Does not modify builder state — suitable for GoalTreeAdapter which
-	 * assembles its own message vector.
-	 */
-	@SuppressWarnings("unchecked")
+	/** Resolves loaded paths to messages without modifying builder state. */
 	public AVector<ACell> resolveLoads(AMap<AString, ACell> loads) {
-		if (loads == null || loads.count() == 0) return Vectors.empty();
-
-		ContextLoader loader = new ContextLoader(engine);
-		AVector<ACell> result = Vectors.empty();
-		java.util.Set<convex.core.data.Hash> seenSkillIds = new java.util.HashSet<>();
-
-		for (var entry : loads.entrySet()) {
-			AString path = entry.getKey();
-			AMap<AString, ACell> meta = (AMap<AString, ACell>) entry.getValue();
-
-			int entryBudget = 500;
-			ACell budgetCell = meta.get(Strings.intern("budget"));
-			if (budgetCell instanceof convex.core.data.prim.CVMLong l) {
-				entryBudget = (int) Math.max(MIN_ENTRY_BUDGET, Math.min(l.longValue(), 10_000));
-			}
-
-			loader.setCellExplorer(new CellExplorer(entryBudget));
-			result = (AVector<ACell>) result.concat(
-				renderLoadEntry(loader, path, meta, seenSkillIds, ctx));
-		}
-		return result;
+		return Loads.elements(engine, ctx, loads, Labels.BRACKET);
 	}
 
 	/**
 	 * One provider-facing, freshly resolved view of the effective loads for a
-	 * single LLM inference. Loaded values, contributed tool definitions, and
-	 * their dispatch routes are deliberately assembled together so a caller
-	 * cannot refresh the palette while accidentally retaining stale routes (or
-	 * refresh routes without refreshing the values the model sees).
-	 *
-	 * <p>The snapshot is ephemeral. Callers resolve it once immediately before
-	 * <em>every</em> provider call and never persist its rendered messages.</p>
+	 * single LLM inference — see {@link Loads.Snapshot}.
 	 */
 	public record LoadSnapshot(
 			AVector<ACell> messages,
@@ -522,13 +421,11 @@ public class ContextBuilder {
 	/** Resolves a complete live-load snapshot under the supplied authority. */
 	public static LoadSnapshot resolveLoadSnapshot(Engine engine, RequestContext ctx,
 			AMap<AString, ACell> effectiveLoads, java.util.Set<String> excludeNames) {
+		Loads.Snapshot snapshot = Loads.resolve(engine, ctx, effectiveLoads, excludeNames, Labels.BRACKET);
 		ContextBuilder loadBuilder = new ContextBuilder(engine, ctx)
-			.withLoadedPaths(effectiveLoads, ctx)
+			.withResolvedMessages(snapshot.elements())
 			.withBudgetWarning();
-		Map<String, AString> routes = new HashMap<>();
-		AVector<ACell> tools = loadsToolDefs(engine, ctx, effectiveLoads,
-			excludeNames, routes);
-		return new LoadSnapshot(loadBuilder.build().history(), tools, routes);
+		return new LoadSnapshot(loadBuilder.build().history(), snapshot.tools(), snapshot.routes());
 	}
 
 	/** Appends already-resolved ephemeral messages while preserving accounting. */
@@ -542,139 +439,21 @@ public class ContextBuilder {
 		return this;
 	}
 
-	/**
-	 * Resolves dynamically loaded paths from the loads scope chain.
-	 * Each entry is resolved fresh using ContextLoader with per-entry CellExplorer budget.
-	 * Data entries that exceed remaining budget or fail to resolve are silently
-	 * skipped; skill entries fail VISIBLY (see {@link #renderLoadEntry}).
-	 */
-	@SuppressWarnings("unchecked")
+	/** Resolves dynamically loaded paths from the loads scope chain. */
 	public ContextBuilder withLoadedPaths(AMap<AString, ACell> loads) {
 		return withLoadedPaths(loads, ctx);
 	}
 
-	/**
-	 * Resolves dynamically loaded paths under an explicit authority context.
-	 * Static config context may be operator-pinned, while model-selected loads
-	 * must use the agent's capability-scoped context.
-	 */
-	public ContextBuilder withLoadedPaths(AMap<AString, ACell> loads,
-			RequestContext resolutionCtx) {
-		if (loads == null || loads.count() == 0) return this;
-
-		ContextLoader loader = new ContextLoader(engine);
-		java.util.Set<convex.core.data.Hash> seenSkillIds = new java.util.HashSet<>();
-
-		for (var entry : loads.entrySet()) {
-			AString path = entry.getKey();
-			AMap<AString, ACell> meta = (AMap<AString, ACell>) entry.getValue();
-
-			int entryBudget = 500;
-			ACell budgetCell = meta.get(Strings.intern("budget"));
-			if (budgetCell instanceof convex.core.data.prim.CVMLong l) {
-				entryBudget = (int) Math.max(MIN_ENTRY_BUDGET, Math.min(l.longValue(), 10_000));
-			}
-
-			loader.setCellExplorer(new CellExplorer(entryBudget));
-			AVector<ACell> rendered = renderLoadEntry(
-				loader, path, meta, seenSkillIds, resolutionCtx);
-			for (long i = 0; i < rendered.count(); i++) {
-				ACell msg = rendered.get(i);
-				messages = messages.conj(msg);
-				trackMessage(msg);
-			}
-		}
-		return this;
+	/** Resolves dynamically loaded paths under an explicit authority context. */
+	public ContextBuilder withLoadedPaths(AMap<AString, ACell> loads, RequestContext resolutionCtx) {
+		return withResolvedMessages(Loads.elements(engine, resolutionCtx, loads, Labels.BRACKET));
 	}
 
-	/**
-	 * Renders one loads entry to its context messages. This is the single
-	 * place that knows about entry KINDS — adapters just pass loads through,
-	 * so the same assembly can host a variety of additions:
-	 * <ul>
-	 *   <li><b>Skill entries</b> ({@code skill: true} — SKILLS.md §6): the
-	 *       skill re-resolves from the entry key and renders as
-	 *       {@code [Skill: <name> — <path>]} + body verbatim, followed by the skill's
-	 *       own context entries. Failures are <b>visible</b> — a skill the
-	 *       agent loaded must not silently disappear.</li>
-	 *   <li><b>Everything else</b>: the standard context-entry resolution of
-	 *       the key (absent → skipped, errors → ContextLoader's visible
-	 *       element).</li>
-	 * </ul>
-	 */
-	private AVector<ACell> renderLoadEntry(ContextLoader loader, AString path,
-			AMap<AString, ACell> meta, java.util.Set<convex.core.data.Hash> seenSkillIds,
-			RequestContext resolutionCtx) {
-		if (Skills.isSkillEntry(meta)) {
-			try {
-				Skills.ResolvedSkill skill = Skills.resolveRef(engine, resolutionCtx, path);
-				// Content-identity dedup across the render pass: skills are
-				// content-addressed, so the same skill loaded under two
-				// addresses (or at two tiers) renders its body once. The
-				// identity is LIVE (from this resolution — cell hashes are
-				// memoised), accumulated transiently; nothing persisted.
-				if (skill.id() != null && !seenSkillIds.add(skill.id())) {
-					return Vectors.empty();
-				}
-				AVector<ACell> msgs = Vectors.of(
-					Skills.renderSkillMessage(skill.name(), path, skill.displayBody()));
-				if (skill.contextEntries().count() > 0) {
-					msgs = msgs.concat(loader.resolve(skill.contextEntries(), resolutionCtx));
-				}
-				return msgs;
-			} catch (RuntimeException e) {
-				return Vectors.of(Skills.skillErrorMessage(loadLabel(path, meta), path,
-					ContextLoader.rootMessage(e)));
-			}
-		}
-		ACell msg = loader.resolveEntry(path, resolutionCtx);
-		return (msg != null) ? Vectors.of((ACell) msg) : Vectors.empty();
-	}
-
-	/** An entry's display label: its {@code label} else its path. */
-	private static String loadLabel(AString path, AMap<AString, ACell> meta) {
-		AString label = RT.ensureString(meta.get(Strings.intern("label")));
-		return (label != null) ? label.toString() : path.toString();
-	}
-
-	/**
-	 * Resolves the tool declarations carried by loads entries into LLM tool
-	 * definitions — the generic <b>"a loads entry may contribute tools to the
-	 * palette"</b> rule. Any entry whose spec carries a {@code tools} vector
-	 * of operation refs contributes (skills are the first producer — SKILLS.md
-	 * §5.3 — but the mechanism is kind-agnostic). Definitions resolve fresh
-	 * (same liveness as {@code config.tools}), deduplicated against
-	 * {@code excludeNames} and each other; {@code toolMap} gains the dispatch
-	 * routes of the returned defs.
-	 */
-	@SuppressWarnings("unchecked")
+	/** @see ToolPalette#loadsToolDefs */
 	public static AVector<ACell> loadsToolDefs(Engine engine, RequestContext ctx,
 			AMap<AString, ACell> effectiveLoads, java.util.Set<String> excludeNames,
 			Map<String, AString> toolMap) {
-		AVector<ACell> added = Vectors.empty();
-		if (effectiveLoads == null || effectiveLoads.count() == 0) return added;
-
-		java.util.Set<String> names = new java.util.HashSet<>();
-		if (excludeNames != null) names.addAll(excludeNames);
-
-		ContextBuilder resolver = new ContextBuilder(engine, ctx);
-		for (var entry : effectiveLoads.entrySet()) {
-			ACell spec = entry.getValue();
-			if (!(spec instanceof AMap)) continue;
-			AVector<ACell> ops = RT.ensureVector(((AMap<AString, ACell>) spec).get(K_TOOLS));
-			if (ops == null || ops.count() == 0) continue;
-			Map<String, AString> newMap = new HashMap<>();
-			AVector<ACell> defs = resolver.buildConfigTools(ops, newMap);
-			for (long i = 0; i < defs.count(); i++) {
-				ACell def = defs.get(i);
-				AString n = RT.ensureString(RT.getIn(def, K_NAME));
-				if (n == null || !names.add(n.toString())) continue;
-				added = added.conj(def);
-				AString route = newMap.get(n.toString());
-				if (route != null) toolMap.put(n.toString(), route);
-			}
-		}
-		return added;
+		return ToolPalette.loadsToolDefs(engine, ctx, effectiveLoads, excludeNames, toolMap);
 	}
 
 	/**
@@ -716,9 +495,9 @@ public class ContextBuilder {
 		if (totalBudget <= 0) return this;
 		int pct = (int) (100 * consumed / totalBudget);
 		if (pct < BUDGET_WARN_PCT) return this;
-		ACell msg = Maps.of(K_ROLE, ROLE_SYSTEM, K_CONTENT, Strings.create(
-			"[Context budget] " + pct + "% of the loads budget used — unload paths you no"
-			+ " longer need. Each loaded element shows its path in its header."));
+		ACell msg = Labels.message(ROLE_SYSTEM, Labels.BRACKET, Labels.Kind.BUDGET,
+			pct + "% of the loads budget used — unload paths you no longer need."
+			+ " Each loaded element shows its path in its header.");
 		messages = messages.conj(msg);
 		trackMessage(msg);
 		return this;
@@ -747,7 +526,7 @@ public class ContextBuilder {
 	 */
 	public ContextBuilder withPendingResults(AVector<ACell> pending) {
 		if (pending != null && pending.count() > 0) {
-			StringBuilder sb = new StringBuilder("[Pending job results]\n");
+			StringBuilder sb = new StringBuilder();
 			for (long i = 0; i < pending.count(); i++) {
 				ACell p = pending.get(i);
 				AString jobId = RT.ensureString(RT.getIn(p, Fields.JOB_ID));
@@ -756,7 +535,7 @@ public class ContextBuilder {
 				sb.append("- Job ").append(jobId).append(" status=").append(status)
 				  .append(" output=").append(output).append("\n");
 			}
-			ACell msg = Maps.of(K_ROLE, ROLE_USER, K_CONTENT, Strings.create(sb.toString()));
+			ACell msg = Labels.message(ROLE_USER, Labels.BRACKET, Labels.Kind.PENDING, sb.toString());
 			messages = messages.conj(msg);
 			trackMessage(msg);
 		}
@@ -928,9 +707,9 @@ public class ContextBuilder {
 	 */
 	public ContextBuilder withEmptyStateSignal(boolean hasInput) {
 		if (!hasInput) {
-			ACell msg = Maps.of(K_ROLE, ROLE_USER, K_CONTENT,
-				Strings.create("[No pending tasks, messages, or job results. "
-					+ "You may act proactively based on your role, or report idle.]"));
+			ACell msg = Labels.message(ROLE_USER, Labels.BRACKET, Labels.Kind.NO_INPUT,
+				"No pending tasks, messages, or job results. "
+				+ "You may act proactively based on your role, or report idle.");
 			messages = messages.conj(msg);
 			trackMessage(msg);
 		}
@@ -938,90 +717,15 @@ public class ContextBuilder {
 	}
 
 	/**
-	 * Builds tool list from config and extracts caps.
-	 *
-	 * <p>By default the agent is advertised only the tools it declares in its
-	 * {@code tools} array (strict allowlist). Setting {@code defaultTools: true}
-	 * in the config opts into the additional {@link #DEFAULT_TOOL_OPS} pack.</p>
-	 *
-	 * <p>The default-tool resolution is cached per Engine via
-	 * {@link #DEFAULT_TOOL_CACHE}: the first call per engine builds the
-	 * default tool definitions; subsequent calls reuse them. Per-config
-	 * tools are still rebuilt fresh each call since they may include
-	 * user-scoped {@code /o/<name>} references.</p>
+	 * Resolves the tool palette from config ({@link ToolPalette#resolve}) and
+	 * extracts the declared caps.
 	 */
-	@SuppressWarnings("unchecked")
 	public ContextBuilder withTools() {
 		this.caps = RT.ensureVector(config != null ? config.get(K_CAPS) : null);
-		this.unavailableTools = Vectors.empty();
-		RequestContext resolutionCtx = (caps != null) ? ctx.withCaps(caps) : ctx;
-
-		// Strict allowlist by default (#92): an agent is advertised exactly the
-		// tools it declares, unless it explicitly opts into the default pack
-		// with defaultTools: true. This is fail-safe — a newly-authored agent
-		// does not silently receive ops it never declared. The pack itself is
-		// deliberately minimal (read-only workspace access) — capability tools
-		// arrive via skills or the config tools allowlist.
-		boolean useDefaults = config != null && CVMBool.TRUE.equals(config.get(K_DEFAULT_TOOLS));
-		configToolMap = new HashMap<>();
-
-		AVector<ACell> baseTools = Vectors.empty();
-		if (useDefaults) {
-			// Atomic population: a plain get-then-put let concurrent first-callers
-			// on the same Engine each build and store a different entry, so the
-			// "stable cached instance" contract broke under parallel tests
-			// (ContextBuilderTest.testDefaultToolsCached). computeIfAbsent builds
-			// once per Engine and every caller sees the same instance.
-			DefaultToolsCacheEntry cached = DEFAULT_TOOL_CACHE.computeIfAbsent(engine, e -> {
-				Map<String, AString> freshMap = new HashMap<>();
-				AVector<ACell> freshTools = buildConfigTools(DEFAULT_TOOL_OPS, freshMap);
-				return new DefaultToolsCacheEntry(freshTools, freshMap);
-			});
-			baseTools = cached.tools;
-			// Copy the cached tool map into our per-build map so callers
-			// can mutate it (e.g. add config tools below) without poisoning
-			// the cache. The cache's own map is immutable (Map.copyOf).
-			configToolMap.putAll(cached.toolMap);
-		}
-
-		if (config != null) {
-			ACell toolsCell = config.get(K_TOOLS);
-			if (toolsCell instanceof AVector<?> toolsVec) {
-				// Build config tools, skipping any already provided by defaults
-				AVector<ACell> configTools = buildConfigTools(
-					(AVector<ACell>) toolsVec, configToolMap, resolutionCtx, true);
-				// Deduplicate: configToolMap was populated by defaults first, so
-				// buildConfigTools only adds genuinely new entries. But the vector
-				// may still contain dups if the same operation resolved to an
-				// already-present tool name. Filter by checking baseTools count.
-				if (baseTools.count() == 0) {
-					baseTools = configTools;
-				} else {
-					// Only append tools whose name isn't already in baseTools
-					java.util.Set<String> existing = new java.util.HashSet<>();
-					for (long j = 0; j < baseTools.count(); j++) {
-						ACell t = baseTools.get(j);
-						if (t instanceof AMap) {
-							ACell n = ((AMap<?,?>) t).get(Fields.NAME);
-							if (n != null) existing.add(n.toString());
-						}
-					}
-					for (long j = 0; j < configTools.count(); j++) {
-						ACell t = configTools.get(j);
-						String n = null;
-						if (t instanceof AMap) {
-							ACell nc = ((AMap<?,?>) t).get(Fields.NAME);
-							if (nc != null) n = nc.toString();
-						}
-						if (n == null || !existing.contains(n)) {
-							baseTools = (AVector<ACell>) baseTools.conj(t);
-						}
-					}
-				}
-			}
-		}
-
-		this.tools = baseTools;
+		ToolPalette.Palette palette = ToolPalette.resolve(engine, ctx, config, skipToolNames);
+		this.tools = palette.tools();
+		this.configToolMap = palette.routes();
+		this.unavailableTools = palette.unavailable();
 		appendUnavailableToolsMessage();
 		return this;
 	}
@@ -1092,117 +796,24 @@ public class ContextBuilder {
 		return sb.toString();
 	}
 
-	// ========== Tool building (moved from LLMAgentAdapter) ==========
+	// ========== Tool building — see ToolPalette ==========
 
-	/**
-	 * Resolves config tools to LLM tool definitions.
-	 *
-	 * <p>Each entry in {@code toolsVec} is either a string (operation path) or
-	 * a map with {@code operation}, optional {@code name}, optional {@code description}.
-	 * The resolved tool definitions are returned; the {@code toolMap} is populated
-	 * as a side-effect (tool name → operation path) for dispatch routing.</p>
-	 */
-	@SuppressWarnings("unchecked")
+	/** @see ToolPalette#forOperations */
 	public AVector<ACell> buildConfigTools(AVector<ACell> toolsVec, Map<String, AString> toolMap) {
-		return buildConfigTools(toolsVec, toolMap, ctx, false);
-	}
-
-	@SuppressWarnings("unchecked")
-	private AVector<ACell> buildConfigTools(AVector<ACell> toolsVec,
-			Map<String, AString> toolMap, RequestContext resolutionCtx,
-			boolean reportUnavailable) {
-		AVector<ACell> result = Vectors.empty();
-		for (long i = 0; i < toolsVec.count(); i++) {
-			ACell entry = toolsVec.get(i);
-
-			AString[] parsed = parseConfigToolEntry(entry);
-			if (parsed == null) continue;
-
-			AString operation = parsed[0];
-			AString nameOverride = parsed[1];
-			AString descOverride = parsed[2];
-
-			// Skip harness tools — they're resolved by the adapter, not here
-			if (skipToolNames.contains(operation.toString())) continue;
-
-			Asset asset;
-			try {
-				requireToolMetadataRead(engine, resolutionCtx, operation);
-				asset = engine.resolveAsset(operation, resolutionCtx);
-			} catch (covia.exception.RemoteFetchException e) {
-				// A tool whose definition lives on an unreachable remote venue
-				// must not fail the whole tool list (and the agent turn). Live
-				// config assembly records the omission; standalone callers retain
-				// the historical skip behaviour.
-				log.warn("Config tool: skipping '{}' — remote fetch failed: {}", operation, e.getMessage());
-				if (reportUnavailable) recordUnavailable(operation,
-					"remote metadata fetch failed: " + safeMessage(e));
-				continue;
-			} catch (RuntimeException e) {
-				if (!reportUnavailable) throw e;
-				log.warn("Config tool: cannot read operation '{}': {}", operation, e.getMessage());
-				recordUnavailable(operation, "operation metadata is not readable: " + safeMessage(e));
-				continue;
-			}
-			if (asset == null) {
-				log.warn("Config tool: cannot resolve operation '{}'", operation);
-				if (reportUnavailable) recordUnavailable(operation,
-					"operation metadata was not found or is not an operation");
-				continue;
-			}
-
-			// toolName lives inside the operation block, not at the top level.
-			// If absent, sanitise operation.adapter (dispatch string like
-			// "agent:create") rather than the catalog path used for lookup —
-			// the dispatch string sanitises cleanly via colon→underscore.
-			AString assetToolName = RT.ensureString(RT.getIn(asset.meta(), Fields.OPERATION, Fields.TOOL_NAME));
-			AString dispatchAdapter = RT.ensureString(RT.getIn(asset.meta(), Fields.OPERATION, Fields.ADAPTER));
-			AString fallbackSource = (dispatchAdapter != null) ? dispatchAdapter : operation;
-			String toolName = deriveToolName(nameOverride, assetToolName, fallbackSource);
-			toolMap.put(toolName, operation);
-
-			// Prepend the catalog path to the description so the LLM sees the
-			// lattice address co-located with the tool name. This lets the
-			// model reason about provenance, discover sibling ops, and pin or
-			// copy tools to its own /o/ namespace using the path it can see.
-			AString rawDescription = (descOverride != null)
-				? descOverride
-				: RT.ensureString(asset.meta().get(Fields.DESCRIPTION));
-			String descBody = (rawDescription != null) ? rawDescription.toString() : "";
-			AString description = Strings.create("Operation: " + operation + "\n\n" + descBody);
-
-			ACell inputSchema = RT.getIn(asset.meta(), Fields.OPERATION, Fields.INPUT);
-
-			AMap<AString, ACell> toolDef = buildToolDefinition(toolName, description, inputSchema);
-			result = result.conj(toolDef);
-			toolMap.put(toolName, operation);
-		}
-		return result;
-	}
-
-	private void recordUnavailable(AString operation, String reason) {
-		for (long i = 0; i < unavailableTools.count(); i++) {
-			if (operation.equals(RT.getIn(unavailableTools.get(i), Fields.OPERATION))) return;
-		}
-		unavailableTools = unavailableTools.conj(Maps.of(
-			Fields.OPERATION, operation,
-			Fields.REASON, Strings.create(reason)));
+		return ToolPalette.forOperations(engine, ctx, toolsVec, toolMap);
 	}
 
 	private void appendUnavailableToolsMessage() {
 		if (unavailableTools.isEmpty()) return;
 		StringBuilder sb = new StringBuilder(
-			"[Configured tools unavailable in this session. Do not claim that actions "
+			"Configured tools unavailable in this session. Do not claim that actions "
 			+ "through these tools succeeded:");
 		for (long i = 0; i < unavailableTools.count(); i++) {
 			ACell entry = unavailableTools.get(i);
-			sb.append("\n- ").append(String.valueOf(
-				RT.getIn(entry, Fields.OPERATION)))
-				.append(": ").append(String.valueOf(
-					RT.getIn(entry, Fields.REASON)));
+			sb.append("\n- ").append(String.valueOf(RT.getIn(entry, Fields.OPERATION)))
+				.append(": ").append(String.valueOf(RT.getIn(entry, Fields.REASON)));
 		}
-		sb.append(']');
-		ACell message = Maps.of(K_ROLE, ROLE_SYSTEM, K_CONTENT, Strings.create(sb.toString()));
+		ACell message = Labels.message(ROLE_SYSTEM, Labels.BRACKET, Labels.Kind.UNAVAILABLE_TOOLS, sb.toString());
 		messages = messages.conj(message);
 		trackMessage(message);
 	}
@@ -1214,131 +825,26 @@ public class ContextBuilder {
 		return this;
 	}
 
-	/**
-	 * Resolves configured operation tools under the agent's effective capability
-	 * scope and returns every unavailable entry as
-	 * {@code {operation, reason}}. This is the shared diagnostic used by
-	 * author-time warnings and {@code agent:info}; live context assembly records
-	 * the same shape while building the actual provider tool list.
-	 */
+	/** @see ToolPalette#unavailableConfigTools */
 	public static AVector<ACell> unavailableConfigTools(
 			Engine engine, RequestContext ctx, AMap<AString, ACell> config,
 			java.util.Set<String> skipToolNames) {
-		AVector<ACell> unavailable = Vectors.empty();
-		if (config == null) return unavailable;
-		AVector<ACell> toolsVec = RT.ensureVector(config.get(K_TOOLS));
-		if (toolsVec == null) return unavailable;
-		AVector<ACell> configCaps = RT.ensureVector(config.get(K_CAPS));
-		RequestContext resolutionCtx = (configCaps != null) ? ctx.withCaps(configCaps) : ctx;
-		for (long i = 0; i < toolsVec.count(); i++) {
-			AString[] parsed = parseConfigToolEntry(toolsVec.get(i));
-			if (parsed == null) continue;
-			AString operation = parsed[0];
-			if (skipToolNames.contains(operation.toString())) continue;
-			String reason = null;
-			Asset asset;
-			try {
-				requireToolMetadataRead(engine, resolutionCtx, operation);
-				asset = engine.resolveAsset(operation, resolutionCtx);
-				if (asset == null) reason = "operation metadata was not found or is not an operation";
-			} catch (covia.exception.RemoteFetchException e) {
-				reason = "remote metadata fetch failed: " + safeMessage(e);
-			} catch (RuntimeException e) {
-				reason = "operation metadata is not readable: " + safeMessage(e);
-			}
-			if (reason != null) unavailable = unavailable.conj(Maps.of(
-				Fields.OPERATION, operation,
-				Fields.REASON, Strings.create(reason)));
-		}
-		return unavailable;
+		return ToolPalette.unavailableConfigTools(engine, ctx, config, skipToolNames);
 	}
 
-	/** Private user-scoped operation definitions are data: the agent must be
-	 * able to read their metadata as well as invoke them. Venue catalog entries
-	 * ({@code v/ops/...}) are shared public metadata; remote DID references apply
-	 * the publishing venue's asset-read policy during fetch. */
-	private static void requireToolMetadataRead(
-			Engine engine, RequestContext ctx, AString operation) {
-		String ref = operation.toString();
-		String normalised = ref.startsWith("/") ? ref.substring(1) : ref;
-		if (normalised.startsWith("v/")) return;
-
-		Hash hash = Hash.parse(operation);
-		if (hash != null || normalised.startsWith("a/")) {
-			engine.requireResourceAccess(ctx, operation, Abilities.ASSET_READ);
-			return;
-		}
-		if (normalised.startsWith("w/") || normalised.startsWith("o/")
-				|| normalised.startsWith("g/") || normalised.startsWith("j/")
-				|| normalised.startsWith("s/") || normalised.startsWith("h/")
-				|| normalised.startsWith("n/") || normalised.startsWith("c/")) {
-			engine.requireResourceAccess(ctx, operation, Capability.CRUD_READ);
-		}
+	/** @see ToolPalette#parseConfigToolEntry */
+	public static AString[] parseConfigToolEntry(ACell entry) {
+		return ToolPalette.parseConfigToolEntry(entry);
 	}
 
-	private static String safeMessage(Throwable error) {
-		String message = error.getMessage();
-		return (message == null || message.isBlank())
-			? error.getClass().getSimpleName() : message;
-	}
-
-	/**
-	 * Parses a config tool entry (string or map) into its components.
-	 *
-	 * @return Array of [operation, nameOverride, descOverride], or null if invalid
-	 */
-	@SuppressWarnings("unchecked")
-	public
-	static AString[] parseConfigToolEntry(ACell entry) {
-		AString operation;
-		AString nameOverride = null;
-		AString descOverride = null;
-
-		if (entry instanceof AString s) {
-			operation = s;
-		} else if (entry instanceof AMap<?, ?> m) {
-			AMap<AString, ACell> map = (AMap<AString, ACell>) m;
-			operation = RT.ensureString(map.get(Fields.OPERATION));
-			nameOverride = RT.ensureString(map.get(K_NAME));
-			descOverride = RT.ensureString(map.get(K_DESCRIPTION));
-		} else {
-			return null;
-		}
-
-		if (operation == null) return null;
-		return new AString[] { operation, nameOverride, descOverride };
-	}
-
-	/**
-	 * Derives a tool name from overrides, asset metadata, or the operation name.
-	 * Priority: nameOverride → asset toolName → operation with colons/slashes→underscores
-	 */
+	/** @see ToolPalette#deriveToolName */
 	public static String deriveToolName(AString nameOverride, AString assetToolName, AString operation) {
-		if (nameOverride != null) return nameOverride.toString();
-		if (assetToolName != null) return assetToolName.toString();
-		return operation.toString().replace(':', '_').replace('/', '_');
+		return ToolPalette.deriveToolName(nameOverride, assetToolName, operation);
 	}
 
-	/**
-	 * Builds a tool definition map from resolved components.
-	 */
-	@SuppressWarnings("unchecked")
-	public
-	static AMap<AString, ACell> buildToolDefinition(String toolName, AString description, ACell inputSchema) {
-		AMap<AString, ACell> parameters;
-		if (inputSchema instanceof AMap) {
-			parameters = (AMap<AString, ACell>) inputSchema;
-		} else {
-			parameters = Maps.of(K_TYPE, Strings.create("object"), K_PROPERTIES, Maps.empty());
-		}
-
-		AMap<AString, ACell> toolDef = Maps.of(
-			K_NAME, Strings.create(toolName),
-			K_PARAMETERS, parameters);
-		if (description != null) {
-			toolDef = toolDef.assoc(K_DESCRIPTION, description);
-		}
-		return toolDef;
+	/** @see ToolPalette#buildToolDefinition */
+	public static AMap<AString, ACell> buildToolDefinition(String toolName, AString description, ACell inputSchema) {
+		return ToolPalette.buildToolDefinition(toolName, description, inputSchema);
 	}
 
 	// ========== Config helpers ==========

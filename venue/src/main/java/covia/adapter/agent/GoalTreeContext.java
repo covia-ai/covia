@@ -388,7 +388,7 @@ public class GoalTreeContext {
 	public static AMap<AString, ACell> renderAncestors(AVector<ACell> frames) {
 		if (frames == null || frames.count() <= 1) return null;
 
-		StringBuilder sb = new StringBuilder("[Ancestor Context]\n");
+		StringBuilder sb = new StringBuilder();
 		long activeIndex = frames.count() - 1;
 
 		// Render from outermost to innermost (excluding active frame)
@@ -409,7 +409,7 @@ public class GoalTreeContext {
 			}
 		}
 
-		return Maps.of(K_ROLE, ROLE_SYSTEM, K_CONTENT, Strings.create(sb.toString()));
+		return Labels.message(ROLE_SYSTEM, Labels.BRACKET, Labels.Kind.ANCESTORS, sb.toString());
 	}
 
 	/**
