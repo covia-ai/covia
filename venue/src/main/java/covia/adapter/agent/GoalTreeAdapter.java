@@ -277,6 +277,21 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		return result;
 	}
 
+	/** Every bare name this runtime resolves itself: the goal-tree harness
+	 *  tools plus the framework's task tools ({@link TaskTools}). */
+	static final java.util.Set<String> HARNESS_NAMES;
+	static {
+		java.util.Set<String> names = new java.util.HashSet<>(HARNESS_TOOL_REGISTRY.keySet());
+		names.addAll(TaskTools.NAMES);
+		HARNESS_NAMES = java.util.Set.copyOf(names);
+	}
+
+	/** Everything a cycle holds constant across its frames and inferences;
+	 *  each frame adds its index and its (mutable) base tools. */
+	record Cycle(AMap<AString, ACell> config, AString llmOperation, Map<String, AString> configToolMap,
+			RequestContext ctx, ContextAssembler.Spec spec, AVector<ACell> typedRootHarnessTools,
+			long toolCallTimeoutMs, AMap<AString, ACell> outerLoads, TaskTools.Tasks tasks) {}
+
 	/** Returns true if the given tool name is a harness tool. */
 	public static boolean isHarnessTool(String name) {
 		return HARNESS_TOOL_REGISTRY.containsKey(name);
@@ -337,15 +352,15 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 	}
 
 	/** What inspection and step share with a live cycle's root frame. */
-	private record Preview(ContextAssembler.Spec spec, AMap<AString, ACell> l3Config,
-			AVector<ACell> rootFrames, AVector<ACell> harness, ToolPalette.Palette palette,
-			AMap<AString, ACell> outerLoads, Loads.Snapshot loads, boolean typedOutputs) {}
+	private record Preview(ContextAssembler.Spec spec, Cycle cycle, AVector<ACell> rootFrames,
+			AVector<ACell> harness, AVector<ACell> baseTools, Loads.Snapshot loads, boolean typedOutputs) {}
 
 	/**
 	 * The first iteration of a transition with these inputs: typed outputs
-	 * resolved, the root frame with this cycle's inbox appended as turns (as
-	 * {@code processGoal} persists them), and a task synthesised into the goal
-	 * the agent would see. Pending results arrive in this runtime as session
+	 * resolved, the root frame with this cycle's input appended as turns —
+	 * inbox envelopes as chat turns, a task as the request turn — exactly as
+	 * {@code processGoal} persists them, and the task rendered last with its
+	 * tools offered. Pending results arrive in this runtime as session
 	 * turns, so none are rendered separately.
 	 */
 	@SuppressWarnings("unchecked")
@@ -384,39 +399,45 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			indexLoads = ContextChain.effective(indexLoads, GoalTreeContext.getLoads(rootFrame));
 			rootFrames = Vectors.of((ACell) rootFrame);
 		}
+
+		// This cycle's input, appended as a live cycle appends it. A session
+		// with no frame yet gets the root a first transition would create.
 		AVector<ACell> inbox = envelopes(in.messages());
-		if (inbox != null) {
-			if (rootFrames.isEmpty()) {
-				rootFrames = Vectors.of((ACell) GoalTreeContext.createFrame(
-					GoalTreeContext.describeTransitionInput(inbox, null, null)));
+		AVector<ACell> tasks = (in.task() != null)
+			? Vectors.of((ACell) Maps.of(Fields.JOB_ID, TaskTools.PREVIEW_JOB_ID, Fields.INPUT, in.task()))
+			: null;
+		if (rootFrames.isEmpty() && (inbox != null || tasks != null)) {
+			rootFrames = Vectors.of((ACell) GoalTreeContext.createFrame(
+				GoalTreeContext.describeTransitionInput(inbox, tasks, in.pending())));
+		}
+		if (!rootFrames.isEmpty()) {
+			long ts = convex.core.util.Utils.getCurrentTimestamp();
+			if (inbox != null) rootFrames = appendCycleInputTurns(rootFrames, inbox, null, ts);
+			if (in.task() != null) {
+				rootFrames = appendCycleInputTurns(rootFrames, null, Maps.of(Fields.NEW_INPUT, in.task()), ts);
 			}
-			rootFrames = appendCycleInputTurns(rootFrames, inbox, null,
-				convex.core.util.Utils.getCurrentTimestamp());
 		}
 
 		// --- same as the first iteration of runFrame ---
 		RequestContext capsCtx = capsContext(config, ctx);
-		ToolPalette.Palette palette = ToolPalette.resolve(engine, ctx, config, HARNESS_TOOL_REGISTRY.keySet());
+		ToolPalette.Palette palette = ToolPalette.resolve(engine, ctx, config, HARNESS_NAMES);
+		long toolCallTimeoutMs = resolveToolCallTimeoutMs(l3Config);
+		TaskTools.Tasks taskTools = new TaskTools.Tasks(engine, capsCtx, tasks, toolCallTimeoutMs, true);
 		AVector<ACell> harness = harnessForFrame(config, 0, typedTools);
-		AVector<ACell> fixedTools = (AVector<ACell>) harness.concat(palette.tools());
+		AVector<ACell> fixedTools = (AVector<ACell>) taskTools.tools().concat(harness).concat(palette.tools());
 		ModelProfile profile = modelProfileFor(l3Config, ctx);
 		Loads.Snapshot loads = Loads.resolve(engine, capsCtx, indexLoads,
 			fixedToolNames(fixedTools), profile.labels());
-
-		// The optional task is the goal the first iteration would see, rendered last.
-		ACell goal = null;
-		if (in.task() != null) {
-			AVector<ACell> tasks = Vectors.of((ACell) Maps.of(Fields.INPUT, in.task()));
-			goal = ContextAssembler.user(GoalTreeContext.describeTransitionInput(null, tasks, null));
-		}
 
 		ContextAssembler.Spec spec = new ContextAssembler.Spec(
 			engine, ctx, capsCtx, l3Config,
 			ContextAssembler.sessionHex(RT.getIn(in.session(), Fields.ID)), null,
 			profile.budget(), profile.labels(),
 			ToolPalette.merge(fixedTools, loads.tools()), loads.elements(), indexLoads,
-			rootFrames, null, null, true, null, goal, palette.unavailable(), null, null);
-		return new Preview(spec, l3Config, rootFrames, harness, palette, outerLoads, loads, typedTools != null);
+			rootFrames, null, null, true, null, taskTools.message(), palette.unavailable(), null, null);
+		Cycle cycle = new Cycle(l3Config, getLLMOperation(l3Config), palette.routes(), capsCtx, spec,
+			typedTools, toolCallTimeoutMs, outerLoads, taskTools);
+		return new Preview(spec, cycle, rootFrames, harness, palette.tools(), loads, typedTools != null);
 	}
 
 	@Override
@@ -445,28 +466,21 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 	 * in-memory frame store: the reply appended, text-as-control recognised
 	 * as live, the batch dispatched through the frame's own registry — except
 	 * that {@code subgoal} is not run, since it would start a child frame and
-	 * call the model — and the next prompt rebuilt as the frame loop rebuilds
-	 * it, a requested compact applied first. A terminal {@code complete} /
-	 * {@code fail} ends the cycle with its value, as live.
+	 * call the model, and a task resolution never reaches a job — and the next
+	 * prompt rebuilt as the frame loop rebuilds it, a requested compact
+	 * applied first. A terminal call ends the cycle with its value, as live.
 	 */
 	@Override
 	@SuppressWarnings("unchecked")
 	public AMap<AString, ACell> stepContext(Inspection in, AMap<AString, ACell> assistant, RequestContext ctx) {
 		Preview p = preview(in, ctx);
-		AMap<AString, ACell> config = p.l3Config();
+		Cycle cycle = p.cycle();
+		AMap<AString, ACell> config = cycle.config();
 		AVector<ACell> frames = p.rootFrames();
-		long ts = convex.core.util.Utils.getCurrentTimestamp();
 		if (frames.isEmpty()) {
-			// No frame yet: the root a first transition would create, described
-			// from the work in hand (processGoal's rootDescription).
-			AVector<ACell> tasks = (in.task() != null)
-				? Vectors.of((ACell) Maps.of(Fields.INPUT, in.task())) : null;
+			// A wake-up with nothing to act on: the root a first transition would create.
 			frames = Vectors.of((ACell) GoalTreeContext.createFrame(
-				GoalTreeContext.describeTransitionInput(envelopes(in.messages()), tasks, in.pending())));
-		}
-		// A task arrives as the request-sourced user turn a live cycle appends.
-		if (in.task() != null) {
-			frames = appendCycleInputTurns(frames, null, Maps.of(Fields.NEW_INPUT, in.task()), ts);
+				GoalTreeContext.describeTransitionInput(null, null, null)));
 		}
 		AMap<AString, ACell> activeFrame = (AMap<AString, ACell>) frames.get(0);
 		if (GoalTreeContext.countLiveTurns(activeFrame) == 0) {
@@ -475,11 +489,9 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		}
 
 		FrameStore store = new FrameStore.LocalFrameStore(frames.assoc(0, activeFrame));
-		FrameToolContext frameTools = new FrameToolContext(null, store, 0, config,
-			getLLMOperation(config), p.palette().tools(), p.palette().routes(), p.spec().capsCtx(),
-			p.spec(), resolveToolCallTimeoutMs(config), p.outerLoads());
+		FrameToolContext frameTools = new FrameToolContext(null, store, 0, p.baseTools(), cycle);
 		frameTools.activeFrame = activeFrame;
-		frameTools.iterationToolMap = mergeRoutes(p.palette().routes(), p.loads().routes());
+		frameTools.iterationToolMap = mergeRoutes(cycle.configToolMap(), p.loads().routes());
 		ToolCycleEngine.Registry<FrameToolContext> registry = frameTools.registry()
 			.register(TOOL_SUBGOAL, (call, ignored) ->
 				ToolCycleEngine.ToolOutcome.result(Strings.create(STEP_SUBGOAL_NOTE)));
@@ -487,10 +499,8 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		AMap<AString, ACell> reply = assistant;
 		AVector<ACell> calls = RT.ensureVector(reply.get(K_TOOL_CALLS));
 		if (calls == null) {
-			java.util.Set<String> controls = new java.util.HashSet<>();
-			if (hasToolNamed(p.harness(), TOOL_COMPLETE)) controls.add(TOOL_COMPLETE);
-			if (hasToolNamed(p.harness(), TOOL_FAIL)) controls.add(TOOL_FAIL);
-			AMap<AString, ACell> rewritten = ToolCycleEngine.recogniseTextualControlCall(reply, 0, controls);
+			AMap<AString, ACell> rewritten = ToolCycleEngine.recogniseTextualControlCall(
+				reply, 0, controlNames(p.harness(), cycle, 0));
 			if (rewritten != null) {
 				reply = rewritten;
 				calls = RT.ensureVector(reply.get(K_TOOL_CALLS));
@@ -766,7 +776,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// config.tools are skipped by the palette — they're resolved separately
 		// by resolveHarnessTools / buildTypedRootHarnessTools.
 		RequestContext capsCtx = capsContext(recordConfig, ctx).withAgentId(agentId);
-		ToolPalette.Palette palette = ToolPalette.resolve(engine, ctx, recordConfig, HARNESS_TOOL_REGISTRY.keySet());
+		ToolPalette.Palette palette = ToolPalette.resolve(engine, ctx, recordConfig, HARNESS_NAMES);
 		AVector<ACell> baseTools = palette.tools();
 		Map<String, AString> configToolMap = palette.routes();
 		AString llmOperation = getLLMOperation(l3Config);
@@ -785,6 +795,9 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// so a stuck sub-job cannot hang this loop. Resolved once and shared
 		// with subgoal recursion.
 		long toolCallTimeoutMs = resolveToolCallTimeoutMs(l3Config);
+		Cycle cycle = new Cycle(l3Config, llmOperation, configToolMap, capsCtx, cycleSpec,
+			typedHarnessTools, toolCallTimeoutMs, outerLoads,
+			new TaskTools.Tasks(engine, capsCtx, tasks, toolCallTimeoutMs, false));
 
 		// Run the root frame. typedHarnessTools (if non-null) injects the
 		// typed complete/fail tools alongside the regular harness/operation
@@ -792,12 +805,8 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// An interrupted stack first settles child frames deepest-first without
 		// resuming their internal execution, then starts the root afresh.
 		FrameResult result = tidyInterrupted
-			? settleInterruptedFrames(job, store, l3Config, llmOperation, baseTools,
-				configToolMap, capsCtx, cycleSpec, typedHarnessTools, toolCallTimeoutMs,
-				outerLoads)
-			: runFrame(job, store, 0, l3Config, llmOperation, baseTools,
-				configToolMap, capsCtx, cycleSpec, typedHarnessTools, toolCallTimeoutMs,
-				outerLoads);
+			? settleInterruptedFrames(job, store, baseTools, cycle)
+			: runFrame(job, store, 0, baseTools, cycle);
 
 		// No per-adapter state is persisted here: the frame stack lives on the
 		// session record, and config's single home is record.config (#144) —
@@ -816,8 +825,12 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// merge out of frames entirely. Only the local-store paths
 		// (unsessioned / direct-invoke) return the stack in the output,
 		// where the caller is the only consumer.
+		// A task the agent resolved itself (complete_task / fail_task) has
+		// reached its job already; one still open when the root frame
+		// completes takes the frame's outcome — in this runtime a reply is
+		// the answer, where llmagent would yield (AGENT_SESSIONS.md §6.3).
 		boolean failed = "failed".equals(result.status());
-		if (tasks != null && tasks.count() > 0 && ctx.getTaskId() != null) {
+		if (tasks != null && tasks.count() > 0 && ctx.getTaskId() != null && !cycle.tasks().resolved()) {
 			completeTaskViaVenueOp(ctx, failed, result.value());
 		}
 		AMap<AString, ACell> output = Maps.of(AgentState.KEY_STATE, newState);
@@ -832,9 +845,9 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// The cycle record and its token totals (#217: measured only; absent
 		// means the provider reported nothing, never zero). Per-call usage
 		// additionally rides each assistant turn in the frame conversation.
-		CycleRecord.Result cycle = CycleRecord.end();
-		output = output.assoc(Fields.CYCLE, cycle.cycle());
-		if (cycle.tokens() != null) output = output.assoc(Fields.TOKENS, cycle.tokens());
+		CycleRecord.Result record = CycleRecord.end();
+		output = output.assoc(Fields.CYCLE, record.cycle());
+		if (record.tokens() != null) output = output.assoc(Fields.TOKENS, record.tokens());
 		return output;
 	}
 
@@ -889,6 +902,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		final Job job;
 		final FrameStore store;
 		final int frameIndex;
+		final Cycle cycle;
 		final AMap<AString, ACell> config;
 		final AString llmOperation;
 		final RequestContext ctx;
@@ -902,26 +916,27 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		String pendingCompactSummary;
 		AString turnText;
 
-		FrameToolContext(Job job, FrameStore store, int frameIndex,
-				AMap<AString, ACell> config, AString llmOperation,
-				AVector<ACell> baseTools, Map<String, AString> configToolMap,
-				RequestContext ctx, ContextAssembler.Spec cycleSpec,
-				long toolCallTimeoutMs, AMap<AString, ACell> outerLoads) {
+		FrameToolContext(Job job, FrameStore store, int frameIndex, AVector<ACell> baseTools, Cycle cycle) {
 			this.job = job;
 			this.store = store;
 			this.frameIndex = frameIndex;
-			this.config = config;
-			this.llmOperation = llmOperation;
 			this.baseTools = baseTools;
-			this.configToolMap = configToolMap;
-			this.ctx = ctx;
-			this.cycleSpec = cycleSpec;
-			this.toolCallTimeoutMs = toolCallTimeoutMs;
-			this.outerLoads = outerLoads;
+			this.cycle = cycle;
+			this.config = cycle.config();
+			this.llmOperation = cycle.llmOperation();
+			this.configToolMap = cycle.configToolMap();
+			this.ctx = cycle.ctx();
+			this.cycleSpec = cycle.spec();
+			this.toolCallTimeoutMs = cycle.toolCallTimeoutMs();
+			this.outerLoads = cycle.outerLoads();
 		}
 
 		ToolCycleEngine.Registry<FrameToolContext> registry() {
 			return new ToolCycleEngine.Registry<FrameToolContext>()
+				// The framework's task boundary (TaskTools): a task resolved
+				// here reaches its job at tool time and ends the frame.
+				.register(TaskTools.COMPLETE, (call, ignored) -> cycle.tasks().complete(call, turnText))
+				.register(TaskTools.FAIL, (call, ignored) -> cycle.tasks().fail(call, turnText))
 				.register(TOOL_COMPLETE, (call, ignored) -> complete(call, false))
 				.register(TOOL_FAIL, (call, ignored) -> complete(call, true))
 				.register(TOOL_COMPACT, (call, ignored) -> compact(call))
@@ -1067,9 +1082,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			if (record != null) record.openFrame();
 			FrameResult childResult;
 			try {
-				childResult = runFrame(job, store, frameIndex + 1,
-					config, llmOperation, baseTools, configToolMap, ctx, cycleSpec, null,
-					toolCallTimeoutMs, outerLoads);
+				childResult = runFrame(job, store, frameIndex + 1, baseTools, cycle);
 			} finally {
 				if (record != null) record.attachFrame(call.id(), record.closeFrame());
 			}
@@ -1095,28 +1108,22 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 	 * Runs a single frame's tool call loop. Recursively invokes child frames
 	 * when subgoal is called.
 	 *
-	 * @param frames the full frame stack
 	 * @param frameIndex index of the active frame
-	 * @param config agent config
-	 * @param llmOperation L3 operation name
-	 * @param baseTools configured operation tools
-	 * @param configToolMap LLM tool name → operation name mapping
-	 * @param ctx request context for tool dispatch — carries the agent's caps
-	 * @param cycleSpec the cycle's assembly Spec; each inference derives its own
-	 * @param typedRootHarnessTools typed complete/fail tools injected at the
-	 *        root frame (alongside config-resolved harness tools), or null
-	 *        for untyped agents. When non-null, the root frame ALSO has
-	 *        response_format set in its L3 config — both completion paths
-	 *        are wired up. Children are always free-form.
+	 * @param baseToolsParam configured operation tools (grown by more_tools)
+	 * @param cycle what holds for the whole cycle — config, operation, routes,
+	 *        authority, Spec, typed root tools, timeout, outer loads, tasks.
+	 *        Typed complete/fail tools apply at the root frame only, where the
+	 *        L3 config ALSO carries response_format; children are free-form.
 	 * @return the frame's result
 	 */
 	@SuppressWarnings("unchecked")
 	FrameResult runFrame(Job job, FrameStore store, int frameIndex,
-			AMap<AString, ACell> config, AString llmOperation,
-			AVector<ACell> baseToolsParam, Map<String, AString> configToolMap,
-			RequestContext ctx, ContextAssembler.Spec cycleSpec,
-			AVector<ACell> typedRootHarnessTools, long toolCallTimeoutMs,
-			AMap<AString, ACell> outerLoads) {
+			AVector<ACell> baseToolsParam, Cycle cycle) {
+		AMap<AString, ACell> config = cycle.config();
+		AString llmOperation = cycle.llmOperation();
+		RequestContext ctx = cycle.ctx();
+		ContextAssembler.Spec cycleSpec = cycle.spec();
+		AVector<ACell> typedRootHarnessTools = cycle.typedRootHarnessTools();
 
 		// Mutable copy — more_tools can append to this mid-run
 		AVector<ACell> baseTools = baseToolsParam;
@@ -1149,9 +1156,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// Deferred compact: applied at the start of the next iteration so we never
 		// split an assistant message from its tool results (OpenAI requires every
 		// tool result to follow its assistant tool_calls message)
-		FrameToolContext frameTools = new FrameToolContext(job, store, frameIndex,
-			config, llmOperation, baseTools, configToolMap, ctx, cycleSpec,
-			toolCallTimeoutMs, outerLoads);
+		FrameToolContext frameTools = new FrameToolContext(job, store, frameIndex, baseTools, cycle);
 		frameTools.activeFrame = activeFrame;
 		ToolCycleEngine.Registry<FrameToolContext> toolRegistry = frameTools.registry();
 
@@ -1200,11 +1205,8 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			AVector<ACell> calls = RT.ensureVector(RT.getIn(assistant, K_TOOL_CALLS));
 			boolean hasCalls = calls != null && calls.count() > 0;
 			if (!hasCalls) {
-				java.util.Set<String> controls = new java.util.HashSet<>();
-				if (hasToolNamed(harnessForFrame, TOOL_COMPLETE)) controls.add(TOOL_COMPLETE);
-				if (hasToolNamed(harnessForFrame, TOOL_FAIL)) controls.add(TOOL_FAIL);
 				AMap<AString, ACell> rewritten = ToolCycleEngine.recogniseTextualControlCall(
-					assistant, iteration, controls);
+					assistant, iteration, controlNames(harnessForFrame, cycle, frameIndex));
 				if (rewritten != null) {
 					log.warn("Assistant emitted a harness control tool as text — honouring it (#215)");
 					assistant = rewritten;
@@ -1321,7 +1323,11 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			AVector<ACell> harnessForFrame, AMap<AString, ACell> frameL3Config, AVector<ACell> stack) {
 		AMap<AString, ACell> effectiveLoads = ContextChain.effective(
 			frameTools.outerLoads, GoalTreeContext.getLoads(frameTools.activeFrame));
-		AVector<ACell> fixedTools = (AVector<ACell>) harnessForFrame.concat(frameTools.baseTools);
+		// The task tools ride the root frame while a task is outstanding —
+		// the framework's task boundary, the same on every runtime (TaskTools).
+		boolean root = frameTools.frameIndex == 0;
+		AVector<ACell> taskTools = root ? frameTools.cycle.tasks().tools() : Vectors.empty();
+		AVector<ACell> fixedTools = (AVector<ACell>) taskTools.concat(harnessForFrame).concat(frameTools.baseTools);
 		Loads.Snapshot loads = Loads.resolve(engine, frameTools.ctx, effectiveLoads,
 			fixedToolNames(fixedTools), frameTools.cycleSpec.labels());
 		frameTools.iterationToolMap = mergeRoutes(frameTools.configToolMap, loads.routes());
@@ -1334,7 +1340,19 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			.forFrame(frameL3Config, (frameTools.frameIndex > 0) ? CHILD_FRAME_NOTICE : null)
 			.withLoads(loads, ToolPalette.merge(fixedTools, loads.tools()), effectiveLoads)
 			.withFrames(stack)
-			.withNotice(notice);
+			.withNotice(notice)
+			.withTask(root ? frameTools.cycle.tasks().message() : null);
+	}
+
+	/** The control tools a text reply may spell out instead of calling
+	 *  (#215): complete / fail when offered, and the task tools while a task
+	 *  is outstanding at the root. */
+	private static java.util.Set<String> controlNames(AVector<ACell> harness, Cycle cycle, int frameIndex) {
+		java.util.Set<String> controls = new java.util.HashSet<>();
+		if (hasToolNamed(harness, TOOL_COMPLETE)) controls.add(TOOL_COMPLETE);
+		if (hasToolNamed(harness, TOOL_FAIL)) controls.add(TOOL_FAIL);
+		if (frameIndex == 0 && cycle.tasks().outstanding()) controls.addAll(TaskTools.NAMES);
+		return controls;
 	}
 
 	/** The contract in force at the root frame: the declared output schema
@@ -1364,11 +1382,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 	 * </ul>
 	 */
 	private FrameResult settleInterruptedFrames(Job job, FrameStore store,
-			AMap<AString, ACell> config, AString llmOperation,
-			AVector<ACell> baseTools, Map<String, AString> configToolMap,
-			RequestContext ctx, ContextAssembler.Spec cycleSpec,
-			AVector<ACell> typedRootHarnessTools, long toolCallTimeoutMs,
-			AMap<AString, ACell> outerLoads) {
+			AVector<ACell> baseTools, Cycle cycle) {
 		while (true) {
 			if (store.aborted()) return abortedResult(store);
 			AVector<ACell> fs = store.frames();
@@ -1416,9 +1430,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			if (!ok) return abortedResult(store);
 		}
 
-		return runFrame(job, store, 0, config, llmOperation, baseTools,
-			configToolMap, ctx, cycleSpec, typedRootHarnessTools, toolCallTimeoutMs,
-			outerLoads);
+		return runFrame(job, store, 0, baseTools, cycle);
 	}
 
 	/** Transition output for a cycle that lost frame ownership mid-flight. */
@@ -1495,7 +1507,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 
 	/** Names a load may never shadow: every harness tool plus the fixed palette. */
 	private static java.util.Set<String> fixedToolNames(AVector<ACell> tools) {
-		java.util.Set<String> names = new java.util.HashSet<>(HARNESS_TOOL_REGISTRY.keySet());
+		java.util.Set<String> names = new java.util.HashSet<>(HARNESS_NAMES);
 		names.addAll(ToolPalette.names(tools));
 		return names;
 	}

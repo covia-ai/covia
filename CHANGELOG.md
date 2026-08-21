@@ -10,6 +10,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Changed
 
+- One task boundary for both runtimes (`TaskTools`): goaltree now offers `complete_task` / `fail_task` while a task is outstanding, renders the task last exactly as llmagent does, and resolves it at tool time through the venue op (ending the frame) — an llmagent configuration runs unchanged on goaltree; a task still open when the root frame completes takes the frame's outcome, as before. The `agent:step` report's `terminal` carries `status` (`complete` | `failed`) rather than the tool name
 - One completion boundary for both runtimes (`Completion`): `complete_task`/`fail_task`, `complete`/`fail` and a typed reply are judged by the same rule — nothing delivered falls back to the turn's text (a blank string or empty object now counts as nothing on goaltree too), JSON-as-text is parsed when it conforms, a mismatch is rejected with the reason and the schema (goaltree now shows the schema; a rejected typed reply is asked again with the rejection rather than a generic notice)
 - Assistant and tool turns carry their real `ts`; the final llmagent turn carries its own inference's `tokens`, not the cycle total; session `meta.tokens` rolls up cache counts
 - `agent:context` simulates a specific call — `message`/`messages`, `pending`, `task` (rendered exactly as live, task tools offered), `sessionId` — and returns the level-3 input with `cacheMarks` plus `budget`, `marks` and `labels` (a structured report, where it returned a string)

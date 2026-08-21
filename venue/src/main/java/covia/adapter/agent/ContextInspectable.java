@@ -50,7 +50,7 @@ public interface ContextInspectable {
 	 * @return {@code assistant}, {@code turns} (what the iteration appends to
 	 *         the conversation), {@code calls} ({@code [{id, name, arguments,
 	 *         result, isError?, ms}]}), {@code terminal?}
-	 *         ({@code {name, value}}), {@code done}, {@code response?} and
+	 *         ({@code {status, value}} — {@code complete} or {@code failed}), {@code done}, {@code response?} and
 	 *         {@code next?} — the following prompt, as {@link #inspectContext} reports it
 	 */
 	AMap<AString, ACell> stepContext(Inspection inspection, AMap<AString, ACell> assistant, RequestContext ctx);

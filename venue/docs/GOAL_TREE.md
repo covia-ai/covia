@@ -164,7 +164,7 @@ The sequence, bands, roles and budget are [AGENT_CONTEXT.md](./AGENT_CONTEXT.md)
 |----------------|-------------------|
 | Conversation (AGENT_CONTEXT §5.6), first | **Ancestor context** — every frame below the active one, outermost first, each rendered at a decreasing budget |
 | Conversation (AGENT_CONTEXT §5.6), rest | The active frame: compacted segments and live turns, full detail |
-| Outstanding task (AGENT_CONTEXT §5.13) | The **goal** — the `subgoal` description that opened the active frame, rendered last on every inference |
+| Outstanding task (AGENT_CONTEXT §5.13) | The open task at the root frame, with `complete_task` / `fail_task` offered — as every runtime renders it. A frame's **goal** is its opening turn (AGENT_CONTEXT §9.1) |
 | Loads chain (AGENT_CONTEXT §7.3) | A **frame tier** inside the session tier, so a subgoal curates its own working set |
 
 The key rule: **the active frame's conversation is full detail; ancestors are progressively summarised.**

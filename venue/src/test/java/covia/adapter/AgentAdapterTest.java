@@ -687,7 +687,7 @@ public class AgentAdapterTest {
 				"assistant", Maps.of("toolCalls", Vectors.of(
 					Maps.of("name", "complete_task", "arguments", Maps.of("result", "4"))))),
 			RequestContext.of(ALICE_DID)).awaitResult(5000));
-		assertEquals("complete_task", RT.getIn(completed, "terminal", "name").toString());
+		assertEquals("complete", RT.getIn(completed, "terminal", "status").toString());
 		assertEquals(Strings.create("4"), RT.getIn(completed, "terminal", "value"));
 		assertFalse(RT.getIn(completed, "next").toString().contains("[Tasks assigned to you]"));
 
@@ -696,7 +696,7 @@ public class AgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "step-agent", "task", "Add 2 and 2",
 				"assistant", "complete_task {\"result\": \"4\"}"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000));
-		assertEquals("complete_task", RT.getIn(textual, "terminal", "name").toString());
+		assertEquals("complete", RT.getIn(textual, "terminal", "status").toString());
 
 		// An unknown tool fails as live: an Error result, recorded as a tool failure.
 		AMap<AString, ACell> unknown = RT.ensureMap(engine.jobs().invokeOperation("v/ops/agent/step",

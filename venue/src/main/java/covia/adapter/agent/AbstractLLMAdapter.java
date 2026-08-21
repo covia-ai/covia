@@ -337,7 +337,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * {@code next} is null when the cycle would end here.
 	 */
 	protected record Step(AMap<AString, ACell> assistant, AVector<ACell> turns, StepSink sink,
-			String terminalTool, ACell terminalValue, ACell response, ContextAssembler.Spec next) {
+			String terminalStatus, ACell terminalValue, ACell response, ContextAssembler.Spec next) {
 
 		/** A reply the loop would return as the cycle's response. */
 		static Step done(AMap<AString, ACell> assistant, ACell response) {
@@ -350,8 +350,8 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 				Fields.TURNS, turns,
 				Fields.CALLS, calls(),
 				K_DONE, CVMBool.create(next == null));
-			if (terminalTool != null) {
-				AMap<AString, ACell> t = Maps.of(K_NAME, Strings.create(terminalTool));
+			if (terminalStatus != null) {
+				AMap<AString, ACell> t = Maps.of(Fields.STATUS, Strings.create(terminalStatus));
 				if (terminalValue != null) t = t.assoc(Fields.VALUE, terminalValue);
 				r = r.assoc(K_TERMINAL, t);
 			}
@@ -761,7 +761,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		static final Map<String, String> PROVIDERS;
 		static {
 			Map<String, String> m = new java.util.HashMap<>();
-			for (String n : GoalTreeAdapter.HARNESS_TOOL_REGISTRY.keySet()) m.put(n, "goaltree");
+			for (String n : GoalTreeAdapter.HARNESS_NAMES) m.put(n, "goaltree");
 			for (String n : LLMAgentAdapter.HARNESS_TOOL_NAMES) m.merge(n, "llmagent", (a, b) -> a + ", " + b);
 			PROVIDERS = Map.copyOf(m);
 		}

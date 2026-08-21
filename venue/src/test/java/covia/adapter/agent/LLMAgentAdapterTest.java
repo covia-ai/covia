@@ -2262,89 +2262,71 @@ public class LLMAgentAdapterTest {
 		assertEquals(Strings.create("object"), RT.getIn(params, "type"));
 	}
 
-	// ========== Pure function: buildOutstandingTaskMessage ==========
+	// ========== The task boundary: TaskTools ==========
 
-	@Test
-	public void testBuildOutstandingTaskMessageNoTasks() {
-		ToolContext ctx = new ToolContext(Strings.create("agent"),
-			RequestContext.of(ALICE_DID), null, null, null, null);
-		assertNull(LLMAgentAdapter.buildOutstandingTaskMessage(ctx));
+	private static ToolCycleEngine.ToolCall completeCall(String result) {
+		return new ToolCycleEngine.ToolCall(Strings.create("c1"), TaskTools.COMPLETE,
+			Maps.of(Fields.RESULT, result), 0);
 	}
 
 	@Test
-	public void testBuildOutstandingTaskMessageEmptyTasks() {
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, Vectors.empty(), null, null, null);
-		assertNull(LLMAgentAdapter.buildOutstandingTaskMessage(ctx));
+	public void testTaskMessageNoTasks() {
+		assertNull(new ToolContext(Strings.create("agent"),
+			RequestContext.of(ALICE_DID), null, null, null, null).tasks.message());
+		assertNull(new ToolContext(Strings.create("agent"), null, Vectors.empty(), null, null, null).tasks.message());
 	}
 
 	@Test
-	public void testBuildOutstandingTaskMessageAllResolved() {
-		AVector<ACell> tasks = Vectors.of(
-			Maps.of(Fields.JOB_ID, "aaa", Fields.INPUT, "task1")
-		);
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, tasks, null, null, null);
-		ctx.recordTaskResult(Strings.create("aaa"),
-			Maps.of(Fields.STATUS, Status.COMPLETE));
-
-		assertNull(LLMAgentAdapter.buildOutstandingTaskMessage(ctx));
-	}
-
-	@Test
-	public void testBuildOutstandingTaskMessageSomeOutstanding() {
+	public void testTaskMessageOmitsResolvedTasks() {
 		AVector<ACell> tasks = Vectors.of(
 			Maps.of(Fields.JOB_ID, "aaa", Fields.INPUT, "done-task"),
-			Maps.of(Fields.JOB_ID, "bbb", Fields.INPUT, "pending-task")
-		);
+			Maps.of(Fields.JOB_ID, "bbb", Fields.INPUT, "pending-task"));
 		ToolContext ctx = new ToolContext(Strings.create("agent"), null, tasks, null, null, null);
-		ctx.recordTaskResult(Strings.create("aaa"),
-			Maps.of(Fields.STATUS, Status.COMPLETE));
+		assertTrue(ctx.tasks.outstanding());
+		assertEquals(2, ctx.tasks.tools().count(), "task tools offered while a task is outstanding");
+		String all = RT.ensureString(ctx.tasks.message().get(Strings.intern("content"))).toString();
+		assertTrue(all.contains("aaa") && all.contains("bbb") && all.contains("[Tasks assigned to you]"), all);
 
-		AMap<AString, ACell> msg = LLMAgentAdapter.buildOutstandingTaskMessage(ctx);
-		assertNotNull(msg);
+		// The first outstanding task resolves (no task id on the context); the message drops it.
+		ToolCycleEngine.ToolOutcome outcome = ctx.tasks.complete(completeCall("done"), null);
+		assertEquals("complete", outcome.terminalStatus());
+		assertEquals(Strings.create("done"), outcome.terminalValue());
+		AMap<AString, ACell> msg = ctx.tasks.message();
 		assertEquals(Strings.create("user"), msg.get(Strings.intern("role")));
-
 		String content = RT.ensureString(msg.get(Strings.intern("content"))).toString();
 		assertTrue(content.contains("bbb"), "Should mention outstanding task bbb");
 		assertFalse(content.contains("aaa"), "Should not mention resolved task aaa");
 		assertTrue(content.contains("complete_task"), "Should instruct to use complete_task");
+
+		// All resolved: nothing to render, nothing to offer.
+		ctx.tasks.complete(completeCall("also done"), null);
+		assertNull(ctx.tasks.message());
+		assertEquals(0, ctx.tasks.tools().count());
 	}
 
 	@Test
-	public void testBuildOutstandingTaskMessageAllOutstanding() {
-		AVector<ACell> tasks = Vectors.of(
-			Maps.of(Fields.JOB_ID, "aaa", Fields.INPUT, "task-one"),
-			Maps.of(Fields.JOB_ID, "bbb", Fields.INPUT, "task-two")
-		);
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, tasks, null, null, null);
-
-		AMap<AString, ACell> msg = LLMAgentAdapter.buildOutstandingTaskMessage(ctx);
-		assertNotNull(msg);
-		String content = RT.ensureString(msg.get(Strings.intern("content"))).toString();
-		assertTrue(content.contains("aaa"));
-		assertTrue(content.contains("bbb"));
-		assertTrue(content.contains("[Tasks assigned to you]"));
-	}
-
-	// ========== ToolContext: recordTaskResult ==========
-
-	@Test
-	public void testToolContextRecordTaskResult() {
+	public void testTaskResolutionPromotesIntoTheOutput() {
+		AVector<ACell> tasks = Vectors.of(Maps.of(Fields.JOB_ID, "job1", Fields.INPUT, "task"));
 		ToolContext ctx = new ToolContext(Strings.create("agent"),
-			RequestContext.of(ALICE_DID), null, null, null, null);
-		assertNull(ctx.taskResults);
+			RequestContext.of(ALICE_DID), tasks, null, null, null);
+		assertFalse(ctx.tasks.resolved());
+		AMap<AString, ACell> chat = Maps.of(Fields.RESPONSE, "Done.");
+		assertSame(chat, ctx.tasks.promote(chat), "nothing resolved: the output stands");
 
-		ctx.recordTaskResult(Strings.create("job1"),
-			Maps.of(Fields.STATUS, Status.COMPLETE, Fields.OUTPUT, "result1"));
-		assertNotNull(ctx.taskResults);
-		assertEquals(1, ctx.taskResults.count());
+		ctx.tasks.complete(completeCall("result1"), null);
+		assertTrue(ctx.tasks.resolved());
+		assertEquals(Strings.create("result1"), RT.getIn(ctx.tasks.results(), "job1", Fields.OUTPUT));
+		assertEquals(Strings.create("result1"), ctx.tasks.promote(chat).get(Fields.RESPONSE),
+			"the structured result is the authoritative answer");
 
-		ctx.recordTaskResult(Strings.create("job2"),
-			Maps.of(Fields.STATUS, Status.FAILED, Fields.ERROR, "reason"));
-		assertEquals(2, ctx.taskResults.count());
-
-		// Verify contents
-		assertEquals(Status.COMPLETE, RT.getIn(ctx.taskResults, "job1", Fields.STATUS));
-		assertEquals(Status.FAILED, RT.getIn(ctx.taskResults, "job2", Fields.STATUS));
+		// A failure replaces the response with the error.
+		ToolContext failing = new ToolContext(Strings.create("agent"),
+			RequestContext.of(ALICE_DID), tasks, null, null, null);
+		failing.tasks.fail(new ToolCycleEngine.ToolCall(Strings.create("f1"), TaskTools.FAIL,
+			Maps.of(Fields.ERROR, "reason"), 0), null);
+		AMap<AString, ACell> failed = failing.tasks.promote(chat);
+		assertEquals(Strings.create("reason"), failed.get(Fields.ERROR));
+		assertNull(failed.get(Fields.RESPONSE));
 	}
 
 	// ========== Integration: buildConfigTools with engine ==========

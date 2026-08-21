@@ -2,7 +2,6 @@ package covia.adapter.agent;
 
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.TimeUnit;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -11,11 +10,9 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
-import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
-import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.AgentAdapter;
@@ -23,7 +20,6 @@ import covia.adapter.agent.ContextInspectable.Inspection;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
 import covia.grid.Job;
-import covia.grid.Status;
 import covia.venue.AgentState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -93,48 +89,8 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 	// K_CONTEXT, K_CAPS, K_TOOL_CALL_TIMEOUT_MS).
 	private static final AString K_DEFAULT_TOOLS   = Strings.intern("defaultTools");
 
-	// Built-in tool names (only task tools remain as built-ins)
-	private static final String TOOL_COMPLETE_TASK = "complete_task";
-	private static final String TOOL_FAIL_TASK     = "fail_task";
-
 	// ========== Default tool definitions ==========
 	// MCP-style: {name, description, parameters: {type: "object", properties: {...}, required: [...]}}
-
-	private static final AMap<AString, ACell> TOOL_DEF_COMPLETE_TASK = Maps.of(
-		K_NAME, Strings.create(TOOL_COMPLETE_TASK),
-		K_DESCRIPTION, Strings.create(
-			"Deliver the final result for the in-scope task and end it. "
-			+ "This is TERMINAL: the caller receives `result` and nothing else. "
-			+ "For a long prose answer, write the complete answer as your message text "
-			+ "and call complete_task with no arguments in the same turn — the text is "
-			+ "delivered as the result. Otherwise pass the answer in `result`. "
-			+ "Only call this once you have the actual answer to deliver. "
-			+ "The agent and task are determined from the current request context — you do not pass an id."),
-		K_PARAMETERS, Maps.of(
-			K_TYPE, Strings.create("object"),
-			K_PROPERTIES, Maps.of(
-				Fields.RESULT, Maps.of(
-					K_DESCRIPTION, Strings.create("The result to return to the requester. Any JSON value — string, object, array, etc. May be omitted only when this turn's message text is the complete answer."))
-			)
-		)
-	);
-
-	private static final AMap<AString, ACell> TOOL_DEF_FAIL_TASK = Maps.of(
-		K_NAME, Strings.create(TOOL_FAIL_TASK),
-		K_DESCRIPTION, Strings.create(
-			"Reject or fail the in-scope task. Call this when you cannot fulfil the request — "
-			+ "e.g. the task is outside your capabilities or the input is invalid. "
-			+ "The agent and task are determined from the current request context — you do not pass an id."),
-		K_PARAMETERS, Maps.of(
-			K_TYPE, Strings.create("object"),
-			K_PROPERTIES, Maps.of(
-				Fields.ERROR, Maps.of(
-					K_TYPE, Strings.create("string"),
-					K_DESCRIPTION, Strings.create("Human-readable explanation of why the task cannot be completed"))
-			),
-			K_REQUIRED, Vectors.of(Strings.create("error"))
-		)
-	);
 
 	// Built-in context tool names
 	private static final String TOOL_CONTEXT_LOAD   = "context_load";
@@ -143,9 +99,12 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 
 	/** Harness pseudo-tools this runtime provides — intercepted by the adapter,
 	 *  never dispatched as operations (see {@link AbstractLLMAdapter#dispatchTool}). */
-	static final java.util.Set<String> HARNESS_TOOL_NAMES = java.util.Set.of(
-		TOOL_COMPLETE_TASK, TOOL_FAIL_TASK, TOOL_CONTEXT_LOAD, TOOL_CONTEXT_UNLOAD,
-		TOOL_SKILL_LOAD);
+	static final java.util.Set<String> HARNESS_TOOL_NAMES;
+	static {
+		java.util.Set<String> names = new java.util.HashSet<>(TaskTools.NAMES);
+		names.addAll(java.util.List.of(TOOL_CONTEXT_LOAD, TOOL_CONTEXT_UNLOAD, TOOL_SKILL_LOAD));
+		HARNESS_TOOL_NAMES = java.util.Set.copyOf(names);
+	}
 
 	private static final AMap<AString, ACell> TOOL_DEF_CONTEXT_LOAD = Maps.of(
 		K_NAME, Strings.create(TOOL_CONTEXT_LOAD),
@@ -185,12 +144,6 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 			+ "path. The skill's tools join your palette from your next step."),
 		K_PARAMETERS, SKILL_LOAD_PARAMS);
 
-	/** Task tools only available when there are outstanding tasks */
-	private static final AVector<ACell> TASK_TOOLS = (AVector<ACell>) Vectors.of(
-		(ACell) TOOL_DEF_COMPLETE_TASK,
-		(ACell) TOOL_DEF_FAIL_TASK
-	);
-
 	@Override
 	public String getName() {
 		return "llmagent";
@@ -222,9 +175,6 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 	 *  context the harness tools run against, and the cycle's fixed tools. */
 	private record Preview(ContextAssembler.Spec spec, ToolContext toolCtx, AVector<ACell> fixedTools) {}
 
-	/** Stands in for the task job id a live cycle carries. */
-	private static final AString PREVIEW_JOB_ID = Strings.intern("preview");
-
 	/**
 	 * The transition a call with these inputs would start: the session's
 	 * conversation, the inbox, pending results, and a task rendered exactly as
@@ -249,12 +199,12 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		// The task renders through the tool loop's own renderer — a preview
 		// job id stands in for the one a real task would carry.
 		AVector<ACell> tasks = (in.task() != null)
-			? Vectors.of((ACell) Maps.of(Fields.JOB_ID, PREVIEW_JOB_ID, Fields.INPUT, in.task()))
+			? Vectors.of((ACell) Maps.of(Fields.JOB_ID, TaskTools.PREVIEW_JOB_ID, Fields.INPUT, in.task()))
 			: null;
 		ToolContext toolCtx = toolContext(config, capsCtx, tasks, in.pending(), palette,
-			configLoads, sessionTier, in.session() != null, fixedTools);
-		ACell task = buildOutstandingTaskMessage(toolCtx);
-		AVector<ACell> tools = (task != null) ? (AVector<ACell>) TASK_TOOLS.concat(fixedTools) : fixedTools;
+			configLoads, sessionTier, in.session() != null, fixedTools, true);
+		ACell task = toolCtx.tasks.message();
+		AVector<ACell> tools = (AVector<ACell>) toolCtx.tasks.tools().concat(fixedTools);
 		Loads.Snapshot loads = toolCtx.refreshLoadSnapshot(engine, profile.labels());
 		boolean hasInput = (in.messages() != null && in.messages().count() > 0)
 			|| (in.pending() != null && in.pending().count() > 0)
@@ -279,7 +229,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 	/**
 	 * One iteration of the tool loop on the supplied reply: text-as-control
 	 * recognised as live, the batch dispatched through the live registry —
-	 * except that resolving a task is reported, never done — and the next
+	 * a task resolution judged and recorded but never reaching a job — and the next
 	 * prompt rebuilt as the loop rebuilds it: loads re-read, a resolved task
 	 * gone from the tail, this iteration's turns in band.
 	 */
@@ -302,61 +252,18 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		toolCtx.turnText = RT.ensureString(reply.get(K_CONTENT));
 		StepSink sink = new StepSink();
 		ToolCycleEngine.BatchResult batch = ToolCycleEngine.executeBatch(
-			calls, 0, previewRegistry(), toolCtx, sink, log);
+			calls, 0, toolRegistry(), toolCtx, sink, log);
 		AVector<ACell> turns = Vectors.of((ACell) reply).concat(sink.turns());
 
 		Loads.Snapshot loads = toolCtx.refreshLoadSnapshot(engine, p.spec().labels());
-		ACell task = buildOutstandingTaskMessage(toolCtx);
+		ACell task = toolCtx.tasks.message();
 		AVector<ACell> tools = ToolPalette.merge(
-			(task != null) ? (AVector<ACell>) TASK_TOOLS.concat(p.fixedTools()) : p.fixedTools(),
-			loads.tools());
+			(AVector<ACell>) toolCtx.tasks.tools().concat(p.fixedTools()), loads.tools());
 		ContextAssembler.Spec next = p.spec()
 			.withLoads(loads, tools, ContextChain.effective(toolCtx.outerLoads, toolCtx.loads))
 			.withToolLoop(turns)
 			.withTask(task);
 		return new Step(reply, turns, sink, batch.terminalStatus(), batch.terminalValue(), null, next).report();
-	}
-
-	/**
-	 * The live registry with one difference: {@code complete_task} and
-	 * {@code fail_task} judge the completion exactly as live but never touch
-	 * a task job; the resolution is the
-	 * batch's terminal outcome, and the task drops out of the next prompt.
-	 */
-	private ToolCycleEngine.Registry<ToolContext> previewRegistry() {
-		return toolRegistry()
-			.register(TOOL_COMPLETE_TASK, (call, toolCtx) -> previewTaskResolution(call, toolCtx, false))
-			.register(TOOL_FAIL_TASK, (call, toolCtx) -> previewTaskResolution(call, toolCtx, true));
-	}
-
-	private static ToolCycleEngine.ToolOutcome previewTaskResolution(
-			ToolCycleEngine.ToolCall call, ToolContext toolCtx, boolean failed) {
-		String tool = failed ? TOOL_FAIL_TASK : TOOL_COMPLETE_TASK;
-		AString jobId = outstandingTaskId(toolCtx);
-		if (jobId == null) return ToolCycleEngine.ToolOutcome.result(Strings.create(
-			"Error: no task in scope — " + tool + " resolves the task this cycle was started for"));
-		Completion completion = failed
-			? Completion.of(RT.getIn(call.input(), Fields.ERROR), toolCtx.turnText, null, tool)
-			: Completion.of(RT.getIn(call.input(), Fields.RESULT), toolCtx.turnText, strictTaskSchema(toolCtx), tool);
-		if (!completion.accepted()) return ToolCycleEngine.ToolOutcome.result(completion.toolError());
-		ACell value = completion.value();
-		toolCtx.recordTaskResult(jobId, failed
-			? Maps.of(Fields.STATUS, Status.FAILED, Fields.ERROR, value)
-			: Maps.of(Fields.STATUS, Status.COMPLETE, Fields.OUTPUT, value));
-		return ToolCycleEngine.ToolOutcome.terminal(
-			Maps.of(Fields.STATUS, failed ? Status.FAILED : Status.COMPLETE), tool, value);
-	}
-
-	/** The first task not yet resolved this cycle, or null. */
-	private static AString outstandingTaskId(ToolContext toolCtx) {
-		if (toolCtx.tasks == null) return null;
-		for (long i = 0; i < toolCtx.tasks.count(); i++) {
-			AString jobId = RT.ensureString(RT.getIn(toolCtx.tasks.get(i), Fields.JOB_ID));
-			if (jobId != null && (toolCtx.taskResults == null || toolCtx.taskResults.get(jobId) == null)) {
-				return jobId;
-			}
-		}
-		return null;
 	}
 
 	/**
@@ -419,7 +326,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		ModelProfile profile = modelProfileFor(config, ctx);
 
 		ToolContext toolCtx = toolContext(config, capsCtx, tasks, pending, palette,
-			configLoads, sessionTier, sessionInScope, fixedTools);
+			configLoads, sessionTier, sessionInScope, fixedTools, false);
 
 		// Everything the assembler needs for this cycle; the loop supplies what
 		// changes per inference — loads, this cycle's turns, the outstanding task.
@@ -486,22 +393,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 			output = output.assoc(Fields.LOADS, toolCtx.getLoads());
 		}
 
-		if (toolCtx.taskResults != null && toolCtx.taskResults.count() > 0) {
-			// One-task-per-cycle: take the single entry
-			var entry = toolCtx.taskResults.entrySet().iterator().next();
-			ACell taskResult = entry.getValue();
-			AString status = RT.ensureString(RT.getIn(taskResult, Fields.STATUS));
-			if (Status.FAILED.equals(status)) {
-				ACell err = RT.getIn(taskResult, Fields.ERROR);
-				if (err != null) output = output.assoc(Fields.ERROR, err)
-					.dissoc(Fields.RESPONSE);
-			} else {
-				ACell taskOutput = RT.getIn(taskResult, Fields.OUTPUT);
-				if (taskOutput != null) {
-					output = output.assoc(Fields.RESPONSE, taskOutput);
-				}
-			}
-		}
+		output = toolCtx.tasks.promote(output);
 
 		// The cycle record and its token totals (#217: measured only; absent
 		// means the provider reported nothing, never zero).
@@ -516,12 +408,14 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 	 * the SESSION tier (the innermost writable tier for this runtime); the
 	 * agent tier rides along read-only for unload masking decisions.
 	 */
-	private static ToolContext toolContext(AMap<AString, ACell> config, RequestContext capsCtx,
+	private ToolContext toolContext(AMap<AString, ACell> config, RequestContext capsCtx,
 			AVector<ACell> tasks, AVector<ACell> pending, ToolPalette.Palette palette,
 			AMap<AString, ACell> configLoads, AMap<AString, ACell> sessionTier,
-			boolean sessionInScope, AVector<ACell> fixedTools) {
-		ToolContext toolCtx = new ToolContext(capsCtx.getAgentId(), capsCtx, tasks, pending,
-			palette.routes(), sessionTier, resolveToolCallTimeoutMs(config));
+			boolean sessionInScope, AVector<ACell> fixedTools, boolean preview) {
+		long timeoutMs = resolveToolCallTimeoutMs(config);
+		ToolContext toolCtx = new ToolContext(capsCtx.getAgentId(), capsCtx,
+			new TaskTools.Tasks(engine, capsCtx, tasks, timeoutMs, preview), pending,
+			palette.routes(), sessionTier, timeoutMs);
 		toolCtx.outerLoads = configLoads;
 		toolCtx.sessionInScope = sessionInScope;
 		toolCtx.skillSources = Skills.sourcesOf(config);
@@ -578,10 +472,9 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 			AMap<AString, ACell> effectiveLoads =
 				ContextChain.effective(toolCtx.outerLoads, toolCtx.loads);
 			Loads.Snapshot loads = toolCtx.refreshLoadSnapshot(engine, spec.labels());
-			ACell taskMessage = buildOutstandingTaskMessage(toolCtx);
+			ACell taskMessage = toolCtx.tasks.message();
 			AVector<ACell> tools = ToolPalette.merge(
-				(taskMessage != null) ? (AVector<ACell>) TASK_TOOLS.concat(fixedTools) : fixedTools,
-				loads.tools());
+				(AVector<ACell>) toolCtx.tasks.tools().concat(fixedTools), loads.tools());
 			ContextAssembler.Prompt prompt = ContextAssembler.assemble(
 				spec.withLoads(loads, tools, effectiveLoads).withToolLoop(messages).withTask(taskMessage));
 
@@ -591,7 +484,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 			if (!hasCalls && taskMessage != null) {
 				AMap<AString, ACell> rewritten = ToolCycleEngine.recogniseTextualControlCall(
 					assistant, iteration,
-					java.util.Set.of(TOOL_COMPLETE_TASK, TOOL_FAIL_TASK));
+					TaskTools.NAMES);
 				if (rewritten != null) {
 					log.warn("Assistant emitted a harness control tool as text — honouring it (#215)");
 					assistant = rewritten;
@@ -633,22 +526,8 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 	 */
 	private ToolCycleEngine.Registry<ToolContext> toolRegistry() {
 		return new ToolCycleEngine.Registry<ToolContext>()
-			.register(TOOL_COMPLETE_TASK, (call, toolCtx) -> {
-				long before = toolCtx.taskResultCount();
-				ACell result = handleCompleteTask(call.input(), toolCtx);
-				return (toolCtx.taskResultCount() > before)
-					? ToolCycleEngine.ToolOutcome.terminal(result, TOOL_COMPLETE_TASK,
-						RT.getIn(call.input(), Fields.RESULT))
-					: ToolCycleEngine.ToolOutcome.result(result);
-			})
-			.register(TOOL_FAIL_TASK, (call, toolCtx) -> {
-				long before = toolCtx.taskResultCount();
-				ACell result = handleFailTask(call.input(), toolCtx);
-				return (toolCtx.taskResultCount() > before)
-					? ToolCycleEngine.ToolOutcome.terminal(result, TOOL_FAIL_TASK,
-						RT.getIn(call.input(), Fields.ERROR))
-					: ToolCycleEngine.ToolOutcome.result(result);
-			})
+			.register(TaskTools.COMPLETE, (call, toolCtx) -> toolCtx.tasks.complete(call, toolCtx.turnText))
+			.register(TaskTools.FAIL, (call, toolCtx) -> toolCtx.tasks.fail(call, toolCtx.turnText))
 			.register(TOOL_CONTEXT_LOAD, (call, toolCtx) ->
 				ToolCycleEngine.ToolOutcome.result(handleContextLoad(call.input(), toolCtx)))
 			.register(TOOL_CONTEXT_UNLOAD, (call, toolCtx) ->
@@ -661,110 +540,6 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 	}
 
 	// ========== Built-in tool execution ==========
-
-	/**
-	 * Completes the in-scope task with a result by invoking the
-	 * {@code agent:completeTask} venue op. The op reads {@code agentId} and
-	 * {@code taskId} from the {@link RequestContext} (populated by the framework
-	 * for every transition cycle), so the LLM only supplies {@code result}.
-	 *
-	 * <p>The venue op completes the caller's pending task Job and removes the
-	 * task entry from the agent's task Index. We also record into
-	 * {@link ToolContext#taskResults} so the surrounding {@code processChat}
-	 * can promote the structured task output into the transition's
-	 * {@code response} field for the timeline (otherwise the timeline
-	 * {@code result} would just be the empty content of the assistant's
-	 * tool-call message).</p>
-	 */
-	private ACell handleCompleteTask(ACell input, ToolContext toolCtx) {
-		Completion completion = Completion.of(RT.getIn(input, Fields.RESULT), toolCtx.turnText,
-			strictTaskSchema(toolCtx), TOOL_COMPLETE_TASK);
-		if (!completion.accepted()) return completion.toolError();
-		ACell result = completion.value();
-		AMap<AString, ACell> opInput = Maps.of(Fields.RESULT, result);
-		ACell opResult;
-		try {
-			opResult = engine.jobs().invokeInternal(
-				"v/ops/agent/complete-task", opInput, toolCtx.ctx)
-				.get(toolCtx.toolCallTimeoutMs, TimeUnit.MILLISECONDS);
-		} catch (Exception e) {
-			return Strings.create("Error: " + unwrap(e).getMessage());
-		}
-
-		// Record locally so processChat can promote the structured output
-		// into the transition's response field for the timeline.
-		Blob taskId = toolCtx.ctx.getTaskId();
-		if (taskId != null) {
-			AString taskIdStr = Strings.create(taskId.toHexString());
-			toolCtx.recordTaskResult(taskIdStr,
-				Maps.of(Fields.STATUS, Status.COMPLETE, Fields.OUTPUT, result));
-		}
-
-		return (opResult != null) ? opResult : Maps.empty();
-	}
-
-	/** The contract in force for a task completion: the requester's response
-	 *  schema when it asked for strict enforcement (#376); otherwise none — a
-	 *  non-strict schema is guidance, never judged here. */
-	private static AMap<AString, ACell> strictTaskSchema(ToolContext toolCtx) {
-		AMap<AString, ACell> task = inScopeTask(toolCtx);
-		return (task != null && CVMBool.TRUE.equals(task.get(Fields.STRICT)))
-			? RT.ensureMap(task.get(Fields.RESPONSE_SCHEMA)) : null;
-	}
-
-	/** The wire-shape task entry matching the request context's in-scope task
-	 *  id, or null. Task entries carry {jobId, input, caller?, responseSchema?,
-	 *  strict?} (AgentAdapter.formatTask). */
-	@SuppressWarnings("unchecked")
-	private static AMap<AString, ACell> inScopeTask(ToolContext toolCtx) {
-		Blob taskId = toolCtx.ctx.getTaskId();
-		if (taskId == null || toolCtx.tasks == null) return null;
-		String hex = taskId.toHexString();
-		for (long i = 0; i < toolCtx.tasks.count(); i++) {
-			ACell t = toolCtx.tasks.get(i);
-			if (!(t instanceof AMap)) continue;
-			AString jobId = RT.ensureString(RT.getIn(t, Fields.JOB_ID));
-			if (jobId != null && hex.equals(jobId.toString())) return (AMap<AString, ACell>) t;
-		}
-		return null;
-	}
-
-	/**
-	 * Fails the in-scope task by invoking the {@code agent:failTask} venue op.
-	 * The op reads {@code agentId} and {@code taskId} from the
-	 * {@link RequestContext}; the LLM supplies an {@code error} message.
-	 *
-	 * <p>As with {@link #handleCompleteTask}, we record locally into
-	 * {@link ToolContext#taskResults} so {@code processChat} can promote
-	 * the error into the transition's {@code error} field for the timeline.
-	 * The venue op completes the pending Job and removes the task entry —
-	 * the framework reads completion state directly from the now-finished
-	 * Job, so no separate signal is required.</p>
-	 */
-	private ACell handleFailTask(ACell input, ToolContext toolCtx) {
-		Completion completion = Completion.of(RT.getIn(input, Fields.ERROR), toolCtx.turnText, null, TOOL_FAIL_TASK);
-		if (!completion.accepted()) return completion.toolError();
-		ACell error = completion.value();
-
-		AMap<AString, ACell> opInput = Maps.of(Fields.ERROR, error);
-		ACell opResult;
-		try {
-			opResult = engine.jobs().invokeInternal(
-				"v/ops/agent/fail-task", opInput, toolCtx.ctx)
-				.get(toolCtx.toolCallTimeoutMs, TimeUnit.MILLISECONDS);
-		} catch (Exception e) {
-			return Strings.create("Error: " + unwrap(e).getMessage());
-		}
-
-		Blob taskId = toolCtx.ctx.getTaskId();
-		if (taskId != null) {
-			AString taskIdStr = Strings.create(taskId.toHexString());
-			toolCtx.recordTaskResult(taskIdStr,
-				Maps.of(Fields.STATUS, Status.FAILED, Fields.ERROR, error));
-		}
-
-		return (opResult != null) ? opResult : Maps.empty();
-	}
 
 	// ========== Built-in context tools ==========
 
@@ -806,53 +581,9 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 			toolCtx.skillSources);
 	}
 
-	/**
-	 * Builds a user message listing only outstanding (unresolved) tasks.
-	 * Returns null if no tasks remain, signalling the loop to omit task tools.
-	 */
-	static AMap<AString, ACell> buildOutstandingTaskMessage(ToolContext toolCtx) {
-		if (toolCtx.tasks == null || toolCtx.tasks.count() == 0) return null;
-		StringBuilder sb = new StringBuilder();
-		int outstanding = 0;
-		for (long i = 0; i < toolCtx.tasks.count(); i++) {
-			ACell task = toolCtx.tasks.get(i);
-			AString jobId = RT.ensureString(RT.getIn(task, Fields.JOB_ID));
-			if (jobId != null && toolCtx.taskResults != null && toolCtx.taskResults.get(jobId) != null) {
-				continue; // already resolved
-			}
-			if (outstanding == 0) sb.append("[Tasks assigned to you]\n");
-			outstanding++;
-			ACell taskInput = RT.getIn(task, Fields.INPUT);
-			ACell caller = RT.getIn(task, Fields.CALLER);
-			sb.append("- Task ").append(jobId);
-			if (caller != null) sb.append(" (from: ").append(caller).append(")");
-			sb.append(": ").append(renderTaskText(taskInput)).append("\n");
-			// The requester's declared result shape (#376) — advisory unless
-			// the requester opted into enforcement.
-			ACell schema = RT.getIn(task, Fields.RESPONSE_SCHEMA);
-			if (schema != null) {
-				boolean strict = CVMBool.TRUE.equals(RT.getIn(task, Fields.STRICT));
-				sb.append("  Response schema").append(strict
-						? " (enforced — complete_task results must conform)"
-						: " (guidance)")
-					.append(": ").append(convex.core.util.JSON.print(schema)).append("\n");
-			}
-		}
-		if (outstanding == 0) return null;
-		sb.append("Use complete_task or fail_task to resolve each task.");
-		return Maps.of(K_ROLE, ROLE_USER, K_CONTENT, Strings.create(sb.toString()));
-	}
-
-	/**
-	 * Renders a task input for the model: strings verbatim, anything else as
-	 * JSON — never a CVM cell's EDN-style {@code toString()}, which models
-	 * misread as noise (#215: qwen2.5 answered "no task details provided" to
-	 * an EDN-wrapped task it handled fine as plain text).
-	 */
+	/** @see TaskTools#renderTaskText */
 	static String renderTaskText(ACell input) {
-		if (input == null) return "";
-		if (input instanceof AString s) return s.toString();
-		return convex.core.util.JSON.print(input).toString();
+		return TaskTools.renderTaskText(input);
 	}
 
 	/**
@@ -873,7 +604,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 	 */
 	static AMap<AString, ACell> recogniseTextualControlCall(ACell assistantMsg, int iteration) {
 		return ToolCycleEngine.recogniseTextualControlCall(assistantMsg, iteration,
-			java.util.Set.of(TOOL_COMPLETE_TASK, TOOL_FAIL_TASK));
+			TaskTools.NAMES);
 	}
 
 	static AString getConfigValue(AMap<AString, ACell> config, AString key, AString defaultValue) {
@@ -913,11 +644,10 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 	static class ToolContext {
 		final AString agentId;
 		final RequestContext ctx;
-		final AVector<ACell> tasks;
+		final TaskTools.Tasks tasks;
 		final AVector<ACell> pending;
 		final Map<String, AString> configToolMap;
 		final long toolCallTimeoutMs;
-		AMap<AString, ACell> taskResults;
 		/** The innermost writable tier's loads (the session tier, #142). */
 		AMap<AString, ACell> loads;
 		/** Effective loads of the OUTER tiers (agent config.loads) — read-only environment. */
@@ -964,10 +694,12 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 
 		ToolContext(AString agentId, RequestContext ctx, AVector<ACell> tasks, AVector<ACell> pending,
 				Map<String, AString> configToolMap, AMap<AString, ACell> loads) {
-			this(agentId, ctx, tasks, pending, configToolMap, loads, DEFAULT_TOOL_CALL_TIMEOUT_MS);
+			// No live task boundary: the tasks resolve in preview, never reaching a job.
+			this(agentId, ctx, new TaskTools.Tasks(null, ctx, tasks, DEFAULT_TOOL_CALL_TIMEOUT_MS, true),
+				pending, configToolMap, loads, DEFAULT_TOOL_CALL_TIMEOUT_MS);
 		}
 
-		ToolContext(AString agentId, RequestContext ctx, AVector<ACell> tasks, AVector<ACell> pending,
+		ToolContext(AString agentId, RequestContext ctx, TaskTools.Tasks tasks, AVector<ACell> pending,
 				Map<String, AString> configToolMap, AMap<AString, ACell> loads,
 				long toolCallTimeoutMs) {
 			this.agentId = agentId;
@@ -979,15 +711,6 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 			this.configToolMap = (configToolMap != null) ? configToolMap : new java.util.HashMap<>();
 			this.loads = (loads != null) ? loads : Maps.empty();
 			this.toolCallTimeoutMs = toolCallTimeoutMs;
-		}
-
-		void recordTaskResult(AString jobId, AMap<AString, ACell> result) {
-			if (taskResults == null) taskResults = Maps.empty();
-			taskResults = taskResults.assoc(jobId, result);
-		}
-
-		long taskResultCount() {
-			return (taskResults != null) ? taskResults.count() : 0;
 		}
 
 		void addLoad(AString path, AMap<AString, ACell> meta) {

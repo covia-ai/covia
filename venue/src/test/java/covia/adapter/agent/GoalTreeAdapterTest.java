@@ -264,7 +264,7 @@ public class GoalTreeAdapterTest {
 					Maps.of("name", "complete", "arguments", Maps.of("result", "done"))))),
 			ALICE).awaitResult(5000));
 		assertEquals(CVMBool.TRUE, done.get(Strings.intern("done")));
-		assertEquals("complete", RT.getIn(done, "terminal", "name").toString());
+		assertEquals("complete", RT.getIn(done, "terminal", "status").toString());
 		assertEquals(Strings.create("done"), RT.getIn(done, "terminal", "value", "result"));
 		assertNull(done.get(Strings.intern("next")));
 		AVector<ACell> turns = RT.ensureVector(done.get(Fields.TURNS));
@@ -279,6 +279,45 @@ public class GoalTreeAdapterTest {
 		String result = RT.getIn(RT.ensureVector(sub.get(Strings.intern("calls"))).get(0), "result").toString();
 		assertTrue(result.contains("not executed"), result);
 		assertEquals(CVMBool.FALSE, sub.get(Strings.intern("done")));
+	}
+
+	/** The framework's task tools on goaltree: a task is rendered last with
+	 *  complete_task / fail_task offered, and resolving it through the tool
+	 *  reaches the caller's job at tool time and ends the frame — an
+	 *  llmagent configuration runs unchanged. */
+	@Test
+	public void testTaskToolsResolveTheTaskOnGoaltree() {
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "task-tools-goal",
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/goaltree/chat",
+					"llmOperation", "v/test/ops/taskllm")),
+			ALICE).awaitResult(5000);
+
+		// The task renders last, with the task tools offered — as every runtime renders it.
+		AMap<AString, ACell> context = RT.ensureMap(engine.jobs().invokeOperation("v/ops/agent/context",
+			Maps.of(Fields.AGENT_ID, "task-tools-goal", "task", "Summarise w/report"),
+			ALICE).awaitResult(5000));
+		AVector<ACell> messages = RT.ensureVector(context.get(Fields.MESSAGES));
+		String last = RT.getIn(messages.get(messages.count() - 1), "content").toString();
+		assertTrue(last.startsWith("[Tasks assigned to you]") && last.contains("Summarise w/report"), last);
+		assertTrue(context.get(Fields.TOOLS).toString().contains("complete_task"), "task tools offered");
+
+		// taskllm reads the task message and calls complete_task: the caller's
+		// job completes with the delivered result, the frame ends.
+		ACell result = engine.jobs().invokeOperation("v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, "task-tools-goal", Fields.MESSAGE, "do the thing", "timeout", 15000L),
+			ALICE).awaitResult(20000);
+		assertNotNull(result, "the task's result reaches the requester");
+		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("task-tools-goal");
+		TestEngine.awaitTimelineCount(agent, 1, 10000);
+		AMap<AString, ACell> entry = RT.ensureMap(agent.getTimeline().get(0));
+		AVector<ACell> inferences = RT.ensureVector(entry.get(Fields.INFERENCES));
+		assertEquals(1, inferences.count(), "complete_task is terminal: no closing inference: " + inferences);
+		ACell call = RT.ensureVector(RT.getIn(inferences.get(0), Fields.CALLS)).get(0);
+		assertEquals("complete_task", RT.getIn(call, "name").toString());
+		assertNull(RT.getIn(call, "isError"), "resolved: " + call);
+		assertEquals(0, agent.getTasks().count(), "the task left the queue");
 	}
 
 	/** A subgoal's exchange is recorded under the call that produced it (#392):

@@ -137,8 +137,8 @@ final class ToolCycleEngine {
 			// batch, even though later side effects must be fenced after terminal.
 			if (terminalStatus != null) {
 				sink.append(stamped(AbstractLLMAdapter.toolResultMessage(id, name, Strings.create(
-					"Error: not executed because " + terminalStatus
-					+ " was already requested in this tool batch."))));
+					"Error: not executed — an earlier call in this tool batch was terminal ("
+					+ terminalStatus + ")."))));
 				continue;
 			}
 

@@ -327,7 +327,7 @@ The framework around the transition:
    - Append adapter-emitted non-terminal `turns`, if any, to `c/history`
    - If return value non-null → append one terminal turn to `c/history`
    - If chat picked: complete chat Job with return value (yield only if return is null — rare)
-   - If task picked: completed iff `agent:complete_task` / `agent:fail_task` was invoked during transition; otherwise yield, apply falloff (§6.3)
+   - If task picked: completed iff `agent:complete_task` / `agent:fail_task` was invoked during transition; otherwise yield, apply falloff (§6.3). (goaltree additionally completes a still-open task when its root frame completes — there, a reply is the answer; llmagent yields.)
    - If message picked: no completion concept (return value already emitted to history)
 7. On adapter throw → if task/chat picked, Job → FAILED with *technical* error (distinct from `fail_task` semantic failure)
 8. Returns the sessionId in the response envelope (always)

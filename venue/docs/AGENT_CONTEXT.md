@@ -309,7 +309,7 @@ One line, changing daily, taken from the Spec's clock — never from the system 
 Configured tools that did not resolve this cycle — reported so the agent adapts rather than calling into a void. Resolution is live, so a fixed path or restored grant makes the tool available on the next cycle with no recreate.
 
 ### 5.13 Outstanding task
-Present only when the agent has a task it must complete or fail. A `user` message rendered last on every inference — after the tool-loop messages and after the notices — so it is the thing nearest the reply, and never baked into history: the model sees only tasks still outstanding. For goaltree this is the active frame's **goal** — the `subgoal` description — rendered last for the same reason, and therefore never persisted as a turn or re-appended after compaction.
+Present only when the agent has a task it must complete or fail. A `user` message rendered last on every inference — after the tool-loop messages and after the notices — so it is the thing nearest the reply, and never baked into history: the model sees only tasks still outstanding. The same on every runtime, with `complete_task` / `fail_task` offered only while it is present — the framework's task boundary (`TaskTools`). A goal-tree frame's *goal* is its opening turn, not this slot (§9.1).
 
 ---
 
@@ -419,7 +419,7 @@ The Spec is the whole interface between a runtime and the assembler. Every runti
 | `pending` | Results that arrived for this cycle | Job results | Drained into the active frame's conversation (GOAL_TREE.md) |
 | `input` | What drives this cycle | Inbox messages | — (none) |
 | `toolLoop` | Messages accumulated within this cycle | — | — |
-| `task` | What must be completed or failed, rendered last (§5.13) | The open task, if any | The active frame's goal |
+| `task` | What must be completed or failed, rendered last (§5.13) | The open task, if any | The open task, if any (root frame) |
 | `unavailable` | Configured tools the palette could not resolve | — | — |
 | `now` | The clock | — | — |
 
