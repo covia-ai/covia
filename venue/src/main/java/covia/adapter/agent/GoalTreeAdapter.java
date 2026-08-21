@@ -18,6 +18,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.json.schema.JsonSchema;
+import covia.adapter.agent.ContextInspectable.Inspection;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.venue.AgentState;
@@ -328,12 +329,25 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 
 	/** Session-aware variant: when {@code session} is non-null, the session's
 	 *  root frame is rendered exactly as the live driver renders it (#211). */
-	@SuppressWarnings("unchecked")
 	public AMap<AString, ACell> buildFirstIterationL3Input(
 			AMap<AString, ACell> recordConfig, ACell state, ACell task,
 			AMap<AString, ACell> session, RequestContext ctx) {
-		// --- same as processGoal ---
-		AMap<AString, ACell> config = recordConfig;
+		ContextAssembler.Spec spec = inspectionSpec(
+			new Inspection(recordConfig, state, session, null, null, task), ctx);
+		return ContextAssembler.assemble(spec).toL3Input(spec.config());
+	}
+
+	/**
+	 * The Spec the first iteration of a transition with these inputs would
+	 * assemble: typed outputs resolved, the root frame with this cycle's inbox
+	 * appended as turns (as {@code processGoal} persists them), and a task
+	 * synthesised into the goal the agent would see. Pending results arrive
+	 * in this runtime as session turns, so none are rendered separately.
+	 */
+	@SuppressWarnings("unchecked")
+	@Override
+	protected ContextAssembler.Spec inspectionSpec(Inspection in, RequestContext ctx) {
+		AMap<AString, ACell> config = in.config();
 		AMap<AString, ACell> outputs = resolveOutputs(config);
 		AMap<AString, ACell> completeSchema = outputsCompleteSchema(outputs);
 		AMap<AString, ACell> l3Config = config;
@@ -353,12 +367,12 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// root frame's tier when a session carries frames), so the inspected
 		// skills index carries the right (loaded) markers.
 		AMap<AString, ACell> configLoads = ContextChain.declaredLoads(
-			RT.getIn(recordConfig, Fields.LOADS), "config.loads");
-		ACell sessLoads = RT.getIn(session, Fields.LOADS);
+			RT.getIn(config, Fields.LOADS), "config.loads");
+		ACell sessLoads = RT.getIn(in.session(), Fields.LOADS);
 		AMap<AString, ACell> sessionTier = (sessLoads instanceof AMap)
 			? (AMap<AString, ACell>) sessLoads : null;
 		AMap<AString, ACell> indexLoads = ContextChain.effective(configLoads, sessionTier);
-		AVector<ACell> sessionFrames = sessionFramesOf(session);
+		AVector<ACell> sessionFrames = sessionFramesOf(in.session());
 		AVector<ACell> rootFrames = Vectors.empty();
 		if (sessionFrames != null && sessionFrames.count() > 0
 				&& sessionFrames.get(0) instanceof AMap) {
@@ -366,10 +380,18 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			indexLoads = ContextChain.effective(indexLoads, GoalTreeContext.getLoads(rootFrame));
 			rootFrames = Vectors.of((ACell) rootFrame);
 		}
+		if (in.messages() != null && in.messages().count() > 0) {
+			if (rootFrames.isEmpty()) {
+				rootFrames = Vectors.of((ACell) GoalTreeContext.createFrame(
+					GoalTreeContext.describeTransitionInput(in.messages(), null, null)));
+			}
+			rootFrames = appendCycleInputTurns(rootFrames, in.messages(), null,
+				convex.core.util.Utils.getCurrentTimestamp());
+		}
 
 		// --- same as the first iteration of runFrame ---
-		RequestContext capsCtx = capsContext(recordConfig, ctx);
-		ToolPalette.Palette palette = ToolPalette.resolve(engine, ctx, recordConfig, HARNESS_TOOL_REGISTRY.keySet());
+		RequestContext capsCtx = capsContext(config, ctx);
+		ToolPalette.Palette palette = ToolPalette.resolve(engine, ctx, config, HARNESS_TOOL_REGISTRY.keySet());
 		AVector<ACell> harnessTools = resolveHarnessTools(config);
 		AVector<ACell> fixedTools = (typedTools != null)
 			? (AVector<ACell>) typedTools.concat(harnessTools).concat(palette.tools())
@@ -380,18 +402,17 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 
 		// The optional task is the goal the first iteration would see, rendered last.
 		ACell goal = null;
-		if (task != null) {
-			AVector<ACell> tasks = Vectors.of((ACell) Maps.of(Strings.intern("input"), task));
+		if (in.task() != null) {
+			AVector<ACell> tasks = Vectors.of((ACell) Maps.of(Strings.intern("input"), in.task()));
 			goal = ContextAssembler.user(GoalTreeContext.describeTransitionInput(null, tasks, null));
 		}
 
-		ContextAssembler.Spec spec = new ContextAssembler.Spec(
+		return new ContextAssembler.Spec(
 			engine, ctx, capsCtx, l3Config,
-			ContextAssembler.sessionHex(RT.getIn(session, Fields.ID)), null,
+			ContextAssembler.sessionHex(RT.getIn(in.session(), Fields.ID)), null,
 			profile.budget(), profile.labels(),
 			ToolPalette.merge(fixedTools, loads.tools()), loads.elements(), indexLoads,
 			rootFrames, null, null, true, null, goal, palette.unavailable(), null, null);
-		return ContextAssembler.assemble(spec).toL3Input(l3Config);
 	}
 
 	// ========== Invocation ==========
@@ -400,20 +421,6 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		requireInvoke(ctx);
 		return CompletableFuture.supplyAsync(() -> processGoal(null, ctx, input), VIRTUAL_EXECUTOR);
-	}
-
-	/**
-	 * Builds the first-iteration L3 input for {@code agent:context} inspection.
-	 * Same pipeline as the first iteration of {@link #runFrame}: the same Spec,
-	 * the same assembler, optional typed-output handling. Delegates
-	 * to {@link #buildFirstIterationL3Input}, which is also exposed for tests
-	 * that assert on the input directly (without going through the JSON render).
-	 */
-	@Override
-	protected AMap<AString, ACell> buildInspectionInput(
-			AMap<AString, ACell> recordConfig, ACell state, ACell taskInput,
-			AMap<AString, ACell> session, RequestContext ctx) {
-		return buildFirstIterationL3Input(recordConfig, state, taskInput, session, ctx);
 	}
 
 	/**

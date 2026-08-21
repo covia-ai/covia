@@ -1367,10 +1367,11 @@ public class AgentAdapter extends AAdapter {
 	 * Dispatches {@code agent:context} to the configured transition adapter.
 	 *
 	 * <p>Looks up the agent's transition operation, resolves its adapter, and
-	 * if the adapter implements {@link ContextInspectable}, asks it to render
-	 * its context as JSON. Adapters that do not declare context inspection
-	 * support cause the call to fail with a clear message — AgentAdapter
-	 * holds no opinion on what a context "looks like".</p>
+	 * if the adapter implements {@link ContextInspectable}, asks it to assemble
+	 * the context for the hypothetical call described by the input. Adapters
+	 * that do not declare context inspection support cause the call to fail
+	 * with a clear message — AgentAdapter holds no opinion on what a context
+	 * "looks like".</p>
 	 */
 	@SuppressWarnings("unchecked")
 	private void handleContext(Job job, ACell input, RequestContext ctx) {
@@ -1429,25 +1430,37 @@ public class AgentAdapter extends AAdapter {
 			if (session == null) { job.fail("Unknown session: " + sidHex); return; }
 		}
 
-		ACell taskInput = RT.getIn(input, Strings.intern("task"));
+		// The hypothetical call: inbox message(s), pending results, a task.
 		// Inspection must resolve n/ paths and capability-scoped loads exactly as
 		// the live transition does. The caller identity remains the owner; the
 		// agent id selects the same private namespace/cursor view as execution.
-		AString rendered = inspectable.inspectContext(
-			recordConfig, state, taskInput, session, ctx.withAgentId(agentId));
+		ContextInspectable.Inspection inspection = new ContextInspectable.Inspection(
+			recordConfig, state, session, inboxOf(input),
+			RT.ensureVector(RT.getIn(input, Fields.PENDING)),
+			RT.getIn(input, K_TASK));
+		AMap<AString, ACell> report = inspectable.inspectContext(inspection, ctx.withAgentId(agentId));
 
 		// Session token totals (#217): measured usage accumulated on
-		// meta.tokens, appended so an inspector sees real counts instead of
-		// estimating from characters. Output stays a rendered string —
-		// structured reads go job-free via values API on the session record.
+		// meta.tokens, so an inspector sees real counts instead of estimating.
 		ACell sessionTokens = RT.getIn(session, Strings.intern("meta"), Fields.TOKENS);
-		if (sessionTokens != null) {
-			rendered = Strings.create(rendered + "\n[Session token usage (measured): "
-				+ convex.core.util.JSON.print(sessionTokens) + "]");
-		}
+		if (sessionTokens != null) report = report.assoc(K_SESSION_TOKENS, sessionTokens);
 
 		job.setStatus(Status.STARTED);
-		job.completeWith(rendered);
+		job.completeWith(report);
+	}
+
+	private static final AString K_TASK           = Strings.intern("task");
+	private static final AString K_SESSION_TOKENS = Strings.intern("sessionTokens");
+
+	/** The inbox of a hypothetical call: {@code message} (a string or an
+	 *  envelope) and/or {@code messages}; null when the call carries none. */
+	private static AVector<ACell> inboxOf(ACell input) {
+		AVector<ACell> inbox = Vectors.empty();
+		ACell one = RT.getIn(input, Fields.MESSAGE);
+		if (one != null) inbox = inbox.conj(one);
+		AVector<ACell> many = RT.ensureVector(RT.getIn(input, Fields.MESSAGES));
+		if (many != null) inbox = inbox.concat(many);
+		return inbox.isEmpty() ? null : inbox;
 	}
 
 	private void handleList(Job job, ACell input, RequestContext ctx) {

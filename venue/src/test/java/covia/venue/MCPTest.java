@@ -473,10 +473,15 @@ public class MCPTest {
 	 * object-output tools advertise their declared schema unmodified.
 	 */
 	@Test public void testOutputSchemaOnlyForObjectOutputs() {
+		AMap<AString, ACell> models = findTool("llm_models");
+		assertNotNull(models, "llm_models tool should be listed");
+		assertNull(models.get(Fields.OUTPUT_SCHEMA),
+			"llm_models declares no object output — it must not advertise an outputSchema");
+
 		AMap<AString, ACell> agentContext = findTool("agent_context");
 		assertNotNull(agentContext, "agent_context tool should be listed");
-		assertNull(agentContext.get(Fields.OUTPUT_SCHEMA),
-			"agent_context returns a string — it must not advertise an outputSchema");
+		assertEquals(Fields.OBJECT, RT.getIn(agentContext, Fields.OUTPUT_SCHEMA, Fields.TYPE),
+			"agent_context returns the assembly report — an object schema");
 
 		AMap<AString, ACell> assetGet = findTool("asset_get");
 		assertNotNull(assetGet, "asset_get tool should be listed");
@@ -540,16 +545,16 @@ public class MCPTest {
 	 * outputSchema (testOutputSchemaOnlyForObjectOutputs).
 	 */
 	@Test public void testCallResultScalarConformance() throws Exception {
-		HttpResponse<String> create = postMcp(
-			"{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"name\":\"agent_create\","
-			+ "\"arguments\":{\"agentId\":\"mcp-conf-agent\",\"config\":{"
-			+ "\"operation\":\"v/ops/goaltree/chat\",\"llmOperation\":\"v/test/ops/llm\","
-			+ "\"systemPrompt\":\"Conformance probe agent.\"}}},\"id\":1}");
-		assertEquals(200, create.statusCode());
+		// memory recall renders a numbered text block — a scalar result.
+		HttpResponse<String> remember = postMcp(
+			"{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"name\":\"memory\","
+			+ "\"arguments\":{\"command\":\"remember\",\"path\":\"w/mcp-conformance-memory\","
+			+ "\"text\":\"Conformance probe fact.\"}},\"id\":1}");
+		assertEquals(200, remember.statusCode());
 
 		HttpResponse<String> resp = postMcp(
-			"{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"name\":\"agent_context\","
-			+ "\"arguments\":{\"agentId\":\"mcp-conf-agent\"}},\"id\":2}");
+			"{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"name\":\"memory\","
+			+ "\"arguments\":{\"command\":\"recall\",\"path\":\"w/mcp-conformance-memory\"}},\"id\":2}");
 		assertEquals(200, resp.statusCode());
 		AMap<AString, ACell> body = RT.ensureMap(JSON.parse(resp.body()));
 		assertNull(body.get(Strings.create("error")), resp.body());
@@ -563,7 +568,7 @@ public class MCPTest {
 		assertEquals(Strings.create("text"), first.get(Fields.TYPE));
 		AString text = RT.ensureString(first.get(Strings.create("text")));
 		assertNotNull(text);
-		assertTrue(text.toString().contains("Conformance probe agent"),
+		assertTrue(text.toString().contains("Conformance probe fact"),
 			"the scalar payload must survive as text: " + text);
 
 		assertNull(result.get(Strings.create("structuredContent")),

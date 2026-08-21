@@ -615,8 +615,8 @@ public class LLMAgentAdapterTest {
 
 		// Inspection uses the same builder chain as processChat — the index
 		// must appear as a system message in the assembled L3 input.
-		AMap<AString, ACell> l3 = adapter.buildInspectionInput(
-			config, null, null, null, RequestContext.of(ALICE_DID));
+		AMap<AString, ACell> l3 = adapter.inspectContext(
+			new ContextInspectable.Inspection(config, null, null, null, null, null), RequestContext.of(ALICE_DID));
 		AVector<ACell> messages = RT.ensureVector(RT.getIn(l3, Fields.MESSAGES));
 		assertNotNull(messages);
 		boolean found = false;
@@ -637,9 +637,9 @@ public class LLMAgentAdapterTest {
 		// session id, so the agent can schedule agent:request {sessionId}
 		// back into this conversation.
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
-		AMap<AString, ACell> l3 = adapter.buildInspectionInput(
-			Maps.of("llmOperation", "v/test/ops/llm"), null, null,
-			Maps.of(Fields.ID, Blob.fromHex("11bb11bb11bb11bb11bb11bb11bb11bb")),
+		AMap<AString, ACell> l3 = adapter.inspectContext(new ContextInspectable.Inspection(
+			Maps.of("llmOperation", "v/test/ops/llm"), null,
+			Maps.of(Fields.ID, Blob.fromHex("11bb11bb11bb11bb11bb11bb11bb11bb")), null, null, null),
 			RequestContext.of(ALICE_DID));
 		AVector<ACell> messages = RT.ensureVector(RT.getIn(l3, Fields.MESSAGES));
 		String prompt = RT.ensureString(RT.getIn(messages.get(0), "content")).toString();
@@ -663,9 +663,9 @@ public class LLMAgentAdapterTest {
 				AgentState.KEY_CONVERSATION, Vectors.empty())));
 
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
-		AMap<AString, ACell> l3 = adapter.buildInspectionInput(
-			Maps.of("llmOperation", "v/test/ops/llm"), null, null,
-			session, RequestContext.of(ALICE_DID));
+		AMap<AString, ACell> l3 = adapter.inspectContext(new ContextInspectable.Inspection(
+			Maps.of("llmOperation", "v/test/ops/llm"), null, session, null, null, null),
+			RequestContext.of(ALICE_DID));
 
 		String renderedMessages = convex.core.util.JSON.print(
 			RT.getIn(l3, Fields.MESSAGES)).toString();
@@ -1575,8 +1575,8 @@ public class LLMAgentAdapterTest {
 			"v/ops/agent/context",
 			Maps.of(Fields.AGENT_ID, "tokens-agent", Fields.SESSION_ID, sid),
 			RequestContext.of(ALICE_DID)).awaitResult(10000);
-		assertTrue(rendered.toString().contains("Session token usage (measured)"),
-			"context render must include the measured session totals");
+		assertNotNull(RT.getIn(rendered, "sessionTokens"),
+			"context report must include the measured session totals");
 	}
 
 	@Test

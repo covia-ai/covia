@@ -425,7 +425,7 @@ The Spec is the whole interface between a runtime and the assembler. Every runti
 
 A dash means the runtimes agree. **The table is the whole difference.** Anything a runtime needs that is not in it is a signal that the Spec is missing a field, not that the runtime needs its own pipeline.
 
-`agent:context` inspection builds the same Spec and calls the same `assemble`, so an inspected context matches a live inference **by construction** rather than by two call chains agreeing.
+`agent:context` builds the same Spec and calls the same `assemble`, so an inspected context matches a live inference **by construction** rather than by two call chains agreeing. It takes the hypothetical call — an inbox message or several, pending results, a task, a session — and returns the level-3 input with `cacheMarks`, the `budget` (`bytes`, `used`, `remaining`), the `marks` at each band's end and the label dialect.
 
 ---
 

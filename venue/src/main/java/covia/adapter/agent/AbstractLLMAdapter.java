@@ -22,6 +22,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.adapter.AAdapter;
+import covia.adapter.agent.ContextInspectable.Inspection;
 import covia.adapter.ToolCallArguments;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
@@ -256,40 +257,18 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	// ========== Inspection (template method) ==========
 
 	/**
-	 * Renders the L3 input that would be sent to the LLM on a fresh transition.
-	 * Final on the parent — subclasses provide the L3 input via
-	 * {@link #buildInspectionInput} and the parent renders it identically for
-	 * both adapters.
+	 * The context this runtime would assemble for the hypothetical call —
+	 * the same Spec through the same assembler as a live transition, minus
+	 * the provider call. Final on the parent: subclasses supply the Spec via
+	 * {@link #inspectionSpec}.
 	 */
 	@Override
-	public final AString inspectContext(AMap<AString, ACell> recordConfig,
-	                                    ACell state,
-	                                    ACell taskInput,
-	                                    AMap<AString, ACell> session,
-	                                    RequestContext ctx) {
-		AMap<AString, ACell> l3Input = buildInspectionInput(recordConfig, state, taskInput, session, ctx);
-		return renderL3InputAsJson(l3Input);
+	public final AMap<AString, ACell> inspectContext(Inspection inspection, RequestContext ctx) {
+		return ContextAssembler.report(inspectionSpec(inspection, ctx));
 	}
 
-	/**
-	 * Builds the L3 input map that {@link #inspectContext} will render. Subclasses
-	 * compute the same context they would on a real transition — system prompt,
-	 * tool palette, message history, optional task synthesised as a user goal —
-	 * but skip the actual LLM call. Returns the {@code {messages, tools, model, …}}
-	 * map that {@link #invokeLevel3} would dispatch.
-	 *
-	 * @param recordConfig record-level agent config (may be null)
-	 * @param state agent state (may be null)
-	 * @param taskInput optional task input — when non-null, append a synthesised
-	 *        user goal message
-	 * @param session optional session record — when non-null, include its
-	 *        frames conversation exactly as the live transition path does (#211)
-	 * @param ctx request context
-	 * @return L3 input map
-	 */
-	protected abstract AMap<AString, ACell> buildInspectionInput(
-		AMap<AString, ACell> recordConfig, ACell state, ACell taskInput,
-		AMap<AString, ACell> session, RequestContext ctx);
+	/** The Spec a live transition with these inputs would assemble. */
+	protected abstract ContextAssembler.Spec inspectionSpec(Inspection inspection, RequestContext ctx);
 
 	/** The frames vector of a session record, or null when absent. */
 	protected static AVector<ACell> sessionFramesOf(AMap<AString, ACell> session) {

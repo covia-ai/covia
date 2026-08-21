@@ -593,6 +593,48 @@ public class AgentAdapterTest {
 		assertFalse(context.contains("Configured tools unavailable"), context);
 	}
 
+	/** agent:context simulates one call: the inbox, a task, or nothing at all. */
+	@Test
+	public void testContextSimulatesASpecificCall() {
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "sim-agent",
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/llmagent/chat",
+					"llmOperation", "v/test/ops/llm",
+					"systemPrompt", "You simulate.")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		// An inbox message renders as the current input, right before the tail.
+		AMap<AString, ACell> withMessage = RT.ensureMap(engine.jobs().invokeOperation("v/ops/agent/context",
+			Maps.of(Fields.AGENT_ID, "sim-agent", Fields.MESSAGE, "What is 2+2?"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000));
+		AVector<ACell> messages = RT.ensureVector(withMessage.get(Fields.MESSAGES));
+		assertEquals("user", RT.getIn(messages.get(messages.count() - 2), "role").toString());
+		assertEquals("What is 2+2?", RT.getIn(messages.get(messages.count() - 2), "content").toString());
+		assertTrue(RT.getIn(messages.get(0), "content").toString().startsWith("You simulate."));
+		assertNotNull(RT.getIn(withMessage, "budget", "used"));
+		assertEquals(CVMLong.create(1), RT.getIn(withMessage, "marks", "head"));
+		assertEquals(Strings.create("bracket"), withMessage.get(Strings.intern("labels")));
+		assertNotNull(withMessage.get(Strings.intern("cacheMarks")), "the input is a cache breakpoint");
+
+		// A task renders exactly as the tool loop renders it, task tools offered.
+		AMap<AString, ACell> withTask = RT.ensureMap(engine.jobs().invokeOperation("v/ops/agent/context",
+			Maps.of(Fields.AGENT_ID, "sim-agent", "task", "Summarise w/report"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000));
+		AVector<ACell> taskMessages = RT.ensureVector(withTask.get(Fields.MESSAGES));
+		String last = RT.getIn(taskMessages.get(taskMessages.count() - 1), "content").toString();
+		assertTrue(last.startsWith("[Tasks assigned to you]") && last.contains("Summarise w/report"), last);
+		java.util.Set<String> toolNames = new java.util.HashSet<>();
+		AVector<ACell> tools = RT.ensureVector(withTask.get(Fields.TOOLS));
+		for (long i = 0; i < tools.count(); i++) toolNames.add(RT.getIn(tools.get(i), "name").toString());
+		assertTrue(toolNames.contains("complete_task") && toolNames.contains("fail_task"), toolNames.toString());
+
+		// Nothing to act on: the empty-state signal a wake-up would see.
+		AMap<AString, ACell> wakeUp = RT.ensureMap(engine.jobs().invokeOperation("v/ops/agent/context",
+			Maps.of(Fields.AGENT_ID, "sim-agent"), RequestContext.of(ALICE_DID)).awaitResult(5000));
+		assertTrue(wakeUp.toString().contains("[No input]"), wakeUp.toString());
+	}
+
 	@Test
 	public void testContextInspectionUsesAgentPrivateNamespace() {
 		AString agentId = Strings.create("private-context-inspection");

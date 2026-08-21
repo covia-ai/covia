@@ -267,6 +267,36 @@ public final class ContextAssembler {
 		}
 	}
 
+	private static final AString K_BUDGET    = AbstractLLMAdapter.K_BUDGET;
+	private static final AString K_BYTES     = AbstractLLMAdapter.K_BYTES;
+	private static final AString K_USED      = Strings.intern("used");
+	private static final AString K_REMAINING = Strings.intern("remaining");
+	private static final AString K_MARKS     = Strings.intern("marks");
+	private static final AString K_LABELS    = AbstractLLMAdapter.OPT_LABELS;
+
+	/**
+	 * Assembles the prompt and reports it: the level-3 input plus assembly
+	 * diagnostics — {@code budget {bytes, used, remaining}}, {@code marks}
+	 * (message counts at each band's end) and {@code labels}. What
+	 * {@code agent:context} returns, and the same bytes a live call sends.
+	 */
+	public static AMap<AString, ACell> report(Spec spec) {
+		Prompt p = assemble(spec);
+		AMap<AString, ACell> marks = Maps.empty();
+		for (Map.Entry<Band, Integer> e : p.marks().entrySet()) {
+			String name = e.getKey().name().toLowerCase();
+			if (e.getKey() == Band.TOOL_LOOP) name = "toolLoop";
+			marks = marks.assoc(Strings.create(name), CVMLong.create(e.getValue()));
+		}
+		return p.toL3Input(spec.config())
+			.assoc(K_BUDGET, Maps.of(
+				K_BYTES, CVMLong.create(p.budget()),
+				K_USED, CVMLong.create(p.used()),
+				K_REMAINING, CVMLong.create(p.remaining())))
+			.assoc(K_MARKS, marks)
+			.assoc(K_LABELS, spec.labels());
+	}
+
 	/** The sequence of AGENT_CONTEXT.md §3.2. */
 	public static Prompt assemble(Spec spec) {
 		Prompt p = new Prompt(spec.budget());

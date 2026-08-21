@@ -20,6 +20,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.AgentAdapter;
+import covia.adapter.agent.ContextInspectable.Inspection;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
 import covia.grid.Job;
@@ -219,41 +220,49 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 	}
 
 	/**
-	 * Builds the L3 input for {@code agent:context} inspection: the same Spec a
-	 * fresh transition would assemble — minus the provider call.
+	 * The Spec a transition with these inputs would assemble: the session's
+	 * conversation, the inbox, pending results, and a task rendered exactly as
+	 * the tool loop renders it — task tools included.
 	 */
 	@Override
-	protected AMap<AString, ACell> buildInspectionInput(
-			AMap<AString, ACell> recordConfig, ACell state, ACell taskInput,
-			AMap<AString, ACell> session, RequestContext ctx) {
+	protected ContextAssembler.Spec inspectionSpec(Inspection in, RequestContext ctx) {
+		AMap<AString, ACell> config = in.config();
 		// Same scope-chain view as processChat (agent tier + session tier), so
 		// the inspected skills index carries the right (loaded) markers.
 		AMap<AString, ACell> configLoads = ContextChain.declaredLoads(
-			RT.getIn(recordConfig, Fields.LOADS), "config.loads");
-		ACell sessLoads = RT.getIn(session, Fields.LOADS);
+			RT.getIn(config, Fields.LOADS), "config.loads");
+		ACell sessLoads = RT.getIn(in.session(), Fields.LOADS);
 		@SuppressWarnings("unchecked")
 		AMap<AString, ACell> sessionTier = (sessLoads instanceof AMap)
 			? (AMap<AString, ACell>) sessLoads : null;
 		AMap<AString, ACell> effectiveLoads = ContextChain.effective(configLoads, sessionTier);
 
-		RequestContext capsCtx = capsContext(recordConfig, ctx);
-		ToolPalette.Palette palette = ToolPalette.resolve(engine, ctx, recordConfig, HARNESS_TOOL_NAMES);
-		AVector<ACell> fixedTools = fixedTools(recordConfig, palette);
-		ModelProfile profile = modelProfileFor(recordConfig, ctx);
+		RequestContext capsCtx = capsContext(config, ctx);
+		ToolPalette.Palette palette = ToolPalette.resolve(engine, ctx, config, HARNESS_TOOL_NAMES);
+		ModelProfile profile = modelProfileFor(config, ctx);
+
+		// The task renders through the tool loop's own renderer — a preview
+		// job id stands in for the one a real task would carry.
+		AVector<ACell> tasks = (in.task() != null)
+			? Vectors.of((ACell) Maps.of(Fields.JOB_ID, Strings.create("preview"), Fields.INPUT, in.task()))
+			: null;
+		ACell task = buildOutstandingTaskMessage(
+			new ToolContext(null, capsCtx, tasks, in.pending(), palette.routes(), null));
+		AVector<ACell> fixedTools = fixedTools(config, palette);
+		if (task != null) fixedTools = (AVector<ACell>) TASK_TOOLS.concat(fixedTools);
 		Loads.Snapshot loads = Loads.resolve(engine, capsCtx, effectiveLoads,
 			fixedToolNames(fixedTools), profile.labels());
+		boolean hasInput = (in.messages() != null && in.messages().count() > 0)
+			|| (in.pending() != null && in.pending().count() > 0)
+			|| task != null;
 
-		// A fresh transition: no inbox and no pending results; an optional task
-		// input is the outstanding task, rendered last as it would be live.
-		ContextAssembler.Spec spec = new ContextAssembler.Spec(
-			engine, ctx, capsCtx, recordConfig,
-			ContextAssembler.sessionHex(RT.getIn(session, Fields.ID)), null,
+		return new ContextAssembler.Spec(
+			engine, ctx, capsCtx, config,
+			ContextAssembler.sessionHex(RT.getIn(in.session(), Fields.ID)), null,
 			profile.budget(), profile.labels(),
 			ToolPalette.merge(fixedTools, loads.tools()), loads.elements(), effectiveLoads,
-			sessionFramesOf(session), null, null, true, null,
-			(taskInput != null) ? ContextAssembler.user(taskInput.toString()) : null,
+			sessionFramesOf(in.session()), in.pending(), in.messages(), hasInput, null, task,
 			palette.unavailable(), null, null);
-		return ContextAssembler.assemble(spec).toL3Input(recordConfig);
 	}
 
 	/**

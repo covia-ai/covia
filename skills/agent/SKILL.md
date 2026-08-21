@@ -154,7 +154,7 @@ join the palette, so point `config.skills` only at sources you trust.
 |------|-----|
 | See what a venue offers | `skills command=list` (optionally `sources=[...]`) |
 | Read one without loading it | `skills command=read name=<name>` (or `ref=<path>`) |
-| See what an agent actually gets | `agent_context agentId=<name>` — the `[Skills]` block, plus `(loaded)` markers |
+| See exactly what an agent would send its model | `agent_context agentId=<name> message="…"` (or `task=…`, `sessionId=…`) — the level-3 input for that call with cache marks, budget and band marks |
 | Write a personal skill | `covia_write path=w/skills/<name>` with `{description, content: {inline: "..."}, skill: {tools: [...], skills: [...]}}` |
 
 A skill with no content is a pure toolset; one carrying an `operation` facet

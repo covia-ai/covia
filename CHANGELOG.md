@@ -10,6 +10,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Changed
 
+- `agent:context` simulates a specific call — `message`/`messages`, `pending`, `task` (rendered exactly as live, task tools offered), `sessionId` — and returns the level-3 input with `cacheMarks` plus `budget`, `marks` and `labels` (a structured report, where it returned a string)
 - Agent context assembly rebuilt around `ContextAssembler` — a Spec in, a Prompt out — per `venue/docs/AGENT_CONTEXT.md`: one sequence for llmagent and goaltree, one label renderer (the model's `labels` dialect honoured), one tool palette, one loads phase, one budget from the model's `budget.bytes`; the head and pinned context re-resolve every inference, the date and notices ride the tail, and inspection is the live Spec through the live assembler
 - The capability notice renders only for agents that have tools
 - Provider edge: on a provider with one system parameter (`systemMessages: "single"` / `"none"`), a system message after the conversation has begun becomes a `[system: …]` user message in place instead of being hoisted into the cached head
