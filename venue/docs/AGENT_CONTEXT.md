@@ -48,6 +48,7 @@ Elements are self-describing by a label convention, because substring recognitio
 | `[Skill: <name> — <path>]` | a loaded skill; the path is its unload key |
 | `[Context: <label>]` | a rendered context entry; the label is its unload key |
 | `[Context: <label> — unavailable: <reason>]` | an entry whose source failed |
+| `[system: …]` | a system-authored message after the conversation has begun, on a provider with no system role in its message list (§3.2.1) |
 | `[Compacted: <N> turns] <summary>` | a compacted conversation segment |
 | `[Tool failure: <name>] <reason>` | a diagnostic turn inside the conversation |
 | `[Pending job results]` | results that arrived for this cycle |
@@ -101,40 +102,42 @@ The band is the *expected* change frequency. Content can be more volatile than i
 | 1 | Identity prompt | fixed head | `system` | `config.systemPrompt` or the default identity, plus one line of session identity |
 | 2 | Lattice reference | fixed head | `system` | Namespace and addressing cheat sheet |
 | 3 | Capability notice | fixed head | `system` | Declared `config.caps`, so bounds are known before they are hit |
-| 4 | Pinned context | live surface | `user` | `config.context` entries (§6) — operator-owned, agent cannot drop |
-| 5 | Skills index | live surface | `user` | `[Skills]` — one line per discoverable skill (SKILLS.md §4.3) |
-| 6 | Loaded elements | live surface | `user` | Every effective load (§7), each with its unload key |
+| 4 | Pinned context | live surface | `system` | `config.context` entries (§6) — operator-owned, agent cannot drop |
+| 5 | Skills index | live surface | `system` | `[Skills]` — one line per discoverable skill (SKILLS.md §4.3) |
+| 6 | Loaded elements | live surface | `system` | Every effective load (§7), each with its unload key |
 | 7 | Conversation | conversation | `user` / `assistant` / `tool` | The rendered frame(s) |
 | 8 | Pending results | conversation | `user` | Job results that arrived for this cycle |
 | 9 | Current input | conversation | `user` | The inbox message(s) driving this cycle |
 | 10 | Tool-loop messages | conversation | `assistant` / `tool` | Assistant/tool turns accumulated within this cycle |
-| 11 | Outstanding task | volatile tail | `user` | The task the agent must complete or fail |
-| 12 | Budget warning | volatile tail | `user` | **Only** when the budget is under pressure (§3.4) |
-| 13 | Current date | volatile tail | `user` | One line; changes daily |
-| 14 | Unavailable tools | volatile tail | `user` | Configured tools that did not resolve this cycle |
+| 11 | Budget warning | volatile tail | `system` | **Only** when the budget is under pressure (§3.4) |
+| 12 | Current date | volatile tail | `system` | One line; changes daily |
+| 13 | Unavailable tools | volatile tail | `system` | Configured tools that did not resolve this cycle |
+| 14 | Outstanding task | volatile tail | `user` | The task the agent must complete or fail — the last thing before the reply |
 | — | Empty-state signal | conversation | `user` | Replaces 8–9 when there is nothing to act on |
 
-Sections 1–3 are **one `system` message**: they change together, are always all present, and are the first thing in every request — the first block of the prefix on providers that cache. Sections 11–14 are **one `user` message**, composed of whichever parts are present: the tail is re-rendered every inference, and one message is the cheapest shape for it.
+The *Role* column is the role a section emits — the role that is true of its content. Sections 1–3 are **one `system` message**: they change together, are always all present, and are the first thing in every request. Sections 11–13 are **one `system` message**, composed of whichever parts are present: the tail is re-rendered every inference, and one message is the cheapest shape for it. How a system message that follows the conversation reaches a given provider is the edge's business (§3.2.1, §3.5), never a section's.
 
 ### 3.2.1 The role rule
 
-**`system` is the fixed head and nothing else.** Everything after it is `user`, `assistant` or `tool`.
+Roles are **semantic**, not positional. `system` is what the venue, the operator or the runtime says — identity and reference, the working set, a notice, a diagnostic, a compaction summary. `user` is what has happened or must be acted on — pending results, the input, the goal, the empty-state signal. `assistant` and `tool` are the agent's own turns and their results. A section emits the role that is true of its content, and the stored conversation keeps it, so provenance survives. Nothing in assembly depends on the provider.
 
-Three reasons, any one of which would be sufficient:
+Where a `system` message that follows the conversation actually lands is provider-dependent, and model-dependent on top. Anthropic and Gemini have no system role in the message list — system content is a top-level parameter — so a client must do *something* with a late one, and the naive thing, hoisting it, is wrong: it is cached as part of the head, so a "tail" date or a compaction nudge busts the cached head on every inference, and a compaction summary leaves its place in the conversation. OpenAI-compatible APIs keep a late system message in place, with its meaning left to the chat template. Local models served through Ollama may honour only the leading one.
 
-- **Position.** Where a `system` message placed after the head actually lands is provider-dependent, and model-dependent on top. Anthropic and Gemini have **no system role in the message list at all** — system content is a top-level parameter — so every system message is necessarily hoisted there, whatever its position, and cached as one block: a "tail" date lands in the cached head and busts it, a compaction summary leaves its place in the conversation, a diagnostic leaves the turn it explains. OpenAI-compatible APIs keep a late system message **in place**, but what a mid-conversation system turn *means* is up to the model's chat template, and local models served through Ollama may honour only the leading one. Hoisted, honoured or ignored: a design that places system messages after the head relies on something with three behaviours. One system message, first, is the only placement every provider agrees on.
-- **Authority.** The head is venue- and operator-authored instruction. Everything after it is either the conversation or resolved data — a document, a job result, an op's output, a skill body from a workspace the agent may write. Data carries no instruction authority, whatever it says.
-- **Legality.** Every request needs at least one non-system message. Band 3 always ends with a `user` or `tool` message — the input, pending results, the empty-state signal, or the last tool result — so every prompt is legal by construction and the edge never has to invent a turn.
+So the **edge normalises, where the provider requires it** (§3.5), driven by the model's declared `systemMessages`:
 
-Skill bodies are instruction, yet they are `user`: they are loaded, from places the agent may write, under a label that says what they are. A model follows a labelled `[Skill: …]` block in a user message as readily as in the system prompt, and the head stays what the operator wrote.
+- `"multiple"` — nothing to do. System messages reach the model where they were placed.
+- `"single"` — the **leading run** of system messages (the head and the live surface) coalesces into the provider's system parameter, as a list of blocks where the API takes them, so the head/live boundary still carries a cache mark. Any **later** system message becomes a `user` message with its content wrapped `[system: …]`, in place: the model still sees who is speaking, and the message stays exactly where it was put.
+- `"none"` — as `"single"`, with the leading run folded into the first user message.
 
-**Standing instruction and reference are therefore `system`; everything the agent sees, did, or must act on is `user`, `assistant` or `tool`.** Consecutive same-role messages are normal — several `user` elements in a row are merged or accepted by every provider — and the §1.1 labels, not the message boundaries, are what keep elements distinct.
+An operator whose model mishandles late system messages declares `"single"` for it and gets the same treatment. No section ever knows.
+
+Two consequences are load-bearing. Every request contains at least one non-system message, because band 3 always ends with a `user` or `tool` message — the input, pending results, the empty-state signal, or the last tool result — so the edge never has to invent a turn. And consecutive same-role messages are normal — every provider merges or accepts them — so the §1.1 labels, not the message boundaries, are what keep elements distinct.
 
 ### 3.2.2 Ephemeral and persisted
 
-Bands 1, 2 and 4 are **ephemeral**: rendered for one inference from live sources and never written to the conversation. Band 3 is **persisted as rendered**: pending results, the input and the tool-loop messages land in the frame at the end of the cycle in exactly the form the model saw them, which is what makes the band append-only for the next cycle. Two exceptions, both deliberate: the empty-state signal occupies the input slot for its inference and is not persisted; and a diagnostic the runtime must add to the conversation — a tool failure it could not return as a tool result — is persisted as a labelled `user` turn, because it is an event in the sequence.
+Bands 1, 2 and 4 are **ephemeral**: rendered for one inference from live sources and never written to the conversation. Band 3 is **persisted as rendered**: pending results, the input and the tool-loop messages land in the frame at the end of the cycle in exactly the form the model saw them, which is what makes the band append-only for the next cycle. Two exceptions, both deliberate: the empty-state signal occupies the input slot for its inference and is not persisted; and a diagnostic the runtime must add to the conversation — a tool failure it could not return as a tool result — is persisted as a `system` turn with its source recorded, because it is an event in the sequence.
 
-**Warnings are never conversation.** The budget warning, the compaction nudge, the date and the unavailable-tools notice describe the state of *this inference*. They belong in the tail, render once, and vanish when the condition does. A warning written into the conversation is re-read on every later inference as though it were still true — and, as a `system` turn, is hoisted out of sequence on the providers that have no system role in the list.
+**Warnings are never conversation.** The budget warning, the compaction nudge, the date and the unavailable-tools notice describe the state of *this inference*. They belong in the tail, render once, and vanish when the condition does. A warning written into the conversation would be re-read on every later inference as though it were still true.
 
 ### 3.3 The top-level function
 
@@ -161,14 +164,14 @@ static Prompt assemble(Spec spec) {
     p.add(toolLoopMessages(spec));
     p.mark(Band.CONVERSATION);
 
-    // Volatile tail — one user message; re-rendered every inference, never cached
-    p.add(userMessage(outstandingTask(spec), budgetWarning(p.used(), p.budget()),
-                      currentDate(spec), unavailableTools(spec)));
+    // Volatile tail — re-rendered every inference, never cached
+    p.add(systemMessage(budgetWarning(p.used(), p.budget()), currentDate(spec), unavailableTools(spec)));
+    p.add(outstandingTask(spec));                 // user — the last thing before the reply
     return p;
 }
 ```
 
-`Prompt` is a mutable accumulator: `add(messages)` appends and charges their bytes, `mark(band)` records where a band ends, `remaining()` and `used()` report the budget position. It knows nothing about skills, tools or capabilities. Every section is a plain function of the Spec returning messages; an empty return contributes nothing, and `systemMessage`/`userMessage` join the parts that are present into one message.
+`Prompt` is a mutable accumulator: `add(messages)` appends and charges their bytes, `mark(band)` records where a band ends, `remaining()` and `used()` report the budget position. It knows nothing about skills, tools or capabilities. Every section is a plain function of the Spec returning messages; an empty return contributes nothing, and `systemMessage` joins the parts that are present into one message.
 
 `p.remaining()` is passed explicitly in the three places that need it — §5.4, which sizes structured rendering from it; §5.7, which gives the conversation renderer its allowance; and the tail, which reports on it. That is the *only* order-dependence in the system, and visible arguments state it more honestly than a running total threaded invisibly through every section.
 
@@ -195,16 +198,18 @@ What the budget does, and nothing else:
 
 ### 3.5 The edge
 
-The assembler's output is provider-neutral. The level-3 adapter, reading the model's declared options, does four things and no others:
+The assembler's output is provider-neutral. The level-3 adapter, reading the model's declared options, does these things and no others:
 
 | Declared | The edge |
 |----------|----------|
-| `systemMessages: "none"` | folds the single system message into the first user message |
-| `cachePrefix` | turns the band marks into the provider's cache controls — the last message of the head, of the live surface and of the conversation |
+| `systemMessages: "multiple"` | passes system messages through where they are placed |
+| `systemMessages: "single"` | delivers the leading system run as the provider's system parameter — a list of blocks where the API takes them, one joined text where it does not — and converts every later system message to a `[system: …]` user message in place (§3.2.1) |
+| `systemMessages: "none"` | as `"single"`, with the leading run folded into the first user message |
+| `cachePrefix` | turns the band marks into the provider's cache controls — the head mark on the last head block inside the system parameter, the others on the last message of the live surface and of the conversation |
 | always | maps `tool` messages and `toolCalls` to the provider's shapes, merging consecutive same-role messages where the API requires alternation |
 | always | **never reorders, never drops, never adds content** |
 
-Nothing else about a provider needs handling: its context size is already in the budget, and the role rule has removed the case where the number of system messages could matter.
+Nothing else about a provider needs handling: its context size is already in the budget.
 
 ---
 
@@ -264,7 +269,7 @@ The band is append-only **within a cycle**: every inference of a tool loop sees 
 - **Scratch elision** (the default; `renderHistory: "full"` opts out). A completed cycle renders as its user input and final assistant reply; its tool calls and tool results are dropped *together*, because providers require a call and its result to be both present or both absent. It happens at the latest possible point — the cycle that has just completed — which is the rewrite that invalidates the least, and it is the automatic half of the budget's elasticity (§3.4).
 - **Compaction.** A range of turns collapses into a `[Compacted: N turns] summary` segment whose summary the agent wrote, because only the agent knows what mattered. It rewrites from the segment onward, so it happens in coarse steps when the budget asks for it, never every cycle. The `compact` tool is a context tool, available to every runtime.
 
-Everything else in the band is an append. Segments and diagnostic turns render as labelled `user` messages — never `system`, which would lift them out of the sequence they explain (§3.2.1).
+Everything else in the band is an append. Segments and diagnostic turns are `system` turns in the stored conversation — authored by the runtime, in sequence — and the edge keeps them in place on every provider (§3.2.1).
 
 ### 5.8 Pending results
 Job results that completed for this cycle — the mechanism by which asynchronous work re-enters the conversation. Placed before the current input so that the input, the thing to act on, is closest to the reply.
@@ -275,17 +280,17 @@ The inbox message(s) driving this cycle. goaltree synthesises a goal description
 ### 5.10 Tool-loop messages
 Assistant and tool messages accumulated *within* this cycle. These are conversation, not preamble: they sit inside the band, before the tail, so each inference of the loop shares its prefix with the previous one through the last tool result and only the tail is re-rendered.
 
-### 5.11 Outstanding task
-Present only when the agent has a task it must complete or fail. Rendered in the tail on every inference, so it is the last thing before the reply, and never baked into history — the model sees only tasks still outstanding.
-
-### 5.12 Budget warning
+### 5.11 Budget warning
 The line described in §3.4, present at ≥ 70%, escalating at ≥ 90%. Silence is the normal case, so it costs nothing until it means something.
 
-### 5.13 Current date
+### 5.12 Current date
 One line, changing daily, taken from the Spec's clock — never from the system clock inside a section, so assembly stays pure. Kept out of the head precisely so the cacheable prefix contains no changing value; in the tail it busts only itself.
 
-### 5.14 Unavailable tools
+### 5.13 Unavailable tools
 Configured tools that did not resolve this cycle — reported so the agent adapts rather than calling into a void. Resolution is live, so a fixed path or restored grant makes the tool available on the next cycle with no recreate.
+
+### 5.14 Outstanding task
+Present only when the agent has a task it must complete or fail. A `user` message rendered last on every inference — after the tool-loop messages and after the notices — so it is the thing nearest the reply, and never baked into history: the model sees only tasks still outstanding.
 
 ---
 
@@ -422,7 +427,7 @@ A dash means the runtimes agree. **The table is the whole difference.** Anything
 
 Recorded so the rewrite has an acceptance test. Everything above is written as the target; this list is the whole of the current difference.
 
-- **Late `system` messages.** The skills index, loaded elements, compaction segments, tool diagnostics, the date, the budget warning and unavailable tools are all `system` today. On Anthropic and Gemini every one of them is hoisted into the system parameter and the cache mark lands on the last — the date — so the "cached head" changes whenever any of them does; on OpenAI-compatible providers they stay in place.
+- **The edge hoists late `system` messages.** Compaction segments, tool diagnostics, the date, the budget warning and unavailable tools follow the conversation as `system`, and the Anthropic edge lets the client hoist every one of them into the system parameter, where the cache mark lands on the last — the date — so the "cached head" changes whenever any of them does. §3.2.1 wants them converted to `[system: …]` user messages in place.
 - **The compaction nudge is a late `system` message too**, appended after the conversation once live turns exceed 20. It is ephemeral, but it names the turn count, so while over threshold it changes — and on Anthropic busts the cached head — on every inference.
 - **Nothing in `messages` is cached.** The Anthropic edge marks only tools and system (`cacheSystemMessages`, `cacheTools`); there are no band marks, so bands 2–3 currently buy nothing there.
 - **Two builders, two budgets.** Loads are resolved by a second `ContextBuilder` with its own default budget, so the budget warning measures the loads alone, tool bytes are never charged, and `model.budget.bytes` is consumed by nothing.
