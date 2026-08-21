@@ -218,6 +218,39 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 
 	public static final AString DEFAULT_LLM_OPERATION = Strings.create("v/ops/langchain/anthropic");
 
+	// ========== Authority and model profile (AGENT_CONTEXT.md §4, §8) ==========
+
+	/** The agent's capability-narrowed context: {@code config.caps} applied, else {@code ctx} unchanged. */
+	public static RequestContext capsContext(AMap<AString, ACell> config, RequestContext ctx) {
+		AVector<ACell> caps = RT.ensureVector(config != null ? config.get(K_CAPS) : null);
+		return (caps != null) ? ctx.withCaps(caps) : ctx;
+	}
+
+	/** What the model declares that assembly needs: its context budget in bytes and its label dialect. */
+	public record ModelProfile(long budget, AString labels) {
+		public static final ModelProfile DEFAULT =
+			new ModelProfile(ContextAssembler.DEFAULT_BUDGET, LABELS_BRACKET);
+	}
+
+	/**
+	 * The model profile for an agent's configured LLM operation and model —
+	 * the {@code model} facet of the operation asset, resolved for the model.
+	 * Defaults when the asset cannot be read: a missing provider must fail at
+	 * the call, not at assembly.
+	 */
+	protected ModelProfile modelProfileFor(AMap<AString, ACell> config, RequestContext ctx) {
+		try {
+			covia.grid.Asset asset = engine.resolveAsset(getLLMOperation(config), ctx);
+			if (asset == null) return ModelProfile.DEFAULT;
+			AString model = RT.ensureString(config != null ? config.get(K_MODEL) : null);
+			return new ModelProfile(
+				modelBudgetBytes(asset.meta(), model, ContextAssembler.DEFAULT_BUDGET),
+				labelDialect(asset.meta(), model));
+		} catch (RuntimeException e) {
+			return ModelProfile.DEFAULT;
+		}
+	}
+
 	// ========== Inspection (template method) ==========
 
 	/**

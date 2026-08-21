@@ -386,6 +386,10 @@ public class GoalTreeContext {
 	 * @return system message with rendered ancestor context, or null if root frame
 	 */
 	public static AMap<AString, ACell> renderAncestors(AVector<ACell> frames) {
+		return renderAncestors(frames, Labels.BRACKET);
+	}
+
+	public static AMap<AString, ACell> renderAncestors(AVector<ACell> frames, AString dialect) {
 		if (frames == null || frames.count() <= 1) return null;
 
 		StringBuilder sb = new StringBuilder();
@@ -409,7 +413,7 @@ public class GoalTreeContext {
 			}
 		}
 
-		return Labels.message(ROLE_SYSTEM, Labels.BRACKET, Labels.Kind.ANCESTORS, sb.toString());
+		return Labels.message(ROLE_SYSTEM, dialect, Labels.Kind.ANCESTORS, sb.toString());
 	}
 
 	/**

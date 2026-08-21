@@ -27,8 +27,12 @@ public final class ConversationRenderer {
 	private ConversationRenderer() {}
 
 	/** Renders every live turn and compacted segment in a frame. */
-	@SuppressWarnings("unchecked")
 	public static AVector<ACell> renderFull(AMap<AString, ACell> frame) {
+		return renderFull(frame, Labels.BRACKET);
+	}
+
+	@SuppressWarnings("unchecked")
+	public static AVector<ACell> renderFull(AMap<AString, ACell> frame, AString dialect) {
 		AVector<ACell> conversation = (AVector<ACell>) frame.get(GoalTreeContext.K_CONVERSATION);
 		if (conversation == null || conversation.count() == 0) return Vectors.empty();
 
@@ -36,7 +40,7 @@ public final class ConversationRenderer {
 		for (long i = 0; i < conversation.count(); i++) {
 			ACell entry = conversation.get(i);
 			if (GoalTreeContext.isSegment(entry)) {
-				messages = messages.conj(renderSegment(entry));
+				messages = messages.conj(renderSegment(entry, dialect));
 			} else if (GoalTreeContext.isLiveTurn(entry)) {
 				messages = messages.conj(entry);
 			}
@@ -50,8 +54,12 @@ public final class ConversationRenderer {
 	 * results are therefore either both present or both absent, as required by
 	 * Anthropic and other tool-use protocols.
 	 */
-	@SuppressWarnings("unchecked")
 	public static AVector<ACell> renderElidingPriorScratch(AMap<AString, ACell> frame) {
+		return renderElidingPriorScratch(frame, Labels.BRACKET);
+	}
+
+	@SuppressWarnings("unchecked")
+	public static AVector<ACell> renderElidingPriorScratch(AMap<AString, ACell> frame, AString dialect) {
 		AVector<ACell> conversation = (AVector<ACell>) frame.get(GoalTreeContext.K_CONVERSATION);
 		if (conversation == null || conversation.count() == 0) return Vectors.empty();
 
@@ -81,7 +89,7 @@ public final class ConversationRenderer {
 		for (long i = 0; i < count; i++) {
 			ACell entry = conversation.get(i);
 			if (GoalTreeContext.isSegment(entry)) {
-				messages = messages.conj(renderSegment(entry));
+				messages = messages.conj(renderSegment(entry, dialect));
 				continue;
 			}
 			if (!GoalTreeContext.isLiveTurn(entry)) continue;
@@ -108,9 +116,52 @@ public final class ConversationRenderer {
 	/** Uses full history only when explicitly requested; elision is the default. */
 	public static AVector<ACell> renderFor(AMap<AString, ACell> frame,
 			AMap<AString, ACell> config) {
+		return renderFor(frame, config, Labels.BRACKET);
+	}
+
+	public static AVector<ACell> renderFor(AMap<AString, ACell> frame,
+			AMap<AString, ACell> config, AString dialect) {
 		AString mode = (config != null) ? RT.ensureString(config.get(K_RENDER_HISTORY)) : null;
 		return RENDER_HISTORY_FULL.equals(mode)
-			? renderFull(frame) : renderElidingPriorScratch(frame);
+			? renderFull(frame, dialect) : renderElidingPriorScratch(frame, dialect);
+	}
+
+	/**
+	 * Converts one stored turn or live inbox envelope into the provider-facing
+	 * message shape {@code {role, content, toolCalls?, id?, name?, structuredContent?, isError?}}:
+	 * content stringified (JSON, never EDN), framework metadata such as
+	 * {@code ts}, {@code source} and {@code caller} dropped.
+	 *
+	 * @param value stored turn, inbox envelope, or raw message string
+	 * @param defaultRole role used when {@code value} has none; null requires one
+	 * @return the message, or null when no role can be established
+	 */
+	@SuppressWarnings("unchecked")
+	public static AMap<AString, ACell> toMessage(ACell value, AString defaultRole) {
+		AString role = defaultRole;
+		ACell content = value;
+		AMap<AString, ACell> source = null;
+		if (value instanceof AMap<?, ?> raw) {
+			source = (AMap<AString, ACell>) raw;
+			AString sourceRole = RT.ensureString(source.get(GoalTreeContext.K_ROLE));
+			if (sourceRole != null) role = sourceRole;
+			content = source.get(covia.api.Fields.MESSAGE);
+			if (content == null) content = source.get(GoalTreeContext.K_CONTENT);
+			// A malformed envelope with a default role still renders, as itself.
+			if (content == null && defaultRole != null) content = source;
+		}
+		if (role == null) return null;
+		AString text = (content instanceof AString s) ? s
+			: (content == null) ? Strings.EMPTY : convex.core.util.JSON.print(content);
+		AMap<AString, ACell> message = Maps.of(GoalTreeContext.K_ROLE, role, GoalTreeContext.K_CONTENT, text);
+		if (source == null) return message;
+		for (AString key : java.util.List.of(
+				GoalTreeContext.K_TOOL_CALLS, Strings.intern("id"), Strings.intern("name"),
+				covia.api.Fields.STRUCTURED_CONTENT, Strings.intern("isError"))) {
+			ACell fieldValue = source.get(key);
+			if (fieldValue != null) message = message.assoc(key, fieldValue);
+		}
+		return message;
 	}
 
 	@SuppressWarnings("unchecked")
@@ -120,11 +171,11 @@ public final class ConversationRenderer {
 	}
 
 	@SuppressWarnings("unchecked")
-	private static AMap<AString, ACell> renderSegment(ACell entry) {
+	private static AMap<AString, ACell> renderSegment(ACell entry, AString dialect) {
 		AMap<AString, ACell> segment = (AMap<AString, ACell>) entry;
 		AString summary = RT.ensureString(segment.get(GoalTreeContext.K_SUMMARY));
 		ACell turns = segment.get(GoalTreeContext.K_TURNS);
-		return Labels.message(GoalTreeContext.ROLE_SYSTEM, Labels.BRACKET, Labels.Kind.COMPACTED,
+		return Labels.message(GoalTreeContext.ROLE_SYSTEM, dialect, Labels.Kind.COMPACTED,
 			(summary != null) ? summary.toString() : "",
 			(turns != null) ? turns.toString() : "?");
 	}

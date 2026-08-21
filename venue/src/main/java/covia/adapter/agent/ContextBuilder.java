@@ -647,59 +647,10 @@ public class ContextBuilder {
 	/** The last foreign principal noted by {@link #appendTurn}; null while turns are the agent's own. */
 	private AString lastAttributedCaller = null;
 
-	/**
-	 * Converts one stored turn or live inbox envelope into the provider-facing
-	 * message shape. This is the single attribution path for both sources.
-	 *
-	 * @param value stored turn, inbox envelope, or raw message string
-	 * @param defaultRole role used when {@code value} has none; null requires one
-	 * @param currentCaller authenticated principal in the current run context
-	 * @return provider-facing message, or null when no role can be established
-	 */
-	@SuppressWarnings("unchecked")
+	/** @see ConversationRenderer#toMessage */
 	static AMap<AString, ACell> renderMessageForContext(ACell value,
 			AString defaultRole, AString currentCaller) {
-		AString role = defaultRole;
-		AString caller = null;
-		ACell content = value;
-		AMap<AString, ACell> source = null;
-
-		if (value instanceof AMap<?, ?> raw) {
-			source = (AMap<AString, ACell>) raw;
-			AString sourceRole = RT.ensureString(source.get(K_ROLE));
-			if (sourceRole != null) role = sourceRole;
-			caller = RT.ensureString(source.get(Fields.CALLER));
-			content = source.get(Fields.MESSAGE);
-			if (content == null) content = source.get(K_CONTENT);
-			// Preserve the old diagnostic fallback for malformed inbox envelopes.
-			if (content == null && defaultRole != null) content = source;
-		}
-
-		if (role == null) return null;
-		AString contentStr;
-		if (content instanceof AString s) {
-			contentStr = s;
-		} else if (content == null) {
-			contentStr = Strings.EMPTY;
-		} else {
-			// JSON, never EDN: CVM map toString() output is hard for models to read.
-			contentStr = convex.core.util.JSON.print(content);
-		}
-
-		AMap<AString, ACell> message = Maps.of(
-			K_ROLE, role,
-			K_CONTENT, contentStr);
-		if (source == null) return message;
-
-		// Keep provider-significant tool fields while dropping framework-only
-		// metadata. Attribution has already been folded into user content above.
-		for (AString key : java.util.List.of(
-				Strings.intern("toolCalls"), Strings.intern("id"),
-				K_NAME, Fields.STRUCTURED_CONTENT, K_IS_ERROR)) {
-			ACell fieldValue = source.get(key);
-			if (fieldValue != null) message = message.assoc(key, fieldValue);
-		}
-		return message;
+		return ConversationRenderer.toMessage(value, defaultRole);
 	}
 
 	/**
