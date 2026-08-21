@@ -1790,20 +1790,23 @@ public class LangChainAdapterTest {
 			RT.getIn(providers.get(0), "model", "budget", "bytes"));
 	}
 
-	/** Labels are markdown unless an asset opts into xml; a typo changes nothing. */
+	/** Labels are bracket-style unless an asset opts into xml; a typo changes nothing. */
 	@Test
-	public void testLabelDialectDefaultsToMarkdown() {
-		assertEquals("markdown", covia.adapter.agent.AbstractLLMAdapter.labelDialect(Maps.empty(), null).toString());
-		assertEquals("markdown", covia.adapter.agent.AbstractLLMAdapter.labelDialect(null, null).toString());
+	public void testLabelDialectDefaultsToBracket() {
+		assertEquals("bracket", covia.adapter.agent.AbstractLLMAdapter.labelDialect(Maps.empty(), null).toString());
+		assertEquals("bracket", covia.adapter.agent.AbstractLLMAdapter.labelDialect(null, null).toString());
 
 		AMap<AString, ACell> xml = Maps.of(Strings.create("model"), Maps.of(
 			Strings.create("options"), Maps.of(Strings.create("labels"), Strings.create("xml"))));
 		assertEquals("xml", covia.adapter.agent.AbstractLLMAdapter.labelDialect(xml, null).toString());
+		AMap<AString, ACell> header = Maps.of(Strings.create("model"), Maps.of(
+			Strings.create("options"), Maps.of(Strings.create("labels"), Strings.create("header"))));
+		assertEquals("header", covia.adapter.agent.AbstractLLMAdapter.labelDialect(header, null).toString());
 
-		for (String bad : new String[] { "XML", "Markdown", "html", "" }) {
+		for (String bad : new String[] { "XML", "Bracket", "Header", "markdown", "" }) {
 			AMap<AString, ACell> meta = Maps.of(Strings.create("model"), Maps.of(
 				Strings.create("options"), Maps.of(Strings.create("labels"), Strings.create(bad))));
-			assertEquals("markdown", covia.adapter.agent.AbstractLLMAdapter.labelDialect(meta, null).toString(), bad);
+			assertEquals("bracket", covia.adapter.agent.AbstractLLMAdapter.labelDialect(meta, null).toString(), bad);
 		}
 
 		// A byModel override flips it for that model only.
@@ -1811,13 +1814,13 @@ public class LangChainAdapterTest {
 			Strings.create("byModel"), Maps.of(Strings.create("tagged"), Maps.of(
 				Strings.create("options"), Maps.of(Strings.create("labels"), Strings.create("xml"))))));
 		assertEquals("xml", covia.adapter.agent.AbstractLLMAdapter.labelDialect(perModel, Strings.create("tagged")).toString());
-		assertEquals("markdown", covia.adapter.agent.AbstractLLMAdapter.labelDialect(perModel, Strings.create("other")).toString());
+		assertEquals("bracket", covia.adapter.agent.AbstractLLMAdapter.labelDialect(perModel, Strings.create("other")).toString());
 
-		// No shipped provider opts in: markdown is the venue-wide default.
+		// No shipped provider opts in: bracket is the venue-wide default.
 		var engine = covia.venue.TestEngine.ENGINE;
 		var ctx = covia.venue.RequestContext.of(covia.venue.TestEngine.uniqueDID("labels"));
 		covia.grid.Asset anthropic = engine.resolveAsset(Strings.create("v/ops/langchain/anthropic"), ctx);
-		assertEquals("markdown", covia.adapter.agent.AbstractLLMAdapter.labelDialect(
+		assertEquals("bracket", covia.adapter.agent.AbstractLLMAdapter.labelDialect(
 			anthropic.meta(), Strings.create("claude-sonnet-5")).toString());
 	}
 }

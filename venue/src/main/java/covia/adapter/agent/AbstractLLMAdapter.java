@@ -506,7 +506,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 *     cost saving (AGENT_CONTEXT.md §3.1).</li>
 	 * <li>{@code toolCallingByModel}: tool support varies per model rather than
 	 *     per provider, so it cannot be assumed from the provider alone.</li>
-	 * <li>{@code labels}: {@code "markdown"} (default) or {@code "xml"} — the
+	 * <li>{@code labels}: {@code "bracket"} (default), {@code "xml"} or {@code "header"} — the
 	 *     dialect in which context elements are labelled, applied by the one
 	 *     label renderer (AGENT_CONTEXT.md §1.1). See {@link #labelDialect}.</li>
 	 * </ul>
@@ -551,19 +551,23 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 
 	/** The {@code labels} option: which dialect context elements are labelled in. */
 	public static final AString OPT_LABELS = Strings.intern("labels");
-	/** Markdown headings — the default dialect. */
-	public static final AString LABELS_MARKDOWN = Strings.intern("markdown");
+	/** {@code [Label …]} lines — the default dialect. */
+	public static final AString LABELS_BRACKET = Strings.intern("bracket");
 	/** XML-style elements with explicit closing tags — opt-in. */
 	public static final AString LABELS_XML = Strings.intern("xml");
+	/** Markdown headings — opt-in. */
+	public static final AString LABELS_HEADER = Strings.intern("header");
 
 	/**
-	 * The label dialect for one model: {@link #LABELS_MARKDOWN} unless the
-	 * asset declares {@code "xml"}. Anything else is the default — a misspelt
-	 * option must never change how a prompt is labelled.
+	 * The label dialect for one model: {@link #LABELS_BRACKET} unless the
+	 * asset declares {@code "xml"} or {@code "header"}. Anything else is the
+	 * default — a misspelt option must never change how a prompt is labelled.
 	 */
 	public static AString labelDialect(AMap<AString, ACell> meta, AString modelId) {
 		AString declared = RT.ensureString(modelOptions(meta, modelId).get(OPT_LABELS));
-		return LABELS_XML.equals(declared) ? LABELS_XML : LABELS_MARKDOWN;
+		if (LABELS_XML.equals(declared)) return LABELS_XML;
+		if (LABELS_HEADER.equals(declared)) return LABELS_HEADER;
+		return LABELS_BRACKET;
 	}
 
 	/**
