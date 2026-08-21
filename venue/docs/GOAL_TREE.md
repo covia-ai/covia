@@ -158,7 +158,16 @@ Frames live on the session record (`sessions/<sid>/frames`). The LLM doesn't see
 
 ### Context Assembly
 
-For each inference, the harness assembles context from the stack. The key rule: **current frame's conversation is full detail, ancestor frames are progressively summarised.**
+The sequence, bands, roles and budget are [AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §3; the goal tree adds nothing to the order. What it adds is *content* in four of the canonical slots:
+
+| Canonical slot | Goal-tree content |
+|----------------|-------------------|
+| Conversation (AGENT_CONTEXT §5.7), first | **Ancestor context** — every frame below the active one, outermost first, each rendered at a decreasing budget |
+| Conversation (AGENT_CONTEXT §5.7), rest | The active frame: compacted segments and live turns, full detail |
+| Current input (AGENT_CONTEXT §5.9) | The **goal** — the `subgoal` description that opened the active frame |
+| Loads chain (AGENT_CONTEXT §7.3) | A **frame tier** inside the session tier, so a subgoal curates its own working set |
+
+The key rule: **the active frame's conversation is full detail; ancestors are progressively summarised.**
 
 ```
 Stack:
@@ -167,33 +176,22 @@ Stack:
   Frame 2 (vendor-b): conversation at full detail        <- active
 ```
 
-The LLM sees:
+What the model sees, in the canonical order:
 
 ```
-[SYSTEM]
-(system prompt, tool schemas, context map)
-
-[ANCESTOR CONTEXT]
-[{description: "Competitive analysis for A, B, C",
-  conversation: ["Explored vendors. Methodology loaded.",
-    subgoal("Research vendors") -> pending...]},
- {description: "Research vendors sequentially",
-  conversation: [
-    subgoal("vendor-a") -> {share: 0.23, growth: 0.08},
-    subgoal("vendor-b") -> pending...]}]
-
-[LOADED DATA]
-w/notes/methodology (200B, inherited from root):
-"Compare revenue growth, margins, share. Flag risks."
-
-w/vendors/b/profile (500B, own scope):
-{name: "Beta Inc", founded: 2018, employees: 1200, ...}
-
-[CONVERSATION -- full detail]
-(live turns from current frame)
-
-[GOAL]
-Analyse Beta Inc: products, financials, market position.
+[SYSTEM]            identity, lattice reference, capabilities      — fixed head
+[LOADED]            [Context: w/notes/methodology] (inherited from root)
+                    [Context: w/vendors/b/profile] (own scope)       — live surface
+[ANCESTORS]         [{description: "Competitive analysis for A, B, C",
+                      conversation: ["Explored vendors. Methodology loaded.",
+                        subgoal("Research vendors") -> pending...]},
+                     {description: "Research vendors sequentially",
+                      conversation: [
+                        subgoal("vendor-a") -> {share: 0.23, growth: 0.08},
+                        subgoal("vendor-b") -> pending...]}]        — conversation, head
+[CONVERSATION]      live turns of the active frame, full detail      — conversation
+[GOAL]              Analyse Beta Inc: products, financials, market position.
+                                                                     — current input
 ```
 
 Ancestor budget is configurable. Rule of thumb: parent ~300B, grandparent ~150B, great-grandparent ~80B. CellExplorer renders each ancestor's conversation at its budget — segments show as summaries, live turns may be truncated.
@@ -283,9 +281,9 @@ When the agent calls `compact`:
 
 The `summary` parameter is required — only the LLM knows what matters in the work done so far. The harness prompts when compaction is needed but the agent writes the summary:
 
-**Auto-compact nudge (current):** When live turn count exceeds `AUTO_COMPACT_THRESHOLD` (20) and the agent has `compact` in its tool set, the harness injects a system message: "Your conversation has N turns. Call compact(summary) now to free context space before continuing." The LLM decides whether to compact.
+**Auto-compact nudge (current):** When live turn count exceeds `AUTO_COMPACT_THRESHOLD` (20) and the agent has `compact` in its tool set, the harness adds a line to the tail: "Your conversation has N turns. Call compact(summary) now to free context space before continuing." The LLM decides whether to compact.
 
-**Future (planned):** byte-budget-based thresholds (70% / 90%) with hard truncation of oldest turns at 90% if the LLM ignores the nudge.
+**Target:** the byte-budget thresholds of AGENT_CONTEXT.md §3.4 — a warning at 70%, compaction required at 90% — replacing the turn count. There is no hard truncation at any level: if the agent ignores the requirement and the provider rejects the prompt, the cycle fails loudly with the remedy. The runtime never removes context on its own authority.
 
 ## Compacted Segment Structure
 
@@ -531,65 +529,18 @@ covia_inspect({path: "sessions/<sid>/frames/1", budget: 500})
 
 ## Context Assembly Layout
 
-The harness assembles the full LLM context for each inference. Ordering follows attention research: reference material at top (primacy), conversation in middle, goal and current turn at bottom (recency).
+The layout is the canonical one — [AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §3.2 — and the budget is the canonical budget (§3.4): one number, the model's declared context size, with the conversation as the elastic band. The goal tree spends its share of the conversation allowance in a fixed way:
 
 ```
-+----------------------------------------------------------+
-| A. SYSTEM PROMPT                              ~2,000 B   |
-|    Agent identity, behavioural rules, response format.    |
-|    Static per session.                                    |
-+----------------------------------------------------------+
-| B. TOOL SCHEMAS                               variable   |
-|    Harness tools (subgoal, complete, fail, compact, ...)  |
-|    + configured operation tools (covia_*, agent_*, etc.)  |
-+----------------------------------------------------------+
-| C. CONTEXT MAP                                  ~300 B   |
-|    Budget tracking (bytes consumed/remaining).            |
-|    Loaded paths with scope + inheritance info.            |
-+----------------------------------------------------------+
-| D. ANCESTOR CONTEXT                          ~200-500 B  |
-|    Parent, grandparent, etc. conversations rendered       |
-|    at decreasing budgets.                                 |
-|    Provides: chain of purpose, prior sibling results.     |
-+----------------------------------------------------------+
-| E. LOADED DATA                           agent-controlled |
-|    Inherited loads + own scoped loads.                    |
-|    Refreshed from lattice each turn.                      |
-+----------------------------------------------------------+
-| F. CONVERSATION                               remainder  |
-|    [compacted segments] + live turns.                     |
-|    Current frame only. Full detail.                       |
-|    This is the largest and most variable section.         |
-+----------------------------------------------------------+
-| G. GOAL                                                   |
-|    The subgoal description for the current frame.         |
-|    Strong recency attention.                              |
-+----------------------------------------------------------+
+Conversation allowance (what remains after head, live surface, input and tail)
+  Ancestors:   ~200-500 B, configurable per depth level (parent ~300, grandparent ~150, ...)
+  Goal:        ~200 B
+  Remainder:   the active frame — segments at summary depth, live turns in full
 ```
 
-### Budget Allocation
+### Ancestor Context
 
-```
-Total context budget (default ~180,000 bytes, configurable)
-
-Fixed:
-  A. System prompt:       ~2,000 B
-  B. Tool schemas:        variable (depends on configured tools)
-  C. Context map:           ~300 B
-  Subtotal fixed:         ~4,500 B typical
-
-Variable (harness-managed):
-  D. Ancestor context:    ~200-500 B (configurable per depth level)
-  E. Loaded data:         sum of load budgets (agent-controlled)
-  G. Goal:                ~200 B
-
-Remainder -> F. Conversation:
-  = total - fixed - ancestors - loaded - goal
-```
-
-### Ancestor Context (Section D)
-
-Ancestors are an array of frames, ordered from outermost to innermost. Each frame has its description and conversation rendered via CellExplorer at decreasing budgets:
+Ancestors are an array of frames, ordered from outermost to innermost, rendered as the first messages of the conversation band. Each frame has its description and conversation rendered via CellExplorer at decreasing budgets:
 
 ```
 [
@@ -674,28 +625,23 @@ Both the full goal-tree adapter and the simpler LLM chat adapter share this sess
 ### Parent Context (root frame, researching vendors)
 
 ```
-[A: SYSTEM]
+[SYSTEM]
 You are a research analyst agent on the Covia lattice.
 
-[B: TOOLS]
+[TOOLS]
 covia_inspect, covia_read, covia_write, covia_list,
 context_load, context_unload,
 subgoal, complete, fail, compact,
 (+ other configured tools)
 
-[C: CONTEXT MAP]
-budget: 4500/180000 bytes (175500 remaining)
-loaded:
-  w/notes/methodology [200B, root]
-
-[D: ANCESTOR CONTEXT]
-(none -- this is the root frame)
-
-[E: LOADED DATA]
-w/notes/methodology (200B):
+[LOADED]
+[Context: w/notes/methodology]
 "Compare revenue growth, margins, share. Flag risks."
 
-[F: CONVERSATION]
+[ANCESTORS]
+(none -- this is the root frame)
+
+[CONVERSATION]
 <covia_inspect path="w/vendors" budget=300>
 -> {a: "Acme Corp", b: "Beta Inc", c: "Gamma Ltd", /* +9 more */}
 "Found all three. Starting sequential research."
@@ -704,26 +650,28 @@ w/notes/methodology (200B):
 -> {status: "complete", result: {share: 0.23, growth: 0.08, risk: "margin pressure"}}
 "Acme done. Now Beta."
 
-[G: GOAL]
+[GOAL]
 Generate competitive analysis report for vendors A, B, C.
 ```
 
 ### Child Context (vendor-b frame)
 
 ```
-[A: SYSTEM]
+[SYSTEM]
 (same system prompt)
 
-[B: TOOLS]
+[TOOLS]
 (same tool palette)
 
-[C: CONTEXT MAP]
-budget: 5200/180000 bytes (174800 remaining)
-loaded:
-  w/notes/methodology [200B, inherited]
-  w/vendors/b/profile [500B, current]
+[LOADED]
+[Context: w/notes/methodology]   (inherited from root)
+"Compare revenue growth, margins, share. Flag risks."
 
-[D: ANCESTOR CONTEXT]
+[Context: w/vendors/b/profile]   (own scope)
+{name: "Beta Inc", founded: 2018, employees: 1200,
+ hq: "Austin TX", sector: "enterprise software"}
+
+[ANCESTORS]
 [{description: "Competitive analysis for vendors A, B, C",
   conversation: [
     covia_inspect("w/vendors") -> {a: "Acme", b: "Beta", c: "Gamma", /* +9 */},
@@ -733,25 +681,17 @@ loaded:
     subgoal("Analyse Beta Inc") -> pending...
   ]}]
 
-[E: LOADED DATA]
-w/notes/methodology (200B, inherited):
-"Compare revenue growth, margins, share. Flag risks."
-
-w/vendors/b/profile (500B):
-{name: "Beta Inc", founded: 2018, employees: 1200,
- hq: "Austin TX", sector: "enterprise software"}
-
-[F: CONVERSATION]
+[CONVERSATION]
 (empty -- fresh frame)
 
-[G: GOAL]
+[GOAL]
 Analyse Beta Inc: products, financials, market position.
 ```
 
 ### Child Working (several turns in)
 
 ```
-[F: CONVERSATION]
+[CONVERSATION]
 <covia_inspect path="w/vendors/b/products" budget=800>
 -> {flagship: ["Bolt"], total: 8, share: 0.15}
 "Focused portfolio -- 8 products vs Acme's 14, but 15% share."
@@ -771,7 +711,7 @@ Analysis complete. Beta is smaller but growing fastest with strong margins.
 ### After Child Pops -- Parent Sees
 
 ```
-[F: CONVERSATION]
+[CONVERSATION]
 ...previous turns...
 
 <subgoal description="Analyse Beta Inc: products, financials, market position.">
@@ -856,14 +796,15 @@ As goals get more complex, the agent can opt into more tools:
 15. **Text-only = implicit complete.** Natural LLM API contract. No bouncing.
 16. **Goal-tree and simple-chat adapters share the session schema.** Simple chat is the degenerate case: root frame only, no harness tools enabled. Agents choose adapter via config; readers consume both the same way.
 17. **Existing tools reused.** `context_load`, `context_unload`, all `covia:*` operations, `agent:*` operations — everything from the existing tool palette. Goal tree adds 7 harness tools, not a new tool universe.
-18. **Budget is harness-managed by default.** Agent gets yes/no on loads, not arithmetic. Context map shows numbers for advanced agents.
-19. **Context layout follows attention research.** Reference at top (primacy), conversation in middle, current turn at bottom (recency).
+18. **Budget is harness-managed by default.** Agent gets yes/no on loads, not arithmetic. The budget warning shows numbers only under pressure (AGENT_CONTEXT.md §3.4).
+19. **Context layout is the canonical one.** Reference at top (primacy), conversation in middle, current turn at bottom (recency) — the sequence is AGENT_CONTEXT.md §3, and the goal tree only fills its slots.
 20. **Frame stack is lattice data on the session record.** Stored in `sessions/<sid>/frames`. Explorable and mergeable. It survives transitions and venue restarts as durable conversation state, not as an executor checkpoint.
 21. **Compacted segments accumulate.** Each `compact` appends a segment. Phase boundaries preserved. Per-question bracketing is the primary use in chat sessions.
 22. **Intake queue stays at session level.** `sessions/<sid>/pending` is the pre-transition staging area; envelopes are drained into the root frame as `user` turns atomically with the transition's other writes. Keeps concurrent intake separate from the append path.
 
 ## Related Design
 
+- `AGENT_CONTEXT.md` — canonical context assembly: bands, sequence, roles, budget, the provider edge. This document describes only what the goal tree adds.
 - `GRID_LATTICE_DESIGN.md` — virtual namespace resolution for `t/` / `n/` / `c/`, session record shape, lattice addressing
 - `AGENT_LOOP.md` — run loop, intake, transition contract
 - `AGENT_SESSIONS.md` — session lifecycle, pending envelope shape
