@@ -171,7 +171,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		ContextAssembler.Spec spec = new ContextAssembler.Spec(
 			engine, ctx, capsCtx, config,
 			ContextAssembler.sessionHex(RT.getIn(in.session(), Fields.ID)), null,
-			profile.budget(), profile.labels(),
+			profile.budget(), profile.labels(), profile.toolCalling(),
 			ToolPalette.merge(tools, loads.tools()), loads.elements(),
 			ContextChain.effective(configLoads, sessionTier),
 			sessionFramesOf(in.session()), in.pending(), in.messages(), hasInput, null, task,
@@ -291,7 +291,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		ContextAssembler.Spec spec = new ContextAssembler.Spec(
 			engine, ctx, capsCtx, config,
 			ContextAssembler.sessionHex(RT.getIn(input, Fields.SESSION, Fields.ID)), null,
-			profile.budget(), profile.labels(),
+			profile.budget(), profile.labels(), profile.toolCalling(),
 			fixedTools, null, null, sessionFrames, pending, messages, hasInput, null, null,
 			palette.unavailable(), null, null);
 

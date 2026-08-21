@@ -239,11 +239,12 @@ public class AgentAdapterTest {
 		assertTrue(noTools.toString().contains("does not advertise tool-calling"));
 
 		// caps including "tools" → no warning
-		// Declared data: a model facet that says toolCalling: false warns without a probe.
+		// Declared data: a resolved profile that says toolCalling: false warns without a probe.
 		assertNull(AgentAdapter.declaredNoToolCalling(Maps.empty(), null, Strings.create("v/ops/x")));
 		AString declared = AgentAdapter.declaredNoToolCalling(
-			Maps.of("toolCalling", CVMBool.FALSE), Strings.create("tiny"), Strings.create("v/ops/langchain/ollama"));
-		assertTrue(declared.toString().contains("'tiny'") && declared.toString().contains("declares no tool calling"), declared.toString());
+			Maps.of("options", Maps.of("toolCalling", CVMBool.FALSE)),
+			Strings.create("tiny"), Strings.create("v/ops/langchain/ollama"));
+		assertTrue(declared.toString().contains("'tiny'") && declared.toString().contains("tool calling is off"), declared.toString());
 		assertNull(AgentAdapter.toolWarningFor(
 			"qwen2.5", "http://localhost:11434", java.util.List.of("completion", "tools")));
 	}
@@ -666,6 +667,45 @@ public class AgentAdapterTest {
 			Vectors.of(Strings.create("context_load"), Strings.create("more_tools"), Strings.create("subgoal"))));
 		assertTrue(listed.contains("context_load") && listed.contains("more_tools"), listed.toString());
 		assertFalse(listed.contains("subgoal"), "a goal-tree frame tool is not this runtime's: " + listed);
+	}
+
+	/** toolCalling: false — declared by the provider, the model, or the agent's own
+	 *  config.modelProfile — is honoured by the assembler: no tool is presented,
+	 *  no capability notice, no skills index; agent:create says so. */
+	@Test
+	public void testToolCallingOffPresentsNoTools() {
+		AMap<AString, ACell> config = Maps.of(
+			Fields.OPERATION, "v/ops/llmagent/chat",
+			"llmOperation", "v/test/ops/llm",
+			"caps", Vectors.of(Maps.of("with", "v/ops/covia", "can", "invoke")),
+			"skillsets", Vectors.of(Strings.create("w/skills")),
+			Fields.TOOLS, Vectors.of(Strings.create("v/ops/covia/read"), Strings.create("more_tools")),
+			"modelProfile", Maps.of("options", Maps.of("toolCalling", CVMBool.FALSE)));
+		ACell created = engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "no-tool-calling", Fields.CONFIG, config),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		assertTrue(RT.getIn(created, Fields.WARNINGS).toString().contains("tool calling is off"),
+			"create advises: " + RT.getIn(created, Fields.WARNINGS));
+
+		AMap<AString, ACell> context = RT.ensureMap(engine.jobs().invokeOperation("v/ops/agent/context",
+			Maps.of(Fields.AGENT_ID, "no-tool-calling", Fields.MESSAGE, "hi"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000));
+		AVector<ACell> presented = RT.ensureVector(context.get(Fields.TOOLS));
+		assertTrue(presented == null || presented.isEmpty(), "no tool presented: " + presented);
+		assertEquals(CVMBool.FALSE, context.get(Strings.intern("toolCalling")));
+		String rendered = context.get(Fields.MESSAGES).toString();
+		assertFalse(rendered.contains("[Skills]"), "no index the model could not load from");
+		assertFalse(rendered.contains("Capabilities"), "no capability notice without tools");
+
+		// The same configuration without the override: tools, index and notice all return.
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "tool-calling-on", Fields.CONFIG, config.dissoc(Strings.intern("modelProfile"))),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		AMap<AString, ACell> on = RT.ensureMap(engine.jobs().invokeOperation("v/ops/agent/context",
+			Maps.of(Fields.AGENT_ID, "tool-calling-on", Fields.MESSAGE, "hi"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000));
+		assertFalse(RT.ensureVector(on.get(Fields.TOOLS)).isEmpty());
+		assertNull(on.get(Strings.intern("toolCalling")), "absent means the norm");
 	}
 
 	/** more_tools on llmagent: operations added mid-run are offered from the next

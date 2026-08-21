@@ -359,7 +359,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		ContextAssembler.Spec spec = new ContextAssembler.Spec(
 			engine, ctx, capsCtx, l3Config,
 			ContextAssembler.sessionHex(RT.getIn(in.session(), Fields.ID)), null,
-			profile.budget(), profile.labels(),
+			profile.budget(), profile.labels(), profile.toolCalling(),
 			ToolPalette.merge(fixedTools, loads.tools()), loads.elements(), indexLoads,
 			rootFrames, null, null, true, null, taskTools.message(), palette.unavailable(), null, null);
 		Cycle cycle = new Cycle(l3Config, getLLMOperation(l3Config), palette.routes(), capsCtx, spec,
@@ -714,7 +714,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		ContextAssembler.Spec cycleSpec = new ContextAssembler.Spec(
 			engine, ctx, capsCtx, l3Config,
 			ContextAssembler.sessionHex(RT.getIn(input, Fields.SESSION, Fields.ID)), null,
-			profile.budget(), profile.labels(),
+			profile.budget(), profile.labels(), profile.toolCalling(),
 			null, null, null, null, null, null, true, null, null,
 			palette.unavailable(), null, null);
 

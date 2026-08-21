@@ -15,6 +15,7 @@ import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.data.type.Types;
 import convex.core.data.util.CellExplorer;
@@ -123,6 +124,7 @@ public final class ContextAssembler {
 			String headNotice,
 			long budget,
 			AString labels,
+			boolean toolCalling,
 			AVector<ACell> tools,
 			AVector<ACell> loadElements,
 			AMap<AString, ACell> effectiveLoads,
@@ -140,7 +142,9 @@ public final class ContextAssembler {
 			if (capsCtx == null) capsCtx = ctx;
 			if (budget <= 0) budget = DEFAULT_BUDGET;
 			if (labels == null) labels = Labels.BRACKET;
-			tools = orEmpty(tools);
+			// A model that cannot call tools is presented none: not the palette,
+			// not the capability notice, not the skills index it could not act on.
+			tools = toolCalling ? orEmpty(tools) : Vectors.empty();
 			loadElements = orEmpty(loadElements);
 			frames = orEmpty(frames);
 			pending = orEmpty(pending);
@@ -150,44 +154,55 @@ public final class ContextAssembler {
 			if (now == null) now = LocalDate.now();
 		}
 
+		/** A Spec for a model that calls tools — the norm; tests and callers without a profile use this. */
+		public Spec(Engine engine, RequestContext ctx, RequestContext capsCtx, AMap<AString, ACell> config,
+				String sessionId, String headNotice, long budget, AString labels,
+				AVector<ACell> tools, AVector<ACell> loadElements, AMap<AString, ACell> effectiveLoads,
+				AVector<ACell> frames, AVector<ACell> pending, AVector<ACell> input, boolean hasInput,
+				AVector<ACell> toolLoop, ACell task, AVector<ACell> unavailable, String notice, LocalDate now) {
+			this(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, true,
+				tools, loadElements, effectiveLoads, frames, pending, input, hasInput,
+				toolLoop, task, unavailable, notice, now);
+		}
+
 		private static AVector<ACell> orEmpty(AVector<ACell> v) {
 			return (v != null) ? v : Vectors.empty();
 		}
 
 		/** The per-inference loads and the palette that includes their tools. */
 		public Spec withLoads(Loads.Snapshot loads, AVector<ACell> tools, AMap<AString, ACell> effectiveLoads) {
-			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels,
+			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling,
 				tools, loads.elements(), effectiveLoads, frames, pending, input, hasInput,
 				toolLoop, task, unavailable, notice, now);
 		}
 
 		public Spec withToolLoop(AVector<ACell> toolLoop) {
-			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels,
+			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling,
 				tools, loadElements, effectiveLoads, frames, pending, input, hasInput,
 				toolLoop, task, unavailable, notice, now);
 		}
 
 		public Spec withTask(ACell task) {
-			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels,
+			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling,
 				tools, loadElements, effectiveLoads, frames, pending, input, hasInput,
 				toolLoop, task, unavailable, notice, now);
 		}
 
 		public Spec withFrames(AVector<ACell> frames) {
-			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels,
+			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling,
 				tools, loadElements, effectiveLoads, frames, pending, input, hasInput,
 				toolLoop, task, unavailable, notice, now);
 		}
 
 		public Spec withNotice(String notice) {
-			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels,
+			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling,
 				tools, loadElements, effectiveLoads, frames, pending, input, hasInput,
 				toolLoop, task, unavailable, notice, now);
 		}
 
 		/** A frame's view: its own config and head notice. */
 		public Spec forFrame(AMap<AString, ACell> config, String headNotice) {
-			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels,
+			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling,
 				tools, loadElements, effectiveLoads, frames, pending, input, hasInput,
 				toolLoop, task, unavailable, notice, now);
 		}
@@ -273,6 +288,7 @@ public final class ContextAssembler {
 	private static final AString K_REMAINING = Strings.intern("remaining");
 	private static final AString K_MARKS     = Strings.intern("marks");
 	private static final AString K_LABELS    = AbstractLLMAdapter.OPT_LABELS;
+	private static final AString K_TOOL_CALLING = AbstractLLMAdapter.OPT_TOOL_CALLING;
 
 	/**
 	 * Assembles the prompt and reports it: the level-3 input plus assembly
@@ -288,13 +304,14 @@ public final class ContextAssembler {
 			if (e.getKey() == Band.TOOL_LOOP) name = "toolLoop";
 			marks = marks.assoc(Strings.create(name), CVMLong.create(e.getValue()));
 		}
-		return p.toL3Input(spec.config())
+		AMap<AString, ACell> report = p.toL3Input(spec.config())
 			.assoc(K_BUDGET, Maps.of(
 				K_BYTES, CVMLong.create(p.budget()),
 				K_USED, CVMLong.create(p.used()),
 				K_REMAINING, CVMLong.create(p.remaining())))
 			.assoc(K_MARKS, marks)
 			.assoc(K_LABELS, spec.labels());
+		return spec.toolCalling() ? report : report.assoc(K_TOOL_CALLING, CVMBool.FALSE);
 	}
 
 	/** The sequence of AGENT_CONTEXT.md §3.2. */
@@ -408,6 +425,7 @@ public final class ContextAssembler {
 
 	/** One line per discoverable skill, {@code (loaded)} against those in context; absent without sources. */
 	static AMap<AString, ACell> skillsIndex(Spec spec) {
+		if (!spec.toolCalling()) return null;   // nothing to load it with
 		Skills.SkillSources sources = Skills.effectiveSources(
 			Skills.sourcesOf(spec.config()), spec.effectiveLoads());
 		if (sources.isEmpty()) return null;

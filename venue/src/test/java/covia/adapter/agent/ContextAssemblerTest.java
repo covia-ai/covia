@@ -178,6 +178,53 @@ public class ContextAssemblerTest {
 		assertNull(CycleRecord.end().tokens().get(Fields.CACHE_READ), "absent means not measured, never zero");
 	}
 
+	// ========== Tool calling off ==========
+
+	/** A Spec for a model that cannot call tools presents none — not the
+	 *  palette, not the capability notice, not the skills index. */
+	@Test
+	public void testToolCallingOffPresentsNothingToCall() {
+		AMap<AString, ACell> config = Maps.of(
+			"caps", Vectors.of(Maps.of("with", "v/ops/covia", "can", "invoke")));
+		AVector<ACell> palette = Vectors.of(Maps.of("name", "covia_read", "parameters", Maps.of("type", "object")));
+		Spec on = new Spec(engine, ctx, null, config, null, null, 0, null, true,
+			palette, null, null, null, null, null, true, null, null, null, null, null);
+		Spec off = new Spec(engine, ctx, null, config, null, null, 0, null, false,
+			palette, null, null, null, null, null, true, null, null, null, null, null);
+		assertEquals(1, on.tools().count());
+		assertEquals(0, off.tools().count(), "the Spec itself holds no tools");
+		Prompt p = ContextAssembler.assemble(off);
+		assertEquals(0, p.tools().count());
+		assertFalse(head(p).contains("Capabilities"), "no notice without tools");
+		assertEquals(CVMBool.FALSE, ContextAssembler.report(off).get(Strings.intern("toolCalling")));
+		assertNull(ContextAssembler.report(on).get(Strings.intern("toolCalling")), "absent means the norm");
+	}
+
+	/** The profile chain: provider facet, byModel, then the agent's config.modelProfile, one key deep. */
+	@Test
+	public void testModelProfileLayersProviderModelAndConfig() {
+		AMap<AString, ACell> meta = Maps.of("model", Maps.of(
+			"options", Maps.of("labels", "xml", "systemMessages", "single"),
+			"budget", Maps.of("bytes", 100L),
+			"byModel", Maps.of("tiny", Maps.of("options", Maps.of("toolCalling", CVMBool.FALSE)))));
+		AbstractLLMAdapter.ModelProfile provider = AbstractLLMAdapter.ModelProfile.of(
+			AbstractLLMAdapter.modelProfile(meta, null, null));
+		assertTrue(provider.toolCalling());
+		assertEquals(Strings.create("xml"), provider.labels());
+		assertEquals(100L, provider.budget());
+		AbstractLLMAdapter.ModelProfile tiny = AbstractLLMAdapter.ModelProfile.of(
+			AbstractLLMAdapter.modelProfile(meta, Strings.create("tiny"), null));
+		assertFalse(tiny.toolCalling(), "the model's entry overrides the provider");
+		assertEquals(Strings.create("xml"), tiny.labels(), "what it does not state survives");
+		AMap<AString, ACell> config = Maps.of("modelProfile", Maps.of(
+			"options", Maps.of("toolCalling", CVMBool.TRUE), "budget", Maps.of("bytes", 50L)));
+		AbstractLLMAdapter.ModelProfile agent = AbstractLLMAdapter.ModelProfile.of(
+			AbstractLLMAdapter.modelProfile(meta, Strings.create("tiny"), config));
+		assertTrue(agent.toolCalling(), "the agent's override wins");
+		assertEquals(50L, agent.budget());
+		assertEquals(Strings.create("xml"), agent.labels());
+	}
+
 	// ========== Head ==========
 
 	@Test

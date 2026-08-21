@@ -414,6 +414,7 @@ The Spec is the whole interface between a runtime and the assembler. Every runti
 | `headNotice` | Runtime text appended to the head, stable within its scope (§5.1) | — (none) | Subgoal notice for child frames |
 | `model` | The resolved model profile: `budget`, `options` — including the label dialect the renderer uses | — | — |
 | `tools` | The palette (§4): tool definitions in order — harness, configured, loads-contributed | Harness tools opted into (skill_load and context_unload implied by skills, task tools by a task), configured tools, loads | The same, plus typed `complete`/`fail` with declared outputs |
+| `toolCalling` | Whether the model can call tools (the profile: provider, `byModel`, `config.modelProfile`). Off, the Spec holds no tools, renders no capability notice and no skills index — nothing is presented that cannot be called; the task message stays, since a control call written as text still resolves it (#215) | from the profile | from the profile |
 | `loads` | The resolved loads snapshot (§4): elements, in chain order | agent → session | agent → session → frame |
 | `frames` | What the conversation renders | The session's single frame | The frame stack: ancestors compacted, active frame full |
 | `pending` | Results that arrived for this cycle | Job results | Drained into the active frame's conversation (GOAL_TREE.md) |

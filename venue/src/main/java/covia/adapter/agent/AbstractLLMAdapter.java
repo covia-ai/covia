@@ -229,26 +229,36 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		return (caps != null) ? ctx.withCaps(caps) : ctx;
 	}
 
-	/** What the model declares that assembly needs: its context budget in bytes and its label dialect. */
-	public record ModelProfile(long budget, AString labels) {
+	/**
+	 * What the model declares that assembly needs: its context budget in
+	 * bytes, its label dialect, and whether it can call tools at all — with
+	 * tool calling off, no tool is presented (OPERATIONS.md, <i>The
+	 * {@code model} facet</i>).
+	 */
+	public record ModelProfile(long budget, AString labels, boolean toolCalling) {
 		public static final ModelProfile DEFAULT =
-			new ModelProfile(ContextAssembler.DEFAULT_BUDGET, LABELS_BRACKET);
+			new ModelProfile(ContextAssembler.DEFAULT_BUDGET, LABELS_BRACKET, true);
+
+		/** The profile a resolved facet map declares; defaults fill what it does not. */
+		public static ModelProfile of(AMap<AString, ACell> profile) {
+			return new ModelProfile(
+				AbstractLLMAdapter.budgetBytes(profile, ContextAssembler.DEFAULT_BUDGET),
+				AbstractLLMAdapter.labelDialect(profile),
+				AbstractLLMAdapter.toolCalling(profile));
+		}
 	}
 
 	/**
-	 * The model profile for an agent's configured LLM operation and model —
-	 * the {@code model} facet of the operation asset, resolved for the model.
-	 * Defaults when the asset cannot be read: a missing provider must fail at
-	 * the call, not at assembly.
+	 * The model profile for an agent: the {@code model} facet of its LLM
+	 * operation, resolved for its model, with the agent's own
+	 * {@code config.modelProfile} layered last. Defaults when the asset cannot
+	 * be read: a missing provider must fail at the call, not at assembly.
 	 */
 	protected ModelProfile modelProfileFor(AMap<AString, ACell> config, RequestContext ctx) {
 		try {
 			covia.grid.Asset asset = engine.resolveAsset(getLLMOperation(config), ctx);
-			if (asset == null) return ModelProfile.DEFAULT;
-			AString model = RT.ensureString(config != null ? config.get(K_MODEL) : null);
-			return new ModelProfile(
-				modelBudgetBytes(asset.meta(), model, ContextAssembler.DEFAULT_BUDGET),
-				labelDialect(asset.meta(), model));
+			return ModelProfile.of(modelProfile((asset != null) ? asset.meta() : null,
+				RT.ensureString(config != null ? config.get(K_MODEL) : null), config));
 		} catch (RuntimeException e) {
 			return ModelProfile.DEFAULT;
 		}
@@ -529,6 +539,8 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	public static final AString K_OPTIONS = Strings.intern("options");
 	/** Per-model overrides inside the {@code model} facet, keyed by model id. */
 	public static final AString K_BY_MODEL = Strings.intern("byModel");
+	/** Agent config: the facet's shape again, layered over the operation's for this agent. */
+	public static final AString K_MODEL_PROFILE = Strings.intern("modelProfile");
 	/** Context budget in bytes of UTF-8, inside {@code model.budget}. */
 	public static final AString K_BYTES = Strings.intern("bytes");
 
@@ -571,14 +583,34 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		ACell byModel = facet.get(K_BY_MODEL);
 		AMap<AString, ACell> profile = facet.dissoc(K_BY_MODEL);
 		if (modelId == null || !(byModel instanceof AMap)) return profile;
-		ACell override = ((AMap<AString, ACell>) byModel).get(modelId);
-		if (!(override instanceof AMap)) return profile;
-		for (Map.Entry<AString, ACell> e : ((AMap<AString, ACell>) override).entrySet()) {
+		return layer(profile, RT.ensureMap(((AMap<AString, ACell>) byModel).get(modelId)));
+	}
+
+	/**
+	 * The facet resolved for one model and one agent: the provider level, the
+	 * model's {@code byModel} entry, then the agent's {@code config.modelProfile}
+	 * — each layered one key deep, stating only what it changes. An agent
+	 * override speaks to assembly ({@code options.toolCalling},
+	 * {@code options.labels}, {@code budget.bytes}); the provider edge reads the
+	 * operation's own facet.
+	 */
+	public static AMap<AString, ACell> modelProfile(AMap<AString, ACell> meta, AString modelId,
+			AMap<AString, ACell> config) {
+		return layer(modelProfile(meta, modelId),
+			RT.ensureMap(config != null ? config.get(K_MODEL_PROFILE) : null));
+	}
+
+	/** {@code override} over {@code base}, one key deep: maps merge key-wise, anything else replaces. */
+	@SuppressWarnings("unchecked")
+	private static AMap<AString, ACell> layer(AMap<AString, ACell> base, AMap<AString, ACell> override) {
+		if (override == null) return base;
+		AMap<AString, ACell> profile = base;
+		for (Map.Entry<AString, ACell> e : override.entrySet()) {
 			AString key = e.getKey();
 			ACell value = e.getValue();
-			ACell base = profile.get(key);
-			if (base instanceof AMap && value instanceof AMap) {
-				AMap<AString, ACell> merged = (AMap<AString, ACell>) base;
+			ACell under = profile.get(key);
+			if (under instanceof AMap && value instanceof AMap) {
+				AMap<AString, ACell> merged = (AMap<AString, ACell>) under;
 				for (Map.Entry<AString, ACell> inner : ((AMap<AString, ACell>) value).entrySet()) {
 					merged = merged.assoc(inner.getKey(), inner.getValue());
 				}
@@ -587,6 +619,11 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			profile = profile.assoc(key, value);
 		}
 		return profile;
+	}
+
+	/** Whether a resolved profile allows tool calling: {@code options.toolCalling}, true unless declared false. */
+	public static boolean toolCalling(AMap<AString, ACell> profile) {
+		return !CVMBool.FALSE.equals(RT.getIn(profile, K_OPTIONS, OPT_TOOL_CALLING));
 	}
 
 	/**
@@ -652,7 +689,12 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 *        is not a positive integer
 	 */
 	public static long modelBudgetBytes(AMap<AString, ACell> meta, AString modelId, long defaultBytes) {
-		CVMLong bytes = RT.ensureLong(RT.getIn(modelProfile(meta, modelId), K_BUDGET, K_BYTES));
+		return budgetBytes(modelProfile(meta, modelId), defaultBytes);
+	}
+
+	/** {@code budget.bytes} of a resolved profile, or the default when absent or not a positive integer. */
+	public static long budgetBytes(AMap<AString, ACell> profile, long defaultBytes) {
+		CVMLong bytes = RT.ensureLong(RT.getIn(profile, K_BUDGET, K_BYTES));
 		return (bytes != null && bytes.longValue() > 0) ? bytes.longValue() : defaultBytes;
 	}
 
@@ -671,7 +713,12 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * default — a misspelt option must never change how a prompt is labelled.
 	 */
 	public static AString labelDialect(AMap<AString, ACell> meta, AString modelId) {
-		AString declared = RT.ensureString(modelOptions(meta, modelId).get(OPT_LABELS));
+		return labelDialect(modelProfile(meta, modelId));
+	}
+
+	/** The label dialect a resolved profile declares, by the same rule. */
+	public static AString labelDialect(AMap<AString, ACell> profile) {
+		AString declared = RT.ensureString(RT.getIn(profile, K_OPTIONS, OPT_LABELS));
 		if (LABELS_XML.equals(declared)) return LABELS_XML;
 		if (LABELS_HEADER.equals(declared)) return LABELS_HEADER;
 		return LABELS_BRACKET;

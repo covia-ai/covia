@@ -107,6 +107,7 @@ top level of a legacy flat config map):
 | `tools` | array | Tool operation lattice paths the agent can call (e.g. `v/ops/covia/read`) |
 | `model` | string | Optional provider model name; provider default when absent |
 | `llmOperation` | string | Optional LLM backend operation path; venue default when absent |
+| `modelProfile` | object | Optional override of the LLM operation's `model` facet for this agent — `{options: {toolCalling, labels}, budget: {bytes}}`, layered last, stating only what it changes (OPERATIONS.md, *The `model` facet*). `toolCalling: false` presents the agent no tools at all |
 | `caps` | array | Capability restrictions (array of {with, can} objects) |
 | `context` | array | Context loading entries (asset hashes, workspace paths) |
 | `responseFormat` | object | Structured output schema ({name, schema}) |
