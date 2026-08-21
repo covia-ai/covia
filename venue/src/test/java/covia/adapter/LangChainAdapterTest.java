@@ -1823,4 +1823,41 @@ public class LangChainAdapterTest {
 		assertEquals("bracket", covia.adapter.agent.AbstractLLMAdapter.labelDialect(
 			anthropic.meta(), Strings.create("claude-sonnet-5")).toString());
 	}
+
+	/**
+	 * The edge's half of the role rule: on a single-system provider a system
+	 * message after the conversation has begun becomes a [system: …] user
+	 * message in place, never hoisted into the cached head.
+	 */
+	@Test
+	public void testLateSystemMessagesAreWrappedForSingleSystemProviders() {
+		AVector<ACell> messages = Vectors.of(
+			(ACell) Maps.of("role", "system", "content", "identity"),
+			(ACell) Maps.of("role", "system", "content", "[Skills]\n- alpha"),
+			(ACell) Maps.of("role", "user", "content", "hello"),
+			(ACell) Maps.of("role", "assistant", "content", "hi"),
+			(ACell) Maps.of("role", "system", "content", "Current date: 2026-01-01."));
+
+		// "multiple": untouched
+		assertSame(messages, LangChainAdapter.normaliseSystemMessages(messages, "multiple", Strings.create("bracket")));
+		assertSame(messages, LangChainAdapter.normaliseSystemMessages(messages, null, Strings.create("bracket")));
+
+		// "single": the leading run stays system; the late one is wrapped, in place
+		AVector<ACell> single = LangChainAdapter.normaliseSystemMessages(messages, "single", Strings.create("bracket"));
+		assertEquals(5, single.count());
+		assertEquals("system", RT.getIn(single.get(0), "role").toString());
+		assertEquals("system", RT.getIn(single.get(1), "role").toString());
+		assertEquals("user", RT.getIn(single.get(4), "role").toString());
+		assertEquals("[system: Current date: 2026-01-01.]", RT.getIn(single.get(4), "content").toString());
+		// ...in the declared dialect
+		AVector<ACell> xml = LangChainAdapter.normaliseSystemMessages(messages, "single", Strings.create("xml"));
+		assertEquals("<system>Current date: 2026-01-01.</system>", RT.getIn(xml.get(4), "content").toString());
+
+		// "none": the head is folded into the first user message too
+		AVector<ACell> none = LangChainAdapter.normaliseSystemMessages(messages, "none", Strings.create("bracket"));
+		assertEquals(3, none.count());
+		assertEquals("user", RT.getIn(none.get(0), "role").toString());
+		assertEquals("identity\n\n[Skills]\n- alpha\n\nhello", RT.getIn(none.get(0), "content").toString());
+		assertEquals("[system: Current date: 2026-01-01.]", RT.getIn(none.get(2), "content").toString());
+	}
 }

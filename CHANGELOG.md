@@ -8,6 +8,15 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- Agent context assembly rebuilt around `ContextAssembler` — a Spec in, a Prompt out — per `venue/docs/AGENT_CONTEXT.md`: one sequence for llmagent and goaltree, one label renderer (the model's `labels` dialect honoured), one tool palette, one loads phase, one budget from the model's `budget.bytes`; the head and pinned context re-resolve every inference, the date and notices ride the tail, and inspection is the live Spec through the live assembler
+- Provider edge: on a provider with one system parameter (`systemMessages: "single"` / `"none"`), a system message after the conversation has begun becomes a `[system: …]` user message in place instead of being hoisted into the cached head
+
+### Removed
+
+- `ContextBuilder` (internal) — replaced by `ContextAssembler`, `ToolPalette`, `Loads` and `Labels`
+
 ### Added
 
 - `model` facet on LLM operation assets: optional `options` — rendering hints (`systemMessages`, `requiresUserMessage`, `cachePrefix`, `toolCallingByModel`, `labels`) — and `budget.bytes`, an estimate of the context size appropriate for the model in UTF-8 bytes, with `byModel` per-model overrides; declared as data rather than branched on by provider name, reported verbatim by `v/ops/langchain/models`

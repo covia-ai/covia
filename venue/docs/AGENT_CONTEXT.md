@@ -2,7 +2,7 @@
 
 The canonical description of how an agent's context — the messages and tools sent to its model — is assembled. Every runtime assembles through this design; a runtime-specific document (GOAL_TREE.md for the goal-tree harness) describes only what it adds, and refers back here for the rest.
 
-**Status:** The body describes the target in the present tense, so it can serve as the reference without a rewrite; the code is being converged on it. Where the two differ today the difference is recorded in §9.1 and nowhere else.
+**Status:** The code follows this document. Where it still differs, the difference is recorded in §9.1 and nowhere else.
 
 See [AGENT_LOOP.md](./AGENT_LOOP.md) §3.2 for the surrounding level-2 architecture, [SKILLS.md](./SKILLS.md) for skills, [AGENT_TEMPLATES.md](./AGENT_TEMPLATES.md) for how configuration is composed, [GOAL_TREE.md](./GOAL_TREE.md) for the goal-tree harness, and [OPERATIONS.md](./OPERATIONS.md) (*The `model` facet*) for what a model declares about itself.
 
@@ -225,7 +225,7 @@ The assembler's output is provider-neutral. The level-3 adapter, reading the mod
 | `systemMessages: "single"` | delivers the leading system run as the provider's system parameter — a list of blocks where the API takes them, one joined text where it does not — and converts every later system message to a `[system: …]` user message in place (§3.2.1) |
 | `systemMessages: "none"` | as `"single"`, with the leading run folded into the first user message |
 | `labels` | nothing at the edge beyond the wrapper above — the dialect is applied by the one renderer (§1.1), which the edge also uses for that wrapper |
-| `cachePrefix` | turns the band marks into the provider's cache controls — the head mark on the last head block inside the system parameter, the others on the last message of the live surface and of the conversation |
+| `cachePrefix` | turns the band marks into the provider's cache controls — the head mark on the last head block inside the system parameter, the others on the last message of the live surface and of the conversation (today the head only — §9.1) |
 | always | maps the tool definitions to the provider's schema, in the given order, and `tool` messages and `toolCalls` to its shapes, merging consecutive same-role messages where the API requires alternation |
 | always | **never reorders, never drops, never adds content** |
 
@@ -433,36 +433,26 @@ A dash means the runtimes agree. **The table is the whole difference.** Anything
 
 | Concern | Home |
 |---------|------|
-| `Spec`, `Prompt`, `assemble`, the section functions, the label renderer | `ContextAssembler` — replaces the section-building half of `ContextBuilder` |
+| `Spec`, `Prompt`, `assemble`, the section functions, attribution | `ContextAssembler` |
+| The label renderer (§1.1) | `Labels` |
+| The palette (§3.2.3): resolution, merge, unavailable diagnostic | `ToolPalette` |
+| The loads phase (§4): elements, contributed tools, routes | `Loads` |
 | Entry resolution and rendering (§6) | `ContextLoader` |
 | Scope chain algebra (§7) | `ContextChain` |
-| Frame rendering, elision, segments (§5.6) | `ConversationRenderer` |
+| Frame rendering, elision, segments, turn normalisation (§5.6) | `ConversationRenderer` |
 | Skills index and skill elements | `Skills` |
-| Model facts: `model.options`, `model.budget` | `AbstractLLMAdapter.modelProfile` |
-| The edge (§3.5) | `LangChainAdapter` |
+| Authority and the model profile: `capsContext`, `modelProfileFor` | `AbstractLLMAdapter` |
+| The edge (§3.5): `normaliseSystemMessages` | `LangChainAdapter` |
 | llmagent spec | `LLMAgentAdapter` |
 | goaltree spec | `GoalTreeAdapter` |
 
-### 9.1 Known divergences to close
+### 9.1 Known divergences
 
-Recorded so the rewrite has an acceptance test. Everything above is written as the target; this list is the whole of the current difference.
+Everything above is written as the target; this list is the whole of the current difference.
 
-- **The edge hoists late `system` messages.** Compaction segments, tool diagnostics, the date, the budget warning and unavailable tools follow the conversation as `system`, and the Anthropic edge lets the client hoist every one of them into the system parameter, where the cache mark lands on the last — the date — so the "cached head" changes whenever any of them does. §3.2.1 wants them converted to `[system: …]` user messages in place.
-- **The compaction nudge is a late `system` message too**, appended after the conversation once live turns exceed 20. It is ephemeral, but it names the turn count, so while over threshold it changes — and on Anthropic busts the cached head — on every inference.
-- **Nothing in `messages` is cached.** The Anthropic edge marks only tools and system (`cacheSystemMessages`, `cacheTools`); there are no band marks, so bands 2–3 currently buy nothing there.
-- **Two builders, two budgets.** Loads are resolved by a second `ContextBuilder` with its own default budget, so the budget warning measures the loads alone, tool bytes are never charged, and `model.budget.bytes` is consumed by nothing.
-- **The budget warning is emitted inside the load snapshot** — in the live surface, before the conversation — not in the tail.
-- **The date is read from the system clock inside the builder**, so assembly is not pure and the inspection path can differ from the live one across midnight.
-- goaltree injects the **current date before loads and the conversation**, so once a day it invalidates both.
-- llmagent appends **tool-loop messages and the outstanding task after the tail**, so within a tool loop the tail is not last.
-- Both runtimes build a partial context and then concatenate the rest imperatively, so §3.2's ordering is only half-enforced and §4's phases interleave (palette → loads → palette again).
-- goaltree constructs a context in three separate methods, including its inspection path; the invariant that inspection matches inference is maintained by agreement rather than by construction.
-- **The lattice reference is appended to every agent's system prompt**, tool-using or not; there is no `data` skill family yet to hold it.
+- **Cache marks stop at the head.** `Prompt` marks all three band boundaries, but langchain4j 1.19 exposes only `cacheSystemMessages` and `cacheTools` for Anthropic — no per-message `cache_control` — so the live surface and the conversation are not yet cached there. Closing this means shaping the Anthropic request directly.
+- **The lattice reference is appended to every agent's head**, tool-using or not; there is no `data` skill family yet to hold it.
 - **The capability notice renders whenever `config.caps` is declared**, with or without tools.
-- `compact` exists only in the goal-tree harness; llmagent has no compaction.
-- **Attribution notes are mid-conversation `system` messages.** llmagent's `appendTurn` precedes a foreign principal's turns with a venue-authored system note; on Anthropic it is hoisted away from the turns it introduces. goaltree's live path bypasses `appendTurn` altogether, so attribution differs by runtime.
-- **goaltree resolves the head and pinned context once per cycle** (`systemMessages`, shared by every frame and iteration), so a pinned op entry is not re-read per inference.
-- **goaltree persists the goal as the frame's opening user turn** and re-appends it after compaction, instead of rendering it last on every inference.
-- llmagent's inspection path and live path assemble the tools array in different orders.
-- Labels are built by string concatenation in several places (`ContextBuilder`, `ContextLoader`, `Skills`, `GoalTreeContext`, `LLMAgentAdapter`, `GoalTreeAdapter`), not by one renderer. The `labels` option is declared and resolvable (`AbstractLLMAdapter.labelDialect`) but nothing reads it, so `xml` and `header` have no effect yet.
-- Stale references to the removed `[Context Map]` remain in a `ContextBuilder` comment.
+- `compact` exists only in the goal-tree harness; llmagent has no compaction, so the 90% line asks there for what it cannot offer.
+- **goaltree persists the goal as the frame's opening user turn** and re-appends it after compaction, rather than rendering it in the task slot. Kept deliberately for now: the root frame's "goal" of a chat session is its origin description, which must not be re-read on every inference; the task-slot rendering is right for subgoal frames and is the pending change.
+- The agent-facing text of `skill_load` and SKILLS.md §4.3 name the `[Skills]` index by its bracket label whatever the dialect.

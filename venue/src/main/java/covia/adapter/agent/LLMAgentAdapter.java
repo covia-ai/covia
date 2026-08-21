@@ -724,7 +724,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 	 * writable, delegates ALL skill semantics to {@link Skills#load}, and
 	 * writes the returned entry into the loads tier exactly as
 	 * {@code context_load} does. Rendering and tool activation then follow
-	 * from the entry via the generic context assembly (ContextBuilder), so
+	 * from the entry via the generic context assembly (ContextAssembler), so
 	 * this runtime carries no knowledge of what a skill IS.
 	 */
 	ACell handleSkillLoad(ACell input, ToolContext toolCtx) {

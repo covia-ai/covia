@@ -260,7 +260,14 @@ public class LangChainAdapter extends AAdapter {
 		// The canonical agent messages retain their exact structuredContent for
 		// session persistence; this narrow conversion also avoids #334's hang
 		// when nested Convex collections reached the Anthropic worker unchanged.
-		final AVector<ACell> providerMessages = serialiseToolResultsForProvider(messages);
+		// The same copy applies the role rule for the declared provider
+		// (AGENT_CONTEXT.md §3.5): a system message after the conversation has
+		// begun must not be hoisted into the cached head.
+		final AString modelId = (resolvedModelName != null) ? Strings.create(resolvedModelName) : null;
+		final AVector<ACell> providerMessages = normaliseSystemMessages(
+			serialiseToolResultsForProvider(messages),
+			AbstractLLMAdapter.modelOptionText(meta, modelId, OPT_SYSTEM_MESSAGES),
+			AbstractLLMAdapter.labelDialect(meta, modelId));
 
 		// Response format: "json", "text", or {name, schema} map
 		ACell responseFormatCell = RT.getIn(input, K_RESPONSE_FORMAT);
@@ -1045,6 +1052,74 @@ public class LangChainAdapter extends AAdapter {
 			result = result.assoc(i, providerEntry);
 		}
 		return result;
+	}
+
+	/** The {@code model.options.systemMessages} key: how the provider takes system content. */
+	static final AString OPT_SYSTEM_MESSAGES = Strings.intern("systemMessages");
+	static final AString SYSTEM_MESSAGES_SINGLE = Strings.intern("single");
+	static final AString SYSTEM_MESSAGES_NONE = Strings.intern("none");
+
+	/**
+	 * The edge's half of the role rule (AGENT_CONTEXT.md §3.2.1, §3.5), for the
+	 * provider's declared {@code systemMessages}:
+	 * <ul>
+	 *   <li>{@code "multiple"} (or undeclared): messages pass through — the
+	 *       provider keeps a system message wherever it is placed.</li>
+	 *   <li>{@code "single"}: the leading run of system messages stays system
+	 *       (the client coalesces it into the provider's one system parameter);
+	 *       any system message after the conversation has begun becomes a
+	 *       {@code user} message wrapped as a system element, in place — never
+	 *       hoisted into the cached head, never out of sequence.</li>
+	 *   <li>{@code "none"}: as {@code "single"}, with the leading run folded
+	 *       into the first user message.</li>
+	 * </ul>
+	 * Never reorders, never drops, never adds content of its own.
+	 */
+	@SuppressWarnings("unchecked")
+	static AVector<ACell> normaliseSystemMessages(AVector<ACell> messages, String systemMode, AString dialect) {
+		boolean single = SYSTEM_MESSAGES_SINGLE.toString().equals(systemMode);
+		boolean none = SYSTEM_MESSAGES_NONE.toString().equals(systemMode);
+		if (!single && !none) return messages;
+
+		AVector<ACell> out = Vectors.empty();
+		StringBuilder leading = new StringBuilder();
+		boolean started = false;
+		for (long i = 0; i < messages.count(); i++) {
+			ACell entry = messages.get(i);
+			AString role = RT.ensureString(RT.getIn(entry, K_ROLE));
+			if (ROLE_SYSTEM.equals(role)) {
+				AString content = RT.ensureString(RT.getIn(entry, K_CONTENT));
+				if (started) {
+					out = out.conj(Maps.of(K_ROLE, ROLE_USER, K_CONTENT, Strings.create(
+						covia.adapter.agent.Labels.wrapSystem(dialect, content != null ? content.toString() : ""))));
+				} else if (none) {
+					if (leading.length() > 0) leading.append("\n\n");
+					if (content != null) leading.append(content);
+				} else {
+					out = out.conj(entry);
+				}
+				continue;
+			}
+			if (!started) {
+				started = true;
+				if (none && leading.length() > 0) {
+					// Fold the head into the first user message; any other first
+					// message gets it as its own user turn immediately before.
+					ACell content = RT.getIn(entry, K_CONTENT);
+					if (ROLE_USER.equals(role) && content instanceof AString text) {
+						entry = ((AMap<AString, ACell>) entry).assoc(K_CONTENT,
+							Strings.create(leading + "\n\n" + text));
+					} else {
+						out = out.conj(Maps.of(K_ROLE, ROLE_USER, K_CONTENT, Strings.create(leading.toString())));
+					}
+				}
+			}
+			out = out.conj(entry);
+		}
+		if (none && !started && leading.length() > 0) {
+			out = out.conj(Maps.of(K_ROLE, ROLE_USER, K_CONTENT, Strings.create(leading.toString())));
+		}
+		return out;
 	}
 
 	/**
