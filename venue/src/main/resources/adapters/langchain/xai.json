@@ -3,10 +3,17 @@
 	"description": "Chat with current xAI Grok models via the OpenAI-compatible xAI API. Grok 4.3 is the balanced default, 4.5 targets highest-quality work, and Grok Build is coding-specific.",
 	"creator": "Covia",
 	"dateCreated": "2026-04-15T00:00:00Z",
-	"keywords": ["LLM", "model", "xai", "grok"],
+	"keywords": [
+		"LLM",
+		"model",
+		"xai",
+		"grok"
+	],
 	"operation": {
 		"adapter": "langchain:xai",
-		"secretFields": ["apiKey"],
+		"secretFields": [
+			"apiKey"
+		],
 		"secretKey": "XAI_API_KEY",
 		"input": {
 			"type": "object",
@@ -58,10 +65,23 @@
 		"output": {
 			"type": "object",
 			"properties": {
-				"role": { "type": "string" },
-				"content": { "type": "string", "description": "The LLM response text" },
-				"toolCalls": { "type": "array", "description": "Tool call requests from the LLM" }
+				"role": {
+					"type": "string"
+				},
+				"content": {
+					"type": "string",
+					"description": "The LLM response text"
+				},
+				"toolCalls": {
+					"type": "array",
+					"description": "Tool call requests from the LLM"
+				}
 			}
+		}
+	},
+	"model": {
+		"options": {
+			"systemMessages": "multiple"
 		}
 	}
 }

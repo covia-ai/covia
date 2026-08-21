@@ -1,67 +1,76 @@
 {
-	"name":"Gemini model chat",
-	"creator":"Mike Anderson",
-	"description":"Chat with current Gemini models through Google's OpenAI-compatible endpoint.",
-	"dateCreated":"2025-09-16T00:00:00Z",
+	"name": "Gemini model chat",
+	"creator": "Mike Anderson",
+	"description": "Chat with current Gemini models through Google's OpenAI-compatible endpoint.",
+	"dateCreated": "2025-09-16T00:00:00Z",
 	"dateModified": "2025-09-16T00:00:00Z",
-	"keywords":["LLM", "model", "gemini"],
+	"keywords": [
+		"LLM",
+		"model",
+		"gemini"
+	],
 	"operation": {
 		"adapter": "langchain:gemini",
 		"secretKey": "GOOGLE_API_KEY",
-		"secretFields": ["apiKey"],
-		"info":{
-            "featured":true
-        },
-
-		"input":{
-			"type":"object",
-			"properties":{
-				"prompt":{
-					"type":"string",
-					"description":"The prompt for the model."
+		"secretFields": [
+			"apiKey"
+		],
+		"info": {
+			"featured": true
+		},
+		"input": {
+			"type": "object",
+			"properties": {
+				"prompt": {
+					"type": "string",
+					"description": "The prompt for the model."
 				},
-				"model":{
-					"type":"string",
-					"description":"Optional model name. Gemini 3.6 Flash is the balanced default; 3.5 Flash-Lite is the economical high-throughput option.",
-					"default":"gemini-3.6-flash"
+				"model": {
+					"type": "string",
+					"description": "Optional model name. Gemini 3.6 Flash is the balanced default; 3.5 Flash-Lite is the economical high-throughput option.",
+					"default": "gemini-3.6-flash"
 				},
-				"systemPrompt":{
-					"type":"string",
-					"description":"System prompt to set the AI's behaviour and context"
+				"systemPrompt": {
+					"type": "string",
+					"description": "System prompt to set the AI's behaviour and context"
 				},
-				"apiKey":{
-					"type":"string",
-					"secret":true,
-					"description":"API key for authentication"
+				"apiKey": {
+					"type": "string",
+					"secret": true,
+					"description": "API key for authentication"
 				},
-				"url":{
-					"type":"string",
-					"description":"Gemini base URL (defaults to https://generativelanguage.googleapis.com/v1beta)",
-					"default":"https://generativelanguage.googleapis.com/v1beta"
+				"url": {
+					"type": "string",
+					"description": "Gemini base URL (defaults to https://generativelanguage.googleapis.com/v1beta)",
+					"default": "https://generativelanguage.googleapis.com/v1beta"
 				},
-				"temperature":{
-					"type":"number",
-					"description":"Sampling temperature (e.g. 0 for deterministic extraction); provider default when omitted"
+				"temperature": {
+					"type": "number",
+					"description": "Sampling temperature (e.g. 0 for deterministic extraction); provider default when omitted"
 				},
-				"topP":{
-					"type":"number",
-					"description":"Nucleus sampling top_p; provider default when omitted"
+				"topP": {
+					"type": "number",
+					"description": "Nucleus sampling top_p; provider default when omitted"
 				}
 			}
 		},
-		"output":{
-			"type":"object",
-			"properties":{
-				"response":{
-					"type":"string",
-					"description":"The LLM response"
+		"output": {
+			"type": "object",
+			"properties": {
+				"response": {
+					"type": "string",
+					"description": "The LLM response"
 				},
-				"think":{
-					"type":"string",
-					"description":"Model thought process"
+				"think": {
+					"type": "string",
+					"description": "Model thought process"
 				}
 			}
 		}
+	},
+	"model": {
+		"options": {
+			"systemMessages": "single"
+		}
 	}
 }
-

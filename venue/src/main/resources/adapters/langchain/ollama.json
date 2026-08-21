@@ -1,61 +1,71 @@
 {
-	"name":"Ollama model chat",
-	"creator":"Mike Anderson",
-	"description":"Example operation that chats with a local Ollama-served LLM via LangChainAdapter",
-	"dateCreated":"2025-09-16T00:00:00Z",
+	"name": "Ollama model chat",
+	"creator": "Mike Anderson",
+	"description": "Example operation that chats with a local Ollama-served LLM via LangChainAdapter",
+	"dateCreated": "2025-09-16T00:00:00Z",
 	"dateModified": "2025-09-16T00:00:00Z",
-	"keywords":["LLM", "model", "ollama"],
+	"keywords": [
+		"LLM",
+		"model",
+		"ollama"
+	],
 	"operation": {
 		"adapter": "langchain:ollama",
-		"secretFields": ["apiKey"],
-
-		"input":{
-			"type":"object",
-			"properties":{
-				"prompt":{
-					"type":"string",
-					"description":"The prompt for the model."
+		"secretFields": [
+			"apiKey"
+		],
+		"input": {
+			"type": "object",
+			"properties": {
+				"prompt": {
+					"type": "string",
+					"description": "The prompt for the model."
 				},
-				"model":{
-					"type":"string",
-					"description":"Optional model name (defaults to qwen)"
+				"model": {
+					"type": "string",
+					"description": "Optional model name (defaults to qwen)"
 				},
-				"systemPrompt":{
-					"type":"string",
-					"description":"Optional system prompt to set the AI's behavior and context"
+				"systemPrompt": {
+					"type": "string",
+					"description": "Optional system prompt to set the AI's behavior and context"
 				},
-				"apiKey":{
-					"type":"string",
-                    "secret":true,
-					"description":"Optional API key for authentication (if not provided, uses OPENAI_API_KEY environment variable)"
+				"apiKey": {
+					"type": "string",
+					"secret": true,
+					"description": "Optional API key for authentication (if not provided, uses OPENAI_API_KEY environment variable)"
 				},
-				"url":{
-					"type":"string",
-					"description":"Optional Ollama base URL. When omitted, resolves venue-side: adapters.langchain.ollamaUrl config, then the OLLAMA_BASE_URL environment variable, then http://localhost:11434. Keep agents topology-agnostic — set the venue-level knob instead of per-agent URLs"
+				"url": {
+					"type": "string",
+					"description": "Optional Ollama base URL. When omitted, resolves venue-side: adapters.langchain.ollamaUrl config, then the OLLAMA_BASE_URL environment variable, then http://localhost:11434. Keep agents topology-agnostic — set the venue-level knob instead of per-agent URLs"
 				},
-				"temperature":{
-					"type":"number",
-					"description":"Sampling temperature (e.g. 0 for deterministic extraction); provider default when omitted"
+				"temperature": {
+					"type": "number",
+					"description": "Sampling temperature (e.g. 0 for deterministic extraction); provider default when omitted"
 				},
-				"topP":{
-					"type":"number",
-					"description":"Nucleus sampling top_p; provider default when omitted"
+				"topP": {
+					"type": "number",
+					"description": "Nucleus sampling top_p; provider default when omitted"
 				}
 			}
 		},
-		"output":{
-			"type":"object",
-			"properties":{
-				"response":{
-					"type":"string",
-					"description":"The LLM response"
+		"output": {
+			"type": "object",
+			"properties": {
+				"response": {
+					"type": "string",
+					"description": "The LLM response"
 				},
-				"think":{
-					"type":"string",
-					"description":"Model thought process"
+				"think": {
+					"type": "string",
+					"description": "Model thought process"
 				}
 			}
 		}
+	},
+	"model": {
+		"options": {
+			"systemMessages": "multiple",
+			"toolCallingByModel": true
+		}
 	}
 }
-

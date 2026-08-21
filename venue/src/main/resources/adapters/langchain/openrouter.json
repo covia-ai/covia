@@ -64,5 +64,10 @@
 				}
 			}
 		}
+	},
+	"model": {
+		"options": {
+			"systemMessages": "multiple"
+		}
 	}
 }

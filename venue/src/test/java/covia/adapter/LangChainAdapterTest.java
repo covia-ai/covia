@@ -1640,4 +1640,62 @@ public class LangChainAdapterTest {
 		assertNotNull(RT.getIn(ollama, "url"), "ollama entry always names its resolved url");
 		assertNotNull(RT.getIn(ollama, "ready"));
 	}
+
+	// ========== model facet: provider rendering hints ==========
+
+	/**
+	 * Providers declare their API quirks as DATA on the asset, so a caller
+	 * shapes a prompt from the declaration rather than branching on a name.
+	 */
+	@Test
+	public void testProviderAssetsDeclareModelOptions() {
+		var engine = covia.venue.TestEngine.ENGINE;
+		var ctx = covia.venue.RequestContext.of(covia.venue.TestEngine.uniqueDID("model-facet"));
+		// Anthropic: one system parameter, rejects system-only, caches a prefix.
+		covia.grid.Asset anthropic = engine.resolveAsset(
+			Strings.create("v/ops/langchain/anthropic"), ctx);
+		AMap<AString, ACell> opts = covia.adapter.agent.AbstractLLMAdapter.modelOptions(anthropic.meta());
+		assertEquals("single", covia.adapter.agent.AbstractLLMAdapter.modelOptionText(
+			anthropic.meta(), Strings.create("systemMessages")));
+		assertTrue(covia.adapter.agent.AbstractLLMAdapter.modelOption(
+			anthropic.meta(), Strings.create("requiresUserMessage")));
+		assertTrue(covia.adapter.agent.AbstractLLMAdapter.modelOption(
+			anthropic.meta(), Strings.create("cachePrefix")));
+		assertFalse(opts.isEmpty());
+
+		// An OpenAI-compatible provider keeps its system messages separate.
+		covia.grid.Asset deepseek = engine.resolveAsset(
+			Strings.create("v/ops/langchain/deepseek"), ctx);
+		assertEquals("multiple", covia.adapter.agent.AbstractLLMAdapter.modelOptionText(
+			deepseek.meta(), Strings.create("systemMessages")));
+		// Undeclared options read false rather than throwing.
+		assertFalse(covia.adapter.agent.AbstractLLMAdapter.modelOption(
+			deepseek.meta(), Strings.create("requiresUserMessage")));
+	}
+
+	/** An asset with no model facet is simply "nothing special". */
+	@Test
+	public void testModelOptionsAbsentIsEmpty() {
+		assertTrue(covia.adapter.agent.AbstractLLMAdapter.modelOptions(Maps.empty()).isEmpty());
+		assertTrue(covia.adapter.agent.AbstractLLMAdapter.modelOptions(null).isEmpty());
+		assertNull(covia.adapter.agent.AbstractLLMAdapter.modelOptionText(
+			Maps.empty(), Strings.create("systemMessages")));
+		// A malformed facet is ignored, not fatal — discovery must still answer.
+		assertTrue(covia.adapter.agent.AbstractLLMAdapter.modelOptions(
+			Maps.of(Strings.create("model"), Strings.create("nonsense"))).isEmpty());
+	}
+
+	/** Discovery surfaces them, so a client sees the quirks without guessing. */
+	@Test
+	public void testModelsDiscoveryIncludesOptions() {
+		var engine = covia.venue.TestEngine.ENGINE;
+		var ctx = covia.venue.RequestContext.of(covia.venue.TestEngine.uniqueDID("model-disc"));
+		ACell result = engine.jobs().invokeInternal("v/ops/langchain/models",
+			Maps.of(Strings.create("provider"), Strings.create("anthropic")), ctx)
+			.join();
+		AVector<ACell> providers = RT.ensureVector(RT.getIn(result, "providers"));
+		assertNotNull(providers);
+		assertEquals("single",
+			RT.getIn(providers.get(0), "options", "systemMessages").toString());
+	}
 }

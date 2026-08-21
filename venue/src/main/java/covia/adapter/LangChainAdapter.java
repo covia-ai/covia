@@ -20,6 +20,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.util.JSON;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
+import covia.adapter.agent.AbstractLLMAdapter;
 import covia.api.Fields;
 import covia.grid.Status;
 import covia.venue.RequestContext;
@@ -621,20 +622,43 @@ public class LangChainAdapter extends AAdapter {
 			} catch (Exception e) {
 				// No store / anonymous caller → not ready.
 			}
-			providers = providers.conj(Maps.of(
-				Strings.intern("op"), Strings.create("v/ops/langchain/" + hp.name()),
+			String opPath = "v/ops/langchain/" + hp.name();
+			AMap<AString, ACell> entry = Maps.of(
+				Strings.intern("op"), Strings.create(opPath),
 				Strings.intern("provider"), Strings.intern(hp.name()),
 				Strings.intern("keySecret"), Strings.intern(hp.keySecret()),
 				Strings.intern("ready"), ready ? CVMBool.TRUE : CVMBool.FALSE,
 				Strings.intern("defaultModel"), Strings.intern(hp.defaultModel()),
 				Strings.intern("models"), modelsFor(hp.name(), adapterCfg),
-				Strings.intern("recommendations"), hp.recommendations()));
+				Strings.intern("recommendations"), hp.recommendations());
+			// The provider's declared rendering hints, so a caller can see how
+			// a prompt must be shaped for it without branching on its name.
+			AMap<AString, ACell> options = declaredModelOptions(ctx, opPath);
+			if (!options.isEmpty()) {
+				entry = entry.assoc(Strings.intern("options"), options);
+			}
+			providers = providers.conj(entry);
 		}
 
 		if (filter == null || "ollama".equals(filter.toString())) {
 			providers = providers.conj(ollamaEntry(adapterCfg));
 		}
 		return Maps.of(Strings.intern("providers"), providers);
+	}
+
+	/**
+	 * The {@code model.options} facet declared on a provider's operation asset
+	 * (AGENT_CONTEXT.md §2, goal 5). Never throws: discovery must answer even
+	 * when one asset is missing or unreadable.
+	 */
+	private AMap<AString, ACell> declaredModelOptions(RequestContext ctx, String opPath) {
+		try {
+			covia.grid.Asset asset = engine.resolveAsset(Strings.create(opPath), ctx);
+			return (asset != null)
+				? AbstractLLMAdapter.modelOptions(asset.meta()) : Maps.empty();
+		} catch (RuntimeException e) {
+			return Maps.empty();
+		}
 	}
 
 	/** Model hints for a provider: venue config override

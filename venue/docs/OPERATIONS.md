@@ -675,3 +675,46 @@ The design adds **one virtual namespace prefix (`/v/`)** and **removes one globa
 - Federation: list `did:web:other.host:v/ops` to discover what a remote venue offers, with the same primitives.
 
 The lattice is the source of truth. Less code, less special-casing, fewer parallel data paths.
+
+## The `model` facet
+
+An LLM operation asset may carry a `model` facet beside its `operation` facet,
+declaring **provider-specific options** — facts about that provider's API that
+change how a prompt must be shaped for it:
+
+```json
+{
+  "name": "Anthropic Chat",
+  "operation": { "adapter": "langchain:anthropic", ... },
+  "model": {
+    "options": {
+      "systemMessages": "single",
+      "requiresUserMessage": true,
+      "cachePrefix": true
+    }
+  }
+}
+```
+
+These are **rendering hints declared as data**, so a caller shapes a prompt from
+the declaration rather than branching on a provider name in code. The facet and
+the `options` map are both optional: an absent facet means the OpenAI-compatible
+norm, so a provider only declares what *differs*.
+
+| Option | Meaning |
+|--------|---------|
+| `systemMessages` | `"multiple"` — separate system messages survive to the wire. `"single"` — the provider has one system parameter, so they are concatenated and the boundaries between them carry no downstream meaning. `"none"` — no system role; system content must be folded into the first user message. |
+| `requiresUserMessage` | The request is rejected without at least one non-system message (Anthropic's Messages API does this). |
+| `cachePrefix` | The provider caches an explicitly marked stable prefix, so keeping volatile elements out of the head has a direct cost saving. |
+| `toolCallingByModel` | Tool support varies per model rather than per provider, so it cannot be assumed from the provider alone. |
+
+The map is **open**: unknown keys are ignored, so an asset declaring a newer
+option stays readable by an older venue. Read it with
+`AbstractLLMAdapter.modelOptions(meta)` (or the `modelOption` /
+`modelOptionText` accessors); `v/ops/langchain/models` reports each provider's
+declared options alongside its readiness and model list.
+
+Why the asset rather than code: the provider list is operator-extensible and the
+quirks belong with the thing they describe. A venue that adds a provider declares
+its behaviour in the same asset that declares its invocation — see
+[AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §2 goal 5.

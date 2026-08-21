@@ -423,6 +423,62 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * {@link #invokeLevel3} so the same construction can be used for
 	 * inspection (e.g. {@code agent:context}) without actually calling the LLM.
 	 */
+	/** The {@code model} facet key on an LLM operation asset. */
+	public static final AString K_MODEL_FACET = Strings.intern("model");
+	/** Provider-specific rendering hints, inside the {@code model} facet. */
+	public static final AString K_OPTIONS = Strings.intern("options");
+
+	/**
+	 * The provider's declared <b>model options</b> — the {@code model.options}
+	 * facet on an LLM operation asset (e.g. {@code v/ops/langchain/anthropic}).
+	 *
+	 * <p>These are rendering hints: facts about a provider's API that change
+	 * how a prompt should be built for it, declared as data on the asset rather
+	 * than branched on by name in code. An absent facet means the
+	 * OpenAI-compatible norm, so every caller can treat empty as "nothing
+	 * special" — a provider only declares what differs.</p>
+	 *
+	 * <p>Known keys (the map is open; unknown keys are ignored, so a newer
+	 * asset stays readable by an older venue):</p>
+	 *
+	 * <ul>
+	 * <li>{@code systemMessages}: {@code "multiple"} — separate system messages
+	 *     survive to the wire; {@code "single"} — the provider has ONE system
+	 *     parameter, so they are concatenated and the boundaries between them
+	 *     carry no meaning downstream; {@code "none"} — no system role at all,
+	 *     so system content must be folded into the first user message.</li>
+	 * <li>{@code requiresUserMessage}: the request is rejected without at least
+	 *     one non-system message. Anthropic's Messages API does this, which is
+	 *     why the empty-state signal is a {@code user} turn.</li>
+	 * <li>{@code cachePrefix}: the provider caches an explicitly marked stable
+	 *     prefix, so keeping volatile elements out of the head has a direct
+	 *     cost saving (AGENT_CONTEXT.md §3.1).</li>
+	 * <li>{@code toolCallingByModel}: tool support varies per model rather than
+	 *     per provider, so it cannot be assumed from the provider alone.</li>
+	 * </ul>
+	 *
+	 * @param meta resolved operation metadata for the LLM operation
+	 * @return the options map, or an empty map when the asset declares none
+	 */
+	@SuppressWarnings("unchecked")
+	public static AMap<AString, ACell> modelOptions(AMap<AString, ACell> meta) {
+		ACell facet = (meta != null) ? meta.get(K_MODEL_FACET) : null;
+		if (!(facet instanceof AMap)) return Maps.empty();
+		ACell options = ((AMap<AString, ACell>) facet).get(K_OPTIONS);
+		return (options instanceof AMap) ? (AMap<AString, ACell>) options : Maps.empty();
+	}
+
+	/** One boolean model option, defaulting to false when undeclared. */
+	public static boolean modelOption(AMap<AString, ACell> meta, AString key) {
+		return CVMBool.TRUE.equals(modelOptions(meta).get(key));
+	}
+
+	/** One string model option, or null when undeclared. */
+	public static String modelOptionText(AMap<AString, ACell> meta, AString key) {
+		AString v = RT.ensureString(modelOptions(meta).get(key));
+		return (v != null) ? v.toString() : null;
+	}
+
 	public static AMap<AString, ACell> buildL3Input(AMap<AString, ACell> config,
 			AVector<ACell> messages, AVector<ACell> tools) {
 		AMap<AString, ACell> l3Input = Maps.of(K_MESSAGES, messages);
