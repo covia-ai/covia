@@ -710,6 +710,7 @@ declares what *differs*.
 | `requiresUserMessage` | The request is rejected without at least one non-system message (Anthropic's Messages API does this). |
 | `cachePrefix` | The provider caches an explicitly marked stable prefix, so keeping volatile elements out of the head has a direct cost saving. |
 | `toolCallingByModel` | Tool support varies per model rather than per provider, so it cannot be assumed from the provider alone. |
+| `labels` | `"markdown"` (default) or `"xml"`: the dialect in which context elements are labelled — markdown headings, or XML-style elements with explicit closing tags. One renderer applies it; see [AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §1.1. |
 
 ### `budget` — context size
 

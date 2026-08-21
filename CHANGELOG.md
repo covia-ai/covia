@@ -10,7 +10,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Added
 
-- `model` facet on LLM operation assets: optional `options` — rendering hints (`systemMessages`, `requiresUserMessage`, `cachePrefix`, `toolCallingByModel`) — and `budget.bytes`, an estimate of the context size appropriate for the model in UTF-8 bytes, with `byModel` per-model overrides; declared as data rather than branched on by provider name, reported verbatim by `v/ops/langchain/models`
+- `model` facet on LLM operation assets: optional `options` — rendering hints (`systemMessages`, `requiresUserMessage`, `cachePrefix`, `toolCallingByModel`, `labels`) — and `budget.bytes`, an estimate of the context size appropriate for the model in UTF-8 bytes, with `byModel` per-model overrides; declared as data rather than branched on by provider name, reported verbatim by `v/ops/langchain/models`
 - Hierarchical agent skills: skills and skillsets are separate declared kinds; a loaded skill contributes further sources — discovered, never auto-loaded
 - Venue skill library grouped into skillsets under `v/skills/<set>/`, with `v/skills/root` as the entry index (24 always-on lines down to 8)
 - SKILL.md frontmatter accepts `tools`, `skills` and `skillsets` lists

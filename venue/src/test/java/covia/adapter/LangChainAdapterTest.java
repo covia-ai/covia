@@ -1789,4 +1789,35 @@ public class LangChainAdapterTest {
 		assertEquals(CVMLong.create(400_000),
 			RT.getIn(providers.get(0), "model", "budget", "bytes"));
 	}
+
+	/** Labels are markdown unless an asset opts into xml; a typo changes nothing. */
+	@Test
+	public void testLabelDialectDefaultsToMarkdown() {
+		assertEquals("markdown", covia.adapter.agent.AbstractLLMAdapter.labelDialect(Maps.empty(), null).toString());
+		assertEquals("markdown", covia.adapter.agent.AbstractLLMAdapter.labelDialect(null, null).toString());
+
+		AMap<AString, ACell> xml = Maps.of(Strings.create("model"), Maps.of(
+			Strings.create("options"), Maps.of(Strings.create("labels"), Strings.create("xml"))));
+		assertEquals("xml", covia.adapter.agent.AbstractLLMAdapter.labelDialect(xml, null).toString());
+
+		for (String bad : new String[] { "XML", "Markdown", "html", "" }) {
+			AMap<AString, ACell> meta = Maps.of(Strings.create("model"), Maps.of(
+				Strings.create("options"), Maps.of(Strings.create("labels"), Strings.create(bad))));
+			assertEquals("markdown", covia.adapter.agent.AbstractLLMAdapter.labelDialect(meta, null).toString(), bad);
+		}
+
+		// A byModel override flips it for that model only.
+		AMap<AString, ACell> perModel = Maps.of(Strings.create("model"), Maps.of(
+			Strings.create("byModel"), Maps.of(Strings.create("tagged"), Maps.of(
+				Strings.create("options"), Maps.of(Strings.create("labels"), Strings.create("xml"))))));
+		assertEquals("xml", covia.adapter.agent.AbstractLLMAdapter.labelDialect(perModel, Strings.create("tagged")).toString());
+		assertEquals("markdown", covia.adapter.agent.AbstractLLMAdapter.labelDialect(perModel, Strings.create("other")).toString());
+
+		// No shipped provider opts in: markdown is the venue-wide default.
+		var engine = covia.venue.TestEngine.ENGINE;
+		var ctx = covia.venue.RequestContext.of(covia.venue.TestEngine.uniqueDID("labels"));
+		covia.grid.Asset anthropic = engine.resolveAsset(Strings.create("v/ops/langchain/anthropic"), ctx);
+		assertEquals("markdown", covia.adapter.agent.AbstractLLMAdapter.labelDialect(
+			anthropic.meta(), Strings.create("claude-sonnet-5")).toString());
+	}
 }

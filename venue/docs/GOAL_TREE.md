@@ -180,8 +180,8 @@ What the model sees, in the canonical order:
 
 ```
 [SYSTEM]            identity, lattice reference, capabilities      — fixed head
-[LOADED]            [Context: w/notes/methodology] (inherited from root)
-                    [Context: w/vendors/b/profile] (own scope)       — live surface
+[LOADED]            ## Context: w/notes/methodology (inherited from root)
+                    ## Context: w/vendors/b/profile (own scope)       — live surface
 [ANCESTORS]         [{description: "Competitive analysis for A, B, C",
                       conversation: ["Explored vendors. Methodology loaded.",
                         subgoal("Research vendors") -> pending...]},
@@ -635,7 +635,7 @@ subgoal, complete, fail, compact,
 (+ other configured tools)
 
 [LOADED]
-[Context: w/notes/methodology]
+## Context: w/notes/methodology
 "Compare revenue growth, margins, share. Flag risks."
 
 [ANCESTORS]
@@ -664,10 +664,10 @@ Generate competitive analysis report for vendors A, B, C.
 (same tool palette)
 
 [LOADED]
-[Context: w/notes/methodology]   (inherited from root)
+## Context: w/notes/methodology   (inherited from root)
 "Compare revenue growth, margins, share. Flag risks."
 
-[Context: w/vendors/b/profile]   (own scope)
+## Context: w/vendors/b/profile   (own scope)
 {name: "Beta Inc", founded: 2018, employees: 1200,
  hq: "Austin TX", sector: "enterprise software"}
 
