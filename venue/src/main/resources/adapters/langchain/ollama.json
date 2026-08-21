@@ -66,6 +66,9 @@
 		"options": {
 			"systemMessages": "multiple",
 			"toolCallingByModel": true
+		},
+		"budget": {
+			"bytes": 32000
 		}
 	}
 }

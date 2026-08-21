@@ -679,8 +679,8 @@ The lattice is the source of truth. Less code, less special-casing, fewer parall
 ## The `model` facet
 
 An LLM operation asset may carry a `model` facet beside its `operation` facet,
-declaring **provider-specific options** — facts about that provider's API that
-change how a prompt must be shaped for it:
+declaring facts about the model that change how a prompt must be **shaped** and
+**sized** for it:
 
 ```json
 {
@@ -691,15 +691,18 @@ change how a prompt must be shaped for it:
       "systemMessages": "single",
       "requiresUserMessage": true,
       "cachePrefix": true
-    }
+    },
+    "budget": { "bytes": 400000 }
   }
 }
 ```
 
-These are **rendering hints declared as data**, so a caller shapes a prompt from
-the declaration rather than branching on a provider name in code. The facet and
-the `options` map are both optional: an absent facet means the OpenAI-compatible
-norm, so a provider only declares what *differs*.
+These are **declared as data**, so a caller works from the declaration rather
+than branching on a provider name in code. The facet and everything in it are
+optional: an absent facet means the OpenAI-compatible norm, so a provider only
+declares what *differs*.
+
+### `options` — rendering hints
 
 | Option | Meaning |
 |--------|---------|
@@ -708,13 +711,45 @@ norm, so a provider only declares what *differs*.
 | `cachePrefix` | The provider caches an explicitly marked stable prefix, so keeping volatile elements out of the head has a direct cost saving. |
 | `toolCallingByModel` | Tool support varies per model rather than per provider, so it cannot be assumed from the provider alone. |
 
-The map is **open**: unknown keys are ignored, so an asset declaring a newer
+### `budget` — context size
+
+`budget.bytes` is an **estimate of the context size appropriate for the model,
+in bytes of UTF-8** — what an assembler should target, not the hard window the
+provider enforces. Bytes, because bytes are what the venue can count without a
+provider-specific tokenizer, and the agent runtime already accounts in bytes; a
+`budget.tokens` sibling may follow. The shipped values take 4 bytes ≈ 1 token
+and roughly half the advertised input window. `ollama` is deliberately small: a
+default Ollama server runs a short context and truncates the prompt head
+silently when it is exceeded, so raise it per model once the server is
+configured for more. When nothing is declared the runtime falls back to its own
+default (`ContextBuilder.DEFAULT_BUDGET`).
+
+### `byModel` — per-model overrides
+
+A provider default is not right for every model it serves: OpenRouter fronts
+models of every size, and the models behind one Ollama server vary by an order
+of magnitude. `byModel` carries the facet's own shape again, keyed by model id,
+layered over the provider level one key deep — `options` and `budget` merge
+key-wise, so an override states only what it changes:
+
+```json
+"model": {
+  "options": { "systemMessages": "multiple" },
+  "budget": { "bytes": 128000 },
+  "byModel": {
+    "google/gemini-3.5-flash": { "budget": { "bytes": 1000000 } }
+  }
+}
+```
+
+Every map is **open**: unknown keys are ignored, so an asset declaring a newer
 option stays readable by an older venue. Read it with
-`AbstractLLMAdapter.modelOptions(meta)` (or the `modelOption` /
-`modelOptionText` accessors); `v/ops/langchain/models` reports each provider's
-declared options alongside its readiness and model list.
+`AbstractLLMAdapter.modelProfile(meta, modelId)` for the resolved facet, or the
+`modelOptions` / `modelOption` / `modelOptionText` / `modelBudgetBytes`
+accessors; `v/ops/langchain/models` reports each provider's facet verbatim
+under `model`, alongside its readiness and model list.
 
 Why the asset rather than code: the provider list is operator-extensible and the
-quirks belong with the thing they describe. A venue that adds a provider declares
+facts belong with the thing they describe. A venue that adds a provider declares
 its behaviour in the same asset that declares its invocation — see
 [AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §2 goal 5.

@@ -71,6 +71,9 @@
 	"model": {
 		"options": {
 			"systemMessages": "single"
+		},
+		"budget": {
+			"bytes": 1000000
 		}
 	}
 }

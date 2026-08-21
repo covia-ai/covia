@@ -12,6 +12,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
+import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 
@@ -1651,43 +1652,131 @@ public class LangChainAdapterTest {
 	public void testProviderAssetsDeclareModelOptions() {
 		var engine = covia.venue.TestEngine.ENGINE;
 		var ctx = covia.venue.RequestContext.of(covia.venue.TestEngine.uniqueDID("model-facet"));
+		AString sonnet = Strings.create("claude-sonnet-5");
 		// Anthropic: one system parameter, rejects system-only, caches a prefix.
 		covia.grid.Asset anthropic = engine.resolveAsset(
 			Strings.create("v/ops/langchain/anthropic"), ctx);
-		AMap<AString, ACell> opts = covia.adapter.agent.AbstractLLMAdapter.modelOptions(anthropic.meta());
+		AMap<AString, ACell> opts = covia.adapter.agent.AbstractLLMAdapter.modelOptions(anthropic.meta(), sonnet);
 		assertEquals("single", covia.adapter.agent.AbstractLLMAdapter.modelOptionText(
-			anthropic.meta(), Strings.create("systemMessages")));
+			anthropic.meta(), sonnet, Strings.create("systemMessages")));
 		assertTrue(covia.adapter.agent.AbstractLLMAdapter.modelOption(
-			anthropic.meta(), Strings.create("requiresUserMessage")));
+			anthropic.meta(), sonnet, Strings.create("requiresUserMessage")));
 		assertTrue(covia.adapter.agent.AbstractLLMAdapter.modelOption(
-			anthropic.meta(), Strings.create("cachePrefix")));
+			anthropic.meta(), sonnet, Strings.create("cachePrefix")));
 		assertFalse(opts.isEmpty());
 
 		// An OpenAI-compatible provider keeps its system messages separate.
 		covia.grid.Asset deepseek = engine.resolveAsset(
 			Strings.create("v/ops/langchain/deepseek"), ctx);
 		assertEquals("multiple", covia.adapter.agent.AbstractLLMAdapter.modelOptionText(
-			deepseek.meta(), Strings.create("systemMessages")));
+			deepseek.meta(), null, Strings.create("systemMessages")));
 		// Undeclared options read false rather than throwing.
 		assertFalse(covia.adapter.agent.AbstractLLMAdapter.modelOption(
-			deepseek.meta(), Strings.create("requiresUserMessage")));
+			deepseek.meta(), null, Strings.create("requiresUserMessage")));
+	}
+
+	/**
+	 * Every provider declares a context budget in UTF-8 bytes — an estimate
+	 * of what is APPROPRIATE for the model, which an assembler targets instead
+	 * of a venue-wide constant. Local models get a deliberately small one.
+	 */
+	@Test
+	public void testProviderAssetsDeclareContextBudget() {
+		var engine = covia.venue.TestEngine.ENGINE;
+		var ctx = covia.venue.RequestContext.of(covia.venue.TestEngine.uniqueDID("model-budget"));
+		long fallback = 180_000;
+		covia.grid.Asset anthropic = engine.resolveAsset(
+			Strings.create("v/ops/langchain/anthropic"), ctx);
+		assertEquals(400_000, covia.adapter.agent.AbstractLLMAdapter.modelBudgetBytes(
+			anthropic.meta(), Strings.create("claude-sonnet-5"), fallback));
+		// A model id with no override inherits the provider level.
+		assertEquals(400_000, covia.adapter.agent.AbstractLLMAdapter.modelBudgetBytes(
+			anthropic.meta(), Strings.create("claude-opus-5"), fallback));
+
+		covia.grid.Asset ollama = engine.resolveAsset(
+			Strings.create("v/ops/langchain/ollama"), ctx);
+		long local = covia.adapter.agent.AbstractLLMAdapter.modelBudgetBytes(
+			ollama.meta(), Strings.create("qwen2.5"), fallback);
+		assertTrue(local > 0 && local < fallback, "local default should be conservative: " + local);
+
+		// Nothing declared → the caller's fallback, not zero and not an exception.
+		assertEquals(fallback, covia.adapter.agent.AbstractLLMAdapter.modelBudgetBytes(
+			Maps.empty(), Strings.create("anything"), fallback));
+		assertEquals(fallback, covia.adapter.agent.AbstractLLMAdapter.modelBudgetBytes(
+			null, null, fallback));
+	}
+
+	/**
+	 * A provider default is not right for every model it serves: OpenRouter's
+	 * router may pick a small model, so its provider budget is conservative and
+	 * the known large models raise it via {@code byModel}.
+	 */
+	@Test
+	public void testByModelOverridesLayerOverProviderLevel() {
+		var engine = covia.venue.TestEngine.ENGINE;
+		var ctx = covia.venue.RequestContext.of(covia.venue.TestEngine.uniqueDID("model-bymodel"));
+		covia.grid.Asset router = engine.resolveAsset(
+			Strings.create("v/ops/langchain/openrouter"), ctx);
+		long auto = covia.adapter.agent.AbstractLLMAdapter.modelBudgetBytes(
+			router.meta(), Strings.create("openrouter/auto"), 1);
+		long gemini = covia.adapter.agent.AbstractLLMAdapter.modelBudgetBytes(
+			router.meta(), Strings.create("google/gemini-3.5-flash"), 1);
+		assertTrue(gemini > auto, "override should raise the budget: " + gemini + " vs " + auto);
+		// The override touched only budget; the provider's options still apply.
+		assertEquals("multiple", covia.adapter.agent.AbstractLLMAdapter.modelOptionText(
+			router.meta(), Strings.create("google/gemini-3.5-flash"), Strings.create("systemMessages")));
+		// byModel never leaks into a resolved profile.
+		assertNull(covia.adapter.agent.AbstractLLMAdapter.modelProfile(
+			router.meta(), Strings.create("google/gemini-3.5-flash"))
+			.get(covia.adapter.agent.AbstractLLMAdapter.K_BY_MODEL));
+	}
+
+	/** Overrides merge one key deep: an option override keeps its siblings. */
+	@Test
+	public void testByModelMergesOptionsKeywise() {
+		AMap<AString, ACell> meta = Maps.of(Strings.create("model"), Maps.of(
+			Strings.create("options"), Maps.of(
+				Strings.create("systemMessages"), Strings.create("single"),
+				Strings.create("requiresUserMessage"), CVMBool.TRUE),
+			Strings.create("budget"), Maps.of(Strings.create("bytes"), CVMLong.create(100)),
+			Strings.create("byModel"), Maps.of(Strings.create("tiny"), Maps.of(
+				Strings.create("options"), Maps.of(
+					Strings.create("systemMessages"), Strings.create("none"))))));
+		AString tiny = Strings.create("tiny");
+		assertEquals("none", covia.adapter.agent.AbstractLLMAdapter.modelOptionText(
+			meta, tiny, Strings.create("systemMessages")));
+		assertTrue(covia.adapter.agent.AbstractLLMAdapter.modelOption(
+			meta, tiny, Strings.create("requiresUserMessage")));
+		assertEquals(100, covia.adapter.agent.AbstractLLMAdapter.modelBudgetBytes(meta, tiny, 7));
+		// Another model, and the provider level, are untouched by it.
+		assertEquals("single", covia.adapter.agent.AbstractLLMAdapter.modelOptionText(
+			meta, Strings.create("other"), Strings.create("systemMessages")));
+		assertEquals("single", covia.adapter.agent.AbstractLLMAdapter.modelOptionText(
+			meta, null, Strings.create("systemMessages")));
 	}
 
 	/** An asset with no model facet is simply "nothing special". */
 	@Test
 	public void testModelOptionsAbsentIsEmpty() {
-		assertTrue(covia.adapter.agent.AbstractLLMAdapter.modelOptions(Maps.empty()).isEmpty());
-		assertTrue(covia.adapter.agent.AbstractLLMAdapter.modelOptions(null).isEmpty());
+		assertTrue(covia.adapter.agent.AbstractLLMAdapter.modelOptions(Maps.empty(), null).isEmpty());
+		assertTrue(covia.adapter.agent.AbstractLLMAdapter.modelOptions(null, null).isEmpty());
 		assertNull(covia.adapter.agent.AbstractLLMAdapter.modelOptionText(
-			Maps.empty(), Strings.create("systemMessages")));
+			Maps.empty(), null, Strings.create("systemMessages")));
 		// A malformed facet is ignored, not fatal — discovery must still answer.
 		assertTrue(covia.adapter.agent.AbstractLLMAdapter.modelOptions(
-			Maps.of(Strings.create("model"), Strings.create("nonsense"))).isEmpty());
+			Maps.of(Strings.create("model"), Strings.create("nonsense")), null).isEmpty());
+		// A budget that is not a positive integer falls back rather than
+		// producing a zero or negative budget.
+		for (ACell bad : new ACell[] { Strings.create("lots"), CVMLong.create(0), CVMLong.create(-5) }) {
+			AMap<AString, ACell> meta = Maps.of(Strings.create("model"), Maps.of(
+				Strings.create("budget"), Maps.of(Strings.create("bytes"), bad)));
+			assertEquals(42, covia.adapter.agent.AbstractLLMAdapter.modelBudgetBytes(meta, null, 42));
+		}
 	}
 
-	/** Discovery surfaces them, so a client sees the quirks without guessing. */
+	/** Discovery surfaces the facet, so a client sees it without guessing. */
 	@Test
-	public void testModelsDiscoveryIncludesOptions() {
+	public void testModelsDiscoveryIncludesModelFacet() {
 		var engine = covia.venue.TestEngine.ENGINE;
 		var ctx = covia.venue.RequestContext.of(covia.venue.TestEngine.uniqueDID("model-disc"));
 		ACell result = engine.jobs().invokeInternal("v/ops/langchain/models",
@@ -1696,6 +1785,8 @@ public class LangChainAdapterTest {
 		AVector<ACell> providers = RT.ensureVector(RT.getIn(result, "providers"));
 		assertNotNull(providers);
 		assertEquals("single",
-			RT.getIn(providers.get(0), "options", "systemMessages").toString());
+			RT.getIn(providers.get(0), "model", "options", "systemMessages").toString());
+		assertEquals(CVMLong.create(400_000),
+			RT.getIn(providers.get(0), "model", "budget", "bytes"));
 	}
 }

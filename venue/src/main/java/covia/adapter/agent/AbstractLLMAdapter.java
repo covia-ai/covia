@@ -417,30 +417,79 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		return false;
 	}
 
-	/**
-	 * Builds the L3 input map: {@code {messages, tools, model, ...}} — the
-	 * exact payload that goes to the LLM provider operation. Factored out of
-	 * {@link #invokeLevel3} so the same construction can be used for
-	 * inspection (e.g. {@code agent:context}) without actually calling the LLM.
-	 */
+	// ========== The `model` facet: rendering hints and context budget ==========
+
 	/** The {@code model} facet key on an LLM operation asset. */
 	public static final AString K_MODEL_FACET = Strings.intern("model");
 	/** Provider-specific rendering hints, inside the {@code model} facet. */
 	public static final AString K_OPTIONS = Strings.intern("options");
+	/** Per-model overrides inside the {@code model} facet, keyed by model id. */
+	public static final AString K_BY_MODEL = Strings.intern("byModel");
+	/** Context budget in bytes of UTF-8, inside {@code model.budget}. */
+	public static final AString K_BYTES = Strings.intern("bytes");
 
 	/**
-	 * The provider's declared <b>model options</b> — the {@code model.options}
-	 * facet on an LLM operation asset (e.g. {@code v/ops/langchain/anthropic}).
+	 * The {@code model} facet on an LLM operation asset (e.g.
+	 * {@code v/ops/langchain/anthropic}), or an empty map when absent or
+	 * malformed — discovery must answer even for a broken asset.
 	 *
-	 * <p>These are rendering hints: facts about a provider's API that change
-	 * how a prompt should be built for it, declared as data on the asset rather
-	 * than branched on by name in code. An absent facet means the
-	 * OpenAI-compatible norm, so every caller can treat empty as "nothing
-	 * special" — a provider only declares what differs.</p>
+	 * <p>The facet declares, as data on the asset rather than branches in
+	 * code, facts about the model that change how a prompt is shaped and sized
+	 * for it:</p>
+	 * <ul>
+	 * <li>{@code options} — rendering hints, see {@link #modelOptions};</li>
+	 * <li>{@code budget.bytes} — an estimate of the context size appropriate
+	 *     for the model, in bytes of UTF-8, see {@link #modelBudgetBytes};</li>
+	 * <li>{@code byModel.<id>} — the same shape again for one model id, layered
+	 *     over the provider level by {@link #modelProfile}.</li>
+	 * </ul>
 	 *
-	 * <p>Known keys (the map is open; unknown keys are ignored, so a newer
-	 * asset stays readable by an older venue):</p>
+	 * <p>An absent facet means the OpenAI-compatible norm, so a provider only
+	 * declares what differs. Every map is open — unknown keys are ignored, so a
+	 * newer asset stays readable by an older venue.</p>
+	 */
+	@SuppressWarnings("unchecked")
+	public static AMap<AString, ACell> modelFacet(AMap<AString, ACell> meta) {
+		ACell facet = (meta != null) ? meta.get(K_MODEL_FACET) : null;
+		return (facet instanceof AMap) ? (AMap<AString, ACell>) facet : Maps.empty();
+	}
+
+	/**
+	 * The facet resolved for one model: the provider level with that model's
+	 * {@code byModel} entry layered over it, one key deep — {@code options}
+	 * and {@code budget} merge key-wise, so an override states only what it
+	 * changes. {@code byModel} itself is dropped from the result. A null or
+	 * unknown model id yields the provider level.
+	 */
+	@SuppressWarnings("unchecked")
+	public static AMap<AString, ACell> modelProfile(AMap<AString, ACell> meta, AString modelId) {
+		AMap<AString, ACell> facet = modelFacet(meta);
+		ACell byModel = facet.get(K_BY_MODEL);
+		AMap<AString, ACell> profile = facet.dissoc(K_BY_MODEL);
+		if (modelId == null || !(byModel instanceof AMap)) return profile;
+		ACell override = ((AMap<AString, ACell>) byModel).get(modelId);
+		if (!(override instanceof AMap)) return profile;
+		for (Map.Entry<AString, ACell> e : ((AMap<AString, ACell>) override).entrySet()) {
+			AString key = e.getKey();
+			ACell value = e.getValue();
+			ACell base = profile.get(key);
+			if (base instanceof AMap && value instanceof AMap) {
+				AMap<AString, ACell> merged = (AMap<AString, ACell>) base;
+				for (Map.Entry<AString, ACell> inner : ((AMap<AString, ACell>) value).entrySet()) {
+					merged = merged.assoc(inner.getKey(), inner.getValue());
+				}
+				value = merged;
+			}
+			profile = profile.assoc(key, value);
+		}
+		return profile;
+	}
+
+	/**
+	 * The declared <b>model options</b> for one model — rendering hints: facts
+	 * about the provider's API that change how a prompt should be built for it.
 	 *
+	 * <p>Known keys:</p>
 	 * <ul>
 	 * <li>{@code systemMessages}: {@code "multiple"} — separate system messages
 	 *     survive to the wire; {@code "single"} — the provider has ONE system
@@ -458,27 +507,49 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * </ul>
 	 *
 	 * @param meta resolved operation metadata for the LLM operation
-	 * @return the options map, or an empty map when the asset declares none
+	 * @param modelId the model in use, or null for the provider level
+	 * @return the options map, or an empty map when nothing is declared
 	 */
 	@SuppressWarnings("unchecked")
-	public static AMap<AString, ACell> modelOptions(AMap<AString, ACell> meta) {
-		ACell facet = (meta != null) ? meta.get(K_MODEL_FACET) : null;
-		if (!(facet instanceof AMap)) return Maps.empty();
-		ACell options = ((AMap<AString, ACell>) facet).get(K_OPTIONS);
+	public static AMap<AString, ACell> modelOptions(AMap<AString, ACell> meta, AString modelId) {
+		ACell options = modelProfile(meta, modelId).get(K_OPTIONS);
 		return (options instanceof AMap) ? (AMap<AString, ACell>) options : Maps.empty();
 	}
 
 	/** One boolean model option, defaulting to false when undeclared. */
-	public static boolean modelOption(AMap<AString, ACell> meta, AString key) {
-		return CVMBool.TRUE.equals(modelOptions(meta).get(key));
+	public static boolean modelOption(AMap<AString, ACell> meta, AString modelId, AString key) {
+		return CVMBool.TRUE.equals(modelOptions(meta, modelId).get(key));
 	}
 
 	/** One string model option, or null when undeclared. */
-	public static String modelOptionText(AMap<AString, ACell> meta, AString key) {
-		AString v = RT.ensureString(modelOptions(meta).get(key));
+	public static String modelOptionText(AMap<AString, ACell> meta, AString modelId, AString key) {
+		AString v = RT.ensureString(modelOptions(meta, modelId).get(key));
 		return (v != null) ? v.toString() : null;
 	}
 
+	/**
+	 * The declared <b>context budget</b> for one model, in bytes of UTF-8:
+	 * {@code model.budget.bytes}, a {@code byModel} override winning over the
+	 * provider level. It is an estimate of the context size <em>appropriate</em>
+	 * for the model — what an assembler should target — not the hard window the
+	 * provider enforces. Bytes rather than tokens because bytes are what the
+	 * venue can count without a provider-specific tokenizer; a
+	 * {@code budget.tokens} sibling may follow.
+	 *
+	 * @param defaultBytes returned when nothing is declared, or the declaration
+	 *        is not a positive integer
+	 */
+	public static long modelBudgetBytes(AMap<AString, ACell> meta, AString modelId, long defaultBytes) {
+		CVMLong bytes = RT.ensureLong(RT.getIn(modelProfile(meta, modelId), K_BUDGET, K_BYTES));
+		return (bytes != null && bytes.longValue() > 0) ? bytes.longValue() : defaultBytes;
+	}
+
+	/**
+	 * Builds the L3 input map: {@code {messages, tools, model, ...}} — the
+	 * exact payload that goes to the LLM provider operation. Factored out of
+	 * {@link #invokeLevel3} so the same construction can be used for
+	 * inspection (e.g. {@code agent:context}) without actually calling the LLM.
+	 */
 	public static AMap<AString, ACell> buildL3Input(AMap<AString, ACell> config,
 			AVector<ACell> messages, AVector<ACell> tools) {
 		AMap<AString, ACell> l3Input = Maps.of(K_MESSAGES, messages);

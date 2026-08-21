@@ -68,6 +68,36 @@
 	"model": {
 		"options": {
 			"systemMessages": "multiple"
+		},
+		"budget": {
+			"bytes": 128000
+		},
+		"byModel": {
+			"anthropic/claude-sonnet-5": {
+				"budget": {
+					"bytes": 400000
+				}
+			},
+			"openai/gpt-5.4-mini": {
+				"budget": {
+					"bytes": 500000
+				}
+			},
+			"google/gemini-3.5-flash": {
+				"budget": {
+					"bytes": 1000000
+				}
+			},
+			"deepseek/deepseek-v4-flash": {
+				"budget": {
+					"bytes": 250000
+				}
+			},
+			"mistralai/mistral-medium-latest": {
+				"budget": {
+					"bytes": 250000
+				}
+			}
 		}
 	}
 }

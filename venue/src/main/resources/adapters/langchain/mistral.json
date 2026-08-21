@@ -68,6 +68,9 @@
 	"model": {
 		"options": {
 			"systemMessages": "multiple"
+		},
+		"budget": {
+			"bytes": 250000
 		}
 	}
 }

@@ -631,11 +631,12 @@ public class LangChainAdapter extends AAdapter {
 				Strings.intern("defaultModel"), Strings.intern(hp.defaultModel()),
 				Strings.intern("models"), modelsFor(hp.name(), adapterCfg),
 				Strings.intern("recommendations"), hp.recommendations());
-			// The provider's declared rendering hints, so a caller can see how
-			// a prompt must be shaped for it without branching on its name.
-			AMap<AString, ACell> options = declaredModelOptions(ctx, opPath);
-			if (!options.isEmpty()) {
-				entry = entry.assoc(Strings.intern("options"), options);
+			// The provider's declared model facet — rendering hints and context
+			// budget — verbatim, so a caller sees how a prompt must be shaped and
+			// sized for it without branching on its name.
+			AMap<AString, ACell> facet = declaredModelFacet(ctx, opPath);
+			if (!facet.isEmpty()) {
+				entry = entry.assoc(AbstractLLMAdapter.K_MODEL_FACET, facet);
 			}
 			providers = providers.conj(entry);
 		}
@@ -647,15 +648,15 @@ public class LangChainAdapter extends AAdapter {
 	}
 
 	/**
-	 * The {@code model.options} facet declared on a provider's operation asset
+	 * The {@code model} facet declared on a provider's operation asset
 	 * (AGENT_CONTEXT.md §2, goal 5). Never throws: discovery must answer even
 	 * when one asset is missing or unreadable.
 	 */
-	private AMap<AString, ACell> declaredModelOptions(RequestContext ctx, String opPath) {
+	private AMap<AString, ACell> declaredModelFacet(RequestContext ctx, String opPath) {
 		try {
 			covia.grid.Asset asset = engine.resolveAsset(Strings.create(opPath), ctx);
 			return (asset != null)
-				? AbstractLLMAdapter.modelOptions(asset.meta()) : Maps.empty();
+				? AbstractLLMAdapter.modelFacet(asset.meta()) : Maps.empty();
 		} catch (RuntimeException e) {
 			return Maps.empty();
 		}

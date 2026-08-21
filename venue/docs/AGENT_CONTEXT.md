@@ -139,6 +139,8 @@ static Prompt assemble(Engine engine, RequestContext ctx, Spec spec) {
 
 `Prompt` is a mutable accumulator: `add(messages)` appends and tracks bytes, `remaining()` reports what is left. It knows nothing about skills, tools or capabilities. Every section is a plain function returning messages, and an empty return contributes nothing.
 
+`spec.budget()` is the model's declared context budget — `model.budget.bytes` on the LLM operation asset, resolved for the agent's model (OPERATIONS.md, *The `model` facet*) — falling back to `ContextBuilder.DEFAULT_BUDGET`. The size of the context is a fact about the model, declared beside the model, not a venue-wide constant.
+
 `p.remaining()` is passed explicitly in the two places that genuinely need it — §5.4, which sizes structured rendering from it, and §5.12, which reports on it. That is the *only* order-dependence in the system, and two visible arguments state it more honestly than a running total threaded invisibly through every method.
 
 ---

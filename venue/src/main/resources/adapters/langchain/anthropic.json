@@ -75,6 +75,9 @@
 			"systemMessages": "single",
 			"requiresUserMessage": true,
 			"cachePrefix": true
+		},
+		"budget": {
+			"bytes": 400000
 		}
 	}
 }
