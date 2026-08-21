@@ -28,7 +28,7 @@ Every inference is one call with one input:
 
 `messages` is a **flat array of `{role, content}`** in four roles — `system`, `user`, `assistant`, `tool`. There is no nested structure, no typed section, no ordering metadata. Everything that looks structured to the model is a **labelled text element** inside a content string. Two message kinds carry more than text, and the assembler passes them through untouched: an assistant message may carry `toolCalls`, a `tool` message carries its call id and result, and a user message may carry an array of content blocks for vision.
 
-`tools` is part of the prompt too, and part of the cached prefix on every provider that caches; Anthropic documents it as the first block, ahead of system and messages. The array is ordered deterministically — harness tools, then configured tools, then tools contributed by loads — and a change to any definition invalidates the prefix from wherever the provider serialises tools: on Anthropic, from the first byte. A skill that contributes tools is therefore a heavier load than one that contributes text.
+`tools` is part of the prompt too — section 0 of the sequence (§3.2.3): every provider serialises the definitions ahead of the messages, so they are the first bytes of the cached prefix.
 
 So assembly is: *compute each element, in order, and concatenate*. The value of the design is not in the data structure — it is in **which elements, in what order, produced by whom**.
 
@@ -99,6 +99,7 @@ The band is the *expected* change frequency. Content can be more volatile than i
 
 | # | Section | Band | Role | Contents |
 |---|---------|------|------|----------|
+| 0 | Tool definitions | fixed head (loads-contributed: live surface) | — | The palette (§4): harness, configured, then loads-contributed tools. A parameter, not a message; every provider places it first (§3.2.3) |
 | 1 | Identity prompt | fixed head | `system` | `config.systemPrompt` or the default identity, plus one line of session identity |
 | 2 | Capability notice | fixed head | `system` | Declared `config.caps` — **only for an agent with tools** — so bounds are known before they are hit |
 | 3 | Pinned context | live surface | `system` | `config.context` entries (§6) — operator-owned, agent cannot drop |
@@ -138,13 +139,27 @@ Bands 1, 2 and 4 are **ephemeral**: rendered for one inference from live sources
 
 **Warnings are never conversation.** The budget warning, the compaction nudge, the date and the unavailable-tools notice describe the state of *this inference*. They belong in the tail, render once, and vanish when the condition does. A warning written into the conversation would be re-read on every later inference as though it were still true.
 
+### 3.2.3 Tool definitions
+
+Tool definitions are **section 0**. They are not a message — every provider takes them as a separate parameter — but they are prompt bytes, and every provider serialises them **ahead of everything else**: Anthropic documents its cache order as tools, then system, then messages; chat templates inject them into the system region. The assembler therefore controls two things about them and not a third: **which** are present (the palette, §4) and their **order** — harness tools, then configured tools, then loads-contributed tools, each group in declared order — never their position, which is first.
+
+That position has a cost the bands cannot hide. Harness and configured tools change with configuration and belong to the fixed head; loads-contributed tools change with the working set and belong to the live surface — yet they sit *before* the head, so **a change to the tools array invalidates the whole prefix**, head included. It is the one place where live-surface content precedes fixed-head content, and it is the provider's doing, not ours. Two consequences for design:
+
+- A skill that contributes tools is a heavier load than one that contributes text. Load it at the start of a task, not in the middle of one.
+- A skill can name operations the agent calls through the generic invoke tool instead of contributing definitions, keeping the array stable. The trade is a definition the model can see against a prefix that survives.
+
+Tool definitions are charged to the budget first (§3.4) and need no cache mark of their own: the head mark covers them.
+
 ### 3.3 The top-level function
 
 The sequence above is not a description of the code — it *is* the code:
 
 ```java
 static Prompt assemble(Spec spec) {
-    Prompt p = new Prompt(spec.budget(), spec.toolBytes());
+    Prompt p = new Prompt(spec.budget());
+
+    // Section 0 — a parameter, not a message; charged first, placed first by every provider
+    p.tools(spec.tools());
 
     // Fixed head — one system message; identical every inference
     p.add(systemMessage(identityPrompt(spec), capabilityNotice(spec)));
@@ -170,7 +185,7 @@ static Prompt assemble(Spec spec) {
 }
 ```
 
-`Prompt` is a mutable accumulator: `add(messages)` appends and charges their bytes, `mark(band)` records where a band ends, `remaining()` and `used()` report the budget position. It knows nothing about skills, tools or capabilities. Every section is a plain function of the Spec returning messages; an empty return contributes nothing, and `systemMessage` joins the parts that are present into one message.
+`Prompt` is a mutable accumulator and the whole request: `tools(defs)` sets the tool array and charges its bytes, `add(messages)` appends and charges theirs, `mark(band)` records where a band ends, `remaining()` and `used()` report the budget position. It knows nothing about skills, tools or capabilities. Every section is a plain function of the Spec returning messages; an empty return contributes nothing, and `systemMessage` joins the parts that are present into one message.
 
 `p.remaining()` is passed explicitly in the three places that need it — §5.3, which sizes structured rendering from it; §5.6, which gives the conversation renderer its allowance; and the tail, which reports on it. That is the *only* order-dependence in the system, and visible arguments state it more honestly than a running total threaded invisibly through every section.
 
@@ -205,7 +220,7 @@ The assembler's output is provider-neutral. The level-3 adapter, reading the mod
 | `systemMessages: "single"` | delivers the leading system run as the provider's system parameter — a list of blocks where the API takes them, one joined text where it does not — and converts every later system message to a `[system: …]` user message in place (§3.2.1) |
 | `systemMessages: "none"` | as `"single"`, with the leading run folded into the first user message |
 | `cachePrefix` | turns the band marks into the provider's cache controls — the head mark on the last head block inside the system parameter, the others on the last message of the live surface and of the conversation |
-| always | maps `tool` messages and `toolCalls` to the provider's shapes, merging consecutive same-role messages where the API requires alternation |
+| always | maps the tool definitions to the provider's schema, in the given order, and `tool` messages and `toolCalls` to its shapes, merging consecutive same-role messages where the API requires alternation |
 | always | **never reorders, never drops, never adds content** |
 
 Nothing else about a provider needs handling: its context size is already in the budget.
@@ -391,7 +406,7 @@ The Spec is the whole interface between a runtime and the assembler. Every runti
 | `config` | The agent's merged configuration | — | — |
 | `capsCtx` | Capability-narrowed request context (§4) | — | — |
 | `model` | The resolved model profile: `budget`, `options` | — | — |
-| `toolBytes` | Size of the palette's tool definitions, charged first (§3.4) | — | — |
+| `tools` | The palette (§4): tool definitions in order — harness, configured, loads-contributed | Context tools, configured tools, loads | Harness tools, typed completion tools, configured tools, loads |
 | `loads` | The resolved loads snapshot (§4): elements, in chain order | agent → session | agent → session → frame |
 | `frames` | What the conversation renders | The session's single frame | The frame stack: ancestors compacted, active frame full |
 | `pending` | Results that arrived for this cycle | Job results | Drained into the active frame's conversation (GOAL_TREE.md) |
