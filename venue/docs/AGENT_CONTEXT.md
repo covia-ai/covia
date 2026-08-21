@@ -86,7 +86,7 @@ Four bands, ordered by change frequency. The band is the *reason* an element sit
 |------|--------------|-------------------|
 | **Fixed head** | configuration changes | Identical across cycles — the cacheable prefix |
 | **Live surface** | the working set changes, or the data it reflects changes | Stable while the agent's loads and their sources are stable |
-| **Conversation** | a turn is added | Append-only within a cycle; rewritten only by the two sanctioned rewrites (§5.7) |
+| **Conversation** | a turn is added | Append-only within a cycle; rewritten only by the two sanctioned rewrites (§5.6) |
 | **Volatile tail** | every inference, or daily | Never cached; invalidates only itself |
 
 **Band boundaries are cache boundaries.** On a provider that caches an explicitly marked prefix (`cachePrefix`), the edge marks the last message of the fixed head, of the live surface and of the conversation; the tail is never marked. The bands are therefore not a convention about ordering — they are the literal cache structure of every request.
@@ -100,22 +100,21 @@ The band is the *expected* change frequency. Content can be more volatile than i
 | # | Section | Band | Role | Contents |
 |---|---------|------|------|----------|
 | 1 | Identity prompt | fixed head | `system` | `config.systemPrompt` or the default identity, plus one line of session identity |
-| 2 | Lattice reference | fixed head | `system` | Namespace and addressing cheat sheet |
-| 3 | Capability notice | fixed head | `system` | Declared `config.caps`, so bounds are known before they are hit |
-| 4 | Pinned context | live surface | `system` | `config.context` entries (§6) — operator-owned, agent cannot drop |
-| 5 | Skills index | live surface | `system` | `[Skills]` — one line per discoverable skill (SKILLS.md §4.3) |
-| 6 | Loaded elements | live surface | `system` | Every effective load (§7), each with its unload key |
-| 7 | Conversation | conversation | `user` / `assistant` / `tool` | The rendered frame(s) |
-| 8 | Pending results | conversation | `user` | Job results that arrived for this cycle |
-| 9 | Current input | conversation | `user` | The inbox message(s) driving this cycle |
-| 10 | Tool-loop messages | conversation | `assistant` / `tool` | Assistant/tool turns accumulated within this cycle |
-| 11 | Budget warning | volatile tail | `system` | **Only** when the budget is under pressure (§3.4) |
-| 12 | Current date | volatile tail | `system` | One line; changes daily |
-| 13 | Unavailable tools | volatile tail | `system` | Configured tools that did not resolve this cycle |
-| 14 | Outstanding task | volatile tail | `user` | The task the agent must complete or fail — the last thing before the reply |
-| — | Empty-state signal | conversation | `user` | Replaces 8–9 when there is nothing to act on |
+| 2 | Capability notice | fixed head | `system` | Declared `config.caps` — **only for an agent with tools** — so bounds are known before they are hit |
+| 3 | Pinned context | live surface | `system` | `config.context` entries (§6) — operator-owned, agent cannot drop |
+| 4 | Skills index | live surface | `system` | `[Skills]` — one line per discoverable skill (SKILLS.md §4.3) |
+| 5 | Loaded elements | live surface | `system` | Every effective load (§7), each with its unload key |
+| 6 | Conversation | conversation | `user` / `assistant` / `tool` | The rendered frame(s) |
+| 7 | Pending results | conversation | `user` | Job results that arrived for this cycle |
+| 8 | Current input | conversation | `user` | The inbox message(s) driving this cycle |
+| 9 | Tool-loop messages | conversation | `assistant` / `tool` | Assistant/tool turns accumulated within this cycle |
+| 10 | Budget warning | volatile tail | `system` | **Only** when the budget is under pressure (§3.4) |
+| 11 | Current date | volatile tail | `system` | One line; changes daily |
+| 12 | Unavailable tools | volatile tail | `system` | Configured tools that did not resolve this cycle |
+| 13 | Outstanding task | volatile tail | `user` | The task the agent must complete or fail — the last thing before the reply |
+| — | Empty-state signal | conversation | `user` | Replaces 7–8 when there is nothing to act on |
 
-The *Role* column is the role a section emits — the role that is true of its content. Sections 1–3 are **one `system` message**: they change together, are always all present, and are the first thing in every request. Sections 11–13 are **one `system` message**, composed of whichever parts are present: the tail is re-rendered every inference, and one message is the cheapest shape for it. How a system message that follows the conversation reaches a given provider is the edge's business (§3.2.1, §3.5), never a section's.
+The *Role* column is the role a section emits — the role that is true of its content. Sections 1–2 are **one `system` message** — just the identity for an agent without tools: they change together and are the first thing in every request. Sections 10–12 are **one `system` message**, composed of whichever parts are present: the tail is re-rendered every inference, and one message is the cheapest shape for it. How a system message that follows the conversation reaches a given provider is the edge's business (§3.2.1, §3.5), never a section's.
 
 ### 3.2.1 The role rule
 
@@ -148,7 +147,7 @@ static Prompt assemble(Spec spec) {
     Prompt p = new Prompt(spec.budget(), spec.toolBytes());
 
     // Fixed head — one system message; identical every inference
-    p.add(systemMessage(identityPrompt(spec), latticeReference(), capabilityNotice(spec)));
+    p.add(systemMessage(identityPrompt(spec), capabilityNotice(spec)));
     p.mark(Band.HEAD);
 
     // Live surface — re-resolved each inference; moves only when the working set moves
@@ -173,7 +172,7 @@ static Prompt assemble(Spec spec) {
 
 `Prompt` is a mutable accumulator: `add(messages)` appends and charges their bytes, `mark(band)` records where a band ends, `remaining()` and `used()` report the budget position. It knows nothing about skills, tools or capabilities. Every section is a plain function of the Spec returning messages; an empty return contributes nothing, and `systemMessage` joins the parts that are present into one message.
 
-`p.remaining()` is passed explicitly in the three places that need it — §5.4, which sizes structured rendering from it; §5.7, which gives the conversation renderer its allowance; and the tail, which reports on it. That is the *only* order-dependence in the system, and visible arguments state it more honestly than a running total threaded invisibly through every section.
+`p.remaining()` is passed explicitly in the three places that need it — §5.3, which sizes structured rendering from it; §5.6, which gives the conversation renderer its allowance; and the tail, which reports on it. That is the *only* order-dependence in the system, and visible arguments state it more honestly than a running total threaded invisibly through every section.
 
 ### 3.4 The budget
 
@@ -182,14 +181,14 @@ static Prompt assemble(Spec spec) {
 How it is spent:
 
 - The **fixed head** and the **live surface** are what they are. Loads are never evicted: the agent put them there and only the agent takes them out.
-- The **conversation** is the elastic band. It receives the remaining allowance and meets it by the two sanctioned rewrites of §5.7 — elision, which is automatic, and compaction, which needs the agent.
+- The **conversation** is the elastic band. It receives the remaining allowance and meets it by the two sanctioned rewrites of §5.6 — elision, which is automatic, and compaction, which needs the agent.
 - The **tail** is small; it is charged like everything else and never cached.
 
 What the budget does, and nothing else:
 
 | Position | Behaviour |
 |----------|-----------|
-| any | per-entry render sizing: a structured entry is capped at a twentieth of what remains when it renders (§5.4) |
+| any | per-entry render sizing: a structured entry is capped at a twentieth of what remains when it renders (§5.3) |
 | ≥ 70% | the tail carries one line — `[Context budget]` — saying the budget is filling and that every element's header is its unload key |
 | ≥ 90% | the line says compaction is required before further work; the harness offers `compact` |
 | over | the prompt is sent anyway; if the provider rejects it the cycle fails with the size and the remedy (`agent:context`, `context_unload`, `compact`) |
@@ -238,30 +237,29 @@ Four functions, four return values. A runtime that needs `capsCtx` calls `resolv
 ### 5.1 Identity prompt
 `config.systemPrompt`, else a default identity, followed by one line of session identity: the venue name, the model when configured, and the session id when one is in scope — the agent's handle for reporting back into this conversation from deferred work. Rebuilt every cycle from live config, so an `agent_update` applies on the next cycle with no freeze-on-first-use caching. Nothing that changes within a session belongs here.
 
-### 5.2 Lattice reference
-The namespace and addressing cheat sheet. Always present, so every agent knows the prefixes and resolution rules. Fixed text — pure prefix, ideal cache material.
+**Head discipline:** the head holds what every cycle of *this* agent needs and nothing more. It is cached, but providers without caching pay for it on every inference, and an agent that answers questions needs neither a namespace cheat sheet nor capability bounds. Depth belongs in skills, loaded when needed (SKILLS.md).
 
-**Head discipline:** the fixed head holds what every cycle needs and nothing more. It is cached, but providers without caching pay for it on every inference; depth belongs in skills, loaded when needed (SKILLS.md).
+The lattice reference — namespace prefixes and addressing rules — is therefore a **skill**, not a head section: a venue skill in the `data` family, mirrored into `root`, pinned by the templates of agents that have lattice tools and discoverable by any agent that meets a path. Not every agent has tools, and not every agent with tools touches the lattice.
 
-### 5.3 Capability notice
-Rendered only when `config.caps` is declared. Without it an agent discovers its boundaries by hitting them, which wastes a cycle and produces a confusing denial. This states them up front.
+### 5.2 Capability notice
+Rendered only for an agent that **has tools** and declares `config.caps`. Capabilities bound what the agent can *do*; an agent with no tools can do nothing the notice would inform. With tools, stating the bounds up front saves the cycle an agent otherwise spends discovering them by hitting them, and the confusing denial that follows.
 
-### 5.4 Pinned context
+### 5.3 Pinned context
 `config.context` entries, resolved through the entry grammar of §6. Operator-owned: the agent may mask an entry for a conversation but cannot remove it.
 
 Structured values are rendered as budget-bounded JSON5; any one entry is capped at a twentieth of the budget remaining when it renders (`max(MIN_ENTRY_BUDGET, remaining/20)`), so no single entry can consume the context. Strings render verbatim.
 
-### 5.5 Skills index
+### 5.4 Skills index
 One line per discoverable skill, with `(loaded)` against those already in context. Resolved fresh each inference from the agent's effective sources. Absent entirely when the agent declares no skill sources. See SKILLS.md §4.3.
 
-### 5.6 Loaded elements
+### 5.5 Loaded elements
 Every entry in the effective loads chain (§7), rendered through the same resolver as pinned context and re-read from the lattice on every inference (§7.2). A skill-flagged entry renders `[Skill: <name> — <path>]` plus its body; other entries render `[Context: <label>]`.
 
 Each element carries its **unload key** in its header. `context_unload` takes a path, and a skill is otherwise only ever named, so without this the key is invisible. A non-skill element's label is its ref, so it already carries its key.
 
 Failures are visible, never silent: a load that stops resolving renders `[… — unavailable: <reason>]` rather than vanishing, because a missing element changes behaviour too much to hide.
 
-### 5.7 Conversation
+### 5.6 Conversation
 Runtime-supplied frames, rendered by one `ConversationRenderer` for every runtime. llmagent supplies its session's single frame; goaltree supplies its frame stack, ancestors first at decreasing budgets and the active frame last (GOAL_TREE.md). The assembler does not know the difference.
 
 The band is append-only **within a cycle**: every inference of a tool loop sees exactly what the previous one saw, plus the new tool-loop messages. Across cycles there are exactly two sanctioned rewrites, both deliberate trades of cache for context size:
@@ -271,32 +269,32 @@ The band is append-only **within a cycle**: every inference of a tool loop sees 
 
 Everything else in the band is an append. Segments and diagnostic turns are `system` turns in the stored conversation — authored by the runtime, in sequence — and the edge keeps them in place on every provider (§3.2.1).
 
-### 5.8 Pending results
+### 5.7 Pending results
 Job results that completed for this cycle — the mechanism by which asynchronous work re-enters the conversation. Placed before the current input so that the input, the thing to act on, is closest to the reply.
 
-### 5.9 Current input
+### 5.8 Current input
 The inbox message(s) driving this cycle. goaltree synthesises a goal description here instead; same slot, different producer. When there is neither input nor pending results, the **empty-state signal** takes the slot: one `user` line saying so, so the agent can act on its role or report idle. It is content, not padding — its role as the message that keeps a system-only request legal (§3.2.1) is a consequence, not its purpose.
 
-### 5.10 Tool-loop messages
+### 5.9 Tool-loop messages
 Assistant and tool messages accumulated *within* this cycle. These are conversation, not preamble: they sit inside the band, before the tail, so each inference of the loop shares its prefix with the previous one through the last tool result and only the tail is re-rendered.
 
-### 5.11 Budget warning
+### 5.10 Budget warning
 The line described in §3.4, present at ≥ 70%, escalating at ≥ 90%. Silence is the normal case, so it costs nothing until it means something.
 
-### 5.12 Current date
+### 5.11 Current date
 One line, changing daily, taken from the Spec's clock — never from the system clock inside a section, so assembly stays pure. Kept out of the head precisely so the cacheable prefix contains no changing value; in the tail it busts only itself.
 
-### 5.13 Unavailable tools
+### 5.12 Unavailable tools
 Configured tools that did not resolve this cycle — reported so the agent adapts rather than calling into a void. Resolution is live, so a fixed path or restored grant makes the tool available on the next cycle with no recreate.
 
-### 5.14 Outstanding task
+### 5.13 Outstanding task
 Present only when the agent has a task it must complete or fail. A `user` message rendered last on every inference — after the tool-loop messages and after the notices — so it is the thing nearest the reply, and never baked into history: the model sees only tasks still outstanding.
 
 ---
 
 ## 6. Context entries — the grammar
 
-The entry model shared by pinned context (§5.4), loaded elements (§5.6), and `context_load`.
+The entry model shared by pinned context (§5.3), loaded elements (§5.5), and `context_load`.
 
 An entry is a **string** or a **map**.
 
@@ -416,7 +414,7 @@ A dash means the runtimes agree. **The table is the whole difference.** Anything
 | `Spec`, `Prompt`, `assemble`, the section functions, the label renderer | `ContextAssembler` — replaces the section-building half of `ContextBuilder` |
 | Entry resolution and rendering (§6) | `ContextLoader` |
 | Scope chain algebra (§7) | `ContextChain` |
-| Frame rendering, elision, segments (§5.7) | `ConversationRenderer` |
+| Frame rendering, elision, segments (§5.6) | `ConversationRenderer` |
 | Skills index and skill elements | `Skills` |
 | Model facts: `model.options`, `model.budget` | `AbstractLLMAdapter.modelProfile` |
 | The edge (§3.5) | `LangChainAdapter` |
@@ -437,6 +435,8 @@ Recorded so the rewrite has an acceptance test. Everything above is written as t
 - llmagent appends **tool-loop messages and the outstanding task after the tail**, so within a tool loop the tail is not last.
 - Both runtimes build a partial context and then concatenate the rest imperatively, so §3.2's ordering is only half-enforced and §4's phases interleave (palette → loads → palette again).
 - goaltree constructs a context in three separate methods, including its inspection path; the invariant that inspection matches inference is maintained by agreement rather than by construction.
+- **The lattice reference is appended to every agent's system prompt**, tool-using or not; there is no `data` skill family yet to hold it.
+- **The capability notice renders whenever `config.caps` is declared**, with or without tools.
 - `compact` exists only in the goal-tree harness; llmagent has no compaction.
 - Labels are built by string concatenation in several places (`ContextBuilder`, `ContextLoader`, `Skills`, `LLMAgentAdapter`), not by one renderer.
 - Stale references to the removed `[Context Map]` remain in a `ContextBuilder` comment.
