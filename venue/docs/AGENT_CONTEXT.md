@@ -52,6 +52,7 @@ The complete set:
 | Entry whose source failed | `[Context: <label> — unavailable: <reason>]` | `<context label="…" unavailable="…"/>` | `## Context: <label> — unavailable: <reason>` |
 | Late system message (§3.2.1) | `[system: …]` | `<system>` | `## System` |
 | Compacted conversation segment | `[Compacted: <N> turns] <summary>` | `<compacted turns="…">` | `## Compacted: <N> turns` |
+| Ancestor context (goal tree) | `[Ancestor Context]` | `<ancestors>` | `## Ancestor context` |
 | Tool-failure diagnostic | `[Tool failure: <name>] <reason>` | `<tool-failure name="…">` | `## Tool failure: <name>` |
 | Pending results | `[Pending job results]` | `<pending-results>` | `## Pending job results` |
 | Outstanding task | `[Tasks assigned to you]` | `<tasks>` | `## Tasks assigned to you` |
@@ -74,7 +75,7 @@ A block is its label followed by its body; in `xml` the body is followed by the 
 
 3. **Maintainable: sections are functions.** Each section is a function of the Spec returning messages. It can be read, tested and changed alone. Assembly is a mutable accumulator that knows only *append*, *mark* and *bytes so far* — it holds no subsystem knowledge.
 
-4. **Different agent setups supported by input, not by forking the pipeline.** goaltree renders a frame stack and synthesises a goal message; llmagent renders a session frame and an inbox. Both hand the assembler a Spec.
+4. **Different agent setups supported by input, not by forking the pipeline.** goaltree renders a frame stack and carries the frame's goal as its task; llmagent renders a session frame, an inbox and its assigned tasks. Both hand the assembler a Spec.
 
 5. **Flexible over providers**, to support the quirks of different LLMs. Sections never know which provider they are writing for. The facts about a provider that change how a prompt must be shaped or sized — whether it has a system role, whether a prefix is cached, how much context is appropriate — are declared as data on the model's operation asset (the `model` facet) and applied at the edge (§3.5) — or, for the label dialect, by the one renderer (§1.1). The assembler emits output legal for every declared provider; adding a provider means declaring its facts, not branching in a section.
 
@@ -255,7 +256,7 @@ Four functions, four return values. A runtime that needs `capsCtx` calls `resolv
 ## 5. Section notes
 
 ### 5.1 Identity prompt
-`config.systemPrompt`, else a default identity, followed by one line of session identity: the venue name, the model when configured, and the session id when one is in scope — the agent's handle for reporting back into this conversation from deferred work. Rebuilt every cycle from live config, so an `agent_update` applies on the next cycle with no freeze-on-first-use caching. Nothing that changes within a session belongs here.
+`config.systemPrompt`, else a default identity, followed by one line of session identity: the venue name, the model when configured, and the session id when one is in scope — the agent's handle for reporting back into this conversation from deferred work. Rebuilt every cycle from live config, so an `agent_update` applies on the next cycle with no freeze-on-first-use caching. A runtime may append a notice of its own — goaltree's subgoal notice for child frames — provided it is stable for the life of its scope. Nothing that changes within a session belongs here.
 
 **Head discipline:** the head holds what every cycle of *this* agent needs and nothing more. It is cached, but providers without caching pay for it on every inference, and an agent that answers questions needs neither a namespace cheat sheet nor capability bounds. Depth belongs in skills, loaded when needed (SKILLS.md).
 
@@ -293,7 +294,7 @@ Everything else in the band is an append. Segments and diagnostic turns are `sys
 Job results that completed for this cycle — the mechanism by which asynchronous work re-enters the conversation. Placed before the current input so that the input, the thing to act on, is closest to the reply.
 
 ### 5.8 Current input
-The inbox message(s) driving this cycle. goaltree synthesises a goal description here instead; same slot, different producer. When there is neither input nor pending results, the **empty-state signal** takes the slot: one `user` line saying so, so the agent can act on its role or report idle. It is content, not padding — its role as the message that keeps a system-only request legal (§3.2.1) is a consequence, not its purpose.
+The inbox message(s) driving this cycle; goaltree has none — its goal rides in the task slot (§5.13). When there is neither input nor pending results, the **empty-state signal** takes the slot: one `user` line saying so, so the agent can act on its role or report idle. It is content, not padding — its role as the message that keeps a system-only request legal (§3.2.1) is a consequence, not its purpose.
 
 ### 5.9 Tool-loop messages
 Assistant and tool messages accumulated *within* this cycle. These are conversation, not preamble: they sit inside the band, before the tail, so each inference of the loop shares its prefix with the previous one through the last tool result and only the tail is re-rendered.
@@ -308,7 +309,7 @@ One line, changing daily, taken from the Spec's clock — never from the system 
 Configured tools that did not resolve this cycle — reported so the agent adapts rather than calling into a void. Resolution is live, so a fixed path or restored grant makes the tool available on the next cycle with no recreate.
 
 ### 5.13 Outstanding task
-Present only when the agent has a task it must complete or fail. A `user` message rendered last on every inference — after the tool-loop messages and after the notices — so it is the thing nearest the reply, and never baked into history: the model sees only tasks still outstanding.
+Present only when the agent has a task it must complete or fail. A `user` message rendered last on every inference — after the tool-loop messages and after the notices — so it is the thing nearest the reply, and never baked into history: the model sees only tasks still outstanding. For goaltree this is the active frame's **goal** — the `subgoal` description — rendered last for the same reason, and therefore never persisted as a turn or re-appended after compaction.
 
 ---
 
@@ -410,14 +411,15 @@ The Spec is the whole interface between a runtime and the assembler. Every runti
 |-------|---------|----------|----------|
 | `config` | The agent's merged configuration | — | — |
 | `capsCtx` | Capability-narrowed request context (§4) | — | — |
+| `headNotice` | Runtime text appended to the head, stable within its scope (§5.1) | — (none) | Subgoal notice for child frames |
 | `model` | The resolved model profile: `budget`, `options` — including the label dialect the renderer uses | — | — |
 | `tools` | The palette (§4): tool definitions in order — harness, configured, loads-contributed | Context tools, configured tools, loads | Harness tools, typed completion tools, configured tools, loads |
 | `loads` | The resolved loads snapshot (§4): elements, in chain order | agent → session | agent → session → frame |
 | `frames` | What the conversation renders | The session's single frame | The frame stack: ancestors compacted, active frame full |
 | `pending` | Results that arrived for this cycle | Job results | Drained into the active frame's conversation (GOAL_TREE.md) |
-| `input` | What drives this cycle | Inbox messages | Synthesised goal description |
+| `input` | What drives this cycle | Inbox messages | — (none) |
 | `toolLoop` | Messages accumulated within this cycle | — | — |
-| `task` | The outstanding task, if any | Task message when one is open | Typed completion tools instead |
+| `task` | What must be completed or failed, rendered last (§5.13) | The open task, if any | The active frame's goal |
 | `unavailable` | Configured tools the palette could not resolve | — | — |
 | `now` | The clock | — | — |
 
@@ -458,5 +460,9 @@ Recorded so the rewrite has an acceptance test. Everything above is written as t
 - **The lattice reference is appended to every agent's system prompt**, tool-using or not; there is no `data` skill family yet to hold it.
 - **The capability notice renders whenever `config.caps` is declared**, with or without tools.
 - `compact` exists only in the goal-tree harness; llmagent has no compaction.
-- Labels are built by string concatenation in several places (`ContextBuilder`, `ContextLoader`, `Skills`, `LLMAgentAdapter`), not by one renderer. The `labels` option is declared and resolvable (`AbstractLLMAdapter.labelDialect`) but nothing reads it, so `xml` and `header` have no effect yet.
+- **Attribution notes are mid-conversation `system` messages.** llmagent's `appendTurn` precedes a foreign principal's turns with a venue-authored system note; on Anthropic it is hoisted away from the turns it introduces. goaltree's live path bypasses `appendTurn` altogether, so attribution differs by runtime.
+- **goaltree resolves the head and pinned context once per cycle** (`systemMessages`, shared by every frame and iteration), so a pinned op entry is not re-read per inference.
+- **goaltree persists the goal as the frame's opening user turn** and re-appends it after compaction, instead of rendering it last on every inference.
+- llmagent's inspection path and live path assemble the tools array in different orders.
+- Labels are built by string concatenation in several places (`ContextBuilder`, `ContextLoader`, `Skills`, `GoalTreeContext`, `LLMAgentAdapter`, `GoalTreeAdapter`), not by one renderer. The `labels` option is declared and resolvable (`AbstractLLMAdapter.labelDialect`) but nothing reads it, so `xml` and `header` have no effect yet.
 - Stale references to the removed `[Context Map]` remain in a `ContextBuilder` comment.

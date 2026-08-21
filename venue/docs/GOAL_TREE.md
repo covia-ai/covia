@@ -164,7 +164,7 @@ The sequence, bands, roles and budget are [AGENT_CONTEXT.md](./AGENT_CONTEXT.md)
 |----------------|-------------------|
 | Conversation (AGENT_CONTEXT §5.6), first | **Ancestor context** — every frame below the active one, outermost first, each rendered at a decreasing budget |
 | Conversation (AGENT_CONTEXT §5.6), rest | The active frame: compacted segments and live turns, full detail |
-| Current input (AGENT_CONTEXT §5.8) | The **goal** — the `subgoal` description that opened the active frame |
+| Outstanding task (AGENT_CONTEXT §5.13) | The **goal** — the `subgoal` description that opened the active frame, rendered last on every inference |
 | Loads chain (AGENT_CONTEXT §7.3) | A **frame tier** inside the session tier, so a subgoal curates its own working set |
 
 The key rule: **the active frame's conversation is full detail; ancestors are progressively summarised.**
@@ -191,7 +191,7 @@ What the model sees, in the canonical order:
                         subgoal("vendor-b") -> pending...]}]        — conversation, head
 [CONVERSATION]      live turns of the active frame, full detail      — conversation
 [GOAL]              Analyse Beta Inc: products, financials, market position.
-                                                                     — current input
+                                                                     — outstanding task, last
 ```
 
 Ancestor budget is configurable. Rule of thumb: parent ~300B, grandparent ~150B, great-grandparent ~80B. CellExplorer renders each ancestor's conversation at its budget — segments show as summaries, live turns may be truncated.
