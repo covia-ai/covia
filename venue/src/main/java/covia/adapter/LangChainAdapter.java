@@ -3,6 +3,7 @@ package covia.adapter;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Future;
 
@@ -41,6 +42,7 @@ import dev.langchain4j.model.chat.request.ResponseFormatType;
 import dev.langchain4j.model.chat.request.json.JsonSchema;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.output.FinishReason;
+import dev.langchain4j.model.anthropic.AnthropicTokenUsage;
 import dev.langchain4j.model.output.TokenUsage;
 import dev.langchain4j.model.chat.request.json.JsonArraySchema;
 import dev.langchain4j.model.chat.request.json.JsonBooleanSchema;
@@ -268,6 +270,7 @@ public class LangChainAdapter extends AAdapter {
 			serialiseToolResultsForProvider(messages),
 			AbstractLLMAdapter.modelOptionText(meta, modelId, OPT_SYSTEM_MESSAGES),
 			AbstractLLMAdapter.labelDialect(meta, modelId));
+		final Set<Long> cacheMarks = cacheMarksOf(input, tuning);
 
 		// Response format: "json", "text", or {name, schema} map
 		ACell responseFormatCell = RT.getIn(input, K_RESPONSE_FORMAT);
@@ -292,7 +295,8 @@ public class LangChainAdapter extends AAdapter {
 				AVector<ACell> resolvedMessages = resolveImageRefs(providerMessages, rctx);
 				ACell result;
 				try {
-					result = callModel(provider, resolvedModelName, chatModel, resolvedMessages, tools, responseFormatCell);
+					result = callModel(provider, resolvedModelName, chatModel, resolvedMessages, tools,
+						responseFormatCell, cacheMarks);
 				} catch (RuntimeException e) {
 					// A connect failure against Ollama is almost always topology
 					// (Docker vs host) — turn the bare ConnectException into a
@@ -321,8 +325,13 @@ public class LangChainAdapter extends AAdapter {
 
 	/** Optional sampling/bounds parameters passed through to the provider
 	 *  builders (#218) — all nullable; provider defaults apply when absent. */
-	record ModelTuning(Integer maxTokens, Double temperature, Double topP) {
-		static final ModelTuning NONE = new ModelTuning(null, null, null);
+	record ModelTuning(Integer maxTokens, Double temperature, Double topP, Boolean cache) {
+		static final ModelTuning NONE = new ModelTuning(null, null, null, null);
+
+		/** Prompt caching is on unless the call says {@code cache: false}. */
+		boolean caching() {
+			return cache == null || cache;
+		}
 	}
 
 	/** Reads maxTokens/temperature/topP from the op input. Numeric fields
@@ -332,9 +341,32 @@ public class LangChainAdapter extends AAdapter {
 	static ModelTuning extractTuning(ACell input) {
 		CVMLong maxTokensCell = RT.ensureLong(RT.getIn(input, "maxTokens"));
 		Integer maxTokens = (maxTokensCell != null) ? (int) maxTokensCell.longValue() : null;
+		ACell cacheCell = RT.getIn(input, K_CACHE);
+		Boolean cache = (cacheCell instanceof CVMBool b) ? b.booleanValue() : null;
 		return new ModelTuning(maxTokens,
 			asDouble(RT.getIn(input, "temperature"), "temperature"),
-			asDouble(RT.getIn(input, "topP"), "topP"));
+			asDouble(RT.getIn(input, "topP"), "topP"),
+			cache);
+	}
+
+	/** The {@code cache} input: prompt caching on or off for this call. */
+	static final AString K_CACHE = Strings.intern("cache");
+
+	/**
+	 * The message indices this call marks as prompt-cache breakpoints — the
+	 * caller's {@code cacheMarks}, honoured only while caching is on. The agent
+	 * runtime sends the band boundaries of AGENT_CONTEXT.md §3.1.
+	 */
+	static Set<Long> cacheMarksOf(ACell input, ModelTuning tuning) {
+		if (!tuning.caching()) return Set.of();
+		AVector<ACell> marks = RT.ensureVector(RT.getIn(input, AbstractLLMAdapter.K_CACHE_MARKS));
+		if (marks == null || marks.isEmpty()) return Set.of();
+		Set<Long> out = new java.util.HashSet<>();
+		for (long i = 0; i < marks.count(); i++) {
+			CVMLong idx = RT.ensureLong(marks.get(i));
+			if (idx != null && idx.longValue() >= 0) out.add(idx.longValue());
+		}
+		return out;
 	}
 
 	private static Double asDouble(ACell v, String field) {
@@ -514,11 +546,11 @@ public class LangChainAdapter extends AAdapter {
 			.modelName(model)
 			.timeout(timeout)
 			// Anthropic prompt caching is explicit opt-in: mark the system
-			// prompt and tool definitions with cache_control. The assembler
-			// keeps both stable across calls (no changing values in the early
-			// context), so agent loops reuse the cached prefix every iteration.
-			.cacheSystemMessages(true)
-			.cacheTools(true);
+			// prompt and tool definitions with cache_control (the assembler
+			// keeps both stable across calls), and the caller's cacheMarks
+			// place the conversation breakpoints — see toChatMessages.
+			.cacheSystemMessages(tuning.caching())
+			.cacheTools(tuning.caching());
 		// Anthropic's API requires max_tokens on every request; when the caller
 		// doesn't bound it, langchain4j's model default applies (covia#198).
 		if (tuning.maxTokens() != null) builder = builder.maxTokens(tuning.maxTokens());
@@ -770,13 +802,13 @@ public class LangChainAdapter extends AAdapter {
 	 *        or a map {@code {name: "...", schema: {type: "object", ...}}} for strict schema mode
 	 */
 	private static ACell callModel(String provider, String modelName, ChatModel model, AVector<ACell> messages,
-			AVector<ACell> tools, ACell responseFormatCell) {
-		List<ChatMessage> chatMessages = toChatMessages(messages);
+			AVector<ACell> tools, ACell responseFormatCell, Set<Long> cacheMarks) {
+		List<ChatMessage> chatMessages = toChatMessages(messages, cacheMarks);
 		ResponseFormat responseFormat = toResponseFormat(responseFormatCell);
 
 		if (responseFormat != null && lacksSchemaResponseFormat(provider)) {
 			if (responseFormat.jsonSchema() != null) {
-				return callModelForcedTool(model, messages, tools, responseFormatCell);
+				return callModelForcedTool(model, messages, tools, responseFormatCell, cacheMarks);
 			}
 			// Plain JSON mode (no schema) is equally unsupported there —
 			// suppress rather than let the provider client reject the
@@ -877,7 +909,7 @@ public class LangChainAdapter extends AAdapter {
 	 * (typed complete/fail), so agents are unaffected.</p>
 	 */
 	static ACell callModelForcedTool(ChatModel model, AVector<ACell> messages,
-			AVector<ACell> tools, ACell responseFormatCell) {
+			AVector<ACell> tools, ACell responseFormatCell, Set<Long> cacheMarks) {
 		String outName = outputToolName(responseFormatCell);
 		AMap<AString, ACell> outputTool = syntheticOutputTool(outName, responseFormatCell);
 		AVector<ACell> allTools = (tools != null) ? tools.conj(outputTool) : Vectors.of((ACell) outputTool);
@@ -886,7 +918,7 @@ public class LangChainAdapter extends AAdapter {
 			messages.count(), allTools.count(), outName);
 
 		ChatRequest request = ChatRequest.builder()
-			.messages(toChatMessages(messages))
+			.messages(toChatMessages(messages, cacheMarks))
 			.toolSpecifications(toToolSpecifications(allTools))
 			.toolChoice(dev.langchain4j.model.chat.request.ToolChoice.REQUIRED)
 			.build();
@@ -946,9 +978,10 @@ public class LangChainAdapter extends AAdapter {
 
 	/**
 	 * Builds an assistant message map from a full ChatResponse. Includes
-	 * {@code tokens: {input, output, total}} and {@code finishReason} when
-	 * the provider reports them. Sub-counts (cached, reasoning) are not
-	 * surfaced — keep this minimal for now.
+	 * {@code tokens: {input, output, total, cacheRead?, cacheWrite?}} and
+	 * {@code finishReason} when the provider reports them. The cache counts
+	 * are what prompt caching is costing and saving — present only when the
+	 * provider reports them (Anthropic).
 	 */
 	@SuppressWarnings("unchecked")
 	static ACell toAssistantMessage(ChatResponse response) {
@@ -963,6 +996,12 @@ public class LangChainAdapter extends AAdapter {
 			if (in != null)  tokens = tokens.assoc(K_INPUT,  CVMLong.create(in));
 			if (out != null) tokens = tokens.assoc(K_OUTPUT, CVMLong.create(out));
 			if (tot != null) tokens = tokens.assoc(K_TOTAL,  CVMLong.create(tot));
+			if (usage instanceof AnthropicTokenUsage cached) {
+				Integer read = cached.cacheReadInputTokens();
+				Integer write = cached.cacheCreationInputTokens();
+				if (read != null && read > 0) tokens = tokens.assoc(Fields.CACHE_READ, CVMLong.create(read));
+				if (write != null && write > 0) tokens = tokens.assoc(Fields.CACHE_WRITE, CVMLong.create(write));
+			}
 			if (tokens.count() > 0) msg = msg.assoc(K_TOKENS, tokens);
 		}
 
@@ -1260,11 +1299,27 @@ public class LangChainAdapter extends AAdapter {
 	 */
 	@SuppressWarnings("unchecked")
 	static List<ChatMessage> toChatMessages(AVector<ACell> messages) {
+		return toChatMessages(messages, Set.of());
+	}
+
+	/** The langchain4j message attribute the Anthropic mapper turns into {@code cache_control}. */
+	static final java.util.Map<String, Object> CACHE_ATTRIBUTE = java.util.Map.of("cache_control", "ephemeral");
+
+	/**
+	 * Converts the canonical {@code {role, content, ...}} messages to LangChain4j
+	 * messages. A message whose index is in {@code cacheMarks} carries the
+	 * cache attribute: the Anthropic mapper places {@code cache_control} on its
+	 * last content block, making it a prompt-cache breakpoint (other providers
+	 * ignore the attribute).
+	 */
+	@SuppressWarnings("unchecked")
+	static List<ChatMessage> toChatMessages(AVector<ACell> messages, Set<Long> cacheMarks) {
 		List<ChatMessage> result = new ArrayList<>();
 		for (long i = 0; i < messages.count(); i++) {
 			ACell entry = messages.get(i);
 			AString role = RT.ensureString(RT.getIn(entry, K_ROLE));
 			if (role == null) continue;
+			boolean marked = cacheMarks.contains(i);
 
 			String roleStr = role.toString();
 			switch (roleStr) {
@@ -1275,12 +1330,12 @@ public class LangChainAdapter extends AAdapter {
 				}
 				case "user": {
 					ACell contentCell = RT.getIn(entry, K_CONTENT);
+					UserMessage user;
 					if (contentCell instanceof AVector) {
 						// Multimodal content blocks (vision, covia#198):
 						// [{type:"text", text:"…"}, {type:"image",
 						//   source:{type:"base64", mediaType:"image/jpeg", data:"…"}}]
-						result.add(UserMessage.from(
-							toUserContents((AVector<ACell>) contentCell)));
+						user = UserMessage.from(toUserContents((AVector<ACell>) contentCell));
 					} else if (contentCell != null) {
 						// Agent requests are commonly structured objects. Preserve that
 						// information as readable JSON just like the assembler's persisted
@@ -1289,13 +1344,17 @@ public class LangChainAdapter extends AAdapter {
 						AString content = RT.ensureString(contentCell);
 						String text = (content != null)
 							? content.toString() : JSON.print(contentCell).toString();
-						result.add(UserMessage.from(text));
+						user = UserMessage.from(text);
+					} else {
+						break;
 					}
+					result.add(marked ? user.toBuilder().attributes(CACHE_ATTRIBUTE).build() : user);
 					break;
 				}
 				case "assistant": {
 					AString content = RT.ensureString(RT.getIn(entry, K_CONTENT));
 					ACell tcCell = RT.getIn(entry, K_TOOL_CALLS);
+					AiMessage ai;
 					if (tcCell instanceof AVector && ((AVector<ACell>) tcCell).count() > 0) {
 						List<ToolExecutionRequest> reqs = new ArrayList<>();
 						AVector<ACell> toolCalls = (AVector<ACell>) tcCell;
@@ -1315,10 +1374,13 @@ public class LangChainAdapter extends AAdapter {
 							}
 						}
 						String text = (content != null) ? content.toString() : null;
-						result.add(new AiMessage(text, reqs));
+						ai = new AiMessage(text, reqs);
 					} else if (content != null) {
-						result.add(AiMessage.from(content.toString()));
+						ai = AiMessage.from(content.toString());
+					} else {
+						break;
 					}
+					result.add(marked ? ai.toBuilder().attributes(CACHE_ATTRIBUTE).build() : ai);
 					break;
 				}
 				case "tool": {
@@ -1335,6 +1397,7 @@ public class LangChainAdapter extends AAdapter {
 						if (rawIsError instanceof CVMBool) {
 							builder.isError(CVMBool.TRUE.equals(rawIsError));
 						}
+						if (marked) builder.attributes(CACHE_ATTRIBUTE);
 						result.add(builder.build());
 					}
 					break;

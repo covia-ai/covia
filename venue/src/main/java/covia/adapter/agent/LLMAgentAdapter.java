@@ -479,7 +479,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 			ContextAssembler.Prompt prompt = ContextAssembler.assemble(
 				spec.withLoads(loads, tools, effectiveLoads).withToolLoop(messages).withTask(taskMessage));
 
-			ACell assistant = invokeLevel3(llmOperation, config, prompt.messages(), prompt.tools(), ctx);
+			ACell assistant = invokeLevel3(llmOperation, config, prompt, ctx);
 			AVector<ACell> calls = RT.ensureVector(RT.getIn(assistant, K_TOOL_CALLS));
 			boolean hasCalls = calls != null && calls.count() > 0;
 			if (!hasCalls && taskMessage != null) {

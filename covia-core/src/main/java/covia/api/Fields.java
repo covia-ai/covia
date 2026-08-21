@@ -50,6 +50,10 @@ public class Fields {
 	// List / pagination related
 	public static final StringShort ITEMS = Strings.intern("items");
 	public static final StringShort TOTAL = Strings.intern("total");
+	/** Prompt-cache tokens served at the discounted read rate (provider-reported). */
+	public static final StringShort CACHE_READ = Strings.intern("cacheRead");
+	/** Prompt-cache tokens written at the write premium (provider-reported). */
+	public static final StringShort CACHE_WRITE = Strings.intern("cacheWrite");
 	public static final StringShort OFFSET = Strings.intern("offset");
 	public static final StringShort LIMIT = Strings.intern("limit");
 	

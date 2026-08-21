@@ -1155,7 +1155,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 				.withFrames(stack)
 				.withNotice(notice));
 
-			ACell assistant = invokeLevel3(llmOperation, frameL3Config, prompt.messages(), prompt.tools(), ctx);
+			ACell assistant = invokeLevel3(llmOperation, frameL3Config, prompt, ctx);
 			AVector<ACell> calls = RT.ensureVector(RT.getIn(assistant, K_TOOL_CALLS));
 			boolean hasCalls = calls != null && calls.count() > 0;
 			if (!hasCalls) {

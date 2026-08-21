@@ -1,6 +1,6 @@
 {
 	"name": "Anthropic Chat",
-	"description": "Chat with Anthropic Claude models using the native Anthropic API. API key resolution prefers the caller/public secret store (ANTHROPIC_API_KEY by default), then the venue process environment; override by passing apiKey explicitly or as 's/<SECRET_NAME>'. Supports system prompts, tools, and structured output.",
+	"description": "Chat with Anthropic Claude models using the native Anthropic API. API key resolution prefers the caller/public secret store (ANTHROPIC_API_KEY by default), then the venue process environment; override by passing apiKey explicitly or as 's/<SECRET_NAME>'. Supports system prompts, tools, and structured output. Prompt caching is on by default: tools, system prompt and the caller's cacheMarks are cache breakpoints; usage reports cacheRead and cacheWrite tokens.",
 	"creator": "Covia",
 	"operation": {
 		"adapter": "langchain:anthropic",
@@ -52,6 +52,17 @@
 				"maxTokens": {
 					"type": "integer",
 					"description": "Maximum output tokens for the response (bounds cost/latency; e.g. 1024 for extraction calls). Provider default when omitted."
+				},
+				"cache": {
+					"type": "boolean",
+					"description": "Prompt caching (default true): the tool definitions and the system prompt are marked as cache breakpoints and cacheMarks are honoured. Set false to disable caching for this call."
+				},
+				"cacheMarks": {
+					"type": "array",
+					"items": {
+						"type": "integer"
+					},
+					"description": "Indices of messages to mark as prompt-cache breakpoints (ephemeral, 5-minute TTL), placed on each message's last content block. The agent runtime marks the conversation as it stood when the cycle began and the tool loop so far; with the system prompt and tools that is the maximum of four."
 				}
 			}
 		},

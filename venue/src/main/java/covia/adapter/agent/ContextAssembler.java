@@ -15,6 +15,7 @@ import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.data.prim.CVMLong;
 import convex.core.data.type.Types;
 import convex.core.data.util.CellExplorer;
 import convex.core.lang.RT;
@@ -77,8 +78,13 @@ public final class ContextAssembler {
 	static final String EMPTY_STATE_SIGNAL =
 		"No pending tasks, messages, or job results. You may act proactively based on your role, or report idle.";
 
-	/** The cache bands of §3.1. A mark records where a band ends. */
-	public enum Band { HEAD, LIVE, CONVERSATION }
+	/**
+	 * The cache bands of §3.1. A mark records where a band ends. The
+	 * conversation band carries two: where the cycle began ({@code CONVERSATION})
+	 * and where it stands now ({@code TOOL_LOOP}), so a provider can read the
+	 * previous inference's prefix while this inference writes the next.
+	 */
+	public enum Band { HEAD, LIVE, CONVERSATION, TOOL_LOOP }
 
 	/**
 	 * Everything one inference needs (AGENT_CONTEXT.md §8). A runtime builds
@@ -232,9 +238,32 @@ public final class ContextAssembler {
 		/** Message count at the end of each band. */
 		public Map<Band, Integer> marks() { return marks; }
 
-		/** The level-3 input: {@code {messages, tools, model, ...}}. */
+		/**
+		 * The message indices a caching provider should mark as breakpoints:
+		 * the conversation as it stood when the cycle began, and the tool loop
+		 * so far. System messages are never marked — the provider's system slot
+		 * takes its own mark — and nothing in the tail is.
+		 */
+		public AVector<ACell> cacheMarks() {
+			AVector<ACell> out = Vectors.empty();
+			long last = -1;
+			for (Band band : new Band[] { Band.CONVERSATION, Band.TOOL_LOOP }) {
+				Integer end = marks.get(band);
+				if (end == null || end == 0) continue;
+				long idx = end - 1;
+				if (idx == last) continue;
+				if (ROLE_SYSTEM.equals(RT.getIn(messages.get(idx), K_ROLE))) continue;
+				out = out.conj(CVMLong.create(idx));
+				last = idx;
+			}
+			return out;
+		}
+
+		/** The level-3 input: {@code {messages, tools, model, ..., cacheMarks?}}. */
 		public AMap<AString, ACell> toL3Input(AMap<AString, ACell> config) {
-			return AbstractLLMAdapter.buildL3Input(config, messages, tools);
+			AMap<AString, ACell> l3 = AbstractLLMAdapter.buildL3Input(config, messages, tools);
+			AVector<ACell> marks = cacheMarks();
+			return marks.isEmpty() ? l3 : l3.assoc(AbstractLLMAdapter.K_CACHE_MARKS, marks);
 		}
 	}
 
@@ -255,10 +284,12 @@ public final class ContextAssembler {
 		p.add(spec.loadElements());
 		p.mark(Band.LIVE);
 
-		// Conversation — append-only within a cycle
+		// Conversation — append-only within a cycle; marked where the cycle
+		// began and where it stands now
 		p.add(conversation(spec));
-		p.add(spec.toolLoop());
 		p.mark(Band.CONVERSATION);
+		p.add(spec.toolLoop());
+		p.mark(Band.TOOL_LOOP);
 
 		// Volatile tail — re-rendered every inference, never cached
 		p.add(notices(spec, p.used()));

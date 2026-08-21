@@ -115,6 +115,10 @@ public class ContextAssemblerTest {
 		assertEquals(1, p.marks().get(ContextAssembler.Band.HEAD));
 		assertEquals(1, p.marks().get(ContextAssembler.Band.LIVE));
 		assertEquals(2, p.marks().get(ContextAssembler.Band.CONVERSATION));
+		assertEquals(2, p.marks().get(ContextAssembler.Band.TOOL_LOOP));
+		// One cache breakpoint: the input message; the tail is never marked.
+		assertEquals(Vectors.of(CVMLong.create(1)), p.cacheMarks());
+		assertEquals(Vectors.of(CVMLong.create(1)), RT.getIn(p.toL3Input(null), "cacheMarks"));
 	}
 
 	@Test
@@ -142,7 +146,36 @@ public class ContextAssemblerTest {
 		assertEquals("assistant", role(p.messages().get(2)));
 		assertEquals("tool", role(p.messages().get(3)));
 		assertTrue(tail(p).contains("Current date:"));
-		assertEquals(4, p.marks().get(ContextAssembler.Band.CONVERSATION));
+		assertEquals(2, p.marks().get(ContextAssembler.Band.CONVERSATION));
+		assertEquals(4, p.marks().get(ContextAssembler.Band.TOOL_LOOP));
+		// Two breakpoints: where the cycle began (the input) and where it stands (the last tool result).
+		assertEquals(Vectors.of(CVMLong.create(1), CVMLong.create(3)), p.cacheMarks());
+	}
+
+	@Test
+	public void testNoCacheMarksWithoutConversation() {
+		Prompt p = ContextAssembler.assemble(spec(null));
+		assertEquals(0, p.cacheMarks().count(), "head and tail are never marked");
+		assertNull(RT.getIn(p.toL3Input(null), "cacheMarks"));
+	}
+
+	@Test
+	public void testTokenTallyIncludesCacheCounts() {
+		AbstractLLMAdapter.beginTokenTally();
+		AbstractLLMAdapter.tallyTokens(Maps.of(Fields.TOKENS, Maps.of(
+			Fields.INPUT, CVMLong.create(100), Fields.OUTPUT, CVMLong.create(10),
+			Fields.CACHE_READ, CVMLong.create(80), Fields.CACHE_WRITE, CVMLong.create(20))));
+		AbstractLLMAdapter.tallyTokens(Maps.of(Fields.TOKENS, Maps.of(
+			Fields.INPUT, CVMLong.create(50), Fields.OUTPUT, CVMLong.create(5))));
+		AMap<AString, ACell> totals = AbstractLLMAdapter.endTokenTally();
+		assertEquals(CVMLong.create(150), totals.get(Fields.INPUT));
+		assertEquals(CVMLong.create(165), totals.get(Fields.TOTAL));
+		assertEquals(CVMLong.create(80), totals.get(Fields.CACHE_READ));
+		assertEquals(CVMLong.create(20), totals.get(Fields.CACHE_WRITE));
+
+		AbstractLLMAdapter.beginTokenTally();
+		AbstractLLMAdapter.tallyTokens(Maps.of(Fields.TOKENS, Maps.of(Fields.INPUT, CVMLong.create(1))));
+		assertNull(AbstractLLMAdapter.endTokenTally().get(Fields.CACHE_READ), "absent means not measured, never zero");
 	}
 
 	// ========== Head ==========

@@ -85,6 +85,8 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	public static final AString K_ROLE       = Strings.intern("role");
 	public static final AString K_CONTENT    = Strings.intern("content");
 	public static final AString K_MESSAGES   = Strings.intern("messages");
+	/** Message indices the assembler marks as prompt-cache breakpoints (AGENT_CONTEXT.md §3.1). */
+	public static final AString K_CACHE_MARKS = Strings.intern("cacheMarks");
 	public static final AString K_TOOL_CALLS = Strings.intern("toolCalls");
 	public static final AString K_ID         = Strings.intern("id");
 	public static final AString K_NAME       = Strings.intern("name");
@@ -297,7 +299,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	// ========== Token usage tally (#217) ==========
 
 	/**
-	 * Per-transition token tally: {@code [input, output, total, measured]}.
+	 * Per-transition token tally: {@code [input, output, total, measured, cacheRead, cacheWrite]}.
 	 *
 	 * <p>Thread-confined by design: a transition (and every
 	 * {@link #invokeLevel3} call it makes — tool-loop iterations, goal-tree
@@ -311,7 +313,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 
 	/** Opens a fresh tally for this transition (overwrites any stale one). */
 	protected static void beginTokenTally() {
-		TOKEN_TALLY.set(new long[4]);
+		TOKEN_TALLY.set(new long[6]);
 	}
 
 	/**
@@ -324,10 +326,15 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		long[] t = TOKEN_TALLY.get();
 		TOKEN_TALLY.remove();
 		if (t == null || t[3] == 0) return null;
-		return Maps.of(
+		AMap<AString, ACell> totals = Maps.of(
 			Fields.INPUT,  CVMLong.create(t[0]),
 			Fields.OUTPUT, CVMLong.create(t[1]),
 			Fields.TOTAL,  CVMLong.create(t[2]));
+		// Cache counts only when the provider reported any: their absence
+		// means "not measured", never zero.
+		if (t[4] > 0) totals = totals.assoc(Fields.CACHE_READ, CVMLong.create(t[4]));
+		if (t[5] > 0) totals = totals.assoc(Fields.CACHE_WRITE, CVMLong.create(t[5]));
+		return totals;
 	}
 
 	/** Adds an L3 assistant message's {@code tokens} sub-map to the open
@@ -349,6 +356,10 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		t[1] += outV;
 		t[2] += (tot != null) ? tot.longValue() : inV + outV;
 		t[3] = 1; // measured
+		CVMLong read = RT.ensureLong(RT.getIn(tokens, Fields.CACHE_READ));
+		CVMLong write = RT.ensureLong(RT.getIn(tokens, Fields.CACHE_WRITE));
+		if (read != null) t[4] += read.longValue();
+		if (write != null) t[5] += write.longValue();
 	}
 
 	// ========== Level 3 invocation ==========
@@ -365,7 +376,22 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 */
 	protected ACell invokeLevel3(AString llmOperation, AMap<AString, ACell> config,
 			AVector<ACell> messages, AVector<ACell> tools, RequestContext ctx) {
-		AMap<AString, ACell> l3Input = buildL3Input(config, messages, tools);
+		return invokeLevel3(llmOperation, config, buildL3Input(config, messages, tools), messages, ctx);
+	}
+
+	/**
+	 * As {@link #invokeLevel3(AString, AMap, AVector, AVector, RequestContext)}
+	 * for an assembled prompt: the L3 input also carries the prompt's cache
+	 * marks, so a caching provider can place its breakpoints at the band
+	 * boundaries (AGENT_CONTEXT.md §3.1).
+	 */
+	protected ACell invokeLevel3(AString llmOperation, AMap<AString, ACell> config,
+			ContextAssembler.Prompt prompt, RequestContext ctx) {
+		return invokeLevel3(llmOperation, config, prompt.toL3Input(config), prompt.messages(), ctx);
+	}
+
+	private ACell invokeLevel3(AString llmOperation, AMap<AString, ACell> config,
+			AMap<AString, ACell> l3Input, AVector<ACell> messages, RequestContext ctx) {
 		// LLM invocation is framework infrastructure: the agent's caps gate
 		// what it can DO via tools, not the inference call itself. Trust is
 		// established by going through invokeInternal — the framework path —

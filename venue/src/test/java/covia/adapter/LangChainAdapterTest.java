@@ -1407,7 +1407,7 @@ public class LangChainAdapterTest {
 			(ACell) Maps.of("name", Strings.create("covia_read"),
 				"description", Strings.create("read a value")));
 
-		ACell result = LangChainAdapter.callModelForcedTool(stub, messages, workTools, RF_SCHEMA);
+		ACell result = LangChainAdapter.callModelForcedTool(stub, messages, workTools, RF_SCHEMA, java.util.Set.of());
 
 		// Request shape: both tools present, choice forced
 		var request = captured.get();
@@ -1429,7 +1429,7 @@ public class LangChainAdapterTest {
 
 	@Test
 	public void testTuningReachesProviderModels() {
-		LangChainAdapter.ModelTuning tuning = new LangChainAdapter.ModelTuning(null, 0.0, 0.9);
+		LangChainAdapter.ModelTuning tuning = new LangChainAdapter.ModelTuning(null, 0.0, 0.9, null);
 
 		var ollama = LangChainAdapter.buildOllamaModel("http://localhost:11434", "qwen",
 			java.time.Duration.ofSeconds(5), tuning);
@@ -1859,5 +1859,72 @@ public class LangChainAdapterTest {
 		assertEquals("user", RT.getIn(none.get(0), "role").toString());
 		assertEquals("identity\n\n[Skills]\n- alpha\n\nhello", RT.getIn(none.get(0), "content").toString());
 		assertEquals("[system: Current date: 2026-01-01.]", RT.getIn(none.get(2), "content").toString());
+	}
+
+	/** A marked message carries the cache attribute the Anthropic mapper turns into cache_control. */
+	@Test
+	public void testCacheMarksBecomeMessageAttributes() {
+		AVector<ACell> messages = Vectors.of(
+			(ACell) Maps.of("role", "system", "content", "identity"),
+			(ACell) Maps.of("role", "user", "content", "hello"),
+			(ACell) Maps.of("role", "assistant", "content", "", "toolCalls", Vectors.of(
+				Maps.of("id", "c1", "name", "covia_read", "arguments", "{}"))),
+			(ACell) Maps.of("role", "tool", "id", "c1", "name", "covia_read", "content", "x"),
+			(ACell) Maps.of("role", "user", "content", "and then"));
+		List<ChatMessage> out = LangChainAdapter.toChatMessages(messages, java.util.Set.of(1L, 3L));
+		assertEquals(5, out.size());
+		assertEquals("ephemeral", ((dev.langchain4j.data.message.UserMessage) out.get(1)).attributes().get("cache_control"));
+		assertNull(((dev.langchain4j.data.message.AiMessage) out.get(2)).attributes().get("cache_control"));
+		assertEquals("ephemeral", ((dev.langchain4j.data.message.ToolExecutionResultMessage) out.get(3)).attributes().get("cache_control"));
+		assertNull(((dev.langchain4j.data.message.UserMessage) out.get(4)).attributes().get("cache_control"));
+		// The assistant turn can be a breakpoint too.
+		List<ChatMessage> ai = LangChainAdapter.toChatMessages(messages, java.util.Set.of(2L));
+		assertEquals("ephemeral", ((dev.langchain4j.data.message.AiMessage) ai.get(2)).attributes().get("cache_control"));
+		// Unmarked calls carry no attribute at all.
+		assertTrue(((dev.langchain4j.data.message.UserMessage) LangChainAdapter.toChatMessages(messages).get(1)).attributes().isEmpty());
+	}
+
+	/** cache: false silences the marks; otherwise they are read from the call. */
+	@Test
+	public void testCacheMarksHonourTheCacheOption() {
+		AMap<AString, ACell> input = Maps.of(
+			Strings.create("cacheMarks"), Vectors.of(CVMLong.create(1), CVMLong.create(3)));
+		assertEquals(java.util.Set.of(1L, 3L), LangChainAdapter.cacheMarksOf(input, LangChainAdapter.extractTuning(input)));
+		AMap<AString, ACell> off = input.assoc(Strings.create("cache"), CVMBool.FALSE);
+		LangChainAdapter.ModelTuning tuning = LangChainAdapter.extractTuning(off);
+		assertFalse(tuning.caching());
+		assertTrue(LangChainAdapter.cacheMarksOf(off, tuning).isEmpty());
+		assertTrue(LangChainAdapter.extractTuning(Maps.empty()).caching(), "caching is on by default");
+	}
+
+	/** The anthropic op declares its cache options, so callers can see and switch them. */
+	@Test
+	public void testAnthropicOpExposesCacheOptions() {
+		var engine = covia.venue.TestEngine.ENGINE;
+		var ctx = covia.venue.RequestContext.of(covia.venue.TestEngine.uniqueDID("cache-opts"));
+		covia.grid.Asset anthropic = engine.resolveAsset(Strings.create("v/ops/langchain/anthropic"), ctx);
+		ACell props = RT.getIn(anthropic.meta(), "operation", "input", "properties");
+		assertEquals("boolean", RT.getIn(props, "cache", "type").toString());
+		assertEquals("array", RT.getIn(props, "cacheMarks", "type").toString());
+		assertEquals("integer", RT.getIn(props, "cacheMarks", "items", "type").toString());
+	}
+
+	/** Cache read/write tokens are reported when the provider measures them. */
+	@Test
+	public void testCacheUsageIsReported() {
+		ChatResponse response = ChatResponse.builder()
+			.aiMessage(dev.langchain4j.data.message.AiMessage.from("hi"))
+			.tokenUsage(dev.langchain4j.model.anthropic.AnthropicTokenUsage.builder()
+				.inputTokenCount(100).outputTokenCount(5)
+				.cacheReadInputTokens(80).cacheCreationInputTokens(20).build())
+			.build();
+		ACell msg = LangChainAdapter.toAssistantMessage(response);
+		assertEquals(CVMLong.create(80), RT.getIn(msg, "tokens", "cacheRead"));
+		assertEquals(CVMLong.create(20), RT.getIn(msg, "tokens", "cacheWrite"));
+		// A provider that reports no cache counts reports none — never zeros.
+		ChatResponse plain = ChatResponse.builder()
+			.aiMessage(dev.langchain4j.data.message.AiMessage.from("hi"))
+			.tokenUsage(new TokenUsage(12, 3, 15)).build();
+		assertNull(RT.getIn(LangChainAdapter.toAssistantMessage(plain), "tokens", "cacheRead"));
 	}
 }

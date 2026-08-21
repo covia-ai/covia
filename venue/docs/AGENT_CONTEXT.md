@@ -94,7 +94,7 @@ Four bands, ordered by change frequency. The band is the *reason* an element sit
 | **Conversation** | a turn is added | Append-only within a cycle; rewritten only by the two sanctioned rewrites (§5.6) |
 | **Volatile tail** | every inference, or daily | Never cached; invalidates only itself |
 
-**Band boundaries are cache boundaries.** On a provider that caches an explicitly marked prefix (`cachePrefix`), the edge marks the last message of the fixed head, of the live surface and of the conversation; the tail is never marked. The bands are therefore not a convention about ordering — they are the literal cache structure of every request.
+**Band boundaries are cache boundaries.** On a provider that caches an explicitly marked prefix (`cachePrefix`), the edge marks the tool definitions, the system slot (head and live surface), the conversation as it stood when the cycle began, and the tool loop so far — four breakpoints, Anthropic's maximum; the tail is never marked. Within a tool loop the last mark moves forward each inference while the previous one stays a valid read point, so each inference reads the one before. The bands are therefore not a convention about ordering — they are the literal cache structure of every request.
 
 **The rule for placing a new section:** it goes in the earliest band whose change frequency it does not exceed. That is the whole answer to "where does this go". A section that cannot name its band has not been placed; it has been appended.
 
@@ -225,7 +225,7 @@ The assembler's output is provider-neutral. The level-3 adapter, reading the mod
 | `systemMessages: "single"` | delivers the leading system run as the provider's system parameter — a list of blocks where the API takes them, one joined text where it does not — and converts every later system message to a `[system: …]` user message in place (§3.2.1) |
 | `systemMessages: "none"` | as `"single"`, with the leading run folded into the first user message |
 | `labels` | nothing at the edge beyond the wrapper above — the dialect is applied by the one renderer (§1.1), which the edge also uses for that wrapper |
-| `cachePrefix` | turns the band marks into the provider's cache controls — the head mark on the last head block inside the system parameter, the others on the last message of the live surface and of the conversation (today the head only — §9.1) |
+| `cachePrefix` | turns the band marks into the provider's cache controls: tools and the system slot by the client's own flags, the conversation-at-cycle-start and tool-loop marks as per-message breakpoints carried in the L3 input as `cacheMarks`; `cache: false` on the call switches all of it off |
 | always | maps the tool definitions to the provider's schema, in the given order, and `tool` messages and `toolCalls` to its shapes, merging consecutive same-role messages where the API requires alternation |
 | always | **never reorders, never drops, never adds content** |
 
@@ -450,7 +450,7 @@ A dash means the runtimes agree. **The table is the whole difference.** Anything
 
 Everything above is written as the target; this list is the whole of the current difference.
 
-- **Cache marks stop at the head.** `Prompt` marks all three band boundaries, but langchain4j 1.19 exposes only `cacheSystemMessages` and `cacheTools` for Anthropic — no per-message `cache_control` — so the live surface and the conversation are not yet cached there. Closing this means shaping the Anthropic request directly.
+- **The head and the live surface share one breakpoint.** The client marks only the last block of the system parameter, so a load or unload re-writes the head along with the live surface; a separate head mark means shaping the Anthropic request directly. Breakpoints are the 5-minute ephemeral kind — langchain4j exposes no 1-hour TTL.
 - `compact` exists only in the goal-tree harness; llmagent has no compaction, so the 90% line asks there for what it cannot offer.
 - **goaltree persists the goal as the frame's opening user turn** and re-appends it after compaction, rather than rendering it in the task slot. Kept deliberately for now: the root frame's "goal" of a chat session is its origin description, which must not be re-read on every inference; the task-slot rendering is right for subgoal frames and is the pending change.
 - The agent-facing text of `skill_load` and SKILLS.md §4.3 name the `[Skills]` index by its bracket label whatever the dialect.
