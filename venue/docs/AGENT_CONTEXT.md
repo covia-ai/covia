@@ -51,6 +51,8 @@ Elements are self-describing by a label convention, because substring recognitio
 
 4. **Different agent setups supported by input, not by forking the pipeline.** goaltree renders a frame stack and synthesises a goal message; llmagent renders a session frame stack and an inbox. Both hand the assembler messages.
 
+5. **Flexible over Providers** to support the quirks of different LLMs
+
 ---
 
 ## 3. The section sequence
@@ -70,22 +72,36 @@ Four bands, ordered by change frequency. The band is the *reason* an element sit
 
 ### 3.2 The sequence
 
-| # | Section | Band | Contents |
-|---|---------|------|----------|
-| 1 | Identity prompt | fixed head | `config.systemPrompt` or the default identity |
-| 2 | Lattice reference | fixed head | Namespace and addressing cheat sheet |
-| 3 | Capability notice | fixed head | Declared `config.caps`, so bounds are known before they are hit |
-| 4 | Pinned context | live surface | `config.context` entries (§6) — operator-owned, agent cannot drop |
-| 5 | Skills index | live surface | `[Skills]` — one line per discoverable skill (SKILLS.md §4.3) |
-| 6 | Loaded elements | live surface | Every effective load (§7), each with its unload key |
-| 7 | Conversation | conversation | The rendered frame stack / session history |
-| 8 | Pending results | conversation | Job results that arrived for this transition |
-| 9 | Current input | conversation | The inbox message(s) driving this turn |
-| 10 | Tool-loop messages | conversation | Assistant/tool turns accumulated within this transition |
-| 11 | Outstanding task | volatile tail | The task the agent must complete or fail |
-| 12 | Budget warning | volatile tail | **Only** when the loads budget is under pressure |
-| 13 | Current date | volatile tail | One line; changes daily |
-| 14 | Unavailable tools | volatile tail | Configured tools that did not resolve this turn |
+| # | Section | Band | Role | Contents |
+|---|---------|------|------|----------|
+| 1 | Identity prompt | fixed head | `system` | `config.systemPrompt` or the default identity |
+| 2 | Lattice reference | fixed head | `system` | Namespace and addressing cheat sheet |
+| 3 | Capability notice | fixed head | `system` | Declared `config.caps`, so bounds are known before they are hit |
+| 4 | Pinned context | live surface | `system` | `config.context` entries (§6) — operator-owned, agent cannot drop |
+| 5 | Skills index | live surface | `system` | `[Skills]` — one line per discoverable skill (SKILLS.md §4.3) |
+| 6 | Loaded elements | live surface | `system` | Every effective load (§7), each with its unload key |
+| 7 | Conversation | conversation | `user` / `assistant` | The rendered frame stack / session history |
+| 8 | Pending results | conversation | `user` | Job results that arrived for this transition |
+| 9 | Current input | conversation | `user` | The inbox message(s) driving this turn |
+| 10 | Tool-loop messages | conversation | `assistant` / `tool` | Assistant/tool turns accumulated within this transition |
+| 11 | Outstanding task | volatile tail | `user` | The task the agent must complete or fail |
+| 12 | Budget warning | volatile tail | `system` | **Only** when the loads budget is under pressure |
+| 13 | Current date | volatile tail | `system` | One line; changes daily |
+| 14 | Unavailable tools | volatile tail | `system` | Configured tools that did not resolve this turn |
+| — | Empty-state signal | volatile tail | `user` | Replaces 8–11 when there is nothing to act on |
+
+Sections 1–3 are composed into a **single** `system` message, not three.
+
+### 3.2.1 The role rule
+
+**Standing instruction and reference are `system`. What has happened, or must be acted on now, is `user`.** That is why pending results, the outstanding task, the empty-state signal and goaltree's synthesised goal are all `user` turns: they represent events arriving, not instructions.
+
+Two constraints make the roles load-bearing rather than cosmetic:
+
+- **A system-only request is illegal on Anthropic.** Its Messages API rejects one, so an agent triggered with no input would fail if every element were `system`. The `user`-role empty-state signal is what keeps such a turn legal — do not "tidy" it into a system message.
+- **Multiple `system` messages are a fiction at the wire.** Each becomes a `SystemMessage`, and providers with a single system parameter (Anthropic among them) concatenate them. The message boundary between `[Skills]` and `[Skill: …]` therefore carries no semantics downstream — only the §1.1 text labels do. That is what the label convention is for, and why it must stay disciplined.
+
+**Open question — data vs instruction.** Pinned context and loaded elements are `system` today, which hands a workspace document, a job result or a skill body *instruction authority*. SKILLS.md §11 already flags the trust assumption; the role choice is what makes it maximal. The defensible alternative is `system` for venue- and operator-authored instruction (identity, lattice, capabilities, skills index, skill bodies) and `user` for resolved data (documents, job results, op output). It also removes an accident: a job result reaches the model as `system` when loaded via `context_load {job: …}` but as `user` when it arrives as a pending result. Not changed yet — it alters how models weight loaded content.
 
 ### 3.3 The top-level function
 
