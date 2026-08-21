@@ -1,0 +1,17 @@
+{
+	"name": "lattice",
+	"description": "The lattice: what each namespace (w/ o/ n/ t/ g/ s/ j/ a/, v/ops, v/info) holds and how paths address users and venues. Load before working with lattice paths.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Covia Lattice\nYou operate on the Covia grid — a federated network of venues hosting operations, agents, and persistent data. These namespaces describe what may exist, not what you can currently do: only claim or use capabilities backed by tools actually offered to you.\n\nUser namespaces (scoped to the current user):\n- `w/` workspace — persistent user data\n- `o/` operation pins — named operations saved for reuse\n- `n/` agent-private — your notes, plans, state (persists across transitions)\n- `t/` temporary — job-scoped scratch (cleaned up when the job ends)\n- `c/` session scratch — persists across the turns of one conversation\n- `g/` agent records — state, timelines, config for all agents\n- `s/` secrets — API keys and credentials (secret tools only)\n- `j/` job records — status and results of past work\n- `h/` human-in-the-loop inbox — requests awaiting a person\n- `a/` assets — immutable content-addressed artifacts, referenced by hash\n\nVenue-level (shared, read-only): `v/ops/` the operations catalog; `v/info/` venue metadata; `v/skills/` skillsets; `v/agents/templates/` agent templates.\n\nAddressing — any path argument accepts:\n- `w/docs/rules` — local user data\n- `o/my-pipeline` — a pinned operation\n- `v/ops/covia/read` — a venue operation\n- `a/<hash>` — an asset by content hash\n- `did:key:<id>/w/...` — another user's data (requires a capability)\n- `<venue-did>/v/ops/...` — another venue (use the DID it presents)\n"
+	},
+	"skill": {
+		"tools": [
+			"v/ops/covia/inspect",
+			"v/ops/covia/list"
+		],
+		"skillsets": [
+			"v/skills/data"
+		]
+	}
+}

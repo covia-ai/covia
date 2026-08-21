@@ -10,6 +10,13 @@
 				"v/ops/covia/list",
 				"v/ops/covia/slice"
 			],
+			"loads": {
+				"v/skills/data/lattice": {
+					"skill": true,
+					"budget": 2000,
+					"label": "lattice"
+				}
+			},
 			"defaultTools": false,
 			"skillsets": [
 				"w/skills"

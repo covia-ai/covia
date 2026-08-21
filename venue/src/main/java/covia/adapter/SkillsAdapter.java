@@ -136,8 +136,9 @@ public class SkillsAdapter extends AAdapter {
 	/**
 	 * The platform skills — the ones about Covia and the venue as a whole rather
 	 * than any one adapter: orientation ({@code covia}, {@code venue}), how to
-	 * find things ({@code discovery}, {@code provenance}) and the skills system
-	 * itself. Materialised under {@code v/skills/<skillset>/} on boot (see
+	 * find things ({@code discovery}, {@code provenance}), the lattice reference
+	 * ({@code lattice} — namespace literacy, a skill rather than a line in every
+	 * head) and the skills system itself. Materialised under {@code v/skills/<skillset>/} on boot (see
 	 * {@link #LIBRARY_PATHS}); bodies ship in {@code content.inline} (one JSON
 	 * resource per skill).
 	 *
@@ -156,7 +157,7 @@ public class SkillsAdapter extends AAdapter {
 	 * venue skill of the same name.</p>
 	 */
 	static final String[] LIBRARY = {
-		"covia", "venue", "discovery", "provenance", "skills", "skill-authoring"
+		"covia", "venue", "discovery", "provenance", "skills", "skill-authoring", "lattice"
 	};
 
 	/**
@@ -173,6 +174,7 @@ public class SkillsAdapter extends AAdapter {
 		{"discovery",       "ops-tools/discovery",  "root/discovery"},
 		{"provenance",      "ops-tools/provenance"},
 		{"skill-authoring", "building/skill-authoring"},
+		{"lattice",         "data/lattice",         "root/lattice"},
 	};
 
 	@Override

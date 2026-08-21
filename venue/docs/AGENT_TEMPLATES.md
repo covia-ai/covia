@@ -329,6 +329,8 @@ palette assembled for the current provider call.
 
 **Tools are opt-in.** Each template explicitly lists the tools it needs in `config.tools`; `defaultTools: true` adds only the deliberately small read/list pack. GoalTree harness tools (`subgoal`, `complete`, `fail`, `compact`, `context_load`, `context_unload`, `more_tools`) are opt-in by name. The plain LLM runtime always supplies its session context load/unload tools. `skill_load` appears whenever `config.skills` is non-empty. Typed GoalTree outputs auto-inject `complete`/`fail` regardless of the tools list.
 
+**Namespace literacy is a pinned skill, not prompt text.** Every template with lattice tools pins `v/skills/data/lattice` through `config.loads` (as a skill entry), so the namespace and addressing reference renders as a loaded element the agent can mask rather than as a line in every head; `minimal` has no tools and carries none (AGENT_CONTEXT.md §5.1).
+
 Template JSON files live in `venue/src/main/resources/agent-templates/`.
 
 ### Default template

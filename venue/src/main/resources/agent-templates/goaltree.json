@@ -23,6 +23,13 @@
 				"context_unload",
 				"more_tools"
 			],
+			"loads": {
+				"v/skills/data/lattice": {
+					"skill": true,
+					"budget": 2000,
+					"label": "lattice"
+				}
+			},
 			"defaultTools": false,
 			"skillsets": [
 				"w/skills",

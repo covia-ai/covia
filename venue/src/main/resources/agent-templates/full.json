@@ -34,6 +34,13 @@
 				"context_load",
 				"context_unload"
 			],
+			"loads": {
+				"v/skills/data/lattice": {
+					"skill": true,
+					"budget": 2000,
+					"label": "lattice"
+				}
+			},
 			"skillsets": [
 				"w/skills",
 				"v/skills/root"

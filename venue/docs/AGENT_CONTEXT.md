@@ -260,7 +260,7 @@ Four functions, four return values. A runtime that needs `capsCtx` calls `resolv
 
 **Head discipline:** the head holds what every cycle of *this* agent needs and nothing more. It is cached, but providers without caching pay for it on every inference, and an agent that answers questions needs neither a namespace cheat sheet nor capability bounds. Depth belongs in skills, loaded when needed (SKILLS.md).
 
-The lattice reference — namespace prefixes and addressing rules — is therefore a **skill**, not a head section: a venue skill in the `data` family, mirrored into `root`, pinned by the templates of agents that have lattice tools and discoverable by any agent that meets a path. Not every agent has tools, and not every agent with tools touches the lattice.
+The lattice reference — namespace prefixes and addressing rules — is therefore a **skill**, not a head section: `v/skills/data/lattice`, mirrored into `root`, pinned through `config.loads` by the templates of agents that have lattice tools and discoverable by any agent that meets a path. Not every agent has tools, and not every agent with tools touches the lattice.
 
 ### 5.2 Capability notice
 Rendered only for an agent that **has tools** and declares `config.caps`. Capabilities bound what the agent can *do*; an agent with no tools can do nothing the notice would inform. With tools, stating the bounds up front saves the cycle an agent otherwise spends discovering them by hitting them, and the confusing denial that follows.
@@ -451,8 +451,6 @@ A dash means the runtimes agree. **The table is the whole difference.** Anything
 Everything above is written as the target; this list is the whole of the current difference.
 
 - **Cache marks stop at the head.** `Prompt` marks all three band boundaries, but langchain4j 1.19 exposes only `cacheSystemMessages` and `cacheTools` for Anthropic — no per-message `cache_control` — so the live surface and the conversation are not yet cached there. Closing this means shaping the Anthropic request directly.
-- **The lattice reference is appended to every agent's head**, tool-using or not; there is no `data` skill family yet to hold it.
-- **The capability notice renders whenever `config.caps` is declared**, with or without tools.
 - `compact` exists only in the goal-tree harness; llmagent has no compaction, so the 90% line asks there for what it cannot offer.
 - **goaltree persists the goal as the frame's opening user turn** and re-appends it after compaction, rather than rendering it in the task slot. Kept deliberately for now: the root frame's "goal" of a chat session is its origin description, which must not be re-read on every inference; the task-slot rendering is right for subgoal frames and is the pending change.
 - The agent-facing text of `skill_load` and SKILLS.md §4.3 name the `[Skills]` index by its bracket label whatever the dialect.

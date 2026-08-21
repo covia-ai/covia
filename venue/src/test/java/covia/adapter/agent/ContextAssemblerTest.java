@@ -152,7 +152,7 @@ public class ContextAssemblerTest {
 		Prompt p = ContextAssembler.assemble(spec(null));
 		assertEquals("system", role(p.messages().get(0)));
 		assertTrue(head(p).contains("helpful AI agent"));
-		assertTrue(head(p).contains("Covia Lattice"), "lattice reference rides the head for now");
+		assertFalse(head(p).contains("Covia Lattice"), "namespace literacy is a skill, not head text");
 	}
 
 	@Test
@@ -160,7 +160,7 @@ public class ContextAssemblerTest {
 		Prompt p = ContextAssembler.assemble(spec(
 			Maps.of(Strings.intern("systemPrompt"), Strings.create("You are a financial analyst."))));
 		assertTrue(head(p).contains("financial analyst"));
-		assertTrue(head(p).contains("Covia Lattice"));
+		assertFalse(head(p).contains("Covia Lattice"));
 	}
 
 	@Test
@@ -187,31 +187,48 @@ public class ContextAssemblerTest {
 		assertTrue(head(ContextAssembler.assemble(s)).endsWith("You are inside a subgoal."));
 	}
 
+	/** A Spec whose palette holds one tool — enough for the capability notice. */
+	private Spec withTools(AMap<AString, ACell> config) {
+		AVector<ACell> tools = Vectors.of((ACell) ToolPalette.buildToolDefinition("t", null, null));
+		return new Spec(engine, ctx, null, config, null, null, 0, null,
+			tools, null, null, null, null, null, true, null, null, null, null, null);
+	}
+
 	@Test
-	public void testCapabilityNoticeOnlyWhenDeclared() {
-		assertFalse(head(ContextAssembler.assemble(spec(null))).contains("Your capabilities (caps)"));
+	public void testCapabilityNoticeOnlyWhenDeclaredAndTheAgentHasTools() {
+		assertFalse(head(ContextAssembler.assemble(withTools(null))).contains("Your capabilities (caps)"));
 
 		AMap<AString, ACell> config = Maps.of(Strings.intern("caps"), Vectors.of(
 			(ACell) Maps.of(Strings.intern("with"), Strings.create("w/decisions/"), Strings.intern("can"), Strings.create("crud")),
 			(ACell) Maps.of(Strings.intern("with"), Strings.create("w/"), Strings.intern("can"), Strings.create("crud/read"))));
-		String h = head(ContextAssembler.assemble(spec(config)));
+		// Capabilities bound what the agent can do: with no tools, no notice.
+		assertFalse(head(ContextAssembler.assemble(spec(config))).contains("Your capabilities (caps)"));
+		String h = head(ContextAssembler.assemble(withTools(config)));
 		assertTrue(h.contains("Your capabilities (caps)"));
 		assertTrue(h.contains("crud on w/decisions/"), h);
 		assertTrue(h.contains("crud/read on w/"), h);
 		assertTrue(h.contains("Capability denied"));
 		assertTrue(h.contains("Retrying the same call does not help"));
 
-		String empty = head(ContextAssembler.assemble(spec(Maps.of(Strings.intern("caps"), Vectors.empty()))));
+		String empty = head(ContextAssembler.assemble(withTools(Maps.of(Strings.intern("caps"), Vectors.empty()))));
 		assertTrue(empty.contains("(none)"), "deny-all is stated explicitly");
 	}
 
+	/** The lattice reference is a venue skill: in the data family, mirrored into root. */
 	@Test
-	public void testLatticeReferenceContent() {
-		String h = head(ContextAssembler.assemble(spec(null)));
-		assertTrue(h.contains("Workspace"));
-		assertTrue(h.contains("v/ops"));
-		assertTrue(h.contains("Only claim or use capabilities backed by tools"),
+	public void testLatticeReferenceIsASkill() {
+		Skills.ResolvedSkill lattice = Skills.resolveRef(engine, ctx, Strings.create("v/skills/data/lattice"));
+		assertTrue(lattice.body().contains("## Covia Lattice"), lattice.body());
+		assertTrue(lattice.body().contains("only claim or use capabilities backed by tools"),
 			"addressability must not imply capability");
+		assertTrue(lattice.body().contains("`w/` workspace") && lattice.body().contains("v/ops/"));
+		Skills.ResolvedSkill mirrored = Skills.resolveRef(engine, ctx, Strings.create("v/skills/root/lattice"));
+		assertEquals(lattice.id(), mirrored.id(), "root mirror is the same skill");
+		// Pinned via config.loads, it renders as a skill element the agent can mask.
+		AMap<AString, ACell> loads = ContextChain.declaredLoads(Maps.of(
+			Strings.create("v/skills/data/lattice"), Maps.of(Strings.create("skill"), CVMBool.TRUE)), "config.loads");
+		String all = allContent(Loads.elements(engine, ctx, loads, Labels.BRACKET));
+		assertTrue(all.startsWith("[Skill: lattice — v/skills/data/lattice]\n## Covia Lattice"), all);
 	}
 
 	// ========== Pinned context ==========
@@ -584,7 +601,7 @@ public class ContextAssemblerTest {
 
 	@Test
 	public void testBudgetWarningUnderPressure() {
-		AMap<AString, ACell> bigConfig = Maps.of(Strings.intern("systemPrompt"), Strings.create("x".repeat(800)));
+		AMap<AString, ACell> bigConfig = Maps.of(Strings.intern("systemPrompt"), Strings.create("x".repeat(950)));
 		Spec s = new Spec(engine, ctx, null, bigConfig, null, null, 1000, null,
 			null, null, null, null, null, null, true, null, null, null, null, null);
 		String t = tail(ContextAssembler.assemble(s));

@@ -11,6 +11,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 ### Changed
 
 - Agent context assembly rebuilt around `ContextAssembler` — a Spec in, a Prompt out — per `venue/docs/AGENT_CONTEXT.md`: one sequence for llmagent and goaltree, one label renderer (the model's `labels` dialect honoured), one tool palette, one loads phase, one budget from the model's `budget.bytes`; the head and pinned context re-resolve every inference, the date and notices ride the tail, and inspection is the live Spec through the live assembler
+- The capability notice renders only for agents that have tools
 - Provider edge: on a provider with one system parameter (`systemMessages: "single"` / `"none"`), a system message after the conversation has begun becomes a `[system: …]` user message in place instead of being hoisted into the cached head
 
 ### Removed
@@ -19,6 +20,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Added
 
+- `lattice` venue skill (`v/skills/data/lattice`, mirrored into `root`): the namespace and addressing reference, pinned by the tool-using agent templates and loadable by any agent — no longer part of every system prompt
 - `model` facet on LLM operation assets: optional `options` — rendering hints (`systemMessages`, `requiresUserMessage`, `cachePrefix`, `toolCallingByModel`, `labels`) — and `budget.bytes`, an estimate of the context size appropriate for the model in UTF-8 bytes, with `byModel` per-model overrides; declared as data rather than branched on by provider name, reported verbatim by `v/ops/langchain/models`
 - Hierarchical agent skills: skills and skillsets are separate declared kinds; a loaded skill contributes further sources — discovered, never auto-loaded
 - Venue skill library grouped into skillsets under `v/skills/<set>/`, with `v/skills/root` as the entry index (24 always-on lines down to 8)

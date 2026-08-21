@@ -67,36 +67,6 @@ public final class ContextAssembler {
 		+ "operations to complete tasks efficiently. Give concise, clear, "
 		+ "accurate responses.";
 
-	/** Namespace and addressing reference — in the head until it is a skill (AGENT_CONTEXT.md §9.1). */
-	static final String LATTICE_REFERENCE =
-		"## Covia Lattice\n"
-		+ "You operate on the Covia grid — a federated network of venues hosting "
-		+ "operations, agents, and persistent data.\n"
-		+ "These namespaces describe what may exist, not what you can currently do. "
-		+ "Only claim or use capabilities backed by tools actually offered to you.\n"
-		+ "\n"
-		+ "User namespaces (scoped to current user):\n"
-		+ "  w/  Workspace — persistent user data\n"
-		+ "  o/  Operation pins — named operations saved for reuse\n"
-		+ "  n/  Agent-private — your notes, plans, state (persists across transitions)\n"
-		+ "  t/  Temporary — job-scoped scratch space (cleaned up when job ends)\n"
-		+ "  g/  Agent records — state, timelines, config for all agents\n"
-		+ "  s/  Secrets — API keys and credentials (secret tools only)\n"
-		+ "  j/  Job records — status and results of past work\n"
-		+ "  a/  Assets — immutable content-addressed artifacts, referenced by hash\n"
-		+ "\n"
-		+ "Venue-level (shared, read-only):\n"
-		+ "  v/ops/  Operations catalog\n"
-		+ "  v/info/  Venue metadata\n"
-		+ "\n"
-		+ "Addressing — any path argument accepts:\n"
-		+ "  w/docs/rules                  Local user data\n"
-		+ "  o/my-pipeline                 Pinned operation\n"
-		+ "  v/ops/covia/read              Venue operation\n"
-		+ "  a/<hash>                      Asset by content hash\n"
-		+ "  did:key:<id>/w/...            Cross-user (requires capability)\n"
-		+ "  <venue-did>/v/ops/...         Cross-venue (use the presented DID)";
-
 	/** Preamble of the skills index — what the block is and how to act on it (SKILLS.md §4.2). */
 	static final String SKILLS_PREAMBLE =
 		"Named skill packs available through the advertised skill-loading control. Loading injects\n"
@@ -298,7 +268,12 @@ public final class ContextAssembler {
 
 	// ========== Sections ==========
 
-	/** Identity, session identity, lattice reference, capability notice, runtime notice — one system message. */
+	/**
+	 * Identity, session identity, the capability notice (agents with tools
+	 * only), a runtime notice — one system message. The head holds what every
+	 * cycle of THIS agent needs and nothing more: namespace literacy is the
+	 * {@code lattice} skill, loaded by agents that work with the lattice.
+	 */
 	static AMap<AString, ACell> head(Spec spec) {
 		AMap<AString, ACell> config = spec.config();
 		AString identity = configValue(config, K_SYSTEM_PROMPT);
@@ -312,9 +287,12 @@ public final class ContextAssembler {
 		if (spec.sessionId() != null) sb.append(". Session: ").append(spec.sessionId());
 		sb.append('.');
 
-		sb.append("\n\n").append(LATTICE_REFERENCE);
-		String caps = capabilityNotice(RT.ensureVector(config != null ? config.get(K_CAPS) : null));
-		if (caps != null) sb.append("\n\n").append(caps);
+		// Capabilities bound what the agent can DO; with no tools there is
+		// nothing the notice would inform.
+		if (spec.tools().count() > 0) {
+			String caps = capabilityNotice(RT.ensureVector(config != null ? config.get(K_CAPS) : null));
+			if (caps != null) sb.append("\n\n").append(caps);
+		}
 		if (spec.headNotice() != null) sb.append("\n\n").append(spec.headNotice());
 		return system(sb.toString());
 	}

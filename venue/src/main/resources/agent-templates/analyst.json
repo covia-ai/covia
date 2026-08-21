@@ -14,6 +14,13 @@
 				"v/ops/schema/infer",
 				"v/ops/schema/coerce"
 			],
+			"loads": {
+				"v/skills/data/lattice": {
+					"skill": true,
+					"budget": 2000,
+					"label": "lattice"
+				}
+			},
 			"defaultTools": false,
 			"skillsets": [
 				"w/skills"

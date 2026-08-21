@@ -462,4 +462,17 @@ public class SkillsLibraryTest {
 		assertTrue(first >= 0, index);
 		assertEquals(first, index.lastIndexOf("- workspace — "), "workspace listed twice: " + index);
 	}
+
+	/** Templates with lattice tools pin the lattice skill; the tool-less one does not. */
+	@Test
+	public void testToolTemplatesPinTheLatticeSkill() {
+		for (String t : new String[] {"skilled", "reader", "worker", "analyst", "manager", "goaltree", "full"}) {
+			ACell asset = engine.resolvePath(Strings.create("v/agents/templates/" + t), ctx);
+			ACell pin = RT.getIn(asset, "agent", "config", "loads", "v/skills/data/lattice");
+			assertTrue(pin instanceof AMap, t + " should pin the lattice skill: " + pin);
+			assertTrue(Skills.isSkillEntry(pin), t + " pins it as a skill entry");
+		}
+		ACell minimal = engine.resolvePath(Strings.create("v/agents/templates/minimal"), ctx);
+		assertNull(RT.getIn(minimal, "agent", "config", "loads"), "no tools, no lattice reference");
+	}
 }

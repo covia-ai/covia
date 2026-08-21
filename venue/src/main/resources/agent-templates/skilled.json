@@ -9,6 +9,13 @@
 				"v/ops/covia/read",
 				"v/ops/covia/list"
 			],
+			"loads": {
+				"v/skills/data/lattice": {
+					"skill": true,
+					"budget": 2000,
+					"label": "lattice"
+				}
+			},
 			"skillsets": [
 				"w/skills",
 				"v/skills/root"
