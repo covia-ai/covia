@@ -705,13 +705,95 @@ public class AgentAdapterTest {
 			RequestContext.of(ALICE_DID)).awaitResult(5000));
 		assertEquals(CVMBool.TRUE,
 			RT.getIn(RT.ensureVector(unknown.get(Strings.intern("calls"))).get(0), "isError"));
-		assertEquals(1, RT.ensureVector(unknown.get(Fields.TOOL_FAILURES)).count());
 
 		// The agent itself is untouched: no cycle ran.
 		AMap<AString, ACell> info = RT.ensureMap(engine.jobs().invokeOperation("v/ops/agent/info",
 			Maps.of(Fields.AGENT_ID, "step-agent"), RequestContext.of(ALICE_DID)).awaitResult(5000));
 		ACell timeline = RT.getIn(info, "timelineLength");
 		assertTrue(timeline == null || CVMLong.create(0).equals(timeline), "no cycle ran: " + timeline);
+	}
+
+	/** The timeline entry records every inference of a cycle (#392): the
+	 *  standing context once, each call's reply and tool batch, nothing twice. */
+	@Test
+	public void testTimelineEntryRecordsEveryInference() {
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "record-agent",
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/llmagent/chat",
+					"llmOperation", "v/test/ops/toolllm",
+					"systemPrompt", "You record.")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		ACell chat = engine.jobs().invokeOperation("v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "record-agent", Fields.MESSAGE, "use your tool"),
+			RequestContext.of(ALICE_DID)).awaitResult(10000);
+		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("record-agent");
+		TestEngine.awaitTimelineCount(agent, 1, 10000);
+		AMap<AString, ACell> entry = RT.ensureMap(agent.getTimeline().get(0));
+
+		// The cycle's standing context: the head, once, on the entry — not per inference.
+		AVector<ACell> context = RT.ensureVector(entry.get(Fields.CONTEXT));
+		assertEquals("system", RT.getIn(context.get(0), "role").toString());
+		assertTrue(RT.getIn(context.get(0), "content").toString().startsWith("You record."));
+		assertNotNull(entry.get(Fields.TOOLS), "tools offered to the first inference");
+		assertEquals(RT.getIn(chat, Fields.SESSION_ID), entry.get(Fields.SESSION_ID));
+
+		// toolllm: one inference that calls echo, one that answers.
+		AVector<ACell> inferences = RT.ensureVector(entry.get(Fields.INFERENCES));
+		assertEquals(2, inferences.count(), "one record per model call: " + inferences);
+		AMap<AString, ACell> first = RT.ensureMap(inferences.get(0));
+		assertEquals(Strings.create("v/test/ops/toolllm"), first.get(Fields.OP));
+		assertNotNull(first.get(Fields.MS));
+		assertNotNull(first.get(Fields.SENT), "the first inference sends the tail");
+		assertNotNull(RT.getIn(first, Fields.REPLY, "toolCalls"), "the reply verbatim");
+		AVector<ACell> calls = RT.ensureVector(first.get(Fields.CALLS));
+		assertEquals(1, calls.count());
+		assertEquals("v/test/ops/echo", RT.getIn(calls.get(0), "name").toString());
+		assertNotNull(RT.getIn(calls.get(0), Fields.MS));
+		assertNotNull(RT.getIn(calls.get(0), Fields.RESULT, "echo"), "the result verbatim");
+		AMap<AString, ACell> second = RT.ensureMap(inferences.get(1));
+		assertNull(second.get(Fields.SENT), "nothing new was sent: the reply and result are recorded above");
+		assertNull(second.get(Fields.TOOLS), "same tools as before");
+		assertTrue(RT.getIn(second, Fields.REPLY, "content").toString().startsWith("Tool returned:"));
+
+		// Derivable data is not stored: no cycle tokens, no toolFailures on the entry.
+		assertNull(entry.get(Fields.TOKENS));
+		assertNull(entry.get(Strings.intern("toolFailures")));
+
+		// The final assistant turn carries its own inference's usage, not the cycle total.
+		AMap<AString, ACell> session = agent.getSession(
+			Blob.fromHex(RT.getIn(chat, Fields.SESSION_ID).toString()));
+		AVector<ACell> frames = RT.ensureVector(RT.getIn(session, Fields.FRAMES));
+		AVector<ACell> conversation = RT.ensureVector(RT.getIn(frames.get(0), "conversation"));
+		ACell last = conversation.get(conversation.count() - 1);
+		assertEquals("assistant", RT.getIn(last, "role").toString());
+		assertEquals(RT.getIn(second, Fields.REPLY, Fields.TOKENS), RT.getIn(last, Fields.TOKENS));
+	}
+
+	/** A cycle whose transition throws still writes its entry, with the error
+	 *  and the inferences that ran before it (#392). */
+	@Test
+	public void testFailedCycleKeepsItsInferences() {
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "failing-record-agent",
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/llmagent/chat",
+					"llmOperation", "v/test/ops/error")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		Job chat = engine.jobs().invokeOperation("v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "failing-record-agent", Fields.MESSAGE, "hello"),
+			RequestContext.of(ALICE_DID));
+		assertThrows(Exception.class, () -> chat.awaitResult(10000));
+		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("failing-record-agent");
+		TestEngine.awaitTimelineCount(agent, 1, 10000);
+		AMap<AString, ACell> entry = RT.ensureMap(agent.getTimeline().get(0));
+		assertTrue(entry.get(Fields.RESULT).toString().contains("Transition failed"),
+			entry.get(Fields.RESULT).toString());
+		AVector<ACell> inferences = RT.ensureVector(entry.get(Fields.INFERENCES));
+		assertEquals(1, inferences.count(), "the call that failed is recorded: " + entry);
+		assertNotNull(RT.getIn(inferences.get(0), Fields.ERROR));
+		assertNull(RT.getIn(inferences.get(0), Fields.REPLY));
+		assertFalse(RT.ensureVector(entry.get(Fields.CONTEXT)).isEmpty(), "the context it was sent");
 	}
 
 	@Test
@@ -3007,10 +3089,10 @@ public class AgentAdapterTest {
 	// ========== #211 — tool failures recorded + visible in agent:context ==========
 
 	/**
-	 * A denied tool call must stay observable after the cycle: on the
-	 * timeline entry ({@code toolFailures}), once as the provider-shaped tool
-	 * result in the session conversation, and in {@code agent:context} when
-	 * inspected with the sessionId. It must not also be copied into a synthetic
+	 * A denied tool call must stay observable after the cycle: in the cycle
+	 * record on the timeline entry (the call's {@code isError}), once as the
+	 * provider-shaped tool result in the session conversation, and in
+	 * {@code agent:context} when inspected with the sessionId. It must not also be copied into a synthetic
 	 * system turn (#290).
 	 */
 	@Test
@@ -3042,14 +3124,14 @@ public class AgentAdapterTest {
 
 		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("tool-fail-agent");
 
-		// 1. Timeline entry carries the failure diagnostics
+		// 1. The cycle record carries the failed call: isError, the denial as its result
 		ACell timelineEntry = agent.getTimeline().get(agent.getTimeline().count() - 1);
-		AVector<ACell> failures = RT.ensureVector(RT.getIn(timelineEntry, Fields.TOOL_FAILURES));
-		assertNotNull(failures, "timeline entry must carry toolFailures");
-		assertTrue(failures.count() > 0);
-		assertTrue(RT.getIn(failures.get(0), Fields.ERROR).toString().contains("Capability denied"),
-			"the recorded failure must carry the denial: " + failures.get(0));
-
+		AVector<ACell> inferences = RT.ensureVector(RT.getIn(timelineEntry, Fields.INFERENCES));
+		assertNotNull(inferences, "timeline entry must record the cycle's inferences");
+		ACell denied = RT.ensureVector(RT.getIn(inferences.get(0), Fields.CALLS)).get(0);
+		assertEquals(CVMBool.TRUE, RT.getIn(denied, "isError"), "the call is recorded as failed: " + denied);
+		assertTrue(RT.getIn(denied, Fields.RESULT).toString().contains("Capability denied"),
+			"the recorded failure must carry the denial: " + denied);
 		// 2. Session conversation contains exactly one tool failure turn: the
 		// provider-shaped result needed to keep the conversation valid.
 		AMap<AString, ACell> session = agent.getSession(Blob.fromHex(sidHex.toString()));

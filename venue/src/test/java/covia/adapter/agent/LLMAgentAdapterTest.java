@@ -1536,9 +1536,8 @@ public class LLMAgentAdapterTest {
 		AgentState agent = user.agent("tokens-agent");
 		TestEngine.awaitTimelineCount(agent, 1, 10000);
 
-		AMap<AString, ACell> t1 = (AMap<AString, ACell>) RT.getIn(
-			agent.getTimeline().get(0), Fields.TOKENS);
-		assertNotNull(t1, "timeline entry must record the cycle's tokens");
+		AMap<AString, ACell> t1 = entryTokens(agent.getTimeline().get(0));
+		assertNotNull(t1, "the entry's inferences must carry the cycle's tokens");
 		long total1 = RT.ensureLong(RT.getIn(t1, Fields.TOTAL)).longValue();
 		assertTrue(total1 > 0);
 		assertEquals(RT.ensureLong(RT.getIn(t1, Fields.INPUT)).longValue()
@@ -1561,8 +1560,7 @@ public class LLMAgentAdapterTest {
 			RequestContext.of(ALICE_DID)).awaitResult(10000);
 		TestEngine.awaitTimelineCount(agent, 2, 10000);
 
-		AMap<AString, ACell> t2 = (AMap<AString, ACell>) RT.getIn(
-			agent.getTimeline().get(1), Fields.TOKENS);
+		AMap<AString, ACell> t2 = entryTokens(agent.getTimeline().get(1));
 		assertNotNull(t2, "second cycle must also be measured");
 		long total2 = RT.ensureLong(RT.getIn(t2, Fields.TOTAL)).longValue();
 		long sessTotal = RT.ensureLong(RT.getIn(
@@ -1616,6 +1614,24 @@ public class LLMAgentAdapterTest {
 		ACell jobTokens = RT.getIn(record, Fields.TOKENS);
 		assertNotNull(jobTokens, "task job record must carry the cycle's token usage");
 		assertTrue(RT.ensureLong(RT.getIn(jobTokens, Fields.TOTAL)).longValue() > 0);
+	}
+
+	/** The cycle's token totals as the entry records them: the sum over its
+	 *  inferences' replies (#392) — the entry stores nothing derivable. */
+	private static AMap<AString, ACell> entryTokens(ACell entry) {
+		AVector<ACell> inferences = RT.ensureVector(RT.getIn(entry, Fields.INFERENCES));
+		if (inferences == null) return null;
+		long in = 0, out = 0, total = 0;
+		boolean measured = false;
+		for (long i = 0; i < inferences.count(); i++) {
+			ACell t = RT.getIn(inferences.get(i), Fields.REPLY, Fields.TOKENS);
+			if (t == null) continue;
+			measured = true;
+			in += RT.ensureLong(RT.getIn(t, Fields.INPUT)).longValue();
+			out += RT.ensureLong(RT.getIn(t, Fields.OUTPUT)).longValue();
+			total += RT.ensureLong(RT.getIn(t, Fields.TOTAL)).longValue();
+		}
+		return measured ? Maps.of(Fields.INPUT, in, Fields.OUTPUT, out, Fields.TOTAL, total) : null;
 	}
 
 	// ========== #215 — textual control tools, task rendering, terminal cap ==========

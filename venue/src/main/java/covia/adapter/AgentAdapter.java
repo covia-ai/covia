@@ -33,6 +33,7 @@ import convex.core.util.Utils;
 import covia.adapter.agent.AbstractLLMAdapter;
 import covia.adapter.agent.ToolPalette;
 import covia.adapter.agent.ContextInspectable;
+import covia.adapter.agent.CycleRecord;
 import covia.adapter.agent.Skills;
 import covia.api.Fields;
 import covia.grid.Job;
@@ -2717,8 +2718,19 @@ public class AgentAdapter extends AAdapter {
 						Strings.create("Transition cancelled"));
 				} catch (java.util.concurrent.CompletionException e) {
 					Throwable cause = (e.getCause() != null) ? e.getCause() : e;
-					transitionResult = Maps.of(Fields.ERROR,
-						Strings.create("Transition failed: " + describeFailure(cause)));
+					// A failure that carries its cycle record (#392) still
+					// writes the entry, with the inferences that ran before it.
+					CycleRecord.Failure carried = CycleRecord.Failure.find(cause);
+					Throwable reason = (carried != null && carried.getCause() != null) ? carried.getCause() : cause;
+					AMap<AString, ACell> failed = Maps.of(Fields.ERROR,
+						Strings.create("Transition failed: " + describeFailure(reason)));
+					if (carried != null) {
+						failed = failed.assoc(Fields.CYCLE, carried.result().cycle());
+						if (carried.result().tokens() != null) {
+							failed = failed.assoc(Fields.TOKENS, carried.result().tokens());
+						}
+					}
+					transitionResult = failed;
 				} finally {
 					activeTransitions.remove(key, transitionFuture);
 					activeCancellations.remove(key, cancelToken);
@@ -2758,7 +2770,7 @@ public class AgentAdapter extends AAdapter {
 				IterResult merged = mergeAndPostProcess(
 					agent, agentId, ownerDID, transitionOp, framesOwned, transitionResult, pickedTask,
 					pickedTaskInput, formattedTasks, pickedSession,
-					pickedSessionBlob, pickedChatJob, filteredInbox,
+					pickedSessionBlob, pickedChatJob, filteredInbox, resolvedPending,
 					presentedSessionPendingCount, startTs, allTaskResults);
 				lastResult = merged.lastResult();
 				allTaskResults = merged.allTaskResults();
@@ -2816,7 +2828,7 @@ public class AgentAdapter extends AAdapter {
 			ACell transitionResult, Map.Entry<Blob, ACell> pickedTask,
 			ACell pickedTaskInput, AVector<ACell> formattedTasks,
 			AString pickedSession, Blob pickedSessionBlob, Job pickedChatJob,
-			AVector<ACell> filteredInbox, long presentedSessionPendingCount,
+			AVector<ACell> filteredInbox, ACell pending, long presentedSessionPendingCount,
 			long startTs, AMap<AString, ACell> allTaskResults) {
 		final AgentKey key = new AgentKey(callerDID, agentId);
 		long endTs = Utils.getCurrentTimestamp();
@@ -2855,14 +2867,21 @@ public class AgentAdapter extends AAdapter {
 		}
 		if (taskResults != null) timelineEntry = timelineEntry.assoc(Fields.TASK_RESULTS, taskResults);
 
-		// Tool-failure diagnostics ([{name, error}], #211): persisted on the
-		// timeline entry so a denied/failed tool call is queryable after the
-		// cycle. The adapter's provider-shaped role:tool result in Fields.TURNS
-		// is the single session record of the same failure (#290).
-		AVector<ACell> toolFailures = RT.ensureVector(
-			RT.getIn(transitionResult, Fields.TOOL_FAILURES));
-		if (toolFailures != null && toolFailures.count() > 0) {
-			timelineEntry = timelineEntry.assoc(Fields.TOOL_FAILURES, toolFailures);
+		// The cycle's exchange with the model (#392): the root frame's standing
+		// context and tools, then every inference — what it newly sent, the
+		// reply verbatim, the tool batch it requested, a subgoal's child frame
+		// under its call. The entry is the complete record of the cycle; the
+		// session keeps the conversation the next cycle continues from.
+		if (RT.getIn(transitionResult, Fields.CYCLE) instanceof AMap<?, ?> cm) {
+			AMap<AString, ACell> cycle = (AMap<AString, ACell>) cm;
+			for (AString k : new AString[] {Fields.CONTEXT, Fields.TOOLS, Fields.INFERENCES}) {
+				ACell v = cycle.get(k);
+				if (v != null) timelineEntry = timelineEntry.assoc(k, v);
+			}
+		}
+		if (pickedSession != null) timelineEntry = timelineEntry.assoc(Fields.SESSION_ID, pickedSession);
+		if (pending instanceof AVector<?> pv && pv.count() > 0) {
+			timelineEntry = timelineEntry.assoc(Fields.PENDING, pending);
 		}
 		// Adapter-emitted non-terminal turns (currently llmagent tool-call and
 		// tool-result messages). These slot between framework-authored user input
@@ -2871,16 +2890,14 @@ public class AgentAdapter extends AAdapter {
 		AVector<ACell> transitionTurns = RT.ensureVector(
 			RT.getIn(transitionResult, Fields.TURNS));
 
-		// Cycle token usage ({input, output, total}, #217): persisted on the
-		// timeline entry; mergeRunResult mirrors it into the picked session's
-		// meta.tokens running totals in the same CAS. Measured only — absent
+		// Cycle token usage (#217): the sum over the cycle's inferences, as
+		// the adapter reports it. Not stored on the entry — derivable from its
+		// inferences — but added to the picked session's meta.tokens in the
+		// merge CAS and attached to the caller's job. Measured only: absent
 		// means the LLM op reported nothing, never zero.
 		AMap<AString, ACell> cycleTokens =
 			(RT.getIn(transitionResult, Fields.TOKENS) instanceof AMap<?, ?> tm)
 				? (AMap<AString, ACell>) tm : null;
-		if (cycleTokens != null) {
-			timelineEntry = timelineEntry.assoc(Fields.TOKENS, cycleTokens);
-		}
 
 		// Accumulate task results across iterations
 		if (taskResults != null) {
@@ -2951,12 +2968,12 @@ public class AgentAdapter extends AAdapter {
 					AgentState.K_CONTENT, leanResponse,
 					AgentState.K_TURN_TS, CVMLong.create(endTs),
 					AgentState.K_SOURCE,  AgentState.SOURCE_TRANSITION);
-				// Per-turn usage where known (#217): one assistant turn per
-				// cycle on this path, so the cycle totals ARE its usage.
-				// (Frames-owning adapters record per-call usage on each L3
-				// message they append themselves.)
-				if (cycleTokens != null) {
-					assistantTurn = assistantTurn.assoc(Fields.TOKENS, cycleTokens);
+				// Per-turn usage (#217): this turn is the last inference's
+				// reply, so it carries that inference's usage — never the cycle
+				// total, which would double-count the tool-call turns before it.
+				ACell turnTokens = lastInferenceTokens(transitionResult);
+				if (turnTokens != null) {
+					assistantTurn = assistantTurn.assoc(Fields.TOKENS, turnTokens);
 				}
 				turnsToAppend = turnsToAppend.conj(assistantTurn);
 			}
@@ -2985,7 +3002,7 @@ public class AgentAdapter extends AAdapter {
 			timelineEntry, pickedSessionBlob, turnsToAppend,
 			framesOwned ? 0 : presentedSessionPendingCount,
 			framesOwned ? null : adapterFrames,
-			sessionLoads);
+			sessionLoads, cycleTokens);
 
 		// Per-thread scheduled wake (B8.8). Transition result may carry a
 		// `wakeTime` (absolute wall-clock millis) requesting a future fire on
@@ -3319,6 +3336,14 @@ public class AgentAdapter extends AAdapter {
 
 	/** Stamps token usage onto a job's record (#217) — best-effort: an
 	 *  already-finished or racing job just keeps its record as-is. */
+	/** The usage reported on the cycle's last root-frame inference, or null. */
+	private static ACell lastInferenceTokens(ACell transitionResult) {
+		AVector<ACell> inferences = RT.ensureVector(
+			RT.getIn(transitionResult, Fields.CYCLE, Fields.INFERENCES));
+		if (inferences == null || inferences.isEmpty()) return null;
+		return RT.getIn(inferences.get(inferences.count() - 1), Fields.REPLY, Fields.TOKENS);
+	}
+
 	private static void attachTokens(Job job, AMap<AString, ACell> tokens) {
 		if (job == null || job.isFinished()) return;
 		try {

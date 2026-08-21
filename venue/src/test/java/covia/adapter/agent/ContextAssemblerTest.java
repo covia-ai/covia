@@ -161,21 +161,21 @@ public class ContextAssemblerTest {
 
 	@Test
 	public void testTokenTallyIncludesCacheCounts() {
-		AbstractLLMAdapter.beginTokenTally();
-		AbstractLLMAdapter.tallyTokens(Maps.of(Fields.TOKENS, Maps.of(
+		CycleRecord.begin();
+		CycleRecord.tally(Maps.of(Fields.TOKENS, Maps.of(
 			Fields.INPUT, CVMLong.create(100), Fields.OUTPUT, CVMLong.create(10),
 			Fields.CACHE_READ, CVMLong.create(80), Fields.CACHE_WRITE, CVMLong.create(20))));
-		AbstractLLMAdapter.tallyTokens(Maps.of(Fields.TOKENS, Maps.of(
+		CycleRecord.tally(Maps.of(Fields.TOKENS, Maps.of(
 			Fields.INPUT, CVMLong.create(50), Fields.OUTPUT, CVMLong.create(5))));
-		AMap<AString, ACell> totals = AbstractLLMAdapter.endTokenTally();
+		AMap<AString, ACell> totals = CycleRecord.end().tokens();
 		assertEquals(CVMLong.create(150), totals.get(Fields.INPUT));
 		assertEquals(CVMLong.create(165), totals.get(Fields.TOTAL));
 		assertEquals(CVMLong.create(80), totals.get(Fields.CACHE_READ));
 		assertEquals(CVMLong.create(20), totals.get(Fields.CACHE_WRITE));
 
-		AbstractLLMAdapter.beginTokenTally();
-		AbstractLLMAdapter.tallyTokens(Maps.of(Fields.TOKENS, Maps.of(Fields.INPUT, CVMLong.create(1))));
-		assertNull(AbstractLLMAdapter.endTokenTally().get(Fields.CACHE_READ), "absent means not measured, never zero");
+		CycleRecord.begin();
+		CycleRecord.tally(Maps.of(Fields.TOKENS, Maps.of(Fields.INPUT, CVMLong.create(1))));
+		assertNull(CycleRecord.end().tokens().get(Fields.CACHE_READ), "absent means not measured, never zero");
 	}
 
 	// ========== Head ==========

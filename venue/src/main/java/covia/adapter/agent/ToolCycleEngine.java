@@ -36,19 +36,6 @@ final class ToolCycleEngine {
 
 	private ToolCycleEngine() {}
 
-	/** Mutable diagnostics shared by nested cycles in one harness step. */
-	static final class Diagnostics {
-		private AVector<ACell> failures = Vectors.empty();
-
-		void record(AString name, String failure) {
-			failures = failures.conj(Maps.of(
-				AbstractLLMAdapter.K_NAME, name,
-				covia.api.Fields.ERROR, Strings.create(failure)));
-		}
-
-		AVector<ACell> failures() { return failures; }
-	}
-
 	/** A decoded provider tool call. */
 	record ToolCall(AString id, String name, ACell input, int iteration) {}
 
@@ -69,7 +56,13 @@ final class ToolCycleEngine {
 		}
 
 		static ToolOutcome recorded() {
-			return new ToolOutcome(null, null, null, false, false);
+			return recorded(null);
+		}
+
+		/** A handler that persisted its result itself; {@code result} is what
+		 *  it recorded, kept for the cycle record. */
+		static ToolOutcome recorded(ACell result) {
+			return new ToolOutcome(result, null, null, false, false);
 		}
 
 		static ToolOutcome terminal(ACell result, String status, ACell value) {
@@ -120,7 +113,6 @@ final class ToolCycleEngine {
 	/** Adapter-specific turn persistence and cycle diagnostics. */
 	interface BatchSink {
 		void append(AMap<AString, ACell> message);
-		void recordFailure(AString name, String failure);
 		/** Every call that reached a handler, with its outcome and wall-clock
 		 *  milliseconds. Calls fenced after a terminal request never get here. */
 		default void recordCall(ToolCall call, ToolOutcome outcome, long millis) {}
@@ -144,9 +136,9 @@ final class ToolCycleEngine {
 			// Provider protocols require a result for every call in a parallel
 			// batch, even though later side effects must be fenced after terminal.
 			if (terminalStatus != null) {
-				sink.append(AbstractLLMAdapter.toolResultMessage(id, name, Strings.create(
+				sink.append(stamped(AbstractLLMAdapter.toolResultMessage(id, name, Strings.create(
 					"Error: not executed because " + terminalStatus
-					+ " was already requested in this tool batch.")));
+					+ " was already requested in this tool batch."))));
 				continue;
 			}
 
@@ -176,20 +168,18 @@ final class ToolCycleEngine {
 					log.warn("Tool execution failed: {} — {}", name, detail);
 				}
 			}
-			sink.recordCall(call, outcome, (System.nanoTime() - started) / 1_000_000);
+			long millis = (System.nanoTime() - started) / 1_000_000;
+			sink.recordCall(call, outcome, millis);
+			CycleRecord record = CycleRecord.current();
+			if (record != null) record.recordCall(call, outcome, millis);
 
 			if (outcome.aborted()) {
 				return new BatchResult(null, null, true);
 			}
 
-			String failure = AbstractLLMAdapter.toolFailureMessage(outcome.result());
-			if (failure != null) {
-				sink.recordFailure((nameCell != null) ? nameCell : Strings.create("unknown"), failure);
-			}
-
 			if (outcome.appendResult()) {
 				ACell result = (outcome.result() != null) ? outcome.result() : Maps.empty();
-				sink.append(AbstractLLMAdapter.toolResultMessage(id, name, result));
+				sink.append(stamped(AbstractLLMAdapter.toolResultMessage(id, name, result)));
 			}
 
 			if (outcome.terminalStatus() != null) {
@@ -247,6 +237,11 @@ final class ToolCycleEngine {
 			AbstractLLMAdapter.K_ROLE, AbstractLLMAdapter.ROLE_ASSISTANT,
 			AbstractLLMAdapter.K_CONTENT, content,
 			AbstractLLMAdapter.K_TOOL_CALLS, Vectors.of(toolCall));
+	}
+
+	@SuppressWarnings("unchecked")
+	private static AMap<AString, ACell> stamped(AMap<AString, ACell> message) {
+		return (AMap<AString, ACell>) AbstractLLMAdapter.stampTs(message);
 	}
 
 	private static String describe(Throwable failure) {

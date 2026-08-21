@@ -446,44 +446,13 @@ Semantics and caveats:
 
 ---
 
-## 8. Timeline as State Snapshots
+## 8. Timeline Entries Are Cycle Records
 
-### 8.1 Mental model
+A timeline entry is the complete record of one cycle's exchange with the model — what the cycle was given, the standing context it was told, every inference (what was newly sent, the reply verbatim, the tool batch it requested, a subgoal's child frame under its call) and the result. The shape is defined in [AGENT_LOOP.md §2.4](./AGENT_LOOP.md).
 
-Timeline entries are **agent state snapshots at transition boundaries**, not events or conversation logs. Each entry captures "what the agent looked like at moment T" — not "what happened." This is already true today; the framing matters when sessions enter the picture.
+Entries are not state snapshots: the agent's config and sessions are not copied into them. The two records have different lifecycles, and that is the point — the session is mutable conversational state (compaction rewrites it, `context_unload` changes what renders, a completed child frame is popped, `agent:deleteSession` removes it) while the timeline is append-only. Replies and tool results therefore appear in both; an audit record cannot depend on state that later mutates. `deleteSession` removes the conversation, not the cycle records.
 
-### 8.2 With sessions
-
-A snapshot is the **full agent state at the transition boundary**, including every active session in full:
-
-```json
-{
-  "ts": 1776079053991,
-  "transitionId": "...",
-  "config": { ... full agent config ... },
-  "state": { ... agent-level state ... },
-  "sessions": {
-    "conv-mike":  { "meta": {...}, "state": {...}, "history": [...] },
-    "support-01HXYZ": { "meta": {...}, "state": {...}, "history": [...] }
-  },
-  "status": "SLEEPING"
-}
-```
-
-Lattice content addressing means unchanged sub-structures are deduplicated automatically — the inactive session's history isn't recopied, the unchanged config map points to the same cell as before. Each snapshot is "logically the whole agent at that moment" but physically only writes what changed.
-
-### 8.3 What this gives
-
-- **Complete reconstruction** — any past state of the agent is fully retrievable from one snapshot, no walking required
-- **Multi-session captured naturally** — every active session is in the snapshot in full
-- **Audit semantics straightforward** — "what was the agent at transition T?" is just reading the snapshot
-- **Lattice dedup makes it free** — only changed cells take new storage; the snapshot's *logical* completeness is the correct mental model, the *physical* delta is the lattice's job
-
-### 8.4 Cross-session view
-
-To see all transitions across all sessions, the timeline is the right place — each snapshot already lists all active sessions. To see detail within one session, walk that session's history at `g/<agent>/sessions/<sid>/history`.
-
----
+To follow one conversation, read the session; to see what happened in a cycle — including inside subgoals, which the session does not keep — read its entry.
 
 ## 9. Cross-Session Concerns
 

@@ -226,6 +226,6 @@ public class AgentStateSessionCycleTest {
 		AMap<AString, ACell> timelineEntry = Maps.of(
 			Strings.create("op"), Strings.create("test-cycle"));
 		agent.mergeRunResult(Maps.empty(), null,
-			timelineEntry, sid, null, 0, null, null);
+			timelineEntry, sid, null, 0, null, null, null);
 	}
 }

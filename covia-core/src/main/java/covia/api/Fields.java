@@ -170,10 +170,24 @@ public class Fields {
 	public static final StringShort TASKS = Strings.intern("tasks");
 	public static final StringShort PENDING = Strings.intern("pending");
 	public static final StringShort TASK_RESULTS = Strings.intern("taskResults");
-	/** Transition-output diagnostics: tool calls that failed this cycle,
-	 *  as [{name, error}] — persisted to the timeline entry and recorded as
-	 *  system turns in the session conversation (#211). */
-	public static final StringShort TOOL_FAILURES = Strings.intern("toolFailures");
+	/** A cycle's exchange with the model — {context, tools, inferences} — on
+	 *  the transition output; spread onto the timeline entry (#392). */
+	public static final StringShort CYCLE = Strings.intern("cycle");
+	/** A frame's standing context: the head and live surface as first
+	 *  rendered — the prompt minus the conversation. */
+	public static final StringShort CONTEXT = Strings.intern("context");
+	/** One record per model call: {ts, ms, op, model?, sent?, tools?, reply | error, calls?}. */
+	public static final StringShort INFERENCES = Strings.intern("inferences");
+	/** The messages an inference sent for the first time in its cycle. */
+	public static final StringShort SENT = Strings.intern("sent");
+	/** The model's reply, verbatim. */
+	public static final StringShort REPLY = Strings.intern("reply");
+	/** The tool batch an inference requested: [{id, name, ms, result, isError?, frame?}]. */
+	public static final StringShort CALLS = Strings.intern("calls");
+	/** A subgoal call's child frame record: {context, tools, inferences}. */
+	public static final StringShort FRAME = Strings.intern("frame");
+	/** Wall-clock milliseconds. */
+	public static final StringShort MS = Strings.intern("ms");
 	public static final StringShort JOB_ID = Strings.intern("jobId");
 	public static final StringShort SNAPSHOT = Strings.intern("snapshot");
 	public static final StringShort AUTO_WAKE = Strings.intern("autoWake");

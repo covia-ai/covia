@@ -42,7 +42,7 @@
 		},
 		"output": {
 			"type": "object",
-			"description": "assistant (the reply as it would be recorded), turns (what the iteration appends to the conversation), calls [{id, name, arguments, result, isError?, ms}], toolFailures?, terminal? {name, value}, done, response? (when the cycle ends here), next? (the following prompt, as agent:context reports it)."
+			"description": "assistant (the reply as it would be recorded), turns (what the iteration appends to the conversation), calls [{id, name, arguments, result, isError?, ms}], terminal? {name, value}, done, response? (when the cycle ends here), next? (the following prompt, as agent:context reports it)."
 		}
 	}
 }

@@ -64,7 +64,7 @@ The agent's value is a plain map. Every write replaces the entire map atomically
 | `tasks` | index | `Index<Blob, ACell>` of inbound request Job IDs. Persistent until resolved. Ordered by Job ID. |
 | `pending` | index | `Index<Blob, ACell>` of outbound Job IDs the agent is waiting on. Ordered by Job ID. |
 | `sessions` | index | `Index<Blob, ACell>` of sessions. Each session contains `frames` (the goal-tree frame stack — `frames[0].conversation` is the canonical transcript), pending messages, metadata, and per-session state (`c/`). See AGENT_SESSIONS.md and GOAL_TREE.md. |
-| `timeline` | vector | Append-only log of transition records (§2.3). Grows with each successful agent run. Timestamped for audit. |
+| `timeline` | vector | Append-only log of cycle records (§2.4), one per cycle whose transition ran — the complete record of each cycle's exchange with the model. |
 | `caps` | map | Capability attenuations — UCAN scoping for agent tool calls. See [UCAN.md §5.4](./UCAN.md) for Model A (user-scoped) vs Model B (independent DID). |
 | `error` | string? | Last error message, or null. Set when the transition function fails. |
 
@@ -96,28 +96,57 @@ wakes the agent to process the result.
 
 ### 2.4 Timeline Entry
 
-Each entry in the `timeline` vector records one successful agent run. The
-timeline is the **complete audit trail** — it captures everything the agent
-received, decided, and accomplished in each run.
+Each entry in the `timeline` vector is the complete record of one cycle's
+exchange with the model: what the cycle was given, what the model was told
+beyond the conversation, every inference it made, and what came of it. The
+session keeps the conversation the next cycle continues from; the entry keeps
+what happened. An entry is written for every cycle whose transition ran,
+success or failure — a failure's entry carries the error and the inferences
+that ran before it.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `start` | long | Timestamp when the run started. |
-| `end` | long | Timestamp when the run completed. |
-| `op` | string | The operation reference used for the transition function. |
-| `state` | any | The starting state passed to the transition function. |
-| `tasks` | vector | Resolved task data (jobId, input, status) at run start (from the `tasks` index). |
-| `messages` | vector | The session pending messages passed to the transition function. |
-| `result` | any | The `result` returned by the transition function. |
-| `taskResults` | map? | Task completions from output declarations (§3.4.1). `{<jobId>: {status, output}}`. |
+| `start`, `end` | long | When the cycle began and ended. |
+| `op` | string | The transition operation (llmagent / goaltree). |
+| `sessionId` | string? | The session the cycle ran on. |
+| `tasks`, `messages`, `pending` | vector? | What the cycle was given: resolved tasks, inbox envelopes, job results that arrived. |
+| `context` | vector | The root frame's standing context as rendered for its first inference — the head and live surface (system prompt, skills index, loads): the prompt minus the conversation. |
+| `tools` | vector | Names of the tools offered to the first inference. |
+| `inferences` | vector | One record per model call, in order — see below. |
+| `result` | any | The cycle's response, or its error. |
+| `taskResults` | map? | Task completions, `{<jobId>: {status, output}}`. |
 
-The output state is not stored in the timeline entry — it is the `state` field in
-the agent record (for the latest run) or the `state` field in the next timeline
-entry (for earlier runs). This avoids redundant storage.
+An inference record:
 
-Timeline entries are only appended on success. On error, no timeline entry is
-written — the error is recorded in the agent record's `error` field and all
-queues are preserved for retry.
+| Field | Description |
+|-------|-------------|
+| `ts`, `ms` | Call start (wall clock) and provider round-trip. |
+| `op`, `model?` | The level-3 operation and the model id it was asked for. |
+| `sent?` | Messages first sent in this inference. The first inference's are the tail (date notice, task message, budget warning); later ones hold only what is new — a changed notice, a load added mid-cycle. |
+| `tools?` | The tools offered, only when they differ from the previous inference. |
+| `reply` \| `error` | The model's reply verbatim (`{content?, toolCalls?, tokens?}`), or why the call failed. |
+| `calls?` | The tool batch the reply requested: `[{id, name, ms, result, isError?, frame?}]`. Arguments are in `reply.toolCalls`. |
+
+A `subgoal` call's `frame` is the child frame's record — `{context, tools,
+inferences}` — in the same shape, to any depth. The child is popped from the
+session when it completes, so its exchange lives here: a subgoal pops out of
+the parent's current context but loses none of its history.
+
+**One rule.** A message is recorded once, in the inference that first sends it
+— except turns of the root conversation, which the session records. The head
+is recorded once per cycle; a child frame's head is new (it carries the child
+notice) and its goal turn and ancestor rendering are its first inference's
+`sent`; a reply is recorded under the inference that produced it, never
+re-listed as sent by the next. Cycle token totals are the sum over every
+`reply.tokens` in the entry (child frames included) and a failed call is
+`calls[j].isError` with its `result` as the message — neither is stored
+separately, because both are derivable.
+
+Replies and tool results also appear as session turns. The two records have
+different lifecycles — the session is mutable conversational state
+(compaction, `context_unload`, popped child frames, `deleteSession`), the
+timeline is append-only — and an audit record cannot depend on state that
+later mutates.
 
 ### 2.5 Status and execution
 
@@ -653,12 +682,11 @@ run's `finally` block.
      preserved beyond the presented count and picked up by the next
      iteration's work check.
    - Update `state` from the returned value.
-   - Append timeline entry with full audit data (§2.4). When the
-     transition reports LLM token usage (`tokens: {input, output, total}`,
-     provider-measured — #217), it rides the timeline entry, is mirrored
-     into the picked session's `meta.tokens` running totals in the same
-     CAS, stamped on the assistant turn, and attached to the caller's
-     task/chat job record. Absent means "not measured", never zero.
+   - Append the cycle record (§2.4). The cycle's token usage — the sum
+     over its inferences, provider-measured (#217) — is added to the picked
+     session's `meta.tokens` in the same CAS and attached to the caller's
+     task/chat job record; the final assistant turn carries its own
+     inference's usage. Absent means "not measured", never zero.
    - Do not write executor status; the launcher slot remains the liveness truth.
 6. Complete any picked chat Job and drain parked task completions from
    `agent:complete-task` / `agent:fail-task` calls made during the
@@ -667,7 +695,9 @@ run's `finally` block.
 7. Loop back to step 1. The top-of-loop check at step 2 is the sole
    exit gate.
 8. On exception:
-   - Leave `state`, `tasks`, `pending`, and `sessions` unchanged.
+   - Append the cycle record with the error and the inferences that ran
+     before it (§2.4).
+   - Leave `tasks`, `pending`, and `sessions` unchanged.
    - Set status → `"SUSPENDED"`, set `error`.
    - Fail all pending task Jobs and clear parked completions for this
      agent.

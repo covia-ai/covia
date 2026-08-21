@@ -10,6 +10,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Changed
 
+- Assistant and tool turns carry their real `ts`; the final llmagent turn carries its own inference's `tokens`, not the cycle total; session `meta.tokens` rolls up cache counts
 - `agent:context` simulates a specific call — `message`/`messages`, `pending`, `task` (rendered exactly as live, task tools offered), `sessionId` — and returns the level-3 input with `cacheMarks` plus `budget`, `marks` and `labels` (a structured report, where it returned a string)
 - Agent context assembly rebuilt around `ContextAssembler` — a Spec in, a Prompt out — per `venue/docs/AGENT_CONTEXT.md`: one sequence for llmagent and goaltree, one label renderer (the model's `labels` dialect honoured), one tool palette, one loads phase, one budget from the model's `budget.bytes`; the head and pinned context re-resolve every inference, the date and notices ride the tail, and inspection is the live Spec through the live assembler
 - The capability notice renders only for agents that have tools
@@ -17,10 +18,12 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Removed
 
+- `toolFailures` and cycle `tokens` on the timeline entry — both derivable from `inferences`; `toolFailures` on the `agent:step` report
 - `ContextBuilder` (internal) — replaced by `ContextAssembler`, `ToolPalette`, `Loads` and `Labels`
 
 ### Added
 
+- Timeline entries record every inference of a cycle (#392): the root frame's standing `context` and `tools` once, then per inference `ts`, `ms`, `op`, `model?`, what was newly `sent`, the `reply` verbatim (or `error`) and the tool `calls` it requested with results and timings; a `subgoal` call carries its child frame's record (`frame`) in the same shape, so popped subgoals keep their history; a cycle whose transition throws still writes its entry with the inferences that ran; entries carry `sessionId` and `pending`
 - `agent:step` — one harness iteration on a supplied model reply, without calling the model: tool calls dispatched exactly as live (routes, capability checks, authority; real side effects), results rendered, the next prompt returned; the agent's session, timeline and tasks untouched; control tools reported as `terminal`, goaltree `subgoal` not run
 - Prompt caching end to end on Anthropic: the assembler marks the band boundaries (`cacheMarks` in the level-3 input), the anthropic op turns them into per-message `cache_control` breakpoints alongside the system prompt and tools, accepts `cache: false` to switch caching off for a call, and reports `cacheRead` / `cacheWrite` tokens in usage and in the agent cycle tally
 - `lattice` venue skill (`v/skills/data/lattice`, mirrored into `root`): the namespace and addressing reference, pinned by the tool-using agent templates and loadable by any agent — no longer part of every system prompt

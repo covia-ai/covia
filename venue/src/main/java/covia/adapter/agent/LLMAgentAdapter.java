@@ -376,12 +376,20 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 	 * @param input Transition input: { agentId, state, tasks, pending, messages, config, newInput, session? }
 	 * @return Transition output: { state, response | error }
 	 */
-	@SuppressWarnings("unchecked")
 	ACell processChat(RequestContext ctx, ACell input) {
-		// Cycle-scoped token tally (#217): every invokeLevel3 below adds its
-		// provider-reported usage; drained into the transition output at the
-		// end. Thread-confined — see AbstractLLMAdapter.TOKEN_TALLY.
-		beginTokenTally();
+		// The cycle record (#392) collects every inference and tool call made
+		// below — thread-confined, nothing threaded through the loop — and
+		// rides out on the output, or on the failure that ends the cycle.
+		CycleRecord.begin();
+		try {
+			return chat(ctx, input);
+		} catch (RuntimeException e) {
+			throw CycleRecord.Failure.of(e);
+		}
+	}
+
+	@SuppressWarnings("unchecked")
+	private ACell chat(RequestContext ctx, ACell input) {
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
 		ACell state = RT.getIn(input, AgentState.KEY_STATE);
 		// S3c: prefer session.pending over agent-level messages when a session
@@ -485,14 +493,6 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 			output = output.assoc(Fields.LOADS, toolCtx.getLoads());
 		}
 
-		// Tool-failure diagnostics — the framework persists them to the
-		// timeline entry and records them as system turns in the session
-		// conversation, so denials/failures stay observable after the
-		// cycle (#211).
-		if (toolCtx.toolFailures.count() > 0) {
-			output = output.assoc(Fields.TOOL_FAILURES, toolCtx.toolFailures);
-		}
-
 		if (toolCtx.taskResults != null && toolCtx.taskResults.count() > 0) {
 			// One-task-per-cycle: take the single entry
 			var entry = toolCtx.taskResults.entrySet().iterator().next();
@@ -510,12 +510,11 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 			}
 		}
 
-		// Cycle token totals (#217) — measured only; absent means the
-		// provider reported nothing, never zero.
-		AMap<AString, ACell> cycleTokens = endTokenTally();
-		if (cycleTokens != null) {
-			output = output.assoc(Fields.TOKENS, cycleTokens);
-		}
+		// The cycle record and its token totals (#217: measured only; absent
+		// means the provider reported nothing, never zero).
+		CycleRecord.Result cycle = CycleRecord.end();
+		output = output.assoc(Fields.CYCLE, cycle.cycle());
+		if (cycle.tokens() != null) output = output.assoc(Fields.TOKENS, cycle.tokens());
 		return output;
 	}
 
@@ -578,12 +577,6 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 			public void append(AMap<AString, ACell> message) {
 				sinkMessages[0] = sinkMessages[0].conj(message);
 			}
-
-			@Override
-			public void recordFailure(AString name, String failure) {
-				toolCtx.toolFailures = toolCtx.toolFailures.conj(Maps.of(
-					K_NAME, name, Fields.ERROR, Strings.create(failure)));
-			}
 		};
 
 		for (int iteration = 0; iteration < maxToolIterations; iteration++) {
@@ -628,10 +621,10 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 						}
 					}
 				}
-				return messages.conj(assistant);
+				return messages.conj(stampTs(assistant));
 			}
 
-			messages = messages.conj(assistant);
+			messages = messages.conj(stampTs(assistant));
 			toolCtx.turnText = RT.ensureString(RT.getIn(assistant, K_CONTENT));
 			sinkMessages[0] = messages;
 			ToolCycleEngine.executeBatch(calls, iteration, registry, toolCtx, sink, log);
@@ -1003,10 +996,6 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		AMap<AString, ACell> outerLoads = Maps.empty();
 		/** Whether a session is in scope; without one there is no writable tier. */
 		boolean sessionInScope = true;
-		/** Tool calls that failed this cycle, as [{name, error}] — emitted on
-		 *  the transition output under {@code Fields.TOOL_FAILURES} so the
-		 *  framework can persist them (timeline + session turns, #211). */
-		AVector<ACell> toolFailures = Vectors.empty();
 		/** Text content of the assistant message whose tool batch is currently
 		 *  executing — the fallback payload for an empty {@code complete_task}
 		 *  (the dual of #215: control emitted as a tool, answer emitted as

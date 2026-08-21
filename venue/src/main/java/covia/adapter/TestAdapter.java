@@ -97,6 +97,8 @@ public class TestAdapter extends AAdapter {
                 }
                 case "subgoalllm":
                     return CompletableFuture.completedFuture(withMockTokens(handleSubgoalLlm(input), input));
+                case "subgoalechollm":
+                    return CompletableFuture.completedFuture(withMockTokens(handleSubgoalEchoLlm(input), input));
                 case "taskllm":
                     return CompletableFuture.completedFuture(withMockTokens(handleTaskLlm(input), input));
                 case "textctlllm":
@@ -166,6 +168,7 @@ public class TestAdapter extends AAdapter {
 			installTestAsset("nevertoolllm", BASE+"testnevertoolllm.json");
 			installTestAsset("neverfailllm", BASE+"testneverfailllm.json");
 			installTestAsset("subgoalllm",   BASE+"testsubgoalllm.json");
+			installTestAsset("subgoalechollm", BASE+"testsubgoalechollm.json");
 			installTestAsset("taskllm",      BASE+"testtaskllm.json");
 			installTestAsset("textctlllm",   BASE+"testtextctlllm.json");
 			installTestAsset("stubbornllm",  BASE+"teststubbornllm.json");
@@ -883,6 +886,50 @@ public class TestAdapter extends AAdapter {
                     "id", Strings.create("call_child_never"),
                     "name", Strings.create("v/test/ops/never"),
                     "arguments", Strings.create("{}")
+                )));
+        }
+        return Maps.of(
+            "role", Strings.create("assistant"),
+            "toolCalls", Vectors.of(Maps.of(
+                "id", Strings.create("call_subgoal"),
+                "name", Strings.create("subgoal"),
+                "arguments", Strings.create("{\"description\":\"run the sub-task\"}")
+            )));
+    }
+
+    /**
+     * Test LLM for a subgoal that completes: the ROOT issues a subgoal; the
+     * CHILD (recognised by its goal text) calls echo once, then answers
+     * "sub done"; the root answers "root done" on seeing the subgoal's
+     * result. Push, run, pop — the child's exchange survives only in the
+     * cycle record (#392).
+     */
+    @SuppressWarnings("unchecked")
+    private ACell handleSubgoalEchoLlm(ACell input) {
+        boolean inChild = false;
+        ACell messagesCell = RT.getIn(input, "messages");
+        if (messagesCell instanceof AVector) {
+            AVector<ACell> messages = (AVector<ACell>) messagesCell;
+            for (long i = 0; i < messages.count(); i++) {
+                AString content = RT.ensureString(RT.getIn(messages.get(i), "content"));
+                if (content != null && content.toString().contains("run the sub-task")) {
+                    inChild = true;
+                    break;
+                }
+            }
+        }
+        if (hasToolResultMessage(input)) {
+            return Maps.of(
+                "role", Strings.create("assistant"),
+                "content", Strings.create(inChild ? "sub done" : "root done"));
+        }
+        if (inChild) {
+            return Maps.of(
+                "role", Strings.create("assistant"),
+                "toolCalls", Vectors.of(Maps.of(
+                    "id", Strings.create("call_child_echo"),
+                    "name", Strings.create("v/test/ops/echo"),
+                    "arguments", Strings.create("{\"echo\":\"from the child\"}")
                 )));
         }
         return Maps.of(

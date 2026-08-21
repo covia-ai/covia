@@ -272,11 +272,17 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 
 	// ========== Step: one harness iteration on a supplied reply ==========
 
-	public static final AString K_CALLS    = Strings.intern("calls");
 	public static final AString K_TERMINAL = Strings.intern("terminal");
 	public static final AString K_DONE     = Strings.intern("done");
 	public static final AString K_NEXT     = Strings.intern("next");
-	public static final AString K_MS       = Strings.intern("ms");
+
+	/** A conversation turn stamped with the wall-clock moment it was recorded. */
+	static ACell stampTs(ACell message) {
+		if (!(message instanceof AMap<?, ?>)) return message;
+		@SuppressWarnings("unchecked")
+		AMap<AString, ACell> m = (AMap<AString, ACell>) message;
+		return m.assoc(Fields.TS, CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()));
+	}
 
 	/**
 	 * The reply {@code agent:step} steps through, normalised to the shape the
@@ -308,20 +314,14 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		return reply.assoc(K_TOOL_CALLS, normalised);
 	}
 
-	/** Collects what one batch produces — the tool-result turns in order,
-	 *  the failures, and each call's wall-clock — for the step report. */
+	/** Collects what one batch produces — the tool-result turns in order
+	 *  and each call's wall-clock — for the step report. */
 	protected static final class StepSink implements ToolCycleEngine.BatchSink {
 		private AVector<ACell> turns = Vectors.empty();
-		private AVector<ACell> failures = Vectors.empty();
 		private final Map<AString, Long> millis = new java.util.HashMap<>();
 
 		@Override
 		public void append(AMap<AString, ACell> message) { turns = turns.conj(message); }
-
-		@Override
-		public void recordFailure(AString name, String failure) {
-			failures = failures.conj(Maps.of(K_NAME, name, Fields.ERROR, Strings.create(failure)));
-		}
 
 		@Override
 		public void recordCall(ToolCycleEngine.ToolCall call, ToolCycleEngine.ToolOutcome outcome, long ms) {
@@ -329,7 +329,6 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		}
 
 		AVector<ACell> turns() { return turns; }
-		AVector<ACell> failures() { return failures; }
 	}
 
 	/**
@@ -349,9 +348,8 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			AMap<AString, ACell> r = Maps.of(
 				ROLE_ASSISTANT, assistant,
 				Fields.TURNS, turns,
-				K_CALLS, calls(),
+				Fields.CALLS, calls(),
 				K_DONE, CVMBool.create(next == null));
-			if (sink != null && !sink.failures().isEmpty()) r = r.assoc(Fields.TOOL_FAILURES, sink.failures());
 			if (terminalTool != null) {
 				AMap<AString, ACell> t = Maps.of(K_NAME, Strings.create(terminalTool));
 				if (terminalValue != null) t = t.assoc(Fields.VALUE, terminalValue);
@@ -385,7 +383,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 				if (result != null) call = call.assoc(Fields.RESULT, result);
 				if (CVMBool.TRUE.equals(turn.get(K_IS_ERROR))) call = call.assoc(K_IS_ERROR, CVMBool.TRUE);
 				Long ms = (id != null) ? sink.millis.get(id) : null;
-				if (ms != null) call = call.assoc(K_MS, CVMLong.create(ms));
+				if (ms != null) call = call.assoc(Fields.MS, CVMLong.create(ms));
 				out = out.conj(call);
 			}
 			return out;
@@ -395,72 +393,6 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	/** The frames vector of a session record, or null when absent. */
 	protected static AVector<ACell> sessionFramesOf(AMap<AString, ACell> session) {
 		return (session != null) ? RT.ensureVector(session.get(Fields.FRAMES)) : null;
-	}
-
-	// ========== Token usage tally (#217) ==========
-
-	/**
-	 * Per-transition token tally: {@code [input, output, total, measured, cacheRead, cacheWrite]}.
-	 *
-	 * <p>Thread-confined by design: a transition (and every
-	 * {@link #invokeLevel3} call it makes — tool-loop iterations, goal-tree
-	 * subgoal recursion, compaction) runs synchronously on one virtual
-	 * thread, so a ThreadLocal carries the cycle's running totals without
-	 * threading a parameter through the frame recursion. Nested agent
-	 * transitions are dispatched onto their own virtual threads by
-	 * {@code invokeInternal}, so tallies never cross agents.</p>
-	 */
-	private static final ThreadLocal<long[]> TOKEN_TALLY = new ThreadLocal<>();
-
-	/** Opens a fresh tally for this transition (overwrites any stale one). */
-	protected static void beginTokenTally() {
-		TOKEN_TALLY.set(new long[6]);
-	}
-
-	/**
-	 * Closes the tally and returns the cycle's totals as a
-	 * {@code {input, output, total}} map, or null when no L3 call reported
-	 * measured usage — callers must then omit the field entirely (absent
-	 * means "not measured", never zero).
-	 */
-	protected static AMap<AString, ACell> endTokenTally() {
-		long[] t = TOKEN_TALLY.get();
-		TOKEN_TALLY.remove();
-		if (t == null || t[3] == 0) return null;
-		AMap<AString, ACell> totals = Maps.of(
-			Fields.INPUT,  CVMLong.create(t[0]),
-			Fields.OUTPUT, CVMLong.create(t[1]),
-			Fields.TOTAL,  CVMLong.create(t[2]));
-		// Cache counts only when the provider reported any: their absence
-		// means "not measured", never zero.
-		if (t[4] > 0) totals = totals.assoc(Fields.CACHE_READ, CVMLong.create(t[4]));
-		if (t[5] > 0) totals = totals.assoc(Fields.CACHE_WRITE, CVMLong.create(t[5]));
-		return totals;
-	}
-
-	/** Adds an L3 assistant message's {@code tokens} sub-map to the open
-	 *  tally, if any. Missing counts contribute nothing; a missing total is
-	 *  derived from input + output so the invariant total ≥ input + output
-	 *  parts holds across providers that omit it. */
-	static void tallyTokens(ACell l3Result) {
-		long[] t = TOKEN_TALLY.get();
-		if (t == null) return;
-		ACell tokens = RT.getIn(l3Result, Fields.TOKENS);
-		if (!(tokens instanceof AMap)) return;
-		CVMLong in  = RT.ensureLong(RT.getIn(tokens, Fields.INPUT));
-		CVMLong out = RT.ensureLong(RT.getIn(tokens, Fields.OUTPUT));
-		CVMLong tot = RT.ensureLong(RT.getIn(tokens, Fields.TOTAL));
-		if (in == null && out == null && tot == null) return;
-		long inV = (in != null) ? in.longValue() : 0;
-		long outV = (out != null) ? out.longValue() : 0;
-		t[0] += inV;
-		t[1] += outV;
-		t[2] += (tot != null) ? tot.longValue() : inV + outV;
-		t[3] = 1; // measured
-		CVMLong read = RT.ensureLong(RT.getIn(tokens, Fields.CACHE_READ));
-		CVMLong write = RT.ensureLong(RT.getIn(tokens, Fields.CACHE_WRITE));
-		if (read != null) t[4] += read.longValue();
-		if (write != null) t[5] += write.longValue();
 	}
 
 	// ========== Level 3 invocation ==========
@@ -488,7 +420,21 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 */
 	protected ACell invokeLevel3(AString llmOperation, AMap<AString, ACell> config,
 			ContextAssembler.Prompt prompt, RequestContext ctx) {
-		return invokeLevel3(llmOperation, config, prompt.toL3Input(config), prompt.messages(), ctx);
+		// The cycle record (#392) sees every call made from an assembled
+		// prompt: what it newly sent, then the reply verbatim or the failure.
+		CycleRecord record = CycleRecord.current();
+		if (record != null) {
+			record.beginInference(prompt, llmOperation,
+				RT.ensureString(config != null ? config.get(K_MODEL) : null));
+		}
+		try {
+			ACell reply = invokeLevel3(llmOperation, config, prompt.toL3Input(config), prompt.messages(), ctx);
+			if (record != null) record.endInference(reply);
+			return reply;
+		} catch (RuntimeException e) {
+			if (record != null) record.failInference(describeFailure(e));
+			throw e;
+		}
 	}
 
 	private ACell invokeLevel3(AString llmOperation, AMap<AString, ACell> config,
@@ -551,12 +497,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		// Keep the persisted agent protocol provider-neutral even when a custom
 		// Level 3 operation returns OpenAI-style JSON text. Malformed text remains
 		// intact so executeToolCall can produce a visible, correctable error.
-		result = ToolCallArguments.canonicaliseAssistantMessage(result);
-
-		// Provider-reported usage rides the assistant message (tokens
-		// {input, output, total}); add it to this transition's tally (#217).
-		tallyTokens(result);
-		return result;
+		return ToolCallArguments.canonicaliseAssistantMessage(result);
 	}
 
 	/** Recognises common provider context-window failures without guessing tokens. */

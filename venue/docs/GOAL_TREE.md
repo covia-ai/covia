@@ -492,7 +492,7 @@ subgoal("Analyse Delta Corp")
 -> {"status": "failed", "error": {"reason": "API returned 503", "retryable": true}}
 ```
 
-Parent decides: retry, skip, escalate, or fail itself. The failed child frame is popped from the stack; its conversation is kept as a compacted segment in the parent's conversation with `summary` derived from the failure reason — useful for debugging and for the parent's next-inference context.
+Parent decides: retry, skip, escalate, or fail itself. The child frame is popped from the stack either way; the parent sees its outcome as the subgoal call's tool result, and the child's own exchange — context, inferences, tool calls and results — is kept under that call in the cycle's timeline entry ([AGENT_LOOP.md §2.4](./AGENT_LOOP.md)). A subgoal pops out of the parent's current context; its history stays available for audit and introspection.
 
 **Transition atomicity.** Each frame-stack mutation (push, pop, append, compaction, pending drain) lands atomically on the session record. A process failure can leave a valid intermediate frame stack, but never a torn lattice write. That state is retained for audit and may be settled by a later fresh attempt; the failed executor itself is not resumed.
 

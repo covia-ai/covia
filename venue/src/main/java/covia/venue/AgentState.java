@@ -514,8 +514,9 @@ public class AgentState extends ALatticeComponent<ACell> {
 	}
 
 	/**
-	 * Adds a cycle's measured {@code {input, output, total}} token counts
-	 * into the session's {@code meta.tokens} running totals (#217). Pure —
+	 * Adds a cycle's measured token counts — {@code input}, {@code output},
+	 * {@code total} and the cache counts when reported — into the session's
+	 * {@code meta.tokens} running totals (#217). Pure —
 	 * safe under CAS retry. A session without a meta map (shouldn't happen —
 	 * sessions mint meta at creation) is left untouched rather than grown a
 	 * partial one.
@@ -527,7 +528,8 @@ public class AgentState extends ALatticeComponent<ACell> {
 		AMap<AString, ACell> meta = (AMap<AString, ACell>) session.get(K_META);
 		AMap<AString, ACell> totals = (meta.get(Fields.TOKENS) instanceof AMap tm)
 			? (AMap<AString, ACell>) tm : Maps.empty();
-		for (AString k : new AString[] {Fields.INPUT, Fields.OUTPUT, Fields.TOTAL}) {
+		for (AString k : new AString[] {Fields.INPUT, Fields.OUTPUT, Fields.TOTAL,
+				Fields.CACHE_READ, Fields.CACHE_WRITE}) {
 			long add = (cycleTokens.get(k) instanceof CVMLong cl) ? cl.longValue() : 0;
 			if (add == 0) continue;
 			long current = (totals.get(k) instanceof CVMLong cl) ? cl.longValue() : 0;
@@ -1083,7 +1085,9 @@ public class AgentState extends ALatticeComponent<ACell> {
 	 *       messages arriving during the transition (the tail) are preserved
 	 *       for the next cycle.</li>
 	 * </ul>
-	 * All performed inside the same CAS as the timeline / state writes.</p>
+	 * All performed inside the same CAS as the timeline / state writes.
+	 * {@code cycleTokens}, when non-null, is added to the picked session's
+	 * {@code meta.tokens} in that CAS.</p>
 	 *
 	 * <p>This atomic-update guarantee matches the deferred-completion
 	 * ordering invariant: an external observer never sees a cycle that
@@ -1108,7 +1112,8 @@ public class AgentState extends ALatticeComponent<ACell> {
 			AVector<ACell> turnsToAppend,
 			long presentedSessionPendingCount,
 			AVector<ACell> newFrames,
-			AMap<AString, ACell> sessionLoads) {
+			AMap<AString, ACell> sessionLoads,
+			AMap<AString, ACell> cycleTokens) {
 		return update(r -> {
 			// Remove completed tasks, detect new ones
 			Index<Blob, ACell> currentTasks = extractTasks(r);
@@ -1159,15 +1164,11 @@ public class AgentState extends ALatticeComponent<ACell> {
 						session = drainPendingPrefix(session, presentedSessionPendingCount);
 					}
 
-					// Session running token totals (#217): mirror the cycle's
-					// measured usage (as recorded on the timeline entry) into
-					// meta.tokens — same CAS, so timeline and session totals
-					// can never disagree.
-					ACell cycleTokens = (timelineEntry != null)
-						? timelineEntry.get(Fields.TOKENS) : null;
-					if (cycleTokens instanceof AMap) {
-						session = bumpMetaTokens(session,
-							(AMap<AString, ACell>) cycleTokens);
+					// Session running token totals (#217): the cycle's measured
+					// usage — the sum over its recorded inferences — added to
+					// meta.tokens in the same CAS as the entry.
+					if (cycleTokens != null) {
+						session = bumpMetaTokens(session, cycleTokens);
 					}
 
 					// The cycle is complete — release the session's inCycle

@@ -1,0 +1,33 @@
+{
+	"name": "Test subgoalechollm",
+	"description": "Test LLM driving a subgoal that completes: the root issues a subgoal; the child calls v/test/ops/echo once, then answers; the root answers on the subgoal result. Exercises push → run → pop, so the child's exchange is observable only through the cycle record.",
+	"dateCreated": "2026-08-21T00:00:00Z",
+	"operation": {
+		"adapter": "test:subgoalechollm",
+		"input": {
+			"type": "object",
+			"properties": {
+				"messages": {
+					"type": "array"
+				},
+				"tools": {
+					"type": "array"
+				}
+			}
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"role": {
+					"type": "string"
+				},
+				"content": {
+					"type": "string"
+				},
+				"toolCalls": {
+					"type": "array"
+				}
+			}
+		}
+	}
+}

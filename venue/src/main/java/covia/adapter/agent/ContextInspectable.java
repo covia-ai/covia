@@ -49,7 +49,7 @@ public interface ContextInspectable {
 	 * @param assistant the reply, normalised: {@code {role, content?, toolCalls?: [{id, name, arguments}]}}
 	 * @return {@code assistant}, {@code turns} (what the iteration appends to
 	 *         the conversation), {@code calls} ({@code [{id, name, arguments,
-	 *         result, isError?, ms}]}), {@code toolFailures?}, {@code terminal?}
+	 *         result, isError?, ms}]}), {@code terminal?}
 	 *         ({@code {name, value}}), {@code done}, {@code response?} and
 	 *         {@code next?} — the following prompt, as {@link #inspectContext} reports it
 	 */

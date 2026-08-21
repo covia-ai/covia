@@ -478,7 +478,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		FrameStore store = new FrameStore.LocalFrameStore(frames.assoc(0, activeFrame));
 		FrameToolContext frameTools = new FrameToolContext(null, store, 0, config,
 			getLLMOperation(config), p.palette().tools(), p.palette().routes(), p.spec().capsCtx(),
-			p.spec(), resolveToolCallTimeoutMs(config), p.outerLoads(), new ToolCycleEngine.Diagnostics());
+			p.spec(), resolveToolCallTimeoutMs(config), p.outerLoads());
 		frameTools.activeFrame = activeFrame;
 		frameTools.iterationToolMap = mergeRoutes(p.palette().routes(), p.loads().routes());
 		ToolCycleEngine.Registry<FrameToolContext> registry = frameTools.registry()
@@ -564,13 +564,21 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 	 * @param input transition input: {@code {agentId, state, tasks, pending, messages, config, newInput, session?}}
 	 * @return transition output: {@code {state, response | error}}
 	 */
-	@SuppressWarnings("unchecked")
 	ACell processGoal(Job job, RequestContext ctx, ACell input) {
-		// Cycle-scoped token tally (#217): every invokeLevel3 in the frame
-		// run below (tool iterations, subgoal recursion, compaction — all on
-		// this virtual thread) adds its provider-reported usage; drained
-		// into the transition output at the end.
-		beginTokenTally();
+		// The cycle record (#392) collects every inference and tool call of
+		// the frame run below — subgoal recursion included, all on this
+		// virtual thread — and rides out on the output, or on the failure
+		// that ends the cycle.
+		CycleRecord.begin();
+		try {
+			return goal(job, ctx, input);
+		} catch (RuntimeException e) {
+			throw CycleRecord.Failure.of(e);
+		}
+	}
+
+	@SuppressWarnings("unchecked")
+	private ACell goal(Job job, RequestContext ctx, ACell input) {
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
 		ACell state = RT.getIn(input, AgentState.KEY_STATE);
 		// S3c: prefer session.pending over agent-level messages when a session
@@ -783,14 +791,13 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// tools, supporting providers that prefer tool calls over response_format.
 		// An interrupted stack first settles child frames deepest-first without
 		// resuming their internal execution, then starts the root afresh.
-		ToolCycleEngine.Diagnostics diagnostics = new ToolCycleEngine.Diagnostics();
 		FrameResult result = tidyInterrupted
 			? settleInterruptedFrames(job, store, l3Config, llmOperation, baseTools,
 				configToolMap, capsCtx, cycleSpec, typedHarnessTools, toolCallTimeoutMs,
-				outerLoads, diagnostics)
+				outerLoads)
 			: runFrame(job, store, 0, l3Config, llmOperation, baseTools,
 				configToolMap, capsCtx, cycleSpec, typedHarnessTools, toolCallTimeoutMs,
-				outerLoads, diagnostics);
+				outerLoads);
 
 		// No per-adapter state is persisted here: the frame stack lives on the
 		// session record, and config's single home is record.config (#144) —
@@ -822,17 +829,12 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		} else {
 			output = output.assoc(Fields.RESPONSE, result.value());
 		}
-		if (diagnostics.failures().count() > 0) {
-			output = output.assoc(Fields.TOOL_FAILURES, diagnostics.failures());
-		}
-		// Cycle token totals (#217) — measured only; absent means the
-		// provider reported nothing, never zero. Per-call usage additionally
-		// rides each assistant turn in the frame conversation (the raw L3
-		// message, tokens included, is what appendTurn records).
-		AMap<AString, ACell> cycleTokens = endTokenTally();
-		if (cycleTokens != null) {
-			output = output.assoc(Fields.TOKENS, cycleTokens);
-		}
+		// The cycle record and its token totals (#217: measured only; absent
+		// means the provider reported nothing, never zero). Per-call usage
+		// additionally rides each assistant turn in the frame conversation.
+		CycleRecord.Result cycle = CycleRecord.end();
+		output = output.assoc(Fields.CYCLE, cycle.cycle());
+		if (cycle.tokens() != null) output = output.assoc(Fields.TOKENS, cycle.tokens());
 		return output;
 	}
 
@@ -893,7 +895,6 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		final ContextAssembler.Spec cycleSpec;
 		final long toolCallTimeoutMs;
 		final AMap<AString, ACell> outerLoads;
-		final ToolCycleEngine.Diagnostics diagnostics;
 		AVector<ACell> baseTools;
 		final Map<String, AString> configToolMap;
 		Map<String, AString> iterationToolMap = Map.of();
@@ -905,8 +906,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 				AMap<AString, ACell> config, AString llmOperation,
 				AVector<ACell> baseTools, Map<String, AString> configToolMap,
 				RequestContext ctx, ContextAssembler.Spec cycleSpec,
-				long toolCallTimeoutMs, AMap<AString, ACell> outerLoads,
-				ToolCycleEngine.Diagnostics diagnostics) {
+				long toolCallTimeoutMs, AMap<AString, ACell> outerLoads) {
 			this.job = job;
 			this.store = store;
 			this.frameIndex = frameIndex;
@@ -918,7 +918,6 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			this.cycleSpec = cycleSpec;
 			this.toolCallTimeoutMs = toolCallTimeoutMs;
 			this.outerLoads = outerLoads;
-			this.diagnostics = diagnostics;
 		}
 
 		ToolCycleEngine.Registry<FrameToolContext> registry() {
@@ -1086,9 +1085,19 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 				return ToolCycleEngine.ToolOutcome.abort();
 			}
 
-			FrameResult childResult = runFrame(job, store, frameIndex + 1,
-				config, llmOperation, baseTools, configToolMap, ctx, cycleSpec, null,
-				toolCallTimeoutMs, outerLoads, diagnostics);
+			// The child's exchange is recorded under this call (#392): the
+			// frame is popped from the session when it completes, so the
+			// cycle's entry is where its history lives.
+			CycleRecord record = CycleRecord.current();
+			if (record != null) record.openFrame();
+			FrameResult childResult;
+			try {
+				childResult = runFrame(job, store, frameIndex + 1,
+					config, llmOperation, baseTools, configToolMap, ctx, cycleSpec, null,
+					toolCallTimeoutMs, outerLoads);
+			} finally {
+				if (record != null) record.attachFrame(call.id(), record.closeFrame());
+			}
 			if (store.aborted()) return ToolCycleEngine.ToolOutcome.abort();
 
 			AMap<AString, ACell> result = Maps.of(
@@ -1097,13 +1106,13 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 				result = result.assoc(Strings.create("result"), childResult.value());
 			}
 			AMap<AString, ACell> withResult = GoalTreeContext.appendTurn(activeFrame,
-				toolResultMessage(call.id(), call.name(), result));
+				stampTs(toolResultMessage(call.id(), call.name(), result)));
 			if (!store.update(frames -> updateFrame(
 					(AVector<ACell>) frames.slice(0, frameIndex + 1), frameIndex, withResult))) {
 				return ToolCycleEngine.ToolOutcome.abort();
 			}
 			activeFrame = withResult;
-			return ToolCycleEngine.ToolOutcome.recorded();
+			return ToolCycleEngine.ToolOutcome.recorded(result);
 		}
 	}
 
@@ -1132,8 +1141,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			AVector<ACell> baseToolsParam, Map<String, AString> configToolMap,
 			RequestContext ctx, ContextAssembler.Spec cycleSpec,
 			AVector<ACell> typedRootHarnessTools, long toolCallTimeoutMs,
-			AMap<AString, ACell> outerLoads,
-			ToolCycleEngine.Diagnostics diagnostics) {
+			AMap<AString, ACell> outerLoads) {
 
 		// Mutable copy — more_tools can append to this mid-run
 		AVector<ACell> baseTools = baseToolsParam;
@@ -1168,7 +1176,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// tool result to follow its assistant tool_calls message)
 		FrameToolContext frameTools = new FrameToolContext(job, store, frameIndex,
 			config, llmOperation, baseTools, configToolMap, ctx, cycleSpec,
-			toolCallTimeoutMs, outerLoads, diagnostics);
+			toolCallTimeoutMs, outerLoads);
 		frameTools.activeFrame = activeFrame;
 		ToolCycleEngine.Registry<FrameToolContext> toolRegistry = frameTools.registry();
 
@@ -1180,11 +1188,6 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			public void append(AMap<AString, ACell> message) {
 				frameTools.activeFrame = GoalTreeContext.appendTurn(
 					frameTools.activeFrame, message);
-			}
-
-			@Override
-			public void recordFailure(AString name, String failure) {
-				diagnostics.record(name, failure);
 			}
 		};
 
@@ -1253,13 +1256,13 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 					}
 				}
 				AMap<AString, ACell> terminal = GoalTreeContext.withStatus(
-					GoalTreeContext.appendTurn(frameTools.activeFrame, assistant),
+					GoalTreeContext.appendTurn(frameTools.activeFrame, stampTs(assistant)),
 					GoalTreeContext.STATUS_COMPLETE);
 				if (!persist(store, frameIndex, terminal)) return abortedResult(store);
 				return FrameResult.complete(value, store.frames());
 			}
 
-			frameTools.activeFrame = GoalTreeContext.appendTurn(frameTools.activeFrame, assistant);
+			frameTools.activeFrame = GoalTreeContext.appendTurn(frameTools.activeFrame, stampTs(assistant));
 			frameTools.turnText = RT.ensureString(RT.getIn(assistant, K_CONTENT));
 			if (!persist(store, frameIndex, frameTools.activeFrame)) return abortedResult(store);
 			log.info("Frame[{}] iter={} tools={}", frameIndex, iteration, calls.count());
@@ -1393,8 +1396,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			AVector<ACell> baseTools, Map<String, AString> configToolMap,
 			RequestContext ctx, ContextAssembler.Spec cycleSpec,
 			AVector<ACell> typedRootHarnessTools, long toolCallTimeoutMs,
-			AMap<AString, ACell> outerLoads,
-			ToolCycleEngine.Diagnostics diagnostics) {
+			AMap<AString, ACell> outerLoads) {
 		while (true) {
 			if (store.aborted()) return abortedResult(store);
 			AVector<ACell> fs = store.frames();
@@ -1444,7 +1446,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 
 		return runFrame(job, store, 0, config, llmOperation, baseTools,
 			configToolMap, ctx, cycleSpec, typedRootHarnessTools, toolCallTimeoutMs,
-			outerLoads, diagnostics);
+			outerLoads);
 	}
 
 	/** Transition output for a cycle that lost frame ownership mid-flight. */

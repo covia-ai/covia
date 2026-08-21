@@ -278,8 +278,55 @@ public class GoalTreeAdapterTest {
 			ALICE).awaitResult(5000));
 		String result = RT.getIn(RT.ensureVector(sub.get(Strings.intern("calls"))).get(0), "result").toString();
 		assertTrue(result.contains("not executed"), result);
-		assertNull(sub.get(Fields.TOOL_FAILURES));
 		assertEquals(CVMBool.FALSE, sub.get(Strings.intern("done")));
+	}
+
+	/** A subgoal's exchange is recorded under the call that produced it (#392):
+	 *  the child frame is popped from the session, so the entry is where its history lives. */
+	@Test
+	public void testSubgoalRecordedUnderItsCall() {
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "subgoal-record",
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/goaltree/chat",
+					"llmOperation", "v/test/ops/subgoalechollm",
+					Fields.TOOLS, Vectors.of(Strings.create("subgoal")))),
+			ALICE).awaitResult(5000);
+		ACell chat = engine.jobs().invokeOperation("v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "subgoal-record", Fields.MESSAGE, "decompose this"),
+			ALICE).awaitResult(15000);
+		assertEquals("root done", RT.getIn(chat, Fields.RESPONSE).toString());
+		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("subgoal-record");
+		TestEngine.awaitTimelineCount(agent, 1, 10000);
+		AMap<AString, ACell> entry = RT.ensureMap(agent.getTimeline().get(0));
+
+		AVector<ACell> inferences = RT.ensureVector(entry.get(Fields.INFERENCES));
+		assertEquals(2, inferences.count(), "root: the subgoal call, then the answer: " + inferences);
+		ACell call = RT.ensureVector(RT.getIn(inferences.get(0), Fields.CALLS)).get(0);
+		assertEquals("subgoal", RT.getIn(call, "name").toString());
+		assertEquals("complete", RT.getIn(call, Fields.RESULT, "status").toString());
+
+		// The child frame, in the same shape, under the call.
+		AMap<AString, ACell> frame = RT.ensureMap(RT.getIn(call, Fields.FRAME));
+		assertNotNull(frame, "the child's record rides its call: " + call);
+		AVector<ACell> childContext = RT.ensureVector(frame.get(Fields.CONTEXT));
+		assertTrue(RT.getIn(childContext.get(0), "content").toString().contains(GoalTreeAdapter.CHILD_FRAME_NOTICE),
+			"the child's head is new — it carries the child notice");
+		assertFalse(RT.ensureVector(frame.get(Fields.TOOLS)).toString().contains("subgoal"),
+			"children are not offered subgoal");
+		AVector<ACell> childInferences = RT.ensureVector(frame.get(Fields.INFERENCES));
+		assertEquals(2, childInferences.count(), "child: the echo call, then its answer: " + childInferences);
+		String sent = RT.getIn(childInferences.get(0), Fields.SENT).toString();
+		assertTrue(sent.contains("run the sub-task"), "the child's goal is its first inference's sent: " + sent);
+		ACell echo = RT.ensureVector(RT.getIn(childInferences.get(0), Fields.CALLS)).get(0);
+		assertEquals("v/test/ops/echo", RT.getIn(echo, "name").toString());
+		assertEquals("sub done", RT.getIn(childInferences.get(1), Fields.REPLY, "content").toString());
+		assertEquals("root done", RT.getIn(inferences.get(1), Fields.REPLY, "content").toString());
+
+		// The session keeps only the root: the child's history exists nowhere else.
+		AMap<AString, ACell> session = agent.getSession(
+			Blob.fromHex(RT.getIn(chat, Fields.SESSION_ID).toString()));
+		assertEquals(1, RT.ensureVector(RT.getIn(session, Fields.FRAMES)).count());
 	}
 
 	// ========== Tool definitions ==========
@@ -607,7 +654,7 @@ public class GoalTreeAdapterTest {
 	}
 
 	@Test
-	public void testToolFailuresUseSharedCycleDiagnostics() {
+	public void testToolFailuresRecordedOnTheCycle() {
 		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
 		ACell output = adapter.processGoal(null, ALICE, Maps.of(
 			Fields.AGENT_ID, "goal-tool-failure-agent",
@@ -619,11 +666,13 @@ public class GoalTreeAdapterTest {
 				Fields.MESSAGE, Strings.create("recover from a bad tool call")))));
 
 		assertEquals("recovered from tool failure", RT.getIn(output, Fields.RESPONSE).toString());
-		AVector<ACell> failures = RT.ensureVector(RT.getIn(output, Fields.TOOL_FAILURES));
-		assertNotNull(failures);
-		assertEquals(1, failures.count());
-		assertEquals("context_load", RT.getIn(failures.get(0), Fields.NAME).toString());
-		assertTrue(RT.getIn(failures.get(0), Fields.ERROR).toString().contains("path is required"));
+		// The failed call is in the cycle record: isError, the message as its result (#392).
+		AVector<ACell> inferences = RT.ensureVector(RT.getIn(output, Fields.CYCLE, Fields.INFERENCES));
+		assertNotNull(inferences);
+		ACell failed = RT.ensureVector(RT.getIn(inferences.get(0), Fields.CALLS)).get(0);
+		assertEquals("context_load", RT.getIn(failed, Fields.NAME).toString());
+		assertEquals(CVMBool.TRUE, RT.getIn(failed, "isError"));
+		assertTrue(RT.getIn(failed, Fields.RESULT).toString().contains("path is required"));
 	}
 
 	@Test
