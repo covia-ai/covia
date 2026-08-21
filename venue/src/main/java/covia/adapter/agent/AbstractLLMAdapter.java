@@ -281,8 +281,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * @param taskInput optional task input — when non-null, append a synthesised
 	 *        user goal message
 	 * @param session optional session record — when non-null, include its
-	 *        frames conversation via {@code withFrameStack}, exactly as the
-	 *        live transition path does (#211)
+	 *        frames conversation exactly as the live transition path does (#211)
 	 * @param ctx request context
 	 * @return L3 input map
 	 */

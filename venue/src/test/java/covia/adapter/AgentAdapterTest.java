@@ -23,7 +23,7 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
-import covia.adapter.agent.ContextBuilder;
+import covia.adapter.agent.ContextAssembler;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.grid.Job;
@@ -2186,7 +2186,7 @@ public class AgentAdapterTest {
 	}
 
 	/**
-	 * {@link ContextBuilder#withFrameStack} must convert the active frame's
+	 * The assembler's conversation section must convert the active frame's
 	 * conversation turn envelopes {role, content, ts, source} into plain
 	 * LLM messages {role, content}. Degenerate single-frame case: no ancestor
 	 * summary, just the root's conversation. Tool-call interleaving from
@@ -2210,13 +2210,11 @@ public class AgentAdapterTest {
 			AgentState.KEY_CONVERSATION, turns);
 		AVector<ACell> frames = Vectors.of(rootFrame);
 
-		ContextBuilder builder = new ContextBuilder(engine, RequestContext.of(ALICE_DID));
-		ContextBuilder.ContextResult result = builder
-			.withFrameStack(frames)
-			.withTools()
-			.build();
-
-		AVector<ACell> llmMessages = result.history();
+		AVector<ACell> all = ContextAssembler.assemble(new ContextAssembler.Spec(
+			engine, RequestContext.of(ALICE_DID), null, null, null, null, 0, null,
+			null, null, null, frames, null, null, true, null, null, null, null, null)).messages();
+		// Between the head and the tail notices lies the conversation.
+		AVector<ACell> llmMessages = all.slice(1, all.count() - 1);
 		assertEquals(2, llmMessages.count(), "Two turns → two LLM messages");
 
 		AMap<AString, ACell> first = (AMap<AString, ACell>) llmMessages.get(0);

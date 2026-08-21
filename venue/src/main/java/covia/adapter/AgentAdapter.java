@@ -31,7 +31,7 @@ import convex.core.lang.RT;
 import convex.core.json.schema.JsonSchema;
 import convex.core.util.Utils;
 import covia.adapter.agent.AbstractLLMAdapter;
-import covia.adapter.agent.ContextBuilder;
+import covia.adapter.agent.ToolPalette;
 import covia.adapter.agent.ContextInspectable;
 import covia.adapter.agent.Skills;
 import covia.api.Fields;
@@ -790,7 +790,7 @@ public class AgentAdapter extends AAdapter {
 	 */
 	private AString unavailableToolsWarning(AMap<AString, ACell> config, RequestContext ctx) {
 		if (config == null) return null;
-		AVector<ACell> unavailable = ContextBuilder.unavailableConfigTools(
+		AVector<ACell> unavailable = ToolPalette.unavailableConfigTools(
 			engine, ctx, config, AbstractLLMAdapter.allHarnessToolNames());
 		if (unavailable.isEmpty()) return null;
 		java.util.List<String> details = new java.util.ArrayList<>();
@@ -1355,7 +1355,7 @@ public class AgentAdapter extends AAdapter {
 		@SuppressWarnings("unchecked")
 		AMap<AString, ACell> config = (record.get(AgentState.KEY_CONFIG) instanceof AMap<?, ?> m)
 			? (AMap<AString, ACell>) m : null;
-		AVector<ACell> unavailable = ContextBuilder.unavailableConfigTools(
+		AVector<ACell> unavailable = ToolPalette.unavailableConfigTools(
 			engine, ctx, config, AbstractLLMAdapter.allHarnessToolNames());
 		if (!unavailable.isEmpty()) {
 			summary = summary.assoc(Fields.UNAVAILABLE_TOOLS, unavailable);

@@ -53,7 +53,7 @@ import org.slf4j.LoggerFactory;
  * leaves them empty.</p>
  *
  * <p>Used by the {@code skills} venue op, the {@code skill_load} harness tool,
- * and {@link ContextBuilder}'s per-turn index/rendering — one resolver, so the
+ * and {@link ContextAssembler}'s per-turn index/rendering — one resolver, so the
  * surfaces can never drift. See {@code venue/docs/SKILLS.md} for the design.</p>
  */
 public final class Skills {
@@ -698,7 +698,7 @@ public final class Skills {
 	 * Builds the loads-entry spec for a loaded skill:
 	 * {@code {skill: true, budget, ts, label, tools?, skills?, skillsets?}}. A
 	 * plain map — fully compatible with ContextChain (tombstones, masking),
-	 * context_unload, the Context Map, and safety-valve eviction. The body is
+	 * context_unload and the loads snapshot. The body is
 	 * NOT denormalised (re-resolved each turn via the entry key); tool and
 	 * child refs ARE (their targets still resolve fresh each turn).
 	 */
@@ -1115,7 +1115,7 @@ public final class Skills {
 	 * The discovery surface declared on an agent config — {@code config.skills}
 	 * (individual skills) and {@code config.skillsets} (directories), validated.
 	 * Empty when the agent declares neither. Adapters treat the result as
-	 * opaque — all skills semantics live here and in {@link ContextBuilder}.
+	 * opaque — all skills semantics live here and in {@link ContextAssembler}.
 	 */
 	public static SkillSources sourcesOf(AMap<AString, ACell> config) {
 		if (config == null) return SkillSources.EMPTY;
@@ -1234,7 +1234,7 @@ public final class Skills {
 
 		// Resolve the declared tools once for an honest result (activated
 		// names + unresolvable refs). Per-turn activation re-resolves via the
-		// generic loads rule (ContextBuilder.loadsToolDefs) — same liveness
+		// generic loads rule (ToolPalette.loadsToolDefs) — same liveness
 		// as config.tools.
 		AVector<ACell> toolNames = Vectors.empty();
 		AVector<ACell> unresolved = Vectors.empty();

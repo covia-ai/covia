@@ -26,7 +26,7 @@ import convex.core.lang.RT;
  *   <li>Goal — the subgoal description for the current frame</li>
  * </ol>
  *
- * <p>System prompt and tool schemas are handled separately by ContextBuilder.
+ * <p>System prompt and tool schemas are handled separately by ContextAssembler.
  * This class focuses on the goal-tree-specific sections.</p>
  *
  * <h3>Why the layout matters</h3>

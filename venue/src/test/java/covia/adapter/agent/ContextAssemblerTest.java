@@ -1,0 +1,735 @@
+package covia.adapter.agent;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInfo;
+
+import convex.core.data.ACell;
+import convex.core.data.AMap;
+import convex.core.data.AString;
+import convex.core.data.AVector;
+import convex.core.data.Maps;
+import convex.core.data.Strings;
+import convex.core.data.Vectors;
+import convex.core.data.prim.CVMBool;
+import convex.core.data.prim.CVMLong;
+import convex.core.lang.RT;
+import covia.adapter.agent.ContextAssembler.Prompt;
+import covia.adapter.agent.ContextAssembler.Spec;
+import covia.api.Fields;
+import covia.grid.Job;
+import covia.venue.Engine;
+import covia.venue.RequestContext;
+import covia.venue.TestEngine;
+
+/**
+ * The assembler: sections, sequence, budget and the pieces it is built from
+ * (ToolPalette, Loads, attribution). AGENT_CONTEXT.md §3 as tests.
+ */
+public class ContextAssemblerTest {
+
+	private final Engine engine = TestEngine.ENGINE;
+	private RequestContext ctx;
+	private AString ALICE_DID;
+
+	private static final AString K_ROLE    = Strings.intern("role");
+	private static final AString K_CONTENT = Strings.intern("content");
+	private static final AString K_CONTEXT = Strings.intern("context");
+
+	@BeforeEach
+	public void setup(TestInfo info) {
+		ALICE_DID = TestEngine.uniqueDID(info);
+		ctx = RequestContext.of(ALICE_DID);
+	}
+
+	// ========== Helpers ==========
+
+	/** A Spec with only a config: no tools, loads, frames, input or task. */
+	private Spec spec(AMap<AString, ACell> config) {
+		return new Spec(engine, ctx, null, config, null, null, 0, null,
+			null, null, null, null, null, null, true, null, null, null, null, null);
+	}
+
+	private Spec spec(AMap<AString, ACell> config, AVector<ACell> frames, AVector<ACell> pending,
+			AVector<ACell> input, boolean hasInput) {
+		return new Spec(engine, ctx, null, config, null, null, 0, null,
+			null, null, null, frames, pending, input, hasInput, null, null, null, null, null);
+	}
+
+	private static String content(ACell message) {
+		AString c = RT.ensureString(RT.getIn(message, K_CONTENT));
+		return (c != null) ? c.toString() : "";
+	}
+
+	private static String role(ACell message) {
+		return RT.ensureString(RT.getIn(message, K_ROLE)).toString();
+	}
+
+	/** The head: always the first message. */
+	private static String head(Prompt p) {
+		return content(p.messages().get(0));
+	}
+
+	/** The tail notices: always the last message when there is no task. */
+	private static String tail(Prompt p) {
+		return content(p.messages().get(p.messages().count() - 1));
+	}
+
+	private static String allContent(AVector<ACell> messages) {
+		StringBuilder sb = new StringBuilder();
+		for (long i = 0; i < messages.count(); i++) sb.append(content(messages.get(i))).append('\n');
+		return sb.toString();
+	}
+
+	private static String allContent(Prompt p) {
+		return allContent(p.messages());
+	}
+
+	private void write(String path, ACell value) {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Strings.create("path"), Strings.create(path), Strings.create("value"), value),
+			ctx).awaitResult(5000);
+	}
+
+	private void writeSkill(String path, String description) {
+		write(path, Maps.of(Strings.create("description"), Strings.create(description)));
+	}
+
+	// ========== Sequence ==========
+
+	@Test
+	public void testSequenceHeadConversationTail() {
+		AVector<ACell> inbox = Vectors.of((ACell) Strings.create("Do something"));
+		Prompt p = ContextAssembler.assemble(spec(
+			Maps.of(Strings.intern("defaultTools"), CVMBool.TRUE), null, null, inbox, true));
+		// head, the input, the tail notices
+		assertEquals(3, p.messages().count());
+		assertEquals("system", role(p.messages().get(0)));
+		assertEquals("user", role(p.messages().get(1)));
+		assertEquals("Do something", content(p.messages().get(1)));
+		assertEquals("system", role(p.messages().get(2)));
+		assertTrue(tail(p).contains("Current date: " + java.time.LocalDate.now()), tail(p));
+		// Band marks: the head ends after one message; the conversation after two.
+		assertEquals(1, p.marks().get(ContextAssembler.Band.HEAD));
+		assertEquals(1, p.marks().get(ContextAssembler.Band.LIVE));
+		assertEquals(2, p.marks().get(ContextAssembler.Band.CONVERSATION));
+	}
+
+	@Test
+	public void testTaskIsRenderedLast() {
+		ACell task = ContextAssembler.user("[Tasks assigned to you]\n- Task 1: do it");
+		Spec s = new Spec(engine, ctx, null, null, null, null, 0, null, null, null, null,
+			null, null, Vectors.of((ACell) Strings.create("hi")), true, null, task, null, null, null);
+		Prompt p = ContextAssembler.assemble(s);
+		ACell last = p.messages().get(p.messages().count() - 1);
+		assertEquals("user", role(last));
+		assertTrue(content(last).startsWith("[Tasks assigned to you]"));
+		// ...after the notices, which carry the date
+		assertTrue(content(p.messages().get(p.messages().count() - 2)).contains("Current date:"));
+	}
+
+	@Test
+	public void testToolLoopTurnsSitBeforeTheTail() {
+		AVector<ACell> loop = Vectors.of(
+			(ACell) Maps.of("role", "assistant", "content", "", "toolCalls", Vectors.of(
+				Maps.of("id", "c1", "name", "covia_read", "arguments", "{}"))),
+			(ACell) Maps.of("role", "tool", "id", "c1", "name", "covia_read", "content", "x"));
+		Spec s = new Spec(engine, ctx, null, null, null, null, 0, null, null, null, null,
+			null, null, Vectors.of((ACell) Strings.create("hi")), true, loop, null, null, null, null);
+		Prompt p = ContextAssembler.assemble(s);
+		assertEquals("assistant", role(p.messages().get(2)));
+		assertEquals("tool", role(p.messages().get(3)));
+		assertTrue(tail(p).contains("Current date:"));
+		assertEquals(4, p.marks().get(ContextAssembler.Band.CONVERSATION));
+	}
+
+	// ========== Head ==========
+
+	@Test
+	public void testDefaultIdentityWhenNoSystemPrompt() {
+		Prompt p = ContextAssembler.assemble(spec(null));
+		assertEquals("system", role(p.messages().get(0)));
+		assertTrue(head(p).contains("helpful AI agent"));
+		assertTrue(head(p).contains("Covia Lattice"), "lattice reference rides the head for now");
+	}
+
+	@Test
+	public void testCustomSystemPrompt() {
+		Prompt p = ContextAssembler.assemble(spec(
+			Maps.of(Strings.intern("systemPrompt"), Strings.create("You are a financial analyst."))));
+		assertTrue(head(p).contains("financial analyst"));
+		assertTrue(head(p).contains("Covia Lattice"));
+	}
+
+	@Test
+	public void testHeadCarriesVenueModelAndSessionButNeverTheDate() {
+		Spec s = new Spec(engine, ctx, null, Maps.of(Strings.intern("model"), Strings.create("gpt-4.1-mini")),
+			ContextAssembler.sessionHex(convex.core.data.Blob.fromHex("00aa00aa00aa00aa00aa00aa00aa00aa")),
+			null, 0, null, null, null, null, null, null, null, true, null, null, null, null, null);
+		Prompt p = ContextAssembler.assemble(s);
+		assertTrue(head(p).contains("Venue:"), head(p));
+		assertTrue(head(p).contains("Model: gpt-4.1-mini"), head(p));
+		assertTrue(head(p).contains("Session: 00aa00aa00aa00aa00aa00aa00aa00aa"), head(p));
+		// CACHE GUARD: the date must never creep into the cached prefix.
+		assertFalse(head(p).contains(java.time.LocalDate.now().toString()), head(p));
+		assertTrue(tail(p).contains(java.time.LocalDate.now().toString()), tail(p));
+
+		assertEquals("beef0001", ContextAssembler.sessionHex(Strings.create("beef0001")));
+		assertNull(ContextAssembler.sessionHex(null));
+		assertFalse(head(ContextAssembler.assemble(spec(null))).contains("Session:"));
+	}
+
+	@Test
+	public void testHeadNoticeIsPartOfTheHead() {
+		Spec s = spec(null).forFrame(null, "You are inside a subgoal.");
+		assertTrue(head(ContextAssembler.assemble(s)).endsWith("You are inside a subgoal."));
+	}
+
+	@Test
+	public void testCapabilityNoticeOnlyWhenDeclared() {
+		assertFalse(head(ContextAssembler.assemble(spec(null))).contains("Your capabilities (caps)"));
+
+		AMap<AString, ACell> config = Maps.of(Strings.intern("caps"), Vectors.of(
+			(ACell) Maps.of(Strings.intern("with"), Strings.create("w/decisions/"), Strings.intern("can"), Strings.create("crud")),
+			(ACell) Maps.of(Strings.intern("with"), Strings.create("w/"), Strings.intern("can"), Strings.create("crud/read"))));
+		String h = head(ContextAssembler.assemble(spec(config)));
+		assertTrue(h.contains("Your capabilities (caps)"));
+		assertTrue(h.contains("crud on w/decisions/"), h);
+		assertTrue(h.contains("crud/read on w/"), h);
+		assertTrue(h.contains("Capability denied"));
+		assertTrue(h.contains("Retrying the same call does not help"));
+
+		String empty = head(ContextAssembler.assemble(spec(Maps.of(Strings.intern("caps"), Vectors.empty()))));
+		assertTrue(empty.contains("(none)"), "deny-all is stated explicitly");
+	}
+
+	@Test
+	public void testLatticeReferenceContent() {
+		String h = head(ContextAssembler.assemble(spec(null)));
+		assertTrue(h.contains("Workspace"));
+		assertTrue(h.contains("v/ops"));
+		assertTrue(h.contains("Only claim or use capabilities backed by tools"),
+			"addressability must not imply capability");
+	}
+
+	// ========== Pinned context ==========
+
+	@Test
+	public void testPinnedContextFromConfig() {
+		write("w/rules", Strings.create("Rule 1: validate all inputs"));
+		AMap<AString, ACell> config = Maps.of(K_CONTEXT, Vectors.of((ACell) Strings.create("w/rules")));
+		Prompt p = ContextAssembler.assemble(spec(config));
+		assertTrue(allContent(p).contains("[Context: w/rules]\nRule 1: validate all inputs"), allContent(p));
+		assertEquals(2, p.marks().get(ContextAssembler.Band.LIVE), "the entry is in the live surface");
+	}
+
+	@Test
+	public void testInvalidConfigContextThrows() {
+		AMap<AString, ACell> config = Maps.of(K_CONTEXT, Strings.create("not-an-array"));
+		RuntimeException ex = assertThrows(RuntimeException.class,
+			() -> ContextAssembler.assemble(spec(config)));
+		assertTrue(ex.getMessage().contains("config.context"), ex.getMessage());
+	}
+
+	@Test
+	public void testAbsentContextIsFine() {
+		assertDoesNotThrow(() -> ContextAssembler.assemble(spec(
+			Maps.of(Strings.intern("systemPrompt"), Strings.create("Be helpful")))));
+	}
+
+	@Test
+	public void testStructuredEntriesRenderThroughCellExplorer() {
+		write("w/structured", Maps.of(Strings.create("name"), Strings.create("Alice"),
+			Strings.create("role"), Strings.create("analyst")));
+		AMap<AString, ACell> config = Maps.of(K_CONTEXT, Vectors.of((ACell) Strings.create("w/structured")));
+		String all = allContent(ContextAssembler.assemble(spec(config)));
+		assertTrue(all.contains("Alice") && all.contains("analyst"), all);
+	}
+
+	// ========== Skills index ==========
+
+	@Test
+	public void testSkillsIndexInjectedAndBudgeted() {
+		writeSkill("w/skills/alpha", "Alpha skill");
+		AMap<AString, ACell> config = Maps.of(
+			Strings.intern("skillsets"), Vectors.of((ACell) Strings.create("w/skills")));
+		Prompt p = ContextAssembler.assemble(spec(config));
+		String all = allContent(p);
+		assertTrue(all.contains("[Skills]"), all);
+		assertTrue(all.contains("- alpha — Alpha skill"), all);
+		assertTrue(all.contains("advertised skill-loading control"),
+			"preamble explains the capability without coupling to an alias");
+		assertFalse(all.contains("skill_load"), "no provider-facing alias in durable text");
+		assertFalse(all.contains("(loaded)"), all);
+		assertTrue(p.used() > ContextAssembler.assemble(spec(null)).used(),
+			"the index is charged to the budget");
+	}
+
+	@Test
+	public void testSkillsIndexLoadedMarker() {
+		writeSkill("w/skills/alpha", "Alpha skill");
+		AMap<AString, ACell> config = Maps.of(
+			Strings.intern("skillsets"), Vectors.of((ACell) Strings.create("w/skills")));
+		AMap<AString, ACell> effectiveLoads = Maps.of(Strings.create("w/skills/alpha"), Maps.of(
+			Strings.create("skill"), CVMBool.TRUE, Strings.create("budget"), CVMLong.create(2000)));
+		Spec s = spec(config).withLoads(Loads.Snapshot.EMPTY, Vectors.empty(), effectiveLoads);
+		assertTrue(allContent(ContextAssembler.assemble(s)).contains("- alpha — Alpha skill (loaded)"));
+	}
+
+	@Test
+	public void testLoadedSkillContributesToSkillsIndex() {
+		write("w/root-skill", Maps.of(
+			Fields.NAME, Strings.create("root-skill"),
+			Fields.DESCRIPTION, Strings.create("Reveals specialists"),
+			Skills.K_SKILL, Maps.of(Skills.K_SKILLSETS, Vectors.of(Strings.create("w/specialists")))));
+		writeSkill("w/specialists/reviewer", "Review a result");
+		Skills.ResolvedSkill root = Skills.resolveRef(engine, ctx, Strings.create("w/root-skill"));
+		AMap<AString, ACell> loads = Maps.of(root.path(), Skills.buildSkillLoadMeta(2000, root));
+
+		String all = allContent(ContextAssembler.assemble(
+			spec(null).withLoads(Loads.Snapshot.EMPTY, Vectors.empty(), loads)));
+		assertTrue(all.contains("- reviewer — Review a result"), all);
+		assertTrue(all.contains("may also reveal more skills"), all);
+		assertFalse(all.contains("- root-skill —"),
+			"a direct-ref bootstrap need not make itself a configured source");
+	}
+
+	@Test
+	public void testSkillsIndexAbsentOrEmpty() {
+		assertFalse(allContent(ContextAssembler.assemble(spec(
+			Maps.of(Strings.intern("systemPrompt"), Strings.create("Hi"))))).contains("[Skills]"));
+		assertFalse(allContent(ContextAssembler.assemble(spec(
+			Maps.of(Strings.intern("skillsets"), Vectors.empty())))).contains("[Skills]"));
+		assertFalse(allContent(ContextAssembler.assemble(spec(
+			Maps.of(Strings.intern("skillsets"), Vectors.of((ACell) Strings.create("w/no-skills-here"))))))
+			.contains("[Skills]"));
+	}
+
+	@Test
+	public void testInvalidConfigSkillsThrows() {
+		RuntimeException e1 = assertThrows(RuntimeException.class, () -> ContextAssembler.assemble(spec(
+			Maps.of(Strings.intern("skillsets"), Strings.create("w/skills")))));
+		assertTrue(e1.getMessage().contains("config.skills"), e1.getMessage());
+		RuntimeException e2 = assertThrows(RuntimeException.class, () -> ContextAssembler.assemble(spec(
+			Maps.of(Strings.intern("skillsets"), Vectors.of(CVMLong.create(42))))));
+		assertTrue(e2.getMessage().contains("config.skills"), e2.getMessage());
+	}
+
+	// ========== Loads ==========
+
+	private AMap<AString, ACell> alphaSkillLoads() {
+		write("w/skills/alpha", Maps.of(
+			Strings.create("description"), Strings.create("Alpha skill"),
+			Strings.create("content"), Maps.of(Strings.create("inline"), Strings.create("## Alpha\nDo the thing.")),
+			Strings.create("skill"), Maps.of(Strings.create("context"), Vectors.of(Maps.of(
+				Strings.create("text"), Strings.create("Alpha extra context"),
+				Strings.create("label"), Strings.create("Alpha notes"))))));
+		Skills.ResolvedSkill s = Skills.resolveRef(engine, ctx, Strings.create("w/skills/alpha"));
+		return Maps.of(Strings.create("w/skills/alpha"), Skills.buildSkillLoadMeta(2000, s));
+	}
+
+	@Test
+	public void testSkillEntryRendersBodyAndContext() {
+		String all = allContent(Loads.elements(engine, ctx, alphaSkillLoads(), Labels.BRACKET));
+		assertTrue(all.contains("[Skill: alpha — w/skills/alpha]\n## Alpha\nDo the thing."),
+			"body renders verbatim under its label, the path being its unload key: " + all);
+		assertTrue(all.contains("[Context: Alpha notes]\nAlpha extra context"), all);
+	}
+
+	@Test
+	public void testVanishedSkillRendersVisibly() {
+		AMap<AString, ACell> loads = Maps.of(Strings.create("w/skills/ghost"), Maps.of(
+			Strings.create("skill"), CVMBool.TRUE,
+			Strings.create("budget"), CVMLong.create(2000),
+			Strings.create("label"), Strings.create("ghost")));
+		String all = allContent(Loads.elements(engine, ctx, loads, Labels.BRACKET));
+		assertTrue(all.contains("[Skill: ghost — w/skills/ghost — unavailable:"), all);
+	}
+
+	@Test
+	public void testOverBudgetSkillIsNeverEvicted() {
+		// Budgets are advisory: a behaviour-changing skill is never dropped on
+		// an imprecise token proxy. The tail warns instead.
+		Loads.Snapshot loads = Loads.resolve(engine, ctx, alphaSkillLoads(), java.util.Set.of(), Labels.BRACKET);
+		Spec s = new Spec(engine, ctx, null, null, null, null, 300, null,
+			null, null, null, null, null, null, true, null, null, null, null, null)
+			.withLoads(loads, Vectors.empty(), alphaSkillLoads());
+		Prompt p = ContextAssembler.assemble(s);
+		String all = allContent(p);
+		assertTrue(all.contains("[Skill: alpha — w/skills/alpha]") && all.contains("Do the thing."), all);
+		assertTrue(tail(p).contains("[Context budget]"), tail(p));
+	}
+
+	@Test
+	public void testDuplicateSkillEntriesRenderOnce() {
+		AMap<AString, ACell> one = alphaSkillLoads();
+		@SuppressWarnings("unchecked")
+		AMap<AString, ACell> entryMeta = (AMap<AString, ACell>) one.get(Strings.create("w/skills/alpha"));
+		engine.jobs().invokeOperation("v/ops/covia/copy",
+			Maps.of(Strings.create("from"), Strings.create("w/skills/alpha"),
+				Strings.create("to"), Strings.create("w/skills/alias")), ctx).awaitResult(5000);
+		AMap<AString, ACell> both = one.assoc(Strings.create("w/skills/alias"), entryMeta);
+
+		String all = allContent(Loads.elements(engine, ctx, both, Labels.BRACKET));
+		int firstBody = all.indexOf("## Alpha\nDo the thing.");
+		assertTrue(firstBody >= 0, all);
+		assertEquals(-1, all.indexOf("## Alpha\nDo the thing.", firstBody + 1), "one body per content identity");
+		assertEquals(-1, all.indexOf("[Skill: ", all.indexOf("[Skill: ") + 1), "one element per content identity");
+	}
+
+	@Test
+	public void testLoadedPathsResolution() {
+		write("w/test-data", Maps.of(Strings.create("key"), Strings.create("value")));
+		AMap<AString, ACell> loads = Maps.of(Strings.create("w/test-data"),
+			Maps.of(Strings.create("budget"), CVMLong.create(500)));
+		assertTrue(allContent(Loads.elements(engine, ctx, loads, Labels.BRACKET)).contains("key"));
+	}
+
+	@Test
+	public void testLoadedPathsMissingSkipped() {
+		AMap<AString, ACell> loads = Maps.of(Strings.create("w/nonexistent/path"),
+			Maps.of(Strings.create("budget"), CVMLong.create(500)));
+		assertEquals(0, Loads.elements(engine, ctx, loads, Labels.BRACKET).count());
+	}
+
+	@Test
+	public void testNonSkillLoadShowsItsPath() {
+		write("w/data", Strings.create("payload-here"));
+		AMap<AString, ACell> loads = Maps.of(Strings.create("w/data"), Maps.of(
+			Strings.create("budget"), CVMLong.create(800),
+			Strings.create("label"), Strings.create("Test Data")));
+		String all = allContent(Loads.elements(engine, ctx, loads, Labels.BRACKET));
+		assertTrue(all.contains("w/data") && all.contains("payload-here"), all);
+	}
+
+	@Test
+	public void testJobTemporaryPathLoadsThroughVirtualNamespace() {
+		Job scope = engine.jobs().invokeOperation("v/test/ops/echo", Maps.of("scope", "temp-load"), ctx);
+		scope.awaitResult(5000);
+		RequestContext jobCtx = ctx.withJobId(scope.getID());
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of("path", "t/live-note", "value", "TEMP_LOAD_VISIBLE"), jobCtx).awaitResult(5000);
+		AMap<AString, ACell> loads = Maps.of(Strings.create("t/live-note"), Maps.of("budget", 500L));
+		assertTrue(allContent(Loads.elements(engine, jobCtx, loads, Labels.BRACKET)).contains("TEMP_LOAD_VISIBLE"));
+	}
+
+	@Test
+	public void testLoadsSnapshotCarriesToolsAndRoutes() {
+		write("w/skills/toolful", Maps.of(
+			Strings.create("description"), Strings.create("Has a tool"),
+			Strings.create("skill"), Maps.of(Strings.create("tools"),
+				Vectors.of((ACell) Strings.create("v/ops/covia/read")))));
+		Skills.ResolvedSkill s = Skills.resolveRef(engine, ctx, Strings.create("w/skills/toolful"));
+		AMap<AString, ACell> loads = Maps.of(s.path(), Skills.buildSkillLoadMeta(2000, s));
+		Loads.Snapshot snap = Loads.resolve(engine, ctx, loads, java.util.Set.of(), Labels.BRACKET);
+		assertEquals(1, snap.tools().count());
+		assertEquals("v/ops/covia/read", snap.routes().get("covia_read").toString());
+		// A name fixed by harness or config is never shadowed by a load.
+		assertEquals(0, Loads.resolve(engine, ctx, loads, java.util.Set.of("covia_read"), Labels.BRACKET).tools().count());
+	}
+
+	// ========== Conversation ==========
+
+	@Test
+	public void testPendingResults() {
+		AVector<ACell> pending = Vectors.of((ACell) Maps.of(
+			Fields.JOB_ID, Strings.create("abc123"),
+			Fields.STATUS, Strings.create("COMPLETE"),
+			Fields.OUTPUT, Strings.create("result data")));
+		Prompt p = ContextAssembler.assemble(spec(null, null, pending, null, true));
+		ACell results = p.messages().get(1);
+		assertEquals("user", role(results));
+		assertTrue(content(results).startsWith("[Pending job results]"), content(results));
+		assertTrue(content(results).contains("abc123") && content(results).contains("result data"));
+	}
+
+	@Test
+	public void testNothingToAddAddsNothing() {
+		// head + tail only
+		assertEquals(2, ContextAssembler.assemble(spec(null)).messages().count());
+	}
+
+	@Test
+	public void testInboxStringMessage() {
+		Prompt p = ContextAssembler.assemble(spec(null, null, null,
+			Vectors.of((ACell) Strings.create("Hello agent")), true));
+		ACell turn = p.messages().get(1);
+		assertEquals("user", role(turn));
+		assertEquals("Hello agent", content(turn));
+	}
+
+	@Test
+	public void testForeignInboxMessageIsAttributed() {
+		AVector<ACell> inbox = Vectors.of((ACell) Maps.of(
+			Fields.CALLER, Strings.create("did:key:z6MkBob"),
+			Fields.MESSAGE, Strings.create("Please review the report")));
+		AVector<ACell> m = ContextAssembler.assemble(spec(null, null, null, inbox, true)).messages();
+		// head, attribution note, the turn, tail
+		assertEquals(4, m.count());
+		assertEquals("system", role(m.get(1)));
+		assertTrue(content(m.get(1)).startsWith("Venue attribution:") && content(m.get(1)).contains("did:key:z6MkBob"));
+		assertEquals("Please review the report", content(m.get(2)), "the user's text is never touched");
+	}
+
+	@Test
+	public void testToMessageNormalisesEnvelopesAndTurnsAlike() {
+		AString bob = Strings.create("did:key:z6MkBob");
+		AMap<AString, ACell> envelope = Maps.of(Fields.CALLER, bob, Fields.MESSAGE, Strings.create("Please review"));
+		AMap<AString, ACell> stored = Maps.of(K_ROLE, Strings.intern("user"),
+			K_CONTENT, Strings.create("Please review"), Fields.CALLER, bob);
+		AMap<AString, ACell> live = ConversationRenderer.toMessage(envelope, Strings.intern("user"));
+		AMap<AString, ACell> persisted = ConversationRenderer.toMessage(stored, null);
+		assertEquals(live, persisted);
+		assertEquals("Please review", content(live));
+		assertNull(live.get(Fields.CALLER), "framework metadata is dropped");
+
+		AMap<AString, ACell> own = Maps.of(Fields.CALLER, ALICE_DID, Fields.MESSAGE, Strings.create("This is me"));
+		assertEquals("This is me", content(ConversationRenderer.toMessage(own, Strings.intern("user"))));
+	}
+
+	@Test
+	public void testAttributionNoteOncePerPrincipalChange() {
+		AString bob = Strings.create("did:key:z6MkBob");
+		AVector<ACell> inbox = Vectors.of(
+			(ACell) Maps.of(Fields.CALLER, bob, Fields.MESSAGE, Strings.create("first from bob")),
+			(ACell) Maps.of(Fields.CALLER, bob, Fields.MESSAGE, Strings.create("second from bob")),
+			(ACell) Maps.of(Fields.CALLER, ALICE_DID, Fields.MESSAGE, Strings.create("alice herself")),
+			(ACell) Maps.of(Fields.CALLER, bob, Fields.MESSAGE, Strings.create("bob again")));
+		AVector<ACell> m = ContextAssembler.assemble(spec(null, null, null, inbox, true)).messages();
+		int notes = 0, bobNotes = 0, ownNotes = 0;
+		for (long i = 0; i < m.count(); i++) {
+			if (!"system".equals(role(m.get(i)))) continue;
+			String c = content(m.get(i));
+			if (!c.startsWith("Venue attribution:")) continue;
+			notes++;
+			if (c.contains("z6MkBob")) bobNotes++;
+			if (c.contains("your own principal")) ownNotes++;
+		}
+		assertEquals(3, notes, "one note per change of submitting principal");
+		assertEquals(2, bobNotes);
+		assertEquals(1, ownNotes);
+	}
+
+	@Test
+	public void testAttributionNotesSpeakToTheRelationship() {
+		RequestContext agentCtx = RequestContext.ofAuthority(
+			covia.grid.Authority.ofAgent(ALICE_DID, Strings.create("helper")));
+		String owner = ContextAssembler.attributionNote(engine, agentCtx, ALICE_DID);
+		assertTrue(owner.contains("from your owner") && owner.contains("with confidence"), owner);
+		String sibling = ContextAssembler.attributionNote(engine, agentCtx,
+			covia.grid.Principals.agentDID(ALICE_DID, Strings.create("scout")));
+		assertTrue(sibling.contains("scout") && sibling.contains("colleague"), sibling);
+		String venue = ContextAssembler.attributionNote(engine, agentCtx, engine.getDIDString());
+		assertTrue(venue.contains("the venue itself") && venue.contains("trusted operator"), venue);
+		String stranger = ContextAssembler.attributionNote(engine, agentCtx,
+			Strings.create(engine.getDIDString() + ":public"));
+		assertTrue(stranger.contains("anonymous public principal") && stranger.contains("untrusted"), stranger);
+		String other = ContextAssembler.attributionNote(engine, agentCtx, Strings.create("did:key:z6MkBob"));
+		assertTrue(other.contains("another user of this venue") && other.contains("no authority beyond"), other);
+
+		AString publicDID = Strings.create(engine.getDIDString() + ":public");
+		RequestContext publicCtx = RequestContext.ofAuthority(
+			covia.grid.Authority.ofAgent(publicDID, Strings.create("Assistant")));
+		String publicOwner = ContextAssembler.attributionNote(engine, publicCtx, publicDID);
+		assertTrue(publicOwner.contains("from your owner") && publicOwner.contains("with confidence"), publicOwner);
+
+		for (String n : new String[] {owner, sibling, venue, stranger, other, publicOwner}) {
+			assertTrue(n.startsWith("Venue attribution:") && n.contains("Verified by the venue"), n);
+		}
+	}
+
+	@Test
+	public void testFrameStackRendersThroughTheConversationRenderer() {
+		AMap<AString, ACell> frame = GoalTreeContext.createFrame("flat session");
+		frame = GoalTreeContext.appendTurn(frame, Maps.of("role", "user", "content", "first", "ts", 1L, "source", "chat"));
+		frame = GoalTreeContext.appendTurn(frame, Maps.of("role", "assistant", "content", "4"));
+		AVector<ACell> m = ContextAssembler.conversation(spec(null, Vectors.of((ACell) frame), null, null, true));
+		assertEquals(2, m.count());
+		assertEquals("first", content(m.get(0)));
+		assertNull(RT.getIn(m.get(0), "ts"), "framework metadata is dropped");
+		assertEquals("4", content(m.get(1)));
+	}
+
+	@Test
+	public void testAncestorsPrecedeTheActiveFrame() {
+		AMap<AString, ACell> root = GoalTreeContext.appendTurn(
+			GoalTreeContext.createFrame("root goal"), Maps.of("role", "user", "content", "start"));
+		AMap<AString, ACell> child = GoalTreeContext.appendTurn(
+			GoalTreeContext.createFrame("child goal"), Maps.of("role", "user", "content", "child goal"));
+		AVector<ACell> m = ContextAssembler.conversation(
+			spec(null, Vectors.of((ACell) root, (ACell) child), null, null, true));
+		assertTrue(content(m.get(0)).startsWith("[Ancestor Context]"), content(m.get(0)));
+		assertTrue(content(m.get(0)).contains("root goal"));
+		assertEquals("child goal", content(m.get(1)));
+	}
+
+	@Test
+	public void testEmptyStateSignalWhenNothingToActOn() {
+		Prompt p = ContextAssembler.assemble(spec(null, null, null, null, false));
+		ACell signal = p.messages().get(1);
+		assertEquals("user", role(signal));
+		assertTrue(content(signal).startsWith("[No input]"), content(signal));
+		assertTrue(content(signal).contains("No pending tasks"), content(signal));
+		assertFalse(allContent(ContextAssembler.assemble(spec(null, null, null, null, true))).contains("No pending tasks"));
+	}
+
+	// ========== Tail ==========
+
+	@Test
+	public void testBudgetWarningIsSilentWhenQuiet() {
+		assertFalse(allContent(ContextAssembler.assemble(spec(null))).contains("Context budget"));
+	}
+
+	@Test
+	public void testBudgetWarningUnderPressure() {
+		AMap<AString, ACell> bigConfig = Maps.of(Strings.intern("systemPrompt"), Strings.create("x".repeat(800)));
+		Spec s = new Spec(engine, ctx, null, bigConfig, null, null, 1000, null,
+			null, null, null, null, null, null, true, null, null, null, null, null);
+		String t = tail(ContextAssembler.assemble(s));
+		assertTrue(t.contains("[Context budget]") && t.contains("unload"), t);
+		assertTrue(t.contains("Compact the conversation"), "over 90%: compaction is required");
+	}
+
+	@Test
+	public void testUnavailableToolsNotice() {
+		AVector<ACell> unavailable = Vectors.of((ACell) Maps.of(
+			Fields.OPERATION, Strings.create("w/private/op"), Fields.REASON, Strings.create("not readable")));
+		Spec s = new Spec(engine, ctx, null, null, null, null, 0, null,
+			null, null, null, null, null, null, true, null, null, unavailable, null, null);
+		String t = tail(ContextAssembler.assemble(s));
+		assertTrue(t.startsWith("Current date:"), t);
+		assertTrue(t.contains("[Unavailable tools]"), t);
+		assertTrue(t.contains("Configured tools unavailable in this session"), t);
+		assertTrue(t.contains("- w/private/op: not readable"), t);
+	}
+
+	@Test
+	public void testRuntimeNoticeRidesTheTail() {
+		String t = tail(ContextAssembler.assemble(spec(null).withNotice("Your conversation has 21 turns.")));
+		assertTrue(t.startsWith("Your conversation has 21 turns.\n\nCurrent date:"), t);
+	}
+
+	// ========== Budget ==========
+
+	@Test
+	public void testBudgetAccounting() {
+		Spec s = new Spec(engine, ctx, null, null, null, null, 100_000, null,
+			null, null, null, null, null, null, true, null, null, null, null, null);
+		Prompt p = ContextAssembler.assemble(s);
+		assertTrue(p.used() > 0, "the head costs bytes");
+		assertTrue(p.remaining() < 100_000);
+		assertEquals(100_000, p.used() + p.remaining());
+		assertEquals(100_000, p.budget());
+		assertEquals(ContextAssembler.DEFAULT_BUDGET, ContextAssembler.assemble(spec(null)).budget(),
+			"no declared budget → the default");
+	}
+
+	@Test
+	public void testToolsAreChargedFirst() {
+		AVector<ACell> tools = ToolPalette.resolve(engine, ctx,
+			Maps.of(Strings.intern("defaultTools"), CVMBool.TRUE), java.util.Set.of()).tools();
+		Spec s = new Spec(engine, ctx, null, null, null, null, 0, null,
+			tools, null, null, null, null, null, true, null, null, null, null, null);
+		Prompt with = ContextAssembler.assemble(s);
+		assertSame(tools, with.tools());
+		assertTrue(with.used() > ContextAssembler.assemble(spec(null)).used());
+		assertTrue(with.toL3Input(null).get(Strings.intern("tools")) != null);
+	}
+
+	// ========== ToolPalette ==========
+
+	@Test
+	public void testDefaultToolsCachedPerEngine() {
+		AMap<AString, ACell> config = Maps.of(Strings.intern("defaultTools"), CVMBool.TRUE);
+		ToolPalette.Palette p1 = ToolPalette.resolve(engine, ctx, config, java.util.Set.of());
+		ToolPalette.Palette p2 = ToolPalette.resolve(engine, ctx, config, java.util.Set.of());
+		assertSame(p1.tools(), p2.tools(), "the default pack is one cached instance per Engine");
+		assertNotSame(p1.routes(), p2.routes(), "routes are a per-palette copy");
+		assertEquals(p1.routes().keySet(), p2.routes().keySet());
+		assertEquals(java.util.Set.of("covia_read", "covia_list"), p1.routes().keySet(),
+			"the default pack stays minimal and read-only — add tools via skills instead");
+	}
+
+	@Test
+	public void testToolDescriptionCarriesTheCatalogPath() {
+		ToolPalette.Palette p = ToolPalette.resolve(engine, ctx,
+			Maps.of(Strings.intern("defaultTools"), CVMBool.TRUE), java.util.Set.of());
+		boolean found = false;
+		for (long i = 0; i < p.tools().count(); i++) {
+			AMap<AString, ACell> tool = RT.castMap(p.tools().get(i));
+			if (!"covia_read".equals(RT.ensureString(tool.get(Strings.intern("name"))).toString())) continue;
+			found = true;
+			String desc = RT.ensureString(tool.get(Strings.intern("description"))).toString();
+			assertTrue(desc.startsWith("Operation: v/ops/covia/read"), desc);
+			assertTrue(desc.contains("Read a value"), "the original description body follows");
+		}
+		assertTrue(found);
+	}
+
+	@Test
+	public void testDefaultToolsOptIn() {
+		assertEquals(0, ToolPalette.resolve(engine, ctx,
+			Maps.of(Strings.intern("defaultTools"), CVMBool.FALSE), java.util.Set.of()).tools().count());
+		assertEquals(0, ToolPalette.resolve(engine, ctx, null, java.util.Set.of()).tools().count());
+	}
+
+	@Test
+	public void testConfiguredToolsMergeWithoutDuplicates() {
+		AMap<AString, ACell> config = Maps.of(
+			Strings.intern("defaultTools"), CVMBool.TRUE,
+			Strings.intern("tools"), Vectors.of((ACell) Strings.create("v/ops/covia/read"),
+				(ACell) Strings.create("v/ops/covia/write"), (ACell) Strings.create("skip_me")));
+		ToolPalette.Palette p = ToolPalette.resolve(engine, ctx, config, java.util.Set.of("skip_me"));
+		assertEquals(java.util.Set.of("covia_read", "covia_list", "covia_write"), ToolPalette.names(p.tools()));
+		assertEquals(0, p.unavailable().count(), "a skipped harness name is not unavailable");
+	}
+
+	@Test
+	public void testUnresolvableConfiguredToolIsReported() {
+		AMap<AString, ACell> config = Maps.of(Strings.intern("tools"),
+			Vectors.of((ACell) Strings.create("v/ops/no/such/op")));
+		ToolPalette.Palette p = ToolPalette.resolve(engine, ctx, config, java.util.Set.of());
+		assertEquals(0, p.tools().count());
+		assertEquals(1, p.unavailable().count());
+		assertEquals("v/ops/no/such/op", RT.getIn(p.unavailable().get(0), Fields.OPERATION).toString());
+		assertEquals(p.unavailable(), ToolPalette.unavailableConfigTools(engine, ctx, config, java.util.Set.of()));
+	}
+
+	@Test
+	public void testCapsContext() {
+		AMap<AString, ACell> config = Maps.of(Strings.intern("caps"),
+			Vectors.of((ACell) Maps.of(Strings.intern("with"), Strings.create("w/"), Strings.intern("can"), Strings.create("crud/read"))));
+		RequestContext capped = AbstractLLMAdapter.capsContext(config, ctx);
+		assertNotNull(capped.getCaps());
+		assertEquals(ctx.getCallerDID(), capped.getCallerDID());
+		assertSame(ctx, AbstractLLMAdapter.capsContext(null, ctx), "no caps → unchanged");
+	}
+
+	@Test
+	public void testParseConfigToolEntry() {
+		AString[] s = ToolPalette.parseConfigToolEntry(Strings.create("v/ops/agent/create"));
+		assertEquals("v/ops/agent/create", s[0].toString());
+		assertNull(s[1]);
+		AString[] m = ToolPalette.parseConfigToolEntry(Maps.of(
+			Fields.OPERATION, Strings.create("v/ops/grid/run"),
+			Strings.intern("name"), Strings.create("myTool"),
+			Strings.intern("description"), Strings.create("My tool")));
+		assertEquals("myTool", m[1].toString());
+		assertEquals("My tool", m[2].toString());
+		assertNull(ToolPalette.parseConfigToolEntry(CVMLong.create(42)));
+		assertNull(ToolPalette.parseConfigToolEntry(null));
+	}
+
+	@Test
+	public void testDeriveToolNameAndDefinition() {
+		assertEquals("override", ToolPalette.deriveToolName(Strings.create("override"), Strings.create("asset"), Strings.create("op:name")));
+		assertEquals("asset", ToolPalette.deriveToolName(null, Strings.create("asset"), Strings.create("op:name")));
+		assertEquals("op_name", ToolPalette.deriveToolName(null, null, Strings.create("op:name")));
+		AMap<AString, ACell> def = ToolPalette.buildToolDefinition("myTool", Strings.create("Does things"), null);
+		assertEquals("myTool", RT.getIn(def, Strings.intern("name")).toString());
+		assertEquals("Does things", RT.getIn(def, Strings.intern("description")).toString());
+		assertNotNull(RT.getIn(def, Strings.intern("parameters")));
+	}
+}

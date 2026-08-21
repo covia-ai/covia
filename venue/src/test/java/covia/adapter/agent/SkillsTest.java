@@ -487,14 +487,14 @@ public class SkillsTest {
 			Strings.create("w/skills/x"), Skills.buildSkillLoadMeta(2000, s));
 
 		java.util.Map<String, AString> toolMap = new java.util.HashMap<>();
-		AVector<ACell> defs = ContextBuilder.loadsToolDefs(engine, ctx, loads,
+		AVector<ACell> defs = ToolPalette.loadsToolDefs(engine, ctx, loads,
 			java.util.Set.of(), toolMap);
 		assertEquals(1, defs.count());
 		assertEquals("covia_read", RT.getIn(defs.get(0), Fields.NAME).toString());
 		assertEquals("v/ops/covia/read", toolMap.get("covia_read").toString());
 
 		// Dedup against names already offered outside the loads mechanism
-		AVector<ACell> none = ContextBuilder.loadsToolDefs(engine, ctx, loads,
+		AVector<ACell> none = ToolPalette.loadsToolDefs(engine, ctx, loads,
 			java.util.Set.of("covia_read"), new java.util.HashMap<>());
 		assertEquals(0, none.count());
 
@@ -503,7 +503,7 @@ public class SkillsTest {
 			Strings.create("w/data/pack"), Maps.of(
 				Strings.create("budget"), CVMLong.create(500),
 				Fields.TOOLS, Vectors.of(Strings.create("v/ops/covia/list"))));
-		AVector<ACell> plainDefs = ContextBuilder.loadsToolDefs(engine, ctx, plain,
+		AVector<ACell> plainDefs = ToolPalette.loadsToolDefs(engine, ctx, plain,
 			java.util.Set.of(), new java.util.HashMap<>());
 		assertEquals(1, plainDefs.count());
 
@@ -512,7 +512,7 @@ public class SkillsTest {
 			Strings.create("w/skills/y"), Maps.of(
 				Strings.create("skill"), convex.core.data.prim.CVMBool.TRUE,
 				Fields.TOOLS, Vectors.of(Strings.create("v/ops/no/such/op"))));
-		assertEquals(0, ContextBuilder.loadsToolDefs(engine, ctx, broken,
+		assertEquals(0, ToolPalette.loadsToolDefs(engine, ctx, broken,
 			java.util.Set.of(), new java.util.HashMap<>()).count());
 	}
 

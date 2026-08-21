@@ -21,7 +21,7 @@ import convex.core.data.AVector;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
-import covia.adapter.agent.ContextBuilder;
+import covia.adapter.agent.ToolPalette;
 import covia.adapter.agent.Skills;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -318,7 +318,7 @@ public class SkillsLibraryTest {
 			RT.getIn(asset.meta(), "operation", "toolName"));
 		AString adapter = RT.ensureString(
 			RT.getIn(asset.meta(), "operation", "adapter"));
-		String alias = ContextBuilder.deriveToolName(null, explicitName,
+		String alias = ToolPalette.deriveToolName(null, explicitName,
 			(adapter != null) ? adapter : operationRef);
 		// Bare words such as "memory" are also ordinary prose. Generated
 		// namespaced aliases are the brittle identifiers this guard targets.

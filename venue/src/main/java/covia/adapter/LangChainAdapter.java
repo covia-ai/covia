@@ -507,7 +507,7 @@ public class LangChainAdapter extends AAdapter {
 			.modelName(model)
 			.timeout(timeout)
 			// Anthropic prompt caching is explicit opt-in: mark the system
-			// prompt and tool definitions with cache_control. ContextBuilder
+			// prompt and tool definitions with cache_control. The assembler
 			// keeps both stable across calls (no changing values in the early
 			// context), so agent loops reuse the cached prefix every iteration.
 			.cacheSystemMessages(true)
@@ -1208,7 +1208,7 @@ public class LangChainAdapter extends AAdapter {
 							toUserContents((AVector<ACell>) contentCell)));
 					} else if (contentCell != null) {
 						// Agent requests are commonly structured objects. Preserve that
-						// information as readable JSON just like ContextBuilder's persisted
+						// information as readable JSON just like the assembler's persisted
 						// history renderer; dropping the turn leaves Anthropic with a
 						// system-only request, which its Messages API rejects.
 						AString content = RT.ensureString(contentCell);

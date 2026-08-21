@@ -255,7 +255,7 @@ public class LLMAgentAdapterTest {
 	public void testCustomSystemPrompt() {
 		// processChat should accept and apply a custom systemPrompt without
 		// error. The system message itself is rebuilt fresh per turn and
-		// not persisted to the transcript — see ContextBuilderTest
+		// not persisted to the transcript — see ContextAssemblerTest
 		// .testSystemPromptIncludesLatticeReference for the assertion that
 		// the prompt actually reaches the LLM context.
 		ACell initialConfig = Maps.of(
@@ -1432,10 +1432,9 @@ public class LLMAgentAdapterTest {
 			"role", "assistant", "toolCalls", Vectors.of(
 				Maps.of("id", "live-call", "name", "covia_read", "arguments", "{}"))));
 
-		AVector<ACell> history = new ContextBuilder(engine, RequestContext.of(ALICE_DID))
-			.withConfig(Maps.empty())
-			.withFrameStack(Vectors.of((ACell) frame))
-			.build().history();
+		AVector<ACell> history = ContextAssembler.conversation(new ContextAssembler.Spec(
+			engine, RequestContext.of(ALICE_DID), null, Maps.empty(), null, null, 0, null,
+			null, null, null, Vectors.of((ACell) frame), null, null, true, null, null, null, null, null));
 
 		assertEquals(4, history.count());
 		assertEquals("first", RT.getIn(history.get(0), "content").toString());
@@ -2111,7 +2110,7 @@ public class LLMAgentAdapterTest {
 
 	@Test
 	public void testParseConfigToolEntryString() {
-		AString[] parsed = ContextBuilder.parseConfigToolEntry(Strings.create("v/ops/agent/create"));
+		AString[] parsed = ToolPalette.parseConfigToolEntry(Strings.create("v/ops/agent/create"));
 		assertNotNull(parsed);
 		assertEquals("v/ops/agent/create", parsed[0].toString());
 		assertNull(parsed[1]); // no name override
@@ -2125,7 +2124,7 @@ public class LLMAgentAdapterTest {
 			"name", "fetch_url",
 			"description", "Fetch a URL"
 		);
-		AString[] parsed = ContextBuilder.parseConfigToolEntry(entry);
+		AString[] parsed = ToolPalette.parseConfigToolEntry(entry);
 		assertNotNull(parsed);
 		assertEquals("v/ops/http/get", parsed[0].toString());
 		assertEquals("fetch_url", parsed[1].toString());
@@ -2135,7 +2134,7 @@ public class LLMAgentAdapterTest {
 	@Test
 	public void testParseConfigToolEntryMapMinimal() {
 		ACell entry = Maps.of("operation", "v/ops/agent/list");
-		AString[] parsed = ContextBuilder.parseConfigToolEntry(entry);
+		AString[] parsed = ToolPalette.parseConfigToolEntry(entry);
 		assertNotNull(parsed);
 		assertEquals("v/ops/agent/list", parsed[0].toString());
 		assertNull(parsed[1]);
@@ -2145,25 +2144,25 @@ public class LLMAgentAdapterTest {
 	@Test
 	public void testParseConfigToolEntryMapMissingOperation() {
 		ACell entry = Maps.of("name", "orphan_tool");
-		assertNull(ContextBuilder.parseConfigToolEntry(entry));
+		assertNull(ToolPalette.parseConfigToolEntry(entry));
 	}
 
 	@Test
 	public void testParseConfigToolEntryInvalidType() {
-		assertNull(ContextBuilder.parseConfigToolEntry(CVMLong.create(42)));
-		assertNull(ContextBuilder.parseConfigToolEntry(CVMBool.TRUE));
+		assertNull(ToolPalette.parseConfigToolEntry(CVMLong.create(42)));
+		assertNull(ToolPalette.parseConfigToolEntry(CVMBool.TRUE));
 	}
 
 	@Test
 	public void testParseConfigToolEntryNull() {
-		assertNull(ContextBuilder.parseConfigToolEntry(null));
+		assertNull(ToolPalette.parseConfigToolEntry(null));
 	}
 
 	// ========== Pure function: deriveToolName ==========
 
 	@Test
 	public void testDeriveToolNameOverrideWins() {
-		String name = ContextBuilder.deriveToolName(
+		String name = ToolPalette.deriveToolName(
 			Strings.create("my_tool"),
 			Strings.create("asset_tool"),
 			Strings.create("adapter:op"));
@@ -2172,7 +2171,7 @@ public class LLMAgentAdapterTest {
 
 	@Test
 	public void testDeriveToolNameAssetToolNameWins() {
-		String name = ContextBuilder.deriveToolName(
+		String name = ToolPalette.deriveToolName(
 			null,
 			Strings.create("asset_tool"),
 			Strings.create("adapter:op"));
@@ -2181,21 +2180,21 @@ public class LLMAgentAdapterTest {
 
 	@Test
 	public void testDeriveToolNameFallbackColonToUnderscore() {
-		String name = ContextBuilder.deriveToolName(
+		String name = ToolPalette.deriveToolName(
 			null, null, Strings.create("agent:create"));
 		assertEquals("agent_create", name);
 	}
 
 	@Test
 	public void testDeriveToolNameFallbackSlashToUnderscore() {
-		String name = ContextBuilder.deriveToolName(
+		String name = ToolPalette.deriveToolName(
 			null, null, Strings.create("did:venue:user/o/my-tool"));
 		assertEquals("did_venue_user_o_my-tool", name);
 	}
 
 	@Test
 	public void testDeriveToolNameNoSpecialChars() {
-		String name = ContextBuilder.deriveToolName(
+		String name = ToolPalette.deriveToolName(
 			null, null, Strings.create("simple"));
 		assertEquals("simple", name);
 	}
@@ -2209,7 +2208,7 @@ public class LLMAgentAdapterTest {
 			"properties", Maps.of("url", Maps.of("type", "string")),
 			"required", Vectors.of("url")
 		);
-		AMap<AString, ACell> def = ContextBuilder.buildToolDefinition(
+		AMap<AString, ACell> def = ToolPalette.buildToolDefinition(
 			"fetch_url", Strings.create("Fetch a URL"), schema);
 
 		assertEquals(Strings.create("fetch_url"), def.get(Strings.intern("name")));
@@ -2219,7 +2218,7 @@ public class LLMAgentAdapterTest {
 
 	@Test
 	public void testBuildToolDefinitionNullSchema() {
-		AMap<AString, ACell> def = ContextBuilder.buildToolDefinition(
+		AMap<AString, ACell> def = ToolPalette.buildToolDefinition(
 			"my_tool", Strings.create("Does stuff"), null);
 
 		assertEquals(Strings.create("my_tool"), def.get(Strings.intern("name")));
@@ -2232,7 +2231,7 @@ public class LLMAgentAdapterTest {
 	@Test
 	public void testBuildToolDefinitionNullDescription() {
 		AMap<AString, ACell> schema = Maps.of("type", "object");
-		AMap<AString, ACell> def = ContextBuilder.buildToolDefinition("tool", null, schema);
+		AMap<AString, ACell> def = ToolPalette.buildToolDefinition("tool", null, schema);
 
 		assertEquals(Strings.create("tool"), def.get(Strings.intern("name")));
 		assertNull(def.get(Strings.intern("description")));
@@ -2241,7 +2240,7 @@ public class LLMAgentAdapterTest {
 	@Test
 	public void testBuildToolDefinitionStringSchema() {
 		// Non-map schema (e.g. a string) should get default object schema
-		AMap<AString, ACell> def = ContextBuilder.buildToolDefinition(
+		AMap<AString, ACell> def = ToolPalette.buildToolDefinition(
 			"tool", null, Strings.create("bad-schema"));
 		ACell params = def.get(Strings.intern("parameters"));
 		assertEquals(Strings.create("object"), RT.getIn(params, "type"));

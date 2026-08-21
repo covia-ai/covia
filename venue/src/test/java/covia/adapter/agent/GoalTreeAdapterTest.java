@@ -142,7 +142,7 @@ public class GoalTreeAdapterTest {
 
 		// The inherited entry contributes tools in the child's effective view
 		java.util.Map<String, AString> routes = new java.util.HashMap<>();
-		AVector<ACell> defs = ContextBuilder.loadsToolDefs(engine, ALICE,
+		AVector<ACell> defs = ToolPalette.loadsToolDefs(engine, ALICE,
 			ContextChain.effective(childLoads), java.util.Set.of(), routes);
 		assertEquals(1, defs.count());
 		assertEquals("covia_read", RT.getIn(defs.get(0), Strings.intern("name")).toString());
@@ -155,10 +155,10 @@ public class GoalTreeAdapterTest {
 		AMap<AString, ACell> childEffective = ContextChain.effective(
 			GoalTreeContext.getLoads(parent), masked);
 		assertEquals(0, childEffective.count());
-		assertEquals(0, ContextBuilder.loadsToolDefs(engine, ALICE,
+		assertEquals(0, ToolPalette.loadsToolDefs(engine, ALICE,
 			childEffective, java.util.Set.of(), new java.util.HashMap<>()).count());
-		ContextBuilder.LoadSnapshot unloaded = ContextBuilder.resolveLoadSnapshot(
-			engine, ALICE, childEffective, java.util.Set.of());
+		Loads.Snapshot unloaded = Loads.resolve(
+			engine, ALICE, childEffective, java.util.Set.of(), Labels.BRACKET);
 		ACell hallucinated = ((GoalTreeAdapter) engine.getAdapter("goaltree")).dispatchTool(
 			"covia_read", Maps.of("path", "w/probe"), unloaded.routes(), ALICE,
 			AbstractLLMAdapter.DEFAULT_TOOL_CALL_TIMEOUT_MS);
