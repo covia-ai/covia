@@ -223,6 +223,65 @@ public class GoalTreeAdapterTest {
 		assertTrue(found, "skills index should be injected as a system message");
 	}
 
+	/** agent:step on a goaltree agent: one root-frame iteration over an in-memory store. */
+	@Test
+	public void testStepRunsOneFrameIteration() {
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "step-goal",
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/goaltree/chat",
+					"llmOperation", "v/test/ops/llm",
+					Fields.TOOLS, Vectors.of(Strings.create("complete"), Strings.create("subgoal"),
+						Strings.create("v/test/ops/echo")))),
+			ALICE).awaitResult(5000);
+
+		// A tool call lands in the root frame; the next prompt renders the
+		// frame — the input turn, then the reply and its tool result.
+		AMap<AString, ACell> stepped = RT.ensureMap(engine.jobs().invokeOperation("v/ops/agent/step",
+			Maps.of(Fields.AGENT_ID, "step-goal", Fields.MESSAGE, "Echo this",
+				"assistant", Maps.of("toolCalls", Vectors.of(
+					Maps.of("name", "test_echo", "arguments", Maps.of("x", 1L))))),
+			ALICE).awaitResult(5000));
+		assertEquals(CVMBool.FALSE, stepped.get(Strings.intern("done")));
+		AVector<ACell> messages = RT.ensureVector(
+			RT.getIn(stepped, Strings.intern("next"), Fields.MESSAGES));
+		int user = -1, tool = -1;
+		for (int i = 0; i < messages.count(); i++) {
+			String role = RT.getIn(messages.get(i), "role").toString();
+			ACell content = RT.getIn(messages.get(i), "content");
+			if (user < 0 && "user".equals(role) && content != null
+					&& content.toString().contains("Echo this")) user = i;
+			if ("tool".equals(role)) tool = i;
+		}
+		assertTrue(user >= 0 && tool > user, "input turn then tool result: " + messages);
+		AVector<ACell> calls = RT.ensureVector(stepped.get(Strings.intern("calls")));
+		assertEquals(Maps.of("x", 1L), RT.getIn(calls.get(0), "result"));
+
+		// complete ends the frame with its value — reported, nothing resolved.
+		AMap<AString, ACell> done = RT.ensureMap(engine.jobs().invokeOperation("v/ops/agent/step",
+			Maps.of(Fields.AGENT_ID, "step-goal", Fields.MESSAGE, "hi",
+				"assistant", Maps.of("toolCalls", Vectors.of(
+					Maps.of("name", "complete", "arguments", Maps.of("result", "done"))))),
+			ALICE).awaitResult(5000));
+		assertEquals(CVMBool.TRUE, done.get(Strings.intern("done")));
+		assertEquals("complete", RT.getIn(done, "terminal", "name").toString());
+		assertEquals(Strings.create("done"), RT.getIn(done, "terminal", "value", "result"));
+		assertNull(done.get(Strings.intern("next")));
+		AVector<ACell> turns = RT.ensureVector(done.get(Fields.TURNS));
+		assertEquals("assistant", RT.getIn(turns.get(turns.count() - 1), "role").toString());
+
+		// subgoal is reported, not run — it would call the model.
+		AMap<AString, ACell> sub = RT.ensureMap(engine.jobs().invokeOperation("v/ops/agent/step",
+			Maps.of(Fields.AGENT_ID, "step-goal", Fields.MESSAGE, "hi",
+				"assistant", Maps.of("toolCalls", Vectors.of(
+					Maps.of("name", "subgoal", "arguments", Maps.of("goal", "sub"))))),
+			ALICE).awaitResult(5000));
+		String result = RT.getIn(RT.ensureVector(sub.get(Strings.intern("calls"))).get(0), "result").toString();
+		assertTrue(result.contains("not executed"), result);
+		assertNull(sub.get(Fields.TOOL_FAILURES));
+		assertEquals(CVMBool.FALSE, sub.get(Strings.intern("done")));
+	}
+
 	// ========== Tool definitions ==========
 
 	@Test

@@ -261,6 +261,7 @@ public class AgentAdapter extends AAdapter {
 		installAsset("agent/trigger",     BASE + "trigger.json");
 		installAsset("agent/info",        BASE + "info.json");
 		installAsset("agent/context",     BASE + "context.json");
+		installAsset("agent/step",        BASE + "step.json");
 		installAsset("agent/list",        BASE + "list.json");
 		installAsset("agent/delete",      BASE + "delete.json");
 		installAsset("agent/suspend",     BASE + "suspend.json");
@@ -467,7 +468,7 @@ public class AgentAdapter extends AAdapter {
 		AString ability = switch (subOp) {
 			case "create", "fork" -> Abilities.AGENT_CREATE;
 			case "request"        -> Abilities.AGENT_REQUEST;
-			case "message", "chat" -> Abilities.AGENT_MESSAGE;
+			case "message", "chat", "step" -> Abilities.AGENT_MESSAGE;
 			case "delete", "suspend", "resume", "update", "cancelTask", "deleteSession", "renameSession" -> Abilities.AGENT_WRITE;
 			default -> null; // info/list/context (reads), trigger, completeTask/failTask
 		};
@@ -508,6 +509,7 @@ public class AgentAdapter extends AAdapter {
 				case "trigger" -> handleTrigger(job, input, ctx);
 				case "info"    -> handleQuery(job, input, ctx);
 				case "context" -> handleContext(job, input, ctx);
+				case "step"    -> handleStep(job, input, ctx);
 				case "list"    -> handleList(job, input, ctx);
 				case "delete"  -> handleDelete(job, input, ctx);
 				case "suspend" -> handleSuspend(job, input, ctx);
@@ -1373,16 +1375,61 @@ public class AgentAdapter extends AAdapter {
 	 * with a clear message — AgentAdapter holds no opinion on what a context
 	 * "looks like".</p>
 	 */
-	@SuppressWarnings("unchecked")
 	private void handleContext(Job job, ACell input, RequestContext ctx) {
+		Inspectable target = inspectable(job, input, ctx);
+		if (target == null) return;
+		AMap<AString, ACell> report = target.adapter().inspectContext(target.inspection(), target.ctx());
+
+		// Session token totals (#217): measured usage accumulated on
+		// meta.tokens, so an inspector sees real counts instead of estimating.
+		ACell sessionTokens = RT.getIn(target.inspection().session(), Strings.intern("meta"), Fields.TOKENS);
+		if (sessionTokens != null) report = report.assoc(K_SESSION_TOKENS, sessionTokens);
+
+		job.setStatus(Status.STARTED);
+		job.completeWith(report);
+	}
+
+	/**
+	 * {@code agent:step}: the same hypothetical call, stepped one harness
+	 * iteration forward on the supplied model reply. The reply's tool calls
+	 * run for real under the agent's authority — the point: routes, capability
+	 * checks and timeouts exactly as live; the agent's own state is untouched.
+	 */
+	private void handleStep(Job job, ACell input, RequestContext ctx) {
+		Inspectable target = inspectable(job, input, ctx);
+		if (target == null) return;
+		AMap<AString, ACell> assistant;
+		try {
+			assistant = AbstractLLMAdapter.stepAssistant(RT.getIn(input, K_ASSISTANT));
+		} catch (IllegalArgumentException e) {
+			job.fail(e.getMessage());
+			return;
+		}
+		if (assistant == null) { job.fail("assistant is required — the model reply to step through"); return; }
+		job.setStatus(Status.STARTED);
+		job.completeWith(target.adapter().stepContext(target.inspection(), assistant, target.ctx()));
+	}
+
+	/** The resolved target of an inspection op: the adapter, the call, and the context it runs under. */
+	private record Inspectable(ContextInspectable adapter, ContextInspectable.Inspection inspection,
+			RequestContext ctx) {}
+
+	/**
+	 * Resolves the agent named by the input and the hypothetical call it
+	 * describes — inbox message(s), pending results, a task, a session — for
+	 * the agent's transition adapter, which must be {@link ContextInspectable}.
+	 * Fails the job and returns null when any part does not resolve.
+	 */
+	@SuppressWarnings("unchecked")
+	private Inspectable inspectable(Job job, ACell input, RequestContext ctx) {
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
-		if (agentId == null) { job.fail("agentId is required"); return; }
+		if (agentId == null) { job.fail("agentId is required"); return null; }
 
 		Users users = engine.getVenueState().users();
 		User user = users.get(ctx.getUserDID());
-		if (user == null) { job.fail("User not found"); return; }
+		if (user == null) { job.fail("User not found"); return null; }
 		AgentState agent = user.agent(agentId);
-		if (agent == null) { job.fail("Agent not found: " + agentId); return; }
+		if (agent == null) { job.fail("Agent not found: " + agentId); return null; }
 
 		AMap<AString, ACell> record = agent.getRecord();
 		AMap<AString, ACell> recordConfig = (record.get(AgentState.KEY_CONFIG) instanceof AMap m)
@@ -1392,29 +1439,20 @@ public class AgentAdapter extends AAdapter {
 		AString operation = (recordConfig != null)
 			? RT.ensureString(recordConfig.get(Fields.OPERATION))
 			: null;
-		if (operation == null) {
-			job.fail("Agent has no transition operation configured");
-			return;
-		}
+		if (operation == null) { job.fail("Agent has no transition operation configured"); return null; }
 
 		// Resolve the adapter that handles the agent's transition operation.
 		covia.grid.Asset asset = engine.resolveAsset(operation, ctx);
-		if (asset == null) {
-			job.fail("Could not resolve agent's operation: " + operation);
-			return;
-		}
+		if (asset == null) { job.fail("Could not resolve agent's operation: " + operation); return null; }
 		AString adapterRef = RT.ensureString(RT.getIn(asset.meta(), Fields.OPERATION, Fields.ADAPTER));
-		if (adapterRef == null) {
-			job.fail("Agent's operation has no adapter: " + operation);
-			return;
-		}
+		if (adapterRef == null) { job.fail("Agent's operation has no adapter: " + operation); return null; }
 		String adapterName = adapterRef.toString();
 		int colon = adapterName.indexOf(':');
 		if (colon >= 0) adapterName = adapterName.substring(0, colon);
 		AAdapter target = engine.getAdapter(adapterName);
 		if (!(target instanceof ContextInspectable inspectable)) {
 			job.fail("Adapter '" + adapterName + "' does not support context inspection");
-			return;
+			return null;
 		}
 
 		// Optional session scope (#211): with a sessionId the rendered context
@@ -1425,9 +1463,9 @@ public class AgentAdapter extends AAdapter {
 		AString sidHex = RT.ensureString(RT.getIn(input, Fields.SESSION_ID));
 		if (sidHex != null) {
 			Blob sid = Blob.fromHex(sidHex.toString());
-			if (sid == null) { job.fail("Invalid sessionId format: " + sidHex); return; }
+			if (sid == null) { job.fail("Invalid sessionId format: " + sidHex); return null; }
 			session = agent.getSession(sid);
-			if (session == null) { job.fail("Unknown session: " + sidHex); return; }
+			if (session == null) { job.fail("Unknown session: " + sidHex); return null; }
 		}
 
 		// The hypothetical call: inbox message(s), pending results, a task.
@@ -1438,18 +1476,11 @@ public class AgentAdapter extends AAdapter {
 			recordConfig, state, session, inboxOf(input),
 			RT.ensureVector(RT.getIn(input, Fields.PENDING)),
 			RT.getIn(input, K_TASK));
-		AMap<AString, ACell> report = inspectable.inspectContext(inspection, ctx.withAgentId(agentId));
-
-		// Session token totals (#217): measured usage accumulated on
-		// meta.tokens, so an inspector sees real counts instead of estimating.
-		ACell sessionTokens = RT.getIn(session, Strings.intern("meta"), Fields.TOKENS);
-		if (sessionTokens != null) report = report.assoc(K_SESSION_TOKENS, sessionTokens);
-
-		job.setStatus(Status.STARTED);
-		job.completeWith(report);
+		return new Inspectable(inspectable, inspection, ctx.withAgentId(agentId));
 	}
 
 	private static final AString K_TASK           = Strings.intern("task");
+	private static final AString K_ASSISTANT      = Strings.intern("assistant");
 	private static final AString K_SESSION_TOKENS = Strings.intern("sessionTokens");
 
 	/** The inbox of a hypothetical call: {@code message} (a string or an

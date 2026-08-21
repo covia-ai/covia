@@ -427,6 +427,8 @@ A dash means the runtimes agree. **The table is the whole difference.** Anything
 
 `agent:context` builds the same Spec and calls the same `assemble`, so an inspected context matches a live inference **by construction** rather than by two call chains agreeing. It takes the hypothetical call — an inbox message or several, pending results, a task, a session — and returns the level-3 input with `cacheMarks`, the `budget` (`bytes`, `used`, `remaining`), the `marks` at each band's end and the label dialect.
 
+`agent:step` takes the same call plus the reply the model would give and runs one harness iteration on it: text-as-control recognised, the tool calls dispatched through the runtime's own registry — same routes, capability checks and authority, so the tools' side effects are real — their results rendered, and the next prompt assembled from the same Spec with this iteration in the tool-loop band. The agent is untouched: a terminal control tool is reported (`terminal`), never resolved; goaltree's `subgoal` is not run. It returns `assistant`, `turns`, `calls` (`id, name, arguments, result, isError?, ms`), `toolFailures?`, `terminal?`, `done`, `response?` and `next?` (an `agent:context` report).
+
 ---
 
 ## 9. Implementation map

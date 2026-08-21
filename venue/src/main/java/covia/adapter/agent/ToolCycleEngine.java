@@ -121,6 +121,9 @@ final class ToolCycleEngine {
 	interface BatchSink {
 		void append(AMap<AString, ACell> message);
 		void recordFailure(AString name, String failure);
+		/** Every call that reached a handler, with its outcome and wall-clock
+		 *  milliseconds. Calls fenced after a terminal request never get here. */
+		default void recordCall(ToolCall call, ToolOutcome outcome, long millis) {}
 	}
 
 	/**
@@ -158,9 +161,11 @@ final class ToolCycleEngine {
 				log.warn("Tool call {} has malformed arguments: {}", name, detail);
 			}
 
+			ToolCall call = new ToolCall(id, name, toolInput, iteration);
+			long started = System.nanoTime();
 			if (outcome == null) {
 				try {
-					outcome = registry.dispatch(new ToolCall(id, name, toolInput, iteration), context);
+					outcome = registry.dispatch(call, context);
 					if (outcome == null) {
 						outcome = ToolOutcome.result(Strings.create(
 							"Error: tool handler returned no outcome: " + name));
@@ -171,6 +176,7 @@ final class ToolCycleEngine {
 					log.warn("Tool execution failed: {} — {}", name, detail);
 				}
 			}
+			sink.recordCall(call, outcome, (System.nanoTime() - started) / 1_000_000);
 
 			if (outcome.aborted()) {
 				return new BatchResult(null, null, true);

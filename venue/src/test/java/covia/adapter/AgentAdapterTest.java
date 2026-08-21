@@ -635,6 +635,85 @@ public class AgentAdapterTest {
 		assertTrue(wakeUp.toString().contains("[No input]"), wakeUp.toString());
 	}
 
+	/** agent:step runs one harness iteration on a supplied reply: tools dispatched as live, the agent untouched. */
+	@Test
+	public void testStepRunsOneHarnessIteration() {
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "step-agent",
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/llmagent/chat",
+					"llmOperation", "v/test/ops/llm",
+					"systemPrompt", "You step.",
+					Fields.TOOLS, Vectors.of(Strings.create("v/test/ops/echo")))),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		// A tool call: dispatched through the agent's routes, its result
+		// rendered, the next prompt carrying this iteration in the tool-loop band.
+		AMap<AString, ACell> stepped = RT.ensureMap(engine.jobs().invokeOperation("v/ops/agent/step",
+			Maps.of(Fields.AGENT_ID, "step-agent", Fields.MESSAGE, "Echo this",
+				"assistant", Maps.of("content", "Echoing.", "toolCalls", Vectors.of(
+					Maps.of("name", "test_echo", "arguments", Maps.of("x", 1L))))),
+			RequestContext.of(ALICE_DID)).awaitResult(5000));
+		assertEquals(CVMBool.FALSE, stepped.get(Strings.intern("done")));
+		AVector<ACell> calls = RT.ensureVector(stepped.get(Strings.intern("calls")));
+		assertEquals(1, calls.count());
+		assertEquals("test_echo", RT.getIn(calls.get(0), "name").toString());
+		assertEquals(CVMLong.create(1), RT.getIn(calls.get(0), "result", "x"));
+		assertEquals(CVMLong.create(1), RT.getIn(calls.get(0), "arguments", "x"));
+		assertNotNull(RT.getIn(calls.get(0), "ms"));
+		assertNull(RT.getIn(calls.get(0), "isError"));
+		AVector<ACell> turns = RT.ensureVector(stepped.get(Fields.TURNS));
+		assertEquals(2, turns.count());
+		assertEquals("tool", RT.getIn(turns.get(1), "role").toString());
+		AMap<AString, ACell> next = RT.ensureMap(stepped.get(Strings.intern("next")));
+		AVector<ACell> messages = RT.ensureVector(next.get(Fields.MESSAGES));
+		long conv = RT.ensureLong(RT.getIn(next, "marks", "conversation")).longValue();
+		assertEquals("assistant", RT.getIn(messages.get(conv), "role").toString());
+		assertEquals("tool", RT.getIn(messages.get(conv + 1), "role").toString());
+		assertEquals(CVMLong.create(conv + 2), RT.getIn(next, "marks", "toolLoop"));
+
+		// A text reply ends the cycle: the response, no next prompt.
+		AMap<AString, ACell> text = RT.ensureMap(engine.jobs().invokeOperation("v/ops/agent/step",
+			Maps.of(Fields.AGENT_ID, "step-agent", Fields.MESSAGE, "hi", "assistant", "Four."),
+			RequestContext.of(ALICE_DID)).awaitResult(5000));
+		assertEquals(CVMBool.TRUE, text.get(Strings.intern("done")));
+		assertEquals(Strings.create("Four."), text.get(Fields.RESPONSE));
+		assertNull(text.get(Strings.intern("next")));
+
+		// complete_task on a task: validated and reported as the terminal
+		// outcome, the task gone from the next prompt — no task job touched.
+		AMap<AString, ACell> completed = RT.ensureMap(engine.jobs().invokeOperation("v/ops/agent/step",
+			Maps.of(Fields.AGENT_ID, "step-agent", "task", "Add 2 and 2",
+				"assistant", Maps.of("toolCalls", Vectors.of(
+					Maps.of("name", "complete_task", "arguments", Maps.of("result", "4"))))),
+			RequestContext.of(ALICE_DID)).awaitResult(5000));
+		assertEquals("complete_task", RT.getIn(completed, "terminal", "name").toString());
+		assertEquals(Strings.create("4"), RT.getIn(completed, "terminal", "value"));
+		assertFalse(RT.getIn(completed, "next").toString().contains("[Tasks assigned to you]"));
+
+		// Text spelling a control tool is honoured exactly as the loop honours it (#215).
+		AMap<AString, ACell> textual = RT.ensureMap(engine.jobs().invokeOperation("v/ops/agent/step",
+			Maps.of(Fields.AGENT_ID, "step-agent", "task", "Add 2 and 2",
+				"assistant", "complete_task {\"result\": \"4\"}"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000));
+		assertEquals("complete_task", RT.getIn(textual, "terminal", "name").toString());
+
+		// An unknown tool fails as live: an Error result, recorded as a tool failure.
+		AMap<AString, ACell> unknown = RT.ensureMap(engine.jobs().invokeOperation("v/ops/agent/step",
+			Maps.of(Fields.AGENT_ID, "step-agent", Fields.MESSAGE, "hi",
+				"assistant", Maps.of("toolCalls", Vectors.of(Maps.of("name", "no_such_tool")))),
+			RequestContext.of(ALICE_DID)).awaitResult(5000));
+		assertEquals(CVMBool.TRUE,
+			RT.getIn(RT.ensureVector(unknown.get(Strings.intern("calls"))).get(0), "isError"));
+		assertEquals(1, RT.ensureVector(unknown.get(Fields.TOOL_FAILURES)).count());
+
+		// The agent itself is untouched: no cycle ran.
+		AMap<AString, ACell> info = RT.ensureMap(engine.jobs().invokeOperation("v/ops/agent/info",
+			Maps.of(Fields.AGENT_ID, "step-agent"), RequestContext.of(ALICE_DID)).awaitResult(5000));
+		ACell timeline = RT.getIn(info, "timelineLength");
+		assertTrue(timeline == null || CVMLong.create(0).equals(timeline), "no cycle ran: " + timeline);
+	}
+
 	@Test
 	public void testContextInspectionUsesAgentPrivateNamespace() {
 		AString agentId = Strings.create("private-context-inspection");

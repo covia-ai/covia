@@ -35,4 +35,23 @@ public interface ContextInspectable {
 	 * {@code marks} (message counts at each band's end) and {@code labels}.
 	 */
 	AMap<AString, ACell> inspectContext(Inspection inspection, RequestContext ctx);
+
+	/**
+	 * One harness iteration on that context, given the model's reply instead
+	 * of calling the model. The reply's tool calls are dispatched exactly as a
+	 * live cycle dispatches them — same registry, same routes, same authority,
+	 * so the tools' own side effects are real — their results rendered, and
+	 * the prompt the next inference would receive assembled. The agent itself
+	 * is untouched: nothing persists to its session, timeline or tasks; a
+	 * terminal control tool is reported as the outcome rather than resolving
+	 * anything.
+	 *
+	 * @param assistant the reply, normalised: {@code {role, content?, toolCalls?: [{id, name, arguments}]}}
+	 * @return {@code assistant}, {@code turns} (what the iteration appends to
+	 *         the conversation), {@code calls} ({@code [{id, name, arguments,
+	 *         result, isError?, ms}]}), {@code toolFailures?}, {@code terminal?}
+	 *         ({@code {name, value}}), {@code done}, {@code response?} and
+	 *         {@code next?} — the following prompt, as {@link #inspectContext} reports it
+	 */
+	AMap<AString, ACell> stepContext(Inspection inspection, AMap<AString, ACell> assistant, RequestContext ctx);
 }

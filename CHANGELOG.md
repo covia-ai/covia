@@ -21,6 +21,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Added
 
+- `agent:step` — one harness iteration on a supplied model reply, without calling the model: tool calls dispatched exactly as live (routes, capability checks, authority; real side effects), results rendered, the next prompt returned; the agent's session, timeline and tasks untouched; control tools reported as `terminal`, goaltree `subgoal` not run
 - Prompt caching end to end on Anthropic: the assembler marks the band boundaries (`cacheMarks` in the level-3 input), the anthropic op turns them into per-message `cache_control` breakpoints alongside the system prompt and tools, accepts `cache: false` to switch caching off for a call, and reports `cacheRead` / `cacheWrite` tokens in usage and in the agent cycle tally
 - `lattice` venue skill (`v/skills/data/lattice`, mirrored into `root`): the namespace and addressing reference, pinned by the tool-using agent templates and loadable by any agent — no longer part of every system prompt
 - `model` facet on LLM operation assets: optional `options` — rendering hints (`systemMessages`, `requiresUserMessage`, `cachePrefix`, `toolCallingByModel`, `labels`) — and `budget.bytes`, an estimate of the context size appropriate for the model in UTF-8 bytes, with `byModel` per-model overrides; declared as data rather than branched on by provider name, reported verbatim by `v/ops/langchain/models`

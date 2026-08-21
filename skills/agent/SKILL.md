@@ -155,6 +155,7 @@ join the palette, so point `config.skills` only at sources you trust.
 | See what a venue offers | `skills command=list` (optionally `sources=[...]`) |
 | Read one without loading it | `skills command=read name=<name>` (or `ref=<path>`) |
 | See exactly what an agent would send its model | `agent_context agentId=<name> message="…"` (or `task=…`, `sessionId=…`) — the level-3 input for that call with cache marks, budget and band marks |
+| Dry-run one harness iteration — "why was my tool denied?" | `agent_step agentId=<name> message="…" assistant={"toolCalls":[{"name":"<tool>","arguments":{…}}]}` — dispatches the calls as live (real side effects), returns `calls` with results/errors/ms and `next` (the following prompt); the agent's state is untouched |
 | Write a personal skill | `covia_write path=w/skills/<name>` with `{description, content: {inline: "..."}, skill: {tools: [...], skills: [...]}}` |
 
 A skill with no content is a pure toolset; one carrying an `operation` facet

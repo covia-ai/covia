@@ -1,0 +1,48 @@
+{
+	"name": "Agent Step",
+	"description": "Step an agent's harness through one iteration without calling the model. Describe the call as for agent:context and supply the reply the model would give — text, tool calls, or both. The tool calls are dispatched exactly as a live cycle dispatches them (same routes, same capability checks, same authority — so the tools' own side effects are real), their results are rendered, and the prompt the next inference would receive is returned with what the iteration would have appended to the conversation. The agent itself is untouched: nothing persists to its session, timeline or tasks; complete_task/fail_task (llmagent) and complete/fail (goaltree) are validated as live but reported as the terminal outcome instead of resolving anything. subgoal (goaltree) is not run — it would start a child frame and call the model.",
+	"dateCreated": "2026-08-21T00:00:00Z",
+	"operation": {
+		"adapter": "agent:step",
+		"internal": false,
+		"toolName": "agent_step",
+		"input": {
+			"type": "object",
+			"properties": {
+				"agentId": {
+					"type": "string",
+					"description": "Agent whose harness to step"
+				},
+				"assistant": {
+					"description": "The model reply to step through: a string (text only), or {content?, toolCalls?: [{id?, name, arguments?}]}. Text that spells a control tool (e.g. complete_task {\"result\": ...}) is recognised exactly as the live loop recognises it."
+				},
+				"message": {
+					"description": "A hypothetical inbox message for this call: a string, or an envelope {message, caller?}. Renders as the current input, with venue attribution when the caller is not the agent's own principal."
+				},
+				"messages": {
+					"type": "array",
+					"description": "Several inbox messages, same forms as message."
+				},
+				"pending": {
+					"type": "array",
+					"description": "Job results arriving this cycle, as {jobId, status, output}. (goaltree: results arrive as session turns, so none render separately.)"
+				},
+				"task": {
+					"description": "A task input. llmagent renders it as the outstanding task the agent must complete or fail, with the task tools offered; goaltree renders it as the goal."
+				},
+				"sessionId": {
+					"type": "string",
+					"description": "Optional session id (hex): the session's conversation — prior turns, tool-failure diagnostics — renders exactly as a live transition on that session would see it."
+				}
+			},
+			"required": [
+				"agentId",
+				"assistant"
+			]
+		},
+		"output": {
+			"type": "object",
+			"description": "assistant (the reply as it would be recorded), turns (what the iteration appends to the conversation), calls [{id, name, arguments, result, isError?, ms}], toolFailures?, terminal? {name, value}, done, response? (when the cycle ends here), next? (the following prompt, as agent:context reports it)."
+		}
+	}
+}

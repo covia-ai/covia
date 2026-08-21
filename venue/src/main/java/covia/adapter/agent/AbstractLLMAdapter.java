@@ -270,6 +270,128 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	/** The Spec a live transition with these inputs would assemble. */
 	protected abstract ContextAssembler.Spec inspectionSpec(Inspection inspection, RequestContext ctx);
 
+	// ========== Step: one harness iteration on a supplied reply ==========
+
+	public static final AString K_CALLS    = Strings.intern("calls");
+	public static final AString K_TERMINAL = Strings.intern("terminal");
+	public static final AString K_DONE     = Strings.intern("done");
+	public static final AString K_NEXT     = Strings.intern("next");
+	public static final AString K_MS       = Strings.intern("ms");
+
+	/**
+	 * The reply {@code agent:step} steps through, normalised to the shape the
+	 * loops see from a provider: a string is text only; a map carries
+	 * {@code content} and/or {@code toolCalls}, each call given an id when it
+	 * has none and empty arguments when it has none. Null in, null out.
+	 *
+	 * @throws IllegalArgumentException when a call has no name, or the value is neither form
+	 */
+	@SuppressWarnings("unchecked")
+	public static AMap<AString, ACell> stepAssistant(ACell raw) {
+		if (raw == null) return null;
+		if (raw instanceof AString text) return Maps.of(K_ROLE, ROLE_ASSISTANT, K_CONTENT, text);
+		if (!(raw instanceof AMap)) throw new IllegalArgumentException(
+			"assistant must be a string or {content?, toolCalls?}");
+		AMap<AString, ACell> reply = ((AMap<AString, ACell>) raw).assoc(K_ROLE, ROLE_ASSISTANT);
+		AVector<ACell> calls = RT.ensureVector(reply.get(K_TOOL_CALLS));
+		if (calls == null || calls.isEmpty()) return reply.dissoc(K_TOOL_CALLS);
+		AVector<ACell> normalised = Vectors.empty();
+		for (long i = 0; i < calls.count(); i++) {
+			AMap<AString, ACell> call = RT.ensureMap(calls.get(i));
+			AString name = (call != null) ? RT.ensureString(call.get(K_NAME)) : null;
+			if (name == null) throw new IllegalArgumentException(
+				"assistant.toolCalls[" + i + "] needs a name");
+			if (call.get(K_ID) == null) call = call.assoc(K_ID, Strings.create("step-" + i));
+			if (call.get(K_ARGUMENTS) == null) call = call.assoc(K_ARGUMENTS, Maps.empty());
+			normalised = normalised.conj(call);
+		}
+		return reply.assoc(K_TOOL_CALLS, normalised);
+	}
+
+	/** Collects what one batch produces — the tool-result turns in order,
+	 *  the failures, and each call's wall-clock — for the step report. */
+	protected static final class StepSink implements ToolCycleEngine.BatchSink {
+		private AVector<ACell> turns = Vectors.empty();
+		private AVector<ACell> failures = Vectors.empty();
+		private final Map<AString, Long> millis = new java.util.HashMap<>();
+
+		@Override
+		public void append(AMap<AString, ACell> message) { turns = turns.conj(message); }
+
+		@Override
+		public void recordFailure(AString name, String failure) {
+			failures = failures.conj(Maps.of(K_NAME, name, Fields.ERROR, Strings.create(failure)));
+		}
+
+		@Override
+		public void recordCall(ToolCycleEngine.ToolCall call, ToolCycleEngine.ToolOutcome outcome, long ms) {
+			if (call.id() != null) millis.put(call.id(), ms);
+		}
+
+		AVector<ACell> turns() { return turns; }
+		AVector<ACell> failures() { return failures; }
+	}
+
+	/**
+	 * One stepped iteration, reported. {@code turns} is everything the
+	 * iteration would append to the conversation, the reply first;
+	 * {@code next} is null when the cycle would end here.
+	 */
+	protected record Step(AMap<AString, ACell> assistant, AVector<ACell> turns, StepSink sink,
+			String terminalTool, ACell terminalValue, ACell response, ContextAssembler.Spec next) {
+
+		/** A reply the loop would return as the cycle's response. */
+		static Step done(AMap<AString, ACell> assistant, ACell response) {
+			return new Step(assistant, Vectors.of((ACell) assistant), null, null, null, response, null);
+		}
+
+		AMap<AString, ACell> report() {
+			AMap<AString, ACell> r = Maps.of(
+				ROLE_ASSISTANT, assistant,
+				Fields.TURNS, turns,
+				K_CALLS, calls(),
+				K_DONE, CVMBool.create(next == null));
+			if (sink != null && !sink.failures().isEmpty()) r = r.assoc(Fields.TOOL_FAILURES, sink.failures());
+			if (terminalTool != null) {
+				AMap<AString, ACell> t = Maps.of(K_NAME, Strings.create(terminalTool));
+				if (terminalValue != null) t = t.assoc(Fields.VALUE, terminalValue);
+				r = r.assoc(K_TERMINAL, t);
+			}
+			if (response != null) r = r.assoc(Fields.RESPONSE, response);
+			if (next != null) r = r.assoc(K_NEXT, ContextAssembler.report(next));
+			return r;
+		}
+
+		/** Each dispatched call paired with its result: {@code {id, name, arguments, result, isError?, ms}}. */
+		private AVector<ACell> calls() {
+			AVector<ACell> out = Vectors.empty();
+			if (sink == null) return out;
+			Map<AString, ACell> arguments = new java.util.HashMap<>();
+			AVector<ACell> requested = RT.ensureVector(assistant.get(K_TOOL_CALLS));
+			for (long i = 0; requested != null && i < requested.count(); i++) {
+				AString id = RT.ensureString(RT.getIn(requested.get(i), K_ID));
+				if (id != null) arguments.put(id, RT.getIn(requested.get(i), K_ARGUMENTS));
+			}
+			for (long i = 0; i < sink.turns().count(); i++) {
+				AMap<AString, ACell> turn = RT.ensureMap(sink.turns().get(i));
+				if (turn == null || !ROLE_TOOL.equals(turn.get(K_ROLE))) continue;
+				AString id = RT.ensureString(turn.get(K_ID));
+				AMap<AString, ACell> call = Maps.of(K_NAME, turn.get(K_NAME));
+				if (id != null) call = call.assoc(K_ID, id);
+				ACell args = (id != null) ? arguments.get(id) : null;
+				if (args != null) call = call.assoc(K_ARGUMENTS, args);
+				ACell result = turn.containsKey(K_STRUCTURED_CONTENT)
+					? turn.get(K_STRUCTURED_CONTENT) : turn.get(K_CONTENT);
+				if (result != null) call = call.assoc(Fields.RESULT, result);
+				if (CVMBool.TRUE.equals(turn.get(K_IS_ERROR))) call = call.assoc(K_IS_ERROR, CVMBool.TRUE);
+				Long ms = (id != null) ? sink.millis.get(id) : null;
+				if (ms != null) call = call.assoc(K_MS, CVMLong.create(ms));
+				out = out.conj(call);
+			}
+			return out;
+		}
+	}
+
 	/** The frames vector of a session record, or null when absent. */
 	protected static AVector<ACell> sessionFramesOf(AMap<AString, ACell> session) {
 		return (session != null) ? RT.ensureVector(session.get(Fields.FRAMES)) : null;
