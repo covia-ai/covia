@@ -28,7 +28,7 @@ Every inference is one call with one input:
 
 `messages` is a **flat array of `{role, content}`** in four roles — `system`, `user`, `assistant`, `tool`. There is no nested structure, no typed section, no ordering metadata. Everything that looks structured to the model is a **labelled text element** inside a content string. Two message kinds carry more than text, and the assembler passes them through untouched: an assistant message may carry `toolCalls`, a `tool` message carries its call id and result, and a user message may carry an array of content blocks for vision.
 
-`tools` is part of the prompt too. Providers that cache do so over tools, system and messages **in that order**, so the tools array is the head of the cacheable prefix. It is ordered deterministically — harness tools, then configured tools, then tools contributed by loads — and a change to any definition invalidates everything after it. A skill that contributes tools is therefore a heavier load than one that contributes text.
+`tools` is part of the prompt too, and part of the cached prefix on every provider that caches; Anthropic documents it as the first block, ahead of system and messages. The array is ordered deterministically — harness tools, then configured tools, then tools contributed by loads — and a change to any definition invalidates the prefix from wherever the provider serialises tools: on Anthropic, from the first byte. A skill that contributes tools is therefore a heavier load than one that contributes text.
 
 So assembly is: *compute each element, in order, and concatenate*. The value of the design is not in the data structure — it is in **which elements, in what order, produced by whom**.
 
@@ -114,7 +114,7 @@ The band is the *expected* change frequency. Content can be more volatile than i
 | 14 | Unavailable tools | volatile tail | `user` | Configured tools that did not resolve this cycle |
 | — | Empty-state signal | conversation | `user` | Replaces 8–9 when there is nothing to act on |
 
-Sections 1–3 are **one `system` message**: they change together, are always all present, and are the prefix every provider caches first. Sections 11–14 are **one `user` message**, composed of whichever parts are present: the tail is re-rendered every inference, and one message is the cheapest shape for it.
+Sections 1–3 are **one `system` message**: they change together, are always all present, and are the first thing in every request — the first block of the prefix on providers that cache. Sections 11–14 are **one `user` message**, composed of whichever parts are present: the tail is re-rendered every inference, and one message is the cheapest shape for it.
 
 ### 3.2.1 The role rule
 
@@ -122,13 +122,19 @@ Sections 1–3 are **one `system` message**: they change together, are always al
 
 Three reasons, any one of which would be sufficient:
 
-- **Position.** A provider with a single system parameter collects *every* system message, wherever it sits in the list, into that parameter — and caches the result as one block. A system message placed after the head is silently hoisted into it: a "tail" date lands in the cached head and busts it daily, a compaction summary leaves its place in the conversation, a diagnostic turn leaves the turn it explains. Only the head may be `system`, or the bands are fiction on exactly the providers that cache.
+- **Position.** Where a `system` message placed after the head actually lands is provider-dependent, and model-dependent on top. Anthropic and Gemini have **no system role in the message list at all** — system content is a top-level parameter — so every system message is necessarily hoisted there, whatever its position, and cached as one block: a "tail" date lands in the cached head and busts it, a compaction summary leaves its place in the conversation, a diagnostic leaves the turn it explains. OpenAI-compatible APIs keep a late system message **in place**, but what a mid-conversation system turn *means* is up to the model's chat template, and local models served through Ollama may honour only the leading one. Hoisted, honoured or ignored: a design that places system messages after the head relies on something with three behaviours. One system message, first, is the only placement every provider agrees on.
 - **Authority.** The head is venue- and operator-authored instruction. Everything after it is either the conversation or resolved data — a document, a job result, an op's output, a skill body from a workspace the agent may write. Data carries no instruction authority, whatever it says.
 - **Legality.** Every request needs at least one non-system message. Band 3 always ends with a `user` or `tool` message — the input, pending results, the empty-state signal, or the last tool result — so every prompt is legal by construction and the edge never has to invent a turn.
 
 Skill bodies are instruction, yet they are `user`: they are loaded, from places the agent may write, under a label that says what they are. A model follows a labelled `[Skill: …]` block in a user message as readily as in the system prompt, and the head stays what the operator wrote.
 
 **Standing instruction and reference are therefore `system`; everything the agent sees, did, or must act on is `user`, `assistant` or `tool`.** Consecutive same-role messages are normal — several `user` elements in a row are merged or accepted by every provider — and the §1.1 labels, not the message boundaries, are what keep elements distinct.
+
+### 3.2.2 Ephemeral and persisted
+
+Bands 1, 2 and 4 are **ephemeral**: rendered for one inference from live sources and never written to the conversation. Band 3 is **persisted as rendered**: pending results, the input and the tool-loop messages land in the frame at the end of the cycle in exactly the form the model saw them, which is what makes the band append-only for the next cycle. Two exceptions, both deliberate: the empty-state signal occupies the input slot for its inference and is not persisted; and a diagnostic the runtime must add to the conversation — a tool failure it could not return as a tool result — is persisted as a labelled `user` turn, because it is an event in the sequence.
+
+**Warnings are never conversation.** The budget warning, the compaction nudge, the date and the unavailable-tools notice describe the state of *this inference*. They belong in the tail, render once, and vanish when the condition does. A warning written into the conversation is re-read on every later inference as though it were still true — and, as a `system` turn, is hoisted out of sequence on the providers that have no system role in the list.
 
 ### 3.3 The top-level function
 
@@ -416,7 +422,8 @@ A dash means the runtimes agree. **The table is the whole difference.** Anything
 
 Recorded so the rewrite has an acceptance test. Everything above is written as the target; this list is the whole of the current difference.
 
-- **Late `system` messages.** The skills index, loaded elements, compaction segments, tool diagnostics, the date, the budget warning and unavailable tools are all `system` today. On Anthropic every one of them is hoisted into the system parameter and the cache mark lands on the last — the date — so the "cached head" changes whenever any of them does.
+- **Late `system` messages.** The skills index, loaded elements, compaction segments, tool diagnostics, the date, the budget warning and unavailable tools are all `system` today. On Anthropic and Gemini every one of them is hoisted into the system parameter and the cache mark lands on the last — the date — so the "cached head" changes whenever any of them does; on OpenAI-compatible providers they stay in place.
+- **The compaction nudge is a late `system` message too**, appended after the conversation once live turns exceed 20. It is ephemeral, but it names the turn count, so while over threshold it changes — and on Anthropic busts the cached head — on every inference.
 - **Nothing in `messages` is cached.** The Anthropic edge marks only tools and system (`cacheSystemMessages`, `cacheTools`); there are no band marks, so bands 2–3 currently buy nothing there.
 - **Two builders, two budgets.** Loads are resolved by a second `ContextBuilder` with its own default budget, so the budget warning measures the loads alone, tool bytes are never charged, and `model.budget.bytes` is consumed by nothing.
 - **The budget warning is emitted inside the load snapshot** — in the live surface, before the conversation — not in the tail.

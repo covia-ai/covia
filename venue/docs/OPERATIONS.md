@@ -706,7 +706,7 @@ declares what *differs*.
 
 | Option | Meaning |
 |--------|---------|
-| `systemMessages` | `"multiple"` — separate system messages survive to the wire. `"single"` — the provider has one system parameter, so they are concatenated and the boundaries between them carry no downstream meaning. `"none"` — no system role; system content must be folded into the first user message. |
+| `systemMessages` | `"multiple"` — separate system messages reach the model in the position they are placed. `"single"` — the API has one system parameter and no system role in the message list, so every system message is hoisted into it wherever it sits, and the boundaries between them carry no downstream meaning. `"none"` — no system role at all; system content must be folded into the first user message. |
 | `requiresUserMessage` | The request is rejected without at least one non-system message (Anthropic's Messages API does this). |
 | `cachePrefix` | The provider caches an explicitly marked stable prefix, so keeping volatile elements out of the head has a direct cost saving. |
 | `toolCallingByModel` | Tool support varies per model rather than per provider, so it cannot be assumed from the provider alone. |

@@ -492,10 +492,12 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * <p>Known keys:</p>
 	 * <ul>
 	 * <li>{@code systemMessages}: {@code "multiple"} — separate system messages
-	 *     survive to the wire; {@code "single"} — the provider has ONE system
-	 *     parameter, so they are concatenated and the boundaries between them
-	 *     carry no meaning downstream; {@code "none"} — no system role at all,
-	 *     so system content must be folded into the first user message.</li>
+	 *     reach the model in the position they are placed; {@code "single"} —
+	 *     the API has ONE system parameter and no system role in the message
+	 *     list, so every system message is hoisted into it wherever it sits and
+	 *     the boundaries between them carry no meaning downstream;
+	 *     {@code "none"} — no system role at all, so system content must be
+	 *     folded into the first user message.</li>
 	 * <li>{@code requiresUserMessage}: the request is rejected without at least
 	 *     one non-system message. Anthropic's Messages API does this, which is
 	 *     why the empty-state signal is a {@code user} turn.</li>
