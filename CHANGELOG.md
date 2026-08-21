@@ -10,6 +10,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Changed
 
+- One completion boundary for both runtimes (`Completion`): `complete_task`/`fail_task`, `complete`/`fail` and a typed reply are judged by the same rule — nothing delivered falls back to the turn's text (a blank string or empty object now counts as nothing on goaltree too), JSON-as-text is parsed when it conforms, a mismatch is rejected with the reason and the schema (goaltree now shows the schema; a rejected typed reply is asked again with the rejection rather than a generic notice)
 - Assistant and tool turns carry their real `ts`; the final llmagent turn carries its own inference's `tokens`, not the cycle total; session `meta.tokens` rolls up cache counts
 - `agent:context` simulates a specific call — `message`/`messages`, `pending`, `task` (rendered exactly as live, task tools offered), `sessionId` — and returns the level-3 input with `cacheMarks` plus `budget`, `marks` and `labels` (a structured report, where it returned a string)
 - Agent context assembly rebuilt around `ContextAssembler` — a Spec in, a Prompt out — per `venue/docs/AGENT_CONTEXT.md`: one sequence for llmagent and goaltree, one label renderer (the model's `labels` dialect honoured), one tool palette, one loads phase, one budget from the model's `budget.bytes`; the head and pinned context re-resolve every inference, the date and notices ride the tail, and inspection is the live Spec through the live assembler

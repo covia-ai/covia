@@ -7,7 +7,6 @@ import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import convex.core.json.schema.JsonSchema;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -320,8 +319,8 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 
 	/**
 	 * The live registry with one difference: {@code complete_task} and
-	 * {@code fail_task} validate exactly as live — blank-result fallback,
-	 * strict schema — but never touch a task job; the resolution is the
+	 * {@code fail_task} judge the completion exactly as live but never touch
+	 * a task job; the resolution is the
 	 * batch's terminal outcome, and the task drops out of the next prompt.
 	 */
 	private ToolCycleEngine.Registry<ToolContext> previewRegistry() {
@@ -336,17 +335,11 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		AString jobId = outstandingTaskId(toolCtx);
 		if (jobId == null) return ToolCycleEngine.ToolOutcome.result(Strings.create(
 			"Error: no task in scope — " + tool + " resolves the task this cycle was started for"));
-		ACell value;
-		if (failed) {
-			value = RT.ensureString(RT.getIn(call.input(), Fields.ERROR));
-			if (value == null) return ToolCycleEngine.ToolOutcome.result(Strings.create(FAIL_TASK_ERROR_REQUIRED));
-		} else {
-			try {
-				value = completionResult(call.input(), toolCtx);
-			} catch (IllegalArgumentException e) {
-				return ToolCycleEngine.ToolOutcome.result(Strings.create(e.getMessage()));
-			}
-		}
+		Completion completion = failed
+			? Completion.of(RT.getIn(call.input(), Fields.ERROR), toolCtx.turnText, null, tool)
+			: Completion.of(RT.getIn(call.input(), Fields.RESULT), toolCtx.turnText, strictTaskSchema(toolCtx), tool);
+		if (!completion.accepted()) return ToolCycleEngine.ToolOutcome.result(completion.toolError());
+		ACell value = completion.value();
 		toolCtx.recordTaskResult(jobId, failed
 			? Maps.of(Fields.STATUS, Status.FAILED, Fields.ERROR, value)
 			: Maps.of(Fields.STATUS, Status.COMPLETE, Fields.OUTPUT, value));
@@ -609,16 +602,13 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 
 			if (!hasCalls) {
 				if (config != null) {
+					// responseFormat is a provider hint here, not a contract: the
+					// same judgement as a typed completion, logged rather than enforced.
 					AMap<AString, ACell> schema = getResponseFormatSchema(config);
 					AString content = RT.ensureString(RT.getIn(assistant, K_CONTENT));
 					if (schema != null && content != null) {
-						try {
-							ACell parsed = convex.core.util.JSON.parse(content.toString());
-							String error = JsonSchema.validate(schema, parsed);
-							if (error != null) log.warn("LLM response schema violation: {}", error);
-						} catch (Exception e) {
-							log.warn("LLM response not valid JSON despite responseFormat: {}", e.getMessage());
-						}
+						Completion completion = Completion.of(content, null, schema, null);
+						if (!completion.accepted()) log.warn("LLM response schema violation: {}", completion.rejection());
 					}
 				}
 				return messages.conj(stampTs(assistant));
@@ -687,12 +677,10 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 	 * tool-call message).</p>
 	 */
 	private ACell handleCompleteTask(ACell input, ToolContext toolCtx) {
-		ACell result;
-		try {
-			result = completionResult(input, toolCtx);
-		} catch (IllegalArgumentException e) {
-			return Strings.create(e.getMessage());
-		}
+		Completion completion = Completion.of(RT.getIn(input, Fields.RESULT), toolCtx.turnText,
+			strictTaskSchema(toolCtx), TOOL_COMPLETE_TASK);
+		if (!completion.accepted()) return completion.toolError();
+		ACell result = completion.value();
 		AMap<AString, ACell> opInput = Maps.of(Fields.RESULT, result);
 		ACell opResult;
 		try {
@@ -715,74 +703,13 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		return (opResult != null) ? opResult : Maps.empty();
 	}
 
-	/**
-	 * The result a {@code complete_task} call delivers, validated as the
-	 * completion boundary validates it. The exception's message is what the
-	 * model is told when the call cannot be accepted.
-	 */
-	private static ACell completionResult(ACell input, ToolContext toolCtx) {
-		ACell result = RT.getIn(input, Fields.RESULT);
-		if (isBlankResult(result)) {
-			// The dual of #215 (a control call emitted as text): the answer
-			// emitted as text alongside an empty control call. The model has
-			// already delivered the payload as its message content — honour it
-			// rather than demanding a re-marshalled copy of prose it just
-			// wrote, which long answers reliably fail to produce.
-			AString text = toolCtx.turnText;
-			if (text == null || text.toString().isBlank()) {
-				throw new IllegalArgumentException(
-					"Error: result is required — complete_task delivers `result` to the caller as the task "
-					+ "output, and this turn carried no message text to use instead. Call again with the "
-					+ "actual answer in `result` (or write the answer as your message text and call "
-					+ "complete_task in the same turn), or use fail_task if you cannot complete the task.");
-			}
-			result = text;
-		}
-
-		// Requester-declared response schema with strict enforcement (#376):
-		// the contract is checked at the completion boundary; what the agent
-		// does about a rejection is its own business. Non-strict schemas are
-		// guidance only — never validated here.
+	/** The contract in force for a task completion: the requester's response
+	 *  schema when it asked for strict enforcement (#376); otherwise none — a
+	 *  non-strict schema is guidance, never judged here. */
+	private static AMap<AString, ACell> strictTaskSchema(ToolContext toolCtx) {
 		AMap<AString, ACell> task = inScopeTask(toolCtx);
-		if (task != null && CVMBool.TRUE.equals(task.get(Fields.STRICT))) {
-			AMap<AString, ACell> schema = RT.ensureMap(task.get(Fields.RESPONSE_SCHEMA));
-			if (schema != null) {
-				// A string result (typed or the text fallback) often carries the
-				// JSON as text — parse it before judging, so a text-emitted
-				// object satisfies an object schema.
-				ACell candidate = result;
-				AString s = RT.ensureString(result);
-				if (s != null) {
-					try {
-						ACell parsed = convex.core.util.JSON.parse(s.toString());
-						if (JsonSchema.validate(schema, parsed) == null) candidate = parsed;
-					} catch (Exception e) {
-						// Not JSON — the raw string is judged against the schema.
-					}
-				}
-				String schemaErr = JsonSchema.validate(schema, candidate);
-				if (schemaErr != null) {
-					throw new IllegalArgumentException(
-						"Error: result does not conform to this task's response schema — " + schemaErr
-						+ ". The requester requires: " + convex.core.util.JSON.print(schema)
-						+ ". Correct the result and call complete_task again, or use fail_task if you cannot.");
-				}
-				result = candidate;
-			}
-		}
-		return result;
-	}
-
-	private static final String FAIL_TASK_ERROR_REQUIRED =
-		"Error: error is required — fail_task reports why the task cannot be completed. "
-		+ "Call again with the reason in `error`, e.g. {\"error\": \"why it failed\"}.";
-
-	/** A completion payload the model plainly didn't fill: absent, or a blank
-	 *  string. Structured values (maps, vectors, numbers) are never blank. */
-	private static boolean isBlankResult(ACell result) {
-		if (result == null) return true;
-		AString s = RT.ensureString(result);
-		return s != null && s.toString().isBlank();
+		return (task != null && CVMBool.TRUE.equals(task.get(Fields.STRICT)))
+			? RT.ensureMap(task.get(Fields.RESPONSE_SCHEMA)) : null;
 	}
 
 	/** The wire-shape task entry matching the request context's in-scope task
@@ -815,8 +742,9 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 	 * Job, so no separate signal is required.</p>
 	 */
 	private ACell handleFailTask(ACell input, ToolContext toolCtx) {
-		AString error = RT.ensureString(RT.getIn(input, Fields.ERROR));
-		if (error == null) return Strings.create(FAIL_TASK_ERROR_REQUIRED);
+		Completion completion = Completion.of(RT.getIn(input, Fields.ERROR), toolCtx.turnText, null, TOOL_FAIL_TASK);
+		if (!completion.accepted()) return completion.toolError();
+		ACell error = completion.value();
 
 		AMap<AString, ACell> opInput = Maps.of(Fields.ERROR, error);
 		ACell opResult;

@@ -17,7 +17,6 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
-import convex.core.json.schema.JsonSchema;
 import covia.adapter.agent.ContextInspectable.Inspection;
 import covia.api.Fields;
 import covia.grid.Job;
@@ -503,16 +502,17 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			AString content = RT.ensureString(reply.get(K_CONTENT));
 			ACell value = content;
 			if (p.typedOutputs() && content != null) {
-				try {
-					value = typedValue(content, config);
-				} catch (Exception e) {
+				Completion completion = Completion.of(content, null, rootSchema(config), null);
+				if (!completion.accepted()) {
+					AMap<AString, ACell> retry = retryTurn(completion);
 					frameTools.activeFrame = GoalTreeContext.appendTurn(
-						GoalTreeContext.appendTurn(activeFrame, reply), TYPED_OUTPUT_RETRY);
+						GoalTreeContext.appendTurn(activeFrame, reply), retry);
 					ContextAssembler.Spec next = inferenceSpec(frameTools, p.harness(), config,
 						Vectors.of((ACell) frameTools.activeFrame));
-					return new Step(reply, Vectors.of((ACell) reply, (ACell) TYPED_OUTPUT_RETRY),
+					return new Step(reply, Vectors.of((ACell) reply, (ACell) retry),
 						null, null, null, null, next).report();
 				}
+				value = completion.value();
 			}
 			return Step.done(reply, value).report();
 		}
@@ -937,40 +937,15 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 
 		private ToolCycleEngine.ToolOutcome complete(
 				ToolCycleEngine.ToolCall call, boolean failed) {
-			ACell value = call.input();
-			// Same empty-completion fallback as llmagent: models commonly write
-			// the answer as assistant text and emit an empty control call beside it.
-			if (value instanceof AMap<?, ?> map && map.isEmpty()
-					&& turnText != null && !turnText.toString().isBlank()) {
-				value = turnText;
-			}
-			if (!failed && frameIndex == 0) {
-				AMap<AString, ACell> schema = RT.ensureMap(
-					RT.getIn(config, K_RESPONSE_FORMAT, K_SCHEMA));
-				if (schema != null) {
-					ACell candidate = value;
-					AString stringValue = RT.ensureString(value);
-					if (stringValue != null) {
-						try {
-							ACell parsed = convex.core.util.JSON.parse(stringValue.toString());
-							if (JsonSchema.validate(schema, parsed) == null) candidate = parsed;
-						} catch (Exception ignored) {
-							// Validate the raw string below.
-						}
-					}
-					String schemaError = JsonSchema.validate(schema, candidate);
-					if (schemaError != null) {
-						return ToolCycleEngine.ToolOutcome.result(Strings.create(
-							"Error: result does not conform to the required response schema — "
-							+ schemaError + ". Correct the result and call complete again."));
-					}
-					value = candidate;
-				}
-			}
+			// The contract in force: the root frame's declared output schema.
+			// A failure reason and a child's result are free-form.
+			AMap<AString, ACell> schema = (!failed && frameIndex == 0) ? rootSchema(config) : null;
+			Completion completion = Completion.of(call.input(), turnText, schema, call.name());
+			if (!completion.accepted()) return ToolCycleEngine.ToolOutcome.result(completion.toolError());
 			ACell result = Maps.of(Strings.create("status"),
 				Strings.create(failed ? "failed" : "complete"));
 			return ToolCycleEngine.ToolOutcome.terminal(result,
-				failed ? "failed" : "complete", value);
+				failed ? "failed" : "complete", completion.value());
 		}
 
 		private ToolCycleEngine.ToolOutcome compact(
@@ -1242,18 +1217,19 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 				AString content = RT.ensureString(RT.getIn(assistant, K_CONTENT));
 				ACell value = content;
 				if (typedOutputs && content != null) {
-					try {
-						value = typedValue(content, frameL3Config);
-					} catch (Exception e) {
-						log.warn("Frame[{}] iter={} typed output was invalid: {}",
-							frameIndex, iteration, e.getMessage());
+					// A typed reply is a completion: judged like complete(), and
+					// asked again with the rejection when it does not conform.
+					Completion completion = Completion.of(content, null, rootSchema(frameL3Config), null);
+					if (!completion.accepted()) {
+						log.warn("Frame[{}] iter={} typed output rejected: {}",
+							frameIndex, iteration, completion.rejection());
 						frameTools.activeFrame = GoalTreeContext.appendTurn(
-							frameTools.activeFrame, assistant);
-						frameTools.activeFrame = GoalTreeContext.appendTurn(
-							frameTools.activeFrame, TYPED_OUTPUT_RETRY);
+							GoalTreeContext.appendTurn(frameTools.activeFrame, stampTs(assistant)),
+							retryTurn(completion));
 						if (!persist(store, frameIndex, frameTools.activeFrame)) return abortedResult(store);
 						continue;
 					}
+					value = completion.value();
 				}
 				AMap<AString, ACell> terminal = GoalTreeContext.withStatus(
 					GoalTreeContext.appendTurn(frameTools.activeFrame, stampTs(assistant)),
@@ -1361,21 +1337,17 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			.withNotice(notice);
 	}
 
-	/** A typed-output reply as its value: the JSON parsed and validated against the declared schema. */
-	private static ACell typedValue(AString content, AMap<AString, ACell> frameL3Config) throws Exception {
-		ACell parsed = convex.core.util.JSON.parse(content.toString());
-		AMap<AString, ACell> schema = RT.ensureMap(RT.getIn(frameL3Config, K_RESPONSE_FORMAT, K_SCHEMA));
-		String schemaError = (schema != null) ? JsonSchema.validate(schema, parsed) : null;
-		if (schemaError != null) throw new IllegalArgumentException(schemaError);
-		return parsed;
+	/** The contract in force at the root frame: the declared output schema
+	 *  when typed outputs are active, else null. */
+	private static AMap<AString, ACell> rootSchema(AMap<AString, ACell> frameL3Config) {
+		return RT.ensureMap(RT.getIn(frameL3Config, K_RESPONSE_FORMAT, K_SCHEMA));
 	}
 
-	/** The turn that asks again after a typed-output reply that did not conform. */
-	private static final AMap<AString, ACell> TYPED_OUTPUT_RETRY = Maps.of(
-		K_ROLE, ROLE_USER,
-		K_CONTENT, Strings.create(
-			"Your response did not conform to the declared output schema. "
-			+ "Respond again with valid JSON matching that schema."));
+	/** The turn that asks again after a rejected typed reply — the rejection
+	 *  itself, so the model knows what to fix. */
+	private static AMap<AString, ACell> retryTurn(Completion completion) {
+		return Maps.of(K_ROLE, ROLE_USER, K_CONTENT, Strings.create(completion.rejection()));
+	}
 
 	/**
 	 * Settles a non-quiescent frame stack, deepest child first, then runs the
