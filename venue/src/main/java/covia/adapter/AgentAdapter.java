@@ -812,38 +812,53 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Best-effort tool-capability advisory for a freshly-configured agent (#205).
-	 * When the agent declares {@code tools} on an Ollama-backed model, probes the
-	 * model's advertised capabilities and returns a warning when tool-calling
-	 * can't be confirmed — either the model reports no {@code tools} capability,
-	 * or it couldn't be reached/verified (not installed yet). Warning only:
-	 * create never fails on this, since the model can be switched or installed
-	 * later. Returns {@code null} when there's nothing to warn about — no tools
-	 * declared, a non-Ollama provider (whose tool support isn't discoverable in
-	 * advance, so silence beats a guess), or a confirmed tool-capable model.
+	 * Tool-capability advisory for a freshly-configured agent (#205). An agent
+	 * uses tools when it declares {@code tools} or skill sources (which imply
+	 * {@code skill_load}). Declared data first: a model facet that says
+	 * {@code toolCalling: false} warns outright. Then, where the facet says
+	 * tool support varies by model ({@code toolCallingByModel}) and a probe
+	 * exists — Ollama advertises model capabilities — the probe decides.
+	 * Otherwise silence beats a guess. Warning only: create never fails on
+	 * this, since the model can be switched or installed later.
 	 */
 	private AString toolCapabilityWarning(AMap<AString, ACell> config, RequestContext ctx) {
 		if (config == null) return null;
-		AVector<ACell> tools = RT.ensureVector(config.get(Strings.intern("tools")));
-		if (tools == null || tools.isEmpty()) return null;   // no tools → nothing to check
-
-		// Only Ollama exposes model capabilities; skip other providers entirely.
+		AVector<ACell> tools = RT.ensureVector(config.get(Fields.TOOLS));
+		boolean usesTools = tools != null && !tools.isEmpty();
+		if (!usesTools) {
+			try { usesTools = !Skills.sourcesOf(config).isEmpty(); }
+			catch (RuntimeException e) { /* flagged by skillSourceWarnings */ }
+		}
+		if (!usesTools) return null;
 		AString llmOp = RT.ensureString(config.get(K_LLM_OPERATION));
 		if (llmOp == null) return null;
 		Asset opAsset;
 		try { opAsset = engine.resolveAsset(llmOp, ctx); }
 		catch (RuntimeException e) { return null; }
 		if (opAsset == null) return null;
-		String adapterOp = getAdapterOperation(opAsset.meta());   // e.g. "langchain:ollama"
+		AString model = RT.ensureString(config.get(Strings.intern("model")));
+		AMap<AString, ACell> options = AbstractLLMAdapter.modelOptions(opAsset.meta(), model);
+		AString declared = declaredNoToolCalling(options, model, llmOp);
+		if (declared != null) return declared;
+		if (!CVMBool.TRUE.equals(options.get(AbstractLLMAdapter.OPT_TOOL_CALLING_BY_MODEL))) return null;
+		// The one probe there is: Ollama advertises each model's capabilities.
+		String adapterOp = getAdapterOperation(opAsset.meta());
 		if (adapterOp == null || !adapterOp.startsWith("langchain:ollama")) return null;
-
-		AString modelCell = RT.ensureString(config.get(Strings.intern("model")));
-		String model = (modelCell != null) ? modelCell.toString() : "qwen";  // langchain Ollama default
+		String modelName = (model != null) ? model.toString() : "qwen";  // langchain Ollama default
 		AString urlCell = RT.ensureString(config.get(Strings.intern("url")));
 		String baseUrl = (urlCell != null) ? urlCell.toString() : "http://localhost:11434";
+		return toolWarningFor(modelName, baseUrl,
+			LangChainAdapter.ollamaModelCapabilities(baseUrl, modelName));
+	}
 
-		return toolWarningFor(model, baseUrl,
-			LangChainAdapter.ollamaModelCapabilities(baseUrl, model));
+	/** The declared-data half of {@link #toolCapabilityWarning}: a model facet
+	 *  that says {@code toolCalling: false}. Null when nothing is declared. */
+	static AString declaredNoToolCalling(AMap<AString, ACell> options, AString model, AString llmOp) {
+		if (options == null || !CVMBool.FALSE.equals(options.get(AbstractLLMAdapter.OPT_TOOL_CALLING))) return null;
+		return Strings.create("agent declares tools but its model"
+			+ ((model != null) ? " '" + model + "'" : "") + " (" + llmOp
+			+ ") declares no tool calling — the model will ignore tool calls. Use a tool-capable"
+			+ " model or drop the tools — this is only a warning.");
 	}
 
 	/**

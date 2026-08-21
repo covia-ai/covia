@@ -196,25 +196,30 @@ What the model sees, in the canonical order:
 
 Ancestor budget is configurable. Rule of thumb: parent ~300B, grandparent ~150B, great-grandparent ~80B. CellExplorer renders each ancestor's conversation at its budget — segments show as summaries, live turns may be truncated.
 
-## Harness Tools (7, opt-in)
+## Harness Tools (opt-in)
 
-GoalTreeAdapter provides 7 built-in tools. **All are opt-in** — agents declare which ones they need in `config.tools` alongside operation paths. Zero harness tools by default — a bare chatbot just responds with text.
+Eight harness tools: four shared with the plain LLM runtime and four that are
+the goal tree's own. **All are opt-in** — agents declare the ones they need in
+`config.tools` alongside operation paths, under the one rule every runtime
+applies (`HarnessTools.offered`). Zero harness tools by default — a bare
+chatbot just chats. Declared skills imply `skill_load` and `context_unload`; an
+outstanding task offers `complete_task`/`fail_task`; typed outputs inject
+`complete`/`fail`.
 
 ```json5
 "tools": ["subgoal", "compact", "more_tools", "v/ops/covia/read"]
 ```
 
-The registry:
-
-| Name | Purpose |
-|------|---------|
-| `subgoal` | Delegate work to an isolated child frame |
-| `complete` | Return structured result (auto-injected with typed outputs) |
-| `fail` | Report failure with structured error (auto-injected with typed outputs) |
-| `compact` | Archive conversation to a summary, freeing context space |
-| `context_load` | Pin workspace data in context across turns |
-| `context_unload` | Remove pinned data |
-| `more_tools` | Add operations to the tool set at runtime |
+| Name | Runtime | Purpose |
+|------|---------|---------|
+| `context_load` | shared | Pin a lattice path in context across turns |
+| `context_unload` | shared | Remove a pinned path (implied by declared skills) |
+| `skill_load` | shared | Load a skill from the index (implied by declared skills) |
+| `more_tools` | shared | Add operations to the tool set for the rest of the run |
+| `subgoal` | goaltree | Delegate work to an isolated child frame |
+| `complete` | goaltree | Return a structured result (auto-injected with typed outputs) |
+| `fail` | goaltree | Report failure with a structured error (auto-injected with typed outputs) |
+| `compact` | goaltree | Archive the conversation to a summary, freeing context space |
 
 ### Typed outputs auto-inject complete/fail
 

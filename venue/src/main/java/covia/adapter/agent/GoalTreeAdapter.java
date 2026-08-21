@@ -90,10 +90,6 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 	static final String TOOL_COMPLETE       = "complete";
 	static final String TOOL_FAIL           = "fail";
 	static final String TOOL_COMPACT        = "compact";
-	static final String TOOL_CONTEXT_LOAD   = "context_load";
-	static final String TOOL_CONTEXT_UNLOAD = "context_unload";
-	static final String TOOL_MORE_TOOLS     = "more_tools";
-	static final String TOOL_SKILL_LOAD     = "skill_load";
 
 	// ========== Harness tool definitions ==========
 
@@ -186,95 +182,26 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 						"Your summary of the work done so far (required — only you know what matters)"))),
 			K_REQUIRED, Vectors.of(Strings.create("summary"))));
 
-	static final AMap<AString, ACell> TOOL_DEF_CONTEXT_LOAD = Maps.of(
-		K_NAME, Strings.create(TOOL_CONTEXT_LOAD),
-		K_DESCRIPTION, Strings.create(
-			"Keep data from a workspace path visible in your context across turns. "
-			+ "Use for rules, schemas, or reference material you need to consult "
-			+ "repeatedly. The data is visible on the next model invocation and "
-			+ "refreshed automatically thereafter. Subgoals "
-			+ "inherit your loaded data. For data needed once, use an advertised "
-			+ "bounded inspection or exact-read operation instead. Remove a loaded path "
-			+ "with the context-removal control when finished."),
-		K_PARAMETERS, CONTEXT_LOAD_PARAMS);
-
-	static final AMap<AString, ACell> TOOL_DEF_CONTEXT_UNLOAD = Maps.of(
-		K_NAME, Strings.create(TOOL_CONTEXT_UNLOAD),
-		K_DESCRIPTION, Strings.create(
-			"Remove a path previously added to persistent context. Pass the same "
-			+ "path string you used when loading. Frees context space for other "
-			+ "work or data."),
-		K_PARAMETERS, CONTEXT_UNLOAD_PARAMS);
-
-	static final AMap<AString, ACell> TOOL_DEF_MORE_TOOLS = Maps.of(
-		K_NAME, Strings.create(TOOL_MORE_TOOLS),
-		K_DESCRIPTION, Strings.create(
-			"Add operations to your tool set for the rest of this run. "
-			+ "Use an advertised catalog-listing operation to discover available operations first "
-			+ "(for example, list path=v/ops), then call this with the exact paths "
-			+ "you need. Added tools appear on your next turn."),
-		K_PARAMETERS, Maps.of(
-			K_TYPE, Strings.create("object"),
-			K_PROPERTIES, Maps.of(
-				Strings.create("operations"), Maps.of(
-					K_TYPE, Strings.create("array"),
-					K_DESCRIPTION, Strings.create("Operation paths to add as tools (e.g. [\"v/ops/agent/create\", \"v/ops/grid/run\"])"),
-					Strings.create("items"), Maps.of(K_TYPE, Strings.create("string")))),
-			K_REQUIRED, Vectors.of(Strings.create("operations"))));
-
-	static final AMap<AString, ACell> TOOL_DEF_SKILL_LOAD = Maps.of(
-		K_NAME, Strings.create(TOOL_SKILL_LOAD),
-		K_DESCRIPTION, Strings.create(
-			"Load a skill from the [Skills] index by name (or any skill by direct ref). "
-			+ "The result includes the skill's full instructions for immediate use; they "
-			+ "also stay in your context each turn until you remove the skill's loaded "
-			+ "path. The skill's tools join your palette from your next step. Subgoals "
-			+ "inherit your loaded skills."),
-		K_PARAMETERS, SKILL_LOAD_PARAMS);
-
 	/**
-	 * Registry of all optional harness tool definitions by name.
-	 * Agents opt into harness tools by listing their names in config.tools
-	 * alongside regular operation paths. ({@code skill_load} is also offered
-	 * automatically when the agent declares {@code config.skills}.)
+	 * This runtime's harness registry: the tools every runtime shares
+	 * ({@link HarnessTools#SHARED}) plus the goal-tree frame tools. Offered by
+	 * the one rule ({@link HarnessTools#offered}): opt-in by name in
+	 * {@code config.tools}; {@code skill_load} and {@code context_unload}
+	 * implied by declared skills.
 	 */
-	static final Map<String, AMap<AString, ACell>> HARNESS_TOOL_REGISTRY = Map.of(
-		TOOL_SUBGOAL, TOOL_DEF_SUBGOAL,
-		TOOL_COMPLETE, TOOL_DEF_COMPLETE,
-		TOOL_FAIL, TOOL_DEF_FAIL,
-		TOOL_COMPACT, TOOL_DEF_COMPACT,
-		TOOL_CONTEXT_LOAD, TOOL_DEF_CONTEXT_LOAD,
-		TOOL_CONTEXT_UNLOAD, TOOL_DEF_CONTEXT_UNLOAD,
-		TOOL_MORE_TOOLS, TOOL_DEF_MORE_TOOLS,
-		TOOL_SKILL_LOAD, TOOL_DEF_SKILL_LOAD);
+	static final Map<String, AMap<AString, ACell>> HARNESS_TOOL_REGISTRY;
+	static {
+		Map<String, AMap<AString, ACell>> m = new java.util.HashMap<>(HarnessTools.SHARED);
+		m.put(TOOL_SUBGOAL, TOOL_DEF_SUBGOAL);
+		m.put(TOOL_COMPLETE, TOOL_DEF_COMPLETE);
+		m.put(TOOL_FAIL, TOOL_DEF_FAIL);
+		m.put(TOOL_COMPACT, TOOL_DEF_COMPACT);
+		HARNESS_TOOL_REGISTRY = Map.copyOf(m);
+	}
 
-	/**
-	 * Resolves harness tools from the agent's config.tools list.
-	 *
-	 * <p>Scans config.tools for entries matching known harness tool names
-	 * (subgoal, complete, fail, compact, context_load, context_unload,
-	 * more_tools). Returns their definitions as a vector. Entries that don't
-	 * match are ignored (they'll be resolved as operations by ToolPalette).</p>
-	 *
-	 * @param config agent config (may be null)
-	 * @return vector of harness tool definitions found in config
-	 */
-	@SuppressWarnings("unchecked")
+	/** The harness tools this agent opted into, by the shared rule ({@link HarnessTools#offered}). */
 	static AVector<ACell> resolveHarnessTools(AMap<AString, ACell> config) {
-		AVector<ACell> result = Vectors.empty();
-		if (config == null) return result;
-		ACell toolsCell = config.get(K_TOOLS);
-		if (!(toolsCell instanceof AVector)) return result;
-
-		AVector<ACell> toolsList = (AVector<ACell>) toolsCell;
-		for (long i = 0; i < toolsList.count(); i++) {
-			ACell entry = toolsList.get(i);
-			if (entry instanceof AString s) {
-				AMap<AString, ACell> def = HARNESS_TOOL_REGISTRY.get(s.toString());
-				if (def != null) result = result.conj(def);
-			}
-		}
-		return result;
+		return HarnessTools.offered(config, HARNESS_TOOL_REGISTRY);
 	}
 
 	/** Every bare name this runtime resolves itself: the goal-tree harness
@@ -940,10 +867,10 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 				.register(TOOL_COMPLETE, (call, ignored) -> complete(call, false))
 				.register(TOOL_FAIL, (call, ignored) -> complete(call, true))
 				.register(TOOL_COMPACT, (call, ignored) -> compact(call))
-				.register(TOOL_CONTEXT_LOAD, (call, ignored) -> contextLoad(call))
-				.register(TOOL_CONTEXT_UNLOAD, (call, ignored) -> contextUnload(call))
-				.register(TOOL_SKILL_LOAD, (call, ignored) -> skillLoad(call))
-				.register(TOOL_MORE_TOOLS, (call, ignored) -> moreTools(call))
+				.register(HarnessTools.CONTEXT_LOAD, (call, ignored) -> contextLoad(call))
+				.register(HarnessTools.CONTEXT_UNLOAD, (call, ignored) -> contextUnload(call))
+				.register(HarnessTools.SKILL_LOAD, (call, ignored) -> skillLoad(call))
+				.register(HarnessTools.MORE_TOOLS, (call, ignored) -> moreTools(call))
 				.register(TOOL_SUBGOAL, (call, ignored) -> subgoal(call))
 				.fallback((call, ignored) -> ToolCycleEngine.ToolOutcome.result(
 					dispatchTool(call.name(), call.input(), iterationToolMap,
@@ -1005,33 +932,14 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 				GoalTreeContext.getLoads(activeFrame), outerLoads, true, "", Skills.sourcesOf(config));
 		}
 
+		/** {@code more_tools}: the additions join this frame's base tools and the cycle's routes. */
 		@SuppressWarnings("unchecked")
-		private ToolCycleEngine.ToolOutcome moreTools(
-				ToolCycleEngine.ToolCall call) {
-			ACell opsCell = RT.getIn(call.input(), Strings.create("operations"));
-			if (!(opsCell instanceof AVector<?>)) {
-				return ToolCycleEngine.ToolOutcome.result(Strings.create(
-					"Error: operations must be an array of operation paths"));
-			}
-			AVector<ACell> operations = (AVector<ACell>) opsCell;
-			Map<String, AString> newRoutes = new java.util.HashMap<>();
-			AVector<ACell> newTools = ToolPalette.forOperations(engine, ctx, operations, newRoutes);
-			java.util.Set<String> existing = fixedToolNames(baseTools);
-			AVector<ACell> added = Vectors.empty();
-			for (long i = 0; i < newTools.count(); i++) {
-				ACell tool = newTools.get(i);
-				AString name = RT.ensureString(RT.getIn(tool, K_NAME));
-				if (name != null && existing.add(name.toString())) {
-					baseTools = baseTools.conj(tool);
-					configToolMap.put(name.toString(), newRoutes.get(name.toString()));
-					added = added.conj(name);
-				}
-			}
-			log.info("more_tools: added {} tools", added.count());
-			return ToolCycleEngine.ToolOutcome.result(Maps.of(
-				Strings.create("added"), added,
-				Strings.create("total_tools"), CVMLong.create(baseTools.count()),
-				Strings.create("note"), Strings.create("Tools available on your next turn.")));
+		private ToolCycleEngine.ToolOutcome moreTools(ToolCycleEngine.ToolCall call) {
+			HarnessTools.Added added = HarnessTools.moreTools(
+				call.input(), engine, ctx, fixedToolNames(baseTools), configToolMap);
+			baseTools = (AVector<ACell>) baseTools.concat(added.tools());
+			log.info("more_tools: added {} tools", added.tools().count());
+			return ToolCycleEngine.ToolOutcome.result(added.result());
 		}
 
 		@SuppressWarnings("unchecked")
@@ -1305,9 +1213,6 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 				ACell n = RT.getIn(configHarness.get(i), K_NAME);
 				if (n != null && !TOOL_SUBGOAL.equals(n.toString())) harness = harness.conj(configHarness.get(i));
 			}
-		}
-		if (!Skills.sourcesOf(config).isEmpty() && !hasToolNamed(harness, TOOL_SKILL_LOAD)) {
-			harness = harness.conj(TOOL_DEF_SKILL_LOAD);
 		}
 		return harness;
 	}

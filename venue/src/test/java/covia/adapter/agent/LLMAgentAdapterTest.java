@@ -664,7 +664,9 @@ public class LLMAgentAdapterTest {
 
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		AMap<AString, ACell> l3 = adapter.inspectContext(new ContextInspectable.Inspection(
-			Maps.of("llmOperation", "v/test/ops/llm"), null, session, null, null, null),
+			Maps.of("llmOperation", "v/test/ops/llm",
+				Fields.TOOLS, Vectors.of(Strings.create("context_load"), Strings.create("context_unload"))),
+			null, session, null, null, null),
 			RequestContext.of(ALICE_DID));
 
 		String renderedMessages = convex.core.util.JSON.print(

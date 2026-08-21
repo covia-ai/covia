@@ -521,6 +521,10 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 
 	/** The {@code model} facet key on an LLM operation asset. */
 	public static final AString K_MODEL_FACET = Strings.intern("model");
+	/** Model option: {@code false} declares a model that cannot call tools. */
+	public static final AString OPT_TOOL_CALLING = Strings.intern("toolCalling");
+	/** Model option: tool support varies per model, so it must be probed, never assumed. */
+	public static final AString OPT_TOOL_CALLING_BY_MODEL = Strings.intern("toolCallingByModel");
 	/** Provider-specific rendering hints, inside the {@code model} facet. */
 	public static final AString K_OPTIONS = Strings.intern("options");
 	/** Per-model overrides inside the {@code model} facet, keyed by model id. */
@@ -604,6 +608,9 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * <li>{@code cachePrefix}: the provider caches an explicitly marked stable
 	 *     prefix, so keeping volatile elements out of the head has a direct
 	 *     cost saving (AGENT_CONTEXT.md §3.1).</li>
+	 * <li>{@code toolCalling}: {@code false} declares that the model cannot call
+	 *     tools — {@code agent:create} warns when an agent declares tools or
+	 *     skills against it. Absent means tool calling is available.</li>
 	 * <li>{@code toolCallingByModel}: tool support varies per model rather than
 	 *     per provider, so it cannot be assumed from the provider alone.</li>
 	 * <li>{@code labels}: {@code "bracket"} (default), {@code "xml"} or {@code "header"} — the

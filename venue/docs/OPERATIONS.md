@@ -709,7 +709,8 @@ declares what *differs*.
 | `systemMessages` | `"multiple"` — separate system messages reach the model in the position they are placed. `"single"` — the API has one system parameter and no system role in the message list, so every system message is hoisted into it wherever it sits, and the boundaries between them carry no downstream meaning. `"none"` — no system role at all; system content must be folded into the first user message. |
 | `requiresUserMessage` | The request is rejected without at least one non-system message (Anthropic's Messages API does this). |
 | `cachePrefix` | The provider caches an explicitly marked stable prefix, so keeping volatile elements out of the head has a direct cost saving. |
-| `toolCallingByModel` | Tool support varies per model rather than per provider, so it cannot be assumed from the provider alone. |
+| `toolCalling` | `false` declares a model that cannot call tools: `agent:create` warns when an agent declares tools or skills against it. Absent means tool calling is available. |
+| `toolCallingByModel` | Tool support varies per model rather than per provider, so it cannot be assumed from the provider alone — where a probe exists (Ollama advertises model capabilities), `agent:create` asks it. |
 | `labels` | `"bracket"` (default), `"xml"` or `"header"`: the dialect in which context elements are labelled — `[Label …]` lines, XML-style elements with explicit closing tags, or markdown headings. One renderer applies it; see [AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §1.1. |
 
 ### `budget` — context size

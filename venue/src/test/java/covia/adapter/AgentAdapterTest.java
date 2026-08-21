@@ -239,6 +239,11 @@ public class AgentAdapterTest {
 		assertTrue(noTools.toString().contains("does not advertise tool-calling"));
 
 		// caps including "tools" → no warning
+		// Declared data: a model facet that says toolCalling: false warns without a probe.
+		assertNull(AgentAdapter.declaredNoToolCalling(Maps.empty(), null, Strings.create("v/ops/x")));
+		AString declared = AgentAdapter.declaredNoToolCalling(
+			Maps.of("toolCalling", CVMBool.FALSE), Strings.create("tiny"), Strings.create("v/ops/langchain/ollama"));
+		assertTrue(declared.toString().contains("'tiny'") && declared.toString().contains("declares no tool calling"), declared.toString());
 		assertNull(AgentAdapter.toolWarningFor(
 			"qwen2.5", "http://localhost:11434", java.util.List.of("completion", "tools")));
 	}
@@ -633,6 +638,60 @@ public class AgentAdapterTest {
 		AMap<AString, ACell> wakeUp = RT.ensureMap(engine.jobs().invokeOperation("v/ops/agent/context",
 			Maps.of(Fields.AGENT_ID, "sim-agent"), RequestContext.of(ALICE_DID)).awaitResult(5000));
 		assertTrue(wakeUp.toString().contains("[No input]"), wakeUp.toString());
+	}
+
+	/** Harness tools are opt-in on every runtime (HarnessTools.offered): an agent
+	 *  with nothing declared has no tools at all; declared skills imply
+	 *  skill_load and context_unload; anything else is listed by name. */
+	@Test
+	public void testHarnessToolsAreOptInOnLlmagent() {
+		java.util.function.Function<AMap<AString, ACell>, java.util.Set<String>> toolsOf = config -> {
+			String id = "optin-" + config.hashCode();
+			engine.jobs().invokeOperation("v/ops/agent/create",
+				Maps.of(Fields.AGENT_ID, id, Fields.CONFIG, config.assoc(Fields.OPERATION, Strings.create("v/ops/llmagent/chat"))
+					.assoc(Strings.create("llmOperation"), Strings.create("v/test/ops/llm"))),
+				RequestContext.of(ALICE_DID)).awaitResult(5000);
+			AMap<AString, ACell> context = RT.ensureMap(engine.jobs().invokeOperation("v/ops/agent/context",
+				Maps.of(Fields.AGENT_ID, id), RequestContext.of(ALICE_DID)).awaitResult(5000));
+			java.util.Set<String> names = new java.util.HashSet<>();
+			AVector<ACell> tools = RT.ensureVector(context.get(Fields.TOOLS));
+			for (long i = 0; tools != null && i < tools.count(); i++) names.add(RT.getIn(tools.get(i), "name").toString());
+			return names;
+		};
+		assertTrue(toolsOf.apply(Maps.of("systemPrompt", "bare")).isEmpty(), "nothing declared: no tools");
+		java.util.Set<String> skilled = toolsOf.apply(Maps.of("skillsets", Vectors.of(Strings.create("w/skills"))));
+		assertTrue(skilled.contains("skill_load") && skilled.contains("context_unload"), skilled.toString());
+		assertFalse(skilled.contains("context_load"), "not implied: " + skilled);
+		java.util.Set<String> listed = toolsOf.apply(Maps.of(Fields.TOOLS,
+			Vectors.of(Strings.create("context_load"), Strings.create("more_tools"), Strings.create("subgoal"))));
+		assertTrue(listed.contains("context_load") && listed.contains("more_tools"), listed.toString());
+		assertFalse(listed.contains("subgoal"), "a goal-tree frame tool is not this runtime's: " + listed);
+	}
+
+	/** more_tools on llmagent: operations added mid-run are offered from the next
+	 *  inference and dispatch through the added routes, exactly as on goaltree. */
+	@Test
+	public void testMoreToolsOnLlmagent() {
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "more-tools-llm",
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/llmagent/chat",
+					"llmOperation", "v/test/ops/moretoolsllm",
+					Fields.TOOLS, Vectors.of(Strings.create("more_tools")))),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		ACell chat = engine.jobs().invokeOperation("v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "more-tools-llm", Fields.MESSAGE, "extend yourself"),
+			RequestContext.of(ALICE_DID)).awaitResult(15000);
+		String response = RT.getIn(chat, Fields.RESPONSE).toString();
+		assertTrue(response.startsWith("MORE_TOOLS_RESULT:"), response);
+
+		// The record shows the palette changing between inferences.
+		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("more-tools-llm");
+		TestEngine.awaitTimelineCount(agent, 1, 10000);
+		AVector<ACell> inferences = RT.ensureVector(RT.getIn(agent.getTimeline().get(0), Fields.INFERENCES));
+		assertEquals(3, inferences.count(), "more_tools, then the added tool, then the answer: " + inferences);
+		assertTrue(RT.getIn(inferences.get(1), Fields.TOOLS).toString().contains("test_echo"),
+			"the second inference is offered the added tool");
 	}
 
 	/** agent:step runs one harness iteration on a supplied reply: tools dispatched as live, the agent untouched. */

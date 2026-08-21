@@ -92,57 +92,15 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 	// ========== Default tool definitions ==========
 	// MCP-style: {name, description, parameters: {type: "object", properties: {...}, required: [...]}}
 
-	// Built-in context tool names
-	private static final String TOOL_CONTEXT_LOAD   = "context_load";
-	private static final String TOOL_CONTEXT_UNLOAD = "context_unload";
-	private static final String TOOL_SKILL_LOAD     = "skill_load";
-
 	/** Harness pseudo-tools this runtime provides — intercepted by the adapter,
-	 *  never dispatched as operations (see {@link AbstractLLMAdapter#dispatchTool}). */
+	 *  never dispatched as operations (see {@link AbstractLLMAdapter#dispatchTool}):
+	 *  the shared registry plus the task tools. */
 	static final java.util.Set<String> HARNESS_TOOL_NAMES;
 	static {
-		java.util.Set<String> names = new java.util.HashSet<>(TaskTools.NAMES);
-		names.addAll(java.util.List.of(TOOL_CONTEXT_LOAD, TOOL_CONTEXT_UNLOAD, TOOL_SKILL_LOAD));
+		java.util.Set<String> names = new java.util.HashSet<>(HarnessTools.SHARED.keySet());
+		names.addAll(TaskTools.NAMES);
 		HARNESS_TOOL_NAMES = java.util.Set.copyOf(names);
 	}
-
-	private static final AMap<AString, ACell> TOOL_DEF_CONTEXT_LOAD = Maps.of(
-		K_NAME, Strings.create(TOOL_CONTEXT_LOAD),
-		K_DESCRIPTION, Strings.create(
-			"Add a lattice path to this conversation's loaded context. "
-			+ "The path is resolved fresh and injected as a system message on the "
-			+ "next model invocation, including within the current tool loop. "
-			+ "Scoped to the current session — other conversations are unaffected. "
-			+ "Use for reference material you need across multiple turns. "
-			+ "For one-shot reads, use inspect instead when available."),
-		K_PARAMETERS, CONTEXT_LOAD_PARAMS);
-
-	private static final AMap<AString, ACell> TOOL_DEF_CONTEXT_UNLOAD = Maps.of(
-		K_NAME, Strings.create(TOOL_CONTEXT_UNLOAD),
-		K_DESCRIPTION, Strings.create(
-			"Remove a path from this conversation's loaded context, freeing its "
-			+ "budget. Also hides an operator-pinned load (from config.loads) for "
-			+ "this conversation only — the pin itself is untouched and other "
-			+ "conversations still see it."),
-		K_PARAMETERS, CONTEXT_UNLOAD_PARAMS);
-
-	/** Context tools — always available to agents */
-	private static final AVector<ACell> CONTEXT_TOOLS = (AVector<ACell>) Vectors.of(
-		(ACell) TOOL_DEF_CONTEXT_LOAD,
-		(ACell) TOOL_DEF_CONTEXT_UNLOAD
-	);
-
-	/** Offered only when the agent declares skill sources ({@code config.skills}).
-	 *  The adapter holds no skills semantics — loading delegates to
-	 *  {@link Skills#load} and rendering/activation to the context assembly. */
-	private static final AMap<AString, ACell> TOOL_DEF_SKILL_LOAD = Maps.of(
-		K_NAME, Strings.create(TOOL_SKILL_LOAD),
-		K_DESCRIPTION, Strings.create(
-			"Load a skill from the [Skills] index by name (or any skill by direct ref). "
-			+ "The result includes the skill's full instructions for immediate use; they "
-			+ "also stay in your context each turn until you remove the skill's loaded "
-			+ "path. The skill's tools join your palette from your next step."),
-		K_PARAMETERS, SKILL_LOAD_PARAMS);
 
 	@Override
 	public String getName() {
@@ -258,7 +216,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		Loads.Snapshot loads = toolCtx.refreshLoadSnapshot(engine, p.spec().labels());
 		ACell task = toolCtx.tasks.message();
 		AVector<ACell> tools = ToolPalette.merge(
-			(AVector<ACell>) toolCtx.tasks.tools().concat(p.fixedTools()), loads.tools());
+			(AVector<ACell>) toolCtx.tasks.tools().concat(p.fixedTools()).concat(toolCtx.addedTools), loads.tools());
 		ContextAssembler.Spec next = p.spec()
 			.withLoads(loads, tools, ContextChain.effective(toolCtx.outerLoads, toolCtx.loads))
 			.withToolLoop(turns)
@@ -423,16 +381,12 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		return toolCtx;
 	}
 
-	/** The tools fixed for a cycle — harness tools, then the configured palette. */
+	/** The tools fixed for a cycle — the harness tools offered (HarnessTools:
+	 *  opt-in by name, skill_load and context_unload implied by declared
+	 *  skills), then the configured palette. */
 	@SuppressWarnings("unchecked")
 	private static AVector<ACell> fixedTools(AMap<AString, ACell> config, ToolPalette.Palette palette) {
-		AVector<ACell> harness = CONTEXT_TOOLS;
-		// skill_load is offered only when the agent declares skill sources; the
-		// adapter holds no skills semantics beyond offering it.
-		if (!Skills.sourcesOf(config).isEmpty()) {
-			harness = (AVector<ACell>) Vectors.of((ACell) TOOL_DEF_SKILL_LOAD).concat(harness);
-		}
-		return (AVector<ACell>) harness.concat(palette.tools());
+		return (AVector<ACell>) HarnessTools.offered(config, HarnessTools.SHARED).concat(palette.tools());
 	}
 
 	/**
@@ -474,7 +428,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 			Loads.Snapshot loads = toolCtx.refreshLoadSnapshot(engine, spec.labels());
 			ACell taskMessage = toolCtx.tasks.message();
 			AVector<ACell> tools = ToolPalette.merge(
-				(AVector<ACell>) toolCtx.tasks.tools().concat(fixedTools), loads.tools());
+				(AVector<ACell>) toolCtx.tasks.tools().concat(fixedTools).concat(toolCtx.addedTools), loads.tools());
 			ContextAssembler.Prompt prompt = ContextAssembler.assemble(
 				spec.withLoads(loads, tools, effectiveLoads).withToolLoop(messages).withTask(taskMessage));
 
@@ -528,12 +482,14 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		return new ToolCycleEngine.Registry<ToolContext>()
 			.register(TaskTools.COMPLETE, (call, toolCtx) -> toolCtx.tasks.complete(call, toolCtx.turnText))
 			.register(TaskTools.FAIL, (call, toolCtx) -> toolCtx.tasks.fail(call, toolCtx.turnText))
-			.register(TOOL_CONTEXT_LOAD, (call, toolCtx) ->
+			.register(HarnessTools.CONTEXT_LOAD, (call, toolCtx) ->
 				ToolCycleEngine.ToolOutcome.result(handleContextLoad(call.input(), toolCtx)))
-			.register(TOOL_CONTEXT_UNLOAD, (call, toolCtx) ->
+			.register(HarnessTools.CONTEXT_UNLOAD, (call, toolCtx) ->
 				ToolCycleEngine.ToolOutcome.result(handleContextUnload(call.input(), toolCtx)))
-			.register(TOOL_SKILL_LOAD, (call, toolCtx) ->
+			.register(HarnessTools.SKILL_LOAD, (call, toolCtx) ->
 				ToolCycleEngine.ToolOutcome.result(handleSkillLoad(call.input(), toolCtx)))
+			.register(HarnessTools.MORE_TOOLS, (call, toolCtx) ->
+				ToolCycleEngine.ToolOutcome.result(toolCtx.moreTools(engine, call.input())))
 			.fallback((call, toolCtx) -> ToolCycleEngine.ToolOutcome.result(
 				dispatchTool(call.name(), call.input(), toolCtx.dispatchRoutes(),
 					toolCtx.ctx, toolCtx.toolCallTimeoutMs)));
@@ -663,8 +619,11 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		 *  opaque to this runtime ({@link Skills} owns the semantics). */
 		Skills.SkillSources skillSources = Skills.SkillSources.EMPTY;
 		/** Tool names offered outside the loads mechanism (harness + config
-		 *  tools) — loads-contributed tools dedup against these. */
-		java.util.Set<String> fixedToolNames = java.util.Set.of();
+		 *  tools, and whatever more_tools adds) — loads-contributed tools dedup
+		 *  against these. */
+		java.util.Set<String> fixedToolNames = new java.util.HashSet<>();
+		/** Operations added by more_tools this run: offered from the next inference. */
+		AVector<ACell> addedTools = Vectors.empty();
 		private Map<String, AString> currentLoadRoutes = Map.of();
 
 		/**
@@ -683,6 +642,13 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 				ContextChain.effective(outerLoads, loads), fixedToolNames, labels);
 			currentLoadRoutes = snapshot.routes();
 			return snapshot;
+		}
+
+		/** {@code more_tools}: the additions join this run's palette and routes. */
+		ACell moreTools(Engine engine, ACell input) {
+			HarnessTools.Added added = HarnessTools.moreTools(input, engine, ctx, fixedToolNames, configToolMap);
+			addedTools = (AVector<ACell>) addedTools.concat(added.tools());
+			return added.result();
 		}
 
 		Map<String, AString> dispatchRoutes() {

@@ -12,11 +12,142 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
 
-/** Shared harness-tool handlers parameterised by the writable loads tier. */
+/**
+ * The harness tools every runtime provides, and the one rule for offering
+ * them: opt-in by name in {@code config.tools}, plus what the situation
+ * itself implies — {@code skill_load} and {@code context_unload} when the
+ * agent declares skills. A runtime adds its own tools to the registry
+ * (goaltree: {@code subgoal}, {@code compact}, {@code complete},
+ * {@code fail}); the task tools are {@link TaskTools}, offered while a task
+ * is outstanding. The handlers here are parameterised by the writable loads
+ * tier, which is the only thing the runtimes differ in.
+ */
 final class HarnessTools {
-
 	private HarnessTools() {}
+
+	static final String CONTEXT_LOAD   = "context_load";
+	static final String CONTEXT_UNLOAD = "context_unload";
+	static final String SKILL_LOAD     = "skill_load";
+	static final String MORE_TOOLS     = "more_tools";
+
+	private static final AString K_OPERATIONS = Strings.intern("operations");
+	private static final AString K_ADDED      = Strings.intern("added");
+	private static final AString K_NOTE       = Strings.intern("note");
+
+	static final AMap<AString, ACell> DEF_CONTEXT_LOAD = Maps.of(
+		AbstractLLMAdapter.K_NAME, Strings.create(CONTEXT_LOAD),
+		AbstractLLMAdapter.K_DESCRIPTION, Strings.create(
+			"Keep a lattice path visible in your context across turns: the value is re-read "
+			+ "and rendered on every model call until you remove it. Use for rules, schemas or "
+			+ "reference material you consult repeatedly; for data needed once, use an advertised "
+			+ "inspection or read operation instead. Scoped to this conversation (subgoals inherit "
+			+ "it); other conversations are unaffected. Remove it with context_unload when finished."),
+		AbstractLLMAdapter.K_PARAMETERS, AbstractLLMAdapter.CONTEXT_LOAD_PARAMS);
+
+	static final AMap<AString, ACell> DEF_CONTEXT_UNLOAD = Maps.of(
+		AbstractLLMAdapter.K_NAME, Strings.create(CONTEXT_UNLOAD),
+		AbstractLLMAdapter.K_DESCRIPTION, Strings.create(
+			"Remove a path from this conversation's loaded context, freeing its budget — pass the "
+			+ "same path you loaded. Also hides an operator-pinned load (from config.loads) for this "
+			+ "conversation only; the pin itself is untouched and other conversations still see it."),
+		AbstractLLMAdapter.K_PARAMETERS, AbstractLLMAdapter.CONTEXT_UNLOAD_PARAMS);
+
+	static final AMap<AString, ACell> DEF_SKILL_LOAD = Maps.of(
+		AbstractLLMAdapter.K_NAME, Strings.create(SKILL_LOAD),
+		AbstractLLMAdapter.K_DESCRIPTION, Strings.create(
+			"Load a skill from the [Skills] index by name (or any skill by direct ref). "
+			+ "The result includes the skill's full instructions for immediate use; they "
+			+ "also stay in your context each turn until you remove the skill's loaded "
+			+ "path with context_unload. The skill's tools join your palette from your next step."),
+		AbstractLLMAdapter.K_PARAMETERS, AbstractLLMAdapter.SKILL_LOAD_PARAMS);
+
+	static final AMap<AString, ACell> DEF_MORE_TOOLS = Maps.of(
+		AbstractLLMAdapter.K_NAME, Strings.create(MORE_TOOLS),
+		AbstractLLMAdapter.K_DESCRIPTION, Strings.create(
+			"Add operations to your tool set for the rest of this run. "
+			+ "Use an advertised catalog-listing operation to discover available operations first "
+			+ "(for example, list path=v/ops), then call this with the exact paths "
+			+ "you need. Added tools appear on your next turn."),
+		AbstractLLMAdapter.K_PARAMETERS, Maps.of(
+			AbstractLLMAdapter.K_TYPE, Strings.create("object"),
+			AbstractLLMAdapter.K_PROPERTIES, Maps.of(
+				K_OPERATIONS, Maps.of(
+					AbstractLLMAdapter.K_TYPE, Strings.create("array"),
+					AbstractLLMAdapter.K_DESCRIPTION, Strings.create(
+						"Operation paths to add as tools (e.g. [\"v/ops/agent/create\", \"v/ops/grid/run\"])"),
+					Strings.create("items"), Maps.of(AbstractLLMAdapter.K_TYPE, Strings.create("string")))),
+			AbstractLLMAdapter.K_REQUIRED, Vectors.of((ACell) K_OPERATIONS)));
+
+	/** The harness tools every runtime provides, by name. */
+	static final Map<String, AMap<AString, ACell>> SHARED = Map.of(
+		CONTEXT_LOAD, DEF_CONTEXT_LOAD,
+		CONTEXT_UNLOAD, DEF_CONTEXT_UNLOAD,
+		SKILL_LOAD, DEF_SKILL_LOAD,
+		MORE_TOOLS, DEF_MORE_TOOLS);
+
+	/**
+	 * The harness tools a cycle offers from a runtime's registry: those the
+	 * agent opted into by name in {@code config.tools}, in that order — and,
+	 * when the agent declares skill sources, {@code skill_load} and
+	 * {@code context_unload}: the skills index is rendered, so the tool that
+	 * loads from it and the tool that removes a load are implied. Entries
+	 * that are not harness names are operations, resolved by the palette.
+	 */
+	static AVector<ACell> offered(AMap<AString, ACell> config, Map<String, AMap<AString, ACell>> registry) {
+		AVector<ACell> out = Vectors.empty();
+		Set<String> names = new HashSet<>();
+		AVector<ACell> listed = RT.ensureVector(config != null ? config.get(AbstractLLMAdapter.K_TOOLS) : null);
+		for (long i = 0; listed != null && i < listed.count(); i++) {
+			if (!(listed.get(i) instanceof AString name)) continue;
+			AMap<AString, ACell> def = registry.get(name.toString());
+			if (def != null && names.add(name.toString())) out = out.conj(def);
+		}
+		if (config != null && !Skills.sourcesOf(config).isEmpty()) {
+			for (String implied : new String[] {SKILL_LOAD, CONTEXT_UNLOAD}) {
+				AMap<AString, ACell> def = registry.get(implied);
+				if (def != null && names.add(implied)) out = out.conj(def);
+			}
+		}
+		return out;
+	}
+
+	/** What {@code more_tools} produced: definitions to add to the run's palette, and the reply to the model. */
+	record Added(AVector<ACell> tools, ACell result) {}
+
+	/**
+	 * {@code more_tools}: resolves operation paths to tool definitions under
+	 * the agent's authority, skipping names already offered, and routes each
+	 * new name to its operation. The additions last for the rest of the run
+	 * — never persisted; a load or a skill is the durable way to acquire tools.
+	 */
+	@SuppressWarnings("unchecked")
+	static Added moreTools(ACell input, Engine engine, RequestContext ctx,
+			Set<String> existing, Map<String, AString> routes) {
+		ACell opsCell = RT.getIn(input, K_OPERATIONS);
+		if (!(opsCell instanceof AVector<?>)) {
+			return new Added(Vectors.empty(), Strings.create("Error: operations must be an array of operation paths"));
+		}
+		Map<String, AString> fresh = new HashMap<>();
+		AVector<ACell> resolved = ToolPalette.forOperations(engine, ctx, (AVector<ACell>) opsCell, fresh);
+		AVector<ACell> added = Vectors.empty();
+		AVector<ACell> names = Vectors.empty();
+		for (long i = 0; i < resolved.count(); i++) {
+			ACell tool = resolved.get(i);
+			AString name = RT.ensureString(RT.getIn(tool, AbstractLLMAdapter.K_NAME));
+			if (name == null || !existing.add(name.toString())) continue;
+			added = added.conj(tool);
+			routes.put(name.toString(), fresh.get(name.toString()));
+			names = names.conj(name);
+		}
+		return new Added(added, Maps.of(
+			K_ADDED, names,
+			K_NOTE, Strings.create("Tools available on your next turn.")));
+	}
 
 	/** Mutable view of the innermost loads tier for a flat session or frame. */
 	static final class LoadScope {

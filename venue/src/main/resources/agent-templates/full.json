@@ -32,7 +32,8 @@
 				"v/ops/schema/infer",
 				"v/ops/schema/coerce",
 				"context_load",
-				"context_unload"
+				"context_unload",
+				"more_tools"
 			],
 			"loads": {
 				"v/skills/data/lattice": {
