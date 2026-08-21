@@ -90,7 +90,7 @@ Many files, but each edit small and mechanical. Behind the green suite.
 ### T2. LLM message-protocol vocabulary
 - [ ] Add the one missing key (`Fields.ROLE`) + a small `covia.api` holder for
   `ROLE_*` / `TOOL_CALLS`.
-- [ ] Point `LangChainAdapter`, `AbstractLLMAdapter`, `ContextBuilder`,
+- [ ] Point `LangChainAdapter`, `AbstractLLMAdapter`, `ContextAssembler`,
   `GoalTreeContext`, `AgentState`, `TestAdapter` at the shared constants (delete
   the duplicate declarations).
 - [ ] Extract shared message-scan helpers (`lastUserContent`, `hasToolResults`,

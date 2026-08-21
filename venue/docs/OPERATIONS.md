@@ -723,7 +723,7 @@ and roughly half the advertised input window. `ollama` is deliberately small: a
 default Ollama server runs a short context and truncates the prompt head
 silently when it is exceeded, so raise it per model once the server is
 configured for more. When nothing is declared the runtime falls back to its own
-default (`ContextBuilder.DEFAULT_BUDGET`).
+default (`ContextAssembler.DEFAULT_BUDGET`).
 
 ### `byModel` — per-model overrides
 

@@ -382,7 +382,7 @@ write nothing.
 
 ### Capabilities for handoff
 
-A worker can read a handoff path **only if its capability scope covers it** — sharing the owner's namespace is not sufficient. An agent's `config.caps` narrows it to exactly the listed `{with, can}` grants (`ContextBuilder` applies `ctx.withCaps(caps)` to the transition context); an agent with **no** `caps` runs with the owner's full authority and can read any of the owner's paths.
+A worker can read a handoff path **only if its capability scope covers it** — sharing the owner's namespace is not sufficient. An agent's `config.caps` narrows it to exactly the listed `{with, can}` grants (`AbstractLLMAdapter.capsContext` applies `ctx.withCaps(caps)` to the transition context); an agent with **no** `caps` runs with the owner's full authority and can read any of the owner's paths.
 
 So for a pipeline of *capped* workers, provision the handoff area explicitly:
 

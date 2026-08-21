@@ -312,7 +312,7 @@ Key = the skill's canonical path (what the index shows). Value:
 - The **tool paths and child skill-source refs are denormalised** onto the entry (including the skill's own path as a tool when it is an operation); their targets still resolve fresh each turn. Trade-off: editing either list after load requires unload/reload to take effect; body and context edits apply on the next turn. This keeps the per-turn cost one resolution per skill and the entry a plain map.
 - Because the entry is a plain loads-map entry, everything in the scope chain applies unchanged: tombstone masking, advisory budget accounting, and explicit unloading.
 - **Skills dedup by content identity, not path.** A skill's identity is its resolved metadata's value hash — the asset identity Convex already computes and memoises on every cell (and which pins the body: `content.sha256`/`content.inline` live inside the metadata). Nothing is persisted for this: identities are compared **live** (entries re-resolve, consistent with the body/tools liveness contract) and accumulated in a transient set per pass. Loading the same skill from a second address (a directory ref vs the asset hash, mirrored directories) is a no-op naming the existing entry; rendering skips a second entry with an already-seen identity (e.g. across tiers); and the index's `(loaded)` marker matches by identity, so a skill loaded via `a/<hash>` still marks its directory line. Reloading under the *same* path overwrites (budget updates).
-- **The agent runtimes carry no skill knowledge.** Rendering dispatches on the entry inside the context assembly (`ContextBuilder`), and tool contribution is the generic rule *"a loads entry may declare `tools`"* — kind-agnostic, applied per loop iteration so the palette always mirrors effective loads (load activates mid-transition; unload retracts). Skills are the first producer of such entries; future additions (memory packs, op bundles) ride the same mechanism. The runtime's only skill surface is the `skill_load` harness tool, whose handler delegates wholesale to the skills resolver.
+- **The agent runtimes carry no skill knowledge.** Rendering dispatches on the entry inside the loads phase of the context assembly (`Loads`), and tool contribution is the generic rule *"a loads entry may declare `tools`"* — kind-agnostic, applied per loop iteration so the palette always mirrors effective loads (load activates mid-transition; unload retracts). Skills are the first producer of such entries; future additions (memory packs, op bundles) ride the same mechanism. The runtime's only skill surface is the `skill_load` harness tool, whose handler delegates wholesale to the skills resolver.
 
 ### 5.4 Unloading
 
@@ -375,7 +375,7 @@ There is **no write surface**. Skills are ordinary assets: create and update the
 
 The defaults are venue-configurable (`adapters.skills.defaultSkillsets` / `defaultSkills`, see [CONFIG.md](CONFIG.md#adapter-configuration)) and published at `v/info/adapters/skills`, so a venue curating its own library answers discovery from it and clients read the entry point rather than assuming `v/skills/root`. They govern these operations only: agents declare their own sources, and an agent declaring none has skills off deliberately.
 
-**Rendering is not an operation.** The per-turn `[Skills]` index is built by `ContextBuilder` calling `Skills.renderIndex` directly — it never goes through an op. There is deliberately no callable render: it would exist only to pin an index into `config.context` as an assemble-op, which nothing ships and which a first-class source declaration does better, since that also activates `skill_load`. Add one if a real consumer appears.
+**Rendering is not an operation.** The per-turn `[Skills]` index is built by `ContextAssembler` calling `Skills.renderIndex` directly — it never goes through an op. There is deliberately no callable render: it would exist only to pin an index into `config.context` as an assemble-op, which nothing ships and which a first-class source declaration does better, since that also activates `skill_load`. Add one if a real consumer appears.
 
 ---
 
@@ -448,6 +448,6 @@ Venue-installed skills ship as classpath resources registered by an adapter via 
 | Resolver (one for every surface) | `covia.adapter.agent.Skills` |
 | `skills` op (`list`/`read`) | `covia.adapter.SkillsAdapter` + `adapters/skills/skills.json` |
 | `content.inline` (asset-model inline content) | `Engine.resolveContent` |
-| Index injection + skill rendering + loads-tools rule | `ContextBuilder` (`withSkillsIndex`, `renderLoadEntry`, `loadsToolDefs`) |
+| Index injection + skill rendering + loads-tools rule | `ContextAssembler` (`skillsIndex`), `Loads` (`elements`), `ToolPalette` (`loadsToolDefs`) |
 | `skill_load` glue | `LLMAgentAdapter.handleSkillLoad` (session tier), `GoalTreeAdapter.runFrame` (frame tier) |
 | Venue skill install | `AAdapter.installSkill` → `v/skills/<name>` |
