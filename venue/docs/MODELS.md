@@ -47,10 +47,12 @@ a user's workspace.
 3. **One fact, one home.** The provider's API behaviour is the provider
    operation's; the model's nature is the model asset's; an agent's use of
    it is the agent's. Each layer states only what differs.
-4. **The path is a name; the id is data.** A catalog path is chosen to be a
-   valid, stable, listable name. The provider's model id — with its dots,
-   colons and slashes — is a value inside the asset. Nothing derives one
-   from the other at read time.
+4. **The path is the id.** The catalog name of a model is the provider's
+   model id, verbatim — `gpt-5.6-terra`, `qwen2.5:7b`,
+   `google/gemini-3.6-flash`. A name that differs from the id, however
+   slightly, is a trap for every reader that matters: a model copying a path
+   from a listing, a human comparing a config with a provider's docs. The id
+   is also stated on the asset, so nothing has to parse a path to learn it.
 5. **Identity is the hash.** A model asset is content-addressed. Catalog
    paths, aliases and pins are names for hashes; `a/<hash>` is the model.
 
@@ -94,20 +96,20 @@ A model asset is invocable directly — `grid:run v/models/anthropic/claude-sonn
 
 ## 4. Paths
 
-### 4.1 The catalog: `v/models/<provider>/<name>`
+### 4.1 The catalog: `v/models/<provider>/<id>`
 
 Venue-provided models live in a catalog region beside `v/ops/`, `v/skills/`
 and `v/agents/templates/`, installed through the same seam
-(`AAdapter.installAssetAt`) and materialised at boot. The path has **exactly
-two segments** under the region:
+(`AAdapter.installAssetAt`) and materialised at boot:
 
 ```
 v/models/anthropic/claude-sonnet-5
 v/models/anthropic/claude-haiku-4-5-20251001
-v/models/openai/gpt-5-6-terra
-v/models/gemini/gemini-3-6-flash
-v/models/ollama/qwen2-5-7b
-v/models/openrouter/google-gemini-3-6-flash
+v/models/openai/gpt-5.6-terra
+v/models/gemini/gemini-3.6-flash
+v/models/ollama/qwen2.5:7b
+v/models/openrouter/google/gemini-3.6-flash
+v/models/openrouter/meta-llama/llama-4-maverick
 ```
 
 **`<provider>`** is the provider operation's own name — the last segment of
@@ -117,42 +119,33 @@ catalog groups models by *who serves them*, not by who made them: Llama
 through Ollama and Llama through OpenRouter are two operations with different
 endpoints, keys and behaviour, and they are two entries.
 
-**`<name>`** is a catalog name, subject to the catalog rule every region
-shares: `^[a-z][a-z0-9-]*$`, no `.` or `..` (OPERATIONS.md, *Catalog path
-validity*). Provider ids are not valid names in general — `gpt-5.6-terra`,
-`qwen2.5:7b`, `google/gemini-3.6-flash` — so the name is **derived once,
-when the asset is published**, and the id lives in `operation.default.model`.
-The derivation is fixed so that two operators publishing the same model agree:
+**`<id>`** is the provider's model id, **verbatim and case-sensitive** — the
+string the provider's own API takes, the string a human reads in the
+provider's documentation, the string `operation.default.model` carries. No
+normalisation, no derived names: a listing is something a model or a person
+can copy into a config without translation, and a config is something they
+can check against a provider's docs by eye.
 
-1. lowercase;
-2. every run of characters outside `[a-z0-9]` becomes one `-`;
-3. leading and trailing `-` are dropped;
-4. a name that does not start with a letter is prefixed `m-`.
+A `/` inside an id is a namespace boundary, which is exactly what an
+aggregator means by it: `google/gemini-3.6-flash` under `openrouter` is the
+`google` namespace holding `gemini-3.6-flash`. So the depth of the catalog
+under `v/models/<provider>/` is the depth of that provider's ids —
+`covia:list v/models/anthropic` lists models, `covia:list v/models/openrouter`
+lists vendors and `covia:list v/models/openrouter/google` lists that vendor's
+models. The lattice rule that one level holds records *or* sub-namespaces,
+never both, holds because a provider's ids are either all flat or all
+namespaced; an aggregator that broke it would be publishing a model named
+like another model's vendor, and nobody does that.
 
-| Provider id | Catalog name |
-|-------------|--------------|
-| `claude-sonnet-5` | `claude-sonnet-5` |
-| `claude-haiku-4-5-20251001` | `claude-haiku-4-5-20251001` |
-| `gpt-5.6-terra` | `gpt-5-6-terra` |
-| `gemini-3.6-flash` | `gemini-3-6-flash` |
-| `qwen2.5:7b` | `qwen2-5-7b` |
-| `llama3.1:70b-instruct` | `llama3-1-70b-instruct` |
-| `google/gemini-3.6-flash` (OpenRouter) | `google-gemini-3-6-flash` |
-| `meta-llama/llama-4-maverick` (OpenRouter) | `meta-llama-llama-4-maverick` |
-
-The derivation is a publishing convention, not a parser: **nothing reads a
-name back into an id**. `llm:models`, `agent:context` and the adapters take
-the id from the asset.
-
-**Why two segments and not a tree.** Aggregators name models `vendor/model`,
-which invites `v/models/openrouter/google/gemini-3-6-flash`. It is rejected
-for three reasons. One rule for every provider: `covia:list
-v/models/<provider>` is the provider's model list, at every provider, with no
-second rule for aggregators. The lattice rule that one level holds records
-*or* sub-namespaces, never both, would hold — `openrouter/` would hold only
-namespaces — but every reader of `v/models/*/*` would then have to handle
-both shapes. And the vendor is already the first thing in the name, so
-`covia:list v/models/openrouter` still reads grouped.
+**What constrains a path.** The `[a-z][a-z0-9-]*` rule that `v/ops/` names
+follow is the install-time validator (`AAdapter.isValidCatalogPath`), a
+convention chosen for operation names — not a property of the lattice, whose
+keys are strings, nor of resolution, which special-cases only a `did:`
+prefix, nor of the HTTP surface, which URL-encodes each segment. For
+`v/models/` the validator keeps what is about safety and drops what is about
+style: segments are non-empty, none is `.` or `..`, and a path does not start
+with `/`. Dots, colons, upper case and whatever else a provider puts in an id
+pass through.
 
 ### 4.2 Aliases
 
@@ -171,7 +164,7 @@ Every catalog region is mirrored under the installing adapter's own subtree
 existing rule without a new case:
 
 ```
-v/adapters/langchain/models/<provider>/<name>
+v/adapters/langchain/models/<provider>/<id>
 ```
 
 It is the same hash as the canonical entry — the lattice shares the value —
@@ -218,9 +211,10 @@ it was always an operation path.
 ### 4.6 What is never a path
 
 `config.model` stays the provider's id and never becomes a reference. A
-reference would be told from an id only by sniffing, and `google/gemini-3.6-flash`
-is a legitimate id. The reference an agent holds to its model is
-`llmOperation`; `model` is the override of one default input.
+reference would be told from an id only by sniffing — and since the catalog
+name *is* the id, `gemini-3.6-flash` could be either. The reference an agent
+holds to its model is `llmOperation`; `model` is the override of one default
+input.
 
 ## 5. Resolution
 
@@ -273,7 +267,7 @@ fine-tune.
     "recommended": { "balanced": "v/models/anthropic/claude-sonnet-5", "...": "..." },
     "models": [{
       "op": "v/models/anthropic/claude-sonnet-5",
-      "id": "claude-sonnet-5",
+      "id": "claude-sonnet-5",            // = operation.default.model = the path's tail
       "name": "Claude Sonnet 5",
       "budget": { "bytes": 800000 },
       "options": { "toolCalling": true },
@@ -292,7 +286,7 @@ v/models/anthropic/claude-sonnet-5` the asset.
 ## 7. Seeding and publishing
 
 The venue ships its known models as assets, generated from one JSON resource
-per model (`adapters/langchain/models/<provider>/<name>.json`) and installed
+per model (`adapters/langchain/models/<provider>/<id>.json`) and installed
 at boot under `v/models/` — the same way skills and templates ship. The Java
 table goes; its contents become those resources.
 
@@ -300,7 +294,7 @@ An operator publishes a model by storing the asset and declaring the name
 (`asset:store`, then the catalog declaration — the same two steps the venue
 performs at boot); a user by writing it under `/o/`. Ollama is the case where
 the facts are discoverable rather than known: the capability probe that
-`agent:create` runs today can write what it learns as `v/models/ollama/<name>`
+`agent:create` runs today can write what it learns as `v/models/ollama/<id>`
 assets, after which `toolCallingByModel` has nothing left to probe for those
 models. That is a later step, not a prerequisite.
 
@@ -318,9 +312,10 @@ models. That is a later step, not a prerequisite.
 
 Each step ships on its own:
 
-1. **Region and seeds.** `installAssetAt("v/models/", …)`; the
-   `HOSTED_PROVIDERS` table becomes JSON resources; `ownedPath` already maps
-   the region to `v/adapters/langchain/models/…`.
+1. **Region and seeds.** `installAssetAt("v/models/", …)` with the
+   validator relaxed for this region (§4.1); the `HOSTED_PROVIDERS` table
+   becomes JSON resources; `ownedPath` already maps the region to
+   `v/adapters/langchain/models/…`.
 2. **One hop in the resolver.** `modelProfile(meta, modelId, config)` follows
    `model.provider` once; the LangChain edge reads through it.
 3. **Discovery over the catalog.** `llm:models` enumerates `v/models/`;

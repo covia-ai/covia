@@ -773,7 +773,7 @@ the full chain with `AbstractLLMAdapter.modelProfile(meta, modelId, config)`.
 
 The next step in this direction is a model *asset* — the provider operation
 specialised to one model, with its own facet and defaults, at
-`v/models/<provider>/<name>` — designed in [MODELS.md](./MODELS.md).
+`v/models/<provider>/<id>` — designed in [MODELS.md](./MODELS.md).
 
 Why the asset rather than code: the provider list is operator-extensible and the
 facts belong with the thing they describe. A venue that adds a provider declares
