@@ -771,6 +771,10 @@ one-key-deep merge, and it speaks to assembly only (`options.toolCalling`,
 facet, so `systemMessages` and its kind are the operation's to declare. Read
 the full chain with `AbstractLLMAdapter.modelProfile(meta, modelId, config)`.
 
+The next step in this direction is a model *asset* — the provider operation
+specialised to one model, with its own facet and defaults, at
+`v/models/<provider>/<name>` — designed in [MODELS.md](./MODELS.md).
+
 Why the asset rather than code: the provider list is operator-extensible and the
 facts belong with the thing they describe. A venue that adds a provider declares
 its behaviour in the same asset that declares its invocation — see

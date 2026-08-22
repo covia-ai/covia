@@ -250,6 +250,7 @@ java -jar target/covia.jar [config.json]
   a user-signed, self-sovereign token for cross-venue access (covia#292)
 - `docs/SKILLS.md` — agent skill system
 - `docs/OPERATIONS.md` — operation model, defaults, discovery
+- `docs/MODELS.md` — model definition assets (design): a model is an operation asset at `v/models/<provider>/<name>`
 - `docs/GRID_LATTICE_DESIGN.md` — lattice design
 - `docs/AGENT_LOOP.md`, `docs/AGENT_SESSIONS.md`, `docs/AGENT_TEMPLATES.md`,
   `docs/GOAL_TREE.md` — agent architecture

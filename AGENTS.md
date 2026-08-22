@@ -249,6 +249,7 @@ The list below tracks engineering tasks. For the developer-experience and open-s
 
 - **DX_PLAN.md** — Public developer-experience roadmap: onboarding, packaging, build reproducibility, CI quality gate, versioning, docs, community scaffolding, open-core boundary, operability
 - **venue/docs/ADAPTERS.md** — Canonical adapter system and authoring contract
+- **venue/docs/MODELS.md** — Model definition assets (design): models as operation assets under `v/models/`
 - **venue/docs/GRID_LATTICE_DESIGN.md** — Grid lattice design: addressing, namespaces, UCAN capabilities, federation, agents, lattice mechanics, implementation phases
 - **venue/CLAUDE.md** — Detailed venue module architecture, design objectives, adapter reference, API endpoints, and development guidelines
 - **venue/CLAUDE.local.md** — Working notes on lattice persistence implementation progress
