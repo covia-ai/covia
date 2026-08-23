@@ -89,7 +89,7 @@ class DiscordAdapterTest {
 
 	@Test void catalogStatusSkillAndTemplateAreInstalled(){
 		ACell status=run(OWNER,"v/ops/discord/bots",Maps.empty());assertTrue(status.toString().contains("RUNNING"));assertFalse(status.toString().contains("literal-test-token"));
-		assertNotNull(engine.resolvePath(Strings.create("v/skills/discord"),engine.venueContext()));
+		assertNotNull(engine.resolvePath(Strings.create("v/skills/adapters/discord"),engine.venueContext()));
 		assertNotNull(engine.resolvePath(Strings.create("v/agents/templates/discord"),engine.venueContext()));
 		assertEquals(List.of("abc","def"),BotRunner.split("abc def",3));
 	}

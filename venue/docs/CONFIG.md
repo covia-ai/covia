@@ -1030,7 +1030,7 @@ own update loop owns them) — gated on `telegram/call`; and
 `v/ops/telegram/bots` — the caller's bots
 with state (`STARTING`, `PENDING`, `RUNNING`, `STOPPED`), Telegram username,
 last error and counters, tokens never included. The module ships a
-`telegram` agent skill (`v/skills/telegram`).
+`telegram` agent skill (`v/skills/adapters/telegram`).
 
 ### Discord bots (covia-discord)
 
@@ -1094,7 +1094,7 @@ persists at
 `discord:delete` removes it and its sessions. The adapter owns this private,
 fixed schema; tokens remain in `s/`, and user-managed content is not moved
 into it. These require `discord/manage`. The module also publishes
-`v/skills/discord` and `v/agents/templates/discord`.
+`v/skills/adapters/discord` and `v/agents/templates/discord`.
 
 ### Claude Code (covia-claude-code)
 
@@ -1214,7 +1214,7 @@ it), `allowedTools`, `disallowedTools`, `tools`, `maxTurns`, `maxBudgetUsd`,
 output), `agent`, `keepAlive`. **Operator-only** options (a project or the
 adapter, never a call): `addDirs`, `mcpConfig`, `strictMcpConfig`,
 `settings`, `env`. The module ships a `claudecode` agent skill
-(`v/skills/claudecode`). Jobs have no framework timeout — a Claude Code run
+(`v/skills/adapters/claudecode`). Jobs have no framework timeout — a Claude Code run
 may take many minutes; clients poll and reconnect by job id.
 
 ## Runtime adapter lifecycle

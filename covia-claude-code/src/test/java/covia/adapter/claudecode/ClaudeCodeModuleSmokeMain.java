@@ -50,7 +50,7 @@ public final class ClaudeCodeModuleSmokeMain {
 			if (!(loader instanceof ModuleClassLoader)) {
 				throw new AssertionError("Adapter was not loaded as a module: " + loader);
 			}
-			if (engine.resolvePath(Strings.create("v/skills/claudecode"), engine.venueContext()) == null) {
+			if (engine.resolvePath(Strings.create("v/skills/adapters/claudecode"), engine.venueContext()) == null) {
 				throw new AssertionError("Claude Code module skill was not installed");
 			}
 

@@ -54,7 +54,7 @@ public final class TelegramModuleSmokeMain {
 				if (client.getClassLoader() != loader) {
 					throw new AssertionError("Telegram client leaked onto the venue classpath");
 				}
-				if (engine.resolvePath(Strings.create("v/skills/telegram"), engine.venueContext()) == null) {
+				if (engine.resolvePath(Strings.create("v/skills/adapters/telegram"), engine.venueContext()) == null) {
 					throw new AssertionError("Telegram module skill was not installed");
 				}
 
