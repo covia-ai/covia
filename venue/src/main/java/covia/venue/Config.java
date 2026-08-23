@@ -105,7 +105,7 @@ public class Config {
 	public static final AString ROOT_PAGE = Strings.intern("rootPage");
 	public static final AString REDIRECT = Strings.intern("redirect");
 
-	/** Key for the venue default LLM provider operation used for new agents. */
+	/** Key for the venue default LLM operation used for new agents. */
 	public static final AString DEFAULT_LLM_OPERATION = Strings.intern("defaultLlmOperation");
 
 	/** Key for the venue default agent transition operation used for new agents. */
@@ -979,16 +979,14 @@ public class Config {
 	}
 
 	/**
-	 * Venue default LLM provider operation for new agents that declare a
-	 * systemPrompt but no explicit llmOperation. Operator-configurable so a
-	 * venue can default to a different provider (e.g. Anthropic) without code
-	 * changes. Per-provider default <em>models</em> remain in the provider
-	 * adapter — a single venue model default cannot be right across providers.
-	 * @return configured op, or {@code "v/ops/langchain/anthropic"} if unset
+	 * Venue default LLM operation for new agents that declare a systemPrompt
+	 * but no explicit llmOperation. Operator-configurable so a venue can choose
+	 * a different model or provider without code changes.
+	 * @return configured op, or the venue's balanced Anthropic model preset if unset
 	 */
 	public AString getDefaultLlmOperation() {
 		AString v = RT.ensureString(config.get(DEFAULT_LLM_OPERATION));
-		return (v != null) ? v : Strings.intern("v/ops/langchain/anthropic");
+		return (v != null) ? v : Strings.intern("v/models/anthropic/claude-sonnet-5");
 	}
 
 	/**

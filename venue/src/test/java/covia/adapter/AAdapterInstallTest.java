@@ -1,6 +1,7 @@
 package covia.adapter;
 
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -8,8 +9,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 
 import convex.core.data.Hash;
+import convex.core.data.ACell;
+import convex.core.data.AMap;
+import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import covia.api.Fields;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.TestEngine;
@@ -34,6 +39,12 @@ public class AAdapterInstallTest {
 			return java.util.concurrent.CompletableFuture.completedFuture(null);
 		}
 		Hash probeInstall(String resourcePath) { return installAsset(resourcePath); }
+		Hash probeModel(String path) {
+			AMap<AString, ACell> meta = Maps.of(
+				Fields.NAME, Strings.create(path),
+				Fields.OPERATION, Maps.of(Strings.create("adapter"), Strings.create("probe:model")));
+			return installModel(path, meta);
+		}
 		static String probeFailure(Throwable error) { return describeFailure(error); }
 	}
 
@@ -71,5 +82,21 @@ public class AAdapterInstallTest {
 		} finally {
 			lenient.close();
 		}
+	}
+
+	@Test
+	public void testModelCatalogPathsAllowVendorIdsAndRejectTreeCollisions() {
+		ProbeAdapter adapter = new ProbeAdapter();
+		adapter.engine = TestEngine.ENGINE;
+		assertNotNull(adapter.probeModel("openrouter/anthropic/claude-sonnet-5"));
+		assertTrue(adapter.pendingCatalogEntries.containsKey(
+			"v/models/openrouter/anthropic/claude-sonnet-5"));
+		assertThrows(IllegalArgumentException.class,
+			() -> adapter.probeModel("OpenRouter/model"));
+		assertThrows(IllegalArgumentException.class,
+			() -> adapter.probeModel("openrouter/model/"));
+		adapter.probeModel("openai/gpt-5");
+		assertThrows(IllegalArgumentException.class,
+			() -> adapter.probeModel("openai/gpt-5/mini"));
 	}
 }

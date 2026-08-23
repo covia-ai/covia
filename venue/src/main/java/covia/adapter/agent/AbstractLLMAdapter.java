@@ -26,7 +26,9 @@ import covia.adapter.agent.ContextInspectable.Inspection;
 import covia.adapter.ToolCallArguments;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
+import covia.grid.Asset;
 import covia.grid.Status;
+import covia.venue.Engine;
 import covia.venue.RequestContext;
 
 /**
@@ -219,7 +221,8 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 
 	// ========== Defaults ==========
 
-	public static final AString DEFAULT_LLM_OPERATION = Strings.create("v/ops/langchain/anthropic");
+	public static final AString DEFAULT_LLM_OPERATION = Strings.create(
+		"v/models/anthropic/claude-sonnet-5");
 
 	// ========== Authority and model profile (AGENT_CONTEXT.md §4, §8) ==========
 
@@ -256,11 +259,61 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 */
 	protected ModelProfile modelProfileFor(AMap<AString, ACell> config, RequestContext ctx) {
 		try {
-			covia.grid.Asset asset = engine.resolveAsset(getLLMOperation(config), ctx);
-			return ModelProfile.of(modelProfile((asset != null) ? asset.meta() : null,
-				RT.ensureString(config != null ? config.get(K_MODEL) : null), config));
+			Asset asset = engine.resolveAsset(getLLMOperation(config), ctx);
+			return ModelProfile.of(resolveModel(engine, asset,
+				RT.ensureString(config != null ? config.get(K_MODEL) : null), config, ctx).assemblyProfile());
 		} catch (RuntimeException e) {
 			return ModelProfile.DEFAULT;
+		}
+	}
+
+	/**
+	 * A selected provider or model operation reduced to the same effective
+	 * execution data. Caller-supplied {@code model} wins over operation
+	 * defaults; a model preset contributes its own facet only while its selected
+	 * id remains effective.
+	 */
+	public record ResolvedModel(Asset operation, Asset provider, AString modelId,
+			AMap<AString, ACell> executionProfile, AMap<AString, ACell> assemblyProfile) {}
+
+	/** Resolves the data shared by provider-edge rendering and agent assembly. */
+	public static ResolvedModel resolveModel(Engine engine, Asset selected, AString requestedModel,
+			AMap<AString, ACell> config, RequestContext ctx) {
+		if (selected == null) throw new IllegalArgumentException("LLM operation does not resolve");
+		AMap<AString, ACell> selectedMeta = selected.meta();
+		AMap<AString, ACell> selectedFacet = modelFacet(selectedMeta);
+		AString selectedId = RT.ensureString(selectedFacet.get(K_MODEL_ID));
+		AString modelId = (requestedModel != null) ? requestedModel : declaredModelDefault(selectedMeta);
+		if (modelId == null) modelId = selectedId;
+
+		Asset provider = selected;
+		AString providerRef = RT.ensureString(selectedFacet.get(K_MODEL_PROVIDER));
+		if (providerRef != null) {
+			provider = engine.resolveAsset(providerRef, ctx);
+			if (provider == null) throw new IllegalArgumentException(
+				"Model provider does not resolve: " + providerRef);
+		}
+
+		AMap<AString, ACell> execution = modelProfile(provider.meta(), modelId);
+		if (selectedId != null && selectedId.equals(modelId)) {
+			execution = layer(execution, modelDefinitionProfile(selectedFacet));
+		}
+		AMap<AString, ACell> assembly = layer(execution,
+			RT.ensureMap(config != null ? config.get(K_MODEL_PROFILE) : null));
+		return new ResolvedModel(selected, provider, modelId, execution, assembly);
+	}
+
+	/** Adds the operation default to effective agent config for inspection and L3 input. */
+	protected AMap<AString, ACell> effectiveModelConfig(AMap<AString, ACell> config,
+			RequestContext ctx) {
+		AMap<AString, ACell> effective = (config != null) ? config : Maps.empty();
+		if (effective.get(K_MODEL) != null) return effective;
+		try {
+			Asset selected = engine.resolveAsset(getLLMOperation(effective), ctx);
+			AString modelId = resolveModel(engine, selected, null, effective, ctx).modelId();
+			return (modelId != null) ? effective.assoc(K_MODEL, modelId) : effective;
+		} catch (RuntimeException e) {
+			return effective;
 		}
 	}
 
@@ -531,6 +584,12 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 
 	/** The {@code model} facet key on an LLM operation asset. */
 	public static final AString K_MODEL_FACET = Strings.intern("model");
+	/** Canonical model id on a model-operation asset. */
+	public static final AString K_MODEL_ID = Strings.intern("id");
+	/** Provider operation reference on a model-operation asset. */
+	public static final AString K_MODEL_PROVIDER = Strings.intern("provider");
+	private static final AString K_MODEL_TAGS = Strings.intern("tags");
+	private static final AString K_MODEL_RECOMMENDED = Strings.intern("recommended");
 	/** Model option: {@code false} declares a model that cannot call tools. */
 	public static final AString OPT_TOOL_CALLING = Strings.intern("toolCalling");
 	/** Model option: tool support varies per model, so it must be probed, never assumed. */
@@ -598,6 +657,23 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			AMap<AString, ACell> config) {
 		return layer(modelProfile(meta, modelId),
 			RT.ensureMap(config != null ? config.get(K_MODEL_PROFILE) : null));
+	}
+
+	/** Operation default first, legacy schema default second. */
+	private static AString declaredModelDefault(AMap<AString, ACell> meta) {
+		AString model = RT.ensureString(RT.getIn(meta, Fields.OPERATION, Fields.DEFAULT, K_MODEL));
+		if (model != null) return model;
+		return RT.ensureString(RT.getIn(meta, Fields.OPERATION, Fields.INPUT,
+			K_PROPERTIES, K_MODEL, Fields.DEFAULT));
+	}
+
+	/** Removes discovery/identity fields from a model asset's executable profile. */
+	private static AMap<AString, ACell> modelDefinitionProfile(AMap<AString, ACell> facet) {
+		return facet.dissoc(K_MODEL_ID)
+			.dissoc(K_MODEL_PROVIDER)
+			.dissoc(K_MODEL_TAGS)
+			.dissoc(Fields.DEFAULT)
+			.dissoc(K_MODEL_RECOMMENDED);
 	}
 
 	/** {@code override} over {@code base}, one key deep: maps merge key-wise, anything else replaces. */
@@ -673,6 +749,12 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	/** One string model option, or null when undeclared. */
 	public static String modelOptionText(AMap<AString, ACell> meta, AString modelId, AString key) {
 		AString v = RT.ensureString(modelOptions(meta, modelId).get(key));
+		return (v != null) ? v.toString() : null;
+	}
+
+	/** One string option from an already resolved execution profile. */
+	public static String modelOptionText(AMap<AString, ACell> profile, AString key) {
+		AString v = RT.ensureString(RT.getIn(profile, K_OPTIONS, key));
 		return (v != null) ? v.toString() : null;
 	}
 

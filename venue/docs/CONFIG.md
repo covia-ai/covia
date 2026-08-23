@@ -830,17 +830,20 @@ pass through to every provider (#218 — accepts integer or double, so
 `temperature: 0` works for deterministic extraction); `maxTokens` is
 honoured by the anthropic provider (its API requires it).
 
-`defaultLlmOperation` selects the provider used when an agent config does not
-name one; the built-in fallback is `v/ops/langchain/anthropic`. Standard agent
-templates are provider-neutral, so a later config layer can choose any provider
-without copying the template. `v/ops/langchain/models` reports caller-relative
-provider readiness, each release-time model list, its balanced default, and
-workload recommendations (for example `economical`, `quality`, or `coding`).
+`defaultLlmOperation` selects the operation used when an agent config does not
+name one; the built-in fallback is the model operation
+`v/models/anthropic/claude-sonnet-5`. Standard agent templates are
+provider-neutral, so a later config layer can choose any provider or model
+operation without copying the template. `v/ops/langchain/models` walks the
+`v/models/` catalog and reports caller-relative provider readiness, model
+operation paths, balanced defaults, and workload recommendations (for example
+`economical`, `quality`, or `coding`).
 The built-in balanced defaults are Sonnet 5, GPT-5.6 Terra, Gemini 3.6 Flash,
 DeepSeek V4 Flash, Grok 4.3, Mistral Medium (`mistral-medium-latest`) and, for
-OpenRouter, `openrouter/auto` (any vendor-prefixed OpenRouter model id works). Operators may replace an advertised hosted list
-with `adapters.langchain.models.<provider>`; this is discovery metadata, not an
-allowlist, so other provider-supported model IDs remain usable.
+OpenRouter, `openrouter/auto` (any vendor-prefixed OpenRouter model id works).
+These choices live in `adapters/langchain/model-catalog.json`; they are
+operation presets, not allowlists, so callers may still override the model id.
+Any restriction belongs in a capability gate.
 
 Ollama base URL resolution (#224): explicit input `url`, then venue config
 `adapters.langchain.ollamaUrl`, then the `OLLAMA_BASE_URL` environment

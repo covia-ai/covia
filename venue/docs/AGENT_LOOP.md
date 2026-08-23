@@ -265,7 +265,7 @@ swap the level 3 operation to change provider, use a remote venue via federation
 or a test mock.
 
 The level 3 operation to invoke is specified in `config.llmOperation`
-(built-in fallback: `v/ops/langchain/anthropic`; venues may override it with
+(built-in fallback: `v/models/anthropic/claude-sonnet-5`; venues may override it with
 `defaultLlmOperation`). The agent creator picks both the agent loop
 strategy (level 2) and the LLM backend (level 3).
 

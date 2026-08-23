@@ -140,7 +140,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 	 */
 	@SuppressWarnings("unchecked")
 	private Preview preview(Inspection in, RequestContext ctx) {
-		AMap<AString, ACell> config = in.config();
+		AMap<AString, ACell> config = effectiveModelConfig(in.config(), ctx);
 		// Same scope-chain view as processChat (agent tier + session tier), so
 		// the inspected skills index carries the right (loaded) markers.
 		AMap<AString, ACell> configLoads = ContextChain.declaredLoads(
@@ -278,7 +278,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		AVector<ACell> sessionFrames = AgentAdapter.sessionFrames(input);
 		RequestContext capsCtx = capsContext(recordConfig, ctx).withAgentId(agentId);
 		ToolPalette.Palette palette = ToolPalette.resolve(engine, ctx, recordConfig, HARNESS_TOOL_NAMES);
-		AMap<AString, ACell> config = recordConfig;
+		AMap<AString, ACell> config = effectiveModelConfig(recordConfig, ctx);
 		AString llmOperation = getLLMOperation(config);
 		AVector<ACell> fixedTools = fixedTools(config, palette);
 		ModelProfile profile = modelProfileFor(config, ctx);

@@ -187,13 +187,13 @@ public class AbstractLLMAdapterTest {
 		AMap<AString, ACell> config = Maps.of(
 			Strings.create("model"), Strings.create("gpt-4o"));
 		AString op = AbstractLLMAdapter.getLLMOperation(config);
-		assertEquals("v/ops/langchain/anthropic", op.toString());
+		assertEquals("v/models/anthropic/claude-sonnet-5", op.toString());
 	}
 
 	@Test
 	public void testGetLLMOperationNullConfig() {
 		AString op = AbstractLLMAdapter.getLLMOperation(null);
-		assertEquals("v/ops/langchain/anthropic", op.toString());
+		assertEquals("v/models/anthropic/claude-sonnet-5", op.toString());
 	}
 
 	// ========== copyIfPresent ==========

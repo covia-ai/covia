@@ -54,6 +54,9 @@ import java.util.concurrent.TimeUnit;
 
 import com.sun.net.httpserver.HttpServer;
 
+import covia.adapter.agent.AbstractLLMAdapter;
+import covia.api.Fields;
+import covia.grid.Asset;
 import covia.grid.Status;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -1319,13 +1322,15 @@ public class LangChainAdapterTest {
 	/**
 	 * Regression for the actual root cause behind the reasoning_effort fix:
 	 * a caller that omits "model" (e.g. the frontend's "Venue default" option)
-	 * relies on {@code defaultModelFor} to resolve it — that resolved name,
-	 * not the raw null input, is what must reach the reasoning-model check,
-	 * or the whole fix silently never fires for the default configuration.
+	 * relies on the provider operation's data default. That resolved name, not
+	 * the raw null input, must reach the reasoning-model check.
 	 */
 	@Test
 	public void testDefaultOpenAiModelIsARecognisedReasoningModel() {
-		String resolved = LangChainAdapter.defaultModelFor("openai");
+		Engine engine = covia.venue.TestEngine.ENGINE;
+		Asset openai = engine.resolveAsset(Strings.create("v/ops/langchain/openai"), engine.venueContext());
+		String resolved = RT.ensureString(RT.getIn(openai.meta(), Fields.OPERATION,
+			Fields.DEFAULT, AbstractLLMAdapter.K_MODEL)).toString();
 		assertTrue(LangChainAdapter.isOpenAiReasoningModel(resolved),
 			"openai's default model (" + resolved + ") must be recognised as a reasoning model, "
 			+ "since every catalogued openai model is gpt-5.x");
@@ -1559,30 +1564,40 @@ public class LangChainAdapterTest {
 	// ========== langchain:models discovery ==========
 
 	@Test
-	public void testModelsForConfigOverrideAndBuiltins() {
-		// Built-ins: current supported selections across workload tiers.
-		assertTrue(LangChainAdapter.modelsFor("anthropic", null).toString().contains("claude-opus-5"));
-		assertTrue(LangChainAdapter.modelsFor("anthropic", null).toString().contains("claude-sonnet-5"));
-		assertTrue(LangChainAdapter.modelsFor("openai", null).toString().contains("gpt-5.6-terra"));
-		assertTrue(LangChainAdapter.modelsFor("openai", null).toString().contains("gpt-5.4-nano"));
-		assertTrue(LangChainAdapter.modelsFor("gemini", null).toString().contains("gemini-3.6-flash"));
-		assertTrue(LangChainAdapter.modelsFor("deepseek", null).toString().contains("deepseek-v4-flash"));
-		assertTrue(LangChainAdapter.modelsFor("xai", null).toString().contains("grok-build-0.1"));
-		assertEquals("claude-sonnet-5", LangChainAdapter.defaultModelFor("anthropic"));
-		assertEquals("gpt-5.6-terra", LangChainAdapter.defaultModelFor("openai"));
-		assertEquals("grok-4.3", LangChainAdapter.defaultModelFor("xai"));
-		assertTrue(LangChainAdapter.modelsFor("mistral", null).toString().contains("mistral-large-latest"));
-		assertEquals("mistral-medium-latest", LangChainAdapter.defaultModelFor("mistral"));
-		assertTrue(LangChainAdapter.modelsFor("openrouter", null).toString().contains("anthropic/claude-sonnet-5"));
-		assertEquals("openrouter/auto", LangChainAdapter.defaultModelFor("openrouter"));
+	public void testModelCatalogPublishesCompleteInvocableDefinitions() {
+		Engine engine = covia.venue.TestEngine.ENGINE;
+		RequestContext ctx = engine.venueContext();
+		Asset anthropic = engine.resolveAsset(
+			Strings.create("v/models/anthropic/claude-opus-5"), ctx);
+		assertNotNull(anthropic);
+		assertEquals("langchain:anthropic",
+			RT.getIn(anthropic.meta(), Fields.OPERATION, "adapter").toString());
+		assertEquals("claude-opus-5",
+			RT.getIn(anthropic.meta(), Fields.OPERATION, Fields.DEFAULT, "model").toString());
+		assertEquals("ANTHROPIC_API_KEY",
+			RT.getIn(anthropic.meta(), Fields.OPERATION, "secretKey").toString());
+		assertNotNull(RT.getIn(anthropic.meta(), Fields.OPERATION, "input"));
+		assertNotNull(RT.getIn(anthropic.meta(), Fields.OPERATION, "output"));
+		assertNotNull(engine.resolveAsset(
+			Strings.create("v/models/openrouter/anthropic/claude-sonnet-5"), ctx));
 		assertTrue(LangChainAdapter.providerNeedsApiKey("mistral") && LangChainAdapter.providerNeedsApiKey("openrouter"));
+	}
 
-		// Venue config override wins wholesale
-		AMap<AString, ACell> cfg = Maps.of(
-			Strings.create("models"), Maps.of(
-				Strings.create("anthropic"), Vectors.of((ACell) Strings.create("claude-fable-5"))));
-		assertEquals("claude-fable-5",
-			LangChainAdapter.modelsFor("anthropic", cfg).get(0).toString());
+	@Test
+	public void testModelOverrideSelectsEffectiveProviderProfile() {
+		Engine engine = covia.venue.TestEngine.ENGINE;
+		RequestContext ctx = engine.venueContext();
+		Asset preset = engine.resolveAsset(Strings.create(
+			"v/models/openrouter/anthropic/claude-sonnet-5"), ctx);
+		var selected = AbstractLLMAdapter.resolveModel(engine, preset, null, null, ctx);
+		assertEquals("anthropic/claude-sonnet-5", selected.modelId().toString());
+		assertEquals(400000L, AbstractLLMAdapter.budgetBytes(selected.executionProfile(), 0));
+
+		var overridden = AbstractLLMAdapter.resolveModel(engine, preset,
+			Strings.create("google/gemini-3.5-flash"), null, ctx);
+		assertEquals("google/gemini-3.5-flash", overridden.modelId().toString());
+		assertEquals(1000000L, AbstractLLMAdapter.budgetBytes(overridden.executionProfile(), 0),
+			"caller model override must select the effective model profile");
 	}
 
 	@Test
@@ -1636,7 +1651,12 @@ public class LangChainAdapterTest {
 			.get(15, java.util.concurrent.TimeUnit.SECONDS);
 		var providers = RT.ensureVector(RT.getIn(result, "providers"));
 		assertEquals(8, providers.count(), "7 hosted + ollama");
-		AMap<AString, ACell> ollama = RT.castMap(providers.get(7));
+		AMap<AString, ACell> ollama = null;
+		for (long i = 0; i < providers.count(); i++) {
+			AMap<AString, ACell> candidate = RT.castMap(providers.get(i));
+			if ("ollama".equals(RT.getIn(candidate, "provider").toString())) ollama = candidate;
+		}
+		assertNotNull(ollama);
 		assertEquals("ollama", RT.getIn(ollama, "provider").toString());
 		assertNotNull(RT.getIn(ollama, "url"), "ollama entry always names its resolved url");
 		assertNotNull(RT.getIn(ollama, "ready"));

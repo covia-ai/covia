@@ -193,7 +193,26 @@ final class VenueBootstrapMaterializer {
 
 	private void writeCatalogDeclaration(AAdapter adapter, String path, Hash assetHash) {
 		validateCatalogPath(path);
+		if (path.startsWith("v/models/")) validateModelTreePosition(path);
 		writeAndValidateVenuePath(path, catalogMetadata(adapter, path, assetHash));
+	}
+
+	/** A lattice location cannot be both a model asset and a model namespace. */
+	private void validateModelTreePosition(String path) {
+		String[] segments = path.split("/", -1);
+		String parent = "v/models";
+		for (int i = 2; i < segments.length - 1; i++) {
+			parent += "/" + segments[i];
+			ACell value = readVenuePath(parent);
+			if (value != null && !(value instanceof AMap<?, ?> map && map.get(Fields.OPERATION) == null)) {
+				throw new IllegalStateException("Model catalog path crosses an existing leaf: " + path);
+			}
+		}
+		ACell existing = readVenuePath(path);
+		if (existing != null && (!(existing instanceof AMap<?, ?> map)
+				|| (map.get(Fields.OPERATION) == null && !map.isEmpty()))) {
+			throw new IllegalStateException("Model catalog path replaces an existing namespace: " + path);
+		}
 	}
 
 	private static ACell catalogMetadata(AAdapter adapter, String path, Hash assetHash) {
@@ -212,6 +231,7 @@ final class VenueBootstrapMaterializer {
 
 	private static void validateCatalogPath(String path) {
 		if (path == null || !(path.startsWith("v/ops/")
+				|| path.startsWith("v/models/")
 				|| path.startsWith("v/test/ops/")
 				|| path.startsWith("v/agents/templates/")
 				|| path.startsWith("v/skills/")

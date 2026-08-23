@@ -2,7 +2,9 @@ package covia.adapter;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Future;
@@ -14,6 +16,7 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
@@ -23,6 +26,7 @@ import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import covia.adapter.agent.AbstractLLMAdapter;
 import covia.api.Fields;
+import covia.grid.Asset;
 import covia.grid.Status;
 import covia.venue.RequestContext;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
@@ -120,6 +124,12 @@ public class LangChainAdapter extends AAdapter {
 	static final AString K_OUTPUT         = Strings.intern("output");
 	static final AString K_TOTAL          = Strings.intern("total");
 	static final AString K_FINISH_REASON  = Strings.intern("finishReason");
+	static final AString K_PROVIDER       = Strings.intern("provider");
+	static final AString K_PROVIDERS      = Strings.intern("providers");
+	static final AString K_MODELS         = Strings.intern("models");
+	static final AString K_RESOURCE       = Strings.intern("resource");
+	static final AString K_RECOMMENDED    = Strings.intern("recommended");
+	static final AString K_TAGS           = Strings.intern("tags");
 
 	// Role constants
 	static final AString ROLE_SYSTEM    = Strings.intern("system");
@@ -143,19 +153,137 @@ public class LangChainAdapter extends AAdapter {
 	public void installAssets() {
 		// The adapter's own skill: v/skills/models lives and dies with this adapter.
 		installSkill("ops-tools/models", "/skills/models.json");
-		// Canonical operations — one per adapter route
-		installAsset("langchain/openai",    "/adapters/langchain/openai.json");
-		installAsset("langchain/ollama",    "/adapters/langchain/ollama.json");
-		installAsset("langchain/anthropic", "/adapters/langchain/anthropic.json");
-		installAsset("langchain/gemini",    "/adapters/langchain/gemini.json");
-		installAsset("langchain/xai",       "/adapters/langchain/xai.json");
-		installAsset("langchain/deepseek",  "/adapters/langchain/deepseek.json");
-		installAsset("langchain/mistral",   "/adapters/langchain/mistral.json");
-		installAsset("langchain/openrouter", "/adapters/langchain/openrouter.json");
+		installModelCatalog();
 		installAsset("langchain/models",    "/adapters/langchain/models.json");
 
 		// Example configurations — stored in CAS, not in /v/ops/.
 		installExampleAsset("/asset-examples/qwen.json");   // langchain:ollama:qwen3
+	}
+
+	/** Publishes provider operations and their model-operation presets from one data file. */
+	private void installModelCatalog() {
+		AMap<AString, ACell> manifest = readJsonMap("/adapters/langchain/model-catalog.json");
+		AVector<ACell> providers = RT.ensureVector(manifest.get(K_PROVIDERS));
+		if (providers == null) throw new IllegalStateException("model-catalog.json needs providers[]");
+		for (long i = 0; i < providers.count(); i++) {
+			AMap<AString, ACell> spec = RT.ensureMap(providers.get(i));
+			AString provider = RT.ensureString(spec != null ? spec.get(K_NAME) : null);
+			AString resource = RT.ensureString(spec != null ? spec.get(K_RESOURCE) : null);
+			AString defaultModel = RT.ensureString(spec != null ? spec.get(Fields.DEFAULT) : null);
+			AVector<ACell> models = RT.ensureVector(spec != null ? spec.get(K_MODELS) : null);
+			if (provider == null || resource == null || defaultModel == null || models == null) {
+				throw new IllegalStateException("Invalid model provider at index " + i);
+			}
+
+			AMap<AString, ACell> executable = withModelDefault(readJsonMap(resource.toString()), defaultModel);
+			String providerOp = "v/ops/langchain/" + provider;
+			AMap<AString, ACell> providerFacet = AbstractLLMAdapter.modelFacet(executable)
+				.assoc(Fields.DEFAULT, modelPath(provider, defaultModel))
+				.assoc(K_RECOMMENDED, modelPaths(provider, RT.ensureMap(spec.get(K_RECOMMENDED))));
+			AMap<AString, ACell> providerMeta = executable.assoc(
+				AbstractLLMAdapter.K_MODEL_FACET, providerFacet);
+			installAsset("langchain/" + provider, providerMeta);
+
+			for (long j = 0; j < models.count(); j++) {
+				AMap<AString, ACell> modelSpec = RT.ensureMap(models.get(j));
+				AString id = RT.ensureString(modelSpec != null ? modelSpec.get(K_ID) : null);
+				if (id == null) throw new IllegalStateException(
+					"Invalid model at providers[" + i + "].models[" + j + "]");
+				AMap<AString, ACell> facet = modelSpecificProfile(executable, id);
+				AMap<AString, ACell> declaredFacet = Maps.empty();
+				ACell options = modelSpec.get(AbstractLLMAdapter.K_OPTIONS);
+				ACell budget = modelSpec.get(AbstractLLMAdapter.K_BUDGET);
+				if (options != null) declaredFacet = declaredFacet.assoc(AbstractLLMAdapter.K_OPTIONS, options);
+				if (budget != null) declaredFacet = declaredFacet.assoc(AbstractLLMAdapter.K_BUDGET, budget);
+				facet = layerModelProfile(facet, declaredFacet)
+					.assoc(K_ID, id)
+					.assoc(K_PROVIDER, Strings.create(providerOp));
+				ACell tags = modelSpec.get(K_TAGS);
+				if (tags != null) facet = facet.assoc(K_TAGS, tags);
+
+				AMap<AString, ACell> modelMeta = withModelDefaults(executable, id,
+					RT.ensureMap(modelSpec.get(Fields.DEFAULT)))
+					.assoc(Fields.NAME, valueOr(modelSpec.get(Fields.NAME),
+						Strings.create(provider + " / " + id)))
+					.assoc(Fields.DESCRIPTION, valueOr(modelSpec.get(Fields.DESCRIPTION), Strings.create(
+						"Model preset for " + id + " through the " + provider + " provider operation.")))
+					.assoc(AbstractLLMAdapter.K_MODEL_FACET, facet);
+				installModel(provider + "/" + id, modelMeta);
+			}
+		}
+	}
+
+	private AMap<AString, ACell> readJsonMap(String resourcePath) {
+		try {
+			AMap<AString, ACell> map = RT.ensureMap(JSON.parse(readResource(resourcePath)));
+			if (map == null) throw new IllegalStateException("Resource is not a JSON object: " + resourcePath);
+			return map;
+		} catch (java.io.IOException e) {
+			throw new IllegalStateException("Cannot read adapter resource " + resourcePath, e);
+		}
+	}
+
+	private static AMap<AString, ACell> withModelDefault(AMap<AString, ACell> meta, AString model) {
+		return withModelDefaults(meta, model, null);
+	}
+
+	private static AMap<AString, ACell> withModelDefaults(AMap<AString, ACell> meta, AString model,
+			AMap<AString, ACell> modelDefaults) {
+		AMap<AString, ACell> operation = RT.ensureMap(meta.get(Fields.OPERATION));
+		if (operation == null) throw new IllegalStateException("Model provider asset needs operation metadata");
+		AMap<AString, ACell> defaults = RT.ensureMap(operation.get(Fields.DEFAULT));
+		if (defaults == null) defaults = Maps.empty();
+		if (modelDefaults != null) {
+			for (var entry : modelDefaults.entrySet()) defaults = defaults.assoc(entry.getKey(), entry.getValue());
+		}
+		operation = operation.assoc(Fields.DEFAULT, defaults.assoc(AbstractLLMAdapter.K_MODEL, model));
+		return meta.assoc(Fields.OPERATION, operation);
+	}
+
+	private static ACell valueOr(ACell value, ACell fallback) {
+		return (value != null) ? value : fallback;
+	}
+
+	@SuppressWarnings("unchecked")
+	private static AMap<AString, ACell> modelSpecificProfile(AMap<AString, ACell> providerMeta,
+			AString modelId) {
+		AMap<AString, ACell> byModel = RT.ensureMap(
+			AbstractLLMAdapter.modelFacet(providerMeta).get(AbstractLLMAdapter.K_BY_MODEL));
+		AMap<AString, ACell> profile = (byModel != null) ? RT.ensureMap(byModel.get(modelId)) : null;
+		return (profile != null) ? profile : Maps.empty();
+	}
+
+	@SuppressWarnings("unchecked")
+	private static AMap<AString, ACell> layerModelProfile(AMap<AString, ACell> base,
+			AMap<AString, ACell> override) {
+		AMap<AString, ACell> result = base;
+		for (var entry : override.entrySet()) {
+			ACell under = result.get(entry.getKey());
+			ACell value = entry.getValue();
+			if (under instanceof AMap && value instanceof AMap) {
+				AMap<AString, ACell> merged = (AMap<AString, ACell>) under;
+				for (var inner : ((AMap<AString, ACell>) value).entrySet()) {
+					merged = merged.assoc(inner.getKey(), inner.getValue());
+				}
+				value = merged;
+			}
+			result = result.assoc(entry.getKey(), value);
+		}
+		return result;
+	}
+
+	private static AString modelPath(AString provider, AString id) {
+		return Strings.create("v/models/" + provider + "/" + id);
+	}
+
+	private static AMap<AString, ACell> modelPaths(AString provider, AMap<AString, ACell> ids) {
+		AMap<AString, ACell> paths = Maps.empty();
+		if (ids == null) return paths;
+		for (var entry : ids.entrySet()) {
+			AString id = RT.ensureString(entry.getValue());
+			if (id != null) paths = paths.assoc(entry.getKey(), modelPath(provider, id));
+		}
+		return paths;
 	}
 
 	@Override
@@ -188,7 +316,15 @@ public class LangChainAdapter extends AAdapter {
 			AString modelParam = RT.ensureString(RT.getIn(input, "model"));
 			modelName = (modelParam != null) ? modelParam.toString() : null;
 		}
-		final String finalModelName = modelName;
+		final AbstractLLMAdapter.ResolvedModel resolvedModel;
+		try {
+			resolvedModel = AbstractLLMAdapter.resolveModel(engine, Asset.fromMeta(meta),
+				(modelName != null) ? Strings.create(modelName) : null, null, ctx);
+		} catch (RuntimeException e) {
+			return CompletableFuture.completedFuture(Status.failure("Cannot resolve model: " + e.getMessage()));
+		}
+		final String finalModelName = (resolvedModel.modelId() != null)
+			? resolvedModel.modelId().toString() : null;
 
 		// Resolve API key
 		final String apiKey = resolveApiKey(meta, input, ctx);
@@ -208,6 +344,10 @@ public class LangChainAdapter extends AAdapter {
 				Status.failure("API key not found for provider '" + provider + "' at " + hint)
 			);
 		}
+		if (finalModelName == null || finalModelName.isBlank()) {
+			return CompletableFuture.completedFuture(
+				Status.failure("Model not specified for provider '" + provider + "'"));
+		}
 
 		// Optional sampling/bounds parameters (#218): temperature and topP pass
 		// through to every provider; maxTokens (covia#198) is honoured by the
@@ -221,13 +361,9 @@ public class LangChainAdapter extends AAdapter {
 		final String ollamaUrl = "ollama".equals(provider) ? resolveOllamaUrl(urlParam) : null;
 		final AString effectiveUrl = (ollamaUrl != null) ? Strings.create(ollamaUrl) : urlParam;
 
-		// Build the ChatModel
-		// buildProviderModel() applies its own defaultModelFor(provider) fallback
-		// internally when finalModelName is null (e.g. the frontend's "Venue
-		// default" option omits "model" entirely) — that resolved name is local
-		// to that method, so it's recomputed here for callers downstream (like
-		// callModel's reasoning-model check) that need the model actually in use.
-		final String resolvedModelName = (finalModelName != null) ? finalModelName : defaultModelFor(provider);
+		// Build the ChatModel. The selected operation's data has already supplied
+		// any default, with caller input winning.
+		final String resolvedModelName = finalModelName;
 		final ChatModel chatModel = buildProviderModel(provider, finalModelName, apiKey, effectiveUrl, tuning);
 		if (chatModel == null) {
 			return CompletableFuture.completedFuture(
@@ -265,11 +401,10 @@ public class LangChainAdapter extends AAdapter {
 		// The same copy applies the role rule for the declared provider
 		// (AGENT_CONTEXT.md §3.5): a system message after the conversation has
 		// begun must not be hoisted into the cached head.
-		final AString modelId = (resolvedModelName != null) ? Strings.create(resolvedModelName) : null;
 		final AVector<ACell> providerMessages = normaliseSystemMessages(
 			serialiseToolResultsForProvider(messages),
-			AbstractLLMAdapter.modelOptionText(meta, modelId, OPT_SYSTEM_MESSAGES),
-			AbstractLLMAdapter.labelDialect(meta, modelId));
+			AbstractLLMAdapter.modelOptionText(resolvedModel.executionProfile(), OPT_SYSTEM_MESSAGES),
+			AbstractLLMAdapter.labelDialect(resolvedModel.executionProfile()));
 		final Set<Long> cacheMarks = cacheMarksOf(input, tuning);
 
 		// Response format: "json", "text", or {name, schema} map
@@ -458,40 +593,32 @@ public class LangChainAdapter extends AAdapter {
 	private ChatModel buildProviderModel(String provider, String modelName, String apiKey, AString urlParam, ModelTuning tuning) {
 		if ("ollama".equals(provider)) {
 			String baseUrl = (urlParam != null) ? urlParam.toString() : "http://localhost:11434";
-			String model = (modelName != null) ? modelName : "qwen";
-			return buildOllamaModel(baseUrl, model, IO_TIMEOUT, tuning);
+			return buildOllamaModel(baseUrl, modelName, IO_TIMEOUT, tuning);
 		} else if ("openai".equals(provider)) {
 			String baseUrl = (urlParam != null) ? urlParam.toString() : "https://api.openai.com/v1";
-			String model = (modelName != null) ? modelName : defaultModelFor(provider);
-			return buildOpenAiModel(apiKey, baseUrl, model, IO_TIMEOUT, tuning);
+			return buildOpenAiModel(apiKey, baseUrl, modelName, IO_TIMEOUT, tuning);
 		} else if ("anthropic".equals(provider)) {
 			String baseUrl = (urlParam != null) ? urlParam.toString() : "https://api.anthropic.com/v1/";
-			String model = (modelName != null) ? modelName : defaultModelFor(provider);
-			return buildAnthropicModel(apiKey, baseUrl, model, IO_TIMEOUT, tuning);
+			return buildAnthropicModel(apiKey, baseUrl, modelName, IO_TIMEOUT, tuning);
 		} else if ("gemini".equals(provider)) {
 			String baseUrl = (urlParam != null) ? urlParam.toString() : "https://generativelanguage.googleapis.com/v1beta/openai/";
-			String model = (modelName != null) ? modelName : defaultModelFor(provider);
-			return buildOpenAiModel(apiKey, baseUrl, model, IO_TIMEOUT, tuning);
+			return buildOpenAiModel(apiKey, baseUrl, modelName, IO_TIMEOUT, tuning);
 		} else if ("xai".equals(provider)) {
 			String baseUrl = (urlParam != null) ? urlParam.toString() : "https://api.x.ai/v1";
-			String model = (modelName != null) ? modelName : defaultModelFor(provider);
-			return buildOpenAiModel(apiKey, baseUrl, model, IO_TIMEOUT, tuning);
+			return buildOpenAiModel(apiKey, baseUrl, modelName, IO_TIMEOUT, tuning);
 		} else if ("deepseek".equals(provider)) {
 			String baseUrl = (urlParam != null) ? urlParam.toString() : "https://api.deepseek.com/v1";
-			String model = (modelName != null) ? modelName : defaultModelFor(provider);
-			return buildOpenAiModel(apiKey, baseUrl, model, IO_TIMEOUT, tuning);
+			return buildOpenAiModel(apiKey, baseUrl, modelName, IO_TIMEOUT, tuning);
 		} else if ("mistral".equals(provider)) {
 			// Mistral's API is OpenAI-compatible (chat completions, tools, JSON mode).
 			String baseUrl = (urlParam != null) ? urlParam.toString() : "https://api.mistral.ai/v1";
-			String model = (modelName != null) ? modelName : defaultModelFor(provider);
-			return buildOpenAiModel(apiKey, baseUrl, model, IO_TIMEOUT, tuning);
+			return buildOpenAiModel(apiKey, baseUrl, modelName, IO_TIMEOUT, tuning);
 		} else if ("openrouter".equals(provider)) {
 			// OpenRouter fronts many vendors behind one OpenAI-compatible endpoint;
 			// model ids are vendor-prefixed (anthropic/…, openai/…) and
 			// openrouter/auto lets the router choose.
 			String baseUrl = (urlParam != null) ? urlParam.toString() : "https://openrouter.ai/api/v1";
-			String model = (modelName != null) ? modelName : defaultModelFor(provider);
-			return buildOpenAiModel(apiKey, baseUrl, model, IO_TIMEOUT, tuning);
+			return buildOpenAiModel(apiKey, baseUrl, modelName, IO_TIMEOUT, tuning);
 		}
 		return null;
 	}
@@ -563,157 +690,168 @@ public class LangChainAdapter extends AAdapter {
 
 	// ========== Provider/model discovery (langchain:models) ==========
 
-	/** One source for hosted-provider discovery, runtime defaults and usage
-	 *  recommendations. Model IDs are supported production choices current at
-	 *  release time; venue config may replace the advertised list. */
-	private record HostedProvider(String name, String keySecret, String defaultModel,
-			AVector<ACell> models, AMap<AString, ACell> recommendations) {}
-
-	private static AVector<ACell> modelList(String... names) {
-		AVector<ACell> out = Vectors.empty();
-		for (String name : names) out = out.conj(Strings.intern(name));
-		return out;
-	}
-
-	private static AMap<AString, ACell> recommendations(String... pairs) {
-		AMap<AString, ACell> out = Maps.empty();
-		for (int i = 0; i < pairs.length; i += 2) {
-			out = out.assoc(Strings.intern(pairs[i]), Strings.intern(pairs[i + 1]));
-		}
-		return out;
-	}
-
-	private static final HostedProvider[] HOSTED_PROVIDERS = {
-		new HostedProvider("openai", "OPENAI_API_KEY", "gpt-5.6-terra",
-			modelList("gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.6-luna",
-				"gpt-5.4-mini", "gpt-5.4-nano"),
-			recommendations("balanced", "gpt-5.6-terra", "quality", "gpt-5.6-sol",
-				"highVolume", "gpt-5.6-luna", "coding", "gpt-5.4-mini",
-				"economical", "gpt-5.4-nano")),
-		new HostedProvider("anthropic", "ANTHROPIC_API_KEY", "claude-sonnet-5",
-			modelList("claude-sonnet-5", "claude-opus-5", "claude-fable-5",
-				"claude-haiku-4-5-20251001"),
-			recommendations("balanced", "claude-sonnet-5", "quality", "claude-opus-5",
-				"longRunning", "claude-fable-5", "economical", "claude-haiku-4-5-20251001")),
-		new HostedProvider("gemini", "GOOGLE_API_KEY", "gemini-3.6-flash",
-			modelList("gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"),
-			recommendations("balanced", "gemini-3.6-flash", "quality", "gemini-3.6-flash",
-				"coding", "gemini-3.5-flash", "economical", "gemini-3.5-flash-lite")),
-		new HostedProvider("deepseek", "DEEPSEEK_API_KEY", "deepseek-v4-flash",
-			modelList("deepseek-v4-flash", "deepseek-v4-pro"),
-			recommendations("balanced", "deepseek-v4-flash", "economical", "deepseek-v4-flash",
-				"quality", "deepseek-v4-pro")),
-		new HostedProvider("xai", "XAI_API_KEY", "grok-4.3",
-			modelList("grok-4.3", "grok-4.5", "grok-build-0.1"),
-			recommendations("balanced", "grok-4.3", "quality", "grok-4.5",
-				"coding", "grok-build-0.1")),
-		// Mistral publishes stable "-latest" aliases per family; they track the
-		// current release without a rename here.
-		new HostedProvider("mistral", "MISTRAL_API_KEY", "mistral-medium-latest",
-			modelList("mistral-medium-latest", "mistral-large-latest", "mistral-small-latest",
-				"magistral-medium-latest", "codestral-latest", "ministral-8b-latest"),
-			recommendations("balanced", "mistral-medium-latest", "quality", "mistral-large-latest",
-				"economical", "mistral-small-latest", "coding", "codestral-latest",
-				"reasoning", "magistral-medium-latest")),
-		// OpenRouter: any of its vendor-prefixed model ids works; the list is a
-		// starting point and openrouter/auto delegates the choice to the router.
-		new HostedProvider("openrouter", "OPENROUTER_API_KEY", "openrouter/auto",
-			modelList("openrouter/auto", "anthropic/claude-sonnet-5", "openai/gpt-5.4-mini",
-				"google/gemini-3.5-flash", "deepseek/deepseek-v4-flash", "mistralai/mistral-medium-latest"),
-			recommendations("balanced", "openrouter/auto", "quality", "anthropic/claude-sonnet-5",
-				"economical", "google/gemini-3.5-flash")),
-	};
-
-	private static HostedProvider hostedProvider(String provider) {
-		for (HostedProvider spec : HOSTED_PROVIDERS) {
-			if (spec.name().equals(provider)) return spec;
-		}
-		return null;
-	}
-
-	static String defaultModelFor(String provider) {
-		HostedProvider spec = hostedProvider(provider);
-		return (spec != null) ? spec.defaultModel() : null;
-	}
-
 	/**
-	 * {@code langchain:models} — provider/model discovery with
-	 * <b>caller-relative</b> readiness. A hosted provider is {@code ready}
-	 * when the CALLER's secret store resolves its conventional key name (the
-	 * value is discarded and never surfaced); ollama is {@code ready} when
-	 * its resolved base URL responds, and its {@code models} list is the
-	 * server's live installed set. Readiness cannot be venue-static: secrets
-	 * are per-user, so the same venue answers differently per caller.
+	 * {@code langchain:models} is a view over {@code v/models/}. The catalog is
+	 * authoritative; this method only adds caller-relative readiness and the
+	 * live set reported by Ollama.
 	 */
 	private ACell handleModels(RequestContext ctx, ACell input) {
 		AString filter = RT.ensureString(RT.getIn(input, "provider"));
-		AMap<AString, ACell> adapterCfg = (engine != null)
-			? engine.adapterConfig("langchain") : null;
-
 		AVector<ACell> providers = Vectors.empty();
-		for (HostedProvider hp : HOSTED_PROVIDERS) {
-			if (filter != null && !filter.toString().equals(hp.name())) continue;
-			boolean ready = false;
+		for (Map.Entry<String, List<ModelDefinition>> group : catalogModels(ctx).entrySet()) {
+			String providerName = group.getKey();
+			if (filter != null && !filter.toString().equals(providerName)) continue;
+			providers = providers.conj(providerEntry(providerName, group.getValue(), ctx));
+		}
+		return Maps.of(K_PROVIDERS, providers);
+	}
+
+	private static final class ModelDefinition {
+		final AMap<AString, ACell> meta;
+		final List<String> paths = new ArrayList<>();
+		ModelDefinition(AMap<AString, ACell> meta, String path) {
+			this.meta = meta;
+			this.paths.add(path);
+		}
+	}
+
+	private Map<String, List<ModelDefinition>> catalogModels(RequestContext ctx) {
+		AMap<AString, ACell> root = RT.ensureMap(engine.resolvePath(Strings.create("v/models"), ctx));
+		Map<String, LinkedHashMap<Hash, ModelDefinition>> grouped = new LinkedHashMap<>();
+		if (root != null) collectModels(root, "", grouped);
+		Map<String, List<ModelDefinition>> result = new LinkedHashMap<>();
+		for (var entry : grouped.entrySet()) {
+			List<ModelDefinition> definitions = new ArrayList<>(entry.getValue().values());
+			for (ModelDefinition definition : definitions) definition.paths.sort(String::compareTo);
+			definitions.sort((a, b) -> a.paths.get(0).compareTo(b.paths.get(0)));
+			result.put(entry.getKey(), definitions);
+		}
+		return result;
+	}
+
+	@SuppressWarnings("unchecked")
+	private static void collectModels(AMap<AString, ACell> node, String relative,
+			Map<String, LinkedHashMap<Hash, ModelDefinition>> grouped) {
+		if (node.get(Fields.OPERATION) != null) {
+			int slash = relative.indexOf('/');
+			if (slash <= 0) return;
+			String provider = relative.substring(0, slash);
+			String path = "v/models/" + relative;
+			Hash hash = Asset.fromMeta(node).getID();
+			ModelDefinition definition = grouped
+				.computeIfAbsent(provider, ignored -> new LinkedHashMap<>())
+				.get(hash);
+			if (definition == null) {
+				definition = new ModelDefinition(node, path);
+				grouped.get(provider).put(hash, definition);
+			} else {
+				definition.paths.add(path);
+			}
+			return;
+		}
+		for (var entry : node.entrySet()) {
+			if (!(entry.getValue() instanceof AMap)) continue;
+			String next = relative.isEmpty() ? entry.getKey().toString()
+				: relative + "/" + entry.getKey();
+			collectModels((AMap<AString, ACell>) entry.getValue(), next, grouped);
+		}
+	}
+
+	private AMap<AString, ACell> providerEntry(String providerName,
+			List<ModelDefinition> definitions, RequestContext ctx) {
+		AMap<AString, ACell> firstFacet = AbstractLLMAdapter.modelFacet(definitions.get(0).meta);
+		AString providerRef = RT.ensureString(firstFacet.get(AbstractLLMAdapter.K_MODEL_PROVIDER));
+		Asset provider = (providerRef != null) ? engine.resolveAsset(providerRef, ctx) : null;
+		AMap<AString, ACell> providerMeta = (provider != null) ? provider.meta() : definitions.get(0).meta;
+		AMap<AString, ACell> providerFacet = AbstractLLMAdapter.modelFacet(providerMeta);
+
+		AVector<ACell> ids = Vectors.empty();
+		AVector<ACell> entries = Vectors.empty();
+		for (ModelDefinition definition : definitions) {
+			AMap<AString, ACell> facet = AbstractLLMAdapter.modelFacet(definition.meta);
+			AString id = RT.ensureString(facet.get(AbstractLLMAdapter.K_MODEL_ID));
+			if (id == null) continue;
+			String canonical = "v/models/" + providerName + "/" + id;
+			String primary = definition.paths.contains(canonical) ? canonical : definition.paths.get(0);
+			ids = ids.conj(id);
+			AMap<AString, ACell> item = Maps.of(
+				Fields.OP, Strings.create(primary),
+				Fields.ID, id,
+				Fields.NAME, definition.meta.get(Fields.NAME));
+			ACell tags = facet.get(K_TAGS);
+			if (tags != null) item = item.assoc(K_TAGS, tags);
 			try {
-				// Presence check only — the value is never returned.
-				ready = preferStoredSecret(
-					engine.resolveSecret(hp.keySecret(), ctx), System.getenv(hp.keySecret())) != null;
-			} catch (Exception e) {
-				// No store / anonymous caller → not ready.
+				AMap<AString, ACell> profile = AbstractLLMAdapter.resolveModel(engine,
+					Asset.fromMeta(definition.meta), null, null, ctx).executionProfile();
+				ACell options = profile.get(AbstractLLMAdapter.K_OPTIONS);
+				ACell budget = profile.get(AbstractLLMAdapter.K_BUDGET);
+				if (options != null) item = item.assoc(AbstractLLMAdapter.K_OPTIONS, options);
+				if (budget != null) item = item.assoc(AbstractLLMAdapter.K_BUDGET, budget);
+			} catch (RuntimeException e) {
+				// The definition remains discoverable even if its provider is broken.
 			}
-			String opPath = "v/ops/langchain/" + hp.name();
-			AMap<AString, ACell> entry = Maps.of(
-				Strings.intern("op"), Strings.create(opPath),
-				Strings.intern("provider"), Strings.intern(hp.name()),
-				Strings.intern("keySecret"), Strings.intern(hp.keySecret()),
-				Strings.intern("ready"), ready ? CVMBool.TRUE : CVMBool.FALSE,
-				Strings.intern("defaultModel"), Strings.intern(hp.defaultModel()),
-				Strings.intern("models"), modelsFor(hp.name(), adapterCfg),
-				Strings.intern("recommendations"), hp.recommendations());
-			// The provider's declared model facet — rendering hints and context
-			// budget — verbatim, so a caller sees how a prompt must be shaped and
-			// sized for it without branching on its name.
-			AMap<AString, ACell> facet = declaredModelFacet(ctx, opPath);
-			if (!facet.isEmpty()) {
-				entry = entry.assoc(AbstractLLMAdapter.K_MODEL_FACET, facet);
+			if (definition.paths.size() > 1) {
+				AVector<ACell> aliases = Vectors.empty();
+				for (String path : definition.paths) if (!path.equals(primary)) aliases = aliases.conj(Strings.create(path));
+				item = item.assoc(Strings.intern("aliases"), aliases);
 			}
-			providers = providers.conj(entry);
+			entries = entries.conj(item);
 		}
 
-		if (filter == null || "ollama".equals(filter.toString())) {
-			providers = providers.conj(ollamaEntry(adapterCfg));
+		AString defaultPath = RT.ensureString(providerFacet.get(Fields.DEFAULT));
+		AMap<AString, ACell> recommended = RT.ensureMap(providerFacet.get(K_RECOMMENDED));
+		AString keySecret = RT.ensureString(RT.getIn(providerMeta, Fields.OPERATION, "secretKey"));
+		boolean ready = keySecret == null;
+		if (keySecret != null) {
+			try {
+				ready = preferStoredSecret(engine.resolveSecret(keySecret.toString(), ctx),
+					System.getenv(keySecret.toString())) != null;
+			} catch (RuntimeException e) {
+				ready = false;
+			}
 		}
-		return Maps.of(Strings.intern("providers"), providers);
-	}
 
-	/**
-	 * The {@code model} facet declared on a provider's operation asset
-	 * (AGENT_CONTEXT.md §2, goal 5). Never throws: discovery must answer even
-	 * when one asset is missing or unreadable.
-	 */
-	private AMap<AString, ACell> declaredModelFacet(RequestContext ctx, String opPath) {
-		try {
-			covia.grid.Asset asset = engine.resolveAsset(Strings.create(opPath), ctx);
-			return (asset != null)
-				? AbstractLLMAdapter.modelFacet(asset.meta()) : Maps.empty();
-		} catch (RuntimeException e) {
-			return Maps.empty();
+		AMap<AString, ACell> entry = Maps.of(
+			Fields.OP, (providerRef != null) ? providerRef : Strings.create("v/ops/langchain/" + providerName),
+			K_PROVIDER, Strings.create(providerName),
+			Strings.intern("ready"), CVMBool.create(ready),
+			K_MODELS, ids,
+			Strings.intern("entries"), entries,
+			AbstractLLMAdapter.K_MODEL_FACET, providerFacet);
+		if (keySecret != null) entry = entry.assoc(Strings.intern("keySecret"), keySecret);
+		if (defaultPath != null) {
+			entry = entry.assoc(Fields.DEFAULT, defaultPath)
+				.assoc(Strings.intern("defaultModel"), modelIdFromPath(providerName, defaultPath));
 		}
+		if (recommended != null) {
+			entry = entry.assoc(K_RECOMMENDED, recommended)
+				.assoc(Strings.intern("recommendations"), modelIdsFromPaths(providerName, recommended));
+		}
+		AString adapter = RT.ensureString(RT.getIn(providerMeta, Fields.OPERATION, "adapter"));
+		if (adapter != null && "langchain:ollama".equals(adapter.toString())) {
+			for (var status : ollamaStatus().entrySet()) entry = entry.assoc(status.getKey(), status.getValue());
+		}
+		return entry;
 	}
 
-	/** Model hints for a provider: venue config override
-	 *  ({@code adapters.langchain.models.<provider>}) wins, else the
-	 *  conservative built-ins, else empty. */
-	static AVector<ACell> modelsFor(String provider, AMap<AString, ACell> adapterConfig) {
-		AVector<ACell> configured = RT.ensureVector(RT.getIn(adapterConfig, "models", provider));
-		if (configured != null) return configured;
-		HostedProvider spec = hostedProvider(provider);
-		return (spec != null) ? spec.models() : Vectors.empty();
+	private static AString modelIdFromPath(String provider, AString path) {
+		String prefix = "v/models/" + provider + "/";
+		String value = path.toString();
+		return Strings.create(value.startsWith(prefix) ? value.substring(prefix.length()) : value);
 	}
 
-	/** Live ollama entry: reachability of the resolved base URL (#224 chain)
-	 *  and the server's installed models via {@code /api/tags}. */
-	private AMap<AString, ACell> ollamaEntry(AMap<AString, ACell> adapterCfg) {
+	private static AMap<AString, ACell> modelIdsFromPaths(String provider, AMap<AString, ACell> paths) {
+		AMap<AString, ACell> ids = Maps.empty();
+		for (var entry : paths.entrySet()) {
+			AString path = RT.ensureString(entry.getValue());
+			if (path != null) ids = ids.assoc(entry.getKey(), modelIdFromPath(provider, path));
+		}
+		return ids;
+	}
+
+	/** Live Ollama reachability and installed models; catalog definitions stay authoritative. */
+	private AMap<AString, ACell> ollamaStatus() {
+		AMap<AString, ACell> adapterCfg = engine.adapterConfig("langchain");
 		String url = resolveOllamaUrl(null, adapterCfg, System.getenv("OLLAMA_BASE_URL"));
 		AVector<ACell> models = Vectors.empty();
 		boolean ready = false;
@@ -743,12 +881,9 @@ public class LangChainAdapter extends AAdapter {
 			note = "unreachable at " + url + " — venue knob: adapters.langchain.ollamaUrl";
 		}
 		AMap<AString, ACell> entry = Maps.of(
-			Strings.intern("op"), Strings.intern("v/ops/langchain/ollama"),
-			Strings.intern("provider"), Strings.intern("ollama"),
 			Strings.intern("url"), Strings.create(url),
 			Strings.intern("ready"), ready ? CVMBool.TRUE : CVMBool.FALSE,
-			Strings.intern("defaultModel"), Strings.intern("qwen"),
-			Strings.intern("models"), models);
+			Strings.intern("installedModels"), models);
 		if (note != null) entry = entry.assoc(Strings.intern("note"), Strings.create(note));
 		return entry;
 	}

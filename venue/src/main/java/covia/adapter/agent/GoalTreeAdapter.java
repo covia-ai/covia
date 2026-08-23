@@ -307,6 +307,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 				(ACell) typedCompleteTool(completeSchema),
 				(ACell) typedFailTool(failSchema));
 		}
+		l3Config = effectiveModelConfig(l3Config, ctx);
 
 		// Same scope-chain view as processGoal (agent + session tiers, plus the
 		// root frame's tier when a session carries frames), so the inspected
@@ -561,6 +562,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 				Strings.create("schema"), activeSchema);
 			l3Config = config.assoc(K_RESPONSE_FORMAT, responseFormat);
 		}
+		l3Config = effectiveModelConfig(l3Config, ctx);
 
 		// Build typed harness tools (complete/fail) when typed outputs are active.
 		// Use the active schema (per-request override or agent default).

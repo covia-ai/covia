@@ -203,6 +203,11 @@ public class AgentAdapterTest {
 			"no-config agent should discover workspace and venue skills");
 		assertNull(config.get(Strings.intern("model")),
 			"venue/provider should choose the default model");
+		AMap<AString, ACell> context = RT.ensureMap(engine.jobs().invokeOperation(
+			"v/ops/agent/context", Maps.of(Fields.AGENT_ID, "my-assistant"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000));
+		assertEquals(Strings.create("claude-sonnet-5"), context.get(Strings.intern("model")),
+			"inspection should expose the effective model supplied by the model operation");
 	}
 
 	@Test

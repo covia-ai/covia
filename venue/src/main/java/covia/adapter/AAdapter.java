@@ -292,6 +292,38 @@ public abstract class AAdapter {
 	}
 
 	/**
+	 * Installs constructed model-operation metadata under
+	 * {@code /v/models/<provider>/<model-id>}.
+	 *
+	 * <p>The provider segment uses the ordinary catalog grammar. Model-id
+	 * segments additionally allow the punctuation commonly used by model
+	 * vendors ({@code . _ : + @ -}) and may be nested, as in
+	 * {@code openrouter/anthropic/claude-sonnet-5}. A model path may not be a
+	 * prefix of another model path because lattice nodes cannot be both an asset
+	 * and a directory.</p>
+	 *
+	 * @param catalogPath provider and model id below {@code v/models/}
+	 * @param metadata complete invocable operation metadata for the model
+	 * @return the installed asset hash
+	 */
+	protected Hash installModel(String catalogPath, AMap<AString, ACell> metadata) {
+		if (!isValidModelCatalogPath(catalogPath)) {
+			throw new IllegalArgumentException("Invalid model catalog path: " + catalogPath);
+		}
+		String path = "v/models/" + catalogPath;
+		for (String existing : pendingCatalogEntries.keySet()) {
+			if (!existing.startsWith("v/models/")) continue;
+			if (existing.equals(path) || existing.startsWith(path + "/") || path.startsWith(existing + "/")) {
+				throw new IllegalArgumentException("Conflicting model catalog paths: "
+					+ existing.substring("v/models/".length()) + " and " + catalogPath);
+			}
+		}
+		Hash hash = installAsset(metadata);
+		if (hash != null) declare("v/models/", catalogPath, hash);
+		return hash;
+	}
+
+	/**
 	 * Shared implementation: store the asset, validate the catalog path, and
 	 * defer the materialisation write until {@link covia.venue.Engine#materialiseVOps}.
 	 */
@@ -418,10 +450,23 @@ public abstract class AAdapter {
 	 */
 	private static boolean isValidCatalogPath(String catalogPath) {
 		if (catalogPath == null || catalogPath.isEmpty()) return false;
-		String[] segments = catalogPath.split("/");
+		String[] segments = catalogPath.split("/", -1);
 		for (String seg : segments) {
 			if (seg.isEmpty() || ".".equals(seg) || "..".equals(seg)) return false;
 			if (!seg.matches("^[a-z][a-z0-9-]*$")) return false;
+		}
+		return true;
+	}
+
+	/** Model paths are {@code <provider>/<vendor-model-id>}. */
+	private static boolean isValidModelCatalogPath(String catalogPath) {
+		if (catalogPath == null || catalogPath.isEmpty()) return false;
+		String[] segments = catalogPath.split("/", -1);
+		if (segments.length < 2 || !segments[0].matches("^[a-z][a-z0-9-]*$")) return false;
+		for (int i = 1; i < segments.length; i++) {
+			String seg = segments[i];
+			if (seg.isEmpty() || ".".equals(seg) || "..".equals(seg)) return false;
+			if (!seg.matches("^[A-Za-z0-9][A-Za-z0-9._:+@-]*$")) return false;
 		}
 		return true;
 	}

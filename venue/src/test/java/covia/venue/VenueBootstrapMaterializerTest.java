@@ -14,7 +14,9 @@ import org.junit.jupiter.api.Test;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.Maps;
 import convex.core.data.Strings;
+import covia.api.Fields;
 import covia.adapter.AAdapter;
 
 /** Tests native, Job-free publication of venue-owned bootstrap state. */
@@ -32,6 +34,10 @@ public class VenueBootstrapMaterializerTest {
 				"catalog and v/info materialisation must not create bootstrap Jobs");
 			assertNotNull(engine.resolvePath(
 				Strings.create("v/ops/covia/write"), engine.venueContext()));
+			assertNotNull(engine.resolvePath(
+				Strings.create("v/models/anthropic/claude-sonnet-5"), engine.venueContext()));
+			assertNotNull(engine.resolvePath(Strings.create(
+				"v/adapters/langchain/models/anthropic/claude-sonnet-5"), engine.venueContext()));
 			assertEquals(engine.getDIDString(), engine.resolvePath(
 				Strings.create("v/info/did"), engine.venueContext()));
 		} finally {
@@ -98,8 +104,39 @@ public class VenueBootstrapMaterializerTest {
 		}
 	}
 
+	@Test
+	public void modelLeafCannotAlsoBecomeNamespaceAcrossAdapters() {
+		Engine engine = Engine.createTemp(null);
+		try {
+			engine.registerAdapter(new ModelCatalogAdapter("model-leaf", "shared/foo"));
+			engine.registerAdapter(new ModelCatalogAdapter("model-child", "shared/foo/bar"));
+			IllegalStateException failure = assertThrows(IllegalStateException.class,
+				engine::materialiseBootstrapState);
+			assertTrue(failure.getMessage().contains("existing leaf"), failure.getMessage());
+		} finally {
+			engine.close();
+		}
+	}
+
 	private static long venueJobCount(Engine engine) {
 		return engine.jobs().getJobs(engine.venueContext()).count();
+	}
+
+	private static final class ModelCatalogAdapter extends AAdapter {
+		private final String name;
+		private final String path;
+		ModelCatalogAdapter(String name, String path) { this.name = name; this.path = path; }
+		@Override public String getName() { return name; }
+		@Override public String getDescription() { return "Model catalog collision test"; }
+		@Override protected void installAssets() {
+			installModel(path, Maps.of(
+				Fields.NAME, Strings.create(path),
+				Fields.OPERATION, Maps.of("adapter", "test:echo")));
+		}
+		@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx,
+				AMap<AString, ACell> meta, ACell input) {
+			return CompletableFuture.completedFuture(input);
+		}
 	}
 
 	private static final class CatalogCollisionAdapter extends AAdapter {

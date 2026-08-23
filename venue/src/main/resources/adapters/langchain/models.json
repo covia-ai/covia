@@ -1,6 +1,6 @@
 {
 	"name": "LLM Models",
-	"description": "Discover LLM providers and current model choices on this venue, with CALLER-RELATIVE readiness. Returns {providers: [{op, provider, keySecret?, ready, defaultModel, models, recommendations?, url?, note?}]}. Hosted readiness means YOUR secret store or the venue environment supplies the conventional key (never returned); Ollama readiness is live reachability. Hosted lists are supported release-time selections, replaceable via adapters.langchain.models.<provider>.",
+	"description": "Discover model operations from v/models/, grouped by serving provider, with CALLER-RELATIVE readiness. Returns provider defaults and recommendations as catalog paths, compatible model-id lists, and detailed operation entries. Hosted readiness means YOUR secret store or the venue environment supplies the conventional key (never returned); Ollama readiness is live reachability.",
 	"dateCreated": "2026-07-17T00:00:00Z",
 	"operation": {
 		"adapter": "langchain:models",
@@ -8,11 +8,11 @@
 		"input": {
 			"type": "object",
 			"properties": {
-				"provider": { "type": "string", "description": "Optional filter: openai | anthropic | gemini | deepseek | xai | ollama" }
+				"provider": { "type": "string", "description": "Optional serving-profile filter, such as openai, anthropic, gemini, deepseek, xai, mistral, openrouter or ollama" }
 			}
 		},
 		"output": {
-			"description": "{providers: [{op, provider, keySecret?, ready, defaultModel, models, recommendations?, url?, note?}]} — choose a ready provider and a model suited to the workload; configure agents with llmOperation = op and model = the selected id."
+			"description": "{providers: [{op, provider, keySecret?, ready, default, recommended?, defaultModel, recommendations?, models:[id], entries:[{op,id,name,tags?,budget?,options?,aliases?}], installedModels?, url?, note?}]} — prefer configuring llmOperation to an entry op; caller model/url/apiKey values remain ordinary overrides."
 		}
 	}
 }

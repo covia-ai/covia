@@ -1,0 +1,132 @@
+{
+	"providers": [
+		{
+			"name": "openai",
+			"resource": "/adapters/langchain/openai.json",
+			"default": "gpt-5.6-terra",
+			"recommended": {
+				"balanced": "gpt-5.6-terra",
+				"quality": "gpt-5.6-sol",
+				"highVolume": "gpt-5.6-luna",
+				"coding": "gpt-5.4-mini",
+				"economical": "gpt-5.4-nano"
+			},
+			"models": [
+				{"id": "gpt-5.6-terra", "tags": ["balanced"]},
+				{"id": "gpt-5.6-sol", "tags": ["quality"]},
+				{"id": "gpt-5.6-luna", "tags": ["high-volume"]},
+				{"id": "gpt-5.4-mini", "tags": ["coding"]},
+				{"id": "gpt-5.4-nano", "tags": ["economical"]}
+			]
+		},
+		{
+			"name": "anthropic",
+			"resource": "/adapters/langchain/anthropic.json",
+			"default": "claude-sonnet-5",
+			"recommended": {
+				"balanced": "claude-sonnet-5",
+				"quality": "claude-opus-5",
+				"longRunning": "claude-fable-5",
+				"economical": "claude-haiku-4-5-20251001"
+			},
+			"models": [
+				{"id": "claude-sonnet-5", "tags": ["balanced"]},
+				{"id": "claude-opus-5", "tags": ["quality"]},
+				{"id": "claude-fable-5", "tags": ["long-running"]},
+				{"id": "claude-haiku-4-5-20251001", "tags": ["economical"]}
+			]
+		},
+		{
+			"name": "gemini",
+			"resource": "/adapters/langchain/gemini.json",
+			"default": "gemini-3.6-flash",
+			"recommended": {
+				"balanced": "gemini-3.6-flash",
+				"quality": "gemini-3.6-flash",
+				"coding": "gemini-3.5-flash",
+				"economical": "gemini-3.5-flash-lite"
+			},
+			"models": [
+				{"id": "gemini-3.6-flash", "tags": ["balanced", "quality"]},
+				{"id": "gemini-3.5-flash", "tags": ["coding"]},
+				{"id": "gemini-3.5-flash-lite", "tags": ["economical"]}
+			]
+		},
+		{
+			"name": "deepseek",
+			"resource": "/adapters/langchain/deepseek.json",
+			"default": "deepseek-v4-flash",
+			"recommended": {
+				"balanced": "deepseek-v4-flash",
+				"economical": "deepseek-v4-flash",
+				"quality": "deepseek-v4-pro"
+			},
+			"models": [
+				{"id": "deepseek-v4-flash", "tags": ["balanced", "economical"]},
+				{"id": "deepseek-v4-pro", "tags": ["quality"]}
+			]
+		},
+		{
+			"name": "xai",
+			"resource": "/adapters/langchain/xai.json",
+			"default": "grok-4.3",
+			"recommended": {
+				"balanced": "grok-4.3",
+				"quality": "grok-4.5",
+				"coding": "grok-build-0.1"
+			},
+			"models": [
+				{"id": "grok-4.3", "tags": ["balanced"]},
+				{"id": "grok-4.5", "tags": ["quality"]},
+				{"id": "grok-build-0.1", "tags": ["coding"]}
+			]
+		},
+		{
+			"name": "mistral",
+			"resource": "/adapters/langchain/mistral.json",
+			"default": "mistral-medium-latest",
+			"recommended": {
+				"balanced": "mistral-medium-latest",
+				"quality": "mistral-large-latest",
+				"economical": "mistral-small-latest",
+				"coding": "codestral-latest",
+				"reasoning": "magistral-medium-latest"
+			},
+			"models": [
+				{"id": "mistral-medium-latest", "tags": ["balanced"]},
+				{"id": "mistral-large-latest", "tags": ["quality"]},
+				{"id": "mistral-small-latest", "tags": ["economical"]},
+				{"id": "magistral-medium-latest", "tags": ["reasoning"]},
+				{"id": "codestral-latest", "tags": ["coding"]},
+				{"id": "ministral-8b-latest", "tags": ["small"]}
+			]
+		},
+		{
+			"name": "openrouter",
+			"resource": "/adapters/langchain/openrouter.json",
+			"default": "openrouter/auto",
+			"recommended": {
+				"balanced": "openrouter/auto",
+				"quality": "anthropic/claude-sonnet-5",
+				"economical": "google/gemini-3.5-flash"
+			},
+			"models": [
+				{"id": "openrouter/auto", "tags": ["balanced", "automatic"]},
+				{"id": "anthropic/claude-sonnet-5", "tags": ["quality"]},
+				{"id": "openai/gpt-5.4-mini", "tags": ["coding"]},
+				{"id": "google/gemini-3.5-flash", "tags": ["economical"]},
+				{"id": "deepseek/deepseek-v4-flash", "tags": ["economical"]},
+				{"id": "mistralai/mistral-medium-latest", "tags": ["balanced"]}
+			]
+		},
+		{
+			"name": "ollama",
+			"resource": "/adapters/langchain/ollama.json",
+			"default": "qwen",
+			"recommended": {"balanced": "qwen"},
+			"models": [
+				{"id": "qwen", "tags": ["local"]}
+			]
+		}
+	]
+}
