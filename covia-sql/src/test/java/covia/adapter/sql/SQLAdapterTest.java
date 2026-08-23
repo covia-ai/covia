@@ -224,7 +224,7 @@ public class SQLAdapterTest {
 
 	/**
 	 * The module ships its own agent skill (SKILLS.md): the resource lives in
-	 * the module jar and installs to {@code v/skills/sql} exactly when the
+	 * the module jar and installs to {@code v/skills/data/sql} exactly when the
 	 * module is loaded. Mirrors the venue's SkillsLibraryTest guards — the
 	 * skill must resolve with a real body and every declared tool must
 	 * resolve on the venue.
@@ -232,7 +232,7 @@ public class SQLAdapterTest {
 	@Test
 	public void testSqlSkillShipsWithModule() {
 		covia.adapter.agent.Skills.ResolvedSkill s =
-			covia.adapter.agent.Skills.resolveRef(engine, ctx, Strings.create("v/skills/sql"));
+			covia.adapter.agent.Skills.resolveRef(engine, ctx, Strings.create("v/skills/data/sql"));
 		assertEquals("sql", s.name());
 		assertNotNull(s.body(), "sql skill should carry an inline body");
 		AVector<ACell> tools = s.toolOps();

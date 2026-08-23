@@ -37,7 +37,7 @@ public final class SQLModuleSmokeMain {
 			if (driver.getClassLoader() != loader) {
 				throw new AssertionError("convex-db leaked onto the venue classpath");
 			}
-			if (engine.resolvePath(Strings.create("v/skills/sql"), engine.venueContext()) == null) {
+			if (engine.resolvePath(Strings.create("v/skills/data/sql"), engine.venueContext()) == null) {
 				throw new AssertionError("SQL module skill was not installed");
 			}
 

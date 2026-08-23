@@ -105,7 +105,7 @@ mvn -pl covia-sql -am package -DskipTests               # produces covia-sql-<ve
 mkdir -p modules && cp covia-sql/target/covia-sql-*-module.jar modules/
 sha256sum modules/covia-sql-*-module.jar                # PowerShell: Get-FileHash -Algorithm SHA256
 ```
-then (with venue authority) `grid_run operation=v/ops/venue/module/load input={"module":"covia-sql-<ver>-module.jar","sha256":"<hex>"}` → `sql` adapter appears, `v/ops/sql/query` and `v/ops/sql/execute` are live, and its module-shipped agent skill materialises at `v/skills/sql`. Unload with `input={"name":"covia-sql-<ver>-module"}` (jar name without `.jar`, as listed by `status` / `v/info/modules`).
+then (with venue authority) `grid_run operation=v/ops/venue/module/load input={"module":"covia-sql-<ver>-module.jar","sha256":"<hex>"}` → `sql` adapter appears, `v/ops/sql/query` and `v/ops/sql/execute` are live, and its module-shipped agent skill materialises at `v/skills/data/sql`. Unload with `input={"name":"covia-sql-<ver>-module"}` (jar name without `.jar`, as listed by `status` / `v/info/modules`).
 
 A module jar is a shaded jar compiled against `venue` (provided scope) that declares its adapters in `META-INF/services/covia.adapter.AAdapter`; `config` on load is passed to every adapter in the module before registration (`modules[].config` shape).
 

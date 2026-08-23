@@ -894,7 +894,7 @@ first use; ONE instance = one store, per-user isolation via the `database=`
 param) and operator-registered JDBC connections
 (`adapters.sql.databases.<name>`, passwords as `s/` secret refs). Callers name a `db`, never a URL. Caps:
 `sql/<db>` × `sql/query`|`sql/execute`. The module ships its own `sql`
-agent skill from its jar (materialises at `v/skills/sql` exactly when the
+agent skill from its jar (materialises at `v/skills/data/sql` exactly when the
 module is loaded — the module-shipped-skill pattern, see `docs/SKILLS.md`).
 
 ### Telegram bots (covia-telegram)
