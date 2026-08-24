@@ -8,7 +8,7 @@
 			"type": "object",
 			"properties": {
 				"name": { "type": "string", "description": "Registry name for the server — becomes the catalog path segment; must match [a-z0-9-]{1,64}" },
-				"url": { "type": "string", "description": "Base URL of the MCP server (http/https; the /mcp endpoint is implied)" },
+				"url": { "type": "string", "description": "MCP server URL (http/https). A URL with no path implies /mcp; an explicit path is used as-is; a trailing slash expresses an exact root endpoint" },
 				"auth": { "type": "string", "description": "Optional bearer credential: a secret reference 's/<name>' (recommended), a DID-qualified reference 'did:.../s/<name>', or a literal token (discouraged — the registry persists on the lattice)" },
 				"scope": { "type": "string", "enum": ["user", "venue"], "description": "Where the bridged ops materialise. Default 'user' (your o/mcp/ namespace); 'venue' (v/ops/mcp/, shared) requires the mcp/manage ability" }
 			},

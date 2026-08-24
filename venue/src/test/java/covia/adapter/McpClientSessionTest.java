@@ -37,14 +37,18 @@ public class McpClientSessionTest {
 	public void testNormalisesMcpEndpointUrls() {
 		assertEquals("http://venue.example/mcp",
 			McpClientSession.endpointUrl("http://venue.example"));
-		assertEquals("http://venue.example/mcp",
+		assertEquals("http://venue.example/",
 			McpClientSession.endpointUrl("http://venue.example/"));
 		assertEquals("https://venue.example/mcp",
 			McpClientSession.endpointUrl("https://venue.example/mcp/"));
 		assertEquals("https://venue.example/api/mcp?tenant=alice",
 			McpClientSession.endpointUrl("https://venue.example/api/mcp/?tenant=alice"));
-		assertEquals("https://venue.example/gateway/mcp",
+		assertEquals("https://venue.example/gateway",
 			McpClientSession.endpointUrl("https://venue.example/gateway/"));
+		assertEquals("https://mcp.zapier.com/api/v1/connect",
+			McpClientSession.endpointUrl("https://mcp.zapier.com/api/v1/connect"));
+		assertEquals("https://mcp.stripe.com/",
+			McpClientSession.endpointUrl("https://mcp.stripe.com/"));
 	}
 
 	@Test

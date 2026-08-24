@@ -207,7 +207,7 @@ public class MCPBridgeTest {
 			String error = job.getErrorMessage();
 			assertTrue(error.contains("Cannot initialize MCP client for server " + server), error);
 			assertTrue(error.contains("Authorization error"), error);
-			assertTrue(error.contains("HTTP(S) base URL or /mcp endpoint"), error);
+			assertTrue(error.contains("URL names the MCP endpoint"), error);
 			assertTrue(error.contains("credentials") && error.contains("protocol version"), error);
 			assertEquals("/mcp", requestedPath.get(),
 				"a trailing slash on an explicit MCP endpoint must not append another /mcp");

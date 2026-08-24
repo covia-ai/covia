@@ -7,7 +7,7 @@
 		"input": {
 			"type": "object",
 			"properties": {
-				"server": { "type": "string", "description": "Base URL of the MCP server the tool lives on (http/https)" },
+				"server": { "type": "string", "description": "MCP server URL (http/https). A URL with no path implies /mcp; an explicit path is used as-is; a trailing slash expresses an exact root endpoint" },
 				"tool": { "type": "string", "description": "The remote tool's name exactly as the server lists it" },
 				"path": { "type": "string", "description": "Catalog destination for the bridged op, naming the op itself — e.g. o/research/search_papers (your operations) or v/ops/... (venue catalog, needs mcp/manage)" },
 				"auth": { "type": "string", "description": "Optional bearer credential: a secret reference 's/<name>' (recommended, stored via v/ops/secret/set), a DID-qualified reference 'did:.../s/<name>', or a literal token (discouraged — persists on the lattice)" },

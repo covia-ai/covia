@@ -12,7 +12,7 @@
 			"properties": {
 				"server": {
 					"type": "string",
-					"description": "HTTP(S) base URL or explicit /mcp endpoint for the MCP server; trailing slashes are accepted",
+					"description": "HTTP(S) MCP server URL. A URL with no path implies /mcp; an explicit path is used as-is; a trailing slash expresses an exact root endpoint",
 					"examples":["https://mcp.example.com","https://mcp.example.com/mcp"]
 				},
 				"toolName": {

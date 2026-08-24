@@ -44,8 +44,10 @@ public class McpClientSession implements AutoCloseable {
 
 	/**
 	 * Normalises a configured MCP server URL to its streamable-HTTP endpoint.
-	 * Base URLs imply {@code /mcp}; an explicit endpoint is retained. Trailing
-	 * slashes are ignored and query parameters are preserved.
+	 * A URL with no path implies {@code /mcp}; any explicit path is retained.
+	 * A sole trailing slash therefore expresses an exact root endpoint, while
+	 * trailing slashes on non-root paths are ignored. Query parameters are
+	 * preserved.
 	 */
 	static String endpointUrl(String serverUrl) {
 		if (serverUrl == null || serverUrl.isBlank()) {
@@ -71,12 +73,12 @@ public class McpClientSession implements AutoCloseable {
 		}
 
 		String path = uri.getPath();
-		if (path == null || path.isEmpty()) path = "/";
-		while (path.length() > 1 && path.endsWith("/")) {
-			path = path.substring(0, path.length() - 1);
-		}
-		if (!path.toLowerCase(Locale.ROOT).endsWith("/mcp")) {
-			path = path.equals("/") ? "/mcp" : path + "/mcp";
+		if (path == null || path.isEmpty()) {
+			path = "/mcp";
+		} else {
+			while (path.length() > 1 && path.endsWith("/")) {
+				path = path.substring(0, path.length() - 1);
+			}
 		}
 
 		try {

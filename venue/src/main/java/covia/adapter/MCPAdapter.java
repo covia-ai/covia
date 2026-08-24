@@ -505,8 +505,8 @@ public class MCPAdapter extends AAdapter {
 			session.invalidate();
 			throw new JobFailedException("Cannot initialize MCP client for server " + serverUrl
 				+ ": " + rootCauseMessage(e)
-				+ " — check that the server is reachable at an HTTP(S) base URL or /mcp endpoint, "
-				+ "and that its credentials and MCP protocol version are valid");
+				+ " — check that the URL names the MCP endpoint and that its credentials and "
+				+ "protocol version are valid; include a trailing / for an exact root endpoint");
 		}
 		try {
 			ListToolsResult result = client.listTools();
@@ -1025,7 +1025,8 @@ public class MCPAdapter extends AAdapter {
 			session.invalidate();
 			throw new JobFailedException("Cannot list tools from MCP server at " + url
 				+ ": " + rootCauseMessage(e)
-				+ " — check the URL points at an MCP endpoint and any auth credential is valid");
+				+ " — check the URL points at the exact MCP endpoint and any auth credential is valid;"
+				+ " include a trailing / for an exact root endpoint");
 		}
 	}
 
