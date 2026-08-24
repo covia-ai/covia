@@ -11,6 +11,7 @@ import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 
 /**
@@ -75,6 +76,19 @@ public class AbstractLLMAdapterTest {
 	public void testGetToolCallsNull() {
 		AVector<ACell> calls = AbstractLLMAdapter.getToolCalls(null);
 		assertEquals(0, calls.count());
+	}
+
+	@Test
+	public void testLengthLimitedFinishReason() {
+		assertTrue(AbstractLLMAdapter.isLengthLimited(Maps.of("finishReason", "length")));
+		assertTrue(AbstractLLMAdapter.isLengthLimited(Maps.of("finishReason", "LENGTH")));
+		assertFalse(AbstractLLMAdapter.isLengthLimited(Maps.of("finishReason", "stop")));
+		assertFalse(AbstractLLMAdapter.isLengthLimited(Maps.empty()));
+
+		AMap<AString, ACell> retry = AbstractLLMAdapter.truncationRetryTurn();
+		assertEquals(AbstractLLMAdapter.ROLE_SYSTEM, retry.get(AbstractLLMAdapter.K_ROLE));
+		assertTrue(RT.getIn(retry, "content").toString().contains("output token limit"));
+		assertNull(RT.getIn(retry, "toolCalls"));
 	}
 
 	// ========== parseToolArguments — the LLM wire boundary (#89) ==========
@@ -236,5 +250,21 @@ public class AbstractLLMAdapterTest {
 		AMap<AString, ACell> result = AbstractLLMAdapter.copyIfPresent(
 			source, target, Strings.create("model"));
 		assertEquals(0, result.count());
+	}
+
+	@Test
+	public void testBuildL3InputCarriesCallerTuning() {
+		AMap<AString, ACell> config = Maps.of(
+			"model", "claude-sonnet-5",
+			"maxTokens", 2048,
+			"temperature", 0,
+			"topP", 1,
+			"cache", false);
+		AMap<AString, ACell> input = AbstractLLMAdapter.buildL3Input(
+			config, Vectors.of(Maps.of("role", "user", "content", "hello")), Vectors.empty());
+		assertEquals(2048L, RT.ensureLong(RT.getIn(input, "maxTokens")).longValue());
+		assertEquals(0L, RT.ensureLong(RT.getIn(input, "temperature")).longValue());
+		assertEquals(1L, RT.ensureLong(RT.getIn(input, "topP")).longValue());
+		assertEquals(CVMBool.FALSE, RT.getIn(input, "cache"));
 	}
 }

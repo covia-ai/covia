@@ -828,7 +828,12 @@ text-only tool results are preserved (structured content wins when present).
 `temperature` / `topP` / `tools` / `responseFormat`. `temperature` and `topP`
 pass through to every provider (#218 — accepts integer or double, so
 `temperature: 0` works for deterministic extraction); `maxTokens` is
-honoured by the anthropic provider (its API requires it).
+honoured by the anthropic provider. Anthropic requires the field on the wire,
+so its operation metadata supplies an overridable default of 8192; a model
+preset may override that default, and explicit caller input wins over both.
+Agent config forwards `maxTokens`, `temperature`, `topP`, and `cache` to each
+level-3 call. These are presets and call parameters, not policy; use a
+capability gate for limits.
 
 `defaultLlmOperation` selects the operation used when an agent config does not
 name one; the built-in fallback is the model operation
@@ -856,6 +861,10 @@ URL and this knob instead of a bare ConnectException.
 Agent-side bounds: each level-3 LLM call is bounded by the agent's
 `llmTimeoutMs` (default 120s) and each tool call by `toolCallTimeoutMs`
 (default 300s); cancellation interrupts the in-flight provider call.
+Provider responses also carry `finishReason` when reported. A `length` result
+is incomplete: both agent runtimes discard its partial content and tool calls,
+retry once with a concise-response diagnostic, and fail clearly if the retry
+is truncated again.
 
 ## Venue modules
 

@@ -1080,6 +1080,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 					frameTools.activeFrame, message);
 			}
 		};
+		boolean retriedAfterTruncation = false;
 
 		for (int iteration = 0; iteration < maxIterations; iteration++) {
 			if (store.aborted()) return abortedResult(store);
@@ -1112,6 +1113,24 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 				inferenceSpec(frameTools, harnessForFrame, frameL3Config, stack));
 
 			ACell assistant = invokeLevel3(llmOperation, frameL3Config, prompt, ctx);
+			if (isLengthLimited(assistant)) {
+				if (retriedAfterTruncation) {
+					log.warn("Frame[{}] response reached its output token limit again — failing the frame",
+						frameIndex);
+					AMap<AString, ACell> failed = GoalTreeContext.withStatus(
+						frameTools.activeFrame, GoalTreeContext.STATUS_FAILED);
+					if (!persist(store, frameIndex, failed)) return abortedResult(store);
+					return FrameResult.failed(Strings.create(TRUNCATION_FAILURE_MESSAGE), store.frames());
+				}
+				retriedAfterTruncation = true;
+				log.warn("Frame[{}] response reached its output token limit — retrying once without partial output",
+					frameIndex);
+				frameTools.activeFrame = GoalTreeContext.appendTurn(
+					frameTools.activeFrame, stampTs(truncationRetryTurn()));
+				if (!persist(store, frameIndex, frameTools.activeFrame)) return abortedResult(store);
+				iteration--; // truncation recovery is not a tool iteration
+				continue;
+			}
 			AVector<ACell> calls = RT.ensureVector(RT.getIn(assistant, K_TOOL_CALLS));
 			boolean hasCalls = calls != null && calls.count() > 0;
 			if (!hasCalls) {

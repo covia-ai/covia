@@ -122,6 +122,42 @@ public class LLMAgentAdapterTest {
 	}
 
 	@Test
+	public void testLengthLimitedResponseRetriesWithoutUsingPartialOutput() {
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "length-retry-agent",
+			AgentState.KEY_CONFIG, Maps.of(
+				"llmOperation", "v/test/ops/llm",
+				"model", "length-then-answer-test"),
+			Fields.MESSAGES, Vectors.of(Maps.of("content", "answer fully")));
+
+		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
+		assertEquals("complete after truncation retry", RT.getIn(output, Fields.RESPONSE).toString());
+		AVector<ACell> turns = RT.ensureVector(RT.getIn(output, Fields.TURNS));
+		assertNotNull(turns);
+		assertEquals(1, turns.count(), "only the retry diagnostic precedes the final answer");
+		assertEquals("system", RT.getIn(turns.get(0), "role").toString());
+		assertNull(RT.getIn(turns.get(0), "toolCalls"), "partial tool calls must not execute or persist");
+		assertEquals(2, RT.ensureVector(RT.getIn(output, Fields.CYCLE, Fields.INFERENCES)).count());
+	}
+
+	@Test
+	public void testRepeatedLengthLimitedResponseFailsClearly() {
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "length-failure-agent",
+			AgentState.KEY_CONFIG, Maps.of(
+				"llmOperation", "v/test/ops/llm",
+				"model", "always-length-test"),
+			Fields.MESSAGES, Vectors.of(Maps.of("content", "answer fully")));
+
+		covia.exception.JobFailedException failure = assertThrows(
+			covia.exception.JobFailedException.class,
+			() -> adapter.processChat(RequestContext.of(ALICE_DID), input));
+		assertTrue(failure.getMessage().contains("Increase maxTokens"), failure.getMessage());
+	}
+
+	@Test
 	public void testLevel3FailureFailsTransition() {
 		// Regression: a level-3 op that completes with a failure VALUE
 		// ({status: FAILED} from Status.failure — here an unresolvable API

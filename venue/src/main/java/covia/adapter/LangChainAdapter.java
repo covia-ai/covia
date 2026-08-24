@@ -459,7 +459,8 @@ public class LangChainAdapter extends AAdapter {
 	// ========== Model construction ==========
 
 	/** Optional sampling/bounds parameters passed through to the provider
-	 *  builders (#218) — all nullable; provider defaults apply when absent. */
+	 *  builders (#218). Anthropic requires an effective {@code maxTokens}; its
+	 *  operation metadata supplies the built-in default before this edge. */
 	record ModelTuning(Integer maxTokens, Double temperature, Double topP, Boolean cache) {
 		static final ModelTuning NONE = new ModelTuning(null, null, null, null);
 
@@ -474,14 +475,26 @@ public class LangChainAdapter extends AAdapter {
 	 *  a long from JSON and must not be dropped (it's the deterministic-
 	 *  extraction case that motivated #218). */
 	static ModelTuning extractTuning(ACell input) {
-		CVMLong maxTokensCell = RT.ensureLong(RT.getIn(input, "maxTokens"));
-		Integer maxTokens = (maxTokensCell != null) ? (int) maxTokensCell.longValue() : null;
+		Integer maxTokens = asPositiveInt(RT.getIn(input, "maxTokens"), "maxTokens");
 		ACell cacheCell = RT.getIn(input, K_CACHE);
 		Boolean cache = (cacheCell instanceof CVMBool b) ? b.booleanValue() : null;
 		return new ModelTuning(maxTokens,
 			asDouble(RT.getIn(input, "temperature"), "temperature"),
 			asDouble(RT.getIn(input, "topP"), "topP"),
 			cache);
+	}
+
+	private static Integer asPositiveInt(ACell value, String field) {
+		if (value == null) return null;
+		if (!(value instanceof CVMLong number)) {
+			throw new IllegalArgumentException(field + " must be a positive integer, got: " + value);
+		}
+		long n = number.longValue();
+		if (n <= 0 || n > Integer.MAX_VALUE) {
+			throw new IllegalArgumentException(field + " must be between 1 and "
+				+ Integer.MAX_VALUE + ", got: " + n);
+		}
+		return (int) n;
 	}
 
 	/** The {@code cache} input: prompt caching on or off for this call. */
@@ -678,9 +691,15 @@ public class LangChainAdapter extends AAdapter {
 			// place the conversation breakpoints — see toChatMessages.
 			.cacheSystemMessages(tuning.caching())
 			.cacheTools(tuning.caching());
-		// Anthropic's API requires max_tokens on every request; when the caller
-		// doesn't bound it, langchain4j's model default applies (covia#198).
-		if (tuning.maxTokens() != null) builder = builder.maxTokens(tuning.maxTokens());
+		// Anthropic requires max_tokens on every request. Built-in provider and
+		// model operations declare an overridable operation.default; requiring the
+		// effective value here also keeps authored operations from silently falling
+		// through to langchain4j's hidden 1024-token default (#391).
+		if (tuning.maxTokens() == null) {
+			throw new IllegalArgumentException("Anthropic requires an effective maxTokens; "
+				+ "declare operation.default.maxTokens or supply maxTokens in the call");
+		}
+		builder = builder.maxTokens(tuning.maxTokens());
 		if (tuning.temperature() != null) builder = builder.temperature(tuning.temperature());
 		if (tuning.topP() != null) builder = builder.topP(tuning.topP());
 		return builder.build();

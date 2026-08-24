@@ -297,7 +297,7 @@ Job results that completed for this cycle — the mechanism by which asynchronou
 The inbox message(s) driving this cycle; goaltree has none — its goal rides in the task slot (§5.13). When there is neither input nor pending results, the **empty-state signal** takes the slot: one `user` line saying so, so the agent can act on its role or report idle. It is content, not padding — its role as the message that keeps a system-only request legal (§3.2.1) is a consequence, not its purpose.
 
 ### 5.9 Tool-loop messages
-Assistant and tool messages accumulated *within* this cycle. These are conversation, not preamble: they sit inside the band, before the tail, so each inference of the loop shares its prefix with the previous one through the last tool result and only the tail is re-rendered.
+Assistant and tool messages accumulated *within* this cycle. These are conversation, not preamble: they sit inside the band, before the tail, so each inference of the loop shares its prefix with the previous one through the last tool result and only the tail is re-rendered. A provider reply whose `finishReason` is `length` is incomplete: the runtimes do not execute or persist its partial tool calls or content. They append one runtime diagnostic asking for a complete concise regeneration and retry once; a second truncated reply fails the cycle explicitly.
 
 ### 5.10 Budget warning
 The line described in §3.4, present at ≥ 70%, escalating at ≥ 90%. Silence is the normal case, so it costs nothing until it means something.

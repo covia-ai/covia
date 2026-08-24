@@ -452,6 +452,27 @@ public class GoalTreeAdapterTest {
 	}
 
 	@Test
+	public void testLengthLimitedResponseRetriesWithoutUsingPartialOutput() {
+		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "length-retry-goal-agent",
+			AgentState.KEY_CONFIG, Maps.of(
+				"llmOperation", "v/test/ops/llm",
+				"model", "length-then-answer-test"),
+			Fields.MESSAGES, Vectors.of(Maps.of("content", "answer fully")));
+
+		ACell output = adapter.processGoal(null, ALICE, input);
+		assertEquals("complete after truncation retry", RT.getIn(output, Fields.RESPONSE).toString());
+		AVector<ACell> frames = RT.ensureVector(RT.getIn(output, Fields.FRAMES));
+		AVector<ACell> conversation = RT.ensureVector(RT.getIn(frames.get(0), "conversation"));
+		assertNotNull(conversation);
+		assertTrue(conversation.toString().contains("output token limit"));
+		assertFalse(conversation.toString().contains("partial_call"),
+			"partial tool calls must not execute or persist");
+		assertEquals(2, RT.ensureVector(RT.getIn(output, Fields.CYCLE, Fields.INFERENCES)).count());
+	}
+
+	@Test
 	public void testRootConversationSentOnceToLlm() {
 		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
 		AString agentId = Strings.create("capture-root-agent");

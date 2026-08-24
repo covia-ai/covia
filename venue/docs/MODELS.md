@@ -321,6 +321,14 @@ complete model operation snapshot carries `secretFields`, so an explicit
 credential is redacted from durable Job state exactly as it is for the
 provider operation.
 
+Anthropic requires `max_tokens` on every wire request, but callers do not have
+to repeat it. The built-in serving operation declares `maxTokens: 8192`; a
+generated model may layer a model-specific value over that (the long-running
+Fable preset uses 16000), and explicit call input wins over both. The adapter
+requires the resulting effective value instead of accepting LangChain4j's
+hidden 1024-token fallback. This remains a default, not a ceiling: deployments
+that need an upper bound enforce it with a capability gate.
+
 ## 6. Discovery
 
 `llm:models` enumerates the catalog instead of a Java table. It accepts the

@@ -419,6 +419,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 				sinkMessages[0] = sinkMessages[0].conj(message);
 			}
 		};
+		boolean retriedAfterTruncation = false;
 
 		for (int iteration = 0; iteration < maxToolIterations; iteration++) {
 			// The whole prompt is rebuilt before every call: loads re-read, this
@@ -433,6 +434,17 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 				spec.withLoads(loads, tools, effectiveLoads).withToolLoop(messages).withTask(taskMessage));
 
 			ACell assistant = invokeLevel3(llmOperation, config, prompt, ctx);
+			if (isLengthLimited(assistant)) {
+				if (retriedAfterTruncation) {
+					log.warn("LLM response reached its output token limit again — failing the transition");
+					throw new JobFailedException(TRUNCATION_FAILURE_MESSAGE);
+				}
+				retriedAfterTruncation = true;
+				log.warn("LLM response reached its output token limit — retrying once without partial output");
+				messages = messages.conj(stampTs(truncationRetryTurn()));
+				iteration--; // truncation recovery is not a tool iteration
+				continue;
+			}
 			AVector<ACell> calls = RT.ensureVector(RT.getIn(assistant, K_TOOL_CALLS));
 			boolean hasCalls = calls != null && calls.count() > 0;
 			if (!hasCalls && taskMessage != null) {

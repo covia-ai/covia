@@ -1434,7 +1434,7 @@ public class LangChainAdapterTest {
 
 	@Test
 	public void testTuningReachesProviderModels() {
-		LangChainAdapter.ModelTuning tuning = new LangChainAdapter.ModelTuning(null, 0.0, 0.9, null);
+		LangChainAdapter.ModelTuning tuning = new LangChainAdapter.ModelTuning(2048, 0.0, 0.9, null);
 
 		var ollama = LangChainAdapter.buildOllamaModel("http://localhost:11434", "qwen",
 			java.time.Duration.ofSeconds(5), tuning);
@@ -1450,6 +1450,12 @@ public class LangChainAdapterTest {
 			"claude-sonnet-5", java.time.Duration.ofSeconds(5), tuning);
 		assertEquals(0.0, anthropic.defaultRequestParameters().temperature());
 		assertEquals(0.9, anthropic.defaultRequestParameters().topP());
+		assertEquals(2048, anthropic.defaultRequestParameters().maxOutputTokens());
+
+		IllegalArgumentException missing = assertThrows(IllegalArgumentException.class,
+			() -> LangChainAdapter.buildAnthropicModel("key", "https://api.anthropic.com/v1/",
+				"claude-sonnet-5", java.time.Duration.ofSeconds(5), LangChainAdapter.ModelTuning.NONE));
+		assertTrue(missing.getMessage().contains("effective maxTokens"));
 
 		// Absent tuning leaves provider defaults alone (no crash, no forced values)
 		var plain = LangChainAdapter.buildOllamaModel("http://localhost:11434", "qwen",
@@ -1524,6 +1530,12 @@ public class LangChainAdapterTest {
 
 		assertThrows(IllegalArgumentException.class,
 			() -> LangChainAdapter.extractTuning(JSON.parse("{\"temperature\": \"hot\"}")));
+		assertThrows(IllegalArgumentException.class,
+			() -> LangChainAdapter.extractTuning(JSON.parse("{\"maxTokens\": 0}")));
+		assertThrows(IllegalArgumentException.class,
+			() -> LangChainAdapter.extractTuning(JSON.parse("{\"maxTokens\": 2147483648}")));
+		assertThrows(IllegalArgumentException.class,
+			() -> LangChainAdapter.extractTuning(JSON.parse("{\"maxTokens\": \"1024\"}")));
 	}
 
 	// ========== #224 — Ollama base URL resolution + connect hint ==========
@@ -1567,6 +1579,10 @@ public class LangChainAdapterTest {
 	public void testModelCatalogPublishesCompleteInvocableDefinitions() {
 		Engine engine = covia.venue.TestEngine.ENGINE;
 		RequestContext ctx = engine.venueContext();
+		Asset provider = engine.resolveAsset(
+			Strings.create("v/ops/langchain/anthropic"), ctx);
+		assertEquals(8192L, RT.ensureLong(RT.getIn(provider.meta(),
+			Fields.OPERATION, Fields.DEFAULT, "maxTokens")).longValue());
 		Asset anthropic = engine.resolveAsset(
 			Strings.create("v/models/anthropic/claude-opus-5"), ctx);
 		assertNotNull(anthropic);
@@ -1574,6 +1590,13 @@ public class LangChainAdapterTest {
 			RT.getIn(anthropic.meta(), Fields.OPERATION, "adapter").toString());
 		assertEquals("claude-opus-5",
 			RT.getIn(anthropic.meta(), Fields.OPERATION, Fields.DEFAULT, "model").toString());
+		assertEquals(8192L, RT.ensureLong(RT.getIn(anthropic.meta(),
+			Fields.OPERATION, Fields.DEFAULT, "maxTokens")).longValue());
+		Asset fable = engine.resolveAsset(
+			Strings.create("v/models/anthropic/claude-fable-5"), ctx);
+		assertEquals(16000L, RT.ensureLong(RT.getIn(fable.meta(),
+			Fields.OPERATION, Fields.DEFAULT, "maxTokens")).longValue(),
+			"model metadata may override the provider default");
 		assertEquals("ANTHROPIC_API_KEY",
 			RT.getIn(anthropic.meta(), Fields.OPERATION, "secretKey").toString());
 		assertNotNull(RT.getIn(anthropic.meta(), Fields.OPERATION, "input"));

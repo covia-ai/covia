@@ -4,6 +4,9 @@
 	"creator": "Covia",
 	"operation": {
 		"adapter": "langchain:anthropic",
+		"default": {
+			"maxTokens": 8192
+		},
 		"secretFields": [
 			"apiKey"
 		],
@@ -51,7 +54,8 @@
 				},
 				"maxTokens": {
 					"type": "integer",
-					"description": "Maximum output tokens for the response (bounds cost/latency; e.g. 1024 for extraction calls). Provider default when omitted."
+					"minimum": 1,
+					"description": "Maximum output tokens for the response (bounds cost/latency; e.g. 1024 for extraction calls). Defaults to 8192 from operation metadata; model metadata and caller input may override it."
 				},
 				"cache": {
 					"type": "boolean",
@@ -77,6 +81,14 @@
 				},
 				"toolCalls": {
 					"type": "array"
+				},
+				"finishReason": {
+					"type": "string",
+					"description": "Provider finish reason in lower case (for example stop, length, or tool_execution). A length response reached maxTokens and is incomplete."
+				},
+				"tokens": {
+					"type": "object",
+					"description": "Provider-reported token usage, when available."
 				}
 			}
 		}

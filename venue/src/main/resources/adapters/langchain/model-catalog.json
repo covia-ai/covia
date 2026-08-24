@@ -32,7 +32,7 @@
 			"models": [
 				{"id": "claude-sonnet-5", "tags": ["balanced"]},
 				{"id": "claude-opus-5", "tags": ["quality"]},
-				{"id": "claude-fable-5", "tags": ["long-running"]},
+				{"id": "claude-fable-5", "default": {"maxTokens": 16000}, "tags": ["long-running"]},
 				{"id": "claude-haiku-4-5-20251001", "tags": ["economical"]}
 			]
 		},

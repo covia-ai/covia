@@ -28,6 +28,7 @@ import covia.api.Fields;
 import covia.exception.JobFailedException;
 import covia.grid.Asset;
 import covia.grid.Status;
+import covia.venue.AgentState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 
@@ -91,6 +92,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	/** Message indices the assembler marks as prompt-cache breakpoints (AGENT_CONTEXT.md §3.1). */
 	public static final AString K_CACHE_MARKS = Strings.intern("cacheMarks");
 	public static final AString K_TOOL_CALLS = Strings.intern("toolCalls");
+	public static final AString K_FINISH_REASON = Strings.intern("finishReason");
 	public static final AString K_ID         = Strings.intern("id");
 	public static final AString K_NAME       = Strings.intern("name");
 	public static final AString K_ARGUMENTS  = Strings.intern("arguments");
@@ -218,6 +220,14 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	public static final AString ROLE_USER      = Strings.intern("user");
 	public static final AString ROLE_ASSISTANT = Strings.intern("assistant");
 	public static final AString ROLE_TOOL      = Strings.intern("tool");
+	private static final AString FINISH_LENGTH = Strings.intern("length");
+
+	static final String TRUNCATION_RETRY_MESSAGE =
+		"The previous assistant response reached its output token limit and was incomplete. "
+		+ "Regenerate a complete, concise response from the original request. Do not continue "
+		+ "or act on any partial tool call from that response.";
+	static final String TRUNCATION_FAILURE_MESSAGE =
+		"LLM response reached its output token limit twice. Increase maxTokens or request a shorter response.";
 
 	// ========== Defaults ==========
 
@@ -815,7 +825,9 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	public static AMap<AString, ACell> buildL3Input(AMap<AString, ACell> config,
 			AVector<ACell> messages, AVector<ACell> tools) {
 		AMap<AString, ACell> l3Input = Maps.of(K_MESSAGES, messages);
-		l3Input = copyIfPresent(config, l3Input, K_MODEL, K_URL, K_API_KEY, K_RESPONSE_FORMAT);
+		l3Input = copyIfPresent(config, l3Input, K_MODEL, K_URL, K_API_KEY, K_RESPONSE_FORMAT,
+			Strings.intern("maxTokens"), Strings.intern("temperature"), Strings.intern("topP"),
+			Strings.intern("cache"));
 		if (tools != null && tools.count() > 0) {
 			l3Input = l3Input.assoc(K_TOOLS, tools);
 		}
@@ -838,6 +850,20 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	protected static AVector<ACell> getToolCalls(ACell l3Result) {
 		ACell tc = RT.getIn(l3Result, K_TOOL_CALLS);
 		return (tc instanceof AVector) ? (AVector<ACell>) tc : Vectors.empty();
+	}
+
+	/** True when the provider says the assistant response stopped at its output bound. */
+	static boolean isLengthLimited(ACell assistant) {
+		AString reason = RT.ensureString(RT.getIn(assistant, K_FINISH_REASON));
+		return reason != null && FINISH_LENGTH.toString().equalsIgnoreCase(reason.toString());
+	}
+
+	/** Persisted diagnostic that changes the retry prompt without retaining partial output. */
+	static AMap<AString, ACell> truncationRetryTurn() {
+		return Maps.of(
+			K_ROLE, ROLE_SYSTEM,
+			K_CONTENT, Strings.create(TRUNCATION_RETRY_MESSAGE),
+			AgentState.K_SOURCE, AgentState.SOURCE_TRANSITION);
 	}
 
 	// ========== Tool dispatch ==========

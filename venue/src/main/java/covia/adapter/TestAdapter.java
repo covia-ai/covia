@@ -378,6 +378,29 @@ public class TestAdapter extends AAdapter {
 			sameSessionFollowup |= role != null && "user".equals(role.toString())
 				&& content != null && content.toString().contains("same session followup");
 		}
+		if (model != null && ("length-then-answer-test".equals(model.toString())
+				|| "always-length-test".equals(model.toString()))) {
+			boolean sawRetry = false;
+			for (long i = 0; i < modelMessages.count(); i++) {
+				AString content = RT.ensureString(RT.getIn(modelMessages.get(i), "content"));
+				sawRetry |= content != null && content.toString().contains("output token limit");
+			}
+			if (sawRetry && "length-then-answer-test".equals(model.toString())) {
+				return Maps.of(
+					"role", Strings.create("assistant"),
+					"content", Strings.create("complete after truncation retry"),
+					"finishReason", Strings.create("stop"));
+			}
+			// Deliberately include a partial tool call: the harness must neither
+			// execute nor persist it when finishReason says the response is incomplete.
+			return Maps.of(
+				"role", Strings.create("assistant"),
+				"content", Strings.create("partial response"),
+				"finishReason", Strings.create("length"),
+				"toolCalls", Vectors.of(Maps.of(
+					"id", "partial_call", "name", "v/test/ops/echo",
+					"arguments", "{\"partial\":true}")));
+		}
 		if (sameSessionFollowup) {
 			return Maps.of("role", Strings.create("assistant"),
 				"content", Strings.create("NEXT_TURN_OK"));
