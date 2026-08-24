@@ -40,7 +40,11 @@ public class UserMemoryAdapterTest {
 	}
 
 	private ACell run(AMap<AString, ACell> input) {
-		return engine.jobs().invokeOperation(OP, input, ALICE).awaitResult(5000);
+		return run(input, ALICE);
+	}
+
+	private ACell run(AMap<AString, ACell> input, RequestContext ctx) {
+		return engine.jobs().invokeOperation(OP, input, ctx).awaitResult(5000);
 	}
 
 	private ACell remember(String text) {
@@ -140,6 +144,26 @@ public class UserMemoryAdapterTest {
 		assertNull(recall(), "default w/memory list is independent of the custom path");
 	}
 
+	@Test
+	public void testAgentLocalMemoryAtNPath() {
+		RequestContext agentA = RequestContext.ofAgent(ALICE.getUserDID(), Strings.create("memory-agent-a"));
+		RequestContext agentB = RequestContext.ofAgent(ALICE.getUserDID(), Strings.create("memory-agent-b"));
+		AMap<AString, ACell> remember = Maps.of(
+			Strings.create("command"), Strings.create("remember"),
+			Strings.create("path"), Strings.create("n/memory"),
+			Strings.create("text"), Strings.create("Agent-local fact"));
+
+		run(remember, agentA);
+		AMap<AString, ACell> recall = Maps.of(
+			Strings.create("command"), Strings.create("recall"),
+			Strings.create("path"), Strings.create("n/memory"));
+
+		assertEquals("1. Agent-local fact", run(recall, agentA).toString());
+		assertNull(run(recall, agentB), "different agents must not share n/memory");
+		assertThrows(JobFailedException.class, () -> run(recall, ALICE),
+			"n/memory must require agent scope");
+	}
+
 	// ========== recall over a map collection (e.g. a clinical problem list) ==========
 
 	@Test
@@ -209,14 +233,14 @@ public class UserMemoryAdapterTest {
 			Strings.create("op"), Strings.create(OP),
 			Strings.create("input"), Maps.of(Strings.create("command"), Strings.create("recall"),
 				Strings.create("path"), Strings.create("w/memory")),
-			Strings.create("label"), Strings.create("User memory"));
+			Strings.create("label"), Strings.create("User memory (w/memory)"));
 
 		ACell msg = loader.resolveEntry(entry, ALICE);
 		assertNotNull(msg, "recall op entry should resolve to a system message");
 		assertEquals(Strings.create("system"), RT.getIn(msg, "role"));
 
 		String content = RT.ensureString(RT.getIn(msg, "content")).toString();
-		assertEquals("[Context: User memory]\n1. Prefers metric units\n2. Anxious about heart", content);
+		assertEquals("[Context: User memory (w/memory)]\n1. Prefers metric units\n2. Anxious about heart", content);
 	}
 
 	@Test
@@ -226,7 +250,7 @@ public class UserMemoryAdapterTest {
 			Strings.create("op"), Strings.create(OP),
 			Strings.create("input"), Maps.of(Strings.create("command"), Strings.create("recall"),
 				Strings.create("path"), Strings.create("w/memory")),
-			Strings.create("label"), Strings.create("User memory"));
+			Strings.create("label"), Strings.create("User memory (w/memory)"));
 
 		assertNull(loader.resolveEntry(entry, ALICE), "empty memory should inject no system message");
 	}

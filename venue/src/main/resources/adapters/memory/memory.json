@@ -1,6 +1,6 @@
 {
 	"name": "Memory",
-	"description": "The user's memory — a numbered list of durable facts to keep in view. Pick the action with `command`: 'recall' renders the numbered list (you rarely need this — it is injected into your context automatically); 'remember' appends a new item; 'update' replaces item n; 'forget' removes item n. Edit by the item numbers shown in the list. Stored durably and scoped to the user.",
+	"description": "Durable memory — a numbered list of facts at a caller-selected workspace path. Pick the action with `command`: 'recall' renders the numbered list; 'remember' appends a new item; 'update' replaces item n; 'forget' removes item n. Edit by the item numbers shown in the list and, when the context label names a path, pass that same path on every edit. The operation defaults to the user's shared w/memory; default agents keep their own list at n/memory.",
 	"dateCreated": "2026-06-15T00:00:00Z",
 	"operation": {
 		"adapter": "memory:manage",

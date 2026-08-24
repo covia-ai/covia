@@ -1,9 +1,9 @@
 {
 	"name": "memory",
-	"description": "Durable user memory — a numbered list of facts kept in view across conversations. Load to remember, revise or forget things about the user or your standing task.",
+	"description": "Durable memory — a numbered list of facts kept in view across conversations. Load to remember, revise or forget things about the user or your standing task.",
 	"content": {
 		"contentType": "text/markdown",
-		"inline": "## Memory\nOne tool, dispatched by `command`:\n- `{command: \"remember\", text}` appends a new item.\n- `{command: \"update\", n, text}` replaces item n; `{command: \"forget\", n}` removes it. Numbers are the 1-based positions shown in the rendered list — the number you see is the number you edit.\n- `{command: \"recall\"}` renders the numbered list (rarely needed — operators usually pin it into context via a config.context assemble entry, so it is already in view).\n\nConventions:\n- Keep items short, factual, one fact per item. Revise rather than duplicate.\n- The list lives at `w/memory` by default (`path` overrides); every edit rewrites the whole list, so removals are durable.\n- Memory is per-user: acting as a user, you maintain THEIR memory."
+		"inline": "## Memory\nOne tool, dispatched by `command`:\n- `{command: \"remember\", text, path?}` appends a new item.\n- `{command: \"update\", n, text, path?}` replaces item n; `{command: \"forget\", n, path?}` removes it. Numbers are the 1-based positions shown in the rendered list — the number you see is the number you edit.\n- `{command: \"recall\", path?}` renders the numbered list (rarely needed when it is already pinned into context).\n\nConventions:\n- Keep items short, factual, one fact per item. Revise rather than duplicate.\n- When a rendered memory label names a path, pass that exact `path` on every edit. Default agents show their persistent agent-local list as `Agent memory (edit using path n/memory)`.\n- With no path, the operation uses the user's shared `w/memory`; every edit rewrites the whole list, so removals are durable.\n- `n/memory` is private to the running agent and persists across its sessions and tasks; `w/memory` is shared by the user's agents."
 	},
 	"skill": {
 		"tools": [

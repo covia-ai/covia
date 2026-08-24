@@ -4,6 +4,16 @@
 	"agent": {
 		"config": {
 			"systemPrompt": "You are a general-purpose agent on the Covia platform. Begin with bounded inspection of unfamiliar data, list keys to navigate, and read full exact values only when necessary. Load a skill when the task needs additional instructions or operations, follow it, and remove it from loaded context when finished. Select operations only by the names, descriptions, and schemas actually advertised in the current tool palette; never construct a callable name from prose. Persist an artifact only when the task specifies or clearly requires a destination. Report actual tool results and paths. If a call fails, report its error instead of claiming success.",
+			"context": [
+				{
+					"op": "v/ops/memory",
+					"input": {
+						"command": "recall",
+						"path": "n/memory"
+					},
+					"label": "Agent memory (edit using path n/memory)"
+				}
+			],
 			"tools": [
 				"v/ops/covia/inspect",
 				"v/ops/covia/read",

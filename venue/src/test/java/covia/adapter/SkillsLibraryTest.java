@@ -401,6 +401,12 @@ public class SkillsLibraryTest {
 		AVector<ACell> tools = RT.ensureVector(RT.getIn(config, "tools"));
 		assertEquals(3, tools.count(), "lean base: inspect + read + list");
 		assertTrue(tools.contains(Strings.create("v/ops/covia/inspect")));
+		AVector<ACell> context = RT.ensureVector(RT.getIn(config, "context"));
+		assertEquals(1, context.count(), "default agent should pin one agent-local memory source");
+		ACell memory = context.get(0);
+		assertEquals("v/ops/memory", RT.getIn(memory, "op").toString());
+		assertEquals("n/memory", RT.getIn(memory, "input", "path").toString());
+		assertEquals("Agent memory (edit using path n/memory)", RT.getIn(memory, "label").toString());
 		// minimal holds NO op tools — skills discovery is its entire surface
 		ACell minimalAsset = engine.resolvePath(Strings.create("v/agents/templates/minimal"), ctx);
 		ACell minimal = RT.getIn(minimalAsset, "agent", "config");
