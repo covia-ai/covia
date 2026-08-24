@@ -1,11 +1,13 @@
 package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URI;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
@@ -28,6 +30,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.ResponseException;
 import covia.grid.Job;
 import covia.grid.auth.VenueAuth;
 import covia.grid.client.VenueHTTP;
@@ -216,14 +219,17 @@ public class NamedUserAuthTest {
 		assertNotNull(job);
 	}
 
+	/**
+	 * Asserts the venue refused the token. The refusal is a {@link
+	 * ResponseException} — the type the client already raises for any non-2xx
+	 * answer — so that is what we assert. Matching text in the cause chain
+	 * instead would accept any failure whose message happened to contain the
+	 * digits, including a transport error that never reached the venue.
+	 */
 	private void assertRejected(String token) {
-		Throwable failure = assertThrows(Throwable.class,
-			() -> client(token).invokeAndWait(OP_ECHO, Maps.of(Fields.VALUE, "denied")));
-		StringBuilder chain = new StringBuilder();
-		for (Throwable c = failure; c != null; c = c.getCause()) {
-			chain.append(c.getMessage()).append(" | ");
-		}
-		assertTrue(chain.toString().contains("401"), "expected 401, got " + chain);
+		CompletionException failure = assertThrows(CompletionException.class,
+			() -> client(token).startJobAsync(OP_ECHO, Maps.of(Fields.VALUE, "denied")).join());
+		assertInstanceOf(ResponseException.class, failure.getCause());
 	}
 
 	private VenueHTTP client(String token) {

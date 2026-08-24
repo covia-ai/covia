@@ -50,6 +50,26 @@ public class VenueHTTP extends Venue {
 
 	public static Logger log=LoggerFactory.getLogger(VenueHTTP.class);
 
+	/**
+	 * The HTTP client shared by every {@code VenueHTTP}.
+	 *
+	 * <p>A JDK {@link HttpClient} is a thread-safe, heavyweight object: it owns
+	 * a selector thread, an executor and a connection pool, and releases them
+	 * only on close. One per {@code VenueHTTP} therefore cost ~3 platform
+	 * threads and a private pool per instance, and — since callers legitimately
+	 * build a client per remote venue, per user, or per request — that cost was
+	 * unbounded. It also defeated keep-alive: every instance opened its own TCP
+	 * connections to a venue another instance was already talking to.</p>
+	 *
+	 * <p>Sharing is safe because nothing identifying a caller lives on the
+	 * client — auth, UCAN proofs, the per-request deadline and the base URI are
+	 * all applied per request. One pool serves every caller, reusing
+	 * connections instead of accumulating them.</p>
+	 */
+	private static final HttpClient HTTP_CLIENT = HttpClient.newBuilder()
+		.connectTimeout(Duration.ofSeconds(10))
+		.build();
+
 	private static final double BACKOFF_FACTOR = 1.5;
 	/**
 	 * Initial poll delay in ms. Kept low so short operations finish in
@@ -148,9 +168,7 @@ public class VenueHTTP extends Venue {
 
 	public VenueHTTP(URI host, VenueAuth auth) {
 		this.baseURI = host.resolve("/api/v1/");
-		this.httpClient = HttpClient.newBuilder()
-			.connectTimeout(Duration.ofSeconds(10))
-			.build();
+		this.httpClient = HTTP_CLIENT;
 		this.auth = auth;
 
 		// Auto-set user identity from auth if available
