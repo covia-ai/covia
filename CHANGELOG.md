@@ -8,8 +8,34 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+This development line targets **0.10.0**. It is a minor release because it
+contains intentional breaking changes to the agent skill configuration and
+skills operations described below.
+
+### Migration
+
+- A directory of skills moves from `config.skills` to `config.skillsets`;
+  `config.skills` now contains individual skill references only.
+- Replace the former command-dispatched `v/ops/skills` with
+  `v/ops/skills/list` for one skillset and `v/ops/skills/read` for one skill.
+- Harness tools are opt-in by name in `config.tools`. Declaring skills or
+  skillsets still implies `skill_load` and `context_unload`.
+- MCP URLs with no path still imply `/mcp`. Any explicit path is now used
+  verbatim; append a sole trailing `/` when the server's endpoint is its root.
+- Timeline consumers should derive cycle token totals and tool failures from
+  `inferences`; the redundant cycle-level fields have been removed.
+
 ### Changed
 
+- Convex upgraded from 0.8.14 to 0.8.15.
+- **Breaking:** `config.skills` now means individual skills only; directories
+  move to `config.skillsets`. Standard templates are migrated.
+- Adapter-global durable state now has a shared venue-private convention at
+  `<venue-did>/w/adapters/<adapter>/`. Telegram and Discord use matching
+  `config/<bot>/sessions` and `users/<did>/{bots,sessions}` schemas while
+  leaving user-managed storage paths user-selectable and credentials in `s/`.
+  Telegram discovers and copies its legacy `w/telegram` runtime records on
+  upgrade; deletion cleans both locations.
 - One harness registry and one offering rule for both runtimes (`HarnessTools`): `context_load`, `context_unload`, `skill_load` and `more_tools` are shared and opt-in by name in `config.tools` — llmagent gains `more_tools` and no longer supplies context load/unload unasked; declared skills imply `skill_load` and `context_unload`; an agent declaring nothing has no tools and no capability notice. The `full` template opts into `more_tools`
 - `toolCalling: false` is honoured end to end: declared on the LLM operation's `model` facet, per model under `byModel`, or by the agent's own `config.modelProfile` (new — the facet's shape layered last for assembly facts: `toolCalling`, `labels`, `budget.bytes`), the assembler presents the model no tools, no capability notice and no skills index; `agent:context` reports `toolCalling: false`
 - `agent:create` warns about tools on a non-tool-capable model from declared data: a model facet `toolCalling: false` warns outright; `toolCallingByModel` still asks the Ollama probe; declared skills count as using tools
@@ -28,6 +54,13 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Added
 
+- Built-in provider model definitions are data assets under `v/models/`; model
+  catalogs, defaults, per-model overrides and caller overrides now share one
+  metadata-driven path.
+- `agent:context` reports tool-palette provenance, unavailable tools, per-load
+  resolution/budget/truncation details and logical prefix hashes (#393).
+- `GET /api/v1/assets?expand=metadata` returns a page of venue asset ids and
+  metadata in one response, avoiding one metadata request per asset (#381).
 - Timeline entries record every inference of a cycle (#392): the root frame's standing `context` and `tools` once, then per inference `ts`, `ms`, `op`, `model?`, what was newly `sent`, the `reply` verbatim (or `error`) and the tool `calls` it requested with results and timings; a `subgoal` call carries its child frame's record (`frame`) in the same shape, so popped subgoals keep their history; a cycle whose transition throws still writes its entry with the inferences that ran; entries carry `sessionId` and `pending`
 - `agent:step` — one harness iteration on a supplied model reply, without calling the model: tool calls dispatched exactly as live (routes, capability checks, authority; real side effects), results rendered, the next prompt returned; the agent's session, timeline and tasks untouched; control tools reported as `terminal`, goaltree `subgoal` not run
 - Prompt caching end to end on Anthropic: the assembler marks the band boundaries (`cacheMarks` in the level-3 input), the anthropic op turns them into per-message `cache_control` breakpoints alongside the system prompt and tools, accepts `cache: false` to switch caching off for a call, and reports `cacheRead` / `cacheWrite` tokens in usage and in the agent cycle tally
@@ -53,19 +86,21 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   parking, REST rate-limit retry, a module-shipped agent skill/template, and
   a shaded JDA 6.5.0 runtime isolated from the venue classpath.
 
-### Changed
-
-- **Breaking:** `config.skills` now means individual skills only; directories move to `config.skillsets`. Standard templates are migrated
-
-- Adapter-global durable state now has a shared venue-private convention at
-  `<venue-did>/w/adapters/<adapter>/`. Telegram and Discord use matching
-  `config/<bot>/sessions` and `users/<did>/{bots,sessions}` schemas while
-  leaving user-managed storage paths user-selectable and credentials in `s/`.
-  Telegram discovers and copies its legacy `w/telegram` runtime records on
-  upgrade; deletion cleans both locations.
-
 ### Fixed
 
+- Anthropic operations now declare an overridable `maxTokens` default; model
+  and caller overrides remain authoritative, usage and finish reason are
+  surfaced, and both agent runtimes retry one length-truncated response before
+  failing clearly (#391).
+- Job-free `GET /api/v1/values/*` reads honour delegation proofs from
+  `X-Covia-Ucans`, matching job-status GET semantics without creating a Job
+  (#399).
+- Explicit non-root MCP endpoints are no longer given an extra `/mcp`; an
+  explicit root endpoint is expressible with a trailing slash (#398).
+- `VenueHTTP` instances share one thread-safe JDK HTTP client, connection pool
+  and selector instead of leaking a heavyweight client per instance (#400).
+- A present but malformed secret-store record now fails visibly instead of
+  being reported as an absent secret (#402).
 - Removed the per-turn `[Context Map]` inventory. It restated the loaded elements rendered immediately above it, and its byte counts changed every build — so in the only production path, which injected it BEFORE the conversation history and current input, it invalidated the prefix cache for the largest cacheable region every turn. Its own javadoc said to call it last; nothing did. The loads budget now speaks only when it is under pressure
 
 - Indexing a skill no longer reads its content just because it omits `name` — the index falls back to the path segment, which is also the key `skill_load` matches. This stops a name-less skill from requiring `asset/read` where its named neighbours needed only `crud/read`, and stops the index showing a frontmatter name that could not be loaded
