@@ -212,6 +212,13 @@ public class CoviaAPI extends ACoviaAPI {
 		                description = "The maximum number of assets to return. Must be non-negative and not exceed 1000. If not specified, returns the first page (up to 1000 assets).",
 		                required = false,
 		                example = "100"
+		            ),
+		            @OpenApiParam(
+		                name = "expand",
+		                type = String.class,
+		                description = "Set to 'metadata' to return each venue asset as {id, metadata} instead of an id string.",
+		                required = false,
+		                example = "metadata"
 		            )
 		        },
 		        responses = {
@@ -243,6 +250,12 @@ public class CoviaAPI extends ACoviaAPI {
 		String scope = ctx.queryParam("scope");
 		if ("own".equals(scope) || "mine".equals(scope)) {
 			getOwnAssets(ctx);
+			return;
+		}
+		String expand = ctx.queryParam("expand");
+		boolean expandMetadata = "metadata".equals(expand);
+		if (expand != null && !expandMetadata) {
+			buildError(ctx, 400, "Unsupported asset expansion: " + expand);
 			return;
 		}
 		long offset=-1;
@@ -285,7 +298,25 @@ public class CoviaAPI extends ACoviaAPI {
 			// A venue-CAS listing must round-trip through the general resolver.
 			// A bare hash is caller-relative (the caller's a/), so returning one
 			// here would silently change namespace when passed to GET assets/<ref>.
-			assetsList.add(engine().assetDIDURL(h).toString());
+			String id = engine().assetDIDURL(h).toString();
+			if (!expandMetadata) {
+				assetsList.add(id);
+				continue;
+			}
+			try {
+				Asset asset = venue.getAsset(h);
+				if (asset == null) {
+					buildError(ctx, 500, "Listed venue asset is unavailable: " + id);
+					return;
+				}
+				Map<Object, Object> item = new HashMap<>();
+				item.put(Fields.ID, id);
+				item.put(Fields.METADATA, asset.meta());
+				assetsList.add(item);
+			} catch (IOException e) {
+				buildError(ctx, 500, "Error retrieving venue asset " + id + ": " + e.getMessage());
+				return;
+			}
 		}
 		result.put(Fields.ITEMS, assetsList);
 
@@ -1554,7 +1585,8 @@ public class CoviaAPI extends ACoviaAPI {
 
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 		AString bearer = ctx.attribute(AuthMiddleware.UCAN_BEARER_ATTR);
-		rctx = AuthMiddleware.withTransportAuth(rctx, bearer, null, null, engine().didVerifier());
+		rctx = AuthMiddleware.withTransportAuth(rctx, bearer,
+			AuthMiddleware.headerUcans(ctx), null, engine().didVerifier());
 
 		AMap<AString, ACell> input;
 		try {

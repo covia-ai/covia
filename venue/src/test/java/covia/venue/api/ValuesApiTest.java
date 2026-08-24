@@ -64,6 +64,8 @@ public class ValuesApiTest {
 	private AString callerDID;
 	private String jwt;
 	private VenueHTTP client;
+	private AKeyPair delegatedOwnerKP;
+	private AString delegatedOwnerDID;
 	private final AString scopedAgentId = Strings.create("values-agent");
 	private final Blob scopedSessionId = Blob.fromHex("00112233445566778899aabbccddeeff");
 	private Blob scopedTaskId;
@@ -83,6 +85,8 @@ public class ValuesApiTest {
 		jwt = token.toJWT(kp).toString();
 		client = VenueHTTP.create(URI.create(TestServer.BASE_URL), VenueAuth.bearer(jwt));
 		client.setTimeout(5000);
+		delegatedOwnerKP = AKeyPair.generate();
+		delegatedOwnerDID = UCAN.toDIDKey(delegatedOwnerKP.getAccountKey());
 
 		// Seed known data (each write persists one job under callerDID — the
 		// job-free test captures its baseline afterwards).
@@ -100,6 +104,10 @@ public class ValuesApiTest {
 			Strings.create("o1"), Maps.of(Strings.create("source"), Strings.create("nhs")),
 			Strings.create("o2"), Maps.of(Strings.create("source"), Strings.create("nhs")),
 			Strings.create("o3"), Maps.of(Strings.create("source"), Strings.create("gp"))));
+		TestServer.ENGINE.jobs().invokeOperation(OP_WRITE, Maps.of(
+			Strings.create("path"), Strings.create("w/delegated"),
+			Strings.create("value"), Strings.create("owner content")),
+			RequestContext.of(delegatedOwnerDID)).awaitResult(5000);
 
 		// Seed all three execution-scoped stores without creating extra Jobs.
 		// In particular, task scratch is backed by the existing task Job record.
@@ -147,6 +155,16 @@ public class ValuesApiTest {
 		return HttpClient.newHttpClient().send(
 			HttpRequest.newBuilder().uri(URI.create(uri))
 				.header("Authorization", "Bearer " + jwt).GET().build(),
+			HttpResponse.BodyHandlers.ofString());
+	}
+
+	private HttpResponse<String> getWithProof(String route, String path, AString proof) throws Exception {
+		String uri = TestServer.BASE_URL + "/api/v1/values/" + route
+			+ "?path=" + URLEncoder.encode(path, StandardCharsets.UTF_8);
+		return HttpClient.newHttpClient().send(
+			HttpRequest.newBuilder().uri(URI.create(uri))
+				.header("Authorization", "Bearer " + jwt)
+				.header(VenueHTTP.UCANS_HEADER, proof.toString()).GET().build(),
 			HttpResponse.BodyHandlers.ofString());
 	}
 
@@ -301,6 +319,25 @@ public class ValuesApiTest {
 		Job job = client.invokeAndWait(OP_READ, Maps.of(Strings.create("path"), Strings.create("w/vGreeting")));
 		assertEquals(Status.COMPLETE, job.getStatus());
 		assertEquals(before + 1, jobCount(), "covia:read via invoke persists exactly one job");
+	}
+
+	/** #399: a GET has no body for delegation proofs, so job-free reads take
+	 *  them from X-Covia-Ucans exactly like the job-status GET route. */
+	@Test
+	public void testDelegatedReadFromHeaderIsJobFree() throws Exception {
+		long exp = (System.currentTimeMillis() / 1000) + 3600;
+		AString proof = UCAN.createJWT(delegatedOwnerKP, UCAN.fromDIDKey(callerDID), exp,
+			Vectors.of(Capability.create(
+				Strings.create(delegatedOwnerDID + "/w/"), Capability.CRUD_READ)),
+			Vectors.empty());
+		long before = jobCount();
+
+		HttpResponse<String> r = getWithProof("read",
+			delegatedOwnerDID + "/w/delegated", proof);
+
+		assertEquals(200, r.statusCode(), r.body());
+		assertEquals(Strings.create("owner content"), RT.getIn(JSON.parse(r.body()), "value"));
+		assertEquals(before, jobCount(), "a delegated GET read must not persist a job");
 	}
 
 	// ===================== aggregate / count =====================

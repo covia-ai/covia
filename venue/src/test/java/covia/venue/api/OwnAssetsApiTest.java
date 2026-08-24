@@ -121,6 +121,29 @@ public class OwnAssetsApiTest {
 	}
 
 	@Test
+	public void testVenueListingCanExpandMetadataInOnePage() throws Exception {
+		HttpResponse<String> r = get("assets?expand=metadata&limit=5", true);
+		assertEquals(200, r.statusCode(), r.body());
+		AVector<?> items = (AVector<?>) RT.getIn(JSON.parse(r.body()), "items");
+		assertNotNull(items, r.body());
+		assertTrue(items.count() > 0, "the venue catalog should not be empty");
+		for (long i = 0; i < items.count(); i++) {
+			ACell item = items.get(i);
+			AString id = RT.ensureString(RT.getIn(item, "id"));
+			ACell metadata = RT.getIn(item, "metadata");
+			assertNotNull(id, item.toString());
+			assertNotNull(metadata, item.toString());
+			assertTrue(id.toString().endsWith("/a/" + metadata.getHash().toHexString()),
+				"expanded metadata must hash to its listed id: " + item);
+		}
+	}
+
+	@Test
+	public void testVenueListingRejectsUnknownExpansion() throws Exception {
+		assertEquals(400, get("assets?expand=everything", true).statusCode());
+	}
+
+	@Test
 	public void testScopeOwnIsJobFree() throws Exception {
 		long before = jobCount();
 		assertEquals(200, get("assets?scope=own", true).statusCode());
