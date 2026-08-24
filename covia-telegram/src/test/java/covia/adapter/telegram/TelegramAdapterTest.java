@@ -8,16 +8,22 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.function.BooleanSupplier;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -37,6 +43,7 @@ import covia.venue.RequestContext;
  * over the echoing {@code v/test/ops/llm}), and real lattice-persisted
  * sessions — no network, no mocks of our own code.
  */
+@Execution(ExecutionMode.SAME_THREAD)
 public class TelegramAdapterTest {
 
 	private static final AString OWNER = Strings.create("did:test:telegram:owner");
@@ -263,11 +270,14 @@ public class TelegramAdapterTest {
 			configureBots(Maps.of(Strings.create("echo"), echoCfg,
 				Strings.create("modes"), base.assoc(BotSpec.K_REPLY, convex.core.data.prim.CVMBool.FALSE)));
 			awaitState("modes", BotRunner.State.RUNNING, 10_000);
-			long jobsBefore = engine.jobs().getJobs(RequestContext.of(OWNER)).count();
+			RequestContext owner = RequestContext.of(OWNER);
+			Set<Blob> jobsBefore = new HashSet<>(engine.jobs().getJobs(owner).keySet());
 			telegram.push(token, 6001L, "private", STRANGER_ID, null, "quiet");
-			assertNull(telegram.awaitSent(token, 2_000), "reply:false must send nothing");
-			await(() -> engine.jobs().getJobs(RequestContext.of(OWNER)).count() == jobsBefore + 1, 10_000,
-				() -> "each inbound message is one Job in the bot user's job index");
+			Job quiet = awaitNewJob(owner, jobsBefore, 10_000);
+			quiet.awaitResult(10_000);
+			await(() -> adapter.runner("modes").isChatIdle(6001L), 10_000,
+				() -> "operation handler did not finish");
+			assertNull(telegram.awaitSent(token, 0), "reply:false must send nothing");
 
 			// reply:"…" — a fixed acknowledgement instead of the result
 			configureBots(Maps.of(Strings.create("echo"), echoCfg,
@@ -521,10 +531,13 @@ public class TelegramAdapterTest {
 	@Test
 	public void testDisabledAdapterIsOfflineUntilReenabled() throws Exception {
 		long chat = 1004L;
+		BotRunner runner = adapter.runner("echo");
 		engine.disableAdapter("telegram");
 		try {
+			await(runner::isOffline, 2_000,
+				() -> "Telegram poll loop did not park after adapter disablement");
 			telegram.push(chat, ALLOWED_ID, "alice", "while disabled");
-			assertNull(telegram.awaitSent(2_500), "a disabled adapter must not act on Telegram traffic");
+			assertNull(telegram.awaitSent(0), "a disabled adapter must not act on Telegram traffic");
 		} finally {
 			engine.enableAdapter("telegram");
 		}
@@ -613,16 +626,15 @@ public class TelegramAdapterTest {
 		assertTrue(text.length() > 2 * BotRunner.MAX_MESSAGE_LENGTH);
 		run(RequestContext.of(OWNER), "v/ops/telegram/send", Maps.of(
 			"chat_id", CVMLong.create(3004L), "text", text));
-		StringBuilder received = new StringBuilder();
-		int chunks = 0;
-		FakeTelegramServer.Sent s;
-		while ((s = telegram.awaitSent(chunks == 0 ? 10_000 : 2_000)) != null) {
-			assertTrue(s.text().length() <= BotRunner.MAX_MESSAGE_LENGTH, "chunk within Telegram's limit");
-			received.append(s.text()).append('\n');
-			chunks++;
+		List<String> expected = BotRunner.split(text, BotRunner.MAX_MESSAGE_LENGTH);
+		List<String> actual = new java.util.ArrayList<>(expected.size());
+		for (int i = 0; i < expected.size(); i++) {
+			FakeTelegramServer.Sent sent = telegram.awaitSent(i == 0 ? 10_000 : 0);
+			assertNotNull(sent, "missing chunk " + i);
+			actual.add(sent.text());
 		}
-		assertTrue(chunks >= 3, "split into several messages, got " + chunks);
-		assertTrue(received.toString().contains("line 699 of a rather long message"), "nothing lost at the tail");
+		assertEquals(expected, actual, "send every split chunk exactly once and in order");
+		assertNull(telegram.awaitSent(0), "send no extra chunks");
 	}
 
 	@Test
@@ -749,6 +761,18 @@ public class TelegramAdapterTest {
 		if(runner==null)return null;
 		ACell v=engine.resolvePath(Strings.create(runner.sessionsPath()+"/"+chatId),engine.venueContext());
 		return (v == null) ? null : v.toString();
+	}
+
+	private static Job awaitNewJob(RequestContext ctx, Set<Blob> known, long timeoutMs)
+			throws InterruptedException {
+		long deadline = System.currentTimeMillis() + timeoutMs;
+		while (System.currentTimeMillis() <= deadline) {
+			for (Blob id : engine.jobs().getJobs(ctx).keySet()) {
+				if (!known.contains(id)) return engine.jobs().getJob(id, ctx);
+			}
+			Thread.sleep(10);
+		}
+		throw new AssertionError("inbound message did not create a Job");
 	}
 
 	private static void awaitState(String bot, BotRunner.State state, long timeoutMs) throws InterruptedException {

@@ -2,6 +2,8 @@ package covia.adapter;
 
 import java.security.SecureRandom;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -43,6 +45,53 @@ public class TestAdapter extends AAdapter {
      * provider adapters. */
     public static final java.util.concurrent.ConcurrentHashMap<AString, ACell> CAPTURED_LLM_INPUT
         = new java.util.concurrent.ConcurrentHashMap<>();
+
+	/** A deterministic blocking point for tests that need work to remain live
+	 * without encoding correctness as a multi-second sleep. */
+	public static final class TestGate implements AutoCloseable {
+		private final String name;
+		private final CountDownLatch entered = new CountDownLatch(1);
+		private final CountDownLatch released = new CountDownLatch(1);
+
+		private TestGate(String name) {
+			this.name = name;
+		}
+
+		public boolean awaitEntered(long timeout, TimeUnit unit) throws InterruptedException {
+			return entered.await(timeout, unit);
+		}
+
+		public void release() {
+			released.countDown();
+		}
+
+		private void pass() {
+			entered.countDown();
+			try {
+				released.await();
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				throw new IllegalStateException("test gate interrupted: " + name, e);
+			}
+		}
+
+		@Override
+		public void close() {
+			release();
+			TEST_GATES.remove(name, this);
+		}
+	}
+
+	private static final java.util.concurrent.ConcurrentHashMap<String, TestGate> TEST_GATES
+		= new java.util.concurrent.ConcurrentHashMap<>();
+
+	public static TestGate createGate(String name) {
+		TestGate gate = new TestGate(name);
+		if (TEST_GATES.putIfAbsent(name, gate) != null) {
+			throw new IllegalArgumentException("Test gate already exists: " + name);
+		}
+		return gate;
+	}
 
     private final SecureRandom random = new SecureRandom();
     
@@ -211,6 +260,7 @@ public class TestAdapter extends AAdapter {
             job.setStatus(Status.PAUSED);
         } else if ("delay".equals(subOp)) {
             // Delay: needs Job for caller DID propagation to sub-invocation
+			job.setStatus(Status.STARTED);
             handleDelay(job, ctx, input);
         } else if ("never".equals(subOp)) {
             // Never completes. Run the default one-shot path (starts the
@@ -308,6 +358,12 @@ public class TestAdapter extends AAdapter {
      */
     private ACell handleTaskComplete(RequestContext ctx, ACell input) {
         ACell newInput = RT.getIn(input, Fields.NEW_INPUT);
+		AString gateName = RT.ensureString(RT.getIn(input, AgentState.KEY_CONFIG, "testGate"));
+		if (gateName != null) {
+			TestGate gate = TEST_GATES.get(gateName.toString());
+			if (gate == null) throw new IllegalStateException("Unknown test gate: " + gateName);
+			gate.pass();
+		}
         ACell delayCell = RT.getIn(newInput, Fields.DELAY);
 		// Agent/A2A integration tests can hold a transition open without shaping
 		// the user message around this test adapter's private delay control.

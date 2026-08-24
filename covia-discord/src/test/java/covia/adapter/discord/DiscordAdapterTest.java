@@ -20,6 +20,8 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -39,6 +41,7 @@ import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 
+@Execution(ExecutionMode.SAME_THREAD)
 class DiscordAdapterTest {
 	private static final AString OWNER=Strings.create("did:test:discord:owner"),OTHER=Strings.create("did:test:discord:other");
 	private static Engine engine;private static DiscordAdapter adapter;private static FakeGatewayHub gateway;private static FakeDiscordAPI api;

@@ -15,7 +15,9 @@ import java.util.concurrent.CompletionException;
 import java.util.stream.IntStream;
 
 import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.junit.jupiter.api.io.TempDir;
 
 import convex.core.data.ACell;
@@ -66,6 +68,9 @@ class PythonAdapterTest {
 	}
 
 	@Test
+	@Tag("integration")
+	@EnabledIfSystemProperty(named = "covia.tests.integration", matches = "true",
+		disabledReason = "embeds native CPython; enable with -Dcovia.tests.integration=true")
 	void managedInstancesAreOwnedAllowlistedBoundedAndClosable() throws Exception {
 		Assumptions.assumeTrue(PythonRuntime.availability().available(),
 			PythonRuntime.availability().detail());
@@ -164,6 +169,9 @@ class PythonAdapterTest {
 	}
 
 	@Test
+	@Tag("integration")
+	@EnabledIfSystemProperty(named = "covia.tests.integration", matches = "true",
+		disabledReason = "embeds native CPython; enable with -Dcovia.tests.integration=true")
 	void configuredScriptBecomesStatefulVenueOperation() throws Exception {
 		Assumptions.assumeTrue(PythonRuntime.availability().available(),
 			PythonRuntime.availability().detail());

@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.a2aproject.sdk.jsonrpc.common.json.JsonUtil;
@@ -45,6 +46,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import covia.api.Fields;
+import covia.adapter.TestAdapter;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.auth.VenueAuth;
@@ -395,7 +397,7 @@ public class A2AAgentCardTest {
 	 * #305 — an A2A turn has no synchronous completion deadline. SendMessage
 	 * returns the ordinary durable task Job immediately; the same id can be
 	 * reattached through polling or SSE, and both views converge on one final
-	 * state. The deterministic transition delay keeps the task live while the
+	 * state. The deterministic transition gate keeps the task live while the
 	 * client disconnects from SendMessage and opens a fresh subscription.
 	 */
 	@Test
@@ -407,36 +409,40 @@ public class A2AAgentCardTest {
 		VenueHTTP client = VenueHTTP.create(URI.create(BASE_URL), VenueAuth.bearer(jwt));
 		client.setTimeout(5000);
 
-		Job created = client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
-			Fields.AGENT_ID, Strings.create(agentId),
-			Fields.CONFIG, Maps.of(
-				Fields.OPERATION, Strings.create("v/test/ops/taskcomplete"),
-				Fields.DELAY, convex.core.data.prim.CVMLong.create(3000))));
-		assertEquals(Status.COMPLETE, created.getStatus(), created.getErrorMessage());
+		try (TestAdapter.TestGate gate = TestAdapter.createGate(agentId)) {
+			Job created = client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
+				Fields.AGENT_ID, Strings.create(agentId),
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, Strings.create("v/test/ops/taskcomplete"),
+					"testGate", Strings.create(agentId))));
+			assertEquals(Status.COMPLETE, created.getStatus(), created.getErrorMessage());
 
-		String endpoint = "/a2a/" + ownerDid + "/g/" + agentId;
-		Task submitted = extractTask(parse(post(endpoint,
-			rpcEnvelope("long-send", "SendMessage",
-				new MessageSendParams(userMessage("long turn"), null, null)), jwt)));
-		assertNotNull(submitted);
-		assertNotNull(submitted.id(), "SendMessage must return the durable Job id");
-		assertNotNull(submitted.contextId(), "SendMessage must return the session id");
-		assertTrue(!submitted.status().state().isFinal(),
-			"SendMessage must not wait for or manufacture a terminal timeout");
+			String endpoint = "/a2a/" + ownerDid + "/g/" + agentId;
+			Task submitted = extractTask(parse(post(endpoint,
+				rpcEnvelope("long-send", "SendMessage",
+					new MessageSendParams(userMessage("long turn"), null, null)), jwt)));
+			assertNotNull(submitted);
+			assertNotNull(submitted.id(), "SendMessage must return the durable Job id");
+			assertNotNull(submitted.contextId(), "SendMessage must return the session id");
+			assertTrue(!submitted.status().state().isFinal(),
+				"SendMessage must not wait for or manufacture a terminal timeout");
+			assertTrue(gate.awaitEntered(5, TimeUnit.SECONDS),
+				"agent transition did not reach its deterministic blocking point");
 
-		TaskStatusUpdateEvent streamed = awaitFinalStatusUpdate(endpoint,
-			submitted.id(), jwt, 7000);
-		assertEquals(submitted.id(), streamed.taskId());
-		assertEquals(submitted.contextId(), streamed.contextId());
-		assertTrue(streamed.isFinal());
-		assertEquals(TaskState.TASK_STATE_COMPLETED, streamed.status().state());
+			TaskStatusUpdateEvent streamed = awaitFinalStatusUpdate(endpoint,
+				submitted.id(), jwt, 7000, gate::release);
+			assertEquals(submitted.id(), streamed.taskId());
+			assertEquals(submitted.contextId(), streamed.contextId());
+			assertTrue(streamed.isFinal());
+			assertEquals(TaskState.TASK_STATE_COMPLETED, streamed.status().state());
 
-		Task polled = awaitTask(endpoint, submitted.id(), jwt,
-			TaskState.TASK_STATE_COMPLETED);
-		assertEquals(streamed.taskId(), polled.id());
-		assertEquals(streamed.contextId(), polled.contextId());
-		assertEquals(streamed.status().state(), polled.status().state(),
-			"GetTask and SubscribeToTask must converge on the same Job state");
+			Task polled = awaitTask(endpoint, submitted.id(), jwt,
+				TaskState.TASK_STATE_COMPLETED);
+			assertEquals(streamed.taskId(), polled.id());
+			assertEquals(streamed.contextId(), polled.contextId());
+			assertEquals(streamed.status().state(), polled.status().state(),
+				"GetTask and SubscribeToTask must converge on the same Job state");
+		}
 	}
 
 	// ---- helpers ----
@@ -502,12 +508,13 @@ public class A2AAgentCardTest {
 	}
 
 	private TaskStatusUpdateEvent awaitFinalStatusUpdate(String endpoint,
-			String taskId, String jwt, long timeoutMs) throws Exception {
+			String taskId, String jwt, long timeoutMs, Runnable afterSubscribed) throws Exception {
 		HttpResponse<java.util.stream.Stream<String>> response = postStreaming(endpoint,
 			rpcEnvelope("long-subscribe", "SubscribeToTask", new TaskIdParams(taskId)), jwt);
 		assertEquals(200, response.statusCode());
 		assertTrue(response.headers().firstValue("Content-Type").orElse("")
 			.contains("text/event-stream"));
+		afterSubscribed.run();
 
 		AtomicReference<TaskStatusUpdateEvent> terminal = new AtomicReference<>();
 		AtomicReference<Throwable> consumerFailure = new AtomicReference<>();

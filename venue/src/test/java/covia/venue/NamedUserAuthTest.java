@@ -117,9 +117,12 @@ public class NamedUserAuthTest {
 		assertRejected(namedToken(aliceKey, aliceDID, bobDID, venueDID));
 		assertRejected(namedToken(aliceKey, aliceDID, aliceDID,
 			UCAN.toDIDKey(AKeyPair.generate().getAccountKey())));
-		assertRejected(namedToken(aliceKey,
-			Strings.create("did:web:foreign.example:u:alice"),
-			Strings.create("did:web:foreign.example:u:alice"), venueDID));
+		// Exercise the remote-DID verification boundary without making this unit
+		// test depend on DNS, HTTPS, or the production did:web timeout.
+		AString foreign = Strings.create("did:exampletest:foreign-user");
+		server.getEngine().didVerifier().registerMethod("exampletest",
+			(did, message, signature) -> false);
+		assertRejected(namedToken(aliceKey, foreign, foreign, venueDID));
 	}
 
 	@Test

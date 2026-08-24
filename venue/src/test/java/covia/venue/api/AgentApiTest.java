@@ -60,6 +60,7 @@ public class AgentApiTest {
 	private AString callerDID;
 	private String jwt;
 	private VenueHTTP client;
+	private HttpClient http;
 
 	@BeforeAll
 	public void setup() throws Exception {
@@ -76,6 +77,7 @@ public class AgentApiTest {
 		jwt = token.toJWT(kp).toString();
 		client = VenueHTTP.create(URI.create(TestServer.BASE_URL), VenueAuth.bearer(jwt));
 		client.setTimeout(5000);
+		http = HttpClient.newHttpClient();
 
 		createAgent("AgentAlpha");
 		createAgent("AgentBeta");
@@ -95,7 +97,7 @@ public class AgentApiTest {
 		HttpRequest.Builder b = HttpRequest.newBuilder()
 			.uri(URI.create(TestServer.BASE_URL + "/api/v1/" + route)).GET();
 		if (auth) b.header("Authorization", "Bearer " + jwt);
-		return HttpClient.newHttpClient().send(b.build(), HttpResponse.BodyHandlers.ofString());
+		return http.send(b.build(), HttpResponse.BodyHandlers.ofString());
 	}
 
 	private long jobCount() {

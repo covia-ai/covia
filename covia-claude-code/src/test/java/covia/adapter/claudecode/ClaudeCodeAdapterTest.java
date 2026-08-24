@@ -18,6 +18,8 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -48,6 +50,7 @@ import covia.venue.RequestContext;
 @EnabledIfSystemProperty(named = "covia.tests.integration", matches = "true",
 	disabledReason = "drives real Claude Code CLI subprocesses (timing/environment-sensitive); "
 		+ "enable with -Dcovia.tests.integration=true")
+@Execution(ExecutionMode.SAME_THREAD)
 public class ClaudeCodeAdapterTest {
 
 	private static final AString OWNER = Strings.create("did:test:claudecode:owner");

@@ -7,6 +7,8 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -27,6 +29,7 @@ import covia.venue.RequestContext;
  * databases ({@code jdbc:convex:mem:}): real driver, real Calcite planner,
  * real lattice tables — no external processes, no stubs.
  */
+@Execution(ExecutionMode.SAME_THREAD)
 public class SQLAdapterTest {
 
 	private static Engine engine;

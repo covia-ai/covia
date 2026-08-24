@@ -118,6 +118,8 @@ final class BotRunner {
 	private volatile boolean stopped;
 	private volatile ScheduledFuture<?> retry;
 	private volatile Thread pollThread;
+	/** True once the poll loop has observed that its adapter is disabled. */
+	private volatile boolean offline;
 
 	private final AtomicLong received = new AtomicLong();
 	private final AtomicLong sent = new AtomicLong();
@@ -290,9 +292,11 @@ final class BotRunner {
 			TelegramBot b = bot;
 			if (b == null) return;
 			if (!adapter.isActive()) {
+				offline = true;
 				sleep(1_000);
 				continue;
 			}
+			offline = false;
 			try {
 				GetUpdates req = new GetUpdates().offset(offset).timeout(POLL_TIMEOUT_SECS);
 				// A conversation only needs messages; an operation handler gets every
@@ -329,6 +333,18 @@ final class BotRunner {
 				backoff = Math.min(backoff * 2, 60_000);
 			}
 		}
+		offline = false;
+	}
+
+	/** Whether the long-poll loop has parked after observing adapter disablement. */
+	boolean isOffline() {
+		return offline;
+	}
+
+	/** Whether all work already accepted for one chat has finished. */
+	boolean isChatIdle(long chatId) {
+		CompletableFuture<Void> tail = chatTails.get(chatId);
+		return tail == null || tail.isDone();
 	}
 
 	private void pollError(String why) {
