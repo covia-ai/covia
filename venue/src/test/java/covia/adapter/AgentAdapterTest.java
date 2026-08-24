@@ -2043,6 +2043,8 @@ public class AgentAdapterTest {
 		AMap<AString, ACell> meta = (AMap<AString, ACell>) session.get(Strings.intern("meta"));
 		assertEquals(CVMLong.create(2), meta.get(Strings.intern("turns")),
 			"meta.turns must reflect appended turn count");
+		assertEquals(assistantTurn.get(AgentState.K_TURN_TS), meta.get(Fields.UPDATED),
+			"meta.updated must ratchet to the newest persisted turn timestamp");
 
 		// #84 opt-in off by default: no per-turn caller attribution.
 		assertNull(userTurn.get(Fields.CALLER),
@@ -6119,5 +6121,115 @@ public class AgentAdapterTest {
 		ACell result = engine.jobs().invokeOperation(
 			"v/ops/agent/create", input, scoped).awaitResult(5000);
 		assertNull(RT.getIn(result, Fields.WARNINGS), String.valueOf(result));
+	}
+
+	// ========== agent-safe past sessions (#403) ==========
+
+	@Test
+	public void testPastSessionsAreSelfScopedCurrentExcludedAndNeedNoRawReadCap() {
+		AString agentId = Strings.create("past-session-agent");
+		AgentState agent = engine.getVenueState().users().ensure(ALICE_DID)
+			.ensureAgent(agentId, Maps.empty(), null);
+		Blob older = Blob.fromHex("10000000000000000000000000000001");
+		Blob newer = Blob.fromHex("10000000000000000000000000000002");
+		Blob current = Blob.fromHex("10000000000000000000000000000003");
+		setConversation(agent, older,
+			turn("user", "  Older\n topic  ", 100),
+			turn("assistant", "older answer", 110));
+		setConversation(agent, newer,
+			turn("user", "Newest topic", 200),
+			turn("assistant", "newest answer", 210));
+		setConversation(agent, current,
+			turn("user", "current topic", 300),
+			turn("assistant", "current answer", 310));
+
+		RequestContext scoped = RequestContext.ofAgent(ALICE_DID, agentId)
+			.withSessionId(current)
+			.withCaps(Vectors.of(
+				Capability.create(Strings.create("v/ops/agent/sessions"), Strings.create("invoke")),
+				Capability.create(Strings.create("v/ops/agent/session-read"), Strings.create("invoke"))));
+		ACell listed = engine.jobs().invokeOperation(
+			"v/ops/agent/sessions", Maps.empty(), scoped).awaitResult(5000);
+		AVector<ACell> sessions = RT.ensureVector(RT.getIn(listed, "sessions"));
+		assertEquals(2, sessions.count());
+		assertEquals(newer.toHexString(), RT.getIn(sessions.get(0), Fields.SESSION_ID).toString());
+		assertEquals("Newest topic", RT.getIn(sessions.get(0), "title").toString());
+		assertEquals("Older topic", RT.getIn(sessions.get(1), "title").toString());
+		assertEquals(2L, ((CVMLong) RT.getIn(sessions.get(0), "turnCount")).longValue());
+
+		ACell read = engine.jobs().invokeOperation(
+			"v/ops/agent/session-read", Maps.empty(), scoped).awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(read, "found"));
+		assertEquals(newer.toHexString(), RT.getIn(read, Fields.SESSION_ID).toString());
+		assertEquals(2, RT.ensureVector(RT.getIn(read, Fields.MESSAGES)).count());
+	}
+
+	@Test
+	public void testPastSessionMissingCurrentAndPolicyVetoAreIndistinguishable() {
+		AString agentId = Strings.create("private-past-session-agent");
+		AgentState agent = engine.getVenueState().users().ensure(ALICE_DID)
+			.ensureAgent(agentId, Maps.empty(), null);
+		Blob visible = Blob.fromHex("20000000000000000000000000000001");
+		Blob hidden = Blob.fromHex("20000000000000000000000000000002");
+		Blob current = Blob.fromHex("20000000000000000000000000000003");
+		Blob missing = Blob.fromHex("20000000000000000000000000000004");
+		for (Blob sid : new Blob[] {visible, hidden, current}) {
+			setConversation(agent, sid,
+				turn("user", "question " + sid.toHexString(), 100),
+				turn("assistant", "answer", 110));
+		}
+
+		RequestContext scoped = RequestContext.ofAgent(ALICE_DID, agentId)
+			.withSessionId(current)
+			.withCaps(Vectors.of(
+				Capability.create(Strings.create("v/ops/agent/session-read"), Strings.create("invoke")),
+				Capability.create(Strings.create("v/ops/agent/sessions"), Strings.create("invoke"))));
+		AgentAdapter adapter = (AgentAdapter) engine.getAdapter("agent");
+		try (AgentAdapter.SessionVisibilityRegistration ignored =
+				adapter.registerSessionVisibilityPolicy(candidate -> {
+					if (!ALICE_DID.equals(candidate.ownerDID())
+							|| !agentId.equals(candidate.agentId())) return true;
+					if (hidden.equals(candidate.sessionId())) {
+						throw new IllegalStateException("policy unavailable");
+					}
+					return true;
+				})) {
+			ACell absent = readPastSession(scoped, missing);
+			ACell active = readPastSession(scoped, current);
+			ACell vetoed = readPastSession(scoped, hidden);
+			assertEquals(Maps.of("found", false), absent);
+			assertEquals(absent, active);
+				assertEquals(absent, vetoed);
+				assertEquals(1, ((AMap<?, ?>) vetoed).count());
+				assertEquals(CVMBool.TRUE, RT.getIn(readPastSession(scoped, visible), "found"));
+
+				ACell listed = engine.jobs().invokeOperation(
+					"v/ops/agent/sessions", Maps.empty(), scoped).awaitResult(5000);
+				AVector<ACell> sessions = RT.ensureVector(RT.getIn(listed, "sessions"));
+				assertEquals(1, sessions.count(), "current and policy-hidden sessions must be omitted");
+				assertEquals(visible.toHexString(),
+					RT.getIn(sessions.get(0), Fields.SESSION_ID).toString());
+		}
+	}
+
+	private ACell readPastSession(RequestContext ctx, Blob sid) {
+		return engine.jobs().invokeOperation("v/ops/agent/session-read",
+			Maps.of(Fields.SESSION_ID, sid.toHexString()), ctx).awaitResult(5000);
+	}
+
+	private static ACell turn(String role, String content, long ts) {
+		return Maps.of("role", role, "content", content, "ts", ts);
+	}
+
+	@SuppressWarnings("unchecked")
+	private static void setConversation(AgentState agent, Blob sid, ACell... turns) {
+		agent.ensureSession(sid, Strings.create("test-caller"));
+		AVector<ACell> conversation = Vectors.empty();
+		for (ACell turn : turns) conversation = conversation.conj(turn);
+		final AVector<ACell> stored = conversation;
+		assertTrue(agent.updateSessionFrames(sid, null, frames -> {
+			AMap<AString, ACell> root = (AMap<AString, ACell>) frames.get(0);
+			return frames.assoc(0, root.assoc(AgentState.KEY_CONVERSATION, stored));
+		}));
 	}
 }

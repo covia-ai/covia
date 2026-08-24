@@ -1,0 +1,42 @@
+{
+	"name": "List Past Agent Sessions",
+	"description": "Lists bounded metadata for the running agent's own past conversations, newest first. The current session, unfinished conversations and sessions hidden by venue policy are omitted. This is a safe projection, not generic access to agent state.",
+	"dateCreated": "2026-08-24T00:00:00Z",
+	"operation": {
+		"adapter": "agent:sessions",
+		"readOnly": true,
+		"toolName": "agent_sessions",
+		"default": {
+			"limit": 20,
+			"offset": 0
+		},
+		"input": {
+			"type": "object",
+			"properties": {
+				"limit": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Maximum sessions to return. Default 20." },
+				"offset": { "type": "integer", "minimum": 0, "description": "Number of newest visible sessions to skip. Default 0." }
+			}
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"sessions": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"properties": {
+							"sessionId": { "type": "string" },
+							"title": { "type": "string", "description": "Explicit title, or a bounded title derived from the first completed user turn." },
+							"created": { "type": "integer", "description": "Creation time in Unix milliseconds." },
+							"updated": { "type": "integer", "description": "Last completed conversational activity in Unix milliseconds." },
+							"turnCount": { "type": "integer", "description": "Number of turns in the safe historical projection." }
+						}
+					}
+				},
+				"count": { "type": "integer" },
+				"total": { "type": "integer" },
+				"offset": { "type": "integer" }
+			}
+		}
+	}
+}

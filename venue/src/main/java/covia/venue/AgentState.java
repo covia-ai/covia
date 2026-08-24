@@ -301,8 +301,10 @@ public class AgentState extends ALatticeComponent<ACell> {
 			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index idx)
 				? (Index<Blob, ACell>) idx : Index.none();
 			if (sessions.get(sid) != null) return r;
+			long created = Utils.getCurrentTimestamp();
 			AMap<AString, ACell> meta = Maps.of(
-				K_CREATED, CVMLong.create(Utils.getCurrentTimestamp()),
+				K_CREATED, CVMLong.create(created),
+				Fields.UPDATED, CVMLong.create(created),
 				K_TURNS,   CVMLong.create(0),
 				K_PARTIES, (caller != null) ? Vectors.of(caller) : Vectors.empty());
 			AMap<AString, ACell> rootFrame = Maps.of(
@@ -508,6 +510,12 @@ public class AgentState extends ALatticeComponent<ACell> {
 			AMap<AString, ACell> meta = (AMap<AString, ACell>) session.get(K_META);
 			long current = (meta.get(K_TURNS) instanceof CVMLong cl) ? cl.longValue() : 0;
 			meta = meta.assoc(K_TURNS, CVMLong.create(current + turnsToAppend.count()));
+			long updated = (meta.get(Fields.UPDATED) instanceof CVMLong cl) ? cl.longValue() : 0;
+			for (long i = 0; i < turnsToAppend.count(); i++) {
+				ACell ts = RT.getIn(turnsToAppend.get(i), K_TURN_TS);
+				if (ts instanceof CVMLong cl) updated = Math.max(updated, cl.longValue());
+			}
+			if (updated > 0) meta = meta.assoc(Fields.UPDATED, CVMLong.create(updated));
 			session = session.assoc(K_META, meta);
 		}
 		return session;

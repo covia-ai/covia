@@ -1,11 +1,14 @@
 package covia.adapter;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
@@ -32,6 +35,7 @@ import convex.core.lang.RT;
 import convex.core.json.schema.JsonSchema;
 import convex.core.util.Utils;
 import covia.adapter.agent.AbstractLLMAdapter;
+import covia.adapter.agent.ConversationRenderer;
 import covia.adapter.agent.ToolPalette;
 import covia.adapter.agent.ContextInspectable;
 import covia.adapter.agent.CycleRecord;
@@ -94,6 +98,17 @@ public class AgentAdapter extends AAdapter {
 	private static final AString K_API_KEY          = Strings.intern("apiKey");
 	private static final AString K_PROVIDER_OPTIONS = Strings.intern("providerOptions");
 	private static final AString K_AGENT_FACET      = Strings.intern("agent");
+	private static final AString K_SESSIONS         = Strings.intern("sessions");
+	private static final AString K_FOUND            = Strings.intern("found");
+	private static final AString K_COUNT            = Strings.intern("count");
+	private static final AString K_TURN_COUNT       = Strings.intern("turnCount");
+	private static final AString K_MAX_TURNS        = Strings.intern("maxTurns");
+	private static final AString K_MAX_CHARS        = Strings.intern("maxChars");
+	private static final AString K_TRUNCATED        = Strings.intern("truncated");
+	private static final AString K_META             = Strings.intern("meta");
+	private static final AString K_FRAMES           = Strings.intern("frames");
+	private static final AString K_TITLE            = Strings.intern("title");
+	private static final AString K_CREATED          = Strings.intern("created");
 	private static final int MAX_CONFIG_LAYER_DEPTH = 32;
 	/** Persisted, non-secret requester scope used to reconstruct an output
 	 * handoff after a venue restart. Live requests use the complete immutable
@@ -151,6 +166,32 @@ public class AgentAdapter extends AAdapter {
 	 */
 	private final ConcurrentHashMap<Blob, RequestContext> outputContexts
 		= new ConcurrentHashMap<>();
+
+	/** Trusted host policies may only remove sessions from the self-history
+	 * projection. Policies compose by intersection and exceptions fail closed. */
+	private final CopyOnWriteArrayList<SessionVisibilityPolicy> sessionVisibilityPolicies
+		= new CopyOnWriteArrayList<>();
+
+	@FunctionalInterface
+	public interface SessionVisibilityPolicy {
+		boolean isVisible(SessionVisibilityContext session);
+	}
+
+	public record SessionVisibilityContext(RequestContext request, AString ownerDID,
+			AString agentId, Blob sessionId, AMap<AString, ACell> session) {}
+
+	@FunctionalInterface
+	public interface SessionVisibilityRegistration extends AutoCloseable {
+		@Override void close();
+	}
+
+	/** Registers a venue-host policy veto for agent-facing past-session reads. */
+	public SessionVisibilityRegistration registerSessionVisibilityPolicy(
+			SessionVisibilityPolicy policy) {
+		Objects.requireNonNull(policy, "policy");
+		sessionVisibilityPolicies.add(policy);
+		return () -> sessionVisibilityPolicies.remove(policy);
+	}
 
 	/**
 	 * Per-agent in-flight chat Jobs keyed by session ID. An entry reserves
@@ -323,6 +364,8 @@ public class AgentAdapter extends AAdapter {
 		installAsset("agent/fail-task",     BASE + "failTask.json");
 		installAsset("agent/delete-session", BASE + "deleteSession.json");
 		installAsset("agent/rename-session", BASE + "renameSession.json");
+		installAsset("agent/sessions",       BASE + "sessions.json");
+		installAsset("agent/session-read",   BASE + "sessionRead.json");
 
 		// Install standard agent templates at v/agents/templates/<name>.
 		// Discoverable via covia_list path=v/agents/templates and usable in
@@ -388,6 +431,12 @@ public class AgentAdapter extends AAdapter {
 								+ "' was not found or is terminated; use agent:list or agent:create"));
 					}
 					return CompletableFuture.completedFuture(summary);
+				}
+				case "sessions" -> {
+					return CompletableFuture.completedFuture(doSessions(ctx, input));
+				}
+				case "sessionRead" -> {
+					return CompletableFuture.completedFuture(doSessionRead(ctx, input));
 				}
 				default -> {
 					// Everything else — create, update, fork, chat, message,
@@ -542,6 +591,8 @@ public class AgentAdapter extends AAdapter {
 				case "cancelTask"   -> handleCancelTask(job, input, ctx);
 				case "deleteSession" -> handleDeleteSession(job, input, ctx);
 				case "renameSession" -> handleRenameSession(job, input, ctx);
+				case "sessions"      -> handleSessions(job, input, ctx);
+				case "sessionRead"   -> handleSessionRead(job, input, ctx);
 				case "completeTask" -> handleCompleteTask(job, input, ctx);
 				case "failTask"     -> handleFailTask(job, input, ctx);
 				default             -> job.fail("Unknown agent operation: " + getSubOperation(meta));
@@ -1591,6 +1642,204 @@ public class AgentAdapter extends AAdapter {
 		}
 
 		return Maps.of(Strings.intern("agents"), agents);
+	}
+
+	// ========== Agent-safe past-session projection (#403) ==========
+
+	private static final int DEFAULT_SESSION_LIMIT = 20;
+	private static final int MAX_SESSION_LIMIT = 100;
+	private static final int DEFAULT_HISTORY_TURNS = 20;
+	private static final int MAX_HISTORY_TURNS = 100;
+	private static final int DEFAULT_HISTORY_CHARS = 8_000;
+	private static final int MAX_HISTORY_CHARS = 100_000;
+	private static final int MAX_SESSION_TITLE_CHARS = 120;
+
+	private record SessionSummary(Blob id, AMap<AString, ACell> session,
+			AString title, long created, long updated, long turnCount) {}
+
+	private void handleSessions(Job job, ACell input, RequestContext ctx) {
+		job.setStatus(Status.STARTED);
+		job.completeWith(doSessions(ctx, input));
+	}
+
+	private void handleSessionRead(Job job, ACell input, RequestContext ctx) {
+		job.setStatus(Status.STARTED);
+		job.completeWith(doSessionRead(ctx, input));
+	}
+
+	/** Lists only the running agent's own, completed, non-current sessions. */
+	private AMap<AString, ACell> doSessions(RequestContext ctx, ACell input) {
+		AgentState agent = requireSelfAgent(ctx);
+		int limit = boundedInt(input, Fields.LIMIT, DEFAULT_SESSION_LIMIT, 1, MAX_SESSION_LIMIT);
+		int offset = boundedInt(input, Fields.OFFSET, 0, 0, Integer.MAX_VALUE);
+		List<SessionSummary> summaries = visibleSessionSummaries(ctx, agent);
+		int start = Math.min(offset, summaries.size());
+		int end = (int) Math.min((long) start + limit, summaries.size());
+		AVector<ACell> sessions = Vectors.empty();
+		for (int i = start; i < end; i++) {
+			SessionSummary summary = summaries.get(i);
+			AMap<AString, ACell> item = Maps.of(
+				Fields.SESSION_ID, Strings.create(summary.id().toHexString()),
+				K_CREATED, CVMLong.create(summary.created()),
+				Fields.UPDATED, CVMLong.create(summary.updated()),
+				K_TURN_COUNT, CVMLong.create(summary.turnCount()));
+			if (summary.title() != null) item = item.assoc(K_TITLE, summary.title());
+			sessions = sessions.conj(item);
+		}
+		return Maps.of(
+			K_SESSIONS, sessions,
+			K_COUNT, CVMLong.create(sessions.count()),
+			Fields.TOTAL, CVMLong.create(summaries.size()),
+			Fields.OFFSET, CVMLong.create(start));
+	}
+
+	/** Reads a bounded projection of one past session, or the newest when omitted. */
+	private AMap<AString, ACell> doSessionRead(RequestContext ctx, ACell input) {
+		AgentState agent = requireSelfAgent(ctx);
+		int maxTurns = boundedInt(input, K_MAX_TURNS,
+			DEFAULT_HISTORY_TURNS, 1, MAX_HISTORY_TURNS);
+		int maxChars = boundedInt(input, K_MAX_CHARS,
+			DEFAULT_HISTORY_CHARS, 1, MAX_HISTORY_CHARS);
+
+		AString requested = RT.ensureString(RT.getIn(input, Fields.SESSION_ID));
+		SessionSummary summary;
+		if (requested == null) {
+			List<SessionSummary> summaries = visibleSessionSummaries(ctx, agent);
+			if (summaries.isEmpty()) return sessionNotFound();
+			summary = summaries.get(0);
+		} else {
+			Blob sid;
+			try {
+				sid = Blob.fromHex(requested.toString());
+			} catch (RuntimeException e) {
+				throw new IllegalArgumentException("sessionId must be a 16-byte hex string");
+			}
+			if (sid == null || sid.count() != 16) {
+				throw new IllegalArgumentException("sessionId must be a 16-byte hex string");
+			}
+			summary = summarizeSession(ctx, sid, agent.getSession(sid));
+			if (summary == null) return sessionNotFound();
+		}
+
+		AMap<AString, ACell> frame = rootFrame(summary.session());
+		ConversationRenderer.HistoricalView view = ConversationRenderer.historical(
+			frame, maxTurns, maxChars);
+		AMap<AString, ACell> result = Maps.of(
+			K_FOUND, CVMBool.TRUE,
+			Fields.SESSION_ID, Strings.create(summary.id().toHexString()),
+			K_CREATED, CVMLong.create(summary.created()),
+			Fields.UPDATED, CVMLong.create(summary.updated()),
+			K_TURN_COUNT, CVMLong.create(summary.turnCount()),
+			Fields.MESSAGES, view.messages(),
+			K_TRUNCATED, CVMBool.create(view.truncated()));
+		if (summary.title() != null) result = result.assoc(K_TITLE, summary.title());
+		return result;
+	}
+
+	private AgentState requireSelfAgent(RequestContext ctx) {
+		AString owner = ctx.getUserDID();
+		AString agentId = ctx.getAgentId();
+		if (owner == null || agentId == null) {
+			throw new IllegalArgumentException(
+				"Past-session operations require an agent execution context");
+		}
+		User user = engine.getVenueState().users().get(owner);
+		AgentState agent = (user != null) ? user.agent(agentId) : null;
+		if (agent == null || !agent.exists()) {
+			throw new IllegalArgumentException("Current agent was not found");
+		}
+		return agent;
+	}
+
+	private List<SessionSummary> visibleSessionSummaries(RequestContext ctx,
+			AgentState agent) {
+		List<SessionSummary> result = new ArrayList<>();
+		Index<Blob, ACell> sessions = agent.getSessions();
+		for (long i = 0; i < sessions.count(); i++) {
+			var entry = sessions.entryAt(i);
+			if (!(entry.getValue() instanceof AMap<?, ?> raw)) continue;
+			@SuppressWarnings("unchecked")
+			AMap<AString, ACell> session = (AMap<AString, ACell>) raw;
+			SessionSummary summary = summarizeSession(ctx, entry.getKey(), session);
+			if (summary != null) result.add(summary);
+		}
+		result.sort(Comparator
+			.comparingLong(SessionSummary::updated).reversed()
+			.thenComparing(s -> s.id().toHexString(), Comparator.reverseOrder()));
+		return result;
+	}
+
+	private SessionSummary summarizeSession(RequestContext ctx, Blob sid,
+			AMap<AString, ACell> session) {
+		if (session == null || !isSessionVisible(ctx, sid, session)) return null;
+		ConversationRenderer.HistoricalView view = ConversationRenderer.historical(
+			rootFrame(session), 0, 0);
+		if (view.turnCount() == 0) return null;
+		AMap<AString, ACell> meta = RT.ensureMap(session.get(K_META));
+		long created = longValue((meta != null) ? meta.get(K_CREATED) : null, 0);
+		long updated = view.updated();
+		if (updated == 0 && meta != null) updated = longValue(meta.get(Fields.UPDATED), created);
+		if (updated == 0) updated = created;
+		AString title = cleanTitle((meta != null) ? RT.ensureString(meta.get(K_TITLE)) : null);
+		if (title == null) title = cleanTitle(view.firstUserContent());
+		return new SessionSummary(sid, session, title, created, updated, view.turnCount());
+	}
+
+	private boolean isSessionVisible(RequestContext ctx, Blob sid,
+			AMap<AString, ACell> session) {
+		if (sid.equals(ctx.getSessionId())) return false;
+		SessionVisibilityContext visibility = new SessionVisibilityContext(
+			ctx, ctx.getUserDID(), ctx.getAgentId(), sid, session);
+		for (SessionVisibilityPolicy policy : sessionVisibilityPolicies) {
+			try {
+				if (!policy.isVisible(visibility)) return false;
+			} catch (RuntimeException e) {
+				log.warn("Agent session visibility policy failed closed", e);
+				return false;
+			}
+		}
+		return true;
+	}
+
+	@SuppressWarnings("unchecked")
+	private static AMap<AString, ACell> rootFrame(AMap<AString, ACell> session) {
+		AVector<ACell> frames = RT.ensureVector(session.get(K_FRAMES));
+		if (frames == null || frames.isEmpty() || !(frames.get(0) instanceof AMap<?, ?> frame)) {
+			return null;
+		}
+		return (AMap<AString, ACell>) frame;
+	}
+
+	private static int boundedInt(ACell input, AString field, int defaultValue,
+			int min, int max) {
+		ACell value = RT.getIn(input, field);
+		if (value == null) return defaultValue;
+		if (!(value instanceof CVMLong number)) {
+			throw new IllegalArgumentException(field + " must be an integer");
+		}
+		long n = number.longValue();
+		if (n < min || n > max) {
+			throw new IllegalArgumentException(field + " must be between " + min + " and " + max);
+		}
+		return (int) n;
+	}
+
+	private static long longValue(ACell value, long fallback) {
+		return (value instanceof CVMLong number) ? number.longValue() : fallback;
+	}
+
+	private static AString cleanTitle(AString value) {
+		if (value == null) return null;
+		String title = value.toString().replaceAll("\\s+", " ").trim();
+		if (title.isEmpty()) return null;
+		if (title.length() > MAX_SESSION_TITLE_CHARS) {
+			title = title.substring(0, MAX_SESSION_TITLE_CHARS - 1) + "…";
+		}
+		return Strings.create(title);
+	}
+
+	private static AMap<AString, ACell> sessionNotFound() {
+		return Maps.of(K_FOUND, CVMBool.FALSE);
 	}
 
 	private void handleDelete(Job job, ACell input, RequestContext ctx) {

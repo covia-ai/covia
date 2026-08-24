@@ -69,10 +69,11 @@ g/<agent>/
                         the in-flight instruction keyed by that same ID.
   sessions/           — Index of sessions, keyed by sid
     <sid>/
-      meta            — {id, parties, title, status, started, lastActivity, turnCount}
-      history         — vector of turns/events (full transcript)
+      meta            — {parties, title?, created, updated, turns, tokens?}
+      frames/0/
+        conversation  — vector of persisted turns and compacted segments
       pending         — messages queued for next transition (§5.5.2)
-      config?         — session-level config overrides (rare)
+      c/              — session-scoped user scratch (the `c/` shorthand)
 ```
 
 Other framework-managed fields on the agent record (status, scheduling, error, caps, timeline entries) are documented where they are authoritative — see [GRID_LATTICE_DESIGN.md §4.3](./GRID_LATTICE_DESIGN.md) for the top-level shape, [SCHEDULER.md](./SCHEDULER.md) for wake state, and [AGENT_LOOP.md](./AGENT_LOOP.md) for timeline entry structure.
@@ -97,21 +98,19 @@ Three virtual namespaces expose user-writable scratch scoped to the agent, sessi
 
 Resolution rules, lifetimes, scoping inheritance, and the split between user scratch and framework-managed state are defined in [GRID_LATTICE_DESIGN.md §4.5](./GRID_LATTICE_DESIGN.md).
 
-### 4.3 Session metadata shape (suggested)
+### 4.3 Session metadata shape
 
 ```json
 {
-  "id": "01HXYZABC123...",
   "parties": ["did:key:z6MkAgent...", "did:key:z6MkUser..."],
   "title": "AP demo improvements",
-  "status": "active",
-  "started": 1776079053991,
-  "lastActivity": 1776082534100,
-  "turnCount": 47
+  "created": 1776079053991,
+  "updated": 1776082534100,
+  "turns": 47
 }
 ```
 
-The id is opaque and venue-minted (UUID-ish, MCP/A2A-compatible). `parties` is the authoritative access-control list — capability checks read it directly. Title is free-form, human-facing. Status tracks lifecycle (§7).
+The id is the enclosing Index key: an opaque, venue-minted 16-byte value rendered as hex at API boundaries. `parties` records participants, title is optional and human-facing, and `updated` ratchets from persisted turn timestamps. Authorisation is capability-based; `parties` is not an ambient permission grant.
 
 ---
 
@@ -145,25 +144,30 @@ Session ids are always venue-minted — callers never supply their own. Per-op r
 
 **Why three ops, not flags on one op.** Each op encodes a distinct caller intent (long-running task vs. wait-for-reply vs. notify). The agent doesn't have to declare its mode — the framework already knows what to do with the agent's response based on which queue picked the work. This eliminates the "is this response a task completion or a chat reply or both?" ambiguity that comes from a single intake op + per-call flags.
 
-### 5.2 New operations
+### 5.2 Agent-safe retrospective operations
 
 | Op | Purpose |
 |----|---------|
-| `agent:sessionList` | List sessions for an agent (filter by type, counterparty, status) |
-| `agent:sessionInfo` | Get metadata + summary for a session |
-| `agent:renameSession` | Set or clear a session's human-facing title |
-| `agent:sessionArchive` | Mark a session archived (no longer active) |
-| `agent:sessionDelete` | Permanently remove (rare; audit-sensitive) |
+| `agent:sessions` | List bounded metadata for the running agent's own past sessions, newest first |
+| `agent:sessionRead` | Read a bounded safe transcript projection; omit `sessionId` for the newest visible session |
+| `agent:renameSession` | Set or clear a session's human-facing title (owner management surface) |
+| `agent:deleteSession` | Permanently remove a session (owner management surface; audit-sensitive) |
 
-Or — alternatively, no new operations: sessions are just lattice data, use `covia_list path=g/<agent>/sessions` to discover. This is more in keeping with the lattice-everything philosophy.
+The retrospective operations are deliberately self-scoped from `RequestContext.agentId`; they accept no `agentId` parameter and require only invocation capability for their exact operation asset. They do not confer generic `g/` read access. The current session is always excluded. Missing, current, unfinished and policy-vetoed sessions all produce exactly `{"found":false}` from `agent:sessionRead`, avoiding an existence oracle.
+
+The projection contains completed user/final-assistant turns and compacted summaries. Provider tool calls, tool results, framework diagnostics and an unanswered tail remain in the durable audit transcript but are not exposed to the agent. Both turn count and total content are bounded, including a single oversized turn.
+
+Trusted venue modules may register an `AgentAdapter.SessionVisibilityPolicy`. Policies compose by intersection: any veto hides the session, and policy failure hides it as well. This gives applications a narrow private-conversation rule without duplicating transcript rendering or granting agents raw session-tree access.
 
 ### 5.3 Discovery via standard lattice ops
 
 ```
 covia_list  path=g/Assistant/sessions                       — all sessions
 covia_read  path=g/Assistant/sessions/<sid>/meta            — one session's metadata
-covia_slice path=g/Assistant/sessions/<sid>/history limit=20 — recent turns
+covia_slice path=g/Assistant/sessions/<sid>/frames/0/conversation limit=20 — recent stored entries
 ```
+
+These generic operations remain the owner/operator inspection surface and require the corresponding lattice capabilities. Agent configurations should receive the exact `agent:sessions` / `agent:sessionRead` invoke capabilities instead of broad `g/<agent>/sessions` read access.
 
 ### 5.4 Default session rule
 
@@ -226,7 +230,7 @@ client → agent_message {agentId, sessionId: "s-01HX...",
 
 #### 5.5.1 Where messages live
 
-All conversational traffic is session-scoped. Messages land in `sessions/<sid>/pending` and are drained into `sessions/<sid>/history` by the run loop on the next transition cycle for that session. There is no agent-level inbox — conversation lives with the conversation.
+All conversational traffic is session-scoped. Messages land in `sessions/<sid>/pending` and are drained into `sessions/<sid>/frames/0/conversation` by the run loop on the next transition cycle for that session. There is no agent-level inbox — conversation lives with the conversation.
 
 #### 5.5.2 Multiple messages before the agent transitions
 
@@ -234,11 +238,11 @@ If a caller sends several messages on the same session while the agent is still 
 
 ```
 g/<agent>/sessions/<sid>/
-  history    — appended turns (processed)
+  frames/0/conversation — appended turns (processed)
   pending    — messages received but not yet presented to a transition
 ```
 
-When the agent next transitions, all items in `pending` are moved into the transition input (as a batch of new messages in a single turn boundary) and then into `history` once the transition completes. This preserves ordering per-session and prevents interleaving across sessions — conversation A can't disrupt conversation B's turn assembly.
+When the agent next transitions, claimed items in `pending` are appended to the root-frame conversation atomically as they are presented to the transition. This preserves ordering per-session and prevents interleaving across sessions — conversation A can't disrupt conversation B's turn assembly.
 
 #### 5.5.3 Agent-to-agent messages (pipelines)
 
@@ -265,7 +269,7 @@ input: {
   session: {
     sessionId, parties, meta,
     c,                 — session state snapshot (from sessions/<sid>/c/). Common updates.
-    history,           — conversation transcript
+    frames,            — root conversation plus any goal-tree child frames
     pending            — messages queued since last transition (§5.5.2)
   },
   task?: {             — present only when this transition is servicing a task
@@ -278,10 +282,10 @@ input: {
   newInput             — the new request/message that triggered this transition
 }
 
-output: ACell           — the response value (or null), appended to c/history
+output: ACell           — the response value (or null), appended to frames[0].conversation
 ```
 
-If the return value is non-null, the framework appends it as the terminal turn in `c/history`. A transition may also return `turns`: non-terminal assistant tool-call and tool-result messages that the framework inserts immediately before that terminal turn. This keeps one chronologically ordered audit transcript without making the framework understand provider-specific tool execution. For chat work, the return value also completes the chat Job. For task work, completion is **explicit**: the agent (or LLM tool loop) invokes `agent:complete_task` to finish; if no completion op was invoked during the transition, the task yields and stays in the queue.
+If the return value is non-null, the framework appends it as the terminal turn in `frames[0].conversation`. A transition may also return `turns`: non-terminal assistant tool-call and tool-result messages that the framework inserts immediately before that terminal turn. This keeps one chronologically ordered audit transcript without making the framework understand provider-specific tool execution. For chat work, the return value also completes the chat Job. For task work, completion is **explicit**: the agent (or LLM tool loop) invokes `agent:complete_task` to finish; if no completion op was invoked during the transition, the task yields and stays in the queue.
 
 **Stored history vs model context.** The session retains the complete transcript: user input, assistant tool calls, tool results, durable failure diagnostics, and the final assistant response. The default LLM rendering starts an in-flight cycle at the newest unanswered user turn and renders that tail in full. Completed cycles retain only user/final-assistant turns and failure diagnostics; raw tool-call/result scratch is elided as whole pairs. Explicit `complete`/`fail` control calls persist a plain assistant projection of their value, which closes the cycle immediately, so later or idle/proactive inference keeps the answer without replaying the control-tool transcript. This satisfies Anthropic's strict ordering rule: no visible `tool_use` is separated from or left without its corresponding `tool_result`. Set `config.renderHistory` to `"full"` for debugging or replay that requires the complete provider-shaped history. This is a render-time view only; it never deletes audit data.
 
@@ -313,19 +317,20 @@ There is no `agent:yield` op — yield is the natural state when no completion o
 | `inCycle` | the owning attempt sets it at claim; merge/suspend/startup clear it | write fence only; it is never a wake signal or resume checkpoint |
 | `loads` | the merge (session-tier working set) | unchanged |
 | `meta.turns` | whoever appends root turns (shared helper) | bumped in the same CAS as the append |
+| `meta.updated` | whoever appends root turns (shared helper) | ratcheted to the newest persisted turn timestamp in the same CAS |
 
 **Completion ordering.** `agent:complete_task` / `agent:fail_task` do not finish the caller's pending Job inline. The completion envelope is parked and drained after the transition's timeline + state writes commit. Only then is the pending Job completed. This ordering is load-bearing: any caller awaiting its task observes the timeline and lattice writes for its task before its await returns. Without the deferral, the venue op would race the framework's timeline write and callers could see an empty `taskResults` immediately after unblocking.
 
 The framework around the transition:
 
 1. Resolves or mints the session before invoking (§5.4)
-2. Reads `n/`, `c/`, `history`, `pending` (and `t` if a task is focused) from the lattice
+2. Reads `n/`, `c/`, `frames`, `pending` (and `t` if a task is focused) from the lattice
 3. Scopes the request context to `(agent, session, task?)` so writes and completion ops route correctly
 4. Provides the snapshots as transition input under their shorthand names
 5. Invokes the transition adapter
 6. On adapter return:
-   - Append adapter-emitted non-terminal `turns`, if any, to `c/history`
-   - If return value non-null → append one terminal turn to `c/history`
+   - Append adapter-emitted non-terminal `turns`, if any, to `frames[0].conversation`
+   - If return value non-null → append one terminal turn to `frames[0].conversation`
    - If chat picked: complete chat Job with return value (yield only if return is null — rare)
    - If task picked: completed iff `agent:complete_task` / `agent:fail_task` was invoked during transition; otherwise yield, apply falloff (§6.3). (goaltree additionally completes a still-open task when its root frame completes — there, a reply is the answer; llmagent yields.)
    - If message picked: no completion concept (return value already emitted to history)
@@ -410,7 +415,7 @@ Sessions are **never deleted by the framework** (audit). Archived sessions can b
 
 A user can hold a private conversation and delete it afterwards.
 `agent:deleteSession {agentId, sessionId}` removes the **session record** —
-`g/<agent>/sessions/<sid>` (pending, frames / history, meta). Removal is
+`g/<agent>/sessions/<sid>` (pending, frames, meta, and `c/` scratch). Removal is
 durable: the venue merge is whole-value LWW, so the deleted session is not
 resurrected on sync, and a concurrent `mergeRunResult` on the same session
 safely skips its write (`instanceof AMap` guard).

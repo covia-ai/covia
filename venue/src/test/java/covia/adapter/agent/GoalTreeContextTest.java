@@ -416,6 +416,59 @@ public class GoalTreeContextTest {
 		assertEquals(5, fullRender.count());
 	}
 
+	@Test
+	public void testHistoricalProjectionKeepsOnlyCompletedConversation() {
+		AMap<AString, ACell> frame = withConversation(
+			Maps.of("role", "user", "content", "first question", "ts", 1L),
+			assistantToolCall("lookup"),
+			toolResult("private scratch"),
+			Maps.of("role", "system", "content", "framework diagnostic", "ts", 2L),
+			Maps.of("role", "assistant", "content", "first answer", "ts", 3L),
+			Maps.of("role", "user", "content", "unfinished", "ts", 4L),
+			assistantToolCall("still-working"));
+
+		ConversationRenderer.HistoricalView view =
+			ConversationRenderer.historical(frame, 20, 1000);
+		assertEquals(2, view.turnCount());
+		assertEquals(2, view.messages().count());
+		assertEquals("first question", view.firstUserContent().toString());
+		assertEquals(3, view.updated());
+		assertFalse(view.truncated());
+		assertEquals("first question",
+			RT.ensureString(RT.getIn(view.messages().get(0), "content")).toString());
+		assertEquals("first answer",
+			RT.ensureString(RT.getIn(view.messages().get(1), "content")).toString());
+		for (ACell message : view.messages()) {
+			assertNull(RT.getIn(message, "ts"));
+			assertNull(RT.getIn(message, "toolCalls"));
+		}
+	}
+
+	@Test
+	public void testHistoricalProjectionBoundsNewestContentIncludingOversizedTurn() {
+		AMap<AString, ACell> frame = withConversation(
+			Maps.of("role", "user", "content", "question-one", "ts", 1L),
+			Maps.of("role", "assistant", "content", "answer-one", "ts", 2L),
+			Maps.of("role", "user", "content", "question-two", "ts", 3L),
+			Maps.of("role", "assistant", "content", "answer-two", "ts", 4L));
+
+		ConversationRenderer.HistoricalView byTurns =
+			ConversationRenderer.historical(frame, 2, 1000);
+		assertEquals(4, byTurns.turnCount());
+		assertEquals(2, byTurns.messages().count());
+		assertTrue(byTurns.truncated());
+		assertEquals("question-two",
+			RT.ensureString(RT.getIn(byTurns.messages().get(0), "content")).toString());
+
+		ConversationRenderer.HistoricalView byChars =
+			ConversationRenderer.historical(frame, 20, 4);
+		assertEquals(1, byChars.messages().count());
+		assertEquals("-two",
+			RT.ensureString(RT.getIn(byChars.messages().get(0), "content")).toString());
+		assertEquals(Boolean.TRUE, RT.jvm(RT.getIn(byChars.messages().get(0), "truncated")));
+		assertTrue(byChars.truncated());
+	}
+
 	// ========== Ancestor rendering ==========
 
 	@Test
