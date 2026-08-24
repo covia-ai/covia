@@ -8,10 +8,10 @@
 		"input": {
 			"type": "object",
 			"properties": {
-				"agentId": { "type": "string", "description": "Agent name to delete" },
+				"agentId": { "type": "string", "description": "Agent reference: a bare name for the caller's agent, g/<id>, /g/<id>, or <ownerDID>/g/<id>" },
 				"agentIds": {
 					"type": "array",
-					"description": "Exact agent names to delete in one Job. No prefixes or wildcards. All IDs must exist; maximum 100.",
+					"description": "Exact agent references to delete in one Job. Each may be bare, g/<id>, /g/<id>, or <ownerDID>/g/<id>. No prefixes or wildcards. All targets must exist; maximum 100.",
 					"items": { "type": "string" },
 					"minItems": 1,
 					"maxItems": 100,
@@ -28,6 +28,7 @@
 			"type": "object",
 			"properties": {
 				"agentId": { "type": "string" },
+				"address": { "type": "string", "description": "Canonical <ownerDID>/g/<agentId> address" },
 				"status": { "type": "string", "description": "Final status (TERMINATED)" },
 				"removed": { "type": "boolean", "description": "True if the record was removed" },
 				"agents": {

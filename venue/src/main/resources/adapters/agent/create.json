@@ -10,7 +10,7 @@
 			"properties": {
 				"agentId": {
 					"type": "string",
-					"description": "Human-readable agent name (e.g. 'Alice', 'DataChecker')"
+					"description": "Target agent reference: a bare human-readable name for the caller's namespace, g/<id>, /g/<id>, or <ownerDID>/g/<id>"
 				},
 				"config": {
 					"description": "One config layer, or an ordered array of additive layers. A layer is an inline map or a string reference resolving to a flat config map or an asset with agent.config. Later layers override earlier values; nested maps merge recursively, arrays replace. Null is not a layer; put null inside a map to clear an inherited field. References include workspace paths, asset refs, DID URLs, and venue templates. A resolved composition may include state, used as initial agent state.",
@@ -106,6 +106,10 @@
 			"properties": {
 				"agentId": {
 					"type": "string"
+				},
+				"address": {
+					"type": "string",
+					"description": "Canonical <ownerDID>/g/<agentId> address"
 				},
 				"status": {
 					"type": "string",

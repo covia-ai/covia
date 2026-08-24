@@ -8,7 +8,7 @@
 		"input": {
 			"type": "object",
 			"properties": {
-				"agentId": { "type": "string", "description": "Target agent name" },
+				"agentId": { "type": "string", "description": "Agent reference: a bare name for the caller's agent, g/<id>, /g/<id>, or <ownerDID>/g/<id>" },
 				"input": {
 					"type": "object",
 					"description": "The request payload. MUST contain the actual instructions, data, or parameters the agent needs. NEVER pass an empty object {} — the worker has nothing to act on. Use field 'task' for free-form instructions; add other fields the worker needs (data, paths, options). Example: {task: 'summarise w/notes/daily', format: 'bullet list'}."
@@ -39,7 +39,7 @@
 		},
 		"output": {
 			"type": "object",
-			"description": "Either the agent's structured response (if it completed within the timeout) or a snapshot {id, status: STARTED, agentId, sessionId} to poll via grid_job_result. Always carries the sessionId the task belonged to.",
+			"description": "Either the agent's structured response (if it completed within the timeout) or a snapshot {id, status: STARTED, agentId, address, sessionId} to poll via grid_job_result. address is the canonical <ownerDID>/g/<agentId> target. Always carries the sessionId the task belonged to.",
 			"additionalProperties": true
 		}
 	}

@@ -35,6 +35,21 @@ See GRID_LATTICE_DESIGN.md for: per-user namespace layout (§4.3), agent address
    records the error. The transition function is responsible for its own error
    handling; if it wants the agent to continue running, it must return successfully.
 
+### 1.1 Agent references
+
+Every native agent operation that accepts `agentId` uses the ordinary grid path
+resolver. A bare value such as `Manager` is shorthand for the caller-owned
+`g/Manager`; `g/Manager` and `/g/Manager` are equivalent. A DID-qualified path
+such as `did:key:zAlice/g/Manager` explicitly selects that owner's agent.
+
+Qualified references do not introduce a separate agent-address grammar or lookup
+path: they resolve exactly like other physical user resources. The canonical
+resource is `<ownerDID>/g/<agentId>`, capability checks apply to that resource at
+the point of action, and the runtime key remains `(ownerDID, agentId)`. Accessing
+another user's agent therefore requires a matching capability; metadata cannot
+redirect or authorize the access. Results keep the local `agentId` for compatibility
+and include the canonical `address`.
+
 ---
 
 ## 2. Data Structure

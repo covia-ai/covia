@@ -6,7 +6,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
-import convex.auth.did.DIDURL;
 import convex.auth.ucan.Capability;
 import convex.auth.ucan.UCAN;
 import convex.auth.ucan.UCANValidator;
@@ -1976,11 +1975,8 @@ public class CoviaAdapter extends AAdapter {
 	 *
 	 * <p>Paths can be either relative (e.g. {@code "w/notes"}) targeting the
 	 * caller's own namespace, or DID URL paths (e.g. {@code "did:key:z6Mk.../w/notes"})
-	 * targeting another user. DID URL parsing uses {@link DIDURL} from convex-core.</p>
-	 *
-	 * <p>Cross-user access is denied until capability enforcement is implemented.
-	 * The infrastructure resolves the target user and path, then rejects with a
-	 * clear error.</p>
+	 * targeting another user. DID URL parsing and owner lookup use the Engine's
+	 * shared physical user-path resolver.</p>
 	 *
 	 * @return A two-element result: [cursor, pathKeys] where pathKeys are the
 	 *         namespace-relative keys (DID prefix stripped)
@@ -2086,19 +2082,9 @@ public class CoviaAdapter extends AAdapter {
 	 *         {@code create} is false and the target has no namespace here
 	 */
 	private Object[] resolveDIDURL(RequestContext ctx, String rawPath, boolean create) {
-		DIDURL didURL = DIDURL.create(rawPath);
-		AString targetDID = Strings.create(didURL.getDID().toString());
-		ACell[] pathKeys = parseStringPath(didURL.getPath());
-
-		if (targetDID.equals(ctx.getUserDID())) {
-			// Own namespace via explicit DID — same place a bare path canonicalises to.
-			ALatticeCursor<ACell> own = create ? ensureUserCursor(ctx) : getUserCursor(ctx);
-			return new Object[] { own, pathKeys };
-		}
-		// Cross-user: requireCap already authorised (or threw). Just locate.
-		Users users = engine.getVenueState().users();
-		User targetUser = create ? users.ensure(targetDID) : users.get(targetDID);
-		return new Object[] { (targetUser == null) ? null : targetUser.cursor(), pathKeys };
+		var target = engine.resolveUserPath(ctx, Strings.create(rawPath), create);
+		User user = target.user();
+		return new Object[] { (user == null) ? null : user.cursor(), target.pathKeys() };
 	}
 
 	/**

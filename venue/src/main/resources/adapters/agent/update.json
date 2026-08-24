@@ -8,7 +8,7 @@
 		"input": {
 			"type": "object",
 			"properties": {
-				"agentId": { "type": "string", "description": "Agent name to update" },
+				"agentId": { "type": "string", "description": "Agent reference: a bare name for the caller's agent, g/<id>, /g/<id>, or <ownerDID>/g/<id>" },
 				"config": {
 					"description": "Config override layer(s): inline map, lattice/asset reference, or ordered array. Nested maps merge recursively over existing config; later scalar/vector/null field values replace earlier ones. Array entries must each be a map or string reference; null is not a layer.",
 					"oneOf": [
@@ -28,6 +28,7 @@
 			"type": "object",
 			"properties": {
 				"agentId": { "type": "string" },
+				"address": { "type": "string", "description": "Canonical <ownerDID>/g/<agentId> address" },
 				"status": { "type": "string" }
 			}
 		}

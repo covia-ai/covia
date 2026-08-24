@@ -11,7 +11,7 @@
 			"properties": {
 				"agentId": {
 					"type": "string",
-					"description": "Agent whose harness to step"
+					"description": "Agent reference: a bare name for the caller's agent, g/<id>, /g/<id>, or <ownerDID>/g/<id>"
 				},
 				"assistant": {
 					"description": "The model reply to step through: a string (text only), or {content?, toolCalls?: [{id?, name, arguments?}]}. Text that spells a control tool (e.g. complete_task {\"result\": ...}) is recognised exactly as the live loop recognises it."

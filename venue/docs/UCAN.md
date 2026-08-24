@@ -135,6 +135,7 @@ Abilities follow UCAN's slash-delimited convention with no leading slash. `*` is
 | `agent/request` | — | Submit a request task to an agent |
 | `agent/message` | — | Send message to agent session |
 | `agent/fork` | — | Fork an agent |
+| `agent/write` | — | Update or administer an existing agent |
 | `asset` | every `asset/*` | All asset operations |
 | `asset/store` | — | Store a new content-addressed asset |
 | `asset/read` | — | Get / list content-addressed assets |
@@ -546,9 +547,14 @@ Venue:
 | `dlfs:write` / `dlfs:append` / `dlfs:mkdir` / `dlfs:createDrive` | `{ with: "dlfs/<drive>/<path>", can: "crud/write" }` |
 | `dlfs:delete` / `dlfs:deleteDrive` | `{ with: "dlfs/<drive>/<path>", can: "crud/delete" }` |
 | `secret:extract` | `{ with: "/s/<name>", can: "secret/decrypt" }` |
-| `agent:create` | `{ with: "/g/<id>", can: "agent/create" }` |
-| `agent:request` (cross-user) | `{ with: "/g/<id>", can: "agent/request" }` |
-| `agent:message` (cross-user) | `{ with: "/g/<id>", can: "agent/message" }` |
+| `agent:create` | `{ with: "<ownerDID>/g/<id>", can: "agent/create" }` |
+| `agent:info` / `agent:context` (cross-user) | `{ with: "<ownerDID>/g/<id>", can: "crud/read" }` |
+| `agent:request` (cross-user) | `{ with: "<ownerDID>/g/<id>", can: "agent/request" }` |
+| `agent:trigger` (cross-user) | `{ with: "<ownerDID>/g/<id>", can: "agent/request" }` |
+| `agent:message` (cross-user) | `{ with: "<ownerDID>/g/<id>", can: "agent/message" }` |
+| `agent:chat` / `agent:step` (cross-user) | `{ with: "<ownerDID>/g/<id>", can: "agent/message" }` |
+| `agent:fork` (cross-user source) | `{ with: "<ownerDID>/g/<id>", can: "agent/fork" }` |
+| `agent:update` / suspend / resume / delete / task-session administration (cross-user) | `{ with: "<ownerDID>/g/<id>", can: "agent/write" }` |
 | `asset:store` | `{ with: "<any>", can: "asset/store" }` |
 | `asset:get` / `asset:list` | `{ with: "<any>", can: "asset/read" }` |
 | Grid operation invoke | `{ with: "/o/<op>", can: "invoke" }` |

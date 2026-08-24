@@ -11,7 +11,7 @@
 			"properties": {
 				"agentId": {
 					"type": "string",
-					"description": "Agent name to inspect"
+					"description": "Agent reference: a bare name for the caller's agent, g/<id>, /g/<id>, or <ownerDID>/g/<id>"
 				},
 				"message": {
 					"description": "A hypothetical inbox message for this call: a string, or an envelope {message, caller?}. Renders as the current input, with venue attribution when the caller is not the agent's own principal."

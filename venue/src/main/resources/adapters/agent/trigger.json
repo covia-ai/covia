@@ -7,7 +7,7 @@
 		"input": {
 			"type": "object",
 			"properties": {
-				"agentId": { "type": "string", "description": "Agent name to trigger" },
+				"agentId": { "type": "string", "description": "Agent reference: a bare name for the caller's agent, g/<id>, /g/<id>, or <ownerDID>/g/<id>" },
 				"force": { "type": "boolean", "description": "true (default): run a cycle even if the agent has no outstanding work. false: run only if there is work — a no-op on an idle agent. The venue scheduler fires deferred wakes with force=false." },
 				"wait": { "description": "Wait policy: true (default, block until cycle yields or completes), false (return immediately), or integer milliseconds (timeout). Not a result-await — wait on the task/chat Job for results. Cancelling this trigger Job ends the wait early; the run loop is unaffected and continues for any other waiters." },
 				"sessionId": {
@@ -21,6 +21,7 @@
 			"type": "object",
 			"properties": {
 				"agentId": { "type": "string" },
+				"address": { "type": "string", "description": "Canonical <ownerDID>/g/<agentId> address" },
 				"sessionId": { "type": "string", "description": "Echoed only if a sessionId was supplied in the request" },
 				"status": { "type": "string", "description": "Agent status at return: SLEEPING (cycle quiesced) or RUNNING (cycle still in progress, yielded on async op, or wait=false / timed out)" },
 				"result": { "description": "Transition result snapshot if the cycle completed during the wait. Do NOT use this to read agent output — await the task/chat Job instead." }

@@ -8,8 +8,8 @@
 		"input": {
 			"type": "object",
 			"properties": {
-				"sourceId": { "type": "string", "description": "Agent ID to fork from (must exist and not be TERMINATED)" },
-				"agentId": { "type": "string", "description": "New agent ID for the fork; must not already exist" },
+				"sourceId": { "type": "string", "description": "Source agent reference: bare, g/<id>, /g/<id>, or <ownerDID>/g/<id>; it must exist and not be TERMINATED" },
+				"agentId": { "type": "string", "description": "Target agent reference: bare, g/<id>, /g/<id>, or <ownerDID>/g/<id>; it must not already exist" },
 				"config": {
 					"description": "Optional config override layer(s): inline map, reference, or ordered array of both. Resolved and recursively merged on top of the source agent's config. Array entries must each be a map or string reference; null is not a layer (put null inside a map to clear an inherited field).",
 					"oneOf": [
@@ -29,8 +29,9 @@
 			"type": "object",
 			"properties": {
 				"agentId": { "type": "string" },
+				"address": { "type": "string", "description": "Canonical <ownerDID>/g/<agentId> address" },
 				"status": { "type": "string" },
-				"forkedFrom": { "type": "string", "description": "The sourceId this agent was forked from" }
+				"forkedFrom": { "type": "string", "description": "Local ID of the source agent" }
 			}
 		}
 	}

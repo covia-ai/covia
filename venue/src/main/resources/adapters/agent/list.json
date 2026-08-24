@@ -20,6 +20,7 @@
 						"type": "object",
 						"properties": {
 							"agentId": { "type": "string" },
+							"address": { "type": "string", "description": "Canonical <ownerDID>/g/<agentId> address" },
 							"status": { "type": "string" },
 							"tasks": { "type": "integer", "description": "Number of pending tasks" },
 							"error": { "type": "string", "description": "Last error, if any" }

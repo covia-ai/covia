@@ -8,7 +8,7 @@
 		"input": {
 			"type": "object",
 			"properties": {
-				"agentId": { "type": "string", "description": "Target agent name" },
+				"agentId": { "type": "string", "description": "Agent reference: a bare name for the caller's agent, g/<id>, /g/<id>, or <ownerDID>/g/<id>" },
 				"message": { "type": "string", "description": "Message content to deliver to the agent's inbox" },
 				"sessionId": {
 					"type": "string",
@@ -25,6 +25,7 @@
 			"type": "object",
 			"properties": {
 				"agentId": { "type": "string", "description": "Agent that received the message" },
+				"address": { "type": "string", "description": "Canonical <ownerDID>/g/<agentId> address" },
 				"sessionId": { "type": "string", "description": "Session the message was delivered into" },
 				"delivered": { "type": "boolean", "description": "true if message was delivered" }
 			}

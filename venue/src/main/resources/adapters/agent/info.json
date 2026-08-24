@@ -9,7 +9,7 @@
 		"input": {
 			"type": "object",
 			"properties": {
-				"agentId": { "type": "string", "description": "Agent name to query" }
+				"agentId": { "type": "string", "description": "Agent reference: a bare name for the caller's agent, g/<id>, /g/<id>, or <ownerDID>/g/<id>" }
 			},
 			"required": ["agentId"]
 		},
@@ -17,6 +17,7 @@
 			"type": "object",
 			"properties": {
 				"agentId": { "type": "string" },
+				"address": { "type": "string", "description": "Canonical <ownerDID>/g/<agentId> address" },
 				"status": { "type": "string", "description": "SLEEPING, RUNNING, SUSPENDED, or TERMINATED" },
 				"config": { "type": "object", "description": "Canonical merged agent config: transition/provider selection, prompt, tools, skills, context, loads, caps, outputs, and definition provenance where present" },
 				"timelineLength": { "type": "integer", "description": "Number of completed runs" },

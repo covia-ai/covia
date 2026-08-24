@@ -9,7 +9,7 @@
 		"input": {
 			"type": "object",
 			"properties": {
-				"agentId": { "type": "string", "description": "The agent that owns the session" },
+				"agentId": { "type": "string", "description": "Agent reference: a bare name for the caller's agent, g/<id>, /g/<id>, or <ownerDID>/g/<id>" },
 				"sessionId": { "type": "string", "description": "Hex ID of the session to rename" },
 				"title": { "type": "string", "description": "New title, or omitted/empty to clear it" }
 			},
@@ -19,6 +19,7 @@
 			"type": "object",
 			"properties": {
 				"agentId": { "type": "string" },
+				"address": { "type": "string", "description": "Canonical <ownerDID>/g/<agentId> address" },
 				"sessionId": { "type": "string" },
 				"title": { "type": "string" }
 			}

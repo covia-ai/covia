@@ -8,7 +8,7 @@
 		"input": {
 			"type": "object",
 			"properties": {
-				"agentId": { "type": "string", "description": "Target agent name" },
+				"agentId": { "type": "string", "description": "Agent reference: a bare name for the caller's agent, g/<id>, /g/<id>, or <ownerDID>/g/<id>" },
 				"message": { "description": "Message content to send to the agent. May be a string, structured object, or any JSON-serialisable value." },
 				"loads": { "type": "object", "description": "Optional context to pre-load for the NEW session (the session tier of the context scope chain, #142): map of lattice path to {budget} bytes. Only valid when this call creates the session — an error if the session already exists." },
 				"sessionId": {
@@ -23,6 +23,7 @@
 			"description": "Agent's response to the chat message.",
 			"properties": {
 				"agentId": { "type": "string", "description": "Agent that produced the response" },
+				"address": { "type": "string", "description": "Canonical <ownerDID>/g/<agentId> address" },
 				"sessionId": { "type": "string", "description": "Session the response belongs to (echo on subsequent chats to continue)" },
 				"response": { "description": "The agent's response value (whatever the transition emitted as its turn output)" }
 			}

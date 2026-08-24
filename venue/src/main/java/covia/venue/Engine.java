@@ -1408,6 +1408,82 @@ public class Engine {
 	}
 
 	/**
+	 * A physical path in a user's local namespace. Relative paths belong to the
+	 * caller; DID URL paths name their owner explicitly.
+	 */
+	public record UserPathTarget(AString ownerDID, User user, ACell[] pathKeys, AString resource) {
+		public UserPathTarget {
+			pathKeys = pathKeys.clone();
+		}
+
+		@Override
+		public ACell[] pathKeys() {
+			return pathKeys.clone();
+		}
+	}
+
+	private record ParsedUserPath(AString ownerDID, ACell[] pathKeys, AString resource) {}
+
+	/**
+	 * Resolves a physical user path without applying an access policy. This is
+	 * the common location primitive for adapters that enforce their capability
+	 * at the point of action.
+	 *
+	 * @param create whether to create an absent target user namespace
+	 */
+	public UserPathTarget resolveUserPath(RequestContext ctx, AString ref, boolean create) {
+		ParsedUserPath parsed = parseUserPath(ctx, ref);
+		return locateUserPath(parsed, create);
+	}
+
+	/**
+	 * Authorises and resolves a physical user path. Authorisation precedes
+	 * optional namespace creation, so a denied delegated write has no side
+	 * effects.
+	 */
+	public UserPathTarget requireUserPath(RequestContext ctx, AString ref, AString ability, boolean create) {
+		ParsedUserPath parsed = parseUserPath(ctx, ref);
+		requireLocalAccess(ctx, parsed.resource(), ability);
+		return locateUserPath(parsed, create);
+	}
+
+	private ParsedUserPath parseUserPath(RequestContext ctx, AString ref) {
+		if (ctx == null || ctx.getUserDID() == null) {
+			throw new IllegalArgumentException("User path resolution requires an authenticated user");
+		}
+		if (ref == null || ref.isEmpty()) {
+			throw new IllegalArgumentException("User path must not be empty");
+		}
+
+		AString ownerDID;
+		ACell[] pathKeys;
+		if (ref.startsWith(NS_DID)) {
+			DIDURL didURL = DIDURL.create(ref.toString());
+			ownerDID = Strings.create(didURL.getDID().toString());
+			pathKeys = CoviaAdapter.parseStringPath(didURL.getPath());
+		} else {
+			ownerDID = ctx.getUserDID();
+			pathKeys = CoviaAdapter.parseStringPath(stripLeadingSlash(ref).toString());
+		}
+
+		if (pathKeys.length == 0) {
+			throw new IllegalArgumentException("User path must include a namespace");
+		}
+
+		StringBuilder resource = new StringBuilder(ownerDID.toString());
+		for (ACell key : pathKeys) {
+			resource.append('/').append(key);
+		}
+		return new ParsedUserPath(ownerDID, pathKeys, Strings.create(resource.toString()));
+	}
+
+	private UserPathTarget locateUserPath(ParsedUserPath parsed, boolean create) {
+		Users users = venueState.users();
+		User user = create ? users.ensure(parsed.ownerDID()) : users.get(parsed.ownerDID());
+		return new UserPathTarget(parsed.ownerDID(), user, parsed.pathKeys(), parsed.resource());
+	}
+
+	/**
 	 * Pure single-step path navigation. Returns the literal value at the
 	 * resolved local lattice cell. Does NOT chase references, follow
 	 * indirections, or interpret the value in any way.
@@ -1418,6 +1494,8 @@ public class Engine {
 	 *   <li>{@code a/<hash>} or {@code /a/<hash>} → asset metadata from CAS</li>
 	 *   <li>{@code /o/<name>} → caller's own /o/ entry value</li>
 	 *   <li>Local DID URL with {@code /a/<hash>} path → asset metadata</li>
+	 *   <li>DID-qualified physical user path ({@code <did>/w/...},
+	 *       {@code <did>/g/...}, etc.) → that user's cursor value</li>
 	 *   <li>Workspace path ({@code w/...}, {@code g/...}, etc.) → cursor value</li>
 	 * </ul>
 	 *
@@ -1449,10 +1527,20 @@ public class Engine {
 			return (asset != null) ? asset.meta() : null;
 		}
 
-		// 3. DID URL — local cases only; remote is handled by resolveAsset
+		// 3. DID URL — local cases only; remote asset fetch is handled by
+		// resolveAsset. Asset catalog refs and physical user paths share the
+		// platform DID-path grammar.
 		if (ref.startsWith(NS_DID)) {
 			Asset local = resolveLocalDIDURL(ref, ctx);
-			return (local != null) ? local.meta() : null;
+			if (local != null) return local.meta();
+			UserPathTarget target;
+			try {
+				target = resolveUserPath(ctx, ref, false);
+			} catch (IllegalArgumentException e) {
+				return null;
+			}
+			if (!isPhysicalUserNamespace(target.pathKeys())) return null;
+			return readUserPathValue(target);
 		}
 
 		// Steps 4–5 cover the virtual and workspace namespaces, where a
@@ -1571,12 +1659,21 @@ public class Engine {
 	 */
 	private ACell readWorkspacePathValue(AString ref, RequestContext ctx) {
 		if (ctx == null || ctx.getUserDID() == null) return null;
-		Users users = venueState.users();
-		User user = users.get(ctx.getUserDID());
-		if (user == null) return null;
+		return readUserPathValue(resolveUserPath(ctx, ref, false));
+	}
 
-		ACell[] pathKeys = covia.adapter.CoviaAdapter.parseStringPath(ref.toString());
-		if (pathKeys.length == 0) return null;
+	private static boolean isPhysicalUserNamespace(ACell[] pathKeys) {
+		if (pathKeys.length == 0) return false;
+		return switch (pathKeys[0].toString()) {
+			case "w", "g", "o", "j", "s", "h" -> true;
+			default -> false;
+		};
+	}
+
+	private ACell readUserPathValue(UserPathTarget target) {
+		User user = target.user();
+		if (user == null) return null;
+		ACell[] pathKeys = target.pathKeys();
 
 		// Absence is a null return (no user, empty path, or readPath finding
 		// nothing — none of which throw). Anything that throws is a real failure —

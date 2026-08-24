@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
 import convex.auth.ucan.Capability;
+import convex.auth.ucan.UCAN;
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -101,6 +102,140 @@ public class AgentAdapterTest {
 		AMap<AString, ACell> info = ((AgentAdapter) engine.getAdapter("agent"))
 			.agentInfo(RequestContext.of(ALICE_DID), agent.getAgentId());
 		return RT.ensureString(info.get(Fields.STATUS));
+	}
+
+	@Test
+	public void testQualifiedAgentReferencesUseNormalGridPaths() {
+		AString address = Strings.create(ALICE_DID + "/g/qualified-agent");
+		ACell created = engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, address),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		assertEquals(Strings.create("qualified-agent"), RT.getIn(created, Fields.AGENT_ID));
+		assertEquals(address, RT.getIn(created, Fields.ADDRESS));
+		assertNotNull(engine.resolvePath(address, RequestContext.of(ALICE_DID)),
+			"qualified g/ paths should resolve through the universal grid resolver");
+
+		AgentAdapter adapter = (AgentAdapter) engine.getAdapter("agent");
+		for (AString ref : new AString[] {
+			Strings.create("qualified-agent"),
+			Strings.create("g/qualified-agent"),
+			Strings.create("/g/qualified-agent"),
+			address
+		}) {
+			AMap<AString, ACell> info = adapter.agentInfo(RequestContext.of(ALICE_DID), ref);
+			assertNotNull(info, "reference should resolve: " + ref);
+			assertEquals(Strings.create("qualified-agent"), info.get(Fields.AGENT_ID));
+			assertEquals(address, info.get(Fields.ADDRESS));
+		}
+
+		ACell updated = engine.jobs().invokeOperation(
+			"v/ops/agent/update",
+			Maps.of(Fields.AGENT_ID, address, AgentState.KEY_STATE, Maps.of("qualified", true)),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		assertEquals(address, RT.getIn(updated, Fields.ADDRESS));
+		assertEquals(CVMBool.TRUE, RT.getIn(
+			engine.getVenueState().users().get(ALICE_DID)
+				.agent("qualified-agent").getState(), "qualified"));
+	}
+
+	@Test
+	public void testCrossUserQualifiedAgentOperationsWithOwnerProof() {
+		AKeyPair ownerKP = AKeyPair.generate();
+		AKeyPair delegateKP = AKeyPair.generate();
+		AString ownerDID = UCAN.toDIDKey(ownerKP.getAccountKey());
+		AString delegateDID = UCAN.toDIDKey(delegateKP.getAccountKey());
+		AString address = Strings.create(ownerDID + "/g/delegated-agent");
+
+		long exp = (System.currentTimeMillis() / 1000) + 3600;
+		UCAN grant = UCAN.create(ownerKP, delegateKP.getAccountKey(), exp,
+			Vectors.of(
+				Capability.create(address, Abilities.AGENT_CREATE),
+				Capability.create(address, Capability.CRUD_READ),
+				Capability.create(address, Abilities.AGENT_REQUEST),
+				Capability.create(address, Abilities.AGENT_WRITE)),
+			Vectors.empty());
+		RequestContext delegated = RequestContext.of(delegateDID)
+			.withProofs(Vectors.of(grant.toMap()));
+
+		ACell created = engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, address,
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
+			delegated).awaitResult(5000);
+		assertEquals(address, RT.getIn(created, Fields.ADDRESS));
+
+		ACell info = engine.jobs().invokeOperation("v/ops/agent/info",
+			Maps.of(Fields.AGENT_ID, address), delegated).awaitResult(5000);
+		assertEquals(address, RT.getIn(info, Fields.ADDRESS));
+
+		ACell result = engine.jobs().invokeOperation("v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, address, Fields.INPUT, Maps.of("delegated", true)),
+			delegated).awaitResult(5000);
+		assertNotNull(result);
+		ACell suspended = engine.jobs().invokeOperation("v/ops/agent/suspend",
+			Maps.of(Fields.AGENT_ID, address), delegated).awaitResult(5000);
+		assertEquals(AgentState.SUSPENDED, RT.getIn(suspended, Fields.STATUS));
+		assertNotNull(engine.getVenueState().users().get(ownerDID).agent("delegated-agent"));
+		User delegate = engine.getVenueState().users().get(delegateDID);
+		assertTrue(delegate == null || delegate.agent("delegated-agent") == null,
+			"the delegated request must run the owner's agent, not a same-named delegate agent");
+	}
+
+	@Test
+	public void testCrossUserQualifiedAgentDeniedWithoutMatchingProof() {
+		AKeyPair ownerKP = AKeyPair.generate();
+		AKeyPair delegateKP = AKeyPair.generate();
+		AString ownerDID = UCAN.toDIDKey(ownerKP.getAccountKey());
+		AString delegateDID = UCAN.toDIDKey(delegateKP.getAccountKey());
+		AString address = Strings.create(ownerDID + "/g/private-agent");
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "private-agent"), RequestContext.of(ownerDID))
+			.awaitResult(5000);
+
+		Job denied = engine.jobs().invokeOperation("v/ops/agent/info",
+			Maps.of(Fields.AGENT_ID, address), RequestContext.of(delegateDID));
+		assertThrows(covia.exception.JobFailedException.class, () -> denied.awaitResult(5000));
+		assertTrue(denied.getErrorMessage().contains("crud/read"));
+	}
+
+	@Test
+	public void testCrossUserQualifiedAgentRequiresTheActionAbility() {
+		AKeyPair ownerKP = AKeyPair.generate();
+		AKeyPair delegateKP = AKeyPair.generate();
+		AString ownerDID = UCAN.toDIDKey(ownerKP.getAccountKey());
+		AString delegateDID = UCAN.toDIDKey(delegateKP.getAccountKey());
+		AString address = Strings.create(ownerDID + "/g/read-only-agent");
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "read-only-agent"), RequestContext.of(ownerDID))
+			.awaitResult(5000);
+
+		long exp = (System.currentTimeMillis() / 1000) + 3600;
+		UCAN readGrant = UCAN.create(ownerKP, delegateKP.getAccountKey(), exp,
+			Vectors.of(Capability.create(address, Capability.CRUD_READ)), Vectors.empty());
+		RequestContext delegated = RequestContext.of(delegateDID)
+			.withProofs(Vectors.of(readGrant.toMap()));
+		assertNotNull(engine.jobs().invokeOperation("v/ops/agent/info",
+			Maps.of(Fields.AGENT_ID, address), delegated).awaitResult(5000));
+
+		Job denied = engine.jobs().invokeOperation("v/ops/agent/suspend",
+			Maps.of(Fields.AGENT_ID, address), delegated);
+		assertThrows(covia.exception.JobFailedException.class, () -> denied.awaitResult(5000));
+		assertTrue(denied.getErrorMessage().contains("agent/write"));
+		assertEquals(AgentState.SLEEPING,
+			engine.getVenueState().users().get(ownerDID).agent("read-only-agent").getStatus());
+	}
+
+	@Test
+	public void testAuthenticatedCallerCanReadPublicQualifiedAgent() {
+		AString publicDID = Strings.create(engine.getDIDString() + ":public");
+		AString id = Strings.create("public-qualified-" + Math.abs(ALICE_DID.hashCode()));
+		engine.getVenueState().users().ensure(publicDID).ensureAgent(id, Maps.empty(), null);
+
+		AMap<AString, ACell> info = ((AgentAdapter) engine.getAdapter("agent"))
+			.agentInfo(RequestContext.of(BOB_DID), Strings.create(publicDID + "/g/" + id));
+		assertNotNull(info);
+		assertEquals(Strings.create(publicDID + "/g/" + id), info.get(Fields.ADDRESS));
 	}
 
 	// ========== agent:create ==========

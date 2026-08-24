@@ -144,6 +144,7 @@ Any operation argument that accepts a lattice address — `path`, `from`, `ref`,
 | Bare hex hash | `abc123def456...` | Content-addressed lookup; equivalent to `/a/<hash>` |
 | Explicit `/a/<hash>` | `/a/abc123...` | CAS lookup |
 | User namespace path | `o/merge`, `w/notes`, `g/alice/state` | Caller's own lattice region |
+| DID-qualified user path | `did:key:zAlice…/w/notes`, `did:key:zAlice…/g/Manager` | The named local user's physical lattice region, subject to capability checks |
 | Virtual prefix | `n/notes`, `t/draft`, `v/ops/json/merge` | Resolved by registered `NamespaceResolver` |
 | DID URL (hash) | `did:key:z6Mk…/a/<hash>`, `did:web:venue.host/a/<hash>` | Asset as published by a principal — self-verifying. Read-side: local copies only. Invocation-side: a local copy if held, else a hash-verified metadata fetch from the publishing venue (`did:web` only) |
 | DID URL (named) | `did:web:venue.host/v/ops/json/merge` | Catalog binding maintained by the publishing venue — mutable, trusted at fetch time. Invocation-side only: name → id resolved at the publisher, then the same hash-verified definition fetch. The job record carries the resolved hash |
@@ -179,7 +180,7 @@ A write-side argument is constrained because you can't write to a content-addres
 2. **`/a/<hash>`** → fetch from CAS
 3. **`/o/<name>`** → caller's own `/o/`
 4. **`/v/<path>`** → venue globals via `VenueGlobalsResolver` (virtual prefix to `<venue-DID>/w/global/<path>`)
-5. **DID URL** (`did:.../a/<hash>`) → local copies only: the named principal's records, then the venue store. `resolvePath` never touches the network
+5. **DID URL** → asset refs (`did:.../a/<hash>`) resolve local copies only; physical user refs (`did:.../w/...`, `did:.../g/...`, etc.) resolve through the named local user's cursor. `resolvePath` never touches the network
 6. **Workspace path** (`w/`, `g/`, `o/`, `j/`, etc.) → caller's lattice cursor
 
 The resolver returns the **literal value** at the resolved location. It does NOT chase references, follow indirections, or interpret the value in any way. It is a single-step navigation primitive.
