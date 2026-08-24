@@ -32,6 +32,15 @@ public class VenueHTTPRetryTest {
 		return new VenueHTTP(URI.create("http://localhost:1")); // no connection is made
 	}
 
+	@Test
+	public void bodyRequestsWaitForContinue() {
+		HttpRequest request = client().bodyRequestBuilder("invoke")
+			.POST(HttpRequest.BodyPublishers.ofString("{}"))
+			.build();
+		assertTrue(request.expectContinue(),
+			"body requests must allow header-only 401/429 responses before sending content");
+	}
+
 	/** Minimal fake response carrying a status code and optional Retry-After. */
 	private static HttpResponse<String> resp(int code, String retryAfter) {
 		HttpHeaders headers = (retryAfter == null)

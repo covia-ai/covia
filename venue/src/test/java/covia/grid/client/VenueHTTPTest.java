@@ -278,6 +278,24 @@ public class VenueHTTPTest {
 	}
 
 	@Test
+	public void concurrentBodyRequestsReceiveTypedAuthRejections() {
+		VenueHTTP denied = VenueHTTP.create(URI.create(authBase),
+			VenueAuth.bearer("not-a-valid-token"));
+		denied.setTimeout(5000);
+
+		IntStream.range(0, 32).parallel().forEach(i -> {
+			CompletionException ex = assertThrows(CompletionException.class, () ->
+				denied.startJobAsync(OP_ECHO,
+					Maps.of(Strings.create("request"), Strings.create(Integer.toString(i))))
+					.join());
+			assertTrue(ex.getCause() instanceof ResponseException responseFailure
+					&& responseFailure.response instanceof java.net.http.HttpResponse<?> response
+					&& response.statusCode() == 401,
+				"request " + i + " must receive the venue's 401, got: " + ex.getCause());
+		});
+	}
+
+	@Test
 	public void validBearerAuthenticates() throws Exception {
 		// A self-signed UCAN (issuer == caller) with a declared audience and in
 		// date authenticates its issuer as the caller (AuthMiddleware.tryVerifyUCAN

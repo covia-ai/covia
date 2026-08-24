@@ -234,6 +234,15 @@ public class VenueHTTP extends Venue {
 		return requestBuilder(getBaseURI().resolve(path));
 	}
 
+	/**
+	 * Builds a request that carries a body. Waiting for {@code 100 Continue}
+	 * lets a venue reject from headers (notably 401 and 429) without racing an
+	 * unread request body against the final response.
+	 */
+	HttpRequest.Builder bodyRequestBuilder(String path) {
+		return requestBuilder(path).expectContinue(true);
+	}
+
 	/** Builds a request with a complete lattice reference as the wildcard path tail. */
 	private HttpRequest.Builder referenceRequestBuilder(String endpoint, String ref) {
 		if (ref == null || ref.isBlank()) throw new IllegalArgumentException("Missing asset reference");
@@ -354,7 +363,7 @@ public class VenueHTTP extends Venue {
 	 * Adds an asset to the connected venue
 	 */
 	public CompletableFuture<Hash> addAsset(ACell meta) {
-		HttpRequest req = requestBuilder("assets")
+		HttpRequest req = bodyRequestBuilder("assets")
 			.header("Content-Type", "application/json")
 			.POST(HttpRequest.BodyPublishers.ofString(JSON.printPretty(meta).toString()))
 			.build();
@@ -485,7 +494,7 @@ public class VenueHTTP extends Venue {
 		AVector<ACell> proofTokens = this.ucans;
 		if (proofTokens != null) reqBody = reqBody.assoc(Fields.UCANS, proofTokens);
 
-		HttpRequest req = requestBuilder("run")
+		HttpRequest req = bodyRequestBuilder("run")
 			.header("Content-Type", "application/json")
 			.POST(HttpRequest.BodyPublishers.ofString(JSON.toString(reqBody)))
 			.build();
@@ -629,7 +638,7 @@ public class VenueHTTP extends Venue {
 		// unlike headers) — verified by the venue at ingress.
 		AVector<ACell> proofTokens = this.ucans;
 		if (proofTokens != null) reqBody = reqBody.assoc(Strings.intern("ucans"), proofTokens);
-		HttpRequest req = requestBuilder("invoke")
+		HttpRequest req = bodyRequestBuilder("invoke")
 			.header("Content-Type", "application/json")
 			.POST(HttpRequest.BodyPublishers.ofString(JSON.toString(reqBody)))
 			.build();
@@ -863,7 +872,7 @@ public class VenueHTTP extends Venue {
 		Hash h = Assets.parseAssetID(assetID);
 		if (h == null) throw new IllegalArgumentException("Bad asset ID format");
 		
-		HttpRequest req = requestBuilder("assets/" + h.toHexString() + "/content")
+		HttpRequest req = bodyRequestBuilder("assets/" + h.toHexString() + "/content")
 			.header("Content-Type", "application/octet-stream")
 			.PUT(HttpRequest.BodyPublishers.ofByteArray(content.getBlob().getBytes()))
 			.build();
@@ -1268,7 +1277,7 @@ public class VenueHTTP extends Venue {
 
 	@Override
 	public int sendMessage(String jobId, AMap<AString, ACell> message) {
-		HttpRequest req = requestBuilder("jobs/" + jobId)
+		HttpRequest req = bodyRequestBuilder("jobs/" + jobId)
 			.header("Content-Type", "application/json")
 			.POST(HttpRequest.BodyPublishers.ofString(JSON.toString(message)))
 			.build();
