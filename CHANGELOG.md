@@ -8,9 +8,10 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
-This development line targets **0.10.0**. It is a minor release because it
-contains intentional breaking changes to the agent skill configuration and
-skills operations described below.
+## [0.9.4] - 2026-08-24
+
+This release contains intentional breaking changes to the agent skill
+configuration and skills operations described below.
 
 ### Migration
 
@@ -568,7 +569,8 @@ Initial public release: venue server with the adapter framework, lattice-backed
 content-addressed assets, the async job model with SSE, multi-protocol surface
 (REST / MCP / A2A / DID), and strategy-based authentication.
 
-[Unreleased]: https://github.com/covia-ai/covia/compare/0.9.3...HEAD
+[Unreleased]: https://github.com/covia-ai/covia/compare/0.9.4...HEAD
+[0.9.4]: https://github.com/covia-ai/covia/compare/0.9.3...0.9.4
 [0.9.3]: https://github.com/covia-ai/covia/compare/0.9.2...0.9.3
 [0.9.2]: https://github.com/covia-ai/covia/compare/0.9.1...0.9.2
 [0.9.1]: https://github.com/covia-ai/covia/compare/0.9.0...0.9.1
