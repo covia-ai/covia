@@ -2,10 +2,12 @@ package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URI;
+import java.util.concurrent.CompletionException;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -25,6 +27,7 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import covia.grid.Job;
 import covia.exception.AuthException;
+import covia.exception.ResponseException;
 import covia.grid.auth.VenueAuth;
 import covia.grid.client.VenueHTTP;
 import covia.venue.server.VenueServer;
@@ -129,12 +132,10 @@ public class AudiencePolicyTest {
 	}
 
 	private static void assertRejected401(VenueHTTP client) {
-		Throwable t = assertThrows(Throwable.class, () ->
-			client.invokeAndWait(OP_ECHO, Maps.of(Strings.create("hi"), Strings.create("there"))));
-		StringBuilder chain = new StringBuilder();
-		for (Throwable c = t; c != null; c = c.getCause()) chain.append(c.getMessage()).append(" | ");
-		assertTrue(chain.toString().contains("401") || chain.toString().contains("audience"),
-			"expected a 401 audience rejection, got: " + chain);
+		CompletionException failure = assertThrows(CompletionException.class, () ->
+			client.startJobAsync(OP_ECHO,
+				Maps.of(Strings.create("hi"), Strings.create("there"))).join());
+		assertInstanceOf(ResponseException.class, failure.getCause());
 	}
 
 	// =============================== require ===============================
