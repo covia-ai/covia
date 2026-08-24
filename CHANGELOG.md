@@ -28,6 +28,9 @@ skills operations described below.
 ### Changed
 
 - Update the Convex runtime and storage dependencies from 0.8.14 to 0.8.15.
+- Agent operations accept bare ids, `g/<id>` paths and owner-DID-qualified
+  `<did>/g/<id>` paths through the shared user-path resolver, with capability
+  checks against the canonical qualified address (#375).
 - **Breaking:** `config.skills` now means individual skills only; directories
   move to `config.skillsets`. Standard templates are migrated.
 - Adapter-global durable state now has a shared venue-private convention at
