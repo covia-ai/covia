@@ -63,7 +63,6 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> {
 	 * @param plaintext Secret value in plaintext
 	 * @param encryptionKey 32-byte AES-256 key (from {@link #deriveKey})
 	 */
-	@SuppressWarnings({ "unchecked", "rawtypes" })
 	public void store(String name, String plaintext, byte[] encryptionKey) {
 		store(Strings.create(name), Strings.create(plaintext), encryptionKey);
 	}
@@ -75,7 +74,7 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> {
 			UPDATED_KEY, CVMLong.create(System.currentTimeMillis())
 		);
 		cursor.updateAndGet(current -> {
-			AMap m = RT.castMap(current);
+			AMap<AString, ACell> m = RT.castMap(current);
 			if (m == null) m = Maps.empty();
 			return m.assoc(name, record);
 		});
@@ -167,14 +166,13 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> {
 	 *
 	 * @param name Secret name to delete
 	 */
-	@SuppressWarnings({ "unchecked", "rawtypes" })
 	public void delete(String name) {
 		delete(Strings.create(name));
 	}
 
 	public void delete(AString name) {
 		cursor.updateAndGet(current -> {
-			AMap m = RT.ensureMap(current);
+			AMap<AString,ACell> m = RT.ensureMap(current);
 			if (m == null) return null;
 			return m.dissoc(name);
 		});
@@ -188,6 +186,10 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> {
 		AMap<AString, ACell> all = cursor.get();
 		if (all == null) return null;
 		ACell value = all.get(name);
-		return (value instanceof AMap) ? (AMap<AString, ACell>) value : null;
+		if (!(value instanceof AMap)) {
+			if (!all.containsKey(name)) return null;
+			throw new IllegalStateException("Secret store entry in wrong format");
+		}
+		return (AMap<AString, ACell>) value;
 	}
 }
