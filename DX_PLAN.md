@@ -110,7 +110,7 @@ Related: the platform is licensed under the **Eclipse Public License 2.0** (inhe
 
 ## A note on the Convex dependency
 
-Covia is built on the [Convex](https://github.com/Convex-Dev/convex) lattice platform and tends to track its latest capabilities. Covia depends on **released Convex artifacts from Maven Central** (currently 0.8.14), so a clean clone always builds. Experimental work may override `convex.version` locally, but committed and published builds use released artifacts.
+Covia is built on the [Convex](https://github.com/Convex-Dev/convex) lattice platform and tends to track its latest capabilities. Covia depends on **released Convex artifacts from Maven Central** (currently 0.8.15), so a clean clone always builds. Experimental work may override `convex.version` locally, but committed and published builds use released artifacts.
 
 ---
 

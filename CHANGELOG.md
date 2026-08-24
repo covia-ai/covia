@@ -27,6 +27,7 @@ skills operations described below.
 
 ### Changed
 
+- Update the Convex runtime and storage dependencies from 0.8.14 to 0.8.15.
 - **Breaking:** `config.skills` now means individual skills only; directories
   move to `config.skillsets`. Standard templates are migrated.
 - Adapter-global durable state now has a shared venue-private convention at
