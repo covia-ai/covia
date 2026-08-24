@@ -8,6 +8,7 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Cells;
 import convex.core.data.util.CellExplorer;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
@@ -54,6 +55,11 @@ public class ContextLoader {
 	private final Engine engine;
 	private final AString dialect;
 	private CellExplorer explorer;
+	private long explorerBudget = Long.MAX_VALUE;
+	private boolean truncated;
+	private Resolution resolution = Resolution.RESOLVED;
+
+	enum Resolution { RESOLVED, ABSENT, UNAVAILABLE }
 
 	public ContextLoader(Engine engine) {
 		this(engine, Labels.BRACKET);
@@ -72,7 +78,21 @@ public class ContextLoader {
 	 */
 	public void setCellExplorer(CellExplorer explorer) {
 		this.explorer = explorer;
+		this.explorerBudget = Long.MAX_VALUE;
+		this.truncated = false;
+		this.resolution = Resolution.RESOLVED;
 	}
+
+	/** Starts one load's rendering trace without changing rendering semantics. */
+	void beginTrace(long budget) {
+		this.explorer = new CellExplorer((int) budget);
+		this.explorerBudget = budget;
+		this.truncated = false;
+		this.resolution = Resolution.RESOLVED;
+	}
+
+	boolean wasTruncated() { return truncated; }
+	Resolution resolution() { return resolution; }
 
 	/**
 	 * Renders a CVM value as a string for inclusion in LLM context.
@@ -85,7 +105,10 @@ public class ContextLoader {
 	 */
 	public String renderValue(ACell value) {
 		if (value instanceof AString s) return s.toString();
-		if (explorer != null) return explorer.explore(value).toString();
+		if (explorer != null) {
+			if (Cells.storageSize(value) > explorerBudget) truncated = true;
+			return explorer.explore(value).toString();
+		}
 		return value.toString();
 	}
 
@@ -133,11 +156,16 @@ public class ContextLoader {
 		String label = deriveLabel(ref.toString());
 		try {
 			String content = resolveReference(ref, ctx);
-			if (content == null) return null;            // absent/empty → skip
+			if (content == null) {
+				resolution = Resolution.ABSENT;
+				return null;                                // absent/empty → skip
+			}
+			resolution = Resolution.RESOLVED;
 			return systemMessage(label, content);
 		} catch (RuntimeException e) {
 			// String entries carry no `required` flag — surface the failure
 			// visibly so the LLM knows this context source is broken.
+			resolution = Resolution.UNAVAILABLE;
 			return errorMessage(label, rootMessage(e));
 		}
 	}

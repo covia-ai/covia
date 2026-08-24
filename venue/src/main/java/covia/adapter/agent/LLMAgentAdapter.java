@@ -131,7 +131,8 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 
 	/** What inspection and step share with a live cycle: the Spec, the tool
 	 *  context the harness tools run against, and the cycle's fixed tools. */
-	private record Preview(ContextAssembler.Spec spec, ToolContext toolCtx, AVector<ACell> fixedTools) {}
+	private record Preview(ContextAssembler.Spec spec, ToolContext toolCtx, AVector<ACell> fixedTools,
+			ContextAssembler.Diagnostics diagnostics) {}
 
 	/**
 	 * The transition a call with these inputs would start: the session's
@@ -152,7 +153,8 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		RequestContext capsCtx = capsContext(config, ctx);
 		ToolPalette.Palette palette = ToolPalette.resolve(engine, ctx, config, HARNESS_TOOL_NAMES);
 		ModelProfile profile = modelProfileFor(config, ctx);
-		AVector<ACell> fixedTools = fixedTools(config, palette);
+		AVector<ACell> harness = HarnessTools.offered(config, HarnessTools.SHARED);
+		AVector<ACell> fixedTools = (AVector<ACell>) harness.concat(palette.tools());
 
 		// The task renders through the tool loop's own renderer — a preview
 		// job id stands in for the one a real task would carry.
@@ -162,7 +164,8 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		ToolContext toolCtx = toolContext(config, capsCtx, tasks, in.pending(), palette,
 			configLoads, sessionTier, in.session() != null, fixedTools, true);
 		ACell task = toolCtx.tasks.message();
-		AVector<ACell> tools = (AVector<ACell>) toolCtx.tasks.tools().concat(fixedTools);
+		AVector<ACell> taskTools = toolCtx.tasks.tools();
+		AVector<ACell> tools = (AVector<ACell>) taskTools.concat(fixedTools);
 		Loads.Snapshot loads = toolCtx.refreshLoadSnapshot(engine, profile.labels());
 		boolean hasInput = (in.messages() != null && in.messages().count() > 0)
 			|| (in.pending() != null && in.pending().count() > 0)
@@ -176,12 +179,22 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 			ContextChain.effective(configLoads, sessionTier),
 			sessionFramesOf(in.session()), in.pending(), in.messages(), hasInput, null, task,
 			palette.unavailable(), null, null);
-		return new Preview(spec, toolCtx, fixedTools);
+		AVector<ACell> entries = Vectors.empty();
+		if (profile.toolCalling()) {
+			entries = (AVector<ACell>) ToolPalette.provenance(taskTools, "harness")
+				.concat(ToolPalette.provenance(harness, "harness"))
+				.concat(palette.provenance())
+				.concat(loads.toolProvenance());
+		}
+		ContextAssembler.Diagnostics diagnostics = new ContextAssembler.Diagnostics(
+			entries, loads.diagnostics(), palette.unavailable());
+		return new Preview(spec, toolCtx, fixedTools, diagnostics);
 	}
 
 	@Override
-	protected ContextAssembler.Spec inspectionSpec(Inspection in, RequestContext ctx) {
-		return preview(in, ctx).spec();
+	protected InspectionContext inspectionContext(Inspection in, RequestContext ctx) {
+		Preview p = preview(in, ctx);
+		return new InspectionContext(p.spec(), p.diagnostics());
 	}
 
 	/**

@@ -720,6 +720,36 @@ public class LLMAgentAdapterTest {
 		}
 		assertTrue(names.contains("context_load"), names.toString());
 		assertTrue(names.contains("context_unload"), names.toString());
+
+		AMap<AString, ACell> palette = RT.ensureMap(l3.get(Strings.intern("palette")));
+		AVector<ACell> paletteEntries = RT.ensureVector(palette.get(Fields.TOOLS));
+		assertEquals(2, paletteEntries.count());
+		for (long i = 0; i < paletteEntries.count(); i++) {
+			assertEquals("harness", RT.getIn(paletteEntries.get(i), Fields.SOURCE).toString());
+		}
+		assertEquals(0, RT.ensureVector(palette.get(Strings.intern("unavailable"))).count());
+
+		AVector<ACell> loadEntries = RT.ensureVector(l3.get(Fields.LOADS));
+		assertEquals(1, loadEntries.count());
+		assertEquals("w/inspection-probe", RT.getIn(loadEntries.get(0), Fields.REF).toString());
+		assertEquals("load", RT.getIn(loadEntries.get(0), "kind").toString());
+		assertEquals("resolved", RT.getIn(loadEntries.get(0), "status").toString());
+		assertTrue(((CVMLong) RT.getIn(loadEntries.get(0), Fields.BYTES)).longValue() > 0);
+		assertNotNull(l3.get(Strings.intern("prefixHashes")));
+	}
+
+	@Test
+	public void testInspectionReportsUnavailableConfiguredTools() {
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+		AMap<AString, ACell> report = adapter.inspectContext(new ContextInspectable.Inspection(
+			Maps.of("llmOperation", "v/test/ops/llm",
+				Fields.TOOLS, Vectors.of(Strings.create("v/ops/no/such/tool"))),
+			null, null, null, null, null), RequestContext.of(ALICE_DID));
+		AMap<AString, ACell> palette = RT.ensureMap(report.get(Strings.intern("palette")));
+		AVector<ACell> unavailable = RT.ensureVector(palette.get(Strings.intern("unavailable")));
+		assertEquals(1, unavailable.count());
+		assertEquals("v/ops/no/such/tool", RT.getIn(unavailable.get(0), Fields.OPERATION).toString());
+		assertNotNull(RT.getIn(unavailable.get(0), Fields.REASON));
 	}
 
 	@Test

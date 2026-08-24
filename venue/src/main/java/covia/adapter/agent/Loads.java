@@ -9,9 +9,13 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Maps;
+import convex.core.data.Strings;
 import convex.core.data.Vectors;
-import convex.core.data.util.CellExplorer;
+import convex.core.data.prim.CVMBool;
+import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import covia.api.Fields;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 
@@ -28,14 +32,22 @@ public final class Loads {
 
 	private Loads() {}
 
+	private static final AString K_KIND         = Strings.intern("kind");
+	private static final AString K_STATUS       = Strings.intern("status");
+	private static final AString K_TRUNCATED    = Strings.intern("truncated");
+	private static final AString K_DEDUPLICATED = Strings.intern("deduplicated");
+
 	/** One inference's view of the effective loads. */
-	public record Snapshot(AVector<ACell> elements, AVector<ACell> tools, Map<String, AString> routes) {
-		public static final Snapshot EMPTY = new Snapshot(null, null, null);
+	public record Snapshot(AVector<ACell> elements, AVector<ACell> tools, Map<String, AString> routes,
+			AVector<ACell> diagnostics, AVector<ACell> toolProvenance) {
+		public static final Snapshot EMPTY = new Snapshot(null, null, null, null, null);
 
 		public Snapshot {
 			elements = (elements != null) ? elements : Vectors.empty();
 			tools = (tools != null) ? tools : Vectors.empty();
 			routes = (routes != null) ? Map.copyOf(routes) : Map.of();
+			diagnostics = (diagnostics != null) ? diagnostics : Vectors.empty();
+			toolProvenance = (toolProvenance != null) ? toolProvenance : Vectors.empty();
 		}
 	}
 
@@ -48,8 +60,11 @@ public final class Loads {
 			AMap<AString, ACell> effectiveLoads, Set<String> fixedNames, AString dialect) {
 		if (effectiveLoads == null || effectiveLoads.count() == 0) return Snapshot.EMPTY;
 		Map<String, AString> routes = new HashMap<>();
-		AVector<ACell> tools = ToolPalette.loadsToolDefs(engine, ctx, effectiveLoads, fixedNames, routes);
-		return new Snapshot(elements(engine, ctx, effectiveLoads, dialect), tools, routes);
+		java.util.List<AMap<AString, ACell>> toolEntries = new java.util.ArrayList<>();
+		AVector<ACell> tools = ToolPalette.loadsToolDefs(
+			engine, ctx, effectiveLoads, fixedNames, routes, toolEntries);
+		ResolvedElements resolved = resolveElements(engine, ctx, effectiveLoads, dialect);
+		return new Snapshot(resolved.elements(), tools, routes, resolved.diagnostics(), vector(toolEntries));
 	}
 
 	/**
@@ -69,41 +84,74 @@ public final class Loads {
 	@SuppressWarnings("unchecked")
 	public static AVector<ACell> elements(Engine engine, RequestContext ctx,
 			AMap<AString, ACell> loads, AString dialect) {
+		return resolveElements(engine, ctx, loads, dialect).elements();
+	}
+
+	private record ResolvedElements(AVector<ACell> elements, AVector<ACell> diagnostics) {}
+	private record Element(AVector<ACell> messages, String status, boolean deduplicated) {}
+
+	@SuppressWarnings("unchecked")
+	private static ResolvedElements resolveElements(Engine engine, RequestContext ctx,
+			AMap<AString, ACell> loads, AString dialect) {
 		AVector<ACell> out = Vectors.empty();
-		if (loads == null || loads.count() == 0) return out;
+		AVector<ACell> diagnostics = Vectors.empty();
+		if (loads == null || loads.count() == 0) return new ResolvedElements(out, diagnostics);
 		ContextLoader loader = new ContextLoader(engine, dialect);
 		Set<convex.core.data.Hash> seenSkillIds = new HashSet<>();
 		for (var entry : loads.entrySet()) {
 			AString path = entry.getKey();
 			AMap<AString, ACell> meta = (AMap<AString, ACell>) entry.getValue();
-			int entryBudget = (int) AbstractLLMAdapter.clampLoadBudget(meta.get(AbstractLLMAdapter.K_BUDGET));
-			loader.setCellExplorer(new CellExplorer(entryBudget));
-			out = (AVector<ACell>) out.concat(element(engine, ctx, loader, path, meta, seenSkillIds, dialect));
+			long entryBudget = AbstractLLMAdapter.clampLoadBudget(meta.get(AbstractLLMAdapter.K_BUDGET));
+			loader.beginTrace(entryBudget);
+			boolean skill = Skills.isSkillEntry(meta);
+			Element resolved = element(engine, ctx, loader, path, meta, seenSkillIds, dialect);
+			out = (AVector<ACell>) out.concat(resolved.messages());
+			long bytes = 0;
+			for (long i = 0; i < resolved.messages().count(); i++) {
+				bytes += ContextAssembler.bytes(resolved.messages().get(i));
+			}
+			diagnostics = diagnostics.conj(Maps.of(
+				Fields.REF, path,
+				K_KIND, Strings.create(skill ? "skill" : "load"),
+				Fields.BYTES, CVMLong.create(bytes),
+				AbstractLLMAdapter.K_BUDGET, CVMLong.create(entryBudget),
+				K_STATUS, Strings.create(resolved.status()),
+				K_TRUNCATED, CVMBool.create(loader.wasTruncated()),
+				K_DEDUPLICATED, CVMBool.create(resolved.deduplicated())));
 		}
-		return out;
+		return new ResolvedElements(out, diagnostics);
 	}
 
-	private static AVector<ACell> element(Engine engine, RequestContext ctx, ContextLoader loader,
+	private static Element element(Engine engine, RequestContext ctx, ContextLoader loader,
 			AString path, AMap<AString, ACell> meta, Set<convex.core.data.Hash> seenSkillIds,
 			AString dialect) {
 		if (!Skills.isSkillEntry(meta)) {
 			ACell msg = loader.resolveEntry(path, ctx);
-			return (msg != null) ? Vectors.of(msg) : Vectors.empty();
+			AVector<ACell> messages = (msg != null) ? Vectors.of(msg) : Vectors.empty();
+			return new Element(messages, loader.resolution().name().toLowerCase(), false);
 		}
 		try {
 			Skills.ResolvedSkill skill = Skills.resolveRef(engine, ctx, path);
-			if (skill.id() != null && !seenSkillIds.add(skill.id())) return Vectors.empty();
+			if (skill.id() != null && !seenSkillIds.add(skill.id())) {
+				return new Element(Vectors.empty(), "deduplicated", true);
+			}
 			AVector<ACell> msgs = Vectors.of(
 				Skills.renderSkillMessage(dialect, skill.name(), path, skill.displayBody()));
 			if (skill.contextEntries().count() > 0) {
 				msgs = msgs.concat(loader.resolve(skill.contextEntries(), ctx));
 			}
-			return msgs;
+			return new Element(msgs, "resolved", false);
 		} catch (RuntimeException e) {
 			AString label = RT.ensureString(meta.get(AbstractLLMAdapter.K_LABEL));
-			return Vectors.of(Skills.skillErrorMessage(dialect,
+			return new Element(Vectors.of(Skills.skillErrorMessage(dialect,
 				(label != null) ? label.toString() : path.toString(), path,
-				ContextLoader.rootMessage(e)));
+				ContextLoader.rootMessage(e))), "unavailable", false);
 		}
+	}
+
+	private static AVector<ACell> vector(java.util.List<? extends ACell> cells) {
+		AVector<ACell> out = Vectors.empty();
+		for (ACell cell : cells) out = out.conj(cell);
+		return out;
 	}
 }

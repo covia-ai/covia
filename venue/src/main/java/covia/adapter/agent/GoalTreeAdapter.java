@@ -273,14 +273,15 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 	public AMap<AString, ACell> buildFirstIterationL3Input(
 			AMap<AString, ACell> recordConfig, ACell state, ACell task,
 			AMap<AString, ACell> session, RequestContext ctx) {
-		ContextAssembler.Spec spec = inspectionSpec(
-			new Inspection(recordConfig, state, session, null, null, task), ctx);
+		ContextAssembler.Spec spec = inspectionContext(
+			new Inspection(recordConfig, state, session, null, null, task), ctx).spec();
 		return ContextAssembler.assemble(spec).toL3Input(spec.config());
 	}
 
 	/** What inspection and step share with a live cycle's root frame. */
 	private record Preview(ContextAssembler.Spec spec, Cycle cycle, AVector<ACell> rootFrames,
-			AVector<ACell> harness, AVector<ACell> baseTools, Loads.Snapshot loads, boolean typedOutputs) {}
+			AVector<ACell> harness, AVector<ACell> baseTools, Loads.Snapshot loads,
+			boolean typedOutputs, ContextAssembler.Diagnostics diagnostics) {}
 
 	/**
 	 * The first iteration of a transition with these inputs: typed outputs
@@ -365,12 +366,23 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			rootFrames, null, null, true, null, taskTools.message(), palette.unavailable(), null, null);
 		Cycle cycle = new Cycle(l3Config, getLLMOperation(l3Config), palette.routes(), capsCtx, spec,
 			typedTools, toolCallTimeoutMs, outerLoads, taskTools);
-		return new Preview(spec, cycle, rootFrames, harness, palette.tools(), loads, typedTools != null);
+		AVector<ACell> entries = Vectors.empty();
+		if (profile.toolCalling()) {
+			entries = (AVector<ACell>) ToolPalette.provenance(taskTools.tools(), "harness")
+				.concat(ToolPalette.provenance(harness, "harness"))
+				.concat(palette.provenance())
+				.concat(loads.toolProvenance());
+		}
+		ContextAssembler.Diagnostics diagnostics = new ContextAssembler.Diagnostics(
+			entries, loads.diagnostics(), palette.unavailable());
+		return new Preview(spec, cycle, rootFrames, harness, palette.tools(), loads,
+			typedTools != null, diagnostics);
 	}
 
 	@Override
-	protected ContextAssembler.Spec inspectionSpec(Inspection in, RequestContext ctx) {
-		return preview(in, ctx).spec();
+	protected InspectionContext inspectionContext(Inspection in, RequestContext ctx) {
+		Preview p = preview(in, ctx);
+		return new InspectionContext(p.spec(), p.diagnostics());
 	}
 
 	/** The inbox as the envelopes a live cycle carries — a plain string

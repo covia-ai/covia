@@ -333,15 +333,19 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * The context this runtime would assemble for the hypothetical call —
 	 * the same Spec through the same assembler as a live transition, minus
 	 * the provider call. Final on the parent: subclasses supply the Spec via
-	 * {@link #inspectionSpec}.
+	 * {@link #inspectionContext}.
 	 */
 	@Override
 	public final AMap<AString, ACell> inspectContext(Inspection inspection, RequestContext ctx) {
-		return ContextAssembler.report(inspectionSpec(inspection, ctx));
+		InspectionContext inspected = inspectionContext(inspection, ctx);
+		return ContextAssembler.report(inspected.spec(), inspected.diagnostics());
 	}
 
-	/** The Spec a live transition with these inputs would assemble. */
-	protected abstract ContextAssembler.Spec inspectionSpec(Inspection inspection, RequestContext ctx);
+	/** The Spec and resolution sidecars a live transition with these inputs would assemble. */
+	protected record InspectionContext(ContextAssembler.Spec spec,
+			ContextAssembler.Diagnostics diagnostics) {}
+
+	protected abstract InspectionContext inspectionContext(Inspection inspection, RequestContext ctx);
 
 	// ========== Step: one harness iteration on a supplied reply ==========
 

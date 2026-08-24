@@ -289,6 +289,20 @@ public final class ContextAssembler {
 	private static final AString K_MARKS     = Strings.intern("marks");
 	private static final AString K_LABELS    = AbstractLLMAdapter.OPT_LABELS;
 	private static final AString K_TOOL_CALLING = AbstractLLMAdapter.OPT_TOOL_CALLING;
+	private static final AString K_PALETTE       = Strings.intern("palette");
+	private static final AString K_LOADS         = Fields.LOADS;
+	private static final AString K_PREFIX_HASHES = Strings.intern("prefixHashes");
+	private static final AString K_UNAVAILABLE   = Strings.intern("unavailable");
+
+	/** Resolution sidecars retained by inspection but never sent to a provider. */
+	record Diagnostics(AVector<ACell> palette, AVector<ACell> loads,
+			AVector<ACell> unavailable) {
+		public Diagnostics {
+			palette = (palette != null) ? palette : Vectors.empty();
+			loads = (loads != null) ? loads : Vectors.empty();
+			unavailable = (unavailable != null) ? unavailable : Vectors.empty();
+		}
+	}
 
 	/**
 	 * Assembles the prompt and reports it: the level-3 input plus assembly
@@ -297,6 +311,11 @@ public final class ContextAssembler {
 	 * {@code agent:context} returns, and the same bytes a live call sends.
 	 */
 	public static AMap<AString, ACell> report(Spec spec) {
+		return report(spec, null);
+	}
+
+	/** The inspection report, including resolution diagnostics when supplied. */
+	static AMap<AString, ACell> report(Spec spec, Diagnostics diagnostics) {
 		Prompt p = assemble(spec);
 		AMap<AString, ACell> marks = Maps.empty();
 		for (Map.Entry<Band, Integer> e : p.marks().entrySet()) {
@@ -310,8 +329,34 @@ public final class ContextAssembler {
 				K_USED, CVMLong.create(p.used()),
 				K_REMAINING, CVMLong.create(p.remaining())))
 			.assoc(K_MARKS, marks)
-			.assoc(K_LABELS, spec.labels());
+			.assoc(K_LABELS, spec.labels())
+			.assoc(K_PREFIX_HASHES, prefixHashes(p));
+		if (diagnostics != null) {
+			report = report
+				.assoc(K_PALETTE, Maps.of(
+					AbstractLLMAdapter.K_TOOLS, diagnostics.palette(),
+					K_UNAVAILABLE, diagnostics.unavailable()))
+				.assoc(K_LOADS, diagnostics.loads());
+		}
 		return spec.toolCalling() ? report : report.assoc(K_TOOL_CALLING, CVMBool.FALSE);
+	}
+
+	/**
+	 * CAD3 hashes of Covia's logical prompt prefixes. Each band hashes
+	 * {@code [tools, messages-through-band]}; these are structural validators,
+	 * not claims about a provider's wire-format cache key.
+	 */
+	private static AMap<AString, ACell> prefixHashes(Prompt p) {
+		AMap<AString, ACell> hashes = Maps.of(
+			AbstractLLMAdapter.K_TOOLS, Strings.create(p.tools().getHash().toHexString()));
+		for (Band band : Band.values()) {
+			Integer end = p.marks().get(band);
+			if (end == null) continue;
+			String name = (band == Band.TOOL_LOOP) ? "toolLoop" : band.name().toLowerCase();
+			ACell prefix = Vectors.of((ACell) p.tools(), (ACell) p.messages().slice(0, end));
+			hashes = hashes.assoc(Strings.create(name), Strings.create(prefix.getHash().toHexString()));
+		}
+		return hashes;
 	}
 
 	/** The sequence of AGENT_CONTEXT.md §3.2. */

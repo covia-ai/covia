@@ -32,7 +32,8 @@ public interface ContextInspectable {
 	 * The assembled context for the call: the level-3 input — {@code model},
 	 * {@code messages}, {@code tools}, {@code cacheMarks} — plus the assembly
 	 * diagnostics {@code budget} ({@code bytes}, {@code used}, {@code remaining}),
-	 * {@code marks} (message counts at each band's end) and {@code labels}.
+	 * {@code marks} (message counts at each band's end), {@code labels}, palette
+	 * provenance, per-load resolution diagnostics and logical prefix hashes.
 	 */
 	AMap<AString, ACell> inspectContext(Inspection inspection, RequestContext ctx);
 
@@ -51,7 +52,7 @@ public interface ContextInspectable {
 	 *         the conversation), {@code calls} ({@code [{id, name, arguments,
 	 *         result, isError?, ms}]}), {@code terminal?}
 	 *         ({@code {status, value}} — {@code complete} or {@code failed}), {@code done}, {@code response?} and
-	 *         {@code next?} — the following prompt, as {@link #inspectContext} reports it
+	 *         {@code next?} — the following prompt with assembly diagnostics
 	 */
 	AMap<AString, ACell> stepContext(Inspection inspection, AMap<AString, ACell> assistant, RequestContext ctx);
 }

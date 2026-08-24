@@ -426,9 +426,13 @@ The Spec is the whole interface between a runtime and the assembler. Every runti
 
 A dash means the runtimes agree. **The table is the whole difference.** Anything a runtime needs that is not in it is a signal that the Spec is missing a field, not that the runtime needs its own pipeline.
 
-`agent:context` builds the same Spec and calls the same `assemble`, so an inspected context matches a live inference **by construction** rather than by two call chains agreeing. It takes the hypothetical call — an inbox message or several, pending results, a task, a session — and returns the level-3 input with `cacheMarks`, the `budget` (`bytes`, `used`, `remaining`), the `marks` at each band's end and the label dialect.
+`agent:context` builds the same Spec and calls the same `assemble`, so an inspected context matches a live inference **by construction** rather than by two call chains agreeing. It takes the hypothetical call — an inbox message or several, pending results, a task, a session — and returns the level-3 input with `cacheMarks`, the `budget` (`bytes`, `used`, `remaining`), the `marks` at each band's end and the label dialect. Resolution sidecars explain that input without changing it:
 
-`agent:step` takes the same call plus the reply the model would give and runs one harness iteration on it: text-as-control recognised, the tool calls dispatched through the runtime's own registry — same routes, capability checks and authority, so the tools' side effects are real — their results rendered, and the next prompt assembled from the same Spec with this iteration in the tool-loop band. The agent is untouched: a terminal control tool is reported (`terminal`), never resolved; goaltree's `subgoal` is not run. It returns `assistant`, `turns`, `calls` (`id, name, arguments, result, isError?, ms`), `terminal?`, `done`, `response?` and `next?` (an `agent:context` report).
+- `palette.tools` follows the final tool-definition order and records each tool's `name`, `source` (`harness`, `default`, `config`, `skill` or `load`), and `operation` / load `ref` where one exists; `palette.unavailable` carries configured operations that could not resolve and their reasons.
+- `loads` records every effective load's `ref`, `kind`, resolved `status`, rendered `bytes`, clamped `budget`, `truncated` and `deduplicated`. `truncated` means the structured value was shortened by `CellExplorer`; plain text and skill bodies remain verbatim, so they can consume more than their advisory per-load budget without that flag.
+- `prefixHashes` contains CAD3 structural hashes for the tools vector and `[tools, messages-through-band]` at `head`, `live`, `conversation` and `toolLoop`. They make logical prefix changes easy to compare; they are not provider wire-format cache keys, because the edge may reshape system messages and provider clients serialise requests differently.
+
+`agent:step` takes the same call plus the reply the model would give and runs one harness iteration on it: text-as-control recognised, the tool calls dispatched through the runtime's own registry — same routes, capability checks and authority, so the tools' side effects are real — their results rendered, and the next prompt assembled from the same Spec with this iteration in the tool-loop band. The agent is untouched: a terminal control tool is reported (`terminal`), never resolved; goaltree's `subgoal` is not run. It returns `assistant`, `turns`, `calls` (`id, name, arguments, result, isError?, ms`), `terminal?`, `done`, `response?` and `next?` (the following prompt with assembly diagnostics; resolution sidecars belong to `agent:context`).
 
 The same bands drive the record a live cycle leaves on its timeline entry (`AGENT_LOOP.md` §2.4): a message is recorded in the inference that first sends it — head and live messages once (a frame's first inference pulls them up as its `context`), the tail as it appears; the root conversation is the session's, a child frame's is recorded as the frame opens, and the tool loop is recorded as replies and calls.
 
@@ -440,8 +444,8 @@ The same bands drive the record a live cycle leaves on its timeline entry (`AGEN
 |---------|------|
 | `Spec`, `Prompt`, `assemble`, the section functions, attribution | `ContextAssembler` |
 | The label renderer (§1.1) | `Labels` |
-| The palette (§3.2.3): resolution, merge, unavailable diagnostic | `ToolPalette` |
-| The loads phase (§4): elements, contributed tools, routes | `Loads` |
+| The palette (§3.2.3): resolution, merge, provenance, unavailable diagnostic | `ToolPalette` |
+| The loads phase (§4): elements, contributed tools, routes, resolution diagnostics | `Loads` |
 | Entry resolution and rendering (§6) | `ContextLoader` |
 | Scope chain algebra (§7) | `ContextChain` |
 | Frame rendering, elision, segments, turn normalisation (§5.6) | `ConversationRenderer` |

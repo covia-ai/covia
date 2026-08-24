@@ -1,6 +1,6 @@
 {
 	"name": "Agent Context",
-	"description": "Assemble the exact context an agent would send to its model for one hypothetical call, without calling the model: the same Spec through the same assembler as a live transition. Describe the call — an inbox message (or several), pending job results, a task, a session — and receive the level-3 input (model, messages, tools, cacheMarks) plus the assembly diagnostics: budget {bytes, used, remaining}, marks (message counts at each band end: head, live, conversation, toolLoop) and the label dialect. With nothing to act on, the context shows the empty-state signal a wake-up would see.",
+	"description": "Assemble the exact context an agent would send to its model for one hypothetical call, without calling the model: the same Spec through the same assembler as a live transition. Describe the call — an inbox message (or several), pending job results, a task, a session — and receive the level-3 input (model, messages, tools, cacheMarks) plus budget and band diagnostics, palette provenance, load-resolution details and logical prefix hashes. With nothing to act on, the context shows the empty-state signal a wake-up would see.",
 	"dateCreated": "2026-04-12T00:00:00Z",
 	"operation": {
 		"adapter": "agent:context",
@@ -38,7 +38,7 @@
 		},
 		"output": {
 			"type": "object",
-			"description": "The level-3 input — model and caller tuning such as maxTokens/temperature/topP/cache when configured, responseFormat?, messages, tools, cacheMarks? — plus budget {bytes, used, remaining}, marks {head, live, conversation, toolLoop}, labels, and sessionTokens when a session has measured usage."
+			"description": "The level-3 input — model and caller tuning such as maxTokens/temperature/topP/cache when configured, responseFormat?, messages, tools, cacheMarks? — plus budget {bytes, used, remaining}, marks {head, live, conversation, toolLoop}, labels, palette {tools, unavailable}, loads [{ref, kind, status, bytes, budget, truncated, deduplicated}], logical prefixHashes, and sessionTokens when a session has measured usage."
 		}
 	}
 }

@@ -777,6 +777,17 @@ public class GoalTreeAdapterTest {
 
 		AVector<ACell> tools = RT.ensureVector(RT.getIn(l3, Fields.TOOLS));
 		assertTrue(hasNamedTool(tools, "covia_read"), tools.toString());
+
+		AMap<AString, ACell> report = adapter.inspectContext(
+			new ContextInspectable.Inspection(config, null, null, null, null, null), ALICE);
+		AMap<AString, ACell> palette = RT.ensureMap(report.get(Strings.intern("palette")));
+		AVector<ACell> provenance = RT.ensureVector(palette.get(Fields.TOOLS));
+		assertEquals("load", RT.getIn(provenance.get(provenance.count() - 1), Fields.SOURCE).toString());
+		assertEquals("w/goal-inspection-load",
+			RT.getIn(provenance.get(provenance.count() - 1), Fields.REF).toString());
+		AVector<ACell> loadDiagnostics = RT.ensureVector(report.get(Fields.LOADS));
+		assertEquals(1, loadDiagnostics.count());
+		assertEquals("resolved", RT.getIn(loadDiagnostics.get(0), "status").toString());
 	}
 
 	@Test

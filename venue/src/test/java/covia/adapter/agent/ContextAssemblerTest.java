@@ -200,6 +200,26 @@ public class ContextAssemblerTest {
 		assertNull(ContextAssembler.report(on).get(Strings.intern("toolCalling")), "absent means the norm");
 	}
 
+	@Test
+	public void testPrefixHashesTrackLogicalBandPrefixes() {
+		Spec first = spec(null, null, null,
+			Vectors.of((ACell) Maps.of("content", "first")), true);
+		Spec second = spec(null, null, null,
+			Vectors.of((ACell) Maps.of("content", "second")), true);
+		AMap<AString, ACell> a = RT.ensureMap(
+			ContextAssembler.report(first).get(Strings.intern("prefixHashes")));
+		AMap<AString, ACell> b = RT.ensureMap(
+			ContextAssembler.report(second).get(Strings.intern("prefixHashes")));
+		assertNotNull(a);
+		assertEquals(5, a.count());
+		assertEquals(a.get(Strings.intern("tools")), b.get(Strings.intern("tools")));
+		assertEquals(a.get(Strings.intern("head")), b.get(Strings.intern("head")));
+		assertEquals(a.get(Strings.intern("live")), b.get(Strings.intern("live")));
+		assertNotEquals(a.get(Strings.intern("conversation")), b.get(Strings.intern("conversation")));
+		assertNotEquals(a.get(Strings.intern("toolLoop")), b.get(Strings.intern("toolLoop")));
+		assertEquals(64, RT.ensureString(a.get(Strings.intern("head"))).count());
+	}
+
 	/** The profile chain: provider facet, byModel, then the agent's config.modelProfile, one key deep. */
 	@Test
 	public void testModelProfileLayersProviderModelAndConfig() {
@@ -523,8 +543,38 @@ public class ContextAssemblerTest {
 		Loads.Snapshot snap = Loads.resolve(engine, ctx, loads, java.util.Set.of(), Labels.BRACKET);
 		assertEquals(1, snap.tools().count());
 		assertEquals("v/ops/covia/read", snap.routes().get("covia_read").toString());
+		assertEquals("skill", RT.getIn(snap.toolProvenance().get(0), Fields.SOURCE).toString());
+		assertEquals("w/skills/toolful", RT.getIn(snap.toolProvenance().get(0), Fields.REF).toString());
 		// A name fixed by harness or config is never shadowed by a load.
 		assertEquals(0, Loads.resolve(engine, ctx, loads, java.util.Set.of("covia_read"), Labels.BRACKET).tools().count());
+	}
+
+	@Test
+	public void testLoadsSnapshotReportsBudgetAndDeduplication() {
+		AVector<ACell> large = Vectors.empty();
+		for (int i = 0; i < 100; i++) large = large.conj(Strings.create("value-" + i + "-xxxxxxxx"));
+		write("w/large-load", large);
+		Loads.Snapshot structured = Loads.resolve(engine, ctx,
+			Maps.of("w/large-load", Maps.of("budget", 256L)), java.util.Set.of(), Labels.BRACKET);
+		ACell diagnostic = structured.diagnostics().get(0);
+		assertEquals("load", RT.getIn(diagnostic, "kind").toString());
+		assertEquals("resolved", RT.getIn(diagnostic, "status").toString());
+		assertEquals(CVMLong.create(256), RT.getIn(diagnostic, "budget"));
+		assertEquals(CVMBool.TRUE, RT.getIn(diagnostic, "truncated"));
+		assertEquals(CVMBool.FALSE, RT.getIn(diagnostic, "deduplicated"));
+		assertTrue(((CVMLong) RT.getIn(diagnostic, Fields.BYTES)).longValue() > 0);
+
+		AMap<AString, ACell> one = alphaSkillLoads();
+		AMap<AString, ACell> meta = RT.ensureMap(one.get(Strings.create("w/skills/alpha")));
+		engine.jobs().invokeOperation("v/ops/covia/copy",
+			Maps.of("from", "w/skills/alpha", "to", "w/skills/diagnostic-alias"), ctx).awaitResult(5000);
+		Loads.Snapshot duplicate = Loads.resolve(engine, ctx,
+			one.assoc(Strings.create("w/skills/diagnostic-alias"), meta), java.util.Set.of(), Labels.BRACKET);
+		int deduplicated = 0;
+		for (long i = 0; i < duplicate.diagnostics().count(); i++) {
+			if (CVMBool.TRUE.equals(RT.getIn(duplicate.diagnostics().get(i), "deduplicated"))) deduplicated++;
+		}
+		assertEquals(1, deduplicated);
 	}
 
 	// ========== Conversation ==========
@@ -781,6 +831,11 @@ public class ContextAssemblerTest {
 		ToolPalette.Palette p = ToolPalette.resolve(engine, ctx, config, java.util.Set.of("skip_me"));
 		assertEquals(java.util.Set.of("covia_read", "covia_list", "covia_write"), ToolPalette.names(p.tools()));
 		assertEquals(0, p.unavailable().count(), "a skipped harness name is not unavailable");
+		assertEquals(3, p.provenance().count());
+		assertEquals("default", RT.getIn(p.provenance().get(0), Fields.SOURCE).toString());
+		assertEquals("default", RT.getIn(p.provenance().get(1), Fields.SOURCE).toString());
+		assertEquals("config", RT.getIn(p.provenance().get(2), Fields.SOURCE).toString());
+		assertEquals("v/ops/covia/write", RT.getIn(p.provenance().get(2), Fields.OPERATION).toString());
 	}
 
 	@Test

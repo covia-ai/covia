@@ -50,6 +50,10 @@ public final class ToolPalette {
 	private static final AString K_PARAMETERS    = Strings.intern("parameters");
 	private static final AString K_TYPE          = Strings.intern("type");
 	private static final AString K_PROPERTIES    = Strings.intern("properties");
+	private static final AString SOURCE_DEFAULT  = Strings.intern("default");
+	private static final AString SOURCE_CONFIG   = Strings.intern("config");
+	private static final AString SOURCE_SKILL    = Strings.intern("skill");
+	private static final AString SOURCE_LOAD     = Strings.intern("load");
 
 	/** Default tool operations — deliberately minimal: read-only situational
 	 *  awareness. Everything with side effects arrives via skills or the agent's
@@ -69,15 +73,18 @@ public final class ToolPalette {
 
 	/**
 	 * Resolved tool definitions with their dispatch routes (tool name → operation
-	 * ref) and the configured tools that did not resolve ({@code {operation, reason}}).
+	 * ref), configured tools that did not resolve ({@code {operation, reason}}),
+	 * and inspection-only provenance in definition order.
 	 * {@code routes} is a fresh mutable map per palette: runtimes add routes for
 	 * tools adopted mid-run.
 	 */
-	public record Palette(AVector<ACell> tools, Map<String, AString> routes, AVector<ACell> unavailable) {
+	public record Palette(AVector<ACell> tools, Map<String, AString> routes,
+			AVector<ACell> unavailable, AVector<ACell> provenance) {
 		public Palette {
 			tools = (tools != null) ? tools : Vectors.empty();
 			routes = (routes != null) ? routes : new HashMap<>();
 			unavailable = (unavailable != null) ? unavailable : Vectors.empty();
+			provenance = (provenance != null) ? provenance : Vectors.empty();
 		}
 	}
 
@@ -98,25 +105,30 @@ public final class ToolPalette {
 		Map<String, AString> routes = new HashMap<>();
 
 		AVector<ACell> tools = Vectors.empty();
+		AVector<ACell> entries = Vectors.empty();
 		if (config != null && CVMBool.TRUE.equals(config.get(K_DEFAULT_TOOLS))) {
 			Palette defaults = DEFAULT_TOOL_CACHE.computeIfAbsent(engine, e -> {
 				Map<String, AString> freshRoutes = new HashMap<>();
-				AVector<ACell> defs = build(e, ctx, DEFAULT_TOOL_OPS, Set.of(), freshRoutes, null);
-				return new Palette(defs, Map.copyOf(freshRoutes), Vectors.empty());
+				List<AMap<AString, ACell>> provenance = new java.util.ArrayList<>();
+				AVector<ACell> defs = build(e, ctx, DEFAULT_TOOL_OPS, Set.of(), freshRoutes, null,
+					provenance, SOURCE_DEFAULT, null);
+				return new Palette(defs, Map.copyOf(freshRoutes), Vectors.empty(), vector(provenance));
 			});
 			tools = defaults.tools();
 			routes.putAll(defaults.routes());
+			entries = defaults.provenance();
 		}
 
 		List<AMap<AString, ACell>> unavailable = new java.util.ArrayList<>();
+		List<AMap<AString, ACell>> configuredEntries = new java.util.ArrayList<>();
 		AVector<ACell> configured = RT.ensureVector(config != null ? config.get(K_TOOLS) : null);
 		if (configured != null) {
 			Set<String> skip = (skipNames != null) ? skipNames : Set.of();
-			tools = merge(tools, build(engine, resolutionCtx, configured, skip, routes, unavailable));
+			tools = merge(tools, build(engine, resolutionCtx, configured, skip, routes, unavailable,
+				configuredEntries, SOURCE_CONFIG, null));
 		}
-		AVector<ACell> unavailableVec = Vectors.empty();
-		for (AMap<AString, ACell> u : unavailable) unavailableVec = unavailableVec.conj(u);
-		return new Palette(tools, routes, unavailableVec);
+		entries = mergeEntries(entries, vector(configuredEntries));
+		return new Palette(tools, routes, vector(unavailable), entries);
 	}
 
 	/**
@@ -127,7 +139,7 @@ public final class ToolPalette {
 	 */
 	public static AVector<ACell> forOperations(Engine engine, RequestContext ctx,
 			AVector<ACell> operations, Map<String, AString> routes) {
-		return build(engine, ctx, operations, Set.of(), routes, null);
+		return build(engine, ctx, operations, Set.of(), routes, null, null, null, null);
 	}
 
 	/**
@@ -151,6 +163,14 @@ public final class ToolPalette {
 	public static AVector<ACell> loadsToolDefs(Engine engine, RequestContext ctx,
 			AMap<AString, ACell> effectiveLoads, Set<String> excludeNames,
 			Map<String, AString> routes) {
+		return loadsToolDefs(engine, ctx, effectiveLoads, excludeNames, routes, null);
+	}
+
+	/** Same resolution as {@link #loadsToolDefs}, retaining provenance for inspection. */
+	@SuppressWarnings("unchecked")
+	static AVector<ACell> loadsToolDefs(Engine engine, RequestContext ctx,
+			AMap<AString, ACell> effectiveLoads, Set<String> excludeNames,
+			Map<String, AString> routes, List<AMap<AString, ACell>> provenance) {
 		AVector<ACell> added = Vectors.empty();
 		if (effectiveLoads == null || effectiveLoads.count() == 0) return added;
 		Set<String> names = new HashSet<>();
@@ -169,9 +189,24 @@ public final class ToolPalette {
 				added = added.conj(def);
 				AString route = newRoutes.get(n.toString());
 				if (route != null) routes.put(n.toString(), route);
+				if (provenance != null) provenance.add(entry(n,
+					Skills.isSkillEntry((AMap<AString, ACell>) spec) ? SOURCE_SKILL : SOURCE_LOAD,
+					route, entry.getKey()));
 			}
 		}
 		return added;
+	}
+
+	/** Inspection entries for runtime-owned definitions that have no operation route. */
+	static AVector<ACell> provenance(AVector<ACell> tools, String source) {
+		AVector<ACell> out = Vectors.empty();
+		if (tools == null) return out;
+		AString src = Strings.create(source);
+		for (long i = 0; i < tools.count(); i++) {
+			AString name = RT.ensureString(RT.getIn(tools.get(i), K_NAME));
+			if (name != null) out = out.conj(entry(name, src, null, null));
+		}
+		return out;
 	}
 
 	/** Appends the contributed definitions whose names are not already present.
@@ -207,7 +242,8 @@ public final class ToolPalette {
 	 */
 	private static AVector<ACell> build(Engine engine, RequestContext ctx,
 			AVector<ACell> entries, Set<String> skipNames, Map<String, AString> routes,
-			List<AMap<AString, ACell>> unavailable) {
+			List<AMap<AString, ACell>> unavailable, List<AMap<AString, ACell>> provenance,
+			AString source, AString ref) {
 		AVector<ACell> result = Vectors.empty();
 		for (long i = 0; i < entries.count(); i++) {
 			AString[] parsed = parseConfigToolEntry(entries.get(i));
@@ -252,8 +288,36 @@ public final class ToolPalette {
 
 			result = result.conj(buildToolDefinition(toolName, description, inputSchema));
 			routes.put(toolName, operation);
+			if (provenance != null) provenance.add(entry(Strings.create(toolName), source, operation, ref));
 		}
 		return result;
+	}
+
+	private static AMap<AString, ACell> entry(AString name, AString source,
+			AString operation, AString ref) {
+		AMap<AString, ACell> out = Maps.of(K_NAME, name, Fields.SOURCE, source);
+		if (operation != null) out = out.assoc(Fields.OPERATION, operation);
+		if (ref != null) out = out.assoc(Fields.REF, ref);
+		return out;
+	}
+
+	private static AVector<ACell> vector(List<? extends ACell> cells) {
+		AVector<ACell> out = Vectors.empty();
+		for (ACell cell : cells) out = out.conj(cell);
+		return out;
+	}
+
+	private static AVector<ACell> mergeEntries(AVector<ACell> first, AVector<ACell> second) {
+		Set<String> names = new HashSet<>();
+		AVector<ACell> out = Vectors.empty();
+		for (AVector<ACell> entries : List.of(first, second)) {
+			for (long i = 0; i < entries.count(); i++) {
+				ACell entry = entries.get(i);
+				AString name = RT.ensureString(RT.getIn(entry, K_NAME));
+				if (name != null && names.add(name.toString())) out = out.conj(entry);
+			}
+		}
+		return out;
 	}
 
 	private static void record(List<AMap<AString, ACell>> unavailable, AString operation, String reason) {
