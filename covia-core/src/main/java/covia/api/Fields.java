@@ -96,6 +96,10 @@ public class Fields {
 	public static final StringShort BODY = Strings.intern("body");
 	public static final StringShort METHOD = Strings.intern("method");
 	public static final StringShort BEARER_SECRET = Strings.intern("bearerSecret");
+	/** Map of outbound HTTP header name to a caller-visible secret reference.
+	 * The resolved secret is the complete header value. Operation metadata must
+	 * declare this field secret so references do not persist in Job records. */
+	public static final StringShort SECRET_HEADERS = Strings.intern("secretHeaders");
 	/** Literal bearer credential supplied directly to an outbound protocol
 	 * adapter. Operation metadata must declare this as a secret field so the
 	 * value never persists in a Job record. */

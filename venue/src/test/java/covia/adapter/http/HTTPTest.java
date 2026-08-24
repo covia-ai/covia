@@ -1,6 +1,7 @@
 package covia.adapter.http;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -10,18 +11,26 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
 
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
 
 import convex.core.data.ACell;
+import convex.core.data.AString;
+import convex.core.data.AVector;
 import convex.core.data.Maps;
+import convex.core.data.Strings;
 import convex.core.lang.RT;
+import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.client.VenueHTTP;
 import covia.venue.TestServer;
 import covia.venue.TestOps;
+import covia.venue.RequestContext;
+import covia.venue.SecretStore;
+import covia.venue.User;
 import covia.adapter.HTTPAdapter;
 import covia.test.IntegrationTest;
 
@@ -180,6 +189,75 @@ public class HTTPTest {
 			assertEquals("POST", RT.getIn(result.getOutput(), "body").toString());
 		} finally {
 			echo.stop(0);
+		}
+	}
+
+	@Test public void testSecretHeadersResolveOverrideAndStayOutOfJobRecords() throws Exception {
+		AString caller = Strings.create("did:test:http:secret-headers:" + System.nanoTime());
+		User user = TestServer.ENGINE.getVenueState().users().ensure(caller);
+		byte[] key = SecretStore.deriveKey(TestServer.ENGINE.getKeyPair());
+		user.secrets().store("API_KEY", "resolved-api-key", key);
+		user.secrets().store("BASIC_AUTH", "Basic dXNlcjp0b2tlbg==", key);
+
+		AtomicReference<String> received = new AtomicReference<>();
+		HttpServer echo = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
+		echo.createContext("/headers", exchange -> {
+			received.set(exchange.getRequestHeaders().getFirst("X-API-Key") + "|"
+				+ exchange.getRequestHeaders().getFirst("Authorization"));
+			byte[] body = "ok".getBytes(StandardCharsets.UTF_8);
+			exchange.sendResponseHeaders(200, body.length);
+			try (OutputStream os = exchange.getResponseBody()) { os.write(body); }
+		});
+		echo.start();
+		try {
+			ACell input = Maps.of(
+				Fields.URL, "http://localhost:" + echo.getAddress().getPort() + "/headers",
+				Fields.HEADERS, Maps.of("X-API-Key", "literal-must-lose"),
+				Fields.SECRET_HEADERS, Maps.of(
+					"X-API-Key", "s/API_KEY",
+					"Authorization", "s/BASIC_AUTH"));
+			Job job = TestServer.ENGINE.jobs().invokeOperation(
+				"v/ops/http/get", input, RequestContext.of(caller));
+			ACell output = job.awaitResult(5000);
+
+			assertEquals("ok", RT.getIn(output, Fields.BODY).toString());
+			assertEquals("resolved-api-key|Basic dXNlcjp0b2tlbg==", received.get());
+			assertEquals(Fields.HIDDEN,
+				RT.getIn(job.getData(), Fields.INPUT, Fields.SECRET_HEADERS));
+			String durable = job.getData().toString();
+			assertFalse(durable.contains("resolved-api-key"), durable);
+			assertFalse(durable.contains("dXNlcjp0b2tlbg"), durable);
+			assertFalse(durable.contains("s/API_KEY"), durable);
+		} finally {
+			echo.stop(0);
+		}
+	}
+
+	@Test public void testBearerSecretConflictsWithAuthorizationSecretHeader() {
+		AString caller = Strings.create("did:test:http:secret-conflict:" + System.nanoTime());
+		User user = TestServer.ENGINE.getVenueState().users().ensure(caller);
+		byte[] key = SecretStore.deriveKey(TestServer.ENGINE.getKeyPair());
+		user.secrets().store("AUTH", "complete-header", key);
+		user.secrets().store("TOKEN", "bearer-token", key);
+
+		IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+			() -> TestServer.ENGINE.jobs().invokeOperation("v/ops/http/get", Maps.of(
+				Fields.URL, TestServer.BASE_URL + "/api/v1/status",
+				Fields.SECRET_HEADERS, Maps.of("Authorization", "s/AUTH"),
+				Fields.BEARER_SECRET, "s/TOKEN"), RequestContext.of(caller)));
+		assertTrue(error.getMessage().contains("either secretHeaders or bearerSecret"),
+			error.getMessage());
+	}
+
+	@Test public void testHTTPGetAndPostDeclareSecretHeadersForRedaction() {
+		RequestContext ctx = RequestContext.of(Strings.create(
+			"did:test:http:secret-schema:" + System.nanoTime()));
+		for (String ref : new String[] {"v/ops/http/get", "v/ops/http/post"}) {
+			ACell operation = TestServer.ENGINE.resolvePath(Strings.create(ref), ctx);
+			AVector<ACell> secretFields = RT.ensureVector(
+				RT.getIn(operation, Fields.OPERATION, "secretFields"));
+			assertNotNull(secretFields, ref);
+			assertTrue(secretFields.contains(Fields.SECRET_HEADERS), ref);
 		}
 	}
 

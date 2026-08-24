@@ -7,7 +7,7 @@
 		"info":{
 		    "featured":true
 		},
-		"secretFields": ["bearerSecret"],
+		"secretFields": ["bearerSecret", "secretHeaders"],
 
 
 		"input": {
@@ -36,6 +36,11 @@
 				"bearerSecret": {
 					"type": "string",
 					"description": "Optional reference to a secret (e.g. 's/MY_TOKEN') resolved from the caller's secret store and sent as 'Authorization: Bearer <token>'. For a plaintext bearer token, set the Authorization header directly via 'headers' instead."
+				},
+				"secretHeaders": {
+					"type": "object",
+					"description": "Optional map of HTTP header name to secret reference. Each resolved secret is used as the complete header value, so store values such as 'Basic <base64>' or the API key itself. Resolved headers override matching literal headers and this entire field is redacted from job records.",
+					"additionalProperties": { "type": "string" }
 				}
 			},
 			"required": ["url"]
@@ -58,4 +63,4 @@
 			}
 		}
 	}
-} 
+}

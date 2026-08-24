@@ -12,6 +12,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -218,6 +219,7 @@ public class HTTPAdapter extends AAdapter {
 		AMap<AString,AString> queryParams=RT.castMap(RT.getIn(input, Fields.QUERY_PARAMS));
 		ACell bodyField=RT.getIn(input, Fields.BODY);
 		AString bearerSecret=RT.ensureString(RT.getIn(input, Fields.BEARER_SECRET));
+		AMap<AString, ACell> secretHeaders = optionalMap(input, Fields.SECRET_HEADERS);
 		
 		try {
 			String method = "GET"; // default
@@ -284,19 +286,37 @@ public class HTTPAdapter extends AAdapter {
 				}
 			}
 
-			// Resolve bearer secret reference and set Authorization header.
-			// Only secret references are accepted — for plaintext tokens, set the
-			// Authorization header directly via the headers field.
+			// Resolved secret headers override matching literal headers. The stored
+			// secret is the complete header value (e.g. "Basic ..." or an API key),
+			// keeping auth-scheme formatting out of the infrastructure.
+			Set<String> resolvedNames = new HashSet<>();
+			if (secretHeaders != null) {
+				for (MapEntry<AString, ACell> entry : secretHeaders.entryVector()) {
+					AString header = RT.ensureString(entry.getKey());
+					AString secret = RT.ensureString(entry.getValue());
+					if (header == null || header.isEmpty() || secret == null || secret.isEmpty()) {
+						throw new IllegalArgumentException(
+							"secretHeaders must map non-empty header names to secret references");
+					}
+					String canonical = header.toString().toLowerCase(Locale.ROOT);
+					if (!resolvedNames.add(canonical)) {
+						throw new IllegalArgumentException(
+							"secretHeaders contains the same header more than once: " + header);
+					}
+					requestBuilder.setHeader(header.toString(),
+						resolveSecret(secret, ctx, "secretHeaders"));
+				}
+			}
+
+			// Backward-compatible bearer shorthand. Refuse two secret sources for
+			// Authorization rather than silently choosing one.
 			if (bearerSecret != null) {
-				if (engine == null || ctx == null) {
-					throw new IllegalStateException("bearerSecret requires engine and request context");
+				if (resolvedNames.contains("authorization")) {
+					throw new IllegalArgumentException(
+						"Specify Authorization in either secretHeaders or bearerSecret, not both");
 				}
-				String resolved = engine.resolveSecret(bearerSecret.toString(), ctx);
-				if (resolved == null) {
-					throw new IllegalArgumentException("Cannot resolve bearerSecret '" + bearerSecret
-						+ "'; store it with secret:set or pass an existing s/<name> reference");
-				}
-				requestBuilder.setHeader("Authorization", "Bearer " + resolved);
+				requestBuilder.setHeader("Authorization",
+					"Bearer " + resolveSecret(bearerSecret, ctx, "bearerSecret"));
 			}
 
 			HttpRequest request = requestBuilder.build();
@@ -331,6 +351,28 @@ public class HTTPAdapter extends AAdapter {
 			throw new RuntimeException("Bad URI syntax: "+url,e);
 		}
 
+	}
+
+	@SuppressWarnings("unchecked")
+	private static AMap<AString, ACell> optionalMap(ACell input, AString field) {
+		ACell value = RT.getIn(input, field);
+		if (value == null) return null;
+		if (!(value instanceof AMap<?, ?> map)) {
+			throw new IllegalArgumentException(field + " must be an object");
+		}
+		return (AMap<AString, ACell>) map;
+	}
+
+	private String resolveSecret(AString reference, RequestContext ctx, String field) {
+		if (engine == null || ctx == null) {
+			throw new IllegalStateException(field + " requires engine and request context");
+		}
+		String resolved = engine.resolveSecret(reference.toString(), ctx);
+		if (resolved == null) {
+			throw new IllegalArgumentException("Cannot resolve " + field + " reference '"
+				+ reference + "'; store it with secret:set or pass an existing s/<name> reference");
+		}
+		return resolved;
 	}
 
 }
