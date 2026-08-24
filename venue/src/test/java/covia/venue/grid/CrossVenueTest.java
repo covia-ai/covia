@@ -1,12 +1,14 @@
 package covia.venue.grid;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URI;
+import java.util.concurrent.CompletionException;
 
 import org.junit.jupiter.api.Test;
 
@@ -19,6 +21,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.exception.ResponseException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.auth.VenueAuth;
@@ -220,13 +223,14 @@ public class CrossVenueTest {
 			VenueAuth.bearer(jwt));
 		bobOnB.setUser(bobDID.toString());
 
-		Throwable t = assertThrows(Throwable.class, () ->
-			bobOnB.invokeAndWait(Strings.create("v/ops/covia/read"),
-				Maps.of(Fields.PATH, bobDID + "/w/somewhere")));
-		StringBuilder chain = new StringBuilder();
-		for (Throwable c = t; c != null; c = c.getCause()) chain.append(c.getMessage()).append(" | ");
-		assertTrue(chain.toString().contains("audience") || chain.toString().contains("401"),
-			"A token not audienced to venue B must be rejected at the transport boundary, got: " + chain);
+		// Venue B refuses the token, which the client raises as a typed
+		// ResponseException. Asserting the type — not text in the cause chain —
+		// is what makes this a test of venue B's answer: a transport failure
+		// arrives as a different type and now fails the test as itself.
+		CompletionException failure = assertThrows(CompletionException.class, () ->
+			bobOnB.startJobAsync(Strings.create("v/ops/covia/read"),
+				Maps.of(Fields.PATH, bobDID + "/w/somewhere")).join());
+		assertInstanceOf(ResponseException.class, failure.getCause());
 	}
 
 	/**
