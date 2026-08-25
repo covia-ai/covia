@@ -82,8 +82,7 @@ public class VenueServerTest {
 			Config.ROOT_PAGE, Maps.of(
 				Config.REDIRECT, Strings.create("https://operator.example/"))));
 		try {
-			HttpClient client = HttpClient.newBuilder()
-				.followRedirects(HttpClient.Redirect.NEVER).build();
+			HttpClient client = TestHTTP.CLIENT;
 			HttpResponse<String> root = client.send(HttpRequest.newBuilder()
 				.uri(new URI("http://127.0.0.1:" + server.port() + "/"))
 				.GET().timeout(Duration.ofSeconds(5)).build(),
@@ -113,7 +112,7 @@ public class VenueServerTest {
 			Config.ROOT_PAGE, Maps.of(
 				Config.FILE, Strings.create(page.toString()))));
 		try {
-			HttpResponse<String> root = HttpClient.newHttpClient().send(
+			HttpResponse<String> root = TestHTTP.CLIENT.send(
 				HttpRequest.newBuilder()
 					.uri(new URI("http://127.0.0.1:" + server.port() + "/"))
 					.GET().timeout(Duration.ofSeconds(5)).build(),
@@ -158,7 +157,7 @@ public class VenueServerTest {
 						Config.CLIENT_ID, clientId,
 						Config.CLIENT_SECRET, clientSecret)))));
 		try {
-			HttpResponse<String> response = HttpClient.newHttpClient().send(
+			HttpResponse<String> response = TestHTTP.CLIENT.send(
 				HttpRequest.newBuilder()
 					.uri(new URI("http://127.0.0.1:" + server.port() + "/config"))
 					.GET().timeout(Duration.ofSeconds(5)).build(),
@@ -184,7 +183,7 @@ public class VenueServerTest {
 	 */
 	@Test public void testPrivateNetworkHeaderFollowsBind() throws Exception {
 		// The shared TestServer sets no bindAddress → all-interfaces → PNA off.
-		HttpClient client = HttpClient.newBuilder().build();
+		HttpClient client = TestHTTP.CLIENT;
 		HttpRequest req = HttpRequest.newBuilder()
 			.uri(new URI("http://localhost:" + PORT + "/api/v1/status"))
 			.GET().timeout(Duration.ofSeconds(10)).build();
@@ -303,7 +302,7 @@ public class VenueServerTest {
 	}
 
 	private static HttpResponse<String> corsGet(VenueServer server, String origin) throws Exception {
-		return HttpClient.newHttpClient().send(HttpRequest.newBuilder()
+		return TestHTTP.CLIENT.send(HttpRequest.newBuilder()
 			.uri(new URI("http://localhost:" + server.port() + "/api/v1/status"))
 			.header("Origin", origin)
 			.GET().timeout(Duration.ofSeconds(10)).build(),
@@ -316,7 +315,7 @@ public class VenueServerTest {
 
 	private static HttpResponse<String> corsPreflight(
 			VenueServer server, String origin, String path) throws Exception {
-		return HttpClient.newHttpClient().send(HttpRequest.newBuilder()
+		return TestHTTP.CLIENT.send(HttpRequest.newBuilder()
 			.uri(new URI("http://localhost:" + server.port() + path))
 			.header("Origin", origin)
 			.header("Access-Control-Request-Method", "GET")
@@ -333,7 +332,7 @@ public class VenueServerTest {
 	 * required {@code path} parameter (they were once parameterless stubs).
 	 */
 	@Test public void testAPIDoc() throws URISyntaxException, InterruptedException, ExecutionException, TimeoutException {
-		HttpClient client = HttpClient.newBuilder().build();
+		HttpClient client = TestHTTP.CLIENT;
 		HttpRequest req = HttpRequest.newBuilder()
 			.uri(new URI("http://localhost:"+PORT+"/openapi"))
 			.GET()
@@ -367,7 +366,7 @@ public class VenueServerTest {
 	 * Test for presence of MCP interface
 	 */
 	@Test public void testMCPWellKnown() throws URISyntaxException, InterruptedException, ExecutionException, TimeoutException {
-		HttpClient client = HttpClient.newBuilder().build();
+		HttpClient client = TestHTTP.CLIENT;
 		HttpRequest req = HttpRequest.newBuilder()
 			.uri(new URI("http://localhost:"+PORT+"/.well-known/mcp"))
 			.GET()
@@ -654,7 +653,7 @@ public class VenueServerTest {
 	@Test
 	public void testHTTPInvokeAgentCreate() throws Exception {
 		// Reproduce: POST /invoke with agent:create — should not hang
-		HttpClient client = HttpClient.newBuilder().build();
+		HttpClient client = TestHTTP.CLIENT;
 		String body = "{\"operation\": \"v/ops/agent/create\", \"input\": {\"agentId\": \"HttpTestAgent\"}}";
 		HttpRequest req = HttpRequest.newBuilder()
 			.uri(new URI("http://localhost:" + PORT + "/api/v1/invoke"))
@@ -674,7 +673,7 @@ public class VenueServerTest {
 	@Test
 	public void testHTTPInvokeSecretSet() throws Exception {
 		// Reproduce: POST /invoke with secret:set ��� should not hang
-		HttpClient client = HttpClient.newBuilder().build();
+		HttpClient client = TestHTTP.CLIENT;
 		String body = "{\"operation\": \"v/ops/secret/set\", \"input\": {\"name\": \"TEST_SECRET\", \"value\": \"test123\"}}";
 		HttpRequest req = HttpRequest.newBuilder()
 			.uri(new URI("http://localhost:" + PORT + "/api/v1/invoke"))
@@ -699,7 +698,7 @@ public class VenueServerTest {
 		covia.invokeAndWait(Strings.create("v/test/ops/echo"),
 			Maps.of(Strings.create("x"), CVMLong.create(1)));
 
-		HttpClient client = HttpClient.newHttpClient();
+		HttpClient client = TestHTTP.CLIENT;
 		HttpResponse<String> r = client.send(HttpRequest.newBuilder()
 			.uri(new URI(BASE_URL + "/api/v1/jobs?limit=1"))
 			.GET().timeout(Duration.ofSeconds(10)).build(),
@@ -719,7 +718,7 @@ public class VenueServerTest {
 	public void testStatusStatsIncludeJobCounts() throws Exception {
 		covia.invokeAndWait(Strings.create("v/test/ops/echo"),
 			Maps.of(Strings.create("x"), CVMLong.create(2)));
-		HttpClient client = HttpClient.newHttpClient();
+		HttpClient client = TestHTTP.CLIENT;
 		HttpResponse<String> r = client.send(HttpRequest.newBuilder()
 			.uri(new URI(BASE_URL + "/api/v1/status"))
 			.GET().timeout(Duration.ofSeconds(10)).build(),
@@ -745,7 +744,7 @@ public class VenueServerTest {
 			Strings.create("bindAddress"), Strings.create("127.0.0.1")));
 		try {
 			int port = server.port();
-			HttpClient client = HttpClient.newHttpClient();
+			HttpClient client = TestHTTP.CLIENT;
 			for (String host : new String[] {"127.0.0.1", "[::1]"}) {
 				HttpResponse<String> r = client.send(HttpRequest.newBuilder()
 					.uri(new URI("http://" + host + ":" + port + "/api/v1/status"))
@@ -810,7 +809,7 @@ public class VenueServerTest {
 	public void testEncodedSlashInCatalogNamePath() throws Exception {
 		String name = "v/ops/jvm/string-concat";
 		String encoded = java.net.URLEncoder.encode(name, java.nio.charset.StandardCharsets.UTF_8);
-		HttpClient client = HttpClient.newBuilder().build();
+		HttpClient client = TestHTTP.CLIENT;
 		HttpRequest req = HttpRequest.newBuilder()
 			.uri(new URI("http://localhost:" + PORT + "/api/v1/operations/" + encoded))
 			.GET().timeout(Duration.ofSeconds(10)).build();
@@ -831,7 +830,7 @@ public class VenueServerTest {
 	 * pinning that the compliance scope is not silently re-widened.
 	 */
 	@Test public void testEncodedDotPathRejected() throws Exception {
-		HttpClient client = HttpClient.newBuilder().build();
+		HttpClient client = TestHTTP.CLIENT;
 		HttpRequest req = HttpRequest.newBuilder()
 			.uri(new URI("http://localhost:" + PORT + "/api/v1/%2e%2e/status"))
 			.GET().timeout(Duration.ofSeconds(10)).build();

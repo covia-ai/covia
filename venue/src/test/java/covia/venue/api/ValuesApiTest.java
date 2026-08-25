@@ -7,7 +7,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URI;
 import java.net.URLEncoder;
-import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
@@ -142,7 +141,7 @@ public class ValuesApiTest {
 	private HttpResponse<String> get(String route, String path) throws Exception {
 		String uri = TestServer.BASE_URL + "/api/v1/values/" + route
 			+ (path == null ? "" : "?path=" + URLEncoder.encode(path, StandardCharsets.UTF_8));
-		return HttpClient.newHttpClient().send(
+		return covia.venue.TestHTTP.CLIENT.send(
 			HttpRequest.newBuilder().uri(URI.create(uri))
 				.header("Authorization", "Bearer " + jwt).GET().build(),
 			HttpResponse.BodyHandlers.ofString());
@@ -151,7 +150,7 @@ public class ValuesApiTest {
 	private HttpResponse<String> getQ(String route, String path, String extraQuery) throws Exception {
 		String uri = TestServer.BASE_URL + "/api/v1/values/" + route
 			+ "?path=" + URLEncoder.encode(path, StandardCharsets.UTF_8) + extraQuery;
-		return HttpClient.newHttpClient().send(
+		return covia.venue.TestHTTP.CLIENT.send(
 			HttpRequest.newBuilder().uri(URI.create(uri))
 				.header("Authorization", "Bearer " + jwt).GET().build(),
 			HttpResponse.BodyHandlers.ofString());
@@ -160,7 +159,7 @@ public class ValuesApiTest {
 	private HttpResponse<String> getWithProof(String route, String path, AString proof) throws Exception {
 		String uri = TestServer.BASE_URL + "/api/v1/values/" + route
 			+ "?path=" + URLEncoder.encode(path, StandardCharsets.UTF_8);
-		return HttpClient.newHttpClient().send(
+		return covia.venue.TestHTTP.CLIENT.send(
 			HttpRequest.newBuilder().uri(URI.create(uri))
 				.header("Authorization", "Bearer " + jwt)
 				.header(VenueHTTP.UCANS_HEADER, proof.toString()).GET().build(),
@@ -170,7 +169,7 @@ public class ValuesApiTest {
 	private HttpResponse<String> getIfNoneMatch(String route, String path, String etag) throws Exception {
 		String uri = TestServer.BASE_URL + "/api/v1/values/" + route
 			+ "?path=" + URLEncoder.encode(path, StandardCharsets.UTF_8);
-		return HttpClient.newHttpClient().send(
+		return covia.venue.TestHTTP.CLIENT.send(
 			HttpRequest.newBuilder().uri(URI.create(uri))
 				.header("Authorization", "Bearer " + jwt)
 				.header("If-None-Match", etag).GET().build(),

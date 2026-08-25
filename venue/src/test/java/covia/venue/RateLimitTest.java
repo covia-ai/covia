@@ -39,7 +39,7 @@ public class RateLimitTest {
 				Strings.create("blockMs"), 0L)));
 		try {
 			String url = "http://127.0.0.1:" + server.port() + "/api/v1/invoke";
-			HttpClient client = HttpClient.newHttpClient();
+			HttpClient client = TestHTTP.CLIENT;
 			HttpRequest invokeNever = HttpRequest.newBuilder(URI.create(url))
 				.header("Content-Type", "application/json")
 				.POST(HttpRequest.BodyPublishers.ofString("{\"operation\":\"v/test/ops/never\"}"))

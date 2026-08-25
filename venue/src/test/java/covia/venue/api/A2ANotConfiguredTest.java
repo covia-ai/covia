@@ -36,7 +36,7 @@ public class A2ANotConfiguredTest {
 		// No `a2a` block → A2A routes are not registered by the A2A handler.
 		server = VenueServer.launch(Maps.of(Strings.create("port"), 0));
 		baseUrl = "http://localhost:" + server.port();
-		http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+		http = covia.venue.TestHTTP.CLIENT;
 	}
 
 	@AfterAll

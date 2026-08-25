@@ -41,8 +41,9 @@ public final class ClaudeCodeModuleSmokeMain {
 						Strings.create("smoke"), Maps.of(
 							Strings.create("path"), Strings.create(projectDir.toString()),
 							Strings.create("user"), owner)))));
-		Engine engine = Engine.createTemp(config);
+		Engine engine = null;
 		try {
+			engine = Engine.createTemp(config);
 			Engine.addDemoAssets(engine);
 			AAdapter adapter = engine.getAdapter("claudecode");
 			if (adapter == null) throw new AssertionError("Claude Code adapter did not load");
@@ -70,7 +71,20 @@ public final class ClaudeCodeModuleSmokeMain {
 			if (!projects.toString().contains("smoke")) throw new AssertionError("Project missing: " + projects);
 			System.out.println("CLAUDECODE_MODULE_SMOKE_OK");
 		} finally {
-			engine.close();
+			if (engine != null) engine.close();
+			deleteRecursively(projectDir);
+		}
+	}
+
+	private static void deleteRecursively(Path dir) throws Exception {
+		try (var paths = Files.walk(dir)) {
+			paths.sorted(java.util.Comparator.reverseOrder())
+				.forEach(path -> {
+					try {
+						Files.deleteIfExists(path);
+					} catch (java.io.IOException ignored) {
+					}
+				});
 		}
 	}
 

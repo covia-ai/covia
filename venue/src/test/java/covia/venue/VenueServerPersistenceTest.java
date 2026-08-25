@@ -43,8 +43,7 @@ import covia.test.DurabilityTest;
 @DurabilityTest
 public class VenueServerPersistenceTest {
 
-	private HttpClient http = HttpClient.newBuilder()
-		.connectTimeout(Duration.ofSeconds(5)).build();
+	private HttpClient http = TestHTTP.CLIENT;
 
 	private HttpResponse<String> webdav(int port, String method, String path, String body) throws Exception {
 		HttpRequest.Builder builder = HttpRequest.newBuilder()

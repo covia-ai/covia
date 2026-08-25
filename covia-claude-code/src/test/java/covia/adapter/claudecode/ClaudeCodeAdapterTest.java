@@ -18,6 +18,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
 
@@ -60,12 +61,12 @@ public class ClaudeCodeAdapterTest {
 
 	private static Engine engine;
 	private static ClaudeCodeAdapter adapter;
+	@TempDir private static Path root;
 	private static Path alphaDir, betaDir, gammaDir, bypassDir, stateDir;
 	private static AMap<AString, ACell> baseConfig;
 
 	@BeforeAll
 	static void boot() throws Exception {
-		Path root = Files.createTempDirectory("covia-claudecode-test");
 		alphaDir = Files.createDirectories(root.resolve("alpha"));
 		betaDir = Files.createDirectories(root.resolve("beta"));
 		gammaDir = Files.createDirectories(root.resolve("gamma"));
@@ -418,7 +419,7 @@ public class ClaudeCodeAdapterTest {
 
 	@Test
 	public void testRuntimeProjectsNeedVenueAuthorityAndPersist() throws Exception {
-		Path dir = Files.createTempDirectory("covia-claudecode-runtime");
+		Path dir = Files.createDirectory(root.resolve("runtime"));
 		// A plain user cannot register a directory.
 		Job denied = awaitFinished(engine.jobs().invokeOperation("v/ops/claudecode/create", Maps.of("name", "rt", "path", dir.toString()), OWNER_CTX));
 		assertEquals(Status.FAILED, denied.getStatus());
@@ -457,7 +458,7 @@ public class ClaudeCodeAdapterTest {
 
 	@Test
 	public void testRuntimeProjectsRearmFromTheLattice() throws Exception {
-		Path dir = Files.createTempDirectory("covia-claudecode-rearm");
+		Path dir = Files.createDirectory(root.resolve("rearm"));
 		run(engine.venueContext(), "v/ops/claudecode/create", Maps.of("name", "rearm", "path", dir.toString(), "user", OWNER.toString()));
 		try {
 			// A fresh adapter instance installed on the same engine (a restart, in effect) sees the project.

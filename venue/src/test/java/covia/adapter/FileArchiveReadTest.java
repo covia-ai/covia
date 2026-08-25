@@ -11,6 +11,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -56,6 +57,11 @@ public class FileArchiveReadTest {
 		Files.writeString(workspace.resolve("notazip.txt"), "plain");
 		// A .zip-named file that is NOT actually a zip — exercises the mount failure.
 		Files.writeString(workspace.resolve("fake.zip"), "not really a zip");
+	}
+
+	@AfterAll
+	static void teardown() {
+		engine.close();
 	}
 
 	private RequestContext ctx() { return RequestContext.of(Strings.create(DID)); }

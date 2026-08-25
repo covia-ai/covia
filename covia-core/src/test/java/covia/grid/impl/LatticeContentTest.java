@@ -32,7 +32,9 @@ public class LatticeContentTest {
 		LatticeContent lc = LatticeContent.of(Cursors.of(root), hash);
 		assertEquals(content, lc.getBlob());
 		assertEquals(4, lc.getSize());
-		assertNotNull(lc.getInputStream());
+		try (var input = lc.getInputStream()) {
+			assertNotNull(input);
+		}
 	}
 
 	@Test

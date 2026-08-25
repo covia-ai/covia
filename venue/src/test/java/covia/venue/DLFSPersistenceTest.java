@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.File;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import convex.core.data.ACell;
@@ -34,6 +35,29 @@ import covia.test.DurabilityTest;
 public class DLFSPersistenceTest {
 
 	static final AString ALICE_DID = Strings.create("did:key:z6MkAlice");
+	private AStore store;
+	private NodeServer<Index<Keyword, ACell>> node;
+	private Engine engine;
+
+	@AfterEach
+	void teardown() throws Exception {
+		closePhase();
+	}
+
+	private void closePhase() throws Exception {
+		try {
+			if (engine != null) engine.close();
+		} finally {
+			engine = null;
+			try {
+				if (node != null) node.close();
+			} finally {
+				node = null;
+				if (store != null) store.close();
+				store = null;
+			}
+		}
+	}
 
 	@Test
 	public void testDLFSDataSurvivesRestart() throws Exception {
@@ -44,13 +68,13 @@ public class DLFSPersistenceTest {
 
 		// === Phase 1: Write data ===
 		{
-			AStore store = EtchStore.create(etchFile);
-			NodeServer<Index<Keyword, ACell>> node =
+			store = EtchStore.create(etchFile);
+			node =
 				new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
 			node.setMergeContext(LatticeContext.create(null, venueKey));
 			node.launch();
 
-			Engine engine = new Engine(Maps.of(
+			engine = new Engine(Maps.of(
 				Config.USERS, Maps.of(Config.AUTO_CREATE, true)), node.getCursor(), venueKey).start();
 			Engine.addDemoAssets(engine);
 
@@ -97,14 +121,13 @@ public class DLFSPersistenceTest {
 			ACell storedDlfs = RT.getIn(storeRoot, Covia.DLFS);
 			assertNotNull(storedDlfs, ":dlfs should be in store root data");
 
-			node.close();
-			store.close();
+			closePhase();
 		}
 
 		// === Phase 2: Restart and read ===
 		{
-			AStore store = EtchStore.create(etchFile);
-			NodeServer<Index<Keyword, ACell>> node =
+			store = EtchStore.create(etchFile);
+			node =
 				new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
 			node.setMergeContext(LatticeContext.create(null, venueKey));
 			node.launch();
@@ -116,7 +139,7 @@ public class DLFSPersistenceTest {
 			assertNotNull(dlfs, ":dlfs region should survive restart");
 
 			// Check the cursor chain that DLFSAdapter would use
-			Engine engine = new Engine(Maps.of(
+			engine = new Engine(Maps.of(
 				Config.USERS, Maps.of(Config.AUTO_CREATE, true)), node.getCursor(), venueKey).start();
 			Engine.addDemoAssets(engine);
 
@@ -147,8 +170,7 @@ public class DLFSPersistenceTest {
 			String content = RT.ensureString(RT.getIn(result, "content")).toString();
 			assertEquals("persistent!", content, "DLFS file content should survive restart");
 
-			node.close();
-			store.close();
+			closePhase();
 		}
 	}
 }

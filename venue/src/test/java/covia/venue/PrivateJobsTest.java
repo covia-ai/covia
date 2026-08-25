@@ -3,6 +3,7 @@ package covia.venue;
 import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestInstance.Lifecycle;
@@ -34,6 +35,11 @@ public class PrivateJobsTest {
 			Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
 		Engine.addDemoAssets(engine);
 		ALICE = Strings.create("did:key:zPrivateJobsTestAlice");
+	}
+
+	@AfterAll
+	public void teardown() {
+		engine.close();
 	}
 
 	private long jobCount() {
@@ -101,7 +107,7 @@ public class PrivateJobsTest {
 	/** The legacy REST wire field is rejected: invoke always means durable. */
 	@Test
 	public void testRestInvokePrivateFieldRejected() throws Exception {
-		java.net.http.HttpClient http = java.net.http.HttpClient.newHttpClient();
+		java.net.http.HttpClient http = TestHTTP.CLIENT;
 		String body = "{\"operation\": \"v/test/ops/echo\", \"input\": {\"value\": \"wire secret\"}, "
 			+ "\"private\": true, \"wait\": true}";
 		java.net.http.HttpResponse<String> resp = http.send(

@@ -6,7 +6,6 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URI;
-import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 
@@ -70,7 +69,7 @@ public class OwnAssetsApiTest {
 		HttpRequest.Builder b = HttpRequest.newBuilder()
 			.uri(URI.create(TestServer.BASE_URL + "/api/v1/" + route)).GET();
 		if (auth) b.header("Authorization", "Bearer " + jwt);
-		return HttpClient.newHttpClient().send(b.build(), HttpResponse.BodyHandlers.ofString());
+		return covia.venue.TestHTTP.CLIENT.send(b.build(), HttpResponse.BodyHandlers.ofString());
 	}
 
 	private long jobCount() {

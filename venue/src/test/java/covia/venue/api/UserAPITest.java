@@ -73,7 +73,7 @@ public class UserAPITest {
 			engine.getAuth().getUser(ALICE).get(Fields.DID));
 
 		// Fetch the DID document via HTTP
-		HttpClient client = HttpClient.newBuilder().build();
+		HttpClient client = covia.venue.TestHTTP.CLIENT;
 		HttpRequest req = HttpRequest.newBuilder()
 			.uri(new URI("http://localhost:" + port + "/u/alice/did.json"))
 			.GET()
@@ -122,7 +122,7 @@ public class UserAPITest {
 		engine.getAuth().putUser(alias, Maps.of(Fields.DID, external));
 		engine.getVenueState().users().ensure(external);
 
-		HttpResponse<String> resp = HttpClient.newHttpClient().send(
+		HttpResponse<String> resp = covia.venue.TestHTTP.CLIENT.send(
 			HttpRequest.newBuilder()
 				.uri(new URI("http://localhost:" + port + "/u/oauth_alias/did.json"))
 				.GET().timeout(Duration.ofSeconds(10)).build(),
@@ -134,7 +134,7 @@ public class UserAPITest {
 
 	@Test
 	void testUnknownUserReturns404() throws Exception {
-		HttpClient client = HttpClient.newBuilder().build();
+		HttpClient client = covia.venue.TestHTTP.CLIENT;
 		HttpRequest req = HttpRequest.newBuilder()
 			.uri(new URI("http://localhost:" + port + "/u/unknown_user_xyz/did.json"))
 			.GET()

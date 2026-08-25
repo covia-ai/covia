@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.concurrent.TimeUnit;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import convex.core.crypto.AKeyPair;
@@ -40,12 +41,35 @@ import covia.test.DurabilityTest;
 // `mvn test` inner loop, run on every push via CI (-DexcludedGroups=integration).
 @DurabilityTest
 public class VenueRestartTest {
+	private EtchStore store;
+	private NodeServer<Index<Keyword, ACell>> activeNode;
+	private Engine activeEngine;
+
+	@AfterEach
+	void teardown() throws Exception {
+		try {
+			closeActivePhase();
+		} finally {
+			if (store != null) store.close();
+			store = null;
+		}
+	}
+
+	private void closeActivePhase() throws Exception {
+		try {
+			if (activeEngine != null) activeEngine.close();
+		} finally {
+			activeEngine = null;
+			if (activeNode != null) activeNode.close();
+			activeNode = null;
+		}
+	}
 
 	@Test
 	public void testRestartFromEtchStore() throws Exception {
 
 		// Use a single Etch store that survives across "restarts"
-		EtchStore store = EtchStore.createTemp();
+		store = EtchStore.createTemp();
 
 		// Fixed DID so both engines use the same lattice path
 		AKeyPair kp = AKeyPair.generate();
@@ -68,8 +92,10 @@ public class VenueRestartTest {
 
 		{
 			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
+			activeNode = ns;
 			ns.launch();
 			Engine engine = new Engine(config, ns.getCursor(), kp).start();
+			activeEngine = engine;
 			Engine.addDemoAssets(engine);
 
 			// Store a custom asset with content
@@ -132,15 +158,17 @@ public class VenueRestartTest {
 			// ========== Stage 2: Sync and shut down ==========
 
 			engine.syncState();
-			ns.close(); // persists via triggerAndClose
+			closeActivePhase(); // persists via triggerAndClose
 		}
 
 		// ========== Stage 3: Restart with the same store ==========
 
 		{
 			NodeServer<Index<Keyword, ACell>> ns2 = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
+			activeNode = ns2;
 			ns2.launch(); // restores from store
 			Engine engine2 = new Engine(config, ns2.getCursor(), kp).start();
+			activeEngine = engine2;
 			Engine.addDemoAssets(engine2);
 			engine2.jobs().recoverJobs();
 
@@ -215,7 +243,7 @@ public class VenueRestartTest {
 					"Unpaused job should be COMPLETE after receiving message");
 			assertNotNull(unpausedData.get(Fields.OUTPUT), "Unpaused job should have output");
 
-			ns2.close();
+			closeActivePhase();
 		}
 	}
 }

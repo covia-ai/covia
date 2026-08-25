@@ -47,11 +47,15 @@ class SQLModuleIT {
 
 		Process process = new ProcessBuilder(command)
 			.redirectErrorStream(true).redirectOutput(log.toFile()).start();
-		assertTrue(process.waitFor(Duration.ofSeconds(90).toMillis(), TimeUnit.MILLISECONDS),
-			"module smoke process timed out");
-		String output = Files.readString(log);
-		assertEquals(0, process.exitValue(), output);
-		assertTrue(output.contains("SQL_MODULE_SMOKE_OK"), output);
+		try {
+			assertTrue(process.waitFor(Duration.ofSeconds(90).toMillis(), TimeUnit.MILLISECONDS),
+				"module smoke process timed out");
+			String output = Files.readString(log);
+			assertEquals(0, process.exitValue(), output);
+			assertTrue(output.contains("SQL_MODULE_SMOKE_OK"), output);
+		} finally {
+			if (process.isAlive()) process.destroyForcibly().waitFor(5, TimeUnit.SECONDS);
+		}
 	}
 
 	private static boolean containsPrefix(Path jar, String prefix) throws Exception {

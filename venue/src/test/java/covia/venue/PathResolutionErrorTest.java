@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestInstance.Lifecycle;
@@ -54,6 +55,11 @@ public class PathResolutionErrorTest {
 			}
 			@Override public boolean isWritable() { return false; }
 		});
+	}
+
+	@AfterAll
+	public void teardown() {
+		engine.close();
 	}
 
 	@Test

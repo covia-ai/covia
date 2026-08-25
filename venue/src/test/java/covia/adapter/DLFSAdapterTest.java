@@ -3,6 +3,7 @@ package covia.adapter;
 import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
@@ -50,6 +51,11 @@ public class DLFSAdapterTest {
 		engine = Engine.createTemp(Maps.of(
 			Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
 		Engine.addDemoAssets(engine);
+	}
+
+	@AfterAll
+	static void teardown() {
+		engine.close();
 	}
 
 	@BeforeEach

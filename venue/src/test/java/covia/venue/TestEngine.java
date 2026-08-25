@@ -63,6 +63,8 @@ public class TestEngine {
 		ENGINE = Engine.createTemp(Maps.of(
 			Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
 		Engine.addDemoAssets(ENGINE);
+		Runtime.getRuntime().addShutdownHook(
+			new Thread(ENGINE::close, "test-engine-shutdown"));
 	}
 
 	/**

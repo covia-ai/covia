@@ -329,12 +329,15 @@ public class EngineTest {
 
 		BlobContent content =  BlobContent.of(contentBlob);
 
-		venue.putContent(venue.getMetaValue(assetId), content.getInputStream());
+		try (InputStream source = content.getInputStream()) {
+			venue.putContent(venue.getMetaValue(assetId), source);
+		}
 
-		InputStream retrievedStream = venue.getContentStream(venue.getMetaValue(assetId));
-		assertNotNull(retrievedStream, "Retrieved content stream should not be null");
-
-		byte[] retrievedBytes = retrievedStream.readAllBytes();
+		byte[] retrievedBytes;
+		try (InputStream retrievedStream = venue.getContentStream(venue.getMetaValue(assetId))) {
+			assertNotNull(retrievedStream, "Retrieved content stream should not be null");
+			retrievedBytes = retrievedStream.readAllBytes();
+		}
 		String retrievedContent = new String(retrievedBytes);
 
 		assertEquals(testContent, retrievedContent, "Retrieved content should match original content");
@@ -541,25 +544,29 @@ public class EngineTest {
 					Strings.create("FOO"), Strings.create("bar"))));
 
 		Engine e = Engine.createTemp(cfg);
-		int provisioned = e.provisionConfiguredSecrets();
-		assertEquals(4, provisioned, "All four secrets should be provisioned");
+		try {
+			int provisioned = e.provisionConfiguredSecrets();
+			assertEquals(4, provisioned, "All four secrets should be provisioned");
 
-		AString venueDID = e.getDIDString();
-		AString publicDID = Strings.create(venueDID.toString() + ":public");
+			AString venueDID = e.getDIDString();
+			AString publicDID = Strings.create(venueDID.toString() + ":public");
 
-		// Each user keeps its own value — no cross-user leakage
-		assertEquals("sk-venue",
-			e.resolveSecret("OPENAI_API_KEY", RequestContext.of(venueDID)));
-		assertEquals("sk-anth",
-			e.resolveSecret("ANTHROPIC_API_KEY", RequestContext.of(venueDID)));
-		assertEquals("sk-public",
-			e.resolveSecret("OPENAI_API_KEY", RequestContext.of(publicDID)));
-		assertEquals("bar",
-			e.resolveSecret("FOO", RequestContext.of(externalDID)));
+			// Each user keeps its own value — no cross-user leakage
+			assertEquals("sk-venue",
+				e.resolveSecret("OPENAI_API_KEY", RequestContext.of(venueDID)));
+			assertEquals("sk-anth",
+				e.resolveSecret("ANTHROPIC_API_KEY", RequestContext.of(venueDID)));
+			assertEquals("sk-public",
+				e.resolveSecret("OPENAI_API_KEY", RequestContext.of(publicDID)));
+			assertEquals("bar",
+				e.resolveSecret("FOO", RequestContext.of(externalDID)));
 
-		// Names not configured for a user remain unset
-		assertNull(e.resolveSecret("ANTHROPIC_API_KEY", RequestContext.of(publicDID)));
-		assertNull(e.resolveSecret("FOO", RequestContext.of(venueDID)));
+			// Names not configured for a user remain unset
+			assertNull(e.resolveSecret("ANTHROPIC_API_KEY", RequestContext.of(publicDID)));
+			assertNull(e.resolveSecret("FOO", RequestContext.of(venueDID)));
+		} finally {
+			e.close();
+		}
 	}
 
 	@Test
@@ -569,23 +576,31 @@ public class EngineTest {
 				Strings.create("public"), Maps.of(
 					Strings.create("KEY1"), Strings.create("from-config"))));
 		Engine e = Engine.createTemp(cfg);
-		AString publicDID = Strings.create(e.getDIDString().toString() + ":public");
+		try {
+			AString publicDID = Strings.create(e.getDIDString().toString() + ":public");
 
-		// Pre-existing user-set value is overwritten by config
-		User pub = e.getVenueState().users().ensure(publicDID);
-		byte[] encKey = SecretStore.deriveKey(e.getKeyPair());
-		pub.secrets().store("KEY1", "from-runtime", encKey);
-		assertEquals("from-runtime", e.resolveSecret("KEY1", RequestContext.of(publicDID)));
+			// Pre-existing user-set value is overwritten by config
+			User pub = e.getVenueState().users().ensure(publicDID);
+			byte[] encKey = SecretStore.deriveKey(e.getKeyPair());
+			pub.secrets().store("KEY1", "from-runtime", encKey);
+			assertEquals("from-runtime", e.resolveSecret("KEY1", RequestContext.of(publicDID)));
 
-		assertEquals(1, e.provisionConfiguredSecrets());
-		assertEquals("from-config", e.resolveSecret("KEY1", RequestContext.of(publicDID)));
+			assertEquals(1, e.provisionConfiguredSecrets());
+			assertEquals("from-config", e.resolveSecret("KEY1", RequestContext.of(publicDID)));
+		} finally {
+			e.close();
+		}
 	}
 
 	@Test
 	public void testProvisionConfiguredSecretsAbsent() {
 		Engine e = Engine.createTemp(null);
-		assertEquals(0, e.provisionConfiguredSecrets(),
-			"No secrets configured → returns 0, no error");
+		try {
+			assertEquals(0, e.provisionConfiguredSecrets(),
+				"No secrets configured → returns 0, no error");
+		} finally {
+			e.close();
+		}
 	}
 
 	// ========== Secret field redaction ==========
@@ -716,27 +731,33 @@ public class EngineTest {
 		);
 
 		Engine dlfsVenue = Engine.createTemp(config);
-		assertNotNull(dlfsVenue);
+		try {
+			assertNotNull(dlfsVenue);
 
-		String testContent = "DLFS storage test content";
-		Blob contentBlob = Blob.wrap(testContent.getBytes());
-		Hash contentHash = Hashing.sha256(contentBlob.getBytes());
+			String testContent = "DLFS storage test content";
+			Blob contentBlob = Blob.wrap(testContent.getBytes());
+			Hash contentHash = Hashing.sha256(contentBlob.getBytes());
 
-		AMap<AString, ACell> metadata = Maps.of(
-			Fields.NAME, "dlfs-test-asset",
-			Fields.CONTENT, Maps.of(Fields.SHA256, contentHash.toHexString())
-		);
+			AMap<AString, ACell> metadata = Maps.of(
+				Fields.NAME, "dlfs-test-asset",
+				Fields.CONTENT, Maps.of(Fields.SHA256, contentHash.toHexString())
+			);
 
-		Hash assetId = dlfsVenue.storeAsset(JSON.printPretty(metadata), null);
-		assertNotNull(assetId);
+			Hash assetId = dlfsVenue.storeAsset(JSON.printPretty(metadata), null);
+			assertNotNull(assetId);
 
-		dlfsVenue.putContent(dlfsVenue.getMetaValue(assetId), new ByteArrayInputStream(testContent.getBytes()));
+			dlfsVenue.putContent(dlfsVenue.getMetaValue(assetId),
+				new ByteArrayInputStream(testContent.getBytes()));
 
-		InputStream retrievedStream = dlfsVenue.getContentStream(dlfsVenue.getMetaValue(assetId));
-		assertNotNull(retrievedStream);
-
-		String retrievedContent = new String(retrievedStream.readAllBytes());
-		assertEquals(testContent, retrievedContent);
+			try (InputStream retrievedStream =
+					dlfsVenue.getContentStream(dlfsVenue.getMetaValue(assetId))) {
+				assertNotNull(retrievedStream);
+				String retrievedContent = new String(retrievedStream.readAllBytes());
+				assertEquals(testContent, retrievedContent);
+			}
+		} finally {
+			dlfsVenue.close();
+		}
 	}
 
 	// ========== DID document — did:web alias presentation (covia#167) ==========

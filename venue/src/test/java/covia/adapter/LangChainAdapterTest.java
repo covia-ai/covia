@@ -105,47 +105,56 @@ public class LangChainAdapterTest {
 	@Test
 	public void testAnthropicUnresolvedSecretRefReturnsClearError() throws Exception {
 		Engine engine = Engine.createTemp(null);
-		Engine.addDemoAssets(engine);
-		RequestContext ctx = RequestContext.of(Strings.create("did:key:zTestNoSecret"));
+		try {
+			Engine.addDemoAssets(engine);
+			RequestContext ctx = RequestContext.of(Strings.create("did:key:zTestNoSecret"));
 
-		AMap<AString, ACell> meta = Maps.of(
-			Strings.create("operation"), Maps.of(
-				Strings.create("adapter"), Strings.create("langchain:anthropic")
-			)
-		);
-		ACell input = Maps.of(
-			Strings.create("prompt"), Strings.create("hi"),
-			Strings.create("apiKey"), Strings.create("/s/anthropic"),
-			Strings.create("url"), Strings.create("http://127.0.0.1:1/")
-		);
+			AMap<AString, ACell> meta = Maps.of(
+				Strings.create("operation"), Maps.of(
+					Strings.create("adapter"), Strings.create("langchain:anthropic")
+				)
+			);
+			ACell input = Maps.of(
+				Strings.create("prompt"), Strings.create("hi"),
+				Strings.create("apiKey"), Strings.create("/s/anthropic"),
+				Strings.create("url"), Strings.create("http://127.0.0.1:1/")
+			);
 
-		LangChainAdapter adapter = (LangChainAdapter) engine.getAdapter("langchain");
-		ACell result = adapter.invokeFuture(ctx, meta, input).get(5, java.util.concurrent.TimeUnit.SECONDS);
-
-		assertFailureMentioning(result, "/s/anthropic");
+			LangChainAdapter adapter = (LangChainAdapter) engine.getAdapter("langchain");
+			ACell result = adapter.invokeFuture(ctx, meta, input)
+				.get(5, java.util.concurrent.TimeUnit.SECONDS);
+			assertFailureMentioning(result, "/s/anthropic");
+		} finally {
+			engine.close();
+		}
 	}
 
 	private static void assertMissingSecretReportsClearly(String adapterOp, String secretName) throws Exception {
 		Engine engine = Engine.createTemp(null);
-		Engine.addDemoAssets(engine);
-		RequestContext ctx = RequestContext.of(Strings.create("did:key:zTestNoSecret"));
+		try {
+			Engine.addDemoAssets(engine);
+			RequestContext ctx = RequestContext.of(Strings.create("did:key:zTestNoSecret"));
 
-		AMap<AString, ACell> meta = Maps.of(
-			Strings.create("operation"), Maps.of(
-				Strings.create("adapter"), Strings.create(adapterOp),
-				Strings.create("secretKey"), Strings.create(secretName)
-			)
-		);
-		ACell input = Maps.of(
-			Strings.create("prompt"), Strings.create("hi"),
-			// Closed port so an accidental HTTP call would fail fast — but the
-			// fix should make the adapter fail BEFORE attempting any dial.
-			Strings.create("url"), Strings.create("http://127.0.0.1:1/")
-		);
+			AMap<AString, ACell> meta = Maps.of(
+				Strings.create("operation"), Maps.of(
+					Strings.create("adapter"), Strings.create(adapterOp),
+					Strings.create("secretKey"), Strings.create(secretName)
+				)
+			);
+			ACell input = Maps.of(
+				Strings.create("prompt"), Strings.create("hi"),
+				// Closed port so an accidental HTTP call would fail fast — but the
+				// fix should make the adapter fail BEFORE attempting any dial.
+				Strings.create("url"), Strings.create("http://127.0.0.1:1/")
+			);
 
-		LangChainAdapter adapter = (LangChainAdapter) engine.getAdapter("langchain");
-		ACell result = adapter.invokeFuture(ctx, meta, input).get(5, java.util.concurrent.TimeUnit.SECONDS);
-		assertFailureMentioning(result, secretName);
+			LangChainAdapter adapter = (LangChainAdapter) engine.getAdapter("langchain");
+			ACell result = adapter.invokeFuture(ctx, meta, input)
+				.get(5, java.util.concurrent.TimeUnit.SECONDS);
+			assertFailureMentioning(result, secretName);
+		} finally {
+			engine.close();
+		}
 	}
 
 	private static void assertFailureMentioning(ACell result, String hint) {

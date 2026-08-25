@@ -54,53 +54,73 @@ public class JobConcurrencyCapTest {
 	@Test
 	public void testAtCapSheds() {
 		Engine e = capEngine(2);
-		RequestContext alice = caller("did:key:zAliceCap");
+		try {
+			RequestContext alice = caller("did:key:zAliceCap");
 
-		assertNotNull(never(e, alice));
-		assertNotNull(never(e, alice));           // cap (2) now full
+			assertNotNull(never(e, alice));
+			assertNotNull(never(e, alice));           // cap (2) now full
 
-		RateLimitException ex = assertThrows(RateLimitException.class, () -> never(e, alice),
-			"an invoke over the cap must shed with RateLimitException");
-		assertTrue(ex.getRetryAfterSeconds() >= 1, "429 must carry a positive Retry-After");
+			RateLimitException ex = assertThrows(RateLimitException.class, () -> never(e, alice),
+				"an invoke over the cap must shed with RateLimitException");
+			assertTrue(ex.getRetryAfterSeconds() >= 1, "429 must carry a positive Retry-After");
+		} finally {
+			e.close();
+		}
 	}
 
 	@Test
 	public void testCancelFreesSlot() {
 		Engine e = capEngine(1);
-		RequestContext alice = caller("did:key:zAliceFree");
+		try {
+			RequestContext alice = caller("did:key:zAliceFree");
 
-		Job j1 = never(e, alice);
-		assertThrows(RateLimitException.class, () -> never(e, alice)); // at cap
+			Job j1 = never(e, alice);
+			assertThrows(RateLimitException.class, () -> never(e, alice)); // at cap
 
-		e.jobs().cancelJob(j1.getID(), alice);    // terminal → synchronously releases the permit
-		assertNotNull(never(e, alice), "cancelling a job must free a concurrency slot");
+			e.jobs().cancelJob(j1.getID(), alice); // terminal → synchronously releases the permit
+			assertNotNull(never(e, alice), "cancelling a job must free a concurrency slot");
+		} finally {
+			e.close();
+		}
 	}
 
 	@Test
 	public void testSubJobsExempt() {
 		Engine e = capEngine(1);
-		RequestContext alice = caller("did:key:zAliceSub");
+		try {
+			RequestContext alice = caller("did:key:zAliceSub");
 
-		Job j1 = never(e, alice);                  // top-level fills the cap
-		// A sub-invoke carries a parent jobId — exempt from the cap, admitted
-		// even though the caller is at the limit.
-		Job sub = never(e, alice.withJobId(j1.getID()));
-		assertNotNull(sub, "sub-jobs (parent jobId set) must bypass the cap");
+			Job j1 = never(e, alice); // top-level fills the cap
+			// A sub-invoke carries a parent jobId — exempt from the cap, admitted
+			// even though the caller is at the limit.
+			Job sub = never(e, alice.withJobId(j1.getID()));
+			assertNotNull(sub, "sub-jobs (parent jobId set) must bypass the cap");
+		} finally {
+			e.close();
+		}
 	}
 
 	@Test
 	public void testOtherCallerIndependent() {
 		Engine e = capEngine(1);
-		never(e, caller("did:key:zAliceIso"));     // Alice at cap
-		assertNotNull(never(e, caller("did:key:zBobIso")),
-			"one caller's saturation must not affect another");
+		try {
+			never(e, caller("did:key:zAliceIso")); // Alice at cap
+			assertNotNull(never(e, caller("did:key:zBobIso")),
+				"one caller's saturation must not affect another");
+		} finally {
+			e.close();
+		}
 	}
 
 	@Test
 	public void testCapZeroDisablesLimit() {
 		Engine e = capEngine(0);                    // 0 → cap disabled
-		RequestContext alice = caller("did:key:zAliceUnlimited");
-		for (int i = 0; i < 5; i++) assertNotNull(never(e, alice));
+		try {
+			RequestContext alice = caller("did:key:zAliceUnlimited");
+			for (int i = 0; i < 5; i++) assertNotNull(never(e, alice));
+		} finally {
+			e.close();
+		}
 	}
 
 	@Test

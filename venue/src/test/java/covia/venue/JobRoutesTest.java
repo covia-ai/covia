@@ -43,7 +43,7 @@ import covia.grid.auth.VenueAuth;
 public class JobRoutesTest {
 
 	private final String base = TestServer.BASE_URL;
-	private final HttpClient http = HttpClient.newHttpClient();
+	private final HttpClient http = TestHTTP.CLIENT;
 
 	/** Invokes the given test op asynchronously and returns the job id (bare hex). */
 	private String invoke(String op) throws Exception {

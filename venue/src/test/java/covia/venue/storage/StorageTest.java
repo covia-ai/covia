@@ -52,10 +52,11 @@ class StorageTest {
         assertEquals(testContent.length(), retrieved.getSize());
         
         // Verify input stream
-        InputStream is = retrieved.getInputStream();
-        assertNotNull(is);
-        String retrievedContent = new String(is.readAllBytes());
-        assertEquals(testContent, retrievedContent);
+		try (InputStream is = retrieved.getInputStream()) {
+			assertNotNull(is);
+			String retrievedContent = new String(is.readAllBytes());
+			assertEquals(testContent, retrievedContent);
+		}
     }
     
     @Test
@@ -75,10 +76,11 @@ class StorageTest {
         assertEquals(testContent.length(), retrieved.getSize());
         
         // Verify input stream
-        InputStream is = retrieved.getInputStream();
-        assertNotNull(is);
-        String retrievedContent = new String(is.readAllBytes());
-        assertEquals(testContent, retrievedContent);
+		try (InputStream is = retrieved.getInputStream()) {
+			assertNotNull(is);
+			String retrievedContent = new String(is.readAllBytes());
+			assertEquals(testContent, retrievedContent);
+		}
     }
     
     @Test
@@ -142,4 +144,4 @@ class StorageTest {
             storage.store(testHash, (InputStream) null);
         });
     }
-} 
+}

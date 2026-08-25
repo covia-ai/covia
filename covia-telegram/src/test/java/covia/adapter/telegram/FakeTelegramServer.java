@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
@@ -55,6 +56,7 @@ final class FakeTelegramServer implements AutoCloseable {
 	}
 
 	private final HttpServer server;
+	private final ExecutorService executor;
 	private final Map<String, Bot> bots = new ConcurrentHashMap<>();
 	private final AtomicInteger updateIds = new AtomicInteger(1000);
 	private final AtomicInteger messageIds = new AtomicInteger(1);
@@ -62,11 +64,12 @@ final class FakeTelegramServer implements AutoCloseable {
 	FakeTelegramServer() throws IOException {
 		server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
 		server.createContext("/", this::handle);
-		server.setExecutor(Executors.newCachedThreadPool(r -> {
+		executor = Executors.newCachedThreadPool(r -> {
 			Thread t = new Thread(r, "fake-telegram");
 			t.setDaemon(true);
 			return t;
-		}));
+		});
+		server.setExecutor(executor);
 		server.start();
 		registerBot(TOKEN, BOT_USERNAME);
 	}
@@ -185,6 +188,7 @@ final class FakeTelegramServer implements AutoCloseable {
 	@Override
 	public void close() {
 		server.stop(0);
+		executor.shutdownNow();
 	}
 
 	private Bot bot(String token) {

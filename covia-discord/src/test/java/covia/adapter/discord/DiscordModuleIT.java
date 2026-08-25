@@ -24,7 +24,17 @@ class DiscordModuleIT {
 		assertTrue(has(module,"net/dv8tion/jda/"),"JDA must be bundled");assertTrue(has(module,"okhttp3/"),"JDA HTTP stack must be bundled");
 		Path log=temp.resolve("discord-module.log");String executable=System.getProperty("os.name","").startsWith("Windows")?"java.exe":"java";
 		List<String> command=List.of(Path.of(System.getProperty("java.home"),"bin",executable).toString(),"-cp",venue+java.io.File.pathSeparator+System.getProperty("covia.test.classes"),"covia.adapter.discord.DiscordModuleSmokeMain",module.toString());
-		Process p=new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(log.toFile()).start();assertTrue(p.waitFor(Duration.ofSeconds(120).toMillis(),TimeUnit.MILLISECONDS));String out=Files.readString(log);assertEquals(0,p.exitValue(),out);assertTrue(out.contains("DISCORD_MODULE_SMOKE_OK"),out);
+		Process process = new ProcessBuilder(command)
+			.redirectErrorStream(true).redirectOutput(log.toFile()).start();
+		try {
+			assertTrue(process.waitFor(Duration.ofSeconds(120).toMillis(), TimeUnit.MILLISECONDS),
+				"module smoke process timed out");
+			String output = Files.readString(log);
+			assertEquals(0, process.exitValue(), output);
+			assertTrue(output.contains("DISCORD_MODULE_SMOKE_OK"), output);
+		} finally {
+			if (process.isAlive()) process.destroyForcibly().waitFor(5, TimeUnit.SECONDS);
+		}
 	}
 	private static boolean has(Path jar,String prefix)throws Exception{try(ZipFile z=new ZipFile(jar.toFile())){return z.stream().anyMatch(e->e.getName().startsWith(prefix));}}
 }

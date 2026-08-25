@@ -62,8 +62,7 @@ class UserAdmissionTest {
 			AString did = UCAN.toDIDKey(keyPair.getAccountKey());
 			String token = VenueAuth.keyPair(keyPair,
 				server.getEngine().getDIDString().toString(), 300).mintToken();
-			HttpClient http = HttpClient.newBuilder()
-				.connectTimeout(Duration.ofSeconds(5)).build();
+			HttpClient http = TestHTTP.CLIENT;
 			String requestBody = "{\"operation\":\"v/test/ops/echo\",\"input\":{}}";
 
 			for (String path : new String[] { "/api/v1/invoke", "/api/v1/run" }) {

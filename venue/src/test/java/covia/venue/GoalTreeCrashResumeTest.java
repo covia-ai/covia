@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.function.BooleanSupplier;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import convex.core.crypto.AKeyPair;
@@ -36,6 +37,29 @@ import covia.test.DurabilityTest;
  */
 @DurabilityTest
 public class GoalTreeCrashResumeTest {
+	private EtchStore activeStore;
+	private NodeServer<Index<Keyword, ACell>> activeNode;
+	private Engine activeEngine;
+
+	@AfterEach
+	void teardown() throws Exception {
+		try {
+			closeActivePhase();
+		} finally {
+			if (activeStore != null) activeStore.close();
+			activeStore = null;
+		}
+	}
+
+	private void closeActivePhase() throws Exception {
+		try {
+			if (activeEngine != null) activeEngine.close();
+		} finally {
+			activeEngine = null;
+			if (activeNode != null) activeNode.close();
+			activeNode = null;
+		}
+	}
 
 	private static final AString ALICE = Strings.create("did:key:z6MkCrashBoundaryAlice");
 
@@ -49,14 +73,16 @@ public class GoalTreeCrashResumeTest {
 		return Maps.of(Config.DID, did, Config.USERS, Maps.of(Config.AUTO_CREATE, true));
 	}
 
-	private static Engine start(EtchStore store, AKeyPair keyPair,
-			AMap<AString, ACell> config, NodeServer<Index<Keyword, ACell>>[] holder)
+	private Engine start(EtchStore store, AKeyPair keyPair,
+			AMap<AString, ACell> config)
 			throws Exception {
+		activeStore = store;
 		NodeServer<Index<Keyword, ACell>> node =
 			new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
+		activeNode = node;
 		node.launch();
-		holder[0] = node;
 		Engine engine = new Engine(config, node.getCursor(), keyPair).start();
+		activeEngine = engine;
 		Engine.addDemoAssets(engine);
 		return engine;
 	}
@@ -97,9 +123,7 @@ public class GoalTreeCrashResumeTest {
 		Blob sid = Blob.fromHex("cc112233445566778899aabbccddee31");
 		Blob requestId;
 
-		@SuppressWarnings("unchecked")
-		NodeServer<Index<Keyword, ACell>>[] node = new NodeServer[1];
-		Engine first = start(store, keyPair, config, node);
+		Engine first = start(store, keyPair, config);
 		createGoalAgent(first, "request-agent");
 		agent(first, "request-agent").ensureSession(sid, ALICE);
 		Job request = first.jobs().invokeOperation("v/ops/agent/request",
@@ -113,10 +137,9 @@ public class GoalTreeCrashResumeTest {
 		assertEquals(AgentState.RUNNING, agent(first, "request-agent").getStatus());
 		assertNotNull(agent(first, "request-agent").getSessionCycleEpoch(sid));
 		first.flush();
-		first.close();
-		node[0].close();
+		closeActivePhase();
 
-		Engine second = start(store, keyPair, config, node);
+		Engine second = start(store, keyPair, config);
 		second.jobs().recoverJobs();
 		AMap<AString, ACell> failed = second.jobs().getJobData(requestId, RequestContext.of(ALICE));
 		assertEquals(Status.FAILED, failed.get(Fields.STATUS));
@@ -130,8 +153,7 @@ public class GoalTreeCrashResumeTest {
 		assertNull(recovered.getTasks().get(requestId));
 		assertFalse(String.valueOf(rootConversation(second, "request-agent", sid)).contains("gave up"),
 			"startup must not continue the interrupted model loop");
-		second.close();
-		node[0].close();
+		closeActivePhase();
 	}
 
 	@Test
@@ -141,9 +163,7 @@ public class GoalTreeCrashResumeTest {
 		AMap<AString, ACell> config = config(keyPair);
 		Blob sid = Blob.fromHex("cc112233445566778899aabbccddee32");
 
-		@SuppressWarnings("unchecked")
-		NodeServer<Index<Keyword, ACell>>[] node = new NodeServer[1];
-		Engine first = start(store, keyPair, config, node);
+		Engine first = start(store, keyPair, config);
 		createGoalAgent(first, "message-agent");
 		agent(first, "message-agent").ensureSession(sid, ALICE);
 		Job delivery = first.jobs().invokeOperation("v/ops/agent/message",
@@ -154,10 +174,9 @@ public class GoalTreeCrashResumeTest {
 		delivery.awaitResult(5000);
 		await(() -> parkedInTool(first, "message-agent", sid), 10_000, "message parked in tool");
 		first.flush();
-		first.close();
-		node[0].close();
+		closeActivePhase();
 
-		Engine second = start(store, keyPair, config, node);
+		Engine second = start(store, keyPair, config);
 		second.jobs().recoverJobs();
 		AgentAdapter adapter = (AgentAdapter) second.getAdapter("agent");
 		assertEquals(0, adapter.wakeAgentsWithWork(),
@@ -166,8 +185,7 @@ public class GoalTreeCrashResumeTest {
 		assertEquals(AgentState.SLEEPING, recovered.getStatus());
 		assertNull(recovered.getSessionCycleEpoch(sid));
 		assertFalse(String.valueOf(rootConversation(second, "message-agent", sid)).contains("gave up"));
-		second.close();
-		node[0].close();
+		closeActivePhase();
 	}
 
 	@Test
@@ -177,9 +195,7 @@ public class GoalTreeCrashResumeTest {
 		AMap<AString, ACell> config = config(keyPair);
 		Blob sid = Blob.fromHex("cc112233445566778899aabbccddee33");
 
-		@SuppressWarnings("unchecked")
-		NodeServer<Index<Keyword, ACell>>[] node = new NodeServer[1];
-		Engine engine = start(store, keyPair, config, node);
+		Engine engine = start(store, keyPair, config);
 		try {
 			createGoalAgent(engine, "repair-agent");
 			agent(engine, "repair-agent").ensureSession(sid, ALICE);
@@ -209,8 +225,7 @@ public class GoalTreeCrashResumeTest {
 				.contains("did not return"), 10_000,
 				"fresh attempt settled the dangling call explicitly");
 		} finally {
-			engine.close();
-			node[0].close();
+			closeActivePhase();
 		}
 	}
 }

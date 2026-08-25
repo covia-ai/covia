@@ -29,7 +29,7 @@ public class DLFSWebDAVTest {
 	@BeforeAll
 	public void setup() {
 		server = TestServer.SERVER;
-		http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+		http = TestHTTP.CLIENT;
 	}
 
 	private HttpResponse<String> request(String method, String path, String body) throws Exception {

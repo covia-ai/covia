@@ -63,12 +63,16 @@ public class FileAdapterTest {
 
 	@AfterAll
 	static void teardown() throws IOException {
-		// TempDir cleans the directories themselves, but files inside the
-		// readonly root may have been left behind (it's only logically RO).
-		try (Stream<Path> walk = Files.walk(workspace)) {
-			walk.sorted(Comparator.reverseOrder())
-				.filter(p -> !p.equals(workspace))
-				.forEach(p -> { try { Files.deleteIfExists(p); } catch (IOException ignored) {} });
+		try {
+			engine.close();
+		} finally {
+			// TempDir cleans the directories themselves, but files inside the
+			// readonly root may have been left behind (it's only logically RO).
+			try (Stream<Path> walk = Files.walk(workspace)) {
+				walk.sorted(Comparator.reverseOrder())
+					.filter(p -> !p.equals(workspace))
+					.forEach(p -> { try { Files.deleteIfExists(p); } catch (IOException ignored) {} });
+			}
 		}
 	}
 
@@ -105,17 +109,20 @@ public class FileAdapterTest {
 			))
 		));
 		Engine.addDemoAssets(eng);
+		try {
+			Job rootsJob = eng.jobs().invokeOperation(
+				"v/ops/file/roots", Maps.empty(),
+				RequestContext.of(convex.core.data.Strings.create(DID)));
+			rootsJob.awaitResult(2000);
+			assertEquals(Status.COMPLETE, rootsJob.getStatus());
 
-		Job rootsJob = eng.jobs().invokeOperation(
-			"v/ops/file/roots", Maps.empty(),
-			RequestContext.of(convex.core.data.Strings.create(DID)));
-		rootsJob.awaitResult(2000);
-		assertEquals(Status.COMPLETE, rootsJob.getStatus());
-
-		AVector<?> rootsList = RT.ensureVector(RT.getIn(rootsJob.getOutput(), "roots"));
-		assertEquals(1, rootsList.count());
-		assertEquals("Project documentation root",
-			RT.ensureString(RT.getIn(rootsList.get(0), "description")).toString());
+			AVector<?> rootsList = RT.ensureVector(RT.getIn(rootsJob.getOutput(), "roots"));
+			assertEquals(1, rootsList.count());
+			assertEquals("Project documentation root",
+				RT.ensureString(RT.getIn(rootsList.get(0), "description")).toString());
+		} finally {
+			eng.close();
+		}
 	}
 
 	@Test
@@ -960,43 +967,46 @@ public class FileAdapterTest {
 			))
 		));
 		Engine.addDemoAssets(eng);
+		try {
+			convex.core.data.AString did = convex.core.data.Strings.create(
+				"did:key:z6Mk-test-FileAdapterTest-dlfs");
 
-		convex.core.data.AString did = convex.core.data.Strings.create(
-			"did:key:z6Mk-test-FileAdapterTest-dlfs");
+			// roots reports the dlfs-backed root with kind=dlfs.
+			Job rootsJob = eng.jobs().invokeOperation(
+				"v/ops/file/roots", Maps.empty(), RequestContext.of(did));
+			rootsJob.awaitResult(2000);
+			AVector<?> rootsList = RT.ensureVector(RT.getIn(rootsJob.getOutput(), "roots"));
+			assertEquals(1, rootsList.count());
+			assertEquals("dlfs", RT.ensureString(RT.getIn(rootsList.get(0), "kind")).toString());
+			assertEquals("shared", RT.ensureString(RT.getIn(rootsList.get(0), "name")).toString());
 
-		// roots reports the dlfs-backed root with kind=dlfs.
-		Job rootsJob = eng.jobs().invokeOperation(
-			"v/ops/file/roots", Maps.empty(), RequestContext.of(did));
-		rootsJob.awaitResult(2000);
-		AVector<?> rootsList = RT.ensureVector(RT.getIn(rootsJob.getOutput(), "roots"));
-		assertEquals(1, rootsList.count());
-		assertEquals("dlfs", RT.ensureString(RT.getIn(rootsList.get(0), "kind")).toString());
-		assertEquals("shared", RT.ensureString(RT.getIn(rootsList.get(0), "name")).toString());
+			// Write through file: surface
+			Job writeJob = eng.jobs().invokeOperation(
+				"v/ops/file/write",
+				Maps.of("root", "shared", "path", "hello.txt", "content", "via file"),
+				RequestContext.of(did));
+			writeJob.awaitResult(2000);
+			assertEquals(Status.COMPLETE, writeJob.getStatus());
+			assertTrue(RT.bool(RT.getIn(writeJob.getOutput(), "created")));
 
-		// Write through file: surface
-		Job writeJob = eng.jobs().invokeOperation(
-			"v/ops/file/write",
-			Maps.of("root", "shared", "path", "hello.txt", "content", "via file"),
-			RequestContext.of(did));
-		writeJob.awaitResult(2000);
-		assertEquals(Status.COMPLETE, writeJob.getStatus());
-		assertTrue(RT.bool(RT.getIn(writeJob.getOutput(), "created")));
+			// Read it back through file:
+			Job readJob = eng.jobs().invokeOperation(
+				"v/ops/file/read",
+				Maps.of("root", "shared", "path", "hello.txt"),
+				RequestContext.of(did));
+			readJob.awaitResult(2000);
+			assertEquals("via file", RT.ensureString(RT.getIn(readJob.getOutput(), "content")).toString());
 
-		// Read it back through file:
-		Job readJob = eng.jobs().invokeOperation(
-			"v/ops/file/read",
-			Maps.of("root", "shared", "path", "hello.txt"),
-			RequestContext.of(did));
-		readJob.awaitResult(2000);
-		assertEquals("via file", RT.ensureString(RT.getIn(readJob.getOutput(), "content")).toString());
-
-		// And confirm the same data is visible via dlfs: surface
-		Job dlfsRead = eng.jobs().invokeOperation(
-			"v/ops/dlfs/read",
-			Maps.of("drive", "shared-drive", "path", "/hello.txt"),
-			RequestContext.of(did));
-		dlfsRead.awaitResult(2000);
-		assertEquals("via file", RT.ensureString(RT.getIn(dlfsRead.getOutput(), "content")).toString());
+			// And confirm the same data is visible via dlfs: surface
+			Job dlfsRead = eng.jobs().invokeOperation(
+				"v/ops/dlfs/read",
+				Maps.of("drive", "shared-drive", "path", "/hello.txt"),
+				RequestContext.of(did));
+			dlfsRead.awaitResult(2000);
+			assertEquals("via file", RT.ensureString(RT.getIn(dlfsRead.getOutput(), "content")).toString());
+		} finally {
+			eng.close();
+		}
 	}
 
 	@Test
@@ -1057,48 +1067,52 @@ public class FileAdapterTest {
 			))
 		));
 		Engine.addDemoAssets(eng);
-		RequestContext ctx = RequestContext.of(convex.core.data.Strings.create(
-			"did:key:z6Mk-test-FileAdapterTest-dlfs-move"));
+		try {
+			RequestContext ctx = RequestContext.of(convex.core.data.Strings.create(
+				"did:key:z6Mk-test-FileAdapterTest-dlfs-move"));
 
-		Job write = eng.jobs().invokeOperation("v/ops/file/write",
-			Maps.of("root", "docs", "path", "draft.txt", "content", "final text"), ctx);
-		write.awaitResult(2000);
-		assertEquals(Status.COMPLETE, write.getStatus());
-		eng.jobs().invokeOperation("v/ops/file/mkdir",
-			Maps.of("root", "docs", "path", "filed"), ctx).awaitResult(2000);
+			Job write = eng.jobs().invokeOperation("v/ops/file/write",
+				Maps.of("root", "docs", "path", "draft.txt", "content", "final text"), ctx);
+			write.awaitResult(2000);
+			assertEquals(Status.COMPLETE, write.getStatus());
+			eng.jobs().invokeOperation("v/ops/file/mkdir",
+				Maps.of("root", "docs", "path", "filed"), ctx).awaitResult(2000);
 
-		// Native move: source gone, destination carries the content.
-		Job move = eng.jobs().invokeOperation("v/ops/file/move",
-			Maps.of("root", "docs", "from", "draft.txt", "to", "filed/letter.txt"), ctx);
-		move.awaitResult(2000);
-		assertEquals(Status.COMPLETE, move.getStatus());
-		assertTrue(RT.bool(RT.getIn(move.getOutput(), "moved")));
+			// Native move: source gone, destination carries the content.
+			Job move = eng.jobs().invokeOperation("v/ops/file/move",
+				Maps.of("root", "docs", "from", "draft.txt", "to", "filed/letter.txt"), ctx);
+			move.awaitResult(2000);
+			assertEquals(Status.COMPLETE, move.getStatus());
+			assertTrue(RT.bool(RT.getIn(move.getOutput(), "moved")));
 
-		Job readMoved = eng.jobs().invokeOperation("v/ops/file/read",
-			Maps.of("root", "docs", "path", "filed/letter.txt"), ctx);
-		readMoved.awaitResult(2000);
-		assertEquals("final text",
-			RT.ensureString(RT.getIn(readMoved.getOutput(), "content")).toString());
-
-		Job listRoot = eng.jobs().invokeOperation("v/ops/file/list",
-			Maps.of("root", "docs", "path", ""), ctx);
-		listRoot.awaitResult(2000);
-		AVector<?> entries = RT.ensureVector(RT.getIn(listRoot.getOutput(), "entries"));
-		assertEquals(1, entries.count(), "the moved source must be gone: " + entries);
-
-		// Native copy: both endpoints carry the content afterwards.
-		Job copy = eng.jobs().invokeOperation("v/ops/file/copy",
-			Maps.of("root", "docs", "from", "filed/letter.txt",
-				"to", "filed/letter-backup.txt"), ctx);
-		copy.awaitResult(2000);
-		assertEquals(Status.COMPLETE, copy.getStatus());
-		assertTrue(RT.bool(RT.getIn(copy.getOutput(), "copied")));
-		for (String p : new String[] {"filed/letter.txt", "filed/letter-backup.txt"}) {
-			Job read = eng.jobs().invokeOperation("v/ops/file/read",
-				Maps.of("root", "docs", "path", p), ctx);
-			read.awaitResult(2000);
+			Job readMoved = eng.jobs().invokeOperation("v/ops/file/read",
+				Maps.of("root", "docs", "path", "filed/letter.txt"), ctx);
+			readMoved.awaitResult(2000);
 			assertEquals("final text",
-				RT.ensureString(RT.getIn(read.getOutput(), "content")).toString());
+				RT.ensureString(RT.getIn(readMoved.getOutput(), "content")).toString());
+
+			Job listRoot = eng.jobs().invokeOperation("v/ops/file/list",
+				Maps.of("root", "docs", "path", ""), ctx);
+			listRoot.awaitResult(2000);
+			AVector<?> entries = RT.ensureVector(RT.getIn(listRoot.getOutput(), "entries"));
+			assertEquals(1, entries.count(), "the moved source must be gone: " + entries);
+
+			// Native copy: both endpoints carry the content afterwards.
+			Job copy = eng.jobs().invokeOperation("v/ops/file/copy",
+				Maps.of("root", "docs", "from", "filed/letter.txt",
+					"to", "filed/letter-backup.txt"), ctx);
+			copy.awaitResult(2000);
+			assertEquals(Status.COMPLETE, copy.getStatus());
+			assertTrue(RT.bool(RT.getIn(copy.getOutput(), "copied")));
+			for (String p : new String[] {"filed/letter.txt", "filed/letter-backup.txt"}) {
+				Job read = eng.jobs().invokeOperation("v/ops/file/read",
+					Maps.of("root", "docs", "path", p), ctx);
+				read.awaitResult(2000);
+				assertEquals("final text",
+					RT.ensureString(RT.getIn(read.getOutput(), "content")).toString());
+			}
+		} finally {
+			eng.close();
 		}
 	}
 
@@ -1213,23 +1227,26 @@ public class FileAdapterTest {
 			))
 		));
 		Engine.addDemoAssets(eng);
+		try {
+			convex.core.data.AString alice = convex.core.data.Strings.create(
+				"did:key:z6Mk-test-FileAdapterTest-alice");
+			convex.core.data.AString bob = convex.core.data.Strings.create(
+				"did:key:z6Mk-test-FileAdapterTest-bob");
 
-		convex.core.data.AString alice = convex.core.data.Strings.create(
-			"did:key:z6Mk-test-FileAdapterTest-alice");
-		convex.core.data.AString bob = convex.core.data.Strings.create(
-			"did:key:z6Mk-test-FileAdapterTest-bob");
+			eng.jobs().invokeOperation("v/ops/file/write",
+				Maps.of("root", "private", "path", "secret.txt", "content", "alice's note"),
+				RequestContext.of(alice)).awaitResult(2000);
 
-		eng.jobs().invokeOperation("v/ops/file/write",
-			Maps.of("root", "private", "path", "secret.txt", "content", "alice's note"),
-			RequestContext.of(alice)).awaitResult(2000);
-
-		// Bob's view of the same drive name must be empty.
-		Job bobList = eng.jobs().invokeOperation(
-			"v/ops/file/list", Maps.of("root", "private"),
-			RequestContext.of(bob));
-		bobList.awaitResult(2000);
-		AVector<?> entries = RT.ensureVector(RT.getIn(bobList.getOutput(), "entries"));
-		assertEquals(0, entries.count(), "Bob should not see Alice's drive contents");
+			// Bob's view of the same drive name must be empty.
+			Job bobList = eng.jobs().invokeOperation(
+				"v/ops/file/list", Maps.of("root", "private"),
+				RequestContext.of(bob));
+			bobList.awaitResult(2000);
+			AVector<?> entries = RT.ensureVector(RT.getIn(bobList.getOutput(), "entries"));
+			assertEquals(0, entries.count(), "Bob should not see Alice's drive contents");
+		} finally {
+			eng.close();
+		}
 	}
 
 	@Test
@@ -1267,30 +1284,33 @@ public class FileAdapterTest {
 			))
 		));
 		Engine.addDemoAssets(tempEng);
+		try {
+			Job rootsJob = tempEng.jobs().invokeOperation(
+				"v/ops/file/roots", Maps.empty(),
+				RequestContext.of(convex.core.data.Strings.create(DID)));
+			rootsJob.awaitResult(2000);
+			assertEquals(Status.COMPLETE, rootsJob.getStatus());
 
-		Job rootsJob = tempEng.jobs().invokeOperation(
-			"v/ops/file/roots", Maps.empty(),
-			RequestContext.of(convex.core.data.Strings.create(DID)));
-		rootsJob.awaitResult(2000);
-		assertEquals(Status.COMPLETE, rootsJob.getStatus());
+			AVector<?> rootsList = RT.ensureVector(RT.getIn(rootsJob.getOutput(), "roots"));
+			assertEquals(1, rootsList.count());
+			String tempRootPath = RT.ensureString(RT.getIn(rootsList.get(0), "path")).toString();
 
-		AVector<?> rootsList = RT.ensureVector(RT.getIn(rootsJob.getOutput(), "roots"));
-		assertEquals(1, rootsList.count());
-		String tempRootPath = RT.ensureString(RT.getIn(rootsList.get(0), "path")).toString();
+			// Should be a real directory under the system tmp.
+			Path tempPath = Path.of(tempRootPath);
+			assertTrue(Files.isDirectory(tempPath));
+			assertTrue(tempPath.getFileName().toString().startsWith("fa-test-"),
+				"unexpected temp dir name: " + tempPath.getFileName());
 
-		// Should be a real directory under the system tmp.
-		Path tempPath = Path.of(tempRootPath);
-		assertTrue(Files.isDirectory(tempPath));
-		assertTrue(tempPath.getFileName().toString().startsWith("fa-test-"),
-			"unexpected temp dir name: " + tempPath.getFileName());
-
-		// And it's writable.
-		Job writeJob = tempEng.jobs().invokeOperation(
-			"v/ops/file/write",
-			Maps.of("root", "scratch", "path", "hi.txt", "content", "hello"),
-			RequestContext.of(convex.core.data.Strings.create(DID)));
-		writeJob.awaitResult(2000);
-		assertEquals(Status.COMPLETE, writeJob.getStatus());
-		assertEquals("hello", Files.readString(tempPath.resolve("hi.txt")));
+			// And it's writable.
+			Job writeJob = tempEng.jobs().invokeOperation(
+				"v/ops/file/write",
+				Maps.of("root", "scratch", "path", "hi.txt", "content", "hello"),
+				RequestContext.of(convex.core.data.Strings.create(DID)));
+			writeJob.awaitResult(2000);
+			assertEquals(Status.COMPLETE, writeJob.getStatus());
+			assertEquals("hello", Files.readString(tempPath.resolve("hi.txt")));
+		} finally {
+			tempEng.close();
+		}
 	}
 }

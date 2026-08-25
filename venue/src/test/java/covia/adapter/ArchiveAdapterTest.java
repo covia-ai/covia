@@ -17,6 +17,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -57,6 +58,11 @@ public class ArchiveAdapterTest {
 		Files.createDirectories(workspace.resolve("data/sub"));
 		Files.writeString(workspace.resolve("data/a.txt"), "alpha");
 		Files.writeString(workspace.resolve("data/sub/b.txt"), "bravo");
+	}
+
+	@AfterAll
+	static void teardown() {
+		engine.close();
 	}
 
 	private RequestContext ctx() {

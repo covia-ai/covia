@@ -80,7 +80,7 @@ public class AgentApiTest {
 		jwt = token.toJWT(kp).toString();
 		client = VenueHTTP.create(URI.create(TestServer.BASE_URL), VenueAuth.bearer(jwt));
 		client.setTimeout(5000);
-		http = HttpClient.newHttpClient();
+		http = covia.venue.TestHTTP.CLIENT;
 
 		createAgent("AgentAlpha");
 		createAgent("AgentBeta");

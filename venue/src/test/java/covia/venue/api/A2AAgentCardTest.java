@@ -71,7 +71,7 @@ public class A2AAgentCardTest {
 
 	@BeforeAll
 	public void setup() {
-		http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+		http = covia.venue.TestHTTP.CLIENT;
 	}
 
 	@Test

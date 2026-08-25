@@ -63,7 +63,7 @@ public class A2ASyncChatOpTest {
 								Config.ENABLED, true,
 								Config.CAPS, Strings.create("unrestricted")))));
 		baseUrl = "http://localhost:" + server.port();
-		http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+		http = covia.venue.TestHTTP.CLIENT;
 	}
 
 	@AfterAll

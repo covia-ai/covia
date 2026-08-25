@@ -74,9 +74,7 @@ class EmbedderRoutePolicyTest {
 		}
 	}
 
-	private final HttpClient http = HttpClient.newBuilder()
-		.connectTimeout(Duration.ofSeconds(10))
-		.build();
+	private final HttpClient http = TestHTTP.CLIENT;
 
 	private VenueServer strictServer;
 	private AKeyPair operatorKey;

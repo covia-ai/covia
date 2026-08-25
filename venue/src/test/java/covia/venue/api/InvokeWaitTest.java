@@ -6,7 +6,6 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URI;
-import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 
@@ -87,7 +86,7 @@ public class InvokeWaitTest {
 			.header("Content-Type", "application/json")
 			.POST(HttpRequest.BodyPublishers.ofString(body))
 			.build();
-		return HttpClient.newHttpClient().send(req, HttpResponse.BodyHandlers.ofString());
+		return covia.venue.TestHTTP.CLIENT.send(req, HttpResponse.BodyHandlers.ofString());
 	}
 
 	private static HttpResponse<String> run(String body) throws Exception {
@@ -96,7 +95,7 @@ public class InvokeWaitTest {
 			.header("Content-Type", "application/json")
 			.POST(HttpRequest.BodyPublishers.ofString(body))
 			.build();
-		return HttpClient.newHttpClient().send(req, HttpResponse.BodyHandlers.ofString());
+		return covia.venue.TestHTTP.CLIENT.send(req, HttpResponse.BodyHandlers.ofString());
 	}
 
 	@Test

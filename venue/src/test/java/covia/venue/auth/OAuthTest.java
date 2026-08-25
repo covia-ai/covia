@@ -131,7 +131,7 @@ public class OAuthTest {
 
 	@Test
 	void testUnknownProviderReturnsError() throws Exception {
-		HttpClient client = HttpClient.newBuilder().build();
+		HttpClient client = covia.venue.TestHTTP.CLIENT;
 		HttpRequest req = HttpRequest.newBuilder()
 			.uri(new URI("http://localhost:" + PORT + "/auth/unknownprovider"))
 			.GET()
@@ -225,7 +225,11 @@ public class OAuthTest {
 		Engine tempEngine = Engine.createTemp(Maps.of(
 			"name", "no-auth-venue"
 		));
-		assertTrue(tempEngine.getAuth().isPublicAccessEnabled());
+		try {
+			assertTrue(tempEngine.getAuth().isPublicAccessEnabled());
+		} finally {
+			tempEngine.close();
+		}
 	}
 
 	@Test
@@ -235,13 +239,17 @@ public class OAuthTest {
 				Config.PUBLIC, Maps.of(Config.ENABLED, false)
 			)
 		));
-		assertFalse(tempEngine.getAuth().isPublicAccessEnabled());
+		try {
+			assertFalse(tempEngine.getAuth().isPublicAccessEnabled());
+		} finally {
+			tempEngine.close();
+		}
 	}
 
 	@Test
 	void testAnonymousAccessAllowedWhenPublic() throws Exception {
 		// Test server has public access enabled, so anonymous API calls should work
-		HttpClient client = HttpClient.newBuilder().build();
+		HttpClient client = covia.venue.TestHTTP.CLIENT;
 		HttpRequest req = HttpRequest.newBuilder()
 			.uri(new URI("http://localhost:" + PORT + "/api/v1/status"))
 			.GET()

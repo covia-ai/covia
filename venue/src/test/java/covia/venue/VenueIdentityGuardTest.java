@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import convex.core.crypto.AKeyPair;
@@ -32,6 +33,29 @@ import covia.venue.server.VenueServer;
  * empty venue entry alongside the real one, orphaning all existing data.
  */
 public class VenueIdentityGuardTest {
+	private EtchStore ownedStore;
+	private NodeServer<Index<Keyword, ACell>> activeNode;
+	private Engine activeEngine;
+
+	@AfterEach
+	void teardown() throws Exception {
+		try {
+			closeActivePhase();
+		} finally {
+			if (ownedStore != null) ownedStore.close();
+			ownedStore = null;
+		}
+	}
+
+	private void closeActivePhase() throws Exception {
+		try {
+			if (activeEngine != null) activeEngine.close();
+		} finally {
+			activeEngine = null;
+			if (activeNode != null) activeNode.close();
+			activeNode = null;
+		}
+	}
 
 	private static String didFor(AKeyPair kp) {
 		return "did:key:" + Multikey.encodePublicKey(kp.getAccountKey());
@@ -53,23 +77,26 @@ public class VenueIdentityGuardTest {
 	@Test
 	public void testWrongKeyOnExistingStoreFails() throws Exception {
 		EtchStore store = EtchStore.createTemp();
+		ownedStore = store;
 		AKeyPair kpA = AKeyPair.generate();
 		AKeyPair kpB = AKeyPair.generate();
 
 		// Stage 1: create the venue under key A and persist it.
 		{
 			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
+			activeNode = ns;
 			ns.launch();
 			Engine engine = new Engine(configFor(kpA), ns.getCursor(), kpA).start();
+			activeEngine = engine;
 			assertEquals(didFor(kpA), engine.getDIDString().toString());
 			engine.flush();
-			engine.close();
-			ns.close();
+			closeActivePhase();
 		}
 
 		// Stage 2: reopening with key B must fail, naming the store's real owner.
 		{
 			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
+			activeNode = ns;
 			ns.launch();
 			try {
 				IllegalStateException e = assertThrows(IllegalStateException.class,
@@ -79,18 +106,19 @@ public class VenueIdentityGuardTest {
 				assertTrue(e.getMessage().contains(didFor(kpB)),
 					"error names the configured identity: " + e.getMessage());
 			} finally {
-				ns.close();
+				closeActivePhase();
 			}
 		}
 
 		// Stage 3: the owning key still boots normally (guard passes on match).
 		{
 			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
+			activeNode = ns;
 			ns.launch();
 			Engine engine = new Engine(configFor(kpA), ns.getCursor(), kpA).start();
+			activeEngine = engine;
 			assertEquals(didFor(kpA), engine.getDIDString().toString());
-			engine.close();
-			ns.close();
+			closeActivePhase();
 		}
 	}
 

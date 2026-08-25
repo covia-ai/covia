@@ -3,6 +3,7 @@ package covia.adapter;
 import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
 
@@ -31,8 +32,7 @@ public class LLMAgentOllamaIT {
 
 	static boolean isOllamaAvailable() {
 		try {
-			java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder()
-				.connectTimeout(java.time.Duration.ofSeconds(2)).build();
+			java.net.http.HttpClient client = covia.venue.TestHTTP.CLIENT;
 			java.net.http.HttpResponse<Void> resp = client.send(
 				java.net.http.HttpRequest.newBuilder()
 					.uri(java.net.URI.create("http://localhost:11434/api/tags"))
@@ -52,6 +52,11 @@ public class LLMAgentOllamaIT {
 	public void setup() {
 		engine = Engine.createTemp(null);
 		Engine.addDemoAssets(engine);
+	}
+
+	@AfterEach
+	public void teardown() {
+		engine.close();
 	}
 
 	@Test

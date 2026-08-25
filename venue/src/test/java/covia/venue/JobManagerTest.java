@@ -406,32 +406,48 @@ public class JobManagerTest {
 		// Default config → outputValidation off → a non-object result (which
 		// violates the schema) must NOT raise. No validation, no logging.
 		Engine eng = Engine.createTemp(null);
-		eng.jobs().validateOutput(metaWithObjectOutput(), Strings.create("not an object"));
+		try {
+			eng.jobs().validateOutput(metaWithObjectOutput(), Strings.create("not an object"));
+		} finally {
+			eng.close();
+		}
 	}
 
 	@Test
 	public void testOutputValidationStrictFailsBadResult() {
 		Engine eng = Engine.createTemp(Maps.of(Config.OUTPUT_VALIDATION, Strings.create("strict")));
-		assertThrows(IllegalArgumentException.class,
-			() -> eng.jobs().validateOutput(metaWithObjectOutput(), Strings.create("not an object")));
-		// A conforming result (an object) passes.
-		eng.jobs().validateOutput(metaWithObjectOutput(), Maps.empty());
+		try {
+			assertThrows(IllegalArgumentException.class,
+				() -> eng.jobs().validateOutput(metaWithObjectOutput(), Strings.create("not an object")));
+			// A conforming result (an object) passes.
+			eng.jobs().validateOutput(metaWithObjectOutput(), Maps.empty());
+		} finally {
+			eng.close();
+		}
 	}
 
 	@Test
 	public void testOutputValidationWarnDoesNotFail() {
 		// warn logs a mismatch but completes — must not raise.
 		Engine eng = Engine.createTemp(Maps.of(Config.OUTPUT_VALIDATION, Strings.create("warn")));
-		eng.jobs().validateOutput(metaWithObjectOutput(), Strings.create("not an object"));
+		try {
+			eng.jobs().validateOutput(metaWithObjectOutput(), Strings.create("not an object"));
+		} finally {
+			eng.close();
+		}
 	}
 
 	@Test
 	public void testOutputValidationNoSchemaIsNoop() {
 		// An operation with no output schema is never validated, even in strict.
 		Engine eng = Engine.createTemp(Maps.of(Config.OUTPUT_VALIDATION, Strings.create("strict")));
-		AMap<AString, ACell> meta = Maps.of(Fields.OPERATION,
-			Maps.of(Fields.ADAPTER, Strings.create("test:out")));
-		eng.jobs().validateOutput(meta, Strings.create("anything"));
+		try {
+			AMap<AString, ACell> meta = Maps.of(Fields.OPERATION,
+				Maps.of(Fields.ADAPTER, Strings.create("test:out")));
+			eng.jobs().validateOutput(meta, Strings.create("anything"));
+		} finally {
+			eng.close();
+		}
 	}
 
 	@Test

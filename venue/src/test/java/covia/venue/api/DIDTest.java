@@ -34,7 +34,7 @@ public class DIDTest {
 	@Test
 	void testDIDEndpoint() throws Exception {
 		// Test the DID endpoint using HTTP client
-		HttpClient client = HttpClient.newBuilder().build();
+		HttpClient client = covia.venue.TestHTTP.CLIENT;
 		HttpRequest req = HttpRequest.newBuilder()
 			.uri(new URI("http://localhost:" + PORT + "/.well-known/did.json"))
 			.GET()
@@ -59,7 +59,7 @@ public class DIDTest {
     
 	@Test
 	void testDIDDocumentStructure() throws Exception {
-		HttpClient client = HttpClient.newBuilder().build();
+		HttpClient client = covia.venue.TestHTTP.CLIENT;
 		HttpRequest req = HttpRequest.newBuilder()
 			.uri(new URI("http://localhost:" + PORT + "/.well-known/did.json"))
 			.GET()

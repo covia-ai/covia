@@ -115,7 +115,16 @@ public class HardKillPersistenceTest {
 
 		@Override public void close() {
 			try { stdin.close(); } catch (Exception ignored) {}
-			try { process.destroyForcibly(); } catch (Exception ignored) {}
+			try {
+				if (process.isAlive()) process.destroyForcibly();
+				process.waitFor(5, TimeUnit.SECONDS);
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+			} catch (Exception ignored) {}
+			try { stdout.close(); } catch (Exception ignored) {}
+			try { stderrPump.join(5_000); } catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+			}
 		}
 	}
 

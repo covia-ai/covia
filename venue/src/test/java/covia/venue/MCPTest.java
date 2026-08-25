@@ -66,10 +66,7 @@ public class MCPTest {
 	
 	McpSyncClient mcp;
 	
-	// Shared HttpClient for all tests in this class
-	private static final HttpClient httpClient = HttpClient.newBuilder()
-		.connectTimeout(Duration.ofSeconds(10))
-		.build();
+	private static final HttpClient httpClient = TestHTTP.CLIENT;
 	
 	MCP mcpApi;
 	

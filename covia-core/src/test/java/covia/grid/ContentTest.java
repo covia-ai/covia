@@ -17,8 +17,9 @@ public class ContentTest {
 	@Test public void testBlobContent() throws IOException {
 		BlobContent bc=BlobContent.of(Blobs.empty());
 		
-		InputStream bis=bc.getInputStream();
-		assertEquals(-1,bis.read());
+		try (InputStream bis = bc.getInputStream()) {
+			assertEquals(-1, bis.read());
+		}
 		
 		assertSame(Blobs.empty(),bc.getBlob());
 	}

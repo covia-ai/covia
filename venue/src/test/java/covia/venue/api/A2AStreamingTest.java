@@ -42,7 +42,7 @@ public class A2AStreamingTest {
 	@BeforeAll
 	public void setup() {
 		assertNotNull(TestServer.SERVER);
-		this.http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+		this.http = covia.venue.TestHTTP.CLIENT;
 	}
 
 	// ============================================================

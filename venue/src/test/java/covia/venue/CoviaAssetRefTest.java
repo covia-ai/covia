@@ -48,7 +48,7 @@ public class CoviaAssetRefTest {
 
 	private final String base = TestServer.BASE_URL;
 	private final VenueHTTP client = TestServer.COVIA;
-	private final HttpClient http = HttpClient.newHttpClient();
+	private final HttpClient http = TestHTTP.CLIENT;
 
 	private HttpResponse<String> get(String path) throws Exception {
 		return http.send(

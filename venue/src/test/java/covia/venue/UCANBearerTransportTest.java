@@ -48,6 +48,7 @@ public class UCANBearerTransportTest {
 
 	static final int PORT = TestServer.PORT;
 	static final String BASE_URL = TestServer.BASE_URL;
+	private static final HttpClient HTTP = TestHTTP.CLIENT;
 
 	Engine engine;
 
@@ -66,15 +67,13 @@ public class UCANBearerTransportTest {
 	}
 
 	private static HttpResponse<String> postInvoke(String body, String bearer) throws Exception {
-		HttpClient client = HttpClient.newBuilder().build();
 		HttpRequest.Builder rb = HttpRequest.newBuilder()
 			.uri(new URI(BASE_URL + "/api/v1/invoke?wait=true"))
 			.POST(HttpRequest.BodyPublishers.ofString(body))
 			.header("Content-Type", "application/json")
 			.timeout(Duration.ofSeconds(10));
 		if (bearer != null) rb.header("Authorization", "Bearer " + bearer);
-		return client.sendAsync(rb.build(), HttpResponse.BodyHandlers.ofString())
-			.get();
+		return HTTP.send(rb.build(), HttpResponse.BodyHandlers.ofString());
 	}
 
 	private static AString callerDIDOf(HttpResponse<String> resp) {

@@ -58,9 +58,7 @@ public class MCPAuthTest {
 		}
 		""";
 
-	private final HttpClient http = HttpClient.newBuilder()
-		.connectTimeout(Duration.ofSeconds(10))
-		.build();
+	private final HttpClient http = TestHTTP.CLIENT;
 
 	private VenueServer server;
 	private String baseUrl;

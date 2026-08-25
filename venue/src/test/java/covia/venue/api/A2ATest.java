@@ -54,7 +54,7 @@ public class A2ATest {
 	@BeforeAll
 	public void setup() {
 		assertNotNull(TestServer.SERVER, "Test server must be running");
-		this.http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+		this.http = covia.venue.TestHTTP.CLIENT;
 	}
 
 	// ============================================================

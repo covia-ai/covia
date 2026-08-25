@@ -151,9 +151,12 @@ class VenueProcessTest {
 		assertEquals(0, VenueRelauncher.run(spec));
 		long pid = Long.parseLong(Files.readString(result).trim());
 		ProcessHandle child = ProcessHandle.of(pid).orElseThrow();
-		assertTrue(child.isAlive(), "readiness is accepted only while the child remains alive");
-		child.destroyForcibly();
-		child.onExit().get(5, TimeUnit.SECONDS);
+		try {
+			assertTrue(child.isAlive(), "readiness is accepted only while the child remains alive");
+		} finally {
+			if (child.isAlive()) child.destroyForcibly();
+			child.onExit().get(5, TimeUnit.SECONDS);
+		}
 		awaitDelete(probeJar);
 	}
 
