@@ -33,6 +33,9 @@ public final class Abilities {
 	/** Venue-owned adapter and module lifecycle (enable/disable/configure,
 	 *  module load/unload) — guarded on {@code <venue DID>/adapters}. */
 	public static final AString ADAPTER_MANAGE = Strings.intern("adapter/manage");
+	/** Process-level graceful restart and executable venue-jar handoff — guarded
+	 *  on {@code <venue DID>/process}. */
+	public static final AString VENUE_RESTART = Strings.intern("venue/restart");
 
 	/** The venue-scoped MCP management resource guarded by {@link #MCP_MANAGE}. */
 	public static final AString V_MCP = Strings.intern("v/mcp");

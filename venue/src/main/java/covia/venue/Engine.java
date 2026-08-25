@@ -126,6 +126,9 @@ public class Engine {
 	/** Job lifecycle manager (submission, queries, persistence, recovery) */
 	private final JobManager jobManager;
 
+	/** MainVenue process control; absent for embedded and test engines. */
+	private volatile VenueProcess processControl;
+
 	/**
 	 * Per-venue grid scheduler. Fires any deferred grid operation at a future
 	 * wall-clock time; an agent wake is one consumer (a scheduled
@@ -798,6 +801,25 @@ public class Engine {
 	/** True only after start completed successfully and before close began. */
 	public boolean isStarted() {
 		return lifecycle == Lifecycle.STARTED;
+	}
+
+	/** Installs process control before MainVenue publishes restart authority. */
+	void setProcessControl(VenueProcess processControl) {
+		if (this.processControl != null && this.processControl != processControl) {
+			throw new IllegalStateException("Venue process control is already installed");
+		}
+		this.processControl = java.util.Objects.requireNonNull(processControl);
+	}
+
+	/** Requests a successor handoff from a standalone MainVenue process. */
+	public VenueProcess.RestartPlan requestProcessRestart(String successor,
+			String sha256, long startupTimeoutMillis, covia.grid.Job job) {
+		VenueProcess control = processControl;
+		if (control == null) {
+			throw new IllegalStateException(
+				"Process restart is unavailable: this venue is not managed by MainVenue");
+		}
+		return control.requestRestart(successor, sha256, startupTimeoutMillis, job);
 	}
 
 	public static void addDemoAssets(Engine venue) {

@@ -98,7 +98,7 @@ AUTH_REQUIRED).
 | `scheduler` | Deferred grid-op invocation | `schedule`, `cancel`, `trigger`, `list` |
 | `auth` | Authentication ops | login/token flows |
 | `user` | Explicit user registration and discovery (arbitrary DIDs; venue-managed did:web usernames) | `create`, `info`, `list` |
-| `venue` | Venue administration — runtime adapter/module lifecycle (venue-owned; `docs/CONFIG.md` "Runtime adapter lifecycle") | `adapters`, `adapter/enable`, `adapter/disable`, `adapter/configure`, `module/load`, `module/unload` |
+| `venue` | Venue administration — runtime adapter/module lifecycle and process restart (venue-owned; `docs/CONFIG.md`) | `adapters`, `adapter/enable`, `adapter/disable`, `adapter/configure`, `module/load`, `module/unload`, `restart` |
 | `test` | Testing | `echo`, `delay`, `fail`, `never`, `random`, `chat`, `pause`, `taskComplete` |
 
 Module adapters (shaded module jars, not in covia.jar — `docs/CONFIG.md` "Venue modules"):

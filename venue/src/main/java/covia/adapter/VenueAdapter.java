@@ -20,14 +20,15 @@ import covia.venue.Modules;
 import covia.venue.RequestContext;
 
 /**
- * Venue administration: adapter and module lifecycle on a live venue.
+ * Venue administration: live adapter/module lifecycle and process restart.
  *
- * <p>Every operation here is venue-owned — authorised only for direct
- * execution as the venue identity or a venue-rooted delegation over
- * {@code <venue DID>/adapters} with {@code adapter/manage}
- * ({@link covia.venue.Engine#requireVenueAuthority}). A null capability scope
- * is deliberately not enough: an ordinary authenticated user cannot switch
- * adapters off or load code.</p>
+ * <p>Every operation here is venue-owned. Adapter/module lifecycle requires a
+ * venue-rooted delegation over {@code <venue DID>/adapters} with
+ * {@code adapter/manage}; process restart requires {@code venue/restart} over
+ * {@code <venue DID>/process}
+ * ({@link covia.venue.Engine#requireVenueAuthority}). Direct venue execution
+ * is allowed. A null capability scope is deliberately not enough for an
+ * ordinary authenticated user.</p>
  *
  * <ul>
  *   <li>{@code venue/adapters} — full registry view: active and disabled
@@ -38,6 +39,9 @@ import covia.venue.RequestContext;
  *       ({@link covia.venue.Engine#configureAdapter}).</li>
  *   <li>{@code venue/module/load|unload} — runtime module lifecycle, subject
  *       to the operator's {@code dynamicModules} policy ({@link Modules}).</li>
+ *   <li>{@code venue/restart} — process-wide graceful successor handoff,
+ *       separately guarded by {@code venue/restart} on
+ *       {@code <venue DID>/process}.</li>
  * </ul>
  *
  * <p>Changes are not persisted: after a restart the venue config is
@@ -47,6 +51,7 @@ import covia.venue.RequestContext;
 public class VenueAdapter extends AAdapter {
 
 	static final String RESOURCE = "adapters";
+	static final String PROCESS_RESOURCE = "process";
 
 	private static final AString K_ENABLED = Strings.intern("enabled");
 	private static final AString K_KERNEL = Strings.intern("kernel");
@@ -60,6 +65,10 @@ public class VenueAdapter extends AAdapter {
 	private static final AString K_PATH = Strings.intern("path");
 	private static final AString K_SHA256 = Strings.intern("sha256");
 	private static final AString K_UNLOADED = Strings.intern("unloaded");
+	private static final AString K_ACCEPTED = Strings.intern("accepted");
+	private static final AString K_JAR = Strings.intern("jar");
+	private static final AString K_FALLBACK = Strings.intern("fallback");
+	private static final AString K_STARTUP_TIMEOUT = Strings.intern("startupTimeout");
 
 	@Override
 	public String getName() {
@@ -69,7 +78,7 @@ public class VenueAdapter extends AAdapter {
 	@Override
 	public String getDescription() {
 		return "Venue administration: enable, disable and reconfigure adapters, and load or "
-			+ "unload adapter modules on the running venue. Venue-owned operations.";
+			+ "unload adapter modules or restart the standalone venue process. Venue-owned operations.";
 	}
 
 	@Override
@@ -80,6 +89,7 @@ public class VenueAdapter extends AAdapter {
 		installAsset("venue/adapter/configure", "/adapters/venue/adapterConfigure.json");
 		installAsset("venue/module/load", "/adapters/venue/moduleLoad.json");
 		installAsset("venue/module/unload", "/adapters/venue/moduleUnload.json");
+		installAsset("venue/restart", "/adapters/venue/restart.json");
 		installSkill("adapters/adapters", "/skills/adapters.json");
 	}
 
@@ -88,14 +98,20 @@ public class VenueAdapter extends AAdapter {
 			AMap<AString, ACell> meta, ACell input) {
 		requireInvoke(ctx);
 		try {
-			engine.requireVenueAuthority(ctx, RESOURCE, Abilities.ADAPTER_MANAGE);
-			return CompletableFuture.completedFuture(switch (getSubOperation(meta)) {
+			String subOperation = getSubOperation(meta);
+			if ("restart".equals(subOperation)) {
+				engine.requireVenueAuthority(ctx, PROCESS_RESOURCE, Abilities.VENUE_RESTART);
+			} else {
+				engine.requireVenueAuthority(ctx, RESOURCE, Abilities.ADAPTER_MANAGE);
+			}
+			return CompletableFuture.completedFuture(switch (subOperation) {
 				case "adapters" -> adapters();
 				case "adapter-enable" -> adapterEnable(input);
 				case "adapter-disable" -> adapterDisable(input);
 				case "adapter-configure" -> adapterConfigure(input);
 				case "module-load" -> moduleLoad(input);
 				case "module-unload" -> moduleUnload(input);
+				case "restart" -> restart(ctx, input);
 				default -> throw new IllegalArgumentException(
 					"Unknown venue operation: " + getSubOperation(meta));
 			});
@@ -206,6 +222,30 @@ public class VenueAdapter extends AAdapter {
 		}
 		Modules.LoadedModule module = Modules.unload(engine, name);
 		return moduleEntry(module).assoc(K_UNLOADED, CVMBool.TRUE);
+	}
+
+	// ========== process restart ==========
+
+	ACell restart(RequestContext ctx, ACell input) {
+		AString jar = RT.ensureString(RT.getIn(input, K_JAR));
+		AString sha = RT.ensureString(RT.getIn(input, K_SHA256));
+		long timeout = 60_000;
+		ACell timeoutCell = RT.getIn(input, K_STARTUP_TIMEOUT);
+		if (timeoutCell != null) {
+			convex.core.data.prim.CVMLong value = RT.ensureLong(timeoutCell);
+			if (value == null) throw new IllegalArgumentException("startupTimeout must be an integer");
+			timeout = value.longValue();
+		}
+		var plan = engine.requestProcessRestart(
+			(jar != null) ? jar.toString() : null,
+			(sha != null) ? sha.toString() : null,
+			timeout, ctx.getJob());
+		return Maps.of(
+			K_ACCEPTED, CVMBool.TRUE,
+			K_JAR, Strings.create(plan.successorJar().toString()),
+			K_SHA256, Strings.create(plan.successorSha256()),
+			K_FALLBACK, Strings.create(plan.fallbackJar().toString()),
+			K_STARTUP_TIMEOUT, convex.core.data.prim.CVMLong.create(plan.startupTimeoutMillis()));
 	}
 
 	private static String requireName(ACell input, String field) {

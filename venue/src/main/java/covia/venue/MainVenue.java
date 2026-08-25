@@ -74,9 +74,13 @@ public class MainVenue {
 		
 		List<AMap<AString, ACell>> venues = Config.validateServerConfig(config);
 		List<VenueServer> servers=new ArrayList<>();
+		VenueProcess process = VenueProcess.create(args);
 		for (AMap<AString,ACell> venueConfig: venues) {
-			servers.add(VenueServer.launch(venueConfig));
+			VenueServer server = VenueServer.launch(venueConfig);
+			process.manage(server);
+			servers.add(server);
 		}
+		process.arm();
 
 		// On JVM shutdown (e.g. `docker stop` → SIGTERM) flush each venue's
 		// accumulated state before the process exits. Registered on Convex's
@@ -102,6 +106,10 @@ public class MainVenue {
 		// best-effort; headless or unsupported desktops (and COVIA_NO_TRAY=1)
 		// run without one. Tray logs why when it installs nothing.
 		Tray.install(servers);
+
+		// A predecessor only considers this JVM started after all configured venues
+		// are listening and process control is armed.
+		VenueRelauncher.signalMainVenueReady();
 	}
 	
 	private static void configureLogging(ACell config) throws JoranException, IOException {

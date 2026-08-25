@@ -388,7 +388,8 @@ public class AdapterLifecycleTest {
 			engine.getVenueState().users().create(caller);
 			for (String op : new String[] {"v/ops/venue/adapters", "v/ops/venue/adapter/disable",
 					"v/ops/venue/adapter/enable", "v/ops/venue/adapter/configure",
-					"v/ops/venue/module/load", "v/ops/venue/module/unload"}) {
+					"v/ops/venue/module/load", "v/ops/venue/module/unload",
+					"v/ops/venue/restart"}) {
 				ExecutionException denied = assertThrows(ExecutionException.class,
 					() -> engine.jobs().invokeInternal(op,
 						Maps.of(Strings.create("name"), Strings.create("test"),
@@ -397,9 +398,29 @@ public class AdapterLifecycleTest {
 						RequestContext.of(caller)).get(10, TimeUnit.SECONDS), op);
 				assertInstanceOf(AuthException.class, denied.getCause(), op);
 				assertTrue(denied.getCause().getMessage().contains("venue-issued delegation"), op);
+				if (op.endsWith("/restart")) {
+					assertTrue(denied.getCause().getMessage().contains("venue/restart"), op);
+					assertTrue(denied.getCause().getMessage().contains("/process"), op);
+				} else {
+					assertTrue(denied.getCause().getMessage().contains("adapter/manage"), op);
+					assertTrue(denied.getCause().getMessage().contains("/adapters"), op);
+				}
 			}
 			// Nothing changed
 			assertNotNull(engine.getAdapter("test"));
+		} finally {
+			engine.close();
+		}
+	}
+
+	@Test
+	public void testRestartRequiresStandaloneMainVenueProcess() throws Exception {
+		Engine engine = boot(null);
+		try {
+			ExecutionException unavailable = assertThrows(ExecutionException.class,
+				() -> asVenue(engine, "v/ops/venue/restart", Maps.empty()));
+			assertTrue(unavailable.getCause().getMessage().contains("not managed by MainVenue"),
+				String.valueOf(unavailable.getCause()));
 		} finally {
 			engine.close();
 		}

@@ -139,6 +139,7 @@ Abilities follow UCAN's slash-delimited convention with no leading slash. `*` is
 | `asset` | every `asset/*` | All asset operations |
 | `asset/store` | — | Store a new content-addressed asset |
 | `asset/read` | — | Get / list content-addressed assets |
+| `venue/restart` | — | Restart a standalone venue process or hand off to a successor jar |
 | `secret/decrypt` | — | Decrypt a secret |
 | `ucan/delegate` | — | Sub-delegate capabilities |
 | `ucan/revoke` | — | Revoke a UCAN |

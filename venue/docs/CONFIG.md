@@ -255,6 +255,43 @@ Strictly best-effort — headless JVMs (Docker, CI, servers) and unsupported
 desktops run without an icon, and a tray failure never takes a venue down.
 Set `COVIA_NO_TRAY=1` to suppress it explicitly. See `covia.venue.Tray`.
 
+## Process restart and executable upgrade
+
+A standalone `java -jar covia.jar` venue publishes
+`v/ops/venue/restart`. It gracefully closes every venue hosted by that JVM and
+starts a replacement executable Covia jar. Omit `jar` to restart the current
+version:
+
+```json
+{
+  "jar": "releases/covia-0.9.6.jar",
+  "sha256": "<optional 64-character hex digest>",
+  "startupTimeout": 60000
+}
+```
+
+The operation validates the successor before accepting the request and commits
+its Job result before shutdown begins. A helper from the current jar then:
+
+1. waits for the old JVM and all its shutdown hooks to exit;
+2. starts the successor with the same JVM arguments, application arguments,
+   working directory and environment;
+3. waits until every configured venue has launched; and
+4. starts the current jar instead if the successor exits or misses the startup
+   deadline.
+
+Use immutable, versioned jar paths and keep the current jar in place until the
+handoff finishes; it is the rollback artifact. A successor from before this
+facility cannot emit the readiness signal and therefore triggers fallback.
+Embedded `VenueServer` instances have no process owner and reject this
+operation. Inside a container this restarts a jar already available in that
+container; it does not replace the container image.
+
+This is process-wide authority, distinct from adapter management. Direct venue
+execution is allowed; delegation requires `venue/restart` on
+`<venue DID>/process` (as well as `invoke` on the operation). There is no
+configuration bypass or enable flag.
+
 ## Embedded route policy
 
 `VenueServer.launch(config, routeContributors)` lets a Java application mount

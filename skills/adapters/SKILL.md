@@ -1,7 +1,7 @@
 ---
 name: adapters
-description: Discover, invoke and manage adapters on a Covia venue — list adapters and their operations, inspect an operation's schema, run adapter operations, enable/disable/reconfigure adapters at runtime, and load/unload adapter module jars (covia-sql, covia-python-adapter). Use when a user asks what adapters exist, how to call one, or how to add, remove, configure or turn off an adapter.
-argument-hint: "<list|inspect|run|enable|disable|configure|load|unload|status> <name>"
+description: Discover, invoke and manage adapters on a Covia venue — list adapters and their operations, inspect an operation's schema, run adapter operations, enable/disable/reconfigure adapters at runtime, load/unload adapter module jars, and restart or upgrade a standalone venue process. Use when a user asks what adapters exist, how to call one, or how to add, remove, configure, turn off or restart venue facilities.
+argument-hint: "<list|inspect|run|enable|disable|configure|load|unload|restart|status> <name>"
 ---
 
 # Adapters
@@ -76,12 +76,18 @@ The `venue` adapter changes the adapter set of a *running* venue, no restart:
 | `configure <name>` | `v/ops/venue/adapter/configure` | `{"name": "<adapter>", "config": {…}, "merge": false}` — `config` is the `adapters.<name>` shape; `merge: true` overlays the current effective config instead of replacing it |
 | `load <jar>` | `v/ops/venue/module/load` | `{"module": "<jar name>", "sha256": "<hex>", "config": {…}}` — `sha256` and `config` optional |
 | `unload <name>` | `v/ops/venue/module/unload` | `{"name": "<jar name without .jar>"}` |
+| `restart [jar]` | `v/ops/venue/restart` | `{"jar": "<successor covia jar>", "sha256": "<hex>", "startupTimeout": 60000}` — all optional; omitting `jar` restarts the current version |
 
 All are invoked with `grid_run operation=v/ops/venue/... input=...`. Enable/disable/configure return `{name, enabled, changed}` / `{name, config}` — `changed: false` means it was already in that state (idempotent). Load returns `{name, path, sha256, adapters}`; unload returns `{name, path, adapters, unloaded}`.
 
 ### Authority — read this before trying
 
-These are **venue-owned**: they require `adapter/manage` on `<venueDID>/adapters`. A null (unrestricted) capability scope is deliberately *not* enough, so **the default local MCP connection — which acts as the venue's public user — is denied** with `Venue administration denied: requires adapter/manage on <venueDID>/adapters from the venue (call as the venue or present a venue-issued delegation)`. That is by design (loading in-process code is total compromise of the venue), not a misconfiguration. Do not loop retrying; explain and pick a route:
+These are **venue-owned**. Adapter/module lifecycle requires `adapter/manage`
+on `<venueDID>/adapters`; process restart instead requires `venue/restart` on
+`<venueDID>/process`. A null (unrestricted) capability scope is deliberately
+*not* enough, so **the default local MCP connection — which acts as the venue's
+public user — is denied**. That is by design, not a misconfiguration. Do not
+loop retrying; explain and pick a route:
 
 1. **Call as the venue** — authenticate with the venue's own key pair (config `seed`, `keystore`, or the auto-generated `venue.key` beside a persistent store; an ephemeral `local-dev.json` venue has a fresh random key each start, so this route needs a persistent config such as `dev/local.json`). From the Java SDK:
    ```java
@@ -93,6 +99,13 @@ These are **venue-owned**: they require `adapter/manage` on `<venueDID>/adapters
    The same strategy's `mintToken()` gives a bearer JWT for `curl … -H "Authorization: Bearer <jwt>" POST /api/v1/run` or an MCP client `headers` block. Never paste the seed into chat or commit it.
 2. **In-process operator code** — anything holding the `Engine` uses `engine.jobs().invokeOperation("v/ops/venue/...", input, engine.venueContext())`. This is how tests and embedded venues do it.
 3. **Venue-issued delegation** — for a standing admin identity, mint a UCAN *as the venue* (route 1 or 2, `v/ops/ucan/issue` with `att: [{"with": "<venueDID>/adapters", "can": "adapter/manage"}]`, `aud` = the admin's DID); the admin then presents it as a transport proof (`ucans` / bearer). Same model as `user:create`. See `/ucan`.
+
+`venue/restart` is deliberately separate process authority: it requires
+`venue/restart` on `<venueDID>/process`, plus invoke authority for the operation.
+It is available only when running the executable `MainVenue` jar. The operation
+finishes its Job before closing all venues; a helper starts the successor and
+falls back to the current jar if startup does not reach readiness. Use immutable,
+versioned jar paths and leave the current jar available for rollback.
 
 ### Module policy
 
