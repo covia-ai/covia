@@ -281,6 +281,43 @@ public class GoalTreeAdapterTest {
 		assertEquals(CVMBool.FALSE, sub.get(Strings.intern("done")));
 	}
 
+	@Test
+	public void testStepCarriesStructuredToolResultIntoNextInference() {
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "step-structured-result",
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/goaltree/chat",
+					"llmOperation", "v/test/ops/llm",
+					Fields.TOOLS, Vectors.of(Strings.create("v/test/ops/echo")))),
+			ALICE).awaitResult(5000);
+
+		AMap<AString, ACell> result = Maps.of(
+			"total", 3L,
+			"bySource", Maps.of("NHS", 2L, "Letters", 1L));
+		AMap<AString, ACell> stepped = RT.ensureMap(engine.jobs().invokeOperation("v/ops/agent/step",
+			Maps.of(Fields.AGENT_ID, "step-structured-result", Fields.MESSAGE, "Count my vault",
+				"assistant", Maps.of("toolCalls", Vectors.of(
+					Maps.of("id", "call_totals", "name", "test_echo", "arguments", result)))),
+			ALICE).awaitResult(5000));
+
+		assertEquals(CVMBool.FALSE, stepped.get(Strings.intern("done")));
+		AVector<ACell> messages = RT.ensureVector(
+			RT.getIn(stepped, Strings.intern("next"), Fields.MESSAGES));
+		ACell tool = null;
+		for (long i = 0; i < messages.count(); i++) {
+			if ("tool".equals(String.valueOf(RT.getIn(messages.get(i), "role")))) {
+				tool = messages.get(i);
+				break;
+			}
+		}
+		assertNotNull(tool, "the deterministic step must append the tool result to the next prompt");
+		assertEquals("call_totals", RT.getIn(tool, "id").toString());
+		assertEquals("test_echo", RT.getIn(tool, "name").toString());
+		assertEquals(result, RT.getIn(tool, "structuredContent"));
+		assertNull(RT.getIn(tool, "content"),
+			"structured-only results must stay content-absent for provider serialisation");
+	}
+
 	/** The framework's task tools on goaltree: a task is rendered last with
 	 *  complete_task / fail_task offered, and resolving it through the tool
 	 *  reaches the caller's job at tool time and ends the frame — an

@@ -55,6 +55,7 @@ import java.util.concurrent.TimeUnit;
 import com.sun.net.httpserver.HttpServer;
 
 import covia.adapter.agent.AbstractLLMAdapter;
+import covia.adapter.agent.ConversationRenderer;
 import covia.api.Fields;
 import covia.grid.Asset;
 import covia.grid.Status;
@@ -451,9 +452,12 @@ public class LangChainAdapterTest {
 		ACell nested = Maps.of("results", Vectors.of(
 			Maps.of("source", Maps.of("name", "kyc")),
 			Maps.of("source", Maps.of("name", "sanctions"))));
-		var canonical = Vectors.of(
+		AMap<AString, ACell> rendered = ConversationRenderer.toMessage(
 			Maps.of("role", "tool", "id", "call_old", "name", "covia_read",
-				"structuredContent", nested));
+				"structuredContent", nested), null);
+		assertNull(rendered.get(Strings.intern("content")),
+			"conversation rendering must not replace a structured result with empty text");
+		var canonical = Vectors.of(rendered);
 		var messages = LangChainAdapter.serialiseToolResultsForProvider(canonical);
 
 		List<ChatMessage> result = LangChainAdapter.toChatMessages(messages);

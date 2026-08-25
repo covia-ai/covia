@@ -247,9 +247,11 @@ public final class ConversationRenderer {
 
 	/**
 	 * Converts one stored turn or live inbox envelope into the provider-facing
-	 * message shape {@code {role, content, toolCalls?, id?, name?, structuredContent?, isError?}}:
+	 * message shape {@code {role, content?, toolCalls?, id?, name?, structuredContent?, isError?}}:
 	 * content stringified (JSON, never EDN), framework metadata such as
-	 * {@code ts}, {@code source} and {@code caller} dropped.
+	 * {@code ts}, {@code source} and {@code caller} dropped. A structured-only
+	 * tool result keeps content absent so the provider edge can render the
+	 * structured value rather than mistake an invented empty string for it.
 	 *
 	 * @param value stored turn, inbox envelope, or raw message string
 	 * @param defaultRole role used when {@code value} has none; null requires one
@@ -270,9 +272,16 @@ public final class ConversationRenderer {
 			if (content == null && defaultRole != null) content = source;
 		}
 		if (role == null) return null;
-		AString text = (content instanceof AString s) ? s
-			: (content == null) ? Strings.EMPTY : convex.core.util.JSON.print(content);
-		AMap<AString, ACell> message = Maps.of(GoalTreeContext.K_ROLE, role, GoalTreeContext.K_CONTENT, text);
+		boolean structuredOnlyTool = content == null
+			&& GoalTreeContext.ROLE_TOOL.equals(role)
+			&& source != null
+			&& source.get(covia.api.Fields.STRUCTURED_CONTENT) != null;
+		AMap<AString, ACell> message = Maps.of(GoalTreeContext.K_ROLE, role);
+		if (!structuredOnlyTool) {
+			AString text = (content instanceof AString s) ? s
+				: (content == null) ? Strings.EMPTY : convex.core.util.JSON.print(content);
+			message = message.assoc(GoalTreeContext.K_CONTENT, text);
+		}
 		if (source == null) return message;
 		for (AString key : java.util.List.of(
 				GoalTreeContext.K_TOOL_CALLS, Strings.intern("id"), Strings.intern("name"),
