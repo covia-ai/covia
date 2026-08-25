@@ -8,6 +8,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.9.5] - 2026-08-25
+
 ### Migration
 
 - Remote `grid:run` and `grid:invoke` calls no longer infer authentication from
@@ -620,7 +622,8 @@ Initial public release: venue server with the adapter framework, lattice-backed
 content-addressed assets, the async job model with SSE, multi-protocol surface
 (REST / MCP / A2A / DID), and strategy-based authentication.
 
-[Unreleased]: https://github.com/covia-ai/covia/compare/0.9.4...HEAD
+[Unreleased]: https://github.com/covia-ai/covia/compare/0.9.5...HEAD
+[0.9.5]: https://github.com/covia-ai/covia/compare/0.9.4...0.9.5
 [0.9.4]: https://github.com/covia-ai/covia/compare/0.9.3...0.9.4
 [0.9.3]: https://github.com/covia-ai/covia/compare/0.9.2...0.9.3
 [0.9.2]: https://github.com/covia-ai/covia/compare/0.9.1...0.9.2
