@@ -255,11 +255,12 @@ public final class Skills {
 	 * treated as a nested directory — the one case that must not be reported
 	 * as a broken skill.</p>
 	 *
-	 * <p>This heuristic applies ONLY to members of an already-declared
-	 * skillset, never to a source: kinds are declared, so a directory is only
-	 * ever guessed at one level down. It can still be fooled by a directory
-	 * whose own key set happens to look skill-shaped (a member literally named
-	 * {@code skill}); keep skillset members named after what they do.</p>
+	 * <p>Kinds remain declared rather than inferred at runtime. This heuristic
+	 * is used to exclude nested directories from a declared skillset, and by
+	 * create-time diagnostics to identify a clear wrong-kind declaration. It can
+	 * still be fooled by a directory whose own key set happens to look
+	 * skill-shaped (a member literally named {@code skill}); keep skillset
+	 * members named after what they do.</p>
 	 */
 	private static boolean isSkillValue(ACell value) {
 		if (value instanceof AString) return true;                   // string ref → one skill
@@ -834,6 +835,31 @@ public final class Skills {
 	}
 
 	// ========== Venue-side configuration diagnostics ==========
+
+	/**
+	 * The first declared individual skill that resolves to a directory rather
+	 * than one skill, or null when no ref has that clear kind mismatch.
+	 *
+	 * <p>This catches a directory placed under {@code config.skills}, especially
+	 * {@code w/skills} or {@code v/skills}. Missing and unreadable refs belong to
+	 * the ordinary source report; malformed skill assets remain visible as
+	 * broken skills rather than being guessed to be directories.</p>
+	 */
+	public static AString misdirectedSkill(Engine engine, RequestContext ctx,
+			AVector<ACell> skills) {
+		if (engine == null || ctx == null || skills == null) return null;
+		for (long i = 0; i < skills.count(); i++) {
+			AString ref = RT.ensureString(skills.get(i));
+			if (ref == null) continue;
+			try {
+				ACell value = engine.resolvePath(ref, ctx);
+				if (value instanceof AMap<?, ?> && !isSkillValue(value)) return ref;
+			} catch (RuntimeException e) {
+				// Unreadable or absent — not a kind mismatch. Skip.
+			}
+		}
+		return null;
+	}
 
 	/**
 	 * The first declared skillset that resolves to a directory of

@@ -23,9 +23,9 @@
 					"label": "Memory"
 				}
 			],
-			"skills": [
+			"skillsets": [
 				"w/skills",
-				"v/skills"
+				"v/skills/root"
 			],
 			"defaultTools": false
 		}

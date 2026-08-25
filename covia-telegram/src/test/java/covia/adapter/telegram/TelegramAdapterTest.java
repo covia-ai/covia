@@ -501,7 +501,9 @@ public class TelegramAdapterTest {
 			"mirrored in the adapter's own subtree");
 		ACell cfg = RT.getIn(template, "agent", "config");
 		assertTrue(RT.getIn(cfg, "systemPrompt").toString().contains("via.from"), "the prompt teaches via");
-		assertTrue(RT.getIn(cfg, "skills").toString().contains("v/skills"), "the whole venue index, so nothing is invisible");
+		assertEquals(Vectors.of((ACell) Strings.create("w/skills"), Strings.create("v/skills/root")),
+			RT.getIn(cfg, "skillsets"), "the template discovers personal and venue skillsets");
+		assertNull(RT.getIn(cfg, "skills"), "directories must not be declared as individual skills");
 		assertTrue(RT.getIn(cfg, "tools").toString().contains("v/ops/memory"), "memory is a base tool");
 		assertNotNull(RT.getIn(cfg, "context"), "memory is pinned into context");
 
@@ -510,6 +512,12 @@ public class TelegramAdapterTest {
 			Fields.AGENT_ID, "tg-templated",
 			Fields.CONFIG, Vectors.of(Strings.create("v/agents/templates/telegram"),
 				Maps.of("llmOperation", "v/test/ops/llm"))));
+		ACell agentContext = run(RequestContext.of(OWNER), "v/ops/agent/context", Maps.of(
+			Fields.AGENT_ID, "tg-templated", Fields.MESSAGE, "hello"));
+		String messages = RT.getIn(agentContext, Fields.MESSAGES).toString();
+		assertTrue(messages.contains("[Skills]"), messages);
+		assertTrue(messages.contains("adapters"),
+			"the venue adapter skill router must be discoverable: " + messages);
 		String token = "888:TEMPLATE-BOT";
 		telegram.registerBot(token, "templated_bot");
 		run(RequestContext.of(OWNER), "v/ops/secret/set", Maps.of("name", "TG_TEMPLATE", "value", token));

@@ -934,6 +934,67 @@ Modules can also be loaded and unloaded on a running venue — see
 [Runtime adapter lifecycle](#runtime-adapter-lifecycle). Off by default;
 `modules` remains the boot-time, restart-surviving declaration.
 
+### Using released modules from an embedded host
+
+Released module classifiers are ordinary Maven Central artifacts. Resolve the
+shaded jar by its `module` classifier and copy it into the application
+distribution; do not put either the thin jar or shaded module jar on the host
+application classpath. For example, an embedding application's POM can copy
+Telegram and Discord during `package`:
+
+```xml
+<properties>
+  <covia.version>0.9.4</covia.version>
+</properties>
+<build>
+  <plugins>
+    <plugin>
+      <groupId>org.apache.maven.plugins</groupId>
+      <artifactId>maven-dependency-plugin</artifactId>
+      <version>3.11.0</version>
+      <executions>
+        <execution>
+          <id>copy-covia-modules</id>
+          <phase>prepare-package</phase>
+          <goals><goal>copy</goal></goals>
+          <configuration>
+            <artifactItems>
+              <artifactItem>
+                <groupId>ai.covia</groupId>
+                <artifactId>covia-telegram</artifactId>
+                <version>${covia.version}</version>
+                <type>jar</type>
+                <classifier>module</classifier>
+              </artifactItem>
+              <artifactItem>
+                <groupId>ai.covia</groupId>
+                <artifactId>covia-discord</artifactId>
+                <version>${covia.version}</version>
+                <type>jar</type>
+                <classifier>module</classifier>
+              </artifactItem>
+            </artifactItems>
+            <outputDirectory>${project.build.directory}/covia-modules</outputDirectory>
+          </configuration>
+        </execution>
+      </executions>
+    </plugin>
+  </plugins>
+</build>
+```
+
+Package those copied files with the application, place them in its data or
+module directory at install time, and supply their filesystem paths in
+`modules` before creating the `Engine`. A host that deliberately loads after
+startup can call the existing `Modules.load(engine, path, sha256, config)` API
+with the copied jar. Both routes retain the module classloader's dependency
+isolation and require no venue-side Maven resolver.
+
+The Maven dependency-plugin `artifact` argument form is
+`ai.covia:<module-artifact>:<version>:jar:module`. Released classifiers are
+also signed; GitHub Releases pair operator downloads with SHA-256 checksum
+files when an application wants to pin `modules[].sha256`.
+
 First module: **covia-sql** (#227) — `v/ops/sql/query` / `v/ops/sql/execute`
 over venue-local convex-db databases (per-user, lattice-backed, created on
 first use; ONE instance = one store, per-user isolation via the `database=`

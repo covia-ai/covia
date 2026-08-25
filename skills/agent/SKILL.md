@@ -24,7 +24,7 @@ agent that cannot do the intended work:
 
 4. **Conversation history is session-scoped** — updating a prompt changes later turns but does not erase existing sessions. Omit `sessionId` to start a new conversation; delete/recreate the agent only when you explicitly need a completely fresh identity and audit record.
 
-5. **Operation references are lattice paths, not adapter shorthand** — `config.operation`, `llmOperation`, and operation entries in `tools` must be resolvable paths such as `v/ops/covia/write`, never `covia:write`. Create returns warnings for unavailable configured tools. Harness tools (`subgoal`, `complete`, `fail`, `compact`, `context_load`, `context_unload`, `more_tools`, and `skill_load` when `config.skills` is non-empty) are bare names. A custom read/write agent must declare those operations or start from `worker`.
+5. **Operation references are lattice paths, not adapter shorthand** — `config.operation`, `llmOperation`, and operation entries in `tools` must be resolvable paths such as `v/ops/covia/write`, never `covia:write`. Create returns warnings for unavailable configured tools. Harness tools (`subgoal`, `complete`, `fail`, `compact`, `context_load`, `context_unload`, `more_tools`, and `skill_load` when `config.skills` or `config.skillsets` is non-empty) are bare names. A custom read/write agent must declare those operations or start from `worker`.
 
 ## Commands
 
@@ -101,26 +101,28 @@ Skills are named bundles of instructions, context, and tools that an agent
 loads **on demand**, so a lean agent stays lean until a task needs more. Full
 reference: **`venue/docs/SKILLS.md`**.
 
-**`config.skills` lists sources, not skills.** A source is a skills directory,
-a single skill path, or a content-addressed asset ref:
+Sources have two declared kinds: **`config.skills` contains individual skill
+refs**, while **`config.skillsets` contains directories of skills**. Do not put
+`w/skills` or `v/skills` under `skills`; `v/skills` is itself a directory of
+skillsets, so the standard venue entry point is `v/skills/root`:
 
 ```
 agent_create agentId="Bob" config=[
   "v/agents/templates/skilled",
-  {"skills": ["w/skills", "v/skills/workspace", "a/<hash>"]}
+  {"skillsets": ["w/skills", "v/skills/root"],
+   "skills": ["v/skills/data/workspace", "a/<hash>"]}
 ]
 ```
 
-Every standard template already declares sources: `skilled`, `minimal`,
-`goaltree` and `full` take the whole library (`["w/skills", "v/skills"]`),
-while `reader`, `worker`, `analyst` and `manager` curate a role-specific list.
-`w/skills` comes first in all of them, so a personal skill shadows a
-same-named venue skill — **first source wins**.
+Standard broad templates declare `skillsets: ["w/skills", "v/skills/root"]`;
+role-specific templates combine those directories with a compact list of
+individual `skills`. Explicit skills are resolved before skillsets, and each
+kind is declaration-ordered, so **first source wins** within a kind.
 
-A non-empty `config.skills` switches on both halves of the feature: the
-`[Skills]` index injected each turn (one `- name — description` line per
-skill) and the `skill_load` harness tool. An agent with no sources has
-neither, and behaves exactly as it did before skills existed.
+A non-empty declaration of either kind switches on both halves of the feature:
+the `[Skills]` index injected each turn (one `- name — description` line per
+skill) and the `skill_load` harness tool. An agent with no sources has neither,
+and behaves exactly as it did before skills existed.
 
 ### Hierarchical discovery
 
@@ -129,7 +131,8 @@ A loaded skill can contribute **further sources** through its own
 
 ```
 {"description": "Find data-engineering specialists",
- "skill": {"skills": ["v/skills/data", "w/team-skills/sql-review"]}}
+ "skill": {"skillsets": ["v/skills/data"],
+           "skills": ["w/team-skills/sql-review"]}}
 ```
 
 Children are **discovered, not auto-loaded**. Loading the parent returns a
@@ -138,15 +141,17 @@ step, and lists them in the following turn's index; loading a child may reveal
 another layer. The resolver never walks an unloaded subtree, so cycles are
 inert and a broad hierarchy never floods the prompt.
 
-Effective sources are `config.skills` first, then the sources contributed by
-loaded skills, deduplicated first-wins — configured sources keep precedence.
-Unloading a parent (`context_unload`) retracts its contributed sources;
-children already loaded stay loaded independently.
+Effective sources are configured individual skills and skillsets followed by
+the corresponding sources contributed by loaded skills, deduplicated
+first-wins — configured sources keep precedence. Unloading a parent
+(`context_unload`) retracts its contributed sources; children already loaded
+stay loaded independently.
 
 Contributing a ref grants no authority to read it — every source is
 capability-checked as usual, and a skill's tools are still checked at
 invocation. A skill's instructions enter the prompt verbatim and its tools
-join the palette, so point `config.skills` only at sources you trust.
+join the palette, so point `config.skills` and `config.skillsets` only at
+sources you trust.
 
 ### Inspecting and authoring
 

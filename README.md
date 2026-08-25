@@ -260,6 +260,7 @@ java -jar venue/target/covia.jar
 | `workbench` | A minimal Swing REPL for demos and testing |
 | `covia-sql` | Optional loadable SQL adapter module |
 | `covia-telegram` | Optional loadable Telegram bot module — operator-declared bots route chats to agents, agents send Telegram messages |
+| `covia-discord` | Optional loadable Discord bot module — operator-declared bots route channels to agents, agents send Discord messages |
 | `covia-claude-code` | Optional loadable Claude Code module — drives the Claude Code CLI in venue-authorised project directories (runs and resumable sessions) |
 
 The standard venue and Docker image have no Python dependency. Java 21 builds

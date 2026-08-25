@@ -190,8 +190,9 @@ Resolution order is **skills before skillsets**, each in declaration order. Name
 
 A non-empty declaration of either kind activates both halves of the feature: the per-turn index injection (§4.3) and the `skill_load` tool (§5). A malformed declaration (not a vector, non-string entry) throws at transition time — a configuration error to fix, not to mask.
 
-**Diagnostics.** Merely absent refs are not warned about in a user's agent config: they are maybe-style paths resolved live, and an empty `w/skills` is the designed default. Two things *are* reported:
+**Diagnostics.** Merely absent refs are not warned about in a user's agent config: they are maybe-style paths resolved live, and an empty `w/skills` is the designed default. The following *are* reported:
 
+- `agent:create` warns when a `config.skills` entry resolves to a directory rather than one skill — for example `w/skills` or `v/skills` under the wrong key.
 - `agent:create` warns when a `config.skillsets` entry resolves to a directory of **directories** — the classic `v/skills` instead of `v/skills/root` mistake, which would silently yield an empty index. Resolution uses the caller's namespace, since `w/` paths are user-relative.
 - `agent:create` reports source problems as one terse line per category, aggregating refs:
 

@@ -3,6 +3,7 @@ package covia.adapter.discord;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -93,7 +94,10 @@ class DiscordAdapterTest {
 	@Test void catalogStatusSkillAndTemplateAreInstalled(){
 		ACell status=run(OWNER,"v/ops/discord/bots",Maps.empty());assertTrue(status.toString().contains("RUNNING"));assertFalse(status.toString().contains("literal-test-token"));
 		assertNotNull(engine.resolvePath(Strings.create("v/skills/adapters/discord"),engine.venueContext()));
-		assertNotNull(engine.resolvePath(Strings.create("v/agents/templates/discord"),engine.venueContext()));
+		ACell template=engine.resolvePath(Strings.create("v/agents/templates/discord"),engine.venueContext());assertNotNull(template);
+		ACell cfg=RT.getIn(template,"agent","config");
+		assertEquals(Vectors.of((ACell)Strings.create("w/skills"),Strings.create("v/skills/root")),RT.getIn(cfg,"skillsets"));
+		assertNull(RT.getIn(cfg,"skills"));
 		assertEquals(List.of("abc","def"),BotRunner.split("abc def",3));
 	}
 

@@ -662,6 +662,12 @@ public class SkillsTest {
 	@Test
 	public void testMisdirectedSkillsetDetection() {
 		write("w/tree/group/reader", Maps.of(Fields.DESCRIPTION, Strings.create("Deep skill")));
+		assertEquals("w/tree", Skills.misdirectedSkill(engine, ctx,
+			Vectors.of(Strings.create("w/tree"))).toString());
+		assertNull(Skills.misdirectedSkill(engine, ctx,
+			Vectors.of(Strings.create("w/tree/group/reader"))));
+		assertNull(Skills.misdirectedSkill(engine, ctx,
+			Vectors.of(Strings.create("w/nothing-here"))));
 		// w/tree holds skillsets, not skills — the classic v/skills mistake.
 		assertEquals("w/tree", Skills.misdirectedSkillset(engine, ctx,
 			Vectors.of(Strings.create("w/tree"))).toString());

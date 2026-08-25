@@ -591,6 +591,24 @@ public class AgentAdapterTest {
 	}
 
 	@Test
+	public void testCreateWarnsWhenSkillRefIsADirectory() {
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "skills-wrong-kind-agent",
+			Fields.CONFIG, Maps.of(
+				"operation", "v/ops/llmagent/chat",
+				"llmOperation", "v/ops/langchain/openai",
+				"model", "gpt-5.4-mini",
+				"skills", Vectors.of(Strings.create("v/skills"))));
+		ACell result = engine.jobs().invokeOperation(
+			"v/ops/agent/create", input, RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		ACell warnings = RT.getIn(result, Fields.WARNINGS);
+		assertNotNull(warnings, "a skill ref pointing at a directory should be flagged");
+		assertTrue(warnings.toString().contains(
+			"skill is a skillset, not a skill: v/skills"), warnings.toString());
+	}
+
+	@Test
 	public void testCreateWarnsOnMalformedSkills() {
 		// A malformed config.skills THROWS at transition time — flag it at
 		// create, when it's fixable.

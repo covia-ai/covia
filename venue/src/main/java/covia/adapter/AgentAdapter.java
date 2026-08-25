@@ -803,6 +803,10 @@ public class AgentAdapter extends AAdapter {
 		} catch (RuntimeException e) {
 			return out.conj(Strings.create("skills config invalid: " + describeFailure(e)));
 		}
+		AString misdirectedSkill = Skills.misdirectedSkill(engine, ctx, sources.skills());
+		if (misdirectedSkill != null) {
+			out = out.conj(Strings.create("skill is a skillset, not a skill: " + misdirectedSkill));
+		}
 		AString misdirected = Skills.misdirectedSkillset(engine, ctx, sources.skillsets());
 		if (misdirected != null) {
 			out = out.conj(Strings.create("skillset holds skillsets, not skills: " + misdirected));
