@@ -1,9 +1,15 @@
 package covia.adapter;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
+import convex.auth.did.DIDVerifier;
+import convex.auth.ucan.Capability;
+import convex.auth.ucan.UCAN;
+import convex.auth.ucan.UCANValidator;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -11,12 +17,12 @@ import convex.core.data.AVector;
 import convex.core.data.Blob;
 import convex.core.data.Hash;
 import convex.core.data.Maps;
+import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
-import convex.auth.ucan.UCAN;
-import convex.auth.ucan.UCANValidator;
+import covia.exception.AuthException;
 import covia.grid.Grid;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -31,6 +37,7 @@ import covia.venue.UcanJwtValidator;
  * Adapter that proxies Covia grid operations to the local engine or a remote venue.
  */
 public class GridAdapter extends AAdapter {
+	private static final AString AUTHENTICATE_AS = Strings.intern("authenticateAs");
 
     /** Asset hash for synchronous grid run operation. */
     public static Hash RUN_OPERATION;
@@ -190,69 +197,76 @@ public class GridAdapter extends AAdapter {
 		return 0;
 	}
 
-    /** The ability a caller grants this venue to relay a hop as itself:
-     *  a token {@code {iss: caller, aud: <thisVenue>, att: [{…, can: "venue/relay"}]}}
-     *  is both the instruction and the authorisation — no mode flag. */
-    static final AString RELAY_ABILITY = convex.core.data.Strings.intern("venue/relay");
+	/** Ability authorising an explicit {@code authenticateAs:"venue"} request. */
+	static final AString RELAY_ABILITY = Strings.intern("venue/relay");
 
-    /**
-     * Resolves the target venue for a grid op, forwarding the caller's authority
-     * (C3a, covia#100). Authority travels ONLY in the {@code ucans} proof channel
-     * — never in operation input (which is persisted in job records):
-     * <ul>
-     *   <li><b>Proofs are relayed, audience-filtered.</b> Only tokens provably
-     *       admissible at the target travel: audienced to the principal acting
-     *       there, or to the target itself. Tokens audienced elsewhere are
-     *       guaranteed inert at the target (the audience check fails at use), so
-     *       forwarding them would be pure disclosure of the caller's other
-     *       grants/relationships. The caller curates what it presents; the relay
-     *       drops only the provably-irrelevant.</li>
-     *   <li><b>Caller identity</b> travels as an identity token the caller minted
-     *       (a UCAN with empty {@code att}, audienced to the TARGET venue) inside
-     *       their {@code ucans}; the target's ingress verifies the caller's own
-     *       signature — zero trust in this relay. Nothing to do here beyond
-     *       forwarding it.</li>
-     *   <li><b>Venue-as-delegate:</b> when the caller has granted THIS venue a
-     *       {@code venue/relay} capability (token issued by the caller, audienced
-     *       to this venue), the hop authenticates as the venue itself, exercising
-     *       that delegation. The issuer-must-be-the-caller rule is inherent — a
-     *       delegation someone else minted for this venue is not an instruction
-     *       from this caller (confused-deputy safe).</li>
-     * </ul>
-     * No relay instruction and no identity token → anonymous hop (the explicit
-     * choice for public operations). A local target carries the complete caller
-     * context because there is no transport boundary at which to reconstruct it.
-     */
-    private Venue selectVenue(RequestContext ctx, AString venueSpec, ACell input) {
-        if (venueSpec != null) {
-            return connectRemote(ctx, venueSpec);
-        }
-        LocalVenue lv = new LocalVenue(engine);
-        // An in-process hop has no transport boundary at which to reconstruct
-        // authority. Carry the complete immutable context so agent caps,
-        // sub-principal scope, proofs, cancellation and parent job scope survive.
-        lv.setRequestContext(ctx);
-        return lv;
-    }
+	/**
+	 * Resolves the target venue for a grid op. The operation input explicitly
+	 * chooses authentication behaviour with {@code authenticateAs}; credentials
+	 * authenticate and UCANs authorise, with no token-presence mode switch:
+	 * <ul>
+	 *   <li>{@code anonymous} (default): no authentication and no grants.</li>
+	 *   <li>{@code caller}: requires a target-audienced, empty-att identity
+	 *       credential from the caller; it travels in Authorization, while only
+	 *       non-empty grants audienced to that caller travel in {@code ucans}.</li>
+	 *   <li>{@code venue}: explicitly asks this venue to authenticate as itself;
+	 *       a caller-issued {@code venue/relay} grant must authorise that request.
+	 *       Only grants audienced to this venue are forwarded.</li>
+	 * </ul>
+	 * A local target carries the complete caller context because there is no
+	 * transport boundary at which to reconstruct it.
+	 */
+	private Venue selectVenue(RequestContext ctx, AString venueSpec, ACell input) {
+		if (venueSpec != null) return connectRemote(ctx, venueSpec, input);
+		LocalVenue lv = new LocalVenue(engine);
+		// An in-process hop has no transport boundary at which to reconstruct
+		// authority. Carry the complete immutable context so agent caps,
+		// sub-principal scope, proofs, cancellation and parent job scope survive.
+		lv.setRequestContext(ctx);
+		return lv;
+	}
 
-    private Venue connectRemote(RequestContext ctx, AString venueSpec) {
-        AString venueDID = engine.getDIDString();
-        java.util.List<UCAN> tokens = parsedRawUcans(ctx, engine.didVerifier());
+	private Venue connectRemote(RequestContext ctx, AString venueSpec, ACell input) {
+		AString venueDID = engine.getDIDString();
+		List<UCAN> tokens = parsedRawUcans(ctx, engine.didVerifier());
+		AString modeCell = RT.ensureString(RT.getIn(input, AUTHENTICATE_AS));
+		String mode = (modeCell != null) ? modeCell.toString() : "anonymous";
 
-        boolean relayAsSelf = hasRelayInstruction(tokens, ctx.getCallerDID(), venueDID);
-        VenueAuth auth = relayAsSelf
-            ? VenueAuth.identityKeyPair(engine.getKeyPair(), venueDID.toString(),
-				targetVenueDID(venueSpec))
-            : VenueAuth.none();
+		VenueAuth auth;
+		AString principal;
+		switch (mode) {
+			case "anonymous" -> {
+				auth = VenueAuth.none();
+				principal = null;
+			}
+			case "caller" -> {
+				AString targetDID = Strings.create(targetVenueDID(venueSpec));
+				String credential = identityCredential(ctx, tokens, ctx.getCallerDID(), targetDID);
+				if (credential == null) {
+					throw new AuthException("authenticateAs=caller requires an in-date, empty-att "
+						+ "identity credential issued by the caller to " + targetDID);
+				}
+				auth = VenueAuth.bearer(credential);
+				principal = ctx.getCallerDID();
+			}
+			case "venue" -> {
+				AString targetDID = Strings.create(targetVenueDID(venueSpec));
+				if (!hasRelayGrant(tokens, ctx.getCallerDID(), venueDID)) {
+					throw new AuthException("authenticateAs=venue requires venue/relay on "
+						+ ctx.getCallerDID() + " granted to " + venueDID);
+				}
+				auth = VenueAuth.identityKeyPair(engine.getKeyPair(), venueDID.toString(),
+					targetDID.toString());
+				principal = venueDID;
+			}
+			default -> throw new IllegalArgumentException(
+				"authenticateAs must be one of: anonymous, caller, venue");
+		}
 
-        // The principal acting at the target: this venue when relaying as itself
-        // (the delegation chain's leaf is audienced to us), else the caller.
-        AString principal = relayAsSelf ? venueDID : ctx.getCallerDID();
-
-        Venue venue = Grid.connect(venueSpec.toString(), auth);
-        venue.setUcans(admissibleTokens(ctx, tokens, principal));
-        return venue;
-    }
+		Venue venue = Grid.connect(venueSpec.toString(), auth);
+		venue.setUcans(admissibleGrants(ctx, tokens, principal));
+		return venue;
+	}
 
 	/** Resolve the target identity once for audience-bound venue authentication. */
 	private static String targetVenueDID(AString venueSpec) {
@@ -273,101 +287,116 @@ public class GridAdapter extends AAdapter {
 			AString path, ACell value) {
 		ACell writeInput = Maps.of(Fields.PATH, path, Fields.VALUE, value);
 		RequestContext writeCtx = ctx.withInvocation(writeInput, null);
-		engine.requireResourceAccess(writeCtx, path, convex.auth.ucan.Capability.CRUD_WRITE);
-		Venue venue = connectRemote(ctx, venueSpec);
+		engine.requireResourceAccess(writeCtx, path, Capability.CRUD_WRITE);
+		// A foreign output path is itself an explicit request to write remotely as
+		// the current caller. The identity credential authenticates that caller;
+		// its mere presence still cannot select this behaviour.
+		Venue venue = connectRemote(ctx, venueSpec,
+			Maps.of(AUTHENTICATE_AS, Strings.create("caller")));
 		return venue.invoke("v/ops/covia/write",
 				writeInput)
 			.thenCompose(Job::future);
 	}
 
-    /**
-     * True when the caller has instructed this venue to relay as itself: a
-     * presented token issued BY the caller, audienced TO this venue, carrying a
-     * capability whose ability covers {@link #RELAY_ABILITY}, still in-date.
-     * Signature/chain were verified at transport ingress.
-     */
-    static boolean hasRelayInstruction(java.util.List<UCAN> tokens,
-            AString caller, AString venueDID) {
-        if (tokens == null || caller == null) return false;
-        long now = System.currentTimeMillis() / 1000;
-        for (UCAN token : tokens) {
-            if (!caller.equals(token.getIssuer())) continue;      // instruction must come from OUR caller
-            if (!venueDID.equals(token.getAudience())) continue;  // ...and be addressed to US
-            if (!UCANValidator.checkTemporalBounds(token, now)) continue;
-            AVector<ACell> att = token.getCapabilities();
-            if (att == null) continue;
-            for (long i = 0; i < att.count(); i++) {
-                AMap<AString, ACell> cap = RT.castMap(att.get(i));
-                if (cap == null) continue;
-                AString can = RT.ensureString(cap.get(convex.auth.ucan.Capability.CAN));
-                if (convex.auth.ucan.Capability.abilityCovers(can, RELAY_ABILITY)) return true;
-            }
-        }
-        return false;
-    }
+	/**
+	 * True when the caller has granted this venue permission to relay as itself.
+	 * This is an authorisation predicate only; callers must separately request
+	 * {@code authenticateAs:"venue"} in the grid operation input.
+	 */
+	static boolean hasRelayGrant(List<UCAN> tokens, AString caller, AString venueDID) {
+		if (tokens == null || caller == null) return false;
+		long now = System.currentTimeMillis() / 1000;
+		for (UCAN token : tokens) {
+			if (!caller.equals(token.getIssuer())) continue;      // grant must come from OUR caller
+			if (!venueDID.equals(token.getAudience())) continue;  // ...and be addressed to US
+			if (!UCANValidator.checkTemporalBounds(token, now)) continue;
+			AVector<ACell> att = token.getCapabilities();
+			if (att == null) continue;
+			for (long i = 0; i < att.count(); i++) {
+				AMap<AString, ACell> cap = RT.castMap(att.get(i));
+				if (cap == null) continue;
+				if (!caller.equals(RT.ensureString(cap.get(Capability.WITH)))) continue;
+				AString can = RT.ensureString(cap.get(Capability.CAN));
+				if (Capability.abilityCovers(can, RELAY_ABILITY)) return true;
+			}
+		}
+		return false;
+	}
 
-    /**
-     * Filters the caller's raw tokens for a hop, relaying only what could be
-     * admissible at the target. Provably inert tokens are dropped — forwarding
-     * them would be pure disclosure of the caller's unrelated grants:
-     * <ul>
-     *   <li><b>expired / unparseable</b> — grant nothing anywhere;</li>
-     *   <li><b>audienced to a non-principal</b> — a token audienced to the local
-     *       caller when the hop's principal is this venue (relay-as-self) can
-     *       authorise nothing at the target.</li>
-     * </ul>
-     * Tokens audienced to <em>other</em> identities are kept: the target's DID is
-     * not generally known before contact (URL venue specs), so a token audienced
-     * "elsewhere" may be the caller's identity token for the target. Presentation
-     * remains the caller's disclosure choice — present per-request, not a wallet.
-     * Returns raw JWT strings; {@code tokens} is index-aligned with
-     * {@link RequestContext#getRawUcans()}.
-     */
-    static java.util.List<String> admissibleTokens(RequestContext ctx,
-            java.util.List<UCAN> tokens, AString principal) {
-        AVector<ACell> raw = ctx.getRawUcans();
-        if (raw == null || tokens == null) return null;
-        long now = System.currentTimeMillis() / 1000;
-        AString caller = ctx.getCallerDID();
-        java.util.List<String> out = new java.util.ArrayList<>();
-        for (int i = 0; i < raw.count(); i++) {
-            AString jwt = RT.ensureString(raw.get(i));
-            UCAN token = (i < tokens.size()) ? tokens.get(i) : null;
-            if (jwt == null || token == null) continue;                    // unparseable → don't relay
-            if (!UCANValidator.checkTemporalBounds(token, now)) continue;  // expired → inert
-            AString aud = token.getAudience();
-            if (aud == null) continue;
-            // Provably inert: audienced to the local caller while the principal
-            // at the target is someone else (this venue, relay-as-self mode).
-            if (!aud.equals(principal) && aud.equals(caller)) continue;
-            out.add(jwt.toString());
-        }
-        return out.isEmpty() ? null : out;
-    }
+	/**
+	 * Filters raw tokens down to in-date, non-empty capability grants whose
+	 * audience is exactly the principal authenticated at the target. Identity
+	 * credentials never enter the grant channel. Returns raw JWT strings;
+	 * {@code tokens} is index-aligned with {@link RequestContext#getRawUcans()}.
+	 */
+	static List<String> admissibleGrants(RequestContext ctx,
+			List<UCAN> tokens, AString principal) {
+		AVector<ACell> raw = ctx.getRawUcans();
+		if (raw == null || tokens == null || principal == null) return null;
+		long now = System.currentTimeMillis() / 1000;
+		List<String> out = new ArrayList<>();
+		for (int i = 0; i < raw.count(); i++) {
+			AString jwt = RT.ensureString(raw.get(i));
+			UCAN token = (i < tokens.size()) ? tokens.get(i) : null;
+			if (jwt == null || token == null) continue;                    // unparseable → don't relay
+			if (!UCANValidator.checkTemporalBounds(token, now)) continue;  // expired → inert
+			AString aud = token.getAudience();
+			AVector<ACell> capabilities = token.getCapabilities();
+			if (aud == null || !aud.equals(principal)
+					|| capabilities == null || capabilities.isEmpty()) continue;
+			out.add(jwt.toString());
+		}
+		return out.isEmpty() ? null : out;
+	}
 
-    /** Parses the caller's raw transport tokens (already signature-verified at
-     *  ingress) for audience/issuer inspection; null-padded on parse failure so
-     *  indices align with {@link RequestContext#getRawUcans()}. */
-    static java.util.List<UCAN> parsedRawUcans(RequestContext ctx,
-            convex.auth.did.DIDVerifier verifier) {
-        AVector<ACell> raw = ctx.getRawUcans();
-        if (raw == null || raw.isEmpty()) return null;
-        java.util.List<UCAN> out = new java.util.ArrayList<>();
-        long now = System.currentTimeMillis() / 1000;
-        for (long i = 0; i < raw.count(); i++) {
-            UCAN token = null;
-            AString jwt = RT.ensureString(raw.get(i));
-            if (jwt != null) {
-                try {
-                    token = UcanJwtValidator.validateJWT(jwt, now, verifier);
-                } catch (Exception e) {
-                    // defective token: null slot, grants nothing
-                }
-            }
-            out.add(token);
-        }
-        return out;
-    }
+	/** Finds the caller's explicit, target-audienced identity credential. */
+	static String identityCredential(RequestContext ctx, List<UCAN> tokens,
+			AString caller, AString targetVenueDID) {
+		AVector<ACell> raw = ctx.getRawUcans();
+		if (raw == null || tokens == null || caller == null || targetVenueDID == null) return null;
+		long now = System.currentTimeMillis() / 1000;
+		String found = null;
+		for (int i = 0; i < raw.count(); i++) {
+			AString jwt = RT.ensureString(raw.get(i));
+			UCAN token = (i < tokens.size()) ? tokens.get(i) : null;
+			if (jwt == null || token == null
+					|| !UCANValidator.checkTemporalBounds(token, now)
+					|| !caller.equals(token.getIssuer())
+					|| !targetVenueDID.equals(token.getAudience())) continue;
+			AVector<ACell> capabilities = token.getCapabilities();
+			if (capabilities == null || !capabilities.isEmpty()) continue;
+			if (found != null && !found.equals(jwt.toString())) {
+				throw new IllegalArgumentException(
+					"Multiple caller identity credentials were supplied for " + targetVenueDID);
+			}
+			found = jwt.toString();
+		}
+		return found;
+	}
+
+	/**
+	 * Parses the caller's raw transport tokens for audience/issuer inspection;
+	 * null-padded on failure so indices align with {@link RequestContext#getRawUcans()}.
+	 */
+	static List<UCAN> parsedRawUcans(RequestContext ctx, DIDVerifier verifier) {
+		AVector<ACell> raw = ctx.getRawUcans();
+		if (raw == null || raw.isEmpty()) return null;
+		List<UCAN> out = new ArrayList<>();
+		long now = System.currentTimeMillis() / 1000;
+		for (long i = 0; i < raw.count(); i++) {
+			UCAN token = null;
+			AString jwt = RT.ensureString(raw.get(i));
+			if (jwt != null) {
+				try {
+					token = UcanJwtValidator.validateJWT(jwt, now, verifier);
+				} catch (Exception e) {
+					// Defective token: null slot, grants nothing.
+				}
+			}
+			out.add(token);
+		}
+		return out;
+	}
 
     private Blob parseJobId(ACell jobIdCell) {
         if (jobIdCell == null) return null;

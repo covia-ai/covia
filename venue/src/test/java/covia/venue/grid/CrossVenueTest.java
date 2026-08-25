@@ -290,11 +290,8 @@ public class CrossVenueTest {
 
 	// ============== C3a: grid hop forwards the caller's authority ==============
 	//
-	// Authority travels ONLY in the ucans proof channel — grid op input carries
-	// data only (a credential in input would be persisted in the job record).
-	// Tokens are self-describing: an identity token (empty att, audienced to the
-	// TARGET venue) proves the caller there; a venue/relay delegation (issued by
-	// the caller, audienced to THIS venue) instructs the venue to hop as itself.
+	// The grid input explicitly selects authentication behaviour. Credentials
+	// authenticate; UCANs only authorise the selected behaviour and target action.
 
 	/** Mints an identity token: a UCAN with EMPTY att, audienced to {@code venueDID}
 	 *  — pure proof of identity for that venue, unusable anywhere else. */
@@ -305,9 +302,8 @@ public class CrossVenueTest {
 	/**
 	 * Passthrough hop: Bob calls {@code grid:run} on venue A targeting venue B,
 	 * presenting (in his {@code ucans}) Alice's self-sovereign grant plus his
-	 * identity token <em>for venue B</em>. A relays the tokens; B verifies Bob's
-	 * own signature on the identity token (zero trust in A) and authorises the
-	 * read via Alice's grant. The grid op input carries no authority at all.
+	 * identity credential <em>for venue B</em>. authenticateAs=caller explicitly
+	 * selects it; A sends it as Authorization and forwards Alice's grant separately.
 	 */
 	@Test
 	public void gridHopForwardsCallerAuthority() throws Exception {
@@ -337,6 +333,7 @@ public class CrossVenueTest {
 		Job hop = bobOnA.invokeAndWait(OP_GRID_RUN, Maps.of(
 			Fields.OPERATION, "v/ops/covia/read",
 			Fields.VENUE, TwoVenueTestServer.BASE_URL_B,
+			"authenticateAs", "caller",
 			Fields.INPUT, Maps.of(Fields.PATH, aliceDID + "/w/hop/doc")));
 		assertEquals(Status.COMPLETE, hop.getStatus(),
 			"grid hop with relayed caller authority should complete: "
@@ -352,6 +349,7 @@ public class CrossVenueTest {
 		Job anon = bobNoIdentity.invokeAndWait(OP_GRID_RUN, Maps.of(
 			Fields.OPERATION, "v/ops/covia/read",
 			Fields.VENUE, TwoVenueTestServer.BASE_URL_B,
+			"authenticateAs", "caller",
 			Fields.INPUT, Maps.of(Fields.PATH, aliceDID + "/w/hop/doc")));
 		assertNotEquals(Status.COMPLETE, anon.getStatus(),
 			"without an identity token the hop is anonymous and must be denied");
@@ -359,10 +357,9 @@ public class CrossVenueTest {
 
 	/**
 	 * Venue-as-delegate hop: Alice grants VENUE A a token carrying both her
-	 * {@code crud/read} authority and the {@code venue/relay} instruction
-	 * (iss = Alice, aud = venue A). No flag anywhere — the token is both the
-	 * authorisation and the instruction. A hops authenticated as itself; at B
-	 * the chain roots at Alice = owner.
+	 * {@code crud/read} authority and a {@code venue/relay} grant
+	 * (iss = Alice, aud = venue A). authenticateAs=venue is the separate
+	 * instruction. A authenticates as itself; at B the chain roots at Alice.
 	 */
 	@Test
 	public void gridHopVenueRelayExercisesDelegation() throws Exception {
@@ -373,8 +370,8 @@ public class CrossVenueTest {
 		aliceOnB.invokeAndWait(Strings.create("v/ops/covia/write"),
 			Maps.of(Fields.PATH, "w/deleg/doc", Fields.VALUE, Strings.create("delegated content")));
 
-		// One token: Alice → venue A, granting read over her namespace AND the
-		// relay instruction (venue/relay over her own DID).
+		// One token: Alice → venue A, granting read over her namespace and
+		// authorising venue relay over her own DID.
 		String toVenueA = UcanTokens.relayDelegation(aliceKP,
 			TwoVenueTestServer.DID_A, 3600,
 			aliceDID + "/w/", Capability.CRUD_READ.toString());
@@ -383,9 +380,17 @@ public class CrossVenueTest {
 			URI.create(TwoVenueTestServer.BASE_URL_A), VenueAuth.keyPair(aliceKP));
 		aliceOnA.setUcans(java.util.List.of(toVenueA));
 
+		Job inert = aliceOnA.invokeAndWait(OP_GRID_RUN, Maps.of(
+			Fields.OPERATION, "v/ops/covia/read",
+			Fields.VENUE, TwoVenueTestServer.BASE_URL_B,
+			Fields.INPUT, Maps.of(Fields.PATH, aliceDID + "/w/deleg/doc")));
+		assertNotEquals(Status.COMPLETE, inert.getStatus(),
+			"a venue/relay grant must be inert until authenticateAs=venue is requested");
+
 		Job hop = aliceOnA.invokeAndWait(OP_GRID_RUN, Maps.of(
 			Fields.OPERATION, "v/ops/covia/read",
 			Fields.VENUE, TwoVenueTestServer.BASE_URL_B,
+			"authenticateAs", "venue",
 			Fields.INPUT, Maps.of(Fields.PATH, aliceDID + "/w/deleg/doc")));
 		assertEquals(Status.COMPLETE, hop.getStatus(),
 			"venue/relay hop under the caller's delegation should complete: "
@@ -395,24 +400,21 @@ public class CrossVenueTest {
 	}
 
 	/**
-	 * Confused-deputy guard: a relay instruction is only an instruction when
-	 * ISSUED BY the authenticated caller. Carol presenting a {@code venue/relay}
-	 * token Bob minted for venue A gets no relay — the hop stays anonymous and
-	 * the read is denied at B.
+	 * Confused-deputy guard: an explicit venue-mode request is authorised only by
+	 * a relay grant issued by the authenticated caller. Carol cannot use Bob's.
 	 */
 	@Test
-	public void gridHopRelayInstructionMustComeFromCaller() throws Exception {
+	public void gridHopRelayGrantMustComeFromCaller() throws Exception {
 		AKeyPair aliceKP = AKeyPair.generate();
 		AString aliceDID = UCAN.toDIDKey(aliceKP.getAccountKey());
 		AKeyPair bobKP = AKeyPair.generate();
 		AKeyPair carolKP = AKeyPair.generate();
 
-		// Bob (not Carol) mints a venue/relay token for venue A.
+		// Bob (not Carol) mints a venue/relay grant for venue A.
 		String bobRelay = UcanTokens.relayDelegation(bobKP,
 			TwoVenueTestServer.DID_A, 3600);
 
-		// Carol presents Bob's token: issuer != caller → not an instruction from
-		// Carol → anonymous hop → denied at B.
+		// Carol explicitly requests venue mode but presents Bob's grant.
 		VenueHTTP carolOnA = VenueHTTP.create(
 			URI.create(TwoVenueTestServer.BASE_URL_A), VenueAuth.keyPair(carolKP));
 		carolOnA.setUcans(java.util.List.of(bobRelay));
@@ -420,8 +422,9 @@ public class CrossVenueTest {
 		Job hop = carolOnA.invokeAndWait(OP_GRID_RUN, Maps.of(
 			Fields.OPERATION, "v/ops/covia/read",
 			Fields.VENUE, TwoVenueTestServer.BASE_URL_B,
+			"authenticateAs", "venue",
 			Fields.INPUT, Maps.of(Fields.PATH, aliceDID + "/w/deleg/doc")));
 		assertNotEquals(Status.COMPLETE, hop.getStatus(),
-			"a relay token issued by someone other than the caller must not trigger relay");
+			"a relay grant issued by someone other than the caller cannot authorise venue mode");
 	}
 }

@@ -101,8 +101,8 @@ public class UCANTest {
 		// Presented proofs are additive grants, never subtractive: to act with
 		// reduced authority, use a narrower Authority (Authority.of(did, grants))
 		// or present only the UCANs the request needs.
-		RequestContext rctx = AuthMiddleware.withTransportAuth(
-			RequestContext.of(ALICE_DID), null, null);
+		RequestContext rctx = AuthMiddleware.withTransportGrants(
+			RequestContext.of(ALICE_DID), null);
 		assertNull(rctx.getCaps());
 		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "w/other/free", Fields.VALUE, Strings.create("ok")),
@@ -110,26 +110,24 @@ public class UCANTest {
 	}
 
 	@Test
-	public void testTransportDelegationSeparatesActorUserAndScope() {
+	public void testSudoGrantDoesNotSelectNamespaceOrScope() {
 		long exp = (System.currentTimeMillis() / 1000) + HOUR;
-		AString bearer = UCAN.createJWT(BOB_KP, venueKP.getAccountKey(), exp,
-			Vectors.empty(), Vectors.empty());
 		AString delegation = UCAN.createJWT(ALICE_KP, BOB_KP.getAccountKey(), exp,
-			Vectors.of(Capability.create(ALICE_DID, Abilities.USER_ACT),
+			Vectors.of(Capability.create(ALICE_DID, Abilities.USER_SUDO),
 				Capability.create(Strings.create(ALICE_DID + "/w/shared"), Capability.CRUD_READ)),
 			Vectors.empty());
 
-		RequestContext delegated = AuthMiddleware.withTransportAuth(
-			BOB, bearer, Vectors.of(delegation), venueDID, DIDVerifier.CONVEX);
-		assertEquals(BOB_DID, delegated.getCallerDID(), "the audience is the actor");
-		assertEquals(ALICE_DID, delegated.getUserDID(), "the issuer supplies the user namespace");
-		assertEquals(Vectors.empty(), delegated.getCaps(),
-			"on-behalf execution is proof-bounded, not ambiently unrestricted");
-		assertEquals(2, delegated.getProofs().count(), "bearer and body proof are retained");
+		RequestContext ctx = AuthMiddleware.withTransportGrants(
+			BOB, Vectors.of(delegation), DIDVerifier.CONVEX);
+		assertEquals(BOB_DID, ctx.getCallerDID());
+		assertEquals(BOB_DID, ctx.getUserDID(),
+			"a grant cannot instruct the venue to enter its issuer's namespace");
+		assertNull(ctx.getCaps(), "a grant does not attenuate the authenticated caller");
+		assertEquals(1, ctx.getProofs().count());
 	}
 
 	@Test
-	public void testTransportIdentityAndIrrelevantProofsDoNotSelectNamespace() {
+	public void testBodyIdentityCredentialDoesNotAuthenticate() {
 		long exp = (System.currentTimeMillis() / 1000) + HOUR;
 		AString identity = UCAN.createJWT(ALICE_KP, venueKP.getAccountKey(), exp,
 			Vectors.empty(), Vectors.empty());
@@ -138,12 +136,14 @@ public class UCANTest {
 				Strings.create(ALICE_DID + "/w/"), Capability.CRUD_READ)),
 			Vectors.empty());
 
-		RequestContext ctx = AuthMiddleware.withTransportAuth(
-			BOB, null, Vectors.of(identity, wrongAudience), venueDID, DIDVerifier.CONVEX);
-		assertEquals(BOB_DID, ctx.getCallerDID());
-		assertEquals(BOB_DID, ctx.getUserDID(),
-			"empty identity tokens and grants audienced elsewhere are not act-as delegations");
-		assertNull(ctx.getCaps(), "ordinary caller authority remains unrestricted in its own namespace");
+		RequestContext ctx = AuthMiddleware.withTransportGrants(
+			RequestContext.ANONYMOUS, Vectors.of(identity, wrongAudience), DIDVerifier.CONVEX);
+		assertNull(ctx.getCallerDID(),
+			"proof-channel tokens cannot establish authentication");
+		assertEquals(1, ctx.getProofs().count(),
+			"only the capability-bearing token enters proof evaluation");
+		assertEquals(2, ctx.getRawUcans().count(),
+			"the empty-att target credential remains inert relay material");
 	}
 
 	@Test
@@ -153,8 +153,8 @@ public class UCANTest {
 			Vectors.of(Capability.create(
 				Strings.create(ALICE_DID + "/w/"), Capability.CRUD_READ)), Vectors.empty());
 
-		RequestContext ctx = AuthMiddleware.withTransportAuth(
-			BOB, null, Vectors.of(readGrant), venueDID, DIDVerifier.CONVEX);
+		RequestContext ctx = AuthMiddleware.withTransportGrants(
+			BOB, Vectors.of(readGrant), DIDVerifier.CONVEX);
 		assertEquals(BOB_DID, ctx.getUserDID(),
 			"a data grant alone must not relocate the caller's jobs or implicit paths");
 		assertNull(ctx.getCaps(), "the caller keeps ambient authority over its own namespace");
@@ -162,19 +162,20 @@ public class UCANTest {
 	}
 
 	@Test
-	public void testTransportRejectsAmbiguousDelegatingUsers() {
+	public void testMultipleSudoGrantsRemainInert() {
 		long exp = (System.currentTimeMillis() / 1000) + HOUR;
 		AString alice = UCAN.createJWT(ALICE_KP, BOB_KP.getAccountKey(), exp,
-			Vectors.of(Capability.create(ALICE_DID, Abilities.USER_ACT),
+			Vectors.of(Capability.create(ALICE_DID, Abilities.USER_SUDO),
 				Capability.create(Strings.create(ALICE_DID + "/w/"), Capability.CRUD_READ)), Vectors.empty());
 		AString carol = UCAN.createJWT(CAROL_KP, BOB_KP.getAccountKey(), exp,
-			Vectors.of(Capability.create(CAROL_DID, Abilities.USER_ACT),
+			Vectors.of(Capability.create(CAROL_DID, Abilities.USER_SUDO),
 				Capability.create(Strings.create(CAROL_DID + "/w/"), Capability.CRUD_READ)), Vectors.empty());
 
-		AuthException error = assertThrows(AuthException.class, () ->
-			AuthMiddleware.withTransportAuth(BOB, null, Vectors.of(alice, carol),
-				venueDID, DIDVerifier.CONVEX));
-		assertTrue(error.getMessage().contains("Ambiguous delegated namespace"));
+		RequestContext ctx = AuthMiddleware.withTransportGrants(
+			BOB, Vectors.of(alice, carol), DIDVerifier.CONVEX);
+		assertEquals(BOB_DID, ctx.getUserDID());
+		assertEquals(2, ctx.getProofs().count(),
+			"even several grants cannot select an execution target");
 	}
 
 	// ========== ucan:issue ==========

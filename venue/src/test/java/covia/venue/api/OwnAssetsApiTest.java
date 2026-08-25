@@ -15,7 +15,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestInstance.Lifecycle;
 
-import convex.auth.ucan.Capability;
 import convex.auth.ucan.UCAN;
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
@@ -53,8 +52,7 @@ public class OwnAssetsApiTest {
 		callerDID = UCAN.toDIDKey(kp.getAccountKey()).toString();
 		long exp = (System.currentTimeMillis() / 1000) + 3600;
 		UCAN token = UCAN.create(kp, TestServer.ENGINE.getAccountKey(), exp,
-			Vectors.of(Capability.create(Strings.create(callerDID + "/w/"), Capability.CRUD_READ)),
-			Vectors.empty());
+			Vectors.empty(), Vectors.empty());
 		jwt = token.toJWT(kp).toString();
 		client = VenueHTTP.create(URI.create(TestServer.BASE_URL), VenueAuth.bearer(jwt));
 		client.setTimeout(5000);

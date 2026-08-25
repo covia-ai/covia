@@ -20,7 +20,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestInstance.Lifecycle;
 
-import convex.auth.ucan.Capability;
 import convex.auth.ucan.UCAN;
 import convex.core.crypto.AKeyPair;
 import convex.core.crypto.Hashing;
@@ -302,15 +301,13 @@ public class VenueHTTPTest {
 		// returns the issuer DID). The Authorization header must actually carry
 		// identity through to a gated venue, not merely be present.
 		AKeyPair callerKP = AKeyPair.generate();
-		AString callerDID = UCAN.toDIDKey(callerKP.getAccountKey());
 		long exp = (System.currentTimeMillis() / 1000) + 3600;
 
 		// Audience = THIS venue (so the bearer passes audience validation); the
 		// issuer (caller) is still attributed as the identity.
 		UCAN token = UCAN.create(callerKP,
 			authServer.getEngine().getAccountKey(), exp,
-			Vectors.of(Capability.create(Strings.create(callerDID + "/w/"), Capability.CRUD_READ)),
-			Vectors.empty());
+			Vectors.empty(), Vectors.empty());
 		String jwt = token.toJWT(callerKP).toString();
 
 		VenueHTTP authed = VenueHTTP.create(URI.create(authBase), VenueAuth.bearer(jwt));

@@ -16,6 +16,12 @@
 				"venue": {
 					"type": "string",
 					"description": "Optional remote venue URL or DID. Omit to run on this venue."
+				},
+				"authenticateAs": {
+					"type": "string",
+					"enum": ["anonymous", "caller", "venue"],
+					"default": "anonymous",
+					"description": "Explicit remote authentication mode. caller requires a target-audienced empty-att identity credential; venue requires a venue/relay grant. UCAN grant presence never selects a mode."
 				}
 			},
 			"required": ["operation"]

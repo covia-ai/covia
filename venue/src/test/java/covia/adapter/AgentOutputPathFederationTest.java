@@ -1,6 +1,7 @@
 package covia.adapter;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -22,14 +23,14 @@ import covia.venue.RequestContext;
 import covia.venue.TwoVenueTestServer;
 
 /**
- * Federation coverage for issue #71 output handoffs. The destination is a
- * foreign did:web lattice path on venue B; venue A must route the write rather
- * than creating a local shadow user with that DID.
+ * Federation coverage for issue #71 output handoffs. A foreign did:web
+ * destination must enter the remote caller-authentication path rather than
+ * becoming a local shadow user or silently falling back to anonymous.
  */
 public class AgentOutputPathFederationTest {
 
 	@Test
-	public void outputPathRoutesForeignDidWebWriteAndFailsClosedWithoutAuthority() {
+	public void outputPathFailsClosedWithoutRemoteIdentityCredential() {
 		AString caller = Strings.create("did:key:zOutputPathFederationCaller");
 		RequestContext ctx = RequestContext.of(caller);
 		String agentId = "remote-output-worker";
@@ -51,16 +52,15 @@ public class AgentOutputPathFederationTest {
 				Fields.OUTPUT_PATH, outputPath),
 			ctx);
 		assertThrows(JobFailedException.class, () -> request.awaitResult(10_000));
-		assertTrue(request.getErrorMessage().contains("another user's resource"),
-			"Destination venue must enforce its ordinary cross-owner write gate");
+		assertTrue(request.getErrorMessage().contains("identity credential"),
+			"A remote output write must explicitly authenticate as its caller");
 		assertNull(TwoVenueTestServer.ENGINE_A.getVenueState().users().get(remoteOwner),
 			"Foreign did:web owner must not be materialised as a local shadow user");
 		assertNull(TwoVenueTestServer.ENGINE_B.getVenueState().users().get(remoteOwner),
 			"Denied remote write must not materialise the destination owner either");
 
-		// Prove this was a federated attempt, not a locally-produced denial:
-		// venue B's public ledger contains the covia:write Job with our unique
-		// destination in its persisted input.
+		// Missing authentication fails before dispatch and cannot create a remote
+		// public Job as a side effect.
 		RequestContext publicB = RequestContext.of(
 			Strings.create(TwoVenueTestServer.DID_B + ":public"));
 		Index<Blob, ACell> jobs = TwoVenueTestServer.ENGINE_B.jobs().getJobs(publicB);
@@ -71,7 +71,8 @@ public class AgentOutputPathFederationTest {
 				break;
 			}
 		}
-		assertTrue(remoteJobFound, "Foreign outputPath must dispatch covia:write on venue B");
+		assertFalse(remoteJobFound,
+			"A missing caller credential must not fall back to an anonymous remote write");
 	}
 
 	@Test

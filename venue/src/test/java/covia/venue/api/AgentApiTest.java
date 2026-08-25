@@ -59,6 +59,7 @@ public class AgentApiTest {
 	private static final AString OP_CREATE = Strings.create("v/ops/agent/create");
 	private static final AString OP_DELETE = Strings.create("v/ops/agent/delete");
 	private static final AString OP_LIST   = Strings.create("v/ops/agent/list");
+	private static final AString OP_SUDO   = Strings.create("v/ops/user/sudo");
 
 	private AString callerDID;
 	private String jwt;
@@ -75,8 +76,7 @@ public class AgentApiTest {
 		callerDID = UCAN.toDIDKey(kp.getAccountKey());
 		long exp = (System.currentTimeMillis() / 1000) + 3600;
 		UCAN token = UCAN.create(kp, TestServer.ENGINE.getAccountKey(), exp,
-			Vectors.of(Capability.create(Strings.create(callerDID + "/w/"), Capability.CRUD_READ)),
-			Vectors.empty());
+			Vectors.empty(), Vectors.empty());
 		jwt = token.toJWT(kp).toString();
 		client = VenueHTTP.create(URI.create(TestServer.BASE_URL), VenueAuth.bearer(jwt));
 		client.setTimeout(5000);
@@ -215,8 +215,7 @@ public class AgentApiTest {
 		assertEquals(before + 1, jobCount(), "agent:list via invoke persists exactly one job");
 	}
 
-	/** #406: a user delegating to an intermediary keeps the intermediary as the
-	 * actor while implicit agent paths and the durable Job belong to the user. */
+	/** #406: grants are inert until the intermediary explicitly invokes user/sudo. */
 	@Test
 	public void testDelegatedCreateUsesIssuerNamespaceAndProofBounds() throws Exception {
 		AKeyPair ownerKey = AKeyPair.generate();
@@ -226,7 +225,7 @@ public class AgentApiTest {
 		long exp = (System.currentTimeMillis() / 1000) + 3600;
 		AString createGrant = UCAN.create(ownerKey, delegateKey.getAccountKey(), exp,
 			Vectors.of(
-				Capability.create(owner, Abilities.USER_ACT),
+				Capability.create(owner, Abilities.USER_SUDO),
 				Capability.create(Strings.create(owner + "/v/ops/agent/create"), Strings.create("invoke")),
 				Capability.create(Strings.create(owner + "/g/"), Abilities.AGENT_CREATE)),
 			Vectors.empty()).toJWT(ownerKey);
@@ -235,15 +234,26 @@ public class AgentApiTest {
 			URI.create(TestServer.BASE_URL), VenueAuth.keyPair(delegateKey));
 		delegated.setTimeout(5000);
 		delegated.setUcans(java.util.List.of(createGrant.toString()));
-		Job created = delegated.invokeAndWait(OP_CREATE, Maps.of(Fields.AGENT_ID, "delegated-agent"));
+
+		Job direct = delegated.invokeAndWait(OP_CREATE,
+			Maps.of(Fields.AGENT_ID, "grant-is-inert"));
+		assertEquals(Status.COMPLETE, direct.getStatus(), direct.getErrorMessage());
+		assertEquals(Strings.create(delegate + "/g/grant-is-inert"),
+			RT.getIn(direct.getData(), Fields.OUTPUT, Fields.ADDRESS),
+			"presenting a sudo grant must not itself select the owner's namespace");
+
+		Job created = delegated.invokeAndWait(OP_SUDO, Maps.of(
+			Fields.DID, owner,
+			Fields.OPERATION, OP_CREATE,
+			Fields.INPUT, Maps.of(Fields.AGENT_ID, "delegated-agent")));
 
 		assertEquals(Status.COMPLETE, created.getStatus(), created.getErrorMessage());
 		assertEquals(Strings.create(owner + "/g/delegated-agent"),
 			RT.getIn(created.getData(), Fields.OUTPUT, Fields.ADDRESS));
-		assertEquals(owner, RT.getIn(created.getData(), Fields.CALLER),
-			"the delegating user owns the job receipt");
-		assertEquals(delegate, RT.getIn(created.getData(), Fields.ACTOR),
-			"the intermediary remains auditable as the actor");
+		assertEquals(delegate, RT.getIn(created.getData(), Fields.CALLER),
+			"the explicit sudo wrapper remains the authenticated delegate's job");
+		assertNull(RT.getIn(created.getData(), Fields.ACTOR),
+			"authentication is unchanged; the wrapper caller and actor are the delegate");
 		assertNotNull(TestServer.ENGINE.getVenueState().users().get(owner).agent("delegated-agent"));
 		User delegateUser = TestServer.ENGINE.getVenueState().users().get(delegate);
 		assertTrue(delegateUser == null || delegateUser.agent("delegated-agent") == null,
@@ -252,11 +262,14 @@ public class AgentApiTest {
 		// Namespace selection cannot confer ambient owner authority: the token
 		// permits invocation but omits the action's agent/create capability.
 		AString invokeOnly = UCAN.create(ownerKey, delegateKey.getAccountKey(), exp,
-			Vectors.of(Capability.create(owner, Abilities.USER_ACT),
+			Vectors.of(Capability.create(owner, Abilities.USER_SUDO),
 				Capability.create(Strings.create(owner + "/v/ops/agent/create"), Strings.create("invoke"))),
 			Vectors.empty()).toJWT(ownerKey);
 		delegated.setUcans(java.util.List.of(invokeOnly.toString()));
-		Job denied = delegated.invokeAndWait(OP_CREATE, Maps.of(Fields.AGENT_ID, "not-authorised"));
+		Job denied = delegated.invokeAndWait(OP_SUDO, Maps.of(
+			Fields.DID, owner,
+			Fields.OPERATION, OP_CREATE,
+			Fields.INPUT, Maps.of(Fields.AGENT_ID, "not-authorised")));
 		assertEquals(Status.FAILED, denied.getStatus());
 		assertTrue(denied.getErrorMessage().contains("agent/create"), denied.getErrorMessage());
 		assertNull(TestServer.ENGINE.getVenueState().users().get(owner).agent("not-authorised"),

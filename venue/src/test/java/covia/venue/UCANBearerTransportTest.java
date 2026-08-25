@@ -36,10 +36,11 @@ import covia.grid.Job;
  * Integration tests for UCAN transport via {@code Authorization: Bearer <ucan-jwt>}
  * on the REST API. Verifies:
  * <ul>
- *   <li>A valid UCAN bearer token sets callerDID to the UCAN's issuer (IETF UCAN-HTTP)</li>
+ *   <li>A valid empty-att UCAN bearer authenticates its issuer</li>
+ *   <li>A capability-bearing UCAN is not accepted as an authentication credential</li>
  *   <li>Tampered or expired bearers fall through to the existing auth paths
  *       (anonymous, under public-access mode)</li>
- *   <li>Bearer and body {@code ucans} are merged through a single trust boundary</li>
+ *   <li>Body {@code ucans} authorise independently of bearer authentication</li>
  * </ul>
  */
 @TestInstance(Lifecycle.PER_CLASS)
@@ -117,6 +118,39 @@ public class UCANBearerTransportTest {
 		assertTrue(resp.statusCode() == 200 || resp.statusCode() == 201,
 			() -> "Legacy UCAN bearer should verify: " + resp.statusCode() + " / " + resp.body());
 		assertEquals(ALICE_DID, callerDIDOf(resp));
+	}
+
+	@Test
+	public void testCapabilityGrantCannotAuthenticateAsBearer() throws Exception {
+		long exp = (System.currentTimeMillis() / 1000) + 3600;
+		AString grant = UCAN.createJWT(ALICE_KP, engine.getAccountKey(), exp,
+			Vectors.of(Capability.create(ALICE_DID, Capability.CRUD_READ)),
+			Vectors.empty());
+
+		HttpResponse<String> resp = postInvoke(
+			"{\"operation\":\"v/test/ops/echo\",\"input\":{\"message\":\"hi\"}}",
+			grant.toString());
+		assertEquals(401, resp.statusCode(),
+			"a capability grant is authority, not an authentication credential");
+	}
+
+	@Test
+	public void testCapabilityGrantWithSubjectCannotFallThroughToJwtAuthentication()
+			throws Exception {
+		long exp = (System.currentTimeMillis() / 1000) + 3600;
+		AMap<AString, ACell> claims = Maps.of(
+			UCAN.ISS, ALICE_DID,
+			Fields.SUB, ALICE_DID,
+			UCAN.AUD, engine.getDIDString(),
+			UCAN.EXP, CVMLong.create(exp),
+			UCAN.ATT, Vectors.of(Capability.create(ALICE_DID, Capability.CRUD_READ)));
+		AString mixedRole = JWT.signPublic(claims, ALICE_KP);
+
+		HttpResponse<String> resp = postInvoke(
+			"{\"operation\":\"v/test/ops/echo\",\"input\":{\"message\":\"hi\"}}",
+			mixedRole.toString());
+		assertEquals(401, resp.statusCode(),
+			"adding JWT identity claims must not turn a capability grant into a credential");
 	}
 
 	/**
@@ -236,11 +270,9 @@ public class UCANBearerTransportTest {
 	}
 
 	/**
-	 * Bearer UCAN and body {@code ucans} merge through the same trust boundary.
-	 * Pattern: Bob bears his own invocation UCAN (iss=Bob — establishes
-	 * caller identity), and accompanies it with a venue-issued delegation
-	 * (iss=venue, aud=Bob, att=read Alice/w/) in the body. The venue
-	 * delegation grants Bob cross-user read access.
+	 * Bearer authentication and body authority remain separate. Bob uses an
+	 * empty-att credential to establish identity and independently presents
+	 * Alice's capability grant in the body.
 	 */
 	@Test
 	public void testBearerAndBodyDelegationGrantCrossUserRead() throws Exception {

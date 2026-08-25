@@ -438,11 +438,10 @@ public class CoviaAPI extends ACoviaAPI {
 	 * ref whose final segment is {@code content}, #368).
 	 */
 	private void serveAssetMeta(Context ctx, String ref) {
-		// Caller identity + transport UCAN authority (a bearer UCAN supplies the
-		// proof for cross-DID reads, per the IETF UCAN-HTTP convention).
+		// Caller identity comes from authentication; UCAN grants arrive separately.
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
-		AString bearer = ctx.attribute(AuthMiddleware.UCAN_BEARER_ATTR);
-		rctx = AuthMiddleware.withTransportAuth(rctx, bearer, null, null, engine().didVerifier());
+		rctx = AuthMiddleware.withTransportGrants(rctx,
+			AuthMiddleware.headerUcans(ctx), engine().didVerifier());
 
 		try {
 			Asset asset=resolveAssetReference(ref, rctx);
@@ -471,7 +470,7 @@ public class CoviaAPI extends ACoviaAPI {
 	 * {@code o/…}), or a DID URL — the same addressing scheme {@code invoke}
 	 * uses. Enforces the asset-read capability (consistent with the
 	 * {@code asset:get} operation); cross-DID reads are satisfied by a UCAN
-	 * bearer proof on the request.
+	 * grant presented through the request's proof channel.
 	 *
 	 * @param ref Asset reference (lattice address or bare hash)
 	 * @param ctx Request context (caller identity, grant scope, proofs)
@@ -633,8 +632,8 @@ public class CoviaAPI extends ACoviaAPI {
 			}
 
 			RequestContext rctx = AuthMiddleware.callerContext(ctx);
-			AString bearer = ctx.attribute(AuthMiddleware.UCAN_BEARER_ATTR);
-			rctx = AuthMiddleware.withTransportAuth(rctx, bearer, null, null, engine().didVerifier());
+			rctx = AuthMiddleware.withTransportGrants(rctx,
+				AuthMiddleware.headerUcans(ctx), engine().didVerifier());
 			AString ref = Strings.create(id);
 
 			Hash assetID=parseCallerAssetId(id);
@@ -740,8 +739,8 @@ public class CoviaAPI extends ACoviaAPI {
 			}
 
 			RequestContext rctx = AuthMiddleware.callerContext(ctx);
-			AString bearer = ctx.attribute(AuthMiddleware.UCAN_BEARER_ATTR);
-			rctx = AuthMiddleware.withTransportAuth(rctx, bearer, null, null, engine().didVerifier());
+			rctx = AuthMiddleware.withTransportGrants(rctx,
+				AuthMiddleware.headerUcans(ctx), engine().didVerifier());
 			AString ref = Strings.create(idString);
 			AString writeAs=engine().requireLocalAccess(rctx, ref, Abilities.ASSET_STORE);
 			AVector<?> record=engine().getAssetRecord(assetID, writeAs);
@@ -813,8 +812,7 @@ public class CoviaAPI extends ACoviaAPI {
 		ACell input = RT.getIn(req, Fields.INPUT);
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 		AVector<ACell> ucans = RT.getIn(req, Fields.UCANS);
-		AString bearer = ctx.attribute(AuthMiddleware.UCAN_BEARER_ATTR);
-		rctx = AuthMiddleware.withTransportAuth(rctx, bearer, ucans, engine().getDIDString(), engine().didVerifier());
+		rctx = AuthMiddleware.withTransportGrants(rctx, ucans, engine().didVerifier());
 
 		try {
 			ACell result = engine().jobs().runOperation(op, input, rctx).join();
@@ -911,16 +909,10 @@ public class CoviaAPI extends ACoviaAPI {
 		ACell input=RT.getIn(req, "input");
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 
-		// Attach transport UCAN authority, including on-behalf-of namespace selection —
-		// from both channels: the `ucans` envelope array and an
-		// `Authorization: Bearer <ucan-jwt>` (IETF UCAN-HTTP) stashed by
-		// AuthMiddleware as UCAN_BEARER_ATTR.
+		// Authentication has already selected the caller. Body UCANs are grants
+		// only: they cannot authenticate, select a namespace, or instruct execution.
 		AVector<ACell> ucans = RT.getIn(req, "ucans");
-		AString bearer = ctx.attribute(AuthMiddleware.UCAN_BEARER_ATTR);
-		// venueDID enables identity-from-ucans: an anonymous transport carrying a
-		// verified identity token audienced to this venue authenticates as its
-		// issuer (relayed cross-venue callers, covia#100 C3a).
-		rctx = AuthMiddleware.withTransportAuth(rctx, bearer, ucans, engine().getDIDString(), engine().didVerifier());
+		rctx = AuthMiddleware.withTransportGrants(rctx, ucans, engine().didVerifier());
 
 		try {
 			// Wait window: `wait` (query param or body field) is boolean or an
@@ -1054,13 +1046,9 @@ public class CoviaAPI extends ACoviaAPI {
 		}
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 		// Job reads are delegable and federated observation must carry the
-		// caller's authority: attach transport proofs from the bearer and the
-		// X-Covia-Ucans header (a GET has no body for the ucans array). With
-		// venueDID set, an identity token authenticates a relayed caller —
-		// this is how a grid hop observes the remote job it created.
-		AString bearer = ctx.attribute(AuthMiddleware.UCAN_BEARER_ATTR);
-		rctx = AuthMiddleware.withTransportAuth(rctx, bearer,
-			AuthMiddleware.headerUcans(ctx), engine().getDIDString(), engine().didVerifier());
+		// caller's authority: attach grants from X-Covia-Ucans (a GET has no body).
+		rctx = AuthMiddleware.withTransportGrants(rctx,
+			AuthMiddleware.headerUcans(ctx), engine().didVerifier());
 
 		try {
 			AMap<AString,ACell> status=engine().jobs().getJobData(id, rctx);
@@ -1595,9 +1583,8 @@ public class CoviaAPI extends ACoviaAPI {
 		}
 
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
-		AString bearer = ctx.attribute(AuthMiddleware.UCAN_BEARER_ATTR);
-		rctx = AuthMiddleware.withTransportAuth(rctx, bearer,
-			AuthMiddleware.headerUcans(ctx), null, engine().didVerifier());
+		rctx = AuthMiddleware.withTransportGrants(rctx,
+			AuthMiddleware.headerUcans(ctx), engine().didVerifier());
 
 		AMap<AString, ACell> input;
 		try {

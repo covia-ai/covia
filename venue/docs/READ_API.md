@@ -90,8 +90,8 @@ CoviaAdapter
 
   ```java
   RequestContext rctx = AuthMiddleware.callerContext(ctx);
-  AString bearer = ctx.attribute(AuthMiddleware.UCAN_BEARER_ATTR);
-  rctx = AuthMiddleware.withTransportAuth(rctx, bearer, null);
+  AVector<ACell> grants = AuthMiddleware.headerUcans(ctx);
+  rctx = AuthMiddleware.withTransportGrants(rctx, grants, engine.didVerifier());
   ```
 
   — calls the accessor, and serialises via `buildResult(ctx, 200, value)`. No job,

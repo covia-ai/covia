@@ -7,19 +7,16 @@ import java.nio.charset.StandardCharsets;
 import java.util.Set;
 
 import convex.api.ContentTypes;
+import convex.auth.did.DIDVerifier;
+import convex.auth.ucan.UCAN;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
-import convex.auth.did.DIDVerifier;
-import convex.auth.ucan.Capability;
-import convex.auth.ucan.UCAN;
-import convex.auth.ucan.UCANValidator;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
-import covia.api.Abilities;
 import covia.exception.AuthException;
 import covia.venue.Auth;
 import covia.venue.Config;
@@ -60,14 +57,6 @@ public class AuthMiddleware {
 	 * authenticated callers (unrestricted unless a transport token attenuates).
 	 */
 	static final String CALLER_CAPS_ATTR = "callerCaps";
-	/**
-	 * Context attribute holding the raw UCAN JWT extracted from an
-	 * {@code Authorization: Bearer ...} header, when the bearer is a valid
-	 * UCAN (and so also serves as caller authentication). Downstream handlers
-	 * merge this into their transport {@code ucans} vector at ingress. Null when the
-	 * request has no bearer token or the bearer is not a UCAN.
-	 */
-	public static final String UCAN_BEARER_ATTR = "ucanBearer";
 	// Per-instance state. Was static, which made running multiple VenueServers
 	// in the same JVM (production multi-tenant, parallel test classes) racy:
 	// every register() call would trample the previous instance's fields,
@@ -299,7 +288,7 @@ public class AuthMiddleware {
 	 * DID plus, for unauthenticated (public) callers, the configured capability
 	 * grant scope ({@code auth.public.caps}, default read-only). This is the single
 	 * seam where a request's grant scope is established, before transport-token
-	 * authority ({@link #withTransportAuth}) is layered on. Null-safe: a null
+	 * authority ({@link #withTransportGrants}) is layered on. Null-safe: a null
 	 * Javalin context (e.g. an MCP call with no HTTP context) yields
 	 * {@link RequestContext#ANONYMOUS}.
 	 *
@@ -315,41 +304,37 @@ public class AuthMiddleware {
 	}
 
 	/**
-	 * Attach transport-presented UCAN authority to a request context — the single
-	 * seam used by every invoke transport (REST, MCP). Presented proofs are the
-	 * cryptographically-verified tokens, attached for cross-user grant checks
-	 * (§5.2). Ordinary proofs are additive. A body token carrying
-	 * {@code user/act} over its issuer and issued directly to the authenticated caller selects
-	 * on-behalf-of execution: the caller remains the actor, the issuer becomes
-	 * the user namespace, and that context is bounded to the presented proofs.
-	 * This prevents a delegate's unrestricted authority over its own account from
-	 * becoming unrestricted authority over the issuer's account (#406).
+	 * Attach transport-presented UCAN grants to a request context — the single
+	 * seam used by every invoke transport (REST, MCP). Capability-bearing tokens
+	 * are attached only for capability checks
+	 * (§5.2). Proofs are additive grants: their presence never authenticates a
+	 * caller, selects an execution namespace, or instructs an operation. Empty-att
+	 * target credentials remain only in the raw relay envelope.
 	 *
 	 * <p>With no token presented, nothing is attached and access is unrestricted
 	 * (the common case).</p>
 	 *
 	 * @param rctx context for the authenticated caller (caller DID already set)
-	 * @param bearer Authorization bearer JWT, or null
 	 * @param ucans transport {@code ucans} vector, or null
 	 * @return rctx with the presented proofs attached
 	 */
-	public static RequestContext withTransportAuth(RequestContext rctx, AString bearer,
+	public static RequestContext withTransportGrants(RequestContext rctx,
 			AVector<ACell> ucans) {
-		return withTransportAuth(rctx, bearer, ucans, null);
+		return withTransportGrants(rctx, ucans, DIDVerifier.CONVEX);
 	}
 
 	/**
 	 * Raw JWT strings from the {@code X-Covia-Ucans} header (comma-separated),
 	 * in the same vector shape as the request-body {@code ucans} array —
-	 * verified downstream by {@link #withTransportAuth} exactly like body
-	 * proofs. The header channel exists for body-less requests (job
+	 * verified downstream by {@link #withTransportGrants} exactly like the body
+	 * envelope. The header channel exists for body-less requests (job
 	 * observation GETs): without it a federated hop can invoke a remote job
 	 * but never observe it. Returns null when the header is absent or empty.
 	 */
 	public static AVector<ACell> headerUcans(Context ctx) {
 		String h = ctx.header(covia.grid.client.VenueHTTP.UCANS_HEADER);
 		if (h == null || h.isBlank()) return null;
-		AVector<ACell> v = convex.core.data.Vectors.empty();
+		AVector<ACell> v = Vectors.empty();
 		for (String part : h.split(",")) {
 			String t = part.trim();
 			if (!t.isEmpty()) v = v.conj(Strings.create(t));
@@ -358,152 +343,37 @@ public class AuthMiddleware {
 	}
 
 	/**
-	 * As {@link #withTransportAuth(RequestContext, AString, AVector)}, and — when
-	 * {@code venueDID} is supplied and the transport is unauthenticated — derives
-	 * the caller's identity from a presented <b>identity token</b>: a verified
-	 * UCAN with {@code aud == venueDID} and an <b>empty</b> attenuation list
-	 * (pure identity, no dual use as a grant). The issuer signed a token naming
-	 * this venue as audience, so the identity is proven by the caller's own key
-	 * and cannot be replayed at another venue (audience-bound). This is how a
-	 * relayed cross-venue request carries the original caller's identity — the
-	 * relay forwards the token, this venue verifies the caller's signature
-	 * directly (zero trust in the relay). Two identity tokens with different
-	 * issuers are ambiguous and rejected (401-equivalent).
-	 *
-	 * <p>Applies only when the transport is anonymous/public — an Authorization
-	 * header always wins (a transport-authenticated peer, e.g. a relaying venue
-	 * acting as itself, is the caller regardless of what it forwards).</p>
-	 */
-	public static RequestContext withTransportAuth(RequestContext rctx, AString bearer,
-			AVector<ACell> ucans, AString venueDID) {
-		return withTransportAuth(rctx, bearer, ucans, venueDID, DIDVerifier.CONVEX);
-	}
-
-	/**
-	 * As {@link #withTransportAuth(RequestContext, AString, AVector, AString)},
-	 * verifying token signatures with the supplied DID verifier. Venue call
+	 * Verifies proof signatures with the supplied DID verifier. Venue call
 	 * sites pass {@code engine.didVerifier()} so did:web-identified issuers
 	 * (covia#343) verify at ingress exactly like did:key ones; the
-	 * {@link DIDVerifier#CONVEX} default of the shorter overloads remains
+	 * {@link DIDVerifier#CONVEX} default of the shorter overload remains
 	 * did:key-only.
 	 */
-	public static RequestContext withTransportAuth(RequestContext rctx, AString bearer,
-			AVector<ACell> ucans, AString venueDID, DIDVerifier verifier) {
+	public static RequestContext withTransportGrants(RequestContext rctx,
+			AVector<ACell> ucans, DIDVerifier verifier) {
 		// Verify signatures at ingress with an explicit DID verifier.
 		DIDVerifier effectiveVerifier = (verifier != null) ? verifier : DIDVerifier.CONVEX;
-		AVector<ACell> bearerProofs = (bearer != null)
-			? UcanJwtValidator.parseTransportUCANs(Vectors.of(bearer), effectiveVerifier)
-			: null;
-		AVector<ACell> bodyProofs = UcanJwtValidator.parseTransportUCANs(ucans, effectiveVerifier);
-		AVector<ACell> proofs = concatProofs(bearerProofs, bodyProofs);
-		if (proofs == null) return rctx;
+		AVector<ACell> parsed = UcanJwtValidator.parseTransportUCANs(ucans, effectiveVerifier);
+		if (parsed == null) return rctx;
 
-		// Identity from the proof channel: only for an unauthenticated transport
-		// (no bearer identity), and only when the venue context is known.
-		if (venueDID != null && bearer == null && isPublicOrAnonymous(rctx, venueDID)) {
-			AString identity = identityFromProofs(proofs, venueDID);
-			if (identity != null) {
-				// A proven caller: fresh context — the public read-only grant scope
-				// does not apply to an authenticated identity.
-				rctx = RequestContext.of(identity);
+		AVector<ACell> grants = Vectors.empty();
+		for (long i = 0; i < parsed.count(); i++) {
+			AMap<AString, ACell> map = RT.castMap(parsed.get(i));
+			UCAN token = (map != null) ? UCAN.parse(map) : null;
+			AVector<ACell> capabilities = (token != null) ? token.getCapabilities() : null;
+			if (capabilities != null && !capabilities.isEmpty()) {
+				grants = grants.conj(parsed.get(i));
 			}
 		}
-
-		rctx = rctx.withProofs(proofs);
-		// A body token carrying user/act on its issuer is an on-behalf-of
-		// delegation. Keep the audience as caller/actor, but execute in the issuer's
-		// namespace under proof-only authority. Ordinary cross-user grants stay
-		// additive; namespace selection is itself explicit capability data. A single
-		// invocation cannot act for two users at once.
-		AString delegatedUser = delegatedUser(bodyProofs, rctx.getCallerDID());
-		if (delegatedUser != null) rctx = rctx.onBehalfOf(delegatedUser);
-		// Retain the raw body tokens for cross-venue relay (C3a): proofs are
-		// self-verifying, so forwarding them is safe — but only the original
-		// signed JWTs verify at the next hop, not the parsed maps. The bearer is
-		// NOT retained for relay — it is audienced to THIS venue (#149) and must
-		// never be replayed elsewhere.
+		if (!grants.isEmpty()) rctx = rctx.withProofs(grants);
+		// Retain the raw transport envelope for cross-venue forwarding (C3a):
+		// proofs are self-verifying, but only the original signed JWTs verify at
+		// the next hop, not the parsed maps. A target credential may be carried
+		// here, but it remains inert and never enters the proof channel.
 		if (ucans != null && !ucans.isEmpty()) rctx = rctx.withRawUcans(ucans);
-		// Outside the explicit on-behalf-of case above, presented proofs are
-		// additive and never subtractive. To act with reduced authority, hand the
+		// Presented proofs are additive and never subtractive. To act with reduced authority, hand the
 		// callee a narrower Authority (Authority.of(did, grants)) or present only the
 		// UCANs the request needs — you never send everything and then subtract.
 		return rctx;
-	}
-
-	private static AVector<ACell> concatProofs(AVector<ACell> first, AVector<ACell> second) {
-		if (first == null || first.isEmpty()) return second;
-		if (second == null || second.isEmpty()) return first;
-		return first.concat(second);
-	}
-
-	/** The unique direct issuer granting {@code user/act} over itself, if any. */
-	private static AString delegatedUser(AVector<ACell> proofs, AString actor) {
-		if (proofs == null || actor == null) return null;
-		AString user = null;
-		for (long i = 0; i < proofs.count(); i++) {
-			AMap<AString, ACell> map = RT.castMap(proofs.get(i));
-			UCAN token = (map != null) ? UCAN.parse(map) : null;
-			if (token == null || !actor.equals(token.getAudience())) continue;
-			AString issuer = token.getIssuer();
-			if (issuer == null || issuer.equals(actor)) continue;
-			AVector<ACell> capabilities = token.getCapabilities();
-			if (!grantsActAs(capabilities, issuer)) continue;
-			if (user != null && !user.equals(issuer)) {
-				throw new AuthException("Ambiguous delegated namespace: proofs were issued by both "
-					+ user + " and " + issuer + "; submit one user's delegation per invocation");
-			}
-			user = issuer;
-		}
-		return user;
-	}
-
-	private static boolean grantsActAs(AVector<ACell> capabilities, AString issuer) {
-		if (capabilities == null) return false;
-		for (long i = 0; i < capabilities.count(); i++) {
-			AMap<AString, ACell> cap = RT.castMap(capabilities.get(i));
-			if (cap == null) continue;
-			if (issuer.equals(RT.ensureString(cap.get(Capability.WITH)))
-					&& Abilities.USER_ACT.equals(
-						RT.ensureString(cap.get(Capability.CAN)))) {
-				return true;
-			}
-		}
-		return false;
-	}
-
-	/** True when the context carries no authenticated identity: anonymous, or the
-	 *  venue's shared {@code :public} DID. */
-	private static boolean isPublicOrAnonymous(RequestContext rctx, AString venueDID) {
-		AString caller = rctx.getCallerDID();
-		if (caller == null) return true;
-		return caller.toString().equals(venueDID + ":public");
-	}
-
-	/**
-	 * Extracts a caller identity from verified proofs: a UCAN audienced to this
-	 * venue with an empty attenuation list. Returns null when absent; throws on
-	 * ambiguity (two identity tokens with different issuers).
-	 */
-	private static AString identityFromProofs(AVector<ACell> proofs, AString venueDID) {
-		AString identity = null;
-		long now = System.currentTimeMillis() / 1000;
-		for (long i = 0; i < proofs.count(); i++) {
-			AMap<AString, ACell> map = convex.core.lang.RT.castMap(proofs.get(i));
-			if (map == null) continue;
-			convex.auth.ucan.UCAN token = convex.auth.ucan.UCAN.parse(map);
-			if (token == null) continue;
-			if (!venueDID.equals(token.getAudience())) continue;
-			AVector<ACell> att = token.getCapabilities();
-			if (att != null && !att.isEmpty()) continue; // a grant, not an identity token
-			if (!UCANValidator.checkTemporalBounds(token, now)) continue;
-			AString iss = token.getIssuer();
-			if (iss == null || iss.equals(venueDID)) continue;
-			if (identity != null && !identity.equals(iss)) {
-				throw new IllegalStateException(
-					"Ambiguous caller identity: multiple identity tokens with different issuers");
-			}
-			identity = iss;
-		}
-		return identity;
 	}
 }

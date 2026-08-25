@@ -166,7 +166,8 @@ public class UCANAdapter extends AAdapter {
 						throw new RuntimeException("att[" + i + "].with is outside your namespace "
 							+ "and your presented proofs do not establish the granting right "
 							+ grantAbility + " over " + w + " — present a delegation from the "
-							+ "resource owner (transport ucans / bearer), or use your own namespace");
+							+ "resource owner through the transport ucans grant channel, or use "
+							+ "your own namespace");
 					}
 					// This second check asks only whether the granting chain still
 					// exists at the minted token's expiry horizon — unbounded for a

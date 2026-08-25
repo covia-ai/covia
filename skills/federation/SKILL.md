@@ -50,21 +50,21 @@ Ask the user for the remote venue URL (or use `http://localhost:8081` if running
 
 1. **Echo test** — verify connectivity:
    ```
-   grid_run  operation=test:echo  input={"hello": "federation"}  venue=<remote-url>
+   grid_run  operation=test:echo  input={"hello": "federation"}  venue=<remote-url>  authenticateAs=anonymous
    ```
 
 2. **Remote LLM call** — invoke an LLM on the remote venue:
    ```
-   grid_run  operation=langchain:openai  venue=<remote-url>
+   grid_run  operation=langchain:openai  venue=<remote-url>  authenticateAs=anonymous
      input={ "messages": [{"role": "user", "content": "What venue are you running on?"}] }
    ```
 
 3. **Async invoke** — submit and poll:
    ```
-   grid_invoke  operation=test:echo  input={"async": true}  venue=<remote-url>
+   grid_invoke  operation=test:echo  input={"async": true}  venue=<remote-url>  authenticateAs=anonymous
    → returns job ID
-   grid_jobStatus  id=<job-id>  venue=<remote-url>
-   grid_jobResult  id=<job-id>  venue=<remote-url>
+   grid_jobStatus  id=<job-id>  venue=<remote-url>  authenticateAs=anonymous
+   grid_jobResult  id=<job-id>  venue=<remote-url>  authenticateAs=anonymous
    ```
 
 ### `invoke <venue-url>` — Run a specific operation on a remote venue
@@ -72,16 +72,16 @@ Ask the user for the remote venue URL (or use `http://localhost:8081` if running
 Ask the user which operation and input, then:
 
 ```
-grid_run  operation=<op>  input=<input>  venue=<venue-url>
+grid_run  operation=<op>  input=<input>  venue=<venue-url>  authenticateAs=<anonymous|caller|venue>
 ```
 
 ## Key Talking Points
 
 - Operations execute on the **remote** venue — data stays where it's controlled
 - The local venue only sees the result, not intermediate state
-- UCAN capability tokens travel with requests (the `ucans` proof channel) for fine-grained authorisation; the relaying venue forwards the caller's tokens on cross-venue hops
-- The caller's identity crosses venues as an **identity token** (a UCAN with empty `att`, audienced to the target venue) — the target verifies the caller's own signature, trusting no relay
-- A caller can grant the venue a `venue/relay` capability to have it make the hop authenticated as itself, exercising the caller's delegation
+- UCAN capability tokens travel through the `ucans` proof channel for fine-grained authorisation and are forwarded only when admissible for the explicitly selected remote principal
+- Remote authentication is explicit: use `authenticateAs=caller` with an empty-`att` credential audienced to the target, or `authenticateAs=venue` for a venue-authenticated hop
+- `venue/relay` authorises the explicit `authenticateAs=venue` request; merely presenting the grant never changes behaviour
 - Every invocation creates an immutable job record on both venues
 - Venues are identified by DIDs — decentralised, no central registry
 - The same operation interface works locally and across the grid

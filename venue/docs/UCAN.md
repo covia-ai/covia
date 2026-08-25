@@ -10,7 +10,7 @@ Design for User Controlled Authorisation Networks (UCAN) in Covia, using lattice
 
 1. **Consistent with UCAN spec.** Same conceptual model: issuer/audience, attenuated capabilities, delegation chains, cryptographic signatures. Where Covia diverges from the UCAN spec, it is because the encoding uses CAD3/lattice rather than IPLD/DAG-CBOR — not because the authorisation model differs.
 
-2. **Lattice-native.** UCANs are first-class lattice values, stored as content-addressable data in `/a/`. The CAD3 form is canonical — its value hash is the UCAN's identifier — and UCANs merge, replicate, and verify like any other lattice data. For interoperable *transport* (HTTP `ucans` arrays, bearer headers, cross-venue relay) the standard JWT encoding is used (§4.3); the two encodings carry the same token.
+2. **Lattice-native.** UCANs are first-class lattice values, stored as content-addressable data in `/a/`. The CAD3 form is canonical — its value hash is the UCAN's identifier — and UCANs merge, replicate, and verify like any other lattice data. For interoperable *transport* (HTTP grant envelopes, empty-`att` authentication credentials, cross-venue relay) the standard JWT encoding is used (§4.3); the two encodings carry the same token format while the transport channel fixes its role.
 
 3. **Self-contained.** A UCAN plus its proof chain is sufficient for verification. No callbacks, no token servers, no online authority. This is critical for federated execution where the verifying venue may have no relationship with the issuer.
 
@@ -304,8 +304,8 @@ requests** (job observation GETs) carry the same JWTs comma-separated in
 the `X-Covia-Ucans` header (`VenueHTTP.UCANS_HEADER`), explicitly attached
 by the sender and verified identically at ingress
 (`AuthMiddleware.headerUcans`). This is what lets a federated hop observe
-the remote job it created — the identity token authenticates the caller on
-the read exactly as on the invoke.
+the remote job it created. Authentication remains in `Authorization` on
+both requests; these channels carry grants only.
 
 ```
 RequestContext:
@@ -320,7 +320,7 @@ of Alice's workspace might require:
   of Carol
 
 The proofs travel with the request — they are not stored at the venue.
-This is the standard UCAN bearer token model.
+This is the standard per-request UCAN proof-presentation model.
 
 #### Proof references
 
@@ -334,12 +334,13 @@ value hashes as the native content-addressing scheme.
 
 #### Transport
 
-**REST API**: UCAN tokens may arrive through either (or both) of two
-transport channels — they are merged through the same trust boundary:
+**REST API** separates authentication credentials from capability proofs:
 
-1. **Request body `ucans` array** — the portable envelope form that survives
+1. **Request body `ucans` array** (or `X-Covia-Ucans` on body-less requests)
+   — the portable grant envelope that survives
    cross-venue hops (e.g. `grid:invoke`) where HTTP headers are not
-   preserved:
+   preserved. These UCANs authorise actions; they never authenticate the
+   request, select a user namespace, or instruct an operation:
    ```json
    POST /api/v1/invoke
    {
@@ -348,47 +349,44 @@ transport channels — they are merged through the same trust boundary:
      "ucans": [<signed-token>, ...]
    }
    ```
+   A relay request may also carry a target-audienced empty-`att` credential in
+   this raw envelope. It is inert at the receiving venue and becomes a bearer
+   only if the grid input explicitly selects `authenticateAs: "caller"`.
 
-2. **`Authorization: Bearer <ucan-jwt>`** — matching the IETF UCAN-HTTP
-   bearer convention. A single UCAN JWT in the standard HTTP bearer slot
-   serves both as caller authentication (the UCAN's `iss` becomes the
-   caller DID, since the signature proves the issuer holds the private
-   key) and as a capability proof (the same token is added to the proof
-   vector). Additional delegation proofs may accompany it in the body
-   `ucans` array. Expired, tampered, or non-UCAN bearer tokens fall
-   through to the existing JWT auth paths.
+2. **`Authorization: Bearer <credential>`** authenticates the caller. An
+   empty-`att`, audience-bound UCAN may be used as a self-sovereign identity
+   credential; a capability-bearing UCAN is rejected in this slot. The
+   credential is never added to `RequestContext.proofs`. Other accepted JWT
+   credentials follow the same separation.
 
-**Delegated execution.** When an authenticated actor presents a body token
-whose `aud` is that actor and which carries `{with: <iss>, can: "user/act"}`,
-the invocation executes on behalf of the issuer. The actor
-remains the proof audience and is recorded as the Job's `actor`; bare paths,
-per-user state, admission and the Job receipt use the issuer's namespace. This
-context has an empty ambient scope, so every action must be covered by the
-presented proof chain — selecting a namespace never grants authority by itself.
-The `user/act` capability grants no operation by itself: invoke and
-point-of-action capabilities remain separate and mandatory. Ordinary
-cross-user proofs, empty-att identity tokens and tokens audienced elsewhere do
-not select a namespace. `user/act` proofs from two different direct issuers are
-rejected as ambiguous: one invocation has one user namespace.
+**Explicit sudo.** `user:sudo {did, operation, input}` is the instruction to
+execute one nested operation in another user's namespace. It requires a
+presented `{with: <did>, can: "user/sudo"}` grant, plus the nested operation's
+`invoke` and point-of-action grants. The authenticated caller remains the actor;
+only the effective user namespace changes, and the nested context has no ambient
+caller capabilities. A `user/sudo` grant on an ordinary invocation is inert.
 
-**MCP**: Same two channels. Tool call parameters may include `ucans`, and
-the MCP endpoint honours `Authorization: Bearer <ucan-jwt>` on the
-enclosing HTTP request:
+**MCP**: Same separation. Tool call parameters may include grant `ucans`, and
+the enclosing HTTP request carries its authentication credential in
+`Authorization`:
 ```json
 { "path": "did:key:zAlice.../w/notes", "ucans": [<signed-token>, ...] }
 ```
 
-**Grid operations** (`grid:run`, `grid:invoke`): Optional `ucans` field
-in the operation input — the envelope channel for authority to travel with
-the job across venue boundaries:
+**Grid operations** (`grid:run`, `grid:invoke`) explicitly select remote
+authentication with `authenticateAs`:
 ```json
-grid:invoke { operation: "...", input: {...}, ucans: [...] }
+grid:invoke {
+  operation: "...",
+  input: {...},
+  venue: "https://remote.example",
+  authenticateAs: "caller"
+}
 ```
-This is the *transport*; on a cross-venue hop the grid wrapper relays the
-caller's presented tokens into this field, filtered to the provably
-admissible — see §5.6 "Forwarding authority across venues" for the full
-forwarding model (identity tokens, `venue/relay` delegations, the relay
-filter).
+`anonymous` is the default, `caller` requires a target-audienced empty-`att`
+credential, and `venue` requires a `venue/relay` grant. Credentials and grants
+are forwarded in their distinct channels, filtered to the selected principal.
+Grant presence never selects a mode. See §5.6.
 
 **Agent tool calls**: The agent framework (level 2) attaches the user's
 proofs automatically when invoking tools on behalf of the user. Agents
@@ -485,7 +483,8 @@ default scope is **read-only** (`crud/read` on its own namespace + `asset/read`;
 no `invoke`, so `POST /api/v1/invoke` of a compute op returns a `FAILED` job with
 `"Capability denied"`). Two ways to gain invoke/write authority:
 
-1. **Authenticate as yourself** — present a self-issued UCAN bearer token:
+1. **Authenticate as yourself** — present a self-issued, empty-`att` UCAN
+   identity credential:
    `Authorization: Bearer <ucan-jwt>`, with `aud` = the venue DID (from
    `GET /.well-known/did.json`). You then run as your own `did:key`, which is
    unrestricted within its own namespace (own-namespace implicit grant, §5.1).
@@ -527,10 +526,11 @@ with reduced authority:
 - **Externally** — present only the UCANs the request actually needs, never the
   caller's whole authority.
 
-The transport on-behalf-of rule is the deliberate boundary: a delegate does
+The explicit `user:sudo` operation is the deliberate boundary: a delegate does
 not carry its own ambient authority into another user's namespace. Its
-authority there is exactly the issuer's presented proof chain, while its actor
-identity remains unchanged for attribution and audience checks.
+authority there is exactly the target user's presented proof chain, while its
+authenticated actor identity remains unchanged for attribution and audience
+checks.
 
 ### 5.2 Cross-User Access
 
@@ -1000,9 +1000,9 @@ verification phases exactly: **proofs + self-sovereign signatures with C3a**
 exists).
 
 **C3a implementation (shipped).** Authority travels **only in the `ucans` proof
-channel** — never in operation input (input is data, persisted in job records;
-a credential there would leak into durable history). Tokens are self-describing,
-so there are no mode flags or auth fields anywhere:
+channel** — never as operation data (which is persisted in job records).
+Authentication mode is a non-secret, explicit grid parameter; credentials use
+the authentication channel. The three concerns never infer one another:
 
 - **Proofs are relayed, filtered to the provably admissible.** The caller's raw
   transport UCANs (`RequestContext.getRawUcans()`; the parsed maps cannot be
@@ -1013,27 +1013,22 @@ so there are no mode flags or auth fields anywhere:
   is not provable (the relay cannot know which resources an operation on the
   target touches, nor generally the target's DID before contact), so
   presentation remains the *caller's* disclosure decision: present per-request,
-  not a wallet. The inbound *bearer* is never relayed — it is audienced to the
-  relaying venue (§4.4).
+  not a wallet. The inbound bearer authenticates only to the relaying venue and
+  is never replayed elsewhere (§4.4).
 - **Identity token** — the caller mints a UCAN with an **empty `att`**,
-  audienced to the **target** venue, and presents it in their `ucans`. Pure
-  proof of identity: it grants nothing, and being audience-bound it is unusable
-  at any other venue. The relay just forwards it; the target's ingress accepts
-  a verified identity token as the caller's identity **only on an anonymous
-  transport** (an Authorization header always wins), verifying the caller's own
-  signature — zero trust in the relay. The caller is then the principal at the
-  target: jobs owned by them, their proofs audienced to them apply.
-- **`venue/relay` delegation** — to have the venue hop *as itself*, the caller
-  grants it a capability with `can: venue/relay` (token issued **by the
-  caller**, audienced **to the relaying venue**; conventionally
-  `with: <callerDID>`). The token is simultaneously the instruction and the
-  authorisation — no flag. The issuer-must-be-the-caller rule makes the
-  confused deputy impossible by construction: a relay delegation someone else
-  minted for the venue is not an instruction from this caller. The same token
-  can carry the substantive grants (e.g. `crud/read` over the owner's
-  namespace) whose chain the target verifies to the owner root.
-- **No identity token and no relay delegation** → anonymous hop (the explicit
-  choice for public operations).
+  audienced to the **target** venue and carries it to the relay in the raw token
+  envelope. It grants nothing and is inert at the relay. Only an explicit
+  `authenticateAs: "caller"` request causes the relay to install that credential
+  in the target request's `Authorization` header. The target verifies the
+  caller's own signature — zero trust in the relay.
+- **`venue/relay` delegation** — `authenticateAs: "venue"` is the separate
+  instruction to have the venue hop as itself. The caller must authorise that
+  request with `can: venue/relay` issued **by the caller**, audienced **to the
+  relaying venue**, and scoped to `with: <callerDID>`. Someone else's grant
+  cannot authorise this caller, preventing confused-deputy use. The same token
+  can carry substantive grants that the target independently verifies.
+- **`authenticateAs: "anonymous"`** is the default and sends neither identity
+  nor grants, even when valid credentials or grants were presented locally.
 - **Local targets** carry the caller's verified proofs into the local context
   (`LocalVenue.setProofs`), so a local hop keeps authority exactly like a
   remote hop forwards it (closes covia#102 Finding 1).
@@ -1104,8 +1099,9 @@ land together, in order of dependency:
   convex-core `UCANValidator` (Convex-Dev/convex#635); covia's `proofsCover`
   composes the policy.
 - *Forward:* the grid wrapper relays the caller's authority per §5.6 — proofs
-  filtered to the provably admissible, identity as an audience-bound identity
-  token, venue-as-delegate via a `venue/relay` capability.
+  filtered to the provably admissible; explicit `authenticateAs` selects
+  anonymous, caller-credential, or venue-credential authentication, with
+  `venue/relay` authorising only the last choice.
 
 **C3b — Venue-attested (custodial).**
 - *Verify:* accept a root signed by a *remote* controlling venue for its

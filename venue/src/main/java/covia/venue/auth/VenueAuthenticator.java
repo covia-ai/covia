@@ -27,16 +27,15 @@ import covia.exception.AuthException;
 import covia.venue.Auth;
 import covia.venue.Engine;
 import covia.venue.UcanJwtValidator;
-import covia.venue.server.AuthMiddleware;
 import io.javalin.http.Context;
 
 /**
  * Public authentication service for venue embedders.
  *
  * <p>This is the single policy implementation for credentials accepted by a
- * venue: self-issued and named-user EdDSA tokens, venue-issued sessions, UCAN
- * bearers, and configured external OAuth providers. Embedders should use this
- * service rather than reproducing the venue's signature, audience, temporal,
+ * venue: self-issued and named-user EdDSA tokens, venue-issued sessions,
+ * empty-att UCAN identity bearers, and configured external OAuth providers.
+ * Embedders should use this service rather than reproducing the venue's signature, audience, temporal,
  * or local-user mapping rules.</p>
  *
  * <p>Authentication does not admit or create a venue user. Route middleware or
@@ -71,8 +70,7 @@ public final class VenueAuthenticator {
 
 	private record VerifiedPrincipal(
 			AString authenticatedIdentity,
-			AString venueUserDID,
-			boolean ucanBearer) {}
+			AString venueUserDID) {}
 
 	private static final class AudienceRejected extends RuntimeException {
 		private static final long serialVersionUID = 1L;
@@ -129,8 +127,8 @@ public final class VenueAuthenticator {
 
 	/**
 	 * Authenticates a credential and binds both the directly proven identity and
-	 * effective venue user to a Javalin request. A UCAN bearer is also retained
-	 * for downstream capability processing. This does not admit the user.
+	 * effective venue user to a Javalin request. Authentication credentials are
+	 * not retained as capability proofs. This does not admit the user.
 	 *
 	 * @return the effective local venue user
 	 * @throws AuthException if the token is not accepted
@@ -139,9 +137,6 @@ public final class VenueAuthenticator {
 		if (context == null) throw new IllegalArgumentException("context is required");
 		VerifiedPrincipal principal = verify(token);
 		bindIdentity(context, principal.authenticatedIdentity(), principal.venueUserDID());
-		if (principal.ucanBearer()) {
-			context.attribute(AuthMiddleware.UCAN_BEARER_ATTR, token);
-		}
 		return principal.venueUserDID();
 	}
 
@@ -182,7 +177,12 @@ public final class VenueAuthenticator {
 			throw new AuthException("Authentication required");
 		}
 		try {
+			boolean ucanShaped = hasUCANAtt(token);
 			VerifiedPrincipal principal = tryVerifyUCAN(token);
+			if (principal == null && ucanShaped) {
+				throw new AuthException(
+					"A UCAN bearer credential must be valid, audience-bound, and have empty att");
+			}
 			if (principal == null) principal = tryVerifySelfIssued(token);
 			if (principal == null && venueKey != null) {
 				principal = tryVerifyVenueSigned(token);
@@ -202,6 +202,12 @@ public final class VenueAuthenticator {
 			log.warn("Error processing authentication token", e);
 			throw new AuthException("Authentication failed", e);
 		}
+	}
+
+	private static boolean hasUCANAtt(AString jwt) {
+		JWT parsed = JWT.parse(jwt);
+		AMap<AString, ACell> claims = (parsed != null) ? parsed.getClaims() : null;
+		return claims != null && claims.containsKey(UCAN.ATT);
 	}
 
 	private void requireAudience(ACell aud) {
@@ -249,8 +255,10 @@ public final class VenueAuthenticator {
 		if (token == null) return null;
 		AString issuer = token.getIssuer();
 		if (issuer == null) return null;
+		AVector<ACell> capabilities = token.getCapabilities();
+		if (capabilities == null || !capabilities.isEmpty()) return null;
 		requireAudience(token.getAudience());
-		return new VerifiedPrincipal(issuer, issuer, true);
+		return new VerifiedPrincipal(issuer, issuer);
 	}
 
 	private VerifiedPrincipal tryVerifySelfIssued(AString jwt) {
@@ -270,7 +278,7 @@ public final class VenueAuthenticator {
 			if (signingKey == null || JWT.verifyPublic(jwt, signingKey) == null) return null;
 			if (!temporalValid(claims, System.currentTimeMillis() / 1000)) return null;
 			requireAudience(claims.get(AUD));
-			return new VerifiedPrincipal(keyDID, sub, false);
+			return new VerifiedPrincipal(keyDID, sub);
 		}
 
 		AString userId = engine.managedUserName(sub);
@@ -286,7 +294,7 @@ public final class VenueAuthenticator {
 			if (!venueAuth.isAuthenticationKeyActive(userId, keyDID)) return null;
 			if (!temporalValid(claims, System.currentTimeMillis() / 1000)) return null;
 			requireAudience(claims.get(AUD));
-			return new VerifiedPrincipal(keyDID, sub, false);
+			return new VerifiedPrincipal(keyDID, sub);
 		}
 
 		// A non-local DID is authenticated by its method resolver. No caller in
@@ -304,7 +312,7 @@ public final class VenueAuthenticator {
 		}
 		if (!temporalValid(claims, System.currentTimeMillis() / 1000)) return null;
 		requireAudience(claims.get(AUD));
-		return new VerifiedPrincipal(sub, sub, false);
+		return new VerifiedPrincipal(sub, sub);
 	}
 
 	private VerifiedPrincipal tryVerifyVenueSigned(AString jwt) {
@@ -321,7 +329,7 @@ public final class VenueAuthenticator {
 		} catch (RuntimeException e) {
 			return null;
 		}
-		return new VerifiedPrincipal(sub, sub, false);
+		return new VerifiedPrincipal(sub, sub);
 	}
 
 	private static AString authenticationKeyDID(AString jwt, AString subject) {
@@ -370,7 +378,7 @@ public final class VenueAuthenticator {
 				AString subject = RT.ensureString(claims.get(SUB));
 				if (venueUserDID == null) return null;
 				if (subject == null) subject = email;
-				return new VerifiedPrincipal(subject, venueUserDID, false);
+				return new VerifiedPrincipal(subject, venueUserDID);
 			}
 		} catch (Exception e) {
 			// A provider miss is indistinguishable from the other verifier misses.

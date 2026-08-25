@@ -19,8 +19,8 @@ import covia.venue.RequestContext;
 /**
  * Deterministic unit tests for the grid hop's token relay filter (covia#100
  * C3a): relay only what could be admissible at the target, drop the provably
- * inert (expired / unparseable / audienced to a non-principal), and recognise a
- * {@code venue/relay} instruction only from the authenticated caller.
+ * inert (expired / unparseable / wrong audience), keep identity credentials
+ * out of the grant channel, and validate {@code venue/relay} only as authority.
  */
 public class GridForwardingFilterTest {
 
@@ -46,17 +46,17 @@ public class GridForwardingFilterTest {
 	}
 
 	@Test
-	public void testPassthroughKeepsCallerAndOnwardTokens() {
-		// Principal = caller (passthrough): caller-audienced grants and tokens
-		// addressed onward (e.g. an identity token for the target) are relayed.
+	public void testCallerModeSeparatesIdentityCredentialFromGrants() {
 		String grantToBob = token(aliceKP, BOB, ALICE + "/w/", "crud/read", 3600);
-		String identityForTarget = token(bobKP, VENUE, null, null, 300); // aud = some other venue
+		String identityForTarget = token(bobKP, VENUE, null, null, 300);
 		RequestContext ctx = ctxWith(BOB, grantToBob, identityForTarget);
+		List<UCAN> parsed = GridAdapter.parsedRawUcans(ctx,
+			convex.auth.did.DIDVerifier.CONVEX);
 
-		List<String> out = GridAdapter.admissibleTokens(ctx,
-			GridAdapter.parsedRawUcans(ctx, convex.auth.did.DIDVerifier.CONVEX), BOB);
-		assertNotNull(out);
-		assertEquals(2, out.size(), "both tokens are admissible in passthrough mode");
+		assertEquals(identityForTarget,
+			GridAdapter.identityCredential(ctx, parsed, BOB, VENUE));
+		assertEquals(List.of(grantToBob), GridAdapter.admissibleGrants(ctx, parsed, BOB),
+			"the identity credential travels as authentication, never as a grant");
 	}
 
 	@Test
@@ -68,7 +68,7 @@ public class GridForwardingFilterTest {
 		String chainToVenue = token(aliceKP, VENUE, ALICE + "/w/", "crud/read", 3600);
 		RequestContext ctx = ctxWith(BOB, grantToBob, chainToVenue);
 
-		List<String> out = GridAdapter.admissibleTokens(ctx,
+		List<String> out = GridAdapter.admissibleGrants(ctx,
 			GridAdapter.parsedRawUcans(ctx, convex.auth.did.DIDVerifier.CONVEX), VENUE);
 		assertNotNull(out);
 		assertEquals(List.of(chainToVenue), out,
@@ -79,32 +79,35 @@ public class GridForwardingFilterTest {
 	public void testExpiredAndGarbageDropped() {
 		String expired = token(aliceKP, BOB, ALICE + "/w/", "crud/read", -3600);
 		RequestContext ctx = ctxWith(BOB, expired, "not-a-jwt");
-		assertNull(GridAdapter.admissibleTokens(ctx,
+		assertNull(GridAdapter.admissibleGrants(ctx,
 			GridAdapter.parsedRawUcans(ctx, convex.auth.did.DIDVerifier.CONVEX), BOB),
 			"expired and unparseable tokens are provably inert — nothing to relay");
 	}
 
 	@Test
-	public void testRelayInstructionRecognisedOnlyFromCaller() {
+	public void testRelayGrantRecognisedOnlyFromCaller() {
 		String bobRelay = token(bobKP, VENUE, BOB.toString(), "venue/relay", 3600);
-		// Bob presenting his own instruction → recognised.
+		// This answers only whether an explicit venue-mode request is authorised.
 		RequestContext bobCtx = ctxWith(BOB, bobRelay);
-		assertTrue(GridAdapter.hasRelayInstruction(
+		assertTrue(GridAdapter.hasRelayGrant(
 			GridAdapter.parsedRawUcans(bobCtx, convex.auth.did.DIDVerifier.CONVEX), BOB, VENUE));
-		// Carol presenting Bob's instruction → issuer != caller → not an instruction.
+		// Carol cannot exercise Bob's grant.
 		AString CAROL = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
 		RequestContext carolCtx = ctxWith(CAROL, bobRelay);
-		assertFalse(GridAdapter.hasRelayInstruction(
+		assertFalse(GridAdapter.hasRelayGrant(
 			GridAdapter.parsedRawUcans(carolCtx, convex.auth.did.DIDVerifier.CONVEX), CAROL, VENUE));
 	}
 
 	@Test
-	public void testRelayInstructionRequiresRelayAbility() {
-		// A plain grant to the venue (crud/read, no venue/relay) is NOT an
-		// instruction to relay — authority alone doesn't trigger action.
+	public void testRelayGrantRequiresExactResourceAndAbility() {
 		String grantOnly = token(bobKP, VENUE, ALICE + "/w/", "crud/read", 3600);
 		RequestContext ctx = ctxWith(BOB, grantOnly);
-		assertFalse(GridAdapter.hasRelayInstruction(
+		assertFalse(GridAdapter.hasRelayGrant(
 			GridAdapter.parsedRawUcans(ctx, convex.auth.did.DIDVerifier.CONVEX), BOB, VENUE));
+
+		String wrongResource = token(bobKP, VENUE, ALICE.toString(), "venue/relay", 3600);
+		RequestContext wrong = ctxWith(BOB, wrongResource);
+		assertFalse(GridAdapter.hasRelayGrant(
+			GridAdapter.parsedRawUcans(wrong, convex.auth.did.DIDVerifier.CONVEX), BOB, VENUE));
 	}
 }

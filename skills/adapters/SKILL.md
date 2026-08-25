@@ -98,7 +98,7 @@ loop retrying; explain and pick a route:
    ```
    The same strategy's `mintToken()` gives a bearer JWT for `curl … -H "Authorization: Bearer <jwt>" POST /api/v1/run` or an MCP client `headers` block. Never paste the seed into chat or commit it.
 2. **In-process operator code** — anything holding the `Engine` uses `engine.jobs().invokeOperation("v/ops/venue/...", input, engine.venueContext())`. This is how tests and embedded venues do it.
-3. **Venue-issued delegation** — for a standing admin identity, mint a UCAN *as the venue* (route 1 or 2, `v/ops/ucan/issue` with `att: [{"with": "<venueDID>/adapters", "can": "adapter/manage"}]`, `aud` = the admin's DID); the admin then presents it as a transport proof (`ucans` / bearer). Same model as `user:create`. See `/ucan`.
+3. **Venue-issued delegation** — for a standing admin identity, mint a UCAN *as the venue* (route 1 or 2, `v/ops/ucan/issue` with `att: [{"with": "<venueDID>/adapters", "can": "adapter/manage"}]`, `aud` = the admin's DID); the admin then presents it through the `ucans` grant channel. Authentication remains a separate bearer credential. Same model as `user:create`. See `/ucan`.
 
 `venue/restart` is deliberately separate process authority: it requires
 `venue/restart` on `<venueDID>/process`, plus invoke authority for the operation.

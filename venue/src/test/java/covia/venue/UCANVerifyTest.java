@@ -293,7 +293,7 @@ public class UCANVerifyTest {
 		ACell r = verify(Maps.of("token", jwt));
 		assertEquals(CVMBool.TRUE, RT.getIn(r, "valid"));
 		AVector<?> att = RT.ensureVector(RT.getIn(r, "att"));
-		assertEquals(2L, att.count(), "venue/relay instruction + the substantive grant");
+		assertEquals(2L, att.count(), "venue/relay authority + the substantive grant");
 		assertEquals(Strings.create(UcanTokens.VENUE_RELAY), RT.getIn(att.get(0), "can"));
 	}
 }

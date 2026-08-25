@@ -15,7 +15,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestInstance.Lifecycle;
 
-import convex.auth.ucan.Capability;
 import convex.auth.ucan.UCAN;
 import convex.core.crypto.AKeyPair;
 import convex.core.data.AString;
@@ -90,13 +89,11 @@ public class PublicScopeTest {
 	 */
 	private static VenueHTTP authed(VenueServer server) {
 		AKeyPair kp = AKeyPair.generate();
-		AString did = UCAN.toDIDKey(kp.getAccountKey());
 		long exp = (System.currentTimeMillis() / 1000) + 3600;
 		// Audience = THIS venue (its account key's DID), so the token passes
 		// audience validation; the bearer authenticates identity, not a scope.
 		UCAN token = UCAN.create(kp, server.getEngine().getAccountKey(), exp,
-			Vectors.of(Capability.create(Strings.create(did + "/w/"), Capability.CRUD_READ)),
-			Vectors.empty());
+			Vectors.empty(), Vectors.empty());
 		String jwt = token.toJWT(kp).toString();
 		VenueHTTP c = VenueHTTP.create(URI.create("http://localhost:" + server.port()), VenueAuth.bearer(jwt));
 		c.setTimeout(5000);

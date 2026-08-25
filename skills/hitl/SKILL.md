@@ -89,7 +89,7 @@ ucan_issue                                   # run as the TARGET user
   exp: <unix seconds>
 ```
 
-The requester presents that token (transport `ucans` / bearer) when calling `hitl_request user=<targetDID>`. Without it, delivery fails with a `hitl/request` denial and **no record is created**.
+The requester presents that token through the transport `ucans` grant channel when calling `hitl_request user=<targetDID>`; the request's bearer remains a separate authentication credential. Without the grant, delivery fails with a `hitl/request` denial and **no record is created**.
 
 ### `agent` — teach a resident Covia agent to use HITL
 

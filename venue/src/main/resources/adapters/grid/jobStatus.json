@@ -14,6 +14,12 @@
 				"venue": {
 					"type": "string",
 					"description": "Optional remote venue URL or DID to query"
+				},
+				"authenticateAs": {
+					"type": "string",
+					"enum": ["anonymous", "caller", "venue"],
+					"default": "anonymous",
+					"description": "Explicit remote authentication mode; use the same mode and credentials as the invocation that created the job"
 				}
 			},
 			"required": ["id"]

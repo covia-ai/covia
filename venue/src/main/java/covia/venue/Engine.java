@@ -2992,6 +2992,31 @@ public class Engine {
 		return proofsCover(ctx, resource, ability, System.currentTimeMillis() / 1000);
 	}
 
+	/**
+	 * Authorises an explicit request to execute within another user's namespace.
+	 * The request itself is the instruction; the {@code user/sudo} capability is
+	 * only the permission check. Authentication and actor attribution are retained.
+	 *
+	 * <p>The returned context is proof-bounded so the actor's ambient authority
+	 * over its own account cannot leak into the target account. The sudo grant
+	 * selects only the namespace: the invoked operation and every point of action
+	 * must still be covered independently.</p>
+	 */
+	public RequestContext sudoContext(RequestContext ctx, AString userDID) {
+		if (ctx == null || ctx.getCallerDID() == null
+				|| isPublicPrincipal(ctx.getCallerDID())) {
+			throw new AuthException("Authentication required for user/sudo");
+		}
+		if (userDID == null) throw new IllegalArgumentException("Target user DID is required");
+		requireNotSubPrincipal(userDID);
+		if (userDID.equals(ctx.getUserDID())) return ctx;
+		if (!crossUserAllows(ctx, userDID, Abilities.USER_SUDO)) {
+			throw new AuthException("Sudo denied: requires user/sudo on " + userDID
+				+ " from that user");
+		}
+		return ctx.onBehalfOf(userDID);
+	}
+
 	/** A read of the venue's explicitly addressed content catalog
 	 *  ({@code <venueDID>/a/…}). It is public only for reads and only for the
 	 *  venue's own DID; bare hashes and another user's {@code /a/} are private. */

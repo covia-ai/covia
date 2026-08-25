@@ -55,6 +55,7 @@ public class UserAdapter extends AAdapter {
 		// The adapter's own skill: v/skills/users lives and dies with this adapter.
 		installSkill("admin/users", "/skills/users.json");
 		installAsset("user/create", "/adapters/user/create.json");
+		installAsset("user/sudo", "/adapters/user/sudo.json");
 		installAsset("user/info", "/adapters/user/info.json");
 		installAsset("user/list", "/adapters/user/list.json");
 		installAsset("user/authentication-add", "/adapters/user/authentication-add.json");
@@ -66,8 +67,10 @@ public class UserAdapter extends AAdapter {
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx,
 			AMap<AString, ACell> meta, ACell input) {
 		requireInvoke(ctx);
+		String subOperation = getSubOperation(meta);
+		if ("sudo".equals(subOperation)) return sudo(ctx, input);
 		try {
-			return CompletableFuture.completedFuture(switch (getSubOperation(meta)) {
+			return CompletableFuture.completedFuture(switch (subOperation) {
 				case "create" -> create(ctx, input);
 				case "info" -> info(ctx, input);
 				case "list" -> list(ctx);
@@ -75,8 +78,21 @@ public class UserAdapter extends AAdapter {
 				case "authentication-revoke" -> authenticationRevoke(ctx, input);
 				case "authentication-list" -> authenticationList(ctx, input);
 				default -> throw new IllegalArgumentException(
-					"Unknown user operation: " + getSubOperation(meta));
+					"Unknown user operation: " + subOperation);
 			});
+		} catch (Exception e) {
+			return CompletableFuture.failedFuture(e);
+		}
+	}
+
+	/** Explicitly execute one operation in another user's namespace. */
+	private CompletableFuture<ACell> sudo(RequestContext ctx, ACell input) {
+		try {
+			AString userDID = requireDID(RT.ensureString(RT.getIn(input, Fields.DID)));
+			AString operation = RT.ensureString(RT.getIn(input, Fields.OPERATION));
+			if (operation == null) throw new IllegalArgumentException("operation is required");
+			RequestContext sudo = engine.sudoContext(ctx, userDID);
+			return engine.jobs().invokeInternal(operation, RT.getIn(input, Fields.INPUT), sudo);
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
 		}

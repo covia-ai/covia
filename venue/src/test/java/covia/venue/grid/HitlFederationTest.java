@@ -69,6 +69,7 @@ public class HitlFederationTest {
 		while (System.currentTimeMillis() < deadline) {
 			Job probe = viaA.invokeAndWait(OP_GRID_JOB_STATUS, Maps.of(
 				Fields.VENUE, TwoVenueTestServer.BASE_URL_B,
+				"authenticateAs", "caller",
 				"id", remoteId));
 			lastSeen = probe.getData();
 			if (Status.COMPLETE.equals(probe.getStatus())) {
@@ -131,6 +132,7 @@ public class HitlFederationTest {
 
 		Job hop = bobOnA.invokeAndWait(OP_GRID_INVOKE, Maps.of(
 			Fields.VENUE, TwoVenueTestServer.BASE_URL_B,
+			"authenticateAs", "caller",
 			Fields.OPERATION, "v/ops/hitl/request",
 			Fields.INPUT, Hitl.request("Report access")
 				.to(aliceDID.toString())
@@ -207,6 +209,7 @@ public class HitlFederationTest {
 
 		Job hop = bobOnA.invokeAndWait(OP_GRID_INVOKE, Maps.of(
 			Fields.VENUE, TwoVenueTestServer.BASE_URL_B,
+			"authenticateAs", "caller",
 			Fields.OPERATION, "v/ops/hitl/request",
 			Fields.INPUT, Hitl.request("gimme")
 				.to(aliceDID.toString())

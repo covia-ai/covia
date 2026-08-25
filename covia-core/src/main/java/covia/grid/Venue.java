@@ -36,11 +36,12 @@ public abstract class Venue {
 	}
 
 	/**
-	 * Sets UCAN proof tokens (JWT strings) to present with requests — the
-	 * delegation channel for cross-user / cross-venue access. Base
-	 * implementation is a no-op; transports with a proof channel (HTTP
-	 * {@code ucans} body array) override.
-	 * @param jwts Proof tokens, or null/empty for none
+	 * Sets the raw UCAN envelope (JWT strings) to present with requests. Normally
+	 * this contains capability grants. A relay request may additionally carry a
+	 * target-audienced empty-att credential; it remains inert until an explicit
+	 * remote-authentication instruction installs it as the target's bearer. Base
+	 * implementation is a no-op; transports with a UCAN channel override.
+	 * @param jwts grant tokens and optional inert relay credentials, or null/empty
 	 */
 	public void setUcans(java.util.List<String> jwts) {
 		// no-op by default

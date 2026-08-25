@@ -211,8 +211,8 @@ public class VenueHTTP extends Venue {
 		auth.apply(builder);
 		// Proofs also ride a header so body-less requests (GET /jobs/{id} and
 		// friends) carry the caller's authority — without this, a federated
-		// hop can invoke a remote job but never observe it (identity tokens
-		// and delegations only travelled in the invoke body).
+		// hop can invoke a remote job but never observe it. Authentication is
+		// applied separately above; this header contains capability grants only.
 		AVector<ACell> proofTokens = this.ucans;
 		if (proofTokens != null) {
 			StringBuilder sb = new StringBuilder();

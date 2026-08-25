@@ -16,21 +16,24 @@ import convex.core.data.Vectors;
  * counterpart: a venue cannot sign as the caller without holding the caller's
  * key, so principals speak for themselves here and venues only verify.
  *
- * <p>All helpers return the JWT encoding — the transport form carried in the
- * {@code ucans} request array ({@link covia.grid.Venue#setUcans}) and relayed
- * across cross-venue hops.</p>
+ * <p>All helpers return JWT encoding. Capability grants travel through
+ * {@link covia.grid.Venue#setUcans}; an identity token is instead an
+ * authentication credential (for example {@code VenueAuth.bearer(token)}).
+ * A caller may carry a target-audienced identity token to a relay in its raw
+ * UCAN envelope, but it remains inert there and is installed as the target
+ * request's bearer only after an explicit {@code authenticateAs=caller}.</p>
  *
  * <p>Three token shapes (see the venue UCAN spec §5.6):</p>
  * <ul>
  *   <li>{@link #identityToken} — proves <em>who you are</em> to one venue;</li>
  *   <li>{@link #grant} — delegates capability over your resources to someone;</li>
- *   <li>{@link #relayDelegation} — instructs+authorises a venue to relay a
- *       cross-venue hop as itself on your behalf.</li>
+ *   <li>{@link #relayDelegation} — authorises an explicitly requested venue-
+ *       authenticated cross-venue hop.</li>
  * </ul>
  */
 public final class UcanTokens {
 
-	/** The ability that instructs a venue to relay a hop as itself. */
+	/** The ability that authorises a venue to relay a hop as itself. */
 	public static final String VENUE_RELAY = "venue/relay";
 
 	private UcanTokens() {}
@@ -44,9 +47,9 @@ public final class UcanTokens {
 	 * Mints an <b>identity token</b>: a UCAN with an empty attenuation list,
 	 * audienced to {@code venueDID}. Pure proof of identity — it grants
 	 * nothing, and being audience-bound it is unusable at any other venue.
-	 * Present it in the {@code ucans} array; the venue accepts it as the
-	 * caller identity on an otherwise-unauthenticated transport (the mechanism
-	 * that carries identity across cross-venue relays).
+	 * Use it as the target venue's bearer credential. For a grid relay, carry it
+	 * in the incoming raw UCAN envelope and explicitly request
+	 * {@code authenticateAs=caller}; its presence alone has no effect.
 	 *
 	 * @param kp         the caller's key pair (signs; its did:key is the identity)
 	 * @param venueDID   the DID of the venue this token authenticates to
@@ -79,18 +82,19 @@ public final class UcanTokens {
 	}
 
 	/**
-	 * Mints a <b>relay delegation</b>: instructs and authorises {@code venueDID}
-	 * to make a cross-venue hop authenticated as itself, exercising the caller's
-	 * authority. Carries the {@code venue/relay} instruction plus the substantive
+	 * Mints a <b>relay delegation</b>: authorises {@code venueDID} to make an
+	 * explicitly requested cross-venue hop authenticated as itself, exercising
+	 * the caller's authority. Carries the {@code venue/relay} grant plus the substantive
 	 * capabilities the venue may exercise (each {@code {with, can}} pair from
-	 * {@code caps}). The venue honours the instruction only when its issuer is
-	 * the authenticated caller.
+	 * {@code caps}). The venue accepts the grant only when its issuer is the
+	 * authenticated caller; the grid input must separately say
+	 * {@code authenticateAs=venue}.
 	 *
 	 * @param kp         the caller's key pair
 	 * @param venueDID   the relaying venue's DID (the token's audience)
 	 * @param ttlSeconds validity window
 	 * @param caps       alternating {@code with, can} pairs for the substantive
-	 *                   grants (may be empty for a bare instruction)
+	 *                   grants (may be empty for relay authority alone)
 	 * @return the delegation as a JWT string
 	 */
 	public static String relayDelegation(AKeyPair kp, String venueDID,

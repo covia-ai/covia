@@ -28,9 +28,9 @@ public final class Abilities {
 	public static final AString AGENT_WRITE   = Strings.intern("agent/write");
 	public static final AString USER_CREATE   = Strings.intern("user/create");
 	public static final AString USER_READ     = Strings.intern("user/read");
-	/** Execute within the issuing user's namespace while retaining the audience
-	 *  as the actor. Scoped to the issuer DID itself; grants no action authority. */
-	public static final AString USER_ACT      = Strings.intern("user/act");
+	/** Authorise an explicit sudo request into a user's namespace. Scoped to the
+	 *  target user DID itself; grants no operation or action authority. */
+	public static final AString USER_SUDO     = Strings.intern("user/sudo");
 	public static final AString USER_AUTH_MANAGE =
 		Strings.intern("user/authentication-manage");
 	/** Venue-owned adapter and module lifecycle (enable/disable/configure,
