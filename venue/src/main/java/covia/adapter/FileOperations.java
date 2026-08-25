@@ -52,11 +52,19 @@ final class FileOperations {
 	private static final AString FIELD_CONTENT_REF = Strings.intern("contentRef");
 	private static final AString FIELD_PARENTS = Strings.intern("parents");
 	private static final AString FIELD_RECURSIVE = Strings.intern("recursive");
+	private static final AString DIRECTORY_CHANGED_WARNING = Strings.intern(
+		"Directory changed during traversal; one or more entries disappeared and were omitted,"
+		+ " so this result is not a complete snapshot.");
 
 	private static final int MAX_DEPTH_CAP = 10;
 	private static final int MAX_ENTRIES_CAP = 5000;
 
 	private FileOperations() {}
+
+	@FunctionalInterface
+	interface AttributeReader {
+		BasicFileAttributes read(Path path) throws IOException;
+	}
 
 	/**
 	 * Resolve a caller path inside a filesystem root. Leading separators mean
@@ -113,11 +121,22 @@ final class FileOperations {
 	}
 
 	static ACell list(Path dir) throws IOException {
+		return list(dir, child -> Files.readAttributes(child, BasicFileAttributes.class));
+	}
+
+	static ACell list(Path dir, AttributeReader attributeReader) throws IOException {
 		if (!Files.isDirectory(dir)) throw new IllegalArgumentException("Not a directory: " + dir);
 		AVector<ACell> entries = Vectors.empty();
+		boolean changed = false;
 		try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
 			for (Path child : stream) {
-				BasicFileAttributes attrs = Files.readAttributes(child, BasicFileAttributes.class);
+				BasicFileAttributes attrs;
+				try {
+					attrs = attributeReader.read(child);
+				} catch (NoSuchFileException e) {
+					changed = true;
+					continue;
+				}
 				String type = attrs.isDirectory() ? "directory"
 					: attrs.isRegularFile() ? "file"
 					: attrs.isSymbolicLink() ? "symlink" : "other";
@@ -130,29 +149,42 @@ final class FileOperations {
 				));
 			}
 		}
-		return Maps.of("entries", entries);
+		AMap<AString, ACell> result = Maps.of("entries", entries);
+		if (changed) result = result.assoc(Fields.WARNINGS, Vectors.of(DIRECTORY_CHANGED_WARNING));
+		return result;
 	}
 
 	static ACell tree(Path dir, AMap<AString, ACell> input) throws IOException {
+		return tree(dir, input,
+			child -> Files.readAttributes(child, BasicFileAttributes.class));
+	}
+
+	static ACell tree(Path dir, AMap<AString, ACell> input,
+			AttributeReader attributeReader) throws IOException {
 		if (!Files.isDirectory(dir)) throw new IllegalArgumentException("Not a directory: " + dir);
 		int maxDepth = boundedInt(input, "maxDepth", 3, 1, MAX_DEPTH_CAP);
 		int maxEntries = boundedInt(input, "maxEntries", 500, 1, MAX_ENTRIES_CAP);
 		AString infoCell = RT.ensureString(input.get(Strings.create("info")));
 		TreeState state = new TreeState();
 		walkTree(dir, 0, maxDepth, maxEntries,
-			infoCell != null ? infoCell.toString() : null, state);
-		return Maps.of("tree", state.out.toString(),
+			infoCell != null ? infoCell.toString() : null, state, attributeReader);
+		AMap<AString, ACell> result = Maps.of("tree", state.out.toString(),
 			"truncated", CVMBool.create(state.truncated));
+		if (state.changed) {
+			result = result.assoc(Fields.WARNINGS, Vectors.of(DIRECTORY_CHANGED_WARNING));
+		}
+		return result;
 	}
 
 	private static final class TreeState {
 		final StringBuilder out = new StringBuilder();
 		int entries;
 		boolean truncated;
+		boolean changed;
 	}
 
 	private static void walkTree(Path dir, int depth, int maxDepth, int maxEntries,
-			String info, TreeState state) throws IOException {
+			String info, TreeState state, AttributeReader attributeReader) throws IOException {
 		List<Path> children = new ArrayList<>();
 		try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
 			for (Path child : stream) children.add(child);
@@ -163,14 +195,25 @@ final class FileOperations {
 				state.truncated = true;
 				return;
 			}
+			BasicFileAttributes attrs;
+			try {
+				attrs = attributeReader.read(child);
+			} catch (NoSuchFileException e) {
+				state.changed = true;
+				continue;
+			}
 			state.entries++;
-			BasicFileAttributes attrs = Files.readAttributes(child, BasicFileAttributes.class);
 			for (int i = 0; i < depth; i++) state.out.append('\t');
 			state.out.append(displayName(child));
 			if (attrs.isDirectory()) {
 				state.out.append("/\n");
 				if (depth + 1 < maxDepth) {
-					walkTree(child, depth + 1, maxDepth, maxEntries, info, state);
+					try {
+						walkTree(child, depth + 1, maxDepth, maxEntries,
+							info, state, attributeReader);
+					} catch (NoSuchFileException e) {
+						state.changed = true;
+					}
 					if (state.truncated) return;
 				}
 			} else {

@@ -23,7 +23,12 @@
       "type": "object",
       "properties": {
         "tree": { "type": "string", "description": "Tab-indented text tree. Each line is one entry: '<tabs><name>' for files, '<tabs><name>/' for directories." },
-        "truncated": { "type": "boolean", "description": "True if the entries cap was reached and the walk stopped early. The agent should narrow the path or lower maxDepth and try again." }
+        "truncated": { "type": "boolean", "description": "True if the entries cap was reached and the walk stopped early. The agent should narrow the path or lower maxDepth and try again." },
+        "warnings": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Non-fatal advisories. Present when entries disappeared during traversal and were omitted."
+        }
       }
     }
   }

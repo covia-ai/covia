@@ -30,6 +30,11 @@
               "modified": { "type": "integer" }
             }
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Non-fatal advisories. Present when entries disappeared during traversal and were omitted."
         }
       }
     }

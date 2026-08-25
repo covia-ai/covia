@@ -25,6 +25,11 @@
               "modified": { "type": "integer", "description": "Last-modified epoch milliseconds" }
             }
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Non-fatal advisories. Present when entries disappeared during traversal and were omitted."
         }
       }
     }
