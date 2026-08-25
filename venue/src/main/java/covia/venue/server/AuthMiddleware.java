@@ -12,9 +12,14 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.auth.did.DIDVerifier;
+import convex.auth.ucan.Capability;
+import convex.auth.ucan.UCAN;
 import convex.auth.ucan.UCANValidator;
+import convex.core.lang.RT;
 import convex.core.util.JSON;
+import covia.api.Abilities;
 import covia.exception.AuthException;
 import covia.venue.Auth;
 import covia.venue.Config;
@@ -59,8 +64,7 @@ public class AuthMiddleware {
 	 * Context attribute holding the raw UCAN JWT extracted from an
 	 * {@code Authorization: Bearer ...} header, when the bearer is a valid
 	 * UCAN (and so also serves as caller authentication). Downstream handlers
-	 * merge this into their transport {@code ucans} vector via
-	 * {@link UcanJwtValidator#parseTransportUCANsWithBearer}. Null when the
+	 * merge this into their transport {@code ucans} vector at ingress. Null when the
 	 * request has no bearer token or the bearer is not a UCAN.
 	 */
 	public static final String UCAN_BEARER_ATTR = "ucanBearer";
@@ -313,12 +317,13 @@ public class AuthMiddleware {
 	/**
 	 * Attach transport-presented UCAN authority to a request context — the single
 	 * seam used by every invoke transport (REST, MCP). Presented proofs are the
-	 * cryptographically-verified tokens, attached for <b>cross-user grant
-	 * checks</b> (§5.2). Proofs are <b>additive</b>: a token only ever <em>adds</em>
-	 * a grant, it never subtracts from the caller's own authority — so there is no
-	 * wire-level self-attenuation. To act with reduced authority, run under a
-	 * narrower {@link covia.grid.Authority} (an agent's {@code config.caps}) or
-	 * present only the UCANs the request needs.
+	 * cryptographically-verified tokens, attached for cross-user grant checks
+	 * (§5.2). Ordinary proofs are additive. A body token carrying
+	 * {@code user/act} over its issuer and issued directly to the authenticated caller selects
+	 * on-behalf-of execution: the caller remains the actor, the issuer becomes
+	 * the user namespace, and that context is bounded to the presented proofs.
+	 * This prevents a delegate's unrestricted authority over its own account from
+	 * becoming unrestricted authority over the issuer's account (#406).
 	 *
 	 * <p>With no token presented, nothing is attached and access is unrestricted
 	 * (the common case).</p>
@@ -385,8 +390,12 @@ public class AuthMiddleware {
 	public static RequestContext withTransportAuth(RequestContext rctx, AString bearer,
 			AVector<ACell> ucans, AString venueDID, DIDVerifier verifier) {
 		// Verify signatures at ingress with an explicit DID verifier.
-		AVector<ACell> proofs = UcanJwtValidator.parseTransportUCANsWithBearer(bearer, ucans,
-			(verifier != null) ? verifier : DIDVerifier.CONVEX);
+		DIDVerifier effectiveVerifier = (verifier != null) ? verifier : DIDVerifier.CONVEX;
+		AVector<ACell> bearerProofs = (bearer != null)
+			? UcanJwtValidator.parseTransportUCANs(Vectors.of(bearer), effectiveVerifier)
+			: null;
+		AVector<ACell> bodyProofs = UcanJwtValidator.parseTransportUCANs(ucans, effectiveVerifier);
+		AVector<ACell> proofs = concatProofs(bearerProofs, bodyProofs);
 		if (proofs == null) return rctx;
 
 		// Identity from the proof channel: only for an unauthenticated transport
@@ -401,17 +410,65 @@ public class AuthMiddleware {
 		}
 
 		rctx = rctx.withProofs(proofs);
+		// A body token carrying user/act on its issuer is an on-behalf-of
+		// delegation. Keep the audience as caller/actor, but execute in the issuer's
+		// namespace under proof-only authority. Ordinary cross-user grants stay
+		// additive; namespace selection is itself explicit capability data. A single
+		// invocation cannot act for two users at once.
+		AString delegatedUser = delegatedUser(bodyProofs, rctx.getCallerDID());
+		if (delegatedUser != null) rctx = rctx.onBehalfOf(delegatedUser);
 		// Retain the raw body tokens for cross-venue relay (C3a): proofs are
 		// self-verifying, so forwarding them is safe — but only the original
 		// signed JWTs verify at the next hop, not the parsed maps. The bearer is
 		// NOT retained for relay — it is audienced to THIS venue (#149) and must
 		// never be replayed elsewhere.
 		if (ucans != null && !ucans.isEmpty()) rctx = rctx.withRawUcans(ucans);
-		// No self-attenuation from the wire: presented proofs are additive grants,
-		// never subtractive. To act with reduced authority, hand the
+		// Outside the explicit on-behalf-of case above, presented proofs are
+		// additive and never subtractive. To act with reduced authority, hand the
 		// callee a narrower Authority (Authority.of(did, grants)) or present only the
 		// UCANs the request needs — you never send everything and then subtract.
 		return rctx;
+	}
+
+	private static AVector<ACell> concatProofs(AVector<ACell> first, AVector<ACell> second) {
+		if (first == null || first.isEmpty()) return second;
+		if (second == null || second.isEmpty()) return first;
+		return first.concat(second);
+	}
+
+	/** The unique direct issuer granting {@code user/act} over itself, if any. */
+	private static AString delegatedUser(AVector<ACell> proofs, AString actor) {
+		if (proofs == null || actor == null) return null;
+		AString user = null;
+		for (long i = 0; i < proofs.count(); i++) {
+			AMap<AString, ACell> map = RT.castMap(proofs.get(i));
+			UCAN token = (map != null) ? UCAN.parse(map) : null;
+			if (token == null || !actor.equals(token.getAudience())) continue;
+			AString issuer = token.getIssuer();
+			if (issuer == null || issuer.equals(actor)) continue;
+			AVector<ACell> capabilities = token.getCapabilities();
+			if (!grantsActAs(capabilities, issuer)) continue;
+			if (user != null && !user.equals(issuer)) {
+				throw new AuthException("Ambiguous delegated namespace: proofs were issued by both "
+					+ user + " and " + issuer + "; submit one user's delegation per invocation");
+			}
+			user = issuer;
+		}
+		return user;
+	}
+
+	private static boolean grantsActAs(AVector<ACell> capabilities, AString issuer) {
+		if (capabilities == null) return false;
+		for (long i = 0; i < capabilities.count(); i++) {
+			AMap<AString, ACell> cap = RT.castMap(capabilities.get(i));
+			if (cap == null) continue;
+			if (issuer.equals(RT.ensureString(cap.get(Capability.WITH)))
+					&& Abilities.USER_ACT.equals(
+						RT.ensureString(cap.get(Capability.CAN)))) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/** True when the context carries no authenticated identity: anonymous, or the

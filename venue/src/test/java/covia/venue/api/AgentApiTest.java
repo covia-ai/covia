@@ -3,6 +3,7 @@ package covia.venue.api;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URI;
@@ -29,6 +30,8 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
+import covia.api.Abilities;
+import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.auth.VenueAuth;
@@ -210,5 +213,53 @@ public class AgentApiTest {
 		Job job = client.invokeAndWait(OP_LIST, Maps.empty());
 		assertEquals(Status.COMPLETE, job.getStatus(), job.getErrorMessage());
 		assertEquals(before + 1, jobCount(), "agent:list via invoke persists exactly one job");
+	}
+
+	/** #406: a user delegating to an intermediary keeps the intermediary as the
+	 * actor while implicit agent paths and the durable Job belong to the user. */
+	@Test
+	public void testDelegatedCreateUsesIssuerNamespaceAndProofBounds() throws Exception {
+		AKeyPair ownerKey = AKeyPair.generate();
+		AKeyPair delegateKey = AKeyPair.generate();
+		AString owner = UCAN.toDIDKey(ownerKey.getAccountKey());
+		AString delegate = UCAN.toDIDKey(delegateKey.getAccountKey());
+		long exp = (System.currentTimeMillis() / 1000) + 3600;
+		AString createGrant = UCAN.create(ownerKey, delegateKey.getAccountKey(), exp,
+			Vectors.of(
+				Capability.create(owner, Abilities.USER_ACT),
+				Capability.create(Strings.create(owner + "/v/ops/agent/create"), Strings.create("invoke")),
+				Capability.create(Strings.create(owner + "/g/"), Abilities.AGENT_CREATE)),
+			Vectors.empty()).toJWT(ownerKey);
+
+		VenueHTTP delegated = VenueHTTP.create(
+			URI.create(TestServer.BASE_URL), VenueAuth.keyPair(delegateKey));
+		delegated.setTimeout(5000);
+		delegated.setUcans(java.util.List.of(createGrant.toString()));
+		Job created = delegated.invokeAndWait(OP_CREATE, Maps.of(Fields.AGENT_ID, "delegated-agent"));
+
+		assertEquals(Status.COMPLETE, created.getStatus(), created.getErrorMessage());
+		assertEquals(Strings.create(owner + "/g/delegated-agent"),
+			RT.getIn(created.getData(), Fields.OUTPUT, Fields.ADDRESS));
+		assertEquals(owner, RT.getIn(created.getData(), Fields.CALLER),
+			"the delegating user owns the job receipt");
+		assertEquals(delegate, RT.getIn(created.getData(), Fields.ACTOR),
+			"the intermediary remains auditable as the actor");
+		assertNotNull(TestServer.ENGINE.getVenueState().users().get(owner).agent("delegated-agent"));
+		User delegateUser = TestServer.ENGINE.getVenueState().users().get(delegate);
+		assertTrue(delegateUser == null || delegateUser.agent("delegated-agent") == null,
+			"an implicit agent id must never land in the intermediary's namespace");
+
+		// Namespace selection cannot confer ambient owner authority: the token
+		// permits invocation but omits the action's agent/create capability.
+		AString invokeOnly = UCAN.create(ownerKey, delegateKey.getAccountKey(), exp,
+			Vectors.of(Capability.create(owner, Abilities.USER_ACT),
+				Capability.create(Strings.create(owner + "/v/ops/agent/create"), Strings.create("invoke"))),
+			Vectors.empty()).toJWT(ownerKey);
+		delegated.setUcans(java.util.List.of(invokeOnly.toString()));
+		Job denied = delegated.invokeAndWait(OP_CREATE, Maps.of(Fields.AGENT_ID, "not-authorised"));
+		assertEquals(Status.FAILED, denied.getStatus());
+		assertTrue(denied.getErrorMessage().contains("agent/create"), denied.getErrorMessage());
+		assertNull(TestServer.ENGINE.getVenueState().users().get(owner).agent("not-authorised"),
+			"namespace selection must not bypass the signed capability limit");
 	}
 }

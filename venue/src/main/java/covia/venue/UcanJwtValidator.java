@@ -168,15 +168,6 @@ public final class UcanJwtValidator {
 		return result.isEmpty() ? null : result;
 	}
 
-	/** Parse a bearer plus body proofs through one validation boundary. */
-	public static AVector<ACell> parseTransportUCANsWithBearer(AString bearer,
-			AVector<ACell> bodyUcans, DIDVerifier verifier) {
-		if (bearer == null) return parseTransportUCANs(bodyUcans, verifier);
-		AVector<ACell> combined = Vectors.of(bearer);
-		if (bodyUcans != null && !bodyUcans.isEmpty()) combined = combined.concat(bodyUcans);
-		return parseTransportUCANs(combined, verifier);
-	}
-
 	private static Validation failure(String reason) {
 		return new Validation(null, reason);
 	}

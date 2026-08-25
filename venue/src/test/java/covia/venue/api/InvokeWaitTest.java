@@ -1,6 +1,7 @@
 package covia.venue.api;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -12,11 +13,15 @@ import java.net.http.HttpResponse;
 import org.junit.jupiter.api.Test;
 
 import convex.core.data.ACell;
+import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
+import covia.api.Fields;
+import covia.grid.Job;
+import covia.grid.Status;
 import covia.venue.TestServer;
 
 /**
@@ -60,6 +65,18 @@ public class InvokeWaitTest {
 		assertThrows(IllegalArgumentException.class, () -> CoviaAPI.parseWaitMs(null, Strings.create("whenever")));
 		assertThrows(IllegalArgumentException.class, () -> CoviaAPI.parseWaitMs(null, CVMLong.create(-1)));
 		assertThrows(IllegalArgumentException.class, () -> CoviaAPI.parseWaitMs(null, convex.core.data.Maps.of("ms", CVMLong.create(5))));
+	}
+
+	@Test
+	public void testCompletionAfterExpiredWaitStaysAsynchronous() {
+		Job job = Job.create(Maps.of(Fields.STATUS, Status.STARTED));
+
+		boolean completedWithinWait = CoviaAPI.awaitCompletion(job, 1);
+		job.completeWith(Maps.of("late", true));
+
+		assertTrue(job.isComplete(), "the job may complete after the wait expires");
+		assertFalse(completedWithinWait,
+			"a late completion must not retroactively turn an expired wait into HTTP 200");
 	}
 
 	// ========== End-to-end over the real transport ==========

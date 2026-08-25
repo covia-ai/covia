@@ -21,6 +21,7 @@ import covia.lattice.CapabilityChecker;
 public class RequestContextAuthorityTest {
 
 	private static final AString ALICE = Strings.create("did:key:zAlice");
+	private static final AString DELEGATE = Strings.create("did:key:zDelegate");
 	private static final ACell PROOF = Strings.create("proof");
 	private static final ACell CAP = Strings.create("cap");
 
@@ -56,6 +57,22 @@ public class RequestContextAuthorityTest {
 		assertEquals(1, ctx.getAuthority().getGrants().count());
 		// null restores unrestricted
 		assertNull(ctx.withCaps(null).getCaps());
+	}
+
+	@Test
+	public void testDelegatedAuthoritySeparatesActorFromNamespaceAndIsProofBounded() {
+		RequestContext original = RequestContext.of(DELEGATE)
+			.withProofs(Vectors.of(PROOF));
+		RequestContext delegated = original.onBehalfOf(ALICE);
+
+		assertEquals(DELEGATE, delegated.getCallerDID(), "the delegate remains the actor");
+		assertEquals(ALICE, delegated.getUserDID(), "bare paths use the delegating user's namespace");
+		assertTrue(delegated.isSubPrincipal());
+		assertEquals(Vectors.of(PROOF), delegated.getProofs());
+		assertEquals(Vectors.empty(), delegated.getCaps(),
+			"delegated execution must not inherit the actor's unrestricted ambient scope");
+		assertSame(original, original.onBehalfOf(DELEGATE),
+			"acting in the existing namespace is a no-op");
 	}
 
 	@Test

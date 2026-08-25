@@ -478,7 +478,7 @@ public class MCP extends McpServer {
 				Context ctx = McpServer.getCurrentContext();
 				RequestContext rctx = AuthMiddleware.callerContext(ctx);
 
-				// Attach transport UCAN authority — proofs are additive cross-user
+				// Attach transport UCAN authority — additive grants or a proof-bounded on-behalf-of
 				// grants — from the `ucans` tool argument and an Authorization
 				// bearer UCAN.
 				AVector<ACell> ucans = RT.getIn(arguments, Fields.UCANS);

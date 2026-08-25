@@ -358,6 +358,19 @@ transport channels — they are merged through the same trust boundary:
    `ucans` array. Expired, tampered, or non-UCAN bearer tokens fall
    through to the existing JWT auth paths.
 
+**Delegated execution.** When an authenticated actor presents a body token
+whose `aud` is that actor and which carries `{with: <iss>, can: "user/act"}`,
+the invocation executes on behalf of the issuer. The actor
+remains the proof audience and is recorded as the Job's `actor`; bare paths,
+per-user state, admission and the Job receipt use the issuer's namespace. This
+context has an empty ambient scope, so every action must be covered by the
+presented proof chain — selecting a namespace never grants authority by itself.
+The `user/act` capability grants no operation by itself: invoke and
+point-of-action capabilities remain separate and mandatory. Ordinary
+cross-user proofs, empty-att identity tokens and tokens audienced elsewhere do
+not select a namespace. `user/act` proofs from two different direct issuers are
+rejected as ambiguous: one invocation has one user namespace.
+
 **MCP**: Same two channels. Tool call parameters may include `ucans`, and
 the MCP endpoint honours `Authorization: Bearer <ucan-jwt>` on the
 enclosing HTTP request:
@@ -513,6 +526,11 @@ with reduced authority:
   *augment* with additional grants — e.g. a time-limited token (§5.2).
 - **Externally** — present only the UCANs the request actually needs, never the
   caller's whole authority.
+
+The transport on-behalf-of rule is the deliberate boundary: a delegate does
+not carry its own ambient authority into another user's namespace. Its
+authority there is exactly the issuer's presented proof chain, while its actor
+identity remains unchanged for attribution and audience checks.
 
 ### 5.2 Cross-User Access
 

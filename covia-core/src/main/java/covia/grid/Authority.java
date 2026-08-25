@@ -113,6 +113,25 @@ public final class Authority {
 		return new Authority(Principals.agentDID(userDID, agentId), userDID, null, null);
 	}
 
+	/**
+	 * Returns this actor executing on behalf of {@code userDID} under its
+	 * presented delegation proofs.
+	 *
+	 * <p>The actor identity is preserved for attribution and proof-audience
+	 * checks, while bare paths and per-user state resolve in the delegating
+	 * user's namespace. The held scope is deliberately empty: authority over
+	 * that namespace must come from the signed proofs, never from the actor's
+	 * otherwise-unrestricted authority over its own account.</p>
+	 *
+	 * @param userDID the delegating user whose namespace the actor works in
+	 * @return a proof-bounded delegated authority, or this authority when the
+	 *         user is null or already the actor's user
+	 */
+	public Authority onBehalfOf(AString userDID) {
+		if (userDID == null || userDID.equals(getUserDID())) return this;
+		return new Authority(did, userDID, Vectors.empty(), proofs);
+	}
+
 	/** The caller identity, or null if anonymous. */
 	public AString getDID() {
 		return did;

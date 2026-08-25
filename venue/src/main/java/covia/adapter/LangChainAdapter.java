@@ -1260,9 +1260,11 @@ public class LangChainAdapter extends AAdapter {
 	 *       provider keeps a system message wherever it is placed.</li>
 	 *   <li>{@code "single"}: the leading run of system messages stays system
 	 *       (the client coalesces it into the provider's one system parameter);
-	 *       any system message after the conversation has begun becomes a
-	 *       {@code user} message wrapped as a system element, in place — never
-	 *       hoisted into the cached head, never out of sequence.</li>
+	 *       any system message after the conversation has begun is wrapped as a
+	 *       system element. When immediately followed by a text user turn it is
+	 *       prepended to that turn, preserving provenance without creating a
+	 *       synthetic user turn; otherwise it remains a standalone user message.
+	 *       Nothing is hoisted into the cached head or moved out of sequence.</li>
 	 *   <li>{@code "none"}: as {@code "single"}, with the leading run folded
 	 *       into the first user message.</li>
 	 * </ul>
@@ -1276,6 +1278,7 @@ public class LangChainAdapter extends AAdapter {
 
 		AVector<ACell> out = Vectors.empty();
 		StringBuilder leading = new StringBuilder();
+		StringBuilder pendingLate = new StringBuilder();
 		boolean started = false;
 		for (long i = 0; i < messages.count(); i++) {
 			ACell entry = messages.get(i);
@@ -1283,8 +1286,9 @@ public class LangChainAdapter extends AAdapter {
 			if (ROLE_SYSTEM.equals(role)) {
 				AString content = RT.ensureString(RT.getIn(entry, K_CONTENT));
 				if (started) {
-					out = out.conj(Maps.of(K_ROLE, ROLE_USER, K_CONTENT, Strings.create(
-						covia.adapter.agent.Labels.wrapSystem(dialect, content != null ? content.toString() : ""))));
+					if (pendingLate.length() > 0) pendingLate.append("\n\n");
+					pendingLate.append(covia.adapter.agent.Labels.wrapSystem(
+						dialect, content != null ? content.toString() : ""));
 				} else if (none) {
 					if (leading.length() > 0) leading.append("\n\n");
 					if (content != null) leading.append(content);
@@ -1292,6 +1296,17 @@ public class LangChainAdapter extends AAdapter {
 					out = out.conj(entry);
 				}
 				continue;
+			}
+			if (pendingLate.length() > 0) {
+				ACell content = RT.getIn(entry, K_CONTENT);
+				if (ROLE_USER.equals(role) && content instanceof AString text) {
+					entry = ((AMap<AString, ACell>) entry).assoc(K_CONTENT,
+						Strings.create(pendingLate + "\n\n" + text));
+				} else {
+					out = out.conj(Maps.of(K_ROLE, ROLE_USER, K_CONTENT,
+						Strings.create(pendingLate.toString())));
+				}
+				pendingLate.setLength(0);
 			}
 			if (!started) {
 				started = true;
@@ -1308,6 +1323,10 @@ public class LangChainAdapter extends AAdapter {
 				}
 			}
 			out = out.conj(entry);
+		}
+		if (pendingLate.length() > 0) {
+			out = out.conj(Maps.of(K_ROLE, ROLE_USER, K_CONTENT,
+				Strings.create(pendingLate.toString())));
 		}
 		if (none && !started && leading.length() > 0) {
 			out = out.conj(Maps.of(K_ROLE, ROLE_USER, K_CONTENT, Strings.create(leading.toString())));

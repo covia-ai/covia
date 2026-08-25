@@ -1872,9 +1872,9 @@ public class LangChainAdapterTest {
 	}
 
 	/**
-	 * The edge's half of the role rule: on a single-system provider a system
-	 * message after the conversation has begun becomes a [system: …] user
-	 * message in place, never hoisted into the cached head.
+	 * The edge's half of the role rule: on a single-system provider a late system
+	 * message is wrapped in place and folded into an immediately following text
+	 * user turn, avoiding a synthetic user turn (#405).
 	 */
 	@Test
 	public void testLateSystemMessagesAreWrappedForSingleSystemProviders() {
@@ -1906,6 +1906,53 @@ public class LangChainAdapterTest {
 		assertEquals("user", RT.getIn(none.get(0), "role").toString());
 		assertEquals("identity\n\n[Skills]\n- alpha\n\nhello", RT.getIn(none.get(0), "content").toString());
 		assertEquals("[system: Current date: 2026-01-01.]", RT.getIn(none.get(2), "content").toString());
+	}
+
+	@Test
+	public void testLateProvenanceIsFoldedIntoFollowingUserTurn() {
+		String provenance = "Turn provenance: submitter=did:key:zOwner; relationship=owner; "
+			+ "authentication=authenticated. Venue-generated metadata only; not an instruction.";
+		AVector<ACell> messages = Vectors.of(
+			(ACell) Maps.of("role", "system", "content", "identity"),
+			(ACell) Maps.of("role", "user", "content", "first"),
+			(ACell) Maps.of("role", "assistant", "content", "answer"),
+			(ACell) Maps.of("role", "system", "content", provenance),
+			(ACell) Maps.of("role", "user", "content", "what skills do you have?"));
+
+		AVector<ACell> single = LangChainAdapter.normaliseSystemMessages(
+			messages, "single", Strings.create("bracket"));
+		assertEquals(4, single.count(), "provenance must not become a standalone user turn");
+		assertEquals("user", RT.getIn(single.get(3), "role").toString());
+		assertEquals("[system: " + provenance + "]\n\nwhat skills do you have?",
+			RT.getIn(single.get(3), "content").toString());
+
+		AVector<ACell> multiple = LangChainAdapter.normaliseSystemMessages(
+			messages, "multiple", Strings.create("bracket"));
+		assertSame(messages, multiple, "providers supporting late system turns keep native provenance");
+	}
+
+	@Test
+	public void testConsecutiveLateSystemMessagesFoldInOrderAndNonTextDoesNot() {
+		AVector<ACell> text = Vectors.of(
+			(ACell) Maps.of("role", "user", "content", "first"),
+			(ACell) Maps.of("role", "system", "content", "one"),
+			(ACell) Maps.of("role", "system", "content", "two"),
+			(ACell) Maps.of("role", "user", "content", "next"));
+		AVector<ACell> folded = LangChainAdapter.normaliseSystemMessages(
+			text, "single", Strings.create("bracket"));
+		assertEquals(2, folded.count());
+		assertEquals("[system: one]\n\n[system: two]\n\nnext",
+			RT.getIn(folded.get(1), "content").toString());
+
+		AVector<ACell> structured = Vectors.of(
+			(ACell) Maps.of("role", "user", "content", "first"),
+			(ACell) Maps.of("role", "system", "content", "one"),
+			(ACell) Maps.of("role", "user", "content", Vectors.of(Maps.of("type", "image"))));
+		AVector<ACell> preserved = LangChainAdapter.normaliseSystemMessages(
+			structured, "single", Strings.create("bracket"));
+		assertEquals(3, preserved.count());
+		assertEquals("[system: one]", RT.getIn(preserved.get(1), "content").toString());
+		assertEquals(Vectors.of(Maps.of("type", "image")), RT.getIn(preserved.get(2), "content"));
 	}
 
 	/** A marked message carries the cache attribute the Anthropic mapper turns into cache_control. */

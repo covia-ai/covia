@@ -911,7 +911,7 @@ public class CoviaAPI extends ACoviaAPI {
 		ACell input=RT.getIn(req, "input");
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 
-		// Attach transport UCAN authority — proofs are additive cross-user grants —
+		// Attach transport UCAN authority, including on-behalf-of namespace selection —
 		// from both channels: the `ucans` envelope array and an
 		// `Authorization: Bearer <ucan-jwt>` (IETF UCAN-HTTP) stashed by
 		// AuthMiddleware as UCAN_BEARER_ATTR.
@@ -940,15 +940,9 @@ public class CoviaAPI extends ACoviaAPI {
 				return;
 			}
 
-			if (waitMs > 0) {
-				try {
-					job.awaitResult(waitMs);
-				} catch (Exception e) {
-					// Timeout or failure — return current state
-				}
-			}
+			boolean completedWithinWait = awaitCompletion(job, waitMs);
 
-			this.buildResult(ctx, waitMs > 0 && job.isComplete() ? 200 : 201, job.getData());
+			this.buildResult(ctx, completedWithinWait ? 200 : 201, job.getData());
 			ctx.header("Location",ROUTE+"jobs/"+job.getID().toHexString());
 		} catch (AuthException e) {
 			this.buildError(ctx, 403, e.getMessage());
@@ -976,6 +970,23 @@ public class CoviaAPI extends ACoviaAPI {
 	 *  server thread, so the cap is a resource guard, not a convenience — clients
 	 *  wanting longer waits poll {@code /jobs/{id}} or subscribe via SSE. */
 	static final long MAX_WAIT_MS = 120_000;
+
+	/**
+	 * Waits for successful completion and latches the outcome at the wait
+	 * boundary. Do not decide from {@link Job#isComplete()} afterwards: under
+	 * load the request thread may be descheduled after a timeout while the job
+	 * finishes, which must still produce the asynchronous 201 response.
+	 */
+	static boolean awaitCompletion(Job job, long waitMs) {
+		if (waitMs <= 0) return false;
+		try {
+			job.awaitResult(waitMs);
+			return job.isComplete();
+		} catch (Exception e) {
+			// Timeout or failure — return the current record for polling.
+			return false;
+		}
+	}
 
 	/**
 	 * Parses the invoke {@code wait} parameter, following the same convention as

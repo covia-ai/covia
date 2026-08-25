@@ -194,6 +194,20 @@ public class RequestContext {
 	}
 
 	/**
+	 * Returns a context in which the authenticated actor executes on behalf of a
+	 * delegating user. Actor identity and execution scopes are preserved; bare
+	 * paths and per-user state resolve under {@code userDID}, and every action is
+	 * bounded by the attached delegation proofs.
+	 */
+	public RequestContext onBehalfOf(AString userDID) {
+		Authority delegated = authority.onBehalfOf(userDID);
+		if (delegated == authority) return this;
+		return new RequestContext(delegated, agentId, jobId, sessionId,
+			taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job,
+			taskRevision);
+	}
+
+	/**
 	 * Returns a new context whose capability scope is replaced. Every operation
 	 * executed under this context is checked against that scope at the adapter's
 	 * point of action ({@link #requireCapability} / Engine's common gates), on
@@ -352,7 +366,8 @@ public class RequestContext {
 
 	/**
 	 * The user whose namespace this request acts within: the owning user for an
-	 * agent sub-principal, and {@link #getCallerDID()} for everyone else.
+	 * agent or delegated sub-principal, and {@link #getCallerDID()} for everyone
+	 * else.
 	 *
 	 * <p><b>Use this for namespace questions</b> — which per-user lattice record,
 	 * whose secret store, whose workspace a bare {@code w/foo} names. <b>Use
@@ -367,8 +382,8 @@ public class RequestContext {
 	}
 
 	/**
-	 * True if this context acts as an agent sub-principal — the caller is an
-	 * agent DID and {@link #getUserDID()} names a different, owning principal.
+	 * True if this context acts within another principal's namespace — for
+	 * example an agent or a caller carrying an owner-issued delegation.
 	 */
 	public boolean isSubPrincipal() {
 		return authority.isSubPrincipal();
@@ -417,7 +432,17 @@ public class RequestContext {
 	boolean delegatedProofsCover(RootAuthorityPolicy rootPolicy, AString resource,
 			AString ability, long now) {
 		return CapabilityChecker.proofsCover(authority.getProofs(), authority.getDID(),
-			rootPolicy, resource, ability, now, op, invocationInput, gate);
+			rootPolicy, proofResource(resource), ability, now, op, invocationInput, gate);
+	}
+
+	/** Bare capability resources execute in a sub-principal's user namespace. */
+	private AString proofResource(AString resource) {
+		if (!authority.isSubPrincipal() || resource == null) return resource;
+		String value = resource.toString();
+		if (value.startsWith("did:") || value.contains("://")) return resource;
+		while (value.startsWith("/")) value = value.substring(1);
+		if (value.isEmpty()) return resource;
+		return Strings.create(authority.getUserDID() + "/" + value);
 	}
 
 	/**

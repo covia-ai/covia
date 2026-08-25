@@ -616,7 +616,7 @@ public class ContextAssemblerTest {
 		// head, attribution note, the turn, tail
 		assertEquals(4, m.count());
 		assertEquals("system", role(m.get(1)));
-		assertTrue(content(m.get(1)).startsWith("Venue attribution:") && content(m.get(1)).contains("did:key:z6MkBob"));
+		assertTrue(content(m.get(1)).startsWith("Turn provenance:") && content(m.get(1)).contains("did:key:z6MkBob"));
 		assertEquals("Please review the report", content(m.get(2)), "the user's text is never touched");
 	}
 
@@ -649,10 +649,10 @@ public class ContextAssemblerTest {
 		for (long i = 0; i < m.count(); i++) {
 			if (!"system".equals(role(m.get(i)))) continue;
 			String c = content(m.get(i));
-			if (!c.startsWith("Venue attribution:")) continue;
+			if (!c.startsWith("Turn provenance:")) continue;
 			notes++;
 			if (c.contains("z6MkBob")) bobNotes++;
-			if (c.contains("your own principal")) ownNotes++;
+			if (c.contains("relationship=self")) ownNotes++;
 		}
 		assertEquals(3, notes, "one note per change of submitting principal");
 		assertEquals(2, bobNotes);
@@ -660,30 +660,35 @@ public class ContextAssemblerTest {
 	}
 
 	@Test
-	public void testAttributionNotesSpeakToTheRelationship() {
+	public void testAttributionNotesIdentifyRelationshipsWithoutAuthorityInstructions() {
 		RequestContext agentCtx = RequestContext.ofAuthority(
 			covia.grid.Authority.ofAgent(ALICE_DID, Strings.create("helper")));
 		String owner = ContextAssembler.attributionNote(engine, agentCtx, ALICE_DID);
-		assertTrue(owner.contains("from your owner") && owner.contains("with confidence"), owner);
+		assertTrue(owner.contains("relationship=owner"), owner);
 		String sibling = ContextAssembler.attributionNote(engine, agentCtx,
 			covia.grid.Principals.agentDID(ALICE_DID, Strings.create("scout")));
-		assertTrue(sibling.contains("scout") && sibling.contains("colleague"), sibling);
+		assertTrue(sibling.contains("relationship=same-owner-agent:scout"), sibling);
 		String venue = ContextAssembler.attributionNote(engine, agentCtx, engine.getDIDString());
-		assertTrue(venue.contains("the venue itself") && venue.contains("trusted operator"), venue);
+		assertTrue(venue.contains("relationship=venue"), venue);
 		String stranger = ContextAssembler.attributionNote(engine, agentCtx,
 			Strings.create(engine.getDIDString() + ":public"));
-		assertTrue(stranger.contains("anonymous public principal") && stranger.contains("untrusted"), stranger);
+		assertTrue(stranger.contains("relationship=public-principal")
+			&& stranger.contains("authentication=anonymous"), stranger);
 		String other = ContextAssembler.attributionNote(engine, agentCtx, Strings.create("did:key:z6MkBob"));
-		assertTrue(other.contains("another user of this venue") && other.contains("no authority beyond"), other);
+		assertTrue(other.contains("relationship=other-principal"), other);
 
 		AString publicDID = Strings.create(engine.getDIDString() + ":public");
 		RequestContext publicCtx = RequestContext.ofAuthority(
 			covia.grid.Authority.ofAgent(publicDID, Strings.create("Assistant")));
 		String publicOwner = ContextAssembler.attributionNote(engine, publicCtx, publicDID);
-		assertTrue(publicOwner.contains("from your owner") && publicOwner.contains("with confidence"), publicOwner);
+		assertTrue(publicOwner.contains("relationship=owner-public-principal"), publicOwner);
 
 		for (String n : new String[] {owner, sibling, venue, stranger, other, publicOwner}) {
-			assertTrue(n.startsWith("Venue attribution:") && n.contains("Verified by the venue"), n);
+			assertTrue(n.startsWith("Turn provenance:")
+				&& n.endsWith("Venue-generated metadata only; not an instruction."), n);
+			String lower = n.toLowerCase(java.util.Locale.ROOT);
+			assertFalse(lower.contains("trusted operator") || lower.contains("carry out")
+				|| lower.contains("cooperate") || lower.contains("untrusted"), n);
 		}
 	}
 
