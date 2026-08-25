@@ -6144,6 +6144,71 @@ public class AgentAdapterTest {
 	// ========== agent-safe past sessions (#403) ==========
 
 	@Test
+	public void testOwnerCanUseSafePastSessionProjection() {
+		AString agentId = Strings.create("owner-session-agent");
+		AgentState agent = engine.getVenueState().users().ensure(ALICE_DID)
+			.ensureAgent(agentId, Maps.empty(), null);
+		Blob sid = Blob.fromHex("0a000000000000000000000000000001");
+		setConversation(agent, sid,
+			turn("user", "Owner-visible question", 100),
+			turn("assistant", "Owner-visible answer", 110));
+
+		RequestContext owner = RequestContext.of(ALICE_DID);
+		ACell listed = engine.jobs().invokeOperation("v/ops/agent/sessions",
+			Maps.of(Fields.AGENT_ID, agentId), owner).awaitResult(5000);
+		AVector<ACell> sessions = RT.ensureVector(RT.getIn(listed, "sessions"));
+		assertEquals(1, sessions.count());
+		assertEquals(sid.toHexString(), RT.getIn(sessions.get(0), Fields.SESSION_ID).toString());
+
+		ACell read = engine.jobs().invokeOperation("v/ops/agent/session-read",
+			Maps.of(Fields.AGENT_ID, agentId, Fields.SESSION_ID, sid.toHexString()), owner)
+			.awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(read, "found"));
+		assertEquals(2, RT.ensureVector(RT.getIn(read, Fields.MESSAGES)).count());
+
+		Job denied = engine.jobs().invokeOperation("v/ops/agent/session-read",
+			Maps.of(Fields.AGENT_ID, ALICE_DID + "/g/" + agentId,
+				Fields.SESSION_ID, sid.toHexString()), RequestContext.of(BOB_DID));
+		assertThrows(covia.exception.JobFailedException.class, () -> denied.awaitResult(5000));
+		assertTrue(denied.getErrorMessage().contains("crud/read"), denied.getErrorMessage());
+	}
+
+	@Test
+	public void testAgentSessionOperationsAcceptCvmPrefixedHexIds() {
+		String agentId = "prefixed-session-agent";
+		createChatAgent(agentId);
+		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent(agentId);
+		Blob sid = Blob.fromHex("0b000000000000000000000000000001");
+		setConversation(agent, sid,
+			turn("user", "Prefixed id question", 100),
+			turn("assistant", "Prefixed id answer", 110));
+		String prefixed = "0x" + sid.toHexString();
+		RequestContext owner = RequestContext.of(ALICE_DID);
+
+		ACell context = engine.jobs().invokeOperation("v/ops/agent/context",
+			Maps.of(Fields.AGENT_ID, agentId, Fields.SESSION_ID, prefixed), owner)
+			.awaitResult(5000);
+		assertNotNull(RT.getIn(context, Fields.MESSAGES));
+
+		ACell renamed = engine.jobs().invokeOperation("v/ops/agent/rename-session",
+			Maps.of(Fields.AGENT_ID, agentId, Fields.SESSION_ID, prefixed,
+				Fields.TITLE, "Prefixed session"), owner).awaitResult(5000);
+		assertEquals(sid.toHexString(), RT.getIn(renamed, Fields.SESSION_ID).toString());
+
+		ACell read = engine.jobs().invokeOperation("v/ops/agent/session-read",
+			Maps.of(Fields.AGENT_ID, agentId, Fields.SESSION_ID, prefixed), owner)
+			.awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(read, "found"));
+		assertEquals("Prefixed session", RT.getIn(read, "title").toString());
+
+		ACell deleted = engine.jobs().invokeOperation("v/ops/agent/delete-session",
+			Maps.of(Fields.AGENT_ID, agentId, Fields.SESSION_ID, prefixed), owner)
+			.awaitResult(5000);
+		assertEquals(sid.toHexString(), RT.getIn(deleted, Fields.SESSION_ID).toString());
+		assertNull(agent.getSession(sid));
+	}
+
+	@Test
 	public void testPastSessionsAreSelfScopedCurrentExcludedAndNeedNoRawReadCap() {
 		AString agentId = Strings.create("past-session-agent");
 		AgentState agent = engine.getVenueState().users().ensure(ALICE_DID)

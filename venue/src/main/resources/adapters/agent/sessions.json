@@ -1,6 +1,6 @@
 {
 	"name": "List Past Agent Sessions",
-	"description": "Lists bounded metadata for the running agent's own past conversations, newest first. The current session, unfinished conversations and sessions hidden by venue policy are omitted. This is a safe projection, not generic access to agent state.",
+	"description": "Lists bounded metadata for past conversations, newest first. An agent may omit agentId to inspect itself; an owner or authorised caller supplies agentId. The caller's current session, unfinished conversations and sessions hidden by venue policy are omitted. This is a safe projection, not generic access to agent state.",
 	"dateCreated": "2026-08-24T00:00:00Z",
 	"operation": {
 		"adapter": "agent:sessions",
@@ -13,6 +13,7 @@
 		"input": {
 			"type": "object",
 			"properties": {
+				"agentId": { "type": "string", "description": "Optional target agent id or g/<id> path. Omit only from that agent's own execution context. Reading an explicit target requires agent read access." },
 				"limit": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Maximum sessions to return. Default 20." },
 				"offset": { "type": "integer", "minimum": 0, "description": "Number of newest visible sessions to skip. Default 0." }
 			}

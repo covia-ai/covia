@@ -29,7 +29,7 @@
 				},
 				"sessionId": {
 					"type": "string",
-					"description": "Optional session id (hex): the session's conversation — prior turns, tool-failure diagnostics — renders exactly as a live transition on that session would see it."
+					"description": "Optional session id (hex, with or without a 0x prefix): the session's conversation — prior turns, tool-failure diagnostics — renders exactly as a live transition on that session would see it."
 				}
 			},
 			"required": [

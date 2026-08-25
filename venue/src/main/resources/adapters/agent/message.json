@@ -12,7 +12,7 @@
 				"message": { "type": "string", "description": "Message content to deliver to the agent's inbox" },
 				"sessionId": {
 					"type": "string",
-					"description": "Optional session identifier (hex string). Messages sharing a sessionId are treated as part of the same conversation. If omitted, a new session is created and its id returned in the response."
+					"description": "Optional session identifier (hex string, with or without a 0x prefix). Messages sharing a sessionId are treated as part of the same conversation. If omitted, a new session is created and its id returned in the response."
 				},
 				"taskId": {
 					"type": "string",

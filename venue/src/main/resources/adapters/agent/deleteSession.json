@@ -10,7 +10,7 @@
 			"type": "object",
 			"properties": {
 				"agentId": { "type": "string", "description": "Agent reference: a bare name for the caller's agent, g/<id>, /g/<id>, or <ownerDID>/g/<id>" },
-				"sessionId": { "type": "string", "description": "Hex ID of the session to delete" }
+				"sessionId": { "type": "string", "description": "Hex ID of the session to delete, with or without a 0x prefix" }
 			},
 			"required": ["agentId", "sessionId"]
 		},

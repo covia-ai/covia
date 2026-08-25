@@ -13,7 +13,7 @@
 				"loads": { "type": "object", "description": "Optional context to pre-load for the NEW session (the session tier of the context scope chain, #142): map of lattice path to {budget} bytes. Only valid when this call creates the session — an error if the session already exists." },
 				"sessionId": {
 					"type": "string",
-					"description": "Optional session identifier (hex string). Echo the sessionId returned by a previous chat to continue the conversation. If omitted, a new session is created and its id returned in the response. An unknown sessionId is rejected — omit to start a new session."
+					"description": "Optional session identifier (hex string, with or without a 0x prefix). Echo the sessionId returned by a previous chat to continue the conversation. If omitted, a new session is created and its id returned in the response. An unknown sessionId is rejected — omit to start a new session."
 				}
 			},
 			"required": ["agentId", "message"]

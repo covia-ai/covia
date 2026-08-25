@@ -538,8 +538,9 @@ public class ContextAssemblerTest {
 			Strings.create("description"), Strings.create("Has a tool"),
 			Strings.create("skill"), Maps.of(Strings.create("tools"),
 				Vectors.of((ACell) Strings.create("v/ops/covia/read")))));
-		Skills.ResolvedSkill s = Skills.resolveRef(engine, ctx, Strings.create("w/skills/toolful"));
-		AMap<AString, ACell> loads = Maps.of(s.path(), Skills.buildSkillLoadMeta(2000, s));
+		AMap<AString, ACell> loads = Maps.of(Strings.create("w/skills/toolful"), Maps.of(
+			Strings.create("skill"), CVMBool.TRUE,
+			Strings.create("budget"), CVMLong.create(2000)));
 		Loads.Snapshot snap = Loads.resolve(engine, ctx, loads, java.util.Set.of(), Labels.BRACKET);
 		assertEquals(1, snap.tools().count());
 		assertEquals("v/ops/covia/read", snap.routes().get("covia_read").toString());
@@ -547,6 +548,13 @@ public class ContextAssemblerTest {
 		assertEquals("w/skills/toolful", RT.getIn(snap.toolProvenance().get(0), Fields.REF).toString());
 		// A name fixed by harness or config is never shadowed by a load.
 		assertEquals(0, Loads.resolve(engine, ctx, loads, java.util.Set.of("covia_read"), Labels.BRACKET).tools().count());
+		// Explicit load metadata remains an override, including disabling the facet tools.
+		AMap<AString, ACell> disabled = Maps.of(Strings.create("w/skills/toolful"), Maps.of(
+			Strings.create("skill"), CVMBool.TRUE,
+			Strings.create("budget"), CVMLong.create(2000),
+			Fields.TOOLS, Vectors.empty()));
+		assertEquals(0, Loads.resolve(engine, ctx, disabled,
+			java.util.Set.of(), Labels.BRACKET).tools().count());
 	}
 
 	@Test

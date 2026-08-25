@@ -61,8 +61,9 @@ public final class Loads {
 		if (effectiveLoads == null || effectiveLoads.count() == 0) return Snapshot.EMPTY;
 		Map<String, AString> routes = new HashMap<>();
 		java.util.List<AMap<AString, ACell>> toolEntries = new java.util.ArrayList<>();
+		AMap<AString, ACell> toolLoads = Skills.resolveLoadTools(engine, ctx, effectiveLoads);
 		AVector<ACell> tools = ToolPalette.loadsToolDefs(
-			engine, ctx, effectiveLoads, fixedNames, routes, toolEntries);
+			engine, ctx, toolLoads, fixedNames, routes, toolEntries);
 		ResolvedElements resolved = resolveElements(engine, ctx, effectiveLoads, dialect);
 		return new Snapshot(resolved.elements(), tools, routes, resolved.diagnostics(), vector(toolEntries));
 	}

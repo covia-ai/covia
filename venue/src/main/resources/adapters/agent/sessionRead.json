@@ -1,6 +1,6 @@
 {
 	"name": "Read Past Agent Session",
-	"description": "Reads a bounded, model-safe transcript projection from one of the running agent's own past sessions. Omit sessionId for the newest visible past session. The current session, missing sessions and sessions hidden by venue policy all return exactly {found:false}. Tool scratch, diagnostics and unanswered turns are omitted.",
+	"description": "Reads a bounded, model-safe transcript projection. An agent may omit agentId to inspect itself; an owner or authorised caller supplies agentId. Omit sessionId for the newest visible session. The caller's current session, missing sessions and sessions hidden by venue policy all return exactly {found:false}. Tool scratch, diagnostics and unanswered turns are omitted.",
 	"dateCreated": "2026-08-24T00:00:00Z",
 	"operation": {
 		"adapter": "agent:sessionRead",
@@ -13,7 +13,8 @@
 		"input": {
 			"type": "object",
 			"properties": {
-				"sessionId": { "type": "string", "description": "Optional 16-byte hex session id. Omit to read the newest visible past session." },
+				"agentId": { "type": "string", "description": "Optional target agent id or g/<id> path. Omit only from that agent's own execution context. Reading an explicit target requires agent read access." },
+				"sessionId": { "type": "string", "description": "Optional 16-byte hex session id, with or without a 0x prefix. Omit to read the newest visible session." },
 				"maxTurns": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Maximum newest projected turns. Default 20." },
 				"maxChars": { "type": "integer", "minimum": 1, "maximum": 100000, "description": "Maximum total content characters. A single oversized turn is truncated. Default 8000." }
 			}

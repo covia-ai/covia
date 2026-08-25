@@ -12,7 +12,7 @@
 				"wait": { "description": "Wait policy: true (default, block until cycle yields or completes), false (return immediately), or integer milliseconds (timeout). Not a result-await — wait on the task/chat Job for results. Cancelling this trigger Job ends the wait early; the run loop is unaffected and continues for any other waiters." },
 				"sessionId": {
 					"type": "string",
-					"description": "Optional session identifier (hex string). If supplied it is resolved and echoed back; trigger never creates a session. If omitted the trigger runs unsessioned."
+					"description": "Optional session identifier (hex string, with or without a 0x prefix). If supplied it is resolved and echoed back; trigger never creates a session. If omitted the trigger runs unsessioned."
 				}
 			},
 			"required": ["agentId"]

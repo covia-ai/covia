@@ -491,7 +491,10 @@ public class AgentAdapter extends AAdapter {
 
 	private CompletableFuture<ACell> requestResultFuture(Job taskJob, ACell input) {
 		long timeoutMs = parseRequestTimeoutMs(input);
-		AString sessionId = RT.ensureString(RT.getIn(input, Fields.SESSION_ID));
+		AString suppliedSession = RT.ensureString(RT.getIn(input, Fields.SESSION_ID));
+		Blob parsedSession = parseSessionId(suppliedSession);
+		AString sessionId = (parsedSession != null)
+			? Strings.create(parsedSession.toHexString()) : suppliedSession;
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
 
 		if (timeoutMs <= 0) {
@@ -528,6 +531,8 @@ public class AgentAdapter extends AAdapter {
 			Fields.AGENT_ID, agentId);
 		AString address = RT.ensureString(RT.getIn(taskJob.getData(), Fields.ADDRESS));
 		if (address != null) snap = snap.assoc(Fields.ADDRESS, address);
+		AString resolvedSession = RT.ensureString(RT.getIn(taskJob.getData(), Fields.SESSION_ID));
+		if (resolvedSession != null) sessionId = resolvedSession;
 		if (sessionId != null) snap = snap.assoc(Fields.SESSION_ID, sessionId);
 		return snap;
 	}
@@ -1176,12 +1181,16 @@ public class AgentAdapter extends AAdapter {
 			ACell taskData = agent.getTasks().get(taskId);
 			AString taskSid = (taskData instanceof AMap<?, ?> map)
 				? RT.ensureString(map.get(Fields.SESSION_ID)) : null;
-			sid = (taskSid != null) ? Blob.fromHex(taskSid.toString()) : null;
+			sid = parseSessionId(taskSid);
 			if (sid == null) { job.fail("Task not found: " + taskIdHex); return; }
 			AString suppliedSid = RT.ensureString(RT.getIn(input, Fields.SESSION_ID));
-			if (suppliedSid != null && !taskSid.equals(suppliedSid)) {
-				job.fail("contextId does not match task session");
-				return;
+			if (suppliedSid != null) {
+				Blob supplied = parseSessionId(suppliedSid);
+				if (supplied == null) { job.fail("Invalid sessionId format: " + suppliedSid); return; }
+				if (!sid.equals(supplied)) {
+					job.fail("contextId does not match task session");
+					return;
+				}
 			}
 		} else {
 			sid = resolveOrMintSession(job, agent, input, ctx.getCallerDID());
@@ -1352,7 +1361,7 @@ public class AgentAdapter extends AAdapter {
 		if (sidCell != null) {
 			AString s = RT.ensureString(sidCell);
 			if (s == null) { job.fail("sessionId must be a hex string"); return; }
-			sid = Blob.fromHex(s.toString());
+			sid = parseSessionId(s);
 			if (sid == null) { job.fail("Invalid sessionId format: " + s); return; }
 		}
 		AString sidHex = (sid != null) ? Strings.create(sid.toHexString()) : null;
@@ -1560,7 +1569,7 @@ public class AgentAdapter extends AAdapter {
 		AMap<AString, ACell> session = null;
 		AString sidHex = RT.ensureString(RT.getIn(input, Fields.SESSION_ID));
 		if (sidHex != null) {
-			Blob sid = Blob.fromHex(sidHex.toString());
+			Blob sid = parseSessionId(sidHex);
 			if (sid == null) { job.fail("Invalid sessionId format: " + sidHex); return null; }
 			session = agent.getSession(sid);
 			if (session == null) { job.fail("Unknown session: " + sidHex); return null; }
@@ -1660,6 +1669,8 @@ public class AgentAdapter extends AAdapter {
 
 	private record SessionSummary(Blob id, AMap<AString, ACell> session,
 			AString title, long created, long updated, long turnCount) {}
+	private record SessionAccess(AgentTarget target, AgentState agent,
+			Blob excludedSession) {}
 
 	private void handleSessions(Job job, ACell input, RequestContext ctx) {
 		job.setStatus(Status.STARTED);
@@ -1671,12 +1682,12 @@ public class AgentAdapter extends AAdapter {
 		job.completeWith(doSessionRead(ctx, input));
 	}
 
-	/** Lists only the running agent's own, completed, non-current sessions. */
+	/** Lists completed sessions for the self agent or an explicitly readable target. */
 	private AMap<AString, ACell> doSessions(RequestContext ctx, ACell input) {
-		AgentState agent = requireSelfAgent(ctx);
+		SessionAccess access = resolveSessionAccess(ctx, input);
 		int limit = boundedInt(input, Fields.LIMIT, DEFAULT_SESSION_LIMIT, 1, MAX_SESSION_LIMIT);
 		int offset = boundedInt(input, Fields.OFFSET, 0, 0, Integer.MAX_VALUE);
-		List<SessionSummary> summaries = visibleSessionSummaries(ctx, agent);
+		List<SessionSummary> summaries = visibleSessionSummaries(ctx, access);
 		int start = Math.min(offset, summaries.size());
 		int end = (int) Math.min((long) start + limit, summaries.size());
 		AVector<ACell> sessions = Vectors.empty();
@@ -1697,9 +1708,9 @@ public class AgentAdapter extends AAdapter {
 			Fields.OFFSET, CVMLong.create(start));
 	}
 
-	/** Reads a bounded projection of one past session, or the newest when omitted. */
+	/** Reads a bounded projection of one session, or the newest when omitted. */
 	private AMap<AString, ACell> doSessionRead(RequestContext ctx, ACell input) {
-		AgentState agent = requireSelfAgent(ctx);
+		SessionAccess access = resolveSessionAccess(ctx, input);
 		int maxTurns = boundedInt(input, K_MAX_TURNS,
 			DEFAULT_HISTORY_TURNS, 1, MAX_HISTORY_TURNS);
 		int maxChars = boundedInt(input, K_MAX_CHARS,
@@ -1708,20 +1719,15 @@ public class AgentAdapter extends AAdapter {
 		AString requested = RT.ensureString(RT.getIn(input, Fields.SESSION_ID));
 		SessionSummary summary;
 		if (requested == null) {
-			List<SessionSummary> summaries = visibleSessionSummaries(ctx, agent);
+			List<SessionSummary> summaries = visibleSessionSummaries(ctx, access);
 			if (summaries.isEmpty()) return sessionNotFound();
 			summary = summaries.get(0);
 		} else {
-			Blob sid;
-			try {
-				sid = Blob.fromHex(requested.toString());
-			} catch (RuntimeException e) {
-				throw new IllegalArgumentException("sessionId must be a 16-byte hex string");
-			}
+			Blob sid = parseSessionId(requested);
 			if (sid == null || sid.count() != 16) {
 				throw new IllegalArgumentException("sessionId must be a 16-byte hex string");
 			}
-			summary = summarizeSession(ctx, sid, agent.getSession(sid));
+			summary = summarizeSession(ctx, access, sid, access.agent().getSession(sid));
 			if (summary == null) return sessionNotFound();
 		}
 
@@ -1740,7 +1746,23 @@ public class AgentAdapter extends AAdapter {
 		return result;
 	}
 
-	private AgentState requireSelfAgent(RequestContext ctx) {
+	private SessionAccess resolveSessionAccess(RequestContext ctx, ACell input) {
+		ACell rawTarget = RT.getIn(input, Fields.AGENT_ID);
+		AString requested = RT.ensureString(rawTarget);
+		if (rawTarget != null && requested == null) {
+			throw new IllegalArgumentException("agentId must be a string");
+		}
+		if (requested != null) {
+			AgentTarget target = resolveAgentTarget(ctx, requested, Capability.CRUD_READ, false);
+			AgentState agent = (target.user() != null) ? target.user().agent(target.agentId()) : null;
+			if (agent == null || !agent.exists()) {
+				throw new IllegalArgumentException("Agent not found: " + target.address());
+			}
+			Blob excluded = target.ownerDID().equals(ctx.getUserDID())
+					&& target.agentId().equals(ctx.getAgentId()) ? ctx.getSessionId() : null;
+			return new SessionAccess(target, agent, excluded);
+		}
+
 		AString owner = ctx.getUserDID();
 		AString agentId = ctx.getAgentId();
 		if (owner == null || agentId == null) {
@@ -1752,19 +1774,21 @@ public class AgentAdapter extends AAdapter {
 		if (agent == null || !agent.exists()) {
 			throw new IllegalArgumentException("Current agent was not found");
 		}
-		return agent;
+		AgentTarget target = new AgentTarget(owner, user, agentId,
+			Strings.create(owner + "/g/" + agentId));
+		return new SessionAccess(target, agent, ctx.getSessionId());
 	}
 
 	private List<SessionSummary> visibleSessionSummaries(RequestContext ctx,
-			AgentState agent) {
+			SessionAccess access) {
 		List<SessionSummary> result = new ArrayList<>();
-		Index<Blob, ACell> sessions = agent.getSessions();
+		Index<Blob, ACell> sessions = access.agent().getSessions();
 		for (long i = 0; i < sessions.count(); i++) {
 			var entry = sessions.entryAt(i);
 			if (!(entry.getValue() instanceof AMap<?, ?> raw)) continue;
 			@SuppressWarnings("unchecked")
 			AMap<AString, ACell> session = (AMap<AString, ACell>) raw;
-			SessionSummary summary = summarizeSession(ctx, entry.getKey(), session);
+			SessionSummary summary = summarizeSession(ctx, access, entry.getKey(), session);
 			if (summary != null) result.add(summary);
 		}
 		result.sort(Comparator
@@ -1773,9 +1797,9 @@ public class AgentAdapter extends AAdapter {
 		return result;
 	}
 
-	private SessionSummary summarizeSession(RequestContext ctx, Blob sid,
+	private SessionSummary summarizeSession(RequestContext ctx, SessionAccess access, Blob sid,
 			AMap<AString, ACell> session) {
-		if (session == null || !isSessionVisible(ctx, sid, session)) return null;
+		if (session == null || !isSessionVisible(ctx, access, sid, session)) return null;
 		ConversationRenderer.HistoricalView view = ConversationRenderer.historical(
 			rootFrame(session), 0, 0);
 		if (view.turnCount() == 0) return null;
@@ -1789,11 +1813,12 @@ public class AgentAdapter extends AAdapter {
 		return new SessionSummary(sid, session, title, created, updated, view.turnCount());
 	}
 
-	private boolean isSessionVisible(RequestContext ctx, Blob sid,
+	private boolean isSessionVisible(RequestContext ctx, SessionAccess access, Blob sid,
 			AMap<AString, ACell> session) {
-		if (sid.equals(ctx.getSessionId())) return false;
+		if (access.excludedSession() != null && sid.equals(access.excludedSession())) return false;
+		AgentTarget target = access.target();
 		SessionVisibilityContext visibility = new SessionVisibilityContext(
-			ctx, ctx.getUserDID(), ctx.getAgentId(), sid, session);
+			ctx, target.ownerDID(), target.agentId(), sid, session);
 		for (SessionVisibilityPolicy policy : sessionVisibilityPolicies) {
 			try {
 				if (!policy.isVisible(visibility)) return false;
@@ -2155,12 +2180,7 @@ public class AgentAdapter extends AAdapter {
 		AgentState agent = lookupAgent(job, target);
 		if (agent == null) return;
 
-		Blob sid;
-		try {
-			sid = Blob.fromHex(sidHex.toString());
-		} catch (Exception e) {
-			sid = null;
-		}
+		Blob sid = parseSessionId(sidHex);
 		if (sid == null) { job.fail("Invalid sessionId format: " + sidHex); return; }
 
 		if (agent.getSession(sid) == null) {
@@ -2183,7 +2203,7 @@ public class AgentAdapter extends AAdapter {
 
 		job.setStatus(Status.STARTED);
 		job.completeWith(identify(target, Maps.of(
-			Fields.SESSION_ID, sidHex,
+			Fields.SESSION_ID, Strings.create(sid.toHexString()),
 			Fields.DELETED,    CVMBool.TRUE)));
 	}
 
@@ -2205,12 +2225,7 @@ public class AgentAdapter extends AAdapter {
 		AgentState agent = lookupAgent(job, target);
 		if (agent == null) return;
 
-		Blob sid;
-		try {
-			sid = Blob.fromHex(sidHex.toString());
-		} catch (Exception e) {
-			sid = null;
-		}
+		Blob sid = parseSessionId(sidHex);
 		if (sid == null) { job.fail("Invalid sessionId format: " + sidHex); return; }
 
 		ACell titleValue = RT.getIn(input, Fields.TITLE);
@@ -2228,7 +2243,7 @@ public class AgentAdapter extends AAdapter {
 
 		job.setStatus(Status.STARTED);
 		AMap<AString, ACell> result = identify(target, Maps.of(
-			Fields.SESSION_ID, sidHex));
+			Fields.SESSION_ID, Strings.create(sid.toHexString())));
 		if (title != null) result = result.assoc(Fields.TITLE, title);
 		job.completeWith(result);
 	}
@@ -4176,6 +4191,18 @@ public class AgentAdapter extends AAdapter {
 		return Strings.create(id.toHexString());
 	}
 
+	/** Accepts canonical hex and the {@code 0x}-prefixed form emitted by CVM data. */
+	private static Blob parseSessionId(AString value) {
+		if (value == null) return null;
+		String hex = value.toString();
+		if (hex.startsWith("0x") || hex.startsWith("0X")) hex = hex.substring(2);
+		try {
+			return Blob.fromHex(hex);
+		} catch (RuntimeException e) {
+			return null;
+		}
+	}
+
 	/**
 	 * Resolves the sessionId from input, minting a new one if absent, and
 	 * ensures a session record exists on the agent. Returns the sid, or
@@ -4199,7 +4226,7 @@ public class AgentAdapter extends AAdapter {
 		if (sidCell != null) {
 			AString s = RT.ensureString(sidCell);
 			if (s == null) { job.fail("sessionId must be a hex string"); return null; }
-			sid = Blob.fromHex(s.toString());
+			sid = parseSessionId(s);
 			if (sid == null) {
 				job.fail("Invalid sessionId format: " + s);
 				return null;
@@ -4246,7 +4273,7 @@ public class AgentAdapter extends AAdapter {
 		if (sidCell != null) {
 			AString s = RT.ensureString(sidCell);
 			if (s == null) { job.fail("sessionId must be a hex string"); return null; }
-			Blob sid = Blob.fromHex(s.toString());
+			Blob sid = parseSessionId(s);
 			if (sid == null) { job.fail("Invalid sessionId format: " + s); return null; }
 			if (agent.getSession(sid) == null) {
 				job.fail("Unknown sessionId: " + s + " — omit sessionId to start a new session");

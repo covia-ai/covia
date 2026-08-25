@@ -722,6 +722,39 @@ public final class Skills {
 	}
 
 	/**
+	 * Resolves tool declarations for skill-marked loads that did not already
+	 * declare {@code tools}. Runtime {@code skill_load} entries denormalise this
+	 * field when written; operator-pinned {@code config.loads} entries may be
+	 * hand-written and therefore need the same contribution resolved
+	 * ephemerally. An explicit {@code tools} value, including empty or null,
+	 * remains authoritative.
+	 *
+	 * <p>Resolution failures remain visible through the normal skill-element
+	 * diagnostic and contribute no tools; this helper never makes a pinned
+	 * context entry disappear or fail the whole prompt.</p>
+	 */
+	@SuppressWarnings("unchecked")
+	public static AMap<AString, ACell> resolveLoadTools(Engine engine,
+			RequestContext ctx, AMap<AString, ACell> loads) {
+		if (loads == null || loads.count() == 0) return loads;
+		AMap<AString, ACell> resolved = loads;
+		for (var entry : loads.entrySet()) {
+			if (!(entry.getValue() instanceof AMap<?, ?> raw)) continue;
+			AMap<AString, ACell> meta = (AMap<AString, ACell>) raw;
+			if (!isSkillEntry(meta) || meta.containsKey(Fields.TOOLS)) continue;
+			try {
+				AVector<ACell> tools = resolveRef(engine, ctx, entry.getKey()).toolOps();
+				if (tools.count() > 0) {
+					resolved = resolved.assoc(entry.getKey(), meta.assoc(Fields.TOOLS, tools));
+				}
+			} catch (RuntimeException e) {
+				// Loads.element reports the same resolution failure in model-visible context.
+			}
+		}
+		return resolved;
+	}
+
+	/**
 	 * Combines configured sources with those contributed by currently loaded
 	 * skills, per kind. Configured sources retain priority; exact duplicate
 	 * refs are removed first-wins. Only the immediate refs on loaded entries

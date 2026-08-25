@@ -47,6 +47,8 @@ public class AgentToolboxTest {
 	private static final String CONTEXT_MARKER = "TOOLBOX_CONTEXT_VALUE";
 	private static final String PINNED_PATH = "w/toolbox/pinned";
 	private static final String PINNED_MARKER = "TOOLBOX_PINNED_VALUE";
+	private static final String PINNED_SKILL_PATH = "w/toolbox/pinned-skill";
+	private static final String PINNED_SKILL_BODY = "TOOLBOX_PINNED_SKILL_BODY";
 	private static final String SKILLSET = "w/toolbox/skills";
 	private static final String SKILL_BODY = "TOOLBOX_SKILL_BODY";
 
@@ -63,10 +65,35 @@ public class AgentToolboxTest {
 			"bySource", Maps.of("primary", 2L, "secondary", 1L),
 			"marker", CONTEXT_MARKER));
 		write(PINNED_PATH, Strings.create(PINNED_MARKER));
+		write(PINNED_SKILL_PATH, Maps.of(
+			"description", "Pinned toolbox skill",
+			"content", Maps.of("inline", PINNED_SKILL_BODY),
+			"skill", Maps.of("tools", Vectors.of(Strings.create("v/ops/covia/list")))));
 		write(SKILLSET + "/alpha", Maps.of(
 			"description", "Toolbox alpha skill",
 			"content", Maps.of("inline", SKILL_BODY),
 			"skill", Maps.of("tools", Vectors.of(Strings.create("v/ops/covia/read")))));
+	}
+
+	@Test
+	@SuppressWarnings("unchecked")
+	public void pinnedSkillsContributeTheirToolsWithoutRuntimeSkillLoad() {
+		for (AgentRuntime runtime : RUNTIMES) {
+			AMap<AString, ACell> loads = ((AMap<AString, ACell>) (AMap<?, ?>)
+				RT.ensureMap(sharedConfig(runtime).get(Fields.LOADS)))
+				.assoc(Strings.create(PINNED_SKILL_PATH), Maps.of(
+					"skill", true,
+					"budget", 1000L,
+					"label", "Pinned toolbox skill"));
+			RunningAgent agent = start(runtime, runtime.name() + "-pinned-skill",
+				sharedConfig(runtime).assoc(Fields.LOADS, loads));
+			AMap<AString, ACell> result = step(agent, "inspect the pinned skill",
+				assistantCall("call_echo", "test_echo", Maps.of("ok", true)), null);
+
+			assertTrue(hasSystemContent(result, PINNED_SKILL_BODY), runtime.name());
+			assertTrue(hasTool(result, "covia_list"),
+				runtime.name() + " did not activate the pinned skill's declared tool: " + result);
+		}
 	}
 
 	@Test

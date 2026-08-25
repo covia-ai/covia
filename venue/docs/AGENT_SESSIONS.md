@@ -136,6 +136,8 @@ agent_trigger   agentId=X  sessionId=Y?                 — wake the agent. No p
 
 Session ids are always venue-minted — callers never supply their own. Per-op rules are detailed in §5.5; summary:
 
+Session-id inputs accept both canonical hexadecimal and the `0x`-prefixed representation emitted by CVM/lattice reads. Operation responses use canonical hexadecimal.
+
 - `sessionId` supplied + session known → continue that session (caller echoes the id, A2A/MCP-style)
 - `sessionId` supplied + session unknown → error
 - `sessionId` omitted on `agent_request` / `agent_chat` → venue mints a new session, returns the id
@@ -148,12 +150,12 @@ Session ids are always venue-minted — callers never supply their own. Per-op r
 
 | Op | Purpose |
 |----|---------|
-| `agent:sessions` | List bounded metadata for the running agent's own past sessions, newest first |
-| `agent:sessionRead` | Read a bounded safe transcript projection; omit `sessionId` for the newest visible session |
+| `agent:sessions` | List bounded session metadata, newest first; owners pass `agentId`, the running agent may omit it |
+| `agent:sessionRead` | Read a bounded safe transcript projection; owners pass `agentId`, and may omit `sessionId` for the newest visible session |
 | `agent:renameSession` | Set or clear a session's human-facing title (owner management surface) |
 | `agent:deleteSession` | Permanently remove a session (owner management surface; audit-sensitive) |
 
-The retrospective operations are deliberately self-scoped from `RequestContext.agentId`; they accept no `agentId` parameter and require only invocation capability for their exact operation asset. They do not confer generic `g/` read access. The current session is always excluded. Missing, current, unfinished and policy-vetoed sessions all produce exactly `{"found":false}` from `agent:sessionRead`, avoiding an existence oracle.
+The retrospective operations have two explicit modes. From an agent execution context, omitting `agentId` self-scopes the call and requires only invocation capability for the exact operation asset. An owner or other authorised caller supplies `agentId`; normal `crud/read` resolution for `g/<agentId>` then applies. Neither mode confers generic `g/` read access. The in-scope caller session is excluded. Missing, current, unfinished and policy-vetoed sessions all produce exactly `{"found":false}` from `agent:sessionRead`, avoiding an existence oracle.
 
 The projection contains completed user/final-assistant turns and compacted summaries. Provider tool calls, tool results, framework diagnostics and an unanswered tail remain in the durable audit transcript but are not exposed to the agent. Both turn count and total content are bounded, including a single oversized turn.
 
