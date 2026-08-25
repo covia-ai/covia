@@ -944,7 +944,7 @@ Telegram and Discord during `package`:
 
 ```xml
 <properties>
-  <covia.version>0.9.4</covia.version>
+  <covia.version>0.9.5</covia.version>
 </properties>
 <build>
   <plugins>

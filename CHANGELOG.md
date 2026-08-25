@@ -8,6 +8,57 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Migration
+
+- Remote `grid:run` and `grid:invoke` calls no longer infer authentication from
+  the UCANs presented with a request. Set `authenticateAs` explicitly to
+  `anonymous` (the default), `caller`, or `venue`; the last mode additionally
+  requires the caller's `venue/relay` grant.
+- Capability-bearing UCANs are grants, not authentication credentials or
+  execution instructions. Present grants through the `ucans` channel; a UCAN
+  used as an HTTP bearer credential must have an empty `att` and be audienced
+  to the receiving venue.
+
+### Added
+
+- `v/ops/venue/restart` gracefully closes a standalone venue and starts either
+  the current executable jar or a validated successor. Upgrade handoff waits
+  for readiness and falls back to the current jar when the successor fails to
+  start.
+- `v/ops/user/sudo` provides the explicit, capability-checked boundary for one
+  operation to run in another user's namespace. The authenticated actor is
+  preserved for attribution; the call requires `user/sudo`, operation invoke,
+  and point-of-action grants.
+- Deterministic agent-toolbox regression coverage exercises valid model
+  replies, operation tool calls and results, skill and context loading,
+  unloading, palette expansion, control tools, failures, and unknown tools.
+
+### Changed
+
+- Agent capabilities are explicitly additive: `config.caps` is the inherent
+  authority and valid presented grants add authority. Neither is an
+  instruction, authentication mechanism, or capability ceiling.
+- Venue and owner attribution in agent conversations is neutral provenance,
+  not an instruction to trust or obey the attributed turn (#405).
+- Optional module documentation now shows how embedded hosts resolve and stage
+  the published `module` classifier jars without placing them on the host
+  classpath (#410).
+
+### Fixed
+
+- Structured-only tool results are preserved through conversation rendering,
+  so custom adapter results reliably reach the model on its next inference
+  (GetMine-ai/demo#331).
+- Delegated requests no longer silently execute implicit-caller operations in
+  the intermediary bearer's namespace. Cross-user execution is explicit via
+  `user:sudo`, with separate actor and effective-user identities (#406).
+- File, DLFS and vault listings tolerate entries disappearing during traversal:
+  vanished entries are omitted and the response carries a non-fatal warning
+  instead of failing the whole listing (#404).
+- Telegram and Discord agent templates use `skillsets` with `v/skills/root`,
+  making the venue skill library discoverable. Agent creation also warns when
+  a directory is mistakenly declared as one skill (#409).
+
 ## [0.9.4] - 2026-08-24
 
 This release contains intentional breaking changes to the agent skill
