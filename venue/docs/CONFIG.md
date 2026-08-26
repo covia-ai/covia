@@ -1018,7 +1018,7 @@ records the operation input in the caller's job namespace.
   "modules": ["modules/covia-sonnylabs-<version>-module.jar"],
   "adapters": {
     "sonnylabs": {
-      "apiKey": "s/SONNYLABS_API_KEY",
+      "apiKey": "s/SONNY_LABS",
       "baseUrl": "https://api.sonnylabs.ai",
       "timeoutMillis": 30000
     }
@@ -1026,10 +1026,20 @@ records the operation input in the caller's job namespace.
 }
 ```
 
-`apiKey` is always an `s/NAME` reference, never a literal credential. The
-configured reference is resolved only from the venue's secret store and
+`apiKey` defaults to `s/SONNY_LABS` and is always an `s/NAME` reference, never
+a literal credential. Store a SonnyLabs key with `scans:write` scope under the
+name `SONNY_LABS` using `v/ops/secret/set` **as the venue identity**; `secret:set`
+writes to its caller's store, so running it as an ordinary user will not
+populate the venue-managed credential:
+
+```text
+grid_run operation=v/ops/secret/set input={"name":"SONNY_LABS","value":"<SonnyLabs key>"}
+```
+
+The configured reference is resolved only from the venue's secret store and
 therefore provides an operator-managed shared key with `scans:write` scope.
-A caller may instead pass `apiKey: "s/MY_SONNY_KEY"` to `scan`; that explicit
+A caller may instead store its own `SONNY_LABS` secret and pass
+`apiKey: "s/SONNY_LABS"` to `scan`; that explicit
 reference resolves only from the caller's own store. `baseUrl` supports the
 SaaS default and operator-chosen self-hosted deployments, but is never a
 caller input. Optional `apiVersion` pins the `Sonny-Api-Version` date header;
@@ -1037,6 +1047,20 @@ when absent the current stable v1 revision is used. Each scan receives a fresh
 idempotency key unless the caller supplies `idempotencyKey` for a known retry.
 Transport and non-2xx responses fail the Covia Job rather than fabricating an
 allowed decision, leaving fail-open versus fail-closed policy to the workflow.
+
+Loading the module does not automatically intercept prompts. Workflows call
+the operation explicitly at the point where untrusted external text is about
+to enter an LLM context or control an action. Agents can load the module's
+skill at `v/skills/ops-tools/sonnylabs`; standard skilled agents discover it
+after loading the root `discovery` skill. Pin that skill in `config.skills`
+when scanning is a standing part of the agent's role. The skill contributes
+only `v/ops/sonnylabs/scan` and teaches the inbound boundary, surface mapping,
+decision handling, retention, secret reference and scanner-failure semantics.
+The direct operation shape is, for example:
+
+```text
+grid_run operation=v/ops/sonnylabs/scan input={"text":"<untrusted text>","surface":"document"}
+```
 
 ### Telegram bots (covia-telegram)
 

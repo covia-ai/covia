@@ -1,6 +1,6 @@
 {
-  "name": "Scan with SonnyLabs",
-  "description": "Tests prompt or LLM-facing text with the SonnyLabs AI firewall. Returns its prompt-injection and related safety findings plus the allow/warn/flag/block decision. The scan fails if SonnyLabs is unavailable; callers decide whether their workflow should fail open or closed.",
+  "name": "Scan untrusted text with SonnyLabs",
+  "description": "Scans externally supplied text before it enters an LLM context or controls an action. Returns SonnyLabs prompt-injection and related safety findings plus its allow/warn/flag/block decision. This is an explicit tool, not automatic prompt filtering; scanner failures fail the operation.",
   "operation": {
     "adapter": "sonnylabs:scan",
     "default": {
@@ -11,10 +11,10 @@
     "input": {
       "type": "object",
       "properties": {
-        "prompt": {
+        "text": {
           "type": "string",
           "minLength": 1,
-          "description": "Text to test before it is passed to an LLM or another trust boundary."
+          "description": "Exact untrusted text to scan before it enters an LLM context or influences an action. Do not summarise or interpret it first."
         },
         "surface": {
           "type": "string",
@@ -50,7 +50,7 @@
         "apiKey": {
           "type": "string",
           "pattern": "^/?s/.+",
-          "description": "Optional caller-owned s/NAME reference to a SonnyLabs scans:write key. Omit to use the venue-configured key."
+          "description": "Optional caller-owned secret reference; normally omit to use the venue credential at s/SONNY_LABS. Never pass a raw key."
         },
         "idempotencyKey": {
           "type": "string",
@@ -59,7 +59,7 @@
           "description": "Optional stable key for deduplicating a retry. A fresh UUID is generated when omitted."
         }
       },
-      "required": ["prompt"],
+      "required": ["text"],
       "additionalProperties": false
     },
     "output": {
@@ -76,11 +76,13 @@
           "properties": {
             "action": {"type": "string", "enum": ["blocked", "flagged", "warned", "allowed"]},
             "reason": {"type": "string"}
-          }
+          },
+          "required": ["action"]
         },
         "content_stored": {"type": "boolean"},
         "content": {"type": "object"}
       },
+      "required": ["id", "kind", "surface", "findings", "decision", "content_stored"],
       "additionalProperties": true
     }
   }

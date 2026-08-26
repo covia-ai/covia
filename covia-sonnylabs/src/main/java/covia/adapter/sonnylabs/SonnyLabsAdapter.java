@@ -29,7 +29,7 @@ public class SonnyLabsAdapter extends AAdapter {
 
 	public static final String NAME = "sonnylabs";
 	static final String DEFAULT_BASE_URL = "https://api.sonnylabs.ai";
-	static final String DEFAULT_API_KEY_REF = "s/SONNYLABS_API_KEY";
+	static final String DEFAULT_API_KEY_REF = "s/SONNY_LABS";
 	static final long DEFAULT_TIMEOUT_MILLIS = 30_000;
 	private static final long MAX_TIMEOUT_MILLIS = 3_600_000;
 
@@ -41,7 +41,7 @@ public class SonnyLabsAdapter extends AAdapter {
 	private static final Set<AString> CONFIG_KEYS = Set.of(
 		K_ENABLED, K_BASE_URL, K_API_KEY, K_API_VERSION, K_TIMEOUT_MILLIS);
 
-	private static final AString K_PROMPT = Strings.intern("prompt");
+	private static final AString K_TEXT = Strings.intern("text");
 	private static final AString K_SURFACE = Strings.intern("surface");
 	private static final AString K_TIER = Strings.intern("tier");
 	private static final AString K_CAPTURE = Strings.intern("capture");
@@ -53,6 +53,7 @@ public class SonnyLabsAdapter extends AAdapter {
 		"user_message", "assistant_output", "tool_result", "tool_params",
 		"document", "agent_message", "mcp_resource", "mcp_tool_description");
 	private static final Set<String> TIERS = Set.of("fast", "accurate", "auto");
+	private static final Set<String> ACTIONS = Set.of("blocked", "flagged", "warned", "allowed");
 
 	private final HttpClient http = HttpClient.newBuilder()
 		.connectTimeout(Duration.ofSeconds(10))
@@ -78,7 +79,7 @@ public class SonnyLabsAdapter extends AAdapter {
 	@Override
 	protected void installAssets() {
 		installAsset("sonnylabs/scan", "/adapters/sonnylabs/scan.json");
-		installSkill("security/sonnylabs", "/skills/sonnylabs.json");
+		installSkill("ops-tools/sonnylabs", "/skills/sonnylabs.json");
 	}
 
 	@Override
@@ -129,9 +130,9 @@ public class SonnyLabsAdapter extends AAdapter {
 	}
 
 	ACell scan(RequestContext ctx, ACell input) {
-		AString promptCell = RT.ensureString(RT.getIn(input, K_PROMPT));
-		if (promptCell == null || promptCell.isEmpty()) {
-			throw new IllegalArgumentException("prompt must be a non-empty string");
+		AString textCell = RT.ensureString(RT.getIn(input, K_TEXT));
+		if (textCell == null || textCell.isEmpty()) {
+			throw new IllegalArgumentException("text must be a non-empty string");
 		}
 
 		String surface = optionalInputString(input, K_SURFACE, "user_message");
@@ -157,7 +158,7 @@ public class SonnyLabsAdapter extends AAdapter {
 		AMap<AString, ACell> requestBody = Maps.of(
 			"kind", "content",
 			"surface", surface,
-			"content", Maps.of("type", "text", "text", promptCell),
+			"content", Maps.of("type", "text", "text", textCell),
 			"options", options);
 		if (context != null && !context.isEmpty()) requestBody = requestBody.assoc(K_CONTEXT, context);
 
@@ -194,6 +195,10 @@ public class SonnyLabsAdapter extends AAdapter {
 			if (!(result instanceof AMap<?, ?>)) {
 				throw new JobFailedException("SonnyLabs returned a non-object scan result");
 			}
+			AString action = RT.ensureString(RT.getIn(result, "decision", "action"));
+			if (action == null || !ACTIONS.contains(action.toString())) {
+				throw new JobFailedException("SonnyLabs returned a scan result without a valid decision");
+			}
 			return result;
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
@@ -210,7 +215,7 @@ public class SonnyLabsAdapter extends AAdapter {
 			? "adapters.sonnylabs.apiKey" : "apiKey");
 		RequestContext secretOwner = callerRef == null ? engine.venueContext() : ctx;
 		String value = engine.resolveSecret(ref, secretOwner);
-		if (value == null) {
+		if (value == null || value.isBlank()) {
 			String location = callerRef == null
 				? "the configured venue secret-store location"
 				: "the caller secret store at " + ref;

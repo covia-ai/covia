@@ -30,7 +30,8 @@ public final class SonnyLabsModuleSmokeMain {
 		fake.createContext("/v1/scans", exchange -> {
 			authorization.set(exchange.getRequestHeaders().getFirst("Authorization"));
 			exchange.getRequestBody().readAllBytes();
-			byte[] response = ("{\"id\":\"scan_smoke\",\"kind\":\"content\","
+			byte[] response = ("{\"id\":\"scan_smoke\",\"created\":\"2026-08-26T09:00:00Z\","
+				+ "\"kind\":\"content\","
 				+ "\"surface\":\"user_message\",\"findings\":[],"
 				+ "\"decision\":{\"action\":\"allowed\",\"reason\":\"clean\"},"
 				+ "\"content_stored\":false}").getBytes(StandardCharsets.UTF_8);
@@ -44,8 +45,7 @@ public final class SonnyLabsModuleSmokeMain {
 		Engine engine = Engine.createTemp(Maps.of(
 			Config.MODULES, Vectors.of(Maps.of("path", args[0])),
 			Config.ADAPTERS, Maps.of("sonnylabs", Maps.of(
-				"baseUrl", "http://localhost:" + fake.getAddress().getPort(),
-				"apiKey", "s/SONNYLABS_API_KEY"))));
+				"baseUrl", "http://localhost:" + fake.getAddress().getPort()))));
 		try {
 			Engine.addDemoAssets(engine);
 			AAdapter adapter = engine.getAdapter("sonnylabs");
@@ -53,16 +53,16 @@ public final class SonnyLabsModuleSmokeMain {
 			if (!(adapter.getClass().getClassLoader() instanceof ModuleClassLoader)) {
 				throw new AssertionError("SonnyLabs adapter was not loaded as a module");
 			}
-			if (engine.resolvePath(Strings.create("v/skills/security/sonnylabs"),
+			if (engine.resolvePath(Strings.create("v/skills/ops-tools/sonnylabs"),
 					engine.venueContext()) == null) {
 				throw new AssertionError("SonnyLabs module skill was not installed");
 			}
 
 			User venueUser = engine.getVenueState().users().ensure(engine.getDIDString());
-			venueUser.secrets().store("SONNYLABS_API_KEY", "smoke-token",
+			venueUser.secrets().store("SONNY_LABS", "smoke-token",
 				SecretStore.deriveKey(engine.getKeyPair()));
 			Job job = engine.jobs().invokeOperation("v/ops/sonnylabs/scan",
-				Maps.of("prompt", "hello"), engine.venueContext());
+				Maps.of("text", "hello"), engine.venueContext());
 			ACell output = job.awaitResult(10_000);
 			if (job.getStatus() != Status.COMPLETE) {
 				throw new AssertionError("SonnyLabs smoke scan failed: " + job.getErrorMessage());
