@@ -947,12 +947,15 @@ public class AgentState extends ALatticeComponent<ACell> {
 		}
 
 		if (earliest > 0) {
-			// Non-forcing (run only if work), non-blocking (fire-and-forget).
+			// Non-forcing (run only if work), non-blocking (fire-and-forget), and
+			// explicitly untracked: a wake is machinery, not user work — the run
+			// loop it starts records its own tasks. Only the operator's
+			// forceTrackJobs makes wakes durable (GRID_SCHEDULER.md §7).
 			Blob handle = scheduler.schedule(TRIGGER_OP,
 				Maps.of(Fields.AGENT_ID, agentId,
 					Fields.FORCE, CVMBool.FALSE,
 					Fields.WAIT, CVMBool.FALSE),
-				octx, earliest);
+				octx, earliest, null, Boolean.FALSE);
 			update(r -> r.assoc(K_WAKE_HANDLE, handle));
 			return true;
 		}

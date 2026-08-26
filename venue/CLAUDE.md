@@ -95,7 +95,7 @@ AUTH_REQUIRED).
 | `memory` | Per-user agent memory (one LWW vector, default `w/memory`) | `recall`, `remember`, `update`, `forget` |
 | `skills` | Agent skills discovery (see `docs/SKILLS.md`) | `list`, `read` (command-dispatched) |
 | `ucan` | Capability tokens — granting surface (COG-17) | `issue`, `verify` |
-| `scheduler` | Deferred grid-op invocation | `schedule`, `cancel`, `trigger`, `list` |
+| `scheduler` | Deferred grid-op invocation, one-shot or `repeat.every`; tracked fires are durable Jobs (`docs/GRID_SCHEDULER.md`) | `schedule`, `cancel`, `trigger`, `list` |
 | `auth` | Authentication ops | login/token flows |
 | `user` | Explicit user registration and discovery (arbitrary DIDs; venue-managed did:web usernames) | `create`, `info`, `list` |
 | `venue` | Venue administration — runtime adapter/module lifecycle and process restart (venue-owned; `docs/CONFIG.md`) | `adapters`, `adapter/enable`, `adapter/disable`, `adapter/configure`, `module/load`, `module/unload`, `restart` |

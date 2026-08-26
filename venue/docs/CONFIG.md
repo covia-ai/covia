@@ -793,6 +793,35 @@ Operators can force read-only runs and internal calls to be recorded:
 This option is off by default. It does not change `/invoke`, which is always
 recorded.
 
+## Scheduled job tracking
+
+A scheduled event (`scheduler:schedule`) fires as a transient Job by default —
+no record beyond the log — which suits chatty machinery such as agent wakes.
+A caller can ask for a durable Job per fire with `track: true` on the event;
+the venue decides what happens when the caller says nothing, and may override
+the caller altogether:
+
+```json
+{
+  "scheduler": {
+    "trackJobs": false,
+    "forceTrackJobs": false
+  }
+}
+```
+
+- `trackJobs` — the default for events that did not set `track`. Off by
+  default.
+- `forceTrackJobs` — every scheduled fire is a durable Job whatever the event
+  asked for. Off by default. Use it where an audit trail of all scheduled
+  work is required.
+
+Both are resolved at fire time, so changing them covers events already
+queued. A tracked fire is recorded in the owner's job history; on a recurring
+event its ID is reported as `lastJob` by `scheduler:list` / `GET
+/api/v1/schedules` — read that Job for the outcome. The scheduler itself keeps
+no execution history. See `GRID_SCHEDULER.md` §7.
+
 ## DLFS WebDAV
 
 ```json

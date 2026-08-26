@@ -1,5 +1,6 @@
 package covia.venue;
 
+import java.util.Arrays;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -24,6 +25,7 @@ import convex.core.data.Index;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.Utils;
@@ -32,8 +34,9 @@ import covia.exception.AuthException;
 
 /**
  * Per-venue scheduler for deferred grid-operation invocations. Fires any grid
- * operation at a future wall-clock time; an agent wake is one consumer (a
- * scheduled {@code agent:trigger}). Design in {@code venue/docs/GRID_SCHEDULER.md}.
+ * operation at a future wall-clock time, once or on a fixed interval; an agent
+ * wake is one consumer (a scheduled {@code agent:trigger}). Design in
+ * {@code venue/docs/GRID_SCHEDULER.md}.
  *
  * <p>Authoritative state lives on the lattice in the per-venue {@code :schedule}
  * slot, a whole {@code {updated, events}} value where {@code events} is an
@@ -53,10 +56,25 @@ import covia.exception.AuthException;
  * fired operation itself runs on a fresh virtual thread so its I/O never stalls
  * the alarm.</p>
  *
+ * <p><b>Recurrence.</b> An event carrying a {@code repeat} spec is not removed
+ * when it fires: it is re-inserted at its next due slot under the same
+ * {@code id}, so the handle a caller holds keeps resolving (by id when the
+ * exact key has moved on). Missed slots are skipped, never replayed.</p>
+ *
+ * <p><b>Tracking.</b> The scheduler records schedules; Jobs record executions.
+ * A fire is a transient Job by default (§7); a <i>tracked</i> fire is a durable
+ * Job in the owner's history, and the only thing the scheduler keeps of it is
+ * its ID ({@code lastJob} on a recurring record). No outcome, status or error
+ * is ever stored here — that is what the Job is for. The Job is
+ * {@link JobManager#prepareTracked prepared} (minted, PENDING, persisted) on
+ * the timer thread so that claiming the event and recording its Job ID are
+ * one lattice write; only then does the adapter start, off-thread.</p>
+ *
  * <p><b>No escalation.</b> An event captures the owner's DID plus the proofs and
  * caps presented at schedule time, and firing replays exactly those via
- * {@link JobManager#invokeInternal} (§5 of the design), which enforces that
- * scope on dispatch. The scheduler never invents authority.</p>
+ * {@link JobManager#invokeInternal} / {@link JobManager#prepareTracked} (§5 of
+ * the design), which enforce that scope on dispatch. The scheduler never
+ * invents authority.</p>
  */
 public class Scheduler {
 
@@ -80,6 +98,21 @@ public class Scheduler {
 	static final AString K_CAPS = Strings.intern("caps");
 	/** Event record field: absolute wake time in millis (CVMLong). */
 	static final AString K_TIME = Strings.intern("time");
+	/** Event record field: recurrence spec (AMap, see {@link #validateRepeat});
+	 *  absent ⇒ one-shot. */
+	static final AString K_REPEAT = Strings.intern("repeat");
+	/** Recurrence spec field: fixed interval between fires in millis (CVMLong).
+	 *  The only recurrence understood today; calendar forms may join it later. */
+	static final AString K_EVERY = Strings.intern("every");
+	/** Event record field: the caller's explicit tracking choice (CVMBool);
+	 *  absent ⇒ the venue default applies at fire time. */
+	static final AString K_TRACK = Strings.intern("track");
+	/** Event record field: wall-clock millis of the most recent fire (CVMLong).
+	 *  Only a recurring record survives a fire, so only it carries this. */
+	static final AString K_LAST_FIRED = Strings.intern("lastFired");
+	/** Event record field: ID of the durable Job produced by the most recent
+	 *  tracked fire (Blob) — the one link from a schedule to its executions. */
+	static final AString K_LAST_JOB = Strings.intern("lastJob");
 	/** Slot wrapper field: strictly-increasing stamp; the whole value with the
 	 *  higher stamp wins the (rare) merge, so deletions survive (CVMLong). */
 	static final AString K_UPDATED = Strings.intern("updated");
@@ -87,6 +120,12 @@ public class Scheduler {
 	static final AString K_EVENTS = Strings.intern("events");
 	/** List-result field: the event handle (its index key). */
 	static final AString K_HANDLE = Strings.intern("handle");
+
+	/** Floor on {@code repeat.every}: the first abuse guard against tight loops. */
+	public static final long MIN_REPEAT_MS = 1_000L;
+
+	/** Index key length: 8-byte big-endian wake time + 8-byte id. */
+	private static final int KEY_LENGTH = 16;
 
 	private final Engine engine;
 	private final LongSupplier clock;
@@ -100,6 +139,16 @@ public class Scheduler {
 	 *  thread, so no synchronisation is needed. Seeded from the persisted value
 	 *  in {@link #start()} so it keeps increasing across restarts. */
 	private long lastStamp = 0L;
+
+	/** An event as it stands in the index. */
+	private record Entry(Blob key, AMap<AString, ACell> rec) {}
+
+	/**
+	 * A claimed fire: the event record as fired, and either the prepared Job
+	 * to start (tracked) or null (transient), or the error that prevented
+	 * preparing it. The event's own state has already been committed.
+	 */
+	private record Claimed(AMap<AString, ACell> rec, JobManager.Prepared job, RuntimeException error) {}
 
 	public Scheduler(Engine engine) {
 		this(engine, System::currentTimeMillis);
@@ -121,19 +170,37 @@ public class Scheduler {
 	// ---------------------------------------------------------------- public API
 
 	/**
+	 * Schedule a one-shot {@code opRef(input)} to fire at absolute {@code wakeTime}
+	 * millis, running as the caller with the proofs/caps carried in {@code ctx}
+	 * captured for replay, tracked per the venue default. Returns the event
+	 * handle (its index key).
+	 */
+	public Blob schedule(AString opRef, ACell input, RequestContext ctx, long wakeTime) {
+		return schedule(opRef, input, ctx, wakeTime, null, null);
+	}
+
+	/**
 	 * Schedule {@code opRef(input)} to fire at absolute {@code wakeTime} millis,
 	 * running as the caller with the proofs/caps carried in {@code ctx} captured
 	 * for replay. Returns the event handle (its index key).
+	 *
+	 * @param repeat recurrence spec (validated by {@link #validateRepeat}), or
+	 *        null for a one-shot event
+	 * @param track the caller's explicit tracking choice — true for a durable
+	 *        Job per fire, false for transient — or null to take the venue
+	 *        default at fire time. An operator-level force overrides both.
 	 */
-	public Blob schedule(AString opRef, ACell input, RequestContext ctx, long wakeTime) {
+	public Blob schedule(AString opRef, ACell input, RequestContext ctx, long wakeTime,
+			AMap<AString, ACell> repeat, Boolean track) {
 		AString owner = ctx.getUserDID();
 		if (owner == null) throw new AuthException("Scheduling requires an authenticated caller");
+		AMap<AString, ACell> rep = (repeat == null) ? null : validateRepeat(repeat);
 		// Owned by the user, fired as whoever scheduled it — so an agent's queued
 		// work stays visible to (and cancellable by) the account it runs in.
 		AString actor = ctx.isSubPrincipal() ? ctx.getCallerDID() : null;
 		AVector<ACell> proofs = ctx.getProofs();
 		AVector<ACell> caps = ctx.getCaps();
-		return onTimer(() -> doSchedule(opRef, input, owner, actor, proofs, caps, wakeTime));
+		return onTimer(() -> doSchedule(opRef, input, owner, actor, proofs, caps, wakeTime, rep, track));
 	}
 
 	/** Cancel a scheduled event by handle. Owner-only. Returns false if absent. */
@@ -142,26 +209,32 @@ public class Scheduler {
 	}
 
 	/**
-	 * Fire a scheduled event now, ahead of its time, removing it. Owner-only.
-	 * Returns the invocation's result future (run with the event's stapled
-	 * authority). The deterministic test hook as well as a real "run it now".
+	 * Fire a scheduled event now, ahead of its time. Owner-only. A one-shot
+	 * event is consumed; a recurring one stays scheduled at its unchanged next
+	 * due time. Returns the invocation's result future (run with the event's
+	 * stapled authority). The deterministic test hook as well as a real "run it
+	 * now".
 	 */
 	public CompletableFuture<ACell> trigger(Blob handle, RequestContext ctx) {
-		AMap<AString, ACell> rec;
+		Claimed c;
 		try {
-			rec = onTimer(() -> doClaim(handle, ctx.getUserDID()));
-		} catch (RuntimeException e) {
-			return CompletableFuture.failedFuture(e);
+			c = onTimer(() -> doClaim(handle, ctx.getUserDID()));
+		} catch (RuntimeException ex) {
+			return CompletableFuture.failedFuture(ex);
 		}
-		if (rec == null) {
+		if (c == null) {
 			return CompletableFuture.failedFuture(
 				new IllegalArgumentException("No scheduled event for handle"));
 		}
-		return invokeFor(rec);
+		return fire(c);
 	}
 
-	/** The calling user's pending events, each as {@code {handle, op, time}},
-	 *  time-ordered — including those queued by their agents. */
+	/**
+	 * The calling user's pending events, time-ordered — including those queued
+	 * by their agents. Each is {@code {handle, op, time, track}} plus, when
+	 * present, {@code repeat}, {@code lastFired} and {@code lastJob}.
+	 * {@code track} is the effective tracking that the next fire will use.
+	 */
 	public AVector<ACell> list(RequestContext ctx) {
 		AString caller = ctx.getUserDID();
 		Index<Blob, ACell> idx = index();
@@ -173,10 +246,12 @@ public class Scheduler {
 			@SuppressWarnings("unchecked")
 			AMap<AString, ACell> rec = (AMap<AString, ACell>) e.getValue();
 			if (caller == null || !caller.equals(rec.get(K_OWNER))) continue;
-			out = out.conj(Maps.of(
+			AMap<AString, ACell> item = Maps.of(
 				K_HANDLE, e.getKey(),
 				K_OP, rec.get(K_OP),
-				K_TIME, rec.get(K_TIME)));
+				K_TIME, rec.get(K_TIME),
+				K_TRACK, CVMBool.create(isTracked(rec)));
+			out = out.conj(copyIfPresent(rec, item, K_REPEAT, K_LAST_FIRED, K_LAST_JOB));
 		}
 		return out;
 	}
@@ -200,10 +275,52 @@ public class Scheduler {
 		timer.shutdownNow();
 	}
 
+	// ------------------------------------------------------------- recurrence
+
+	/**
+	 * Validate a recurrence spec and return its canonical form. The only form
+	 * understood today is {@code {every: <millis>}} with
+	 * {@code every >= MIN_REPEAT_MS}; anything else is rejected outright rather
+	 * than guessed at, so a calendar form added later cannot be silently
+	 * misread by an older venue.
+	 */
+	public static AMap<AString, ACell> validateRepeat(AMap<AString, ACell> repeat) {
+		if (repeat.count() != 1 || !repeat.containsKey(K_EVERY)) {
+			throw new IllegalArgumentException("repeat must be {every: <millis>}");
+		}
+		CVMLong every = RT.ensureLong(repeat.get(K_EVERY));
+		if (every == null || every.longValue() < MIN_REPEAT_MS) {
+			throw new IllegalArgumentException(
+				"repeat.every must be an integer of at least " + MIN_REPEAT_MS + " millis");
+		}
+		return Maps.of(K_EVERY, every);
+	}
+
+	/** The fixed interval of a validated {@code {every}} spec. */
+	public static long everyOf(AMap<AString, ACell> repeat) {
+		return RT.ensureLong(repeat.get(K_EVERY)).longValue();
+	}
+
+	/**
+	 * Next due time for a recurring event that was due at {@code time} and is
+	 * firing at {@code now}: the first slot on the {@code time + n·every} grid
+	 * strictly after {@code now}. Keeping the grid's phase makes "every hour"
+	 * stay on the hour it started on; skipping missed slots means a backlog
+	 * (venue down for a day) collapses into the single catch-up fire that just
+	 * happened — never a burst.
+	 */
+	static long nextTime(AMap<AString, ACell> repeat, long time, long now) {
+		long every = everyOf(repeat);
+		long next = time + every;
+		if (next <= now) next = time + ((now - time) / every + 1) * every;
+		return next;
+	}
+
 	// ------------------------------------------------------- timer-thread bodies
 
 	private Blob doSchedule(AString opRef, ACell input, AString owner, AString actor,
-			AVector<ACell> proofs, AVector<ACell> caps, long wakeTime) {
+			AVector<ACell> proofs, AVector<ACell> caps, long wakeTime,
+			AMap<AString, ACell> repeat, Boolean track) {
 		Blob key = mintKey(wakeTime);
 		AMap<AString, ACell> rec = Maps.of(
 			K_OP, opRef,
@@ -213,26 +330,99 @@ public class Scheduler {
 		if (input != null) rec = rec.assoc(K_INPUT, input);
 		if (proofs != null) rec = rec.assoc(K_PROOFS, proofs);
 		if (caps != null) rec = rec.assoc(K_CAPS, caps);
+		if (repeat != null) rec = rec.assoc(K_REPEAT, repeat);
+		if (track != null) rec = rec.assoc(K_TRACK, CVMBool.create(track));
 		final AMap<AString, ACell> frec = rec;
 		putEvents(events -> events.assoc(key, frec));
 		return key;
 	}
 
-	private boolean doCancel(Blob key, AString caller) {
-		ACell rec = index().get(key);
-		if (!(rec instanceof AMap)) return false;
-		requireOwner(asMap(rec), caller);
+	private boolean doCancel(Blob handle, AString caller) {
+		Entry e = find(handle);
+		if (e == null) return false;
+		requireOwner(e.rec(), caller);
+		final Blob key = e.key();
 		putEvents(events -> events.dissoc(key));
 		return true;
 	}
 
-	/** Read + remove an event (the claim), owner-checked. Returns null if absent. */
-	private AMap<AString, ACell> doClaim(Blob key, AString caller) {
-		ACell rec = index().get(key);
-		if (!(rec instanceof AMap)) return null;
-		requireOwner(asMap(rec), caller);
-		putEvents(events -> events.dissoc(key));
-		return asMap(rec);
+	/** Claim an event for an early fire, owner-checked. Returns null if absent. */
+	private Claimed doClaim(Blob handle, AString caller) {
+		Entry e = find(handle);
+		if (e == null) return null;
+		requireOwner(e.rec(), caller);
+		return claim(e.key(), e.rec(), clock.getAsLong(), false);
+	}
+
+	/**
+	 * Claim {@code rec} (at {@code key}) for a fire at {@code now} — one atomic
+	 * lattice write covering everything the fire changes about the schedule:
+	 * <ul>
+	 * <li>a tracked fire's Job is prepared first (minted, PENDING, persisted —
+	 *     the adapter is not started), so its ID is known;</li>
+	 * <li>a one-shot event is removed;</li>
+	 * <li>a recurring event is re-inserted with {@code lastFired = now} and,
+	 *     when tracked, {@code lastJob} — re-keyed at its next due slot when
+	 *     {@code advance} (the alarm path), or left at its current time when not
+	 *     (an early {@code trigger} does not disturb the schedule).</li>
+	 * </ul>
+	 * There is no state in which the event has been consumed but its Job is
+	 * unknown. If the Job cannot be prepared (unresolvable op, capability
+	 * denied), the event is still claimed exactly as an untracked failure
+	 * would be, and the error travels with the claim for the caller to see.
+	 */
+	private Claimed claim(Blob key, AMap<AString, ACell> rec, long now, boolean advance) {
+		JobManager.Prepared job = null;
+		RuntimeException error = null;
+		if (isTracked(rec)) {
+			try {
+				job = engine.jobs().prepareTracked(
+					RT.ensureString(rec.get(K_OP)), rec.get(K_INPUT), fireContext(rec));
+			} catch (RuntimeException e) {
+				error = e;
+			}
+		}
+		AMap<AString, ACell> repeat = repeatOf(rec);
+		if (repeat == null) {
+			putEvents(events -> events.dissoc(key));
+			return new Claimed(rec, job, error);
+		}
+		AMap<AString, ACell> next = rec.assoc(K_LAST_FIRED, CVMLong.create(now));
+		if (job != null) next = next.assoc(K_LAST_JOB, job.job().getID());
+		Blob nextKey = key;
+		if (advance) {
+			long t = nextTime(repeat, timeOf(rec), now);
+			next = next.assoc(K_TIME, CVMLong.create(t));
+			nextKey = rekey(key, t);
+		}
+		final Blob fk = nextKey;
+		final AMap<AString, ACell> fn = next;
+		putEvents(events -> events.dissoc(key).assoc(fk, fn));
+		return new Claimed(rec, job, error);
+	}
+
+	/**
+	 * Locate an event by handle: the exact key, else — because a recurring
+	 * event is re-keyed on every fire while its id suffix stays fixed — the
+	 * entry whose id matches. Schedules are small, so the fallback scan is
+	 * cheap and only ever runs for a handle that has moved on.
+	 */
+	private Entry find(Blob handle) {
+		Index<Blob, ACell> idx = index();
+		ACell rec = idx.get(handle);
+		if (rec instanceof AMap) return new Entry(handle, asMap(rec));
+		if (handle.count() != KEY_LENGTH) return null;
+		byte[] h = handle.getBytes();
+		long cnt = idx.count();
+		for (long i = 0; i < cnt; i++) {
+			var e = idx.entryAt(i);
+			Blob k = (Blob) e.getKey();
+			if (k.count() != KEY_LENGTH || !(e.getValue() instanceof AMap)) continue;
+			if (Arrays.equals(h, 8, KEY_LENGTH, k.getBytes(), 8, KEY_LENGTH)) {
+				return new Entry(k, asMap(e.getValue()));
+			}
+		}
+		return null;
 	}
 
 	/** Fire every event due at or before now, then re-arm. Runs on the timer thread. */
@@ -251,8 +441,9 @@ public class Scheduler {
 			}
 			AMap<AString, ACell> rec = asMap(recCell);
 			if (timeOf(rec) > now) break;                  // earliest is in the future
-			putEvents(events -> events.dissoc(key));       // claim
-			dispatchFire(rec);
+			// Claim: a one-shot is removed; a recurring event moves to its next
+			// slot (strictly after now, so this loop always advances).
+			dispatchFire(claim(key, rec, now, true));
 		}
 		armNext();
 	}
@@ -296,17 +487,36 @@ public class Scheduler {
 	// ------------------------------------------------------------------ firing
 
 	/** Fire-and-forget on a virtual thread (drain path); errors are logged. */
-	private void dispatchFire(AMap<AString, ACell> rec) {
+	private void dispatchFire(Claimed c) {
 		Thread.ofVirtual().name("venue-scheduler-fire").start(() ->
-			invokeFor(rec).whenComplete((r, err) -> {
-				if (err != null) log.warn("scheduled fire failed for op {}", rec.get(K_OP), err);
+			fire(c).whenComplete((r, err) -> {
+				if (err != null) log.warn("scheduled fire failed for op {}", c.rec().get(K_OP), err);
 			}));
 	}
 
-	/** Build the owner+proofs+caps context and dispatch with a transient Job wrapper. */
-	private CompletableFuture<ACell> invokeFor(AMap<AString, ACell> rec) {
-		AString opRef = RT.ensureString(rec.get(K_OP));
-		ACell input = rec.get(K_INPUT);
+	/**
+	 * Run a claimed fire. Tracked: start the Job prepared at claim time (its
+	 * ID is already on the record). Untracked: a transient Job via
+	 * {@code invokeInternal} (design §7). Either way the dispatch runs under the
+	 * owner's stapled caps, which JobManager enforces — so a scheduled fire
+	 * cannot exceed the authority the owner captured at schedule time.
+	 */
+	private CompletableFuture<ACell> fire(Claimed c) {
+		if (c.error() != null) return CompletableFuture.failedFuture(c.error());
+		if (c.job() != null) {
+			try {
+				return c.job().start().future();
+			} catch (RuntimeException e) {
+				return CompletableFuture.failedFuture(e);
+			}
+		}
+		AMap<AString, ACell> rec = c.rec();
+		return engine.jobs().invokeInternal(
+			RT.ensureString(rec.get(K_OP)), rec.get(K_INPUT), fireContext(rec));
+	}
+
+	/** The identity and stapled authority a fire runs under (design §5). */
+	private static RequestContext fireContext(AMap<AString, ACell> rec) {
 		AString owner = RT.ensureString(rec.get(K_OWNER));
 		// Fire as the scheduling agent when there was one. Authority.of recovers
 		// the owning namespace from the agent DID, so a replayed sub-principal
@@ -317,10 +527,20 @@ public class Scheduler {
 		if (proofs != null) ctx = ctx.withProofs(proofs);
 		AVector<ACell> caps = asVector(rec.get(K_CAPS));
 		if (caps != null) ctx = ctx.withCaps(caps);
-		// Zero-Job dispatch under the owner's stapled caps. invokeInternal
-		// enforces that scope, so a scheduled fire cannot exceed the
-		// authority the owner captured at schedule time — no escalation.
-		return engine.jobs().invokeInternal(opRef, input, ctx);
+		return ctx;
+	}
+
+	/**
+	 * Effective tracking for a fire, resolved at fire time so an operator's
+	 * policy applies to everything already queued: operator force → the
+	 * caller's explicit choice → the venue default.
+	 */
+	private boolean isTracked(AMap<AString, ACell> rec) {
+		Config cfg = engine.config();
+		if (cfg.isForceTrackScheduledJobs()) return true;
+		ACell t = rec.get(K_TRACK);
+		if (t instanceof CVMBool b) return b.booleanValue();
+		return cfg.isTrackScheduledJobs();
 	}
 
 	// ------------------------------------------------------------------ helpers
@@ -359,9 +579,23 @@ public class Scheduler {
 		return (c instanceof AVector) ? (AVector<ACell>) c : null;
 	}
 
+	private static AMap<AString, ACell> repeatOf(AMap<AString, ACell> rec) {
+		ACell r = rec.get(K_REPEAT);
+		return (r instanceof AMap) ? asMap(r) : null;
+	}
+
 	private static long timeOf(AMap<AString, ACell> rec) {
 		ACell t = rec.get(K_TIME);
 		return (t instanceof CVMLong l) ? l.longValue() : 0L;   // malformed → due now
+	}
+
+	private static AMap<AString, ACell> copyIfPresent(AMap<AString, ACell> from,
+			AMap<AString, ACell> to, AString... keys) {
+		for (AString k : keys) {
+			ACell v = from.get(k);
+			if (v != null) to = to.assoc(k, v);
+		}
+		return to;
 	}
 
 	private static void requireOwner(AMap<AString, ACell> rec, AString caller) {
@@ -372,9 +606,16 @@ public class Scheduler {
 
 	/** 16-byte key: 8-byte big-endian wakeTime (orders the index) + 8 random bytes (uniqueness). */
 	private static Blob mintKey(long wakeTime) {
-		byte[] bs = new byte[16];
+		byte[] bs = new byte[KEY_LENGTH];
 		Utils.writeLong(bs, 0, wakeTime);
 		Utils.writeLong(bs, 8, ThreadLocalRandom.current().nextLong());
+		return Blob.wrap(bs);
+	}
+
+	/** The same event id under a new wake time — how a recurring event moves. */
+	private static Blob rekey(Blob key, long wakeTime) {
+		byte[] bs = key.getBytes();
+		Utils.writeLong(bs, 0, wakeTime);
 		return Blob.wrap(bs);
 	}
 

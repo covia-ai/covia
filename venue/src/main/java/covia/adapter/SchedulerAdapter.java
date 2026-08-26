@@ -13,16 +13,20 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.exception.AuthException;
 import covia.venue.RequestContext;
+import covia.venue.Scheduler;
 
 /**
  * User-facing surface for the per-venue grid {@link covia.venue.Scheduler}.
- * Schedules any grid operation to fire at a future time — waking an agent is one
- * such operation. See {@code venue/docs/GRID_SCHEDULER.md}.
+ * Schedules any grid operation to fire at a future time, once or on a fixed
+ * interval — waking an agent is one such operation. See
+ * {@code venue/docs/GRID_SCHEDULER.md}.
  *
  * <p>Operations: {@code schedule}, {@code cancel}, {@code trigger}, {@code list}.
  * The firing identity and authority (owner DID, UCAN proofs, caps) are captured
  * from the scheduling caller and replayed at fire time, so a scheduled
- * invocation cannot exceed the authority the owner held when scheduling.</p>
+ * invocation cannot exceed the authority the owner held when scheduling.
+ * Whether a fire is a durable Job ({@code track}) is the caller's choice,
+ * falling back to venue policy; the scheduler itself never records outcomes.</p>
  */
 public class SchedulerAdapter extends AAdapter {
 
@@ -30,6 +34,8 @@ public class SchedulerAdapter extends AAdapter {
 	private static final AString INPUT = Strings.intern("input");
 	private static final AString TIME = Strings.intern("time");
 	private static final AString AFTER = Strings.intern("after");
+	private static final AString REPEAT = Strings.intern("repeat");
+	private static final AString TRACK = Strings.intern("track");
 	private static final AString HANDLE = Strings.intern("handle");
 	private static final AString CANCELLED = Strings.intern("cancelled");
 	private static final AString TRIGGERED = Strings.intern("triggered");
@@ -92,6 +98,8 @@ public class SchedulerAdapter extends AAdapter {
 			throw new IllegalArgumentException("schedule requires an 'operation' reference");
 		}
 		ACell opInput = RT.getIn(input, INPUT);
+		AMap<AString, ACell> repeat = parseRepeat(RT.getIn(input, REPEAT));
+		Boolean track = parseTrack(RT.getIn(input, TRACK));
 		CVMLong timeV = RT.ensureLong(RT.getIn(input, TIME));
 		CVMLong afterV = RT.ensureLong(RT.getIn(input, AFTER));
 		long wakeTime;
@@ -99,12 +107,35 @@ public class SchedulerAdapter extends AAdapter {
 			wakeTime = timeV.longValue();
 		} else if (afterV != null) {
 			wakeTime = System.currentTimeMillis() + afterV.longValue();
+		} else if (repeat != null) {
+			// "every N" with no start: the first fire is one interval from now.
+			wakeTime = System.currentTimeMillis() + Scheduler.everyOf(repeat);
 		} else {
 			throw new IllegalArgumentException(
-				"schedule requires 'time' (absolute millis) or 'after' (millis from now)");
+				"schedule requires 'time' (absolute millis), 'after' (millis from now) or 'repeat'");
 		}
-		Blob handle = engine.gridScheduler().schedule(opRef, opInput, ctx, wakeTime);
-		return Maps.of(HANDLE, handle, TIME, CVMLong.create(wakeTime));
+		Blob handle = engine.gridScheduler().schedule(opRef, opInput, ctx, wakeTime, repeat, track);
+		AMap<AString, ACell> out = Maps.of(HANDLE, handle, TIME, CVMLong.create(wakeTime));
+		return (repeat != null) ? out.assoc(REPEAT, repeat) : out;
+	}
+
+	/** A recurrence spec, validated to its canonical form; null when absent. */
+	@SuppressWarnings("unchecked")
+	private static AMap<AString, ACell> parseRepeat(ACell repeat) {
+		if (repeat == null) return null;
+		if (!(repeat instanceof AMap)) {
+			throw new IllegalArgumentException("repeat must be an object, e.g. {every: <millis>}");
+		}
+		return Scheduler.validateRepeat((AMap<AString, ACell>) repeat);
+	}
+
+	/** The caller's explicit tracking choice; null when absent (venue default applies). */
+	private static Boolean parseTrack(ACell track) {
+		if (track == null) return null;
+		if (!(track instanceof CVMBool b)) {
+			throw new IllegalArgumentException("track must be a boolean");
+		}
+		return b.booleanValue();
 	}
 
 	private ACell handleCancel(RequestContext ctx, ACell input) {

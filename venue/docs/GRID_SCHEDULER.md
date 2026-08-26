@@ -14,15 +14,24 @@ per-thread `AgentScheduler` that predated this service has been retired.
 
 ## 1. Entities
 
-- **Scheduled event** — a single deferred invocation:
-  `{ time, id, operation, input, owner, proofs, repeat? }`.
-  - `time` — absolute wall-clock millis at which the event becomes due.
+- **Scheduled event** — a deferred invocation, one-shot or recurring:
+  `{ time, id, operation, input, owner, proofs, repeat?, track?, lastFired?, lastJob? }`.
+  - `time` — absolute wall-clock millis at which the event is next due.
   - `operation` — a grid operation reference (asset id or operation path).
   - `input` — the cell passed to that operation when it fires.
   - `owner` — the DID that scheduled it; the identity the operation runs as.
   - `proofs` — the UCAN proof(s) the owner presented when scheduling, captured so
     firing runs with **exactly** that authority and cannot escalate (§5).
-  - `repeat` — optional interval (millis) for recurrence; absent ⇒ one-shot.
+  - `repeat` — optional recurrence spec; absent ⇒ one-shot. It is an object so
+    richer forms can join later without renaming anything: today the only form
+    is `{every: <millis>}`, a fixed interval (minimum 1 s). Calendar forms
+    ("weekdays at 09:00") are future work (§9).
+  - `track` — optional; whether each fire is a durable Job (§7). Absent ⇒ the
+    venue default applies at fire time.
+  - `lastFired` / `lastJob` — set only on a recurring event, which is the only
+    kind that still exists after it fires: when it last fired, and the ID of
+    the durable Job that fire produced (tracked fires only). These are the
+    **whole** of the scheduler's execution memory — see §7.
 
 - **Handle** — a stable reference to an event, composed of its `time` and `id`.
   The handle *locates* the event in the index in `O(log n)` (see §3), so it is
@@ -53,7 +62,7 @@ The `:schedule` value is a single `{ updated, events }` map:
 
 ```
 events = Index keyed by  time (8-byte big-endian unsigned millis) ‖ id (unique bytes)
-         value = { op, input, owner, time, proofs?, caps? }
+         value = { op, input, owner, time, proofs?, caps?, repeat?, track?, lastFired?, lastJob? }
 updated = wall-clock stamp of the last mutation
 ```
 
@@ -100,6 +109,13 @@ Because the handle carries `time`, it points straight at the index entry; an id
 alone would require a scan. A handle for an already-fired or cancelled event
 resolves to "not found".
 
+**Recurring events keep their handle.** When a recurring event fires it is
+re-keyed at its next due time (§4), so the exact key a caller was given no
+longer exists — but the `id` half never changes. `cancel` and `trigger` look up
+the exact key first and, on a miss, fall back to matching the `id` across the
+index. Schedules are small, so the fallback is cheap and only ever runs for a
+handle that has moved on; `list` always reports the current key.
+
 ---
 
 ## 4. Firing model
@@ -119,25 +135,47 @@ costs nothing — there is no scan of sleeping events.
 
 **On fire** (now ≥ head time), on the timer thread:
 1. Walk the head while `time ≤ now`.
-2. **Claim each by removing it from the index** (a whole-value replace, §2) before
-   dispatching. Because removal and every other mutation run on this one thread,
-   a `trigger` of the same event either already ran (removed it — drain skips) or
-   runs after (finds it gone). This gives **at-most-once** firing with no locking.
-3. Dispatch the claimed event's operation as the owner on a fresh virtual thread,
-   **replaying the event's stapled `proofs`/`caps`** and nothing more (§5), via the
-   engine's internal transient-Job dispatch — fire-and-forget; any error is logged.
-   The vthread keeps the operation's I/O off the timer thread.
+2. **Claim each** before dispatching — **one** whole-value replace (§2) that
+   covers everything the fire changes about the schedule: a one-shot event is
+   **removed**; a recurring event is **re-inserted** under the same `id` at
+   its next due slot with `lastFired = now` and, for a tracked fire, `lastJob`.
+   To make `lastJob` part of that same write, a tracked fire's Job is
+   *prepared* first, on the timer thread: minted, PENDING, persisted in the
+   owner's history — the adapter is **not** started. So there is no state in
+   which an event has been consumed but its Job is unknown, and nothing an
+   observer can see between "scheduled" and "fired with Job X". Because the
+   claim and every other mutation run on this one thread, a `trigger` of the
+   same event either already ran (drain skips it) or runs after. This gives
+   **at-most-once** firing with no locking.
+3. Dispatch on a fresh virtual thread, **replaying the event's stapled
+   `proofs`/`caps`** and nothing more (§5): start the prepared Job (tracked) or
+   run the engine's transient-Job dispatch (untracked, §7). Fire-and-forget;
+   any error is logged. The vthread keeps the operation's I/O off the timer
+   thread — the timer only ever resolves the op and writes the lattice.
 4. Re-arm for the new head.
+
+If a tracked Job cannot be prepared (unresolvable op, capability denied), the
+event is still claimed exactly as an untracked failure would be — the schedule
+advances, there is no Job and no `lastJob`, and the error is logged (or
+returned, for `trigger`).
 
 **Claim-then-invoke** is chosen over invoke-then-remove so a crash mid-fire can
 at worst *drop* an event, never double-run a user's operation. Schedules that
 need at-least-once delivery are a future option (§9) paired with idempotent
 operations.
 
+**Recurrence.** The next due time of a `{every}` event is the first slot on the
+`time + n·every` grid strictly after `now`. Anchoring to the grid keeps the
+phase ("every hour" stays on the hour it started on); taking the first slot
+*after now* means a backlog of missed slots collapses into the single catch-up
+fire that just happened — one fire, never a burst. The next slot is always in
+the future, so the drain loop always advances.
+
 **Boot.** On startup the service reads the index head and arms — nothing to
 replay. Events whose `time` already passed while the venue was down are overdue
-and fire immediately as a catch-up; a large overdue backlog is drained in
-time-order (throttling the catch-up is a future concern).
+and fire immediately as a catch-up — once each, however many slots a recurring
+event missed; a large overdue backlog is drained in time-order (throttling the
+catch-up is a future concern).
 
 ---
 
@@ -180,10 +218,17 @@ operations, described by intent:
 
 - **schedule** — register an event for a future time (absolute) or after a delay
   (relative), with an operation reference and its input; returns a handle.
+  Optional `repeat: {every: <millis>}` makes it recurring (with neither `time`
+  nor `after`, the first fire is one interval from now); optional `track`
+  chooses durable or transient fires (§7).
 - **cancel** — remove an event by handle.
-- **trigger** — fire an event now by handle, ahead of its time, and remove it
-  (for one-shot) — the early-execution / test hook.
-- **list** — the caller's pending events, in time order.
+- **trigger** — fire an event now by handle, ahead of its time — the
+  early-execution / test hook. A one-shot event is consumed; a recurring event
+  stays scheduled at its unchanged next due time.
+- **list** — the caller's pending events, in time order: each
+  `{handle, op, time, track}` plus `repeat`, `lastFired` and `lastJob` where
+  present. `track` is the effective tracking the next fire will use, after
+  venue policy.
 
 All operations are scoped to the caller's identity. Scheduling is itself an
 operation, so an agent can schedule future work (including waking itself) as a
@@ -191,24 +236,49 @@ normal tool call.
 
 ---
 
-## 7. Relationship to durable Jobs — tracking is policy-driven
+## 7. Relationship to durable Jobs — the scheduler tracks schedules, Jobs track executions
 
-Firing uses a lightweight, transient Job wrapper so adapters receive the normal
-execution context and lifecycle without automatically adding a durable record.
-An operation with `operation.internal:false` still forces recording.
+The scheduler never records an outcome. It has no status, no error text, no
+per-fire history — that would be a second job system. What a fire *did* is a
+Job's business; the scheduler's only memory of executions is `lastFired` and,
+for tracked fires, the Job ID (`lastJob`) on a recurring record. Read that Job
+(`GET /api/v1/jobs/{id}`) for its status, result or failure — the same surface
+every other job uses.
 
-If you *want* a tracked, owned, observable invocation regardless of operation
-metadata, schedule `grid:invoke` (async Job, returns an id to poll). Job semantics
-live in what you schedule and in the target operation's metadata:
+**Tracked vs transient fires.** Each fire is either
+
+- **transient** — a lightweight Job wrapper via the engine's internal dispatch,
+  so the adapter gets the normal execution context and lifecycle without a
+  durable record. Errors surface only in the log. This is the right shape for
+  chatty machinery such as an agent's own wake (`agent:trigger` every few
+  minutes should not fill the owner's job history). An operation declaring
+  `operation.internal:false` still forces recording.
+- **tracked** — a durable Job in the owner's `j/` history, exempt from
+  top-level admission like any internal dispatch, recorded regardless of
+  operation metadata. The Job is prepared before the claim so its ID is
+  written into the surviving recurring record as `lastJob` in the same
+  atomic replace that consumes the fire (§4); a tracked one-shot simply
+  appears in the owner's job list like any other job. On restart, a prepared
+  Job whose adapter never ran is failed as interrupted by job recovery — the
+  same rule as any other PENDING job — so the split can never double-run.
+
+**Which applies is resolved at fire time**, so an operator's policy covers
+events already queued:
+
+1. `scheduler.forceTrackJobs: true` in the venue config → every fire is
+   tracked, whatever the event asked for.
+2. Otherwise the event's own `track`, if the caller set one.
+3. Otherwise `scheduler.trackJobs` (venue default; `false` if unset).
 
 ```
-schedule(agent:trigger, {agentId}, T)          → transient wrapper, no durable record
-schedule(grid:invoke,   {operation: X, …}, T)  → a tracked Job for X at T
+schedule(agent:trigger, {agentId}, T)                    → transient (venue default)
+schedule(X, in, T, track:true)                           → durable Job for X at T
+schedule(X, in, T, repeat:{every:3600000}, track:true)   → a durable Job per fire;
+                                                           list shows lastJob → read it
 ```
 
-Result and error visibility are opt-in the same way: a fire-and-forget op
-surfaces errors only in the log; schedule it through `grid:invoke` when the
-outcome needs to be recorded and awaited.
+Scheduling `grid:invoke` as the target still works and still yields a durable
+Job, but `track:true` does the same with one Job per fire instead of two.
 
 ---
 
@@ -222,9 +292,11 @@ agent is (the agent-side details are in [SCHEDULER.md](./SCHEDULER.md)):
 - `AgentState.setThreadWakeTime` writes that field, then `rescheduleWake`
   re-derives the agent's **single** scheduled event at the *earliest* unfired
   `wakeTime` across all its threads. The event fires `agent:trigger {agentId,
-  force:false, wait:false}`. Its handle is stored on the agent record
-  (`wakeHandle`) so the next change can cancel-and-replace it — exactly one event
-  per agent.
+  force:false, wait:false}` with `track:false` stated explicitly — a wake is
+  machinery, not user work, so the venue's `trackJobs` default does not turn
+  it into a durable Job (only `forceTrackJobs` does, §7). Its handle is stored
+  on the agent record (`wakeHandle`) so the next change can cancel-and-replace
+  it — exactly one event per agent.
 - When it fires, `agent:trigger` (via the transient-Job `invokeFuture` path, so no
   session is minted and no durable Job is recorded) calls `wakeAgent(force:false)`. The run
   loop runs iff there is work (`hasWork` = session pending or tasks); it processes
@@ -246,17 +318,21 @@ A scheduled `agent:trigger` is exactly as lightweight as a direct wake (transien
 
 ## 9. Boundaries and future work
 
-**In scope (first cut):** per-venue `:schedule` index; `schedule` / `cancel` /
-`trigger` / `list`; one-shot events; **captured authority — stapled UCAN proofs
-  replayed at fire time, no escalation (§5)**; lightweight transient-Job firing,
-with durable tracking via operation policy or `grid:invoke`; owner-scoped
-access; boot catch-up; claim-by-removal (at-most-once).
+**In scope:** per-venue `:schedule` index; `schedule` / `cancel` / `trigger` /
+`list`; one-shot and fixed-interval (`repeat.every`) events with handles stable
+across re-keying; **captured authority — stapled UCAN proofs replayed at fire
+time, no escalation (§5)**; transient or tracked fires per event and venue
+policy, with `lastJob` as the sole link to execution records (§7);
+owner-scoped access; boot catch-up (one fire per event, missed slots skipped);
+claim-then-invoke (at-most-once); a 1 s floor on `repeat.every`.
 
 **Deferred:**
-- **Recurrence** — `repeat` interval re-inserts the event at `time + repeat` on
-  fire; cron-style calendar expressions later.
+- **Calendar recurrence** — `repeat` forms beyond `every`: cron-style or
+  "daily at 09:00" expressions, timezone-aware. The `repeat` object is shaped
+  so these can be added without renaming anything.
 - **Quotas and rate limits** — bound events per owner, far-future horizons, and
   recursive scheduling (an operation that schedules more) to prevent abuse.
+  Only the `every` floor exists today.
 - **At-least-once option** — for events that prefer redelivery over loss, paired
   with idempotent operations.
 - **Catch-up throttling** — pace a large overdue backlog on boot.
@@ -267,16 +343,23 @@ access; boot catch-up; claim-by-removal (at-most-once).
 
 **Resolved (as built):**
 1. **Records per-venue** — single slot, single-writer (the timer thread).
-2. **Firing is transient-Job by default** — lightweight fire-and-forget; durable
-   tracking is forced by `operation.internal:false` or by scheduling
-   `grid:invoke` rather than the target operation directly.
+2. **Firing is transient-Job by default** — lightweight fire-and-forget; a
+   durable Job per fire is opted into per event (`track`) or by venue policy
+   (`scheduler.trackJobs` / `forceTrackJobs`), and is still forced by
+   `operation.internal:false` (§7).
 3. **Handle encoding** — the index key surfaced as an opaque hex string
-   (`0x…`); `cancel`/`trigger` accept it as a hex string or blob.
+   (`0x…`); `cancel`/`trigger` accept it as a hex string or blob, and follow
+   the `id` when a recurring event has been re-keyed (§3).
 4. **`:schedule` is a plain `{updated, events}` field inside the venue `:value`**,
    which is a single whole-value-LWW node — so removals survive the fork-merge
    wholesale, with no per-entry `Index` union to re-introduce them (§2).
+5. **No execution history in the scheduler** — outcomes live on Jobs; the
+   scheduler keeps `lastFired` and a `lastJob` pointer, nothing more (§7).
+   Asking it for per-fire status would be rebuilding the job store.
+6. **`repeat` is an object, not a number** — `{every}` today, calendar forms
+   later, no renames (§1).
 
 **Open:**
 - **Delivery** — at-most-once (claim-then-invoke) is the default; an opt-in
   at-least-once mode (with idempotent ops) is future work.
-- **Recurrence, quotas, catch-up throttling** — see §9.
+- **Calendar recurrence, quotas, catch-up throttling** — see §9.

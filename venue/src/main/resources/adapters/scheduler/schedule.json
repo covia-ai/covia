@@ -1,23 +1,64 @@
 {
   "name": "Schedule Operation",
-  "description": "Schedule a grid operation to run at a future time. Returns a handle used to trigger the event early or cancel it. The operation fires with the authority captured from the caller.",
+  "description": "Schedule a grid operation to run at a future time, once or on a fixed interval. Returns a handle used to trigger the event early or cancel it. The operation fires with the authority captured from the caller. A tracked fire is a durable Job in your job history; an untracked fire leaves no record beyond the log.",
   "operation": {
     "adapter": "scheduler:schedule",
     "input": {
       "type": "object",
       "properties": {
-        "operation": { "type": "string", "description": "Reference of the operation to invoke when due" },
-        "input": { "type": "object", "description": "Input passed to the operation when it fires" },
-        "time": { "type": "integer", "description": "Absolute fire time, in milliseconds since the epoch" },
-        "after": { "type": "integer", "description": "Fire after this many milliseconds from now (alternative to time)" }
+        "operation": {
+          "type": "string",
+          "description": "Reference of the operation to invoke when due"
+        },
+        "input": {
+          "type": "object",
+          "description": "Input passed to the operation when it fires"
+        },
+        "time": {
+          "type": "integer",
+          "description": "Absolute first fire time, in milliseconds since the epoch"
+        },
+        "after": {
+          "type": "integer",
+          "description": "Fire after this many milliseconds from now (alternative to time)"
+        },
+        "repeat": {
+          "type": "object",
+          "description": "Recurrence. Omit for a one-shot event. With repeat, time/after set the first fire (default: one interval from now); the event then re-fires on the every-millis grid, skipping any slots missed while the venue was down.",
+          "properties": {
+            "every": {
+              "type": "integer",
+              "description": "Interval between fires in milliseconds (minimum 1000)"
+            }
+          },
+          "required": [
+            "every"
+          ]
+        },
+        "track": {
+          "type": "boolean",
+          "description": "Whether each fire runs as a durable Job (visible in your job history, its ID reported as lastJob on a recurring event). Omit to use the venue default; an operator may force tracking on."
+        }
       },
-      "required": ["operation"]
+      "required": [
+        "operation"
+      ]
     },
     "output": {
       "type": "object",
       "properties": {
-        "handle": { "type": "string", "description": "Handle identifying the scheduled event" },
-        "time": { "type": "integer", "description": "Absolute fire time, in milliseconds since the epoch" }
+        "handle": {
+          "type": "string",
+          "description": "Handle identifying the scheduled event"
+        },
+        "time": {
+          "type": "integer",
+          "description": "Absolute first fire time, in milliseconds since the epoch"
+        },
+        "repeat": {
+          "type": "object",
+          "description": "The canonical recurrence spec, when recurring"
+        }
       }
     }
   }

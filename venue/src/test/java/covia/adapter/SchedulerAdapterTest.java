@@ -3,6 +3,7 @@ package covia.adapter;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.concurrent.TimeUnit;
 
@@ -94,6 +95,44 @@ public class SchedulerAdapterTest {
 		ACell triggered = invoke("v/ops/scheduler/trigger", Maps.of(s("handle"), handleStr));
 		assertEquals(CVMBool.TRUE, RT.getIn(triggered, s("triggered")));
 		assertEquals(s("ping"), RT.getIn(triggered, s("result")));
+	}
+
+	@Test
+	public void testScheduleRecurringDefaultsFirstFireOneIntervalOut() throws Exception {
+		ACell every = Maps.of(s("every"), CVMLong.create(HOUR));
+		long before = System.currentTimeMillis();
+		ACell scheduled = invoke("v/ops/scheduler/schedule", Maps.of(
+			s("operation"), s("v/test/ops/echo"),
+			s("input"), s("tick"),
+			s("repeat"), every));
+		long time = ((CVMLong) RT.getIn(scheduled, s("time"))).longValue();
+		assertTrue(time >= before + HOUR, "with neither time nor after, the first fire is one interval out");
+		assertEquals(every, RT.getIn(scheduled, s("repeat")), "the canonical spec is echoed back");
+
+		ACell listed = invoke("v/ops/scheduler/list", Maps.empty());
+		@SuppressWarnings("unchecked")
+		AVector<ACell> events = (AVector<ACell>) RT.getIn(listed, s("events"));
+		assertEquals(1, events.count());
+		assertEquals(every, RT.getIn(events.get(0), s("repeat")));
+		assertEquals(CVMBool.FALSE, RT.getIn(events.get(0), s("track")),
+			"the shared test venue has no tracking policy, so the default is transient");
+
+		ACell cancelled = invoke("v/ops/scheduler/cancel",
+			Maps.of(s("handle"), RT.getIn(scheduled, s("handle"))));
+		assertEquals(CVMBool.TRUE, RT.getIn(cancelled, s("cancelled")));
+	}
+
+	@Test
+	public void testScheduleRejectsMalformedRepeatAndTrack() {
+		assertThrows(java.util.concurrent.ExecutionException.class, () -> invoke("v/ops/scheduler/schedule",
+			Maps.of(s("operation"), s("v/test/ops/echo"), s("repeat"), CVMLong.create(HOUR))),
+			"repeat must be an object, not a bare interval");
+		assertThrows(java.util.concurrent.ExecutionException.class, () -> invoke("v/ops/scheduler/schedule",
+			Maps.of(s("operation"), s("v/test/ops/echo"), s("repeat"), Maps.of(s("cron"), s("0 9 * * *")))),
+			"unknown recurrence forms are rejected");
+		assertThrows(java.util.concurrent.ExecutionException.class, () -> invoke("v/ops/scheduler/schedule",
+			Maps.of(s("operation"), s("v/test/ops/echo"), s("after"), CVMLong.create(HOUR), s("track"), s("yes"))),
+			"track must be a boolean");
 	}
 
 	@Test

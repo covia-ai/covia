@@ -118,6 +118,27 @@ public class ConfigTest {
 	}
 
 	@Test
+	public void testSchedulerBlock() {
+		Config dflt = new Config(null);
+		assertFalse(dflt.isTrackScheduledJobs(), "scheduled fires are transient unless configured");
+		assertFalse(dflt.isForceTrackScheduledJobs());
+
+		Config set = new Config(Maps.of(Config.SCHEDULER, Maps.of(
+			Config.TRACK_JOBS, CVMBool.TRUE, Config.FORCE_TRACK_JOBS, CVMBool.TRUE)));
+		assertTrue(set.isTrackScheduledJobs());
+		assertTrue(set.isForceTrackScheduledJobs());
+
+		// Malformed values always fail; unknown keys only under strictConfig.
+		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+			Config.SCHEDULER, Strings.create("always"))));
+		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+			Config.SCHEDULER, Maps.of(Config.TRACK_JOBS, Strings.create("true")))));
+		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+			Config.STRICT_CONFIG, CVMBool.TRUE,
+			Config.SCHEDULER, Maps.of(Strings.create("trackJob"), CVMBool.TRUE))));
+	}
+
+	@Test
 	public void testKnownMalformedFieldsAlwaysFail() {
 		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
 			Config.PORT, Strings.create("8080"))));

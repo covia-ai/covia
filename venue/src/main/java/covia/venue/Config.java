@@ -129,6 +129,18 @@ public class Config {
 	 *  {@code burst}, {@code maxConcurrentJobsPerUser}). */
 	public static final AString RATE_LIMIT = Strings.intern("rateLimit");
 
+	/** Key for the grid scheduler config block ({@code trackJobs},
+	 *  {@code forceTrackJobs}). See {@code venue/docs/GRID_SCHEDULER.md} §7. */
+	public static final AString SCHEDULER = Strings.intern("scheduler");
+
+	/** Scheduler block: default for a scheduled event that did not say whether
+	 *  its fires should be durable Jobs. */
+	public static final AString TRACK_JOBS = Strings.intern("trackJobs");
+
+	/** Scheduler block: operator override — every scheduled fire is a durable
+	 *  Job, whatever the event asked for. */
+	public static final AString FORCE_TRACK_JOBS = Strings.intern("forceTrackJobs");
+
 	/** Key for the HTTP connector's accept-queue (backlog) size */
 	public static final AString ACCEPT_QUEUE_SIZE = Strings.intern("acceptQueueSize");
 
@@ -378,7 +390,7 @@ public class Config {
 		"modules", "dynamicModules", "users", "store", "seed", "keystore", "storage", "etch",
 		"maxContentSize", "auth", "webdav", "file", "corsOrigins",
 		"allowPrivateNetwork", "enablePrivateJobs", "recordReadOnlyOperations", "fixMcpStrings",
-		"outputValidation", "secrets", "strictAssets", "strictConfig");
+		"outputValidation", "secrets", "strictAssets", "strictConfig", "scheduler");
 
 	/**
 	 * Create a Config wrapping the given venue config map.
@@ -468,6 +480,7 @@ public class Config {
 		validateBaseUrl();
 		validateRootPage(strict);
 		validateRateLimit(strict);
+		validateScheduler(strict);
 		validateKeystore(strict);
 		validateStorage(strict);
 		validateWebDav(strict);
@@ -573,6 +586,14 @@ public class Config {
 		optionalLong(rate, Strings.intern("maxConcurrentJobsPerUser"),
 			"rateLimit.maxConcurrentJobsPerUser", 0, Integer.MAX_VALUE);
 		optionalLong(rate, Strings.intern("blockMs"), "rateLimit.blockMs", 0, Long.MAX_VALUE);
+	}
+
+	private void validateScheduler(boolean strict) {
+		AMap<AString, ACell> sched = optionalMap(config, SCHEDULER, "scheduler");
+		if (sched == null) return;
+		validateUnknownFields(sched, Set.of("trackJobs", "forceTrackJobs"), "scheduler", strict);
+		optionalBoolean(sched, TRACK_JOBS, "scheduler.trackJobs", false);
+		optionalBoolean(sched, FORCE_TRACK_JOBS, "scheduler.forceTrackJobs", false);
 	}
 
 	private void validateKeystore(boolean strict) {
@@ -1956,6 +1977,33 @@ public class Config {
 	 */
 	public boolean isRecordReadOnlyOperations() {
 		ACell v = config.get(RECORD_READ_ONLY_OPERATIONS);
+		return (v != null) && RT.bool(v);
+	}
+
+	/**
+	 * Whether a scheduled event that did not state a {@code track} preference
+	 * fires as a durable Job ({@code scheduler.trackJobs}). Defaults to false:
+	 * a scheduled fire is a transient Job unless the event, or the operator
+	 * via {@link #isForceTrackScheduledJobs()}, says otherwise.
+	 */
+	public boolean isTrackScheduledJobs() {
+		return schedulerBool(TRACK_JOBS);
+	}
+
+	/**
+	 * Whether every scheduled fire is a durable Job regardless of the event's
+	 * own {@code track} choice ({@code scheduler.forceTrackJobs}). Defaults to
+	 * false. Resolved at fire time, so enabling it covers events already queued.
+	 */
+	public boolean isForceTrackScheduledJobs() {
+		return schedulerBool(FORCE_TRACK_JOBS);
+	}
+
+	private boolean schedulerBool(AString key) {
+		ACell block = config.get(SCHEDULER);
+		if (!(block instanceof AMap)) return false;
+		@SuppressWarnings("unchecked")
+		ACell v = ((AMap<AString, ACell>) block).get(key);
 		return (v != null) && RT.bool(v);
 	}
 

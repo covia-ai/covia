@@ -167,6 +167,88 @@ public class JobManager {
 	}
 
 	public Job invokeOperation(AString ref, ACell input, RequestContext ctx) {
+		// Execution is always local: resolution returns a definition (remote
+		// refs are FETCHED by resolveAsset, never delegated), so every
+		// accepted invoke produces a job on THIS venue. Cross-venue
+		// execution is explicit via grid:run / grid:invoke.
+		// Scope the context to the caller-supplied reference — the only point
+		// the human path form still exists — so requireInvoke can check a
+		// resource-precise invoke capability (#211).
+		return invokeOperation(resolveOperation(ref, ctx).meta(), input, ctx.withOp(ref));
+	}
+
+	/**
+	 * Prepare a durable, tracked Job on behalf of a trusted in-process caller
+	 * without starting it — the scheduler's tracked fire path. Resolves and
+	 * scopes exactly like {@link #invokeOperation(AString, ACell, RequestContext)},
+	 * but is exempt from top-level admission like {@link #invokeInternal}: the
+	 * venue itself is dispatching, not a user request. The Job is recorded in
+	 * the owner's history (PENDING) regardless of operation metadata, so the
+	 * caller can commit its ID alongside its own state <i>before</i> any work
+	 * begins, then {@link Prepared#start()} the adapter.
+	 *
+	 * @param ref Operation reference (hex hash, DID URL, workspace path, etc.)
+	 * @param input Input parameters
+	 * @param ctx Request context (caller identity, caps, scope)
+	 * @return the prepared Job, not yet started
+	 */
+	public Prepared prepareTracked(AString ref, ACell input, RequestContext ctx) {
+		return prepareOperation(resolveOperation(ref, ctx).meta(), input, ctx.withOp(ref),
+			false, false, false);
+	}
+
+	/**
+	 * A Job that exists — PENDING, and persisted when durable — whose adapter
+	 * has not yet been invoked. Separating creation from start lets a caller
+	 * record the Job's ID atomically with its own state (the scheduler writes
+	 * it into the same lattice replace that claims the event) and only then
+	 * hand the work to the adapter. {@link #start()} runs exactly once.
+	 */
+	public static final class Prepared {
+		private final Job job;
+		private final AAdapter adapter;
+		private final RequestContext jobCtx;
+		private final AMap<AString, ACell> meta;
+		private final ACell input;
+		private boolean started;
+
+		Prepared(Job job, AAdapter adapter, RequestContext jobCtx,
+				AMap<AString, ACell> meta, ACell input) {
+			this.job = job;
+			this.adapter = adapter;
+			this.jobCtx = jobCtx;
+			this.meta = meta;
+			this.input = input;
+		}
+
+		/** The Job, already visible in the owner's history if durable. */
+		public Job job() {
+			return job;
+		}
+
+		/**
+		 * Invoke the adapter. A synchronous capability denial fails the Job (the
+		 * same surface async adapters produce); any other synchronous adapter
+		 * failure is recorded on the Job and then rethrown, so a Job is never
+		 * stranded PENDING with no worker.
+		 */
+		public Job start() {
+			if (started) throw new IllegalStateException("Job already started: " + job.getID());
+			started = true;
+			try {
+				adapter.invoke(job, jobCtx, meta, input);
+			} catch (covia.exception.AuthException e) {
+				job.fail(e);
+			} catch (RuntimeException e) {
+				job.fail(e);
+				throw e;
+			}
+			return job;
+		}
+	}
+
+	/** Resolve a reference to an operation definition, failing fast otherwise. */
+	private Operation resolveOperation(AString ref, RequestContext ctx) {
 		if (ref == null) throw new IllegalArgumentException("Operation must be specified");
 
 		Asset asset = engine.resolveAsset(ref, ctx);
@@ -178,15 +260,7 @@ public class JobManager {
 		if (op == null) {
 			throw new IllegalArgumentException("Asset is not an operation: " + asset.getID());
 		}
-
-		// Execution is always local: resolution returns a definition (remote
-		// refs are FETCHED by resolveAsset, never delegated), so every
-		// accepted invoke produces a job on THIS venue. Cross-venue
-		// execution is explicit via grid:run / grid:invoke.
-		// Scope the context to the caller-supplied reference — the only point
-		// the human path form still exists — so requireInvoke can check a
-		// resource-precise invoke capability (#211).
-		return invokeOperation(op.meta(), input, ctx.withOp(ref));
+		return op;
 	}
 
 	/**
@@ -212,6 +286,18 @@ public class JobManager {
 	 *        therefore needs original typed in-process failures preserved
 	 */
 	private Job dispatchOperation(AMap<AString, ACell> meta, ACell input,
+			RequestContext ctx, boolean memoryOnly, boolean applyAdmission,
+			boolean resultOriented) {
+		return prepareOperation(meta, input, ctx, memoryOnly, applyAdmission, resultOriented).start();
+	}
+
+	/**
+	 * Everything {@link #dispatchOperation} does short of invoking the adapter:
+	 * defaults, gates, adapter lookup, admission, Job creation and persistence.
+	 * The returned {@link Prepared} carries the Job (already PENDING) and what
+	 * {@link Prepared#start()} needs to run it.
+	 */
+	private Prepared prepareOperation(AMap<AString, ACell> meta, ACell input,
 			RequestContext ctx, boolean memoryOnly, boolean applyAdmission,
 			boolean resultOriented) {
 		requireAccepting();
@@ -277,24 +363,7 @@ public class JobManager {
 		if (jobCtx.getJobId() == null && job.isRecorded()) {
 			jobCtx = jobCtx.withJobId(job.getID());
 		}
-		try {
-			adapter.invoke(job, jobCtx, meta, input);
-		} catch (covia.exception.AuthException e) {
-			// A capability denial thrown synchronously from a job-aware adapter's
-			// enforcement point fails the Job — the same surface async adapters
-			// already produce (a denied request was authenticated and dispatched,
-			// so the denial is a FAILED Job, not a thrown exception). Other
-			// synchronous failures (bad input, schema) propagate as before.
-			job.fail(e);
-		} catch (RuntimeException e) {
-			// Once a Job has been created, every adapter failure must become a
-			// terminal record. Preserve the existing synchronous API error surface
-			// after recording the failure, rather than stranding a PENDING/STARTED
-			// job that no worker can ever complete.
-			job.fail(e);
-			throw e;
-		}
-		return job;
+		return new Prepared(job, adapter, jobCtx, meta, input);
 	}
 
 	// ========== Result-oriented invocation ==========
