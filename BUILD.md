@@ -46,6 +46,9 @@ covia/
 ├── covia-discord/         # Optional loadable Discord bot module
 │   ├── pom.xml            # Venue SPI provided; JDA shaded
 │   └── src/               # Discord Gateway/REST adapter and deterministic tests
+├── covia-sonnylabs/       # Optional loadable SonnyLabs scanning module
+│   ├── pom.xml            # Venue SPI provided; JDK HTTP client only
+│   └── src/               # Prompt-injection scan adapter and local fake tests
 └── covia-claude-code/     # Optional loadable Claude Code module
     ├── pom.xml            # Venue SPI provided; no third-party deps
     └── src/               # Claude Code CLI adapter and tests (fake CLI)
@@ -311,7 +314,8 @@ The reactor modules are published to Maven Central under the `ai.covia`
 groupId. `ai.covia:covia-core`, `ai.covia:covia-python`, `ai.covia:venue`, and
 `ai.covia:workbench` are ordinary library artifacts (along with the
 `ai.covia:covia` parent POM). The operator-facing `covia-python-adapter`,
-`covia-sql`, `covia-telegram`, `covia-discord` and `covia-claude-code` artifacts are loadable venue modules rather than dependencies of
+`covia-sql`, `covia-telegram`, `covia-discord`, `covia-sonnylabs` and
+`covia-claude-code` artifacts are loadable venue modules rather than dependencies of
 the standard venue; their shaded `module` classifier jars are also published
 and signed. GitHub Releases remain the canonical operator download, pairing
 each module jar with its checksum. The executable `covia.jar` is an unattached
@@ -390,6 +394,8 @@ Both snapshot and stable releases include:
 - `covia-telegram-<version>-module.jar.sha256` - SHA-256 checksum
 - `covia-discord-<version>-module.jar` - Optional Discord bot venue module
 - `covia-discord-<version>-module.jar.sha256` - SHA-256 checksum
+- `covia-sonnylabs-<version>-module.jar` - Optional SonnyLabs scanning venue module
+- `covia-sonnylabs-<version>-module.jar.sha256` - SHA-256 checksum
 - `covia-claude-code-<version>-module.jar` - Optional Claude Code venue module
 - `covia-claude-code-<version>-module.jar.sha256` - SHA-256 checksum
 

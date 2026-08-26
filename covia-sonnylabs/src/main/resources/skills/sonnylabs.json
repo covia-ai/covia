@@ -1,0 +1,11 @@
+{
+  "name": "sonnylabs",
+  "description": "Test prompts and other LLM-facing text for prompt injection with the SonnyLabs AI firewall.",
+  "content": {
+    "contentType": "text/markdown",
+    "inline": "## SonnyLabs prompt scanning\nUse `sonnylabs_scan` before forwarding untrusted text across an LLM or tool trust boundary. Pass `{prompt}` for the usual inbound-user check; choose `surface` when scanning a tool result, document, agent message, or model output. Read `decision.action` (`allowed`, `warned`, `flagged`, or `blocked`) together with `findings`; detection is a safety signal, not proof that allowed text is harmless. Leave `capture` false unless the user explicitly wants SonnyLabs to retain the raw content. Omit `apiKey` to use the venue credential, or pass a caller-owned `s/NAME` reference—never a raw key. The operation fails if the scanner is unavailable, so the enclosing workflow must make any fail-open/fail-closed decision explicitly."
+  },
+  "skill": {
+    "tools": ["v/ops/sonnylabs/scan"]
+  }
+}

@@ -8,6 +8,13 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- Optional `covia-sonnylabs` module with `v/ops/sonnylabs/scan` for testing
+  prompts and other LLM-facing text through the SonnyLabs AI firewall. It
+  supports venue-managed or caller-owned secret references, self-hosted
+  endpoints, scan tiers and explicit provider-retention controls.
+
 ## [0.9.5] - 2026-08-25
 
 ### Migration

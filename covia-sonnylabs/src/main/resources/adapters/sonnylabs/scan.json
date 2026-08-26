@@ -1,0 +1,87 @@
+{
+  "name": "Scan with SonnyLabs",
+  "description": "Tests prompt or LLM-facing text with the SonnyLabs AI firewall. Returns its prompt-injection and related safety findings plus the allow/warn/flag/block decision. The scan fails if SonnyLabs is unavailable; callers decide whether their workflow should fail open or closed.",
+  "operation": {
+    "adapter": "sonnylabs:scan",
+    "default": {
+      "surface": "user_message",
+      "capture": false
+    },
+    "secretFields": ["apiKey"],
+    "input": {
+      "type": "object",
+      "properties": {
+        "prompt": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Text to test before it is passed to an LLM or another trust boundary."
+        },
+        "surface": {
+          "type": "string",
+          "enum": ["user_message", "assistant_output", "tool_result", "tool_params", "document", "agent_message", "mcp_resource", "mcp_tool_description"],
+          "description": "Where the text will be used; defaults to user_message."
+        },
+        "tier": {
+          "type": "string",
+          "enum": ["fast", "accurate", "auto"],
+          "description": "Prompt-injection detector tier. Omit to use SonnyLabs auto selection."
+        },
+        "capture": {
+          "type": "boolean",
+          "description": "Whether SonnyLabs may retain the raw content for later retrieval; defaults to false."
+        },
+        "policyId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional SonnyLabs policy identifier."
+        },
+        "context": {
+          "type": "object",
+          "properties": {
+            "agent_id": {"type": "string"},
+            "session_id": {"type": "string"},
+            "mcp_server": {"type": "string"},
+            "trace_id": {"type": "string"},
+            "end_user_id": {"type": "string"}
+          },
+          "additionalProperties": false,
+          "description": "Optional SonnyLabs correlation context."
+        },
+        "apiKey": {
+          "type": "string",
+          "pattern": "^/?s/.+",
+          "description": "Optional caller-owned s/NAME reference to a SonnyLabs scans:write key. Omit to use the venue-configured key."
+        },
+        "idempotencyKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "description": "Optional stable key for deduplicating a retry. A fresh UUID is generated when omitted."
+        }
+      },
+      "required": ["prompt"],
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "string"},
+        "created": {"type": "string"},
+        "kind": {"type": "string"},
+        "surface": {"type": "string"},
+        "context": {"type": "object"},
+        "findings": {"type": "array"},
+        "decision": {
+          "type": "object",
+          "properties": {
+            "action": {"type": "string", "enum": ["blocked", "flagged", "warned", "allowed"]},
+            "reason": {"type": "string"}
+          }
+        },
+        "content_stored": {"type": "boolean"},
+        "content": {"type": "object"}
+      },
+      "additionalProperties": true
+    }
+  }
+}

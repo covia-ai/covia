@@ -19,7 +19,7 @@ The canonical adapter table lives in `venue/CLAUDE.md` ("Adapter Reference"). Gr
 | Agents | `agent`, `llmagent`, `goaltree`, `skills`, `hitl` |
 | Federation | `grid`, `ucan` |
 | Admin | `user`, `venue` (runtime adapter/module lifecycle) |
-| Modules (not in covia.jar) | `sql` (covia-sql), `python` (covia-python-adapter), `telegram` (covia-telegram), `claudecode` (covia-claude-code) |
+| Modules (not in covia.jar) | `sql` (covia-sql), `python` (covia-python-adapter), `telegram` (covia-telegram), `discord` (covia-discord), `sonnylabs` (covia-sonnylabs), `claudecode` (covia-claude-code) |
 | Testing | `test` |
 
 **Kernel adapters** — `covia`, `agent`, `dlfs`, `hitl`, `http`, `file`, `grid`, `venue` — are adapters the standard venue commonly depends on. The marker is informational: venue-authorised configuration and module lifecycle operations may still replace, disable or remove them.

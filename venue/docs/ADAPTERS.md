@@ -234,8 +234,8 @@ Boot modules are configured with `modules`; runtime loading is additionally
 gated by `dynamicModules` and venue authority. See
 [CONFIG.md, “Venue modules”](CONFIG.md#venue-modules) for operator settings and
 [BUILD.md](../../BUILD.md) for reactor and release packaging. Existing
-`covia-telegram`, `covia-discord`, and `covia-sql` modules are concrete
-examples.
+`covia-telegram`, `covia-discord`, `covia-sonnylabs`, and `covia-sql` modules
+are concrete examples.
 
 ## Test checklist
 

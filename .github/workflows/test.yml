@@ -61,9 +61,10 @@ jobs:
         test -f covia-sql/target/covia-sql-*-module.jar
         test -f covia-telegram/target/covia-telegram-*-module.jar
         test -f covia-discord/target/covia-discord-*-module.jar
+        test -f covia-sonnylabs/target/covia-sonnylabs-*-module.jar
         test -f covia-claude-code/target/covia-claude-code-*-module.jar
-        if jar tf venue/target/covia.jar | grep -Eq '^(covia/python/|covia/adapter/python/|covia/adapter/sql/|covia/adapter/telegram/|covia/adapter/discord/|covia/adapter/claudecode/)'; then
-          echo "::error::Optional Python, SQL, Telegram, Discord or Claude Code module classes leaked into covia.jar"
+        if jar tf venue/target/covia.jar | grep -Eq '^(covia/python/|covia/adapter/python/|covia/adapter/sql/|covia/adapter/telegram/|covia/adapter/discord/|covia/adapter/sonnylabs/|covia/adapter/claudecode/)'; then
+          echo "::error::Optional module classes leaked into covia.jar"
           exit 1
         fi
 

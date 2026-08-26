@@ -1004,6 +1004,40 @@ param) and operator-registered JDBC connections
 agent skill from its jar (materialises at `v/skills/data/sql` exactly when the
 module is loaded — the module-shipped-skill pattern, see `docs/SKILLS.md`).
 
+### SonnyLabs prompt scanning (covia-sonnylabs)
+
+The optional **covia-sonnylabs** module exposes `v/ops/sonnylabs/scan`, a
+thin fail-explicit adapter over SonnyLabs `POST /v1/scans`. It tests text for
+prompt injection and returns the provider's structured findings and
+allow/warn/flag/block decision unchanged. `capture` defaults to false; this
+controls provider-side content retention, while the ordinary Covia Job still
+records the operation input in the caller's job namespace.
+
+```json
+{
+  "modules": ["modules/covia-sonnylabs-<version>-module.jar"],
+  "adapters": {
+    "sonnylabs": {
+      "apiKey": "s/SONNYLABS_API_KEY",
+      "baseUrl": "https://api.sonnylabs.ai",
+      "timeoutMillis": 30000
+    }
+  }
+}
+```
+
+`apiKey` is always an `s/NAME` reference, never a literal credential. The
+configured reference is resolved only from the venue's secret store and
+therefore provides an operator-managed shared key with `scans:write` scope.
+A caller may instead pass `apiKey: "s/MY_SONNY_KEY"` to `scan`; that explicit
+reference resolves only from the caller's own store. `baseUrl` supports the
+SaaS default and operator-chosen self-hosted deployments, but is never a
+caller input. Optional `apiVersion` pins the `Sonny-Api-Version` date header;
+when absent the current stable v1 revision is used. Each scan receives a fresh
+idempotency key unless the caller supplies `idempotencyKey` for a known retry.
+Transport and non-2xx responses fail the Covia Job rather than fabricating an
+allowed decision, leaving fail-open versus fail-closed policy to the workflow.
+
 ### Telegram bots (covia-telegram)
 
 The **covia-telegram** module (`telegram` adapter) runs operator-declared
