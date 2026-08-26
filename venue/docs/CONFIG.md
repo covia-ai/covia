@@ -1051,11 +1051,13 @@ allowed decision, leaving fail-open versus fail-closed policy to the workflow.
 Loading the module does not automatically intercept prompts. Workflows call
 the operation explicitly at the point where untrusted external text is about
 to enter an LLM context or control an action. Agents can load the module's
-skill at `v/skills/ops-tools/sonnylabs`; standard skilled agents discover it
+skill at `v/skills/adapters/sonnylabs`; standard skilled agents discover it
 after loading the root `discovery` skill. Pin that skill in `config.skills`
 when scanning is a standing part of the agent's role. The skill contributes
 only `v/ops/sonnylabs/scan` and teaches the inbound boundary, surface mapping,
 decision handling, retention, secret reference and scanner-failure semantics.
+The same asset is exposed in the adapter-owned catalog mirror at
+`v/adapters/sonnylabs/skills/sonnylabs`.
 The direct operation shape is, for example:
 
 ```text

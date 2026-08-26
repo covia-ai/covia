@@ -79,7 +79,7 @@ public class SonnyLabsAdapter extends AAdapter {
 	@Override
 	protected void installAssets() {
 		installAsset("sonnylabs/scan", "/adapters/sonnylabs/scan.json");
-		installSkill("ops-tools/sonnylabs", "/skills/sonnylabs.json");
+		installSkill("adapters/sonnylabs", "/skills/sonnylabs.json");
 	}
 
 	@Override

@@ -53,7 +53,7 @@ public final class SonnyLabsModuleSmokeMain {
 			if (!(adapter.getClass().getClassLoader() instanceof ModuleClassLoader)) {
 				throw new AssertionError("SonnyLabs adapter was not loaded as a module");
 			}
-			if (engine.resolvePath(Strings.create("v/skills/ops-tools/sonnylabs"),
+			if (engine.resolvePath(Strings.create("v/skills/adapters/sonnylabs"),
 					engine.venueContext()) == null) {
 				throw new AssertionError("SonnyLabs module skill was not installed");
 			}

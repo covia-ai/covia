@@ -171,7 +171,11 @@ class SonnyLabsAdapterTest {
 					engine.venueContext());
 				assertEquals("sonnylabs:scan",
 					RT.getIn(op, "operation", "adapter").toString());
-				assertNotNull(engine.resolvePath(Strings.create("v/skills/ops-tools/sonnylabs"),
+				ACell skill = engine.resolvePath(Strings.create("v/skills/adapters/sonnylabs"),
+					engine.venueContext());
+				assertNotNull(skill);
+				assertEquals(skill, engine.resolvePath(
+					Strings.create("v/adapters/sonnylabs/skills/sonnylabs"),
 					engine.venueContext()));
 				ACell published = engine.resolvePath(Strings.create("v/adapters/sonnylabs/config"),
 					engine.venueContext());
@@ -191,7 +195,7 @@ class SonnyLabsAdapterTest {
 			try {
 				RequestContext ctx = engine.venueContext();
 				Skills.ResolvedSkill skill = Skills.resolveRef(engine, ctx,
-					Strings.create("v/skills/ops-tools/sonnylabs"));
+					Strings.create("v/skills/adapters/sonnylabs"));
 				assertEquals("sonnylabs", skill.name());
 				assertTrue(skill.body().contains("externally controlled text"), skill.body());
 				assertTrue(skill.body().contains("before the trust boundary"), skill.body());
@@ -206,7 +210,7 @@ class SonnyLabsAdapterTest {
 
 				String index = Skills.renderIndex(engine, ctx,
 					Skills.SkillSources.ofSkillsets(Vectors.of(
-						(ACell) Strings.create("v/skills/ops-tools"))), null, true);
+						(ACell) Strings.create("v/skills/adapters"))), null, true);
 				assertTrue(index.contains("- sonnylabs — "), index);
 			} finally {
 				engine.close();
