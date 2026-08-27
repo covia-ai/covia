@@ -101,6 +101,9 @@ public class CoviaAPI extends ACoviaAPI {
 				sseServer.broadcastJobUpdate(jobId.toHexString(), job);
 			}
 		});
+
+		// Agent live events (#394) fan out to per-agent stream clients the same way.
+		engine().agentEvents().subscribe(sseServer::broadcastAgentEvent);
 	}
 
 	public void addRoutes(RoutesConfig routes) {
@@ -153,6 +156,7 @@ public class CoviaAPI extends ACoviaAPI {
 		// every other entity type is read via GET; no Job persisted.
 		routes.get(ROUTE+"agents", this::getAgents, COVIA_API);
 		routes.get(ROUTE+"agents/{id}", this::getAgentInfo, COVIA_API);
+		routes.get(ROUTE+"agents/{id}/sse", this::agentSse, COVIA_API);
 
 		// Schedules — job-free read of the caller's pending scheduled events
 		// (#369), so a Scheduler UI can page/refresh without persisting a Job
@@ -1901,6 +1905,69 @@ public class CoviaAPI extends ACoviaAPI {
 		buildResult(ctx, 200, info);
 	}
 
+
+	@OpenApi(path = ROUTE + "agents/{id}/sse",
+			methods = HttpMethod.GET,
+			tags = { "Covia" },
+			summary = "Server-sent events stream of an agent's live run-loop activity",
+			description = "Streams one frame per run-loop transition of the agent as it happens (#394): "
+					+ "run and cycle boundaries, every inference and tool call, and status changes. The SSE "
+					+ "event name is the event type (status, run:start, cycle:start, inference:start, "
+					+ "inference:end, tool:start, tool:result, cycle:end, run:end) and the SSE id the agent's "
+					+ "monotonic sequence number; the first frame is the current status. Owner-level — the same "
+					+ "authority as GET /agents/{id}. Tool inputs, results and appended turns ride under 'detail', "
+					+ "omitted with ?detail=false. The stream closes after the TERMINATED status frame. "
+					+ "Accept negotiation matches /jobs/{id}/sse. Schema: AGENT_LOOP.md §2.6.",
+			pathParams = { @OpenApiParam(name = "id", description = "Agent id") },
+			queryParams = { @OpenApiParam(name = "detail", type = Boolean.class,
+					description = "false to omit the owner-authorised detail (tool input/result, appended turns).") },
+			operationId = "agentSse")
+	protected void agentSse(Context ctx) {
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		if (rctx.getCallerDID() == null) {
+			buildError(ctx, 401, "Authentication required");
+			return;
+		}
+		String id = ctx.pathParam("id");
+		// Ownership applies to the stream exactly as to GET /agents/{id}: the
+		// agent resolves under the caller's context or not at all.
+		AgentAdapter agent = (AgentAdapter) engine().getAdapter("agent");
+		try {
+			if (agent == null || agent.agentInfo(rctx, Strings.create(id)) == null) {
+				buildError(ctx, 404, "Agent not found: " + id);
+				return;
+			}
+		} catch (AuthException e) {
+			buildError(ctx, 403, e.getMessage());
+			return;
+		}
+
+		// Accept negotiation (#222): default to SSE, never a silent 200.
+		String accept = ctx.header("Accept");
+		boolean acceptable = accept == null || accept.isBlank()
+			|| accept.contains("text/event-stream") || accept.contains("*/*");
+		if (!acceptable) {
+			buildError(ctx, 406,
+				"This endpoint streams Server-Sent Events; send Accept: text/event-stream (or omit the Accept header)");
+			return;
+		}
+
+		// Mirror jobSse: a hand-rolled SseHandler.handle, since Javalin's
+		// hard-requires the Accept header.
+		ctx.res().setStatus(200);
+		ctx.res().setCharacterEncoding("UTF-8");
+		ctx.res().setContentType("text/event-stream");
+		ctx.res().addHeader("Connection", "close");
+		ctx.res().addHeader("Cache-Control", "no-cache");
+		ctx.res().addHeader("X-Accel-Buffering", "no");
+		try {
+			ctx.res().flushBuffer();
+		} catch (java.io.IOException e) {
+			throw new RuntimeException(e);
+		}
+		ctx.async(cfg -> cfg.timeout = 0L,
+			() -> sseServer.registerAgentSSE.accept(new io.javalin.http.sse.SseClient(ctx)));
+	}
 	// ========== Secret endpoints ==========
 
 	@OpenApi(path = ROUTE + "secrets",

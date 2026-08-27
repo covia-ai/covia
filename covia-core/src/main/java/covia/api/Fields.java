@@ -190,6 +190,22 @@ public class Fields {
 	public static final StringShort CALLS = Strings.intern("calls");
 	/** A subgoal call's child frame record: {context, tools, inferences}. */
 	public static final StringShort FRAME = Strings.intern("frame");
+	// Agent live events (#394) — see AGENT_LOOP.md §2.6
+	/** Per-agent monotonic event sequence number (venue-process lifetime). */
+	public static final StringShort SEQ = Strings.intern("seq");
+	/** Run number: increments on every run loop launch of an agent. */
+	public static final StringShort RUN = Strings.intern("run");
+	/** Frame depth of an inference or tool event; absent at the root frame. */
+	public static final StringShort DEPTH = Strings.intern("depth");
+	/** Owner-authorised detail on a live event (tool input/result, appended
+	 *  turns) — the part a display-safe consumer strips. */
+	public static final StringShort DETAIL = Strings.intern("detail");
+	public static final StringShort MODEL = Strings.intern("model");
+	public static final StringShort TOOL_CALLS = Strings.intern("toolCalls");
+	public static final StringShort BUDGET = Strings.intern("budget");
+	/** Job ids a cycle presented (chat envelopes drained this cycle). */
+	public static final StringShort JOBS = Strings.intern("jobs");
+	public static final StringShort CYCLES = Strings.intern("cycles");
 	/** Wall-clock milliseconds. */
 	public static final StringShort MS = Strings.intern("ms");
 	public static final StringShort JOB_ID = Strings.intern("jobId");

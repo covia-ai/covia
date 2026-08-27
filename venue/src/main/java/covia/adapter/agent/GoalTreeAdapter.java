@@ -519,7 +519,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// the frame run below — subgoal recursion included, all on this
 		// virtual thread — and rides out on the output, or on the failure
 		// that ends the cycle.
-		CycleRecord.begin();
+		CycleRecord.begin(ctx.getCycle());
 		try {
 			return goal(job, ctx, input);
 		} catch (RuntimeException e) {

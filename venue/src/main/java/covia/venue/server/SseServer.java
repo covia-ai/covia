@@ -11,8 +11,17 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Blob;
+import convex.core.data.Maps;
+import convex.core.data.Strings;
+import convex.core.data.prim.CVMLong;
+import convex.core.lang.RT;
 import convex.core.util.JSON;
+import convex.core.util.Utils;
+import covia.adapter.AgentAdapter;
+import covia.api.Fields;
 import covia.grid.Job;
+import covia.venue.AgentEvents;
+import covia.venue.AgentState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import io.javalin.http.sse.SseClient;
@@ -138,5 +147,109 @@ public class SseServer {
 		AMap<AString, ACell> data = job.getData();
 		String json = JSON.toString(data);
 		client.sendEvent("job-update", json);
+	}
+
+	// ========== Agent streams (#394) ==========
+
+	/** One agent-stream client and whether its frames carry {@code detail}. */
+	private record AgentClient(SseClient client, boolean detail) {}
+
+	/** Per-agent client subscriptions keyed by the agent's grid address
+	 *  ({@code <ownerDID>/g/<agentId>}) — the key every
+	 *  {@link AgentEvents.Event} carries, so fan-out needs no lookup. */
+	private final ConcurrentHashMap<AString, Set<AgentClient>> agentClients = new ConcurrentHashMap<>();
+
+	/**
+	 * Javalin SSE handler for per-agent live event subscriptions
+	 * ({@code GET /agents/{id}/sse}). Authentication, existence/ownership and
+	 * Accept are settled by the route handler before the stream is
+	 * committed; this consumer owns the stream:
+	 *
+	 * <ol>
+	 *   <li>resolve the agent under the caller's context, exactly as
+	 *       {@code GET /agents/{id}} does</li>
+	 *   <li>register the client (BEFORE the initial frame, so an event in
+	 *       between is never missed)</li>
+	 *   <li>send the current observable status as the initial {@code status}
+	 *       frame, stamped with the agent's current {@code seq}</li>
+	 *   <li>an agent already TERMINATED gets that frame and the stream closes</li>
+	 * </ol>
+	 */
+	public Consumer<SseClient> registerAgentSSE = client -> {
+		client.keepAlive();
+
+		String ref = client.ctx().pathParam("id");
+		RequestContext rctx = AuthMiddleware.callerContext(client.ctx());
+		AgentAdapter agents = (AgentAdapter) engine.getAdapter("agent");
+		AMap<AString, ACell> info = (agents != null) ? agents.agentInfo(rctx, Strings.create(ref)) : null;
+		if (info == null) {
+			client.sendEvent("error", "{\"error\":\"Agent not found: " + ref + "\"}");
+			client.close();
+			return;
+		}
+		AString address = RT.ensureString(info.get(Fields.ADDRESS));
+		AString agentId = RT.ensureString(info.get(Fields.AGENT_ID));
+		AString status = RT.ensureString(info.get(Fields.STATUS));
+		boolean detail = !"false".equalsIgnoreCase(client.ctx().queryParam("detail"));
+		boolean terminated = AgentState.TERMINATED.equals(status);
+
+		if (!terminated) registerAgentClient(address, new AgentClient(client, detail));
+
+		AMap<AString, ACell> initial = Maps.of(
+			Fields.SEQ, CVMLong.create(engine.agentEvents().lastSeq(address)),
+			Fields.TS, CVMLong.create(Utils.getCurrentTimestamp()),
+			Fields.TYPE, AgentEvents.STATUS,
+			Fields.AGENT_ID, agentId,
+			Fields.ADDRESS, address,
+			Fields.STATUS, status);
+		client.sendEvent(AgentEvents.STATUS.toString(), JSON.toString(initial));
+		if (terminated) client.close();
+	};
+
+	private void registerAgentClient(AString address, AgentClient ac) {
+		Set<AgentClient> clients = agentClients.computeIfAbsent(address,
+				k -> ConcurrentHashMap.newKeySet());
+		clients.add(ac);
+		ac.client().onClose(() -> {
+			Set<AgentClient> set = agentClients.get(address);
+			if (set != null) {
+				set.remove(ac);
+				if (set.isEmpty()) agentClients.remove(address, set);
+			}
+			log.info("SSE client disconnected for agent: {}", address);
+		});
+		log.info("SSE client connected for agent: {}", address);
+	}
+
+	/**
+	 * Fans one live agent event out to that agent's stream clients: the
+	 * event type is the SSE event name, {@code seq} the SSE id, and the wire
+	 * form the data — without {@code detail} for a client that declined it.
+	 * The stream closes after the TERMINATED status frame; there will never
+	 * be another.
+	 */
+	public void broadcastAgentEvent(AgentEvents.Event event) {
+		Set<AgentClient> clients = agentClients.get(event.address());
+		if (clients == null || clients.isEmpty()) return;
+
+		boolean terminal = event.isTerminal();
+		String full = null;
+		String safe = null;
+		for (AgentClient ac : clients) {
+			try {
+				String json;
+				if (ac.detail()) {
+					if (full == null) full = JSON.toString(event.toCell());
+					json = full;
+				} else {
+					if (safe == null) safe = JSON.toString(event.withoutDetail().toCell());
+					json = safe;
+				}
+				ac.client().sendEvent(event.type().toString(), json, Long.toString(event.seq()));
+				if (terminal) ac.client().close(); // onClose unregisters
+			} catch (Exception e) {
+				log.warn("Failed to send agent SSE event to client for {}: {}", event.address(), e.getMessage());
+			}
+		}
 	}
 }

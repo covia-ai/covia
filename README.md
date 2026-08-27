@@ -211,6 +211,7 @@ A venue exposes the same capabilities over multiple protocols:
 | `POST /api/v1/run` | Wait for an operation and return its result directly |
 | `GET  /api/v1/jobs/{id}` | Job status |
 | `GET  /api/v1/jobs/{id}/sse` | Live job event stream |
+| `GET  /api/v1/agents/{id}/sse` | Live agent run-loop event stream |
 | `POST /mcp` | Model Context Protocol (JSON-RPC) |
 | `POST /a2a` | Agent-to-Agent protocol (JSON-RPC) |
 | `GET  /.well-known/did.json` | Venue DID document |

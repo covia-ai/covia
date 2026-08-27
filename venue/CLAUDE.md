@@ -123,6 +123,7 @@ Base path: `/api/v1/`
 | `/invoke` | POST | Execute an operation — async by default (201 + job record); `?wait=true` blocks up to the 120s cap, `?wait=<ms>` up to that many ms |
 | `/values/{read,list,slice,inspect,aggregate,count}` | GET | Job-free lattice reads (#177) — synchronous, capability-checked, no job persisted. See `docs/READ_API.md` |
 | `/agents`, `/agents/{id}` | GET | Job-free agent listings (#180, #233) |
+| `/agents/{id}/sse` | GET | Server-sent live agent run-loop events (#394; owner-level, closes on TERMINATED) — `docs/AGENT_LOOP.md` §2.6 |
 | `/schedules` | GET | Job-free listing of the caller's pending scheduled events (#369) |
 | `/assets?scope=own` | GET | Job-free listing of the caller's own `a/` assets (#382); default `/assets` is the venue catalog |
 | `/jobs` | GET | Caller's jobs as a paged `{items, total, offset, limit}` envelope (#229) |

@@ -211,6 +211,64 @@ successful launcher install (SLEEPING→RUNNING), clean completion
 (SUSPENDED→SLEEPING), and `agent:delete` (any→TERMINATED or absent). Startup
 clears a crash-stale RUNNING marker after confirming there is no live executor.
 
+### 2.6 Live events
+
+The run loop is observable as it runs (#394). Every run-loop transition emits
+one event on the venue's `AgentEvents` bus (`engine.agentEvents()`), and the
+same ordered stream is served over REST at `GET /api/v1/agents/{id}/sse`.
+Everything else — `agent:info`, `agent:context`, `agent:step`, the timeline —
+is post-hoc; this is the one live surface, and it carries nothing the
+timeline entry does not keep.
+
+| Event | When | Payload |
+|-------|------|---------|
+| `status` | The persisted status changed: RUNNING, SLEEPING, SUSPENDED, TERMINATED (§2.5) | `status`, `error?` |
+| `run:start` | A run loop launched (§4.6) | `run` |
+| `cycle:start` | A cycle picked its work and is invoking the transition | `op`, `tasks`, `messages`, `pending` (counts), `jobs?` (chat job ids presented) |
+| `inference:start` | A model call is starting on an assembled prompt | `op`, `model?`, `messages`, `tools` (counts), `bytes`, `budget` |
+| `inference:end` | The call returned, or failed | `ms`, `content?`, `toolCalls?: [{id, name}]`, `tokens?`, `model?` — or `ms`, `error` |
+| `tool:start` | A tool call is being dispatched | `id`, `name`, `detail: {input}` |
+| `tool:result` | The call finished | `id`, `name`, `ms`, `isError?`, `detail: {result}` |
+| `cycle:end` | The merge committed — timeline entry and session turns are persisted | `ms`, `response?` \| `error?`, `tokens?`, `timeline` (index of the entry), `detail: {turns?}`; a cycle stopped by suspend/delete carries `error` and `cancelled` |
+| `run:end` | The run loop exited | `run`, `status` (the rest state reached), `cycles` |
+
+Every event carries `seq` (strictly increasing per agent for the life of the
+venue process — a restart resets it), `ts`, `type`, `agentId` and `address`.
+Events inside a run carry `run`; events inside a cycle carry `cycle`, the
+picked `sessionId` and, for a task cycle, the task's `jobId`. Inference and
+tool events in a goal-tree child frame carry `depth`. A parallel tool wave
+announces its calls from their own threads; emission for an agent is
+serialised, so delivery order is `seq` order.
+
+**Correlation is by handle, not by lookup.** The run loop creates a cycle
+handle, stamps it on the cycle's `RequestContext` (`getCycle()`) beside the
+cancellation token, and the transition opens its `CycleRecord` on it (§2.4).
+Activity is attributed to exactly the cycle that made it; a transition run
+outside a run loop — a direct `llmagent:chat`, `agent:step` — has no handle
+and emits nothing. Calls fenced after a terminal tool request never ran and
+are not announced.
+
+**Authority and display.** The stream is owner-level, the same authority as
+`GET /agents/{id}`: it carries what the completed timeline entry exposes,
+live. Names, counts, timing and the assistant's explicitly emitted `content`
+sit at the top level; tool inputs, results and appended turns sit under
+`detail`, which `?detail=false` (REST) or `Event.withoutDetail()` (in-process)
+strips for a consumer that renders a display-safe summary — Thinking…,
+Using *tool*… — without the payloads. Hidden model reasoning is never
+carried: `content` is the text the provider adapter already surfaces as the
+assistant's.
+
+**Consuming.** An embedding host subscribes with
+`engine.agentEvents().subscribe(ownerDID, agentId, listener)` (or venue-wide,
+`subscribe(listener)`) and closes the returned `Subscription`; listeners run
+on the emitting thread and must not block or throw. The REST stream opens
+with a `status` frame carrying the agent's current observable status and
+`seq`, then relays events with the type as the SSE event name and `seq` as
+the SSE id; it closes after the TERMINATED status frame. A client builds its
+live activity view from `inference:*` and `tool:*` (rows keyed by call id)
+and reconciles it against the persisted timeline entry and session turns on
+`cycle:end`.
+
 ---
 
 ## 3. Three Levels

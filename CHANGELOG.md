@@ -8,6 +8,12 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- Live agent tap: `GET /agents/{id}/sse` streams run-loop events (run/cycle
+  boundaries, inferences, tool calls, status changes) and
+  `engine.agentEvents()` delivers the same ordered stream in-process (#394).
+
 ### Changed
 
 - The Telegram agent skill now reveals a separate bot-management child for

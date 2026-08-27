@@ -46,6 +46,7 @@ import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.AgentState;
+import covia.venue.AgentEvents;
 import covia.api.Abilities;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -1006,6 +1007,7 @@ public class AgentAdapter extends AAdapter {
 
 		failAllPendingForAgent(ownerDID, agentId, pendingError);
 		agent.setStatus(AgentState.TERMINATED);
+		engine.agentEvents().status(ownerDID, agentId, AgentState.TERMINATED, null);
 		cancelActiveTransition(key);
 		if (oldLoop != null && !oldLoop.isDone()) {
 			try {
@@ -2002,6 +2004,7 @@ public class AgentAdapter extends AAdapter {
 		if (agent == null) return;
 
 		agent.setStatus(AgentState.SUSPENDED);
+		engine.agentEvents().status(target.ownerDID(), agentId, AgentState.SUSPENDED, null);
 
 		// Cancel any active transition so the agent stops promptly (the token
 		// stops the transition thread itself; cancel unblocks the run loop)
@@ -2030,6 +2033,7 @@ public class AgentAdapter extends AAdapter {
 			return;
 		}
 
+		engine.agentEvents().status(target.ownerDID(), agentId, AgentState.SLEEPING, null);
 		if (autoWake) wakeAgent(target.ownerDID(), agentId, false);
 
 		job.setStatus(Status.STARTED);
@@ -2753,6 +2757,7 @@ public class AgentAdapter extends AAdapter {
 		final RequestContext agentCtx = RequestContext.ofAgent(ownerDID, agentId);
 		try {
 			agent.setStatus(AgentState.RUNNING);
+			engine.agentEvents().status(ownerDID, agentId, AgentState.RUNNING, null);
 			final CompletableFuture<ACell> finalCompletion = mine;
 			Thread.ofVirtual().start(
 				() -> executeRunLoop(agentId, ownerDID, agentCtx, finalCompletion));
@@ -2828,6 +2833,9 @@ public class AgentAdapter extends AAdapter {
 		// iteration budget means the agent burned every cycle without progress.
 		Blob stuckTaskId = null;
 		int stuckCount = 0;
+		// The live tap (#394): this launch is one run; each cycle below gets a
+		// handle of its own, stamped on the cycle ctx for the transition.
+		final AgentEvents.Run run = engine.agentEvents().beginRun(ownerDID, agentId);
 
 		try {
 			while (true) {
@@ -2848,6 +2856,7 @@ public class AgentAdapter extends AAdapter {
 
 				AgentState agent = getAgent(ownerDID, agentId);
 				if (agent == null) {
+					run.end(AgentState.TERMINATED);
 					completion.completeExceptionally(
 						new RuntimeException("Agent not found: " + agentId));
 					return;
@@ -3013,10 +3022,15 @@ public class AgentAdapter extends AAdapter {
 				// thread, so long transitions poll the token to stop promptly.
 				java.util.concurrent.atomic.AtomicBoolean cancelToken =
 					new java.util.concurrent.atomic.AtomicBoolean(false);
+				// The live tap (#394): announce the cycle with what it was given
+				// and hand the transition the handle it emits through.
+				AgentEvents.Cycle cycle = run.beginCycle(pickedSession,
+					(pickedTask != null) ? Strings.create(pickedTask.getKey().toHexString()) : null,
+					cycleStartData(transitionOp, filteredInbox, formattedTasks, resolvedPending));
 				activeCancellations.put(key, cancelToken);
 				CompletableFuture<ACell> transitionFuture =
 					engine.jobs().invokeInternal(transitionOp, transitionInput,
-						cycleCtx.withCancellation(cancelToken));
+						cycleCtx.withCancellation(cancelToken).withCycle(cycle));
 				activeTransitions.put(key, transitionFuture);
 
 				// Close the suspend/delete race: if the record was suspended,
@@ -3066,6 +3080,9 @@ public class AgentAdapter extends AAdapter {
 				// recreated agent under the same id (#202). Settle per initiator
 				// and exit; the finally-block re-check handles any new work.
 				if (transitionCancelled) {
+					cycle.end(Maps.of(
+						Fields.ERROR, Strings.create("Transition cancelled"),
+						Fields.CANCELLED, CVMBool.TRUE));
 					AString statusNow = agent.getStatus();
 					if (AgentState.SUSPENDED.equals(statusNow)) {
 						// agent:suspend stopped this cycle — record the cause,
@@ -3074,6 +3091,7 @@ public class AgentAdapter extends AAdapter {
 						AString errStr = Strings.create("Transition cancelled");
 						Index<Blob, ACell> tasksAtCancel = agent.getTasks();
 						agent.suspendAndDrain(errStr);
+						engine.agentEvents().status(ownerDID, agentId, AgentState.SUSPENDED, errStr);
 						failQueuedTasks(tasksAtCancel, errStr.toString());
 						failAllPendingForAgent(ownerDID, agentId, errStr.toString());
 						// Settle the session's cycle claim: an administrative
@@ -3094,7 +3112,7 @@ public class AgentAdapter extends AAdapter {
 					agent, agentId, ownerDID, transitionOp, framesOwned, transitionResult, pickedTask,
 					pickedTaskInput, formattedTasks, pickedSession,
 					pickedSessionBlob, filteredInbox, resolvedPending,
-					presentedSessionPendingCount, startTs, allTaskResults);
+					presentedSessionPendingCount, startTs, allTaskResults, cycle);
 				lastResult = merged.lastResult();
 				allTaskResults = merged.allTaskResults();
 			}
@@ -3108,6 +3126,13 @@ public class AgentAdapter extends AAdapter {
 				AString observed = agent.getStatus();
 				if (observed != null) finalStatus = observed;
 			}
+			// Announce the rest state before releasing waiters, so a consumer
+			// that awaits the loop has already seen it (#394). A stop that
+			// landed while running announced itself when it did.
+			if (AgentState.SLEEPING.equals(finalStatus)) {
+				engine.agentEvents().status(ownerDID, agentId, AgentState.SLEEPING, null);
+			}
+			run.end(finalStatus);
 			completion.complete(Maps.of(
 				Fields.AGENT_ID, agentId,
 				Fields.ADDRESS, Strings.create(ownerDID + "/g/" + agentId),
@@ -3118,6 +3143,7 @@ public class AgentAdapter extends AAdapter {
 			String failure = describeFailure(e);
 			suspendOnError(ownerDID, agentId, e);
 			failAllPendingForAgent(ownerDID, agentId, failure);
+			run.end(AgentState.SUSPENDED);
 			completion.completeExceptionally(new RuntimeException(failure, e));
 		} finally {
 			// Release the launcher slot, then re-check for wakes that may
@@ -3153,7 +3179,7 @@ public class AgentAdapter extends AAdapter {
 			ACell pickedTaskInput, AVector<ACell> formattedTasks,
 			AString pickedSession, Blob pickedSessionBlob,
 			AVector<ACell> filteredInbox, ACell pending, long presentedSessionPendingCount,
-			long startTs, AMap<AString, ACell> allTaskResults) {
+			long startTs, AMap<AString, ACell> allTaskResults, AgentEvents.Cycle tap) {
 		final AgentKey key = new AgentKey(callerDID, agentId);
 		long endTs = Utils.getCurrentTimestamp();
 		ACell newState = RT.getIn(transitionResult, AgentState.KEY_STATE);
@@ -3328,6 +3354,12 @@ public class AgentAdapter extends AAdapter {
 			framesOwned ? null : adapterFrames,
 			sessionLoads, cycleTokens);
 
+		// The live tap's commit event (#394): the entry and turns are
+		// persisted; callers are released below, so a consumer awaiting the
+		// chat Job has already seen the cycle end.
+		tap.end(cycleEndData(merged, leanResponse, leanError, cycleTokens,
+			framesOwned ? null : turnsToAppend));
+
 		// Per-thread scheduled wake (B8.8). Transition result may carry a
 		// `wakeTime` (absolute wall-clock millis) requesting a future fire on
 		// the picked thread. If present, install it via setThreadWakeTime
@@ -3420,6 +3452,7 @@ public class AgentAdapter extends AAdapter {
 			AString errStr = Strings.create(leanError.toString());
 			Index<Blob, ACell> tasksAtError = agent.getTasks();
 			agent.suspendAndDrain(errStr);
+			engine.agentEvents().status(callerDID, agentId, AgentState.SUSPENDED, errStr);
 			failQueuedTasks(tasksAtError, errStr.toString());
 			failAllPendingForAgent(callerDID, agentId, errStr.toString());
 		}
@@ -3464,6 +3497,46 @@ public class AgentAdapter extends AAdapter {
 					? AgentState.SOURCE_TOOL : AgentState.SOURCE_TRANSITION);
 		}
 		return turn;
+	}
+
+	// ========== Live tap payloads (#394) ==========
+
+	/** The {@code cycle:start} payload: the transition op, the job ids of the
+	 *  chat envelopes presented, and how much the cycle was given. */
+	private static AMap<AString, ACell> cycleStartData(AString op, AVector<ACell> inbox,
+			AVector<ACell> tasks, AVector<ACell> pending) {
+		AVector<ACell> jobs = Vectors.empty();
+		for (long i = 0; inbox != null && i < inbox.count(); i++) {
+			ACell jobId = RT.getIn(inbox.get(i), Fields.JOB_ID);
+			if (jobId != null) jobs = jobs.conj(jobId);
+		}
+		AMap<AString, ACell> data = Maps.of(
+			Fields.OP, op,
+			Fields.TASKS, CVMLong.create((tasks != null) ? tasks.count() : 0),
+			Fields.MESSAGES, CVMLong.create((inbox != null) ? inbox.count() : 0),
+			Fields.PENDING, CVMLong.create((pending != null) ? pending.count() : 0));
+		if (!jobs.isEmpty()) data = data.assoc(Fields.JOBS, jobs);
+		return data;
+	}
+
+	/** The {@code cycle:end} payload: the outcome, the cycle's usage, the index
+	 *  of the timeline entry just written and — under {@code detail} — the
+	 *  turns the merge appended to the session. */
+	private static AMap<AString, ACell> cycleEndData(AMap<AString, ACell> merged,
+			ACell response, ACell error, AMap<AString, ACell> tokens, AVector<ACell> turns) {
+		AMap<AString, ACell> data = Maps.empty();
+		if (error != null) data = data.assoc(Fields.ERROR, error);
+		else if (response != null) data = data.assoc(Fields.RESPONSE, response);
+		if (tokens != null) data = data.assoc(Fields.TOKENS, tokens);
+		AVector<ACell> timeline = (merged != null)
+			? RT.ensureVector(merged.get(AgentState.KEY_TIMELINE)) : null;
+		if (timeline != null && !timeline.isEmpty()) {
+			data = data.assoc(AgentState.KEY_TIMELINE, CVMLong.create(timeline.count() - 1));
+		}
+		if (turns != null && !turns.isEmpty()) {
+			data = data.assoc(Fields.DETAIL, Maps.of(Fields.TURNS, turns));
+		}
+		return data;
 	}
 
 	// ========== Helpers ==========
@@ -3747,7 +3820,11 @@ public class AgentAdapter extends AAdapter {
 	private void suspendOnError(AString callerDID, AString agentId, Exception e) {
 		try {
 			AgentState agent = getAgent(callerDID, agentId);
-			if (agent != null) agent.suspend(Strings.create(describeFailure(e)));
+			if (agent != null) {
+				AString error = Strings.create(describeFailure(e));
+				agent.suspend(error);
+				engine.agentEvents().status(callerDID, agentId, AgentState.SUSPENDED, error);
+			}
 		} catch (Exception inner) {
 			log.warn("Failed to set agent error state", inner);
 		}

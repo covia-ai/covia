@@ -251,7 +251,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		// The cycle record (#392) collects every inference and tool call made
 		// below — thread-confined, nothing threaded through the loop — and
 		// rides out on the output, or on the failure that ends the cycle.
-		CycleRecord.begin();
+		CycleRecord.begin(ctx.getCycle());
 		try {
 			return chat(ctx, input);
 		} catch (RuntimeException e) {

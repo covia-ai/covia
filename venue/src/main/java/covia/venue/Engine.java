@@ -135,6 +135,9 @@ public class Engine {
 	 * {@code agent:wake}). See {@code venue/docs/GRID_SCHEDULER.md}.
 	 */
 	private final Scheduler gridScheduler;
+	/** The live agent tap (#394): run-loop, cycle, inference, tool and status
+	 *  events for every agent hosted here. */
+	private final AgentEvents agentEvents = new AgentEvents();
 
 	/**
 	 * Map of named adapters that can handle different types of operations or resources
@@ -2916,6 +2919,16 @@ public class Engine {
 	 */
 	public Scheduler gridScheduler() {
 		return gridScheduler;
+	}
+
+	/**
+	 * The live agent event tap (#394). In-process consumers subscribe here —
+	 * per agent or venue-wide — and see the same ordered events the REST
+	 * stream {@code GET /agents/{id}/sse} carries. See AGENT_LOOP.md §2.6.
+	 * @return AgentEvents instance
+	 */
+	public AgentEvents agentEvents() {
+		return agentEvents;
 	}
 
 	/**

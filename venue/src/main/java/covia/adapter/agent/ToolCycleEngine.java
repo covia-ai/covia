@@ -18,6 +18,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
+import covia.venue.AgentEvents;
 
 /**
  * Shared mechanics for one LLM tool-call cycle.
@@ -41,6 +42,13 @@ import convex.core.lang.RT;
  * appended in call order whatever order they finish in; a successful terminal
  * call still fences every later call; and cycle recording stays on the calling
  * thread, whose {@link CycleRecord} is thread-local.</p>
+ *
+ * <p><b>Live tap.</b> Each call that reaches its handler is announced on the
+ * cycle's {@link AgentEvents.Cycle} — {@code tool:start} as it is dispatched,
+ * {@code tool:result} as it finishes — from whichever thread runs it, so a
+ * parallel wave shows its calls in flight independently (#394). The handle
+ * and frame depth come from this thread's record; calls fenced after a
+ * terminal request never ran and are not announced.</p>
  *
  * <p>This class intentionally does not own the outer loop. {@code AgentAdapter}
  * already runs each agent on one virtual thread, while the flat harness returns
@@ -165,6 +173,12 @@ final class ToolCycleEngine {
 			decoded.add(decode(toolCalls.get(i), iteration, log));
 		}
 
+		// The live tap (#394): captured here, on the record's thread, and
+		// handed to each call — a parallel wave emits from its own threads.
+		CycleRecord record = CycleRecord.current();
+		AgentEvents.Cycle tap = (record != null) ? record.tap() : null;
+		int depth = (record != null) ? record.depth() : 0;
+
 		String terminalStatus = null;
 		ACell terminalValue = null;
 		int i = 0;
@@ -191,12 +205,11 @@ final class ToolCycleEngine {
 			// The common case — one call — stays on this thread: no hop, and a
 			// nested harness sees the same thread-locals it always did.
 			List<Executed> results = (wave.size() == 1)
-				? List.of(execute(wave.get(0), registry, context, log))
-				: executeConcurrently(wave, registry, context, log);
+				? List.of(execute(wave.get(0), registry, context, tap, depth, log))
+				: executeConcurrently(wave, registry, context, tap, depth, log);
 
 			for (Executed e : results) {
 				sink.recordCall(e.call(), e.outcome(), e.millis());
-				CycleRecord record = CycleRecord.current();
 				if (record != null) record.recordCall(e.call(), e.outcome(), e.millis());
 
 				if (e.outcome().aborted()) {
@@ -235,24 +248,33 @@ final class ToolCycleEngine {
 		return new Decoded(new ToolCall(id, name, toolInput, iteration), early);
 	}
 
-	/** One call through its handler; every failure becomes an error outcome. */
-	private static <C> Executed execute(Decoded d, Registry<C> registry, C context, Logger log) {
+	/** One call through its handler; every failure becomes an error outcome.
+	 *  Announced on the tap as it starts and as it finishes. */
+	private static <C> Executed execute(Decoded d, Registry<C> registry, C context,
+			AgentEvents.Cycle tap, int depth, Logger log) {
+		ToolCall call = d.call();
+		if (tap != null) tap.toolStart(call.id(), call.name(), call.input(), depth);
 		long started = System.nanoTime();
 		ToolOutcome outcome = d.early();
 		if (outcome == null) {
 			try {
-				outcome = registry.dispatch(d.call(), context);
+				outcome = registry.dispatch(call, context);
 				if (outcome == null) {
 					outcome = ToolOutcome.result(Strings.create(
-						"Error: tool handler returned no outcome: " + d.call().name()));
+						"Error: tool handler returned no outcome: " + call.name()));
 				}
 			} catch (Exception e) {
 				String detail = describe(e);
 				outcome = ToolOutcome.result(Strings.create("Error: " + detail));
-				log.warn("Tool execution failed: {} — {}", d.call().name(), detail);
+				log.warn("Tool execution failed: {} — {}", call.name(), detail);
 			}
 		}
-		return new Executed(d.call(), outcome, (System.nanoTime() - started) / 1_000_000);
+		long millis = (System.nanoTime() - started) / 1_000_000;
+		if (tap != null) {
+			tap.toolResult(call.id(), call.name(), millis,
+				CycleRecord.isErrorResult(outcome.result()), outcome.result(), depth);
+		}
+		return new Executed(call, outcome, millis);
 	}
 
 	/**
@@ -261,13 +283,13 @@ final class ToolCycleEngine {
 	 * takes as long as its slowest member rather than the sum.
 	 */
 	private static <C> List<Executed> executeConcurrently(List<Decoded> wave,
-			Registry<C> registry, C context, Logger log) {
+			Registry<C> registry, C context, AgentEvents.Cycle tap, int depth, Logger log) {
 		List<CompletableFuture<Executed>> futures = new ArrayList<>(wave.size());
 		for (Decoded d : wave) {
 			CompletableFuture<Executed> future = new CompletableFuture<>();
 			Thread.ofVirtual().name("tool-call-" + d.call().name()).start(() -> {
 				try {
-					future.complete(execute(d, registry, context, log));
+					future.complete(execute(d, registry, context, tap, depth, log));
 				} catch (Throwable t) {
 					future.completeExceptionally(t);
 				}
@@ -281,17 +303,24 @@ final class ToolCycleEngine {
 				out.add(futures.get(k).get());
 			} catch (InterruptedException e) {
 				Thread.currentThread().interrupt();
-				out.add(new Executed(call, ToolOutcome.result(Strings.create(
-					"Error: interrupted while waiting for " + call.name())), 0));
+				out.add(failed(call, "Error: interrupted while waiting for " + call.name(), tap, depth));
 			} catch (ExecutionException e) {
 				// execute() turns handler exceptions into outcomes; only an Error
 				// escapes to here. Report it like any other failed call.
 				String detail = describe((e.getCause() != null) ? e.getCause() : e);
 				log.warn("Tool call {} failed outside its handler: {}", call.name(), detail);
-				out.add(new Executed(call, ToolOutcome.result(Strings.create("Error: " + detail)), 0));
+				out.add(failed(call, "Error: " + detail, tap, depth));
 			}
 		}
 		return out;
+	}
+
+	/** A call that failed outside its handler: the error as its outcome, and
+	 *  its {@code tool:result} on the tap so every announced start is paired. */
+	private static Executed failed(ToolCall call, String message, AgentEvents.Cycle tap, int depth) {
+		AString result = Strings.create(message);
+		if (tap != null) tap.toolResult(call.id(), call.name(), 0, true, result, depth);
+		return new Executed(call, ToolOutcome.result(result), 0);
 	}
 
 	/**

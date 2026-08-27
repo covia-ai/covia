@@ -19,6 +19,7 @@ import convex.core.lang.RT;
 import convex.core.util.Utils;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
+import covia.venue.AgentEvents;
 
 /**
  * The record of one cycle's exchange with the model — what the timeline
@@ -35,6 +36,14 @@ import covia.exception.JobFailedException;
  * root frame and recorded once, when the frame opens, for a child; the tool
  * loop band is this cycle's replies and results, recorded under their
  * inferences; the tail is recorded as it appears.</p>
+ *
+ * <p><b>Live tap.</b> The record is also where the cycle's activity is
+ * observed as it happens (#394): when the transition runs inside a run
+ * loop, the cycle's {@link AgentEvents.Cycle} handle is opened with the
+ * record and every inference start and end is emitted through it. Tool
+ * calls are emitted by {@link ToolCycleEngine} from the thread that runs
+ * them, with the frame depth this record tracks. The record persists; the
+ * tap is ephemeral — nothing is emitted that the record does not keep.</p>
  *
  * <p>Thread-confined: a cycle and every inference it makes — tool-loop
  * iterations, subgoal recursion — run on one virtual thread, so nothing is
@@ -71,14 +80,28 @@ public final class CycleRecord {
 	private final Map<AString, AMap<AString, ACell>> children = new HashMap<>();
 	/** input, output, total, measured, cacheRead, cacheWrite */
 	private final long[] tally = new long[6];
+	/** The live tap of the run-loop cycle this record belongs to, or null
+	 *  outside a run loop (#394). */
+	private final AgentEvents.Cycle tap;
 
-	private CycleRecord() {
+	private CycleRecord(AgentEvents.Cycle tap) {
+		this.tap = tap;
 		frames.push(new Frame());
 	}
 
-	/** Opens the record for the cycle running on this thread. */
+	/** Opens the record for the cycle running on this thread, with no live tap. */
 	public static void begin() {
-		CURRENT.set(new CycleRecord());
+		begin(null);
+	}
+
+	/**
+	 * Opens the record for the cycle running on this thread. {@code tap} is
+	 * the cycle's live-event handle ({@code RequestContext.getCycle()}), or
+	 * null when the transition runs outside a run loop — a direct invocation
+	 * or {@code agent:step} — in which case nothing is emitted.
+	 */
+	public static void begin(AgentEvents.Cycle tap) {
+		CURRENT.set(new CycleRecord(tap));
 	}
 
 	/** The open record, or null outside a cycle. */
@@ -98,6 +121,16 @@ public final class CycleRecord {
 	public static void tally(ACell reply) {
 		CycleRecord r = CURRENT.get();
 		if (r != null) r.add(reply);
+	}
+
+	/** The live tap this record emits through, or null. */
+	AgentEvents.Cycle tap() {
+		return tap;
+	}
+
+	/** Frame depth: 0 at the root, 1 in the first child frame, and so on. */
+	int depth() {
+		return frames.size() - 1;
 	}
 
 	// ========== Frames ==========
@@ -161,24 +194,32 @@ public final class CycleRecord {
 		f.lastTools = tools;
 		f.open = inference;
 		f.openedAt = System.nanoTime();
+		if (tap != null) {
+			tap.inferenceStart(op, model, messages.count(), tools.count(),
+				prompt.used(), prompt.budget(), depth());
+		}
 	}
 
 	/** After the call: the reply verbatim. */
 	void endInference(ACell reply) {
 		Frame f = frames.peek();
 		if (f.open == null) return;
-		f.inferences = f.inferences.conj(f.open.assoc(Fields.MS, elapsed(f)).assoc(Fields.REPLY, reply));
+		CVMLong ms = elapsed(f);
+		f.inferences = f.inferences.conj(f.open.assoc(Fields.MS, ms).assoc(Fields.REPLY, reply));
 		f.open = null;
 		add(reply);
+		if (tap != null) tap.inferenceEnd(reply, ms.longValue(), depth());
 	}
 
 	/** A call that produced no reply. */
 	void failInference(String error) {
 		Frame f = frames.peek();
 		if (f.open == null) return;
+		CVMLong ms = elapsed(f);
 		f.inferences = f.inferences.conj(
-			f.open.assoc(Fields.MS, elapsed(f)).assoc(Fields.ERROR, Strings.create(error)));
+			f.open.assoc(Fields.MS, ms).assoc(Fields.ERROR, Strings.create(error)));
 		f.open = null;
+		if (tap != null) tap.inferenceFailed(error, ms.longValue(), depth());
 	}
 
 	/** From the tool batch that followed the frame's last inference. */
@@ -193,10 +234,7 @@ public final class CycleRecord {
 		ACell result = outcome.result();
 		if (result != null) {
 			rec = rec.assoc(Fields.RESULT, result);
-			if (AbstractLLMAdapter.toolFailureMessage(result) != null
-					|| CVMBool.TRUE.equals(RT.getIn(result, AbstractLLMAdapter.K_IS_ERROR))) {
-				rec = rec.assoc(AbstractLLMAdapter.K_IS_ERROR, CVMBool.TRUE);
-			}
+			if (isErrorResult(result)) rec = rec.assoc(AbstractLLMAdapter.K_IS_ERROR, CVMBool.TRUE);
 		}
 		AMap<AString, ACell> frame = (call.id() != null) ? children.remove(call.id()) : null;
 		if (frame != null) rec = rec.assoc(Fields.FRAME, frame);
@@ -204,6 +242,13 @@ public final class CycleRecord {
 		AVector<ACell> calls = RT.ensureVector(last.get(Fields.CALLS));
 		calls = ((calls != null) ? calls : Vectors.empty()).conj(rec);
 		f.inferences = f.inferences.assoc(n - 1, last.assoc(Fields.CALLS, calls));
+	}
+
+	/** True when a tool result reports failure — a framework error message
+	 *  or an explicit {@code isError} flag. */
+	static boolean isErrorResult(ACell result) {
+		return result != null && (AbstractLLMAdapter.toolFailureMessage(result) != null
+			|| CVMBool.TRUE.equals(RT.getIn(result, AbstractLLMAdapter.K_IS_ERROR)));
 	}
 
 	// ========== Tokens (#217) ==========
