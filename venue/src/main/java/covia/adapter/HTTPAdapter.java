@@ -31,6 +31,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
+import convex.core.data.prim.CVMDouble;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
@@ -408,8 +409,8 @@ public class HTTPAdapter extends AAdapter {
 			methodField=Strings.create(subOp);
 		}
 
-		AMap<AString,AString> headers=RT.castMap(RT.getIn(input, Fields.HEADERS));
-		AMap<AString,AString> queryParams=RT.castMap(RT.getIn(input, Fields.QUERY_PARAMS));
+		AMap<AString, ACell> headers = optionalMap(input, Fields.HEADERS);
+		AMap<AString, ACell> queryParams = optionalMap(input, Fields.QUERY_PARAMS);
 		ACell bodyField=RT.getIn(input, Fields.BODY);
 		AString bearerSecret=RT.ensureString(RT.getIn(input, Fields.BEARER_SECRET));
 		AMap<AString, ACell> secretHeaders = optionalMap(input, Fields.SECRET_HEADERS);
@@ -430,13 +431,13 @@ public class HTTPAdapter extends AAdapter {
 				StringBuilder queryString = new StringBuilder();
 				boolean first = true;
 
-				for (MapEntry<AString,AString> me : queryParams.entryVector()) {
+				for (MapEntry<AString, ACell> me : queryParams.entryVector()) {
 					if (!first) {
 						queryString.append("&");
 					}
 					queryString.append(URLEncoder.encode(me.getKey().toString(), StandardCharsets.UTF_8))
 							  .append("=")
-							  .append(URLEncoder.encode(me.getValue().toString(), StandardCharsets.UTF_8));
+							  .append(URLEncoder.encode(scalar(me.getValue(), Fields.QUERY_PARAMS, me.getKey()), StandardCharsets.UTF_8));
 					first = false;
 				}
 
@@ -457,8 +458,8 @@ public class HTTPAdapter extends AAdapter {
 			LinkedHashMap<String, String> outHeaders = new LinkedHashMap<>();
 			Set<String> credentials = new HashSet<>(CREDENTIAL_HEADERS);
 			if (headers != null) {
-				for (MapEntry<AString,AString> me : headers.entryVector()) {
-					putHeader(outHeaders, me.getKey().toString(), me.getValue().toString());
+				for (MapEntry<AString, ACell> me : headers.entryVector()) {
+					putHeader(outHeaders, me.getKey().toString(), scalar(me.getValue(), Fields.HEADERS, me.getKey()));
 				}
 			}
 
@@ -582,6 +583,20 @@ public class HTTPAdapter extends AAdapter {
 		output = output.assoc(Fields.URL, Strings.create(finalUri.toString()));
 		if (!trail.isEmpty()) output = output.assoc(Fields.REDIRECTS, trail);
 		return output;
+	}
+
+	/**
+	 * A header or query value as text: a string as-is, a number or boolean
+	 * printed — so {@code count: 10} works as a caller would expect — and
+	 * anything structured refused with a message naming the field.
+	 */
+	private static String scalar(ACell value, AString field, ACell key) {
+		if (value instanceof AString s) return s.toString();
+		if (value instanceof CVMLong || value instanceof CVMDouble || value instanceof CVMBool) {
+			return value.toString();
+		}
+		throw new IllegalArgumentException(field + "." + key
+			+ " must be a string, number or boolean, got: " + value);
 	}
 
 	@SuppressWarnings("unchecked")

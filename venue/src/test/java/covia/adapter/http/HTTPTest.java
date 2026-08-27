@@ -696,10 +696,17 @@ public class HTTPTest {
 		return RT.getIn(job.getOutput(), "body").toString();
 	}
 
-	/** Runs a GET through the shared engine and returns the failure message. */
+	/** Runs a GET through the shared engine and returns the failure message —
+	 *  whether the request was refused before it left (a synchronous
+	 *  IllegalArgumentException) or failed once in flight (a FAILED job). */
 	private static String failureOf(ACell input) {
-		Job job = TestServer.ENGINE.jobs().invokeOperation("v/ops/http/get", input,
-			RequestContext.of(Strings.create("did:test:http:redirects")));
+		Job job;
+		try {
+			job = TestServer.ENGINE.jobs().invokeOperation("v/ops/http/get", input,
+				RequestContext.of(Strings.create("did:test:http:redirects")));
+		} catch (RuntimeException refused) {
+			return String.valueOf(refused.getMessage());
+		}
 		try { job.awaitResult(10_000); } catch (Exception expected) { /* reported below */ }
 		assertEquals(Status.FAILED, job.getStatus(), "expected a failure, got status " + job.getStatus());
 		return String.valueOf(job.getErrorMessage());
@@ -924,5 +931,33 @@ public class HTTPTest {
 		assertFalse(HTTPAdapter.sameOrigin(new java.net.URI("http://a.example/x"), new java.net.URI("http://b.example/x")));
 		assertTrue(HTTPAdapter.isRedirect(308) && HTTPAdapter.isRedirect(303));
 		assertFalse(HTTPAdapter.isRedirect(304) || HTTPAdapter.isRedirect(200));
+	}
+
+	@Test public void testHeaderAndQueryValuesMayBeNumbersOrBooleans() throws Exception {
+		VenueHTTP covia = TestServer.COVIA;
+		HttpServer echo = localServer();
+		echo.createContext("/q", x -> respond(x, 200,
+			x.getRequestURI().getRawQuery() + "|" + x.getRequestHeaders().getFirst("X-Count")));
+		echo.start();
+		try {
+			// A skill example passes count: 10 as a number; that must not be a
+			// ClassCastException before the request even leaves the venue.
+			String sent = body(covia.invokeSync("v/ops/http/get", Maps.of(
+				"url", base(echo) + "/q",
+				"queryParams", Maps.of("count", 10, "q", "two words", "exact", true),
+				"headers", Maps.of("X-Count", 7)), 10_000));
+			String query = sent.substring(0, sent.indexOf('|'));
+			assertTrue(query.contains("count=10"), sent);
+			assertTrue(query.contains("q=two+words"), "values are encoded once, by the venue: " + sent);
+			assertTrue(query.contains("exact=true"), sent);
+			assertEquals("7", sent.substring(sent.indexOf('|') + 1));
+
+			// Structured values are refused with the field named, not cast.
+			String refused = failureOf(Maps.of("url", base(echo) + "/q",
+				"queryParams", Maps.of("filter", Maps.of("nested", "no"))));
+			assertTrue(refused.contains("queryParams.filter must be a string, number or boolean"), refused);
+		} finally {
+			echo.stop(0);
+		}
 	}
 }

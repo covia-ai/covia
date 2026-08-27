@@ -29,6 +29,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `http:*` sends a descriptive `User-Agent` when the caller supplies none
   (`adapters.http.userAgent`); the op schemas no longer advertise a default that
   nothing applied (#422).
+- `http:*` header and query values may be numbers or booleans (`count: 10`), not
+  only strings; a structured value is refused naming the field, not cast.
 
 ### Changed
 

@@ -24,7 +24,7 @@
 				},
 				"queryParams": {
 					"type": "object",
-					"description": "Optional query parameters to append to the URL",
+					"description": "Optional query parameters to append to the URL — string, number or boolean values, encoded once by the venue",
 					"defaultValue": {
 						"format": "json",
 						"pretty": "true"
