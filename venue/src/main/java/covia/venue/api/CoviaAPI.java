@@ -1920,7 +1920,8 @@ public class CoviaAPI extends ACoviaAPI {
 					+ "Accept negotiation matches /jobs/{id}/sse. Schema: AGENT_LOOP.md §2.6.",
 			pathParams = { @OpenApiParam(name = "id", description = "Agent id") },
 			queryParams = { @OpenApiParam(name = "detail", type = Boolean.class,
-					description = "false to omit the owner-authorised detail (tool input/result, appended turns).") },
+					description = "false to omit the owner-authorised detail (tool input/result, appended turns)."),
+					@OpenApiParam(name = "sessionId", description = "Narrow the stream to one session (hex id): its cycle, inference and tool events plus the agent's status events; run boundaries and other sessions are omitted.") },
 			operationId = "agentSse")
 	protected void agentSse(Context ctx) {
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
@@ -1941,6 +1942,12 @@ public class CoviaAPI extends ACoviaAPI {
 			buildError(ctx, 403, e.getMessage());
 			return;
 		}
+		String sessionParam = ctx.queryParam("sessionId");
+		if (sessionParam != null && !sessionParam.isBlank() && SseServer.sessionFilter(sessionParam) == null) {
+			buildError(ctx, 400, "sessionId must be a hex string");
+			return;
+		}
+
 
 		// Accept negotiation (#222): default to SSE, never a silent 200.
 		String accept = ctx.header("Accept");

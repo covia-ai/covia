@@ -1,6 +1,7 @@
 package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -378,5 +379,58 @@ public class AgentEventsTest {
 			Maps.of(Fields.STATUS, AgentState.TERMINATED));
 		assertTrue(terminated.isTerminal());
 		assertEquals(CVMBool.TRUE, CVMBool.create(terminated.isTerminal()));
+	}
+
+	// ========== session-scoped subscription ==========
+
+	@Test
+	public void testSessionScopedSubscriptionSeesOnlyItsSession() {
+		String id = "sessions";
+		createAgent(id, Maps.of(
+			Fields.OPERATION, "v/ops/llmagent/chat",
+			"llmOperation", "v/test/ops/llm"));
+		// Mint session A first, so its id is known before subscribing.
+		Job mint = engine.jobs().invokeOperation("v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, id, Fields.MESSAGE, "mint A"), ctx);
+		mint.awaitResult(10_000);
+		AString sessionA = RT.ensureString(RT.getIn(mint.getOutput(), Fields.SESSION_ID));
+		assertNotNull(sessionA);
+
+		Capture whole = new Capture();
+		Capture scoped = new Capture();
+		Job other;
+		try (AgentEvents.Subscription s1 = engine.agentEvents().subscribe(did, Strings.create(id), whole);
+			 AgentEvents.Subscription s2 = engine.agentEvents().subscribe(did, Strings.create(id), sessionA, scoped)) {
+			// One more turn on A, then a chat that mints session B.
+			engine.jobs().invokeOperation("v/ops/agent/chat",
+				Maps.of(Fields.AGENT_ID, id, Fields.SESSION_ID, sessionA, Fields.MESSAGE, "again A"), ctx)
+				.awaitResult(10_000);
+			other = engine.jobs().invokeOperation("v/ops/agent/chat",
+				Maps.of(Fields.AGENT_ID, id, Fields.MESSAGE, "mint B"), ctx);
+			other.awaitResult(10_000);
+			// Both cycles committed and the last run has exited.
+			TestEngine.awaitCondition(() -> whole.all(AgentEvents.CYCLE_END).size() >= 2
+				&& AgentEvents.RUN_END.equals(whole.events.get(whole.events.size() - 1).type()),
+				5_000, () -> "two cycles then a run end: " + whole.types());
+		}
+		AString sessionB = RT.ensureString(RT.getIn(other.getOutput(), Fields.SESSION_ID));
+		assertNotEquals(sessionA, sessionB, "the second chat minted its own session");
+
+		assertEquals(2, whole.all(AgentEvents.CYCLE_START).size(), "the whole-agent view saw both cycles");
+		assertEquals(1, scoped.all(AgentEvents.CYCLE_START).size(), "the session view saw only its own");
+		assertTrue(scoped.all(AgentEvents.RUN_START).isEmpty() && scoped.all(AgentEvents.RUN_END).isEmpty(),
+			"run boundaries are not a session's concern: " + scoped.types());
+		assertFalse(scoped.all(AgentEvents.STATUS).isEmpty(), "status events reach a session view");
+		for (Event e : scoped.events) {
+			if (AgentEvents.STATUS.equals(e.type())) continue;
+			assertEquals(sessionA, str(e, Fields.SESSION_ID), e.type().toString());
+		}
+		assertSeqStrictlyIncreasing(scoped.events);
+
+		// The rule itself, on the wire form a session view sees.
+		Event status = scoped.first(AgentEvents.STATUS);
+		assertTrue(status.concerns(sessionB), "status concerns every session");
+		Event cycle = scoped.first(AgentEvents.CYCLE_START);
+		assertTrue(cycle.concerns(sessionA) && !cycle.concerns(sessionB) && cycle.concerns(null));
 	}
 }

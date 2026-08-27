@@ -152,7 +152,7 @@ public class SseServer {
 	// ========== Agent streams (#394) ==========
 
 	/** One agent-stream client and whether its frames carry {@code detail}. */
-	private record AgentClient(SseClient client, boolean detail) {}
+	private record AgentClient(SseClient client, boolean detail, AString sessionId) {}
 
 	/** Per-agent client subscriptions keyed by the agent's grid address
 	 *  ({@code <ownerDID>/g/<agentId>}) — the key every
@@ -191,9 +191,10 @@ public class SseServer {
 		AString agentId = RT.ensureString(info.get(Fields.AGENT_ID));
 		AString status = RT.ensureString(info.get(Fields.STATUS));
 		boolean detail = !"false".equalsIgnoreCase(client.ctx().queryParam("detail"));
+		AString sessionFilter = sessionFilter(client.ctx().queryParam("sessionId"));
 		boolean terminated = AgentState.TERMINATED.equals(status);
 
-		if (!terminated) registerAgentClient(address, new AgentClient(client, detail));
+		if (!terminated) registerAgentClient(address, new AgentClient(client, detail, sessionFilter));
 
 		AMap<AString, ACell> initial = Maps.of(
 			Fields.SEQ, CVMLong.create(engine.agentEvents().lastSeq(address)),
@@ -202,6 +203,7 @@ public class SseServer {
 			Fields.AGENT_ID, agentId,
 			Fields.ADDRESS, address,
 			Fields.STATUS, status);
+		if (sessionFilter != null) initial = initial.assoc(Fields.SESSION_ID, sessionFilter);
 		client.sendEvent(AgentEvents.STATUS.toString(), JSON.toString(initial));
 		if (terminated) client.close();
 	};
@@ -221,6 +223,18 @@ public class SseServer {
 		log.info("SSE client connected for agent: {}", address);
 	}
 
+
+	/**
+	 * The session a stream is narrowed to, as the bare hex the events carry
+	 * (any parseable form is accepted, {@code 0x}-prefixed included); null
+	 * for the whole agent, or for an unparseable value — the route handler
+	 * rejects that with 400 before the stream is committed.
+	 */
+	public static AString sessionFilter(String param) {
+		if (param == null || param.isBlank()) return null;
+		Blob sid = Blob.parse(param.trim());
+		return (sid != null) ? Strings.create(sid.toHexString()) : null;
+	}
 	/**
 	 * Fans one live agent event out to that agent's stream clients: the
 	 * event type is the SSE event name, {@code seq} the SSE id, and the wire
@@ -236,6 +250,7 @@ public class SseServer {
 		String full = null;
 		String safe = null;
 		for (AgentClient ac : clients) {
+			if (!event.concerns(ac.sessionId())) continue;
 			try {
 				String json;
 				if (ac.detail()) {

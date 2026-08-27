@@ -12,7 +12,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 - Live agent tap: `GET /agents/{id}/sse` streams run-loop events (run/cycle
   boundaries, inferences, tool calls, status changes) and
-  `engine.agentEvents()` delivers the same ordered stream in-process (#394).
+  `engine.agentEvents()` delivers the same ordered stream in-process; both
+  narrow to one session with `?sessionId=` or a session-scoped subscription (#394).
 - `agent:chat` results name every chat the reply answered (`answered`), so one
   reply to several queued messages is distinguishable from several replies (#416).
 

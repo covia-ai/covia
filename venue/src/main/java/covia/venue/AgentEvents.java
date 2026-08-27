@@ -115,6 +115,19 @@ public final class AgentEvents {
 			return new Event(ownerDID, agentId, seq, ts, type, data.dissoc(Fields.DETAIL));
 		}
 
+		/**
+		 * True when a consumer narrowed to one session should see this event:
+		 * the cycle-scoped events of that session, plus every {@code status}
+		 * event — a suspension or termination is the answer to why a
+		 * conversation stopped. Run boundaries and other sessions' cycles are
+		 * not its concern. {@code sessionId} is the bare hex the events carry;
+		 * null means the whole agent.
+		 */
+		public boolean concerns(AString sessionId) {
+			if (sessionId == null || STATUS.equals(type)) return true;
+			return sessionId.equals(RT.getIn(data, Fields.SESSION_ID));
+		}
+
 		/** True for the event that ends an agent's stream: status TERMINATED. */
 		public boolean isTerminal() {
 			return STATUS.equals(type) && AgentState.TERMINATED.equals(RT.getIn(data, Fields.STATUS));
@@ -155,6 +168,18 @@ public final class AgentEvents {
 		Slot s = slot(ownerDID, agentId);
 		s.listeners.add(listener);
 		return () -> s.listeners.remove(listener);
+	}
+
+	/**
+	 * Subscribes to one session of an agent: that session's cycle-scoped
+	 * events and the agent's status events — see {@link Event#concerns}. The
+	 * agent's {@code seq} is unchanged, so a session view sees gaps.
+	 */
+	public Subscription subscribe(AString ownerDID, AString agentId, AString sessionId,
+			Consumer<Event> listener) {
+		java.util.Objects.requireNonNull(listener, "listener");
+		if (sessionId == null) return subscribe(ownerDID, agentId, listener);
+		return subscribe(ownerDID, agentId, e -> { if (e.concerns(sessionId)) listener.accept(e); });
 	}
 
 	/** Subscribes to every agent's events on this venue (the SSE fan-out). */

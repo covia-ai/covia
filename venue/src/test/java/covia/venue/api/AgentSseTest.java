@@ -252,4 +252,65 @@ public class AgentSseTest {
 			s.response.body().close();
 		}
 	}
+
+	@Test
+	public void testSessionFilterNarrowsTheStream() throws Exception {
+		String id = "sse-session";
+		createAgent(id);
+		Job mint = client.invokeAndWait(OP_CHAT, Maps.of(
+			Fields.AGENT_ID, Strings.create(id), Fields.MESSAGE, Strings.create("mint A")));
+		assertEquals(Status.COMPLETE, mint.getStatus(), "chat failed: " + mint.getErrorMessage());
+		String sessionA = RT.ensureString(RT.getIn(mint.getOutput(), Fields.SESSION_ID)).toString();
+
+		HttpResponse<String> bad = http.send(HttpRequest.newBuilder()
+			.uri(new URI(TestServer.BASE_URL + "/api/v1/agents/" + id + "/sse?sessionId=not-hex"))
+			.header("Accept", "text/event-stream").header("Authorization", "Bearer " + jwt).GET().build(),
+			HttpResponse.BodyHandlers.ofString());
+		assertEquals(400, bad.statusCode(), "an unparseable session id is rejected before the stream opens");
+
+		Stream whole = open(id, "", true);
+		Stream scoped = open(id, "?sessionId=0x" + sessionA, true);
+		try {
+			Frame initial = scoped.readUntil(f -> true).get(10, TimeUnit.SECONDS);
+			assertNotNull(initial);
+			assertEquals(Strings.create(sessionA), RT.getIn(initial.data(), Fields.SESSION_ID),
+				"the initial frame echoes the filter in the bare form the events carry");
+			assertNotNull(whole.readUntil(f -> true).get(10, TimeUnit.SECONDS));
+
+			CompletableFuture<Frame> wholeDone = whole.readUntil(f -> "run:end".equals(f.event())
+				&& whole.frames.stream().filter(x -> "cycle:end".equals(x.event())).count() >= 2);
+			Job again = client.invokeAndWait(OP_CHAT, Maps.of(
+				Fields.AGENT_ID, Strings.create(id), Fields.SESSION_ID, Strings.create(sessionA),
+				Fields.MESSAGE, Strings.create("again A")));
+			assertEquals(Status.COMPLETE, again.getStatus(), "chat failed: " + again.getErrorMessage());
+			Job other = client.invokeAndWait(OP_CHAT, Maps.of(
+				Fields.AGENT_ID, Strings.create(id), Fields.MESSAGE, Strings.create("mint B")));
+			assertEquals(Status.COMPLETE, other.getStatus(), "chat failed: " + other.getErrorMessage());
+			String sessionB = RT.ensureString(RT.getIn(other.getOutput(), Fields.SESSION_ID)).toString();
+			Frame lastWhole = wholeDone.get(10, TimeUnit.SECONDS);
+			assertNotNull(lastWhole, "both cycles and the final run end must arrive on the whole stream");
+
+			// Every frame the session view will ever get for those runs was
+			// written before the whole stream's run:end; the last of them is
+			// the SLEEPING status just before it.
+			long target = lastWhole.seq() - 1;
+			assertNotNull(scoped.readUntil(f -> f.seq() >= target).get(10, TimeUnit.SECONDS));
+
+			assertEquals(2, whole.frames.stream().filter(f -> "cycle:start".equals(f.event())).count());
+			List<Frame> cycles = scoped.frames.stream().filter(f -> "cycle:start".equals(f.event())).toList();
+			assertEquals(1, cycles.size(), "the session view saw only its own cycle: " + scoped.events());
+			assertEquals(Strings.create(sessionA), RT.getIn(cycles.get(0).data(), Fields.SESSION_ID));
+			assertTrue(scoped.events().stream().noneMatch(e -> e.startsWith("run:")),
+				"run boundaries are omitted: " + scoped.events());
+			for (Frame f : scoped.frames) {
+				ACell sid = RT.getIn(f.data(), Fields.SESSION_ID);
+				assertFalse(Strings.create(sessionB).equals(sid), "session B never reaches the A view: " + f);
+				if (!"status".equals(f.event())) assertEquals(Strings.create(sessionA), sid, f.toString());
+			}
+			assertTrue(scoped.events().contains("status"), "status events reach the session view");
+		} finally {
+			whole.response.body().close();
+			scoped.response.body().close();
+		}
+	}
 }

@@ -269,6 +269,14 @@ live activity view from `inference:*` and `tool:*` (rows keyed by call id)
 and reconciles it against the persisted timeline entry and session turns on
 `cycle:end`.
 
+**Per session.** Either surface narrows to one conversation —
+`subscribe(ownerDID, agentId, sessionId, listener)` in-process, `?sessionId=<hex>`
+over REST — delivering that session's cycle, inference and tool events plus
+the agent's `status` events (a suspension or termination is why a conversation
+stopped); run boundaries and other sessions' cycles are omitted, and `seq`
+keeps its gaps. The initial REST frame echoes the filter. Session lifecycle
+events (created, deleted, message queued, turn appended) are not emitted.
+
 ---
 
 ## 3. Three Levels
