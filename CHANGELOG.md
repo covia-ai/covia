@@ -41,6 +41,10 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   volatile entry renders within its budget whatever its shape.
   Loaded elements and load-contributed tools render in load order, so a new
   load appends instead of reshuffling.
+- Scheduler recurrence: `repeat: {every: <ms>}` re-inserts a fired event at its
+  next slot under the same id (a missed backlog collapses to one catch-up fire);
+  tracked fires record a durable Job, the recurring record keeps `lastFired` /
+  `lastJob` (#407, #408).
 - Parallel tool calls in the agent cycle: adjacent operation calls in one
   reply run concurrently; harness tools stay ordered barriers and results keep
   call order.
@@ -56,6 +60,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Fixed
 
+- Agent session and pinned-skill interoperability (#411, #412, #413).
 - Operator-pinned skills (`config.loads` `{skill: true}`) now contribute their
   `skill.skills` / `skill.skillsets` to discovery — indexed and `skill_load`
   by name — like a runtime-loaded skill, without loading the children (#415).
