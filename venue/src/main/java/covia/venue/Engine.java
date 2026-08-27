@@ -59,6 +59,7 @@ import covia.adapter.ConvexAdapter;
 import covia.adapter.CoviaAdapter;
 import covia.adapter.GridAdapter;
 import covia.adapter.HTTPAdapter;
+import covia.adapter.OAuthAdapter;
 import covia.adapter.JSONAdapter;
 import covia.adapter.JVMAdapter;
 import covia.adapter.SchemaAdapter;
@@ -828,6 +829,7 @@ public class Engine {
 	public static void addDemoAssets(Engine venue) {
 		venue.registerAdapter(new TestAdapter());
 		venue.registerAdapter(new HTTPAdapter());
+		venue.registerAdapter(new OAuthAdapter());
 		venue.registerAdapter(new JVMAdapter());
 		venue.registerAdapter(new FileAdapter());
 		venue.registerAdapter(new covia.adapter.ArchiveAdapter());

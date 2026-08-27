@@ -1,0 +1,26 @@
+{
+  "name": "Connect an account",
+  "description": "Starts connecting the caller's account at an OAuth provider (google, microsoft, github, or any provider the operator configured). Returns the URL the user must open and approve; the provider then calls the venue back and the grant is stored for the caller. Nothing is connected until the user approves. Afterwards, call the provider's API with http:get / http:post and bearerSecret \"oauth/<provider>\" — the access token never appears in your context.",
+  "operation": {
+    "adapter": "oauth:connect",
+    "input": {
+      "type": "object",
+      "properties": {
+        "provider": { "type": "string", "description": "A configured provider name — see v/info/adapters/oauth" },
+        "scopes": { "type": "array", "items": { "type": "string" }, "description": "Scopes to request; the provider's configured defaults when omitted" },
+        "returnTo": { "type": "string", "description": "Where the browser goes after approval: a venue-relative path, or a URL under an operator-allowed prefix (adapters.oauth.returnTo)" }
+      },
+      "required": ["provider"]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "provider": { "type": "string" },
+        "url": { "type": "string", "description": "The authorisation URL for the user to open — hand it to the user (a hitl ask is the natural way), never open it yourself" },
+        "state": { "type": "string", "description": "The one-time request identifier bound to this caller" },
+        "expiresAt": { "type": "integer", "description": "Epoch millis after which the request lapses and must be started again" },
+        "scopes": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

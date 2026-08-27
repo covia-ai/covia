@@ -1,0 +1,32 @@
+{
+  "name": "Connected accounts",
+  "description": "The caller's connected accounts — provider, granted scope, whether the grant can refresh itself, when it was obtained and when the current access token expires. Never the tokens.",
+  "operation": {
+    "adapter": "oauth:status",
+    "readOnly": true,
+    "input": {
+      "type": "object",
+      "properties": {
+        "provider": { "type": "string", "description": "Report one provider only" }
+      }
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "connections": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "provider": { "type": "string" },
+              "scope": { "type": "string", "description": "The scope the provider granted (space-separated)" },
+              "refreshable": { "type": "boolean", "description": "True when a refresh token is held, so the connection outlives the access token" },
+              "expiresAt": { "type": "integer", "description": "Epoch millis when the current access token expires; 0 when the provider reports no expiry" },
+              "obtained": { "type": "integer", "description": "Epoch millis when the user approved" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

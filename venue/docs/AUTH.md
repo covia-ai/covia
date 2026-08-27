@@ -323,6 +323,16 @@ effect:
   method metadata) and individually revocable, mirroring the key
   registry's tombstone model.
 
+### 8.1 Connected accounts are not linking
+
+Linking adds a way to *log in* as the user. A **connected account** — the
+`oauth` adapter, CONFIG.md "Connected accounts" — is the opposite direction:
+a grant, obtained under the user's venue identity, to act on their data at a
+provider. It never binds a provider identity to the venue user, is stored in
+the user's secret store, and is consumed only by `http:*`
+(`bearerSecret: "oauth/<provider>"`). The two share OAuth plumbing and
+nothing else.
+
 ## 9. Assurance policy enforcement
 
 One Engine-owned seam: `engine.requireAssurance(ctx, policyName)` —

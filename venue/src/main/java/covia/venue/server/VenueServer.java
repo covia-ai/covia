@@ -1007,7 +1007,38 @@ public class VenueServer {
 		}
 	}
 
+	/**
+	 * The OAuth <em>connection</em> callback (not login): the provider redirects
+	 * the user's browser here after approval; the {@code oauth} adapter
+	 * exchanges the code and stores the grant for the user who started the
+	 * connect. Unauthenticated by nature — the one-time {@code state} is the
+	 * capability — and every outcome is rendered, never thrown.
+	 */
+	private void handleOAuthConnectCallback(Context ctx) {
+		covia.adapter.OAuthAdapter oauth = engine.findAdapter(covia.adapter.OAuthAdapter.class);
+		if (oauth == null) {
+			ctx.status(404).result("OAuth connections are not enabled on this venue");
+			return;
+		}
+		covia.adapter.OAuthAdapter.Completion done = oauth.complete(ctx.pathParam("provider"),
+			ctx.queryParam("state"), ctx.queryParam("code"),
+			ctx.queryParam("error"), ctx.queryParam("error_description"));
+		if (done.ok() && done.returnTo() != null) {
+			ctx.redirect(done.returnTo());
+			return;
+		}
+		String title = done.ok() ? "Connected" : "Not connected";
+		String message = done.message().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+		ctx.status(done.ok() ? 200 : 400).html("<!doctype html><html><head><meta charset=\"utf-8\"><title>" + title
+			+ "</title></head><body style=\"font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem\">"
+			+ "<h1>" + title + "</h1><p>" + message + "</p>"
+			+ (done.ok() ? "<p>You can close this window.</p>" : "") + "</body></html>");
+	}
+
 	private void addLoginRoutes(RoutesConfig app) {
+		// The OAuth *connection* callback is independent of login providers.
+		app.get("/auth/connect/{provider}/callback", this::handleOAuthConnectCallback);
+
 		if (!loginProviders.hasProviders()) return;
 
         // Login route for any provider

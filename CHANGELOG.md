@@ -23,6 +23,12 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   adds `mode: "extract"` to `file:read`, `vault:read` and `dlfs:read` — PDF and
   Office text with pages marked, page ranges, a character cap — and
   `documents:extract` for bytes in hand (#427).
+- Connected accounts: the `oauth` adapter runs OAuth 2.0 authorization-code + PKCE
+  against operator-configured providers (google, microsoft, github presets, or
+  any endpoints), stores grants in the user's secret store, and `http:*`
+  attaches a fresh access token for `bearerSecret: "oauth/<provider>"` — the
+  token never reaches a model. `oauth:connect` / `status` / `disconnect`;
+  callback at `/auth/connect/{provider}/callback`.
 
 ### Fixed
 

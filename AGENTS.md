@@ -133,7 +133,7 @@ Adapter Layer (~25 pluggable adapters — canonical table in venue/CLAUDE.md)
     ├── Execution:     langchain (LLMs), mcp, http, convex, jvm, schema, orchestrator, scheduler
     ├── Agents:        agent, llmagent, goaltree, skills, hitl (COG-16 h/ inbox)
     ├── Federation:    grid (run/invoke/jobStatus), ucan (granting surface, COG-17)
-    ├── Admin:         user (registration), venue (runtime adapter/module lifecycle)
+    ├── Admin:         user (registration), venue (runtime adapter/module lifecycle), oauth (connected accounts)
     └── Testing:       test (echo, delay, never, chat, pause, ...)
 ```
 

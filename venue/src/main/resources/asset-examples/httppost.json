@@ -49,7 +49,7 @@
 				},
 				"bearerSecret": {
 					"type": "string",
-					"description": "Optional reference to a secret (e.g. 's/MY_TOKEN') resolved from the caller's secret store and sent as 'Authorization: Bearer <token>'. For a plaintext bearer token, set the Authorization header directly via 'headers' instead."
+					"description": "Optional reference to a secret (e.g. 's/MY_TOKEN') resolved from the caller's secret store and sent as 'Authorization: Bearer <token>', or an oauth/<provider> reference for the caller's connected account (the oauth adapter attaches a fresh access token). For a plaintext bearer token, set the Authorization header directly via 'headers' instead."
 				},
 				"secretHeaders": {
 					"type": "object",

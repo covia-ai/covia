@@ -767,6 +767,72 @@ Currently defined:
   new agents to follow should also update the `config.skillsets` in its agent
   templates (`v/agents/templates/*`).
 
+## Connected accounts (`adapters.oauth`)
+
+The `oauth` adapter holds OAuth 2.0 grants on behalf of venue users so an
+agent can call a provider's API as the user — Gmail, Microsoft Graph, GitHub,
+anything that speaks OAuth 2.0. This is not login: login OAuth (`auth.oauth`)
+proves who a caller is; a *connection* is a grant to act on the user's data
+at a provider, obtained under the caller's venue identity and kept in that
+user's encrypted secret store under `oauth/<provider>`.
+
+```json
+{
+  "adapters": {
+    "oauth": {
+      "providers": {
+        "google": {
+          "clientId": "1234-abcd.apps.googleusercontent.com",
+          "clientSecret": "s/GOOGLE_OAUTH",
+          "scopes": ["https://www.googleapis.com/auth/gmail.readonly"]
+        },
+        "my-idp": {
+          "clientId": "covia",
+          "authorizationEndpoint": "https://idp.example/oauth2/authorize",
+          "tokenEndpoint": "https://idp.example/oauth2/token",
+          "revocationEndpoint": "https://idp.example/oauth2/revoke",
+          "scopes": ["read"],
+          "pkce": true,
+          "params": { "audience": "https://api.example" }
+        }
+      },
+      "returnTo": ["brightside://connected"],
+      "pendingTtlSecs": 600
+    }
+  }
+}
+```
+
+- `providers.<name>` — a client id, an `s/NAME` reference to the client
+  secret stored as the venue identity (omit for a public PKCE client — never
+  a literal), endpoints (filled in for the `google`, `microsoft` and `github`
+  presets; `https` only, plain `http` for loopback test providers), default
+  `scopes`, `pkce` (default on) and extra authorisation `params` (Google's
+  preset already sends `access_type=offline&prompt=consent` so a refresh
+  token is issued). `redirectUri` overrides the venue's own callback URL.
+- The venue's callback is `<baseUrl>/auth/connect/<provider>/callback`;
+  register it with the provider's client. A local venue uses a loopback URL,
+  which Google accepts for a "Desktop app" client on any port.
+- `returnTo` — URL prefixes a connect may name to send the browser back to
+  an app after approval; venue-relative paths are always allowed.
+- `pendingTtlSecs` — how long a started connect may wait for approval
+  (default 600).
+
+Flow: `v/ops/oauth/connect {provider, scopes?, returnTo?}` returns the URL
+the user opens; the callback exchanges the code (PKCE, one-time state bound
+to the caller) and stores the grant. `http:get` / `http:post` with
+`bearerSecret: "oauth/<provider>"` then attach a fresh access token —
+refreshed when expired — that never reaches a model or a job record.
+`oauth:status` lists connections without tokens; `oauth:disconnect` revokes
+where the provider supports it and forgets the grant. Providers and default
+scopes are published at `v/info/adapters/oauth`; the `v/skills/auth/oauth`
+skill teaches agents the flow.
+
+Provider policy is the operator's problem, not the venue's: Google's Gmail
+scopes are *restricted*, so a production client needs Google's verification,
+and an unverified client runs in testing mode with named test users and
+seven-day refresh tokens.
+
 ## Legacy private invoke setting
 
 ```json

@@ -97,6 +97,7 @@ AUTH_REQUIRED).
 | `ucan` | Capability tokens — granting surface (COG-17) | `issue`, `verify` |
 | `scheduler` | Deferred grid-op invocation, one-shot or `repeat.every`; tracked fires are durable Jobs (`docs/GRID_SCHEDULER.md`) | `schedule`, `cancel`, `trigger`, `list` |
 | `auth` | Authentication ops | login/token flows |
+| `oauth` | Connected accounts — OAuth 2.0 grants held for users; `http:*` attaches tokens via `bearerSecret: "oauth/<provider>"` | `connect`, `status`, `disconnect` |
 | `user` | Explicit user registration and discovery (arbitrary DIDs; venue-managed did:web usernames) | `create`, `info`, `list` |
 | `venue` | Venue administration — runtime adapter/module lifecycle and process restart (venue-owned; `docs/CONFIG.md`) | `adapters`, `adapter/enable`, `adapter/disable`, `adapter/configure`, `module/load`, `module/unload`, `restart` |
 | `test` | Testing | `echo`, `delay`, `fail`, `never`, `random`, `chat`, `pause`, `taskComplete` |
@@ -133,6 +134,7 @@ Base path: `/api/v1/`
 | `/jobs/{id}/{cancel,pause,resume,delete}` | PUT | Lifecycle control (pause/resume are adapter opt-in → 409 otherwise) |
 | `/jobs/{id}/sse` | GET | Server-sent job updates (closes on terminal) |
 | `/.well-known/did.json` | GET | Venue DID document (#167) |
+| `/auth/connect/{provider}/callback` | GET | OAuth connection callback — the provider redirects the user here after approval (`adapters.oauth`; not `/api/v1`) |
 
 MCP endpoint at `/mcp`; A2A is opt-in with an `a2a` config block.
 

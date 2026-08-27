@@ -1,5 +1,6 @@
 package covia.adapter;
 
+import java.io.IOException;
 import java.net.InetAddress;
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -492,8 +493,11 @@ public class HTTPAdapter extends AAdapter {
 					throw new IllegalArgumentException(
 						"Specify Authorization in either secretHeaders or bearerSecret, not both");
 				}
-				putHeader(outHeaders, "Authorization",
-					"Bearer " + resolveSecret(bearerSecret, ctx, "bearerSecret"));
+				String ref = bearerSecret.toString();
+				String bearer = ref.startsWith(TokenSource.PREFIX)
+					? connectionToken(ctx, ref.substring(TokenSource.PREFIX.length()))
+					: resolveSecret(bearerSecret, ctx, "bearerSecret");
+				putHeader(outHeaders, "Authorization", "Bearer " + bearer);
 			}
 
 			if (!hasHeader(outHeaders, USER_AGENT_HEADER)) {
@@ -607,6 +611,20 @@ public class HTTPAdapter extends AAdapter {
 			throw new IllegalArgumentException(field + " must be an object");
 		}
 		return (AMap<AString, ACell>) map;
+	}
+
+	/** {@code bearerSecret: "oauth/<provider>"} — a fresh access token for the caller's connected account. */
+	private String connectionToken(RequestContext ctx, String provider) {
+		TokenSource source = (engine != null) ? engine.findAdapter(TokenSource.class) : null;
+		if (source == null) {
+			throw new IllegalStateException("bearerSecret \"oauth/" + provider
+				+ "\" needs the oauth adapter, which is not registered on this venue");
+		}
+		try {
+			return source.accessToken(ctx, provider);
+		} catch (IOException e) {
+			throw new IllegalArgumentException("Could not obtain an access token for " + provider + ": " + e.getMessage());
+		}
 	}
 
 	private String resolveSecret(AString reference, RequestContext ctx, String field) {
