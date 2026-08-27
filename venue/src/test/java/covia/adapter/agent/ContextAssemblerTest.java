@@ -338,8 +338,20 @@ public class ContextAssemblerTest {
 		write("w/rules", Strings.create("Rule 1: validate all inputs"));
 		AMap<AString, ACell> config = Maps.of(K_CONTEXT, Vectors.of((ACell) Strings.create("w/rules")));
 		Prompt p = ContextAssembler.assemble(spec(config));
-		assertTrue(allContent(p).contains("[Context: w/rules]\nRule 1: validate all inputs"), allContent(p));
-		assertEquals(2, p.marks().get(ContextAssembler.Band.LIVE), "the entry is in the live surface");
+		// Loaded content is data: a tool exchange the venue made, behind one
+		// user marker — head, marker, call, result, then the conversation.
+		assertEquals("user", role(p.messages().get(1)));
+		assertEquals(ContextAssembler.LOAD_CONTEXT_REQUEST, content(p.messages().get(1)), "the request the exchanges answer");
+		assertEquals("assistant", role(p.messages().get(2)));
+		ACell call = RT.getIn(p.messages().get(2), "toolCalls", 0);
+		assertEquals("loaded_context", RT.getIn(call, "name").toString());
+		assertEquals("w/rules", RT.getIn(call, "arguments", "key").toString());
+		assertEquals("w/rules", RT.getIn(call, "arguments", "ref").toString());
+		assertEquals("config.context", RT.getIn(call, "arguments", "from").toString());
+		assertEquals("tool", role(p.messages().get(3)));
+		assertEquals("Rule 1: validate all inputs", content(p.messages().get(3)));
+		assertEquals(RT.getIn(call, "id"), RT.getIn(p.messages().get(3), "id"), "result answers the call");
+		assertEquals(4, p.marks().get(ContextAssembler.Band.LIVE), "the exchange is in the live surface");
 	}
 
 	@Test
@@ -449,10 +461,17 @@ public class ContextAssemblerTest {
 
 	@Test
 	public void testSkillEntryRendersBodyAndContext() {
-		String all = allContent(Loads.elements(engine, ctx, alphaSkillLoads(), Labels.BRACKET));
+		Loads.Snapshot snap = Loads.resolve(engine, ctx, alphaSkillLoads(), java.util.Set.of(), Labels.BRACKET);
+		String all = allContent(snap.elements());
 		assertTrue(all.contains("[Skill: alpha — w/skills/alpha]\n## Alpha\nDo the thing."),
 			"body renders verbatim under its label, the path being its unload key: " + all);
-		assertTrue(all.contains("[Context: Alpha notes]\nAlpha extra context"), all);
+		// The skill's own context entry is data it brings along: an exchange from the skill.
+		assertEquals(2, snap.exchanges().count());
+		ACell call = RT.getIn(snap.exchanges().get(0), "toolCalls", 0);
+		assertEquals("skill:alpha", RT.getIn(call, "arguments", "from").toString());
+		assertEquals("Alpha notes", RT.getIn(call, "arguments", "label").toString());
+		assertEquals("w/skills/alpha", RT.getIn(call, "arguments", "key").toString(), "unloads with the skill");
+		assertEquals("Alpha extra context", content(snap.exchanges().get(1)));
 	}
 
 	@Test
@@ -517,8 +536,11 @@ public class ContextAssemblerTest {
 		AMap<AString, ACell> loads = Maps.of(Strings.create("w/data"), Maps.of(
 			Strings.create("budget"), CVMLong.create(800),
 			Strings.create("label"), Strings.create("Test Data")));
-		String all = allContent(Loads.elements(engine, ctx, loads, Labels.BRACKET));
-		assertTrue(all.contains("w/data") && all.contains("payload-here"), all);
+		AVector<ACell> exchanges = Loads.resolve(engine, ctx, loads, java.util.Set.of(), Labels.BRACKET).exchanges();
+		ACell call = RT.getIn(exchanges.get(0), "toolCalls", 0);
+		assertEquals("w/data", RT.getIn(call, "arguments", "key").toString(), "the path is the call's key");
+		assertEquals("config.loads", RT.getIn(call, "arguments", "from").toString());
+		assertEquals("payload-here", content(exchanges.get(1)));
 	}
 
 	@Test
@@ -594,10 +616,29 @@ public class ContextAssemblerTest {
 			Fields.STATUS, Strings.create("COMPLETE"),
 			Fields.OUTPUT, Strings.create("result data")));
 		Prompt p = ContextAssembler.assemble(spec(null, null, pending, null, true));
-		ACell results = p.messages().get(1);
-		assertEquals("user", role(results));
-		assertTrue(content(results).startsWith("[Pending job results]"), content(results));
-		assertTrue(content(results).contains("abc123") && content(results).contains("result data"));
+		// A result is data: request, one call, one listing as the tool result
+		// — head, request, call, result, notices.
+		assertEquals(5, p.messages().count(), allContent(p));
+		assertEquals("user", role(p.messages().get(1)));
+		assertEquals(ContextAssembler.JOB_RESULTS_REQUEST, content(p.messages().get(1)));
+		assertEquals("assistant", role(p.messages().get(2)));
+		ACell call = RT.getIn(p.messages().get(2), "toolCalls", 0);
+		assertEquals("get_job_results", RT.getIn(call, "name").toString());
+		assertEquals(0, RT.ensureMap(RT.getIn(call, "arguments")).count(), "no arguments — the listing is the answer");
+		assertEquals("tool", role(p.messages().get(3)));
+		assertEquals("job abc123 COMPLETE:\nresult data", content(p.messages().get(3)));
+		assertEquals(RT.getIn(call, "id"), RT.getIn(p.messages().get(3), "id"));
+		assertNull(RT.getIn(p.messages().get(3), "isError"), "a failed job is data about the job, not a failed fetch");
+
+		// Every job once, with its reason when it did not complete — and a note when none was recorded.
+		AVector<ACell> mixed = Vectors.of(
+			(ACell) Maps.of(Fields.JOB_ID, Strings.create("def456"), Fields.STATUS, Strings.create("FAILED"),
+				Fields.ERROR, Strings.create("upstream returned 503")),
+			(ACell) Maps.of(Fields.JOB_ID, Strings.create("ghi789"), Fields.STATUS, Strings.create("CANCELLED")));
+		Prompt q = ContextAssembler.assemble(spec(null, null, mixed, null, true));
+		assertEquals(5, q.messages().count(), "still one call, one result");
+		assertEquals("job def456 FAILED: upstream returned 503\n\njob ghi789 CANCELLED — no reason recorded",
+			content(q.messages().get(3)));
 	}
 
 	@Test

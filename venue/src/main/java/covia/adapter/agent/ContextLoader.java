@@ -138,9 +138,30 @@ public class ContextLoader {
 	 * the entry cannot be resolved and is not required.
 	 */
 	public ACell resolveEntry(ACell entry, RequestContext ctx) {
-		if (entry instanceof AString s) {
-			return resolveStringEntry(s, ctx);
-		} else if (entry instanceof AMap) {
+		Resolved r = resolveValue(entry, ctx);
+		if (r == null) return null;
+		return r.error() ? errorMessage(r.label(), r.content()) : systemMessage(r.label(), r.content());
+	}
+
+	/**
+	 * A resolved entry as a value: its label, its rendered content — or the
+	 * failure reason when {@code error} — and the provenance a renderer may
+	 * show: the entry's source in its own terms ({@code ref}, {@code op} +
+	 * {@code input}, {@code job} + {@code path}, or {@code source: text}).
+	 */
+	public record Resolved(String label, String content, boolean error, AMap<AString, ACell> provenance) {}
+
+	private static final AString K_SOURCE = Strings.intern("source");
+	private static final AString SOURCE_TEXT = Strings.intern("text");
+
+	/**
+	 * Resolves one entry to a value — null when absent — for a renderer that
+	 * shapes it (a tool exchange, AGENT_CONTEXT.md §5.5). {@link #resolveEntry}
+	 * is the same resolution shaped as a system message.
+	 */
+	public Resolved resolveValue(ACell entry, RequestContext ctx) {
+		if (entry instanceof AString s) return resolveStringEntry(s, ctx);
+		if (entry instanceof AMap) {
 			@SuppressWarnings("unchecked")
 			AMap<AString, ACell> map = (AMap<AString, ACell>) entry;
 			return resolveMapEntry(map, ctx);
@@ -148,25 +169,36 @@ public class ContextLoader {
 		return null;
 	}
 
+	private Resolved resolved(String label, String content, AMap<AString, ACell> provenance) {
+		resolution = Resolution.RESOLVED;
+		return new Resolved(label, content, false, provenance);
+	}
+
+	private Resolved failed(String label, String reason, AMap<AString, ACell> provenance) {
+		resolution = Resolution.UNAVAILABLE;
+		return new Resolved(label, reason, true, provenance);
+	}
+
 	/**
 	 * Resolves a string context entry. Interprets as workspace path, asset
 	 * reference, or literal text based on prefix.
 	 */
-	ACell resolveStringEntry(AString ref, RequestContext ctx) {
+	Resolved resolveStringEntry(AString ref, RequestContext ctx) {
 		String label = deriveLabel(ref.toString());
+		String str = ref.toString();
+		AMap<AString, ACell> provenance = (isNamespacePath(str) || isAssetReference(str))
+			? Maps.of(K_REF, ref) : Maps.of(K_SOURCE, SOURCE_TEXT);
 		try {
 			String content = resolveReference(ref, ctx);
 			if (content == null) {
 				resolution = Resolution.ABSENT;
 				return null;                                // absent/empty → skip
 			}
-			resolution = Resolution.RESOLVED;
-			return systemMessage(label, content);
+			return resolved(label, content, provenance);
 		} catch (RuntimeException e) {
 			// String entries carry no `required` flag — surface the failure
 			// visibly so the LLM knows this context source is broken.
-			resolution = Resolution.UNAVAILABLE;
-			return errorMessage(label, rootMessage(e));
+			return failed(label, rootMessage(e), provenance);
 		}
 	}
 
@@ -231,10 +263,10 @@ public class ContextLoader {
 		throw new IllegalArgumentException("entry declares none of ref, text, op, job");
 	}
 
-	ACell resolveMapEntry(AMap<AString, ACell> map, RequestContext ctx) {
+	Resolved resolveMapEntry(AMap<AString, ACell> map, RequestContext ctx) {
 		AString label = RT.ensureString(map.get(K_LABEL));
 		boolean required = convex.core.data.prim.CVMBool.TRUE.equals(map.get(K_REQUIRED));
-		// Absent until a builder says otherwise: the message builders record
+		// Absent until a value says otherwise: resolved() / failed() record
 		// RESOLVED / UNAVAILABLE, so a null return here reads as absent.
 		resolution = Resolution.ABSENT;
 
@@ -254,23 +286,24 @@ public class ContextLoader {
 		AString text = RT.ensureString(map.get(K_TEXT));
 		if (text != null) {
 			String labelStr = (label != null) ? label.toString() : null;
-			return systemMessage(labelStr, text.toString());
+			return resolved(labelStr, text.toString(), Maps.of(K_SOURCE, SOURCE_TEXT));
 		}
 
 		// Reference entry
 		AString ref = RT.ensureString(map.get(K_REF));
 		if (ref != null) {
 			String labelStr = (label != null) ? label.toString() : deriveLabel(ref.toString());
+			AMap<AString, ACell> provenance = Maps.of(K_REF, ref);
 			try {
 				String content = resolveReference(ref, ctx);
 				if (content == null) {
 					if (required) throw new RuntimeException("Required context entry not found: " + ref);
 					return null;                          // absent/empty → skip
 				}
-				return systemMessage(labelStr, content);
+				return resolved(labelStr, content, provenance);
 			} catch (RuntimeException e) {
 				if (required) throw e;
-				return errorMessage(labelStr, rootMessage(e));   // errored → visible
+				return failed(labelStr, rootMessage(e), provenance);   // errored → visible
 			}
 		}
 
@@ -424,8 +457,10 @@ public class ContextLoader {
 	/**
 	 * Resolves a grid operation entry by invoking the operation.
 	 */
-	ACell resolveOpEntry(AString op, ACell input, AString label, boolean required, RequestContext ctx) {
+	Resolved resolveOpEntry(AString op, ACell input, AString label, boolean required, RequestContext ctx) {
 		String labelStr = (label != null) ? label.toString() : "op:" + op;
+		AMap<AString, ACell> provenance = Maps.of(K_OP, op);
+		if (input != null) provenance = provenance.assoc(K_INPUT, input);
 		try {
 			// Context loading is framework infrastructure: entries are
 			// declared in the agent's config (visible to the caller before
@@ -438,21 +473,23 @@ public class ContextLoader {
 				if (required) throw new RuntimeException("Required context operation returned null: " + op);
 				return null;                              // produced nothing → skip
 			}
-			return systemMessage(labelStr, renderValue(result));
+			return resolved(labelStr, renderValue(result), provenance);
 		} catch (RuntimeException e) {
 			if (required) throw e;
-			return errorMessage(labelStr, rootMessage(e));   // errored → visible
+			return failed(labelStr, rootMessage(e), provenance);   // errored → visible
 		} catch (Exception e) {
 			if (required) throw new RuntimeException("Context operation failed: " + op + " — " + e.getMessage(), e);
-			return errorMessage(labelStr, rootMessage(e));   // errored → visible
+			return failed(labelStr, rootMessage(e), provenance);   // errored → visible
 		}
 	}
 
 	/**
 	 * Resolves a job result entry by reading the job output.
 	 */
-	ACell resolveJobEntry(AString jobId, AString path, AString label, boolean required, RequestContext ctx) {
+	Resolved resolveJobEntry(AString jobId, AString path, AString label, boolean required, RequestContext ctx) {
 		String labelStr = (label != null) ? label.toString() : "Job " + jobId;
+		AMap<AString, ACell> provenance = Maps.of(K_JOB, jobId);
+		if (path != null) provenance = provenance.assoc(K_PATH, path);
 		try {
 			AMap<AString, ACell> jobData = engine.jobs().getJobData(
 				convex.core.data.Blob.fromHex(jobId.toString()), ctx);
@@ -481,10 +518,10 @@ public class ContextLoader {
 				return null;
 			}
 
-			return systemMessage(labelStr, renderValue(output));
+			return resolved(labelStr, renderValue(output), provenance);
 		} catch (RuntimeException e) {
 			if (required) throw e;
-			return errorMessage(labelStr, rootMessage(e));   // errored → visible
+			return failed(labelStr, rootMessage(e), provenance);   // errored → visible
 		}
 	}
 

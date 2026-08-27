@@ -729,7 +729,11 @@ public class TestAdapter extends AAdapter {
                     && content.toString().contains("generic context lifecycle")) {
                 genericContextLifecycle = true;
             }
-            if (role != null && "system".equals(role.toString()) && content != null
+            // Loaded content arrives as a loaded_context tool result (AGENT_CONTEXT.md §5.5).
+            AString msgName = RT.ensureString(RT.getIn(msg, "name"));
+            boolean loadedResult = role != null && "tool".equals(role.toString())
+                    && msgName != null && "loaded_context".equals(msgName.toString());
+            if ((loadedResult || (role != null && "system".equals(role.toString()))) && content != null
                     && content.toString().contains("IMMEDIATE_CONTEXT_MARKER")) {
                 immediateContextMarker = true;
             }

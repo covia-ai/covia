@@ -25,32 +25,38 @@ import covia.venue.RequestContext;
 
 /**
  * The loads phase of assembly (AGENT_CONTEXT.md §4): the effective loads
- * chain resolved once per inference into the elements the model sees, the
- * tools those loads contribute, and the dispatch routes of those tools —
- * together, so a caller can never refresh one without the others.
+ * chain resolved once per inference into what the model sees, the tools
+ * those loads contribute, and the dispatch routes of those tools — together,
+ * so a caller can never refresh one without the others.
  *
  * <p><b>Entry shape.</b> A loads entry is {@code key → spec}. By default the
  * key is the reference the entry renders (a lattice path, an asset, a
  * content ref). A spec may instead declare its own source — exactly one of
  * {@code ref}, {@code text}, {@code op} (+ {@code input}) or {@code job}
  * (+ {@code path}) — in which case the key is just the entry's identity: the
- * label its header shows and the argument {@code context_unload} takes. The
- * forms are the entry grammar of §6.2; a loads tier is the same grammar keyed
- * for unloading.</p>
+ * argument {@code context_unload} takes. The forms are the entry grammar of
+ * §6.2; a loads tier is the same grammar keyed for unloading.</p>
+ *
+ * <p><b>Shape in the prompt.</b> A skill is instruction and renders as a
+ * system element. Everything else a load brings in is data — the agent's
+ * own workspace included — and renders as a <i>tool exchange</i>
+ * ({@link ContextAssembler#exchange}): a {@code loaded_context} call naming
+ * the key, the source and where it was declared, and the tool result
+ * carrying the content. A skill's own context entries render the same way,
+ * from the skill.</p>
  *
  * <p><b>Placement.</b> An entry is <i>volatile</i> when it declares
  * {@code volatile: true}, or is an {@code op} entry and does not declare
- * {@code volatile: false}. Volatile elements render in the tail, after the
+ * {@code volatile: false}. Volatile exchanges render in the tail, after the
  * conversation, so their per-inference changes bust only themselves; every
- * other element renders in the live surface. A volatile element also sits
+ * other exchange renders in the live surface. A volatile result also sits
  * between the latest input and the reply and is re-sent uncached every
- * inference, so a non-skill one renders <b>within its budget whatever its
- * shape</b>: a structured value through the explorer as always, a string cut
- * at the budget with a visible trailer. A long current-state view belongs in
- * a tool call, not a volatile load. Within a band, elements render
- * in load order — oldest first, undated (configured) entries before dated
- * ones — so a new load appends after everything already in context instead
- * of landing wherever its key hashes.</p>
+ * inference, so it renders <b>within its budget whatever its shape</b>: a
+ * structured value through the explorer as always, a string cut at the
+ * budget with a visible trailer. Within a band, entries render in load order
+ * — oldest first, undated (configured) entries before dated ones — so a new
+ * load appends after everything already in context instead of landing
+ * wherever its key hashes.</p>
  *
  * <p>The snapshot is ephemeral: resolved immediately before every provider
  * call under the agent's capability-narrowed authority, never persisted.</p>
@@ -83,18 +89,30 @@ public final class Loads {
 	private static final AString[] SOURCE_KEYS = { K_REF, K_TEXT, K_OP, K_JOB };
 	private static final AString[] ENTRY_KEYS  = { K_REF, K_TEXT, K_OP, K_INPUT, K_JOB, K_PATH, K_REQUIRED };
 
-	/** One inference's view of the effective loads. */
-	public record Snapshot(AVector<ACell> elements, AVector<ACell> volatileElements, AVector<ACell> tools,
-			Map<String, AString> routes, AVector<ACell> diagnostics, AVector<ACell> toolProvenance) {
-		public static final Snapshot EMPTY = new Snapshot(null, null, null, null, null, null);
+	/**
+	 * One inference's view of the effective loads: the loaded skills as
+	 * system elements, every other live load as a tool exchange, the volatile
+	 * exchanges for the tail, and the tools the loads contribute.
+	 */
+	public record Snapshot(AVector<ACell> skillElements, AVector<ACell> exchanges,
+			AVector<ACell> volatileExchanges, AVector<ACell> tools, Map<String, AString> routes,
+			AVector<ACell> diagnostics, AVector<ACell> toolProvenance) {
+		public static final Snapshot EMPTY = new Snapshot(null, null, null, null, null, null, null);
 
 		public Snapshot {
-			elements = (elements != null) ? elements : Vectors.empty();
-			volatileElements = (volatileElements != null) ? volatileElements : Vectors.empty();
+			skillElements = (skillElements != null) ? skillElements : Vectors.empty();
+			exchanges = (exchanges != null) ? exchanges : Vectors.empty();
+			volatileExchanges = (volatileExchanges != null) ? volatileExchanges : Vectors.empty();
 			tools = (tools != null) ? tools : Vectors.empty();
 			routes = (routes != null) ? Map.copyOf(routes) : Map.of();
 			diagnostics = (diagnostics != null) ? diagnostics : Vectors.empty();
 			toolProvenance = (toolProvenance != null) ? toolProvenance : Vectors.empty();
+		}
+
+		/** The live surface in order: the skill elements, then the exchanges. */
+		@SuppressWarnings("unchecked")
+		public AVector<ACell> elements() {
+			return (AVector<ACell>) skillElements.concat(exchanges);
 		}
 	}
 
@@ -152,10 +170,9 @@ public final class Loads {
 	}
 
 	/**
-	 * The context entry a non-skill load renders through: the key itself (a
-	 * reference), or the map entry the spec declares — labelled with the key
-	 * unless the spec gives a label, so the element's header always carries
-	 * the unload key.
+	 * The context entry a non-skill load resolves through: the key itself (a
+	 * reference), or the map entry the spec declares — carrying the spec's
+	 * label when it gives one.
 	 */
 	static ACell entryFor(AString key, AMap<AString, ACell> spec) {
 		if (!declaresSource(spec)) return key;
@@ -165,7 +182,7 @@ public final class Loads {
 			if (v != null) entry = entry.assoc(k, v);
 		}
 		AString label = RT.ensureString(spec.get(K_LABEL));
-		return entry.assoc(K_LABEL, (label != null) ? label : key);
+		return (label != null) ? entry.assoc(K_LABEL, label) : entry;
 	}
 
 	/**
@@ -186,6 +203,11 @@ public final class Loads {
 		return (spec instanceof AMap<?, ?> m && m.get(K_TS) instanceof CVMLong l) ? l.longValue() : 0L;
 	}
 
+	/** Where an entry was declared: the agent tier is undated, a dynamic tier is stamped. */
+	private static String fromOf(AMap<AString, ACell> meta) {
+		return (meta.get(K_TS) == null) ? ContextAssembler.FROM_CONFIG_LOADS : ContextAssembler.FROM_LOADED;
+	}
+
 	// ========== Resolution ==========
 
 	/**
@@ -202,51 +224,55 @@ public final class Loads {
 		AVector<ACell> tools = ToolPalette.loadsToolDefs(
 			engine, ctx, toolLoads, fixedNames, routes, toolEntries);
 		Resolved resolved = resolveElements(engine, ctx, effectiveLoads, dialect);
-		return new Snapshot(resolved.live(), resolved.volatiles(), tools, routes,
+		return new Snapshot(resolved.skills(), resolved.exchanges(), resolved.volatiles(), tools, routes,
 			resolved.diagnostics(), vector(toolEntries));
 	}
 
 	/**
-	 * Renders every loads entry to its context messages. This is the single
-	 * place that knows about entry kinds:
+	 * The live surface every loads entry renders to — skill elements, then
+	 * exchanges — in load order. This is the single place that knows about
+	 * entry kinds:
 	 * <ul>
 	 *   <li><b>Skill entries</b> ({@code skill: true}): the skill re-resolves
-	 *       from the entry key and renders as a skill element plus its body,
-	 *       followed by the skill's own context entries. Failures are
-	 *       <b>visible</b> — a skill the agent loaded must not silently
-	 *       disappear. A skill reached under two addresses renders once
-	 *       (content-identity dedup).</li>
+	 *       from the entry key and renders as a system skill element plus its
+	 *       body; the skill's own context entries follow as exchanges from
+	 *       the skill. Failures are <b>visible</b> — a skill the agent loaded
+	 *       must not silently disappear. A skill reached under two addresses
+	 *       renders once (content-identity dedup).</li>
 	 *   <li><b>Everything else</b>: standard context-entry resolution of the
-	 *       key, or of the source the spec declares — absent → skipped,
-	 *       error → a visible unavailable element.</li>
+	 *       key, or of the source the spec declares, rendered as one tool
+	 *       exchange — absent → skipped, error → a tool error.</li>
 	 * </ul>
-	 * Returns the live-surface elements; the volatile ones are on the
-	 * {@link Snapshot} (or {@link #volatileElements}).
+	 * The volatile exchanges are on the {@link Snapshot} (or {@link #volatileElements}).
 	 */
 	public static AVector<ACell> elements(Engine engine, RequestContext ctx,
 			AMap<AString, ACell> loads, AString dialect) {
-		return resolveElements(engine, ctx, loads, dialect).live();
+		Resolved r = resolveElements(engine, ctx, loads, dialect);
+		return r.skills().concat(r.exchanges());
 	}
 
-	/** The elements that render in the tail — see {@link #isVolatile}. */
+	/** The exchanges that render in the tail — see {@link #isVolatile}. */
 	public static AVector<ACell> volatileElements(Engine engine, RequestContext ctx,
 			AMap<AString, ACell> loads, AString dialect) {
 		return resolveElements(engine, ctx, loads, dialect).volatiles();
 	}
 
-	private record Resolved(AVector<ACell> live, AVector<ACell> volatiles, AVector<ACell> diagnostics) {}
+	private record Resolved(AVector<ACell> skills, AVector<ACell> exchanges, AVector<ACell> volatiles,
+			AVector<ACell> diagnostics) {}
 
-	private record Element(AVector<ACell> messages, String status, boolean deduplicated) {}
+	private record Element(AVector<ACell> skill, AVector<ACell> exchanges, String status, boolean deduplicated) {}
 
 	@SuppressWarnings("unchecked")
 	private static Resolved resolveElements(Engine engine, RequestContext ctx,
 			AMap<AString, ACell> loads, AString dialect) {
-		AVector<ACell> live = Vectors.empty();
+		AVector<ACell> skills = Vectors.empty();
+		AVector<ACell> exchanges = Vectors.empty();
 		AVector<ACell> volatiles = Vectors.empty();
 		AVector<ACell> diagnostics = Vectors.empty();
-		if (loads == null || loads.count() == 0) return new Resolved(live, volatiles, diagnostics);
+		if (loads == null || loads.count() == 0) return new Resolved(skills, exchanges, volatiles, diagnostics);
 		ContextLoader loader = new ContextLoader(engine, dialect);
 		Set<convex.core.data.Hash> seenSkillIds = new HashSet<>();
+		long ordinal = 0;
 		for (Map.Entry<AString, ACell> entry : ordered(loads)) {
 			AString key = entry.getKey();
 			AMap<AString, ACell> meta = (AMap<AString, ACell>) entry.getValue();
@@ -254,12 +280,12 @@ public final class Loads {
 			loader.beginTrace(entryBudget);
 			boolean skill = Skills.isSkillEntry(meta);
 			boolean tail = isVolatile(meta);
-			Element resolved = element(engine, ctx, loader, key, meta, seenSkillIds, dialect);
+			Element resolved = element(engine, ctx, loader, key, meta, seenSkillIds, dialect, ordinal++);
 			boolean capped = false;
-			AVector<ACell> messages = resolved.messages();
+			AVector<ACell> messages = resolved.exchanges();
 			if (tail && !skill) {
 				// The tail is re-sent uncached every inference and sits between
-				// the input and the reply: a volatile element renders within its
+				// the input and the reply: a volatile result renders within its
 				// budget whatever its shape. Structured values already do (the
 				// explorer); strings are cut here with a visible trailer.
 				AVector<ACell> bounded = Vectors.empty();
@@ -272,12 +298,12 @@ public final class Loads {
 				messages = bounded;
 				volatiles = (AVector<ACell>) volatiles.concat(messages);
 			} else {
-				live = (AVector<ACell>) live.concat(messages);
+				skills = (AVector<ACell>) skills.concat(resolved.skill());
+				exchanges = (AVector<ACell>) exchanges.concat(messages);
 			}
 			long bytes = 0;
-			for (long i = 0; i < messages.count(); i++) {
-				bytes += ContextAssembler.bytes(messages.get(i));
-			}
+			for (long i = 0; i < resolved.skill().count(); i++) bytes += ContextAssembler.bytes(resolved.skill().get(i));
+			for (long i = 0; i < messages.count(); i++) bytes += ContextAssembler.bytes(messages.get(i));
 			diagnostics = diagnostics.conj(Maps.of(
 				Fields.REF, key,
 				K_KIND, Strings.create(skill ? "skill" : "load"),
@@ -288,40 +314,48 @@ public final class Loads {
 				K_TRUNCATED, CVMBool.create(loader.wasTruncated() || capped),
 				K_DEDUPLICATED, CVMBool.create(resolved.deduplicated())));
 		}
-		return new Resolved(live, volatiles, diagnostics);
+		return new Resolved(skills, exchanges, volatiles, diagnostics);
 	}
 
+	@SuppressWarnings("unchecked")
 	private static Element element(Engine engine, RequestContext ctx, ContextLoader loader,
 			AString key, AMap<AString, ACell> meta, Set<convex.core.data.Hash> seenSkillIds,
-			AString dialect) {
+			AString dialect, long ordinal) {
 		if (!Skills.isSkillEntry(meta)) {
-			ACell msg = loader.resolveEntry(entryFor(key, meta), ctx);
-			AVector<ACell> messages = (msg != null) ? Vectors.of(msg) : Vectors.empty();
-			return new Element(messages, loader.resolution().name().toLowerCase(), false);
+			ContextLoader.Resolved r = loader.resolveValue(entryFor(key, meta), ctx);
+			AVector<ACell> messages = (r != null)
+				? ContextAssembler.exchange(key, fromOf(meta), r, ordinal) : Vectors.empty();
+			return new Element(Vectors.empty(), messages, loader.resolution().name().toLowerCase(), false);
 		}
 		try {
 			Skills.ResolvedSkill skill = Skills.resolveRef(engine, ctx, key);
 			if (skill.id() != null && !seenSkillIds.add(skill.id())) {
-				return new Element(Vectors.empty(), "deduplicated", true);
+				return new Element(Vectors.empty(), Vectors.empty(), "deduplicated", true);
 			}
-			AVector<ACell> msgs = Vectors.of(
+			AVector<ACell> body = Vectors.of(
 				Skills.renderSkillMessage(dialect, skill.name(), key, skill.displayBody()));
-			if (skill.contextEntries().count() > 0) {
-				msgs = msgs.concat(loader.resolve(skill.contextEntries(), ctx));
+			// The skill's own context entries are data it brings along: exchanges from the skill.
+			AVector<ACell> exchanges = Vectors.empty();
+			String from = "skill:" + skill.name();
+			for (long i = 0; i < skill.contextEntries().count(); i++) {
+				ContextLoader.Resolved r = loader.resolveValue(skill.contextEntries().get(i), ctx);
+				if (r == null) continue;
+				exchanges = (AVector<ACell>) exchanges.concat(ContextAssembler.exchange(key, from, r, ordinal * 1000 + i));
 			}
-			return new Element(msgs, "resolved", false);
+			return new Element(body, exchanges, "resolved", false);
 		} catch (RuntimeException e) {
 			AString label = RT.ensureString(meta.get(AbstractLLMAdapter.K_LABEL));
 			return new Element(Vectors.of(Skills.skillErrorMessage(dialect,
 				(label != null) ? label.toString() : key.toString(), key,
-				ContextLoader.rootMessage(e))), "unavailable", false);
+				ContextLoader.rootMessage(e))), Vectors.empty(), "unavailable", false);
 		}
 	}
 
 	/**
-	 * A volatile element's message cut to its budget (UTF-8 bytes of content),
-	 * with one trailer naming what was left out and the two ways to get it.
-	 * The same message when it already fits. Never splits a surrogate pair.
+	 * A volatile result cut to its budget (UTF-8 bytes of content), with one
+	 * trailer naming what was left out and the two ways to get it. The same
+	 * message when it already fits, or when it carries no content (the call
+	 * half of an exchange). Never splits a surrogate pair.
 	 */
 	static ACell capped(ACell msg, long budget) {
 		AString content = RT.ensureString(RT.getIn(msg, AbstractLLMAdapter.K_CONTENT));

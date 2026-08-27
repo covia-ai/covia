@@ -107,14 +107,14 @@ The band is the *expected* change frequency. Content can be more volatile than i
 | 0 | Tool definitions | fixed head (loads-contributed: live surface) | — | The palette (§4): harness, configured, then loads-contributed tools. A parameter, not a message; every provider places it first (§3.2.3) |
 | 1 | Identity prompt | fixed head | `system` | `config.systemPrompt` or the default identity, plus one line of session identity |
 | 2 | Capability notice | fixed head | `system` | Declared `config.caps` — **only for an agent with tools** — so bounds are known before they are hit |
-| 3 | Pinned context | live surface | `system` | `config.context` entries (§6) — operator-owned, agent cannot drop |
-| 4 | Skills index | live surface | `system` | `[Skills]` — one line per discoverable skill (SKILLS.md §4.3) |
-| 5 | Loaded elements | live surface | `system` | Every effective load (§7) that is not volatile, in load order, each with its unload key |
+| 3 | Skills index | live surface | `system` | `[Skills]` — one line per discoverable skill (SKILLS.md §4.3) |
+| 4 | Loaded skills | live surface | `system` | Every loaded skill's body (§7), in load order, each with its unload key — the end of the system run |
+| 5 | Loaded context | live surface | `user`, then `assistant` / `tool` per entry | One plain request — *Load the context configured for this conversation.* — then every `config.context` entry and every non-volatile, non-skill load as a **tool exchange** answering it (§5.5): a `loaded_context` call naming its key, source and origin, and the result carrying the content |
 | 6 | Conversation | conversation | `user` / `assistant` / `tool` | The rendered frame(s) |
-| 7 | Pending results | conversation | `user` | Job results that arrived for this cycle |
+| 7 | Pending results | conversation | `user`, `assistant`, `tool` | Job results that arrived for this cycle: one request — *Get job results.* — one `get_job_results()` call, one result listing each job once (§5.7) |
 | 8 | Current input | conversation | `user` | The inbox message(s) driving this cycle |
 | 9 | Tool-loop messages | conversation | `assistant` / `tool` | Assistant/tool turns accumulated within this cycle |
-| 10 | Volatile loads | volatile tail | `system` | Every effective load declared `volatile` — an op entry by default (§5.5) |
+| 10 | Volatile loads | volatile tail | `assistant` / `tool` per entry | Every effective load declared `volatile` — an op entry by default — as tool exchanges (§5.5) |
 | 11 | Budget warning | volatile tail | `system` | **Only** when the budget is under pressure (§3.4) |
 | 12 | Current date | volatile tail | `system` | One line; changes daily |
 | 13 | Unavailable tools | volatile tail | `system` | Configured tools that did not resolve this cycle |
@@ -125,7 +125,7 @@ The *Role* column is the role a section emits — the role that is true of its c
 
 ### 3.2.1 The role rule
 
-Roles are **semantic**, not positional. `system` is what the venue, the operator or the runtime says — identity and reference, the working set, a notice, a diagnostic, a compaction summary. `user` is what has happened or must be acted on — pending results, the input, the goal, the empty-state signal. `assistant` and `tool` are the agent's own turns and their results. A section emits the role that is true of its content, and the stored conversation keeps it, so provenance survives. Nothing in assembly depends on the provider.
+Roles are **semantic**, not positional. `system` is what the venue, the operator or the runtime says *as instruction* — identity and reference, a loaded skill, a notice, a diagnostic, a compaction summary. `user` is what has happened or must be acted on — pending results, the input, the goal, the empty-state signal. `assistant` and `tool` are the agent's own turns and their results — and, marked as such, the calls the venue makes on the agent's behalf to bring loaded content in (§5.5). Loaded content is **data**, whoever owns it — the agent's own workspace included — and data never travels in the system channel: a provider-native tool result is the boundary models are trained to treat as data, which is the whole reason the venue loads it that way. A section emits the role that is true of its content, and the stored conversation keeps it, so provenance survives. Nothing in assembly depends on the provider.
 
 Where a `system` message that follows the conversation actually lands is provider-dependent, and model-dependent on top. Anthropic and Gemini have no system role in the message list — system content is a top-level parameter — so a client must do *something* with a late one, and the naive thing, hoisting it, is wrong: it is cached as part of the head, so a "tail" date or a compaction nudge busts the cached head on every inference, and a compaction summary leaves its place in the conversation. OpenAI-compatible APIs keep a late system message in place, with its meaning left to the chat template. Local models served through Ollama may honour only the leading one.
 
@@ -269,7 +269,7 @@ The lattice reference — namespace prefixes and addressing rules — is therefo
 Rendered only for an agent that **has tools** and declares `config.caps`. Capabilities bound what the agent can *do*; an agent with no tools can do nothing the notice would inform. With tools, stating the bounds up front saves the cycle an agent otherwise spends discovering them by hitting them, and the confusing denial that follows.
 
 ### 5.3 Pinned context
-`config.context` entries, resolved through the entry grammar of §6. Operator-owned: the agent may mask an entry for a conversation but cannot remove it.
+`config.context` entries, resolved through the entry grammar of §6 and rendered as tool exchanges (§5.5) with `from: config.context`. Operator-owned: the agent may mask an entry for a conversation but cannot remove it.
 
 Structured values are rendered as budget-bounded JSON5; any one entry is capped at a twentieth of the budget remaining when it renders (`max(MIN_ENTRY_BUDGET, remaining/20)`), so no single entry can consume the context. Strings render verbatim.
 
@@ -277,11 +277,13 @@ Structured values are rendered as budget-bounded JSON5; any one entry is capped 
 One line per discoverable skill, with `(loaded)` against those already in context. Resolved fresh each inference from the agent's effective sources. Absent entirely when the agent declares no skill sources. See SKILLS.md §4.3.
 
 ### 5.5 Loaded elements
-Every entry in the effective loads chain (§7), rendered through the same resolver as pinned context and re-read on every inference (§7.2). A skill-flagged entry renders `[Skill: <name> — <path>]` plus its body; any other renders `[Context: <label>]` plus its body (§1.1).
+Every entry in the effective loads chain (§7), rendered through the same resolver as pinned context and re-read on every inference (§7.2). A skill-flagged entry is instruction and renders as a system element, `[Skill: <name> — <path>]` plus its body (§1.1). **Everything else is data and renders as a tool exchange**: an `assistant` turn carrying one `loaded_context` call — not a callable tool — and the `tool` result carrying the content. The call's arguments are the provenance the model reasons with: `key` (the unload handle), `from` (`config.context`, `config.loads`, `loaded` for a session or frame load, or `skill:<name>` for a skill's own context entries), the source in its own terms (`ref` for a path or asset, `op` + `input`, `job` + `path`, or `source: text`), and the `label` when one was declared. A failure is a tool error (`Error: <label> unavailable: <reason>`), never a silent gap; an absent source produces no exchange at all.
+
+Why a tool exchange and not a system block: a provider-native tool result is the one boundary models are trained to treat as data, and the system channel is the one an injected instruction most wants to be in. The venue really did run that operation or read that path for this cycle, so the call is an honest record of it — prompt-only, never persisted as a turn, never counted in the cycle record; `agent:context` shows it with `source: load`. The live exchanges answer one plain user turn — *Load the context configured for this conversation.* — so the block is an ordinary cycle, request → calls → results, rather than calls from nowhere; it is also the leading `user` message a provider may require before an assistant tool call. It carries no label and no description: the calls that answer it say what was loaded and from where, and what the model should make of loaded data is prompt content, which is the operator's. Volatile exchanges (below) follow the input and need no request of their own.
 
 A loads entry is `key → spec`. By default the key **is** the entry's source — a lattice path, an asset, a content ref — and the spec carries only `budget`, `label`, `ts`, `skill`, `tools`, `skills`, `skillsets`. A spec may instead declare its own source, exactly one of `ref`, `text`, `op` + `input`, `job` + `path` — the map-entry grammar of §6.2 — in which case the key is simply the entry's identity. The loads tiers are therefore the same grammar as `config.context`, keyed so an entry can be unloaded; a note, a re-run listing or a job result can be pinned at the session tier by whoever minted the session, or by the agent through `context_load`.
 
-Each element carries its **unload key** in its header — the label defaults to the key, and a declared label replaces it only in the header. `context_unload` takes that key, and a skill is otherwise only ever named, so without this the key is invisible.
+Each element carries its **unload key**: a skill in its header, an exchange in its call's `key`. `context_unload` takes that key, and a skill is otherwise only ever named, so without this the key is invisible.
 
 **Placement.** Elements render in **load order** — undated (configured) entries first, then by `ts` — so loading appends after everything already in context; nothing already rendered moves. An element declared `volatile: true` — the default for an `op` entry, which re-runs every inference — renders in the **tail** (§3.2 section 10), after the conversation and every cache mark, so a result that changes each turn busts only itself; `volatile: false` pins an op result whose output is known to be stable into the live surface, where it caches. The band is chosen by declaration, never by observing the content. Declare a path load volatile when its value is likely to change during the conversation — a queue, a status, something the agent writes to.
 
@@ -300,7 +302,9 @@ The band is append-only **within a cycle**: every inference of a tool loop sees 
 Everything else in the band is an append. Segments and diagnostic turns are `system` turns in the stored conversation — authored by the runtime, in sequence — and the edge keeps them in place on every provider (§3.2.1).
 
 ### 5.7 Pending results
-Job results that completed for this cycle — the mechanism by which asynchronous work re-enters the conversation. Placed before the current input so that the input, the thing to act on, is closest to the reply.
+Job results that completed for this cycle — the mechanism by which asynchronous work re-enters the conversation. A result is data, so it arrives as every result does (§5.5): one plain request — *Get job results.* — one `get_job_results()` call, and one tool result listing each job once: its id and status, then its output (strings verbatim, structured values bounded) or, for a job that did not complete, its recorded `error`. One call rather than one per job — the ids would only be repeated, and a listing is the natural answer to the plural request; a failed job is data about that job, not a failed fetch, so the result is not a tool error. Placed before the current input so that the input, the thing to act on, is closest to the reply.
+
+The line this draws, once: **a result renders as a tool exchange; a request renders as a user turn.** Loaded context and job results are results. Tasks (§5.13) and inbox messages are requests from a principal — the user channel is theirs, with attribution.
 
 ### 5.8 Current input
 The inbox message(s) driving this cycle; goaltree has none — its goal rides in the task slot (§5.13). When there is neither input nor pending results, the **empty-state signal** takes the slot: one `user` line saying so, so the agent can act on its role or report idle. It is content, not padding — its role as the message that keeps a system-only request legal (§3.2.1) is a consequence, not its purpose.
@@ -370,7 +374,7 @@ The contract every entry obeys, in either role:
 
 ### 6.4 Rendering
 
-A **string renders verbatim** (markdown and newlines preserved). A **structured value renders as budget-bounded JSON5**. So an assemble op returns a string when exact formatting matters, a map or vector when a compact view is fine, and `null` to contribute nothing.
+A **string renders verbatim** (markdown and newlines preserved). A **structured value renders as budget-bounded JSON5**. So an assemble op returns a string when exact formatting matters, a map or vector when a compact view is fine, and `null` to contribute nothing. In pinned context and the loads tiers the rendered value is the content of a tool result (§5.5); `ContextLoader.resolveEntry` still shapes the same value as a labelled system message for callers that want one.
 
 ### 6.5 Asset resolution
 

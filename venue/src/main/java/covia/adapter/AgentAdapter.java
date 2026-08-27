@@ -3640,6 +3640,10 @@ public class AgentAdapter extends AAdapter {
 				Fields.JOB_ID, taskIdHex(jobId),
 				Fields.STATUS, (jobData != null) ? jobData.get(Fields.STATUS) : null,
 				payloadField, payload);
+			// A job that did not complete says why: the reason is what the
+			// agent needs to react to, not the status alone.
+			ACell error = (jobData != null) ? jobData.get(Fields.ERROR) : null;
+			if (error != null) info = info.assoc(Fields.ERROR, error);
 			if (snapshot != null) info = info.assoc(Fields.SNAPSHOT, snapshot);
 			resolved = resolved.conj(info);
 		}

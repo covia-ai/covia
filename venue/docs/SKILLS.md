@@ -341,7 +341,7 @@ Each skill-flagged entry in effective loads, per turn:
 
 1. Re-resolve the skill from its path.
 2. Inject one system message: `[Skill: <name> — <path>]` followed by the body **verbatim** (markdown preserved — the §6.4 rendering contract of AGENT_CONTEXT.md); a contentless (toolset) skill shows its description one-liner instead.
-3. Resolve the skill's `skill.context` entries through the standard context loader and inject each as a labelled `[Context: …]` message.
+3. Resolve the skill's `skill.context` entries through the standard context loader and render each as a tool exchange from the skill (`loaded_context` with `from: skill:<name>`, keyed by the skill's path so they unload with it) — the skill body is instruction, the context it brings along is data (AGENT_CONTEXT.md §5.5).
 4. Contribute the skill's tools to the turn's palette (deduplicated against existing tool names).
 5. Contribute its immediate `skill.skills` refs to the next skills index and named lookup scope.
 

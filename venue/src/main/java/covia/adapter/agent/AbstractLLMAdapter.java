@@ -134,7 +134,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			K_ID, Maps.of(
 				K_TYPE, Strings.create("string"),
 				K_DESCRIPTION, Strings.create(
-					"Key for a text, op or job entry — shown in its header, passed to context_unload")),
+					"Key for a text, op or job entry — shown in its loaded_context call, passed to context_unload")),
 			Strings.intern("text"), Maps.of(
 				K_TYPE, Strings.create("string"),
 				K_DESCRIPTION, Strings.create("A note to keep in context, verbatim")),
@@ -175,7 +175,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			K_PATH, Maps.of(
 				K_TYPE, Strings.create("string"),
 				K_DESCRIPTION, Strings.create(
-					"The entry's key as shown in its header: the path you loaded, or the id you gave"))),
+					"The entry's key as shown in its loaded_context call: the path you loaded, or the id you gave"))),
 		K_REQUIRED, Vectors.of(K_PATH));
 
 	/**

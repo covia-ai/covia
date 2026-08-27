@@ -8,6 +8,15 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- Loaded context is data and renders as tool exchanges: every `config.context`
+  entry and every non-skill load is a venue-made `loaded_context` call naming
+  its key, source and origin, with the content as the tool result. Skills
+  stay system elements. A plain user request precedes the live exchanges, so
+  the block reads as request → calls → results. Completed job results arrive
+  the same way, as `get_job_results` exchanges.
+
 ### Added
 
 - `config.systemPrompt` may be a context entry — `{ref}` to a workspace path

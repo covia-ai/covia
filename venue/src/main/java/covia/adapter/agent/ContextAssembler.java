@@ -103,9 +103,12 @@ public final class ContextAssembler {
 	 * @param budget the model's context budget in bytes
 	 * @param labels the label dialect (§1.1)
 	 * @param tools the palette, in order: harness, configured, loads-contributed
-	 * @param loadElements the resolved loads (a {@link Loads.Snapshot}'s elements) — the live surface
+	 * @param loadElements the loaded skills (a {@link Loads.Snapshot}'s skill elements) — system
+	 *        messages in the live surface
+	 * @param loadExchanges every other live load as a tool exchange (a {@link Loads.Snapshot}'s
+	 *        exchanges) — the live surface's data, after the system run
 	 * @param volatileLoads the loads declared volatile (a {@link Loads.Snapshot}'s
-	 *        volatile elements) — rendered in the tail, after the conversation, never cached
+	 *        volatile exchanges) — rendered in the tail, after the conversation, never cached
 	 * @param effectiveLoads the effective loads chain, for the skills index markers
 	 * @param frames the frame stack; the last frame is active
 	 * @param pending job results that arrived for this cycle
@@ -129,6 +132,7 @@ public final class ContextAssembler {
 			boolean toolCalling,
 			AVector<ACell> tools,
 			AVector<ACell> loadElements,
+			AVector<ACell> loadExchanges,
 			AVector<ACell> volatileLoads,
 			AMap<AString, ACell> effectiveLoads,
 			AVector<ACell> frames,
@@ -149,6 +153,7 @@ public final class ContextAssembler {
 			// not the capability notice, not the skills index it could not act on.
 			tools = toolCalling ? orEmpty(tools) : Vectors.empty();
 			loadElements = orEmpty(loadElements);
+			loadExchanges = orEmpty(loadExchanges);
 			volatileLoads = orEmpty(volatileLoads);
 			frames = orEmpty(frames);
 			pending = orEmpty(pending);
@@ -158,14 +163,14 @@ public final class ContextAssembler {
 			if (now == null) now = LocalDate.now();
 		}
 
-		/** The shape before volatile loads existed: none. Runtimes set them with {@link #withLoads}. */
+		/** The shape before loads were split into skills, exchanges and volatile: none of them. Runtimes set them with {@link #withLoads}. */
 		public Spec(Engine engine, RequestContext ctx, RequestContext capsCtx, AMap<AString, ACell> config,
 				String sessionId, String headNotice, long budget, AString labels, boolean toolCalling,
 				AVector<ACell> tools, AVector<ACell> loadElements, AMap<AString, ACell> effectiveLoads,
 				AVector<ACell> frames, AVector<ACell> pending, AVector<ACell> input, boolean hasInput,
 				AVector<ACell> toolLoop, ACell task, AVector<ACell> unavailable, String notice, LocalDate now) {
 			this(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling,
-				tools, loadElements, null, effectiveLoads, frames, pending, input, hasInput,
+				tools, loadElements, null, null, effectiveLoads, frames, pending, input, hasInput,
 				toolLoop, task, unavailable, notice, now);
 		}
 
@@ -176,7 +181,7 @@ public final class ContextAssembler {
 				AVector<ACell> frames, AVector<ACell> pending, AVector<ACell> input, boolean hasInput,
 				AVector<ACell> toolLoop, ACell task, AVector<ACell> unavailable, String notice, LocalDate now) {
 			this(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, true,
-				tools, loadElements, null, effectiveLoads, frames, pending, input, hasInput,
+				tools, loadElements, null, null, effectiveLoads, frames, pending, input, hasInput,
 				toolLoop, task, unavailable, notice, now);
 		}
 
@@ -184,41 +189,41 @@ public final class ContextAssembler {
 			return (v != null) ? v : Vectors.empty();
 		}
 
-		/** The per-inference loads — live and volatile — and the palette that includes their tools. */
+		/** The per-inference loads — skills, live exchanges, volatile exchanges — and the palette that includes their tools. */
 		public Spec withLoads(Loads.Snapshot loads, AVector<ACell> tools, AMap<AString, ACell> effectiveLoads) {
 			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling,
-				tools, loads.elements(), loads.volatileElements(), effectiveLoads, frames, pending, input, hasInput,
-				toolLoop, task, unavailable, notice, now);
+				tools, loads.skillElements(), loads.exchanges(), loads.volatileExchanges(), effectiveLoads,
+				frames, pending, input, hasInput, toolLoop, task, unavailable, notice, now);
 		}
 
 		public Spec withToolLoop(AVector<ACell> toolLoop) {
 			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling,
-				tools, loadElements, volatileLoads, effectiveLoads, frames, pending, input, hasInput,
+				tools, loadElements, loadExchanges, volatileLoads, effectiveLoads, frames, pending, input, hasInput,
 				toolLoop, task, unavailable, notice, now);
 		}
 
 		public Spec withTask(ACell task) {
 			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling,
-				tools, loadElements, volatileLoads, effectiveLoads, frames, pending, input, hasInput,
+				tools, loadElements, loadExchanges, volatileLoads, effectiveLoads, frames, pending, input, hasInput,
 				toolLoop, task, unavailable, notice, now);
 		}
 
 		public Spec withFrames(AVector<ACell> frames) {
 			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling,
-				tools, loadElements, volatileLoads, effectiveLoads, frames, pending, input, hasInput,
+				tools, loadElements, loadExchanges, volatileLoads, effectiveLoads, frames, pending, input, hasInput,
 				toolLoop, task, unavailable, notice, now);
 		}
 
 		public Spec withNotice(String notice) {
 			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling,
-				tools, loadElements, volatileLoads, effectiveLoads, frames, pending, input, hasInput,
+				tools, loadElements, loadExchanges, volatileLoads, effectiveLoads, frames, pending, input, hasInput,
 				toolLoop, task, unavailable, notice, now);
 		}
 
 		/** A frame's view: its own config and head notice. */
 		public Spec forFrame(AMap<AString, ACell> config, String headNotice) {
 			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling,
-				tools, loadElements, volatileLoads, effectiveLoads, frames, pending, input, hasInput,
+				tools, loadElements, loadExchanges, volatileLoads, effectiveLoads, frames, pending, input, hasInput,
 				toolLoop, task, unavailable, notice, now);
 		}
 	}
@@ -385,10 +390,17 @@ public final class ContextAssembler {
 		p.add(head(spec));
 		p.mark(Band.HEAD);
 
-		// Live surface — re-resolved each inference; moves only when the working set moves
-		p.add(pinnedContext(spec, p.remaining()));
+		// Live surface — re-resolved each inference; moves only when the working
+		// set moves. The system run first (skills are instructions), then every
+		// other load as a tool exchange (loaded content is data), behind one
+		// user marker so a provider that requires a leading user turn has one
 		p.add(skillsIndex(spec));
 		p.add(spec.loadElements());
+		AVector<ACell> exchanges = (AVector<ACell>) pinnedContext(spec, p.remaining()).concat(spec.loadExchanges());
+		if (exchanges.count() > 0) {
+			p.add(loadedContextMarker(spec));
+			p.add(exchanges);
+		}
 		p.mark(Band.LIVE);
 
 		// Conversation — append-only within a cycle; marked where the cycle
@@ -483,7 +495,78 @@ public final class ContextAssembler {
 		if (entries == null) return Vectors.empty();
 		ContextLoader loader = new ContextLoader(spec.engine(), spec.labels());
 		loader.setCellExplorer(new CellExplorer((int) Math.max(MIN_ENTRY_BUDGET, remaining / 20)));
-		return loader.resolve(entries, spec.ctx());
+		AVector<ACell> out = Vectors.empty();
+		for (long i = 0; i < entries.count(); i++) {
+			ContextLoader.Resolved r = loader.resolveValue(entries.get(i), spec.ctx());
+			if (r == null) continue;                                    // absent → skipped
+			AString key = Strings.create((r.label() != null) ? r.label() : "context[" + i + "]");
+			out = (AVector<ACell>) out.concat(exchange(key, FROM_CONFIG_CONTEXT, r, i));
+		}
+		return out;
+	}
+
+	// ========== Loaded context as tool exchanges (§5.5) ==========
+
+	/** The tool every venue-loaded result is returned under. Not a callable tool. */
+	public static final String LOADED_CONTEXT_TOOL = "loaded_context";
+	public static final String FROM_CONFIG_CONTEXT = "config.context";
+	public static final String FROM_CONFIG_LOADS   = "config.loads";
+	public static final String FROM_LOADED         = "loaded";
+	static final AString K_KEY  = Strings.intern("key");
+	static final AString K_FROM = Strings.intern("from");
+	static final AString K_LABEL_ARG = AbstractLLMAdapter.K_LABEL;
+
+	/**
+	 * One loaded entry as a tool exchange the venue made on the agent's behalf:
+	 * an assistant turn carrying a single {@code loaded_context} call whose
+	 * arguments say exactly what was loaded — its {@code key} (the unload
+	 * handle), {@code from} (which tier or skill declared it), its source in
+	 * its own terms ({@code ref}, {@code op} + {@code input}, {@code job} +
+	 * {@code path}, or {@code source: text}) and its {@code label} — and the
+	 * tool result carrying the content, or the failure as a tool error. A
+	 * provider-native tool result is the boundary models are trained to treat
+	 * as data, which is why loaded content is never a system message.
+	 *
+	 * @param ordinal the entry's position among its siblings — part of the
+	 *        call id, so two entries under one key (a skill's context) differ
+	 */
+	public static AVector<ACell> exchange(AString key, String from, ContextLoader.Resolved r, long ordinal) {
+		AString id = Strings.create("ctx-" + Strings.create(key + "|" + from + "|" + ordinal)
+			.getHash().toHexString().substring(0, 12));
+		AMap<AString, ACell> args = Maps.of(K_KEY, key, K_FROM, Strings.create(from));
+		if (r.provenance() != null) {
+			for (var e : r.provenance().entrySet()) args = args.assoc(e.getKey(), e.getValue());
+		}
+		if (r.label() != null && !r.label().equals(key.toString())) {
+			args = args.assoc(K_LABEL_ARG, Strings.create(r.label()));
+		}
+		AMap<AString, ACell> call = Maps.of(
+			AbstractLLMAdapter.K_ID, id,
+			AbstractLLMAdapter.K_NAME, Strings.create(LOADED_CONTEXT_TOOL),
+			AbstractLLMAdapter.K_ARGUMENTS, args);
+		AMap<AString, ACell> ask = Maps.of(
+			K_ROLE, AbstractLLMAdapter.ROLE_ASSISTANT,
+			AbstractLLMAdapter.K_TOOL_CALLS, Vectors.of(call));
+		String content = r.error()
+			? "Error: " + ((r.label() != null) ? r.label() : key) + " unavailable: " + r.content()
+			: r.content();
+		AMap<AString, ACell> result = AbstractLLMAdapter.toolResultMessage(
+			id, LOADED_CONTEXT_TOOL, Strings.create(content));
+		return Vectors.of(ask, result);
+	}
+
+	/**
+	 * The one user turn before the live exchanges: the request they answer.
+	 * A tool call in a model's experience follows a request, so the venue
+	 * makes the request it then fulfils — which is also the leading user
+	 * message a provider may require before an assistant tool call. The
+	 * calls themselves say what was loaded and from where; this turn adds no
+	 * description and no policy.
+	 */
+	static final String LOAD_CONTEXT_REQUEST = "Load the context configured for this conversation.";
+
+	static AMap<AString, ACell> loadedContextMarker(Spec spec) {
+		return user(LOAD_CONTEXT_REQUEST);
 	}
 
 	/** One line per discoverable skill, {@code (loaded)} against those in context; absent without sources. */
@@ -519,7 +602,7 @@ public final class ContextAssembler {
 				out = attribution.append(out, turns.get(i), null);
 			}
 		}
-		if (spec.pending().count() > 0) out = out.conj(pendingResults(spec));
+		if (spec.pending().count() > 0) out = (AVector<ACell>) out.concat(pendingResults(spec));
 		for (long i = 0; i < spec.input().count(); i++) {
 			out = attribution.append(out, spec.input().get(i), ROLE_USER);
 		}
@@ -529,16 +612,48 @@ public final class ContextAssembler {
 		return out;
 	}
 
-	/** Job results that completed for this cycle — how asynchronous work re-enters the conversation. */
-	static AMap<AString, ACell> pendingResults(Spec spec) {
+	/** The tool the venue fetches completed job results with. Not a callable tool. */
+	public static final String GET_JOB_RESULTS_TOOL = "get_job_results";
+	static final String JOB_RESULTS_REQUEST = "Get job results.";
+	private static final AString JOB_RESULTS_CALL_ID = Strings.intern("job-results");
+
+	/**
+	 * Job results that completed for this cycle — how asynchronous work
+	 * re-enters the conversation. A result is data, so it arrives the way
+	 * every result does (§5.5): one plain request, one
+	 * {@code get_job_results()} call, and one tool result listing
+	 * each job once — its id, its status, then its output (strings verbatim,
+	 * structured values bounded) or, for a job that did not complete, its
+	 * recorded error. One call rather than one per job: the ids would only be
+	 * repeated, and the listing is the natural answer to the plural request.
+	 */
+	static AVector<ACell> pendingResults(Spec spec) {
+		ContextLoader loader = new ContextLoader(spec.engine(), spec.labels());
+		loader.setCellExplorer(new CellExplorer((int) Math.max(MIN_ENTRY_BUDGET, spec.budget() / 20)));
 		StringBuilder sb = new StringBuilder();
 		for (long i = 0; i < spec.pending().count(); i++) {
 			ACell p = spec.pending().get(i);
-			sb.append("- Job ").append(RT.ensureString(RT.getIn(p, Fields.JOB_ID)))
-			  .append(" status=").append(String.valueOf(RT.getIn(p, Fields.STATUS)))
-			  .append(" output=").append(String.valueOf(RT.getIn(p, Fields.OUTPUT))).append('\n');
+			AString jobId = RT.ensureString(RT.getIn(p, Fields.JOB_ID));
+			ACell status = RT.getIn(p, Fields.STATUS);
+			if (sb.length() > 0) sb.append("\n\n");
+			sb.append("job ").append(jobId).append(' ').append((status != null) ? status : "COMPLETE");
+			if (status == null || Strings.create("COMPLETE").equals(status)) {
+				ACell output = RT.getIn(p, Fields.OUTPUT);
+				sb.append(":\n").append((output != null) ? loader.renderValue(output) : "(no output)");
+			} else {
+				AString error = RT.ensureString(RT.getIn(p, Fields.ERROR));
+				sb.append((error != null) ? ": " + error : " — no reason recorded");
+			}
 		}
-		return Labels.message(ROLE_USER, spec.labels(), Labels.Kind.PENDING, sb.toString());
+		AMap<AString, ACell> ask = Maps.of(
+			K_ROLE, AbstractLLMAdapter.ROLE_ASSISTANT,
+			AbstractLLMAdapter.K_TOOL_CALLS, Vectors.of(Maps.of(
+				AbstractLLMAdapter.K_ID, JOB_RESULTS_CALL_ID,
+				AbstractLLMAdapter.K_NAME, Strings.create(GET_JOB_RESULTS_TOOL),
+				AbstractLLMAdapter.K_ARGUMENTS, Maps.empty())));
+		AMap<AString, ACell> result = AbstractLLMAdapter.toolResultMessage(
+			JOB_RESULTS_CALL_ID, GET_JOB_RESULTS_TOOL, Strings.create(sb.toString()));
+		return Vectors.of(user(JOB_RESULTS_REQUEST), ask, result);
 	}
 
 	/**
@@ -551,7 +666,7 @@ public final class ContextAssembler {
 		int pct = (spec.budget() > 0) ? (int) (100 * used / spec.budget()) : 0;
 		if (pct >= BUDGET_WARN_PCT) {
 			String text = pct + "% of the context budget used — unload paths you no longer need."
-				+ " Each loaded element shows its path in its header.";
+				+ " Each loaded element's key is in its loaded_context call.";
 			if (pct >= BUDGET_CRITICAL_PCT) text += " Compact the conversation before further work.";
 			parts.add(Labels.render(spec.labels(), Labels.Kind.BUDGET, text));
 		}

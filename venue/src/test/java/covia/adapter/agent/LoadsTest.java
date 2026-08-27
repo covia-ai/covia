@@ -3,6 +3,7 @@ package covia.adapter.agent;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -32,8 +33,9 @@ import covia.venue.TestEngine;
 
 /**
  * Loads entries beyond a path key — text, op and job sources (AGENT_CONTEXT.md
- * §6.2 at the loads tiers), their placement (volatile entries in the tail),
- * load-order rendering, and the kind-agnostic tools/skills/skillsets rule.
+ * §6.2 at the loads tiers) — rendered as tool exchanges that name their
+ * provenance; their placement (volatile entries in the tail); load-order
+ * rendering; and the kind-agnostic tools/skills/skillsets rule.
  */
 public class LoadsTest {
 
@@ -43,7 +45,6 @@ public class LoadsTest {
 
 	private static final AString K_BUDGET = Strings.intern("budget");
 	private static final AString K_TS     = Strings.intern("ts");
-	private static final AString K_LABEL  = Strings.intern("label");
 
 	@BeforeEach
 	public void setup(TestInfo info) {
@@ -73,6 +74,16 @@ public class LoadsTest {
 		return sb.toString();
 	}
 
+	/** The i-th exchange's call arguments (exchanges are assistant/tool pairs). */
+	private static ACell args(AVector<ACell> exchanges, int i) {
+		return RT.getIn(exchanges.get(2L * i), "toolCalls", 0, "arguments");
+	}
+
+	/** The i-th exchange's result content. */
+	private static String result(AVector<ACell> exchanges, int i) {
+		return content(exchanges.get(2L * i + 1));
+	}
+
 	private static AMap<AString, ACell> spec(Object... kvs) {
 		AMap<AString, ACell> m = Maps.of(K_BUDGET, CVMLong.create(500));
 		for (int i = 0; i < kvs.length; i += 2) {
@@ -80,6 +91,10 @@ public class LoadsTest {
 			m = m.assoc(Strings.create((String) kvs[i]), v);
 		}
 		return m;
+	}
+
+	private Loads.Snapshot resolve(AMap<AString, ACell> loads) {
+		return Loads.resolve(engine, ctx, loads, java.util.Set.of(), Labels.BRACKET);
 	}
 
 	// ========== declaredLoads: the entry forms ==========
@@ -127,59 +142,109 @@ public class LoadsTest {
 	}
 
 	@Test
-	public void testElementsRenderInLoadOrder() {
+	public void testExchangesRenderInLoadOrder() {
 		write("w/first", Strings.create("FIRST"));
 		write("w/second", Strings.create("SECOND"));
 		// Keys chosen so hash/key order would disagree with load order.
 		AMap<AString, ACell> loads = Maps.of(
 			Strings.create("w/second"), spec("ts", CVMLong.create(1)),
 			Strings.create("w/first"), spec("ts", CVMLong.create(2)));
-		String rendered = all(Loads.elements(engine, ctx, loads, Labels.BRACKET));
-		assertTrue(rendered.indexOf("SECOND") < rendered.indexOf("FIRST"), rendered);
+		AVector<ACell> exchanges = resolve(loads).exchanges();
+		assertEquals("SECOND", result(exchanges, 0));
+		assertEquals("FIRST", result(exchanges, 1));
 	}
 
-	// ========== entry forms at a loads tier ==========
+	// ========== the exchange: data, with its provenance ==========
 
 	@Test
-	public void testTextEntryRendersUnderItsKey() {
-		AMap<AString, ACell> loads = Maps.of(Strings.create("brief"), spec("text", "Answer in one line."));
-		AVector<ACell> elements = Loads.elements(engine, ctx, loads, Labels.BRACKET);
-		assertEquals(1, elements.count());
-		String text = content(elements.get(0));
-		assertTrue(text.startsWith("[Context: brief]"), "the header is the unload key: " + text);
-		assertTrue(text.contains("Answer in one line."), text);
-		// A declared label replaces the key in the header.
-		AMap<AString, ACell> labelled = Maps.of(Strings.create("brief"), spec("text", "x", "label", "House rules"));
-		assertTrue(content(Loads.elements(engine, ctx, labelled, Labels.BRACKET).get(0)).startsWith("[Context: House rules]"));
+	public void testPathLoadIsAnExchangeNamingItsSource() {
+		write("w/notes", Strings.create("note body"));
+		AVector<ACell> exchanges = resolve(Maps.of(Strings.create("w/notes"), spec())).exchanges();
+		assertEquals(2, exchanges.count(), "one call, one result");
+		assertEquals("assistant", RT.getIn(exchanges.get(0), "role").toString());
+		assertEquals("loaded_context", RT.getIn(exchanges.get(0), "toolCalls", 0, "name").toString());
+		assertEquals("w/notes", RT.getIn(args(exchanges, 0), "key").toString());
+		assertEquals("w/notes", RT.getIn(args(exchanges, 0), "ref").toString());
+		assertEquals("config.loads", RT.getIn(args(exchanges, 0), "from").toString(), "undated → agent tier");
+		assertEquals("tool", RT.getIn(exchanges.get(1), "role").toString());
+		assertEquals("note body", result(exchanges, 0), "bare content — no header, the call carries the key");
+		assertEquals(RT.getIn(exchanges.get(0), "toolCalls", 0, "id"), RT.getIn(exchanges.get(1), "id"));
+
+		// A dated entry was loaded in-session.
+		AVector<ACell> loaded = resolve(Maps.of(Strings.create("w/notes"), spec("ts", CVMLong.create(5)))).exchanges();
+		assertEquals("loaded", RT.getIn(args(loaded, 0), "from").toString());
+	}
+
+	@Test
+	public void testTextEntryCarriesItsKeyAndLabel() {
+		AVector<ACell> exchanges = resolve(Maps.of(Strings.create("brief"), spec("text", "Answer in one line."))).exchanges();
+		assertEquals("brief", RT.getIn(args(exchanges, 0), "key").toString());
+		assertEquals("text", RT.getIn(args(exchanges, 0), "source").toString());
+		assertNull(RT.getIn(args(exchanges, 0), "label"), "no label declared, the key is enough");
+		assertEquals("Answer in one line.", result(exchanges, 0));
+		// A declared label rides in the call too.
+		AVector<ACell> labelled = resolve(Maps.of(Strings.create("brief"), spec("text", "x", "label", "House rules"))).exchanges();
+		assertEquals("House rules", RT.getIn(args(labelled, 0), "label").toString());
 	}
 
 	@Test
 	public void testOpEntryIsVolatileByDefault() {
 		AMap<AString, ACell> loads = Maps.of(Strings.create("echoed"),
 			spec("op", "v/test/ops/echo", "input", Maps.of(Strings.create("ping"), Strings.create("pong"))));
-		Loads.Snapshot snap = Loads.resolve(engine, ctx, loads, java.util.Set.of(), Labels.BRACKET);
-		assertEquals(0, snap.elements().count(), "an op entry leaves the live surface");
-		assertEquals(1, snap.volatileElements().count());
-		String text = content(snap.volatileElements().get(0));
-		assertTrue(text.startsWith("[Context: echoed]"), text);
-		assertTrue(text.contains("pong"), text);
+		Loads.Snapshot snap = resolve(loads);
+		assertEquals(0, snap.exchanges().count(), "an op entry leaves the live surface");
+		assertEquals(2, snap.volatileExchanges().count());
+		ACell a = args(snap.volatileExchanges(), 0);
+		assertEquals("v/test/ops/echo", RT.getIn(a, "op").toString(), "the call names the operation");
+		assertEquals("pong", RT.getIn(a, "input", "ping").toString(), "and its input");
+		assertTrue(result(snap.volatileExchanges(), 0).contains("pong"));
 		assertEquals("tail", RT.getIn(snap.diagnostics().get(0), "band").toString());
 
 		// volatile: false pins an op result into the live surface instead.
 		AMap<AString, ACell> pinned = Maps.of(Strings.create("echoed"),
 			spec("op", "v/test/ops/echo", "input", Maps.of(), "volatile", CVMBool.FALSE));
-		Loads.Snapshot live = Loads.resolve(engine, ctx, pinned, java.util.Set.of(), Labels.BRACKET);
-		assertEquals(1, live.elements().count());
-		assertEquals(0, live.volatileElements().count());
+		Loads.Snapshot live = resolve(pinned);
+		assertEquals(2, live.exchanges().count());
+		assertEquals(0, live.volatileExchanges().count());
 	}
 
 	@Test
 	public void testPathEntryCanBeDeclaredVolatile() {
 		write("w/ticker", Strings.create("42"));
-		AMap<AString, ACell> loads = Maps.of(Strings.create("w/ticker"), spec("volatile", CVMBool.TRUE));
-		Loads.Snapshot snap = Loads.resolve(engine, ctx, loads, java.util.Set.of(), Labels.BRACKET);
-		assertEquals(0, snap.elements().count());
-		assertTrue(content(snap.volatileElements().get(0)).contains("42"));
+		Loads.Snapshot snap = resolve(Maps.of(Strings.create("w/ticker"), spec("volatile", CVMBool.TRUE)));
+		assertEquals(0, snap.exchanges().count());
+		assertEquals("42", result(snap.volatileExchanges(), 0));
+	}
+
+	@Test
+	public void testJobEntryRendersACompletedJobsOutput() {
+		Job job = engine.jobs().invokeOperation("v/test/ops/echo",
+			Maps.of(Strings.create("answer"), CVMLong.create(7)), ctx);
+		job.awaitResult(5000);
+		AVector<ACell> exchanges = resolve(Maps.of(Strings.create("earlier"),
+			spec("job", job.getID().toHexString(), "path", "answer"))).exchanges();
+		assertEquals(job.getID().toHexString(), RT.getIn(args(exchanges, 0), "job").toString());
+		assertEquals("answer", RT.getIn(args(exchanges, 0), "path").toString());
+		assertTrue(result(exchanges, 0).contains("7"));
+	}
+
+	@Test
+	public void testAbsentAndFailingEntriesKeepTheContract() {
+		AMap<AString, ACell> loads = Maps.of(
+			Strings.create("w/nothing-here"), spec(),
+			Strings.create("broken"), spec("op", "v/ops/no/such/op"));
+		Loads.Snapshot snap = resolve(loads);
+		assertEquals(0, snap.exchanges().count(), "absent → skipped quietly, no exchange at all");
+		assertEquals(2, snap.volatileExchanges().count(), "an erroring op entry is visible");
+		assertTrue(result(snap.volatileExchanges(), 0).startsWith("Error: "), "as a tool error");
+		assertTrue(result(snap.volatileExchanges(), 0).contains("unavailable"));
+		assertEquals(CVMBool.TRUE, RT.getIn(snap.volatileExchanges().get(1), "isError"));
+		for (long i = 0; i < snap.diagnostics().count(); i++) {
+			ACell d = snap.diagnostics().get(i);
+			String status = RT.getIn(d, "status").toString();
+			String ref = RT.getIn(d, "ref").toString();
+			assertEquals(ref.equals("broken") ? "unavailable" : "absent", status, d.toString());
+		}
 	}
 
 	@Test
@@ -188,13 +253,12 @@ public class LoadsTest {
 		// A verbatim string in the live surface stays verbatim (the renderValue contract)…
 		AMap<AString, ACell> live = Maps.of(Strings.create("note"),
 			spec("text", longText, "budget", CVMLong.create(600)));
-		assertTrue(content(Loads.elements(engine, ctx, live, Labels.BRACKET).get(0)).contains(longText));
+		assertEquals(longText, result(resolve(live).exchanges(), 0));
 		// …but the same entry declared volatile is cut at its budget with a visible trailer.
 		AMap<AString, ACell> tail = Maps.of(Strings.create("note"),
 			spec("text", longText, "budget", CVMLong.create(600), "volatile", CVMBool.TRUE));
-		Loads.Snapshot snap = Loads.resolve(engine, ctx, tail, java.util.Set.of(), Labels.BRACKET);
-		String text = content(snap.volatileElements().get(0));
-		assertTrue(text.startsWith("[Context: note]"), text);
+		Loads.Snapshot snap = resolve(tail);
+		String text = result(snap.volatileExchanges(), 0);
 		assertFalse(text.contains(longText), "not verbatim");
 		assertTrue(text.contains("more bytes beyond this entry's budget of 600"), text);
 		assertTrue(text.contains("reload it with a larger budget, or fetch the value with a tool"), text);
@@ -206,46 +270,15 @@ public class LoadsTest {
 		AMap<AString, ACell> opEntry = Maps.of(Strings.create("listing"),
 			spec("op", "v/test/ops/echo", "input", Maps.of(Strings.create("blob"), Strings.create("y".repeat(3000))),
 				"budget", CVMLong.create(300)));
-		String opText = content(Loads.resolve(engine, ctx, opEntry, java.util.Set.of(), Labels.BRACKET).volatileElements().get(0));
+		String opText = result(resolve(opEntry).volatileExchanges(), 0);
 		assertTrue(opText.contains("/* String, 3.0KB */"), opText);
 		assertFalse(opText.contains("more bytes beyond"), opText);
-		// A short volatile entry is untouched.
-		AMap<AString, ACell> small = Maps.of(Strings.create("note"),
-			spec("text", "short", "volatile", CVMBool.TRUE));
-		Loads.Snapshot fits = Loads.resolve(engine, ctx, small, java.util.Set.of(), Labels.BRACKET);
-		assertEquals("[Context: note]\nshort", content(fits.volatileElements().get(0)));
+
+		// A short volatile entry is untouched, and the call half carries no content to cut.
+		AMap<AString, ACell> small = Maps.of(Strings.create("note"), spec("text", "short", "volatile", CVMBool.TRUE));
+		Loads.Snapshot fits = resolve(small);
+		assertEquals("short", result(fits.volatileExchanges(), 0));
 		assertEquals(CVMBool.FALSE, RT.getIn(fits.diagnostics().get(0), "truncated"));
-	}
-
-	@Test
-	public void testJobEntryRendersACompletedJobsOutput() {
-		Job job = engine.jobs().invokeOperation("v/test/ops/echo",
-			Maps.of(Strings.create("answer"), CVMLong.create(7)), ctx);
-		job.awaitResult(5000);
-		AMap<AString, ACell> loads = Maps.of(Strings.create("earlier"),
-			spec("job", job.getID().toHexString(), "path", "answer"));
-		AVector<ACell> elements = Loads.elements(engine, ctx, loads, Labels.BRACKET);
-		assertEquals(1, elements.count());
-		String text = content(elements.get(0));
-		assertTrue(text.startsWith("[Context: earlier]"), text);
-		assertTrue(text.contains("7"), text);
-	}
-
-	@Test
-	public void testAbsentAndFailingEntriesKeepTheContract() {
-		AMap<AString, ACell> loads = Maps.of(
-			Strings.create("w/nothing-here"), spec(),
-			Strings.create("broken"), spec("op", "v/ops/no/such/op"));
-		Loads.Snapshot snap = Loads.resolve(engine, ctx, loads, java.util.Set.of(), Labels.BRACKET);
-		assertEquals(0, snap.elements().count(), "absent → skipped quietly");
-		assertEquals(1, snap.volatileElements().count(), "an erroring op entry is visible");
-		assertTrue(content(snap.volatileElements().get(0)).contains("unavailable"));
-		for (long i = 0; i < snap.diagnostics().count(); i++) {
-			ACell d = snap.diagnostics().get(i);
-			String status = RT.getIn(d, "status").toString();
-			String ref = RT.getIn(d, "ref").toString();
-			assertEquals(ref.equals("broken") ? "unavailable" : "absent", status, d.toString());
-		}
 	}
 
 	// ========== placement in the assembled prompt ==========
@@ -255,7 +288,7 @@ public class LoadsTest {
 		AMap<AString, ACell> loads = Maps.of(
 			Strings.create("brief"), spec("text", "STABLE-NOTE"),
 			Strings.create("fresh"), spec("op", "v/test/ops/echo", "input", Maps.of(Strings.create("k"), Strings.create("FRESH-RESULT"))));
-		Loads.Snapshot snap = Loads.resolve(engine, ctx, loads, java.util.Set.of(), Labels.BRACKET);
+		Loads.Snapshot snap = resolve(loads);
 		AVector<ACell> loop = Vectors.of(
 			(ACell) Maps.of("role", "assistant", "content", "", "toolCalls", Vectors.of(
 				Maps.of("id", "c1", "name", "covia_read", "arguments", "{}"))),
@@ -265,16 +298,34 @@ public class LoadsTest {
 			.withLoads(snap, Vectors.empty(), loads);
 		Prompt p = ContextAssembler.assemble(s);
 		AVector<ACell> m = p.messages();
-		// head, [Context: brief], "hi", assistant, tool, [Context: fresh], notices
-		assertEquals(7, m.count(), all(m));
-		assertTrue(content(m.get(1)).contains("STABLE-NOTE"), "stable entry in the live surface");
-		assertTrue(content(m.get(5)).contains("FRESH-RESULT"), "volatile entry after the tool loop");
-		assertTrue(content(m.get(6)).contains("Current date:"), "notices still last");
-		// The volatile element sits beyond every cache mark, so it busts only itself.
-		assertEquals(2, p.marks().get(ContextAssembler.Band.LIVE));
-		assertEquals(3, p.marks().get(ContextAssembler.Band.CONVERSATION));
-		assertEquals(5, p.marks().get(ContextAssembler.Band.TOOL_LOOP));
-		assertEquals(Vectors.of(CVMLong.create(2), CVMLong.create(4)), p.cacheMarks());
+		// head, marker, brief call, brief result, "hi", assistant, tool, fresh call, fresh result, notices
+		assertEquals(10, m.count(), all(m));
+		assertEquals("user", RT.getIn(m.get(1), "role").toString());
+		assertEquals(ContextAssembler.LOAD_CONTEXT_REQUEST, content(m.get(1)), "the request precedes the live exchanges");
+		assertEquals("STABLE-NOTE", content(m.get(3)), "stable entry in the live surface");
+		assertEquals("hi", content(m.get(4)));
+		assertTrue(content(m.get(8)).contains("FRESH-RESULT"), "volatile exchange after the tool loop");
+		assertTrue(content(m.get(9)).contains("Current date:"), "notices still last");
+		// The volatile exchange sits beyond every cache mark, so it busts only itself.
+		assertEquals(4, p.marks().get(ContextAssembler.Band.LIVE));
+		assertEquals(5, p.marks().get(ContextAssembler.Band.CONVERSATION));
+		assertEquals(7, p.marks().get(ContextAssembler.Band.TOOL_LOOP));
+		assertEquals(Vectors.of(CVMLong.create(4), CVMLong.create(6)), p.cacheMarks());
+	}
+
+	@Test
+	public void testNoMarkerWithoutLiveExchanges() {
+		// A volatile-only load follows the input, which is already a user turn: no marker.
+		AMap<AString, ACell> loads = Maps.of(Strings.create("fresh"),
+			spec("op", "v/test/ops/echo", "input", Maps.of(Strings.create("k"), Strings.create("v"))));
+		Spec s = new Spec(engine, ctx, null, null, null, null, 0, null, null, null, null,
+			null, null, Vectors.of((ACell) Strings.create("hi")), true, null, null, null, null, null)
+			.withLoads(resolve(loads), Vectors.empty(), loads);
+		AVector<ACell> m = ContextAssembler.assemble(s).messages();
+		// head, "hi", fresh call, fresh result, notices
+		assertEquals(5, m.count(), all(m));
+		assertEquals("hi", content(m.get(1)));
+		assertFalse(all(m).contains(ContextAssembler.LOAD_CONTEXT_REQUEST));
 	}
 
 	// ========== the kind-agnostic contribution rule ==========
@@ -294,7 +345,7 @@ public class LoadsTest {
 		assertEquals(1, index.size());
 		assertEquals("review", index.get(0).name());
 
-		Loads.Snapshot snap = Loads.resolve(engine, ctx, loads, java.util.Set.of(), Labels.BRACKET);
+		Loads.Snapshot snap = resolve(loads);
 		assertEquals(1, snap.tools().count(), "a plain load's tools join the palette");
 		assertEquals("load", RT.getIn(snap.toolProvenance().get(0), "source").toString());
 	}
@@ -306,7 +357,7 @@ public class LoadsTest {
 				"tools", Vectors.of(Strings.create("v/ops/covia/read"))),
 			Strings.create("earlier"), spec("text", "a", "ts", CVMLong.create(1),
 				"tools", Vectors.of(Strings.create("v/test/ops/echo"))));
-		Loads.Snapshot snap = Loads.resolve(engine, ctx, loads, java.util.Set.of(), Labels.BRACKET);
+		Loads.Snapshot snap = resolve(loads);
 		assertEquals(2, snap.tools().count());
 		assertEquals("test_echo", RT.getIn(snap.tools().get(0), "name").toString());
 		assertEquals("covia_read", RT.getIn(snap.tools().get(1), "name").toString());
@@ -345,8 +396,9 @@ public class LoadsTest {
 		assertFalse(Loads.isVolatile(scope.loads.get(Strings.create("pinned-listing"))));
 
 		// The stored specs are what a declared tier would hold — they render the same way.
-		AVector<ACell> live = Loads.elements(engine, ctx, scope.loads, Labels.BRACKET);
-		assertTrue(all(live).contains("[Context: brief]"), all(live));
+		AVector<ACell> live = resolve(scope.loads).exchanges();
+		assertTrue(all(live).contains("Keep it short."), all(live));
+		assertEquals("loaded", RT.getIn(args(live, 0), "from").toString(), "an agent load is dated");
 	}
 
 	@Test

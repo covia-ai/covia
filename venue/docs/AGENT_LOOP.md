@@ -329,7 +329,7 @@ The contract between level 1 and level 2:
 | `agent-id` | string | The agent's identifier. |
 | `state` | any | Current `state` from the agent record. Null on first run. |
 | `tasks` | vector | Inbound task data resolved from the `tasks` index (jobId, input, status). |
-| `pending` | vector | Outbound job data resolved from the `pending` index (jobId, status, result). |
+| `pending` | vector | Outbound job data resolved from the `pending` index (jobId, status, output, error when the job did not complete). |
 | `session` | map | The picked session record: `{id, parties, meta, c, history, pending}`. See AGENT_SESSIONS.md §6.1. |
 
 **Output:**
