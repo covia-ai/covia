@@ -171,14 +171,20 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 			|| (in.pending() != null && in.pending().count() > 0)
 			|| task != null;
 
+		// The loads ride in exactly as the tool loop sets them — skills, live
+		// exchanges and volatile exchanges via withLoads — so an inspected
+		// context matches a live inference by construction. The pre-split
+		// elements dropped every loads-derived exchange from inspection (#418).
+		AVector<ACell> offered = ToolPalette.merge(tools, loads.tools());
+		AMap<AString, ACell> effectiveLoads = ContextChain.effective(configLoads, sessionTier);
 		ContextAssembler.Spec spec = new ContextAssembler.Spec(
 			engine, ctx, capsCtx, config,
 			ContextAssembler.sessionHex(RT.getIn(in.session(), Fields.ID)), null,
 			profile.budget(), profile.labels(), profile.toolCalling(),
-			ToolPalette.merge(tools, loads.tools()), loads.elements(),
-			ContextChain.effective(configLoads, sessionTier),
+			offered, null, effectiveLoads,
 			sessionFramesOf(in.session()), in.pending(), in.messages(), hasInput, null, task,
-			palette.unavailable(), null, null);
+			palette.unavailable(), null, null)
+			.withLoads(loads, offered, effectiveLoads);
 		AVector<ACell> entries = Vectors.empty();
 		if (profile.toolCalling()) {
 			entries = (AVector<ACell>) ToolPalette.provenance(taskTools, "harness")

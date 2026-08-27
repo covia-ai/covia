@@ -14,6 +14,11 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   boundaries, inferences, tool calls, status changes) and
   `engine.agentEvents()` delivers the same ordered stream in-process (#394).
 
+### Fixed
+
+- `agent:context` shows loads-derived exchanges (live and volatile): both
+  harness previews now build the Spec exactly as a live inference does (#418).
+
 ### Changed
 
 - The Telegram agent skill now reveals a separate bot-management child for

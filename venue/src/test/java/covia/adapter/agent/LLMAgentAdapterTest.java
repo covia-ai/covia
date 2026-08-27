@@ -2741,4 +2741,30 @@ public class LLMAgentAdapterTest {
 		assertTrue(unknownMsg.startsWith("Error:"), unknownMsg);
 		assertFalse(unknownMsg.contains("harness tool"), unknownMsg);
 	}
+
+	// ========== agent:context includes loads-derived exchanges (#418) ==========
+
+	@Test
+	public void testContextIncludesVolatileLoadExchanges() {
+		// A config.loads op entry renders as a volatile exchange in the tail of
+		// a live inference; agent:context builds the same Spec, so it must show
+		// the exchange too (#418) — not merely report the entry resolved.
+		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(
+			Fields.AGENT_ID, "loads-context-agent",
+			Fields.CONFIG, Maps.of(
+				Fields.OPERATION, "v/ops/llmagent/chat",
+				"llmOperation", "v/test/ops/llm",
+				"loads", Maps.of("now", Maps.of(
+					"op", "v/test/ops/echo",
+					"input", Maps.of("ping", "pong-418"),
+					"budget", 2000,
+					"label", "now")))),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		AMap<AString, ACell> context = RT.ensureMap(engine.jobs().invokeOperation("v/ops/agent/context",
+			Maps.of(Fields.AGENT_ID, "loads-context-agent", Fields.MESSAGE, "what is the time?"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000));
+		AVector<ACell> messages = RT.ensureVector(context.get(Fields.MESSAGES));
+		assertTrue(messages != null && messages.toString().contains("pong-418"),
+			"the volatile op load's exchange must be in the inspected messages: " + messages);
+	}
 }

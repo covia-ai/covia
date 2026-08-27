@@ -1393,4 +1393,30 @@ public class GoalTreeAdapterTest {
 		assertFalse(err.toString().equals("This is plain text, not JSON."),
 			"Plain text response should not be accepted as complete: " + err);
 	}
+
+	// ========== agent:context includes loads-derived exchanges (#418) ==========
+
+	@Test
+	public void testContextIncludesVolatileLoadExchanges() {
+		// preview() must set the loads exactly as runFrame does (withLoads): a
+		// config.loads op entry renders as a volatile exchange in the tail of a
+		// live inference, and agent:context must show it too (#418).
+		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(
+			Fields.AGENT_ID, "loads-context-goal",
+			Fields.CONFIG, Maps.of(
+				Fields.OPERATION, "v/ops/goaltree/chat",
+				"llmOperation", "v/test/ops/llm",
+				"loads", Maps.of("now", Maps.of(
+					"op", "v/test/ops/echo",
+					"input", Maps.of("ping", "pong-418"),
+					"budget", 2000,
+					"label", "now")))),
+			ALICE).awaitResult(5000);
+		AMap<AString, ACell> context = RT.ensureMap(engine.jobs().invokeOperation("v/ops/agent/context",
+			Maps.of(Fields.AGENT_ID, "loads-context-goal", Fields.MESSAGE, "what is the time?"),
+			ALICE).awaitResult(5000));
+		AVector<ACell> messages = RT.ensureVector(context.get(Fields.MESSAGES));
+		assertTrue(messages != null && messages.toString().contains("pong-418"),
+			"the volatile op load's exchange must be in the inspected messages: " + messages);
+	}
 }

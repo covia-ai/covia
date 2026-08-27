@@ -358,12 +358,18 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		Loads.Snapshot loads = Loads.resolve(engine, capsCtx, indexLoads,
 			fixedToolNames(fixedTools), profile.labels());
 
+		// The loads ride in exactly as runFrame sets them — skills, live
+		// exchanges and volatile exchanges via withLoads — so an inspected
+		// context matches a live inference by construction. The pre-split
+		// elements dropped every loads-derived exchange from inspection (#418).
+		AVector<ACell> offered = ToolPalette.merge(fixedTools, loads.tools());
 		ContextAssembler.Spec spec = new ContextAssembler.Spec(
 			engine, ctx, capsCtx, l3Config,
 			ContextAssembler.sessionHex(RT.getIn(in.session(), Fields.ID)), null,
 			profile.budget(), profile.labels(), profile.toolCalling(),
-			ToolPalette.merge(fixedTools, loads.tools()), loads.elements(), indexLoads,
-			rootFrames, null, null, true, null, taskTools.message(), palette.unavailable(), null, null);
+			offered, null, indexLoads,
+			rootFrames, null, null, true, null, taskTools.message(), palette.unavailable(), null, null)
+			.withLoads(loads, offered, indexLoads);
 		Cycle cycle = new Cycle(l3Config, getLLMOperation(l3Config), palette.routes(), capsCtx, spec,
 			typedTools, toolCallTimeoutMs, outerLoads, taskTools);
 		AVector<ACell> entries = Vectors.empty();
