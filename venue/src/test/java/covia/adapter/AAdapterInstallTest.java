@@ -67,6 +67,26 @@ public class AAdapterInstallTest {
 			() -> adapter.probeInstall("/no/such/resource.json"));
 		assertTrue(ex.getMessage().contains("/no/such/resource.json"),
 			"the failure must name the broken resource, got: " + ex.getMessage());
+		assertTrue(ex.getMessage().contains(AAdapter.describeFailure(ex.getCause())),
+			"and say why: " + ex.getMessage());
+	}
+
+	@Test
+	public void testMalformedResourceFailureSaysWhy() {
+		// The venue refused to start on a skill JSON with an unescaped control
+		// character, and the only message was the resource path. The failure
+		// must carry the parser's reason too, so a one-line log tells the
+		// operator what to fix.
+		ProbeAdapter adapter = new ProbeAdapter();
+		adapter.engine = TestEngine.ENGINE;
+		IllegalStateException ex = assertThrows(IllegalStateException.class,
+			() -> adapter.probeInstall("/broken-asset.json"));
+		assertTrue(ex.getMessage().startsWith("Failed to install adapter asset from /broken-asset.json: "),
+			ex.getMessage());
+		assertTrue(ex.getMessage().contains(AAdapter.describeFailure(ex.getCause())),
+			"the cause's detail rides in the message: " + ex.getMessage());
+		assertTrue(ex.getMessage().length() > "Failed to install adapter asset from /broken-asset.json: ".length() + 5,
+			"the reason is not blank: " + ex.getMessage());
 	}
 
 	@Test

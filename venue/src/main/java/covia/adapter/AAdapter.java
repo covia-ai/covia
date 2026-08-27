@@ -166,7 +166,7 @@ public abstract class AAdapter {
 			// downgrades to a warning for test/debug scaffolding only.
 			if (engine == null || engine.config().isStrictAssets()) {
 				throw new IllegalStateException(
-					"Failed to install adapter asset from " + resourcePath, e);
+					"Failed to install adapter asset from " + resourcePath + ": " + describeFailure(e), e);
 			}
 			log.warn("Failed to install asset from {} (tolerated: strictAssets=false)", resourcePath, e);
 			return null;

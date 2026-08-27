@@ -31,6 +31,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   nothing applied (#422).
 - `http:*` header and query values may be numbers or booleans (`count: 10`), not
   only strings; a structured value is refused naming the field, not cast.
+- A venue that fails to start logs one line naming the venue and every cause
+  beneath the failure (an asset that will not parse names the resource and the
+  parse error) and exits with status 70, instead of a bare stack trace.
 
 ### Changed
 

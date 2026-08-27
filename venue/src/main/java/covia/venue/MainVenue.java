@@ -76,7 +76,21 @@ public class MainVenue {
 		List<VenueServer> servers=new ArrayList<>();
 		VenueProcess process = VenueProcess.create(args);
 		for (AMap<AString,ACell> venueConfig: venues) {
-			VenueServer server = VenueServer.launch(venueConfig);
+			VenueServer server;
+			try {
+				server = VenueServer.launch(venueConfig);
+			} catch (RuntimeException | Error e) {
+				// One line naming the venue and every cause beneath the failure,
+				// before the stack trace: a start-up failure is usually a config
+				// or packaging problem whose reason sits several exceptions down.
+				log.error("Venue '{}' failed to start: {}",
+					RT.getIn(venueConfig, Fields.NAME), describeStartupFailure(e), e);
+				for (VenueServer started : servers) {
+					try { started.close(); } catch (Exception ignored) { /* exiting anyway */ }
+				}
+				System.exit(70); // EX_SOFTWARE
+				return;
+			}
 			process.manage(server);
 			servers.add(server);
 		}
@@ -142,5 +156,26 @@ public class MainVenue {
 		configurator.setContext(context);
 		context.reset();
 		configurator.doConfigure(is);
+	}
+
+	/**
+	 * The failure and every distinct cause beneath it, outermost first —
+	 * {@code Failed to install adapter asset from /skills/http.json: ... —
+	 * caused by: Unexpected character at line 7}. A cause whose message the
+	 * layer above already carries is not repeated.
+	 */
+	static String describeStartupFailure(Throwable failure) {
+		StringBuilder sb = new StringBuilder();
+		String previous = null;
+		for (Throwable t = failure; t != null; t = t.getCause()) {
+			String message = (t.getMessage() != null && !t.getMessage().isBlank())
+				? t.getMessage().trim() : t.getClass().getSimpleName();
+			if (previous != null && previous.contains(message)) continue;
+			if (sb.length() > 0) sb.append(" — caused by: ");
+			sb.append(message);
+			previous = message;
+			if (t.getCause() == t) break;
+		}
+		return sb.toString();
 	}
 }
