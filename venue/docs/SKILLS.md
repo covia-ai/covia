@@ -40,7 +40,7 @@ Skills solve this with **progressive disclosure**: a compact index (one line per
 
 5. **Fail-visible.** Absent sources and skills are skipped quietly; resolution *errors* render a visible diagnosable line; malformed shapes (a non-vector `config.skills`/`config.skillsets`, a non-string tools or child-ref entry) throw. A loaded skill that vanishes renders a visible `[Skill: <name> — <path> — unavailable: …]` element rather than silently disappearing — a missing skill changes behaviour too much to hide.
 
-6. **Additive and opt-in.** An agent declaring neither `config.skills` nor `config.skillsets` behaves exactly as before skills existed. Skills are read-only surface: authoring uses the existing `covia:write` / `asset:store`; there is no skill-write op.
+6. **Additive and opt-in.** An agent declaring neither `config.skills` nor `config.skillsets` behaves exactly as before skills existed. Skills are ordinary assets with no store of their own: authoring uses the existing `covia:write` / `asset:store`. The one skills op that writes, `skills:import` (§8), is a translator over that same lattice write — one SKILL.md in, one `<skillset>/<name>` out — so a body reaches the venue without passing through a model's context.
 
 ---
 
@@ -122,9 +122,22 @@ description: Extract text and tables from PDF files
 ...
 ```
 
-works unchanged: when the asset metadata lacks `name`/`description`, the frontmatter supplies them, and the body is the markdown after it. Only `name` and `description` are read from frontmatter; other keys are ignored. Asset metadata, when present, wins — frontmatter is the compatibility fallback.
+works unchanged: when the asset metadata lacks `name`/`description`, the frontmatter supplies them, and the body is the markdown after it. Asset metadata, when present, wins — frontmatter is the compatibility fallback.
+
+What the parser reads (`Skills.parseFrontmatter`):
+
+| Frontmatter key | Becomes |
+|-----------------|---------|
+| `name`, `description` | The asset fields, when metadata lacks them. A description is normalised to **one line** whatever form it was written in — folded (`>`), literal (`\|`), wrapped over continuation lines, or quoted — because it is the index row |
+| `tools`, `skills`, `skillsets` | The facet lists, when the facet leaves them empty (flow `[a, b]` or block `- a` sequences) — so a self-contained SKILL.md can be a router |
+| `license`, `compatibility` | Carried onto the asset as plain fields by `skills:parse` / `skills:import` (provenance); ignored by the resolver |
+| anything else (`allowed-tools`, `argument-hint`, `metadata`, …) | Ignored by the resolver; **reported** under `ignored` by `skills:parse` / `skills:import`. Claude Code tool names are not Covia operations — `skill.tools` is the Covia-native way |
 
 This applies wherever the content comes from — a SKILL.md pasted into `content.inline` of a bare metadata map works identically.
+
+**A content ref to a SKILL.md is itself a skill ref.** `file://<root>/<dir>/SKILL.md` and `dlfs/<drive>/<path>` are accepted wherever a skill ref is — a `config.skills` entry, a skillset member value (`w/skills/agent = "file://reference/skills/agent/SKILL.md"`), or a `skill_load {ref}`. The content provider pins its own read (`crud/read` on the `file://` resource), the frontmatter is the metadata, and identity is the hash of that synthesised metadata, so two addresses of one file dedup as one skill. The body is live — an edit on disk shows on the next turn — and so is the index line, since a bare content ref carries no metadata: the file is read on every index pass. `skills:import` lifts `name`/`description` into stored metadata for exactly that reason.
+
+**Importing.** `skills:import {source}` parses one SKILL.md and writes `<skillset>/<name>` (§8); `skills:parse` returns the same metadata without storing it. Both translate the file **as a single skill**: supporting files (`references/`, `scripts/`, `assets/`) are not walked or copied. A body that links to them relatively will point at nothing once imported; bind the ones an agent needs as `skill.context` entries with `file://` refs, or keep the whole skill live with `content: "ref"` so the agent's `file_read` can follow the same root. Nothing derives the name from anything but the frontmatter, except a SKILL.md that declares none, which takes its directory's name (the Agent Skills rule that the two match).
 
 ### 3.4 A skill can also be an operation
 
@@ -151,6 +164,7 @@ When a skill whose asset has an `operation` facet is loaded, **the asset itself 
 | Asset store | `a/<hash>` | The canonical form: immutable, content-addressed, shareable across venues; body as content |
 | Venue catalog | `v/skills/summarise` | Venue-installed standard skills, materialised at boot (like `v/ops`); the catalog entry is the asset metadata, content in CAS |
 | User workspace | `w/skills/pdf-processing` | Personal skills, quick iteration (`covia:write`) — metadata maps with `content.inline` bodies, or string refs to shared assets |
+| Host file root / DLFS drive | `file://reference/skills/agent/SKILL.md`, `dlfs/team/pdf/SKILL.md` | A SKILL.md used in place, live (§3.3) — or the source for `skills:import` |
 
 No special namespace requirements — these are the standard resolvable addresses.
 
@@ -176,7 +190,7 @@ Discovery has two **declared kinds**. A **skill** ref addresses one skill; a **s
   - an **asset metadata map** (§3.1) — body via content resolution;
   - a **string reference** (`a/<hash>`, another path) — followed to the skill asset (one hop), the same string-ref idiom as templates and context entries.
   A value that is neither is a nested directory, not a broken skill: it is skipped in agent context and reported only on the operator surface (`skills:list`), because skills and directories are separate kinds.
-- **`config.skills`** — each ref is exactly one skill: a stable human-readable path (`v/skills/ops-tools/models`), or an asset ref (`a/<hash>`, `/a/<hash>`, bare hex). This is the form role-specific templates use to curate a compact index. A skillset ref declared here is **not** walked as a directory — the kinds do not interchange.
+- **`config.skills`** — each ref is exactly one skill: a stable human-readable path (`v/skills/ops-tools/models`), an asset ref (`a/<hash>`, `/a/<hash>`, bare hex), or a content ref to a SKILL.md (`file://<root>/<dir>/SKILL.md`, `dlfs/<drive>/<path>`, §3.3). This is the form role-specific templates use to curate a compact index. A skillset ref declared here is **not** walked as a directory — the kinds do not interchange.
 - A ref that resolves to **null** is skipped quietly (absent — sources are maybe-style paths).
 - A ref whose resolution **throws** — including a capability denial — renders one visible line: `[skills source <ref> — unavailable: <reason>]`, on the operator surface only.
 
@@ -353,14 +367,22 @@ A subgoal therefore starts with its parent's loaded skills and may load/unload i
 
 ## 8. The Skills Operations — Discovery for Everyone
 
-Two read-only ops, because listing a skillset and reading a skill are different questions and a single command-dispatched union could only say which arguments belong to which in prose:
+Four ops, one question each, because a single command-dispatched union could only say which arguments belong to which in prose:
 
 | Op | Tool | Input | Output |
 |----|------|-------|--------|
 | `v/ops/skills/list` | `skills_list` | `skillset?` — one directory of skills; omitted → the venue's configured entry skillsets | A map from each skill's resolved **path** to `{name, description, id}` |
-| `v/ops/skills/read` | `skills_read` | `skill` — one resolved path or asset ref | `{name, description, path, id, tools, body?, skills?, skillsets?, context?}` |
+| `v/ops/skills/read` | `skills_read` | `skill` — one resolved path, asset ref, or content ref | `{name, description, path, id, tools, body?, skills?, skillsets?, context?}` |
+| `v/ops/skills/parse` | `skills_parse` | exactly one of `source` (one content ref to a SKILL.md) or `text` (the SKILL.md itself); `content?` = `inline` (default) \| `ref` | `{metadata, name, description, ignored?}` — `metadata` is the map `covia:write` / `asset:store` accept as-is. Nothing stored |
+| `v/ops/skills/import` | `skills_import` | `source` — one content ref to a SKILL.md; `skillset?` (default `w/skills`); `content?` = `inline` \| `ref` | `{path, name, description, source, content, existed, ignored?}` — written to `<skillset>/<name>` |
 
-**Single arity.** One skillset per list, one skill per read. That removes partial failure entirely — there is no "three of five worked" to represent — and the error says what to pass instead. The one plural case is the default: omit `skillset` and the venue's configured entry skillsets are listed, because "where should I start" is inherently a set.
+**Single arity.** One skillset per list, one skill per read, one SKILL.md per parse or import. That removes partial failure entirely — there is no "three of five worked" to represent — and the error says what to pass instead. The one plural case is the default: omit `skillset` and the venue's configured entry skillsets are listed, because "where should I start" is inherently a set.
+
+**Import names one file, never a directory.** A library is imported by naming each SKILL.md. There is deliberately no tree walk: what lands in a skillset is exactly what the caller asked for, the read pin is on one precise resource, and "which of these forty were skills" never has to be reported. The target is a **skillset** rather than a path, so the entry's key is always the frontmatter name — the key is canonical for a skillset member (§3.1), and letting the two disagree would produce an index line that `skill_load {name}` cannot load. Read and parse complete before the write, so a bad source writes nothing; the write is `covia:write`'s own seam, so the namespace rules and the `crud/write` pin are the same ones. Re-importing overwrites (`existed: true`).
+
+**Inline or ref.** `content: "inline"` copies the body into the stored metadata — self-contained, and the facet carries the frontmatter's `tools`/`skills`/`skillsets` since the frontmatter is gone from an inline body. `content: "ref"` binds `content.ref` to the source — the body stays live in the file, the facet is left to the live frontmatter, and only `name`/`description` are snapshots (re-import to refresh the index line). Neither pins bytes; add `content.sha256` with `covia:write` to freeze a ref.
+
+**Why parse exists beside import.** `parse` is the translator alone: for a SKILL.md the caller already holds as text, for review before storing, or to feed `asset:store` for an immutable `a/<hash>`. `import` is the same translation plus the write, and its reason to exist is that the body never passes through a model's context — the alternative, `file_read` then `covia_write`, round-trips every byte through the tool call.
 
 **Listing pairs path with metadata.** A name alone does not say where a skill lives, and where it lives is what you need in order to read it, to see which skillset won a name collision, or to fix a source. Only actual skills appear: a skillset may sit beside nested directories or unrelated data, and a listing answers "what can I load here".
 
@@ -370,7 +392,7 @@ Two read-only ops, because listing a skillset and reading a skill are different 
 
 Capability pins per resource read: a path needs `crud/read`; a content-addressed ref accepts either `asset/read` or `crud/read` over that hash. Both sit inside the anonymous read-only scope, so venue skills are publicly discoverable.
 
-There is **no write surface**. Skills are ordinary assets: create and update them with the lattice write and asset store operations, and remove them with the lattice delete operation.
+There is **no skill store**. Skills are ordinary assets: create and update them with the lattice write and asset store operations (or `import`, which is the lattice write with a parser in front), and remove them with the lattice delete operation.
 
 **There is no operation that enumerates skillsets, deliberately.** A skillset is not a registered thing — it is any lattice path that happens to contain skill assets. Listing the skillsets this venue ships is therefore an ordinary lattice read (`v/ops/covia/list` on `v/skills`, whose keys are the skillsets), and a skillset anywhere else is found the same way you would find any other path. Adding a skills-specific enumeration would imply a registry that does not exist.
 
@@ -394,6 +416,15 @@ asset_store \
 # An existing Anthropic SKILL.md, stored as-is (frontmatter supplies name/description)
 asset_store metadata={} contentText="$(cat SKILL.md)"
 
+# A SKILL.md on a venue file root: import it (→ w/skills/agent), or use it in place
+skills_import source=file://reference/skills/agent/SKILL.md
+skills_import source=file://reference/skills/agent/SKILL.md content=ref   # body stays live
+covia_write path=w/skills/agent value="file://reference/skills/agent/SKILL.md"   # no copy at all
+
+# Translate without storing — review, or store as an immutable asset
+skills_parse source=dlfs/team/pdf/SKILL.md
+skills_parse text="$(cat SKILL.md)"
+
 # Quick workspace iteration: body inline in the standard content descriptor
 covia_write path=w/skills/scratch-notes value={
   "description": "House conventions for scratch analysis",
@@ -410,7 +441,7 @@ Venue-installed skills ship as classpath resources registered by an adapter via 
 
 **Module adapters ship their own skills the same way**: `readResource` resolves against the adapter's own classloader, so a venue module jar (see venue/CLAUDE.md §Venue modules) carries its skill JSONs alongside its op definitions and calls `installSkill` in `installAssets` — the skill appears in `v/skills` exactly when the module is loaded, and the static library list never has to know. covia-sql's `sql` skill is the reference example.
 
-**The venue skill library** ships this way, one resource per skill under `venue/src/main/resources/skills/`, and **each skill is owned by the adapter it teaches**: an adapter calls `installSkill("<name>", "/skills/<name>.json")` in its `installAssets()` (`GridAdapter` ships `grid`, `HITLAdapter` ships `hitl`, `FileAdapter` ships `files`, …), so the skill is published exactly when the adapter is active and retracted when it is disabled or unloaded — the same rule as its operations. `SkillsAdapter.LIBRARY` holds only the platform skills that are about Covia and the venue as a whole: `covia`, `venue`, `discovery`, `provenance`, `skills`, `skill-authoring`. Bodies live in `content.inline`; each declares the operations it teaches. General templates (`minimal`, `skilled`, `goaltree`, `full`) index the complete `v/skills` directory. Specialist templates use stable single-skill paths such as `v/skills/models` to keep their per-turn indexes role-focused. Every template keeps `w/skills` first, so user-authored skills remain visible and shadow same-named venue skills. `SkillsLibraryTest` drift-guards materialisation, bodies, declared tool resolution, compact rendering, and the curated template sources.
+**The venue skill library** ships this way, one resource per skill under `venue/src/main/resources/skills/`, and **each skill is owned by the adapter it teaches**: an adapter calls `installSkill("<name>", "/skills/<name>.json")` in its `installAssets()` (`GridAdapter` ships `grid`, `HITLAdapter` ships `hitl`, `FileAdapter` ships `files`, …), so the skill is published exactly when the adapter is active and retracted when it is disabled or unloaded — the same rule as its operations. `SkillsAdapter.LIBRARY` holds only the platform skills that are about Covia and the venue as a whole: `covia`, `venue`, `discovery`, `provenance`, `lattice`, `skills`, and the `building` family it opens — `skill-authoring` (shape, body, storage) and `skill-import` (SKILL.md files, in place or imported). The root `skills` skill teaches discovery and loading only; format-specific material lives one load deeper, so the always-on index and the root body stay small and an agent pays for the SKILL.md details only when it has such files to bring in. Bodies live in `content.inline`; each declares the operations it teaches. General templates (`minimal`, `skilled`, `goaltree`, `full`) index the complete `v/skills` directory. Specialist templates use stable single-skill paths such as `v/skills/models` to keep their per-turn indexes role-focused. Every template keeps `w/skills` first, so user-authored skills remain visible and shadow same-named venue skills. `SkillsLibraryTest` drift-guards materialisation, bodies, declared tool resolution, compact rendering, and the curated template sources.
 
 ---
 
@@ -447,7 +478,8 @@ Venue-installed skills ship as classpath resources registered by an adapter via 
 | Piece | Where |
 |-------|-------|
 | Resolver (one for every surface) | `covia.adapter.agent.Skills` |
-| `skills` op (`list`/`read`) | `covia.adapter.SkillsAdapter` + `adapters/skills/skills.json` |
+| `skills` ops (`list`/`read`/`parse`/`import`) | `covia.adapter.SkillsAdapter` + `adapters/skills/{list,read,parse,import}.json` |
+| SKILL.md frontmatter and translation to metadata | `Skills.parseFrontmatter`, `Skills.parseSkillText`; content refs via `Skills.resolveContentSkill` |
 | `content.inline` (asset-model inline content) | `Engine.resolveContent` |
 | Index injection + skill rendering + loads-tools rule | `ContextAssembler` (`skillsIndex`), `Loads` (`elements`), `ToolPalette` (`loadsToolDefs`) |
 | `skill_load` glue | `LLMAgentAdapter.handleSkillLoad` (session tier), `GoalTreeAdapter.runFrame` (frame tier) |

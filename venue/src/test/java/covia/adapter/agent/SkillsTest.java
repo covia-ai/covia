@@ -533,6 +533,138 @@ public class SkillsTest {
 		assertNull(Skills.parseFrontmatter("\n---\nname: x\n---\nBody"));
 	}
 
+	@Test
+	public void testParseFrontmatterScalarForms() {
+		// Folded block scalar: lines join with spaces; a blank line is a
+		// paragraph break — and a description is always one line regardless.
+		Skills.Frontmatter folded = Skills.parseFrontmatter("""
+			---
+			name: folded
+			description: >
+			  Extracts text and tables from PDF files.
+			  Use when the user mentions PDFs.
+
+			  Second paragraph.
+			---
+			Body
+			""");
+		assertEquals("Extracts text and tables from PDF files. Use when the user mentions PDFs. Second paragraph.",
+			folded.description());
+
+		// Literal block scalar keeps newlines for other keys; the description
+		// still collapses to one line. Chomping indicators are accepted.
+		Skills.Frontmatter literal = Skills.parseFrontmatter("""
+			---
+			name: literal
+			description: |-
+			  Line one.
+			  Line two.
+			compatibility: |
+			  Requires git
+			  and jq
+			---
+			Body
+			""");
+		assertEquals("Line one. Line two.", literal.description());
+		assertEquals("Requires git\nand jq", literal.extra().get("compatibility"));
+
+		// A plain scalar wrapped over indented continuation lines.
+		Skills.Frontmatter wrapped = Skills.parseFrontmatter("""
+			---
+			name: wrapped
+			description: Starts here
+			  and continues here.
+			---
+			Body
+			""");
+		assertEquals("Starts here and continues here.", wrapped.description());
+
+		// Quoted scalars, including a colon inside the value; comments skipped.
+		Skills.Frontmatter quoted = Skills.parseFrontmatter("""
+			---
+			# a comment
+			name: "quoted"
+			description: 'Use when: something happens'
+			---
+			Body
+			""");
+		assertEquals("quoted", quoted.name());
+		assertEquals("Use when: something happens", quoted.description());
+	}
+
+	@Test
+	public void testParseFrontmatterExtraKeys() {
+		// Every non-Covia key lands in extra, in document order: scalars with
+		// their text, nested maps and sequences as "" — so a translator can
+		// carry license/compatibility and report the rest as ignored.
+		Skills.Frontmatter fm = Skills.parseFrontmatter("""
+			---
+			name: x
+			description: y
+			license: Apache-2.0
+			argument-hint: "<name>"
+			metadata:
+			  author: covia
+			  version: "1.0"
+			allowed-tools: Bash(git:*) Read
+			tools:
+			  - v/ops/a
+			---
+			Body
+			""");
+		assertEquals(java.util.List.of("license", "argument-hint", "metadata", "allowed-tools"),
+			new java.util.ArrayList<>(fm.extra().keySet()));
+		assertEquals("Apache-2.0", fm.extra().get("license"));
+		assertEquals("<name>", fm.extra().get("argument-hint"));
+		assertEquals("", fm.extra().get("metadata"));
+		assertEquals(1, fm.tools().count());
+		assertEquals("Body\n", fm.body());
+	}
+
+	@Test
+	public void testParseSkillText() {
+		String text = "---\nname: pdf\ndescription: >\n  Handle PDFs.\nlicense: MIT\nargument-hint: x\ntools: [v/ops/file/read]\n---\n## PDF\nSteps.\n";
+		AString source = Strings.create("file://docs/pdf/SKILL.md");
+
+		// Inline: self-contained metadata, facet carried (the body has no frontmatter left).
+		Skills.ParsedSkill inline = Skills.parseSkillText(text, source, true);
+		assertEquals("pdf", inline.name());
+		assertEquals("Handle PDFs.", inline.description());
+		assertEquals("## PDF\nSteps.\n", RT.ensureString(RT.getIn(inline.metadata(), "content", "inline")).toString());
+		assertEquals("text/markdown", RT.ensureString(RT.getIn(inline.metadata(), "content", "contentType")).toString());
+		assertEquals("MIT", RT.ensureString(RT.getIn(inline.metadata(), "license")).toString());
+		assertEquals(1, RT.ensureVector(RT.getIn(inline.metadata(), "skill", "tools")).count());
+		assertEquals(java.util.List.of("argument-hint"), inline.ignored());
+
+		// Ref: live binding, no facet — the file's frontmatter stays authoritative.
+		Skills.ParsedSkill ref = Skills.parseSkillText(text, source, false);
+		assertEquals("file://docs/pdf/SKILL.md", RT.ensureString(RT.getIn(ref.metadata(), "content", "ref")).toString());
+		assertNull(RT.getIn(ref.metadata(), "content", "inline"));
+		assertNull(RT.getIn(ref.metadata(), "skill"));
+		assertEquals(1, ref.tools().count());                        // still reported to the resolver
+
+		// Name falls back to the source's directory (SKILL.md) or file stem.
+		assertEquals("pdf", Skills.parseSkillText("---\ndescription: d\n---\n", source, true).name());
+		assertEquals("notes", Skills.parseSkillText("---\ndescription: d\n---\n",
+			Strings.create("dlfs/drive/notes.md"), true).name());
+		assertThrows(IllegalArgumentException.class, () -> Skills.parseSkillText("---\ndescription: d\n---\n", null, true));
+		assertThrows(IllegalArgumentException.class, () -> Skills.parseSkillText("---\ndescription: d\n---\n",
+			Strings.create("a/" + "0".repeat(64)), true));
+		// Not a skill: no frontmatter, no description, a ref binding with no source.
+		assertThrows(IllegalArgumentException.class, () -> Skills.parseSkillText("plain text", source, true));
+		assertThrows(IllegalArgumentException.class, () -> Skills.parseSkillText("---\nname: x\n---\n", source, true));
+		assertThrows(IllegalArgumentException.class, () -> Skills.parseSkillText(text, null, false));
+	}
+
+	@Test
+	public void testNameFromSource() {
+		assertEquals("agent", Skills.nameFromSource("file://work/agent/SKILL.md"));
+		assertEquals("agent", Skills.nameFromSource("dlfs/drive/skills/agent/skill.md"));
+		assertEquals("notes", Skills.nameFromSource("file://work/notes.md"));
+		assertNull(Skills.nameFromSource("a/" + "0".repeat(64)));
+		assertNull(Skills.nameFromSource("file:"));
+	}
+
 
 	@Test
 	public void testParseFrontmatterLists() {

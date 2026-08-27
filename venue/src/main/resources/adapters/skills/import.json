@@ -1,0 +1,22 @@
+{
+	"name": "Import Skill",
+	"description": "Imports one SKILL.md (Anthropic Agent Skills format) as a Covia skill: parses it exactly as the skill-parse operation does and writes the resulting metadata to <skillset>/<name>, where the name comes from the frontmatter and the skillset defaults to w/skills — the personal skills directory every standard agent template indexes first. One source per call, always a single SKILL.md, never a directory: name each file you want. The body never passes through the model. Re-importing the same skill overwrites its entry. By default the body is copied into the venue; choose content 'ref' to keep it bound live to the source file so edits on disk show on the next turn (the index line is a snapshot — re-import to refresh it).",
+	"dateCreated": "2026-08-27T00:00:00Z",
+	"operation": {
+		"adapter": "skills:import",
+		"toolName": "skills_import",
+		"input": {
+			"type": "object",
+			"properties": {
+				"source": { "type": "string", "description": "One content reference to a SKILL.md: 'file://<root>/<dir>/SKILL.md', 'dlfs/<drive>/<path>', or an asset ref ('a/<hash>'). Not a directory." },
+				"skillset": { "type": "string", "description": "The directory of skills to write into — a writable lattice path such as 'w/skills' (default) or 'w/team-skills'. The skill lands at <skillset>/<name>." },
+				"content": { "type": "string", "enum": ["inline", "ref"], "description": "'inline' (default) copies the body into the stored metadata; 'ref' binds content.ref to the source so the body stays live in the file." }
+			},
+			"required": ["source"]
+		},
+		"output": {
+			"type": "object",
+			"description": "{path, name, description, source, content, existed, ignored?}. 'path' is where the skill now lives (add it to config.skills, or its skillset to config.skillsets); 'existed' is true when an entry at that path was replaced; 'ignored' lists dropped frontmatter keys. Fails, writing nothing, when the source does not resolve to SKILL.md content, when the text is not a valid skill, or when the caller may not read the source or write the skillset."
+		}
+	}
+}

@@ -3,6 +3,7 @@ package covia.adapter.agent;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -50,7 +51,10 @@ import org.slf4j.LoggerFactory;
  * standard {@code content.inline} metadata declaration; SKILL.md YAML
  * frontmatter supplies {@code name}/{@code description} and may declare
  * {@code tools}/{@code skills}/{@code skillsets} when the metadata facet
- * leaves them empty.</p>
+ * leaves them empty. A content ref to a SKILL.md ({@code file://root/dir/SKILL.md},
+ * {@code dlfs/drive/path}) is itself a skill ref: the file's frontmatter is
+ * its metadata ({@link #parseSkillText}), which is also what the
+ * {@code skills/parse} and {@code skills/import} ops hand back or store.</p>
  *
  * <p>Used by the {@code skills} venue op, the {@code skill_load} harness tool,
  * and {@link ContextAssembler}'s per-turn index/rendering — one resolver, so the
@@ -187,6 +191,12 @@ public final class Skills {
 		for (long i = 0; i < sources.skills().count(); i++) {
 			AString source = sourceRef(sources.skills().get(i));
 			try {
+				if (isContentRef(source.toString())) {
+					// A SKILL.md behind a content provider: the provider pins
+					// the read and the file's frontmatter is the metadata.
+					addEntry(out, seen, describe(engine, ctx, source, source, source));
+					continue;
+				}
 				requireRead(engine, ctx, source);
 				ACell value = engine.resolvePath(source, ctx);
 				if (value == null) continue;                          // absent → skip quietly
@@ -430,10 +440,13 @@ public final class Skills {
 
 	/**
 	 * Resolves a skill at a direct address — an asset ref ({@code a/<hash>}),
-	 * or a path whose value is a single skill (metadata map, string reference,
-	 * or inline markdown). Throws with a diagnosable message on failure.
+	 * a path whose value is a single skill (metadata map, string reference,
+	 * or a raw SKILL.md blob), or a content ref to a SKILL.md
+	 * ({@code file://root/dir/SKILL.md}, {@code dlfs/drive/path}). Throws
+	 * with a diagnosable message on failure.
 	 */
 	public static ResolvedSkill resolveRef(Engine engine, RequestContext ctx, AString ref) {
+		if (isContentRef(ref.toString())) return resolveContentSkill(engine, ctx, ref, ref);
 		requireRead(engine, ctx, ref);
 		ACell value = engine.resolvePath(ref, ctx);
 		return resolveValue(engine, ctx, ref, ref, value, true);
@@ -457,6 +470,11 @@ public final class Skills {
 
 		if (value instanceof AString s) {
 			String str = s.toString();
+			if (isContentRef(str)) {
+				// A host file or DLFS path holding a SKILL.md — content, not
+				// lattice metadata, so it never goes through resolvePath.
+				return resolveContentSkill(engine, ctx, path, s);
+			}
 			if (ContextLoader.isAssetReference(str)) {
 				// String reference — one hop to the skill asset (no chains,
 				// matching Engine.resolveContent's one-hop rule).
@@ -470,6 +488,12 @@ public final class Skills {
 			}
 			throw new RuntimeException("skill at " + path
 				+ " is not a skill (expected asset metadata or a reference; inline bodies go in content.inline)");
+		}
+
+		if (value instanceof ABlob) {
+			// Raw SKILL.md bytes stored at the path: the universal content
+			// resolution serves a blob value as-is.
+			return resolveContentSkill(engine, ctx, path, opRef);
 		}
 
 		if (value instanceof AMap) {
@@ -584,16 +608,31 @@ public final class Skills {
 
 	// ========== SKILL.md frontmatter ==========
 
+	/**
+	 * The parsed frontmatter of an Anthropic-style SKILL.md. {@code name},
+	 * {@code description} and the three ref lists map onto skill metadata;
+	 * {@code extra} holds every other top-level key in document order — a
+	 * scalar's text, or {@code ""} for a nested map or sequence — so a
+	 * translator can carry provenance fields ({@code license}) and report
+	 * what it dropped instead of losing it silently.
+	 */
 	record Frontmatter(String name, String description, String body,
-			AVector<ACell> tools, AVector<ACell> skills, AVector<ACell> skillsets) {}
+			AVector<ACell> tools, AVector<ACell> skills, AVector<ACell> skillsets,
+			Map<String, String> extra) {}
 
 	/**
 	 * Parses Anthropic-style SKILL.md YAML frontmatter: a leading {@code ---}
-	 * block of {@code key: value} lines. {@code name} and {@code description}
-	 * are scalars; {@code tools}, {@code skills} and {@code skillsets} are
-	 * lists in either YAML form — flow ({@code tools: [a, b]}) or block
-	 * (subsequent {@code  - a} lines). Other keys are ignored. Returns null
-	 * when the text has no frontmatter.
+	 * block of {@code key: value} entries closed by a second {@code ---}.
+	 * Returns null when the text has no frontmatter.
+	 *
+	 * <p>Enough YAML for skill files and no more: plain and quoted scalars,
+	 * plain scalars wrapped over indented continuation lines, block scalars
+	 * ({@code >} folded and {@code |} literal, any chomping indicator), flow
+	 * sequences ({@code [a, b]}), block sequences ({@code - a} lines) and
+	 * nested block maps (recorded by key, contents skipped). {@code #}
+	 * comment lines are ignored. A description is normalised to one line
+	 * whatever form it was written in: it is the index one-liner, and a
+	 * newline in it would break the {@code - name — description} row.</p>
 	 *
 	 * <p>Declaring these in metadata is equivalent and takes precedence; the
 	 * frontmatter path exists so a self-contained SKILL.md file is a complete
@@ -602,59 +641,144 @@ public final class Skills {
 	static Frontmatter parseFrontmatter(String text) {
 		if (text == null) return null;
 		if (!(text.startsWith("---\n") || text.startsWith("---\r\n"))) return null;
-		int start = text.indexOf('\n') + 1;
-		String name = null, description = null;
-		AVector<ACell> tools = Vectors.empty(), skills = Vectors.empty(), skillsets = Vectors.empty();
-		String listKey = null;                                       // open block-sequence key
-		int pos = start;
+		int pos = text.indexOf('\n') + 1;
+		List<String> lines = new ArrayList<>();
+		int bodyStart = -1;
 		while (pos < text.length()) {
 			int eol = text.indexOf('\n', pos);
 			if (eol < 0) return null;                                // no closing delimiter → not frontmatter
 			String line = text.substring(pos, eol).stripTrailing();
 			pos = eol + 1;
-			if (line.strip().equals("---")) {
-				// Body starts after the closing delimiter; strip at most one
-				// blank separator line, preserving intentional leading content.
-				String body = text.substring(pos);
-				if (body.startsWith("\r\n")) body = body.substring(2);
-				else if (body.startsWith("\n")) body = body.substring(1);
-				return new Frontmatter(name, description, body, tools, skills, skillsets);
-			}
-			// A block-sequence item continues the most recent list key.
+			if (line.strip().equals("---")) { bodyStart = pos; break; }
+			lines.add(line);
+		}
+		if (bodyStart < 0) return null;
+		// Body starts after the closing delimiter; strip at most one blank
+		// separator line, preserving intentional leading content.
+		String body = text.substring(bodyStart);
+		if (body.startsWith("\r\n")) body = body.substring(2);
+		else if (body.startsWith("\n")) body = body.substring(1);
+
+		String name = null, description = null;
+		AVector<ACell> tools = Vectors.empty(), skills = Vectors.empty(), skillsets = Vectors.empty();
+		Map<String, String> extra = new LinkedHashMap<>();
+		int i = 0;
+		while (i < lines.size()) {
+			String line = lines.get(i++);
 			String stripped = line.strip();
-			if (listKey != null && stripped.startsWith("-")) {
-				String item = unquote(stripped.substring(1).strip());
-				if (!item.isEmpty()) {
-					switch (listKey) {
-						case "tools" -> tools = tools.conj(Strings.create(item));
-						case "skills" -> skills = skills.conj(Strings.create(item));
-						case "skillsets" -> skillsets = skillsets.conj(Strings.create(item));
-						default -> { }
-					}
-				}
-				continue;
-			}
-			listKey = null;
+			// Blank, comment, or an indented line with no entry to belong to.
+			if (stripped.isEmpty() || stripped.startsWith("#") || indentOf(line) > 0) continue;
 			int colon = line.indexOf(':');
-			if (colon > 0) {
-				String key = line.substring(0, colon).strip();
-				String val = line.substring(colon + 1).strip();
-				switch (key) {
-					case "name" -> name = unquote(val);
-					case "description" -> description = unquote(val);
-					case "tools" -> { tools = parseList(val); listKey = val.isEmpty() ? key : null; }
-					case "skills" -> { skills = parseList(val); listKey = val.isEmpty() ? key : null; }
-					case "skillsets" -> { skillsets = parseList(val); listKey = val.isEmpty() ? key : null; }
-					default -> { }
-				}
+			if (colon <= 0) continue;
+			String key = line.substring(0, colon).strip();
+			String rest = line.substring(colon + 1).strip();
+			// The entry's continuation: every following blank or indented line
+			// belongs to it — a block scalar, a sequence, a nested map, or a
+			// wrapped plain scalar. Surrounding blank lines are clipped.
+			int end = i;
+			while (end < lines.size() && (lines.get(end).isBlank() || indentOf(lines.get(end)) > 0)) end++;
+			List<String> block = trimBlank(lines.subList(i, end));
+			i = end;
+			switch (key) {
+				case "name" -> name = scalar(rest, block);
+				case "description" -> description = oneLine(scalar(rest, block));
+				case "tools" -> tools = list(rest, block);
+				case "skills" -> skills = list(rest, block);
+				case "skillsets" -> skillsets = list(rest, block);
+				default -> extra.put(key, isNested(rest, block) ? "" : scalar(rest, block));
 			}
 		}
-		return null;
+		return new Frontmatter(name, description, body, tools, skills, skillsets, extra);
+	}
+
+	private static int indentOf(String line) {
+		int n = 0;
+		while (n < line.length() && (line.charAt(n) == ' ' || line.charAt(n) == '\t')) n++;
+		return n;
+	}
+
+	private static List<String> trimBlank(List<String> block) {
+		int from = 0, to = block.size();
+		while (from < to && block.get(from).isBlank()) from++;
+		while (to > from && block.get(to - 1).isBlank()) to--;
+		return block.subList(from, to);
+	}
+
+	/** A block sequence item line ({@code - x}, or a bare {@code -}). */
+	private static boolean isItem(String line) {
+		String s = line.strip();
+		return s.equals("-") || s.startsWith("- ");
+	}
+
+	/** An entry whose value is a nested sequence or map rather than a scalar. */
+	private static boolean isNested(String rest, List<String> block) {
+		return rest.isEmpty() && !block.isEmpty();
+	}
+
+	/**
+	 * A scalar in any form a SKILL.md uses. A block scalar ({@code >} or
+	 * {@code |} header) has its common indentation removed; folded joins
+	 * lines with spaces and turns a blank line into a newline, literal keeps
+	 * every newline. Trailing newlines are dropped whatever the chomping
+	 * indicator says — no skill field wants them. Otherwise the inline value
+	 * plus any indented continuation lines, joined by spaces, unquoted once.
+	 */
+	private static String scalar(String rest, List<String> block) {
+		if (rest.startsWith(">") || rest.startsWith("|")) {
+			boolean folded = rest.startsWith(">");
+			int indent = Integer.MAX_VALUE;
+			for (String l : block) if (!l.isBlank()) indent = Math.min(indent, indentOf(l));
+			StringBuilder sb = new StringBuilder();
+			boolean joinable = false;
+			for (String l : block) {
+				String content = l.isBlank() ? "" : l.substring(indent);
+				if (!folded) {
+					if (sb.length() > 0) sb.append('\n');
+					sb.append(content);
+				} else if (content.isEmpty()) {
+					sb.append('\n');
+					joinable = false;
+				} else {
+					if (joinable) sb.append(' ');
+					sb.append(content);
+					joinable = true;
+				}
+			}
+			return sb.toString().stripTrailing();
+		}
+		if (block.isEmpty()) return unquote(rest);
+		StringBuilder sb = new StringBuilder(rest);
+		for (String l : block) {
+			if (l.isBlank()) continue;
+			if (sb.length() > 0) sb.append(' ');
+			sb.append(l.strip());
+		}
+		return unquote(sb.toString());
+	}
+
+	/** Collapses all whitespace runs — including newlines — to one space. */
+	private static String oneLine(String s) {
+		return (s == null) ? null : s.replaceAll("\\s+", " ").strip();
+	}
+
+	/**
+	 * A list in any form: flow ({@code [a, b]}) or a bare scalar on the entry
+	 * line, else the block sequence beneath it.
+	 */
+	private static AVector<ACell> list(String rest, List<String> block) {
+		if (!rest.isEmpty()) return parseList(rest);
+		AVector<ACell> out = Vectors.empty();
+		for (String l : block) {
+			if (!isItem(l)) continue;
+			String item = unquote(l.strip().substring(1).strip());
+			if (!item.isEmpty()) out = out.conj(Strings.create(item));
+		}
+		return out;
 	}
 
 	/**
 	 * A YAML flow sequence ({@code [a, b]}) or a bare scalar treated as a
-	 * one-element list. An empty value opens a block sequence instead.
+	 * one-element list.
 	 */
 	private static AVector<ACell> parseList(String value) {
 		AVector<ACell> out = Vectors.empty();
@@ -681,6 +805,144 @@ public final class Skills {
 			return s.substring(1, s.length() - 1);
 		}
 		return s;
+	}
+
+	// ========== SKILL.md → skill metadata ==========
+
+	/** Content type recorded for a SKILL.md body. */
+	private static final AString MARKDOWN = Strings.intern("text/markdown");
+	/** Agent Skills provenance fields carried onto the asset as plain fields. */
+	private static final AString K_LICENSE = Strings.intern("license");
+	private static final AString K_COMPATIBILITY = Strings.intern("compatibility");
+
+	/**
+	 * Content refs a skill may live behind — host file roots and DLFS drives.
+	 * These resolve through the content providers, never the lattice, and the
+	 * provider pins its own read ability on the resource.
+	 */
+	public static boolean isContentRef(String ref) {
+		return ref != null
+			&& (ref.startsWith("file:/") || ref.startsWith("dlfs/") || ref.startsWith("dlfs://"));
+	}
+
+	/**
+	 * A SKILL.md translated to Covia skill metadata — the map that
+	 * {@code covia:write} and {@code asset:store} accept as-is. Frontmatter
+	 * {@code name} and {@code description} become the asset fields;
+	 * {@code license} and {@code compatibility} ride along as plain fields;
+	 * the ref lists become the {@code skill} facet when the body is copied
+	 * inline (the frontmatter is gone from an inline body, so the facet must
+	 * carry them) and are left to the live frontmatter when the body is a
+	 * {@code content.ref} binding. Every other frontmatter key is listed in
+	 * {@code ignored} rather than silently dropped.
+	 */
+	public record ParsedSkill(AMap<AString, ACell> metadata, String name, String description,
+			String body, AVector<ACell> tools, AVector<ACell> skills, AVector<ACell> skillsets,
+			List<String> ignored) {}
+
+	/**
+	 * Parses SKILL.md text into skill metadata.
+	 *
+	 * @param text the SKILL.md text
+	 * @param source where it came from: the reference recorded as
+	 *        {@code content.ref} when {@code inline} is false, and the name
+	 *        fallback when the frontmatter declares none (the directory of a
+	 *        {@code SKILL.md}, else the file's stem). Null for text with no
+	 *        address
+	 * @param inline copy the body into {@code content.inline} (self-contained)
+	 *        rather than bind it live through {@code content.ref}
+	 * @throws IllegalArgumentException when the text is not a skill — no
+	 *         frontmatter, no description, or no name and no source to derive
+	 *         one from — with the reason
+	 */
+	public static ParsedSkill parseSkillText(String text, AString source, boolean inline) {
+		Frontmatter fm = parseFrontmatter(text);
+		if (fm == null) {
+			throw new IllegalArgumentException("not a SKILL.md: expected a leading '---' frontmatter block"
+				+ " declaring name and description");
+		}
+		String description = fm.description();
+		if (description == null || description.isEmpty()) {
+			throw new IllegalArgumentException("SKILL.md frontmatter declares no description");
+		}
+		String name = fm.name();
+		if (name == null || name.isEmpty()) name = (source != null) ? nameFromSource(source.toString()) : null;
+		if (name == null) {
+			throw new IllegalArgumentException("SKILL.md frontmatter declares no name,"
+				+ " and none can be derived from the source");
+		}
+		if (name.contains("/") || name.chars().anyMatch(Character::isWhitespace)) {
+			throw new IllegalArgumentException("skill name must be one path segment, got '" + name + "'");
+		}
+		if (!inline && source == null) {
+			throw new IllegalArgumentException("a content.ref binding needs a source to reference");
+		}
+
+		AMap<AString, ACell> content = Maps.of(Fields.CONTENT_TYPE, MARKDOWN);
+		content = inline
+			? content.assoc(Fields.INLINE, Strings.create(fm.body()))
+			: content.assoc(Fields.REF, source);
+		AMap<AString, ACell> meta = Maps.of(
+			Fields.NAME, Strings.create(name),
+			Fields.DESCRIPTION, Strings.create(description),
+			Fields.CONTENT, content);
+		List<String> ignored = new ArrayList<>();
+		for (Map.Entry<String, String> e : fm.extra().entrySet()) {
+			switch (e.getKey()) {
+				case "license" -> meta = meta.assoc(K_LICENSE, Strings.create(e.getValue()));
+				case "compatibility" -> meta = meta.assoc(K_COMPATIBILITY, Strings.create(e.getValue()));
+				default -> ignored.add(e.getKey());
+			}
+		}
+		if (inline) {
+			AMap<AString, ACell> facet = Maps.empty();
+			if (fm.tools().count() > 0) facet = facet.assoc(Fields.TOOLS, fm.tools());
+			if (fm.skills().count() > 0) facet = facet.assoc(K_SKILLS, fm.skills());
+			if (fm.skillsets().count() > 0) facet = facet.assoc(K_SKILLSETS, fm.skillsets());
+			if (!facet.isEmpty()) meta = meta.assoc(K_SKILL, facet);
+		}
+		return new ParsedSkill(meta, name, description, fm.body(),
+			fm.tools(), fm.skills(), fm.skillsets(), ignored);
+	}
+
+	/**
+	 * The conventional name of a SKILL.md reached by address: its directory
+	 * (the Agent Skills rule that a name matches its parent directory), else
+	 * the file's stem. Null when the address has no usable segment — a
+	 * content-addressed ref names nothing.
+	 */
+	static String nameFromSource(String source) {
+		if (AssetAdapter.parseAssetId(Strings.create(source)) != null) return null;
+		String s = source;
+		while (s.endsWith("/")) s = s.substring(0, s.length() - 1);
+		String[] segs = s.split("/");
+		if (segs.length == 0) return null;
+		String last = segs[segs.length - 1];
+		String candidate;
+		if (last.equalsIgnoreCase("SKILL.md")) {
+			candidate = (segs.length >= 2) ? segs[segs.length - 2] : null;
+		} else {
+			int dot = last.lastIndexOf('.');
+			candidate = (dot > 0) ? last.substring(0, dot) : last;
+		}
+		return (candidate == null || candidate.isEmpty() || candidate.contains(":")) ? null : candidate;
+	}
+
+	/**
+	 * A skill addressed by its content rather than by metadata — a host file
+	 * ({@code file://root/dir/SKILL.md}), a DLFS path, or a raw blob at a
+	 * lattice path. The text is a SKILL.md: frontmatter supplies the name and
+	 * description, and the synthesised metadata binds the body live through
+	 * {@code content.ref}, so two addresses of one file share an identity.
+	 * The content provider pins the read; nothing is pinned here.
+	 */
+	private static ResolvedSkill resolveContentSkill(Engine engine, RequestContext ctx,
+			AString path, AString ref) {
+		String text = contentOf(engine, ctx, ref);
+		if (text == null) throw new RuntimeException("skill not found: " + ref);
+		ParsedSkill p = parseSkillText(text, ref, false);
+		return new ResolvedSkill(p.name(), p.description(), p.body(), p.tools(), Vectors.empty(),
+			p.skills(), p.skillsets(), 0, path, p.metadata().getHash());
 	}
 
 	// ========== Loads-entry integration ==========

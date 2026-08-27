@@ -1,7 +1,12 @@
 package covia.adapter;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 
+import convex.core.data.ABlob;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -9,28 +14,38 @@ import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.adapter.agent.Skills;
 import covia.api.Fields;
 import covia.venue.RequestContext;
+import covia.venue.storage.ContentProvider;
 
 /**
- * Read-only discovery of agent skills — named bundles of instructions,
+ * Discovery and import of agent skills — named bundles of instructions,
  * context, and tools (see {@code venue/docs/SKILLS.md}).
  *
- * <p>Two ops with precise schemas: {@code v/ops/skills/list} (the skills in a
- * skillset) and {@code v/ops/skills/read} (one skill in full). They answer
- * different questions and a union input could only express which arguments
- * belong to which in prose. All resolution logic lives in
+ * <p>Four ops with precise schemas, one question each: {@code skills/list}
+ * (the skills in a skillset), {@code skills/read} (one skill in full),
+ * {@code skills/parse} (one SKILL.md translated to skill metadata, nothing
+ * stored) and {@code skills/import} (one SKILL.md parsed and written to
+ * {@code <skillset>/<name>}). A union input could only express which
+ * arguments belong to which in prose. All resolution logic lives in
  * {@link covia.adapter.agent.Skills}, shared with the agent runtimes'
  * skills index and {@code skill_load} tool so the surfaces can never drift.</p>
  *
- * <p>There is deliberately <b>no write surface</b>: skills are authored with
- * the existing {@code covia:write} (workspace) and {@code asset:store}
- * (immutable assets). A skill is an asset, so reads are pinned as metadata
- * reads — either {@code crud/read} or {@code asset/read} over the resource
- * suffices, whichever way it was addressed. Both sit inside the anonymous
- * read-only grant scope, so venue skills are publicly discoverable.</p>
+ * <p>There is no skill store: skills are ordinary assets, authored with
+ * {@code covia:write} (workspace) and {@code asset:store} (immutable
+ * assets). {@code import} is a translator over that same write — it hands
+ * the parsed metadata to the lattice write seam, so the namespace rules and
+ * the {@code crud/write} pin are exactly {@code covia:write}'s, and it
+ * exists so a SKILL.md body reaches the venue without ever passing through a
+ * model's context. Reads are pinned as metadata reads — either
+ * {@code crud/read} or {@code asset/read} over the resource suffices,
+ * whichever way it was addressed — and content references
+ * ({@code file://}, {@code dlfs/}) are pinned by their provider. Both read
+ * abilities sit inside the anonymous read-only grant scope, so venue skills
+ * are publicly discoverable.</p>
  */
 public class SkillsAdapter extends AAdapter {
 
@@ -57,6 +72,12 @@ public class SkillsAdapter extends AAdapter {
 	private static final AString K_CONTEXT  = Strings.intern("context");
 	private static final AString K_SKILLS   = Strings.intern("skills");
 	private static final AString K_SKILLSETS = Strings.intern("skillsets");
+	private static final AString K_IGNORED  = Strings.intern("ignored");
+	private static final AString K_EXISTED  = Strings.intern("existed");
+
+	/** Where {@code import} writes when the caller names no skillset: the
+	 *  personal skills directory every standard template indexes first. */
+	static final String DEFAULT_IMPORT_SKILLSET = "w/skills";
 
 	@Override
 	public String getName() {
@@ -124,13 +145,14 @@ public class SkillsAdapter extends AAdapter {
 
 	@Override
 	public String getDescription() {
-		return "Discover agent skills — named bundles of instructions, context, tools, and further "
-			+ "skills. Two read-only operations: list the skills in a skillset (a directory of "
-			+ "skills, such as w/skills or v/skills/data), and read one skill in full by its "
-			+ "resolved path or asset ref. Listing returns each skill's path alongside its name "
-			+ "and description, so a caller knows where to read it from. Skills are authored with "
-			+ "the ordinary lattice write and asset store operations — there is no write surface "
-			+ "here.";
+		return "Discover and import agent skills — named bundles of instructions, context, tools, "
+			+ "and further skills. Read-only: list the skills in a skillset (a directory of "
+			+ "skills, such as w/skills or v/skills/data), read one skill in full by its "
+			+ "resolved path or asset ref, and parse a SKILL.md (Anthropic Agent Skills format) "
+			+ "into the skill metadata the lattice write and asset store operations accept. "
+			+ "Import parses one SKILL.md and writes it to <skillset>/<name> in one step, so the "
+			+ "body never passes through a model. Skills are ordinary assets: edit and remove "
+			+ "them with the lattice operations.";
 	}
 
 	/**
@@ -157,7 +179,7 @@ public class SkillsAdapter extends AAdapter {
 	 * venue skill of the same name.</p>
 	 */
 	static final String[] LIBRARY = {
-		"covia", "venue", "discovery", "provenance", "skills", "skill-authoring", "lattice"
+		"covia", "venue", "discovery", "provenance", "skills", "skill-authoring", "skill-import", "lattice"
 	};
 
 	/**
@@ -174,6 +196,7 @@ public class SkillsAdapter extends AAdapter {
 		{"discovery",       "ops-tools/discovery",  "root/discovery"},
 		{"provenance",      "ops-tools/provenance"},
 		{"skill-authoring", "building/skill-authoring"},
+		{"skill-import",    "building/skill-import"},
 		{"lattice",         "data/lattice",         "root/lattice"},
 	};
 
@@ -183,6 +206,8 @@ public class SkillsAdapter extends AAdapter {
 		// a skillset listing and a single-skill read are different questions.
 		installAsset("skills/list", "/adapters/skills/list.json");
 		installAsset("skills/read", "/adapters/skills/read.json");
+		installAsset("skills/parse", "/adapters/skills/parse.json");
+		installAsset("skills/import", "/adapters/skills/import.json");
 		for (String[] entry : LIBRARY_PATHS) {
 			String resource = "/skills/" + entry[0] + ".json";
 			for (int i = 1; i < entry.length; i++) {
@@ -200,6 +225,8 @@ public class SkillsAdapter extends AAdapter {
 			return switch (getSubOperation(meta)) {
 				case "list" -> CompletableFuture.completedFuture(handleList(ctx, input));
 				case "read" -> CompletableFuture.completedFuture(handleRead(ctx, input));
+				case "parse" -> CompletableFuture.completedFuture(handleParse(ctx, input));
+				case "import" -> CompletableFuture.completedFuture(handleImport(ctx, input));
 				default -> CompletableFuture.failedFuture(new IllegalArgumentException(
 					"Unknown skills operation: " + getSubOperation(meta)));
 			};
@@ -300,6 +327,149 @@ public class SkillsAdapter extends AAdapter {
 			out = out.assoc(K_SKILLSETS, skill.skillsets());
 		}
 		return out;
+	}
+
+	// ========== parse — one SKILL.md to skill metadata ==========
+
+	/**
+	 * Translates a SKILL.md into the metadata map {@code covia:write} and
+	 * {@code asset:store} accept, storing nothing. The text comes from exactly
+	 * one of {@code source} (a content reference) or {@code text} (the SKILL.md
+	 * itself — for a caller that already has it in hand). {@code content}
+	 * chooses how the map carries the body: copied into {@code content.inline},
+	 * or bound live through {@code content.ref} to the source.
+	 */
+	private ACell handleParse(RequestContext ctx, ACell input) {
+		AString source = RT.ensureString(RT.getIn(input, Fields.SOURCE));
+		AString text = RT.ensureString(RT.getIn(input, Fields.TEXT));
+		if ((source == null) == (text == null)) {
+			throw new IllegalArgumentException("provide exactly one of 'source' (one content reference to a"
+				+ " SKILL.md, e.g. file://<root>/<dir>/SKILL.md, dlfs/<drive>/<path> or a/<hash>)"
+				+ " or 'text' (the SKILL.md itself)");
+		}
+		boolean inline = inlineBody(input);
+		if (!inline && source == null) {
+			throw new IllegalArgumentException("content 'ref' binds the body to a source —"
+				+ " give a 'source', or keep content 'inline' for text");
+		}
+		String skillText = (source != null) ? readSkillText(ctx, source) : text.toString();
+		Skills.ParsedSkill parsed = Skills.parseSkillText(skillText, source, inline);
+		AMap<AString, ACell> out = Maps.of(
+			Fields.METADATA, parsed.metadata(),
+			Fields.NAME, Strings.create(parsed.name()),
+			Fields.DESCRIPTION, Strings.create(parsed.description()));
+		return withIgnored(out, parsed.ignored());
+	}
+
+	// ========== import — one SKILL.md written as a skill ==========
+
+	/**
+	 * Parses one SKILL.md and writes the result to {@code <skillset>/<name>}.
+	 * The source is always one file, never a directory: importing a library
+	 * means naming each SKILL.md, so nothing is walked and nothing lands
+	 * unasked. The name is the frontmatter's (the directory key is canonical
+	 * for a skillset member, so the two cannot disagree), and the skillset
+	 * defaults to the caller's own {@code w/skills}.
+	 *
+	 * <p>Read and parse complete before the write, so a bad source writes
+	 * nothing. The write goes through the lattice write seam, which enforces
+	 * the namespace rules and the {@code crud/write} pin; the source read is
+	 * pinned by its provider or as a metadata read.</p>
+	 */
+	private ACell handleImport(RequestContext ctx, ACell input) {
+		AString source = RT.ensureString(RT.getIn(input, Fields.SOURCE));
+		if (source == null) {
+			throw new IllegalArgumentException("source must be one content reference to a SKILL.md —"
+				+ " e.g. file://<root>/<dir>/SKILL.md, dlfs/<drive>/<path> or a/<hash>."
+				+ " Import one skill per call: a directory is not a source, name each SKILL.md");
+		}
+		ACell rawSkillset = RT.getIn(input, K_SKILLSET);
+		AString skillset = RT.ensureString(rawSkillset);
+		if (skillset == null && rawSkillset != null) {
+			throw new IllegalArgumentException("skillset must be one writable directory path, e.g. 'w/skills'");
+		}
+		String dir = (skillset == null) ? DEFAULT_IMPORT_SKILLSET : skillset.toString().strip();
+		while (dir.endsWith("/")) dir = dir.substring(0, dir.length() - 1);
+		if (dir.isEmpty()) {
+			throw new IllegalArgumentException("skillset must be a directory path such as 'w/skills'");
+		}
+		boolean inline = inlineBody(input);
+
+		Skills.ParsedSkill parsed = Skills.parseSkillText(readSkillText(ctx, source), source, inline);
+		AString path = Strings.create(dir + "/" + parsed.name());
+		ACell written = write(ctx, path, parsed.metadata());
+
+		AMap<AString, ACell> out = Maps.of(
+			Fields.PATH, path,
+			Fields.NAME, Strings.create(parsed.name()),
+			Fields.DESCRIPTION, Strings.create(parsed.description()),
+			Fields.SOURCE, source,
+			Fields.CONTENT, inline ? Fields.INLINE : Fields.REF,
+			K_EXISTED, CVMBool.of(RT.bool(RT.getIn(written, K_EXISTED))));
+		return withIgnored(out, parsed.ignored());
+	}
+
+	/** The {@code content} option: {@code inline} (default) or {@code ref}. */
+	private static boolean inlineBody(ACell input) {
+		ACell raw = RT.getIn(input, Fields.CONTENT);
+		if (raw == null) return true;
+		AString form = RT.ensureString(raw);
+		if (Fields.INLINE.equals(form)) return true;
+		if (Fields.REF.equals(form)) return false;
+		throw new IllegalArgumentException("content must be 'inline' (copy the body) or 'ref' (bind it live to the source)");
+	}
+
+	/**
+	 * The SKILL.md text behind a content reference. A provider reference
+	 * ({@code file://}, {@code dlfs/}) is pinned by its provider; a lattice
+	 * path or asset ref is pinned as a metadata read first — so a caller
+	 * needs exactly what the skill-read operation would need for the same
+	 * address. Whatever resolves is handed to the parser as text: a value
+	 * that is not a SKILL.md fails there with the reason.
+	 */
+	private String readSkillText(RequestContext ctx, AString source) {
+		if (!Skills.isContentRef(source.toString())) requireReadCap(ctx, source);
+		ABlob blob;
+		try {
+			ContentProvider.Resolved resolved = engine.resolveContent(source, ctx);
+			if (resolved == null || resolved.content() == null) {
+				throw new IllegalArgumentException("source has no content: " + source);
+			}
+			blob = resolved.content().getBlob();
+		} catch (IOException e) {
+			throw new IllegalArgumentException("cannot read source " + source + ": " + e.getMessage(), e);
+		}
+		if (blob == null || blob.count() == 0) {
+			throw new IllegalArgumentException("source is empty: " + source);
+		}
+		return new String(blob.getBytes(), StandardCharsets.UTF_8);
+	}
+
+	/** Writes through the lattice write seam — {@code covia:write}'s namespace
+	 *  rules and capability pin, not a second implementation of them. */
+	private ACell write(RequestContext ctx, AString path, ACell value) {
+		AAdapter raw = engine.getAdapter("covia");
+		if (!(raw instanceof CoviaAdapter covia)) {
+			throw new IllegalStateException("covia adapter is unavailable — nothing to write the skill with");
+		}
+		try {
+			return covia.writeResolvedPath(ctx, path, value).get();
+		} catch (ExecutionException e) {
+			Throwable cause = e.getCause();
+			if (cause instanceof RuntimeException re) throw re;
+			throw new RuntimeException(cause);
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			throw new RuntimeException("interrupted while writing " + path, e);
+		}
+	}
+
+	/** Dropped frontmatter keys are reported, never silently lost. */
+	private static AMap<AString, ACell> withIgnored(AMap<AString, ACell> out, List<String> ignored) {
+		if (ignored.isEmpty()) return out;
+		AVector<ACell> keys = Vectors.empty();
+		for (String k : ignored) keys = keys.conj(Strings.create(k));
+		return out.assoc(K_IGNORED, keys);
 	}
 
 	// ========== helpers ==========

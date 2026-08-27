@@ -1,0 +1,21 @@
+{
+	"name": "Parse Skill",
+	"description": "Translates a SKILL.md (Anthropic Agent Skills format: YAML frontmatter plus a Markdown body) into Covia skill metadata without storing anything. Give either 'source' — one content reference such as file://<root>/<dir>/SKILL.md, dlfs/<drive>/<path> or a/<hash> — or 'text', the SKILL.md itself. Returns the metadata map that the lattice write and asset store operations accept as-is: frontmatter name and description become asset fields, tools/skills/skillsets become the skill facet, license and compatibility ride along, and any other frontmatter key is reported under 'ignored'. Use the skill-import operation to parse and store in one step. Read-only.",
+	"dateCreated": "2026-08-27T00:00:00Z",
+	"operation": {
+		"adapter": "skills:parse",
+		"toolName": "skills_parse",
+		"input": {
+			"type": "object",
+			"properties": {
+				"source": { "type": "string", "description": "One content reference to a SKILL.md: 'file://<root>/<dir>/SKILL.md', 'dlfs/<drive>/<path>', or an asset ref ('a/<hash>'). Mutually exclusive with 'text'." },
+				"text": { "type": "string", "description": "The SKILL.md text itself, when it is already in hand. Mutually exclusive with 'source'." },
+				"content": { "type": "string", "enum": ["inline", "ref"], "description": "How the returned metadata carries the body: 'inline' (default) copies it into content.inline — self-contained; 'ref' binds content.ref to 'source' so the body stays live in the file (requires 'source')." }
+			}
+		},
+		"output": {
+			"type": "object",
+			"description": "{metadata, name, description, ignored?}. 'metadata' is the complete skill map — write it to w/skills/<name> with the lattice write operation, or store it with the asset store operation for an immutable a/<hash>. 'ignored' lists frontmatter keys that have no Covia equivalent (for example allowed-tools or argument-hint) and were dropped. Fails when the text has no frontmatter, no description, or no name that can be derived from the source, or when the source does not resolve to content — a source that is already skill metadata is read with the skill-read operation instead."
+		}
+	}
+}

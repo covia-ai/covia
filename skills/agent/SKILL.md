@@ -157,8 +157,9 @@ sources you trust.
 
 | Want | Do |
 |------|-----|
-| See what a venue offers | `skills command=list` (optionally `sources=[...]`) |
-| Read one without loading it | `skills command=read name=<name>` (or `ref=<path>`) |
+| See what a venue offers | `skills_list` (optionally `skillset=<dir>`; default = the venue's configured entry skillsets) |
+| Read one without loading it | `skills_read skill=<path or a/hash>` |
+| Import a SKILL.md from a file root or DLFS drive | `skills_import source=file://<root>/<dir>/SKILL.md` — one file per call, lands at `w/skills/<name>`; the venue's `v/skills/building/skill-import` skill covers the options |
 | See exactly what an agent would send its model | `agent_context agentId=<name> message="…"` (or `task=…`, `sessionId=…`) — the level-3 input for that call with cache marks, budget and band marks |
 | Audit what an agent did in a cycle | `covia_read path=g/<name>/timeline` — each entry holds the cycle's `context`, `tools` and `inferences` (per call: `sent`, `reply`, `calls` with results and `ms`; a `subgoal` call carries its child `frame`) |
 | Dry-run one harness iteration — "why was my tool denied?" | `agent_step agentId=<name> message="…" assistant={"toolCalls":[{"name":"<tool>","arguments":{…}}]}` — dispatches the calls as live (real side effects), returns `calls` with results/errors/ms and `next` (the following prompt); the agent's state is untouched |

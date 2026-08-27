@@ -10,10 +10,21 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Added
 
+- `v/ops/skills/parse` and `v/ops/skills/import`: translate one SKILL.md
+  (Anthropic Agent Skills format) into skill metadata, or write it straight to
+  `<skillset>/<name>` — one file per call, body copied or bound live.
+- `file://` and `dlfs/` references to a SKILL.md resolve as skills wherever a
+  skill ref is accepted.
 - Optional `covia-sonnylabs` module with `v/ops/sonnylabs/scan` for testing
   prompts and other LLM-facing text through the SonnyLabs AI firewall. It
   supports venue-managed or caller-owned secret references, self-hosted
   endpoints, scan tiers and explicit provider-retention controls.
+
+### Fixed
+
+- SKILL.md frontmatter with a folded, literal or wrapped description parsed as
+  `>` instead of the text; unknown frontmatter keys are now reported rather
+  than silently dropped.
 
 ## [0.9.5] - 2026-08-25
 

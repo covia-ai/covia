@@ -93,7 +93,7 @@ AUTH_REQUIRED).
 | `vault` | Personal vault (configurable-drive DLFS wrapper) | `read`, `write`, `list`, `mkdir`, `delete` |
 | `secret` | Secret store | `set`, `extract` (removal via `covia:delete s/<name>`) |
 | `memory` | Per-user agent memory (one LWW vector, default `w/memory`) | `recall`, `remember`, `update`, `forget` |
-| `skills` | Agent skills discovery (see `docs/SKILLS.md`) | `list`, `read` (command-dispatched) |
+| `skills` | Agent skills discovery and SKILL.md import (see `docs/SKILLS.md`) | `list`, `read`, `parse`, `import` |
 | `ucan` | Capability tokens — granting surface (COG-17) | `issue`, `verify` |
 | `scheduler` | Deferred grid-op invocation, one-shot or `repeat.every`; tracked fires are durable Jobs (`docs/GRID_SCHEDULER.md`) | `schedule`, `cancel`, `trigger`, `list` |
 | `auth` | Authentication ops | login/token flows |
