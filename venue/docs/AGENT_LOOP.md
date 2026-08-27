@@ -489,6 +489,24 @@ includes a caps section so the LLM knows its boundaries upfront.
 
 See [UCAN.md](./UCAN.md) for the capability model.
 
+#### Batch execution
+
+A reply may request several tool calls at once. The batch runs as ordered
+**waves** (`ToolCycleEngine`): ordinary operation calls that sit next to each
+other in the batch run **concurrently**, one virtual thread each, so a model's
+parallel reads and writes overlap instead of queueing; a harness tool
+(`complete`, `fail`, `subgoal`, `compact`, `context_load`/`unload`,
+`skill_load`, `more_tools`) is a **barrier** — it runs alone, on the loop
+thread, after the wave before it has finished and before the wave after it
+starts, because it mutates the harness context or ends the cycle and its
+position in the batch is its meaning. Whatever order calls finish in, results
+are appended in call order and every call id gets exactly one result; a
+successful terminal call still fences every later call (they receive an
+"Error: not executed" result and never run); each call keeps its own dispatch
+timeout, so a wave takes as long as its slowest member; and the timeline's
+`calls[].ms` is each call's own wall clock. A single-call batch runs on the
+loop thread with no hop.
+
 #### Additional tools
 
 Level 2 also passes through any **external MCP tools** configured for the agent

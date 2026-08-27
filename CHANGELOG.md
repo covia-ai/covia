@@ -10,6 +10,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Added
 
+- Parallel tool calls in the agent cycle: adjacent operation calls in one
+  reply run concurrently; harness tools stay ordered barriers and results keep
+  call order.
 - `v/ops/skills/parse` and `v/ops/skills/import`: translate one SKILL.md
   (Anthropic Agent Skills format) into skill metadata, or write it straight to
   `<skillset>/<name>` — one file per call, body copied or bound live.
