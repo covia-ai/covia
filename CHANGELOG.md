@@ -25,6 +25,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Changed
 
+- A2A per-agent `SendMessage` with a `contextId` submits an `agent:request` task on
+  that session (was `agent:chat`), so every A2A send is its own Task with its own
+  reply (#416).
 - The Telegram agent skill now reveals a separate bot-management child for
   creating, inspecting and deleting user-owned bots. Management authority stays
   unloaded during ordinary messaging, and the child reveals encrypted secret

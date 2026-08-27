@@ -391,6 +391,28 @@ public class A2AAgentCardTest {
 		assertNotEquals(initial.id(), next.id());
 		assertEquals(initial.contextId(), next.contextId());
 		awaitTask(endpoint, next.id(), jwt, TaskState.TASK_STATE_COMPLETED);
+
+		// Two contextId sends queued before the agent runs are two tasks, two
+		// cycles and two replies — never one shared chat reply (#416).
+		AgentState agentState = TestServer.ENGINE.getVenueState().users().get(ownerDid).agent("Continuer");
+		long cyclesBefore = agentState.getTimeline().count();
+		Message fifthTurn = Message.builder().role(Message.Role.ROLE_USER)
+			.parts(List.<Part<?>>of(new TextPart("fifth", null))).messageId("context-fifth")
+			.contextId(initial.contextId()).build();
+		Message sixthTurn = Message.builder().role(Message.Role.ROLE_USER)
+			.parts(List.<Part<?>>of(new TextPart("sixth", null))).messageId("context-sixth")
+			.contextId(initial.contextId()).build();
+		Task fifth = extractTask(parse(post(endpoint,
+			rpcEnvelope("fifth", "SendMessage", new MessageSendParams(fifthTurn, null, null)), jwt)));
+		Task sixth = extractTask(parse(post(endpoint,
+			rpcEnvelope("sixth", "SendMessage", new MessageSendParams(sixthTurn, null, null)), jwt)));
+		assertNotEquals(fifth.id(), sixth.id());
+		assertEquals(initial.contextId(), fifth.contextId());
+		assertEquals(initial.contextId(), sixth.contextId());
+		awaitTask(endpoint, fifth.id(), jwt, TaskState.TASK_STATE_COMPLETED);
+		awaitTask(endpoint, sixth.id(), jwt, TaskState.TASK_STATE_COMPLETED);
+		assertEquals(cyclesBefore + 2, agentState.getTimeline().count(),
+			"each queued send is its own task and runs its own cycle");
 	}
 
 	/**

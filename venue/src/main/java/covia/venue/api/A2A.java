@@ -354,11 +354,13 @@ public class A2A extends ACoviaAPI {
 	}
 
 	/**
-	 * Per-agent {@code SendMessage}: a fresh message is submitted to the agent as
-	 * an {@code agent:request} task; the task Job becomes the A2A Task (async — the
-	 * client polls GetTask). A {@code contextId} without a task starts a new chat
-	 * Job in the existing session; a {@code taskId} attaches input to that exact
-	 * non-terminal agent task.
+	 * Per-agent {@code SendMessage}: a message without a {@code taskId} is
+	 * submitted to the agent as an {@code agent:request} task — on the session
+	 * a {@code contextId} names, or a fresh one — and the task Job becomes the
+	 * A2A Task (async — the client polls GetTask). A {@code taskId} attaches
+	 * input to that exact non-terminal agent task. Every send is therefore its
+	 * own task with its own reply; the per-agent surface never uses
+	 * {@code agent:chat} (#416).
 	 */
 	private void doSendMessageToAgent(Context ctx, Object id, MessageSendParams params,
 			A2ACodec.AgentRef ref, RequestContext rctx) {
@@ -375,18 +377,18 @@ public class A2A extends ACoviaAPI {
 		AMap<AString, ACell> record = A2ACodec.toMessageRecord(incoming, false);
 		Job job;
 		try {
+			// Every per-agent send is an agent:request task: a contextId selects
+			// the session, the task Job is the A2A Task, and each message gets
+			// its own cycle and its own reply (#416). agent:chat would batch
+			// the messages queued on one session into one shared reply, which
+			// A2A cannot express — a message without taskId is a new task.
+			AMap<AString, ACell> input = Maps.of(
+				Fields.AGENT_ID, Strings.create(ref.agentId()),
+				Fields.INPUT, record);
 			if (incoming.contextId() != null) {
-				ACell input = Maps.of(
-					Fields.AGENT_ID, Strings.create(ref.agentId()),
-					Fields.MESSAGE, record,
-					Fields.SESSION_ID, Strings.create(incoming.contextId()));
-				job = engine().jobs().invokeOperation("v/ops/agent/chat", input, rctx);
-			} else {
-				ACell input = Maps.of(
-					Fields.AGENT_ID, Strings.create(ref.agentId()),
-					Fields.INPUT, record);
-				job = engine().jobs().invokeOperation("v/ops/agent/request", input, rctx);
+				input = input.assoc(Fields.SESSION_ID, Strings.create(incoming.contextId()));
 			}
+			job = engine().jobs().invokeOperation("v/ops/agent/request", input, rctx);
 		} catch (IllegalArgumentException e) {
 			writeError(ctx, id, A2AErrorCodes.INVALID_AGENT_RESPONSE,
 				"Agent intake failed: " + e.getMessage());

@@ -167,6 +167,15 @@ immediately with its Task and session identifiers; it never imposes a
 synchronous turn deadline. Polling and SSE therefore observe one state machine
 and converge on the same final Task.
 
+A `SendMessage` carrying a `contextId` but no `taskId` is likewise an
+`agent:request` on that session — a new task, one cycle, its own reply — and
+a `taskId` continues that task. The per-agent surface never uses `agent:chat`:
+a message without `taskId` is a new unit of work in A2A, whereas `agent:chat`
+batches the messages queued on one session into one shared reply
+(AGENT_SESSIONS.md §5.5.2), which A2A has no way to express (#416). The front
+door is whatever `a2a.defaultChatOp` names; an operator who points it at an
+agent chat inherits chat semantics there.
+
 ## Relationship to the venue-as-single-agent model
 
 The current single-agent behaviour stays as the **front-door** case: an operator
@@ -212,7 +221,7 @@ Shipped:
   operations.
 - Authenticated catalogue discovery over the job-free agent-list read surface.
 - Per-agent `SendMessage` dispatch through `agent:request`, with Task = task Job
-  and `contextId` = session.
+  and `contextId` = session — for fresh sends and `contextId` follow-ups alike (#416).
 - Private-by-default cards, explicit public publication, and attenuated
   anonymous interaction scopes alongside UCAN delegation.
 - `GetTask` and `CancelTask` on the per-agent endpoint.
