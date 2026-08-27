@@ -5,7 +5,7 @@
 	<parent>
 		<groupId>ai.covia</groupId>
 		<artifactId>covia</artifactId>
-		<version>0.9.6-SNAPSHOT</version>
+		<version>0.9.6</version>
 	</parent>
 	<artifactId>covia-telegram</artifactId>
 
