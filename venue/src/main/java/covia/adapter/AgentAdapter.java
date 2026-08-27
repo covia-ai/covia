@@ -197,16 +197,20 @@ public class AgentAdapter extends AAdapter {
 
 	/**
 	 * Per-agent in-flight chat Jobs keyed by session ID. An entry reserves
-	 * the chat slot for its session — a subsequent {@code agent:chat} on the
-	 * same session fails fast while the entry is live. The slot is released
-	 * when the run loop completes the Job, when the caller's Job is cancelled
-	 * (via a cancel hook registered in {@link #handleChat}), or when
-	 * {@link #failAllPendingForAgent} sweeps on technical failure. Keeping
-	 * the reservation in memory (not on the lattice) lets {@code Job.isFinished()}
-	 * act as the truth — no separate CAS required, and a cancelled caller
-	 * Job naturally frees the slot.
+	 * a chat awaiting a reply on a session, keyed by the chat's own Job id, so a
+	 * session may hold several at once — chats are not serialised. A response on
+	 * the session completes every waiter whose message it had already seen (its
+	 * envelope drained from {@code session.pending}); one that arrived after the
+	 * cycle's snapshot stays until the next response (§5.5). The map is released
+	 * per waiter when the run loop completes its Job, when the caller cancels it
+	 * (a cancel hook in {@link #handleChat}), on {@code deleteSession}, or when
+	 * {@link #failAllPendingForAgent} sweeps on technical failure. Keeping it in
+	 * memory (not on the lattice) lets {@code Job.isFinished()} be the truth —
+	 * the durable record of an awaiting chat is its envelope in
+	 * {@code session.pending} plus the STARTED Job, recovered on restart by the
+	 * stale-STARTED gate, not this map.
 	 */
-	private final ConcurrentHashMap<AgentKey, ConcurrentHashMap<Blob, Job>> activeChats = new ConcurrentHashMap<>();
+	private final ConcurrentHashMap<AgentKey, ConcurrentHashMap<Blob, ConcurrentHashMap<Blob, Job>>> activeChats = new ConcurrentHashMap<>();
 
 	/**
 	 * Identity of an agent on this venue: its owner's DID plus the local agent
@@ -266,16 +270,25 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/** True only while this venue process owns a live run-loop attempt. */
-	/** A job's id for messages; a job without one (test placeholders) renders as "?". */
-	private static String jobIdOf(Job job) {
-		Blob id = (job != null) ? job.getID() : null;
-		return (id != null) ? id.toHexString() : "?";
+
+	/** The set of chat-job ids still queued in a session's pending envelopes —
+	 *  a waiter whose id is here has not yet been presented to the agent. */
+	private static java.util.Set<Blob> pendingChatJobIds(AVector<ACell> pending) {
+		java.util.Set<Blob> ids = new java.util.HashSet<>();
+		if (pending == null) return ids;
+		for (long i = 0; i < pending.count(); i++) {
+			AString jobHex = RT.ensureString(RT.getIn(pending.get(i), Fields.JOB_ID));
+			if (jobHex != null) {
+				try { ids.add(Blob.fromHex(jobHex.toString())); } catch (Exception ignored) {}
+			}
+		}
+		return ids;
 	}
 
-	/** Whether a session still has queued (undrained) chat/message envelopes. */
-	private static boolean hasPendingEnvelopes(AgentState agent, Blob sid) {
-		AVector<ACell> pending = agent.getSessionPending(sid);
-		return pending != null && pending.count() > 0;
+	/** The in-memory waiter map for one session, or null when none is held. */
+	private ConcurrentHashMap<Blob, Job> sessionChats(AgentKey key, Blob sid) {
+		ConcurrentHashMap<Blob, ConcurrentHashMap<Blob, Job>> agentChats = activeChats.get(key);
+		return (agentChats != null) ? agentChats.get(sid) : null;
 	}
 
 	private boolean isRunning(AgentKey key) {
@@ -298,27 +311,19 @@ public class AgentAdapter extends AAdapter {
 			? AgentState.RUNNING : AgentState.SLEEPING;
 	}
 
-	/**
-	 * Test-only: injects a chat reservation so a follow-up {@code agent:chat}
-	 * on the same session hits the busy-slot path deterministically without
-	 * needing a real long-running transition to hold the slot.
-	 */
-	public void reserveChatSlotForTest(AString ownerDID, AString agentId, Blob sid, Job job) {
-		activeChats.computeIfAbsent(new AgentKey(ownerDID, agentId), k -> new ConcurrentHashMap<>())
-			.put(sid, job);
-	}
 
 	/**
-	 * Test-only: returns the live chat Job for the given session (the one
-	 * reserving the in-memory slot), or {@code null} if no reservation
-	 * is held. Returns null if the previous holder's Job has since finished
-	 * — matches the semantics used by the run loop.
+	 * Test-only: returns a live chat Job awaiting on the given session, or
+	 * {@code null} when none is — matches the run loop's finished-is-released
+	 * semantics.
 	 */
 	public Job getActiveChatForTest(AString ownerDID, AString agentId, Blob sid) {
-		ConcurrentHashMap<Blob, Job> agentChats = activeChats.get(new AgentKey(ownerDID, agentId));
-		if (agentChats == null) return null;
-		Job j = agentChats.get(sid);
-		return (j != null && !j.isFinished()) ? j : null;
+		ConcurrentHashMap<Blob, Job> sessionChats = sessionChats(new AgentKey(ownerDID, agentId), sid);
+		if (sessionChats == null) return null;
+		for (Job j : sessionChats.values()) {
+			if (j != null && !j.isFinished()) return j;
+		}
+		return null;
 	}
 
 	/** Counter for session ID generation */
@@ -1283,48 +1288,20 @@ public class AgentAdapter extends AAdapter {
 		if (sid == null) return;
 		AString sidHex = Strings.create(sid.toHexString());
 
-		// Reserve the per-session chat slot (in-memory), atomically: two chats
-		// arriving together must not both pass a check-then-put and both queue
-		// envelopes (the cycle would complete only one and the other would hang
-		// STARTED for ever). A previous caller whose Job has since finished
-		// (completed or cancelled) no longer holds the slot. Register a cancel
-		// hook so the caller cancelling their own Job immediately frees the
-		// slot for a retry.
+		// Chats are not serialised: register this one as a waiter on the session
+		// keyed by its own Job id, alongside any already awaiting. Its message
+		// queues below like any other; the cycle that next runs on this session
+		// answers the conversation so far, and completion (in the run loop)
+		// resolves every waiter the agent had already seen. A cancel hook drops
+		// the waiter so a caller cancelling their own Job stops awaiting at once.
 		AgentKey chatKey = target.key();
 		ConcurrentHashMap<Blob, Job> agentChats = activeChats
-			.computeIfAbsent(chatKey, k -> new ConcurrentHashMap<>());
-		Job[] displaced = new Job[1];
-		Job holder = agentChats.compute(sid, (k, existing) -> {
-			if (existing == null || existing.isFinished()) return job;
-			// An unfinished holder that nothing can ever complete — the agent
-			// loop is not running and the session has no queued work — is a
-			// wedge (a transition that died, a lost wake), not a busy session
-			// (#377). Self-heal: fail it with the reason and take the slot.
-			// A genuinely busy session always has the loop running or an
-			// envelope pending, so this cannot misfire on it.
-			if (!isRunning(chatKey) && !hasPendingEnvelopes(agent, sid)) {
-				displaced[0] = existing;
-				return job;
-			}
-			return existing;
-		});
-		if (holder != job) {
-			job.fail("Session " + sidHex + " already has an in-flight chat (job "
-				+ jobIdOf(holder) + ", " + holder.getStatus()
-				+ ") — wait for it or cancel it before sending another message");
-			return;
-		}
-		if (displaced[0] != null) {
-			log.warn("Session {} of agent {}: chat job {} was left unfinished with the agent idle and "
-				+ "nothing pending — failing it and accepting a new chat", sidHex, agentId,
-				jobIdOf(displaced[0]));
-			displaced[0].fail("Chat cycle did not complete: the agent went idle with this chat still "
-				+ "in flight and no queued work — the session was released for the next message");
-		}
+			.computeIfAbsent(chatKey, k -> new ConcurrentHashMap<>())
+			.computeIfAbsent(sid, k -> new ConcurrentHashMap<>());
+		agentChats.put(job.getID(), job);
 		final ConcurrentHashMap<Blob, Job> chatsRef = agentChats;
-		final Blob sidRef = sid;
 		final Job jobRef = job;
-		job.setCancelHook(() -> chatsRef.remove(sidRef, jobRef));
+		job.setCancelHook(() -> chatsRef.remove(jobRef.getID(), jobRef));
 
 		// The envelope carries the chat Job id for provenance — turns minted
 		// from it keep the id, tying conversation content back to the job.
@@ -2214,14 +2191,16 @@ public class AgentAdapter extends AAdapter {
 			return;
 		}
 
-		// Fail any in-flight chat awaiting on this session so its caller
-		// unblocks with a clean error (scoped analogue of failAllPendingForAgent)
-		ConcurrentHashMap<Blob, Job> agentChats =
+		// Fail every chat awaiting on this session so each caller unblocks with
+		// a clean error (scoped analogue of failAllPendingForAgent).
+		ConcurrentHashMap<Blob, ConcurrentHashMap<Blob, Job>> agentChats =
 			activeChats.get(target.key());
 		if (agentChats != null) {
-			Job chatJob = agentChats.remove(sid);
-			if (chatJob != null && !chatJob.isFinished()) {
-				chatJob.fail("Session deleted");
+			ConcurrentHashMap<Blob, Job> sessionChats = agentChats.remove(sid);
+			if (sessionChats != null) {
+				for (Job chatJob : sessionChats.values()) {
+					if (chatJob != null && !chatJob.isFinished()) chatJob.fail("Session deleted");
+				}
 			}
 		}
 
@@ -2934,17 +2913,9 @@ public class AgentAdapter extends AAdapter {
 				// from it — a second lattice read would let a message land in
 				// between, making the drain count, the adapter's view and the
 				// timeline snapshot disagree about what was presented.
-				Job pickedChatJob = null;
 				AMap<AString, ACell> pickedSessionRecord = null;
 				AVector<ACell> filteredInbox = Vectors.empty();
 				if (pickedSessionBlob != null) {
-					ConcurrentHashMap<Blob, Job> agentChats = activeChats.get(key);
-					if (agentChats != null) {
-						Job candidate = agentChats.get(pickedSessionBlob);
-						if (candidate != null && !candidate.isFinished()) {
-							pickedChatJob = candidate;
-						}
-					}
 					pickedSessionRecord = agent.getSession(pickedSessionBlob);
 					if (pickedSessionRecord != null
 							&& pickedSessionRecord.get(AgentState.KEY_PENDING) instanceof AVector<?> pv) {
@@ -2990,8 +2961,13 @@ public class AgentAdapter extends AAdapter {
 						taskJob.setStatus(Status.STARTED);
 					}
 				}
-				if (pickedChatJob != null && Status.PENDING.equals(pickedChatJob.getStatus())) {
-					pickedChatJob.setStatus(Status.STARTED);
+				if (pickedSessionBlob != null) {
+					ConcurrentHashMap<Blob, Job> waiters = sessionChats(key, pickedSessionBlob);
+					if (waiters != null) {
+						for (Job w : waiters.values()) {
+							if (w != null && Status.PENDING.equals(w.getStatus())) w.setStatus(Status.STARTED);
+						}
+					}
 				}
 
 				AMap<AString, ACell> transitionInput = Maps.of(
@@ -3117,7 +3093,7 @@ public class AgentAdapter extends AAdapter {
 				IterResult merged = mergeAndPostProcess(
 					agent, agentId, ownerDID, transitionOp, framesOwned, transitionResult, pickedTask,
 					pickedTaskInput, formattedTasks, pickedSession,
-					pickedSessionBlob, pickedChatJob, filteredInbox, resolvedPending,
+					pickedSessionBlob, filteredInbox, resolvedPending,
 					presentedSessionPendingCount, startTs, allTaskResults);
 				lastResult = merged.lastResult();
 				allTaskResults = merged.allTaskResults();
@@ -3175,7 +3151,7 @@ public class AgentAdapter extends AAdapter {
 			AString transitionOp, boolean framesOwned,
 			ACell transitionResult, Map.Entry<Blob, ACell> pickedTask,
 			ACell pickedTaskInput, AVector<ACell> formattedTasks,
-			AString pickedSession, Blob pickedSessionBlob, Job pickedChatJob,
+			AString pickedSession, Blob pickedSessionBlob,
 			AVector<ACell> filteredInbox, ACell pending, long presentedSessionPendingCount,
 			long startTs, AMap<AString, ACell> allTaskResults) {
 		final AgentKey key = new AgentKey(callerDID, agentId);
@@ -3397,7 +3373,6 @@ public class AgentAdapter extends AAdapter {
 			if (pickedTask != null) {
 				attachTokens(engine.jobs().getJob(pickedTask.getKey()), cycleTokens);
 			}
-			attachTokens(pickedChatJob, cycleTokens);
 		}
 
 		// Now that the timeline + state are persisted, claim the parked
@@ -3406,23 +3381,31 @@ public class AgentAdapter extends AAdapter {
 		// awaitResult caller sees the completed cycle's writes.
 		completeDeferredJobs(deferredCompletions.remove(key));
 
-		// Complete any in-flight chat for the picked session. Same
-		// post-merge ordering invariant as task completion.
-		if (pickedChatJob != null && (leanError != null || leanResponse != null)) {
-			ConcurrentHashMap<Blob, Job> agentChats = activeChats.get(key);
-			if (agentChats != null) agentChats.remove(pickedSessionBlob, pickedChatJob);
-			if (leanError != null) {
-				if (!pickedChatJob.isFinished()) pickedChatJob.fail(leanError.toString());
-			} else {
-				if (!pickedChatJob.isFinished()) {
-					pickedChatJob.completeWith(Maps.of(
+		// Complete every chat the agent has already seen. A response on the
+		// session answers the whole conversation queued before this cycle, so
+		// each waiter whose envelope has been drained from pending (presented
+		// this cycle or an earlier yielded one) resolves with the same reply;
+		// a waiter whose envelope is still pending arrived after the snapshot
+		// and keeps awaiting. Same post-merge ordering as task completion. A
+		// technical error suspends the agent and fails every waiter via
+		// failAllPendingForAgent below, so only the response path is here.
+		if (leanResponse != null && pickedSessionBlob != null) {
+			ConcurrentHashMap<Blob, Job> waiters = sessionChats(key, pickedSessionBlob);
+			if (waiters != null) {
+				java.util.Set<Blob> stillQueued = pendingChatJobIds(agent.getSessionPending(pickedSessionBlob));
+				for (Job chatJob : new java.util.ArrayList<>(waiters.values())) {
+					if (chatJob == null || chatJob.isFinished()) { waiters.remove(chatJob != null ? chatJob.getID() : null); continue; }
+					if (stillQueued.contains(chatJob.getID())) continue;   // not yet presented
+					waiters.remove(chatJob.getID(), chatJob);
+					if (cycleTokens != null) attachTokens(chatJob, cycleTokens);
+					chatJob.completeWith(Maps.of(
 						Fields.AGENT_ID,   agentId,
 						Fields.SESSION_ID, pickedSession,
 						Fields.RESPONSE,   leanResponse));
 				}
 			}
 		}
-		// else: yield — keep slot reserved for the next wake
+		// else: yield — every waiter stays for the next response
 
 		// Fail-fast on transition error. Framework does not classify or retry —
 		// the caller (operator, or whichever submitter is awaiting a queued
@@ -3740,11 +3723,11 @@ public class AgentAdapter extends AAdapter {
 		if (agent != null) {
 			failQueuedTasks(agent.getTasks(), error);
 		}
-		ConcurrentHashMap<Blob, Job> agentChats = activeChats.remove(key);
+		ConcurrentHashMap<Blob, ConcurrentHashMap<Blob, Job>> agentChats = activeChats.remove(key);
 		if (agentChats != null) {
-			for (Job chatJob : agentChats.values()) {
-				if (chatJob != null && !chatJob.isFinished()) {
-					chatJob.fail(error);
+			for (ConcurrentHashMap<Blob, Job> sessionChats : agentChats.values()) {
+				for (Job chatJob : sessionChats.values()) {
+					if (chatJob != null && !chatJob.isFinished()) chatJob.fail(error);
 				}
 			}
 		}

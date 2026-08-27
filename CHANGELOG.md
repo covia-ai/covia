@@ -10,6 +10,10 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Changed
 
+- `agent:chat` no longer rejects concurrent chats on one session. Several may
+  await at once; a response completes every chat whose message the agent had
+  already seen, so quick successive messages may share one reply. Removes the
+  "already has an in-flight chat" failure and the single-slot machinery.
 - Loaded context is data and renders as tool exchanges: every `config.context`
   entry and every non-skill load is a venue-made `loaded_context` call naming
   its key, source and origin, with the content as the tool result. Skills

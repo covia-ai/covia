@@ -1,6 +1,6 @@
 {
 	"name": "Chat with Agent",
-	"description": "Send a message to an agent and synchronously await its next response on the session. Mints a new session when sessionId is omitted (returned in the response); continues an existing session when sessionId is supplied. A2A message/send analogue. Use this for conversational interactions where you need a reply. Use agent_request for tracked task delegation, or agent_message for fire-and-forget notifications. Only one chat may be in flight per session — concurrent calls on the same session are rejected.",
+	"description": "Send a message to an agent and synchronously await its next response on the session. Mints a new session when sessionId is omitted (returned in the response); continues an existing session when sessionId is supplied. A2A message/send analogue. Use this for conversational interactions where you need a reply. Use agent_request for tracked task delegation, or agent_message for fire-and-forget notifications. Several chats may be in flight on one session at once — they are not rejected; each awaits the agent's next response, and a response answers every message the agent had already seen, so quick successive messages may share one reply.",
 	"dateCreated": "2026-04-16T00:00:00Z",
 	"operation": {
 		"adapter": "agent:chat",

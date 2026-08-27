@@ -1898,96 +1898,50 @@ public class AgentAdapterTest {
 	}
 
 	@Test
-	public void testChatRejectsConcurrentOnSameSession() throws InterruptedException {
-		// Use a long-running LLM op so the first chat stays in flight while
-		// the second arrives. v/test/ops/delay holds the transition open.
+	public void testConcurrentChatsOnOneSessionAllGetTheReply() throws Exception {
+		// Chats are not serialised: several may await one session at once, and a
+		// response answers the conversation the agent had already seen, so every
+		// presented waiter completes with that reply — none is rejected.
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
-			Maps.of(
-				Fields.AGENT_ID, "chat-busy-agent",
+			Maps.of(Fields.AGENT_ID, "chat-multi-agent",
 				Fields.CONFIG, Maps.of(
 					Fields.OPERATION, "v/ops/llmagent/chat",
-					// Wrap delay around the L3 call by using the standard llm op
-					// but with a slow llm. Easiest: use test:delay-llm if it exists,
-					// otherwise just attempt a second call quickly.
 					"llmOperation", "v/test/ops/llm",
-					"systemPrompt", "Echo the user."
-				)
-			),
+					"systemPrompt", "Echo the user.")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		User user = engine.getVenueState().users().get(ALICE_DID);
-		AgentState agent = user.agent("chat-busy-agent");
-
-		// Pre-create a session and reserve its in-memory chat slot with a
-		// never-finished Job to force the second-chat-on-busy-session error
-		// path deterministically.
-		Blob sid = Blob.fromHex("11111111111111111111111111111111");
-		agent.ensureSession(sid, ALICE_DID);
-		AgentAdapter agentAdapter = (AgentAdapter) engine.getAdapter("agent");
-		// A never-completing placeholder Job holds the slot, and its envelope is
-		// still queued on the session — a genuinely busy session (a chat that
-		// was accepted and not yet drained), which intake must refuse.
-		Job placeholder = Job.create(Maps.of(Fields.STATUS, Status.STARTED));
-		agentAdapter.reserveChatSlotForTest(
-			ALICE_DID, Strings.create("chat-busy-agent"), sid, placeholder);
-		agent.appendSessionPending(sid, Maps.of(
-			Fields.CALLER, ALICE_DID, Fields.MESSAGE, Strings.create("first, still queued")));
-
-		// Now an agent_chat on the same session must fail fast
-		Job chatJob = engine.jobs().invokeOperation(
+		// First chat mints the session; recover its id and send more on it. invoke
+		// returns the Job before the cycle runs, so the follow-ups queue alongside.
+		Job first = engine.jobs().invokeOperation(
 			"v/ops/agent/chat",
-			Maps.of(
-				Fields.AGENT_ID,   "chat-busy-agent",
-				Fields.SESSION_ID, Strings.create(sid.toHexString()),
-				Fields.MESSAGE,    Strings.create("hi")),
+			Maps.of(Fields.AGENT_ID, "chat-multi-agent", Fields.MESSAGE, Strings.create("one")),
 			RequestContext.of(ALICE_DID));
+		ACell firstResult = first.awaitResult(10000);
+		assertEquals(Status.COMPLETE, first.getStatus(), String.valueOf(first.getErrorMessage()));
+		assertNotNull(RT.getIn(firstResult, Fields.RESPONSE));
+		AString sidHex = RT.ensureString(RT.getIn(firstResult, Fields.SESSION_ID));
+		assertNotNull(sidHex, "chat returns its session id");
 
-		try {
-			chatJob.awaitResult(5000);
-			fail("Concurrent chat on same session must be rejected");
-		} catch (Exception e) {
-			assertEquals(Status.FAILED, chatJob.getStatus());
-			assertTrue(String.valueOf(chatJob.getErrorMessage()).contains("already has an in-flight chat"),
-				chatJob.getErrorMessage());
-		}
-		assertFalse(placeholder.isFinished(), "a busy holder is left alone");
-	}
-
-	/**
-	 * Regression for #377: a chat whose cycle never completed (a transition
-	 * that died, a lost wake) used to hold the session's slot for ever — every
-	 * later chat was rejected as "already in flight" although nothing could
-	 * ever finish the holder. Intake now recognises that state (agent idle,
-	 * nothing pending) and self-heals: the stale holder is failed with the
-	 * reason and the new chat proceeds.
-	 */
-	@Test
-	public void testChatSelfHealsAWedgedSession() {
-		createChatAgent("chat-wedged-agent");
-		User user = engine.getVenueState().users().get(ALICE_DID);
-		AgentState agent = user.agent("chat-wedged-agent");
-		Blob sid = Blob.fromHex("22222222222222222222222222222222");
-		agent.ensureSession(sid, ALICE_DID);
-		AgentAdapter agentAdapter = (AgentAdapter) engine.getAdapter("agent");
-		// The wedge: an unfinished holder, agent idle, session pending empty.
-		Job stale = Job.create(Maps.of(Fields.STATUS, Status.STARTED));
-		agentAdapter.reserveChatSlotForTest(ALICE_DID, Strings.create("chat-wedged-agent"), sid, stale);
-
-		Job chatJob = engine.jobs().invokeOperation(
+		// Two more on the same session, back to back — neither is rejected.
+		Job a = engine.jobs().invokeOperation(
 			"v/ops/agent/chat",
-			Maps.of(
-				Fields.AGENT_ID,   "chat-wedged-agent",
-				Fields.SESSION_ID, Strings.create(sid.toHexString()),
-				Fields.MESSAGE,    Strings.create("are you there?")),
+			Maps.of(Fields.AGENT_ID, "chat-multi-agent", Fields.SESSION_ID, sidHex,
+				Fields.MESSAGE, Strings.create("two")),
 			RequestContext.of(ALICE_DID));
-		ACell result = chatJob.awaitResult(10000);
-		assertEquals(Status.COMPLETE, chatJob.getStatus(), "the new chat proceeds: " + chatJob.getErrorMessage());
-		assertNotNull(RT.getIn(result, Fields.RESPONSE));
-		assertTrue(stale.isFinished() && Status.FAILED.equals(stale.getStatus()), "the stale holder is failed, not left dangling");
-		assertTrue(String.valueOf(stale.getErrorMessage()).contains("did not complete"), stale.getErrorMessage());
-		assertNull(agentAdapter.getActiveChatForTest(ALICE_DID, Strings.create("chat-wedged-agent"), sid),
-			"slot released after the healed chat completed");
+		Job b = engine.jobs().invokeOperation(
+			"v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "chat-multi-agent", Fields.SESSION_ID, sidHex,
+				Fields.MESSAGE, Strings.create("three")),
+			RequestContext.of(ALICE_DID));
+		ACell ra = a.awaitResult(10000);
+		ACell rb = b.awaitResult(10000);
+		assertEquals(Status.COMPLETE, a.getStatus(), String.valueOf(a.getErrorMessage()));
+		assertEquals(Status.COMPLETE, b.getStatus(), String.valueOf(b.getErrorMessage()));
+		assertNotNull(RT.getIn(ra, Fields.RESPONSE));
+		assertNotNull(RT.getIn(rb, Fields.RESPONSE));
+		assertEquals(sidHex, RT.getIn(ra, Fields.SESSION_ID));
+		assertEquals(sidHex, RT.getIn(rb, Fields.SESSION_ID));
 	}
 
 	@Test

@@ -130,7 +130,7 @@ agent_trigger   agentId=X  sessionId=Y?                 — wake the agent. No p
 | Op | Queue | Caller waits? | Completion semantics |
 |----|-------|---------------|----------------------|
 | `agent_request` | `tasks` Index | yes (Job) | Agent must produce `response` (auto-completes task) or `error`, or yield (task stays pending until external wake) |
-| `agent_chat` | session-scoped chat slot | yes (Job) | Agent's next `response` on this session completes the chat job. Typically continues an existing session (`sessionId` supplied); mints a new one on first contact |
+| `agent_chat` | session `pending` (as an awaiting waiter) | yes (Job) | Agent's next `response` on this session completes every chat whose message it had already seen (§5.5.2). Not serialised — several may await one session. Typically continues an existing session (`sessionId` supplied); mints a new one on first contact |
 | `agent_message` | session `pending` | no | Agent processes whenever; any `response` lands in session history |
 | `agent_trigger` | none | block on cycle quiesce/yield | **Fallback kick** — nudges the run loop, no payload, no result-await. Callers wanting output should wait on a task/chat Job from `agent_request` / `agent_chat`. |
 
@@ -246,6 +246,8 @@ g/<agent>/sessions/<sid>/
 ```
 
 When the agent next transitions, claimed items in `pending` are appended to the root-frame conversation atomically as they are presented to the transition. This preserves ordering per-session and prevents interleaving across sessions — conversation A can't disrupt conversation B's turn assembly.
+
+**Chats are not serialised.** A session may hold several `agent_chat` calls awaiting at once — a caller sending three messages before a reply arrives is never rejected. Each is a waiter (an envelope in `pending` carrying its chat Job id, plus a STARTED Job). A cycle drains every presented envelope into one prompt and produces one response, so completion resolves **every waiter the agent had already seen** — each whose envelope was drained (presented this cycle or an earlier one that yielded) completes with that same response; a waiter whose envelope is still `pending` arrived after the cycle's snapshot and awaits the next response. So N quick messages get the one reply the agent formed after reading all N — which is honest, not a dropped message. Cancelling a chat Job stops that caller awaiting; the message was still delivered. A technical error or `deleteSession` fails every waiter on the session with the reason. The in-memory waiter set is a convenience: the durable record is the envelope plus the STARTED Job, recovered on restart by the stale-STARTED gate.
 
 #### 5.5.3 Agent-to-agent messages (pipelines)
 
