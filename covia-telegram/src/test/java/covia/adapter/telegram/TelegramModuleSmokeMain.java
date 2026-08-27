@@ -57,6 +57,10 @@ public final class TelegramModuleSmokeMain {
 				if (engine.resolvePath(Strings.create("v/skills/adapters/telegram"), engine.venueContext()) == null) {
 					throw new AssertionError("Telegram module skill was not installed");
 				}
+				if (engine.resolvePath(Strings.create("v/skills/adapters/telegram-bot-management"),
+						engine.venueContext()) == null) {
+					throw new AssertionError("Telegram bot-management skill was not installed");
+				}
 
 				// Inbound: an open bot answers a stranger via the echo operation.
 				telegram.push(4242L, 99L, "smoker", "round trip");

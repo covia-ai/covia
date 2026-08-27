@@ -1225,8 +1225,11 @@ parameters (`sendPhoto`/`sendDocument` by `file_id` or URL, `editMessageText`,
 own update loop owns them) — gated on `telegram/call`; and
 `v/ops/telegram/bots` — the caller's bots
 with state (`STARTING`, `PENDING`, `RUNNING`, `STOPPED`), Telegram username,
-last error and counters, tokens never included. The module ships a
-`telegram` agent skill (`v/skills/adapters/telegram`).
+last error and counters, tokens never included. The module ships a lightweight
+`telegram` agent skill (`v/skills/adapters/telegram`) for ordinary messaging
+and status. It reveals `telegram-bot-management` only when an agent needs to
+create, repair or delete a user-owned bot; that child in turn reveals the
+encrypted-secret skill used to store BotFather tokens.
 
 ### Discord bots (covia-discord)
 

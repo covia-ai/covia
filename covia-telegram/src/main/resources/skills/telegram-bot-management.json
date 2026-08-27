@@ -1,0 +1,18 @@
+{
+	"name": "telegram-bot-management",
+	"description": "Create, register, inspect, repair or delete a user-owned Telegram bot; handle a BotFather token, choose its agent or operation, and configure who may talk to it. Load for Telegram bot setup or management.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Telegram bot management\nBots created here act as the authenticated caller and persist across venue restarts. A bot that must act as another identity is operator-declared venue configuration instead.\n\nCreate or repair a bot:\n1. Establish a short unique name, exactly one inbound handler (`agent` you own or an `operation` reference), and access: an `allow` list of Telegram numeric user ids / `@usernames`, or `open: true`. Access is fail-closed; never silently choose open access. Optional fields include `greeting`, `parseMode`, and operation-handler `reply`.\n2. Load the revealed `secrets` skill. Store the BotFather token under a clear secret name, then use only `s/<NAME>` below. Never put a literal token in bot config; create rejects it. If a user supplied a token in chat, store it promptly and do not repeat it.\n3. Call create with `{name, token: \"s/<NAME>\", agent}` or `{name, token: \"s/<NAME>\", operation, reply?}`, plus `allow` or `open`.\n4. Call bots and confirm `RUNNING` plus the expected Telegram username. `PENDING` includes the actionable error (missing secret, rejected token or unreachable API) and retries automatically after the cause is fixed. Do not claim success until status confirms it.\n\nManagement:\n- `bots {}` is the source of truth for ownership, target, state, username, errors and counters. Tokens are never exposed.\n- There is no update operation. Changing handler or access currently means delete then create; deletion also removes the venue's per-chat sessions, so explain that consequence and get confirmation before replacing a working bot.\n- `delete {name}` stops and removes only a user-created venue bot. It does not revoke the Telegram bot or BotFather token, and it refuses operator-declared bots.\n- Capability denied means the caller lacks `telegram/manage` for that bot; report the boundary rather than treating the operation as absent."
+	},
+	"skill": {
+		"skills": [
+			"v/skills/auth/secrets"
+		],
+		"tools": [
+			"v/ops/telegram/create",
+			"v/ops/telegram/delete",
+			"v/ops/telegram/bots"
+		]
+	}
+}

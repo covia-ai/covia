@@ -8,6 +8,13 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- The Telegram agent skill now reveals a separate bot-management child for
+  creating, inspecting and deleting user-owned bots. Management authority stays
+  unloaded during ordinary messaging, and the child reveals encrypted secret
+  storage for BotFather tokens.
+
 ## [0.9.6] - 2026-08-27
 
 ### Changed

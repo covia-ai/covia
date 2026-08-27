@@ -537,6 +537,30 @@ public class TelegramAdapterTest {
 	}
 
 	@Test
+	public void testTelegramSkillHierarchy() {
+		RequestContext owner = RequestContext.of(OWNER);
+		ACell telegramSkill = engine.resolvePath(
+			Strings.create("v/skills/adapters/telegram"), owner);
+		ACell managementSkill = engine.resolvePath(
+			Strings.create("v/skills/adapters/telegram-bot-management"), owner);
+
+		assertNotNull(telegramSkill);
+		assertNotNull(managementSkill);
+		assertEquals(Vectors.of((ACell) Strings.create(
+			"v/skills/adapters/telegram-bot-management")),
+			RT.getIn(telegramSkill, "skill", "skills"));
+		assertEquals(Vectors.of(
+			(ACell) Strings.create("v/ops/telegram/create"),
+			Strings.create("v/ops/telegram/delete"),
+			Strings.create("v/ops/telegram/bots")),
+			RT.getIn(managementSkill, "skill", "tools"));
+		assertEquals(Vectors.of((ACell) Strings.create("v/skills/auth/secrets")),
+			RT.getIn(managementSkill, "skill", "skills"));
+		assertEquals(managementSkill, engine.resolvePath(
+			Strings.create("v/adapters/telegram/skills/telegram-bot-management"), owner));
+	}
+
+	@Test
 	public void testDisabledAdapterIsOfflineUntilReenabled() throws Exception {
 		long chat = 1004L;
 		BotRunner runner = adapter.runner("echo");

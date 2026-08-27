@@ -108,7 +108,7 @@ grid_run  operation=v/ops/venue/adapter/configure
 
 ## `teach` — Let an agent use Telegram
 
-The module ships the `telegram` agent skill at `v/skills/adapters/telegram` (present exactly when the module is loaded). Any agent whose config declares the standard venue skillsets can `skill_load` it and then call `v/ops/telegram/send` / `v/ops/telegram/bots`. The agent must run as the bot's user (or hold a `telegram/send` delegation), which is automatic when the bot's `user` is the agent's owner. Give it the chat id explicitly or let it answer within a Telegram-originated conversation — the skill tells it never to guess chat ids.
+The module ships the `telegram` agent skill at `v/skills/adapters/telegram` (present exactly when the module is loaded). It grants ordinary send/call/status tools and reveals `telegram-bot-management`; the child grants create/delete/status and reveals `v/skills/auth/secrets` for storing BotFather tokens. Any agent whose config declares the standard venue skillsets can load this hierarchy on demand. The agent must run as the bot's user (or hold a `telegram/send` delegation), which is automatic when the bot's `user` is the agent's owner. Give it the chat id explicitly or let it answer within a Telegram-originated conversation — the skill tells it never to guess chat ids.
 
 ## Troubleshooting
 
