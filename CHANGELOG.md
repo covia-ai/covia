@@ -16,6 +16,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   narrow to one session with `?sessionId=` or a session-scoped subscription (#394).
 - `agent:chat` results name every chat the reply answered (`answered`), so one
   reply to several queued messages is distinguishable from several replies (#416).
+- `http:*` follows redirects: bounded, SSRF-checked per hop, credentials dropped
+  on a change of origin, the final `url` and the `redirects` taken on the result;
+  `followRedirects: false` opts out (#423).
 
 ### Fixed
 
@@ -23,12 +26,17 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   harness previews now build the Spec exactly as a live inference does (#418).
 - `Engine.jarVersion()` reads the venue's own Maven descriptor first, so a
   venue embedded in a host's fat jar reports its own version (#420).
+- `http:*` sends a descriptive `User-Agent` when the caller supplies none
+  (`adapters.http.userAgent`); the op schemas no longer advertise a default that
+  nothing applied (#422).
 
 ### Changed
 
 - A2A per-agent `SendMessage` with a `contextId` submits an `agent:request` task on
   that session (was `agent:chat`), so every A2A send is its own Task with its own
   reply (#416).
+- `adapters.http` gains `userAgent`, `allowedHosts`, `blockedHosts` and
+  `maxRedirects`; the SSRF lists previously had no configuration path.
 - The Telegram agent skill now reveals a separate bot-management child for
   creating, inspecting and deleting user-owned bots. Management authority stays
   unloaded during ordinary messaging, and the child reveals encrypted secret

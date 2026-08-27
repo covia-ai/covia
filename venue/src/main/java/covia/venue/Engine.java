@@ -970,7 +970,7 @@ public class Engine {
 	 * {@code Implementation-Version} misreported an embedded venue (#420).
 	 * The manifest is the fallback, then {@code "dev"}.
 	 */
-	static String jarVersion() {
+	public static String jarVersion() {
 		return versionFrom(mavenDescriptor(), Engine.class.getPackage());
 	}
 

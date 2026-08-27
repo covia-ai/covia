@@ -21,6 +21,7 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.grid.Job;
@@ -664,5 +665,264 @@ public class HTTPTest {
 		} finally {
 			echo.stop(0);
 		}
+	}
+
+	// ====================================================================
+	// Default User-Agent (#422) and bounded, guarded redirects (#423)
+	// ====================================================================
+
+	private static HttpServer localServer() throws java.io.IOException {
+		return HttpServer.create(new InetSocketAddress("localhost", 0), 0);
+	}
+
+	private static String base(HttpServer server) {
+		return "http://localhost:" + server.getAddress().getPort();
+	}
+
+	private static void respond(com.sun.net.httpserver.HttpExchange x, int code, String body) throws java.io.IOException {
+		byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+		x.sendResponseHeaders(code, bytes.length);
+		try (OutputStream os = x.getResponseBody()) { os.write(bytes); }
+	}
+
+	private static void redirect(com.sun.net.httpserver.HttpExchange x, int code, String location) throws java.io.IOException {
+		x.getResponseHeaders().add("Location", location);
+		x.sendResponseHeaders(code, -1);
+		x.close();
+	}
+
+	private static String body(Job job) {
+		assertTrue(job.isComplete(), String.valueOf(job.getErrorMessage()));
+		return RT.getIn(job.getOutput(), "body").toString();
+	}
+
+	/** Runs a GET through the shared engine and returns the failure message. */
+	private static String failureOf(ACell input) {
+		Job job = TestServer.ENGINE.jobs().invokeOperation("v/ops/http/get", input,
+			RequestContext.of(Strings.create("did:test:http:redirects")));
+		try { job.awaitResult(10_000); } catch (Exception expected) { /* reported below */ }
+		assertEquals(Status.FAILED, job.getStatus(), "expected a failure, got status " + job.getStatus());
+		return String.valueOf(job.getErrorMessage());
+	}
+
+	@Test public void testDefaultUserAgentUnlessSupplied() throws Exception {
+		VenueHTTP covia = TestServer.COVIA;
+		HttpServer echo = localServer();
+		echo.createContext("/ua", x -> respond(x, 200, String.valueOf(x.getRequestHeaders().getFirst("User-Agent"))));
+		echo.start();
+		try {
+			// No headers at all: the venue's own descriptive User-Agent, not the JDK's.
+			String sent = body(covia.invokeSync("v/ops/http/get", Maps.of("url", base(echo) + "/ua"), 10_000));
+			assertTrue(sent.startsWith("Covia/") && sent.contains("+https://covia.ai"), sent);
+			assertEquals(HTTPAdapter.defaultUserAgent(), sent);
+			// Other headers but no User-Agent: still added.
+			sent = body(covia.invokeSync("v/ops/http/get", Maps.of(
+				"url", base(echo) + "/ua", "headers", Maps.of("Accept", "application/json")), 10_000));
+			assertEquals(HTTPAdapter.defaultUserAgent(), sent);
+			// An explicit caller value wins, whatever its case.
+			sent = body(covia.invokeSync("v/ops/http/get", Maps.of(
+				"url", base(echo) + "/ua", "headers", Maps.of("user-agent", "Brightside/2.0")), 10_000));
+			assertEquals("Brightside/2.0", sent);
+		} finally {
+			echo.stop(0);
+		}
+	}
+
+	@Test public void testFollowsRedirectsWithProvenance() throws Exception {
+		VenueHTTP covia = TestServer.COVIA;
+		HttpServer s = localServer();
+		String root = base(s);
+		s.createContext("/start", x -> redirect(x, 302, "/second"));          // relative Location
+		s.createContext("/second", x -> redirect(x, 301, root + "/final"));   // absolute Location
+		s.createContext("/final", x -> respond(x, 200, "done"));
+		s.start();
+		try {
+			Job r = covia.invokeSync("v/ops/http/get", Maps.of("url", root + "/start"), 10_000);
+			assertEquals("done", body(r));
+			assertEquals(200, RT.ensureLong(RT.getIn(r.getOutput(), "status")).longValue());
+			assertEquals(root + "/final", RT.getIn(r.getOutput(), "url").toString());
+			AVector<ACell> hops = RT.ensureVector(RT.getIn(r.getOutput(), "redirects"));
+			assertNotNull(hops, "the hops taken are reported");
+			assertEquals(2, hops.count());
+			assertEquals(302, RT.ensureLong(RT.getIn(hops.get(0), "status")).longValue());
+			assertEquals(root + "/start", RT.getIn(hops.get(0), "from").toString());
+			assertEquals(root + "/second", RT.getIn(hops.get(0), "to").toString());
+			assertEquals(301, RT.ensureLong(RT.getIn(hops.get(1), "status")).longValue());
+			assertEquals(root + "/final", RT.getIn(hops.get(1), "to").toString());
+
+			// A direct response has a url and no redirects.
+			Job direct = covia.invokeSync("v/ops/http/get", Maps.of("url", root + "/final"), 10_000);
+			assertEquals(root + "/final", RT.getIn(direct.getOutput(), "url").toString());
+			assertTrue(RT.getIn(direct.getOutput(), "redirects") == null);
+
+			// Opting out returns the redirect itself.
+			Job raw = covia.invokeSync("v/ops/http/get", Maps.of("url", root + "/start", "followRedirects", false), 10_000);
+			assertTrue(raw.isComplete(), String.valueOf(raw.getErrorMessage()));
+			assertEquals(302, RT.ensureLong(RT.getIn(raw.getOutput(), "status")).longValue());
+			assertTrue(RT.getIn(raw.getOutput(), "redirects") == null);
+			assertEquals(root + "/start", RT.getIn(raw.getOutput(), "url").toString());
+		} finally {
+			s.stop(0);
+		}
+	}
+
+	@Test public void testRedirectMethodSemantics() throws Exception {
+		VenueHTTP covia = TestServer.COVIA;
+		HttpServer s = localServer();
+		s.createContext("/see-other", x -> redirect(x, 303, "/method"));
+		s.createContext("/temporary", x -> redirect(x, 307, "/method"));
+		s.createContext("/moved", x -> redirect(x, 301, "/method"));
+		s.createContext("/method", x -> {
+			String received = new String(x.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+			respond(x, 200, x.getRequestMethod() + ":" + received.replaceAll("\\s", "")
+				+ ":" + x.getRequestHeaders().getFirst("Content-Type"));
+		});
+		s.start();
+		try {
+			ACell payload = Maps.of("k", "v");
+			// 303: GET, no body, no stale Content-Type.
+			assertEquals("GET::null", body(covia.invokeSync("v/ops/http/post", Maps.of(
+				"url", base(s) + "/see-other", "body", payload,
+				"headers", Maps.of("Content-Type", "application/json")), 10_000)));
+			// 301 on a POST: GET, as browsers do.
+			assertEquals("GET::null", body(covia.invokeSync("v/ops/http/post", Maps.of(
+				"url", base(s) + "/moved", "body", payload,
+				"headers", Maps.of("Content-Type", "application/json")), 10_000)));
+			// 307: method and body preserved.
+			assertEquals("POST:{\"k\":\"v\"}:application/json", body(covia.invokeSync("v/ops/http/post", Maps.of(
+				"url", base(s) + "/temporary", "body", payload,
+				"headers", Maps.of("Content-Type", "application/json")), 10_000)));
+		} finally {
+			s.stop(0);
+		}
+	}
+
+	@Test public void testRedirectAcrossOriginsDropsCredentials() throws Exception {
+		AString caller = Strings.create("did:test:http:redirect-credentials:" + System.nanoTime());
+		User user = TestServer.ENGINE.getVenueState().users().ensure(caller);
+		byte[] key = SecretStore.deriveKey(TestServer.ENGINE.getKeyPair());
+		user.secrets().store("API_KEY", "resolved-api-key", key);
+		user.secrets().store("TOKEN", "bearer-token", key);
+
+		HttpServer a = localServer();
+		HttpServer b = localServer();   // same host, different port: a different origin
+		com.sun.net.httpserver.HttpHandler echo = x -> respond(x, 200,
+			x.getRequestHeaders().getFirst("Authorization") + "|"
+			+ x.getRequestHeaders().getFirst("X-API-Key") + "|"
+			+ x.getRequestHeaders().getFirst("Cookie") + "|"
+			+ x.getRequestHeaders().getFirst("X-Trace") + "|"
+			+ (x.getRequestHeaders().getFirst("User-Agent") != null));
+		String bRoot = base(b);
+		a.createContext("/away", x -> redirect(x, 302, bRoot + "/land"));
+		a.createContext("/home", x -> redirect(x, 302, "/land"));
+		a.createContext("/land", echo);
+		b.createContext("/land", echo);
+		a.start();
+		b.start();
+		try {
+			ACell headers = Maps.of("X-Trace", "keep", "Cookie", "session=1");
+			ACell secrets = Maps.of("X-API-Key", "s/API_KEY");
+
+			// Same origin: every credential survives the hop.
+			Job same = TestServer.ENGINE.jobs().invokeOperation("v/ops/http/get", Maps.of(
+				Fields.URL, base(a) + "/home", Fields.HEADERS, headers,
+				Fields.SECRET_HEADERS, secrets, Fields.BEARER_SECRET, "s/TOKEN"),
+				RequestContext.of(caller));
+			same.awaitResult(10_000);
+			assertEquals("Bearer bearer-token|resolved-api-key|session=1|keep|true", body(same));
+
+			// Cross origin: Authorization, Cookie and every secret header are
+			// dropped; ordinary headers and the User-Agent still travel.
+			Job away = TestServer.ENGINE.jobs().invokeOperation("v/ops/http/get", Maps.of(
+				Fields.URL, base(a) + "/away", Fields.HEADERS, headers,
+				Fields.SECRET_HEADERS, secrets, Fields.BEARER_SECRET, "s/TOKEN"),
+				RequestContext.of(caller));
+			away.awaitResult(10_000);
+			assertEquals("null|null|null|keep|true", body(away));
+			assertEquals(bRoot + "/land", RT.getIn(away.getOutput(), "url").toString());
+
+			// A literal Authorization header is a credential too.
+			Job literal = TestServer.ENGINE.jobs().invokeOperation("v/ops/http/get", Maps.of(
+				Fields.URL, base(a) + "/away", Fields.HEADERS, Maps.of("Authorization", "Basic literal")),
+				RequestContext.of(caller));
+			literal.awaitResult(10_000);
+			assertTrue(body(literal).startsWith("null|"), body(literal));
+		} finally {
+			a.stop(0);
+			b.stop(0);
+		}
+	}
+
+	@Test public void testRedirectLoopLimitAndPrivateTargetsAreRefused() throws Exception {
+		HttpServer s = localServer();
+		s.createContext("/loop", x -> redirect(x, 302, "/loop"));
+		s.createContext("/deep", x -> redirect(x, 302, x.getRequestURI().getPath() + "/x"));
+		s.createContext("/meta", x -> redirect(x, 302, "http://169.254.169.254/latest/meta-data/"));
+		s.createContext("/broken", x -> redirect(x, 302, "http://exa mple.com/"));
+		s.start();
+		try {
+			String loop = failureOf(Maps.of("url", base(s) + "/loop"));
+			assertTrue(loop.contains("Redirect loop"), loop);
+			assertTrue(loop.contains("/loop -> " + base(s) + "/loop"), loop);
+
+			String deep = failureOf(Maps.of("url", base(s) + "/deep"));
+			assertTrue(deep.contains("Too many redirects (limit " + HTTPAdapter.DEFAULT_MAX_REDIRECTS + ")"), deep);
+
+			// A redirect into the metadata service is refused by the same guard
+			// as a direct request would be — and the chain is named.
+			String meta = failureOf(Maps.of("url", base(s) + "/meta"));
+			assertTrue(meta.contains("Redirect refused") && meta.contains("private/internal"), meta);
+			assertTrue(meta.contains("169.254.169.254"), meta);
+
+			String broken = failureOf(Maps.of("url", base(s) + "/broken"));
+			assertTrue(broken.contains("malformed Location"), broken);
+		} finally {
+			s.stop(0);
+		}
+	}
+
+	@Test public void testConfigureUserAgentListsAndRedirectCap() {
+		HTTPAdapter adapter = new HTTPAdapter();
+		assertEquals(HTTPAdapter.defaultUserAgent(), adapter.getUserAgent());
+		assertEquals(HTTPAdapter.DEFAULT_MAX_REDIRECTS, adapter.getMaxRedirects());
+
+		assertTrue(adapter.configure(Maps.of(
+			"userAgent", "MyApp/1.0 (+https://example.com)",
+			"maxRedirects", 2,
+			"allowedHosts", Vectors.of("LOCALHOST"),
+			"blockedHosts", Vectors.of("blocked.example")), false));
+		assertEquals("MyApp/1.0 (+https://example.com)", adapter.getUserAgent());
+		assertEquals(2, adapter.getMaxRedirects());
+		// Configured lists drive the guard: allowed skips the loopback refusal,
+		// blocked is refused before any resolution.
+		adapter.requireSafeUrl("http://localhost:1/");
+		IllegalArgumentException blocked = assertThrows(IllegalArgumentException.class,
+			() -> adapter.requireSafeUrl("https://Blocked.example/x"));
+		assertTrue(blocked.getMessage().contains("blocked"), blocked.getMessage());
+		// Published for discovery.
+		assertEquals("MyApp/1.0 (+https://example.com)", RT.getIn(adapter.info(), "userAgent").toString());
+		assertEquals(Vectors.of(Strings.create("localhost")), RT.getIn(adapter.info(), "allowedHosts"));
+
+		assertThrows(IllegalArgumentException.class, () -> adapter.configure(Maps.of("maxRedirects", 99), false));
+		assertThrows(IllegalArgumentException.class, () -> adapter.configure(Maps.of("maxRedirects", -1), false));
+		assertThrows(IllegalArgumentException.class, () -> adapter.configure(Maps.of("userAgent", "  "), false));
+		assertThrows(IllegalArgumentException.class, () -> adapter.configure(Maps.of("allowedHosts", "not-a-list"), false));
+		assertThrows(IllegalArgumentException.class, () -> adapter.configure(Maps.of("blockedHosts", Vectors.of(1)), false));
+
+		// Reconfiguring with nothing restores the defaults.
+		assertTrue(adapter.configure(Maps.empty(), false));
+		assertEquals(HTTPAdapter.defaultUserAgent(), adapter.getUserAgent());
+		assertEquals(HTTPAdapter.DEFAULT_MAX_REDIRECTS, adapter.getMaxRedirects());
+		assertThrows(IllegalArgumentException.class, () -> adapter.requireSafeUrl("http://localhost:1/"));
+	}
+
+	@Test public void testSameOriginRule() throws Exception {
+		assertTrue(HTTPAdapter.sameOrigin(new java.net.URI("https://a.example/x"), new java.net.URI("https://A.EXAMPLE:443/y")));
+		assertTrue(HTTPAdapter.sameOrigin(new java.net.URI("http://a.example/x"), new java.net.URI("http://a.example:80/")));
+		assertFalse(HTTPAdapter.sameOrigin(new java.net.URI("http://a.example/x"), new java.net.URI("https://a.example/x")));
+		assertFalse(HTTPAdapter.sameOrigin(new java.net.URI("http://a.example/x"), new java.net.URI("http://a.example:8080/x")));
+		assertFalse(HTTPAdapter.sameOrigin(new java.net.URI("http://a.example/x"), new java.net.URI("http://b.example/x")));
+		assertTrue(HTTPAdapter.isRedirect(308) && HTTPAdapter.isRedirect(303));
+		assertFalse(HTTPAdapter.isRedirect(304) || HTTPAdapter.isRedirect(200));
 	}
 }

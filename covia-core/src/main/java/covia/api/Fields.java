@@ -93,6 +93,12 @@ public class Fields {
 	// HTTP related
 	public static final StringShort HEADERS = Strings.intern("headers");
 	public static final StringShort QUERY_PARAMS = Strings.intern("queryParams");
+	/** http:* input: follow 3xx redirects (default true) — see HTTPAdapter (#423). */
+	public static final StringShort FOLLOW_REDIRECTS = Strings.intern("followRedirects");
+	/** http:* output: the redirects followed, each {status, from, to}. */
+	public static final StringShort REDIRECTS = Strings.intern("redirects");
+	public static final StringShort FROM = Strings.intern("from");
+	public static final StringShort TO = Strings.intern("to");
 	public static final StringShort BODY = Strings.intern("body");
 	public static final StringShort METHOD = Strings.intern("method");
 	public static final StringShort BEARER_SECRET = Strings.intern("bearerSecret");

@@ -680,6 +680,7 @@ same forms are accepted by `file:move` and `file:copy` endpoints.
 {
   "adapters": {
     "agent": { "sessionDelete": false },
+    "http": { "userAgent": "MyApp/1.0 (+https://example.com)", "allowedHosts": ["intranet.example"], "maxRedirects": 5 },
     "vault": { "drive": "vault" },
     "skills": { "defaultSkillsets": ["w/skills", "v/skills/root"] },
     "orchestrator": {
@@ -716,6 +717,18 @@ Currently defined:
 - `agent.sessionDelete` — whether `agent:deleteSession` is available
   (default `true`). Set `false` to disable user-initiated session deletion
   venue-wide; the op then fails with "disabled on this venue".
+- `http.userAgent` — the `User-Agent` sent by `http:*` when the caller supplies
+  none (default `Covia/<version> (+https://covia.ai)`); an explicit caller
+  header always wins. Public APIs such as Wikipedia refuse anonymous clients.
+- `http.allowedHosts` / `http.blockedHosts` — host names exempted from, or
+  always refused by, the SSRF guard that every outbound HTTP, MCP and A2A URL
+  passes. Block wins over allow. Loopback, private and link-local targets are
+  refused unless their host is allowed here. Both lists are published at
+  `v/info/adapters/http`.
+- `http.maxRedirects` — the longest redirect chain `http:*` follows (default
+  `5`, at most `20`; `0` returns 3xx responses unfollowed). Every hop passes
+  the SSRF guard, credentials are dropped on a change of origin, and a loop or
+  a longer chain fails the request naming the chain.
 - `hitl.maxGrantLifetimeSecs` — optional positive lifetime ceiling for grants
   minted after HITL approval. It is absent by default, so the venue imposes no
   maximum and permits an explicit `exp: null`. With a finite ceiling, null and

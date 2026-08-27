@@ -24,10 +24,9 @@
 				},
 				"headers": {
 					"type": "object",
-					"description": "HTTP headers to include in the request",
+					"description": "HTTP headers to include in the request. A User-Agent is sent when none is supplied — the venue's own, published at v/info/adapters/http — and an explicit one always wins.",
 					"defaultValue": {
-						"Content-Type": "application/json",
-						"User-Agent": "Covia-HTTP/1.0"
+						"Content-Type": "application/json"
 					}
 				},
 				"queryParams": {
@@ -43,6 +42,10 @@
 					"defaultValue": {
 						"message": "Hello from Covia HTTP adapter"
 					}
+				},
+				"followRedirects": {
+					"type": "boolean",
+					"description": "Follow 3xx redirects (default true). Every hop passes the same SSRF checks as the first URL, credentials are dropped on a change of origin, and the venue caps the chain (v/info/adapters/http maxRedirects); a loop or a longer chain fails the request. 303 — and 301/302 for a POST — re-request with GET and no body; 307/308 keep the method and body. false returns the redirect response itself."
 				},
 				"bearerSecret": {
 					"type": "string",
@@ -70,6 +73,15 @@
 				"headers": {
 					"type": "object",
 					"description": "Response headers from the server"
+				},
+				"url": {
+					"type": "string",
+					"description": "The URL the response came from — the last of the chain when redirects were followed"
+				},
+				"redirects": {
+					"type": "array",
+					"description": "The redirects followed, in order, each {status, from, to}; absent when there were none",
+					"items": { "type": "object" }
 				}
 			}
 		}
