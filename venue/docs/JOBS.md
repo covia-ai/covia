@@ -95,6 +95,12 @@ for days, weeks, or months (workflows, HITL, agents). Consequences:
   hook**. The default adapter path wires the hook to `future.cancel(true)`;
   adapters that submit interruptible work (e.g. LangChainAdapter) bridge
   cancellation to a worker-thread interrupt, closing in-flight HTTP calls.
+- `cancel(reason)` — `PUT /jobs/{id}/cancel` with a `{"reason"}` body,
+  `agent:cancelTask reason`, `VenueHTTP.cancelJob(id, reason)` — makes the
+  reason the job's `error`, so a cancelled job reads like any other
+  non-completion: status says cancelled, `error` says why. Without a reason
+  the error names the job. There is no separate reason field, deliberately:
+  one key explains every way a job can end short of completion.
 - Best-effort: side effects already produced are not undone.
 
 ## Pause and resume — Job verbs, hook opt-in

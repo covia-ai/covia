@@ -870,17 +870,30 @@ public class JobManager {
 	 * @throws AuthException if the caller does not own the job
 	 */
 	public AMap<AString, ACell> cancelJob(Blob id, RequestContext ctx) {
+		return cancelJob(id, ctx, null);
+	}
+
+	/**
+	 * Cancels a Job with request context and an optional reason, which becomes
+	 * the job's {@code error} ({@link Job#cancel(String)}).
+	 * @throws AuthException if the caller does not own the job
+	 */
+	public AMap<AString, ACell> cancelJob(Blob id, RequestContext ctx, String reason) {
 		AMap<AString, ACell> data = getJobData(id, ctx);
 		if (data == null) return null;
 		requireJobOwner(ctx, id, data); // mutation: owner-only, not read-delegable
-		return cancelJob(id);
+		return cancelJob(id, reason);
 	}
 
 	public AMap<AString, ACell> cancelJob(Blob id) {
+		return cancelJob(id, (String) null);
+	}
+
+	public AMap<AString, ACell> cancelJob(Blob id, String reason) {
 		Job job;
 		job = activeJobs.get(id);
 		if (job == null) return null;
-		job.cancel();
+		job.cancel(reason);
 		return job.getData();
 	}
 

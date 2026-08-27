@@ -1,6 +1,6 @@
 {
 	"name": "Cancel Agent Task",
-	"description": "Removes a pending task from an agent's task queue. The task will no longer be presented to the agent's transition function. Use this to clean up stuck or unwanted tasks.",
+	"description": "Removes a pending task from an agent's task queue. The task will no longer be presented to the agent's transition function. Use this to clean up stuck or unwanted tasks. An optional reason becomes the cancelled task job's error, so whoever is waiting on it sees why.",
 	"dateCreated": "2026-03-11T00:00:00Z",
 	"operation": {
 		"adapter": "agent:cancelTask",
@@ -10,7 +10,8 @@
 			"type": "object",
 			"properties": {
 				"agentId": { "type": "string", "description": "Agent reference: a bare name for the caller's agent, g/<id>, /g/<id>, or <ownerDID>/g/<id>" },
-				"taskId": { "type": "string", "description": "Hex ID of the task to cancel" }
+				"taskId": { "type": "string", "description": "Hex ID of the task to cancel" },
+				"reason": { "type": "string", "description": "Optional: why the task is cancelled — recorded as the task job's error" }
 			},
 			"required": ["agentId", "taskId"]
 		},

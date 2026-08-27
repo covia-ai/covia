@@ -2149,8 +2149,13 @@ public class AgentAdapter extends AAdapter {
 			return;
 		}
 		outputContexts.remove(taskId);
+		// An optional reason becomes the task job's error, so the requester
+		// awaiting it sees why rather than only that it was cancelled.
+		AString reason = RT.ensureString(RT.getIn(input, Fields.REASON));
 		Job pending = engine.jobs().getJob(taskId);
-		if (pending != null && !pending.isFinished()) pending.cancel();
+		if (pending != null && !pending.isFinished()) {
+			pending.cancel((reason != null) ? reason.toString() : null);
+		}
 
 		job.setStatus(Status.STARTED);
 		job.completeWith(identify(target, Maps.of(

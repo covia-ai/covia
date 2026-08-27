@@ -971,8 +971,22 @@ public class VenueHTTP extends Venue {
 	 * @return Future that completes when the job is successfully cancelled, or completes exceptionally if the job doesn't exist
 	 */
 	public CompletableFuture<AMap<AString,ACell>> cancelJob(String jobId) {
+		return cancelJob(jobId, null);
+	}
+
+	/**
+	 * Cancels a job on the connected venue with a reason, which becomes the
+	 * job's {@code error} so readers see why it did not complete.
+	 * @param jobId The job ID to cancel
+	 * @param reason Why, or null to cancel without one
+	 * @return Future that completes when the job is successfully cancelled, or completes exceptionally if the job doesn't exist
+	 */
+	public CompletableFuture<AMap<AString,ACell>> cancelJob(String jobId, String reason) {
+		String body = (reason != null)
+			? JSON.print(Maps.of(Fields.REASON, Strings.create(reason))).toString()
+			: "";
 		HttpRequest req = requestBuilder("jobs/" + jobId + "/cancel")
-			.PUT(HttpRequest.BodyPublishers.ofString(""))
+			.PUT(HttpRequest.BodyPublishers.ofString(body))
 			.build();
 		
 		return dispatch(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {

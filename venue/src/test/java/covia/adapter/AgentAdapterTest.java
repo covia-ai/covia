@@ -5045,6 +5045,33 @@ public class AgentAdapterTest {
 	}
 
 	@Test
+	public void testCancelTaskWithReasonBecomesTheJobsError() {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "task-reason-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("task-reason-agent");
+
+		// Task ID == the requester's job ID: a live job stands in for the request.
+		Job request = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), RequestContext.of(ALICE_DID));
+		agent.addTask(request.getID(), Maps.of("question", "Still needed?"));
+
+		ACell result = engine.jobs().invokeOperation(
+			"v/ops/agent/cancel-task",
+			Maps.of(Fields.AGENT_ID, "task-reason-agent",
+				Fields.TASK_ID, request.getID().toHexString(),
+				Fields.REASON, "requester withdrew the question"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(result, Fields.CANCELLED));
+		assertEquals(0, agent.getTasks().count());
+		// The requester's job reads like any non-completion: CANCELLED, with the reason as its error.
+		assertEquals(Status.CANCELLED, request.getStatus());
+		assertEquals("requester withdrew the question", RT.getIn(request.getData(), Fields.ERROR).toString());
+	}
+
+	@Test
 	public void testCancelTaskNotFound() {
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",

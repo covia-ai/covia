@@ -136,6 +136,22 @@ public class VenueHTTPTest {
 	}
 
 	@Test
+	public void cancelWithReasonBecomesTheJobsError() throws Exception {
+		Job job = client.startJob(OP_NEVER, Maps.empty());
+		AMap<AString, ACell> cancelled = client.cancelJob(job.getID().toHexString(), "no longer needed").join();
+		assertEquals("CANCELLED", RT.getIn(cancelled, Fields.STATUS).toString());
+		assertEquals("no longer needed", RT.getIn(cancelled, Fields.ERROR).toString(),
+			"the reason is the error every reader shows");
+		AMap<AString, ACell> remote = client.getJobData(job.getID()).join();
+		assertEquals("no longer needed", RT.getIn(remote, Fields.ERROR).toString());
+
+		// Without a reason, the error names the job as before.
+		Job plain = client.startJob(OP_NEVER, Maps.empty());
+		AMap<AString, ACell> plainCancelled = client.cancelJob(plain.getID().toHexString()).join();
+		assertTrue(RT.getIn(plainCancelled, Fields.ERROR).toString().startsWith("Job cancelled: "));
+	}
+
+	@Test
 	public void operationFailureSurfacesAsFailedJobWithError() throws Exception {
 		Job job = client.invokeAndWait(OP_ERROR, Maps.of(
 			Fields.MESSAGE, Strings.create("intentional-failure")));

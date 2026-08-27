@@ -402,11 +402,29 @@ public class Job {
 	 * worker must poll {@link #isFinished()} to notice.</p>
 	 */
 	public void cancel() {
+		cancel(null);
+	}
+
+	/**
+	 * Cancel this Job with a reason. No effect if already finished.
+	 *
+	 * <p>A cancellation with a reason looks like any other non-completion:
+	 * the status is {@code CANCELLED} and {@code error} is the reason, so
+	 * every reader that explains why a job did not complete — status reads,
+	 * timelines, an agent waiting on the job — shows it. Without a reason the
+	 * error names the job, as before.</p>
+	 *
+	 * @param reason why the job was cancelled, or null
+	 */
+	public void cancel(String reason) {
 		if (isFinished()) return;
 		cancelled = true;
+		String message = (reason != null && !reason.isBlank())
+			? reason.strip()
+			: "Job cancelled: " + getID().toHexString();
 		update(job -> {
 			job = job.assoc(Fields.STATUS, Status.CANCELLED);
-			job = job.assoc(Fields.ERROR, Strings.create("Job cancelled: " + getID().toHexString()));
+			job = job.assoc(Fields.ERROR, Strings.create(message));
 			return job;
 		});
 		Runnable hook = onCancel;

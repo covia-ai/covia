@@ -1120,25 +1120,42 @@ public class CoviaAPI extends ACoviaAPI {
 	@OpenApi(path = ROUTE + "jobs/{id}/cancel", 
 			methods = HttpMethod.PUT, 
 			tags = { "Covia"},
-			summary = "Cancels a job.", 
+			summary = "Cancels a job.",
+			description = "Cancels a job. An optional JSON body {\"reason\": \"...\"} becomes the job's error, "
+				+ "so readers see why it did not complete; without one the error names the job.",
 			operationId = CoviaAPI.CANCEL_JOB,
 			pathParams = {
 					@OpenApiParam(
-							name = "id", 
-							description = "Job ID, as created by invoke request.", 
-							required = true, 
-							type = String.class, 
-							example = "0x12345678123456781234567812345678") })	
+							name = "id",
+							description = "Job ID, as created by invoke request.",
+							required = true,
+							type = String.class,
+							example = "0x12345678123456781234567812345678") })
 	protected void cancelJob(Context ctx) {
 		Blob id=Blob.parse(ctx.pathParam("id"));
 		if (id==null) {
 			buildError(ctx,400,"Job cancellation request requires a job ID as a valid hex string");
 			return;
 		}
+		// The reason is optional: an empty body cancels as before; a body that
+		// is present must be JSON — a malformed one is the caller's error.
+		String reason = null;
+		String body = ctx.body();
+		if (body != null && !body.isBlank()) {
+			ACell parsed;
+			try {
+				parsed = JSON.parseJSON5(body);
+			} catch (Exception e) {
+				buildError(ctx, 400, "Request body is not valid JSON: " + e.getMessage());
+				return;
+			}
+			AString reasonCell = RT.ensureString(RT.getIn(parsed, Fields.REASON));
+			if (reasonCell != null) reason = reasonCell.toString();
+		}
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 
 		try {
-			AMap<AString, ACell> status = engine().jobs().cancelJob(id, rctx);
+			AMap<AString, ACell> status = engine().jobs().cancelJob(id, rctx, reason);
 			if (status!=null) {
 				buildResult(ctx,status);
 				ctx.status(200);

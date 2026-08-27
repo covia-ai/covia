@@ -57,6 +57,26 @@ public class JobCancellationTest {
 	}
 
 	@Test
+	public void testCancelWithReasonIsTheError() {
+		// A cancel with a reason looks like any non-completion: CANCELLED, and
+		// the reason is the error every reader shows.
+		Job job = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), ctx);
+		job.cancel("superseded by a newer request");
+		assertEquals("CANCELLED", job.getStatus().toString());
+		assertEquals("superseded by a newer request", RT.getIn(job.getData(), Fields.ERROR).toString());
+
+		// Through the manager, under the owner's context.
+		Job other = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), ctx);
+		engine.jobs().cancelJob(other.getID(), ctx, "operator stopped it");
+		assertEquals("operator stopped it", RT.getIn(engine.jobs().getJobData(other.getID(), ctx), Fields.ERROR).toString());
+
+		// No reason, or a blank one, keeps the default that names the job.
+		Job plain = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), ctx);
+		plain.cancel("   ");
+		assertEquals("Job cancelled: " + plain.getID().toHexString(), RT.getIn(plain.getData(), Fields.ERROR).toString());
+	}
+
+	@Test
 	public void testCancelFinishedJobIsNoop() {
 		Job job = engine.jobs().invokeOperation("v/test/ops/echo",
 			Maps.of(Strings.create("value"), Strings.create("hello")), ctx);

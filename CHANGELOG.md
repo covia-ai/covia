@@ -19,6 +19,11 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Added
 
+- Cancel with a reason: `PUT /jobs/{id}/cancel` takes an optional
+  `{"reason"}` body, `agent:cancelTask` an optional `reason`, and
+  `Job.cancel(reason)` / `VenueHTTP.cancelJob(id, reason)` carry it; the
+  reason becomes the job's `error`, so a cancelled job reads like any other
+  non-completion — including in an agent's `get_job_results`.
 - `config.systemPrompt` may be a context entry — `{ref}` to a workspace path
   or DLFS file, `{op, input}`, `{job}` — resolved once per cycle through the
   loads machinery; an unresolvable prompt fails the cycle and warns at create.
