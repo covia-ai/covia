@@ -93,8 +93,10 @@
 							<goal>shade</goal>
 						</goals>
 						<configuration>
-							<shadedArtifactAttached>true</shadedArtifactAttached>
-							<shadedClassifierName>module</shadedClassifierName>
+							<!-- The fat module jar is a GitHub Releases artifact, not a Maven Central
+							     one: shade writes it under the -module name but does not attach it, so
+							     `mvn deploy` publishes only this module's slim jar. -->
+							<outputFile>${project.build.directory}/${project.build.finalName}-module.jar</outputFile>
 							<artifactSet>
 								<excludes>
 									<!-- Host API and Convex cell/runtime identity are parent-first. -->

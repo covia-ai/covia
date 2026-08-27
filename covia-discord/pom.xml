@@ -44,7 +44,7 @@
 		<plugin>
 			<groupId>org.apache.maven.plugins</groupId><artifactId>maven-shade-plugin</artifactId><version>3.6.2</version>
 			<executions><execution><phase>package</phase><goals><goal>shade</goal></goals><configuration>
-				<shadedArtifactAttached>true</shadedArtifactAttached><shadedClassifierName>module</shadedClassifierName>
+				<outputFile>${project.build.directory}/${project.build.finalName}-module.jar</outputFile>
 				<artifactSet><excludes>
 					<exclude>ai.covia:venue</exclude><exclude>ai.covia:covia-core</exclude>
 					<exclude>world.convex:convex-core</exclude><exclude>world.convex:convex-peer</exclude>

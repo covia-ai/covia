@@ -314,10 +314,12 @@ The reactor modules are published to Maven Central under the `ai.covia`
 groupId. `ai.covia:covia-core`, `ai.covia:covia-python`, `ai.covia:venue`, and
 `ai.covia:workbench` are ordinary library artifacts (along with the
 `ai.covia:covia` parent POM). The operator-facing `covia-python-adapter`,
-`covia-sql`, `covia-telegram`, `covia-discord`, `covia-sonnylabs` and
+`covia-sql`, `covia-telegram`, `covia-discord`, `covia-sonnylabs`, `covia-documents` and
 `covia-claude-code` artifacts are loadable venue modules rather than dependencies of
-the standard venue; their shaded `module` classifier jars are also published
-and signed. GitHub Releases remain the canonical operator download, pairing
+the standard venue. Their slim jars are published so an embedding host can
+depend on a module through Maven; the shaded `-module.jar`s are GitHub Releases
+artifacts only and are never deployed to Central (the shade plugin writes them
+without attaching them). GitHub Releases remain the canonical operator download, pairing
 each module jar with its checksum. The executable `covia.jar` is an unattached
 assembly and is **not** published to Central.
 

@@ -46,6 +46,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   reply (#416).
 - `adapters.http` gains `userAgent`, `allowedHosts`, `blockedHosts` and
   `maxRedirects`; the SSRF lists previously had no configuration path.
+- Module fat jars (`*-module.jar`) are no longer attached Maven artifacts: `mvn
+  deploy` publishes each module's slim jar only; the shaded jars stay GitHub
+  Releases artifacts.
 - The Telegram agent skill now reveals a separate bot-management child for
   creating, inspecting and deleting user-owned bots. Management authority stays
   unloaded during ordinary messaging, and the child reveals encrypted secret
