@@ -19,6 +19,10 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `http:*` follows redirects: bounded, SSRF-checked per hop, credentials dropped
   on a change of origin, the final `url` and the `redirects` taken on the result;
   `followRedirects: false` opts out (#423).
+- Document text extraction: the optional `covia-documents` module (PDFBox, POI)
+  adds `mode: "extract"` to `file:read`, `vault:read` and `dlfs:read` — PDF and
+  Office text with pages marked, page ranges, a character cap — and
+  `documents:extract` for bytes in hand (#427).
 
 ### Fixed
 

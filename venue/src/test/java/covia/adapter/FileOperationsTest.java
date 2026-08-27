@@ -95,4 +95,14 @@ class FileOperationsTest {
 		assertEquals(1, warnings.count());
 		assertTrue(warnings.get(0).toString().contains("not a complete snapshot"));
 	}
+
+	@Test
+	void extractModeWithoutTheDocumentsModuleNamesIt() throws Exception {
+		Path pdf = tempDir.resolve("report.pdf");
+		Files.write(pdf, "%PDF-1.4 fake".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+		IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+			() -> FileOperations.read(pdf, "extract", null, null, null));
+		assertTrue(ex.getMessage().contains("documents module"), ex.getMessage());
+		assertTrue(ex.getMessage().contains("covia-documents"), ex.getMessage());
+	}
 }

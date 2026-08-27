@@ -35,6 +35,8 @@ covia/                          # ai.covia:covia (parent POM)
 │                               #   agents/operations, discord:send; shaded "module" jar)
 ├── covia-sonnylabs/            # SonnyLabs prompt-injection scanning venue module
 │                               #   (POST /v1/scans; shaded "module" jar)
+├── covia-documents/            # PDF/Office text extraction venue module (PDFBox, POI;
+│                               #   file:read mode "extract"; shaded "module" jar)
 ├── covia-claude-code/          # Claude Code CLI venue module (runs/resumable sessions in
 │                               #   authorised project dirs; shaded "module" jar, not in covia.jar)
 ├── workbench/                  # Minimal Swing GUI REPL for demo/testing

@@ -690,7 +690,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 
 		Path path = resolvePath(fs, pathCell.toString());
 		return FileOperations.read(path, mode,
-			crossUser ? null : buildWebDAVUrl(driveName, pathCell.toString()));
+			crossUser ? null : buildWebDAVUrl(driveName, pathCell.toString()), engine, input);
 	}
 
 	/**

@@ -110,6 +110,7 @@ Module adapters (shaded module jars, not in covia.jar — `docs/CONFIG.md` "Venu
 | `telegram` | covia-telegram | Telegram bots (operator-declared or user-created) routing chats to agents or handing Updates to operations; Bot API access in Telegram's own shapes | `send`, `call`, `create`, `delete`, `bots` |
 | `discord` | covia-discord | Discord bots (operator-declared or user-created) routing DMs and mentioned guild messages to agents or operations; Discord REST API access | `send`, `call`, `create`, `delete`, `bots` |
 | `sonnylabs` | covia-sonnylabs | SonnyLabs AI-firewall scanning for prompt injection and related LLM safety findings | `scan` |
+| `documents` | covia-documents | Readable text from PDF and Office documents (PDFBox, POI) behind `mode: "extract"` on file/vault/dlfs reads; page ranges and a character cap | `extract` |
 | `claudecode` | covia-claude-code | Drives the Claude Code CLI in venue-authorised project directories: one-shot runs and long-lived resumable sessions over a bounded warm-process pool | `run`, `session`, `sessions`, `stop`, `projects`, `create`, `delete` |
 
 ## API Endpoints

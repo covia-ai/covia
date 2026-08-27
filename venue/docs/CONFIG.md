@@ -1106,6 +1106,35 @@ The direct operation shape is, for example:
 grid_run operation=v/ops/sonnylabs/scan input={"text":"<untrusted text>","surface":"document"}
 ```
 
+### Documents (covia-documents)
+
+The optional **covia-documents** module reads PDF and Office documents as
+text. Loaded, it adds `mode: "extract"` to `file:read`, `vault:read` and
+`dlfs:read` — the document's readable text with pages or slides marked
+(`--- page 3 ---`), a `pages` range (`"3-5"`), a `maxChars` cap reported as
+`truncated` with the last page covered, and `meta` (title, author, created;
+`scanned: true` with a note when a PDF has no usable text layer — there is no
+OCR) — plus `v/ops/documents/extract` for bytes a caller already holds. It
+ships PDFBox and POI, which is why it is a module rather than part of
+`covia.jar`. Without it, `mode: "extract"` fails naming the module.
+
+```json
+{
+  "modules": ["modules/covia-documents-<version>-module.jar"],
+  "adapters": {
+    "documents": { "maxChars": 16000 }
+  }
+}
+```
+
+- `documents.maxChars` — the character cap applied when a caller sets none
+  (default `16000`; a caller may set its own up to 1,000,000).
+
+Supported: `pdf`, `docx`, `xlsx`, `pptx`, legacy `doc`, `xls`, `ppt`, and plain
+text formats (returned as themselves). The venue skill `v/skills/data/documents`
+teaches agents to read documents in slices and to treat a scanned PDF as
+unreadable rather than empty.
+
 ### Telegram bots (covia-telegram)
 
 The **covia-telegram** module (`telegram` adapter) runs operator-declared

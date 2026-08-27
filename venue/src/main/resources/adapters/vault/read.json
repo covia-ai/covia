@@ -9,7 +9,9 @@
       "type": "object",
       "properties": {
         "path": { "type": "string", "description": "File path within the vault (e.g. 'documents/report-q4.json')" },
-        "mode": { "type": "string", "enum": ["auto", "text", "bytes", "json"], "description": "How to decode the file. Default 'auto'." }
+        "mode": { "type": "string", "enum": ["auto", "text", "bytes", "json", "extract"], "description": "Decoding mode (default 'auto'). 'extract' returns the readable text of a PDF or Office document with pages marked — needs the documents module (v/info/adapters/documents lists the supported types)." },
+        "pages": { "description": "With mode 'extract': a page (or slide) number, a range like \"3-5\", or {first, last} — 1-based, inclusive" },
+        "maxChars": { "type": "integer", "description": "With mode 'extract': cap the returned text (the module's default applies when omitted); 'truncated' reports when it cut and 'lastPage' how far it got" }
       },
       "required": ["path"]
     },

@@ -66,6 +66,7 @@
 		<module>covia-telegram</module>
 		<module>covia-discord</module>
 		<module>covia-sonnylabs</module>
+		<module>covia-documents</module>
 		<module>covia-claude-code</module>
 	</modules>
 

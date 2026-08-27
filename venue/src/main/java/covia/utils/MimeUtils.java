@@ -50,6 +50,12 @@ public final class MimeUtils {
 		Map.entry("yml", "application/yaml"),
 		// Documents
 		Map.entry("pdf", "application/pdf"),
+		Map.entry("docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+		Map.entry("xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+		Map.entry("pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"),
+		Map.entry("doc", "application/msword"),
+		Map.entry("xls", "application/vnd.ms-excel"),
+		Map.entry("ppt", "application/vnd.ms-powerpoint"),
 		// Code
 		Map.entry("js", "application/javascript"),
 		Map.entry("mjs", "application/javascript")

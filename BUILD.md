@@ -396,6 +396,8 @@ Both snapshot and stable releases include:
 - `covia-discord-<version>-module.jar.sha256` - SHA-256 checksum
 - `covia-sonnylabs-<version>-module.jar` - Optional SonnyLabs scanning venue module
 - `covia-sonnylabs-<version>-module.jar.sha256` - SHA-256 checksum
+- `covia-documents-<version>-module.jar` - Optional documents (PDF/Office text) venue module
+- `covia-documents-<version>-module.jar.sha256` - SHA-256 checksum
 - `covia-claude-code-<version>-module.jar` - Optional Claude Code venue module
 - `covia-claude-code-<version>-module.jar.sha256` - SHA-256 checksum
 

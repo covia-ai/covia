@@ -1237,6 +1237,21 @@ public class Engine {
 	}
 
 	/**
+	 * The first registered adapter implementing an interface — the seam by
+	 * which a core operation reaches a capability an optional module supplies
+	 * (a {@link covia.adapter.TextExtractor} from covia-documents behind
+	 * {@code file:read mode=extract}). Null when none is registered; the
+	 * caller then fails naming the module rather than degrading silently.
+	 */
+	public <T> T findAdapter(Class<T> type) {
+		for (String name : getAdapterNames()) {
+			AAdapter adapter = getAdapter(name);
+			if (type.isInstance(adapter)) return type.cast(adapter);
+		}
+		return null;
+	}
+
+	/**
 	 * Get all active adapter names
 	 * @return Set of all registered, enabled adapter names
 	 */

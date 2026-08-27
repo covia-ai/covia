@@ -798,7 +798,7 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 
 		try (Resolved r = resolveEntry(ctx, rootName, pathArg, Capability.CRUD_READ, true)) {
 			String binaryUrl = r.entryPath() == null ? r.target().binaryUrl() : null;
-			return FileOperations.read(r.path(), mode, binaryUrl);
+			return FileOperations.read(r.path(), mode, binaryUrl, engine, input);
 		}
 	}
 

@@ -1,0 +1,46 @@
+{
+  "name": "Extract readable text from a document",
+  "description": "The readable text of a PDF or Office document (docx, xlsx, pptx, and legacy doc, xls, ppt) supplied as bytes, with pages or slides marked, an optional page range and a character cap. For a file on a root or drive use file:read, vault:read or dlfs:read with mode 'extract' instead — same result, with the read's own authorisation. No OCR: a scanned PDF is reported as such.",
+  "operation": {
+    "adapter": "documents:extract",
+    "input": {
+      "type": "object",
+      "properties": {
+        "bytes": {
+          "type": "string",
+          "description": "The document, base64-encoded"
+        },
+        "filename": {
+          "type": "string",
+          "description": "Its file name — the extension selects the parser when mime is not given"
+        },
+        "mime": {
+          "type": "string",
+          "description": "Its MIME type, when known; otherwise detected from the name and content"
+        },
+        "pages": {
+          "description": "A page (or slide) number, a range like \"3-5\", or {first, last} — 1-based, inclusive. Applies to paged formats (pdf, pptx, ppt)."
+        },
+        "maxChars": {
+          "type": "integer",
+          "description": "Cap on the returned text; the module's configured default applies when omitted. 'truncated' reports when the cap cut, and 'lastPage' how far it got."
+        }
+      },
+      "required": ["bytes"]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "text": { "type": "string", "description": "The readable text; pages or slides are marked '--- page N ---'" },
+        "mime": { "type": "string", "description": "The detected type" },
+        "size": { "type": "integer", "description": "Document size in bytes" },
+        "chars": { "type": "integer", "description": "Characters returned" },
+        "truncated": { "type": "boolean", "description": "True when the character cap cut the text" },
+        "pages": { "type": "integer", "description": "Page or slide count, for paged formats" },
+        "firstPage": { "type": "integer", "description": "First page covered, for paged formats" },
+        "lastPage": { "type": "integer", "description": "Last page covered — the page the cap cut into, when it did" },
+        "meta": { "type": "object", "description": "title, author, created (epoch millis) when the document carries them; sheets for workbooks; scanned: true with a note when a paged document has no usable text layer" }
+      }
+    }
+  }
+}

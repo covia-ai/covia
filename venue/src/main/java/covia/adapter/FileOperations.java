@@ -231,6 +231,13 @@ final class FileOperations {
 	}
 
 	static ACell read(Path file, String mode, String binaryUrl) throws IOException {
+		return read(file, mode, binaryUrl, null, null);
+	}
+
+	/** As above; {@code engine} and {@code input} serve {@code mode: "extract"} — the venue's
+	 *  {@link TextExtractor} and the read's {@code pages} / {@code maxChars} options. */
+	static ACell read(Path file, String mode, String binaryUrl, Engine engine,
+			AMap<AString, ACell> input) throws IOException {
 		if (!Files.isRegularFile(file)) throw new IllegalArgumentException("Not a regular file: " + file);
 		byte[] bytes = Files.readAllBytes(file);
 		String mime = MimeUtils.guess(displayName(file), bytes);
@@ -265,9 +272,37 @@ final class FileOperations {
 				yield Maps.of("content", Base64.getEncoder().encodeToString(bytes),
 					"encoding", "base64", "size", size, "mime", mime);
 			}
+			case "extract" -> extract(bytes, displayName(file), mime, size, engine, input);
 			default -> throw new IllegalArgumentException(
-				"Unknown mode '" + effectiveMode + "'. Expected: auto, text, bytes, json");
+				"Unknown mode '" + effectiveMode + "'. Expected: auto, text, bytes, json, extract");
 		};
+	}
+
+	/**
+	 * {@code mode: "extract"} — the readable text of a document, through the
+	 * venue's {@link TextExtractor} (the {@code documents} adapter of the
+	 * covia-documents module). Without one the read fails naming the module:
+	 * a PDF as {@code text} is garbage and as {@code bytes} is useless to a
+	 * model, and neither should pass for a successful read.
+	 */
+	static ACell extract(byte[] bytes, String name, String mime, CVMLong size,
+			Engine engine, AMap<AString, ACell> input) throws IOException {
+		TextExtractor extractor = (engine != null) ? engine.findAdapter(TextExtractor.class) : null;
+		if (extractor == null) {
+			throw new IllegalArgumentException("mode 'extract' needs the documents module (covia-documents), "
+				+ "which is not loaded on this venue — read the file with mode 'bytes', or ask the operator "
+				+ "to load the module");
+		}
+		if (!extractor.supports(mime, name)) {
+			throw new IllegalArgumentException("No text extractor for " + name + " (" + mime
+				+ "); supported: " + extractor.supported());
+		}
+		CVMLong max = (input != null) ? RT.ensureLong(input.get(TextExtractor.K_MAX_CHARS)) : null;
+		Integer[] pages = TextExtractor.parsePages((input != null) ? input.get(TextExtractor.K_PAGES) : null);
+		TextExtractor.Extraction extraction = extractor.extract(new TextExtractor.Request(
+			bytes, name, mime, (max != null) ? (int) max.longValue() : 0,
+			(pages != null) ? pages[0] : null, (pages != null) ? pages[1] : null));
+		return extraction.toCell(mime, size.longValue());
 	}
 
 	static ACell write(Path file, AMap<AString, ACell> input, Engine engine,
