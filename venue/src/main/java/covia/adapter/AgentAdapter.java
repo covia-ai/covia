@@ -40,6 +40,8 @@ import covia.adapter.agent.ToolPalette;
 import covia.adapter.agent.ContextInspectable;
 import covia.adapter.agent.CycleRecord;
 import covia.adapter.agent.Skills;
+import covia.adapter.agent.ContextLoader;
+import covia.adapter.agent.Loads;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -776,7 +778,26 @@ public class AgentAdapter extends AAdapter {
 		warnings = warnings.concat(skillSourceWarnings(ctx, config));
 		AString keyWarn = rawApiKeyWarning(config);
 		if (keyWarn != null) warnings = warnings.conj(keyWarn);
+		AString promptWarn = systemPromptWarning(config, ctx);
+		if (promptWarn != null) warnings = warnings.conj(promptWarn);
 		return warnings;
+	}
+
+	/**
+	 * A {@code systemPrompt} entry that does not resolve for the creator now
+	 * will fail the agent's every cycle: say so at create time. Resolution
+	 * uses the creator's own access, as the skill-source advisories do.
+	 */
+	private AString systemPromptWarning(AMap<AString, ACell> config, RequestContext ctx) {
+		if (config == null || !(config.get(K_SYSTEM_PROMPT) instanceof AMap<?, ?> pm)) return null;
+		@SuppressWarnings("unchecked")
+		AMap<AString, ACell> entry = (AMap<AString, ACell>) pm;
+		try {
+			new ContextLoader(engine).resolveText(entry, ctx);
+			return null;
+		} catch (RuntimeException e) {
+			return Strings.create("systemPrompt does not resolve: " + ContextLoader.rootMessage(e));
+		}
 	}
 
 
@@ -4097,7 +4118,21 @@ public class AgentAdapter extends AAdapter {
 		if (config == null) return;
 		requireConfigType(config, Fields.OPERATION, AString.class, "a string transition operation path");
 		requireConfigType(config, K_LLM_OPERATION, AString.class, "a string LLM operation path");
-		requireConfigType(config, K_SYSTEM_PROMPT, AString.class, "a string");
+		// A prompt is literal text, or one context entry (ref / text / op / job)
+		// resolved once per cycle through the loads machinery.
+		ACell prompt = config.get(K_SYSTEM_PROMPT);
+		if (prompt instanceof AMap<?, ?> pm) {
+			@SuppressWarnings("unchecked")
+			AMap<AString, ACell> entry = (AMap<AString, ACell>) pm;
+			Loads.validateSpec(entry, "config", K_SYSTEM_PROMPT);
+			if (!Loads.declaresSource(entry)) {
+				throw new IllegalArgumentException("config.systemPrompt must be a string, or an entry"
+					+ " declaring one of ref, text, op, job; got a map with none");
+			}
+		} else {
+			requireConfigType(config, K_SYSTEM_PROMPT, AString.class,
+				"a string, or an entry {ref | text | op + input | job}");
+		}
 		requireConfigType(config, K_MODEL, AString.class, "a string model name");
 		requireConfigType(config, K_API_KEY, AString.class, "a string secret reference");
 		requireConfigType(config, K_DEFAULT_TOOLS, CVMBool.class, "a boolean");

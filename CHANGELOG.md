@@ -10,6 +10,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Added
 
+- `config.systemPrompt` may be a context entry — `{ref}` to a workspace path
+  or DLFS file, `{op, input}`, `{job}` — resolved once per cycle through the
+  loads machinery; an unresolvable prompt fails the cycle and warns at create.
 - Loads entries may declare their own source — `text`, `op`, `job`, `ref` — at
   every tier (`config.loads`, session mint `loads`, `context_load`), so a
   note, a re-run listing or a job result can be pinned per session. Any loads

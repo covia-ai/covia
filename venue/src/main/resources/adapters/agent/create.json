@@ -23,8 +23,7 @@
 									"description": "Transition operation for the agent — must be a resolvable lattice path (e.g. 'v/ops/llmagent/chat' for persona chat, 'v/ops/goaltree/chat' for goal-decomposing planners). Bare adapter shorthand like 'llmagent:chat' will NOT resolve. Determines how the agent processes tasks."
 								},
 								"systemPrompt": {
-									"type": "string",
-									"description": "System prompt defining the agent's role and behaviour"
+									"description": "System prompt defining the agent's role and behaviour: the text itself, or one context entry resolved once per cycle — {ref: 'w/prompts/x'} for a workspace path, {ref: 'dlfs/<drive>/<file>'} for a DLFS file, {op, input?} for a read-only operation that returns the text, {job} for a completed job's text output. An entry that does not resolve fails the cycle; create warns when it does not resolve now."
 								},
 								"llmOperation": {
 									"type": "string",

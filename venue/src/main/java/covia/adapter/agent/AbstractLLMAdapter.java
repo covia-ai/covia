@@ -338,10 +338,15 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		return new ResolvedModel(selected, provider, modelId, execution, assembly);
 	}
 
-	/** Adds the operation default to effective agent config for inspection and L3 input. */
+	/**
+	 * The cycle's effective config: the identity prompt resolved to text and
+	 * the operation's model default added, for inspection and L3 input. Both
+	 * runtimes call this once per cycle, so a {@code systemPrompt} entry is
+	 * read once and the head stays identical across the cycle's inferences.
+	 */
 	protected AMap<AString, ACell> effectiveModelConfig(AMap<AString, ACell> config,
 			RequestContext ctx) {
-		AMap<AString, ACell> effective = (config != null) ? config : Maps.empty();
+		AMap<AString, ACell> effective = resolveSystemPrompt((config != null) ? config : Maps.empty(), ctx);
 		if (effective.get(K_MODEL) != null) return effective;
 		try {
 			Asset selected = engine.resolveAsset(getLLMOperation(effective), ctx);
@@ -349,6 +354,30 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			return (modelId != null) ? effective.assoc(K_MODEL, modelId) : effective;
 		} catch (RuntimeException e) {
 			return effective;
+		}
+	}
+
+	/**
+	 * {@code config.systemPrompt} as text. A string is the prompt itself. A map
+	 * is a context entry (AGENT_CONTEXT.md §6.2 — {@code ref}, {@code text},
+	 * {@code op} + {@code input}, {@code job}) resolved through the same
+	 * loader as pinned context and loads, once per cycle, under the cycle's
+	 * identity: a prompt kept at a workspace path or in a DLFS file, or built
+	 * by a read-only operation. A prompt that does not resolve fails the
+	 * cycle — a missing identity is a configuration error, not something to
+	 * render around.
+	 */
+	protected AMap<AString, ACell> resolveSystemPrompt(AMap<AString, ACell> config, RequestContext ctx) {
+		ACell prompt = config.get(K_SYSTEM_PROMPT);
+		if (!(prompt instanceof AMap)) return config;
+		@SuppressWarnings("unchecked")
+		AMap<AString, ACell> entry = (AMap<AString, ACell>) prompt;
+		try {
+			String text = new ContextLoader(engine).resolveText(entry, ctx);
+			return config.assoc(K_SYSTEM_PROMPT, Strings.create(text));
+		} catch (RuntimeException e) {
+			throw new IllegalStateException("config.systemPrompt did not resolve — " + entry
+				+ ": " + ContextLoader.rootMessage(e), e);
 		}
 	}
 

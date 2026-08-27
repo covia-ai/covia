@@ -173,6 +173,64 @@ public class ContextLoader {
 	/**
 	 * Resolves a map context entry with explicit fields.
 	 */
+	/**
+	 * The raw text a map entry resolves to — the same forms as
+	 * {@link #resolveMapEntry} ({@code ref}, {@code text}, {@code op} +
+	 * {@code input}, {@code job} + {@code path}) with no header and
+	 * <b>required</b> semantics: an absent source or a failure throws with
+	 * the reason, and a value that is not text is an error rather than a
+	 * rendering. This is what {@code config.systemPrompt} resolves through
+	 * when it is an entry rather than a literal (AGENT_CONTEXT.md §5.1).
+	 */
+	public String resolveText(AMap<AString, ACell> entry, RequestContext ctx) {
+		AString text = RT.ensureString(entry.get(K_TEXT));
+		if (text != null) return text.toString();
+		AString ref = RT.ensureString(entry.get(K_REF));
+		if (ref != null) {
+			String content = resolveReference(ref, ctx);
+			if (content == null) throw new RuntimeException("not found: " + ref);
+			return content;
+		}
+		AString op = RT.ensureString(entry.get(K_OP));
+		if (op != null) {
+			ACell result;
+			try {
+				result = engine.jobs().invokeInternal(op, entry.get(K_INPUT), ctx)
+					.get(10_000, java.util.concurrent.TimeUnit.MILLISECONDS);
+			} catch (Exception e) {
+				throw new RuntimeException("operation " + op + " failed: " + rootMessage(e), e);
+			}
+			AString s = RT.ensureString(result);
+			if (s == null) {
+				throw new RuntimeException("operation " + op + " returned "
+					+ ((result == null) ? "nothing" : result.getClass().getSimpleName()) + ", not text");
+			}
+			return s.toString();
+		}
+		AString jobId = RT.ensureString(entry.get(K_JOB));
+		if (jobId != null) {
+			AMap<AString, ACell> jobData = engine.jobs().getJobData(
+				convex.core.data.Blob.fromHex(jobId.toString()), ctx);
+			if (jobData == null) throw new RuntimeException("job not found: " + jobId);
+			ACell status = jobData.get(Fields.STATUS);
+			if (!Strings.create("COMPLETE").equals(status)) {
+				throw new RuntimeException("job " + jobId + " is not complete (" + status + ")");
+			}
+			ACell output = jobData.get(Fields.OUTPUT);
+			AString path = RT.ensureString(entry.get(K_PATH));
+			if (path != null && output != null) {
+				for (String key : path.toString().split("\\.")) {
+					output = RT.getIn(output, Strings.create(key));
+					if (output == null) break;
+				}
+			}
+			AString s = RT.ensureString(output);
+			if (s == null) throw new RuntimeException("job " + jobId + " output is not text");
+			return s.toString();
+		}
+		throw new IllegalArgumentException("entry declares none of ref, text, op, job");
+	}
+
 	ACell resolveMapEntry(AMap<AString, ACell> map, RequestContext ctx) {
 		AString label = RT.ensureString(map.get(K_LABEL));
 		boolean required = convex.core.data.prim.CVMBool.TRUE.equals(map.get(K_REQUIRED));
@@ -453,7 +511,7 @@ public class ContextLoader {
 	}
 
 	/** Unwraps the most useful message from a (possibly wrapped) throwable. */
-	static String rootMessage(Throwable e) {
+	public static String rootMessage(Throwable e) {
 		Throwable c = e;
 		if (c instanceof java.util.concurrent.ExecutionException && c.getCause() != null) c = c.getCause();
 		String m = c.getMessage();

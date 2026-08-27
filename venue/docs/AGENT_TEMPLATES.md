@@ -103,7 +103,7 @@ top level of a legacy flat config map):
 |-------|------|-------------|
 | `name` | string | Human-readable template name |
 | `description` | string | What this agent does (useful for LLM discovery) |
-| `systemPrompt` | string | System prompt defining the agent's role |
+| `systemPrompt` | string or entry | System prompt defining the agent's role — the text, or a context entry (`{ref}`, `{text}`, `{op, input}`, `{job}`) resolved once per cycle, so a prompt can live at a workspace path or in a DLFS file (AGENT_CONTEXT.md §5.1) |
 | `tools` | array | Tool operation lattice paths the agent can call (e.g. `v/ops/covia/read`) |
 | `model` | string | Optional provider model name; provider default when absent |
 | `llmOperation` | string | Optional LLM backend operation path; venue default when absent |

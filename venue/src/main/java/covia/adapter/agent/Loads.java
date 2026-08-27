@@ -106,7 +106,7 @@ public final class Loads {
 	 * {@code input} only with {@code op}; {@code volatile} a boolean. A bad
 	 * declaration is a configuration error and throws with the entry named.
 	 */
-	static void validateSpec(AMap<AString, ACell> spec, String which, AString key) {
+	public static void validateSpec(AMap<AString, ACell> spec, String which, AString key) {
 		int forms = 0;
 		for (AString k : SOURCE_KEYS) {
 			ACell v = spec.get(k);
@@ -132,7 +132,7 @@ public final class Loads {
 	}
 
 	/** True when the spec declares its own source rather than rendering its key. */
-	static boolean declaresSource(AMap<AString, ACell> spec) {
+	public static boolean declaresSource(AMap<AString, ACell> spec) {
 		for (AString k : SOURCE_KEYS) {
 			if (spec.get(k) != null) return true;
 		}
