@@ -205,6 +205,8 @@ public class Fields {
 	public static final StringShort BUDGET = Strings.intern("budget");
 	/** Job ids a cycle presented (chat envelopes drained this cycle). */
 	public static final StringShort JOBS = Strings.intern("jobs");
+	/** Chat job ids one response answered together, in presentation order (#416). */
+	public static final StringShort ANSWERED = Strings.intern("answered");
 	public static final StringShort CYCLES = Strings.intern("cycles");
 	/** Wall-clock milliseconds. */
 	public static final StringShort MS = Strings.intern("ms");

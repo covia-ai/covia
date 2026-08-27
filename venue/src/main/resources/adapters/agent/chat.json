@@ -25,7 +25,8 @@
 				"agentId": { "type": "string", "description": "Agent that produced the response" },
 				"address": { "type": "string", "description": "Canonical <ownerDID>/g/<agentId> address" },
 				"sessionId": { "type": "string", "description": "Session the response belongs to (echo on subsequent chats to continue)" },
-				"response": { "description": "The agent's response value (whatever the transition emitted as its turn output)" }
+				"response": { "description": "The agent's response value (whatever the transition emitted as its turn output)" },
+				"answered": { "type": "array", "items": { "type": "string" }, "description": "Ids of every chat Job this response answered, this one included, in presentation order — several when the agent read several queued messages before replying (#416)" }
 			}
 		}
 	}

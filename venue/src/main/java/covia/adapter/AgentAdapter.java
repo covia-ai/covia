@@ -3425,15 +3425,34 @@ public class AgentAdapter extends AAdapter {
 			ConcurrentHashMap<Blob, Job> waiters = sessionChats(key, pickedSessionBlob);
 			if (waiters != null) {
 				java.util.Set<Blob> stillQueued = pendingChatJobIds(agent.getSessionPending(pickedSessionBlob));
+				java.util.LinkedHashMap<Blob, Job> answered = new java.util.LinkedHashMap<>();
 				for (Job chatJob : new java.util.ArrayList<>(waiters.values())) {
 					if (chatJob == null || chatJob.isFinished()) { waiters.remove(chatJob != null ? chatJob.getID() : null); continue; }
 					if (stillQueued.contains(chatJob.getID())) continue;   // not yet presented
 					waiters.remove(chatJob.getID(), chatJob);
+					answered.put(chatJob.getID(), chatJob);
+				}
+				// Every result names the chats this response answered, in
+				// presentation order — this cycle's inbox first, then any
+				// waiter presented by an earlier cycle that yielded — so a
+				// client can tell one reply to several messages from several
+				// replies and collapse the duplicates (#416).
+				java.util.LinkedHashSet<Blob> order = new java.util.LinkedHashSet<>();
+				for (long i = 0; filteredInbox != null && i < filteredInbox.count(); i++) {
+					AString jid = RT.ensureString(RT.getIn(filteredInbox.get(i), Fields.JOB_ID));
+					Blob id = (jid != null) ? Blob.parse(jid.toString()) : null;
+					if (id != null && answered.containsKey(id)) order.add(id);
+				}
+				order.addAll(answered.keySet());
+				AVector<ACell> answeredIds = Vectors.empty();
+				for (Blob id : order) answeredIds = answeredIds.conj(Strings.create(id.toHexString()));
+				for (Job chatJob : answered.values()) {
 					if (cycleTokens != null) attachTokens(chatJob, cycleTokens);
 					chatJob.completeWith(Maps.of(
 						Fields.AGENT_ID,   agentId,
 						Fields.SESSION_ID, pickedSession,
-						Fields.RESPONSE,   leanResponse));
+						Fields.RESPONSE,   leanResponse,
+						Fields.ANSWERED,   answeredIds));
 				}
 			}
 		}

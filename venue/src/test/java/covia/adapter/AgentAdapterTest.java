@@ -1942,6 +1942,27 @@ public class AgentAdapterTest {
 		assertNotNull(RT.getIn(rb, Fields.RESPONSE));
 		assertEquals(sidHex, RT.getIn(ra, Fields.SESSION_ID));
 		assertEquals(sidHex, RT.getIn(rb, Fields.SESSION_ID));
+
+		// Every result names the chats its reply answered (#416): always itself;
+		// and when two were read together they share one reply and one list.
+		AString aId = Strings.create(a.getID().toHexString());
+		AString bId = Strings.create(b.getID().toHexString());
+		AVector<ACell> answeredFirst = RT.ensureVector(RT.getIn(firstResult, Fields.ANSWERED));
+		assertEquals(Vectors.of(Strings.create(first.getID().toHexString())), answeredFirst,
+			"a lone chat answers only itself");
+		AVector<ACell> answeredA = RT.ensureVector(RT.getIn(ra, Fields.ANSWERED));
+		AVector<ACell> answeredB = RT.ensureVector(RT.getIn(rb, Fields.ANSWERED));
+		assertNotNull(answeredA);
+		assertNotNull(answeredB);
+		assertTrue(answeredA.contains(aId), "a names itself: " + answeredA);
+		assertTrue(answeredB.contains(bId), "b names itself: " + answeredB);
+		if (answeredA.contains(bId)) {
+			assertEquals(answeredA, answeredB, "chats read together share one list");
+			assertEquals(RT.getIn(ra, Fields.RESPONSE), RT.getIn(rb, Fields.RESPONSE), "and one reply");
+		} else {
+			assertEquals(Vectors.of(aId), answeredA);
+			assertEquals(Vectors.of(bId), answeredB);
+		}
 	}
 
 	@Test
