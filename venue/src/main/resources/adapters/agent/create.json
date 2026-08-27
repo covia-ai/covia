@@ -56,7 +56,7 @@
 								},
 								"loads": {
 									"type": "object",
-									"description": "Operator-pinned live loads keyed by reference path; each value may include label, budget, required, and contributed tools."
+									"description": "Operator-pinned live loads: a map of key to entry spec. The key is the reference (lattice path, skill path with {skill: true}) unless the spec declares its own source — {text}, {op, input?} (volatile by default: rendered in the tail, never cached), {job} — under any key. Each value may include label, budget, required, volatile, and contributed tools, skills and skillsets."
 								},
 								"skills": {
 									"type": "array",

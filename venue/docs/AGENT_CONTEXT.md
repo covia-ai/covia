@@ -109,18 +109,19 @@ The band is the *expected* change frequency. Content can be more volatile than i
 | 2 | Capability notice | fixed head | `system` | Declared `config.caps` — **only for an agent with tools** — so bounds are known before they are hit |
 | 3 | Pinned context | live surface | `system` | `config.context` entries (§6) — operator-owned, agent cannot drop |
 | 4 | Skills index | live surface | `system` | `[Skills]` — one line per discoverable skill (SKILLS.md §4.3) |
-| 5 | Loaded elements | live surface | `system` | Every effective load (§7), each with its unload key |
+| 5 | Loaded elements | live surface | `system` | Every effective load (§7) that is not volatile, in load order, each with its unload key |
 | 6 | Conversation | conversation | `user` / `assistant` / `tool` | The rendered frame(s) |
 | 7 | Pending results | conversation | `user` | Job results that arrived for this cycle |
 | 8 | Current input | conversation | `user` | The inbox message(s) driving this cycle |
 | 9 | Tool-loop messages | conversation | `assistant` / `tool` | Assistant/tool turns accumulated within this cycle |
-| 10 | Budget warning | volatile tail | `system` | **Only** when the budget is under pressure (§3.4) |
-| 11 | Current date | volatile tail | `system` | One line; changes daily |
-| 12 | Unavailable tools | volatile tail | `system` | Configured tools that did not resolve this cycle |
-| 13 | Outstanding task | volatile tail | `user` | The task the agent must complete or fail — the last thing before the reply |
+| 10 | Volatile loads | volatile tail | `system` | Every effective load declared `volatile` — an op entry by default (§5.5) |
+| 11 | Budget warning | volatile tail | `system` | **Only** when the budget is under pressure (§3.4) |
+| 12 | Current date | volatile tail | `system` | One line; changes daily |
+| 13 | Unavailable tools | volatile tail | `system` | Configured tools that did not resolve this cycle |
+| 14 | Outstanding task | volatile tail | `user` | The task the agent must complete or fail — the last thing before the reply |
 | — | Empty-state signal | conversation | `user` | Replaces 7–8 when there is nothing to act on |
 
-The *Role* column is the role a section emits — the role that is true of its content. Sections 1–2 are **one `system` message** — just the identity for an agent without tools: they change together and are the first thing in every request. Sections 10–12 are **one `system` message**, composed of whichever parts are present: the tail is re-rendered every inference, and one message is the cheapest shape for it. How a system message that follows the conversation reaches a given provider is the edge's business (§3.2.1, §3.5), never a section's.
+The *Role* column is the role a section emits — the role that is true of its content. Sections 1–2 are **one `system` message** — just the identity for an agent without tools: they change together and are the first thing in every request. Sections 11–13 are **one `system` message**, composed of whichever parts are present: the tail is re-rendered every inference, and one message is the cheapest shape for it. How a system message that follows the conversation reaches a given provider is the edge's business (§3.2.1, §3.5), never a section's.
 
 ### 3.2.1 The role rule
 
@@ -274,9 +275,13 @@ Structured values are rendered as budget-bounded JSON5; any one entry is capped 
 One line per discoverable skill, with `(loaded)` against those already in context. Resolved fresh each inference from the agent's effective sources. Absent entirely when the agent declares no skill sources. See SKILLS.md §4.3.
 
 ### 5.5 Loaded elements
-Every entry in the effective loads chain (§7), rendered through the same resolver as pinned context and re-read from the lattice on every inference (§7.2). A skill-flagged entry renders `[Skill: <name> — <path>]` plus its body; any other renders `[Context: <label>]` plus its body (§1.1).
+Every entry in the effective loads chain (§7), rendered through the same resolver as pinned context and re-read on every inference (§7.2). A skill-flagged entry renders `[Skill: <name> — <path>]` plus its body; any other renders `[Context: <label>]` plus its body (§1.1).
 
-Each element carries its **unload key** in its header. `context_unload` takes a path, and a skill is otherwise only ever named, so without this the key is invisible. A non-skill element's label is its ref, so it already carries its key.
+A loads entry is `key → spec`. By default the key **is** the entry's source — a lattice path, an asset, a content ref — and the spec carries only `budget`, `label`, `ts`, `skill`, `tools`, `skills`, `skillsets`. A spec may instead declare its own source, exactly one of `ref`, `text`, `op` + `input`, `job` + `path` — the map-entry grammar of §6.2 — in which case the key is simply the entry's identity. The loads tiers are therefore the same grammar as `config.context`, keyed so an entry can be unloaded; a note, a re-run listing or a job result can be pinned at the session tier by whoever minted the session, or by the agent through `context_load`.
+
+Each element carries its **unload key** in its header — the label defaults to the key, and a declared label replaces it only in the header. `context_unload` takes that key, and a skill is otherwise only ever named, so without this the key is invisible.
+
+**Placement.** Elements render in **load order** — undated (configured) entries first, then by `ts` — so loading appends after everything already in context; nothing already rendered moves. An element declared `volatile: true` — the default for an `op` entry, which re-runs every inference — renders in the **tail** (§3.2 section 10), after the conversation and every cache mark, so a result that changes each turn busts only itself; `volatile: false` pins an op result whose output is known to be stable into the live surface, where it caches. The band is chosen by declaration, never by observing the content.
 
 Failures are visible, never silent: a load that stops resolving renders `[… — unavailable: <reason>]` rather than vanishing, because a missing element changes behaviour too much to hide.
 
@@ -342,8 +347,9 @@ The literal fallback means a mistyped *prefix* (`ws/notes`) is injected as text 
 | `required` | Failure throws and fails the cycle |
 | `budget` | Render cap for a structured value (§6.4); not an accounting charge |
 | `wait` | Job entries: ms to wait for a running job |
+| `volatile` | Loads tiers only (§5.5): render in the tail rather than the live surface. Defaults to true for an `op` entry, false otherwise |
 
-An **op entry** runs fresh every inference under the caller's identity, so assemble ops must be **read-only** — a write-on-assemble fires every inference. Operation entries generalise the rest: a workspace read, a cross-venue fetch and a purpose-built assembler are all just operations.
+An **op entry** runs fresh every inference under the caller's identity, so assemble ops must be **read-only** — a write-on-assemble fires every inference. Operation entries generalise the rest: a workspace read, a cross-venue fetch and a purpose-built assembler are all just operations. In `config.context` an op entry renders in place, in declared order (§3.1: put stable entries first); at a loads tier it is volatile by default and renders in the tail, where a changing result costs only itself.
 
 ### 6.3 Resolution outcomes
 
@@ -377,7 +383,7 @@ Which entries are in play at all.
 - **Configured** (`config.context`, `config.loads`) — operator-owned, loaded every cycle, **pinned**: the agent may mask it for a conversation but not remove it.
 - **Agent-managed** — the working set the agent curates via `context_load` / `context_unload`.
 
-They share the entry grammar, the resolver, the rendering contract and the budget. They differ only in *ownership and lifetime*. The agent can therefore pin a computed result exactly as configuration can — an op entry, a job result, a literal note.
+They share the entry grammar, the resolver, the rendering contract and the budget. They differ only in *ownership and lifetime*. The agent can therefore pin a computed result exactly as configuration can — `context_load` takes a `path`, or `text` / `op` / `job` under an `id` (§5.5) — and any loads entry, whoever wrote it, may declare `tools`, `skills` and `skillsets`: the palette and the skills index are widened by the entry, not by its kind.
 
 ### 7.2 The chain
 
@@ -387,7 +393,7 @@ Tiers, outer → inner:
 agent (config.loads) → session (sessions.<sid>.loads) → frame (frame.loads, goaltree)
 ```
 
-Each tier has automatic loads declared when its container is created, plus dynamic entries written while it is the innermost tier. Rules (implemented in `ContextChain`, pure functions):
+Each tier has automatic loads declared when its container is created — `config.loads` for the agent, the `loads` parameter of `agent:request` / `agent:chat` for a session it mints (the same entry shapes, `{skill: true}` included) — plus dynamic entries written while it is the innermost tier. Rules (implemented in `ContextChain`, pure functions):
 
 - **Assembly is a union down the chain; inner shadows outer** on a path collision.
 - **Masking:** unloading an outer-tier path writes a nil **tombstone** at the innermost tier — excluded from there inward, leaving the outer entry and every sibling untouched. A later load overwrites the tombstone. goaltree's copy-on-push frame inheritance copies tombstones, so masks propagate to children.

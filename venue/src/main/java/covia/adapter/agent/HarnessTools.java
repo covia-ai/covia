@@ -42,19 +42,24 @@ final class HarnessTools {
 	static final AMap<AString, ACell> DEF_CONTEXT_LOAD = Maps.of(
 		AbstractLLMAdapter.K_NAME, Strings.create(CONTEXT_LOAD),
 		AbstractLLMAdapter.K_DESCRIPTION, Strings.create(
-			"Keep a lattice path visible in your context across turns: the value is re-read "
-			+ "and rendered on every model call until you remove it. Use for rules, schemas or "
+			"Keep something visible in your context across turns until you remove it: a lattice "
+			+ "path (re-read and rendered on every model call), a note you write (text), a read-only "
+			+ "operation whose fresh result you want each turn (op), or a finished job's result (job). "
+			+ "Give exactly one of path, text, op or job; text, op and job also need an id — the key "
+			+ "shown in the element's header and passed to context_unload. Use for rules, schemas or "
 			+ "reference material you consult repeatedly; for data needed once, use an advertised "
-			+ "inspection or read operation instead. Scoped to this conversation (subgoals inherit "
-			+ "it); other conversations are unaffected. Remove it with context_unload when finished."),
+			+ "inspection or read operation instead. An op entry re-runs every call and renders at "
+			+ "the end of your context (never cached); other entries render in the working set. "
+			+ "Scoped to this conversation (subgoals inherit it); other conversations are unaffected."),
 		AbstractLLMAdapter.K_PARAMETERS, AbstractLLMAdapter.CONTEXT_LOAD_PARAMS);
 
 	static final AMap<AString, ACell> DEF_CONTEXT_UNLOAD = Maps.of(
 		AbstractLLMAdapter.K_NAME, Strings.create(CONTEXT_UNLOAD),
 		AbstractLLMAdapter.K_DESCRIPTION, Strings.create(
-			"Remove a path from this conversation's loaded context, freeing its budget — pass the "
-			+ "same path you loaded. Also hides an operator-pinned load (from config.loads) for this "
-			+ "conversation only; the pin itself is untouched and other conversations still see it."),
+			"Remove an entry from this conversation's loaded context, freeing its budget — pass the "
+			+ "key shown in its header: the path you loaded, or the id you gave a text, op or job "
+			+ "entry. Also hides an operator-pinned load (from config.loads) for this conversation "
+			+ "only; the pin itself is untouched and other conversations still see it."),
 		AbstractLLMAdapter.K_PARAMETERS, AbstractLLMAdapter.CONTEXT_UNLOAD_PARAMS);
 
 	static final AMap<AString, ACell> DEF_SKILL_LOAD = Maps.of(
@@ -172,29 +177,67 @@ final class HarnessTools {
 		}
 	}
 
+	/**
+	 * {@code context_load}: pins one entry into the innermost loads tier.
+	 * Exactly one source form — {@code path} (the key is the path, as always),
+	 * or {@code text} / {@code op} / {@code job} under a caller-chosen
+	 * {@code id} (the key). The entry grammar is AGENT_CONTEXT.md §6.2; the
+	 * stored spec is what a declared load would carry, so the loads tiers
+	 * hold one shape whoever wrote them. An op entry defaults to volatile —
+	 * it re-runs every inference, so it belongs in the tail.
+	 */
 	static ACell contextLoad(ACell input, LoadScope scope) {
 		AString path = RT.ensureString(RT.getIn(input, AbstractLLMAdapter.K_PATH));
-		if (path == null) return Strings.create(
-			"Error: path is required — context_load pins a lattice path into your context. "
-			+ "Call with {\"path\": \"w/...\"} (optional: \"budget\" in bytes, \"label\").");
+		AString text = RT.ensureString(RT.getIn(input, Loads.K_TEXT));
+		AString op   = RT.ensureString(RT.getIn(input, Loads.K_OP));
+		AString job  = RT.ensureString(RT.getIn(input, Loads.K_JOB));
+		int forms = (path != null ? 1 : 0) + (text != null ? 1 : 0) + (op != null ? 1 : 0) + (job != null ? 1 : 0);
+		if (forms == 0) return Strings.create(
+			"Error: path is required — or text, op or job with an id. context_load pins one entry "
+			+ "into your context: {\"path\": \"w/...\"} keeps a lattice path visible; {\"id\", \"text\"} "
+			+ "a note; {\"id\", \"op\", \"input\"?} a read-only operation re-run each turn; "
+			+ "{\"id\", \"job\"} a finished job's result. Optional: budget in bytes, label.");
+		if (forms > 1) return Strings.create(
+			"Error: give exactly one of path, text, op or job — context_load pins one entry per call.");
 		if (!scope.writable) return Strings.create(scope.unavailableMessage);
-		try {
-			new ContextLoader(scope.engine).requireReadAccess(path, scope.context);
-		} catch (RuntimeException e) {
-			return Strings.create("Error: context_load denied: " + describe(e));
-		}
-
 		long budget = AbstractLLMAdapter.clampLoadBudget(
 			RT.getIn(input, AbstractLLMAdapter.K_BUDGET));
 		AString label = RT.ensureString(RT.getIn(input, AbstractLLMAdapter.K_LABEL));
-		scope.loads = scope.loads.assoc(path,
-			AbstractLLMAdapter.buildLoadEntryMeta(budget, label));
+		AMap<AString, ACell> meta = AbstractLLMAdapter.buildLoadEntryMeta(budget, label);
+		AString key = path;
+		if (path != null) {
+			try {
+				new ContextLoader(scope.engine).requireReadAccess(path, scope.context);
+			} catch (RuntimeException e) {
+				return Strings.create("Error: context_load denied: " + describe(e));
+			}
+		} else {
+			key = RT.ensureString(RT.getIn(input, AbstractLLMAdapter.K_ID));
+			if (key == null) return Strings.create(
+				"Error: id is required with text, op or job — it is the key shown in the "
+				+ "element's header and the argument to context_unload.");
+			if (text != null) {
+				meta = meta.assoc(Loads.K_TEXT, text);
+			} else if (op != null) {
+				meta = meta.assoc(Loads.K_OP, op);
+				ACell opInput = RT.getIn(input, Loads.K_INPUT);
+				if (opInput != null) meta = meta.assoc(Loads.K_INPUT, opInput);
+			} else {
+				meta = meta.assoc(Loads.K_JOB, job);
+			}
+		}
+		ACell vol = RT.getIn(input, Loads.K_VOLATILE);
+		if (vol instanceof CVMBool) meta = meta.assoc(Loads.K_VOLATILE, vol);
+		scope.loads = scope.loads.assoc(key, meta);
+		String note = Loads.isVolatile(meta)
+			? "Loaded. It re-renders at the end of your context on every model call (never cached)"
+				+ " until you unload " + key + "."
+			: "Loaded. It is visible on every model call until you unload " + key + ".";
 		return Maps.of(
-			AbstractLLMAdapter.K_PATH, path,
+			AbstractLLMAdapter.K_PATH, key,
 			Strings.create("loaded"), CVMBool.TRUE,
 			AbstractLLMAdapter.K_BUDGET, CVMLong.create(budget),
-			Strings.create("note"), Strings.create(
-				"Path is loaded and will be visible on the next model invocation."));
+			Strings.create("note"), Strings.create(note));
 	}
 
 	static ACell contextUnload(ACell input, LoadScope scope) {

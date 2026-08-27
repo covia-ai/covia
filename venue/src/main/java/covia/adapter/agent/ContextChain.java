@@ -94,16 +94,19 @@ public class ContextChain {
 	/**
 	 * Parses and normalises a declared loads tier. Budgets use the same
 	 * advisory range/default as runtime context_load; labels and timestamps
-	 * are type-checked. A missing timestamp is stamped only at a persistence
-	 * boundary (for example session mint), never during ordinary rendering —
-	 * otherwise a stable declaration would appear newest on every inference.
+	 * are type-checked, and a declared source ({@code ref}/{@code text}/
+	 * {@code op}/{@code job}) or placement ({@code volatile}) is validated by
+	 * {@link Loads#validateSpec}. A missing timestamp is stamped only at a
+	 * persistence boundary (for example session mint), never during ordinary
+	 * rendering — otherwise a stable declaration would appear newest on every
+	 * inference.
 	 */
 	@SuppressWarnings("unchecked")
 	public static AMap<AString, ACell> declaredLoads(ACell raw, String which,
 			boolean stampMissingTimestamp) {
 		if (raw == null) return Maps.empty();
 		if (!(raw instanceof AMap)) {
-			throw new IllegalArgumentException(which + " must be a map of path → {budget?}, got "
+			throw new IllegalArgumentException(which + " must be a map of key → {budget?, …}, got "
 				+ Types.get(raw));
 		}
 		AMap<AString, ACell> loads = (AMap<AString, ACell>) raw;
@@ -132,6 +135,7 @@ public class ContextChain {
 				throw new IllegalArgumentException(which + " entry '" + entry.getKey()
 					+ "' ts must be an integer, got " + Types.get(ts));
 			}
+			Loads.validateSpec(meta, which, entry.getKey());
 			long budget = AbstractLLMAdapter.clampLoadBudget(meta.get(budgetKey));
 			meta = meta.assoc(budgetKey, CVMLong.create(budget));
 			if (ts == null && stampMissingTimestamp) {

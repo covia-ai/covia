@@ -103,7 +103,9 @@ public final class ContextAssembler {
 	 * @param budget the model's context budget in bytes
 	 * @param labels the label dialect (§1.1)
 	 * @param tools the palette, in order: harness, configured, loads-contributed
-	 * @param loadElements the resolved loads (a {@link Loads.Snapshot}'s elements)
+	 * @param loadElements the resolved loads (a {@link Loads.Snapshot}'s elements) — the live surface
+	 * @param volatileLoads the loads declared volatile (a {@link Loads.Snapshot}'s
+	 *        volatile elements) — rendered in the tail, after the conversation, never cached
 	 * @param effectiveLoads the effective loads chain, for the skills index markers
 	 * @param frames the frame stack; the last frame is active
 	 * @param pending job results that arrived for this cycle
@@ -127,6 +129,7 @@ public final class ContextAssembler {
 			boolean toolCalling,
 			AVector<ACell> tools,
 			AVector<ACell> loadElements,
+			AVector<ACell> volatileLoads,
 			AMap<AString, ACell> effectiveLoads,
 			AVector<ACell> frames,
 			AVector<ACell> pending,
@@ -146,12 +149,24 @@ public final class ContextAssembler {
 			// not the capability notice, not the skills index it could not act on.
 			tools = toolCalling ? orEmpty(tools) : Vectors.empty();
 			loadElements = orEmpty(loadElements);
+			volatileLoads = orEmpty(volatileLoads);
 			frames = orEmpty(frames);
 			pending = orEmpty(pending);
 			input = orEmpty(input);
 			toolLoop = orEmpty(toolLoop);
 			unavailable = orEmpty(unavailable);
 			if (now == null) now = LocalDate.now();
+		}
+
+		/** The shape before volatile loads existed: none. Runtimes set them with {@link #withLoads}. */
+		public Spec(Engine engine, RequestContext ctx, RequestContext capsCtx, AMap<AString, ACell> config,
+				String sessionId, String headNotice, long budget, AString labels, boolean toolCalling,
+				AVector<ACell> tools, AVector<ACell> loadElements, AMap<AString, ACell> effectiveLoads,
+				AVector<ACell> frames, AVector<ACell> pending, AVector<ACell> input, boolean hasInput,
+				AVector<ACell> toolLoop, ACell task, AVector<ACell> unavailable, String notice, LocalDate now) {
+			this(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling,
+				tools, loadElements, null, effectiveLoads, frames, pending, input, hasInput,
+				toolLoop, task, unavailable, notice, now);
 		}
 
 		/** A Spec for a model that calls tools — the norm; tests and callers without a profile use this. */
@@ -161,7 +176,7 @@ public final class ContextAssembler {
 				AVector<ACell> frames, AVector<ACell> pending, AVector<ACell> input, boolean hasInput,
 				AVector<ACell> toolLoop, ACell task, AVector<ACell> unavailable, String notice, LocalDate now) {
 			this(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, true,
-				tools, loadElements, effectiveLoads, frames, pending, input, hasInput,
+				tools, loadElements, null, effectiveLoads, frames, pending, input, hasInput,
 				toolLoop, task, unavailable, notice, now);
 		}
 
@@ -169,41 +184,41 @@ public final class ContextAssembler {
 			return (v != null) ? v : Vectors.empty();
 		}
 
-		/** The per-inference loads and the palette that includes their tools. */
+		/** The per-inference loads — live and volatile — and the palette that includes their tools. */
 		public Spec withLoads(Loads.Snapshot loads, AVector<ACell> tools, AMap<AString, ACell> effectiveLoads) {
 			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling,
-				tools, loads.elements(), effectiveLoads, frames, pending, input, hasInput,
+				tools, loads.elements(), loads.volatileElements(), effectiveLoads, frames, pending, input, hasInput,
 				toolLoop, task, unavailable, notice, now);
 		}
 
 		public Spec withToolLoop(AVector<ACell> toolLoop) {
 			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling,
-				tools, loadElements, effectiveLoads, frames, pending, input, hasInput,
+				tools, loadElements, volatileLoads, effectiveLoads, frames, pending, input, hasInput,
 				toolLoop, task, unavailable, notice, now);
 		}
 
 		public Spec withTask(ACell task) {
 			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling,
-				tools, loadElements, effectiveLoads, frames, pending, input, hasInput,
+				tools, loadElements, volatileLoads, effectiveLoads, frames, pending, input, hasInput,
 				toolLoop, task, unavailable, notice, now);
 		}
 
 		public Spec withFrames(AVector<ACell> frames) {
 			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling,
-				tools, loadElements, effectiveLoads, frames, pending, input, hasInput,
+				tools, loadElements, volatileLoads, effectiveLoads, frames, pending, input, hasInput,
 				toolLoop, task, unavailable, notice, now);
 		}
 
 		public Spec withNotice(String notice) {
 			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling,
-				tools, loadElements, effectiveLoads, frames, pending, input, hasInput,
+				tools, loadElements, volatileLoads, effectiveLoads, frames, pending, input, hasInput,
 				toolLoop, task, unavailable, notice, now);
 		}
 
 		/** A frame's view: its own config and head notice. */
 		public Spec forFrame(AMap<AString, ACell> config, String headNotice) {
 			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling,
-				tools, loadElements, effectiveLoads, frames, pending, input, hasInput,
+				tools, loadElements, volatileLoads, effectiveLoads, frames, pending, input, hasInput,
 				toolLoop, task, unavailable, notice, now);
 		}
 	}
@@ -383,7 +398,10 @@ public final class ContextAssembler {
 		p.add(spec.toolLoop());
 		p.mark(Band.TOOL_LOOP);
 
-		// Volatile tail — re-rendered every inference, never cached
+		// Volatile tail — re-rendered every inference, never cached: the loads
+		// declared volatile (op entries by default) first, so a result that
+		// changes every turn busts only itself, then the notices, then the task
+		p.add(spec.volatileLoads());
 		p.add(notices(spec, p.used()));
 		p.add(spec.task());
 		return p;

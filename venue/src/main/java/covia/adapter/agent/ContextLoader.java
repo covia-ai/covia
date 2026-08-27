@@ -176,6 +176,9 @@ public class ContextLoader {
 	ACell resolveMapEntry(AMap<AString, ACell> map, RequestContext ctx) {
 		AString label = RT.ensureString(map.get(K_LABEL));
 		boolean required = convex.core.data.prim.CVMBool.TRUE.equals(map.get(K_REQUIRED));
+		// Absent until a builder says otherwise: the message builders record
+		// RESOLVED / UNAVAILABLE, so a null return here reads as absent.
+		resolution = Resolution.ABSENT;
 
 		// Grid operation entry
 		AString op = RT.ensureString(map.get(K_OP));
@@ -429,6 +432,7 @@ public class ContextLoader {
 
 	/** A context element: the labelled content, or bare content when unlabelled. */
 	ACell systemMessage(String label, String content) {
+		resolution = Resolution.RESOLVED;
 		String text = (label != null) ? Labels.render(dialect, Labels.Kind.CONTEXT, content, label) : content;
 		return Maps.of(K_ROLE, ROLE_SYSTEM, K_CONTENT, Strings.create(text));
 	}
@@ -442,6 +446,7 @@ public class ContextLoader {
 	 * not reported here.
 	 */
 	ACell errorMessage(String label, String reason) {
+		resolution = Resolution.UNAVAILABLE;
 		String l = (label != null && !label.isEmpty()) ? label : "context";
 		return Maps.of(K_ROLE, ROLE_SYSTEM, K_CONTENT,
 			Strings.create(Labels.renderUnavailable(dialect, Labels.Kind.CONTEXT, reason, l)));

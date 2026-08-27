@@ -175,7 +175,9 @@ public final class ToolPalette {
 		if (effectiveLoads == null || effectiveLoads.count() == 0) return added;
 		Set<String> names = new HashSet<>();
 		if (excludeNames != null) names.addAll(excludeNames);
-		for (var entry : effectiveLoads.entrySet()) {
+		// Load order, so a new load's tools append after existing definitions
+		// and the cached tool block is not reshuffled.
+		for (var entry : Loads.ordered(effectiveLoads)) {
 			ACell spec = entry.getValue();
 			if (!(spec instanceof AMap)) continue;
 			AVector<ACell> ops = RT.ensureVector(((AMap<AString, ACell>) spec).get(K_TOOLS));

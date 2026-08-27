@@ -1017,11 +1017,14 @@ public final class Skills {
 	}
 
 	/**
-	 * Combines configured sources with those contributed by currently loaded
-	 * skills, per kind. Configured sources retain priority; exact duplicate
-	 * refs are removed first-wins. Only the immediate refs on loaded entries
-	 * are considered: children are discoverable, never recursively auto-loaded,
-	 * so an unloaded subtree is never walked and cycles are inert.
+	 * Combines configured sources with those contributed by the effective
+	 * loads, per kind. Any loads entry may declare {@code skills} and
+	 * {@code skillsets} — the same kind-agnostic rule as {@code tools}, so a
+	 * session profile or a plain note widens discovery exactly as a loaded
+	 * skill does. Configured sources retain priority; exact duplicate refs are
+	 * removed first-wins, in load order. Only the immediate refs on loaded
+	 * entries are considered: children are discoverable, never recursively
+	 * auto-loaded, so an unloaded subtree is never walked and cycles are inert.
 	 */
 	public static SkillSources effectiveSources(SkillSources configured,
 			AMap<AString, ACell> effectiveLoads) {
@@ -1035,8 +1038,8 @@ public final class Skills {
 				"config.skillsets", K_SKILLSETS);
 		}
 		if (effectiveLoads == null) return new SkillSources(skills, skillsets);
-		for (var entry : effectiveLoads.entrySet()) {
-			if (!isSkillEntry(entry.getValue())) continue;
+		for (var entry : Loads.ordered(effectiveLoads)) {
+			if (!(entry.getValue() instanceof AMap)) continue;
 			@SuppressWarnings("unchecked")
 			AMap<AString, ACell> spec = (AMap<AString, ACell>) entry.getValue();
 			skills = appendContributed(skills, spec, K_SKILLS, seenSkills, entry.getKey());

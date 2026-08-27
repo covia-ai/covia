@@ -143,6 +143,7 @@ Session-id inputs accept both canonical hexadecimal and the `0x`-prefixed repres
 - `sessionId` omitted on `agent_request` / `agent_chat` → venue mints a new session, returns the id
 - `sessionId` omitted on `agent_message` → **error** (messages require a session)
 - `session={title: ..., parties: [...]}` on `agent_request` → create new session with explicit metadata; the response includes the minted id
+- `loads={...}` on `agent_request` / `agent_chat` → the minted session's declared loads (AGENT_CONTEXT.md §7.2): skills to pre-load, notes, re-run operations, job results, extra tools and skill sources. Mint-time only; the A2A front door and `agent_message` cannot pass it — pre-mint a session with `agent_request`/`agent_chat` and hand out its id
 
 **Why three ops, not flags on one op.** Each op encodes a distinct caller intent (long-running task vs. wait-for-reply vs. notify). The agent doesn't have to declare its mode — the framework already knows what to do with the agent's response based on which queue picked the work. This eliminates the "is this response a task completion or a chat reply or both?" ambiguity that comes from a single intake op + per-call flags.
 

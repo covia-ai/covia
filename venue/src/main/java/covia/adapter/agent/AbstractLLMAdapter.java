@@ -130,16 +130,37 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			K_PATH, Maps.of(
 				K_TYPE, Strings.create("string"),
 				K_DESCRIPTION, Strings.create(
-					"Workspace path to load (e.g. w/docs/rules, n/notes)")),
+					"Lattice path to keep visible (e.g. w/docs/rules, n/notes). Its own key.")),
+			K_ID, Maps.of(
+				K_TYPE, Strings.create("string"),
+				K_DESCRIPTION, Strings.create(
+					"Key for a text, op or job entry — shown in its header, passed to context_unload")),
+			Strings.intern("text"), Maps.of(
+				K_TYPE, Strings.create("string"),
+				K_DESCRIPTION, Strings.create("A note to keep in context, verbatim")),
+			Strings.intern("op"), Maps.of(
+				K_TYPE, Strings.create("string"),
+				K_DESCRIPTION, Strings.create(
+					"A read-only operation path (e.g. v/ops/covia/list) re-run on every model call;"
+					+ " its result renders at the end of your context")),
+			Strings.intern("input"), Maps.of(
+				K_TYPE, Strings.create("object"),
+				K_DESCRIPTION, Strings.create("Input for op")),
+			Strings.intern("job"), Maps.of(
+				K_TYPE, Strings.create("string"),
+				K_DESCRIPTION, Strings.create("A completed job's id; its output is the content")),
 			K_BUDGET, Maps.of(
 				K_TYPE, Strings.create("integer"),
 				K_DESCRIPTION, Strings.create(
-					"Byte budget for rendering this path (default 500, max 10000)")),
+					"Byte budget for rendering a structured value (default 500, max 10000)")),
 			K_LABEL, Maps.of(
 				K_TYPE, Strings.create("string"),
 				K_DESCRIPTION, Strings.create(
-					"Optional human-readable label for this context entry"))),
-		K_REQUIRED, Vectors.of(K_PATH));
+					"Optional human-readable label for this context entry")),
+			Strings.intern("volatile"), Maps.of(
+				K_TYPE, Strings.create("boolean"),
+				K_DESCRIPTION, Strings.create(
+					"Render at the end of your context, never cached (default: true for op, else false)"))));
 
 	/**
 	 * Shared parameter schema for the {@code context_unload} tool.
@@ -150,7 +171,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			K_PATH, Maps.of(
 				K_TYPE, Strings.create("string"),
 				K_DESCRIPTION, Strings.create(
-					"Workspace path to unload (must match the path used in context_load)"))),
+					"The entry's key as shown in its header: the path you loaded, or the id you gave"))),
 		K_REQUIRED, Vectors.of(K_PATH));
 
 	/**
