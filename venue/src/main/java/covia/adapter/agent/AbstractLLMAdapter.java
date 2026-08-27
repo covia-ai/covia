@@ -152,7 +152,8 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			K_BUDGET, Maps.of(
 				K_TYPE, Strings.create("integer"),
 				K_DESCRIPTION, Strings.create(
-					"Byte budget for rendering a structured value (default 500, max 10000)")),
+					"Byte budget for rendering a structured value (default 500, max 10000); a hard cap "
+					+ "on a volatile entry whatever its shape")),
 			K_LABEL, Maps.of(
 				K_TYPE, Strings.create("string"),
 				K_DESCRIPTION, Strings.create(
@@ -160,7 +161,10 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			Strings.intern("volatile"), Maps.of(
 				K_TYPE, Strings.create("boolean"),
 				K_DESCRIPTION, Strings.create(
-					"Render at the end of your context, never cached (default: true for op, else false)"))));
+					"Render at the end of your context, never cached, so its changes cost nothing "
+					+ "else. Default true for op, else false. Set true for a path whose value is likely "
+					+ "to change during this conversation (a queue, a status, something you write to); "
+					+ "leave false for reference material. Unload it when no longer needed."))));
 
 	/**
 	 * Shared parameter schema for the {@code context_unload} tool.

@@ -16,7 +16,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   entry may contribute `tools`, `skills` and `skillsets`.
 - Volatile loads render in the tail: an `op` entry (or anything declared
   `volatile: true`) sits after the conversation and every cache mark, so a
-  result that changes each turn no longer invalidates the cached prefix.
+  result that changes each turn no longer invalidates the cached prefix. A
+  volatile entry renders within its budget whatever its shape.
   Loaded elements and load-contributed tools render in load order, so a new
   load appends instead of reshuffling.
 - Parallel tool calls in the agent cycle: adjacent operation calls in one

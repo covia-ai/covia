@@ -281,7 +281,9 @@ A loads entry is `key → spec`. By default the key **is** the entry's source �
 
 Each element carries its **unload key** in its header — the label defaults to the key, and a declared label replaces it only in the header. `context_unload` takes that key, and a skill is otherwise only ever named, so without this the key is invisible.
 
-**Placement.** Elements render in **load order** — undated (configured) entries first, then by `ts` — so loading appends after everything already in context; nothing already rendered moves. An element declared `volatile: true` — the default for an `op` entry, which re-runs every inference — renders in the **tail** (§3.2 section 10), after the conversation and every cache mark, so a result that changes each turn busts only itself; `volatile: false` pins an op result whose output is known to be stable into the live surface, where it caches. The band is chosen by declaration, never by observing the content.
+**Placement.** Elements render in **load order** — undated (configured) entries first, then by `ts` — so loading appends after everything already in context; nothing already rendered moves. An element declared `volatile: true` — the default for an `op` entry, which re-runs every inference — renders in the **tail** (§3.2 section 10), after the conversation and every cache mark, so a result that changes each turn busts only itself; `volatile: false` pins an op result whose output is known to be stable into the live surface, where it caches. The band is chosen by declaration, never by observing the content. Declare a path load volatile when its value is likely to change during the conversation — a queue, a status, something the agent writes to.
+
+A volatile element has two costs the live surface does not: it is re-sent uncached on every inference, and it sits between the latest input and the reply. So a non-skill volatile element renders **within its budget whatever its shape** — a structured value through the explorer as always, a string cut at the budget with one trailer naming the bytes left out and the two ways to get them (reload with a larger `budget`, or fetch the value with a tool). A volatile load is a compact current-state view; a long one belongs in a tool call, which lands in the loop as an ordinary result. And it should be unloaded as soon as it is no longer needed — `context_unload` says so.
 
 Failures are visible, never silent: a load that stops resolving renders `[… — unavailable: <reason>]` rather than vanishing, because a missing element changes behaviour too much to hide.
 
@@ -345,7 +347,7 @@ The literal fallback means a mistyped *prefix* (`ws/notes`) is injected as text 
 | `job` + `path?` | A job result, optionally navigated into |
 | `label` | Heading; defaults to the ref |
 | `required` | Failure throws and fails the cycle |
-| `budget` | Render cap for a structured value (§6.4); not an accounting charge |
+| `budget` | Render cap for a structured value (§6.4); not an accounting charge. A hard cap on a volatile loads entry whatever its shape (§5.5) |
 | `wait` | Job entries: ms to wait for a running job |
 | `volatile` | Loads tiers only (§5.5): render in the tail rather than the live surface. Defaults to true for an `op` entry, false otherwise |
 

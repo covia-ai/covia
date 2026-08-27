@@ -1,5 +1,6 @@
 package covia.adapter.agent;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -41,7 +42,12 @@ import covia.venue.RequestContext;
  * {@code volatile: true}, or is an {@code op} entry and does not declare
  * {@code volatile: false}. Volatile elements render in the tail, after the
  * conversation, so their per-inference changes bust only themselves; every
- * other element renders in the live surface. Within a band, elements render
+ * other element renders in the live surface. A volatile element also sits
+ * between the latest input and the reply and is re-sent uncached every
+ * inference, so a non-skill one renders <b>within its budget whatever its
+ * shape</b>: a structured value through the explorer as always, a string cut
+ * at the budget with a visible trailer. A long current-state view belongs in
+ * a tool call, not a volatile load. Within a band, elements render
  * in load order — oldest first, undated (configured) entries before dated
  * ones — so a new load appends after everything already in context instead
  * of landing wherever its key hashes.</p>
@@ -249,14 +255,28 @@ public final class Loads {
 			boolean skill = Skills.isSkillEntry(meta);
 			boolean tail = isVolatile(meta);
 			Element resolved = element(engine, ctx, loader, key, meta, seenSkillIds, dialect);
-			if (tail) {
-				volatiles = (AVector<ACell>) volatiles.concat(resolved.messages());
+			boolean capped = false;
+			AVector<ACell> messages = resolved.messages();
+			if (tail && !skill) {
+				// The tail is re-sent uncached every inference and sits between
+				// the input and the reply: a volatile element renders within its
+				// budget whatever its shape. Structured values already do (the
+				// explorer); strings are cut here with a visible trailer.
+				AVector<ACell> bounded = Vectors.empty();
+				for (long i = 0; i < messages.count(); i++) {
+					ACell msg = messages.get(i);
+					ACell cut = capped(msg, entryBudget);
+					if (cut != msg) capped = true;
+					bounded = bounded.conj(cut);
+				}
+				messages = bounded;
+				volatiles = (AVector<ACell>) volatiles.concat(messages);
 			} else {
-				live = (AVector<ACell>) live.concat(resolved.messages());
+				live = (AVector<ACell>) live.concat(messages);
 			}
 			long bytes = 0;
-			for (long i = 0; i < resolved.messages().count(); i++) {
-				bytes += ContextAssembler.bytes(resolved.messages().get(i));
+			for (long i = 0; i < messages.count(); i++) {
+				bytes += ContextAssembler.bytes(messages.get(i));
 			}
 			diagnostics = diagnostics.conj(Maps.of(
 				Fields.REF, key,
@@ -265,7 +285,7 @@ public final class Loads {
 				Fields.BYTES, CVMLong.create(bytes),
 				AbstractLLMAdapter.K_BUDGET, CVMLong.create(entryBudget),
 				K_STATUS, Strings.create(resolved.status()),
-				K_TRUNCATED, CVMBool.create(loader.wasTruncated()),
+				K_TRUNCATED, CVMBool.create(loader.wasTruncated() || capped),
 				K_DEDUPLICATED, CVMBool.create(resolved.deduplicated())));
 		}
 		return new Resolved(live, volatiles, diagnostics);
@@ -296,6 +316,26 @@ public final class Loads {
 				(label != null) ? label.toString() : key.toString(), key,
 				ContextLoader.rootMessage(e))), "unavailable", false);
 		}
+	}
+
+	/**
+	 * A volatile element's message cut to its budget (UTF-8 bytes of content),
+	 * with one trailer naming what was left out and the two ways to get it.
+	 * The same message when it already fits. Never splits a surrogate pair.
+	 */
+	static ACell capped(ACell msg, long budget) {
+		AString content = RT.ensureString(RT.getIn(msg, AbstractLLMAdapter.K_CONTENT));
+		if (content == null) return msg;
+		String s = content.toString();
+		long size = s.getBytes(StandardCharsets.UTF_8).length;
+		if (size <= budget) return msg;
+		int cut = (int) Math.min(s.length(), budget);           // chars ≤ bytes, so a safe upper bound
+		while (cut > 0 && s.substring(0, cut).getBytes(StandardCharsets.UTF_8).length > budget) cut--;
+		if (cut > 0 && cut < s.length() && Character.isHighSurrogate(s.charAt(cut - 1))) cut--;
+		String trailer = "\n… (" + (size - s.substring(0, cut).getBytes(StandardCharsets.UTF_8).length)
+			+ " more bytes beyond this entry's budget of " + budget
+			+ " — reload it with a larger budget, or fetch the value with a tool)";
+		return RT.ensureMap(msg).assoc(AbstractLLMAdapter.K_CONTENT, Strings.create(s.substring(0, cut) + trailer));
 	}
 
 	private static AVector<ACell> vector(List<? extends ACell> cells) {

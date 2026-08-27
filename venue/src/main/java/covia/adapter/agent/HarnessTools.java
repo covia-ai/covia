@@ -58,8 +58,10 @@ final class HarnessTools {
 		AbstractLLMAdapter.K_DESCRIPTION, Strings.create(
 			"Remove an entry from this conversation's loaded context, freeing its budget — pass the "
 			+ "key shown in its header: the path you loaded, or the id you gave a text, op or job "
-			+ "entry. Also hides an operator-pinned load (from config.loads) for this conversation "
-			+ "only; the pin itself is untouched and other conversations still see it."),
+			+ "entry. Unload a volatile entry (one that renders at the end of your context, such as "
+			+ "an op) as soon as you no longer need it: it is re-run and re-sent on every model call "
+			+ "until you do. Also hides an operator-pinned load (from config.loads) for this "
+			+ "conversation only; the pin itself is untouched and other conversations still see it."),
 		AbstractLLMAdapter.K_PARAMETERS, AbstractLLMAdapter.CONTEXT_UNLOAD_PARAMS);
 
 	static final AMap<AString, ACell> DEF_SKILL_LOAD = Maps.of(

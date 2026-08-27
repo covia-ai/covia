@@ -183,6 +183,41 @@ public class LoadsTest {
 	}
 
 	@Test
+	public void testVolatileEntryRendersWithinItsBudgetWhateverItsShape() {
+		String longText = "x".repeat(3000);
+		// A verbatim string in the live surface stays verbatim (the renderValue contract)…
+		AMap<AString, ACell> live = Maps.of(Strings.create("note"),
+			spec("text", longText, "budget", CVMLong.create(600)));
+		assertTrue(content(Loads.elements(engine, ctx, live, Labels.BRACKET).get(0)).contains(longText));
+		// …but the same entry declared volatile is cut at its budget with a visible trailer.
+		AMap<AString, ACell> tail = Maps.of(Strings.create("note"),
+			spec("text", longText, "budget", CVMLong.create(600), "volatile", CVMBool.TRUE));
+		Loads.Snapshot snap = Loads.resolve(engine, ctx, tail, java.util.Set.of(), Labels.BRACKET);
+		String text = content(snap.volatileElements().get(0));
+		assertTrue(text.startsWith("[Context: note]"), text);
+		assertFalse(text.contains(longText), "not verbatim");
+		assertTrue(text.contains("more bytes beyond this entry's budget of 600"), text);
+		assertTrue(text.contains("reload it with a larger budget, or fetch the value with a tool"), text);
+		assertTrue(text.getBytes(java.nio.charset.StandardCharsets.UTF_8).length < 600 + 200, "budget plus trailer: " + text.length());
+		assertEquals(CVMBool.TRUE, RT.getIn(snap.diagnostics().get(0), "truncated"));
+
+		// A structured op result is already bounded by the explorer, whose own
+		// annotation is the hint — no trailer is added on top of it.
+		AMap<AString, ACell> opEntry = Maps.of(Strings.create("listing"),
+			spec("op", "v/test/ops/echo", "input", Maps.of(Strings.create("blob"), Strings.create("y".repeat(3000))),
+				"budget", CVMLong.create(300)));
+		String opText = content(Loads.resolve(engine, ctx, opEntry, java.util.Set.of(), Labels.BRACKET).volatileElements().get(0));
+		assertTrue(opText.contains("/* String, 3.0KB */"), opText);
+		assertFalse(opText.contains("more bytes beyond"), opText);
+		// A short volatile entry is untouched.
+		AMap<AString, ACell> small = Maps.of(Strings.create("note"),
+			spec("text", "short", "volatile", CVMBool.TRUE));
+		Loads.Snapshot fits = Loads.resolve(engine, ctx, small, java.util.Set.of(), Labels.BRACKET);
+		assertEquals("[Context: note]\nshort", content(fits.volatileElements().get(0)));
+		assertEquals(CVMBool.FALSE, RT.getIn(fits.diagnostics().get(0), "truncated"));
+	}
+
+	@Test
 	public void testJobEntryRendersACompletedJobsOutput() {
 		Job job = engine.jobs().invokeOperation("v/test/ops/echo",
 			Maps.of(Strings.create("answer"), CVMLong.create(7)), ctx);
