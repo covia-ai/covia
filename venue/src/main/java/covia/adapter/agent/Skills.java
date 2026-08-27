@@ -1016,6 +1016,14 @@ public final class Skills {
 		return resolved;
 	}
 
+	/** No-engine form: contributes only child refs already denormalised onto
+	 *  the loads entries. Used by tests and pure callers; a live caller passes
+	 *  engine + ctx so an operator-pinned skill's facet is resolved too (#415). */
+	public static SkillSources effectiveSources(SkillSources configured,
+			AMap<AString, ACell> effectiveLoads) {
+		return effectiveSources(null, null, configured, effectiveLoads);
+	}
+
 	/**
 	 * Combines configured sources with those contributed by the effective
 	 * loads, per kind. Any loads entry may declare {@code skills} and
@@ -1025,9 +1033,19 @@ public final class Skills {
 	 * removed first-wins, in load order. Only the immediate refs on loaded
 	 * entries are considered: children are discoverable, never recursively
 	 * auto-loaded, so an unloaded subtree is never walked and cycles are inert.
+	 *
+	 * <p>A skill-flagged loads entry contributes its {@code skill.skills} /
+	 * {@code skill.skillsets} whether they were denormalised onto the entry
+	 * (a runtime {@code skill_load}) or live only in the skill's facet (a
+	 * hand-written {@code config.loads} pin, #415): for a pin missing a kind,
+	 * the skill is re-resolved and its facet children are contributed — the
+	 * sources counterpart of {@link #resolveLoadTools}. An explicit
+	 * {@code skills} / {@code skillsets} on the entry, including an empty vector
+	 * or null, stays authoritative. Needs {@code engine} + {@code ctx}; the
+	 * no-arg overload skips this repair.</p>
 	 */
-	public static SkillSources effectiveSources(SkillSources configured,
-			AMap<AString, ACell> effectiveLoads) {
+	public static SkillSources effectiveSources(Engine engine, RequestContext ctx,
+			SkillSources configured, AMap<AString, ACell> effectiveLoads) {
 		AVector<ACell> skills = Vectors.empty();
 		AVector<ACell> skillsets = Vectors.empty();
 		Set<String> seenSkills = new HashSet<>();
@@ -1042,17 +1060,39 @@ public final class Skills {
 			if (!(entry.getValue() instanceof AMap)) continue;
 			@SuppressWarnings("unchecked")
 			AMap<AString, ACell> spec = (AMap<AString, ACell>) entry.getValue();
-			skills = appendContributed(skills, spec, K_SKILLS, seenSkills, entry.getKey());
-			skillsets = appendContributed(skillsets, spec, K_SKILLSETS, seenSets, entry.getKey());
+			// A pinned skill whose child refs are not on the entry: resolve its
+			// facet once so its children reach discovery, without loading them.
+			AVector<ACell> facetSkills = null, facetSkillsets = null;
+			if (engine != null && isSkillEntry(spec)
+					&& (!spec.containsKey(K_SKILLS) || !spec.containsKey(K_SKILLSETS))) {
+				try {
+					ResolvedSkill pinned = resolveRef(engine, ctx, entry.getKey());
+					facetSkills = pinned.skills();
+					facetSkillsets = pinned.skillsets();
+				} catch (RuntimeException e) {
+					// Resolution failure is already visible via Loads.element.
+				}
+			}
+			skills = appendContributed(skills, spec, K_SKILLS, seenSkills, entry.getKey(), facetSkills);
+			skillsets = appendContributed(skillsets, spec, K_SKILLSETS, seenSets, entry.getKey(), facetSkillsets);
 		}
 		return new SkillSources(skills, skillsets);
 	}
 
-	/** Appends one kind of contributed refs from a loaded skill's entry. */
+	/**
+	 * Appends one kind of contributed refs from a loaded skill's entry. The
+	 * entry wins when it declares the kind ({@code containsKey}) — an explicit
+	 * value, empty or null, is authoritative; only a kind the entry omits falls
+	 * back to {@code facet}, the pinned skill's live child refs (#415).
+	 */
 	private static AVector<ACell> appendContributed(AVector<ACell> out,
-			AMap<AString, ACell> spec, AString key, Set<String> seen, AString entryKey) {
+			AMap<AString, ACell> spec, AString key, Set<String> seen, AString entryKey,
+			AVector<ACell> facet) {
 		ACell raw = spec.get(key);
-		if (raw == null) return out;
+		if (raw == null) {
+			if (spec.containsKey(key) || facet == null) return out;   // authoritative absence, or nothing to add
+			raw = facet;
+		}
 		AVector<ACell> refs = RT.ensureVector(raw);
 		if (refs == null) {
 			throw new RuntimeException("loaded skill." + key + " at " + entryKey + " must be an array");
@@ -1535,7 +1575,7 @@ public final class Skills {
 		}
 		ResolvedSkill skill = (ref != null)
 			? resolveRef(engine, ctx, ref)
-			: resolveByName(engine, ctx, effectiveSources(sources, effectiveLoads), name.toString());
+			: resolveByName(engine, ctx, effectiveSources(engine, ctx, sources, effectiveLoads), name.toString());
 
 		// Same content already loaded under another address → no-op naming it.
 		AString existing = findLoadedDuplicate(engine, ctx, effectiveLoads, skill.id());
@@ -1594,7 +1634,7 @@ public final class Skills {
 			AMap<AString, ACell> prospectiveLoads = (effectiveLoads == null)
 				? Maps.of(skill.path(), entryMeta)
 				: effectiveLoads.assoc(skill.path(), entryMeta);
-			SkillSources widened = effectiveSources(sources, prospectiveLoads);
+			SkillSources widened = effectiveSources(engine, ctx, sources, prospectiveLoads);
 			// What is NEW, named outright. The refreshed index alone made the
 			// reader diff it against the [Skills] block from the start of the
 			// turn — it has both lists, but has to notice they differ, and a

@@ -56,6 +56,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Fixed
 
+- Operator-pinned skills (`config.loads` `{skill: true}`) now contribute their
+  `skill.skills` / `skill.skillsets` to discovery — indexed and `skill_load`
+  by name — like a runtime-loaded skill, without loading the children (#415).
 - SKILL.md frontmatter with a folded, literal or wrapped description parsed as
   `>` instead of the text; unknown frontmatter keys are now reported rather
   than silently dropped.

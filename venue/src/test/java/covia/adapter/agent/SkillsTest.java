@@ -288,6 +288,72 @@ public class SkillsTest {
 	}
 
 	@Test
+	public void testOperatorPinnedSkillContributesChildSources() {
+		// #415: a hand-written config.loads pin — {skill:true, budget, label},
+		// no denormalised children — must contribute its live skill.skills /
+		// skill.skillsets to discovery, exactly as a runtime skill_load does,
+		// without loading the children.
+		write("w/introduction", Maps.of(
+			Fields.DESCRIPTION, Strings.create("Parent skill"),
+			Fields.CONTENT, Maps.of(Strings.create("inline"), Strings.create("PARENT-BODY")),
+			Skills.K_SKILL, Maps.of(
+				Skills.K_SKILLS, Vectors.of(Strings.create("w/example/conversations")),
+				Skills.K_SKILLSETS, Vectors.of(Strings.create("w/example/set")))));
+		write("w/example/conversations", Maps.of(
+			Fields.DESCRIPTION, Strings.create("Load conversations"),
+			Fields.CONTENT, Maps.of(Strings.create("inline"), Strings.create("CHILD-BODY"))));
+		write("w/example/set/summariser", Maps.of(
+			Fields.DESCRIPTION, Strings.create("Summarise")));
+
+		// The pin as an operator writes it: no child refs on the entry.
+		AMap<AString, ACell> loads = Maps.of(Strings.create("w/introduction"),
+			Maps.of(Skills.K_SKILL, convex.core.data.prim.CVMBool.TRUE,
+				Strings.create("budget"), CVMLong.create(4000),
+				Strings.create("label"), Strings.create("introduction")));
+
+		// The child sources reach the discovery surface (engine+ctx form).
+		Skills.SkillSources eff = Skills.effectiveSources(engine, ctx, null, loads);
+		assertEquals(Vectors.of(Strings.create("w/example/conversations")), eff.skills());
+		assertEquals(Vectors.of(Strings.create("w/example/set")), eff.skillsets());
+
+		// Both children appear in the index and resolve by name.
+		String index = Skills.renderIndex(engine, ctx, eff, loads, false);
+		assertTrue(index.contains("conversations — Load conversations"), index);
+		assertTrue(index.contains("summariser — Summarise"), index);
+		assertEquals("w/example/conversations",
+			Skills.resolveByName(engine, ctx, eff, "conversations").path().toString());
+		assertEquals("w/example/set/summariser",
+			Skills.resolveByName(engine, ctx, eff, "summariser").path().toString());
+
+		// Discovery only: the pin renders the parent body, never a child's.
+		String rendered = convex.core.util.JSON.print(covia.adapter.agent.Loads.elements(
+			engine, ctx, loads, covia.adapter.agent.Labels.BRACKET)).toString();
+		assertTrue(rendered.contains("PARENT-BODY"), rendered);
+		assertFalse(rendered.contains("CHILD-BODY"),
+			"children are discoverable, not loaded: " + rendered);
+
+		// The no-engine overload skips the repair (denormalised children only).
+		assertTrue(Skills.effectiveSources(null, loads).skills().isEmpty());
+	}
+
+	@Test
+	public void testPinnedSkillExplicitChildSourcesStayAuthoritative() {
+		// #413/#415 override contract: an explicit skills/skillsets on the pin —
+		// including an empty vector — wins over the skill's facet.
+		write("w/introduction", Maps.of(
+			Fields.DESCRIPTION, Strings.create("Parent"),
+			Fields.CONTENT, Maps.of(Strings.create("inline"), Strings.create("BODY")),
+			Skills.K_SKILL, Maps.of(Skills.K_SKILLS, Vectors.of(Strings.create("w/example/conversations")))));
+		write("w/example/conversations", Maps.of(Fields.DESCRIPTION, Strings.create("Child")));
+
+		AMap<AString, ACell> loads = Maps.of(Strings.create("w/introduction"),
+			Maps.of(Skills.K_SKILL, convex.core.data.prim.CVMBool.TRUE,
+				Skills.K_SKILLS, Vectors.empty()));   // explicit empty — suppress the facet's child
+		assertTrue(Skills.effectiveSources(engine, ctx, null, loads).skills().isEmpty(),
+			"an explicit empty skills on the pin overrides the facet");
+	}
+
+	@Test
 	public void testLoadedSkillContributesDiscoverableChildSources() {
 		write("w/root", Maps.of(
 			Fields.NAME, Strings.create("root"),

@@ -572,7 +572,7 @@ public final class ContextAssembler {
 	/** One line per discoverable skill, {@code (loaded)} against those in context; absent without sources. */
 	static AMap<AString, ACell> skillsIndex(Spec spec) {
 		if (!spec.toolCalling()) return null;   // nothing to load it with
-		Skills.SkillSources sources = Skills.effectiveSources(
+		Skills.SkillSources sources = Skills.effectiveSources(spec.engine(), spec.ctx(),
 			Skills.sourcesOf(spec.config()), spec.effectiveLoads());
 		if (sources.isEmpty()) return null;
 		String index = Skills.renderIndex(spec.engine(), spec.ctx(), sources, spec.effectiveLoads(), false);
