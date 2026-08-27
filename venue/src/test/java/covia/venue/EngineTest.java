@@ -800,4 +800,23 @@ public class EngineTest {
 			webVenue.close();
 		}
 	}
+
+	@Test
+	public void testJarVersionPrefersMavenDescriptor() {
+		// Embedded in a host's fat jar, the single manifest names the host;
+		// the venue's Maven descriptor names the venue (#420).
+		java.util.Properties descriptor = new java.util.Properties();
+		descriptor.setProperty("version", "0.9.6");
+		assertEquals("0.9.6", Engine.versionFrom(descriptor, Engine.class.getPackage()));
+		assertEquals("0.9.6", Engine.versionFrom(descriptor, null));
+
+		// No descriptor: the manifest, else "dev" — the behaviour before #420.
+		String manifest = Engine.class.getPackage().getImplementationVersion();
+		assertEquals((manifest != null) ? manifest : "dev",
+			Engine.versionFrom(null, Engine.class.getPackage()));
+		assertEquals("dev", Engine.versionFrom(new java.util.Properties(), null));
+
+		// Whatever this build carries, the venue never reports a blank version.
+		assertFalse(Engine.jarVersion().isBlank());
+	}
 }

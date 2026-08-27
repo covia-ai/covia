@@ -962,11 +962,35 @@ public class Engine {
 	 * Best-effort jar version lookup. Returns {@code "dev"} when running from
 	 * IDE classes rather than a packaged jar.
 	 */
+	/**
+	 * The venue's own version. The Maven descriptor the module jar carries
+	 * ({@code META-INF/maven/ai.covia/venue/pom.properties}) comes first:
+	 * shading and assembly into a host's fat jar preserve it, whereas the
+	 * single manifest of such a jar names the host, so its
+	 * {@code Implementation-Version} misreported an embedded venue (#420).
+	 * The manifest is the fallback, then {@code "dev"}.
+	 */
 	static String jarVersion() {
-		Package pkg = Engine.class.getPackage();
-		if (pkg == null) return "dev";
-		String v = pkg.getImplementationVersion();
-		return (v != null) ? v : "dev";
+		return versionFrom(mavenDescriptor(), Engine.class.getPackage());
+	}
+
+	/** The version a Maven descriptor and a package resolve to — the descriptor first. */
+	static String versionFrom(java.util.Properties descriptor, Package pkg) {
+		String v = (descriptor != null) ? descriptor.getProperty("version") : null;
+		if (v != null && !v.isBlank()) return v.trim();
+		v = (pkg != null) ? pkg.getImplementationVersion() : null;
+		return (v != null && !v.isBlank()) ? v : "dev";
+	}
+
+	private static java.util.Properties mavenDescriptor() {
+		try (InputStream in = Engine.class.getResourceAsStream("/META-INF/maven/ai.covia/venue/pom.properties")) {
+			if (in == null) return null;
+			java.util.Properties p = new java.util.Properties();
+			p.load(in);
+			return p;
+		} catch (IOException e) {
+			return null;
+		}
 	}
 
 	// ========== Adapter lifecycle ==========
@@ -2484,8 +2508,8 @@ public class Engine {
 		}
 
 		// Build version so operators can detect version drift across venues.
-		// jarVersion() reads the (shaded) jar's Implementation-Version and falls
-		// back to "dev" when running from classes — never null. See #139.
+		// jarVersion() prefers the venue's own Maven descriptor, then the jar
+		// manifest's Implementation-Version, else "dev" — never null. See #139, #420.
 		status=status.assoc(Fields.VERSION, Strings.create(jarVersion()));
 		status=status.assoc(Fields.UCAN_PROFILE, UCAN.VERSION);
 

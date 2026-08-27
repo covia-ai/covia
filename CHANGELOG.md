@@ -18,6 +18,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 - `agent:context` shows loads-derived exchanges (live and volatile): both
   harness previews now build the Spec exactly as a live inference does (#418).
+- `Engine.jarVersion()` reads the venue's own Maven descriptor first, so a
+  venue embedded in a host's fat jar reports its own version (#420).
 
 ### Changed
 
