@@ -270,9 +270,11 @@ class VenueProcessTest {
 	public static final class RelaunchProbe {
 		public static void main(String[] args) throws Exception {
 			long pid = ProcessHandle.current().pid();
+			// The parent reads the PID file as soon as readiness is signalled,
+			// so the PID must be on disk before the readiness file appears (#417).
+			Files.writeString(Path.of(args[0]), Long.toString(pid));
 			Files.writeString(Path.of(System.getenv(VenueRelauncher.READY_FILE_ENV)),
 				Long.toString(pid));
-			Files.writeString(Path.of(args[0]), Long.toString(pid));
 			Thread.sleep(30_000);
 		}
 	}
