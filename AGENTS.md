@@ -156,6 +156,7 @@ Defined in code at `venue/src/main/java/covia/lattice/Covia.java`. Full design i
 - **SSE** — Server-sent events for real-time job updates (`/api/v1/jobs/{id}/sse`) and live agent run-loop events (`/api/v1/agents/{id}/sse`, #394)
 - **MCP** — Model Context Protocol JSON-RPC endpoint
 - **A2A** — Agent-to-Agent federated protocol
+- **OAuth 2.1** — optional authorization server (`auth.oauth.provider`): registered clients obtain venue bearers via code+PKCE; access tokens are venue-signed UCAN JWTs (`/oauth/authorize`, `/oauth/token`)
 - **DID** — Decentralized identifiers for venue discovery (`/.well-known/did.json`). A venue may declare `did:web:<hostname>` as its stable identity; otherwise its key-derived `did:key` remains the identity. Consumers preserve the presented DID as-is (`alsoKnownAs` is informational, never a rebinding instruction). Remote routing and signature verification dispatch by DID method: `did:key` and `did:web` are built in, while future methods such as `did:convex` plug in without changing federation or UCAN code (#167, #343).
 
 ## Development Conventions

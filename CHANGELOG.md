@@ -29,6 +29,11 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   attaches a fresh access token for `bearerSecret: "oauth/<provider>"` — the
   token never reaches a model. `oauth:connect` / `status` / `disconnect`;
   callback at `/auth/connect/{provider}/callback`.
+- OAuth authorization server: with `auth.oauth.provider` the venue runs the
+  OAuth 2.1 authorization-code + PKCE flow for registered clients and issues
+  venue-signed bearers (`/oauth/authorize`, `/oauth/token`, `/oauth/revoke`,
+  RFC 8414 metadata); MCP protected-resource metadata advertises it. Access
+  tokens act as the resource owner; scope-to-capability narrowing is future work.
 
 ### Fixed
 

@@ -557,6 +557,11 @@ Covia currently accepts its DID/UCAN bearer profiles rather than acting as an
 OAuth 2.1 authorization server. The protected-resource document therefore
 uses standard RFC 9728 fields where truthful and carries the Covia bearer
 expectation in the namespaced `_meta["ai.covia/authentication"]` extension.
+
+When `auth.oauth.provider` is enabled (CONFIG.md "OAuth authorization server"),
+the protected-resource document additionally names that server in the standard
+`authorization_servers` member, so a metadata-driven MCP client runs the
+authorization-code flow to obtain a bearer instead of needing one pre-issued.
 It deliberately does not advertise a fictional `authorization_servers`
 entry. A future OAuth bridge can add that standard field without changing the
 discovery URLs.
@@ -832,6 +837,72 @@ Provider policy is the operator's problem, not the venue's: Google's Gmail
 scopes are *restricted*, so a production client needs Google's verification,
 and an unverified client runs in testing mode with named test users and
 seven-day refresh tokens.
+
+## OAuth authorization server (`auth.oauth.provider`)
+
+The venue can act as an OAuth 2.1 authorization server so a third-party or MCP
+client obtains a bearer to act as a venue user through the standard
+authorization-code + PKCE flow. This is the mirror of connected accounts
+(`adapters.oauth`, which makes the venue an OAuth *client*): here the venue is
+the *provider*. The access token it issues is the same venue-signed JWT the
+login flow mints, so every venue surface accepts it directly — the resource
+server and the authorization server are one venue, which is why the MCP
+protected-resource metadata (`/.well-known/oauth-protected-resource/mcp`) can
+now name this server in `authorization_servers`.
+
+```json
+{
+  "auth": {
+    "oauth": {
+      "provider": {
+        "enabled": true,
+        "accessTokenTtlSecs": 3600,
+        "clients": {
+          "my-web-app": {
+            "name": "My Web App",
+            "redirectUris": ["https://app.example/oauth/callback"],
+            "secret": "s/MYAPP_OAUTH_SECRET",
+            "scopes": ["read", "write"]
+          },
+          "my-cli": {
+            "redirectUris": ["http://127.0.0.1/callback"],
+            "public": true,
+            "scopes": ["read"]
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+- `clients.<id>` — a registered client. `redirectUris` is an exact allowlist
+  (a loopback URI matches any port, per RFC 8252, so a native client may use
+  an ephemeral port); a confidential client sets `secret` (an `s/NAME`
+  reference stored as the venue identity, never a literal), a public client
+  sets `public: true` and authenticates by PKCE alone. `scopes` bounds what
+  the client may request; `name` is for display.
+- `accessTokenTtlSecs` — access-token lifetime (default 3600, 60–86400).
+- `issuer` — the stable issuer identifier; defaults to the venue `baseUrl`, or,
+  when that is not fixed (an ephemeral port, or a proxy that sets `Host`),
+  is derived per request from the forwarded scheme and host.
+
+Endpoints: `/.well-known/oauth-authorization-server` (RFC 8414 metadata),
+`/oauth/authorize`, `/oauth/token`, `/oauth/revoke` (RFC 7009). PKCE with
+`S256` is required for every client and `response_type=code` is the only
+response type (OAuth 2.1). The resource owner authenticates at `/oauth/authorize`
+by presenting a venue bearer — Covia has no cookie session, so a browser
+consent page is deliberately out of this first cut; a first-party app that
+already holds the user's venue bearer drives the flow and hands the resulting
+code to the client.
+
+**Trust model.** An issued token authenticates as the resource owner with the
+user's authority; the granted `scope` rides on the token for audit but does
+not yet narrow it to attenuated capabilities — that is the next step. Clients
+are operator-registered with allowlisted redirect URIs and PKCE, so this is a
+registered-client model, not open registration. Refresh tokens and
+authorization codes are held in memory, so a venue restart invalidates
+outstanding refresh tokens (clients re-authorize); persistence is a follow-up.
 
 ## Legacy private invoke setting
 

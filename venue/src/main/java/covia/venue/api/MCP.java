@@ -320,6 +320,14 @@ public class MCP extends McpServer {
 			"bearer_methods_supported", Vectors.of("header"),
 			"_meta", Maps.of("ai.covia/authentication", coviaAuthenticationMetadata(ctx))
 		);
+		// When the venue runs its own OAuth authorization server (auth.oauth.provider),
+		// name it the standard RFC 9728 way so a metadata-driven client (MCP) can begin
+		// the authorization-code flow instead of needing a pre-issued Covia bearer.
+		covia.venue.auth.OAuthProvider provider = covia.venue.auth.OAuthProvider.from(engine());
+		if (provider != null) {
+			result = result.assoc(convex.core.data.Strings.intern("authorization_servers"),
+				Vectors.of(convex.core.data.Strings.create(provider.issuer(ctx))));
+		}
 		ctx.contentType(ContentTypes.JSON);
 		ctx.result(JSON.print(result).toString());
 	}

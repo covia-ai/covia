@@ -107,6 +107,7 @@ public class VenueServer {
 	protected A2A a2a;
 	protected UserAPI userApi;
 	protected LoginProviders loginProviders;
+	protected covia.venue.auth.OAuthProvider oauthProvider;
 	protected VenueAuthenticator authenticator;
 
 	/**
@@ -198,6 +199,7 @@ public class VenueServer {
 		api=new CoviaAPI(localVenue);
 		userApi=new UserAPI(localVenue);
 		loginProviders=engine.getAuth().getLoginProviders();
+		oauthProvider=covia.venue.auth.OAuthProvider.from(engine);
 		authenticator=new VenueAuthenticator(engine);
 
 		AMap<AString,ACell> mcpConfig=this.config.getMCPConfig();
@@ -1038,6 +1040,7 @@ public class VenueServer {
 	private void addLoginRoutes(RoutesConfig app) {
 		// The OAuth *connection* callback is independent of login providers.
 		app.get("/auth/connect/{provider}/callback", this::handleOAuthConnectCallback);
+		if (oauthProvider != null) oauthProvider.addRoutes(app);
 
 		if (!loginProviders.hasProviders()) return;
 

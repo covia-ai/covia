@@ -134,6 +134,8 @@ Base path: `/api/v1/`
 | `/jobs/{id}/{cancel,pause,resume,delete}` | PUT | Lifecycle control (pause/resume are adapter opt-in → 409 otherwise) |
 | `/jobs/{id}/sse` | GET | Server-sent job updates (closes on terminal) |
 | `/.well-known/did.json` | GET | Venue DID document (#167) |
+| `/.well-known/oauth-authorization-server` | GET | OAuth 2.1 AS metadata (RFC 8414) when `auth.oauth.provider` is enabled |
+| `/oauth/{authorize,token,revoke}` | — | OAuth 2.1 authorization server: code+PKCE flow issuing venue bearers (`auth.oauth.provider`) |
 | `/auth/connect/{provider}/callback` | GET | OAuth connection callback — the provider redirects the user here after approval (`adapters.oauth`; not `/api/v1`) |
 
 MCP endpoint at `/mcp`; A2A is opt-in with an `a2a` config block.
