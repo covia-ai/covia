@@ -49,6 +49,13 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A venue that fails to start logs one line naming the venue and every cause
   beneath the failure (an asset that will not parse names the resource and the
   parse error) and exits with status 70, instead of a bare stack trace.
+- `GET /api/v1/status` answers strangers even when public access is disabled:
+  status is discovery — a client must be able to find and verify a venue (DID,
+  name, version) before it can authenticate — so it now carries the new
+  `VenueRouteFeature.COVIA_DISCOVERY` policy. A presented bearer must still be
+  valid and admitted; every other native REST route keeps the anonymous gate.
+  Brightside's launch takeover had gone blind on its own private venue because
+  the probe only accepted a `200`.
 
 ### Changed
 

@@ -64,6 +64,17 @@ public enum VenueRouteFeature implements RouteRole {
 	COVIA_API,
 
 	/**
+	 * Native Covia discovery policy: reachable anonymously <em>even when public
+	 * access is disabled</em>, because a venue's identity and status are how a
+	 * client finds and verifies it before it can authenticate at all — a
+	 * newcomer taking over a private desktop venue, a federation peer checking a
+	 * DID, a health probe. A presented bearer is still authenticated and admitted
+	 * exactly as for {@link #COVIA_API}; only the anonymous gate differs. Rate
+	 * limited and lattice-synced like the other native surfaces.
+	 */
+	COVIA_DISCOVERY,
+
+	/**
 	 * Native MCP transport policy, including its authentication requirement and
 	 * optional DID allowlist, plus rate limiting and lattice sync.
 	 */
@@ -82,6 +93,7 @@ public enum VenueRouteFeature implements RouteRole {
 	static boolean usesRateLimit(Set<RouteRole> roles) {
 		return has(roles, RATE_LIMITED)
 			|| has(roles, COVIA_API)
+			|| has(roles, COVIA_DISCOVERY)
 			|| has(roles, COVIA_MCP)
 			|| has(roles, COVIA_A2A);
 	}
@@ -89,6 +101,7 @@ public enum VenueRouteFeature implements RouteRole {
 	static boolean syncsLattice(Set<RouteRole> roles) {
 		return has(roles, LATTICE_SYNC)
 			|| has(roles, COVIA_API)
+			|| has(roles, COVIA_DISCOVERY)
 			|| has(roles, COVIA_MCP)
 			|| has(roles, COVIA_A2A);
 	}

@@ -76,7 +76,9 @@ public class AuthMiddleware {
 		this.publicAccessEnabled = auth.isPublicAccessEnabled();
 		// Capability grant scope for public callers — secure read-only by default,
 		// operator-overridable via auth.public.caps. Only relevant when public
-		// access is enabled (otherwise every anonymous request is 401'd).
+		// access is enabled (otherwise every anonymous request is 401'd, except on
+		// COVIA_DISCOVERY routes such as /api/v1/status, which stay reachable so a
+		// client can find and verify the venue before it authenticates).
 		this.publicScope = publicAccessEnabled ? auth.getPublicScope(publicDID) : null;
 	}
 
@@ -115,6 +117,12 @@ public class AuthMiddleware {
 			Config config = engine.config();
 			extractMCPIdentity(ctx, config.isMCPAuthRequired(),
 				config.getMCPAllowedDids());
+			return;
+		}
+		if (VenueRouteFeature.has(roles, VenueRouteFeature.COVIA_DISCOVERY)) {
+			// Discovery answers strangers even on a private venue; a presented
+			// bearer must still authenticate and admit, as on any native route.
+			extractIdentity(ctx, true, null, true);
 			return;
 		}
 		if (VenueRouteFeature.has(roles, VenueRouteFeature.COVIA_API)

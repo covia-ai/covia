@@ -1,6 +1,7 @@
 package covia.venue.api;
 
 import static covia.venue.server.VenueRouteFeature.COVIA_API;
+import static covia.venue.server.VenueRouteFeature.COVIA_DISCOVERY;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -107,7 +108,10 @@ public class CoviaAPI extends ACoviaAPI {
 	}
 
 	public void addRoutes(RoutesConfig routes) {
-		routes.get(ROUTE+"status", this::getStatus, COVIA_API);
+		// Status is discovery: a client must be able to find and verify the venue
+		// (its DID, name, version) before it can authenticate, so it answers
+		// strangers even when public access is disabled.
+		routes.get(ROUTE+"status", this::getStatus, COVIA_DISCOVERY);
 		// assets/<ref> is metadata; content/<ref> is bytes. Do not reserve
 		// assets/content/<ref>: that would make "content/..." impossible to
 		// address as metadata.
