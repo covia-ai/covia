@@ -11,7 +11,6 @@
 	<name>Covia Discord Module</name>
 	<description>Discord bot adapter for Covia venues, packaged as an optional loadable venue module.</description>
 	<properties>
-		<maven.deploy.skip>true</maven.deploy.skip>
 		<jda.version>6.5.0</jda.version>
 	</properties>
 	<dependencies>
@@ -44,7 +43,9 @@
 		<plugin>
 			<groupId>org.apache.maven.plugins</groupId><artifactId>maven-shade-plugin</artifactId><version>3.6.2</version>
 			<executions><execution><phase>package</phase><goals><goal>shade</goal></goals><configuration>
+				<!-- -module.jar is a GitHub Releases artifact, never attached; the slim jar keeps its real POM. -->
 				<outputFile>${project.build.directory}/${project.build.finalName}-module.jar</outputFile>
+				<createDependencyReducedPom>false</createDependencyReducedPom>
 				<artifactSet><excludes>
 					<exclude>ai.covia:venue</exclude><exclude>ai.covia:covia-core</exclude>
 					<exclude>world.convex:convex-core</exclude><exclude>world.convex:convex-peer</exclude>

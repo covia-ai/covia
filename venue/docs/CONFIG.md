@@ -1115,64 +1115,34 @@ Modules can also be loaded and unloaded on a running venue — see
 
 ### Using released modules from an embedded host
 
-Released module classifiers are ordinary Maven Central artifacts. Resolve the
-shaded jar by its `module` classifier and copy it into the application
-distribution; do not put either the thin jar or shaded module jar on the host
-application classpath. For example, an embedding application's POM can copy
-Telegram and Discord during `package`:
+Shaded module jars (`covia-<module>-<version>-module.jar`) are GitHub Releases
+artifacts, each paired with a `.sha256` checksum file; they are not published
+to Maven Central. (Releases up to 0.9.6 also attached them there under a
+`module` classifier; 0.9.7 onwards do not.) Maven Central carries only each
+module's slim jar, sources and javadoc, for hosts that compile against a
+module's classes. Do not put either the slim jar or the shaded module jar on
+the host application classpath.
 
-```xml
-<properties>
-  <covia.version>0.9.5</covia.version>
-</properties>
-<build>
-  <plugins>
-    <plugin>
-      <groupId>org.apache.maven.plugins</groupId>
-      <artifactId>maven-dependency-plugin</artifactId>
-      <version>3.11.0</version>
-      <executions>
-        <execution>
-          <id>copy-covia-modules</id>
-          <phase>prepare-package</phase>
-          <goals><goal>copy</goal></goals>
-          <configuration>
-            <artifactItems>
-              <artifactItem>
-                <groupId>ai.covia</groupId>
-                <artifactId>covia-telegram</artifactId>
-                <version>${covia.version}</version>
-                <type>jar</type>
-                <classifier>module</classifier>
-              </artifactItem>
-              <artifactItem>
-                <groupId>ai.covia</groupId>
-                <artifactId>covia-discord</artifactId>
-                <version>${covia.version}</version>
-                <type>jar</type>
-                <classifier>module</classifier>
-              </artifactItem>
-            </artifactItems>
-            <outputDirectory>${project.build.directory}/covia-modules</outputDirectory>
-          </configuration>
-        </execution>
-      </executions>
-    </plugin>
-  </plugins>
-</build>
-```
-
-Package those copied files with the application, place them in its data or
-module directory at install time, and supply their filesystem paths in
-`modules` before creating the `Engine`. A host that deliberately loads after
-startup can call the existing `Modules.load(engine, path, sha256, config)` API
-with the copied jar. Both routes retain the module classloader's dependency
+Download the module jar from the release matching the venue version in use,
+verify the checksum, package it with the application, place it in the
+application's data or module directory at install time, and supply its
+filesystem path in `modules` before creating the `Engine` — pinning
+`modules[].sha256` to the published checksum. A host that deliberately loads
+after startup can call the existing `Modules.load(engine, path, sha256, config)`
+API with the same jar. Both routes retain the module classloader's dependency
 isolation and require no venue-side Maven resolver.
 
-The Maven dependency-plugin `artifact` argument form is
-`ai.covia:<module-artifact>:<version>:jar:module`. Released classifiers are
-also signed; GitHub Releases pair operator downloads with SHA-256 checksum
-files when an application wants to pin `modules[].sha256`.
+For example, fetching the Telegram module for release `$v`:
+
+```bash
+base=https://github.com/covia-ai/covia/releases/download/$v
+curl -fsSLO "$base/covia-telegram-$v-module.jar"
+curl -fsSLO "$base/covia-telegram-$v-module.jar.sha256"
+sha256sum -c "covia-telegram-$v-module.jar.sha256"
+```
+
+Checksum files from 0.9.8 onwards name the bare jar; those of 0.9.7 and
+earlier embed a build path, so compare their hash column by hand.
 
 First module: **covia-sql** (#227) — `v/ops/sql/query` / `v/ops/sql/execute`
 over venue-local convex-db databases (per-user, lattice-backed, created on

@@ -8,6 +8,19 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- Module slim jars on Maven Central carry their real dependencies (no
+  dependency-reduced POM for the unattached `-module.jar`).
+- `covia-sql` module jar no longer bundles the venue's BouncyCastle, Netty
+  and ANTLR.
+- Module `.sha256` release assets name the bare jar (`sha256sum -c` works).
+
+### Changed
+
+- Docs: shaded module jars are GitHub Releases artifacts only; the Maven
+  `module` classifier recipe is replaced by a download recipe.
+
 ## [0.9.7] - 2026-08-29
 
 ### Added

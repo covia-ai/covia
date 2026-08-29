@@ -113,14 +113,13 @@ versioned jar paths and leave the current jar available for rollback.
 
 `module/load` and `module/unload` additionally require the operator opt-in `dynamicModules.enabled: true` (default **off**) in the venue config; otherwise they fail with a policy error regardless of authority. By default `module` must be a **jar name inside the staging directory** `dynamicModules.dir` (default `modules`, relative to the venue's working directory) — no absolute paths, no `..`, and the resolved real path must stay inside the directory. `dynamicModules.anyPath: true` widens this to any filesystem path (a relative one still resolves against `dir`).
 
-Released shaded jars are resolvable from Maven Central with classifier
-`module`; for example, the Maven dependency-plugin argument is
-`ai.covia:covia-telegram:<version>:jar:module`. An embedded host should use its
-build tool to copy that artifact into its application distribution or data
-directory, then name the resulting filesystem path in boot `modules` (or call
-the public `Modules.load` API). Keep the jar off the host classpath so the
-module classloader retains dependency isolation. The complete Maven
-dependency-plugin recipe is in `venue/docs/CONFIG.md`.
+Released shaded jars (`covia-<module>-<version>-module.jar`, with a `.sha256`
+checksum file alongside) are GitHub Releases artifacts, not Maven Central
+ones. An embedded host should download the jar for its venue version into its
+application distribution or data directory, then name the resulting filesystem
+path in boot `modules` (or call the public `Modules.load` API). Keep the jar
+off the host classpath so the module classloader retains dependency isolation.
+The download recipe is in `venue/docs/CONFIG.md`.
 
 Loading covia-sql at runtime, end to end:
 

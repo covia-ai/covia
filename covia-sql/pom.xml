@@ -10,14 +10,7 @@
 	<artifactId>covia-sql</artifactId>
 
 	<name>Covia SQL Module</name>
-	<description>SQL adapter for Covia venues — query/execute over lattice-backed convex-db databases and operator-registered JDBC connections. Packaged as a loadable venue module (the shaded "module" classifier jar), not part of covia.jar.</description>
-
-	<properties>
-		<!-- Skip ordinary deploy-plugin publication. The Central publishing
-		     extension bundles reactor artifacts independently, including the
-		     signed shaded module classifier used by venue operators. -->
-		<maven.deploy.skip>true</maven.deploy.skip>
-	</properties>
+	<description>SQL adapter for Covia venues — query/execute over lattice-backed convex-db databases and operator-registered JDBC connections. Packaged as a loadable venue module (the shaded -module.jar), not part of covia.jar.</description>
 
 	<dependencies>
 		<!-- The venue SPI — provided by the loading venue, never bundled -->
@@ -28,8 +21,11 @@
 			<scope>provided</scope>
 		</dependency>
 
-		<!-- convex-db (JDBC driver + Calcite). convex-core is excluded: the
-		     venue provides it, and cell-type identity must be shared. -->
+		<!-- convex-db (JDBC driver + Calcite). convex-core and convex-peer are
+		     excluded: the venue provides both (cell-type identity must be shared),
+		     and their transitive BouncyCastle, Netty and ANTLR would otherwise be
+		     shaded into the module jar; the module classloader falls back to the
+		     venue's copies. -->
 		<dependency>
 			<groupId>world.convex</groupId>
 			<artifactId>convex-db</artifactId>
@@ -38,6 +34,10 @@
 				<exclusion>
 					<groupId>world.convex</groupId>
 					<artifactId>convex-core</artifactId>
+				</exclusion>
+				<exclusion>
+					<groupId>world.convex</groupId>
+					<artifactId>convex-peer</artifactId>
 				</exclusion>
 			</exclusions>
 		</dependency>
@@ -80,7 +80,7 @@
 				</executions>
 			</plugin>
 			<!-- The loadable module jar: covia-sql + convex-db + Calcite,
-			     attached with the "module" classifier. The plain jar remains
+			     written to target/ as -module.jar. The plain jar remains
 			     the Maven artifact. -->
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
@@ -95,8 +95,11 @@
 						<configuration>
 							<!-- The fat module jar is a GitHub Releases artifact, not a Maven Central
 							     one: shade writes it under the -module name but does not attach it, so
-							     `mvn deploy` publishes only this module's slim jar. -->
+							     `mvn deploy` publishes only this module's slim jar, with its real POM
+							     (no dependency-reduced POM, which would strip the shaded dependencies
+							     from the published artifact). -->
 							<outputFile>${project.build.directory}/${project.build.finalName}-module.jar</outputFile>
+							<createDependencyReducedPom>false</createDependencyReducedPom>
 							<artifactSet>
 								<excludes>
 									<!-- Host API and Convex cell/runtime identity are parent-first. -->

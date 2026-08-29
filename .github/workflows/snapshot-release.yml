@@ -50,8 +50,10 @@ jobs:
 
     - name: Create optional module checksums
       run: |
+        # Run inside each jar's directory so the checksum file names the bare
+        # jar and verifies with `sha256sum -c` next to the downloaded file.
         for jar in covia-python-adapter/target/*-module.jar covia-sql/target/*-module.jar covia-telegram/target/*-module.jar covia-discord/target/*-module.jar covia-sonnylabs/target/*-module.jar covia-documents/target/*-module.jar covia-claude-code/target/*-module.jar; do
-          sha256sum "$jar" > "$jar.sha256"
+          (cd "$(dirname "$jar")" && sha256sum "$(basename "$jar")" > "$(basename "$jar").sha256")
         done
 
     - name: Get current date
