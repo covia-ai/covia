@@ -11,7 +11,9 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
+import convex.core.util.Utils;
 import covia.api.Fields;
+import covia.grid.Asset;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import java.util.HashMap;
@@ -50,94 +52,24 @@ final class HarnessTools {
 	static final AString K_TOOL_ADDITION      = Strings.intern("toolAddition");
 	static final AString K_TOOL_REMOVAL       = Strings.intern("toolRemoval");
 
-	static final AMap<AString, ACell> DEF_CONTEXT_LOAD = Maps.of(
-		AbstractLLMAdapter.K_NAME, Strings.create(CONTEXT_LOAD),
-		AbstractLLMAdapter.K_DESCRIPTION, Strings.create(
-			"Keep something visible in your context across turns until you remove it: a lattice "
-			+ "path loaded now, a note you write (text), a read-only operation whose fresh result you "
-			+ "want each turn (op), or a finished job's result (job). "
-			+ "Give exactly one of path, text, op or job; text, op and job also need an id — the key "
-			+ "shown in the element's header and passed to context_unload. Use for rules, schemas or "
-			+ "reference material you consult repeatedly; for data needed once, use an advertised "
-			+ "inspection or read operation instead. An op entry re-runs every call and renders at "
-			+ "the end of your context (never cached); other entries render in the working set. "
-			+ "Scoped to this conversation (subgoals inherit it); other conversations are unaffected."),
-		AbstractLLMAdapter.K_PARAMETERS, AbstractLLMAdapter.CONTEXT_LOAD_PARAMS);
+	private static final String BASE = "/adapters/agent/harness/";
 
-	static final AMap<AString, ACell> DEF_CONTEXT_UNLOAD = Maps.of(
-		AbstractLLMAdapter.K_NAME, Strings.create(CONTEXT_UNLOAD),
-		AbstractLLMAdapter.K_DESCRIPTION, Strings.create(
-			"Deliberately remove agent-managed persistent context. Accepts only exact map keys from a "
-			+ "loaded_context result; use paths to remove several together. Never pass a display label, "
-			+ "a source or operation path from pinned_context, or an argument from an ordinary tool call. "
-			+ "Ordinary results such as covia_read and covia_inspect belong to conversation history, are "
-			+ "not persistent loads, and need no cleanup. Operator/caller pinned_context cannot be removed."),
-		AbstractLLMAdapter.K_PARAMETERS, AbstractLLMAdapter.CONTEXT_UNLOAD_PARAMS);
+	static final AMap<AString, ACell> DEF_CONTEXT_LOAD = definition(BASE + "contextLoad.json");
 
-	static final AMap<AString, ACell> DEF_SKILL_LOAD = Maps.of(
-		AbstractLLMAdapter.K_NAME, Strings.create(SKILL_LOAD),
-		AbstractLLMAdapter.K_DESCRIPTION, Strings.create(
-			"Load a skill from the [Skills] index by name (or any skill by direct ref). "
-			+ "The result acknowledges activation; the skill instructions are appended once and "
-			+ "stay in your context across turns. Their loaded skill header names the exact unload "
-			+ "key if you later need to remove one; routine cleanup is unnecessary. The skill's tools "
-			+ "join your palette from your next step."),
-		AbstractLLMAdapter.K_PARAMETERS, AbstractLLMAdapter.SKILL_LOAD_PARAMS);
+	static final AMap<AString, ACell> DEF_CONTEXT_UNLOAD = definition(BASE + "contextUnload.json");
 
-	static final AMap<AString, ACell> DEF_MORE_TOOLS = Maps.of(
-		AbstractLLMAdapter.K_NAME, Strings.create(MORE_TOOLS),
-		AbstractLLMAdapter.K_DESCRIPTION, Strings.create(
-			"Add operations to your tool set for the rest of this run. "
-			+ "Use an advertised catalog-listing operation to discover available operations first "
-			+ "(for example, list path=v/ops), then call this with the exact paths "
-			+ "you need. Added tools appear on your next turn."),
-		AbstractLLMAdapter.K_PARAMETERS, Maps.of(
-			AbstractLLMAdapter.K_TYPE, Strings.create("object"),
-			AbstractLLMAdapter.K_PROPERTIES, Maps.of(
-				K_OPERATIONS, Maps.of(
-					AbstractLLMAdapter.K_TYPE, Strings.create("array"),
-					AbstractLLMAdapter.K_DESCRIPTION, Strings.create(
-						"Operation paths to add as tools (e.g. [\"v/ops/agent/create\", \"v/ops/grid/run\"])"),
-					Strings.create("items"), Maps.of(AbstractLLMAdapter.K_TYPE, Strings.create("string")))),
-			AbstractLLMAdapter.K_REQUIRED, Vectors.of((ACell) K_OPERATIONS)));
+	static final AMap<AString, ACell> DEF_SKILL_LOAD = definition(BASE + "skillLoad.json");
+
+	static final AMap<AString, ACell> DEF_MORE_TOOLS = definition(BASE + "moreTools.json");
 
 	/** Stable provider fallback for tools introduced after the initial tools
 	 * vector was materialised. Native provider edges may translate the same
 	 * persisted state event to their tool-addition block instead. */
-	static final AMap<AString, ACell> DEF_INVOKE_TOOL = Maps.of(
-		AbstractLLMAdapter.K_NAME, Strings.create(INVOKE_TOOL),
-		AbstractLLMAdapter.K_DESCRIPTION, Strings.create(
-			"Invoke a tool that a later tool-addition system event made available. "
-			+ "Use the exact added tool name and pass that tool's arguments in input. "
-			+ "Do not use this for tools already offered directly."),
-		AbstractLLMAdapter.K_PARAMETERS, Maps.of(
-			AbstractLLMAdapter.K_TYPE, Strings.create("object"),
-			AbstractLLMAdapter.K_PROPERTIES, Maps.of(
-				K_NAME, Maps.of(
-					AbstractLLMAdapter.K_TYPE, Strings.create("string"),
-					AbstractLLMAdapter.K_DESCRIPTION, Strings.create("Exact name from a tool-addition event")),
-				K_INPUT, Maps.of(
-					AbstractLLMAdapter.K_TYPE, Strings.create("object"),
-					AbstractLLMAdapter.K_DESCRIPTION, Strings.create("Arguments for the added tool"))),
-			AbstractLLMAdapter.K_REQUIRED, Vectors.of((ACell) K_NAME)));
+	static final AMap<AString, ACell> DEF_INVOKE_TOOL = definition(BASE + "invokeTool.json");
 
 	/** Shared conversation compaction. The summary is agent-authored memory;
 	 * the runtime archives the exact replaced conversation beneath it. */
-	static final AMap<AString, ACell> DEF_COMPACT = Maps.of(
-		AbstractLLMAdapter.K_NAME, Strings.create(COMPACT),
-		AbstractLLMAdapter.K_DESCRIPTION, Strings.create(
-			"Archive the conversation so far under a summary you write, freeing context "
-			+ "space for future turns while retaining the exact archived history for audit. "
-			+ "Use after a significant chunk of work when you still have more to do. "
-			+ "Capture key findings, decisions, active constraints and what remains."),
-		AbstractLLMAdapter.K_PARAMETERS, Maps.of(
-			AbstractLLMAdapter.K_TYPE, Strings.create("object"),
-			AbstractLLMAdapter.K_PROPERTIES, Maps.of(
-				K_SUMMARY, Maps.of(
-					AbstractLLMAdapter.K_TYPE, Strings.create("string"),
-					AbstractLLMAdapter.K_DESCRIPTION, Strings.create(
-						"Required summary of what future turns need to remember"))),
-			AbstractLLMAdapter.K_REQUIRED, Vectors.of((ACell) K_SUMMARY)));
+	static final AMap<AString, ACell> DEF_COMPACT = definition(BASE + "compact.json");
 
 	/** The harness tools every runtime provides, by name. */
 	static final Map<String, AMap<AString, ACell>> SHARED = Map.of(
@@ -147,6 +79,25 @@ final class HarnessTools {
 		MORE_TOOLS, DEF_MORE_TOOLS,
 		INVOKE_TOOL, DEF_INVOKE_TOOL,
 		COMPACT, DEF_COMPACT);
+
+	/** Reads ordinary operation metadata without installing it in the venue
+	 * catalog, then projects it through the same provider-tool path as a
+	 * registered operation. A name override is only for a cycle-local alias. */
+	static AMap<AString, ACell> definition(String resourcePath) {
+		return definition(resourcePath, null);
+	}
+
+	static AMap<AString, ACell> definition(String resourcePath, String nameOverride) {
+		try {
+			AMap<AString, ACell> metadata = Asset.forString(
+				Utils.readResourceAsAString(resourcePath)).meta();
+			return ToolPalette.operationToolDefinition(metadata,
+				(nameOverride != null) ? Strings.create(nameOverride) : null, null);
+		} catch (Exception e) {
+			throw new ExceptionInInitializerError(
+				"Invalid harness tool resource " + resourcePath + ": " + e.getMessage());
+		}
+	}
 
 	/** Validated request supplied to {@code compact}. */
 	record Compaction(String summary, ACell error) {}

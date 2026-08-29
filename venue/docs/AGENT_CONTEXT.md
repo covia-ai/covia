@@ -163,7 +163,17 @@ The volatile tail is **ephemeral**. Its values may be resolved for every inferen
 
 Tool definitions are **section 0**. They are not a message — providers take them as a separate parameter — but they are prompt bytes placed ahead of the messages. The base manifest is therefore fixed for the persisted context, canonically ordered and rendered once.
 
-A tool becoming available later must not cause the venue to rebuild that array silently. Covia declares the exact schemas of every skill in the **initial discoverable catalog** in the fixed manifest. Dispatch remains gated: calling one before its skill is loaded returns `load skill <name> first`; after `skill_load`, the model calls the native tool directly. This is the fixed-array strategy used by Anthropic as well as other providers, so common skill tools retain provider-side schema validation without a load-time prefix bust.
+Harness controls use the ordinary operation-asset metadata shape too: their
+description lives at the asset root and their provider schema in
+`operation.input`. The built-in harness resources are read with the normal
+asset parser and projected by the same `ToolPalette` path as catalog
+operations. They are not installed under `v/ops` merely to make them tools:
+the runtime owns their handlers and selects them from its fixed registry.
+Where a harness control is also a public operation (`complete_task` /
+`fail_task`), the harness reuses that operation resource and changes only the
+cycle-local tool name. This keeps schema and prompt prose single-sourced.
+
+A tool becoming available later must not cause the venue to rebuild that array silently. Covia declares the exact schemas of every skill in the **initial discoverable catalog** in the fixed manifest. Dispatch remains gated: calling one before a provider skill is loaded says to load a skill that provides it; after any provider is loaded, the model calls the native tool directly. Tools shared by several skills are deliberately not assigned to an arbitrary owner. This is the fixed-array strategy used by Anthropic as well as other providers, so common skill tools retain provider-side schema validation without a load-time prefix bust.
 
 Tools discovered only after a parent skill loads, or introduced by `more_tools`, were not part of that initial superset. The provider strategy for those genuinely later definitions chooses one of three representations, in order:
 

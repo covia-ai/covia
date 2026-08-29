@@ -67,14 +67,15 @@ import covia.venue.RequestContext;
  * old vector beneath the archive record.</p>
  *
  * <h3>Conversation structure</h3>
- * <pre>{@code
+ * <pre>
  * { "frames": [{
  *   "description": "Process incoming work",
  *   "conversation": [
  *     { "role": "user",      "content": "Hello" },
  *     { "role": "assistant", "content": "Hi there!" }
  *   ]
- * }]}</pre>
+ * }]}
+ * </pre>
  */
 public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning {
 
@@ -661,10 +662,9 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 	}
 
 	private ACell dispatchActiveTool(String name, ACell input, ToolContext toolCtx) {
-		String requiredSkill = toolCtx.inactiveDeclaredSkill(name);
-		if (requiredSkill != null) return Strings.create(
-			"Error: tool '" + name + "' requires skill '" + requiredSkill
-			+ "'. Load that skill from [Skills] first.");
+		if (toolCtx.inactiveDeclaredSkill(name)) return Strings.create(
+			"Error: tool '" + name + "' requires loading a skill that provides it"
+			+ " from [Skills] first.");
 		return dispatchTool(name, input, toolCtx.dispatchRoutes(),
 			toolCtx.ctx, toolCtx.toolCallTimeoutMs);
 	}
@@ -900,10 +900,10 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 			return snapshot;
 		}
 
-		String inactiveDeclaredSkill(String name) {
+		boolean inactiveDeclaredSkill(String name) {
 			if (name == null || currentLoadRoutes.containsKey(name)
-					|| !manifestDeclaredSkillNames().contains(name)) return null;
-			return declaredSkillTools.skills().get(name);
+					|| !manifestDeclaredSkillNames().contains(name)) return false;
+			return true;
 		}
 
 		java.util.Set<String> manifestDeclaredSkillNames() {

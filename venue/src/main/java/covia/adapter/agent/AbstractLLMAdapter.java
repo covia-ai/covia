@@ -108,7 +108,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	public static final AString K_PROPERTIES  = Strings.intern("properties");
 	public static final AString K_REQUIRED    = Strings.intern("required");
 
-	// ========== context_load / context_unload — shared schema + helpers ==========
+	// ========== context_load / context_unload helpers ==========
 
 	public static final AString K_PATH   = Strings.intern("path");
 	public static final AString K_PATHS  = Strings.intern("paths");
@@ -119,75 +119,6 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	public static final long CONTEXT_LOAD_DEFAULT_BUDGET = 500L;
 	public static final long CONTEXT_LOAD_MIN_BUDGET     = 256L;
 	public static final long CONTEXT_LOAD_MAX_BUDGET     = 10_000L;
-
-	/**
-	 * Shared parameter schema for the {@code context_load} tool. Subclasses
-	 * pair this with their own outer description (which may differ in wording
-	 * — e.g. "subgoals inherit your loaded data" only makes sense for
-	 * {@link GoalTreeAdapter}).
-	 */
-	public static final AMap<AString, ACell> CONTEXT_LOAD_PARAMS = Maps.of(
-		K_TYPE, Strings.create("object"),
-		K_PROPERTIES, Maps.of(
-			K_PATH, Maps.of(
-				K_TYPE, Strings.create("string"),
-				K_DESCRIPTION, Strings.create(
-					"Lattice path to keep visible (e.g. w/docs/rules, n/notes). Its own key.")),
-			K_ID, Maps.of(
-				K_TYPE, Strings.create("string"),
-				K_DESCRIPTION, Strings.create(
-					"Key for a text, op or job entry — used as a key in the loaded_context result map")),
-			Strings.intern("text"), Maps.of(
-				K_TYPE, Strings.create("string"),
-				K_DESCRIPTION, Strings.create("A note to keep in context, verbatim")),
-			Strings.intern("op"), Maps.of(
-				K_TYPE, Strings.create("string"),
-				K_DESCRIPTION, Strings.create(
-					"A read-only operation path (e.g. v/ops/covia/list) re-run on every model call;"
-					+ " its result renders at the end of your context")),
-			Strings.intern("input"), Maps.of(
-				K_TYPE, Strings.create("object"),
-				K_DESCRIPTION, Strings.create("Input for op")),
-			Strings.intern("job"), Maps.of(
-				K_TYPE, Strings.create("string"),
-				K_DESCRIPTION, Strings.create("A completed job's id; its output is the content")),
-			K_BUDGET, Maps.of(
-				K_TYPE, Strings.create("integer"),
-				K_DESCRIPTION, Strings.create(
-					"Byte budget for rendering a structured value (default 500, max 10000); a hard cap "
-					+ "on a volatile entry whatever its shape")),
-			K_LABEL, Maps.of(
-				K_TYPE, Strings.create("string"),
-				K_DESCRIPTION, Strings.create(
-					"Optional human-readable label for this context entry")),
-			Strings.intern("volatile"), Maps.of(
-				K_TYPE, Strings.create("boolean"),
-				K_DESCRIPTION, Strings.create(
-					"Render at the end of your context, never cached, so its changes cost nothing "
-					+ "else. Default true for op, else false. Set true for a path whose value is likely "
-					+ "to change during this conversation (a queue, a status, something you write to); "
-					+ "leave false for stable reference material."))));
-
-	/**
-	 * Shared parameter schema for the {@code context_unload} tool.
-	 */
-	public static final AMap<AString, ACell> CONTEXT_UNLOAD_PARAMS = Maps.of(
-		K_TYPE, Strings.create("object"),
-		K_PROPERTIES, Maps.of(
-			K_PATH, Maps.of(
-				K_TYPE, Strings.create("string"),
-				K_DESCRIPTION, Strings.create(
-					"One exact key from the loaded_context result map")),
-			K_PATHS, Maps.of(
-				K_TYPE, Strings.create("array"),
-				K_DESCRIPTION, Strings.create(
-					"Several exact keys from the loaded_context result map, removed together in one call"),
-				Strings.create("items"), Maps.of(K_TYPE, Strings.create("string")),
-				Strings.create("minItems"), CVMLong.ONE,
-				Strings.create("maxItems"), CVMLong.create(50))),
-		Strings.create("oneOf"), Vectors.of(
-			Maps.of(K_REQUIRED, Vectors.of(K_PATH)),
-			Maps.of(K_REQUIRED, Vectors.of(K_PATHS))));
 
 	/**
 	 * Clamps a budget value supplied by the LLM. Returns the default
@@ -209,34 +140,13 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			Math.min(defaultBudget, CONTEXT_LOAD_MAX_BUDGET));
 	}
 
-	// ========== skill_load — shared schema (SKILLS.md §5) ==========
+	// ========== skill_load helpers (SKILLS.md §5) ==========
 
 	public static final AString K_REF = Strings.intern("ref");
 
 	/** Default accounting budget for a loaded skill — bodies run bigger than
 	 *  data loads (overridable per call, and per skill via {@code skill.budget}). */
 	public static final long SKILL_LOAD_DEFAULT_BUDGET = 2_000L;
-
-	/**
-	 * Shared parameter schema for the {@code skill_load} tool. Exactly one of
-	 * {@code name} / {@code ref} — enforced by the handler, where the error is
-	 * diagnosable, rather than by schema {@code required}.
-	 */
-	public static final AMap<AString, ACell> SKILL_LOAD_PARAMS = Maps.of(
-		K_TYPE, Strings.create("object"),
-		K_PROPERTIES, Maps.of(
-			K_NAME, Maps.of(
-				K_TYPE, Strings.create("string"),
-				K_DESCRIPTION, Strings.create(
-					"A skill name from the [Skills] index")),
-			K_REF, Maps.of(
-				K_TYPE, Strings.create("string"),
-				K_DESCRIPTION, Strings.create(
-					"Direct skill address (a/<hash>, v/skills/<x>, w/skills/<x>) — alternative to name")),
-			K_BUDGET, Maps.of(
-				K_TYPE, Strings.create("integer"),
-				K_DESCRIPTION, Strings.create(
-					"Accounting budget for the skill's context entry (default 2000, max 10000)"))));
 
 	/**
 	 * Builds the loaded-context entry metadata: {@code {budget, ts, label?}}.

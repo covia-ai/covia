@@ -1,0 +1,14 @@
+{
+    "name": "Fail Goal-Tree Goal",
+    "description": "Report that your goal cannot be completed. Explain what went wrong so the caller can decide whether to retry, try a different approach, or give up.",
+    "dateCreated": "2026-08-29T00:00:00Z",
+    "operation": {
+        "adapter": "harness:fail",
+        "internal": true,
+        "toolName": "fail",
+        "input": {
+            "type": "object",
+            "properties": {}
+        }
+    }
+}

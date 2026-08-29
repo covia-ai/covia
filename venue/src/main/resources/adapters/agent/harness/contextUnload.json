@@ -1,0 +1,30 @@
+{
+    "name": "Unload Agent Context",
+    "description": "Deliberately remove agent-managed persistent context. Accepts only exact map keys from a loaded_context result; use paths to remove several together. Never pass a display label, a source or operation path from pinned_context, or an argument from an ordinary tool call. Ordinary results such as covia_read and covia_inspect belong to conversation history, are not persistent loads, and need no cleanup. Operator/caller pinned_context cannot be removed.",
+    "dateCreated": "2026-08-29T00:00:00Z",
+    "operation": {
+        "adapter": "harness:contextUnload",
+        "internal": true,
+        "toolName": "context_unload",
+        "input": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "One exact key from the loaded_context result map"
+                },
+                "paths": {
+                    "type": "array",
+                    "description": "Several exact keys from the loaded_context result map, removed together in one call",
+                    "items": { "type": "string" },
+                    "minItems": 1,
+                    "maxItems": 50
+                }
+            },
+            "oneOf": [
+                { "required": ["path"] },
+                { "required": ["paths"] }
+            ]
+        }
+    }
+}

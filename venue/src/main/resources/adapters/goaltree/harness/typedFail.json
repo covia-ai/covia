@@ -1,0 +1,25 @@
+{
+    "name": "Fail Typed Goal-Tree Goal",
+    "description": "Report that your goal cannot be completed. Parameters carry the structured error schema.",
+    "dateCreated": "2026-08-29T00:00:00Z",
+    "operation": {
+        "adapter": "harness:fail",
+        "internal": true,
+        "toolName": "fail",
+        "input": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "description": "Brief explanation of why the goal failed"
+                },
+                "details": {
+                    "type": "string",
+                    "description": "Additional context: tool errors, missing data, partial work done"
+                }
+            },
+            "required": ["reason", "details"],
+            "additionalProperties": false
+        }
+    }
+}

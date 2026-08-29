@@ -192,7 +192,7 @@ public class JobManager {
 	 * @param ctx Request context (caller identity, caps, scope)
 	 * @return the prepared Job, not yet started
 	 */
-	public Prepared prepareTracked(AString ref, ACell input, RequestContext ctx) {
+	Prepared prepareTracked(AString ref, ACell input, RequestContext ctx) {
 		return prepareOperation(resolveOperation(ref, ctx).meta(), input, ctx.withOp(ref),
 			false, false, false);
 	}
@@ -204,7 +204,7 @@ public class JobManager {
 	 * it into the same lattice replace that claims the event) and only then
 	 * hand the work to the adapter. {@link #start()} runs exactly once.
 	 */
-	public static final class Prepared {
+	static final class Prepared {
 		private final Job job;
 		private final AAdapter adapter;
 		private final RequestContext jobCtx;
@@ -222,7 +222,7 @@ public class JobManager {
 		}
 
 		/** The Job, already visible in the owner's history if durable. */
-		public Job job() {
+		Job job() {
 			return job;
 		}
 
@@ -232,7 +232,7 @@ public class JobManager {
 		 * failure is recorded on the Job and then rethrown, so a Job is never
 		 * stranded PENDING with no worker.
 		 */
-		public Job start() {
+		synchronized Job start() {
 			if (started) throw new IllegalStateException("Job already started: " + job.getID());
 			started = true;
 			try {

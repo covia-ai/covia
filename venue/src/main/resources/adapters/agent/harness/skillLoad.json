@@ -1,0 +1,27 @@
+{
+    "name": "Load Agent Skill",
+    "description": "Load a skill from the [Skills] index by name (or any skill by direct ref). The result acknowledges activation; the skill instructions are appended once and stay in your context across turns. Their loaded skill header names the exact unload key if you later need to remove one; routine cleanup is unnecessary. The skill's tools join your palette from your next step.",
+    "dateCreated": "2026-08-29T00:00:00Z",
+    "operation": {
+        "adapter": "harness:skillLoad",
+        "internal": true,
+        "toolName": "skill_load",
+        "input": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "A skill name from the [Skills] index"
+                },
+                "ref": {
+                    "type": "string",
+                    "description": "Direct skill address (a/<hash>, v/skills/<x>, w/skills/<x>) — alternative to name"
+                },
+                "budget": {
+                    "type": "integer",
+                    "description": "Accounting budget for the skill's context entry (default 2000, max 10000)"
+                }
+            }
+        }
+    }
+}

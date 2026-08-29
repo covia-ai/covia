@@ -1,0 +1,20 @@
+{
+    "name": "Compact Agent Context",
+    "description": "Archive the conversation so far under a summary you write, freeing context space for future turns while retaining the exact archived history for audit. Use after a significant chunk of work when you still have more to do. Capture key findings, decisions, active constraints and what remains.",
+    "dateCreated": "2026-08-29T00:00:00Z",
+    "operation": {
+        "adapter": "harness:compact",
+        "internal": true,
+        "toolName": "compact",
+        "input": {
+            "type": "object",
+            "properties": {
+                "summary": {
+                    "type": "string",
+                    "description": "Required summary of what future turns need to remember"
+                }
+            },
+            "required": ["summary"]
+        }
+    }
+}

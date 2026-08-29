@@ -1,0 +1,24 @@
+{
+    "name": "Invoke Added Agent Tool",
+    "description": "Invoke a tool that a later tool-addition system event made available. Use the exact added tool name and pass that tool's arguments in input. Do not use this for tools already offered directly.",
+    "dateCreated": "2026-08-29T00:00:00Z",
+    "operation": {
+        "adapter": "harness:invokeTool",
+        "internal": true,
+        "toolName": "invoke_tool",
+        "input": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Exact name from a tool-addition event"
+                },
+                "input": {
+                    "type": "object",
+                    "description": "Arguments for the added tool"
+                }
+            },
+            "required": ["name"]
+        }
+    }
+}

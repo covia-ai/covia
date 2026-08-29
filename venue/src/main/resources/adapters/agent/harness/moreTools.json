@@ -1,0 +1,21 @@
+{
+    "name": "Add Agent Tools",
+    "description": "Add operations to your tool set for the rest of this run. Use an advertised catalog-listing operation to discover available operations first (for example, list path=v/ops), then call this with the exact paths you need. Added tools appear on your next turn.",
+    "dateCreated": "2026-08-29T00:00:00Z",
+    "operation": {
+        "adapter": "harness:moreTools",
+        "internal": true,
+        "toolName": "more_tools",
+        "input": {
+            "type": "object",
+            "properties": {
+                "operations": {
+                    "type": "array",
+                    "description": "Operation paths to add as tools (e.g. [\"v/ops/agent/create\", \"v/ops/grid/run\"])",
+                    "items": { "type": "string" }
+                }
+            },
+            "required": ["operations"]
+        }
+    }
+}

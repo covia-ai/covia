@@ -8,6 +8,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.9.7] - 2026-08-29
+
 ### Added
 
 - `agent:reloadContext` explicitly clears one idle session's materialised
@@ -50,6 +52,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Fixed
 
+- Stable and snapshot GitHub releases now include the `covia-documents`
+  module jar and checksum promised by the release manifest.
 - A sessioned agent's `hitl:request` tool call now returns the durable request
   ID immediately instead of occupying the tool loop until timeout. The HITL
   record remembers the asking session; answer, rejection and expiry deliver a
@@ -105,6 +109,13 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Changed
 
+- The scheduler's atomic prepare/claim/start seam is package-private and its
+  one-shot start guard is thread-safe; `JobManager.Prepared` is no longer an
+  accidental public extension point (#414).
+- Harness tool descriptions and input schemas now use ordinary operation-shaped
+  JSON resources and the same asset/parser-to-`ToolPalette` projection as
+  catalog operations. Task completion aliases reuse their registered operation
+  resources; harness-only controls remain unregistered and runtime-owned.
 - `llmagent` and `goaltree` now use the same durable frame opener, input
   presentation, interruption repair and root-turn append path. `compact` is a
   shared opt-in harness tool: it renders agent-written summaries as assistant
@@ -129,9 +140,10 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Each session frame now persists its exact initial tool and message vectors.
   Ordinary inference reuses those cells verbatim; compaction/context reload is
   an explicit rebuild boundary. Exact schemas from the initial discoverable
-  skill catalog are fixed in that manifest and load-gated at dispatch; only
-  later-revealed skill and `more_tools` definitions append tool-state events
-  and use the stable `invoke_tool` fallback (#443, #445).
+  skill catalog are fixed in that manifest and load-gated at dispatch without
+  assigning shared tools to an arbitrary provider skill; only later-revealed
+  skill and `more_tools` definitions append tool-state events and use the
+  stable `invoke_tool` fallback (#443, #445).
   The static task completion controls also remain in the initial harness, so a
   task arriving later cannot change the tool prefix.
 - `agent:update` refreshes the skills catalog of existing sessions by appending
@@ -829,7 +841,9 @@ Initial public release: venue server with the adapter framework, lattice-backed
 content-addressed assets, the async job model with SSE, multi-protocol surface
 (REST / MCP / A2A / DID), and strategy-based authentication.
 
-[Unreleased]: https://github.com/covia-ai/covia/compare/0.9.5...HEAD
+[Unreleased]: https://github.com/covia-ai/covia/compare/0.9.7...HEAD
+[0.9.7]: https://github.com/covia-ai/covia/compare/0.9.6...0.9.7
+[0.9.6]: https://github.com/covia-ai/covia/compare/0.9.5...0.9.6
 [0.9.5]: https://github.com/covia-ai/covia/compare/0.9.4...0.9.5
 [0.9.4]: https://github.com/covia-ai/covia/compare/0.9.3...0.9.4
 [0.9.3]: https://github.com/covia-ai/covia/compare/0.9.2...0.9.3

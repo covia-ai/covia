@@ -73,6 +73,26 @@ public class AgentToolboxTest {
 			"description", "Toolbox alpha skill",
 			"content", Maps.of("inline", SKILL_BODY),
 			"skill", Maps.of("tools", Vectors.of(Strings.create("v/ops/covia/read")))));
+		write(SKILLSET + "/beta", Maps.of(
+			"description", "Second provider of the same toolbox tool",
+			"content", Maps.of("inline", "TOOLBOX_SECOND_SKILL_BODY"),
+			"skill", Maps.of("tools", Vectors.of(Strings.create("v/ops/covia/read")))));
+	}
+
+	@Test
+	public void harnessDefinitionsProjectOrdinaryOperationMetadata() {
+		for (var entry : HarnessTools.SHARED.entrySet()) {
+			assertToolDefinition(entry.getValue(), entry.getKey());
+		}
+		for (String name : Set.of(GoalTreeAdapter.TOOL_SUBGOAL,
+				GoalTreeAdapter.TOOL_COMPLETE, GoalTreeAdapter.TOOL_FAIL)) {
+			assertToolDefinition(GoalTreeAdapter.HARNESS_TOOL_REGISTRY.get(name), name);
+		}
+
+		// The registered task operations and their harness aliases share the exact
+		// description and input-schema values; only the provider-facing name differs.
+		assertTaskAlias("/adapters/agent/completeTask.json", TaskTools.COMPLETE);
+		assertTaskAlias("/adapters/agent/failTask.json", TaskTools.FAIL);
 	}
 
 	@Test
@@ -146,8 +166,19 @@ public class AgentToolboxTest {
 			AMap<AString, ACell> gated = step(agent, "try skill tool too early",
 				assistantCall("call_gated_read", "covia_read",
 					Maps.of("path", "w/probe")), null);
-			assertTrue(RT.getIn(call(gated, "call_gated_read"), Fields.RESULT).toString()
-				.contains("requires skill 'alpha'"), where + " inactive skill tool was not gated: " + gated);
+			String gate = RT.getIn(call(gated, "call_gated_read"), Fields.RESULT).toString();
+			assertTrue(gate.contains("requires loading a skill that provides it"),
+				where + " inactive shared skill tool was not gated: " + gated);
+			assertFalse(gate.contains("alpha"),
+				where + " shared skill tool was assigned to an arbitrary provider: " + gated);
+			AVector<ACell> gatedTools = RT.ensureVector(
+				RT.getIn(gated, AbstractLLMAdapter.K_NEXT, Fields.TOOLS));
+			String description = tool(gatedTools, "covia_read")
+				.get(AbstractLLMAdapter.K_DESCRIPTION).toString();
+			assertTrue(description.startsWith(
+				"Available after loading a skill that provides it from [Skills]."), description);
+			assertFalse(description.contains("alpha"),
+				where + " shared tool description named an arbitrary provider: " + description);
 
 			// skill_load: the initial catalog supplied the native schema once;
 			// loading appends only the trusted instructions and activates dispatch.
@@ -268,6 +299,32 @@ public class AgentToolboxTest {
 			(ACell) Strings.create(HarnessTools.MORE_TOOLS),
 			(ACell) Strings.create(HarnessTools.COMPACT),
 			(ACell) Strings.create("v/test/ops/echo"));
+	}
+
+	private static void assertTaskAlias(String resource, String aliasName) {
+		AMap<AString, ACell> operation = HarnessTools.definition(resource);
+		AMap<AString, ACell> alias = tool(TaskTools.DEFINITIONS, aliasName);
+		assertEquals(operation.get(AbstractLLMAdapter.K_DESCRIPTION),
+			alias.get(AbstractLLMAdapter.K_DESCRIPTION));
+		assertEquals(operation.get(AbstractLLMAdapter.K_PARAMETERS),
+			alias.get(AbstractLLMAdapter.K_PARAMETERS));
+		assertEquals(aliasName, alias.get(AbstractLLMAdapter.K_NAME).toString());
+	}
+
+	private static void assertToolDefinition(AMap<AString, ACell> definition, String expectedName) {
+		assertNotNull(definition, expectedName);
+		assertEquals(expectedName, definition.get(AbstractLLMAdapter.K_NAME).toString());
+		assertInstanceOf(AString.class, definition.get(AbstractLLMAdapter.K_DESCRIPTION));
+		assertInstanceOf(AMap.class, definition.get(AbstractLLMAdapter.K_PARAMETERS));
+	}
+
+	private static AMap<AString, ACell> tool(AVector<ACell> definitions, String name) {
+		for (long i = 0; i < definitions.count(); i++) {
+			AMap<AString, ACell> definition = RT.ensureMap(definitions.get(i));
+			if (name.equals(String.valueOf(definition.get(AbstractLLMAdapter.K_NAME)))) return definition;
+		}
+		fail("missing tool definition " + name);
+		return null;
 	}
 
 	private RunningAgent start(AgentRuntime runtime, String id, AMap<AString, ACell> config) {

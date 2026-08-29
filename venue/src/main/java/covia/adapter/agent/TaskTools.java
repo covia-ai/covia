@@ -40,38 +40,13 @@ final class TaskTools {
 	/** Stands in for the task job id a live cycle carries ({@code agent:context}, {@code agent:step}). */
 	static final AString PREVIEW_JOB_ID = Strings.intern("preview");
 
-	private static final AMap<AString, ACell> DEF_COMPLETE = Maps.of(
-		AbstractLLMAdapter.K_NAME, Strings.create(COMPLETE),
-		AbstractLLMAdapter.K_DESCRIPTION, Strings.create(
-			"Deliver the final result for the in-scope task and end it. "
-			+ "This is TERMINAL: the caller receives `result` and nothing else. "
-			+ "For a long prose answer, write the complete answer as your message text "
-			+ "and call complete_task with no arguments in the same turn — the text is "
-			+ "delivered as the result. Otherwise pass the answer in `result`. "
-			+ "Only call this once you have the actual answer to deliver. "
-			+ "The agent and task are determined from the current request context — you do not pass an id."),
-		AbstractLLMAdapter.K_PARAMETERS, Maps.of(
-			AbstractLLMAdapter.K_TYPE, Strings.create("object"),
-			AbstractLLMAdapter.K_PROPERTIES, Maps.of(
-				Fields.RESULT, Maps.of(
-					AbstractLLMAdapter.K_DESCRIPTION, Strings.create(
-						"The result to return to the requester. Any JSON value — string, object, array, etc. "
-						+ "May be omitted only when this turn's message text is the complete answer.")))));
+	private static final String BASE = "/adapters/agent/";
 
-	private static final AMap<AString, ACell> DEF_FAIL = Maps.of(
-		AbstractLLMAdapter.K_NAME, Strings.create(FAIL),
-		AbstractLLMAdapter.K_DESCRIPTION, Strings.create(
-			"Reject or fail the in-scope task. Call this when you cannot fulfil the request — "
-			+ "e.g. the task is outside your capabilities or the input is invalid. "
-			+ "The agent and task are determined from the current request context — you do not pass an id."),
-		AbstractLLMAdapter.K_PARAMETERS, Maps.of(
-			AbstractLLMAdapter.K_TYPE, Strings.create("object"),
-			AbstractLLMAdapter.K_PROPERTIES, Maps.of(
-				Fields.ERROR, Maps.of(
-					AbstractLLMAdapter.K_TYPE, Strings.create("string"),
-					AbstractLLMAdapter.K_DESCRIPTION, Strings.create(
-						"Human-readable explanation of why the task cannot be completed"))),
-			AbstractLLMAdapter.K_REQUIRED, Vectors.of(Strings.create("error"))));
+	private static final AMap<AString, ACell> DEF_COMPLETE =
+		HarnessTools.definition(BASE + "completeTask.json", COMPLETE);
+
+	private static final AMap<AString, ACell> DEF_FAIL =
+		HarnessTools.definition(BASE + "failTask.json", FAIL);
 
 	/** Both tools. They remain in the immutable harness palette; without an
 	 * outstanding task their handlers return a scoped error. */

@@ -1,0 +1,24 @@
+{
+    "name": "Create Goal-Tree Subgoal",
+    "description": "Delegate a self-contained piece of work. Describe what you need done — a sub-agent will execute it independently and return the result. Use when your current goal has distinct parts you want done separately (e.g. 'analyse vendor Acme' then 'analyse vendor Globex'). The sub-agent has access to all your tools and loaded data.",
+    "dateCreated": "2026-08-29T00:00:00Z",
+    "operation": {
+        "adapter": "harness:subgoal",
+        "internal": true,
+        "toolName": "subgoal",
+        "input": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string",
+                    "description": "What the subgoal should accomplish"
+                },
+                "loads": {
+                    "type": "object",
+                    "description": "Optional context to pre-load for the sub-agent: a map of lattice path to {budget} (bytes). Added on top of your own loaded data, which the sub-agent inherits."
+                }
+            },
+            "required": ["description"]
+        }
+    }
+}

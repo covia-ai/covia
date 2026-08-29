@@ -1,0 +1,14 @@
+{
+    "name": "Complete Goal-Tree Goal",
+    "description": "Finish your current goal and return the result. When a structured output schema is declared, your arguments must match it. Otherwise this tool accepts any object. For untyped text answers, just respond normally — that also completes the goal.",
+    "dateCreated": "2026-08-29T00:00:00Z",
+    "operation": {
+        "adapter": "harness:complete",
+        "internal": true,
+        "toolName": "complete",
+        "input": {
+            "type": "object",
+            "properties": {}
+        }
+    }
+}

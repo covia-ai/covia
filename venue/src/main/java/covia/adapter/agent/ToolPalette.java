@@ -92,21 +92,17 @@ public final class ToolPalette {
 
 	/** Tools contributed by the skills visible in the initial catalog. They are
 	 * declared to the provider up front for stable schemas, but their routes do
-	 * not become callable until the corresponding skill is loaded. */
-	public record DeclaredSkillTools(AVector<ACell> tools,
-			Map<String, AString> routes, Map<String, String> skills,
+	 * not become callable until a skill that provides them is loaded. */
+	public record DeclaredSkillTools(AVector<ACell> tools, Set<String> names,
 			AVector<ACell> provenance) {
 		public static final DeclaredSkillTools EMPTY =
-			new DeclaredSkillTools(null, null, null, null);
+			new DeclaredSkillTools(null, null, null);
 
 		public DeclaredSkillTools {
 			tools = (tools != null) ? tools : Vectors.empty();
-			routes = (routes != null) ? Map.copyOf(routes) : Map.of();
-			skills = (skills != null) ? Map.copyOf(skills) : Map.of();
+			names = (names != null) ? Set.copyOf(names) : Set.of();
 			provenance = (provenance != null) ? provenance : Vectors.empty();
 		}
-
-		public Set<String> names() { return skills.keySet(); }
 	}
 
 	/**
@@ -166,8 +162,6 @@ public final class ToolPalette {
 		Set<String> names = new HashSet<>();
 		if (occupiedNames != null) names.addAll(occupiedNames);
 		AVector<ACell> tools = Vectors.empty();
-		Map<String, AString> routes = new HashMap<>();
-		Map<String, String> owners = new HashMap<>();
 		List<AMap<AString, ACell>> entries = new java.util.ArrayList<>();
 		for (Skills.SkillIndexEntry listed : Skills.listSkills(engine, catalogCtx, sources)) {
 			if (listed.name() == null || listed.error() != null) continue;
@@ -183,14 +177,11 @@ public final class ToolPalette {
 					if (name == null || !names.add(name.toString())) continue;
 					AString description = RT.ensureString(definition.get(K_DESCRIPTION));
 					definition = definition.assoc(K_DESCRIPTION, Strings.create(
-						"Available after loading skill '" + skill.name()
-						+ "' from [Skills].\n\n"
+						"Available after loading a skill that provides it from [Skills].\n\n"
 						+ (description != null ? description.toString() : "")))
-						.assoc(K_REQUIRES_SKILL, Strings.create(skill.name()));
+						.assoc(K_REQUIRES_SKILL, CVMBool.TRUE);
 					tools = tools.conj(definition);
 					AString route = skillRoutes.get(name.toString());
-					if (route != null) routes.put(name.toString(), route);
-					owners.put(name.toString(), skill.name());
 					entries.add(entry(name, SOURCE_SKILL, route, listed.path()));
 				}
 			} catch (RuntimeException e) {
@@ -198,7 +189,8 @@ public final class ToolPalette {
 					listed.path(), safeMessage(e));
 			}
 		}
-		return new DeclaredSkillTools(tools, routes, owners, vector(entries));
+		names.removeAll(occupiedNames != null ? occupiedNames : Set.of());
+		return new DeclaredSkillTools(tools, names, vector(entries));
 	}
 
 	/**
@@ -211,16 +203,15 @@ public final class ToolPalette {
 	public static DeclaredSkillTools declaredSkillTools(AVector<ACell> manifest) {
 		if (manifest == null || manifest.isEmpty()) return DeclaredSkillTools.EMPTY;
 		AVector<ACell> tools = Vectors.empty();
-		Map<String, String> owners = new HashMap<>();
+		Set<String> names = new HashSet<>();
 		for (long i = 0; i < manifest.count(); i++) {
 			ACell definition = manifest.get(i);
 			AString name = RT.ensureString(RT.getIn(definition, K_NAME));
-			AString skill = RT.ensureString(RT.getIn(definition, K_REQUIRES_SKILL));
-			if (name == null || skill == null) continue;
+			if (name == null || RT.getIn(definition, K_REQUIRES_SKILL) == null) continue;
 			tools = tools.conj(definition);
-			owners.put(name.toString(), skill.toString());
+			names.add(name.toString());
 		}
-		return new DeclaredSkillTools(tools, Map.of(), owners, Vectors.empty());
+		return new DeclaredSkillTools(tools, names, Vectors.empty());
 	}
 
 	/**
@@ -378,9 +369,9 @@ public final class ToolPalette {
 				? parsed[2] : RT.ensureString(asset.meta().get(Fields.DESCRIPTION));
 			AString description = Strings.create("Operation: " + operation + "\n\n"
 				+ (rawDescription != null ? rawDescription.toString() : ""));
-			ACell inputSchema = RT.getIn(asset.meta(), Fields.OPERATION, Fields.INPUT);
 
-			result = result.conj(buildToolDefinition(toolName, description, inputSchema));
+			result = result.conj(operationToolDefinition(asset.meta(),
+				Strings.create(toolName), description));
 			routes.put(toolName, operation);
 			if (provenance != null) provenance.add(entry(Strings.create(toolName), source, operation, ref));
 		}
@@ -488,5 +479,27 @@ public final class ToolPalette {
 		AMap<AString, ACell> toolDef = Maps.of(K_NAME, Strings.create(toolName), K_PARAMETERS, parameters);
 		if (description != null) toolDef = toolDef.assoc(K_DESCRIPTION, description);
 		return toolDef;
+	}
+
+	/**
+	 * Projects ordinary operation metadata into the provider tool shape. Harness
+	 * controls use the same metadata resources as venue operations, but are not
+	 * installed in the operation catalog; an optional name/description override
+	 * supplies a cycle-local alias without duplicating its JSON Schema.
+	 */
+	static AMap<AString, ACell> operationToolDefinition(AMap<AString, ACell> metadata,
+			AString nameOverride, AString descriptionOverride) {
+		if (!(RT.getIn(metadata, Fields.OPERATION) instanceof AMap)) {
+			throw new IllegalArgumentException("Tool metadata must contain an operation object");
+		}
+		AString name = (nameOverride != null) ? nameOverride
+			: RT.ensureString(RT.getIn(metadata, Fields.OPERATION, Fields.TOOL_NAME));
+		if (name == null || name.toString().isBlank()) {
+			throw new IllegalArgumentException("Tool metadata must declare operation.toolName");
+		}
+		AString description = (descriptionOverride != null) ? descriptionOverride
+			: RT.ensureString(metadata.get(Fields.DESCRIPTION));
+		return buildToolDefinition(name.toString(), description,
+			RT.getIn(metadata, Fields.OPERATION, Fields.INPUT));
 	}
 }

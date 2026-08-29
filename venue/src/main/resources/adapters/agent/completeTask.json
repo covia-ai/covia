@@ -1,6 +1,6 @@
 {
     "name": "Complete Agent Task",
-    "description": "Explicitly marks the in-scope task as successfully complete. Invoked by an agent transition (typically as an LLM tool call) to deliver the final result to the caller. The agentId and taskId are read from the request context — the framework populates them when dispatching a task transition. Without a task in scope the call fails. Side effects: completes the pending task Job with the supplied result and removes the task from the agent's task queue.",
+    "description": "Deliver the final result for the in-scope task and end it. This is terminal: the caller receives the result and nothing else. During an LLM transition, a long prose answer may be supplied as the message text with no result argument in the same turn; otherwise pass the answer in result. Only invoke this once the actual answer is ready. The agent and task are determined from the current request context — no id is passed. Without a task in scope the call fails. Side effects: completes the pending task Job and removes the task from the agent's task queue.",
     "dateCreated": "2026-04-16T00:00:00Z",
     "operation": {
         "adapter": "agent:completeTask",
@@ -9,7 +9,7 @@
             "type": "object",
             "properties": {
                 "result": {
-                    "description": "The successful result to deliver to the caller. Any value is accepted; the schema is intentionally open so transitions can return arbitrary structured output."
+                    "description": "The result to deliver to the caller. Any JSON value is accepted. In an LLM transition it may be omitted only when the same turn's message text is the complete answer."
                 }
             }
         },

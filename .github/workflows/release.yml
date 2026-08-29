@@ -127,6 +127,8 @@ jobs:
           covia-discord/target/*-module.jar.sha256 \
           covia-sonnylabs/target/*-module.jar \
           covia-sonnylabs/target/*-module.jar.sha256 \
+          covia-documents/target/*-module.jar \
+          covia-documents/target/*-module.jar.sha256 \
           covia-claude-code/target/*-module.jar \
           covia-claude-code/target/*-module.jar.sha256
 
@@ -159,5 +161,7 @@ jobs:
           covia-discord/target/*-module.jar.sha256 \
           covia-sonnylabs/target/*-module.jar \
           covia-sonnylabs/target/*-module.jar.sha256 \
+          covia-documents/target/*-module.jar \
+          covia-documents/target/*-module.jar.sha256 \
           covia-claude-code/target/*-module.jar \
           covia-claude-code/target/*-module.jar.sha256

@@ -93,7 +93,16 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 
 	private static final AString K_OUTPUTS     = Strings.intern("outputs");
 	private static final AString K_SCHEMA      = Strings.intern("schema");
-	private static final AString K_ADDITIONAL_PROPERTIES = Strings.intern("additionalProperties");
+	private static final String HARNESS_BASE = "/adapters/goaltree/harness/";
+
+	static final AMap<AString, ACell> TOOL_DEF_SUBGOAL =
+		HarnessTools.definition(HARNESS_BASE + "subgoal.json");
+	static final AMap<AString, ACell> TOOL_DEF_COMPLETE =
+		HarnessTools.definition(HARNESS_BASE + "complete.json");
+	static final AMap<AString, ACell> TOOL_DEF_FAIL =
+		HarnessTools.definition(HARNESS_BASE + "fail.json");
+	private static final AMap<AString, ACell> TOOL_DEF_TYPED_FAIL =
+		HarnessTools.definition(HARNESS_BASE + "typedFail.json");
 
 	/**
 	 * Default schema for the {@code fail} tool's parameters when an agent has
@@ -101,39 +110,8 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 	 * compatible: every property is required, additionalProperties is false.
 	 */
 	@SuppressWarnings("unchecked")
-	static final AMap<AString, ACell> DEFAULT_FAIL_SCHEMA = Maps.of(
-		K_TYPE, Strings.create("object"),
-		K_PROPERTIES, Maps.of(
-			Strings.create("reason"), Maps.of(
-				K_TYPE, Strings.create("string"),
-				K_DESCRIPTION, Strings.create("Brief explanation of why the goal failed")),
-			Strings.create("details"), Maps.of(
-				K_TYPE, Strings.create("string"),
-				K_DESCRIPTION, Strings.create("Additional context: tool errors, missing data, partial work done"))),
-		K_REQUIRED, Vectors.of((ACell) Strings.create("reason"), (ACell) Strings.create("details")),
-		K_ADDITIONAL_PROPERTIES, convex.core.data.prim.CVMBool.FALSE);
-
-	static final AMap<AString, ACell> TOOL_DEF_SUBGOAL = Maps.of(
-		K_NAME, Strings.create(TOOL_SUBGOAL),
-		K_DESCRIPTION, Strings.create(
-			"Delegate a self-contained piece of work. Describe what you need done "
-			+ "— a sub-agent will execute it independently and return the result. "
-			+ "Use when your current goal has distinct parts you want done separately (e.g. "
-			+ "'analyse vendor Acme' then 'analyse vendor Globex'). The sub-agent "
-			+ "has access to all your tools and loaded data."),
-		K_PARAMETERS, Maps.of(
-			K_TYPE, Strings.create("object"),
-			K_PROPERTIES, Maps.of(
-				Strings.create("description"), Maps.of(
-					K_TYPE, Strings.create("string"),
-					K_DESCRIPTION, Strings.create("What the subgoal should accomplish")),
-				Strings.create("loads"), Maps.of(
-					K_TYPE, Strings.create("object"),
-					K_DESCRIPTION, Strings.create(
-						"Optional context to pre-load for the sub-agent: a map of lattice "
-						+ "path to {budget} (bytes). Added on top of your own loaded data, "
-						+ "which the sub-agent inherits."))),
-			K_REQUIRED, Vectors.of(Strings.create("description"))));
+	static final AMap<AString, ACell> DEFAULT_FAIL_SCHEMA =
+		(AMap<AString, ACell>) TOOL_DEF_TYPED_FAIL.get(K_PARAMETERS);
 
 	/*
 	 * Untyped complete/fail: parameters are open objects — the LLM can pass
@@ -143,26 +121,6 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 	 * agents cannot return arrays or primitives directly. To return an array,
 	 * wrap it: complete({items: [...]}).
 	 */
-
-	static final AMap<AString, ACell> TOOL_DEF_COMPLETE = Maps.of(
-		K_NAME, Strings.create(TOOL_COMPLETE),
-		K_DESCRIPTION, Strings.create(
-			"Finish your current goal and return the result. Only needed when "
-			+ "your caller needs structured output. For text answers, just "
-			+ "respond normally — that also completes the goal."),
-		K_PARAMETERS, Maps.of(
-			K_TYPE, Strings.create("object"),
-			K_PROPERTIES, Maps.empty()));
-
-	static final AMap<AString, ACell> TOOL_DEF_FAIL = Maps.of(
-		K_NAME, Strings.create(TOOL_FAIL),
-		K_DESCRIPTION, Strings.create(
-			"Report that your goal cannot be completed. Explain what went wrong "
-			+ "so the caller can decide whether to retry, try a different approach, "
-			+ "or give up."),
-		K_PARAMETERS, Maps.of(
-			K_TYPE, Strings.create("object"),
-			K_PROPERTIES, Maps.empty()));
 
 	/**
 	 * This runtime's harness registry: the tools every runtime shares
@@ -813,10 +771,9 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		private ACell dispatchActiveTool(String name, ACell input) {
 			if (!iterationToolMap.containsKey(name)
 					&& manifestDeclaredSkillNames().contains(name)) {
-				String requiredSkill = declaredSkillTools.skills().get(name);
-				if (requiredSkill != null) return Strings.create(
-					"Error: tool '" + name + "' requires skill '" + requiredSkill
-					+ "'. Load that skill from [Skills] first.");
+				return Strings.create(
+					"Error: tool '" + name + "' requires loading a skill that provides it"
+						+ " from [Skills] first.");
 			}
 			return dispatchTool(name, input, iterationToolMap, ctx, toolCallTimeoutMs);
 		}
@@ -1572,12 +1529,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 	 * this restriction should be removed.</p>
 	 */
 	static AMap<AString, ACell> typedCompleteTool(AMap<AString, ACell> resultSchema) {
-		return Maps.of(
-			K_NAME, Strings.create(TOOL_COMPLETE),
-			K_DESCRIPTION, Strings.create(
-				"Finish your goal with the structured result. Parameters carry the "
-				+ "declared output schema."),
-			K_PARAMETERS, resultSchema);
+		return TOOL_DEF_COMPLETE.assoc(K_PARAMETERS, resultSchema);
 	}
 
 	/**
@@ -1586,12 +1538,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 	 * {@code fail({reason: "...", details: "..."})} — no wrapper.
 	 */
 	static AMap<AString, ACell> typedFailTool(AMap<AString, ACell> errorSchema) {
-		return Maps.of(
-			K_NAME, Strings.create(TOOL_FAIL),
-			K_DESCRIPTION, Strings.create(
-				"Report that your goal cannot be completed. Parameters carry the "
-				+ "structured error schema."),
-			K_PARAMETERS, errorSchema);
+		return TOOL_DEF_TYPED_FAIL.assoc(K_PARAMETERS, errorSchema);
 	}
 
 	/**
