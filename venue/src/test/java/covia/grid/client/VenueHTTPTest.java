@@ -281,13 +281,16 @@ public class VenueHTTPTest {
 	// =============================== Auth ===============================
 
 	@Test
-	public void unauthenticatedRequestRejected() {
-		// Public access is disabled on authServer — an anonymous request to a
-		// gated /api/* path must be refused, not silently allowed.
+	public void statusIsPublicButUnauthenticatedOperationIsRejected() {
+		// Status is public discovery even when general public access is disabled.
 		VenueHTTP none = VenueHTTP.create(URI.create(authBase));
 		none.setTimeout(3000);
+		assertNotNull(none.getStatus().join());
+
+		// An anonymous request to a genuinely gated operation must still be
+		// refused, not silently allowed.
 		CompletionException ex = assertThrows(CompletionException.class,
-			() -> none.getStatus().join());
+			() -> none.startJobAsync(OP_ECHO, Maps.empty()).join());
 		assertTrue(ex.getCause() instanceof ResponseException,
 			"401 must surface as a typed ResponseException, got: " + ex.getCause());
 	}

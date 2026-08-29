@@ -35,6 +35,7 @@ import convex.core.lang.RT;
 import convex.core.json.schema.JsonSchema;
 import convex.core.util.Utils;
 import covia.adapter.agent.AbstractLLMAdapter;
+import covia.adapter.agent.ContextAssembler;
 import covia.adapter.agent.ConversationRenderer;
 import covia.adapter.agent.ToolPalette;
 import covia.adapter.agent.ContextInspectable;
@@ -290,6 +291,25 @@ public class AgentAdapter extends AAdapter {
 	private ConcurrentHashMap<Blob, Job> sessionChats(AgentKey key, Blob sid) {
 		ConcurrentHashMap<Blob, ConcurrentHashMap<Blob, Job>> agentChats = activeChats.get(key);
 		return (agentChats != null) ? agentChats.get(sid) : null;
+	}
+
+	/** Fail only chat callers whose envelopes were consumed by this cycle. */
+	private void failPresentedChats(AgentKey key, Blob sid, AgentState agent,
+			String error, AMap<AString, ACell> cycleTokens) {
+		if (sid == null) return;
+		ConcurrentHashMap<Blob, Job> waiters = sessionChats(key, sid);
+		if (waiters == null) return;
+		java.util.Set<Blob> stillQueued = pendingChatJobIds(agent.getSessionPending(sid));
+		for (Job chatJob : new java.util.ArrayList<>(waiters.values())) {
+			if (chatJob == null || chatJob.isFinished()) {
+				waiters.remove(chatJob != null ? chatJob.getID() : null);
+				continue;
+			}
+			if (stillQueued.contains(chatJob.getID())) continue;
+			waiters.remove(chatJob.getID(), chatJob);
+			if (cycleTokens != null) attachTokens(chatJob, cycleTokens);
+			chatJob.fail(error);
+		}
 	}
 
 	private boolean isRunning(AgentKey key) {
@@ -2099,6 +2119,9 @@ public class AgentAdapter extends AAdapter {
 		}
 
 		agent.updateConfigAndState(newConfig, newState);
+		if (newConfig != null) {
+			ContextAssembler.refreshSkillCatalogs(agent, engine, ctx, newConfig);
+		}
 
 		job.setStatus(Status.STARTED);
 		job.completeWith(identify(target, Maps.of(Fields.STATUS, agent.getStatus())));
@@ -3047,6 +3070,7 @@ public class AgentAdapter extends AAdapter {
 
 				ACell transitionResult;
 				boolean transitionCancelled = false;
+				boolean llmTimedOut = false;
 				try {
 					transitionResult = transitionFuture.join();
 				} catch (java.util.concurrent.CancellationException ce) {
@@ -3059,6 +3083,7 @@ public class AgentAdapter extends AAdapter {
 					// writes the entry, with the inferences that ran before it.
 					CycleRecord.Failure carried = CycleRecord.Failure.find(cause);
 					Throwable reason = (carried != null && carried.getCause() != null) ? carried.getCause() : cause;
+					llmTimedOut = isLlmTimeout(reason);
 					AMap<AString, ACell> failed = Maps.of(Fields.ERROR,
 						Strings.create("Transition failed: " + describeFailure(reason)));
 					if (carried != null) {
@@ -3112,7 +3137,7 @@ public class AgentAdapter extends AAdapter {
 					agent, agentId, ownerDID, transitionOp, framesOwned, transitionResult, pickedTask,
 					pickedTaskInput, formattedTasks, pickedSession,
 					pickedSessionBlob, filteredInbox, resolvedPending,
-					presentedSessionPendingCount, startTs, allTaskResults, cycle);
+					presentedSessionPendingCount, startTs, allTaskResults, llmTimedOut, cycle);
 				lastResult = merged.lastResult();
 				allTaskResults = merged.allTaskResults();
 			}
@@ -3179,12 +3204,14 @@ public class AgentAdapter extends AAdapter {
 			ACell pickedTaskInput, AVector<ACell> formattedTasks,
 			AString pickedSession, Blob pickedSessionBlob,
 			AVector<ACell> filteredInbox, ACell pending, long presentedSessionPendingCount,
-			long startTs, AMap<AString, ACell> allTaskResults, AgentEvents.Cycle tap) {
+			long startTs, AMap<AString, ACell> allTaskResults, boolean llmTimedOut,
+			AgentEvents.Cycle tap) {
 		final AgentKey key = new AgentKey(callerDID, agentId);
 		long endTs = Utils.getCurrentTimestamp();
 		ACell newState = RT.getIn(transitionResult, AgentState.KEY_STATE);
 		ACell leanResponse = RT.getIn(transitionResult, Fields.RESPONSE);
 		ACell leanError = RT.getIn(transitionResult, Fields.ERROR);
+		if (llmTimedOut && newState == null) newState = agent.getState();
 		// Adapter-owned frame stack: when the transition emits `frames`, the
 		// adapter has recorded its own assistant/tool turns in the appropriate
 		// frame conversations. Framework skips appending the assistant response
@@ -3200,6 +3227,18 @@ public class AgentAdapter extends AAdapter {
 		// catch sweeper — the slot is only cleared after merge succeeds.
 		ConcurrentHashMap<Blob, AMap<AString, ACell>> deferred =
 			deferredCompletions.get(key);
+		// A timeout consumes the picked task once, but does not abandon any
+		// later queued tasks. Use the ordinary deferred-completion path so task
+		// removal is atomic with the timeline write and its caller is released
+		// only after that state is visible.
+		if (llmTimedOut && leanError != null && pickedTask != null) {
+			deferred = deferredCompletions.computeIfAbsent(key,
+				k -> new ConcurrentHashMap<>());
+			deferred.putIfAbsent(pickedTask.getKey(), Maps.of(
+				Fields.ID, pickedTask.getKey(),
+				Fields.STATUS, Status.FAILED,
+				Fields.ERROR, leanError));
+		}
 		AMap<AString, ACell> taskResults = buildTaskResultsFromDeferred(deferred);
 		ACell result = (leanError != null) ? leanError : leanResponse;
 
@@ -3458,7 +3497,16 @@ public class AgentAdapter extends AAdapter {
 		}
 		// else: yield — every waiter stays for the next response
 
-		// Fail-fast on transition error. Framework does not classify or retry —
+		// A provider timeout fails only work already presented to this cycle.
+		// Unpresented tasks and chat envelopes remain queued, and the ordinary
+		// clean-exit path returns the agent to SLEEPING. Every other transition
+		// error retains the fail-fast suspension introduced for #88.
+		if (leanError != null && llmTimedOut) {
+			failPresentedChats(key, pickedSessionBlob, agent,
+				leanError.toString(), cycleTokens);
+		}
+
+		// Fail-fast on deterministic transition error. Framework does not retry —
 		// the caller (operator, or whichever submitter is awaiting a queued
 		// task) decides how to respond to a failure. Suspend the agent and
 		// drop the task queue first so the lattice state is settled before
@@ -3467,7 +3515,7 @@ public class AgentAdapter extends AAdapter {
 		// via the SUSPENDED check; the finally re-wake only fires on
 		// SLEEPING, so the agent stays down until an operator resumes it.
 		// See issue #88.
-		if (leanError != null) {
+		if (leanError != null && !llmTimedOut) {
 			AString errStr = Strings.create(leanError.toString());
 			Index<Blob, ACell> tasksAtError = agent.getTasks();
 			agent.suspendAndDrain(errStr);
@@ -3479,12 +3527,26 @@ public class AgentAdapter extends AAdapter {
 		ACell lastResult = Maps.of(
 			Fields.AGENT_ID, agentId,
 			Fields.ADDRESS, Strings.create(callerDID + "/g/" + agentId),
-			Fields.STATUS, (leanError != null) ? AgentState.SUSPENDED
+			Fields.STATUS, (leanError != null && !llmTimedOut) ? AgentState.SUSPENDED
 				: merged.get(AgentState.KEY_STATUS),
 			Fields.RESULT, result,
 			Fields.TASK_RESULTS, allTaskResults);
 
 		return new IterResult(lastResult, allTaskResults);
+	}
+
+	/** The narrow recoverable case: an LLM wait that retained its TimeoutException cause. */
+	private static boolean isLlmTimeout(Throwable failure) {
+		boolean llmFailure = false;
+		boolean timeout = false;
+		for (Throwable t = failure; t != null; t = t.getCause()) {
+			if (t instanceof TimeoutException) timeout = true;
+			String message = t.getMessage();
+			if (message != null && message.startsWith("LLM call timed out after ")) {
+				llmFailure = true;
+			}
+		}
+		return llmFailure && timeout;
 	}
 
 	/**

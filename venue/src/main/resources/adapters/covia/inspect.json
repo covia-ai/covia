@@ -1,6 +1,6 @@
 {
 	"name": "Inspect Lattice Data",
-	"description": "Primary discovery tool. Budget-bounded JSON5 preview of any lattice path: shows shape, types, sizes, and partial values without overwhelming context. Annotations like {/* +15 more, 102KB */} reveal what was elided so you can decide where to drill in next.\n\nAll paths resolve under your DID as the implicit root. Two kinds of sub-namespaces:\n\nVenue-virtual (read-only, same view for every caller — start here for discovery):\n  v/ops/         venue operation catalog (e.g. v/ops/json/merge)\n  v/info/        venue introspection (adapters, capabilities)\n\nYour private namespaces (start empty; populated by your writes):\n  w/             workspace — read/write structured data\n  o/             operation pins — short names for grid_run\n  a/             content-addressed assets — immutable blobs by hash\n  g/             agents — config, state, timeline, inbox\n  n/             named references\n  t/             transient/scratch space\n  j/             job log — auto-populated by the venue as you invoke ops\n\nFederated:\n  did:key:<id>/    another user's namespace (subject to access control)\n  did:web:<host>/  another venue\n\nNote: '/' lists only your materialised entries (j/ and anything you've written) — virtual namespaces like v/ resolve on lookup but don't appear in root enumeration. So begin with covia_inspect path=v.\n\nProgressive exploration: covia_inspect path=v budget=400 (venue overview) → covia_inspect path=v/ops/secret budget=2000 (drill down) → covia_read path=v/ops/secret/set (full value when ready). Pass an array of paths to compare multiple values in one call.",
+	"description": "Primary discovery tool. Budget-bounded JSON5 preview of any lattice path: shows shape, types, sizes, and partial values without overwhelming context. Annotations like {/* +15 more, 102KB */} reveal what was elided so you can decide where to drill in next.\n\nAll paths resolve under your DID as the implicit root. Two kinds of sub-namespaces:\n\nVenue-virtual (read-only, same view for every caller — start here for discovery):\n  v/ops/         venue operation catalog (e.g. v/ops/json/merge)\n  v/info/        venue introspection (adapters, capabilities)\n\nYour private namespaces (start empty; populated by your writes):\n  w/             workspace — read/write structured data\n  o/             operation pins — short names for grid_run\n  a/             content-addressed assets — immutable blobs by hash\n  g/             agents — config, state, timeline, inbox\n  n/             named references\n  t/             transient/scratch space\n  j/             durable top-level and explicitly recorded Jobs (inline agent tool calls are audited in the session/timeline instead)\n\nFederated:\n  did:key:<id>/    another user's namespace (subject to access control)\n  did:web:<host>/  another venue\n\nNote: '/' lists only your materialised entries (j/ and anything you've written) — virtual namespaces like v/ resolve on lookup but don't appear in root enumeration. So begin with covia_inspect path=v.\n\nProgressive exploration: covia_inspect path=v budget=400 (venue overview) → covia_inspect path=v/ops/secret budget=2000 (drill down) → covia_read path=v/ops/secret/set (full value when ready). Pass an array of paths to compare multiple values in one call.",
 	"dateCreated": "2026-04-07T00:00:00Z",
 	"operation": {
 		"adapter": "covia:inspect",
@@ -10,9 +10,13 @@
 			"type": "object",
 			"properties": {
 				"path": {
+					"type": "string",
 					"description": "The path to inspect (the usual case). Any resolvable path, e.g. 'v/info', 'w/vendors', 'v/ops/json/merge'."
 				},
 				"paths": {
+					"type": "array",
+					"minItems": 1,
+					"items": { "type": "string" },
 					"description": "Special case: an array of paths to compare in a single call, sharing the budget equally. Provide either 'path' (single) or 'paths' (multiple)."
 				},
 				"budget": {
@@ -24,13 +28,21 @@
 					"description": "If true, render single-line JSON5 output (default). If false, pretty-print with indentation."
 				}
 			},
-			"required": []
+			"oneOf": [
+				{ "required": ["path"] },
+				{ "required": ["paths"] }
+			],
+			"additionalProperties": false
 		},
 		"output": {
 			"type": "object",
 			"properties": {
-				"result": { "description": "Rendered JSON5 string (single path) or map of path → rendered JSON5 (multiple paths)" }
-			}
+				"result": {
+					"description": "Rendered JSON5 string (single path) or map of path → rendered JSON5 (multiple paths)",
+					"oneOf": [{ "type": "string" }, { "type": "object" }]
+				}
+			},
+			"required": ["result"]
 		}
 	}
 }

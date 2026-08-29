@@ -70,6 +70,7 @@ The `venue` adapter changes the adapter set of a *running* venue, no restart:
 
 | Command | Operation | Input |
 |---------|-----------|-------|
+| `show-config` | `v/ops/venue/show-config` | `{}` — curated public effective settings for agents/clients; never raw operator config |
 | `status` | `v/ops/venue/adapters` | `{}` — every registered adapter, **active and disabled**, with `enabled`, `kernel`, `module`, effective `config`, `operations`; plus loaded `modules` |
 | `disable <name>` | `v/ops/venue/adapter/disable` | `{"name": "<adapter>"}` |
 | `enable <name>` | `v/ops/venue/adapter/enable` | `{"name": "<adapter>"}` |
@@ -78,11 +79,12 @@ The `venue` adapter changes the adapter set of a *running* venue, no restart:
 | `unload <name>` | `v/ops/venue/module/unload` | `{"name": "<jar name without .jar>"}` |
 | `restart [jar]` | `v/ops/venue/restart` | `{"jar": "<successor covia jar>", "sha256": "<hex>", "startupTimeout": 60000}` — all optional; omitting `jar` restarts the current version |
 
-All are invoked with `grid_run operation=v/ops/venue/... input=...`. Enable/disable/configure return `{name, enabled, changed}` / `{name, config}` — `changed: false` means it was already in that state (idempotent). Load returns `{name, path, sha256, adapters}`; unload returns `{name, path, adapters, unloaded}`.
+All are invoked with `grid_run operation=v/ops/venue/... input=...`. `show-config` is read-only under the public `v/` scope and reports identity, agent/Job/storage/protocol/limit policy, active adapters, and only adapter settings explicitly allow-listed by `publicConfig()`. Enable/disable/configure return `{name, enabled, changed}` / `{name, config}` — `changed: false` means it was already in that state (idempotent). Load returns `{name, path, sha256, adapters}`; unload returns `{name, path, adapters, unloaded}`.
 
 ### Authority — read this before trying
 
-These are **venue-owned**. Adapter/module lifecycle requires `adapter/manage`
+The administrative commands below are **venue-owned**; `show-config` is the
+public read-only exception. Adapter/module lifecycle requires `adapter/manage`
 on `<venueDID>/adapters`; process restart instead requires `venue/restart` on
 `<venueDID>/process`. A null (unrestricted) capability scope is deliberately
 *not* enough, so **the default local MCP connection — which acts as the venue's

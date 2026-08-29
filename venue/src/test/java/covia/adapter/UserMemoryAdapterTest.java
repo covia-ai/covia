@@ -235,12 +235,10 @@ public class UserMemoryAdapterTest {
 				Strings.create("path"), Strings.create("w/memory")),
 			Strings.create("label"), Strings.create("User memory (w/memory)"));
 
-		ACell msg = loader.resolveEntry(entry, ALICE);
-		assertNotNull(msg, "recall op entry should resolve to a system message");
-		assertEquals(Strings.create("system"), RT.getIn(msg, "role"));
-
-		String content = RT.ensureString(RT.getIn(msg, "content")).toString();
-		assertEquals("[Context: User memory (w/memory)]\n1. Prefers metric units\n2. Anxious about heart", content);
+		ContextLoader.Resolved resolved = loader.resolveValue(entry, ALICE);
+		assertNotNull(resolved, "recall op entry should resolve as context data");
+		assertEquals("User memory (w/memory)", resolved.label());
+		assertEquals("1. Prefers metric units\n2. Anxious about heart", resolved.content());
 	}
 
 	@Test
@@ -252,6 +250,6 @@ public class UserMemoryAdapterTest {
 				Strings.create("path"), Strings.create("w/memory")),
 			Strings.create("label"), Strings.create("User memory (w/memory)"));
 
-		assertNull(loader.resolveEntry(entry, ALICE), "empty memory should inject no system message");
+		assertNull(loader.resolveValue(entry, ALICE), "empty memory should inject no context result");
 	}
 }

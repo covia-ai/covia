@@ -430,7 +430,7 @@ public class LangChainAdapterTest {
 	}
 
 	@Test
-	public void testAnthropicWireMapperGroupsParallelToolResultsAfterToolUse() {
+	public void testAnthropicWireMapperGroupsParallelToolResultsBeforeFollowingEvent() {
 		var canonical = Vectors.of(
 			Maps.of("role", "assistant", "content", "", "toolCalls", Vectors.of(
 				Maps.of("id", "call_ok", "name", "complete", "arguments", Maps.of("answer", "42")),
@@ -438,15 +438,16 @@ public class LangChainAdapterTest {
 			Maps.of("role", "tool", "id", "call_ok", "name", "complete",
 				"content", "{\"status\":\"complete\"}"),
 			Maps.of("role", "tool", "id", "call_skip", "name", "search",
-				"content", "Error: skipped", "isError", CVMBool.TRUE));
+				"content", "Error: skipped", "isError", CVMBool.TRUE),
+			Maps.of("role", "user", "content", "Loaded context event."));
 
 		List<AnthropicMessage> wire = AnthropicMapper.toAnthropicMessages(
 			LangChainAdapter.toChatMessages(canonical));
-		assertEquals(2, wire.size());
+		assertEquals(3, wire.size());
 		assertEquals(AnthropicRole.ASSISTANT, wire.get(0).role);
 		assertEquals(AnthropicRole.USER, wire.get(1).role);
-		assertEquals(2, wire.get(1).content.size(),
-			"parallel results must share the immediately following Anthropic user turn");
+		assertTrue(wire.get(1).content.size() >= 2,
+			"parallel results must lead the immediately following Anthropic user turn");
 		AnthropicToolResultContent ok = assertInstanceOf(
 			AnthropicToolResultContent.class, wire.get(1).content.get(0));
 		AnthropicToolResultContent skipped = assertInstanceOf(
@@ -454,6 +455,8 @@ public class LangChainAdapterTest {
 		assertEquals("call_ok", ok.toolUseId);
 		assertEquals("call_skip", skipped.toolUseId);
 		assertEquals(Boolean.TRUE, skipped.isError);
+		assertEquals(AnthropicRole.USER, wire.get(2).role,
+			"the load event follows the complete result message");
 	}
 
 	@Test

@@ -36,9 +36,29 @@ import org.junit.jupiter.api.TestInfo;
 public class ContextLoaderTest {
 
 	private final Engine engine = TestEngine.ENGINE;
-	private final ContextLoader loader = new ContextLoader(engine);
+	private final TestLoader loader = new TestLoader(engine);
 	private RequestContext ctx;
 	private AString ALICE_DID;
+
+	/** Resolver tests use the production data renderer; no test-only label or
+	 * system-message format is copied here. */
+	private static final class TestLoader extends ContextLoader {
+		TestLoader(Engine engine) { super(engine); }
+
+		ACell resolveEntry(ACell entry, RequestContext ctx) {
+			Resolved resolved = resolveValue(entry, ctx);
+			return (resolved != null) ? ContextAssembler.contextEntry(null, false, resolved) : null;
+		}
+
+		AVector<ACell> resolve(AVector<ACell> entries, RequestContext ctx) {
+			AVector<ACell> out = Vectors.empty();
+			for (long i = 0; entries != null && i < entries.count(); i++) {
+				ACell value = resolveEntry(entries.get(i), ctx);
+				if (value != null) out = out.conj(value);
+			}
+			return out;
+		}
+	}
 
 	@BeforeEach
 	public void setup(TestInfo info) {
@@ -107,18 +127,6 @@ public class ContextLoaderTest {
 	}
 
 	@Test
-	public void testSystemMessage() {
-		ACell msg = loader.systemMessage("AP Rules", "Rule 1: do stuff");
-		AString content = RT.ensureString(RT.getIn(msg, Strings.intern("content")));
-		assertEquals("[Context: AP Rules]\nRule 1: do stuff", content.toString());
-
-		// Null label — no prefix
-		ACell msg2 = loader.systemMessage(null, "Plain text");
-		AString content2 = RT.ensureString(RT.getIn(msg2, Strings.intern("content")));
-		assertEquals("Plain text", content2.toString());
-	}
-
-	@Test
 	public void testWorkspaceLoadHonoursRestrictedAgentReadScope() throws Exception {
 		// context_load is a harness tool rather than an adapter dispatch, but the
 		// eventual read must still go through the same capability seam. An empty
@@ -156,7 +164,8 @@ public class ContextLoaderTest {
 		ACell msg = loader.resolveEntry(entry, ctx);
 		assertNotNull(msg);
 		String content = RT.ensureString(RT.getIn(msg, Strings.intern("content"))).toString();
-		assertTrue(content.contains("[Context: Unit Policy]"));
+		assertFalse(content.contains("Unit Policy"), "display metadata must not be spliced into data");
+		assertEquals("Unit Policy", loader.resolveValue(entry, ctx).label());
 		assertTrue(content.contains("Use metric units."));
 	}
 
@@ -174,7 +183,7 @@ public class ContextLoaderTest {
 		assertNotNull(msg, "Should resolve workspace path");
 		String content = RT.ensureString(RT.getIn(msg, Strings.intern("content"))).toString();
 		assertTrue(content.contains("Rule 1: Always validate"));
-		assertTrue(content.contains("[Context: w/docs/test-rules]"));
+		assertFalse(content.contains("[Context:"), "data has no instruction-looking wrapper");
 	}
 
 	@Test
@@ -298,7 +307,7 @@ public class ContextLoaderTest {
 		ACell msg = loader.resolveEntry(Strings.create("v/agents/templates/minimal"), ctx);
 		assertNotNull(msg, "v/ data path should resolve as context");
 		String content = RT.getIn(msg, Strings.intern("content")).toString();
-		assertTrue(content.contains("[Context: v/agents/templates/minimal]"), content);
+		assertFalse(content.contains("[Context:"), content);
 	}
 
 	@Test
@@ -356,7 +365,8 @@ public class ContextLoaderTest {
 		ACell msg = loader.resolveEntry(entry, ctx);
 		assertNotNull(msg, "Should resolve completed job");
 		String content = RT.ensureString(RT.getIn(msg, Strings.intern("content"))).toString();
-		assertTrue(content.contains("[Context: Echo Result]"));
+		assertFalse(content.contains("Echo Result"));
+		assertEquals("Echo Result", loader.resolveValue(entry, ctx).label());
 		assertTrue(content.contains("hello world"));
 	}
 
@@ -410,7 +420,8 @@ public class ContextLoaderTest {
 		ACell msg = loader.resolveEntry(entry, ctx);
 		assertNotNull(msg, "Should resolve grid operation");
 		String content = RT.ensureString(RT.getIn(msg, Strings.intern("content"))).toString();
-		assertTrue(content.contains("[Context: Echo Op]"));
+		assertFalse(content.contains("Echo Op"));
+		assertEquals("Echo Op", loader.resolveValue(entry, ctx).label());
 		assertTrue(content.contains("hello from op"));
 	}
 
@@ -434,18 +445,17 @@ public class ContextLoaderTest {
 
 	@Test
 	public void testGridOpFailureNotRequiredIsVisible() {
-		// A non-required op that ERRORS surfaces a visible "[Context: ... unavailable]"
-		// element (so the LLM knows the source is broken), rather than vanishing.
+		// A non-required op that errors remains a structured failed resolution.
 		ACell entry = Maps.of(
 			Strings.intern("op"), Strings.create("v/test/ops/error"),
 			Strings.intern("input"), Maps.of(Strings.create("message"), Strings.create("boom")),
 			Strings.intern("label"), Strings.create("Risky Op")
 		);
-		ACell msg = loader.resolveEntry(entry, ctx);
-		assertNotNull(msg, "Failed non-required op should surface a visible error element, not vanish");
-		String content = RT.ensureString(RT.getIn(msg, Strings.intern("content"))).toString();
-		assertTrue(content.contains("[Context: Risky Op"), "error element keeps the label");
-		assertTrue(content.contains("unavailable"), "error element marks the source unavailable");
+		ContextLoader.Resolved resolved = loader.resolveValue(entry, ctx);
+		assertNotNull(resolved, "Failed non-required op should remain visible, not vanish");
+		assertTrue(resolved.error());
+		assertEquals("Risky Op", resolved.label());
+		assertFalse(resolved.content().contains("[Context:"));
 	}
 
 	@Test
@@ -474,7 +484,8 @@ public class ContextLoaderTest {
 		ACell msg = loader.resolveEntry(entry, ctx);
 		assertNotNull(msg);
 		String content = RT.ensureString(RT.getIn(msg, Strings.intern("content"))).toString();
-		assertTrue(content.contains("[Context: Custom Label]"));
+		assertFalse(content.contains("Custom Label"));
+		assertEquals("Custom Label", loader.resolveValue(entry, ctx).label());
 		assertTrue(content.contains("ref content"));
 	}
 

@@ -419,7 +419,8 @@ public class AgentState extends ALatticeComponent<ACell> {
 	 * <p>{@code fn} must be pure: the CAS may re-apply it on contention.</p>
 	 *
 	 * @param expectedEpoch the claiming cycle's epoch (from
-	 *        {@link #beginSessionCycle}); null skips the fence (test use only)
+	 *        {@link #beginSessionCycle}); null skips the fence for quiescent
+	 *        operator updates, initialisation, and tests
 	 * @return true if the update applied; false if the record/session is
 	 *         missing or the epoch fence rejected the write
 	 */

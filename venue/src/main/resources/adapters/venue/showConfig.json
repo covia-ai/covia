@@ -1,0 +1,110 @@
+{
+  "name": "Show venue configuration",
+  "description": "Returns a curated public view of effective venue settings that agents and clients need to operate correctly: venue identity, agent defaults, job/audit policy, storage durability, access and protocol availability, limits, validation mode, active adapters, and each adapter's explicitly allow-listed public settings. This is not the raw operator config: private paths, network allow-lists, module details, credentials and secret references are never included.",
+  "operation": {
+    "adapter": "venue:show-config",
+    "readOnly": true,
+    "input": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "venue": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" },
+            "did": { "type": "string" },
+            "url": { "type": "string" }
+          },
+          "required": ["did", "url"]
+        },
+        "agents": {
+          "type": "object",
+          "properties": {
+            "defaultLlmOperation": { "type": "string" },
+            "defaultTransitionOp": { "type": "string" },
+            "maxToolIterations": { "type": "integer" }
+          },
+          "required": ["defaultLlmOperation", "defaultTransitionOp", "maxToolIterations"]
+        },
+        "jobs": {
+          "type": "object",
+          "properties": {
+            "recordReadOnlyOperations": { "type": "boolean" },
+            "privateJobsEnabled": { "type": "boolean" },
+            "scheduledJobsTrackedByDefault": { "type": "boolean" },
+            "scheduledJobTrackingForced": { "type": "boolean" }
+          },
+          "required": ["recordReadOnlyOperations", "privateJobsEnabled", "scheduledJobsTrackedByDefault", "scheduledJobTrackingForced"]
+        },
+        "storage": {
+          "type": "object",
+          "properties": {
+            "statePersistence": { "type": "string", "enum": ["persistent", "temporary", "memory-only"] },
+            "contentBackend": { "type": "string" },
+            "stateEncrypted": { "type": "boolean" },
+            "maxContentSize": { "type": "integer" }
+          },
+          "required": ["statePersistence", "contentBackend", "stateEncrypted", "maxContentSize"]
+        },
+        "access": {
+          "type": "object",
+          "properties": {
+            "public": { "type": "boolean" },
+            "userAutoCreate": { "type": "boolean" }
+          },
+          "required": ["public", "userAutoCreate"]
+        },
+        "protocols": {
+          "type": "object",
+          "properties": {
+            "rest": { "type": "boolean" },
+            "mcp": {
+              "type": "object",
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "authRequired": { "type": "boolean" }
+              },
+              "required": ["enabled", "authRequired"]
+            },
+            "a2a": {
+              "type": "object",
+              "properties": { "enabled": { "type": "boolean" } },
+              "required": ["enabled"]
+            }
+          },
+          "required": ["rest", "mcp", "a2a"]
+        },
+        "limits": {
+          "type": "object",
+          "properties": {
+            "rateLimitEnabled": { "type": "boolean" },
+            "requestsPerSecond": { "type": "number" },
+            "requestBurst": { "type": "number" },
+            "maxConcurrentJobsPerUser": { "type": "integer" },
+            "admissionBlockMs": { "type": "integer" }
+          },
+          "required": ["rateLimitEnabled", "requestsPerSecond", "requestBurst", "maxConcurrentJobsPerUser", "admissionBlockMs"]
+        },
+        "validation": {
+          "type": "object",
+          "properties": { "output": { "type": "string", "enum": ["off", "warn", "strict"] } },
+          "required": ["output"]
+        },
+        "adapters": {
+          "type": "object",
+          "properties": {
+            "active": { "type": "array", "items": { "type": "string" } },
+            "publicConfig": { "type": "object" }
+          },
+          "required": ["active", "publicConfig"]
+        },
+        "notice": { "type": "string" }
+      },
+      "required": ["venue", "agents", "jobs", "storage", "access", "protocols", "limits", "validation", "adapters", "notice"]
+    }
+  }
+}

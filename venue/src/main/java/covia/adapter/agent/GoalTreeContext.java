@@ -21,7 +21,7 @@ import convex.core.lang.RT;
  * <h3>Context layout (follows attention research: reference at top, recency at bottom)</h3>
  * <ol>
  *   <li>Ancestor context — parent/grandparent conversations at decreasing budgets</li>
- *   <li>Loaded data — inherited + own scoped loads, refreshed each turn</li>
+ *   <li>Loaded data — inherited + own scoped load events</li>
  *   <li>Conversation — compacted segments + live turns, current frame only</li>
  *   <li>Goal — the subgoal description for the current frame</li>
  * </ol>
@@ -51,6 +51,10 @@ public class GoalTreeContext {
 
 	/** Frame-scoped loads (map of path → load metadata) */
 	static final AString K_LOADS = Strings.intern("loads");
+
+	/** Exact initial provider-facing vectors for this frame. Their presence is
+	 * the cache invariant: ordinary source mutation cannot rewrite the prefix. */
+	static final AString K_RENDERED_CONTEXT = Strings.intern("renderedContext");
 
 	/** Frame lifecycle status: absent while live; {@link #STATUS_COMPLETE} /
 	 *  {@link #STATUS_FAILED} written in the same CAS as the terminal turn,
@@ -461,7 +465,15 @@ public class GoalTreeContext {
 
 		// New conversation = existing segments + new segment (no live turns)
 		AVector<ACell> newConversation = segments.conj(segment);
-		return frame.assoc(K_CONVERSATION, newConversation);
+		// Compaction is an explicit prefix rewrite boundary. The next inference
+		// materialises a new initial representation around the compacted history.
+		return frame.assoc(K_CONVERSATION, newConversation).dissoc(K_RENDERED_CONTEXT);
+	}
+
+	/** Persists the exact initial vectors on a frame. */
+	static AMap<AString, ACell> withRenderedContext(AMap<AString, ACell> frame,
+			ContextAssembler.Rendered rendered) {
+		return frame.assoc(K_RENDERED_CONTEXT, rendered.toCell());
 	}
 
 	/**

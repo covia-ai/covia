@@ -26,7 +26,7 @@ Skills solve this with **progressive disclosure**: a compact index (one line per
 
 1. **A skill is an asset.** Skill metadata is ordinary asset metadata — `name`, `description`, and the standard `content` descriptor. The **body is the asset's content**, resolved through the venue's universal content resolution (CAS blob, `content.inline`, `content.dlfs` pinned or live bindings, DLFS drive refs — `Engine.resolveContent`). There is no description-as-body fallback: the description is the index one-liner, never the documentation, and a contentless skill is simply a pure toolset. Skill-specific extras live under a **`skill` facet**, exactly as invocability lives under the `operation` facet. No new type, no schema registration: something is treated as a skill because it is *referenced as one* (declared in `config.skills`, a member of a declared skillset, or the target of `skill_load`).
 
-2. **Built on the loads scope chain — no parallel machinery.** Loading a skill writes an ordinary, skill-flagged entry into the existing context loads tier (session for llmagent, frame for goaltree). Persistence across turns, advisory per-entry budgets, tombstone masking, and unloading via `context_unload` all come from the existing machinery unchanged.
+2. **Built on the loads scope chain — no parallel machinery.** Loading a skill writes an ordinary, agent-managed, skill-flagged entry into the existing context loads tier (session for llmagent, frame for goaltree). Persistence across turns, advisory per-entry budgets, explicit ownership and unloading via `context_unload` all come from the existing machinery unchanged. Operator/caller-pinned skill entries use the same resolver but cannot be unloaded by the agent.
 
 3. **Compatibility with established idioms.** LLMs must see familiar shapes — unfamiliar surface confuses models and wastes their pretraining:
    - Skill metadata is asset metadata; the `skill` facet mirrors the `operation` facet; body-as-content is the asset content model.
@@ -34,11 +34,11 @@ Skills solve this with **progressive disclosure**: a compact index (one line per
    - Directory entries may be **string references** — the same string idiom context entries and `agent:create config` already use.
    - `skill_load` follows the `context_load` / `context_unload` / `more_tools` harness-tool family: same schema style, same "takes effect on your next step" result notes, and unloading reuses `context_unload` rather than adding a parallel tool.
    - The venue op follows the `memory` adapter idiom: one command-dispatched tool, minimal tool-context footprint.
-   - Index block and `[Skill: <name>]` labels follow the `[Context: …]` rendering conventions.
+   - The index block and ownership-specific `[Pinned skill: …]` / `[Loaded skill: …]` labels follow the shared context rendering conventions.
 
-4. **Progressive disclosure, resolved fresh.** The index and every loaded body are re-resolved each turn from their sources — skills stay live, the same freshness contract as every other context entry. Nothing is snapshotted at load except the skill's tool paths and contributed skill-source refs (§5.3).
+4. **Progressive disclosure, appended once.** Loading resolves a skill once and appends its instructions and contributed context to the conversation. Source mutation alone does not rewrite prior model input; an explicit reload appends the newer version. Tool paths and contributed skill-source refs are snapshotted on the loads entry (§5.3).
 
-5. **Fail-visible.** Absent sources and skills are skipped quietly; resolution *errors* render a visible diagnosable line; malformed shapes (a non-vector `config.skills`/`config.skillsets`, a non-string tools or child-ref entry) throw. A loaded skill that vanishes renders a visible `[Skill: <name> — <path> — unavailable: …]` element rather than silently disappearing — a missing skill changes behaviour too much to hide.
+5. **Fail-visible.** Absent sources and skills are skipped quietly; resolution *errors* render a visible diagnosable line; malformed shapes (a non-vector `config.skills`/`config.skillsets`, a non-string tools or child-ref entry) throw. A persistent skill that vanishes keeps its ownership label and adds `unavailable: …` rather than silently disappearing — a missing skill changes behaviour too much to hide.
 
 6. **Additive and opt-in.** An agent declaring neither `config.skills` nor `config.skillsets` behaves exactly as before skills existed. Skills are ordinary assets with no store of their own: authoring uses the existing `covia:write` / `asset:store`. The one skills op that writes, `skills:import` (§8), is a translator over that same lattice write — one SKILL.md in, one `<skillset>/<name>` out — so a body reaches the venue without passing through a model's context.
 
@@ -104,7 +104,7 @@ Body resolution is the venue's **universal content resolution** (`Engine.resolve
 
 Nothing skill-specific here: `content.inline` is an asset-model feature, served by the same resolution for every content consumer (`asset:content`, context entries, skills). A metadata map that is not itself stored in the CAS (e.g. hand-written in a workspace) still serves its metadata-declared content.
 
-**A skill with no content has no body — it is a pure toolset** (`skill.tools` plus the index one-liner), which is exactly a #79 toolset. When a contentless skill is loaded, its `[Skill: <name>]` element shows the description line — a rendering fallback, not a body.
+**A skill with no content has no body — it is a pure toolset** (`skill.tools` plus the index one-liner), which is exactly a #79 toolset. When a contentless skill is persistent, its ownership-specific skill element shows the description line — a rendering fallback, not a body.
 
 Validation (fail-visible): a missing `description` renders a visible index error line (`- <name> — INVALID: missing description`) and `skill_load` refuses it with a diagnosable error. A `skill.tools` or `skill.skills` entry that is not a string is an error at load; a tool path that fails to *resolve* is not — it is reported in the `skill_load` result under `unresolved` so the model can see and adapt (mirrors `config.tools` skip-with-warn behaviour). Contributed skill sources use the normal index behaviour for absent, invalid, and inaccessible sources.
 
@@ -135,7 +135,7 @@ What the parser reads (`Skills.parseFrontmatter`):
 
 This applies wherever the content comes from — a SKILL.md pasted into `content.inline` of a bare metadata map works identically.
 
-**A content ref to a SKILL.md is itself a skill ref.** `file://<root>/<dir>/SKILL.md` and `dlfs/<drive>/<path>` are accepted wherever a skill ref is — a `config.skills` entry, a skillset member value (`w/skills/agent = "file://reference/skills/agent/SKILL.md"`), or a `skill_load {ref}`. The content provider pins its own read (`crud/read` on the `file://` resource), the frontmatter is the metadata, and identity is the hash of that synthesised metadata, so two addresses of one file dedup as one skill. The body is live — an edit on disk shows on the next turn — and so is the index line, since a bare content ref carries no metadata: the file is read on every index pass. `skills:import` lifts `name`/`description` into stored metadata for exactly that reason.
+**A content ref to a SKILL.md is itself a skill ref.** `file://<root>/<dir>/SKILL.md` and `dlfs/<drive>/<path>` are accepted wherever a skill ref is — a `config.skills` entry, a skillset member value (`w/skills/agent = "file://reference/skills/agent/SKILL.md"`), or a `skill_load {ref}`. The content provider pins its own read (`crud/read` on the `file://` resource), the frontmatter is the metadata, and identity is the hash of that synthesised metadata, so two addresses of one file dedup as one skill. The file is read when the index is initialised or the skill is explicitly loaded/reloaded; an edit does not rewrite an active conversation implicitly. `skills:import` lifts `name`/`description` into stored metadata so discovery does not depend on a live file read.
 
 **Importing.** `skills:import {source}` parses one SKILL.md and writes `<skillset>/<name>` (§8); `skills:parse` returns the same metadata without storing it. Both translate the file **as a single skill**: supporting files (`references/`, `scripts/`, `assets/`) are not walked or copied. A body that links to them relatively will point at nothing once imported; bind the ones an agent needs as `skill.context` entries with `file://` refs, or keep the whole skill live with `content: "ref"` so the agent's `file_read` can follow the same root. Nothing derives the name from anything but the frontmatter, except a SKILL.md that declares none, which takes its directory's name (the Agent Skills rule that the two match).
 
@@ -202,7 +202,7 @@ A skill is an asset, and indexing one needs only `crud/read` over its path. An `
 
 Resolution order is **skills before skillsets**, each in declaration order. Name collisions are first-wins, so an explicitly named skill always beats a same-named member of a skillset.
 
-A non-empty declaration of either kind activates both halves of the feature: the per-turn index injection (§4.3) and the `skill_load` tool (§5). A malformed declaration (not a vector, non-string entry) throws at transition time — a configuration error to fix, not to mask.
+A non-empty declaration of either kind activates both halves of the feature: the initial index snapshot (§4.3) and the `skill_load` tool (§5). A malformed declaration (not a vector, non-string entry) throws at transition time — a configuration error to fix, not to mask.
 
 **Diagnostics.** Merely absent refs are not warned about in a user's agent config: they are maybe-style paths resolved live, and an empty `w/skills` is the designed default. The following *are* reported:
 
@@ -243,7 +243,7 @@ A loaded skill may contribute more of both kinds through `skill.skills` and `ski
 
 Effective sources are the configured refs followed by the immediate contributions of loaded skills, deduplicated first-wins **per kind**, so configured refs retain precedence. Each contributed ref has the same grammar and capability checks as a configured one; contributing a ref does not grant permission to read it.
 
-Children are **discovered, not auto-loaded**. Loading `workspace` returns the refreshed effective index immediately, makes the skills under `v/skills/data` and the single `sql-review` path addressable by `skill_load {name}` on the next tool-loop step, and includes them in the next per-turn index. Loading one of those children may reveal a further layer. The resolver never walks an unloaded subtree, so cycles are inert and a broad hierarchy does not flood the prompt.
+Children are **discovered, not auto-loaded**. Loading `workspace` returns the refreshed effective index in its acknowledgement, makes the skills under `v/skills/data` and the single `sql-review` path addressable by `skill_load {name}` on the next tool-loop step, and names newly revealed entries explicitly. Loading one of those children may reveal a further layer. The resolver never walks an unloaded subtree, so cycles are inert and a broad hierarchy does not flood the prompt.
 
 Contributed refs are denormalised onto the parent's loads entry, like tool refs. Editing a loaded parent's lists therefore needs unload/reload; the target directories and skill metadata remain live. Unloading the parent retracts its contributed sources. A child already loaded remains loaded independently and continues to contribute its own until it too is unloaded.
 
@@ -253,13 +253,13 @@ An entry point is installed at **both** its family path and its `root/` mirror, 
 
 ### 4.3 The skills index
 
-One budget-tracked system message injected each turn, immediately after the `config.context` entries and before the loads:
+One budget-tracked system message snapshotted when the rendered context is initialised:
 
 ```
 [Skills]
 Named skill packs you can load with skill_load({name: "..."}). Loading injects the
-skill's instructions into your context (persists across turns; unload with
-context_unload), adds its tools to your palette, and may reveal more skills.
+skill's instructions into your context across turns, adds its tools to your palette,
+and may reveal more skills. A loaded skill's header gives its exact removal key.
 - pdf-processing — Extract text and tables from PDF files
 - code-review — Review code against the house style (loaded)
 - broken-skill — INVALID: missing description
@@ -267,7 +267,7 @@ context_unload), adds its tools to your palette, and may reveal more skills.
 ```
 
 - One line per skill: `- <name> — <description>`, with a `(loaded)` suffix when a skill-flagged loads entry for it is in effective context.
-- Resolved fresh each turn — one `resolvePath` per source (plus one per string-ref directory entry); no caching.
+- Later catalog changes do not rewrite it. An explicit load returns a refreshed index and revealed names in its appended tool exchange. An operator `agent:update` refreshes existing sessions by appending a new catalog system event only when the exact rendered catalog differs; repeating the same update appends nothing. Compaction/reset may build a replacement initial snapshot.
 - Rendering delegates to the same function the `skills:list` op uses (§8), so the injected index and the op output can never drift.
 
 ---
@@ -290,12 +290,12 @@ A `name` that matches nothing fails with a message naming the skills that ARE av
 
 1. Resolves the skill (§3) — failure returns a diagnosable `Error:` tool result naming the skill and reason.
 2. Writes a **skill-flagged entry** into the innermost loads tier (session for llmagent, frame for goaltree).
-3. Resolves the skill's tools — `skill.tools`, plus the asset itself when it carries an `operation` facet (§3.4) — into LLM tool definitions and activates them **within the same transition**, available from the next tool-loop iteration, exactly like `more_tools`. Operator-pinned `config.loads` entries marked `skill: true` resolve the same tool declarations before each inference; explicitly supplied `tools` metadata remains authoritative.
-4. Adds the skill's contributed refs to the effective discovery sources and reports what that gained: `revealed` names the skills that were not discoverable before, alongside the refreshed `skillIndex`. Named children can be loaded from the next tool-loop iteration and appear in the next per-turn index.
+3. Resolves the skill's tools — `skill.tools`, plus the asset itself when it carries an `operation` facet (§3.4) — into exact LLM tool definitions and appends one trusted tool-addition event. They activate **within the same transition**, available from the next tool-loop iteration, exactly like `more_tools`, without changing the initial tool vector. A native provider may consume that structured event directly; the portable path calls the fixed `invoke_tool` dispatcher with the added name and arguments. Operator-pinned `config.loads` entries marked `skill: true` contribute their declarations to the initial fixed vector; explicitly supplied `tools` metadata remains authoritative.
+4. Adds the skill's contributed refs to the effective discovery sources and reports what that gained: `revealed` names the skills that were not discoverable before, alongside the refreshed `skillIndex`. Named children can be loaded from the next tool-loop iteration and appear in the refreshed discovery index.
 
    `revealed` exists because the index alone was not enough: the reader already has the turn-start `[Skills]` block and the refreshed index, but must notice they differ. A live agent observably did not — it reported "no new skills" while listing the revealed ones. Naming them removes the inference.
-5. Loads the skill's `skill.context` entries into the same tier alongside the body.
-6. Returns the body immediately, so the instructions are usable in the same turn without waiting for the next context build:
+5. Appends the body as a loaded-skill system event and the skill's `skill.context` as one `loaded_context` result under the same key. The next inference in the same tool loop therefore sees both without regenerating either.
+6. Returns a compact acknowledgement. The body and contributed data occur only in the appended events, not again in this result:
 
 ```json
 {
@@ -303,51 +303,45 @@ A `name` that matches nothing fails with a message naming the skills that ARE av
   "skill": "pdf-processing",
   "path": "w/skills/pdf-processing",
   "tools": ["file_read", "schema_validate"],
-  "skills": ["v/skills/pdf-specialists"],
   "skillIndex": "- pdf-table-extraction — Extract tables from PDFs\n...",
   "unresolved": ["v/ops/gone/op"],
-  "body": "## PDF processing\n...",
-  "note": "Skill instructions stay in context each turn (unload with context_unload). Tools are available from your next step."
+  "note": "Skill instructions were appended to context. Its path is the exact unload key if you later need to remove it; ordinary tool results need no cleanup. Tools and contributed skills are active from your next step."
 }
 ```
-
-`body` is the display text: the skill's content, or the description one-liner for a contentless (toolset) skill.
 
 ### 5.3 The loads entry
 
 Key = the skill's canonical path (what the index shows). Value:
 
 ```json
-{"skill": true, "budget": 2000, "ts": 1789000000000, "label": "pdf-processing",
+{"skill": true, "budget": 2000, "ts": 1789000000000, "label": "pdf-processing", "appended": true,
  "tools": ["v/ops/file/read", "v/ops/schema/validate"],
- "skills": ["v/skills/pdf-specialists"]}
+ "skills": ["v/skills/pdf-specialists"], "skillsets": []}
 ```
 
-- The **body is not denormalised** — it re-resolves from the path each turn through the §3.2 chain, staying live like every other load.
-- The **tool paths and child skill-source refs are denormalised** onto the entry (including the skill's own path as a tool when it is an operation); their targets still resolve fresh each turn. Trade-off: editing either list after load requires unload/reload to take effect; body and context edits apply on the next turn. This keeps the per-turn cost one resolution per skill and the entry a plain map.
-- Because the entry is a plain loads-map entry, everything in the scope chain applies unchanged: tombstone masking, advisory budget accounting, and explicit unloading.
-- **Skills dedup by content identity, not path.** A skill's identity is its resolved metadata's value hash — the asset identity Convex already computes and memoises on every cell (and which pins the body: `content.sha256`/`content.inline` live inside the metadata). Nothing is persisted for this: identities are compared **live** (entries re-resolve, consistent with the body/tools liveness contract) and accumulated in a transient set per pass. Loading the same skill from a second address (a directory ref vs the asset hash, mirrored directories) is a no-op naming the existing entry; rendering skips a second entry with an already-seen identity (e.g. across tiers); and the index's `(loaded)` marker matches by identity, so a skill loaded via `a/<hash>` still marks its directory line. Reloading under the *same* path overwrites (budget updates).
-- **The agent runtimes carry no skill knowledge.** Rendering dispatches on the entry inside the loads phase of the context assembly (`Loads`), and tool contribution is the generic rule *"a loads entry may declare `tools`, `skills` and `skillsets`"* — kind-agnostic, applied per loop iteration so the palette and the index always mirror effective loads (load activates mid-transition; unload retracts). A plain session load — a note pinned at mint with `{text, tools, skillsets}` — widens a session's palette and discovery exactly as a loaded skill does. Skills are the first producer of such entries; future additions (memory packs, op bundles) ride the same mechanism. The runtime's only skill surface is the `skill_load` harness tool, whose handler delegates wholesale to the skills resolver.
+- The **body is not duplicated on the entry** — its rendered instruction event is already in conversation. `appended: true` tells later assembly not to resolve or re-inject it.
+- The **tool paths and child skill-source refs are snapshotted** onto the entry, including empty vectors and the skill's own path as a tool when it is an operation. Editing the body, context or these lists requires an explicit reload, which appends the new material rather than rewriting history.
+- Because the entry is a plain loads-map entry, everything in the scope chain applies unchanged: explicit ownership, advisory budget accounting, and explicit unloading of agent-managed entries.
+- **Skills dedup by content identity, not path.** A skill's identity is its resolved metadata's value hash — the asset identity Convex already computes and memoises on every cell. Identity is compared when an explicit load/reload resolves the candidate. Loading the same skill from a second address (a directory ref vs the asset hash, mirrored directories) is a no-op naming the existing entry; reloading under the same path appends the newer body and updates its budget.
+- **The agent runtimes carry no skill knowledge.** Rendering dispatches on the entry inside the loads phase of the context assembly (`Loads`), and tool contribution is the generic rule *"a loads entry may declare `tools`, `skills` and `skillsets`"*. Initial entries join the fixed manifest. A later load or unload changes the live route map and appends the corresponding tool-state event; it never regenerates the initial palette or skill body. A plain session load — a note pinned at mint with `{text, tools, skillsets}` — widens a session's palette and discovery exactly as a loaded skill does. Skills are the first producer of such entries; future additions (memory packs, op bundles) ride the same mechanism. The runtime's only skill surface is the `skill_load` harness tool, whose handler delegates wholesale to the skills resolver.
 
 ### 5.4 Unloading
 
-`context_unload {path: "w/skills/pdf-processing"}` — the existing tool. Removing the entry removes the injected body, the skill's context entries, its tools, and its contributed discovery sources from the next turn onward. Already-loaded children remain independent entries. There is deliberately no `skill_unload`: one unload idiom, no near-duplicate tools to confuse a model.
+`context_unload {path: "w/skills/pdf-processing"}` — the existing tool, using the exact key shown in the loaded-skill header. Removing an agent-loaded entry deactivates its tools and contributed discovery sources from the next inference. Its earlier body and context remain honest stale history until explicit compaction/reset; the unload result is the newer state event. Already-loaded children remain independent. A pinned skill has no unload key and is rejected. There is deliberately no `skill_unload`: one unload idiom, no near-duplicate tools to confuse a model.
 
 ---
 
-## 6. Per-Turn Rendering
+## 6. Load-Event Rendering
 
-Each skill-flagged entry in effective loads, per turn:
+When a skill is loaded or explicitly reloaded:
 
-1. Re-resolve the skill from its path.
-2. Inject one system message: `[Skill: <name> — <path>]` followed by the body **verbatim** (markdown preserved — the §6.4 rendering contract of AGENT_CONTEXT.md); a contentless (toolset) skill shows its description one-liner instead.
-3. Resolve the skill's `skill.context` entries through the standard context loader and render each as a tool exchange from the skill (`loaded_context` with `from: skill:<name>`, keyed by the skill's path so they unload with it) — the skill body is instruction, the context it brings along is data (AGENT_CONTEXT.md §5.5).
-4. Contribute the skill's tools to the turn's palette (deduplicated against existing tool names).
+1. Resolve the skill from its path.
+2. Append one system message followed by the body **verbatim**: `[Loaded skill: <name> — unload key: <path>]` for an agent-loaded skill, or `[Pinned skill: <name> — <source>]` for operator/caller-owned context. A contentless toolset shows its description one-liner instead.
+3. Resolve `skill.context` through the standard loader and aggregate its data under the same ownership class. For an agent-loaded skill, `loaded_context[<path>]` contains one entry or a vector of entries, so the body and all contributed data share one exact unload key. The skill body is instruction; the context it brings along is data.
+4. Contribute the skill's tools to the palette (deduplicated against existing tool names).
 5. Contribute its immediate `skill.skills` refs to the next skills index and named lookup scope.
 
-A skill that fails to resolve renders a visible `[Skill: <name> — <path> — unavailable: <reason>]` element. Advisory aggregate budget pressure never makes a loaded skill silently disappear.
-
-Load order for each inference: system prompt → `config.context` → **skills index** → a freshly resolved loads snapshot (skill bodies and other loaded entries) → conversation.
+A skill that fails to resolve appends a visible ownership-specific label with `unavailable: <reason>`. Advisory aggregate budget pressure never makes a persistent skill silently disappear. Later inferences reuse the appended cells; only an explicit reload resolves again.
 
 ---
 
@@ -356,10 +350,10 @@ Load order for each inference: system prompt → `config.context` → **skills i
 | | llmagent | goaltree |
 |---|---|---|
 | Loads tier written | session (`sessions.<sid>.loads`) | active frame (`frame.loads`) |
-| Persistence | across turns for the session, via the existing loads write-back | frame lifetime; **inherited copy-on-push by subgoals** (like all frame loads, tombstones included) |
-| Tool activation | same transition — from the next tool-loop iteration | same transition — from the next iteration; the body ALSO re-renders mid-run (goaltree rebuilds loads context per iteration) |
+| Persistence | across turns for the session, via the existing loads write-back | frame lifetime; **inherited copy-on-push by subgoals** |
+| Tool activation | same transition — from the next tool-loop iteration | same transition — from the next iteration |
 | Tool offered when | any skill source declared (automatic) | any skill source declared (automatic), or bare `"skill_load"` in `config.tools` (registry opt-in) |
-| Unload scope | session | frame — unloading an inherited skill masks it for that frame only |
+| Unload scope | session, agent-managed entries only | frame, agent-managed entries only — removing an inherited copy leaves the parent's copy untouched |
 
 A subgoal therefore starts with its parent's loaded skills and may load/unload its own without affecting the parent — the same lexical-scoping semantics as every other load.
 
@@ -398,7 +392,7 @@ There is **no skill store**. Skills are ordinary assets: create and update them 
 
 The defaults are venue-configurable (`adapters.skills.defaultSkillsets` / `defaultSkills`, see [CONFIG.md](CONFIG.md#adapter-configuration)) and published at `v/info/adapters/skills`, so a venue curating its own library answers discovery from it and clients read the entry point rather than assuming `v/skills/root`. They govern these operations only: agents declare their own sources, and an agent declaring none has skills off deliberately.
 
-**Rendering is not an operation.** The per-turn `[Skills]` index is built by `ContextAssembler` calling `Skills.renderIndex` directly — it never goes through an op. There is deliberately no callable render: it would exist only to pin an index into `config.context` as an assemble-op, which nothing ships and which a first-class source declaration does better, since that also activates `skill_load`. Add one if a real consumer appears.
+**Rendering is not an operation.** The initial `[Skills]` snapshot is built by `ContextAssembler` calling `Skills.renderIndex` directly — it never goes through an op. There is deliberately no callable render: it would exist only to pin an index into `config.context` as an assemble-op, which nothing ships and which a first-class source declaration does better, since that also activates `skill_load`. Add one if a real consumer appears.
 
 ---
 
@@ -441,7 +435,7 @@ Venue-installed skills ship as classpath resources registered by an adapter via 
 
 **Module adapters ship their own skills the same way**: `readResource` resolves against the adapter's own classloader, so a venue module jar (see venue/CLAUDE.md §Venue modules) carries its skill JSONs alongside its op definitions and calls `installSkill` in `installAssets` — the skill appears in `v/skills` exactly when the module is loaded, and the static library list never has to know. covia-sql's `sql` skill is the reference example.
 
-**The venue skill library** ships this way, one resource per skill under `venue/src/main/resources/skills/`, and **each skill is owned by the adapter it teaches**: an adapter calls `installSkill("<name>", "/skills/<name>.json")` in its `installAssets()` (`GridAdapter` ships `grid`, `HITLAdapter` ships `hitl`, `FileAdapter` ships `files`, …), so the skill is published exactly when the adapter is active and retracted when it is disabled or unloaded — the same rule as its operations. `SkillsAdapter.LIBRARY` holds only the platform skills that are about Covia and the venue as a whole: `covia`, `venue`, `discovery`, `provenance`, `lattice`, `skills`, and the `building` family it opens — `skill-authoring` (shape, body, storage) and `skill-import` (SKILL.md files, in place or imported). The root `skills` skill teaches discovery and loading only; format-specific material lives one load deeper, so the always-on index and the root body stay small and an agent pays for the SKILL.md details only when it has such files to bring in. Bodies live in `content.inline`; each declares the operations it teaches. General templates (`minimal`, `skilled`, `goaltree`, `full`) index the complete `v/skills` directory. Specialist templates use stable single-skill paths such as `v/skills/models` to keep their per-turn indexes role-focused. Every template keeps `w/skills` first, so user-authored skills remain visible and shadow same-named venue skills. `SkillsLibraryTest` drift-guards materialisation, bodies, declared tool resolution, compact rendering, and the curated template sources.
+**The venue skill library** ships this way, one resource per skill under `venue/src/main/resources/skills/`, and **each skill is owned by the adapter it teaches**: an adapter calls `installSkill("<name>", "/skills/<name>.json")` in its `installAssets()` (`GridAdapter` ships `grid`, `HITLAdapter` ships `hitl`, `FileAdapter` ships `files`, …), so the skill is published exactly when the adapter is active and retracted when it is disabled or unloaded — the same rule as its operations. `SkillsAdapter.LIBRARY` holds only the platform skills that are about Covia and the venue as a whole: `covia`, `venue`, `discovery`, `provenance`, `lattice`, `skills`, and the `building` family it opens — `skill-authoring` (shape, body, storage) and `skill-import` (SKILL.md files, in place or imported). The root `skills` skill teaches discovery and loading only; format-specific material lives one load deeper, so the always-on index and the root body stay small and an agent pays for the SKILL.md details only when it has such files to bring in. Bodies live in `content.inline`; each declares the operations it teaches. General templates (`minimal`, `skilled`, `goaltree`, `full`) index the complete `v/skills` directory. Specialist templates use stable single-skill paths such as `v/skills/models` to keep their discovery indexes role-focused. Every template keeps `w/skills` first, so user-authored skills remain visible and shadow same-named venue skills. `SkillsLibraryTest` drift-guards materialisation, bodies, declared tool resolution, compact rendering, and the curated template sources.
 
 ---
 
@@ -451,7 +445,7 @@ Venue-installed skills ship as classpath resources registered by an adapter via 
 |---------|--------------|
 | **Assets** | A skill *is* an asset: standard metadata, body as content via the universal content resolution (CAS, `content.inline`, `content.dlfs` pinned/live), extras under a `skill` facet exactly as invocability sits under `operation`. |
 | **Operations** | Facets compose: an asset with both `operation` and `skill` is a self-documenting tool — loading it injects its manual and offers the op itself (§3.4). |
-| **Context loads / scope chain** | Skills are loads entries with a `skill` flag — the scope chain, budgets, eviction, and `context_unload` are reused, not duplicated. |
+| **Context loads / scope chain** | Skills are loads entries with a `skill` flag — the scope chain, budgets, explicit ownership, and `context_unload` are reused, not duplicated. |
 | **`config.context`** | Pinned baseline knowledge, always loaded. Skills are the on-demand complement, declared with `config.skills` / `config.skillsets`. |
 | **Agent templates** | Same philosophy (config is data), same string-reference idiom. A template declares what an agent *is*; a skill declares what an agent *can pick up*. Templates may ship `config.skills` / `config.skillsets`. |
 | **`more_tools` (goaltree)** | Skill tool activation reuses its mechanics. `more_tools` remains for raw op paths; skills add the instructions half and cross-runtime persistence. |
@@ -469,7 +463,7 @@ Venue-installed skills ship as classpath resources registered by an adapter via 
 - **Budget is an advisory rendering/accounting weight**: string bodies render verbatim regardless (the existing `renderValue` contract); the budget bounds structured exploration but never triggers silent eviction.
 - **`agent:context` inspection** uses the same effective scope, load renderer, contributed tools, ordering, and capability context as a live first inference.
 - **Skillsets** read the whole map per turn to build the index — fine at expected scale; revisit with a keys-only listing if venues grow hundreds of skills. Grouping keeps the always-on index small, so a wide library costs an index line only once a family is opened.
-- **Skill authors are trusted by the loading agent's operator**: a skill's instructions enter the prompt verbatim, its tools join the palette, and its child sources join discovery. Point your skill sources only at libraries you trust — the same trust rule as `config.context` (child reads and tool invocations remain capability-checked as usual).
+- **Skill loading is an instruction-trust decision**: a resolved skill body enters the prompt verbatim as a system message whether it was pinned or selected with `skill_load`. Trust comes from the operator-supplied skill catalog, never from an agent/caller `trusted` flag. Point sources only at libraries you trust. Context data bundled by the skill remains a tool result, and child reads/tool invocations remain capability-checked as usual.
 
 ---
 

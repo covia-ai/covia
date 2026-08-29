@@ -26,44 +26,45 @@ Every inference is one call with one input:
 }
 ```
 
-`messages` is a **flat array of `{role, content}`** in four roles — `system`, `user`, `assistant`, `tool`. There is no nested structure, no typed section, no ordering metadata. Everything that looks structured to the model is a **labelled text element** inside a content string. Two message kinds carry more than text, and the assembler passes them through untouched: an assistant message may carry `toolCalls`, a `tool` message carries its call id and result, and a user message may carry an array of content blocks for vision.
+`messages` is a **flat array of messages** in four roles — `system`, `user`, `assistant`, `tool`. Most carry text in `content`; a tool result may instead carry its typed map/vector in `structuredContent`. An assistant message may carry `toolCalls`, a `tool` message carries its matching call id and result, and a user message may carry an array of content blocks for vision.
 
 `tools` is part of the prompt too — section 0 of the sequence (§3.2.3): every provider serialises the definitions ahead of the messages, so they are the first bytes of the cached prefix.
 
 So assembly is: *compute each element, in order, and concatenate*. The value of the design is not in the data structure — it is in **which elements, in what order, produced by whom**.
 
-**The unit of assembly is one inference, not one cycle.** Within a tool loop the whole prompt is rebuilt before every call: loads are re-read, so a tool's write to a loaded path is visible on the next inference; the tool-loop messages so far are appended in band; the tail is rendered again after them.
+**The unit of submission is one inference.** The stable representation is simpler: a fixed tool vector and one append-only message vector. Each inference reuses them, appends the current turn, and renders only the volatile tail again. Persistent sources are resolved when their load is appended, not polled and re-rendered before every call.
 
 **Assembly is a pure function**: `assemble(Spec) → Prompt`. The Spec (§8) carries everything, the clock included; the assembler reads nothing else. The same Spec yields the same Prompt, which is what makes `agent:context` inspection exact and every section testable without a venue.
 
 This document covers that. The grammar of what an individual context entry may be lives in §6; the scope chain that decides which entries are in play lives in §7.
 
-### 1.1 Element labels
+### 1.1 Instruction labels and data boundaries
 
-Every element the assembler renders is `{kind, key?, body}`, and **one function renders it**, in one of three dialects chosen by the model's declared `labels` option: `bracket` (the default), `xml` or `header`. Labels are the interface between the prompt and everything that reads it back — the model, `agent:context` inspection and the tests — which is why there is one renderer and not a header convention per section: changing a label changes it everywhere it is read, including the tests that probe for it.
+Labels are for **instruction and diagnostic blocks**, not for untrusted loaded data. Operator-trusted context and skill bodies use them in `system` messages. Data has a stronger interface: an injected assistant tool call followed by a provider-native `tool` result whose `structuredContent` carries source, label and content/error/absence. Adding textual wrappers around the same data duplicates metadata, costs tokens and blurs the security boundary.
 
-The complete set:
+The label renderer therefore handles only blocks that genuinely travel as instructions or requests, in one of three dialects chosen by the model's declared `labels` option: `bracket` (the default), `xml` or `header`:
 
 | Element | `bracket` (default) | `xml` | `header` |
 |---------|---------------------|-------|----------|
 | Skills index — one line per skill, `(loaded)` against those in context | `[Skills]` | `<skills>` | `## Skills` |
-| Loaded skill — the path is its unload key | `[Skill: <name> — <path>]` | `<skill name="…" path="…">` | `## Skill: <name> — <path>` |
-| Context entry — the label is its unload key | `[Context: <label>]` | `<context label="…">` | `## Context: <label>` |
-| Entry whose source failed | `[Context: <label> — unavailable: <reason>]` | `<context label="…" unavailable="…"/>` | `## Context: <label> — unavailable: <reason>` |
+| Pinned skill — no unload handle | `[Pinned skill: <name> — <source>]` | `<pinned-skill name="…" source="…">` | `## Pinned skill: <name> — <source>` |
+| Agent-loaded skill — the path is its unload key | `[Loaded skill: <name> — unload key: <path>]` | `<loaded-skill name="…" unload-key="…">` | `## Loaded skill: <name> — unload key: <path>` |
+| Trusted operator context | `[Pinned context: <label>]` | `<pinned-context label="…">` | `## Pinned context: <label>` |
 | Late system message (§3.2.1) | `[system: …]` | `<system>` | `## System` |
 | Compacted conversation segment | `[Compacted: <N> turns] <summary>` | `<compacted turns="…">` | `## Compacted: <N> turns` |
 | Ancestor context (goal tree) | `[Ancestor Context]` | `<ancestors>` | `## Ancestor context` |
 | Tool-failure diagnostic | `[Tool failure: <name>] <reason>` | `<tool-failure name="…">` | `## Tool failure: <name>` |
-| Pending results | `[Pending job results]` | `<pending-results>` | `## Pending job results` |
 | Outstanding task | `[Tasks assigned to you]` | `<tasks>` | `## Tasks assigned to you` |
 | Empty-state signal | `[No pending tasks, messages, or job results. …]` | `<no-input>` | `## No input` |
 | Budget warning | `[Context budget] <pct>% …` | `<context-budget>` | `## Context budget` |
 | Unavailable tools | `[Configured tools unavailable in this session. …]` | `<unavailable-tools>` | `## Unavailable tools` |
 | Current date | `Current date: <date>.` | `Current date: <date>.` | `Current date: <date>.` |
 
-A block is its label followed by its body; in `xml` the body is followed by the closing tag. A one-line element — the date — is a line in every dialect. Names, paths, labels and reasons are rendered verbatim in each.
+A block is its label followed by its body; in `xml` the body is followed by the closing tag. A one-line element — the date — is a line in every dialect. Fields interpolated into an instruction label come only from operator configuration or validated runtime metadata and are escaped for the chosen dialect. Labels on untrusted declarations remain data fields in tool results.
 
-`bracket` is cheap in tokens, reads naturally in logs, and is plain text: it never collides with markdown a body may contain, and it reads the same whether an element is one of many in a system block or a message on its own. `xml` marks where an element **ends** as well as where it begins — which matters when a long body is followed by another element in the same system block — and is the delimiter Anthropic documents for multi-document prompts. `header` suits models whose guidance favours markdown sections, at two costs: a heading reads oddly when the element is a message on its own, and it competes with headings inside a body. A model that benefits from either alternative opts in on its asset. The dialect is applied at render time to ephemeral elements, and segments and diagnostics are rendered from stored data, so nothing persisted carries a dialect: an agent can change model without its history changing.
+`bracket` is cheap in tokens, reads naturally in logs, and is plain text. `xml` marks where an instruction block ends as well as where it begins. `header` suits models whose guidance favours markdown sections, at the cost of competing with headings inside an instruction body. A model that benefits from either alternative opts in on its asset. The dialect is fixed for a persisted context; changing it rebuilds the prefix deliberately.
+
+**Prompt-injection boundary.** Trust and lifetime are independent: `pinned` says who owns/removes an entry; `trusted` says whether its resolved bytes have instruction authority. Untrusted values stay under `content` in `structuredContent`, alongside sibling provenance fields, and the edge preserves the native call/result boundary. A provider that accepts only textual tool content receives canonical JSON in the `tool` role; it is never flattened into instruction text. Only an operator declaration can admit ordinary context as trusted. A skill body is also instruction because `skill_load` explicitly selects a trusted skill asset; data bundled by the skill still travels as a tool result. This is defence in depth, not a security decision delegated to the model: capabilities and dispatch checks remain authoritative even if the model follows malicious text.
 
 ---
 
@@ -71,7 +72,7 @@ A block is its label followed by its body; in `xml` the body is followed by the 
 
 1. **One assembly, every runtime.** The order is defined once. A runtime chooses *what it puts in*, never *where it lands*. Divergence should be impossible to express, not merely discouraged.
 
-2. **Cache-efficient by construction.** Providers cache on a prefix. Anything that changes invalidates everything after it, so elements are ordered by **how often their bytes change** — stable first, volatile last — and the band boundaries are the cache boundaries (§3.1). This is a property of the sequence, not of anyone remembering to be careful.
+2. **Cache-efficient by construction.** The rendered message vector is deterministic and append-only. Existing cells are reused byte-for-byte; ordinary change appends, and only a small set of explicit operations may rebuild the prefix (§3.1). This is a property of the representation, not of anyone remembering to be careful.
 
 3. **Maintainable: sections are functions.** Each section is a function of the Spec returning messages. It can be read, tested and changed alone. Assembly is a mutable accumulator that knows only *append*, *mark* and *bytes so far* — it holds no subsystem knowledge.
 
@@ -83,117 +84,124 @@ A block is its label followed by its body; in `xml` the body is followed by the 
 
 ## 3. The section sequence
 
-### 3.1 Bands
+### 3.1 Stable prefix and cache boundaries
 
-Four bands, ordered by change frequency. The band is the *reason* an element sits where it does:
+There is no separate cache lifecycle object. Persist exactly two stable values: the fixed tool vector and the rendered message vector. The latter begins with the identity and initial context, then grows in the order the model sees conversation, loads, skills and tool-state changes:
 
-| Band | Changes when | Cache consequence |
-|------|--------------|-------------------|
-| **Fixed head** | configuration changes | Identical across cycles — the cacheable prefix |
-| **Live surface** | the working set changes, or the data it reflects changes | Stable while the agent's loads and their sources are stable |
-| **Conversation** | a turn is added | Append-only within a cycle; rewritten only by the two sanctioned rewrites (§5.6) |
-| **Volatile tail** | every inference, or daily | Never cached; invalidates only itself |
+```
+tools + messages + workingTurn + volatileTail
+```
 
-**Band boundaries are cache boundaries.** On a provider that caches an explicitly marked prefix (`cachePrefix`), the edge marks the tool definitions, the system slot (head and live surface), the conversation as it stood when the cycle began, and the tool loop so far — four breakpoints, Anthropic's maximum; the tail is never marked. Within a tool loop the last mark moves forward each inference while the previous one stays a valid read point, so each inference reads the one before. The bands are therefore not a convention about ordering — they are the literal cache structure of every request.
+`tools`, `messages` and `workingTurn` are immutable CVM vectors. Completing a cycle is `messages = messages.concat(workingTurn)`; adding a load or other dynamic change is the same append operation. Assembly does not reconstruct those vectors from mutable configuration, workspace paths, a skill registry or an adapter registry.
 
-**The rule for placing a new section:** it goes in the earliest band whose change frequency it does not exceed. That is the whole answer to "where does this go". A section that cannot name its band has not been placed; it has been appended.
+No parallel cache-key system is needed. Compare successive tool vectors with ordinary Convex equality; when they are equal, locate the reusable message prefix with the vectors' common-prefix operation. Both are hash-accelerated by the CVM representation. If the tool vectors differ, the reusable provider prefix starts at zero and the change must have been an explicit rebuild. Tool-call ids required by a provider are persisted transport references pairing a call with its result; they are not cache identities and are never regenerated while replaying a call.
 
-The band is the *expected* change frequency. Content can be more volatile than its band: an op entry in pinned context that returns a listing changes whenever the listing does, and busts everything after it from the live surface down. The ordering cannot prevent that; it can only make the cost legible. Within `config.context`, entries render in declared order, so stable entries go first.
+Determinism applies when the venue renders a cell: tool and entry order comes from canonical declared/load order, structured data uses the canonical renderer, and inference-local clocks, registry iteration order, random synthetic ids and byte counts never enter that rendering. Provider-returned call ids are conversation data and are persisted verbatim rather than regenerated. Given equal starting vectors and an equal appended change, rendering produces equal result vectors.
+
+**Cache boundaries** are indices into this representation. On a provider that caches an explicitly marked prefix (`cachePrefix`), the edge may mark the end of the initial head, `messages` as it stood when the cycle began, and `workingTurn` as it grows; `volatileTail` is never marked. A provider may impose a smaller breakpoint limit, but it must not change logical order to accommodate it.
+
+Only an intentional prefix rebuild invalidates earlier cells:
+
+- explicit compaction or conversation reset;
+- a hard security removal that must make old content absent rather than merely inactive;
+- a change to the model, provider-shaping profile, label dialect, base system prompt or fixed tool/schema manifest;
+- an incompatible renderer/schema version.
+
+**Reload is not a rebuild.** Reloading dynamic context, a skill or an operation result appends another load event, even for the same key. The newer result is closer to the reply and becomes the current value; the older one remains honest stale history. This is how models already experience repeated tool reads, and it preserves the full cached prefix in the usual case. Source mutation alone does nothing: the prior value remains until an explicit reload appends the new one.
+
+**Test contract.** Equal initial inputs produce equal tool/message vectors; appending an event leaves the prior message vector as the common prefix; changing only the volatile tail leaves every marked vector equal; and an explicit rebuild is the only test that expects an earlier prefix to change. Tests do not pin content merely to exercise rendering. When fixed rendered content is unavoidable, they use a production constant or the same production helper that creates it, never a hand-copied duplicate.
 
 ### 3.2 The sequence
 
-| # | Section | Band | Role | Contents |
+| # | Section | Region | Role | Contents |
 |---|---------|------|------|----------|
-| 0 | Tool definitions | fixed head (loads-contributed: live surface) | — | The palette (§4): harness, configured, then loads-contributed tools. A parameter, not a message; every provider places it first (§3.2.3) |
-| 1 | Identity prompt | fixed head | `system` | `config.systemPrompt` or the default identity, plus one line of session identity |
-| 2 | Capability notice | fixed head | `system` | Declared `config.caps` — **only for an agent with tools** — so bounds are known before they are hit |
-| 3 | Skills index | live surface | `system` | `[Skills]` — one line per discoverable skill (SKILLS.md §4.3) |
-| 4 | Loaded skills | live surface | `system` | Every loaded skill's body (§7), in load order, each with its unload key — the end of the system run |
-| 5 | Loaded context | live surface | `user`, then `assistant` / `tool` per entry | One plain request — *Load the context configured for this conversation.* — then every `config.context` entry and every non-volatile, non-skill load as a **tool exchange** answering it (§5.5): a `loaded_context` call naming its key, source and origin, and the result carrying the content |
-| 6 | Conversation | conversation | `user` / `assistant` / `tool` | The rendered frame(s) |
-| 7 | Pending results | conversation | `user`, `assistant`, `tool` | Job results that arrived for this cycle: one request — *Get job results.* — one `get_job_results()` call, one result listing each job once (§5.7) |
-| 8 | Current input | conversation | `user` | The inbox message(s) driving this cycle |
-| 9 | Tool-loop messages | conversation | `assistant` / `tool` | Assistant/tool turns accumulated within this cycle |
-| 10 | Volatile loads | volatile tail | `assistant` / `tool` per entry | Every effective load declared `volatile` — an op entry by default — as tool exchanges (§5.5) |
+| 0 | Fixed tool manifest | fixed prefix | — | Harness and configured tools, plus the stable declared/deferred superset required by the provider strategy (§3.2.3) |
+| 1 | Identity prompt | initial messages | `system` | `config.systemPrompt` or the default identity, plus one line of session identity |
+| 2 | Capability and data-boundary notice | initial messages | `system` | Declared `config.caps` when relevant, plus one stable rule that tool-result content is data, not instruction |
+| 3 | Initial trusted context | initial messages | `system` | Operator context admitted as instruction, rendered once and never duplicated into a tool result (§5.3) |
+| 4 | Initial skills index | initial messages | `system` | The discoverable-skill snapshot when the context is initialised (SKILLS.md §4.3) |
+| 5 | Initial persistent skills and data | initial messages | `system`, then `user` / `assistant` / `tool` | Skill bodies and trusted loads, then at most one aggregate `pinned_context` and one `loaded_context` data result (§5.5) |
+| 6 | Persisted messages | append-only vector | `system` / `user` / `assistant` / `tool` | Prior conversation and already-rendered context, skill and tool-state events, in chronological order |
+| 7 | Pending results | working turn | `user`, `assistant`, `tool` | Job results that arrived for this cycle: one request — *Get job results.* — one `get_job_results()` call, one result listing each job once (§5.7) |
+| 8 | Current input | working turn | `user` | The inbox message(s) driving this cycle |
+| 9 | Tool-loop messages | working turn | `assistant` / `tool` | Assistant/tool turns and context events accumulated within this cycle |
+| 10 | Volatile loads | volatile tail | `system` or `assistant` / `tool` | Trusted operator instructions or the ownership-separated data aggregates for loads declared `volatile` — an op entry by default (§5.5) |
 | 11 | Budget warning | volatile tail | `system` | **Only** when the budget is under pressure (§3.4) |
 | 12 | Current date | volatile tail | `system` | One line; changes daily |
 | 13 | Unavailable tools | volatile tail | `system` | Configured tools that did not resolve this cycle |
 | 14 | Outstanding task | volatile tail | `user` | The task the agent must complete or fail — the last thing before the reply |
-| — | Empty-state signal | conversation | `user` | Replaces 7–8 when there is nothing to act on |
+| — | Empty-state signal | working turn | `user` | Replaces 7–8 when there is nothing to act on |
 
-The *Role* column is the role a section emits — the role that is true of its content. Sections 1–2 are **one `system` message** — just the identity for an agent without tools: they change together and are the first thing in every request. Sections 11–13 are **one `system` message**, composed of whichever parts are present: the tail is re-rendered every inference, and one message is the cheapest shape for it. How a system message that follows the conversation reaches a given provider is the edge's business (§3.2.1, §3.5), never a section's.
+The *Role* column is the role a section emits — the role that is true of its content. The initial consecutive system sections coalesce when the persisted context is first rendered. Sections 11–13 are **one `system` message**, composed of whichever parts are present: the tail is re-rendered every inference, and one message is the cheapest shape for it. How a system message that follows conversation reaches a given provider is the edge's business (§3.2.1, §3.5), never a section's.
 
 ### 3.2.1 The role rule
 
-Roles are **semantic**, not positional. `system` is what the venue, the operator or the runtime says *as instruction* — identity and reference, a loaded skill, a notice, a diagnostic, a compaction summary. `user` is what has happened or must be acted on — pending results, the input, the goal, the empty-state signal. `assistant` and `tool` are the agent's own turns and their results — and, marked as such, the calls the venue makes on the agent's behalf to bring loaded content in (§5.5). Loaded content is **data**, whoever owns it — the agent's own workspace included — and data never travels in the system channel: a provider-native tool result is the boundary models are trained to treat as data, which is the whole reason the venue loads it that way. A section emits the role that is true of its content, and the stored conversation keeps it, so provenance survives. Nothing in assembly depends on the provider.
+Roles are **semantic**, not positional. `system` is what the venue, the operator or the runtime admits *as instruction* — identity, operator-trusted context, a loaded skill, a notice, a diagnostic, a compaction summary. `user` is what has happened or must be acted on — pending results, the input, the goal, the empty-state signal. `assistant` and `tool` are the agent's own turns and their results — and, marked as such, the calls the venue makes on the agent's behalf to bring context data in (§5.5). Ordinary context loads are data and never acquire system authority merely because they persist or are pinned. A section emits the role that is true of its content, and the stored conversation keeps it, so provenance survives. Nothing in assembly depends on the provider.
 
-Where a `system` message that follows the conversation actually lands is provider-dependent, and model-dependent on top. Anthropic and Gemini have no system role in the message list — system content is a top-level parameter — so a client must do *something* with a late one, and the naive thing, hoisting it, is wrong: it is cached as part of the head, so a "tail" date or a compaction nudge busts the cached head on every inference, and a compaction summary leaves its place in the conversation. OpenAI-compatible APIs keep a late system message in place, with its meaning left to the chat template. Local models served through Ollama may honour only the leading one.
+Where a `system` message that follows conversation actually lands is provider- and model-dependent. Some APIs accept native mid-conversation system blocks, some have only a top-level system parameter, and some local templates honour only the leading instruction. The naive fallback — hoisting a late instruction into the head — is wrong: it rewrites the cached prefix and moves the instruction away from the event that made it relevant.
 
 So the **edge normalises, where the provider requires it** (§3.5), driven by the model's declared `systemMessages`:
 
 - `"multiple"` — nothing to do. System messages reach the model where they were placed.
-- `"single"` — the **leading run** of system messages (the head and the live surface) coalesces into the provider's system parameter, as a list of blocks where the API takes them, so the head/live boundary still carries a cache mark. Any **later** system message becomes a `user` message with its content wrapped `[system: …]` (§1.1), in place: the model still sees who is speaking, and the message stays exactly where it was put.
+- `"midConversation"` — the leading run becomes the provider's system parameter and later system events become its native mid-conversation system blocks, in place.
+- `"single"` — the **leading run** of system messages coalesces into the provider's system parameter, as a list of blocks where the API takes them. Any **later** system message becomes a `user` message with its content wrapped `[system: …]` (§1.1), in place: the model still sees who is speaking, and the message stays exactly where it was put.
 - `"none"` — as `"single"`, with the leading run folded into the first user message.
 
 An operator whose model mishandles late system messages declares `"single"` for it and gets the same treatment. No section ever knows.
 
-Two consequences are load-bearing. Every request contains at least one non-system message, because band 3 always ends with a `user` or `tool` message — the input, pending results, the empty-state signal, or the last tool result — so the edge never has to invent a turn. And consecutive same-role messages are normal — every provider merges or accepts them — so the §1.1 labels, not the message boundaries, are what keep elements distinct.
+Two consequences are load-bearing. Every request contains at least one non-system message — initial context data, persisted conversation, the input, pending results, the empty-state signal or the last tool result — so the edge never has to invent a turn. And consecutive same-role messages are normal — every provider merges or accepts them. Instruction blocks use §1.1 labels; data blocks use their tool name and structured result schema.
 
 ### 3.2.2 Ephemeral and persisted
 
-Bands 1, 2 and 4 are **ephemeral**: rendered for one inference from live sources and never written to the conversation. Band 3 is **persisted as rendered**: pending results, the input and the tool-loop messages land in the frame at the end of the cycle in exactly the form the model saw them, which is what makes the band append-only for the next cycle. Two exceptions, both deliberate: the empty-state signal occupies the input slot for its inference and is not persisted; and a diagnostic the runtime must add to the conversation — a tool failure it could not return as a tool result — is persisted as a `system` turn with its source recorded, because it is an event in the sequence.
+The message vector is **persisted as rendered**. Pending results, input, tool-loop messages and context events append in exactly the form the model saw them. The working turn is the only uncommitted prefix state. Two exceptions are deliberate: the empty-state signal occupies the input slot for its inference and is not committed; and a diagnostic the runtime must add — a tool failure it could not return as a tool result — is committed as a `system` event with its source recorded.
+
+The volatile tail is **ephemeral**. Its values may be resolved for every inference because its declaration explicitly opts out of prefix caching. Nothing else is made fresh implicitly.
 
 **Warnings are never conversation.** The budget warning, the compaction nudge, the date and the unavailable-tools notice describe the state of *this inference*. They belong in the tail, render once, and vanish when the condition does. A warning written into the conversation would be re-read on every later inference as though it were still true.
 
 ### 3.2.3 Tool definitions
 
-Tool definitions are **section 0**. They are not a message — every provider takes them as a separate parameter — but they are prompt bytes, and every provider serialises them **ahead of everything else**: Anthropic documents its cache order as tools, then system, then messages; chat templates inject them into the system region. The assembler therefore controls two things about them and not a third: **which** are present (the palette, §4) and their **order** — harness tools, then configured tools, then loads-contributed tools, each group in declared order — never their position, which is first.
+Tool definitions are **section 0**. They are not a message — providers take them as a separate parameter — but they are prompt bytes placed ahead of the messages. The base manifest is therefore fixed for the persisted context, canonically ordered and rendered once.
 
-That position has a cost the bands cannot hide. Harness and configured tools change with configuration and belong to the fixed head; loads-contributed tools change with the working set and belong to the live surface — yet they sit *before* the head, so **a change to the tools array invalidates the whole prefix**, head included. It is the one place where live-surface content precedes fixed-head content, and it is the provider's doing, not ours. Two consequences for design:
+A tool becoming available later must not cause the venue to rebuild that array silently. The provider strategy chooses one of three representations, in order:
 
-- A skill that contributes tools is a heavier load than one that contributes text. Load it at the start of a task, not in the middle of one.
-- A skill can name operations the agent calls through the generic invoke tool instead of contributing definitions, keeping the array stable. The trade is a definition the model can see against a prefix that survives.
+1. declare the stable/deferred superset required by the provider, then append native `tool_addition` / `tool_removal` events when support exists;
+2. keep the fixed generic search/invoke tools and append a capability-description event, with dispatch through the generic tool;
+3. if the exact direct schema must change and neither representation is available, rebuild the prefix explicitly.
 
-Tool definitions are charged to the budget first (§3.4) and need no cache mark of their own: the head mark covers them.
+An adapter or plugin loading or unloading mutates the venue capability registry, not the fixed tool vector of an existing context. Revocation is always enforced at dispatch even if an earlier event remains visible to the model. A soft removal appends a removal event; only an explicit rebuild makes the historical definition absent.
+
+The same rule applies to conditional capabilities. The static `complete_task` / `fail_task` schemas stay in the fixed harness manifest and reject calls when no task is in scope. Skill- and `more_tools`-contributed operations append exact addition/removal state and are invoked through the fixed generic dispatcher where the provider has no native representation. `context_unload` also stays declared whenever skill loading makes persistent agent-managed context possible.
+
+Tool definitions are charged to the budget first (§3.4). Dynamically appended definitions are charged where their addition event enters the message vector.
 
 ### 3.3 The top-level function
 
-The sequence above is not a description of the code — it *is* the code:
+Initialisation resolves and renders the starting inputs once. Inference assembly is deliberately smaller:
 
 ```java
 static Prompt assemble(Spec spec) {
     Prompt p = new Prompt(spec.budget());
 
-    // Section 0 — a parameter, not a message; charged first, placed first by every provider
     p.tools(spec.tools());
+    p.addAll(spec.messages());
+    p.markAt(Band.INITIAL, spec.initialEnd());
+    p.mark(Band.COMMITTED);
 
-    // Fixed head — one system message; identical every inference
-    p.add(systemMessage(identityPrompt(spec), capabilityNotice(spec)));
-    p.mark(Band.HEAD);
-
-    // Live surface — re-resolved each inference; moves only when the working set moves
-    p.add(pinnedContext(spec, p.remaining()));
-    p.add(skillsIndex(spec));
-    p.add(loadedElements(spec));
-    p.mark(Band.LIVE);
-
-    // Conversation — append-only within a cycle
-    p.add(conversation(spec, p.remaining()));
-    p.add(pendingResults(spec));
-    p.add(currentInput(spec));
-    p.add(toolLoopMessages(spec));
-    p.mark(Band.CONVERSATION);
+    p.addAll(spec.workingTurn());
+    p.mark(Band.WORKING);
 
     // Volatile tail — re-rendered every inference, never cached
+    p.add(contextExchanges(spec.volatileEntries()));
     p.add(systemMessage(budgetWarning(p.used(), p.budget()), currentDate(spec), unavailableTools(spec)));
-    p.add(outstandingTask(spec));                 // user — the last thing before the reply
+    p.add(outstandingTask(spec));
     return p;
 }
 ```
 
-`Prompt` is a mutable accumulator and the whole request: `tools(defs)` sets the tool array and charges its bytes, `add(messages)` appends and charges theirs, `mark(band)` records where a band ends, `remaining()` and `used()` report the budget position. It knows nothing about skills, tools or capabilities. Every section is a plain function of the Spec returning messages; an empty return contributes nothing, and `systemMessage` joins the parts that are present into one message.
+`Prompt` is a mutable request accumulator: `tools(defs)` sets and charges the tool array, `addAll(messages)` appends and charges immutable vectors, `markAt` / `mark` record cache boundaries, and `remaining()` / `used()` report the budget position. It knows nothing about skills, tools or capabilities. Initial rendering and event append own resolution; replay does not.
 
-`p.remaining()` is passed explicitly in the three places that need it — §5.3, which sizes structured rendering from it; §5.6, which gives the conversation renderer its allowance; and the tail, which reports on it. That is the *only* order-dependence in the system, and visible arguments state it more honestly than a running total threaded invisibly through every section.
+`p.remaining()` is passed explicitly when an entry is first appended, when compaction builds a replacement prefix, and when the tail renders. Already persisted entries are never re-truncated to fit a later request.
 
 ### 3.4 The budget
 
@@ -201,8 +209,8 @@ static Prompt assemble(Spec spec) {
 
 How it is spent:
 
-- The **fixed head** and the **live surface** are what they are. Loads are never evicted: the agent put them there and only the agent takes them out.
-- The **conversation** is the elastic band. It receives the remaining allowance and meets it by the two sanctioned rewrites of §5.6 — elision, which is automatic, and compaction, which needs the agent.
+- The **fixed tools and persisted messages** are what they are. Persistent content is never auto-evicted or silently re-rendered.
+- The **working turn** appends to the message vector. Explicit compaction rebuilds the prefix when space must be reclaimed (§5.6).
 - The **tail** is small; it is charged like everything else and never cached.
 
 What the budget does, and nothing else:
@@ -210,11 +218,11 @@ What the budget does, and nothing else:
 | Position | Behaviour |
 |----------|-----------|
 | any | per-entry render sizing: a structured entry is capped at a twentieth of what remains when it renders (§5.3) |
-| ≥ 70% | the tail carries one line — `[Context budget]` — saying the budget is filling and that every element's header is its unload key |
+| ≥ 70% | the tail carries one line — `[Context budget]`; it names exact `loaded_context` keys only when agent-managed entries exist, otherwise says the persistent material is pinned |
 | ≥ 90% | the line says compaction is required before further work; the harness offers `compact` |
 | over | the prompt is sent anyway; if the provider rejects it the cycle fails with the size and the remedy (`agent:context`, `context_unload`, `compact`) |
 
-**Never silent.** Byte accounting is not a token bound across providers, so the runtime never removes context on its own authority. An inventory of what is loaded does not belong in the prompt either: it restates the elements rendered above it, and its byte counts change every inference.
+**Never silent.** Byte accounting is not a token bound across providers, so the runtime never removes or rewrites context on its own authority. A soft `context_unload` prevents future use but cannot reclaim already rendered bytes; explicit compaction or reset does that. An inventory of what is loaded does not belong in every prompt either: it restates the events already rendered and its byte counts would change every inference.
 
 ### 3.5 The edge
 
@@ -223,83 +231,131 @@ The assembler's output is provider-neutral. The level-3 adapter, reading the mod
 | Declared | The edge |
 |----------|----------|
 | `systemMessages: "multiple"` | passes system messages through where they are placed |
+| `systemMessages: "midConversation"` | delivers the leading run through the provider's system parameter and maps later system events to native mid-conversation blocks in place |
 | `systemMessages: "single"` | delivers the leading system run as the provider's system parameter — a list of blocks where the API takes them, one joined text where it does not — and converts every later system message to a `[system: …]` user message in place (§3.2.1) |
 | `systemMessages: "none"` | as `"single"`, with the leading run folded into the first user message |
 | `labels` | nothing at the edge beyond the wrapper above — the dialect is applied by the one renderer (§1.1), which the edge also uses for that wrapper |
-| `cachePrefix` | turns the band marks into the provider's cache controls: tools and the system slot by the client's own flags, the conversation-at-cycle-start and tool-loop marks as per-message breakpoints carried in the L3 input as `cacheMarks`; `cache: false` on the call switches all of it off |
-| always | maps the tool definitions to the provider's schema, in the given order, and `tool` messages and `toolCalls` to its shapes, merging consecutive same-role messages where the API requires alternation |
+| `cachePrefix` | turns the initial, committed-message and working-turn marks into the provider's cache controls; `cache: false` on the call switches all of it off |
+| dynamic-tool support | maps persisted tool-state events to native addition/removal blocks; without it, uses the fixed generic-tool strategy or requires an explicit rebuild (§3.2.3) |
+| always | maps the base tool manifest to the provider's schema, in the given order, and `tool` messages and `toolCalls` to its shapes, merging consecutive same-role messages where the API requires alternation |
 | always | **never reorders, never drops, never adds content** |
 
 Nothing else about a provider needs handling: its context size is already in the budget.
 
 ---
 
-## 4. Four phases
+## 4. Resolution and assembly
 
-Assembly is the last of four steps; each produces an input the next needs:
+Mutable state is consulted only when initialising context, appending an explicit event or rendering a declared volatile value:
 
 ```
 resolveAuthority(config, ctx)                 →  capsCtx
-resolveLoads(engine, capsCtx, chain, fixed)   →  elements, loadTools, routes
-resolvePalette(config, harness, loadTools)    →  tools, routes, unavailable
-assemble(spec)                                →  prompt
+initialise(engine, capsCtx, config, chain)     →  tools, messages, initialEnd
+appendEvent(engine, capsCtx, messages, change) →  messages.concat(renderedEvent)
+assemble(tools, messages, working, volatile)  →  prompt
 ```
 
 - **Authority** first: everything that reads the lattice reads under the agent's capability-narrowed context.
-- **Loads** next, and they produce more than messages: a loaded skill contributes tool operations and their routes. The snapshot is resolved **once per inference** and never persisted.
-- **Palette** merges harness tools, configured tools and loads-contributed tools, in that order; a name already fixed by harness or config is never shadowed by a load. The palette also knows which configured tools failed to resolve.
-- **Assembly** then has everything and produces only the prompt.
+- **Initialisation** snapshots the model/rendering profile, fixed palette, skills index and starting effective loads. It resolves and renders that state once.
+- **Event append** handles an explicit load, reload, unload, skill or tool-state change. It resolves the affected value once, renders a canonical event once and concatenates it. It does not regenerate unrelated context.
+- **Assembly** concatenates immutable vectors and renders only the declared volatile suffix. It reads no registry or persistent source.
 
-Four functions, four return values. A runtime that needs `capsCtx` calls `resolveAuthority`; it does not build a context to extract it.
+A runtime that needs `capsCtx` calls `resolveAuthority`; it does not build a context to extract it. Merely assembling another inference never observes external mutation. An explicit reload appends what it observes; only a separately requested compaction/reset rebuilds earlier cells.
 
 ---
 
 ## 5. Section notes
 
 ### 5.1 Identity prompt
-`config.systemPrompt`, else a default identity, followed by one line of session identity: the venue name, the model when configured, and the session id when one is in scope — the agent's handle for reporting back into this conversation from deferred work. Rebuilt every cycle from live config, so an `agent_update` applies on the next cycle with no freeze-on-first-use caching. A runtime may append a notice of its own — goaltree's subgoal notice for child frames — provided it is stable for the life of its scope. Nothing that changes within a session belongs here.
+`config.systemPrompt`, else a default identity, followed by one line of session identity: the venue name, the model when configured, and the session id when one is in scope — the agent's handle for reporting back into this conversation from deferred work. It is rendered when context is initialised. An `agent_update` affects new contexts; an existing context keeps its rendered identity until an explicit compaction or reset rebuilds it, so active history is never rewritten accidentally. A runtime may append a notice of its own — goaltree's subgoal notice for child frames — when that frame opens. Nothing inference-local belongs here.
 
-`systemPrompt` is the text itself, or **one context entry** in the grammar of §6 — `{ref: "w/prompts/mina"}`, `{ref: "dlfs/vault/prompts/mina.md"}`, `{text}`, `{op, input}`, `{job}` — resolved through the same loader as pinned context and loads (`ContextLoader.resolveText`). Three things differ from a load: it renders as the identity, with no header; it resolves **once per cycle** (`effectiveModelConfig`, both runtimes), so the head is identical across a tool loop and a change to the file shows on the next cycle; and it is required — an entry that does not resolve, or resolves to something that is not text, fails the cycle with the reason, because a missing identity is a configuration error. `agent:create` warns when the entry does not resolve for the creator. A workspace path is one lattice read and a DLFS file one content read; neither creates a job.
+`systemPrompt` is the text itself, or **one context entry** in the grammar of §6 — `{ref: "w/prompts/mina"}`, `{ref: "dlfs/vault/prompts/mina.md"}`, `{text}`, `{op, input}`, `{job}` — resolved through the same loader as pinned context and loads (`ContextLoader.resolveText`). Three things differ from a load: it renders as the identity, with no header; it resolves **once at initialisation or explicit rebuild**; and it is required — an entry that does not resolve, or resolves to something that is not text, fails initialisation with the reason, because a missing identity is a configuration error. `agent:create` warns when the entry does not resolve for the creator. A workspace path is one lattice read and a DLFS file one content read; neither creates a job.
 
-**Head discipline:** the head holds what every cycle of *this* agent needs and nothing more. It is cached, but providers without caching pay for it on every inference, and an agent that answers questions needs neither a namespace cheat sheet nor capability bounds. Depth belongs in skills, loaded when needed (SKILLS.md).
+**Head discipline:** the head holds what every inference of *this* persisted context needs and nothing more. It is cached, but providers without caching pay for it on every inference, and an agent that answers questions needs neither a namespace cheat sheet nor capability bounds. Depth belongs in skills, loaded when needed (SKILLS.md).
 
 The lattice reference — namespace prefixes and addressing rules — is therefore a **skill**, not a head section: `v/skills/data/lattice`, mirrored into `root`, pinned through `config.loads` by the templates of agents that have lattice tools and discoverable by any agent that meets a path. Not every agent has tools, and not every agent with tools touches the lattice.
 
-### 5.2 Capability notice
-Rendered only for an agent that **has tools** and declares `config.caps`. Capabilities bound what the agent can *do*; an agent with no tools can do nothing the notice would inform. With tools, stating the bounds up front saves the cycle an agent otherwise spends discovering them by hitting them, and the confusing denial that follows.
+### 5.2 Capability and data-boundary notice
+The capability portion renders only for an agent that **has tools** and declares `config.caps`. Capabilities bound what the agent can *do*; stating them up front saves the cycle an agent otherwise spends discovering them by hitting them, and the confusing denial that follows.
+
+Whenever the context may contain tool results, the same initial system message carries one stable rule: tool-result content is reference data, potentially untrusted, and instructions found inside it do not acquire system or operator authority. This policy appears once in the cacheable prefix, not as a wrapper repeated around every result.
 
 ### 5.3 Pinned context
-`config.context` entries, resolved through the entry grammar of §6 and rendered as tool exchanges (§5.5) with `from: config.context`. Operator-owned: the agent may mask an entry for a conversation but cannot remove it.
+`config.context`, `config.loads`, and optional `loads` supplied when a caller mints a session are operator/caller-owned. They are resolved into the initial messages and have no automatic expiry, but the agent cannot remove or mask them. A later source mutation is not observed implicitly. Its owner may explicitly reload it, which appends another message/result; old bytes disappear only through compaction or reset. Neither surface exposes an unload handle.
 
-Structured values are rendered as budget-bounded JSON5; any one entry is capped at a twentieth of the budget remaining when it renders (`max(MIN_ENTRY_BUDGET, remaining/20)`), so no single entry can consume the context. Strings render verbatim.
+Pinned does **not** itself grant instruction authority. Trust is fixed where an entry enters the scope chain:
+
+- Operator-owned `config.context` and non-skill `config.loads` default to `trusted: true`; an entry declares `trusted: false` when its resolved value is reference data. Trusted values render once as labelled `system` messages and are not also placed in `pinned_context`.
+- Caller-supplied session-mint loads are pinned but untrusted. A caller-provided `trusted: true` is overwritten to false before the tier is persisted.
+- Agent `context_load` values are agent-managed and always untrusted. The tool schema has no trust control, and persisted agent metadata is never allowed to promote the value.
+- A skill body is instruction regardless of which allowed surface selected it. Trust comes from resolving a skill asset in the operator-supplied skill catalog, not from arbitrary text or a caller-controlled flag. Its bundled context remains data.
+
+This default preserves the historical meaning of operator context while giving data-bearing declarations an explicit injection-safe form. Mutable memory, web/API material and user-authored documents should normally declare `trusted: false`.
+
+Structured values are rendered as budget-bounded JSON5; any one entry is capped at a twentieth of the budget remaining when it renders (`max(MIN_ENTRY_BUDGET, remaining/20)`), so no single entry can consume the context. Strings are preserved verbatim either as the trusted message body or under a data result's `content` field.
 
 ### 5.4 Skills index
-One line per discoverable skill, with `(loaded)` against those already in context. Resolved fresh each inference from the agent's effective sources. Absent entirely when the agent declares no skill sources. See SKILLS.md §4.3.
+One line per discoverable skill, with `(loaded)` against those already in context. Snapshotted when context is initialised. A later catalog change appends a catalog event only when explicitly surfaced; otherwise it becomes visible after the next prefix rebuild. Absent entirely when the agent declares no skill sources. See SKILLS.md §4.3.
 
-### 5.5 Loaded elements
-Every entry in the effective loads chain (§7), rendered through the same resolver as pinned context and re-read on every inference (§7.2). A skill-flagged entry is instruction and renders as a system element, `[Skill: <name> — <path>]` plus its body (§1.1). **Everything else is data and renders as a tool exchange**: an `assistant` turn carrying one `loaded_context` call — not a callable tool — and the `tool` result carrying the content. The call's arguments are the provenance the model reasons with: `key` (the unload handle), `from` (`config.context`, `config.loads`, `loaded` for a session or frame load, or `skill:<name>` for a skill's own context entries), the source in its own terms (`ref` for a path or asset, `op` + `input`, `job` + `path`, or `source: text`), and the `label` when one was declared. A failure is a tool error (`Error: <label> unavailable: <reason>`), never a silent gap; an absent source produces no exchange at all.
+### 5.5 Persistent elements
+Every entry in the effective loads chain (§7) uses the same resolver, but it is resolved **once per load**. Skill bodies and operator entries stamped trusted are instructions. Pinned skills render as `[Pinned skill: <name> — <source>]`; agent-loaded skills render as `[Loaded skill: <name> — unload key: <key>]`; trusted ordinary entries render as `[Pinned context: <label>]`. Every untrusted value renders behind a provider-native tool-result boundary.
 
-Why a tool exchange and not a system block: a provider-native tool result is the one boundary models are trained to treat as data, and the system channel is the one an injected instruction most wants to be in. The venue really did run that operation or read that path for this cycle, so the call is an honest record of it — prompt-only, never persisted as a turn, never counted in the cycle record; `agent:context` shows it with `source: load`. The live exchanges answer one plain user turn — *Load the context configured for this conversation.* — so the block is an ordinary cycle, request → calls → results, rather than calls from nowhere; it is also the leading `user` message a provider may require before an assistant tool call. It carries no label and no description: the calls that answer it say what was loaded and from where, and what the model should make of loaded data is prompt content, which is the operator's. Volatile exchanges (below) follow the input and need no request of their own.
+At initialisation the starting data is aggregated once per ownership class:
 
-A loads entry is `key → spec`. By default the key **is** the entry's source — a lattice path, an asset, a content ref — and the spec carries only `budget`, `label`, `ts`, `skill`, `tools`, `skills`, `skillsets`. A spec may instead declare its own source, exactly one of `ref`, `text`, `op` + `input`, `job` + `path` — the map-entry grammar of §6.2 — in which case the key is simply the entry's identity. The loads tiers are therefore the same grammar as `config.context`, keyed so an entry can be unloaded; a note, a re-run listing or a job result can be pinned at the session tier by whoever minted the session, or by the agent through `context_load`.
+- `pinned_context` returns an ordered vector. It contains only untrusted operator/caller entries and exposes no unload handles.
+- `loaded_context` returns a map from exact unload key to the entry. If one skill contributes several context values, that map value is a vector.
 
-Each element carries its **unload key**: a skill in its header, an exchange in its call's `key`. `context_unload` takes that key, and a skill is otherwise only ever named, so without this the key is invisible.
+A later agent load or reload appends one `loaded_context` exchange containing only the affected keys. An owner reload appends trusted system messages and/or one `pinned_context` data exchange for only the affected entries; neither form exposes unload handles. One invocation may resolve several entries, so data remains one map/vector rather than one synthetic call per key. Already rendered values are neither repeated nor regrouped on later inferences. Loading the same key again needs no special replacement event: the later result is the current one because it appears later in the conversation.
 
-**Placement.** Elements render in **load order** — undated (configured) entries first, then by `ts` — so loading appends after everything already in context; nothing already rendered moves. An element declared `volatile: true` — the default for an `op` entry, which re-runs every inference — renders in the **tail** (§3.2 section 10), after the conversation and every cache mark, so a result that changes each turn busts only itself; `volatile: false` pins an op result whose output is known to be stable into the live surface, where it caches. The band is chosen by declaration, never by observing the content. Declare a path load volatile when its value is likely to change during the conversation — a queue, a status, something the agent writes to.
+When the agent initiated it, the ordinary `context_load` result is only a compact acknowledgement of the keys loaded; the values themselves appear exactly once, in the appended `loaded_context` exchange. Likewise `skill_load` acknowledges activation, while the body appears once as the appended instruction and its context entries appear once in `loaded_context`.
 
-A volatile element has two costs the live surface does not: it is re-sent uncached on every inference, and it sits between the latest input and the reply. So a non-skill volatile element renders **within its budget whatever its shape** — a structured value through the explorer as always, a string cut at the budget with one trailer naming the bytes left out and the two ways to get them (reload with a larger `budget`, or fetch the value with a tool). A volatile load is a compact current-state view; a long one belongs in a tool call, which lands in the loop as an ordinary result. And it should be unloaded as soon as it is no longer needed — `context_unload` says so.
+Each data entry carries its source in its own terms (`ref`, `op` + `input`, `job` + `path`, or `source: text`), `label` only when it adds information, and exactly one of `content`, `error`, or `absent: true`. An agent-managed default path load omits `ref` because its `loaded_context` map key already identifies the same path. Metadata and content exist only in the result: the injected call arguments are `{}`. The exchange's provider-required call id is derived deterministically from its persisted event position and exists solely to pair the assistant call and tool result; there is no synthetic per-entry id and replay never generates a new one.
 
-Failures are visible, never silent: a load that stops resolving renders `[… — unavailable: <reason>]` rather than vanishing, because a missing element changes behaviour too much to hide.
+Why tool results and not labelled system blocks: a provider-native tool result is the boundary models are trained to treat as data, and the system channel is the one an injected instruction most wants to occupy. The venue really did run those operations or reads when it appended the exchange. Initial aggregates answer one plain user turn — *Load the context available for this conversation.* — which also supplies the leading user message some providers require. Later exchanges enter the vector where the corresponding load or reload occurred. Volatile aggregates follow the input and need no request of their own.
+
+The result schema, not a prose wrapper, tells the model what it received. Each `pinned_context` vector element and `loaded_context` map value has provenance plus exactly one of `content`, `error`, or `absent: true`. Even when `content` is a string containing apparent instructions, it remains nested inside the `tool` result; the venue never splices an untrusted value beside a trusted heading or into a system block.
+
+Canonical shape, before provider mapping:
+
+```json
+[
+  {"role": "assistant", "toolCalls": [
+    {"id": "context:7", "name": "loaded_context", "arguments": {}}
+  ]},
+  {"role": "tool", "id": "context:7", "name": "loaded_context",
+   "structuredContent": {
+     "w/reference/policy": {
+       "label": "Reference policy",
+       "content": "potentially untrusted source text"
+     }
+   }}
+]
+```
+
+The call name establishes why the result is present, the map key is its unload handle, and the nested fields describe the data. No extra `[Context: …]` text is needed.
+
+This is deliberately different from an ordinary tool result such as `covia_read` or `covia_inspect`. An ordinary result keeps its real tool name in the persisted message vector and is never copied into either context aggregate. It remains history until explicit compaction, but it is not active persistent context and never needs `context_unload`.
+
+A loads entry is `key → spec`. By default the key **is** the entry's source — a lattice path, an asset, a content ref — and the spec carries only modifiers. A spec may instead declare exactly one of `ref`, `text`, `op` + `input`, or `job` + `path`, in which case the key is its identity. Ownership, not map shape or age, decides whether that identity is unloadable.
+
+Only agent-managed elements expose an **unload key**, in the `loaded_context` result map or a loaded-skill header. `context_unload` accepts one exact key or a `paths` array of exact keys. It rejects display labels, ordinary tool arguments, and pinned keys; it never manufactures a mask over pinned context. The base tool remains present whenever the scope has a writable tier, including while that tier is empty, so loading or unloading context does not mutate section 0.
+
+A successful soft unload appends a compact state event listing the affected keys and any skill/tool deactivations; it never repeats their content. When the agent called `context_unload`, its persisted tool result is that event. An owner-initiated change uses an attributed system event. Folding the newest event for a key determines whether it is active, while the prior bytes remain honest history until compaction or reset.
+
+**Placement.** Starting elements render in declared/load order in the initial messages; later elements append where they are loaded, so nothing already rendered moves. An element declared `volatile: true` — the default for an `op` entry — renders in the **tail** (§3.2 section 10), after every cache mark. A non-volatile entry is resolved once per load; loading it again appends the newer result. The placement is chosen by declaration, never by observing the content. Declare a queue, status or other genuinely current-state view volatile; use an ordinary tool call when freshness is needed only on demand.
+
+A volatile element is re-sent uncached on every inference and sits between the latest input and the reply. It therefore renders **within its budget whatever its shape** — a structured value through the explorer as always, a string cut at the budget with one trailer naming the bytes left out and the two ways to get them (reload with a larger `budget`, or fetch the value with a tool). A volatile load is a compact current-state view; a long one belongs in an ordinary tool call. Its declaration persists until explicitly unloaded or changed by its owner; its rendered result does not. Neither kind auto-expires.
+
+Failures are visible, never silent: a skill or trusted entry keeps its instruction label and reports unavailability; a data entry carries `error` in its ownership aggregate. A later reload appends a successful result; inference assembly does not retry it. An absent optional pinned source remains visible as a trusted `absent` diagnostic or an untrusted `{absent: true}` data entry. An absent agent-managed dynamic load contributes no value.
 
 ### 5.6 Conversation
 Runtime-supplied frames, rendered by one `ConversationRenderer` for every runtime. llmagent supplies its session's single frame; goaltree supplies its frame stack, ancestors first at decreasing budgets and the active frame last (GOAL_TREE.md). The assembler does not know the difference.
 
-The band is append-only **within a cycle**: every inference of a tool loop sees exactly what the previous one saw, plus the new tool-loop messages. Across cycles there are exactly two sanctioned rewrites, both deliberate trades of cache for context size:
+The message vector is append-only **across cycles as well as within one**: every inference sees exactly the previous immutable vector plus newly appended events and the working turn. Calls and results remain paired and byte-identical. No end-of-cycle scratch-elision pass rewrites the conversation.
 
-- **Scratch elision** (the default; `renderHistory: "full"` opts out). A completed cycle renders as its user input and final assistant reply; its tool calls and tool results are dropped *together*, because providers require a call and its result to be both present or both absent. It happens at the latest possible point — the cycle that has just completed — which is the rewrite that invalidates the least, and it is the automatic half of the budget's elasticity (§3.4).
-- **Compaction.** A range of turns collapses into a `[Compacted: N turns] summary` segment whose summary the agent wrote, because only the agent knows what mattered. It rewrites from the segment onward, so it happens in coarse steps when the budget asks for it, never every cycle. The `compact` tool is a context tool, available to every runtime.
+**Compaction is the one ordinary rewrite.** A selected range collapses into a `[Compacted: N turns] summary` whose summary the agent wrote, because only the agent knows what mattered. The runtime replaces the persisted message vector with an explicitly compacted representation. It may omit obsolete tool chatter and superseded/unloaded context because the cache invalidation is intentional and observable. The `compact` tool is a context tool, available to every runtime.
 
-Everything else in the band is an append. Segments and diagnostic turns are `system` turns in the stored conversation — authored by the runtime, in sequence — and the edge keeps them in place on every provider (§3.2.1).
+Everything else is an append. Context state is obtained by folding its events in order; a repeated load makes its newest result current without pretending the model never saw the older one. That small amount of stale history is normal for an LLM conversation, while recency puts the relevant value nearest the reply. Segments and diagnostic events are `system` turns — authored by the runtime, in sequence — and the edge keeps them in place on every provider (§3.2.1).
 
 ### 5.7 Pending results
 Job results that completed for this cycle — the mechanism by which asynchronous work re-enters the conversation. A result is data, so it arrives as every result does (§5.5): one plain request — *Get job results.* — one `get_job_results()` call, and one tool result listing each job once: its id and status, then its output (strings verbatim, structured values bounded) or, for a job that did not complete, its recorded `error`. One call rather than one per job — the ids would only be repeated, and a listing is the natural answer to the plural request; a failed job is data about that job, not a failed fetch, so the result is not a tool error. Placed before the current input so that the input, the thing to act on, is closest to the reply.
@@ -310,7 +366,7 @@ The line this draws, once: **a result renders as a tool exchange; a request rend
 The inbox message(s) driving this cycle; goaltree has none — its goal rides in the task slot (§5.13). When there is neither input nor pending results, the **empty-state signal** takes the slot: one `user` line saying so, so the agent can act on its role or report idle. It is content, not padding — its role as the message that keeps a system-only request legal (§3.2.1) is a consequence, not its purpose.
 
 ### 5.9 Tool-loop messages
-Assistant and tool messages accumulated *within* this cycle. These are conversation, not preamble: they sit inside the band, before the tail, so each inference of the loop shares its prefix with the previous one through the last tool result and only the tail is re-rendered. A provider reply whose `finishReason` is `length` is incomplete: the runtimes do not execute or persist its partial tool calls or content. They append one runtime diagnostic asking for a complete concise regeneration and retry once; a second truncated reply fails the cycle explicitly.
+Assistant and tool messages accumulated *within* this cycle. These are conversation, not preamble: they sit in the working vector before the tail, so each inference of the loop shares its prefix with the previous one through the last tool result and only the tail is re-rendered. A provider reply whose `finishReason` is `length` is incomplete: the runtimes do not execute or persist its partial tool calls or content. They append one runtime diagnostic asking for a complete concise regeneration and retry once; a second truncated reply fails the cycle explicitly.
 
 ### 5.10 Budget warning
 The line described in §3.4, present at ≥ 70%, escalating at ≥ 90%. Silence is the normal case, so it costs nothing until it means something.
@@ -319,7 +375,7 @@ The line described in §3.4, present at ≥ 70%, escalating at ≥ 90%. Silence 
 One line, changing daily, taken from the Spec's clock — never from the system clock inside a section, so assembly stays pure. Kept out of the head precisely so the cacheable prefix contains no changing value; in the tail it busts only itself.
 
 ### 5.12 Unavailable tools
-Configured tools that did not resolve this cycle — reported so the agent adapts rather than calling into a void. Resolution is live, so a fixed path or restored grant makes the tool available on the next cycle with no recreate.
+Tool resolution failures observed during initialisation or a current append — reported so the agent adapts rather than calling into a void. The adapter registry is not polled by assembly; a restored operation becomes available through an explicit tool-state event or prefix rebuild.
 
 ### 5.13 Outstanding task
 Present only when the agent has a task it must complete or fail. A `user` message rendered last on every inference — after the tool-loop messages and after the notices — so it is the thing nearest the reply, and never baked into history: the model sees only tasks still outstanding. The same on every runtime, with `complete_task` / `fail_task` offered only while it is present — the framework's task boundary (`TaskTools`). A goal-tree frame's *goal* is its opening turn, not this slot (§9.1).
@@ -351,13 +407,14 @@ The literal fallback means a mistyped *prefix* (`ws/notes`) is injected as text 
 | `text` | Literal text (mutually exclusive with `ref`) |
 | `op` + `input` | Invoke a grid operation; its output is the content |
 | `job` + `path?` | A job result, optionally navigated into |
-| `label` | Heading; defaults to the ref |
-| `required` | Failure throws and fails the cycle |
+| `label` | Optional name for the entry. It labels an operator-trusted instruction; on untrusted data it remains display metadata inside the structured result. Never an unload key |
+| `trusted` | Operator `config.context` / `config.loads` only: render the resolved value as a `system` instruction. Defaults true there. Forced false for caller/session and agent context loads; skill bodies have their own trusted type semantics |
+| `required` | Failure throws and fails initialisation or the requested load |
 | `budget` | Render cap for a structured value (§6.4); not an accounting charge. A hard cap on a volatile loads entry whatever its shape (§5.5) |
 | `wait` | Job entries: ms to wait for a running job |
-| `volatile` | Loads tiers only (§5.5): render in the tail rather than the live surface. Defaults to true for an `op` entry, false otherwise |
+| `volatile` | Loads tiers only (§5.5): render afresh in the tail rather than commit a result. Defaults to true for an `op` entry, false otherwise |
 
-An **op entry** runs fresh every inference under the caller's identity, so assemble ops must be **read-only** — a write-on-assemble fires every inference. Operation entries generalise the rest: a workspace read, a cross-venue fetch and a purpose-built assembler are all just operations. In `config.context` an op entry renders in place, in declared order (§3.1: put stable entries first); at a loads tier it is volatile by default and renders in the tail, where a changing result costs only itself.
+An **op entry** runs once per load unless it is volatile. A volatile op runs every inference under the caller's identity, so it must be **read-only** — a write-on-assemble would fire every inference. Operation entries generalise the rest: a workspace read, a cross-venue fetch and a purpose-built assembler are all just operations. In `config.context` an op is part of the initial snapshot; at a loads tier it is volatile by default and renders in the tail, where a changing result costs only itself.
 
 ### 6.3 Resolution outcomes
 
@@ -365,16 +422,17 @@ The contract every entry obeys, in either role:
 
 | Outcome | Behaviour |
 |---------|-----------|
-| Absent / empty / returns null | **Skipped** quietly — context is supplementary; nothing to add adds no noise |
-| Resolution **errors** | Visible `[… — unavailable: <reason>]` element, so the model can adapt |
-| `required: true` and fails | **Throws** — fails the cycle |
+| Optional pinned source absent / empty / returns null | Visible without invented content: a trusted labelled diagnostic or `{absent: true}` in `pinned_context` |
+| Agent-managed source absent | Skipped; the initiating tool acknowledgement already records the attempted load |
+| Resolution **errors** | Visible `error` in a data tool result, or `unavailable: <reason>` on an instruction block, so the model can adapt |
+| `required: true` and fails | **Throws** — fails initialisation or the requested load |
 | Malformed `context` value (not an array) | **Throws** — a configuration error to fix, not mask |
 
-*Bad shape → throw; required failure → throw; error → visible; absent → skip.*
+*Bad shape → throw; required failure → throw; error → visible; pinned absence → visible.*
 
 ### 6.4 Rendering
 
-A **string renders verbatim** (markdown and newlines preserved). A **structured value renders as budget-bounded JSON5**. So an assemble op returns a string when exact formatting matters, a map or vector when a compact view is fine, and `null` to contribute nothing. In pinned context and the loads tiers the rendered value is the content of a tool result (§5.5); `ContextLoader.resolveEntry` still shapes the same value as a labelled system message for callers that want one.
+A **string is preserved verbatim** (markdown and newlines included) as either a trusted system-message body or the `content` field of its structured tool result. A **structured value renders as budget-bounded JSON5** in the same selected channel. So an assemble op returns a string when exact formatting matters and a map or vector when a compact view is fine. Only `systemPrompt`, skill bodies and operator entries admitted as trusted leave the data-result path.
 
 ### 6.5 Asset resolution
 
@@ -388,10 +446,10 @@ Which entries are in play at all.
 
 ### 7.1 Two roles, one pipeline
 
-- **Configured** (`config.context`, `config.loads`) — operator-owned, loaded every cycle, **pinned**: the agent may mask it for a conversation but not remove it.
-- **Agent-managed** — the working set the agent curates via `context_load` / `context_unload`.
+- **Pinned** (`config.context`, `config.loads`, and caller-supplied session-mint `loads`) — owned outside the agent, snapshotted into the initial messages, never removable by the agent.
+- **Agent-managed** — the working set the agent creates via `context_load` / `skill_load` and may deliberately remove via `context_unload`.
 
-They share the entry grammar, the resolver, the rendering contract and the budget. They differ only in *ownership and lifetime*. The agent can therefore pin a computed result exactly as configuration can — `context_load` takes a `path`, or `text` / `op` / `job` under an `id` (§5.5) — and any loads entry, whoever wrote it, may declare `tools`, `skills` and `skillsets`: the palette and the skills index are widened by the entry, not by its kind.
+They share the entry grammar, resolver, append contract and budget. They differ in *ownership and control*, made explicit by an internal ownership marker rather than inferred from timestamps. Trust is a second stamped property and is never inferred from persistence or ownership after tiers merge. Both kinds are persistent: their appended events reappear across model calls and turns and have no time-based expiry. `context_load` takes a `path`, or `text` / `op` / `job` under an `id`; any loads entry may declare `tools`, `skills` and `skillsets`.
 
 ### 7.2 The chain
 
@@ -401,54 +459,66 @@ Tiers, outer → inner:
 agent (config.loads) → session (sessions.<sid>.loads) → frame (frame.loads, goaltree)
 ```
 
-Each tier has automatic loads declared when its container is created — `config.loads` for the agent, the `loads` parameter of `agent:request` / `agent:chat` for a session it mints (the same entry shapes, `{skill: true}` included) — plus dynamic entries written while it is the innermost tier. Rules (implemented in `ContextChain`, pure functions):
+Each tier may contain declarations installed by its owner plus dynamic entries written by the agent while it is the innermost writable tier. Rules:
 
-- **Assembly is a union down the chain; inner shadows outer** on a path collision.
-- **Masking:** unloading an outer-tier path writes a nil **tombstone** at the innermost tier — excluded from there inward, leaving the outer entry and every sibling untouched. A later load overwrites the tombstone. goaltree's copy-on-push frame inheritance copies tombstones, so masks propagate to children.
+- **The effective starting set is a union down the chain; inner shadows outer** on a path collision. It is folded once when context is initialised.
+- **Unload is ownership-safe:** only an agent-managed entry in the innermost writable tier can be removed. Removing a local shadow reveals any pinned outer entry. Pinned entries cannot be hidden with `context_unload`.
+- **Legacy tombstones remain readable** for existing stored sessions, but the agent harness no longer creates new tombstones over pinned context.
 - **Inner tiers read outer tiers, never mutate them** — one writer per tier.
 - **Budgets are advisory** — never a basis for silent eviction.
 - **No session in scope → no writable tier**: `context_load`/`unload` fail with a diagnosable result.
 
-The chain is resolved immediately before **every** LLM call, including successive calls within one tool loop, so a tool write to an already-loaded path is visible on the next inference without reloading.
+The chain is resolved when context is initialised. Later loads and reloads resolve only their requested keys and append results to the message vector. A tool write to an already-loaded path does **not** change the model's context on the next inference; the agent or owner must load it again, or read the current value with an ordinary tool call. This is the freshness boundary that protects the cache from unrelated mutable state.
 
 ### 7.3 Frame scoping
 
-A goaltree subgoal inherits configured context but starts with its own empty agent-managed set, curating loads for its sub-task without polluting parent or siblings. This is the one structural reason the agent-managed store is not a flat agent-level list.
+A goaltree subgoal initialises its own rendered message vector from the effective pinned context but starts with an empty agent-managed set, curating loads for its sub-task without polluting parent or siblings. This is the one structural reason the agent-managed store is not a flat agent-level list.
 
 ---
 
-## 8. The Spec and runtime profiles
+## 8. Initialisation and inference Specs
 
-The Spec is the whole interface between a runtime and the assembler. Every runtime fills the same fields; they differ only in what they put in them:
+Initial rendering and inference assembly have different inputs because only the former may build the fixed prefix.
+
+The **InitialSpec** is consumed only by `initialise`:
+
+| Field | Meaning |
+|-------|---------|
+| `config` | The merged agent configuration to snapshot |
+| `capsCtx` | Capability-narrowed request context used for all initial resolution |
+| `model` | The model, provider-shaping options, budget and label dialect fixed for the persisted context |
+| `headNotice` | Runtime text captured in the head; absent for llmagent, the subgoal notice for a goaltree child |
+| `loads` | The effective starting chain: agent → session for llmagent; agent → session → frame for goaltree |
+| `seedMessages` | Empty for a new conversation; an explicit summary/current-state representation after compaction or reset |
+
+The per-call **InferenceSpec** contains the persisted vectors and values allowed to vary without rebuilding them:
 
 | Field | Meaning | llmagent | goaltree |
 |-------|---------|----------|----------|
-| `config` | The agent's merged configuration | — | — |
-| `capsCtx` | Capability-narrowed request context (§4) | — | — |
-| `headNotice` | Runtime text appended to the head, stable within its scope (§5.1) | — (none) | Subgoal notice for child frames |
-| `model` | The resolved model profile: `budget`, `options` — including the label dialect the renderer uses | — | — |
-| `tools` | The palette (§4): tool definitions in order — harness, configured, loads-contributed | Harness tools opted into (skill_load and context_unload implied by skills, task tools by a task), configured tools, loads | The same, plus typed `complete`/`fail` with declared outputs |
-| `toolCalling` | Whether the model can call tools (the profile: provider, `byModel`, `config.modelProfile`). Off, the Spec holds no tools, renders no capability notice and no skills index — nothing is presented that cannot be called; the task message stays, since a control call written as text still resolves it (#215) | from the profile | from the profile |
-| `loads` | The resolved loads snapshot (§4): elements, in chain order | agent → session | agent → session → frame |
-| `frames` | What the conversation renders | The session's single frame | The frame stack: ancestors compacted, active frame full |
-| `pending` | Results that arrived for this cycle | Job results | Drained into the active frame's conversation (GOAL_TREE.md) |
+| `tools` | Persisted immutable fixed tool vector | Session tools | Active-frame tools |
+| `messages` | Persisted immutable append-only message vector | Session messages | Active-frame messages |
+| `initialEnd` | Index of the initial-head cache boundary in `messages` | — | — |
+| `capsCtx` | Authority for dispatch and explicitly volatile reads; not a rendering source | — | — |
+| `pending` | Results appended for this cycle | Job results | Drained into the active frame (GOAL_TREE.md) |
 | `input` | What drives this cycle | Inbox messages | — (none) |
-| `toolLoop` | Messages accumulated within this cycle | — | — |
-| `task` | What must be completed or failed, rendered last (§5.13) | The open task, if any | The open task, if any (root frame) |
-| `unavailable` | Configured tools the palette could not resolve | — | — |
-| `now` | The clock | — | — |
+| `toolLoop` | Messages and appended events accumulated within this cycle | — | — |
+| `volatile` | Declarations intentionally resolved into the uncached suffix | — | — |
+| `task` | What must be completed or failed, rendered last (§5.13) | Open task, if any | Open task, if any (root frame) |
+| `unavailable` | Failures produced by the current event/volatile work, not a registry rescan | — | — |
+| `now` | The clock used by tail rendering | — | — |
 
-A dash means the runtimes agree. **The table is the whole difference.** Anything a runtime needs that is not in it is a signal that the Spec is missing a field, not that the runtime needs its own pipeline.
+A dash means the runtimes agree. Anything a runtime needs that is not in these interfaces is a signal that an input is missing, not that the runtime needs its own assembly pipeline.
 
-`agent:context` builds the same Spec and calls the same `assemble`, so an inspected context matches a live inference **by construction** rather than by two call chains agreeing. It takes the hypothetical call — an inbox message or several, pending results, a task, a session — and returns the level-3 input with `cacheMarks`, the `budget` (`bytes`, `used`, `remaining`), the `marks` at each band's end and the label dialect. Resolution sidecars explain that input without changing it:
+`agent:context` reads the same persisted vectors and calls the same `assemble`, so an inspected existing context matches a live inference **by construction**. For a session with no rendered context it previews `initialise` without persisting it. It returns the level-3 input with `cacheMarks`, the `budget` (`bytes`, `used`, `remaining`), the marks at the initial, committed-message and working-turn boundaries, and the label dialect. Sidecars explain the stored state without changing or re-resolving it:
 
-- `palette.tools` follows the final tool-definition order and records each tool's `name`, `source` (`harness`, `default`, `config`, `skill` or `load`), and `operation` / load `ref` where one exists; `palette.unavailable` carries configured operations that could not resolve and their reasons.
-- `loads` records every effective load's `ref`, `kind`, resolved `status`, rendered `bytes`, clamped `budget`, `truncated` and `deduplicated`. `truncated` means the structured value was shortened by `CellExplorer`; plain text and skill bodies remain verbatim, so they can consume more than their advisory per-load budget without that flag.
-- `prefixHashes` contains CAD3 structural hashes for the tools vector and `[tools, messages-through-band]` at `head`, `live`, `conversation` and `toolLoop`. They make logical prefix changes easy to compare; they are not provider wire-format cache keys, because the edge may reshape system messages and provider clients serialise requests differently.
+- `palette.tools` records the base manifest and appended tool-state events with their source and operation route.
+- `loads` folds appended context events to report each key's ownership, source, current/stale/unloaded state, rendered bytes, budget and truncation status.
 
-`agent:step` takes the same call plus the reply the model would give and runs one harness iteration on it: text-as-control recognised, the tool calls dispatched through the runtime's own registry — same routes, capability checks and authority, so the tools' side effects are real — their results rendered, and the next prompt assembled from the same Spec with this iteration in the tool-loop band. The agent is untouched: a terminal control tool is reported (`terminal`), never resolved; goaltree's `subgoal` is not run. It returns `assistant`, `turns`, `calls` (`id, name, arguments, result, isError?, ms`), `terminal?`, `done`, `response?` and `next?` (the following prompt with assembly diagnostics; resolution sidecars belong to `agent:context`).
+Consumers compare the returned immutable `tools` and `messages` vectors directly. `.equals()` answers whether a whole logical request component is unchanged; the vector common-prefix operation locates the reusable prefix. Separate synthetic prefix hashes add bookkeeping without adding information.
 
-The same bands drive the record a live cycle leaves on its timeline entry (`AGENT_LOOP.md` §2.4): a message is recorded in the inference that first sends it — head and live messages once (a frame's first inference pulls them up as its `context`), the tail as it appears; the root conversation is the session's, a child frame's is recorded as the frame opens, and the tool loop is recorded as replies and calls.
+`agent:step` takes the same inference plus the reply the model would give and runs one harness iteration on it: text-as-control recognised, tool calls dispatched through the runtime's registry with the same routes, capability checks and authority, their results appended to the working turn, and any context/tool-state event appended once. The agent is untouched: a terminal control tool is reported (`terminal`), never resolved; goaltree's `subgoal` is not run. It returns `assistant`, `turns`, `calls` (`id, name, arguments, result, isError?, ms`), `terminal?`, `done`, `response?` and `next?`.
+
+The same regions drive the timeline record (`AGENT_LOOP.md` §2.4): initial messages are recorded once, later events once when appended, the working turn as replies and calls append, and the volatile tail only for the inference in which it appeared. Recording never regenerates prompt content.
 
 ---
 
@@ -456,24 +526,26 @@ The same bands drive the record a live cycle leaves on its timeline entry (`AGEN
 
 | Concern | Home |
 |---------|------|
-| `Spec`, `Prompt`, `assemble`, the section functions, attribution | `ContextAssembler` |
+| `InitialSpec`, `InferenceSpec`, `Prompt`, concatenation and attribution | `ContextAssembler` |
+| Persisted tool/message vectors and event append | Session/frame state (`renderedContext` + frame conversation) |
 | The label renderer (§1.1) | `Labels` |
-| The palette (§3.2.3): resolution, merge, provenance, unavailable diagnostic | `ToolPalette` |
-| The loads phase (§4): elements, contributed tools, routes, resolution diagnostics | `Loads` |
+| Base manifest and dynamic-tool strategy (§3.2.3) | `ToolPalette` |
+| Initial loads and context-event append (§4) | `Loads` |
 | Entry resolution and rendering (§6) | `ContextLoader` |
 | Scope chain algebra (§7) | `ContextChain` |
-| Frame rendering, elision, segments, turn normalisation (§5.6) | `ConversationRenderer` |
+| Frame rendering, segments and turn normalisation (§5.6) | `ConversationRenderer` |
 | Skills index and skill elements | `Skills` |
 | Authority and the model profile: `capsContext`, `modelProfileFor` | `AbstractLLMAdapter` |
-| The edge (§3.5): `normaliseSystemMessages` | `LangChainAdapter` |
+| The edge (§3.5): system normalisation, cache marks and native tool-state events | `LangChainAdapter` |
 | llmagent spec | `LLMAgentAdapter` |
 | goaltree spec | `GoalTreeAdapter` |
 
 ### 9.1 Known divergences
 
-Everything above is written as the target; this list is the whole of the current difference.
+Everything above is implemented except the provider-edge refinements listed here.
 
-- **The head and the live surface share one breakpoint.** The client marks only the last block of the system parameter, so a load or unload re-writes the head along with the live surface; a separate head mark means shaping the Anthropic request directly. Breakpoints are the 5-minute ephemeral kind — langchain4j exposes no 1-hour TTL.
+- **Native provider tool-state blocks are not mapped yet.** The canonical conversation already persists trusted events carrying exact `toolAddition` / `toolRemoval` state, and every supporting context has the fixed `invoke_tool` fallback, so the initial tool vector remains unchanged and dispatch is authoritative. Provider edges currently receive the generic late-system representation; a native edge may map the same fields to its tool-addition/removal blocks without changing stored history.
+- **The head and current live surface share one provider breakpoint.** The client marks only the last block of the system parameter. The target initial/committed/working marks require shaping the provider request directly; langchain4j currently exposes only the 5-minute ephemeral cache kind, not a longer TTL.
 - `compact` exists only in the goal-tree harness; llmagent has no compaction, so the 90% line asks there for what it cannot offer.
 - **goaltree persists the goal as the frame's opening user turn** and re-appends it after compaction, rather than rendering it in the task slot. Kept deliberately for now: the root frame's "goal" of a chat session is its origin description, which must not be re-read on every inference; the task-slot rendering is right for subgoal frames and is the pending change.
 - The agent-facing text of `skill_load` and SKILLS.md §4.3 name the `[Skills]` index by its bracket label whatever the dialect.

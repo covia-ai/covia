@@ -2700,6 +2700,22 @@ public class Engine {
 	public AString managedUserName(AString did) {
 		AString base = config.getWebDID();
 		if (base == null || did == null) return null;
+		return userNameBelow(did, base);
+	}
+
+	/**
+	 * A venue-issued user below this venue's actual identity. Personal venues
+	 * sign login identities such as {@code did:key:...:u:alice}; this does not
+	 * make did:key a generally routable namespace, but it does make the venue
+	 * authoritative for the exact subjects it issued itself.
+	 */
+	private boolean isVenueIssuedUserDID(AString did) {
+		return userNameBelow(did, getDIDString()) != null;
+	}
+
+	/** One valid username segment immediately below an exact DID base. */
+	private static AString userNameBelow(AString did, AString base) {
+		if (base == null || did == null) return null;
 		String prefix = base + ":u:";
 		String value = did.toString();
 		if (!value.startsWith(prefix)) return null;
@@ -2712,9 +2728,10 @@ public class Engine {
 	 * Root-authority policy for resources enforced by this venue.
 	 *
 	 * <p>Self-sovereign owners root their own grants. The venue may additionally
-	 * attest only for user DIDs it minted under its managed {@code did:web}
-	 * namespace. Merely registering an arbitrary external DID does not transfer
-	 * control of that identity or make the venue authoritative for its resources.</p>
+	 * attest only for user DIDs it issued directly below its own identity. This
+	 * includes the venue-signed {@code did:key:...:u:name} subjects used by a
+	 * personal venue as well as named {@code did:web} users. Merely registering
+	 * an arbitrary external DID does not transfer control of that identity.</p>
 	 */
 	public RootAuthorityPolicy rootAuthorityPolicy() {
 		AString venueDID = getDIDString();
@@ -2723,7 +2740,7 @@ public class Engine {
 			DID owner = RootAuthorityPolicy.ownerDID(resource);
 			if (owner == null) return false;
 			AString ownerDID = Strings.create("did:" + owner.getMethod() + ":" + owner.getID());
-			return isManagedUserDID(ownerDID);
+			return isManagedUserDID(ownerDID) || isVenueIssuedUserDID(ownerDID);
 		});
 	}
 

@@ -37,7 +37,9 @@ public final class Labels {
 	public enum Kind {
 		SKILLS("Skills", "skills", false),
 		SKILL("Skill: %s — %s", "skill", false, "name", "path"),
-		CONTEXT("Context: %s", "context", false, "label"),
+		PINNED_SKILL("Pinned skill: %s — %s", "pinned-skill", false, "name", "source"),
+		LOADED_SKILL("Loaded skill: %s — unload key: %s", "loaded-skill", false, "name", "unload-key"),
+		PINNED_CONTEXT("Pinned context: %s", "pinned-context", false, "label"),
 		COMPACTED("Compacted: %s turns", "compacted", true, "turns"),
 		ANCESTORS("Ancestor Context", "ancestors", false),
 		TOOL_FAILURE("Tool failure: %s", "tool-failure", false, "name"),

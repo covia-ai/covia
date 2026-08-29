@@ -197,6 +197,8 @@ final class BotRunner {
 	}
 
 	private void pending(String why) {
+		State previousState = state;
+		String previousError = error;
 		state = State.PENDING;
 		error = why;
 		// Config-bootstrapped secrets are provisioned after adapters install, so the
@@ -206,10 +208,18 @@ final class BotRunner {
 		long delay = (attempt == 1) ? Math.min(2_000, adapter.retryMillis) : adapter.retryMillis;
 		if (attempt == 1) {
 			log.info("Telegram bot '{}' not started yet: {} (retrying shortly)", spec.name(), why);
-		} else {
+		} else if (shouldWarnPending(previousState, previousError, attempt, why)) {
 			log.warn("Telegram bot '{}' not started: {} (will retry)", spec.name(), why);
+		} else {
+			log.debug("Telegram bot '{}' still pending: {} (will retry)", spec.name(), why);
 		}
 		retry = adapter.scheduleRetry(this::tryStart, delay);
+	}
+
+	/** Warn once when an initial problem persists, and again only on a new outage or reason. */
+	static boolean shouldWarnPending(State previousState, String previousError, int attempt, String why) {
+		return attempt == 2 || previousState != State.PENDING
+			|| !java.util.Objects.equals(previousError, why);
 	}
 
 	synchronized void stop() {

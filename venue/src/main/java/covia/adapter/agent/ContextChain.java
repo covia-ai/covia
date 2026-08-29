@@ -15,18 +15,20 @@ import convex.core.lang.RT;
  * with lexical-scoping semantics.
  *
  * <p>Each tier is a map {@code path → spec}, where spec is a map (budget,
- * ts, label…) or <b>nil — a tombstone</b> masking an outer tier's entry from
- * that tier inward. Rules:</p>
+ * ts, label…) or <b>nil — a legacy tombstone</b> masking an outer tier's entry
+ * from that tier inward. Rules:</p>
  * <ul>
  *   <li><b>Assembly</b> = union outer→inner; inner shadows outer; nil masks.</li>
  *   <li><b>Mutation targets the innermost tier only</b> — outer tiers are
- *       environment, never workspace ({@link #unload} writes a tombstone when
- *       the path is supplied by an outer tier).</li>
+ *       environment, never workspace.</li>
  *   <li>The agent tier is principal-authored ({@code config.loads}) and never
  *       pruned; dynamic tiers prune innermost-first.</li>
  * </ul>
  *
- * <p>All methods are pure functions on immutable maps.</p>
+ * <p>All methods are pure functions on immutable maps. The model-facing
+ * harness applies ownership on top: it removes only local agent-managed
+ * entries and never calls {@link #unload} to mask pinned context. The tombstone
+ * algebra remains for backward-compatible stored state and internal callers.</p>
  */
 public class ContextChain {
 
@@ -53,7 +55,8 @@ public class ContextChain {
 	}
 
 	/**
-	 * Unloads a path from the innermost tier per lexical rules: the local
+	 * Low-level lexical masking operation retained for legacy/internal callers:
+	 * unloads a path from the innermost tier. The local
 	 * entry (if any) is removed; if the path is still supplied by an outer
 	 * tier, a nil tombstone is written so the intent ("stop looking at this")
 	 * holds from this tier inward while the outer entry — and every other
@@ -81,14 +84,24 @@ public class ContextChain {
 	}
 
 	/**
-	 * Parses a tier's declared loads ({@code {path: {budget?, label?}}}), e.g.
-	 * {@code config.loads} or a session-mint {@code loads} param. Absent →
+	 * Parses an untrusted tier's declared loads ({@code {path: {budget?, label?}}}),
+	 * such as a session-mint {@code loads} param. Absent →
 	 * empty; a non-map value or a non-map spec is a configuration error and
 	 * throws loudly (a malformed declaration must not be silently dropped).
 	 */
 	@SuppressWarnings("unchecked")
 	public static AMap<AString, ACell> declaredLoads(ACell raw, String which) {
 		return declaredLoads(raw, which, false);
+	}
+
+	/**
+	 * Parses operator-owned agent configuration. Non-skill data is trusted by
+	 * default, while an entry may explicitly choose {@code trusted: false}.
+	 * The marker is written before scope-chain merging so caller-owned tiers can
+	 * never acquire operator authority merely by also being pinned.
+	 */
+	public static AMap<AString, ACell> operatorLoads(ACell raw, String which) {
+		return declaredLoads(raw, which, false, true);
 	}
 
 	/**
@@ -104,6 +117,12 @@ public class ContextChain {
 	@SuppressWarnings("unchecked")
 	public static AMap<AString, ACell> declaredLoads(ACell raw, String which,
 			boolean stampMissingTimestamp) {
+		return declaredLoads(raw, which, stampMissingTimestamp, false);
+	}
+
+	@SuppressWarnings("unchecked")
+	private static AMap<AString, ACell> declaredLoads(ACell raw, String which,
+			boolean stampMissingTimestamp, boolean operatorOwned) {
 		if (raw == null) return Maps.empty();
 		if (!(raw instanceof AMap)) {
 			throw new IllegalArgumentException(which + " must be a map of key → {budget?, …}, got "
@@ -141,6 +160,15 @@ public class ContextChain {
 			if (ts == null && stampMissingTimestamp) {
 				meta = meta.assoc(tsKey, CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()));
 			}
+			// Every declared tier is external to the agent's mutable working set.
+			// Trust is a separate authority marker: operator config may opt out,
+			// while caller/session declarations may never opt themselves in.
+			meta = meta.assoc(Loads.K_AGENT_MANAGED, convex.core.data.prim.CVMBool.FALSE);
+			ACell declaredTrust = meta.get(Loads.K_TRUSTED);
+			boolean trusted = operatorOwned
+				&& !convex.core.data.prim.CVMBool.FALSE.equals(declaredTrust);
+			meta = meta.assoc(Loads.K_TRUSTED,
+				convex.core.data.prim.CVMBool.create(trusted));
 			normalised = normalised.assoc(entry.getKey(), meta);
 		}
 		return normalised;

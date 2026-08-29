@@ -180,8 +180,8 @@ What the model sees, in the canonical order:
 
 ```
 [SYSTEM]            identity, lattice reference, capabilities      — fixed head
-[LOADED]            [Context: w/notes/methodology] (inherited from root)
-                    [Context: w/vendors/b/profile] (own scope)       — live surface
+[PERSISTENT DATA]   loaded_context["w/notes/methodology"] (inherited copy)
+                    loaded_context["w/vendors/b/profile"] (own scope) — live surface
 [ANCESTORS]         [{description: "Competitive analysis for A, B, C",
                       conversation: ["Explored vendors. Methodology loaded.",
                         subgoal("Research vendors") -> pending...]},
@@ -196,15 +196,17 @@ What the model sees, in the canonical order:
 
 Ancestor budget is configurable. Rule of thumb: parent ~300B, grandparent ~150B, great-grandparent ~80B. CellExplorer renders each ancestor's conversation at its budget — segments show as summaries, live turns may be truncated.
 
-## Harness Tools (opt-in)
+## Harness Tools
 
-Eight harness tools: four shared with the plain LLM runtime and four that are
-the goal tree's own. **All are opt-in** — agents declare the ones they need in
-`config.tools` alongside operation paths, under the one rule every runtime
-applies (`HarnessTools.offered`). Zero harness tools by default — a bare
-chatbot just chats. Declared skills imply `skill_load` and `context_unload`; an
-outstanding task offers `complete_task`/`fail_task`; typed outputs inject
-`complete`/`fail`.
+Five shared controls and four goal-tree controls are configurable through
+`config.tools` alongside operation paths (`HarnessTools.offered`). A bare
+chatbot gets only the stable `complete_task` / `fail_task` task boundary; their
+handlers return a scoped error when no task is outstanding. Declared skills
+imply stable `skill_load`, `context_unload` and `invoke_tool` definitions.
+`invoke_tool` is the portable dispatcher for exact definitions appended later
+by `skill_load` or `more_tools`; providers with native tool-state events may map
+the same stored state directly. Typed outputs additionally inject `complete` /
+`fail`.
 
 ```json5
 "tools": ["subgoal", "compact", "more_tools", "v/ops/covia/read"]
@@ -213,9 +215,12 @@ outstanding task offers `complete_task`/`fail_task`; typed outputs inject
 | Name | Runtime | Purpose |
 |------|---------|---------|
 | `context_load` | shared | Pin a lattice path in context across turns |
-| `context_unload` | shared | Remove a pinned path (implied by declared skills) |
+| `context_unload` | shared | Remove one or several exact agent-managed `loaded_context` keys; hidden when none exist |
 | `skill_load` | shared | Load a skill from the index (implied by declared skills) |
-| `more_tools` | shared | Add operations to the tool set for the rest of the run |
+| `more_tools` | shared | Append operations to the active tool state for the rest of the run |
+| `invoke_tool` | shared | Invoke an operation introduced by a later tool-addition event (automatically implied where needed) |
+| `complete_task` | shared task boundary | Resolve the in-scope caller task; stable definition, scoped at execution |
+| `fail_task` | shared task boundary | Fail the in-scope caller task; stable definition, scoped at execution |
 | `subgoal` | goaltree | Delegate work to an isolated child frame |
 | `complete` | goaltree | Return a structured result (auto-injected with typed outputs) |
 | `fail` | goaltree | Report failure with a structured error (auto-injected with typed outputs) |
@@ -639,8 +644,8 @@ context_load, context_unload,
 subgoal, complete, fail, compact,
 (+ other configured tools)
 
-[LOADED]
-[Context: w/notes/methodology]
+[PERSISTENT DATA]
+loaded_context["w/notes/methodology"]
 "Compare revenue growth, margins, share. Flag risks."
 
 [ANCESTORS]
@@ -668,11 +673,11 @@ Generate competitive analysis report for vendors A, B, C.
 [TOOLS]
 (same tool palette)
 
-[LOADED]
-[Context: w/notes/methodology]   (inherited from root)
+[PERSISTENT DATA]
+loaded_context["w/notes/methodology"]   (inherited copy)
 "Compare revenue growth, margins, share. Flag risks."
 
-[Context: w/vendors/b/profile]   (own scope)
+loaded_context["w/vendors/b/profile"]   (own scope)
 {name: "Beta Inc", founded: 2018, employees: 1200,
  hq: "Austin TX", sector: "enterprise software"}
 
@@ -780,7 +785,7 @@ As goals get more complex, the agent can opt into more tools:
 | Need intra-transition scratch | `t/` namespace with `covia_write` | Working files for one transition; shared across subgoals |
 | Need cross-turn session memory | `c/` namespace with `covia_write` | Survives turns within the session; scoped to this conversation |
 | Context getting long | `compact` | Agent-controlled checkpointing |
-| Load rejected, context full | `context_unload` | Free space by removing paths |
+| Agent-managed context no longer useful | `context_unload` | Remove exact keys from `loaded_context`; pinned context is not removable |
 
 ## Design Decisions
 

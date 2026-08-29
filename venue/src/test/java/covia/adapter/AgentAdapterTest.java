@@ -799,9 +799,9 @@ public class AgentAdapterTest {
 		assertTrue(wakeUp.toString().contains("[No input]"), wakeUp.toString());
 	}
 
-	/** Harness tools are opt-in on every runtime (HarnessTools.offered): an agent
-	 *  with nothing declared has no tools at all; declared skills imply
-	 *  skill_load and context_unload; anything else is listed by name. */
+	/** Configurable harness tools are opt-in on every runtime
+	 *  (HarnessTools.offered). The task controls are an always-declared stable
+	 *  pair; skills imply skill_load/context_unload; other controls are named. */
 	@Test
 	public void testHarnessToolsAreOptInOnLlmagent() {
 		java.util.function.Function<AMap<AString, ACell>, java.util.Set<String>> toolsOf = config -> {
@@ -817,9 +817,12 @@ public class AgentAdapterTest {
 			for (long i = 0; tools != null && i < tools.count(); i++) names.add(RT.getIn(tools.get(i), "name").toString());
 			return names;
 		};
-		assertTrue(toolsOf.apply(Maps.of("systemPrompt", "bare")).isEmpty(), "nothing declared: no tools");
+		assertEquals(java.util.Set.of("complete_task", "fail_task"),
+			toolsOf.apply(Maps.of("systemPrompt", "bare")),
+			"the invariant task controls are the only tools when nothing is declared");
 		java.util.Set<String> skilled = toolsOf.apply(Maps.of("skillsets", Vectors.of(Strings.create("w/skills"))));
-		assertTrue(skilled.contains("skill_load") && skilled.contains("context_unload"), skilled.toString());
+		assertTrue(skilled.contains("skill_load"), skilled.toString());
+		assertTrue(skilled.contains("context_unload"), "stable declared manifest: " + skilled);
 		assertFalse(skilled.contains("context_load"), "not implied: " + skilled);
 		java.util.Set<String> listed = toolsOf.apply(Maps.of(Fields.TOOLS,
 			Vectors.of(Strings.create("context_load"), Strings.create("more_tools"), Strings.create("subgoal"))));
@@ -866,8 +869,8 @@ public class AgentAdapterTest {
 		assertNull(on.get(Strings.intern("toolCalling")), "absent means the norm");
 	}
 
-	/** more_tools on llmagent: operations added mid-run are offered from the next
-	 *  inference and dispatch through the added routes, exactly as on goaltree. */
+	/** more_tools on llmagent: definitions append as state and dispatch through
+	 *  the fixed fallback, exactly as on goaltree. */
 	@Test
 	public void testMoreToolsOnLlmagent() {
 		engine.jobs().invokeOperation("v/ops/agent/create",
@@ -883,13 +886,17 @@ public class AgentAdapterTest {
 		String response = RT.getIn(chat, Fields.RESPONSE).toString();
 		assertTrue(response.startsWith("MORE_TOOLS_RESULT:"), response);
 
-		// The record shows the palette changing between inferences.
+		// The record shows a stable palette and an appended tool-addition event.
 		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("more-tools-llm");
 		TestEngine.awaitTimelineCount(agent, 1, 10000);
 		AVector<ACell> inferences = RT.ensureVector(RT.getIn(agent.getTimeline().get(0), Fields.INFERENCES));
 		assertEquals(3, inferences.count(), "more_tools, then the added tool, then the answer: " + inferences);
-		assertTrue(RT.getIn(inferences.get(1), Fields.TOOLS).toString().contains("test_echo"),
-			"the second inference is offered the added tool");
+		assertNull(RT.getIn(inferences.get(1), Fields.TOOLS),
+			"a stable palette emits no per-inference tools delta");
+		ACell session = agent.getSessions().entrySet().iterator().next().getValue();
+		assertTrue(RT.getIn(session, Fields.FRAMES, CVMLong.ZERO, Strings.intern("conversation"))
+			.toString().contains("toolAddition"),
+			"the session persists appended tool state");
 	}
 
 	/** agent:step runs one harness iteration on a supplied reply: tools dispatched as live, the agent untouched. */
@@ -5398,8 +5405,9 @@ public class AgentAdapterTest {
 	}
 
 	@Test
-	public void testGoaltreeTemplateGetsAllSevenHarnessTools() {
-		// template:goaltree explicitly lists all 7 harness tools — verify all resolve
+	public void testGoaltreeTemplateKeepsContextUnloadStable() {
+		// The template declares all seven. context_unload remains present before
+		// and after loads so a context transition does not rewrite the tool vector.
 		engine.jobs().invokeOperation("v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "gt-runtime",
 					Fields.CONFIG, Strings.create("v/agents/templates/goaltree")),
@@ -5496,6 +5504,77 @@ public class AgentAdapterTest {
 	}
 
 	// ========== Issue #88: fail-fast on transition error ==========
+
+	@Test
+	public void testLlmTimeoutFailsCycleWithoutSuspendingAgent() {
+		String agentId = "timeout-sleeps-agent";
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(
+				Fields.AGENT_ID, agentId,
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/llmagent/chat",
+					"llmOperation", "v/test/ops/never",
+					"llmTimeoutMs", 1000)),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job timedOut = engine.jobs().invokeOperation(
+			"v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, agentId, Fields.MESSAGE, "first"),
+			RequestContext.of(ALICE_DID));
+		assertThrows(covia.exception.JobFailedException.class,
+			() -> timedOut.awaitResult(5000));
+		assertTrue(timedOut.getErrorMessage().contains("LLM call timed out"),
+			timedOut.getErrorMessage());
+
+		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent(agentId);
+		assertEquals(AgentState.SLEEPING, awaitFinished(agent));
+		assertNull(agent.getError(), "a provider timeout must not park the agent");
+
+		// Correct the provider and send another chat without an agent:resume.
+		engine.jobs().invokeOperation(
+			"v/ops/agent/update",
+			Maps.of(Fields.AGENT_ID, agentId,
+				Fields.CONFIG, Maps.of("llmOperation", "v/test/ops/llm")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		ACell recovered = engine.jobs().invokeOperation(
+			"v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, agentId, Fields.MESSAGE, "second"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		assertEquals(Strings.create("second"), RT.getIn(recovered, Fields.RESPONSE));
+	}
+
+	@Test
+	public void testLlmTimeoutFailsPickedTaskWithoutSuspendingAgent() {
+		String agentId = "timeout-task-agent";
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(
+				Fields.AGENT_ID, agentId,
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/llmagent/chat",
+					"llmOperation", "v/test/ops/never",
+					"llmTimeoutMs", 1000)),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job request = engine.jobs().invokeOperation(
+			"v/ops/agent/request",
+			Maps.of(
+				Fields.AGENT_ID, agentId,
+				Fields.INPUT, Maps.of("q", "first"),
+				Fields.WAIT, CVMLong.create(5000)),
+			RequestContext.of(ALICE_DID));
+		assertThrows(covia.exception.JobFailedException.class,
+			() -> request.awaitResult(5000));
+		assertTrue(request.getErrorMessage().contains("LLM call timed out"),
+			request.getErrorMessage());
+
+		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent(agentId);
+		assertEquals(AgentState.SLEEPING, awaitFinished(agent));
+		assertEquals(0, agent.getTasks().count(),
+			"the task consumed by the failed cycle must be settled exactly once");
+		assertNull(agent.getError(), "a provider timeout must not park the agent");
+	}
 
 	/**
 	 * Transition that always fails must surface as a FAILED request Job, suspend

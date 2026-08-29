@@ -50,6 +50,7 @@ public class PublicScopeTest {
 
 	private static final AString OP_WRITE = Strings.create("v/ops/covia/write");
 	private static final AString OP_READ  = Strings.create("v/ops/covia/read");
+	private static final AString OP_SHOW_CONFIG = Strings.create("v/ops/venue/show-config");
 	private static final AString OP_ECHO  = Strings.create("v/test/ops/echo");
 
 	/** Venue with the secure read-only public default (auth.public.caps absent). */
@@ -139,6 +140,17 @@ public class PublicScopeTest {
 		Job job = pub.invokeAndWait(OP_READ, Maps.of(Strings.create("path"), Strings.create("w/x")));
 		assertEquals(Status.COMPLETE, job.getStatus(),
 			"public read of own/venue lattice is allowed under the read-only default");
+	}
+
+	@Test
+	public void anonymousShowConfigAllowedByDefault() throws Exception {
+		VenueHTTP pub = anon(secureBase);
+		Job job = pub.invokeAndWait(OP_SHOW_CONFIG, Maps.empty());
+		assertEquals(Status.COMPLETE, job.getStatus(),
+			"the curated venue configuration is public discovery under the read-only default");
+		assertEquals(secureServer.getEngine().getDIDString(),
+			convex.core.lang.RT.getIn(job.getOutput(), "venue", "did"));
+		assertNotNull(convex.core.lang.RT.getIn(job.getOutput(), "notice"));
 	}
 
 	@Test

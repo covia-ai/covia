@@ -150,7 +150,9 @@ public class ToolCycleEngineTest {
 			.register(CONTROL, (c, ctx) -> {
 				assertSame(caller, Thread.currentThread(), "harness tools run on the calling thread");
 				events.add("control");
-				return ok("loaded");
+				return ToolCycleEngine.ToolOutcome.result(Strings.create("loaded"), Vectors.of(
+					Maps.of(AbstractLLMAdapter.K_ROLE, AbstractLLMAdapter.ROLE_SYSTEM,
+						AbstractLLMAdapter.K_CONTENT, Strings.create("loaded context event"))));
 			})
 			.fallback((c, ctx) -> {
 				events.add(c.id() + ":start");
@@ -168,7 +170,12 @@ public class ToolCycleEngineTest {
 		assertTrue(seq.indexOf("1:end") < control && seq.indexOf("2:end") < control,
 			"the wave before the barrier completes first: " + seq);
 		assertTrue(control < seq.indexOf("3:start"), "the wave after waits: " + seq);
-		assertEquals(List.of("1", "2", "ctl", "3"), sink.messages.stream().map(ToolCycleEngineTest::id).toList());
+		assertEquals(5, sink.messages.size());
+		assertEquals(List.of("1", "2", "ctl", "3"),
+			sink.messages.subList(0, 4).stream().map(ToolCycleEngineTest::id).toList(),
+			"every result in the assistant batch precedes load events");
+		assertEquals(AbstractLLMAdapter.ROLE_SYSTEM,
+			sink.messages.get(4).get(AbstractLLMAdapter.K_ROLE));
 	}
 
 	@Test
@@ -178,10 +185,20 @@ public class ToolCycleEngineTest {
 		Thread caller = Thread.currentThread();
 		List<Thread> seen = new ArrayList<>();
 		ToolCycleEngine.Registry<Object> registry = new ToolCycleEngine.Registry<Object>()
-			.fallback((c, ctx) -> { seen.add(Thread.currentThread()); return ok("ran"); });
-		ToolCycleEngine.executeBatch(Vectors.of(call("only", "op")), 0, registry, new Object(), new Sink(), log);
+			.fallback((c, ctx) -> {
+				seen.add(Thread.currentThread());
+				return ToolCycleEngine.ToolOutcome.result(Strings.create("ran"), Vectors.of(
+					Maps.of(AbstractLLMAdapter.K_ROLE, AbstractLLMAdapter.ROLE_SYSTEM,
+						AbstractLLMAdapter.K_CONTENT, Strings.create("event"))));
+			});
+		Sink sink = new Sink();
+		ToolCycleEngine.executeBatch(Vectors.of(call("only", "op")), 0, registry, new Object(), sink, log);
 		assertEquals(1, seen.size());
 		assertSame(caller, seen.get(0));
+		assertEquals(2, sink.messages.size());
+		assertEquals("only", id(sink.messages.get(0)), "the single result remains immediate");
+		assertEquals(AbstractLLMAdapter.ROLE_SYSTEM,
+			sink.messages.get(1).get(AbstractLLMAdapter.K_ROLE));
 	}
 
 	@Test

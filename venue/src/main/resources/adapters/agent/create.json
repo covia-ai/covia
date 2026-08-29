@@ -51,11 +51,11 @@
 								},
 								"context": {
 									"type": "array",
-									"description": "Operator-pinned context entries: inline text, refs, job results, or read-only operation results."
+									"description": "Operator-pinned context entries: inline text, refs, job results, or read-only operation results. Entries are trusted system instructions by default; set trusted:false on data that must remain inside a pinned_context tool result."
 								},
 								"loads": {
 									"type": "object",
-									"description": "Operator-pinned live loads: a map of key to entry spec. The key is the reference (lattice path, skill path with {skill: true}) unless the spec declares its own source — {text}, {op, input?} (volatile by default: rendered in the tail, never cached), {job} — under any key. Each value may include label, budget, required, volatile, and contributed tools, skills and skillsets."
+									"description": "Operator-pinned live loads: a map of key to entry spec. The key is the reference (lattice path, skill path with {skill: true}) unless the spec declares its own source — {text}, {op, input?} (volatile by default: rendered in the tail, never cached), {job} — under any key. Non-skill entries are trusted system instructions by default; use trusted:false for reference data. Each value may also include label, budget, required, volatile, and contributed tools, skills and skillsets."
 								},
 								"skills": {
 									"type": "array",

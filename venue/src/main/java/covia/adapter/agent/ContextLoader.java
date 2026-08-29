@@ -7,12 +7,10 @@ import convex.core.data.ABlob;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
-import convex.core.data.AVector;
 import convex.core.data.Cells;
 import convex.core.data.util.CellExplorer;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
-import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import covia.adapter.AssetAdapter;
 import covia.adapter.CoviaAdapter;
@@ -23,7 +21,7 @@ import covia.venue.Engine;
 import covia.venue.RequestContext;
 
 /**
- * Resolves context entries into system messages for agent LLM context.
+ * Resolves context entries into values for agent LLM context.
  *
  * <p>Context entries can be:</p>
  * <ul>
@@ -39,10 +37,6 @@ import covia.venue.RequestContext;
  */
 public class ContextLoader {
 
-	private static final AString K_ROLE    = Strings.intern("role");
-	private static final AString K_CONTENT = Strings.intern("content");
-	private static final AString ROLE_SYSTEM = Strings.intern("system");
-
 	private static final AString K_REF      = Strings.intern("ref");
 	private static final AString K_TEXT     = Strings.intern("text");
 	private static final AString K_LABEL    = Strings.intern("label");
@@ -53,7 +47,6 @@ public class ContextLoader {
 	private static final AString K_PATH     = Strings.intern("path");
 
 	private final Engine engine;
-	private final AString dialect;
 	private CellExplorer explorer;
 	private long explorerBudget = Long.MAX_VALUE;
 	private boolean truncated;
@@ -62,13 +55,7 @@ public class ContextLoader {
 	enum Resolution { RESOLVED, ABSENT, UNAVAILABLE }
 
 	public ContextLoader(Engine engine) {
-		this(engine, Labels.BRACKET);
-	}
-
-	/** A loader whose elements are labelled in the given dialect (AGENT_CONTEXT.md §1.1). */
-	public ContextLoader(Engine engine, AString dialect) {
 		this.engine = engine;
-		this.dialect = (dialect != null) ? dialect : Labels.BRACKET;
 	}
 
 	/**
@@ -113,70 +100,93 @@ public class ContextLoader {
 	}
 
 	/**
-	 * Resolves a vector of context entries into a vector of system messages.
-	 *
-	 * @param entries Context entries (strings or maps)
-	 * @param ctx Request context (caller identity for namespace scoping)
-	 * @return Vector of system message maps ({role: "system", content: "..."})
-	 */
-	public AVector<ACell> resolve(AVector<ACell> entries, RequestContext ctx) {
-		if (entries == null || entries.count() == 0) return Vectors.empty();
-
-		AVector<ACell> messages = Vectors.empty();
-		for (long i = 0; i < entries.count(); i++) {
-			ACell entry = entries.get(i);
-			ACell msg = resolveEntry(entry, ctx);
-			if (msg != null) {
-				messages = messages.conj(msg);
-			}
-		}
-		return messages;
-	}
-
-	/**
-	 * Resolves a single context entry into a system message, or null if
-	 * the entry cannot be resolved and is not required.
-	 */
-	public ACell resolveEntry(ACell entry, RequestContext ctx) {
-		Resolved r = resolveValue(entry, ctx);
-		if (r == null) return null;
-		return r.error() ? errorMessage(r.label(), r.content()) : systemMessage(r.label(), r.content());
-	}
-
-	/**
 	 * A resolved entry as a value: its label, its rendered content — or the
 	 * failure reason when {@code error} — and the provenance a renderer may
 	 * show: the entry's source in its own terms ({@code ref}, {@code op} +
 	 * {@code input}, {@code job} + {@code path}, or {@code source: text}).
 	 */
-	public record Resolved(String label, String content, boolean error, AMap<AString, ACell> provenance) {}
+	public record Resolved(String label, String content, boolean error, boolean absent,
+			AMap<AString, ACell> provenance) {}
 
 	private static final AString K_SOURCE = Strings.intern("source");
 	private static final AString SOURCE_TEXT = Strings.intern("text");
 
 	/**
-	 * Resolves one entry to a value — null when absent — for a renderer that
-	 * shapes it (a tool exchange, AGENT_CONTEXT.md §5.5). {@link #resolveEntry}
-	 * is the same resolution shaped as a system message.
+	 * Resolves one entry to a value — null when absent. The declaration boundary
+	 * decides whether a renderer admits it as instruction or shapes it as a tool
+	 * result (AGENT_CONTEXT.md §5.3–5.5).
 	 */
 	public Resolved resolveValue(ACell entry, RequestContext ctx) {
-		if (entry instanceof AString s) return resolveStringEntry(s, ctx);
+		return resolveValue(entry, ctx, false);
+	}
+
+	/**
+	 * Resolves one entry, optionally retaining a declared-but-absent source as a
+	 * structured result. Initial pinned context uses this so an absent optional
+	 * reference is visible rather than silently disappearing; ordinary dynamic
+	 * loads retain the historical null/skip behaviour.
+	 */
+	public Resolved resolveValue(ACell entry, RequestContext ctx, boolean includeAbsent) {
+		Resolved result = null;
+		if (entry instanceof AString s) result = resolveStringEntry(s, ctx);
 		if (entry instanceof AMap) {
 			@SuppressWarnings("unchecked")
 			AMap<AString, ACell> map = (AMap<AString, ACell>) entry;
-			return resolveMapEntry(map, ctx);
+			result = resolveMapEntry(map, ctx);
 		}
-		return null;
+		if (result != null || !includeAbsent || resolution != Resolution.ABSENT) return result;
+		return absent(entry);
 	}
 
 	private Resolved resolved(String label, String content, AMap<AString, ACell> provenance) {
 		resolution = Resolution.RESOLVED;
-		return new Resolved(label, content, false, provenance);
+		return new Resolved(label, content, false, false, provenance);
 	}
 
 	private Resolved failed(String label, String reason, AMap<AString, ACell> provenance) {
 		resolution = Resolution.UNAVAILABLE;
-		return new Resolved(label, reason, true, provenance);
+		return new Resolved(label, reason, true, false, provenance);
+	}
+
+	/** Metadata-only value for an optional declaration whose source is absent. */
+	private Resolved absent(ACell entry) {
+		String label = null;
+		AMap<AString, ACell> provenance = Maps.empty();
+		if (entry instanceof AString ref) {
+			boolean reference = isNamespacePath(ref.toString()) || isAssetReference(ref.toString());
+			label = reference ? deriveLabel(ref.toString()) : null;
+			provenance = reference ? Maps.of(K_REF, ref) : Maps.of(K_SOURCE, SOURCE_TEXT);
+		} else if (entry instanceof AMap<?, ?> raw) {
+			@SuppressWarnings("unchecked")
+			AMap<AString, ACell> map = (AMap<AString, ACell>) raw;
+			AString declaredLabel = RT.ensureString(map.get(K_LABEL));
+			AString ref = RT.ensureString(map.get(K_REF));
+			AString op = RT.ensureString(map.get(K_OP));
+			AString job = RT.ensureString(map.get(K_JOB));
+			AString text = RT.ensureString(map.get(K_TEXT));
+			if (declaredLabel != null) label = declaredLabel.toString();
+			if (ref != null) {
+				if (label == null) label = deriveLabel(ref.toString());
+				provenance = Maps.of(K_REF, ref);
+			} else if (op != null) {
+				if (label == null) label = "op:" + op;
+				provenance = Maps.of(K_OP, op);
+				ACell input = map.get(K_INPUT);
+				if (input != null) provenance = provenance.assoc(K_INPUT, input);
+			} else if (job != null) {
+				if (label == null) label = "Job " + job;
+				provenance = Maps.of(K_JOB, job);
+				AString path = RT.ensureString(map.get(K_PATH));
+				if (path != null) provenance = provenance.assoc(K_PATH, path);
+			} else if (text != null) {
+				provenance = Maps.of(K_SOURCE, SOURCE_TEXT);
+			} else {
+				return null;
+			}
+		} else {
+			return null;
+		}
+		return new Resolved(label, null, false, true, provenance);
 	}
 
 	/**
@@ -184,9 +194,10 @@ public class ContextLoader {
 	 * reference, or literal text based on prefix.
 	 */
 	Resolved resolveStringEntry(AString ref, RequestContext ctx) {
-		String label = deriveLabel(ref.toString());
 		String str = ref.toString();
-		AMap<AString, ACell> provenance = (isNamespacePath(str) || isAssetReference(str))
+		boolean reference = isNamespacePath(str) || isAssetReference(str);
+		String label = reference ? deriveLabel(str) : null;
+		AMap<AString, ACell> provenance = reference
 			? Maps.of(K_REF, ref) : Maps.of(K_SOURCE, SOURCE_TEXT);
 		try {
 			String content = resolveReference(ref, ctx);
@@ -523,28 +534,6 @@ public class ContextLoader {
 			if (required) throw e;
 			return failed(labelStr, rootMessage(e), provenance);   // errored → visible
 		}
-	}
-
-	/** A context element: the labelled content, or bare content when unlabelled. */
-	ACell systemMessage(String label, String content) {
-		resolution = Resolution.RESOLVED;
-		String text = (label != null) ? Labels.render(dialect, Labels.Kind.CONTEXT, content, label) : content;
-		return Maps.of(K_ROLE, ROLE_SYSTEM, K_CONTENT, Strings.create(text));
-	}
-
-	/**
-	 * Builds a visible "context source failed" system message. Used when an
-	 * entry ERRORS while resolving (op throws/times out, a read genuinely
-	 * fails) and is not {@code required} — so the LLM sees that this context
-	 * source is broken (and can adapt / retry / tell the user) instead of
-	 * silently operating without it. A merely absent/empty source is skipped,
-	 * not reported here.
-	 */
-	ACell errorMessage(String label, String reason) {
-		resolution = Resolution.UNAVAILABLE;
-		String l = (label != null && !label.isEmpty()) ? label : "context";
-		return Maps.of(K_ROLE, ROLE_SYSTEM, K_CONTENT,
-			Strings.create(Labels.renderUnavailable(dialect, Labels.Kind.CONTEXT, reason, l)));
 	}
 
 	/** Unwraps the most useful message from a (possibly wrapped) throwable. */

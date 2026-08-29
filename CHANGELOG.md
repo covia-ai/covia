@@ -10,6 +10,10 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Added
 
+- `v/ops/venue/show-config` gives agents and clients a public, curated view of
+  effective venue behavior (agent defaults, Job policy, durability, protocols,
+  limits, validation, active adapters and their explicit `publicConfig()`
+  allow-lists) without reflecting raw operator config or private settings.
 - Live agent tap: `GET /agents/{id}/sse` streams run-loop events (run/cycle
   boundaries, inferences, tool calls, status changes) and
   `engine.agentEvents()` delivers the same ordered stream in-process; both
@@ -37,6 +41,25 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Fixed
 
+- Tool batches now emit every provider `tool_result` before appending context or
+  skill-load events, keeping parallel Anthropic tool-use batches structurally
+  valid while preserving harness barrier execution order (#441).
+- Context-budget notices no longer present `context_unload` as reclaiming
+  append-only history, and only recommend `compact` when that tool is actually
+  available to the agent (#437).
+- Personal venues may use their own root key to grant capabilities for the exact
+  `did:key:...:u:<name>` subjects they issued, while foreign and nested
+  lookalikes remain outside venue authority (#440).
+- An LLM invocation timeout now fails only the task and chat inputs consumed by
+  that cycle and lets the agent return to `SLEEPING`; unrelated queued callers
+  survive and deterministic transition failures still suspend fail-fast (#439).
+- Telegram bots log one warning when a startup failure persists, then keep
+  identical retry noise at debug until the reason changes or a new outage begins
+  (#435).
+- `covia:inspect` now declares and enforces exactly one string `path` or a
+  non-empty string-array `paths`; case-sensitive multi-path agent inspection is
+  regression-tested so existing `g/Brightside`-style paths cannot silently
+  become `not found` through the provider-facing form.
 - `agent:context` shows loads-derived exchanges (live and volatile): both
   harness previews now build the Spec exactly as a live inference does (#418).
 - `Engine.jarVersion()` reads the venue's own Maven descriptor first, so a
@@ -59,6 +82,34 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Changed
 
+- Persistent agent context is ownership- and authority-explicit (#434, #436).
+  Operator `config.context` / `config.loads` values default to trusted system
+  instructions, with `trusted: false` for data. Caller-minted pinned data cannot
+  opt into trust; agent `context_load` data is always untrusted; resolved skill
+  bodies remain trusted instructions. Untrusted pinned values use one aggregate
+  `pinned_context` result, while agent-created values use one `loaded_context`
+  map keyed by exact unload handles. Content appears in only one channel.
+- `context_unload` accepts one key or a batch of keys, rejects pinned context
+  instead of masking it, and keeps a stable declared tool definition across
+  loads and unloads. Persistent entries still never auto-expire.
+- Agent-created non-volatile context and skill loads resolve once and append
+  their rendered event to conversation history. Later inference does not
+  re-read or rewrite that content; an explicit reload appends a newer event.
+  Full assistant/tool exchanges remain append-only, replacing scratch-history
+  elision, and cache-prefix inspection compares the immutable Convex vectors
+  directly rather than maintaining parallel prefix hashes.
+- Each session frame now persists its exact initial tool and message vectors.
+  Ordinary inference reuses those cells verbatim; compaction/reset is an
+  explicit rebuild boundary, while later skill and `more_tools` definitions
+  append trusted tool-state events and use the stable `invoke_tool` fallback.
+  The static task completion controls also remain in the initial harness, so a
+  task arriving later cannot change the tool prefix.
+- `agent:update` refreshes the skills catalog of existing sessions by appending
+  a newer system event only when the rendered catalog actually changed. Equal
+  reseeds are no-ops, preserving both history and the reusable prefix (#438).
+- Context data crosses a stable tool-result trust boundary: one system notice
+  identifies tool results as potentially untrusted reference data, while labels
+  remain reserved for trusted instructions and diagnostics.
 - A2A per-agent `SendMessage` with a `contextId` submits an `agent:request` task on
   that session (was `agent:chat`), so every A2A send is its own Task with its own
   reply (#416).

@@ -124,36 +124,55 @@ public class AgentToolboxTest {
 					Maps.of("path", CONTEXT_PATH, "budget", 1000L, "label", "Toolbox context")), null);
 			exercisedHarness.add(HarnessTools.CONTEXT_LOAD);
 			assertFalse(CVMBool.TRUE.equals(loaded.get(AbstractLLMAdapter.K_DONE)), where);
-			assertEquals(CVMBool.TRUE, RT.getIn(firstCall(loaded), Fields.RESULT, "loaded"), where);
+			assertEquals(CVMBool.TRUE,
+				RT.getIn(call(loaded, "call_context_load"), Fields.RESULT, "loaded"), where);
+			assertNotNull(call(loaded, "context:call_context_load"),
+				where + " context_load did not append its loaded_context event");
 			assertTrue(messages(loaded).toString().contains(CONTEXT_MARKER),
 				where + " context_load result was not assembled into the next prompt: " + loaded);
 
-			// context_unload: a conversation mask removes an operator-pinned load.
+			// context_unload: operator-pinned context is visible but protected.
 			AMap<AString, ACell> unloaded = step(agent, "unload context",
 				assistantCall("call_context_unload", HarnessTools.CONTEXT_UNLOAD,
 					Maps.of("path", PINNED_PATH)), null);
 			exercisedHarness.add(HarnessTools.CONTEXT_UNLOAD);
-			assertEquals(CVMBool.TRUE, RT.getIn(firstCall(unloaded), Fields.RESULT, "unloaded"), where);
-			assertFalse(messages(unloaded).toString().contains(PINNED_MARKER),
-				where + " context_unload left the pinned value in the next prompt: " + unloaded);
+			assertTrue(RT.getIn(firstCall(unloaded), Fields.RESULT).toString()
+				.contains("pinned_context and cannot be unloaded"), where);
+			assertTrue(messages(unloaded).toString().contains(PINNED_MARKER),
+				where + " context_unload removed pinned context: " + unloaded);
 
-			// skill_load: instructions and contributed tools both join the next inference.
+			// skill_load: instructions and tool state both append; the fixed
+			// dispatcher was part of the initial palette.
 			AMap<AString, ACell> skill = step(agent, "load a skill",
 				assistantCall("call_skill_load", HarnessTools.SKILL_LOAD,
 					Maps.of("name", "alpha")), null);
 			exercisedHarness.add(HarnessTools.SKILL_LOAD);
 			assertTrue(hasSystemContent(skill, SKILL_BODY),
 				where + " skill instructions missing from next prompt: " + skill);
-			assertTrue(hasTool(skill, "covia_read"),
-				where + " skill-contributed operation missing from next palette: " + skill);
+			assertTrue(hasTool(skill, HarnessTools.INVOKE_TOOL), where);
+			assertTrue(hasToolAddition(skill, "covia_read"),
+				where + " skill-contributed operation missing from appended state: " + skill);
+			assertFalse(hasTool(skill, "covia_read"),
+				where + " later definition rewrote the fixed palette: " + skill);
 
-			// more_tools: resolved operations join the next inference's palette.
+			// more_tools uses the same append-only state path. The following
+			// dispatcher call proves the new route is live without another palette.
 			AMap<AString, ACell> more = step(agent, "add a tool",
-				assistantCall("call_more_tools", HarnessTools.MORE_TOOLS,
-					Maps.of("operations", Vectors.of(Strings.create("v/test/ops/capturectx")))), null);
+				Maps.of("toolCalls", Vectors.of(
+					(ACell) Maps.of("id", "call_more_tools", "name", HarnessTools.MORE_TOOLS,
+						"arguments", Maps.of("operations",
+							Vectors.of(Strings.create("v/test/ops/capturectx")))),
+					(ACell) Maps.of("id", "call_invoke_tool", "name", HarnessTools.INVOKE_TOOL,
+						"arguments", Maps.of("name", "test_capturectx", "input", Maps.empty())))), null);
 			exercisedHarness.add(HarnessTools.MORE_TOOLS);
-			assertTrue(hasTool(more, "test_capturectx"),
-				where + " more_tools addition missing from next palette: " + more);
+			exercisedHarness.add(HarnessTools.INVOKE_TOOL);
+			assertTrue(hasToolAddition(more, "test_capturectx"),
+				where + " more_tools addition missing from appended state: " + more);
+			assertFalse(hasTool(more, "test_capturectx"), where);
+			ACell invokedResult = RT.getIn(call(more, "call_invoke_tool"), Fields.RESULT);
+			assertNotNull(invokedResult, where);
+			assertFalse(invokedResult.toString().startsWith("Error:"),
+				where + " fixed dispatcher did not invoke the added operation: " + more);
 
 			// Framework task tools are conditional toolbox entries, shared by both runtimes.
 			AMap<AString, ACell> completed = step(agent, null,
@@ -286,6 +305,17 @@ public class AgentToolboxTest {
 		return calls.get(0);
 	}
 
+	private static ACell call(AMap<AString, ACell> step, String id) {
+		AVector<ACell> calls = RT.ensureVector(step.get(Fields.CALLS));
+		assertNotNull(calls, "step has no calls: " + step);
+		for (long i = 0; i < calls.count(); i++) {
+			ACell call = calls.get(i);
+			if (id.equals(String.valueOf(RT.getIn(call, AbstractLLMAdapter.K_ID)))) return call;
+		}
+		fail("step has no call " + id + ": " + step);
+		return null;
+	}
+
 	private static void assertNextToolResult(AMap<AString, ACell> step,
 			String id, String name, ACell expected, String where) {
 		assertEquals(expected, RT.getIn(firstCall(step), Fields.RESULT), where);
@@ -316,6 +346,17 @@ public class AgentToolboxTest {
 			ACell message = messages(step).get(i);
 			if ("system".equals(String.valueOf(RT.getIn(message, "role")))
 					&& String.valueOf(RT.getIn(message, "content")).contains(expected)) return true;
+		}
+		return false;
+	}
+
+	private static boolean hasToolAddition(AMap<AString, ACell> step, String name) {
+		for (long i = 0; i < messages(step).count(); i++) {
+			AVector<ACell> additions = RT.ensureVector(
+				RT.getIn(messages(step).get(i), HarnessTools.K_TOOL_ADDITION));
+			for (long j = 0; additions != null && j < additions.count(); j++) {
+				if (name.equals(String.valueOf(RT.getIn(additions.get(j), Fields.NAME)))) return true;
+			}
 		}
 		return false;
 	}

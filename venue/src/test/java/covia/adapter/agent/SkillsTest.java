@@ -206,8 +206,8 @@ public class SkillsTest {
 		Skills.ResolvedSkill s = resolve("w/skills/shared");
 		assertEquals("shared-skill", s.name());
 		assertEquals("Shared body", s.body());
-		// Canonical path stays the directory address — the loads key the body
-		// re-resolves from each turn.
+		// Canonical path stays the directory address — the exact loads key and
+		// unload handle.
 		assertEquals("w/skills/shared", s.path().toString());
 	}
 
@@ -505,7 +505,8 @@ public class SkillsTest {
 		assertTrue(((CVMLong) meta.get(Strings.create("ts"))).longValue() > 0);
 		assertEquals("pdf", meta.get(Strings.create("label")).toString());
 		assertEquals(s.toolOps(), meta.get(Fields.TOOLS));
-		assertNull(meta.get(Skills.K_SKILLS));
+		assertEquals(Vectors.empty(), meta.get(Skills.K_SKILLS));
+		assertEquals(Vectors.empty(), meta.get(Skills.K_SKILLSETS));
 		// Nothing identity-shaped persists on the entry — dedup is live.
 		assertNull(meta.get(Strings.create("id")));
 
@@ -529,8 +530,8 @@ public class SkillsTest {
 		assertEquals(viaRef.id(), direct.id());
 		assertFalse(viaRef.path().equals(direct.path()));
 
-		// findLoadedDuplicate spots it under the other address — by LIVE
-		// re-resolution of the loaded entry, nothing stored
+		// findLoadedDuplicate spots it under the other address by content
+		// identity, regardless of address.
 		AMap<AString, ACell> loads = Maps.of(direct.path(), Skills.buildSkillLoadMeta(2000, direct));
 		assertEquals(direct.path(), Skills.findLoadedDuplicate(engine, ctx, loads, viaRef.id()));
 		assertNull(Skills.findLoadedDuplicate(engine, ctx, loads, Strings.create("other").getHash()));

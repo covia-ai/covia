@@ -690,6 +690,18 @@ public class TelegramAdapterTest {
 	// ------------------------------------------------------------------ status
 
 	@Test
+	public void testPendingRetryWarningIsDeduplicated() {
+		assertTrue(BotRunner.shouldWarnPending(BotRunner.State.PENDING,
+			"same reason", 2, "same reason"), "the first slow retry warns once");
+		assertFalse(BotRunner.shouldWarnPending(BotRunner.State.PENDING,
+			"same reason", 3, "same reason"), "unchanged retries are debug-only");
+		assertTrue(BotRunner.shouldWarnPending(BotRunner.State.PENDING,
+			"old reason", 3, "new reason"), "a changed failure remains visible");
+		assertTrue(BotRunner.shouldWarnPending(BotRunner.State.RUNNING,
+			null, 4, "outage"), "a new outage after recovery warns");
+	}
+
+	@Test
 	public void testBotsListsOnlyTheCallersBots() throws Exception {
 		ACell mine = run(RequestContext.of(OWNER), "v/ops/telegram/bots", Maps.empty());
 		AVector<ACell> bots = RT.ensureVector(RT.getIn(mine, TelegramAdapter.K_BOTS));

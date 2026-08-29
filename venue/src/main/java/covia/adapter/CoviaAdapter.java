@@ -435,12 +435,16 @@ public class CoviaAdapter extends AAdapter {
 	 * @return For a single path: {@code {result: "rendered JSON5"}}. For multiple
 	 *         paths: {@code {result: {path1: "...", path2: "..."}}}
 	 */
-	@SuppressWarnings("unchecked")
 	public ACell handleInspect(RequestContext ctx, ACell input) {
-		// Accept the uniform single-path `path` param (values API) as well as the
-		// original multi-target `paths`; `paths` wins when both are present.
+		// Keep the provider contract unambiguous: exactly one string `path` or
+		// string-vector `paths`. In particular, do not stringify arbitrary cells
+		// into paths — a malformed tool call must fail instead of silently reading
+		// a surprising location.
 		ACell pathsCell = RT.getIn(input, K_PATHS);
-		if (pathsCell == null) pathsCell = RT.getIn(input, Fields.PATH);
+		ACell pathCell = RT.getIn(input, Fields.PATH);
+		if ((pathCell == null) == (pathsCell == null)) {
+			throw new IllegalArgumentException("Provide exactly one of 'path' or 'paths'");
+		}
 
 		// Budget
 		int budget = DEFAULT_INSPECT_BUDGET;
@@ -452,26 +456,28 @@ public class CoviaAdapter extends AAdapter {
 		ACell compactCell = RT.getIn(input, K_COMPACT);
 		if (CVMBool.FALSE.equals(compactCell)) compact = false;
 
-		// Single path (string)
-		if (pathsCell instanceof AString) {
-			String rendered = explorePath(ctx, pathsCell.toString(), budget, compact);
+		// Single path
+		if (pathCell != null) {
+			AString path = RT.ensureString(pathCell);
+			if (path == null) throw new IllegalArgumentException("'path' must be a string");
+			String rendered = explorePath(ctx, path.toString(), budget, compact);
 			return Maps.of(K_RESULT, Strings.create(rendered));
 		}
 
-		// Multiple paths (vector)
-		if (pathsCell instanceof AVector<?> pathsVec) {
-			int perPath = Math.max(10, budget / (int) Math.max(1, pathsVec.count()));
-			AMap<AString, ACell> results = Maps.empty();
-			for (long i = 0; i < pathsVec.count(); i++) {
-				ACell p = pathsVec.get(i);
-				String pathStr = (p instanceof AString s) ? s.toString() : p.toString();
-				String rendered = explorePath(ctx, pathStr, perPath, compact);
-				results = results.assoc(Strings.create(pathStr), Strings.create(rendered));
-			}
-			return Maps.of(K_RESULT, results);
+		// Multiple paths
+		if (!(pathsCell instanceof AVector<?> pathsVec) || pathsVec.isEmpty()) {
+			throw new IllegalArgumentException("'paths' must be a non-empty array of strings");
 		}
-
-		throw new RuntimeException("'paths' must be a string or array of strings");
+		int perPath = Math.max(10, budget / (int) pathsVec.count());
+		AMap<AString, ACell> results = Maps.empty();
+		for (long i = 0; i < pathsVec.count(); i++) {
+			AString path = RT.ensureString(pathsVec.get(i));
+			if (path == null) throw new IllegalArgumentException("'paths' must contain only strings");
+			String pathStr = path.toString();
+			String rendered = explorePath(ctx, pathStr, perPath, compact);
+			results = results.assoc(path, Strings.create(rendered));
+		}
+		return Maps.of(K_RESULT, results);
 	}
 
 	/**

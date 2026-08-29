@@ -83,7 +83,7 @@ public class GoalTreeAdapterTest {
 			Maps.of("path", "w/skills/alpha",
 				"value", Maps.of(
 					"description", "Alpha skill",
-					"content", Maps.of("inline", "Use covia_read on w/probe."),
+					"content", Maps.of("inline", TestAdapter.SKILL_LLM_BODY),
 					"skill", Maps.of("tools", Vectors.of(Strings.create("v/ops/covia/read"))))),
 			ALICE).awaitResult(5000);
 		engine.jobs().invokeOperation("v/ops/covia/write",
@@ -314,8 +314,8 @@ public class GoalTreeAdapterTest {
 
 	@Test
 	public void testHarnessToolRegistry() {
-		// All 8 harness tools are in the registry
-		assertEquals(8, GoalTreeAdapter.HARNESS_TOOL_REGISTRY.size());
+		// Shared controls plus the stable dispatcher are in the registry.
+		assertEquals(9, GoalTreeAdapter.HARNESS_TOOL_REGISTRY.size());
 		assertTrue(GoalTreeAdapter.isHarnessTool("subgoal"));
 		assertTrue(GoalTreeAdapter.isHarnessTool("complete"));
 		assertTrue(GoalTreeAdapter.isHarnessTool("fail"));
@@ -324,6 +324,7 @@ public class GoalTreeAdapterTest {
 		assertTrue(GoalTreeAdapter.isHarnessTool("context_unload"));
 		assertTrue(GoalTreeAdapter.isHarnessTool("more_tools"));
 		assertTrue(GoalTreeAdapter.isHarnessTool("skill_load"));
+		assertTrue(GoalTreeAdapter.isHarnessTool("invoke_tool"));
 		assertFalse(GoalTreeAdapter.isHarnessTool("covia_read"));
 
 		// Each definition has name, description, parameters
@@ -346,10 +347,11 @@ public class GoalTreeAdapterTest {
 				(ACell) Strings.create("v/ops/covia/read"), // not a harness tool — skipped
 				(ACell) Strings.create("more_tools")));
 		AVector<ACell> resolved = GoalTreeAdapter.resolveHarnessTools(config);
-		assertEquals(3, resolved.count());
+		assertEquals(4, resolved.count());
 		assertEquals("subgoal", RT.ensureString(RT.getIn(resolved.get(0), "name")).toString());
 		assertEquals("complete", RT.ensureString(RT.getIn(resolved.get(1), "name")).toString());
 		assertEquals("more_tools", RT.ensureString(RT.getIn(resolved.get(2), "name")).toString());
+		assertEquals("invoke_tool", RT.ensureString(RT.getIn(resolved.get(3), "name")).toString());
 	}
 
 	@Test
@@ -733,7 +735,7 @@ public class GoalTreeAdapterTest {
 	}
 
 	@Test
-	public void testLoadedValueRefreshesAfterToolWriteWithinSameFrame() {
+	public void testPersistentLoadedValueStaysStableAfterToolWriteWithinSameFrame() {
 		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of("path", "w/live-load", "value", "LOAD_VALUE_OLD"),
 			ALICE).awaitResult(5000);
@@ -751,7 +753,7 @@ public class GoalTreeAdapterTest {
 				(ACell) Maps.of("content", "refresh the loaded value")));
 
 		ACell output = adapter.processGoal(null, ALICE, input);
-		assertEquals("LIVE_LOAD_REFRESHED",
+		assertEquals("LIVE_LOAD_STABLE",
 			RT.ensureString(RT.getIn(output, Fields.RESPONSE)).toString());
 	}
 

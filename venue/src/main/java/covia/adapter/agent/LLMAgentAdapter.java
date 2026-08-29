@@ -10,6 +10,7 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -144,7 +145,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		AMap<AString, ACell> config = effectiveModelConfig(in.config(), ctx);
 		// Same scope-chain view as processChat (agent tier + session tier), so
 		// the inspected skills index carries the right (loaded) markers.
-		AMap<AString, ACell> configLoads = ContextChain.declaredLoads(
+		AMap<AString, ACell> configLoads = ContextChain.operatorLoads(
 			RT.getIn(config, Fields.LOADS), "config.loads");
 		ACell sessLoads = RT.getIn(in.session(), Fields.LOADS);
 		AMap<AString, ACell> sessionTier = (sessLoads instanceof AMap)
@@ -154,7 +155,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		ToolPalette.Palette palette = ToolPalette.resolve(engine, ctx, config, HARNESS_TOOL_NAMES);
 		ModelProfile profile = modelProfileFor(config, ctx);
 		AVector<ACell> harness = HarnessTools.offered(config, HarnessTools.SHARED);
-		AVector<ACell> fixedTools = (AVector<ACell>) harness.concat(palette.tools());
+		AVector<ACell> fixedTools = fixedTools(config, palette);
 
 		// The task renders through the tool loop's own renderer — a preview
 		// job id stands in for the one a real task would carry.
@@ -163,9 +164,8 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 			: null;
 		ToolContext toolCtx = toolContext(config, capsCtx, tasks, in.pending(), palette,
 			configLoads, sessionTier, in.session() != null, fixedTools, true);
+		toolCtx.labels = profile.labels();
 		ACell task = toolCtx.tasks.message();
-		AVector<ACell> taskTools = toolCtx.tasks.tools();
-		AVector<ACell> tools = (AVector<ACell>) taskTools.concat(fixedTools);
 		Loads.Snapshot loads = toolCtx.refreshLoadSnapshot(engine, profile.labels());
 		boolean hasInput = (in.messages() != null && in.messages().count() > 0)
 			|| (in.pending() != null && in.pending().count() > 0)
@@ -175,7 +175,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		// exchanges and volatile exchanges via withLoads — so an inspected
 		// context matches a live inference by construction. The pre-split
 		// elements dropped every loads-derived exchange from inspection (#418).
-		AVector<ACell> offered = ToolPalette.merge(tools, loads.tools());
+		AVector<ACell> offered = ToolPalette.merge(fixedTools, loads.tools());
 		AMap<AString, ACell> effectiveLoads = ContextChain.effective(configLoads, sessionTier);
 		ContextAssembler.Spec spec = new ContextAssembler.Spec(
 			engine, ctx, capsCtx, config,
@@ -187,7 +187,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 			.withLoads(loads, offered, effectiveLoads);
 		AVector<ACell> entries = Vectors.empty();
 		if (profile.toolCalling()) {
-			entries = (AVector<ACell>) ToolPalette.provenance(taskTools, "harness")
+			entries = (AVector<ACell>) ToolPalette.provenance(TaskTools.DEFINITIONS, "harness")
 				.concat(ToolPalette.provenance(harness, "harness"))
 				.concat(palette.provenance())
 				.concat(loads.toolProvenance());
@@ -207,7 +207,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 	 * One iteration of the tool loop on the supplied reply: text-as-control
 	 * recognised as live, the batch dispatched through the live registry —
 	 * a task resolution judged and recorded but never reaching a job — and the next
-	 * prompt rebuilt as the loop rebuilds it: loads re-read, a resolved task
+	 * prompt rebuilt as the loop rebuilds it: appended loads reused, volatile loads refreshed, a resolved task
 	 * gone from the tail, this iteration's turns in band.
 	 */
 	@Override
@@ -234,8 +234,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 
 		Loads.Snapshot loads = toolCtx.refreshLoadSnapshot(engine, p.spec().labels());
 		ACell task = toolCtx.tasks.message();
-		AVector<ACell> tools = ToolPalette.merge(
-			(AVector<ACell>) toolCtx.tasks.tools().concat(p.fixedTools()).concat(toolCtx.addedTools), loads.tools());
+		AVector<ACell> tools = ToolPalette.merge(p.fixedTools(), loads.tools());
 		ContextAssembler.Spec next = p.spec()
 			.withLoads(loads, tools, ContextChain.effective(toolCtx.outerLoads, toolCtx.loads))
 			.withToolLoop(turns)
@@ -289,7 +288,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		// the innermost tier for this runtime; a cycle with no session in scope
 		// has no writable tier and context_load/unload fail diagnosably.
 		boolean sessionInScope = RT.getIn(input, Fields.SESSION) != null;
-		AMap<AString, ACell> configLoads = ContextChain.declaredLoads(
+		AMap<AString, ACell> configLoads = ContextChain.operatorLoads(
 			RT.getIn(recordConfig, Fields.LOADS), "config.loads");
 		AMap<AString, ACell> sessionTier = ContextChain.sessionLoads(input);
 		AMap<AString, ACell> effectiveLoads = ContextChain.effective(configLoads, sessionTier);
@@ -304,6 +303,11 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 
 		ToolContext toolCtx = toolContext(config, capsCtx, tasks, pending, palette,
 			configLoads, sessionTier, sessionInScope, fixedTools, false);
+		toolCtx.labels = profile.labels();
+		toolCtx.frames = (sessionFrames != null) ? sessionFrames
+			: sessionInScope ? Vectors.of((ACell) GoalTreeContext.createFrame("")) : Vectors.empty();
+		toolCtx.sessionId = ctx.getSessionId();
+		toolCtx.agentState = resolveAgentState(ctx, agentId);
 
 		// Everything the assembler needs for this cycle; the loop supplies what
 		// changes per inference — loads, this cycle's turns, the outstanding task.
@@ -364,7 +368,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 				newMessagesFiltered.slice(0, newMessagesFiltered.count() - 1));
 		}
 		// Session-tier loads (post valve + this cycle's context_load/unload
-		// mutations, tombstones included) — the framework writes them back to
+		// mutations (including legacy tombstones) — the framework writes them back to
 		// sessions.<sid>.loads inside mergeRunResult's CAS (#142).
 		if (sessionInScope) {
 			output = output.assoc(Fields.LOADS, toolCtx.getLoads());
@@ -383,7 +387,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 	/**
 	 * The context harness tools run against for one cycle. Its loads slot is
 	 * the SESSION tier (the innermost writable tier for this runtime); the
-	 * agent tier rides along read-only for unload masking decisions.
+	 * agent tier rides along read-only so pinned ownership can be enforced.
 	 */
 	private ToolContext toolContext(AMap<AString, ACell> config, RequestContext capsCtx,
 			AVector<ACell> tasks, AVector<ACell> pending, ToolPalette.Palette palette,
@@ -400,12 +404,13 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		return toolCtx;
 	}
 
-	/** The tools fixed for a cycle — the harness tools offered (HarnessTools:
-	 *  opt-in by name, skill_load and context_unload implied by declared
-	 *  skills), then the configured palette. */
+	/** The immutable tools for a session: task controls, declared harness tools,
+	 * then the configured palette. Task controls reject calls when no task is in scope. */
 	@SuppressWarnings("unchecked")
 	private static AVector<ACell> fixedTools(AMap<AString, ACell> config, ToolPalette.Palette palette) {
-		return (AVector<ACell>) HarnessTools.offered(config, HarnessTools.SHARED).concat(palette.tools());
+		return (AVector<ACell>) TaskTools.DEFINITIONS
+			.concat(HarnessTools.offered(config, HarnessTools.SHARED))
+			.concat(palette.tools());
 	}
 
 	/**
@@ -441,16 +446,20 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		boolean retriedAfterTruncation = false;
 
 		for (int iteration = 0; iteration < maxToolIterations; iteration++) {
-			// The whole prompt is rebuilt before every call: loads re-read, this
-			// cycle's turns in band, the tail re-rendered after them.
+			// Existing messages stay intact; this cycle's turns extend them and
+			// only the volatile tail is expected to change.
 			AMap<AString, ACell> effectiveLoads =
 				ContextChain.effective(toolCtx.outerLoads, toolCtx.loads);
 			Loads.Snapshot loads = toolCtx.refreshLoadSnapshot(engine, spec.labels());
 			ACell taskMessage = toolCtx.tasks.message();
-			AVector<ACell> tools = ToolPalette.merge(
-				(AVector<ACell>) toolCtx.tasks.tools().concat(fixedTools).concat(toolCtx.addedTools), loads.tools());
-			ContextAssembler.Prompt prompt = ContextAssembler.assemble(
-				spec.withLoads(loads, tools, effectiveLoads).withToolLoop(messages).withTask(taskMessage));
+			AVector<ACell> tools = ToolPalette.merge(fixedTools, loads.tools());
+			ContextAssembler.Spec inference = spec
+				.withLoads(loads, tools, effectiveLoads)
+				.withFrames(toolCtx.frames)
+				.withToolLoop(messages)
+				.withTask(taskMessage);
+			inference = materialiseInitial(inference, toolCtx);
+			ContextAssembler.Prompt prompt = ContextAssembler.assemble(inference);
 
 			ACell assistant = invokeLevel3(llmOperation, config, prompt, ctx);
 			if (isLengthLimited(assistant)) {
@@ -504,6 +513,43 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 			+ maxToolIterations + ") without completing the task.");
 	}
 
+	/** Materialises the exact initial vectors before the first provider call.
+	 * A session CAS only fills an absent value, so a racing reader either sees
+	 * these vectors or reuses the already-committed ones. */
+	@SuppressWarnings("unchecked")
+	private ContextAssembler.Spec materialiseInitial(
+			ContextAssembler.Spec spec, ToolContext toolCtx) {
+		if (ContextAssembler.rendered(toolCtx.frames) != null || toolCtx.frames.isEmpty()) {
+			return spec;
+		}
+		ContextAssembler.Rendered rendered = ContextAssembler.initialise(spec);
+		AMap<AString, ACell> root = (AMap<AString, ACell>) toolCtx.frames.get(0);
+		toolCtx.frames = toolCtx.frames.assoc(0,
+			GoalTreeContext.withRenderedContext(root, rendered));
+
+		if (toolCtx.agentState != null && toolCtx.sessionId != null) {
+			ContextAssembler.Rendered candidate = rendered;
+			toolCtx.agentState.updateSessionFrames(toolCtx.sessionId, null, frames -> {
+				if (frames.isEmpty()) return frames;
+				AMap<AString, ACell> current = (AMap<AString, ACell>) frames.get(0);
+				if (ContextAssembler.Rendered.fromCell(
+						current.get(GoalTreeContext.K_RENDERED_CONTEXT)) != null) return frames;
+				return frames.assoc(0, GoalTreeContext.withRenderedContext(current, candidate));
+			});
+			AMap<AString, ACell> session = toolCtx.agentState.getSession(toolCtx.sessionId);
+			AVector<ACell> persisted = (session != null)
+				? RT.ensureVector(session.get(Strings.intern("frames"))) : null;
+			if (persisted != null && !persisted.isEmpty()) toolCtx.frames = persisted;
+		}
+		return spec.withFrames(toolCtx.frames);
+	}
+
+	private AgentState resolveAgentState(RequestContext ctx, AString agentId) {
+		if (agentId == null || ctx.getUserDID() == null) return null;
+		covia.venue.User user = engine.getVenueState().users().get(ctx.getUserDID());
+		return (user != null) ? user.agent(agentId.toString()) : null;
+	}
+
 	/**
 	 * Per-cycle harness registry. Completion becomes terminal only after the
 	 * lifecycle venue operation succeeds; a rejected completion remains
@@ -513,14 +559,11 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		return new ToolCycleEngine.Registry<ToolContext>()
 			.register(TaskTools.COMPLETE, (call, toolCtx) -> toolCtx.tasks.complete(call, toolCtx.turnText))
 			.register(TaskTools.FAIL, (call, toolCtx) -> toolCtx.tasks.fail(call, toolCtx.turnText))
-			.register(HarnessTools.CONTEXT_LOAD, (call, toolCtx) ->
-				ToolCycleEngine.ToolOutcome.result(handleContextLoad(call.input(), toolCtx)))
-			.register(HarnessTools.CONTEXT_UNLOAD, (call, toolCtx) ->
-				ToolCycleEngine.ToolOutcome.result(handleContextUnload(call.input(), toolCtx)))
-			.register(HarnessTools.SKILL_LOAD, (call, toolCtx) ->
-				ToolCycleEngine.ToolOutcome.result(handleSkillLoad(call.input(), toolCtx)))
-			.register(HarnessTools.MORE_TOOLS, (call, toolCtx) ->
-				ToolCycleEngine.ToolOutcome.result(toolCtx.moreTools(engine, call.input())))
+			.register(HarnessTools.CONTEXT_LOAD, this::handleContextLoad)
+			.register(HarnessTools.CONTEXT_UNLOAD, this::handleContextUnload)
+			.register(HarnessTools.SKILL_LOAD, this::handleSkillLoad)
+			.register(HarnessTools.MORE_TOOLS, this::handleMoreTools)
+			.register(HarnessTools.INVOKE_TOOL, this::handleInvokeTool)
 			.fallback((call, toolCtx) -> ToolCycleEngine.ToolOutcome.result(
 				dispatchTool(call.name(), call.input(), toolCtx.dispatchRoutes(),
 					toolCtx.ctx, toolCtx.toolCallTimeoutMs)));
@@ -536,6 +579,13 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		ACell result = HarnessTools.contextLoad(input, scope);
 		toolCtx.loads = scope.loads;
 		return result;
+	}
+
+	private ToolCycleEngine.ToolOutcome handleContextLoad(
+			ToolCycleEngine.ToolCall call, ToolContext toolCtx) {
+		AMap<AString, ACell> before = toolCtx.loads;
+		ACell result = handleContextLoad(call.input(), toolCtx);
+		return loadedOutcome(call, toolCtx, before, result);
 	}
 
 	/**
@@ -554,12 +604,66 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		return result;
 	}
 
+	private ToolCycleEngine.ToolOutcome handleSkillLoad(
+			ToolCycleEngine.ToolCall call, ToolContext toolCtx) {
+		AMap<AString, ACell> before = toolCtx.loads;
+		ACell result = handleSkillLoad(call.input(), toolCtx);
+		return loadedOutcome(call, toolCtx, before, result);
+	}
+
+	private ToolCycleEngine.ToolOutcome loadedOutcome(ToolCycleEngine.ToolCall call,
+			ToolContext toolCtx, AMap<AString, ACell> before, ACell result) {
+		AString key = RT.ensureString(RT.getIn(result, K_PATH));
+		if (key == null || before.equals(toolCtx.loads)) {
+			return ToolCycleEngine.ToolOutcome.result(result);
+		}
+		AString eventId = ContextAssembler.contextEventId(call.id(), call.iteration(), key);
+		Loads.Snapshot beforeSnapshot = loadSnapshot(toolCtx, before);
+		Loads.Append appended = Loads.append(
+			engine, toolCtx.ctx, toolCtx.loads, key, toolCtx.labels, eventId);
+		toolCtx.loads = appended.loads();
+		AVector<ACell> events = (AVector<ACell>) appended.messages().concat(
+			HarnessTools.toolStateEvent(beforeSnapshot, loadSnapshot(toolCtx, toolCtx.loads)));
+		return ToolCycleEngine.ToolOutcome.result(result, events);
+	}
+
 	ACell handleContextUnload(ACell input, ToolContext toolCtx) {
 		HarnessTools.LoadScope scope = loadScope(toolCtx,
 			"Error: no session in scope — context loads are per-conversation (#142)");
 		ACell result = HarnessTools.contextUnload(input, scope);
 		toolCtx.loads = scope.loads;
 		return result;
+	}
+
+	private ToolCycleEngine.ToolOutcome handleContextUnload(
+			ToolCycleEngine.ToolCall call, ToolContext toolCtx) {
+		AMap<AString, ACell> before = toolCtx.loads;
+		Loads.Snapshot beforeSnapshot = loadSnapshot(toolCtx, before);
+		ACell result = handleContextUnload(call.input(), toolCtx);
+		return ToolCycleEngine.ToolOutcome.result(result,
+			HarnessTools.toolStateEvent(beforeSnapshot, loadSnapshot(toolCtx, toolCtx.loads)));
+	}
+
+	private ToolCycleEngine.ToolOutcome handleMoreTools(
+			ToolCycleEngine.ToolCall call, ToolContext toolCtx) {
+		HarnessTools.Added added = toolCtx.moreTools(engine, call.input());
+		return ToolCycleEngine.ToolOutcome.result(added.result(),
+			HarnessTools.toolStateEvent(added.tools(), null));
+	}
+
+	private ToolCycleEngine.ToolOutcome handleInvokeTool(
+			ToolCycleEngine.ToolCall call, ToolContext toolCtx) {
+		HarnessTools.Invocation invocation = HarnessTools.invocation(call.input());
+		if (invocation.error() != null) return ToolCycleEngine.ToolOutcome.result(invocation.error());
+		return ToolCycleEngine.ToolOutcome.result(dispatchTool(
+			invocation.name(), invocation.input(), toolCtx.dispatchRoutes(),
+			toolCtx.ctx, toolCtx.toolCallTimeoutMs));
+	}
+
+	private Loads.Snapshot loadSnapshot(ToolContext toolCtx, AMap<AString, ACell> loads) {
+		return Loads.resolve(engine, toolCtx.ctx,
+			ContextChain.effective(toolCtx.outerLoads, loads),
+			toolCtx.fixedToolNames, toolCtx.labels);
 	}
 
 	private HarnessTools.LoadScope loadScope(ToolContext toolCtx, String unavailableMessage) {
@@ -646,6 +750,10 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		 *  (the dual of #215: control emitted as a tool, answer emitted as
 		 *  text). Null when the turn carried no text. */
 		AString turnText;
+		AString labels = Labels.BRACKET;
+		AVector<ACell> frames = Vectors.empty();
+		AgentState agentState;
+		Blob sessionId;
 		/** Skill sources from {@code config.skills} + {@code config.skillsets} —
 		 *  opaque to this runtime ({@link Skills} owns the semantics). */
 		Skills.SkillSources skillSources = Skills.SkillSources.EMPTY;
@@ -653,8 +761,6 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		 *  tools, and whatever more_tools adds) — loads-contributed tools dedup
 		 *  against these. */
 		java.util.Set<String> fixedToolNames = new java.util.HashSet<>();
-		/** Operations added by more_tools this run: offered from the next inference. */
-		AVector<ACell> addedTools = Vectors.empty();
 		private Map<String, AString> currentLoadRoutes = Map.of();
 
 		/**
@@ -676,10 +782,9 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		}
 
 		/** {@code more_tools}: the additions join this run's palette and routes. */
-		ACell moreTools(Engine engine, ACell input) {
+		HarnessTools.Added moreTools(Engine engine, ACell input) {
 			HarnessTools.Added added = HarnessTools.moreTools(input, engine, ctx, fixedToolNames, configToolMap);
-			addedTools = (AVector<ACell>) addedTools.concat(added.tools());
-			return added.result();
+			return added;
 		}
 
 		Map<String, AString> dispatchRoutes() {

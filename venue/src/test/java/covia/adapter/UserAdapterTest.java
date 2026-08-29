@@ -125,6 +125,27 @@ class UserAdapterTest {
 	}
 
 	@Test
+	void personalVenueRootAuthorityCoversOnlyItsIssuedUsers() {
+		Engine personal = Engine.createTemp(Maps.empty());
+		try {
+			RootAuthorityPolicy policy = personal.rootAuthorityPolicy();
+			AString venue = personal.getDIDString();
+			AString issued = Strings.create(venue + ":u:alice");
+			AString external = Strings.create(
+				UCAN.toDIDKey(AKeyPair.generate().getAccountKey()) + ":u:alice");
+
+			assertTrue(policy.acceptsRoot(venue, Strings.create(issued + "/w/notes")));
+			assertFalse(policy.acceptsRoot(venue, Strings.create(external + "/w/notes")),
+				"another did:key user-shaped subject is not venue-issued");
+			assertFalse(policy.acceptsRoot(venue,
+				Strings.create(issued + ":admin/w/notes")),
+				"the issued user must be exactly one valid username segment");
+		} finally {
+			personal.close();
+		}
+	}
+
+	@Test
 	void rejectsMalformedDIDAndAmbiguousIdentityInput() {
 		ExecutionException badDID = assertThrows(ExecutionException.class,
 			() -> create(Maps.of(Fields.DID, "alice")));

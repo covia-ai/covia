@@ -38,10 +38,13 @@ import covia.venue.AgentEvents;
  * subgoal, compact, context and skill loads, more_tools) is a barrier: it runs
  * alone, on the calling thread, after the wave before it has finished and
  * before the wave after it starts, because it mutates the harness context or
- * ends the cycle and its position in the batch is its meaning. Results are
- * appended in call order whatever order they finish in; a successful terminal
- * call still fences every later call; and cycle recording stays on the calling
- * thread, whose {@link CycleRecord} is thread-local.</p>
+	 * ends the cycle and its position in the batch is its meaning. Results are
+	 * appended in call order whatever order they finish in. Venue-authored events
+	 * produced by a call are held until every result in the assistant's batch has
+	 * been appended, because provider protocols require the complete result set
+	 * in the immediately following message. A successful terminal call still
+	 * fences every later call; cycle recording stays on the calling thread, whose
+	 * {@link CycleRecord} is thread-local.</p>
  *
  * <p><b>Live tap.</b> Each call that reaches its handler is announced on the
  * cycle's {@link AgentEvents.Cycle} — {@code tool:start} as it is dispatched,
@@ -72,12 +75,22 @@ final class ToolCycleEngine {
 	 * @param terminalValue harness result carried by that terminal request
 	 * @param appendResult false when a handler persisted its result atomically
 	 * @param aborted true when the surrounding cycle must stop immediately
+	 * @param events venue-authored messages appended after all results in this
+	 *        assistant batch, for example a resolved context/skill load
 	 */
 	record ToolOutcome(ACell result, String terminalStatus, ACell terminalValue,
-			boolean appendResult, boolean aborted) {
+			boolean appendResult, boolean aborted, AVector<ACell> events) {
+
+		ToolOutcome {
+			events = (events != null) ? events : Vectors.empty();
+		}
 
 		static ToolOutcome result(ACell result) {
-			return new ToolOutcome(result, null, null, true, false);
+			return new ToolOutcome(result, null, null, true, false, null);
+		}
+
+		static ToolOutcome result(ACell result, AVector<ACell> events) {
+			return new ToolOutcome(result, null, null, true, false, events);
 		}
 
 		static ToolOutcome recorded() {
@@ -87,15 +100,15 @@ final class ToolCycleEngine {
 		/** A handler that persisted its result itself; {@code result} is what
 		 *  it recorded, kept for the cycle record. */
 		static ToolOutcome recorded(ACell result) {
-			return new ToolOutcome(result, null, null, false, false);
+			return new ToolOutcome(result, null, null, false, false, null);
 		}
 
 		static ToolOutcome terminal(ACell result, String status, ACell value) {
-			return new ToolOutcome(result, status, value, true, false);
+			return new ToolOutcome(result, status, value, true, false, null);
 		}
 
 		static ToolOutcome abort() {
-			return new ToolOutcome(null, null, null, false, true);
+			return new ToolOutcome(null, null, null, false, true, null);
 		}
 	}
 
@@ -181,6 +194,7 @@ final class ToolCycleEngine {
 
 		String terminalStatus = null;
 		ACell terminalValue = null;
+		List<AMap<AString, ACell>> deferredEvents = new ArrayList<>();
 		int i = 0;
 		while (i < decoded.size()) {
 			// The next wave: one harness tool alone, or every adjacent operation call.
@@ -213,12 +227,17 @@ final class ToolCycleEngine {
 				if (record != null) record.recordCall(e.call(), e.outcome(), e.millis());
 
 				if (e.outcome().aborted()) {
+					appendEvents(sink, deferredEvents);
 					return new BatchResult(null, null, true);
 				}
 
 				if (e.outcome().appendResult()) {
 					ACell result = (e.outcome().result() != null) ? e.outcome().result() : Maps.empty();
 					sink.append(stamped(AbstractLLMAdapter.toolResultMessage(e.call().id(), e.call().name(), result)));
+				}
+				for (long eventIndex = 0; eventIndex < e.outcome().events().count(); eventIndex++) {
+					AMap<AString, ACell> event = RT.ensureMap(e.outcome().events().get(eventIndex));
+					if (event != null) deferredEvents.add(stamped(event));
 				}
 
 				if (e.outcome().terminalStatus() != null) {
@@ -227,8 +246,13 @@ final class ToolCycleEngine {
 				}
 			}
 		}
+		appendEvents(sink, deferredEvents);
 
 		return new BatchResult(terminalStatus, terminalValue, false);
+	}
+
+	private static void appendEvents(BatchSink sink, List<AMap<AString, ACell>> events) {
+		for (AMap<AString, ACell> event : events) sink.append(event);
 	}
 
 	private static Decoded decode(ACell rawCall, int iteration, Logger log) {

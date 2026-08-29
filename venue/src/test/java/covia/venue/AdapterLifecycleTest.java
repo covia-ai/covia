@@ -19,8 +19,10 @@ import convex.core.lang.RT;
 import convex.auth.ucan.UCAN;
 import covia.adapter.AAdapter;
 import covia.exception.AuthException;
+import covia.grid.Authority;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.lattice.CapabilityChecker;
 
 /**
  * Runtime adapter lifecycle: enable / disable / reconfigure on a live venue,
@@ -318,6 +320,57 @@ public class AdapterLifecycleTest {
 	}
 
 	// ========== v/ops/venue/* operations ==========
+
+	@Test
+	public void testShowConfigIsCuratedEffectiveAndPublic() throws Exception {
+		Engine engine = Engine.createTemp(Maps.of(
+			Config.NAME, "Configured Venue",
+			Config.HOSTNAME, "venue.example",
+			Config.PORT, 443L,
+			Config.STORE, "memory",
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
+			Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(Config.ENABLED, true)),
+			Config.DEFAULT_LLM_OPERATION, "v/models/test/public-default",
+			Config.DEFAULT_TRANSITION_OP, "v/ops/llmagent/test",
+			Config.MAX_TOOL_ITERATIONS, 17L,
+			Config.RECORD_READ_ONLY_OPERATIONS, true,
+			Config.OUTPUT_VALIDATION, "strict",
+			Config.ADAPTERS, Maps.of("fact", Maps.of(
+				"colour", "blue",
+				"token", "literal-secret-marker",
+				"ref", "s/SECRET_REFERENCE"))));
+		try {
+			engine.registerAdapter(new FactAdapter());
+			Engine.addDemoAssets(engine);
+
+			AString publicDID = Strings.create(engine.getDIDString() + ":public");
+			RequestContext publicCtx = RequestContext.ofAuthority(Authority.of(
+				publicDID, CapabilityChecker.readOnlyScope(publicDID)));
+			ACell shown = engine.jobs().invokeInternal(
+				"v/ops/venue/show-config", Maps.empty(), publicCtx)
+				.get(10, TimeUnit.SECONDS);
+
+			assertEquals(Strings.create("Configured Venue"), RT.getIn(shown, "venue", "name"));
+			assertEquals(Strings.create("https://venue.example"), RT.getIn(shown, "venue", "url"));
+			assertEquals(Strings.create("v/models/test/public-default"),
+				RT.getIn(shown, "agents", "defaultLlmOperation"));
+			assertEquals(convex.core.data.prim.CVMLong.create(17),
+				RT.getIn(shown, "agents", "maxToolIterations"));
+			assertEquals(CVMBool.TRUE, RT.getIn(shown, "jobs", "recordReadOnlyOperations"));
+			assertEquals(Strings.create("memory-only"), RT.getIn(shown, "storage", "statePersistence"));
+			assertEquals(Strings.create("strict"), RT.getIn(shown, "validation", "output"));
+			assertEquals(Strings.create("blue"),
+				RT.getIn(shown, "adapters", "publicConfig", "fact", "colour"));
+
+			String rendered = shown.toString();
+			assertFalse(rendered.contains("literal-secret-marker"), rendered);
+			assertFalse(rendered.contains("SECRET_REFERENCE"), rendered);
+			assertNull(RT.getIn(shown, "adapters", "publicConfig", "fact", "token"));
+			assertNull(RT.getIn(shown, "adapters", "publicConfig", "fact", "ref"));
+		} finally {
+			engine.close();
+		}
+	}
 
 	@Test
 	public void testVenueOpsDriveLifecycle() throws Exception {

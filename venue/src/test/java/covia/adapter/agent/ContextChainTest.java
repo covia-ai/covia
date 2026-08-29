@@ -9,6 +9,7 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 
@@ -113,10 +114,24 @@ public class ContextChainTest {
 			"declared and dynamic loads use the same advisory normalisation");
 		assertNull(RT.getIn(ok.get(A), "ts"),
 			"rendering a stable config declaration must not invent a fresh timestamp");
+		assertEquals(CVMBool.FALSE, RT.getIn(ok.get(A), Loads.K_AGENT_MANAGED),
+			"a generic declared tier is pinned");
+		assertEquals(CVMBool.FALSE, RT.getIn(ok.get(A), Loads.K_TRUSTED),
+			"generic/caller declarations do not receive instruction authority");
+		AMap<AString, ACell> operator = ContextChain.operatorLoads(Maps.of(
+			A, spec(100), B, spec(100).assoc(Loads.K_TRUSTED, CVMBool.FALSE)), "config.loads");
+		assertEquals(CVMBool.TRUE, RT.getIn(operator.get(A), Loads.K_TRUSTED));
+		assertEquals(CVMBool.FALSE, RT.getIn(operator.get(B), Loads.K_TRUSTED),
+			"operator config may explicitly keep reference data untrusted");
 		AMap<AString, ACell> minted = ContextChain.declaredLoads(
-			Maps.of(A, Maps.empty()), "loads", true);
+			Maps.of(A, Maps.of(Loads.K_AGENT_MANAGED, CVMBool.TRUE,
+				Loads.K_TRUSTED, CVMBool.TRUE)), "loads", true);
 		assertNotNull(RT.getIn(minted.get(A), "ts"),
 			"persistence boundaries stamp missing timestamps once");
+		assertEquals(CVMBool.FALSE, RT.getIn(minted.get(A), Loads.K_AGENT_MANAGED),
+			"caller-provided session context stays pinned even if it supplies an ownership flag");
+		assertEquals(CVMBool.FALSE, RT.getIn(minted.get(A), Loads.K_TRUSTED),
+			"caller-provided session context cannot promote itself to system authority");
 
 		// Non-map declaration or non-map spec: loud, never silently dropped.
 		assertThrows(IllegalArgumentException.class,

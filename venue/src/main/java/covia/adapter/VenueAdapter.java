@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -16,21 +17,27 @@ import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.api.Abilities;
 import covia.api.Fields;
+import covia.venue.Config;
 import covia.venue.Modules;
 import covia.venue.RequestContext;
 
 /**
- * Venue administration: live adapter/module lifecycle and process restart.
+ * Public venue configuration plus live adapter/module administration and
+ * process restart.
  *
- * <p>Every operation here is venue-owned. Adapter/module lifecycle requires a
+ * <p>{@code venue/show-config} is the deliberately curated public exception:
+ * it requires only read access to {@code v/config} and reports effective
+ * operational settings without reflecting the raw operator document. Every
+ * lifecycle operation is venue-owned. Adapter/module lifecycle requires a
  * venue-rooted delegation over {@code <venue DID>/adapters} with
  * {@code adapter/manage}; process restart requires {@code venue/restart} over
- * {@code <venue DID>/process}
- * ({@link covia.venue.Engine#requireVenueAuthority}). Direct venue execution
- * is allowed. A null capability scope is deliberately not enough for an
- * ordinary authenticated user.</p>
+ * {@code <venue DID>/process} ({@link covia.venue.Engine#requireVenueAuthority}).
+ * Direct venue execution is allowed. A null capability scope is deliberately
+ * not enough for an ordinary authenticated user.</p>
  *
  * <ul>
+ *   <li>{@code venue/show-config} — curated public effective settings useful
+ *       to agents and clients; never raw configuration.</li>
  *   <li>{@code venue/adapters} — full registry view: active and disabled
  *       adapters (kernel flag, owning module, operations) plus loaded modules.</li>
  *   <li>{@code venue/adapter/enable|disable} — retract or restore a non-kernel
@@ -69,6 +76,16 @@ public class VenueAdapter extends AAdapter {
 	private static final AString K_JAR = Strings.intern("jar");
 	private static final AString K_FALLBACK = Strings.intern("fallback");
 	private static final AString K_STARTUP_TIMEOUT = Strings.intern("startupTimeout");
+	private static final AString K_VENUE = Strings.intern("venue");
+	private static final AString K_AGENTS = Strings.intern("agents");
+	private static final AString K_JOBS = Strings.intern("jobs");
+	private static final AString K_STORAGE = Strings.intern("storage");
+	private static final AString K_ACCESS = Strings.intern("access");
+	private static final AString K_PROTOCOLS = Strings.intern("protocols");
+	private static final AString K_LIMITS = Strings.intern("limits");
+	private static final AString K_VALIDATION = Strings.intern("validation");
+	private static final AString K_PUBLIC_CONFIG = Strings.intern("publicConfig");
+	private static final AString K_NOTICE = Strings.intern("notice");
 
 	@Override
 	public String getName() {
@@ -77,12 +94,13 @@ public class VenueAdapter extends AAdapter {
 
 	@Override
 	public String getDescription() {
-		return "Venue administration: enable, disable and reconfigure adapters, and load or "
-			+ "unload adapter modules or restart the standalone venue process. Venue-owned operations.";
+		return "Public effective venue settings, plus venue-owned administration to enable, disable "
+			+ "and reconfigure adapters, load or unload modules, or restart the standalone process.";
 	}
 
 	@Override
 	protected void installAssets() {
+		installAsset("venue/show-config", "/adapters/venue/showConfig.json");
 		installAsset("venue/adapters", "/adapters/venue/adapters.json");
 		installAsset("venue/adapter/enable", "/adapters/venue/adapterEnable.json");
 		installAsset("venue/adapter/disable", "/adapters/venue/adapterDisable.json");
@@ -96,9 +114,13 @@ public class VenueAdapter extends AAdapter {
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx,
 			AMap<AString, ACell> meta, ACell input) {
-		requireInvoke(ctx);
 		try {
 			String subOperation = getSubOperation(meta);
+			if ("show-config".equals(subOperation)) {
+				engine.requireResourceAccess(ctx, Strings.create("v/config"), Capability.CRUD_READ);
+				return CompletableFuture.completedFuture(showConfig());
+			}
+			requireInvoke(ctx);
 			if ("restart".equals(subOperation)) {
 				engine.requireVenueAuthority(ctx, PROCESS_RESOURCE, Abilities.VENUE_RESTART);
 			} else {
@@ -118,6 +140,83 @@ public class VenueAdapter extends AAdapter {
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
 		}
+	}
+
+	// ========== public effective configuration ==========
+
+	/**
+	 * A stable allow-list of effective settings that affect how callers and
+	 * resident agents use this venue. This must never become a filtered copy of
+	 * the raw operator document: additions are explicit security decisions. Adapter
+	 * settings come only from each adapter's equally-public
+	 * {@link AAdapter#publicConfig()} allow-list.
+	 */
+	ACell showConfig() {
+		Config config = engine.config();
+
+		AMap<AString, ACell> venue = Maps.of(
+			Fields.DID, engine.getDIDString(),
+			Fields.URL, Strings.create(config.getBaseUrl()));
+		if (engine.getName() != null) venue = venue.assoc(Fields.NAME, engine.getName());
+
+		AMap<AString, ACell> agentDefaults = Maps.of(
+			"defaultLlmOperation", config.getDefaultLlmOperation(),
+			"defaultTransitionOp", config.getDefaultTransitionOp(),
+			"maxToolIterations", config.getMaxToolIterations());
+		AMap<AString, ACell> jobs = Maps.of(
+			"recordReadOnlyOperations", config.isRecordReadOnlyOperations(),
+			"privateJobsEnabled", config.isPrivateJobsEnabled(),
+			"scheduledJobsTrackedByDefault", config.isTrackScheduledJobs(),
+			"scheduledJobTrackingForced", config.isForceTrackScheduledJobs());
+
+		String store = config.getStore();
+		String persistence = "persistent";
+		if ("temp".equalsIgnoreCase(store)) persistence = "temporary";
+		else if ("memory".equalsIgnoreCase(store)) persistence = "memory-only";
+		AMap<AString, ACell> storage = Maps.of(
+			"statePersistence", persistence,
+			"contentBackend", config.getStorageType(),
+			"stateEncrypted", config.hasEncryptedEtchPolicy(),
+			"maxContentSize", config.getMaxContentSize());
+
+		AMap<AString, ACell> access = Maps.of(
+			"public", config.isPublicAccess(),
+			"userAutoCreate", config.isUserAutoCreate());
+		AMap<AString, ACell> protocols = Maps.of(
+			"rest", true,
+			"mcp", Maps.of("enabled", config.hasMCP(), "authRequired", config.isMCPAuthRequired()),
+			"a2a", Maps.of("enabled", config.hasA2A()));
+		AMap<AString, ACell> limits = Maps.of(
+			"rateLimitEnabled", config.isRateLimitEnabled(),
+			"requestsPerSecond", RT.cvm(config.getRateLimitRps()),
+			"requestBurst", RT.cvm(config.getRateLimitBurst()),
+			"maxConcurrentJobsPerUser", config.getMaxConcurrentJobsPerUser(),
+			"admissionBlockMs", config.getRateLimitBlockMs());
+
+		List<String> names = new ArrayList<>(engine.getAdapterNames());
+		names.sort(String::compareTo);
+		AVector<ACell> active = Vectors.empty();
+		AMap<AString, ACell> publicConfig = Maps.empty();
+		for (String name : names) {
+			active = active.conj(Strings.create(name));
+			AMap<AString, ACell> published = engine.getAdapter(name).publicConfig();
+			if (published != null && !published.isEmpty()) {
+				publicConfig = publicConfig.assoc(Strings.create(name), published);
+			}
+		}
+
+		return Maps.of(
+			K_VENUE, venue,
+			K_AGENTS, agentDefaults,
+			K_JOBS, jobs,
+			K_STORAGE, storage,
+			K_ACCESS, access,
+			K_PROTOCOLS, protocols,
+			K_LIMITS, limits,
+			K_VALIDATION, Maps.of("output", config.getOutputValidation()),
+			K_ADAPTERS, Maps.of("active", active, K_PUBLIC_CONFIG, publicConfig),
+			K_NOTICE, Strings.create("Curated effective settings only; private paths, allow-lists, "
+				+ "module details, credentials and secret references are omitted."));
 	}
 
 	// ========== adapters ==========

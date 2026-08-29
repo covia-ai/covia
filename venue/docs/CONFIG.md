@@ -1595,6 +1595,29 @@ adapter, never a call): `addDirs`, `mcpConfig`, `strictMcpConfig`,
 (`v/skills/adapters/claudecode`). Jobs have no framework timeout — a Claude Code run
 may take many minutes; clients poll and reconnect by job id.
 
+## Agent-visible effective configuration
+
+`v/ops/venue/show-config` returns the small, effective subset of venue
+configuration that clients and resident agents need in order to behave
+correctly. It is read-only and available under the normal public `v/` read
+scope. The result includes:
+
+- venue identity and advertised URL;
+- agent defaults, Job-recording policy and scheduled-Job tracking;
+- state durability, content backend and upload limit;
+- public access and protocol availability;
+- rate/admission limits and output-validation mode; and
+- sorted active adapters plus only the settings each adapter explicitly
+  publishes through its `publicConfig()` allow-list.
+
+This is an allow-list assembled from typed effective getters, not a raw config
+dump with guessed redaction. It never includes store or module paths, dynamic
+module policy, bind/CORS/SSRF or DID allow-lists, OAuth/client configuration,
+adapter-private settings, credentials, or secret references. New fields require
+an explicit publication and schema decision. Operators needing the full live
+registry and effective adapter configuration use the separately authorised
+`v/ops/venue/adapters` operation.
+
 ## Runtime adapter lifecycle
 
 This section is the operator reference. Adapter implementation and lifecycle
@@ -1611,7 +1634,8 @@ contracts are documented in [ADAPTERS.md](ADAPTERS.md#lifecycle-and-configuratio
 ```
 
 The `venue` adapter exposes venue-owned operations that change the adapter
-set of a *running* venue without a restart:
+set of a *running* venue without a restart. Its public `show-config` operation
+above is intentionally outside this administrative group:
 
 | Operation | Effect |
 |-----------|--------|

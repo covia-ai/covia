@@ -26,8 +26,6 @@ import covia.venue.AgentState;
  */
 public final class ConversationRenderer {
 
-	private static final AString K_RENDER_HISTORY = Strings.intern("renderHistory");
-	private static final AString RENDER_HISTORY_FULL = Strings.intern("full");
 	private static final AString K_TRUNCATED = Strings.intern("truncated");
 
 	private ConversationRenderer() {}
@@ -168,84 +166,6 @@ public final class ConversationRenderer {
 	}
 
 	/**
-	 * Renders prior completed cycles as user/final-assistant pairs while
-	 * retaining the active cycle in full. Assistant tool calls and their tool
-	 * results are therefore either both present or both absent, as required by
-	 * Anthropic and other tool-use protocols.
-	 */
-	public static AVector<ACell> renderElidingPriorScratch(AMap<AString, ACell> frame) {
-		return renderElidingPriorScratch(frame, Labels.BRACKET);
-	}
-
-	@SuppressWarnings("unchecked")
-	public static AVector<ACell> renderElidingPriorScratch(AMap<AString, ACell> frame, AString dialect) {
-		AVector<ACell> conversation = (AVector<ACell>) frame.get(GoalTreeContext.K_CONVERSATION);
-		if (conversation == null || conversation.count() == 0) return Vectors.empty();
-
-		long count = conversation.count();
-		long activeCycleStart = 0;
-		for (long i = count - 1; i >= 0; i--) {
-			ACell entry = conversation.get(i);
-			if (GoalTreeContext.isSegment(entry)) continue;
-			if (GoalTreeContext.isLiveTurn(entry)
-					&& GoalTreeContext.ROLE_USER.equals(RT.ensureString(
-						((AMap<AString, ACell>) entry).get(GoalTreeContext.K_ROLE)))) {
-				activeCycleStart = i;
-				break;
-			}
-		}
-		for (long i = activeCycleStart + 1; i < count; i++) {
-			ACell entry = conversation.get(i);
-			if (!GoalTreeContext.isLiveTurn(entry)) continue;
-			AMap<AString, ACell> turn = (AMap<AString, ACell>) entry;
-			if (GoalTreeContext.ROLE_ASSISTANT.equals(RT.ensureString(
-					turn.get(GoalTreeContext.K_ROLE))) && !hasToolCalls(turn)) {
-				activeCycleStart = count;
-			}
-		}
-
-		AVector<ACell> messages = Vectors.empty();
-		for (long i = 0; i < count; i++) {
-			ACell entry = conversation.get(i);
-			if (GoalTreeContext.isSegment(entry)) {
-				messages = messages.conj(renderSegment(entry, dialect));
-				continue;
-			}
-			if (!GoalTreeContext.isLiveTurn(entry)) continue;
-			AMap<AString, ACell> turn = (AMap<AString, ACell>) entry;
-
-			if (i >= activeCycleStart) {
-				messages = messages.conj(turn);
-				continue;
-			}
-
-			AString role = RT.ensureString(turn.get(GoalTreeContext.K_ROLE));
-			if (GoalTreeContext.ROLE_USER.equals(role)) {
-				messages = messages.conj(turn);
-			} else if (GoalTreeContext.ROLE_ASSISTANT.equals(role) && !hasToolCalls(turn)) {
-				messages = messages.conj(turn);
-			} else if (GoalTreeContext.ROLE_SYSTEM.equals(role)
-					&& AgentState.SOURCE_TOOL.equals(RT.getIn(turn, AgentState.K_SOURCE))) {
-				messages = messages.conj(turn);
-			}
-		}
-		return messages;
-	}
-
-	/** Uses full history only when explicitly requested; elision is the default. */
-	public static AVector<ACell> renderFor(AMap<AString, ACell> frame,
-			AMap<AString, ACell> config) {
-		return renderFor(frame, config, Labels.BRACKET);
-	}
-
-	public static AVector<ACell> renderFor(AMap<AString, ACell> frame,
-			AMap<AString, ACell> config, AString dialect) {
-		AString mode = (config != null) ? RT.ensureString(config.get(K_RENDER_HISTORY)) : null;
-		return RENDER_HISTORY_FULL.equals(mode)
-			? renderFull(frame, dialect) : renderElidingPriorScratch(frame, dialect);
-	}
-
-	/**
 	 * Converts one stored turn or live inbox envelope into the provider-facing
 	 * message shape {@code {role, content?, toolCalls?, id?, name?, structuredContent?, isError?}}:
 	 * content stringified (JSON, never EDN), framework metadata such as
@@ -284,8 +204,9 @@ public final class ConversationRenderer {
 		}
 		if (source == null) return message;
 		for (AString key : java.util.List.of(
-				GoalTreeContext.K_TOOL_CALLS, Strings.intern("id"), Strings.intern("name"),
-				covia.api.Fields.STRUCTURED_CONTENT, Strings.intern("isError"))) {
+			GoalTreeContext.K_TOOL_CALLS, Strings.intern("id"), Strings.intern("name"),
+				covia.api.Fields.STRUCTURED_CONTENT, Strings.intern("isError"),
+				HarnessTools.K_TOOL_ADDITION, HarnessTools.K_TOOL_REMOVAL)) {
 			ACell fieldValue = source.get(key);
 			if (fieldValue != null) message = message.assoc(key, fieldValue);
 		}

@@ -313,7 +313,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// Same scope-chain view as processGoal (agent + session tiers, plus the
 		// root frame's tier when a session carries frames), so the inspected
 		// skills index carries the right (loaded) markers.
-		AMap<AString, ACell> configLoads = ContextChain.declaredLoads(
+		AMap<AString, ACell> configLoads = ContextChain.operatorLoads(
 			RT.getIn(config, Fields.LOADS), "config.loads");
 		ACell sessLoads = RT.getIn(in.session(), Fields.LOADS);
 		AMap<AString, ACell> sessionTier = (sessLoads instanceof AMap)
@@ -353,7 +353,10 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		long toolCallTimeoutMs = resolveToolCallTimeoutMs(l3Config);
 		TaskTools.Tasks taskTools = new TaskTools.Tasks(engine, capsCtx, tasks, toolCallTimeoutMs, true);
 		AVector<ACell> harness = harnessForFrame(config, 0, typedTools);
-		AVector<ACell> fixedTools = (AVector<ACell>) taskTools.tools().concat(harness).concat(palette.tools());
+		AVector<ACell> fixedTools = (AVector<ACell>) TaskTools.DEFINITIONS.concat(harness).concat(palette.tools());
+		AMap<AString, ACell> frameLoads = rootFrames.isEmpty()
+			? Maps.empty()
+			: GoalTreeContext.getLoads((AMap<AString, ACell>) rootFrames.get(0));
 		ModelProfile profile = modelProfileFor(l3Config, ctx);
 		Loads.Snapshot loads = Loads.resolve(engine, capsCtx, indexLoads,
 			fixedToolNames(fixedTools), profile.labels());
@@ -374,7 +377,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			typedTools, toolCallTimeoutMs, outerLoads, taskTools);
 		AVector<ACell> entries = Vectors.empty();
 		if (profile.toolCalling()) {
-			entries = (AVector<ACell>) ToolPalette.provenance(taskTools.tools(), "harness")
+			entries = (AVector<ACell>) ToolPalette.provenance(TaskTools.DEFINITIONS, "harness")
 				.concat(ToolPalette.provenance(harness, "harness"))
 				.concat(palette.provenance())
 				.concat(loads.toolProvenance());
@@ -716,7 +719,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// operator-pinned) + session (sessions.<sid>.loads). Constant within a
 		// cycle; frames compose their tier on top (inner shadows/masks outer).
 		AMap<AString, ACell> outerLoads = ContextChain.effective(
-			ContextChain.declaredLoads(RT.getIn(recordConfig, Fields.LOADS), "config.loads"),
+			ContextChain.operatorLoads(RT.getIn(recordConfig, Fields.LOADS), "config.loads"),
 			ContextChain.sessionLoads(input));
 
 		// Authority, palette and the cycle's Spec. Harness tool names in
@@ -857,6 +860,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		final long toolCallTimeoutMs;
 		final AMap<AString, ACell> outerLoads;
 		AVector<ACell> baseTools;
+		final java.util.Set<String> fixedNames;
 		final Map<String, AString> configToolMap;
 		Map<String, AString> iterationToolMap = Map.of();
 		AMap<AString, ACell> activeFrame;
@@ -868,6 +872,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			this.store = store;
 			this.frameIndex = frameIndex;
 			this.baseTools = baseTools;
+			this.fixedNames = fixedToolNames(baseTools);
 			this.cycle = cycle;
 			this.config = cycle.config();
 			this.llmOperation = cycle.llmOperation();
@@ -891,6 +896,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 				.register(HarnessTools.CONTEXT_UNLOAD, (call, ignored) -> contextUnload(call))
 				.register(HarnessTools.SKILL_LOAD, (call, ignored) -> skillLoad(call))
 				.register(HarnessTools.MORE_TOOLS, (call, ignored) -> moreTools(call))
+				.register(HarnessTools.INVOKE_TOOL, (call, ignored) -> invokeTool(call))
 				.register(TOOL_SUBGOAL, (call, ignored) -> subgoal(call))
 				.fallback((call, ignored) -> ToolCycleEngine.ToolOutcome.result(
 					dispatchTool(call.name(), call.input(), iterationToolMap,
@@ -926,23 +932,43 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		private ToolCycleEngine.ToolOutcome contextLoad(
 				ToolCycleEngine.ToolCall call) {
 			HarnessTools.LoadScope scope = loadScope();
+			AMap<AString, ACell> before = scope.loads;
 			ACell result = HarnessTools.contextLoad(call.input(), scope);
-			activeFrame = activeFrame.assoc(GoalTreeContext.K_LOADS, scope.loads);
-			return ToolCycleEngine.ToolOutcome.result(result);
+			return loadedOutcome(call, scope, before, result);
 		}
 
 		private ToolCycleEngine.ToolOutcome contextUnload(
 				ToolCycleEngine.ToolCall call) {
 			HarnessTools.LoadScope scope = loadScope();
+			Loads.Snapshot before = loadSnapshot(scope.loads);
 			ACell result = HarnessTools.contextUnload(call.input(), scope);
 			activeFrame = activeFrame.assoc(GoalTreeContext.K_LOADS, scope.loads);
-			return ToolCycleEngine.ToolOutcome.result(result);
+			return ToolCycleEngine.ToolOutcome.result(result,
+				HarnessTools.toolStateEvent(before, loadSnapshot(scope.loads)));
 		}
 
 		private ToolCycleEngine.ToolOutcome skillLoad(
 				ToolCycleEngine.ToolCall call) {
 			HarnessTools.LoadScope scope = loadScope();
+			AMap<AString, ACell> before = scope.loads;
 			ACell result = HarnessTools.skillLoad(call.input(), scope);
+			return loadedOutcome(call, scope, before, result);
+		}
+
+		private ToolCycleEngine.ToolOutcome loadedOutcome(ToolCycleEngine.ToolCall call,
+				HarnessTools.LoadScope scope, AMap<AString, ACell> before, ACell result) {
+			AString key = RT.ensureString(RT.getIn(result, K_PATH));
+			if (key != null && !before.equals(scope.loads)) {
+				AString eventId = ContextAssembler.contextEventId(call.id(), call.iteration(), key);
+				Loads.Snapshot beforeSnapshot = loadSnapshot(before);
+				Loads.Append appended = Loads.append(
+					engine, ctx, scope.loads, key, cycleSpec.labels(), eventId);
+				scope.loads = appended.loads();
+				activeFrame = activeFrame.assoc(GoalTreeContext.K_LOADS, scope.loads);
+				AVector<ACell> events = (AVector<ACell>) appended.messages().concat(
+					HarnessTools.toolStateEvent(beforeSnapshot, loadSnapshot(scope.loads)));
+				return ToolCycleEngine.ToolOutcome.result(result, events);
+			}
 			activeFrame = activeFrame.assoc(GoalTreeContext.K_LOADS, scope.loads);
 			return ToolCycleEngine.ToolOutcome.result(result);
 		}
@@ -952,14 +978,27 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 				GoalTreeContext.getLoads(activeFrame), outerLoads, true, "", Skills.sourcesOf(config));
 		}
 
-		/** {@code more_tools}: the additions join this frame's base tools and the cycle's routes. */
-		@SuppressWarnings("unchecked")
+		/** {@code more_tools}: append definitions while keeping the initial tool vector fixed. */
 		private ToolCycleEngine.ToolOutcome moreTools(ToolCycleEngine.ToolCall call) {
 			HarnessTools.Added added = HarnessTools.moreTools(
-				call.input(), engine, ctx, fixedToolNames(baseTools), configToolMap);
-			baseTools = (AVector<ACell>) baseTools.concat(added.tools());
+				call.input(), engine, ctx, fixedNames, configToolMap);
 			log.info("more_tools: added {} tools", added.tools().count());
-			return ToolCycleEngine.ToolOutcome.result(added.result());
+			return ToolCycleEngine.ToolOutcome.result(added.result(),
+				HarnessTools.toolStateEvent(added.tools(), null));
+		}
+
+		private ToolCycleEngine.ToolOutcome invokeTool(ToolCycleEngine.ToolCall call) {
+			HarnessTools.Invocation invocation = HarnessTools.invocation(call.input());
+			if (invocation.error() != null) return ToolCycleEngine.ToolOutcome.result(invocation.error());
+			return ToolCycleEngine.ToolOutcome.result(dispatchTool(
+				invocation.name(), invocation.input(), iterationToolMap,
+				ctx, toolCallTimeoutMs));
+		}
+
+		private Loads.Snapshot loadSnapshot(AMap<AString, ACell> frameLoads) {
+			return Loads.resolve(engine, ctx,
+				ContextChain.effective(outerLoads, frameLoads),
+				fixedNames, cycleSpec.labels());
 		}
 
 		@SuppressWarnings("unchecked")
@@ -1124,11 +1163,21 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 				frameTools.pendingCompactSummary = null;
 			}
 
-			// The whole prompt is rebuilt before every call.
+			// The initial vectors are materialised exactly once per frame. Later
+			// calls reuse them and append conversation/tool-state events.
 			AVector<ACell> stack = (AVector<ACell>) currentFrames.slice(0, frameIndex + 1)
 				.assoc(frameIndex, frameTools.activeFrame);
-			ContextAssembler.Prompt prompt = ContextAssembler.assemble(
-				inferenceSpec(frameTools, harnessForFrame, frameL3Config, stack));
+			ContextAssembler.Spec inference =
+				inferenceSpec(frameTools, harnessForFrame, frameL3Config, stack);
+			if (ContextAssembler.rendered(stack) == null) {
+				ContextAssembler.Rendered rendered = ContextAssembler.initialise(inference);
+				frameTools.activeFrame = GoalTreeContext.withRenderedContext(
+					frameTools.activeFrame, rendered);
+				if (!persist(store, frameIndex, frameTools.activeFrame)) return abortedResult(store);
+				stack = stack.assoc(frameIndex, frameTools.activeFrame);
+				inference = inference.withFrames(stack);
+			}
+			ContextAssembler.Prompt prompt = ContextAssembler.assemble(inference);
 
 			ACell assistant = invokeLevel3(llmOperation, frameL3Config, prompt, ctx);
 			if (isLengthLimited(assistant)) {
@@ -1258,22 +1307,23 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 
 	/**
 	 * The Spec one inference of a frame assembles from — rebuilt before every
-	 * call: loads re-read under the agent's authority (their routes replacing
-	 * the frame's live-load routes), the frame stack (ancestors compacted, the
+	 * call: appended persistent loads skipped, volatile loads resolved under
+	 * the agent's authority, the frame stack (ancestors compacted, the
 	 * active frame in full), the compaction nudge once the frame has grown.
 	 */
 	@SuppressWarnings("unchecked")
 	private ContextAssembler.Spec inferenceSpec(FrameToolContext frameTools,
 			AVector<ACell> harnessForFrame, AMap<AString, ACell> frameL3Config, AVector<ACell> stack) {
+		AMap<AString, ACell> frameLoads = GoalTreeContext.getLoads(frameTools.activeFrame);
 		AMap<AString, ACell> effectiveLoads = ContextChain.effective(
-			frameTools.outerLoads, GoalTreeContext.getLoads(frameTools.activeFrame));
-		// The task tools ride the root frame while a task is outstanding —
-		// the framework's task boundary, the same on every runtime (TaskTools).
+			frameTools.outerLoads, frameLoads);
+		// Task controls are a stable part of the root harness. Keeping them in
+		// the initial vector avoids a palette rewrite when a task arrives.
 		boolean root = frameTools.frameIndex == 0;
-		AVector<ACell> taskTools = root ? frameTools.cycle.tasks().tools() : Vectors.empty();
+		AVector<ACell> taskTools = root ? TaskTools.DEFINITIONS : Vectors.empty();
 		AVector<ACell> fixedTools = (AVector<ACell>) taskTools.concat(harnessForFrame).concat(frameTools.baseTools);
 		Loads.Snapshot loads = Loads.resolve(engine, frameTools.ctx, effectiveLoads,
-			fixedToolNames(fixedTools), frameTools.cycleSpec.labels());
+			frameTools.fixedNames, frameTools.cycleSpec.labels());
 		frameTools.iterationToolMap = mergeRoutes(frameTools.configToolMap, loads.routes());
 		long liveTurns = GoalTreeContext.countLiveTurns(frameTools.activeFrame);
 		String notice = (liveTurns > AUTO_COMPACT_THRESHOLD && hasCompactTool(harnessForFrame))

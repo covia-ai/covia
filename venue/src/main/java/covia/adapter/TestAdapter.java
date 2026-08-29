@@ -19,6 +19,7 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.Utils;
+import covia.adapter.agent.ContextAssembler;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -28,6 +29,9 @@ import covia.venue.AgentState;
 public class TestAdapter extends AAdapter {
 	
 	public static final Logger log=LoggerFactory.getLogger(TestAdapter.class);
+
+	/** Shared body used by the skill-adoption test fixture and its mock LLM. */
+	public static final String SKILL_LLM_BODY = "Use covia_read on w/probe.";
 
     /**
      * Test-only sink: the {@code capturectx} op records the {@link RequestContext}
@@ -649,7 +653,7 @@ public class TestAdapter extends AAdapter {
      *   <li>covia_read result seen → respond
      *       {@code SKILL_TOOL_RESULT: <content>} — proves load → palette →
      *       dispatch all worked inside one chat transition</li>
-     *   <li>later turns ({@code [Skill: alpha — <path>]} system message present) →
+     *   <li>later turns (the shared skill body is present as a system message) →
      *       respond {@code SKILL_BODY_PRESENT} plus
      *       {@code SKILL_TOOLS_ACTIVE}/{@code SKILL_TOOLS_MISSING} for the
      *       persisted palette</li>
@@ -666,15 +670,20 @@ public class TestAdapter extends AAdapter {
 		if (model != null && "load-refresh-test".equals(model.toString())) {
 			boolean oldValue = false;
 			boolean newValue = false;
+			boolean writeResult = false;
 			for (long i = 0; i < messages.count(); i++) {
-				AString content = RT.ensureString(RT.getIn(messages.get(i), "content"));
-				if (content == null) continue;
-				oldValue |= content.toString().contains("LOAD_VALUE_OLD");
-				newValue |= content.toString().contains("LOAD_VALUE_NEW");
+				String visible = messagePayloadText(messages.get(i));
+				oldValue |= visible.contains("LOAD_VALUE_OLD");
+				newValue |= visible.contains("LOAD_VALUE_NEW");
+				writeResult |= "covia_write".equals(String.valueOf(RT.getIn(messages.get(i), "name")));
 			}
 			if (newValue) {
 				return Maps.of("role", Strings.create("assistant"),
-					"content", Strings.create("LIVE_LOAD_REFRESHED"));
+					"content", Strings.create("LIVE_LOAD_CHANGED_WITHOUT_RELOAD"));
+			}
+			if (oldValue && writeResult) {
+				return Maps.of("role", Strings.create("assistant"),
+					"content", Strings.create("LIVE_LOAD_STABLE"));
 			}
 			if (oldValue) {
 				return Maps.of("role", Strings.create("assistant"),
@@ -688,27 +697,30 @@ public class TestAdapter extends AAdapter {
 				"content", Strings.create("LIVE_LOAD_MISSING"));
 		}
 
-        boolean coviaReadOffered = false;
-        for (long i = 0; i < tools.count(); i++) {
-            AString n = RT.ensureString(RT.getIn(tools.get(i), "name"));
-            if (n != null && "covia_read".equals(n.toString())) { coviaReadOffered = true; break; }
-        }
-
-        boolean skillBodyPresent = false, skillLoadResult = false, coviaReadResult = false;
+		long currentCycleStart = 0;
+		for (long i = 0; i < messages.count(); i++) {
+			if ("user".equals(String.valueOf(RT.getIn(messages.get(i), "role")))) currentCycleStart = i;
+		}
+		boolean skillBodyPresent = false, skillLoadResult = false, coviaReadResult = false;
+		boolean coviaReadAdded = false;
         String coviaReadContent = "";
         for (long i = 0; i < messages.count(); i++) {
             ACell msg = messages.get(i);
             AString role = RT.ensureString(RT.getIn(msg, "role"));
             AString content = RT.ensureString(RT.getIn(msg, "content"));
             if (role == null) continue;
-            if ("system".equals(role.toString()) && content != null
-                    && content.toString().contains("[Skill: alpha")) {
-                skillBodyPresent = true;
-            }
-            if ("tool".equals(role.toString())) {
-                AString name = RT.ensureString(RT.getIn(msg, "name"));
-                if (name != null && "skill_load".equals(name.toString())) skillLoadResult = true;
-                if (name != null && "covia_read".equals(name.toString())) {
+			if ("system".equals(role.toString()) && content != null
+					&& content.toString().contains(SKILL_LLM_BODY)) {
+				skillBodyPresent = true;
+			}
+			AVector<ACell> additions = RT.ensureVector(RT.getIn(msg, "toolAddition"));
+			for (long j = 0; additions != null && j < additions.count(); j++) {
+				coviaReadAdded |= "covia_read".equals(String.valueOf(RT.getIn(additions.get(j), "name")));
+			}
+			if (i > currentCycleStart && "tool".equals(role.toString())) {
+				AString name = RT.ensureString(RT.getIn(msg, "name"));
+				if (name != null && "skill_load".equals(name.toString())) skillLoadResult = true;
+				if (name != null && "invoke_tool".equals(name.toString())) {
                     coviaReadResult = true;
                     ACell structured = RT.getIn(msg, "structuredContent");
                     coviaReadContent = (structured != null)
@@ -719,7 +731,7 @@ public class TestAdapter extends AAdapter {
         }
 
         boolean genericContextLifecycle = false;
-        boolean contextLoadResult = false, contextUnloadResult = false;
+		boolean contextLoadResult = false, contextUnloadResult = false, contextUnloadSucceeded = false;
         boolean immediateContextMarker = false;
         for (long i = 0; i < messages.count(); i++) {
             ACell msg = messages.get(i);
@@ -732,27 +744,33 @@ public class TestAdapter extends AAdapter {
             // Loaded content arrives as a loaded_context tool result (AGENT_CONTEXT.md §5.5).
             AString msgName = RT.ensureString(RT.getIn(msg, "name"));
             boolean loadedResult = role != null && "tool".equals(role.toString())
-                    && msgName != null && "loaded_context".equals(msgName.toString());
-            if ((loadedResult || (role != null && "system".equals(role.toString()))) && content != null
-                    && content.toString().contains("IMMEDIATE_CONTEXT_MARKER")) {
+                    && msgName != null && ContextAssembler.LOADED_CONTEXT_TOOL.equals(msgName.toString());
+            if ((loadedResult || (role != null && "system".equals(role.toString())))
+                    && messagePayloadText(msg).contains("IMMEDIATE_CONTEXT_MARKER")) {
                 immediateContextMarker = true;
             }
             if (role != null && "tool".equals(role.toString())) {
                 AString name = RT.ensureString(RT.getIn(msg, "name"));
                 if (name != null && "context_load".equals(name.toString())) contextLoadResult = true;
-                if (name != null && "context_unload".equals(name.toString())) contextUnloadResult = true;
+				if (name != null && "context_unload".equals(name.toString())) {
+					contextUnloadResult = true;
+					String payload = messagePayloadText(msg);
+					contextUnloadSucceeded = payload.contains("\"unloaded\":true")
+						|| payload.contains("unloaded: true");
+				}
             }
         }
 
         // Generic context lifecycle mode proves both directions in one
-        // transition: load content appears on the next inference, then unload
-        // removes it on the following inference.
-        if (genericContextLifecycle) {
-            if (contextUnloadResult) {
-                return Maps.of("role", Strings.create("assistant"),
-                    "content", Strings.create(immediateContextMarker
-                        ? "CONTEXT_UNLOAD_FAILED"
-                        : "CONTEXT_LOAD_AND_UNLOAD_IMMEDIATE"));
+		// transition: load content appears on the next inference, then unload
+		// deactivates it on the following inference. Append-only history still
+		// contains the earlier value, so the newest state event is authoritative.
+		if (genericContextLifecycle) {
+			if (contextUnloadResult) {
+				return Maps.of("role", Strings.create("assistant"),
+					"content", Strings.create(contextUnloadSucceeded
+						? "CONTEXT_LOAD_AND_UNLOAD_IMMEDIATE"
+						: "CONTEXT_UNLOAD_FAILED"));
             }
             if (contextLoadResult) {
                 if (!immediateContextMarker) {
@@ -784,22 +802,24 @@ public class TestAdapter extends AAdapter {
                 return Maps.of("role", Strings.create("assistant"),
                     "content", Strings.create("SKILL_BODY_MISSING"));
             }
-            if (!coviaReadOffered) {
-                return Maps.of("role", Strings.create("assistant"),
-                    "content", Strings.create("SKILL_TOOLS_MISSING"));
-            }
-            return Maps.of("role", Strings.create("assistant"),
-                "toolCalls", Vectors.of(Maps.of(
-                    "id", Strings.create("call_read"),
-                    "name", Strings.create("covia_read"),
-                    "arguments", Strings.create("{\"path\":\"w/probe\"}"))));
+			if (!coviaReadAdded || !hasTool(tools, "invoke_tool")) {
+				return Maps.of("role", Strings.create("assistant"),
+					"content", Strings.create("SKILL_TOOLS_MISSING"));
+			}
+			return Maps.of("role", Strings.create("assistant"),
+				"toolCalls", Vectors.of(Maps.of(
+					"id", Strings.create("call_read"),
+					"name", Strings.create("invoke_tool"),
+					"arguments", Strings.create(
+						"{\"name\":\"covia_read\",\"input\":{\"path\":\"w/probe\"}}"))));
         }
         if (skillBodyPresent) {
             // A later turn: the persisted loads entry re-rendered the body and
             // re-contributed the tools.
-            return Maps.of("role", Strings.create("assistant"),
-                "content", Strings.create("SKILL_BODY_PRESENT "
-                    + (coviaReadOffered ? "SKILL_TOOLS_ACTIVE" : "SKILL_TOOLS_MISSING")));
+			return Maps.of("role", Strings.create("assistant"),
+				"content", Strings.create("SKILL_BODY_PRESENT "
+					+ (coviaReadAdded && hasTool(tools, "invoke_tool")
+						? "SKILL_TOOLS_ACTIVE" : "SKILL_TOOLS_MISSING")));
         }
         return Maps.of("role", Strings.create("assistant"),
             "toolCalls", Vectors.of(Maps.of(
@@ -807,6 +827,14 @@ public class TestAdapter extends AAdapter {
                 "name", Strings.create("skill_load"),
                 "arguments", Strings.create("{\"name\":\"alpha\"}"))));
     }
+
+	/** Provider-visible result text, including canonical structured tool payloads. */
+	private static String messagePayloadText(ACell message) {
+		AString content = RT.ensureString(RT.getIn(message, "content"));
+		ACell structured = RT.getIn(message, "structuredContent");
+		if (structured == null) return (content != null) ? content.toString() : "";
+		return convex.core.util.JSON.print(structured).toString();
+	}
 
     /**
      * Test LLM driving more_tools mid-run adoption: adds {@code v/test/ops/echo}
@@ -821,21 +849,21 @@ public class TestAdapter extends AAdapter {
         AVector<ACell> tools = (RT.getIn(input, "tools") instanceof AVector<?> v)
             ? (AVector<ACell>) v : Vectors.empty();
 
-        boolean echoOffered = false;
-        for (long i = 0; i < tools.count(); i++) {
-            AString n = RT.ensureString(RT.getIn(tools.get(i), "name"));
-            if (n != null && "test_echo".equals(n.toString())) { echoOffered = true; break; }
-        }
+		boolean echoAdded = false;
 
         boolean moreToolsResult = false, echoResult = false;
         String echoContent = "";
         for (long i = 0; i < messages.count(); i++) {
             ACell msg = messages.get(i);
-            AString role = RT.ensureString(RT.getIn(msg, "role"));
-            if (role == null || !"tool".equals(role.toString())) continue;
+			AString role = RT.ensureString(RT.getIn(msg, "role"));
+			AVector<ACell> additions = RT.ensureVector(RT.getIn(msg, "toolAddition"));
+			for (long j = 0; additions != null && j < additions.count(); j++) {
+				echoAdded |= "test_echo".equals(String.valueOf(RT.getIn(additions.get(j), "name")));
+			}
+			if (role == null || !"tool".equals(role.toString())) continue;
             AString name = RT.ensureString(RT.getIn(msg, "name"));
             if (name != null && "more_tools".equals(name.toString())) moreToolsResult = true;
-            if (name != null && "test_echo".equals(name.toString())) {
+			if (name != null && "invoke_tool".equals(name.toString())) {
                 echoResult = true;
                 ACell structured = RT.getIn(msg, "structuredContent");
                 AString content = RT.ensureString(RT.getIn(msg, "content"));
@@ -850,22 +878,30 @@ public class TestAdapter extends AAdapter {
                 "content", Strings.create("MORE_TOOLS_RESULT: " + echoContent));
         }
         if (moreToolsResult) {
-            if (!echoOffered) {
+			if (!echoAdded || !hasTool(tools, "invoke_tool")) {
                 return Maps.of("role", Strings.create("assistant"),
                     "content", Strings.create("MORE_TOOLS_MISSING"));
             }
-            return Maps.of("role", Strings.create("assistant"),
-                "toolCalls", Vectors.of(Maps.of(
-                    "id", Strings.create("call_echo"),
-                    "name", Strings.create("test_echo"),
-                    "arguments", Strings.create("{\"echo\":\"mid-loop\"}"))));
+			return Maps.of("role", Strings.create("assistant"),
+				"toolCalls", Vectors.of(Maps.of(
+					"id", Strings.create("call_echo"),
+					"name", Strings.create("invoke_tool"),
+					"arguments", Strings.create(
+						"{\"name\":\"test_echo\",\"input\":{\"echo\":\"mid-loop\"}}"))));
         }
         return Maps.of("role", Strings.create("assistant"),
             "toolCalls", Vectors.of(Maps.of(
                 "id", Strings.create("call_more"),
                 "name", Strings.create("more_tools"),
-                "arguments", Strings.create("{\"operations\":[\"v/test/ops/echo\"]}"))));
-    }
+				"arguments", Strings.create("{\"operations\":[\"v/test/ops/echo\"]}"))));
+	}
+
+	private static boolean hasTool(AVector<ACell> tools, String name) {
+		for (long i = 0; tools != null && i < tools.count(); i++) {
+			if (name.equals(String.valueOf(RT.getIn(tools.get(i), "name")))) return true;
+		}
+		return false;
+	}
 
     /**
      * Test LLM that emits a tool call with MALFORMED (non-JSON) arguments on

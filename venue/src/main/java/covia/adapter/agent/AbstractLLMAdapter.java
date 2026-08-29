@@ -110,6 +110,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	// ========== context_load / context_unload — shared schema + helpers ==========
 
 	public static final AString K_PATH   = Strings.intern("path");
+	public static final AString K_PATHS  = Strings.intern("paths");
 	public static final AString K_BUDGET = Strings.intern("budget");
 	public static final AString K_LABEL  = Strings.intern("label");
 
@@ -134,7 +135,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			K_ID, Maps.of(
 				K_TYPE, Strings.create("string"),
 				K_DESCRIPTION, Strings.create(
-					"Key for a text, op or job entry — shown in its loaded_context call, passed to context_unload")),
+					"Key for a text, op or job entry — used as a key in the loaded_context result map")),
 			Strings.intern("text"), Maps.of(
 				K_TYPE, Strings.create("string"),
 				K_DESCRIPTION, Strings.create("A note to keep in context, verbatim")),
@@ -164,7 +165,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 					"Render at the end of your context, never cached, so its changes cost nothing "
 					+ "else. Default true for op, else false. Set true for a path whose value is likely "
 					+ "to change during this conversation (a queue, a status, something you write to); "
-					+ "leave false for reference material. Unload it when no longer needed."))));
+					+ "leave false for stable reference material."))));
 
 	/**
 	 * Shared parameter schema for the {@code context_unload} tool.
@@ -175,8 +176,17 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			K_PATH, Maps.of(
 				K_TYPE, Strings.create("string"),
 				K_DESCRIPTION, Strings.create(
-					"The entry's key as shown in its loaded_context call: the path you loaded, or the id you gave"))),
-		K_REQUIRED, Vectors.of(K_PATH));
+					"One exact key from the loaded_context result map")),
+			K_PATHS, Maps.of(
+				K_TYPE, Strings.create("array"),
+				K_DESCRIPTION, Strings.create(
+					"Several exact keys from the loaded_context result map, removed together in one call"),
+				Strings.create("items"), Maps.of(K_TYPE, Strings.create("string")),
+				Strings.create("minItems"), CVMLong.ONE,
+				Strings.create("maxItems"), CVMLong.create(50))),
+		Strings.create("oneOf"), Vectors.of(
+			Maps.of(K_REQUIRED, Vectors.of(K_PATH)),
+			Maps.of(K_REQUIRED, Vectors.of(K_PATHS))));
 
 	/**
 	 * Clamps a budget value supplied by the LLM. Returns the default
@@ -234,7 +244,9 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	public static AMap<AString, ACell> buildLoadEntryMeta(long budget, AString label) {
 		AMap<AString, ACell> meta = Maps.of(
 			K_BUDGET, CVMLong.create(budget),
-			Strings.intern("ts"), CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()));
+			Strings.intern("ts"), CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()),
+			Loads.K_AGENT_MANAGED, CVMBool.TRUE,
+			Loads.K_TRUSTED, CVMBool.FALSE);
 		if (label != null) meta = meta.assoc(K_LABEL, label);
 		return meta;
 	}
@@ -586,8 +598,10 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			result = invocation.get(llmTimeoutMs, TimeUnit.MILLISECONDS);
 		} catch (TimeoutException e) {
 			invocation.cancel(true);
-			throw new JobFailedException("LLM call timed out after " + llmTimeoutMs
+			JobFailedException failure = new JobFailedException("LLM call timed out after " + llmTimeoutMs
 				+ "ms (" + llmOperation + ")");
+			failure.initCause(e);
+			throw failure;
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
 			invocation.cancel(true);

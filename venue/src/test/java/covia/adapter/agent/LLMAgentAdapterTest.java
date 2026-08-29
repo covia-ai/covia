@@ -21,6 +21,7 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import covia.adapter.TestAdapter;
 import covia.adapter.agent.LLMAgentAdapter;
 import covia.adapter.agent.LLMAgentAdapter.ToolContext;
 import covia.api.Fields;
@@ -723,7 +724,7 @@ public class LLMAgentAdapterTest {
 
 		AMap<AString, ACell> palette = RT.ensureMap(l3.get(Strings.intern("palette")));
 		AVector<ACell> paletteEntries = RT.ensureVector(palette.get(Fields.TOOLS));
-		assertEquals(2, paletteEntries.count());
+		assertEquals(4, paletteEntries.count(), "stable task controls plus the two declared context tools");
 		for (long i = 0; i < paletteEntries.count(); i++) {
 			assertEquals("harness", RT.getIn(paletteEntries.get(i), Fields.SOURCE).toString());
 		}
@@ -735,7 +736,8 @@ public class LLMAgentAdapterTest {
 		assertEquals("load", RT.getIn(loadEntries.get(0), "kind").toString());
 		assertEquals("resolved", RT.getIn(loadEntries.get(0), "status").toString());
 		assertTrue(((CVMLong) RT.getIn(loadEntries.get(0), Fields.BYTES)).longValue() > 0);
-		assertNotNull(l3.get(Strings.intern("prefixHashes")));
+		assertNull(l3.get(Strings.intern("prefixHashes")),
+			"Convex vector equality is the cache identity; no parallel hash map is emitted");
 	}
 
 	@Test
@@ -778,7 +780,7 @@ public class LLMAgentAdapterTest {
 			Maps.of("path", "w/skills/alpha",
 				"value", Maps.of(
 					"description", "Alpha skill",
-					"content", Maps.of("inline", "Use covia_read on w/probe."),
+					"content", Maps.of("inline", TestAdapter.SKILL_LLM_BODY),
 					"skill", Maps.of("tools", Vectors.of(Strings.create("v/ops/covia/read"))))),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 		engine.jobs().invokeOperation("v/ops/covia/write",
@@ -801,7 +803,8 @@ public class LLMAgentAdapterTest {
 
 		ACell result = adapter.handleSkillLoad(Maps.of("name", "alpha"), ctx);
 		assertTrue(RT.getIn(result, "loaded") != null, result.toString());
-		assertEquals("Use covia_read on w/probe.", RT.getIn(result, "body").toString());
+		assertNull(RT.getIn(result, "body"),
+			"skill_load is a compact acknowledgement; the body is appended as an event");
 		AVector<ACell> toolNames = RT.ensureVector(RT.getIn(result, "tools"));
 		assertEquals(1, toolNames.count());
 		assertEquals("covia_read", toolNames.get(0).toString());
@@ -986,6 +989,11 @@ public class LLMAgentAdapterTest {
 		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
 		assertEquals("CONTEXT_LOAD_AND_UNLOAD_IMMEDIATE",
 			RT.ensureString(RT.getIn(output, Fields.RESPONSE)).toString());
+		AVector<ACell> turns = RT.ensureVector(RT.getIn(output, Fields.TURNS));
+		String renderedTurns = convex.core.util.JSON.toString(turns);
+		assertTrue(renderedTurns.contains("\"name\":\"loaded_context\""), renderedTurns);
+		assertEquals(1, renderedTurns.split("IMMEDIATE_CONTEXT_MARKER", -1).length - 1,
+			"the value appears once in the appended loaded_context result, not in its acknowledgement");
 
 		@SuppressWarnings("unchecked")
 		AMap<AString, ACell> loads =
@@ -1032,8 +1040,8 @@ public class LLMAgentAdapterTest {
 		assertNotNull(loads);
 		assertTrue(Skills.isSkillEntry(loads.get(Strings.create("w/skills/alpha"))));
 
-		// Turn 2: body re-renders and tools re-contribute from the persisted
-		// entry — no reload.
+		// Turn 2 reuses the appended skill body and tool-state event — no reload
+		// and no rewrite of the initial tools vector.
 		agent.appendSessionPending(sid, Maps.of(
 			Strings.intern("content"), Strings.create("carry on")));
 		engine.jobs().invokeOperation("v/ops/agent/trigger",
@@ -1045,6 +1053,36 @@ public class LLMAgentAdapterTest {
 		AString turn2 = RT.ensureString(RT.getIn(agent.getTimeline().get(1), Fields.RESULT));
 		assertTrue(turn2.toString().contains("SKILL_BODY_PRESENT"), turn2.toString());
 		assertTrue(turn2.toString().contains("SKILL_TOOLS_ACTIVE"), turn2.toString());
+
+		// The app/release path reseeds a skillset and then explicitly reapplies
+		// agent config. A changed catalog appends once; the initial messages stay
+		// byte-identical.
+		session = agent.getSession(sid);
+		ACell initialMessages = RT.getIn(session, Fields.FRAMES, CVMLong.ZERO,
+			GoalTreeContext.K_RENDERED_CONTEXT, Strings.intern("messages"));
+		engine.jobs().invokeOperation("v/ops/covia/write", Maps.of(
+			Fields.PATH, "w/skills/beta",
+			Fields.VALUE, Maps.of("description", "Beta catalog refresh")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		engine.jobs().invokeOperation("v/ops/agent/update", Maps.of(
+			Fields.AGENT_ID, "skill-e2e-agent",
+			Fields.CONFIG, Maps.of("skillsets", Vectors.of(Strings.create("w/skills")))),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		session = agent.getSession(sid);
+		assertEquals(initialMessages, RT.getIn(session, Fields.FRAMES, CVMLong.ZERO,
+			GoalTreeContext.K_RENDERED_CONTEXT, Strings.intern("messages")));
+		assertTrue(RT.getIn(session, Fields.FRAMES, CVMLong.ZERO,
+			Strings.intern("conversation")).toString().contains("Beta catalog refresh"));
+		long turnsAfterRefresh = RT.ensureVector(RT.getIn(session, Fields.FRAMES, CVMLong.ZERO,
+			Strings.intern("conversation"))).count();
+		engine.jobs().invokeOperation("v/ops/agent/update", Maps.of(
+			Fields.AGENT_ID, "skill-e2e-agent",
+			Fields.CONFIG, Maps.of("skillsets", Vectors.of(Strings.create("w/skills")))),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		assertEquals(turnsAfterRefresh, RT.ensureVector(RT.getIn(agent.getSession(sid),
+			Fields.FRAMES, CVMLong.ZERO, Strings.intern("conversation"))).count(),
+			"an equal catalog must not append duplicate context");
 	}
 
 	// ========== Response format ==========
@@ -1330,7 +1368,7 @@ public class LLMAgentAdapterTest {
 	}
 
 	@Test
-	public void testLoadedValueRefreshesAfterToolWriteWithinSameTransition() {
+	public void testPersistentLoadedValueStaysStableAfterToolWriteWithinSameTransition() {
 		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of("path", "w/live-load", "value", "LOAD_VALUE_OLD"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
@@ -1347,7 +1385,7 @@ public class LLMAgentAdapterTest {
 			Fields.SESSION, Maps.of(Fields.ID, Strings.create("live-load-session")));
 
 		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
-		assertEquals("LIVE_LOAD_REFRESHED",
+		assertEquals("LIVE_LOAD_STABLE",
 			RT.ensureString(RT.getIn(output, Fields.RESPONSE)).toString());
 	}
 
@@ -1486,7 +1524,7 @@ public class LLMAgentAdapterTest {
 	}
 
 	@Test
-	public void testFlatAgentContextUsesSharedConversationElision() {
+	public void testFlatAgentContextKeepsSharedConversationAppendOnly() {
 		AMap<AString, ACell> frame = GoalTreeContext.createFrame("flat session");
 		frame = GoalTreeContext.appendTurn(frame, Maps.of("role", "user", "content", "first"));
 		frame = GoalTreeContext.appendTurn(frame, Maps.of(
@@ -1504,12 +1542,14 @@ public class LLMAgentAdapterTest {
 			engine, RequestContext.of(ALICE_DID), null, Maps.empty(), null, null, 0, null,
 			null, null, null, Vectors.of((ACell) frame), null, null, true, null, null, null, null, null));
 
-		assertEquals(4, history.count());
+		assertEquals(6, history.count());
 		assertEquals("first", RT.getIn(history.get(0), "content").toString());
-		assertEquals("first done", RT.getIn(history.get(1), "content").toString());
-		assertEquals("second", RT.getIn(history.get(2), "content").toString());
-		assertNotNull(RT.getIn(history.get(3), "toolCalls"),
-			"the active tool cycle must remain intact for the provider");
+		assertNotNull(RT.getIn(history.get(1), "toolCalls"));
+		assertEquals("tool", RT.getIn(history.get(2), "role").toString());
+		assertEquals("first done", RT.getIn(history.get(3), "content").toString());
+		assertEquals("second", RT.getIn(history.get(4), "content").toString());
+		assertNotNull(RT.getIn(history.get(5), "toolCalls"),
+			"the current tool cycle also remains intact for the provider");
 	}
 
 	@Test
@@ -2366,10 +2406,10 @@ public class LLMAgentAdapterTest {
 		assertFalse(content.contains("aaa"), "Should not mention resolved task aaa");
 		assertTrue(content.contains("complete_task"), "Should instruct to use complete_task");
 
-		// All resolved: nothing to render, nothing to offer.
+		// All resolved: no task tail, but the immutable harness remains byte-stable.
 		ctx.tasks.complete(completeCall("also done"), null);
 		assertNull(ctx.tasks.message());
-		assertEquals(0, ctx.tasks.tools().count());
+		assertEquals(TaskTools.DEFINITIONS, ctx.tasks.tools());
 	}
 
 	@Test
@@ -2649,9 +2689,8 @@ public class LLMAgentAdapterTest {
 
 	// ========== Context scope chain (#142) ==========
 
-	/** context_unload masks an operator-pinned load with a nil tombstone —
-	 *  this conversation only; the pin itself is untouched. */
-	@Test public void testUnloadMasksConfigLoad() {
+	/** context_unload cannot hide operator-pinned context. */
+	@Test public void testUnloadRejectsConfigLoad() {
 		ToolContext toolCtx = new ToolContext(Strings.create("agent"),
 			RequestContext.of(ALICE_DID), null, null, null, null);
 		toolCtx.outerLoads = Maps.of(Strings.create("w/pinned"),
@@ -2659,14 +2698,10 @@ public class LLMAgentAdapterTest {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 
 		ACell result = adapter.handleContextUnload(Maps.of("path", "w/pinned"), toolCtx);
-		assertEquals(CVMBool.TRUE, RT.getIn(result, "unloaded"), "result: " + result);
-		assertTrue(toolCtx.loads.containsKey(Strings.create("w/pinned")), "tombstone written");
-		assertNull(toolCtx.loads.get(Strings.create("w/pinned")));
-
-		// Re-loading overwrites the tombstone (local un-mask).
-		ACell reload = adapter.handleContextLoad(Maps.of("path", "w/pinned"), toolCtx);
-		assertEquals(CVMBool.TRUE, RT.getIn(reload, "loaded"), "result: " + reload);
-		assertNotNull(toolCtx.loads.get(Strings.create("w/pinned")));
+		assertTrue(result.toString().contains("pinned_context and cannot be unloaded"), "result: " + result);
+		assertEquals(0, toolCtx.loads.count(), "no masking tombstone is written");
+		assertNotNull(ContextChain.effective(toolCtx.outerLoads, toolCtx.loads)
+			.get(Strings.create("w/pinned")), "the pinned value remains visible");
 	}
 
 	/** A cycle with no session in scope has no writable tier. */

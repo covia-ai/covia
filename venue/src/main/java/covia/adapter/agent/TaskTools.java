@@ -24,8 +24,8 @@ import covia.venue.RequestContext;
  * (AGENT_SESSIONS.md §6.3) is that a picked task completes only when the
  * agent says so — {@code complete_task} / {@code fail_task}, resolved at
  * tool time through the venue op — and otherwise yields. This class owns
- * what that takes: the two tool definitions, offered only while a task is
- * outstanding; the outstanding-task message rendered last on every
+	 * what that takes: two stable harness definitions; the outstanding-task
+	 * message rendered last on every
  * inference; and the resolution itself, judged by {@link Completion} against
  * the requester's strict schema (#376). The harness supplies the cycle's
  * tasks and the turn's text, and decides what a resolution means for its own
@@ -73,7 +73,8 @@ final class TaskTools {
 						"Human-readable explanation of why the task cannot be completed"))),
 			AbstractLLMAdapter.K_REQUIRED, Vectors.of(Strings.create("error"))));
 
-	/** Both tools, offered only while a task is outstanding. */
+	/** Both tools. They remain in the immutable harness palette; without an
+	 * outstanding task their handlers return a scoped error. */
 	static final AVector<ACell> DEFINITIONS = Vectors.of((ACell) DEF_COMPLETE, (ACell) DEF_FAIL);
 
 	private TaskTools() {}
@@ -115,9 +116,9 @@ final class TaskTools {
 			return results;
 		}
 
-		/** The task tools while a task is outstanding; none otherwise. */
+		/** The stable task-tool definitions. */
 		AVector<ACell> tools() {
-			return outstanding() ? DEFINITIONS : Vectors.empty();
+			return DEFINITIONS;
 		}
 
 		/**

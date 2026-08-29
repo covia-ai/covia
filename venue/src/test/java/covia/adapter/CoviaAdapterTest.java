@@ -2154,7 +2154,7 @@ public class CoviaAdapterTest {
 			jobCtx).awaitResult(5000);
 
 		Job inspectJob = engine.jobs().invokeOperation("v/ops/covia/inspect",
-			Maps.of(Strings.create("paths"), Strings.create("t/analysis"),
+			Maps.of(Strings.create("path"), Strings.create("t/analysis"),
 				Strings.create("budget"), CVMLong.create(1000)),
 			jobCtx);
 		ACell result = inspectJob.awaitResult(5000);
@@ -2379,7 +2379,7 @@ public class CoviaAdapterTest {
 			ALICE).awaitResult(5000);
 
 		Job exploreJob = engine.jobs().invokeOperation("v/ops/covia/inspect",
-			Maps.of(Strings.create("paths"), Strings.create("w/vendors/acme"),
+			Maps.of(Strings.create("path"), Strings.create("w/vendors/acme"),
 				Strings.create("budget"), CVMLong.create(2000)),
 			ALICE);
 		ACell result = exploreJob.awaitResult(5000);
@@ -2418,6 +2418,35 @@ public class CoviaAdapterTest {
 	}
 
 	@Test
+	public void testInspectMultipleCaseSensitiveAgentPaths() {
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "Brightside",
+				Fields.CONFIG, Maps.of("model", "upper-model"),
+				AgentState.KEY_STATE, Maps.of("marker", "upper-agent")),
+			ALICE).awaitResult(5000);
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "brightside",
+				Fields.CONFIG, Maps.of("model", "lower-model"),
+				AgentState.KEY_STATE, Maps.of("marker", "lower-agent")),
+			ALICE).awaitResult(5000);
+
+		ACell result = engine.jobs().invokeOperation("v/ops/covia/inspect",
+			Maps.of("paths", Vectors.of(
+				(ACell) Strings.create("g/Brightside"),
+				(ACell) Strings.create("g/brightside")),
+				"budget", 20_000L), ALICE).awaitResult(5000);
+		ACell rendered = RT.getIn(result, "result");
+		AString upper = RT.ensureString(RT.getIn(rendered, "g/Brightside"));
+		AString lower = RT.ensureString(RT.getIn(rendered, "g/brightside"));
+		assertNotNull(upper);
+		assertNotNull(lower);
+		assertFalse(upper.toString().contains("not found"), upper.toString());
+		assertFalse(lower.toString().contains("not found"), lower.toString());
+		assertTrue(upper.toString().contains("upper-agent"), upper.toString());
+		assertTrue(lower.toString().contains("lower-agent"), lower.toString());
+	}
+
+	@Test
 	public void testInspectBudgetTruncation() {
 		// Write a large map
 		AMap<AString, ACell> largeMap = Maps.empty();
@@ -2432,7 +2461,7 @@ public class CoviaAdapterTest {
 
 		// Small budget — should truncate
 		Job exploreJob = engine.jobs().invokeOperation("v/ops/covia/inspect",
-			Maps.of(Strings.create("paths"), Strings.create("w/large"),
+			Maps.of(Strings.create("path"), Strings.create("w/large"),
 				Strings.create("budget"), CVMLong.create(200)),
 			ALICE);
 		ACell result = exploreJob.awaitResult(5000);
@@ -2450,7 +2479,7 @@ public class CoviaAdapterTest {
 
 		// No budget param — should use default (500)
 		Job exploreJob = engine.jobs().invokeOperation("v/ops/covia/inspect",
-			Maps.of(Strings.create("paths"), Strings.create("w/small")),
+			Maps.of(Strings.create("path"), Strings.create("w/small")),
 			ALICE);
 		ACell result = exploreJob.awaitResult(5000);
 		String rendered = RT.ensureString(RT.getIn(result, Strings.intern("result"))).toString();
@@ -2460,7 +2489,7 @@ public class CoviaAdapterTest {
 	@Test
 	public void testInspectMissingPath() {
 		Job exploreJob = engine.jobs().invokeOperation("v/ops/covia/inspect",
-			Maps.of(Strings.create("paths"), Strings.create("w/nonexistent")),
+			Maps.of(Strings.create("path"), Strings.create("w/nonexistent")),
 			ALICE);
 		ACell result = exploreJob.awaitResult(5000);
 		String rendered = RT.ensureString(RT.getIn(result, Strings.intern("result"))).toString();
@@ -2479,7 +2508,7 @@ public class CoviaAdapterTest {
 			agentCtx).awaitResult(5000);
 
 		Job exploreJob = engine.jobs().invokeOperation("v/ops/covia/inspect",
-			Maps.of(Strings.create("paths"), Strings.create("n/research"),
+			Maps.of(Strings.create("path"), Strings.create("n/research"),
 				Strings.create("budget"), CVMLong.create(1000)),
 			agentCtx);
 		ACell result = exploreJob.awaitResult(5000);
@@ -2499,7 +2528,7 @@ public class CoviaAdapterTest {
 			ALICE).awaitResult(5000);
 
 		Job exploreJob = engine.jobs().invokeOperation("v/ops/covia/inspect",
-			Maps.of(Strings.create("paths"), Strings.create("w/deep"),
+			Maps.of(Strings.create("path"), Strings.create("w/deep"),
 				Strings.create("budget"), CVMLong.create(5000)),
 			ALICE);
 		ACell result = exploreJob.awaitResult(5000);
