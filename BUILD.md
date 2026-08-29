@@ -373,7 +373,11 @@ mvn clean deploy    # -SNAPSHOT version → routes to the Central snapshot repo
 
 **Publish a release** — only after the GitHub Release for the tag is live:
 ```bash
-mvn clean deploy -Prelease
+mvn clean deploy -P release,gpg
+```
+In PowerShell, quote the combined profile argument:
+```powershell
+mvn clean deploy '-Prelease,gpg'
 ```
 `-Prelease` GPG-signs every artifact; the Central plugin bundles all reactor
 modules (main + sources + javadoc + pom + signatures, including attached
