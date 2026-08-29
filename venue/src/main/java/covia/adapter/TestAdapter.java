@@ -702,7 +702,6 @@ public class TestAdapter extends AAdapter {
 			if ("user".equals(String.valueOf(RT.getIn(messages.get(i), "role")))) currentCycleStart = i;
 		}
 		boolean skillBodyPresent = false, skillLoadResult = false, coviaReadResult = false;
-		boolean coviaReadAdded = false;
         String coviaReadContent = "";
         for (long i = 0; i < messages.count(); i++) {
             ACell msg = messages.get(i);
@@ -713,14 +712,11 @@ public class TestAdapter extends AAdapter {
 					&& content.toString().contains(SKILL_LLM_BODY)) {
 				skillBodyPresent = true;
 			}
-			AVector<ACell> additions = RT.ensureVector(RT.getIn(msg, "toolAddition"));
-			for (long j = 0; additions != null && j < additions.count(); j++) {
-				coviaReadAdded |= "covia_read".equals(String.valueOf(RT.getIn(additions.get(j), "name")));
-			}
 			if (i > currentCycleStart && "tool".equals(role.toString())) {
 				AString name = RT.ensureString(RT.getIn(msg, "name"));
 				if (name != null && "skill_load".equals(name.toString())) skillLoadResult = true;
-				if (name != null && "invoke_tool".equals(name.toString())) {
+				if (name != null && ("covia_read".equals(name.toString())
+						|| "invoke_tool".equals(name.toString()))) {
                     coviaReadResult = true;
                     ACell structured = RT.getIn(msg, "structuredContent");
                     coviaReadContent = (structured != null)
@@ -802,23 +798,22 @@ public class TestAdapter extends AAdapter {
                 return Maps.of("role", Strings.create("assistant"),
                     "content", Strings.create("SKILL_BODY_MISSING"));
             }
-			if (!coviaReadAdded || !hasTool(tools, "invoke_tool")) {
+			if (!hasTool(tools, "covia_read")) {
 				return Maps.of("role", Strings.create("assistant"),
 					"content", Strings.create("SKILL_TOOLS_MISSING"));
 			}
 			return Maps.of("role", Strings.create("assistant"),
 				"toolCalls", Vectors.of(Maps.of(
 					"id", Strings.create("call_read"),
-					"name", Strings.create("invoke_tool"),
-					"arguments", Strings.create(
-						"{\"name\":\"covia_read\",\"input\":{\"path\":\"w/probe\"}}"))));
+					"name", Strings.create("covia_read"),
+					"arguments", Strings.create("{\"path\":\"w/probe\"}"))));
         }
         if (skillBodyPresent) {
             // A later turn: the persisted loads entry re-rendered the body and
             // re-contributed the tools.
 			return Maps.of("role", Strings.create("assistant"),
 				"content", Strings.create("SKILL_BODY_PRESENT "
-					+ (coviaReadAdded && hasTool(tools, "invoke_tool")
+					+ (hasTool(tools, "covia_read")
 						? "SKILL_TOOLS_ACTIVE" : "SKILL_TOOLS_MISSING")));
         }
         return Maps.of("role", Strings.create("assistant"),
@@ -1411,7 +1406,7 @@ public class TestAdapter extends AAdapter {
             for (long i = 0; i < messages.count(); i++) {
                 AString role = RT.ensureString(RT.getIn(messages.get(i), "role"));
                 AString content = RT.ensureString(RT.getIn(messages.get(i), "content"));
-                if (role != null && "system".equals(role.toString())
+                if (role != null && "assistant".equals(role.toString())
                         && content != null && content.toString().contains("[Compacted:")) {
                     return Maps.of(
                         "role", Strings.create("assistant"),

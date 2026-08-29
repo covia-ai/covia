@@ -90,9 +90,24 @@ public final class Labels {
 	/** The wrapper a provider edge applies to a system message that follows the
 	 *  conversation, where the provider has no system role in its message list. */
 	public static String wrapSystem(AString dialect, String content) {
+		if (isRenderedElement(dialect, content)) return content;
 		if (XML.equals(dialect)) return "<system>" + content + "</system>";
 		if (HEADER.equals(dialect)) return "## System\n" + content;
 		return "[system: " + content + "]";
+	}
+
+	/** A canonical labelled element already carries its venue-authored meaning
+	 * after a single-system provider moves it into a user-role message. */
+	private static boolean isRenderedElement(AString dialect, String content) {
+		if (content == null) return false;
+		for (Kind kind : Kind.values()) {
+			if (XML.equals(dialect) && content.startsWith("<" + kind.tag)) return true;
+			String prefix = kind.pattern.split("%s", 2)[0];
+			if (HEADER.equals(dialect) && content.startsWith("## " + prefix)) return true;
+			if (!XML.equals(dialect) && !HEADER.equals(dialect)
+					&& content.startsWith("[" + prefix)) return true;
+		}
+		return false;
 	}
 
 	/** A {@code {role, content}} message carrying one rendered element. */

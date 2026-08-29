@@ -14,6 +14,7 @@ import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -29,6 +30,9 @@ import covia.grid.hitl.Hitl;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.Config;
+import covia.venue.AgentState;
+import covia.venue.TestEngine;
+import covia.venue.User;
 
 /**
  * HITL end-to-end (COG-16), driven through the {@link Hitl} builders — the
@@ -130,6 +134,52 @@ public class HITLAdapterTest {
 		assertEquals(CVMBool.TRUE, RT.getIn(output, "answers", "pay"));
 		assertEquals(Strings.create(id), RT.getIn(output, "id"));
 		assertEquals(Hitl.ANSWERED, readRecord(ALICE, id).get(Hitl.STATUS));
+	}
+
+	@Test
+	public void testAgentToolReturnsImmediatelyAndAnswerReentersAsSessionMessage() {
+		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(
+			Fields.AGENT_ID, "hitl-agent",
+			Fields.CONFIG, Maps.of(
+				Fields.OPERATION, "v/ops/llmagent/chat",
+				"llmOperation", "v/test/ops/llm",
+				Fields.TOOLS, Vectors.of(Strings.create("v/ops/hitl/request")))),
+			ALICE).awaitResult(5000);
+		User owner = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = owner.agent("hitl-agent");
+		Blob sid = Blob.fromHex("a11ce000a11ce000a11ce000a11ce000");
+		agent.ensureSession(sid, ALICE_DID);
+
+		AMap<AString, ACell> ask = Hitl.request("Choose a path")
+			.ask(Hitl.choice("path", "Which path?")
+				.option("left", "Left").option("right", "Right").required())
+			.build();
+		AMap<AString, ACell> stepped = RT.ensureMap(engine.jobs().invokeOperation(
+			"v/ops/agent/step", Maps.of(
+				Fields.AGENT_ID, "hitl-agent",
+				Fields.SESSION_ID, sid.toHexString(),
+				"assistant", Maps.of("toolCalls", Vectors.of(Maps.of(
+					"id", "ask-human", "name", "hitl_request", "arguments", ask)))),
+			ALICE).awaitResult(5000));
+		ACell call = RT.ensureVector(stepped.get(Fields.CALLS)).get(0);
+		AMap<AString, ACell> receipt = RT.ensureMap(RT.getIn(call, Fields.RESULT));
+		assertEquals(Status.INPUT_REQUIRED, receipt.get(Fields.STATUS));
+		AString id = RT.ensureString(receipt.get(Fields.ID));
+		assertNotNull(id, "the agent must receive the durable request handle immediately");
+		Job request = engine.jobs().getJob(Blob.fromHex(id.toString()));
+		assertNotNull(request);
+		assertEquals(Status.INPUT_REQUIRED, request.getStatus());
+		AMap<AString, ACell> record = readRecord(ALICE, id.toString());
+		assertEquals(Strings.create("hitl-agent"), record.get(Hitl.AGENT));
+		assertEquals(Strings.create(sid.toHexString()), record.get(Fields.SESSION_ID));
+
+		respond(ALICE, Hitl.answer(id.toString()).answer("path", "left").build());
+		assertEquals(Status.COMPLETE, request.getStatus());
+		TestEngine.awaitTimelineCount(agent, 1, 10000);
+		String conversation = RT.getIn(owner.agent("hitl-agent").getSession(sid),
+			Fields.FRAMES, CVMLong.ZERO, Strings.intern("conversation")).toString();
+		assertTrue(conversation.contains(id.toString()) && conversation.contains("left"),
+			"the human answer must arrive in the asking session: " + conversation);
 	}
 
 	// ========== Token transport (COG-19): self-sovereign cross-venue tokens ==========

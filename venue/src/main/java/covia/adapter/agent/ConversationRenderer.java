@@ -20,7 +20,7 @@ import covia.venue.AgentState;
  *
  * <p>Both flat LLM agents and goal-tree agents persist the active conversation
  * in the same frame shape. This class owns the shared provider-facing view:
- * compacted segments become system messages, completed tool exchanges are
+ * compacted segments become assistant memory messages, completed tool exchanges are
  * elided by default, and the current in-flight tool cycle remains structurally
  * intact. The durable frame is never mutated.</p>
  */
@@ -35,7 +35,8 @@ public final class ConversationRenderer {
 	 * Only completed conversational cycles are exposed: user turns followed by
 	 * a final assistant text turn. Tool calls, tool results, diagnostics and an
 	 * unanswered tail are omitted. Compacted segments are already summaries and
-	 * remain visible as system messages.
+	 * remain visible as assistant messages; an agent-authored summary never gains
+	 * system authority merely because the venue persisted it.
 	 */
 	public record HistoricalView(AVector<ACell> messages, AString firstUserContent,
 			long updated, long turnCount, boolean truncated) {}
@@ -48,8 +49,20 @@ public final class ConversationRenderer {
 	@SuppressWarnings("unchecked")
 	public static HistoricalView historical(AMap<AString, ACell> frame,
 			int maxTurns, int maxChars) {
+		return historical(frame, maxTurns, maxChars, 0);
+	}
+
+	/** Historical projection with bounded recursive expansion of compacted
+	 * archives. Depth zero shows summaries; each higher level opens one nested
+	 * {@code items} vector before applying the same safe turn projection. */
+	@SuppressWarnings("unchecked")
+	public static HistoricalView historical(AMap<AString, ACell> frame,
+			int maxTurns, int maxChars, int archiveDepth) {
 		if (maxTurns < 0 || maxChars < 0) {
 			throw new IllegalArgumentException("Historical view limits must be non-negative");
+		}
+		if (archiveDepth < 0) {
+			throw new IllegalArgumentException("Archive depth must be non-negative");
 		}
 		AVector<ACell> conversation = (frame != null)
 			? RT.ensureVector(frame.get(GoalTreeContext.K_CONVERSATION)) : null;
@@ -57,6 +70,7 @@ public final class ConversationRenderer {
 			return new HistoricalView(Vectors.empty(), null, 0, 0, false);
 		}
 
+		conversation = expandArchives(conversation, archiveDepth);
 		ArrayDeque<AMap<AString, ACell>> tail = new ArrayDeque<>();
 		ArrayDeque<AMap<AString, ACell>> pending = new ArrayDeque<>();
 		long pendingCount = 0;
@@ -69,7 +83,10 @@ public final class ConversationRenderer {
 		for (long i = 0; i < conversation.count(); i++) {
 			ACell entry = conversation.get(i);
 			if (GoalTreeContext.isSegment(entry)) {
-				turnCount++;
+				ACell archivedTurns = RT.getIn(entry, GoalTreeContext.K_TURNS);
+				turnCount += (archivedTurns instanceof CVMLong n) ? n.longValue() : 1;
+				if (firstCompletedUser == null) firstCompletedUser = firstUser(entry);
+				updated = Math.max(updated, latestTimestamp(entry));
 				retain(tail, renderSegment(entry, Labels.BRACKET), maxTurns);
 				continue;
 			}
@@ -129,6 +146,50 @@ public final class ConversationRenderer {
 		AVector<ACell> messages = Vectors.empty();
 		for (AMap<AString, ACell> message : bounded) messages = messages.conj(message);
 		return new HistoricalView(messages, firstCompletedUser, updated, turnCount, truncated);
+	}
+
+	@SuppressWarnings("unchecked")
+	private static AVector<ACell> expandArchives(AVector<ACell> entries, int depth) {
+		if (depth <= 0 || entries == null || entries.isEmpty()) return entries;
+		AVector<ACell> expanded = Vectors.empty();
+		for (long i = 0; i < entries.count(); i++) {
+			ACell entry = entries.get(i);
+			if (GoalTreeContext.isSegment(entry)) {
+				AVector<ACell> items = RT.ensureVector(RT.getIn(entry, GoalTreeContext.K_ITEMS));
+				if (items != null) {
+					expanded = expanded.concat(expandArchives(items, depth - 1));
+					continue;
+				}
+			}
+			expanded = expanded.conj(entry);
+		}
+		return expanded;
+	}
+
+	private static AString firstUser(ACell entry) {
+		if (GoalTreeContext.isSegment(entry)) {
+			AVector<ACell> items = RT.ensureVector(RT.getIn(entry, GoalTreeContext.K_ITEMS));
+			for (long i = 0; items != null && i < items.count(); i++) {
+				AString found = firstUser(items.get(i));
+				if (found != null) return found;
+			}
+			return null;
+		}
+		if (!GoalTreeContext.ROLE_USER.equals(RT.getIn(entry, GoalTreeContext.K_ROLE))) return null;
+		return RT.ensureString(RT.getIn(entry, GoalTreeContext.K_CONTENT));
+	}
+
+	private static long latestTimestamp(ACell entry) {
+		if (GoalTreeContext.isSegment(entry)) {
+			long latest = 0;
+			AVector<ACell> items = RT.ensureVector(RT.getIn(entry, GoalTreeContext.K_ITEMS));
+			for (long i = 0; items != null && i < items.count(); i++) {
+				latest = Math.max(latest, latestTimestamp(items.get(i)));
+			}
+			return latest;
+		}
+		return (entry instanceof AMap<?, ?> raw)
+			? timestamp((AMap<AString, ACell>) raw) : 0;
 	}
 
 	private static void retain(ArrayDeque<AMap<AString, ACell>> values,
@@ -224,7 +285,7 @@ public final class ConversationRenderer {
 		AMap<AString, ACell> segment = (AMap<AString, ACell>) entry;
 		AString summary = RT.ensureString(segment.get(GoalTreeContext.K_SUMMARY));
 		ACell turns = segment.get(GoalTreeContext.K_TURNS);
-		return Labels.message(GoalTreeContext.ROLE_SYSTEM, dialect, Labels.Kind.COMPACTED,
+		return Labels.message(GoalTreeContext.ROLE_ASSISTANT, dialect, Labels.Kind.COMPACTED,
 			(summary != null) ? summary.toString() : "",
 			(turns != null) ? turns.toString() : "?");
 	}

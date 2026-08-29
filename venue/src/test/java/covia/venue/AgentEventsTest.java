@@ -20,6 +20,7 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -252,9 +253,14 @@ public class AgentEventsTest {
 		assertEquals(response, str(cycleEnd, Fields.RESPONSE));
 		assertNotNull(RT.getIn(cycleEnd.data(), Fields.TOKENS));
 		assertEquals(0, num(cycleEnd, AgentState.KEY_TIMELINE));
-		AVector<ACell> turns = RT.ensureVector(RT.getIn(cycleEnd.data(), Fields.DETAIL, Fields.TURNS));
-		assertNotNull(turns, "the turns the merge appended ride under detail");
-		assertTrue(turns.count() >= 3, "user, tool-call reply, tool result, response: " + turns);
+		assertNull(cycleEnd.data().get(Fields.DETAIL),
+			"frame-owning runtimes do not duplicate already-persisted turns in cycle:end");
+		AgentState agent = engine.getVenueState().users().get(did).agent(id);
+		AVector<ACell> turns = RT.ensureVector(RT.getIn(
+			agent.getSession(Blob.fromHex(sid.toString())), Fields.FRAMES,
+			CVMLong.ZERO, AgentState.KEY_CONVERSATION));
+		assertTrue(turns.count() >= 4,
+			"canonical session has user, tool-call reply, tool result and response: " + turns);
 		assertNull(RT.getIn(cycleEnd.data(), Fields.ERROR));
 	}
 

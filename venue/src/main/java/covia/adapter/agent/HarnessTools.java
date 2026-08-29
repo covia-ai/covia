@@ -24,10 +24,10 @@ import java.util.Set;
  * them: opt-in by name in {@code config.tools}, plus what the situation
  * itself implies — {@code skill_load} when the agent declares skills, and
  * {@code context_unload} when skills make persistent loads relevant. The
- * manifest stays fixed while the writable tier changes. A runtime adds its own tools to the registry
- * (goaltree: {@code subgoal}, {@code compact}, {@code complete},
-	 * {@code fail}); the stable task tools are {@link TaskTools}. The handlers
-	 * here are parameterised by the writable loads
+ * manifest stays fixed while the writable tier changes. A runtime adds only
+ * its specialised tools to the registry (goaltree: {@code subgoal},
+ * {@code complete}, {@code fail}); the stable task tools are
+ * {@link TaskTools}. The handlers here are parameterised by the writable loads
  * tier, which is the only thing the runtimes differ in.
  */
 final class HarnessTools {
@@ -38,6 +38,7 @@ final class HarnessTools {
 	static final String SKILL_LOAD     = "skill_load";
 	static final String MORE_TOOLS     = "more_tools";
 	static final String INVOKE_TOOL    = "invoke_tool";
+	static final String COMPACT        = "compact";
 
 	private static final AString K_OPERATIONS = Strings.intern("operations");
 	private static final AString K_ADDED      = Strings.intern("added");
@@ -45,6 +46,7 @@ final class HarnessTools {
 	private static final AString K_ERRORS     = Strings.intern("errors");
 	private static final AString K_NAME       = Strings.intern("name");
 	private static final AString K_INPUT      = Strings.intern("input");
+	private static final AString K_SUMMARY    = Strings.intern("summary");
 	static final AString K_TOOL_ADDITION      = Strings.intern("toolAddition");
 	static final AString K_TOOL_REMOVAL       = Strings.intern("toolRemoval");
 
@@ -119,13 +121,44 @@ final class HarnessTools {
 					AbstractLLMAdapter.K_DESCRIPTION, Strings.create("Arguments for the added tool"))),
 			AbstractLLMAdapter.K_REQUIRED, Vectors.of((ACell) K_NAME)));
 
+	/** Shared conversation compaction. The summary is agent-authored memory;
+	 * the runtime archives the exact replaced conversation beneath it. */
+	static final AMap<AString, ACell> DEF_COMPACT = Maps.of(
+		AbstractLLMAdapter.K_NAME, Strings.create(COMPACT),
+		AbstractLLMAdapter.K_DESCRIPTION, Strings.create(
+			"Archive the conversation so far under a summary you write, freeing context "
+			+ "space for future turns while retaining the exact archived history for audit. "
+			+ "Use after a significant chunk of work when you still have more to do. "
+			+ "Capture key findings, decisions, active constraints and what remains."),
+		AbstractLLMAdapter.K_PARAMETERS, Maps.of(
+			AbstractLLMAdapter.K_TYPE, Strings.create("object"),
+			AbstractLLMAdapter.K_PROPERTIES, Maps.of(
+				K_SUMMARY, Maps.of(
+					AbstractLLMAdapter.K_TYPE, Strings.create("string"),
+					AbstractLLMAdapter.K_DESCRIPTION, Strings.create(
+						"Required summary of what future turns need to remember"))),
+			AbstractLLMAdapter.K_REQUIRED, Vectors.of((ACell) K_SUMMARY)));
+
 	/** The harness tools every runtime provides, by name. */
 	static final Map<String, AMap<AString, ACell>> SHARED = Map.of(
 		CONTEXT_LOAD, DEF_CONTEXT_LOAD,
 		CONTEXT_UNLOAD, DEF_CONTEXT_UNLOAD,
 		SKILL_LOAD, DEF_SKILL_LOAD,
 		MORE_TOOLS, DEF_MORE_TOOLS,
-		INVOKE_TOOL, DEF_INVOKE_TOOL);
+		INVOKE_TOOL, DEF_INVOKE_TOOL,
+		COMPACT, DEF_COMPACT);
+
+	/** Validated request supplied to {@code compact}. */
+	record Compaction(String summary, ACell error) {}
+
+	static Compaction compaction(ACell input) {
+		AString summary = RT.ensureString(RT.getIn(input, K_SUMMARY));
+		if (summary == null || summary.toString().isBlank()) {
+			return new Compaction(null, Strings.create(
+				"Error: summary is required — compact must preserve the important work so far."));
+		}
+		return new Compaction(summary.toString(), null);
+	}
 
 	/**
 	 * The harness tools a cycle offers from a runtime's registry: those the
@@ -198,13 +231,22 @@ final class HarnessTools {
 
 	/** Minimal changed definitions/removals between two active-load snapshots. */
 	static AVector<ACell> toolStateEvent(Loads.Snapshot before, Loads.Snapshot after) {
+		return toolStateEvent(before, after, Set.of());
+	}
+
+	/** Tool-state delta excluding definitions already present in the immutable
+	 * provider manifest. Their skill body announces activation; repeating full
+	 * schemas as text would waste context and contradict native declarations. */
+	static AVector<ACell> toolStateEvent(Loads.Snapshot before, Loads.Snapshot after,
+			Set<String> alreadyDeclared) {
 		Map<String, ACell> oldDefs = definitionsByName(before != null ? before.tools() : null);
 		Map<String, ACell> newDefs = definitionsByName(after != null ? after.tools() : null);
 		AVector<ACell> additions = Vectors.empty();
 		for (long i = 0; after != null && i < after.tools().count(); i++) {
 			ACell def = after.tools().get(i);
 			AString name = RT.ensureString(RT.getIn(def, AbstractLLMAdapter.K_NAME));
-			if (name != null && !def.equals(oldDefs.get(name.toString()))) additions = additions.conj(def);
+			if (name != null && !alreadyDeclared.contains(name.toString())
+					&& !def.equals(oldDefs.get(name.toString()))) additions = additions.conj(def);
 		}
 		AVector<ACell> removals = Vectors.empty();
 		for (long i = 0; before != null && i < before.tools().count(); i++) {

@@ -10,6 +10,15 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Added
 
+- `agent:reloadContext` explicitly clears one idle session's materialised
+  provider prefix while preserving its conversation and loads exactly; the
+  next inference rebuilds current prompt, fixed schemas, skill catalog and
+  pinned context. Ordinary `agent:update` stays append-only for live history.
+- `agent:compactSession` lets an authorised owner compact an idle session
+  without losing audit data: the exact old conversation vector is nested under
+  the compaction record and the Job returns metadata only. `agent:sessionRead`
+  can expand nested records to an explicit bounded `archiveDepth` while still
+  omitting tool scratch, diagnostics and unfinished cycles.
 - `v/ops/venue/show-config` gives agents and clients a public, curated view of
   effective venue behavior (agent defaults, Job policy, durability, protocols,
   limits, validation, active adapters and their explicit `publicConfig()`
@@ -41,6 +50,20 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Fixed
 
+- A sessioned agent's `hitl:request` tool call now returns the durable request
+  ID immediately instead of occupying the tool loop until timeout. The HITL
+  record remembers the asking session; answer, rejection and expiry deliver a
+  verified message to that session and wake it, including after recovery (#442).
+- Session input presentation and pending drain after interruption repair are
+  fenced by the already-claimed cycle epoch, so a superseded runner cannot
+  reclaim the session or consume a newer runner's inbox.
+- Anthropic/provider cache marks are translated through late-system message
+  normalisation and fall back to the preceding cacheable message when a band
+  ends in system events, so a skill load cannot move the conversation mark
+  onto the volatile tail (#446).
+- `config.context` now honours `volatile`; operation entries are live by
+  default, matching loads, while refs may opt in. Mutable pinned views can stay
+  fresh in the uncached tail without rebuilding the stable prefix (#444).
 - Tool batches now emit every provider `tool_result` before appending context or
   skill-load events, keeping parallel Anthropic tool-use batches structurally
   valid while preserving harness barrier execution order (#441).
@@ -82,6 +105,11 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Changed
 
+- `llmagent` and `goaltree` now use the same durable frame opener, input
+  presentation, interruption repair and root-turn append path. `compact` is a
+  shared opt-in harness tool: it renders agent-written summaries as assistant
+  memory, nests prior compactions recursively, and rebuilds the prefix only at
+  that explicit boundary.
 - Persistent agent context is ownership- and authority-explicit (#434, #436).
   Operator `config.context` / `config.loads` values default to trusted system
   instructions, with `trusted: false` for data. Caller-minted pinned data cannot
@@ -99,9 +127,11 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   elision, and cache-prefix inspection compares the immutable Convex vectors
   directly rather than maintaining parallel prefix hashes.
 - Each session frame now persists its exact initial tool and message vectors.
-  Ordinary inference reuses those cells verbatim; compaction/reset is an
-  explicit rebuild boundary, while later skill and `more_tools` definitions
-  append trusted tool-state events and use the stable `invoke_tool` fallback.
+  Ordinary inference reuses those cells verbatim; compaction/context reload is
+  an explicit rebuild boundary. Exact schemas from the initial discoverable
+  skill catalog are fixed in that manifest and load-gated at dispatch; only
+  later-revealed skill and `more_tools` definitions append tool-state events
+  and use the stable `invoke_tool` fallback (#443, #445).
   The static task completion controls also remain in the initial harness, so a
   task arriving later cannot change the tool prefix.
 - `agent:update` refreshes the skills catalog of existing sessions by appending

@@ -409,6 +409,37 @@ public class AgentState extends ALatticeComponent<ACell> {
 	}
 
 	/**
+	 * Atomically presents input after a cycle has claimed and repaired its
+	 * frames. The epoch fence prevents an interrupted runner from draining
+	 * pending messages after a newer cycle has superseded it.
+	 */
+	@SuppressWarnings("unchecked")
+	public boolean presentSessionCycleInput(Blob sid, ACell expectedEpoch,
+			AVector<ACell> turns, long drainCount) {
+		java.util.concurrent.atomic.AtomicBoolean applied =
+			new java.util.concurrent.atomic.AtomicBoolean(false);
+		update(r -> {
+			applied.set(false);
+			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index idx)
+				? (Index<Blob, ACell>) idx : Index.none();
+			ACell sv = sessions.get(sid);
+			if (!(sv instanceof AMap)) return r;
+			AMap<AString, ACell> session = (AMap<AString, ACell>) sv;
+			if (!Objects.equals(expectedEpoch, session.get(K_IN_CYCLE))) return r;
+
+			if (turns != null && turns.count() > 0) {
+				session = appendTurnsToRoot(session, turns);
+			}
+			if (drainCount > 0) {
+				session = drainPendingPrefix(session, drainCount);
+			}
+			applied.set(true);
+			return r.assoc(K_SESSIONS, sessions.assoc(sid, session));
+		});
+		return applied.get();
+	}
+
+	/**
 	 * Atomically updates {@code sessions[sid].frames}, fenced by the cycle
 	 * epoch: the write applies only while {@code session.inCycle} equals
 	 * {@code expectedEpoch}. A transition whose cycle has been superseded
@@ -419,13 +450,25 @@ public class AgentState extends ALatticeComponent<ACell> {
 	 * <p>{@code fn} must be pure: the CAS may re-apply it on contention.</p>
 	 *
 	 * @param expectedEpoch the claiming cycle's epoch (from
-	 *        {@link #beginSessionCycle}); null skips the fence for quiescent
-	 *        operator updates, initialisation, and tests
+	 *        {@link #beginSessionCycle}); null skips the fence for coordinated
+	 *        initialisation and tests. Owner mutations should use
+	 *        {@link #updateQuiescentSessionFrames}.
 	 * @return true if the update applied; false if the record/session is
 	 *         missing or the epoch fence rejected the write
 	 */
 	@SuppressWarnings("unchecked")
 	public boolean updateSessionFrames(Blob sid, ACell expectedEpoch, UnaryOperator<AVector<ACell>> fn) {
+		return updateSessionFrames(sid, expectedEpoch, false, fn);
+	}
+
+	/** Applies an owner-side frame mutation only while the session is idle. */
+	public boolean updateQuiescentSessionFrames(Blob sid, UnaryOperator<AVector<ACell>> fn) {
+		return updateSessionFrames(sid, null, true, fn);
+	}
+
+	@SuppressWarnings("unchecked")
+	private boolean updateSessionFrames(Blob sid, ACell expectedEpoch,
+			boolean requireQuiescent, UnaryOperator<AVector<ACell>> fn) {
 		java.util.concurrent.atomic.AtomicBoolean applied =
 			new java.util.concurrent.atomic.AtomicBoolean(false);
 		update(r -> {
@@ -435,6 +478,7 @@ public class AgentState extends ALatticeComponent<ACell> {
 			ACell sv = sessions.get(sid);
 			if (!(sv instanceof AMap)) return r;
 			AMap<AString, ACell> session = (AMap<AString, ACell>) sv;
+			if (requireQuiescent && session.get(K_IN_CYCLE) != null) return r;
 			if (expectedEpoch != null && !expectedEpoch.equals(session.get(K_IN_CYCLE))) {
 				return r;   // fence: this cycle no longer owns the session
 			}
@@ -446,6 +490,27 @@ public class AgentState extends ALatticeComponent<ACell> {
 				return r;   // no change — skip the write (and the K_TS bump)
 			}
 			session = session.assoc(K_FRAMES, updatedFrames);
+			applied.set(true);
+			return r.assoc(K_SESSIONS, sessions.assoc(sid, session));
+		});
+		return applied.get();
+	}
+
+	/** Appends one root-frame conversation turn under the active cycle fence,
+	 * updating session turn/timestamp metadata atomically with the frame. */
+	@SuppressWarnings("unchecked")
+	public boolean appendSessionRootTurn(Blob sid, ACell expectedEpoch, ACell turn) {
+		java.util.concurrent.atomic.AtomicBoolean applied =
+			new java.util.concurrent.atomic.AtomicBoolean(false);
+		update(r -> {
+			applied.set(false);
+			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index idx)
+				? (Index<Blob, ACell>) idx : Index.none();
+			ACell sv = sessions.get(sid);
+			if (!(sv instanceof AMap)) return r;
+			AMap<AString, ACell> session = (AMap<AString, ACell>) sv;
+			if (expectedEpoch != null && !expectedEpoch.equals(session.get(K_IN_CYCLE))) return r;
+			session = appendTurnsToRoot(session, Vectors.of(turn));
 			applied.set(true);
 			return r.assoc(K_SESSIONS, sessions.assoc(sid, session));
 		});

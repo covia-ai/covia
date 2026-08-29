@@ -27,6 +27,7 @@ import convex.core.lang.RT;
 /**
  * Unit tests for the session cycle-epoch primitives (lattice-resident frames,
  * Stage A): {@link AgentState#beginSessionCycle},
+ * {@link AgentState#presentSessionCycleInput},
  * {@link AgentState#updateSessionFrames} (epoch-fenced), the shared
  * root-turn-append/pending-drain helpers, the {@code inCycle} clear inside
  * {@link AgentState#mergeRunResult}, and the rule that {@code inCycle} is a
@@ -106,6 +107,19 @@ public class AgentStateSessionCycleTest {
 		// cycle overwrites it, after which the old epoch's writes are fenced.
 		assertTrue(agent.beginSessionCycle(sid, EPOCH_A, null, 0));
 		assertTrue(agent.beginSessionCycle(sid, EPOCH_B, null, 0));
+		assertEquals(EPOCH_B, agent.getSessionCycleEpoch(sid));
+	}
+
+	@Test
+	public void testInputPresentationCannotDrainAfterCycleIsSuperseded() {
+		agent.appendSessionPending(sid, envelope("m1"));
+		assertTrue(agent.beginSessionCycle(sid, EPOCH_A, null, 0));
+		assertTrue(agent.beginSessionCycle(sid, EPOCH_B, null, 0));
+
+		assertFalse(agent.presentSessionCycleInput(
+			sid, EPOCH_A, Vectors.of(turn("m1")), 1));
+		assertEquals(0, rootConversation().count());
+		assertEquals(1, agent.getSessionPending(sid).count());
 		assertEquals(EPOCH_B, agent.getSessionCycleEpoch(sid));
 	}
 

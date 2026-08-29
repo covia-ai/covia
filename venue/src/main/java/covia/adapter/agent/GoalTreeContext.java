@@ -337,13 +337,37 @@ public class GoalTreeContext {
 	// ========== Segment construction ==========
 
 	/**
-	 * Creates a compacted segment from live turns and an LLM-provided summary.
+	 * Creates a compacted segment from the exact conversation prefix it replaces.
+	 * Items may themselves be compacted segments; {@code turns} is therefore the
+	 * recursive leaf-turn count, not merely {@code items.count()}. Keeping the
+	 * original vector under the segment gives the lattice an auditable,
+	 * structurally-shared archive without a second transcript store.
 	 */
 	public static AMap<AString, ACell> createSegment(String summary, AVector<ACell> items) {
 		return Maps.of(
 			K_SUMMARY, Strings.create(summary),
-			K_TURNS, CVMLong.create(items.count()),
+			K_TURNS, CVMLong.create(turnCount(items)),
 			K_ITEMS, items);
+	}
+
+	/** Recursive number of ordinary conversation turns archived by entries. */
+	static long turnCount(AVector<ACell> entries) {
+		long count = 0;
+		for (long i = 0; entries != null && i < entries.count(); i++) {
+			ACell entry = entries.get(i);
+			if (isSegment(entry)) {
+				ACell turns = RT.getIn(entry, K_TURNS);
+				if (turns instanceof CVMLong n) count += n.longValue();
+			} else if (isLiveTurn(entry)) {
+				count++;
+			}
+		}
+		return count;
+	}
+
+	/** Total ordinary turns represented by a frame, including nested archives. */
+	public static long countTurns(AMap<AString, ACell> frame) {
+		return turnCount(RT.ensureVector(frame != null ? frame.get(K_CONVERSATION) : null));
 	}
 
 	/**
@@ -434,37 +458,39 @@ public class GoalTreeContext {
 	}
 
 	/**
-	 * Compacts live turns in a frame's conversation into a new segment.
-	 * Returns an updated frame with the segment appended and live turns cleared.
+	 * Compacts the frame's complete visible conversation into one new segment.
+	 * Existing segments are nested in {@code items}, rather than retained as
+	 * siblings, so repeated compaction keeps provider-visible history bounded
+	 * while preserving every replaced cell for audit and later inspection.
 	 *
 	 * @param frame the frame to compact
 	 * @param summary LLM-provided summary of the compacted turns
 	 * @return new frame with compacted conversation
 	 */
-	@SuppressWarnings("unchecked")
 	public static AMap<AString, ACell> compactFrame(AMap<AString, ACell> frame, String summary) {
+		return compactFrame(frame, summary, null);
+	}
+
+	/** Compacts with optional non-rendered provenance attached to the archive. */
+	@SuppressWarnings("unchecked")
+	public static AMap<AString, ACell> compactFrame(AMap<AString, ACell> frame,
+			String summary, AMap<AString, ACell> provenance) {
 		AVector<ACell> conversation = (AVector<ACell>) frame.get(K_CONVERSATION);
 		if (conversation == null || conversation.count() == 0) return frame;
 
-		// Split into segments (keep) and live turns (compact)
-		AVector<ACell> segments = Vectors.empty();
-		AVector<ACell> liveTurns = Vectors.empty();
-		for (long i = 0; i < conversation.count(); i++) {
-			ACell entry = conversation.get(i);
-			if (isSegment(entry)) {
-				segments = segments.conj(entry);
-			} else {
-				liveTurns = liveTurns.conj(entry);
+		if (countLiveTurns(frame) == 0) return frame;
+
+		// The old vector itself is the archive. Convex cells are immutable, so
+		// this retains exact history through structural sharing rather than copy.
+		AMap<AString, ACell> segment = createSegment(summary, conversation);
+		if (provenance != null) {
+			for (var entry : provenance.entrySet()) {
+				if (segment.get(entry.getKey()) == null) {
+					segment = segment.assoc(entry.getKey(), entry.getValue());
+				}
 			}
 		}
-
-		if (liveTurns.count() == 0) return frame;
-
-		// Create new segment from live turns
-		AMap<AString, ACell> segment = createSegment(summary, liveTurns);
-
-		// New conversation = existing segments + new segment (no live turns)
-		AVector<ACell> newConversation = segments.conj(segment);
+		AVector<ACell> newConversation = Vectors.of((ACell) segment);
 		// Compaction is an explicit prefix rewrite boundary. The next inference
 		// materialises a new initial representation around the compacted history.
 		return frame.assoc(K_CONVERSATION, newConversation).dissoc(K_RENDERED_CONTEXT);
@@ -474,6 +500,13 @@ public class GoalTreeContext {
 	static AMap<AString, ACell> withRenderedContext(AMap<AString, ACell> frame,
 			ContextAssembler.Rendered rendered) {
 		return frame.assoc(K_RENDERED_CONTEXT, rendered.toCell());
+	}
+
+	/** Clears only the materialised provider prefix. Conversation, loads and
+	 * frame state remain byte-identical; the next inference rebuilds the prefix
+	 * from current agent configuration. */
+	public static AMap<AString, ACell> reloadContext(AMap<AString, ACell> frame) {
+		return frame.dissoc(K_RENDERED_CONTEXT);
 	}
 
 	/**

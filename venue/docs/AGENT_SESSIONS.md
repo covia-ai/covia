@@ -152,13 +152,19 @@ Session-id inputs accept both canonical hexadecimal and the `0x`-prefixed repres
 | Op | Purpose |
 |----|---------|
 | `agent:sessions` | List bounded session metadata, newest first; owners pass `agentId`, the running agent may omit it |
-| `agent:sessionRead` | Read a bounded safe transcript projection; owners pass `agentId`, and may omit `sessionId` for the newest visible session |
+| `agent:sessionRead` | Read a bounded safe transcript projection; `archiveDepth` optionally opens nested compaction records before applying the bounds |
 | `agent:renameSession` | Set or clear a session's human-facing title (owner management surface) |
+| `agent:compactSession` | Replace an idle session's visible history with owner-supplied assistant memory while retaining the exact old vector under the compaction record |
+| `agent:reloadContext` | Clear an idle session's materialised provider prefix so the next inference rebuilds current prompt/tools/pinned context; conversation and loads stay exact |
 | `agent:deleteSession` | Permanently remove a session (owner management surface; audit-sensitive) |
 
 The retrospective operations have two explicit modes. From an agent execution context, omitting `agentId` self-scopes the call and requires only invocation capability for the exact operation asset. An owner or other authorised caller supplies `agentId`; normal `crud/read` resolution for `g/<agentId>` then applies. Neither mode confers generic `g/` read access. The in-scope caller session is excluded. Missing, current, unfinished and policy-vetoed sessions all produce exactly `{"found":false}` from `agent:sessionRead`, avoiding an existence oracle.
 
-The projection contains completed user/final-assistant turns and compacted summaries. Provider tool calls, tool results, framework diagnostics and an unanswered tail remain in the durable audit transcript but are not exposed to the agent. Both turn count and total content are bounded, including a single oversized turn.
+The projection contains completed user/final-assistant turns and, by default, compacted summaries. `archiveDepth` opens at most that many nested compaction records and then applies the same safe projection and response bounds. Provider tool calls, tool results, framework diagnostics and an unanswered tail remain in the durable audit transcript but are never exposed by this operation. Both turn count and total content are bounded, including a single oversized turn.
+
+`agent:compactSession` is the explicit owner management surface and requires agent-write authority. It only mutates a quiescent session. The old immutable conversation vector becomes the segment's `items`, provenance is stamped on that segment, and the Job returns only bounded metadata rather than a second copy of the transcript. Future turns append after the segment normally. The in-band `compact` harness tool applies the same representation from either built-in LLM runtime.
+
+`agent:reloadContext` is the rarer cache-invalidation boundary for a host that updated an agent's identity, model shape, fixed tools or pinned declarations and wants an existing conversation to adopt them. It also requires agent-write authority and a quiescent session. It removes only each frame's `renderedContext`; the durable conversation and loads vectors are unchanged, and the next inference materialises the new prefix once. Ordinary `agent:update` does not rewrite existing prefixes.
 
 Trusted venue modules may register an `AgentAdapter.SessionVisibilityPolicy`. Policies compose by intersection: any veto hides the session, and policy failure hides it as well. This gives applications a narrow private-conversation rule without duplicating transcript rendering or granting agents raw session-tree access.
 
@@ -350,7 +356,8 @@ For task work, the framework distinguishes **completed** from **yield** by obser
 
 **Yield semantics.** A task cycle that exits without invoking a completion op yields — the run loop exits the active wake, the agent returns to SLEEPING, and the task stays in the `tasks` Index for next time. Yield is the natural way to express:
 
-- **Long-running task in progress** — agent kicked off a delegated op via async invoke (§3.4.2), recorded it in `t`, and is waiting for the callback
+- **Human input in progress** — a sessioned HITL request returned its durable
+  handle; the answer will append to this session and wake the task again (§3.4.2)
 - **Multi-step planning** — agent did internal work (lattice writes to `n` / `c` / `t`) but isn't ready to complete
 - **Agent had nothing useful to say** — transient false wake; loop exits cleanly
 
@@ -389,7 +396,7 @@ The chat adapter is parameterised by two flags:
 
 Flat + persistent is a chatbot. Framed + persistent is a durable goal history across completed attempts. Framed + non-persistent is a one-shot decomposition.
 
-Harness tools (`more_tools`, `context_load`, `context_unload`, typed `complete`/`fail`) are available in both modes. Harness tools that depend on the frame model (`subgoal`, `compact`) are only meaningful under `framed: true`.
+Harness tools (`more_tools`, `context_load`, `context_unload`, `compact`, typed `complete`/`fail`) use the same shared registry and conversation representation. Only hierarchy controls such as `subgoal` depend on multi-frame mode.
 
 ---
 

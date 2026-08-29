@@ -25,6 +25,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.agent.ContextAssembler;
+import covia.adapter.agent.GoalTreeContext;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.grid.Job;
@@ -2171,9 +2172,9 @@ public class AgentAdapterTest {
 	}
 
 	/**
-	 * Errored cycles append no turns. {@code leanError != null} must skip
-	 * history population entirely so the audit trail doesn't claim a
-	 * conversation turn that the agent failed to produce.
+	 * A failed inference still retains the user input that was durably presented,
+	 * but must not invent an assistant response. This is the same live-frame
+	 * audit rule used by both LLM runtimes.
 	 */
 	@Test
 	public void testErrorResponseDoesNotAppendTurn() {
@@ -2198,7 +2199,7 @@ public class AgentAdapterTest {
 		try { chatJob.awaitResult(5000); } catch (Exception ignored) {}
 
 		// Find the minted session via agent state — chat slot should be cleared
-		// either way, but we want any session that exists to have empty history.
+		// either way, and any history contains only the presented user turn.
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("hist-err-agent");
 		var sessions = agent.getSessions();
@@ -2208,8 +2209,10 @@ public class AgentAdapterTest {
 			AVector<ACell> frames = (AVector<ACell>) session.get(AgentState.KEY_FRAMES);
 			AMap<AString, ACell> rootFrame = (AMap<AString, ACell>) frames.get(0);
 			AVector<ACell> history = (AVector<ACell>) rootFrame.get(AgentState.KEY_CONVERSATION);
-			assertEquals(0, history.count(),
-				"Errored cycle must not append any turns to history");
+			assertEquals(1, history.count(),
+				"failed inference retains the presented input for audit");
+			assertEquals(AgentState.ROLE_USER,
+				RT.getIn(history.get(0), AgentState.K_ROLE));
 		}
 	}
 
@@ -6035,6 +6038,132 @@ public class AgentAdapterTest {
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AMap<AString, ACell> session = user.agent("rename-cap-agent").getSession(Blob.fromHex(sidHex.toString()));
 		assertNull(RT.getIn(session, "meta", "title"), "title must not be set by a denied attempt");
+	}
+
+	// ========== agent:compactSession ==========
+
+	@Test
+	public void testCompactSessionArchivesExactHistoryAndFutureTurnsAppend() {
+		RequestContext alice = RequestContext.of(ALICE_DID);
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "compact-session-agent", Fields.CONFIG, Maps.of(
+				Fields.OPERATION, "v/ops/llmagent/chat",
+				"llmOperation", "v/test/ops/llm")), alice).awaitResult(5000);
+
+		ACell first = engine.jobs().invokeOperation("v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "compact-session-agent", Fields.MESSAGE, "first"),
+			alice).awaitResult(5000);
+		AString sidHex = RT.ensureString(RT.getIn(first, Fields.SESSION_ID));
+		engine.jobs().invokeOperation("v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "compact-session-agent", Fields.SESSION_ID, sidHex,
+				Fields.MESSAGE, "second"), alice).awaitResult(5000);
+
+		AgentState agent = engine.getVenueState().users().get(ALICE_DID)
+			.agent("compact-session-agent");
+		Blob sid = Blob.fromHex(sidHex.toString());
+		AMap<AString, ACell> beforeRoot = RT.ensureMap(
+			RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO));
+		AVector<ACell> before = RT.ensureVector(
+			beforeRoot.get(AgentState.KEY_CONVERSATION));
+		assertEquals(4, before.count());
+		assertNotNull(beforeRoot.get(Strings.intern("renderedContext")));
+
+		Job compact = engine.jobs().invokeOperation("v/ops/agent/compact-session",
+			Maps.of(Fields.AGENT_ID, "compact-session-agent", Fields.SESSION_ID, sidHex,
+				"summary", "Remember both completed exchanges."), alice);
+		ACell result = compact.awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(result, "compacted"));
+		assertEquals(CVMLong.create(4), RT.getIn(result, "archivedTurns"));
+
+		AMap<AString, ACell> compactedRoot = RT.ensureMap(
+			RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO));
+		AVector<ACell> compacted = RT.ensureVector(
+			compactedRoot.get(AgentState.KEY_CONVERSATION));
+		assertEquals(1, compacted.count());
+		AMap<AString, ACell> archive = RT.ensureMap(compacted.get(0));
+		assertTrue(GoalTreeContext.isSegment(archive));
+		assertEquals(before, RT.ensureVector(archive.get(Strings.intern("items"))),
+			"the archive retains the exact replaced vector");
+		assertEquals(Strings.create(compact.getID().toHexString()), archive.get(Fields.JOB_ID));
+		assertEquals(ALICE_DID, archive.get(Fields.CALLER));
+		assertNull(compactedRoot.get(Strings.intern("renderedContext")),
+			"compaction is one explicit rendered-prefix rebuild boundary");
+
+		ACell summaryView = engine.jobs().invokeOperation("v/ops/agent/session-read",
+			Maps.of(Fields.AGENT_ID, "compact-session-agent", Fields.SESSION_ID, sidHex),
+			alice).awaitResult(5000);
+		AVector<ACell> summaryMessages = RT.ensureVector(
+			RT.getIn(summaryView, Fields.MESSAGES));
+		assertEquals(1, summaryMessages.count(), "archives are summary-only by default");
+		assertEquals("assistant", RT.getIn(summaryMessages.get(0), "role").toString());
+
+		ACell expandedView = engine.jobs().invokeOperation("v/ops/agent/session-read",
+			Maps.of(Fields.AGENT_ID, "compact-session-agent", Fields.SESSION_ID, sidHex,
+				"archiveDepth", 1L), alice).awaitResult(5000);
+		AVector<ACell> expandedMessages = RT.ensureVector(
+			RT.getIn(expandedView, Fields.MESSAGES));
+		assertEquals(4, expandedMessages.count());
+		assertEquals("first", RT.getIn(expandedMessages.get(0), "content").toString());
+
+		engine.jobs().invokeOperation("v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "compact-session-agent", Fields.SESSION_ID, sidHex,
+				Fields.MESSAGE, "third"), alice).awaitResult(5000);
+		AVector<ACell> appended = RT.ensureVector(RT.getIn(
+			agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO, AgentState.KEY_CONVERSATION));
+		assertEquals(3, appended.count(), "archive + new user + new assistant");
+		assertEquals(archive, appended.get(0), "future turns append after the sealed archive");
+	}
+
+	@Test
+	public void testReloadContextRebuildsPrefixAndPreservesConversationExactly() {
+		RequestContext alice = RequestContext.of(ALICE_DID);
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "reload-context-agent", Fields.CONFIG, Maps.of(
+				Fields.OPERATION, "v/ops/llmagent/chat",
+				"llmOperation", "v/test/ops/llm",
+				"systemPrompt", "OLD_IDENTITY")), alice).awaitResult(5000);
+
+		ACell first = engine.jobs().invokeOperation("v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "reload-context-agent", Fields.MESSAGE, "first"),
+			alice).awaitResult(5000);
+		AString sidHex = RT.ensureString(RT.getIn(first, Fields.SESSION_ID));
+		Blob sid = Blob.fromHex(sidHex.toString());
+		AgentState agent = engine.getVenueState().users().get(ALICE_DID)
+			.agent("reload-context-agent");
+		AMap<AString, ACell> beforeRoot = RT.ensureMap(
+			RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO));
+		AVector<ACell> conversation = RT.ensureVector(
+			beforeRoot.get(AgentState.KEY_CONVERSATION));
+		assertTrue(RT.getIn(beforeRoot, "renderedContext", "messages", 0, "content")
+			.toString().contains("OLD_IDENTITY"));
+
+		engine.jobs().invokeOperation("v/ops/agent/update",
+			Maps.of(Fields.AGENT_ID, "reload-context-agent",
+				Fields.CONFIG, Maps.of("systemPrompt", "NEW_IDENTITY")), alice)
+			.awaitResult(5000);
+		AMap<AString, ACell> stillOld = RT.ensureMap(
+			RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO));
+		assertTrue(RT.getIn(stillOld, "renderedContext", "messages", 0, "content")
+			.toString().contains("OLD_IDENTITY"), "ordinary update must not rewrite a session prefix");
+
+		ACell reload = engine.jobs().invokeOperation("v/ops/agent/reload-context",
+			Maps.of(Fields.AGENT_ID, "reload-context-agent", Fields.SESSION_ID, sidHex), alice)
+			.awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(reload, "reloaded"));
+		assertEquals(CVMLong.ONE, RT.getIn(reload, "frames"));
+		AMap<AString, ACell> cleared = RT.ensureMap(
+			RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO));
+		assertNull(RT.getIn(cleared, "renderedContext"));
+		assertEquals(conversation, cleared.get(AgentState.KEY_CONVERSATION),
+			"reload changes only the materialised prefix");
+
+		engine.jobs().invokeOperation("v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "reload-context-agent", Fields.SESSION_ID, sidHex,
+				Fields.MESSAGE, "second"), alice).awaitResult(5000);
+		AMap<AString, ACell> rebuilt = RT.ensureMap(
+			RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO));
+		assertTrue(RT.getIn(rebuilt, "renderedContext", "messages", 0, "content")
+			.toString().contains("NEW_IDENTITY"));
 	}
 
 	/** Builds the L3 input via the same code path as agent:context and returns tool names. */

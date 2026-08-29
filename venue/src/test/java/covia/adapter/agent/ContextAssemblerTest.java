@@ -169,6 +169,18 @@ public class ContextAssemblerTest {
 	}
 
 	@Test
+	public void testCacheBoundaryEndingInSystemUsesPrecedingConversationMessage() {
+		Prompt p = new Prompt(10_000);
+		p.add(Maps.of("role", "user", "content", "request"));
+		p.add(Maps.of("role", "assistant", "content", "answer"));
+		p.add(Maps.of("role", "system", "content", "first event"));
+		p.add(Maps.of("role", "system", "content", "second event"));
+		p.mark(ContextAssembler.Band.CONVERSATION);
+
+		assertEquals(Vectors.of(CVMLong.create(1)), p.cacheMarks());
+	}
+
+	@Test
 	public void testTokenTallyIncludesCacheCounts() {
 		CycleRecord.begin();
 		CycleRecord.tally(Maps.of(Fields.TOKENS, Maps.of(
@@ -393,6 +405,35 @@ public class ContextAssemblerTest {
 		IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
 			() -> ContextAssembler.assemble(spec(config)));
 		assertTrue(ex.getMessage().contains("config.context[0] trusted"), ex.getMessage());
+	}
+
+	@Test
+	public void testVolatilePinnedContextStaysOutOfThePrefixAndRefreshes() {
+		write("w/live-profile", Strings.create("first"));
+		AMap<AString, ACell> config = Maps.of(K_CONTEXT, Vectors.of((ACell) Maps.of(
+			"ref", "w/live-profile", "volatile", true, "trusted", false)));
+		Spec s = spec(config);
+
+		ContextAssembler.Rendered rendered = ContextAssembler.initialise(s);
+		assertFalse(allContent(rendered.messages()).contains("first"));
+		assertTrue(allContent(ContextAssembler.assemble(s)).contains("first"));
+
+		write("w/live-profile", Strings.create("second"));
+		String refreshed = allContent(ContextAssembler.assemble(s));
+		assertTrue(refreshed.contains("second"), refreshed);
+		assertFalse(refreshed.contains("first"), refreshed);
+	}
+
+	@Test
+	public void testPinnedOperationIsVolatileByDefaultAndPlacementMustBeBoolean() {
+		assertTrue(ContextAssembler.volatileContextEntry(
+			Maps.of("op", "v/test/ops/echo"), "config.context[0]"));
+		assertFalse(ContextAssembler.volatileContextEntry(
+			Maps.of("op", "v/test/ops/echo", "volatile", false), "config.context[0]"));
+		IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+			() -> ContextAssembler.volatileContextEntry(
+				Maps.of("ref", "w/data", "volatile", "sometimes"), "config.context[0]"));
+		assertTrue(ex.getMessage().contains("volatile must be a boolean"), ex.getMessage());
 	}
 
 	@Test
@@ -922,7 +963,7 @@ public class ContextAssemblerTest {
 		assertFalse(t.contains(ContextAssembler.BUDGET_COMPACT_NOTE), t);
 
 		Spec compact = new Spec(engine, ctx, null, bigConfig, null, null, 1000, null,
-			Vectors.of((ACell) GoalTreeAdapter.TOOL_DEF_COMPACT), null, null, null, null, null,
+			Vectors.of((ACell) HarnessTools.DEF_COMPACT), null, null, null, null, null,
 			true, null, null, null, null, null);
 		String compactTail = tail(ContextAssembler.assemble(compact));
 		assertTrue(compactTail.contains(ContextAssembler.BUDGET_COMPACT_NOTE), compactTail);

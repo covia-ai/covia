@@ -188,7 +188,7 @@ public class GoalTreeContextTest {
 	}
 
 	@Test
-	public void testRenderConversationSegmentsBecomeSystemMessages() {
+	public void testRenderConversationSegmentsBecomeAssistantMemory() {
 		AVector<ACell> items = Vectors.of(
 			(ACell) Maps.of("role", "assistant", "content", "step 1"),
 			(ACell) Maps.of("role", "assistant", "content", "step 2"));
@@ -202,8 +202,8 @@ public class GoalTreeContextTest {
 
 		AVector<ACell> messages = ConversationRenderer.renderFull(frame);
 		assertEquals(2, messages.count());
-		// First message is the segment rendered as system
-		assertEquals("system", RT.ensureString(RT.getIn(messages.get(0), "role")).toString());
+		// Agent-written summaries remain assistant memory, never system instruction.
+		assertEquals("assistant", RT.ensureString(RT.getIn(messages.get(0), "role")).toString());
 		String content = RT.ensureString(RT.getIn(messages.get(0), "content")).toString();
 		assertTrue(content.contains("Compacted"));
 		assertTrue(content.contains("2 turns"));
@@ -305,6 +305,34 @@ public class GoalTreeContextTest {
 			RT.ensureString(RT.getIn(byChars.messages().get(0), "content")).toString());
 		assertEquals(Boolean.TRUE, RT.jvm(RT.getIn(byChars.messages().get(0), "truncated")));
 		assertTrue(byChars.truncated());
+	}
+
+	@Test
+	public void testHistoricalProjectionOpensCompactedArchivesSafely() {
+		AMap<AString, ACell> frame = withConversation(
+			Maps.of("role", "user", "content", "archived question", "ts", 1L),
+			assistantToolCall("lookup"),
+			toolResult("private scratch"),
+			Maps.of("role", "assistant", "content", "archived answer", "ts", 3L));
+		frame = GoalTreeContext.compactFrame(frame, "Question answered");
+
+		ConversationRenderer.HistoricalView summary =
+			ConversationRenderer.historical(frame, 20, 1000);
+		assertEquals(1, summary.messages().count());
+		assertEquals("assistant", RT.getIn(summary.messages().get(0), "role").toString());
+		assertTrue(RT.getIn(summary.messages().get(0), "content").toString()
+			.contains("Question answered"));
+
+		ConversationRenderer.HistoricalView expanded =
+			ConversationRenderer.historical(frame, 20, 1000, 1);
+		assertEquals(2, expanded.messages().count());
+		assertEquals("archived question",
+			RT.getIn(expanded.messages().get(0), "content").toString());
+		assertEquals("archived answer",
+			RT.getIn(expanded.messages().get(1), "content").toString());
+		assertEquals("archived question", expanded.firstUserContent().toString());
+		assertEquals(3, expanded.updated());
+		assertFalse(expanded.messages().toString().contains("private scratch"));
 	}
 
 	// ========== Ancestor rendering ==========
@@ -410,7 +438,7 @@ public class GoalTreeContextTest {
 	}
 
 	@Test
-	public void testCompactPreservesExistingSegments() {
+	public void testRepeatedCompactionNestsExistingArchive() {
 		// Start with a segment already in conversation
 		AVector<ACell> items = Vectors.of(
 			(ACell) Maps.of("role", "assistant", "content", "old work"));
@@ -428,9 +456,14 @@ public class GoalTreeContextTest {
 
 		@SuppressWarnings("unchecked")
 		AVector<ACell> newConv = (AVector<ACell>) compacted.get(GoalTreeContext.K_CONVERSATION);
-		assertEquals(2, newConv.count()); // old segment + new segment
+		assertEquals(1, newConv.count());
 		assertTrue(GoalTreeContext.isSegment(newConv.get(0)));
-		assertTrue(GoalTreeContext.isSegment(newConv.get(1)));
+		AMap<AString, ACell> outer = RT.ensureMap(newConv.get(0));
+		AVector<ACell> archived = RT.ensureVector(outer.get(GoalTreeContext.K_ITEMS));
+		assertEquals(conv.conj(Maps.of("role", "assistant", "content", "new work")), archived);
+		assertSame(oldSegment, archived.get(0));
+		assertEquals(2L, ((CVMLong) outer.get(GoalTreeContext.K_TURNS)).longValue(),
+			"turn count is recursive across nested compactions");
 	}
 
 	@Test

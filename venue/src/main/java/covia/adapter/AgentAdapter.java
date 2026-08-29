@@ -37,6 +37,7 @@ import convex.core.util.Utils;
 import covia.adapter.agent.AbstractLLMAdapter;
 import covia.adapter.agent.ContextAssembler;
 import covia.adapter.agent.ConversationRenderer;
+import covia.adapter.agent.GoalTreeContext;
 import covia.adapter.agent.ToolPalette;
 import covia.adapter.agent.ContextInspectable;
 import covia.adapter.agent.CycleRecord;
@@ -70,8 +71,9 @@ import covia.venue.Users;
  *
  * <p>Transitions are invoked with a blocking {@code .join()} on the virtual
  * thread — cheap (vthreads park without consuming an OS thread), no yield
- * plumbing needed. Long-running external ops (HTTP, slow LLM, HITL) simply
- * park the vthread until the future completes. Self-chat and async resume
+ * plumbing needed. Long-running ordinary ops (HTTP, slow LLM) simply park the
+ * vthread until the future completes; sessioned HITL returns a durable handle
+ * and later re-enters through the inbox. Self-chat and async resume
  * work without races because work arrives on the lattice and is naturally
  * drained by the same loop.</p>
  *
@@ -108,6 +110,7 @@ public class AgentAdapter extends AAdapter {
 	private static final AString K_TURN_COUNT       = Strings.intern("turnCount");
 	private static final AString K_MAX_TURNS        = Strings.intern("maxTurns");
 	private static final AString K_MAX_CHARS        = Strings.intern("maxChars");
+	private static final AString K_ARCHIVE_DEPTH    = Strings.intern("archiveDepth");
 	private static final AString K_TRUNCATED        = Strings.intern("truncated");
 	private static final AString K_META             = Strings.intern("meta");
 	private static final AString K_FRAMES           = Strings.intern("frames");
@@ -392,6 +395,8 @@ public class AgentAdapter extends AAdapter {
 		installAsset("agent/fail-task",     BASE + "failTask.json");
 		installAsset("agent/delete-session", BASE + "deleteSession.json");
 		installAsset("agent/rename-session", BASE + "renameSession.json");
+		installAsset("agent/compact-session", BASE + "compactSession.json");
+		installAsset("agent/reload-context", BASE + "reloadContext.json");
 		installAsset("agent/sessions",       BASE + "sessions.json");
 		installAsset("agent/session-read",   BASE + "sessionRead.json");
 
@@ -468,7 +473,7 @@ public class AgentAdapter extends AAdapter {
 				}
 				default -> {
 					// Everything else — create, update, fork, chat, message,
-					// delete, suspend, resume, cancelTask, deleteSession,
+					// delete, suspend, resume, cancelTask, deleteSession, compactSession, reloadContext,
 					// context — is JOB-WORTHY by design: an agent creating,
 					// reconfiguring or conversing with another agent is a
 					// system-of-record action, so the internal path (LLM tool
@@ -624,6 +629,8 @@ public class AgentAdapter extends AAdapter {
 				case "cancelTask"   -> handleCancelTask(job, input, ctx);
 				case "deleteSession" -> handleDeleteSession(job, input, ctx);
 				case "renameSession" -> handleRenameSession(job, input, ctx);
+				case "compactSession" -> handleCompactSession(job, input, ctx);
+				case "reloadContext" -> handleReloadContext(job, input, ctx);
 				case "sessions"      -> handleSessions(job, input, ctx);
 				case "sessionRead"   -> handleSessionRead(job, input, ctx);
 				case "completeTask" -> handleCompleteTask(job, input, ctx);
@@ -1593,6 +1600,7 @@ public class AgentAdapter extends AAdapter {
 			if (sid == null) { job.fail("Invalid sessionId format: " + sidHex); return null; }
 			session = agent.getSession(sid);
 			if (session == null) { job.fail("Unknown session: " + sidHex); return null; }
+			agentCtx = agentCtx.withSessionId(sid);
 		}
 
 		// The hypothetical call: inbox message(s), pending results, a task.
@@ -1685,6 +1693,7 @@ public class AgentAdapter extends AAdapter {
 	private static final int MAX_HISTORY_TURNS = 100;
 	private static final int DEFAULT_HISTORY_CHARS = 8_000;
 	private static final int MAX_HISTORY_CHARS = 100_000;
+	private static final int MAX_ARCHIVE_DEPTH = 8;
 	private static final int MAX_SESSION_TITLE_CHARS = 120;
 
 	private record SessionSummary(Blob id, AMap<AString, ACell> session,
@@ -1735,6 +1744,7 @@ public class AgentAdapter extends AAdapter {
 			DEFAULT_HISTORY_TURNS, 1, MAX_HISTORY_TURNS);
 		int maxChars = boundedInt(input, K_MAX_CHARS,
 			DEFAULT_HISTORY_CHARS, 1, MAX_HISTORY_CHARS);
+		int archiveDepth = boundedInt(input, K_ARCHIVE_DEPTH, 0, 0, MAX_ARCHIVE_DEPTH);
 
 		AString requested = RT.ensureString(RT.getIn(input, Fields.SESSION_ID));
 		SessionSummary summary;
@@ -1753,7 +1763,7 @@ public class AgentAdapter extends AAdapter {
 
 		AMap<AString, ACell> frame = rootFrame(summary.session());
 		ConversationRenderer.HistoricalView view = ConversationRenderer.historical(
-			frame, maxTurns, maxChars);
+			frame, maxTurns, maxChars, archiveDepth);
 		AMap<AString, ACell> result = Maps.of(
 			K_FOUND, CVMBool.TRUE,
 			Fields.SESSION_ID, Strings.create(summary.id().toHexString()),
@@ -2280,6 +2290,114 @@ public class AgentAdapter extends AAdapter {
 		job.completeWith(result);
 	}
 
+	/** Explicit owner-side compaction of an idle session. The exact replaced
+	 * conversation remains nested under the resulting archive record; the Job
+	 * returns bounded metadata rather than copying that transcript again. */
+	private void handleCompactSession(Job job, ACell input, RequestContext ctx) {
+		AgentTarget target = resolveAgentTarget(ctx, input, Fields.AGENT_ID,
+			Abilities.AGENT_WRITE, false);
+		AString sidHex = RT.ensureString(RT.getIn(input, Fields.SESSION_ID));
+		if (sidHex == null) { job.fail("sessionId is required"); return; }
+		AString summary = RT.ensureString(RT.getIn(input, Strings.intern("summary")));
+		if (summary == null || summary.toString().isBlank()) {
+			job.fail("summary is required");
+			return;
+		}
+
+		AgentState agent = lookupAgent(job, target);
+		if (agent == null) return;
+		Blob sid = parseSessionId(sidHex);
+		if (sid == null) { job.fail("Invalid sessionId format: " + sidHex); return; }
+		if (agent.getSession(sid) == null) { job.fail("Session not found: " + sidHex); return; }
+
+		java.util.concurrent.atomic.AtomicLong archived =
+			new java.util.concurrent.atomic.AtomicLong(0);
+		java.util.concurrent.atomic.AtomicLong total =
+			new java.util.concurrent.atomic.AtomicLong(0);
+		AMap<AString, ACell> provenance = Maps.of(
+			K_CREATED, CVMLong.create(Utils.getCurrentTimestamp()),
+			Fields.CALLER, ctx.getCallerDID(),
+			Fields.JOB_ID, Strings.create(job.getID().toHexString()));
+		boolean applied = agent.updateQuiescentSessionFrames(sid, frames -> {
+			if (frames.isEmpty()) return frames;
+			AMap<AString, ACell> root = RT.ensureMap(frames.get(0));
+			long live = GoalTreeContext.countLiveTurns(root);
+			archived.set(live);
+			if (live == 0) {
+				total.set(GoalTreeContext.countTurns(root));
+				return frames;
+			}
+			AMap<AString, ACell> compacted = GoalTreeContext.compactFrame(
+				root, summary.toString(), provenance);
+			total.set(GoalTreeContext.countTurns(compacted));
+			return frames.assoc(0, compacted);
+		});
+		if (!applied) {
+			if (agent.getSessionCycleEpoch(sid) != null) {
+				job.fail("Session is active; retry compaction after the current cycle completes");
+			} else {
+				job.fail("Session changed or disappeared before compaction");
+			}
+			return;
+		}
+
+		job.setStatus(Status.STARTED);
+		job.completeWith(identify(target, Maps.of(
+			Fields.SESSION_ID, Strings.create(sid.toHexString()),
+			Strings.intern("compacted"), CVMBool.create(archived.get() > 0),
+			Strings.intern("archivedTurns"), CVMLong.create(archived.get()),
+			K_TURN_COUNT, CVMLong.create(total.get()))));
+	}
+
+	/** Explicit owner-side provider-prefix rebuild for one idle session. The
+	 * conversation and loads are untouched; only materialised renderedContext
+	 * cells are removed, so the next inference uses current config and sources. */
+	@SuppressWarnings("unchecked")
+	private void handleReloadContext(Job job, ACell input, RequestContext ctx) {
+		AgentTarget target = resolveAgentTarget(ctx, input, Fields.AGENT_ID,
+			Abilities.AGENT_WRITE, false);
+		AString sidHex = RT.ensureString(RT.getIn(input, Fields.SESSION_ID));
+		if (sidHex == null) { job.fail("sessionId is required"); return; }
+
+		AgentState agent = lookupAgent(job, target);
+		if (agent == null) return;
+		Blob sid = parseSessionId(sidHex);
+		if (sid == null) { job.fail("Invalid sessionId format: " + sidHex); return; }
+		if (agent.getSession(sid) == null) { job.fail("Session not found: " + sidHex); return; }
+
+		AVector<ACell> existingFrames = RT.ensureVector(
+			RT.getIn(agent.getSession(sid), Fields.FRAMES));
+		int clearable = 0;
+		for (long i = 0; existingFrames != null && i < existingFrames.count(); i++) {
+			AMap<AString, ACell> frame = RT.ensureMap(existingFrames.get(i));
+			if (frame != null && GoalTreeContext.reloadContext(frame) != frame) clearable++;
+		}
+		boolean applied = agent.updateQuiescentSessionFrames(sid, frames -> {
+			AVector<ACell> updated = frames;
+			for (long i = 0; i < frames.count(); i++) {
+				AMap<AString, ACell> frame = RT.ensureMap(frames.get(i));
+				if (frame == null) continue;
+				AMap<AString, ACell> next = GoalTreeContext.reloadContext(frame);
+				if (next != frame) updated = updated.assoc(i, next);
+			}
+			return updated;
+		});
+		if (!applied) {
+			if (agent.getSessionCycleEpoch(sid) != null) {
+				job.fail("Session is active; retry context reload after the current cycle completes");
+			} else {
+				job.fail("Session changed or disappeared before context reload");
+			}
+			return;
+		}
+
+		job.setStatus(Status.STARTED);
+		job.completeWith(identify(target, Maps.of(
+			Fields.SESSION_ID, Strings.create(sid.toHexString()),
+			Strings.intern("reloaded"), CVMBool.create(clearable > 0),
+			Strings.intern("frames"), CVMLong.create(clearable))));
+	}
+
 	/**
 	 * Completes the in-scope task with a successful result. Invoked by an
 	 * agent transition (typically as an LLM tool call) to explicitly mark
@@ -2795,6 +2913,26 @@ public class AgentAdapter extends AAdapter {
 		return mine;
 	}
 
+	/**
+	 * Venue-mediated delivery to a known agent session. The caller has already
+	 * authorised and verified the event (for example a completed HITL request),
+	 * so this method performs no public admission decision: it appends one
+	 * provenance-bearing envelope and wakes the ordinary run loop.
+	 */
+	public boolean deliverSessionMessage(AString ownerDID, AString agentId, Blob sessionId,
+			AString caller, AString jobId, ACell message) {
+		AgentState agent = getAgent(ownerDID, agentId);
+		if (agent == null || agent.getSession(sessionId) == null) return false;
+		AMap<AString, ACell> envelope = Maps.of(
+			Fields.CALLER, caller,
+			Fields.SESSION_ID, Strings.create(sessionId.toHexString()),
+			Fields.MESSAGE, message);
+		if (jobId != null) envelope = envelope.assoc(Fields.JOB_ID, jobId);
+		agent.appendSessionPending(sessionId, envelope);
+		wakeAgent(ownerDID, agentId, true);
+		return true;
+	}
+
 	/** Overload: non-forced wake (used by message delivery / resume auto-wake). */
 	CompletableFuture<ACell> wakeAgent(AString ownerDID, AString agentId) {
 		return wakeAgent(ownerDID, agentId, false);
@@ -2824,7 +2962,7 @@ public class AgentAdapter extends AAdapter {
 	 *   <li>Picks one task / one session and builds transition input.</li>
 	 *   <li>Invokes the transition and blocks on its future via
 	 *       {@code .join()}. Virtual thread parking is cheap; a slow or
-	 *       long-running op (HTTP, HITL, slow LLM) does not consume an OS
+	 *       long-running ordinary op (HTTP, slow LLM) does not consume an OS
 	 *       thread. Self-chat and other in-transition ops that enqueue more
 	 *       work on the lattice are picked up by the same loop on the next
 	 *       iteration — no cross-thread wake needed.</li>
@@ -3212,11 +3350,9 @@ public class AgentAdapter extends AAdapter {
 		ACell leanResponse = RT.getIn(transitionResult, Fields.RESPONSE);
 		ACell leanError = RT.getIn(transitionResult, Fields.ERROR);
 		if (llmTimedOut && newState == null) newState = agent.getState();
-		// Adapter-owned frame stack: when the transition emits `frames`, the
-		// adapter has recorded its own assistant/tool turns in the appropriate
-		// frame conversations. Framework skips appending the assistant response
-		// to frames[0] in that case (would duplicate). User turns from drained
-		// pending still append at root (concurrent-intake path).
+		// A transition may still return frames for direct-call compatibility.
+		// Live session ownership is declared by the adapter's FramesOwning marker,
+		// not inferred from this optional output.
 		ACell framesCell = RT.getIn(transitionResult, Fields.FRAMES);
 		@SuppressWarnings("unchecked")
 		AVector<ACell> adapterFrames = (framesCell instanceof AVector)
@@ -3272,10 +3408,9 @@ public class AgentAdapter extends AAdapter {
 		if (pending instanceof AVector<?> pv && pv.count() > 0) {
 			timelineEntry = timelineEntry.assoc(Fields.PENDING, pending);
 		}
-		// Adapter-emitted non-terminal turns (currently llmagent tool-call and
-		// tool-result messages). These slot between framework-authored user input
-		// and the final response; unlike Fields.FRAMES they do not transfer frame
-		// ownership to the adapter.
+		// Adapter-emitted non-terminal turns for ordinary transition adapters.
+		// FramesOwning runtimes already persisted these live; the conventional
+		// output remains useful to direct callers but is ignored by the merge.
 		AVector<ACell> transitionTurns = RT.ensureVector(
 			RT.getIn(transitionResult, Fields.TURNS));
 
@@ -3295,10 +3430,9 @@ public class AgentAdapter extends AAdapter {
 			}
 		}
 
-		// Build turns to append to frames[0].conversation (only when a session
-		// was picked this cycle, the transition didn't error, and the adapter
-		// did NOT emit its own frames stack). When adapterFrames is non-null
-		// the adapter owns every conversation write — framework stays out.
+		// Build turns to append to frames[0].conversation for an ordinary
+		// transition adapter. Frame ownership is explicit; adapterFrames remains
+		// the legacy output path for non-owning custom adapters.
 		// Order: inbox messages → picked task input → assistant response.
 		//
 		// Per-turn caller attribution (#84): opt-in via config.recordCaller.
@@ -3381,7 +3515,7 @@ public class AgentAdapter extends AAdapter {
 		//
 		// FramesOwning transitions (lattice-resident frames) already wrote
 		// their frames live and drained the presented pending at cycle start
-		// (beginSessionCycle) — the merge must not re-drain (it would drop
+		// (presentSessionCycleInput) — the merge must not re-drain (it would drop
 		// mid-transition arrivals) and must not rewrite frames (the live
 		// stack is authoritative; a merge rewrite would also mask any missed
 		// live-write in testing). The merge still clears the session's

@@ -24,8 +24,10 @@ import convex.auth.ucan.UCAN;
 import convex.auth.ucan.UCANValidator;
 import covia.adapter.hitl.HitlValidation;
 import covia.api.Abilities;
+import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.grid.Job;
+import covia.grid.Principals;
 import covia.grid.Status;
 import covia.grid.hitl.Hitl;
 import covia.venue.RequestContext;
@@ -71,6 +73,7 @@ public class HITLAdapter extends AAdapter {
 
 	/** Optional adapter-config ceiling. Absent/null means no venue maximum. */
 	static final AString CONFIG_MAX_GRANT_LIFETIME_SECS = Strings.intern("maxGrantLifetimeSecs");
+	private static final AString K_REQUESTER_USER = Strings.intern("requesterUser");
 
 	/** Expiry timers — daemon; lost on restart and re-armed by {@link #rearmExpiries()}. */
 	private static final ScheduledExecutorService EXPIRY = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -165,7 +168,8 @@ public class HITLAdapter extends AAdapter {
 		// caller, and h/ is not writable via covia:write), then park the Job.
 		long nowMs = System.currentTimeMillis();
 		AString id = Strings.create(job.getID().toHexString());
-		AMap<AString, ACell> record = buildRecord(id, caller, ctx.getAgentId(), title,
+		AMap<AString, ACell> record = buildRecord(id, caller, ctx.getUserDID(), ctx.getAgentId(),
+			ctx.getSessionId(), title,
 			RT.ensureString(RT.getIn(input, Hitl.DESCRIPTION)), asks, nowMs, timeoutSecs);
 
 		final AString targetDID = target;
@@ -198,8 +202,9 @@ public class HITLAdapter extends AAdapter {
 		engine.requireLocalAccess(ctx, resource, ABILITY_HITL_REQUEST);
 	}
 
-	private static AMap<AString, ACell> buildRecord(AString id, AString from, AString agentId,
-			AString title, AString description, AVector<ACell> asks, long nowMs, Long timeoutSecs) {
+	private static AMap<AString, ACell> buildRecord(AString id, AString from,
+			AString requesterUser, AString agentId, Blob sessionId, AString title,
+			AString description, AVector<ACell> asks, long nowMs, Long timeoutSecs) {
 		AMap<AString, ACell> record = Maps.of(
 			Hitl.ID, id,
 			Hitl.FROM, from,
@@ -208,7 +213,13 @@ public class HITLAdapter extends AAdapter {
 			Hitl.STATUS, Hitl.OPEN,
 			Hitl.CREATED, CVMLong.create(nowMs));
 		if (description != null) record = record.assoc(Hitl.DESCRIPTION, description);
-		if (agentId != null) record = record.assoc(Hitl.AGENT, agentId);
+		if (agentId != null) {
+			record = record.assoc(Hitl.AGENT, agentId);
+			if (requesterUser != null) record = record.assoc(K_REQUESTER_USER, requesterUser);
+			if (sessionId != null) {
+				record = record.assoc(Fields.SESSION_ID, Strings.create(sessionId.toHexString()));
+			}
+		}
 		if (timeoutSecs != null) record = record.assoc(Hitl.EXPIRES, CVMLong.create(nowMs + timeoutSecs * 1000));
 		return record;
 	}
@@ -294,6 +305,8 @@ public class HITLAdapter extends AAdapter {
 			// read the responder's inbox.
 			job.fail("HITL request rejected" + (comment != null ? ": " + comment : ""));
 		}
+		deliverToRequester(record, user.getDID(),
+			response.assoc(Hitl.ID, id).assoc(Hitl.STATUS, Hitl.REJECTED));
 		return Maps.of(Hitl.ID, id, Hitl.STATUS, Hitl.REJECTED);
 	}
 
@@ -344,14 +357,14 @@ public class HITLAdapter extends AAdapter {
 		if (approved.count() > 0) response = response.assoc(Hitl.GRANTS, approved);
 		user.putHitlRequest(id, record.assoc(Hitl.STATUS, Hitl.ANSWERED).assoc(Hitl.RESPONSE, response));
 
-		if (job != null && !job.isFinished()) {
-			AMap<AString, ACell> output = response.assoc(Hitl.ID, id);
-			if (token != null) output = output.assoc(Hitl.TOKEN, token);
-			// The full signed tokens ride the requester's job output (never the
-			// durable inbox record); the requester reads them by ask id.
-			if (transported.count() > 0) output = output.assoc(Hitl.TOKENS, transported);
-			job.completeWith(output);
-		}
+		AMap<AString, ACell> output = response.assoc(Hitl.ID, id);
+		if (token != null) output = output.assoc(Hitl.TOKEN, token);
+		// The full signed tokens ride the requester's job output (never the
+		// responder's inbox record); an agent requester receives the same value
+		// in its own durable session.
+		if (transported.count() > 0) output = output.assoc(Hitl.TOKENS, transported);
+		if (job != null && !job.isFinished()) job.completeWith(output);
+		deliverToRequester(record, user.getDID(), output);
 		return Maps.of(Hitl.ID, id, Hitl.STATUS, Hitl.ANSWERED);
 	}
 
@@ -575,11 +588,38 @@ public class HITLAdapter extends AAdapter {
 	/** Expires an open request: record → expired, job → FAILED. Terminal-state
 	 *  stickiness makes the race against a response commit exactly one winner. */
 	private void expireRequest(AString targetDID, AString id, Blob jobId) {
+		User target = engine.getVenueState().users().get(targetDID);
+		AMap<AString, ACell> record = (target != null) ? target.getHitlRequest(id) : null;
 		boolean marked = markResolved(targetDID, id, Hitl.EXPIRED, null);
 		if (!marked) return; // already resolved
 		Job job = engine.jobs().getJob(jobId);
 		if (job != null && !job.isFinished()) job.fail("HITL request expired");
+		if (record != null) {
+			deliverToRequester(record, engine.getDIDString(), Maps.of(
+				Hitl.ID, id, Hitl.STATUS, Hitl.EXPIRED,
+				Fields.ERROR, Strings.create("HITL request expired")));
+		}
 		log.info("HITL request {} expired", id);
+	}
+
+	/** Delivers a resolved request to the exact agent session that asked it. */
+	private void deliverToRequester(AMap<AString, ACell> record,
+			AString responder, ACell result) {
+		AString agentId = RT.ensureString(record.get(Hitl.AGENT));
+		AString sidHex = RT.ensureString(record.get(Fields.SESSION_ID));
+		if (agentId == null || sidHex == null) return;
+		Blob sid = Blob.fromHex(sidHex.toString());
+		if (sid == null) return;
+		AString requesterUser = RT.ensureString(record.get(K_REQUESTER_USER));
+		if (requesterUser == null) {
+			requesterUser = Principals.userOf(RT.ensureString(record.get(Hitl.FROM)));
+		}
+		AString id = RT.ensureString(record.get(Hitl.ID));
+		if (requesterUser == null || !(engine.getAdapter("agent") instanceof AgentAdapter agents)
+				|| !agents.deliverSessionMessage(requesterUser, agentId, sid,
+					responder, id, result)) {
+			log.warn("HITL request {} resolved but its asking agent session is unavailable", id);
+		}
 	}
 
 	/** Marks an OPEN record with a terminal status; returns false if it was

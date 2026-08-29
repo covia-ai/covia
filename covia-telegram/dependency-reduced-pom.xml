@@ -3,7 +3,7 @@
   <parent>
     <artifactId>covia</artifactId>
     <groupId>ai.covia</groupId>
-    <version>0.9.6-SNAPSHOT</version>
+    <version>0.9.7-SNAPSHOT</version>
   </parent>
   <modelVersion>4.0.0</modelVersion>
   <artifactId>covia-telegram</artifactId>
@@ -40,8 +40,7 @@
               <goal>shade</goal>
             </goals>
             <configuration>
-              <shadedArtifactAttached>true</shadedArtifactAttached>
-              <shadedClassifierName>module</shadedClassifierName>
+              <outputFile>${project.build.directory}/${project.build.finalName}-module.jar</outputFile>
               <artifactSet>
                 <excludes>
                   <exclude>ai.covia:venue</exclude>
@@ -80,7 +79,7 @@
     <dependency>
       <groupId>ai.covia</groupId>
       <artifactId>venue</artifactId>
-      <version>0.9.6-SNAPSHOT</version>
+      <version>0.9.7-SNAPSHOT</version>
       <scope>provided</scope>
     </dependency>
     <dependency>

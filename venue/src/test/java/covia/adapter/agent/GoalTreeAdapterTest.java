@@ -847,8 +847,8 @@ public class GoalTreeAdapterTest {
 		// test:compactllm calls test:echo + compact in one batch, then on next
 		// iteration sees the compacted segment and returns text.
 		// This verifies: (1) deferred compaction doesn't orphan tool results,
-		// (2) compacted segment renders as a system message, (3) goal is
-		// re-injected after compaction.
+		// (2) compacted segment renders as assistant memory without repeating
+		// the original goal outside its archive.
 		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
 
 		ACell input = Maps.of(

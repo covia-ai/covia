@@ -70,8 +70,10 @@ public final class AgentEvents {
 	 *  {@code {run, cycle, op, sessionId?, jobId?, jobs?, tasks, messages, pending}} */
 	public static final AString CYCLE_START = Strings.intern("cycle:start");
 	/** The cycle's merge committed — timeline entry and session turns are
-	 *  persisted. {@code {run, cycle, ms, response? | error?, tokens?,
-	 *  timeline?, detail: {turns?}}} */
+	 *  persisted. Generic transitions may include the turns appended by the
+	 *  merge under {@code detail}; frame-owning runtimes do not duplicate their
+	 *  already-live turns. {@code {run, cycle, ms, response? | error?, tokens?,
+	 *  timeline?, detail?: {turns}}} */
 	public static final AString CYCLE_END = Strings.intern("cycle:end");
 	/** A model call is starting. {@code {op, model?, messages, tools, bytes, budget, depth?}} */
 	public static final AString INFERENCE_START = Strings.intern("inference:start");

@@ -1967,6 +1967,20 @@ public class LangChainAdapterTest {
 		assertEquals(Vectors.of(Maps.of("type", "image")), RT.getIn(preserved.get(2), "content"));
 	}
 
+	@Test
+	public void testCanonicalLateSystemElementIsNotWrappedTwice() {
+		String pinned = covia.adapter.agent.Labels.render(
+			Strings.create("bracket"), covia.adapter.agent.Labels.Kind.PINNED_CONTEXT,
+			"fresh value", "Profile");
+		AVector<ACell> messages = Vectors.of(
+			(ACell) Maps.of("role", "user", "content", "request"),
+			(ACell) Maps.of("role", "system", "content", pinned));
+
+		AVector<ACell> normalised = LangChainAdapter.normaliseSystemMessages(
+			messages, "single", Strings.create("bracket"));
+		assertEquals(pinned, RT.getIn(normalised.get(1), "content").toString());
+	}
+
 	/** A marked message carries the cache attribute the Anthropic mapper turns into cache_control. */
 	@Test
 	public void testCacheMarksBecomeMessageAttributes() {
@@ -1988,6 +2002,29 @@ public class LangChainAdapterTest {
 		assertEquals("ephemeral", ((dev.langchain4j.data.message.AiMessage) ai.get(2)).attributes().get("cache_control"));
 		// Unmarked calls carry no attribute at all.
 		assertTrue(((dev.langchain4j.data.message.UserMessage) LangChainAdapter.toChatMessages(messages).get(1)).attributes().isEmpty());
+	}
+
+	@Test
+	public void testCacheMarksFollowLateSystemNormalisationAndNeverMoveToTail() {
+		AVector<ACell> messages = Vectors.of(
+			(ACell) Maps.of("role", "user", "content", "request"),
+			(ACell) Maps.of("role", "assistant", "content", "", "toolCalls", Vectors.of(
+				Maps.of("id", "c1", "name", "skill_load", "arguments", "{}"))),
+			(ACell) Maps.of("role", "tool", "id", "c1", "name", "skill_load", "content", "loaded"),
+			(ACell) Maps.of("role", "system", "content", "skill instructions"),
+			(ACell) Maps.of("role", "system", "content", "tool state"),
+			(ACell) Maps.of("role", "user", "content", "next request"),
+			(ACell) Maps.of("role", "system", "content", "volatile tail"));
+
+		LangChainAdapter.NormalisedMessages normalised = LangChainAdapter.normaliseSystemMessages(
+			messages, java.util.Set.of(5L), "single", Strings.create("bracket"));
+		assertEquals(java.util.Set.of(3L), normalised.cacheMarks());
+		List<ChatMessage> provider = LangChainAdapter.toChatMessages(
+			normalised.messages(), normalised.cacheMarks());
+		assertEquals("ephemeral", ((dev.langchain4j.data.message.UserMessage) provider.get(3))
+			.attributes().get("cache_control"));
+		assertNull(((dev.langchain4j.data.message.UserMessage) provider.get(4))
+			.attributes().get("cache_control"));
 	}
 
 	/** cache: false silences the marks; otherwise they are read from the call. */

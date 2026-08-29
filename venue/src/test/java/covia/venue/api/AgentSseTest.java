@@ -24,6 +24,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestInstance.Lifecycle;
+import org.junit.jupiter.api.parallel.Isolated;
 
 import convex.auth.ucan.UCAN;
 import convex.core.crypto.AKeyPair;
@@ -49,6 +50,7 @@ import covia.venue.TestServer;
  * the shared {@link TestServer} as a unique authenticated caller.
  */
 @TestInstance(Lifecycle.PER_CLASS)
+@Isolated("holds multiple long-lived connections to the shared TestServer")
 public class AgentSseTest {
 
 	private static final AString OP_CREATE = Strings.create("v/ops/agent/create");

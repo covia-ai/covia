@@ -27,6 +27,7 @@ import covia.adapter.ToolCallArguments;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
 import covia.grid.Asset;
+import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.AgentState;
 import covia.venue.Engine;
@@ -1028,8 +1029,10 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	}
 
 	/**
-	 * Invokes an operation with a per-call timeout, via the no-Job internal
-	 * dispatch path. {@code invokeInternal} enforces the grant scope carried by
+	 * Invokes an operation with a per-call timeout, normally via the no-Job
+	 * internal dispatch path. Sessioned {@code hitl:request} is the deliberate
+	 * exception: it returns its durable Job handle immediately and re-enters the
+	 * session on resolution. {@code invokeInternal} enforces the grant scope carried by
 	 * {@code ctx} (today the agent cycle runs unrestricted at the context
 	 * level); {@link #dispatchTool} has additionally checked the call against
 	 * the agent's own config caps. Times out via
@@ -1042,6 +1045,22 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		// (parseToolArguments); a wrong-shaped input is the caller's error and
 		// surfaces from the op's own validation (#89).
 		try {
+			// HITL is naturally longer-lived than a model turn. Its operation
+			// already owns a durable Job, so a sessioned agent receives that handle
+			// immediately; HITLAdapter delivers the eventual outcome back to this
+			// session. Direct/API callers retain the ordinary parked-Job contract.
+			if ("v/ops/hitl/request".equals(operation.toString())
+					&& ctx.getAgentId() != null && ctx.getSessionId() != null) {
+				Job job = engine.jobs().invokeOperation(operation, input, ctx);
+				String error = job.getErrorMessage();
+				if (error != null) return Strings.create("Error: " + error);
+				AMap<AString, ACell> receipt = Maps.of(
+					Fields.ID, Strings.create(job.getID().toHexString()),
+					Fields.STATUS, job.getStatus());
+				AString title = RT.ensureString(RT.getIn(input, Fields.TITLE));
+				if (title != null) receipt = receipt.assoc(Fields.TITLE, title);
+				return receipt;
+			}
 			ACell result = engine.jobs().invokeInternal(operation, input, ctx)
 				.get(timeoutMs, TimeUnit.MILLISECONDS);
 			return (result != null) ? result : Maps.empty();

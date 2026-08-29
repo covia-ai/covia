@@ -98,10 +98,10 @@ Resident agents get HITL from the venue skill library (`v/skills/hitl`) — ever
 1. **Check the skill is visible** — `agent_context` (or ask the agent "what skills do you see?") should list `hitl` in the index. If the agent's config overrides `skills`, ensure `v/skills` is in the sources.
 2. **Instruct it in the system prompt** — add HITL policy to `config.systemPrompt` at creation (see `/agent` for creation mechanics):
 
-   > "For any action that is irreversible, spends money, or exceeds your authority: load the `hitl` skill and send a `hitl_request` to your owner FIRST. Put the full decision context in the description. Batch related questions into one request. If the answer is a rejection, accept it — never retry. If the tool call times out, note the job id and check it on your next turn instead of re-asking."
+   > "For any action that is irreversible, spends money, or exceeds your authority: load the `hitl` skill and send a `hitl_request` to your owner FIRST. Put the full decision context in the description. Batch related questions into one request. The request returns immediately; continue independent work and wait for the verified answer to arrive in this session. If rejected, accept it — never retry."
 
 3. **Or instruct per-task** — include "confirm with me via a HITL request before X" in an `agent_request` task; a skills-capable agent will load the skill and ask.
-4. **Timing** — an agent's HITL tool call blocks up to its `toolCallTimeoutMs` (default 5 min). If the human answers within that window the agent continues in the same cycle; otherwise the tool returns the job id and the agent should park the work and re-check the job (`covia_read path=j/<id>`) on a later wake — this is normal, not an error.
+4. **Timing** — a sessioned agent's HITL tool call returns immediately with the durable request id and `INPUT_REQUIRED`. The answer, rejection or expiry arrives as a verified message in the same session and wakes the agent. Continue independent work; do not poll unless the result is needed before that wake. `covia_read path=j/<id>` remains the fallback.
 5. **Authority** — the ask goes to the agent's **owner** by default (omit `user`); that needs no delegation. Asking anyone else requires the `hitl/request` token above, and a caps-pinned agent additionally needs its capability scope to permit the op (skill loading grants no authority).
 
 ### `test` — smoke-test the full loop
@@ -126,6 +126,6 @@ Run these in order against a dev venue; each step states its expected outcome. (
 | "No HITL request <id> in your inbox" | You are not the target — only the inbox owner can respond (the requester never can) |
 | "echoed grant ... was not offered" | The echo doesn't match an offer your choices triggered — echo exactly the offered `{with, can}`, only for choices you made |
 | "HITL request ... is not open" | Already answered/rejected/expired/cancelled — check `covia_read path=h/<id>` status |
-| Tool call timed out | Normal for long asks — the job id is in the result; poll `covia_read path=j/<id>` |
+| Answer has not arrived | The request is still open or its asking session was removed; inspect `covia_read path=j/<id>` as the durable fallback |
 | Record not found at `h/<id>` | Record ids are bare hex; strip a leading `0x` from a job id for `covia_read` paths (`hitl_respond` accepts both forms) |
 | Job stuck `INPUT_REQUIRED` after venue restart | Expected — open asks survive restarts (expiry timers re-arm at boot); just respond normally |

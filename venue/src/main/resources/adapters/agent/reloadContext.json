@@ -1,0 +1,28 @@
+{
+	"name": "Reload Agent Session Context",
+	"description": "Explicitly invalidates one idle session's materialised provider prefix so its next inference rebuilds the system prompt, fixed tools, skill catalog and pinned context from current agent configuration. Conversation history and loaded context are preserved exactly. Ordinary agent updates do not do this implicitly.",
+	"dateCreated": "2026-08-29T00:00:00Z",
+	"operation": {
+		"adapter": "agent:reloadContext",
+		"internal": false,
+		"toolName": "agent_reload_context",
+		"input": {
+			"type": "object",
+			"properties": {
+				"agentId": { "type": "string", "description": "Agent reference: a bare name for the caller's agent, g/<id>, /g/<id>, or <ownerDID>/g/<id>" },
+				"sessionId": { "type": "string", "description": "Hex ID of the idle session whose provider prefix should be rebuilt, with or without a 0x prefix" }
+			},
+			"required": ["agentId", "sessionId"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"agentId": { "type": "string" },
+				"address": { "type": "string" },
+				"sessionId": { "type": "string" },
+				"reloaded": { "type": "boolean", "description": "True when a materialised prefix was cleared" },
+				"frames": { "type": "integer", "description": "Number of frame prefixes cleared" }
+			}
+		}
+	}
+}

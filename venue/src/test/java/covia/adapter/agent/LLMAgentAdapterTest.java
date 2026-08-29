@@ -550,6 +550,23 @@ public class LLMAgentAdapterTest {
 	}
 
 	@Test
+	public void testCompactUsesSharedFrameRepresentation() {
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), Maps.of(
+			Fields.AGENT_ID, "flat-compact-agent",
+			AgentState.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/compactllm"),
+			Fields.MESSAGES, Vectors.of(Maps.of("content", "compact this"))));
+
+		assertTrue(RT.getIn(output, Fields.RESPONSE).toString().contains("Compact verified"));
+		AVector<ACell> frames = RT.ensureVector(RT.getIn(output, Fields.FRAMES));
+		AVector<ACell> conversation = RT.ensureVector(
+			RT.getIn(frames.get(0), AgentState.KEY_CONVERSATION));
+		assertEquals(2, conversation.count(), "compacted prefix + later assistant reply");
+		assertTrue(GoalTreeContext.isSegment(conversation.get(0)));
+		assertEquals("assistant", RT.getIn(conversation.get(1), "role").toString());
+	}
+
+	@Test
 	public void testNestedCoviaCollectionsReturnThroughToolLoop() throws Exception {
 		// #334: direct covia reads were fast, but the same tiny nested values
 		// stayed RUNNING indefinitely when returned as an agent tool result.
@@ -897,6 +914,7 @@ public class LLMAgentAdapterTest {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		ToolContext ctx = skillToolCtx();
 		ctx.fixedToolNames = java.util.Set.of("covia_read");
+		ctx.loadExcludedNames = java.util.Set.of("covia_read");
 		adapter.handleSkillLoad(Maps.of("name", "alpha"), ctx);
 		assertEquals(0, ctx.loadTools(engine).count());
 		assertNull(ctx.configToolMap.get("covia_read"),
@@ -1060,9 +1078,16 @@ public class LLMAgentAdapterTest {
 		session = agent.getSession(sid);
 		ACell initialMessages = RT.getIn(session, Fields.FRAMES, CVMLong.ZERO,
 			GoalTreeContext.K_RENDERED_CONTEXT, Strings.intern("messages"));
+		AVector<ACell> initialTools = RT.ensureVector(RT.getIn(session, Fields.FRAMES, CVMLong.ZERO,
+			GoalTreeContext.K_RENDERED_CONTEXT, Fields.TOOLS));
+		assertFalse(ToolPalette.names(initialTools).contains("covia_write"));
 		engine.jobs().invokeOperation("v/ops/covia/write", Maps.of(
 			Fields.PATH, "w/skills/beta",
-			Fields.VALUE, Maps.of("description", "Beta catalog refresh")),
+			Fields.VALUE, Maps.of(
+				"description", "Beta catalog refresh",
+				"content", Maps.of("inline", "Use covia_write when asked."),
+				"skill", Maps.of("tools",
+					Vectors.of(Strings.create("v/ops/covia/write"))))),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 		engine.jobs().invokeOperation("v/ops/agent/update", Maps.of(
 			Fields.AGENT_ID, "skill-e2e-agent",
@@ -1074,6 +1099,23 @@ public class LLMAgentAdapterTest {
 			GoalTreeContext.K_RENDERED_CONTEXT, Strings.intern("messages")));
 		assertTrue(RT.getIn(session, Fields.FRAMES, CVMLong.ZERO,
 			Strings.intern("conversation")).toString().contains("Beta catalog refresh"));
+
+		// Beta was not in this session's immutable initial manifest. Loading it
+		// therefore appends a genuine tool addition; it must not rewrite tools.
+		AMap<AString, ACell> betaLoad = RT.ensureMap(engine.jobs().invokeOperation(
+			"v/ops/agent/step", Maps.of(
+				Fields.AGENT_ID, "skill-e2e-agent",
+				Fields.SESSION_ID, sid.toHexString(),
+				"assistant", Maps.of("toolCalls", Vectors.of(Maps.of(
+					"id", "load-beta", "name", HarnessTools.SKILL_LOAD,
+					"arguments", Maps.of("name", "beta"))))),
+			RequestContext.of(ALICE_DID)).awaitResult(5000));
+		AMap<AString, ACell> next = RT.ensureMap(betaLoad.get(AbstractLLMAdapter.K_NEXT));
+		assertEquals(initialTools, RT.ensureVector(next.get(Fields.TOOLS)),
+			"a later catalog load must preserve the exact fixed manifest");
+		String nextMessages = RT.ensureVector(next.get(Fields.MESSAGES)).toString();
+		assertTrue(nextMessages.contains("toolAddition") && nextMessages.contains("covia_write"),
+			"a later catalog tool must be appended as tool state: " + nextMessages);
 		long turnsAfterRefresh = RT.ensureVector(RT.getIn(session, Fields.FRAMES, CVMLong.ZERO,
 			Strings.intern("conversation"))).count();
 		engine.jobs().invokeOperation("v/ops/agent/update", Maps.of(

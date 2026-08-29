@@ -141,8 +141,16 @@ public class AgentToolboxTest {
 			assertTrue(messages(unloaded).toString().contains(PINNED_MARKER),
 				where + " context_unload removed pinned context: " + unloaded);
 
-			// skill_load: instructions and tool state both append; the fixed
-			// dispatcher was part of the initial palette.
+			// Initial skill schemas are native provider tools, but remain gated
+			// until their trusted instructions have been selected.
+			AMap<AString, ACell> gated = step(agent, "try skill tool too early",
+				assistantCall("call_gated_read", "covia_read",
+					Maps.of("path", "w/probe")), null);
+			assertTrue(RT.getIn(call(gated, "call_gated_read"), Fields.RESULT).toString()
+				.contains("requires skill 'alpha'"), where + " inactive skill tool was not gated: " + gated);
+
+			// skill_load: the initial catalog supplied the native schema once;
+			// loading appends only the trusted instructions and activates dispatch.
 			AMap<AString, ACell> skill = step(agent, "load a skill",
 				assistantCall("call_skill_load", HarnessTools.SKILL_LOAD,
 					Maps.of("name", "alpha")), null);
@@ -150,10 +158,10 @@ public class AgentToolboxTest {
 			assertTrue(hasSystemContent(skill, SKILL_BODY),
 				where + " skill instructions missing from next prompt: " + skill);
 			assertTrue(hasTool(skill, HarnessTools.INVOKE_TOOL), where);
-			assertTrue(hasToolAddition(skill, "covia_read"),
-				where + " skill-contributed operation missing from appended state: " + skill);
-			assertFalse(hasTool(skill, "covia_read"),
-				where + " later definition rewrote the fixed palette: " + skill);
+			assertTrue(hasTool(skill, "covia_read"),
+				where + " discoverable skill schema missing from fixed palette: " + skill);
+			assertFalse(hasToolAddition(skill, "covia_read"),
+				where + " fixed skill schema was duplicated into conversation state: " + skill);
 
 			// more_tools uses the same append-only state path. The following
 			// dispatcher call proves the new route is live without another palette.
@@ -173,6 +181,17 @@ public class AgentToolboxTest {
 			assertNotNull(invokedResult, where);
 			assertFalse(invokedResult.toString().startsWith("Error:"),
 				where + " fixed dispatcher did not invoke the added operation: " + more);
+
+			// compact is one shared conversation primitive. The summary is
+			// assistant memory and the archived inputs are not repeated visibly.
+			AMap<AString, ACell> compact = step(agent, "retain this work",
+				assistantCall("call_compact", HarnessTools.COMPACT,
+					Maps.of("summary", "TOOLBOX_COMPACT_SUMMARY")), null);
+			exercisedHarness.add(HarnessTools.COMPACT);
+			assertTrue(messages(compact).toString().contains("TOOLBOX_COMPACT_SUMMARY"),
+				where + " compact summary missing from next inference: " + compact);
+			assertFalse(hasSystemContent(compact, "TOOLBOX_COMPACT_SUMMARY"),
+				where + " elevated agent-authored compacted memory to system authority");
 
 			// Framework task tools are conditional toolbox entries, shared by both runtimes.
 			AMap<AString, ACell> completed = step(agent, null,
@@ -200,8 +219,7 @@ public class AgentToolboxTest {
 			.concat(Vectors.of(
 				(ACell) Strings.create(GoalTreeAdapter.TOOL_SUBGOAL),
 				(ACell) Strings.create(GoalTreeAdapter.TOOL_COMPLETE),
-				(ACell) Strings.create(GoalTreeAdapter.TOOL_FAIL),
-				(ACell) Strings.create(GoalTreeAdapter.TOOL_COMPACT)));
+				(ACell) Strings.create(GoalTreeAdapter.TOOL_FAIL)));
 		AMap<AString, ACell> config = sharedConfig(GOAL_TREE).assoc(Fields.TOOLS, tools);
 		RunningAgent agent = start(GOAL_TREE, "goaltree-specific", config);
 		Set<String> exercised = new HashSet<>();
@@ -217,13 +235,6 @@ public class AgentToolboxTest {
 				Maps.of("reason", "blocked")), null);
 		exercised.add(GoalTreeAdapter.TOOL_FAIL);
 		assertTerminal(fail, "failed", Maps.of("reason", "blocked"), "goaltree");
-
-		AMap<AString, ACell> compact = step(agent, "retain this goal",
-			assistantCall("call_compact", GoalTreeAdapter.TOOL_COMPACT,
-				Maps.of("summary", "TOOLBOX_COMPACT_SUMMARY")), null);
-		exercised.add(GoalTreeAdapter.TOOL_COMPACT);
-		assertTrue(messages(compact).toString().contains("TOOLBOX_COMPACT_SUMMARY"),
-			"compact summary missing from next inference: " + compact);
 
 		// agent:step cannot recursively call a model, so subgoal reports that exact
 		// boundary. GoalTreeAdapterTest exercises the deterministic live push/run/pop.
@@ -255,6 +266,7 @@ public class AgentToolboxTest {
 			(ACell) Strings.create(HarnessTools.CONTEXT_LOAD),
 			(ACell) Strings.create(HarnessTools.CONTEXT_UNLOAD),
 			(ACell) Strings.create(HarnessTools.MORE_TOOLS),
+			(ACell) Strings.create(HarnessTools.COMPACT),
 			(ACell) Strings.create("v/test/ops/echo"));
 	}
 

@@ -51,7 +51,7 @@ The label renderer therefore handles only blocks that genuinely travel as instru
 | Agent-loaded skill — the path is its unload key | `[Loaded skill: <name> — unload key: <path>]` | `<loaded-skill name="…" unload-key="…">` | `## Loaded skill: <name> — unload key: <path>` |
 | Trusted operator context | `[Pinned context: <label>]` | `<pinned-context label="…">` | `## Pinned context: <label>` |
 | Late system message (§3.2.1) | `[system: …]` | `<system>` | `## System` |
-| Compacted conversation segment | `[Compacted: <N> turns] <summary>` | `<compacted turns="…">` | `## Compacted: <N> turns` |
+| Compacted conversation segment (assistant memory) | `[Compacted: <N> turns] <summary>` | `<compacted turns="…">` | `## Compacted: <N> turns` |
 | Ancestor context (goal tree) | `[Ancestor Context]` | `<ancestors>` | `## Ancestor context` |
 | Tool-failure diagnostic | `[Tool failure: <name>] <reason>` | `<tool-failure name="…">` | `## Tool failure: <name>` |
 | Outstanding task | `[Tasks assigned to you]` | `<tasks>` | `## Tasks assigned to you` |
@@ -107,7 +107,7 @@ Only an intentional prefix rebuild invalidates earlier cells:
 - a change to the model, provider-shaping profile, label dialect, base system prompt or fixed tool/schema manifest;
 - an incompatible renderer/schema version.
 
-**Reload is not a rebuild.** Reloading dynamic context, a skill or an operation result appends another load event, even for the same key. The newer result is closer to the reply and becomes the current value; the older one remains honest stale history. This is how models already experience repeated tool reads, and it preserves the full cached prefix in the usual case. Source mutation alone does nothing: the prior value remains until an explicit reload appends the new one.
+**Reloading a value is not rebuilding the prefix.** Reloading agent-managed context, a skill or an operation result appends another load event, even for the same key. The newer result is closer to the reply and becomes the current value; the older one remains honest stale history. This is how models already experience repeated tool reads, and it preserves the full cached prefix in the usual case. Source mutation alone does nothing to a non-volatile snapshot. `agent:reloadContext` is deliberately different: it is the explicit owner operation that invalidates one idle session's materialised prefix, preserves its conversation/loads exactly, and rebuilds from current config on the next inference.
 
 **Test contract.** Equal initial inputs produce equal tool/message vectors; appending an event leaves the prior message vector as the common prefix; changing only the volatile tail leaves every marked vector equal; and an explicit rebuild is the only test that expects an earlier prefix to change. Tests do not pin content merely to exercise rendering. When fixed rendered content is unavoidable, they use a production constant or the same production helper that creates it, never a hand-copied duplicate.
 
@@ -125,7 +125,7 @@ Only an intentional prefix rebuild invalidates earlier cells:
 | 7 | Pending results | working turn | `user`, `assistant`, `tool` | Job results that arrived for this cycle: one request — *Get job results.* — one `get_job_results()` call, one result listing each job once (§5.7) |
 | 8 | Current input | working turn | `user` | The inbox message(s) driving this cycle |
 | 9 | Tool-loop messages | working turn | `assistant` / `tool` | Assistant/tool turns and context events accumulated within this cycle |
-| 10 | Volatile loads | volatile tail | `system` or `assistant` / `tool` | Trusted operator instructions or the ownership-separated data aggregates for loads declared `volatile` — an op entry by default (§5.5) |
+| 10 | Volatile context | volatile tail | `system` or `assistant` / `tool` | Trusted operator instructions or ownership-separated data for `config.context` / loads entries declared `volatile` — an op entry by default (§5.5) |
 | 11 | Budget warning | volatile tail | `system` | **Only** when the budget is under pressure (§3.4) |
 | 12 | Current date | volatile tail | `system` | One line; changes daily |
 | 13 | Unavailable tools | volatile tail | `system` | Configured tools that did not resolve this cycle |
@@ -136,7 +136,7 @@ The *Role* column is the role a section emits — the role that is true of its c
 
 ### 3.2.1 The role rule
 
-Roles are **semantic**, not positional. `system` is what the venue, the operator or the runtime admits *as instruction* — identity, operator-trusted context, a loaded skill, a notice, a diagnostic, a compaction summary. `user` is what has happened or must be acted on — pending results, the input, the goal, the empty-state signal. `assistant` and `tool` are the agent's own turns and their results — and, marked as such, the calls the venue makes on the agent's behalf to bring context data in (§5.5). Ordinary context loads are data and never acquire system authority merely because they persist or are pinned. A section emits the role that is true of its content, and the stored conversation keeps it, so provenance survives. Nothing in assembly depends on the provider.
+Roles are **semantic**, not positional. `system` is what the venue or operator admits *as instruction* — identity, operator-trusted context, a loaded skill, a notice or a runtime diagnostic. `user` is what has happened or must be acted on — pending results, the input, the goal, the empty-state signal. `assistant` and `tool` are the agent's own turns and their results — including an agent-written compaction summary — and, marked as such, the calls the venue makes on the agent's behalf to bring context data in (§5.5). Ordinary context loads are data and never acquire system authority merely because they persist or are pinned. A section emits the role that is true of its content, and the stored conversation keeps it, so provenance survives. Nothing in assembly depends on the provider.
 
 Where a `system` message that follows conversation actually lands is provider- and model-dependent. Some APIs accept native mid-conversation system blocks, some have only a top-level system parameter, and some local templates honour only the leading instruction. The naive fallback — hoisting a late instruction into the head — is wrong: it rewrites the cached prefix and moves the instruction away from the event that made it relevant.
 
@@ -163,7 +163,9 @@ The volatile tail is **ephemeral**. Its values may be resolved for every inferen
 
 Tool definitions are **section 0**. They are not a message — providers take them as a separate parameter — but they are prompt bytes placed ahead of the messages. The base manifest is therefore fixed for the persisted context, canonically ordered and rendered once.
 
-A tool becoming available later must not cause the venue to rebuild that array silently. The provider strategy chooses one of three representations, in order:
+A tool becoming available later must not cause the venue to rebuild that array silently. Covia declares the exact schemas of every skill in the **initial discoverable catalog** in the fixed manifest. Dispatch remains gated: calling one before its skill is loaded returns `load skill <name> first`; after `skill_load`, the model calls the native tool directly. This is the fixed-array strategy used by Anthropic as well as other providers, so common skill tools retain provider-side schema validation without a load-time prefix bust.
+
+Tools discovered only after a parent skill loads, or introduced by `more_tools`, were not part of that initial superset. The provider strategy for those genuinely later definitions chooses one of three representations, in order:
 
 1. declare the stable/deferred superset required by the provider, then append native `tool_addition` / `tool_removal` events when support exists;
 2. keep the fixed generic search/invoke tools and append a capability-description event, with dispatch through the generic tool;
@@ -171,7 +173,7 @@ A tool becoming available later must not cause the venue to rebuild that array s
 
 An adapter or plugin loading or unloading mutates the venue capability registry, not the fixed tool vector of an existing context. Revocation is always enforced at dispatch even if an earlier event remains visible to the model. A soft removal appends a removal event; only an explicit rebuild makes the historical definition absent.
 
-The same rule applies to conditional capabilities. The static `complete_task` / `fail_task` schemas stay in the fixed harness manifest and reject calls when no task is in scope. Skill- and `more_tools`-contributed operations append exact addition/removal state and are invoked through the fixed generic dispatcher where the provider has no native representation. `context_unload` also stays declared whenever skill loading makes persistent agent-managed context possible.
+The same rule applies to conditional capabilities. The static `complete_task` / `fail_task` schemas stay in the fixed harness manifest and reject calls when no task is in scope. Initially discoverable skill operations stay in that manifest and are load-gated at dispatch; later-discovered skill and `more_tools` operations append exact addition/removal state and use the fixed `invoke_tool` dispatcher where the provider has no native representation. `context_unload` also stays declared whenever skill loading makes persistent agent-managed context possible.
 
 Tool definitions are charged to the budget first (§3.4). Dynamically appended definitions are charged where their addition event enters the message vector.
 
@@ -235,7 +237,7 @@ The assembler's output is provider-neutral. The level-3 adapter, reading the mod
 | `systemMessages: "single"` | delivers the leading system run as the provider's system parameter — a list of blocks where the API takes them, one joined text where it does not — and converts every later system message to a `[system: …]` user message in place (§3.2.1) |
 | `systemMessages: "none"` | as `"single"`, with the leading run folded into the first user message |
 | `labels` | nothing at the edge beyond the wrapper above — the dialect is applied by the one renderer (§1.1), which the edge also uses for that wrapper |
-| `cachePrefix` | turns the initial, committed-message and working-turn marks into the provider's cache controls; `cache: false` on the call switches all of it off |
+| `cachePrefix` | turns the initial, committed-message and working-turn marks into the provider's cache controls; provider normalization remaps canonical indices to wire indices, and a boundary ending in system content uses the nearest preceding cacheable message; `cache: false` switches all of it off |
 | dynamic-tool support | maps persisted tool-state events to native addition/removal blocks; without it, uses the fixed generic-tool strategy or requires an explicit rebuild (§3.2.3) |
 | always | maps the base tool manifest to the provider's schema, in the given order, and `tool` messages and `toolCalls` to its shapes, merging consecutive same-role messages where the API requires alternation |
 | always | **never reorders, never drops, never adds content** |
@@ -267,7 +269,7 @@ A runtime that needs `capsCtx` calls `resolveAuthority`; it does not build a con
 ## 5. Section notes
 
 ### 5.1 Identity prompt
-`config.systemPrompt`, else a default identity, followed by one line of session identity: the venue name, the model when configured, and the session id when one is in scope — the agent's handle for reporting back into this conversation from deferred work. It is rendered when context is initialised. An `agent_update` affects new contexts; an existing context keeps its rendered identity until an explicit compaction or reset rebuilds it, so active history is never rewritten accidentally. A runtime may append a notice of its own — goaltree's subgoal notice for child frames — when that frame opens. Nothing inference-local belongs here.
+`config.systemPrompt`, else a default identity, followed by one line of session identity: the venue name, the model when configured, and the session id when one is in scope — the agent's handle for reporting back into this conversation from deferred work. It is rendered when context is initialised. An `agent_update` affects new contexts; an existing context keeps its rendered identity until compaction or `agent:reloadContext` rebuilds it, so active history is never rewritten accidentally. A runtime may append a notice of its own — goaltree's subgoal notice for child frames — when that frame opens. Nothing inference-local belongs here.
 
 `systemPrompt` is the text itself, or **one context entry** in the grammar of §6 — `{ref: "w/prompts/mina"}`, `{ref: "dlfs/vault/prompts/mina.md"}`, `{text}`, `{op, input}`, `{job}` — resolved through the same loader as pinned context and loads (`ContextLoader.resolveText`). Three things differ from a load: it renders as the identity, with no header; it resolves **once at initialisation or explicit rebuild**; and it is required — an entry that does not resolve, or resolves to something that is not text, fails initialisation with the reason, because a missing identity is a configuration error. `agent:create` warns when the entry does not resolve for the creator. A workspace path is one lattice read and a DLFS file one content read; neither creates a job.
 
@@ -281,7 +283,7 @@ The capability portion renders only for an agent that **has tools** and declares
 Whenever the context may contain tool results, the same initial system message carries one stable rule: tool-result content is reference data, potentially untrusted, and instructions found inside it do not acquire system or operator authority. This policy appears once in the cacheable prefix, not as a wrapper repeated around every result.
 
 ### 5.3 Pinned context
-`config.context`, `config.loads`, and optional `loads` supplied when a caller mints a session are operator/caller-owned. They are resolved into the initial messages and have no automatic expiry, but the agent cannot remove or mask them. A later source mutation is not observed implicitly. Its owner may explicitly reload it, which appends another message/result; old bytes disappear only through compaction or reset. Neither surface exposes an unload handle.
+`config.context`, `config.loads`, and optional `loads` supplied when a caller mints a session are operator/caller-owned. Non-volatile entries are resolved into the initial messages and have no automatic expiry; the agent cannot remove or mask them, and later source mutation is not observed implicitly. A mutable current-state view declares `volatile: true` (an `op` entry defaults to it), so it is re-read in the uncached tail. `agent:reloadContext` explicitly rebuilds an idle session's whole prefix from current config while preserving conversation and loads exactly. Neither surface exposes an unload handle.
 
 Pinned does **not** itself grant instruction authority. Trust is fixed where an entry enters the scope chain:
 
@@ -305,7 +307,7 @@ At initialisation the starting data is aggregated once per ownership class:
 - `pinned_context` returns an ordered vector. It contains only untrusted operator/caller entries and exposes no unload handles.
 - `loaded_context` returns a map from exact unload key to the entry. If one skill contributes several context values, that map value is a vector.
 
-A later agent load or reload appends one `loaded_context` exchange containing only the affected keys. An owner reload appends trusted system messages and/or one `pinned_context` data exchange for only the affected entries; neither form exposes unload handles. One invocation may resolve several entries, so data remains one map/vector rather than one synthetic call per key. Already rendered values are neither repeated nor regrouped on later inferences. Loading the same key again needs no special replacement event: the later result is the current one because it appears later in the conversation.
+A later agent load or reload appends one `loaded_context` exchange containing only the affected keys. One invocation may resolve several entries, so data remains one map/vector rather than one synthetic call per key. Already rendered values are neither repeated nor regrouped on later inferences. Loading the same key again needs no special replacement event: the later result is the current one because it appears later in the conversation. Owner-pinned current-state views use `volatile`; `agent:reloadContext` is a whole-prefix rebuild rather than a per-entry append.
 
 When the agent initiated it, the ordinary `context_load` result is only a compact acknowledgement of the keys loaded; the values themselves appear exactly once, in the appended `loaded_context` exchange. Likewise `skill_load` acknowledges activation, while the body appears once as the appended instruction and its context entries appear once in `loaded_context`.
 
@@ -342,7 +344,7 @@ Only agent-managed elements expose an **unload key**, in the `loaded_context` re
 
 A successful soft unload appends a compact state event listing the affected keys and any skill/tool deactivations; it never repeats their content. When the agent called `context_unload`, its persisted tool result is that event. An owner-initiated change uses an attributed system event. Folding the newest event for a key determines whether it is active, while the prior bytes remain honest history until compaction or reset.
 
-**Placement.** Starting elements render in declared/load order in the initial messages; later elements append where they are loaded, so nothing already rendered moves. An element declared `volatile: true` — the default for an `op` entry — renders in the **tail** (§3.2 section 10), after every cache mark. A non-volatile entry is resolved once per load; loading it again appends the newer result. The placement is chosen by declaration, never by observing the content. Declare a queue, status or other genuinely current-state view volatile; use an ordinary tool call when freshness is needed only on demand.
+**Placement.** Starting elements render in declared/load order in the initial messages; later elements append where they are loaded, so nothing already rendered moves. A `config.context` or loads element declared `volatile: true` — the default for an `op` entry — renders in the **tail** (§3.2 section 10), after every cache mark. A non-volatile entry is resolved once per load; an agent loading it again appends the newer result. The placement is chosen by declaration, never by observing the content. Declare a queue, status, memory or other genuinely current-state view volatile; use an ordinary tool call when freshness is needed only on demand.
 
 A volatile element is re-sent uncached on every inference and sits between the latest input and the reply. It therefore renders **within its budget whatever its shape** — a structured value through the explorer as always, a string cut at the budget with one trailer naming the bytes left out and the two ways to get them (reload with a larger `budget`, or fetch the value with a tool). A volatile load is a compact current-state view; a long one belongs in an ordinary tool call. Its declaration persists until explicitly unloaded or changed by its owner; its rendered result does not. Neither kind auto-expires.
 
@@ -353,9 +355,9 @@ Runtime-supplied frames, rendered by one `ConversationRenderer` for every runtim
 
 The message vector is append-only **across cycles as well as within one**: every inference sees exactly the previous immutable vector plus newly appended events and the working turn. Calls and results remain paired and byte-identical. No end-of-cycle scratch-elision pass rewrites the conversation.
 
-**Compaction is the one ordinary rewrite.** A selected range collapses into a `[Compacted: N turns] summary` whose summary the agent wrote, because only the agent knows what mattered. The runtime replaces the persisted message vector with an explicitly compacted representation. It may omit obsolete tool chatter and superseded/unloaded context because the cache invalidation is intentional and observable. The `compact` tool is a context tool, available to every runtime.
+**Compaction is the one ordinary rewrite.** The complete visible conversation vector collapses into one `[Compacted: N turns] summary` assistant-memory message whose summary the agent wrote, because only the agent knows what mattered. The exact replaced vector is retained under that segment's `items`; it is not copied into the Job result. A later compaction nests the earlier segment together with all turns appended since it, keeping the provider-visible representation bounded without rewriting or discarding the audit history. The frame's rendered prefix is then rebuilt once around the new segment. The shared `compact` tool works in both LLM runtimes, and `agent:compactSession` applies the same transform to an idle session for an authorised owner.
 
-Everything else is an append. Context state is obtained by folding its events in order; a repeated load makes its newest result current without pretending the model never saw the older one. That small amount of stale history is normal for an LLM conversation, while recency puts the relevant value nearest the reply. Segments and diagnostic events are `system` turns — authored by the runtime, in sequence — and the edge keeps them in place on every provider (§3.2.1).
+Everything else is an append. Context state is obtained by folding its events in order; a repeated load makes its newest result current without pretending the model never saw the older one. That small amount of stale history is normal for an LLM conversation, while recency puts the relevant value nearest the reply. Compacted segments are `assistant` turns because their summaries are agent-authored and may describe untrusted tool data; persisting them never promotes them to operator instruction. Runtime diagnostics retain their own semantic role, and the edge keeps every event in place on every provider (§3.2.1).
 
 ### 5.7 Pending results
 Job results that completed for this cycle — the mechanism by which asynchronous work re-enters the conversation. A result is data, so it arrives as every result does (§5.5): one plain request — *Get job results.* — one `get_job_results()` call, and one tool result listing each job once: its id and status, then its output (strings verbatim, structured values bounded) or, for a job that did not complete, its recorded `error`. One call rather than one per job — the ids would only be repeated, and a listing is the natural answer to the plural request; a failed job is data about that job, not a failed fetch, so the result is not a tool error. Placed before the current input so that the input, the thing to act on, is closest to the reply.
@@ -412,9 +414,9 @@ The literal fallback means a mistyped *prefix* (`ws/notes`) is injected as text 
 | `required` | Failure throws and fails initialisation or the requested load |
 | `budget` | Render cap for a structured value (§6.4); not an accounting charge. A hard cap on a volatile loads entry whatever its shape (§5.5) |
 | `wait` | Job entries: ms to wait for a running job |
-| `volatile` | Loads tiers only (§5.5): render afresh in the tail rather than commit a result. Defaults to true for an `op` entry, false otherwise |
+| `volatile` | `config.context` and loads tiers (§5.5): render afresh in the tail rather than commit a result. Defaults to true for an `op` entry, false otherwise |
 
-An **op entry** runs once per load unless it is volatile. A volatile op runs every inference under the caller's identity, so it must be **read-only** — a write-on-assemble would fire every inference. Operation entries generalise the rest: a workspace read, a cross-venue fetch and a purpose-built assembler are all just operations. In `config.context` an op is part of the initial snapshot; at a loads tier it is volatile by default and renders in the tail, where a changing result costs only itself.
+An **op entry** is volatile by default and runs every inference under the caller's identity, so it must be **read-only** — a write-on-assemble would fire every inference. `volatile: false` makes it a once-per-load snapshot. Operation entries generalise the rest: a workspace read, a cross-venue fetch and a purpose-built assembler are all just operations. The rule is identical in `config.context` and loads tiers, and a changing result in the tail costs only itself.
 
 ### 6.3 Resolution outcomes
 
@@ -446,7 +448,7 @@ Which entries are in play at all.
 
 ### 7.1 Two roles, one pipeline
 
-- **Pinned** (`config.context`, `config.loads`, and caller-supplied session-mint `loads`) — owned outside the agent, snapshotted into the initial messages, never removable by the agent.
+- **Pinned** (`config.context`, `config.loads`, and caller-supplied session-mint `loads`) — owned outside the agent, snapshotted into the initial messages unless declared volatile, never removable by the agent.
 - **Agent-managed** — the working set the agent creates via `context_load` / `skill_load` and may deliberately remove via `context_unload`.
 
 They share the entry grammar, resolver, append contract and budget. They differ in *ownership and control*, made explicit by an internal ownership marker rather than inferred from timestamps. Trust is a second stamped property and is never inferred from persistence or ownership after tiers merge. Both kinds are persistent: their appended events reappear across model calls and turns and have no time-based expiry. `context_load` takes a `path`, or `text` / `op` / `job` under an `id`; any loads entry may declare `tools`, `skills` and `skillsets`.
@@ -544,8 +546,6 @@ The same regions drive the timeline record (`AGENT_LOOP.md` §2.4): initial mess
 
 Everything above is implemented except the provider-edge refinements listed here.
 
-- **Native provider tool-state blocks are not mapped yet.** The canonical conversation already persists trusted events carrying exact `toolAddition` / `toolRemoval` state, and every supporting context has the fixed `invoke_tool` fallback, so the initial tool vector remains unchanged and dispatch is authoritative. Provider edges currently receive the generic late-system representation; a native edge may map the same fields to its tool-addition/removal blocks without changing stored history.
+- **Native provider tool-state blocks are not mapped yet for genuinely late definitions.** Initially discoverable skill tools already have native schemas in the fixed manifest and call directly after load. The canonical conversation persists exact `toolAddition` / `toolRemoval` state only for definitions revealed later or added through `more_tools`; `invoke_tool` is their fixed fallback. Provider edges currently receive the generic late-system representation and may map the same fields natively without changing stored history.
 - **The head and current live surface share one provider breakpoint.** The client marks only the last block of the system parameter. The target initial/committed/working marks require shaping the provider request directly; langchain4j currently exposes only the 5-minute ephemeral cache kind, not a longer TTL.
-- `compact` exists only in the goal-tree harness; llmagent has no compaction, so the 90% line asks there for what it cannot offer.
-- **goaltree persists the goal as the frame's opening user turn** and re-appends it after compaction, rather than rendering it in the task slot. Kept deliberately for now: the root frame's "goal" of a chat session is its origin description, which must not be re-read on every inference; the task-slot rendering is right for subgoal frames and is the pending change.
 - The agent-facing text of `skill_load` and SKILLS.md §4.3 name the `[Skills]` index by its bracket label whatever the dialect.

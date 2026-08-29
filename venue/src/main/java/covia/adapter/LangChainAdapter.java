@@ -401,11 +401,13 @@ public class LangChainAdapter extends AAdapter {
 		// The same copy applies the role rule for the declared provider
 		// (AGENT_CONTEXT.md §3.5): a system message after the conversation has
 		// begun must not be hoisted into the cached head.
-		final AVector<ACell> providerMessages = normaliseSystemMessages(
-			serialiseToolResultsForProvider(messages),
+		final Set<Long> canonicalCacheMarks = cacheMarksOf(input, tuning);
+		final NormalisedMessages normalised = normaliseSystemMessages(
+			serialiseToolResultsForProvider(messages), canonicalCacheMarks,
 			AbstractLLMAdapter.modelOptionText(resolvedModel.executionProfile(), OPT_SYSTEM_MESSAGES),
 			AbstractLLMAdapter.labelDialect(resolvedModel.executionProfile()));
-		final Set<Long> cacheMarks = cacheMarksOf(input, tuning);
+		final AVector<ACell> providerMessages = normalised.messages();
+		final Set<Long> cacheMarks = normalised.cacheMarks();
 
 		// Response format: "json", "text", or {name, schema} map
 		ACell responseFormatCell = RT.getIn(input, K_RESPONSE_FORMAT);
@@ -1272,11 +1274,25 @@ public class LangChainAdapter extends AAdapter {
 	 */
 	@SuppressWarnings("unchecked")
 	static AVector<ACell> normaliseSystemMessages(AVector<ACell> messages, String systemMode, AString dialect) {
+		return normaliseSystemMessages(messages, Set.of(), systemMode, dialect).messages();
+	}
+
+	/** Provider messages together with cache marks translated from canonical
+	 * message indices to the corresponding provider-message indices. */
+	static record NormalisedMessages(AVector<ACell> messages, Set<Long> cacheMarks) {}
+
+	@SuppressWarnings("unchecked")
+	static NormalisedMessages normaliseSystemMessages(AVector<ACell> messages,
+			Set<Long> cacheMarks, String systemMode, AString dialect) {
 		boolean single = SYSTEM_MESSAGES_SINGLE.toString().equals(systemMode);
 		boolean none = SYSTEM_MESSAGES_NONE.toString().equals(systemMode);
-		if (!single && !none) return messages;
+		if (!single && !none) return new NormalisedMessages(messages, cacheMarks);
 
 		AVector<ACell> out = Vectors.empty();
+		long[] providerIndex = new long[Math.toIntExact(messages.count())];
+		java.util.Arrays.fill(providerIndex, -1L);
+		java.util.List<Integer> leadingIndices = new java.util.ArrayList<>();
+		java.util.List<Integer> pendingLateIndices = new java.util.ArrayList<>();
 		StringBuilder leading = new StringBuilder();
 		StringBuilder pendingLate = new StringBuilder();
 		boolean started = false;
@@ -1289,10 +1305,13 @@ public class LangChainAdapter extends AAdapter {
 					if (pendingLate.length() > 0) pendingLate.append("\n\n");
 					pendingLate.append(covia.adapter.agent.Labels.wrapSystem(
 						dialect, content != null ? content.toString() : ""));
+					pendingLateIndices.add(Math.toIntExact(i));
 				} else if (none) {
 					if (leading.length() > 0) leading.append("\n\n");
 					if (content != null) leading.append(content);
+					leadingIndices.add(Math.toIntExact(i));
 				} else {
+					providerIndex[Math.toIntExact(i)] = out.count();
 					out = out.conj(entry);
 				}
 				continue;
@@ -1302,11 +1321,15 @@ public class LangChainAdapter extends AAdapter {
 				if (ROLE_USER.equals(role) && content instanceof AString text) {
 					entry = ((AMap<AString, ACell>) entry).assoc(K_CONTENT,
 						Strings.create(pendingLate + "\n\n" + text));
+					mapTo(pendingLateIndices, providerIndex, out.count());
 				} else {
+					long syntheticIndex = out.count();
 					out = out.conj(Maps.of(K_ROLE, ROLE_USER, K_CONTENT,
 						Strings.create(pendingLate.toString())));
+					mapTo(pendingLateIndices, providerIndex, syntheticIndex);
 				}
 				pendingLate.setLength(0);
+				pendingLateIndices.clear();
 			}
 			if (!started) {
 				started = true;
@@ -1317,21 +1340,40 @@ public class LangChainAdapter extends AAdapter {
 					if (ROLE_USER.equals(role) && content instanceof AString text) {
 						entry = ((AMap<AString, ACell>) entry).assoc(K_CONTENT,
 							Strings.create(leading + "\n\n" + text));
+						mapTo(leadingIndices, providerIndex, out.count());
 					} else {
+						long syntheticIndex = out.count();
 						out = out.conj(Maps.of(K_ROLE, ROLE_USER, K_CONTENT, Strings.create(leading.toString())));
+						mapTo(leadingIndices, providerIndex, syntheticIndex);
 					}
 				}
 			}
+			providerIndex[Math.toIntExact(i)] = out.count();
 			out = out.conj(entry);
 		}
 		if (pendingLate.length() > 0) {
+			long syntheticIndex = out.count();
 			out = out.conj(Maps.of(K_ROLE, ROLE_USER, K_CONTENT,
 				Strings.create(pendingLate.toString())));
+			mapTo(pendingLateIndices, providerIndex, syntheticIndex);
 		}
 		if (none && !started && leading.length() > 0) {
+			long syntheticIndex = out.count();
 			out = out.conj(Maps.of(K_ROLE, ROLE_USER, K_CONTENT, Strings.create(leading.toString())));
+			mapTo(leadingIndices, providerIndex, syntheticIndex);
 		}
-		return out;
+		Set<Long> translated = new java.util.HashSet<>();
+		for (Long mark : cacheMarks) {
+			if (mark == null || mark < 0 || mark >= providerIndex.length) continue;
+			long mapped = providerIndex[mark.intValue()];
+			if (mapped >= 0) translated.add(mapped);
+		}
+		return new NormalisedMessages(out, Set.copyOf(translated));
+	}
+
+	private static void mapTo(java.util.List<Integer> canonicalIndices,
+			long[] providerIndices, long providerIndex) {
+		for (int canonicalIndex : canonicalIndices) providerIndices[canonicalIndex] = providerIndex;
 	}
 
 	/**

@@ -1,9 +1,9 @@
 package covia.adapter.agent;
 
 /**
- * Marker: this transition adapter owns the session's frame stack and pending
- * drain itself (lattice-resident frames — it claims the session via
- * {@code beginSessionCycle} and writes every frame mutation live).
+ * Marker for LLM transition adapters that own the session's frame stack and
+ * pending drain. Both built-in runtimes claim the session through the shared
+ * {@link FrameStore} and write every conversation mutation live.
  *
  * <p>The framework consults this on the <em>adapter</em>, not the transition
  * output: an errored or cancelled transition produces no output, so gating on

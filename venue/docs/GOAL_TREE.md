@@ -58,13 +58,13 @@ Chat sessions typically never `complete` the root frame — they run indefinitel
 
 ### Per-question bracketing
 
-"Thinking for a specific question" is bracketed by `compact`. The agent calls `compact(summary)` at the end of its work on a question, rolling that run of live turns into a segment whose summary surfaces in future-turn context. No extra frame needed — the compact segment IS the bracket.
+"Thinking for a specific question" can be bracketed by `compact`. The agent calls `compact(summary)` at the end of its work, replacing the visible conversation with one assistant-memory segment whose `items` retains the exact old vector. No extra frame is needed; later turns append after the segment.
 
 Subgoals remain available for intra-question decomposition (e.g. "analyse each vendor") and nest inside the session's root frame. A complex question might do: user turn → tool calls → subgoal(vendor-a) → subgoal(vendor-b) → subgoal(vendor-c) → assistant synthesis → compact.
 
 ### LLMAgentAdapter is the degenerate case
 
-`llmagent:chat` agents use the same structure: root frame only, no harness tools enabled (no `subgoal`, no `compact`, no `complete`). Their conversation is a flat list of live turns. A single reader ingests both `llmagent` and `goaltree` sessions — no divergent schema.
+`llmagent:chat` agents use the same durable frame store and conversation operations with one root frame. They may opt into shared harness tools such as `compact`, but not hierarchy controls such as `subgoal` or `complete`. A single reader ingests both `llmagent` and `goaltree` sessions — no divergent schema or persistence path.
 
 ## How LLMs Work With Tools
 
@@ -108,8 +108,10 @@ A frame's conversation is a list. Each entry is either a **live turn** or a **co
 
 ```
 [
-  {summary: "...", turns: 200, items: [...]},   // segment 0
-  {summary: "...", turns: 200, items: [...]},   // segment 1
+  {summary: "...", turns: 400, items: [         // one visible segment
+    {summary: "...", turns: 200, items: [...]}, // prior compaction nests
+    /* turns appended before the later compaction */
+  ]},
   {role: "user", content: "...",                 // live turn from intake
    ts: 1713600000000, source: "chat"},
   {role: "assistant", content: "..."},           // live turn
@@ -121,28 +123,14 @@ A frame's conversation is a list. Each entry is either a **live turn** or a **co
 
 **Turn envelope fields:** `role` and `content` are the LLM-conversation primitives. Optional `ts` (wall-clock millis) and `source` (`"chat" | "message" | "request" | "transition"`) carry provenance — they let audit and replay distinguish a chat-intake user turn from a task-request user turn without inspecting role alone. Vendor LLM APIs ignore `ts`/`source`; the adapter strips them when constructing the level 3 payload. Assistant turns with `toolCalls` and subsequent `tool` turns preserve intra-transition interleaving on the lattice.
 
-Compacted segments contain the full conversation data in `items`. The `summary` is an LLM-provided description of that phase of work. CellExplorer renders the whole list at whatever budget the context allows — segments are truncated to summaries at low budget, expanded to full turns at high budget.
+Compacted segments contain the exact replaced conversation vector in `items`.
+The agent-provided `summary` is the only part rendered into normal model
+context, as assistant memory. A later compaction nests the earlier segment and
+newer turns under a new one rather than accumulating sibling summaries.
 
-**There is no separate archive.** The segments hold the actual data. CellExplorer controls how much is visible in the active context window. At full budget, every turn is visible. At low budget, only summaries show.
-
-```
-Budget 50:
-  [{/* Seg, 200 turns */}, {/* Seg, 200 turns */}], turn 401, turn 402
-
-Budget 200:
-  [{summary: "Setup and vendor research...", turns: 200, items: [/* Vec, 200 */]},
-   {summary: "Cross-reference and draft...", turns: 200, items: [/* Vec, 200 */]}],
-  turn 401, turn 402
-
-Budget 2000+:
-  [{summary: "...", turns: 200, items: [
-     {role: "assistant", content: "Let me check products."},
-     {role: "assistant", content: "...", toolCalls: [{id: "tc_1", name: "covia_inspect", ...}]},
-     {role: "tool", id: "tc_1", name: "covia_inspect", content: "{share: 0.23, ...}"},
-     /* +197 more */]},
-   ...],
-  turn 401, turn 402
-```
+**There is no separate archive.** Authorised operators can read the nested
+lattice value directly; `agent:sessionRead` can open a bounded `archiveDepth`
+while continuing to omit tool scratch, diagnostics and unfinished cycles.
 
 ## The Frame Stack
 
@@ -224,7 +212,7 @@ the same stored state directly. Typed outputs additionally inject `complete` /
 | `subgoal` | goaltree | Delegate work to an isolated child frame |
 | `complete` | goaltree | Return a structured result (auto-injected with typed outputs) |
 | `fail` | goaltree | Report failure with a structured error (auto-injected with typed outputs) |
-| `compact` | goaltree | Archive the conversation to a summary, freeing context space |
+| `compact` | shared | Replace visible conversation with assistant memory while retaining the exact old vector |
 
 ### Typed outputs auto-inject complete/fail
 
@@ -284,16 +272,18 @@ Protocol limitation: LLM tool call arguments must be JSON objects (OpenAI, Anthr
 ```
 
 When the agent calls `compact`:
-1. Live turns archived into a new segment with the LLM's summary
-2. Segment appended to the conversation's segment list
-3. Live conversation starts fresh after the segments
-4. Agent continues with more context space
+1. The complete visible conversation vector becomes the new segment's `items`
+2. The LLM's summary and recursive leaf-turn count become the segment's visible representation
+3. The conversation becomes a one-element vector containing that segment
+4. The rendered prefix is rebuilt once; later turns append normally
+
+Repeated compaction nests the earlier segment together with the newer turns. This bounds the provider-visible representation without changing or duplicating the audit history. The segment renders as an `assistant` message: an agent-written summary may describe untrusted tool data and must not acquire system authority merely because it was persisted.
 
 The `summary` parameter is required — only the LLM knows what matters in the work done so far. The harness prompts when compaction is needed but the agent writes the summary:
 
 **Auto-compact nudge (current):** When live turn count exceeds `AUTO_COMPACT_THRESHOLD` (20) and the agent has `compact` in its tool set, the harness adds a line to the tail: "Your conversation has N turns. Call compact(summary) now to free context space before continuing." The LLM decides whether to compact.
 
-**Target:** the byte-budget thresholds of AGENT_CONTEXT.md §3.4 — a warning at 70%, compaction required at 90% — replacing the turn count. There is no hard truncation at any level: if the agent ignores the requirement and the provider rejects the prompt, the cycle fails loudly with the remedy. The runtime never removes context on its own authority.
+Both runtimes also use the byte-budget thresholds of AGENT_CONTEXT.md §3.4: a warning at 70%, escalating at 90% when `compact` is available. There is no hard truncation: if the agent ignores the warning and the provider rejects the prompt, the cycle fails loudly. The runtime never removes context on its own authority.
 
 ## Compacted Segment Structure
 
@@ -311,7 +301,7 @@ The `summary` parameter is required — only the LLM knows what matters in the w
 }
 ```
 
-`summary` is LLM-provided (via `compact` call). `turns` and `items` are harness-provided. CellExplorer uses `summary` for low-budget rendering and `items` for high-budget rendering. Everything is always there — resolution is the only variable.
+`summary` is LLM-provided (via `compact` call). `turns` and `items` are harness-provided. Normal model context renders only the summary; the exact nested `items` remain lattice data for audit and bounded retrospective expansion through `agent:sessionRead archiveDepth=N`.
 
 ## Scoped Loads
 
@@ -517,12 +507,10 @@ covia_inspect({path: "sessions/<sid>/frames/0", budget: 200})
     conversation: [/* Vec, 47 entries */],
     loads: {/* Map, 2 entries */}}
 
-// Root conversation at summary level -- segments collapse to their summaries
+// Root conversation -- a compacted prefix is one segment
 covia_inspect({path: "sessions/<sid>/frames/0/conversation", budget: 500})
--> [{summary: "Setup and vendor A research...", turns: 45, /* items hidden */},
-    {summary: "Vendor B research...", turns: 38, /* items hidden */},
-    {role: "assistant", content: "Now analysing vendor C."},
-    ...]
+-> [{summary: "Setup and vendor A/B research...", turns: 83, /* items hidden */},
+    {role: "assistant", content: "Now analysing vendor C."}, ...]
 
 // Drill into a specific segment's full turns
 covia_inspect({path: "sessions/<sid>/frames/0/conversation/0/items", budget: 5000})
@@ -579,10 +567,10 @@ There's no separate compaction mechanism. It's the same principle applied everyw
 |-----------|-------------|-------------------|
 | Ancestor frame | Full conversation stored in parent frame | Summarised at budget |
 | Completed sibling | Full conversation stored at sibling's node | One-line result in parent conversation |
-| Compacted segment | Full turns stored in segment | Summary at low budget, full at high budget |
+| Compacted segment | Exact old vector nested under `items` | Assistant-memory summary |
 | Live turns | In current conversation | Full detail |
 
-One principle: **full data always stored, CellExplorer controls resolution.** Compaction, ancestry, and sibling results are all the same operation viewed differently.
+One principle: **full data remains lattice data while model context stays deliberately bounded.** Ancestor budgets use `CellExplorer`; compaction uses an explicit summary and exposes nested history only through bounded introspection or ordinary authorised lattice reads.
 
 ## State Model
 
@@ -628,7 +616,7 @@ The frame stack is stored as a vector. The last element is the active frame. Pus
 
 Config is read on every transition and propagated into the transition input. Per-session data (frames, pending) is fetched from the session record, not the agent.
 
-Both the full goal-tree adapter and the simpler LLM chat adapter share this session shape. The simpler case is a single root frame with no harness tools enabled; the goal-tree case adds nested frames and harness tools. A single reader walks both.
+Both the full goal-tree adapter and the simpler LLM chat adapter share this session shape and frame store. The simpler case has one root frame and may opt into shared harness tools; the goal-tree case adds nested frames and hierarchy controls. A single reader walks both.
 
 ## Full Example: What the LLM Sees
 
@@ -792,9 +780,9 @@ As goals get more complex, the agent can opt into more tools:
 1. **`subgoal` is a tool call.** Branches to child, returns result. LLMs already know how tool calls work.
 2. **`complete`/`fail` are return/throw.** Explicit completion. Text-only response is implicit complete.
 3. **`compact` requires an LLM-written summary.** Only the LLM knows what matters. The harness prompts when compaction is needed but never auto-generates summaries.
-4. **Segments contain full data.** `items` holds every turn. `summary` is for CellExplorer truncation. Nothing is ever discarded.
-5. **No separate archive.** The conversation structure IS the archive. CellExplorer controls visibility.
-6. **One resolution principle.** Ancestors, siblings, compacted segments, and live turns all use the same mechanism: full data stored, CellExplorer renders at budget.
+4. **Segments contain full data.** `items` holds the exact replaced vector. Nothing is discarded or copied into a second archive.
+5. **No separate archive.** The conversation structure is the archive. Normal rendering uses the summary; introspection opens `items` explicitly and within bounds.
+6. **Compaction is recursive.** A later compact nests the previous segment with newer turns, so the visible conversation remains one summary plus subsequent appends.
 7. **Ancestor context is an array of frames.** Each rendered at decreasing budgets. Parent ~300B, grandparent ~150B.
 8. **Description is the child's goal.** The `subgoal` description becomes the goal message in the child frame.
 9. **Loads are lexically scoped.** Children inherit parent loads. Shadowing supported. Pop restores parent's version.
@@ -804,12 +792,12 @@ As goals get more complex, the agent can opt into more tools:
 13. **Session IS a root frame.** Root frame is created at session creation and persists for the session's life. Transitions append to it; they do not rebuild it. Chat sessions never `complete` the root; one-shot invocations do.
 14. **The frame stack is the session's conversation record.** `sessions/<sid>/frames[0].conversation` holds everything — user turns, assistant turns, tool calls, tool results, segments, and child-frame references. There is no `session.history` field, no per-adapter transcript, no debug snapshot on failure; the full stack on the lattice is the only record.
 15. **Text-only = implicit complete.** Natural LLM API contract. No bouncing.
-16. **Goal-tree and simple-chat adapters share the session schema.** Simple chat is the degenerate case: root frame only, no harness tools enabled. Agents choose adapter via config; readers consume both the same way.
-17. **Existing tools reused.** `context_load`, `context_unload`, all `covia:*` operations, `agent:*` operations — everything from the existing tool palette. Goal tree adds 7 harness tools, not a new tool universe.
+16. **Goal-tree and simple-chat adapters share the frame store.** Simple chat is the one-root-frame case and may use shared harness tools such as `compact`. Agents choose hierarchy via config; persistence and readers are identical.
+17. **Existing tools reused.** `context_load`, `context_unload`, `compact`, all `covia:*` operations and `agent:*` operations come from the shared palette. Goal tree adds only hierarchy controls.
 18. **Budget is harness-managed by default.** Agent gets yes/no on loads, not arithmetic. The budget warning shows numbers only under pressure (AGENT_CONTEXT.md §3.4).
 19. **Context layout is the canonical one.** Reference at top (primacy), conversation in middle, current turn at bottom (recency) — the sequence is AGENT_CONTEXT.md §3, and the goal tree only fills its slots.
 20. **Frame stack is lattice data on the session record.** Stored in `sessions/<sid>/frames`. Explorable and mergeable. It survives transitions and venue restarts as durable conversation state, not as an executor checkpoint.
-21. **Compacted segments accumulate.** Each `compact` appends a segment. Phase boundaries preserved. Per-question bracketing is the primary use in chat sessions.
+21. **Compacted segments nest.** Each `compact` replaces the visible prefix with one new segment containing the exact prior vector. Future activity only appends.
 22. **Intake queue stays at session level.** `sessions/<sid>/pending` is the pre-transition staging area; envelopes are drained into the root frame as `user` turns atomically with the transition's other writes. Keeps concurrent intake separate from the append path.
 
 ## Related Design

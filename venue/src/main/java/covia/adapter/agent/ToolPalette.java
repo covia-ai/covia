@@ -33,8 +33,9 @@ import covia.venue.RequestContext;
  * <p>Three producers feed it — harness tools (the runtime's own), configured
  * tools ({@code config.tools}, plus the opt-in default pack) and tools
  * contributed by loads — merged in that order: a name already fixed by harness
- * or config is never shadowed by a load. Definitions resolve fresh on every
- * inference, under the agent's capability-narrowed authority.</p>
+ * or config is never shadowed by a load. The initial manifest is persisted by
+ * {@link ContextAssembler}; only genuinely late load contributions resolve
+ * after that boundary.</p>
  */
 public final class ToolPalette {
 
@@ -48,6 +49,7 @@ public final class ToolPalette {
 	private static final AString K_NAME          = Strings.intern("name");
 	private static final AString K_DESCRIPTION   = Strings.intern("description");
 	private static final AString K_PARAMETERS    = Strings.intern("parameters");
+	private static final AString K_REQUIRES_SKILL = Strings.intern("requiresSkill");
 	private static final AString K_TYPE          = Strings.intern("type");
 	private static final AString K_PROPERTIES    = Strings.intern("properties");
 	private static final AString SOURCE_DEFAULT  = Strings.intern("default");
@@ -86,6 +88,25 @@ public final class ToolPalette {
 			unavailable = (unavailable != null) ? unavailable : Vectors.empty();
 			provenance = (provenance != null) ? provenance : Vectors.empty();
 		}
+	}
+
+	/** Tools contributed by the skills visible in the initial catalog. They are
+	 * declared to the provider up front for stable schemas, but their routes do
+	 * not become callable until the corresponding skill is loaded. */
+	public record DeclaredSkillTools(AVector<ACell> tools,
+			Map<String, AString> routes, Map<String, String> skills,
+			AVector<ACell> provenance) {
+		public static final DeclaredSkillTools EMPTY =
+			new DeclaredSkillTools(null, null, null, null);
+
+		public DeclaredSkillTools {
+			tools = (tools != null) ? tools : Vectors.empty();
+			routes = (routes != null) ? Map.copyOf(routes) : Map.of();
+			skills = (skills != null) ? Map.copyOf(skills) : Map.of();
+			provenance = (provenance != null) ? provenance : Vectors.empty();
+		}
+
+		public Set<String> names() { return skills.keySet(); }
 	}
 
 	/**
@@ -129,6 +150,77 @@ public final class ToolPalette {
 		}
 		entries = mergeEntries(entries, vector(configuredEntries));
 		return new Palette(tools, routes, vector(unavailable), entries);
+	}
+
+	/**
+	 * Resolves the tools of every skill in the initial discovery surface. The
+	 * catalog is read under operator authority, exactly like its rendered index;
+	 * operation schemas are resolved under the agent's capability scope. Name
+	 * precedence is the provider manifest's precedence: harness/config names in
+	 * {@code occupiedNames} win, then the first skill in catalog order wins.
+	 */
+	public static DeclaredSkillTools declaredSkillTools(Engine engine,
+			RequestContext catalogCtx, RequestContext operationCtx,
+			Skills.SkillSources sources, Set<String> occupiedNames) {
+		if (sources == null || sources.isEmpty()) return DeclaredSkillTools.EMPTY;
+		Set<String> names = new HashSet<>();
+		if (occupiedNames != null) names.addAll(occupiedNames);
+		AVector<ACell> tools = Vectors.empty();
+		Map<String, AString> routes = new HashMap<>();
+		Map<String, String> owners = new HashMap<>();
+		List<AMap<AString, ACell>> entries = new java.util.ArrayList<>();
+		for (Skills.SkillIndexEntry listed : Skills.listSkills(engine, catalogCtx, sources)) {
+			if (listed.name() == null || listed.error() != null) continue;
+			try {
+				Skills.ResolvedSkill skill = Skills.resolveRef(engine, catalogCtx, listed.path());
+				Map<String, AString> skillRoutes = new HashMap<>();
+				AVector<ACell> definitions = forOperations(
+					engine, operationCtx, skill.toolOps(), skillRoutes);
+				for (long i = 0; i < definitions.count(); i++) {
+					@SuppressWarnings("unchecked")
+					AMap<AString, ACell> definition = (AMap<AString, ACell>) definitions.get(i);
+					AString name = RT.ensureString(definition.get(K_NAME));
+					if (name == null || !names.add(name.toString())) continue;
+					AString description = RT.ensureString(definition.get(K_DESCRIPTION));
+					definition = definition.assoc(K_DESCRIPTION, Strings.create(
+						"Available after loading skill '" + skill.name()
+						+ "' from [Skills].\n\n"
+						+ (description != null ? description.toString() : "")))
+						.assoc(K_REQUIRES_SKILL, Strings.create(skill.name()));
+					tools = tools.conj(definition);
+					AString route = skillRoutes.get(name.toString());
+					if (route != null) routes.put(name.toString(), route);
+					owners.put(name.toString(), skill.name());
+					entries.add(entry(name, SOURCE_SKILL, route, listed.path()));
+				}
+			} catch (RuntimeException e) {
+				log.warn("Skill tool declaration: skipping '{}': {}",
+					listed.path(), safeMessage(e));
+			}
+		}
+		return new DeclaredSkillTools(tools, routes, owners, vector(entries));
+	}
+
+	/**
+	 * Recovers the load gates embedded in an already-persisted provider
+	 * manifest. Unknown definition fields are ignored by provider adapters, so
+	 * this annotation is cache-stable Covia metadata rather than a second copy
+	 * of the tool schemas.
+	 */
+	@SuppressWarnings("unchecked")
+	public static DeclaredSkillTools declaredSkillTools(AVector<ACell> manifest) {
+		if (manifest == null || manifest.isEmpty()) return DeclaredSkillTools.EMPTY;
+		AVector<ACell> tools = Vectors.empty();
+		Map<String, String> owners = new HashMap<>();
+		for (long i = 0; i < manifest.count(); i++) {
+			ACell definition = manifest.get(i);
+			AString name = RT.ensureString(RT.getIn(definition, K_NAME));
+			AString skill = RT.ensureString(RT.getIn(definition, K_REQUIRES_SKILL));
+			if (name == null || skill == null) continue;
+			tools = tools.conj(definition);
+			owners.put(name.toString(), skill.toString());
+		}
+		return new DeclaredSkillTools(tools, Map.of(), owners, Vectors.empty());
 	}
 
 	/**

@@ -103,11 +103,11 @@ by the run loop on the next transition cycle for that session and appended to
 `session.frames[0].conversation` as user turns. See AGENT_SESSIONS.md for the
 session model.
 
-An agent also tracks **pending** outbound jobs — jobs it has explicitly created
-via the async invoke tool during the tool call loop (level 2). The agent
-chooses which invocations to track; synchronous tool calls and internal
-framework jobs are not tracked. When a pending job completes, the scheduler
-wakes the agent to process the result.
+The record also reserves a **pending** outbound-Job index. The run loop and
+context assembler can present entries already written there, but no generic
+async-invoke tool currently populates it or registers completion wakes
+(§3.4.2). HITL uses the session inbox instead, because its immediate receipt
+already completes the original tool exchange.
 
 ### 2.4 Timeline Entry
 
@@ -334,11 +334,11 @@ For LLM agents (`llmagent:chat`), level 2:
 - Invokes level 3 (LLM call) as a grid operation
 - Handles tool call responses: execute tools, feed results back, call level 3
   again (loop until the LLM returns a text response or a limit is reached)
-- The assistant's final response is returned to the framework, which appends
-  it as a turn to `session.frames[0].conversation`
-- The session frame stack is the canonical conversation record. The system
-  prompt, context entries, and loaded paths are ephemeral — they rebuild
-  fresh each turn so config updates apply immediately to existing agents.
+- The shared frame store appends assistant and tool turns live, under the same
+  cycle epoch fence used for interruption repair and input presentation.
+- The session frame stack is the canonical conversation record. Its rendered
+  prefix is persisted and reused exactly; dynamic loads and tool-state changes
+  append events. Only explicit boundaries such as compaction rebuild it.
 
 Level 2 does not import or depend on any LLM library. It invokes level 3 as a
 grid operation and works with structured message maps. This makes it pluggable:
@@ -350,12 +350,10 @@ The level 3 operation to invoke is specified in `config.llmOperation`
 `defaultLlmOperation`). The agent creator picks both the agent loop
 strategy (level 2) and the LLM backend (level 3).
 
-The other level 2 adapter, `goaltree:chat`, is documented separately in
-[GOAL_TREE.md](./GOAL_TREE.md). It reads and writes the same `session.frames`
-stack, with `frames[0]` persisting for the life of the session. Each transition
-updates the stack atomically on the session record. It supports typed outputs
-(schema-enforced `complete`/`fail`), opt-in harness tools, runtime tool
-discovery via `more_tools`, and auto-compact nudges.
+The goal-tree level 2 adapter is documented separately in
+[GOAL_TREE.md](./GOAL_TREE.md). It uses the same frame store, input presentation,
+interruption repair, compact operation and shared harness registry as
+`llmagent:chat`, then adds child-frame hierarchy and typed subgoal completion.
 
 ### 3.3 Level 3 — LLM Call (Single Step)
 
@@ -396,7 +394,7 @@ The contract between level 1 and level 2:
 | `state` | any | Current `state` from the agent record. Null on first run. |
 | `tasks` | vector | Inbound task data resolved from the `tasks` index (jobId, input, status). |
 | `pending` | vector | Outbound job data resolved from the `pending` index (jobId, status, output, error when the job did not complete). |
-| `session` | map | The picked session record: `{id, parties, meta, c, history, pending}`. See AGENT_SESSIONS.md §6.1. |
+| `session` | map | The picked session record: `{id, parties, meta, c, frames, pending}`. See AGENT_SESSIONS.md §6.1. |
 
 **Output:**
 
@@ -406,13 +404,15 @@ The contract between level 1 and level 2:
 | `result` | any | Summary of what happened. Recorded in the timeline entry and returned to callers. |
 | `taskResults` | map? | Optional task completions: `{<jobId>: {status, output}}`. See §3.4.1. |
 
-The transition function does not manage ts, status, timeline, sessions, or
-scheduling. It declares what it has accomplished and the framework applies the
-changes atomically.
+The ordinary transition contract does not require an adapter to manage ts,
+status, timeline, sessions or scheduling. The built-in LLM adapters explicitly
+implement `FramesOwning`: they write the selected session's frames live under
+its cycle fence, and the framework skips the duplicate frame/turn/pending merge.
+Status, timeline, task settlement and scheduling remain framework-owned.
 
-Pending outbound jobs are not declared in the output — they are created as
-side effects during execution via the async invoke tool (§3.4.2). Level 2
-adds their Job IDs to `pending` directly.
+Pending outbound jobs are not declared in transition output. The field is a
+reserved framework surface; the built-in harnesses currently have no generic
+writer for it (§3.4.2).
 
 The transition function must handle its own errors internally. If it throws, the
 agent update treats this as a severe failure: the agent is suspended, all queues
@@ -452,26 +452,19 @@ crashed, the task *was* completed. The timeline entry will be missing (since the
 run failed), but the Job result is durable. This matches how other side effects
 (tool calls that send emails, invoke external APIs) behave.
 
-#### 3.4.2 Async Invoke — Pending Jobs
+#### 3.4.2 Deferred results
 
-Level 2 exposes an **async invoke** tool to the LLM. When called, it:
+The transition input and context assembler understand an agent-level `pending`
+Job index and render resolved entries as `get_job_results`, but Covia does not
+currently expose a generic async-invoke harness tool that writes that index.
+Ordinary operation tools remain synchronous and bounded by `toolCallTimeoutMs`.
 
-1. Invokes the specified operation asynchronously (creates a Job via JobManager).
-2. Adds the Job ID to the agent's `pending` index via an atomic cursor update.
-3. Registers a completion callback that calls `wakeAgent` (§4.6) when the
-   job finishes.
-4. Returns the Job ID to the LLM as the tool result.
-
-The agent does not wait for the result — execution continues. On the next wake,
-the framework resolves `pending` and passes the results to the transition
-function.
-
-Only jobs created through the async invoke tool appear in `pending`. Synchronous
-tool calls, internal framework jobs, and any other jobs created indirectly are
-not tracked — they are invisible to the agent.
-
-This is the mechanism for delegated work, long-running computations, and HITL
-requests (Phase D). The LLM decides what to fire-and-forget vs what to await.
+HITL is the deliberate long-lived exception (§6.3). A sessioned agent receives
+the durable request ID immediately; the HITL record remembers that session and
+answer, rejection or expiry is delivered through its durable inbox, which wakes
+the normal run loop. This avoids pretending a human-timescale request is an
+ordinary synchronous tool call while leaving the broader async-operation design
+open rather than documenting an unimplemented mechanism.
 
 ### 3.5 Context Loading
 
@@ -729,9 +722,10 @@ await that Job. Use trigger only when the normal intake path isn't enough
 
 The `wait` parameter on trigger is a block on the loop's completion
 future, not a result-await: it returns when the loop drains all
-outstanding work and exits to SLEEPING. A transition that awaits an
-async op (LLM, HTTP, HITL) simply keeps its virtual thread blocked on
-`.join()` — there is no yield/resume handoff. A `SLEEPING` return means
+outstanding work and exits to SLEEPING. A transition that awaits an ordinary
+async op (LLM or HTTP) simply keeps its virtual thread blocked on `.join()` —
+there is no yield/resume handoff. Sessioned HITL requests return their durable
+handle immediately and re-enter through the asking session (§6.3). A `SLEEPING` return means
 the loop fully drained; a `RUNNING` snapshot from a bounded `wait` means
 the loop is still processing. The transition always runs once per
 trigger, even with no pending work, so an agent may act proactively on
@@ -971,13 +965,16 @@ adds complexity that is not needed for the initial LLM agent.
 
 ### 6.3 Human-in-the-loop (HITL) requests
 
-When an agent needs human input, it creates an outbound Job targeting the human
-user. This Job appears in the user's **request queue** at `/h/<job-id>` in the
-user's lattice namespace. The human completes the Job (via MCP or REST), which
-appears as a completed pending job on the agent's next wake.
+When an agent needs human input, `hitl:request` creates a durable Job and record
+in the target user's **request queue** at `/h/<job-id>`. From a sessioned agent
+tool call it returns `{id, status: INPUT_REQUIRED, title}` immediately. The
+record stores the verified requester, agent and session. When the human answers,
+rejects, or the request expires, HITL resolves the Job, appends the outcome to
+that exact session as a provenance-bearing message, and wakes the agent. The
+Job remains the polling and audit fallback; no model turn waits for the human.
 
-HITL is not a special mechanism — it reuses the same Job infrastructure. The
-difference is that the executor is a human rather than an adapter or agent.
+External callers keep the standard Job contract: the returned Job remains
+`INPUT_REQUIRED` until it completes or fails.
 
 **User request namespace:**
 
@@ -989,8 +986,8 @@ The `/h/` namespace is analogous to `/g/` (agents) and `/s/` (secrets) but
 holds Job IDs for requests that the human user is expected to complete. MCP
 clients can list and respond to these requests.
 
-**TODO:** Define the MCP-facing operations for HITL: listing pending requests,
-responding to requests, rejecting requests. This is a Phase D concern.
+The MCP-facing operations are `hitl:list`, `hitl:respond`, and the ordinary Job
+read/status surfaces.
 
 ### 6.4 MCP-facing agent operations
 

@@ -1,0 +1,30 @@
+{
+	"name": "Compact Agent Session",
+	"description": "Replaces an idle session's visible conversation with one assistant-memory summary while retaining the exact replaced history nested under the compaction record for audit. Future turns append normally. The result is bounded metadata; it does not duplicate the archived transcript.",
+	"dateCreated": "2026-08-29T00:00:00Z",
+	"operation": {
+		"adapter": "agent:compactSession",
+		"internal": false,
+		"toolName": "agent_compact_session",
+		"input": {
+			"type": "object",
+			"properties": {
+				"agentId": { "type": "string", "description": "Agent reference: a bare name for the caller's agent, g/<id>, /g/<id>, or <ownerDID>/g/<id>" },
+				"sessionId": { "type": "string", "description": "Hex ID of the idle session to compact, with or without a 0x prefix" },
+				"summary": { "type": "string", "minLength": 1, "description": "Summary future turns should retain. It is agent memory, not a privileged system instruction." }
+			},
+			"required": ["agentId", "sessionId", "summary"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"agentId": { "type": "string" },
+				"address": { "type": "string" },
+				"sessionId": { "type": "string" },
+				"compacted": { "type": "boolean" },
+				"archivedTurns": { "type": "integer", "description": "Live conversation entries folded by this compaction." },
+				"turnCount": { "type": "integer", "description": "Recursive leaf entries retained under the resulting segment." }
+			}
+		}
+	}
+}

@@ -277,6 +277,17 @@ public final class ContextAssembler {
 				toolLoop, task, unavailable, notice, now);
 		}
 
+		/** The next inference after an explicit compaction: the replacement
+		 * frame is now the conversation, while one-cycle inputs already covered
+		 * by the agent's summary must not be injected a second time. An unresolved
+		 * task remains live and is still rendered through {@code task}. */
+		public Spec afterCompaction(AVector<ACell> frames) {
+			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling,
+				tools, loadElements, loadExchanges, volatileLoads, effectiveLoads, frames,
+				Vectors.empty(), Vectors.empty(), true, Vectors.empty(), task,
+				unavailable, notice, now);
+		}
+
 		public Spec withNotice(String notice) {
 			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling,
 				tools, loadElements, loadExchanges, volatileLoads, effectiveLoads, frames, pending, input, hasInput,
@@ -353,8 +364,9 @@ public final class ContextAssembler {
 				Integer end = marks.get(band);
 				if (end == null || end == 0) continue;
 				long idx = end - 1;
+				while (idx >= 0 && ROLE_SYSTEM.equals(RT.getIn(messages.get(idx), K_ROLE))) idx--;
+				if (idx < 0) continue;
 				if (idx == last) continue;
-				if (ROLE_SYSTEM.equals(RT.getIn(messages.get(idx), K_ROLE))) continue;
 				out = out.conj(CVMLong.create(idx));
 				last = idx;
 			}
@@ -447,6 +459,9 @@ public final class ContextAssembler {
 		// Volatile tail — re-rendered every inference, never cached: the loads
 		// declared volatile (op entries by default) first, so a result that
 		// changes every turn busts only itself, then the notices, then the task
+		PinnedContext volatilePinned = pinnedContext(spec, p.remaining(), true);
+		p.add(volatilePinned.instructions());
+		p.add(contextExchanges(volatilePinned.data(), true));
 		p.add(contextMessages(spec.volatileLoads(), true));
 		p.add(notices(spec, p.used()));
 		p.add(spec.task());
@@ -462,7 +477,7 @@ public final class ContextAssembler {
 		p.add(head(spec));
 		p.mark(Band.HEAD);
 
-		PinnedContext pinned = pinnedContext(spec, p.remaining());
+		PinnedContext pinned = pinnedContext(spec, p.remaining(), false);
 		p.add(pinned.instructions());
 		ACell catalog = skillsIndex(spec);
 		p.add(catalog);
@@ -558,7 +573,7 @@ public final class ContextAssembler {
 	 */
 	private record PinnedContext(AVector<ACell> instructions, AVector<ACell> data) {}
 
-	static PinnedContext pinnedContext(Spec spec, long remaining) {
+	static PinnedContext pinnedContext(Spec spec, long remaining, boolean volatileBand) {
 		AMap<AString, ACell> config = spec.config();
 		if (config == null) return new PinnedContext(Vectors.empty(), Vectors.empty());
 		AVector<ACell> entries = contextVector(config.get(K_CONTEXT), "config.context");
@@ -569,6 +584,7 @@ public final class ContextAssembler {
 		AVector<ACell> data = Vectors.empty();
 		for (long i = 0; i < entries.count(); i++) {
 			ACell entry = entries.get(i);
+			if (volatileContextEntry(entry, "config.context[" + i + "]") != volatileBand) continue;
 			boolean trusted = trusted(entry, true, "config.context[" + i + "]");
 			ContextLoader.Resolved r = loader.resolveValue(entry, spec.ctx(), true);
 			if (r == null) continue;
@@ -579,6 +595,17 @@ public final class ContextAssembler {
 			}
 		}
 		return new PinnedContext(instructions, data);
+	}
+
+	/** Pinned context uses the same placement rule as keyed loads: an op is
+	 * live by default, while any entry may opt in or out explicitly. */
+	static boolean volatileContextEntry(ACell entry, String which) {
+		if (!(entry instanceof AMap<?, ?> map)) return false;
+		ACell value = map.get(Loads.K_VOLATILE);
+		if (value != null && !(value instanceof CVMBool)) {
+			throw new IllegalArgumentException(which + " volatile must be a boolean");
+		}
+		return Loads.isVolatile(entry);
 	}
 
 	// ========== Pinned and loaded context as aggregate tool exchanges (§5.5) ==========
@@ -920,7 +947,7 @@ public final class ContextAssembler {
 			String text = pct + "% of the context budget used."
 				+ (unloadable ? BUDGET_UNLOAD_NOTE : BUDGET_PINNED_NOTE);
 			if (pct >= BUDGET_CRITICAL_PCT) {
-				text += ToolPalette.names(spec.tools()).contains(GoalTreeAdapter.TOOL_COMPACT)
+				text += ToolPalette.names(spec.tools()).contains(HarnessTools.COMPACT)
 					? BUDGET_COMPACT_NOTE : BUDGET_NO_COMPACT_NOTE;
 			}
 			parts.add(Labels.render(spec.labels(), Labels.Kind.BUDGET, text));
