@@ -28,8 +28,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `covia-documents` bridges POI's Log4j logging to SLF4J: no more "Log4j API
   could not find a logging provider" when the module loads.
 - A passing Maven build prints nothing: test JVMs bind SLF4J everywhere,
-  deliberate-failure tests silence the logger they provoke, and JDK 23+
-  allows protobuf's `sun.misc.Unsafe` use in test JVMs and the Docker image.
+  deliberate-failure tests silence the logger they provoke, and test JVMs and
+  the Docker image allow protobuf's `sun.misc.Unsafe` use via a `-D` property
+  every JDK accepts.
 
 ### Changed
 

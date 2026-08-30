@@ -54,8 +54,16 @@
 		<langchain.version>1.19.0</langchain.version>
 		<mcp.version>2.0.1</mcp.version>
 		<a2a.version>1.2.0.Final</a2a.version>
-		<!-- Extra flags for forked test JVMs; the jdk23-plus-tests profile fills it. -->
-		<covia.test.jvmflags></covia.test.jvmflags>
+		<!-- Flags for every forked test JVM (surefire and failsafe; modules with
+		     their own argLine splice this in). JDK 24+ warns once per JVM when a
+		     library touches sun.misc.Unsafe memory access (JEP 471); protobuf-java
+		     still does, and the warning is for that library's maintainers, not
+		     this build. The -D form is the property the launcher maps its
+		     sun-misc-unsafe-memory-access option onto: JDK 24+ honours it and
+		     every older JDK ignores it. The launcher-option form (two leading
+		     dashes) is rejected by any JDK below 23, including an IDE JUnit launch
+		     on 21 that inherits this argLine, so it must never appear here. -->
+		<covia.test.jvmflags>-Dsun.misc.unsafe.memory.access=allow</covia.test.jvmflags>
 	</properties>
 
 	<modules>
@@ -219,21 +227,6 @@
 					</plugin>
 				</plugins>
 			</build>
-		</profile>
-
-		<!-- JDK 23+ prints one warning per JVM when a library touches
-		     sun.misc.Unsafe memory access (JEP 471); protobuf-java still does. It
-		     is addressed to that library's maintainers, not to this build, so test
-		     JVMs allow it and a passing build prints nothing. The Docker image
-		     sets the same flag for the venue itself. -->
-		<profile>
-			<id>jdk23-plus-tests</id>
-			<activation>
-				<jdk>[23,)</jdk>
-			</activation>
-			<properties>
-				<covia.test.jvmflags>--sun-misc-unsafe-memory-access=allow</covia.test.jvmflags>
-			</properties>
 		</profile>
 	</profiles>
 </project>
