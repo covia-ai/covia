@@ -827,6 +827,11 @@ public class Engine {
 		return lifecycle == Lifecycle.STARTED;
 	}
 
+	/** True once close began: the venue is releasing work, not taking any on. */
+	public boolean isClosing() {
+		return lifecycle == Lifecycle.CLOSING || lifecycle == Lifecycle.CLOSED;
+	}
+
 	/** Installs process control before MainVenue publishes restart authority. */
 	void setProcessControl(VenueProcess processControl) {
 		if (this.processControl != null && this.processControl != processControl) {

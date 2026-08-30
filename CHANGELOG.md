@@ -43,6 +43,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Changed
 
+- `agent:request` and `agent:chat` Jobs survive a venue restart: kept at
+  shutdown and at boot while their intake is queued on the agent, and
+  completed by the boot wake. A `trigger` wait still fails as interrupted.
 - `agent:update` no longer refuses a running agent: config applies to future
   transitions, and the run loop merges the transition's state change against
   its fire-time snapshot so mid-transition updates survive.

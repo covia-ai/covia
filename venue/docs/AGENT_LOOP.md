@@ -960,6 +960,12 @@ Durable Jobs, queued inputs, stable lifecycle state, and external interaction
 records survive independently. Recovery may start a fresh attempt from a
 durable boundary; it never treats a persisted executor bit as resumable state.
 
+Request and chat Jobs survive a restart: the adapter's `recoverJob` keeps a
+request whose task is still in `tasks` and a chat whose envelope is
+still pending on its session, so the boot wake completes them. Venue shutdown
+likewise leaves them `STARTED` (`suspendJob`) and stops the run loop without
+relaunching it (see JOBS.md § Shutdown).
+
 ### 6.2 Effects
 
 Transition functions implement their own effects. A transition function that

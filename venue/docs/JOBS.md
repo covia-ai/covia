@@ -165,10 +165,11 @@ loaded, boot-disabled):
 An adapter overrides `recoverJob` to re-attach to work that continued outside
 the process (poll a remote job again, re-arm a timer, re-subscribe to an
 agent loop) or to retry an operation *it* knows is idempotent, calling
-`super` for the cases it does not handle. Today the agent adapter still takes
-the default for `STARTED` agent requests/chats and removes their queued
-intake and stale session fence; HITL re-arms its durable expiries after
-recovery.
+`super` for the cases it does not handle. The agent adapter keeps queued
+request and chat Jobs whose intake is still on the agent — a request
+*is* its task, a chat is answered from its session's pending envelope — and
+the boot wake completes them; only a `trigger` wait takes the default. HITL
+re-arms its durable expiries after recovery.
 
 Restored non-terminal jobs **re-occupy their caller's concurrency-cap
 permit** (`JobSemaphore.reserveRecovered`, which may drive permits negative):

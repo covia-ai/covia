@@ -2723,6 +2723,69 @@ public class AgentAdapter extends AAdapter {
 		return (sid != null) ? receipt.assoc(Fields.SESSION_ID, sid) : receipt;
 	}
 
+	// ========== Durability: tasks and chats outlive the process ==========
+
+	/**
+	 * A request Job is the task itself and a chat Job is answered from the
+	 * session's durable pending envelope: neither holds a thread, and both
+	 * are queued on the agent record. They therefore survive the process —
+	 * left as they are at shutdown, and at boot kept whenever their intake is
+	 * still on the agent (a chat re-registers as a waiter so the next cycle
+	 * answers it). Anything else — a trigger wait holds a thread for one
+	 * cycle — takes the framework default.
+	 */
+	@Override
+	public void suspendJob(Job job) {
+		if (intakeStillQueued(job, false)) return;
+		super.suspendJob(job);
+	}
+
+	@Override
+	public void recoverJob(Job job) {
+		if (intakeStillQueued(job, true)) return;
+		super.recoverJob(job);
+	}
+
+	/**
+	 * True when {@code job} is a queued (PENDING or STARTED) request whose task
+	 * is still in the agent's tasks Index, or a chat whose envelope is still pending
+	 * on its session. With {@code reattach}, a chat is re-registered as a
+	 * waiter on the session so the next cycle completes it.
+	 */
+	private boolean intakeStillQueued(Job job, boolean reattach) {
+		AString status = job.getStatus();
+		if (!Status.PENDING.equals(status) && !Status.STARTED.equals(status)) return false;
+		AMap<AString, ACell> data = job.getData();
+		AString address = RT.ensureString(data.get(Fields.ADDRESS));
+		AString agentId = RT.ensureString(data.get(Fields.AGENT_ID));
+		if (address == null || agentId == null) return false;
+		int split = address.toString().lastIndexOf("/g/");
+		if (split < 0) return false;
+		AString ownerDID = Strings.create(address.toString().substring(0, split));
+		AgentState agent = getAgent(ownerDID, agentId);
+		if (agent == null) return false;
+		Blob jobId = job.getID();
+		Index<Blob, ACell> tasks = agent.getTasks();
+		if (tasks != null && tasks.containsKey(jobId)) return true;
+		Blob sid = parseSessionId(RT.ensureString(data.get(Fields.SESSION_ID)));
+		if (sid == null) return false;
+		AVector<ACell> pending = agent.getSessionPending(sid);
+		if (pending == null) return false;
+		AString jobIdHex = Strings.create(jobId.toHexString());
+		for (long i = 0; i < pending.count(); i++) {
+			if (!jobIdHex.equals(RT.getIn(pending.get(i), Fields.JOB_ID))) continue;
+			if (reattach) {
+				ConcurrentHashMap<Blob, Job> chats = activeChats
+					.computeIfAbsent(new AgentKey(ownerDID, agentId), k -> new ConcurrentHashMap<>())
+					.computeIfAbsent(sid, k -> new ConcurrentHashMap<>());
+				chats.put(jobId, job);
+				job.setCancelHook(() -> chats.remove(jobId, job));
+			}
+			return true;
+		}
+		return false;
+	}
+
 	// ========== Wake and run management ==========
 
 	/**
@@ -2858,6 +2921,8 @@ public class AgentAdapter extends AAdapter {
 	public CompletableFuture<ACell> wakeAgent(AString ownerDID, AString agentId, boolean force) {
 		AgentState agent = getAgent(ownerDID, agentId);
 		if (agent == null) return null;
+		// Shutdown: no new loop. Queued work waits durably for the next boot.
+		if (engine.isClosing()) return null;
 
 		final AgentKey key = new AgentKey(ownerDID, agentId);
 
@@ -3043,6 +3108,10 @@ public class AgentAdapter extends AAdapter {
 						|| AgentState.TERMINATED.equals(curStatus)) {
 					break;
 				}
+
+				// Shutdown: stop here. Tasks and chats stay queued durably; the
+				// next boot restores their Jobs and wakes the agent (recoverJob).
+				if (engine.isClosing()) break;
 
 				// On subsequent iterations, exit cleanly if no work remains.
 				// The finally block performs a post-exit re-check that closes
@@ -4123,7 +4192,8 @@ public class AgentAdapter extends AAdapter {
 				if (isRunning(key)) continue;
 				// No executor survives venue startup. Clear the durable dirty
 				// marker before deciding whether remaining queued work merits a
-				// fresh attempt; recoverJobs has already failed interrupted Jobs.
+				// fresh attempt; recoverJobs has settled interrupted Jobs and kept
+				// queued request/chat Jobs for this wake to complete.
 				if (AgentState.RUNNING.equals(agent.getStatus())) {
 					agent.sleep();
 					staleRuns++;
