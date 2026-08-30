@@ -839,7 +839,14 @@ on the agent's lattice cell, so concurrent operations against the same
 agent serialise cleanly without explicit locking. The run loop's cycle
 is a read → transition → merge sequence; concurrency with external
 mutations is handled by reading the current record inside the merge
-(not the pre-transition snapshot) so late writes are never lost.
+(not the pre-transition snapshot) so late writes are never lost. That
+holds for `state` too: the transition's result is applied as its *change*
+against the snapshot it fired with (`AgentState.applyStateChange`) — keys it
+changed or removed win, keys it left alone keep the record's current value.
+So `agent:update` never waits for, or refuses, a running agent: config
+applies to future transitions (a started transition keeps its fire-time
+snapshot), state merges, and `agent:suspend` is how a transition in flight
+is halted.
 
 **Status invariants:**
 

@@ -4991,21 +4991,20 @@ public class AgentAdapterTest {
 		assertEquals(AgentState.RUNNING, observableStatus(old));
 		assertEquals(AgentState.RUNNING, old.getStatus());
 
-		// History-preserving mutation cannot safely swap config under an active
-		// transition; callers must either wait or choose full replacement.
-		Job unsafeUpdate = engine.jobs().invokeOperation(
+		// Config and state changes land on the record now and apply to future
+		// transitions; the never-completing transition keeps the snapshot it
+		// fired with, and the result says a run is in flight.
+		ACell updated = engine.jobs().invokeOperation(
 			"v/ops/agent/update",
 			Maps.of(Fields.AGENT_ID, "run-ow",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
-			RequestContext.of(ALICE_DID));
-		try {
-			unsafeUpdate.awaitResult(5000);
-			fail("agent:update must reject RUNNING config mutation");
-		} catch (covia.exception.JobFailedException expected) {
-			// expected
-		}
-		assertEquals(Strings.create("v/test/ops/never"),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete"),
+				AgentState.KEY_STATE, Maps.of("external", CVMLong.ONE)),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(updated, "running"));
+		assertEquals(Strings.create("v/test/ops/taskcomplete"),
 			old.getConfig().get(Fields.OPERATION));
+		assertEquals(CVMLong.ONE, RT.getIn(old.getState(), "external"));
+		assertEquals(AgentState.RUNNING, observableStatus(old), "the started transition is unaffected");
 
 		// Delete halts and settles the old loop before a replacement is created.
 		engine.jobs().invokeOperation(
@@ -6286,6 +6285,9 @@ public class AgentAdapterTest {
 		assertTrue(RT.getIn(beforeRoot, "renderedContext", "messages", 0, "content")
 			.toString().contains("OLD_IDENTITY"));
 
+		// Straight after the reply, with no wait for the loop's rest state:
+		// config changes apply to future transitions, so a live loop is no
+		// reason to refuse (this sequence used to be timing-dependent).
 		engine.jobs().invokeOperation("v/ops/agent/update",
 			Maps.of(Fields.AGENT_ID, "reload-context-agent",
 				Fields.CONFIG, Maps.of("systemPrompt", "NEW_IDENTITY")), alice)

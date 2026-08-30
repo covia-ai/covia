@@ -117,6 +117,7 @@ public class AgentAdapter extends AAdapter {
 	private static final AString K_FRAMES           = Strings.intern("frames");
 	private static final AString K_TITLE            = Strings.intern("title");
 	private static final AString K_CREATED          = Strings.intern("created");
+	private static final AString K_RUNNING          = Strings.intern("running");
 	private static final int MAX_CONFIG_LAYER_DEPTH = 32;
 	/** Persisted, non-secret requester scope used to reconstruct an output
 	 * handoff after a venue restart. Live requests use the complete immutable
@@ -2079,20 +2080,15 @@ public class AgentAdapter extends AAdapter {
 
 		AgentState agent = lookupAgent(job, target);
 		if (agent == null) return;
-		if (isRunning(target.key())) {
-			// A running transition has already captured its config (including caps)
-			// for the duration of its tool loop, so mutating the record mid-run
-			// would not affect it and is refused by design. To revoke authority or
-			// otherwise reconfigure a running agent, HALT it first: agent:suspend
-			// cancels the in-flight transition promptly (no further tool call
-			// runs), the update then applies to the stopped agent, and agent:resume
-			// restarts it under the new config. This is the kill-switch pattern —
-			// the caller halts, then updates.
-			job.fail("Cannot update agent " + agentId + ": currently RUNNING. "
-				+ "Suspend it first (agent:suspend) to halt the run, then update and resume; "
-				+ "or delete it with remove=true before creating a replacement.");
-			return;
-		}
+		// Config changes apply to future transitions: a transition already
+		// running keeps the snapshot it fired with (transitionInput.config) and
+		// the next cycle re-reads the record. State is merged by the run loop as
+		// the transition's change against its fire-time snapshot
+		// (AgentState.applyStateChange), so an update landing mid-transition
+		// survives on every key the transition does not touch. Nothing here
+		// needs the loop to be idle: the result says whether a transition is in
+		// flight, and agent:suspend remains the way to halt one now.
+		boolean running = isRunning(target.key());
 
 		ACell configInput = RT.getIn(input, Fields.CONFIG);
 		AMap<AString, ACell> newConfig = null;
@@ -2134,8 +2130,18 @@ public class AgentAdapter extends AAdapter {
 			ContextAssembler.refreshSkillCatalogs(agent, engine, ctx, newConfig);
 		}
 
+		AMap<AString, ACell> result = Maps.of(
+			Fields.STATUS, agent.getStatus(),
+			K_RUNNING, CVMBool.create(running));
+		if (running && newConfig != null && newConfig.containsKey(K_CAPS)) {
+			// Honest about authority: the transition in flight keeps the caps it
+			// fired with until it ends.
+			result = result.assoc(Fields.WARNINGS, Vectors.of(Strings.create(
+				"A transition is running under the caps it fired with; the new caps apply"
+				+ " from the next transition. Use agent:suspend to halt it now.")));
+		}
 		job.setStatus(Status.STARTED);
-		job.completeWith(identify(target, Maps.of(Fields.STATUS, agent.getStatus())));
+		job.completeWith(identify(target, result));
 	}
 
 	private void handleCancelTask(Job job, ACell input, RequestContext ctx) {
@@ -3273,7 +3279,7 @@ public class AgentAdapter extends AAdapter {
 				}
 
 				IterResult merged = mergeAndPostProcess(
-					agent, agentId, ownerDID, transitionOp, framesOwned, transitionResult, pickedTask,
+					agent, agentId, ownerDID, transitionOp, framesOwned, transitionResult, currentState, pickedTask,
 					pickedTaskInput, formattedTasks, pickedSession,
 					pickedSessionBlob, filteredInbox, resolvedPending,
 					presentedSessionPendingCount, startTs, allTaskResults, llmTimedOut, cycle);
@@ -3339,7 +3345,7 @@ public class AgentAdapter extends AAdapter {
 	private IterResult mergeAndPostProcess(
 			AgentState agent, AString agentId, AString callerDID,
 			AString transitionOp, boolean framesOwned,
-			ACell transitionResult, Map.Entry<Blob, ACell> pickedTask,
+			ACell transitionResult, ACell snapshotState, Map.Entry<Blob, ACell> pickedTask,
 			ACell pickedTaskInput, AVector<ACell> formattedTasks,
 			AString pickedSession, Blob pickedSessionBlob,
 			AVector<ACell> filteredInbox, ACell pending, long presentedSessionPendingCount,
@@ -3350,7 +3356,8 @@ public class AgentAdapter extends AAdapter {
 		ACell newState = RT.getIn(transitionResult, AgentState.KEY_STATE);
 		ACell leanResponse = RT.getIn(transitionResult, Fields.RESPONSE);
 		ACell leanError = RT.getIn(transitionResult, Fields.ERROR);
-		if (llmTimedOut && newState == null) newState = agent.getState();
+		// A null state result is "no change" (AgentState.applyStateChange), so a
+		// timed-out transition simply leaves the record's state alone.
 		// A transition may still return frames for direct-call compatibility.
 		// Live session ownership is declared by the adapter's FramesOwning marker,
 		// not inferred from this optional output.
@@ -3522,7 +3529,7 @@ public class AgentAdapter extends AAdapter {
 		// live-write in testing). The merge still clears the session's
 		// inCycle claim, appends the timeline entry and removes completed tasks.
 		AMap<AString, ACell> merged = agent.mergeRunResult(
-			newState, taskResults,
+			snapshotState, newState, taskResults,
 			timelineEntry, pickedSessionBlob, turnsToAppend,
 			framesOwned ? 0 : presentedSessionPendingCount,
 			framesOwned ? null : adapterFrames,

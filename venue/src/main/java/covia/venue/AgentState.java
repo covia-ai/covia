@@ -1126,6 +1126,44 @@ public class AgentState extends ALatticeComponent<ACell> {
 		});
 	}
 
+	/**
+	 * A transition's state change, applied to the record's <em>current</em>
+	 * state. Every writer of the record is a function serialised by the
+	 * cursor's CAS; a transition read its state minutes ago and must not
+	 * overwrite what arrived meanwhile, so its result is applied as the
+	 * difference from the snapshot it fired with. Per key of the result:
+	 * <ul>
+	 *   <li>changed or added by the transition (differs from the snapshot) →
+	 *       the transition's value;</li>
+	 *   <li>present in the snapshot, absent from the result → removed (the
+	 *       transition dropped it);</li>
+	 *   <li>untouched by the transition → whatever the record holds now, so an
+	 *       external update survives.</li>
+	 * </ul>
+	 * A null result is no change. When any of the three is not a map the
+	 * result replaces the state wholesale.
+	 */
+	@SuppressWarnings("unchecked")
+	public static ACell applyStateChange(ACell current, ACell snapshot, ACell returned) {
+		if (returned == null) return current;
+		if (!(returned instanceof AMap) || !(snapshot instanceof AMap) || !(current instanceof AMap)) {
+			return returned;
+		}
+		AMap<ACell, ACell> snap = (AMap<ACell, ACell>) snapshot;
+		AMap<ACell, ACell> ret = (AMap<ACell, ACell>) returned;
+		AMap<ACell, ACell> out = (AMap<ACell, ACell>) current;
+		for (java.util.Map.Entry<ACell, ACell> e : ret.entrySet()) {
+			ACell k = e.getKey();
+			if (!snap.containsKey(k) || !java.util.Objects.equals(snap.get(k), e.getValue())) {
+				out = out.assoc(k, e.getValue());
+			}
+		}
+		for (ACell k : snap.keySet()) {
+			if (!ret.containsKey(k)) out = out.dissoc(k);
+		}
+		return out;
+	}
+
 	/** Shallow-merge: incoming keys override existing, existing keys preserved. */
 	@SuppressWarnings("unchecked")
 	private static AMap<AString, ACell> merge(AMap<AString, ACell> existing, AMap<AString, ACell> incoming) {
@@ -1178,10 +1216,19 @@ public class AgentState extends ALatticeComponent<ACell> {
 	 * intake (drained pending envelopes → user turns at root) co-exists
 	 * with adapter-owned stack emission.</p>
 	 *
+	 * <p>{@code state} is merged, not replaced: the transition's result is
+	 * applied as its <em>change</em> against {@code snapshotState} — the value
+	 * it fired with — onto whatever the record holds now
+	 * ({@link #applyStateChange}). An {@code agent:update} that landed while
+	 * the transition ran therefore survives on every key the transition did
+	 * not touch, and the transition wins a genuine same-key conflict. A null
+	 * result means the transition made no state change.</p>
+	 *
 	 * @return The new record (check status to determine if loop should continue)
 	 */
 	@SuppressWarnings("unchecked")
 	public AMap<AString, ACell> mergeRunResult(
+			ACell snapshotState,
 			ACell newState,
 			AMap<AString, ACell> taskResults,
 			AMap<AString, ACell> timelineEntry,
@@ -1199,7 +1246,7 @@ public class AgentState extends ALatticeComponent<ACell> {
 			AVector<ACell> timeline = extractTimeline(r);
 
 			AMap<AString, ACell> updated = r
-				.assoc(K_STATE, newState)
+				.assoc(K_STATE, applyStateChange(r.get(K_STATE), snapshotState, newState))
 				.assoc(K_TASKS, remainingTasks)
 				.assoc(K_TIMELINE, timeline.conj(timelineEntry))
 				.dissoc(K_ERROR);

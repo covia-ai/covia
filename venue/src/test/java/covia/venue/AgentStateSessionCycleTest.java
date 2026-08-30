@@ -239,7 +239,7 @@ public class AgentStateSessionCycleTest {
 	private void mergeMinimalCycle() {
 		AMap<AString, ACell> timelineEntry = Maps.of(
 			Strings.create("op"), Strings.create("test-cycle"));
-		agent.mergeRunResult(Maps.empty(), null,
+		agent.mergeRunResult(null, Maps.empty(), null,
 			timelineEntry, sid, null, 0, null, null, null);
 	}
 }

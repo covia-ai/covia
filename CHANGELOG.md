@@ -28,6 +28,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Changed
 
+- `agent:update` no longer refuses a running agent: config applies to future
+  transitions, and the run loop merges the transition's state change against
+  its fire-time snapshot so mid-transition updates survive.
 - Docs: shaded module jars are GitHub Releases artifacts only; the Maven
   `module` classifier recipe is replaced by a download recipe.
 
