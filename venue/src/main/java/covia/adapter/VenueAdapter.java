@@ -2,6 +2,7 @@ package covia.adapter;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.io.IOException;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
@@ -20,6 +21,7 @@ import covia.api.Fields;
 import covia.venue.Config;
 import covia.venue.Modules;
 import covia.venue.RequestContext;
+import covia.venue.StoreControl;
 
 /**
  * Public venue configuration plus live adapter/module administration and
@@ -49,6 +51,9 @@ import covia.venue.RequestContext;
  *   <li>{@code venue/restart} — process-wide graceful successor handoff,
  *       separately guarded by {@code venue/restart} on
  *       {@code <venue DID>/process}.</li>
+ *   <li>{@code venue/gc} — online garbage collection of the Etch store
+ *       while the venue keeps serving (covia#452), separately guarded by
+ *       {@code venue/gc} on {@code <venue DID>/store}.</li>
  * </ul>
  *
  * <p>Changes are not persisted: after a restart the venue config is
@@ -57,8 +62,11 @@ import covia.venue.RequestContext;
  */
 public class VenueAdapter extends AAdapter {
 
+	private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(VenueAdapter.class);
+
 	static final String RESOURCE = "adapters";
 	static final String PROCESS_RESOURCE = "process";
+	static final String STORE_RESOURCE = "store";
 
 	private static final AString K_ENABLED = Strings.intern("enabled");
 	private static final AString K_KERNEL = Strings.intern("kernel");
@@ -86,6 +94,21 @@ public class VenueAdapter extends AAdapter {
 	private static final AString K_VALIDATION = Strings.intern("validation");
 	private static final AString K_PUBLIC_CONFIG = Strings.intern("publicConfig");
 	private static final AString K_NOTICE = Strings.intern("notice");
+	private static final AString K_STATUS = Strings.intern("status");
+	private static final AString K_CANCEL = Strings.intern("cancel");
+	private static final AString K_RESTART = Strings.intern("restart");
+	private static final AString K_FILE = Strings.intern("file");
+	private static final AString K_BYTES = Strings.intern("bytes");
+	private static final AString K_BYTES_BEFORE = Strings.intern("bytesBefore");
+	private static final AString K_BYTES_AFTER = Strings.intern("bytesAfter");
+	private static final AString K_RECLAIMED = Strings.intern("reclaimed");
+	private static final AString K_RECLAIMED_AT = Strings.intern("reclaimedAt");
+	private static final AString K_ELAPSED = Strings.intern("elapsedMillis");
+	private static final AString K_COLLECTED_FILE = Strings.intern("collectedFile");
+	private static final AString K_COLLECTED_BYTES = Strings.intern("collectedBytes");
+	private static final AString K_IN_PROGRESS = Strings.intern("inProgress");
+	private static final AString K_SWEEP_COMPLETE = Strings.intern("sweepComplete");
+	private static final AString K_COMPLETED = Strings.intern("completed");
 
 	@Override
 	public String getName() {
@@ -95,7 +118,8 @@ public class VenueAdapter extends AAdapter {
 	@Override
 	public String getDescription() {
 		return "Public effective venue settings, plus venue-owned administration to enable, disable "
-			+ "and reconfigure adapters, load or unload modules, or restart the standalone process.";
+			+ "and reconfigure adapters, load or unload modules, garbage-collect the store, "
+			+ "or restart the standalone process.";
 	}
 
 	@Override
@@ -108,6 +132,7 @@ public class VenueAdapter extends AAdapter {
 		installAsset("venue/module/load", "/adapters/venue/moduleLoad.json");
 		installAsset("venue/module/unload", "/adapters/venue/moduleUnload.json");
 		installAsset("venue/restart", "/adapters/venue/restart.json");
+		installAsset("venue/gc", "/adapters/venue/gc.json");
 		installSkill("adapters/adapters", "/skills/adapters.json");
 	}
 
@@ -121,6 +146,10 @@ public class VenueAdapter extends AAdapter {
 				return CompletableFuture.completedFuture(showConfig());
 			}
 			requireInvoke(ctx);
+			if ("gc".equals(subOperation)) {
+				engine.requireVenueAuthority(ctx, STORE_RESOURCE, Abilities.VENUE_GC);
+				return gc(ctx, input);
+			}
 			if ("restart".equals(subOperation)) {
 				engine.requireVenueAuthority(ctx, PROCESS_RESOURCE, Abilities.VENUE_RESTART);
 			} else {
@@ -321,6 +350,97 @@ public class VenueAdapter extends AAdapter {
 		}
 		Modules.LoadedModule module = Modules.unload(engine, name);
 		return moduleEntry(module).assoc(K_UNLOADED, CVMBool.TRUE);
+	}
+
+	// ========== store garbage collection ==========
+
+	/**
+	 * {@code venue/gc} (covia#452): {@code status}/{@code cancel} answer at
+	 * once; otherwise one online cycle runs on its own thread with the Job
+	 * {@code STARTED} throughout — cancelling the Job cancels the cycle, which
+	 * rolls the store back to its original file. With {@code restart}, both
+	 * authorities and restart availability are checked <em>before</em>
+	 * collecting, so a cycle never runs for a restart that cannot follow.
+	 */
+	private CompletableFuture<ACell> gc(RequestContext ctx, ACell input) throws IOException {
+		StoreControl control = engine.storeControl();
+		if (CVMBool.TRUE.equals(RT.getIn(input, K_STATUS))) {
+			return CompletableFuture.completedFuture(status(control.status()));
+		}
+		if (CVMBool.TRUE.equals(RT.getIn(input, K_CANCEL))) {
+			control.cancel();
+			return CompletableFuture.completedFuture(status(control.status()));
+		}
+		boolean restart = CVMBool.TRUE.equals(RT.getIn(input, K_RESTART));
+		long startupTimeout = 60_000;
+		if (restart) {
+			engine.requireVenueAuthority(ctx, PROCESS_RESOURCE, Abilities.VENUE_RESTART);
+			if (!engine.hasProcessControl()) {
+				throw new IllegalStateException(
+					"Process restart is unavailable: this venue is not managed by MainVenue");
+			}
+			ACell timeoutCell = RT.getIn(input, K_STARTUP_TIMEOUT);
+			if (timeoutCell != null) {
+				convex.core.data.prim.CVMLong value = RT.ensureLong(timeoutCell);
+				if (value == null) throw new IllegalArgumentException("startupTimeout must be an integer");
+				startupTimeout = value.longValue();
+			}
+		}
+		final long timeout = startupTimeout;
+		final covia.grid.Job job = ctx.getJob();
+		CompletableFuture<ACell> result = new CompletableFuture<>();
+		// The standard Job bridge cancels this future: turn that into a cycle
+		// cancel, which makes the sweep stop and the store roll back
+		result.whenComplete((ignored, failure) -> {
+			if (!result.isCancelled()) return;
+			try {
+				control.cancel();
+			} catch (IOException | RuntimeException e) {
+				log.warn("Cancelling the store collection failed", e);
+			}
+		});
+		Thread.ofVirtual().name("covia-store-gc").start(() -> {
+			try {
+				StoreControl.Result r = control.collect();
+				AMap<AString, ACell> out = Maps.of(
+					K_FILE, Strings.create(r.file()),
+					K_BYTES_BEFORE, convex.core.data.prim.CVMLong.create(r.bytesBefore()),
+					K_BYTES_AFTER, convex.core.data.prim.CVMLong.create(r.bytesAfter()),
+					K_RECLAIMED, convex.core.data.prim.CVMLong.create(Math.max(0, r.bytesBefore() - r.bytesAfter())),
+					K_ELAPSED, convex.core.data.prim.CVMLong.create(r.elapsedMillis()),
+					K_COLLECTED_FILE, Strings.create(r.collectedFile()),
+					K_RECLAIMED_AT, Strings.create("shutdown"));
+				if (restart) {
+					// Registered before this Job completes: the handoff follows its
+					// successful, persisted result, exactly as venue/restart does
+					var plan = engine.requestProcessRestart(null, null, timeout, job);
+					out = out.assoc(K_RECLAIMED_AT, Strings.create("restart")).assoc(K_RESTART, Maps.of(
+						K_ACCEPTED, CVMBool.TRUE,
+						K_JAR, Strings.create(plan.successorJar().toString()),
+						K_SHA256, Strings.create(plan.successorSha256()),
+						K_FALLBACK, Strings.create(plan.fallbackJar().toString()),
+						K_STARTUP_TIMEOUT, convex.core.data.prim.CVMLong.create(plan.startupTimeoutMillis())));
+				}
+				result.complete(out);
+			} catch (Throwable t) {
+				result.completeExceptionally(t);
+			}
+		});
+		return result;
+	}
+
+	private static ACell status(StoreControl.Status s) {
+		AMap<AString, ACell> out = Maps.of(
+			K_FILE, Strings.create(s.file()),
+			K_BYTES, convex.core.data.prim.CVMLong.create(s.bytes()),
+			K_IN_PROGRESS, CVMBool.create(s.inProgress()),
+			K_SWEEP_COMPLETE, CVMBool.create(s.sweepComplete()),
+			K_COMPLETED, CVMBool.create(s.completed()));
+		if (s.collectedFile() != null) {
+			out = out.assoc(K_COLLECTED_FILE, Strings.create(s.collectedFile()))
+				.assoc(K_COLLECTED_BYTES, convex.core.data.prim.CVMLong.create(s.collectedBytes()));
+		}
+		return out;
 	}
 
 	// ========== process restart ==========

@@ -15,6 +15,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   delegation; talking only, public principal never.
 - Turn provenance names a foreign caller's user, agent id and venue.
 - `etch.gc.onStart` garbage-collects the Etch store at startup (#451).
+- `venue:gc` collects the Etch store online while the venue keeps serving;
+  venue-owned (`venue/gc` on `<venueDID>/store`), one cycle per process (#452).
 
 ### Fixed
 

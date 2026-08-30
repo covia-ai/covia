@@ -59,12 +59,35 @@ public class TestEngine {
 	 */
 	public static final Engine ENGINE;
 
+	/**
+	 * The shared engine's store: a temp Etch store rather than memory, so
+	 * online GC can be exercised on it under the suite's own concurrent load
+	 * ({@code SharedEngineOnlineGcTest}, covia#452). Deleted on exit.
+	 */
+	public static final convex.etch.EtchStore STORE;
+	private static volatile convex.etch.EtchStore collected;
+
 	static {
-		ENGINE = Engine.createTemp(Maps.of(
-			Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
+		try {
+			STORE = convex.etch.EtchStore.createTemp("covia-test");
+			convex.core.crypto.AKeyPair keyPair = convex.core.crypto.AKeyPair.generate();
+			ENGINE = new Engine(new Config(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true))),
+				CoviaApplication.open(STORE, keyPair), keyPair).start();
+		} catch (java.io.IOException e) {
+			throw new ExceptionInInitializerError(e);
+		}
 		Engine.addDemoAssets(ENGINE);
-		Runtime.getRuntime().addShutdownHook(
-			new Thread(ENGINE::close, "test-engine-shutdown"));
+		Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+			ENGINE.close();
+			STORE.close();
+			convex.etch.EtchStore successor = collected;
+			if (successor != null) successor.close();
+		}, "test-engine-shutdown"));
+	}
+
+	/** Parks the successor of an online GC cycle on {@link #STORE} so it is closed cleanly at exit. */
+	public static void adoptCollected(convex.etch.EtchStore successor) {
+		collected = successor;
 	}
 
 	/**

@@ -27,6 +27,10 @@ import covia.venue.server.VenueServer;
  * unreachable data goes, root state stays, both handles close cleanly so a
  * plain relaunch opens the collected file — and a failed cycle boots on the
  * untouched original.
+ *
+ * <p>Venue launches are the expensive part, so the whole flag-off / flag-on /
+ * relaunch story runs as one scenario on one store; the edge cases use a bare
+ * {@link EtchStore} and no venue.</p>
  */
 public class EtchGcOnStartTest {
 
@@ -46,9 +50,8 @@ public class EtchGcOnStartTest {
 		return cfg;
 	}
 
-	private static String storePath(String prefix) throws Exception {
-		File dir = TestTemp.dir(prefix).toFile();
-		return new File(dir, "venue.etch").getAbsolutePath().replace('\\', '/');
+	private static File storeFile(String prefix) throws Exception {
+		return new File(TestTemp.dir(prefix).toFile(), "venue.etch");
 	}
 
 	private static void write(VenueServer v, String path, ACell value) throws Exception {
@@ -63,25 +66,18 @@ public class EtchGcOnStartTest {
 		return RT.getIn(read, Fields.VALUE);
 	}
 
-	/** Runs a venue on the store, writes one workspace value, closes. */
-	private static void seed(String storePath, AString value) throws Exception {
-		VenueServer v = VenueServer.launch(config(storePath, false));
-		try {
-			write(v, "w/gc-proof", value);
-			v.getEngine().flush();
-		} finally {
-			v.close();
-		}
-	}
-
 	/** A non-embedded string: longer than the embedding limit, so it is its own entry. */
 	private static AString big(String tag) {
 		return Strings.create(tag + "-" + "x".repeat(200));
 	}
 
-	/** Persists trees nothing references — garbage by the retention contract — and returns the file length. */
-	private static long addGarbage(String storePath) throws Exception {
-		EtchStore store = EtchStore.create(new File(storePath));
+	/**
+	 * Persists trees nothing references into a store the venue has not yet
+	 * initialised — garbage by the retention contract — and returns the file's
+	 * data length. The venue then lays its root down beside it.
+	 */
+	static long addGarbage(File file) throws Exception {
+		EtchStore store = EtchStore.create(file);
 		try {
 			for (int i = 0; i < 40; i++) {
 				AVector<ACell> junk = Vectors.empty();
@@ -96,12 +92,27 @@ public class EtchGcOnStartTest {
 	}
 
 	@Test
-	public void collectsUnreachableDataAtStartupAndKeepsState() throws Exception {
-		String storePath = storePath("etch-gc-onstart");
+	public void collectsAtStartupAndKeepsState() throws Exception {
+		File file = storeFile("etch-gc-onstart");
+		String storePath = file.getAbsolutePath().replace('\\', '/');
+		long garbage = addGarbage(file);
 		AString value = Strings.create("survives collection");
-		seed(storePath, value);
-		long before = addGarbage(storePath);
 
+		// 1. Flag off: the venue initialises its root beside the garbage and
+		// leaves the file alone.
+		long before = 0;
+		VenueServer plain = VenueServer.launch(config(storePath, false));
+		try {
+			write(plain, "w/gc-proof", value);
+			plain.getEngine().flush();
+			before = ((EtchStore) plain.getStore()).getEtch().getDataLength();
+			assertTrue(before >= garbage, "without the flag the store must not shrink");
+		} finally {
+			plain.close();
+		}
+
+		// 2. Flag on: collected before serving; root state intact; the venue
+		// writes and flushes normally on the collected store.
 		VenueServer collected = VenueServer.launch(config(storePath, true));
 		try {
 			assertEquals(value, read(collected, "w/gc-proof"), "root state must survive collection");
@@ -109,14 +120,15 @@ public class EtchGcOnStartTest {
 			assertFalse(store.isGCInProgress());
 			long after = store.getEtch().getDataLength();
 			assertTrue(after < before, "collected store must be smaller: " + after + " vs " + before);
-			// The venue writes and flushes normally on the collected store
+			assertTrue(before - after > garbage / 2,
+				"the garbage must be what went: reclaimed " + (before - after) + " of " + garbage);
 			write(collected, "w/after-gc", Strings.create("ok"));
 			collected.getEngine().flush();
 		} finally {
 			collected.close();
 		}
 
-		// Both handles were closed cleanly: a plain relaunch opens the store
+		// 3. Both handles were closed cleanly: a plain relaunch opens the store
 		// (adopted under the base name, or the collected file directly while
 		// mappings pin the old one) and sees everything.
 		VenueServer again = VenueServer.launch(config(storePath, false));
@@ -129,29 +141,15 @@ public class EtchGcOnStartTest {
 	}
 
 	@Test
-	public void flagOffLeavesTheStoreAlone() throws Exception {
-		String storePath = storePath("etch-gc-off");
-		seed(storePath, Strings.create("kept"));
-		long before = addGarbage(storePath);
-		VenueServer v = VenueServer.launch(config(storePath, false));
+	public void storeWithoutARootIsSkipped() throws Exception {
+		File f = storeFile("etch-gc-fresh");
+		EtchStore store = EtchStore.create(f);
 		try {
-			assertEquals(Strings.create("kept"), read(v, "w/gc-proof"));
-			assertTrue(((EtchStore) v.getStore()).getEtch().getDataLength() >= before,
-				"without the flag the store must not shrink");
+			assertSame(store, VenueServer.collectAtStartup(store, f, null),
+				"nothing to collect: the same handle boots");
+			assertFalse(store.isGCInProgress());
 		} finally {
-			v.close();
-		}
-	}
-
-	@Test
-	public void freshStoreWithFlagBootsWithNothingToCollect() throws Exception {
-		String storePath = storePath("etch-gc-fresh");
-		VenueServer v = VenueServer.launch(config(storePath, true));
-		try {
-			write(v, "w/first", Strings.create("first"));
-			assertEquals(Strings.create("first"), read(v, "w/first"));
-		} finally {
-			v.close();
+			store.close();
 		}
 	}
 
@@ -159,7 +157,7 @@ public class EtchGcOnStartTest {
 	public void failedSweepBootsOnTheOriginalStore() throws Exception {
 		// A root whose children were never written: the sweep meets missing
 		// data, so the cycle must be cancelled and the original store kept.
-		File f = new File(storePath("etch-gc-broken"));
+		File f = storeFile("etch-gc-broken");
 		AVector<ACell> tree = Vectors.of(big("left"), big("right"));
 		EtchStore broken = EtchStore.create(f);
 		broken.storeTopRef(tree.getRef(), Ref.STORED, null); // top entry only
@@ -169,8 +167,8 @@ public class EtchGcOnStartTest {
 
 		EtchStore store = EtchStore.create(f);
 		try {
-			EtchStore result = VenueServer.collectAtStartup(store, f, null);
-			assertSame(store, result, "a failed cycle boots on the original store");
+			assertSame(store, VenueServer.collectAtStartup(store, f, null),
+				"a failed cycle boots on the original store");
 			assertFalse(store.isGCInProgress(), "the failed cycle must be cancelled");
 			assertEquals(tree.getHash(), store.getRootHash(), "the original root is untouched");
 		} finally {

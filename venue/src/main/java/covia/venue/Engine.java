@@ -129,6 +129,8 @@ public class Engine {
 
 	/** MainVenue process control; absent for embedded and test engines. */
 	private volatile VenueProcess processControl;
+	/** Host-installed store maintenance seam (covia#452); null when the host installed none. */
+	private volatile StoreControl storeControl;
 
 	/**
 	 * Per-venue grid scheduler. Fires any deferred grid operation at a future
@@ -824,6 +826,33 @@ public class Engine {
 				"Process restart is unavailable: this venue is not managed by MainVenue");
 		}
 		return control.requestRestart(successor, sha256, startupTimeoutMillis, job);
+	}
+
+	/** Whether a standalone MainVenue process manages this venue, so restart requests can be honoured. */
+	public boolean hasProcessControl() {
+		return processControl != null;
+	}
+
+	/** Installs the host's store maintenance seam (covia#452); the host owns the store, the Engine only relays. */
+	public void setStoreControl(StoreControl storeControl) {
+		if (this.storeControl != null && this.storeControl != storeControl) {
+			throw new IllegalStateException("Venue store control is already installed");
+		}
+		this.storeControl = java.util.Objects.requireNonNull(storeControl);
+	}
+
+	/**
+	 * The host's store maintenance seam, for venue-owned operations.
+	 *
+	 * @throws IllegalStateException when the host installed none
+	 */
+	public StoreControl storeControl() {
+		StoreControl control = storeControl;
+		if (control == null) {
+			throw new IllegalStateException(
+				"Store maintenance is unavailable: this venue's host installed no store control");
+		}
+		return control;
 	}
 
 	public static void addDemoAssets(Engine venue) {

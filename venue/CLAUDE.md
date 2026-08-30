@@ -100,7 +100,7 @@ AUTH_REQUIRED).
 | `auth` | Authentication ops | login/token flows |
 | `oauth` | Connected accounts — OAuth 2.0 grants held for users; `http:*` attaches tokens via `bearerSecret: "oauth/<provider>"` | `connect`, `status`, `disconnect` |
 | `user` | Explicit user registration and discovery (arbitrary DIDs; venue-managed did:web usernames) | `create`, `info`, `list` |
-| `venue` | Venue administration — runtime adapter/module lifecycle and process restart (venue-owned; `docs/CONFIG.md`) | `adapters`, `adapter/enable`, `adapter/disable`, `adapter/configure`, `module/load`, `module/unload`, `restart` |
+| `venue` | Venue administration — runtime adapter/module lifecycle and process restart (venue-owned; `docs/CONFIG.md`) | `adapters`, `adapter/enable`, `adapter/disable`, `adapter/configure`, `module/load`, `module/unload`, `restart`, `gc` |
 | `test` | Testing | `echo`, `delay`, `fail`, `never`, `random`, `chat`, `pause`, `taskComplete` |
 
 Module adapters (shaded module jars, not in covia.jar — `docs/CONFIG.md` "Venue modules"):

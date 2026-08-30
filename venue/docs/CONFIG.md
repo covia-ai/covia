@@ -105,8 +105,9 @@ before cutover cancels the cycle and boots on the untouched original (logged
 at ERROR). `temp`/`memory` stores and a store with no root yet are skipped.
 The flag pairs with `venue:restart` — restart with it set and the successor
 process collects on its way up. Collecting a **running** venue without a
-restart is tracked by covia#452. The `gc` block sits alongside the creation
-policy fields below and is not passed through to Convex.
+restart is `v/ops/venue/gc` — see [Store garbage collection
+(online)](#store-garbage-collection-online). The `gc` block sits alongside
+the creation policy fields below and is not passed through to Convex.
 
 ### Etch store policy (`etch`)
 
@@ -323,6 +324,42 @@ This is process-wide authority, distinct from adapter management. Direct venue
 execution is allowed; delegation requires `venue/restart` on
 `<venue DID>/process` (as well as `invoke` on the operation). There is no
 configuration bypass or enable flag.
+
+## Store garbage collection (online)
+
+`v/ops/venue/gc` collects the Etch store **while the venue keeps serving**
+(covia#452). It drives Convex's online cycle: from the start of the cycle
+writes go to a fresh target file and reads fall back to the old one; the
+root-reachable tree is swept across alongside live writes, verified, and the
+venue cuts over. The venue then keeps using its original store handle as a
+view over both files, so nothing in memory has to be rebound; the successor
+is retained only to be cleanly closed at shutdown, when the superseded file
+is deleted (or on the following start where the platform still pins it) and
+the collected file is adopted under the store's name.
+
+```json
+{}                      // collect; the Job stays STARTED for the sweep
+{"status": true}       // {file, bytes, inProgress, sweepComplete, completed, collectedFile?, collectedBytes?}
+{"cancel": true}       // roll a running cycle back; nothing written during it is lost
+{"restart": true}      // restart after cutover so the disk comes back now
+```
+
+The result carries `bytesBefore`, `bytesAfter`, `reclaimed`, `elapsedMillis`,
+`collectedFile` and `reclaimedAt` (`shutdown`, or `restart`). Cancelling the
+Job cancels the cycle. Constraints:
+
+- **One collection per process.** The successor cannot be threaded into the
+  running node, so a second `gc` is refused until the venue restarts — which
+  adopts the collected file and, with `etch.gc.onStart`, collects again on the
+  way up. `restart: true` chains the two.
+- Needs free disk of about the current file size; about 2× disk is used until
+  the superseded file is deleted, and reads cost a little more during the
+  cycle. `temp`/`memory` stores are refused.
+- **Venue-owned**: `venue/gc` on `<venueDID>/store`, checked like
+  `venue/restart` — direct venue execution, or a venue-issued delegation;
+  the venue's own agents are not admitted without one. `restart: true`
+  additionally requires `venue/restart` on `<venueDID>/process` and a
+  `MainVenue`-managed process, both checked before any collection starts.
 
 ## Embedded route policy
 
