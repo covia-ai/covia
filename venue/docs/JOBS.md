@@ -145,15 +145,30 @@ inbound messages durably in `session.pending` — see AGENT_SESSIONS.md).
 
 Recovery **stabilises, never re-executes** — a venue restart leaves every job
 in a stable, honest state so callers can resume, cancel, or retry as they wish.
-Re-execution would double side effects for non-idempotent ops
-(`convex:transact`, `http:post`, …), so nothing is ever re-fired.
+The framework never re-fires an operation: re-execution would double side
+effects for non-idempotent ops (`convex:transact`, `http:post`, …).
 
-| State at crash | At boot | Caller's move |
-|----------------|---------|---------------|
+The decision is the owning adapter's. At boot, before the venue serves
+requests, `JobManager.recoverJobs()` rebuilds each non-terminal durable job
+from its record, registers it, and calls `AAdapter.recoverJob(job)`. The job
+carries its record and every verb; whatever state it is in when the hook
+returns is the durable truth, and anything still non-terminal is restored
+live. The default — also applied when the adapter is absent (module not
+loaded, boot-disabled):
+
+| State at crash | Default at boot | Caller's move |
+|----------------|-----------------|---------------|
 | `PENDING` | `FAILED` — "restarted before execution began" | retry |
-| `STARTED` (most ops) | `FAILED` — "effects may or may not have applied; verify before retrying" | verify, then retry |
-| `STARTED` agent request/chat | `FAILED`; AgentAdapter removes its queued intake and stale session fence | inspect external interaction records, then retry if safe |
+| `STARTED` | `FAILED` — "effects may or may not have applied; verify before retrying" | verify, then retry |
 | `PAUSED` / `INPUT_REQUIRED` / `AUTH_REQUIRED` | restored live | continue as before |
+
+An adapter overrides `recoverJob` to re-attach to work that continued outside
+the process (poll a remote job again, re-arm a timer, re-subscribe to an
+agent loop) or to retry an operation *it* knows is idempotent, calling
+`super` for the cases it does not handle. Today the agent adapter still takes
+the default for `STARTED` agent requests/chats and removes their queued
+intake and stale session fence; HITL re-arms its durable expiries after
+recovery.
 
 Restored non-terminal jobs **re-occupy their caller's concurrency-cap
 permit** (`JobSemaphore.reserveRecovered`, which may drive permits negative):
@@ -165,12 +180,39 @@ terminal Jobs is removed, stale execution markers/fences are cleared, and only
 remaining durable queued work can start a fresh attempt. `inCycle` never causes
 a wake by itself.
 
+## Shutdown
+
+`Engine.close()` runs the job shutdown sequence first, outside the engine
+monitor (`JobManager.shutdown`):
+
+1. **Top-level admission closes** (`beginShutdown()`): `invokeOperation`
+   throws. Internal composition — the sub-operations in-flight work runs to
+   finish — is still admitted.
+2. **Grace**: in-flight work (`PENDING`/`STARTED`) gets up to
+   `shutdown.graceMs` (default 2000) to finish on its own. An upper bound:
+   shutdown proceeds the moment nothing is in flight.
+3. **Suspend**: each job still in flight is handed to its adapter,
+   `AAdapter.suspendJob(job)`. In-process execution is bounded and ends with
+   the process; a wait on something outside it is state, not a thread. The
+   default pauses a job whose adapter registered a pause hook and cancels any
+   other in-flight job with the reason "Venue shut down"; the paused family
+   is left as is. An adapter overrides to record a durable wait and let its
+   thread go — whatever it leaves non-terminal comes back through
+   `recoverJob` at the next boot.
+4. **Admission closes completely** (`closeAdmission()`): `invokeInternal`
+   now returns a failed future too, so nothing — including a racing timer —
+   submits work after the final persistence barrier.
+5. **Release**: a waiter still parked on a surviving job's in-memory future
+   gets a `JobPollingFailedException` ("Venue shut down") with no change to
+   the record, so no thread outlives the venue on a job's account.
+
+Then the persistence sweep stops and the final flush runs, carrying the
+suspended states.
+
 ## Admission
 
-- **Shutdown gate**: `Engine.close()` calls `JobManager.beginShutdown()`
-  *before* stopping the scheduler — `invokeOperation` then throws and
-  `invokeInternal` returns a failed future, so nothing (including a racing
-  timer) can submit fresh work after the final persistence barrier.
+- **Shutdown gate**: admission closes first in the [shutdown
+  sequence](#shutdown), before anything else is stopped.
 - **Per-caller concurrency cap**: see `venue/CLAUDE.md` § Rate limiting.
   Sub-jobs (carrying a parent job id) are exempt.
 

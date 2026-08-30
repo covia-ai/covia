@@ -325,6 +325,20 @@ execution is allowed; delegation requires `venue/restart` on
 `<venue DID>/process` (as well as `invoke` on the operation). There is no
 configuration bypass or enable flag.
 
+## Shutdown (`shutdown.graceMs`)
+
+```json
+{ "shutdown": { "graceMs": 2000 } }
+```
+
+How long `Engine.close()` lets in-flight jobs finish before their adapters
+are asked to suspend them. An upper bound: shutdown proceeds as soon as
+nothing is in flight. Default 2000; `0` suspends at once. What "suspend"
+means is the adapter's decision — bounded in-process work is cancelled
+("Venue shut down"), a job whose adapter registered a pause hook is paused,
+and a durable wait is recorded and restored at the next boot. See
+[JOBS.md § Shutdown](JOBS.md#shutdown).
+
 ## Store garbage collection (online)
 
 `v/ops/venue/gc` collects the Etch store **while the venue keeps serving**

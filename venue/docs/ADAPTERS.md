@@ -44,13 +44,22 @@ The significant lifecycle is:
    `configure(config, strict)`.
 4. Unless boot-disabled or declined, `install(engine)` binds the engine and
    private `AdapterWorkspace`, then `installAssets()` declares its catalog.
-5. Runtime `adapter/configure` calls `configure` again and republishes public
+5. Before the venue serves requests, `recoverJob(job)` is called once per
+   non-terminal durable Job the adapter's operations own. The default
+   stabilises and never re-executes; override to re-attach or retry
+   (see [JOBS.md § Recovery](JOBS.md#recovery-on-restart-214)).
+6. Runtime `adapter/configure` calls `configure` again and republishes public
    configuration and information if accepted.
-6. Disable removes live dispatch and public introspection but retains the
+7. Disable removes live dispatch and public introspection but retains the
    instance and durable catalog metadata. Enable restores it.
-7. Module unload deregisters its live adapters and closes `AutoCloseable`
+8. Module unload deregisters its live adapters and closes `AutoCloseable`
    resources and the module classloader. In-flight jobs retain their adapter
    instance and may finish.
+9. At venue shutdown, in-flight Jobs get `shutdown.graceMs` to finish;
+   `suspendJob(job)` is then called for each still in flight. The default
+   pauses a pausable Job and cancels the rest; override to record a
+   durable wait and let the thread go
+   (see [JOBS.md § Shutdown](JOBS.md#shutdown)).
 
 The venue config is authoritative again after restart; runtime enable,
 disable, configure, load, and unload changes are not persisted. Full operator

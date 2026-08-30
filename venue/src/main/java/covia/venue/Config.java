@@ -132,6 +132,8 @@ public class Config {
 	/** Key for the grid scheduler config block ({@code trackJobs},
 	 *  {@code forceTrackJobs}). See {@code venue/docs/GRID_SCHEDULER.md} §7. */
 	public static final AString SCHEDULER = Strings.intern("scheduler");
+	public static final AString SHUTDOWN = Strings.intern("shutdown");
+	public static final AString GRACE_MS = Strings.intern("graceMs");
 
 	/** Scheduler block: default for a scheduled event that did not say whether
 	 *  its fires should be durable Jobs. */
@@ -390,7 +392,8 @@ public class Config {
 		"modules", "dynamicModules", "users", "store", "seed", "keystore", "storage", "etch",
 		"maxContentSize", "auth", "webdav", "file", "corsOrigins",
 		"allowPrivateNetwork", "enablePrivateJobs", "recordReadOnlyOperations", "fixMcpStrings",
-		"outputValidation", "secrets", "strictAssets", "strictConfig", "scheduler");
+		"outputValidation", "secrets", "strictAssets", "strictConfig", "scheduler",
+		"shutdown");
 
 	/**
 	 * Create a Config wrapping the given venue config map.
@@ -481,6 +484,7 @@ public class Config {
 		validateRootPage(strict);
 		validateRateLimit(strict);
 		validateScheduler(strict);
+		validateShutdown(strict);
 		validateKeystore(strict);
 		validateStorage(strict);
 		validateWebDav(strict);
@@ -594,6 +598,29 @@ public class Config {
 		validateUnknownFields(sched, Set.of("trackJobs", "forceTrackJobs"), "scheduler", strict);
 		optionalBoolean(sched, TRACK_JOBS, "scheduler.trackJobs", false);
 		optionalBoolean(sched, FORCE_TRACK_JOBS, "scheduler.forceTrackJobs", false);
+	}
+
+	private void validateShutdown(boolean strict) {
+		AMap<AString, ACell> shutdown = optionalMap(config, SHUTDOWN, "shutdown");
+		if (shutdown == null) return;
+		validateUnknownFields(shutdown, Set.of("graceMs"), "shutdown", strict);
+		optionalLong(shutdown, GRACE_MS, "shutdown.graceMs", 0, Long.MAX_VALUE);
+	}
+
+	/** Default upper bound on the wait for in-flight jobs at shutdown ({@code shutdown.graceMs}). */
+	public static final long DEFAULT_SHUTDOWN_GRACE_MS = 2000;
+
+	/**
+	 * How long {@code Engine.close()} lets in-flight jobs finish before their
+	 * adapters are asked to suspend them ({@code shutdown.graceMs}). An upper
+	 * bound: shutdown proceeds as soon as nothing is in flight. Default 2000;
+	 * 0 suspends at once.
+	 */
+	public long getShutdownGraceMs() {
+		AMap<AString, ACell> shutdown = RT.castMap(config.get(SHUTDOWN));
+		if (shutdown == null) return DEFAULT_SHUTDOWN_GRACE_MS;
+		CVMLong v = RT.ensureLong(shutdown.get(GRACE_MS));
+		return (v != null) ? v.longValue() : DEFAULT_SHUTDOWN_GRACE_MS;
 	}
 
 	private void validateKeystore(boolean strict) {

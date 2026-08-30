@@ -711,19 +711,31 @@ public class Engine {
 	 * reads from the root cursor. {@code VenueServer.close()} handles this
 	 * ordering.</p>
 	 *
+	 * <p>In-flight jobs first get {@code shutdown.graceMs} to finish, then
+	 * their adapters suspend them ({@link covia.adapter.AAdapter#suspendJob});
+	 * see {@link JobManager#shutdown}.</p>
+	 *
 	 * <p>Idempotent — calling close more than once is safe.</p>
 	 */
-	public synchronized void close() {
-		if (lifecycle == Lifecycle.CLOSED || lifecycle == Lifecycle.CLOSING) return;
-		boolean flush = lifecycle == Lifecycle.STARTED;
-		lifecycle = Lifecycle.CLOSING;
-		closeStartedResources(flush, null);
-		lifecycle = Lifecycle.CLOSED;
+	public void close() {
+		boolean flush;
+		synchronized (this) {
+			if (lifecycle == Lifecycle.CLOSED || lifecycle == Lifecycle.CLOSING) return;
+			flush = lifecycle == Lifecycle.STARTED;
+			lifecycle = Lifecycle.CLOSING;
+		}
+		// Jobs first, outside the engine monitor: work finishing inside the
+		// grace window may need engine services that synchronise on it.
+		if (flush) jobManager.shutdown(config.getShutdownGraceMs());
+		synchronized (this) {
+			closeStartedResources(flush, null);
+			lifecycle = Lifecycle.CLOSED;
+		}
 	}
 
 	/** Releases resources in the reverse of {@link #start()} acquisition order. */
 	private void closeStartedResources(boolean flush, Throwable startupFailure) {
-		jobManager.beginShutdown();
+		jobManager.closeAdmission();
 
 		// Release adapter-owned native/session resources before module classloaders.
 		for (AAdapter adapter : adapters.values()) {

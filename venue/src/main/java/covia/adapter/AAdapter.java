@@ -670,6 +670,74 @@ public abstract class AAdapter {
 		return job.future();
 	}
 
+	// ===== Durability: recovery at boot, suspension at shutdown =====
+
+	/** Recovery message for a durable Job that never began executing. */
+	public static final String RESTARTED_BEFORE_START =
+		"Venue restarted before execution began — retry if desired";
+
+	/** Recovery message for a durable Job interrupted mid-execution. */
+	public static final String RESTARTED_DURING_EXECUTION =
+		"Venue restarted during execution — effects may or may not have applied;"
+		+ " verify state before retrying";
+
+	/** Cancellation reason for in-process work ended by venue shutdown. */
+	public static final String VENUE_SHUT_DOWN = "Venue shut down";
+
+	/**
+	 * Called once at boot, before the venue serves requests, for every
+	 * non-terminal durable Job whose operation this adapter owns. The Job
+	 * carries its persisted record and every verb; whatever state it is in
+	 * when this returns is the durable truth. The default never re-executes:
+	 * {@code PENDING} and {@code STARTED} fail with a message the caller can
+	 * act on, the paused family is restored live. Override to re-attach to
+	 * work that continued outside this process (poll a remote job again,
+	 * re-arm a timer) or to retry an operation the adapter knows is
+	 * idempotent, and call {@code super} for the cases not handled.
+	 *
+	 * @param job the recovered Job
+	 */
+	public void recoverJob(Job job) {
+		defaultRecover(job);
+	}
+
+	/**
+	 * Called at shutdown for every active Job whose operation this adapter
+	 * owns and which is still in flight once the grace window has passed.
+	 * In-process execution is bounded and ends with the process; a wait on
+	 * something outside it is state, not a thread. The default pauses a Job
+	 * whose adapter registered a pause hook — its declaration that the work
+	 * can be suspended — and cancels any other {@code PENDING}/{@code STARTED}
+	 * Job with {@link #VENUE_SHUT_DOWN}; the paused family is left as is.
+	 * Override to record a durable wait and let the thread go; whatever
+	 * remains non-terminal is handed to {@link #recoverJob} at the next boot.
+	 *
+	 * @param job the in-flight Job
+	 */
+	public void suspendJob(Job job) {
+		defaultSuspend(job);
+	}
+
+	/** The framework's recovery rule, also applied when a Job's adapter is absent. */
+	public static void defaultRecover(Job job) {
+		AString status = job.getStatus();
+		if (Status.PENDING.equals(status)) {
+			job.fail(RESTARTED_BEFORE_START);
+		} else if (Status.STARTED.equals(status)) {
+			job.fail(RESTARTED_DURING_EXECUTION);
+		}
+	}
+
+	/** The framework's suspension rule, also applied when a Job's adapter is absent. */
+	public static void defaultSuspend(Job job) {
+		if (job.isFinished() || job.isPaused()) return;
+		if (job.isPausable()) {
+			job.pause();
+		} else {
+			job.cancel(VENUE_SHUT_DOWN);
+		}
+	}
+
 	// ===== Shared future -> Job completion bridge =====
 
 	/**

@@ -50,6 +50,11 @@ public class VenueJob extends Job {
 		return !isRecorded();
 	}
 
+	/** Resolved operation metadata, or null when the operation could not be resolved. */
+	AMap<AString, ACell> meta() {
+		return meta;
+	}
+
 	@Override
 	public AMap<AString, ACell> processUpdate(AMap<AString, ACell> newData) {
 		return newData.assoc(Fields.UPDATED, CVMLong.create(Utils.getCurrentTimestamp()));

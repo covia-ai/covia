@@ -17,6 +17,10 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `etch.gc.onStart` garbage-collects the Etch store at startup (#451).
 - `venue:gc` collects the Etch store online while the venue keeps serving;
   venue-owned (`venue/gc` on `<venueDID>/store`), one cycle per process (#452).
+- `AAdapter.recoverJob` / `suspendJob`: recovery at boot and suspension at
+  shutdown are the owning adapter's decision, taken on the Job itself. The
+  default stabilises (never re-executes) and cancels bounded in-process work;
+  `shutdown.graceMs` lets in-flight jobs finish first.
 
 ### Fixed
 
@@ -34,6 +38,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Closing a venue ends open MCP SSE streams first, so their request handlers
   unwind against a live engine; no more `ClosedChannelException` /
   Javalin `WRITER` errors on the console at shutdown.
+- Shutdown no longer leaves job threads parked past the venue ("Slow shutdown
+  of executor task threads" on the console).
 
 ### Changed
 
