@@ -13,7 +13,6 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Cells;
 import convex.core.data.Maps;
-import convex.core.data.Ref;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
@@ -25,8 +24,8 @@ import covia.venue.server.VenueServer;
  * Startup garbage collection of the venue's Etch store (covia#451): with
  * {@code etch.gc.onStart} the venue collects the store before it serves —
  * unreachable data goes, root state stays, both handles close cleanly so a
- * plain relaunch opens the collected file — and a failed cycle boots on the
- * untouched original.
+ * plain relaunch opens the collected file. The failed-cycle path lives in
+ * {@link EtchGcOnStartFailureTest}, which must run alone.
  *
  * <p>Venue launches are the expensive part, so the whole flag-off / flag-on /
  * relaunch story runs as one scenario on one store; the edge cases use a bare
@@ -148,29 +147,6 @@ public class EtchGcOnStartTest {
 			assertSame(store, VenueServer.collectAtStartup(store, f, null),
 				"nothing to collect: the same handle boots");
 			assertFalse(store.isGCInProgress());
-		} finally {
-			store.close();
-		}
-	}
-
-	@Test
-	public void failedSweepBootsOnTheOriginalStore() throws Exception {
-		// A root whose children were never written: the sweep meets missing
-		// data, so the cycle must be cancelled and the original store kept.
-		File f = storeFile("etch-gc-broken");
-		AVector<ACell> tree = Vectors.of(big("left"), big("right"));
-		EtchStore broken = EtchStore.create(f);
-		broken.storeTopRef(tree.getRef(), Ref.STORED, null); // top entry only
-		broken.getEtch().setRootHash(tree.getHash());
-		broken.flush();
-		broken.close();
-
-		EtchStore store = EtchStore.create(f);
-		try {
-			assertSame(store, VenueServer.collectAtStartup(store, f, null),
-				"a failed cycle boots on the original store");
-			assertFalse(store.isGCInProgress(), "the failed cycle must be cancelled");
-			assertEquals(tree.getHash(), store.getRootHash(), "the original root is untouched");
 		} finally {
 			store.close();
 		}

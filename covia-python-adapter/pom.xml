@@ -52,7 +52,7 @@
 				<artifactId>maven-surefire-plugin</artifactId>
 				<version>3.5.6</version>
 				<configuration>
-					<argLine>--enable-native-access=ALL-UNNAMED</argLine>
+					<argLine>${covia.test.jvmflags} --enable-native-access=ALL-UNNAMED</argLine>
 				</configuration>
 			</plugin>
 			<plugin>
@@ -60,7 +60,7 @@
 				<artifactId>maven-failsafe-plugin</artifactId>
 				<version>3.5.6</version>
 				<configuration>
-					<argLine>--enable-native-access=ALL-UNNAMED</argLine>
+					<argLine>${covia.test.jvmflags} --enable-native-access=ALL-UNNAMED</argLine>
 					<systemPropertyVariables>
 						<covia.module.jar>${project.build.directory}/${project.build.finalName}-module.jar</covia.module.jar>
 						<covia.venue.jar>${project.parent.basedir}/venue/target/covia.jar</covia.venue.jar>

@@ -43,7 +43,10 @@ USER appuser
 EXPOSE 8080
 
 # Set JVM options optimized for Cloud Run
+# --sun-misc-unsafe-memory-access: JDK 24+ warns once when protobuf-java
+# touches Unsafe (JEP 471); that warning is for the library, not the operator.
 ENV JAVA_OPTS="-XX:+UseContainerSupport \
+                --sun-misc-unsafe-memory-access=allow \
                 -XX:MaxRAMPercentage=75.0 \
                 -XX:+UseG1GC \
                 -XX:+UseStringDeduplication \

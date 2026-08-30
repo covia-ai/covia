@@ -25,6 +25,14 @@
 			<artifactId>slf4j-api</artifactId>
 			<version>${slf4j.version}</version>
 		</dependency>
+		<!-- Tests bind SLF4J to logback (see logback-test.xml) so the build never
+		     prints SLF4J's no-provider warning. -->
+		<dependency>
+			<groupId>ch.qos.logback</groupId>
+			<artifactId>logback-classic</artifactId>
+			<version>${logback.version}</version>
+			<scope>test</scope>
+		</dependency>
 
 		<!-- Testing -->
 		<dependency>

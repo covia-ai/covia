@@ -25,6 +25,11 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `covia-sql` module jar no longer bundles the venue's BouncyCastle, Netty
   and ANTLR.
 - Module `.sha256` release assets name the bare jar (`sha256sum -c` works).
+- `covia-documents` bridges POI's Log4j logging to SLF4J: no more "Log4j API
+  could not find a logging provider" when the module loads.
+- A passing Maven build prints nothing: test JVMs bind SLF4J everywhere,
+  deliberate-failure tests silence the logger they provoke, and JDK 23+
+  allows protobuf's `sun.misc.Unsafe` use in test JVMs and the Docker image.
 
 ### Changed
 
