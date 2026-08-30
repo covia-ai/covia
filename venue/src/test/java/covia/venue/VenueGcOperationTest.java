@@ -140,6 +140,8 @@ public class VenueGcOperationTest {
 			assertEquals(Strings.create("before"), read(relaunched, "w/before-gc"));
 			assertEquals(Strings.create("after"), read(relaunched, "w/after-gc"));
 			EtchStore store = (EtchStore) relaunched.getStore();
+			assertTrue(store.getEtch().getDataLength() < before,
+				"the relaunched venue must run on the collected data");
 			assertFalse(store.isGCInProgress());
 		} finally {
 			relaunched.close();
