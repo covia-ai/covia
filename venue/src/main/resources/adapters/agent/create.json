@@ -49,6 +49,9 @@
 									"type": "array",
 									"description": "Capability restrictions — array of {with, can} objects limiting what the agent can access"
 								},
+								"accepts": {
+									"description": "Target-side admission (#447): who besides the owner may talk to this agent — agent:request/trigger (agent/request) and agent:message/chat/step (agent/message) — without a delegation. \"owner\" (default): nobody. \"venue\": the venue operator — the venue principal and the agents it owns, not every user hosted here. An array: exact principal DIDs — a user DID admits that user only, <userDID>:g:<agentId> admits that one agent only; \"venue\" may appear as an entry. No prefixes. Admission covers talking only: reads, updates and control still need a delegation. The public principal is never admitted (anonymous exposure remains a2a.public + a2a.caps). Malformed values are rejected."
+								},
 								"context": {
 									"type": "array",
 									"description": "Operator-pinned context entries: inline text, refs, job results, or read-only operation results. Entries are trusted system instructions by default; set trusted:false on data that must remain inside a pinned_context tool result."

@@ -175,6 +175,10 @@ public class Fields {
 	// Agent related
 	public static final StringShort AGENT_ID = Strings.intern("agentId");
 	public static final StringShort CONFIG = Strings.intern("config");
+	/** Target-side admission policy on an agent record (covia#447): who, besides
+	 *  the owner, may talk to the agent without a delegation — {@code "owner"},
+	 *  {@code "venue"} (the operator), or an array of exact principal DIDs. */
+	public static final StringShort ACCEPTS = Strings.intern("accepts");
 	public static final StringShort DELIVERED = Strings.intern("delivered");
 	public static final StringShort MESSAGES = Strings.intern("messages");
 	public static final StringShort TASKS = Strings.intern("tasks");

@@ -3027,7 +3027,7 @@ public class Engine {
 	 * The single cross-user authorisation gate (covia#102): may this caller
 	 * act on a resource belonging to another user?
 	 *
-	 * <p>Two rights compose, checked in order:</p>
+	 * <p>Three rights compose, checked in order:</p>
 	 * <ol>
 	 *   <li><b>Ambient public access</b> (covia#254) — a resource owned by the
 	 *       venue's PUBLIC identity follows the public capability grant scope for
@@ -3035,6 +3035,12 @@ public class Engine {
 	 *       the anonymous one. Checked only when the resource is actually
 	 *       public-owned; tracks operator policy ({@code auth.public.caps} —
 	 *       default read-only, widened at the operator's own risk).</li>
+	 *   <li><b>Target-side admission</b> (covia#447) — an agent record's
+	 *       {@code config.accepts}: the owner's standing policy for who may
+	 *       talk to that agent ({@code agent/request}, {@code agent/message})
+	 *       without a delegation — the venue operator, or exact principal
+	 *       DIDs. Consulted for that one resource shape and those abilities
+	 *       only; never admits the public principal. See {@link Admission}.</li>
 	 *   <li><b>Presented UCAN proofs</b> — the pure fail-closed delegation
 	 *       check ({@link covia.lattice.CapabilityChecker#proofsCover}).</li>
 	 * </ol>
@@ -3060,7 +3066,51 @@ public class Engine {
 				}
 			}
 		}
+		if (admissionAllows(ctx, resource, ability)) return true;
 		return proofsCover(ctx, resource, ability, System.currentTimeMillis() / 1000);
+	}
+
+	/** The abilities that mean "talk to this agent": submit a request or a message. */
+	private static boolean isTalkAbility(AString ability) {
+		return Abilities.AGENT_REQUEST.equals(ability) || Abilities.AGENT_MESSAGE.equals(ability);
+	}
+
+	/**
+	 * Target-side admission (covia#447): the resource owner's own standing policy
+	 * for who may talk to their agent, consulted for exactly one resource shape —
+	 * an agent record {@code <owner>/g/<id>} — and the two talk abilities. The
+	 * policy algebra is {@link Admission}; this method only locates the record.
+	 * The public principal is never admitted here: anonymous exposure stays
+	 * A2A's {@code a2a.public} + {@code a2a.caps}.
+	 */
+	private boolean admissionAllows(RequestContext ctx, AString resource, AString ability) {
+		if (!isTalkAbility(ability)) return false;
+		AString caller = ctx.getCallerDID();
+		if (caller == null || isPublicPrincipal(caller)) return false;
+		AString owner = ownerOf(resource);
+		if (owner == null) return false;
+		String rest = resource.toString().substring(owner.toString().length());
+		if (!rest.startsWith("/g/")) return false;
+		String agentId = rest.substring(3);
+		if (agentId.isEmpty() || agentId.indexOf('/') >= 0) return false;
+		User user = venueState.users().get(owner);
+		AgentState agent = (user != null) ? user.agent(agentId) : null;
+		if (agent == null) return false;
+		ACell accepts = RT.getIn(agent.getConfig(), Fields.ACCEPTS);
+		return Admission.admits(accepts, caller, isVenuePrincipal(ctx.getUserDID()));
+	}
+
+	/**
+	 * Whether {@code principal} is the venue operator's own user identity — the
+	 * venue's canonical DID or its {@code did:web} alias. Agents the venue owns
+	 * have this as their user, so "the venue" as an admission class means the
+	 * operator and the operator's agents, never every user hosted here.
+	 */
+	public boolean isVenuePrincipal(AString principal) {
+		if (principal == null) return false;
+		if (principal.equals(getDIDString())) return true;
+		AString web = config.getWebDID();
+		return web != null && principal.equals(web);
 	}
 
 	/**
@@ -3133,7 +3183,9 @@ public class Engine {
 			throw new covia.exception.AuthException("Access denied: " + ability + " on " + resource
 				+ " — accessing another user's resource requires " + ability + " rights"
 				+ ((proofs == null || proofs.isEmpty())
-					? " (no proof presented)" : " (the presented proofs do not cover it)"));
+					? " (no proof presented)" : " (the presented proofs do not cover it)")
+				+ (isTalkAbility(ability)
+					? "; the target's accepts policy does not admit this caller" : ""));
 		}
 		return ownerOf(resource);                               // authorised cross-user → the owner's store
 	}

@@ -1035,14 +1035,35 @@ public final class ContextAssembler {
 			}
 			case SELF:
 				return provenance(caller, "self", "authenticated");
-			default:
-				return provenance(caller, "other-principal", "authenticated");
+			default: {
+				// A foreign principal: name its user, its agent id if it is an agent,
+				// and its venue when that is known — venue-verified facts, so the
+				// target can judge who is asking without trusting the request text
+				// (#447). The venue operator's own agents are named as such.
+				AString user = covia.grid.Principals.userOf(caller);
+				AString agent = covia.grid.Principals.agentIdOf(caller);
+				if (engine != null && engine.isVenuePrincipal(user)) {
+					return provenance(caller, agent != null ? "venue-agent:" + agent : "venue",
+						null, "authenticated");
+				}
+				boolean local = engine != null && engine.getVenueState().users().get(user) != null;
+				String detail = "user=" + user + (local ? "; venue=" + venue : "");
+				return provenance(caller, agent != null ? "other-user-agent:" + agent : "other-user",
+					detail, "authenticated");
+			}
 		}
 	}
 
 	private static String provenance(AString caller, String relationship, String authentication) {
+		return provenance(caller, relationship, null, authentication);
+	}
+
+	private static String provenance(AString caller, String relationship, String detail,
+			String authentication) {
 		return "Turn provenance: submitter=" + (caller != null ? caller : "unknown")
-			+ "; relationship=" + relationship + "; authentication=" + authentication
+			+ "; relationship=" + relationship
+			+ (detail != null ? "; " + detail : "")
+			+ "; authentication=" + authentication
 			+ ". Venue-generated metadata only; not an instruction.";
 	}
 

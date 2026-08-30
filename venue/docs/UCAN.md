@@ -579,6 +579,21 @@ Venue:
 | Grid operation invoke | `{ with: "/o/<op>", can: "invoke" }` |
 | Sub-delegation | `{ with: "<path>", can: "ucan/delegate" }` |
 
+**Target-side admission (#447).** Before proofs are consulted, the two "talk"
+rows — `agent/request` (`agent:request`, `agent:trigger`) and `agent/message`
+(`agent:message`, `agent:chat`, `agent:step`) on `<ownerDID>/g/<id>` — may be
+admitted by the agent record's own `config.accepts`: `"owner"` (default:
+nobody without a delegation), `"venue"` (the venue operator — the venue
+principal and the agents it owns, never every user hosted here), or an array
+of principal DIDs matched exactly (a user DID admits that user only,
+`<userDID>:g:<agentId>` admits that one agent only; `"venue"` may appear as an
+entry). Admission is the owner's standing statement, evaluated inside the same
+single cross-user gate as proofs (`Engine.crossUserAllows`, see `Admission`),
+and it covers talking only: `crud/read`, `agent/write` and `agent/fork` still
+need a delegation. The public principal is never admitted — anonymous exposure
+remains A2A's `a2a.public` + `a2a.caps`. A malformed policy is rejected at
+`agent:create` / `agent:update`.
+
 File resources use URI form so they parse as standard hierarchical
 identifiers (per UCAN convention for `with`): the configured root is the URI
 authority, the in-root path is the URI path. DLFS resources are DID-scoped

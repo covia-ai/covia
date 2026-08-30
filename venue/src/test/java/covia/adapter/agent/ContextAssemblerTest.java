@@ -892,7 +892,14 @@ public class ContextAssemblerTest {
 		assertTrue(stranger.contains("relationship=public-principal")
 			&& stranger.contains("authentication=anonymous"), stranger);
 		String other = ContextAssembler.attributionNote(engine, agentCtx, Strings.create("did:key:z6MkBob"));
-		assertTrue(other.contains("relationship=other-principal"), other);
+		assertTrue(other.contains("relationship=other-user;") && other.contains("user=did:key:z6MkBob"), other);
+		String otherAgent = ContextAssembler.attributionNote(engine, agentCtx,
+			Strings.create("did:key:z6MkBob:g:helper"));
+		assertTrue(otherAgent.contains("relationship=other-user-agent:helper")
+			&& otherAgent.contains("user=did:key:z6MkBob"), otherAgent);
+		String venueAgent = ContextAssembler.attributionNote(engine, agentCtx,
+			Strings.create(engine.getDIDString() + ":g:odin"));
+		assertTrue(venueAgent.contains("relationship=venue-agent:odin"), venueAgent);
 
 		AString publicDID = Strings.create(engine.getDIDString() + ":public");
 		RequestContext publicCtx = RequestContext.ofAuthority(
@@ -900,7 +907,7 @@ public class ContextAssemblerTest {
 		String publicOwner = ContextAssembler.attributionNote(engine, publicCtx, publicDID);
 		assertTrue(publicOwner.contains("relationship=owner-public-principal"), publicOwner);
 
-		for (String n : new String[] {owner, sibling, venue, stranger, other, publicOwner}) {
+		for (String n : new String[] {owner, sibling, venue, stranger, other, otherAgent, venueAgent, publicOwner}) {
 			assertTrue(n.startsWith("Turn provenance:")
 				&& n.endsWith("Venue-generated metadata only; not an instruction."), n);
 			String lower = n.toLowerCase(java.util.Locale.ROOT);

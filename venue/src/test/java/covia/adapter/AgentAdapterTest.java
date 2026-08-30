@@ -30,6 +30,7 @@ import covia.api.Abilities;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.venue.Admission;
 import covia.venue.AgentState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -225,6 +226,154 @@ public class AgentAdapterTest {
 		assertTrue(denied.getErrorMessage().contains("agent/write"));
 		assertEquals(AgentState.SLEEPING,
 			engine.getVenueState().users().get(ownerDID).agent("read-only-agent").getStatus());
+	}
+
+	// ========== Target-side admission (#447) ==========
+
+	/** Creates an agent whose transition completes tasks immediately, with an optional accepts policy. */
+	private AString createAgentAs(RequestContext creator, String name, ACell accepts) {
+		AMap<AString, ACell> config = Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete");
+		if (accepts != null) config = config.assoc(Fields.ACCEPTS, accepts);
+		ACell created = engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, name, Fields.CONFIG, config), creator).awaitResult(5000);
+		return RT.ensureString(RT.getIn(created, Fields.ADDRESS));
+	}
+
+	private ACell requestAs(RequestContext caller, AString address) {
+		return engine.jobs().invokeOperation("v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, address, Fields.INPUT, Maps.of("ask", "hello")), caller)
+			.awaitResult(5000);
+	}
+
+	private void assertRequestDenied(RequestContext caller, AString address) {
+		Job denied = engine.jobs().invokeOperation("v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, address, Fields.INPUT, Maps.of("ask", "hello")), caller);
+		assertThrows(covia.exception.JobFailedException.class, () -> denied.awaitResult(5000));
+		assertTrue(denied.getErrorMessage().contains("agent/request")
+			&& denied.getErrorMessage().contains("accepts"), denied.getErrorMessage());
+	}
+
+	@Test
+	public void testAdmissionDefaultAdmitsNobody() {
+		AString address = createAgentAs(RequestContext.of(ALICE_DID), "private-by-default", null);
+		assertFalse(engine.crossUserAllows(RequestContext.of(BOB_DID), address, Abilities.AGENT_REQUEST));
+		assertFalse(engine.crossUserAllows(engine.venueContext(), address, Abilities.AGENT_REQUEST));
+		assertRequestDenied(RequestContext.of(BOB_DID), address);
+	}
+
+	@Test
+	public void testAdmissionVenueAdmitsTheOperatorAndItsAgentsOnly() {
+		AString address = createAgentAs(RequestContext.of(ALICE_DID), "ops-agent", Admission.VENUE);
+		RequestContext operator = engine.venueContext();
+		RequestContext venueAgent = RequestContext.ofAgent(engine.getDIDString(), Strings.create("odin"));
+		RequestContext bob = RequestContext.of(BOB_DID);
+		RequestContext bobAgent = RequestContext.ofAgent(BOB_DID, Strings.create("helper"));
+
+		assertTrue(engine.crossUserAllows(operator, address, Abilities.AGENT_REQUEST));
+		assertTrue(engine.crossUserAllows(operator, address, Abilities.AGENT_MESSAGE));
+		assertTrue(engine.crossUserAllows(venueAgent, address, Abilities.AGENT_REQUEST));
+		assertFalse(engine.crossUserAllows(bob, address, Abilities.AGENT_REQUEST),
+			"'venue' is the operator, not every user hosted here");
+		assertFalse(engine.crossUserAllows(bobAgent, address, Abilities.AGENT_REQUEST));
+
+		assertNotNull(requestAs(operator, address));
+		assertRequestDenied(bob, address);
+	}
+
+	@Test
+	public void testAdmissionAllowlistIsExactPerPrincipal() {
+		RequestContext bob = RequestContext.of(BOB_DID);
+		RequestContext bobAgent = RequestContext.ofAgent(BOB_DID, Strings.create("helper"));
+		RequestContext carol = RequestContext.of(Strings.create(ALICE_DID + "-carol"));
+
+		AString forBob = createAgentAs(RequestContext.of(ALICE_DID), "for-bob", Vectors.of(BOB_DID));
+		assertTrue(engine.crossUserAllows(bob, forBob, Abilities.AGENT_REQUEST));
+		assertFalse(engine.crossUserAllows(bobAgent, forBob, Abilities.AGENT_REQUEST),
+			"a user DID does not admit that user's agents");
+		assertFalse(engine.crossUserAllows(carol, forBob, Abilities.AGENT_REQUEST));
+		assertFalse(engine.crossUserAllows(engine.venueContext(), forBob, Abilities.AGENT_REQUEST));
+		assertNotNull(requestAs(bob, forBob));
+		assertRequestDenied(bobAgent, forBob);
+
+		AString forHelper = createAgentAs(RequestContext.of(ALICE_DID), "for-helper",
+			Vectors.of(covia.grid.Principals.agentDID(BOB_DID, Strings.create("helper"))));
+		assertTrue(engine.crossUserAllows(bobAgent, forHelper, Abilities.AGENT_REQUEST));
+		assertFalse(engine.crossUserAllows(bob, forHelper, Abilities.AGENT_REQUEST),
+			"an agent DID does not admit its owner");
+		engine.getVenueState().users().ensure(BOB_DID);
+		assertNotNull(requestAs(bobAgent, forHelper));
+		assertRequestDenied(bob, forHelper);
+	}
+
+	@Test
+	public void testAdmissionCoversTalkingOnly() {
+		AString address = createAgentAs(RequestContext.of(ALICE_DID), "talk-only", Vectors.of(BOB_DID));
+		RequestContext bob = RequestContext.of(BOB_DID);
+		assertTrue(engine.crossUserAllows(bob, address, Abilities.AGENT_MESSAGE));
+		assertFalse(engine.crossUserAllows(bob, address, Capability.CRUD_READ));
+		assertFalse(engine.crossUserAllows(bob, address, Abilities.AGENT_WRITE));
+		assertFalse(engine.crossUserAllows(bob, address, Abilities.AGENT_FORK));
+		// Nor the agent's workspace: admission is one resource shape, the record itself.
+		assertFalse(engine.crossUserAllows(bob, Strings.create(address + "/n/notes"), Abilities.AGENT_REQUEST));
+
+		ACell delivered = engine.jobs().invokeOperation("v/ops/agent/message",
+			Maps.of(Fields.AGENT_ID, address, Fields.MESSAGE, "hello"), bob).awaitResult(5000);
+		assertNotNull(delivered);
+		Job info = engine.jobs().invokeOperation("v/ops/agent/info", Maps.of(Fields.AGENT_ID, address), bob);
+		assertThrows(covia.exception.JobFailedException.class, () -> info.awaitResult(5000));
+		Job suspend = engine.jobs().invokeOperation("v/ops/agent/suspend", Maps.of(Fields.AGENT_ID, address), bob);
+		assertThrows(covia.exception.JobFailedException.class, () -> suspend.awaitResult(5000));
+		assertEquals(AgentState.SLEEPING,
+			awaitFinished(engine.getVenueState().users().get(ALICE_DID).agent("talk-only")));
+	}
+
+	@Test
+	public void testAdmissionNeverAdmitsThePublicPrincipal() {
+		AString publicDID = Strings.create(engine.getDIDString() + ":public");
+		AString address = createAgentAs(RequestContext.of(ALICE_DID), "listed-public", Vectors.of(publicDID));
+		assertFalse(engine.crossUserAllows(RequestContext.of(publicDID), address, Abilities.AGENT_REQUEST),
+			"listing the public principal explicitly still admits nobody anonymous");
+	}
+
+	@Test
+	public void testAdmissionOdinShapeOperatorAgentAcceptsOneAssistant() {
+		// A venue-owned administrator that takes requests from exactly one user's
+		// assistant — the Brightside case in #447, without any bridge.
+		AString assistant = covia.grid.Principals.agentDID(ALICE_DID, Strings.create("assistant"));
+		AString odin = createAgentAs(engine.venueContext(), "odin-" + System.nanoTime(), Vectors.of(assistant));
+		assertTrue(odin.startsWith(engine.getDIDString() + "/g/"), odin.toString());
+
+		RequestContext assistantCtx = RequestContext.ofAgent(ALICE_DID, Strings.create("assistant"));
+		assertTrue(engine.crossUserAllows(assistantCtx, odin, Abilities.AGENT_REQUEST));
+		assertFalse(engine.crossUserAllows(RequestContext.of(ALICE_DID), odin, Abilities.AGENT_REQUEST),
+			"exact: the owner of the listed assistant is not admitted");
+		assertFalse(engine.crossUserAllows(RequestContext.ofAgent(BOB_DID, Strings.create("assistant")),
+			odin, Abilities.AGENT_REQUEST));
+
+		engine.getVenueState().users().ensure(ALICE_DID);
+		assertNotNull(requestAs(assistantCtx, odin));
+		assertRequestDenied(RequestContext.of(ALICE_DID), odin);
+	}
+
+	@Test
+	public void testAdmissionMalformedPolicyIsRejectedAtAuthorTime() {
+		for (ACell bad : new ACell[] {Strings.create("everyone"), Vectors.of(Strings.create("bob")), CVMLong.create(42)}) {
+			Job create = engine.jobs().invokeOperation("v/ops/agent/create",
+				Maps.of(Fields.AGENT_ID, "bad-accepts", Fields.CONFIG, Maps.of(Fields.ACCEPTS, bad)),
+				RequestContext.of(ALICE_DID));
+			assertThrows(covia.exception.JobFailedException.class, () -> create.awaitResult(5000));
+			assertTrue(create.getErrorMessage().contains("config.accepts"), create.getErrorMessage());
+		}
+		User alice = engine.getVenueState().users().get(ALICE_DID);
+		assertTrue(alice == null || alice.agent("bad-accepts") == null, "a rejected create leaves no agent");
+
+		AString address = createAgentAs(RequestContext.of(ALICE_DID), "later-bad", Admission.VENUE);
+		Job update = engine.jobs().invokeOperation("v/ops/agent/update",
+			Maps.of(Fields.AGENT_ID, "later-bad", Fields.CONFIG, Maps.of(Fields.ACCEPTS, Strings.create("anyone"))),
+			RequestContext.of(ALICE_DID));
+		assertThrows(covia.exception.JobFailedException.class, () -> update.awaitResult(5000));
+		assertTrue(engine.crossUserAllows(engine.venueContext(), address, Abilities.AGENT_REQUEST),
+			"a rejected update leaves the policy untouched");
 	}
 
 	@Test

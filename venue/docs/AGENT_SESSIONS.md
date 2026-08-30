@@ -261,6 +261,8 @@ When one agent messages another as part of a shared pipeline run, the orchestrat
 
 When agents correspond outside an orchestration (Bob asks Carol a question on his own initiative), each participant's `agent_message` / `agent_request` still follows the mint-on-missing rule: the first outbound call mints a session, subsequent calls echo the id. The two agents share one session because they share the id, not because of any special "agent-to-agent" machinery.
 
+Across users, the target decides. An agent may talk to another user's agent when the target's owner has admitted it — `config.accepts` on the target record: `"venue"` for the venue operator and its agents, or an exact list of principal DIDs such as `<userDID>:g:<agentId>` — or when the caller presents a delegation for `agent/request` / `agent/message` on `<ownerDID>/g/<id>` (UCAN.md §5.3, #447). Either way the request stays the caller's own Job and the target agent runs as itself; the target sees who asked as venue-verified turn provenance (`relationship=other-user-agent:<id>; user=<did>; venue=<did>`), never as a claim inside the message.
+
 Shared pipeline sessions already have >2 parties in practice; formalising multi-party semantics is a future question (§9.3).
 
 ---

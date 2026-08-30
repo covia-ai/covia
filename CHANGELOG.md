@@ -8,6 +8,13 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- Agent admission policy `config.accepts` (#447): an owner admits the venue
+  operator or an exact list of principal DIDs to talk to an agent without a
+  delegation; talking only, public principal never.
+- Turn provenance names a foreign caller's user, agent id and venue.
+
 ### Fixed
 
 - Module slim jars on Maven Central carry their real dependencies (no

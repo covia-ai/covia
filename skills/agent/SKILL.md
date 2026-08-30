@@ -26,6 +26,8 @@ agent that cannot do the intended work:
 
 5. **Operation references are lattice paths, not adapter shorthand** — `config.operation`, `llmOperation`, and operation entries in `tools` must be resolvable paths such as `v/ops/covia/write`, never `covia:write`. Create returns warnings for unavailable configured tools. Harness tools (`subgoal`, `complete`, `fail`, `compact`, `context_load`, `context_unload`, `more_tools`, and `skill_load` when `config.skills` or `config.skillsets` is non-empty) are bare names. A custom read/write agent must declare those operations or start from `worker`.
 
+6. **Another user's agent needs admission or a delegation (#447)** — `agent_request` / `agent_message` on `<ownerDID>/g/<id>` is refused unless the target's `config.accepts` admits the caller (`"venue"` = the venue operator and its agents only; or an exact list of principal DIDs — `<userDID>:g:<agentId>` for one agent, a user DID for that user only, no prefixes) or the caller presents a UCAN for `agent/request`. Admission covers talking only; reads, updates and control still need a delegation. A malformed `accepts` is rejected at create/update.
+
 ## Commands
 
 ### `create <name>` — Create an LLM-backed agent

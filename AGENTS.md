@@ -196,7 +196,7 @@ Operation metadata examples and rules are in `venue/docs/ADAPTERS.md` and
 
 ### In Progress
 
-- **Capability enforcement** — largely landed: point-of-action `requireCapability` (adapter-pinned) + the single cross-user gate `Engine.crossUserAllows` (public-user parity #254 + UCAN proofs); granting is production-gated at surfaces (`ucan:issue`, HITL) per COG-17. See `venue/docs/UCAN.md`. Remaining: custodial attestation trust policy (C3b), resource-precise pins for agent-state mutations.
+- **Capability enforcement** — largely landed: point-of-action `requireCapability` (adapter-pinned) + the single cross-user gate `Engine.crossUserAllows` (public-user parity #254 + agent admission `config.accepts` #447 + UCAN proofs); granting is production-gated at surfaces (`ucan:issue`, HITL) per COG-17. See `venue/docs/UCAN.md`. Remaining: custodial attestation trust policy (C3b), resource-precise pins for agent-state mutations.
 
 ---
 

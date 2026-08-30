@@ -47,6 +47,7 @@ import covia.adapter.agent.Loads;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.venue.Admission;
 import covia.venue.AgentState;
 import covia.venue.AgentEvents;
 import covia.api.Abilities;
@@ -4421,6 +4422,12 @@ public class AgentAdapter extends AAdapter {
 		requireConfigType(config, K_API_KEY, AString.class, "a string secret reference");
 		requireConfigType(config, K_DEFAULT_TOOLS, CVMBool.class, "a boolean");
 		requireConfigType(config, K_CAPS, AVector.class, "an array of capability objects");
+		// Admission is security configuration: a policy that would fail closed at
+		// runtime must fail loudly here instead (#447).
+		String acceptsProblem = Admission.problem(config.get(Fields.ACCEPTS));
+		if (acceptsProblem != null) {
+			throw new IllegalArgumentException("config.accepts " + acceptsProblem);
+		}
 		requireConfigType(config, K_CONTEXT, AVector.class, "an array of context entries");
 		requireConfigType(config, Fields.LOADS, AMap.class, "a map of path to load options");
 		requireConfigType(config, K_OUTPUTS, AMap.class, "a map of output declarations");
