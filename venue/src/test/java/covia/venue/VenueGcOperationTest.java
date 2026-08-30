@@ -112,7 +112,12 @@ public class VenueGcOperationTest {
 			assertTrue(noRestart.contains("restart"), noRestart);
 			assertEquals(CVMBool.FALSE, RT.getIn(gc(engine, operator, STATUS), "completed"));
 
-			// The collection itself.
+			// The collection itself. Persist the live root first: the venue writes
+			// lazily on its 100 ms sweep, so without this the sizes below would
+			// compare a file that does not yet hold the ~1.7 MB operation catalog
+			// against one that does (a fast sequential run collected before the
+			// first sweep and the relaunched store came out bigger, not smaller).
+			engine.flush();
 			ACell result = gc(engine, operator, Maps.empty());
 			before = asLong(result, "bytesBefore");
 			long after = asLong(result, "bytesAfter");
