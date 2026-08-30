@@ -232,7 +232,7 @@ Adapter-owned state uses `AdapterWorkspace`; see
 ## Configuration
 
 Full operator reference: **`docs/CONFIG.md`** — persistence & identity
-(seed/keystore/venue.key), network binding, rate limiting, public access
+(seed/keystore/venue.key), startup store GC (`etch.gc.onStart`), network binding, rate limiting, public access
 (`auth.public.caps`), user admission (`users.autoCreate`), per-adapter config,
 private jobs, DLFS WebDAV, MCP tool
 bridging, LLM providers, venue modules, A2A, secrets bootstrap.

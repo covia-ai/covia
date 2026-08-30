@@ -34,6 +34,7 @@ import convex.core.data.Blob;
 import convex.core.lang.RT;
 import convex.core.util.FileUtils;
 import convex.core.store.AStore;
+import convex.core.data.Hash;
 import convex.etch.EtchConfig;
 import convex.etch.EtchStore;
 import convex.core.util.Utils;
@@ -223,6 +224,9 @@ public class VenueServer {
 	 */
 	private static AStore createStore(Config config) throws IOException {
 		EtchConfig etchConfig = config.getEtchConfig();
+		if (config.isEtchGcOnStart() && !config.isPersistentFileStore()) {
+			log.info("etch.gc.onStart has no effect: store '{}' is not a persistent file", config.getStore());
+		}
 		if (etchConfig != null && etchConfig.getCipherMode() != EtchConfig.CipherMode.NONE
 				&& "file".equals(String.valueOf(config.getStorageType()))) {
 			log.warn("Encrypted Etch store with 'storage.content: file' — asset content bytes "
@@ -254,7 +258,77 @@ public class VenueServer {
 		f.getParentFile().mkdirs();
 		log.info("Using persistent Etch store: {}{}", f,
 			(etchConfig != null) ? " (configured Etch policy)" : "");
-		return (etchConfig != null) ? EtchStore.create(f, etchConfig) : EtchStore.create(f);
+		EtchStore opened = (etchConfig != null) ? EtchStore.create(f, etchConfig) : EtchStore.create(f);
+		if (config.isEtchGcOnStart()) {
+			return collectAtStartup(opened, f, etchConfig);
+		}
+		return opened;
+	}
+
+	/**
+	 * Garbage-collects a freshly opened persistent store before anything holds
+	 * a reference into it (covia#451): the one point where collection is
+	 * trivially safe — no {@code RefSoft} is bound to the old file yet and no
+	 * write is in flight — and where the reclaimed space comes back at once.
+	 *
+	 * <p>Drives Convex's own cycle ({@code startGC → transferGC → verifyGC →
+	 * completeGC}; {@code convex-core/docs/ETCH_GC.md}), closes <em>both</em>
+	 * handles — Etch v3 records clean-close, and an unclosed successor would be
+	 * refused on the next open — and reopens through the normal path, whose
+	 * recovery installs the collected file under the original name or, where
+	 * mappings still pin files (Windows), opens it directly and finishes the
+	 * rename on a later start.</p>
+	 *
+	 * <p>Collection is maintenance and never stops a venue from starting: a
+	 * failure before cutover cancels the cycle and boots on the untouched
+	 * original. A failure after cutover surfaces — the collected file is
+	 * durable and adopted on the next start.</p>
+	 *
+	 * <p>Embedders that adopt a caller-opened store may run this on it before
+	 * {@link #launch(AMap, AStore)} — the same "nothing holds a reference yet"
+	 * condition must hold.</p>
+	 *
+	 * @return the store to run on: the reopened collected store, or the
+	 *         original when there was nothing to collect or the cycle failed
+	 */
+	public static EtchStore collectAtStartup(EtchStore store, File file, EtchConfig etchConfig) throws IOException {
+		if (store.getRootRef() == null) {
+			log.info("Etch GC at startup skipped: {} has no root data yet", file);
+			return store;
+		}
+		long started = System.currentTimeMillis();
+		long before = store.getEtch().getDataLength();
+		try {
+			store.startGC();
+			store.transferGC();
+			List<Hash> missing = store.verifyGC();
+			if (!missing.isEmpty()) {
+				throw new IOException(missing.size()
+					+ " value(s) reachable from the root are missing from the collected file");
+			}
+		} catch (IOException | RuntimeException e) {
+			// The original file is untouched: roll the cycle back and boot on it.
+			log.error("Etch GC at startup failed for {}; continuing on the uncollected store", file, e);
+			if (store.isGCInProgress()) {
+				try {
+					store.cancelGC();
+				} catch (IOException | RuntimeException cancelFailure) {
+					log.warn("Etch GC cancel failed for {} (recovery rolls an abandoned cycle"
+						+ " forward on a later start)", file, cancelFailure);
+				}
+			}
+			return store;
+		}
+		EtchStore collected = store.completeGC();
+		long after = collected.getEtch().getDataLength();
+		store.close();     // deletes the superseded original, or defers while pinned
+		collected.close(); // clean-close the successor: a dirty v3 file is refused on open
+		EtchStore reopened = (etchConfig != null) ? EtchStore.create(file, etchConfig) : EtchStore.create(file);
+		long reclaimed = Math.max(0, before - after);
+		log.info("Etch GC at startup: {} -> {} bytes ({}% reclaimed) in {} ms; store file {}",
+			before, after, (before > 0) ? (100 * reclaimed / before) : 0,
+			System.currentTimeMillis() - started, reopened.getFile());
+		return reopened;
 	}
 
 	/**

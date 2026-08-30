@@ -14,6 +14,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   operator or an exact list of principal DIDs to talk to an agent without a
   delegation; talking only, public principal never.
 - Turn provenance names a foreign caller's user, agent id and venue.
+- `etch.gc.onStart` garbage-collects the Etch store at startup (#451).
 
 ### Fixed
 

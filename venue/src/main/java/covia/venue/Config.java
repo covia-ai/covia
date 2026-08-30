@@ -1195,6 +1195,12 @@ public class Config {
 		return config.get(STORE) != null;
 	}
 
+	/** Whether {@code store} names a persistent file rather than {@code temp} or {@code memory}. */
+	public boolean isPersistentFileStore() {
+		String store = getStore();
+		return !"temp".equals(store) && !"memory".equals(store);
+	}
+
 	/**
 	 * Config key for the optional Etch store creation policy (Convex 0.8.11+):
 	 * a map passed through to {@link convex.etch.EtchConfig#fromMap} —
@@ -1209,6 +1215,9 @@ public class Config {
 	 */
 	public static final AString ETCH = Strings.intern("etch");
 	private static final AString ETCH_KEY = Strings.intern("key");
+	/** Covia-side {@code etch.gc} block: store garbage-collection policy (covia#451). */
+	private static final AString ETCH_GC = Strings.intern("gc");
+	private static final AString ETCH_GC_ON_START = Strings.intern("onStart");
 
 	/**
 	 * Compiles the optional Etch creation policy, resolving the {@code key}
@@ -1267,7 +1276,7 @@ public class Config {
 			throw malformed("etch.key", "both a config key source and an embedder "
 				+ "key function were supplied — use exactly one");
 		}
-		AMap<AString, ACell> convexMap = etch.dissoc(ETCH_KEY);
+		AMap<AString, ACell> convexMap = etch.dissoc(ETCH_KEY).dissoc(ETCH_GC);
 		java.util.function.Function<convex.core.data.AccountKey, byte[]> keyFn = keyFunction;
 		if (keyFunction == null && keySource != null) {
 			byte[] key = resolveEtchKey(keySource);
@@ -1322,15 +1331,50 @@ public class Config {
 		if (raw == null) return;
 		AMap<AString, ACell> etch = RT.castMap(raw);
 		if (etch == null) throw malformed("etch", "must be an object");
+		validateEtchGc(etch.get(ETCH_GC));
 		if (etch.get(ETCH_KEY) != null) {
 			getEtchConfig();
 			return;
 		}
 		try {
-			convex.etch.EtchConfig.fromMap(etch.dissoc(ETCH_KEY), ignored -> null);
+			convex.etch.EtchConfig.fromMap(etch.dissoc(ETCH_KEY).dissoc(ETCH_GC), ignored -> null);
 		} catch (IllegalArgumentException e) {
 			throw malformed("etch", e.getMessage());
 		}
+	}
+
+	/**
+	 * Shape-validates the Covia-side {@code etch.gc} block: an object whose only
+	 * field is the boolean {@code onStart}. Fail-closed like the rest of the etch
+	 * policy — a misspelt or mistyped field is a startup error, never a silently
+	 * skipped collection.
+	 */
+	private void validateEtchGc(ACell raw) {
+		if (raw == null) return;
+		AMap<AString, ACell> gc = RT.castMap(raw);
+		if (gc == null) throw malformed("etch.gc", "must be an object");
+		for (AString key : gc.keySet()) {
+			if (!ETCH_GC_ON_START.equals(key)) {
+				throw malformed("etch.gc", "unknown field '" + key + "' (known: onStart)");
+			}
+		}
+		ACell onStart = gc.get(ETCH_GC_ON_START);
+		if (onStart != null && !(onStart instanceof CVMBool)) {
+			throw malformed("etch.gc.onStart", "must be a boolean");
+		}
+	}
+
+	/**
+	 * Whether the venue garbage-collects its persistent Etch store at startup,
+	 * before anything holds a reference into it ({@code etch.gc.onStart},
+	 * covia#451). Default false; has no effect on {@code temp}/{@code memory}
+	 * stores.
+	 */
+	public boolean isEtchGcOnStart() {
+		AMap<AString, ACell> etch = RT.castMap(config.get(ETCH));
+		if (etch == null) return false;
+		AMap<AString, ACell> gc = RT.castMap(etch.get(ETCH_GC));
+		return gc != null && CVMBool.TRUE.equals(gc.get(ETCH_GC_ON_START));
 	}
 
 	/** Resolves the {@code etch.key} source to the raw 32-byte encryption key. */

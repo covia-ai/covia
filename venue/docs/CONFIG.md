@@ -76,6 +76,38 @@ Venue state (lattice, agents, secrets, DLFS) is persisted via Etch store:
 - `store`: `"temp"` (default, deleted on exit), `"memory"`, or file path
 - `seed`: Ed25519 hex seed for stable venue identity. If omitted with a persistent store, auto-generated and saved to `venue.key` alongside the store file. On POSIX filesystems this raw seed is created with owner-only permissions (`0600`), and existing key-file permissions are repaired on each launch. On non-POSIX filesystems it inherits the platform ACL policy.
 
+### Garbage collection at startup (`etch.gc.onStart`)
+
+Etch is append-only: superseded lattice roots, timeline entries and job
+records stay in the file forever, so a long-running venue's store only grows.
+Setting `etch.gc.onStart` collects the store **before the venue serves** —
+the one moment nothing holds a reference into it, so collection is trivially
+safe and the reclaimed space comes back at once:
+
+```json
+{
+  "store": "/data/venue.etch",
+  "etch": { "gc": { "onStart": true } }
+}
+```
+
+The venue drives Convex's own cycle (`startGC → transferGC → verifyGC →
+completeGC`; see `convex-core/docs/ETCH_GC.md`): everything reachable from the
+root is copied into `<store>~`, both files are cleanly closed, and the
+collected file is installed under the original name (where memory mappings
+still pin the old file — Windows — the venue opens the collected file directly
+and the rename completes on a later start). Before and after sizes are logged
+at INFO. The cycle needs free disk of roughly the current file size while it
+runs.
+
+Collection is maintenance and never stops a venue from starting: a failure
+before cutover cancels the cycle and boots on the untouched original (logged
+at ERROR). `temp`/`memory` stores and a store with no root yet are skipped.
+The flag pairs with `venue:restart` — restart with it set and the successor
+process collects on its way up. Collecting a **running** venue without a
+restart is tracked by covia#452. The `gc` block sits alongside the creation
+policy fields below and is not passed through to Convex.
+
 ### Etch store policy (`etch`)
 
 An optional `etch` block (Convex 0.8.11+) sets the Etch creation policy for

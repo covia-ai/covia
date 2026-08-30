@@ -390,6 +390,16 @@ We don't need this today. Noting it so we know the door is open if scheduled-swe
 
 ---
 
+### 5.8 Store garbage collection
+
+Etch never reclaims space on its own. `etch.gc.onStart` (CONFIG.md
+"Persistence", covia#451) collects the store at boot, in
+`VenueServer.createStore` before `NodeServer` launches — the only point where
+no `RefSoft` is bound to the old file, which is what makes the cutover
+trivially safe. Online collection of a running venue (covia#452) instead
+relies on the old `EtchStore` handle remaining a functional view after
+`completeGC()`; see `convex-core/docs/ETCH_GC.md`.
+
 ## 6. Migration plan
 
 Three phases (was four), each independently mergeable, each with tests.
