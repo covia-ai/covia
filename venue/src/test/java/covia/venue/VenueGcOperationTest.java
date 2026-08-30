@@ -70,6 +70,17 @@ public class VenueGcOperationTest {
 		return job.getErrorMessage();
 	}
 
+	/** Every file beside the store with its size — what recovery had to work with. */
+	private static String describe(File dir) {
+		StringBuilder sb = new StringBuilder();
+		File[] files = dir.listFiles();
+		if (files != null) {
+			java.util.Arrays.sort(files);
+			for (File f : files) sb.append(f.getName()).append('=').append(f.length()).append(' ');
+		}
+		return sb.toString().trim();
+	}
+
 	private static long asLong(ACell map, String key) {
 		CVMLong v = RT.ensureLong(RT.getIn(map, key));
 		assertNotNull(v, key);
@@ -140,8 +151,11 @@ public class VenueGcOperationTest {
 			assertEquals(Strings.create("before"), read(relaunched, "w/before-gc"));
 			assertEquals(Strings.create("after"), read(relaunched, "w/after-gc"));
 			EtchStore store = (EtchStore) relaunched.getStore();
-			assertTrue(store.getEtch().getDataLength() < before,
-				"the relaunched venue must run on the collected data");
+			long relaunchedBytes = store.getEtch().getDataLength();
+			long uncollected = before;
+			assertTrue(relaunchedBytes < uncollected, () -> "the relaunched venue must run on the collected data:"
+				+ " opened " + store.getFile() + " holding " + relaunchedBytes + " bytes, the uncollected store held "
+				+ uncollected + "; store directory: " + describe(file.getParentFile()));
 			assertFalse(store.isGCInProgress());
 		} finally {
 			relaunched.close();
