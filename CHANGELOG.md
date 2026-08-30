@@ -31,6 +31,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   deliberate-failure tests silence the logger they provoke, and test JVMs and
   the Docker image allow protobuf's `sun.misc.Unsafe` use via a `-D` property
   every JDK accepts.
+- Closing a venue ends open MCP SSE streams first, so their request handlers
+  unwind against a live engine; no more `ClosedChannelException` /
+  Javalin `WRITER` errors on the console at shutdown.
 
 ### Changed
 

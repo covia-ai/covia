@@ -1181,6 +1181,11 @@ public class VenueServer {
 	 * propagator's shutdown drain reads from it. See
 	 * {@code venue/docs/PERSISTENCE.md} §5.3.</p>
 	 */
+	/** The MCP endpoint, or null when the venue has no {@code mcp} config block. */
+	public MCP getMcp() {
+		return mcp;
+	}
+
 	public void close() {
 		closeResources(null);
 	}
@@ -1192,6 +1197,14 @@ public class VenueServer {
 	 */
 	private void closeResources(Throwable launchFailure) {
 		if (!closed.compareAndSet(false, true)) return; // idempotent — already closed
+		MCP ownedMcp = mcp;
+		if (ownedMcp != null) {
+			try {
+				ownedMcp.close(); // end SSE streams: their handlers unwind against a live engine
+			} catch (RuntimeException e) {
+				recordCloseFailure(launchFailure, "MCP close failed", e);
+			}
+		}
 		Javalin app = javalin;
 		javalin = null;
 		if (app != null) {

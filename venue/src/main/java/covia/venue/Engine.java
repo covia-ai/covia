@@ -601,6 +601,12 @@ public class Engine {
 	 * persist.</p>
 	 */
 	public void syncState() {
+		if (lifecycle == Lifecycle.CLOSING || lifecycle == Lifecycle.CLOSED || lifecycle == Lifecycle.FAILED) {
+			// A request unwinding across shutdown must not write to a closing store;
+			// close() has taken (or will take) the final flush.
+			log.debug("syncState skipped: engine is {}", lifecycle);
+			return;
+		}
 		venueState.sync();
 		publishApplicationRoot();
 	}
