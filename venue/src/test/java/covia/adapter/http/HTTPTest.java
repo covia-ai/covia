@@ -735,6 +735,24 @@ public class HTTPTest {
 		}
 	}
 
+	@Test public void testJsonBodyDefaultsContentTypeUnlessSupplied() throws Exception {
+		VenueHTTP covia = TestServer.COVIA;
+		HttpServer echo = localServer();
+		echo.createContext("/content-type", x -> respond(x, 200,
+			String.valueOf(x.getRequestHeaders().getFirst("Content-Type"))));
+		echo.start();
+		try {
+			ACell body = Maps.of("message", "hello");
+			assertEquals("application/json", body(covia.invokeSync("v/ops/http/post", Maps.of(
+				"url", base(echo) + "/content-type", "body", body), 10_000)));
+			assertEquals("application/problem+json", body(covia.invokeSync("v/ops/http/post", Maps.of(
+				"url", base(echo) + "/content-type", "body", body,
+				"headers", Maps.of("content-type", "application/problem+json")), 10_000)));
+		} finally {
+			echo.stop(0);
+		}
+	}
+
 	@Test public void testFollowsRedirectsWithProvenance() throws Exception {
 		VenueHTTP covia = TestServer.COVIA;
 		HttpServer s = localServer();

@@ -84,6 +84,7 @@ public class HTTPAdapter extends AAdapter {
 	public static final int MAX_REDIRECTS_CEILING = 20;
 
 	private static final String USER_AGENT_HEADER = "User-Agent";
+	private static final String CONTENT_TYPE_HEADER = "Content-Type";
 	/** Header names that never cross an origin change, whoever set them. */
 	private static final Set<String> CREDENTIAL_HEADERS = Set.of("authorization", "proxy-authorization", "cookie");
 	private static final Set<String> METHODS = Set.of("GET", "POST", "PUT", "DELETE", "PATCH");
@@ -503,6 +504,14 @@ public class HTTPAdapter extends AAdapter {
 					? connectionToken(ctx, ref.substring(TokenSource.PREFIX.length()))
 					: resolveSecret(bearerSecret, ctx, "bearerSecret");
 				putHeader(outHeaders, "Authorization", "Bearer " + bearer);
+			}
+
+			// The declared body is a JSON value and bodyText is its JSON encoding.
+			// Make that wire contract real without requiring every skill or caller to
+			// repeat the same header; an explicit content type still wins.
+			if (bodyField != null && ("POST".equals(method) || "PUT".equals(method) || "PATCH".equals(method))
+					&& !hasHeader(outHeaders, CONTENT_TYPE_HEADER)) {
+				outHeaders.put(CONTENT_TYPE_HEADER, "application/json");
 			}
 
 			if (!hasHeader(outHeaders, USER_AGENT_HEADER)) {
