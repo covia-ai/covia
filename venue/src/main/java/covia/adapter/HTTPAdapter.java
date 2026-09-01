@@ -318,6 +318,12 @@ public class HTTPAdapter extends AAdapter {
 		installSkill("connections/linear",   "/skills/linear.json");
 		installSkill("connections/stripe",   "/skills/stripe.json");
 		installSkill("connections/airtable", "/skills/airtable.json");
+		installSkill("connections/discord",  "/skills/discord.json");
+		installSkill("connections/asana",    "/skills/asana.json");
+		installSkill("connections/intercom", "/skills/intercom.json");
+		installSkill("connections/sentry",   "/skills/sentry.json");
+		installSkill("connections/sendgrid", "/skills/sendgrid.json");
+		installSkill("connections/twilio",   "/skills/twilio.json");
 		String BASE = "/asset-examples/";
 
 		// HTTP primitives — registered in /v/ops/.
