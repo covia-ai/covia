@@ -1,6 +1,6 @@
 ---
 name: agent
-description: Create, configure, and manage Covia agents. Handles config gotchas, system prompts, LLM backend setup, skills and hierarchical skill discovery, and lifecycle operations. Use when working with agents on a venue.
+description: Create, configure, and manage Covia agents dynamically on a running venue.
 argument-hint: "<create|list|query|reset> <agent-name>"
 ---
 
@@ -22,7 +22,7 @@ agent that cannot do the intended work:
 
 3. **`config` is the single home for ALL agent settings (#144)** — `operation`, `llmOperation`, `model`, `systemPrompt`, `tools`, `caps` all live in the top-level `config` map. Passing a `config` key inside `state` is rejected with an error.
 
-4. **Conversation history is session-scoped** — updating a prompt affects new contexts; an existing session keeps its exact rendered prefix until explicit compaction or `agent_reload_context`. Omit `sessionId` to start a new conversation; use context reload to adopt current config while preserving history, and delete/recreate only when you explicitly need a completely fresh identity and audit record. Config updates apply to future transitions — a transition already running keeps the snapshot it fired with (`agent_update` reports `running: true`) — so never suspend just to update; suspend only to halt a run now.
+4. **Conversation history is session-scoped** — a changed declarative config makes each existing session's materialised prompt/tool prefix stale; its next inference re-renders that config-owned prefix while preserving rendered conversation and load events verbatim. Ambient source changes alone do nothing. Use `agent_reload_context` to force a same-config refresh of an idle session. Omit `sessionId` to start a new conversation, and delete/recreate only when you explicitly need a completely fresh identity and audit record. Config updates apply to future transitions — a transition already running keeps the snapshot it fired with (`agent_update` reports `running: true`) — so never suspend just to update; suspend only to halt a run now.
 
 5. **Operation references are lattice paths, not adapter shorthand** — `config.operation`, `llmOperation`, and operation entries in `tools` must be resolvable paths such as `v/ops/covia/write`, never `covia:write`. Create returns warnings for unavailable configured tools. Harness tools (`subgoal`, `complete`, `fail`, `compact`, `context_load`, `context_unload`, `more_tools`, and `skill_load` when `config.skills` or `config.skillsets` is non-empty) are bare names. A custom read/write agent must declare those operations or start from `worker`.
 
@@ -165,7 +165,7 @@ sources you trust.
 | See exactly what an agent would send its model | `agent_context agentId=<name> message="…"` (or `task=…`, `sessionId=…`) — the level-3 input for that call with cache marks, budget and band marks |
 | List/read safe past conversations | `agent_sessions agentId=<name>` then `agent_session_read agentId=<name> sessionId=<id>`; add `archiveDepth=N` to open nested compactions within the normal safety and size bounds |
 | Compact an idle session as its owner | `agent_compact_session agentId=<name> sessionId=<id> summary="…"` — keeps the exact old vector under the compaction record and returns metadata only |
-| Rebuild an idle session's provider prefix | `agent_reload_context agentId=<name> sessionId=<id>` — preserves conversation and loads, then applies current prompt/tools/pinned context on the next inference |
+| Rebuild an idle session's provider prefix | `agent_reload_context agentId=<name> sessionId=<id>` — forces a same-config refresh of prompt/tools/pinned context on the next inference while preserving conversation and loads |
 | Audit what an agent did in a cycle | `covia_read path=g/<name>/timeline` — each entry holds the cycle's `context`, `tools` and `inferences` (per call: `sent`, `reply`, `calls` with results and `ms`; a `subgoal` call carries its child `frame`) |
 | Dry-run one harness iteration — "why was my tool denied?" | `agent_step agentId=<name> message="…" assistant={"toolCalls":[{"name":"<tool>","arguments":{…}}]}` — dispatches the calls as live (real side effects), returns `calls` with results/errors/ms and `next` (the following prompt); the agent's state is untouched |
 | Write a personal skill | `covia_write path=w/skills/<name>` with `{description, content: {inline: "..."}, skill: {tools: [...], skills: [...]}}` |

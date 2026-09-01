@@ -473,12 +473,19 @@ public class ContextLoader {
 		AMap<AString, ACell> provenance = Maps.of(K_OP, op);
 		if (input != null) provenance = provenance.assoc(K_INPUT, input);
 		try {
+			Asset asset = engine.resolveAsset(op, ctx);
+			if (asset == null) throw new IllegalArgumentException(
+				"Cannot resolve context operation: " + op);
+			if (!convex.core.data.prim.CVMBool.TRUE.equals(
+					RT.getIn(asset.meta(), Fields.OPERATION, Fields.READ_ONLY))) {
+				throw new IllegalArgumentException("Context operation must declare operation.readOnly=true: " + op);
+			}
 			// Context loading is framework infrastructure: entries are
 			// declared in the agent's config (visible to the caller before
 			// invocation) and run pre-transition under the caller's identity.
 			// invokeInternal is the framework dispatch path — no cap check
 			// applied. Caps stay on ctx for audit.
-			ACell result = engine.jobs().invokeInternal(op, input, ctx)
+			ACell result = engine.jobs().invokeInternal(asset.meta(), input, ctx.withOp(op))
 				.get(10_000, java.util.concurrent.TimeUnit.MILLISECONDS);
 			if (result == null) {
 				if (required) throw new RuntimeException("Required context operation returned null: " + op);

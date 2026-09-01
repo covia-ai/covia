@@ -76,6 +76,11 @@ g/<agent>/
       c/              — session-scoped user scratch (the `c/` shorthand)
 ```
 
+This diagram defines the session container, not the encoding of model context.
+The exact context-bearing cells under `frames` and the session/frame load tiers
+are defined only by [AGENT_CONTEXT.md §1.1](./AGENT_CONTEXT.md#11-durable-context-state-contract);
+this document does not repeat them.
+
 Other framework-managed fields on the agent record (status, scheduling, error, caps, timeline entries) are documented where they are authoritative — see [GRID_LATTICE_DESIGN.md §4.3](./GRID_LATTICE_DESIGN.md) for the top-level shape, [SCHEDULER.md](./SCHEDULER.md) for wake state, and [AGENT_LOOP.md](./AGENT_LOOP.md) for timeline entry structure.
 
 **User scratch space** for the agent, session, and task lives in the virtual namespaces `n/`, `c/`, and `t/` respectively — see [GRID_LATTICE_DESIGN.md §4.5](./GRID_LATTICE_DESIGN.md). Task scratch is stored once on the task Job at `j/<taskId>/temp/`; it is not duplicated on the transient `g/<agent>/tasks` queue row. These are for arbitrary user data; framework-managed state (status, `wakeTime`, task input/result, etc.) is accessed through dedicated APIs, not via these shortcuts.

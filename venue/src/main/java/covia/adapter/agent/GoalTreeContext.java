@@ -56,6 +56,10 @@ public class GoalTreeContext {
 	 * the cache invariant: ordinary source mutation cannot rewrite the prefix. */
 	static final AString K_RENDERED_CONTEXT = Strings.intern("renderedContext");
 
+	/** Latest canonical value and exact appended messages for each watched
+	 * context declaration. This is durable frame state, not a runtime cache. */
+	static final AString K_OBSERVATIONS = Strings.intern("observations");
+
 	/** Frame lifecycle status: absent while live; {@link #STATUS_COMPLETE} /
 	 *  {@link #STATUS_FAILED} written in the same CAS as the terminal turn,
 	 *  {@link #STATUS_INTERRUPTED} by an operator-suspend settle. Explicit
@@ -490,7 +494,11 @@ public class GoalTreeContext {
 				}
 			}
 		}
+		// A compacted summary replaces history, not current watched state. Reuse
+		// the exact latest observation messages after the archive so no source is
+		// re-read and the model still has the active snapshot.
 		AVector<ACell> newConversation = Vectors.of((ACell) segment);
+		newConversation = (AVector<ACell>) newConversation.concat(latestObservationMessages(frame));
 		// Compaction is an explicit prefix rewrite boundary. The next inference
 		// materialises a new initial representation around the compacted history.
 		return frame.assoc(K_CONVERSATION, newConversation).dissoc(K_RENDERED_CONTEXT);
@@ -517,6 +525,128 @@ public class GoalTreeContext {
 		AVector<ACell> conversation = (AVector<ACell>) frame.get(K_CONVERSATION);
 		if (conversation == null) conversation = Vectors.empty();
 		return frame.assoc(K_CONVERSATION, conversation.conj(turn));
+	}
+
+	// ========== Watched context observations ==========
+
+	/**
+	 * Atomically-applicable pure frame transform for watched context. Candidate
+	 * values were materialised before this call. Equal canonical values retain
+	 * the exact prior messages and append nothing; changes append the new
+	 * provider messages and removals append one venue-authored state event.
+	 */
+	@SuppressWarnings("unchecked")
+	static AMap<AString, ACell> applyObservations(AMap<AString, ACell> frame,
+			AVector<ACell> candidates, long timestamp) {
+		if (frame == null) return null;
+		AMap<AString, ACell> previous = (frame.get(K_OBSERVATIONS) instanceof AMap<?, ?> raw)
+			? (AMap<AString, ACell>) raw : Maps.empty();
+		AMap<AString, ACell> next = previous;
+		AVector<ACell> conversation = (frame.get(K_CONVERSATION) instanceof AVector<?> raw)
+			? (AVector<ACell>) raw : Vectors.empty();
+		java.util.Set<AString> active = new java.util.HashSet<>();
+
+		for (long i = 0; candidates != null && i < candidates.count(); i++) {
+			AMap<AString, ACell> candidate = RT.ensureMap(candidates.get(i));
+			if (candidate == null) continue;
+			AString id = RT.ensureString(candidate.get(ContextAssembler.K_OBSERVATION_ID));
+			AVector<ACell> value = RT.ensureVector(
+				candidate.get(ContextAssembler.K_OBSERVATION_VALUE));
+			if (id == null || value == null || !active.add(id)) continue;
+			ACell order = candidate.get(ContextAssembler.K_OBSERVATION_ORDER);
+			AMap<AString, ACell> old = RT.ensureMap(previous.get(id));
+			if (old != null && value.equals(old.get(ContextAssembler.K_OBSERVATION_VALUE))) {
+				AMap<AString, ACell> retained = old;
+				if (order != null && !order.equals(old.get(ContextAssembler.K_OBSERVATION_ORDER))) {
+					retained = retained.assoc(ContextAssembler.K_OBSERVATION_ORDER, order);
+				}
+				if (retained != old) next = next.assoc(id, retained);
+				continue;
+			}
+
+			AVector<ACell> messages = stampObservationMessages(value, timestamp);
+			conversation = (AVector<ACell>) conversation.concat(messages);
+			AMap<AString, ACell> observation = Maps.of(
+				ContextAssembler.K_OBSERVATION_VALUE, value,
+				ContextAssembler.K_OBSERVATION_MESSAGES, messages,
+				ContextAssembler.K_OBSERVATION_ORDER,
+				(order != null) ? order : CVMLong.create(i));
+			next = next.assoc(id, observation);
+		}
+
+		java.util.List<java.util.Map.Entry<AString, ACell>> removed = new java.util.ArrayList<>();
+		for (var entry : previous.entrySet()) {
+			if (!active.contains(entry.getKey())) removed.add(entry);
+		}
+		removed.sort(java.util.Comparator
+			.comparingLong((java.util.Map.Entry<AString, ACell> e) -> observationOrder(e.getValue()))
+			.thenComparing(e -> e.getKey().toString()));
+		for (var entry : removed) {
+			AVector<ACell> event = stampObservationMessages(Vectors.of(
+				ContextAssembler.observationRemoved(entry.getKey())), timestamp);
+			conversation = (AVector<ACell>) conversation.concat(event);
+			next = next.dissoc(entry.getKey());
+		}
+
+		AMap<AString, ACell> updated = frame;
+		AVector<ACell> oldConversation = RT.ensureVector(frame.get(K_CONVERSATION));
+		if (oldConversation == null || !conversation.equals(oldConversation)) {
+			updated = updated.assoc(K_CONVERSATION, conversation);
+		}
+		if (next.isEmpty()) {
+			if (updated.get(K_OBSERVATIONS) != null) updated = updated.dissoc(K_OBSERVATIONS);
+		} else if (!next.equals(previous)) {
+			updated = updated.assoc(K_OBSERVATIONS, next);
+		}
+		return updated;
+	}
+
+	private static long observationOrder(ACell value) {
+		ACell order = RT.getIn(value, ContextAssembler.K_OBSERVATION_ORDER);
+		return (order instanceof CVMLong n) ? n.longValue() : Long.MAX_VALUE;
+	}
+
+	/** Adds audit metadata after canonical comparison; it never participates in
+	 * change detection and therefore cannot create clock-driven observations. */
+	@SuppressWarnings("unchecked")
+	private static AVector<ACell> stampObservationMessages(
+			AVector<ACell> messages, long timestamp) {
+		AVector<ACell> stamped = Vectors.empty();
+		for (long i = 0; messages != null && i < messages.count(); i++) {
+			ACell value = messages.get(i);
+			if (!(value instanceof AMap<?, ?> raw)) {
+				stamped = stamped.conj(value);
+				continue;
+			}
+			AMap<AString, ACell> message = (AMap<AString, ACell>) raw;
+			AString role = RT.ensureString(message.get(K_ROLE));
+			AString source = ROLE_TOOL.equals(role)
+				? covia.venue.AgentState.SOURCE_TOOL
+				: covia.venue.AgentState.SOURCE_TRANSITION;
+			stamped = stamped.conj(message
+				.assoc(covia.venue.AgentState.K_TURN_TS, CVMLong.create(timestamp))
+				.assoc(covia.venue.AgentState.K_SOURCE, source));
+		}
+		return stamped;
+	}
+
+	/** Exact latest observation messages in their current declaration order. */
+	@SuppressWarnings("unchecked")
+	private static AVector<ACell> latestObservationMessages(AMap<AString, ACell> frame) {
+		if (!(frame.get(K_OBSERVATIONS) instanceof AMap<?, ?> raw)) return Vectors.empty();
+		AMap<AString, ACell> observations = (AMap<AString, ACell>) raw;
+		java.util.List<java.util.Map.Entry<AString, ACell>> ordered = new java.util.ArrayList<>();
+		for (var entry : observations.entrySet()) ordered.add(entry);
+		ordered.sort(java.util.Comparator
+			.comparingLong((java.util.Map.Entry<AString, ACell> e) -> observationOrder(e.getValue()))
+			.thenComparing(e -> e.getKey().toString()));
+		AVector<ACell> messages = Vectors.empty();
+		for (var entry : ordered) {
+			AVector<ACell> value = RT.ensureVector(RT.getIn(
+				entry.getValue(), ContextAssembler.K_OBSERVATION_MESSAGES));
+			if (value != null) messages = (AVector<ACell>) messages.concat(value);
+		}
+		return messages;
 	}
 
 	/**

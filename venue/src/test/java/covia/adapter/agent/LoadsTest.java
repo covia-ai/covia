@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -34,7 +35,7 @@ import covia.venue.TestEngine;
 /**
  * Loads entries beyond a path key — text, op and job sources (AGENT_CONTEXT.md
  * §6.2 at the loads tiers) — rendered as tool exchanges that name their
- * provenance; their placement (volatile entries in the tail); load-order
+ * provenance; watched entries append-only-on-change placement; load-order
  * rendering; and the kind-agnostic tools/skills/skillsets rule.
  */
 public class LoadsTest {
@@ -81,8 +82,23 @@ public class LoadsTest {
 		return content(entry(entries, i));
 	}
 
-	private static AVector<ACell> aggregate(AVector<ACell> entries, boolean volatileBand) {
-		return ContextAssembler.contextExchanges(entries, volatileBand);
+	private static AVector<ACell> aggregate(AVector<ACell> entries) {
+		return ContextAssembler.contextExchanges(entries);
+	}
+
+	/** Exact provider messages for one watched candidate. */
+	private static AVector<ACell> observationMessages(Loads.Snapshot snapshot, int i) {
+		return RT.ensureVector(RT.getIn(snapshot.observations().get(i), "value"));
+	}
+
+	/** Aggregate-ready data recovered from a watched candidate's tool result. */
+	private static AVector<ACell> observationEntries(Loads.Snapshot snapshot, int i) {
+		AVector<ACell> messages = observationMessages(snapshot, i);
+		for (long j = 0; j < messages.count(); j++) {
+			AVector<ACell> entries = RT.ensureVector(RT.getIn(messages.get(j), "structuredContent"));
+			if (entries != null) return entries;
+		}
+		return Vectors.empty();
 	}
 
 	private static AMap<AString, ACell> spec(Object... kvs) {
@@ -162,7 +178,7 @@ public class LoadsTest {
 		write("w/notes", Strings.create("note body"));
 		AVector<ACell> entries = resolve(Maps.of(Strings.create("w/notes"), spec())).exchanges();
 		assertEquals(1, entries.count());
-		AVector<ACell> exchange = aggregate(entries, false);
+		AVector<ACell> exchange = aggregate(entries);
 		assertEquals(2, exchange.count(), "one aggregate call, one result");
 		assertEquals("assistant", RT.getIn(exchange.get(0), "role").toString());
 		assertEquals(ContextAssembler.PINNED_CONTEXT_TOOL,
@@ -178,7 +194,7 @@ public class LoadsTest {
 
 		// A dated entry was loaded in-session.
 		AVector<ACell> loaded = aggregate(resolve(Maps.of(
-			Strings.create("w/notes"), spec("ts", CVMLong.create(5)))).exchanges(), false);
+			Strings.create("w/notes"), spec("ts", CVMLong.create(5)))).exchanges());
 		assertEquals(ContextAssembler.LOADED_CONTEXT_TOOL,
 			RT.getIn(loaded.get(0), "toolCalls", 0, "name").toString());
 		assertEquals("note body", RT.getIn(loaded.get(1), "structuredContent", "w/notes", "content").toString());
@@ -234,19 +250,33 @@ public class LoadsTest {
 			spec("op", "v/test/ops/echo", "input", Maps.of(Strings.create("ping"), Strings.create("pong"))));
 		Loads.Snapshot snap = resolve(loads);
 		assertEquals(0, snap.exchanges().count(), "an op entry leaves the live surface");
-		assertEquals(1, snap.volatileElements().count());
-		ACell a = entry(snap.volatileElements(), 0);
+		assertEquals(1, snap.observations().count());
+		AVector<ACell> observed = observationEntries(snap, 0);
+		ACell a = entry(observed, 0);
 		assertEquals("v/test/ops/echo", RT.getIn(a, "op").toString(), "the call names the operation");
 		assertEquals("pong", RT.getIn(a, "input", "ping").toString(), "and its input");
-		assertTrue(result(snap.volatileElements(), 0).contains("pong"));
-		assertEquals("tail", RT.getIn(snap.diagnostics().get(0), "band").toString());
+		assertTrue(result(observed, 0).contains("pong"));
+		assertEquals("observation", RT.getIn(snap.diagnostics().get(0), "band").toString());
 
 		// volatile: false pins an op result into the live surface instead.
 		AMap<AString, ACell> pinned = Maps.of(Strings.create("echoed"),
 			spec("op", "v/test/ops/echo", "input", Maps.of(), "volatile", CVMBool.FALSE));
 		Loads.Snapshot live = resolve(pinned);
 		assertEquals(1, live.exchanges().count());
-		assertEquals(0, live.volatileElements().count());
+		assertEquals(0, live.observations().count());
+	}
+
+	@Test
+	public void testContextOperationMustDeclareReadOnly() {
+		String target = "w/volatile-op-must-not-write";
+		AMap<AString, ACell> loads = Maps.of(Strings.create("bad-watcher"),
+			spec("op", "v/ops/covia/write", "input", Maps.of(
+				Fields.PATH, Strings.create(target), Fields.VALUE, CVMBool.TRUE)));
+		Loads.Snapshot snapshot = resolve(loads);
+		String error = RT.getIn(observationEntries(snapshot, 0).get(0), Fields.ERROR).toString();
+		assertTrue(error.contains("operation.readOnly=true"), error);
+		assertNull(engine.resolvePath(Strings.create(target), ctx),
+			"context observation must never execute a mutating operation");
 	}
 
 	@Test
@@ -254,7 +284,37 @@ public class LoadsTest {
 		write("w/ticker", Strings.create("42"));
 		Loads.Snapshot snap = resolve(Maps.of(Strings.create("w/ticker"), spec("volatile", CVMBool.TRUE)));
 		assertEquals(0, snap.exchanges().count());
-		assertEquals("42", result(snap.volatileElements(), 0));
+		assertEquals("42", result(observationEntries(snap, 0), 0));
+	}
+
+	@Test
+	public void testVolatileSkillUsesTheSameObservationLifecycle() {
+		AString path = Strings.create("w/watched-skill");
+		write(path.toString(), Maps.of(
+			"description", "Watched skill",
+			"content", Maps.of("inline", "WATCHED-SKILL-ONE")));
+		AMap<AString, ACell> loads = Maps.of(path, Maps.of(
+			"skill", CVMBool.TRUE,
+			"volatile", CVMBool.TRUE,
+			"budget", CVMLong.create(2000)));
+		Loads.Snapshot first = resolve(loads);
+		assertEquals(0, first.instructionElements().count(),
+			"a watched skill is not baked into the rendered prefix");
+		assertEquals(1, first.observations().count());
+		assertTrue(all(RT.ensureVector(RT.getIn(first.observations().get(0), "value")))
+			.contains("WATCHED-SKILL-ONE"));
+
+		AMap<AString, ACell> frame = GoalTreeContext.applyObservations(
+			GoalTreeContext.createFrame(""), first.observations(), 1L);
+		write(path.toString(), Maps.of(
+			"description", "Watched skill",
+			"content", Maps.of("inline", "WATCHED-SKILL-TWO")));
+		Loads.Snapshot second = resolve(loads);
+		AMap<AString, ACell> changed = GoalTreeContext.applyObservations(
+			frame, second.observations(), 2L);
+		String history = all(RT.ensureVector(changed.get(GoalTreeContext.K_CONVERSATION)));
+		assertTrue(history.contains("WATCHED-SKILL-ONE"), history);
+		assertTrue(history.contains("WATCHED-SKILL-TWO"), history);
 	}
 
 	@Test
@@ -277,10 +337,10 @@ public class LoadsTest {
 		Loads.Snapshot snap = resolve(loads);
 		assertEquals(1, snap.exchanges().count(), "pinned absence remains visible");
 		assertEquals(CVMBool.TRUE, RT.getIn(entry(snap.exchanges(), 0), "absent"));
-		assertEquals(1, snap.volatileElements().count(), "an erroring op entry is visible");
-		String error = RT.getIn(entry(snap.volatileElements(), 0), Fields.ERROR).toString();
+		assertEquals(1, snap.observations().count(), "an erroring op entry is visible");
+		String error = RT.getIn(entry(observationEntries(snap, 0), 0), Fields.ERROR).toString();
 		assertFalse(error.isBlank(), "the per-entry failure remains visible");
-		assertNull(RT.getIn(aggregate(snap.volatileElements(), true).get(1), "isError"),
+		assertNull(RT.getIn(observationMessages(snap, 0).get(1), "isError"),
 			"one failed item does not mark the whole aggregate result failed");
 		for (long i = 0; i < snap.diagnostics().count(); i++) {
 			ACell d = snap.diagnostics().get(i);
@@ -298,10 +358,10 @@ public class LoadsTest {
 			spec("text", longText, "budget", CVMLong.create(600)));
 		assertEquals(longText, result(resolve(live).exchanges(), 0));
 		// …but the same entry declared volatile is cut at its budget with a visible trailer.
-		AMap<AString, ACell> tail = Maps.of(Strings.create("note"),
+		AMap<AString, ACell> watched = Maps.of(Strings.create("note"),
 			spec("text", longText, "budget", CVMLong.create(600), "volatile", CVMBool.TRUE));
-		Loads.Snapshot snap = resolve(tail);
-		String text = result(snap.volatileElements(), 0);
+		Loads.Snapshot snap = resolve(watched);
+		String text = result(observationEntries(snap, 0), 0);
 		assertFalse(text.contains(longText), "not verbatim");
 		assertTrue(text.contains("more bytes beyond this entry's budget of 600"), text);
 		assertTrue(text.contains("reload it with a larger budget, or fetch the value with a tool"), text);
@@ -313,21 +373,22 @@ public class LoadsTest {
 		AMap<AString, ACell> opEntry = Maps.of(Strings.create("listing"),
 			spec("op", "v/test/ops/echo", "input", Maps.of(Strings.create("blob"), Strings.create("y".repeat(3000))),
 				"budget", CVMLong.create(300)));
-		String opText = result(resolve(opEntry).volatileElements(), 0);
+		Loads.Snapshot opSnapshot = resolve(opEntry);
+		String opText = result(observationEntries(opSnapshot, 0), 0);
 		assertTrue(opText.contains("/* String, 3.0KB */"), opText);
 		assertFalse(opText.contains("more bytes beyond"), opText);
 
 		// A short volatile entry is untouched, and the call half carries no content to cut.
 		AMap<AString, ACell> small = Maps.of(Strings.create("note"), spec("text", "short", "volatile", CVMBool.TRUE));
 		Loads.Snapshot fits = resolve(small);
-		assertEquals("short", result(fits.volatileElements(), 0));
+		assertEquals("short", result(observationEntries(fits, 0), 0));
 		assertEquals(CVMBool.FALSE, RT.getIn(fits.diagnostics().get(0), "truncated"));
 	}
 
 	// ========== placement in the assembled prompt ==========
 
 	@Test
-	public void testVolatileLoadsRenderAfterTheConversationAndBeforeTheNotices() {
+	public void testVolatileLoadsAppendToConversationOnlyWhenChanged() {
 		AMap<AString, ACell> loads = Maps.of(
 			Strings.create("brief"), spec("text", "STABLE-NOTE"),
 			Strings.create("fresh"), spec("op", "v/test/ops/echo", "input", Maps.of(Strings.create("k"), Strings.create("FRESH-RESULT"))));
@@ -336,36 +397,55 @@ public class LoadsTest {
 			(ACell) Maps.of("role", "assistant", "content", "", "toolCalls", Vectors.of(
 				Maps.of("id", "c1", "name", "covia_read", "arguments", "{}"))),
 			(ACell) Maps.of("role", "tool", "id", "c1", "name", "covia_read", "content", "x"));
-		Spec s = new Spec(engine, ctx, null, null, null, null, 0, null, null, null, null,
-			null, null, Vectors.of((ACell) Strings.create("hi")), true, loop, null, null, null, null)
+		AMap<AString, ACell> frame = GoalTreeContext.appendTurn(
+			GoalTreeContext.createFrame(""), Maps.of("role", "user", "content", "hi"));
+		Spec s = new Spec(engine, ctx, null, null, null, null, 0, null, true,
+			Vectors.empty(), Vectors.empty(), Vectors.empty(), loads,
+			Vectors.of((ACell) frame), Vectors.empty(), Vectors.empty(), true,
+			loop, null, Vectors.empty(), null, null)
 			.withLoads(snap, Vectors.empty(), loads);
+		frame = GoalTreeContext.applyObservations(frame,
+			ContextAssembler.observations(s, snap), 1L);
+		s = s.withFrames(Vectors.of((ACell) frame));
 		Prompt p = ContextAssembler.assemble(s);
 		AVector<ACell> m = p.messages();
-		// head, marker, brief call, brief result, "hi", assistant, tool, fresh call, fresh result, notices
+		// head, stable marker/call/result, "hi", watched call/result, tool loop, notices
 		assertEquals(10, m.count(), all(m));
 		assertEquals("user", RT.getIn(m.get(1), "role").toString());
 		assertEquals(ContextAssembler.LOAD_CONTEXT_REQUEST, content(m.get(1)), "the request precedes the live exchanges");
 		assertEquals("STABLE-NOTE", RT.getIn(m.get(3), "structuredContent", 0, "content").toString(),
 			"stable entry in the live surface");
 		assertEquals("hi", content(m.get(4)));
-		assertTrue(RT.getIn(m.get(8), "structuredContent", 0, "content").toString().contains("FRESH-RESULT"),
-			"volatile exchange after the tool loop");
+		assertTrue(RT.getIn(m.get(6), "structuredContent", 0, "content").toString().contains("FRESH-RESULT"),
+			"watched exchange is durable conversation before the tool loop");
 		assertTrue(content(m.get(9)).contains("Current date:"), "notices still last");
-		// The volatile exchange sits beyond every cache mark, so it busts only itself.
+		// A stable observation is now part of the append-only cache prefix.
 		assertEquals(4, p.marks().get(ContextAssembler.Band.LIVE));
-		assertEquals(5, p.marks().get(ContextAssembler.Band.CONVERSATION));
-		assertEquals(7, p.marks().get(ContextAssembler.Band.TOOL_LOOP));
-		assertEquals(Vectors.of(CVMLong.create(4), CVMLong.create(6)), p.cacheMarks());
+		assertEquals(7, p.marks().get(ContextAssembler.Band.CONVERSATION));
+		assertEquals(9, p.marks().get(ContextAssembler.Band.TOOL_LOOP));
+		assertEquals(Vectors.of(CVMLong.create(6), CVMLong.create(8)), p.cacheMarks());
+
+		AMap<AString, ACell> unchanged = GoalTreeContext.applyObservations(frame,
+			ContextAssembler.observations(s, resolve(loads)), 2L);
+		assertSame(frame, unchanged, "same watched value adds no tail or conversation bytes");
 	}
 
 	@Test
 	public void testNoMarkerWithoutLiveExchanges() {
-		// A volatile-only load follows the input, which is already a user turn: no marker.
+		// A watched-only load is appended after the user turn: no initial-load marker.
 		AMap<AString, ACell> loads = Maps.of(Strings.create("fresh"),
 			spec("op", "v/test/ops/echo", "input", Maps.of(Strings.create("k"), Strings.create("v"))));
-		Spec s = new Spec(engine, ctx, null, null, null, null, 0, null, null, null, null,
-			null, null, Vectors.of((ACell) Strings.create("hi")), true, null, null, null, null, null)
-			.withLoads(resolve(loads), Vectors.empty(), loads);
+		Loads.Snapshot snapshot = resolve(loads);
+		AMap<AString, ACell> frame = GoalTreeContext.appendTurn(
+			GoalTreeContext.createFrame(""), Maps.of("role", "user", "content", "hi"));
+		Spec s = new Spec(engine, ctx, null, null, null, null, 0, null, true,
+			Vectors.empty(), Vectors.empty(), Vectors.empty(), loads,
+			Vectors.of((ACell) frame), Vectors.empty(), Vectors.empty(), true,
+			Vectors.empty(), null, Vectors.empty(), null, null)
+			.withLoads(snapshot, Vectors.empty(), loads);
+		frame = GoalTreeContext.applyObservations(frame,
+			ContextAssembler.observations(s, snapshot), 1L);
+		s = s.withFrames(Vectors.of((ACell) frame));
 		AVector<ACell> m = ContextAssembler.assemble(s).messages();
 		// head, "hi", fresh call, fresh result, notices
 		assertEquals(5, m.count(), all(m));
@@ -429,7 +509,7 @@ public class LoadsTest {
 			Strings.create("id"), Strings.create("listing"),
 			Strings.create("op"), Strings.create("v/ops/covia/list"),
 			Strings.create("input"), Maps.of(Fields.PATH, Strings.create("w"))), scope);
-		assertTrue(RT.getIn(fresh, "note").toString().contains("never cached"), fresh.toString());
+		assertTrue(RT.getIn(fresh, "note").toString().contains("appends only when changed"), fresh.toString());
 		assertTrue(Loads.isVolatile(scope.loads.get(Strings.create("listing"))));
 		assertEquals("v/ops/covia/list", RT.getIn(scope.loads, "listing", "op").toString());
 
@@ -441,7 +521,7 @@ public class LoadsTest {
 		assertFalse(Loads.isVolatile(scope.loads.get(Strings.create("pinned-listing"))));
 
 		// The stored specs are what a declared tier would hold — they render the same way.
-		AVector<ACell> live = aggregate(resolve(scope.loads).exchanges(), false);
+		AVector<ACell> live = aggregate(resolve(scope.loads).exchanges());
 		assertTrue(all(live).contains("Keep it short."), all(live));
 		assertEquals(ContextAssembler.LOADED_CONTEXT_TOOL,
 			RT.getIn(live.get(0), "toolCalls", 0, "name").toString());

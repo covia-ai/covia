@@ -1,6 +1,6 @@
 {
     "name": "Add Agent Tools",
-    "description": "Add operations to your tool set for the rest of this run. Use an advertised catalog-listing operation to discover available operations first (for example, list path=v/ops), then call this with the exact paths you need. Added tools appear on your next turn.",
+    "description": "Load operations into this conversation as tools. Use an advertised catalog-listing operation to discover available operations first (for example, list path=v/ops), then call this with the exact paths you need. The result returns a persistent load key; pass that key to context_unload only when you need to remove the tools. Added tools appear on your next turn.",
     "dateCreated": "2026-08-29T00:00:00Z",
     "operation": {
         "adapter": "harness:moreTools",

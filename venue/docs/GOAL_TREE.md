@@ -104,29 +104,17 @@ From the parent's perspective, `subgoal` is just a tool call that branches to th
 
 ## Conversation Structure
 
-A frame's conversation is a list. Each entry is either a **live turn** or a **compacted segment**:
+The durable `Frame`, `Turn`, `CompactedSegment` and `RenderedContext` shapes are
+defined only in
+[AGENT_CONTEXT.md §1.1](./AGENT_CONTEXT.md#11-durable-context-state-contract).
+The goal tree uses that representation unchanged. Its contribution is frame
+lifecycle: `subgoal` pushes a child, completion returns its result to the parent,
+and interruption repair settles unfinished tool exchanges.
 
-```
-[
-  {summary: "...", turns: 400, items: [         // one visible segment
-    {summary: "...", turns: 200, items: [...]}, // prior compaction nests
-    /* turns appended before the later compaction */
-  ]},
-  {role: "user", content: "...",                 // live turn from intake
-   ts: 1713600000000, source: "chat"},
-  {role: "assistant", content: "..."},           // live turn
-  {role: "assistant", content: "...",            // live turn with tool calls
-   toolCalls: [{id: "tc_1", name: "covia_inspect", arguments: {...}}]},
-  {role: "tool", id: "tc_1", name: "covia_inspect", content: "..."},
-]
-```
-
-**Turn envelope fields:** `role` and `content` are the LLM-conversation primitives. Optional `ts` (wall-clock millis) and `source` (`"chat" | "message" | "request" | "transition"`) carry provenance — they let audit and replay distinguish a chat-intake user turn from a task-request user turn without inspecting role alone. Vendor LLM APIs ignore `ts`/`source`; the adapter strips them when constructing the level 3 payload. Assistant turns with `toolCalls` and subsequent `tool` turns preserve intra-transition interleaving on the lattice.
-
-Compacted segments contain the exact replaced conversation vector in `items`.
-The agent-provided `summary` is the only part rendered into normal model
-context, as assistant memory. A later compaction nests the earlier segment and
-newer turns under a new one rather than accumulating sibling summaries.
+Compaction renders the agent-authored summary as assistant memory. A later
+compaction nests the earlier segment and newer turns rather than accumulating
+sibling summaries; the exact archive semantics are part of the canonical
+context-state contract.
 
 **There is no separate archive.** Authorised operators can read the nested
 lattice value directly; `agent:sessionRead` can open a bounded `archiveDepth`
@@ -136,13 +124,11 @@ while continuing to omit tool scratch, diagnostics and unfinished cycles.
 
 Frames live on the session record (`sessions/<sid>/frames`). The LLM doesn't see the stack — it just calls tools. The stack is how the harness assembles context for each inference and is persisted across transitions as part of session state.
 
-### Frame Contents
-
-| Field | Description |
-|-------|-------------|
-| description | Root: session origin. Child: the `subgoal` description that created this frame. |
-| conversation | List of segments + live turns (each turn: `{role, content, ts?, source?, toolCalls?}`) |
-| loads | Lattice paths loaded at this scope |
+The canonical frame's `description` is the session origin at the root and the
+creating subgoal description on a child. Its frame-level loads form the
+innermost writable tier. Goal-tree lifecycle additionally uses `callId` to pair
+a child with its spawning tool call and `status` to settle terminal or
+interrupted frames; these fields do not alter context encoding.
 
 ### Context Assembly
 
@@ -152,7 +138,7 @@ The sequence, bands, roles and budget are [AGENT_CONTEXT.md](./AGENT_CONTEXT.md)
 |----------------|-------------------|
 | Conversation (AGENT_CONTEXT §5.6), first | **Ancestor context** — every frame below the active one, outermost first, each rendered at a decreasing budget |
 | Conversation (AGENT_CONTEXT §5.6), rest | The active frame: compacted segments and live turns, full detail |
-| Outstanding task (AGENT_CONTEXT §5.13) | The open task at the root frame, with `complete_task` / `fail_task` offered — as every runtime renders it. A frame's **goal** is its opening turn (AGENT_CONTEXT §9.1) |
+| Outstanding task (AGENT_CONTEXT §5.13) | The open task at the root frame, with `complete_task` / `fail_task` offered — as every runtime renders it. A frame's **goal** is its opening turn. |
 | Loads chain (AGENT_CONTEXT §7.3) | A **frame tier** inside the session tier, so a subgoal curates its own working set |
 
 The key rule: **the active frame's conversation is full detail; ancestors are progressively summarised.**
@@ -186,7 +172,7 @@ Ancestor budget is configurable. Rule of thumb: parent ~300B, grandparent ~150B,
 
 ## Harness Tools
 
-Five shared controls and four goal-tree controls are configurable through
+Six shared controls and four goal-tree controls are configurable through
 `config.tools` alongside operation paths (`HarnessTools.offered`). A bare
 chatbot gets only the stable `complete_task` / `fail_task` task boundary; their
 handlers return a scoped error when no task is outstanding. Declared skills
@@ -203,9 +189,9 @@ the same stored state directly. Typed outputs additionally inject `complete` /
 | Name | Runtime | Purpose |
 |------|---------|---------|
 | `context_load` | shared | Pin a lattice path in context across turns |
-| `context_unload` | shared | Remove one or several exact agent-managed `loaded_context` keys; hidden when none exist |
+| `context_unload` | shared | Remove exact agent-managed load keys returned by `context_load`, `skill_load` or `more_tools` |
 | `skill_load` | shared | Load a skill from the index (implied by declared skills) |
-| `more_tools` | shared | Append operations to the active tool state for the rest of the run |
+| `more_tools` | shared | Create a persistent tool-only load from operation paths; remove it by its returned key with `context_unload` |
 | `invoke_tool` | shared | Invoke an operation introduced by a later tool-addition event (automatically implied where needed) |
 | `complete_task` | shared task boundary | Resolve the in-scope caller task; stable definition, scoped at execution |
 | `fail_task` | shared task boundary | Fail the in-scope caller task; stable definition, scoped at execution |
@@ -285,23 +271,12 @@ The `summary` parameter is required — only the LLM knows what matters in the w
 
 Both runtimes also use the byte-budget thresholds of AGENT_CONTEXT.md §3.4: a warning at 70%, escalating at 90% when `compact` is available. There is no hard truncation: if the agent ignores the warning and the provider rejects the prompt, the cycle fails loudly. The runtime never removes context on its own authority.
 
-## Compacted Segment Structure
-
-```json5
-{
-  summary: "Explored vendor A products (23% share, 14 products). Explored financials (4.2B revenue, 8% growth). Identified margin pressure. Wrote notes to w/notes/vendor-a.",
-  turns: 45,
-  items: [
-    {role: "assistant", content: "Let me check products."},
-    {role: "assistant", content: "...", toolCalls: [{id: "tc_1", name: "covia_inspect", arguments: {path: "w/vendors/a/products", budget: 800}}]},
-    {role: "tool", id: "tc_1", name: "covia_inspect", content: "{flagship: [\"Atlas\", \"Beacon\", \"Core\"], total: 14, share: 0.23}"},
-    {role: "assistant", content: "Strong portfolio, 23% share. Now financials."},
-    // ... all 45 turns
-  ]
-}
-```
-
-`summary` is LLM-provided (via `compact` call). `turns` and `items` are harness-provided. Normal model context renders only the summary; the exact nested `items` remain lattice data for audit and bounded retrospective expansion through `agent:sessionRead archiveDepth=N`.
+The compacted-segment encoding is part of the single durable context-state
+contract in
+[AGENT_CONTEXT.md §1.1](./AGENT_CONTEXT.md#11-durable-context-state-contract).
+This harness supplies the agent-authored summary and archives the replaced
+conversation through that shared representation; it defines no goal-tree-only
+segment shape.
 
 ## Scoped Loads
 
@@ -572,49 +547,16 @@ There's no separate compaction mechanism. It's the same principle applied everyw
 
 One principle: **full data remains lattice data while model context stays deliberately bounded.** Ancestor budgets use `CellExplorer`; compaction uses an explicit summary and exposes nested history only through bounded introspection or ordinary authorised lattice reads.
 
-## State Model
+## State Ownership
 
-Frame state lives on the **session record**, not per-adapter agent state. Config remains on the agent; per-conversation data is owned by the session.
-
-### Session record
-
-```json5
-// sessions/<sid>
-{
-  parties: [ /* DIDs participating */ ],
-  meta:    { created: <ts>, turns: <N>, ... },
-  pending: [ /* intake envelopes not yet drained into the frame */ ],
-  frames: [
-    {
-      description: "Session origin (first message, task goal, invocation input)",
-      conversation: [ /* segments + live turns -- the session's sole conversation record */ ],
-      loads:        { /* frame-scoped loads */ }
-    },
-    {
-      description: "Subgoal description (pushed by subgoal tool)",
-      conversation: [ /* ... */ ],
-      loads:        { /* ... */ }
-    }
-  ],
-  result: null  // set when root frame completes (one-shot invocations only)
-}
-```
-
-The frame stack is stored as a vector. The last element is the active frame. Push appends, pop removes the last element. `frames[0]` is the persistent root frame — its `conversation` is the canonical session history.
-
-### Agent record
-
-```json5
-// g/<agent>
-{
-  config: { /* operation, model, systemPrompt, tools, caps, context */ },
-  state:  { /* agent-level state -- NO per-session conversation data here */ },
-  tasks:  { /* pending task Jobs */ },
-  sessions: { /* session IDs this agent participates in */ }
-}
-```
-
-Config is read on every transition and propagated into the transition input. Per-session data (frames, pending) is fetched from the session record, not the agent.
+Frame state lives on the **session record**, not in per-adapter agent state.
+The surrounding session/agent containers are defined in
+[AGENT_SESSIONS.md §4](./AGENT_SESSIONS.md#4-storage-layout); context-bearing
+frame cells are defined in
+[AGENT_CONTEXT.md §1.1](./AGENT_CONTEXT.md#11-durable-context-state-contract).
+This document owns only goal-tree lifecycle: push appends a child frame, pop
+removes the active child, and `frames[0]` remains the root. Agent config remains
+on the agent record and is captured with the session snapshot for a transition.
 
 Both the full goal-tree adapter and the simpler LLM chat adapter share this session shape and frame store. The simpler case has one root frame and may opt into shared harness tools; the goal-tree case adds nested frames and hierarchy controls. A single reader walks both.
 

@@ -2126,9 +2126,6 @@ public class AgentAdapter extends AAdapter {
 		}
 
 		agent.updateConfigAndState(newConfig, newState);
-		if (newConfig != null) {
-			ContextAssembler.refreshSkillCatalogs(agent, engine, ctx, newConfig);
-		}
 
 		AMap<AString, ACell> result = Maps.of(
 			Fields.STATUS, agent.getStatus(),
@@ -2358,7 +2355,7 @@ public class AgentAdapter extends AAdapter {
 
 	/** Explicit owner-side provider-prefix rebuild for one idle session. The
 	 * conversation and loads are untouched; only materialised renderedContext
-	 * cells are removed, so the next inference uses current config and sources. */
+	 * cells are removed, so equal config can be refreshed from current sources. */
 	@SuppressWarnings("unchecked")
 	private void handleReloadContext(Job job, ACell input, RequestContext ctx) {
 		AgentTarget target = resolveAgentTarget(ctx, input, Fields.AGENT_ID,

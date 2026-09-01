@@ -408,7 +408,7 @@ public class ContextAssemblerTest {
 	}
 
 	@Test
-	public void testVolatilePinnedContextStaysOutOfThePrefixAndRefreshes() {
+	public void testVolatilePinnedContextAppendsOnlyWhenChanged() {
 		write("w/live-profile", Strings.create("first"));
 		AMap<AString, ACell> config = Maps.of(K_CONTEXT, Vectors.of((ACell) Maps.of(
 			"ref", "w/live-profile", "volatile", true, "trusted", false)));
@@ -416,12 +416,23 @@ public class ContextAssemblerTest {
 
 		ContextAssembler.Rendered rendered = ContextAssembler.initialise(s);
 		assertFalse(allContent(rendered.messages()).contains("first"));
+		AMap<AString, ACell> frame = GoalTreeContext.applyObservations(
+			GoalTreeContext.createFrame(""),
+			ContextAssembler.observations(s, Loads.Snapshot.EMPTY), 1L);
+		s = s.withFrames(Vectors.of((ACell) frame));
 		assertTrue(allContent(ContextAssembler.assemble(s)).contains("first"));
 
+		AMap<AString, ACell> unchanged = GoalTreeContext.applyObservations(frame,
+			ContextAssembler.observations(s, Loads.Snapshot.EMPTY), 2L);
+		assertSame(frame, unchanged, "an equal rendered observation performs no state update");
+
 		write("w/live-profile", Strings.create("second"));
-		String refreshed = allContent(ContextAssembler.assemble(s));
+		AMap<AString, ACell> changed = GoalTreeContext.applyObservations(frame,
+			ContextAssembler.observations(s, Loads.Snapshot.EMPTY), 3L);
+		String refreshed = allContent(ContextAssembler.assemble(
+			s.withFrames(Vectors.of((ACell) changed))));
 		assertTrue(refreshed.contains("second"), refreshed);
-		assertFalse(refreshed.contains("first"), refreshed);
+		assertTrue(refreshed.contains("first"), "the previous value remains honest history");
 	}
 
 	@Test
@@ -631,7 +642,7 @@ public class ContextAssemblerTest {
 		assertEquals("Alpha notes", RT.getIn(entry, "label").toString());
 		assertEquals("w/skills/alpha", RT.getIn(entry, "key").toString(), "unloads with the skill");
 		assertEquals("Alpha extra context", RT.getIn(entry, "content").toString());
-		AVector<ACell> aggregate = ContextAssembler.contextExchanges(snap.exchanges(), false);
+		AVector<ACell> aggregate = ContextAssembler.contextExchanges(snap.exchanges());
 		assertEquals(ContextAssembler.LOADED_CONTEXT_TOOL,
 			RT.getIn(aggregate.get(0), "toolCalls", 0, "name").toString());
 		assertEquals("Alpha extra context",
@@ -1024,26 +1035,60 @@ public class ContextAssemblerTest {
 	}
 
 	@Test
-	public void testPersistedInitialVectorsSurviveSourceAndPaletteMutation() {
-		Spec original = new Spec(engine, ctx, null, null, null, null, 0, null,
+	public void testPersistedInitialVectorsSurviveAmbientMaterialisationChange() {
+		AMap<AString, ACell> sourceConfig = Maps.of(
+			"systemPrompt", Maps.of("ref", "w/prompts/identity"));
+		Spec original = new Spec(engine, ctx, null,
+			Maps.of("systemPrompt", "resolved identity one"), null, null, 0, null,
 			Vectors.of((ACell) HarnessTools.DEF_CONTEXT_LOAD), null, null,
 			Vectors.of((ACell) GoalTreeContext.createFrame("")), null, null, true,
-			null, null, null, null, null);
+			null, null, null, null, null).withSourceConfig(sourceConfig);
 		ContextAssembler.Rendered rendered = ContextAssembler.initialise(original);
 		AMap<AString, ACell> frame = GoalTreeContext.withRenderedContext(
 			GoalTreeContext.appendTurn(GoalTreeContext.createFrame(""),
 				Maps.of("role", "user", "content", "later turn")), rendered);
 
-		Spec changedSources = new Spec(engine, ctx, null,
-			Maps.of("systemPrompt", "a changed source must await explicit rebuild"),
+		Spec changedAmbient = new Spec(engine, ctx, null,
+			Maps.of("systemPrompt", "resolved identity two"),
 			null, null, 0, null,
 			Vectors.of((ACell) HarnessTools.DEF_CONTEXT_UNLOAD), null, null,
-			Vectors.of((ACell) frame), null, null, true, null, null, null, null, null);
-		Prompt prompt = ContextAssembler.assemble(changedSources);
+			Vectors.of((ACell) frame), null, null, true, null, null, null, null, null)
+			.withSourceConfig(sourceConfig);
+		Prompt prompt = ContextAssembler.assemble(changedAmbient);
 
 		assertEquals(rendered.tools(), prompt.tools());
 		assertEquals(rendered.messages(), prompt.messages().slice(0, rendered.messages().count()));
+		assertTrue(head(prompt).contains("resolved identity one"));
+		assertFalse(head(prompt).contains("resolved identity two"));
 		assertEquals("later turn", content(prompt.messages().get(rendered.messages().count())));
+	}
+
+	@Test
+	public void testDeclarativeConfigChangeRerendersPrefixAndKeepsConversation() {
+		AMap<AString, ACell> oldConfig = Maps.of("systemPrompt", "old identity");
+		Spec original = new Spec(engine, ctx, null, oldConfig, null, null, 0, null,
+			Vectors.of((ACell) HarnessTools.DEF_CONTEXT_LOAD), null, null,
+			Vectors.of((ACell) GoalTreeContext.createFrame("")), null, null, true,
+			null, null, null, null, null);
+		ContextAssembler.Rendered rendered = ContextAssembler.initialise(original);
+		assertEquals(oldConfig, rendered.sourceConfig());
+		assertEquals(rendered, ContextAssembler.Rendered.fromCell(rendered.toCell()));
+		assertNull(RT.getIn(rendered.toCell(), "skillCatalog"),
+			"the skills index already lives in messages and has no sidecar");
+
+		AMap<AString, ACell> frame = GoalTreeContext.withRenderedContext(
+			GoalTreeContext.appendTurn(GoalTreeContext.createFrame(""),
+				Maps.of("role", "user", "content", "historical turn")), rendered);
+		AMap<AString, ACell> newConfig = Maps.of("systemPrompt", "new identity");
+		Spec changed = new Spec(engine, ctx, null, newConfig, null, null, 0, null,
+			Vectors.of((ACell) HarnessTools.DEF_CONTEXT_UNLOAD), null, null,
+			Vectors.of((ACell) frame), null, null, true, null, null, null, null, null);
+
+		Prompt prompt = ContextAssembler.assemble(changed);
+		assertTrue(head(prompt).contains("new identity"));
+		assertFalse(head(prompt).contains("old identity"));
+		assertEquals(Vectors.of((ACell) HarnessTools.DEF_CONTEXT_UNLOAD), prompt.tools());
+		assertTrue(allContent(prompt).contains("historical turn"));
 	}
 
 	// ========== ToolPalette ==========

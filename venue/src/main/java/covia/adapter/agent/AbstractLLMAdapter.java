@@ -712,7 +712,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 *     one non-system message. Anthropic's Messages API does this, which is
 	 *     why the empty-state signal is a {@code user} turn.</li>
 	 * <li>{@code cachePrefix}: the provider caches an explicitly marked stable
-	 *     prefix, so keeping volatile elements out of the head has a direct
+	 *     prefix, so keeping watched source output out of the head has a direct
 	 *     cost saving (AGENT_CONTEXT.md §3.1).</li>
 	 * <li>{@code toolCalling}: {@code false} declares that the model cannot call
 	 *     tools — {@code agent:create} warns when an agent declares tools or

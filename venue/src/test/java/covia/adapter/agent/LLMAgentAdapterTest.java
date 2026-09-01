@@ -1072,9 +1072,9 @@ public class LLMAgentAdapterTest {
 		assertTrue(turn2.toString().contains("SKILL_BODY_PRESENT"), turn2.toString());
 		assertTrue(turn2.toString().contains("SKILL_TOOLS_ACTIVE"), turn2.toString());
 
-		// The app/release path reseeds a skillset and then explicitly reapplies
-		// agent config. A changed catalog appends once; the initial messages stay
-		// byte-identical.
+		// A source behind unchanged declarative config is ambient: reseeding the
+		// directory and reapplying the same config neither rewrites nor appends to
+		// this session's already-materialised context.
 		session = agent.getSession(sid);
 		ACell initialMessages = RT.getIn(session, Fields.FRAMES, CVMLong.ZERO,
 			GoalTreeContext.K_RENDERED_CONTEXT, Strings.intern("messages"));
@@ -1097,7 +1097,7 @@ public class LLMAgentAdapterTest {
 		session = agent.getSession(sid);
 		assertEquals(initialMessages, RT.getIn(session, Fields.FRAMES, CVMLong.ZERO,
 			GoalTreeContext.K_RENDERED_CONTEXT, Strings.intern("messages")));
-		assertTrue(RT.getIn(session, Fields.FRAMES, CVMLong.ZERO,
+		assertFalse(RT.getIn(session, Fields.FRAMES, CVMLong.ZERO,
 			Strings.intern("conversation")).toString().contains("Beta catalog refresh"));
 
 		// Beta was not in this session's immutable initial manifest. Loading it
@@ -1116,15 +1116,15 @@ public class LLMAgentAdapterTest {
 		String nextMessages = RT.ensureVector(next.get(Fields.MESSAGES)).toString();
 		assertTrue(nextMessages.contains("toolAddition") && nextMessages.contains("covia_write"),
 			"a later catalog tool must be appended as tool state: " + nextMessages);
-		long turnsAfterRefresh = RT.ensureVector(RT.getIn(session, Fields.FRAMES, CVMLong.ZERO,
+		long turnsAfterAmbientUpdate = RT.ensureVector(RT.getIn(session, Fields.FRAMES, CVMLong.ZERO,
 			Strings.intern("conversation"))).count();
 		engine.jobs().invokeOperation("v/ops/agent/update", Maps.of(
 			Fields.AGENT_ID, "skill-e2e-agent",
 			Fields.CONFIG, Maps.of("skillsets", Vectors.of(Strings.create("w/skills")))),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
-		assertEquals(turnsAfterRefresh, RT.ensureVector(RT.getIn(agent.getSession(sid),
+		assertEquals(turnsAfterAmbientUpdate, RT.ensureVector(RT.getIn(agent.getSession(sid),
 			Fields.FRAMES, CVMLong.ZERO, Strings.intern("conversation"))).count(),
-			"an equal catalog must not append duplicate context");
+			"an equal config must not append ambient catalog state");
 	}
 
 	// ========== Response format ==========
@@ -2823,9 +2823,9 @@ public class LLMAgentAdapterTest {
 
 	@Test
 	public void testContextIncludesVolatileLoadExchanges() {
-		// A config.loads op entry renders as a volatile exchange in the tail of
-		// a live inference; agent:context builds the same Spec, so it must show
-		// the exchange too (#418) — not merely report the entry resolved.
+		// A watched config.loads op entry appends its first observation to the
+		// local preview frame; agent:context must show the exchange too (#418) —
+		// not merely report the entry resolved.
 		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(
 			Fields.AGENT_ID, "loads-context-agent",
 			Fields.CONFIG, Maps.of(
@@ -2842,6 +2842,6 @@ public class LLMAgentAdapterTest {
 			RequestContext.of(ALICE_DID)).awaitResult(5000));
 		AVector<ACell> messages = RT.ensureVector(context.get(Fields.MESSAGES));
 		assertTrue(messages != null && messages.toString().contains("pong-418"),
-			"the volatile op load's exchange must be in the inspected messages: " + messages);
+			"the watched op load's exchange must be in the inspected messages: " + messages);
 	}
 }

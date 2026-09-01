@@ -77,14 +77,14 @@ public final class ToolPalette {
 	 * Resolved tool definitions with their dispatch routes (tool name → operation
 	 * ref), configured tools that did not resolve ({@code {operation, reason}}),
 	 * and inspection-only provenance in definition order.
-	 * {@code routes} is a fresh mutable map per palette: runtimes add routes for
-	 * tools adopted mid-run.
+	 * {@code routes} is immutable. Dynamic routes are projections of durable
+	 * loads and never mutate this configured palette.
 	 */
 	public record Palette(AVector<ACell> tools, Map<String, AString> routes,
 			AVector<ACell> unavailable, AVector<ACell> provenance) {
 		public Palette {
 			tools = (tools != null) ? tools : Vectors.empty();
-			routes = (routes != null) ? routes : new HashMap<>();
+			routes = (routes != null) ? Map.copyOf(routes) : Map.of();
 			unavailable = (unavailable != null) ? unavailable : Vectors.empty();
 			provenance = (provenance != null) ? provenance : Vectors.empty();
 		}
@@ -226,6 +226,39 @@ public final class ToolPalette {
 	}
 
 	/**
+	 * Resolves operation refs once into the durable binding shape carried by a
+	 * load: {@code [{operation, definition}]}. The provider projection uses only
+	 * {@code definition}; dispatch uses the co-located {@code operation}.
+	 */
+	static AVector<ACell> bindingsForOperations(Engine engine, RequestContext ctx,
+			AVector<ACell> operations) {
+		Map<String, AString> routes = new HashMap<>();
+		AVector<ACell> definitions = forOperations(engine, ctx, operations, routes);
+		AVector<ACell> bindings = Vectors.empty();
+		for (long i = 0; i < definitions.count(); i++) {
+			ACell definition = definitions.get(i);
+			AString name = RT.ensureString(RT.getIn(definition, K_NAME));
+			AString operation = (name != null) ? routes.get(name.toString()) : null;
+			if (operation != null) {
+				bindings = bindings.conj(Maps.of(
+					Fields.OPERATION, operation,
+					Fields.DEFINITION, definition));
+			}
+		}
+		return bindings;
+	}
+
+	/** Materialises a stable load's tool declarations once. */
+	static AMap<AString, ACell> materialiseLoadToolBindings(Engine engine,
+			RequestContext ctx, AMap<AString, ACell> spec) {
+		if (spec.containsKey(Loads.K_TOOL_BINDINGS)) return spec;
+		AVector<ACell> operations = RT.ensureVector(spec.get(K_TOOLS));
+		if (operations == null) return spec;
+		return spec.assoc(Loads.K_TOOL_BINDINGS,
+			bindingsForOperations(engine, ctx, operations));
+	}
+
+	/**
 	 * Configured tools that do not resolve under the agent's authority, as
 	 * {@code {operation, reason}} — the author-time diagnostic used by
 	 * {@code agent:create} warnings and {@code agent:info}.
@@ -263,19 +296,23 @@ public final class ToolPalette {
 		for (var entry : Loads.ordered(effectiveLoads)) {
 			ACell spec = entry.getValue();
 			if (!(spec instanceof AMap)) continue;
-			AVector<ACell> ops = RT.ensureVector(((AMap<AString, ACell>) spec).get(K_TOOLS));
-			if (ops == null || ops.count() == 0) continue;
-			Map<String, AString> newRoutes = new HashMap<>();
-			AVector<ACell> defs = forOperations(engine, ctx, ops, newRoutes);
-			for (long i = 0; i < defs.count(); i++) {
-				ACell def = defs.get(i);
+			AMap<AString, ACell> meta = (AMap<AString, ACell>) spec;
+			AVector<ACell> bindings = RT.ensureVector(meta.get(Loads.K_TOOL_BINDINGS));
+			if (bindings == null) {
+				AVector<ACell> ops = RT.ensureVector(meta.get(K_TOOLS));
+				if (ops == null || ops.count() == 0) continue;
+				bindings = bindingsForOperations(engine, ctx, ops);
+			}
+			for (long i = 0; i < bindings.count(); i++) {
+				ACell binding = bindings.get(i);
+				ACell def = RT.getIn(binding, Fields.DEFINITION);
 				AString n = RT.ensureString(RT.getIn(def, K_NAME));
 				if (n == null || !names.add(n.toString())) continue;
 				added = added.conj(def);
-				AString route = newRoutes.get(n.toString());
+				AString route = RT.ensureString(RT.getIn(binding, Fields.OPERATION));
 				if (route != null) routes.put(n.toString(), route);
 				if (provenance != null) provenance.add(entry(n,
-					Skills.isSkillEntry((AMap<AString, ACell>) spec) ? SOURCE_SKILL : SOURCE_LOAD,
+					Skills.isSkillEntry(meta) ? SOURCE_SKILL : SOURCE_LOAD,
 					route, entry.getKey()));
 			}
 		}

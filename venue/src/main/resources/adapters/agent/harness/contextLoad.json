@@ -1,6 +1,6 @@
 {
     "name": "Load Agent Context",
-    "description": "Keep something visible in your context across turns until you remove it: a lattice path loaded now, a note you write (text), a read-only operation whose fresh result you want each turn (op), or a finished job's result (job). Give exactly one of path, text, op or job; text, op and job also need an id — the key shown in the element's header and passed to context_unload. Use for rules, schemas or reference material you consult repeatedly; for data needed once, use an advertised inspection or read operation instead. An op entry re-runs every call and renders at the end of your context (never cached); other entries render in the working set. Scoped to this conversation (subgoals inherit it); other conversations are unaffected.",
+    "description": "Keep something visible in your context across turns until you remove it: a lattice path loaded now, a note you write (text), a read-only operation whose result you want watched (op), or a finished job's result (job). Give exactly one of path, text, op or job; text, op and job also need an id — the key shown in the element's header and passed to context_unload. Use for rules, schemas or reference material you consult repeatedly; for data needed once, use an advertised inspection or read operation instead. An op entry is checked before every model call and appends a new observation only when its rendered result changes; other entries render once. Scoped to this conversation (subgoals inherit it); other conversations are unaffected.",
     "dateCreated": "2026-08-29T00:00:00Z",
     "operation": {
         "adapter": "harness:contextLoad",
@@ -23,7 +23,7 @@
                 },
                 "op": {
                     "type": "string",
-                    "description": "A read-only operation path (e.g. v/ops/covia/list) re-run on every model call; its result renders at the end of your context"
+					"description": "A read-only operation path (e.g. v/ops/covia/list) checked before every model call; a new result is appended only when it changes"
                 },
                 "input": {
                     "type": "object",
@@ -43,7 +43,7 @@
                 },
                 "volatile": {
                     "type": "boolean",
-                    "description": "Render at the end of your context, never cached, so its changes cost nothing else. Default true for op, else false. Set true for a path whose value is likely to change during this conversation (a queue, a status, something you write to); leave false for stable reference material."
+					"description": "Watch before each model call and append a new observation only when the rendered value changes. Default true for op, else false. Set true for a path likely to change during this conversation; leave false for stable reference material."
                 }
             }
         }

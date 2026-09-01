@@ -473,6 +473,49 @@ public class GoalTreeContextTest {
 		assertSame(frame, compacted);
 	}
 
+	@Test
+	public void testObservationsAppendOnChangeAndSurviveCompaction() {
+		AString id = Strings.create("loads:status");
+		AVector<ACell> firstValue = Vectors.of((ACell) Maps.of(
+			"role", "system", "content", "status one"));
+		AVector<ACell> first = Vectors.of((ACell)
+			ContextAssembler.observation(id, 0, firstValue));
+
+		AMap<AString, ACell> frame = GoalTreeContext.applyObservations(
+			GoalTreeContext.createFrame("watch"), first, 10L);
+		AVector<ACell> conversation = RT.ensureVector(
+			frame.get(GoalTreeContext.K_CONVERSATION));
+		assertEquals(1, conversation.count());
+		assertEquals("status one", RT.getIn(conversation.get(0), "content").toString());
+
+		AMap<AString, ACell> unchanged = GoalTreeContext.applyObservations(frame, first, 20L);
+		assertSame(frame, unchanged, "the clock is not part of canonical comparison");
+
+		AVector<ACell> second = Vectors.of((ACell) ContextAssembler.observation(id, 0,
+			Vectors.of((ACell) Maps.of("role", "system", "content", "status two"))));
+		AMap<AString, ACell> changed = GoalTreeContext.applyObservations(frame, second, 30L);
+		AVector<ACell> changedConversation = RT.ensureVector(
+			changed.get(GoalTreeContext.K_CONVERSATION));
+		assertEquals(2, changedConversation.count());
+		assertEquals("status two", RT.getIn(changedConversation.get(1), "content").toString());
+
+		ACell exactLatest = RT.getIn(changed, GoalTreeContext.K_OBSERVATIONS,
+			id, ContextAssembler.K_OBSERVATION_MESSAGES, 0L);
+		AMap<AString, ACell> compacted = GoalTreeContext.compactFrame(changed, "latest status is two");
+		AVector<ACell> compactedConversation = RT.ensureVector(
+			compacted.get(GoalTreeContext.K_CONVERSATION));
+		assertEquals(2, compactedConversation.count(), "archive plus current observation");
+		assertSame(exactLatest, compactedConversation.get(1),
+			"compaction reuses the persisted observation without resolving or rendering");
+
+		AMap<AString, ACell> removed = GoalTreeContext.applyObservations(compacted,
+			Vectors.empty(), 40L);
+		assertNull(removed.get(GoalTreeContext.K_OBSERVATIONS));
+		String removal = RT.getIn(removed, GoalTreeContext.K_CONVERSATION,
+			2L, "content").toString();
+		assertTrue(removal.contains("no longer active"), removal);
+	}
+
 	// ========== Turn counting and size ==========
 
 	@Test

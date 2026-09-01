@@ -194,8 +194,8 @@ public class AgentToolboxTest {
 			assertFalse(hasToolAddition(skill, "covia_read"),
 				where + " fixed skill schema was duplicated into conversation state: " + skill);
 
-			// more_tools uses the same append-only state path. The following
-			// dispatcher call proves the new route is live without another palette.
+			// more_tools is a tool-only load. The parallel dispatcher call proves
+			// the new route is live immediately without rewriting the fixed palette.
 			AMap<AString, ACell> more = step(agent, "add a tool",
 				Maps.of("toolCalls", Vectors.of(
 					(ACell) Maps.of("id", "call_more_tools", "name", HarnessTools.MORE_TOOLS,
@@ -212,6 +212,9 @@ public class AgentToolboxTest {
 			assertNotNull(invokedResult, where);
 			assertFalse(invokedResult.toString().startsWith("Error:"),
 				where + " fixed dispatcher did not invoke the added operation: " + more);
+			AString toolLoadPath = RT.ensureString(RT.getIn(
+				call(more, "call_more_tools"), Fields.RESULT, AbstractLLMAdapter.K_PATH));
+			assertNotNull(toolLoadPath, where + " more_tools did not return its load key: " + more);
 
 			// compact is one shared conversation primitive. The summary is
 			// assistant memory and the archived inputs are not repeated visibly.

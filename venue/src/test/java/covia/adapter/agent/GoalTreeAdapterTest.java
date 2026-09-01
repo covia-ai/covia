@@ -347,11 +347,12 @@ public class GoalTreeAdapterTest {
 				(ACell) Strings.create("v/ops/covia/read"), // not a harness tool — skipped
 				(ACell) Strings.create("more_tools")));
 		AVector<ACell> resolved = GoalTreeAdapter.resolveHarnessTools(config);
-		assertEquals(4, resolved.count());
+		assertEquals(5, resolved.count());
 		assertEquals("subgoal", RT.ensureString(RT.getIn(resolved.get(0), "name")).toString());
 		assertEquals("complete", RT.ensureString(RT.getIn(resolved.get(1), "name")).toString());
 		assertEquals("more_tools", RT.ensureString(RT.getIn(resolved.get(2), "name")).toString());
-		assertEquals("invoke_tool", RT.ensureString(RT.getIn(resolved.get(3), "name")).toString());
+		assertEquals("context_unload", RT.ensureString(RT.getIn(resolved.get(3), "name")).toString());
+		assertEquals("invoke_tool", RT.ensureString(RT.getIn(resolved.get(4), "name")).toString());
 	}
 
 	@Test
@@ -681,20 +682,41 @@ public class GoalTreeAdapterTest {
 
 	@Test
 	public void testStrictTaskSchemaRejectsThenAccepts() {
-		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
-		ACell output = adapter.processGoal(null, ALICE, Maps.of(
+		AMap<AString, ACell> config = Maps.of(
+			Fields.OPERATION, "v/ops/goaltree/chat",
+			"llmOperation", "v/test/ops/llm",
+			"model", "strict-goal-schema-test");
+		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(
 			Fields.AGENT_ID, "strict-goal-schema-agent",
-			AgentState.KEY_CONFIG, Maps.of(
-				"llmOperation", "v/test/ops/llm",
-				"model", "strict-goal-schema-test"),
-			Fields.TASKS, Vectors.of((ACell) Maps.of(
-				Fields.JOB_ID, "strict-goal-job",
-				Fields.INPUT, "return a typed answer",
-				Fields.RESPONSE_SCHEMA, simpleSchema(),
-				Fields.STRICT, CVMBool.TRUE))));
+			Fields.CONFIG, config), ALICE).awaitResult(5000);
 
-		assertEquals("corrected", RT.getIn(output, Fields.RESPONSE, "answer").toString(),
-			"the invalid first completion must be rejected and retried against the task schema");
+		engine.jobs().invokeOperation("v/ops/agent/request", Maps.of(
+			Fields.AGENT_ID, "strict-goal-schema-agent",
+			Fields.INPUT, "return a typed answer",
+			Fields.RESPONSE_SCHEMA, simpleSchema(),
+			Fields.STRICT, CVMBool.TRUE,
+			"timeout", 15000L), ALICE).awaitResult(20000);
+
+		AgentState agent = engine.getVenueState().users().get(ALICE_DID)
+			.agent("strict-goal-schema-agent");
+		TestEngine.awaitTimelineCount(agent, 1, 10000);
+		assertEquals(0, agent.getTasks().count());
+		ACell taskResults = RT.getIn(agent.getTimeline().get(0), Fields.TASK_RESULTS);
+		assertNotNull(taskResults);
+		assertTrue(taskResults.toString().contains("corrected"),
+			"the invalid first completion must be rejected and retried: " + taskResults);
+		ACell session = agent.getSessions().entrySet().iterator().next().getValue();
+		ACell root = RT.getIn(session, Fields.FRAMES, 0);
+		assertEquals(config, RT.getIn(root,
+			GoalTreeContext.K_RENDERED_CONTEXT, "sourceConfig"),
+			"request schema must not become a prefix invalidation input");
+		assertNull(RT.getIn(root,
+			GoalTreeContext.K_RENDERED_CONTEXT, "sourceConfig", "responseFormat"));
+		AVector<ACell> tools = RT.ensureVector(RT.getIn(root,
+			GoalTreeContext.K_RENDERED_CONTEXT, "tools"));
+		assertTrue(hasNamedTool(tools, TaskTools.COMPLETE));
+		assertFalse(hasNamedTool(tools, "complete"),
+			"request schema must not specialise the persistent root palette");
 	}
 
 	@Test
@@ -1111,13 +1133,14 @@ public class GoalTreeAdapterTest {
 
 		AMap<AString, ACell> outputs = Maps.of(
 			Strings.create("complete"), Maps.of(Strings.create("schema"), simpleSchema()));
+		AMap<AString, ACell> config = Maps.of(
+			Strings.create("llmOperation"), Strings.create("v/test/ops/llm"),
+			Strings.create("outputs"), outputs);
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "typed-text-agent",
 			AgentState.KEY_STATE, null,
-			AgentState.KEY_CONFIG, Maps.of(
-				Strings.create("llmOperation"), Strings.create("v/test/ops/llm"),
-				Strings.create("outputs"), outputs),
+			AgentState.KEY_CONFIG, config,
 			Fields.MESSAGES, Vectors.of(
 				(ACell) Maps.of(Strings.create("content"),
 					Strings.create("anything"))));
@@ -1128,6 +1151,12 @@ public class GoalTreeAdapterTest {
 		assertNotNull(err, "Failed transition should report error");
 		assertFalse(err.toString().equals("anything"),
 			"Text-only response must not be accepted under typed outputs: " + err);
+		ACell root = RT.getIn(output, Fields.FRAMES, 0);
+		assertEquals(config, RT.getIn(root,
+			GoalTreeContext.K_RENDERED_CONTEXT, "sourceConfig"),
+			"configured outputs may project responseFormat without changing the declarative stamp");
+		assertNull(RT.getIn(root,
+			GoalTreeContext.K_RENDERED_CONTEXT, "sourceConfig", "responseFormat"));
 	}
 
 	@Test
@@ -1319,6 +1348,40 @@ public class GoalTreeAdapterTest {
 		assertEquals(1, countTurnsMatching(conv3, "turn three"));
 	}
 
+	@Test
+	public void testDeclarativeConfigChangeRebuildsRootPrefixAndPreservesTurns() {
+		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
+		AMap<AString, ACell> oldConfig = Maps.of(
+			"llmOperation", "v/test/ops/llm", "systemPrompt", "OLD_GOAL_IDENTITY");
+		ACell first = adapter.processGoal(null, ALICE, Maps.of(
+			Fields.AGENT_ID, "config-generation-goal",
+			AgentState.KEY_CONFIG, oldConfig,
+			Fields.MESSAGES, Vectors.of(Maps.of("content", "first turn"))));
+		AVector<ACell> firstFrames = RT.ensureVector(RT.getIn(first, Fields.FRAMES));
+		AVector<ACell> firstTurns = RT.ensureVector(RT.getIn(
+			firstFrames.get(0), GoalTreeContext.K_CONVERSATION));
+		assertTrue(RT.getIn(firstFrames.get(0), GoalTreeContext.K_RENDERED_CONTEXT,
+			"messages", 0, "content").toString().contains("OLD_GOAL_IDENTITY"));
+
+		AMap<AString, ACell> newConfig = Maps.of(
+			"llmOperation", "v/test/ops/llm", "systemPrompt", "NEW_GOAL_IDENTITY");
+		ACell second = adapter.processGoal(null, ALICE, Maps.of(
+			Fields.AGENT_ID, "config-generation-goal",
+			AgentState.KEY_CONFIG, newConfig,
+			Fields.SESSION, Maps.of(AgentState.KEY_FRAMES, firstFrames),
+			Fields.MESSAGES, Vectors.of(Maps.of("content", "second turn"))));
+		AVector<ACell> secondFrames = RT.ensureVector(RT.getIn(second, Fields.FRAMES));
+		ACell root = secondFrames.get(0);
+		assertTrue(RT.getIn(root, GoalTreeContext.K_RENDERED_CONTEXT,
+			"messages", 0, "content").toString().contains("NEW_GOAL_IDENTITY"));
+		assertEquals(newConfig, RT.getIn(root,
+			GoalTreeContext.K_RENDERED_CONTEXT, "sourceConfig"));
+		AVector<ACell> secondTurns = RT.ensureVector(
+			RT.getIn(root, GoalTreeContext.K_CONVERSATION));
+		assertEquals(firstTurns, secondTurns.slice(0, firstTurns.count()),
+			"config-owned context changes; prior rendered turns do not");
+	}
+
 	/**
 	 * Counts user-role turns in a conversation vector whose content
 	 * stringifies to contain {@code needle}. Filters by role to avoid
@@ -1400,9 +1463,9 @@ public class GoalTreeAdapterTest {
 
 	@Test
 	public void testContextIncludesVolatileLoadExchanges() {
-		// preview() must set the loads exactly as runFrame does (withLoads): a
-		// config.loads op entry renders as a volatile exchange in the tail of a
-		// live inference, and agent:context must show it too (#418).
+		// preview() must apply observations exactly as runFrame does: a watched
+		// config.loads op entry appends its first value to the local frame, and
+		// agent:context must show it too (#418).
 		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(
 			Fields.AGENT_ID, "loads-context-goal",
 			Fields.CONFIG, Maps.of(
@@ -1419,6 +1482,6 @@ public class GoalTreeAdapterTest {
 			ALICE).awaitResult(5000));
 		AVector<ACell> messages = RT.ensureVector(context.get(Fields.MESSAGES));
 		assertTrue(messages != null && messages.toString().contains("pong-418"),
-			"the volatile op load's exchange must be in the inspected messages: " + messages);
+			"the watched op load's exchange must be in the inspected messages: " + messages);
 	}
 }

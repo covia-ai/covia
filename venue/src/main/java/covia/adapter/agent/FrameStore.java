@@ -181,6 +181,22 @@ interface FrameStore {
 	 */
 	boolean update(UnaryOperator<AVector<ACell>> fn);
 
+	/**
+	 * Applies already-materialised watched-context candidates to one frame in a
+	 * single state update. All reads and operation calls must have completed
+	 * before this method; the CAS transform itself is pure and non-blocking.
+	 */
+	@SuppressWarnings("unchecked")
+	default boolean observe(int frameIndex, AVector<ACell> candidates, long timestamp) {
+		return update(frames -> {
+			if (frameIndex < 0 || frameIndex >= frames.count()) return frames;
+			AMap<AString, ACell> frame = (AMap<AString, ACell>) frames.get(frameIndex);
+			AMap<AString, ACell> observed = GoalTreeContext.applyObservations(
+				frame, candidates, timestamp);
+			return (observed == frame) ? frames : frames.assoc(frameIndex, observed);
+		});
+	}
+
 	/** Appends one durable root-conversation turn. The lattice store also
 	 * updates the session's turn/timestamp metadata in the same CAS. */
 	boolean appendRoot(ACell turn);

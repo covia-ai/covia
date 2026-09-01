@@ -1019,34 +1019,62 @@ public class AgentAdapterTest {
 		assertNull(on.get(Strings.intern("toolCalling")), "absent means the norm");
 	}
 
-	/** more_tools on llmagent: definitions append as state and dispatch through
-	 *  the fixed fallback, exactly as on goaltree. */
+	/** Tool-only loads persist and reconstruct dispatch across both runtimes. */
 	@Test
-	public void testMoreToolsOnLlmagent() {
-		engine.jobs().invokeOperation("v/ops/agent/create",
-			Maps.of(Fields.AGENT_ID, "more-tools-llm",
-				Fields.CONFIG, Maps.of(
-					Fields.OPERATION, "v/ops/llmagent/chat",
-					"llmOperation", "v/test/ops/moretoolsllm",
-					Fields.TOOLS, Vectors.of(Strings.create("more_tools")))),
-			RequestContext.of(ALICE_DID)).awaitResult(5000);
-		ACell chat = engine.jobs().invokeOperation("v/ops/agent/chat",
-			Maps.of(Fields.AGENT_ID, "more-tools-llm", Fields.MESSAGE, "extend yourself"),
-			RequestContext.of(ALICE_DID)).awaitResult(15000);
-		String response = RT.getIn(chat, Fields.RESPONSE).toString();
-		assertTrue(response.startsWith("MORE_TOOLS_RESULT:"), response);
+	public void testMoreToolsPersistAcrossRuntimes() {
+		for (String runtime : new String[] {"llmagent", "goaltree"}) {
+			String agentId = "more-tools-" + runtime;
+			engine.jobs().invokeOperation("v/ops/agent/create",
+				Maps.of(Fields.AGENT_ID, agentId,
+					Fields.CONFIG, Maps.of(
+						Fields.OPERATION, "v/ops/" + runtime + "/chat",
+						"llmOperation", "v/test/ops/moretoolsllm",
+						Fields.TOOLS, Vectors.of(Strings.create("more_tools")))),
+				RequestContext.of(ALICE_DID)).awaitResult(5000);
+			ACell chat = engine.jobs().invokeOperation("v/ops/agent/chat",
+				Maps.of(Fields.AGENT_ID, agentId, Fields.MESSAGE, "extend yourself"),
+				RequestContext.of(ALICE_DID)).awaitResult(15000);
+			String response = RT.getIn(chat, Fields.RESPONSE).toString();
+			assertTrue(response.startsWith("MORE_TOOLS_RESULT:"), runtime + ": " + response);
 
-		// The record shows a stable palette and an appended tool-addition event.
-		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("more-tools-llm");
-		TestEngine.awaitTimelineCount(agent, 1, 10000);
-		AVector<ACell> inferences = RT.ensureVector(RT.getIn(agent.getTimeline().get(0), Fields.INFERENCES));
-		assertEquals(3, inferences.count(), "more_tools, then the added tool, then the answer: " + inferences);
-		assertNull(RT.getIn(inferences.get(1), Fields.TOOLS),
-			"a stable palette emits no per-inference tools delta");
-		ACell session = agent.getSessions().entrySet().iterator().next().getValue();
-		assertTrue(RT.getIn(session, Fields.FRAMES, CVMLong.ZERO, Strings.intern("conversation"))
-			.toString().contains("toolAddition"),
-			"the session persists appended tool state");
+			// The record shows a stable palette and an appended tool-addition event.
+			AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent(agentId);
+			TestEngine.awaitTimelineCount(agent, 1, 10000);
+			AVector<ACell> inferences = RT.ensureVector(
+				RT.getIn(agent.getTimeline().get(0), Fields.INFERENCES));
+			assertEquals(3, inferences.count(), runtime + ": " + inferences);
+			assertNull(RT.getIn(inferences.get(1), Fields.TOOLS),
+				runtime + " emitted a per-inference tools delta");
+			ACell session = agent.getSessions().entrySet().iterator().next().getValue();
+			assertTrue(RT.getIn(session, Fields.FRAMES, CVMLong.ZERO,
+				Strings.intern("conversation")).toString().contains("toolAddition"),
+				runtime + " did not persist appended tool state");
+			AMap<AString, ACell> loads = RT.ensureMap(RT.getIn(session, Fields.LOADS));
+			if (loads == null) loads = RT.ensureMap(
+				RT.getIn(session, Fields.FRAMES, CVMLong.ZERO, Fields.LOADS));
+			assertNotNull(loads, runtime + " did not persist the acquired load");
+			ACell toolLoad = loads.entrySet().stream()
+				.map(java.util.Map.Entry::getValue)
+				.filter(v -> "tools".equals(String.valueOf(RT.getIn(v, "kind"))))
+				.findFirst().orElse(null);
+			assertNotNull(toolLoad, runtime + " has no tool-only load: " + session);
+			assertNotNull(RT.getIn(toolLoad, "toolBindings", CVMLong.ZERO, Fields.DEFINITION),
+				runtime + " did not persist the exact tool binding");
+
+			// agent:step is read-only but starts from the durable session. A fresh
+			// runtime tool context must reconstruct the operation route.
+			ACell assistant = Maps.of("toolCalls", Vectors.of((ACell) Maps.of(
+				"id", "call_resumed_echo", "name", "invoke_tool",
+				"arguments", Maps.of("name", "test_echo", "input", Maps.of("again", true)))));
+			AMap<AString, ACell> resumed = RT.ensureMap(engine.jobs().invokeOperation(
+				"v/ops/agent/step", Maps.of(
+					Fields.AGENT_ID, agentId,
+					Fields.SESSION_ID, RT.getIn(chat, Fields.SESSION_ID),
+					"assistant", assistant), RequestContext.of(ALICE_DID)).awaitResult(5000));
+			ACell resumedCall = RT.ensureVector(resumed.get(Fields.CALLS)).get(0);
+			assertEquals(CVMBool.TRUE, RT.getIn(resumedCall, Fields.RESULT, "again"),
+				runtime + ": " + resumed);
+		}
 	}
 
 	/** agent:step runs one harness iteration on a supplied reply: tools dispatched as live, the agent untouched. */
@@ -6263,7 +6291,7 @@ public class AgentAdapterTest {
 	}
 
 	@Test
-	public void testReloadContextRebuildsPrefixAndPreservesConversationExactly() {
+	public void testConfigChangeRebuildsPrefixAndExplicitReloadPreservesConversation() {
 		RequestContext alice = RequestContext.of(ALICE_DID);
 		engine.jobs().invokeOperation("v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "reload-context-agent", Fields.CONFIG, Maps.of(
@@ -6295,7 +6323,22 @@ public class AgentAdapterTest {
 		AMap<AString, ACell> stillOld = RT.ensureMap(
 			RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO));
 		assertTrue(RT.getIn(stillOld, "renderedContext", "messages", 0, "content")
-			.toString().contains("OLD_IDENTITY"), "ordinary update must not rewrite a session prefix");
+			.toString().contains("OLD_IDENTITY"),
+			"update records config atomically; the next inference replaces the stale rendering");
+
+		engine.jobs().invokeOperation("v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "reload-context-agent", Fields.SESSION_ID, sidHex,
+				Fields.MESSAGE, "second"), alice).awaitResult(5000);
+		AMap<AString, ACell> rebuilt = RT.ensureMap(
+			RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO));
+		assertTrue(RT.getIn(rebuilt, "renderedContext", "messages", 0, "content")
+			.toString().contains("NEW_IDENTITY"));
+		assertEquals("NEW_IDENTITY",
+			RT.getIn(rebuilt, "renderedContext", "sourceConfig", "systemPrompt").toString());
+		AVector<ACell> rebuiltConversation = RT.ensureVector(
+			rebuilt.get(AgentState.KEY_CONVERSATION));
+		assertEquals(conversation, rebuiltConversation.slice(0, conversation.count()),
+			"config re-render keeps all prior session turns verbatim");
 
 		ACell reload = engine.jobs().invokeOperation("v/ops/agent/reload-context",
 			Maps.of(Fields.AGENT_ID, "reload-context-agent", Fields.SESSION_ID, sidHex), alice)
@@ -6305,15 +6348,15 @@ public class AgentAdapterTest {
 		AMap<AString, ACell> cleared = RT.ensureMap(
 			RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO));
 		assertNull(RT.getIn(cleared, "renderedContext"));
-		assertEquals(conversation, cleared.get(AgentState.KEY_CONVERSATION),
+		assertEquals(rebuiltConversation, cleared.get(AgentState.KEY_CONVERSATION),
 			"reload changes only the materialised prefix");
 
 		engine.jobs().invokeOperation("v/ops/agent/chat",
 			Maps.of(Fields.AGENT_ID, "reload-context-agent", Fields.SESSION_ID, sidHex,
-				Fields.MESSAGE, "second"), alice).awaitResult(5000);
-		AMap<AString, ACell> rebuilt = RT.ensureMap(
+				Fields.MESSAGE, "third"), alice).awaitResult(5000);
+		AMap<AString, ACell> rebuiltAgain = RT.ensureMap(
 			RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO));
-		assertTrue(RT.getIn(rebuilt, "renderedContext", "messages", 0, "content")
+		assertTrue(RT.getIn(rebuiltAgain, "renderedContext", "messages", 0, "content")
 			.toString().contains("NEW_IDENTITY"));
 	}
 

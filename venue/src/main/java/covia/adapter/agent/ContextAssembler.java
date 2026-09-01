@@ -12,8 +12,6 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
-import convex.core.data.Blob;
-import convex.core.data.Index;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -37,9 +35,9 @@ import covia.venue.RequestContext;
  * contributes nothing. The {@code Prompt} is a mutable accumulator that knows
  * only append, band marks and bytes so far.</p>
  *
- * <p>The order is the cache structure: fixed head, live surface, conversation,
- * volatile tail — stable first, volatile last, with band boundaries as the
- * provider's cache boundaries.</p>
+ * <p>The order is the cache structure: fixed head, live surface, append-only
+ * conversation, then the small inference-local tail. Watched context values
+ * are conversation observations, not disposable tail material.</p>
  */
 public final class ContextAssembler {
 
@@ -104,20 +102,31 @@ public final class ContextAssembler {
 	private static final AString K_RENDERED_MESSAGES = Strings.intern("messages");
 	private static final AString K_RENDERED_HEAD     = Strings.intern("head");
 	private static final AString K_RENDERED_LIVE     = Strings.intern("live");
-	private static final AString K_RENDERED_CATALOG  = Strings.intern("skillCatalog");
 	private static final AString K_RENDERED_LABELS   = Strings.intern("labels");
+	private static final AString K_RENDERED_CONFIG   = Strings.intern("sourceConfig");
+
+	/** Canonical watched-context candidate fields. The active frame persists
+	 * the same value under {@code observations}; see {@link GoalTreeContext}. */
+	static final AString K_OBSERVATION_ID       = Strings.intern("id");
+	static final AString K_OBSERVATION_VALUE    = Strings.intern("value");
+	static final AString K_OBSERVATION_MESSAGES = Strings.intern("messages");
+	static final AString K_OBSERVATION_ORDER    = Strings.intern("order");
 
 	/**
 	 * The exact initial provider-facing vectors persisted on a session frame.
-	 * This is the cache state itself: no parallel epoch or cache-key exists.
-	 * Once present, mutable sources are not consulted again until an explicit
-	 * reset or compaction removes this value.
+	 * This is the cache state itself. The declarative config cell is retained
+	 * alongside it: equal config reuses these exact vectors, while changed
+	 * config makes the value inapplicable and causes an atomic replacement on
+	 * the next inference. Ambient values resolved while producing the vectors
+	 * are deliberately not invalidation inputs.
 	 */
 	public record Rendered(AVector<ACell> tools, AVector<ACell> messages,
-			int headEnd, int liveEnd, ACell skillCatalog, AString labels) {
+			int headEnd, int liveEnd, AString labels,
+			AMap<AString, ACell> sourceConfig) {
 		public Rendered {
 			tools = (tools != null) ? tools : Vectors.empty();
 			messages = (messages != null) ? messages : Vectors.empty();
+			sourceConfig = normaliseConfig(sourceConfig);
 		}
 
 		ACell toCell() {
@@ -125,8 +134,8 @@ public final class ContextAssembler {
 				K_RENDERED_TOOLS, tools,
 				K_RENDERED_MESSAGES, messages,
 				K_RENDERED_HEAD, CVMLong.create(headEnd),
-				K_RENDERED_LIVE, CVMLong.create(liveEnd));
-			if (skillCatalog != null) value = value.assoc(K_RENDERED_CATALOG, skillCatalog);
+				K_RENDERED_LIVE, CVMLong.create(liveEnd),
+				K_RENDERED_CONFIG, sourceConfig);
 			if (labels != null) value = value.assoc(K_RENDERED_LABELS, labels);
 			return value;
 		}
@@ -136,17 +145,26 @@ public final class ContextAssembler {
 			if (!(value instanceof AMap<?, ?> map)) return null;
 			ACell tools = map.get(K_RENDERED_TOOLS);
 			ACell messages = map.get(K_RENDERED_MESSAGES);
-			if (!(tools instanceof AVector<?>) || !(messages instanceof AVector<?>)) return null;
+			ACell sourceConfig = map.get(K_RENDERED_CONFIG);
+			// An older materialisation has no config provenance. Treat it as absent
+			// so the next inference upgrades it once instead of guessing validity.
+			if (!(tools instanceof AVector<?>) || !(messages instanceof AVector<?>)
+					|| !(sourceConfig instanceof AMap<?, ?>)) return null;
 			long head = (map.get(K_RENDERED_HEAD) instanceof CVMLong n) ? n.longValue() : 0;
 			long live = (map.get(K_RENDERED_LIVE) instanceof CVMLong n) ? n.longValue() : head;
 			return new Rendered((AVector<ACell>) tools, (AVector<ACell>) messages,
 				Math.toIntExact(head), Math.toIntExact(live),
-				map.get(K_RENDERED_CATALOG), RT.ensureString(map.get(K_RENDERED_LABELS)));
+				RT.ensureString(map.get(K_RENDERED_LABELS)),
+				(AMap<AString, ACell>) sourceConfig);
 		}
 
-		Rendered withSkillCatalog(ACell catalog) {
-			return new Rendered(tools, messages, headEnd, liveEnd, catalog, labels);
+		boolean matchesConfig(AMap<AString, ACell> config) {
+			return sourceConfig.equals(normaliseConfig(config));
 		}
+	}
+
+	private static AMap<AString, ACell> normaliseConfig(AMap<AString, ACell> config) {
+		return (config != null) ? config : Maps.empty();
 	}
 
 	/**
@@ -159,7 +177,9 @@ public final class ContextAssembler {
 	 *        index resolve under it (operator-pinned material is not narrowed
 	 *        by the agent's own caps)
 	 * @param capsCtx the capability-narrowed context the agent acts under
-	 * @param config the agent's configuration
+	 * @param config the effective configuration used to render and invoke L3
+	 * @param sourceConfig the declarative configuration whose equality owns the
+	 *        rendered prefix; ambient resolutions are excluded
 	 * @param sessionId the in-scope session id (hex), or null
 	 * @param headNotice runtime text appended to the head, stable within its scope, or null
 	 * @param budget the model's context budget in bytes
@@ -169,9 +189,6 @@ public final class ContextAssembler {
 	 *        elements) — system messages in the live surface
 	 * @param loadExchanges every other live load as aggregate-ready entries (a {@link Loads.Snapshot}'s
 	 *        exchanges) — the live surface's data, after the system run
-	 * @param volatileLoads the trusted messages and data entries declared volatile (a
-	 *        {@link Loads.Snapshot}'s volatile elements) — rendered in the tail, after the
-	 *        conversation, never cached
 	 * @param effectiveLoads the effective loads chain, for the skills index markers
 	 * @param frames the frame stack; the last frame is active
 	 * @param pending job results that arrived for this cycle
@@ -196,7 +213,6 @@ public final class ContextAssembler {
 			AVector<ACell> tools,
 			AVector<ACell> loadElements,
 			AVector<ACell> loadExchanges,
-			AVector<ACell> volatileLoads,
 			AMap<AString, ACell> effectiveLoads,
 			AVector<ACell> frames,
 			AVector<ACell> pending,
@@ -206,7 +222,8 @@ public final class ContextAssembler {
 			ACell task,
 			AVector<ACell> unavailable,
 			String notice,
-			LocalDate now) {
+			LocalDate now,
+			AMap<AString, ACell> sourceConfig) {
 
 		public Spec {
 			if (capsCtx == null) capsCtx = ctx;
@@ -217,7 +234,6 @@ public final class ContextAssembler {
 			tools = toolCalling ? orEmpty(tools) : Vectors.empty();
 			loadElements = orEmpty(loadElements);
 			loadExchanges = orEmpty(loadExchanges);
-			volatileLoads = orEmpty(volatileLoads);
 			frames = orEmpty(frames);
 			pending = orEmpty(pending);
 			input = orEmpty(input);
@@ -226,14 +242,32 @@ public final class ContextAssembler {
 			if (now == null) now = LocalDate.now();
 		}
 
-		/** The shape before loads were split into skills, exchanges and volatile: none of them. Runtimes set them with {@link #withLoads}. */
+		/** Backwards-compatible construction: when there is no separately
+		 * materialised effective config, the supplied config owns its rendering. */
+		public Spec(Engine engine, RequestContext ctx, RequestContext capsCtx,
+				AMap<AString, ACell> config, String sessionId, String headNotice,
+				long budget, AString labels, boolean toolCalling,
+				AVector<ACell> tools, AVector<ACell> loadElements,
+				AVector<ACell> loadExchanges,
+				AMap<AString, ACell> effectiveLoads, AVector<ACell> frames,
+				AVector<ACell> pending, AVector<ACell> input, boolean hasInput,
+				AVector<ACell> toolLoop, ACell task, AVector<ACell> unavailable,
+				String notice, LocalDate now) {
+			this(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels,
+				toolCalling, tools, loadElements, loadExchanges,
+				effectiveLoads, frames, pending, input, hasInput, toolLoop, task,
+				unavailable, notice, now, config);
+		}
+
+		/** The shape before stable loads were split into instructions and exchanges:
+		 * neither is present. Runtimes set them with {@link #withLoads}. */
 		public Spec(Engine engine, RequestContext ctx, RequestContext capsCtx, AMap<AString, ACell> config,
 				String sessionId, String headNotice, long budget, AString labels, boolean toolCalling,
 				AVector<ACell> tools, AVector<ACell> loadElements, AMap<AString, ACell> effectiveLoads,
 				AVector<ACell> frames, AVector<ACell> pending, AVector<ACell> input, boolean hasInput,
 				AVector<ACell> toolLoop, ACell task, AVector<ACell> unavailable, String notice, LocalDate now) {
 			this(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling,
-				tools, loadElements, null, null, effectiveLoads, frames, pending, input, hasInput,
+				tools, loadElements, null, effectiveLoads, frames, pending, input, hasInput,
 				toolLoop, task, unavailable, notice, now);
 		}
 
@@ -244,7 +278,7 @@ public final class ContextAssembler {
 				AVector<ACell> frames, AVector<ACell> pending, AVector<ACell> input, boolean hasInput,
 				AVector<ACell> toolLoop, ACell task, AVector<ACell> unavailable, String notice, LocalDate now) {
 			this(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, true,
-				tools, loadElements, null, null, effectiveLoads, frames, pending, input, hasInput,
+				tools, loadElements, null, effectiveLoads, frames, pending, input, hasInput,
 				toolLoop, task, unavailable, notice, now);
 		}
 
@@ -252,29 +286,30 @@ public final class ContextAssembler {
 			return (v != null) ? v : Vectors.empty();
 		}
 
-		/** The per-inference loads — skills, live entries, volatile entries — and their contributed tools. */
+		/** The per-inference stable loads and their contributed tools. Watched
+		 * values are applied to frame observations before this Spec is assembled. */
 		public Spec withLoads(Loads.Snapshot loads, AVector<ACell> tools, AMap<AString, ACell> effectiveLoads) {
 			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling,
-				tools, loads.instructionElements(), loads.exchanges(), loads.volatileElements(), effectiveLoads,
-				frames, pending, input, hasInput, toolLoop, task, unavailable, notice, now);
+				tools, loads.instructionElements(), loads.exchanges(), effectiveLoads,
+				frames, pending, input, hasInput, toolLoop, task, unavailable, notice, now, sourceConfig);
 		}
 
 		public Spec withToolLoop(AVector<ACell> toolLoop) {
 			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling,
-				tools, loadElements, loadExchanges, volatileLoads, effectiveLoads, frames, pending, input, hasInput,
-				toolLoop, task, unavailable, notice, now);
+				tools, loadElements, loadExchanges, effectiveLoads, frames, pending, input, hasInput,
+				toolLoop, task, unavailable, notice, now, sourceConfig);
 		}
 
 		public Spec withTask(ACell task) {
 			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling,
-				tools, loadElements, loadExchanges, volatileLoads, effectiveLoads, frames, pending, input, hasInput,
-				toolLoop, task, unavailable, notice, now);
+				tools, loadElements, loadExchanges, effectiveLoads, frames, pending, input, hasInput,
+				toolLoop, task, unavailable, notice, now, sourceConfig);
 		}
 
 		public Spec withFrames(AVector<ACell> frames) {
 			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling,
-				tools, loadElements, loadExchanges, volatileLoads, effectiveLoads, frames, pending, input, hasInput,
-				toolLoop, task, unavailable, notice, now);
+				tools, loadElements, loadExchanges, effectiveLoads, frames, pending, input, hasInput,
+				toolLoop, task, unavailable, notice, now, sourceConfig);
 		}
 
 		/** The next inference after an explicit compaction: the replacement
@@ -283,22 +318,30 @@ public final class ContextAssembler {
 		 * task remains live and is still rendered through {@code task}. */
 		public Spec afterCompaction(AVector<ACell> frames) {
 			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling,
-				tools, loadElements, loadExchanges, volatileLoads, effectiveLoads, frames,
+				tools, loadElements, loadExchanges, effectiveLoads, frames,
 				Vectors.empty(), Vectors.empty(), true, Vectors.empty(), task,
-				unavailable, notice, now);
+				unavailable, notice, now, sourceConfig);
 		}
 
 		public Spec withNotice(String notice) {
 			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling,
-				tools, loadElements, loadExchanges, volatileLoads, effectiveLoads, frames, pending, input, hasInput,
-				toolLoop, task, unavailable, notice, now);
+				tools, loadElements, loadExchanges, effectiveLoads, frames, pending, input, hasInput,
+				toolLoop, task, unavailable, notice, now, sourceConfig);
+		}
+
+		/** Uses a declarative config distinct from the materialised effective
+		 * config. Stable ambient resolutions therefore do not invalidate history. */
+		public Spec withSourceConfig(AMap<AString, ACell> sourceConfig) {
+			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling,
+				tools, loadElements, loadExchanges, effectiveLoads, frames, pending, input, hasInput,
+				toolLoop, task, unavailable, notice, now, sourceConfig);
 		}
 
 		/** A frame's view: its own config and head notice. */
 		public Spec forFrame(AMap<AString, ACell> config, String headNotice) {
 			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling,
-				tools, loadElements, loadExchanges, volatileLoads, effectiveLoads, frames, pending, input, hasInput,
-				toolLoop, task, unavailable, notice, now);
+				tools, loadElements, loadExchanges, effectiveLoads, frames, pending, input, hasInput,
+				toolLoop, task, unavailable, notice, now, sourceConfig);
 		}
 	}
 
@@ -442,7 +485,7 @@ public final class ContextAssembler {
 	public static Prompt assemble(Spec spec) {
 		Prompt p = new Prompt(spec.budget());
 
-		Rendered rendered = rendered(spec.frames());
+		Rendered rendered = rendered(spec);
 		if (rendered == null) rendered = initialise(spec);
 		p.tools(rendered.tools());
 		p.add(rendered.messages());
@@ -456,13 +499,8 @@ public final class ContextAssembler {
 		p.add(spec.toolLoop());
 		p.mark(Band.TOOL_LOOP);
 
-		// Volatile tail — re-rendered every inference, never cached: the loads
-		// declared volatile (op entries by default) first, so a result that
-		// changes every turn busts only itself, then the notices, then the task
-		PinnedContext volatilePinned = pinnedContext(spec, p.remaining(), true);
-		p.add(volatilePinned.instructions());
-		p.add(contextExchanges(volatilePinned.data(), true));
-		p.add(contextMessages(spec.volatileLoads(), true));
+		// Inference-local tail. Watched context has already been compared and,
+		// when changed, atomically appended to the active frame's conversation.
 		p.add(notices(spec, p.used()));
 		p.add(spec.task());
 		return p;
@@ -477,13 +515,13 @@ public final class ContextAssembler {
 		p.add(head(spec));
 		p.mark(Band.HEAD);
 
-		PinnedContext pinned = pinnedContext(spec, p.remaining(), false);
+		PinnedContext pinned = pinnedContext(spec, p.remaining());
 		p.add(pinned.instructions());
 		ACell catalog = skillsIndex(spec);
 		p.add(catalog);
 		p.add(spec.loadElements());
 		AVector<ACell> entries = (AVector<ACell>) pinned.data().concat(spec.loadExchanges());
-		AVector<ACell> exchanges = contextExchanges(entries, false);
+		AVector<ACell> exchanges = contextExchanges(entries);
 		if (!exchanges.isEmpty()) {
 			p.add(loadedContextMarker(spec));
 			p.add(exchanges);
@@ -491,7 +529,8 @@ public final class ContextAssembler {
 		p.mark(Band.LIVE);
 		return new Rendered(p.tools(), p.messages(),
 			p.marks().getOrDefault(Band.HEAD, 0),
-			p.marks().getOrDefault(Band.LIVE, 0), catalog, spec.labels());
+			p.marks().getOrDefault(Band.LIVE, 0), spec.labels(),
+			spec.sourceConfig());
 	}
 
 	/** Returns the active frame's persisted initial vectors, if materialised. */
@@ -499,6 +538,17 @@ public final class ContextAssembler {
 		if (frames == null || frames.isEmpty()) return null;
 		ACell active = frames.get(frames.count() - 1);
 		return Rendered.fromCell(RT.getIn(active, GoalTreeContext.K_RENDERED_CONTEXT));
+	}
+
+	/** Returns the active rendering only when it belongs to this declarative
+	 * config. Equality is structural and hash-accelerated by CVM cells. */
+	static Rendered rendered(AVector<ACell> frames, AMap<AString, ACell> sourceConfig) {
+		Rendered rendered = rendered(frames);
+		return rendered != null && rendered.matchesConfig(sourceConfig) ? rendered : null;
+	}
+
+	static Rendered rendered(Spec spec) {
+		return rendered(spec.frames(), spec.sourceConfig());
 	}
 
 	// ========== Sections ==========
@@ -573,7 +623,7 @@ public final class ContextAssembler {
 	 */
 	private record PinnedContext(AVector<ACell> instructions, AVector<ACell> data) {}
 
-	static PinnedContext pinnedContext(Spec spec, long remaining, boolean volatileBand) {
+	static PinnedContext pinnedContext(Spec spec, long remaining) {
 		AMap<AString, ACell> config = spec.config();
 		if (config == null) return new PinnedContext(Vectors.empty(), Vectors.empty());
 		AVector<ACell> entries = contextVector(config.get(K_CONTEXT), "config.context");
@@ -584,7 +634,7 @@ public final class ContextAssembler {
 		AVector<ACell> data = Vectors.empty();
 		for (long i = 0; i < entries.count(); i++) {
 			ACell entry = entries.get(i);
-			if (volatileContextEntry(entry, "config.context[" + i + "]") != volatileBand) continue;
+			if (volatileContextEntry(entry, "config.context[" + i + "]")) continue;
 			boolean trusted = trusted(entry, true, "config.context[" + i + "]");
 			ContextLoader.Resolved r = loader.resolveValue(entry, spec.ctx(), true);
 			if (r == null) continue;
@@ -608,6 +658,82 @@ public final class ContextAssembler {
 		return Loads.isVolatile(entry);
 	}
 
+	/**
+	 * Materialises every watched declaration into canonical provider messages.
+	 * This may perform IO, so runtimes call it before their atomic frame update.
+	 * The returned vector is ordered and contains no clock-derived metadata;
+	 * equality therefore means equality of what the model would actually see.
+	 */
+	static AVector<ACell> observations(Spec spec, Loads.Snapshot loads) {
+		AVector<ACell> candidates = pinnedObservations(spec);
+		if (loads != null) candidates = (AVector<ACell>) candidates.concat(loads.observations());
+		AVector<ACell> ordered = Vectors.empty();
+		for (long i = 0; i < candidates.count(); i++) {
+			AMap<AString, ACell> candidate = RT.ensureMap(candidates.get(i));
+			if (candidate != null) {
+				ordered = ordered.conj(candidate.assoc(K_OBSERVATION_ORDER, CVMLong.create(i)));
+			}
+		}
+		return ordered;
+	}
+
+	/** Config-owned watched entries precede keyed load observations. */
+	private static AVector<ACell> pinnedObservations(Spec spec) {
+		AMap<AString, ACell> config = spec.config();
+		if (config == null) return Vectors.empty();
+		AVector<ACell> entries = contextVector(config.get(K_CONTEXT), "config.context");
+		if (entries == null) return Vectors.empty();
+		long entryBudget = Math.max(MIN_ENTRY_BUDGET, spec.budget() / 20);
+		ContextLoader loader = new ContextLoader(spec.engine());
+		AVector<ACell> out = Vectors.empty();
+		for (long i = 0; i < entries.count(); i++) {
+			ACell entry = entries.get(i);
+			if (!volatileContextEntry(entry, "config.context[" + i + "]")) continue;
+			loader.beginTrace(entryBudget);
+			ContextLoader.Resolved r = loader.resolveValue(entry, spec.ctx(), true);
+			if (r == null) continue;
+			AVector<ACell> instructions = Vectors.empty();
+			AVector<ACell> data = Vectors.empty();
+			if (trusted(entry, true, "config.context[" + i + "]")) {
+				instructions = Vectors.of(Loads.capped(
+					trustedContextMessage(spec.labels(), r, null), entryBudget));
+			} else {
+				data = Vectors.of(Loads.capped(contextEntry(null, true, r), entryBudget));
+			}
+			AString id = Strings.create("config.context:" + i);
+			AString eventId = observationEventId(id, instructions, data);
+			AVector<ACell> messages = (AVector<ACell>) instructions.concat(
+				contextExchanges(data, eventId));
+			out = out.conj(observation(id, i, messages));
+		}
+		return out;
+	}
+
+	/** A canonical observation candidate. */
+	static AMap<AString, ACell> observation(AString id, long order,
+			AVector<ACell> messages) {
+		return Maps.of(
+			K_OBSERVATION_ID, id,
+			K_OBSERVATION_ORDER, CVMLong.create(order),
+			K_OBSERVATION_VALUE, (messages != null) ? messages : Vectors.empty());
+	}
+
+	/** Stable provider pairing id derived from declaration identity and visible value. */
+	static AString observationEventId(AString id, AVector<ACell> instructions,
+			AVector<ACell> data) {
+		ACell identity = Maps.of(
+			K_OBSERVATION_ID, id,
+			Strings.intern("instructions"), (instructions != null) ? instructions : Vectors.empty(),
+			Strings.intern("data"), (data != null) ? data : Vectors.empty());
+		return Strings.create("context:observation:" + identity.getHash().toHexString());
+	}
+
+	/** Venue-authored transition when a declaration stops being watched. */
+	static AMap<AString, ACell> observationRemoved(AString id) {
+		return system("Context observation " + id
+			+ " is no longer active. Treat its earlier values as history, not current context.");
+	}
+
 	// ========== Pinned and loaded context as aggregate tool exchanges (§5.5) ==========
 
 	/** Synthetic tools used only to put data behind a provider-native result boundary. */
@@ -620,8 +746,6 @@ public final class ContextAssembler {
 	static final AString K_LABEL_ARG = AbstractLLMAdapter.K_LABEL;
 	private static final AString PINNED_LIVE_ID     = Strings.intern("ctx-pinned-live");
 	private static final AString LOADED_LIVE_ID     = Strings.intern("ctx-loaded-live");
-	private static final AString PINNED_VOLATILE_ID = Strings.intern("ctx-pinned-volatile");
-	private static final AString LOADED_VOLATILE_ID = Strings.intern("ctx-loaded-volatile");
 
 	/**
 	 * One resolved context item before aggregation. Metadata and content live
@@ -683,29 +807,15 @@ public final class ContextAssembler {
 	 * value becomes a vector rather than repeating the key or making more calls.
 	 */
 	@SuppressWarnings("unchecked")
-	static AVector<ACell> contextExchanges(AVector<ACell> entries, boolean volatileBand) {
-		return contextExchanges(entries, volatileBand, null);
+	static AVector<ACell> contextExchanges(AVector<ACell> entries) {
+		return contextExchanges(entries, null);
 	}
 
-	/** Provider messages already rendered by trusted loads, followed by one
-	 * aggregate exchange for the remaining data entries. */
-	static AVector<ACell> contextMessages(AVector<ACell> entries, boolean volatileBand) {
-		if (entries == null || entries.isEmpty()) return Vectors.empty();
-		AVector<ACell> messages = Vectors.empty();
-		AVector<ACell> data = Vectors.empty();
-		for (long i = 0; i < entries.count(); i++) {
-			ACell entry = entries.get(i);
-			if (ROLE_SYSTEM.equals(RT.getIn(entry, K_ROLE))) messages = messages.conj(entry);
-			else data = data.conj(entry);
-		}
-		return (AVector<ACell>) messages.concat(contextExchanges(data, volatileBand));
-	}
-
-	/** As {@link #contextExchanges(AVector, boolean)}, with the persisted id
+	/** As {@link #contextExchanges(AVector)}, with the persisted id
 	 *  supplied by the load event that caused this exchange. */
 	@SuppressWarnings("unchecked")
 	static AVector<ACell> contextExchanges(
-			AVector<ACell> entries, boolean volatileBand, AString eventId) {
+			AVector<ACell> entries, AString eventId) {
 		if (entries == null || entries.isEmpty()) return Vectors.empty();
 		AVector<ACell> pinned = Vectors.empty();
 		AMap<AString, ACell> loaded = Maps.empty();
@@ -742,13 +852,13 @@ public final class ContextAssembler {
 		AVector<ACell> results = Vectors.empty();
 		if (!pinned.isEmpty()) {
 			AString id = (eventId != null) ? Strings.create(eventId + ":pinned")
-				: volatileBand ? PINNED_VOLATILE_ID : PINNED_LIVE_ID;
+				: PINNED_LIVE_ID;
 			calls = calls.conj(contextCall(id, PINNED_CONTEXT_TOOL));
 			results = results.conj(AbstractLLMAdapter.toolResultMessage(id, PINNED_CONTEXT_TOOL, pinned));
 		}
 		if (!loaded.isEmpty()) {
 			AString id = (eventId != null) ? eventId
-				: volatileBand ? LOADED_VOLATILE_ID : LOADED_LIVE_ID;
+				: LOADED_LIVE_ID;
 			calls = calls.conj(contextCall(id, LOADED_CONTEXT_TOOL));
 			results = results.conj(AbstractLLMAdapter.toolResultMessage(id, LOADED_CONTEXT_TOOL, loaded));
 		}
@@ -805,57 +915,6 @@ public final class ContextAssembler {
 		String index = Skills.renderIndex(engine, ctx, sources, effectiveLoads, false);
 		if (index == null) return null;
 		return Labels.message(ROLE_SYSTEM, labels, Labels.Kind.SKILLS, SKILLS_PREAMBLE + index);
-	}
-
-	/**
-	 * Explicit owner refresh used by {@code agent:update}: compare the newly
-	 * rendered catalog with each materialised session's last catalog cell and
-	 * append only when it differs. Existing initial vectors are never edited.
-	 */
-	@SuppressWarnings("unchecked")
-	public static int refreshSkillCatalogs(covia.venue.AgentState agent, Engine engine,
-			RequestContext ctx, AMap<AString, ACell> config) {
-		if (agent == null) return 0;
-		Index<Blob, ACell> sessions = agent.getSessions();
-		int changed = 0;
-		for (var entry : sessions.entrySet()) {
-			Blob sid = entry.getKey();
-			AMap<AString, ACell> session = RT.ensureMap(entry.getValue());
-			AVector<ACell> frames = (session != null)
-				? RT.ensureVector(session.get(Strings.intern("frames"))) : null;
-			if (frames == null || frames.isEmpty()) continue;
-			AMap<AString, ACell> root = RT.ensureMap(frames.get(0));
-			Rendered rendered = (root != null)
-				? Rendered.fromCell(root.get(GoalTreeContext.K_RENDERED_CONTEXT)) : null;
-			if (rendered == null) continue;
-
-			AMap<AString, ACell> operator = ContextChain.operatorLoads(
-				RT.getIn(config, Fields.LOADS), "config.loads");
-			AMap<AString, ACell> sessionLoads = RT.ensureMap(session.get(Fields.LOADS));
-			AMap<AString, ACell> effective = ContextChain.effective(
-				operator, sessionLoads, GoalTreeContext.getLoads(root));
-			AString dialect = (rendered.labels() != null) ? rendered.labels() : Labels.BRACKET;
-			ACell catalog = skillsIndex(engine, ctx, config, effective, true, dialect);
-			if (java.util.Objects.equals(rendered.skillCatalog(), catalog)) continue;
-
-			ACell event = (catalog != null) ? catalog : system(
-				"The skills catalog is now empty. Previously advertised unloaded skills are no longer available.");
-			Rendered nextRendered = rendered.withSkillCatalog(catalog);
-			boolean applied = agent.updateSessionFrames(sid, null, current -> {
-				if (current.isEmpty()) return current;
-				AMap<AString, ACell> currentRoot = RT.ensureMap(current.get(0));
-				Rendered live = (currentRoot != null)
-					? Rendered.fromCell(currentRoot.get(GoalTreeContext.K_RENDERED_CONTEXT)) : null;
-				if (live == null || !java.util.Objects.equals(live.skillCatalog(), rendered.skillCatalog())) {
-					return current;
-				}
-				currentRoot = GoalTreeContext.appendTurn(currentRoot, event);
-				currentRoot = GoalTreeContext.withRenderedContext(currentRoot, nextRendered);
-				return current.assoc(0, currentRoot);
-			});
-			if (applied) changed++;
-		}
-		return changed;
 	}
 
 	/**

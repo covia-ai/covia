@@ -1589,6 +1589,11 @@ public final class Skills {
 			RT.getIn(toolInput, K_BUDGET), defaultBudget);
 
 		AMap<AString, ACell> entryMeta = buildSkillLoadMeta(budget, skill);
+		ACell volatileCell = RT.getIn(toolInput, Loads.K_VOLATILE);
+		if (volatileCell != null && !(volatileCell instanceof CVMBool)) {
+			throw new IllegalArgumentException("skill_load volatile must be a boolean");
+		}
+		if (volatileCell != null) entryMeta = entryMeta.assoc(Loads.K_VOLATILE, volatileCell);
 
 		// Resolve the declared operation refs for an honest result (activated
 		// names + unresolvable refs). The refs are snapshotted on the load entry;
@@ -1612,12 +1617,16 @@ public final class Skills {
 			}
 		}
 
+		boolean watched = Loads.isVolatile(entryMeta);
 		AMap<AString, ACell> result = Maps.of(
 			Strings.intern("loaded"), CVMBool.TRUE,
 			K_SKILL, Strings.create(skill.name()),
 			Strings.intern("path"), skill.path(),
 			Strings.intern("note"), Strings.create(
-				"Skill instructions were appended to context. Its path is the exact unload key if you "
+				(watched
+					? "Skill instructions are watched and append to context when their rendered value changes. "
+					: "Skill instructions were appended to context. ")
+				+ "Its path is the exact unload key if you "
 				+ "later need to remove it; ordinary tool results need no cleanup. Tools and contributed "
 				+ "skills are active from your next step."));
 		if (toolNames.count() > 0) result = result.assoc(Fields.TOOLS, toolNames);

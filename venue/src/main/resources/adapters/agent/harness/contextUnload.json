@@ -1,6 +1,6 @@
 {
     "name": "Unload Agent Context",
-    "description": "Deliberately remove agent-managed persistent context. Accepts only exact map keys from a loaded_context result; use paths to remove several together. Never pass a display label, a source or operation path from pinned_context, or an argument from an ordinary tool call. Ordinary results such as covia_read and covia_inspect belong to conversation history, are not persistent loads, and need no cleanup. Operator/caller pinned_context cannot be removed.",
+    "description": "Deliberately remove agent-managed persistent loads. Accepts only exact keys returned by context_load, skill_load or more_tools; use paths to remove several together. Never pass a display label, a source or operation path from pinned_context, or an argument from an ordinary tool call. Ordinary results such as covia_read and covia_inspect belong to conversation history, are not persistent loads, and need no cleanup. Operator/caller pinned_context cannot be removed.",
     "dateCreated": "2026-08-29T00:00:00Z",
     "operation": {
         "adapter": "harness:contextUnload",
@@ -11,11 +11,11 @@
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "One exact key from the loaded_context result map"
+                    "description": "One exact agent-managed load key returned by a load tool"
                 },
                 "paths": {
                     "type": "array",
-                    "description": "Several exact keys from the loaded_context result map, removed together in one call",
+                    "description": "Several exact agent-managed load keys, removed together in one call",
                     "items": { "type": "string" },
                     "minItems": 1,
                     "maxItems": 50

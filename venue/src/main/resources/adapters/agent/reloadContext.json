@@ -1,6 +1,6 @@
 {
 	"name": "Reload Agent Session Context",
-	"description": "Explicitly invalidates one idle session's materialised provider prefix so its next inference rebuilds the system prompt, fixed tools, skill catalog and pinned context from current agent configuration. Conversation history and loaded context are preserved exactly. Ordinary agent updates do not do this implicitly.",
+	"description": "Explicitly invalidates one idle session's materialised provider prefix so its next inference rebuilds the system prompt, fixed tools, skill catalog and pinned context from current agent configuration and sources. Conversation history and loaded context are preserved exactly. Changed declarative config already triggers this on the next inference; use this operation to force a same-config refresh.",
 	"dateCreated": "2026-08-29T00:00:00Z",
 	"operation": {
 		"adapter": "agent:reloadContext",
