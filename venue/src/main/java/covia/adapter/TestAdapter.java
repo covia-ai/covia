@@ -502,9 +502,10 @@ public class TestAdapter extends AAdapter {
 				"role", Strings.create("assistant"),
 				"toolCalls", Vectors.of(Maps.of(
 					"id", sawRejection ? "call_valid_complete" : "call_invalid_complete",
-					"name", "complete",
+					"name", "complete_task",
 					"arguments", sawRejection
-						? "{\"answer\":\"corrected\"}" : "{\"answer\":42}")));
+						? "{\"result\":{\"answer\":\"corrected\"}}"
+						: "{\"result\":{\"answer\":42}}")));
 		}
 		if (model != null && "parallel-complete-test".equals(model.toString())) {
 			// Anthropic-compatibility fixture: a terminal harness call can arrive
