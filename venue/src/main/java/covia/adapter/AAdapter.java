@@ -15,7 +15,6 @@ import convex.core.util.ThreadUtils;
 import convex.core.data.AString;
 import convex.core.data.Hash;
 import convex.core.data.Index;
-import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
@@ -483,18 +482,6 @@ public abstract class AAdapter {
 	}
 
     protected Hash installAsset(AString metaString) {
-		AMap<AString, ACell> meta = RT.ensureMap(JSON.parse(metaString));
-		ACell operation = meta.get(Fields.OPERATION);
-		if (operation != null) {
-			AMap<AString, ACell> op = RT.ensureMap(operation);
-			ACell readOnly = op.get(Fields.READ_ONLY);
-			if (!(readOnly instanceof CVMBool)) {
-				ACell adapter = op.get(Fields.ADAPTER);
-				throw new IllegalArgumentException(
-					"Adapter operation " + (adapter == null ? "<unknown>" : adapter)
-					+ " must explicitly declare operation.readOnly as true or false");
-			}
-		}
 		Hash assetHash = engine.storeAsset(metaString, null);
 		installedAssets = installedAssets.assoc(assetHash, metaString);
 		return assetHash;

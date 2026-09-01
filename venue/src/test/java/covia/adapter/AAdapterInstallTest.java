@@ -53,15 +53,14 @@ public class AAdapterInstallTest {
 	}
 
 	@Test
-	public void testOperationsRequireExplicitReadOnlyClassification() {
+	public void testOperationReadOnlyClassificationIsOptionalAtPublication() {
 		ProbeAdapter adapter = new ProbeAdapter();
 		adapter.engine = TestEngine.ENGINE;
 		AMap<AString, ACell> unclassified = Maps.of(
 			Fields.NAME, Strings.create("Unclassified operation"),
 			Fields.OPERATION, Maps.of(Fields.ADAPTER, Strings.create("probe:unclassified")));
-		IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
-			() -> adapter.probeInstall(unclassified));
-		assertTrue(failure.getMessage().contains("operation.readOnly"), failure.getMessage());
+		assertNotNull(adapter.probeInstall(unclassified),
+			"readOnly is an optional execution hint, not an adapter publication requirement");
 
 		assertNotNull(adapter.probeInstall(Maps.of(
 			Fields.NAME, Strings.create("Read operation"),

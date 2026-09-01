@@ -224,12 +224,11 @@ schema validation and agent tool use:
 }
 ```
 
-Every adapter-owned operation must explicitly declare
-`operation.readOnly` as `true` or `false`; publication rejects a missing or
-non-boolean classification. Use `true` only when result-oriented execution is
-safe without a durable job record. Use `false` for mutations, sensitive or
-effectful reads, and operations whose result should remain auditable. Operators
-can still record classified reads with `recordReadOnlyOperations: true`.
+`operation.readOnly` is optional. An explicit `true` permits result-oriented
+execution without a durable job record. `false` or absence retains the normal
+durable-job default, preserving compatibility with existing and external
+operation assets. Use `true` only for safe reads; operators can still record
+classified reads with `recordReadOnlyOperations: true`.
 
 `operation.activityLabel` is optional UI text for a running tool call. It is
 never sent in the model provider's tool definition. The runtime falls back to

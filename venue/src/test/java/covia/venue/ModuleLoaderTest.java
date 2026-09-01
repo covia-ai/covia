@@ -57,14 +57,14 @@ public class ModuleLoaderTest {
 			jos.closeEntry();
 
 			// The adapter's asset JSON — deliberately NOT on the test
-			// classpath, so it can only resolve through the module loader.
+			// classpath, so it can only resolve through the module loader. It also
+			// omits optional readOnly metadata to preserve older module compatibility.
 			jos.putNextEntry(new ZipEntry("modtest/echo.json"));
 			jos.write(("{\n"
 				+ "\t\"name\": \"Modtest Echo\",\n"
 				+ "\t\"description\": \"Echo operation from a module jar\",\n"
 				+ "\t\"operation\": {\n"
 				+ "\t\t\"adapter\": \"modtest\",\n"
-				+ "\t\t\"readOnly\": true,\n"
 				+ "\t\t\"input\": {}\n"
 				+ "\t}\n"
 				+ "}").getBytes(StandardCharsets.UTF_8));
