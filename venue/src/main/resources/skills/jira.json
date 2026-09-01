@@ -1,0 +1,15 @@
+{
+	"name": "jira",
+	"description": "Work with Jira Cloud issues, projects, and transitions using an Atlassian API token (Basic auth via secretHeaders). Load for JQL searches, issue reads, creating issues, and moving issues through workflow.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Jira (Atlassian Cloud)\nCalls go through `v/ops/http/get` / `v/ops/http/post` against `https://<your-site>.atlassian.net` with `secretHeaders: {\"Authorization\": \"s/ATLASSIAN_AUTH\"}`. Store the secret as the complete header value `Basic <base64 of email:api_token>` (create the token at id.atlassian.com -> Security -> API tokens, then base64-encode `you@example.com:TOKEN`). Send `Accept: application/json`. Only the secret reference goes in the request; never the token or the encoded value.\n\nCommon calls (REST v3):\n- Current user: `GET /rest/api/3/myself`\n- Search (JQL): `GET /rest/api/3/search?jql=<encoded>&maxResults=50&fields=summary,status,assignee` (e.g. `project = ABC AND statusCategory != Done ORDER BY updated DESC`)\n- One issue: `GET /rest/api/3/issue/{key}` (key like `ABC-123`)\n- Create: `POST /rest/api/3/issue` body `{fields: {project: {key}, issuetype: {name: \"Task\"}, summary, description?}}`\n- Comment: `POST /rest/api/3/issue/{key}/comment` body `{body: <ADF>}`\n- Transitions: `GET /rest/api/3/issue/{key}/transitions`, then `POST` the same path `{transition: {id}}`\n- Projects: `GET /rest/api/3/project/search`\n\nRules:\n- Check `status`; errors carry `{errorMessages, errors}`. 401 = bad credential; 403 = no permission on that project.\n- The site host is per-user - read it from the user, never hard-code.\n- URL-encode JQL with `v/ops/jvm/url-encode`. Description and comment bodies use Atlassian Document Format (ADF), not plain strings.\n"
+	},
+	"skill": {
+		"tools": [
+			"v/ops/http/get",
+			"v/ops/http/post",
+			"v/ops/jvm/url-encode"
+		]
+	}
+}
