@@ -1,0 +1,20 @@
+{
+	"name": "linear",
+	"description": "Work with Linear issues, teams, and projects over its GraphQL API using a personal API key (via secretHeaders). Load for issue searches, reads, and creating issues.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Linear\nLinear is GraphQL-only. Calls go through `v/ops/http/post` against `https://api.linear.app/graphql` with `secretHeaders: {\"Authorization\": \"s/LINEAR_API_KEY\"}` (a personal API key from Linear -> Settings -> Security & access -> API -> Personal keys; sent as-is, with no \"Bearer \" prefix). Body is `{query, variables?}`. Only the secret reference goes in the request.\n\nCommon operations (POST body `{query, variables}`):\n- Whoami: `query { viewer { id name email } }`\n- My issues: `query { viewer { assignedIssues(first: 50) { nodes { identifier title state { name } url } } } }`\n- Search: `query($q: String!) { issueSearch(query: $q, first: 50) { nodes { identifier title state { name } } } }`\n- One issue: `query($id: String!) { issue(id: $id) { identifier title description state { name } assignee { name } } }`\n- Teams: `query { teams { nodes { id key name } } }`\n- Create: `mutation($t: String!, $team: String!) { issueCreate(input: {title: $t, teamId: $team}) { success issue { identifier url } } }`\n\nRules:\n- Check `status`, but GraphQL returns 200 even on logical errors - also inspect `body.errors`. An `errors` array means the query or permissions failed. 401 = bad API key.\n- `teamId` is required to create an issue; fetch it from `teams` first. `issue(id:)` accepts the `ABC-123` identifier or the UUID.\n- Request only the fields the task needs; keep selections small.\n"
+	},
+	"connection": {
+		"baseUrl": "https://api.linear.app/graphql",
+		"auth": { "kind": "secret-header", "alternatives": ["s/LINEAR_API_KEY"] }
+	},
+	"skill": {
+		"tools": [
+			"v/ops/connections/status",
+			"v/ops/http/get",
+			"v/ops/http/post",
+			"v/ops/jvm/url-encode"
+		]
+	}
+}

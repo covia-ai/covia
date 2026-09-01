@@ -46,9 +46,21 @@ public class ConnectionsAdapter extends AAdapter {
 
 	/** Stable presentation order. Provider metadata itself lives in each skill asset. */
 	private static final List<Provider> PROVIDERS = List.of(
+		new Provider("airtable"),
+		new Provider("asana"),
+		new Provider("discord"),
+		new Provider("github"),
 		new Provider("hubspot"),
+		new Provider("intercom"),
+		new Provider("jira"),
+		new Provider("linear"),
 		new Provider("notion"),
-		new Provider("slack"));
+		new Provider("sendgrid"),
+		new Provider("sentry"),
+		new Provider("slack"),
+		new Provider("stripe"),
+		new Provider("telegram"),
+		new Provider("twilio"));
 
 	private record Provider(String name) {
 		String skillRef() {

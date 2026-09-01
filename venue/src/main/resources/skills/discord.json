@@ -1,0 +1,20 @@
+{
+	"name": "discord",
+	"description": "Send messages and read channels/guilds with a Discord bot token (Bot auth via secretHeaders). Load for posting messages, reading channel history, and listing guild channels.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Discord\nCalls go through `v/ops/http/get` / `v/ops/http/post` against `https://discord.com/api/v10` with `secretHeaders: {\"Authorization\": \"s/DISCORD_BOT_TOKEN\"}`. Store the secret as the complete header value `Bot <token>` (create a bot at discord.com/developers -> your app -> Bot -> Reset Token; invite it to the server with the scopes you need). Only the secret reference goes in the request.\n\nCommon calls:\n- Bot identity: `GET /users/@me`\n- List guilds the bot is in: `GET /users/@me/guilds`\n- Guild channels: `GET /guilds/{guild_id}/channels`\n- Channel messages: `GET /channels/{channel_id}/messages?limit=50`\n- Send a message: `POST /channels/{channel_id}/messages` body `{content}` (or `{embeds: [...]}`)\n\nRules:\n- Check `status`; errors carry `{code, message}`. 401 = bad token; 403 = the bot lacks the channel/guild permission; 429 = rate limited, honour `retry_after`.\n- The bot only sees guilds it has been invited to and channels its role can read. Ids are snowflakes (long numeric strings).\n"
+	},
+	"connection": {
+		"baseUrl": "https://discord.com/api/v10",
+		"auth": { "kind": "secret-header", "alternatives": ["s/DISCORD_BOT_TOKEN"] }
+	},
+	"skill": {
+		"tools": [
+			"v/ops/connections/status",
+			"v/ops/http/get",
+			"v/ops/http/post",
+			"v/ops/jvm/url-encode"
+		]
+	}
+}

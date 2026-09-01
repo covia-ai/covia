@@ -1,0 +1,20 @@
+{
+	"name": "stripe",
+	"description": "Read and manage Stripe customers, charges, invoices, and subscriptions using a (preferably restricted) API key. Load for billing lookups, searches, and, with care, creating records.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Stripe\nCalls go through `v/ops/http/get` / `v/ops/http/post` against `https://api.stripe.com/v1` with `bearerSecret: \"s/STRIPE_KEY\"`. Prefer a restricted key (Developers -> API keys -> Create restricted key), read-only unless writes are needed; avoid the live secret key when a restricted one will do. Request bodies are form-encoded (`application/x-www-form-urlencoded`), not JSON. Only the secret reference goes in the request.\n\nCommon calls:\n- Customers: `GET /customers?limit=100` (page with `starting_after={last id}`); one: `GET /customers/{id}`\n- Search: `GET /customers/search?query=email:'a@b.com'`\n- Charges / intents: `GET /charges?limit=100`, `GET /payment_intents?limit=100`\n- Invoices / subscriptions: `GET /invoices?status=open`, `GET /subscriptions?status=active`\n- Balance: `GET /balance`\n- Create customer: `POST /customers` form body `email=a@b.com&name=Ada`\n\nRules:\n- Check `status`; errors are `{error: {type, code, message}}`. 401 = bad key; `card_error` / `invalid_request_error` explain the problem in `message`.\n- Amounts are in the smallest currency unit (cents); timestamps are Unix seconds.\n- Page with `limit` + `starting_after`; never assume one call returns everything.\n- Treat POST calls as real money operations - confirm intent before creating or modifying anything in live mode.\n"
+	},
+	"connection": {
+		"baseUrl": "https://api.stripe.com/v1",
+		"auth": { "kind": "bearer-secret", "alternatives": ["s/STRIPE_KEY"] }
+	},
+	"skill": {
+		"tools": [
+			"v/ops/connections/status",
+			"v/ops/http/get",
+			"v/ops/http/post",
+			"v/ops/jvm/url-encode"
+		]
+	}
+}

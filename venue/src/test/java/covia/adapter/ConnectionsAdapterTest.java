@@ -60,10 +60,12 @@ public class ConnectionsAdapterTest {
 	public void testListIsDerivedFromProviderSkills() throws Exception {
 		ACell result = invoke("v/ops/connections/list", Maps.empty());
 		AVector<ACell> providers = RT.ensureVector(RT.getIn(result, "providers"));
-		assertEquals(3, providers.count());
-		assertEquals(Strings.create("hubspot"), RT.getIn(providers.get(0), "provider"));
-		assertEquals(Strings.create("notion"), RT.getIn(providers.get(1), "provider"));
-		assertEquals(Strings.create("slack"), RT.getIn(providers.get(2), "provider"));
+		assertEquals(15, providers.count());
+		assertEquals(Strings.create("airtable"), RT.getIn(providers.get(0), "provider"));
+		assertEquals(Strings.create("hubspot"), RT.getIn(providers.get(4), "provider"));
+		assertEquals(Strings.create("notion"), RT.getIn(providers.get(8), "provider"));
+		assertEquals(Strings.create("slack"), RT.getIn(providers.get(11), "provider"));
+		assertEquals(Strings.create("twilio"), RT.getIn(providers.get(14), "provider"));
 
 		AMap<AString, ACell> notion = named(result, "providers", "notion");
 		assertEquals(Strings.create("v/skills/connections/notion"), notion.get(Strings.intern("skill")));

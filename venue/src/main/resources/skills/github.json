@@ -1,0 +1,20 @@
+{
+	"name": "github",
+	"description": "Work with GitHub repos, issues, and pull requests using the user's own token. Load for repo/issue/PR reads, searches, creating issues and comments.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## GitHub\nCalls go through `v/ops/http/get` / `v/ops/http/post` against `https://api.github.com` with `bearerSecret: \"s/GITHUB_TOKEN\"` (a fine-grained or classic personal access token: Settings -> Developer settings -> Personal access tokens; grant only the repos and scopes the task needs). Send headers `Accept: application/vnd.github+json` and `X-GitHub-Api-Version: 2022-11-28`. Only the secret reference goes in the request; never the token.\n\nCommon calls:\n- Whoami: `GET /user`\n- Your repos: `GET /user/repos?per_page=100&sort=updated` (page via the `Link` header `rel=\"next\"`)\n- Repo issues: `GET /repos/{owner}/{repo}/issues?state=open&per_page=100`\n- One issue: `GET /repos/{owner}/{repo}/issues/{number}`\n- Create issue: `POST /repos/{owner}/{repo}/issues` body `{title, body?, labels?, assignees?}`\n- Comment: `POST /repos/{owner}/{repo}/issues/{number}/comments` body `{body}`\n- Pull requests: `GET /repos/{owner}/{repo}/pulls?state=open`\n- Search: `GET /search/issues?q=<encoded>` (e.g. `repo:owner/name is:open is:issue`)\n- File contents: `GET /repos/{owner}/{repo}/contents/{path}` (base64 in `content`)\n\nRules:\n- Check `status`; errors are `{message, documentation_url}`. 401 = bad/expired token; 403 with `X-RateLimit-Remaining: 0` = rate limited (wait for `X-RateLimit-Reset`); 404 on a private repo usually means the token was not granted it.\n- Fine-grained tokens are scoped per repo. If a repo 404s, add it to the token.\n- Use `search/issues` for cross-repo queries but sparingly; its rate limit is lower. URL-encode `q` with `v/ops/jvm/url-encode`.\n"
+	},
+	"connection": {
+		"baseUrl": "https://api.github.com",
+		"auth": { "kind": "bearer-secret", "alternatives": ["s/GITHUB_TOKEN"] }
+	},
+	"skill": {
+		"tools": [
+			"v/ops/connections/status",
+			"v/ops/http/get",
+			"v/ops/http/post",
+			"v/ops/jvm/url-encode"
+		]
+	}
+}
