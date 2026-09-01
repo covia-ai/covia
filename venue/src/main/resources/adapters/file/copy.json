@@ -12,6 +12,7 @@
   },
   "operation": {
     "adapter": "file:copy",
+    "readOnly": false,
     "toolName": "file_copy",
     "input": {
       "type": "object",

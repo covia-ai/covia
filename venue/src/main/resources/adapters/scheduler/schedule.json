@@ -3,6 +3,7 @@
   "description": "Schedule a grid operation to run at a future time, once or on a fixed interval. Returns a handle used to trigger the event early or cancel it. The operation fires with the authority captured from the caller. A tracked fire is a durable Job in your job history; an untracked fire leaves no record beyond the log.",
   "operation": {
     "adapter": "scheduler:schedule",
+    "readOnly": false,
     "input": {
       "type": "object",
       "properties": {

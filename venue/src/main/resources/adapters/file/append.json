@@ -4,6 +4,7 @@
   "creator": "Covia",
   "operation": {
     "adapter": "file:append",
+    "readOnly": false,
     "toolName": "file_append",
     "input": {
       "type": "object",

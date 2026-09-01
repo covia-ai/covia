@@ -3,6 +3,7 @@
   "description": "Three-agent AP pipeline: Alice extracts structured invoice data, Bob enriches with vendor/PO validation, Carol applies approval policy rules. Requires agents Alice, Bob, and Carol to be created via /ap-demo setup.",
   "type": "orchestration",
   "operation": {
+    "readOnly": false,
     "adapter": "orchestrator",
     "input": {
       "type": "object",

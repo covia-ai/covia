@@ -3,6 +3,7 @@
   "description": "Cancel a scheduled event by its handle, removing it before it fires. Only the event's owner may cancel it.",
   "operation": {
     "adapter": "scheduler:cancel",
+    "readOnly": false,
     "input": {
       "type": "object",
       "properties": {

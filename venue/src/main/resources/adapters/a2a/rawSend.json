@@ -3,6 +3,7 @@
 	"description": "Diagnostic escape hatch: send directly to an A2A URL with per-call Bearer authentication. Prefer importing an A2A agent asset.",
 	"operation": {
 		"adapter": "a2a:rawSend",
+		"readOnly": false,
 		"internal": false,
 		"secretFields": ["bearerSecret", "bearerToken"],
 		"input": {

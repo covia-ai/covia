@@ -4,6 +4,7 @@
   "creator": "Covia",
   "operation": {
     "adapter": "file:roots",
+    "readOnly": true,
     "toolName": "file_roots",
     "input": {
       "type": "object",

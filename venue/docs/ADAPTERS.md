@@ -212,6 +212,7 @@ schema validation and agent tool use:
   "description": "What the operation does and when to use it.",
   "operation": {
     "adapter": "example:run",
+    "readOnly": false,
     "input": {
       "type": "object",
       "properties": {},
@@ -221,6 +222,13 @@ schema validation and agent tool use:
   }
 }
 ```
+
+Every adapter-owned operation must explicitly declare
+`operation.readOnly` as `true` or `false`; publication rejects a missing or
+non-boolean classification. Use `true` only when result-oriented execution is
+safe without a durable job record. Use `false` for mutations, sensitive or
+effectful reads, and operations whose result should remain auditable. Operators
+can still record classified reads with `recordReadOnlyOperations: true`.
 
 See [OPERATIONS.md](OPERATIONS.md) for defaults, discovery, reference
 resolution, and full metadata rules.
@@ -276,4 +284,3 @@ tests are verified.
 - [GRID_LATTICE_DESIGN.md](GRID_LATTICE_DESIGN.md) — lattice namespaces and federation
 - [../CLAUDE.md](../CLAUDE.md) — venue architecture and adapter inventory
 - [../../BUILD.md](../../BUILD.md) — build, module artifacts, and release flow
-

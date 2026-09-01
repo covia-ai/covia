@@ -3,6 +3,7 @@
 	"description": "Stops the live process behind a session (freeing its ~400 MB). The conversation is kept by Claude Code on disk: the next claudecode:run with this 'session' resumes it on a fresh process. If a turn is running it is interrupted (its job fails). Same authorisation as claudecode:run for the session's project.",
 	"operation": {
 		"adapter": "claudecode:stop",
+		"readOnly": false,
 		"input": {
 			"type": "object",
 			"properties": {

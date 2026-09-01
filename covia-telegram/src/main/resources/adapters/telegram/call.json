@@ -3,6 +3,7 @@
 	"description": "Calls any Telegram Bot API method through one of the venue's bots, with the method's own parameters exactly as documented at https://core.telegram.org/bots/api, and returns Telegram's result. This is how everything beyond plain text is done: sendPhoto / sendDocument / sendVoice / sendMediaGroup (media by file_id or public URL — a file the venue already holds is not uploaded through this op), editMessageText, deleteMessage, answerCallbackQuery, sendChatAction, getChat, setMessageReaction, getFile, ... Maps and arrays in params are sent as JSON as Telegram expects. Refused: getUpdates, setWebhook, deleteWebhook, logOut, close (the venue's own update loop owns them). Requires telegram/call on <bot user>/telegram/<bot> — a broader ability than telegram/send.",
 	"operation": {
 		"adapter": "telegram:call",
+		"readOnly": false,
 		"input": {
 			"type": "object",
 			"properties": {

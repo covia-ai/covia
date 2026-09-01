@@ -4,6 +4,7 @@
 	"dateCreated": "2026-08-29T00:00:00Z",
 	"operation": {
 		"adapter": "agent:reloadContext",
+		"readOnly": false,
 		"internal": false,
 		"toolName": "agent_reload_context",
 		"input": {

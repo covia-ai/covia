@@ -2,7 +2,7 @@
   "name": "Send Discord message",
   "description": "Sends a message through a venue Discord bot. Content over Discord's 2000-character limit is split. Requires discord/send on <bot user>/discord/<bot>.",
   "operation": {
-    "adapter": "discord:send",
+    "adapter": "discord:send","readOnly":false,
     "input": {"type":"object","properties":{
       "bot":{"type":"string","description":"Bot name; optional when the caller owns exactly one."},
       "channel_id":{"type":"string","description":"Discord channel snowflake."},

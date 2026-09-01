@@ -131,7 +131,9 @@ public class VenueBootstrapMaterializerTest {
 		@Override protected void installAssets() {
 			installModel(path, Maps.of(
 				Fields.NAME, Strings.create(path),
-				Fields.OPERATION, Maps.of("adapter", "test:echo")));
+				Fields.OPERATION, Maps.of(
+					Fields.ADAPTER, Strings.create("test:echo"),
+					Fields.READ_ONLY, convex.core.data.prim.CVMBool.FALSE)));
 		}
 		@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx,
 				AMap<AString, ACell> meta, ACell input) {

@@ -3,6 +3,7 @@
   "description": "Validate a value against a JSON Schema and return all violations (not just the first). Returns {valid: true/false, errors: [...]}.",
   "operation": {
     "adapter": "schema:validateAll",
+    "readOnly": true,
     "toolName": "schema_validate_all",
     "input": {
       "type": "object",

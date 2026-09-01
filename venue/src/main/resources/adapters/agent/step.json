@@ -4,6 +4,7 @@
 	"dateCreated": "2026-08-21T00:00:00Z",
 	"operation": {
 		"adapter": "agent:step",
+		"readOnly": false,
 		"internal": false,
 		"toolName": "agent_step",
 		"input": {

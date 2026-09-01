@@ -11,6 +11,7 @@
 	],
 	"operation": {
 		"adapter": "langchain:gemini",
+		"readOnly": false,
 		"secretKey": "GOOGLE_API_KEY",
 		"secretFields": [
 			"apiKey"

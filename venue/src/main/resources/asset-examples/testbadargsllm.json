@@ -4,6 +4,7 @@
 	"dateCreated": "2026-07-02T00:00:00Z",
 	"operation": {
 		"adapter": "test:badargsllm",
+		"readOnly": false,
 		"input": {
 			"type": "object",
 			"properties": {

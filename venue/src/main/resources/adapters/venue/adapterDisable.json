@@ -3,6 +3,7 @@
   "description": "Disables an active adapter on the running venue: removes its v/info/adapters entry and stops dispatch while leaving durable catalog metadata in place. The kernel marker is informational and does not restrict venue authority. In-flight jobs finish on the retained instance. Idempotent; not persisted across restarts. Venue-owned: requires adapter/manage on <venue DID>/adapters.",
   "operation": {
     "adapter": "venue:adapter-disable",
+    "readOnly": false,
     "input": {
       "type": "object",
       "properties": {

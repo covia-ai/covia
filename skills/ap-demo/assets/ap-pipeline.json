@@ -3,6 +3,7 @@
   "type": "orchestration",
   "description": "Three-step accounts payable pipeline: Alice (extract) → Bob (enrich) → Carol (approve). Pass invoice_text as input. Returns extraction, enrichment, and approval decision.",
   "operation": {
+    "readOnly": false,
     "adapter": "orchestrator",
     "input": {
       "type": "object",

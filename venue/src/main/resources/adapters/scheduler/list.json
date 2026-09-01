@@ -3,6 +3,7 @@
   "description": "List the caller's pending scheduled events, soonest first. Each entry carries its handle, operation reference, next fire time and effective tracking; a recurring event also carries its repeat spec, lastFired time and — when tracked — the lastJob ID of its most recent fire (read that Job for the outcome).",
   "operation": {
     "adapter": "scheduler:list",
+    "readOnly": true,
     "input": {
       "type": "object",
       "properties": {}

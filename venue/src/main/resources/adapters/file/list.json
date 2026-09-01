@@ -4,6 +4,7 @@
   "creator": "Covia",
   "operation": {
     "adapter": "file:list",
+    "readOnly": true,
     "toolName": "file_list",
     "input": {
       "type": "object",

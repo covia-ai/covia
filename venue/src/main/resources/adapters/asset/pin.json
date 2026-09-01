@@ -3,6 +3,7 @@
 	"description": "Snapshot any resolvable metadata value into your a/ content-addressed store. Idempotent — the same value produces the same hash. Use to freeze a venue op or workspace value at a specific version. Returns {ref, id}; historical {path, hash} aliases are also included.",
 	"operation": {
 		"adapter": "asset:pin",
+		"readOnly": false,
 		"toolName": "asset_pin",
 		"input": {
 			"type": "object",

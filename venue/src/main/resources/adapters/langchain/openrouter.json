@@ -11,6 +11,7 @@
 	],
 	"operation": {
 		"adapter": "langchain:openrouter",
+		"readOnly": false,
 		"secretKey": "OPENROUTER_API_KEY",
 		"secretFields": [
 			"apiKey"

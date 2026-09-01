@@ -3,6 +3,7 @@
   "description": "Validate a value against a JSON Schema. Returns {valid: true} if the value conforms, or {valid: false, error: '...'} with the first violation found.",
   "operation": {
     "adapter": "schema:validate",
+    "readOnly": true,
     "toolName": "schema_validate",
     "input": {
       "type": "object",

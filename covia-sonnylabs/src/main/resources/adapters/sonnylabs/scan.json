@@ -3,6 +3,7 @@
   "description": "Scans externally supplied text before it enters an LLM context or controls an action. Returns SonnyLabs prompt-injection and related safety findings plus its allow/warn/flag/block decision. This is an explicit tool, not automatic prompt filtering; scanner failures fail the operation.",
   "operation": {
     "adapter": "sonnylabs:scan",
+    "readOnly": false,
     "default": {
       "surface": "user_message",
       "capture": false

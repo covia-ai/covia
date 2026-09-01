@@ -4,6 +4,7 @@
 	"dateCreated": "2026-08-27T00:00:00Z",
 	"operation": {
 		"adapter": "skills:parse",
+		"readOnly": true,
 		"toolName": "skills_parse",
 		"input": {
 			"type": "object",

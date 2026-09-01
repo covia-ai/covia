@@ -3,6 +3,7 @@
   "description": "Registers a user DID at this venue. Venue administrators may supply any valid DID, or a username to derive did:web:<venue>:u:<username>. Idempotent: created is false when already registered.",
   "operation": {
     "adapter": "user:create",
+    "readOnly": false,
     "input": {
       "type": "object",
       "properties": {

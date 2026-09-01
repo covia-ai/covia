@@ -4,6 +4,7 @@
     "dateCreated": "2026-04-16T00:00:00Z",
     "operation": {
         "adapter": "agent:completeTask",
+        "readOnly": false,
         "toolName": "agent_complete_task",
         "input": {
             "type": "object",

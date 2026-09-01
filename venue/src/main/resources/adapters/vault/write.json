@@ -4,6 +4,7 @@
   "creator": "Covia",
   "operation": {
     "adapter": "vault:write",
+    "readOnly": false,
     "toolName": "vault_write",
     "input": {
       "type": "object",

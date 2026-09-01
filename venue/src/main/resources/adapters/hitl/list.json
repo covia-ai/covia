@@ -4,6 +4,7 @@
 	"creator": "Covia",
 	"operation": {
 		"adapter": "hitl:list",
+		"readOnly": true,
 		"toolName": "hitl_list",
 		"input": {
 			"type": "object",

@@ -3,6 +3,7 @@
   "description": "Lists users registered at this venue. Requires venue user-read authority.",
   "operation": {
     "adapter": "user:list",
+    "readOnly": true,
     "input": {
       "type": "object",
       "properties": {}

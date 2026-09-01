@@ -3,6 +3,7 @@
   "description": "Collects the venue's Etch store while the venue keeps serving: everything reachable from the lattice root is copied into a fresh file and the venue cuts over to it, with reads and writes continuing throughout. The superseded file is deleted when the venue next closes (or on the following start if the platform still pins it), and the collected file is adopted under the store's name on the next start — so disk comes back at shutdown unless restart is set. One collection per process: a second needs a restart first (etch.gc.onStart collects at boot). Needs free disk of about the current file size. Venue-owned: requires venue/gc on <venue DID>/store; restart additionally requires venue/restart on <venue DID>/process.",
   "operation": {
     "adapter": "venue:gc",
+    "readOnly": false,
     "input": {
       "type": "object",
       "properties": {

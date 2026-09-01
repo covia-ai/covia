@@ -14,6 +14,7 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.prim.CVMBool;
 import covia.api.Fields;
 import covia.venue.Config;
 import covia.venue.Engine;
@@ -39,13 +40,39 @@ public class AAdapterInstallTest {
 			return java.util.concurrent.CompletableFuture.completedFuture(null);
 		}
 		Hash probeInstall(String resourcePath) { return installAsset(resourcePath); }
+		Hash probeInstall(AMap<AString, ACell> meta) { return installAsset(meta); }
 		Hash probeModel(String path) {
 			AMap<AString, ACell> meta = Maps.of(
 				Fields.NAME, Strings.create(path),
-				Fields.OPERATION, Maps.of(Strings.create("adapter"), Strings.create("probe:model")));
+				Fields.OPERATION, Maps.of(
+					Fields.ADAPTER, Strings.create("probe:model"),
+					Fields.READ_ONLY, CVMBool.FALSE));
 			return installModel(path, meta);
 		}
 		static String probeFailure(Throwable error) { return describeFailure(error); }
+	}
+
+	@Test
+	public void testOperationsRequireExplicitReadOnlyClassification() {
+		ProbeAdapter adapter = new ProbeAdapter();
+		adapter.engine = TestEngine.ENGINE;
+		AMap<AString, ACell> unclassified = Maps.of(
+			Fields.NAME, Strings.create("Unclassified operation"),
+			Fields.OPERATION, Maps.of(Fields.ADAPTER, Strings.create("probe:unclassified")));
+		IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+			() -> adapter.probeInstall(unclassified));
+		assertTrue(failure.getMessage().contains("operation.readOnly"), failure.getMessage());
+
+		assertNotNull(adapter.probeInstall(Maps.of(
+			Fields.NAME, Strings.create("Read operation"),
+			Fields.OPERATION, Maps.of(
+				Fields.ADAPTER, Strings.create("probe:read"),
+				Fields.READ_ONLY, CVMBool.TRUE))));
+		assertNotNull(adapter.probeInstall(Maps.of(
+			Fields.NAME, Strings.create("Mutating operation"),
+			Fields.OPERATION, Maps.of(
+				Fields.ADAPTER, Strings.create("probe:write"),
+				Fields.READ_ONLY, CVMBool.FALSE))));
 	}
 
 	@Test

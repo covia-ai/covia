@@ -3,6 +3,7 @@
   "description": "Explicitly executes one operation in another user's namespace. Requires user/sudo on the target DID, plus the target operation's invoke and point-of-action capabilities. The authenticated caller remains the actor.",
   "operation": {
     "adapter": "user:sudo",
+    "readOnly": false,
     "input": {
       "type": "object",
       "properties": {

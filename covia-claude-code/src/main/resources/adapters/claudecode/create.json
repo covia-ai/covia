@@ -3,6 +3,7 @@
 	"description": "Registers a directory as a Claude Code project at runtime. Venue authority is required (claudecode/manage on <venueDID>/claudecode/projects — call as the venue or present a venue-issued delegation): naming a directory the venue's own OS user may execute code in is an operator decision. 'user' names who owns the project (that user and their agents may run in it; others need a delegation from them) — a DID, 'public' (the venue's public principal) or 'venue'; it defaults to the caller. The project is recorded at w/claudecode/projects/<name> in the venue workspace and re-armed at every start. Config-declared projects cannot be created or replaced this way.",
 	"operation": {
 		"adapter": "claudecode:create",
+		"readOnly": false,
 		"input": {
 			"type": "object",
 			"properties": {

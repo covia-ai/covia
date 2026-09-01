@@ -3,6 +3,7 @@
 	"description": "Opens a long-lived conversation with Claude Code in a project as one Job. The job runs the optional first 'prompt', then waits in INPUT_REQUIRED with the reply as its output; every message sent to the job ({\"content\": \"...\"} — or {\"prompt\": ...}) is the next turn, and {\"end\": true} finishes it (completing with a summary). Between turns the process stays warm (subject to the pool's idle timeout and live cap) and is respawned transparently — the conversation lives in Claude Code's own session on disk, so it survives reaps and even venue restarts. Use this from clients that hold a job handle (REST/SSE, A2A); an agent using Claude Code as a tool should call claudecode:run with 'session' instead. Same authorisation as claudecode:run.",
 	"operation": {
 		"adapter": "claudecode:session",
+		"readOnly": false,
 		"input": {
 			"type": "object",
 			"properties": {

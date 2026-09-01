@@ -3,6 +3,7 @@
   "description": "Gracefully closes every venue in this JVM and hands off to a successor executable Covia jar. The requesting Job is completed and persisted before shutdown. A helper waits for the old JVM to exit, starts the successor, and starts the current jar as a fallback if the successor does not signal readiness. Omit jar to restart the current version. Venue-owned: requires venue/restart on <venue DID>/process.",
   "operation": {
     "adapter": "venue:restart",
+    "readOnly": false,
     "input": {
       "type": "object",
       "properties": {

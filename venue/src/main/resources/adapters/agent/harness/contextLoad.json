@@ -4,6 +4,7 @@
     "dateCreated": "2026-08-29T00:00:00Z",
     "operation": {
         "adapter": "harness:contextLoad",
+        "readOnly": false,
         "internal": true,
         "toolName": "context_load",
         "input": {

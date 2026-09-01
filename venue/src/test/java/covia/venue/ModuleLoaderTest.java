@@ -64,6 +64,7 @@ public class ModuleLoaderTest {
 				+ "\t\"description\": \"Echo operation from a module jar\",\n"
 				+ "\t\"operation\": {\n"
 				+ "\t\t\"adapter\": \"modtest\",\n"
+				+ "\t\t\"readOnly\": true,\n"
 				+ "\t\t\"input\": {}\n"
 				+ "\t}\n"
 				+ "}").getBytes(StandardCharsets.UTF_8));

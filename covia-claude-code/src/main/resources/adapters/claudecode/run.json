@@ -3,6 +3,7 @@
 	"description": "Runs one Claude Code turn in a venue-authorised project directory and returns its result. Claude Code is a full coding agent: it reads and edits files, runs commands, uses git and its own tools in that directory, so a prompt should be a complete, self-contained task ('add a unit test for X and run it', 'summarise what changed in the last 5 commits', 'fix the failing build and report the diff'). Pass 'session' (from a previous result) to continue the same conversation with full context — Claude Code keeps every session on disk, so a session outlives its process. While running, the job carries 'progress' {toolCalls, lastTool, text, session, model} so watchers see what Claude Code is doing. A turn Claude Code reports as an error (max turns, budget, execution error) fails the job with the reason and the session id to resume. Requires claudecode/run on <project owner>/claudecode/<project>: the project's user (and their agents, within scope) may run; others need a delegation from that user.",
 	"operation": {
 		"adapter": "claudecode:run",
+		"readOnly": false,
 		"input": {
 			"type": "object",
 			"properties": {

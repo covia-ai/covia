@@ -4,6 +4,7 @@
   "creator": "Covia",
   "operation": {
     "adapter": "file:write",
+    "readOnly": false,
     "toolName": "file_write",
     "input": {
       "type": "object",

@@ -11,6 +11,7 @@
 	],
 	"operation": {
 		"adapter": "langchain:deepseek",
+		"readOnly": false,
 		"secretKey": "DEEPSEEK_API_KEY",
 		"secretFields": [
 			"apiKey"

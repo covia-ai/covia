@@ -4,6 +4,7 @@
     "dateCreated": "2026-08-29T00:00:00Z",
     "operation": {
         "adapter": "harness:subgoal",
+        "readOnly": false,
         "internal": true,
         "toolName": "subgoal",
         "input": {

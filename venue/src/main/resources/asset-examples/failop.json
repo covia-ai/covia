@@ -5,6 +5,7 @@
 	"dateModified": "2025-06-09T07:22:59Z",
 	"operation": {
 		"adapter": "test:error",
+		"readOnly": false,
 		"input": { "type": "object" },
 		"output": {}
 	}

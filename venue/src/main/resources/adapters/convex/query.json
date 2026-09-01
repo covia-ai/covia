@@ -3,6 +3,7 @@
 	"description": "Execute a read-only query against a Convex peer",
 	"operation": {
 		"adapter": "convex:query",
+		"readOnly": true,
 		"input": {
 			"type": "object",
 			"properties": {

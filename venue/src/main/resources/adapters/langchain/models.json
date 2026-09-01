@@ -4,6 +4,7 @@
 	"dateCreated": "2026-07-17T00:00:00Z",
 	"operation": {
 		"adapter": "langchain:models",
+		"readOnly": true,
 		"toolName": "llm_models",
 		"input": {
 			"type": "object",
