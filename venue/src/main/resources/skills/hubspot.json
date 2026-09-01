@@ -5,8 +5,16 @@
 		"contentType": "text/markdown",
 		"inline": "## HubSpot\nCalls go through `v/ops/http/get` / `v/ops/http/post` against `https://api.hubapi.com` with `bearerSecret: \"s/HUBSPOT_TOKEN\"` (a private-app access token: Settings → Integrations → Private Apps; scoped, non-expiring). Only the secret reference goes in the request; never the token itself.\n\nCRM v3 patterns (`{object}` is `contacts`, `companies`, `deals`, or `tickets`):\n- List: `GET /crm/v3/objects/{object}?limit=100&properties=firstname,lastname,email` (paginate with `after` from `paging.next.after`)\n- Get one: `GET /crm/v3/objects/{object}/{id}?properties=...`\n- Search: `POST /crm/v3/objects/{object}/search` body `{filterGroups: [{filters: [{propertyName, operator: \"EQ\"|\"CONTAINS_TOKEN\"|..., value}]}], properties: [...], limit}`\n- Create: `POST /crm/v3/objects/{object}` body `{properties: {...}}`\n- Update: `POST /crm/v3/objects/{object}/{id}` with `method: \"PATCH\"` and body `{properties: {...}}`\n- Associations: `GET /crm/v4/objects/{object}/{id}/associations/{toObject}`\n\nRules:\n- Check `status`; HubSpot errors carry `{status: \"error\", message, category}`. `MISSING_SCOPES` means the private app lacks the scope: say which scope, do not retry.\n- Property names are internal names (`firstname`, `hs_object_id`), not display labels; `GET /crm/v3/properties/{object}` lists them.\n- Respect rate limits (HTTP 429 with `Retry-After`); batch endpoints (`/batch/read`, `/batch/create`) for more than a handful of records.\n- Email addresses identify contacts; search before creating to avoid duplicates.\n"
 	},
+	"connection": {
+		"baseUrl": "https://api.hubapi.com",
+		"auth": {
+			"kind": "bearer-secret",
+			"alternatives": ["s/HUBSPOT_TOKEN"]
+		}
+	},
 	"skill": {
 		"tools": [
+			"v/ops/connections/status",
 			"v/ops/http/get",
 			"v/ops/http/post",
 			"v/ops/jvm/url-encode"

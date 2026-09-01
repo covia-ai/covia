@@ -56,6 +56,7 @@ import covia.adapter.AssetAdapter;
 import covia.adapter.AuthAdapter;
 import covia.adapter.UserAdapter;
 import covia.adapter.ConvexAdapter;
+import covia.adapter.ConnectionsAdapter;
 import covia.adapter.CoviaAdapter;
 import covia.adapter.GridAdapter;
 import covia.adapter.HTTPAdapter;
@@ -883,6 +884,7 @@ public class Engine {
 		venue.registerAdapter(new HTTPAdapter());
 		venue.registerAdapter(new OAuthAdapter());
 		venue.registerAdapter(new JVMAdapter());
+		venue.registerAdapter(new ConnectionsAdapter());
 		venue.registerAdapter(new FileAdapter());
 		venue.registerAdapter(new covia.adapter.ArchiveAdapter());
 		venue.registerAdapter(new SchemaAdapter());

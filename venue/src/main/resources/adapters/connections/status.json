@@ -1,0 +1,63 @@
+{
+	"name": "Connection Status",
+	"description": "Reports whether the authenticated caller has one of each provider's named credentials and whether the provider's tools are live. Checks encrypted record presence only; never resolves, decrypts, or returns a credential value.",
+	"dateCreated": "2026-09-01T00:00:00Z",
+	"operation": {
+		"adapter": "connections:status",
+		"readOnly": true,
+		"toolName": "connections_status",
+		"input": {
+			"type": "object",
+			"properties": {
+				"provider": { "type": "string", "minLength": 1, "description": "Report one provider only; omit for all." }
+			},
+			"additionalProperties": false
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"connections": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"properties": {
+							"provider": { "type": "string" },
+							"skill": { "type": "string" },
+							"configured": { "type": "boolean", "description": "True when at least one credential alternative exists for this caller (including the public fallback)." },
+							"credentials": {
+								"type": "array",
+								"items": {
+									"type": "object",
+									"properties": {
+										"ref": { "type": "string" },
+										"configured": { "type": "boolean" },
+										"source": { "type": "string", "enum": ["user", "public"] }
+									},
+									"required": ["ref", "configured"],
+									"additionalProperties": false
+								}
+							},
+							"available": { "type": "boolean", "description": "Whether every declared tool's adapter is live; this does not imply caller authority." },
+							"unavailableTools": {
+								"type": "array",
+								"items": {
+									"type": "object",
+									"properties": {
+										"operation": { "type": "string" },
+										"reason": { "type": "string" }
+									},
+									"required": ["operation", "reason"],
+									"additionalProperties": false
+								}
+							}
+						},
+						"required": ["provider", "skill", "configured", "credentials", "available", "unavailableTools"],
+						"additionalProperties": false
+					}
+				}
+			},
+			"required": ["connections"],
+			"additionalProperties": false
+		}
+	}
+}

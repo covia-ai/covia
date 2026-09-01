@@ -1,0 +1,17 @@
+{
+	"name": "connections",
+	"description": "Connected services available to this venue: discover provider-specific instructions, required secret references, and live setup status without exposing credentials.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Connections\nConnections are provider skills layered over shared transports; loading one appends its instructions and tools to the agent's existing frame. Use `v/ops/connections/list` to see provider descriptors and transport availability, then `v/ops/connections/status` to check whether your user namespace has a named credential. Status checks encrypted-record presence only and never reads the value.\n\nLoad the provider skill before using a service. It gives the base URL, exact `s/NAME` reference, API conventions, and shared HTTP tools. Loading a skill grants no authority: normal invoke and secret-resolution capability checks still apply. Never copy a token into a prompt or ordinary header; pass only the provider skill's secret reference through the transport's credential field. A missing credential is setup work, not permission to invent or request plaintext in chat."
+	},
+	"skill": {
+		"tools": [
+			"v/ops/connections/list",
+			"v/ops/connections/status"
+		],
+		"skillsets": [
+			"v/skills/connections"
+		]
+	}
+}

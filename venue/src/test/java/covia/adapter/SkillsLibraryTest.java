@@ -114,6 +114,12 @@ public class SkillsLibraryTest {
 			"grid owns its skill, inside its skillset");
 		assertTrue(engine.getAdapter("hitl").pendingCatalogEntries.containsKey("v/skills/agents/hitl"),
 			"hitl owns its skill");
+		assertTrue(engine.getAdapter("connections").pendingCatalogEntries.containsKey("v/skills/connections/notion"),
+			"connections owns provider skills");
+		assertTrue(engine.getAdapter("connections").pendingCatalogEntries.containsKey("v/skills/root/connections"),
+			"connections owns its root entry point");
+		assertFalse(engine.getAdapter("http").pendingCatalogEntries.containsKey("v/skills/connections/notion"),
+			"the transport does not own service definitions");
 		assertFalse(platformNames.contains("grid"), "SkillsAdapter no longer carries adapter skills");
 	}
 

@@ -307,11 +307,6 @@ public class HTTPAdapter extends AAdapter {
 	protected void installAssets() {
 		// The adapter's own skill: v/skills/http lives and dies with this adapter.
 		installSkill("ops-tools/http", "/skills/http.json");
-		// Connection skills: third-party services reachable with a user-supplied token
-		// via bearerSecret. Pure instruction bundles over the http ops above.
-		installSkill("connections/notion", "/skills/notion.json");
-		installSkill("connections/hubspot", "/skills/hubspot.json");
-		installSkill("connections/slack", "/skills/slack.json");
 		String BASE = "/asset-examples/";
 
 		// HTTP primitives — registered in /v/ops/.

@@ -116,6 +116,24 @@ public class AdapterLifecycleTest {
 	}
 
 	@Test
+	public void testConnectionCatalogOwnershipFollowsAdapterLifecycle() throws Exception {
+		Engine engine = boot(null);
+		try {
+			assertNotNull(venueRead(engine, "v/adapters/connections/skills/notion"));
+			assertNotNull(venueRead(engine, "v/adapters/connections/ops/list"));
+			assertTrue(engine.disableAdapter("connections"));
+			assertNull(venueRead(engine, "v/adapters/connections"),
+				"disabling retracts the live owner surface");
+			assertNotNull(venueRead(engine, "v/skills/connections/notion"),
+				"canonical metadata remains stable for already-rendered session history");
+			assertTrue(engine.enableAdapter("connections"));
+			assertNotNull(venueRead(engine, "v/adapters/connections/skills/notion"));
+		} finally {
+			engine.close();
+		}
+	}
+
+	@Test
 	public void testAdapterOwnedSubtreeFollowsLifecycleAndRedactsConfig() throws Exception {
 		Engine engine = Engine.createTemp(Maps.of(
 			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
