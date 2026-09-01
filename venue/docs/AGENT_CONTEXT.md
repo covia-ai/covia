@@ -36,20 +36,21 @@ Every inference is one call with one input:
 
 So assembly is: *compute each element, in order, and concatenate*. The value of the design is not in the data structure — it is in **which elements, in what order, produced by whom**.
 
-**The unit of submission is one inference.** Durable context has two parts: an
-immutable materialised prefix on the active frame and that frame's canonical
-append-only conversation. Each inference reuses the prefix, deterministically
-projects the stored conversation and appends the working turn. The remaining
-inference-local tail contains only small ambient notices and the outstanding
-task. Persistent sources are resolved when their load is materialised or
-appended, not polled and re-rendered before every call.
+**The unit of submission is one inference.** Durable context is the active
+frame's canonical append-only conversation plus, when caching is useful, an
+immutable rendered prefix. Cached inference reuses that prefix; uncached
+inference renders the current config-owned sources directly. Both
+deterministically project stored conversation and append the working turn. The
+remaining inference-local tail contains only small ambient notices and the
+outstanding task. Explicit loads are resolved when appended; volatile loads
+use the observation protocol below.
 
 **Assembly never mutates state.** Before assembly, declarations marked
 `volatile` are resolved outside the lattice update and canonically rendered.
 One pure atomic frame transform compares them with the frame's latest
-observations, appending only changed values (or removals). Assembly then remains
-a pure function of `Spec`; the clock is an explicit input and never participates
-in observation equality. `agent:context` previews the same transform on a local
+observations, appending only changed values (or removals). Assembly receives all
+state mutation as completed immutable cells; the clock is an explicit input and
+never participates in observation equality. `agent:context` previews the same transform on a local
 frame, keeping inspection exact without mutating the session.
 
 This document covers that. The grammar of what an individual context entry may be lives in §6; the scope chain that decides which entries are in play lives in §7.
@@ -81,7 +82,9 @@ session has only the root. Goal-tree lifecycle fields such as `status` and
 `callId` may coexist on a frame; context assembly must preserve fields it does
 not own.
 
-`RenderedContext` has this exact CVM map shape:
+`RenderedContext` is an optional cache projection. It exists only while the
+effective model/call policy uses prefix caching, and has this exact CVM map
+shape:
 
 ```text
 {
@@ -94,7 +97,14 @@ not own.
 }
 ```
 
-`0 <= head <= live <= messages.count`. `sourceConfig` is not another
+`0 <= head <= live <= messages.count`. Models cache by default. An explicit
+`model.options.cachePrefix: false` or call-level `cache: false` makes assembly
+ephemeral: the runtime ignores and removes any old `renderedContext`, resolves
+and renders the current config/session snapshot for the inference, and emits no
+`cacheMarks`. The computed vectors are passed directly to L3 and discarded;
+they are not application state.
+
+When the projection exists, `sourceConfig` is not another
 configuration layer and is never sent to the model from this map. It is the
 exact immutable declarative config cell from which this prefix was
 materialised. Both `llmagent` and `goaltree` stamp the same declarative agent
@@ -158,17 +168,20 @@ defines each of those once rather than copying their field tables here.
 
 The representation has these invariants:
 
-1. Provider input is assembled as
-   `renderedContext.tools` plus
-   `renderedContext.messages ++ render(frame.conversation) ++ workingTurn ++ inferenceTail`.
-   The prefix and conversation are separate durable cells; there is no hidden
-   cache object or second transcript.
-2. Equal `sourceConfig` reuses the exact persisted `tools` and `messages` cells.
-   A missing or unequal stamp causes the next inference to replace only
-   `renderedContext`; `conversation` and both loads tiers remain unchanged.
-3. Ambient mutation never invalidates a materialised rendering. An explicit
+1. Provider input is always
+   `initial.tools` plus
+   `initial.messages ++ render(frame.conversation) ++ workingTurn ++ inferenceTail`.
+   With caching, `initial` is the applicable `renderedContext`; without it,
+   `initialise(spec)` produces the same shape ephemerally. Conversation remains
+   the sole durable transcript; there is no hidden cache object or second transcript.
+2. With caching, equal `sourceConfig` reuses the exact persisted `tools` and
+   `messages` cells. A missing or unequal stamp causes the next inference to
+   replace only `renderedContext`; `conversation` and both loads tiers remain
+   unchanged. Without caching, no stamp is consulted or stored.
+3. Ambient mutation never invalidates a cached rendering. An explicit
    same-config reload clears `renderedContext`; a declarative config change makes
-   it inapplicable by equality.
+   it inapplicable by equality. Ephemeral assembly has no invalidation concept:
+   it simply resolves the current snapshot on each inference.
 4. Conversation changes append canonical entries. Compaction is the explicit
    exception: it nests the exact replaced vector under `items` and clears
    `renderedContext` so the next inference materialises a new prefix.
@@ -180,7 +193,7 @@ The representation has these invariants:
 6. Evolution is structural, with no parallel schema-version state: readers
    preserve unknown map fields. A legacy `renderedContext` without the required
    `sourceConfig`, `tools` or `messages` is treated as absent and is upgraded by
-   the next materialisation.
+   the next cached materialisation; an uncached inference removes it.
 7. Resolution and rendering happen before a lattice mutation. Persistence
    associates all completed immutable observations and their conversation
    messages in one non-blocking atomic frame update; lattice state remains the
@@ -220,11 +233,11 @@ A block is its label followed by its body; in `xml` the body is followed by the 
 
 1. **One assembly, every runtime.** The order is defined once. A runtime chooses *what it puts in*, never *where it lands*. Divergence should be impossible to express, not merely discouraged.
 
-2. **Cache-efficient by construction.** The materialised prefix is reused
-   byte-for-byte and the canonical conversation is append-only. Their provider
-   projection is deterministic; only a small set of explicit operations may
-   rebuild the prefix (§3.1). This is a property of the representation, not of
-   anyone remembering to be careful.
+2. **Cache-efficient by construction.** When enabled, the materialised prefix
+   is reused byte-for-byte and only a small set of explicit operations may
+   rebuild it (§3.1). The canonical conversation is append-only in every mode.
+   When caching is disabled there is no projection to maintain: initial context
+   is rendered for the request and discarded.
 
 3. **Maintainable: sections are functions.** Each section is a function of the Spec returning messages. It can be read, tested and changed alone. Assembly is a mutable accumulator that knows only *append*, *mark* and *bytes so far* — it holds no subsystem knowledge.
 
@@ -241,29 +254,37 @@ A block is its label followed by its body; in `xml` the body is followed by the 
 
 ### 3.1 Stable prefix and cache boundaries
 
-There is no separate cache lifecycle object. The active frame owns the
-`RenderedContext` defined in §1.1: a declarative source-config cell, fixed tool
-vector and config-owned message vector. The config cell is provenance, not a
-cache epoch: ordinary CVM equality decides whether the rendering still applies.
-The frame's separate conversation vector records later events in the order the
-model sees them:
+There is no separate cache lifecycle object. When prefix caching is enabled,
+the active frame owns the `RenderedContext` defined in §1.1: a declarative
+source-config cell, fixed tool vector and config-owned message vector. The
+config cell is provenance, not a cache epoch: ordinary CVM equality decides
+whether the rendering still applies. When caching is disabled, the same render
+is computed from the current `Spec` for each inference and discarded. In both
+cases the frame's separate conversation vector records later events in the
+order the model sees them:
 
 ```
-rendered.tools + rendered.messages + render(conversation) + workingTurn + inferenceTail
+initial.tools + initial.messages + render(conversation) + workingTurn + inferenceTail
 ```
 
 All components are immutable CVM cells. Committing a cycle appends its canonical
-turns to `frame.conversation`; it does not copy them into or reconstruct
-`renderedContext`. Equal declarative config reuses the materialised vectors
-exactly. Assembly projects the stored conversation deterministically and does
-not reconstruct the materialised prefix from mutable workspace paths, a skill
-registry or an adapter registry.
+turns to `frame.conversation`; it never copies them into an initial render.
+Cached assembly reuses equal-config vectors exactly and does not revisit their
+ambient sources. Ephemeral assembly resolves the current sources and tool
+catalog for the call because there is deliberately no retained projection.
+Both modes project stored conversation deterministically.
 
 No parallel cache-key system is needed. Compare successive tool vectors with ordinary Convex equality; when they are equal, locate the reusable message prefix with the vectors' common-prefix operation. Both are hash-accelerated by the CVM representation. If the tool vectors differ, the reusable provider prefix starts at zero and the change must have been an explicit rebuild. Tool-call ids required by a provider are persisted transport references pairing a call with its result; they are not cache identities and are never regenerated while replaying a call.
 
 Determinism applies when the venue renders a cell: tool and entry order comes from canonical declared/load order, structured data uses the canonical renderer, and inference-local clocks, registry iteration order, random synthetic ids and byte counts never enter that rendering. Provider-returned call ids are conversation data and are persisted verbatim rather than regenerated. Given equal starting vectors and an equal appended change, rendering produces equal result vectors.
 
-**Cache boundaries** are indices into this representation. On a provider that caches an explicitly marked prefix (`cachePrefix`), the edge may mark the end of the initial head, `messages` as it stood when the cycle began, and `workingTurn` as it grows. The small inference tail is never marked. A provider may impose a smaller breakpoint limit, but it must not change logical order to accommodate it.
+**Cache boundaries** are indices into this representation. `cachePrefix`
+defaults to true. When enabled, the edge may mark the end of the initial head,
+`messages` as it stood when the cycle began, and `workingTurn` as it grows. The
+small inference tail is never marked. An explicit model-level
+`cachePrefix: false` or call-level `cache: false` omits the marks and the durable
+projection together. A provider may ignore canonical marks or impose a smaller
+breakpoint limit, but it must not change logical order to accommodate them.
 
 Only an intentional prefix rebuild invalidates earlier cells:
 
@@ -274,8 +295,10 @@ Only an intentional prefix rebuild invalidates earlier cells:
 
 **Reloading a value is not rebuilding the prefix.** Reloading agent-managed context, a skill or an operation result appends another load event, even for the same key. The newer result is closer to the reply and becomes the current value; the older one remains honest stale history. This is how models already experience repeated tool reads, and it preserves the full cached prefix in the usual case. Source mutation alone does nothing to a non-volatile snapshot. A declarative config change makes the config-owned rendering inapplicable on the next inference. `agent:reloadContext` is deliberately different: it forces the same rebuild when config is equal, preserving conversation/loads exactly while refreshing current configured sources.
 
-**Test contract.** Equal declarative config reuses the exact materialised
-tool/message cells despite ambient changes; an unchanged watched value leaves
+**Test contract.** In cached mode, equal declarative config reuses the exact
+materialised tool/message cells despite ambient changes. In uncached mode no
+`renderedContext` or `cacheMarks` exists and the next inference sees the current
+ambient source value. In either mode, an unchanged watched value leaves
 the whole frame cell identical; a changed value appends after the existing
 conversation without changing any prior cell; and changed config or an explicit
 rebuild is required for an earlier config-owned prefix to change. Tests do not pin content merely to exercise
@@ -326,14 +349,16 @@ Two consequences are load-bearing. Every request contains at least one non-syste
 ### 3.2.2 Ephemeral and persisted
 
 The initial config-owned vectors are **persisted as rendered** in
-`frame.renderedContext`. Pending results, input, tool-loop messages and context
-events are committed as canonical entries in `frame.conversation`; their
-provider projection preserves their provider fields while discarding audit-only
-metadata. The working turn is the only uncommitted prefix state. Two exceptions
-are deliberate: the empty-state signal occupies the input slot for its
-inference and is not committed; and a diagnostic the runtime must add — a tool
-failure it could not return as a tool result — is committed as a `system` event
-with its source recorded.
+`frame.renderedContext` only when prefix caching is enabled. Otherwise they are
+ordinary ephemeral request values: resolved, rendered, sent and discarded.
+Pending results, input, tool-loop messages and context events are committed as
+canonical entries in `frame.conversation`; their provider projection preserves
+their provider fields while discarding audit-only metadata. The working turn is
+the only uncommitted conversation state. Two exceptions are deliberate: the
+empty-state signal occupies the input slot for its inference and is not
+committed; and a diagnostic the runtime must add — a tool failure it could not
+return as a tool result — is committed as a `system` event with its source
+recorded.
 
 The inference tail is **ephemeral**, but watched context is not part of it.
 Only notices and the outstanding task are rendered there. A volatile
@@ -344,7 +369,11 @@ conversation only on a canonical change. Nothing else is made fresh implicitly.
 
 ### 3.2.3 Tool definitions
 
-Tool definitions are **section 0**. They are not a message — providers take them as a separate parameter — but they are prompt bytes placed ahead of the messages. The base manifest is therefore fixed for the persisted context, canonically ordered and rendered once.
+Tool definitions are **section 0**. They are not a message — providers take
+them as a separate parameter — but they are prompt bytes placed ahead of the
+messages. The base manifest is canonically ordered. Cached assembly fixes it in
+the persisted projection; uncached assembly derives it afresh with the rest of
+the ephemeral initial render.
 
 Harness controls use the ordinary operation-asset metadata shape too: their
 description lives at the asset root and their provider schema in
@@ -360,7 +389,14 @@ A tool becoming available later must not cause the venue to rebuild that array s
 
 Tools discovered only after a parent skill loads, or introduced by `more_tools`, were not part of that initial superset. They are ordinary loads whose rendered projection contains tool definitions rather than message content. The load persists each exact `{operation, definition}` binding once; later inference derives both the provider view and the dispatch route from that one value. There is no parallel mutable tool state.
 
-If such a load is present while a context is first materialised (or explicitly rebuilt), its definitions enter `renderedContext.tools`. If it is acquired later, the fixed array remains unchanged and its addition is appended to `frame.conversation`. Unloading the same load appends the removal. The provider strategy for those genuinely later definitions chooses one of three representations, in order:
+In cached mode, if such a load is present while a context is first materialised
+(or explicitly rebuilt), its definitions enter `renderedContext.tools`. If it
+is acquired later, the fixed array remains unchanged and its addition is
+appended to `frame.conversation`. In uncached mode its durable binding is simply
+projected into each subsequent request's tool vector; there is no cache to
+invalidate. Unloading the same load appends the removal in either mode. The
+provider strategy for genuinely later cached definitions chooses one of three
+representations, in order:
 
 1. declare the stable/deferred superset required by the provider, then append native `tool_addition` / `tool_removal` events when support exists;
 2. keep the fixed generic search/invoke tools and append a capability-description event, with dispatch through the generic tool;
@@ -380,8 +416,10 @@ The executable definition is `ContextAssembler.assemble`; this document does
 not mirror its Java body. It implements the durable-state equation in §1.1 and
 the ordered section table in §3.2. `Prompt` is only a request accumulator: it
 sets and charges tools, appends and charges messages, records band boundaries
-and reports the remaining budget. Persisting a newly initialised `Rendered` is
-the runtime's separate atomic responsibility; `assemble` never writes it.
+and reports the remaining budget. For cached assembly, persisting a newly
+initialised `Rendered` is the runtime's separate atomic responsibility. For
+uncached assembly, the same value is only a local intermediate. `assemble`
+never writes either one.
 
 `p.remaining()` is passed explicitly when an entry is first appended, when compaction builds a replacement prefix, and when the tail renders. Already persisted entries are never re-truncated to fit a later request.
 
@@ -418,7 +456,7 @@ The assembler's output is provider-neutral. The level-3 adapter, reading the mod
 | `systemMessages: "single"` | delivers the leading system run as the provider's system parameter — a list of blocks where the API takes them, one joined text where it does not — and converts every later system message to a `[system: …]` user message in place (§3.2.1) |
 | `systemMessages: "none"` | as `"single"`, with the leading run folded into the first user message |
 | `labels` | nothing at the edge beyond the wrapper above — the dialect is applied by the one renderer (§1.2), which the edge also uses for that wrapper |
-| `cachePrefix` | turns the initial, committed-message and working-turn marks into the provider's cache controls; provider normalization remaps canonical indices to wire indices, and a boundary ending in system content uses the nearest preceding cacheable message; `cache: false` switches all of it off |
+| `cachePrefix` | defaults to true; when enabled, retains `renderedContext` and turns the initial, committed-message and working-turn marks into provider cache controls; `false` makes the render ephemeral and omits the marks; provider normalization remaps canonical indices to wire indices, and a boundary ending in system content uses the nearest preceding cacheable message; call-level `cache: false` switches the same policy off |
 | dynamic-tool support | maps persisted tool-state events to native addition/removal blocks; without it, uses the fixed generic-tool strategy or requires an explicit rebuild (§3.2.3) |
 | always | maps the base tool manifest to the provider's schema, in the given order, and `tool` messages and `toolCalls` to its shapes, merging consecutive same-role messages where the API requires alternation |
 | always | **never reorders, never drops, never adds content** |
@@ -429,8 +467,8 @@ Nothing else about a provider needs handling: its context size is already in the
 
 ## 4. Resolution and assembly
 
-Mutable state is consulted only when initialising context, appending an explicit
-event, or materialising a declared volatile observation:
+Mutable state is consulted only when producing an initial render, appending an
+explicit event, or materialising a declared volatile observation:
 
 ```
 resolveAuthority(config, ctx)                 →  capsCtx
@@ -445,9 +483,10 @@ assemble(Spec)                                 →  Prompt
 - **Authority** first: everything that reads the lattice reads under the agent's capability-narrowed context.
 - **Snapshot** fixes the declarative and effective config, session/frame state
   and request authority used by the cycle.
-- **Initialisation** records the declarative source-config cell and snapshots
-  the model/rendering profile, fixed palette, skills index and starting
-  effective loads. It resolves and renders that state once.
+- **Initialisation** records the declarative source-config cell in the returned
+  value and renders the model profile, fixed palette, skills index and starting
+  effective loads. Cached mode persists that value once per applicable config;
+  uncached mode produces it for the inference and discards it.
 - **Event append** handles an explicit load, reload, unload, skill or tool-state
   change. It resolves the affected value once, renders a canonical event once
   and appends it to the conversation. It does not regenerate unrelated context.
@@ -456,16 +495,18 @@ assemble(Spec)                                 →  Prompt
   updates `frame.observations`, and appends changed/removal messages. Equal
   values return the same frame cell. The transform performs no IO and may be
   retried safely by the lattice CAS.
-- **Assembly** concatenates the materialised prefix, deterministic conversation
-  projection and working turn, then the small inference-local tail. It performs
-  no context resolution.
+- **Assembly** obtains the applicable persisted prefix or initialises one
+  ephemerally, then concatenates it with deterministic conversation projection,
+  the working turn and the small inference-local tail. It never mutates state.
 
 A runtime that needs `capsCtx` calls `resolveAuthority`; it does not build a
-context to extract it. Merely assembling another inference never observes
-external mutation except through a declaration explicitly marked volatile.
-Changed declarative config or an explicit prefix reload rebuilds the
-config-owned cells; compaction/reset may also replace the active session
-projection. Explicit agent-managed loads append what they observe. A watched
+context to extract it. In cached mode, merely assembling another inference
+never observes external mutation except through a declaration explicitly
+marked volatile. In uncached mode, the initial render naturally sees current
+ambient inputs because there is no retained value to invalidate. Changed
+declarative config or an explicit prefix reload rebuilds cached config-owned
+cells; compaction/reset may also replace the active session projection.
+Explicit agent-managed loads append what they observe. A watched
 declaration is checked each inference but appends only a changed rendered value.
 
 ---
@@ -717,13 +758,13 @@ agent (config.loads) → session (sessions.<sid>.loads) → frame (frame.loads, 
 
 Each tier may contain declarations installed by its owner plus dynamic entries written by the agent while it is the innermost writable tier. Rules:
 
-- **The effective set is a union down the chain; inner shadows outer** on a path collision. Declarations are folded without resolving their content; stable content is materialised only for a missing prefix, while volatile content is observed before inference.
+- **The effective set is a union down the chain; inner shadows outer** on a path collision. Declarations are folded without resolving their content; stable content is materialised for a missing cached prefix or rendered ephemerally for an uncached inference, while volatile content is observed before inference.
 - **Unload is ownership-safe:** only an agent-managed entry in the innermost writable tier can be removed. Removing a local shadow reveals any pinned outer entry. Pinned entries cannot be hidden with `context_unload`.
 - **Inner tiers read outer tiers, never mutate them** — one writer per tier.
 - **Budgets are advisory** — never a basis for silent eviction.
 - **No session in scope → no writable tier**: `context_load`/`unload` fail with a diagnosable result.
 
-The chain is resolved when context is initialised. Later loads and reloads
+The chain is resolved when initial context is rendered. Later loads and reloads
 resolve only their requested keys and append results to `frame.conversation`.
 Stable agent-managed tool declarations are resolved to `toolBindings` once at
 that boundary; subsequent calls project them without consulting the operation
@@ -749,20 +790,21 @@ child and do not pollute parent or siblings.
 `ContextAssembler` has one immutable `Spec`. A runtime builds it from one
 config/session snapshot, then uses pure `with*` copies for later inferences in
 the same cycle. `initialise(spec)` may produce the `RenderedContext` of §1.1;
-`assemble(spec)` reads that value from the active frame when its `sourceConfig`
-matches, or produces the same value as a preview when it is absent. Assembly
-never writes lattice state.
+`assemble(spec)` reads that value from the active frame only when
+`cachePrefix` is enabled and its `sourceConfig` matches. Otherwise it produces
+the same value ephemerally from the current Spec. Assembly never writes lattice
+state.
 
 | Spec field | Meaning |
 |------------|---------|
 | `config` | Effective configuration used for rendering and the L3 invocation |
 | `sourceConfig` | Declarative configuration used only to validate `renderedContext` |
 | `ctx` / `capsCtx` | Resolution context and capability-narrowed dispatch context |
-| `sessionId`, `headNotice`, `budget`, `labels`, `toolCalling` | Stable rendering parameters captured for this call |
-| `tools` | Candidate fixed manifest, used only when materialising a prefix |
-| `loadElements`, `loadExchanges` | Candidate non-volatile starting loads, used only when materialising a prefix |
+| `sessionId`, `headNotice`, `budget`, `labels`, `toolCalling`, `cachePrefix` | Stable rendering parameters captured for this call; `cachePrefix` selects retained versus ephemeral initial rendering |
+| `tools` | Candidate initial manifest, persisted only when caching is enabled |
+| `loadElements`, `loadExchanges` | Candidate non-volatile starting loads, persisted only when caching is enabled |
 | `effectiveLoads` | Folded load declarations used for state and diagnostics, not replayed content |
-| `frames` | The durable frame stack defined in §1.1; the active frame supplies both `renderedContext` and conversation |
+| `frames` | The durable frame stack defined in §1.1; the active frame always supplies conversation and may supply `renderedContext` |
 | `pending`, `input`, `hasInput` | Work presented for this cycle |
 | `toolLoop` | Assistant/tool messages accumulated during this cycle |
 | `task`, `unavailable`, `notice`, `now` | Per-inference tail inputs |
@@ -780,9 +822,9 @@ with the frame through `FrameStore` / `AgentState`.
 `agent:context` reads the same durable frame and calls the same `assemble`, so an
 inspected existing context matches a live inference **by construction**. It
 previews watched resolution and the pure observation transform on a local copy.
-For a
-session with no applicable `renderedContext` it previews `initialise` without
-persisting it. It returns the level-3 input with `cacheMarks`, the `budget`
+For a session with no applicable `renderedContext`, or any uncached model, it
+previews `initialise` without persisting it. It returns the level-3 input with
+`cacheMarks` only when caching is enabled, the `budget`
 (`bytes`, `used`, `remaining`), the marks at the initial, committed-message and
 working-turn boundaries, and the label dialect. Sidecars explain the previewed
 state without changing the session:
@@ -822,6 +864,6 @@ The same regions drive the timeline record (`AGENT_LOOP.md` §2.4): initial mess
 Everything above is implemented except the provider-edge refinements listed here.
 
 - **Native provider tool-state blocks are not mapped yet for genuinely late definitions.** Initially discoverable skill tools already have native schemas in the fixed manifest and call directly after load. The canonical conversation persists exact `toolAddition` / `toolRemoval` state only for definitions revealed later or added through `more_tools`; `invoke_tool` is their fixed fallback. Provider edges currently receive the generic late-system representation and may map the same fields natively without changing stored history.
-- **Hand-written operator-pinned load tools have no writable entry on which to materialise `toolBindings`.** Their content remains correctly materialised in `renderedContext`, but their operation metadata is re-resolved to reconstruct gated dispatch routes. Agent-managed skill and `more_tools` loads are fully materialised once. A future compact route projection on `RenderedContext` can remove this last stable-load lookup without introducing sidecar state.
+- **Hand-written operator-pinned load tools have no writable entry on which to materialise `toolBindings`.** Cached contexts retain their provider definitions in `renderedContext`, but operation metadata is re-resolved to reconstruct gated dispatch routes; uncached contexts re-resolve both as part of their ephemeral render. Agent-managed skill and `more_tools` loads materialise their durable bindings once. A future compact route projection on cached `RenderedContext` can remove its last stable-load lookup without introducing sidecar state.
 - **The head and current live surface share one provider breakpoint.** The client marks only the last block of the system parameter. The target initial/committed/working marks require shaping the provider request directly; langchain4j currently exposes only the 5-minute ephemeral cache kind, not a longer TTL.
 - The agent-facing text of `skill_load` and SKILLS.md §4.3 name the `[Skills]` index by its bracket label whatever the dialect.

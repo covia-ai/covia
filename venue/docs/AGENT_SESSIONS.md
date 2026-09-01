@@ -169,7 +169,12 @@ The projection contains completed user/final-assistant turns and, by default, co
 
 `agent:compactSession` is the explicit owner management surface and requires agent-write authority. It only mutates a quiescent session. The old immutable conversation vector becomes the segment's `items`, provenance is stamped on that segment, and the Job returns only bounded metadata rather than a second copy of the transcript. Future turns append after the segment normally. The in-band `compact` harness tool applies the same representation from either built-in LLM runtime.
 
-`agent:reloadContext` is the rarer cache-invalidation boundary for a host that updated an agent's identity, model shape, fixed tools or pinned declarations and wants an existing conversation to adopt them. It also requires agent-write authority and a quiescent session. It removes only each frame's `renderedContext`; the durable conversation and loads vectors are unchanged, and the next inference materialises the new prefix once. Ordinary `agent:update` does not rewrite existing prefixes.
+`agent:reloadContext` is the explicit same-config refresh operation. It requires
+agent-write authority and a quiescent session, and delegates entirely to the
+cache-projection rules in [AGENT_CONTEXT.md §1.1](./AGENT_CONTEXT.md#11-durable-context-state-contract).
+It never changes durable conversation or loads. Declarative config changes are
+handled automatically on the next inference; uncached models have no retained
+projection to refresh.
 
 Trusted venue modules may register an `AgentAdapter.SessionVisibilityPolicy`. Policies compose by intersection: any veto hides the session, and policy failure hides it as well. This gives applications a narrow private-conversation rule without duplicating transcript rendering or granting agents raw session-tree access.
 

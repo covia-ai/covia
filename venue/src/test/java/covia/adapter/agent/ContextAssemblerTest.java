@@ -246,6 +246,7 @@ public class ContextAssemblerTest {
 		AbstractLLMAdapter.ModelProfile provider = AbstractLLMAdapter.ModelProfile.of(
 			AbstractLLMAdapter.modelProfile(meta, null, null));
 		assertTrue(provider.toolCalling());
+		assertTrue(provider.cachePrefix(), "models cache unless explicitly disabled");
 		assertEquals(Strings.create("xml"), provider.labels());
 		assertEquals(100L, provider.budget());
 		AbstractLLMAdapter.ModelProfile tiny = AbstractLLMAdapter.ModelProfile.of(
@@ -253,12 +254,17 @@ public class ContextAssemblerTest {
 		assertFalse(tiny.toolCalling(), "the model's entry overrides the provider");
 		assertEquals(Strings.create("xml"), tiny.labels(), "what it does not state survives");
 		AMap<AString, ACell> config = Maps.of("modelProfile", Maps.of(
-			"options", Maps.of("toolCalling", CVMBool.TRUE), "budget", Maps.of("bytes", 50L)));
+			"options", Maps.of("toolCalling", CVMBool.TRUE, "cachePrefix", CVMBool.FALSE),
+			"budget", Maps.of("bytes", 50L)));
 		AbstractLLMAdapter.ModelProfile agent = AbstractLLMAdapter.ModelProfile.of(
 			AbstractLLMAdapter.modelProfile(meta, Strings.create("tiny"), config));
 		assertTrue(agent.toolCalling(), "the agent's override wins");
 		assertEquals(50L, agent.budget());
 		assertEquals(Strings.create("xml"), agent.labels());
+		assertFalse(agent.cachePrefix(), "the agent can opt this model out of prefix caching");
+		assertTrue(AbstractLLMAdapter.promptCaching(provider, null));
+		assertFalse(AbstractLLMAdapter.promptCaching(provider,
+			Maps.of("cache", CVMBool.FALSE)), "a call can explicitly opt out too");
 	}
 
 	// ========== Head ==========
@@ -1061,6 +1067,33 @@ public class ContextAssemblerTest {
 		assertTrue(head(prompt).contains("resolved identity one"));
 		assertFalse(head(prompt).contains("resolved identity two"));
 		assertEquals("later turn", content(prompt.messages().get(rendered.messages().count())));
+	}
+
+	@Test
+	public void testUncachedAssemblyIgnoresAndRemovesPersistedRendering() {
+		AMap<AString, ACell> oldConfig = Maps.of("systemPrompt", "old identity");
+		Spec original = spec(oldConfig);
+		ContextAssembler.Rendered rendered = ContextAssembler.initialise(original);
+		AMap<AString, ACell> frame = GoalTreeContext.withRenderedContext(
+			GoalTreeContext.appendTurn(GoalTreeContext.createFrame(""),
+				Maps.of("role", "user", "content", "historical turn")), rendered);
+
+		AMap<AString, ACell> newConfig = Maps.of("systemPrompt", "current identity");
+		Spec uncached = spec(newConfig, Vectors.of((ACell) frame), null,
+			Vectors.of((ACell) Strings.create("new input")), true)
+			.withCachePrefix(false);
+		Prompt prompt = ContextAssembler.assemble(uncached);
+
+		assertNull(ContextAssembler.rendered(uncached));
+		assertTrue(head(prompt).contains("current identity"));
+		assertFalse(head(prompt).contains("old identity"));
+		assertTrue(allContent(prompt).contains("historical turn"));
+		assertTrue(prompt.cacheMarks().isEmpty());
+		assertNull(RT.getIn(prompt.toL3Input(null), "cacheMarks"));
+		AMap<AString, ACell> cleaned = ContextAssembler.applyRendering(frame, uncached, null);
+		assertNull(cleaned.get(GoalTreeContext.K_RENDERED_CONTEXT));
+		assertEquals(frame.get(GoalTreeContext.K_CONVERSATION),
+			cleaned.get(GoalTreeContext.K_CONVERSATION));
 	}
 
 	@Test

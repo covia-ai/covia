@@ -153,8 +153,10 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		RequestContext capsCtx = capsContext(config, ctx);
 		ToolPalette.Palette palette = ToolPalette.resolve(engine, ctx, config, HARNESS_TOOL_NAMES);
 		ModelProfile profile = modelProfileFor(config, ctx);
+		boolean cachePrefix = promptCaching(profile, config);
 		AVector<ACell> sessionFrames = sessionFramesOf(in.session());
-		FixedPalette fixed = fixedPalette(sourceConfig, ctx, capsCtx, palette, sessionFrames);
+		FixedPalette fixed = fixedPalette(sourceConfig, ctx, capsCtx, palette,
+			sessionFrames, cachePrefix);
 		AVector<ACell> harness = fixed.harness();
 		AVector<ACell> fixedTools = fixed.tools();
 
@@ -166,6 +168,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		ToolContext toolCtx = toolContext(config, sourceConfig, capsCtx, tasks, in.pending(), palette,
 			configLoads, sessionTier, in.session() != null, fixed, true);
 		toolCtx.labels = profile.labels();
+		toolCtx.cachePrefix = cachePrefix;
 		AVector<ACell> previewFrames = (sessionFrames != null) ? sessionFrames : Vectors.empty();
 		if (previewFrames.isEmpty()) {
 			previewFrames = Vectors.of((ACell) GoalTreeContext.createFrame(""));
@@ -194,7 +197,8 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 			previewFrames, in.pending(), null, hasInput, null, task,
 			palette.unavailable(), null, null)
 			.withLoads(loads, offered, effectiveLoads)
-			.withSourceConfig(sourceConfig);
+			.withSourceConfig(sourceConfig)
+			.withCachePrefix(cachePrefix);
 		if (!toolCtx.store.observe(0, ContextAssembler.observations(spec, loads),
 				convex.core.util.Utils.getCurrentTimestamp())) {
 			throw new IllegalStateException("Could not preview watched context observations");
@@ -377,13 +381,16 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		ToolPalette.Palette palette = ToolPalette.resolve(engine, ctx, recordConfig, HARNESS_TOOL_NAMES);
 		AMap<AString, ACell> config = effectiveModelConfig(recordConfig, ctx);
 		AString llmOperation = getLLMOperation(config);
-		FixedPalette fixed = fixedPalette(recordConfig, ctx, capsCtx, palette, sessionFrames);
-		AVector<ACell> fixedTools = fixed.tools();
 		ModelProfile profile = modelProfileFor(config, ctx);
+		boolean cachePrefix = promptCaching(profile, config);
+		FixedPalette fixed = fixedPalette(recordConfig, ctx, capsCtx, palette,
+			sessionFrames, cachePrefix);
+		AVector<ACell> fixedTools = fixed.tools();
 
 		ToolContext toolCtx = toolContext(config, recordConfig, capsCtx, tasks, pending, palette,
 			configLoads, sessionTier, sessionInScope, fixed, false);
 		toolCtx.labels = profile.labels();
+		toolCtx.cachePrefix = cachePrefix;
 		toolCtx.frames = sessionFrames;
 		toolCtx.store = store;
 
@@ -395,7 +402,8 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 			profile.budget(), profile.labels(), profile.toolCalling(),
 			fixedTools, null, null, sessionFrames, pending, null, hasInput, null, null,
 			palette.unavailable(), null, null)
-			.withSourceConfig(recordConfig);
+			.withSourceConfig(recordConfig)
+			.withCachePrefix(cachePrefix);
 
 		// ctx (uncapped) makes the provider call; capsCtx flows through toolCtx
 		// for tool dispatch.
@@ -498,9 +506,11 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 	 * Skill schemas are declared now but dispatch remains load-gated. */
 	@SuppressWarnings("unchecked")
 	private FixedPalette fixedPalette(AMap<AString, ACell> config, RequestContext catalogCtx,
-			RequestContext capsCtx, ToolPalette.Palette palette, AVector<ACell> frames) {
+			RequestContext capsCtx, ToolPalette.Palette palette, AVector<ACell> frames,
+			boolean cachePrefix) {
 		AVector<ACell> harness = HarnessTools.offered(config, HarnessTools.SHARED);
-		ContextAssembler.Rendered rendered = ContextAssembler.rendered(frames, config);
+		ContextAssembler.Rendered rendered = ContextAssembler.rendered(
+			frames, config, cachePrefix);
 		if (rendered != null) {
 			ToolPalette.DeclaredSkillTools declared =
 				ToolPalette.declaredSkillTools(rendered.tools());
@@ -576,7 +586,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 			}
 			toolCtx.frames = toolCtx.store.frames();
 			inference = inference.withFrames(toolCtx.frames);
-			inference = materialiseInitial(inference, toolCtx);
+			inference = prepareRendering(inference, toolCtx);
 			ContextAssembler.Prompt prompt = ContextAssembler.assemble(inference);
 
 			ACell assistant = invokeLevel3(llmOperation, config, prompt, ctx);
@@ -637,26 +647,24 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 			+ maxToolIterations + ") without completing the task.");
 	}
 
-	/** Materialises the exact config-owned vectors before the provider call.
-	 * The session CAS replaces an absent or differently-stamped rendering while
-	 * leaving its append-only conversation untouched. */
+	/** Applies the model's rendering policy before the provider call. The
+	 * session CAS replaces a stale cached projection or removes one for an
+	 * uncached model, leaving append-only conversation untouched. */
 	@SuppressWarnings("unchecked")
-	private ContextAssembler.Spec materialiseInitial(
+	private ContextAssembler.Spec prepareRendering(
 			ContextAssembler.Spec spec, ToolContext toolCtx) {
-		if (ContextAssembler.rendered(spec) != null || toolCtx.frames.isEmpty()) {
-			return spec;
-		}
-		ContextAssembler.Rendered rendered = ContextAssembler.initialise(spec);
-		ContextAssembler.Rendered candidate = rendered;
+		if (toolCtx.frames.isEmpty()) return spec;
+		if (!ContextAssembler.renderingUpdateRequired(spec)) return spec;
+		ContextAssembler.Rendered candidate = spec.cachePrefix()
+			? ContextAssembler.initialise(spec) : null;
 		if (!toolCtx.store.update(frames -> {
 			if (frames.isEmpty()) return frames;
 			AMap<AString, ACell> root = (AMap<AString, ACell>) frames.get(0);
-			ContextAssembler.Rendered current = ContextAssembler.Rendered.fromCell(
-				root.get(GoalTreeContext.K_RENDERED_CONTEXT));
-			if (current != null && current.matchesConfig(spec.sourceConfig())) return frames;
-			return frames.assoc(0, GoalTreeContext.withRenderedContext(root, candidate));
+			AMap<AString, ACell> prepared = ContextAssembler.applyRendering(
+				root, spec, candidate);
+			return prepared == root ? frames : frames.assoc(0, prepared);
 		})) {
-			throw new JobFailedException("Session cycle was superseded while materialising context");
+			throw new JobFailedException("Session cycle was superseded while preparing context");
 		}
 		toolCtx.frames = toolCtx.store.frames();
 		return spec.withFrames(toolCtx.frames);
@@ -923,6 +931,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		 *  text). Null when the turn carried no text. */
 		AString turnText;
 		AString labels = Labels.BRACKET;
+		boolean cachePrefix = true;
 		AMap<AString, ACell> sourceConfig;
 		AVector<ACell> frames = Vectors.empty();
 		FrameStore store;
@@ -954,7 +963,8 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		}
 
 		Loads.Snapshot refreshLoadSnapshot(Engine engine, AString labels) {
-			boolean materialiseLive = ContextAssembler.rendered(frames, sourceConfig) == null;
+			boolean materialiseLive = ContextAssembler.rendered(
+				frames, sourceConfig, cachePrefix) == null;
 			Loads.Snapshot snapshot = Loads.resolveForInference(engine, ctx,
 				ContextChain.effective(outerLoads, loads), loadExcludedNames, labels,
 				materialiseLive);
@@ -969,7 +979,8 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		}
 
 		java.util.Set<String> manifestDeclaredSkillNames() {
-			ContextAssembler.Rendered rendered = ContextAssembler.rendered(frames, sourceConfig);
+			ContextAssembler.Rendered rendered = ContextAssembler.rendered(
+				frames, sourceConfig, cachePrefix);
 			if (rendered == null) return declaredSkillTools.names();
 			java.util.Set<String> manifested = ToolPalette.names(rendered.tools());
 			java.util.Set<String> names = new java.util.HashSet<>(declaredSkillTools.names());

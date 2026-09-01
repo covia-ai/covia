@@ -949,6 +949,89 @@ public class AgentAdapterTest {
 		assertTrue(wakeUp.toString().contains("[No input]"), wakeUp.toString());
 	}
 
+	@Test
+	public void testUncachedModelsRenderEphemerallyOnBothRuntimes() {
+		RequestContext alice = RequestContext.of(ALICE_DID);
+		for (String runtime : new String[] {"llmagent", "goaltree"}) {
+			String agentId = "uncached-" + runtime;
+			String promptPath = "w/context/" + agentId;
+			engine.jobs().invokeOperation("v/ops/covia/write",
+				Maps.of(Fields.PATH, promptPath, Fields.VALUE, "FIRST_IDENTITY"), alice)
+				.awaitResult(5000);
+			engine.jobs().invokeOperation("v/ops/agent/create",
+				Maps.of(Fields.AGENT_ID, agentId, Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/" + runtime + "/chat",
+					"llmOperation", "v/test/ops/llm",
+					"systemPrompt", Maps.of("ref", promptPath),
+					"modelProfile", Maps.of("options",
+						Maps.of("cachePrefix", CVMBool.FALSE)))), alice)
+				.awaitResult(5000);
+
+			AMap<AString, ACell> inspected = RT.ensureMap(engine.jobs().invokeOperation(
+				"v/ops/agent/context", Maps.of(Fields.AGENT_ID, agentId,
+					Fields.MESSAGE, "inspect"), alice).awaitResult(5000));
+			assertNull(inspected.get(Strings.intern("cacheMarks")), runtime);
+			assertTrue(inspected.get(Fields.MESSAGES).toString().contains("FIRST_IDENTITY"),
+				runtime + ": " + inspected);
+
+			ACell first = engine.jobs().invokeOperation("v/ops/agent/chat",
+				Maps.of(Fields.AGENT_ID, agentId, Fields.MESSAGE, "first"), alice)
+				.awaitResult(5000);
+			AString sidHex = RT.ensureString(RT.getIn(first, Fields.SESSION_ID));
+			Blob sid = Blob.fromHex(sidHex.toString());
+			AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent(agentId);
+			assertNull(RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO,
+				"renderedContext"), runtime + " persisted an unused cache projection");
+
+			engine.jobs().invokeOperation("v/ops/covia/write",
+				Maps.of(Fields.PATH, promptPath, Fields.VALUE, "SECOND_IDENTITY"), alice)
+				.awaitResult(5000);
+			AMap<AString, ACell> refreshed = RT.ensureMap(engine.jobs().invokeOperation(
+				"v/ops/agent/context", Maps.of(Fields.AGENT_ID, agentId,
+					Fields.SESSION_ID, sidHex, Fields.MESSAGE, "inspect again"), alice)
+				.awaitResult(5000));
+			assertTrue(refreshed.get(Fields.MESSAGES).toString().contains("SECOND_IDENTITY"),
+				runtime + " reused stale ambient rendering: " + refreshed);
+			assertNull(refreshed.get(Strings.intern("cacheMarks")), runtime);
+
+			engine.jobs().invokeOperation("v/ops/agent/chat",
+				Maps.of(Fields.AGENT_ID, agentId, Fields.SESSION_ID, sidHex,
+					Fields.MESSAGE, "second"), alice).awaitResult(5000);
+			assertNull(RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO,
+				"renderedContext"), runtime + " materialised on the second cycle");
+		}
+	}
+
+	@Test
+	public void testDisablingCachingRemovesExistingProjectionOnBothRuntimes() {
+		RequestContext alice = RequestContext.of(ALICE_DID);
+		for (String runtime : new String[] {"llmagent", "goaltree"}) {
+			String agentId = "disable-cache-" + runtime;
+			engine.jobs().invokeOperation("v/ops/agent/create",
+				Maps.of(Fields.AGENT_ID, agentId, Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/" + runtime + "/chat",
+					"llmOperation", "v/test/ops/llm")), alice).awaitResult(5000);
+			ACell first = engine.jobs().invokeOperation("v/ops/agent/chat",
+				Maps.of(Fields.AGENT_ID, agentId, Fields.MESSAGE, "cached"), alice)
+				.awaitResult(5000);
+			AString sidHex = RT.ensureString(RT.getIn(first, Fields.SESSION_ID));
+			Blob sid = Blob.fromHex(sidHex.toString());
+			AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent(agentId);
+			assertNotNull(RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO,
+				"renderedContext"), runtime + " did not use the default cached policy");
+
+			engine.jobs().invokeOperation("v/ops/agent/update",
+				Maps.of(Fields.AGENT_ID, agentId, Fields.CONFIG, Maps.of(
+					"modelProfile", Maps.of("options",
+						Maps.of("cachePrefix", CVMBool.FALSE)))), alice).awaitResult(5000);
+			engine.jobs().invokeOperation("v/ops/agent/chat",
+				Maps.of(Fields.AGENT_ID, agentId, Fields.SESSION_ID, sidHex,
+					Fields.MESSAGE, "uncached"), alice).awaitResult(5000);
+			assertNull(RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO,
+				"renderedContext"), runtime + " retained a disabled cache projection");
+		}
+	}
+
 	/** Configurable harness tools are opt-in on every runtime
 	 *  (HarnessTools.offered). The task controls are an always-declared stable
 	 *  pair; skills imply skill_load/context_unload; other controls are named. */

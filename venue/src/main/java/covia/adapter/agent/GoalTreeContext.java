@@ -52,8 +52,8 @@ public class GoalTreeContext {
 	/** Frame-scoped loads (map of path → load metadata) */
 	static final AString K_LOADS = Strings.intern("loads");
 
-	/** Exact initial provider-facing vectors for this frame. Their presence is
-	 * the cache invariant: ordinary source mutation cannot rewrite the prefix. */
+	/** Optional initial provider-facing cache projection for this frame.
+	 * Semantic session state never depends on its presence. */
 	static final AString K_RENDERED_CONTEXT = Strings.intern("renderedContext");
 
 	/** Latest canonical value and exact appended messages for each watched

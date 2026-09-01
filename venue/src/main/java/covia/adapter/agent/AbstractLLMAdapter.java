@@ -61,6 +61,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	public static final AString K_SYSTEM_PROMPT   = Strings.intern("systemPrompt");
 	public static final AString K_URL             = Strings.intern("url");
 	public static final AString K_API_KEY         = Strings.intern("apiKey");
+	public static final AString K_CACHE           = Strings.intern("cache");
 	public static final AString K_TOOLS           = Strings.intern("tools");
 	public static final AString K_RESPONSE_FORMAT = Strings.intern("responseFormat");
 	public static final AString K_CAPS            = Strings.intern("caps");
@@ -192,21 +193,32 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 
 	/**
 	 * What the model declares that assembly needs: its context budget in
-	 * bytes, its label dialect, and whether it can call tools at all — with
+	 * bytes, its label dialect, whether it can call tools at all, and whether
+	 * its provider should receive a persistent cache prefix — with
 	 * tool calling off, no tool is presented (OPERATIONS.md, <i>The
 	 * {@code model} facet</i>).
 	 */
-	public record ModelProfile(long budget, AString labels, boolean toolCalling) {
+	public record ModelProfile(long budget, AString labels, boolean toolCalling,
+			boolean cachePrefix) {
 		public static final ModelProfile DEFAULT =
-			new ModelProfile(ContextAssembler.DEFAULT_BUDGET, LABELS_BRACKET, true);
+			new ModelProfile(ContextAssembler.DEFAULT_BUDGET, LABELS_BRACKET, true, true);
 
 		/** The profile a resolved facet map declares; defaults fill what it does not. */
 		public static ModelProfile of(AMap<AString, ACell> profile) {
 			return new ModelProfile(
 				AbstractLLMAdapter.budgetBytes(profile, ContextAssembler.DEFAULT_BUDGET),
 				AbstractLLMAdapter.labelDialect(profile),
-				AbstractLLMAdapter.toolCalling(profile));
+				AbstractLLMAdapter.toolCalling(profile),
+				AbstractLLMAdapter.cachePrefix(profile));
 		}
+	}
+
+	/** Whether this invocation should retain and mark a rendered prefix. Models
+	 * cache by default; either model metadata or the call config can opt out. */
+	protected static boolean promptCaching(ModelProfile profile,
+			AMap<AString, ACell> config) {
+		return profile.cachePrefix()
+			&& !CVMBool.FALSE.equals(config != null ? config.get(K_CACHE) : null);
 	}
 
 	/**
@@ -585,6 +597,8 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	private static final AString K_MODEL_RECOMMENDED = Strings.intern("recommended");
 	/** Model option: {@code false} declares a model that cannot call tools. */
 	public static final AString OPT_TOOL_CALLING = Strings.intern("toolCalling");
+	/** Model option: {@code false} opts out of persistent prompt-prefix caching. */
+	public static final AString OPT_CACHE_PREFIX = Strings.intern("cachePrefix");
 	/** Model option: tool support varies per model, so it must be probed, never assumed. */
 	public static final AString OPT_TOOL_CALLING_BY_MODEL = Strings.intern("toolCallingByModel");
 	/** Provider-specific rendering hints, inside the {@code model} facet. */
@@ -695,6 +709,13 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		return !CVMBool.FALSE.equals(RT.getIn(profile, K_OPTIONS, OPT_TOOL_CALLING));
 	}
 
+	/** Whether a resolved profile wants a persistent prompt prefix. Absent is
+	 * true: caching is the model norm, and providers may harmlessly ignore the
+	 * canonical cache marks. */
+	public static boolean cachePrefix(AMap<AString, ACell> profile) {
+		return !CVMBool.FALSE.equals(RT.getIn(profile, K_OPTIONS, OPT_CACHE_PREFIX));
+	}
+
 	/**
 	 * The declared <b>model options</b> for one model — rendering hints: facts
 	 * about the provider's API that change how a prompt should be built for it.
@@ -711,9 +732,9 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * <li>{@code requiresUserMessage}: the request is rejected without at least
 	 *     one non-system message. Anthropic's Messages API does this, which is
 	 *     why the empty-state signal is a {@code user} turn.</li>
-	 * <li>{@code cachePrefix}: the provider caches an explicitly marked stable
-	 *     prefix, so keeping watched source output out of the head has a direct
-	 *     cost saving (AGENT_CONTEXT.md §3.1).</li>
+	 * <li>{@code cachePrefix}: {@code false} declares that retaining and marking
+	 *     a rendered prefix has no value for this model. Absent means caching is
+	 *     assumed; a provider may harmlessly ignore the canonical marks.</li>
 	 * <li>{@code toolCalling}: {@code false} declares that the model cannot call
 	 *     tools — {@code agent:create} warns when an agent declares tools or
 	 *     skills against it. Absent means tool calling is available.</li>
@@ -810,7 +831,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		AMap<AString, ACell> l3Input = Maps.of(K_MESSAGES, messages);
 		l3Input = copyIfPresent(config, l3Input, K_MODEL, K_URL, K_API_KEY, K_RESPONSE_FORMAT,
 			Strings.intern("maxTokens"), Strings.intern("temperature"), Strings.intern("topP"),
-			Strings.intern("cache"));
+			K_CACHE);
 		if (tools != null && tools.count() > 0) {
 			l3Input = l3Input.assoc(K_TOOLS, tools);
 		}

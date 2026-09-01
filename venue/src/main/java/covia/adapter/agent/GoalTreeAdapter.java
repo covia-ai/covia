@@ -307,7 +307,10 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		long toolCallTimeoutMs = resolveToolCallTimeoutMs(l3Config);
 		TaskTools.Tasks taskTools = new TaskTools.Tasks(engine, capsCtx, tasks, toolCallTimeoutMs, true);
 		AVector<ACell> harness = harnessForFrame(config, 0, typedTools);
-		FixedPalette fixed = fixedPalette(sourceConfig, ctx, capsCtx, palette, rootFrames);
+		ModelProfile profile = modelProfileFor(l3Config, ctx);
+		boolean cachePrefix = promptCaching(profile, l3Config);
+		FixedPalette fixed = fixedPalette(sourceConfig, ctx, capsCtx, palette,
+			rootFrames, cachePrefix);
 		java.util.Set<String> loadExcluded = fixed.loadExcludedNames();
 		ToolPalette.DeclaredSkillTools declared = fixed.declaredSkillTools();
 		AVector<ACell> baseTools = fixed.baseTools();
@@ -315,8 +318,8 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		AMap<AString, ACell> frameLoads = rootFrames.isEmpty()
 			? Maps.empty()
 			: GoalTreeContext.getLoads((AMap<AString, ACell>) rootFrames.get(0));
-		ModelProfile profile = modelProfileFor(l3Config, ctx);
-		boolean materialiseLive = ContextAssembler.rendered(rootFrames, sourceConfig) == null;
+		boolean materialiseLive = ContextAssembler.rendered(
+			rootFrames, sourceConfig, cachePrefix) == null;
 		Loads.Snapshot loads = Loads.resolveForInference(engine, capsCtx, indexLoads,
 			loadExcluded, profile.labels(), materialiseLive);
 
@@ -332,7 +335,8 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			offered, null, indexLoads,
 			rootFrames, null, null, true, null, taskTools.message(), palette.unavailable(), null, null)
 			.withLoads(loads, offered, indexLoads)
-			.withSourceConfig(sourceConfig);
+			.withSourceConfig(sourceConfig)
+			.withCachePrefix(cachePrefix);
 		AMap<AString, ACell> observedRoot = GoalTreeContext.applyObservations(
 			(AMap<AString, ACell>) rootFrames.get(0),
 			ContextAssembler.observations(spec, loads),
@@ -600,13 +604,15 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// by resolveHarnessTools / buildTypedRootHarnessTools.
 		RequestContext capsCtx = capsContext(recordConfig, ctx).withAgentId(agentId);
 		ToolPalette.Palette palette = ToolPalette.resolve(engine, ctx, recordConfig, HARNESS_NAMES);
-		FixedPalette fixed = fixedPalette(sourceConfig, ctx, capsCtx, palette, frames);
+		ModelProfile profile = modelProfileFor(l3Config, ctx);
+		boolean cachePrefix = promptCaching(profile, l3Config);
+		FixedPalette fixed = fixedPalette(sourceConfig, ctx, capsCtx, palette,
+			frames, cachePrefix);
 		java.util.Set<String> loadExcluded = fixed.loadExcludedNames();
 		ToolPalette.DeclaredSkillTools declared = fixed.declaredSkillTools();
 		AVector<ACell> baseTools = fixed.baseTools();
 		Map<String, AString> configToolMap = palette.routes();
 		AString llmOperation = getLLMOperation(l3Config);
-		ModelProfile profile = modelProfileFor(l3Config, ctx);
 
 		// Everything the assembler needs that holds for the whole cycle; each
 		// frame and inference supplies the rest (AGENT_CONTEXT.md §8).
@@ -616,7 +622,8 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			profile.budget(), profile.labels(), profile.toolCalling(),
 			null, null, null, null, null, null, true, null, null,
 			palette.unavailable(), null, null)
-			.withSourceConfig(sourceConfig);
+			.withSourceConfig(sourceConfig)
+			.withCachePrefix(cachePrefix);
 
 		// Per-tool-call timeout — bounds any single grid op invoked as a tool
 		// so a stuck sub-job cannot hang this loop. Resolved once and shared
@@ -797,7 +804,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 
 		private java.util.Set<String> manifestDeclaredSkillNames() {
 			ContextAssembler.Rendered rendered = ContextAssembler.rendered(
-				store.frames(), cycleSpec.sourceConfig());
+				store.frames(), cycleSpec.sourceConfig(), cycleSpec.cachePrefix());
 			if (rendered == null) return declaredSkillTools.names();
 			java.util.Set<String> manifested = ToolPalette.names(rendered.tools());
 			java.util.Set<String> names = new java.util.HashSet<>(declaredSkillTools.names());
@@ -1065,21 +1072,15 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 				frameTools.compacted = true;
 			}
 
-			// Config-owned vectors are materialised once per declarative config.
-			// Later calls reuse them and append conversation/tool-state events.
+			// A cached model retains its config-owned projection. An uncached
+			// model renders it ephemerally and carries no projection in the frame.
 			AVector<ACell> stack = (AVector<ACell>) currentFrames.slice(0, frameIndex + 1)
 				.assoc(frameIndex, frameTools.activeFrame);
 			ContextAssembler.Spec inference =
 				inferenceSpec(frameTools, harnessForFrame, frameL3Config, stack);
 			if (inference == null) return abortedResult(store);
-			if (ContextAssembler.rendered(inference) == null) {
-				ContextAssembler.Rendered rendered = ContextAssembler.initialise(inference);
-				frameTools.activeFrame = GoalTreeContext.withRenderedContext(
-					frameTools.activeFrame, rendered);
-				if (!persist(store, frameIndex, frameTools.activeFrame)) return abortedResult(store);
-				stack = stack.assoc(frameIndex, frameTools.activeFrame);
-				inference = inference.withFrames(stack);
-			}
+			inference = prepareRendering(frameTools, inference);
+			if (inference == null) return abortedResult(store);
 			ContextAssembler.Prompt prompt = ContextAssembler.assemble(inference);
 
 			ACell assistant = invokeLevel3(llmOperation, frameL3Config, prompt, ctx);
@@ -1226,7 +1227,8 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		AVector<ACell> taskTools = root ? TaskTools.DEFINITIONS : Vectors.empty();
 		AVector<ACell> fixedTools = (AVector<ACell>) taskTools.concat(harnessForFrame).concat(frameTools.baseTools);
 		boolean materialiseLive = ContextAssembler.rendered(
-			stack, frameTools.cycleSpec.sourceConfig()) == null;
+			stack, frameTools.cycleSpec.sourceConfig(),
+			frameTools.cycleSpec.cachePrefix()) == null;
 		Loads.Snapshot loads = Loads.resolveForInference(engine, frameTools.ctx, effectiveLoads,
 			frameTools.loadExcludedNames, frameTools.cycleSpec.labels(), materialiseLive);
 		frameTools.iterationToolMap = mergeRoutes(frameTools.configToolMap, loads.routes());
@@ -1351,6 +1353,25 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			Fields.ERROR, aborted.value());
 	}
 
+	/** Resolves outside the lattice update, then atomically installs or removes
+	 * the optional cache projection for this frame. */
+	private ContextAssembler.Spec prepareRendering(FrameToolContext frameTools,
+			ContextAssembler.Spec spec) {
+		if (!ContextAssembler.renderingUpdateRequired(spec)) return spec;
+		ContextAssembler.Rendered candidate = spec.cachePrefix()
+			? ContextAssembler.initialise(spec) : null;
+		AMap<AString, ACell> prepared = ContextAssembler.applyRendering(
+			frameTools.activeFrame, spec, candidate);
+		if (prepared != frameTools.activeFrame) {
+			frameTools.activeFrame = prepared;
+			if (!persist(frameTools.store, frameTools.frameIndex, prepared)) return null;
+		}
+		AVector<ACell> frames = frameTools.store.frames();
+		if (frameTools.frameIndex >= frames.count()) return null;
+		frameTools.activeFrame = (AMap<AString, ACell>) frames.get(frameTools.frameIndex);
+		return spec.withFrames((AVector<ACell>) frames.slice(0, frameTools.frameIndex + 1));
+	}
+
 	/** Persists the active frame back into the stack; false = cycle superseded. */
 	private static boolean persist(FrameStore store, int frameIndex, AMap<AString, ACell> activeFrame) {
 		return store.update(f -> updateFrame(f, frameIndex, activeFrame));
@@ -1396,8 +1417,10 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 	 */
 	private FixedPalette fixedPalette(AMap<AString, ACell> config,
 			RequestContext catalogCtx, RequestContext capsCtx,
-			ToolPalette.Palette palette, AVector<ACell> frames) {
-		ContextAssembler.Rendered rendered = ContextAssembler.rendered(frames, config);
+			ToolPalette.Palette palette, AVector<ACell> frames,
+			boolean cachePrefix) {
+		ContextAssembler.Rendered rendered = ContextAssembler.rendered(
+			frames, config, cachePrefix);
 		if (rendered != null) {
 			ToolPalette.DeclaredSkillTools declared =
 				ToolPalette.declaredSkillTools(rendered.tools());

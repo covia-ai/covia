@@ -28,12 +28,12 @@ import covia.venue.RequestContext;
 /**
  * Assembles the prompt for one inference — AGENT_CONTEXT.md §3, as code.
  *
- * <p>{@link #assemble} is a pure function of a {@link Spec}: the same Spec
- * yields the same {@link Prompt}, which is what makes {@code agent:context}
- * inspection exact and every section testable without a venue. Sections are
- * plain static functions of the Spec returning messages; an empty return
- * contributes nothing. The {@code Prompt} is a mutable accumulator that knows
- * only append, band marks and bytes so far.</p>
+ * <p>{@link #assemble} never mutates application state. Sections are plain
+ * static functions of the {@link Spec} returning messages; an empty return
+ * contributes nothing. Initial rendering may resolve declared sources from
+ * the Spec's venue snapshot, then returns immutable cells. The {@code Prompt}
+ * is a mutable request-local accumulator that knows only append, band marks
+ * and bytes so far.</p>
  *
  * <p>The order is the cache structure: fixed head, live surface, append-only
  * conversation, then the small inference-local tail. Watched context values
@@ -113,8 +113,9 @@ public final class ContextAssembler {
 	static final AString K_OBSERVATION_ORDER    = Strings.intern("order");
 
 	/**
-	 * The exact initial provider-facing vectors persisted on a session frame.
-	 * This is the cache state itself. The declarative config cell is retained
+	 * The exact initial provider-facing vectors optionally persisted on a
+	 * session frame. This is cache state, not semantic session state. The
+	 * declarative config cell is retained
 	 * alongside it: equal config reuses these exact vectors, while changed
 	 * config makes the value inapplicable and causes an atomic replacement on
 	 * the next inference. Ambient values resolved while producing the vectors
@@ -184,6 +185,7 @@ public final class ContextAssembler {
 	 * @param headNotice runtime text appended to the head, stable within its scope, or null
 	 * @param budget the model's context budget in bytes
 	 * @param labels the label dialect (§1.1)
+	 * @param cachePrefix whether the initial render is a durable cache projection
 	 * @param tools the palette, in order: harness, configured, loads-contributed
 	 * @param loadElements trusted loads and loaded skills (a {@link Loads.Snapshot}'s instruction
 	 *        elements) — system messages in the live surface
@@ -210,6 +212,7 @@ public final class ContextAssembler {
 			long budget,
 			AString labels,
 			boolean toolCalling,
+			boolean cachePrefix,
 			AVector<ACell> tools,
 			AVector<ACell> loadElements,
 			AVector<ACell> loadExchanges,
@@ -254,7 +257,7 @@ public final class ContextAssembler {
 				AVector<ACell> toolLoop, ACell task, AVector<ACell> unavailable,
 				String notice, LocalDate now) {
 			this(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels,
-				toolCalling, tools, loadElements, loadExchanges,
+				toolCalling, true, tools, loadElements, loadExchanges,
 				effectiveLoads, frames, pending, input, hasInput, toolLoop, task,
 				unavailable, notice, now, config);
 		}
@@ -289,25 +292,25 @@ public final class ContextAssembler {
 		/** The per-inference stable loads and their contributed tools. Watched
 		 * values are applied to frame observations before this Spec is assembled. */
 		public Spec withLoads(Loads.Snapshot loads, AVector<ACell> tools, AMap<AString, ACell> effectiveLoads) {
-			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling,
+			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling, cachePrefix,
 				tools, loads.instructionElements(), loads.exchanges(), effectiveLoads,
 				frames, pending, input, hasInput, toolLoop, task, unavailable, notice, now, sourceConfig);
 		}
 
 		public Spec withToolLoop(AVector<ACell> toolLoop) {
-			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling,
+			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling, cachePrefix,
 				tools, loadElements, loadExchanges, effectiveLoads, frames, pending, input, hasInput,
 				toolLoop, task, unavailable, notice, now, sourceConfig);
 		}
 
 		public Spec withTask(ACell task) {
-			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling,
+			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling, cachePrefix,
 				tools, loadElements, loadExchanges, effectiveLoads, frames, pending, input, hasInput,
 				toolLoop, task, unavailable, notice, now, sourceConfig);
 		}
 
 		public Spec withFrames(AVector<ACell> frames) {
-			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling,
+			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling, cachePrefix,
 				tools, loadElements, loadExchanges, effectiveLoads, frames, pending, input, hasInput,
 				toolLoop, task, unavailable, notice, now, sourceConfig);
 		}
@@ -317,14 +320,14 @@ public final class ContextAssembler {
 		 * by the agent's summary must not be injected a second time. An unresolved
 		 * task remains live and is still rendered through {@code task}. */
 		public Spec afterCompaction(AVector<ACell> frames) {
-			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling,
+			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling, cachePrefix,
 				tools, loadElements, loadExchanges, effectiveLoads, frames,
 				Vectors.empty(), Vectors.empty(), true, Vectors.empty(), task,
 				unavailable, notice, now, sourceConfig);
 		}
 
 		public Spec withNotice(String notice) {
-			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling,
+			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling, cachePrefix,
 				tools, loadElements, loadExchanges, effectiveLoads, frames, pending, input, hasInput,
 				toolLoop, task, unavailable, notice, now, sourceConfig);
 		}
@@ -332,14 +335,21 @@ public final class ContextAssembler {
 		/** Uses a declarative config distinct from the materialised effective
 		 * config. Stable ambient resolutions therefore do not invalidate history. */
 		public Spec withSourceConfig(AMap<AString, ACell> sourceConfig) {
-			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling,
+			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling, cachePrefix,
+				tools, loadElements, loadExchanges, effectiveLoads, frames, pending, input, hasInput,
+				toolLoop, task, unavailable, notice, now, sourceConfig);
+		}
+
+		/** Selects persistent prefix materialisation for this invocation. */
+		public Spec withCachePrefix(boolean cachePrefix) {
+			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling, cachePrefix,
 				tools, loadElements, loadExchanges, effectiveLoads, frames, pending, input, hasInput,
 				toolLoop, task, unavailable, notice, now, sourceConfig);
 		}
 
 		/** A frame's view: its own config and head notice. */
 		public Spec forFrame(AMap<AString, ACell> config, String headNotice) {
-			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling,
+			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling, cachePrefix,
 				tools, loadElements, loadExchanges, effectiveLoads, frames, pending, input, hasInput,
 				toolLoop, task, unavailable, notice, now, sourceConfig);
 		}
@@ -351,13 +361,19 @@ public final class ContextAssembler {
 	 */
 	public static final class Prompt {
 		private final long budget;
+		private final boolean cachePrefix;
 		private long used;
 		private AVector<ACell> tools = Vectors.empty();
 		private AVector<ACell> messages = Vectors.empty();
 		private final EnumMap<Band, Integer> marks = new EnumMap<>(Band.class);
 
 		Prompt(long budget) {
+			this(budget, true);
+		}
+
+		Prompt(long budget, boolean cachePrefix) {
 			this.budget = budget;
+			this.cachePrefix = cachePrefix;
 		}
 
 		/** Section 0: the tool definitions, charged first. */
@@ -402,6 +418,7 @@ public final class ContextAssembler {
 		 */
 		public AVector<ACell> cacheMarks() {
 			AVector<ACell> out = Vectors.empty();
+			if (!cachePrefix) return out;
 			long last = -1;
 			for (Band band : new Band[] { Band.CONVERSATION, Band.TOOL_LOOP }) {
 				Integer end = marks.get(band);
@@ -483,7 +500,7 @@ public final class ContextAssembler {
 
 	/** The sequence of AGENT_CONTEXT.md §3.2. */
 	public static Prompt assemble(Spec spec) {
-		Prompt p = new Prompt(spec.budget());
+		Prompt p = new Prompt(spec.budget(), spec.cachePrefix());
 
 		Rendered rendered = rendered(spec);
 		if (rendered == null) rendered = initialise(spec);
@@ -506,11 +523,11 @@ public final class ContextAssembler {
 		return p;
 	}
 
-	/** Renders the fixed initial vectors once. Callers persist the returned
-	 * value on the frame before the first provider invocation. */
+	/** Renders the initial vectors. Cached callers persist the returned value
+	 * before the provider invocation; uncached callers use and discard it. */
 	@SuppressWarnings("unchecked")
 	public static Rendered initialise(Spec spec) {
-		Prompt p = new Prompt(spec.budget());
+		Prompt p = new Prompt(spec.budget(), spec.cachePrefix());
 		p.tools(spec.tools());
 		p.add(head(spec));
 		p.mark(Band.HEAD);
@@ -547,8 +564,36 @@ public final class ContextAssembler {
 		return rendered != null && rendered.matchesConfig(sourceConfig) ? rendered : null;
 	}
 
+	/** The applicable persisted rendering under the model's cache policy. */
+	static Rendered rendered(AVector<ACell> frames,
+			AMap<AString, ACell> sourceConfig, boolean cachePrefix) {
+		return cachePrefix ? rendered(frames, sourceConfig) : null;
+	}
+
 	static Rendered rendered(Spec spec) {
-		return rendered(spec.frames(), spec.sourceConfig());
+		return rendered(spec.frames(), spec.sourceConfig(), spec.cachePrefix());
+	}
+
+	/** Whether the active frame's optional cache projection must change. */
+	static boolean renderingUpdateRequired(Spec spec) {
+		Rendered persisted = rendered(spec.frames());
+		return spec.cachePrefix() ? rendered(spec) == null : persisted != null;
+	}
+
+	/**
+	 * Applies an already-computed cache projection to one frame. This function
+	 * does no resolution and is safe inside a lattice update: cached models keep
+	 * a matching projection or replace it with {@code candidate}; uncached
+	 * models remove the projection entirely.
+	 */
+	static AMap<AString, ACell> applyRendering(AMap<AString, ACell> frame,
+			Spec spec, Rendered candidate) {
+		if (!spec.cachePrefix()) return frame.dissoc(GoalTreeContext.K_RENDERED_CONTEXT);
+		Rendered current = Rendered.fromCell(frame.get(GoalTreeContext.K_RENDERED_CONTEXT));
+		if (current != null && current.matchesConfig(spec.sourceConfig())) return frame;
+		if (candidate == null) throw new IllegalArgumentException(
+			"A cached context replacement requires a rendered candidate");
+		return GoalTreeContext.withRenderedContext(frame, candidate);
 	}
 
 	// ========== Sections ==========

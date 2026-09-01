@@ -162,10 +162,10 @@ sources you trust.
 | See what a venue offers | `skills_list` (optionally `skillset=<dir>`; default = the venue's configured entry skillsets) |
 | Read one without loading it | `skills_read skill=<path or a/hash>` |
 | Import a SKILL.md from a file root or DLFS drive | `skills_import source=file://<root>/<dir>/SKILL.md` — one file per call, lands at `w/skills/<name>`; the venue's `v/skills/building/skill-import` skill covers the options |
-| See exactly what an agent would send its model | `agent_context agentId=<name> message="…"` (or `task=…`, `sessionId=…`) — the level-3 input for that call with cache marks, budget and band marks |
+| See exactly what an agent would send its model | `agent_context agentId=<name> message="…"` (or `task=…`, `sessionId=…`) — the level-3 input for that call with budget and band marks, plus cache marks when enabled |
 | List/read safe past conversations | `agent_sessions agentId=<name>` then `agent_session_read agentId=<name> sessionId=<id>`; add `archiveDepth=N` to open nested compactions within the normal safety and size bounds |
 | Compact an idle session as its owner | `agent_compact_session agentId=<name> sessionId=<id> summary="…"` — keeps the exact old vector under the compaction record and returns metadata only |
-| Rebuild an idle session's provider prefix | `agent_reload_context agentId=<name> sessionId=<id>` — forces a same-config refresh of prompt/tools/pinned context on the next inference while preserving conversation and loads |
+| Rebuild an idle session's cached provider prefix | `agent_reload_context agentId=<name> sessionId=<id>` — forces a same-config refresh on the next cached inference while preserving conversation and loads; uncached models retain no prefix |
 | Audit what an agent did in a cycle | `covia_read path=g/<name>/timeline` — each entry holds the cycle's `context`, `tools` and `inferences` (per call: `sent`, `reply`, `calls` with results and `ms`; a `subgoal` call carries its child `frame`) |
 | Dry-run one harness iteration — "why was my tool denied?" | `agent_step agentId=<name> message="…" assistant={"toolCalls":[{"name":"<tool>","arguments":{…}}]}` — dispatches the calls as live (real side effects), returns `calls` with results/errors/ms and `next` (the following prompt); the agent's state is untouched |
 | Write a personal skill | `covia_write path=w/skills/<name>` with `{description, content: {inline: "..."}, skill: {tools: [...], skills: [...]}}` |
