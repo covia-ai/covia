@@ -19,6 +19,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.CompletableFuture;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -324,6 +326,10 @@ public class HTTPAdapter extends AAdapter {
 		installSkill("connections/sentry",   "/skills/sentry.json");
 		installSkill("connections/sendgrid", "/skills/sendgrid.json");
 		installSkill("connections/twilio",   "/skills/twilio.json");
+		// Telegram authenticates with the bot token in the URL path, so it uses
+		// the {s/NAME} URL-secret substitution rather than the header-based
+		// bearerSecret/secretHeaders the other connectors use.
+		installSkill("connections/telegram", "/skills/telegram.json");
 		String BASE = "/asset-examples/";
 
 		// HTTP primitives — registered in /v/ops/.
@@ -444,8 +450,16 @@ public class HTTPAdapter extends AAdapter {
 				throw new IllegalArgumentException("Unsupported HTTP method: " + method);
 			}
 
-			// Build URL with query parameters
-			String finalUrl = url.toString();
+			// Build URL with query parameters. Inline {s/NAME} placeholders
+			// resolve to stored secrets first, so a credential that an API
+			// carries in the URL itself (e.g. a Telegram bot token in the path)
+			// never rides in the request input — only its s/NAME reference does,
+			// and SSRF validation below still runs on the resolved URL. Every URL
+			// this op reports (final url, redirect trail, error chain) is masked
+			// back to its placeholder via urlRedactions so the resolved token is
+			// never persisted or surfaced.
+			Map<String, String> urlRedactions = new LinkedHashMap<>();
+			String finalUrl = resolveUrlSecrets(url.toString(), ctx, urlRedactions);
 			if (queryParams != null && !queryParams.isEmpty()) {
 				StringBuilder queryString = new StringBuilder();
 				boolean first = true;
@@ -525,7 +539,7 @@ public class HTTPAdapter extends AAdapter {
 			Outbound request = new Outbound(method, bodyText, outHeaders, Set.copyOf(credentials));
 			Set<URI> visited = new HashSet<>();
 			visited.add(targetUri);
-			return send(targetUri, request, follow, maxRedirects, Vectors.empty(), visited);
+			return send(targetUri, request, follow, maxRedirects, Vectors.empty(), visited, urlRedactions);
 
 		} catch (URISyntaxException e) {
 			throw new RuntimeException("Bad URI syntax: "+url,e);
@@ -538,24 +552,25 @@ public class HTTPAdapter extends AAdapter {
 	 * longer than the limit and refused targets fail the job naming the chain.
 	 */
 	private CompletableFuture<ACell> send(URI uri, Outbound request, boolean follow, int hopsLeft,
-			AVector<ACell> trail, Set<URI> visited) {
+			AVector<ACell> trail, Set<URI> visited, Map<String, String> redactions) {
 		return httpClient.sendAsync(request.build(uri), HttpResponse.BodyHandlers.ofString())
 			.thenCompose(response -> {
 				int code = response.statusCode();
 				String location = response.headers().firstValue("Location").orElse(null);
 				if (!follow || !isRedirect(code) || location == null) {
-					return CompletableFuture.completedFuture(output(response, uri, trail));
+					return CompletableFuture.completedFuture(output(response, uri, trail, redactions));
 				}
 				URI next;
 				try {
 					next = uri.resolve(location.trim());
 				} catch (IllegalArgumentException e) {
-					throw new IllegalArgumentException("Redirect from " + uri + " has a malformed Location: " + location);
+					throw new IllegalArgumentException("Redirect from " + redact(uri.toString(), redactions)
+						+ " has a malformed Location: " + location);
 				}
 				AMap<AString, ACell> hop = Maps.of(
 					Fields.STATUS, CVMLong.create(code),
-					Fields.FROM, Strings.create(uri.toString()),
-					Fields.TO, Strings.create(next.toString()));
+					Fields.FROM, Strings.create(redact(uri.toString(), redactions)),
+					Fields.TO, Strings.create(redact(next.toString(), redactions)));
 				AVector<ACell> hops = trail.conj(hop);
 				if (hopsLeft <= 0) {
 					throw new IllegalArgumentException("Too many redirects (limit " + maxRedirects + "): " + chain(hops));
@@ -568,7 +583,7 @@ public class HTTPAdapter extends AAdapter {
 				} catch (IllegalArgumentException e) {
 					throw new IllegalArgumentException("Redirect refused: " + e.getMessage() + " — " + chain(hops));
 				}
-				return send(next, request.follow(code, sameOrigin(uri, next)), true, hopsLeft - 1, hops, visited);
+				return send(next, request.follow(code, sameOrigin(uri, next)), true, hopsLeft - 1, hops, visited, redactions);
 			});
 	}
 
@@ -588,7 +603,8 @@ public class HTTPAdapter extends AAdapter {
 
 	/** The result: status, body and headers of the final response, the final
 	 *  {@code url}, and the {@code redirects} taken when there were any. */
-	private static AMap<AString, ACell> output(HttpResponse<String> response, URI finalUri, AVector<ACell> trail) {
+	private static AMap<AString, ACell> output(HttpResponse<String> response, URI finalUri, AVector<ACell> trail,
+			Map<String, String> redactions) {
 		AMap<AString, ACell> output = Maps.of(
 			Fields.STATUS, CVMLong.create(response.statusCode()),
 			Fields.BODY, Strings.create(response.body()));
@@ -602,7 +618,7 @@ public class HTTPAdapter extends AAdapter {
 			rheaders = rheaders.assoc(Strings.create(key), Strings.create(value));
 		}
 		output = output.assoc(Fields.HEADERS, RT.cvm(rheaders));
-		output = output.assoc(Fields.URL, Strings.create(finalUri.toString()));
+		output = output.assoc(Fields.URL, Strings.create(redact(finalUri.toString(), redactions)));
 		if (!trail.isEmpty()) output = output.assoc(Fields.REDIRECTS, trail);
 		return output;
 	}
@@ -643,6 +659,50 @@ public class HTTPAdapter extends AAdapter {
 		} catch (IOException e) {
 			throw new IllegalArgumentException("Could not obtain an access token for " + provider + ": " + e.getMessage());
 		}
+	}
+
+	/** Inline URL credential placeholder: {s/NAME}, resolved to the stored secret. */
+	private static final Pattern URL_SECRET = Pattern.compile("\\{(s/[^}{]+)\\}");
+
+	/**
+	 * Substitutes every {@code {s/NAME}} placeholder in the URL with its
+	 * resolved secret, in a single pass. A URL with no placeholder is returned
+	 * unchanged (the common case). The resolved value is spliced in verbatim —
+	 * like {@code bearerSecret}/{@code secretHeaders} do for header values — so
+	 * a token keeps whatever literal form the API expects (e.g. Telegram's
+	 * {@code <id>:<hash>}). Place a URL secret in the path or query, never the
+	 * host: {@link #validateURL} runs on the resolved URL and still governs the
+	 * host and scheme, and its diagnostics name only host/scheme, never the path.
+	 */
+	private String resolveUrlSecrets(String rawUrl, RequestContext ctx, Map<String, String> redactions) {
+		Matcher m = URL_SECRET.matcher(rawUrl);
+		if (!m.find()) return rawUrl;
+		StringBuilder out = new StringBuilder();
+		m.reset();
+		while (m.find()) {
+			String placeholder = m.group();
+			String resolved = resolveSecret(Strings.create(m.group(1)), ctx, "url secret");
+			redactions.put(resolved, placeholder);
+			m.appendReplacement(out, Matcher.quoteReplacement(resolved));
+		}
+		m.appendTail(out);
+		return out.toString();
+	}
+
+	/**
+	 * Masks resolved URL secrets back to their {@code {s/NAME}} placeholders
+	 * wherever a URL is reported — the final url, the redirect trail, an error
+	 * chain — so a credential carried in the URL never persists in a job record
+	 * or surfaces in a message. A no-secret request keeps the empty map and this
+	 * returns the URL untouched.
+	 */
+	private static String redact(String url, Map<String, String> redactions) {
+		if (redactions.isEmpty()) return url;
+		String out = url;
+		for (Map.Entry<String, String> e : redactions.entrySet()) {
+			out = out.replace(e.getKey(), e.getValue());
+		}
+		return out;
 	}
 
 	private String resolveSecret(AString reference, RequestContext ctx, String field) {

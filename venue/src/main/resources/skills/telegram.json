@@ -1,0 +1,15 @@
+{
+	"name": "telegram",
+	"description": "Send messages and read updates with a Telegram bot token (token carried in the URL path via {s/NAME}). Load for posting messages to chats, answering users, and polling updates.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Telegram\nCalls go through `v/ops/http/get` / `v/ops/http/post` against `https://api.telegram.org/bot{s/TELEGRAM_BOT_TOKEN}/<method>`. Telegram carries the bot token in the URL path, not a header, so the URL embeds the secret reference `{s/TELEGRAM_BOT_TOKEN}` — the venue resolves it at call time and only the reference is ever sent in the request. Create a bot and get its token from @BotFather (`/newbot`); store it as `TELEGRAM_BOT_TOKEN` (the full `<id>:<hash>` string, no `bot` prefix).\n\nCommon calls:\n- Bot identity: `GET https://api.telegram.org/bot{s/TELEGRAM_BOT_TOKEN}/getMe`\n- Send a message: `POST https://api.telegram.org/bot{s/TELEGRAM_BOT_TOKEN}/sendMessage` body `{chat_id, text}` (add `parse_mode: \"MarkdownV2\"` or `\"HTML\"` for formatting)\n- Poll updates: `GET https://api.telegram.org/bot{s/TELEGRAM_BOT_TOKEN}/getUpdates?offset={next}&timeout=0`\n- Chat info: `GET https://api.telegram.org/bot{s/TELEGRAM_BOT_TOKEN}/getChat?chat_id={chat_id}`\n\nRules:\n- Every response is `{ok, result}` on success or `{ok:false, error_code, description}` on failure; also check the HTTP `status`. 401 = bad token; 403 = the bot was blocked or was never started by that user; 429 = rate limited, honour `parameters.retry_after`.\n- A bot can only message a `chat_id` that has first messaged it (or a group it was added to). `chat_id` is a number (or `@channelusername` for a public channel the bot administers).\n- `getUpdates` is long-poll intake; advance `offset` to the last `update_id + 1` to acknowledge. Do not run `getUpdates` while a webhook is set.\n- Put `{s/TELEGRAM_BOT_TOKEN}` only in the path shown; never inline the raw token.\n"
+	},
+	"skill": {
+		"tools": [
+			"v/ops/http/get",
+			"v/ops/http/post",
+			"v/ops/jvm/url-encode"
+		]
+	}
+}
