@@ -20,7 +20,7 @@ import covia.venue.RequestContext;
 import covia.venue.TestEngine;
 
 /**
- * Tests for the UserMemoryAdapter — one tool ({@code v/ops/memory}) dispatched by
+ * Tests for the UserMemoryAdapter — one editing tool ({@code v/ops/memory}) dispatched by
  * a {@code command} (recall | remember | update | forget) over a numbered memory
  * list. Covers the command surface, recall over both a flat list and a gated map
  * collection, and the context-format path (recall as a config.context assemble-op).
@@ -230,8 +230,8 @@ public class UserMemoryAdapterTest {
 
 		ContextLoader loader = new ContextLoader(engine);
 		ACell entry = Maps.of(
-			Strings.create("op"), Strings.create(OP),
-			Strings.create("input"), Maps.of(Strings.create("command"), Strings.create("recall"),
+			Strings.create("op"), Strings.create("v/ops/memory-recall"),
+			Strings.create("input"), Maps.of(
 				Strings.create("path"), Strings.create("w/memory")),
 			Strings.create("label"), Strings.create("User memory (w/memory)"));
 
@@ -245,8 +245,8 @@ public class UserMemoryAdapterTest {
 	public void testEmptyRecallContextEntrySkipped() {
 		ContextLoader loader = new ContextLoader(engine);
 		ACell entry = Maps.of(
-			Strings.create("op"), Strings.create(OP),
-			Strings.create("input"), Maps.of(Strings.create("command"), Strings.create("recall"),
+			Strings.create("op"), Strings.create("v/ops/memory-recall"),
+			Strings.create("input"), Maps.of(
 				Strings.create("path"), Strings.create("w/memory")),
 			Strings.create("label"), Strings.create("User memory (w/memory)"));
 

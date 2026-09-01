@@ -45,11 +45,10 @@ import covia.venue.RequestContext;
  *
  * <h3>Operations</h3>
  * <ul>
- *   <li>{@code memory:recall} — render the full numbered list as a text block
- *       (or null when empty). The context assemble-op.</li>
- *   <li>{@code memory:remember} — append an item.</li>
- *   <li>{@code memory:update} — replace item {@code n}.</li>
- *   <li>{@code memory:forget} — remove item {@code n}.</li>
+ *   <li>{@code v/ops/memory-recall} ({@code memory:recall}) — read-only render
+ *       of the full numbered list (or null when empty); the context operation.</li>
+ *   <li>{@code v/ops/memory} ({@code memory:manage}) — the compact agent tool:
+ *       recall, append, update or forget selected by {@code command}.</li>
  * </ul>
  */
 public class UserMemoryAdapter extends AAdapter {
@@ -78,8 +77,8 @@ public class UserMemoryAdapter extends AAdapter {
 
 	@Override
 	public String getDescription() {
-		return "Generic per-user memory: ONE tool with a `command` (recall | remember | update | forget) "
-			+ "over a numbered list. recall renders the list (also usable as a config.context assemble-op; "
+		return "Generic per-user memory: one editing tool with a `command` (recall | remember | update | forget) "
+			+ "over a numbered list, plus a dedicated read-only recall operation for context. recall renders the list ("
 			+ "reads a flat list or a map collection); remember appends; update/forget edit by item number. "
 			+ "Stored durably in the user's workspace.";
 	}
@@ -91,6 +90,9 @@ public class UserMemoryAdapter extends AAdapter {
 		// A single op/tool (v/ops/memory) dispatched by the `command` input —
 		// one tool definition is far less agent tool-context than four.
 		installAsset("memory", "/adapters/memory/memory.json");
+		// Context resolution accepts only operations whose metadata is explicitly
+		// read-only. Keep that promise separate from the multiplexed editing op.
+		installAsset("memory-recall", "/adapters/memory/recall.json");
 	}
 
 	@Override
@@ -99,9 +101,10 @@ public class UserMemoryAdapter extends AAdapter {
 		if (ctx.getCallerDID() == null) {
 			return CompletableFuture.failedFuture(new RuntimeException("Authentication required"));
 		}
-		// Dispatch on the `command` field (single tool), mirroring a unified
-		// editor/memory tool rather than four separate ops.
-		String command = strInput(input, "command", "");
+		// The context-only operation fixes recall at the metadata boundary. The
+		// ordinary agent tool remains the compact command-dispatched editor.
+		String command = "recall".equals(getSubOperation(meta))
+			? "recall" : strInput(input, "command", "");
 		try {
 			return switch (command) {
 				case "recall"   -> CompletableFuture.completedFuture(handleRecall(ctx, input));

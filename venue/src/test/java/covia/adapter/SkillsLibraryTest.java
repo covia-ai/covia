@@ -411,8 +411,10 @@ public class SkillsLibraryTest {
 		AVector<ACell> context = RT.ensureVector(RT.getIn(config, "context"));
 		assertEquals(1, context.count(), "default agent should pin one agent-local memory source");
 		ACell memory = context.get(0);
-		assertEquals("v/ops/memory", RT.getIn(memory, "op").toString());
+		assertEquals("v/ops/memory-recall", RT.getIn(memory, "op").toString());
 		assertEquals("n/memory", RT.getIn(memory, "input", "path").toString());
+		assertNull(RT.getIn(memory, "input", "command"),
+			"the dedicated read-only operation fixes recall at its metadata boundary");
 		assertEquals("Agent memory (edit using path n/memory)", RT.getIn(memory, "label").toString());
 		// minimal holds NO op tools — skills discovery is its entire surface
 		ACell minimalAsset = engine.resolvePath(Strings.create("v/agents/templates/minimal"), ctx);
