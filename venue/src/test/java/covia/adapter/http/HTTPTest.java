@@ -234,6 +234,53 @@ public class HTTPTest {
 		}
 	}
 
+	@Test public void testUrlSecretResolvesIntoPathAndStaysOutOfJobRecords() throws Exception {
+		AString caller = Strings.create("did:test:http:url-secret:" + System.nanoTime());
+		User user = TestServer.ENGINE.getVenueState().users().ensure(caller);
+		byte[] key = SecretStore.deriveKey(TestServer.ENGINE.getKeyPair());
+		// A Telegram-shaped token: <id>:<hash>, must reach the server verbatim.
+		String token = "12345:AA-bb_ccDD";
+		user.secrets().store("TG_TOKEN", token, key);
+
+		AtomicReference<String> receivedPath = new AtomicReference<>();
+		HttpServer echo = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
+		echo.createContext("/", exchange -> {
+			receivedPath.set(exchange.getRequestURI().getPath());
+			byte[] body = "{\"ok\":true}".getBytes(StandardCharsets.UTF_8);
+			exchange.sendResponseHeaders(200, body.length);
+			try (OutputStream os = exchange.getResponseBody()) { os.write(body); }
+		});
+		echo.start();
+		try {
+			ACell input = Maps.of(
+				Fields.URL, "http://localhost:" + echo.getAddress().getPort()
+					+ "/bot{s/TG_TOKEN}/getMe");
+			Job job = TestServer.ENGINE.jobs().invokeOperation(
+				"v/ops/http/get", input, RequestContext.of(caller));
+			ACell output = job.awaitResult(5000);
+
+			assertEquals("{\"ok\":true}", RT.getIn(output, Fields.BODY).toString());
+			// The secret is spliced verbatim into the path — the colon survives.
+			assertEquals("/bot" + token + "/getMe", receivedPath.get());
+			// Only the reference persists in the durable record; never the token.
+			String durable = job.getData().toString();
+			assertFalse(durable.contains(token), durable);
+			assertTrue(durable.contains("{s/TG_TOKEN}"), durable);
+		} finally {
+			echo.stop(0);
+		}
+	}
+
+	@Test public void testUrlSecretUnresolvedFailsClearly() {
+		AString caller = Strings.create("did:test:http:url-secret-missing:" + System.nanoTime());
+		IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+			() -> TestServer.ENGINE.jobs().invokeOperation("v/ops/http/get", Maps.of(
+				Fields.URL, "https://api.telegram.org/bot{s/NO_SUCH_SECRET}/getMe"),
+				RequestContext.of(caller)));
+		assertTrue(error.getMessage().contains("url secret")
+			&& error.getMessage().contains("s/NO_SUCH_SECRET"), error.getMessage());
+	}
+
 	@Test public void testBearerSecretConflictsWithAuthorizationSecretHeader() {
 		AString caller = Strings.create("did:test:http:secret-conflict:" + System.nanoTime());
 		User user = TestServer.ENGINE.getVenueState().users().ensure(caller);
