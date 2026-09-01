@@ -213,15 +213,18 @@ public class VenueRestartTest {
 			assertEquals(Status.FAILED, RT.ensureString(errorData.get(Fields.STATUS)),
 					"Error job should still be FAILED");
 
-			// 4g: STARTED plain-op job FAILS at boot with an honest interruption
-			// message — recovery never re-executes (#214): re-running would double
-			// side effects for non-idempotent ops. The caller verifies and retries.
+			// 4g: an in-flight job that registered a pause hook is SUSPENDED at
+			// graceful shutdown, not left to fail. test:never wires a pause hook
+			// (so the lifecycle endpoints work), which under the shutdown
+			// contract (4e3b4cf1) is its declaration that the work can be
+			// suspended: defaultSuspend pauses it, and boot recovery restores the
+			// paused family live. A non-pausable in-flight job is instead
+			// cancelled with "Venue shut down", and a true STARTED-at-crash record
+			// takes the FAILED default — both covered in JobShutdownTest.
 			AMap<AString, ACell> neverData = engine2.jobs().getJobData(Blob.parse(neverJobId), engine2.venueContext());
 			assertNotNull(neverData, "Never job record should survive restart");
-			assertEquals(Status.FAILED, RT.ensureString(neverData.get(Fields.STATUS)),
-					"Interrupted plain-op job should be FAILED after restart");
-			assertTrue(String.valueOf(neverData.get(Fields.ERROR)).contains("may or may not have applied"),
-					"Failure message should say effects are unknown: " + neverData.get(Fields.ERROR));
+			assertEquals(Status.PAUSED, RT.ensureString(neverData.get(Fields.STATUS)),
+					"Suspendable in-flight job should be PAUSED after a graceful restart");
 
 			// 4h: PAUSED job remains PAUSED after restart (not re-fired)
 			AMap<AString, ACell> pauseData = engine2.jobs().getJobData(Blob.parse(pauseJobId), engine2.venueContext());
