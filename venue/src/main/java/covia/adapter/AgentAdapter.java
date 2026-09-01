@@ -815,7 +815,56 @@ public class AgentAdapter extends AAdapter {
 		if (keyWarn != null) warnings = warnings.conj(keyWarn);
 		AString promptWarn = systemPromptWarning(config, ctx);
 		if (promptWarn != null) warnings = warnings.conj(promptWarn);
+		AString contextOpWarn = unclassifiedContextOperationsWarning(config, ctx);
+		if (contextOpWarn != null) warnings = warnings.conj(contextOpWarn);
 		return warnings;
+	}
+
+	/**
+	 * Operator-facing compatibility advisory for context operations supplied by
+	 * older or external assets. Runtime accepts an absent classification, but
+	 * authoring diagnostics belong on create/update results rather than in every
+	 * inference context.
+	 */
+	private AString unclassifiedContextOperationsWarning(
+			AMap<AString, ACell> config, RequestContext ctx) {
+		if (config == null) return null;
+		java.util.Set<String> refs = new java.util.LinkedHashSet<>();
+		AVector<ACell> context = RT.ensureVector(config.get(K_CONTEXT));
+		if (context != null) {
+			for (long i = 0; i < context.count(); i++) {
+				collectContextOperation(context.get(i), refs);
+			}
+		}
+		ACell loadsCell = config.get(Fields.LOADS);
+		if (loadsCell instanceof AMap<?, ?> loads) {
+			for (var entry : loads.entrySet()) collectContextOperation(entry.getValue(), refs);
+		}
+		if (refs.isEmpty()) return null;
+
+		java.util.List<String> unclassified = new java.util.ArrayList<>();
+		for (String ref : refs) {
+			try {
+				Asset asset = engine.resolveAsset(Strings.create(ref), ctx);
+				if (asset != null && RT.getIn(asset.meta(), Fields.OPERATION, Fields.READ_ONLY) == null) {
+					unclassified.add(ref);
+				}
+			} catch (RuntimeException e) {
+				// Resolution failures are reported by the normal context machinery;
+				// this advisory is only about metadata we can inspect now.
+			}
+		}
+		if (unclassified.isEmpty()) return null;
+		return Strings.create("config context operation(s) have no operation.readOnly classification: "
+			+ String.join(", ", unclassified)
+			+ ". They will run for compatibility; classify externally supplied operation metadata"
+			+ " as true or false.");
+	}
+
+	private static void collectContextOperation(ACell entry, java.util.Set<String> refs) {
+		if (!(entry instanceof AMap<?, ?> map)) return;
+		AString op = RT.ensureString(map.get(Fields.OP));
+		if (op != null) refs.add(op.toString());
 	}
 
 	/**
@@ -2130,12 +2179,23 @@ public class AgentAdapter extends AAdapter {
 		AMap<AString, ACell> result = Maps.of(
 			Fields.STATUS, agent.getStatus(),
 			K_RUNNING, CVMBool.create(running));
+		AVector<ACell> warnings = Vectors.empty();
+		if (newConfig != null) {
+			AString contextOpWarn = unclassifiedContextOperationsWarning(newConfig, ctx);
+			if (contextOpWarn != null) warnings = warnings.conj(contextOpWarn);
+		}
 		if (running && newConfig != null && newConfig.containsKey(K_CAPS)) {
 			// Honest about authority: the transition in flight keeps the caps it
 			// fired with until it ends.
-			result = result.assoc(Fields.WARNINGS, Vectors.of(Strings.create(
+			warnings = warnings.conj(Strings.create(
 				"A transition is running under the caps it fired with; the new caps apply"
-				+ " from the next transition. Use agent:suspend to halt it now.")));
+				+ " from the next transition. Use agent:suspend to halt it now."));
+		}
+		if (!warnings.isEmpty()) {
+			result = result.assoc(Fields.WARNINGS, warnings);
+			for (long i = 0; i < warnings.count(); i++) {
+				log.info("agent:update {} — {}", agentId, warnings.get(i));
+			}
 		}
 		job.setStatus(Status.STARTED);
 		job.completeWith(identify(target, result));

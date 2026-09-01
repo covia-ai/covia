@@ -18,12 +18,14 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import convex.core.util.JSON;
 import covia.adapter.agent.ContextAssembler.Prompt;
 import covia.adapter.agent.ContextAssembler.Spec;
 import covia.api.Fields;
@@ -267,16 +269,34 @@ public class LoadsTest {
 	}
 
 	@Test
-	public void testContextOperationMustDeclareReadOnly() {
+	public void testContextOperationRejectsExplicitMutation() {
 		String target = "w/volatile-op-must-not-write";
 		AMap<AString, ACell> loads = Maps.of(Strings.create("bad-watcher"),
 			spec("op", "v/ops/covia/write", "input", Maps.of(
 				Fields.PATH, Strings.create(target), Fields.VALUE, CVMBool.TRUE)));
 		Loads.Snapshot snapshot = resolve(loads);
 		String error = RT.getIn(observationEntries(snapshot, 0).get(0), Fields.ERROR).toString();
-		assertTrue(error.contains("operation.readOnly=true"), error);
+		assertTrue(error.contains("operation.readOnly=false"), error);
 		assertNull(engine.resolvePath(Strings.create(target), ctx),
 			"context observation must never execute a mutating operation");
+	}
+
+	@Test
+	public void testContextOperationWithoutClassificationRunsCleanly() {
+		AMap<AString, ACell> meta = Maps.of(
+			Fields.NAME, Strings.create("Legacy echo"),
+			Fields.OPERATION, Maps.of(
+				Fields.ADAPTER, Strings.create("test:echo"),
+				Fields.INPUT, Maps.of()));
+		Hash hash = engine.storeAsset(JSON.printPretty(meta), null);
+		String op = "a/" + hash.toHexString();
+		Loads.Snapshot snapshot = resolve(Maps.of(Strings.create("legacy"),
+			spec("op", op, "input", Maps.of("ping", "pong"))));
+
+		AMap<AString, ACell> observed = entry(observationEntries(snapshot, 0), 0);
+		assertTrue(content(observed).contains("pong"), observed.toString());
+		assertNull(observed.get(Fields.WARNINGS),
+			"authoring diagnostics do not consume inference context");
 	}
 
 	@Test

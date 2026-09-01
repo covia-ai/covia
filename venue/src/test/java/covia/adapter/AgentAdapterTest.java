@@ -18,12 +18,14 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Blob;
 import convex.core.data.Cells;
+import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import convex.core.util.JSON;
 import covia.adapter.agent.ContextAssembler;
 import covia.adapter.agent.GoalTreeContext;
 import covia.api.Abilities;
@@ -635,6 +637,43 @@ public class AgentAdapterTest {
 			assertNull(RT.getIn(result, Fields.WARNINGS),
 				"secret reference " + ref + " → no advisory");
 		}
+	}
+
+	@Test
+	public void testCreateAndUpdateWarnOnUnclassifiedContextOperations() {
+		Hash contextHash = engine.storeAsset(JSON.printPretty(Maps.of(
+			Fields.NAME, Strings.create("Legacy context echo"),
+			Fields.OPERATION, Maps.of(
+				Fields.ADAPTER, Strings.create("test:echo"),
+				Fields.INPUT, Maps.empty()))), null);
+		Hash loadHash = engine.storeAsset(JSON.printPretty(Maps.of(
+			Fields.NAME, Strings.create("Legacy load echo"),
+			Fields.OPERATION, Maps.of(
+				Fields.ADAPTER, Strings.create("test:echo"),
+				Fields.INPUT, Maps.empty()))), null);
+		String contextOp = "a/" + contextHash.toHexString();
+		String loadOp = "a/" + loadHash.toHexString();
+		AMap<AString, ACell> config = Maps.of(
+			Fields.CONTEXT, Vectors.of(Maps.of(Fields.OP, contextOp)),
+			Fields.LOADS, Maps.of("legacy-load", Maps.of(Fields.OP, loadOp)));
+
+		RequestContext alice = RequestContext.of(ALICE_DID);
+		ACell created = engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(
+			Fields.AGENT_ID, "unclassified-context-op-agent",
+			Fields.CONFIG, config), alice).awaitResult(5000);
+		ACell createWarnings = RT.getIn(created, Fields.WARNINGS);
+		assertNotNull(createWarnings, created.toString());
+		assertTrue(createWarnings.toString().contains(contextOp), createWarnings.toString());
+		assertTrue(createWarnings.toString().contains(loadOp), createWarnings.toString());
+		assertTrue(createWarnings.toString().contains("operation.readOnly"), createWarnings.toString());
+
+		ACell updated = engine.jobs().invokeOperation("v/ops/agent/update", Maps.of(
+			Fields.AGENT_ID, "unclassified-context-op-agent",
+			Fields.CONFIG, Maps.of("model", "gpt-5.4-mini")), alice).awaitResult(5000);
+		ACell updateWarnings = RT.getIn(updated, Fields.WARNINGS);
+		assertNotNull(updateWarnings, updated.toString());
+		assertTrue(updateWarnings.toString().contains(contextOp), updateWarnings.toString());
+		assertTrue(updateWarnings.toString().contains(loadOp), updateWarnings.toString());
 	}
 
 	// ========== Agent ops via the internal path (the LLM tool-loop seam) ==========

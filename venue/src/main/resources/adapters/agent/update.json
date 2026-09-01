@@ -30,7 +30,13 @@
 			"properties": {
 				"agentId": { "type": "string" },
 				"address": { "type": "string", "description": "Canonical <ownerDID>/g/<agentId> address" },
-				"status": { "type": "string" }
+				"status": { "type": "string" },
+				"running": { "type": "boolean", "description": "Whether a transition was already in flight when the update landed." },
+				"warnings": {
+					"type": "array",
+					"items": { "type": "string" },
+					"description": "Operator-facing configuration advisories. Absent when there is nothing to flag."
+				}
 			}
 		}
 	}

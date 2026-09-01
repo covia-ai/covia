@@ -11,6 +11,7 @@ import convex.core.data.Cells;
 import convex.core.data.util.CellExplorer;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.adapter.AssetAdapter;
 import covia.adapter.CoviaAdapter;
@@ -36,7 +37,6 @@ import covia.venue.RequestContext;
  * <p>See {@code venue/docs/AGENT_CONTEXT.md} for the full design.</p>
  */
 public class ContextLoader {
-
 	private static final AString K_REF      = Strings.intern("ref");
 	private static final AString K_TEXT     = Strings.intern("text");
 	private static final AString K_LABEL    = Strings.intern("label");
@@ -476,9 +476,18 @@ public class ContextLoader {
 			Asset asset = engine.resolveAsset(op, ctx);
 			if (asset == null) throw new IllegalArgumentException(
 				"Cannot resolve context operation: " + op);
-			if (!convex.core.data.prim.CVMBool.TRUE.equals(
-					RT.getIn(asset.meta(), Fields.OPERATION, Fields.READ_ONLY))) {
-				throw new IllegalArgumentException("Context operation must declare operation.readOnly=true: " + op);
+			ACell readOnly = RT.getIn(asset.meta(), Fields.OPERATION, Fields.READ_ONLY);
+			if (CVMBool.FALSE.equals(readOnly)) {
+				throw new IllegalArgumentException(
+					"Context operation declares operation.readOnly=false: " + op);
+			}
+			if (readOnly == null) {
+				// Compatibility for externally supplied and older operation assets.
+				// Agent create/update surfaces the missing classification to the
+				// operator; inference context stays free of authoring diagnostics.
+			} else if (!(readOnly instanceof CVMBool)) {
+				throw new IllegalArgumentException(
+					"Context operation has non-boolean operation.readOnly: " + op);
 			}
 			// Context loading is framework infrastructure: entries are
 			// declared in the agent's config (visible to the caller before
