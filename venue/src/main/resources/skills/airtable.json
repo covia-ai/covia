@@ -1,0 +1,15 @@
+{
+	"name": "airtable",
+	"description": "Read and write Airtable bases and records using a personal access token. Load for record lists, filtered queries, reads, and creates/updates.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Airtable\nCalls go through `v/ops/http/get` / `v/ops/http/post` against `https://api.airtable.com/v0` with `bearerSecret: \"s/AIRTABLE_TOKEN\"` (a personal access token from airtable.com/create/tokens; grant the specific bases and `data.records:read`/`:write` scopes needed). Only the secret reference goes in the request.\n\nCommon calls:\n- List bases: `GET https://api.airtable.com/v0/meta/bases`\n- Base schema (tables & fields): `GET https://api.airtable.com/v0/meta/bases/{baseId}/tables`\n- List records: `GET /{baseId}/{tableIdOrName}?pageSize=100` (page with `offset`; filter with `filterByFormula`, e.g. URL-encoded `{Status}='Open'`)\n- One record: `GET /{baseId}/{tableIdOrName}/{recordId}`\n- Create: `POST /{baseId}/{tableIdOrName}` body `{records: [{fields: {...}}], typecast?: true}`\n- Update: `POST /{baseId}/{tableIdOrName}` with `method: \"PATCH\"` and body `{records: [{id, fields: {...}}]}`\n\nRules:\n- Check `status`; errors are `{error: {type, message}}`. 401 = bad token; 403 = base/scope not granted; 422 = a field name or type is wrong (read the schema first).\n- `baseId` starts `app...`, record ids start `rec...`; table can be its name or `tbl...` id. URL-encode names with spaces and any `filterByFormula` (`v/ops/jvm/url-encode`).\n- Max 10 records per create/update call; batch larger writes.\n"
+	},
+	"skill": {
+		"tools": [
+			"v/ops/http/get",
+			"v/ops/http/post",
+			"v/ops/jvm/url-encode"
+		]
+	}
+}

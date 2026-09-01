@@ -1,0 +1,15 @@
+{
+	"name": "twilio",
+	"description": "Send SMS and read messages/calls with Twilio (Basic auth via secretHeaders). Load for sending SMS and reading message logs. Sending SMS is a real, billable action - confirm intent.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Twilio\nCalls go through `v/ops/http/get` / `v/ops/http/post` against `https://api.twilio.com/2010-04-01` with `secretHeaders: {\"Authorization\": \"s/TWILIO_AUTH\"}`. Store the secret as the complete header value `Basic <base64 of AccountSID:AuthToken>` (from console.twilio.com; base64-encode `ACxxxx:your_auth_token`). Request bodies are form-encoded. Only the secret reference goes in the request.\n\nCommon calls (`{SID}` is your Account SID, `ACxxxx`):\n- Account: `GET /Accounts/{SID}.json`\n- Send SMS: `POST /Accounts/{SID}/Messages.json` form body `To=%2B1555...&From=%2B1555...&Body=Hello` (numbers in E.164, `+` encoded as `%2B`)\n- List messages: `GET /Accounts/{SID}/Messages.json?PageSize=50`\n- One message: `GET /Accounts/{SID}/Messages/{MessageSid}.json`\n- List calls: `GET /Accounts/{SID}/Calls.json?PageSize=50`\n\nRules:\n- Check `status`; errors are `{code, message, more_info}`. 401 = bad credentials; 21211 = invalid `To` number.\n- Sending SMS costs money and reaches a real phone - confirm `To`, `From`, and `Body` with the user first. `From` must be a number you own on the account.\n"
+	},
+	"skill": {
+		"tools": [
+			"v/ops/http/get",
+			"v/ops/http/post",
+			"v/ops/jvm/url-encode"
+		]
+	}
+}

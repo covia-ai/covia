@@ -306,11 +306,24 @@ public class HTTPAdapter extends AAdapter {
 	protected void installAssets() {
 		// The adapter's own skill: v/skills/http lives and dies with this adapter.
 		installSkill("ops-tools/http", "/skills/http.json");
-		// Connection skills: third-party services reachable with a user-supplied token
-		// via bearerSecret. Pure instruction bundles over the http ops above.
-		installSkill("connections/notion", "/skills/notion.json");
-		installSkill("connections/hubspot", "/skills/hubspot.json");
-		installSkill("connections/slack", "/skills/slack.json");
+		// Connection skills: third-party services reachable with a user-supplied
+		// token over the http ops above — bearerSecret (Bearer), secretHeaders
+		// (Basic / API-key / Bot), or an {s/NAME} URL placeholder. Pure
+		// instruction bundles; no per-service adapter.
+		installSkill("connections/notion",   "/skills/notion.json");
+		installSkill("connections/hubspot",  "/skills/hubspot.json");
+		installSkill("connections/slack",    "/skills/slack.json");
+		installSkill("connections/github",   "/skills/github.json");
+		installSkill("connections/jira",     "/skills/jira.json");
+		installSkill("connections/linear",   "/skills/linear.json");
+		installSkill("connections/stripe",   "/skills/stripe.json");
+		installSkill("connections/airtable", "/skills/airtable.json");
+		installSkill("connections/discord",  "/skills/discord.json");
+		installSkill("connections/asana",    "/skills/asana.json");
+		installSkill("connections/intercom", "/skills/intercom.json");
+		installSkill("connections/sentry",   "/skills/sentry.json");
+		installSkill("connections/sendgrid", "/skills/sendgrid.json");
+		installSkill("connections/twilio",   "/skills/twilio.json");
 		String BASE = "/asset-examples/";
 
 		// HTTP primitives — registered in /v/ops/.

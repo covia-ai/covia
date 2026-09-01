@@ -1,0 +1,15 @@
+{
+	"name": "sentry",
+	"description": "Read Sentry issues, events, and projects using an auth token. Load for triaging issues, reading error events, and listing projects.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Sentry\nCalls go through `v/ops/http/get` / `v/ops/http/post` against `https://sentry.io/api/0` with `bearerSecret: \"s/SENTRY_TOKEN\"` (an auth token from sentry.io -> Settings -> Auth Tokens, scoped `project:read`, `event:read`, `org:read`). Only the secret reference goes in the request.\n\nCommon calls:\n- Projects: `GET /organizations/{org_slug}/projects/`\n- List issues: `GET /projects/{org_slug}/{project_slug}/issues/?query=is:unresolved&statsPeriod=14d` (URL-encode `query`)\n- One issue: `GET /issues/{issue_id}/`\n- Latest event: `GET /issues/{issue_id}/events/latest/`\n- Update issue: `PUT /issues/{issue_id}/` body `{status: \"resolved\"|\"ignored\"}` (send via `v/ops/http/post` with `method: \"PUT\"`)\n\nRules:\n- Check `status`; errors are `{detail: \"...\"}`. 401 = bad token; 403 = the token lacks that scope.\n- Trailing slashes matter on Sentry endpoints. Results paginate via the `Link` header `rel=\"next\"`. Self-hosted Sentry uses a different base URL - read it from the user.\n"
+	},
+	"skill": {
+		"tools": [
+			"v/ops/http/get",
+			"v/ops/http/post",
+			"v/ops/jvm/url-encode"
+		]
+	}
+}

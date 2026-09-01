@@ -1,0 +1,15 @@
+{
+	"name": "sendgrid",
+	"description": "Send email and read stats/contacts with a SendGrid API key. Load for sending transactional email and reading delivery data. Sending email is a real, outward action - confirm intent.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## SendGrid\nCalls go through `v/ops/http/get` / `v/ops/http/post` against `https://api.sendgrid.com/v3` with `bearerSecret: \"s/SENDGRID_KEY\"` (an API key from app.sendgrid.com -> Settings -> API Keys; scope to Mail Send / read-only as needed). Only the secret reference goes in the request.\n\nCommon calls:\n- Send email: `POST /mail/send` body `{personalizations: [{to: [{email}]}], from: {email}, subject, content: [{type: \"text/plain\", value}]}` (returns 202, empty body)\n- Verified senders: `GET /verified_senders`\n- Stats: `GET /stats?start_date=YYYY-MM-DD`\n- Suppressions (bounces): `GET /suppression/bounces`\n\nRules:\n- Check `status`; 202 = accepted (not a body). Errors are `{errors: [{message, field}]}`. 401 = bad key; 403 = the `from` address is not a verified sender.\n- Sending email is an outward action with real recipients - confirm the recipient, subject, and body with the user before calling `/mail/send`. Never send to addresses the user did not supply.\n"
+	},
+	"skill": {
+		"tools": [
+			"v/ops/http/get",
+			"v/ops/http/post",
+			"v/ops/jvm/url-encode"
+		]
+	}
+}
