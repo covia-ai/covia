@@ -155,6 +155,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 	/** Everything a cycle holds constant across its frames and inferences;
 	 *  each frame adds its index and fixed base-tool projection. */
 	record Cycle(AMap<AString, ACell> config, AString llmOperation, Map<String, AString> configToolMap,
+			Map<String, AString> configActivityLabels,
 			RequestContext ctx, ContextAssembler.Spec spec, AVector<ACell> typedRootHarnessTools,
 			long toolCallTimeoutMs, AMap<AString, ACell> outerLoads, TaskTools.Tasks tasks,
 			java.util.Set<String> loadExcludedNames,
@@ -343,7 +344,8 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			convex.core.util.Utils.getCurrentTimestamp());
 		rootFrames = rootFrames.assoc(0, observedRoot);
 		spec = spec.withFrames(rootFrames);
-		Cycle cycle = new Cycle(l3Config, getLLMOperation(l3Config), palette.routes(), capsCtx, spec,
+		Cycle cycle = new Cycle(l3Config, getLLMOperation(l3Config), palette.routes(),
+			palette.activityLabels(), capsCtx, spec,
 			typedTools, toolCallTimeoutMs, outerLoads, taskTools,
 			java.util.Set.copyOf(loadExcluded), declared);
 		AVector<ACell> entries = Vectors.empty();
@@ -412,7 +414,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		FrameStore store = new FrameStore.LocalFrameStore(frames.assoc(0, activeFrame));
 		FrameToolContext frameTools = new FrameToolContext(null, store, 0, p.baseTools(), cycle);
 		frameTools.activeFrame = activeFrame;
-		frameTools.iterationToolMap = mergeRoutes(cycle.configToolMap(), p.loads().routes());
+		frameTools.adoptLoadSnapshot(p.loads());
 		ToolCycleEngine.Registry<FrameToolContext> registry = frameTools.registry()
 			.register(TOOL_SUBGOAL, (call, ignored) ->
 				ToolCycleEngine.ToolOutcome.result(Strings.create(STEP_SUBGOAL_NOTE)));
@@ -629,7 +631,8 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// so a stuck sub-job cannot hang this loop. Resolved once and shared
 		// with subgoal recursion.
 		long toolCallTimeoutMs = resolveToolCallTimeoutMs(l3Config);
-		Cycle cycle = new Cycle(l3Config, llmOperation, configToolMap, capsCtx, cycleSpec,
+		Cycle cycle = new Cycle(l3Config, llmOperation, configToolMap,
+			palette.activityLabels(), capsCtx, cycleSpec,
 			typedHarnessTools, toolCallTimeoutMs, outerLoads,
 			new TaskTools.Tasks(engine, capsCtx, tasks, toolCallTimeoutMs, false),
 			java.util.Set.copyOf(loadExcluded), declared);
@@ -749,7 +752,9 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		final java.util.Set<String> loadExcludedNames;
 		final ToolPalette.DeclaredSkillTools declaredSkillTools;
 		final Map<String, AString> configToolMap;
+		final Map<String, AString> configActivityLabels;
 		Map<String, AString> iterationToolMap = Map.of();
+		Map<String, AString> iterationActivityLabels = Map.of();
 		AMap<AString, ACell> activeFrame;
 		String pendingCompactSummary;
 		boolean compacted;
@@ -767,6 +772,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			this.config = cycle.config();
 			this.llmOperation = cycle.llmOperation();
 			this.configToolMap = cycle.configToolMap();
+			this.configActivityLabels = cycle.configActivityLabels();
 			this.ctx = cycle.ctx();
 			this.cycleSpec = cycle.spec();
 			this.toolCallTimeoutMs = cycle.toolCallTimeoutMs();
@@ -775,6 +781,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 
 		ToolCycleEngine.Registry<FrameToolContext> registry() {
 			return new ToolCycleEngine.Registry<FrameToolContext>()
+				.activityLabels((name, ignored) -> activityLabel(name))
 				// The framework's task boundary (TaskTools): a task resolved
 				// here reaches its job at tool time and ends the frame.
 				.register(TaskTools.COMPLETE, (call, ignored) -> cycle.tasks().complete(call, turnText))
@@ -790,6 +797,17 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 				.register(TOOL_SUBGOAL, (call, ignored) -> subgoal(call))
 				.fallback((call, ignored) -> ToolCycleEngine.ToolOutcome.result(
 					dispatchActiveTool(call.name(), call.input())));
+		}
+
+		private String activityLabel(String name) {
+			AString label = iterationActivityLabels.get(name);
+			if (label == null) label = configActivityLabels.get(name);
+			return (label != null) ? label.toString() : name;
+		}
+
+		private void adoptLoadSnapshot(Loads.Snapshot snapshot) {
+			iterationToolMap = mergeRoutes(configToolMap, snapshot.routes());
+			iterationActivityLabels = snapshot.activityLabels();
 		}
 
 		private ACell dispatchActiveTool(String name, ACell input) {
@@ -850,7 +868,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			ACell result = HarnessTools.contextUnload(call.input(), scope);
 			activeFrame = activeFrame.assoc(GoalTreeContext.K_LOADS, scope.loads);
 			Loads.Snapshot after = loadSnapshot(scope.loads);
-			iterationToolMap = mergeRoutes(configToolMap, after.routes());
+			adoptLoadSnapshot(after);
 			return ToolCycleEngine.ToolOutcome.result(result,
 				HarnessTools.toolStateEvent(before, after,
 					manifestDeclaredSkillNames()));
@@ -875,7 +893,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 				scope.loads = appended.loads();
 				activeFrame = activeFrame.assoc(GoalTreeContext.K_LOADS, scope.loads);
 				Loads.Snapshot afterSnapshot = loadSnapshot(scope.loads);
-				iterationToolMap = mergeRoutes(configToolMap, afterSnapshot.routes());
+				adoptLoadSnapshot(afterSnapshot);
 				AVector<ACell> events = (AVector<ACell>) appended.messages().concat(
 					HarnessTools.toolStateEvent(beforeSnapshot, afterSnapshot,
 						manifestDeclaredSkillNames()));
@@ -1231,7 +1249,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			frameTools.cycleSpec.cachePrefix()) == null;
 		Loads.Snapshot loads = Loads.resolveForInference(engine, frameTools.ctx, effectiveLoads,
 			frameTools.loadExcludedNames, frameTools.cycleSpec.labels(), materialiseLive);
-		frameTools.iterationToolMap = mergeRoutes(frameTools.configToolMap, loads.routes());
+		frameTools.adoptLoadSnapshot(loads);
 		long liveTurns = GoalTreeContext.countLiveTurns(frameTools.activeFrame);
 		String notice = (liveTurns > AUTO_COMPACT_THRESHOLD && hasCompactTool(harnessForFrame))
 			? "Your conversation has " + liveTurns

@@ -738,7 +738,7 @@ runtime-owned fields. This is their canonical definition:
 | `skill` | Boolean? | The entry represents a loaded skill rather than an ordinary context value |
 | `tools` | Vector<String>? | Snapshotted operation refs contributed by the entry |
 | `kind` | `"tools"`? | Tool-only projection: the entry contributes no message content |
-| `toolBindings` | Vector<{`operation`: String, `definition`: Map}>? | Materialised operation route and exact provider schema for stable load tools; the single durable source for both rendering and dispatch |
+| `toolBindings` | Vector<{`operation`: String, `definition`: Map, `activityLabel`: String}>? | Materialised route, exact provider schema, and UI-only activity label for stable load tools; the single durable source for rendering, dispatch, and activity events. Legacy bindings without `activityLabel` fall back to the provider tool name |
 | `skills` | Vector<String>? | Snapshotted individual skill sources contributed by a loaded skill |
 | `skillsets` | Vector<String>? | Snapshotted skillset sources contributed by a loaded skill |
 

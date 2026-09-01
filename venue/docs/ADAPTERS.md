@@ -213,6 +213,7 @@ schema validation and agent tool use:
   "operation": {
     "adapter": "example:run",
     "readOnly": false,
+    "activityLabel": "Running example",
     "input": {
       "type": "object",
       "properties": {},
@@ -229,6 +230,11 @@ non-boolean classification. Use `true` only when result-oriented execution is
 safe without a durable job record. Use `false` for mutations, sensitive or
 effectful reads, and operations whose result should remain auditable. Operators
 can still record classified reads with `recordReadOnlyOperations: true`.
+
+`operation.activityLabel` is optional UI text for a running tool call. It is
+never sent in the model provider's tool definition. The runtime falls back to
+the asset's top-level `name`, then to the raw tool name when the metadata omits
+it.
 
 See [OPERATIONS.md](OPERATIONS.md) for defaults, discovery, reference
 resolution, and full metadata rules.

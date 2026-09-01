@@ -486,7 +486,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		long timeoutMs = resolveToolCallTimeoutMs(config);
 		ToolContext toolCtx = new ToolContext(capsCtx.getAgentId(), capsCtx,
 			new TaskTools.Tasks(engine, capsCtx, tasks, timeoutMs, preview), pending,
-			palette.routes(), sessionTier, timeoutMs);
+			palette.routes(), palette.activityLabels(), sessionTier, timeoutMs);
 		toolCtx.outerLoads = configLoads;
 		toolCtx.sourceConfig = sourceConfig;
 		toolCtx.sessionInScope = sessionInScope;
@@ -707,6 +707,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 	 */
 	private ToolCycleEngine.Registry<ToolContext> toolRegistry() {
 		return new ToolCycleEngine.Registry<ToolContext>()
+			.activityLabels((name, toolCtx) -> toolCtx.activityLabel(name))
 			.register(TaskTools.COMPLETE, (call, toolCtx) -> toolCtx.tasks.complete(call, toolCtx.turnText))
 			.register(TaskTools.FAIL, (call, toolCtx) -> toolCtx.tasks.fail(call, toolCtx.turnText))
 			.register(HarnessTools.CONTEXT_LOAD, this::handleContextLoad)
@@ -781,7 +782,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 			engine, toolCtx.ctx, toolCtx.loads, key, toolCtx.labels, eventId);
 		toolCtx.loads = appended.loads();
 		Loads.Snapshot afterSnapshot = loadSnapshot(toolCtx, toolCtx.loads);
-		toolCtx.currentLoadRoutes = afterSnapshot.routes();
+		toolCtx.adoptLoadSnapshot(afterSnapshot);
 		AVector<ACell> events = (AVector<ACell>) appended.messages().concat(
 			HarnessTools.toolStateEvent(beforeSnapshot, afterSnapshot,
 				toolCtx.manifestDeclaredSkillNames()));
@@ -802,7 +803,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		Loads.Snapshot beforeSnapshot = loadSnapshot(toolCtx, before);
 		ACell result = handleContextUnload(call.input(), toolCtx);
 		Loads.Snapshot afterSnapshot = loadSnapshot(toolCtx, toolCtx.loads);
-		toolCtx.currentLoadRoutes = afterSnapshot.routes();
+		toolCtx.adoptLoadSnapshot(afterSnapshot);
 		return ToolCycleEngine.ToolOutcome.result(result,
 			HarnessTools.toolStateEvent(beforeSnapshot, afterSnapshot,
 				toolCtx.manifestDeclaredSkillNames()));
@@ -918,6 +919,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		final TaskTools.Tasks tasks;
 		final AVector<ACell> pending;
 		final Map<String, AString> configToolMap;
+		final Map<String, AString> configActivityLabels;
 		final long toolCallTimeoutMs;
 		/** The innermost writable tier's loads (the session tier, #142). */
 		AMap<AString, ACell> loads;
@@ -950,6 +952,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		ToolPalette.DeclaredSkillTools declaredSkillTools =
 			ToolPalette.DeclaredSkillTools.EMPTY;
 		private Map<String, AString> currentLoadRoutes = Map.of();
+		private Map<String, AString> currentLoadActivityLabels = Map.of();
 
 		/**
 		 * Tools contributed by the effective loads — the generic "a loads
@@ -968,8 +971,13 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 			Loads.Snapshot snapshot = Loads.resolveForInference(engine, ctx,
 				ContextChain.effective(outerLoads, loads), loadExcludedNames, labels,
 				materialiseLive);
-			currentLoadRoutes = snapshot.routes();
+			adoptLoadSnapshot(snapshot);
 			return snapshot;
+		}
+
+		void adoptLoadSnapshot(Loads.Snapshot snapshot) {
+			currentLoadRoutes = snapshot.routes();
+			currentLoadActivityLabels = snapshot.activityLabels();
 		}
 
 		boolean inactiveDeclaredSkill(String name) {
@@ -995,16 +1003,28 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 			return effective;
 		}
 
+		String activityLabel(String name) {
+			AString label = currentLoadActivityLabels.get(name);
+			if (label == null) label = configActivityLabels.get(name);
+			return (label != null) ? label.toString() : name;
+		}
+
 		ToolContext(AString agentId, RequestContext ctx, AVector<ACell> tasks, AVector<ACell> pending,
 				Map<String, AString> configToolMap, AMap<AString, ACell> loads) {
 			// No live task boundary: the tasks resolve in preview, never reaching a job.
 			this(agentId, ctx, new TaskTools.Tasks(null, ctx, tasks, DEFAULT_TOOL_CALL_TIMEOUT_MS, true),
-				pending, configToolMap, loads, DEFAULT_TOOL_CALL_TIMEOUT_MS);
+				pending, configToolMap, Map.of(), loads, DEFAULT_TOOL_CALL_TIMEOUT_MS);
 		}
 
 		ToolContext(AString agentId, RequestContext ctx, TaskTools.Tasks tasks, AVector<ACell> pending,
 				Map<String, AString> configToolMap, AMap<AString, ACell> loads,
 				long toolCallTimeoutMs) {
+			this(agentId, ctx, tasks, pending, configToolMap, Map.of(), loads, toolCallTimeoutMs);
+		}
+
+		ToolContext(AString agentId, RequestContext ctx, TaskTools.Tasks tasks, AVector<ACell> pending,
+				Map<String, AString> configToolMap, Map<String, AString> configActivityLabels,
+				AMap<AString, ACell> loads, long toolCallTimeoutMs) {
 			this.agentId = agentId;
 			this.ctx = ctx;
 			this.tasks = tasks;
@@ -1012,6 +1032,8 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 			// Base routes are fixed; load routes are derived from durable load
 			// bindings and replaced together after each load-state transition.
 			this.configToolMap = (configToolMap != null) ? Map.copyOf(configToolMap) : Map.of();
+			this.configActivityLabels = (configActivityLabels != null)
+				? Map.copyOf(configActivityLabels) : Map.of();
 			this.loads = (loads != null) ? loads : Maps.empty();
 			this.toolCallTimeoutMs = toolCallTimeoutMs;
 		}

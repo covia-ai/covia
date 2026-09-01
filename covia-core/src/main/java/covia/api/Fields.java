@@ -29,6 +29,8 @@ public class Fields {
 	/** Operation may execute through result-oriented/internal paths without a
 	 * durable Job record. Only an explicit true opts in. */
 	public static final StringShort READ_ONLY = Strings.intern("readOnly");
+	/** Optional human-facing label for activity emitted while an operation tool runs. */
+	public static final StringShort ACTIVITY_LABEL = Strings.intern("activityLabel");
 	/** Whether an operation may use internal/result-only execution. An explicit
 	 * false forces a durable Job even when the caller uses run/invokeInternal. */
 	public static final StringShort INTERNAL = Strings.intern("internal");

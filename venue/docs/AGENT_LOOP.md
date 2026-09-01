@@ -227,7 +227,7 @@ timeline entry does not keep.
 | `cycle:start` | A cycle picked its work and is invoking the transition | `op`, `tasks`, `messages`, `pending` (counts), `jobs?` (chat job ids presented) |
 | `inference:start` | A model call is starting on an assembled prompt | `op`, `model?`, `messages`, `tools` (counts), `bytes`, `budget` |
 | `inference:end` | The call returned, or failed | `ms`, `content?`, `toolCalls?: [{id, name}]`, `tokens?`, `model?` — or `ms`, `error` |
-| `tool:start` | A tool call is being dispatched | `id`, `name`, `detail: {input}` |
+| `tool:start` | A tool call is being dispatched | `id`, `name`, `activityLabel` (operation metadata → asset name → raw tool name), `detail: {input}` |
 | `tool:result` | The call finished | `id`, `name`, `ms`, `isError?`, `detail: {result}` |
 | `cycle:end` | The merge committed — timeline entry and session turns are persisted | `ms`, `response?` \| `error?`, `tokens?`, `timeline` (index of the entry), `detail: {turns?}`; a cycle stopped by suspend/delete carries `error` and `cancelled` |
 | `run:end` | The run loop exited | `run`, `status` (the rest state reached), `cycles` |

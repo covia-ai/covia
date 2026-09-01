@@ -132,6 +132,7 @@ final class ToolCycleEngine {
 	static final class Registry<C> {
 		private final Map<String, ToolHandler<C>> handlers = new HashMap<>();
 		private ToolHandler<C> fallback;
+		private java.util.function.BiFunction<String, C, String> activityLabels;
 
 		Registry<C> register(String name, ToolHandler<C> handler) {
 			handlers.put(name, handler);
@@ -141,6 +142,16 @@ final class ToolCycleEngine {
 		Registry<C> fallback(ToolHandler<C> handler) {
 			fallback = handler;
 			return this;
+		}
+
+		Registry<C> activityLabels(java.util.function.BiFunction<String, C, String> resolver) {
+			activityLabels = resolver;
+			return this;
+		}
+
+		String activityLabel(String name, C context) {
+			String label = (activityLabels != null) ? activityLabels.apply(name, context) : null;
+			return (label != null && !label.isBlank()) ? label : name;
 		}
 
 		/** True for a tool the harness handles itself. */
@@ -277,7 +288,8 @@ final class ToolCycleEngine {
 	private static <C> Executed execute(Decoded d, Registry<C> registry, C context,
 			AgentEvents.Cycle tap, int depth, Logger log) {
 		ToolCall call = d.call();
-		if (tap != null) tap.toolStart(call.id(), call.name(), call.input(), depth);
+		if (tap != null) tap.toolStart(call.id(), call.name(),
+			registry.activityLabel(call.name(), context), call.input(), depth);
 		long started = System.nanoTime();
 		ToolOutcome outcome = d.early();
 		if (outcome == null) {

@@ -75,16 +75,18 @@ public final class ToolPalette {
 
 	/**
 	 * Resolved tool definitions with their dispatch routes (tool name → operation
-	 * ref), configured tools that did not resolve ({@code {operation, reason}}),
-	 * and inspection-only provenance in definition order.
+	 * ref), UI-only activity labels, configured tools that did not resolve
+	 * ({@code {operation, reason}}), and inspection-only provenance in definition order.
 	 * {@code routes} is immutable. Dynamic routes are projections of durable
 	 * loads and never mutate this configured palette.
 	 */
 	public record Palette(AVector<ACell> tools, Map<String, AString> routes,
+			Map<String, AString> activityLabels,
 			AVector<ACell> unavailable, AVector<ACell> provenance) {
 		public Palette {
 			tools = (tools != null) ? tools : Vectors.empty();
 			routes = (routes != null) ? Map.copyOf(routes) : Map.of();
+			activityLabels = (activityLabels != null) ? Map.copyOf(activityLabels) : Map.of();
 			unavailable = (unavailable != null) ? unavailable : Vectors.empty();
 			provenance = (provenance != null) ? provenance : Vectors.empty();
 		}
@@ -120,19 +122,22 @@ public final class ToolPalette {
 		AVector<ACell> caps = RT.ensureVector(config != null ? config.get(K_CAPS) : null);
 		RequestContext resolutionCtx = (caps != null) ? ctx.withCaps(caps) : ctx;
 		Map<String, AString> routes = new HashMap<>();
+		Map<String, AString> activityLabels = new HashMap<>();
 
 		AVector<ACell> tools = Vectors.empty();
 		AVector<ACell> entries = Vectors.empty();
 		if (config != null && CVMBool.TRUE.equals(config.get(K_DEFAULT_TOOLS))) {
 			Palette defaults = DEFAULT_TOOL_CACHE.computeIfAbsent(engine, e -> {
 				Map<String, AString> freshRoutes = new HashMap<>();
+				Map<String, AString> freshLabels = new HashMap<>();
 				List<AMap<AString, ACell>> provenance = new java.util.ArrayList<>();
-				AVector<ACell> defs = build(e, ctx, DEFAULT_TOOL_OPS, Set.of(), freshRoutes, null,
+				AVector<ACell> defs = build(e, ctx, DEFAULT_TOOL_OPS, Set.of(), freshRoutes, freshLabels, null,
 					provenance, SOURCE_DEFAULT, null);
-				return new Palette(defs, Map.copyOf(freshRoutes), Vectors.empty(), vector(provenance));
+				return new Palette(defs, freshRoutes, freshLabels, Vectors.empty(), vector(provenance));
 			});
 			tools = defaults.tools();
 			routes.putAll(defaults.routes());
+			activityLabels.putAll(defaults.activityLabels());
 			entries = defaults.provenance();
 		}
 
@@ -141,11 +146,11 @@ public final class ToolPalette {
 		AVector<ACell> configured = RT.ensureVector(config != null ? config.get(K_TOOLS) : null);
 		if (configured != null) {
 			Set<String> skip = (skipNames != null) ? skipNames : Set.of();
-			tools = merge(tools, build(engine, resolutionCtx, configured, skip, routes, unavailable,
+			tools = merge(tools, build(engine, resolutionCtx, configured, skip, routes, activityLabels, unavailable,
 				configuredEntries, SOURCE_CONFIG, null));
 		}
 		entries = mergeEntries(entries, vector(configuredEntries));
-		return new Palette(tools, routes, vector(unavailable), entries);
+		return new Palette(tools, routes, activityLabels, vector(unavailable), entries);
 	}
 
 	/**
@@ -222,18 +227,21 @@ public final class ToolPalette {
 	 */
 	public static AVector<ACell> forOperations(Engine engine, RequestContext ctx,
 			AVector<ACell> operations, Map<String, AString> routes) {
-		return build(engine, ctx, operations, Set.of(), routes, null, null, null, null);
+		return build(engine, ctx, operations, Set.of(), routes, null, null, null, null, null);
 	}
 
 	/**
 	 * Resolves operation refs once into the durable binding shape carried by a
-	 * load: {@code [{operation, definition}]}. The provider projection uses only
-	 * {@code definition}; dispatch uses the co-located {@code operation}.
+	 * load: {@code [{operation, definition, activityLabel}]}. The provider
+	 * projection uses only {@code definition}; dispatch and UI events use the
+	 * co-located operation and label.
 	 */
 	static AVector<ACell> bindingsForOperations(Engine engine, RequestContext ctx,
 			AVector<ACell> operations) {
 		Map<String, AString> routes = new HashMap<>();
-		AVector<ACell> definitions = forOperations(engine, ctx, operations, routes);
+		Map<String, AString> activityLabels = new HashMap<>();
+		AVector<ACell> definitions = build(engine, ctx, operations, Set.of(), routes,
+			activityLabels, null, null, null, null);
 		AVector<ACell> bindings = Vectors.empty();
 		for (long i = 0; i < definitions.count(); i++) {
 			ACell definition = definitions.get(i);
@@ -242,7 +250,8 @@ public final class ToolPalette {
 			if (operation != null) {
 				bindings = bindings.conj(Maps.of(
 					Fields.OPERATION, operation,
-					Fields.DEFINITION, definition));
+					Fields.DEFINITION, definition,
+					Fields.ACTIVITY_LABEL, activityLabels.get(name.toString())));
 			}
 		}
 		return bindings;
@@ -279,14 +288,15 @@ public final class ToolPalette {
 	public static AVector<ACell> loadsToolDefs(Engine engine, RequestContext ctx,
 			AMap<AString, ACell> effectiveLoads, Set<String> excludeNames,
 			Map<String, AString> routes) {
-		return loadsToolDefs(engine, ctx, effectiveLoads, excludeNames, routes, null);
+		return loadsToolDefs(engine, ctx, effectiveLoads, excludeNames, routes, null, null);
 	}
 
 	/** Same resolution as {@link #loadsToolDefs}, retaining provenance for inspection. */
 	@SuppressWarnings("unchecked")
 	static AVector<ACell> loadsToolDefs(Engine engine, RequestContext ctx,
 			AMap<AString, ACell> effectiveLoads, Set<String> excludeNames,
-			Map<String, AString> routes, List<AMap<AString, ACell>> provenance) {
+			Map<String, AString> routes, Map<String, AString> activityLabels,
+			List<AMap<AString, ACell>> provenance) {
 		AVector<ACell> added = Vectors.empty();
 		if (effectiveLoads == null || effectiveLoads.count() == 0) return added;
 		Set<String> names = new HashSet<>();
@@ -311,6 +321,12 @@ public final class ToolPalette {
 				added = added.conj(def);
 				AString route = RT.ensureString(RT.getIn(binding, Fields.OPERATION));
 				if (route != null) routes.put(n.toString(), route);
+				AString activityLabel = nonBlank(
+					RT.ensureString(RT.getIn(binding, Fields.ACTIVITY_LABEL)));
+				if (activityLabels != null) {
+					activityLabels.put(n.toString(),
+						(activityLabel != null) ? activityLabel : n);
+				}
 				if (provenance != null) provenance.add(entry(n,
 					Skills.isSkillEntry(meta) ? SOURCE_SKILL : SOURCE_LOAD,
 					route, entry.getKey()));
@@ -364,6 +380,7 @@ public final class ToolPalette {
 	 */
 	private static AVector<ACell> build(Engine engine, RequestContext ctx,
 			AVector<ACell> entries, Set<String> skipNames, Map<String, AString> routes,
+			Map<String, AString> activityLabels,
 			List<AMap<AString, ACell>> unavailable, List<AMap<AString, ACell>> provenance,
 			AString source, AString ref) {
 		AVector<ACell> result = Vectors.empty();
@@ -410,9 +427,24 @@ public final class ToolPalette {
 			result = result.conj(operationToolDefinition(asset.meta(),
 				Strings.create(toolName), description));
 			routes.put(toolName, operation);
+			if (activityLabels != null) {
+				activityLabels.put(toolName, activityLabel(asset.meta(), toolName));
+			}
 			if (provenance != null) provenance.add(entry(Strings.create(toolName), source, operation, ref));
 		}
 		return result;
+	}
+
+	/** UI-only activity text, deliberately kept outside provider tool definitions. */
+	static AString activityLabel(AMap<AString, ACell> metadata, String toolName) {
+		AString label = nonBlank(RT.ensureString(
+			RT.getIn(metadata, Fields.OPERATION, Fields.ACTIVITY_LABEL)));
+		if (label == null) label = nonBlank(RT.ensureString(metadata.get(Fields.NAME)));
+		return (label != null) ? label : Strings.create(toolName);
+	}
+
+	private static AString nonBlank(AString value) {
+		return value != null && !value.toString().isBlank() ? value : null;
 	}
 
 	private static AMap<AString, ACell> entry(AString name, AString source,

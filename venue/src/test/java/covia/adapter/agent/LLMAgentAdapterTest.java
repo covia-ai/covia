@@ -2365,6 +2365,45 @@ public class LLMAgentAdapterTest {
 		assertEquals("simple", name);
 	}
 
+	@Test
+	public void testActivityLabelResolutionAndProviderProjection() {
+		AMap<AString, ACell> explicit = Maps.of(
+			Fields.NAME, "Asset name",
+			Fields.OPERATION, Maps.of(
+				Fields.ADAPTER, "test:echo",
+				Fields.ACTIVITY_LABEL, "Checking status",
+				Fields.INPUT, Maps.empty()));
+		assertEquals(Strings.create("Checking status"),
+			ToolPalette.activityLabel(explicit, "test_echo"));
+
+		AMap<AString, ACell> named = explicit.assoc(Fields.OPERATION,
+			Maps.of(Fields.ADAPTER, "test:echo", Fields.INPUT, Maps.empty()));
+		assertEquals(Strings.create("Asset name"),
+			ToolPalette.activityLabel(named, "test_echo"));
+		assertEquals(Strings.create("test_echo"), ToolPalette.activityLabel(
+			Maps.of(Fields.OPERATION, Maps.of(Fields.ADAPTER, "test:echo")), "test_echo"));
+
+		AMap<AString, ACell> provider = ToolPalette.operationToolDefinition(
+			explicit, Strings.create("test_echo"), null);
+		assertNull(provider.get(Fields.ACTIVITY_LABEL),
+			"UI metadata must not enter the provider tool schema");
+	}
+
+	@Test
+	public void testConfiguredAndDurableToolBindingsCarryActivityLabels() {
+		RequestContext ctx = RequestContext.of(ALICE_DID);
+		ToolPalette.Palette palette = ToolPalette.resolve(engine, ctx,
+			Maps.of(Fields.TOOLS, Vectors.of("v/test/ops/echo")), java.util.Set.of());
+		assertEquals("Echo Operation", palette.activityLabels().get("test_echo").toString());
+		assertNull(RT.getIn(palette.tools().get(0), Fields.ACTIVITY_LABEL));
+
+		AVector<ACell> bindings = ToolPalette.bindingsForOperations(engine, ctx,
+			Vectors.of(Strings.create("v/test/ops/echo")));
+		assertEquals("Echo Operation",
+			RT.getIn(bindings.get(0), Fields.ACTIVITY_LABEL).toString());
+		assertNull(RT.getIn(bindings.get(0), Fields.DEFINITION, Fields.ACTIVITY_LABEL));
+	}
+
 	// ========== Pure function: buildToolDefinition ==========
 
 	@Test

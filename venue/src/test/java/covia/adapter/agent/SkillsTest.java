@@ -554,11 +554,15 @@ public class SkillsTest {
 			Strings.create("w/skills/x"), Skills.buildSkillLoadMeta(2000, s));
 
 		java.util.Map<String, AString> toolMap = new java.util.HashMap<>();
+		java.util.Map<String, AString> activityLabels = new java.util.HashMap<>();
 		AVector<ACell> defs = ToolPalette.loadsToolDefs(engine, ctx, loads,
-			java.util.Set.of(), toolMap);
+			java.util.Set.of(), toolMap, activityLabels, null);
 		assertEquals(1, defs.count());
 		assertEquals("covia_read", RT.getIn(defs.get(0), Fields.NAME).toString());
 		assertEquals("v/ops/covia/read", toolMap.get("covia_read").toString());
+		assertNotNull(activityLabels.get("covia_read"),
+			"a loaded tool retains its UI label outside the provider definition");
+		assertNull(RT.getIn(defs.get(0), Fields.ACTIVITY_LABEL));
 
 		// Dedup against names already offered outside the loads mechanism
 		AVector<ACell> none = ToolPalette.loadsToolDefs(engine, ctx, loads,

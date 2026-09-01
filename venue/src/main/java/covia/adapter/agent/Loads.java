@@ -109,8 +109,9 @@ public final class Loads {
 	public record Snapshot(AVector<ACell> instructionElements, AVector<ACell> exchanges,
 			AVector<ACell> observations,
 			AVector<ACell> tools, Map<String, AString> routes,
+			Map<String, AString> activityLabels,
 			AVector<ACell> diagnostics, AVector<ACell> toolProvenance) {
-		public static final Snapshot EMPTY = new Snapshot(null, null, null, null, null, null, null);
+		public static final Snapshot EMPTY = new Snapshot(null, null, null, null, null, null, null, null);
 
 		public Snapshot {
 			instructionElements = (instructionElements != null) ? instructionElements : Vectors.empty();
@@ -118,6 +119,7 @@ public final class Loads {
 			observations = (observations != null) ? observations : Vectors.empty();
 			tools = (tools != null) ? tools : Vectors.empty();
 			routes = (routes != null) ? Map.copyOf(routes) : Map.of();
+			activityLabels = (activityLabels != null) ? Map.copyOf(activityLabels) : Map.of();
 			diagnostics = (diagnostics != null) ? diagnostics : Vectors.empty();
 			toolProvenance = (toolProvenance != null) ? toolProvenance : Vectors.empty();
 		}
@@ -299,11 +301,12 @@ public final class Loads {
 			AMap<AString, ACell> effectiveLoads, Set<String> fixedNames) {
 		if (effectiveLoads == null || effectiveLoads.count() == 0) return Snapshot.EMPTY;
 		Map<String, AString> routes = new HashMap<>();
+		Map<String, AString> activityLabels = new HashMap<>();
 		List<AMap<AString, ACell>> toolEntries = new ArrayList<>();
 		AMap<AString, ACell> toolLoads = Skills.resolveLoadTools(engine, ctx, effectiveLoads);
 		AVector<ACell> tools = ToolPalette.loadsToolDefs(
-			engine, ctx, toolLoads, fixedNames, routes, toolEntries);
-		return new Snapshot(null, null, null, tools, routes, null, vector(toolEntries));
+			engine, ctx, toolLoads, fixedNames, routes, activityLabels, toolEntries);
+		return new Snapshot(null, null, null, tools, routes, activityLabels, null, vector(toolEntries));
 	}
 
 	private static Snapshot resolve(Engine engine, RequestContext ctx,
@@ -311,13 +314,14 @@ public final class Loads {
 			boolean materialiseLive) {
 		if (effectiveLoads == null || effectiveLoads.count() == 0) return Snapshot.EMPTY;
 		Map<String, AString> routes = new HashMap<>();
+		Map<String, AString> activityLabels = new HashMap<>();
 		List<AMap<AString, ACell>> toolEntries = new ArrayList<>();
 		AMap<AString, ACell> toolLoads = Skills.resolveLoadTools(engine, ctx, effectiveLoads);
 		AVector<ACell> tools = ToolPalette.loadsToolDefs(
-			engine, ctx, toolLoads, fixedNames, routes, toolEntries);
+			engine, ctx, toolLoads, fixedNames, routes, activityLabels, toolEntries);
 		Resolved resolved = resolveElements(engine, ctx, effectiveLoads, dialect, materialiseLive);
 		return new Snapshot(resolved.instructions(), resolved.exchanges(), resolved.observations(),
-			tools, routes,
+			tools, routes, activityLabels,
 			resolved.diagnostics(), vector(toolEntries));
 	}
 
