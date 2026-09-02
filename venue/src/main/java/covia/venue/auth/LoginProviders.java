@@ -22,6 +22,7 @@ import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.auth.jwt.JWT;
+import convex.core.crypto.Hashing;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
@@ -218,19 +219,8 @@ public class LoginProviders {
 
 			// 4. Issue venue-signed EdDSA JWT
 			long nowSecs = System.currentTimeMillis() / 1000;
-			AMap<AString, ACell> claims = Maps.of(
-				"sub", userDID,
-				"iss", engine.getDIDString(),
-				"aud", engine.getDIDString(),
-				"iat", nowSecs,
-				"exp", nowSecs + engine.getAuth().getTokenExpiry()
-			);
-			if (identity.email != null) {
-				claims = claims.assoc(Fields.EMAIL, Strings.create(identity.email));
-			}
-			if (identity.name != null) {
-				claims = claims.assoc(Fields.NAME, Strings.create(identity.name));
-			}
+			AMap<AString, ACell> claims = venueClaims(engine.getDIDString(), userDID,
+				identity.email, nowSecs, nowSecs + engine.getAuth().getTokenExpiry());
 			AString venueJwt = JWT.signPublic(claims, engine.getKeyPair());
 
 			// 5. Return JWT to client
@@ -255,6 +245,30 @@ public class LoginProviders {
 			log.error("OAuth callback error for {}", providerName, e);
 			ctx.status(500).result("OAuth callback failed: " + e.getMessage());
 		}
+	}
+
+	/**
+	 * Claims for the browser-facing venue credential. Provider profile data stays
+	 * in the venue's user record; only its stable pseudonym crosses the callback
+	 * URL inside the signed (but unencrypted) JWT.
+	 */
+	static AMap<AString, ACell> venueClaims(AString venueDID, AString userDID,
+			String email, long issuedAt, long expiresAt) {
+		AMap<AString, ACell> claims = Maps.of(
+			"sub", userDID,
+			"iss", venueDID,
+			"aud", venueDID,
+			"iat", issuedAt,
+			"exp", expiresAt);
+		if (email != null) claims = claims.assoc(Fields.COVIA_UID, coviaUid(email));
+		return claims;
+	}
+
+	/** Lowercase first 16 hex characters of SHA-256(normalised email). */
+	static AString coviaUid(String email) {
+		byte[] normalised = email.trim().toLowerCase(java.util.Locale.ROOT)
+			.getBytes(StandardCharsets.UTF_8);
+		return Strings.create(Hashing.sha256(normalised).toHexString().substring(0, 16));
 	}
 
 	/**

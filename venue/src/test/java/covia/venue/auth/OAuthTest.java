@@ -23,6 +23,7 @@ import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.auth.jwt.JWT;
+import covia.api.Fields;
 import covia.venue.Auth;
 import covia.venue.Config;
 import covia.venue.Engine;
@@ -175,6 +176,25 @@ public class OAuthTest {
 		assertNotNull(verified, "Venue-signed JWT should verify with venue's public key");
 		assertEquals(userDID, verified.get(Strings.intern("sub")).toString());
 		assertEquals(engine.getDIDString(), verified.get(Strings.intern("aud")));
+	}
+
+	@Test
+	void oauthVenueJwtCarriesOnlyPseudonymousProfileIdentity() {
+		long nowSecs = System.currentTimeMillis() / 1000;
+		AString userDID = Strings.create(engine.getDIDString() + ":u:alice");
+		AMap<AString, ACell> claims = LoginProviders.venueClaims(
+			engine.getDIDString(), userDID, " Alice@Example.COM ", nowSecs, nowSecs + 300);
+
+		assertEquals(Strings.create("ff8d9819fc0e12bf"), claims.get(Fields.COVIA_UID));
+		assertFalse(claims.containsKey(Fields.EMAIL));
+		assertFalse(claims.containsKey(Fields.NAME));
+
+		AString jwt = JWT.signPublic(claims, engine.getKeyPair());
+		AMap<AString, ACell> verified = JWT.verifyPublic(jwt, engine.getAccountKey());
+		assertNotNull(verified);
+		assertEquals(Strings.create("ff8d9819fc0e12bf"), verified.get(Fields.COVIA_UID));
+		assertFalse(verified.containsKey(Fields.EMAIL));
+		assertFalse(verified.containsKey(Fields.NAME));
 	}
 
 	@Test

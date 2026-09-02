@@ -24,6 +24,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Fixed
 
+- OAuth login credentials expose only a stable `covia_uid` pseudonym, never
+  the user's raw email or display name in the callback URL's JWT (#448).
 - Module slim jars on Maven Central carry their real dependencies (no
   dependency-reduced POM for the unattached `-module.jar`).
 - `covia-sql` module jar no longer bundles the venue's BouncyCastle, Netty
