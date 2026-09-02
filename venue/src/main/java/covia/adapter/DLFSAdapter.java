@@ -558,7 +558,9 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 			"Access denied: no " + ability + " capability for " + resource);
 	}
 
-	private ACell dispatch(RequestContext ctx, String subOp, AMap<AString, ACell> input) throws IOException {
+	/** Job-free REST reads (#253) call this directly for listDrives/list,
+	 *  reusing the same capability checks as the operation form. */
+	public ACell dispatch(RequestContext ctx, String subOp, AMap<AString, ACell> input) throws IOException {
 		if (input == null) input = Maps.empty();
 		// content.fileName is a destination shorthand for create. Materialise it
 		// before capability resolution so the authorised resource is the actual
