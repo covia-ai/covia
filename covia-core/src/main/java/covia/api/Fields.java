@@ -173,6 +173,8 @@ public class Fields {
 	// Lattice navigation
 	public static final StringShort PATH = Strings.intern("path");
 	public static final StringShort VALUE = Strings.intern("value");
+	/** DLFS drive name (#253) — distinct from the generic lattice PATH within it. */
+	public static final StringShort DRIVE = Strings.intern("drive");
 
 	// Agent related
 	public static final StringShort AGENT_ID = Strings.intern("agentId");
