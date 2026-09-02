@@ -3,6 +3,7 @@ package covia.adapter;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.concurrent.TimeUnit;
 
@@ -62,44 +63,64 @@ public class AgentRestartTest {
 		AKeyPair keyPair = AKeyPair.generate();
 		RequestContext alice = RequestContext.of(ALICE);
 		String agentId = "survivor";
+		String gateName = "agent-restart-" + System.nanoTime();
+		Job request;
 
-		// Phase 1: a transition held open for longer than the venue lives.
-		Engine first = new Engine(config(), cursor, keyPair).start();
-		Engine.addDemoAssets(first);
-		first.jobs().invokeOperation("v/ops/agent/create", Maps.of(
-			Fields.AGENT_ID, agentId,
-			Fields.CONFIG, Maps.of(
-				Fields.OPERATION, "v/test/ops/taskcomplete",
-				Fields.DELAY, 5000L)), alice).awaitResult(5000);
-		Job request = first.jobs().invokeOperation("v/ops/agent/request",
-			Maps.of(Fields.AGENT_ID, agentId, Fields.INPUT, Maps.of("ask", "outlive the venue")), alice);
-		awaitAgentStatus(first, agentId, AgentState.RUNNING); // the delayed transition is in flight
-		assertFalse(request.isFinished(), "a queued task Job is PENDING/STARTED while the agent holds it");
-		first.syncState();
-		first.close();
-		assertFalse(request.isFinished(), "a queued task is kept, not cancelled, at shutdown");
+		// Phase 1: hold the transition at a deterministic gate. Waiting only for
+		// RUNNING races the executor entering a fixed sleep under full-suite load.
+		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
+			Engine first = new Engine(config(), cursor, keyPair).start();
+			try {
+				Engine.addDemoAssets(first);
+				first.jobs().invokeOperation("v/ops/agent/create", Maps.of(
+					Fields.AGENT_ID, agentId,
+					Fields.CONFIG, Maps.of(
+						Fields.OPERATION, "v/test/ops/taskcomplete",
+						"testGate", gateName)), alice).awaitResult(5000);
+				request = first.jobs().invokeOperation("v/ops/agent/request",
+					Maps.of(Fields.AGENT_ID, agentId,
+						Fields.INPUT, Maps.of("ask", "outlive the venue")), alice);
+				assertTrue(gate.awaitEntered(10, TimeUnit.SECONDS),
+					"the task transition never reached its test gate");
+				awaitAgentStatus(first, agentId, AgentState.RUNNING);
+				assertFalse(request.isFinished(),
+					"a queued task Job is PENDING/STARTED while the agent holds it");
+				first.syncState();
+			} finally {
+				first.close();
+			}
+			assertFalse(request.isFinished(), "a queued task is kept, not cancelled, at shutdown");
+		}
 
 		// Phase 2: boot on the same lattice; recovery keeps the task, the wake completes it.
-		Engine second = new Engine(config(), cursor, keyPair).start();
-		try {
-			Engine.addDemoAssets(second);
-			second.jobs().recoverJobs();
-			AMap<AString, ACell> restored = second.jobs().getJobData(request.getID(), alice);
-			assertFalse(Job.isFinished(restored), "the task Job is restored live, not failed: " + restored.get(Fields.STATUS));
+		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
+			// The persisted config still names the gate; let the recovered cycle
+			// cross it immediately rather than adding timing to phase 2.
+			gate.release();
+			Engine second = new Engine(config(), cursor, keyPair).start();
+			try {
+				Engine.addDemoAssets(second);
+				second.jobs().recoverJobs();
+				AMap<AString, ACell> restored = second.jobs().getJobData(request.getID(), alice);
+				assertFalse(Job.isFinished(restored),
+					"the task Job is restored live, not failed: " + restored.get(Fields.STATUS));
 
-			// Let the transition complete promptly this time, then run the boot wake.
-			second.jobs().invokeOperation("v/ops/agent/update", Maps.of(
-				Fields.AGENT_ID, agentId,
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete", Fields.DELAY, 0L)),
-				alice).awaitResult(5000);
-			((AgentAdapter) second.getAdapter("agent")).wakeAgentsWithWork();
+				// Let the transition complete promptly this time, then run the boot wake.
+				second.jobs().invokeOperation("v/ops/agent/update", Maps.of(
+					Fields.AGENT_ID, agentId,
+					Fields.CONFIG, Maps.of(
+						Fields.OPERATION, "v/test/ops/taskcomplete", Fields.DELAY, 0L)),
+					alice).awaitResult(5000);
+				((AgentAdapter) second.getAdapter("agent")).wakeAgentsWithWork();
 
-			Job live = second.jobs().getJob(request.getID(), alice);
-			assertNotNull(live, "the restored Job is live in the second engine");
-			live.awaitResult(10_000);
-			assertEquals(Status.COMPLETE, live.getStatus(), "the boot wake completed the surviving task");
-		} finally {
-			second.close();
+				Job live = second.jobs().getJob(request.getID(), alice);
+				assertNotNull(live, "the restored Job is live in the second engine");
+				live.awaitResult(10_000);
+				assertEquals(Status.COMPLETE, live.getStatus(),
+					"the boot wake completed the surviving task");
+			} finally {
+				second.close();
+			}
 		}
 	}
 }
