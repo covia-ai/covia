@@ -882,7 +882,8 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 
 		private HarnessTools.LoadScope loadScope() {
 			return new HarnessTools.LoadScope(engine, ctx,
-				GoalTreeContext.getLoads(activeFrame), outerLoads, true, "", Skills.sourcesOf(config));
+				GoalTreeContext.getLoads(activeFrame), outerLoads, true, "",
+				Skills.sourcesOf(config), config);
 		}
 
 		/** {@code more_tools}: create a durable tool-only load. */

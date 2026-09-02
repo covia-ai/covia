@@ -1,6 +1,7 @@
 package covia.adapter.agent;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -14,6 +15,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -25,7 +27,9 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.AssetAdapter;
+import covia.api.Abilities;
 import covia.api.Fields;
+import covia.exception.AuthException;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
@@ -93,10 +97,34 @@ public class SkillsTest {
 			"content", Maps.of("inline", Strings.create("Do not expose"))));
 
 		RequestContext denied = ctx.withCaps(Vectors.empty());
-		assertThrows(covia.exception.AuthException.class, () ->
+		assertThrows(AuthException.class, () ->
 			Skills.load(engine, denied, Skills.SkillSources.ofSkillsets(Vectors.of(Strings.create("w/skills"))),
-				Maps.of("ref", Strings.create("w/skills/private")), Maps.empty()),
+				Maps.of("name", Strings.create("private")), Maps.empty()),
 			"skill_load is a read action even though it is implemented by the harness");
+	}
+
+	@Test
+	public void testDirectSkillLoadNeedsPresenceOrExplicitLoadCapability() {
+		write("w/skills/offered", Maps.of(
+			Fields.DESCRIPTION, Strings.create("Advertised instructions")));
+		write("w/private/arbitrary", Maps.of(
+			Fields.DESCRIPTION, Strings.create("Unadvertised instructions")));
+		Skills.SkillSources sources = Skills.SkillSources.ofSkillsets(
+			Vectors.of(Strings.create("w/skills")));
+
+		assertDoesNotThrow(() -> Skills.load(engine, ctx, sources,
+			Maps.of("ref", Strings.create("w/skills/offered")), Maps.empty()));
+		AuthException denied = assertThrows(AuthException.class, () ->
+			Skills.load(engine, ctx, sources,
+				Maps.of("ref", Strings.create("w/private/arbitrary")), Maps.empty()));
+		assertTrue(denied.getMessage().contains("skill/load"), denied.getMessage());
+
+		RequestContext granted = ctx.withCaps(Vectors.of(
+			(ACell) Capability.create(Strings.create("w/private/arbitrary"), Abilities.SKILL_LOAD),
+			(ACell) Capability.create(Strings.create("w/private/arbitrary"), Capability.CRUD_READ),
+			(ACell) Capability.create(Strings.create("w/private/arbitrary"), Abilities.ASSET_READ)));
+		assertDoesNotThrow(() -> Skills.load(engine, granted, sources,
+			Maps.of("ref", Strings.create("w/private/arbitrary")), Maps.empty()));
 	}
 
 	// ========== resolveRef: the body chain ==========

@@ -26,6 +26,10 @@ public final class Abilities {
 	public static final AString AGENT_MESSAGE = Strings.intern("agent/message");
 	public static final AString AGENT_FORK    = Strings.intern("agent/fork");
 	public static final AString AGENT_WRITE   = Strings.intern("agent/write");
+	/** Trust a skill outside an agent's effective advertised skill surface. */
+	public static final AString SKILL_LOAD    = Strings.intern("skill/load");
+	/** Add an operation outside an agent's already declared tool surface. */
+	public static final AString TOOL_LOAD     = Strings.intern("tool/load");
 	public static final AString USER_CREATE   = Strings.intern("user/create");
 	public static final AString USER_READ     = Strings.intern("user/read");
 	/** Authorise an explicit sudo request into a user's namespace. Scoped to the

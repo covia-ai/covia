@@ -136,6 +136,8 @@ Abilities follow UCAN's slash-delimited convention with no leading slash. `*` is
 | `agent/message` | — | Send message to agent session |
 | `agent/fork` | — | Fork an agent |
 | `agent/write` | — | Update or administer an existing agent |
+| `skill/load` | — | Admit a skill outside an agent's advertised skill surface as trusted instructions |
+| `tool/load` | — | Add an operation outside an agent's declared/advertised tool surface |
 | `asset` | every `asset/*` | All asset operations |
 | `asset/store` | — | Store a new content-addressed asset |
 | `asset/read` | — | Get / list content-addressed assets |
@@ -575,6 +577,8 @@ Venue:
 | `agent:chat` / `agent:step` (cross-user) | `{ with: "<ownerDID>/g/<id>", can: "agent/message" }` |
 | `agent:fork` (cross-user source) | `{ with: "<ownerDID>/g/<id>", can: "agent/fork" }` |
 | `agent:update` / suspend / resume / delete / task-session administration (cross-user) | `{ with: "<ownerDID>/g/<id>", can: "agent/write" }` |
+| `skill_load {ref}` outside the effective advertised index | `{ with: "<skill-ref>", can: "skill/load" }`, explicitly present even for an otherwise unrestricted agent; read authority remains separate |
+| `more_tools` outside config, active loads and effective advertised skills | `{ with: "<operation-ref>", can: "tool/load" }`, explicitly present even for an otherwise unrestricted agent; `invoke` remains separate |
 | `asset:store` | `{ with: "<any>", can: "asset/store" }` |
 | `asset:get` / `asset:list` | `{ with: "<any>", can: "asset/read" }` |
 | Grid operation invoke | `{ with: "/o/<op>", can: "invoke" }` |

@@ -516,6 +516,24 @@ public final class ToolPalette {
 		return new AString[] { operation, nameOverride, descOverride };
 	}
 
+	/** True when the declarative agent config already names this operation.
+	 * This is a source-state check for load authority, not a reconstruction from
+	 * provider definitions or rendered context. */
+	static boolean declaresOperation(AMap<AString, ACell> config, AString operation) {
+		if (config == null || operation == null) return false;
+		if (CVMBool.TRUE.equals(config.get(K_DEFAULT_TOOLS))) {
+			for (long i = 0; i < DEFAULT_TOOL_OPS.count(); i++) {
+				if (operation.equals(DEFAULT_TOOL_OPS.get(i))) return true;
+			}
+		}
+		AVector<ACell> configured = RT.ensureVector(config.get(K_TOOLS));
+		for (long i = 0; configured != null && i < configured.count(); i++) {
+			AString[] parsed = parseConfigToolEntry(configured.get(i));
+			if (parsed != null && operation.equals(parsed[0])) return true;
+		}
+		return false;
+	}
+
 	/** Tool name priority: override → asset toolName → operation with colons/slashes as underscores. */
 	public static String deriveToolName(AString nameOverride, AString assetToolName, AString operation) {
 		if (nameOverride != null) return nameOverride.toString();

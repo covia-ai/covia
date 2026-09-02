@@ -286,7 +286,7 @@ skill_load {
 }
 ```
 
-A `name` that matches nothing fails with a message naming the skills that ARE available, so an agent can correct itself from the error rather than guessing again. Exactly one of `name` / `ref`. `name` is an index lookup across the agent's effective sources (the configured skills and skillsets, plus what loaded skills contribute); `ref` resolves directly — an asset ref, or a path whose value is a single skill in any §4.1 form — and is how an agent loads a skill outside its discovered sources, e.g. one it was just told about. No session/frame in scope → diagnosable error, same rule as `context_load`.
+A `name` that matches nothing fails with a message naming the skills that ARE available, so an agent can correct itself from the error rather than guessing again. Exactly one of `name` / `ref`. `name` is an index lookup across the agent's effective sources (the configured skills and skillsets, plus what loaded skills contribute). A `ref` is accepted when that exact ref is in the effective index or is already loaded. Any other direct ref requires an explicit `skill/load` capability on that resource before Covia resolves it as trusted instructions. The ordinary skill metadata/content read checks still apply; load authority is not read authority. No session/frame in scope → diagnosable error, same rule as `context_load`.
 
 ### 5.2 What loading does
 
@@ -451,12 +451,12 @@ Venue-installed skills ship as classpath resources registered by an adapter via 
 | **Context loads / scope chain** | Skills are loads entries with a `skill` flag — the scope chain, budgets, explicit ownership, and `context_unload` are reused, not duplicated. |
 | **`config.context`** | Pinned baseline knowledge, always loaded. Skills are the on-demand complement, declared with `config.skills` / `config.skillsets`. |
 | **Agent templates** | Same philosophy (config is data), same string-reference idiom. A template declares what an agent *is*; a skill declares what an agent *can pick up*. Templates may ship `config.skills` / `config.skillsets`. |
-| **`more_tools`** | The same shared load lifecycle with a tool-only projection. It persists raw op paths and exact bindings; skills add instructions, context and further discovery sources. |
+| **`more_tools`** | The same shared load lifecycle with a tool-only projection. An operation already declared by config, an active load or an effective advertised skill may be selected; any other ref needs explicit `tool/load`. It persists raw op paths and exact bindings; skills add instructions, context and further discovery sources. |
 | **Toolsets (#79)** | A skill facet with only `tools` + a description *is* a toolset — this design subsumes the #79 sketch. |
 | **Hierarchies** | `skill.skills` contributes more source refs while loaded, applying the same progressive-disclosure mechanism recursively without recursively loading anything. |
 | **MCP bridging (#80)** | Bridged MCP tools are ordinary catalog ops — referenced from `skill.tools`, or made skills themselves via facet composition (§3.4). |
 | **A2A agent cards** | A2A `AgentSkill` entries describe what an *agent* offers outward; these skills describe what an agent can *load* inward. Unrelated surfaces; the A2A card could later advertise loaded skills. |
-| **UCAN / caps** | Skill reads pin `crud/read` / `asset/read`. A skill's tools are still capability-checked at invocation — loading a skill grants no authority. |
+| **UCAN / caps** | Skill reads pin `crud/read` / `asset/read`. An unadvertised direct skill or tool additionally needs explicit `skill/load` / `tool/load`; null (ordinarily unrestricted) caps do not opt into those trust-surface expansions. A loaded tool is still checked separately for `invoke`. |
 
 ---
 
@@ -466,7 +466,7 @@ Venue-installed skills ship as classpath resources registered by an adapter via 
 - **Budget is an advisory rendering/accounting weight**: string bodies render verbatim regardless (the existing `renderValue` contract); the budget bounds structured exploration but never triggers silent eviction.
 - **`agent:context` inspection** uses the same effective scope, load renderer, contributed tools, ordering, and capability context as a live first inference.
 - **Skillsets** read the whole map per turn to build the index — fine at expected scale; revisit with a keys-only listing if venues grow hundreds of skills. Grouping keeps the always-on index small, so a wide library costs an index line only once a family is opened.
-- **Skill loading is an instruction-trust decision**: a resolved skill body enters the prompt verbatim as a system message whether it was pinned or selected with `skill_load`. Trust comes from the operator-supplied skill catalog, never from an agent/caller `trusted` flag. Point sources only at libraries you trust. Context data bundled by the skill remains a tool result, and child reads/tool invocations remain capability-checked as usual.
+- **Skill loading is an instruction-trust decision**: a resolved skill body enters the prompt verbatim as a system message whether it was pinned or selected with `skill_load`. Trust comes from the operator-supplied skill catalog or an explicit `skill/load` grant, never from an agent/caller `trusted` flag. Point sources only at libraries you trust. Context data bundled by the skill remains a tool result, and child reads/tool invocations remain capability-checked as usual.
 
 ---
 

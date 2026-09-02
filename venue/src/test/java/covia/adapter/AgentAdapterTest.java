@@ -1154,7 +1154,10 @@ public class AgentAdapterTest {
 					Fields.CONFIG, Maps.of(
 						Fields.OPERATION, "v/ops/" + runtime + "/chat",
 						"llmOperation", "v/test/ops/moretoolsllm",
-						Fields.TOOLS, Vectors.of(Strings.create("more_tools")))),
+						Fields.TOOLS, Vectors.of(Strings.create("more_tools")),
+						"caps", Vectors.of(
+							(ACell) Capability.create(Strings.create("v/test/ops/echo"), Abilities.TOOL_LOAD),
+							(ACell) Capability.create(Strings.create("v/test/ops"), Strings.create("invoke"))))),
 				RequestContext.of(ALICE_DID)).awaitResult(5000);
 			ACell chat = engine.jobs().invokeOperation("v/ops/agent/chat",
 				Maps.of(Fields.AGENT_ID, agentId, Fields.MESSAGE, "extend yourself"),

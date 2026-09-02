@@ -6,6 +6,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -18,6 +19,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.AAdapter;
 import covia.adapter.TestAdapter;
+import covia.api.Abilities;
 import covia.api.Fields;
 import convex.core.data.Blob;
 import covia.grid.Job;
@@ -183,7 +185,10 @@ public class GoalTreeAdapterTest {
 			AgentState.KEY_STATE, null,
 			AgentState.KEY_CONFIG, Maps.of(
 				Strings.create("llmOperation"), Strings.create("v/test/ops/moretoolsllm"),
-				Strings.create("tools"), Vectors.of(Strings.create("more_tools"))),
+				Strings.create("tools"), Vectors.of(Strings.create("more_tools")),
+				Strings.create("caps"), Vectors.of(
+					(ACell) Capability.create(Strings.create("v/test/ops/echo"), Abilities.TOOL_LOAD),
+					(ACell) Capability.create(Strings.create("v/test/ops"), Strings.create("invoke")))),
 			Fields.MESSAGES, Vectors.of(
 				(ACell) Maps.of(Strings.create("content"), Strings.create("get more tools"))));
 

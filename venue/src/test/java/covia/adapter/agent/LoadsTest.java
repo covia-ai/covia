@@ -14,6 +14,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -28,6 +29,7 @@ import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.adapter.agent.ContextAssembler.Prompt;
 import covia.adapter.agent.ContextAssembler.Spec;
+import covia.api.Abilities;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.venue.Engine;
@@ -511,7 +513,38 @@ public class LoadsTest {
 	// ========== context_load: the same forms from the agent ==========
 
 	private HarnessTools.LoadScope scope() {
-		return new HarnessTools.LoadScope(engine, ctx, Maps.empty(), Maps.empty(), true, "unavailable", null);
+		return new HarnessTools.LoadScope(engine, ctx, Maps.empty(), Maps.empty(), true,
+			"unavailable", null, Maps.empty());
+	}
+
+	@Test
+	public void testMoreToolsNeedsPresenceOrExplicitLoadCapability() {
+		AMap<AString, ACell> declaredConfig = Maps.of(Fields.TOOLS,
+			Vectors.of(Strings.create("v/test/ops/echo")));
+		HarnessTools.LoadScope deniedScope = new HarnessTools.LoadScope(
+			engine, ctx, Maps.empty(), Maps.empty(), true, "unavailable", null,
+			declaredConfig);
+		ACell denied = HarnessTools.moreTools(Maps.of("operations", Vectors.of(
+			(ACell) Strings.create("v/test/ops/echo"),
+			(ACell) Strings.create("v/ops/covia/read"))), deniedScope, name -> false);
+		assertTrue(denied.toString().contains("tool/load"), denied.toString());
+		assertEquals(0, deniedScope.loads.count(), "the whole mixed batch must be denied atomically");
+
+		ACell request = Maps.of("operations",
+			Vectors.of(Strings.create("v/test/ops/echo")));
+		HarnessTools.LoadScope declaredScope = new HarnessTools.LoadScope(
+			engine, ctx, Maps.empty(), Maps.empty(), true, "unavailable", null,
+			declaredConfig);
+		ACell declared = HarnessTools.moreTools(request, declaredScope, name -> false);
+		assertNotNull(RT.getIn(declared, "path"), declared.toString());
+
+		RequestContext loadGranted = ctx.withCaps(Vectors.of(Capability.create(
+			Strings.create("v/test/ops/echo"), Abilities.TOOL_LOAD)));
+		HarnessTools.LoadScope grantedScope = new HarnessTools.LoadScope(
+			engine, loadGranted, Maps.empty(), Maps.empty(), true, "unavailable", null,
+			Maps.empty());
+		ACell granted = HarnessTools.moreTools(request, grantedScope, name -> false);
+		assertNotNull(RT.getIn(granted, "path"), granted.toString());
 	}
 
 	@Test
@@ -606,7 +639,7 @@ public class LoadsTest {
 		AMap<AString, ACell> outer = ContextChain.declaredLoads(Maps.of(
 			Strings.create("pinned"), spec("text", "operator context")), "config.loads");
 		HarnessTools.LoadScope scope = new HarnessTools.LoadScope(
-			engine, ctx, Maps.empty(), outer, true, "unavailable", null);
+			engine, ctx, Maps.empty(), outer, true, "unavailable", null, Maps.empty());
 		AVector<ACell> declaredTools = Vectors.of(
 			(ACell) HarnessTools.DEF_CONTEXT_LOAD,
 			(ACell) HarnessTools.DEF_CONTEXT_UNLOAD);

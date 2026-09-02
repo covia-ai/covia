@@ -862,7 +862,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 	private HarnessTools.LoadScope loadScope(ToolContext toolCtx, String unavailableMessage) {
 		return new HarnessTools.LoadScope(engine, toolCtx.ctx, toolCtx.getLoads(),
 			toolCtx.outerLoads, toolCtx.sessionInScope, unavailableMessage,
-			toolCtx.skillSources);
+			toolCtx.skillSources, toolCtx.sourceConfig);
 	}
 
 	/** @see TaskTools#renderTaskText */

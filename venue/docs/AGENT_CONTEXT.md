@@ -423,6 +423,15 @@ derives both provider visibility and dispatch from that value. `more_tools`
 uses the same ordinary load representation. There is no parallel mutable tool
 state and no scan of rendered messages or schemas to recover a route.
 
+Loading is also an authority boundary, separate from invocation. An exact skill
+in the effective advertised index authorises loading that trusted instruction
+bundle; an operation declared by config, an active load or an effective
+advertised skill authorises adding that definition. Anything else requires an
+explicit resource-scoped `skill/load` or `tool/load` grant. For these two
+opt-ins a null capability scope is not consent. The ordinary read checks still
+apply while resolving metadata, and every eventual operation call independently
+requires `invoke` at its point of action.
+
 In cached mode, if such a load is present while a context is first materialised
 (or explicitly rebuilt), its definitions enter `renderedContext.tools`. An
 agent-managed load's name has route-free ownership metadata in `toolIndex`
