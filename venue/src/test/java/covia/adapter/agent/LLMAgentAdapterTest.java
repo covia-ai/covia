@@ -882,8 +882,8 @@ public class LLMAgentAdapterTest {
 	}
 
 	@Test public void testSkillToolsFollowLoads() {
-		// The generic rule: loads-contributed tools mirror effective loads —
-		// a load activates them, an unload retracts them, mid-transition.
+		// The generic rule for genuinely late tools: a load introduces their
+		// bindings and an unload retracts them, mid-transition.
 		writeAlphaSkill();
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		ToolContext ctx = skillToolCtx();
@@ -1078,8 +1078,11 @@ public class LLMAgentAdapterTest {
 		session = agent.getSession(sid);
 		ACell initialMessages = RT.getIn(session, Fields.FRAMES, CVMLong.ZERO,
 			GoalTreeContext.K_RENDERED_CONTEXT, Strings.intern("messages"));
-		AVector<ACell> initialTools = RT.ensureVector(RT.getIn(session, Fields.FRAMES, CVMLong.ZERO,
-			GoalTreeContext.K_RENDERED_CONTEXT, Fields.TOOLS));
+		ContextAssembler.Rendered initialRendering = ContextAssembler.Rendered.fromCell(
+			RT.getIn(session, Fields.FRAMES, CVMLong.ZERO,
+				GoalTreeContext.K_RENDERED_CONTEXT));
+		assertNotNull(initialRendering);
+		AVector<ACell> initialTools = initialRendering.tools();
 		assertFalse(ToolPalette.names(initialTools).contains("covia_write"));
 		engine.jobs().invokeOperation("v/ops/covia/write", Maps.of(
 			Fields.PATH, "w/skills/beta",

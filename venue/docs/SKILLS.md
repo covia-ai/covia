@@ -78,7 +78,7 @@ The **`skill` facet** carries the loadable extras, mirroring how `operation` car
 
 | Facet field | Type | Description |
 |-------------|------|-------------|
-| `tools` | array | Operation catalog paths (`v/ops/...`, `o/...`) added to the agent's tool palette while the skill is loaded. Same form as `config.tools`. |
+| `tools` | array | Operation catalog paths (`v/ops/...`, `o/...`). Tools of skills in the declared initial catalog are directly callable; tools first revealed by a later load are added then. Same form as `config.tools`. |
 | `skills` | array | Individual skill refs made discoverable while this skill is loaded (a path to one skill, or an asset ref). |
 | `skillsets` | array | Skillset refs — directories of skills — made discoverable while this skill is loaded. |
 | `context` | array | Context entries loaded alongside the body — the standard entry grammar of AGENT_CONTEXT.md §6, unchanged. |
@@ -153,7 +153,7 @@ Facets compose. An asset may carry both `operation` and `skill`:
 }
 ```
 
-When a skill whose asset has an `operation` facet is loaded, **the asset itself joins the tool palette** (in addition to any `skill.tools`) — the skill path is its own op ref. This makes self-documenting tools first-class: an MCP-bridged operation (#80) with usage notes as its content becomes a loadable skill that arrives with its own manual. The body explains; the operation executes; one asset.
+When a skill asset has an `operation` facet, **the asset itself is also a tool** (in addition to any `skill.tools`) — the skill path is its own op ref. It joins the fixed palette when the skill is in the declared initial catalog, or the late palette when a load first reveals it. This makes self-documenting tools first-class: an MCP-bridged operation (#80) with usage notes as its content can arrive with its own manual. The body explains; the operation executes; one asset.
 
 (The converse composition also holds: `skill.tools` may reference any catalog op, including bridged ones.)
 
@@ -257,9 +257,10 @@ One budget-tracked system message snapshotted when the rendered context is initi
 
 ```
 [Skills]
-Named skill packs you can load with skill_load({name: "..."}). Loading injects the
-skill's instructions into your context across turns, adds its tools to your palette,
-and may reveal more skills. A loaded skill's header gives its exact removal key.
+Named skill packs available through the advertised skill-loading control. Loading
+injects the skill's instructions into your context across turns; tool availability
+and invocation authority are independent. Loading may reveal later tools or more
+skills. A loaded skill's header gives its exact removal key.
 - pdf-processing — Extract text and tables from PDF files
 - code-review — Review code against the house style (loaded)
 - broken-skill — INVALID: missing description
@@ -325,11 +326,11 @@ Key = the skill's canonical path (what the index shows). Value:
 - A `volatile: true` entry omits `appended`: its body and bundled context are re-resolved and compared as one canonical provider-visible value. Equality adds no prompt bytes; a change appends the new exact messages while retaining earlier versions as history. Tools and child-source refs remain the load-time snapshots above. The durable observation shape and compaction rules are defined once in [AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §1.1 and §5.5.
 - Because the entry is a plain loads-map entry, everything in the scope chain applies unchanged: explicit ownership, advisory budget accounting, and explicit unloading of agent-managed entries.
 - **Skills dedup by content identity, not path.** A skill's identity is its resolved metadata's value hash — the asset identity Convex already computes and memoises on every cell. Identity is compared when an explicit load/reload resolves the candidate. Loading the same skill from a second address (a directory ref vs the asset hash, mirrored directories) is a no-op naming the existing entry; reloading under the same path appends the newer body and updates its budget.
-- **The agent runtimes carry no skill semantics.** The shared palette resolver declares the initial catalog's tool superset, while rendering dispatches on the entry inside the loads phase (`Loads`). Tool contribution remains the generic rule *"a loads entry may declare `tools`, `skills` and `skillsets`"*: loading activates routes, unloading retracts them, and only definitions outside the initial superset append tool-state events. A plain session load — a note pinned at mint with `{text, tools, skillsets}` — widens a session's palette and discovery exactly as a loaded skill does. Skills are the first producer of such entries; future additions (memory packs, op bundles) ride the same mechanism. The runtimes' only skill surface is the `skill_load` handler, which delegates resolution to the skills subsystem.
+- **The agent runtimes carry no skill semantics.** The shared palette resolver declares and binds the initial catalog's tool superset, while rendering dispatches on the entry inside the loads phase (`Loads`). Tool contribution remains the generic rule *"a loads entry may declare `tools`, `skills` and `skillsets`"*: a genuinely new definition and route append when its load first appears, and retract when that load is removed. A fixed initial binding remains callable regardless of whether its skill instructions are loaded. A plain session load — a note pinned at mint with `{text, tools, skillsets}` — widens a session's palette and discovery exactly as a loaded skill does. Skills are the first producer of such entries; future additions (memory packs, op bundles) ride the same mechanism. The runtimes' only skill surface is the `skill_load` handler, which delegates resolution to the skills subsystem.
 
 ### 5.4 Unloading
 
-`context_unload {path: "w/skills/pdf-processing"}` — the existing tool, using the exact key shown in the loaded-skill header. Removing an agent-loaded entry deactivates its tools and contributed discovery sources from the next inference. Its earlier body and context remain honest stale history until explicit compaction/reset; the unload result is the newer state event. Already-loaded children remain independent. A pinned skill has no unload key and is rejected. There is deliberately no `skill_unload`: one unload idiom, no near-duplicate tools to confuse a model.
+`context_unload {path: "w/skills/pdf-processing"}` — the existing tool, using the exact key shown in the loaded-skill header. Removing an agent-loaded entry retracts tool bindings introduced by that load and its contributed discovery sources from the next inference; bindings in the fixed initial catalog remain callable. Its earlier body and context remain honest stale history until explicit compaction/reset; the unload result is the newer state event. Already-loaded children remain independent. A pinned skill has no unload key and is rejected. There is deliberately no `skill_unload`: one unload idiom, no near-duplicate tools to confuse a model.
 
 ---
 
@@ -340,7 +341,7 @@ When a skill is loaded or explicitly reloaded:
 1. Resolve the skill from its path.
 2. Append one system message followed by the body **verbatim**: `[Loaded skill: <name> — unload key: <path>]` for an agent-loaded skill, or `[Pinned skill: <name> — <source>]` for operator/caller-owned context. A contentless toolset shows its description one-liner instead.
 3. Resolve `skill.context` through the standard loader and aggregate its data under the same ownership class. For an agent-loaded skill, `loaded_context[<path>]` contains one entry or a vector of entries, so the body and all contributed data share one exact unload key. The skill body is instruction; the context it brings along is data.
-4. Contribute the skill's tools to the palette (deduplicated against existing tool names).
+4. Materialise exact bindings for genuinely new tools (deduplicated against the fixed palette and earlier loads).
 5. Contribute its immediate `skill.skills` refs to the next skills index and named lookup scope.
 
 A skill that fails to resolve appends a visible ownership-specific label with `unavailable: <reason>`. Advisory aggregate budget pressure never makes a persistent skill silently disappear. Later inferences reuse the appended cells; only an explicit reload resolves a normal skill again. A `volatile` skill follows the watched observation rule linked in §5.3.
@@ -353,7 +354,7 @@ A skill that fails to resolve appends a visible ownership-specific label with `u
 |---|---|---|
 | Loads tier written | session (`sessions.<sid>.loads`) | active frame (`frame.loads`) |
 | Persistence | across turns for the session, via the existing loads write-back | frame lifetime; **inherited copy-on-push by subgoals** |
-| Tool activation | same transition — from the next tool-loop iteration | same transition — from the next iteration |
+| Late tool visibility | same transition — from the next tool-loop iteration | same transition — from the next iteration |
 | Tool offered when | any skill source declared (automatic) | any skill source declared (automatic), or bare `"skill_load"` in `config.tools` (registry opt-in) |
 | Unload scope | session, agent-managed entries only | frame, agent-managed entries only — removing an inherited copy leaves the parent's copy untouched |
 

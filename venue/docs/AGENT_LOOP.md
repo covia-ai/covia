@@ -537,8 +537,9 @@ Any venue operation can be a tool. Common categories:
 | **Assets** | `v/ops/asset/store`, `get`, `list`, `pin`, `content` |
 | **Schema** | `v/ops/schema/validate`, `infer` |
 
-Each tool's description includes its operation path (e.g. `Operation: v/ops/covia/read`)
-so the LLM can reason about provenance and discover related operations.
+Provider descriptions are the operation asset descriptions unchanged. Catalog
+paths and source provenance remain available through agent-context inspection;
+they are not repeated in every provider-facing tool schema.
 
 #### Capability enforcement
 

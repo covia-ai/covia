@@ -712,8 +712,10 @@ public class GoalTreeAdapterTest {
 			"request schema must not become a prefix invalidation input");
 		assertNull(RT.getIn(root,
 			GoalTreeContext.K_RENDERED_CONTEXT, "sourceConfig", "responseFormat"));
-		AVector<ACell> tools = RT.ensureVector(RT.getIn(root,
-			GoalTreeContext.K_RENDERED_CONTEXT, "tools"));
+		ContextAssembler.Rendered rendered = ContextAssembler.Rendered.fromCell(
+			RT.getIn(root, GoalTreeContext.K_RENDERED_CONTEXT));
+		assertNotNull(rendered);
+		AVector<ACell> tools = rendered.tools();
 		assertTrue(hasNamedTool(tools, TaskTools.COMPLETE));
 		assertFalse(hasNamedTool(tools, "complete"),
 			"request schema must not specialise the persistent root palette");

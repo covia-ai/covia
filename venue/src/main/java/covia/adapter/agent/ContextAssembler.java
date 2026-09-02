@@ -80,9 +80,9 @@ public final class ContextAssembler {
 	/** Preamble of the skills index — what the block is and how to act on it (SKILLS.md §4.2). */
 	static final String SKILLS_PREAMBLE =
 		"Named skill packs available through the advertised skill-loading control. Loading injects\n"
-		+ "the skill's instructions into your context across turns and adds its operations to your\n"
-		+ "palette; it may also reveal more skills. A loaded skill's header gives its exact removal\n"
-		+ "key if you later need it; routine cleanup is unnecessary.\n";
+		+ "the skill's instructions into your context across turns; tool availability and invocation\n"
+		+ "authority are independent. Loading may reveal later tools or more skills. A loaded skill's\n"
+		+ "header gives its exact removal key if you later need it; routine cleanup is unnecessary.\n";
 
 	static final String EMPTY_STATE_SIGNAL =
 		"No pending tasks, messages, or job results. You may act proactively based on your role, or report idle.";
@@ -98,12 +98,12 @@ public final class ContextAssembler {
 	 */
 	public enum Band { HEAD, LIVE, CONVERSATION, TOOL_LOOP }
 
-	private static final AString K_RENDERED_TOOLS    = Strings.intern("tools");
 	private static final AString K_RENDERED_MESSAGES = Strings.intern("messages");
 	private static final AString K_RENDERED_HEAD     = Strings.intern("head");
 	private static final AString K_RENDERED_LIVE     = Strings.intern("live");
 	private static final AString K_RENDERED_LABELS   = Strings.intern("labels");
 	private static final AString K_RENDERED_CONFIG   = Strings.intern("sourceConfig");
+	private static final AString K_RENDERED_BINDINGS = Strings.intern("toolBindings");
 
 	/** Canonical watched-context candidate fields. The active frame persists
 	 * the same value under {@code observations}; see {@link GoalTreeContext}. */
@@ -121,18 +121,28 @@ public final class ContextAssembler {
 	 * the next inference. Ambient values resolved while producing the vectors
 	 * are deliberately not invalidation inputs.
 	 */
-	public record Rendered(AVector<ACell> tools, AVector<ACell> messages,
+	public record Rendered(AVector<ACell> toolBindings, AVector<ACell> messages,
 			int headEnd, int liveEnd, AString labels,
 			AMap<AString, ACell> sourceConfig) {
 		public Rendered {
-			tools = (tools != null) ? tools : Vectors.empty();
+			toolBindings = (toolBindings != null) ? toolBindings : Vectors.empty();
 			messages = (messages != null) ? messages : Vectors.empty();
 			sourceConfig = normaliseConfig(sourceConfig);
 		}
 
+		public AVector<ACell> tools() {
+			return new ToolPalette.Bindings(toolBindings).tools();
+		}
+
+		Rendered withToolBindings(ToolPalette.Bindings bindings) {
+			return new Rendered(
+				(bindings != null) ? bindings.cells() : Vectors.empty(),
+				messages, headEnd, liveEnd, labels, sourceConfig);
+		}
+
 		ACell toCell() {
 			AMap<AString, ACell> value = Maps.of(
-				K_RENDERED_TOOLS, tools,
+				K_RENDERED_BINDINGS, toolBindings,
 				K_RENDERED_MESSAGES, messages,
 				K_RENDERED_HEAD, CVMLong.create(headEnd),
 				K_RENDERED_LIVE, CVMLong.create(liveEnd),
@@ -144,16 +154,17 @@ public final class ContextAssembler {
 		@SuppressWarnings("unchecked")
 		static Rendered fromCell(ACell value) {
 			if (!(value instanceof AMap<?, ?> map)) return null;
-			ACell tools = map.get(K_RENDERED_TOOLS);
+			ACell toolBindings = map.get(K_RENDERED_BINDINGS);
 			ACell messages = map.get(K_RENDERED_MESSAGES);
 			ACell sourceConfig = map.get(K_RENDERED_CONFIG);
-			// An older materialisation has no config provenance. Treat it as absent
-			// so the next inference upgrades it once instead of guessing validity.
-			if (!(tools instanceof AVector<?>) || !(messages instanceof AVector<?>)
+			// An older materialisation lacks either the config stamp or fixed
+			// dispatch bindings. Treat it as absent so the next cached inference
+			// upgrades it once rather than re-resolving ambient operation metadata.
+			if (!(toolBindings instanceof AVector<?>) || !(messages instanceof AVector<?>)
 					|| !(sourceConfig instanceof AMap<?, ?>)) return null;
 			long head = (map.get(K_RENDERED_HEAD) instanceof CVMLong n) ? n.longValue() : 0;
 			long live = (map.get(K_RENDERED_LIVE) instanceof CVMLong n) ? n.longValue() : head;
-			return new Rendered((AVector<ACell>) tools, (AVector<ACell>) messages,
+			return new Rendered((AVector<ACell>) toolBindings, (AVector<ACell>) messages,
 				Math.toIntExact(head), Math.toIntExact(live),
 				RT.ensureString(map.get(K_RENDERED_LABELS)),
 				(AMap<AString, ACell>) sourceConfig);
@@ -544,7 +555,7 @@ public final class ContextAssembler {
 			p.add(exchanges);
 		}
 		p.mark(Band.LIVE);
-		return new Rendered(p.tools(), p.messages(),
+		return new Rendered(ToolPalette.Bindings.definitions(p.tools()).cells(), p.messages(),
 			p.marks().getOrDefault(Band.HEAD, 0),
 			p.marks().getOrDefault(Band.LIVE, 0), spec.labels(),
 			spec.sourceConfig());

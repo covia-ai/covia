@@ -942,7 +942,10 @@ public class AgentAdapterTest {
 		String context = engine.jobs().invokeOperation("v/ops/agent/context",
 			Maps.of(Fields.AGENT_ID, "metadata-reader"), RequestContext.of(ALICE_DID))
 			.awaitResult(5000).toString();
-		assertTrue(context.contains("Operation: " + toolPath), context);
+		assertTrue(context.contains(toolPath),
+			"the inspection-only palette retains the operation route: " + context);
+		assertFalse(context.contains("Operation: " + toolPath),
+			"the provider description must not repeat inspection provenance: " + context);
 		assertFalse(context.contains("Configured tools unavailable"), context);
 	}
 

@@ -596,7 +596,7 @@ public class ContextAssemblerTest {
 		String all = allContent(ContextAssembler.assemble(
 			spec(null).withLoads(Loads.Snapshot.EMPTY, Vectors.empty(), loads)));
 		assertTrue(all.contains("- reviewer — Review a result"), all);
-		assertTrue(all.contains("may also reveal more skills"), all);
+		assertTrue(all.contains("may reveal later tools or more skills"), all);
 		assertFalse(all.contains("- root-skill —"),
 			"a direct-ref bootstrap need not make itself a configured source");
 	}
@@ -1035,7 +1035,7 @@ public class ContextAssemblerTest {
 		Spec s = new Spec(engine, ctx, null, null, null, null, 0, null,
 			tools, null, null, null, null, null, true, null, null, null, null, null);
 		Prompt with = ContextAssembler.assemble(s);
-		assertSame(tools, with.tools());
+		assertEquals(tools, with.tools());
 		assertTrue(with.used() > ContextAssembler.assemble(spec(null)).used());
 		assertTrue(with.toL3Input(null).get(Strings.intern("tools")) != null);
 	}
@@ -1106,6 +1106,10 @@ public class ContextAssemblerTest {
 		ContextAssembler.Rendered rendered = ContextAssembler.initialise(original);
 		assertEquals(oldConfig, rendered.sourceConfig());
 		assertEquals(rendered, ContextAssembler.Rendered.fromCell(rendered.toCell()));
+		assertEquals(1, rendered.toolBindings().count());
+		assertNull(ContextAssembler.Rendered.fromCell(
+			RT.ensureMap(rendered.toCell()).dissoc(Strings.intern("toolBindings"))),
+			"a legacy cache without fixed bindings must be rebuilt once");
 		assertNull(RT.getIn(rendered.toCell(), "skillCatalog"),
 			"the skills index already lives in messages and has no sidecar");
 
@@ -1131,7 +1135,8 @@ public class ContextAssemblerTest {
 		AMap<AString, ACell> config = Maps.of(Strings.intern("defaultTools"), CVMBool.TRUE);
 		ToolPalette.Palette p1 = ToolPalette.resolve(engine, ctx, config, java.util.Set.of());
 		ToolPalette.Palette p2 = ToolPalette.resolve(engine, ctx, config, java.util.Set.of());
-		assertSame(p1.tools(), p2.tools(), "the default pack is one cached instance per Engine");
+		assertSame(p1.bindings(), p2.bindings(), "the default pack is one cached instance per Engine");
+		assertEquals(p1.tools(), p2.tools());
 		assertNotSame(p1.routes(), p2.routes(), "routes are a per-palette copy");
 		assertEquals(p1.routes().keySet(), p2.routes().keySet());
 		assertEquals(java.util.Set.of("covia_read", "covia_list"), p1.routes().keySet(),
@@ -1139,7 +1144,7 @@ public class ContextAssemblerTest {
 	}
 
 	@Test
-	public void testToolDescriptionCarriesTheCatalogPath() {
+	public void testToolDescriptionOmitsTheCatalogPath() {
 		ToolPalette.Palette p = ToolPalette.resolve(engine, ctx,
 			Maps.of(Strings.intern("defaultTools"), CVMBool.TRUE), java.util.Set.of());
 		boolean found = false;
@@ -1148,8 +1153,8 @@ public class ContextAssemblerTest {
 			if (!"covia_read".equals(RT.ensureString(tool.get(Strings.intern("name"))).toString())) continue;
 			found = true;
 			String desc = RT.ensureString(tool.get(Strings.intern("description"))).toString();
-			assertTrue(desc.startsWith("Operation: v/ops/covia/read"), desc);
-			assertTrue(desc.contains("Read a value"), "the original description body follows");
+			assertFalse(desc.contains("v/ops/covia/read"), desc);
+			assertTrue(desc.startsWith("Read a value"), "the asset description is unchanged");
 		}
 		assertTrue(found);
 	}
@@ -1175,6 +1180,34 @@ public class ContextAssemblerTest {
 		assertEquals("default", RT.getIn(p.provenance().get(1), Fields.SOURCE).toString());
 		assertEquals("config", RT.getIn(p.provenance().get(2), Fields.SOURCE).toString());
 		assertEquals("v/ops/covia/write", RT.getIn(p.provenance().get(2), Fields.OPERATION).toString());
+		ToolPalette.Bindings bindings = p.bindings();
+		assertEquals(p.routes(), bindings.routes());
+		assertEquals(p.provenance(), bindings.provenance());
+		for (long i = 0; i < bindings.cells().count(); i++) {
+			ACell binding = bindings.cells().get(i);
+			if ("covia_write".equals(String.valueOf(
+					RT.getIn(binding, Fields.DEFINITION, Fields.NAME)))) {
+				assertNull(RT.getIn(binding, Fields.SOURCE),
+					"config is the binding source default and is not stored");
+			}
+		}
+	}
+
+	@Test
+	public void testDefaultBindingFieldsAreOmitted() {
+		String path = "w/same-label-tool";
+		write(path, Maps.of(
+			Fields.NAME, "same_label",
+			Fields.OPERATION, Maps.of(
+				Fields.ADAPTER, "test:echo",
+				Fields.TOOL_NAME, "same_label")));
+		ToolPalette.Palette palette = ToolPalette.resolve(engine, ctx,
+			Maps.of(Fields.TOOLS, Vectors.of((ACell) Strings.create(path))), java.util.Set.of());
+		ACell binding = palette.bindings().cells().get(0);
+		assertNull(RT.getIn(binding, Fields.SOURCE),
+			"config is the source default");
+		assertNull(RT.getIn(binding, Fields.ACTIVITY_LABEL),
+			"the provider name is the activity-label default");
 	}
 
 	@Test

@@ -187,22 +187,15 @@ final class HarnessTools {
 
 	/** Minimal changed definitions/removals between two active-load snapshots. */
 	static AVector<ACell> toolStateEvent(Loads.Snapshot before, Loads.Snapshot after) {
-		return toolStateEvent(before, after, Set.of());
-	}
-
-	/** Tool-state delta excluding definitions already present in the immutable
-	 * provider manifest. Their skill body announces activation; repeating full
-	 * schemas as text would waste context and contradict native declarations. */
-	static AVector<ACell> toolStateEvent(Loads.Snapshot before, Loads.Snapshot after,
-			Set<String> alreadyDeclared) {
 		Map<String, ACell> oldDefs = definitionsByName(before != null ? before.tools() : null);
 		Map<String, ACell> newDefs = definitionsByName(after != null ? after.tools() : null);
 		AVector<ACell> additions = Vectors.empty();
 		for (long i = 0; after != null && i < after.tools().count(); i++) {
 			ACell def = after.tools().get(i);
 			AString name = RT.ensureString(RT.getIn(def, AbstractLLMAdapter.K_NAME));
-			if (name != null && !alreadyDeclared.contains(name.toString())
-					&& !def.equals(oldDefs.get(name.toString()))) additions = additions.conj(def);
+			if (name != null && !def.equals(oldDefs.get(name.toString()))) {
+				additions = additions.conj(def);
+			}
 		}
 		AVector<ACell> removals = Vectors.empty();
 		for (long i = 0; before != null && i < before.tools().count(); i++) {

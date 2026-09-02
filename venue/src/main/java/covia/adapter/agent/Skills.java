@@ -1549,7 +1549,7 @@ public final class Skills {
 	 * Executes the {@code skill_load} semantics: resolve the skill (by
 	 * {@code name} across the agent's sources, or by direct {@code ref}),
 	 * build its loads entry, and assemble the tool result — including the
-	 * body for immediate same-turn use, the activated tool names, the skills a
+	 * body for immediate same-turn use, the declared tool names, the skills a
 	 * contributing load newly revealed (plus the refreshed index), and any
 	 * declared-but-unresolvable tools. Throws with a diagnosable message on
 	 * any failure (the handler renders it as an {@code Error:} tool result).
@@ -1595,7 +1595,7 @@ public final class Skills {
 		}
 		if (volatileCell != null) entryMeta = entryMeta.assoc(Loads.K_VOLATILE, volatileCell);
 
-		// Resolve the declared operation refs for an honest result (activated
+		// Resolve the declared operation refs for an honest result (available
 		// names + unresolvable refs). The refs are snapshotted on the load entry;
 		// the active palette resolves those refs by the generic loads rule.
 		AVector<ACell> toolNames = Vectors.empty();
@@ -1627,8 +1627,9 @@ public final class Skills {
 					? "Skill instructions are watched and append to context when their rendered value changes. "
 					: "Skill instructions were appended to context. ")
 				+ "Its path is the exact unload key if you "
-				+ "later need to remove it; ordinary tool results need no cleanup. Tools and contributed "
-				+ "skills are active from your next step."));
+				+ "later need to remove it; ordinary tool results need no cleanup. Already advertised "
+				+ "tools remain callable; genuinely new tools and contributed skills are available from "
+				+ "your next step. Loading grants no authority."));
 		if (toolNames.count() > 0) result = result.assoc(Fields.TOOLS, toolNames);
 		if (skill.contributesSources()) {
 			if (skill.skills().count() > 0) result = result.assoc(K_SKILLS, skill.skills());

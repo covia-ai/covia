@@ -165,7 +165,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		AVector<ACell> tasks = (in.task() != null)
 			? Vectors.of((ACell) Maps.of(Fields.JOB_ID, TaskTools.PREVIEW_JOB_ID, Fields.INPUT, in.task()))
 			: null;
-		ToolContext toolCtx = toolContext(config, sourceConfig, capsCtx, tasks, in.pending(), palette,
+		ToolContext toolCtx = toolContext(config, sourceConfig, capsCtx, tasks, in.pending(),
 			configLoads, sessionTier, in.session() != null, fixed, true);
 		toolCtx.labels = profile.labels();
 		toolCtx.cachePrefix = cachePrefix;
@@ -209,8 +209,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		if (profile.toolCalling()) {
 			entries = (AVector<ACell>) ToolPalette.provenance(TaskTools.DEFINITIONS, "harness")
 				.concat(ToolPalette.provenance(harness, "harness"))
-				.concat(palette.provenance())
-				.concat(fixed.declared().provenance())
+				.concat(fixed.bindings().provenance())
 				.concat(loads.toolProvenance());
 		}
 		ContextAssembler.Diagnostics diagnostics = new ContextAssembler.Diagnostics(
@@ -387,7 +386,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 			sessionFrames, cachePrefix);
 		AVector<ACell> fixedTools = fixed.tools();
 
-		ToolContext toolCtx = toolContext(config, recordConfig, capsCtx, tasks, pending, palette,
+		ToolContext toolCtx = toolContext(config, recordConfig, capsCtx, tasks, pending,
 			configLoads, sessionTier, sessionInScope, fixed, false);
 		toolCtx.labels = profile.labels();
 		toolCtx.cachePrefix = cachePrefix;
@@ -480,30 +479,29 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 	 */
 	private ToolContext toolContext(AMap<AString, ACell> config,
 			AMap<AString, ACell> sourceConfig, RequestContext capsCtx,
-			AVector<ACell> tasks, AVector<ACell> pending, ToolPalette.Palette palette,
+			AVector<ACell> tasks, AVector<ACell> pending,
 			AMap<AString, ACell> configLoads, AMap<AString, ACell> sessionTier,
 			boolean sessionInScope, FixedPalette fixed, boolean preview) {
 		long timeoutMs = resolveToolCallTimeoutMs(config);
 		ToolContext toolCtx = new ToolContext(capsCtx.getAgentId(), capsCtx,
 			new TaskTools.Tasks(engine, capsCtx, tasks, timeoutMs, preview), pending,
-			palette.routes(), palette.activityLabels(), sessionTier, timeoutMs);
+			fixed.bindings().routes(), fixed.bindings().activityLabels(), sessionTier, timeoutMs);
 		toolCtx.outerLoads = configLoads;
 		toolCtx.sourceConfig = sourceConfig;
 		toolCtx.sessionInScope = sessionInScope;
 		toolCtx.skillSources = Skills.sourcesOf(config);
 		toolCtx.fixedToolNames = fixedToolNames(fixed.tools());
 		toolCtx.loadExcludedNames = fixed.loadExcludedNames();
-		toolCtx.declaredSkillTools = fixed.declared();
+		toolCtx.fixedBindings = fixed.bindings();
 		return toolCtx;
 	}
 
 	private record FixedPalette(AVector<ACell> tools, AVector<ACell> harness,
 			java.util.Set<String> loadExcludedNames,
-			ToolPalette.DeclaredSkillTools declared) {}
+			ToolPalette.Bindings bindings) {}
 
 	/** The immutable tools for a session: task controls, declared harness tools,
-	 * configured operations, then schemas from the initial skills catalog.
-	 * Skill schemas are declared now but dispatch remains load-gated. */
+	 * configured operations, then schemas from the initial skills catalog. */
 	@SuppressWarnings("unchecked")
 	private FixedPalette fixedPalette(AMap<AString, ACell> config, RequestContext catalogCtx,
 			RequestContext capsCtx, ToolPalette.Palette palette, AVector<ACell> frames,
@@ -512,20 +510,22 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		ContextAssembler.Rendered rendered = ContextAssembler.rendered(
 			frames, config, cachePrefix);
 		if (rendered != null) {
-			ToolPalette.DeclaredSkillTools declared =
-				ToolPalette.declaredSkillTools(rendered.tools());
-			java.util.Set<String> loadExcluded = fixedToolNames(rendered.tools());
-			loadExcluded.removeAll(declared.names());
-			return new FixedPalette(rendered.tools(), harness,
-				java.util.Set.copyOf(loadExcluded), declared);
+			ToolPalette.Bindings bindings =
+				new ToolPalette.Bindings(rendered.toolBindings()).operations();
+			AVector<ACell> tools = (AVector<ACell>) TaskTools.DEFINITIONS
+				.concat(harness).concat(bindings.tools());
+			return new FixedPalette(tools, harness,
+				java.util.Set.copyOf(fixedToolNames(tools)), bindings);
 		}
 		AVector<ACell> base = (AVector<ACell>) TaskTools.DEFINITIONS
 			.concat(harness).concat(palette.tools());
 		java.util.Set<String> loadExcluded = fixedToolNames(base);
 		ToolPalette.DeclaredSkillTools declared = ToolPalette.declaredSkillTools(
 			engine, catalogCtx, capsCtx, Skills.sourcesOf(config), loadExcluded);
-		return new FixedPalette(ToolPalette.merge(base, declared.tools()), harness,
-			java.util.Set.copyOf(loadExcluded), declared);
+		AVector<ACell> tools = ToolPalette.merge(base, declared.tools());
+		return new FixedPalette(tools, harness,
+			java.util.Set.copyOf(fixedToolNames(tools)),
+			palette.bindings().merge(declared.bindings()));
 	}
 
 	/**
@@ -656,7 +656,8 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		if (toolCtx.frames.isEmpty()) return spec;
 		if (!ContextAssembler.renderingUpdateRequired(spec)) return spec;
 		ContextAssembler.Rendered candidate = spec.cachePrefix()
-			? ContextAssembler.initialise(spec) : null;
+			? ContextAssembler.initialise(spec).withToolBindings(
+				toolCtx.fixedBindings.forManifest(spec.tools())) : null;
 		if (!toolCtx.store.update(frames -> {
 			if (frames.isEmpty()) return frames;
 			AMap<AString, ACell> root = (AMap<AString, ACell>) frames.get(0);
@@ -721,9 +722,6 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 	}
 
 	private ACell dispatchActiveTool(String name, ACell input, ToolContext toolCtx) {
-		if (toolCtx.inactiveDeclaredSkill(name)) return Strings.create(
-			"Error: tool '" + name + "' requires loading a skill that provides it"
-			+ " from [Skills] first.");
 		return dispatchTool(name, input, toolCtx.dispatchRoutes(),
 			toolCtx.ctx, toolCtx.toolCallTimeoutMs);
 	}
@@ -784,8 +782,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		Loads.Snapshot afterSnapshot = loadSnapshot(toolCtx, toolCtx.loads);
 		toolCtx.adoptLoadSnapshot(afterSnapshot);
 		AVector<ACell> events = (AVector<ACell>) appended.messages().concat(
-			HarnessTools.toolStateEvent(beforeSnapshot, afterSnapshot,
-				toolCtx.manifestDeclaredSkillNames()));
+			HarnessTools.toolStateEvent(beforeSnapshot, afterSnapshot));
 		return ToolCycleEngine.ToolOutcome.result(result, events);
 	}
 
@@ -805,8 +802,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		Loads.Snapshot afterSnapshot = loadSnapshot(toolCtx, toolCtx.loads);
 		toolCtx.adoptLoadSnapshot(afterSnapshot);
 		return ToolCycleEngine.ToolOutcome.result(result,
-			HarnessTools.toolStateEvent(beforeSnapshot, afterSnapshot,
-				toolCtx.manifestDeclaredSkillNames()));
+			HarnessTools.toolStateEvent(beforeSnapshot, afterSnapshot));
 	}
 
 	private ToolCycleEngine.ToolOutcome handleMoreTools(
@@ -945,19 +941,16 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		 *  tools) — loads-contributed tools dedup
 		 *  against these. */
 		java.util.Set<String> fixedToolNames = new java.util.HashSet<>();
-		/** Harness/config names a load may not shadow. Initially declared skill
-		 * names are deliberately absent so a loaded skill can contribute its
-		 * active dispatch route without adding another provider definition. */
+		/** Fixed names a load may not shadow. */
 		java.util.Set<String> loadExcludedNames = java.util.Set.of();
-		ToolPalette.DeclaredSkillTools declaredSkillTools =
-			ToolPalette.DeclaredSkillTools.EMPTY;
+		ToolPalette.Bindings fixedBindings = ToolPalette.Bindings.EMPTY;
 		private Map<String, AString> currentLoadRoutes = Map.of();
 		private Map<String, AString> currentLoadActivityLabels = Map.of();
 
 		/**
 		 * Tools contributed by the effective loads — the generic "a loads
 		 * entry may declare tools" rule ({@link ToolPalette#loadsToolDefs}).
-		 * Resolved fresh for every inference together with loaded values. The
+		 * Projected for every inference from the loads' materialised bindings. The
 		 * route set is replaced atomically, so unloading a source retracts both
 		 * its advertised definition and its name-to-operation dispatch route.
 		 */
@@ -978,22 +971,6 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		void adoptLoadSnapshot(Loads.Snapshot snapshot) {
 			currentLoadRoutes = snapshot.routes();
 			currentLoadActivityLabels = snapshot.activityLabels();
-		}
-
-		boolean inactiveDeclaredSkill(String name) {
-			if (name == null || currentLoadRoutes.containsKey(name)
-					|| !manifestDeclaredSkillNames().contains(name)) return false;
-			return true;
-		}
-
-		java.util.Set<String> manifestDeclaredSkillNames() {
-			ContextAssembler.Rendered rendered = ContextAssembler.rendered(
-				frames, sourceConfig, cachePrefix);
-			if (rendered == null) return declaredSkillTools.names();
-			java.util.Set<String> manifested = ToolPalette.names(rendered.tools());
-			java.util.Set<String> names = new java.util.HashSet<>(declaredSkillTools.names());
-			names.retainAll(manifested);
-			return names;
 		}
 
 		Map<String, AString> dispatchRoutes() {
