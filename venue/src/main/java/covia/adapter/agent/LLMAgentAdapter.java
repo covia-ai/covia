@@ -154,7 +154,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		if (sessionFrames != null && !sessionFrames.isEmpty()) {
 			sessionFrames = GoalTreeContext.withRootLoads(sessionFrames, frameLoads);
 		}
-		FixedPalette fixed = fixedPalette(sourceConfig, ctx, capsCtx,
+		FixedPalette fixed = fixedPalette(sourceConfig, ctx,
 			sessionFrames, cachePrefix);
 		AVector<ACell> harness = fixed.harness();
 		AVector<ACell> fixedTools = fixed.tools();
@@ -378,7 +378,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		AString llmOperation = getLLMOperation(config);
 		ModelProfile profile = modelProfileFor(config, ctx);
 		boolean cachePrefix = promptCaching(profile, config);
-		FixedPalette fixed = fixedPalette(recordConfig, ctx, capsCtx,
+		FixedPalette fixed = fixedPalette(recordConfig, ctx,
 			sessionFrames, cachePrefix);
 		AVector<ACell> fixedTools = fixed.tools();
 
@@ -496,11 +496,11 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		}
 	}
 
-	/** The immutable tools for a session: task controls, declared harness tools,
-	 * configured operations, then schemas from the initial skills catalog. */
+	/** The immutable tools for a session: task controls, declared harness tools
+	 * and configured operations. Skill tools append only when their skill loads. */
 	@SuppressWarnings("unchecked")
 	private FixedPalette fixedPalette(AMap<AString, ACell> config, RequestContext catalogCtx,
-			RequestContext capsCtx, AVector<ACell> frames,
+			AVector<ACell> frames,
 			boolean cachePrefix) {
 		AVector<ACell> harness = HarnessTools.offered(config, HarnessTools.SHARED);
 		ContextAssembler.Rendered rendered = ContextAssembler.rendered(
@@ -511,12 +511,8 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		}
 		ToolPalette.Palette configured = ToolPalette.resolve(
 			engine, catalogCtx, config, HARNESS_TOOL_NAMES);
-		ToolPalette.Palette declared = ToolPalette.declaredSkillTools(
-			engine, catalogCtx, capsCtx, Skills.sourcesOf(config),
-			name -> HARNESS_TOOL_NAMES.contains(name) || configured.contains(name));
-		ToolPalette.Palette base = configured.merge(declared);
-		return new FixedPalette(base.tools(), harness,
-			base.toolIndex(), configured.unavailable());
+		return new FixedPalette(configured.tools(), harness,
+			configured.toolIndex(), configured.unavailable());
 	}
 
 	/**

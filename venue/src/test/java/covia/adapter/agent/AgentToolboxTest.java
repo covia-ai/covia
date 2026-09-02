@@ -74,9 +74,11 @@ public class AgentToolboxTest {
 			"content", Maps.of("inline", SKILL_BODY),
 			"skill", Maps.of("tools", Vectors.of(Strings.create("v/ops/covia/read")))));
 		write(SKILLSET + "/beta", Maps.of(
-			"description", "Second provider of the same toolbox tool",
+			"description", "Second toolbox tool bundle",
 			"content", Maps.of("inline", "TOOLBOX_SECOND_SKILL_BODY"),
-			"skill", Maps.of("tools", Vectors.of(Strings.create("v/ops/covia/read")))));
+			"skill", Maps.of("tools", Vectors.of(
+				Strings.create("v/ops/covia/read"),
+				Strings.create("v/test/ops/capturectx")))));
 	}
 
 	@Test
@@ -157,12 +159,10 @@ public class AgentToolboxTest {
 				"v/ops/agent/context", Maps.of(
 					Fields.AGENT_ID, agent.id(), Fields.SESSION_ID, agent.sessionId()), user)
 				.awaitResult(10000));
-			ACell skillBinding = paletteEntry(cachedContext, "covia_read");
-			assertEquals("skill", RT.getIn(skillBinding, Fields.SOURCE).toString(), where);
-			assertEquals(SKILLSET + "/alpha", RT.getIn(skillBinding, Fields.REF).toString(),
-				where + " cached context lost the first skill provider's provenance");
-			assertEquals("v/ops/covia/read", RT.getIn(skillBinding, Fields.OPERATION).toString(),
-				where + " cached context lost the tool's dispatch route");
+			assertNull(findPaletteEntry(cachedContext, "covia_read"),
+				where + " discoverable skill schema leaked into the fixed palette");
+			assertFalse(hasTool(RT.ensureVector(cachedContext.get(Fields.TOOLS)), "covia_read"),
+				where + " discoverable skill schema leaked into provider tools");
 
 			// A valid text-only model response is itself a complete iteration.
 			AMap<AString, ACell> text = step(agent, "answer this", Strings.create("valid answer"), null);
@@ -200,37 +200,34 @@ public class AgentToolboxTest {
 			assertTrue(messages(unloaded).toString().contains(PINNED_MARKER),
 				where + " context_unload removed pinned context: " + unloaded);
 
-			// A directly advertised skill operation is callable immediately.
-			// Loading its skill controls instructions, not invocation authority.
+			// A discoverable skill operation is not a provider tool before load.
 			AMap<AString, ACell> direct = step(agent, "use a skill-declared tool",
 				assistantCall("call_direct_read", "covia_read",
-					Maps.of("path", "w/probe")), null);
+					Maps.of("path", CONTEXT_PATH)), null);
 			ACell directResult = RT.getIn(call(direct, "call_direct_read"), Fields.RESULT);
-			assertNotNull(directResult, where + " cached skill binding did not dispatch: " + direct);
-			assertFalse(directResult.toString().contains("requires loading a skill"),
-				where + " advertised operation was still load-gated: " + direct);
-			AVector<ACell> directTools = RT.ensureVector(
-				RT.getIn(direct, AbstractLLMAdapter.K_NEXT, Fields.TOOLS));
-			AMap<AString, ACell> directDefinition = tool(directTools, "covia_read");
-			String description = directDefinition
-				.get(AbstractLLMAdapter.K_DESCRIPTION).toString();
-			assertFalse(description.contains("Available after loading"), description);
-			assertNull(directDefinition.get(Strings.intern("requiresSkill")),
-				where + " provider definition retained a Covia-only gate marker");
+			assertTrue(directResult.toString().startsWith("Error:"),
+				where + " dispatched a skill tool that was never loaded: " + direct);
 
-			// skill_load: the initial catalog supplied the native schema once;
-			// loading appends only the trusted instructions.
+			// skill_load appends both trusted instructions and exact tool state.
+			// invoke_tool is a later barrier in the same batch and sees the new route.
 			AMap<AString, ACell> skill = step(agent, "load a skill",
-				assistantCall("call_skill_load", HarnessTools.SKILL_LOAD,
-					Maps.of("name", "alpha")), null);
+				Maps.of("toolCalls", Vectors.of(
+					(ACell) Maps.of("id", "call_skill_load", "name", HarnessTools.SKILL_LOAD,
+						"arguments", Maps.of("name", "alpha")),
+					(ACell) Maps.of("id", "call_skill_read", "name", HarnessTools.INVOKE_TOOL,
+						"arguments", Maps.of("name", "covia_read",
+							"input", Maps.of("path", CONTEXT_PATH))))), null);
 			exercisedHarness.add(HarnessTools.SKILL_LOAD);
+			exercisedHarness.add(HarnessTools.INVOKE_TOOL);
 			assertTrue(hasSystemContent(skill, SKILL_BODY),
 				where + " skill instructions missing from next prompt: " + skill);
 			assertTrue(hasTool(skill, HarnessTools.INVOKE_TOOL), where);
-			assertTrue(hasTool(skill, "covia_read"),
-				where + " discoverable skill schema missing from fixed palette: " + skill);
-			assertFalse(hasToolAddition(skill, "covia_read"),
-				where + " fixed skill schema was duplicated into conversation state: " + skill);
+			assertFalse(hasTool(skill, "covia_read"),
+				where + " loaded skill rewrote the fixed provider tools: " + skill);
+			assertTrue(hasToolAddition(skill, "covia_read"),
+				where + " loaded skill did not append its exact tool definition: " + skill);
+			assertFalse(RT.getIn(call(skill, "call_skill_read"), Fields.RESULT).toString()
+				.startsWith("Error:"), where + " loaded skill route was not active immediately: " + skill);
 
 			// more_tools is a tool-only load. The parallel dispatcher call proves
 			// the new route is live immediately without rewriting the fixed palette.
@@ -472,6 +469,10 @@ public class AgentToolboxTest {
 
 	private static boolean hasTool(AMap<AString, ACell> step, String name) {
 		AVector<ACell> tools = RT.ensureVector(RT.getIn(step, AbstractLLMAdapter.K_NEXT, Fields.TOOLS));
+		return hasTool(tools, name);
+	}
+
+	private static boolean hasTool(AVector<ACell> tools, String name) {
 		for (long i = 0; tools != null && i < tools.count(); i++) {
 			if (name.equals(String.valueOf(RT.getIn(tools.get(i), Fields.NAME)))) return true;
 		}

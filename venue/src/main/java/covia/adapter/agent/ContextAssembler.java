@@ -103,10 +103,12 @@ public final class ContextAssembler {
 	private static final AString K_RENDERED_LIVE     = Strings.intern("live");
 	private static final AString K_RENDERED_LABELS   = Strings.intern("labels");
 	private static final AString K_RENDERED_CONFIG   = Strings.intern("sourceConfig");
+	private static final AString K_RENDERED_VERSION  = Strings.intern("renderVersion");
 	private static final AString K_RENDERED_TOOLS    = Strings.intern("tools");
 	private static final AString K_RENDERED_TOOL_INDEX = Strings.intern("toolIndex");
 	private static final AString K_RENDERED_BASE_START = Strings.intern("baseToolStart");
 	private static final AString K_RENDERED_BASE_END = Strings.intern("baseToolEnd");
+	private static final long RENDER_VERSION = 1L;
 
 	/** Canonical watched-context candidate fields. The active frame persists
 	 * the same value under {@code observations}; see {@link GoalTreeContext}. */
@@ -150,6 +152,7 @@ public final class ContextAssembler {
 
 		ACell toCell() {
 			AMap<AString, ACell> value = Maps.of(
+				K_RENDERED_VERSION, CVMLong.create(RENDER_VERSION),
 				K_RENDERED_TOOLS, tools,
 				K_RENDERED_TOOL_INDEX, toolIndex,
 				K_RENDERED_BASE_START, CVMLong.create(baseToolStart),
@@ -166,6 +169,7 @@ public final class ContextAssembler {
 		static Rendered fromCell(ACell value) {
 			if (!(value instanceof AMap<?, ?> map)) return null;
 			ACell tools = map.get(K_RENDERED_TOOLS);
+			ACell version = map.get(K_RENDERED_VERSION);
 			ACell toolIndex = map.get(K_RENDERED_TOOL_INDEX);
 			ACell baseStart = map.get(K_RENDERED_BASE_START);
 			ACell baseEnd = map.get(K_RENDERED_BASE_END);
@@ -175,7 +179,8 @@ public final class ContextAssembler {
 			ACell sourceConfig = map.get(K_RENDERED_CONFIG);
 			// Older materialisations are inapplicable and upgrade once. Required
 			// fields also keep ordinary cache reads free of schema inspection.
-			if (!(tools instanceof AVector<?> toolVector) || !(toolIndex instanceof AMap<?, ?>)
+			if (!(version instanceof CVMLong v) || v.longValue() != RENDER_VERSION
+					|| !(tools instanceof AVector<?> toolVector) || !(toolIndex instanceof AMap<?, ?>)
 					|| !(baseStart instanceof CVMLong start) || !(baseEnd instanceof CVMLong end)
 					|| start.longValue() < 0 || end.longValue() < start.longValue()
 					|| end.longValue() > toolVector.count()

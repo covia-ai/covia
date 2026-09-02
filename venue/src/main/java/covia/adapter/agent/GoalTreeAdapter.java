@@ -308,7 +308,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		AVector<ACell> harness = harnessForFrame(config, 0, typedTools);
 		ModelProfile profile = modelProfileFor(l3Config, ctx);
 		boolean cachePrefix = promptCaching(profile, l3Config);
-		FixedPalette fixed = fixedPalette(sourceConfig, ctx, capsCtx,
+		FixedPalette fixed = fixedPalette(sourceConfig, ctx,
 			rootFrames, cachePrefix);
 		AVector<ACell> baseTools = fixed.baseTools();
 		AVector<ACell> fixedTools = (AVector<ACell>) TaskTools.DEFINITIONS.concat(harness).concat(baseTools);
@@ -601,7 +601,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		RequestContext capsCtx = capsContext(recordConfig, ctx).withAgentId(agentId);
 		ModelProfile profile = modelProfileFor(l3Config, ctx);
 		boolean cachePrefix = promptCaching(profile, l3Config);
-		FixedPalette fixed = fixedPalette(sourceConfig, ctx, capsCtx,
+		FixedPalette fixed = fixedPalette(sourceConfig, ctx,
 			frames, cachePrefix);
 		AVector<ACell> baseTools = fixed.baseTools();
 		AString llmOperation = getLLMOperation(l3Config);
@@ -1427,7 +1427,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 	 * mutable skill catalog during ordinary inference.
 	 */
 	private FixedPalette fixedPalette(AMap<AString, ACell> config,
-			RequestContext catalogCtx, RequestContext capsCtx,
+			RequestContext catalogCtx,
 			AVector<ACell> frames,
 			boolean cachePrefix) {
 		ContextAssembler.Rendered rendered = ContextAssembler.rendered(
@@ -1437,11 +1437,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		}
 		ToolPalette.Palette palette = ToolPalette.resolve(
 			engine, catalogCtx, config, HARNESS_NAMES);
-		ToolPalette.Palette declared = ToolPalette.declaredSkillTools(
-			engine, catalogCtx, capsCtx, Skills.sourcesOf(config),
-			name -> HARNESS_NAMES.contains(name) || palette.contains(name));
-		ToolPalette.Palette base = palette.merge(declared);
-		return new FixedPalette(base.tools(), base.toolIndex(), palette.unavailable());
+		return new FixedPalette(palette.tools(), palette.toolIndex(), palette.unavailable());
 	}
 
 	/** Provider-neutral history projection for an explicit complete/fail call. */

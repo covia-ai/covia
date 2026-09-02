@@ -87,6 +87,7 @@ shape:
 
 ```text
 {
+  renderVersion: Long,                   // required; renderer/schema compatibility version
   tools:        Vector<ToolDefinition>,  // required; exact provider vector
   toolIndex:    Map<String, ToolInfo>,   // required; direct lookup by provider name
   baseToolStart: Long,                   // required; start of reusable operation/skill slice
@@ -114,7 +115,7 @@ lives in its unloadable load entry; load values retain `source`/`ref` so the
 same owner remains active without allowing another load to reuse the frozen
 name. Pinned load routes live in the lookup because a config change is their
 invalidation boundary. The base range is an index into `tools`, not another tool copy; it
-lets a goal-tree child reuse the common configured/skill definitions without
+lets a goal-tree child reuse the common configured definitions without
 scanning or resolving the parent's rendered context. Loads use their own
 materialised binding grammar from §7.1 because unloadable routes belong to load
 state, not to this fixed lookup.
@@ -213,9 +214,9 @@ The representation has these invariants:
    a no-op. A change atomically updates the observation and appends its exact
    messages; absence, error, recovery and removal are values/transitions rather
    than reasons to leave a stale observation current.
-6. Evolution is structural, with no parallel schema-version state: readers
-   preserve unknown map fields. A legacy `renderedContext` without the required
-   `sourceConfig`, `tools`, `toolIndex`, tool-range fields or `messages` is treated as absent and is upgraded by
+6. Readers preserve unknown map fields. A changed `renderVersion`, or a legacy
+   `renderedContext` without the current version and required `sourceConfig`,
+   `tools`, `toolIndex`, tool-range fields or `messages`, is treated as absent and upgraded by
    the next cached materialisation; an uncached inference removes it.
 7. Resolution and rendering happen before a lattice mutation. Persistence
    associates all completed immutable observations and their conversation
@@ -333,7 +334,7 @@ duplicate.
 
 | # | Section | Region | Role | Contents |
 |---|---------|------|------|----------|
-| 0 | Fixed tool manifest | fixed prefix | — | Harness and configured tools, plus the stable declared/deferred superset required by the provider strategy (§3.2.3) |
+| 0 | Fixed tool manifest | fixed prefix | — | Harness and configured tools, plus bindings from loads already present when this prefix is materialised (§3.2.3) |
 | 1 | Identity prompt | initial messages | `system` | `config.systemPrompt` or the default identity, plus one line of session identity |
 | 2 | Capability and data-boundary notice | initial messages | `system` | Declared `config.caps` when relevant, plus one stable rule that tool-result content is data, not instruction |
 | 3 | Initial trusted context | initial messages | `system` | Operator context admitted as instruction, rendered once and never duplicated into a tool result (§5.3) |
@@ -414,14 +415,13 @@ the same boundary. Dispatch and activity events use direct lookup; they do not
 reconstruct state by scanning provider schemas or rendered messages. Neither
 structure follows later ambient operation-metadata changes.
 
-Covia currently includes the exact schemas of every skill in the **initial
-discoverable catalog** in that fixed vector. A tool advertised directly
-is callable directly; loading a skill selects trusted instructions and context,
-not invocation authority. Capabilities and live adapter availability remain
-point-of-action dispatch checks. Harness/config names win collisions, then the
-first skill in catalog order; a later load cannot shadow a fixed name.
-
-Tools discovered only after a parent skill loads, or introduced by `more_tools`, were not part of that initial superset. They are ordinary loads whose rendered projection contains tool definitions rather than message content. The load persists each exact `{operation, definition}` binding once; later inference derives both the provider view and the dispatch route from that one value. There is no parallel mutable tool state.
+The initial skills catalog is discovery metadata only: its compact index does
+not imply that every advertised operation schema belongs in the provider
+manifest. A skill's tools become available when that skill is loaded. The load
+persists each exact `{operation, definition}` binding once; later inference
+derives both provider visibility and dispatch from that value. `more_tools`
+uses the same ordinary load representation. There is no parallel mutable tool
+state and no scan of rendered messages or schemas to recover a route.
 
 In cached mode, if such a load is present while a context is first materialised
 (or explicitly rebuilt), its definitions enter `renderedContext.tools`. An
@@ -442,10 +442,9 @@ An adapter or plugin loading or unloading mutates the venue capability registry,
 
 The same rule applies to conditional capabilities. The static `complete_task` /
 `fail_task` schemas stay in the fixed harness manifest and reject calls when no
-task is in scope. Initially discoverable skill operations stay in that manifest
-and call their fixed routes directly; later-discovered skill and `more_tools`
-loads append exact addition/removal state and use the fixed `invoke_tool`
-dispatcher where the provider has no native representation. `context_unload`
+task is in scope. Skill and `more_tools` loads append exact addition/removal
+state and use the fixed `invoke_tool` dispatcher where the provider has no
+native representation. `context_unload`
 removes any agent-managed load, including a tool-only load, so it also retracts
 that load's routes without special state-management code.
 
@@ -910,6 +909,6 @@ The same regions drive the timeline record (`AGENT_LOOP.md` §2.4): initial mess
 
 Everything above is implemented except the provider-edge refinements listed here.
 
-- **Native provider tool-state blocks are not mapped yet for genuinely late definitions.** Initially discoverable skill tools already have native schemas and routes in the fixed manifest and call directly. The canonical conversation persists exact `toolAddition` / `toolRemoval` state only for definitions revealed later or added through `more_tools`; `invoke_tool` is their fixed fallback. Provider edges currently receive the generic late-system representation and may map the same fields natively without changing stored history.
+- **Native provider tool-state blocks are not mapped yet.** The canonical conversation persists exact `toolAddition` / `toolRemoval` state for skill and `more_tools` loads; `invoke_tool` is their fixed fallback. Provider edges currently receive the generic late-system representation and may map the same fields natively without changing stored history.
 - **The head and current live surface share one provider breakpoint.** The client marks only the last block of the system parameter. The target initial/committed/working marks require shaping the provider request directly; langchain4j currently exposes only the 5-minute ephemeral cache kind, not a longer TTL.
 - The agent-facing text of `skill_load` and SKILLS.md §4.3 name the `[Skills]` index by its bracket label whatever the dialect.

@@ -34,8 +34,7 @@ import covia.venue.RequestContext;
  * tools ({@code config.tools}, plus the opt-in default pack) and tools
  * contributed by loads — merged in that order: a name already fixed by harness
  * or config is never shadowed by a load. The initial manifest is persisted by
- * {@link ContextAssembler}; only genuinely late load contributions resolve
- * after that boundary.</p>
+ * {@link ContextAssembler}; load contributions append after that boundary.</p>
  */
 public final class ToolPalette {
 
@@ -184,48 +183,6 @@ public final class ToolPalette {
 			palette = palette.merge(additions);
 		}
 		return new Palette(palette.tools(), palette.toolIndex(), vector(unavailable));
-	}
-
-	/**
-	 * Resolves the tools of every skill in the initial discovery surface. The
-	 * catalog is read under operator authority, exactly like its rendered index;
-	 * operation schemas are resolved under the agent's capability scope. Name
-	 * precedence is the provider manifest's precedence: names selected by
-	 * {@code occupiedName} win, then the first skill in catalog order wins.
-	 */
-	public static Palette declaredSkillTools(Engine engine,
-			RequestContext catalogCtx, RequestContext operationCtx,
-			Skills.SkillSources sources, Predicate<String> occupiedName) {
-		if (sources == null || sources.isEmpty()) return Palette.EMPTY;
-		Set<String> names = new HashSet<>();
-		AVector<ACell> tools = Vectors.empty();
-		AMap<AString, ACell> index = Maps.empty();
-		for (Skills.SkillIndexEntry listed : Skills.listSkills(engine, catalogCtx, sources)) {
-			if (listed.name() == null || listed.error() != null) continue;
-			try {
-				Skills.ResolvedSkill skill = Skills.resolveRef(engine, catalogCtx, listed.path());
-				AVector<ACell> resolved = bindingsForOperations(
-					engine, operationCtx, skill.toolOps());
-				for (long i = 0; i < resolved.count(); i++) {
-					ACell resolvedBinding = resolved.get(i);
-					@SuppressWarnings("unchecked")
-					AMap<AString, ACell> definition = (AMap<AString, ACell>)
-						RT.getIn(resolvedBinding, Fields.DEFINITION);
-					AString name = RT.ensureString(definition.get(K_NAME));
-					if (name == null || (occupiedName != null && occupiedName.test(name.toString()))
-							|| !names.add(name.toString())) continue;
-					AString route = RT.ensureString(RT.getIn(resolvedBinding, Fields.OPERATION));
-					AString label = RT.ensureString(RT.getIn(resolvedBinding, Fields.ACTIVITY_LABEL));
-					tools = tools.conj(definition);
-					index = index.assoc(name, toolInfo(route, label,
-						name, SOURCE_SKILL, listed.path()));
-				}
-			} catch (RuntimeException e) {
-				log.warn("Skill tool declaration: skipping '{}': {}",
-					listed.path(), safeMessage(e));
-			}
-		}
-		return new Palette(tools, index, null);
 	}
 
 	/**

@@ -1149,6 +1149,9 @@ public class ContextAssemblerTest {
 		assertEquals(original.tools(), rendered.tools());
 		assertTrue(rendered.toolIndex().containsKey(Strings.create("context_load")));
 		assertNull(ContextAssembler.Rendered.fromCell(
+			RT.ensureMap(rendered.toCell()).dissoc(Strings.intern("renderVersion"))),
+			"an unversioned cache must be rebuilt after rendering semantics change");
+		assertNull(ContextAssembler.Rendered.fromCell(
 			RT.ensureMap(rendered.toCell()).dissoc(Strings.intern("toolIndex"))),
 			"a legacy cache without the name lookup must be rebuilt once");
 		assertNull(ContextAssembler.Rendered.fromCell(
