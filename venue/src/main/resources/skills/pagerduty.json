@@ -1,0 +1,25 @@
+{
+	"name": "pagerduty",
+	"description": "Read PagerDuty incidents, services, and on-call schedules using the user's own API key. Load to see open incidents and who is on call.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## PagerDuty\nCalls go through `v/ops/http/get` / `v/ops/http/post` against `https://api.pagerduty.com` with `secretHeaders: {\"Authorization\": \"s/PAGERDUTY_TOKEN\"}` (an API key: Integrations -> API Access Keys). The stored value is the complete `Token token=<key>` header. Always send `Accept: application/vnd.pagerduty+json;version=2`. Only the secret reference goes in the request; never the key.\n\nCommon calls:\n- Sanity check: `GET /abilities`\n- Open incidents: `GET /incidents?statuses[]=triggered&statuses[]=acknowledged&sort_by=created_at:desc`\n- One incident: `GET /incidents/{id}`\n- Services: `GET /services?limit=100`\n- Who is on call: `GET /oncalls?earliest=true` (scope with `schedule_ids[]=`)\n\nRules:\n- Check `status`; errors are `{error: {code, message, errors}}`. 401 = bad key.\n- Array filters repeat the key with `[]`, e.g. `statuses[]=triggered&statuses[]=acknowledged`.\n- Reads work with any valid key; writing an incident is a `PUT` (no `http/put` op yet), so do acknowledge/resolve in the PagerDuty UI for now.\n"
+	},
+	"connection": {
+		"baseUrl": "https://api.pagerduty.com",
+		"auth": {
+			"kind": "secret-header",
+			"alternatives": [
+				"s/PAGERDUTY_TOKEN"
+			]
+		}
+	},
+	"skill": {
+		"tools": [
+			"v/ops/connections/status",
+			"v/ops/http/get",
+			"v/ops/http/post",
+			"v/ops/jvm/url-encode"
+		]
+	}
+}
