@@ -3369,6 +3369,14 @@ public class AgentAdapter extends AAdapter {
 					activeCancellations.remove(key, cancelToken);
 				}
 
+				// Engine shutdown is a process boundary, not a transition result.
+				// JobManager may settle/cancel the internal transition while close()
+				// is in progress; never merge that administrative interruption as an
+				// agent error. Leave the durable intake and any live frame checkpoint
+				// for startup reconciliation, exactly as if the process had stopped
+				// before the transition returned.
+				if (engine.isClosing()) break;
+
 				// A cancelled transition is an administrative stop (agent:suspend
 				// or agent:delete cancelled it), not an agent failure — it must
 				// NOT flow into the merge + fail-fast path, which would stamp
