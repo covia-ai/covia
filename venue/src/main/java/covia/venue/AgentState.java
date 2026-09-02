@@ -535,6 +535,12 @@ public class AgentState extends ALatticeComponent<ACell> {
 				return r;   // no change — skip the write (and the K_TS bump)
 			}
 			session = session.assoc(K_FRAMES, updatedFrames);
+			AVector<ACell> beforeRoot = rootConversation(frames);
+			AVector<ACell> afterRoot = rootConversation(updatedFrames);
+			if (afterRoot.count() > beforeRoot.count()) {
+				session = bumpTurnMeta(session,
+					(AVector<ACell>) afterRoot.slice(beforeRoot.count(), afterRoot.count()));
+			}
 			applied.set(true);
 			return r.assoc(K_SESSIONS, sessions.assoc(sid, session));
 		});
@@ -616,20 +622,37 @@ public class AgentState extends ALatticeComponent<ACell> {
 		rootFrame = rootFrame.assoc(K_CONVERSATION, rootConv);
 		frames = frames.assoc(0, rootFrame);
 		session = session.assoc(K_FRAMES, frames);
+		return bumpTurnMeta(session, turnsToAppend);
+	}
 
+	/** Updates root-turn count and timestamp metadata for an appended suffix. */
+	@SuppressWarnings("unchecked")
+	private static AMap<AString, ACell> bumpTurnMeta(AMap<AString, ACell> session,
+			AVector<ACell> appended) {
 		if (session.get(K_META) instanceof AMap) {
 			AMap<AString, ACell> meta = (AMap<AString, ACell>) session.get(K_META);
 			long current = (meta.get(K_TURNS) instanceof CVMLong cl) ? cl.longValue() : 0;
-			meta = meta.assoc(K_TURNS, CVMLong.create(current + turnsToAppend.count()));
+			meta = meta.assoc(K_TURNS, CVMLong.create(current + appended.count()));
 			long updated = (meta.get(Fields.UPDATED) instanceof CVMLong cl) ? cl.longValue() : 0;
-			for (long i = 0; i < turnsToAppend.count(); i++) {
-				ACell ts = RT.getIn(turnsToAppend.get(i), K_TURN_TS);
+			for (long i = 0; i < appended.count(); i++) {
+				ACell ts = RT.getIn(appended.get(i), K_TURN_TS);
 				if (ts instanceof CVMLong cl) updated = Math.max(updated, cl.longValue());
 			}
 			if (updated > 0) meta = meta.assoc(Fields.UPDATED, CVMLong.create(updated));
 			session = session.assoc(K_META, meta);
 		}
 		return session;
+	}
+
+	/** Root conversation or an empty vector for an absent/malformed root. */
+	@SuppressWarnings("unchecked")
+	private static AVector<ACell> rootConversation(AVector<ACell> frames) {
+		if (frames == null || frames.isEmpty() || !(frames.get(0) instanceof AMap root)) {
+			return Vectors.empty();
+		}
+		ACell conversation = ((AMap<AString, ACell>) root).get(K_CONVERSATION);
+		return (conversation instanceof AVector cv)
+			? (AVector<ACell>) cv : Vectors.empty();
 	}
 
 	/**
@@ -1281,7 +1304,6 @@ public class AgentState extends ALatticeComponent<ACell> {
 			AVector<ACell> turnsToAppend,
 			long presentedSessionPendingCount,
 			AVector<ACell> newFrames,
-			AMap<AString, ACell> sessionLoads,
 			AMap<AString, ACell> cycleTokens) {
 		return update(r -> {
 			// Remove completed tasks, detect new ones
@@ -1297,12 +1319,11 @@ public class AgentState extends ALatticeComponent<ACell> {
 				.dissoc(K_ERROR);
 
 			// Atomic frames[0].conversation append + session.pending drain +
-			// session-tier loads write + inCycle clear for the picked session.
+			// inCycle clear for the picked session.
 			// All touch the same session record so we fold them into one assoc.
 			boolean hasTurns = turnsToAppend != null && turnsToAppend.count() > 0;
 			boolean hasDrain = presentedSessionPendingCount > 0;
 			boolean hasNewFrames = newFrames != null;
-			boolean hasLoads = sessionLoads != null;
 			if (historySid != null) {
 				Index<Blob, ACell> sessions = (updated.get(K_SESSIONS) instanceof Index idx)
 					? (Index<Blob, ACell>) idx : Index.none();
@@ -1316,13 +1337,6 @@ public class AgentState extends ALatticeComponent<ACell> {
 					// so concurrent-intake user turns end up at root.
 					if (hasNewFrames) {
 						session = session.assoc(K_FRAMES, newFrames);
-					}
-
-					// Session-tier loads (#142): whole-replace with the cycle's
-					// final working set (tombstones included). Single-writer per
-					// tier — only the run loop writes this slot.
-					if (hasLoads) {
-						session = session.assoc(K_LOADS, sessionLoads);
 					}
 
 					if (hasTurns) {

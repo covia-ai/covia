@@ -352,13 +352,13 @@ A skill that fails to resolve appends a visible ownership-specific label with `u
 
 | | llmagent | goaltree |
 |---|---|---|
-| Loads tier written | session (`sessions.<sid>.loads`) | active frame (`frame.loads`) |
-| Persistence | across turns for the session, via the existing loads write-back | frame lifetime; **inherited copy-on-push by subgoals** |
+| Frame use | one durable root frame | root plus active subgoal frames |
+| Load persistence | root-frame lifetime | frame lifetime; **inherited copy-on-push by subgoals** |
 | Late tool visibility | same transition — from the next tool-loop iteration | same transition — from the next iteration |
 | Tool offered when | any skill source declared (automatic) | any skill source declared (automatic), or bare `"skill_load"` in `config.tools` (registry opt-in) |
 | Unload scope | session, agent-managed entries only | frame, agent-managed entries only — removing an inherited copy leaves the parent's copy untouched |
 
-A subgoal therefore starts with its parent's loaded skills and may load/unload its own without affecting the parent — the same lexical-scoping semantics as every other load.
+A subgoal therefore starts with its parent's loaded skills and may load/unload its own without affecting the parent — the same lexical-scoping semantics as every other load. The durable loads shape and ownership rules are defined only in [AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §1.1 and §7.
 
 ---
 

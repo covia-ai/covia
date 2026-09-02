@@ -1290,12 +1290,9 @@ After D-4, §8 is empty. The body of the doc reflects the new model and the bann
 
 1. **Should the step input carry `cause` at all?** Pro: gives the adapter a hint without forcing a lattice diff. Con: adapters might over-trust it. Lean: include it as a non-authoritative hint.
 
-2. **Where does `loads` live post-D-3?** Options:
-   - `K_LOADS` on the agent record (peer of `K_CONFIG`)
-   - Under an `adapters/` namespace map on the agent record
-   - In the session record (per-session loads — different semantics, bigger redesign)
-
-   Lean: `K_LOADS` on the record for parity with `K_CONFIG`.
+2. **Where does `loads` live post-D-3?** Resolved: dynamic loads live on the
+   active durable frame, while operator loads remain in config. The canonical
+   state and scope rules are in [AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §1.1 and §7.
 
 3. **Backwards compatibility for persistent agents.** Resolved (#144): fail-loudly — `agent:create`/`agent:update` reject `state.config` with a clear error; no migration (alpha, agents re-creatable).
 

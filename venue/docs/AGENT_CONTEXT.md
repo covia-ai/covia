@@ -67,7 +67,6 @@ The context-bearing projection of a session is:
 
 ```text
 sessions[sessionId]
-├─ loads?                         Loads
 └─ frames                         Vector<Frame>
    └─ Frame
       ├─ description              String
@@ -124,7 +123,7 @@ state, not to this fixed lookup.
 `0 <= head <= live <= messages.count`. Models cache by default. An explicit
 `model.options.cachePrefix: false` or call-level `cache: false` makes assembly
 ephemeral: the runtime ignores and removes any old `renderedContext`, resolves
-and renders the current config/session snapshot for the inference, and emits no
+and renders the current config/frame snapshot for the inference, and emits no
 `cacheMarks`. The computed vectors are passed directly to L3 and discarded;
 they are not application state.
 
@@ -797,14 +796,18 @@ backward compatibility.
 Tiers, outer → inner:
 
 ```
-agent (config.loads) → session (sessions.<sid>.loads) → frame (frame.loads, goaltree)
+agent (config.loads) → frame (frame.loads)
 ```
 
-Each tier may contain declarations installed by its owner plus dynamic entries written by the agent while it is the innermost writable tier. Rules:
+The root frame holds both caller-pinned declarations supplied when the session
+is minted and dynamic entries written by the agent. Their durable
+`agentManaged` marker, not their physical location, determines whether the
+agent may unload them. A flat agent has one root frame; a goal-tree agent adds
+inner child frames. Rules:
 
 - **The effective set is a union down the chain; inner shadows outer** on a path collision. Declarations are folded without resolving their content; stable content is materialised for a missing cached prefix or rendered ephemerally for an uncached inference, while volatile content is observed before inference.
 - **Unload is ownership-safe:** only an agent-managed entry in the innermost writable tier can be removed. Removing a local shadow reveals any pinned outer entry. Pinned entries cannot be hidden with `context_unload`.
-- **Inner tiers read outer tiers, never mutate them** — one writer per tier.
+- **Frames read config, never mutate it** — one writer per durable frame.
 - **Budgets are advisory** — never a basis for silent eviction.
 - **No session in scope → no writable tier**: `context_load`/`unload` fail with a diagnosable result.
 

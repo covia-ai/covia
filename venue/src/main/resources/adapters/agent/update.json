@@ -21,7 +21,7 @@
 						}
 					]
 				},
-				"state": { "description": "State fields to merge (runtime data only). A 'config' key inside state is rejected (#144), as is a 'loads' key — loads live on the context scope chain: config.loads (operator pins) and per-session loads (#142)." }
+				"state": { "description": "State fields to merge (runtime data only). A 'config' key inside state is rejected (#144), as is a 'loads' key — loads live on the context scope chain: config.loads (operator pins) and frame.loads (#142)." }
 			},
 			"required": ["agentId"]
 		},
