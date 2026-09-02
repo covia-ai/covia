@@ -1,0 +1,25 @@
+{
+	"name": "gitlab",
+	"description": "Work with GitLab projects, issues, and merge requests using the user's own token. Load for project/issue/MR reads, searches, creating issues and notes.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## GitLab\nCalls go through `v/ops/http/get` / `v/ops/http/post` against `https://gitlab.com/api/v4` with `bearerSecret: \"s/GITLAB_TOKEN\"` (a personal access token: Preferences -> Access Tokens; grant the `api` or `read_api` scope). Only the secret reference goes in the request; never the token.\n\nCommon calls:\n- Whoami: `GET /user`\n- Your projects: `GET /projects?membership=true&per_page=100&order_by=last_activity_at`\n- Project issues: `GET /projects/{id}/issues?state=opened&per_page=100` (`{id}` is the numeric project id, or the URL-encoded `group/project` path)\n- One issue: `GET /projects/{id}/issues/{iid}`\n- Create issue: `POST /projects/{id}/issues` body `{title, description?, labels?}`\n- Comment: `POST /projects/{id}/issues/{iid}/notes` body `{body}`\n- Merge requests: `GET /projects/{id}/merge_requests?state=opened`\n- Search: `GET /search?scope=issues&search=<encoded>`\n\nRules:\n- Check `status`; errors are `{message}` or `{error}`. 401 = bad/expired token; 404 usually means the token lacks access to that project.\n- A path `{id}` like `group/name` must be URL-encoded to `group%2Fname` with `v/ops/jvm/url-encode`.\n- Results paginate; follow the `Link` header `rel=\"next\"` or pass `page`.\n"
+	},
+	"connection": {
+		"baseUrl": "https://gitlab.com/api/v4",
+		"auth": {
+			"kind": "bearer-secret",
+			"alternatives": [
+				"s/GITLAB_TOKEN"
+			]
+		}
+	},
+	"skill": {
+		"tools": [
+			"v/ops/connections/status",
+			"v/ops/http/get",
+			"v/ops/http/post",
+			"v/ops/jvm/url-encode"
+		]
+	}
+}

@@ -1,0 +1,25 @@
+{
+	"name": "clickup",
+	"description": "Work with ClickUp tasks, lists, and spaces using the user's own token. Load for task/list/space reads and creating tasks.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## ClickUp\nCalls go through `v/ops/http/get` / `v/ops/http/post` against `https://api.clickup.com/api/v2` with `secretHeaders: {\"Authorization\": \"s/CLICKUP_TOKEN\"}` (a personal API token: Settings -> Apps -> API Token). The token is the raw `Authorization` value, with no `Bearer` prefix. Only the secret reference goes in the request; never the token.\n\nCommon calls:\n- Whoami: `GET /user`\n- Your workspaces: `GET /team`\n- Spaces in a workspace: `GET /team/{team_id}/space`\n- Lists in a space: `GET /space/{space_id}/list` (or `GET /folder/{folder_id}/list`)\n- Tasks in a list: `GET /list/{list_id}/task?archived=false`\n- One task: `GET /task/{task_id}`\n- Create task: `POST /list/{list_id}/task` body `{name, description?, status?, assignees?}`\n\nRules:\n- Check `status`; errors are `{err, ECODE}` (e.g. `OAUTH_*` = bad token, 401).\n- The token is the raw `Authorization` value; do not prefix it with `Bearer`.\n- IDs cascade workspace (team) -> space -> folder/list -> task; start at `GET /team`.\n"
+	},
+	"connection": {
+		"baseUrl": "https://api.clickup.com/api/v2",
+		"auth": {
+			"kind": "secret-header",
+			"alternatives": [
+				"s/CLICKUP_TOKEN"
+			]
+		}
+	},
+	"skill": {
+		"tools": [
+			"v/ops/connections/status",
+			"v/ops/http/get",
+			"v/ops/http/post",
+			"v/ops/jvm/url-encode"
+		]
+	}
+}

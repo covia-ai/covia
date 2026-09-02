@@ -1,0 +1,25 @@
+{
+	"name": "calendly",
+	"description": "Read Calendly scheduled events, event types, and invitees using the user's own token. Load to see upcoming meetings and who booked them.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Calendly\nCalls go through `v/ops/http/get` against `https://api.calendly.com` with `bearerSecret: \"s/CALENDLY_TOKEN\"` (a personal access token: Integrations -> API & Webhooks). Only the secret reference goes in the request; never the token.\n\nCommon calls:\n- Whoami: `GET /users/me` -> `resource.uri` (your user URI) and `resource.current_organization`\n- Your event types: `GET /event_types?user={user_uri}`\n- Scheduled events: `GET /scheduled_events?user={user_uri}&status=active&sort=start_time:asc` (or `organization={org_uri}` for the whole org)\n- One event: `GET /scheduled_events/{uuid}`\n- Invitees: `GET /scheduled_events/{uuid}/invitees`\n\nRules:\n- Check `status`; errors are `{title, message}`. 401 = bad/expired token.\n- Most list calls need a `user` or `organization` URI from `GET /users/me`; fetch that first and pass the full URI, URL-encoded with `v/ops/jvm/url-encode`.\n- Times are ISO 8601 UTC; window with `min_start_time` / `max_start_time`.\n"
+	},
+	"connection": {
+		"baseUrl": "https://api.calendly.com",
+		"auth": {
+			"kind": "bearer-secret",
+			"alternatives": [
+				"s/CALENDLY_TOKEN"
+			]
+		}
+	},
+	"skill": {
+		"tools": [
+			"v/ops/connections/status",
+			"v/ops/http/get",
+			"v/ops/http/post",
+			"v/ops/jvm/url-encode"
+		]
+	}
+}
