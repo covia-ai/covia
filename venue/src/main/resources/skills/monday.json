@@ -1,0 +1,25 @@
+{
+	"name": "monday",
+	"description": "Work with monday.com boards, items, and updates via its GraphQL API using the user's own token. Load for board/item reads, creating items, and posting updates.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## monday.com\nmonday is a single GraphQL endpoint. Calls go through `v/ops/http/post` to `https://api.monday.com/v2` with `secretHeaders: {\"Authorization\": \"s/MONDAY_TOKEN\"}` (a personal API token: your avatar -> Developers -> My access tokens; sent as the raw `Authorization` value). Send body `{\"query\": \"<graphql>\"}` and read `data`; never put the token in the request.\n\nCommon calls (POST `{query}`):\n- Whoami: `{ me { id name email } }`\n- Your boards: `{ boards(limit: 50) { id name state } }`\n- Items on a board: `{ boards(ids: [BOARD_ID]) { items_page(limit: 100) { cursor items { id name column_values { id text } } } } }`\n- Create an item: `mutation { create_item(board_id: BOARD_ID, item_name: \"NAME\") { id } }`\n- Post an update: `mutation { create_update(item_id: ITEM_ID, body: \"TEXT\") { id } }`\n\nRules:\n- Check `status` and the JSON: GraphQL errors return `{errors: [{message}]}` even on HTTP 200 (`Not Authenticated` = bad token).\n- Numeric ids are unquoted in GraphQL; strings are quoted. Escape quotes inside the query string.\n- Page a board with `items_page.cursor`, passed back via `next_items_page`.\n"
+	},
+	"connection": {
+		"baseUrl": "https://api.monday.com/v2",
+		"auth": {
+			"kind": "secret-header",
+			"alternatives": [
+				"s/MONDAY_TOKEN"
+			]
+		}
+	},
+	"skill": {
+		"tools": [
+			"v/ops/connections/status",
+			"v/ops/http/get",
+			"v/ops/http/post",
+			"v/ops/jvm/url-encode"
+		]
+	}
+}
