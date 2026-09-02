@@ -93,6 +93,12 @@ interface FrameStore {
 		if (frames == null || frames.isEmpty()) {
 			frames = Vectors.of((ACell) GoalTreeContext.createFrame(rootDescription));
 		}
+		AMap<AString, ACell> root = RT.ensureMap(frames.get(0));
+		if (root != null) {
+			AMap<AString, ACell> loads = ContextChain.sessionRootLoads(
+				RT.getIn(input, Fields.SESSION));
+			frames = frames.assoc(0, GoalTreeContext.withLoads(root, loads));
+		}
 		frames = appendCycleInputTurns(frames, messages, input, cycleTs, recordCaller);
 		return new Opened(new LocalFrameStore(frames), false, null);
 	}

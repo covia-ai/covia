@@ -36,7 +36,7 @@ public class AgentState extends ALatticeComponent<ACell> {
 	private static final AString K_STATE    = Strings.intern("state");
 	private static final AString K_TASKS    = Strings.intern("tasks");
 	private static final AString K_SESSIONS = Strings.intern("sessions");
-	/** Session-tier loads — the context scope chain's session level (#142). */
+	/** Legacy pre-frame loads slot. Read only by the cycle-start migration. */
 	private static final AString K_LOADS = Strings.intern("loads");
 	private static final AString K_PENDING  = Strings.intern("pending");
 	private static final AString K_TIMELINE = Strings.intern("timeline");
@@ -291,9 +291,9 @@ public class AgentState extends ALatticeComponent<ACell> {
 	}
 
 	/**
-	 * Ensures a session exists, seeding its session-tier loads (#142) when it
-	 * is minted here. {@code initialLoads} applies only on creation — an
-	 * existing session's loads are never touched by this method.
+	 * Ensures a session exists, seeding the root frame's loads when it is
+	 * minted here. {@code initialLoads} applies only on creation — an existing
+	 * session's loads are never touched by this method.
 	 */
 	public AMap<AString, ACell> ensureSession(Blob sid, AString caller,
 			AMap<AString, ACell> initialLoads) {
@@ -310,14 +310,14 @@ public class AgentState extends ALatticeComponent<ACell> {
 			AMap<AString, ACell> rootFrame = Maps.of(
 				K_DESCRIPTION,  Strings.EMPTY,
 				K_CONVERSATION, Vectors.empty());
+			if (initialLoads != null && initialLoads.count() > 0) {
+				rootFrame = rootFrame.assoc(K_LOADS, initialLoads);
+			}
 			AMap<AString, ACell> session = Maps.of(
 				K_C,       Maps.empty(),
 				K_PENDING, Vectors.empty(),
 				K_FRAMES,  Vectors.of(rootFrame),
 				K_META,    meta);
-			if (initialLoads != null && initialLoads.count() > 0) {
-				session = session.assoc(K_LOADS, initialLoads);
-			}
 			return r.assoc(K_SESSIONS, sessions.assoc(sid, session));
 		});
 		return getSession(sid);
@@ -393,7 +393,8 @@ public class AgentState extends ALatticeComponent<ACell> {
 				? (Index<Blob, ACell>) idx : Index.none();
 			ACell sv = sessions.get(sid);
 			if (!(sv instanceof AMap)) return r;
-			AMap<AString, ACell> session = (AMap<AString, ACell>) sv;
+			AMap<AString, ACell> session = migrateLegacySessionLoads(
+				(AMap<AString, ACell>) sv);
 
 			session = session.assoc(K_IN_CYCLE, epoch);
 			if (turns != null && turns.count() > 0) {
@@ -406,6 +407,50 @@ public class AgentState extends ALatticeComponent<ACell> {
 			return r.assoc(K_SESSIONS, sessions.assoc(sid, session));
 		});
 		return applied.get();
+	}
+
+	/**
+	 * Moves the former {@code session.loads} tier into the root frame. Existing
+	 * root-frame entries retain their old inner-scope precedence, including nil
+	 * masks. Flattening the effective value preserves behaviour while giving
+	 * both LLM runtimes one durable frame shape. Pure and safe under CAS retry.
+	 */
+	@SuppressWarnings("unchecked")
+	private static AMap<AString, ACell> migrateLegacySessionLoads(
+			AMap<AString, ACell> session) {
+		if (!session.containsKey(K_LOADS)) return session;
+		AMap<AString, ACell> legacy = (session.get(K_LOADS) instanceof AMap lm)
+			? (AMap<AString, ACell>) lm : Maps.empty();
+		AVector<ACell> frames = (session.get(K_FRAMES) instanceof AVector fv)
+			? (AVector<ACell>) fv : Vectors.empty();
+		AMap<AString, ACell> root;
+		if (frames.isEmpty() || !(frames.get(0) instanceof AMap)) {
+			root = Maps.of(
+				K_DESCRIPTION, Strings.EMPTY,
+				K_CONVERSATION, Vectors.empty());
+			frames = Vectors.of(root);
+		} else {
+			root = (AMap<AString, ACell>) frames.get(0);
+		}
+		AMap<AString, ACell> frameLoads = (root.get(K_LOADS) instanceof AMap fm)
+			? (AMap<AString, ACell>) fm : Maps.empty();
+		AMap<AString, ACell> merged = mergeLoadTiers(legacy, frameLoads);
+		root = merged.isEmpty() ? root.dissoc(K_LOADS) : root.assoc(K_LOADS, merged);
+		return session.assoc(K_FRAMES, frames.assoc(0, root)).dissoc(K_LOADS);
+	}
+
+	/** Applies load tiers outer-to-inner; nil entries mask an outer value. */
+	@SafeVarargs
+	private static AMap<AString, ACell> mergeLoadTiers(AMap<AString, ACell>... tiers) {
+		AMap<AString, ACell> result = Maps.empty();
+		for (AMap<AString, ACell> tier : tiers) {
+			for (var entry : tier.entrySet()) {
+				result = (entry.getValue() == null)
+					? result.dissoc(entry.getKey())
+					: result.assoc(entry.getKey(), entry.getValue());
+			}
+		}
+		return result;
 	}
 
 	/**

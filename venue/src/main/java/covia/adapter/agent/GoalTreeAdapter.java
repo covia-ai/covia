@@ -263,23 +263,19 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		AMap<AString, ACell> sourceConfig = config;
 		l3Config = effectiveModelConfig(l3Config, ctx);
 
-		// Same scope-chain view as processGoal (agent + session tiers, plus the
-		// root frame's tier when a session carries frames), so the inspected
+		// Same scope-chain view as processGoal (agent config + root frame), so the inspected
 		// skills index carries the right (loaded) markers.
 		AMap<AString, ACell> configLoads = ContextChain.operatorLoads(
 			RT.getIn(config, Fields.LOADS), "config.loads");
-		ACell sessLoads = RT.getIn(in.session(), Fields.LOADS);
-		AMap<AString, ACell> sessionTier = (sessLoads instanceof AMap)
-			? (AMap<AString, ACell>) sessLoads : null;
-		AMap<AString, ACell> outerLoads = ContextChain.effective(configLoads, sessionTier);
-		AMap<AString, ACell> indexLoads = outerLoads;
+		AMap<AString, ACell> outerLoads = configLoads;
+		AMap<AString, ACell> rootLoads = ContextChain.sessionRootLoads(in.session());
+		AMap<AString, ACell> indexLoads = ContextChain.effective(outerLoads, rootLoads);
 		AVector<ACell> sessionFrames = sessionFramesOf(in.session());
 		AVector<ACell> rootFrames = Vectors.empty();
 		if (sessionFrames != null && sessionFrames.count() > 0
 				&& sessionFrames.get(0) instanceof AMap) {
 			AMap<AString, ACell> rootFrame = (AMap<AString, ACell>) sessionFrames.get(0);
-			indexLoads = ContextChain.effective(indexLoads, GoalTreeContext.getLoads(rootFrame));
-			rootFrames = Vectors.of((ACell) rootFrame);
+			rootFrames = Vectors.of((ACell) GoalTreeContext.withLoads(rootFrame, rootLoads));
 		}
 
 		// This cycle's input, appended as a live cycle appends it. A session
@@ -301,8 +297,10 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			}
 		}
 		if (rootFrames.isEmpty()) {
-			rootFrames = Vectors.of((ACell) GoalTreeContext.createFrame(""));
+			rootFrames = Vectors.of((ACell) GoalTreeContext.createFrame("", rootLoads));
 		}
+		rootFrames = rootFrames.assoc(0, GoalTreeContext.withLoads(
+			(AMap<AString, ACell>) rootFrames.get(0), rootLoads));
 
 		// --- same as the first iteration of runFrame ---
 		RequestContext capsCtx = capsContext(config, ctx);
@@ -593,12 +591,10 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			frames = (AVector<ACell>) frames.slice(0, 1);
 		}
 
-		// Outer tiers of the context scope chain (#142): agent (config.loads,
-		// operator-pinned) + session (sessions.<sid>.loads). Constant within a
-		// cycle; frames compose their tier on top (inner shadows/masks outer).
-		AMap<AString, ACell> outerLoads = ContextChain.effective(
-			ContextChain.operatorLoads(RT.getIn(recordConfig, Fields.LOADS), "config.loads"),
-			ContextChain.sessionLoads(input));
+		// The operator-pinned config tier is constant within a cycle; each frame
+		// composes its own durable loads on top (inner shadows/masks outer).
+		AMap<AString, ACell> outerLoads = ContextChain.operatorLoads(
+			RT.getIn(recordConfig, Fields.LOADS), "config.loads");
 
 		// Authority, palette and the cycle's Spec. Harness tool names in
 		// config.tools are skipped by the palette — they're resolved separately
@@ -850,7 +846,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			HarnessTools.LoadScope scope = loadScope();
 			Loads.Snapshot before = loadSnapshot(scope.loads);
 			ACell result = HarnessTools.contextUnload(call.input(), scope);
-			activeFrame = activeFrame.assoc(GoalTreeContext.K_LOADS, scope.loads);
+			activeFrame = GoalTreeContext.withLoads(activeFrame, scope.loads);
 			Loads.Snapshot after = loadSnapshot(scope.loads);
 			adoptLoadSnapshot(after);
 			return ToolCycleEngine.ToolOutcome.result(result,
@@ -874,14 +870,14 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 				Loads.Append appended = Loads.append(
 					engine, ctx, scope.loads, key, cycleSpec.labels(), eventId);
 				scope.loads = appended.loads();
-				activeFrame = activeFrame.assoc(GoalTreeContext.K_LOADS, scope.loads);
+				activeFrame = GoalTreeContext.withLoads(activeFrame, scope.loads);
 				Loads.Snapshot afterSnapshot = loadSnapshot(scope.loads);
 				adoptLoadSnapshot(afterSnapshot);
 				AVector<ACell> events = (AVector<ACell>) appended.messages().concat(
 					HarnessTools.toolStateEvent(beforeSnapshot, afterSnapshot));
 				return ToolCycleEngine.ToolOutcome.result(result, events);
 			}
-			activeFrame = activeFrame.assoc(GoalTreeContext.K_LOADS, scope.loads);
+			activeFrame = GoalTreeContext.withLoads(activeFrame, scope.loads);
 			return ToolCycleEngine.ToolOutcome.result(result);
 		}
 

@@ -674,6 +674,13 @@ public class GoalTreeContext {
 		return (loads instanceof AMap) ? (AMap<AString, ACell>) loads : Maps.empty();
 	}
 
+	/** Replaces a frame's loads, omitting the optional field when empty. */
+	public static AMap<AString, ACell> withLoads(AMap<AString, ACell> frame,
+			AMap<AString, ACell> loads) {
+		return (loads == null || loads.isEmpty())
+			? frame.dissoc(K_LOADS) : frame.assoc(K_LOADS, loads);
+	}
+
 	/**
 	 * Adds or replaces a load entry in a frame's loads map.
 	 *
@@ -685,7 +692,7 @@ public class GoalTreeContext {
 	public static AMap<AString, ACell> addLoad(AMap<AString, ACell> frame,
 			AString path, AMap<AString, ACell> meta) {
 		AMap<AString, ACell> loads = getLoads(frame);
-		return frame.assoc(K_LOADS, loads.assoc(path, meta));
+		return withLoads(frame, loads.assoc(path, meta));
 	}
 
 	/**
@@ -698,10 +705,7 @@ public class GoalTreeContext {
 	public static AMap<AString, ACell> removeLoad(AMap<AString, ACell> frame, AString path) {
 		AMap<AString, ACell> loads = getLoads(frame);
 		AMap<AString, ACell> updated = loads.dissoc(path);
-		if (updated.count() == 0) {
-			return frame.dissoc(K_LOADS);
-		}
-		return frame.assoc(K_LOADS, updated);
+		return withLoads(frame, updated);
 	}
 
 	// ========== Internal helpers ==========
