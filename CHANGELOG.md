@@ -43,6 +43,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Changed
 
+- Update the Convex runtime and storage dependencies from 0.8.15 to 0.8.16.
 - `agent:request` and `agent:chat` Jobs survive a venue restart: kept at
   shutdown and at boot while their intake is queued on the agent, and
   completed by the boot wake. A `trigger` wait still fails as interrupted.
