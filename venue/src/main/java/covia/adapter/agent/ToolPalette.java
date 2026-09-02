@@ -1,9 +1,7 @@
 package covia.adapter.agent;
 
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.function.BiPredicate;
 import java.util.function.Predicate;
@@ -231,23 +229,6 @@ public final class ToolPalette {
 	}
 
 	/**
-	 * Tool definitions for explicit operation refs — the shape used by
-	 * {@code more_tools}, skill tool declarations and loads. Routes gain the
-	 * dispatch of every returned definition. An unreachable remote definition
-	 * is skipped; any other resolution failure propagates.
-	 */
-	public static AVector<ACell> forOperations(Engine engine, RequestContext ctx,
-			AVector<ACell> operations, Map<String, AString> routes) {
-		Palette palette = build(engine, ctx, operations, name -> false,
-			null, SOURCE_CONFIG, null);
-		for (var e : palette.toolIndex().entrySet()) {
-			AString operation = RT.ensureString(RT.getIn(e.getValue(), Fields.OPERATION));
-			if (operation != null) routes.put(e.getKey().toString(), operation);
-		}
-		return palette.tools();
-	}
-
-	/**
 	 * Resolves operation refs once into the durable binding shape carried by a
 	 * load: {@code [{operation, definition, activityLabel}]}. The provider
 	 * projection uses only {@code definition}; dispatch and UI events use the
@@ -297,23 +278,6 @@ public final class ToolPalette {
 		return resolve(engine, ctx, config, skipNames).unavailable();
 	}
 
-	/**
-	 * Tools contributed by loads entries — the generic "a loads entry may
-	 * declare {@code tools}" rule (skills are the first producer; the mechanism
-	 * is kind-agnostic). Deduplicated against {@code excludeNames} and each
-	 * other; {@code routes} gains the dispatch of every returned definition.
-	 */
-	@SuppressWarnings("unchecked")
-	public static AVector<ACell> loadsToolDefs(Engine engine, RequestContext ctx,
-			AMap<AString, ACell> effectiveLoads, Set<String> excludeNames,
-			Map<String, AString> routes) {
-		Predicate<String> excluded = (excludeNames != null) ? excludeNames::contains : name -> false;
-		LoadPalette loads = loadPalette(engine, ctx, effectiveLoads,
-			(name, owner) -> excluded.test(name), true);
-		projectRoutes(loads.active(), routes);
-		return loads.active().tools();
-	}
-
 	/** Resolves load-owned tools without parallel route/label projections. */
 	@SuppressWarnings("unchecked")
 	static LoadPalette loadPalette(Engine engine, RequestContext ctx,
@@ -355,14 +319,6 @@ public final class ToolPalette {
 			}
 		}
 		return new LoadPalette(new Palette(added, index, null), pinned);
-	}
-
-	private static void projectRoutes(Palette palette, Map<String, AString> routes) {
-		for (var e : palette.toolIndex().entrySet()) {
-			String name = e.getKey().toString();
-			AString route = RT.ensureString(RT.getIn(e.getValue(), Fields.OPERATION));
-			if (routes != null && route != null) routes.put(name, route);
-		}
 	}
 
 	/** Inspection entries for runtime-owned definitions that have no operation route. */

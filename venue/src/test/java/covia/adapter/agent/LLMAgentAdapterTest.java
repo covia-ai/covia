@@ -6,8 +6,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
-import java.util.HashMap;
-import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 import convex.core.data.ACell;
@@ -2246,14 +2244,13 @@ public class LLMAgentAdapterTest {
 		RequestContext ctx = RequestContext.of(ALICE_DID);
 		AMap<AString, ACell> input = Maps.of("agentId", "Charlie", "n", CVMLong.create(7));
 
-		// Config-mapped path: LLM tool name resolves through configToolMap.
-		java.util.Map<String, AString> toolMap = new java.util.HashMap<>();
-		toolMap.put("my_echo", Strings.create("v/test/ops/echo"));
-		ACell viaConfig = adapter.dispatchTool("my_echo", input, toolMap, ctx, 5000);
+		// Mapped path: LLM tool name resolves through the persisted direct lookup.
+		ACell viaConfig = adapter.dispatchTool("my_echo", input,
+			Strings.create("v/test/ops/echo"), ctx, 5000);
 
 		// Grid-dispatch path: tool name IS the op reference.
 		ACell viaGrid = adapter.dispatchTool("v/test/ops/echo", input,
-			new java.util.HashMap<>(), ctx, 5000);
+			null, ctx, 5000);
 
 		// Same op, same input, both paths: identical result — the
 		// Bob/Charlie divergence (#89) cannot recur.
@@ -2271,7 +2268,7 @@ public class LLMAgentAdapterTest {
 		AString jsonish = Strings.create("{\"key\":\"value\"}");
 
 		ACell result = adapter.dispatchTool("v/test/ops/echo", jsonish,
-			new java.util.HashMap<>(), ctx, 5000);
+			null, ctx, 5000);
 		assertEquals(jsonish, result, "internal dispatch must not silently parse string inputs");
 	}
 
@@ -2527,7 +2524,6 @@ public class LLMAgentAdapterTest {
 	public void testBuildConfigToolsStringEntries() {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 
-		Map<String, AString> configToolMap = new HashMap<>();
 		AVector<ACell> toolsVec = Vectors.of(
 			(ACell) Strings.create("v/ops/agent/create"),
 			(ACell) Strings.create("v/ops/agent/list")
@@ -2857,7 +2853,7 @@ public class LLMAgentAdapterTest {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		RequestContext ctx = RequestContext.of(ALICE_DID);
 
-		ACell result = adapter.dispatchTool("subgoal", Maps.empty(), Map.of(), ctx, 1000);
+		ACell result = adapter.dispatchTool("subgoal", Maps.empty(), null, ctx, 1000);
 		String msg = RT.ensureString(result).toString();
 		assertTrue(msg.startsWith("Error:"), msg);
 		assertTrue(msg.contains("goaltree harness tool"), msg);
@@ -2865,18 +2861,18 @@ public class LLMAgentAdapterTest {
 
 		// The reverse direction: llmagent's harness names under goaltree.
 		GoalTreeAdapter goaltree = (GoalTreeAdapter) engine.getAdapter("goaltree");
-		ACell reverse = goaltree.dispatchTool("complete_task", Maps.empty(), Map.of(), ctx, 1000);
+		ACell reverse = goaltree.dispatchTool("complete_task", Maps.empty(), null, ctx, 1000);
 		String reverseMsg = RT.ensureString(reverse).toString();
 		assertTrue(reverseMsg.contains("llmagent harness tool"), reverseMsg);
 		assertTrue(reverseMsg.contains("goaltree"), reverseMsg);
 
 		// A name shared by both runtimes reports both providers.
-		ACell shared = adapter.dispatchTool("context_load", Maps.empty(), Map.of(), ctx, 1000);
+		ACell shared = adapter.dispatchTool("context_load", Maps.empty(), null, ctx, 1000);
 		String sharedMsg = RT.ensureString(shared).toString();
 		assertTrue(sharedMsg.contains("goaltree, llmagent"), sharedMsg);
 
 		// A genuinely unknown name keeps the ordinary resolution failure.
-		ACell unknown = adapter.dispatchTool("no_such_tool_xyz", Maps.empty(), Map.of(), ctx, 1000);
+		ACell unknown = adapter.dispatchTool("no_such_tool_xyz", Maps.empty(), null, ctx, 1000);
 		String unknownMsg = RT.ensureString(unknown).toString();
 		assertTrue(unknownMsg.startsWith("Error:"), unknownMsg);
 		assertFalse(unknownMsg.contains("harness tool"), unknownMsg);

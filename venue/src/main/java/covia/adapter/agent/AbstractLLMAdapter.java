@@ -874,14 +874,16 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 
 	/**
 	 * Dispatches a tool call through the capability-checked pipeline.
-	 * Checks capabilities, resolves config tools, falls through to grid dispatch.
+	 * Checks capabilities and falls through to grid dispatch when no resolved
+	 * operation route is supplied.
 	 *
 	 * <p>Subclasses should call this for non-harness tools (i.e. after checking
 	 * their own built-in tools like subgoal/complete/compact).</p>
 	 *
 	 * @param toolName the tool name as returned by the LLM
 	 * @param input the tool call arguments
-	 * @param configToolMap mapping of LLM tool names to operation names
+	 * @param operation resolved operation route, or null when the tool name is
+	 *        itself an operation reference
 	 * @param ctx request context for the tool dispatch — carries the agent's
 	 *        grant scope ({@link RequestContext#getCaps()})
 	 * @param timeoutMs per-tool-call wall-clock budget; {@link TimeoutException}
@@ -890,22 +892,9 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * @return tool result (ACell)
 	 */
 	protected ACell dispatchTool(String toolName, ACell input,
-			Map<String, AString> configToolMap, RequestContext ctx,
-			long timeoutMs) {
-		// Resolve the operation: a config tool maps the LLM tool name to an op
-		// ref, otherwise the tool name is dispatched as a grid op. Capability
-		// enforcement happens at the dispatched op's OWN enforcement point
-		// (invokeInternal → the adapter's requireCapability / requireInvoke),
-		// under the agent's grant scope carried on ctx — no name-keyed pre-check here.
-		AString operation = (configToolMap != null) ? configToolMap.get(toolName) : null;
-		return dispatchTool(toolName, input, operation, ctx, timeoutMs);
-	}
-
-	/** Dispatch variant for runtimes that retain a direct name lookup. */
-	protected ACell dispatchTool(String toolName, ACell input,
 			AString operation, RequestContext ctx, long timeoutMs) {
-
-		// Config tools — tool name maps to a resolved operation
+		// Capability enforcement happens at the operation's own enforcement point
+		// under the agent's grant scope carried on ctx — no name-keyed gate here.
 		if (operation != null) {
 			return invokeOperation(operation, input, ctx, timeoutMs);
 		}

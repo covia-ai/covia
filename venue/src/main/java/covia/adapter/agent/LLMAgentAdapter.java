@@ -953,7 +953,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 
 		/**
 		 * Tools contributed by the effective loads — the generic "a loads
-		 * entry may declare tools" rule ({@link ToolPalette#loadsToolDefs}).
+		 * entry may declare tools" rule ({@link ToolPalette}).
 		 * Projected for every inference from the loads' materialised bindings. The
 		 * route set is replaced atomically, so unloading a source retracts both
 		 * its advertised definition and its name-to-operation dispatch route.

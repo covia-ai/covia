@@ -1601,14 +1601,16 @@ public final class Skills {
 		AVector<ACell> toolNames = Vectors.empty();
 		AVector<ACell> unresolved = Vectors.empty();
 		if (skill.toolOps().count() > 0) {
-			Map<String, AString> routes = new java.util.HashMap<>();
-			AVector<ACell> defs = ToolPalette.forOperations(engine, ctx, skill.toolOps(), routes);
-			for (long i = 0; i < defs.count(); i++) {
-				ACell n = RT.getIn(defs.get(i), Fields.NAME);
-				if (n != null) toolNames = toolNames.conj(n);
-			}
+			AVector<ACell> bindings = ToolPalette.bindingsForOperations(
+				engine, ctx, skill.toolOps());
 			Set<String> resolvedOps = new HashSet<>();
-			for (AString route : routes.values()) resolvedOps.add(route.toString());
+			for (long i = 0; i < bindings.count(); i++) {
+				ACell binding = bindings.get(i);
+				ACell n = RT.getIn(binding, Fields.DEFINITION, Fields.NAME);
+				if (n != null) toolNames = toolNames.conj(n);
+				AString operation = RT.ensureString(RT.getIn(binding, Fields.OPERATION));
+				if (operation != null) resolvedOps.add(operation.toString());
+			}
 			for (long i = 0; i < skill.toolOps().count(); i++) {
 				ACell op = skill.toolOps().get(i);
 				if (op != null && !resolvedOps.contains(op.toString())) {

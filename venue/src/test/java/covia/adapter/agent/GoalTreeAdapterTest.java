@@ -142,9 +142,8 @@ public class GoalTreeAdapterTest {
 		assertTrue(Skills.isSkillEntry(childLoads.get(Strings.create("w/skills/alpha"))));
 
 		// The inherited entry contributes tools in the child's effective view
-		java.util.Map<String, AString> routes = new java.util.HashMap<>();
-		AVector<ACell> defs = ToolPalette.loadsToolDefs(engine, ALICE,
-			ContextChain.effective(childLoads), java.util.Set.of(), routes);
+		AVector<ACell> defs = Loads.resolve(engine, ALICE,
+			ContextChain.effective(childLoads), java.util.Set.of(), Labels.BRACKET).tools();
 		assertEquals(1, defs.count());
 		assertEquals("covia_read", RT.getIn(defs.get(0), Strings.intern("name")).toString());
 
@@ -156,8 +155,8 @@ public class GoalTreeAdapterTest {
 		AMap<AString, ACell> childEffective = ContextChain.effective(
 			GoalTreeContext.getLoads(parent), masked);
 		assertEquals(0, childEffective.count());
-		assertEquals(0, ToolPalette.loadsToolDefs(engine, ALICE,
-			childEffective, java.util.Set.of(), new java.util.HashMap<>()).count());
+		assertEquals(0, Loads.resolve(engine, ALICE,
+			childEffective, java.util.Set.of(), Labels.BRACKET).tools().count());
 		Loads.Snapshot unloaded = Loads.resolve(
 			engine, ALICE, childEffective, java.util.Set.of(), Labels.BRACKET);
 		ACell hallucinated = ((GoalTreeAdapter) engine.getAdapter("goaltree")).dispatchTool(

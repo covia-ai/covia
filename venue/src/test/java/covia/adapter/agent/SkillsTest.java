@@ -564,8 +564,8 @@ public class SkillsTest {
 		assertNull(RT.getIn(defs.get(0), Fields.ACTIVITY_LABEL));
 
 		// Dedup against names already offered outside the loads mechanism
-		AVector<ACell> none = ToolPalette.loadsToolDefs(engine, ctx, loads,
-			java.util.Set.of("covia_read"), new java.util.HashMap<>());
+		AVector<ACell> none = Loads.resolve(engine, ctx, loads,
+			java.util.Set.of("covia_read"), Labels.BRACKET).tools();
 		assertEquals(0, none.count());
 
 		// A PLAIN (non-skill) entry with tools contributes too — kind-agnostic.
@@ -573,8 +573,8 @@ public class SkillsTest {
 			Strings.create("w/data/pack"), Maps.of(
 				Strings.create("budget"), CVMLong.create(500),
 				Fields.TOOLS, Vectors.of(Strings.create("v/ops/covia/list"))));
-		AVector<ACell> plainDefs = ToolPalette.loadsToolDefs(engine, ctx, plain,
-			java.util.Set.of(), new java.util.HashMap<>());
+		AVector<ACell> plainDefs = Loads.resolve(engine, ctx, plain,
+			java.util.Set.of(), Labels.BRACKET).tools();
 		assertEquals(1, plainDefs.count());
 
 		// Unresolvable tool refs are skipped (buildConfigTools' skip-with-warn).
@@ -582,8 +582,8 @@ public class SkillsTest {
 			Strings.create("w/skills/y"), Maps.of(
 				Strings.create("skill"), convex.core.data.prim.CVMBool.TRUE,
 				Fields.TOOLS, Vectors.of(Strings.create("v/ops/no/such/op"))));
-		assertEquals(0, ToolPalette.loadsToolDefs(engine, ctx, broken,
-			java.util.Set.of(), new java.util.HashMap<>()).count());
+		assertEquals(0, Loads.resolve(engine, ctx, broken,
+			java.util.Set.of(), Labels.BRACKET).tools().count());
 	}
 
 	// ========== frontmatter parser ==========
