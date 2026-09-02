@@ -2648,6 +2648,27 @@ public class LLMAgentAdapterTest {
 	}
 
 	@Test
+	public void testToolCallingDisabledPersistsEmptyManifest() {
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+		ACell config = Maps.of(
+			"llmOperation", "v/test/ops/llm",
+			"tools", Vectors.of("v/ops/agent/create"),
+			"modelProfile", Maps.of("options",
+				Maps.of("toolCalling", CVMBool.FALSE)));
+
+		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), Maps.of(
+			Fields.AGENT_ID, "no-tool-calling-agent",
+			AgentState.KEY_CONFIG, config,
+			Fields.MESSAGES, Vectors.of(Maps.of("content", "test"))));
+		ACell rendered = RT.getIn(output, Fields.FRAMES, CVMLong.ZERO,
+			GoalTreeContext.K_RENDERED_CONTEXT);
+
+		assertEquals(0, RT.ensureVector(RT.getIn(rendered, Fields.TOOLS)).count());
+		assertEquals(CVMLong.ZERO, RT.getIn(rendered, "baseToolStart"));
+		assertEquals(CVMLong.ZERO, RT.getIn(rendered, "baseToolEnd"));
+	}
+
+	@Test
 	public void testInvalidToolEntrySkipped() {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 

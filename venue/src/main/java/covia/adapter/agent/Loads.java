@@ -7,7 +7,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.function.Predicate;
+import java.util.function.BiPredicate;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -299,7 +299,7 @@ public final class Loads {
 	}
 
 	static Snapshot resolveForInference(Engine engine, RequestContext ctx,
-			AMap<AString, ACell> effectiveLoads, Predicate<String> excluded, AString dialect,
+			AMap<AString, ACell> effectiveLoads, BiPredicate<String, AString> excluded, AString dialect,
 			boolean materialiseLive) {
 		return resolve(engine, ctx, effectiveLoads, excluded, dialect, materialiseLive);
 	}
@@ -312,12 +312,12 @@ public final class Loads {
 	}
 
 	static Snapshot describe(Engine engine, RequestContext ctx,
-			AMap<AString, ACell> effectiveLoads, Predicate<String> excluded) {
+			AMap<AString, ACell> effectiveLoads, BiPredicate<String, AString> excluded) {
 		return describe(engine, ctx, effectiveLoads, excluded, true);
 	}
 
 	static Snapshot describe(Engine engine, RequestContext ctx,
-			AMap<AString, ACell> effectiveLoads, Predicate<String> excluded,
+			AMap<AString, ACell> effectiveLoads, BiPredicate<String, AString> excluded,
 			boolean resolvePinned) {
 		if (effectiveLoads == null || effectiveLoads.count() == 0) return Snapshot.EMPTY;
 		AMap<AString, ACell> toolLoads = resolvePinned
@@ -328,7 +328,7 @@ public final class Loads {
 	}
 
 	private static Snapshot resolve(Engine engine, RequestContext ctx,
-			AMap<AString, ACell> effectiveLoads, Predicate<String> excluded, AString dialect,
+			AMap<AString, ACell> effectiveLoads, BiPredicate<String, AString> excluded, AString dialect,
 			boolean materialiseLive) {
 		if (effectiveLoads == null || effectiveLoads.count() == 0) return Snapshot.EMPTY;
 		AMap<AString, ACell> toolLoads = materialiseLive
@@ -365,8 +365,8 @@ public final class Loads {
 		return new Append(loads.assoc(key, meta.assoc(K_APPENDED, CVMBool.TRUE)), messages);
 	}
 
-	private static Predicate<String> excluded(Set<String> names) {
-		return (names != null) ? names::contains : name -> false;
+	private static BiPredicate<String, AString> excluded(Set<String> names) {
+		return (names != null) ? (name, owner) -> names.contains(name) : (name, owner) -> false;
 	}
 
 	/**

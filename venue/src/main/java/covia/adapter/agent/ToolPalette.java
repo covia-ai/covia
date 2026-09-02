@@ -5,6 +5,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.BiPredicate;
 import java.util.function.Predicate;
 
 import org.slf4j.Logger;
@@ -68,8 +69,8 @@ public final class ToolPalette {
 	 * Exact provider definitions plus a direct lookup by provider tool name.
 	 * Lookup values are sparse: {@code operation} is present only when this
 	 * palette owns dispatch; {@code activityLabel} defaults to the name and
-	 * {@code source} defaults to {@code config}. Empty values reserve names for
-	 * harness or load-owned definitions without duplicating their schemas.
+	 * {@code source} defaults to {@code config}. Route-free values reserve names
+	 * for harness or unloadable load definitions without duplicating schemas.
 	 */
 	public record Palette(AVector<ACell> tools, AMap<AString, ACell> toolIndex,
 			AVector<ACell> unavailable) {
@@ -191,8 +192,8 @@ public final class ToolPalette {
 	 * Resolves the tools of every skill in the initial discovery surface. The
 	 * catalog is read under operator authority, exactly like its rendered index;
 	 * operation schemas are resolved under the agent's capability scope. Name
-	 * precedence is the provider manifest's precedence: harness/config names in
-	 * names selected by {@code occupiedName} win, then the first skill in catalog order wins.
+	 * precedence is the provider manifest's precedence: names selected by
+	 * {@code occupiedName} win, then the first skill in catalog order wins.
 	 */
 	public static Palette declaredSkillTools(Engine engine,
 			RequestContext catalogCtx, RequestContext operationCtx,
@@ -275,7 +276,7 @@ public final class ToolPalette {
 		return bindings;
 	}
 
-	/** Materialises a stable load's tool declarations once. */
+	/** Materialises a load's tool declarations once. */
 	static AMap<AString, ACell> materialiseLoadToolBindings(Engine engine,
 			RequestContext ctx, AMap<AString, ACell> spec) {
 		if (spec.containsKey(Loads.K_TOOL_BINDINGS)) return spec;
@@ -307,7 +308,8 @@ public final class ToolPalette {
 			AMap<AString, ACell> effectiveLoads, Set<String> excludeNames,
 			Map<String, AString> routes) {
 		Predicate<String> excluded = (excludeNames != null) ? excludeNames::contains : name -> false;
-		LoadPalette loads = loadPalette(engine, ctx, effectiveLoads, excluded, true);
+		LoadPalette loads = loadPalette(engine, ctx, effectiveLoads,
+			(name, owner) -> excluded.test(name), true);
 		projectRoutes(loads.active(), routes);
 		return loads.active().tools();
 	}
@@ -315,7 +317,7 @@ public final class ToolPalette {
 	/** Resolves load-owned tools without parallel route/label projections. */
 	@SuppressWarnings("unchecked")
 	static LoadPalette loadPalette(Engine engine, RequestContext ctx,
-			AMap<AString, ACell> effectiveLoads, Predicate<String> excluded,
+			AMap<AString, ACell> effectiveLoads, BiPredicate<String, AString> excluded,
 			boolean resolvePinned) {
 		AVector<ACell> added = Vectors.empty();
 		AMap<AString, ACell> index = Maps.empty();
@@ -339,7 +341,7 @@ public final class ToolPalette {
 				ACell binding = bindings.get(i);
 				ACell def = RT.getIn(binding, Fields.DEFINITION);
 				AString n = RT.ensureString(RT.getIn(def, K_NAME));
-				if (n == null || (excluded != null && excluded.test(n.toString()))
+				if (n == null || (excluded != null && excluded.test(n.toString(), entry.getKey()))
 						|| !names.add(n.toString())) continue;
 				added = added.conj(def);
 				AString route = RT.ensureString(RT.getIn(binding, Fields.OPERATION));
@@ -480,11 +482,6 @@ public final class ToolPalette {
 		return (label != null) ? label : Strings.create(name);
 	}
 
-	/** True only when the fixed palette owns this name's dispatch route. */
-	static boolean hasOperation(AMap<AString, ACell> toolIndex, String name) {
-		return operation(toolIndex, name) != null;
-	}
-
 	/** Adds previously unknown names; the earlier manifest owns collisions. */
 	static AMap<AString, ACell> mergeIndex(AMap<AString, ACell> fixed,
 			AMap<AString, ACell> contributed) {
@@ -494,6 +491,35 @@ public final class ToolPalette {
 			if (!merged.containsKey(e.getKey())) merged = merged.assoc(e.getKey(), e.getValue());
 		}
 		return merged;
+	}
+
+	/** Retains load ownership metadata while leaving dispatch with active load state. */
+	@SuppressWarnings("unchecked")
+	static AMap<AString, ACell> loadOwners(AMap<AString, ACell> activeLoadIndex) {
+		AMap<AString, ACell> owners = Maps.empty();
+		if (activeLoadIndex == null) return owners;
+		for (var e : activeLoadIndex.entrySet()) {
+			AMap<AString, ACell> info = (e.getValue() instanceof AMap<?, ?> map)
+				? (AMap<AString, ACell>) map : Maps.empty();
+			owners = owners.assoc(e.getKey(), info.dissoc(Fields.OPERATION));
+		}
+		return owners;
+	}
+
+	/**
+	 * Whether an active load may contribute a name to an immutable manifest.
+	 * A route already owned by the manifest always wins. A route-free entry is
+	 * a reservation for the load whose key is in {@code ref}; it keeps that
+	 * load active without allowing another load to reuse the frozen name.
+	 */
+	static boolean excludesLoadName(AMap<AString, ACell> manifestIndex,
+			Set<String> harnessNames, String name, AString loadKey) {
+		if (name == null || (harnessNames != null && harnessNames.contains(name))) return true;
+		ACell info = (manifestIndex != null) ? manifestIndex.get(Strings.create(name)) : null;
+		if (info == null) return false;
+		if (RT.getIn(info, Fields.OPERATION) != null) return true;
+		AString owner = RT.ensureString(RT.getIn(info, Fields.REF));
+		return owner == null || !owner.equals(loadKey);
 	}
 
 	private static AString nonBlank(AString value) {

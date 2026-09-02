@@ -321,8 +321,8 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		boolean materialiseLive = ContextAssembler.rendered(
 			rootFrames, sourceConfig, cachePrefix) == null;
 		Loads.Snapshot loads = Loads.resolveForInference(engine, capsCtx, indexLoads,
-			name -> HARNESS_NAMES.contains(name)
-				|| ToolPalette.hasOperation(fixed.toolIndex(), name),
+			(name, owner) -> ToolPalette.excludesLoadName(
+				fixed.toolIndex(), HARNESS_NAMES, name, owner),
 			profile.labels(), materialiseLive);
 
 		// The loads ride in exactly as runFrame sets them — stable elements
@@ -804,8 +804,9 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			return dispatchTool(name, input, operation, ctx, toolCallTimeoutMs);
 		}
 
-		private boolean excludesLoadName(String name) {
-			return HARNESS_NAMES.contains(name) || ToolPalette.hasOperation(toolIndex, name);
+		private boolean excludesLoadName(String name, AString owner) {
+			return ToolPalette.excludesLoadName(
+				toolIndex, HARNESS_NAMES, name, owner);
 		}
 
 		private boolean containsFixedName(String name) {
@@ -1367,10 +1368,14 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		if (spec.cachePrefix()) {
 			AMap<AString, ACell> fixedIndex = ToolPalette.mergeIndex(
 				frameTools.toolIndex, frameTools.pinnedToolIndex);
+			fixedIndex = ToolPalette.mergeIndex(fixedIndex,
+				ToolPalette.loadOwners(frameTools.iterationToolIndex));
 			AMap<AString, ACell> manifestIndex = new ToolPalette.Palette(
 				null, fixedIndex, null).forManifest(spec.tools()).toolIndex();
+			int baseStart = spec.toolCalling() ? frameTools.baseToolStart : 0;
+			int baseEnd = spec.toolCalling() ? frameTools.baseToolEnd : 0;
 			candidate = ContextAssembler.initialise(spec).withToolIndex(
-				manifestIndex, frameTools.baseToolStart, frameTools.baseToolEnd);
+				manifestIndex, baseStart, baseEnd);
 			frameTools.toolIndex = manifestIndex;
 		}
 		AMap<AString, ACell> prepared = ContextAssembler.applyRendering(

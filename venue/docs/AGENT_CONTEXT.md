@@ -109,10 +109,12 @@ ToolInfo := {
 
 `tools` is passed to the provider as-is. `toolIndex` has one key for every named
 definition in that vector. Its values contain no schema: configured operations
-omit `source`, activity labels equal to the provider name are omitted, and an
-empty value reserves a harness or agent-managed load name whose dispatch lives
-in its unloadable load entry. Pinned load routes live in the lookup because a
-config change is their invalidation boundary. The base range is an index into `tools`, not another tool copy; it
+omit `source`, activity labels equal to the provider name are omitted, and a
+route-free value reserves a harness or agent-managed load name whose dispatch
+lives in its unloadable load entry; load values retain `source`/`ref` so the
+same owner remains active without allowing another load to reuse the frozen
+name. Pinned load routes live in the lookup because a config change is their
+invalidation boundary. The base range is an index into `tools`, not another tool copy; it
 lets a goal-tree child reuse the common configured/skill definitions without
 scanning or resolving the parent's rendered context. Loads use their own
 materialised binding grammar from §7.1 because unloadable routes belong to load
@@ -424,9 +426,9 @@ Tools discovered only after a parent skill loads, or introduced by `more_tools`,
 
 In cached mode, if such a load is present while a context is first materialised
 (or explicitly rebuilt), its definitions enter `renderedContext.tools`. An
-agent-managed load's name has an empty `toolIndex` value because the active
-load owns dispatch; a pinned load's route is retained in the lookup. If it
-is acquired later, the fixed array remains unchanged and its addition is
+agent-managed load's name has route-free ownership metadata in `toolIndex`
+because the active load owns dispatch; a pinned load's route is retained in the
+lookup. If it is acquired later, the fixed array remains unchanged and its addition is
 appended to `frame.conversation`. In uncached mode its durable binding is simply
 projected into each subsequent request's tool vector; there is no cache to
 invalidate. Unloading the same load appends the removal in either mode. The

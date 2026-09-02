@@ -754,7 +754,7 @@ public class ContextAssemblerTest {
 		assertEquals("skill", RT.getIn(snap.toolProvenance().get(0), Fields.SOURCE).toString());
 		assertEquals("w/skills/toolful", RT.getIn(snap.toolProvenance().get(0), Fields.REF).toString());
 		assertEquals(0, Loads.resolveForInference(engine, ctx, loads,
-			name -> false, Labels.BRACKET, false).tools().count(),
+			(name, owner) -> false, Labels.BRACKET, false).tools().count(),
 			"a cached inference must not reopen a pinned skill to rediscover tools");
 		// A name fixed by harness or config is never shadowed by a load.
 		assertEquals(0, Loads.resolve(engine, ctx, loads, java.util.Set.of("covia_read"), Labels.BRACKET).tools().count());
@@ -773,13 +773,13 @@ public class ContextAssemblerTest {
 			Fields.TOOLS, Vectors.of(Strings.create("v/ops/covia/read")),
 			Loads.K_KIND, Loads.KIND_TOOLS));
 		Loads.Snapshot initial = Loads.resolveForInference(engine, ctx, loads,
-			name -> false, Labels.BRACKET, true);
+			(name, owner) -> false, Labels.BRACKET, true);
 		assertEquals(1, initial.tools().count());
 		assertEquals("v/ops/covia/read", ToolPalette.operation(
 			initial.pinnedToolIndex(), "covia_read").toString());
 
 		Loads.Snapshot cached = Loads.resolveForInference(engine, ctx, loads,
-			name -> false, Labels.BRACKET, false);
+			(name, owner) -> false, Labels.BRACKET, false);
 		assertEquals(0, cached.tools().count(),
 			"a cached inference must not resolve an unmaterialised pinned declaration again");
 	}
@@ -1151,6 +1151,13 @@ public class ContextAssemblerTest {
 		assertNull(ContextAssembler.Rendered.fromCell(
 			RT.ensureMap(rendered.toCell()).dissoc(Strings.intern("toolIndex"))),
 			"a legacy cache without the name lookup must be rebuilt once");
+		assertNull(ContextAssembler.Rendered.fromCell(
+			RT.ensureMap(rendered.toCell()).dissoc(Strings.intern("live"))),
+			"a cache without required band offsets must be rebuilt once");
+		assertNull(ContextAssembler.Rendered.fromCell(
+			RT.ensureMap(rendered.toCell()).assoc(Strings.intern("live"),
+				CVMLong.create(rendered.messages().count() + 1))),
+			"band offsets outside the persisted vector are invalid");
 		assertNull(RT.getIn(rendered.toCell(), "skillCatalog"),
 			"the skills index already lives in messages and has no sidecar");
 
@@ -1240,6 +1247,28 @@ public class ContextAssemblerTest {
 			"config is the source default");
 		assertNull(RT.getIn(info, Fields.ACTIVITY_LABEL),
 			"the provider name is the activity-label default");
+	}
+
+	@Test
+	public void testRenderedLoadNameIsReservedForItsOwner() {
+		AString name = Strings.create("covia_read");
+		AString owner = Strings.create("w/skills/reader");
+		AMap<AString, ACell> active = Maps.of(name, Maps.of(
+			Fields.OPERATION, "v/ops/covia/read",
+			Fields.SOURCE, "skill",
+			Fields.REF, owner));
+		AMap<AString, ACell> manifest = ToolPalette.loadOwners(active);
+
+		assertNull(RT.getIn(manifest.get(name), Fields.OPERATION),
+			"dispatch remains in the unloadable load entry");
+		assertFalse(ToolPalette.excludesLoadName(
+			manifest, java.util.Set.of(), name.toString(), owner));
+		assertTrue(ToolPalette.excludesLoadName(
+			manifest, java.util.Set.of(), name.toString(), Strings.create("w/skills/other")),
+			"another load cannot reuse a name frozen in the provider manifest");
+		assertTrue(ToolPalette.excludesLoadName(
+			active, java.util.Set.of(), name.toString(), owner),
+			"a manifest-owned dispatch route takes precedence over every load");
 	}
 
 	@Test

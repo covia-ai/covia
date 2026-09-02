@@ -554,7 +554,7 @@ public class SkillsTest {
 			Strings.create("w/skills/x"), Skills.buildSkillLoadMeta(2000, s));
 
 		ToolPalette.Palette palette = ToolPalette.loadPalette(
-			engine, ctx, loads, name -> false, true).active();
+			engine, ctx, loads, (name, owner) -> false, true).active();
 		AVector<ACell> defs = palette.tools();
 		assertEquals(1, defs.count());
 		assertEquals("covia_read", RT.getIn(defs.get(0), Fields.NAME).toString());

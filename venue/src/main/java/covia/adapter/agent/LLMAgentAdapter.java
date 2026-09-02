@@ -658,10 +658,14 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		if (spec.cachePrefix()) {
 			AMap<AString, ACell> fixedIndex = ToolPalette.mergeIndex(
 				toolCtx.toolIndex, toolCtx.currentPinnedToolIndex);
+			fixedIndex = ToolPalette.mergeIndex(fixedIndex,
+				ToolPalette.loadOwners(toolCtx.currentLoadToolIndex));
 			AMap<AString, ACell> manifestIndex = new ToolPalette.Palette(
 				null, fixedIndex, null).forManifest(spec.tools()).toolIndex();
+			int baseStart = spec.toolCalling() ? toolCtx.baseToolStart : 0;
+			int baseEnd = spec.toolCalling() ? toolCtx.baseToolEnd : 0;
 			candidate = ContextAssembler.initialise(spec).withToolIndex(
-				manifestIndex, toolCtx.baseToolStart, toolCtx.baseToolEnd);
+				manifestIndex, baseStart, baseEnd);
 			toolCtx.toolIndex = manifestIndex;
 		}
 		ContextAssembler.Rendered rendering = candidate;
@@ -984,8 +988,9 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 				: ToolPalette.labelFor(toolIndex, name).toString();
 		}
 
-		boolean excludesLoadName(String name) {
-			return HARNESS_TOOL_NAMES.contains(name) || ToolPalette.hasOperation(toolIndex, name);
+		boolean excludesLoadName(String name, AString owner) {
+			return ToolPalette.excludesLoadName(
+				toolIndex, HARNESS_TOOL_NAMES, name, owner);
 		}
 
 		boolean containsFixedName(String name) {

@@ -170,20 +170,26 @@ public final class ContextAssembler {
 			ACell baseStart = map.get(K_RENDERED_BASE_START);
 			ACell baseEnd = map.get(K_RENDERED_BASE_END);
 			ACell messages = map.get(K_RENDERED_MESSAGES);
+			ACell headCell = map.get(K_RENDERED_HEAD);
+			ACell liveCell = map.get(K_RENDERED_LIVE);
 			ACell sourceConfig = map.get(K_RENDERED_CONFIG);
 			// Older materialisations are inapplicable and upgrade once. Required
 			// fields also keep ordinary cache reads free of schema inspection.
 			if (!(tools instanceof AVector<?> toolVector) || !(toolIndex instanceof AMap<?, ?>)
 					|| !(baseStart instanceof CVMLong start) || !(baseEnd instanceof CVMLong end)
 					|| start.longValue() < 0 || end.longValue() < start.longValue()
-					|| end.longValue() > toolVector.count() || !(messages instanceof AVector<?>)
+					|| end.longValue() > toolVector.count()
+					|| start.longValue() > Integer.MAX_VALUE || end.longValue() > Integer.MAX_VALUE
+					|| !(messages instanceof AVector<?> messageVector)
+					|| !(headCell instanceof CVMLong head) || !(liveCell instanceof CVMLong live)
+					|| head.longValue() < 0 || live.longValue() < head.longValue()
+					|| live.longValue() > messageVector.count()
+					|| head.longValue() > Integer.MAX_VALUE || live.longValue() > Integer.MAX_VALUE
 					|| !(sourceConfig instanceof AMap<?, ?>)) return null;
-			long head = (map.get(K_RENDERED_HEAD) instanceof CVMLong n) ? n.longValue() : 0;
-			long live = (map.get(K_RENDERED_LIVE) instanceof CVMLong n) ? n.longValue() : head;
 			return new Rendered((AVector<ACell>) tools, (AMap<AString, ACell>) toolIndex,
 				Math.toIntExact(start.longValue()), Math.toIntExact(end.longValue()),
 				(AVector<ACell>) messages,
-				Math.toIntExact(head), Math.toIntExact(live),
+				Math.toIntExact(head.longValue()), Math.toIntExact(live.longValue()),
 				RT.ensureString(map.get(K_RENDERED_LABELS)),
 				(AMap<AString, ACell>) sourceConfig);
 		}

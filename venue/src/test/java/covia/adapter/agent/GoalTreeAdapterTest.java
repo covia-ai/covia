@@ -14,6 +14,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
+import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.AAdapter;
 import covia.adapter.TestAdapter;
@@ -394,6 +395,27 @@ public class GoalTreeAdapterTest {
 		AString response = RT.ensureString(RT.getIn(output, Fields.RESPONSE));
 		assertNotNull(response, "Should have a response");
 		assertTrue(response.toString().length() > 0, "Response should not be empty");
+	}
+
+	@Test
+	public void testToolCallingDisabledPersistsEmptyManifest() {
+		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
+		ACell config = Maps.of(
+			"llmOperation", "v/test/ops/llm",
+			"tools", Vectors.of("v/ops/agent/create"),
+			"modelProfile", Maps.of("options",
+				Maps.of("toolCalling", CVMBool.FALSE)));
+
+		ACell output = adapter.processGoal(null, ALICE, Maps.of(
+			Fields.AGENT_ID, "no-tool-calling-goal",
+			AgentState.KEY_CONFIG, config,
+			Fields.MESSAGES, Vectors.of(Maps.of("content", "test"))));
+		ACell rendered = RT.getIn(output, Fields.FRAMES, 0,
+			GoalTreeContext.K_RENDERED_CONTEXT);
+
+		assertEquals(0, RT.ensureVector(RT.getIn(rendered, Fields.TOOLS)).count());
+		assertEquals(CVMLong.ZERO, RT.getIn(rendered, "baseToolStart"));
+		assertEquals(CVMLong.ZERO, RT.getIn(rendered, "baseToolEnd"));
 	}
 
 	@Test
