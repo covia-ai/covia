@@ -185,8 +185,10 @@ public class AgentToolboxTest {
 			assertFalse(CVMBool.TRUE.equals(loaded.get(AbstractLLMAdapter.K_DONE)), where);
 			assertEquals(CVMBool.TRUE,
 				RT.getIn(call(loaded, "call_context_load"), Fields.RESULT, "loaded"), where);
-			assertNotNull(call(loaded, "context:call_context_load"),
-				where + " context_load did not append its loaded_context event");
+			ACell loadedEvent = callNamed(loaded, ContextAssembler.LOADED_CONTEXT_TOOL);
+			assertTrue(ToolCallIds.valid(RT.ensureString(
+				RT.getIn(loadedEvent, AbstractLLMAdapter.K_ID))),
+				where + " context_load appended an invalid provider call id");
 			assertTrue(messages(loaded).toString().contains(CONTEXT_MARKER),
 				where + " context_load result was not assembled into the next prompt: " + loaded);
 
@@ -447,6 +449,17 @@ public class AgentToolboxTest {
 			if (id.equals(String.valueOf(RT.getIn(call, AbstractLLMAdapter.K_ID)))) return call;
 		}
 		fail("step has no call " + id + ": " + step);
+		return null;
+	}
+
+	private static ACell callNamed(AMap<AString, ACell> step, String name) {
+		AVector<ACell> calls = RT.ensureVector(step.get(Fields.CALLS));
+		assertNotNull(calls, "step has no calls: " + step);
+		for (long i = 0; i < calls.count(); i++) {
+			ACell call = calls.get(i);
+			if (name.equals(String.valueOf(RT.getIn(call, AbstractLLMAdapter.K_NAME)))) return call;
+		}
+		fail("step has no call named " + name + ": " + step);
 		return null;
 	}
 

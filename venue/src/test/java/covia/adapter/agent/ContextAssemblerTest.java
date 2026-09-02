@@ -909,6 +909,32 @@ public class ContextAssemblerTest {
 	}
 
 	@Test
+	public void testToolCallIdsAreProviderValidAndLegacyFramesRenderSafely() {
+		AString byCall = ContextAssembler.contextEventId(Strings.create("toolu_123"), 2,
+			Strings.create("unused"));
+		AString byFallback = ContextAssembler.contextEventId(null, 2,
+			Strings.create("skills/review"));
+		assertTrue(ToolCallIds.valid(byCall), byCall.toString());
+		assertTrue(ToolCallIds.valid(byFallback), byFallback.toString());
+		assertEquals(byCall, ContextAssembler.contextEventId(Strings.create("toolu_123"), 9,
+			Strings.create("different")), "the real provider call id is the event identity");
+
+		AString legacy = Strings.create("context:2:skills/review");
+		AMap<AString, ACell> storedAssistant = Maps.of(
+			"role", "assistant", "toolCalls", Vectors.of(Maps.of(
+				"id", legacy, "name", "loaded_context", "arguments", Maps.empty())));
+		AMap<AString, ACell> assistant = ConversationRenderer.toMessage(storedAssistant, null);
+		AMap<AString, ACell> result = ConversationRenderer.toMessage(Maps.of(
+			"role", "tool", "id", legacy, "name", "loaded_context", "content", "data"), null);
+		AString callId = RT.ensureString(RT.getIn(assistant, "toolCalls", 0, "id"));
+		assertTrue(ToolCallIds.valid(callId), callId.toString());
+		assertEquals(callId, result.get(Strings.intern("id")),
+			"deterministic repair must preserve tool-call/result pairing");
+		assertEquals(legacy, RT.getIn(storedAssistant, "toolCalls", 0, "id"),
+			"rendering does not mutate durable input");
+	}
+
+	@Test
 	public void testAttributionNoteOncePerPrincipalChange() {
 		AString bob = Strings.create("did:key:z6MkBob");
 		AVector<ACell> inbox = Vectors.of(

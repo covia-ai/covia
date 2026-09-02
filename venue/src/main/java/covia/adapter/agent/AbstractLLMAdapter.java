@@ -373,7 +373,9 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			AString name = (call != null) ? RT.ensureString(call.get(K_NAME)) : null;
 			if (name == null) throw new IllegalArgumentException(
 				"assistant.toolCalls[" + i + "] needs a name");
-			if (call.get(K_ID) == null) call = call.assoc(K_ID, Strings.create("step-" + i));
+			AString id = RT.ensureString(call.get(K_ID));
+			call = call.assoc(K_ID, (id != null)
+				? ToolCallIds.normalise(id) : Strings.create("step-" + i));
 			if (call.get(K_ARGUMENTS) == null) call = call.assoc(K_ARGUMENTS, Maps.empty());
 			normalised = normalised.conj(call);
 		}

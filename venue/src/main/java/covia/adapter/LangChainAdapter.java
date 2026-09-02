@@ -25,6 +25,7 @@ import convex.core.util.JSON;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import covia.adapter.agent.AbstractLLMAdapter;
+import covia.adapter.agent.ToolCallIds;
 import covia.api.Fields;
 import covia.grid.Asset;
 import covia.grid.Status;
@@ -1193,7 +1194,7 @@ public class LangChainAdapter extends AAdapter {
 						req.arguments() == null ? null : Strings.create(req.arguments()))
 				);
 				if (req.id() != null) {
-					tc = tc.assoc(K_ID, Strings.create(req.id()));
+					tc = tc.assoc(K_ID, ToolCallIds.normalise(Strings.create(req.id())));
 				}
 				toolCalls = toolCalls.conj(tc);
 			}
@@ -1580,7 +1581,8 @@ public class LangChainAdapter extends AAdapter {
 							AString id = RT.ensureString(RT.getIn(tc, K_ID));
 							if (name != null) {
 								// Synthetic ID if LLM didn't provide one (e.g. Ollama)
-								String idStr = (id != null) ? id.toString() : name.toString();
+								String idStr = ToolCallIds.normalise(
+									(id != null) ? id : name).toString();
 								reqs.add(ToolExecutionRequest.builder()
 									.id(idStr)
 									.name(name.toString())
@@ -1603,7 +1605,8 @@ public class LangChainAdapter extends AAdapter {
 					AString name = RT.ensureString(RT.getIn(entry, K_NAME));
 					AString content = RT.ensureString(RT.getIn(entry, K_CONTENT));
 					if (name != null && content != null) {
-						String idStr = (id != null) ? id.toString() : name.toString();
+						String idStr = ToolCallIds.normalise(
+							(id != null) ? id : name).toString();
 						var builder = ToolExecutionResultMessage.builder()
 							.id(idStr)
 							.toolName(name.toString())

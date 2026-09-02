@@ -810,7 +810,7 @@ public final class ContextAssembler {
 			K_OBSERVATION_ID, id,
 			Strings.intern("instructions"), (instructions != null) ? instructions : Vectors.empty(),
 			Strings.intern("data"), (data != null) ? data : Vectors.empty());
-		return Strings.create("context:observation:" + identity.getHash().toHexString());
+		return ToolCallIds.synthetic("context-observation", identity);
 	}
 
 	/** Venue-authored transition when a declaration stops being watched. */
@@ -936,13 +936,13 @@ public final class ContextAssembler {
 		AVector<ACell> calls = Vectors.empty();
 		AVector<ACell> results = Vectors.empty();
 		if (!pinned.isEmpty()) {
-			AString id = (eventId != null) ? Strings.create(eventId + ":pinned")
+			AString id = (eventId != null) ? ToolCallIds.synthetic("context-pinned", eventId)
 				: PINNED_LIVE_ID;
 			calls = calls.conj(contextCall(id, PINNED_CONTEXT_TOOL));
 			results = results.conj(AbstractLLMAdapter.toolResultMessage(id, PINNED_CONTEXT_TOOL, pinned));
 		}
 		if (!loaded.isEmpty()) {
-			AString id = (eventId != null) ? eventId
+			AString id = (eventId != null) ? ToolCallIds.normalise(eventId)
 				: LOADED_LIVE_ID;
 			calls = calls.conj(contextCall(id, LOADED_CONTEXT_TOOL));
 			results = results.conj(AbstractLLMAdapter.toolResultMessage(id, LOADED_CONTEXT_TOOL, loaded));
@@ -961,13 +961,11 @@ public final class ContextAssembler {
 			AbstractLLMAdapter.K_ARGUMENTS, Maps.empty());
 	}
 
-	/** Provider pairing id for an appended context event. The originating call
-	 *  id is preferred and persisted; the fallback uses the real load key and
-	 *  iteration, never content or a synthetic per-entry identity. */
+	/** Provider pairing id for an appended context event. The stable identity is
+	 *  the originating call id, or the real load key and iteration as fallback. */
 	static AString contextEventId(AString callId, int iteration, AString key) {
-		return (callId != null)
-			? Strings.create("context:" + callId)
-			: Strings.create("context:" + iteration + ":" + key);
+		ACell identity = (callId != null) ? callId : Vectors.of(CVMLong.create(iteration), key);
+		return ToolCallIds.synthetic("context", identity);
 	}
 
 	/**

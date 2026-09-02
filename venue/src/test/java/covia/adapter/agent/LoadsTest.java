@@ -592,7 +592,9 @@ public class LoadsTest {
 		scope.loads = first.loads();
 		assertEquals("VALUE-ONE",
 			RT.getIn(first.messages().get(1), "structuredContent", "w/reloadable", "content").toString());
-		assertEquals("context:call-1", RT.getIn(first.messages().get(0), "toolCalls", 0, "id").toString());
+		AString firstId = RT.ensureString(RT.getIn(first.messages().get(0), "toolCalls", 0, "id"));
+		assertTrue(ToolCallIds.valid(firstId), firstId.toString());
+		assertEquals(firstId, RT.getIn(first.messages().get(1), "id"));
 
 		// Mutation alone neither re-reads nor re-renders a persistent entry.
 		write("w/reloadable", Strings.create("VALUE-TWO"));
