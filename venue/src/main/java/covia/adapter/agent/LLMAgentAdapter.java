@@ -152,9 +152,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		boolean cachePrefix = promptCaching(profile, config);
 		AVector<ACell> sessionFrames = sessionFramesOf(in.session());
 		if (sessionFrames != null && !sessionFrames.isEmpty()) {
-			AMap<AString, ACell> root = RT.ensureMap(sessionFrames.get(0));
-			if (root != null) sessionFrames = sessionFrames.assoc(0,
-				GoalTreeContext.withLoads(root, frameLoads));
+			sessionFrames = GoalTreeContext.withRootLoads(sessionFrames, frameLoads);
 		}
 		FixedPalette fixed = fixedPalette(sourceConfig, ctx, capsCtx,
 			sessionFrames, cachePrefix);
@@ -374,8 +372,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 			RT.getIn(recordConfig, Fields.LOADS), "config.loads");
 
 		AVector<ACell> sessionFrames = store.frames();
-		AMap<AString, ACell> frameLoads = sessionFrames.isEmpty()
-			? Maps.empty() : GoalTreeContext.getLoads(RT.ensureMap(sessionFrames.get(0)));
+		AMap<AString, ACell> frameLoads = GoalTreeContext.rootLoads(sessionFrames);
 		RequestContext capsCtx = capsContext(recordConfig, ctx).withAgentId(agentId);
 		AMap<AString, ACell> config = effectiveModelConfig(recordConfig, ctx);
 		AString llmOperation = getLLMOperation(config);
@@ -703,8 +700,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 	/** Commits a completed tool batch's results, events and load changes together. */
 	private static void persistRootFrame(ToolContext toolCtx) {
 		AMap<AString, ACell> root = toolCtx.activeFrame;
-		if (root == null || !toolCtx.store.update(frames ->
-			frames.isEmpty() ? frames : frames.assoc(0, root))) {
+		if (root == null || !toolCtx.store.replace(0, root)) {
 			throw new JobFailedException("Session cycle was superseded while committing tool results");
 		}
 		toolCtx.adoptFrames(toolCtx.store.frames());

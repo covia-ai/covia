@@ -275,7 +275,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		if (sessionFrames != null && sessionFrames.count() > 0
 				&& sessionFrames.get(0) instanceof AMap) {
 			AMap<AString, ACell> rootFrame = (AMap<AString, ACell>) sessionFrames.get(0);
-			rootFrames = Vectors.of((ACell) GoalTreeContext.withLoads(rootFrame, rootLoads));
+			rootFrames = Vectors.of((ACell) rootFrame);
 		}
 
 		// This cycle's input, appended as a live cycle appends it. A session
@@ -299,8 +299,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		if (rootFrames.isEmpty()) {
 			rootFrames = Vectors.of((ACell) GoalTreeContext.createFrame("", rootLoads));
 		}
-		rootFrames = rootFrames.assoc(0, GoalTreeContext.withLoads(
-			(AMap<AString, ACell>) rootFrames.get(0), rootLoads));
+		rootFrames = GoalTreeContext.withRootLoads(rootFrames, rootLoads);
 
 		// --- same as the first iteration of runFrame ---
 		RequestContext capsCtx = capsContext(config, ctx);
@@ -1388,7 +1387,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 
 	/** Persists the active frame back into the stack; false = cycle superseded. */
 	private static boolean persist(FrameStore store, int frameIndex, AMap<AString, ACell> activeFrame) {
-		return store.update(f -> updateFrame(f, frameIndex, activeFrame));
+		return store.replace(frameIndex, activeFrame);
 	}
 
 	/** The uniform give-up result when this cycle no longer owns the frames. */

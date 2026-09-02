@@ -93,12 +93,8 @@ interface FrameStore {
 		if (frames == null || frames.isEmpty()) {
 			frames = Vectors.of((ACell) GoalTreeContext.createFrame(rootDescription));
 		}
-		AMap<AString, ACell> root = RT.ensureMap(frames.get(0));
-		if (root != null) {
-			AMap<AString, ACell> loads = ContextChain.sessionRootLoads(
-				RT.getIn(input, Fields.SESSION));
-			frames = frames.assoc(0, GoalTreeContext.withLoads(root, loads));
-		}
+		frames = GoalTreeContext.withRootLoads(frames,
+			ContextChain.sessionRootLoads(RT.getIn(input, Fields.SESSION)));
 		frames = appendCycleInputTurns(frames, messages, input, cycleTs, recordCaller);
 		return new Opened(new LocalFrameStore(frames), false, null);
 	}
@@ -186,6 +182,15 @@ interface FrameStore {
 	 *         must stop
 	 */
 	boolean update(UnaryOperator<AVector<ACell>> fn);
+
+	/** Replaces one frame through the store's ordinary atomic/fenced update. */
+	default boolean replace(int frameIndex, ACell frame) {
+		return update(frames -> {
+			if (frameIndex < 0 || frameIndex >= frames.count()) return frames;
+			return (frames.get(frameIndex) == frame)
+				? frames : frames.assoc(frameIndex, frame);
+		});
+	}
 
 	/**
 	 * Applies already-materialised watched-context candidates to one frame in a

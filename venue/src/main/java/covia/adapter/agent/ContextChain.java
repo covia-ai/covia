@@ -185,9 +185,8 @@ public class ContextChain {
 			? (AMap<AString, ACell>) lm : Maps.empty();
 		AMap<AString, ACell> root = Maps.empty();
 		ACell frames = RT.getIn(session, covia.api.Fields.FRAMES);
-		if (frames instanceof convex.core.data.AVector<?> fv && !fv.isEmpty()
-				&& fv.get(0) instanceof AMap fm) {
-			root = GoalTreeContext.getLoads((AMap<AString, ACell>) fm);
+		if (frames instanceof convex.core.data.AVector<?> fv) {
+			root = GoalTreeContext.rootLoads((convex.core.data.AVector<ACell>) fv);
 		}
 		return effective(legacy, root);
 	}
