@@ -31,6 +31,7 @@ import covia.adapter.AAdapter;
 import covia.adapter.AgentAdapter;
 import covia.adapter.AssetAdapter;
 import covia.adapter.CoviaAdapter;
+import covia.adapter.UserAdapter;
 import convex.core.util.JSON;
 import covia.api.Abilities;
 import covia.api.Fields;
@@ -44,6 +45,7 @@ import covia.venue.api.model.ErrorResponse;
 import covia.venue.api.model.InvokeRequest;
 import covia.venue.api.model.InvokeResult;
 import covia.venue.AssetStore;
+import covia.venue.Config;
 import covia.venue.RequestContext;
 import covia.venue.SecretStore;
 import covia.venue.User;
@@ -167,6 +169,13 @@ public class CoviaAPI extends ACoviaAPI {
 		// per read. scheduler:list remains the operation form.
 		routes.get(ROUTE+"schedules", this::getSchedules, COVIA_API);
 
+		// Users — job-free reads (#255), operator-gated (a 403 here means "not
+		// an operator", not a broken page). Reuses UserAdapter's own
+		// requireVenueUserAuthority checks, so authorization never duplicates.
+		routes.get(ROUTE+"users", this::getUsers, COVIA_API);
+		routes.get(ROUTE+"users/{did}", this::getUserInfo, COVIA_API);
+		routes.get(ROUTE+"users/{did}/authentications", this::getUserAuthentications, COVIA_API);
+
 		// Secrets
 		routes.get(ROUTE+"secrets", this::listSecrets, COVIA_API);
 		routes.put(ROUTE+"secrets/{name}", this::putSecret, COVIA_API);
@@ -195,6 +204,15 @@ public class CoviaAPI extends ACoviaAPI {
 		stats = stats.assoc(Strings.intern("userJobs"),
 			RT.cvm(engine().jobs().getJobs(rctx).count()));
 		result=result.assoc(STATS_FIELD,stats);
+
+		// Curated admission-policy fields (#255) — safe to state to any caller,
+		// same accessors VenueAdapter.showConfig() already exposes via the
+		// operation form. Lets a Users admin UI state autoCreate truthfully
+		// without a dedicated show-config REST route.
+		Config config = engine().config();
+		result = result.assoc(Fields.ACCESS, Maps.of(
+			Strings.intern("public"), CVMBool.create(config.isPublicAccess()),
+			Strings.intern("userAutoCreate"), CVMBool.create(config.isUserAutoCreate())));
 
 		buildResult(ctx,200,result);
 	}
@@ -1909,6 +1927,84 @@ public class CoviaAPI extends ACoviaAPI {
 		buildResult(ctx, 200, info);
 	}
 
+	@OpenApi(path = ROUTE + "users",
+			methods = HttpMethod.GET,
+			tags = { "Covia" },
+			summary = "List registered venue users — the user:list payload (job-free, #255). "
+				+ "Operator-only: a non-operator, signed-in caller gets 403, not a partial list.",
+			operationId = "getUsers")
+	protected void getUsers(Context ctx) {
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		if (rctx.getCallerDID() == null) {
+			buildError(ctx, 401, "Authentication required");
+			return;
+		}
+		UserAdapter user = (UserAdapter) engine().getAdapter("user");
+		try {
+			buildResult(ctx, 200, user.list(rctx));
+		} catch (AuthException e) {
+			buildError(ctx, 403, e.getMessage());
+		} catch (IllegalArgumentException e) {
+			buildError(ctx, 400, e.getMessage());
+		} catch (RuntimeException e) {
+			buildError(ctx, 500, "Read failed: " + e.getMessage());
+		}
+	}
+
+	@OpenApi(path = ROUTE + "users/{did}",
+			methods = HttpMethod.GET,
+			tags = { "Covia" },
+			summary = "Get one registered user — the user:info payload (job-free, #255). "
+				+ "The caller's own DID needs no operator authority; any other DID does.",
+			operationId = "getUserInfo",
+			pathParams = { @OpenApiParam(name = "did", description = "User DID") })
+	protected void getUserInfo(Context ctx) {
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		if (rctx.getCallerDID() == null) {
+			buildError(ctx, 401, "Authentication required");
+			return;
+		}
+		String did = ctx.pathParam("did");
+		UserAdapter user = (UserAdapter) engine().getAdapter("user");
+		AMap<AString, ACell> input = Maps.of(Fields.DID, Strings.create(did));
+		try {
+			buildResult(ctx, 200, user.info(rctx, input));
+		} catch (AuthException e) {
+			buildError(ctx, 403, e.getMessage());
+		} catch (IllegalArgumentException e) {
+			buildError(ctx, 404, e.getMessage());
+		} catch (RuntimeException e) {
+			buildError(ctx, 500, "Read failed: " + e.getMessage());
+		}
+	}
+
+	@OpenApi(path = ROUTE + "users/{did}/authentications",
+			methods = HttpMethod.GET,
+			tags = { "Covia" },
+			summary = "List a venue-managed user's authenticators, active and revoked "
+				+ "tombstones alike — the user:authentication-list payload (job-free, #255). "
+				+ "The caller's own DID needs no operator authority; any other DID does.",
+			operationId = "getUserAuthentications",
+			pathParams = { @OpenApiParam(name = "did", description = "User DID") })
+	protected void getUserAuthentications(Context ctx) {
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		if (rctx.getCallerDID() == null) {
+			buildError(ctx, 401, "Authentication required");
+			return;
+		}
+		String did = ctx.pathParam("did");
+		UserAdapter user = (UserAdapter) engine().getAdapter("user");
+		AMap<AString, ACell> input = Maps.of(Fields.DID, Strings.create(did));
+		try {
+			buildResult(ctx, 200, user.authenticationList(rctx, input));
+		} catch (AuthException e) {
+			buildError(ctx, 403, e.getMessage());
+		} catch (IllegalArgumentException e) {
+			buildError(ctx, 400, e.getMessage());
+		} catch (RuntimeException e) {
+			buildError(ctx, 500, "Read failed: " + e.getMessage());
+		}
+	}
 
 	@OpenApi(path = ROUTE + "agents/{id}/sse",
 			methods = HttpMethod.GET,

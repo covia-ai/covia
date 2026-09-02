@@ -191,6 +191,39 @@ class UserAdapterTest {
 	}
 
 	@Test
+	void widenedMethodsMatchOperationFormAndReportManagedFlag() throws Exception {
+		// #255: CoviaAPI's job-free REST routes call list()/info()/
+		// authenticationList() directly (bypassing invokeFuture's op dispatch),
+		// so they must enforce identical authority and return identical shapes
+		// as the v/ops/user/* operation form.
+		UserAdapter adapter = (UserAdapter) engine.getAdapter("user");
+
+		AString selfSovereign = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
+		create(Maps.of(Fields.DID, selfSovereign));
+		ACell managedCreate = create(Maps.of("username", "managed-flag-check"));
+		AString managedDid = RT.ensureString(RT.getIn(managedCreate, Fields.DID));
+
+		ACell selfInfo = adapter.info(RequestContext.of(selfSovereign), Maps.empty());
+		assertEquals(CVMBool.FALSE, RT.getIn(selfInfo, Fields.MANAGED),
+			"a plain self-sovereign DID is not a managed account");
+
+		ACell managedInfo = adapter.info(engine.venueContext(), Maps.of(Fields.DID, managedDid));
+		assertEquals(CVMBool.TRUE, RT.getIn(managedInfo, Fields.MANAGED),
+			"a venue-managed username account reports managed:true");
+
+		// Non-operator, non-self access is denied identically to the op form.
+		assertThrows(AuthException.class,
+			() -> adapter.info(RequestContext.of(selfSovereign), Maps.of(Fields.DID, managedDid)));
+		assertThrows(AuthException.class, () -> adapter.list(RequestContext.of(selfSovereign)));
+
+		ACell list = adapter.list(engine.venueContext());
+		assertTrue(RT.ensureLong(RT.getIn(list, "total")).longValue() >= 2);
+
+		ACell auths = adapter.authenticationList(RequestContext.of(managedDid), Maps.empty());
+		assertEquals(managedDid, RT.getIn(auths, Fields.DID));
+	}
+
+	@Test
 	void sudoIsExplicitProofBoundedAndPreservesActor() throws Exception {
 		AKeyPair ownerKey = AKeyPair.generate();
 		AKeyPair delegateKey = AKeyPair.generate();
