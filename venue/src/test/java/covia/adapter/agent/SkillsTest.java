@@ -553,14 +553,13 @@ public class SkillsTest {
 		AMap<AString, ACell> loads = Maps.of(
 			Strings.create("w/skills/x"), Skills.buildSkillLoadMeta(2000, s));
 
-		java.util.Map<String, AString> toolMap = new java.util.HashMap<>();
-		java.util.Map<String, AString> activityLabels = new java.util.HashMap<>();
-		AVector<ACell> defs = ToolPalette.loadsToolDefs(engine, ctx, loads,
-			java.util.Set.of(), toolMap, activityLabels, null);
+		ToolPalette.Palette palette = ToolPalette.loadPalette(
+			engine, ctx, loads, name -> false, true).active();
+		AVector<ACell> defs = palette.tools();
 		assertEquals(1, defs.count());
 		assertEquals("covia_read", RT.getIn(defs.get(0), Fields.NAME).toString());
-		assertEquals("v/ops/covia/read", toolMap.get("covia_read").toString());
-		assertNotNull(activityLabels.get("covia_read"),
+		assertEquals("v/ops/covia/read", palette.operation("covia_read").toString());
+		assertNotNull(palette.activityLabel("covia_read"),
 			"a loaded tool retains its UI label outside the provider definition");
 		assertNull(RT.getIn(defs.get(0), Fields.ACTIVITY_LABEL));
 

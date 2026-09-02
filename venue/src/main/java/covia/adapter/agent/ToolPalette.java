@@ -5,6 +5,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Predicate;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -64,197 +65,93 @@ public final class ToolPalette {
 		(ACell) Strings.create("v/ops/covia/list"));
 
 	/**
-	 * Per-engine cache of the resolved default pack. Every default op lives
-	 * under venue-scoped {@code v/ops/}, so the result is the same for every
-	 * caller; adapters install their assets at startup and never change them,
-	 * so it is never invalidated.
+	 * Exact provider definitions plus a direct lookup by provider tool name.
+	 * Lookup values are sparse: {@code operation} is present only when this
+	 * palette owns dispatch; {@code activityLabel} defaults to the name and
+	 * {@code source} defaults to {@code config}. Empty values reserve names for
+	 * harness or load-owned definitions without duplicating their schemas.
 	 */
-	private static final java.util.concurrent.ConcurrentHashMap<Engine, Palette>
-		DEFAULT_TOOL_CACHE = new java.util.concurrent.ConcurrentHashMap<>();
+	public record Palette(AVector<ACell> tools, AMap<AString, ACell> toolIndex,
+			AVector<ACell> unavailable) {
+		public static final Palette EMPTY = new Palette(null, null, null);
 
-	/** A resolved fixed palette plus configured operations that did not resolve. */
-	public record Palette(Bindings bindings, AVector<ACell> unavailable) {
 		public Palette {
-			bindings = (bindings != null) ? bindings : Bindings.EMPTY;
+			tools = (tools != null) ? tools : Vectors.empty();
+			toolIndex = (toolIndex != null) ? toolIndex : Maps.empty();
 			unavailable = (unavailable != null) ? unavailable : Vectors.empty();
 		}
 
-		public AVector<ACell> tools() { return bindings.tools(); }
-		public Map<String, AString> routes() { return bindings.routes(); }
-		public Map<String, AString> activityLabels() { return bindings.activityLabels(); }
-		public AVector<ACell> provenance() { return bindings.provenance(); }
-	}
-
-	/**
-	 * Immutable tool bindings in provider-manifest order. Every entry carries
-	 * its exact {@code definition}; operation-backed entries also carry their
-	 * route. Optional metadata is sparse: {@code activityLabel} defaults to the
-	 * tool name and {@code source} defaults to {@code config} when an operation
-	 * is present. A definition-only entry is runtime-owned or is backed by its
-	 * owning load.
-	 */
-	public record Bindings(AVector<ACell> cells) {
-		public static final Bindings EMPTY = new Bindings(null);
-
-		public Bindings {
-			cells = (cells != null) ? cells : Vectors.empty();
+		public boolean contains(String name) {
+			return name != null && toolIndex.containsKey(Strings.create(name));
 		}
 
-		static Bindings of(AVector<ACell> tools, Map<String, AString> activityLabels,
-				AVector<ACell> provenance) {
-			if (tools == null || tools.isEmpty()) return EMPTY;
-			Map<String, ACell> origins = new HashMap<>();
-			for (long i = 0; provenance != null && i < provenance.count(); i++) {
-				ACell item = provenance.get(i);
-				AString name = RT.ensureString(RT.getIn(item, K_NAME));
-				if (name != null) origins.putIfAbsent(name.toString(), item);
+		public AString operation(String name) {
+			return ToolPalette.operation(toolIndex, name);
+		}
+
+		public AString activityLabel(String name) {
+			return ToolPalette.labelFor(toolIndex, name);
+		}
+
+		/** Appends only definitions whose name is not already present. */
+		public Palette merge(Palette contributed) {
+			if (contributed == null) return this;
+			if (contributed.tools().isEmpty()) {
+				return contributed.unavailable().isEmpty() ? this
+					: new Palette(tools, toolIndex,
+						concat(unavailable, contributed.unavailable()));
 			}
-			AVector<ACell> bindings = Vectors.empty();
-			for (long i = 0; i < tools.count(); i++) {
-				ACell definition = tools.get(i);
+			AVector<ACell> mergedTools = tools;
+			AMap<AString, ACell> mergedIndex = toolIndex;
+			for (long i = 0; i < contributed.tools().count(); i++) {
+				ACell definition = contributed.tools().get(i);
 				AString name = RT.ensureString(RT.getIn(definition, K_NAME));
-				ACell origin = (name != null) ? origins.get(name.toString()) : null;
-				bindings = bindings.conj(binding(definition,
-					RT.ensureString(RT.getIn(origin, Fields.OPERATION)),
-					(name != null && activityLabels != null)
-						? activityLabels.get(name.toString()) : null,
-					name, RT.ensureString(RT.getIn(origin, Fields.SOURCE)),
-					RT.ensureString(RT.getIn(origin, Fields.REF))));
+				if (name != null && mergedIndex.containsKey(name)) continue;
+				mergedTools = mergedTools.conj(definition);
+				if (name != null) {
+					ACell info = contributed.toolIndex().get(name);
+					mergedIndex = mergedIndex.assoc(name, (info != null) ? info : Maps.empty());
+				}
 			}
-			return new Bindings(bindings);
+			return new Palette(mergedTools, mergedIndex,
+				concat(unavailable, contributed.unavailable()));
 		}
 
-		/** Definition-only bindings for runtime-owned tools. */
-		public static Bindings definitions(AVector<ACell> definitions) {
-			AVector<ACell> cells = Vectors.empty();
-			for (long i = 0; definitions != null && i < definitions.count(); i++) {
-				cells = cells.conj(Maps.of(Fields.DEFINITION, definitions.get(i)));
+		/** Exact manifest with one lookup entry for every named definition. */
+		public Palette forManifest(AVector<ACell> manifest) {
+			AMap<AString, ACell> index = Maps.empty();
+			for (long i = 0; manifest != null && i < manifest.count(); i++) {
+				AString name = RT.ensureString(RT.getIn(manifest.get(i), K_NAME));
+				if (name == null || index.containsKey(name)) continue;
+				ACell info = toolIndex.get(name);
+				index = index.assoc(name, (info != null) ? info : Maps.empty());
 			}
-			return cells.isEmpty() ? EMPTY : new Bindings(cells);
+			return new Palette(manifest, index, unavailable);
 		}
 
-		public Bindings merge(Bindings contributed) {
-			if (contributed == null || contributed.cells().isEmpty()) return this;
-			Set<String> names = new HashSet<>(names());
-			AVector<ACell> merged = cells;
-			for (long i = 0; i < contributed.cells().count(); i++) {
-				ACell item = contributed.cells().get(i);
-				AString name = name(item);
-				if (name == null || names.add(name.toString())) merged = merged.conj(item);
-			}
-			return merged == cells ? this : new Bindings(merged);
-		}
-
-		/** Reorders bindings to an exact manifest, retaining known metadata. */
-		public Bindings forManifest(AVector<ACell> tools) {
-			Map<String, ACell> known = new HashMap<>();
-			for (long i = 0; i < cells.count(); i++) {
-				AString name = name(cells.get(i));
-				if (name != null) known.putIfAbsent(name.toString(), cells.get(i));
-			}
-			AVector<ACell> ordered = Vectors.empty();
-			for (long i = 0; tools != null && i < tools.count(); i++) {
-				ACell definition = tools.get(i);
-				AString name = RT.ensureString(RT.getIn(definition, K_NAME));
-				AMap<AString, ACell> value = (name != null && known.get(name.toString()) instanceof AMap<?, ?> map)
-					? castMap(map) : Maps.empty();
-				ordered = ordered.conj(value.assoc(Fields.DEFINITION, definition));
-			}
-			return ordered.isEmpty() ? EMPTY : new Bindings(ordered);
-		}
-
-		/** Only bindings whose dispatch route is fixed by the rendered context. */
-		public Bindings operations() {
-			AVector<ACell> out = Vectors.empty();
-			for (long i = 0; i < cells.count(); i++) {
-				ACell value = cells.get(i);
-				if (RT.getIn(value, Fields.OPERATION) != null) out = out.conj(value);
-			}
-			return out.isEmpty() ? EMPTY : new Bindings(out);
-		}
-
-		public AVector<ACell> tools() {
-			AVector<ACell> tools = Vectors.empty();
-			for (long i = 0; i < cells.count(); i++) {
-				ACell definition = RT.getIn(cells.get(i), Fields.DEFINITION);
-				if (definition != null) tools = tools.conj(definition);
-			}
-			return tools;
-		}
-
-		public Set<String> names() {
-			Set<String> names = new HashSet<>();
-			for (long i = 0; i < cells.count(); i++) {
-				AString name = name(cells.get(i));
-				if (name != null) names.add(name.toString());
-			}
-			return Set.copyOf(names);
-		}
-
-		public Map<String, AString> routes() {
-			Map<String, AString> routes = new HashMap<>();
-			for (long i = 0; i < cells.count(); i++) {
-				ACell item = cells.get(i);
-				AString name = name(item);
-				AString operation = RT.ensureString(RT.getIn(item, Fields.OPERATION));
-				if (name != null && operation != null) routes.put(name.toString(), operation);
-			}
-			return Map.copyOf(routes);
-		}
-
-		public Map<String, AString> activityLabels() {
-			Map<String, AString> labels = new HashMap<>();
-			for (long i = 0; i < cells.count(); i++) {
-				ACell item = cells.get(i);
-				AString name = name(item);
-				if (name == null || RT.getIn(item, Fields.OPERATION) == null) continue;
-				AString label = nonBlank(RT.ensureString(
-					RT.getIn(item, Fields.ACTIVITY_LABEL)));
-				labels.put(name.toString(), (label != null) ? label : name);
-			}
-			return Map.copyOf(labels);
-		}
-
-		/** Inspection projection in provider-manifest order. */
+		/** Inspection-only projection; ordinary inference uses direct lookup. */
 		public AVector<ACell> provenance() {
 			AVector<ACell> out = Vectors.empty();
-			for (long i = 0; i < cells.count(); i++) {
-				ACell value = cells.get(i);
-				AString name = name(value);
-				AString operation = RT.ensureString(RT.getIn(value, Fields.OPERATION));
-				if (name == null || operation == null) continue;
-				AString source = RT.ensureString(RT.getIn(value, Fields.SOURCE));
+			for (var e : toolIndex.entrySet()) {
+				AString operation = RT.ensureString(RT.getIn(e.getValue(), Fields.OPERATION));
+				if (operation == null) continue;
+				AString source = RT.ensureString(RT.getIn(e.getValue(), Fields.SOURCE));
 				if (source == null) source = SOURCE_CONFIG;
-				out = out.conj(entry(name, source, operation,
-					RT.ensureString(RT.getIn(value, Fields.REF))));
+				out = out.conj(entry(e.getKey(), source, operation,
+					RT.ensureString(RT.getIn(e.getValue(), Fields.REF))));
 			}
 			return out;
 		}
-
-		private static AString name(ACell binding) {
-			return RT.ensureString(RT.getIn(binding, Fields.DEFINITION, K_NAME));
-		}
-
-		@SuppressWarnings("unchecked")
-		private static AMap<AString, ACell> castMap(AMap<?, ?> map) {
-			return (AMap<AString, ACell>) map;
-		}
 	}
 
-	/** Tools contributed by the skills visible in the initial catalog. Their
-	 * schemas and routes join the fixed context together: loading a skill adds
-	 * instructions, not authority to invoke an already offered tool. */
-	public record DeclaredSkillTools(Bindings bindings) {
-		public static final DeclaredSkillTools EMPTY =
-			new DeclaredSkillTools(null);
+	/** Active load tools plus the subset whose immutable owner is the rendered prefix. */
+	record LoadPalette(Palette active, AMap<AString, ACell> pinnedIndex) {
+		static final LoadPalette EMPTY = new LoadPalette(null, null);
 
-		public DeclaredSkillTools {
-			bindings = (bindings != null) ? bindings : Bindings.EMPTY;
+		LoadPalette {
+			active = (active != null) ? active : Palette.EMPTY;
+			pinnedIndex = (pinnedIndex != null) ? pinnedIndex : Maps.empty();
 		}
-
-		public AVector<ACell> tools() { return bindings.tools(); }
-		public Set<String> names() { return bindings.names(); }
-		public AVector<ACell> provenance() { return bindings.provenance(); }
 	}
 
 	/**
@@ -271,39 +168,23 @@ public final class ToolPalette {
 			AMap<AString, ACell> config, Set<String> skipNames) {
 		AVector<ACell> caps = RT.ensureVector(config != null ? config.get(K_CAPS) : null);
 		RequestContext resolutionCtx = (caps != null) ? ctx.withCaps(caps) : ctx;
-		Map<String, AString> routes = new HashMap<>();
-		Map<String, AString> activityLabels = new HashMap<>();
-
-		AVector<ACell> tools = Vectors.empty();
-		AVector<ACell> entries = Vectors.empty();
-		Palette defaults = null;
+		Set<String> skipped = (skipNames != null) ? skipNames : Set.of();
+		Palette palette = Palette.EMPTY;
 		if (config != null && CVMBool.TRUE.equals(config.get(K_DEFAULT_TOOLS))) {
-			defaults = DEFAULT_TOOL_CACHE.computeIfAbsent(engine, e -> {
-				Map<String, AString> freshRoutes = new HashMap<>();
-				Map<String, AString> freshLabels = new HashMap<>();
-				List<AMap<AString, ACell>> provenance = new java.util.ArrayList<>();
-				AVector<ACell> defs = build(e, ctx, DEFAULT_TOOL_OPS, Set.of(), freshRoutes, freshLabels, null,
-					provenance, SOURCE_DEFAULT, null);
-				return new Palette(Bindings.of(
-					defs, freshLabels, vector(provenance)), Vectors.empty());
-			});
-			tools = defaults.tools();
-			routes.putAll(defaults.routes());
-			activityLabels.putAll(defaults.activityLabels());
-			entries = defaults.provenance();
+			palette = build(engine, ctx, DEFAULT_TOOL_OPS,
+				skipped::contains, null, SOURCE_DEFAULT, null);
 		}
 
 		List<AMap<AString, ACell>> unavailable = new java.util.ArrayList<>();
-		List<AMap<AString, ACell>> configuredEntries = new java.util.ArrayList<>();
 		AVector<ACell> configured = RT.ensureVector(config != null ? config.get(K_TOOLS) : null);
-		if ((configured == null || configured.isEmpty()) && defaults != null) return defaults;
 		if (configured != null) {
-			Set<String> skip = (skipNames != null) ? skipNames : Set.of();
-			tools = merge(tools, build(engine, resolutionCtx, configured, skip, routes, activityLabels, unavailable,
-				configuredEntries, SOURCE_CONFIG, null));
+			Palette existing = palette;
+			Palette additions = build(engine, resolutionCtx, configured,
+				name -> skipped.contains(name) || existing.contains(name),
+				unavailable, SOURCE_CONFIG, null);
+			palette = palette.merge(additions);
 		}
-		entries = mergeEntries(entries, vector(configuredEntries));
-		return new Palette(Bindings.of(tools, activityLabels, entries), vector(unavailable));
+		return new Palette(palette.tools(), palette.toolIndex(), vector(unavailable));
 	}
 
 	/**
@@ -311,15 +192,15 @@ public final class ToolPalette {
 	 * catalog is read under operator authority, exactly like its rendered index;
 	 * operation schemas are resolved under the agent's capability scope. Name
 	 * precedence is the provider manifest's precedence: harness/config names in
-	 * {@code occupiedNames} win, then the first skill in catalog order wins.
+	 * names selected by {@code occupiedName} win, then the first skill in catalog order wins.
 	 */
-	public static DeclaredSkillTools declaredSkillTools(Engine engine,
+	public static Palette declaredSkillTools(Engine engine,
 			RequestContext catalogCtx, RequestContext operationCtx,
-			Skills.SkillSources sources, Set<String> occupiedNames) {
-		if (sources == null || sources.isEmpty()) return DeclaredSkillTools.EMPTY;
+			Skills.SkillSources sources, Predicate<String> occupiedName) {
+		if (sources == null || sources.isEmpty()) return Palette.EMPTY;
 		Set<String> names = new HashSet<>();
-		if (occupiedNames != null) names.addAll(occupiedNames);
-		AVector<ACell> bindings = Vectors.empty();
+		AVector<ACell> tools = Vectors.empty();
+		AMap<AString, ACell> index = Maps.empty();
 		for (Skills.SkillIndexEntry listed : Skills.listSkills(engine, catalogCtx, sources)) {
 			if (listed.name() == null || listed.error() != null) continue;
 			try {
@@ -332,10 +213,12 @@ public final class ToolPalette {
 					AMap<AString, ACell> definition = (AMap<AString, ACell>)
 						RT.getIn(resolvedBinding, Fields.DEFINITION);
 					AString name = RT.ensureString(definition.get(K_NAME));
-					if (name == null || !names.add(name.toString())) continue;
+					if (name == null || (occupiedName != null && occupiedName.test(name.toString()))
+							|| !names.add(name.toString())) continue;
 					AString route = RT.ensureString(RT.getIn(resolvedBinding, Fields.OPERATION));
 					AString label = RT.ensureString(RT.getIn(resolvedBinding, Fields.ACTIVITY_LABEL));
-					bindings = bindings.conj(binding(definition, route, label,
+					tools = tools.conj(definition);
+					index = index.assoc(name, toolInfo(route, label,
 						name, SOURCE_SKILL, listed.path()));
 				}
 			} catch (RuntimeException e) {
@@ -343,7 +226,7 @@ public final class ToolPalette {
 					listed.path(), safeMessage(e));
 			}
 		}
-		return new DeclaredSkillTools(new Bindings(bindings));
+		return new Palette(tools, index, null);
 	}
 
 	/**
@@ -354,7 +237,13 @@ public final class ToolPalette {
 	 */
 	public static AVector<ACell> forOperations(Engine engine, RequestContext ctx,
 			AVector<ACell> operations, Map<String, AString> routes) {
-		return build(engine, ctx, operations, Set.of(), routes, null, null, null, null, null);
+		Palette palette = build(engine, ctx, operations, name -> false,
+			null, SOURCE_CONFIG, null);
+		for (var e : palette.toolIndex().entrySet()) {
+			AString operation = RT.ensureString(RT.getIn(e.getValue(), Fields.OPERATION));
+			if (operation != null) routes.put(e.getKey().toString(), operation);
+		}
+		return palette.tools();
 	}
 
 	/**
@@ -365,20 +254,18 @@ public final class ToolPalette {
 	 */
 	static AVector<ACell> bindingsForOperations(Engine engine, RequestContext ctx,
 			AVector<ACell> operations) {
-		Map<String, AString> routes = new HashMap<>();
-		Map<String, AString> activityLabels = new HashMap<>();
-		AVector<ACell> definitions = build(engine, ctx, operations, Set.of(), routes,
-			activityLabels, null, null, null, null);
+		Palette palette = build(engine, ctx, operations, name -> false,
+			null, SOURCE_CONFIG, null);
 		AVector<ACell> bindings = Vectors.empty();
-		for (long i = 0; i < definitions.count(); i++) {
-			ACell definition = definitions.get(i);
+		for (long i = 0; i < palette.tools().count(); i++) {
+			ACell definition = palette.tools().get(i);
 			AString name = RT.ensureString(RT.getIn(definition, K_NAME));
-			AString operation = (name != null) ? routes.get(name.toString()) : null;
+			AString operation = (name != null) ? palette.operation(name.toString()) : null;
 			if (operation != null) {
 				AMap<AString, ACell> value = Maps.of(
 					Fields.OPERATION, operation,
 					Fields.DEFINITION, definition);
-				AString label = activityLabels.get(name.toString());
+				AString label = palette.activityLabel(name.toString());
 				if (label != null && !label.equals(name)) {
 					value = value.assoc(Fields.ACTIVITY_LABEL, label);
 				}
@@ -419,19 +306,22 @@ public final class ToolPalette {
 	public static AVector<ACell> loadsToolDefs(Engine engine, RequestContext ctx,
 			AMap<AString, ACell> effectiveLoads, Set<String> excludeNames,
 			Map<String, AString> routes) {
-		return loadsToolDefs(engine, ctx, effectiveLoads, excludeNames, routes, null, null);
+		Predicate<String> excluded = (excludeNames != null) ? excludeNames::contains : name -> false;
+		LoadPalette loads = loadPalette(engine, ctx, effectiveLoads, excluded, true);
+		projectRoutes(loads.active(), routes);
+		return loads.active().tools();
 	}
 
-	/** Same resolution as {@link #loadsToolDefs}, retaining provenance for inspection. */
+	/** Resolves load-owned tools without parallel route/label projections. */
 	@SuppressWarnings("unchecked")
-	static AVector<ACell> loadsToolDefs(Engine engine, RequestContext ctx,
-			AMap<AString, ACell> effectiveLoads, Set<String> excludeNames,
-			Map<String, AString> routes, Map<String, AString> activityLabels,
-			List<AMap<AString, ACell>> provenance) {
+	static LoadPalette loadPalette(Engine engine, RequestContext ctx,
+			AMap<AString, ACell> effectiveLoads, Predicate<String> excluded,
+			boolean resolvePinned) {
 		AVector<ACell> added = Vectors.empty();
-		if (effectiveLoads == null || effectiveLoads.count() == 0) return added;
+		AMap<AString, ACell> index = Maps.empty();
+		AMap<AString, ACell> pinned = Maps.empty();
+		if (effectiveLoads == null || effectiveLoads.count() == 0) return LoadPalette.EMPTY;
 		Set<String> names = new HashSet<>();
-		if (excludeNames != null) names.addAll(excludeNames);
 		// Load order, so a new load's tools append after existing definitions
 		// and the cached tool block is not reshuffled.
 		for (var entry : Loads.ordered(effectiveLoads)) {
@@ -440,6 +330,7 @@ public final class ToolPalette {
 			AMap<AString, ACell> meta = (AMap<AString, ACell>) spec;
 			AVector<ACell> bindings = RT.ensureVector(meta.get(Loads.K_TOOL_BINDINGS));
 			if (bindings == null) {
+				if (!resolvePinned && !Loads.isAgentManaged(meta)) continue;
 				AVector<ACell> ops = RT.ensureVector(meta.get(K_TOOLS));
 				if (ops == null || ops.count() == 0) continue;
 				bindings = bindingsForOperations(engine, ctx, ops);
@@ -448,22 +339,28 @@ public final class ToolPalette {
 				ACell binding = bindings.get(i);
 				ACell def = RT.getIn(binding, Fields.DEFINITION);
 				AString n = RT.ensureString(RT.getIn(def, K_NAME));
-				if (n == null || !names.add(n.toString())) continue;
+				if (n == null || (excluded != null && excluded.test(n.toString()))
+						|| !names.add(n.toString())) continue;
 				added = added.conj(def);
 				AString route = RT.ensureString(RT.getIn(binding, Fields.OPERATION));
-				if (route != null) routes.put(n.toString(), route);
 				AString activityLabel = nonBlank(
 					RT.ensureString(RT.getIn(binding, Fields.ACTIVITY_LABEL)));
-				if (activityLabels != null) {
-					activityLabels.put(n.toString(),
-						(activityLabel != null) ? activityLabel : n);
-				}
-				if (provenance != null) provenance.add(entry(n,
+				AMap<AString, ACell> info = toolInfo(route, activityLabel, n,
 					Skills.isSkillEntry(meta) ? SOURCE_SKILL : SOURCE_LOAD,
-					route, entry.getKey()));
+					entry.getKey());
+				index = index.assoc(n, info);
+				if (!Loads.isAgentManaged(meta)) pinned = pinned.assoc(n, info);
 			}
 		}
-		return added;
+		return new LoadPalette(new Palette(added, index, null), pinned);
+	}
+
+	private static void projectRoutes(Palette palette, Map<String, AString> routes) {
+		for (var e : palette.toolIndex().entrySet()) {
+			String name = e.getKey().toString();
+			AString route = RT.ensureString(RT.getIn(e.getValue(), Fields.OPERATION));
+			if (routes != null && route != null) routes.put(name, route);
+		}
 	}
 
 	/** Inspection entries for runtime-owned definitions that have no operation route. */
@@ -474,21 +371,6 @@ public final class ToolPalette {
 		for (long i = 0; i < tools.count(); i++) {
 			AString name = RT.ensureString(RT.getIn(tools.get(i), K_NAME));
 			if (name != null) out = out.conj(entry(name, src, null, null));
-		}
-		return out;
-	}
-
-	/** Appends the contributed definitions whose names are not already present.
-	 *  Returns {@code fixed} itself when nothing is appended. */
-	public static AVector<ACell> merge(AVector<ACell> fixed, AVector<ACell> contributed) {
-		if (contributed == null || contributed.count() == 0) return fixed;
-		if (fixed == null || fixed.count() == 0) return contributed;
-		Set<String> existing = names(fixed);
-		AVector<ACell> out = fixed;
-		for (long i = 0; i < contributed.count(); i++) {
-			ACell def = contributed.get(i);
-			AString n = RT.ensureString(RT.getIn(def, K_NAME));
-			if (n == null || existing.add(n.toString())) out = out.conj(def);
 		}
 		return out;
 	}
@@ -509,17 +391,16 @@ public final class ToolPalette {
 	 * "do not report": a remote fetch failure is skipped, any other failure
 	 * propagates. Otherwise every failure is recorded and resolution continues.
 	 */
-	private static AVector<ACell> build(Engine engine, RequestContext ctx,
-			AVector<ACell> entries, Set<String> skipNames, Map<String, AString> routes,
-			Map<String, AString> activityLabels,
-			List<AMap<AString, ACell>> unavailable, List<AMap<AString, ACell>> provenance,
-			AString source, AString ref) {
-		AVector<ACell> result = Vectors.empty();
+	private static Palette build(Engine engine, RequestContext ctx,
+			AVector<ACell> entries, Predicate<String> skipName,
+			List<AMap<AString, ACell>> unavailable, AString source, AString ref) {
+		AVector<ACell> tools = Vectors.empty();
+		AMap<AString, ACell> index = Maps.empty();
 		for (long i = 0; i < entries.count(); i++) {
 			AString[] parsed = parseConfigToolEntry(entries.get(i));
 			if (parsed == null) continue;
 			AString operation = parsed[0];
-			if (skipNames.contains(operation.toString())) continue;
+			if (skipName.test(operation.toString())) continue;
 
 			Asset asset;
 			try {
@@ -549,19 +430,16 @@ public final class ToolPalette {
 				(dispatchAdapter != null) ? dispatchAdapter : operation);
 			// Manifest order owns name precedence. Do not let a later operation
 			// replace the route behind an earlier definition with the same name.
-			if (skipNames.contains(toolName) || routes.containsKey(toolName)) continue;
+			AString name = Strings.create(toolName);
+			if (skipName.test(toolName) || index.containsKey(name)) continue;
 
 			AString rawDescription = (parsed[2] != null)
 				? parsed[2] : RT.ensureString(asset.meta().get(Fields.DESCRIPTION));
-			result = result.conj(operationToolDefinition(asset.meta(),
-				Strings.create(toolName), rawDescription));
-			routes.put(toolName, operation);
-			if (activityLabels != null) {
-				activityLabels.put(toolName, activityLabel(asset.meta(), toolName));
-			}
-			if (provenance != null) provenance.add(entry(Strings.create(toolName), source, operation, ref));
+			tools = tools.conj(operationToolDefinition(asset.meta(), name, rawDescription));
+			index = index.assoc(name, toolInfo(operation,
+				activityLabel(asset.meta(), toolName), name, source, ref));
 		}
-		return result;
+		return new Palette(tools, index, null);
 	}
 
 	/** UI-only activity text, deliberately kept outside provider tool definitions. */
@@ -572,10 +450,10 @@ public final class ToolPalette {
 		return (label != null) ? label : Strings.create(toolName);
 	}
 
-	/** One sparse durable binding value. */
-	private static AMap<AString, ACell> binding(ACell definition, AString operation,
+	/** One sparse lookup value. Provider definitions live only in the tool vector. */
+	private static AMap<AString, ACell> toolInfo(AString operation,
 			AString activityLabel, AString toolName, AString source, AString ref) {
-		AMap<AString, ACell> value = Maps.of(Fields.DEFINITION, definition);
+		AMap<AString, ACell> value = Maps.empty();
 		if (operation != null) value = value.assoc(Fields.OPERATION, operation);
 		if (activityLabel != null && !activityLabel.equals(toolName)) {
 			value = value.assoc(Fields.ACTIVITY_LABEL, activityLabel);
@@ -585,6 +463,37 @@ public final class ToolPalette {
 		}
 		if (ref != null) value = value.assoc(Fields.REF, ref);
 		return value;
+	}
+
+	/** Direct fixed-route lookup. */
+	static AString operation(AMap<AString, ACell> toolIndex, String name) {
+		return (toolIndex == null || name == null) ? null
+			: RT.ensureString(RT.getIn(toolIndex.get(Strings.create(name)), Fields.OPERATION));
+	}
+
+	/** Direct UI-label lookup; absent labels use the provider tool name. */
+	static AString labelFor(AMap<AString, ACell> toolIndex, String name) {
+		if (name == null) return null;
+		AString label = (toolIndex != null)
+			? nonBlank(RT.ensureString(RT.getIn(
+				toolIndex.get(Strings.create(name)), Fields.ACTIVITY_LABEL))) : null;
+		return (label != null) ? label : Strings.create(name);
+	}
+
+	/** True only when the fixed palette owns this name's dispatch route. */
+	static boolean hasOperation(AMap<AString, ACell> toolIndex, String name) {
+		return operation(toolIndex, name) != null;
+	}
+
+	/** Adds previously unknown names; the earlier manifest owns collisions. */
+	static AMap<AString, ACell> mergeIndex(AMap<AString, ACell> fixed,
+			AMap<AString, ACell> contributed) {
+		AMap<AString, ACell> merged = (fixed != null) ? fixed : Maps.empty();
+		if (contributed == null) return merged;
+		for (var e : contributed.entrySet()) {
+			if (!merged.containsKey(e.getKey())) merged = merged.assoc(e.getKey(), e.getValue());
+		}
+		return merged;
 	}
 
 	private static AString nonBlank(AString value) {
@@ -605,17 +514,9 @@ public final class ToolPalette {
 		return out;
 	}
 
-	private static AVector<ACell> mergeEntries(AVector<ACell> first, AVector<ACell> second) {
-		Set<String> names = new HashSet<>();
-		AVector<ACell> out = Vectors.empty();
-		for (AVector<ACell> entries : List.of(first, second)) {
-			for (long i = 0; i < entries.count(); i++) {
-				ACell entry = entries.get(i);
-				AString name = RT.ensureString(RT.getIn(entry, K_NAME));
-				if (name != null && names.add(name.toString())) out = out.conj(entry);
-			}
-		}
-		return out;
+	@SuppressWarnings("unchecked")
+	private static AVector<ACell> concat(AVector<ACell> first, AVector<ACell> second) {
+		return (AVector<ACell>) first.concat(second);
 	}
 
 	private static void record(List<AMap<AString, ACell>> unavailable, AString operation, String reason) {

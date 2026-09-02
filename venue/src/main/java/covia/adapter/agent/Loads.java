@@ -3,11 +3,11 @@ package covia.adapter.agent;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Predicate;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -108,21 +108,24 @@ public final class Loads {
 	 */
 	public record Snapshot(AVector<ACell> instructionElements, AVector<ACell> exchanges,
 			AVector<ACell> observations,
-			AVector<ACell> tools, Map<String, AString> routes,
-			Map<String, AString> activityLabels,
-			AVector<ACell> diagnostics, AVector<ACell> toolProvenance) {
-		public static final Snapshot EMPTY = new Snapshot(null, null, null, null, null, null, null, null);
+			ToolPalette.Palette toolPalette, AMap<AString, ACell> pinnedToolIndex,
+			AVector<ACell> diagnostics) {
+		public static final Snapshot EMPTY = new Snapshot(null, null, null, null, null, null);
 
 		public Snapshot {
 			instructionElements = (instructionElements != null) ? instructionElements : Vectors.empty();
 			exchanges = (exchanges != null) ? exchanges : Vectors.empty();
 			observations = (observations != null) ? observations : Vectors.empty();
-			tools = (tools != null) ? tools : Vectors.empty();
-			routes = (routes != null) ? Map.copyOf(routes) : Map.of();
-			activityLabels = (activityLabels != null) ? Map.copyOf(activityLabels) : Map.of();
+			toolPalette = (toolPalette != null) ? toolPalette : ToolPalette.Palette.EMPTY;
+			pinnedToolIndex = (pinnedToolIndex != null) ? pinnedToolIndex : Maps.empty();
 			diagnostics = (diagnostics != null) ? diagnostics : Vectors.empty();
-			toolProvenance = (toolProvenance != null) ? toolProvenance : Vectors.empty();
 		}
+
+		public AVector<ACell> tools() { return toolPalette.tools(); }
+		public AMap<AString, ACell> toolIndex() { return toolPalette.toolIndex(); }
+		public AVector<ACell> toolProvenance() { return toolPalette.provenance(); }
+		public AString operation(String name) { return toolPalette.operation(name); }
+		public AString activityLabel(String name) { return toolPalette.activityLabel(name); }
 
 		/** The live surface in provider-message form. */
 		@SuppressWarnings("unchecked")
@@ -280,7 +283,7 @@ public final class Loads {
 	 */
 	public static Snapshot resolve(Engine engine, RequestContext ctx,
 			AMap<AString, ACell> effectiveLoads, Set<String> fixedNames, AString dialect) {
-		return resolve(engine, ctx, effectiveLoads, fixedNames, dialect, true);
+		return resolve(engine, ctx, effectiveLoads, excluded(fixedNames), dialect, true);
 	}
 
 	/**
@@ -292,37 +295,49 @@ public final class Loads {
 	public static Snapshot resolveForInference(Engine engine, RequestContext ctx,
 			AMap<AString, ACell> effectiveLoads, Set<String> fixedNames, AString dialect,
 			boolean materialiseLive) {
-		return resolve(engine, ctx, effectiveLoads, fixedNames, dialect, materialiseLive);
+		return resolve(engine, ctx, effectiveLoads, excluded(fixedNames), dialect, materialiseLive);
+	}
+
+	static Snapshot resolveForInference(Engine engine, RequestContext ctx,
+			AMap<AString, ACell> effectiveLoads, Predicate<String> excluded, AString dialect,
+			boolean materialiseLive) {
+		return resolve(engine, ctx, effectiveLoads, excluded, dialect, materialiseLive);
 	}
 
 	/** Resolves only contributed tool definitions and routes. No context source
 	 * is read and no operation entry is invoked. */
 	public static Snapshot describe(Engine engine, RequestContext ctx,
 			AMap<AString, ACell> effectiveLoads, Set<String> fixedNames) {
+		return describe(engine, ctx, effectiveLoads, excluded(fixedNames));
+	}
+
+	static Snapshot describe(Engine engine, RequestContext ctx,
+			AMap<AString, ACell> effectiveLoads, Predicate<String> excluded) {
+		return describe(engine, ctx, effectiveLoads, excluded, true);
+	}
+
+	static Snapshot describe(Engine engine, RequestContext ctx,
+			AMap<AString, ACell> effectiveLoads, Predicate<String> excluded,
+			boolean resolvePinned) {
 		if (effectiveLoads == null || effectiveLoads.count() == 0) return Snapshot.EMPTY;
-		Map<String, AString> routes = new HashMap<>();
-		Map<String, AString> activityLabels = new HashMap<>();
-		List<AMap<AString, ACell>> toolEntries = new ArrayList<>();
-		AMap<AString, ACell> toolLoads = Skills.resolveLoadTools(engine, ctx, effectiveLoads);
-		AVector<ACell> tools = ToolPalette.loadsToolDefs(
-			engine, ctx, toolLoads, fixedNames, routes, activityLabels, toolEntries);
-		return new Snapshot(null, null, null, tools, routes, activityLabels, null, vector(toolEntries));
+		AMap<AString, ACell> toolLoads = resolvePinned
+			? Skills.resolveLoadTools(engine, ctx, effectiveLoads) : effectiveLoads;
+		ToolPalette.LoadPalette tools = ToolPalette.loadPalette(
+			engine, ctx, toolLoads, excluded, resolvePinned);
+		return new Snapshot(null, null, null, tools.active(), tools.pinnedIndex(), null);
 	}
 
 	private static Snapshot resolve(Engine engine, RequestContext ctx,
-			AMap<AString, ACell> effectiveLoads, Set<String> fixedNames, AString dialect,
+			AMap<AString, ACell> effectiveLoads, Predicate<String> excluded, AString dialect,
 			boolean materialiseLive) {
 		if (effectiveLoads == null || effectiveLoads.count() == 0) return Snapshot.EMPTY;
-		Map<String, AString> routes = new HashMap<>();
-		Map<String, AString> activityLabels = new HashMap<>();
-		List<AMap<AString, ACell>> toolEntries = new ArrayList<>();
-		AMap<AString, ACell> toolLoads = Skills.resolveLoadTools(engine, ctx, effectiveLoads);
-		AVector<ACell> tools = ToolPalette.loadsToolDefs(
-			engine, ctx, toolLoads, fixedNames, routes, activityLabels, toolEntries);
+		AMap<AString, ACell> toolLoads = materialiseLive
+			? Skills.resolveLoadTools(engine, ctx, effectiveLoads) : effectiveLoads;
+		ToolPalette.LoadPalette tools = ToolPalette.loadPalette(
+			engine, ctx, toolLoads, excluded, materialiseLive);
 		Resolved resolved = resolveElements(engine, ctx, effectiveLoads, dialect, materialiseLive);
 		return new Snapshot(resolved.instructions(), resolved.exchanges(), resolved.observations(),
-			tools, routes, activityLabels,
-			resolved.diagnostics(), vector(toolEntries));
+			tools.active(), tools.pinnedIndex(), resolved.diagnostics());
 	}
 
 	/**
@@ -339,15 +354,19 @@ public final class Loads {
 			return new Append((loads != null) ? loads : Maps.empty(), Vectors.empty());
 		}
 		AMap<AString, ACell> meta = (AMap<AString, ACell>) raw;
-		if (isVolatile(meta)) return new Append(loads, Vectors.empty());
-		// Bind stable load tools exactly once. Definitions and dispatch routes then
-		// come from the same durable value on every later inference/restart.
+		// Tool metadata follows load state, not content volatility: resolve it once
+		// when the load changes and retain it even when content is watched.
 		meta = ToolPalette.materialiseLoadToolBindings(engine, ctx, meta);
 		loads = loads.assoc(key, meta);
+		if (isVolatile(meta)) return new Append(loads, Vectors.empty());
 		Resolved resolved = resolveElements(engine, ctx, Maps.of(key, meta), dialect, true);
 		AVector<ACell> messages = (AVector<ACell>) resolved.instructions().concat(
 			ContextAssembler.contextExchanges(resolved.exchanges(), eventId));
 		return new Append(loads.assoc(key, meta.assoc(K_APPENDED, CVMBool.TRUE)), messages);
+	}
+
+	private static Predicate<String> excluded(Set<String> names) {
+		return (names != null) ? names::contains : name -> false;
 	}
 
 	/**

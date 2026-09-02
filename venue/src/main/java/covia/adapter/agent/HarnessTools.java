@@ -20,6 +20,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Predicate;
 
 /**
  * The harness tools every runtime provides, and the one rule for offering
@@ -221,7 +222,7 @@ final class HarnessTools {
 	 * from that one value, exactly as they do for tools contributed by a skill.
 	 */
 	@SuppressWarnings("unchecked")
-	static ACell moreTools(ACell input, LoadScope scope, Set<String> existing) {
+	static ACell moreTools(ACell input, LoadScope scope, Predicate<String> occupiedName) {
 		ACell opsCell = RT.getIn(input, K_OPERATIONS);
 		if (!(opsCell instanceof AVector<?>)) {
 			return Strings.create("Error: operations must be an array of operation paths");
@@ -229,8 +230,7 @@ final class HarnessTools {
 		if (!scope.writable) return Strings.create(scope.unavailableMessage);
 		AVector<ACell> resolved = ToolPalette.bindingsForOperations(
 			scope.engine, scope.context, (AVector<ACell>) opsCell);
-		Set<String> occupied = new HashSet<>();
-		if (existing != null) occupied.addAll(existing);
+		Set<String> addedNames = new HashSet<>();
 		AVector<ACell> bindings = Vectors.empty();
 		AVector<ACell> operations = Vectors.empty();
 		AVector<ACell> names = Vectors.empty();
@@ -239,7 +239,9 @@ final class HarnessTools {
 			ACell definition = RT.getIn(binding, Fields.DEFINITION);
 			AString name = RT.ensureString(RT.getIn(definition, AbstractLLMAdapter.K_NAME));
 			AString operation = RT.ensureString(RT.getIn(binding, Fields.OPERATION));
-			if (name == null || operation == null || !occupied.add(name.toString())) continue;
+			if (name == null || operation == null
+					|| (occupiedName != null && occupiedName.test(name.toString()))
+					|| !addedNames.add(name.toString())) continue;
 			bindings = bindings.conj(binding);
 			operations = operations.conj(operation);
 			names = names.conj(name);

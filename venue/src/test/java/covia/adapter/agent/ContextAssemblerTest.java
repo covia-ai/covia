@@ -750,9 +750,12 @@ public class ContextAssemblerTest {
 			Strings.create("budget"), CVMLong.create(2000)));
 		Loads.Snapshot snap = Loads.resolve(engine, ctx, loads, java.util.Set.of(), Labels.BRACKET);
 		assertEquals(1, snap.tools().count());
-		assertEquals("v/ops/covia/read", snap.routes().get("covia_read").toString());
+		assertEquals("v/ops/covia/read", snap.operation("covia_read").toString());
 		assertEquals("skill", RT.getIn(snap.toolProvenance().get(0), Fields.SOURCE).toString());
 		assertEquals("w/skills/toolful", RT.getIn(snap.toolProvenance().get(0), Fields.REF).toString());
+		assertEquals(0, Loads.resolveForInference(engine, ctx, loads,
+			name -> false, Labels.BRACKET, false).tools().count(),
+			"a cached inference must not reopen a pinned skill to rediscover tools");
 		// A name fixed by harness or config is never shadowed by a load.
 		assertEquals(0, Loads.resolve(engine, ctx, loads, java.util.Set.of("covia_read"), Labels.BRACKET).tools().count());
 		// Explicit load metadata remains an override, including disabling the facet tools.
@@ -762,6 +765,41 @@ public class ContextAssemblerTest {
 			Fields.TOOLS, Vectors.empty()));
 		assertEquals(0, Loads.resolve(engine, ctx, disabled,
 			java.util.Set.of(), Labels.BRACKET).tools().count());
+	}
+
+	@Test
+	public void testPinnedLoadToolsMoveIntoTheRenderedLookup() {
+		AMap<AString, ACell> loads = Maps.of("pinned-tools", Maps.of(
+			Fields.TOOLS, Vectors.of(Strings.create("v/ops/covia/read")),
+			Loads.K_KIND, Loads.KIND_TOOLS));
+		Loads.Snapshot initial = Loads.resolveForInference(engine, ctx, loads,
+			name -> false, Labels.BRACKET, true);
+		assertEquals(1, initial.tools().count());
+		assertEquals("v/ops/covia/read", ToolPalette.operation(
+			initial.pinnedToolIndex(), "covia_read").toString());
+
+		Loads.Snapshot cached = Loads.resolveForInference(engine, ctx, loads,
+			name -> false, Labels.BRACKET, false);
+		assertEquals(0, cached.tools().count(),
+			"a cached inference must not resolve an unmaterialised pinned declaration again");
+	}
+
+	@Test
+	public void testVolatileLoadMaterialisesToolMetadataWhenLoaded() {
+		AString key = Strings.create("volatile-tools");
+		AMap<AString, ACell> loads = Maps.of(key, Maps.of(
+			Fields.TOOLS, Vectors.of(Strings.create("v/ops/covia/read")),
+			Loads.K_KIND, Loads.KIND_TOOLS,
+			Loads.K_AGENT_MANAGED, CVMBool.TRUE,
+			Loads.K_VOLATILE, CVMBool.TRUE));
+		Loads.Append appended = Loads.append(
+			engine, ctx, loads, key, Labels.BRACKET, Strings.create("event"));
+		assertTrue(appended.messages().isEmpty(), "watched content is observed, not appended here");
+		AVector<ACell> bindings = RT.ensureVector(RT.getIn(
+			appended.loads().get(key), Loads.K_TOOL_BINDINGS));
+		assertEquals(1, bindings.count());
+		assertEquals("v/ops/covia/read", RT.getIn(
+			bindings.get(0), Fields.OPERATION).toString());
 	}
 
 	@Test
@@ -1103,13 +1141,16 @@ public class ContextAssemblerTest {
 			Vectors.of((ACell) HarnessTools.DEF_CONTEXT_LOAD), null, null,
 			Vectors.of((ACell) GoalTreeContext.createFrame("")), null, null, true,
 			null, null, null, null, null);
-		ContextAssembler.Rendered rendered = ContextAssembler.initialise(original);
+		ToolPalette.Palette manifest = ToolPalette.Palette.EMPTY.forManifest(original.tools());
+		ContextAssembler.Rendered rendered = ContextAssembler.initialise(original)
+			.withToolIndex(manifest.toolIndex(), 0, 0);
 		assertEquals(oldConfig, rendered.sourceConfig());
 		assertEquals(rendered, ContextAssembler.Rendered.fromCell(rendered.toCell()));
-		assertEquals(1, rendered.toolBindings().count());
+		assertEquals(original.tools(), rendered.tools());
+		assertTrue(rendered.toolIndex().containsKey(Strings.create("context_load")));
 		assertNull(ContextAssembler.Rendered.fromCell(
-			RT.ensureMap(rendered.toCell()).dissoc(Strings.intern("toolBindings"))),
-			"a legacy cache without fixed bindings must be rebuilt once");
+			RT.ensureMap(rendered.toCell()).dissoc(Strings.intern("toolIndex"))),
+			"a legacy cache without the name lookup must be rebuilt once");
 		assertNull(RT.getIn(rendered.toCell(), "skillCatalog"),
 			"the skills index already lives in messages and has no sidecar");
 
@@ -1131,15 +1172,15 @@ public class ContextAssemblerTest {
 	// ========== ToolPalette ==========
 
 	@Test
-	public void testDefaultToolsCachedPerEngine() {
+	public void testDefaultToolsResolveDeterministicallyWithoutSideCache() {
 		AMap<AString, ACell> config = Maps.of(Strings.intern("defaultTools"), CVMBool.TRUE);
 		ToolPalette.Palette p1 = ToolPalette.resolve(engine, ctx, config, java.util.Set.of());
 		ToolPalette.Palette p2 = ToolPalette.resolve(engine, ctx, config, java.util.Set.of());
-		assertSame(p1.bindings(), p2.bindings(), "the default pack is one cached instance per Engine");
 		assertEquals(p1.tools(), p2.tools());
-		assertNotSame(p1.routes(), p2.routes(), "routes are a per-palette copy");
-		assertEquals(p1.routes().keySet(), p2.routes().keySet());
-		assertEquals(java.util.Set.of("covia_read", "covia_list"), p1.routes().keySet(),
+		assertEquals(p1.toolIndex(), p2.toolIndex());
+		assertEquals(2, p1.toolIndex().count());
+		assertTrue(p1.toolIndex().containsKey(Strings.create("covia_read")));
+		assertTrue(p1.toolIndex().containsKey(Strings.create("covia_list")),
 			"the default pack stays minimal and read-only — add tools via skills instead");
 	}
 
@@ -1176,21 +1217,12 @@ public class ContextAssemblerTest {
 		assertEquals(java.util.Set.of("covia_read", "covia_list", "covia_write"), ToolPalette.names(p.tools()));
 		assertEquals(0, p.unavailable().count(), "a skipped harness name is not unavailable");
 		assertEquals(3, p.provenance().count());
-		assertEquals("default", RT.getIn(p.provenance().get(0), Fields.SOURCE).toString());
-		assertEquals("default", RT.getIn(p.provenance().get(1), Fields.SOURCE).toString());
-		assertEquals("config", RT.getIn(p.provenance().get(2), Fields.SOURCE).toString());
-		assertEquals("v/ops/covia/write", RT.getIn(p.provenance().get(2), Fields.OPERATION).toString());
-		ToolPalette.Bindings bindings = p.bindings();
-		assertEquals(p.routes(), bindings.routes());
-		assertEquals(p.provenance(), bindings.provenance());
-		for (long i = 0; i < bindings.cells().count(); i++) {
-			ACell binding = bindings.cells().get(i);
-			if ("covia_write".equals(String.valueOf(
-					RT.getIn(binding, Fields.DEFINITION, Fields.NAME)))) {
-				assertNull(RT.getIn(binding, Fields.SOURCE),
-					"config is the binding source default and is not stored");
-			}
-		}
+		assertEquals("default", RT.getIn(
+			p.toolIndex().get(Strings.create("covia_read")), Fields.SOURCE).toString());
+		assertEquals("v/ops/covia/write", RT.getIn(
+			p.toolIndex().get(Strings.create("covia_write")), Fields.OPERATION).toString());
+		assertNull(RT.getIn(p.toolIndex().get(Strings.create("covia_write")), Fields.SOURCE),
+			"config is the lookup source default and is not stored");
 	}
 
 	@Test
@@ -1203,10 +1235,10 @@ public class ContextAssemblerTest {
 				Fields.TOOL_NAME, "same_label")));
 		ToolPalette.Palette palette = ToolPalette.resolve(engine, ctx,
 			Maps.of(Fields.TOOLS, Vectors.of((ACell) Strings.create(path))), java.util.Set.of());
-		ACell binding = palette.bindings().cells().get(0);
-		assertNull(RT.getIn(binding, Fields.SOURCE),
+		ACell info = palette.toolIndex().get(Strings.create("same_label"));
+		assertNull(RT.getIn(info, Fields.SOURCE),
 			"config is the source default");
-		assertNull(RT.getIn(binding, Fields.ACTIVITY_LABEL),
+		assertNull(RT.getIn(info, Fields.ACTIVITY_LABEL),
 			"the provider name is the activity-label default");
 	}
 

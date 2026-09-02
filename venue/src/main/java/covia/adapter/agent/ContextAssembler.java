@@ -103,7 +103,10 @@ public final class ContextAssembler {
 	private static final AString K_RENDERED_LIVE     = Strings.intern("live");
 	private static final AString K_RENDERED_LABELS   = Strings.intern("labels");
 	private static final AString K_RENDERED_CONFIG   = Strings.intern("sourceConfig");
-	private static final AString K_RENDERED_BINDINGS = Strings.intern("toolBindings");
+	private static final AString K_RENDERED_TOOLS    = Strings.intern("tools");
+	private static final AString K_RENDERED_TOOL_INDEX = Strings.intern("toolIndex");
+	private static final AString K_RENDERED_BASE_START = Strings.intern("baseToolStart");
+	private static final AString K_RENDERED_BASE_END = Strings.intern("baseToolEnd");
 
 	/** Canonical watched-context candidate fields. The active frame persists
 	 * the same value under {@code observations}; see {@link GoalTreeContext}. */
@@ -121,28 +124,36 @@ public final class ContextAssembler {
 	 * the next inference. Ambient values resolved while producing the vectors
 	 * are deliberately not invalidation inputs.
 	 */
-	public record Rendered(AVector<ACell> toolBindings, AVector<ACell> messages,
+	public record Rendered(AVector<ACell> tools, AMap<AString, ACell> toolIndex,
+			int baseToolStart, int baseToolEnd, AVector<ACell> messages,
 			int headEnd, int liveEnd, AString labels,
 			AMap<AString, ACell> sourceConfig) {
 		public Rendered {
-			toolBindings = (toolBindings != null) ? toolBindings : Vectors.empty();
+			tools = (tools != null) ? tools : Vectors.empty();
+			toolIndex = (toolIndex != null) ? toolIndex : Maps.empty();
 			messages = (messages != null) ? messages : Vectors.empty();
 			sourceConfig = normaliseConfig(sourceConfig);
 		}
 
-		public AVector<ACell> tools() {
-			return new ToolPalette.Bindings(toolBindings).tools();
+		@SuppressWarnings("unchecked")
+		public AVector<ACell> baseTools() {
+			return (AVector<ACell>) tools.slice(baseToolStart, baseToolEnd);
 		}
 
-		Rendered withToolBindings(ToolPalette.Bindings bindings) {
-			return new Rendered(
-				(bindings != null) ? bindings.cells() : Vectors.empty(),
+		Rendered withToolIndex(AMap<AString, ACell> index, int baseStart, int baseEnd) {
+			if (baseStart < 0 || baseEnd < baseStart || baseEnd > tools.count()) {
+				throw new IllegalArgumentException("Invalid base tool range");
+			}
+			return new Rendered(tools, index, baseStart, baseEnd,
 				messages, headEnd, liveEnd, labels, sourceConfig);
 		}
 
 		ACell toCell() {
 			AMap<AString, ACell> value = Maps.of(
-				K_RENDERED_BINDINGS, toolBindings,
+				K_RENDERED_TOOLS, tools,
+				K_RENDERED_TOOL_INDEX, toolIndex,
+				K_RENDERED_BASE_START, CVMLong.create(baseToolStart),
+				K_RENDERED_BASE_END, CVMLong.create(baseToolEnd),
 				K_RENDERED_MESSAGES, messages,
 				K_RENDERED_HEAD, CVMLong.create(headEnd),
 				K_RENDERED_LIVE, CVMLong.create(liveEnd),
@@ -154,17 +165,24 @@ public final class ContextAssembler {
 		@SuppressWarnings("unchecked")
 		static Rendered fromCell(ACell value) {
 			if (!(value instanceof AMap<?, ?> map)) return null;
-			ACell toolBindings = map.get(K_RENDERED_BINDINGS);
+			ACell tools = map.get(K_RENDERED_TOOLS);
+			ACell toolIndex = map.get(K_RENDERED_TOOL_INDEX);
+			ACell baseStart = map.get(K_RENDERED_BASE_START);
+			ACell baseEnd = map.get(K_RENDERED_BASE_END);
 			ACell messages = map.get(K_RENDERED_MESSAGES);
 			ACell sourceConfig = map.get(K_RENDERED_CONFIG);
-			// An older materialisation lacks either the config stamp or fixed
-			// dispatch bindings. Treat it as absent so the next cached inference
-			// upgrades it once rather than re-resolving ambient operation metadata.
-			if (!(toolBindings instanceof AVector<?>) || !(messages instanceof AVector<?>)
+			// Older materialisations are inapplicable and upgrade once. Required
+			// fields also keep ordinary cache reads free of schema inspection.
+			if (!(tools instanceof AVector<?> toolVector) || !(toolIndex instanceof AMap<?, ?>)
+					|| !(baseStart instanceof CVMLong start) || !(baseEnd instanceof CVMLong end)
+					|| start.longValue() < 0 || end.longValue() < start.longValue()
+					|| end.longValue() > toolVector.count() || !(messages instanceof AVector<?>)
 					|| !(sourceConfig instanceof AMap<?, ?>)) return null;
 			long head = (map.get(K_RENDERED_HEAD) instanceof CVMLong n) ? n.longValue() : 0;
 			long live = (map.get(K_RENDERED_LIVE) instanceof CVMLong n) ? n.longValue() : head;
-			return new Rendered((AVector<ACell>) toolBindings, (AVector<ACell>) messages,
+			return new Rendered((AVector<ACell>) tools, (AMap<AString, ACell>) toolIndex,
+				Math.toIntExact(start.longValue()), Math.toIntExact(end.longValue()),
+				(AVector<ACell>) messages,
 				Math.toIntExact(head), Math.toIntExact(live),
 				RT.ensureString(map.get(K_RENDERED_LABELS)),
 				(AMap<AString, ACell>) sourceConfig);
@@ -555,7 +573,7 @@ public final class ContextAssembler {
 			p.add(exchanges);
 		}
 		p.mark(Band.LIVE);
-		return new Rendered(ToolPalette.Bindings.definitions(p.tools()).cells(), p.messages(),
+		return new Rendered(p.tools(), Maps.empty(), 0, 0, p.messages(),
 			p.marks().getOrDefault(Band.HEAD, 0),
 			p.marks().getOrDefault(Band.LIVE, 0), spec.labels(),
 			spec.sourceConfig());

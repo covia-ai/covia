@@ -893,14 +893,14 @@ public class LLMAgentAdapterTest {
 		AVector<ACell> active = ctx.loadTools(engine);
 		assertEquals(1, active.count());
 		assertEquals("covia_read", RT.getIn(active.get(0), Fields.NAME).toString());
-		assertEquals("v/ops/covia/read", ctx.dispatchRoutes().get("covia_read").toString());
+		assertEquals("v/ops/covia/read", ctx.operation("covia_read").toString());
 
 		adapter.handleContextUnload(Maps.of("path", "w/skills/alpha"), ctx);
 		assertEquals(0, ctx.loadTools(engine).count());
-		assertNull(ctx.dispatchRoutes().get("covia_read"),
+		assertNull(ctx.operation("covia_read"),
 			"unload must retract the dispatch route as well as the visible tool");
 		ACell hallucinated = adapter.dispatchTool("covia_read",
-			Maps.of("path", "w/probe"), ctx.dispatchRoutes(), ctx.ctx,
+			Maps.of("path", "w/probe"), ctx.operation("covia_read"), ctx.ctx,
 			ctx.toolCallTimeoutMs);
 		assertTrue(String.valueOf(hallucinated).startsWith("Error:"),
 			"a manually supplied call after unload must not use the former route: "
@@ -913,12 +913,12 @@ public class LLMAgentAdapterTest {
 		writeAlphaSkill();
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		ToolContext ctx = skillToolCtx();
-		ctx.fixedToolNames = java.util.Set.of("covia_read");
-		ctx.loadExcludedNames = java.util.Set.of("covia_read");
+		ctx.toolIndex = Maps.of("covia_read",
+			Maps.of(Fields.OPERATION, "v/ops/covia/list"));
 		adapter.handleSkillLoad(Maps.of("name", "alpha"), ctx);
 		assertEquals(0, ctx.loadTools(engine).count());
-		assertNull(ctx.configToolMap.get("covia_read"),
-			"an excluded def must not write a dispatch route");
+		assertEquals("v/ops/covia/list", ctx.operation("covia_read").toString(),
+			"an excluded def must not replace the fixed dispatch route");
 	}
 
 	@Test public void testSkillLoadDedupsByContentIdentity() {
@@ -2397,7 +2397,7 @@ public class LLMAgentAdapterTest {
 		RequestContext ctx = RequestContext.of(ALICE_DID);
 		ToolPalette.Palette palette = ToolPalette.resolve(engine, ctx,
 			Maps.of(Fields.TOOLS, Vectors.of("v/test/ops/echo")), java.util.Set.of());
-		assertEquals("Echo Operation", palette.activityLabels().get("test_echo").toString());
+		assertEquals("Echo Operation", palette.activityLabel("test_echo").toString());
 		assertNull(RT.getIn(palette.tools().get(0), Fields.ACTIVITY_LABEL));
 
 		AVector<ACell> bindings = ToolPalette.bindingsForOperations(engine, ctx,

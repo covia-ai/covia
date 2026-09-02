@@ -898,6 +898,12 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		// (invokeInternal → the adapter's requireCapability / requireInvoke),
 		// under the agent's grant scope carried on ctx — no name-keyed pre-check here.
 		AString operation = (configToolMap != null) ? configToolMap.get(toolName) : null;
+		return dispatchTool(toolName, input, operation, ctx, timeoutMs);
+	}
+
+	/** Dispatch variant for runtimes that retain a direct name lookup. */
+	protected ACell dispatchTool(String toolName, ACell input,
+			AString operation, RequestContext ctx, long timeoutMs) {
 
 		// Config tools — tool name maps to a resolved operation
 		if (operation != null) {

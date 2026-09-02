@@ -160,7 +160,7 @@ public class GoalTreeAdapterTest {
 		Loads.Snapshot unloaded = Loads.resolve(
 			engine, ALICE, childEffective, java.util.Set.of(), Labels.BRACKET);
 		ACell hallucinated = ((GoalTreeAdapter) engine.getAdapter("goaltree")).dispatchTool(
-			"covia_read", Maps.of("path", "w/probe"), unloaded.routes(), ALICE,
+			"covia_read", Maps.of("path", "w/probe"), unloaded.operation("covia_read"), ALICE,
 			AbstractLLMAdapter.DEFAULT_TOOL_CALL_TIMEOUT_MS);
 		assertTrue(String.valueOf(hallucinated).startsWith("Error:"),
 			"a manually supplied call after unload must not retain a dispatch route: "
