@@ -10,6 +10,18 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Added
 
+- Lattice-native connection discovery and status, backed by immutable skill
+  assets for 20 providers. Connection skills keep credential references in
+  their facets and resolve secrets only inside venue HTTP operations.
+- HTTP operations resolve `{s/NAME}` placeholders in URL paths without
+  exposing the secret in persisted Job inputs, and structured request bodies
+  default to JSON. This enables Telegram and the shipped connection catalog.
+- Job-free authenticated reads for DLFS drive/directory browsing (#476) and
+  venue-user administration (#474), including explicit managed-account and
+  admission-policy fields.
+- `memory:recall` provides a read-only way to retrieve selected durable memory.
+- Optional `operation.activityLabel` metadata gives clients a concise label
+  for an in-flight tool call without changing the model-facing schema (#463).
 - Agent admission policy `config.accepts` (#447): an owner admits the venue
   operator or an exact list of principal DIDs to talk to an agent without a
   delegation; talking only, public principal never.
@@ -24,6 +36,23 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Fixed
 
+- Agent tool dispatch now treats the materialised palette as an authority
+  boundary: a model cannot invoke an arbitrary operation merely by naming its
+  path (#477). Loading an arbitrary skill or tool likewise requires either the
+  corresponding catalog entry or an explicit load capability.
+- Cached tool bindings retain their exact operation and skill provenance;
+  loaded skill tools are appended once without pre-declaring every gated JSON
+  schema, and provider tool-call ids are valid across replayed context
+  exchanges (#470, #471, #472, #479).
+- Convex 0.8.16 restores lookup/stat/open for long DLFS directory-entry names
+  after an Etch reopen. Covia's regression covers concurrent sibling
+  promotion, independent handles, root sync and byte-exact restart recovery
+  (#469).
+- Agent state completed during shutdown cancellation is merged rather than
+  overwritten, so a restarted agent does not lose the final transition state.
+- Adapter operation `readOnly` metadata remains optional for compatibility;
+  missing classification warns during agent creation/update instead of
+  preventing an adapter from starting (#459, #465).
 - OAuth login credentials expose only a stable `covia_uid` pseudonym, never
   the user's raw email or display name in the callback URL's JWT (#448).
 - Module slim jars on Maven Central carry their real dependencies (no
@@ -46,6 +75,14 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 ### Changed
 
 - Update the Convex runtime and storage dependencies from 0.8.15 to 0.8.16.
+- Agent context is now represented by one shared durable frame structure for
+  both llmagent and goaltree. Cached models materialise an append-only rendered
+  prefix; configuration or past-state changes rebuild it, while new loads and
+  tool activations append durable exchanges. Models with `promptCaching: false`
+  render ephemerally from session state and persist no rendered context.
+- Prompt caching defaults on when a model does not specify `promptCaching`.
+- Volatile context and skill loads append a new resolved version only when the
+  source changes; the prior version remains part of conversation history.
 - `agent:request` and `agent:chat` Jobs survive a venue restart: kept at
   shutdown and at boot while their intake is queued on the agent, and
   completed by the boot wake. A `trigger` wait still fails as interrupted.
