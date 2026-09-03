@@ -10,6 +10,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Added
 
+- Agent and hosted-provider calls can carry an optional `providerOptions` map
+  of provider-native request fields (for example Claude adaptive thinking and
+  effort). Omitted fields continue to use provider defaults.
 - Lattice-native connection discovery and status, backed by immutable skill
   assets for 20 providers. Connection skills keep credential references in
   their facets and resolve secrets only inside venue HTTP operations.

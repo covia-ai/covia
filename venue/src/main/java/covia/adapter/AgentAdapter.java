@@ -103,7 +103,6 @@ public class AgentAdapter extends AAdapter {
 	private static final AString K_OUTPUTS          = Strings.intern("outputs");
 	private static final AString K_RESPONSE_FORMAT  = Strings.intern("responseFormat");
 	private static final AString K_API_KEY          = Strings.intern("apiKey");
-	private static final AString K_PROVIDER_OPTIONS = Strings.intern("providerOptions");
 	private static final AString K_AGENT_FACET      = Strings.intern("agent");
 	private static final AString K_SESSIONS         = Strings.intern("sessions");
 	private static final AString K_FOUND            = Strings.intern("found");
@@ -4567,7 +4566,7 @@ public class AgentAdapter extends AAdapter {
 		requireConfigType(config, K_CONTEXT, AVector.class, "an array of context entries");
 		requireConfigType(config, Fields.LOADS, AMap.class, "a map of path to load options");
 		requireConfigType(config, K_OUTPUTS, AMap.class, "a map of output declarations");
-		requireConfigType(config, K_PROVIDER_OPTIONS, AMap.class, "a map");
+		requireConfigType(config, AbstractLLMAdapter.K_PROVIDER_OPTIONS, AMap.class, "a map");
 
 		ACell responseFormat = config.get(K_RESPONSE_FORMAT);
 		if (responseFormat != null && !(responseFormat instanceof AString)

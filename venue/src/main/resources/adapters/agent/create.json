@@ -46,6 +46,27 @@
 									"type": "string",
 									"description": "Optional LLM model name; the selected provider's default applies when absent."
 								},
+								"maxTokens": {
+									"type": "integer",
+									"minimum": 1,
+									"description": "Optional maximum output tokens forwarded to the LLM operation; its declared default applies when absent."
+								},
+								"temperature": {
+									"type": "number",
+									"description": "Optional sampling temperature forwarded to the LLM operation; the model provider chooses when absent."
+								},
+								"topP": {
+									"type": "number",
+									"description": "Optional nucleus-sampling value forwarded to the LLM operation; the model provider chooses when absent."
+								},
+								"cache": {
+									"type": "boolean",
+									"description": "Optional prompt-caching override; false disables cached-prefix materialisation and provider cache marks."
+								},
+								"providerOptions": {
+									"type": "object",
+									"description": "Provider-native request body fields forwarded unchanged by providers that support them. Omit the map or individual fields to retain provider defaults."
+								},
 								"caps": {
 									"type": "array",
 									"description": "Capability restrictions — array of {with, can} objects limiting what the agent can access"

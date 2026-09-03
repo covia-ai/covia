@@ -1505,7 +1505,7 @@ public class AgentAdapterTest {
 			Fields.VALUE, Maps.of(
 				"llmOperation", "v/ops/langchain/anthropic",
 				"providerOptions", Maps.of(
-					"thinking", Maps.of("enabled", CVMBool.TRUE, "budget", 1000L)))),
+					"thinking", Maps.of("type", "adaptive", "display", "summarized")))),
 			alice).awaitResult(5000);
 
 		// Canonical functional asset shape: metadata + agent.config facet.
@@ -1525,7 +1525,7 @@ public class AgentAdapterTest {
 			Maps.of(
 				"model", "claude-test-model",
 				"providerOptions", Maps.of(
-					"thinking", Maps.of("budget", 2000L))));
+					"thinking", Maps.of("display", "omitted"))));
 
 		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(
 			Fields.AGENT_ID, "layered-agent",
@@ -1538,10 +1538,10 @@ public class AgentAdapterTest {
 		assertEquals(Strings.create("claude-test-model"), config.get(Strings.create("model")));
 		assertEquals(Strings.create("You review invoices using supplied evidence."),
 			config.get(Strings.create("systemPrompt")));
-		assertEquals(CVMBool.TRUE,
-			RT.getIn(config, Strings.create("providerOptions"), Strings.create("thinking"), Strings.create("enabled")));
-		assertEquals(CVMLong.create(2000),
-			RT.getIn(config, Strings.create("providerOptions"), Strings.create("thinking"), Strings.create("budget")));
+		assertEquals(Strings.create("adaptive"),
+			RT.getIn(config, Strings.create("providerOptions"), Strings.create("thinking"), Strings.create("type")));
+		assertEquals(Strings.create("omitted"),
+			RT.getIn(config, Strings.create("providerOptions"), Strings.create("thinking"), Strings.create("display")));
 
 		// Later layers did not mention tools, so the worker selector survives.
 		AVector<ACell> tools = RT.ensureVector(config.get(Strings.create("tools")));
@@ -5575,7 +5575,7 @@ public class AgentAdapterTest {
 			Fields.CONFIG, Maps.of(
 				"systemPrompt", "Original",
 				"providerOptions", Maps.of(
-					"thinking", Maps.of("enabled", CVMBool.TRUE, "budget", 1000L)))),
+					"thinking", Maps.of("type", "adaptive", "display", "summarized")))),
 			alice).awaitResult(5000);
 
 		engine.jobs().invokeOperation("v/ops/covia/write", Maps.of(
@@ -5590,7 +5590,7 @@ public class AgentAdapterTest {
 				Maps.of(
 					"systemPrompt", "Updated",
 					"providerOptions", Maps.of(
-						"thinking", Maps.of("budget", 2000L))))),
+						"thinking", Maps.of("display", "omitted"))))),
 			alice).awaitResult(5000);
 
 		AMap<AString, ACell> config = engine.getVenueState().users().get(ALICE_DID)
@@ -5598,10 +5598,10 @@ public class AgentAdapterTest {
 		assertEquals(Strings.create("Updated"), config.get(Strings.create("systemPrompt")));
 		assertEquals(Strings.create("v/ops/langchain/anthropic"),
 			config.get(Strings.create("llmOperation")));
-		assertEquals(CVMBool.TRUE,
-			RT.getIn(config, Strings.create("providerOptions"), Strings.create("thinking"), Strings.create("enabled")));
-		assertEquals(CVMLong.create(2000),
-			RT.getIn(config, Strings.create("providerOptions"), Strings.create("thinking"), Strings.create("budget")));
+		assertEquals(Strings.create("adaptive"),
+			RT.getIn(config, Strings.create("providerOptions"), Strings.create("thinking"), Strings.create("type")));
+		assertEquals(Strings.create("omitted"),
+			RT.getIn(config, Strings.create("providerOptions"), Strings.create("thinking"), Strings.create("display")));
 	}
 
 	/** Config has a single home (#144): agent:update rejects state.config loudly. */

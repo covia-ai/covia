@@ -268,12 +268,19 @@ public class AbstractLLMAdapterTest {
 			"maxTokens", 2048,
 			"temperature", 0,
 			"topP", 1,
-			"cache", false);
+			"cache", false,
+			"providerOptions", Maps.of(
+				"thinking", Maps.of("type", "adaptive"),
+				"output_config", Maps.of("effort", "low")));
 		AMap<AString, ACell> input = AbstractLLMAdapter.buildL3Input(
 			config, Vectors.of(Maps.of("role", "user", "content", "hello")), Vectors.empty());
 		assertEquals(2048L, RT.ensureLong(RT.getIn(input, "maxTokens")).longValue());
 		assertEquals(0L, RT.ensureLong(RT.getIn(input, "temperature")).longValue());
 		assertEquals(1L, RT.ensureLong(RT.getIn(input, "topP")).longValue());
 		assertEquals(CVMBool.FALSE, RT.getIn(input, "cache"));
+		assertEquals(Strings.create("adaptive"),
+			RT.getIn(input, "providerOptions", "thinking", "type"));
+		assertEquals(Strings.create("low"),
+			RT.getIn(input, "providerOptions", "output_config", "effort"));
 	}
 }

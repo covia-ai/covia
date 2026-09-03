@@ -461,15 +461,24 @@ public class LangChainAdapter extends AAdapter {
 
 	// ========== Model construction ==========
 
-	/** Optional sampling/bounds parameters passed through to the provider
-	 *  builders (#218). Anthropic requires an effective {@code maxTokens}; its
-	 *  operation metadata supplies the built-in default before this edge. */
-	record ModelTuning(Integer maxTokens, Double temperature, Double topP, Boolean cache) {
-		static final ModelTuning NONE = new ModelTuning(null, null, null, null);
+	/** Optional shared tuning and provider-native request fields passed through
+	 *  to the provider builders. Anthropic requires an effective
+	 *  {@code maxTokens}; its operation metadata supplies the built-in default
+	 *  before this edge. */
+	record ModelTuning(Integer maxTokens, Double temperature, Double topP, Boolean cache,
+			AMap<?, ?> providerOptions) {
+		static final ModelTuning NONE = new ModelTuning(null, null, null, null, null);
 
 		/** Prompt caching is on unless the call says {@code cache: false}. */
 		boolean caching() {
 			return cache == null || cache;
+		}
+
+		/** Provider-native request fields, converted only at the provider edge.
+		 *  A null/empty map means "let the provider choose". */
+		Map<String, Object> nativeOptions() {
+			return providerOptions == null || providerOptions.isEmpty()
+				? null : JSON.jsonMap(providerOptions);
 		}
 	}
 
@@ -481,10 +490,14 @@ public class LangChainAdapter extends AAdapter {
 		Integer maxTokens = asPositiveInt(RT.getIn(input, "maxTokens"), "maxTokens");
 		ACell cacheCell = RT.getIn(input, K_CACHE);
 		Boolean cache = (cacheCell instanceof CVMBool b) ? b.booleanValue() : null;
+		ACell optionsCell = RT.getIn(input, AbstractLLMAdapter.K_PROVIDER_OPTIONS);
+		if (optionsCell != null && !(optionsCell instanceof AMap<?, ?>)) {
+			throw new IllegalArgumentException("providerOptions must be a map");
+		}
 		return new ModelTuning(maxTokens,
 			asDouble(RT.getIn(input, "temperature"), "temperature"),
 			asDouble(RT.getIn(input, "topP"), "topP"),
-			cache);
+			cache, (AMap<?, ?>) optionsCell);
 	}
 
 	private static Integer asPositiveInt(ACell value, String field) {
@@ -644,6 +657,10 @@ public class LangChainAdapter extends AAdapter {
 	// to stdout if the langchain4j logger were ever bumped to DEBUG.
 
 	static ChatModel buildOllamaModel(String baseUrl, String model, Duration timeout, ModelTuning tuning) {
+		Map<String, Object> providerOptions = tuning.nativeOptions();
+		if (providerOptions != null) {
+			throw new IllegalArgumentException("providerOptions are not supported by the Ollama client");
+		}
 		var builder = OllamaChatModel.builder()
 			.baseUrl(baseUrl)
 			.logRequests(false)
@@ -656,6 +673,7 @@ public class LangChainAdapter extends AAdapter {
 	}
 
 	static ChatModel buildOpenAiModel(String apiKey, String baseUrl, String model, Duration timeout, ModelTuning tuning) {
+		Map<String, Object> providerOptions = tuning.nativeOptions();
 		// strictJsonSchema(true) enables OpenAI structured outputs for the
 		// response_format path — server-enforced schema conformance on the
 		// assistant's text response. This is how typed agent outputs are
@@ -677,10 +695,12 @@ public class LangChainAdapter extends AAdapter {
 			.strictJsonSchema(true);
 		if (tuning.temperature() != null) builder = builder.temperature(tuning.temperature());
 		if (tuning.topP() != null) builder = builder.topP(tuning.topP());
+		if (providerOptions != null) builder = builder.customParameters(providerOptions);
 		return builder.build();
 	}
 
 	static ChatModel buildAnthropicModel(String apiKey, String baseUrl, String model, Duration timeout, ModelTuning tuning) {
+		Map<String, Object> providerOptions = tuning.nativeOptions();
 		AnthropicChatModel.AnthropicChatModelBuilder builder = AnthropicChatModel.builder()
 			.apiKey(apiKey)
 			.baseUrl(baseUrl)
@@ -705,6 +725,7 @@ public class LangChainAdapter extends AAdapter {
 		builder = builder.maxTokens(tuning.maxTokens());
 		if (tuning.temperature() != null) builder = builder.temperature(tuning.temperature());
 		if (tuning.topP() != null) builder = builder.topP(tuning.topP());
+		if (providerOptions != null) builder = builder.customParameters(providerOptions);
 		return builder.build();
 	}
 

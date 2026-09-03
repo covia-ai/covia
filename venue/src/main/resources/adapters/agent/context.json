@@ -38,7 +38,7 @@
 		},
 		"output": {
 			"type": "object",
-			"description": "The level-3 input — model and caller tuning such as maxTokens/temperature/topP/cache when configured, responseFormat?, messages, tools, cacheMarks? — plus budget {bytes, used, remaining}, marks {head, live, conversation, toolLoop}, labels, palette {tools, unavailable}, loads [{ref, kind, status, bytes, budget, truncated, deduplicated}], and sessionTokens when a session has measured usage."
+			"description": "The level-3 input — model and caller tuning such as maxTokens/temperature/topP/cache/providerOptions when configured, responseFormat?, messages, tools, cacheMarks? — plus budget {bytes, used, remaining}, marks {head, live, conversation, toolLoop}, labels, palette {tools, unavailable}, loads [{ref, kind, status, bytes, budget, truncated, deduplicated}], and sessionTokens when a session has measured usage."
 		}
 	}
 }

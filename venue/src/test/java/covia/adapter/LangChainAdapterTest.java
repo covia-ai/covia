@@ -51,6 +51,7 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import com.sun.net.httpserver.HttpServer;
 
@@ -1476,7 +1477,7 @@ public class LangChainAdapterTest {
 
 	@Test
 	public void testTuningReachesProviderModels() {
-		LangChainAdapter.ModelTuning tuning = new LangChainAdapter.ModelTuning(2048, 0.0, 0.9, null);
+		LangChainAdapter.ModelTuning tuning = new LangChainAdapter.ModelTuning(2048, 0.0, 0.9, null, null);
 
 		var ollama = LangChainAdapter.buildOllamaModel("http://localhost:11434", "qwen",
 			java.time.Duration.ofSeconds(5), tuning);
@@ -1487,6 +1488,13 @@ public class LangChainAdapterTest {
 			java.time.Duration.ofSeconds(5), tuning);
 		assertEquals(0.0, openai.defaultRequestParameters().temperature());
 		assertEquals(0.9, openai.defaultRequestParameters().topP());
+		LangChainAdapter.ModelTuning nativeTuning = LangChainAdapter.extractTuning(JSON.parse(
+			"{\"providerOptions\":{\"reasoning_effort\":\"low\"}}"));
+		var nativeOpenAi = LangChainAdapter.buildOpenAiModel("key", "https://api.openai.com/v1",
+			"gpt-5.4-mini", java.time.Duration.ofSeconds(5), nativeTuning);
+		var nativeParameters = (dev.langchain4j.model.openai.OpenAiChatRequestParameters)
+			nativeOpenAi.defaultRequestParameters();
+		assertEquals("low", nativeParameters.customParameters().get("reasoning_effort"));
 
 		var anthropic = LangChainAdapter.buildAnthropicModel("key", "https://api.anthropic.com/v1/",
 			"claude-sonnet-5", java.time.Duration.ofSeconds(5), tuning);
@@ -1503,6 +1511,11 @@ public class LangChainAdapterTest {
 		var plain = LangChainAdapter.buildOllamaModel("http://localhost:11434", "qwen",
 			java.time.Duration.ofSeconds(5), LangChainAdapter.ModelTuning.NONE);
 		assertNull(plain.defaultRequestParameters().temperature());
+		assertNull(plain.defaultRequestParameters().topP());
+		assertThrows(IllegalArgumentException.class,
+			() -> LangChainAdapter.buildOllamaModel("http://localhost:11434", "qwen",
+				java.time.Duration.ofSeconds(5), nativeTuning),
+			"an unsupported providerOptions map must fail rather than disappear silently");
 	}
 
 	@Test
@@ -1578,6 +1591,63 @@ public class LangChainAdapterTest {
 			() -> LangChainAdapter.extractTuning(JSON.parse("{\"maxTokens\": 2147483648}")));
 		assertThrows(IllegalArgumentException.class,
 			() -> LangChainAdapter.extractTuning(JSON.parse("{\"maxTokens\": \"1024\"}")));
+		assertThrows(IllegalArgumentException.class,
+			() -> LangChainAdapter.extractTuning(JSON.parse("{\"providerOptions\": true}")));
+	}
+
+	@Test
+	public void testAnthropicProviderOptionsReachWireAndOmissionPreservesDefaults() throws Exception {
+		AtomicReference<ACell> request = new AtomicReference<>();
+		HttpServer provider = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+		provider.createContext("/v1/messages", exchange -> {
+			request.set(JSON.parse(new String(exchange.getRequestBody().readAllBytes(),
+				java.nio.charset.StandardCharsets.UTF_8)));
+			byte[] body = ("{\"id\":\"msg\",\"type\":\"message\",\"role\":\"assistant\","
+				+ "\"model\":\"claude-sonnet-5\",\"content\":[{\"type\":\"text\",\"text\":\"ok\"}],"
+				+ "\"stop_reason\":\"end_turn\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}")
+				.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+			exchange.getResponseHeaders().set("content-type", "application/json");
+			exchange.sendResponseHeaders(200, body.length);
+			try (var out = exchange.getResponseBody()) {
+				out.write(body);
+			}
+		});
+		provider.start();
+		try {
+			LangChainAdapter.ModelTuning tuning = LangChainAdapter.extractTuning(JSON.parse("""
+				{"maxTokens":8192,"providerOptions":{
+				  "thinking":{"type":"adaptive"},
+				  "output_config":{"effort":"low"}
+				}}
+				"""));
+			var model = LangChainAdapter.buildAnthropicModel("key",
+				"http://127.0.0.1:" + provider.getAddress().getPort() + "/v1/",
+				"claude-sonnet-5", Duration.ofSeconds(5), tuning);
+			model.chat(UserMessage.from("hello"));
+
+			assertEquals("adaptive", RT.getIn(request.get(), "thinking", "type").toString());
+			assertEquals("low", RT.getIn(request.get(), "output_config", "effort").toString());
+			assertNull(RT.getIn(request.get(), "temperature"),
+				"omitting shared tuning must leave the provider default alone");
+
+			request.set(null);
+			LangChainAdapter.ModelTuning omitted = LangChainAdapter.extractTuning(
+				JSON.parse("{\"maxTokens\":8192,\"providerOptions\":{}}"));
+			var defaulted = LangChainAdapter.buildAnthropicModel("key",
+				"http://127.0.0.1:" + provider.getAddress().getPort() + "/v1/",
+				"claude-sonnet-5", Duration.ofSeconds(5), omitted);
+			defaulted.chat(UserMessage.from("hello again"));
+
+			assertNotNull(request.get());
+			assertNull(RT.getIn(request.get(), "temperature"));
+			assertNull(RT.getIn(request.get(), "top_p"));
+			assertNull(RT.getIn(request.get(), "thinking"));
+			assertNull(RT.getIn(request.get(), "output_config"));
+			assertEquals(8192L, RT.ensureLong(RT.getIn(request.get(), "max_tokens")).longValue(),
+				"Anthropic's required declared output bound remains the one explicit default");
+		} finally {
+			provider.stop(0);
+		}
 	}
 
 	// ========== #224 — Ollama base URL resolution + connect hint ==========
