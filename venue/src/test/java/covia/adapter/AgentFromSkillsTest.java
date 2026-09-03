@@ -134,6 +134,24 @@ public class AgentFromSkillsTest {
 			"the migrated skill resolves for the agent: " + index);
 	}
 
+	/** A skills entry may be an inline SKILL.md map, so a UI can port a pasted skill in one call. */
+	@Test
+	public void testAcceptsInlineSkillText() {
+		String skillMd = "---\nname: greeting\ndescription: Say hello warmly.\n---\nAlways greet by name.\n";
+		ACell out = call("v/ops/agent/from-skills", Maps.of(
+			K_AGENT_ID, Strings.create("greeter"),
+			K_SKILLS, Vectors.of(Maps.of(Strings.intern("text"), Strings.create(skillMd)))));
+		AVector<ACell> imported = RT.ensureVector(RT.getIn(out, "importedSkills"));
+		assertTrue(imported.contains(Strings.create("w/skills/greeting")),
+			"the inline-text skill is imported: " + imported);
+
+		ACell info = call("v/ops/agent/info", Maps.of(K_AGENT_ID, Strings.create("greeter")));
+		List<Skills.SkillIndexEntry> index = Skills.listSkills(engine, ctx,
+			Skills.SkillSources.ofSkillsets(RT.ensureVector(RT.getIn(info, "config", "skills"))));
+		assertTrue(index.stream().anyMatch(e -> "greeting".equals(e.name()) && e.error() == null),
+			"the inline-text skill resolves for the agent: " + index);
+	}
+
 	/** The composed op inherits agent:create's guard: an existing name is an error. */
 	@Test
 	public void testFailsWhenAgentNameAlreadyExists() {

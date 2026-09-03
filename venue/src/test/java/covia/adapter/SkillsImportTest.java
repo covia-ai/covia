@@ -324,6 +324,27 @@ public class SkillsImportTest {
 	}
 
 	@Test
+	public void testImportFromText() {
+		// A caller that already holds the SKILL.md (e.g. a UI paste) imports it
+		// directly, with no source to stage first.
+		ACell out = importSkill(Maps.of(K_TEXT, Strings.create(
+			"---\nname: quick\ndescription: A quick skill.\n---\nBody here.\n")));
+		assertEquals("w/skills/quick", str(out, "path"));
+		assertEquals("quick", str(out, "name"));
+		assertEquals("inline", str(out, "content"));
+		assertNull(RT.getIn(out, K_SOURCE), "a text import echoes no source");
+		ACell read = call("v/ops/skills/read", Maps.of(K_SKILL, Strings.create("w/skills/quick")));
+		assertTrue(str(read, K_BODY).startsWith("Body here."));
+
+		// Exactly one of source/text; a live 'ref' still needs a source to bind to.
+		assertThrows(IllegalArgumentException.class, () -> importSkill(Maps.of(
+			K_SOURCE, Strings.create("file://work/agent/SKILL.md"),
+			K_TEXT, Strings.create("---\nname: x\ndescription: y\n---\n"))));
+		assertThrows(IllegalArgumentException.class, () -> importSkill(Maps.of(
+			K_TEXT, Strings.create("---\nname: x\ndescription: y\n---\nB\n"), Fields.CONTENT, Fields.REF)));
+	}
+
+	@Test
 	public void testImportWritesNothingOnABadSource() {
 		assertThrows(IllegalArgumentException.class, () -> importSkill(Maps.empty()));
 		assertThrows(IllegalArgumentException.class,

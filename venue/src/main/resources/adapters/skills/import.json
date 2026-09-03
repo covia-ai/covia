@@ -1,6 +1,6 @@
 {
 	"name": "Import Skill",
-	"description": "Imports one SKILL.md (Anthropic Agent Skills format) as a Covia skill: parses it exactly as the skill-parse operation does and writes the resulting metadata to <skillset>/<name>, where the name comes from the frontmatter and the skillset defaults to w/skills — the personal skills directory every standard agent template indexes first. One source per call, always a single SKILL.md, never a directory: name each file you want. The body never passes through the model. Re-importing the same skill overwrites its entry. By default the body is copied into the venue; choose content 'ref' to keep it bound live to the source file so edits on disk show on the next turn (the index line is a snapshot — re-import to refresh it).",
+	"description": "Imports one SKILL.md (Anthropic Agent Skills format) as a Covia skill: parses it exactly as the skill-parse operation does and writes the resulting metadata to <skillset>/<name>, where the name comes from the frontmatter and the skillset defaults to w/skills — the personal skills directory every standard agent template indexes first. Provide exactly one of 'source' (a content reference to a single SKILL.md) or 'text' (the SKILL.md itself, for a caller that already has it in hand). One skill per call, never a directory. The body never passes through the model. Re-importing the same skill overwrites its entry. By default the body is copied into the venue; choose content 'ref' to keep it bound live to the source file so edits on disk show on the next turn (the index line is a snapshot — re-import to refresh it). Content 'ref' requires a 'source' to bind to.",
 	"dateCreated": "2026-08-27T00:00:00Z",
 	"operation": {
 		"adapter": "skills:import",
@@ -9,11 +9,11 @@
 		"input": {
 			"type": "object",
 			"properties": {
-				"source": { "type": "string", "description": "One content reference to a SKILL.md: 'file://<root>/<dir>/SKILL.md', 'dlfs/<drive>/<path>', or an asset ref ('a/<hash>'). Not a directory." },
+				"source": { "type": "string", "description": "One content reference to a SKILL.md: 'file://<root>/<dir>/SKILL.md', 'dlfs/<drive>/<path>', or an asset ref ('a/<hash>'). Not a directory. Provide this or 'text', not both." },
+				"text": { "type": "string", "description": "The SKILL.md content itself, for a caller that already has it in hand (e.g. pasted in a UI). Provide this or 'source', not both. Only 'inline' content is possible with 'text', since there is no source to bind a live 'ref' to." },
 				"skillset": { "type": "string", "description": "The directory of skills to write into — a writable lattice path such as 'w/skills' (default) or 'w/team-skills'. The skill lands at <skillset>/<name>." },
-				"content": { "type": "string", "enum": ["inline", "ref"], "description": "'inline' (default) copies the body into the stored metadata; 'ref' binds content.ref to the source so the body stays live in the file." }
-			},
-			"required": ["source"]
+				"content": { "type": "string", "enum": ["inline", "ref"], "description": "'inline' (default) copies the body into the stored metadata; 'ref' binds content.ref to the source so the body stays live in the file (requires 'source')." }
+			}
 		},
 		"output": {
 			"type": "object",
