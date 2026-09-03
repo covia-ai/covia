@@ -13,6 +13,12 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Agent and hosted-provider calls can carry an optional `providerOptions` map
   of provider-native request fields (for example Claude adaptive thinking and
   effort). Omitted fields continue to use provider defaults.
+- The Convex adapter can generate Ed25519 keys directly into the caller's
+  encrypted secret store and sign UTF-8 or hexadecimal payloads without
+  exposing the private seed. Transactions accept the same `s/<name>` seed
+  references while retaining redacted literal-seed compatibility.
+- `convex:encode-cad3` and `convex:decode-cad3` round-trip native Convex values
+  through complete, self-contained CAD3 messages, including multi-cell data.
 - Lattice-native connection discovery and status, backed by immutable skill
   assets for 20 providers. Connection skills keep credential references in
   their facets and resolve secrets only inside venue HTTP operations.
@@ -47,6 +53,13 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   loaded skill tools are appended once without pre-declaring every gated JSON
   schema, and provider tool-call ids are valid across replayed context
   exchanges (#470, #471, #472, #479).
+- Provider-native assistant state, including signed Anthropic thinking blocks,
+  survives each within-cycle tool call and is replayed unchanged when the
+  provider supports it. Existing conversation records without provider state
+  remain valid.
+- Session compaction reloads the current skills, tools and context through the
+  normal initial-context path, so active resources hidden inside the archived
+  conversation remain available after compaction.
 - Convex 0.8.16 restores lookup/stat/open for long DLFS directory-entry names
   after an Etch reopen. Covia's regression covers concurrent sibling
   promotion, independent handles, root sync and byte-exact restart recovery
@@ -78,6 +91,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 ### Changed
 
 - Update the Convex runtime and storage dependencies from 0.8.15 to 0.8.16.
+- `secret:set` creates by default and requires explicit `overwrite: true` to
+  replace an existing secret; REST `PUT` retains replacement semantics.
 - Agent context is now represented by one shared durable frame structure for
   both llmagent and goaltree. Cached models materialise an append-only rendered
   prefix; configuration or past-state changes rebuild it, while new loads and
