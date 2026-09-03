@@ -12,6 +12,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import convex.core.util.Utils;
+import covia.api.Abilities;
 import covia.api.Fields;
 import covia.grid.Asset;
 import covia.venue.Engine;
@@ -20,6 +21,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Predicate;
 
 /**
  * The harness tools every runtime provides, and the one rule for offering
@@ -187,22 +189,15 @@ final class HarnessTools {
 
 	/** Minimal changed definitions/removals between two active-load snapshots. */
 	static AVector<ACell> toolStateEvent(Loads.Snapshot before, Loads.Snapshot after) {
-		return toolStateEvent(before, after, Set.of());
-	}
-
-	/** Tool-state delta excluding definitions already present in the immutable
-	 * provider manifest. Their skill body announces activation; repeating full
-	 * schemas as text would waste context and contradict native declarations. */
-	static AVector<ACell> toolStateEvent(Loads.Snapshot before, Loads.Snapshot after,
-			Set<String> alreadyDeclared) {
 		Map<String, ACell> oldDefs = definitionsByName(before != null ? before.tools() : null);
 		Map<String, ACell> newDefs = definitionsByName(after != null ? after.tools() : null);
 		AVector<ACell> additions = Vectors.empty();
 		for (long i = 0; after != null && i < after.tools().count(); i++) {
 			ACell def = after.tools().get(i);
 			AString name = RT.ensureString(RT.getIn(def, AbstractLLMAdapter.K_NAME));
-			if (name != null && !alreadyDeclared.contains(name.toString())
-					&& !def.equals(oldDefs.get(name.toString()))) additions = additions.conj(def);
+			if (name != null && !def.equals(oldDefs.get(name.toString()))) {
+				additions = additions.conj(def);
+			}
 		}
 		AVector<ACell> removals = Vectors.empty();
 		for (long i = 0; before != null && i < before.tools().count(); i++) {
@@ -228,16 +223,30 @@ final class HarnessTools {
 	 * from that one value, exactly as they do for tools contributed by a skill.
 	 */
 	@SuppressWarnings("unchecked")
-	static ACell moreTools(ACell input, LoadScope scope, Set<String> existing) {
+	static ACell moreTools(ACell input, LoadScope scope, Predicate<String> occupiedName) {
 		ACell opsCell = RT.getIn(input, K_OPERATIONS);
 		if (!(opsCell instanceof AVector<?>)) {
 			return Strings.create("Error: operations must be an array of operation paths");
 		}
 		if (!scope.writable) return Strings.create(scope.unavailableMessage);
+		AVector<ACell> requested = (AVector<ACell>) opsCell;
+		try {
+			// Authorise the whole batch before resolving or storing any binding.
+			for (long i = 0; i < requested.count(); i++) {
+				AString operation = RT.ensureString(requested.get(i));
+				if (operation == null) {
+					return Strings.create("Error: operations must contain only operation paths");
+				}
+				if (!operationPresent(scope, operation)) {
+					scope.context.requireExplicitCapability(operation, Abilities.TOOL_LOAD);
+				}
+			}
+		} catch (RuntimeException e) {
+			return Strings.create("Error: more_tools denied: " + describe(e));
+		}
 		AVector<ACell> resolved = ToolPalette.bindingsForOperations(
-			scope.engine, scope.context, (AVector<ACell>) opsCell);
-		Set<String> occupied = new HashSet<>();
-		if (existing != null) occupied.addAll(existing);
+			scope.engine, scope.context, requested);
+		Set<String> addedNames = new HashSet<>();
 		AVector<ACell> bindings = Vectors.empty();
 		AVector<ACell> operations = Vectors.empty();
 		AVector<ACell> names = Vectors.empty();
@@ -246,7 +255,9 @@ final class HarnessTools {
 			ACell definition = RT.getIn(binding, Fields.DEFINITION);
 			AString name = RT.ensureString(RT.getIn(definition, AbstractLLMAdapter.K_NAME));
 			AString operation = RT.ensureString(RT.getIn(binding, Fields.OPERATION));
-			if (name == null || operation == null || !occupied.add(name.toString())) continue;
+			if (name == null || operation == null
+					|| (occupiedName != null && occupiedName.test(name.toString()))
+					|| !addedNames.add(name.toString())) continue;
 			bindings = bindings.conj(binding);
 			operations = operations.conj(operation);
 			names = names.conj(name);
@@ -270,6 +281,21 @@ final class HarnessTools {
 				"Tools loaded for this conversation. Use context_unload with path to remove them."));
 	}
 
+	/** Whether an operation is already part of the agent's declarative or
+	 * load-owned surface. This consults canonical source state only. */
+	private static boolean operationPresent(LoadScope scope, AString operation) {
+		if (ToolPalette.declaresOperation(scope.config, operation)) return true;
+		AMap<AString, ACell> effective = ContextChain.effective(scope.outerLoads, scope.loads);
+		for (var entry : effective.entrySet()) {
+			AVector<ACell> operations = RT.ensureVector(RT.getIn(entry.getValue(), Fields.TOOLS));
+			for (long i = 0; operations != null && i < operations.count(); i++) {
+				if (operation.equals(operations.get(i))) return true;
+			}
+		}
+		return Skills.advertisesOperation(scope.engine, scope.context,
+			scope.skillSources, effective, operation);
+	}
+
 	/** Mutable view of the innermost loads tier for a flat session or frame. */
 	static final class LoadScope {
 		final Engine engine;
@@ -278,11 +304,13 @@ final class HarnessTools {
 		final boolean writable;
 		final String unavailableMessage;
 		final Skills.SkillSources skillSources;
+		final AMap<AString, ACell> config;
 		AMap<AString, ACell> loads;
 
 		LoadScope(Engine engine, RequestContext context,
 				AMap<AString, ACell> loads, AMap<AString, ACell> outerLoads,
-				boolean writable, String unavailableMessage, Skills.SkillSources skillSources) {
+				boolean writable, String unavailableMessage, Skills.SkillSources skillSources,
+				AMap<AString, ACell> config) {
 			this.engine = engine;
 			this.context = context;
 			this.loads = (loads != null) ? loads : Maps.empty();
@@ -290,6 +318,7 @@ final class HarnessTools {
 			this.writable = writable;
 			this.unavailableMessage = unavailableMessage;
 			this.skillSources = (skillSources != null) ? skillSources : Skills.SkillSources.EMPTY;
+			this.config = config;
 		}
 	}
 

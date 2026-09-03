@@ -277,8 +277,8 @@ public class EtchV3VenueTest {
 	}
 
 	/**
-	 * Release regression for GetMine #303. The product writes staged files via
-	 * short-lived DLFS views while unrelated venue traffic synchronises the root
+	 * Release regression for GetMine #303 and covia#469. The product writes staged
+	 * files via short-lived DLFS views while unrelated venue traffic synchronises the root
 	 * lattice and the UI lists the same directory. The field report was a fresh
 	 * encrypted-v3 store whose directory nodes became unreadable without any
 	 * reported write failure.
@@ -297,7 +297,11 @@ public class EtchV3VenueTest {
 		int writerCount = 6;
 		int filesPerWriter = 20;
 		Map<String, byte[]> expected = new LinkedHashMap<>();
-		String commonPrefix = "2026-08-13 - NHS health document "; // >32 shared chars
+		// Keep every destination above the 137-byte embedded-string limit while its
+		// staged sibling remains below DLFS's 255-byte component limit. Convex 0.8.15
+		// reloaded such single-entry Index branches with the wrong radix depth: list
+		// still yielded the name, but lookup/stat could not resolve it (covia#469).
+		String commonPrefix = "2026-08-13 - NHS health document " + "x".repeat(145);
 		for (int writer = 0; writer < writerCount; writer++) {
 			for (int item = 0; item < filesPerWriter; item++) {
 				String name = commonPrefix + writer + "-" + item + ".pdf";

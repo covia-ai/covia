@@ -75,7 +75,7 @@ public class AgentStateMergeTest {
 
 		// the transition returns its own view: a changed, b as it saw it
 		agent.mergeRunResult(snapshot, Maps.of("a", 9, "b", 1), null,
-			Maps.of("op", "test-cycle"), null, null, 0, null, null, null);
+			Maps.of("op", "test-cycle"), null, null, 0, null, null);
 
 		ACell state = agent.getState();
 		assertEquals(n(9), RT.getIn(state, "a"));

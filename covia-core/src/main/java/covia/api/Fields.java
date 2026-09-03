@@ -173,6 +173,8 @@ public class Fields {
 	// Lattice navigation
 	public static final StringShort PATH = Strings.intern("path");
 	public static final StringShort VALUE = Strings.intern("value");
+	/** DLFS drive name (#253) — distinct from the generic lattice PATH within it. */
+	public static final StringShort DRIVE = Strings.intern("drive");
 
 	// Agent related
 	public static final StringShort AGENT_ID = Strings.intern("agentId");
@@ -281,6 +283,8 @@ public class Fields {
 	public static final StringShort ROLES = Strings.intern("roles");
 	public static final StringShort REQUIRES = Strings.intern("requires");
 	public static final StringShort EMAIL = Strings.intern("email");
+	/** Stable pseudonymous OAuth identity derived from the normalised email. */
+	public static final StringShort COVIA_UID = Strings.intern("covia_uid");
 	public static final StringShort PROVIDER = Strings.intern("provider");
 	public static final StringShort PROVIDER_SUB = Strings.intern("providerSub");
 	public static final StringShort SUB = Strings.intern("sub");

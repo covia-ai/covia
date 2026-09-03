@@ -256,11 +256,7 @@ public class GoalTreeContext {
 	 * Creates a new frame with description and initial loads (inherited from parent).
 	 */
 	public static AMap<AString, ACell> createFrame(String description, AMap<AString, ACell> loads) {
-		AMap<AString, ACell> frame = createFrame(description);
-		if (loads != null && loads.count() > 0) {
-			frame = frame.assoc(K_LOADS, loads);
-		}
-		return frame;
+		return withLoads(createFrame(description), loads);
 	}
 
 	// ========== Root goal description generators ==========
@@ -674,6 +670,32 @@ public class GoalTreeContext {
 		return (loads instanceof AMap) ? (AMap<AString, ACell>) loads : Maps.empty();
 	}
 
+	/** Returns the root frame's loads, or empty for an absent/malformed root. */
+	@SuppressWarnings("unchecked")
+	public static AMap<AString, ACell> rootLoads(AVector<ACell> frames) {
+		if (frames == null || frames.isEmpty() || !(frames.get(0) instanceof AMap root)) {
+			return Maps.empty();
+		}
+		return getLoads((AMap<AString, ACell>) root);
+	}
+
+	/** Replaces the root frame's loads, preserving every other frame field. */
+	@SuppressWarnings("unchecked")
+	public static AVector<ACell> withRootLoads(AVector<ACell> frames,
+			AMap<AString, ACell> loads) {
+		if (frames == null || frames.isEmpty() || !(frames.get(0) instanceof AMap root)) {
+			return frames;
+		}
+		return frames.assoc(0, withLoads((AMap<AString, ACell>) root, loads));
+	}
+
+	/** Replaces a frame's loads, omitting the optional field when empty. */
+	public static AMap<AString, ACell> withLoads(AMap<AString, ACell> frame,
+			AMap<AString, ACell> loads) {
+		return (loads == null || loads.isEmpty())
+			? frame.dissoc(K_LOADS) : frame.assoc(K_LOADS, loads);
+	}
+
 	/**
 	 * Adds or replaces a load entry in a frame's loads map.
 	 *
@@ -685,7 +707,7 @@ public class GoalTreeContext {
 	public static AMap<AString, ACell> addLoad(AMap<AString, ACell> frame,
 			AString path, AMap<AString, ACell> meta) {
 		AMap<AString, ACell> loads = getLoads(frame);
-		return frame.assoc(K_LOADS, loads.assoc(path, meta));
+		return withLoads(frame, loads.assoc(path, meta));
 	}
 
 	/**
@@ -698,10 +720,7 @@ public class GoalTreeContext {
 	public static AMap<AString, ACell> removeLoad(AMap<AString, ACell> frame, AString path) {
 		AMap<AString, ACell> loads = getLoads(frame);
 		AMap<AString, ACell> updated = loads.dissoc(path);
-		if (updated.count() == 0) {
-			return frame.dissoc(K_LOADS);
-		}
-		return frame.assoc(K_LOADS, updated);
+		return withLoads(frame, updated);
 	}
 
 	// ========== Internal helpers ==========

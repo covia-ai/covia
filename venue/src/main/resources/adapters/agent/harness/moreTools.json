@@ -1,6 +1,6 @@
 {
     "name": "Add Agent Tools",
-    "description": "Load operations into this conversation as tools. Use an advertised catalog-listing operation to discover available operations first (for example, list path=v/ops), then call this with the exact paths you need. The result returns a persistent load key; pass that key to context_unload only when you need to remove the tools. Added tools appear on your next turn.",
+    "description": "Load operation definitions into this conversation with an append-only tool event. An operation already declared by agent config, an active load or an advertised skill may be selected directly; any other operation requires an explicit tool/load capability. Loading does not grant invoke authority. The result returns a persistent load key; pass it to context_unload only when you need to remove the tools.",
     "dateCreated": "2026-08-29T00:00:00Z",
     "operation": {
         "adapter": "harness:moreTools",
@@ -12,7 +12,7 @@
             "properties": {
                 "operations": {
                     "type": "array",
-                    "description": "Operation paths to add as tools (e.g. [\"v/ops/agent/create\", \"v/ops/grid/run\"])",
+                    "description": "Exact operation paths already present in the agent surface or covered by tool/load capability",
                     "items": { "type": "string" }
                 }
             },

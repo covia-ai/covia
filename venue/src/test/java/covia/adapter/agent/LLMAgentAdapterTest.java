@@ -6,8 +6,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
-import java.util.HashMap;
-import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 import convex.core.data.ACell;
@@ -827,7 +825,7 @@ public class LLMAgentAdapterTest {
 		assertEquals("covia_read", toolNames.get(0).toString());
 
 		// The loads entry: skill-flagged, budgeted, denormalised tool refs.
-		AMap<AString, ACell> meta = (AMap<AString, ACell>) ctx.loads.get(Strings.create("w/skills/alpha"));
+		AMap<AString, ACell> meta = (AMap<AString, ACell>) ctx.getLoads().get(Strings.create("w/skills/alpha"));
 		assertNotNull(meta);
 		assertTrue(Skills.isSkillEntry(meta));
 		assertEquals(2000L, ((CVMLong) meta.get(Strings.create("budget"))).longValue());
@@ -866,7 +864,7 @@ public class LLMAgentAdapterTest {
 		ToolContext c1 = skillToolCtx();
 		adapter.handleSkillLoad(Maps.of("name", "alpha", "budget", 50L), c1);
 		assertEquals(256L, ((CVMLong) RT.getIn(
-			c1.loads.get(Strings.create("w/skills/alpha")), "budget")).longValue());
+			c1.getLoads().get(Strings.create("w/skills/alpha")), "budget")).longValue());
 
 		// skill.budget facet beats the default
 		engine.jobs().invokeOperation("v/ops/covia/write",
@@ -878,12 +876,12 @@ public class LLMAgentAdapterTest {
 		ToolContext c2 = skillToolCtx();
 		adapter.handleSkillLoad(Maps.of("name", "budgeted"), c2);
 		assertEquals(5000L, ((CVMLong) RT.getIn(
-			c2.loads.get(Strings.create("w/skills/budgeted")), "budget")).longValue());
+			c2.getLoads().get(Strings.create("w/skills/budgeted")), "budget")).longValue());
 	}
 
 	@Test public void testSkillToolsFollowLoads() {
-		// The generic rule: loads-contributed tools mirror effective loads —
-		// a load activates them, an unload retracts them, mid-transition.
+		// The generic rule for genuinely late tools: a load introduces their
+		// bindings and an unload retracts them, mid-transition.
 		writeAlphaSkill();
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		ToolContext ctx = skillToolCtx();
@@ -893,14 +891,14 @@ public class LLMAgentAdapterTest {
 		AVector<ACell> active = ctx.loadTools(engine);
 		assertEquals(1, active.count());
 		assertEquals("covia_read", RT.getIn(active.get(0), Fields.NAME).toString());
-		assertEquals("v/ops/covia/read", ctx.dispatchRoutes().get("covia_read").toString());
+		assertEquals("v/ops/covia/read", ctx.operation("covia_read").toString());
 
 		adapter.handleContextUnload(Maps.of("path", "w/skills/alpha"), ctx);
 		assertEquals(0, ctx.loadTools(engine).count());
-		assertNull(ctx.dispatchRoutes().get("covia_read"),
+		assertNull(ctx.operation("covia_read"),
 			"unload must retract the dispatch route as well as the visible tool");
 		ACell hallucinated = adapter.dispatchTool("covia_read",
-			Maps.of("path", "w/probe"), ctx.dispatchRoutes(), ctx.ctx,
+			Maps.of("path", "w/probe"), ctx.operation("covia_read"), ctx.ctx,
 			ctx.toolCallTimeoutMs);
 		assertTrue(String.valueOf(hallucinated).startsWith("Error:"),
 			"a manually supplied call after unload must not use the former route: "
@@ -913,12 +911,12 @@ public class LLMAgentAdapterTest {
 		writeAlphaSkill();
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		ToolContext ctx = skillToolCtx();
-		ctx.fixedToolNames = java.util.Set.of("covia_read");
-		ctx.loadExcludedNames = java.util.Set.of("covia_read");
+		ctx.toolIndex = Maps.of("covia_read",
+			Maps.of(Fields.OPERATION, "v/ops/covia/list"));
 		adapter.handleSkillLoad(Maps.of("name", "alpha"), ctx);
 		assertEquals(0, ctx.loadTools(engine).count());
-		assertNull(ctx.configToolMap.get("covia_read"),
-			"an excluded def must not write a dispatch route");
+		assertEquals("v/ops/covia/list", ctx.operation("covia_read").toString(),
+			"an excluded def must not replace the fixed dispatch route");
 	}
 
 	@Test public void testSkillLoadDedupsByContentIdentity() {
@@ -938,7 +936,7 @@ public class LLMAgentAdapterTest {
 		adapter.handleSkillLoad(Maps.of("name", "alpha"), ctx);
 		ACell second = adapter.handleSkillLoad(Maps.of("name", "beta"), ctx);
 
-		assertEquals(1, ctx.loads.count(), "identical content must not load twice");
+		assertEquals(1, ctx.getLoads().count(), "identical content must not load twice");
 		assertEquals(1, ctx.loadTools(engine).count());
 		assertTrue(second.toString().contains("Already loaded"), second.toString());
 		assertTrue(second.toString().contains("w/skills/alpha"), second.toString());
@@ -952,10 +950,10 @@ public class LLMAgentAdapterTest {
 		ToolContext ctx = skillToolCtx();
 		adapter.handleSkillLoad(Maps.of("name", "alpha"), ctx);
 		adapter.handleSkillLoad(Maps.of("name", "alpha", "budget", 3000L), ctx);
-		assertEquals(1, ctx.loads.count());
+		assertEquals(1, ctx.getLoads().count());
 		assertEquals(1, ctx.loadTools(engine).count());
 		assertEquals(3000L, ((CVMLong) RT.getIn(
-			ctx.loads.get(Strings.create("w/skills/alpha")), "budget")).longValue());
+			ctx.getLoads().get(Strings.create("w/skills/alpha")), "budget")).longValue());
 	}
 
 	@Test
@@ -981,10 +979,11 @@ public class LLMAgentAdapterTest {
 		assertTrue(response.toString().contains("SKILL_TOOL_RESULT"), response.toString());
 		assertTrue(response.toString().contains("probe-value"), response.toString());
 
-		// The session tier on the output carries the skill entry (persisted
-		// by the framework's loads write-back).
-		AMap<AString, ACell> loads = (AMap<AString, ACell>) RT.getIn(output, Fields.LOADS);
-		assertNotNull(loads, "session in scope → loads emitted on the output");
+		// Direct invocation returns the shared frame shape; the skill entry is
+		// durable alongside the conversation it changed.
+		AMap<AString, ACell> loads = (AMap<AString, ACell>) RT.getIn(
+			output, Fields.FRAMES, CVMLong.ZERO, Fields.LOADS);
+		assertNotNull(loads);
 		assertTrue(Skills.isSkillEntry(loads.get(Strings.create("w/skills/alpha"))));
 	}
 
@@ -1014,11 +1013,9 @@ public class LLMAgentAdapterTest {
 			"the value appears once in the appended loaded_context result, not in its acknowledgement");
 
 		@SuppressWarnings("unchecked")
-		AMap<AString, ACell> loads =
-			(AMap<AString, ACell>) RT.getIn(output, Fields.LOADS);
-		assertNotNull(loads);
-		assertNull(loads.get(Strings.create("w/context-immediate")),
-			"the same-cycle unload must also persist");
+		AMap<AString, ACell> loads = (AMap<AString, ACell>) RT.getIn(
+			output, Fields.FRAMES, CVMLong.ZERO, Fields.LOADS);
+		assertNull(loads, "an empty optional loads field is omitted");
 	}
 
 	@Test
@@ -1052,9 +1049,10 @@ public class LLMAgentAdapterTest {
 		AString turn1 = RT.ensureString(RT.getIn(agent.getTimeline().get(0), Fields.RESULT));
 		assertTrue(turn1.toString().contains("SKILL_TOOL_RESULT"), turn1.toString());
 
-		// The skill entry landed on the session's loads tier.
+		// The skill entry landed on the session's root frame.
 		AMap<AString, ACell> session = agent.getSession(sid);
-		AMap<AString, ACell> loads = (AMap<AString, ACell>) RT.getIn(session, "loads");
+		AMap<AString, ACell> loads = (AMap<AString, ACell>) RT.getIn(
+			session, Fields.FRAMES, CVMLong.ZERO, Fields.LOADS);
 		assertNotNull(loads);
 		assertTrue(Skills.isSkillEntry(loads.get(Strings.create("w/skills/alpha"))));
 
@@ -1078,8 +1076,11 @@ public class LLMAgentAdapterTest {
 		session = agent.getSession(sid);
 		ACell initialMessages = RT.getIn(session, Fields.FRAMES, CVMLong.ZERO,
 			GoalTreeContext.K_RENDERED_CONTEXT, Strings.intern("messages"));
-		AVector<ACell> initialTools = RT.ensureVector(RT.getIn(session, Fields.FRAMES, CVMLong.ZERO,
-			GoalTreeContext.K_RENDERED_CONTEXT, Fields.TOOLS));
+		ContextAssembler.Rendered initialRendering = ContextAssembler.Rendered.fromCell(
+			RT.getIn(session, Fields.FRAMES, CVMLong.ZERO,
+				GoalTreeContext.K_RENDERED_CONTEXT));
+		assertNotNull(initialRendering);
+		AVector<ACell> initialTools = initialRendering.tools();
 		assertFalse(ToolPalette.names(initialTools).contains("covia_write"));
 		engine.jobs().invokeOperation("v/ops/covia/write", Maps.of(
 			Fields.PATH, "w/skills/beta",
@@ -2243,14 +2244,13 @@ public class LLMAgentAdapterTest {
 		RequestContext ctx = RequestContext.of(ALICE_DID);
 		AMap<AString, ACell> input = Maps.of("agentId", "Charlie", "n", CVMLong.create(7));
 
-		// Config-mapped path: LLM tool name resolves through configToolMap.
-		java.util.Map<String, AString> toolMap = new java.util.HashMap<>();
-		toolMap.put("my_echo", Strings.create("v/test/ops/echo"));
-		ACell viaConfig = adapter.dispatchTool("my_echo", input, toolMap, ctx, 5000);
+		// Mapped path: LLM tool name resolves through the persisted direct lookup.
+		ACell viaConfig = adapter.dispatchTool("my_echo", input,
+			Strings.create("v/test/ops/echo"), ctx, 5000);
 
 		// Grid-dispatch path: tool name IS the op reference.
 		ACell viaGrid = adapter.dispatchTool("v/test/ops/echo", input,
-			new java.util.HashMap<>(), ctx, 5000);
+			null, ctx, 5000);
 
 		// Same op, same input, both paths: identical result — the
 		// Bob/Charlie divergence (#89) cannot recur.
@@ -2268,7 +2268,7 @@ public class LLMAgentAdapterTest {
 		AString jsonish = Strings.create("{\"key\":\"value\"}");
 
 		ACell result = adapter.dispatchTool("v/test/ops/echo", jsonish,
-			new java.util.HashMap<>(), ctx, 5000);
+			null, ctx, 5000);
 		assertEquals(jsonish, result, "internal dispatch must not silently parse string inputs");
 	}
 
@@ -2394,7 +2394,7 @@ public class LLMAgentAdapterTest {
 		RequestContext ctx = RequestContext.of(ALICE_DID);
 		ToolPalette.Palette palette = ToolPalette.resolve(engine, ctx,
 			Maps.of(Fields.TOOLS, Vectors.of("v/test/ops/echo")), java.util.Set.of());
-		assertEquals("Echo Operation", palette.activityLabels().get("test_echo").toString());
+		assertEquals("Echo Operation", palette.activityLabel("test_echo").toString());
 		assertNull(RT.getIn(palette.tools().get(0), Fields.ACTIVITY_LABEL));
 
 		AVector<ACell> bindings = ToolPalette.bindingsForOperations(engine, ctx,
@@ -2524,7 +2524,6 @@ public class LLMAgentAdapterTest {
 	public void testBuildConfigToolsStringEntries() {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 
-		Map<String, AString> configToolMap = new HashMap<>();
 		AVector<ACell> toolsVec = Vectors.of(
 			(ACell) Strings.create("v/ops/agent/create"),
 			(ACell) Strings.create("v/ops/agent/list")
@@ -2645,6 +2644,27 @@ public class LLMAgentAdapterTest {
 	}
 
 	@Test
+	public void testToolCallingDisabledPersistsEmptyManifest() {
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+		ACell config = Maps.of(
+			"llmOperation", "v/test/ops/llm",
+			"tools", Vectors.of("v/ops/agent/create"),
+			"modelProfile", Maps.of("options",
+				Maps.of("toolCalling", CVMBool.FALSE)));
+
+		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), Maps.of(
+			Fields.AGENT_ID, "no-tool-calling-agent",
+			AgentState.KEY_CONFIG, config,
+			Fields.MESSAGES, Vectors.of(Maps.of("content", "test"))));
+		ACell rendered = RT.getIn(output, Fields.FRAMES, CVMLong.ZERO,
+			GoalTreeContext.K_RENDERED_CONTEXT);
+
+		assertEquals(0, RT.ensureVector(RT.getIn(rendered, Fields.TOOLS)).count());
+		assertEquals(CVMLong.ZERO, RT.getIn(rendered, "baseToolStart"));
+		assertEquals(CVMLong.ZERO, RT.getIn(rendered, "baseToolEnd"));
+	}
+
+	@Test
 	public void testInvalidToolEntrySkipped() {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 
@@ -2687,14 +2707,14 @@ public class LLMAgentAdapterTest {
 	@Test public void testContextLoadHandler() {
 		ToolContext ctx = new ToolContext(Strings.create("agent"),
 			RequestContext.of(ALICE_DID), null, null, null, null);
-		assertEquals(0, ctx.loads.count());
+		assertEquals(0, ctx.getLoads().count());
 
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		ACell result = adapter.handleContextLoad(
 			Maps.of("path", "w/docs/rules", "budget", 1000L, "label", "Policy Rules"), ctx);
 		assertTrue(result.toString().contains("loaded"));
-		assertEquals(1, ctx.loads.count());
-		assertNotNull(ctx.loads.get(Strings.create("w/docs/rules")));
+		assertEquals(1, ctx.getLoads().count());
+		assertNotNull(ctx.getLoads().get(Strings.create("w/docs/rules")));
 	}
 
 	@Test public void testContextLoadDefaultBudget() {
@@ -2703,7 +2723,7 @@ public class LLMAgentAdapterTest {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		adapter.handleContextLoad(Maps.of("path", "w/test"), ctx);
 
-		AMap<AString, ACell> meta = (AMap<AString, ACell>) ctx.loads.get(Strings.create("w/test"));
+		AMap<AString, ACell> meta = (AMap<AString, ACell>) ctx.getLoads().get(Strings.create("w/test"));
 		assertEquals(500L, ((CVMLong) meta.get(Strings.create("budget"))).longValue());
 	}
 
@@ -2714,12 +2734,12 @@ public class LLMAgentAdapterTest {
 
 		// Over max
 		adapter.handleContextLoad(Maps.of("path", "w/big", "budget", 99999L), ctx);
-		AMap<AString, ACell> meta = (AMap<AString, ACell>) ctx.loads.get(Strings.create("w/big"));
+		AMap<AString, ACell> meta = (AMap<AString, ACell>) ctx.getLoads().get(Strings.create("w/big"));
 		assertEquals(10_000L, ((CVMLong) meta.get(Strings.create("budget"))).longValue());
 
 		// Under min
 		adapter.handleContextLoad(Maps.of("path", "w/tiny", "budget", 10L), ctx);
-		AMap<AString, ACell> meta2 = (AMap<AString, ACell>) ctx.loads.get(Strings.create("w/tiny"));
+		AMap<AString, ACell> meta2 = (AMap<AString, ACell>) ctx.getLoads().get(Strings.create("w/tiny"));
 		assertEquals(256L, ((CVMLong) meta2.get(Strings.create("budget"))).longValue());
 	}
 
@@ -2730,8 +2750,8 @@ public class LLMAgentAdapterTest {
 		adapter.handleContextLoad(Maps.of("path", "w/data", "budget", 500L, "label", "first"), ctx);
 		adapter.handleContextLoad(Maps.of("path", "w/data", "budget", 1000L, "label", "second"), ctx);
 
-		assertEquals(1, ctx.loads.count());
-		AMap<AString, ACell> meta = (AMap<AString, ACell>) ctx.loads.get(Strings.create("w/data"));
+		assertEquals(1, ctx.getLoads().count());
+		AMap<AString, ACell> meta = (AMap<AString, ACell>) ctx.getLoads().get(Strings.create("w/data"));
 		assertEquals(1000L, ((CVMLong) meta.get(Strings.create("budget"))).longValue());
 		assertEquals("second", meta.get(Strings.create("label")).toString());
 	}
@@ -2741,11 +2761,11 @@ public class LLMAgentAdapterTest {
 			RequestContext.of(ALICE_DID), null, null, null, null);
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		adapter.handleContextLoad(Maps.of("path", "w/data"), ctx);
-		assertEquals(1, ctx.loads.count());
+		assertEquals(1, ctx.getLoads().count());
 
 		ACell result = adapter.handleContextUnload(Maps.of("path", "w/data"), ctx);
 		assertTrue(result.toString().contains("unloaded"));
-		assertEquals(0, ctx.loads.count());
+		assertEquals(0, ctx.getLoads().count());
 	}
 
 	@Test public void testContextLoadRejectsPathOutsideAgentScope() {
@@ -2757,7 +2777,7 @@ public class LLMAgentAdapterTest {
 		ACell result = adapter.handleContextLoad(Maps.of("path", "w/private"), ctx);
 
 		assertTrue(result.toString().contains("denied"), result.toString());
-		assertEquals(0, ctx.loads.count(),
+		assertEquals(0, ctx.getLoads().count(),
 			"a denied path must not be persisted for a later unscoped render");
 	}
 
@@ -2780,8 +2800,8 @@ public class LLMAgentAdapterTest {
 
 		ACell result = adapter.handleContextUnload(Maps.of("path", "w/pinned"), toolCtx);
 		assertTrue(result.toString().contains("pinned_context and cannot be unloaded"), "result: " + result);
-		assertEquals(0, toolCtx.loads.count(), "no masking tombstone is written");
-		assertNotNull(ContextChain.effective(toolCtx.outerLoads, toolCtx.loads)
+		assertEquals(0, toolCtx.getLoads().count(), "no masking tombstone is written");
+		assertNotNull(ContextChain.effective(toolCtx.outerLoads, toolCtx.getLoads())
 			.get(Strings.create("w/pinned")), "the pinned value remains visible");
 	}
 
@@ -2797,9 +2817,8 @@ public class LLMAgentAdapterTest {
 			.toString().contains("no session in scope"));
 	}
 
-	/** The transition output carries the session tier for the framework's
-	 *  session merge — and only when a session is in scope. */
-	@Test public void testProcessChatEmitsSessionLoads() {
+	/** Direct invocation carries dynamic loads in the returned root frame. */
+	@Test public void testProcessChatReturnsFrameLoads() {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		AMap<AString, ACell> tier = Maps.of(Strings.create("w/notes"),
 			Maps.of(Strings.create("budget"), CVMLong.create(300)));
@@ -2809,15 +2828,16 @@ public class LLMAgentAdapterTest {
 			AgentState.KEY_CONFIG, TEST_CONFIG,
 			Fields.SESSION, Maps.of(Fields.SESSION_ID, Strings.create("aa00"), Fields.LOADS, tier),
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "hi"))));
-		assertEquals(tier, RT.getIn(withSession, Fields.LOADS),
-			"session tier rides the output for the framework merge");
+		assertEquals(tier, RT.getIn(withSession,
+			Fields.FRAMES, CVMLong.ZERO, Fields.LOADS));
+		assertNull(RT.getIn(withSession, Fields.LOADS),
+			"the obsolete session-level projection is not emitted");
 
 		ACell withoutSession = adapter.processChat(RequestContext.of(ALICE_DID), Maps.of(
 			Fields.AGENT_ID, "loads-agent",
 			AgentState.KEY_CONFIG, TEST_CONFIG,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "hi"))));
-		assertNull(RT.getIn(withoutSession, Fields.LOADS),
-			"no session in scope → no loads on the output");
+		assertNull(RT.getIn(withoutSession, Fields.LOADS));
 	}
 
 	// ========== Wrong-runtime harness tool calls fail diagnosably (#143) ==========
@@ -2833,7 +2853,7 @@ public class LLMAgentAdapterTest {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		RequestContext ctx = RequestContext.of(ALICE_DID);
 
-		ACell result = adapter.dispatchTool("subgoal", Maps.empty(), Map.of(), ctx, 1000);
+		ACell result = adapter.dispatchTool("subgoal", Maps.empty(), null, ctx, 1000);
 		String msg = RT.ensureString(result).toString();
 		assertTrue(msg.startsWith("Error:"), msg);
 		assertTrue(msg.contains("goaltree harness tool"), msg);
@@ -2841,18 +2861,18 @@ public class LLMAgentAdapterTest {
 
 		// The reverse direction: llmagent's harness names under goaltree.
 		GoalTreeAdapter goaltree = (GoalTreeAdapter) engine.getAdapter("goaltree");
-		ACell reverse = goaltree.dispatchTool("complete_task", Maps.empty(), Map.of(), ctx, 1000);
+		ACell reverse = goaltree.dispatchTool("complete_task", Maps.empty(), null, ctx, 1000);
 		String reverseMsg = RT.ensureString(reverse).toString();
 		assertTrue(reverseMsg.contains("llmagent harness tool"), reverseMsg);
 		assertTrue(reverseMsg.contains("goaltree"), reverseMsg);
 
 		// A name shared by both runtimes reports both providers.
-		ACell shared = adapter.dispatchTool("context_load", Maps.empty(), Map.of(), ctx, 1000);
+		ACell shared = adapter.dispatchTool("context_load", Maps.empty(), null, ctx, 1000);
 		String sharedMsg = RT.ensureString(shared).toString();
 		assertTrue(sharedMsg.contains("goaltree, llmagent"), sharedMsg);
 
 		// A genuinely unknown name keeps the ordinary resolution failure.
-		ACell unknown = adapter.dispatchTool("no_such_tool_xyz", Maps.empty(), Map.of(), ctx, 1000);
+		ACell unknown = adapter.dispatchTool("no_such_tool_xyz", Maps.empty(), null, ctx, 1000);
 		String unknownMsg = RT.ensureString(unknown).toString();
 		assertTrue(unknownMsg.startsWith("Error:"), unknownMsg);
 		assertFalse(unknownMsg.contains("harness tool"), unknownMsg);

@@ -746,7 +746,7 @@ public class AgentAdapter extends AAdapter {
 		// Config has exactly one home: record.config, written by the principal;
 		// state is written by the runtime (#144). A config map smuggled inside
 		// state would be silently inert — reject loudly. Likewise loads (#142):
-		// they live on the context scope chain (config.loads / session loads),
+		// they live on the context scope chain (config.loads / frame loads),
 		// never in agent-level state.
 		if (RT.getIn(initialState, AgentState.KEY_CONFIG) != null) {
 			job.fail("state.config is not supported — pass agent configuration via the 'config' parameter");
@@ -3369,6 +3369,14 @@ public class AgentAdapter extends AAdapter {
 					activeCancellations.remove(key, cancelToken);
 				}
 
+				// Engine shutdown is a process boundary, not a transition result.
+				// JobManager may settle/cancel the internal transition while close()
+				// is in progress; never merge that administrative interruption as an
+				// agent error. Leave the durable intake and any live frame checkpoint
+				// for startup reconciliation, exactly as if the process had stopped
+				// before the transition returned.
+				if (engine.isClosing()) break;
+
 				// A cancelled transition is an administrative stop (agent:suspend
 				// or agent:delete cancelled it), not an agent failure — it must
 				// NOT flow into the merge + fail-fast path, which would stamp
@@ -3636,14 +3644,8 @@ public class AgentAdapter extends AAdapter {
 			}
 		}
 
-		// Session-tier loads (#142): the transition's final working set for the
-		// picked session (tombstones included), written in the same CAS below.
-		AMap<AString, ACell> sessionLoads =
-			(RT.getIn(transitionResult, Fields.LOADS) instanceof AMap<?, ?> lm)
-				? (AMap<AString, ACell>) lm : null;
-
 		// Merge results atomically (timeline, state, task cleanup, history,
-		// session pending drain, session loads). History append lands in the
+		// session pending drain). History append lands in the
 		// same CAS as the timeline, so external readers never see a cycle
 		// that wrote one but not the other.
 		//
@@ -3659,7 +3661,7 @@ public class AgentAdapter extends AAdapter {
 			timelineEntry, pickedSessionBlob, turnsToAppend,
 			framesOwned ? 0 : presentedSessionPendingCount,
 			framesOwned ? null : adapterFrames,
-			sessionLoads, cycleTokens);
+			cycleTokens);
 
 		// The live tap's commit event (#394): the entry and turns are
 		// persisted; callers are released below, so a consumer awaiting the

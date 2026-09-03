@@ -1,6 +1,6 @@
 {
     "name": "Load Agent Skill",
-    "description": "Load a skill from the [Skills] index by name (or any skill by direct ref). By default its instructions are appended once and stay in context; volatile:true instead watches the source and appends only when its rendered value changes. The loaded skill header names the exact unload key if you later need to remove one; routine cleanup is unnecessary. The skill's tools join your palette from your next step.",
+    "description": "Load a skill from the [Skills] index by name or exact advertised ref. A ref outside the current advertised surface requires an explicit skill/load capability. By default its instructions are appended once and stay in context; volatile:true instead watches the source and appends only when its rendered value changes. Its tools are added with the same append-only event. The loaded skill header names the exact unload key if you later need to remove one; routine cleanup is unnecessary. Loading never grants invocation authority.",
     "dateCreated": "2026-08-29T00:00:00Z",
     "operation": {
         "adapter": "harness:skillLoad",
@@ -16,7 +16,7 @@
                 },
                 "ref": {
                     "type": "string",
-                    "description": "Direct skill address (a/<hash>, v/skills/<x>, w/skills/<x>) — alternative to name"
+                    "description": "Exact skill address; must already be advertised or be covered by an explicit skill/load capability"
                 },
                 "budget": {
                     "type": "integer",

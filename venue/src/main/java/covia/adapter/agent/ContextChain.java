@@ -10,9 +10,9 @@ import convex.core.data.type.Types;
 import convex.core.lang.RT;
 
 /**
- * The context scope chain (#142): agent ({@code config.loads}) → session
- * ({@code sessions.<sid>.loads}) → frame ({@code frame.loads}, goaltree),
- * with lexical-scoping semantics.
+ * The context scope chain (#142): agent ({@code config.loads}) → frame
+ * ({@code frame.loads}), with lexical-scoping semantics. A flat LLM agent has
+ * one root frame; a goal-tree agent pushes child frames.
  *
  * <p>Each tier is a map {@code path → spec}, where spec is a map (budget,
  * ts, label…) or <b>nil — a legacy tombstone</b> masking an outer tier's entry
@@ -174,10 +174,20 @@ public class ContextChain {
 		return normalised;
 	}
 
-	/** The session tier from a transition input's session map, or empty. */
+	/**
+	 * Returns the root frame's loads from a session map. Until the session next
+	 * starts a cycle, this also folds in the legacy sibling {@code session.loads}
+	 * tier so read-only inspection has the same view as the atomic migration.
+	 */
 	@SuppressWarnings("unchecked")
-	public static AMap<AString, ACell> sessionLoads(ACell input) {
-		ACell loads = RT.getIn(input, covia.api.Fields.SESSION, covia.api.Fields.LOADS);
-		return (loads instanceof AMap) ? (AMap<AString, ACell>) loads : Maps.empty();
+	public static AMap<AString, ACell> sessionRootLoads(ACell session) {
+		AMap<AString, ACell> legacy = (RT.getIn(session, covia.api.Fields.LOADS) instanceof AMap lm)
+			? (AMap<AString, ACell>) lm : Maps.empty();
+		AMap<AString, ACell> root = Maps.empty();
+		ACell frames = RT.getIn(session, covia.api.Fields.FRAMES);
+		if (frames instanceof convex.core.data.AVector<?> fv) {
+			root = GoalTreeContext.rootLoads((convex.core.data.AVector<ACell>) fv);
+		}
+		return effective(legacy, root);
 	}
 }

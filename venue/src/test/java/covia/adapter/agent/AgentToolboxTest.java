@@ -74,9 +74,11 @@ public class AgentToolboxTest {
 			"content", Maps.of("inline", SKILL_BODY),
 			"skill", Maps.of("tools", Vectors.of(Strings.create("v/ops/covia/read")))));
 		write(SKILLSET + "/beta", Maps.of(
-			"description", "Second provider of the same toolbox tool",
+			"description", "Second toolbox tool bundle",
 			"content", Maps.of("inline", "TOOLBOX_SECOND_SKILL_BODY"),
-			"skill", Maps.of("tools", Vectors.of(Strings.create("v/ops/covia/read")))));
+			"skill", Maps.of("tools", Vectors.of(
+				Strings.create("v/ops/covia/read"),
+				Strings.create("v/test/ops/capturectx")))));
 	}
 
 	@Test
@@ -117,6 +119,35 @@ public class AgentToolboxTest {
 	}
 
 	@Test
+	public void cachedBindingsDoNotFollowAmbientOperationMetadataChanges() {
+		String path = "w/toolbox/mutable-operation";
+		for (AgentRuntime runtime : RUNTIMES) {
+			write(path, operation("stable_tool"));
+			AMap<AString, ACell> config = sharedConfig(runtime).assoc(Fields.TOOLS,
+				(AVector<ACell>) sharedTools().concat(
+					Vectors.of((ACell) Strings.create(path))));
+			RunningAgent agent = start(runtime, runtime.name() + "-stable-binding", config);
+
+			// The catalog path is ambient. Its new metadata must not reinterpret
+			// the schema and route already rendered into this session.
+			write(path, operation("changed_tool"));
+			AMap<AString, ACell> called = step(agent, "use the original advertised tool",
+				assistantCall("call_stable", "stable_tool", Maps.of("ok", true)), null);
+			assertEquals(Maps.of("ok", true),
+				RT.getIn(call(called, "call_stable"), Fields.RESULT), runtime.name());
+
+			AMap<AString, ACell> cachedContext = RT.ensureMap(engine.jobs().invokeOperation(
+				"v/ops/agent/context", Maps.of(
+					Fields.AGENT_ID, agent.id(), Fields.SESSION_ID, agent.sessionId()), user)
+				.awaitResult(10000));
+			assertEquals(path,
+				RT.getIn(paletteEntry(cachedContext, "stable_tool"), Fields.OPERATION).toString());
+			assertNull(findPaletteEntry(cachedContext, "changed_tool"),
+				"ambient metadata must not rewrite cached tool identity");
+		}
+	}
+
+	@Test
 	public void validModelRepliesDriveEverySharedToolboxMechanism() {
 		Set<String> exercisedHarness = new HashSet<>();
 		Set<String> exercisedTaskTools = new HashSet<>();
@@ -124,6 +155,14 @@ public class AgentToolboxTest {
 		for (AgentRuntime runtime : RUNTIMES) {
 			RunningAgent agent = start(runtime, runtime.name() + "-shared", sharedConfig(runtime));
 			String where = runtime.name();
+			AMap<AString, ACell> cachedContext = RT.ensureMap(engine.jobs().invokeOperation(
+				"v/ops/agent/context", Maps.of(
+					Fields.AGENT_ID, agent.id(), Fields.SESSION_ID, agent.sessionId()), user)
+				.awaitResult(10000));
+			assertNull(findPaletteEntry(cachedContext, "covia_read"),
+				where + " discoverable skill schema leaked into the fixed palette");
+			assertFalse(hasTool(RT.ensureVector(cachedContext.get(Fields.TOOLS)), "covia_read"),
+				where + " discoverable skill schema leaked into provider tools");
 
 			// A valid text-only model response is itself a complete iteration.
 			AMap<AString, ACell> text = step(agent, "answer this", Strings.create("valid answer"), null);
@@ -146,8 +185,10 @@ public class AgentToolboxTest {
 			assertFalse(CVMBool.TRUE.equals(loaded.get(AbstractLLMAdapter.K_DONE)), where);
 			assertEquals(CVMBool.TRUE,
 				RT.getIn(call(loaded, "call_context_load"), Fields.RESULT, "loaded"), where);
-			assertNotNull(call(loaded, "context:call_context_load"),
-				where + " context_load did not append its loaded_context event");
+			ACell loadedEvent = callNamed(loaded, ContextAssembler.LOADED_CONTEXT_TOOL);
+			assertTrue(ToolCallIds.valid(RT.ensureString(
+				RT.getIn(loadedEvent, AbstractLLMAdapter.K_ID))),
+				where + " context_load appended an invalid provider call id");
 			assertTrue(messages(loaded).toString().contains(CONTEXT_MARKER),
 				where + " context_load result was not assembled into the next prompt: " + loaded);
 
@@ -161,38 +202,34 @@ public class AgentToolboxTest {
 			assertTrue(messages(unloaded).toString().contains(PINNED_MARKER),
 				where + " context_unload removed pinned context: " + unloaded);
 
-			// Initial skill schemas are native provider tools, but remain gated
-			// until their trusted instructions have been selected.
-			AMap<AString, ACell> gated = step(agent, "try skill tool too early",
-				assistantCall("call_gated_read", "covia_read",
-					Maps.of("path", "w/probe")), null);
-			String gate = RT.getIn(call(gated, "call_gated_read"), Fields.RESULT).toString();
-			assertTrue(gate.contains("requires loading a skill that provides it"),
-				where + " inactive shared skill tool was not gated: " + gated);
-			assertFalse(gate.contains("alpha"),
-				where + " shared skill tool was assigned to an arbitrary provider: " + gated);
-			AVector<ACell> gatedTools = RT.ensureVector(
-				RT.getIn(gated, AbstractLLMAdapter.K_NEXT, Fields.TOOLS));
-			String description = tool(gatedTools, "covia_read")
-				.get(AbstractLLMAdapter.K_DESCRIPTION).toString();
-			assertTrue(description.startsWith(
-				"Available after loading a skill that provides it from [Skills]."), description);
-			assertFalse(description.contains("alpha"),
-				where + " shared tool description named an arbitrary provider: " + description);
+			// A discoverable skill operation is not a provider tool before load.
+			AMap<AString, ACell> direct = step(agent, "use a skill-declared tool",
+				assistantCall("call_direct_read", "covia_read",
+					Maps.of("path", CONTEXT_PATH)), null);
+			ACell directResult = RT.getIn(call(direct, "call_direct_read"), Fields.RESULT);
+			assertTrue(directResult.toString().startsWith("Error:"),
+				where + " dispatched a skill tool that was never loaded: " + direct);
 
-			// skill_load: the initial catalog supplied the native schema once;
-			// loading appends only the trusted instructions and activates dispatch.
+			// skill_load appends both trusted instructions and exact tool state.
+			// invoke_tool is a later barrier in the same batch and sees the new route.
 			AMap<AString, ACell> skill = step(agent, "load a skill",
-				assistantCall("call_skill_load", HarnessTools.SKILL_LOAD,
-					Maps.of("name", "alpha")), null);
+				Maps.of("toolCalls", Vectors.of(
+					(ACell) Maps.of("id", "call_skill_load", "name", HarnessTools.SKILL_LOAD,
+						"arguments", Maps.of("name", "alpha")),
+					(ACell) Maps.of("id", "call_skill_read", "name", HarnessTools.INVOKE_TOOL,
+						"arguments", Maps.of("name", "covia_read",
+							"input", Maps.of("path", CONTEXT_PATH))))), null);
 			exercisedHarness.add(HarnessTools.SKILL_LOAD);
+			exercisedHarness.add(HarnessTools.INVOKE_TOOL);
 			assertTrue(hasSystemContent(skill, SKILL_BODY),
 				where + " skill instructions missing from next prompt: " + skill);
 			assertTrue(hasTool(skill, HarnessTools.INVOKE_TOOL), where);
-			assertTrue(hasTool(skill, "covia_read"),
-				where + " discoverable skill schema missing from fixed palette: " + skill);
-			assertFalse(hasToolAddition(skill, "covia_read"),
-				where + " fixed skill schema was duplicated into conversation state: " + skill);
+			assertFalse(hasTool(skill, "covia_read"),
+				where + " loaded skill rewrote the fixed provider tools: " + skill);
+			assertTrue(hasToolAddition(skill, "covia_read"),
+				where + " loaded skill did not append its exact tool definition: " + skill);
+			assertFalse(RT.getIn(call(skill, "call_skill_read"), Fields.RESULT).toString()
+				.startsWith("Error:"), where + " loaded skill route was not active immediately: " + skill);
 
 			// more_tools is a tool-only load. The parallel dispatcher call proves
 			// the new route is live immediately without rewriting the fixed palette.
@@ -304,6 +341,16 @@ public class AgentToolboxTest {
 			(ACell) Strings.create("v/test/ops/echo"));
 	}
 
+	private static AMap<AString, ACell> operation(String toolName) {
+		return Maps.of(
+			Fields.NAME, toolName,
+			Fields.DESCRIPTION, "Mutable toolbox operation",
+			Fields.OPERATION, Maps.of(
+				Fields.ADAPTER, "test:echo",
+				Fields.TOOL_NAME, toolName,
+				Fields.INPUT, Maps.of("type", "object")));
+	}
+
 	private static void assertTaskAlias(String resource, String aliasName) {
 		AMap<AString, ACell> operation = HarnessTools.definition(resource);
 		AMap<AString, ACell> alias = tool(TaskTools.DEFINITIONS, aliasName);
@@ -327,6 +374,23 @@ public class AgentToolboxTest {
 			if (name.equals(String.valueOf(definition.get(AbstractLLMAdapter.K_NAME)))) return definition;
 		}
 		fail("missing tool definition " + name);
+		return null;
+	}
+
+	private static ACell paletteEntry(AMap<AString, ACell> context, String name) {
+		ACell entry = findPaletteEntry(context, name);
+		if (entry != null) return entry;
+		fail("missing palette entry " + name + ": " + context);
+		return null;
+	}
+
+	private static ACell findPaletteEntry(AMap<AString, ACell> context, String name) {
+		AVector<ACell> entries = RT.ensureVector(
+			RT.getIn(context, "palette", Fields.TOOLS));
+		for (long i = 0; entries != null && i < entries.count(); i++) {
+			ACell entry = entries.get(i);
+			if (name.equals(String.valueOf(RT.getIn(entry, Fields.NAME)))) return entry;
+		}
 		return null;
 	}
 
@@ -388,6 +452,17 @@ public class AgentToolboxTest {
 		return null;
 	}
 
+	private static ACell callNamed(AMap<AString, ACell> step, String name) {
+		AVector<ACell> calls = RT.ensureVector(step.get(Fields.CALLS));
+		assertNotNull(calls, "step has no calls: " + step);
+		for (long i = 0; i < calls.count(); i++) {
+			ACell call = calls.get(i);
+			if (name.equals(String.valueOf(RT.getIn(call, AbstractLLMAdapter.K_NAME)))) return call;
+		}
+		fail("step has no call named " + name + ": " + step);
+		return null;
+	}
+
 	private static void assertNextToolResult(AMap<AString, ACell> step,
 			String id, String name, ACell expected, String where) {
 		assertEquals(expected, RT.getIn(firstCall(step), Fields.RESULT), where);
@@ -407,6 +482,10 @@ public class AgentToolboxTest {
 
 	private static boolean hasTool(AMap<AString, ACell> step, String name) {
 		AVector<ACell> tools = RT.ensureVector(RT.getIn(step, AbstractLLMAdapter.K_NEXT, Fields.TOOLS));
+		return hasTool(tools, name);
+	}
+
+	private static boolean hasTool(AVector<ACell> tools, String name) {
 		for (long i = 0; tools != null && i < tools.count(); i++) {
 			if (name.equals(String.valueOf(RT.getIn(tools.get(i), Fields.NAME)))) return true;
 		}

@@ -1,6 +1,6 @@
 {
 	"name": "Test Skill LLM",
-	"description": "Test LLM driving skill adoption during a chat. Fresh: calls skill_load for the 'alpha' skill. After the load result: calls the skill-provided covia_read tool (proving same-transition palette activation). After that result: reports SKILL_TOOL_RESULT. On later turns with the [Skill: alpha] body present: reports SKILL_BODY_PRESENT plus tool-palette status.",
+	"description": "Test LLM driving skill adoption during a chat. Fresh: calls skill_load for the 'alpha' skill. After the load result: calls the skill-provided covia_read operation through invoke_tool (proving same-transition append-only activation). After that result: reports SKILL_TOOL_RESULT. On later turns with the loaded skill body and tool-addition event present: reports SKILL_BODY_PRESENT plus tool-state status.",
 	"dateCreated": "2026-07-17T00:00:00Z",
 	"operation": {
 		"adapter": "test:skillllm",

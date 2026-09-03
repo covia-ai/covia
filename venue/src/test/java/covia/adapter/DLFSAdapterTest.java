@@ -114,6 +114,28 @@ public class DLFSAdapterTest {
 	}
 
 	@Test
+	public void jobFreeReadsMatchOperationForm() throws Exception {
+		// #253: CoviaAPI bypasses invokeFuture's Job dispatch, so these narrow
+		// read methods must enforce identical authority and return identical shapes.
+		DLFSAdapter dlfs = (DLFSAdapter) engine.getAdapter("dlfs");
+		RequestContext ctx = RequestContext.of(ALICE_DID);
+
+		run("v/ops/dlfs/create-drive", Maps.of("name", "widened-check"));
+		run("v/ops/dlfs/write", Maps.of(
+			"drive", "widened-check", "path", "note.txt", "content", "hi"));
+
+		ACell viaDispatch = dlfs.listDirectory(ctx, Maps.of("drive", "widened-check"));
+		ACell viaOp = run("v/ops/dlfs/list", Maps.of("drive", "widened-check"));
+		AVector<?> entriesViaDispatch = RT.ensureVector(RT.getIn(viaDispatch, "entries"));
+		AVector<?> entriesViaOp = RT.ensureVector(RT.getIn(viaOp, "entries"));
+		assertEquals(entriesViaOp.toString(), entriesViaDispatch.toString());
+
+		AVector<?> drivesViaDispatch = RT.ensureVector(
+			RT.getIn(dlfs.listDrives(ctx), "drives"));
+		assertTrue(drivesViaDispatch.toString().contains("widened-check"));
+	}
+
+	@Test
 	public void testCreateFromStandardContentDescriptor() {
 		run("v/ops/dlfs/create-drive", Maps.of("name", "descriptor-create"));
 		ACell created = run("v/ops/dlfs/create", Maps.of(

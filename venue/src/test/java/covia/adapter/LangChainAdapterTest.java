@@ -290,6 +290,16 @@ public class LangChainAdapterTest {
 	}
 
 	@Test
+	public void testToAssistantMessageNormalisesInvalidProviderToolCallId() {
+		AiMessage ai = new AiMessage(null, List.of(ToolExecutionRequest.builder()
+			.id("provider:id/1").name("search").arguments("{}").build()));
+
+		AString id = RT.ensureString(RT.getIn(
+			LangChainAdapter.toAssistantMessage(ai), "toolCalls", 0L, "id"));
+		assertTrue(id.toString().matches("[A-Za-z0-9_-]+"), id.toString());
+	}
+
+	@Test
 	public void testToAssistantMessageWithTokens() {
 		ChatResponse response = ChatResponse.builder()
 			.aiMessage(AiMessage.from("Hi"))
@@ -386,6 +396,22 @@ public class LangChainAdapterTest {
 		List<ChatMessage> result = LangChainAdapter.toChatMessages(messages);
 		assertEquals(1, result.size());
 		assertInstanceOf(ToolExecutionResultMessage.class, result.get(0));
+	}
+
+	@Test
+	public void testToChatMessagesRepairsLegacyIdsWithoutBreakingPairing() {
+		String legacy = "context:2:skills/review";
+		var messages = Vectors.of(
+			Maps.of("role", "assistant", "toolCalls", Vectors.of(Maps.of(
+				"id", legacy, "name", "loaded_context", "arguments", Maps.empty()))),
+			Maps.of("role", "tool", "id", legacy, "name", "loaded_context", "content", "data"));
+
+		List<ChatMessage> converted = LangChainAdapter.toChatMessages(messages);
+		String callId = assertInstanceOf(AiMessage.class, converted.get(0))
+			.toolExecutionRequests().get(0).id();
+		String resultId = assertInstanceOf(ToolExecutionResultMessage.class, converted.get(1)).id();
+		assertTrue(callId.matches("[A-Za-z0-9_-]+"), callId);
+		assertEquals(callId, resultId);
 	}
 
 	@Test

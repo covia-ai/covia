@@ -80,9 +80,9 @@ public final class ContextAssembler {
 	/** Preamble of the skills index — what the block is and how to act on it (SKILLS.md §4.2). */
 	static final String SKILLS_PREAMBLE =
 		"Named skill packs available through the advertised skill-loading control. Loading injects\n"
-		+ "the skill's instructions into your context across turns and adds its operations to your\n"
-		+ "palette; it may also reveal more skills. A loaded skill's header gives its exact removal\n"
-		+ "key if you later need it; routine cleanup is unnecessary.\n";
+		+ "the skill's instructions into your context across turns; tool availability and invocation\n"
+		+ "authority are independent. Loading may reveal later tools or more skills. A loaded skill's\n"
+		+ "header gives its exact removal key if you later need it; routine cleanup is unnecessary.\n";
 
 	static final String EMPTY_STATE_SIGNAL =
 		"No pending tasks, messages, or job results. You may act proactively based on your role, or report idle.";
@@ -98,12 +98,17 @@ public final class ContextAssembler {
 	 */
 	public enum Band { HEAD, LIVE, CONVERSATION, TOOL_LOOP }
 
-	private static final AString K_RENDERED_TOOLS    = Strings.intern("tools");
 	private static final AString K_RENDERED_MESSAGES = Strings.intern("messages");
 	private static final AString K_RENDERED_HEAD     = Strings.intern("head");
 	private static final AString K_RENDERED_LIVE     = Strings.intern("live");
 	private static final AString K_RENDERED_LABELS   = Strings.intern("labels");
 	private static final AString K_RENDERED_CONFIG   = Strings.intern("sourceConfig");
+	private static final AString K_RENDERED_VERSION  = Strings.intern("renderVersion");
+	private static final AString K_RENDERED_TOOLS    = Strings.intern("tools");
+	private static final AString K_RENDERED_TOOL_INDEX = Strings.intern("toolIndex");
+	private static final AString K_RENDERED_BASE_START = Strings.intern("baseToolStart");
+	private static final AString K_RENDERED_BASE_END = Strings.intern("baseToolEnd");
+	private static final long RENDER_VERSION = 1L;
 
 	/** Canonical watched-context candidate fields. The active frame persists
 	 * the same value under {@code observations}; see {@link GoalTreeContext}. */
@@ -121,18 +126,37 @@ public final class ContextAssembler {
 	 * the next inference. Ambient values resolved while producing the vectors
 	 * are deliberately not invalidation inputs.
 	 */
-	public record Rendered(AVector<ACell> tools, AVector<ACell> messages,
+	public record Rendered(AVector<ACell> tools, AMap<AString, ACell> toolIndex,
+			int baseToolStart, int baseToolEnd, AVector<ACell> messages,
 			int headEnd, int liveEnd, AString labels,
 			AMap<AString, ACell> sourceConfig) {
 		public Rendered {
 			tools = (tools != null) ? tools : Vectors.empty();
+			toolIndex = (toolIndex != null) ? toolIndex : Maps.empty();
 			messages = (messages != null) ? messages : Vectors.empty();
 			sourceConfig = normaliseConfig(sourceConfig);
 		}
 
+		@SuppressWarnings("unchecked")
+		public AVector<ACell> baseTools() {
+			return (AVector<ACell>) tools.slice(baseToolStart, baseToolEnd);
+		}
+
+		Rendered withToolIndex(AMap<AString, ACell> index, int baseStart, int baseEnd) {
+			if (baseStart < 0 || baseEnd < baseStart || baseEnd > tools.count()) {
+				throw new IllegalArgumentException("Invalid base tool range");
+			}
+			return new Rendered(tools, index, baseStart, baseEnd,
+				messages, headEnd, liveEnd, labels, sourceConfig);
+		}
+
 		ACell toCell() {
 			AMap<AString, ACell> value = Maps.of(
+				K_RENDERED_VERSION, CVMLong.create(RENDER_VERSION),
 				K_RENDERED_TOOLS, tools,
+				K_RENDERED_TOOL_INDEX, toolIndex,
+				K_RENDERED_BASE_START, CVMLong.create(baseToolStart),
+				K_RENDERED_BASE_END, CVMLong.create(baseToolEnd),
 				K_RENDERED_MESSAGES, messages,
 				K_RENDERED_HEAD, CVMLong.create(headEnd),
 				K_RENDERED_LIVE, CVMLong.create(liveEnd),
@@ -145,16 +169,32 @@ public final class ContextAssembler {
 		static Rendered fromCell(ACell value) {
 			if (!(value instanceof AMap<?, ?> map)) return null;
 			ACell tools = map.get(K_RENDERED_TOOLS);
+			ACell version = map.get(K_RENDERED_VERSION);
+			ACell toolIndex = map.get(K_RENDERED_TOOL_INDEX);
+			ACell baseStart = map.get(K_RENDERED_BASE_START);
+			ACell baseEnd = map.get(K_RENDERED_BASE_END);
 			ACell messages = map.get(K_RENDERED_MESSAGES);
+			ACell headCell = map.get(K_RENDERED_HEAD);
+			ACell liveCell = map.get(K_RENDERED_LIVE);
 			ACell sourceConfig = map.get(K_RENDERED_CONFIG);
-			// An older materialisation has no config provenance. Treat it as absent
-			// so the next inference upgrades it once instead of guessing validity.
-			if (!(tools instanceof AVector<?>) || !(messages instanceof AVector<?>)
+			// Older materialisations are inapplicable and upgrade once. Required
+			// fields also keep ordinary cache reads free of schema inspection.
+			if (!(version instanceof CVMLong v) || v.longValue() != RENDER_VERSION
+					|| !(tools instanceof AVector<?> toolVector) || !(toolIndex instanceof AMap<?, ?>)
+					|| !(baseStart instanceof CVMLong start) || !(baseEnd instanceof CVMLong end)
+					|| start.longValue() < 0 || end.longValue() < start.longValue()
+					|| end.longValue() > toolVector.count()
+					|| start.longValue() > Integer.MAX_VALUE || end.longValue() > Integer.MAX_VALUE
+					|| !(messages instanceof AVector<?> messageVector)
+					|| !(headCell instanceof CVMLong head) || !(liveCell instanceof CVMLong live)
+					|| head.longValue() < 0 || live.longValue() < head.longValue()
+					|| live.longValue() > messageVector.count()
+					|| head.longValue() > Integer.MAX_VALUE || live.longValue() > Integer.MAX_VALUE
 					|| !(sourceConfig instanceof AMap<?, ?>)) return null;
-			long head = (map.get(K_RENDERED_HEAD) instanceof CVMLong n) ? n.longValue() : 0;
-			long live = (map.get(K_RENDERED_LIVE) instanceof CVMLong n) ? n.longValue() : head;
-			return new Rendered((AVector<ACell>) tools, (AVector<ACell>) messages,
-				Math.toIntExact(head), Math.toIntExact(live),
+			return new Rendered((AVector<ACell>) tools, (AMap<AString, ACell>) toolIndex,
+				Math.toIntExact(start.longValue()), Math.toIntExact(end.longValue()),
+				(AVector<ACell>) messages,
+				Math.toIntExact(head.longValue()), Math.toIntExact(live.longValue()),
 				RT.ensureString(map.get(K_RENDERED_LABELS)),
 				(AMap<AString, ACell>) sourceConfig);
 		}
@@ -544,7 +584,7 @@ public final class ContextAssembler {
 			p.add(exchanges);
 		}
 		p.mark(Band.LIVE);
-		return new Rendered(p.tools(), p.messages(),
+		return new Rendered(p.tools(), Maps.empty(), 0, 0, p.messages(),
 			p.marks().getOrDefault(Band.HEAD, 0),
 			p.marks().getOrDefault(Band.LIVE, 0), spec.labels(),
 			spec.sourceConfig());
@@ -770,7 +810,7 @@ public final class ContextAssembler {
 			K_OBSERVATION_ID, id,
 			Strings.intern("instructions"), (instructions != null) ? instructions : Vectors.empty(),
 			Strings.intern("data"), (data != null) ? data : Vectors.empty());
-		return Strings.create("context:observation:" + identity.getHash().toHexString());
+		return ToolCallIds.synthetic("context-observation", identity);
 	}
 
 	/** Venue-authored transition when a declaration stops being watched. */
@@ -896,13 +936,13 @@ public final class ContextAssembler {
 		AVector<ACell> calls = Vectors.empty();
 		AVector<ACell> results = Vectors.empty();
 		if (!pinned.isEmpty()) {
-			AString id = (eventId != null) ? Strings.create(eventId + ":pinned")
+			AString id = (eventId != null) ? ToolCallIds.synthetic("context-pinned", eventId)
 				: PINNED_LIVE_ID;
 			calls = calls.conj(contextCall(id, PINNED_CONTEXT_TOOL));
 			results = results.conj(AbstractLLMAdapter.toolResultMessage(id, PINNED_CONTEXT_TOOL, pinned));
 		}
 		if (!loaded.isEmpty()) {
-			AString id = (eventId != null) ? eventId
+			AString id = (eventId != null) ? ToolCallIds.normalise(eventId)
 				: LOADED_LIVE_ID;
 			calls = calls.conj(contextCall(id, LOADED_CONTEXT_TOOL));
 			results = results.conj(AbstractLLMAdapter.toolResultMessage(id, LOADED_CONTEXT_TOOL, loaded));
@@ -921,13 +961,11 @@ public final class ContextAssembler {
 			AbstractLLMAdapter.K_ARGUMENTS, Maps.empty());
 	}
 
-	/** Provider pairing id for an appended context event. The originating call
-	 *  id is preferred and persisted; the fallback uses the real load key and
-	 *  iteration, never content or a synthetic per-entry identity. */
+	/** Provider pairing id for an appended context event. The stable identity is
+	 *  the originating call id, or the real load key and iteration as fallback. */
 	static AString contextEventId(AString callId, int iteration, AString key) {
-		return (callId != null)
-			? Strings.create("context:" + callId)
-			: Strings.create("context:" + iteration + ":" + key);
+		ACell identity = (callId != null) ? callId : Vectors.of(CVMLong.create(iteration), key);
+		return ToolCallIds.synthetic("context", identity);
 	}
 
 	/**

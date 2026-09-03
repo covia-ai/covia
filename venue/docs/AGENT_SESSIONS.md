@@ -148,7 +148,7 @@ Session-id inputs accept both canonical hexadecimal and the `0x`-prefixed repres
 - `sessionId` omitted on `agent_request` / `agent_chat` → venue mints a new session, returns the id
 - `sessionId` omitted on `agent_message` → **error** (messages require a session)
 - `session={title: ..., parties: [...]}` on `agent_request` → create new session with explicit metadata; the response includes the minted id
-- `loads={...}` on `agent_request` / `agent_chat` → the minted session's declared loads (AGENT_CONTEXT.md §7.2): skills to pre-load, notes, re-run operations, job results, extra tools and skill sources. Mint-time only; the A2A front door and `agent_message` cannot pass it — pre-mint a session with `agent_request`/`agent_chat` and hand out its id
+- `loads={...}` on `agent_request` / `agent_chat` → declared loads on the minted session's root frame ([AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §7.2): skills to pre-load, notes, re-run operations, job results, extra tools and skill sources. Mint-time only; the A2A front door and `agent_message` cannot pass it — pre-mint a session with `agent_request`/`agent_chat` and hand out its id
 
 **Why three ops, not flags on one op.** Each op encodes a distinct caller intent (long-running task vs. wait-for-reply vs. notify). The agent doesn't have to declare its mode — the framework already knows what to do with the agent's response based on which queue picked the work. This eliminates the "is this response a task completion or a chat reply or both?" ambiguity that comes from a single intake op + per-call flags.
 
@@ -335,12 +335,11 @@ There is no `agent:yield` op — yield is the natural state when no completion o
 
 | Field | Writer | When |
 |-------|--------|------|
-| `pending` | intake (`appendSessionPending`) appends; the presenting cycle drains | drain happens in the same CAS that lands the drained envelopes' user turns — at cycle start for `FramesOwning` adapters (goaltree, via `beginSessionCycle`), at merge for framework-managed conversations (llmagent) |
-| `frames` | the owning cycle | live epoch-fenced writes for `FramesOwning` adapters; the merge's turn-append for framework-managed conversations. The framework merge never touches frames for `FramesOwning` transitions |
+| `pending` | intake (`appendSessionPending`) appends; the presenting cycle drains | drain happens in the same CAS that lands the drained envelopes' user turns — at cycle start for both built-in LLM runtimes |
+| `frames` | the owning cycle | live epoch-fenced writes for both built-in LLM runtimes; the framework merge never rewrites their frames. Context-bearing frame fields are defined only in [AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §1.1 |
 | `inCycle` | the owning attempt sets it at claim; merge/suspend/startup clear it | write fence only; it is never a wake signal or resume checkpoint |
-| `loads` | the merge (session-tier working set) | unchanged |
-| `meta.turns` | whoever appends root turns (shared helper) | bumped in the same CAS as the append |
-| `meta.updated` | whoever appends root turns (shared helper) | ratcheted to the newest persisted turn timestamp in the same CAS |
+| `meta.turns` | the common frame store / framework append | bumped in the same CAS as a root-conversation append |
+| `meta.updated` | the common frame store / framework append | ratcheted to the newest persisted root-turn timestamp in the same CAS |
 
 **Completion ordering.** `agent:complete_task` / `agent:fail_task` do not finish the caller's pending Job inline. The completion envelope is parked and drained after the transition's timeline + state writes commit. Only then is the pending Job completed. This ordering is load-bearing: any caller awaiting its task observes the timeline and lattice writes for its task before its await returns. Without the deferral, the venue op would race the framework's timeline write and callers could see an empty `taskResults` immediately after unblocking.
 

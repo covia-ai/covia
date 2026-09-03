@@ -942,7 +942,10 @@ public class AgentAdapterTest {
 		String context = engine.jobs().invokeOperation("v/ops/agent/context",
 			Maps.of(Fields.AGENT_ID, "metadata-reader"), RequestContext.of(ALICE_DID))
 			.awaitResult(5000).toString();
-		assertTrue(context.contains("Operation: " + toolPath), context);
+		assertTrue(context.contains(toolPath),
+			"the inspection-only palette retains the operation route: " + context);
+		assertFalse(context.contains("Operation: " + toolPath),
+			"the provider description must not repeat inspection provenance: " + context);
 		assertFalse(context.contains("Configured tools unavailable"), context);
 	}
 
@@ -1151,7 +1154,10 @@ public class AgentAdapterTest {
 					Fields.CONFIG, Maps.of(
 						Fields.OPERATION, "v/ops/" + runtime + "/chat",
 						"llmOperation", "v/test/ops/moretoolsllm",
-						Fields.TOOLS, Vectors.of(Strings.create("more_tools")))),
+						Fields.TOOLS, Vectors.of(Strings.create("more_tools")),
+						"caps", Vectors.of(
+							(ACell) Capability.create(Strings.create("v/test/ops/echo"), Abilities.TOOL_LOAD),
+							(ACell) Capability.create(Strings.create("v/test/ops"), Strings.create("invoke"))))),
 				RequestContext.of(ALICE_DID)).awaitResult(5000);
 			ACell chat = engine.jobs().invokeOperation("v/ops/agent/chat",
 				Maps.of(Fields.AGENT_ID, agentId, Fields.MESSAGE, "extend yourself"),
@@ -2374,7 +2380,8 @@ public class AgentAdapterTest {
 		AVector<ACell> conversation = RT.ensureVector(
 			RT.getIn(frames.get(0), AgentState.KEY_CONVERSATION));
 		assertEquals(4, conversation.count(),
-			"user + assistant(tool call) + tool result + final assistant");
+			"user + assistant(tool call) + tool result + final assistant: "
+				+ convex.core.util.JSON.toString(conversation));
 		assertEquals("user", RT.getIn(conversation.get(0), "role").toString());
 		assertEquals("assistant", RT.getIn(conversation.get(1), "role").toString());
 		assertNotNull(RT.getIn(conversation.get(1), "toolCalls"));
@@ -6504,10 +6511,10 @@ public class AgentAdapterTest {
 
 	// ========== Context scope chain (#142) ==========
 
-	/** Mint-time loads seed the session tier; passing loads against an
+	/** Mint-time loads seed the root frame; passing loads against an
 	 *  existing session is an error, never a silent ignore. */
 	@Test
-	public void testChatMintLoadsSeedSessionTier() {
+	public void testChatMintLoadsSeedRootFrame() {
 		createChatAgent("mint-loads-agent");
 		AMap<AString, ACell> loads = Maps.of(
 			Strings.create("w/brief"), Maps.of(Strings.create("budget"), CVMLong.create(400)));
@@ -6522,7 +6529,8 @@ public class AgentAdapterTest {
 		Blob sid = Blob.fromHex(sidHex.toString());
 
 		User u = engine.getVenueState().users().get(ALICE_DID);
-		ACell sessionLoads = RT.getIn(u.agent("mint-loads-agent").getSession(sid), Fields.LOADS);
+		ACell sessionLoads = RT.getIn(u.agent("mint-loads-agent").getSession(sid),
+			Fields.FRAMES, CVMLong.ZERO, Fields.LOADS);
 		assertEquals(400L, ((CVMLong) RT.getIn(sessionLoads, "w/brief", "budget")).longValue());
 		assertNotNull(RT.getIn(sessionLoads, "w/brief", "ts"),
 			"mint loads are normalised and timestamped once at persistence");
@@ -6566,11 +6574,13 @@ public class AgentAdapterTest {
 			RT.getIn(chatB.awaitResult(5000), Fields.SESSION_ID)).toString());
 
 		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("iso-agent");
-		ACell loadsA = RT.getIn(agent.getSession(sidA), Fields.LOADS);
+		ACell loadsA = RT.getIn(agent.getSession(sidA),
+			Fields.FRAMES, CVMLong.ZERO, Fields.LOADS);
 		assertEquals(400L, ((CVMLong) RT.getIn(loadsA, "w/acme", "budget")).longValue(),
 			"session A keeps its loads");
 		assertNotNull(RT.getIn(loadsA, "w/acme", "ts"));
-		ACell loadsB = RT.getIn(agent.getSession(sidB), Fields.LOADS);
+		ACell loadsB = RT.getIn(agent.getSession(sidB),
+			Fields.FRAMES, CVMLong.ZERO, Fields.LOADS);
 		assertTrue(loadsB == null || ((AMap<?, ?>) loadsB).count() == 0,
 			"session B must not see session A's loads, got: " + loadsB);
 		// And nothing leaks to agent-level state.

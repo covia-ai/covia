@@ -532,6 +532,22 @@ public class RequestContext {
 	}
 
 	/**
+	 * Requires an explicitly declared grant, including when this context's
+	 * ordinary capability scope is unrestricted. This is for opt-in authority
+	 * boundaries such as admitting arbitrary instructions or tools: a null scope
+	 * must not silently mean consent to widen an agent's advertised surface.
+	 * Coverage, resource canonicalisation and capability gates otherwise use the
+	 * same rules as {@link #requireCapability(AString, AString)}.
+	 */
+	public void requireExplicitCapability(AString resource, AString ability) {
+		AVector<ACell> grants = authority.getGrants();
+		if (grants == null) grants = Vectors.empty();
+		String denial = CapabilityChecker.allows(grants, resource, ability,
+			authority.getUserDID(), op, invocationInput, gate);
+		if (denial != null) throw new AuthException(denial);
+	}
+
+	/**
 	 * The grant check against this context's own authority: the denial message if
 	 * the caller's capability scope does <em>not</em> cover {@code (resource,
 	 * ability)}, or {@code null} if a grant covers it (an unrestricted, {@code

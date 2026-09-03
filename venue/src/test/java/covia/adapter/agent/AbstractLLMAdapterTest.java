@@ -91,6 +91,15 @@ public class AbstractLLMAdapterTest {
 		assertNull(RT.getIn(retry, "toolCalls"));
 	}
 
+	@Test
+	public void testStepAssistantNormalisesExplicitToolCallId() {
+		AMap<AString, ACell> assistant = AbstractLLMAdapter.stepAssistant(Maps.of(
+			"toolCalls", Vectors.of(Maps.of("id", "caller:id/1", "name", "test"))));
+		AString id = RT.ensureString(RT.getIn(assistant, "toolCalls", 0, "id"));
+		assertTrue(ToolCallIds.valid(id), id.toString());
+		assertEquals(Maps.empty(), RT.getIn(assistant, "toolCalls", 0, "arguments"));
+	}
+
 	// ========== parseToolArguments — the LLM wire boundary (#89) ==========
 
 	@Test

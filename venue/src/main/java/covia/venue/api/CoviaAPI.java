@@ -32,6 +32,7 @@ import covia.adapter.AgentAdapter;
 import covia.adapter.AssetAdapter;
 import covia.adapter.CoviaAdapter;
 import covia.adapter.UserAdapter;
+import covia.adapter.DLFSAdapter;
 import convex.core.util.JSON;
 import covia.api.Abilities;
 import covia.api.Fields;
@@ -175,6 +176,13 @@ public class CoviaAPI extends ACoviaAPI {
 		routes.get(ROUTE+"users", this::getUsers, COVIA_API);
 		routes.get(ROUTE+"users/{did}", this::getUserInfo, COVIA_API);
 		routes.get(ROUTE+"users/{did}/authentications", this::getUserAuthentications, COVIA_API);
+
+		// DLFS — job-free reads (#253), read-first MVP. Reuses DLFSAdapter's own
+		// dispatch()/requireDlfsCap authority checks; a 403 relays the real
+		// Capability-denied message, not a canned string. File content itself
+		// is already job-free via the generic content/<ref> route below.
+		routes.get(ROUTE+"dlfs/drives", this::getDlfsDrives, COVIA_API);
+		routes.get(ROUTE+"dlfs/list", this::getDlfsList, COVIA_API);
 
 		// Secrets
 		routes.get(ROUTE+"secrets", this::listSecrets, COVIA_API);
@@ -708,7 +716,10 @@ public class CoviaAPI extends ACoviaAPI {
 			}
 			sendContent(ctx, (meta!=null)?meta.get(Fields.CONTENT):null, resolved);
 		} catch (AuthException e) {
-			buildError(ctx,403,"Not authorised to read asset content: "+id);
+			// Relay the real Capability-denied message (#253) rather than a
+			// canned string — this is the one job-free route DLFS content
+			// preview/download go through, and callers need to see why.
+			buildError(ctx,403,e.getMessage());
 		} catch (IOException e) {
 			buildError(ctx,500,"Error retrieving asset content: "+e.getMessage());
 		}
@@ -2002,6 +2013,67 @@ public class CoviaAPI extends ACoviaAPI {
 		} catch (IllegalArgumentException e) {
 			buildError(ctx, 400, e.getMessage());
 		} catch (RuntimeException e) {
+			buildError(ctx, 500, "Read failed: " + e.getMessage());
+		}
+	}
+
+	@OpenApi(path = ROUTE + "dlfs/drives",
+			methods = HttpMethod.GET,
+			tags = { "Covia" },
+			summary = "List the caller's DLFS drives, vault included — the dlfs:listDrives "
+				+ "payload (job-free, #253). Read-first MVP: no drive management here.",
+			operationId = "getDlfsDrives")
+	protected void getDlfsDrives(Context ctx) {
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		if (rctx.getCallerDID() == null) {
+			buildError(ctx, 401, "Authentication required");
+			return;
+		}
+		DLFSAdapter dlfs = (DLFSAdapter) engine().getAdapter("dlfs");
+		try {
+			buildResult(ctx, 200, dlfs.listDrives(rctx));
+		} catch (AuthException e) {
+			buildError(ctx, 403, e.getMessage());
+		} catch (IllegalArgumentException e) {
+			buildError(ctx, 400, e.getMessage());
+		} catch (Exception e) {
+			buildError(ctx, 500, "Read failed: " + e.getMessage());
+		}
+	}
+
+	@OpenApi(path = ROUTE + "dlfs/list",
+			methods = HttpMethod.GET,
+			tags = { "Covia" },
+			summary = "List one directory of a DLFS drive — the dlfs:list payload "
+				+ "(job-free, #253). Read-first MVP: own drives by bare name only, "
+				+ "no cross-user DID-URL drive addressing.",
+			operationId = "getDlfsList",
+			queryParams = {
+					@OpenApiParam(name = "drive", required = true, description = "Drive name"),
+					@OpenApiParam(name = "path", description = "Directory path within the drive; omit for the root")
+			})
+	protected void getDlfsList(Context ctx) {
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		if (rctx.getCallerDID() == null) {
+			buildError(ctx, 401, "Authentication required");
+			return;
+		}
+		String drive = ctx.queryParam("drive");
+		if (drive == null || drive.isEmpty()) {
+			buildError(ctx, 400, "Missing 'drive' query parameter");
+			return;
+		}
+		AMap<AString, ACell> input = Maps.of(Fields.DRIVE, Strings.create(drive));
+		String path = ctx.queryParam("path");
+		if (path != null) input = input.assoc(Fields.PATH, Strings.create(path));
+		DLFSAdapter dlfs = (DLFSAdapter) engine().getAdapter("dlfs");
+		try {
+			buildResult(ctx, 200, dlfs.listDirectory(rctx, input));
+		} catch (AuthException e) {
+			buildError(ctx, 403, e.getMessage());
+		} catch (IllegalArgumentException e) {
+			buildError(ctx, 400, e.getMessage());
+		} catch (Exception e) {
 			buildError(ctx, 500, "Read failed: " + e.getMessage());
 		}
 	}

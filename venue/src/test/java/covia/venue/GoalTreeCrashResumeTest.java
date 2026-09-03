@@ -163,6 +163,8 @@ public class GoalTreeCrashResumeTest {
 		AgentState recovered = agent(second, "request-agent");
 		assertNotNull(recovered.getTasks().get(requestId),
 			"the surviving request is still the agent's task after recovery");
+		assertFalse(String.valueOf(rootConversation(second, "request-agent", sid)).contains("gave up"),
+			"startup must not replay the interrupted model loop");
 
 		// The surviving request is boot work: the wake picks it up and starts a
 		// fresh attempt (it does not stay dormant like a completed message).
@@ -174,8 +176,6 @@ public class GoalTreeCrashResumeTest {
 		AString afterWake = RT.ensureString(second.jobs().getJobData(requestId, RequestContext.of(ALICE)).get(Fields.STATUS));
 		assertTrue(Status.STARTED.equals(afterWake) || Status.COMPLETE.equals(afterWake),
 			"the re-attempted request is live or completed, never failed by the restart: " + afterWake);
-		assertFalse(String.valueOf(rootConversation(second, "request-agent", sid)).contains("gave up"),
-			"the wake starts the request over; it must not replay the interrupted model loop");
 		closeActivePhase();
 	}
 

@@ -271,7 +271,7 @@ public final class ConversationRenderer {
 			ACell fieldValue = source.get(key);
 			if (fieldValue != null) message = message.assoc(key, fieldValue);
 		}
-		return message;
+		return ToolCallIds.normaliseMessage(message);
 	}
 
 	@SuppressWarnings("unchecked")

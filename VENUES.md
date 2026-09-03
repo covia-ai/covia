@@ -7,6 +7,19 @@ Two tiers:
 - **Stable** — `venue-1`, `venue-2` (plus `venue-test` for scratch use): run the `:stable` image, deployed automatically on push to `master` (i.e. at releases). Use these for demos, integrations, and anything long-lived.
 - **Dev** — `venue-3`, `venue-4`: run the `:latest` image, deployed automatically on every push to `develop`. Use these to exercise unreleased features.
 
+| Venue | Tier | Fresh authenticated DID |
+|---|---|---|
+| `venue-1.covia.ai` | Stable | Requires operator provisioning with `user:create` |
+| `venue-2.covia.ai` | Stable | Requires operator provisioning with `user:create` |
+| `venue-test.covia.ai` | Stable scratch | Registered on first authenticated use |
+| `venue-3.covia.ai` | Dev | Operator-configured; do not assume first-use registration |
+| `venue-4.covia.ai` | Dev | Registered on first authenticated use |
+
+Anonymous access and authenticated-user admission are separate policies. Use
+`venue-1` or `venue-2` for anonymous stable reads; use `venue-test` for a
+fresh-key authenticated experiment without prior provisioning. Dev-venue
+policy may change with its operator configuration.
+
 ## Stable Venues
 
 All three stable-tier venues run in a **single JVM** on one GCP host (multi-venue `venues` array config — see `deploy/gcp/README.md`), each with its own store and DID. Bootstrapped June 2026 from the latest snapshot build; from the next release onward they track the `:stable` image published from `master`.
@@ -40,7 +53,7 @@ The trio gives a stable federation set for cross-venue work on one host (`35.213
 
 ## Dev Venues
 
-### venue-3.covia.ai (AWS — degraded)
+### venue-3.covia.ai (AWS)
 
 - **URL:** https://venue-3.covia.ai
 - **Status:** https://venue-3.covia.ai/api/v1/status
@@ -50,8 +63,6 @@ The trio gives a stable federation set for cross-venue work on one host (`35.213
 - **Region:** AWS us-east-1 (N. Virginia)
 - **Spec:** 2 vCPU, 4 GB RAM
 - **TLS:** Let's Encrypt (auto-renew)
-- **Availability:** TLS certificate expired as of 2026-08-10; do not use until
-  certificate renewal is restored
 
 ### venue-4.covia.ai (Azure)
 

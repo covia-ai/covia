@@ -6,6 +6,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -14,9 +15,11 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
+import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.AAdapter;
 import covia.adapter.TestAdapter;
+import covia.api.Abilities;
 import covia.api.Fields;
 import convex.core.data.Blob;
 import covia.grid.Job;
@@ -141,9 +144,8 @@ public class GoalTreeAdapterTest {
 		assertTrue(Skills.isSkillEntry(childLoads.get(Strings.create("w/skills/alpha"))));
 
 		// The inherited entry contributes tools in the child's effective view
-		java.util.Map<String, AString> routes = new java.util.HashMap<>();
-		AVector<ACell> defs = ToolPalette.loadsToolDefs(engine, ALICE,
-			ContextChain.effective(childLoads), java.util.Set.of(), routes);
+		AVector<ACell> defs = Loads.resolve(engine, ALICE,
+			ContextChain.effective(childLoads), java.util.Set.of(), Labels.BRACKET).tools();
 		assertEquals(1, defs.count());
 		assertEquals("covia_read", RT.getIn(defs.get(0), Strings.intern("name")).toString());
 
@@ -155,12 +157,12 @@ public class GoalTreeAdapterTest {
 		AMap<AString, ACell> childEffective = ContextChain.effective(
 			GoalTreeContext.getLoads(parent), masked);
 		assertEquals(0, childEffective.count());
-		assertEquals(0, ToolPalette.loadsToolDefs(engine, ALICE,
-			childEffective, java.util.Set.of(), new java.util.HashMap<>()).count());
+		assertEquals(0, Loads.resolve(engine, ALICE,
+			childEffective, java.util.Set.of(), Labels.BRACKET).tools().count());
 		Loads.Snapshot unloaded = Loads.resolve(
 			engine, ALICE, childEffective, java.util.Set.of(), Labels.BRACKET);
 		ACell hallucinated = ((GoalTreeAdapter) engine.getAdapter("goaltree")).dispatchTool(
-			"covia_read", Maps.of("path", "w/probe"), unloaded.routes(), ALICE,
+			"covia_read", Maps.of("path", "w/probe"), unloaded.operation("covia_read"), ALICE,
 			AbstractLLMAdapter.DEFAULT_TOOL_CALL_TIMEOUT_MS);
 		assertTrue(String.valueOf(hallucinated).startsWith("Error:"),
 			"a manually supplied call after unload must not retain a dispatch route: "
@@ -183,7 +185,10 @@ public class GoalTreeAdapterTest {
 			AgentState.KEY_STATE, null,
 			AgentState.KEY_CONFIG, Maps.of(
 				Strings.create("llmOperation"), Strings.create("v/test/ops/moretoolsllm"),
-				Strings.create("tools"), Vectors.of(Strings.create("more_tools"))),
+				Strings.create("tools"), Vectors.of(Strings.create("more_tools")),
+				Strings.create("caps"), Vectors.of(
+					(ACell) Capability.create(Strings.create("v/test/ops/echo"), Abilities.TOOL_LOAD),
+					(ACell) Capability.create(Strings.create("v/test/ops"), Strings.create("invoke")))),
 			Fields.MESSAGES, Vectors.of(
 				(ACell) Maps.of(Strings.create("content"), Strings.create("get more tools"))));
 
@@ -394,6 +399,27 @@ public class GoalTreeAdapterTest {
 		AString response = RT.ensureString(RT.getIn(output, Fields.RESPONSE));
 		assertNotNull(response, "Should have a response");
 		assertTrue(response.toString().length() > 0, "Response should not be empty");
+	}
+
+	@Test
+	public void testToolCallingDisabledPersistsEmptyManifest() {
+		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
+		ACell config = Maps.of(
+			"llmOperation", "v/test/ops/llm",
+			"tools", Vectors.of("v/ops/agent/create"),
+			"modelProfile", Maps.of("options",
+				Maps.of("toolCalling", CVMBool.FALSE)));
+
+		ACell output = adapter.processGoal(null, ALICE, Maps.of(
+			Fields.AGENT_ID, "no-tool-calling-goal",
+			AgentState.KEY_CONFIG, config,
+			Fields.MESSAGES, Vectors.of(Maps.of("content", "test"))));
+		ACell rendered = RT.getIn(output, Fields.FRAMES, 0,
+			GoalTreeContext.K_RENDERED_CONTEXT);
+
+		assertEquals(0, RT.ensureVector(RT.getIn(rendered, Fields.TOOLS)).count());
+		assertEquals(CVMLong.ZERO, RT.getIn(rendered, "baseToolStart"));
+		assertEquals(CVMLong.ZERO, RT.getIn(rendered, "baseToolEnd"));
 	}
 
 	@Test
@@ -712,8 +738,10 @@ public class GoalTreeAdapterTest {
 			"request schema must not become a prefix invalidation input");
 		assertNull(RT.getIn(root,
 			GoalTreeContext.K_RENDERED_CONTEXT, "sourceConfig", "responseFormat"));
-		AVector<ACell> tools = RT.ensureVector(RT.getIn(root,
-			GoalTreeContext.K_RENDERED_CONTEXT, "tools"));
+		ContextAssembler.Rendered rendered = ContextAssembler.Rendered.fromCell(
+			RT.getIn(root, GoalTreeContext.K_RENDERED_CONTEXT));
+		assertNotNull(rendered);
+		AVector<ACell> tools = rendered.tools();
 		assertTrue(hasNamedTool(tools, TaskTools.COMPLETE));
 		assertFalse(hasNamedTool(tools, "complete"),
 			"request schema must not specialise the persistent root palette");
