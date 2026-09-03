@@ -537,6 +537,11 @@ public class LoadsTest {
 			declaredConfig);
 		ACell declared = HarnessTools.moreTools(request, declaredScope, name -> false);
 		assertNotNull(RT.getIn(declared, "path"), declared.toString());
+		ACell declaredLoad = declaredScope.loads.get(
+			RT.ensureString(RT.getIn(declared, "path")));
+		assertNull(RT.getIn(declaredLoad, Loads.K_VOLATILE),
+			"tool-only loads should omit the non-volatile default");
+		assertFalse(Loads.isVolatile(declaredLoad));
 
 		RequestContext loadGranted = ctx.withCaps(Vectors.of(Capability.create(
 			Strings.create("v/test/ops/echo"), Abilities.TOOL_LOAD)));

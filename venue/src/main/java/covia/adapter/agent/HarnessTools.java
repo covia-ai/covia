@@ -271,8 +271,7 @@ final class HarnessTools {
 			AbstractLLMAdapter.CONTEXT_LOAD_MIN_BUDGET, Strings.create("Tools"))
 			.assoc(Loads.K_KIND, Loads.KIND_TOOLS)
 			.assoc(Fields.TOOLS, operations)
-			.assoc(Loads.K_TOOL_BINDINGS, bindings)
-			.assoc(Loads.K_VOLATILE, CVMBool.FALSE);
+			.assoc(Loads.K_TOOL_BINDINGS, bindings);
 		scope.loads = scope.loads.assoc(key, meta);
 		return Maps.of(
 			AbstractLLMAdapter.K_PATH, key,
