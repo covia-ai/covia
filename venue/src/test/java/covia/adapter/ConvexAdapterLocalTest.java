@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -19,6 +20,8 @@ import convex.core.data.ACell;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Blob;
+import convex.core.data.Cells;
+import convex.core.data.Format;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
@@ -29,8 +32,9 @@ import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
 
-/** Local contract tests for Convex key operations. Network tests remain in
- * {@link ConvexAdapterTest}; these run in the default suite without a peer. */
+/** Local contract tests for Convex data and key operations. Network tests
+ * remain in {@link ConvexAdapterTest}; these run in the default suite without
+ * a peer. */
 class ConvexAdapterLocalTest {
 
 	private final Engine engine = TestEngine.ENGINE;
@@ -137,5 +141,62 @@ class ConvexAdapterLocalTest {
 		assertThrows(Exception.class, () -> missing.awaitResult(5000));
 		assertTrue(missing.getErrorMessage().contains("not found"),
 			"secret resolution must fail before attempting a peer connection");
+	}
+
+	@Test
+	void cad3RoundTripsACompleteMultiCellDataStructure() {
+		ACell value = Maps.of(
+			"kind", "multi-cell",
+			"payload", Strings.create("abcdef".repeat(2_000)));
+
+		ACell encoded = run("v/ops/convex/encode-cad3", Maps.of(Fields.VALUE, value));
+		AString encoding = RT.ensureString(RT.getIn(encoded, "encoding"));
+		assertNotNull(encoding);
+		assertTrue(encoding.toString().startsWith("0x"));
+		Blob bytes = Blob.parse(encoding.toString());
+		assertTrue(bytes.count() > Cells.getEncodingLength(value),
+			"test value should require child cells beyond its top-level encoding");
+
+		ACell decoded = run("v/ops/convex/decode-cad3",
+			Maps.of("encoding", encoding));
+		assertEquals(value, decoded);
+	}
+
+	@Test
+	void decodeCad3AcceptsSingleCellEncodingWithoutPrefix() {
+		ACell value = Maps.of("answer", 42L);
+		String encoding = Format.encodeMultiCell(value, true).toHexString();
+
+		assertEquals(value, run("v/ops/convex/decode-cad3",
+			Maps.of("encoding", encoding)));
+	}
+
+	@Test
+	void decodeCad3RejectsMalformedAndIncompleteMessages() {
+		Job malformed = engine.jobs().invokeOperation("v/ops/convex/decode-cad3",
+			Maps.of("encoding", "0xzz"), ctx);
+		assertThrows(Exception.class, () -> malformed.awaitResult(5000));
+		assertTrue(malformed.getErrorMessage().contains("hexadecimal CAD3"));
+
+		ACell value = Maps.of("payload", Strings.create("abcdef".repeat(2_000)));
+		String topCellOnly = Cells.getEncoding(value).toString();
+		Job incomplete = engine.jobs().invokeOperation("v/ops/convex/decode-cad3",
+			Maps.of("encoding", topCellOnly), ctx);
+		assertThrows(Exception.class, () -> incomplete.awaitResult(5000));
+		assertTrue(incomplete.getErrorMessage().contains("Incomplete CAD3 encoding"));
+	}
+
+	@Test
+	void encodeCad3DistinguishesMissingValueFromExplicitNull() {
+		Job missing = engine.jobs().invokeOperation("v/ops/convex/encode-cad3",
+			Maps.empty(), ctx);
+		assertThrows(Exception.class, () -> missing.awaitResult(5000));
+		assertTrue(missing.getErrorMessage().contains("requires a 'value' field"));
+
+		ACell encodedNull = run("v/ops/convex/encode-cad3",
+			Maps.of(Fields.VALUE, null));
+		assertEquals("0x00", RT.getIn(encodedNull, "encoding").toString());
+		assertNull(run("v/ops/convex/decode-cad3",
+			Maps.of("encoding", "0x00")));
 	}
 }

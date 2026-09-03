@@ -9,16 +9,22 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import convex.api.Convex;
+import convex.core.cpos.CPoSConstants;
+import convex.core.cvm.CVMEncoder;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.ABlob;
 import convex.core.data.Blob;
 import convex.core.data.Blobs;
+import convex.core.data.Cells;
+import convex.core.data.Format;
 import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
+import convex.core.exceptions.BadFormatException;
+import convex.core.exceptions.PartialMessageException;
 import convex.core.lang.RT;
 import convex.core.lang.Reader;
 import convex.core.Result;
@@ -32,8 +38,9 @@ import covia.venue.RequestContext;
 /**
  * Adapter for interacting with the Convex network.
  *
- * Provides network queries and transactions plus local Ed25519 key generation
- * and signing. Private seeds remain in the caller's encrypted secret store.
+ * Provides network queries and transactions plus local CAD3 encoding, decoding,
+ * Ed25519 key generation and signing. Private seeds remain in the caller's
+ * encrypted secret store.
  */
 public class ConvexAdapter extends AAdapter {
 
@@ -55,6 +62,8 @@ public class ConvexAdapter extends AAdapter {
 	private Hash TRANSACT_OPERATION;
 	private Hash GENERATE_KEY_OPERATION;
 	private Hash SIGN_OPERATION;
+	private Hash DECODE_CAD3_OPERATION;
+	private Hash ENCODE_CAD3_OPERATION;
 
 	@Override
 	public String getName() {
@@ -63,7 +72,7 @@ public class ConvexAdapter extends AAdapter {
 
 	@Override
 	public String getDescription() {
-		return "Convex network queries, transactions, and secret-backed Ed25519 signing";
+		return "Convex network access, CAD3 data conversion, and secret-backed Ed25519 signing";
 	}
 
 	@Override
@@ -74,6 +83,8 @@ public class ConvexAdapter extends AAdapter {
 		TRANSACT_OPERATION     = installAsset("convex/transact",     "/adapters/convex/transact.json");
 		GENERATE_KEY_OPERATION = installAsset("convex/generate-key", "/adapters/convex/generateKey.json");
 		SIGN_OPERATION         = installAsset("convex/sign",         "/adapters/convex/sign.json");
+		DECODE_CAD3_OPERATION  = installAsset("convex/decode-cad3",  "/adapters/convex/decodeCad3.json");
+		ENCODE_CAD3_OPERATION  = installAsset("convex/encode-cad3",  "/adapters/convex/encodeCad3.json");
 	}
 
 	@Override
@@ -87,8 +98,12 @@ public class ConvexAdapter extends AAdapter {
 				() -> generateKey(ctx, input), VIRTUAL_EXECUTOR);
 			case "sign" -> CompletableFuture.supplyAsync(
 				() -> sign(ctx, input), VIRTUAL_EXECUTOR);
+			case "decode-cad3" -> CompletableFuture.supplyAsync(
+				() -> decodeCAD3(input), VIRTUAL_EXECUTOR);
+			case "encode-cad3" -> CompletableFuture.supplyAsync(
+				() -> encodeCAD3(input), VIRTUAL_EXECUTOR);
 			default -> CompletableFuture.failedFuture(
-					new UnsupportedOperationException("Unsupported Convex operation: " + op));
+				new UnsupportedOperationException("Unsupported Convex operation: " + op));
 		};
 	}
 
@@ -186,6 +201,55 @@ public class ConvexAdapter extends AAdapter {
 		return Maps.of(
 			K_ACCOUNT_KEY, Strings.create(keyPair.getAccountKey().toHexString()),
 			K_SIGNATURE, Strings.create(signature.toHexString()));
+	}
+
+	private ACell decodeCAD3(ACell input) {
+		ACell supplied = RT.getIn(input, K_ENCODING);
+		if (supplied instanceof AString text
+				&& text.count() > (CPoSConstants.MAX_MESSAGE_LENGTH * 2L + 2L)) {
+			throw new IllegalArgumentException("CAD3 encoding exceeds the maximum message size of "
+				+ CPoSConstants.MAX_MESSAGE_LENGTH + " bytes");
+		}
+		ABlob parsed = Blobs.parse(supplied);
+		if (parsed == null) {
+			throw new IllegalArgumentException("encoding must be a hexadecimal CAD3 blob");
+		}
+		if (parsed.count() > CPoSConstants.MAX_MESSAGE_LENGTH) {
+			throw new IllegalArgumentException("CAD3 encoding exceeds the maximum message size of "
+				+ CPoSConstants.MAX_MESSAGE_LENGTH + " bytes");
+		}
+		try {
+			// Storeless multi-cell decoding is deliberate: every referenced child must
+			// be carried by this encoding rather than resolved from ambient venue state.
+			return CVMEncoder.INSTANCE.decodeMultiCell(parsed.toFlatBlob());
+		} catch (PartialMessageException e) {
+			throw new IllegalArgumentException(
+				"Incomplete CAD3 encoding; missing referenced cell " + e.getMissingHash(), e);
+		} catch (BadFormatException e) {
+			throw new IllegalArgumentException("Invalid CAD3 encoding: " + e.getMessage(), e);
+		}
+	}
+
+	private ACell encodeCAD3(ACell input) {
+		if (!(input instanceof AMap<?, ?> map) || !map.containsKey(Fields.VALUE)) {
+			throw new IllegalArgumentException("encode-cad3 requires a 'value' field");
+		}
+		ACell value = map.get(Fields.VALUE);
+		Blob encoding = Format.encodeMultiCell(value, true);
+		try {
+			// Format's size limit may stop traversal before every branch is included.
+			// Never return a purported complete encoding that cannot stand alone.
+			ACell roundTrip = CVMEncoder.INSTANCE.decodeMultiCell(encoding);
+			if (!Cells.equals(value, roundTrip)) {
+				throw new IllegalArgumentException("CAD3 value did not round-trip exactly");
+			}
+		} catch (PartialMessageException e) {
+			throw new IllegalArgumentException(
+				"Value exceeds the maximum complete CAD3 message size", e);
+		} catch (BadFormatException e) {
+			throw new IllegalStateException("Generated invalid CAD3 encoding", e);
+		}
+		return Maps.of(K_ENCODING, Strings.create("0x" + encoding.toHexString()));
 	}
 
 	/** Resolves a transaction/signing seed. Transactions retain literal-seed
@@ -290,5 +354,13 @@ public class ConvexAdapter extends AAdapter {
 
 	public Hash getSignOperation() {
 		return SIGN_OPERATION;
+	}
+
+	public Hash getDecodeCAD3Operation() {
+		return DECODE_CAD3_OPERATION;
+	}
+
+	public Hash getEncodeCAD3Operation() {
+		return ENCODE_CAD3_OPERATION;
 	}
 }

@@ -1,0 +1,22 @@
+{
+	"name": "Decode CAD3",
+	"description": "Decode a complete hexadecimal CAD3 encoding into its native Convex data structure. Accepts both single-cell and self-contained multi-cell encodings.",
+	"operation": {
+		"adapter": "convex:decode-cad3",
+		"readOnly": true,
+		"input": {
+			"type": "object",
+			"properties": {
+				"encoding": {
+					"type": "string",
+					"description": "Complete CAD3 bytes as hexadecimal, with or without the 0x prefix"
+				}
+			},
+			"required": ["encoding"],
+			"additionalProperties": false
+		},
+		"output": {
+			"description": "The decoded native Convex value. JSON transports may render non-JSON CAD3 types as their Convex string form."
+		}
+	}
+}
