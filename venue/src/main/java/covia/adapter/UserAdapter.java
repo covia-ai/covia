@@ -153,7 +153,9 @@ public class UserAdapter extends AAdapter {
 			CREATED, CVMBool.create(created));
 	}
 
-	private ACell info(RequestContext ctx, ACell input) {
+	/** Job-free REST reads (#255) call this directly, reusing the same
+	 *  capability checks as the {@code user:info} operation. */
+	public ACell info(RequestContext ctx, ACell input) {
 		AString did = RT.ensureString(RT.getIn(input, Fields.DID));
 		if (did == null) did = ctx.getCallerDID();
 		if (did == null) throw new AuthException("Authentication required");
@@ -168,7 +170,9 @@ public class UserAdapter extends AAdapter {
 		return summary(user);
 	}
 
-	private ACell list(RequestContext ctx) {
+	/** Job-free REST reads (#255) call this directly, reusing the same
+	 *  capability checks as the {@code user:list} operation. */
+	public ACell list(RequestContext ctx) {
 		requireVenueUserAuthority(ctx, Abilities.USER_READ);
 		Users store = engine.getVenueState().users();
 		AMap<AString, ACell> all = store.getAll();
@@ -213,7 +217,9 @@ public class UserAdapter extends AAdapter {
 			REVOKED, CVMBool.create(revoked));
 	}
 
-	private ACell authenticationList(RequestContext ctx, ACell input) {
+	/** Job-free REST reads (#255) call this directly, reusing the same
+	 *  capability checks as the {@code user:authentication-list} operation. */
+	public ACell authenticationList(RequestContext ctx, ACell input) {
 		AString did = targetManagedUser(ctx, input, Abilities.USER_READ);
 		AString id = engine.managedUserName(did);
 		return Maps.of(
@@ -242,7 +248,8 @@ public class UserAdapter extends AAdapter {
 	private AMap<AString, ACell> summary(User user) {
 		AMap<AString, ACell> out = Maps.of(
 			Fields.DID, user.getDID(),
-			REGISTERED, CVMBool.TRUE);
+			REGISTERED, CVMBool.TRUE,
+			Fields.MANAGED, CVMBool.create(engine.managedUserName(user.getDID()) != null));
 		ACell state = user.get();
 		if (state instanceof AMap<?, ?> map) {
 			ACell metadata = ((AMap<?, ?>) map).get(Covia.K_META);

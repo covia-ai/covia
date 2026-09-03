@@ -297,6 +297,12 @@ public class Fields {
 	public static final StringShort ADDED_BY = Strings.intern("addedBy");
 	public static final StringShort REVOKED_AT = Strings.intern("revokedAt");
 	public static final StringShort REVOKED_BY = Strings.intern("revokedBy");
+	/** Whether a registered user is a venue-managed named account (has a
+	 *  did:web identity minted from a username) vs. a plain registered DID. */
+	public static final StringShort MANAGED = Strings.intern("managed");
+	/** Curated public access-policy block on venue status (#255): admission
+	 *  policy fields safe to state truthfully to any caller. */
+	public static final StringShort ACCESS = Strings.intern("access");
 
 	// Convex related
 	public static final StringShort PEER = Strings.intern("peer");
