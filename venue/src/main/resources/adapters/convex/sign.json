@@ -1,0 +1,39 @@
+{
+	"name": "Convex Sign",
+	"description": "Sign UTF-8 text or hexadecimal bytes with an Ed25519 seed held in the caller's secret store. Returns only the public account key and signature.",
+	"operation": {
+		"adapter": "convex:sign",
+		"readOnly": false,
+		"activityLabel": "Signing data",
+		"input": {
+			"type": "object",
+			"properties": {
+				"seed": {
+					"type": "string",
+					"description": "Secret reference containing a 32-byte Ed25519 seed, for example s/CONVEX_SIGNER"
+				},
+				"message": {
+					"type": "string",
+					"description": "Text to sign as UTF-8, or hexadecimal bytes when encoding is hex"
+				},
+				"encoding": {
+					"type": "string",
+					"enum": ["utf8", "hex"],
+					"default": "utf8",
+					"description": "How to decode message before signing"
+				}
+			},
+			"required": ["seed", "message"],
+			"additionalProperties": false
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"accountKey": { "type": "string", "description": "Public Ed25519 account key as a 32-byte Convex hex blob" },
+				"signature": { "type": "string", "description": "Ed25519 signature as a 64-byte Convex hex blob" }
+			},
+			"required": ["accountKey", "signature"],
+			"additionalProperties": false
+		}
+	}
+}

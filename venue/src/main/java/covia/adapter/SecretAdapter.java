@@ -84,20 +84,23 @@ public class SecretAdapter extends AAdapter {
 		}
 		boolean overwrite = CVMBool.TRUE.equals(overwriteValue);
 
-		store(engine, ctx, name, value, overwrite);
+		storeSecret(engine, ctx, name, value, overwrite);
 		return Maps.of(Fields.NAME, name, K_STORED, CVMBool.TRUE);
 	}
 
 	/** Shared secret-write boundary for operations that generate credentials
 	 * without ever returning their plaintext. The capability check and
 	 * collision rule therefore cannot drift from {@code secret:set}. */
-	static void store(Engine engine, RequestContext ctx, AString name,
+	static void storeSecret(Engine engine, RequestContext ctx, AString name,
 			AString value, boolean overwrite) {
 		if (ctx.getCallerDID() == null) {
 			throw new IllegalArgumentException("Secret operations require an authenticated caller");
 		}
 		if (name == null || name.toString().isBlank()) {
 			throw new IllegalArgumentException("name is required");
+		}
+		if (name.toString().contains("/") || name.toString().contains("\\")) {
+			throw new IllegalArgumentException("name must be a single secret name, not a path");
 		}
 		// Pin the capability to the action: writing a secret requires
 		// secret/write on the secret resource. A null grant scope (authenticated /

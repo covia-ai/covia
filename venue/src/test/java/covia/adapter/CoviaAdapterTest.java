@@ -1135,6 +1135,15 @@ public class CoviaAdapterTest {
 		assertTrue(job.getErrorMessage().contains("overwrite must be a boolean"));
 	}
 
+	@Test
+	public void testSecretSetRejectsPathAsName() {
+		Job job = engine.jobs().invokeOperation("v/ops/secret/set",
+			Maps.of(Fields.NAME, "nested/key", Fields.VALUE, Strings.create("value")),
+			ALICE);
+		assertThrows(Exception.class, () -> job.awaitResult(5000));
+		assertFalse(engine.getVenueState().users().get(ALICE_DID).secrets().exists("nested/key"));
+	}
+
 	// ========== covia:write/read — isolation ==========
 
 	@Test

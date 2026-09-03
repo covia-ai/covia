@@ -20,7 +20,9 @@
 					"type": "string",
 					"description": "Convex Lisp source code to query"
 				}
-			}
+			},
+			"required": ["source"],
+			"additionalProperties": false
 		},
 		"output": {
 			"type": "object",

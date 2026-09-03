@@ -75,7 +75,7 @@ AUTH_REQUIRED).
 | Adapter | Purpose | Operations |
 |---------|---------|------------|
 | `grid` | Federated grid operations | `run`, `invoke`, `jobStatus`, `jobResult` |
-| `convex` | Convex blockchain | `query`, `transact` |
+| `convex` | Convex blockchain and secret-backed Ed25519 keys | `query`, `transact`, `generate-key`, `sign` |
 | `mcp` | Model Context Protocol | `toolList`, `toolCall`, bridging ops |
 | `langchain` | AI/LLM models | `openai`, `ollama`, `anthropic`, `gemini`, `xai`, `deepseek`, `mistral`, `openrouter`, `models` |
 | `http` | HTTP requests (SSRF-protected, bounded validated redirects, default User-Agent; `adapters.http`) | `get`, `post` |
