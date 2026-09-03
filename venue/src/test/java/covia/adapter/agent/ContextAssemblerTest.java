@@ -909,6 +909,29 @@ public class ContextAssemblerTest {
 	}
 
 	@Test
+	public void testProviderStateReachesLiveInferenceButNotHistoricalProjection() {
+		AMap<AString, ACell> state = Maps.of(
+			Fields.PROVIDER, "anthropic", Fields.MODEL, "claude-sonnet-5",
+			"blocks", Vectors.of(Maps.of("type", "thinking", "thinking", "private", "signature", "sig")));
+		AMap<AString, ACell> assistant = Maps.of(
+			"role", "assistant", "content", "done", Fields.PROVIDER_STATE, state);
+
+		assertSame(state, ConversationRenderer.toMessage(assistant, null).get(Fields.PROVIDER_STATE),
+			"live provider rendering must preserve opaque continuation state exactly");
+		assertNull(ConversationRenderer.toMessage(assistant, Strings.intern("user"))
+			.get(Fields.PROVIDER_STATE),
+			"caller input must not be able to manufacture provider continuation state");
+
+		AMap<AString, ACell> frame = GoalTreeContext.createFrame("test")
+			.assoc(GoalTreeContext.K_CONVERSATION, Vectors.of(
+				Maps.of("role", "user", "content", "work"), assistant));
+		ConversationRenderer.HistoricalView historical = ConversationRenderer.historical(frame, 10, 10_000);
+		assertEquals(2, historical.messages().count());
+		assertNull(RT.getIn(historical.messages().get(1), Fields.PROVIDER_STATE),
+			"retrospective/session views must not expose provider reasoning state");
+	}
+
+	@Test
 	public void testToolCallIdsAreProviderValidAndLegacyFramesRenderSafely() {
 		AString byCall = ContextAssembler.contextEventId(Strings.create("toolu_123"), 2,
 			Strings.create("unused"));

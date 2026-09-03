@@ -159,7 +159,14 @@ Turn := {
   role: "system" | "user" | "assistant" | "tool",
   content?, structuredContent?, toolCalls?, id?, name?, isError?,
   toolAddition?, toolRemoval?,
+  providerState?,
   ts?, source?, caller?, jobId?, tokens?
+}
+
+ProviderState := {
+  provider: String,
+  model: String,
+  blocks: Vector<Map>       // opaque provider continuation blocks
 }
 
 CompactedSegment := {
@@ -186,9 +193,20 @@ without resolving or rendering the source again. This index is application
 state in the frame lattice cell, not a Java-side cache or a second transcript.
 
 The provider projection retains the provider fields on `Turn` and removes its
-framework/audit fields. The entry grammar for `LoadSpec` is §6; §7 defines the
-runtime ownership stamps and scope-chain semantics. This document deliberately
-defines each of those once rather than copying their field tables here.
+framework/audit fields. `providerState` is optional and absent from legacy
+records and replies that need no continuation. Agent/session code preserves it
+without interpretation. A provider edge may restore it only when both
+`provider` and `model` match the current inference; other providers, model
+changes, malformed state and unknown block types ignore it. It is currently
+used for Anthropic signed and redacted thinking blocks on assistant tool-use
+turns. It is not assistant content, is omitted from retrospective session
+projections, and is not duplicated in `renderedContext`. Compaction keeps it in
+the exact archived `items` but does not replay archived state through the
+provider-visible summary.
+
+The entry grammar for `LoadSpec` is §6; §7 defines the runtime ownership stamps
+and scope-chain semantics. This document deliberately defines each of those
+once rather than copying their field tables here.
 
 The representation has these invariants:
 

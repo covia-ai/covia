@@ -87,6 +87,10 @@
 				"toolCalls": {
 					"type": "array"
 				},
+				"providerState": {
+					"type": "object",
+					"description": "Opaque provider continuation state on a tool-use reply. Preserve it unchanged with that assistant message; Covia restores it only for the same provider and model."
+				},
 				"finishReason": {
 					"type": "string",
 					"description": "Provider finish reason in lower case (for example stop, length, or tool_execution). A length response reached maxTokens and is incomplete."

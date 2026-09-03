@@ -583,6 +583,8 @@ public class TestAdapter extends AAdapter {
     @SuppressWarnings("unchecked")
     private ACell handleToolLlm(ACell input) {
         ACell messagesCell = RT.getIn(input, "messages");
+		AString model = RT.ensureString(RT.getIn(input, Fields.MODEL));
+		boolean providerStateTest = model != null && "provider-state-test".equals(model.toString());
         if (messagesCell instanceof AVector) {
             AVector<ACell> messages = (AVector<ACell>) messagesCell;
             // Check if any tool result messages exist
@@ -595,9 +597,17 @@ public class TestAdapter extends AAdapter {
 						ACell structured = RT.getIn(messages.get(i), "structuredContent");
 						if (structured != null) toolContent = convex.core.util.JSON.print(structured);
 					}
-                    return Maps.of(
+					boolean statePresent = false;
+					if (providerStateTest) {
+						for (long j = 0; j < messages.count(); j++) {
+							statePresent |= RT.getIn(messages.get(j), Fields.PROVIDER_STATE) != null;
+						}
+					}
+					return Maps.of(
                         "role", Strings.create("assistant"),
-                        "content", Strings.create("Tool returned: " + toolContent)
+						"content", Strings.create(providerStateTest
+							? (statePresent ? "Provider state retained" : "Provider state missing")
+							: "Tool returned: " + toolContent)
                     );
                 }
             }
@@ -629,14 +639,21 @@ public class TestAdapter extends AAdapter {
                 toolName = "covia_list";
                 arguments = "{\"path\":\"w/issue-334/sources\",\"fields\":[\"status\"]}";
             }
-            return Maps.of(
+			AMap<AString, ACell> reply = Maps.of(
                 "role", Strings.create("assistant"),
                 "toolCalls", Vectors.of(Maps.of(
                     "id", Strings.create("call_1"),
                     "name", Strings.create(toolName),
                     "arguments", Strings.create(arguments)
-                ))
-            );
+				)));
+			if (providerStateTest) {
+				reply = reply.assoc(Fields.PROVIDER_STATE, Maps.of(
+					Fields.PROVIDER, "anthropic",
+					Fields.MODEL, "claude-sonnet-5",
+					"blocks", Vectors.of(Maps.of(
+						"type", "thinking", "thinking", "private", "signature", "sig"))));
+			}
+			return reply;
         }
         return Maps.of("role", Strings.create("assistant"), "content", Strings.create("(no messages)"));
     }

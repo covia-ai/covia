@@ -548,6 +548,26 @@ public class LLMAgentAdapterTest {
 	}
 
 	@Test
+	public void testProviderStatePersistsAndReachesNextInferenceWithinCycle() {
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), Maps.of(
+			Fields.AGENT_ID, "provider-state-agent",
+			AgentState.KEY_CONFIG, Maps.of(
+				"llmOperation", "v/test/ops/toolllm",
+				Fields.MODEL, "provider-state-test"),
+			Fields.MESSAGES, Vectors.of(Maps.of("content", "continue signed state"))));
+
+		assertEquals("Provider state retained", RT.getIn(output, Fields.RESPONSE).toString(),
+			"the next inference must receive the opaque state with its assistant tool turn");
+		AVector<ACell> conversation = RT.ensureVector(RT.getIn(
+			output, Fields.FRAMES, CVMLong.ZERO, AgentState.KEY_CONVERSATION));
+		assertNotNull(RT.getIn(conversation.get(1), Fields.PROVIDER_STATE),
+			"the session frame is the durable source of continuation state");
+		assertNotNull(RT.getIn(conversation.get(1), "toolCalls"));
+		assertEquals("tool", RT.getIn(conversation.get(2), "role").toString());
+	}
+
+	@Test
 	public void testCompactUsesSharedFrameRepresentation() {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), Maps.of(

@@ -215,6 +215,10 @@ public class Fields {
 	 *  turns) — the part a display-safe consumer strips. */
 	public static final StringShort DETAIL = Strings.intern("detail");
 	public static final StringShort MODEL = Strings.intern("model");
+	/** Optional opaque continuation data returned by an LLM provider on an
+	 * assistant turn. Agent code preserves it verbatim; only the matching
+	 * provider/model adapter may interpret it on a later inference. */
+	public static final StringShort PROVIDER_STATE = Strings.intern("providerState");
 	public static final StringShort TOOL_CALLS = Strings.intern("toolCalls");
 	public static final StringShort BUDGET = Strings.intern("budget");
 	/** Job ids a cycle presented (chat envelopes drained this cycle). */
