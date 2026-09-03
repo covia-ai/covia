@@ -8,6 +8,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.9.8] - 2026-09-03
+
 ### Added
 
 - Result-oriented `POST /api/v1/run` accepts `private: true` on venues with
