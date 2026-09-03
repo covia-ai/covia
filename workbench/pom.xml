@@ -3,7 +3,7 @@
   <parent>
     <groupId>ai.covia</groupId>
     <artifactId>covia</artifactId>
-    <version>0.9.8</version>
+    <version>0.9.9-SNAPSHOT</version>
   </parent>
   <artifactId>workbench</artifactId>
   <name>Covia Workbench</name>
