@@ -13,7 +13,7 @@
 	<description>Readable text from PDF and Office documents (PDFBox, POI) behind mode 'extract' on file reads, packaged as an optional loadable venue module.</description>
 
 	<properties>
-		<pdfbox.version>3.0.5</pdfbox.version>
+		<pdfbox.version>3.0.8</pdfbox.version>
 		<poi.version>5.4.1</poi.version>
 	</properties>
 
