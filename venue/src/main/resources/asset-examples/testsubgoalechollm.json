@@ -4,6 +4,7 @@
 	"dateCreated": "2026-08-21T00:00:00Z",
 	"operation": {
 		"adapter": "test:subgoalechollm",
+		"readOnly": false,
 		"input": {
 			"type": "object",
 			"properties": {

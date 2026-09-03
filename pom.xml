@@ -4,7 +4,7 @@
 	<modelVersion>4.0.0</modelVersion>
 	<groupId>ai.covia</groupId>
 	<artifactId>covia</artifactId>
-	<version>0.9.7</version>
+	<version>0.9.8</version>
 	<packaging>pom</packaging>
 
 	<name>Covia</name>
@@ -44,7 +44,7 @@
 		<maven.compiler.release>21</maven.compiler.release>
 		<maven.compiler.source>21</maven.compiler.source>
 		<junit.version>6.1.3</junit.version>
-		<convex.version>0.8.15</convex.version>
+		<convex.version>0.8.16</convex.version>
 		<maven.compiler.target>21</maven.compiler.target>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 		
@@ -54,6 +54,16 @@
 		<langchain.version>1.19.0</langchain.version>
 		<mcp.version>2.0.1</mcp.version>
 		<a2a.version>1.2.0.Final</a2a.version>
+		<!-- Flags for every forked test JVM (surefire and failsafe; modules with
+		     their own argLine splice this in). JDK 24+ warns once per JVM when a
+		     library touches sun.misc.Unsafe memory access (JEP 471); protobuf-java
+		     still does, and the warning is for that library's maintainers, not
+		     this build. The -D form is the property the launcher maps its
+		     sun-misc-unsafe-memory-access option onto: JDK 24+ honours it and
+		     every older JDK ignores it. The launcher-option form (two leading
+		     dashes) is rejected by any JDK below 23, including an IDE JUnit launch
+		     on 21 that inherits this argLine, so it must never appear here. -->
+		<covia.test.jvmflags>-Dsun.misc.unsafe.memory.access=allow</covia.test.jvmflags>
 	</properties>
 
 	<modules>
@@ -71,6 +81,19 @@
 	</modules>
 
 	<build>
+		<pluginManagement>
+			<plugins>
+				<!-- Module integration tests inherit the same JVM flags as unit tests. -->
+				<plugin>
+					<groupId>org.apache.maven.plugins</groupId>
+					<artifactId>maven-failsafe-plugin</artifactId>
+					<version>3.5.6</version>
+					<configuration>
+						<argLine>${covia.test.jvmflags}</argLine>
+					</configuration>
+				</plugin>
+			</plugins>
+		</pluginManagement>
 		<plugins>
 			<!-- One reusable test JVM per module; all test concurrency is owned by
 			     JUnit, which can respect class/method isolation annotations. Do not
@@ -82,6 +105,7 @@
 				<artifactId>maven-surefire-plugin</artifactId>
 				<version>3.5.6</version>
 				<configuration>
+					<argLine>${covia.test.jvmflags}</argLine>
 					<forkCount>1</forkCount>
 					<reuseForks>true</reuseForks>
 					<properties>

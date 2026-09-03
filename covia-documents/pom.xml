@@ -5,7 +5,7 @@
 	<parent>
 		<groupId>ai.covia</groupId>
 		<artifactId>covia</artifactId>
-		<version>0.9.7</version>
+		<version>0.9.8</version>
 	</parent>
 	<artifactId>covia-documents</artifactId>
 
@@ -13,7 +13,6 @@
 	<description>Readable text from PDF and Office documents (PDFBox, POI) behind mode 'extract' on file reads, packaged as an optional loadable venue module.</description>
 
 	<properties>
-		<maven.deploy.skip>true</maven.deploy.skip>
 		<pdfbox.version>3.0.5</pdfbox.version>
 		<poi.version>5.4.1</poi.version>
 	</properties>
@@ -39,6 +38,15 @@
 			<groupId>org.apache.poi</groupId>
 			<artifactId>poi-scratchpad</artifactId>
 			<version>${poi.version}</version>
+		</dependency>
+		<!-- POI and PDFBox log through the Log4j API. Bridge it to SLF4J — the
+		     venue's logback, parent-first — so neither a venue loading this module
+		     nor its tests print "Log4j API could not find a logging provider".
+		     Version matches the log4j-api POI ${poi.version} brings. -->
+		<dependency>
+			<groupId>org.apache.logging.log4j</groupId>
+			<artifactId>log4j-to-slf4j</artifactId>
+			<version>2.24.3</version>
 		</dependency>
 		<dependency>
 			<groupId>org.junit.jupiter</groupId>
@@ -84,8 +92,11 @@
 						<configuration>
 							<!-- The fat module jar is a GitHub Releases artifact, not a Maven Central
 							     one: shade writes it under the -module name but does not attach it, so
-							     `mvn deploy` publishes only this module's slim jar. -->
+							     `mvn deploy` publishes only this module's slim jar, with its real POM
+							     (no dependency-reduced POM, which would strip the shaded dependencies
+							     from the published artifact). -->
 							<outputFile>${project.build.directory}/${project.build.finalName}-module.jar</outputFile>
+							<createDependencyReducedPom>false</createDependencyReducedPom>
 							<artifactSet>
 								<excludes>
 									<exclude>ai.covia:venue</exclude>

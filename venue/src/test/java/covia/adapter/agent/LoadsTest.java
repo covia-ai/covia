@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -13,18 +14,22 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import convex.core.util.JSON;
 import covia.adapter.agent.ContextAssembler.Prompt;
 import covia.adapter.agent.ContextAssembler.Spec;
+import covia.api.Abilities;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.venue.Engine;
@@ -34,7 +39,7 @@ import covia.venue.TestEngine;
 /**
  * Loads entries beyond a path key — text, op and job sources (AGENT_CONTEXT.md
  * §6.2 at the loads tiers) — rendered as tool exchanges that name their
- * provenance; their placement (volatile entries in the tail); load-order
+ * provenance; watched entries append-only-on-change placement; load-order
  * rendering; and the kind-agnostic tools/skills/skillsets rule.
  */
 public class LoadsTest {
@@ -81,8 +86,23 @@ public class LoadsTest {
 		return content(entry(entries, i));
 	}
 
-	private static AVector<ACell> aggregate(AVector<ACell> entries, boolean volatileBand) {
-		return ContextAssembler.contextExchanges(entries, volatileBand);
+	private static AVector<ACell> aggregate(AVector<ACell> entries) {
+		return ContextAssembler.contextExchanges(entries);
+	}
+
+	/** Exact provider messages for one watched candidate. */
+	private static AVector<ACell> observationMessages(Loads.Snapshot snapshot, int i) {
+		return RT.ensureVector(RT.getIn(snapshot.observations().get(i), "value"));
+	}
+
+	/** Aggregate-ready data recovered from a watched candidate's tool result. */
+	private static AVector<ACell> observationEntries(Loads.Snapshot snapshot, int i) {
+		AVector<ACell> messages = observationMessages(snapshot, i);
+		for (long j = 0; j < messages.count(); j++) {
+			AVector<ACell> entries = RT.ensureVector(RT.getIn(messages.get(j), "structuredContent"));
+			if (entries != null) return entries;
+		}
+		return Vectors.empty();
 	}
 
 	private static AMap<AString, ACell> spec(Object... kvs) {
@@ -162,7 +182,7 @@ public class LoadsTest {
 		write("w/notes", Strings.create("note body"));
 		AVector<ACell> entries = resolve(Maps.of(Strings.create("w/notes"), spec())).exchanges();
 		assertEquals(1, entries.count());
-		AVector<ACell> exchange = aggregate(entries, false);
+		AVector<ACell> exchange = aggregate(entries);
 		assertEquals(2, exchange.count(), "one aggregate call, one result");
 		assertEquals("assistant", RT.getIn(exchange.get(0), "role").toString());
 		assertEquals(ContextAssembler.PINNED_CONTEXT_TOOL,
@@ -178,7 +198,7 @@ public class LoadsTest {
 
 		// A dated entry was loaded in-session.
 		AVector<ACell> loaded = aggregate(resolve(Maps.of(
-			Strings.create("w/notes"), spec("ts", CVMLong.create(5)))).exchanges(), false);
+			Strings.create("w/notes"), spec("ts", CVMLong.create(5)))).exchanges());
 		assertEquals(ContextAssembler.LOADED_CONTEXT_TOOL,
 			RT.getIn(loaded.get(0), "toolCalls", 0, "name").toString());
 		assertEquals("note body", RT.getIn(loaded.get(1), "structuredContent", "w/notes", "content").toString());
@@ -234,19 +254,51 @@ public class LoadsTest {
 			spec("op", "v/test/ops/echo", "input", Maps.of(Strings.create("ping"), Strings.create("pong"))));
 		Loads.Snapshot snap = resolve(loads);
 		assertEquals(0, snap.exchanges().count(), "an op entry leaves the live surface");
-		assertEquals(1, snap.volatileElements().count());
-		ACell a = entry(snap.volatileElements(), 0);
+		assertEquals(1, snap.observations().count());
+		AVector<ACell> observed = observationEntries(snap, 0);
+		ACell a = entry(observed, 0);
 		assertEquals("v/test/ops/echo", RT.getIn(a, "op").toString(), "the call names the operation");
 		assertEquals("pong", RT.getIn(a, "input", "ping").toString(), "and its input");
-		assertTrue(result(snap.volatileElements(), 0).contains("pong"));
-		assertEquals("tail", RT.getIn(snap.diagnostics().get(0), "band").toString());
+		assertTrue(result(observed, 0).contains("pong"));
+		assertEquals("observation", RT.getIn(snap.diagnostics().get(0), "band").toString());
 
 		// volatile: false pins an op result into the live surface instead.
 		AMap<AString, ACell> pinned = Maps.of(Strings.create("echoed"),
 			spec("op", "v/test/ops/echo", "input", Maps.of(), "volatile", CVMBool.FALSE));
 		Loads.Snapshot live = resolve(pinned);
 		assertEquals(1, live.exchanges().count());
-		assertEquals(0, live.volatileElements().count());
+		assertEquals(0, live.observations().count());
+	}
+
+	@Test
+	public void testContextOperationRejectsExplicitMutation() {
+		String target = "w/volatile-op-must-not-write";
+		AMap<AString, ACell> loads = Maps.of(Strings.create("bad-watcher"),
+			spec("op", "v/ops/covia/write", "input", Maps.of(
+				Fields.PATH, Strings.create(target), Fields.VALUE, CVMBool.TRUE)));
+		Loads.Snapshot snapshot = resolve(loads);
+		String error = RT.getIn(observationEntries(snapshot, 0).get(0), Fields.ERROR).toString();
+		assertTrue(error.contains("operation.readOnly=false"), error);
+		assertNull(engine.resolvePath(Strings.create(target), ctx),
+			"context observation must never execute a mutating operation");
+	}
+
+	@Test
+	public void testContextOperationWithoutClassificationRunsCleanly() {
+		AMap<AString, ACell> meta = Maps.of(
+			Fields.NAME, Strings.create("Legacy echo"),
+			Fields.OPERATION, Maps.of(
+				Fields.ADAPTER, Strings.create("test:echo"),
+				Fields.INPUT, Maps.of()));
+		Hash hash = engine.storeAsset(JSON.printPretty(meta), null);
+		String op = "a/" + hash.toHexString();
+		Loads.Snapshot snapshot = resolve(Maps.of(Strings.create("legacy"),
+			spec("op", op, "input", Maps.of("ping", "pong"))));
+
+		AMap<AString, ACell> observed = entry(observationEntries(snapshot, 0), 0);
+		assertTrue(content(observed).contains("pong"), observed.toString());
+		assertNull(observed.get(Fields.WARNINGS),
+			"authoring diagnostics do not consume inference context");
 	}
 
 	@Test
@@ -254,7 +306,37 @@ public class LoadsTest {
 		write("w/ticker", Strings.create("42"));
 		Loads.Snapshot snap = resolve(Maps.of(Strings.create("w/ticker"), spec("volatile", CVMBool.TRUE)));
 		assertEquals(0, snap.exchanges().count());
-		assertEquals("42", result(snap.volatileElements(), 0));
+		assertEquals("42", result(observationEntries(snap, 0), 0));
+	}
+
+	@Test
+	public void testVolatileSkillUsesTheSameObservationLifecycle() {
+		AString path = Strings.create("w/watched-skill");
+		write(path.toString(), Maps.of(
+			"description", "Watched skill",
+			"content", Maps.of("inline", "WATCHED-SKILL-ONE")));
+		AMap<AString, ACell> loads = Maps.of(path, Maps.of(
+			"skill", CVMBool.TRUE,
+			"volatile", CVMBool.TRUE,
+			"budget", CVMLong.create(2000)));
+		Loads.Snapshot first = resolve(loads);
+		assertEquals(0, first.instructionElements().count(),
+			"a watched skill is not baked into the rendered prefix");
+		assertEquals(1, first.observations().count());
+		assertTrue(all(RT.ensureVector(RT.getIn(first.observations().get(0), "value")))
+			.contains("WATCHED-SKILL-ONE"));
+
+		AMap<AString, ACell> frame = GoalTreeContext.applyObservations(
+			GoalTreeContext.createFrame(""), first.observations(), 1L);
+		write(path.toString(), Maps.of(
+			"description", "Watched skill",
+			"content", Maps.of("inline", "WATCHED-SKILL-TWO")));
+		Loads.Snapshot second = resolve(loads);
+		AMap<AString, ACell> changed = GoalTreeContext.applyObservations(
+			frame, second.observations(), 2L);
+		String history = all(RT.ensureVector(changed.get(GoalTreeContext.K_CONVERSATION)));
+		assertTrue(history.contains("WATCHED-SKILL-ONE"), history);
+		assertTrue(history.contains("WATCHED-SKILL-TWO"), history);
 	}
 
 	@Test
@@ -277,10 +359,10 @@ public class LoadsTest {
 		Loads.Snapshot snap = resolve(loads);
 		assertEquals(1, snap.exchanges().count(), "pinned absence remains visible");
 		assertEquals(CVMBool.TRUE, RT.getIn(entry(snap.exchanges(), 0), "absent"));
-		assertEquals(1, snap.volatileElements().count(), "an erroring op entry is visible");
-		String error = RT.getIn(entry(snap.volatileElements(), 0), Fields.ERROR).toString();
+		assertEquals(1, snap.observations().count(), "an erroring op entry is visible");
+		String error = RT.getIn(entry(observationEntries(snap, 0), 0), Fields.ERROR).toString();
 		assertFalse(error.isBlank(), "the per-entry failure remains visible");
-		assertNull(RT.getIn(aggregate(snap.volatileElements(), true).get(1), "isError"),
+		assertNull(RT.getIn(observationMessages(snap, 0).get(1), "isError"),
 			"one failed item does not mark the whole aggregate result failed");
 		for (long i = 0; i < snap.diagnostics().count(); i++) {
 			ACell d = snap.diagnostics().get(i);
@@ -298,10 +380,10 @@ public class LoadsTest {
 			spec("text", longText, "budget", CVMLong.create(600)));
 		assertEquals(longText, result(resolve(live).exchanges(), 0));
 		// …but the same entry declared volatile is cut at its budget with a visible trailer.
-		AMap<AString, ACell> tail = Maps.of(Strings.create("note"),
+		AMap<AString, ACell> watched = Maps.of(Strings.create("note"),
 			spec("text", longText, "budget", CVMLong.create(600), "volatile", CVMBool.TRUE));
-		Loads.Snapshot snap = resolve(tail);
-		String text = result(snap.volatileElements(), 0);
+		Loads.Snapshot snap = resolve(watched);
+		String text = result(observationEntries(snap, 0), 0);
 		assertFalse(text.contains(longText), "not verbatim");
 		assertTrue(text.contains("more bytes beyond this entry's budget of 600"), text);
 		assertTrue(text.contains("reload it with a larger budget, or fetch the value with a tool"), text);
@@ -313,21 +395,22 @@ public class LoadsTest {
 		AMap<AString, ACell> opEntry = Maps.of(Strings.create("listing"),
 			spec("op", "v/test/ops/echo", "input", Maps.of(Strings.create("blob"), Strings.create("y".repeat(3000))),
 				"budget", CVMLong.create(300)));
-		String opText = result(resolve(opEntry).volatileElements(), 0);
+		Loads.Snapshot opSnapshot = resolve(opEntry);
+		String opText = result(observationEntries(opSnapshot, 0), 0);
 		assertTrue(opText.contains("/* String, 3.0KB */"), opText);
 		assertFalse(opText.contains("more bytes beyond"), opText);
 
 		// A short volatile entry is untouched, and the call half carries no content to cut.
 		AMap<AString, ACell> small = Maps.of(Strings.create("note"), spec("text", "short", "volatile", CVMBool.TRUE));
 		Loads.Snapshot fits = resolve(small);
-		assertEquals("short", result(fits.volatileElements(), 0));
+		assertEquals("short", result(observationEntries(fits, 0), 0));
 		assertEquals(CVMBool.FALSE, RT.getIn(fits.diagnostics().get(0), "truncated"));
 	}
 
 	// ========== placement in the assembled prompt ==========
 
 	@Test
-	public void testVolatileLoadsRenderAfterTheConversationAndBeforeTheNotices() {
+	public void testVolatileLoadsAppendToConversationOnlyWhenChanged() {
 		AMap<AString, ACell> loads = Maps.of(
 			Strings.create("brief"), spec("text", "STABLE-NOTE"),
 			Strings.create("fresh"), spec("op", "v/test/ops/echo", "input", Maps.of(Strings.create("k"), Strings.create("FRESH-RESULT"))));
@@ -336,36 +419,55 @@ public class LoadsTest {
 			(ACell) Maps.of("role", "assistant", "content", "", "toolCalls", Vectors.of(
 				Maps.of("id", "c1", "name", "covia_read", "arguments", "{}"))),
 			(ACell) Maps.of("role", "tool", "id", "c1", "name", "covia_read", "content", "x"));
-		Spec s = new Spec(engine, ctx, null, null, null, null, 0, null, null, null, null,
-			null, null, Vectors.of((ACell) Strings.create("hi")), true, loop, null, null, null, null)
-			.withLoads(snap, Vectors.empty(), loads);
+		AMap<AString, ACell> frame = GoalTreeContext.appendTurn(
+			GoalTreeContext.createFrame(""), Maps.of("role", "user", "content", "hi"));
+		Spec s = new Spec(engine, ctx, null, null, null, null, 0, null, true,
+			Vectors.empty(), Vectors.empty(), Vectors.empty(), loads,
+			Vectors.of((ACell) frame), Vectors.empty(), Vectors.empty(), true,
+			loop, null, Vectors.empty(), null, null)
+			.withLoads(snap, Vectors.empty());
+		frame = GoalTreeContext.applyObservations(frame,
+			ContextAssembler.observations(s, snap), 1L);
+		s = s.withFrames(Vectors.of((ACell) frame));
 		Prompt p = ContextAssembler.assemble(s);
 		AVector<ACell> m = p.messages();
-		// head, marker, brief call, brief result, "hi", assistant, tool, fresh call, fresh result, notices
+		// head, stable marker/call/result, "hi", watched call/result, tool loop, notices
 		assertEquals(10, m.count(), all(m));
 		assertEquals("user", RT.getIn(m.get(1), "role").toString());
 		assertEquals(ContextAssembler.LOAD_CONTEXT_REQUEST, content(m.get(1)), "the request precedes the live exchanges");
 		assertEquals("STABLE-NOTE", RT.getIn(m.get(3), "structuredContent", 0, "content").toString(),
 			"stable entry in the live surface");
 		assertEquals("hi", content(m.get(4)));
-		assertTrue(RT.getIn(m.get(8), "structuredContent", 0, "content").toString().contains("FRESH-RESULT"),
-			"volatile exchange after the tool loop");
+		assertTrue(RT.getIn(m.get(6), "structuredContent", 0, "content").toString().contains("FRESH-RESULT"),
+			"watched exchange is durable conversation before the tool loop");
 		assertTrue(content(m.get(9)).contains("Current date:"), "notices still last");
-		// The volatile exchange sits beyond every cache mark, so it busts only itself.
+		// A stable observation is now part of the append-only cache prefix.
 		assertEquals(4, p.marks().get(ContextAssembler.Band.LIVE));
-		assertEquals(5, p.marks().get(ContextAssembler.Band.CONVERSATION));
-		assertEquals(7, p.marks().get(ContextAssembler.Band.TOOL_LOOP));
-		assertEquals(Vectors.of(CVMLong.create(4), CVMLong.create(6)), p.cacheMarks());
+		assertEquals(7, p.marks().get(ContextAssembler.Band.CONVERSATION));
+		assertEquals(9, p.marks().get(ContextAssembler.Band.TOOL_LOOP));
+		assertEquals(Vectors.of(CVMLong.create(6), CVMLong.create(8)), p.cacheMarks());
+
+		AMap<AString, ACell> unchanged = GoalTreeContext.applyObservations(frame,
+			ContextAssembler.observations(s, resolve(loads)), 2L);
+		assertSame(frame, unchanged, "same watched value adds no tail or conversation bytes");
 	}
 
 	@Test
 	public void testNoMarkerWithoutLiveExchanges() {
-		// A volatile-only load follows the input, which is already a user turn: no marker.
+		// A watched-only load is appended after the user turn: no initial-load marker.
 		AMap<AString, ACell> loads = Maps.of(Strings.create("fresh"),
 			spec("op", "v/test/ops/echo", "input", Maps.of(Strings.create("k"), Strings.create("v"))));
-		Spec s = new Spec(engine, ctx, null, null, null, null, 0, null, null, null, null,
-			null, null, Vectors.of((ACell) Strings.create("hi")), true, null, null, null, null, null)
-			.withLoads(resolve(loads), Vectors.empty(), loads);
+		Loads.Snapshot snapshot = resolve(loads);
+		AMap<AString, ACell> frame = GoalTreeContext.appendTurn(
+			GoalTreeContext.createFrame(""), Maps.of("role", "user", "content", "hi"));
+		Spec s = new Spec(engine, ctx, null, null, null, null, 0, null, true,
+			Vectors.empty(), Vectors.empty(), Vectors.empty(), loads,
+			Vectors.of((ACell) frame), Vectors.empty(), Vectors.empty(), true,
+			Vectors.empty(), null, Vectors.empty(), null, null)
+			.withLoads(snapshot, Vectors.empty());
+		frame = GoalTreeContext.applyObservations(frame,
+			ContextAssembler.observations(s, snapshot), 1L);
+		s = s.withFrames(Vectors.of((ACell) frame));
 		AVector<ACell> m = ContextAssembler.assemble(s).messages();
 		// head, "hi", fresh call, fresh result, notices
 		assertEquals(5, m.count(), all(m));
@@ -411,7 +513,43 @@ public class LoadsTest {
 	// ========== context_load: the same forms from the agent ==========
 
 	private HarnessTools.LoadScope scope() {
-		return new HarnessTools.LoadScope(engine, ctx, Maps.empty(), Maps.empty(), true, "unavailable", null);
+		return new HarnessTools.LoadScope(engine, ctx, Maps.empty(), Maps.empty(), true,
+			"unavailable", null, Maps.empty());
+	}
+
+	@Test
+	public void testMoreToolsNeedsPresenceOrExplicitLoadCapability() {
+		AMap<AString, ACell> declaredConfig = Maps.of(Fields.TOOLS,
+			Vectors.of(Strings.create("v/test/ops/echo")));
+		HarnessTools.LoadScope deniedScope = new HarnessTools.LoadScope(
+			engine, ctx, Maps.empty(), Maps.empty(), true, "unavailable", null,
+			declaredConfig);
+		ACell denied = HarnessTools.moreTools(Maps.of("operations", Vectors.of(
+			(ACell) Strings.create("v/test/ops/echo"),
+			(ACell) Strings.create("v/ops/covia/read"))), deniedScope, name -> false);
+		assertTrue(denied.toString().contains("tool/load"), denied.toString());
+		assertEquals(0, deniedScope.loads.count(), "the whole mixed batch must be denied atomically");
+
+		ACell request = Maps.of("operations",
+			Vectors.of(Strings.create("v/test/ops/echo")));
+		HarnessTools.LoadScope declaredScope = new HarnessTools.LoadScope(
+			engine, ctx, Maps.empty(), Maps.empty(), true, "unavailable", null,
+			declaredConfig);
+		ACell declared = HarnessTools.moreTools(request, declaredScope, name -> false);
+		assertNotNull(RT.getIn(declared, "path"), declared.toString());
+		ACell declaredLoad = declaredScope.loads.get(
+			RT.ensureString(RT.getIn(declared, "path")));
+		assertNull(RT.getIn(declaredLoad, Loads.K_VOLATILE),
+			"tool-only loads should omit the non-volatile default");
+		assertFalse(Loads.isVolatile(declaredLoad));
+
+		RequestContext loadGranted = ctx.withCaps(Vectors.of(Capability.create(
+			Strings.create("v/test/ops/echo"), Abilities.TOOL_LOAD)));
+		HarnessTools.LoadScope grantedScope = new HarnessTools.LoadScope(
+			engine, loadGranted, Maps.empty(), Maps.empty(), true, "unavailable", null,
+			Maps.empty());
+		ACell granted = HarnessTools.moreTools(request, grantedScope, name -> false);
+		assertNotNull(RT.getIn(granted, "path"), granted.toString());
 	}
 
 	@Test
@@ -429,7 +567,7 @@ public class LoadsTest {
 			Strings.create("id"), Strings.create("listing"),
 			Strings.create("op"), Strings.create("v/ops/covia/list"),
 			Strings.create("input"), Maps.of(Fields.PATH, Strings.create("w"))), scope);
-		assertTrue(RT.getIn(fresh, "note").toString().contains("never cached"), fresh.toString());
+		assertTrue(RT.getIn(fresh, "note").toString().contains("appends only when changed"), fresh.toString());
 		assertTrue(Loads.isVolatile(scope.loads.get(Strings.create("listing"))));
 		assertEquals("v/ops/covia/list", RT.getIn(scope.loads, "listing", "op").toString());
 
@@ -441,7 +579,7 @@ public class LoadsTest {
 		assertFalse(Loads.isVolatile(scope.loads.get(Strings.create("pinned-listing"))));
 
 		// The stored specs are what a declared tier would hold — they render the same way.
-		AVector<ACell> live = aggregate(resolve(scope.loads).exchanges(), false);
+		AVector<ACell> live = aggregate(resolve(scope.loads).exchanges());
 		assertTrue(all(live).contains("Keep it short."), all(live));
 		assertEquals(ContextAssembler.LOADED_CONTEXT_TOOL,
 			RT.getIn(live.get(0), "toolCalls", 0, "name").toString());
@@ -459,7 +597,9 @@ public class LoadsTest {
 		scope.loads = first.loads();
 		assertEquals("VALUE-ONE",
 			RT.getIn(first.messages().get(1), "structuredContent", "w/reloadable", "content").toString());
-		assertEquals("context:call-1", RT.getIn(first.messages().get(0), "toolCalls", 0, "id").toString());
+		AString firstId = RT.ensureString(RT.getIn(first.messages().get(0), "toolCalls", 0, "id"));
+		assertTrue(ToolCallIds.valid(firstId), firstId.toString());
+		assertEquals(firstId, RT.getIn(first.messages().get(1), "id"));
 
 		// Mutation alone neither re-reads nor re-renders a persistent entry.
 		write("w/reloadable", Strings.create("VALUE-TWO"));
@@ -478,6 +618,78 @@ public class LoadsTest {
 		AVector<ACell> history = (AVector<ACell>) first.messages().concat(second.messages());
 		assertEquals(first.messages(), history.slice(0, first.messages().count()),
 			"reload preserves the old vector as an exact prefix");
+	}
+
+	@Test
+	public void testCompactionUsesTheOrdinaryInitialLoadPathWithCurrentSources() {
+		AString path = Strings.create("w/skills/rebuild-current");
+		write(path.toString(), Maps.of(
+			Fields.DESCRIPTION, Strings.create("Old skill"),
+			Fields.CONTENT, Maps.of("inline", "OLD BODY"),
+			Skills.K_SKILL, Maps.of(
+				Fields.TOOLS, Vectors.of(Strings.create("v/test/ops/echo")),
+				Skills.K_SKILLS, Vectors.of(Strings.create("w/skills/old-child")))));
+		Skills.ResolvedSkill old = Skills.resolveRef(engine, ctx, path);
+		AMap<AString, ACell> declarations = Maps.of(path,
+			Skills.buildSkillLoadMeta(2000, old));
+		Loads.Append loaded = Loads.append(engine, ctx, declarations, path,
+			Labels.BRACKET, Strings.create("context:old"));
+		assertTrue(all(loaded.messages()).contains("OLD BODY"));
+		assertEquals("test_echo", RT.getIn(
+			loaded.loads().get(path), Loads.K_TOOL_BINDINGS, 0L,
+			Fields.DEFINITION, Fields.NAME).toString());
+
+		AMap<AString, ACell> frame = GoalTreeContext.createFrame("reload", loaded.loads());
+		for (long i = 0; i < loaded.messages().count(); i++) {
+			frame = GoalTreeContext.appendTurn(frame, loaded.messages().get(i));
+		}
+
+		// Compaction is the reset boundary: edits before it become the current
+		// initial context, exactly as they would for a newly-created conversation.
+		write(path.toString(), Maps.of(
+			Fields.DESCRIPTION, Strings.create("Current skill"),
+			Fields.CONTENT, Maps.of("inline", "CURRENT BODY"),
+			Skills.K_SKILL, Maps.of(
+				Fields.TOOLS, Vectors.of(Strings.create("v/ops/covia/read")),
+				Skills.K_SKILLS, Vectors.of(Strings.create("w/skills/current-child")))));
+		AMap<AString, ACell> compacted = GoalTreeContext.compactFrame(frame, "kept the result");
+		AMap<AString, ACell> compactedLoads = GoalTreeContext.getLoads(compacted);
+		assertNull(RT.getIn(compactedLoads.get(path), Loads.K_APPENDED));
+		assertNull(RT.getIn(compactedLoads.get(path), Loads.K_TOOL_BINDINGS));
+
+		Loads.Snapshot initial = Loads.resolveForInference(engine, ctx, compactedLoads,
+			(name, owner) -> false, Labels.BRACKET, true);
+		assertTrue(all(initial.instructionElements()).contains("CURRENT BODY"));
+		assertFalse(all(initial.instructionElements()).contains("OLD BODY"));
+		assertEquals("covia_read", RT.getIn(initial.tools().get(0), Fields.NAME).toString());
+		assertEquals("v/ops/covia/read", RT.getIn(
+			initial.effectiveLoads().get(path), Fields.TOOLS, 0L).toString());
+		assertEquals("w/skills/current-child", RT.getIn(
+			initial.effectiveLoads().get(path), Skills.K_SKILLS, 0L).toString());
+
+		Spec rebuild = new Spec(engine, ctx, ctx, Maps.empty(), null, null,
+			100_000, Labels.BRACKET, true, initial.tools(), null,
+			initial.effectiveLoads(), Vectors.of((ACell) compacted),
+			Vectors.empty(), Vectors.empty(), true, Vectors.empty(), null,
+			Vectors.empty(), null, null)
+			.withLoads(initial, initial.tools());
+		ContextAssembler.Rendered rendered = ContextAssembler.initialise(rebuild);
+		AMap<AString, ACell> persisted = ContextAssembler.applyRendering(
+			compacted, rebuild, rendered);
+		assertNotNull(persisted.get(GoalTreeContext.K_RENDERED_CONTEXT));
+		assertEquals("covia_read", RT.getIn(
+			GoalTreeContext.getLoads(persisted).get(path), Loads.K_TOOL_BINDINGS,
+			0L, Fields.DEFINITION, Fields.NAME).toString(),
+			"the same atomic update retains the current dispatch binding");
+
+		Loads.Snapshot cached = Loads.resolveForInference(engine, ctx,
+			GoalTreeContext.getLoads(persisted), (name, owner) -> false,
+			Labels.BRACKET, false);
+		assertEquals(1, cached.tools().count());
+		assertEquals("v/ops/covia/read", cached.operation("covia_read").toString(),
+			"later calls use the binding installed with the rebuilt prefix");
+		assertTrue(cached.instructionElements().isEmpty(),
+			"the body now comes from renderedContext rather than being appended again");
 	}
 
 	@Test
@@ -506,7 +718,7 @@ public class LoadsTest {
 		AMap<AString, ACell> outer = ContextChain.declaredLoads(Maps.of(
 			Strings.create("pinned"), spec("text", "operator context")), "config.loads");
 		HarnessTools.LoadScope scope = new HarnessTools.LoadScope(
-			engine, ctx, Maps.empty(), outer, true, "unavailable", null);
+			engine, ctx, Maps.empty(), outer, true, "unavailable", null, Maps.empty());
 		AVector<ACell> declaredTools = Vectors.of(
 			(ACell) HarnessTools.DEF_CONTEXT_LOAD,
 			(ACell) HarnessTools.DEF_CONTEXT_UNLOAD);

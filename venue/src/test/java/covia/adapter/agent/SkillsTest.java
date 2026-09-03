@@ -1,6 +1,7 @@
 package covia.adapter.agent;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -14,6 +15,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -25,7 +27,9 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.AssetAdapter;
+import covia.api.Abilities;
 import covia.api.Fields;
+import covia.exception.AuthException;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
@@ -93,10 +97,34 @@ public class SkillsTest {
 			"content", Maps.of("inline", Strings.create("Do not expose"))));
 
 		RequestContext denied = ctx.withCaps(Vectors.empty());
-		assertThrows(covia.exception.AuthException.class, () ->
+		assertThrows(AuthException.class, () ->
 			Skills.load(engine, denied, Skills.SkillSources.ofSkillsets(Vectors.of(Strings.create("w/skills"))),
-				Maps.of("ref", Strings.create("w/skills/private")), Maps.empty()),
+				Maps.of("name", Strings.create("private")), Maps.empty()),
 			"skill_load is a read action even though it is implemented by the harness");
+	}
+
+	@Test
+	public void testDirectSkillLoadNeedsPresenceOrExplicitLoadCapability() {
+		write("w/skills/offered", Maps.of(
+			Fields.DESCRIPTION, Strings.create("Advertised instructions")));
+		write("w/private/arbitrary", Maps.of(
+			Fields.DESCRIPTION, Strings.create("Unadvertised instructions")));
+		Skills.SkillSources sources = Skills.SkillSources.ofSkillsets(
+			Vectors.of(Strings.create("w/skills")));
+
+		assertDoesNotThrow(() -> Skills.load(engine, ctx, sources,
+			Maps.of("ref", Strings.create("w/skills/offered")), Maps.empty()));
+		AuthException denied = assertThrows(AuthException.class, () ->
+			Skills.load(engine, ctx, sources,
+				Maps.of("ref", Strings.create("w/private/arbitrary")), Maps.empty()));
+		assertTrue(denied.getMessage().contains("skill/load"), denied.getMessage());
+
+		RequestContext granted = ctx.withCaps(Vectors.of(
+			(ACell) Capability.create(Strings.create("w/private/arbitrary"), Abilities.SKILL_LOAD),
+			(ACell) Capability.create(Strings.create("w/private/arbitrary"), Capability.CRUD_READ),
+			(ACell) Capability.create(Strings.create("w/private/arbitrary"), Abilities.ASSET_READ)));
+		assertDoesNotThrow(() -> Skills.load(engine, granted, sources,
+			Maps.of("ref", Strings.create("w/private/arbitrary")), Maps.empty()));
 	}
 
 	// ========== resolveRef: the body chain ==========
@@ -553,16 +581,19 @@ public class SkillsTest {
 		AMap<AString, ACell> loads = Maps.of(
 			Strings.create("w/skills/x"), Skills.buildSkillLoadMeta(2000, s));
 
-		java.util.Map<String, AString> toolMap = new java.util.HashMap<>();
-		AVector<ACell> defs = ToolPalette.loadsToolDefs(engine, ctx, loads,
-			java.util.Set.of(), toolMap);
+		ToolPalette.Palette palette = ToolPalette.loadPalette(
+			engine, ctx, loads, (name, owner) -> false, true).active();
+		AVector<ACell> defs = palette.tools();
 		assertEquals(1, defs.count());
 		assertEquals("covia_read", RT.getIn(defs.get(0), Fields.NAME).toString());
-		assertEquals("v/ops/covia/read", toolMap.get("covia_read").toString());
+		assertEquals("v/ops/covia/read", palette.operation("covia_read").toString());
+		assertNotNull(palette.activityLabel("covia_read"),
+			"a loaded tool retains its UI label outside the provider definition");
+		assertNull(RT.getIn(defs.get(0), Fields.ACTIVITY_LABEL));
 
 		// Dedup against names already offered outside the loads mechanism
-		AVector<ACell> none = ToolPalette.loadsToolDefs(engine, ctx, loads,
-			java.util.Set.of("covia_read"), new java.util.HashMap<>());
+		AVector<ACell> none = Loads.resolve(engine, ctx, loads,
+			java.util.Set.of("covia_read"), Labels.BRACKET).tools();
 		assertEquals(0, none.count());
 
 		// A PLAIN (non-skill) entry with tools contributes too — kind-agnostic.
@@ -570,8 +601,8 @@ public class SkillsTest {
 			Strings.create("w/data/pack"), Maps.of(
 				Strings.create("budget"), CVMLong.create(500),
 				Fields.TOOLS, Vectors.of(Strings.create("v/ops/covia/list"))));
-		AVector<ACell> plainDefs = ToolPalette.loadsToolDefs(engine, ctx, plain,
-			java.util.Set.of(), new java.util.HashMap<>());
+		AVector<ACell> plainDefs = Loads.resolve(engine, ctx, plain,
+			java.util.Set.of(), Labels.BRACKET).tools();
 		assertEquals(1, plainDefs.count());
 
 		// Unresolvable tool refs are skipped (buildConfigTools' skip-with-warn).
@@ -579,8 +610,8 @@ public class SkillsTest {
 			Strings.create("w/skills/y"), Maps.of(
 				Strings.create("skill"), convex.core.data.prim.CVMBool.TRUE,
 				Fields.TOOLS, Vectors.of(Strings.create("v/ops/no/such/op"))));
-		assertEquals(0, ToolPalette.loadsToolDefs(engine, ctx, broken,
-			java.util.Set.of(), new java.util.HashMap<>()).count());
+		assertEquals(0, Loads.resolve(engine, ctx, broken,
+			java.util.Set.of(), Labels.BRACKET).tools().count());
 	}
 
 	// ========== frontmatter parser ==========

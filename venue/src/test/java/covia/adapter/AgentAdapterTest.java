@@ -18,18 +18,21 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Blob;
 import convex.core.data.Cells;
+import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import convex.core.util.JSON;
 import covia.adapter.agent.ContextAssembler;
 import covia.adapter.agent.GoalTreeContext;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.venue.Admission;
 import covia.venue.AgentState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -225,6 +228,154 @@ public class AgentAdapterTest {
 		assertTrue(denied.getErrorMessage().contains("agent/write"));
 		assertEquals(AgentState.SLEEPING,
 			engine.getVenueState().users().get(ownerDID).agent("read-only-agent").getStatus());
+	}
+
+	// ========== Target-side admission (#447) ==========
+
+	/** Creates an agent whose transition completes tasks immediately, with an optional accepts policy. */
+	private AString createAgentAs(RequestContext creator, String name, ACell accepts) {
+		AMap<AString, ACell> config = Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete");
+		if (accepts != null) config = config.assoc(Fields.ACCEPTS, accepts);
+		ACell created = engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, name, Fields.CONFIG, config), creator).awaitResult(5000);
+		return RT.ensureString(RT.getIn(created, Fields.ADDRESS));
+	}
+
+	private ACell requestAs(RequestContext caller, AString address) {
+		return engine.jobs().invokeOperation("v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, address, Fields.INPUT, Maps.of("ask", "hello")), caller)
+			.awaitResult(5000);
+	}
+
+	private void assertRequestDenied(RequestContext caller, AString address) {
+		Job denied = engine.jobs().invokeOperation("v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, address, Fields.INPUT, Maps.of("ask", "hello")), caller);
+		assertThrows(covia.exception.JobFailedException.class, () -> denied.awaitResult(5000));
+		assertTrue(denied.getErrorMessage().contains("agent/request")
+			&& denied.getErrorMessage().contains("accepts"), denied.getErrorMessage());
+	}
+
+	@Test
+	public void testAdmissionDefaultAdmitsNobody() {
+		AString address = createAgentAs(RequestContext.of(ALICE_DID), "private-by-default", null);
+		assertFalse(engine.crossUserAllows(RequestContext.of(BOB_DID), address, Abilities.AGENT_REQUEST));
+		assertFalse(engine.crossUserAllows(engine.venueContext(), address, Abilities.AGENT_REQUEST));
+		assertRequestDenied(RequestContext.of(BOB_DID), address);
+	}
+
+	@Test
+	public void testAdmissionVenueAdmitsTheOperatorAndItsAgentsOnly() {
+		AString address = createAgentAs(RequestContext.of(ALICE_DID), "ops-agent", Admission.VENUE);
+		RequestContext operator = engine.venueContext();
+		RequestContext venueAgent = RequestContext.ofAgent(engine.getDIDString(), Strings.create("odin"));
+		RequestContext bob = RequestContext.of(BOB_DID);
+		RequestContext bobAgent = RequestContext.ofAgent(BOB_DID, Strings.create("helper"));
+
+		assertTrue(engine.crossUserAllows(operator, address, Abilities.AGENT_REQUEST));
+		assertTrue(engine.crossUserAllows(operator, address, Abilities.AGENT_MESSAGE));
+		assertTrue(engine.crossUserAllows(venueAgent, address, Abilities.AGENT_REQUEST));
+		assertFalse(engine.crossUserAllows(bob, address, Abilities.AGENT_REQUEST),
+			"'venue' is the operator, not every user hosted here");
+		assertFalse(engine.crossUserAllows(bobAgent, address, Abilities.AGENT_REQUEST));
+
+		assertNotNull(requestAs(operator, address));
+		assertRequestDenied(bob, address);
+	}
+
+	@Test
+	public void testAdmissionAllowlistIsExactPerPrincipal() {
+		RequestContext bob = RequestContext.of(BOB_DID);
+		RequestContext bobAgent = RequestContext.ofAgent(BOB_DID, Strings.create("helper"));
+		RequestContext carol = RequestContext.of(Strings.create(ALICE_DID + "-carol"));
+
+		AString forBob = createAgentAs(RequestContext.of(ALICE_DID), "for-bob", Vectors.of(BOB_DID));
+		assertTrue(engine.crossUserAllows(bob, forBob, Abilities.AGENT_REQUEST));
+		assertFalse(engine.crossUserAllows(bobAgent, forBob, Abilities.AGENT_REQUEST),
+			"a user DID does not admit that user's agents");
+		assertFalse(engine.crossUserAllows(carol, forBob, Abilities.AGENT_REQUEST));
+		assertFalse(engine.crossUserAllows(engine.venueContext(), forBob, Abilities.AGENT_REQUEST));
+		assertNotNull(requestAs(bob, forBob));
+		assertRequestDenied(bobAgent, forBob);
+
+		AString forHelper = createAgentAs(RequestContext.of(ALICE_DID), "for-helper",
+			Vectors.of(covia.grid.Principals.agentDID(BOB_DID, Strings.create("helper"))));
+		assertTrue(engine.crossUserAllows(bobAgent, forHelper, Abilities.AGENT_REQUEST));
+		assertFalse(engine.crossUserAllows(bob, forHelper, Abilities.AGENT_REQUEST),
+			"an agent DID does not admit its owner");
+		engine.getVenueState().users().ensure(BOB_DID);
+		assertNotNull(requestAs(bobAgent, forHelper));
+		assertRequestDenied(bob, forHelper);
+	}
+
+	@Test
+	public void testAdmissionCoversTalkingOnly() {
+		AString address = createAgentAs(RequestContext.of(ALICE_DID), "talk-only", Vectors.of(BOB_DID));
+		RequestContext bob = RequestContext.of(BOB_DID);
+		assertTrue(engine.crossUserAllows(bob, address, Abilities.AGENT_MESSAGE));
+		assertFalse(engine.crossUserAllows(bob, address, Capability.CRUD_READ));
+		assertFalse(engine.crossUserAllows(bob, address, Abilities.AGENT_WRITE));
+		assertFalse(engine.crossUserAllows(bob, address, Abilities.AGENT_FORK));
+		// Nor the agent's workspace: admission is one resource shape, the record itself.
+		assertFalse(engine.crossUserAllows(bob, Strings.create(address + "/n/notes"), Abilities.AGENT_REQUEST));
+
+		ACell delivered = engine.jobs().invokeOperation("v/ops/agent/message",
+			Maps.of(Fields.AGENT_ID, address, Fields.MESSAGE, "hello"), bob).awaitResult(5000);
+		assertNotNull(delivered);
+		Job info = engine.jobs().invokeOperation("v/ops/agent/info", Maps.of(Fields.AGENT_ID, address), bob);
+		assertThrows(covia.exception.JobFailedException.class, () -> info.awaitResult(5000));
+		Job suspend = engine.jobs().invokeOperation("v/ops/agent/suspend", Maps.of(Fields.AGENT_ID, address), bob);
+		assertThrows(covia.exception.JobFailedException.class, () -> suspend.awaitResult(5000));
+		assertEquals(AgentState.SLEEPING,
+			awaitFinished(engine.getVenueState().users().get(ALICE_DID).agent("talk-only")));
+	}
+
+	@Test
+	public void testAdmissionNeverAdmitsThePublicPrincipal() {
+		AString publicDID = Strings.create(engine.getDIDString() + ":public");
+		AString address = createAgentAs(RequestContext.of(ALICE_DID), "listed-public", Vectors.of(publicDID));
+		assertFalse(engine.crossUserAllows(RequestContext.of(publicDID), address, Abilities.AGENT_REQUEST),
+			"listing the public principal explicitly still admits nobody anonymous");
+	}
+
+	@Test
+	public void testAdmissionOdinShapeOperatorAgentAcceptsOneAssistant() {
+		// A venue-owned administrator that takes requests from exactly one user's
+		// assistant — the Brightside case in #447, without any bridge.
+		AString assistant = covia.grid.Principals.agentDID(ALICE_DID, Strings.create("assistant"));
+		AString odin = createAgentAs(engine.venueContext(), "odin-" + System.nanoTime(), Vectors.of(assistant));
+		assertTrue(odin.startsWith(engine.getDIDString() + "/g/"), odin.toString());
+
+		RequestContext assistantCtx = RequestContext.ofAgent(ALICE_DID, Strings.create("assistant"));
+		assertTrue(engine.crossUserAllows(assistantCtx, odin, Abilities.AGENT_REQUEST));
+		assertFalse(engine.crossUserAllows(RequestContext.of(ALICE_DID), odin, Abilities.AGENT_REQUEST),
+			"exact: the owner of the listed assistant is not admitted");
+		assertFalse(engine.crossUserAllows(RequestContext.ofAgent(BOB_DID, Strings.create("assistant")),
+			odin, Abilities.AGENT_REQUEST));
+
+		engine.getVenueState().users().ensure(ALICE_DID);
+		assertNotNull(requestAs(assistantCtx, odin));
+		assertRequestDenied(RequestContext.of(ALICE_DID), odin);
+	}
+
+	@Test
+	public void testAdmissionMalformedPolicyIsRejectedAtAuthorTime() {
+		for (ACell bad : new ACell[] {Strings.create("everyone"), Vectors.of(Strings.create("bob")), CVMLong.create(42)}) {
+			Job create = engine.jobs().invokeOperation("v/ops/agent/create",
+				Maps.of(Fields.AGENT_ID, "bad-accepts", Fields.CONFIG, Maps.of(Fields.ACCEPTS, bad)),
+				RequestContext.of(ALICE_DID));
+			assertThrows(covia.exception.JobFailedException.class, () -> create.awaitResult(5000));
+			assertTrue(create.getErrorMessage().contains("config.accepts"), create.getErrorMessage());
+		}
+		User alice = engine.getVenueState().users().get(ALICE_DID);
+		assertTrue(alice == null || alice.agent("bad-accepts") == null, "a rejected create leaves no agent");
+
+		AString address = createAgentAs(RequestContext.of(ALICE_DID), "later-bad", Admission.VENUE);
+		Job update = engine.jobs().invokeOperation("v/ops/agent/update",
+			Maps.of(Fields.AGENT_ID, "later-bad", Fields.CONFIG, Maps.of(Fields.ACCEPTS, Strings.create("anyone"))),
+			RequestContext.of(ALICE_DID));
+		assertThrows(covia.exception.JobFailedException.class, () -> update.awaitResult(5000));
+		assertTrue(engine.crossUserAllows(engine.venueContext(), address, Abilities.AGENT_REQUEST),
+			"a rejected update leaves the policy untouched");
 	}
 
 	@Test
@@ -486,6 +637,43 @@ public class AgentAdapterTest {
 			assertNull(RT.getIn(result, Fields.WARNINGS),
 				"secret reference " + ref + " → no advisory");
 		}
+	}
+
+	@Test
+	public void testCreateAndUpdateWarnOnUnclassifiedContextOperations() {
+		Hash contextHash = engine.storeAsset(JSON.printPretty(Maps.of(
+			Fields.NAME, Strings.create("Legacy context echo"),
+			Fields.OPERATION, Maps.of(
+				Fields.ADAPTER, Strings.create("test:echo"),
+				Fields.INPUT, Maps.empty()))), null);
+		Hash loadHash = engine.storeAsset(JSON.printPretty(Maps.of(
+			Fields.NAME, Strings.create("Legacy load echo"),
+			Fields.OPERATION, Maps.of(
+				Fields.ADAPTER, Strings.create("test:echo"),
+				Fields.INPUT, Maps.empty()))), null);
+		String contextOp = "a/" + contextHash.toHexString();
+		String loadOp = "a/" + loadHash.toHexString();
+		AMap<AString, ACell> config = Maps.of(
+			Fields.CONTEXT, Vectors.of(Maps.of(Fields.OP, contextOp)),
+			Fields.LOADS, Maps.of("legacy-load", Maps.of(Fields.OP, loadOp)));
+
+		RequestContext alice = RequestContext.of(ALICE_DID);
+		ACell created = engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(
+			Fields.AGENT_ID, "unclassified-context-op-agent",
+			Fields.CONFIG, config), alice).awaitResult(5000);
+		ACell createWarnings = RT.getIn(created, Fields.WARNINGS);
+		assertNotNull(createWarnings, created.toString());
+		assertTrue(createWarnings.toString().contains(contextOp), createWarnings.toString());
+		assertTrue(createWarnings.toString().contains(loadOp), createWarnings.toString());
+		assertTrue(createWarnings.toString().contains("operation.readOnly"), createWarnings.toString());
+
+		ACell updated = engine.jobs().invokeOperation("v/ops/agent/update", Maps.of(
+			Fields.AGENT_ID, "unclassified-context-op-agent",
+			Fields.CONFIG, Maps.of("model", "gpt-5.4-mini")), alice).awaitResult(5000);
+		ACell updateWarnings = RT.getIn(updated, Fields.WARNINGS);
+		assertNotNull(updateWarnings, updated.toString());
+		assertTrue(updateWarnings.toString().contains(contextOp), updateWarnings.toString());
+		assertTrue(updateWarnings.toString().contains(loadOp), updateWarnings.toString());
 	}
 
 	// ========== Agent ops via the internal path (the LLM tool-loop seam) ==========
@@ -754,7 +942,10 @@ public class AgentAdapterTest {
 		String context = engine.jobs().invokeOperation("v/ops/agent/context",
 			Maps.of(Fields.AGENT_ID, "metadata-reader"), RequestContext.of(ALICE_DID))
 			.awaitResult(5000).toString();
-		assertTrue(context.contains("Operation: " + toolPath), context);
+		assertTrue(context.contains(toolPath),
+			"the inspection-only palette retains the operation route: " + context);
+		assertFalse(context.contains("Operation: " + toolPath),
+			"the provider description must not repeat inspection provenance: " + context);
 		assertFalse(context.contains("Configured tools unavailable"), context);
 	}
 
@@ -798,6 +989,89 @@ public class AgentAdapterTest {
 		AMap<AString, ACell> wakeUp = RT.ensureMap(engine.jobs().invokeOperation("v/ops/agent/context",
 			Maps.of(Fields.AGENT_ID, "sim-agent"), RequestContext.of(ALICE_DID)).awaitResult(5000));
 		assertTrue(wakeUp.toString().contains("[No input]"), wakeUp.toString());
+	}
+
+	@Test
+	public void testUncachedModelsRenderEphemerallyOnBothRuntimes() {
+		RequestContext alice = RequestContext.of(ALICE_DID);
+		for (String runtime : new String[] {"llmagent", "goaltree"}) {
+			String agentId = "uncached-" + runtime;
+			String promptPath = "w/context/" + agentId;
+			engine.jobs().invokeOperation("v/ops/covia/write",
+				Maps.of(Fields.PATH, promptPath, Fields.VALUE, "FIRST_IDENTITY"), alice)
+				.awaitResult(5000);
+			engine.jobs().invokeOperation("v/ops/agent/create",
+				Maps.of(Fields.AGENT_ID, agentId, Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/" + runtime + "/chat",
+					"llmOperation", "v/test/ops/llm",
+					"systemPrompt", Maps.of("ref", promptPath),
+					"modelProfile", Maps.of("options",
+						Maps.of("cachePrefix", CVMBool.FALSE)))), alice)
+				.awaitResult(5000);
+
+			AMap<AString, ACell> inspected = RT.ensureMap(engine.jobs().invokeOperation(
+				"v/ops/agent/context", Maps.of(Fields.AGENT_ID, agentId,
+					Fields.MESSAGE, "inspect"), alice).awaitResult(5000));
+			assertNull(inspected.get(Strings.intern("cacheMarks")), runtime);
+			assertTrue(inspected.get(Fields.MESSAGES).toString().contains("FIRST_IDENTITY"),
+				runtime + ": " + inspected);
+
+			ACell first = engine.jobs().invokeOperation("v/ops/agent/chat",
+				Maps.of(Fields.AGENT_ID, agentId, Fields.MESSAGE, "first"), alice)
+				.awaitResult(5000);
+			AString sidHex = RT.ensureString(RT.getIn(first, Fields.SESSION_ID));
+			Blob sid = Blob.fromHex(sidHex.toString());
+			AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent(agentId);
+			assertNull(RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO,
+				"renderedContext"), runtime + " persisted an unused cache projection");
+
+			engine.jobs().invokeOperation("v/ops/covia/write",
+				Maps.of(Fields.PATH, promptPath, Fields.VALUE, "SECOND_IDENTITY"), alice)
+				.awaitResult(5000);
+			AMap<AString, ACell> refreshed = RT.ensureMap(engine.jobs().invokeOperation(
+				"v/ops/agent/context", Maps.of(Fields.AGENT_ID, agentId,
+					Fields.SESSION_ID, sidHex, Fields.MESSAGE, "inspect again"), alice)
+				.awaitResult(5000));
+			assertTrue(refreshed.get(Fields.MESSAGES).toString().contains("SECOND_IDENTITY"),
+				runtime + " reused stale ambient rendering: " + refreshed);
+			assertNull(refreshed.get(Strings.intern("cacheMarks")), runtime);
+
+			engine.jobs().invokeOperation("v/ops/agent/chat",
+				Maps.of(Fields.AGENT_ID, agentId, Fields.SESSION_ID, sidHex,
+					Fields.MESSAGE, "second"), alice).awaitResult(5000);
+			assertNull(RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO,
+				"renderedContext"), runtime + " materialised on the second cycle");
+		}
+	}
+
+	@Test
+	public void testDisablingCachingRemovesExistingProjectionOnBothRuntimes() {
+		RequestContext alice = RequestContext.of(ALICE_DID);
+		for (String runtime : new String[] {"llmagent", "goaltree"}) {
+			String agentId = "disable-cache-" + runtime;
+			engine.jobs().invokeOperation("v/ops/agent/create",
+				Maps.of(Fields.AGENT_ID, agentId, Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/" + runtime + "/chat",
+					"llmOperation", "v/test/ops/llm")), alice).awaitResult(5000);
+			ACell first = engine.jobs().invokeOperation("v/ops/agent/chat",
+				Maps.of(Fields.AGENT_ID, agentId, Fields.MESSAGE, "cached"), alice)
+				.awaitResult(5000);
+			AString sidHex = RT.ensureString(RT.getIn(first, Fields.SESSION_ID));
+			Blob sid = Blob.fromHex(sidHex.toString());
+			AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent(agentId);
+			assertNotNull(RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO,
+				"renderedContext"), runtime + " did not use the default cached policy");
+
+			engine.jobs().invokeOperation("v/ops/agent/update",
+				Maps.of(Fields.AGENT_ID, agentId, Fields.CONFIG, Maps.of(
+					"modelProfile", Maps.of("options",
+						Maps.of("cachePrefix", CVMBool.FALSE)))), alice).awaitResult(5000);
+			engine.jobs().invokeOperation("v/ops/agent/chat",
+				Maps.of(Fields.AGENT_ID, agentId, Fields.SESSION_ID, sidHex,
+					Fields.MESSAGE, "uncached"), alice).awaitResult(5000);
+			assertNull(RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO,
+				"renderedContext"), runtime + " retained a disabled cache projection");
+		}
 	}
 
 	/** Configurable harness tools are opt-in on every runtime
@@ -870,34 +1144,65 @@ public class AgentAdapterTest {
 		assertNull(on.get(Strings.intern("toolCalling")), "absent means the norm");
 	}
 
-	/** more_tools on llmagent: definitions append as state and dispatch through
-	 *  the fixed fallback, exactly as on goaltree. */
+	/** Tool-only loads persist and reconstruct dispatch across both runtimes. */
 	@Test
-	public void testMoreToolsOnLlmagent() {
-		engine.jobs().invokeOperation("v/ops/agent/create",
-			Maps.of(Fields.AGENT_ID, "more-tools-llm",
-				Fields.CONFIG, Maps.of(
-					Fields.OPERATION, "v/ops/llmagent/chat",
-					"llmOperation", "v/test/ops/moretoolsllm",
-					Fields.TOOLS, Vectors.of(Strings.create("more_tools")))),
-			RequestContext.of(ALICE_DID)).awaitResult(5000);
-		ACell chat = engine.jobs().invokeOperation("v/ops/agent/chat",
-			Maps.of(Fields.AGENT_ID, "more-tools-llm", Fields.MESSAGE, "extend yourself"),
-			RequestContext.of(ALICE_DID)).awaitResult(15000);
-		String response = RT.getIn(chat, Fields.RESPONSE).toString();
-		assertTrue(response.startsWith("MORE_TOOLS_RESULT:"), response);
+	public void testMoreToolsPersistAcrossRuntimes() {
+		for (String runtime : new String[] {"llmagent", "goaltree"}) {
+			String agentId = "more-tools-" + runtime;
+			engine.jobs().invokeOperation("v/ops/agent/create",
+				Maps.of(Fields.AGENT_ID, agentId,
+					Fields.CONFIG, Maps.of(
+						Fields.OPERATION, "v/ops/" + runtime + "/chat",
+						"llmOperation", "v/test/ops/moretoolsllm",
+						Fields.TOOLS, Vectors.of(Strings.create("more_tools")),
+						"caps", Vectors.of(
+							(ACell) Capability.create(Strings.create("v/test/ops/echo"), Abilities.TOOL_LOAD),
+							(ACell) Capability.create(Strings.create("v/test/ops"), Strings.create("invoke"))))),
+				RequestContext.of(ALICE_DID)).awaitResult(5000);
+			ACell chat = engine.jobs().invokeOperation("v/ops/agent/chat",
+				Maps.of(Fields.AGENT_ID, agentId, Fields.MESSAGE, "extend yourself"),
+				RequestContext.of(ALICE_DID)).awaitResult(15000);
+			String response = RT.getIn(chat, Fields.RESPONSE).toString();
+			assertTrue(response.startsWith("MORE_TOOLS_RESULT:"), runtime + ": " + response);
 
-		// The record shows a stable palette and an appended tool-addition event.
-		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("more-tools-llm");
-		TestEngine.awaitTimelineCount(agent, 1, 10000);
-		AVector<ACell> inferences = RT.ensureVector(RT.getIn(agent.getTimeline().get(0), Fields.INFERENCES));
-		assertEquals(3, inferences.count(), "more_tools, then the added tool, then the answer: " + inferences);
-		assertNull(RT.getIn(inferences.get(1), Fields.TOOLS),
-			"a stable palette emits no per-inference tools delta");
-		ACell session = agent.getSessions().entrySet().iterator().next().getValue();
-		assertTrue(RT.getIn(session, Fields.FRAMES, CVMLong.ZERO, Strings.intern("conversation"))
-			.toString().contains("toolAddition"),
-			"the session persists appended tool state");
+			// The record shows a stable palette and an appended tool-addition event.
+			AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent(agentId);
+			TestEngine.awaitTimelineCount(agent, 1, 10000);
+			AVector<ACell> inferences = RT.ensureVector(
+				RT.getIn(agent.getTimeline().get(0), Fields.INFERENCES));
+			assertEquals(3, inferences.count(), runtime + ": " + inferences);
+			assertNull(RT.getIn(inferences.get(1), Fields.TOOLS),
+				runtime + " emitted a per-inference tools delta");
+			ACell session = agent.getSessions().entrySet().iterator().next().getValue();
+			assertTrue(RT.getIn(session, Fields.FRAMES, CVMLong.ZERO,
+				Strings.intern("conversation")).toString().contains("toolAddition"),
+				runtime + " did not persist appended tool state");
+			AMap<AString, ACell> loads = RT.ensureMap(RT.getIn(session, Fields.LOADS));
+			if (loads == null) loads = RT.ensureMap(
+				RT.getIn(session, Fields.FRAMES, CVMLong.ZERO, Fields.LOADS));
+			assertNotNull(loads, runtime + " did not persist the acquired load");
+			ACell toolLoad = loads.entrySet().stream()
+				.map(java.util.Map.Entry::getValue)
+				.filter(v -> "tools".equals(String.valueOf(RT.getIn(v, "kind"))))
+				.findFirst().orElse(null);
+			assertNotNull(toolLoad, runtime + " has no tool-only load: " + session);
+			assertNotNull(RT.getIn(toolLoad, "toolBindings", CVMLong.ZERO, Fields.DEFINITION),
+				runtime + " did not persist the exact tool binding");
+
+			// agent:step is read-only but starts from the durable session. A fresh
+			// runtime tool context must reconstruct the operation route.
+			ACell assistant = Maps.of("toolCalls", Vectors.of((ACell) Maps.of(
+				"id", "call_resumed_echo", "name", "invoke_tool",
+				"arguments", Maps.of("name", "test_echo", "input", Maps.of("again", true)))));
+			AMap<AString, ACell> resumed = RT.ensureMap(engine.jobs().invokeOperation(
+				"v/ops/agent/step", Maps.of(
+					Fields.AGENT_ID, agentId,
+					Fields.SESSION_ID, RT.getIn(chat, Fields.SESSION_ID),
+					"assistant", assistant), RequestContext.of(ALICE_DID)).awaitResult(5000));
+			ACell resumedCall = RT.ensureVector(resumed.get(Fields.CALLS)).get(0);
+			assertEquals(CVMBool.TRUE, RT.getIn(resumedCall, Fields.RESULT, "again"),
+				runtime + ": " + resumed);
+		}
 	}
 
 	/** agent:step runs one harness iteration on a supplied reply: tools dispatched as live, the agent untouched. */
@@ -1200,7 +1505,7 @@ public class AgentAdapterTest {
 			Fields.VALUE, Maps.of(
 				"llmOperation", "v/ops/langchain/anthropic",
 				"providerOptions", Maps.of(
-					"thinking", Maps.of("enabled", CVMBool.TRUE, "budget", 1000L)))),
+					"thinking", Maps.of("type", "adaptive", "display", "summarized")))),
 			alice).awaitResult(5000);
 
 		// Canonical functional asset shape: metadata + agent.config facet.
@@ -1220,7 +1525,7 @@ public class AgentAdapterTest {
 			Maps.of(
 				"model", "claude-test-model",
 				"providerOptions", Maps.of(
-					"thinking", Maps.of("budget", 2000L))));
+					"thinking", Maps.of("display", "omitted"))));
 
 		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(
 			Fields.AGENT_ID, "layered-agent",
@@ -1233,10 +1538,10 @@ public class AgentAdapterTest {
 		assertEquals(Strings.create("claude-test-model"), config.get(Strings.create("model")));
 		assertEquals(Strings.create("You review invoices using supplied evidence."),
 			config.get(Strings.create("systemPrompt")));
-		assertEquals(CVMBool.TRUE,
-			RT.getIn(config, Strings.create("providerOptions"), Strings.create("thinking"), Strings.create("enabled")));
-		assertEquals(CVMLong.create(2000),
-			RT.getIn(config, Strings.create("providerOptions"), Strings.create("thinking"), Strings.create("budget")));
+		assertEquals(Strings.create("adaptive"),
+			RT.getIn(config, Strings.create("providerOptions"), Strings.create("thinking"), Strings.create("type")));
+		assertEquals(Strings.create("omitted"),
+			RT.getIn(config, Strings.create("providerOptions"), Strings.create("thinking"), Strings.create("display")));
 
 		// Later layers did not mention tools, so the worker selector survives.
 		AVector<ACell> tools = RT.ensureVector(config.get(Strings.create("tools")));
@@ -2075,7 +2380,8 @@ public class AgentAdapterTest {
 		AVector<ACell> conversation = RT.ensureVector(
 			RT.getIn(frames.get(0), AgentState.KEY_CONVERSATION));
 		assertEquals(4, conversation.count(),
-			"user + assistant(tool call) + tool result + final assistant");
+			"user + assistant(tool call) + tool result + final assistant: "
+				+ convex.core.util.JSON.toString(conversation));
 		assertEquals("user", RT.getIn(conversation.get(0), "role").toString());
 		assertEquals("assistant", RT.getIn(conversation.get(1), "role").toString());
 		assertNotNull(RT.getIn(conversation.get(1), "toolCalls"));
@@ -4842,21 +5148,20 @@ public class AgentAdapterTest {
 		assertEquals(AgentState.RUNNING, observableStatus(old));
 		assertEquals(AgentState.RUNNING, old.getStatus());
 
-		// History-preserving mutation cannot safely swap config under an active
-		// transition; callers must either wait or choose full replacement.
-		Job unsafeUpdate = engine.jobs().invokeOperation(
+		// Config and state changes land on the record now and apply to future
+		// transitions; the never-completing transition keeps the snapshot it
+		// fired with, and the result says a run is in flight.
+		ACell updated = engine.jobs().invokeOperation(
 			"v/ops/agent/update",
 			Maps.of(Fields.AGENT_ID, "run-ow",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
-			RequestContext.of(ALICE_DID));
-		try {
-			unsafeUpdate.awaitResult(5000);
-			fail("agent:update must reject RUNNING config mutation");
-		} catch (covia.exception.JobFailedException expected) {
-			// expected
-		}
-		assertEquals(Strings.create("v/test/ops/never"),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete"),
+				AgentState.KEY_STATE, Maps.of("external", CVMLong.ONE)),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(updated, "running"));
+		assertEquals(Strings.create("v/test/ops/taskcomplete"),
 			old.getConfig().get(Fields.OPERATION));
+		assertEquals(CVMLong.ONE, RT.getIn(old.getState(), "external"));
+		assertEquals(AgentState.RUNNING, observableStatus(old), "the started transition is unaffected");
 
 		// Delete halts and settles the old loop before a replacement is created.
 		engine.jobs().invokeOperation(
@@ -5270,7 +5575,7 @@ public class AgentAdapterTest {
 			Fields.CONFIG, Maps.of(
 				"systemPrompt", "Original",
 				"providerOptions", Maps.of(
-					"thinking", Maps.of("enabled", CVMBool.TRUE, "budget", 1000L)))),
+					"thinking", Maps.of("type", "adaptive", "display", "summarized")))),
 			alice).awaitResult(5000);
 
 		engine.jobs().invokeOperation("v/ops/covia/write", Maps.of(
@@ -5285,7 +5590,7 @@ public class AgentAdapterTest {
 				Maps.of(
 					"systemPrompt", "Updated",
 					"providerOptions", Maps.of(
-						"thinking", Maps.of("budget", 2000L))))),
+						"thinking", Maps.of("display", "omitted"))))),
 			alice).awaitResult(5000);
 
 		AMap<AString, ACell> config = engine.getVenueState().users().get(ALICE_DID)
@@ -5293,10 +5598,10 @@ public class AgentAdapterTest {
 		assertEquals(Strings.create("Updated"), config.get(Strings.create("systemPrompt")));
 		assertEquals(Strings.create("v/ops/langchain/anthropic"),
 			config.get(Strings.create("llmOperation")));
-		assertEquals(CVMBool.TRUE,
-			RT.getIn(config, Strings.create("providerOptions"), Strings.create("thinking"), Strings.create("enabled")));
-		assertEquals(CVMLong.create(2000),
-			RT.getIn(config, Strings.create("providerOptions"), Strings.create("thinking"), Strings.create("budget")));
+		assertEquals(Strings.create("adaptive"),
+			RT.getIn(config, Strings.create("providerOptions"), Strings.create("thinking"), Strings.create("type")));
+		assertEquals(Strings.create("omitted"),
+			RT.getIn(config, Strings.create("providerOptions"), Strings.create("thinking"), Strings.create("display")));
 	}
 
 	/** Config has a single home (#144): agent:update rejects state.config loudly. */
@@ -6115,7 +6420,7 @@ public class AgentAdapterTest {
 	}
 
 	@Test
-	public void testReloadContextRebuildsPrefixAndPreservesConversationExactly() {
+	public void testConfigChangeRebuildsPrefixAndExplicitReloadPreservesConversation() {
 		RequestContext alice = RequestContext.of(ALICE_DID);
 		engine.jobs().invokeOperation("v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "reload-context-agent", Fields.CONFIG, Maps.of(
@@ -6137,6 +6442,9 @@ public class AgentAdapterTest {
 		assertTrue(RT.getIn(beforeRoot, "renderedContext", "messages", 0, "content")
 			.toString().contains("OLD_IDENTITY"));
 
+		// Straight after the reply, with no wait for the loop's rest state:
+		// config changes apply to future transitions, so a live loop is no
+		// reason to refuse (this sequence used to be timing-dependent).
 		engine.jobs().invokeOperation("v/ops/agent/update",
 			Maps.of(Fields.AGENT_ID, "reload-context-agent",
 				Fields.CONFIG, Maps.of("systemPrompt", "NEW_IDENTITY")), alice)
@@ -6144,7 +6452,22 @@ public class AgentAdapterTest {
 		AMap<AString, ACell> stillOld = RT.ensureMap(
 			RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO));
 		assertTrue(RT.getIn(stillOld, "renderedContext", "messages", 0, "content")
-			.toString().contains("OLD_IDENTITY"), "ordinary update must not rewrite a session prefix");
+			.toString().contains("OLD_IDENTITY"),
+			"update records config atomically; the next inference replaces the stale rendering");
+
+		engine.jobs().invokeOperation("v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "reload-context-agent", Fields.SESSION_ID, sidHex,
+				Fields.MESSAGE, "second"), alice).awaitResult(5000);
+		AMap<AString, ACell> rebuilt = RT.ensureMap(
+			RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO));
+		assertTrue(RT.getIn(rebuilt, "renderedContext", "messages", 0, "content")
+			.toString().contains("NEW_IDENTITY"));
+		assertEquals("NEW_IDENTITY",
+			RT.getIn(rebuilt, "renderedContext", "sourceConfig", "systemPrompt").toString());
+		AVector<ACell> rebuiltConversation = RT.ensureVector(
+			rebuilt.get(AgentState.KEY_CONVERSATION));
+		assertEquals(conversation, rebuiltConversation.slice(0, conversation.count()),
+			"config re-render keeps all prior session turns verbatim");
 
 		ACell reload = engine.jobs().invokeOperation("v/ops/agent/reload-context",
 			Maps.of(Fields.AGENT_ID, "reload-context-agent", Fields.SESSION_ID, sidHex), alice)
@@ -6154,15 +6477,15 @@ public class AgentAdapterTest {
 		AMap<AString, ACell> cleared = RT.ensureMap(
 			RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO));
 		assertNull(RT.getIn(cleared, "renderedContext"));
-		assertEquals(conversation, cleared.get(AgentState.KEY_CONVERSATION),
+		assertEquals(rebuiltConversation, cleared.get(AgentState.KEY_CONVERSATION),
 			"reload changes only the materialised prefix");
 
 		engine.jobs().invokeOperation("v/ops/agent/chat",
 			Maps.of(Fields.AGENT_ID, "reload-context-agent", Fields.SESSION_ID, sidHex,
-				Fields.MESSAGE, "second"), alice).awaitResult(5000);
-		AMap<AString, ACell> rebuilt = RT.ensureMap(
+				Fields.MESSAGE, "third"), alice).awaitResult(5000);
+		AMap<AString, ACell> rebuiltAgain = RT.ensureMap(
 			RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO));
-		assertTrue(RT.getIn(rebuilt, "renderedContext", "messages", 0, "content")
+		assertTrue(RT.getIn(rebuiltAgain, "renderedContext", "messages", 0, "content")
 			.toString().contains("NEW_IDENTITY"));
 	}
 
@@ -6188,10 +6511,10 @@ public class AgentAdapterTest {
 
 	// ========== Context scope chain (#142) ==========
 
-	/** Mint-time loads seed the session tier; passing loads against an
+	/** Mint-time loads seed the root frame; passing loads against an
 	 *  existing session is an error, never a silent ignore. */
 	@Test
-	public void testChatMintLoadsSeedSessionTier() {
+	public void testChatMintLoadsSeedRootFrame() {
 		createChatAgent("mint-loads-agent");
 		AMap<AString, ACell> loads = Maps.of(
 			Strings.create("w/brief"), Maps.of(Strings.create("budget"), CVMLong.create(400)));
@@ -6206,7 +6529,8 @@ public class AgentAdapterTest {
 		Blob sid = Blob.fromHex(sidHex.toString());
 
 		User u = engine.getVenueState().users().get(ALICE_DID);
-		ACell sessionLoads = RT.getIn(u.agent("mint-loads-agent").getSession(sid), Fields.LOADS);
+		ACell sessionLoads = RT.getIn(u.agent("mint-loads-agent").getSession(sid),
+			Fields.FRAMES, CVMLong.ZERO, Fields.LOADS);
 		assertEquals(400L, ((CVMLong) RT.getIn(sessionLoads, "w/brief", "budget")).longValue());
 		assertNotNull(RT.getIn(sessionLoads, "w/brief", "ts"),
 			"mint loads are normalised and timestamped once at persistence");
@@ -6250,11 +6574,13 @@ public class AgentAdapterTest {
 			RT.getIn(chatB.awaitResult(5000), Fields.SESSION_ID)).toString());
 
 		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("iso-agent");
-		ACell loadsA = RT.getIn(agent.getSession(sidA), Fields.LOADS);
+		ACell loadsA = RT.getIn(agent.getSession(sidA),
+			Fields.FRAMES, CVMLong.ZERO, Fields.LOADS);
 		assertEquals(400L, ((CVMLong) RT.getIn(loadsA, "w/acme", "budget")).longValue(),
 			"session A keeps its loads");
 		assertNotNull(RT.getIn(loadsA, "w/acme", "ts"));
-		ACell loadsB = RT.getIn(agent.getSession(sidB), Fields.LOADS);
+		ACell loadsB = RT.getIn(agent.getSession(sidB),
+			Fields.FRAMES, CVMLong.ZERO, Fields.LOADS);
 		assertTrue(loadsB == null || ((AMap<?, ?>) loadsB).count() == 0,
 			"session B must not see session A's loads, got: " + loadsB);
 		// And nothing leaks to agent-level state.

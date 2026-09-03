@@ -32,8 +32,11 @@ import covia.test.DurabilityTest;
 
 /**
  * Restart boundary for agent execution. Jobs and external interaction records
- * are durable; a live GoalTree execution attempt is not resumed after its venue
- * process disappears.
+ * are durable, and a request task survives its venue process: it is restored
+ * live and re-attempted fresh at the next boot (ae2c9670). What does not carry
+ * across is the interrupted model loop itself — the boot wake starts the
+ * request over rather than replaying a transition that was aborted mid-flight,
+ * and a merely-completed message never becomes stale boot work.
  */
 @DurabilityTest
 public class GoalTreeCrashResumeTest {
@@ -116,7 +119,17 @@ public class GoalTreeCrashResumeTest {
 	}
 
 	@Test
-	public void testInterruptedRequestFailsAndDoesNotResume() throws Exception {
+	public void testInterruptedRequestSurvivesRestartAndReattempts() throws Exception {
+		// A request is a task, not an ephemeral call (ae2c9670, JOBS.md
+		// § Recovery): its Job is durable and its intake stays on the agent,
+		// so a restart carries it across — restored live (never failed), kept
+		// as the agent's task, and picked up by the boot wake as a FRESH
+		// attempt. The safety line the old behaviour drew still holds: the
+		// wake does not replay the model loop that was interrupted mid-flight
+		// (no "gave up" continuation) — it starts the request over. Whether
+		// that fresh attempt then re-parks or completes is timing, not
+		// contract (AgentRestartTest covers the deterministic completing
+		// case); what matters here is that the restart never fails it.
 		EtchStore store = EtchStore.createTemp();
 		AKeyPair keyPair = AKeyPair.generate();
 		AMap<AString, ACell> config = config(keyPair);
@@ -141,18 +154,28 @@ public class GoalTreeCrashResumeTest {
 
 		Engine second = start(store, keyPair, config);
 		second.jobs().recoverJobs();
-		AMap<AString, ACell> failed = second.jobs().getJobData(requestId, RequestContext.of(ALICE));
-		assertEquals(Status.FAILED, failed.get(Fields.STATUS));
 
-		AgentAdapter adapter = (AgentAdapter) second.getAdapter("agent");
-		assertEquals(0, adapter.wakeAgentsWithWork(),
-			"the abandoned request must not become fresh boot work");
+		// The request Job is restored live, never failed: recovery keeps it as
+		// the agent's durable task rather than taking the STARTED-fails default.
+		AMap<AString, ACell> restored = second.jobs().getJobData(requestId, RequestContext.of(ALICE));
+		assertEquals(Status.STARTED, restored.get(Fields.STATUS),
+			"an interrupted request is restored live, not failed");
 		AgentState recovered = agent(second, "request-agent");
-		assertEquals(AgentState.SLEEPING, recovered.getStatus());
-		assertNull(recovered.getSessionCycleEpoch(sid));
-		assertNull(recovered.getTasks().get(requestId));
+		assertNotNull(recovered.getTasks().get(requestId),
+			"the surviving request is still the agent's task after recovery");
 		assertFalse(String.valueOf(rootConversation(second, "request-agent", sid)).contains("gave up"),
-			"startup must not continue the interrupted model loop");
+			"startup must not replay the interrupted model loop");
+
+		// The surviving request is boot work: the wake picks it up and starts a
+		// fresh attempt (it does not stay dormant like a completed message).
+		AgentAdapter adapter = (AgentAdapter) second.getAdapter("agent");
+		assertEquals(1, adapter.wakeAgentsWithWork(),
+			"the surviving request is fresh boot work for its agent");
+		// The fresh attempt runs — live or completed depending on timing — but
+		// the restart never turns the surviving request into a failure.
+		AString afterWake = RT.ensureString(second.jobs().getJobData(requestId, RequestContext.of(ALICE)).get(Fields.STATUS));
+		assertTrue(Status.STARTED.equals(afterWake) || Status.COMPLETE.equals(afterWake),
+			"the re-attempted request is live or completed, never failed by the restart: " + afterWake);
 		closeActivePhase();
 	}
 

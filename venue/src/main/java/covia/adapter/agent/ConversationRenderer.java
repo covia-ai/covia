@@ -94,7 +94,7 @@ public final class ConversationRenderer {
 			AMap<AString, ACell> turn = (AMap<AString, ACell>) entry;
 			AString role = RT.ensureString(turn.get(GoalTreeContext.K_ROLE));
 			if (GoalTreeContext.ROLE_USER.equals(role)) {
-				AMap<AString, ACell> message = toMessage(turn, null);
+				AMap<AString, ACell> message = toHistoricalMessage(turn);
 				if (message == null) continue;
 				AString content = RT.ensureString(message.get(GoalTreeContext.K_CONTENT));
 				if (pendingFirst == null) pendingFirst = content;
@@ -111,7 +111,7 @@ public final class ConversationRenderer {
 			for (AMap<AString, ACell> message : pending) {
 				retain(tail, message, maxTurns);
 			}
-			retain(tail, toMessage(turn, null), maxTurns);
+			retain(tail, toHistoricalMessage(turn), maxTurns);
 			updated = Math.max(updated, Math.max(pendingUpdated, timestamp(turn)));
 			pending.clear();
 			pendingCount = 0;
@@ -228,7 +228,7 @@ public final class ConversationRenderer {
 
 	/**
 	 * Converts one stored turn or live inbox envelope into the provider-facing
-	 * message shape {@code {role, content?, toolCalls?, id?, name?, structuredContent?, isError?}}:
+	 * message shape {@code {role, content?, toolCalls?, id?, name?, structuredContent?, isError?, providerState?}}:
 	 * content stringified (JSON, never EDN), framework metadata such as
 	 * {@code ts}, {@code source} and {@code caller} dropped. A structured-only
 	 * tool result keeps content absent so the provider edge can render the
@@ -271,7 +271,21 @@ public final class ConversationRenderer {
 			ACell fieldValue = source.get(key);
 			if (fieldValue != null) message = message.assoc(key, fieldValue);
 		}
-		return message;
+		// Only a persisted assistant turn may carry provider continuation data.
+		// In particular, an inbox envelope rendered with a caller-supplied map
+		// must not be able to manufacture a privileged provider message block.
+		if (defaultRole == null && GoalTreeContext.ROLE_ASSISTANT.equals(role)) {
+			ACell providerState = source.get(Fields.PROVIDER_STATE);
+			if (providerState != null) message = message.assoc(Fields.PROVIDER_STATE, providerState);
+		}
+		return ToolCallIds.normaliseMessage(message);
+	}
+
+	/** Provider continuation data is needed by live inference, never by the
+	 * bounded human/agent-safe retrospective projection. */
+	private static AMap<AString, ACell> toHistoricalMessage(ACell value) {
+		AMap<AString, ACell> message = toMessage(value, null);
+		return (message != null) ? message.dissoc(Fields.PROVIDER_STATE) : null;
 	}
 
 	@SuppressWarnings("unchecked")

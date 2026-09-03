@@ -3,6 +3,7 @@
   "description": "Forgets the caller's grant for a provider and, where the provider supports revocation, revokes it there too. Only when the user asks to disconnect.",
   "operation": {
     "adapter": "oauth:disconnect",
+    "readOnly": false,
     "input": {
       "type": "object",
       "properties": {

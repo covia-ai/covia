@@ -51,7 +51,8 @@ venue/
 - **RequestContext** — caller DID, verified UCAN proofs, capability scope,
   execution scopes. `Engine.requireAuthority(ctx, resource, ability)` is the
   point-of-action enforcement primitive; `Engine.crossUserAllows` is the
-  single cross-user gate (public-user parity + delegation proofs).
+  single cross-user gate (public-user parity + target-side admission
+  `config.accepts` for talking to an agent, #447 + delegation proofs).
   **Two identities, never conflated**: `getCallerDID()` is *who acted*
   (attribution, delegation audience, granting authority); `getUserDID()` is
   *whose namespace* (bare paths, workspace, secrets, jobs, inbox, quota). They
@@ -74,10 +75,11 @@ AUTH_REQUIRED).
 | Adapter | Purpose | Operations |
 |---------|---------|------------|
 | `grid` | Federated grid operations | `run`, `invoke`, `jobStatus`, `jobResult` |
-| `convex` | Convex blockchain | `query`, `transact` |
+| `convex` | Convex blockchain, CAD3 conversion, and secret-backed Ed25519 keys | `query`, `transact`, `generate-key`, `sign`, `decode-cad3`, `encode-cad3` |
 | `mcp` | Model Context Protocol | `toolList`, `toolCall`, bridging ops |
 | `langchain` | AI/LLM models | `openai`, `ollama`, `anthropic`, `gemini`, `xai`, `deepseek`, `mistral`, `openrouter`, `models` |
 | `http` | HTTP requests (SSRF-protected, bounded validated redirects, default User-Agent; `adapters.http`) | `get`, `post` |
+| `connections` | Service connection catalog; owns provider skills and reports transport/credential presence without reading secrets | `list`, `status` |
 | `jvm` | JVM utilities | `stringConcat`, `urlEncode`, `urlDecode` |
 | `file` | Filesystem (root-jailed); reads see into archives via `x.zip!/entry` | `roots`, `list`, `tree`, `read`, `write`, `append`, `delete`, `mkdir`, `stat` |
 | `archive` | Zip/jar archives over file roots (zip-slip + zip-bomb guarded) | `list`, `extract`, `zip` |
@@ -99,7 +101,7 @@ AUTH_REQUIRED).
 | `auth` | Authentication ops | login/token flows |
 | `oauth` | Connected accounts — OAuth 2.0 grants held for users; `http:*` attaches tokens via `bearerSecret: "oauth/<provider>"` | `connect`, `status`, `disconnect` |
 | `user` | Explicit user registration and discovery (arbitrary DIDs; venue-managed did:web usernames) | `create`, `info`, `list` |
-| `venue` | Venue administration — runtime adapter/module lifecycle and process restart (venue-owned; `docs/CONFIG.md`) | `adapters`, `adapter/enable`, `adapter/disable`, `adapter/configure`, `module/load`, `module/unload`, `restart` |
+| `venue` | Venue administration — runtime adapter/module lifecycle and process restart (venue-owned; `docs/CONFIG.md`) | `adapters`, `adapter/enable`, `adapter/disable`, `adapter/configure`, `module/load`, `module/unload`, `restart`, `gc` |
 | `test` | Testing | `echo`, `delay`, `fail`, `never`, `random`, `chat`, `pause`, `taskComplete` |
 
 Module adapters (shaded module jars, not in covia.jar — `docs/CONFIG.md` "Venue modules"):
@@ -120,13 +122,15 @@ Base path: `/api/v1/`
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/status` | GET | Venue status and health |
+| `/status` | GET | Venue status and health; `access.{public,userAutoCreate}` states the admission policy truthfully (#255) |
 | `/assets/{ref}` | GET | Asset metadata for any ref form; `/content/{ref}` GET returns content (#368); `/assets` POST registers; `/assets/{id}/content` GET/PUT (hash-only, deprecated GET) |
 | `/invoke` | POST | Execute an operation — async by default (201 + job record); `?wait=true` blocks up to the 120s cap, `?wait=<ms>` up to that many ms |
 | `/values/{read,list,slice,inspect,aggregate,count}` | GET | Job-free lattice reads (#177) — synchronous, capability-checked, no job persisted. See `docs/READ_API.md` |
 | `/agents`, `/agents/{id}` | GET | Job-free agent listings (#180, #233) |
 | `/agents/{id}/sse` | GET | Server-sent live agent run-loop events (#394; owner-level, `?sessionId=` narrows to one session, closes on TERMINATED) — `docs/AGENT_LOOP.md` §2.6 |
 | `/schedules` | GET | Job-free listing of the caller's pending scheduled events (#369) |
+| `/users`, `/users/{did}`, `/users/{did}/authentications` | GET | Job-free user admin reads (#255) — operator-only except a caller's own DID; 403 (not a broken page) for a signed-in non-operator |
+| `/dlfs/drives`, `/dlfs/list` | GET | Job-free DLFS browsing reads (#253) — drive list and one directory's entries; file content itself was already job-free via `/content/dlfs/<drive>/<path>` |
 | `/assets?scope=own` | GET | Job-free listing of the caller's own `a/` assets (#382); default `/assets` is the venue catalog |
 | `/jobs` | GET | Caller's jobs as a paged `{items, total, offset, limit}` envelope (#229) |
 | `/jobs/{id}` | GET | Job status. Proofs ride the `X-Covia-Ucans` header on body-less reads (federated observation) |
@@ -231,7 +235,7 @@ Adapter-owned state uses `AdapterWorkspace`; see
 ## Configuration
 
 Full operator reference: **`docs/CONFIG.md`** — persistence & identity
-(seed/keystore/venue.key), network binding, rate limiting, public access
+(seed/keystore/venue.key), startup store GC (`etch.gc.onStart`), network binding, rate limiting, public access
 (`auth.public.caps`), user admission (`users.autoCreate`), per-adapter config,
 private jobs, DLFS WebDAV, MCP tool
 bridging, LLM providers, venue modules, A2A, secrets bootstrap.

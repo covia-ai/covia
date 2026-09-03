@@ -3,6 +3,7 @@
   "description": "Check whether a JSON Schema is structurally valid (well-formed). Validates type values and property/items structure. Does not reject unknown annotation keywords (per JSON Schema spec).",
   "operation": {
     "adapter": "schema:check",
+    "readOnly": true,
     "toolName": "schema_check",
     "input": {
       "type": "object",

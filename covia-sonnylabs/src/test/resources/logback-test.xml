@@ -1,3 +1,14 @@
-<configuration>
-  <root level="WARN"/>
+<configuration debug="false">
+	<statusListener class="ch.qos.logback.core.status.NopStatusListener" />
+
+	<appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+		<encoder>
+			<pattern>%date{yyyy-MM-dd'T'HH:mm:ss.SSSX, UTC} %-5level [%thread] %logger{36} -- %msg%n</pattern>
+		</encoder>
+	</appender>
+
+	<!-- A passing build prints nothing: only errors reach the console. -->
+	<root level="ERROR">
+		<appender-ref ref="STDOUT" />
+	</root>
 </configuration>

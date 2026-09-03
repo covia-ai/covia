@@ -93,6 +93,8 @@ interface FrameStore {
 		if (frames == null || frames.isEmpty()) {
 			frames = Vectors.of((ACell) GoalTreeContext.createFrame(rootDescription));
 		}
+		frames = GoalTreeContext.withRootLoads(frames,
+			ContextChain.sessionRootLoads(RT.getIn(input, Fields.SESSION)));
 		frames = appendCycleInputTurns(frames, messages, input, cycleTs, recordCaller);
 		return new Opened(new LocalFrameStore(frames), false, null);
 	}
@@ -180,6 +182,31 @@ interface FrameStore {
 	 *         must stop
 	 */
 	boolean update(UnaryOperator<AVector<ACell>> fn);
+
+	/** Replaces one frame through the store's ordinary atomic/fenced update. */
+	default boolean replace(int frameIndex, ACell frame) {
+		return update(frames -> {
+			if (frameIndex < 0 || frameIndex >= frames.count()) return frames;
+			return (frames.get(frameIndex) == frame)
+				? frames : frames.assoc(frameIndex, frame);
+		});
+	}
+
+	/**
+	 * Applies already-materialised watched-context candidates to one frame in a
+	 * single state update. All reads and operation calls must have completed
+	 * before this method; the CAS transform itself is pure and non-blocking.
+	 */
+	@SuppressWarnings("unchecked")
+	default boolean observe(int frameIndex, AVector<ACell> candidates, long timestamp) {
+		return update(frames -> {
+			if (frameIndex < 0 || frameIndex >= frames.count()) return frames;
+			AMap<AString, ACell> frame = (AMap<AString, ACell>) frames.get(frameIndex);
+			AMap<AString, ACell> observed = GoalTreeContext.applyObservations(
+				frame, candidates, timestamp);
+			return (observed == frame) ? frames : frames.assoc(frameIndex, observed);
+		});
+	}
 
 	/** Appends one durable root-conversation turn. The lattice store also
 	 * updates the session's turn/timestamp metadata in the same CAS. */

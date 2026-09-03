@@ -4,6 +4,7 @@
   "creator": "Covia",
   "operation": {
     "adapter": "file:tree",
+    "readOnly": true,
     "toolName": "file_tree",
     "input": {
       "type": "object",

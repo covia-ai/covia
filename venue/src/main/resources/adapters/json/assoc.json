@@ -3,6 +3,7 @@
 	"description": "Returns a new map with 'value' set at 'path' inside 'target'. Path may be a single string key or a vector of keys for nested paths. Intermediate maps are created if missing. Equivalent to Clojure assoc-in or Lodash _.set.",
 	"operation": {
 		"adapter": "json:assoc",
+		"readOnly": true,
 		"input": {
 			"type": "object",
 			"properties": {

@@ -65,7 +65,7 @@ covia/                          # ai.covia:covia (parent POM)
 
 - **Java 21+** (JDK; the published Docker image runs on Java 25)
 - **Maven 3.7+** (enforced by maven-enforcer-plugin)
-- **Convex 0.8.15**
+- **Convex 0.8.16**
 
 ## Build & Run
 
@@ -105,7 +105,7 @@ mvn test -pl covia-core
 
 | Dependency | Version | Purpose |
 |------------|---------|---------|
-| Convex | 0.8.15 | Lattice platform, immutable data, cryptography |
+| Convex | 0.8.16 | Lattice platform, immutable data, cryptography |
 | Javalin | 7.2.3 | HTTP server with OpenAPI/Swagger/ReDoc |
 | LangChain4j | 1.19.0 | LLM orchestration (OpenAI, Ollama, Gemini, DeepSeek) |
 | MCP SDK | 2.0.1 | Model Context Protocol |
@@ -196,7 +196,7 @@ Operation metadata examples and rules are in `venue/docs/ADAPTERS.md` and
 
 ### In Progress
 
-- **Capability enforcement** — largely landed: point-of-action `requireCapability` (adapter-pinned) + the single cross-user gate `Engine.crossUserAllows` (public-user parity #254 + UCAN proofs); granting is production-gated at surfaces (`ucan:issue`, HITL) per COG-17. See `venue/docs/UCAN.md`. Remaining: custodial attestation trust policy (C3b), resource-precise pins for agent-state mutations.
+- **Capability enforcement** — largely landed: point-of-action `requireCapability` (adapter-pinned) + the single cross-user gate `Engine.crossUserAllows` (public-user parity #254 + agent admission `config.accepts` #447 + UCAN proofs); granting is production-gated at surfaces (`ucan:issue`, HITL) per COG-17. See `venue/docs/UCAN.md`. Remaining: custodial attestation trust policy (C3b), resource-precise pins for agent-state mutations.
 
 ---
 

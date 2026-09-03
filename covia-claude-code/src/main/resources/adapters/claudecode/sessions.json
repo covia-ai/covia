@@ -3,6 +3,7 @@
 	"description": "The Claude Code sessions this venue knows about (live processes and recently stopped ones) in projects you may use: session id, project, state (NEW, BUSY, IDLE, STOPPED), whether a process is live, turns completed, idle time, model, who started it. Any stopped session can be continued by passing its id as 'session' to claudecode:run.",
 	"operation": {
 		"adapter": "claudecode:sessions",
+		"readOnly": true,
 		"input": {
 			"type": "object",
 			"properties": {

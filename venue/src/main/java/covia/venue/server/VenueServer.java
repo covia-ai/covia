@@ -34,6 +34,8 @@ import convex.core.data.Blob;
 import convex.core.lang.RT;
 import convex.core.util.FileUtils;
 import convex.core.store.AStore;
+import convex.core.data.Hash;
+import convex.core.data.Ref;
 import convex.etch.EtchConfig;
 import convex.etch.EtchStore;
 import convex.core.util.Utils;
@@ -45,6 +47,7 @@ import covia.lattice.Covia;
 import covia.venue.Config;
 import covia.venue.CoviaApplication;
 import covia.venue.Engine;
+import covia.venue.StoreControl;
 import covia.venue.LocalVenue;
 import convex.dlfs.DLFSDriveManager;
 import convex.dlfs.DLFSDrives;
@@ -89,6 +92,10 @@ public class VenueServer {
 
 	protected Convex convex;
 	protected AStore store;
+	/** Successor store from an online GC cutover (covia#452): the venue keeps
+	 *  using {@link #store} as a view; this is retained only to be cleanly
+	 *  closed after it at shutdown. */
+	protected EtchStore collectedStore;
 	protected Javalin javalin;
 
 	/** NodeServer manages lattice persistence and (future) replication */
@@ -162,6 +169,7 @@ public class VenueServer {
 			CoviaApplication application =
 				CoviaApplication.connect(nodeServer.getRootComponent());
 			engine = new Engine(this.config, application, keyPair);
+			engine.setStoreControl(new StoreMaintenance());
 			engine.start();
 		} catch (Exception e) {
 			// Engine construction is inert; start() owns and rolls back its active
@@ -223,6 +231,9 @@ public class VenueServer {
 	 */
 	private static AStore createStore(Config config) throws IOException {
 		EtchConfig etchConfig = config.getEtchConfig();
+		if (config.isEtchGcOnStart() && !config.isPersistentFileStore()) {
+			log.info("etch.gc.onStart has no effect: store '{}' is not a persistent file", config.getStore());
+		}
 		if (etchConfig != null && etchConfig.getCipherMode() != EtchConfig.CipherMode.NONE
 				&& "file".equals(String.valueOf(config.getStorageType()))) {
 			log.warn("Encrypted Etch store with 'storage.content: file' — asset content bytes "
@@ -254,7 +265,78 @@ public class VenueServer {
 		f.getParentFile().mkdirs();
 		log.info("Using persistent Etch store: {}{}", f,
 			(etchConfig != null) ? " (configured Etch policy)" : "");
-		return (etchConfig != null) ? EtchStore.create(f, etchConfig) : EtchStore.create(f);
+		EtchStore opened = (etchConfig != null) ? EtchStore.create(f, etchConfig) : EtchStore.create(f);
+		if (config.isEtchGcOnStart()) {
+			return collectAtStartup(opened, f, etchConfig);
+		}
+		return opened;
+	}
+
+	/**
+	 * Garbage-collects a freshly opened persistent store before anything holds
+	 * a reference into it (covia#451): the one point where collection is
+	 * trivially safe — no {@code RefSoft} is bound to the old file yet and no
+	 * write is in flight — and where the reclaimed space comes back at once.
+	 *
+	 * <p>Drives Convex's own cycle ({@code startGC → transferGC → verifyGC →
+	 * completeGC}; {@code convex-core/docs/ETCH_GC.md}), closes <em>both</em>
+	 * handles — Etch v3 records clean-close, and an unclosed successor would be
+	 * refused on the next open — and reopens through the normal path, whose
+	 * recovery installs the collected file under the original name or, where
+	 * mappings still pin files (Windows), opens it directly and finishes the
+	 * rename on a later start.</p>
+	 *
+	 * <p>Collection is maintenance and never stops a venue from starting: a
+	 * failure before cutover cancels the cycle and boots on the untouched
+	 * original. A failure after cutover surfaces — the collected file is
+	 * durable and adopted on the next start.</p>
+	 *
+	 * <p>Embedders that adopt a caller-opened store may run this on it before
+	 * {@link #launch(AMap, AStore)} — the same "nothing holds a reference yet"
+	 * condition must hold.</p>
+	 *
+	 * @return the store to run on: the reopened collected store, or the
+	 *         original when there was nothing to collect or the cycle failed
+	 */
+	public static EtchStore collectAtStartup(EtchStore store, File file, EtchConfig etchConfig) throws IOException {
+		Ref<ACell> root = store.getRootRef();
+		if (root == null || root.getValue() == null) {
+			log.info("Etch GC at startup skipped: {} has no root data yet", file);
+			return store;
+		}
+		long started = System.currentTimeMillis();
+		long before = store.getEtch().getDataLength();
+		try {
+			store.startGC();
+			store.transferGC();
+			List<Hash> missing = store.verifyGC();
+			if (!missing.isEmpty()) {
+				throw new IOException(missing.size()
+					+ " value(s) reachable from the root are missing from the collected file");
+			}
+		} catch (IOException | RuntimeException e) {
+			// The original file is untouched: roll the cycle back and boot on it.
+			log.error("Etch GC at startup failed for {}; continuing on the uncollected store", file, e);
+			if (store.isGCInProgress()) {
+				try {
+					store.cancelGC();
+				} catch (IOException | RuntimeException cancelFailure) {
+					log.warn("Etch GC cancel failed for {} (recovery rolls an abandoned cycle"
+						+ " forward on a later start)", file, cancelFailure);
+				}
+			}
+			return store;
+		}
+		EtchStore collected = store.completeGC();
+		long after = collected.getEtch().getDataLength();
+		store.close();     // deletes the superseded original, or defers while pinned
+		collected.close(); // clean-close the successor: a dirty v3 file is refused on open
+		EtchStore reopened = (etchConfig != null) ? EtchStore.create(file, etchConfig) : EtchStore.create(file);
+		long reclaimed = Math.max(0, before - after);
+		log.info("Etch GC at startup: {} -> {} bytes ({}% reclaimed) in {} ms; store file {}",
+			before, after, (before > 0) ? (100 * reclaimed / before) : 0,
+			System.currentTimeMillis() - started, reopened.getFile());
+		return reopened;
 	}
 
 	/**
@@ -1099,6 +1181,11 @@ public class VenueServer {
 	 * propagator's shutdown drain reads from it. See
 	 * {@code venue/docs/PERSISTENCE.md} §5.3.</p>
 	 */
+	/** The MCP endpoint, or null when the venue has no {@code mcp} config block. */
+	public MCP getMcp() {
+		return mcp;
+	}
+
 	public void close() {
 		closeResources(null);
 	}
@@ -1110,6 +1197,14 @@ public class VenueServer {
 	 */
 	private void closeResources(Throwable launchFailure) {
 		if (!closed.compareAndSet(false, true)) return; // idempotent — already closed
+		MCP ownedMcp = mcp;
+		if (ownedMcp != null) {
+			try {
+				ownedMcp.close(); // end SSE streams: their handlers unwind against a live engine
+			} catch (RuntimeException e) {
+				recordCloseFailure(launchFailure, "MCP close failed", e);
+			}
+		}
 		Javalin app = javalin;
 		javalin = null;
 		if (app != null) {
@@ -1139,10 +1234,113 @@ public class VenueServer {
 		store = null;
 		if (ownedStore != null) {
 			try {
-				ownedStore.close();
+				ownedStore.close(); // after an online GC: deletes the superseded file, or defers while pinned
 			} catch (RuntimeException e) {
 				recordCloseFailure(launchFailure, "Store close failed", e);
 			}
+		}
+		EtchStore ownedCollected = collectedStore;
+		collectedStore = null;
+		if (ownedCollected != null) {
+			try {
+				ownedCollected.close(); // clean-close the successor: a dirty v3 file is refused on open
+			} catch (RuntimeException e) {
+				recordCloseFailure(launchFailure, "Collected store close failed", e);
+			}
+		}
+	}
+
+	/**
+	 * Online GC of this venue's store (covia#452) — see {@link StoreControl}.
+	 * One cycle per process: after cutover the venue keeps using the old handle
+	 * as a view (NodeServer's store is final), so the successor cannot start a
+	 * further cycle here; a restart adopts the collected file and starts afresh.
+	 */
+	private final class StoreMaintenance implements StoreControl {
+		private final Object cycleLock = new Object();
+		private boolean collecting;
+		private volatile boolean cancelRequested;
+
+		private EtchStore etchStore() {
+			if (!(store instanceof EtchStore etch) || !config.isPersistentFileStore()) {
+				throw new IllegalStateException("Store garbage collection needs a persistent file store;"
+					+ " this venue's store is '" + config.getStore() + "'");
+			}
+			return etch;
+		}
+
+		@Override
+		public Status status() {
+			EtchStore etch = etchStore();
+			EtchStore done = collectedStore;
+			return new Status(etch.getFile().getPath(), etch.getEtch().getDataLength(),
+				etch.isGCInProgress(), etch.isGCComplete(), done != null,
+				(done != null) ? done.getFile().getPath() : null,
+				(done != null) ? done.getEtch().getDataLength() : 0L);
+		}
+
+		@Override
+		public Result collect() throws IOException {
+			EtchStore etch = etchStore();
+			File file = etch.getFile();
+			synchronized (cycleLock) {
+				if (collectedStore != null) {
+					throw new IllegalStateException("The store was already collected in this process;"
+						+ " restart the venue to collect again (the collected file is adopted on the next start)");
+				}
+				if (collecting || etch.isGCInProgress()) {
+					throw new IllegalStateException("A store collection is already in progress");
+				}
+				long bytes = file.length();
+				long free = Files.getFileStore(file.getAbsoluteFile().toPath()).getUsableSpace();
+				if (free < bytes) {
+					throw new IllegalStateException("Not enough free disk to collect the store: the cycle needs about "
+						+ bytes + " bytes, " + free + " available");
+				}
+				collecting = true;
+				cancelRequested = false;
+			}
+			long started = System.currentTimeMillis();
+			long before = etch.getEtch().getDataLength();
+			try {
+				etch.startGC();
+				etch.transferGC();
+				List<Hash> missing = etch.verifyGC();
+				if (!missing.isEmpty()) {
+					throw new IOException(missing.size()
+						+ " value(s) reachable from the root are missing from the collected file");
+				}
+				EtchStore successor = etch.completeGC();
+				collectedStore = successor; // closed after the old handle in close()
+				long after = successor.getEtch().getDataLength();
+				long elapsed = System.currentTimeMillis() - started;
+				log.info("Etch GC online: {} -> {} bytes in {} ms; now writing to {} (superseded file reclaimed at shutdown)",
+					before, after, elapsed, successor.getFile());
+				return new Result(before, after, elapsed, file.getPath(), successor.getFile().getPath());
+			} catch (IOException | RuntimeException e) {
+				// The original file is untouched: roll the cycle back (unless a
+				// cancel already is) so the store is exactly as before
+				if (!cancelRequested && etch.isGCInProgress()) {
+					try {
+						etch.cancelGC();
+					} catch (IOException | RuntimeException cancelFailure) {
+						log.warn("Etch GC cancel failed for {} (recovery rolls an abandoned cycle"
+							+ " forward on a later start)", file, cancelFailure);
+					}
+				}
+				throw e;
+			} finally {
+				synchronized (cycleLock) {
+					collecting = false;
+				}
+			}
+		}
+
+		@Override
+		public void cancel() throws IOException {
+			EtchStore etch = etchStore();
+			cancelRequested = true;
+			if (etch.isGCInProgress()) etch.cancelGC();
 		}
 	}
 

@@ -16,10 +16,8 @@
 			],
 			"context": [
 				{
-					"op": "v/ops/memory",
-					"input": {
-						"command": "recall"
-					},
+					"op": "v/ops/memory-recall",
+					"input": {},
 					"label": "Memory"
 				}
 			],

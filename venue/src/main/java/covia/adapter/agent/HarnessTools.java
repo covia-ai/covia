@@ -12,6 +12,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import convex.core.util.Utils;
+import covia.api.Abilities;
 import covia.api.Fields;
 import covia.grid.Asset;
 import covia.venue.Engine;
@@ -20,6 +21,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Predicate;
 
 /**
  * The harness tools every runtime provides, and the one rule for offering
@@ -116,7 +118,8 @@ final class HarnessTools {
 	 * agent opted into by name in {@code config.tools}, in that order — and,
 	 * when the agent declares skill sources, {@code skill_load} and
 	 * {@code context_unload}: the skills index is rendered, so both definitions
-	 * remain declared for the persisted context. Entries
+	 * remain declared for the persisted context. {@code more_tools} likewise
+	 * implies {@code context_unload}, because its result is a durable load. Entries
 	 * that are not harness names are operations, resolved by the palette.
 	 */
 	static AVector<ACell> offered(AMap<AString, ACell> config, Map<String, AMap<AString, ACell>> registry) {
@@ -127,6 +130,10 @@ final class HarnessTools {
 			if (!(listed.get(i) instanceof AString name)) continue;
 			AMap<AString, ACell> def = registry.get(name.toString());
 			if (def != null && names.add(name.toString())) out = out.conj(def);
+		}
+		AMap<AString, ACell> unload = registry.get(CONTEXT_UNLOAD);
+		if (names.contains(MORE_TOOLS) && unload != null && names.add(CONTEXT_UNLOAD)) {
+			out = out.conj(unload);
 		}
 		if (config != null && !Skills.sourcesOf(config).isEmpty()) {
 			for (String implied : new String[] {SKILL_LOAD, CONTEXT_UNLOAD}) {
@@ -182,22 +189,15 @@ final class HarnessTools {
 
 	/** Minimal changed definitions/removals between two active-load snapshots. */
 	static AVector<ACell> toolStateEvent(Loads.Snapshot before, Loads.Snapshot after) {
-		return toolStateEvent(before, after, Set.of());
-	}
-
-	/** Tool-state delta excluding definitions already present in the immutable
-	 * provider manifest. Their skill body announces activation; repeating full
-	 * schemas as text would waste context and contradict native declarations. */
-	static AVector<ACell> toolStateEvent(Loads.Snapshot before, Loads.Snapshot after,
-			Set<String> alreadyDeclared) {
 		Map<String, ACell> oldDefs = definitionsByName(before != null ? before.tools() : null);
 		Map<String, ACell> newDefs = definitionsByName(after != null ? after.tools() : null);
 		AVector<ACell> additions = Vectors.empty();
 		for (long i = 0; after != null && i < after.tools().count(); i++) {
 			ACell def = after.tools().get(i);
 			AString name = RT.ensureString(RT.getIn(def, AbstractLLMAdapter.K_NAME));
-			if (name != null && !alreadyDeclared.contains(name.toString())
-					&& !def.equals(oldDefs.get(name.toString()))) additions = additions.conj(def);
+			if (name != null && !def.equals(oldDefs.get(name.toString()))) {
+				additions = additions.conj(def);
+			}
 		}
 		AVector<ACell> removals = Vectors.empty();
 		for (long i = 0; before != null && i < before.tools().count(); i++) {
@@ -216,37 +216,83 @@ final class HarnessTools {
 		return out;
 	}
 
-	/** What {@code more_tools} produced: definitions to add to the run's palette, and the reply to the model. */
-	record Added(AVector<ACell> tools, ACell result) {}
-
 	/**
-	 * {@code more_tools}: resolves operation paths to tool definitions under
-	 * the agent's authority, skipping names already offered, and routes each
-	 * new name to its operation. The additions last for the rest of the run
-	 * — never persisted; a load or a skill is the durable way to acquire tools.
+	 * {@code more_tools}: a tool-only {@link LoadScope} update. Operation refs
+	 * resolve once to exact {@code {operation, definition}} bindings, which are
+	 * persisted on the load entry. Rendering and dispatch subsequently derive
+	 * from that one value, exactly as they do for tools contributed by a skill.
 	 */
 	@SuppressWarnings("unchecked")
-	static Added moreTools(ACell input, Engine engine, RequestContext ctx,
-			Set<String> existing, Map<String, AString> routes) {
+	static ACell moreTools(ACell input, LoadScope scope, Predicate<String> occupiedName) {
 		ACell opsCell = RT.getIn(input, K_OPERATIONS);
 		if (!(opsCell instanceof AVector<?>)) {
-			return new Added(Vectors.empty(), Strings.create("Error: operations must be an array of operation paths"));
+			return Strings.create("Error: operations must be an array of operation paths");
 		}
-		Map<String, AString> fresh = new HashMap<>();
-		AVector<ACell> resolved = ToolPalette.forOperations(engine, ctx, (AVector<ACell>) opsCell, fresh);
-		AVector<ACell> added = Vectors.empty();
+		if (!scope.writable) return Strings.create(scope.unavailableMessage);
+		AVector<ACell> requested = (AVector<ACell>) opsCell;
+		try {
+			// Authorise the whole batch before resolving or storing any binding.
+			for (long i = 0; i < requested.count(); i++) {
+				AString operation = RT.ensureString(requested.get(i));
+				if (operation == null) {
+					return Strings.create("Error: operations must contain only operation paths");
+				}
+				if (!operationPresent(scope, operation)) {
+					scope.context.requireExplicitCapability(operation, Abilities.TOOL_LOAD);
+				}
+			}
+		} catch (RuntimeException e) {
+			return Strings.create("Error: more_tools denied: " + describe(e));
+		}
+		AVector<ACell> resolved = ToolPalette.bindingsForOperations(
+			scope.engine, scope.context, requested);
+		Set<String> addedNames = new HashSet<>();
+		AVector<ACell> bindings = Vectors.empty();
+		AVector<ACell> operations = Vectors.empty();
 		AVector<ACell> names = Vectors.empty();
 		for (long i = 0; i < resolved.count(); i++) {
-			ACell tool = resolved.get(i);
-			AString name = RT.ensureString(RT.getIn(tool, AbstractLLMAdapter.K_NAME));
-			if (name == null || !existing.add(name.toString())) continue;
-			added = added.conj(tool);
-			routes.put(name.toString(), fresh.get(name.toString()));
+			ACell binding = resolved.get(i);
+			ACell definition = RT.getIn(binding, Fields.DEFINITION);
+			AString name = RT.ensureString(RT.getIn(definition, AbstractLLMAdapter.K_NAME));
+			AString operation = RT.ensureString(RT.getIn(binding, Fields.OPERATION));
+			if (name == null || operation == null
+					|| (occupiedName != null && occupiedName.test(name.toString()))
+					|| !addedNames.add(name.toString())) continue;
+			bindings = bindings.conj(binding);
+			operations = operations.conj(operation);
 			names = names.conj(name);
 		}
-		return new Added(added, Maps.of(
+		if (bindings.isEmpty()) return Maps.of(
 			K_ADDED, names,
-			K_NOTE, Strings.create("Tools available on your next turn.")));
+			K_NOTE, Strings.create("No new tool names were added."));
+
+		AString key = Strings.create("tools/" + bindings.getHash().toHexString());
+		AMap<AString, ACell> meta = AbstractLLMAdapter.buildLoadEntryMeta(
+			AbstractLLMAdapter.CONTEXT_LOAD_MIN_BUDGET, Strings.create("Tools"))
+			.assoc(Loads.K_KIND, Loads.KIND_TOOLS)
+			.assoc(Fields.TOOLS, operations)
+			.assoc(Loads.K_TOOL_BINDINGS, bindings);
+		scope.loads = scope.loads.assoc(key, meta);
+		return Maps.of(
+			AbstractLLMAdapter.K_PATH, key,
+			K_ADDED, names,
+			K_NOTE, Strings.create(
+				"Tools loaded for this conversation. Use context_unload with path to remove them."));
+	}
+
+	/** Whether an operation is already part of the agent's declarative or
+	 * load-owned surface. This consults canonical source state only. */
+	private static boolean operationPresent(LoadScope scope, AString operation) {
+		if (ToolPalette.declaresOperation(scope.config, operation)) return true;
+		AMap<AString, ACell> effective = ContextChain.effective(scope.outerLoads, scope.loads);
+		for (var entry : effective.entrySet()) {
+			AVector<ACell> operations = RT.ensureVector(RT.getIn(entry.getValue(), Fields.TOOLS));
+			for (long i = 0; operations != null && i < operations.count(); i++) {
+				if (operation.equals(operations.get(i))) return true;
+			}
+		}
+		return Skills.advertisesOperation(scope.engine, scope.context,
+			scope.skillSources, effective, operation);
 	}
 
 	/** Mutable view of the innermost loads tier for a flat session or frame. */
@@ -257,11 +303,13 @@ final class HarnessTools {
 		final boolean writable;
 		final String unavailableMessage;
 		final Skills.SkillSources skillSources;
+		final AMap<AString, ACell> config;
 		AMap<AString, ACell> loads;
 
 		LoadScope(Engine engine, RequestContext context,
 				AMap<AString, ACell> loads, AMap<AString, ACell> outerLoads,
-				boolean writable, String unavailableMessage, Skills.SkillSources skillSources) {
+				boolean writable, String unavailableMessage, Skills.SkillSources skillSources,
+				AMap<AString, ACell> config) {
 			this.engine = engine;
 			this.context = context;
 			this.loads = (loads != null) ? loads : Maps.empty();
@@ -269,6 +317,7 @@ final class HarnessTools {
 			this.writable = writable;
 			this.unavailableMessage = unavailableMessage;
 			this.skillSources = (skillSources != null) ? skillSources : Skills.SkillSources.EMPTY;
+			this.config = config;
 		}
 	}
 
@@ -279,7 +328,7 @@ final class HarnessTools {
 	 * {@code id} (the key). The entry grammar is AGENT_CONTEXT.md §6.2; the
 	 * stored spec is what a declared load would carry, so the loads tiers
 	 * hold one shape whoever wrote them. An op entry defaults to volatile —
-	 * it re-runs every inference, so it belongs in the tail.
+	 * it is observed before every inference and appends only when changed.
 	 */
 	static ACell contextLoad(ACell input, LoadScope scope) {
 		AString path = RT.ensureString(RT.getIn(input, AbstractLLMAdapter.K_PATH));
@@ -325,7 +374,7 @@ final class HarnessTools {
 		if (vol instanceof CVMBool) meta = meta.assoc(Loads.K_VOLATILE, vol);
 		scope.loads = scope.loads.assoc(key, meta);
 		String note = Loads.isVolatile(meta)
-			? "Loaded as agent-managed context. It re-renders at the end of every model call (never cached)."
+			? "Loaded as agent-managed context. It is checked before every model call and appends only when changed."
 			: "Loaded as agent-managed context across turns.";
 		return Maps.of(
 			AbstractLLMAdapter.K_PATH, key,
@@ -338,12 +387,12 @@ final class HarnessTools {
 		AString path = RT.ensureString(RT.getIn(input, AbstractLLMAdapter.K_PATH));
 		AVector<ACell> paths = RT.ensureVector(RT.getIn(input, AbstractLLMAdapter.K_PATHS));
 		if ((path == null) == (paths == null)) return Strings.create(
-			"Error: give exactly one of path or paths — using exact keys from loaded_context.");
+			"Error: give exactly one of path or paths — using exact agent-managed load keys.");
 		if (!scope.writable) return Strings.create(scope.unavailableMessage);
 
 		if (path != null) return unloadOne(path, scope);
 		if (paths.isEmpty() || paths.count() > 50) {
-			return Strings.create("Error: paths must contain 1 to 50 loaded_context keys.");
+			return Strings.create("Error: paths must contain 1 to 50 agent-managed load keys.");
 		}
 		AVector<ACell> unloaded = Vectors.empty();
 		AVector<ACell> errors = Vectors.empty();

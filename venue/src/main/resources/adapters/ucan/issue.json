@@ -4,6 +4,7 @@
 	"dateCreated": "2026-03-25T00:00:00Z",
 	"operation": {
 		"adapter": "ucan:issue",
+		"readOnly": false,
 		"toolName": "ucan_issue",
 		"input": {
 			"type": "object",

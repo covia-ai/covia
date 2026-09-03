@@ -3,6 +3,7 @@
   "description": "Coerce a value to match a schema where possible. Handles common type mismatches: string-to-number, string-to-boolean, etc. Returns the original value if no coercion is possible.",
   "operation": {
     "adapter": "schema:coerce",
+    "readOnly": true,
     "toolName": "schema_coerce",
     "input": {
       "type": "object",

@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Properties;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 
 /**
  * Small process handoff helper used by {@link VenueProcess}.
@@ -77,7 +78,7 @@ public final class VenueRelauncher {
 			LaunchSpec spec = readSpec(specFile);
 			signalReady(spec.helperReadyFile());
 			waitForParent(spec.parentPid());
-			exit = run(spec);
+			exit = run(spec, System.err::println);
 		} catch (Throwable t) {
 			System.err.println("Covia relaunch helper failed: " + t);
 			t.printStackTrace(System.err);
@@ -99,43 +100,49 @@ public final class VenueRelauncher {
 		}
 	}
 
-	static int run(LaunchSpec spec, Launcher launcher) throws IOException {
+	/**
+	 * Runs the handoff, reporting progress and failures to {@code report}. The
+	 * helper is normally its own process with nothing but stderr to speak to,
+	 * so {@link #main} reports there; in-process callers (tests) supply a sink
+	 * and assert on it instead of writing failure-shaped lines to the console.
+	 */
+	static int run(LaunchSpec spec, Launcher launcher, Consumer<String> report) throws IOException {
 		Path dir = spec.helperReadyFile().getParent();
 		Path successorReady = dir.resolve("successor.ready");
 		if (startAndAwait(spec, spec.successorJar(), spec.successorSha256(),
-				successorReady, launcher)) return 0;
+				successorReady, launcher, report)) return 0;
 
-		System.err.println("Covia successor failed to become ready; starting fallback jar: "
+		report.accept("Covia successor failed to become ready; starting fallback jar: "
 			+ spec.fallbackJar());
 		Path fallbackReady = dir.resolve("fallback.ready");
 		if (startAndAwait(spec, spec.fallbackJar(), spec.fallbackSha256(),
-				fallbackReady, launcher)) return 0;
+				fallbackReady, launcher, report)) return 0;
 
-		System.err.println("Covia fallback failed to become ready: " + spec.fallbackJar());
+		report.accept("Covia fallback failed to become ready: " + spec.fallbackJar());
 		return 70;
 	}
 
 	/** Runs the real ProcessBuilder handoff; package-visible for the forked-JVM test. */
-	static int run(LaunchSpec spec) throws IOException {
-		return run(spec, VenueRelauncher::launch);
+	static int run(LaunchSpec spec, Consumer<String> report) throws IOException {
+		return run(spec, VenueRelauncher::launch, report);
 	}
 
 	private static boolean startAndAwait(LaunchSpec spec, Path jar, String expectedSha256,
 			Path readyFile,
-			Launcher launcher) throws IOException {
+			Launcher launcher, Consumer<String> report) throws IOException {
 		Files.deleteIfExists(readyFile);
-		if (!verifySha256(jar, expectedSha256)) {
-			System.err.println("Venue jar changed after restart was accepted; refusing to execute: " + jar);
+		if (!verifySha256(jar, expectedSha256, report)) {
+			report.accept("Venue jar changed after restart was accepted; refusing to execute: " + jar);
 			return false;
 		}
 		Child child;
 		try {
 			child = launcher.launch(spec, jar, readyFile);
 		} catch (IOException e) {
-			System.err.println("Cannot start venue jar " + jar + ": " + e);
+			report.accept("Cannot start venue jar " + jar + ": " + e);
 			return false;
 		}
-		System.err.println("Started venue jar " + jar + " as pid " + child.pid());
+		report.accept("Started venue jar " + jar + " as pid " + child.pid());
 
 		long deadline = System.nanoTime()
 			+ TimeUnit.MILLISECONDS.toNanos(spec.startupTimeoutMillis());
@@ -145,7 +152,7 @@ public final class VenueRelauncher {
 				if (!child.isAlive()) return false;
 				Thread.sleep(POLL_MILLIS);
 			}
-			System.err.println("Venue startup timed out after "
+			report.accept("Venue startup timed out after "
 				+ spec.startupTimeoutMillis() + " ms: " + jar);
 			return false;
 		} catch (InterruptedException e) {
@@ -265,7 +272,7 @@ public final class VenueRelauncher {
 			StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
 	}
 
-	private static boolean verifySha256(Path jar, String expected) {
+	private static boolean verifySha256(Path jar, String expected, Consumer<String> report) {
 		try (InputStream in = Files.newInputStream(jar)) {
 			MessageDigest digest = MessageDigest.getInstance("SHA-256");
 			byte[] buffer = new byte[64 * 1024];
@@ -274,7 +281,7 @@ public final class VenueRelauncher {
 			}
 			return java.util.HexFormat.of().formatHex(digest.digest()).equalsIgnoreCase(expected);
 		} catch (Exception e) {
-			System.err.println("Cannot verify venue jar " + jar + ": " + e);
+			report.accept("Cannot verify venue jar " + jar + ": " + e);
 			return false;
 		}
 	}

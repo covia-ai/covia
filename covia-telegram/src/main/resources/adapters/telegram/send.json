@@ -3,6 +3,7 @@
 	"description": "Sends a text message through one of the venue's bots. Takes the Telegram Bot API sendMessage parameters as-is (https://core.telegram.org/bots/api#sendmessage): chat_id (numeric chat id — a person's private chat is their user id, groups are negative; the bot's /id command shows it — or @channelusername), text, and optionally parse_mode, entities, link_preview_options, disable_notification, protect_content, message_thread_id, reply_parameters ({message_id, ...}), reply_markup (inline keyboards) and any other sendMessage field. Returns the sent Message as Telegram describes it. Two conveniences: text over 4096 characters is split into consecutive messages, and if a parse_mode is set and Telegram rejects the formatting the text is resent plain. Requires telegram/send on <bot user>/telegram/<bot>: the bot's user (and their agents, within scope) may send; others need a delegation from that user.",
 	"operation": {
 		"adapter": "telegram:send",
+		"readOnly": false,
 		"input": {
 			"type": "object",
 			"properties": {

@@ -3,6 +3,7 @@
 	"description": "Diagnostic escape hatch: cancel a task directly by A2A URL with per-call Bearer authentication. Prefer importing an A2A agent asset.",
 	"operation": {
 		"adapter": "a2a:rawCancel",
+		"readOnly": false,
 		"secretFields": ["bearerSecret", "bearerToken"],
 		"input": {
 			"type": "object",

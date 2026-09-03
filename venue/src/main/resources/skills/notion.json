@@ -1,0 +1,23 @@
+{
+	"name": "notion",
+	"description": "Read and write Notion pages and databases with the user's own Notion token. Load for Notion search, page reads, database queries, and page updates.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Notion\nAll calls go through `v/ops/http/get` / `v/ops/http/post` against `https://api.notion.com/v1` with `bearerSecret: \"s/NOTION_TOKEN\"` and the header `Notion-Version: 2022-06-28`. The token is the user's Notion personal access token (Settings → Developer Mode; uses their own permissions) or an internal connection token (pages must be shared with the connection). Never place the token in `headers`; only the secret reference.\n\nCommon calls (POST unless noted):\n- Search: `POST /search` body `{query, filter?: {property: \"object\", value: \"page\"|\"database\"}}`\n- Read a page: `GET /pages/{page_id}`; page body blocks: `GET /blocks/{page_id}/children?page_size=100` (paginate with `start_cursor`)\n- Query a database: `POST /databases/{database_id}/query` body `{filter?, sorts?, page_size?}`\n- Create a page: `POST /pages` body `{parent: {database_id} | {page_id}, properties, children?}`\n- Update properties: `POST /pages/{page_id}` with `method: \"PATCH\"` and body `{properties}`\n- Append blocks: `POST /blocks/{block_id}/children` with `method: \"PATCH\"` and body `{children: [...]}`\n\nRules:\n- Check `status` before trusting `body`; Notion returns `{object: \"error\", code, message}` on failure. `unauthorized` means the token is missing or the page is not shared with the connection; `rate_limited` means back off (about 3 requests per second).\n- Database property values are typed (`title`, `rich_text`, `select`, `date`, ...); read the schema from `GET /databases/{id}` before writing.\n- Page and database ids may be pasted as URLs; the id is the 32-hex segment (dashes optional).\n- Large pages: fetch blocks page by page and extract what the task needs; do not load whole workspaces into context.\n"
+	},
+	"connection": {
+		"baseUrl": "https://api.notion.com/v1",
+		"auth": {
+			"kind": "bearer-secret",
+			"alternatives": ["s/NOTION_TOKEN"]
+		}
+	},
+	"skill": {
+		"tools": [
+			"v/ops/connections/status",
+			"v/ops/http/get",
+			"v/ops/http/post",
+			"v/ops/jvm/url-encode"
+		]
+	}
+}

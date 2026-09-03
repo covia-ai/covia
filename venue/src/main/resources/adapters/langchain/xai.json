@@ -11,6 +11,7 @@
 	],
 	"operation": {
 		"adapter": "langchain:xai",
+		"readOnly": false,
 		"secretFields": [
 			"apiKey"
 		],
@@ -52,6 +53,10 @@
 				"topP": {
 					"type": "number",
 					"description": "Nucleus sampling top_p; provider default when omitted"
+				},
+				"providerOptions": {
+					"type": "object",
+					"description": "Provider-native request body fields forwarded unchanged; omitted fields retain provider defaults. Do not repeat the shared model/messages/tools/temperature/top_p envelope here."
 				},
 				"tools": {
 					"type": "array",

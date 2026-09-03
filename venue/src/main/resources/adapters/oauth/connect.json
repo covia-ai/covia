@@ -3,6 +3,7 @@
   "description": "Starts connecting the caller's account at an OAuth provider (google, microsoft, github, or any provider the operator configured). Returns the URL the user must open and approve; the provider then calls the venue back and the grant is stored for the caller. Nothing is connected until the user approves. Afterwards, call the provider's API with http:get / http:post and bearerSecret \"oauth/<provider>\" — the access token never appears in your context.",
   "operation": {
     "adapter": "oauth:connect",
+    "readOnly": false,
     "input": {
       "type": "object",
       "properties": {

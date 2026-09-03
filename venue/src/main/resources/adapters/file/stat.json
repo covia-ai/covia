@@ -4,6 +4,7 @@
   "creator": "Covia",
   "operation": {
     "adapter": "file:stat",
+    "readOnly": true,
     "toolName": "file_stat",
     "input": {
       "type": "object",

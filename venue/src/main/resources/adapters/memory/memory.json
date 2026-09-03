@@ -4,6 +4,7 @@
 	"dateCreated": "2026-06-15T00:00:00Z",
 	"operation": {
 		"adapter": "memory:manage",
+		"readOnly": false,
 		"toolName": "memory",
 		"input": {
 			"type": "object",

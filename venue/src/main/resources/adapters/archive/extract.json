@@ -4,6 +4,7 @@
   "creator": "Covia",
   "operation": {
     "adapter": "archive:extract",
+    "readOnly": false,
     "toolName": "archive_extract",
     "input": {
       "type": "object",

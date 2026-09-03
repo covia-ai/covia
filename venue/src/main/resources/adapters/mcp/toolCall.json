@@ -4,6 +4,7 @@
 	"dateCreated": "2025-09-03T23:00:00Z",
 	"operation": {
 		"adapter": "mcp:tools:call",
+		"readOnly": false,
 		"info":{
 		    "featured":true
 		},

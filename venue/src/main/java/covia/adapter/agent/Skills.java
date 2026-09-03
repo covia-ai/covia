@@ -20,6 +20,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.AssetAdapter;
+import covia.api.Abilities;
 import covia.api.Fields;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -243,6 +244,44 @@ public final class Skills {
 			}
 		}
 		return out;
+	}
+
+	/** Exact source-state membership used by {@code skill_load {ref}}. A named
+	 * load already proves this by resolving through the same effective index.
+	 * Direct refs outside it require explicit authority before they are resolved
+	 * as trusted instructions. */
+	static boolean isAdvertised(Engine engine, RequestContext ctx,
+			SkillSources effectiveSources, AMap<AString, ACell> effectiveLoads,
+			AString ref) {
+		if (ref == null) return false;
+		ACell loaded = (effectiveLoads != null) ? effectiveLoads.get(ref) : null;
+		if (isSkillEntry(loaded)) return true;
+		for (SkillIndexEntry entry : listSkills(engine, ctx, effectiveSources)) {
+			if (entry.error() == null && ref.equals(entry.path())) return true;
+		}
+		return false;
+	}
+
+	/** True when the effective advertised skill surface declares an operation.
+	 * Used only on an explicit {@code more_tools} request, so schemas remain out
+	 * of the initial prompt while an operator-advertised bundle can still serve
+	 * as the authority to load its tools. */
+	static boolean advertisesOperation(Engine engine, RequestContext ctx,
+			SkillSources configured, AMap<AString, ACell> effectiveLoads,
+			AString operation) {
+		SkillSources effective = effectiveSources(engine, ctx, configured, effectiveLoads);
+		for (SkillIndexEntry entry : listSkills(engine, ctx, effective)) {
+			if (entry.error() != null) continue;
+			try {
+				ResolvedSkill skill = resolveRef(engine, ctx, entry.path());
+				for (long i = 0; i < skill.toolOps().count(); i++) {
+					if (operation.equals(skill.toolOps().get(i))) return true;
+				}
+			} catch (RuntimeException e) {
+				// A broken advertised skill does not authorise anything.
+			}
+		}
+		return false;
 	}
 
 	/** A source ref must be a string; anything else is a configuration error. */
@@ -979,37 +1018,25 @@ public final class Skills {
 		return meta;
 	}
 
-	/**
-	 * Resolves tool declarations for skill-marked loads that did not already
-	 * declare {@code tools}. Runtime {@code skill_load} entries denormalise this
-	 * field when written; operator-pinned {@code config.loads} entries may be
-	 * hand-written and therefore need the same contribution resolved
-	 * ephemerally. An explicit {@code tools} value, including empty or null,
-	 * remains authoritative.
-	 *
-	 * <p>Resolution failures remain visible through the normal skill-element
-	 * diagnostic and contribute no tools; this helper never makes a pinned
-	 * context entry disappear or fail the whole prompt.</p>
-	 */
-	@SuppressWarnings("unchecked")
-	public static AMap<AString, ACell> resolveLoadTools(Engine engine,
-			RequestContext ctx, AMap<AString, ACell> loads) {
-		if (loads == null || loads.count() == 0) return loads;
-		AMap<AString, ACell> resolved = loads;
-		for (var entry : loads.entrySet()) {
-			if (!(entry.getValue() instanceof AMap<?, ?> raw)) continue;
-			AMap<AString, ACell> meta = (AMap<AString, ACell>) raw;
-			if (!isSkillEntry(meta) || meta.containsKey(Fields.TOOLS)) continue;
-			try {
-				AVector<ACell> tools = resolveRef(engine, ctx, entry.getKey()).toolOps();
-				if (tools.count() > 0) {
-					resolved = resolved.assoc(entry.getKey(), meta.assoc(Fields.TOOLS, tools));
-				}
-			} catch (RuntimeException e) {
-				// Loads.element reports the same resolution failure in model-visible context.
-			}
+	/** Refreshes the fields derived from a loaded skill's current source while
+	 * retaining the load's identity, budget, ordering and ownership. Missing or
+	 * broken skills contribute no tools or child sources; their visible
+	 * unavailable instruction is produced by the ordinary loads renderer. */
+	static AMap<AString, ACell> materialiseLoadMeta(Engine engine, RequestContext ctx,
+			AString path, AMap<AString, ACell> meta) {
+		try {
+			ResolvedSkill skill = resolveRef(engine, ctx, path);
+			if (!meta.containsKey(K_LABEL)) meta = meta.assoc(K_LABEL, Strings.create(skill.name()));
+			if (!meta.containsKey(Fields.TOOLS)) meta = meta.assoc(Fields.TOOLS, skill.toolOps());
+			if (!meta.containsKey(K_SKILLS)) meta = meta.assoc(K_SKILLS, skill.skills());
+			if (!meta.containsKey(K_SKILLSETS)) meta = meta.assoc(K_SKILLSETS, skill.skillsets());
+			return meta;
+		} catch (RuntimeException e) {
+			if (!meta.containsKey(Fields.TOOLS)) meta = meta.assoc(Fields.TOOLS, Vectors.empty());
+			if (!meta.containsKey(K_SKILLS)) meta = meta.assoc(K_SKILLS, Vectors.empty());
+			if (!meta.containsKey(K_SKILLSETS)) meta = meta.assoc(K_SKILLSETS, Vectors.empty());
+			return meta;
 		}
-		return resolved;
 	}
 
 	/** No-engine form: contributes only child refs already denormalised onto
@@ -1035,7 +1062,7 @@ public final class Skills {
 	 * (a runtime {@code skill_load}) or live only in the skill's facet (a
 	 * hand-written {@code config.loads} pin, #415): for a pin missing a kind,
 	 * the skill is re-resolved and its facet children are contributed — the
-	 * sources counterpart of {@link #resolveLoadTools}. An explicit
+	 * sources counterpart of initial load materialisation. An explicit
 	 * {@code skills} / {@code skillsets} on the entry, including an empty vector
 	 * or null, stays authoritative. Needs {@code engine} + {@code ctx}; the
 	 * no-arg overload skips this repair.</p>
@@ -1549,7 +1576,7 @@ public final class Skills {
 	 * Executes the {@code skill_load} semantics: resolve the skill (by
 	 * {@code name} across the agent's sources, or by direct {@code ref}),
 	 * build its loads entry, and assemble the tool result — including the
-	 * body for immediate same-turn use, the activated tool names, the skills a
+	 * body for immediate same-turn use, the declared tool names, the skills a
 	 * contributing load newly revealed (plus the refreshed index), and any
 	 * declared-but-unresolvable tools. Throws with a diagnosable message on
 	 * any failure (the handler renders it as an {@code Error:} tool result).
@@ -1567,9 +1594,13 @@ public final class Skills {
 		if ((name == null) == (ref == null)) {
 			throw new IllegalArgumentException("skill_load requires exactly one of 'name' or 'ref'");
 		}
+		SkillSources effective = effectiveSources(engine, ctx, sources, effectiveLoads);
+		if (ref != null && !isAdvertised(engine, ctx, effective, effectiveLoads, ref)) {
+			ctx.requireExplicitCapability(ref, Abilities.SKILL_LOAD);
+		}
 		ResolvedSkill skill = (ref != null)
 			? resolveRef(engine, ctx, ref)
-			: resolveByName(engine, ctx, effectiveSources(engine, ctx, sources, effectiveLoads), name.toString());
+			: resolveByName(engine, ctx, effective, name.toString());
 
 		// Same content already loaded under another address → no-op naming it.
 		AString existing = findLoadedDuplicate(engine, ctx, effectiveLoads, skill.id());
@@ -1589,21 +1620,28 @@ public final class Skills {
 			RT.getIn(toolInput, K_BUDGET), defaultBudget);
 
 		AMap<AString, ACell> entryMeta = buildSkillLoadMeta(budget, skill);
+		ACell volatileCell = RT.getIn(toolInput, Loads.K_VOLATILE);
+		if (volatileCell != null && !(volatileCell instanceof CVMBool)) {
+			throw new IllegalArgumentException("skill_load volatile must be a boolean");
+		}
+		if (volatileCell != null) entryMeta = entryMeta.assoc(Loads.K_VOLATILE, volatileCell);
 
-		// Resolve the declared operation refs for an honest result (activated
+		// Resolve the declared operation refs for an honest result (available
 		// names + unresolvable refs). The refs are snapshotted on the load entry;
 		// the active palette resolves those refs by the generic loads rule.
 		AVector<ACell> toolNames = Vectors.empty();
 		AVector<ACell> unresolved = Vectors.empty();
 		if (skill.toolOps().count() > 0) {
-			Map<String, AString> routes = new java.util.HashMap<>();
-			AVector<ACell> defs = ToolPalette.forOperations(engine, ctx, skill.toolOps(), routes);
-			for (long i = 0; i < defs.count(); i++) {
-				ACell n = RT.getIn(defs.get(i), Fields.NAME);
-				if (n != null) toolNames = toolNames.conj(n);
-			}
+			AVector<ACell> bindings = ToolPalette.bindingsForOperations(
+				engine, ctx, skill.toolOps());
 			Set<String> resolvedOps = new HashSet<>();
-			for (AString route : routes.values()) resolvedOps.add(route.toString());
+			for (long i = 0; i < bindings.count(); i++) {
+				ACell binding = bindings.get(i);
+				ACell n = RT.getIn(binding, Fields.DEFINITION, Fields.NAME);
+				if (n != null) toolNames = toolNames.conj(n);
+				AString operation = RT.ensureString(RT.getIn(binding, Fields.OPERATION));
+				if (operation != null) resolvedOps.add(operation.toString());
+			}
 			for (long i = 0; i < skill.toolOps().count(); i++) {
 				ACell op = skill.toolOps().get(i);
 				if (op != null && !resolvedOps.contains(op.toString())) {
@@ -1612,14 +1650,19 @@ public final class Skills {
 			}
 		}
 
+		boolean watched = Loads.isVolatile(entryMeta);
 		AMap<AString, ACell> result = Maps.of(
 			Strings.intern("loaded"), CVMBool.TRUE,
 			K_SKILL, Strings.create(skill.name()),
 			Strings.intern("path"), skill.path(),
 			Strings.intern("note"), Strings.create(
-				"Skill instructions were appended to context. Its path is the exact unload key if you "
-				+ "later need to remove it; ordinary tool results need no cleanup. Tools and contributed "
-				+ "skills are active from your next step."));
+				(watched
+					? "Skill instructions are watched and append to context when their rendered value changes. "
+					: "Skill instructions were appended to context. ")
+				+ "Its path is the exact unload key if you "
+				+ "later need to remove it; ordinary tool results need no cleanup. Already advertised "
+				+ "tools remain callable; genuinely new tools and contributed skills are available from "
+				+ "your next step. Loading grants no authority."));
 		if (toolNames.count() > 0) result = result.assoc(Fields.TOOLS, toolNames);
 		if (skill.contributesSources()) {
 			if (skill.skills().count() > 0) result = result.assoc(K_SKILLS, skill.skills());

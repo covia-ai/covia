@@ -3,6 +3,7 @@
 	"description": "Execute a read-only query against a Convex peer",
 	"operation": {
 		"adapter": "convex:query",
+		"readOnly": true,
 		"input": {
 			"type": "object",
 			"properties": {
@@ -19,7 +20,9 @@
 					"type": "string",
 					"description": "Convex Lisp source code to query"
 				}
-			}
+			},
+			"required": ["source"],
+			"additionalProperties": false
 		},
 		"output": {
 			"type": "object",

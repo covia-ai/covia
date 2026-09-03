@@ -1,0 +1,29 @@
+{
+	"name": "Encode CAD3",
+	"description": "Encode a native Convex value as a complete, self-contained hexadecimal CAD3 message. Large values include all required child cells for decode-cad3.",
+	"operation": {
+		"adapter": "convex:encode-cad3",
+		"readOnly": true,
+		"input": {
+			"type": "object",
+			"properties": {
+				"value": {
+					"description": "The value to encode"
+				}
+			},
+			"required": ["value"],
+			"additionalProperties": false
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"encoding": {
+					"type": "string",
+					"description": "Complete CAD3 message as a 0x-prefixed hexadecimal string"
+				}
+			},
+			"required": ["encoding"],
+			"additionalProperties": false
+		}
+	}
+}

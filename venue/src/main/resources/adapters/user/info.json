@@ -3,6 +3,7 @@
   "description": "Returns registration information for the caller, or for another DID when authorised by the venue.",
   "operation": {
     "adapter": "user:info",
+    "readOnly": true,
     "input": {
       "type": "object",
       "properties": {

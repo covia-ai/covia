@@ -3,6 +3,7 @@
 	"description": "Picks the 'then' value of the first case whose 'when' is truthy. Truthiness is strict: only JSON false and null are falsy; everything else (including 0, empty strings/arrays/objects) is truthy. Use to express declarative branching based on prior step results.",
 	"operation": {
 		"adapter": "json:cond",
+		"readOnly": true,
 		"input": {
 			"type": "object",
 			"properties": {

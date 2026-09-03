@@ -25,6 +25,7 @@ import convex.core.util.JSON;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import covia.adapter.agent.AbstractLLMAdapter;
+import covia.adapter.agent.ToolCallIds;
 import covia.api.Fields;
 import covia.grid.Asset;
 import covia.grid.Status;
@@ -70,7 +71,7 @@ import dev.langchain4j.model.openai.OpenAiChatRequestParameters;
  * <p>When input contains a {@code messages} array, each entry is a message map:</p>
  * <ul>
  *   <li>{@code {role: "system"|"user", content: "..."}}</li>
- *   <li>{@code {role: "assistant", content: "...", toolCalls?: [{id, name, arguments: {...}}]}}</li>
+ *   <li>{@code {role: "assistant", content: "...", toolCalls?: [{id, name, arguments: {...}}], providerState?}}</li>
  *   <li>{@code {role: "tool", id: "...", name: "...", content: "...", isError?: boolean}}</li>
  * </ul>
  *
@@ -460,15 +461,24 @@ public class LangChainAdapter extends AAdapter {
 
 	// ========== Model construction ==========
 
-	/** Optional sampling/bounds parameters passed through to the provider
-	 *  builders (#218). Anthropic requires an effective {@code maxTokens}; its
-	 *  operation metadata supplies the built-in default before this edge. */
-	record ModelTuning(Integer maxTokens, Double temperature, Double topP, Boolean cache) {
-		static final ModelTuning NONE = new ModelTuning(null, null, null, null);
+	/** Optional shared tuning and provider-native request fields passed through
+	 *  to the provider builders. Anthropic requires an effective
+	 *  {@code maxTokens}; its operation metadata supplies the built-in default
+	 *  before this edge. */
+	record ModelTuning(Integer maxTokens, Double temperature, Double topP, Boolean cache,
+			AMap<?, ?> providerOptions) {
+		static final ModelTuning NONE = new ModelTuning(null, null, null, null, null);
 
 		/** Prompt caching is on unless the call says {@code cache: false}. */
 		boolean caching() {
 			return cache == null || cache;
+		}
+
+		/** Provider-native request fields, converted only at the provider edge.
+		 *  A null/empty map means "let the provider choose". */
+		Map<String, Object> nativeOptions() {
+			return providerOptions == null || providerOptions.isEmpty()
+				? null : JSON.jsonMap(providerOptions);
 		}
 	}
 
@@ -480,10 +490,14 @@ public class LangChainAdapter extends AAdapter {
 		Integer maxTokens = asPositiveInt(RT.getIn(input, "maxTokens"), "maxTokens");
 		ACell cacheCell = RT.getIn(input, K_CACHE);
 		Boolean cache = (cacheCell instanceof CVMBool b) ? b.booleanValue() : null;
+		ACell optionsCell = RT.getIn(input, AbstractLLMAdapter.K_PROVIDER_OPTIONS);
+		if (optionsCell != null && !(optionsCell instanceof AMap<?, ?>)) {
+			throw new IllegalArgumentException("providerOptions must be a map");
+		}
 		return new ModelTuning(maxTokens,
 			asDouble(RT.getIn(input, "temperature"), "temperature"),
 			asDouble(RT.getIn(input, "topP"), "topP"),
-			cache);
+			cache, (AMap<?, ?>) optionsCell);
 	}
 
 	private static Integer asPositiveInt(ACell value, String field) {
@@ -643,6 +657,10 @@ public class LangChainAdapter extends AAdapter {
 	// to stdout if the langchain4j logger were ever bumped to DEBUG.
 
 	static ChatModel buildOllamaModel(String baseUrl, String model, Duration timeout, ModelTuning tuning) {
+		Map<String, Object> providerOptions = tuning.nativeOptions();
+		if (providerOptions != null) {
+			throw new IllegalArgumentException("providerOptions are not supported by the Ollama client");
+		}
 		var builder = OllamaChatModel.builder()
 			.baseUrl(baseUrl)
 			.logRequests(false)
@@ -655,6 +673,7 @@ public class LangChainAdapter extends AAdapter {
 	}
 
 	static ChatModel buildOpenAiModel(String apiKey, String baseUrl, String model, Duration timeout, ModelTuning tuning) {
+		Map<String, Object> providerOptions = tuning.nativeOptions();
 		// strictJsonSchema(true) enables OpenAI structured outputs for the
 		// response_format path — server-enforced schema conformance on the
 		// assistant's text response. This is how typed agent outputs are
@@ -676,10 +695,12 @@ public class LangChainAdapter extends AAdapter {
 			.strictJsonSchema(true);
 		if (tuning.temperature() != null) builder = builder.temperature(tuning.temperature());
 		if (tuning.topP() != null) builder = builder.topP(tuning.topP());
+		if (providerOptions != null) builder = builder.customParameters(providerOptions);
 		return builder.build();
 	}
 
 	static ChatModel buildAnthropicModel(String apiKey, String baseUrl, String model, Duration timeout, ModelTuning tuning) {
+		Map<String, Object> providerOptions = tuning.nativeOptions();
 		AnthropicChatModel.AnthropicChatModelBuilder builder = AnthropicChatModel.builder()
 			.apiKey(apiKey)
 			.baseUrl(baseUrl)
@@ -692,7 +713,12 @@ public class LangChainAdapter extends AAdapter {
 			// keeps both stable across calls), and the caller's cacheMarks
 			// place the conversation breakpoints — see toChatMessages.
 			.cacheSystemMessages(tuning.caching())
-			.cacheTools(tuning.caching());
+			.cacheTools(tuning.caching())
+			// Thinking is provider continuation state, not assistant content.
+			// Ask LangChain4j to retain it so tool-use replies can persist and
+			// replay it; providers/models that return none add no state at all.
+			.returnThinking(true)
+			.sendThinking(true);
 		// Anthropic requires max_tokens on every request. Built-in provider and
 		// model operations declare an overridable operation.default; requiring the
 		// effective value here also keeps authored operations from silently falling
@@ -704,6 +730,7 @@ public class LangChainAdapter extends AAdapter {
 		builder = builder.maxTokens(tuning.maxTokens());
 		if (tuning.temperature() != null) builder = builder.temperature(tuning.temperature());
 		if (tuning.topP() != null) builder = builder.topP(tuning.topP());
+		if (providerOptions != null) builder = builder.customParameters(providerOptions);
 		return builder.build();
 	}
 
@@ -959,12 +986,13 @@ public class LangChainAdapter extends AAdapter {
 	 */
 	private static ACell callModel(String provider, String modelName, ChatModel model, AVector<ACell> messages,
 			AVector<ACell> tools, ACell responseFormatCell, Set<Long> cacheMarks) {
-		List<ChatMessage> chatMessages = toChatMessages(messages, cacheMarks);
+		List<ChatMessage> chatMessages = toChatMessages(messages, cacheMarks, provider, modelName);
 		ResponseFormat responseFormat = toResponseFormat(responseFormatCell);
 
 		if (responseFormat != null && lacksSchemaResponseFormat(provider)) {
 			if (responseFormat.jsonSchema() != null) {
-				return callModelForcedTool(model, messages, tools, responseFormatCell, cacheMarks);
+				return callModelForcedTool(provider, modelName, model, messages, tools,
+					responseFormatCell, cacheMarks);
 			}
 			// Plain JSON mode (no schema) is equally unsupported there —
 			// suppress rather than let the provider client reject the
@@ -1018,7 +1046,7 @@ public class LangChainAdapter extends AAdapter {
 			response.aiMessage().hasToolExecutionRequests()
 				? response.aiMessage().toolExecutionRequests() : "none");
 
-		return toAssistantMessage(response);
+		return toAssistantMessage(response, provider, modelName);
 	}
 
 	// ========== Provider-aware structured output (#81) ==========
@@ -1064,7 +1092,8 @@ public class LangChainAdapter extends AAdapter {
 	 * free text. The venue harnesses always offer completion tools alongside
 	 * (typed complete/fail), so agents are unaffected.</p>
 	 */
-	static ACell callModelForcedTool(ChatModel model, AVector<ACell> messages,
+	static ACell callModelForcedTool(String provider, String modelName, ChatModel model,
+			AVector<ACell> messages,
 			AVector<ACell> tools, ACell responseFormatCell, Set<Long> cacheMarks) {
 		String outName = outputToolName(responseFormatCell);
 		AMap<AString, ACell> outputTool = syntheticOutputTool(outName, responseFormatCell);
@@ -1074,12 +1103,12 @@ public class LangChainAdapter extends AAdapter {
 			messages.count(), allTools.count(), outName);
 
 		ChatRequest request = ChatRequest.builder()
-			.messages(toChatMessages(messages, cacheMarks))
+			.messages(toChatMessages(messages, cacheMarks, provider, modelName))
 			.toolSpecifications(toToolSpecifications(allTools))
 			.toolChoice(dev.langchain4j.model.chat.request.ToolChoice.REQUIRED)
 			.build();
 		ChatResponse response = model.chat(request);
-		return convertOutputToolCall(toAssistantMessage(response), outName);
+		return convertOutputToolCall(toAssistantMessage(response, provider, modelName), outName);
 	}
 
 	/** The synthetic output tool's name — the responseFormat's own name (the
@@ -1125,6 +1154,9 @@ public class LangChainAdapter extends AAdapter {
 			AString content = (args instanceof AString s) ? s : JSON.print(args);
 			return ((AMap<AString, ACell>) assistantMsg)
 				.dissoc(K_TOOL_CALLS)
+				// The synthetic output call becomes a terminal text reply, so no
+				// provider continuation is required or useful in later history.
+				.dissoc(Fields.PROVIDER_STATE)
 				.assoc(K_CONTENT, content);
 		}
 		return assistantMsg;
@@ -1141,7 +1173,15 @@ public class LangChainAdapter extends AAdapter {
 	 */
 	@SuppressWarnings("unchecked")
 	static ACell toAssistantMessage(ChatResponse response) {
-		AMap<AString, ACell> msg = (AMap<AString, ACell>) toAssistantMessage(response.aiMessage());
+		return toAssistantMessage(response, null, null);
+	}
+
+	/** Provider-aware form: attaches optional continuation state when the
+	 * matching provider returned state for a tool-use reply. */
+	@SuppressWarnings("unchecked")
+	static ACell toAssistantMessage(ChatResponse response, String provider, String modelName) {
+		AMap<AString, ACell> msg = (AMap<AString, ACell>)
+			toAssistantMessage(response.aiMessage(), provider, modelName);
 
 		TokenUsage usage = response.tokenUsage();
 		if (usage != null) {
@@ -1174,6 +1214,11 @@ public class LangChainAdapter extends AAdapter {
 	 * Converts a LangChain4j AiMessage to a Convex assistant message map.
 	 */
 	static ACell toAssistantMessage(AiMessage ai) {
+		return toAssistantMessage(ai, null, null);
+	}
+
+	@SuppressWarnings("unchecked")
+	static ACell toAssistantMessage(AiMessage ai, String provider, String modelName) {
 		AMap<AString, ACell> msg = Maps.of(K_ROLE, ROLE_ASSISTANT);
 
 		// Text content (strip <think> tags)
@@ -1193,12 +1238,15 @@ public class LangChainAdapter extends AAdapter {
 						req.arguments() == null ? null : Strings.create(req.arguments()))
 				);
 				if (req.id() != null) {
-					tc = tc.assoc(K_ID, Strings.create(req.id()));
+					tc = tc.assoc(K_ID, ToolCallIds.normalise(Strings.create(req.id())));
 				}
 				toolCalls = toolCalls.conj(tc);
 			}
 			msg = msg.assoc(K_TOOL_CALLS, toolCalls);
 		}
+
+		AMap<AString, ACell> providerState = ProviderState.capture(provider, modelName, ai);
+		if (providerState != null) msg = msg.assoc(Fields.PROVIDER_STATE, providerState);
 
 		return msg;
 	}
@@ -1529,6 +1577,14 @@ public class LangChainAdapter extends AAdapter {
 	 */
 	@SuppressWarnings("unchecked")
 	static List<ChatMessage> toChatMessages(AVector<ACell> messages, Set<Long> cacheMarks) {
+		return toChatMessages(messages, cacheMarks, null, null);
+	}
+
+	/** Provider-aware form. Optional {@code providerState} is restored only
+	 * when its recorded provider and model exactly match this invocation. */
+	@SuppressWarnings("unchecked")
+	static List<ChatMessage> toChatMessages(AVector<ACell> messages, Set<Long> cacheMarks,
+			String provider, String modelName) {
 		List<ChatMessage> result = new ArrayList<>();
 		for (long i = 0; i < messages.count(); i++) {
 			ACell entry = messages.get(i);
@@ -1580,7 +1636,8 @@ public class LangChainAdapter extends AAdapter {
 							AString id = RT.ensureString(RT.getIn(tc, K_ID));
 							if (name != null) {
 								// Synthetic ID if LLM didn't provide one (e.g. Ollama)
-								String idStr = (id != null) ? id.toString() : name.toString();
+								String idStr = ToolCallIds.normalise(
+									(id != null) ? id : name).toString();
 								reqs.add(ToolExecutionRequest.builder()
 									.id(idStr)
 									.name(name.toString())
@@ -1595,7 +1652,14 @@ public class LangChainAdapter extends AAdapter {
 					} else {
 						break;
 					}
-					result.add(marked ? ai.toBuilder().attributes(CACHE_ATTRIBUTE).build() : ai);
+					ai = ProviderState.restore(provider, modelName,
+						RT.getIn(entry, Fields.PROVIDER_STATE), ai);
+					if (marked) {
+						Map<String, Object> attributes = new LinkedHashMap<>(ai.attributes());
+						attributes.putAll(CACHE_ATTRIBUTE);
+						ai = ai.toBuilder().attributes(attributes).build();
+					}
+					result.add(ai);
 					break;
 				}
 				case "tool": {
@@ -1603,7 +1667,8 @@ public class LangChainAdapter extends AAdapter {
 					AString name = RT.ensureString(RT.getIn(entry, K_NAME));
 					AString content = RT.ensureString(RT.getIn(entry, K_CONTENT));
 					if (name != null && content != null) {
-						String idStr = (id != null) ? id.toString() : name.toString();
+						String idStr = ToolCallIds.normalise(
+							(id != null) ? id : name).toString();
 						var builder = ToolExecutionResultMessage.builder()
 							.id(idStr)
 							.toolName(name.toString())

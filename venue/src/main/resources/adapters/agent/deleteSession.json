@@ -4,6 +4,7 @@
 	"dateCreated": "2026-07-07T00:00:00Z",
 	"operation": {
 		"adapter": "agent:deleteSession",
+		"readOnly": false,
 		"internal": false,
 		"toolName": "agent_delete_session",
 		"input": {

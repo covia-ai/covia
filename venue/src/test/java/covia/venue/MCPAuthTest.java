@@ -19,7 +19,6 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestInstance.Lifecycle;
-import org.junit.jupiter.api.io.TempDir;
 
 import convex.auth.jwt.JWT;
 import convex.auth.ucan.Capability;
@@ -70,9 +69,6 @@ public class MCPAuthTest {
 	private AString namedDid;
 	private AString peerDid;
 	private AString outsiderDid;
-
-	@TempDir
-	Path tempDir;
 
 	@BeforeAll
 	void setup() {
@@ -339,7 +335,11 @@ public class MCPAuthTest {
 
 	@Test
 	void rotationRevocationAndAuthenticatorHistorySurviveRestart() throws Exception {
-		Path store = tempDir.resolve("credential-lifecycle.etch");
+		// Not a JUnit @TempDir: on Java 21 (no FFM mapper) Etch cannot unmap on
+		// close, so on Windows the store file stays pinned until the buffers are
+		// garbage-collected and @TempDir's mandatory cleanup fails the test.
+		// TestTemp deletes best-effort now and retries at JVM exit.
+		Path store = TestTemp.dir("mcp-auth").resolve("credential-lifecycle.etch");
 		AKeyPair oldKey = AKeyPair.generate();
 		AKeyPair replacement = AKeyPair.generate();
 		AString oldKeyDid = UCAN.toDIDKey(oldKey.getAccountKey());

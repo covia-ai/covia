@@ -1,0 +1,21 @@
+{
+	"name": "Recall Memory",
+	"description": "Read a caller-scoped memory collection and render its current surfaceable entries as a stable numbered text block. Returns null when empty. This read-only operation is suitable for watched agent context; use the memory tool to edit the list.",
+	"dateCreated": "2026-09-01T00:00:00Z",
+	"operation": {
+		"adapter": "memory:recall",
+		"readOnly": true,
+		"toolName": "memory_recall",
+		"input": {
+			"type": "object",
+			"properties": {
+				"path": { "type": "string", "description": "Memory path (default 'w/memory')." },
+				"displayField": { "type": "string", "description": "For a map of records, the field shown as each line (default 'text')." },
+				"noteField": { "type": "string", "description": "Optional record field appended after each line as a note." }
+			}
+		},
+		"output": {
+			"description": "A numbered text block, or null when no entries are surfaceable."
+		}
+	}
+}

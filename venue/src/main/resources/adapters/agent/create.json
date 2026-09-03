@@ -4,6 +4,7 @@
 	"dateCreated": "2026-02-27T00:00:00Z",
 	"operation": {
 		"adapter": "agent:create",
+		"readOnly": false,
 		"internal": false,
 		"input": {
 			"type": "object",
@@ -45,9 +46,33 @@
 									"type": "string",
 									"description": "Optional LLM model name; the selected provider's default applies when absent."
 								},
+								"maxTokens": {
+									"type": "integer",
+									"minimum": 1,
+									"description": "Optional maximum output tokens forwarded to the LLM operation; its declared default applies when absent."
+								},
+								"temperature": {
+									"type": "number",
+									"description": "Optional sampling temperature forwarded to the LLM operation; the model provider chooses when absent."
+								},
+								"topP": {
+									"type": "number",
+									"description": "Optional nucleus-sampling value forwarded to the LLM operation; the model provider chooses when absent."
+								},
+								"cache": {
+									"type": "boolean",
+									"description": "Optional prompt-caching override; false disables cached-prefix materialisation and provider cache marks."
+								},
+								"providerOptions": {
+									"type": "object",
+									"description": "Provider-native request body fields forwarded unchanged by providers that support them. Omit the map or individual fields to retain provider defaults."
+								},
 								"caps": {
 									"type": "array",
 									"description": "Capability restrictions — array of {with, can} objects limiting what the agent can access"
+								},
+								"accepts": {
+									"description": "Target-side admission (#447): who besides the owner may talk to this agent — agent:request/trigger (agent/request) and agent:message/chat/step (agent/message) — without a delegation. \"owner\" (default): nobody. \"venue\": the venue operator — the venue principal and the agents it owns, not every user hosted here. An array: exact principal DIDs — a user DID admits that user only, <userDID>:g:<agentId> admits that one agent only; \"venue\" may appear as an entry. No prefixes. Admission covers talking only: reads, updates and control still need a delegation. The public principal is never admitted (anonymous exposure remains a2a.public + a2a.caps). Malformed values are rejected."
 								},
 								"context": {
 									"type": "array",
@@ -55,7 +80,7 @@
 								},
 								"loads": {
 									"type": "object",
-									"description": "Operator-pinned live loads: a map of key to entry spec. The key is the reference (lattice path, skill path with {skill: true}) unless the spec declares its own source — {text}, {op, input?} (volatile by default: rendered in the tail, never cached), {job} — under any key. Non-skill entries are trusted system instructions by default; use trusted:false for reference data. Each value may also include label, budget, required, volatile, and contributed tools, skills and skillsets."
+									"description": "Operator-pinned loads: a map of key to entry spec. The key is the reference (lattice path, skill path with {skill: true}) unless the spec declares its own source — {text}, {op, input?} (volatile by default: observed before each inference and appended only when changed), {job} — under any key. Non-skill entries are trusted system instructions by default; use trusted:false for reference data. Each value may also include label, budget, required, volatile, and contributed tools, skills and skillsets."
 								},
 								"skills": {
 									"type": "array",

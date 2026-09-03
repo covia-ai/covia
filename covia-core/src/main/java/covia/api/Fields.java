@@ -29,6 +29,8 @@ public class Fields {
 	/** Operation may execute through result-oriented/internal paths without a
 	 * durable Job record. Only an explicit true opts in. */
 	public static final StringShort READ_ONLY = Strings.intern("readOnly");
+	/** Optional human-facing label for activity emitted while an operation tool runs. */
+	public static final StringShort ACTIVITY_LABEL = Strings.intern("activityLabel");
 	/** Whether an operation may use internal/result-only execution. An explicit
 	 * false forces a durable Job even when the caller uses run/invokeInternal. */
 	public static final StringShort INTERNAL = Strings.intern("internal");
@@ -171,10 +173,16 @@ public class Fields {
 	// Lattice navigation
 	public static final StringShort PATH = Strings.intern("path");
 	public static final StringShort VALUE = Strings.intern("value");
+	/** DLFS drive name (#253) — distinct from the generic lattice PATH within it. */
+	public static final StringShort DRIVE = Strings.intern("drive");
 
 	// Agent related
 	public static final StringShort AGENT_ID = Strings.intern("agentId");
 	public static final StringShort CONFIG = Strings.intern("config");
+	/** Target-side admission policy on an agent record (covia#447): who, besides
+	 *  the owner, may talk to the agent without a delegation — {@code "owner"},
+	 *  {@code "venue"} (the operator), or an array of exact principal DIDs. */
+	public static final StringShort ACCEPTS = Strings.intern("accepts");
 	public static final StringShort DELIVERED = Strings.intern("delivered");
 	public static final StringShort MESSAGES = Strings.intern("messages");
 	public static final StringShort TASKS = Strings.intern("tasks");
@@ -207,6 +215,10 @@ public class Fields {
 	 *  turns) — the part a display-safe consumer strips. */
 	public static final StringShort DETAIL = Strings.intern("detail");
 	public static final StringShort MODEL = Strings.intern("model");
+	/** Optional opaque continuation data returned by an LLM provider on an
+	 * assistant turn. Agent code preserves it verbatim; only the matching
+	 * provider/model adapter may interpret it on a later inference. */
+	public static final StringShort PROVIDER_STATE = Strings.intern("providerState");
 	public static final StringShort TOOL_CALLS = Strings.intern("toolCalls");
 	public static final StringShort BUDGET = Strings.intern("budget");
 	/** Job ids a cycle presented (chat envelopes drained this cycle). */
@@ -275,6 +287,8 @@ public class Fields {
 	public static final StringShort ROLES = Strings.intern("roles");
 	public static final StringShort REQUIRES = Strings.intern("requires");
 	public static final StringShort EMAIL = Strings.intern("email");
+	/** Stable pseudonymous OAuth identity derived from the normalised email. */
+	public static final StringShort COVIA_UID = Strings.intern("covia_uid");
 	public static final StringShort PROVIDER = Strings.intern("provider");
 	public static final StringShort PROVIDER_SUB = Strings.intern("providerSub");
 	public static final StringShort SUB = Strings.intern("sub");
@@ -287,6 +301,12 @@ public class Fields {
 	public static final StringShort ADDED_BY = Strings.intern("addedBy");
 	public static final StringShort REVOKED_AT = Strings.intern("revokedAt");
 	public static final StringShort REVOKED_BY = Strings.intern("revokedBy");
+	/** Whether a registered user is a venue-managed named account (has a
+	 *  did:web identity minted from a username) vs. a plain registered DID. */
+	public static final StringShort MANAGED = Strings.intern("managed");
+	/** Curated public access-policy block on venue status (#255): admission
+	 *  policy fields safe to state truthfully to any caller. */
+	public static final StringShort ACCESS = Strings.intern("access");
 
 	// Convex related
 	public static final StringShort PEER = Strings.intern("peer");

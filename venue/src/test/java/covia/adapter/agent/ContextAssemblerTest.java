@@ -246,6 +246,7 @@ public class ContextAssemblerTest {
 		AbstractLLMAdapter.ModelProfile provider = AbstractLLMAdapter.ModelProfile.of(
 			AbstractLLMAdapter.modelProfile(meta, null, null));
 		assertTrue(provider.toolCalling());
+		assertTrue(provider.cachePrefix(), "models cache unless explicitly disabled");
 		assertEquals(Strings.create("xml"), provider.labels());
 		assertEquals(100L, provider.budget());
 		AbstractLLMAdapter.ModelProfile tiny = AbstractLLMAdapter.ModelProfile.of(
@@ -253,12 +254,17 @@ public class ContextAssemblerTest {
 		assertFalse(tiny.toolCalling(), "the model's entry overrides the provider");
 		assertEquals(Strings.create("xml"), tiny.labels(), "what it does not state survives");
 		AMap<AString, ACell> config = Maps.of("modelProfile", Maps.of(
-			"options", Maps.of("toolCalling", CVMBool.TRUE), "budget", Maps.of("bytes", 50L)));
+			"options", Maps.of("toolCalling", CVMBool.TRUE, "cachePrefix", CVMBool.FALSE),
+			"budget", Maps.of("bytes", 50L)));
 		AbstractLLMAdapter.ModelProfile agent = AbstractLLMAdapter.ModelProfile.of(
 			AbstractLLMAdapter.modelProfile(meta, Strings.create("tiny"), config));
 		assertTrue(agent.toolCalling(), "the agent's override wins");
 		assertEquals(50L, agent.budget());
 		assertEquals(Strings.create("xml"), agent.labels());
+		assertFalse(agent.cachePrefix(), "the agent can opt this model out of prefix caching");
+		assertTrue(AbstractLLMAdapter.promptCaching(provider, null));
+		assertFalse(AbstractLLMAdapter.promptCaching(provider,
+			Maps.of("cache", CVMBool.FALSE)), "a call can explicitly opt out too");
 	}
 
 	// ========== Head ==========
@@ -408,7 +414,7 @@ public class ContextAssemblerTest {
 	}
 
 	@Test
-	public void testVolatilePinnedContextStaysOutOfThePrefixAndRefreshes() {
+	public void testVolatilePinnedContextAppendsOnlyWhenChanged() {
 		write("w/live-profile", Strings.create("first"));
 		AMap<AString, ACell> config = Maps.of(K_CONTEXT, Vectors.of((ACell) Maps.of(
 			"ref", "w/live-profile", "volatile", true, "trusted", false)));
@@ -416,12 +422,23 @@ public class ContextAssemblerTest {
 
 		ContextAssembler.Rendered rendered = ContextAssembler.initialise(s);
 		assertFalse(allContent(rendered.messages()).contains("first"));
+		AMap<AString, ACell> frame = GoalTreeContext.applyObservations(
+			GoalTreeContext.createFrame(""),
+			ContextAssembler.observations(s, Loads.Snapshot.EMPTY), 1L);
+		s = s.withFrames(Vectors.of((ACell) frame));
 		assertTrue(allContent(ContextAssembler.assemble(s)).contains("first"));
 
+		AMap<AString, ACell> unchanged = GoalTreeContext.applyObservations(frame,
+			ContextAssembler.observations(s, Loads.Snapshot.EMPTY), 2L);
+		assertSame(frame, unchanged, "an equal rendered observation performs no state update");
+
 		write("w/live-profile", Strings.create("second"));
-		String refreshed = allContent(ContextAssembler.assemble(s));
+		AMap<AString, ACell> changed = GoalTreeContext.applyObservations(frame,
+			ContextAssembler.observations(s, Loads.Snapshot.EMPTY), 3L);
+		String refreshed = allContent(ContextAssembler.assemble(
+			s.withFrames(Vectors.of((ACell) changed))));
 		assertTrue(refreshed.contains("second"), refreshed);
-		assertFalse(refreshed.contains("first"), refreshed);
+		assertTrue(refreshed.contains("first"), "the previous value remains honest history");
 	}
 
 	@Test
@@ -468,7 +485,7 @@ public class ContextAssemblerTest {
 			(ACell) Maps.of("role", "tool", "id", "read-1", "name", "covia_read",
 				"content", ordinaryRead));
 		Prompt p = ContextAssembler.assemble(spec(config)
-			.withLoads(loads, Vectors.empty(), effective)
+			.withLoads(loads, Vectors.empty())
 			.withToolLoop(ordinary));
 
 		assertEquals("system", role(p.messages().get(1)));
@@ -562,7 +579,8 @@ public class ContextAssemblerTest {
 			Strings.intern("skillsets"), Vectors.of((ACell) Strings.create("w/skills")));
 		AMap<AString, ACell> effectiveLoads = Maps.of(Strings.create("w/skills/alpha"), Maps.of(
 			Strings.create("skill"), CVMBool.TRUE, Strings.create("budget"), CVMLong.create(2000)));
-		Spec s = spec(config).withLoads(Loads.Snapshot.EMPTY, Vectors.empty(), effectiveLoads);
+		Loads.Snapshot loads = Loads.describe(engine, ctx, effectiveLoads, java.util.Set.of());
+		Spec s = spec(config).withLoads(loads, Vectors.empty());
 		assertTrue(allContent(ContextAssembler.assemble(s)).contains("- alpha — Alpha skill (loaded)"));
 	}
 
@@ -576,10 +594,11 @@ public class ContextAssemblerTest {
 		Skills.ResolvedSkill root = Skills.resolveRef(engine, ctx, Strings.create("w/root-skill"));
 		AMap<AString, ACell> loads = Maps.of(root.path(), Skills.buildSkillLoadMeta(2000, root));
 
+		Loads.Snapshot described = Loads.describe(engine, ctx, loads, java.util.Set.of());
 		String all = allContent(ContextAssembler.assemble(
-			spec(null).withLoads(Loads.Snapshot.EMPTY, Vectors.empty(), loads)));
+			spec(null).withLoads(described, Vectors.empty())));
 		assertTrue(all.contains("- reviewer — Review a result"), all);
-		assertTrue(all.contains("may also reveal more skills"), all);
+		assertTrue(all.contains("may reveal later tools or more skills"), all);
 		assertFalse(all.contains("- root-skill —"),
 			"a direct-ref bootstrap need not make itself a configured source");
 	}
@@ -631,7 +650,7 @@ public class ContextAssemblerTest {
 		assertEquals("Alpha notes", RT.getIn(entry, "label").toString());
 		assertEquals("w/skills/alpha", RT.getIn(entry, "key").toString(), "unloads with the skill");
 		assertEquals("Alpha extra context", RT.getIn(entry, "content").toString());
-		AVector<ACell> aggregate = ContextAssembler.contextExchanges(snap.exchanges(), false);
+		AVector<ACell> aggregate = ContextAssembler.contextExchanges(snap.exchanges());
 		assertEquals(ContextAssembler.LOADED_CONTEXT_TOOL,
 			RT.getIn(aggregate.get(0), "toolCalls", 0, "name").toString());
 		assertEquals("Alpha extra context",
@@ -656,7 +675,7 @@ public class ContextAssemblerTest {
 		Loads.Snapshot loads = Loads.resolve(engine, ctx, alphaSkillLoads(), java.util.Set.of(), Labels.BRACKET);
 		Spec s = new Spec(engine, ctx, null, null, null, null, 300, null,
 			null, null, null, null, null, null, true, null, null, null, null, null)
-			.withLoads(loads, Vectors.empty(), alphaSkillLoads());
+			.withLoads(loads, Vectors.empty());
 		Prompt p = ContextAssembler.assemble(s);
 		Skills.ResolvedSkill alpha = Skills.resolveRef(engine, ctx, Strings.create("w/skills/alpha"));
 		String all = allContent(p);
@@ -733,9 +752,12 @@ public class ContextAssemblerTest {
 			Strings.create("budget"), CVMLong.create(2000)));
 		Loads.Snapshot snap = Loads.resolve(engine, ctx, loads, java.util.Set.of(), Labels.BRACKET);
 		assertEquals(1, snap.tools().count());
-		assertEquals("v/ops/covia/read", snap.routes().get("covia_read").toString());
+		assertEquals("v/ops/covia/read", snap.operation("covia_read").toString());
 		assertEquals("skill", RT.getIn(snap.toolProvenance().get(0), Fields.SOURCE).toString());
 		assertEquals("w/skills/toolful", RT.getIn(snap.toolProvenance().get(0), Fields.REF).toString());
+		assertEquals(0, Loads.resolveForInference(engine, ctx, loads,
+			(name, owner) -> false, Labels.BRACKET, false).tools().count(),
+			"a cached inference must not reopen a pinned skill to rediscover tools");
 		// A name fixed by harness or config is never shadowed by a load.
 		assertEquals(0, Loads.resolve(engine, ctx, loads, java.util.Set.of("covia_read"), Labels.BRACKET).tools().count());
 		// Explicit load metadata remains an override, including disabling the facet tools.
@@ -745,6 +767,41 @@ public class ContextAssemblerTest {
 			Fields.TOOLS, Vectors.empty()));
 		assertEquals(0, Loads.resolve(engine, ctx, disabled,
 			java.util.Set.of(), Labels.BRACKET).tools().count());
+	}
+
+	@Test
+	public void testPinnedLoadToolsMoveIntoTheRenderedLookup() {
+		AMap<AString, ACell> loads = Maps.of("pinned-tools", Maps.of(
+			Fields.TOOLS, Vectors.of(Strings.create("v/ops/covia/read")),
+			Loads.K_KIND, Loads.KIND_TOOLS));
+		Loads.Snapshot initial = Loads.resolveForInference(engine, ctx, loads,
+			(name, owner) -> false, Labels.BRACKET, true);
+		assertEquals(1, initial.tools().count());
+		assertEquals("v/ops/covia/read", ToolPalette.operation(
+			initial.pinnedToolIndex(), "covia_read").toString());
+
+		Loads.Snapshot cached = Loads.resolveForInference(engine, ctx, loads,
+			(name, owner) -> false, Labels.BRACKET, false);
+		assertEquals(0, cached.tools().count(),
+			"a cached inference must not resolve an unmaterialised pinned declaration again");
+	}
+
+	@Test
+	public void testVolatileLoadMaterialisesToolMetadataWhenLoaded() {
+		AString key = Strings.create("volatile-tools");
+		AMap<AString, ACell> loads = Maps.of(key, Maps.of(
+			Fields.TOOLS, Vectors.of(Strings.create("v/ops/covia/read")),
+			Loads.K_KIND, Loads.KIND_TOOLS,
+			Loads.K_AGENT_MANAGED, CVMBool.TRUE,
+			Loads.K_VOLATILE, CVMBool.TRUE));
+		Loads.Append appended = Loads.append(
+			engine, ctx, loads, key, Labels.BRACKET, Strings.create("event"));
+		assertTrue(appended.messages().isEmpty(), "watched content is observed, not appended here");
+		AVector<ACell> bindings = RT.ensureVector(RT.getIn(
+			appended.loads().get(key), Loads.K_TOOL_BINDINGS));
+		assertEquals(1, bindings.count());
+		assertEquals("v/ops/covia/read", RT.getIn(
+			bindings.get(0), Fields.OPERATION).toString());
 	}
 
 	@Test
@@ -854,6 +911,55 @@ public class ContextAssemblerTest {
 	}
 
 	@Test
+	public void testProviderStateReachesLiveInferenceButNotHistoricalProjection() {
+		AMap<AString, ACell> state = Maps.of(
+			Fields.PROVIDER, "anthropic", Fields.MODEL, "claude-sonnet-5",
+			"blocks", Vectors.of(Maps.of("type", "thinking", "thinking", "private", "signature", "sig")));
+		AMap<AString, ACell> assistant = Maps.of(
+			"role", "assistant", "content", "done", Fields.PROVIDER_STATE, state);
+
+		assertSame(state, ConversationRenderer.toMessage(assistant, null).get(Fields.PROVIDER_STATE),
+			"live provider rendering must preserve opaque continuation state exactly");
+		assertNull(ConversationRenderer.toMessage(assistant, Strings.intern("user"))
+			.get(Fields.PROVIDER_STATE),
+			"caller input must not be able to manufacture provider continuation state");
+
+		AMap<AString, ACell> frame = GoalTreeContext.createFrame("test")
+			.assoc(GoalTreeContext.K_CONVERSATION, Vectors.of(
+				Maps.of("role", "user", "content", "work"), assistant));
+		ConversationRenderer.HistoricalView historical = ConversationRenderer.historical(frame, 10, 10_000);
+		assertEquals(2, historical.messages().count());
+		assertNull(RT.getIn(historical.messages().get(1), Fields.PROVIDER_STATE),
+			"retrospective/session views must not expose provider reasoning state");
+	}
+
+	@Test
+	public void testToolCallIdsAreProviderValidAndLegacyFramesRenderSafely() {
+		AString byCall = ContextAssembler.contextEventId(Strings.create("toolu_123"), 2,
+			Strings.create("unused"));
+		AString byFallback = ContextAssembler.contextEventId(null, 2,
+			Strings.create("skills/review"));
+		assertTrue(ToolCallIds.valid(byCall), byCall.toString());
+		assertTrue(ToolCallIds.valid(byFallback), byFallback.toString());
+		assertEquals(byCall, ContextAssembler.contextEventId(Strings.create("toolu_123"), 9,
+			Strings.create("different")), "the real provider call id is the event identity");
+
+		AString legacy = Strings.create("context:2:skills/review");
+		AMap<AString, ACell> storedAssistant = Maps.of(
+			"role", "assistant", "toolCalls", Vectors.of(Maps.of(
+				"id", legacy, "name", "loaded_context", "arguments", Maps.empty())));
+		AMap<AString, ACell> assistant = ConversationRenderer.toMessage(storedAssistant, null);
+		AMap<AString, ACell> result = ConversationRenderer.toMessage(Maps.of(
+			"role", "tool", "id", legacy, "name", "loaded_context", "content", "data"), null);
+		AString callId = RT.ensureString(RT.getIn(assistant, "toolCalls", 0, "id"));
+		assertTrue(ToolCallIds.valid(callId), callId.toString());
+		assertEquals(callId, result.get(Strings.intern("id")),
+			"deterministic repair must preserve tool-call/result pairing");
+		assertEquals(legacy, RT.getIn(storedAssistant, "toolCalls", 0, "id"),
+			"rendering does not mutate durable input");
+	}
+
+	@Test
 	public void testAttributionNoteOncePerPrincipalChange() {
 		AString bob = Strings.create("did:key:z6MkBob");
 		AVector<ACell> inbox = Vectors.of(
@@ -892,7 +998,14 @@ public class ContextAssemblerTest {
 		assertTrue(stranger.contains("relationship=public-principal")
 			&& stranger.contains("authentication=anonymous"), stranger);
 		String other = ContextAssembler.attributionNote(engine, agentCtx, Strings.create("did:key:z6MkBob"));
-		assertTrue(other.contains("relationship=other-principal"), other);
+		assertTrue(other.contains("relationship=other-user;") && other.contains("user=did:key:z6MkBob"), other);
+		String otherAgent = ContextAssembler.attributionNote(engine, agentCtx,
+			Strings.create("did:key:z6MkBob:g:helper"));
+		assertTrue(otherAgent.contains("relationship=other-user-agent:helper")
+			&& otherAgent.contains("user=did:key:z6MkBob"), otherAgent);
+		String venueAgent = ContextAssembler.attributionNote(engine, agentCtx,
+			Strings.create(engine.getDIDString() + ":g:odin"));
+		assertTrue(venueAgent.contains("relationship=venue-agent:odin"), venueAgent);
 
 		AString publicDID = Strings.create(engine.getDIDString() + ":public");
 		RequestContext publicCtx = RequestContext.ofAuthority(
@@ -900,7 +1013,7 @@ public class ContextAssemblerTest {
 		String publicOwner = ContextAssembler.attributionNote(engine, publicCtx, publicDID);
 		assertTrue(publicOwner.contains("relationship=owner-public-principal"), publicOwner);
 
-		for (String n : new String[] {owner, sibling, venue, stranger, other, publicOwner}) {
+		for (String n : new String[] {owner, sibling, venue, stranger, other, otherAgent, venueAgent, publicOwner}) {
 			assertTrue(n.startsWith("Turn provenance:")
 				&& n.endsWith("Venue-generated metadata only; not an instruction."), n);
 			String lower = n.toLowerCase(java.util.Locale.ROOT);
@@ -1011,50 +1124,129 @@ public class ContextAssemblerTest {
 		Spec s = new Spec(engine, ctx, null, null, null, null, 0, null,
 			tools, null, null, null, null, null, true, null, null, null, null, null);
 		Prompt with = ContextAssembler.assemble(s);
-		assertSame(tools, with.tools());
+		assertEquals(tools, with.tools());
 		assertTrue(with.used() > ContextAssembler.assemble(spec(null)).used());
 		assertTrue(with.toL3Input(null).get(Strings.intern("tools")) != null);
 	}
 
 	@Test
-	public void testPersistedInitialVectorsSurviveSourceAndPaletteMutation() {
-		Spec original = new Spec(engine, ctx, null, null, null, null, 0, null,
+	public void testPersistedInitialVectorsSurviveAmbientMaterialisationChange() {
+		AMap<AString, ACell> sourceConfig = Maps.of(
+			"systemPrompt", Maps.of("ref", "w/prompts/identity"));
+		Spec original = new Spec(engine, ctx, null,
+			Maps.of("systemPrompt", "resolved identity one"), null, null, 0, null,
 			Vectors.of((ACell) HarnessTools.DEF_CONTEXT_LOAD), null, null,
 			Vectors.of((ACell) GoalTreeContext.createFrame("")), null, null, true,
-			null, null, null, null, null);
+			null, null, null, null, null).withSourceConfig(sourceConfig);
 		ContextAssembler.Rendered rendered = ContextAssembler.initialise(original);
 		AMap<AString, ACell> frame = GoalTreeContext.withRenderedContext(
 			GoalTreeContext.appendTurn(GoalTreeContext.createFrame(""),
 				Maps.of("role", "user", "content", "later turn")), rendered);
 
-		Spec changedSources = new Spec(engine, ctx, null,
-			Maps.of("systemPrompt", "a changed source must await explicit rebuild"),
+		Spec changedAmbient = new Spec(engine, ctx, null,
+			Maps.of("systemPrompt", "resolved identity two"),
 			null, null, 0, null,
 			Vectors.of((ACell) HarnessTools.DEF_CONTEXT_UNLOAD), null, null,
-			Vectors.of((ACell) frame), null, null, true, null, null, null, null, null);
-		Prompt prompt = ContextAssembler.assemble(changedSources);
+			Vectors.of((ACell) frame), null, null, true, null, null, null, null, null)
+			.withSourceConfig(sourceConfig);
+		Prompt prompt = ContextAssembler.assemble(changedAmbient);
 
 		assertEquals(rendered.tools(), prompt.tools());
 		assertEquals(rendered.messages(), prompt.messages().slice(0, rendered.messages().count()));
+		assertTrue(head(prompt).contains("resolved identity one"));
+		assertFalse(head(prompt).contains("resolved identity two"));
 		assertEquals("later turn", content(prompt.messages().get(rendered.messages().count())));
+	}
+
+	@Test
+	public void testUncachedAssemblyIgnoresAndRemovesPersistedRendering() {
+		AMap<AString, ACell> oldConfig = Maps.of("systemPrompt", "old identity");
+		Spec original = spec(oldConfig);
+		ContextAssembler.Rendered rendered = ContextAssembler.initialise(original);
+		AMap<AString, ACell> frame = GoalTreeContext.withRenderedContext(
+			GoalTreeContext.appendTurn(GoalTreeContext.createFrame(""),
+				Maps.of("role", "user", "content", "historical turn")), rendered);
+
+		AMap<AString, ACell> newConfig = Maps.of("systemPrompt", "current identity");
+		Spec uncached = spec(newConfig, Vectors.of((ACell) frame), null,
+			Vectors.of((ACell) Strings.create("new input")), true)
+			.withCachePrefix(false);
+		Prompt prompt = ContextAssembler.assemble(uncached);
+
+		assertNull(ContextAssembler.rendered(uncached));
+		assertTrue(head(prompt).contains("current identity"));
+		assertFalse(head(prompt).contains("old identity"));
+		assertTrue(allContent(prompt).contains("historical turn"));
+		assertTrue(prompt.cacheMarks().isEmpty());
+		assertNull(RT.getIn(prompt.toL3Input(null), "cacheMarks"));
+		AMap<AString, ACell> cleaned = ContextAssembler.applyRendering(frame, uncached, null);
+		assertNull(cleaned.get(GoalTreeContext.K_RENDERED_CONTEXT));
+		assertEquals(frame.get(GoalTreeContext.K_CONVERSATION),
+			cleaned.get(GoalTreeContext.K_CONVERSATION));
+	}
+
+	@Test
+	public void testDeclarativeConfigChangeRerendersPrefixAndKeepsConversation() {
+		AMap<AString, ACell> oldConfig = Maps.of("systemPrompt", "old identity");
+		Spec original = new Spec(engine, ctx, null, oldConfig, null, null, 0, null,
+			Vectors.of((ACell) HarnessTools.DEF_CONTEXT_LOAD), null, null,
+			Vectors.of((ACell) GoalTreeContext.createFrame("")), null, null, true,
+			null, null, null, null, null);
+		ToolPalette.Palette manifest = ToolPalette.Palette.EMPTY.forManifest(original.tools());
+		ContextAssembler.Rendered rendered = ContextAssembler.initialise(original)
+			.withToolIndex(manifest.toolIndex(), 0, 0);
+		assertEquals(oldConfig, rendered.sourceConfig());
+		assertEquals(rendered, ContextAssembler.Rendered.fromCell(rendered.toCell()));
+		assertEquals(original.tools(), rendered.tools());
+		assertTrue(rendered.toolIndex().containsKey(Strings.create("context_load")));
+		assertNull(ContextAssembler.Rendered.fromCell(
+			RT.ensureMap(rendered.toCell()).dissoc(Strings.intern("renderVersion"))),
+			"an unversioned cache must be rebuilt after rendering semantics change");
+		assertNull(ContextAssembler.Rendered.fromCell(
+			RT.ensureMap(rendered.toCell()).dissoc(Strings.intern("toolIndex"))),
+			"a legacy cache without the name lookup must be rebuilt once");
+		assertNull(ContextAssembler.Rendered.fromCell(
+			RT.ensureMap(rendered.toCell()).dissoc(Strings.intern("live"))),
+			"a cache without required band offsets must be rebuilt once");
+		assertNull(ContextAssembler.Rendered.fromCell(
+			RT.ensureMap(rendered.toCell()).assoc(Strings.intern("live"),
+				CVMLong.create(rendered.messages().count() + 1))),
+			"band offsets outside the persisted vector are invalid");
+		assertNull(RT.getIn(rendered.toCell(), "skillCatalog"),
+			"the skills index already lives in messages and has no sidecar");
+
+		AMap<AString, ACell> frame = GoalTreeContext.withRenderedContext(
+			GoalTreeContext.appendTurn(GoalTreeContext.createFrame(""),
+				Maps.of("role", "user", "content", "historical turn")), rendered);
+		AMap<AString, ACell> newConfig = Maps.of("systemPrompt", "new identity");
+		Spec changed = new Spec(engine, ctx, null, newConfig, null, null, 0, null,
+			Vectors.of((ACell) HarnessTools.DEF_CONTEXT_UNLOAD), null, null,
+			Vectors.of((ACell) frame), null, null, true, null, null, null, null, null);
+
+		Prompt prompt = ContextAssembler.assemble(changed);
+		assertTrue(head(prompt).contains("new identity"));
+		assertFalse(head(prompt).contains("old identity"));
+		assertEquals(Vectors.of((ACell) HarnessTools.DEF_CONTEXT_UNLOAD), prompt.tools());
+		assertTrue(allContent(prompt).contains("historical turn"));
 	}
 
 	// ========== ToolPalette ==========
 
 	@Test
-	public void testDefaultToolsCachedPerEngine() {
+	public void testDefaultToolsResolveDeterministicallyWithoutSideCache() {
 		AMap<AString, ACell> config = Maps.of(Strings.intern("defaultTools"), CVMBool.TRUE);
 		ToolPalette.Palette p1 = ToolPalette.resolve(engine, ctx, config, java.util.Set.of());
 		ToolPalette.Palette p2 = ToolPalette.resolve(engine, ctx, config, java.util.Set.of());
-		assertSame(p1.tools(), p2.tools(), "the default pack is one cached instance per Engine");
-		assertNotSame(p1.routes(), p2.routes(), "routes are a per-palette copy");
-		assertEquals(p1.routes().keySet(), p2.routes().keySet());
-		assertEquals(java.util.Set.of("covia_read", "covia_list"), p1.routes().keySet(),
+		assertEquals(p1.tools(), p2.tools());
+		assertEquals(p1.toolIndex(), p2.toolIndex());
+		assertEquals(2, p1.toolIndex().count());
+		assertTrue(p1.toolIndex().containsKey(Strings.create("covia_read")));
+		assertTrue(p1.toolIndex().containsKey(Strings.create("covia_list")),
 			"the default pack stays minimal and read-only — add tools via skills instead");
 	}
 
 	@Test
-	public void testToolDescriptionCarriesTheCatalogPath() {
+	public void testToolDescriptionOmitsTheCatalogPath() {
 		ToolPalette.Palette p = ToolPalette.resolve(engine, ctx,
 			Maps.of(Strings.intern("defaultTools"), CVMBool.TRUE), java.util.Set.of());
 		boolean found = false;
@@ -1063,8 +1255,8 @@ public class ContextAssemblerTest {
 			if (!"covia_read".equals(RT.ensureString(tool.get(Strings.intern("name"))).toString())) continue;
 			found = true;
 			String desc = RT.ensureString(tool.get(Strings.intern("description"))).toString();
-			assertTrue(desc.startsWith("Operation: v/ops/covia/read"), desc);
-			assertTrue(desc.contains("Read a value"), "the original description body follows");
+			assertFalse(desc.contains("v/ops/covia/read"), desc);
+			assertTrue(desc.startsWith("Read a value"), "the asset description is unchanged");
 		}
 		assertTrue(found);
 	}
@@ -1086,10 +1278,51 @@ public class ContextAssemblerTest {
 		assertEquals(java.util.Set.of("covia_read", "covia_list", "covia_write"), ToolPalette.names(p.tools()));
 		assertEquals(0, p.unavailable().count(), "a skipped harness name is not unavailable");
 		assertEquals(3, p.provenance().count());
-		assertEquals("default", RT.getIn(p.provenance().get(0), Fields.SOURCE).toString());
-		assertEquals("default", RT.getIn(p.provenance().get(1), Fields.SOURCE).toString());
-		assertEquals("config", RT.getIn(p.provenance().get(2), Fields.SOURCE).toString());
-		assertEquals("v/ops/covia/write", RT.getIn(p.provenance().get(2), Fields.OPERATION).toString());
+		assertEquals("default", RT.getIn(
+			p.toolIndex().get(Strings.create("covia_read")), Fields.SOURCE).toString());
+		assertEquals("v/ops/covia/write", RT.getIn(
+			p.toolIndex().get(Strings.create("covia_write")), Fields.OPERATION).toString());
+		assertNull(RT.getIn(p.toolIndex().get(Strings.create("covia_write")), Fields.SOURCE),
+			"config is the lookup source default and is not stored");
+	}
+
+	@Test
+	public void testDefaultBindingFieldsAreOmitted() {
+		String path = "w/same-label-tool";
+		write(path, Maps.of(
+			Fields.NAME, "same_label",
+			Fields.OPERATION, Maps.of(
+				Fields.ADAPTER, "test:echo",
+				Fields.TOOL_NAME, "same_label")));
+		ToolPalette.Palette palette = ToolPalette.resolve(engine, ctx,
+			Maps.of(Fields.TOOLS, Vectors.of((ACell) Strings.create(path))), java.util.Set.of());
+		ACell info = palette.toolIndex().get(Strings.create("same_label"));
+		assertNull(RT.getIn(info, Fields.SOURCE),
+			"config is the source default");
+		assertNull(RT.getIn(info, Fields.ACTIVITY_LABEL),
+			"the provider name is the activity-label default");
+	}
+
+	@Test
+	public void testRenderedLoadNameIsReservedForItsOwner() {
+		AString name = Strings.create("covia_read");
+		AString owner = Strings.create("w/skills/reader");
+		AMap<AString, ACell> active = Maps.of(name, Maps.of(
+			Fields.OPERATION, "v/ops/covia/read",
+			Fields.SOURCE, "skill",
+			Fields.REF, owner));
+		AMap<AString, ACell> manifest = ToolPalette.loadOwners(active);
+
+		assertNull(RT.getIn(manifest.get(name), Fields.OPERATION),
+			"dispatch remains in the unloadable load entry");
+		assertFalse(ToolPalette.excludesLoadName(
+			manifest, java.util.Set.of(), name.toString(), owner));
+		assertTrue(ToolPalette.excludesLoadName(
+			manifest, java.util.Set.of(), name.toString(), Strings.create("w/skills/other")),
+			"another load cannot reuse a name frozen in the provider manifest");
+		assertTrue(ToolPalette.excludesLoadName(
+			active, java.util.Set.of(), name.toString(), owner),
+			"a manifest-owned dispatch route takes precedence over every load");
 	}
 
 	@Test

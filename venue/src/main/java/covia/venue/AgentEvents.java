@@ -372,8 +372,10 @@ public final class AgentEvents {
 		}
 
 		/** A tool call is being dispatched; its decoded input rides under {@code detail}. */
-		public void toolStart(AString id, String name, ACell input, int depth) {
-			AMap<AString, ACell> m = Maps.of(Fields.NAME, Strings.create(name));
+		public void toolStart(AString id, String name, String activityLabel, ACell input, int depth) {
+			AMap<AString, ACell> m = Maps.of(
+				Fields.NAME, Strings.create(name),
+				Fields.ACTIVITY_LABEL, Strings.create(activityLabel));
 			if (id != null) m = m.assoc(Fields.ID, id);
 			AMap<AString, ACell> detail = Maps.empty();
 			if (input != null) detail = detail.assoc(Fields.INPUT, input);

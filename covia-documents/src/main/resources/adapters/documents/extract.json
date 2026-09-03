@@ -3,6 +3,7 @@
   "description": "The readable text of a PDF or Office document (docx, xlsx, pptx, and legacy doc, xls, ppt) supplied as bytes, with pages or slides marked, an optional page range and a character cap. For a file on a root or drive use file:read, vault:read or dlfs:read with mode 'extract' instead — same result, with the read's own authorisation. No OCR: a scanned PDF is reported as such.",
   "operation": {
     "adapter": "documents:extract",
+    "readOnly": true,
     "input": {
       "type": "object",
       "properties": {

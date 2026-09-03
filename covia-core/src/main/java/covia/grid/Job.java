@@ -167,6 +167,17 @@ public class Job {
 	}
 
 	/**
+	 * True when this Job is STARTED and its adapter registered a pause hook —
+	 * the adapter's declaration that the work can be suspended and resumed
+	 * later. Venue shutdown pauses pausable Jobs rather than cancelling them.
+	 *
+	 * @return true if {@link #pause()} would be accepted
+	 */
+	public boolean isPausable() {
+		return onPause != null && Status.STARTED.equals(getStatus());
+	}
+
+	/**
 	 * Updates the job data atomically. No effect if job is already finished.
 	 *
 	 * <p>Lock-free: {@link #processUpdate} runs first (side effects like

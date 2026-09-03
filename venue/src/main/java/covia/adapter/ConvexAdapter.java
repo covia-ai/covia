@@ -1,5 +1,6 @@
 package covia.adapter;
 
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.function.Function;
@@ -8,16 +9,27 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import convex.api.Convex;
+import convex.core.cpos.CPoSConstants;
+import convex.core.cvm.CVMEncoder;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.ABlob;
+import convex.core.data.Blob;
 import convex.core.data.Blobs;
+import convex.core.data.Cells;
+import convex.core.data.Format;
 import convex.core.data.Hash;
+import convex.core.data.Maps;
+import convex.core.data.Strings;
+import convex.core.data.prim.CVMBool;
+import convex.core.exceptions.BadFormatException;
+import convex.core.exceptions.PartialMessageException;
 import convex.core.lang.RT;
 import convex.core.lang.Reader;
 import convex.core.Result;
 import convex.core.crypto.AKeyPair;
+import convex.core.crypto.ASignature;
 import convex.core.cvm.Address;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
@@ -26,8 +38,9 @@ import covia.venue.RequestContext;
 /**
  * Adapter for interacting with the Convex network.
  *
- * Currently supports the {@code convex:query} operation, with a structure that
- * makes it easy to add further Convex operations in future.
+ * Provides network queries and transactions plus local CAD3 encoding, decoding,
+ * Ed25519 key generation and signing. Private seeds remain in the caller's
+ * encrypted secret store.
  */
 public class ConvexAdapter extends AAdapter {
 
@@ -40,8 +53,17 @@ public class ConvexAdapter extends AAdapter {
 	 */
 	private static final long CONVEX_CALL_TIMEOUT_MS = 60_000L;
 
+	private static final AString K_ACCOUNT_KEY = Strings.intern("accountKey");
+	private static final AString K_ENCODING = Strings.intern("encoding");
+	private static final AString K_SECRET = Strings.intern("secret");
+	private static final AString K_SIGNATURE = Strings.intern("signature");
+
 	private Hash QUERY_OPERATION;
 	private Hash TRANSACT_OPERATION;
+	private Hash GENERATE_KEY_OPERATION;
+	private Hash SIGN_OPERATION;
+	private Hash DECODE_CAD3_OPERATION;
+	private Hash ENCODE_CAD3_OPERATION;
 
 	@Override
 	public String getName() {
@@ -50,15 +72,19 @@ public class ConvexAdapter extends AAdapter {
 
 	@Override
 	public String getDescription() {
-		return "Enables interactions with the Convex network, including on-chain CVM queries and transactions";
+		return "Convex network access, CAD3 data conversion, and secret-backed Ed25519 signing";
 	}
 
 	@Override
 	protected void installAssets() {
 		// The adapter's own skill: v/skills/convex lives and dies with this adapter.
 		installSkill("convex/convex", "/skills/convex.json");
-		QUERY_OPERATION    = installAsset("convex/query",    "/adapters/convex/query.json");
-		TRANSACT_OPERATION = installAsset("convex/transact", "/adapters/convex/transact.json");
+		QUERY_OPERATION        = installAsset("convex/query",        "/adapters/convex/query.json");
+		TRANSACT_OPERATION     = installAsset("convex/transact",     "/adapters/convex/transact.json");
+		GENERATE_KEY_OPERATION = installAsset("convex/generate-key", "/adapters/convex/generateKey.json");
+		SIGN_OPERATION         = installAsset("convex/sign",         "/adapters/convex/sign.json");
+		DECODE_CAD3_OPERATION  = installAsset("convex/decode-cad3",  "/adapters/convex/decodeCad3.json");
+		ENCODE_CAD3_OPERATION  = installAsset("convex/encode-cad3",  "/adapters/convex/encodeCad3.json");
 	}
 
 	@Override
@@ -67,70 +93,195 @@ public class ConvexAdapter extends AAdapter {
 		String op = getSubOperation(meta);
 		return switch (op) {
 			case "query" -> invokeQuery(meta, input);
-			case "transact" -> invokeTransact(meta, input);
+			case "transact" -> invokeTransact(ctx, meta, input);
+			case "generate-key" -> CompletableFuture.supplyAsync(
+				() -> generateKey(ctx, input), VIRTUAL_EXECUTOR);
+			case "sign" -> CompletableFuture.supplyAsync(
+				() -> sign(ctx, input), VIRTUAL_EXECUTOR);
+			case "decode-cad3" -> CompletableFuture.supplyAsync(
+				() -> decodeCAD3(input), VIRTUAL_EXECUTOR);
+			case "encode-cad3" -> CompletableFuture.supplyAsync(
+				() -> encodeCAD3(input), VIRTUAL_EXECUTOR);
 			default -> CompletableFuture.failedFuture(
-					new UnsupportedOperationException("Unsupported Convex operation: " + op));
+				new UnsupportedOperationException("Unsupported Convex operation: " + op));
 		};
 	}
 
 	private CompletableFuture<ACell> invokeQuery(AMap<AString, ACell> meta, ACell input) {
-		return withConvexClient(meta, input, convex -> executeQuery(convex, meta, input));
+		final Query request;
+		try {
+			request = query(input);
+		} catch (RuntimeException e) {
+			return CompletableFuture.failedFuture(e);
+		}
+		return withConvexClient(meta, input, convex -> executeQuery(convex, request));
 	}
 
-	private CompletableFuture<ACell> invokeTransact(AMap<AString, ACell> meta, ACell input) {
-		return withConvexClient(meta, input, convex -> executeTransact(convex, meta, input));
+	private CompletableFuture<ACell> invokeTransact(RequestContext ctx,
+			AMap<AString, ACell> meta, ACell input) {
+		final Transaction request;
+		try {
+			request = transaction(ctx, input);
+		} catch (RuntimeException e) {
+			return CompletableFuture.failedFuture(e);
+		}
+		return withConvexClient(meta, input, convex -> executeTransact(convex, request));
 	}
 
-	/**
-	 * Hook for the actual query implementation. 
-	 */
-	protected CompletableFuture<ACell> executeQuery(Convex convex, ACell meta, ACell input) {
-		// Get the address from the input. If not specified
+	private record Query(Address address, ACell code) {}
+	private record Transaction(Address address, AKeyPair keyPair, ACell code) {}
+
+	private Query query(ACell input) {
 		Address address = Address.parse(RT.getIn(input, Fields.ADDRESS));
-
-		AString source=RT.ensureString(RT.getIn(input, Fields.SOURCE));
-		if (source==null) {
-			return CompletableFuture.failedFuture(new JobFailedException("No query source provided"));
+		AString source = RT.ensureString(RT.getIn(input, Fields.SOURCE));
+		if (source == null) {
+			throw new JobFailedException("No query source provided");
 		}
-
-		ACell code=Reader.read(source.toString());
-
-		CompletableFuture<Result> resultFuture = convex.query(code, address);
-
-		return resultFuture.thenApply(result -> {
-			return RT.cvm(result.toJSON());
-		});
+		ACell code = Reader.read(source.toString());
+		if (code == null) throw new JobFailedException("Query source is empty");
+		return new Query(address, code);
 	}
 
-	protected CompletableFuture<ACell> executeTransact(Convex convex, ACell meta, ACell input) {
-		// Get the address from the input. If not specified
+	private Transaction transaction(RequestContext ctx, ACell input) {
 		Address address = Address.parse(RT.getIn(input, Fields.ADDRESS));
-		if (address==null) {
-			return CompletableFuture.failedFuture(new JobFailedException("No address provided"));
+		if (address == null) throw new JobFailedException("No address provided");
+		AString source = RT.ensureString(RT.getIn(input, Fields.SOURCE));
+		if (source == null) throw new JobFailedException("No transaction source provided");
+		ACell code = Reader.read(source.toString());
+		if (code == null) throw new JobFailedException("Transaction source is empty");
+		return new Transaction(address, resolveKeyPair(ctx, input, false), code);
+	}
+
+	private CompletableFuture<ACell> executeQuery(Convex convex, Query request) {
+		return convex.query(request.code(), request.address())
+			.thenApply(ConvexAdapter::resultCell);
+	}
+
+	private CompletableFuture<ACell> executeTransact(Convex convex, Transaction request) {
+		convex.setAddress(request.address());
+		convex.setKeyPair(request.keyPair());
+		return convex.transact(request.code()).thenApply(ConvexAdapter::resultCell);
+	}
+
+	private static ACell resultCell(Result result) {
+		return RT.cvm(result.toJSON());
+	}
+
+	private ACell generateKey(RequestContext ctx, ACell input) {
+		AString name = RT.ensureString(RT.getIn(input, Fields.NAME));
+		if (name == null || name.toString().isBlank()) {
+			throw new IllegalArgumentException("name is required");
 		}
-		
-		// Get the address from the input. If not specified
-		ABlob seedBlob = Blobs.parse(RT.getIn(input, Fields.SEED));
-		if (seedBlob==null) {
-			return CompletableFuture.failedFuture(new JobFailedException("No signing key provided provided as a Ed25519 seed"));
-		}
-		
-
-		AString source=RT.ensureString(RT.getIn(input, Fields.SOURCE));
-		if (source==null) {
-			return CompletableFuture.failedFuture(new JobFailedException("No query source provided"));
+		ACell overwriteValue = RT.getIn(input, Fields.OVERWRITE);
+		if (overwriteValue != null && !(overwriteValue instanceof CVMBool)) {
+			throw new IllegalArgumentException("overwrite must be a boolean");
 		}
 
-		ACell code=Reader.read(source.toString());
+		AKeyPair keyPair = AKeyPair.generate();
+		SecretAdapter.storeSecret(engine, ctx, name,
+			Strings.create(keyPair.getSeed().toHexString()),
+			CVMBool.TRUE.equals(overwriteValue));
+		return Maps.of(
+			K_SECRET, Strings.create("s/" + name),
+			K_ACCOUNT_KEY, Strings.create(keyPair.getAccountKey().toHexString()));
+	}
 
-		convex.setAddress(address);
-		convex.setKeyPair(AKeyPair.create(seedBlob.getBytes()));
+	private ACell sign(RequestContext ctx, ACell input) {
+		AString message = RT.ensureString(RT.getIn(input, Fields.MESSAGE));
+		if (message == null) throw new IllegalArgumentException("message is required");
+		AString encodingValue = RT.ensureString(RT.getIn(input, K_ENCODING));
+		String encoding = (encodingValue != null) ? encodingValue.toString() : "utf8";
+		Blob bytes = switch (encoding) {
+			case "utf8" -> Blob.wrap(message.toString().getBytes(StandardCharsets.UTF_8));
+			case "hex" -> parseBlob(message, "message");
+			default -> throw new IllegalArgumentException("encoding must be 'utf8' or 'hex'");
+		};
+		AKeyPair keyPair = resolveKeyPair(ctx, input, true);
+		ASignature signature = keyPair.sign(bytes);
+		return Maps.of(
+			K_ACCOUNT_KEY, Strings.create(keyPair.getAccountKey().toHexString()),
+			K_SIGNATURE, Strings.create(signature.toHexString()));
+	}
 
-		CompletableFuture<Result> resultFuture = convex.transact(code);
+	private ACell decodeCAD3(ACell input) {
+		ACell supplied = RT.getIn(input, K_ENCODING);
+		if (supplied instanceof AString text
+				&& text.count() > (CPoSConstants.MAX_MESSAGE_LENGTH * 2L + 2L)) {
+			throw new IllegalArgumentException("CAD3 encoding exceeds the maximum message size of "
+				+ CPoSConstants.MAX_MESSAGE_LENGTH + " bytes");
+		}
+		ABlob parsed = Blobs.parse(supplied);
+		if (parsed == null) {
+			throw new IllegalArgumentException("encoding must be a hexadecimal CAD3 blob");
+		}
+		if (parsed.count() > CPoSConstants.MAX_MESSAGE_LENGTH) {
+			throw new IllegalArgumentException("CAD3 encoding exceeds the maximum message size of "
+				+ CPoSConstants.MAX_MESSAGE_LENGTH + " bytes");
+		}
+		try {
+			// Storeless multi-cell decoding is deliberate: every referenced child must
+			// be carried by this encoding rather than resolved from ambient venue state.
+			return CVMEncoder.INSTANCE.decodeMultiCell(parsed.toFlatBlob());
+		} catch (PartialMessageException e) {
+			throw new IllegalArgumentException(
+				"Incomplete CAD3 encoding; missing referenced cell " + e.getMissingHash(), e);
+		} catch (BadFormatException e) {
+			throw new IllegalArgumentException("Invalid CAD3 encoding: " + e.getMessage(), e);
+		}
+	}
 
-		return resultFuture.thenApply(result -> {
-			return RT.cvm(result.toJSON());
-		});
+	private ACell encodeCAD3(ACell input) {
+		if (!(input instanceof AMap<?, ?> map) || !map.containsKey(Fields.VALUE)) {
+			throw new IllegalArgumentException("encode-cad3 requires a 'value' field");
+		}
+		ACell value = map.get(Fields.VALUE);
+		Blob encoding = Format.encodeMultiCell(value, true);
+		try {
+			// Format's size limit may stop traversal before every branch is included.
+			// Never return a purported complete encoding that cannot stand alone.
+			ACell roundTrip = CVMEncoder.INSTANCE.decodeMultiCell(encoding);
+			if (!Cells.equals(value, roundTrip)) {
+				throw new IllegalArgumentException("CAD3 value did not round-trip exactly");
+			}
+		} catch (PartialMessageException e) {
+			throw new IllegalArgumentException(
+				"Value exceeds the maximum complete CAD3 message size", e);
+		} catch (BadFormatException e) {
+			throw new IllegalStateException("Generated invalid CAD3 encoding", e);
+		}
+		return Maps.of(K_ENCODING, Strings.create("0x" + encoding.toHexString()));
+	}
+
+	/** Resolves a transaction/signing seed. Transactions retain literal-seed
+	 * compatibility, but agent-facing signing accepts only a secret reference so
+	 * raw private material never needs to enter its job input. */
+	private AKeyPair resolveKeyPair(RequestContext ctx, ACell input, boolean requireSecretRef) {
+		AString supplied = RT.ensureString(RT.getIn(input, Fields.SEED));
+		if (supplied == null) throw new JobFailedException("No Ed25519 signing seed provided");
+		String value = supplied.toString();
+		boolean secretRef = value.startsWith("s/") || value.startsWith("/s/");
+		if (requireSecretRef && !secretRef) {
+			throw new IllegalArgumentException("seed must be an s/<name> secret reference");
+		}
+		if (secretRef) {
+			String resolved = engine.resolveSecret(value, ctx);
+			if (resolved == null) throw new JobFailedException(
+				"Convex signing seed not found in the caller's secret store: " + value);
+			value = resolved;
+		}
+		Blob seed = parseBlob(Strings.create(value), "seed");
+		if (seed.count() != AKeyPair.SEED_LENGTH) {
+			throw new IllegalArgumentException("Ed25519 seed must be exactly "
+				+ AKeyPair.SEED_LENGTH + " bytes");
+		}
+		return AKeyPair.create(seed);
+	}
+
+	private static Blob parseBlob(AString value, String field) {
+		ABlob parsed = Blobs.parse(value);
+		if (parsed == null) throw new IllegalArgumentException(
+			field + " must be a hexadecimal blob");
+		return parsed.toFlatBlob();
 	}
 
 	private CompletableFuture<ACell> withConvexClient(AMap<AString, ACell> meta, ACell input,
@@ -195,5 +346,21 @@ public class ConvexAdapter extends AAdapter {
 
 	public Hash getTransactOperation() {
 		return TRANSACT_OPERATION;
+	}
+
+	public Hash getGenerateKeyOperation() {
+		return GENERATE_KEY_OPERATION;
+	}
+
+	public Hash getSignOperation() {
+		return SIGN_OPERATION;
+	}
+
+	public Hash getDecodeCAD3Operation() {
+		return DECODE_CAD3_OPERATION;
+	}
+
+	public Hash getEncodeCAD3Operation() {
+		return ENCODE_CAD3_OPERATION;
 	}
 }

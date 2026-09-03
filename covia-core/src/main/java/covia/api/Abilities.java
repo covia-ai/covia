@@ -26,6 +26,10 @@ public final class Abilities {
 	public static final AString AGENT_MESSAGE = Strings.intern("agent/message");
 	public static final AString AGENT_FORK    = Strings.intern("agent/fork");
 	public static final AString AGENT_WRITE   = Strings.intern("agent/write");
+	/** Trust a skill outside an agent's effective advertised skill surface. */
+	public static final AString SKILL_LOAD    = Strings.intern("skill/load");
+	/** Add an operation outside an agent's already declared tool surface. */
+	public static final AString TOOL_LOAD     = Strings.intern("tool/load");
 	public static final AString USER_CREATE   = Strings.intern("user/create");
 	public static final AString USER_READ     = Strings.intern("user/read");
 	/** Authorise an explicit sudo request into a user's namespace. Scoped to the
@@ -39,6 +43,9 @@ public final class Abilities {
 	/** Process-level graceful restart and executable venue-jar handoff — guarded
 	 *  on {@code <venue DID>/process}. */
 	public static final AString VENUE_RESTART = Strings.intern("venue/restart");
+	/** Online garbage collection of the venue's Etch store (covia#452) — guarded
+	 *  on {@code <venue DID>/store}. */
+	public static final AString VENUE_GC = Strings.intern("venue/gc");
 
 	/** The venue-scoped MCP management resource guarded by {@link #MCP_MANAGE}. */
 	public static final AString V_MCP = Strings.intern("v/mcp");

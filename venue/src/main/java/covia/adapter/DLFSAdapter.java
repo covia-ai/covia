@@ -558,6 +558,16 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 			"Access denied: no " + ability + " capability for " + resource);
 	}
 
+	/** Job-free read with the same capability checks as {@code dlfs:listDrives}. */
+	public ACell listDrives(RequestContext ctx) throws IOException {
+		return dispatch(ctx, "listDrives", Maps.empty());
+	}
+
+	/** Job-free read with the same capability checks as {@code dlfs:list}. */
+	public ACell listDirectory(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
+		return dispatch(ctx, "list", input);
+	}
+
 	private ACell dispatch(RequestContext ctx, String subOp, AMap<AString, ACell> input) throws IOException {
 		if (input == null) input = Maps.empty();
 		// content.fileName is a destination shorthand for create. Materialise it

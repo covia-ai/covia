@@ -3,6 +3,7 @@
 	"description": "Import a standard A2A endpoint or a Covia agent as an immutable agent Asset, with a mutable user binding at w/a2a/agents/<name>. Authentication is configured once as a SecretStore reference and never supplied on individual A2A calls.",
 	"operation": {
 		"adapter": "a2a:importAgent",
+		"readOnly": false,
 		"input": {
 			"type": "object",
 			"properties": {

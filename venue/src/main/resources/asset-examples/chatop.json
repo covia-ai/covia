@@ -4,6 +4,7 @@
 	"dateCreated": "2026-01-29T00:00:00Z",
 	"operation": {
 		"adapter": "test:chat",
+		"readOnly": false,
 		"input": {
 			"type": "object",
 			"description": "Optional initial input"

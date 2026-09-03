@@ -8,6 +8,114 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.9.8] - 2026-09-03
+
+### Added
+
+- Result-oriented `POST /api/v1/run` accepts `private: true` on venues with
+  `enablePrivateJobs: true`, forcing even lifecycle-bearing operations to use
+  a transient Job wrapper. The call runs to completion and returns only the
+  operation result; there is no persistent Job ID to poll or recover.
+- Agent and hosted-provider calls can carry an optional `providerOptions` map
+  of provider-native request fields (for example Claude adaptive thinking and
+  effort). Omitted fields continue to use provider defaults.
+- The Convex adapter can generate Ed25519 keys directly into the caller's
+  encrypted secret store and sign UTF-8 or hexadecimal payloads without
+  exposing the private seed. Transactions accept the same `s/<name>` seed
+  references while retaining redacted literal-seed compatibility.
+- `convex:encode-cad3` and `convex:decode-cad3` round-trip native Convex values
+  through complete, self-contained CAD3 messages, including multi-cell data.
+- Lattice-native connection discovery and status, backed by immutable skill
+  assets for 20 providers. Connection skills keep credential references in
+  their facets and resolve secrets only inside venue HTTP operations.
+- HTTP operations resolve `{s/NAME}` placeholders in URL paths without
+  exposing the secret in persisted Job inputs, and structured request bodies
+  default to JSON. This enables Telegram and the shipped connection catalog.
+- Job-free authenticated reads for DLFS drive/directory browsing (#476) and
+  venue-user administration (#474), including explicit managed-account and
+  admission-policy fields.
+- `memory:recall` provides a read-only way to retrieve selected durable memory.
+- Optional `operation.activityLabel` metadata gives clients a concise label
+  for an in-flight tool call without changing the model-facing schema (#463).
+- Agent admission policy `config.accepts` (#447): an owner admits the venue
+  operator or an exact list of principal DIDs to talk to an agent without a
+  delegation; talking only, public principal never.
+- Turn provenance names a foreign caller's user, agent id and venue.
+- `etch.gc.onStart` garbage-collects the Etch store at startup (#451).
+- `venue:gc` collects the Etch store online while the venue keeps serving;
+  venue-owned (`venue/gc` on `<venueDID>/store`), one cycle per process (#452).
+- `AAdapter.recoverJob` / `suspendJob`: recovery at boot and suspension at
+  shutdown are the owning adapter's decision, taken on the Job itself. The
+  default stabilises (never re-executes) and cancels bounded in-process work;
+  `shutdown.graceMs` lets in-flight jobs finish first.
+
+### Fixed
+
+- Agent-controlled skill and tool loading now requires either the exact item
+  to be present in the advertised surface or an explicit resource-scoped
+  `skill/load` or `tool/load` capability. Invocation remains independently
+  authorised by the target operation at its point of action (#477).
+- Cached tool bindings retain their exact operation and skill provenance;
+  loaded skill tools are appended once without pre-declaring every gated JSON
+  schema, and provider tool-call ids are valid across replayed context
+  exchanges (#470, #471, #472, #479).
+- Provider-native assistant state, including signed Anthropic thinking blocks,
+  survives each within-cycle tool call and is replayed unchanged when the
+  provider supports it. Existing conversation records without provider state
+  remain valid.
+- Session compaction reloads the current skills, tools and context through the
+  normal initial-context path, so active resources hidden inside the archived
+  conversation remain available after compaction.
+- Convex 0.8.16 restores lookup/stat/open for long DLFS directory-entry names
+  after an Etch reopen. Covia's regression covers concurrent sibling
+  promotion, independent handles, root sync and byte-exact restart recovery
+  (#469).
+- Agent state completed during shutdown cancellation is merged rather than
+  overwritten, so a restarted agent does not lose the final transition state.
+- Adapter operation `readOnly` metadata remains optional for compatibility;
+  missing classification warns during agent creation/update instead of
+  preventing an adapter from starting (#459, #465).
+- OAuth login credentials expose only a stable `covia_uid` pseudonym, never
+  the user's raw email or display name in the callback URL's JWT (#448).
+- Module slim jars on Maven Central carry their real dependencies (no
+  dependency-reduced POM for the unattached `-module.jar`).
+- `covia-sql` module jar no longer bundles the venue's BouncyCastle, Netty
+  and ANTLR.
+- Module `.sha256` release assets name the bare jar (`sha256sum -c` works).
+- `covia-documents` bridges POI's Log4j logging to SLF4J: no more "Log4j API
+  could not find a logging provider" when the module loads.
+- A passing Maven build prints nothing: test JVMs bind SLF4J everywhere,
+  deliberate-failure tests silence the logger they provoke, and test JVMs and
+  the Docker image allow protobuf's `sun.misc.Unsafe` use via a `-D` property
+  every JDK accepts.
+- Closing a venue ends open MCP SSE streams first, so their request handlers
+  unwind against a live engine; no more `ClosedChannelException` /
+  Javalin `WRITER` errors on the console at shutdown.
+- Shutdown no longer leaves job threads parked past the venue ("Slow shutdown
+  of executor task threads" on the console).
+
+### Changed
+
+- Update the Convex runtime and storage dependencies from 0.8.15 to 0.8.16.
+- `secret:set` creates by default and requires explicit `overwrite: true` to
+  replace an existing secret; REST `PUT` retains replacement semantics.
+- Agent context is now represented by one shared durable frame structure for
+  both llmagent and goaltree. Cached models materialise an append-only rendered
+  prefix; configuration or past-state changes rebuild it, while new loads and
+  tool activations append durable exchanges. Models with `promptCaching: false`
+  render ephemerally from session state and persist no rendered context.
+- Prompt caching defaults on when a model does not specify `promptCaching`.
+- Volatile context and skill loads append a new resolved version only when the
+  source changes; the prior version remains part of conversation history.
+- `agent:request` and `agent:chat` Jobs survive a venue restart: kept at
+  shutdown and at boot while their intake is queued on the agent, and
+  completed by the boot wake. A `trigger` wait still fails as interrupted.
+- `agent:update` no longer refuses a running agent: config applies to future
+  transitions, and the run loop merges the transition's state change against
+  its fire-time snapshot so mid-transition updates survive.
+- Docs: shaded module jars are GitHub Releases artifacts only; the Maven
+  `module` classifier recipe is replaced by a download recipe.
+
 ## [0.9.7] - 2026-08-29
 
 ### Added

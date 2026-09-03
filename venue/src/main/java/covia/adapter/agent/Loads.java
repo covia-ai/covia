@@ -3,11 +3,11 @@ package covia.adapter.agent;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.BiPredicate;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -26,8 +26,9 @@ import covia.venue.RequestContext;
 /**
  * The loads phase of assembly (AGENT_CONTEXT.md §4): explicit persistent
  * loads resolve into an appended event once, while declared volatile loads
- * resolve per inference. Tool contributions and dispatch routes are derived
- * alongside the active loads view.
+ * are observed per inference and append a new event only when their rendered
+ * value changes. Tool contributions and dispatch routes are derived alongside
+ * the active loads view.
  *
  * <p><b>Entry shape.</b> A loads entry is {@code key → spec}. By default the
  * key is the reference the entry renders (a lattice path, an asset, a
@@ -45,11 +46,9 @@ import covia.venue.RequestContext;
  *
  * <p><b>Placement.</b> An entry is <i>volatile</i> when it declares
  * {@code volatile: true}, or is an {@code op} entry and does not declare
- * {@code volatile: false}. Volatile entries render in the tail, after the
- * conversation, so their per-inference changes bust only themselves; every
- * other entry renders in the live surface. A volatile result also sits
- * between the latest input and the reply and is re-sent uncached every
- * inference, so it renders <b>within its budget whatever its shape</b>: a
+ * {@code volatile: false}. Volatile entries are watched before an inference;
+ * a changed value is appended to conversation, while an unchanged value adds
+ * no prompt bytes. A volatile result renders <b>within its budget whatever its shape</b>: a
  * structured value through the explorer as always, a string cut at the
  * budget with a visible trailer. Resolution runs in load order — oldest
  * first, undated (configured) entries before dated ones. Pinned entries keep
@@ -57,21 +56,26 @@ import covia.venue.RequestContext;
  * unload handles are unambiguous.</p>
  *
  * <p>Agent-managed, non-volatile entries are resolved once and persisted as
- * conversation events. Operator-pinned and legacy unmarked entries still form
- * an ephemeral snapshot immediately before each provider call; volatile
- * entries deliberately do so on every call.</p>
+ * conversation events. Operator-pinned and legacy unmarked entries are
+ * materialised only while building a frame's initial rendered prefix.
+ * Volatile declarations are resolved on every call, but their values are
+ * retained as frame observations rather than rebuilt as a disposable tail.</p>
  */
 public final class Loads {
 
 	private Loads() {}
 
-	private static final AString K_KIND         = Strings.intern("kind");
+	static final AString K_KIND                 = Strings.intern("kind");
+	static final AString KIND_TOOLS             = Strings.intern("tools");
+	/** Materialised {@code [{operation, definition}]} for a load's tools. */
+	static final AString K_TOOL_BINDINGS        = Strings.intern("toolBindings");
 	private static final AString K_STATUS       = Strings.intern("status");
 	private static final AString K_TRUNCATED    = Strings.intern("truncated");
 	private static final AString K_DEDUPLICATED = Strings.intern("deduplicated");
 	private static final AString K_BAND         = Strings.intern("band");
 	private static final AString BAND_LIVE      = Strings.intern("live");
-	private static final AString BAND_TAIL      = Strings.intern("tail");
+	private static final AString BAND_OBSERVATION = Strings.intern("observation");
+	private static final String OBSERVATION_PREFIX = "loads:";
 
 	/** The entry-source fields a spec may declare (AGENT_CONTEXT.md §6.2). */
 	static final AString K_REF      = Fields.REF;
@@ -82,7 +86,7 @@ public final class Loads {
 	static final AString K_PATH     = Fields.PATH;
 	static final AString K_REQUIRED = Fields.REQUIRED;
 	static final AString K_LABEL    = Fields.LABEL;
-	/** Placement: tail (never cached) rather than live surface. */
+	/** Watched placement: resolve before inference and append only on change. */
 	static final AString K_VOLATILE = Strings.intern("volatile");
 	static final AString K_TS       = Strings.intern("ts");
 	/** Instruction authority, stamped by the declaration boundary. */
@@ -96,32 +100,40 @@ public final class Loads {
 	private static final AString[] ENTRY_KEYS  = { K_REF, K_TEXT, K_OP, K_INPUT, K_JOB, K_PATH, K_REQUIRED };
 
 	/**
-	 * One inference's active-load view: unappended instructions as system elements,
-	 * unappended data loads as aggregate-ready entries, volatile elements for the
-	 * tail, and the tools contributed by every active load. Entries already
-	 * persisted in conversation contribute metadata and tools, but no duplicate
-	 * content elements.
+	 * One inference's active-load view: unappended stable instructions as system
+	 * elements, unappended stable data as aggregate-ready entries, canonical
+	 * watched-observation candidates, and the tools contributed by every active
+	 * load. Entries already persisted in conversation contribute metadata and
+	 * tools, but no duplicate content elements.
 	 */
 	public record Snapshot(AVector<ACell> instructionElements, AVector<ACell> exchanges,
-			AVector<ACell> volatileElements, AVector<ACell> tools, Map<String, AString> routes,
-			AVector<ACell> diagnostics, AVector<ACell> toolProvenance) {
-		public static final Snapshot EMPTY = new Snapshot(null, null, null, null, null, null, null);
+			AVector<ACell> observations,
+			ToolPalette.Palette toolPalette, AMap<AString, ACell> pinnedToolIndex,
+			AVector<ACell> diagnostics, AMap<AString, ACell> effectiveLoads) {
+		public static final Snapshot EMPTY = new Snapshot(
+			null, null, null, null, null, null, null);
 
 		public Snapshot {
 			instructionElements = (instructionElements != null) ? instructionElements : Vectors.empty();
 			exchanges = (exchanges != null) ? exchanges : Vectors.empty();
-			volatileElements = (volatileElements != null) ? volatileElements : Vectors.empty();
-			tools = (tools != null) ? tools : Vectors.empty();
-			routes = (routes != null) ? Map.copyOf(routes) : Map.of();
+			observations = (observations != null) ? observations : Vectors.empty();
+			toolPalette = (toolPalette != null) ? toolPalette : ToolPalette.Palette.EMPTY;
+			pinnedToolIndex = (pinnedToolIndex != null) ? pinnedToolIndex : Maps.empty();
 			diagnostics = (diagnostics != null) ? diagnostics : Vectors.empty();
-			toolProvenance = (toolProvenance != null) ? toolProvenance : Vectors.empty();
+			effectiveLoads = (effectiveLoads != null) ? effectiveLoads : Maps.empty();
 		}
+
+		public AVector<ACell> tools() { return toolPalette.tools(); }
+		public AMap<AString, ACell> toolIndex() { return toolPalette.toolIndex(); }
+		public AVector<ACell> toolProvenance() { return toolPalette.provenance(); }
+		public AString operation(String name) { return toolPalette.operation(name); }
+		public AString activityLabel(String name) { return toolPalette.activityLabel(name); }
 
 		/** The live surface in provider-message form. */
 		@SuppressWarnings("unchecked")
 		public AVector<ACell> elements() {
 			return (AVector<ACell>) instructionElements.concat(
-				ContextAssembler.contextExchanges(exchanges, false));
+				ContextAssembler.contextExchanges(exchanges));
 		}
 	}
 
@@ -175,9 +187,9 @@ public final class Loads {
 	}
 
 	/**
-	 * True when the entry renders in the tail: declared {@code volatile: true},
-	 * or an {@code op} entry (re-run every inference) that does not declare
-	 * {@code volatile: false}.
+	 * True when the entry is watched: declared {@code volatile: true}, or an
+	 * {@code op} entry (resolved before every inference) that does not declare
+	 * {@code volatile: false}. Watched output is appended only when it changes.
 	 */
 	public static boolean isVolatile(ACell spec) {
 		if (!(spec instanceof AMap<?, ?> m)) return false;
@@ -204,6 +216,11 @@ public final class Loads {
 	static boolean isTrusted(ACell spec) {
 		return !isAgentManaged(spec)
 			&& spec instanceof AMap<?, ?> m && CVMBool.TRUE.equals(m.get(K_TRUSTED));
+	}
+
+	/** True when the load contributes tools but no message content. */
+	static boolean isToolOnly(ACell spec) {
+		return spec instanceof AMap<?, ?> m && KIND_TOOLS.equals(m.get(K_KIND));
 	}
 
 	/** True when at least one visible entry in a tier is agent-managed. */
@@ -268,23 +285,160 @@ public final class Loads {
 	 */
 	public static Snapshot resolve(Engine engine, RequestContext ctx,
 			AMap<AString, ACell> effectiveLoads, Set<String> fixedNames, AString dialect) {
+		return resolve(engine, ctx, effectiveLoads, excluded(fixedNames), dialect, true);
+	}
+
+	/**
+	 * Resolves the active load declarations for an inference. The metadata and
+	 * watched observations are always refreshed. Stable content is resolved only
+	 * when {@code materialiseLive} is true, which is exactly when the frame has no
+	 * applicable rendered prefix.
+	 */
+	public static Snapshot resolveForInference(Engine engine, RequestContext ctx,
+			AMap<AString, ACell> effectiveLoads, Set<String> fixedNames, AString dialect,
+			boolean materialiseLive) {
+		return resolve(engine, ctx, effectiveLoads, excluded(fixedNames), dialect, materialiseLive);
+	}
+
+	static Snapshot resolveForInference(Engine engine, RequestContext ctx,
+			AMap<AString, ACell> effectiveLoads, BiPredicate<String, AString> excluded, AString dialect,
+			boolean materialiseLive) {
+		return resolve(engine, ctx, effectiveLoads, excluded, dialect, materialiseLive);
+	}
+
+	/** Resolves only contributed tool definitions and routes. No context source
+	 * is read and no operation entry is invoked. */
+	public static Snapshot describe(Engine engine, RequestContext ctx,
+			AMap<AString, ACell> effectiveLoads, Set<String> fixedNames) {
+		return describe(engine, ctx, effectiveLoads, excluded(fixedNames));
+	}
+
+	static Snapshot describe(Engine engine, RequestContext ctx,
+			AMap<AString, ACell> effectiveLoads, BiPredicate<String, AString> excluded) {
+		return describe(engine, ctx, effectiveLoads, excluded, true);
+	}
+
+	static Snapshot describe(Engine engine, RequestContext ctx,
+			AMap<AString, ACell> effectiveLoads, BiPredicate<String, AString> excluded,
+			boolean resolvePinned) {
 		if (effectiveLoads == null || effectiveLoads.count() == 0) return Snapshot.EMPTY;
-		Map<String, AString> routes = new HashMap<>();
-		List<AMap<AString, ACell>> toolEntries = new ArrayList<>();
-		AMap<AString, ACell> toolLoads = Skills.resolveLoadTools(engine, ctx, effectiveLoads);
-		AVector<ACell> tools = ToolPalette.loadsToolDefs(
-			engine, ctx, toolLoads, fixedNames, routes, toolEntries);
-		Resolved resolved = resolveElements(engine, ctx, effectiveLoads, dialect);
-		return new Snapshot(resolved.instructions(), resolved.exchanges(), resolved.volatiles(), tools, routes,
-			resolved.diagnostics(), vector(toolEntries));
+		if (resolvePinned) effectiveLoads = materialiseInitial(engine, ctx, effectiveLoads);
+		ToolPalette.LoadPalette tools = ToolPalette.loadPalette(
+			engine, ctx, effectiveLoads, excluded, resolvePinned);
+		return new Snapshot(null, null, null, tools.active(), tools.pinnedIndex(), null,
+			effectiveLoads);
+	}
+
+	private static Snapshot resolve(Engine engine, RequestContext ctx,
+			AMap<AString, ACell> effectiveLoads, BiPredicate<String, AString> excluded, AString dialect,
+			boolean materialiseLive) {
+		if (effectiveLoads == null || effectiveLoads.count() == 0) return Snapshot.EMPTY;
+		if (materialiseLive) effectiveLoads = materialiseInitial(engine, ctx, effectiveLoads);
+		ToolPalette.LoadPalette tools = ToolPalette.loadPalette(
+			engine, ctx, effectiveLoads, excluded, materialiseLive);
+		Resolved resolved = resolveElements(engine, ctx, effectiveLoads, dialect, materialiseLive);
+		return new Snapshot(resolved.instructions(), resolved.exchanges(), resolved.observations(),
+			tools.active(), tools.pinnedIndex(), resolved.diagnostics(), effectiveLoads);
+	}
+
+	/**
+	 * Invalidates the derived part of agent-managed loads at a compaction
+	 * boundary. Their declaration and ownership stay active, but the next
+	 * initial render must resolve current content, skill contributions and tool
+	 * definitions because the earlier appended events are now behind the
+	 * compacted summary. Pinned entries remain byte-identical.
+	 */
+	@SuppressWarnings("unchecked")
+	static AMap<AString, ACell> invalidateAgentMaterialisation(AMap<AString, ACell> loads) {
+		if (loads == null || loads.isEmpty()) return (loads != null) ? loads : Maps.empty();
+		AMap<AString, ACell> updated = loads;
+		for (var entry : loads.entrySet()) {
+			if (!(entry.getValue() instanceof AMap<?, ?> raw)) continue;
+			AMap<AString, ACell> meta = (AMap<AString, ACell>) raw;
+			if (!isAgentManaged(meta)) continue;
+			AMap<AString, ACell> reset = meta
+				.dissoc(K_APPENDED)
+				.dissoc(K_TOOL_BINDINGS);
+			if (Skills.isSkillEntry(meta)) {
+				reset = reset
+					.dissoc(Fields.TOOLS)
+					.dissoc(Skills.K_SKILLS)
+					.dissoc(Skills.K_SKILLSETS)
+					.dissoc(AbstractLLMAdapter.K_LABEL);
+			}
+			if (reset != meta) updated = updated.assoc(entry.getKey(), reset);
+		}
+		return updated;
+	}
+
+	/** Materialises the declarations used by any initial context load. This is
+	 * the common path for a new frame, a cache rebuild and post-compaction
+	 * loading. All source reads happen before the caller enters its atomic frame
+	 * update. */
+	@SuppressWarnings("unchecked")
+	private static AMap<AString, ACell> materialiseInitial(Engine engine,
+			RequestContext ctx, AMap<AString, ACell> loads) {
+		AMap<AString, ACell> updated = loads;
+		for (var entry : loads.entrySet()) {
+			if (!(entry.getValue() instanceof AMap<?, ?> raw)) continue;
+			AMap<AString, ACell> meta = (AMap<AString, ACell>) raw;
+			meta = materialiseEntry(engine, ctx, entry.getKey(), meta);
+			if (meta != entry.getValue()) updated = updated.assoc(entry.getKey(), meta);
+		}
+		return updated;
+	}
+
+	/** One declaration through the same materialisation path used by both an
+	 * explicit load and an initial context render. */
+	private static AMap<AString, ACell> materialiseEntry(Engine engine,
+			RequestContext ctx, AString key, AMap<AString, ACell> meta) {
+		boolean incompleteSkill = Skills.isSkillEntry(meta)
+			&& (!meta.containsKey(Fields.TOOLS)
+				|| !meta.containsKey(Skills.K_SKILLS)
+				|| !meta.containsKey(Skills.K_SKILLSETS));
+		if (incompleteSkill) meta = Skills.materialiseLoadMeta(engine, ctx, key, meta);
+		if (meta.get(Fields.TOOLS) != null && !meta.containsKey(K_TOOL_BINDINGS)) {
+			meta = ToolPalette.materialiseLoadToolBindings(engine, ctx, meta);
+		}
+		return meta;
+	}
+
+	/** Installs refreshed derived metadata onto matching frame-owned entries.
+	 * This is a pure transform for the same atomic update that installs the
+	 * replacement rendered prefix. */
+	@SuppressWarnings("unchecked")
+	static AMap<AString, ACell> applyMaterialisedMetadata(
+			AMap<AString, ACell> frameLoads, AMap<AString, ACell> effectiveLoads) {
+		if (frameLoads == null || frameLoads.isEmpty() || effectiveLoads == null) {
+			return (frameLoads != null) ? frameLoads : Maps.empty();
+		}
+		AMap<AString, ACell> updated = frameLoads;
+		for (var entry : frameLoads.entrySet()) {
+			if (!(entry.getValue() instanceof AMap<?, ?> raw)) continue;
+			AMap<AString, ACell> current = (AMap<AString, ACell>) raw;
+			if (!isAgentManaged(current)) continue;
+			boolean needsMetadata = (Skills.isSkillEntry(current)
+				&& (!current.containsKey(Fields.TOOLS)
+					|| !current.containsKey(Skills.K_SKILLS)
+					|| !current.containsKey(Skills.K_SKILLSETS)))
+				|| (current.get(Fields.TOOLS) != null
+					&& !current.containsKey(K_TOOL_BINDINGS));
+			if (!needsMetadata) continue;
+			ACell replacement = effectiveLoads.get(entry.getKey());
+			if (replacement instanceof AMap<?, ?> && isAgentManaged(replacement)
+					&& !replacement.equals(current)) {
+				updated = updated.assoc(entry.getKey(), replacement);
+			}
+		}
+		return updated;
 	}
 
 	/**
 	 * Resolves one newly loaded non-volatile entry and marks it as appended in
 	 * the same tier value that the runtime persists with the resulting turns.
 	 * A later inference therefore retains the conversation event without
-	 * reading the source again. Volatile entries deliberately stay unmarked and
-	 * continue to resolve in the uncached tail.
+	 * reading the source again. Watched entries deliberately stay unmarked; the
+	 * observation transform resolves and appends them only when their value changes.
 	 */
 	@SuppressWarnings("unchecked")
 	static Append append(Engine engine, RequestContext ctx,
@@ -293,16 +447,25 @@ public final class Loads {
 			return new Append((loads != null) ? loads : Maps.empty(), Vectors.empty());
 		}
 		AMap<AString, ACell> meta = (AMap<AString, ACell>) raw;
+		// Explicit and initial loads share one materialisation path. Tool metadata
+		// follows load state, not content volatility, and is retained even when
+		// content is watched.
+		meta = materialiseEntry(engine, ctx, key, meta);
+		loads = loads.assoc(key, meta);
 		if (isVolatile(meta)) return new Append(loads, Vectors.empty());
-		Resolved resolved = resolveElements(engine, ctx, Maps.of(key, meta), dialect);
+		Resolved resolved = resolveElements(engine, ctx, Maps.of(key, meta), dialect, true);
 		AVector<ACell> messages = (AVector<ACell>) resolved.instructions().concat(
-			ContextAssembler.contextExchanges(resolved.exchanges(), false, eventId));
+			ContextAssembler.contextExchanges(resolved.exchanges(), eventId));
 		return new Append(loads.assoc(key, meta.assoc(K_APPENDED, CVMBool.TRUE)), messages);
 	}
 
+	private static BiPredicate<String, AString> excluded(Set<String> names) {
+		return (names != null) ? (name, owner) -> names.contains(name) : (name, owner) -> false;
+	}
+
 	/**
-	 * The live surface every loads entry renders to — instruction elements, then
-	 * aggregate-ready entries — in load order. This is the single place that knows about
+	 * The initial live surface every stable loads entry renders to — instruction
+	 * elements, then aggregate-ready entries — in load order. This is the single place that knows about
 	 * entry kinds:
 	 * <ul>
 	 *   <li><b>Skill entries</b> ({@code skill: true}): an unapplied entry resolves
@@ -316,22 +479,17 @@ public final class Loads {
 	 *       system instructions; all others are tool-result entries. Optional
 	 *       pinned absence remains visible; dynamic absence is skipped.</li>
 	 * </ul>
-	 * Entries already appended are skipped without reading their source. The
-	 * volatile entries are on the {@link Snapshot} (or {@link #volatileElements}).
+	 * Entries already appended are skipped without reading their source. Watched
+	 * entries are returned only as canonical {@link Snapshot#observations()}.
 	 */
 	public static AVector<ACell> elements(Engine engine, RequestContext ctx,
 			AMap<AString, ACell> loads, AString dialect) {
-		Resolved r = resolveElements(engine, ctx, loads, dialect);
+		Resolved r = resolveElements(engine, ctx, loads, dialect, true);
 		return r.instructions().concat(r.exchanges());
 	}
 
-	/** Trusted messages and aggregate-ready data entries for the tail — see {@link #isVolatile}. */
-	public static AVector<ACell> volatileElements(Engine engine, RequestContext ctx,
-			AMap<AString, ACell> loads, AString dialect) {
-		return resolveElements(engine, ctx, loads, dialect).volatiles();
-	}
-
-	private record Resolved(AVector<ACell> instructions, AVector<ACell> exchanges, AVector<ACell> volatiles,
+	private record Resolved(AVector<ACell> instructions, AVector<ACell> exchanges,
+			AVector<ACell> observations,
 			AVector<ACell> diagnostics) {}
 
 	private record Element(AVector<ACell> instructions, AVector<ACell> exchanges,
@@ -339,25 +497,41 @@ public final class Loads {
 
 	@SuppressWarnings("unchecked")
 	private static Resolved resolveElements(Engine engine, RequestContext ctx,
-			AMap<AString, ACell> loads, AString dialect) {
+			AMap<AString, ACell> loads, AString dialect, boolean materialiseLive) {
 		AVector<ACell> instructions = Vectors.empty();
 		AVector<ACell> exchanges = Vectors.empty();
-		AVector<ACell> volatiles = Vectors.empty();
+		AVector<ACell> observations = Vectors.empty();
 		AVector<ACell> diagnostics = Vectors.empty();
-		if (loads == null || loads.count() == 0) return new Resolved(instructions, exchanges, volatiles, diagnostics);
+		if (loads == null || loads.count() == 0) {
+			return new Resolved(instructions, exchanges, observations, diagnostics);
+		}
 		ContextLoader loader = new ContextLoader(engine);
 		Set<convex.core.data.Hash> seenSkillIds = new HashSet<>();
+		long observationOrder = 0;
 		for (Map.Entry<AString, ACell> entry : ordered(loads)) {
 			AString key = entry.getKey();
 			AMap<AString, ACell> meta = (AMap<AString, ACell>) entry.getValue();
 			long entryBudget = AbstractLLMAdapter.clampLoadBudget(meta.get(AbstractLLMAdapter.K_BUDGET));
 			boolean skill = Skills.isSkillEntry(meta);
-			boolean tail = isVolatile(meta);
+			boolean toolOnly = isToolOnly(meta);
+			boolean watched = isVolatile(meta);
 			boolean agentManaged = isAgentManaged(meta);
-			if (!tail && CVMBool.TRUE.equals(meta.get(K_APPENDED))) {
+			if (!watched && !materialiseLive) {
 				diagnostics = diagnostics.conj(Maps.of(
 					Fields.REF, key,
-					K_KIND, Strings.create(skill ? "skill" : "load"),
+					K_KIND, Strings.create(skill ? "skill" : toolOnly ? "tools" : "load"),
+					K_BAND, BAND_LIVE,
+					Fields.BYTES, CVMLong.ZERO,
+					AbstractLLMAdapter.K_BUDGET, CVMLong.create(entryBudget),
+					K_STATUS, Strings.create("materialised"),
+					K_TRUNCATED, CVMBool.FALSE,
+					K_DEDUPLICATED, CVMBool.FALSE));
+				continue;
+			}
+			if (!watched && CVMBool.TRUE.equals(meta.get(K_APPENDED))) {
+				diagnostics = diagnostics.conj(Maps.of(
+					Fields.REF, key,
+					K_KIND, Strings.create(skill ? "skill" : toolOnly ? "tools" : "load"),
 					K_BAND, BAND_LIVE,
 					Fields.BYTES, CVMLong.ZERO,
 					AbstractLLMAdapter.K_BUDGET, CVMLong.create(entryBudget),
@@ -371,11 +545,10 @@ public final class Loads {
 				dialect, agentManaged);
 			boolean capped = false;
 			AVector<ACell> messages = resolved.exchanges();
-			if (tail && !skill) {
-				// The tail is re-sent uncached every inference and sits between
-				// the input and the reply: a volatile result renders within its
-				// budget whatever its shape. Structured values already do (the
-				// explorer); strings are cut here with a visible trailer.
+			if (watched) {
+				// A watched result becomes durable when it changes, so cap it before
+				// comparison and persistence. Structured values already use the
+				// explorer; verbatim strings and skill bodies are cut here.
 				AVector<ACell> bounded = Vectors.empty();
 				for (long i = 0; i < messages.count(); i++) {
 					ACell msg = messages.get(i);
@@ -391,7 +564,13 @@ public final class Loads {
 					if (cut != msg) capped = true;
 					trusted = trusted.conj(cut);
 				}
-				volatiles = (AVector<ACell>) volatiles.concat(trusted).concat(messages);
+				AString observationId = Strings.create(OBSERVATION_PREFIX + key);
+				AString eventId = ContextAssembler.observationEventId(
+					observationId, trusted, messages);
+				AVector<ACell> event = (AVector<ACell>) trusted.concat(
+					ContextAssembler.contextExchanges(messages, eventId));
+				observations = observations.conj(ContextAssembler.observation(
+					observationId, observationOrder++, event));
 			} else {
 				instructions = (AVector<ACell>) instructions.concat(resolved.instructions());
 				exchanges = (AVector<ACell>) exchanges.concat(messages);
@@ -401,24 +580,28 @@ public final class Loads {
 			for (long i = 0; i < messages.count(); i++) bytes += ContextAssembler.bytes(messages.get(i));
 			diagnostics = diagnostics.conj(Maps.of(
 				Fields.REF, key,
-				K_KIND, Strings.create(skill ? "skill" : "load"),
-				K_BAND, tail ? BAND_TAIL : BAND_LIVE,
+				K_KIND, Strings.create(skill ? "skill" : toolOnly ? "tools" : "load"),
+				K_BAND, watched ? BAND_OBSERVATION : BAND_LIVE,
 				Fields.BYTES, CVMLong.create(bytes),
 				AbstractLLMAdapter.K_BUDGET, CVMLong.create(entryBudget),
 				K_STATUS, Strings.create(resolved.status()),
 				K_TRUNCATED, CVMBool.create(loader.wasTruncated() || capped),
 				K_DEDUPLICATED, CVMBool.create(resolved.deduplicated())));
 		}
-		return new Resolved(instructions, exchanges, volatiles, diagnostics);
+		return new Resolved(instructions, exchanges, observations, diagnostics);
 	}
 
 	@SuppressWarnings("unchecked")
 	private static Element element(Engine engine, RequestContext ctx, ContextLoader loader,
 			AString key, AMap<AString, ACell> meta, Set<convex.core.data.Hash> seenSkillIds,
 			AString dialect, boolean agentManaged) {
+		if (isToolOnly(meta)) {
+			return new Element(Vectors.empty(), Vectors.empty(), "materialised", false);
+		}
 		if (!Skills.isSkillEntry(meta)) {
 			boolean trusted = isTrusted(meta);
-			ContextLoader.Resolved r = loader.resolveValue(entryFor(key, meta), ctx, !agentManaged);
+			ContextLoader.Resolved r = loader.resolveValue(entryFor(key, meta), ctx,
+				!agentManaged || isVolatile(meta));
 			if (r == null) {
 				return new Element(Vectors.empty(), Vectors.empty(),
 					loader.resolution().name().toLowerCase(), false);

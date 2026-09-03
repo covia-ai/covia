@@ -5,6 +5,7 @@
 	"dateCreated": "2025-06-09T07:22:59Z",
 	"dateModified": "2025-06-09T07:22:59Z",
 	"operation": {
+		"readOnly": false,
 		"adapter": "langchain:ollama:qwen3",
 		"input": {
 			"type": "object",
@@ -25,4 +26,4 @@
 			}
 		}
 	}
-} 
+}

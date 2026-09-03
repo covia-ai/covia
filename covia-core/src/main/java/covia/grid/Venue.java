@@ -140,6 +140,27 @@ public abstract class Venue {
 		return run(assetID, input);
 	}
 
+	/**
+	 * Runs an operation with a transient Job wrapper and returns only its result.
+	 * There is no durable Job ID to poll or recover, so callers must await the
+	 * returned future through completion. Implementations may require an explicit
+	 * venue opt-in and must fail rather than silently create a durable Job.
+	 */
+	public CompletableFuture<ACell> runPrivate(Hash assetID, ACell input) {
+		return CompletableFuture.failedFuture(new UnsupportedOperationException(
+			"Private result-oriented runs are not supported by this venue implementation"));
+	}
+
+	/** Private result-oriented run identified by an alias or asset ID. */
+	public CompletableFuture<ACell> runPrivate(String operation, ACell input) {
+		Hash assetID = Hash.parse(operation);
+		if (assetID == null) {
+			throw new IllegalArgumentException(
+				"Operation must be an asset hash for this venue implementation: " + operation);
+		}
+		return runPrivate(assetID, input);
+	}
+
 	public CompletableFuture<Job> getJob(String jobId) {
 		return getJob(Job.parseID(jobId));
 	}

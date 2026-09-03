@@ -142,8 +142,8 @@ public class AgentConcurrencyTest {
 		agent.addTask(taskId, Strings.create("new work"));
 
 		AMap<AString, ACell> merged = agent.mergeRunResult(
-			null, null, Maps.of("ts", CVMLong.create(1)),
-			sid, null, 0, null, null, null);
+			null, null, null, Maps.of("ts", CVMLong.create(1)),
+			sid, null, 0, null, null);
 
 		assertEquals(AgentState.SLEEPING,
 			RT.ensureString(merged.get(AgentState.KEY_STATUS)));

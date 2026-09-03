@@ -114,6 +114,12 @@ public class SkillsLibraryTest {
 			"grid owns its skill, inside its skillset");
 		assertTrue(engine.getAdapter("hitl").pendingCatalogEntries.containsKey("v/skills/agents/hitl"),
 			"hitl owns its skill");
+		assertTrue(engine.getAdapter("connections").pendingCatalogEntries.containsKey("v/skills/connections/notion"),
+			"connections owns provider skills");
+		assertTrue(engine.getAdapter("connections").pendingCatalogEntries.containsKey("v/skills/root/connections"),
+			"connections owns its root entry point");
+		assertFalse(engine.getAdapter("http").pendingCatalogEntries.containsKey("v/skills/connections/notion"),
+			"the transport does not own service definitions");
 		assertFalse(platformNames.contains("grid"), "SkillsAdapter no longer carries adapter skills");
 	}
 
@@ -411,8 +417,10 @@ public class SkillsLibraryTest {
 		AVector<ACell> context = RT.ensureVector(RT.getIn(config, "context"));
 		assertEquals(1, context.count(), "default agent should pin one agent-local memory source");
 		ACell memory = context.get(0);
-		assertEquals("v/ops/memory", RT.getIn(memory, "op").toString());
+		assertEquals("v/ops/memory-recall", RT.getIn(memory, "op").toString());
 		assertEquals("n/memory", RT.getIn(memory, "input", "path").toString());
+		assertNull(RT.getIn(memory, "input", "command"),
+			"the dedicated read-only operation fixes recall at its metadata boundary");
 		assertEquals("Agent memory (edit using path n/memory)", RT.getIn(memory, "label").toString());
 		// minimal holds NO op tools — skills discovery is its entire surface
 		ACell minimalAsset = engine.resolvePath(Strings.create("v/agents/templates/minimal"), ctx);

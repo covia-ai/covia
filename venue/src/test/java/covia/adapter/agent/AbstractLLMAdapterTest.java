@@ -91,6 +91,15 @@ public class AbstractLLMAdapterTest {
 		assertNull(RT.getIn(retry, "toolCalls"));
 	}
 
+	@Test
+	public void testStepAssistantNormalisesExplicitToolCallId() {
+		AMap<AString, ACell> assistant = AbstractLLMAdapter.stepAssistant(Maps.of(
+			"toolCalls", Vectors.of(Maps.of("id", "caller:id/1", "name", "test"))));
+		AString id = RT.ensureString(RT.getIn(assistant, "toolCalls", 0, "id"));
+		assertTrue(ToolCallIds.valid(id), id.toString());
+		assertEquals(Maps.empty(), RT.getIn(assistant, "toolCalls", 0, "arguments"));
+	}
+
 	// ========== parseToolArguments — the LLM wire boundary (#89) ==========
 
 	@Test
@@ -259,12 +268,19 @@ public class AbstractLLMAdapterTest {
 			"maxTokens", 2048,
 			"temperature", 0,
 			"topP", 1,
-			"cache", false);
+			"cache", false,
+			"providerOptions", Maps.of(
+				"thinking", Maps.of("type", "adaptive"),
+				"output_config", Maps.of("effort", "low")));
 		AMap<AString, ACell> input = AbstractLLMAdapter.buildL3Input(
 			config, Vectors.of(Maps.of("role", "user", "content", "hello")), Vectors.empty());
 		assertEquals(2048L, RT.ensureLong(RT.getIn(input, "maxTokens")).longValue());
 		assertEquals(0L, RT.ensureLong(RT.getIn(input, "temperature")).longValue());
 		assertEquals(1L, RT.ensureLong(RT.getIn(input, "topP")).longValue());
 		assertEquals(CVMBool.FALSE, RT.getIn(input, "cache"));
+		assertEquals(Strings.create("adaptive"),
+			RT.getIn(input, "providerOptions", "thinking", "type"));
+		assertEquals(Strings.create("low"),
+			RT.getIn(input, "providerOptions", "output_config", "effort"));
 	}
 }

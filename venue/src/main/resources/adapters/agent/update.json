@@ -1,9 +1,10 @@
 {
 	"name": "Update Agent",
-	"description": "Update a non-running agent's configuration and/or runtime state while preserving its history. Config accepts an inline map, a reference, or ordered layers; it is recursively merged over existing config with later values winning (vectors replace). State remains shallow-merged. Existing sessions keep their materialised prompt/tool prefix; use agent:reloadContext explicitly for an idle session that must adopt those changes. Agent configuration has one home: pass model, tools, caps, outputs, and systemPrompt under config; state.config is rejected. Framework-managed fields (status, tasks, inbox, timeline) are never affected. RUNNING is rejected because its active transition already captured the old config; suspend it before updating and resume afterward.",
+	"description": "Update an agent's configuration and/or runtime state while preserving its history. Config accepts an inline map, a reference, or ordered layers; it is recursively merged over existing config with later values winning (vectors replace). State remains shallow-merged. A changed declarative config makes existing materialised prompt/tool prefixes stale; each session atomically replaces that config-owned rendering on its next inference while preserving rendered conversation and load events verbatim. Ambient source changes alone do not invalidate context; use agent:reloadContext to force a same-config refresh. Agent configuration has one home: pass model, tools, caps, outputs, and systemPrompt under config; state.config is rejected. Framework-managed fields (status, tasks, inbox, timeline) are never affected. A running agent may be updated: config applies to future transitions (a transition already started keeps the snapshot it fired with; use agent:suspend to halt it now), and state is merged by the run loop as the transition's change against its fire-time snapshot, so keys the transition does not touch survive. The result's running flag says whether a transition was in flight; narrowing caps while one runs adds a warning.",
 	"dateCreated": "2026-03-07T00:00:00Z",
 	"operation": {
 		"adapter": "agent:update",
+		"readOnly": false,
 		"internal": false,
 		"input": {
 			"type": "object",
@@ -20,7 +21,7 @@
 						}
 					]
 				},
-				"state": { "description": "State fields to merge (runtime data only). A 'config' key inside state is rejected (#144), as is a 'loads' key — loads live on the context scope chain: config.loads (operator pins) and per-session loads (#142)." }
+				"state": { "description": "State fields to merge (runtime data only). A 'config' key inside state is rejected (#144), as is a 'loads' key — loads live on the context scope chain: config.loads (operator pins) and frame.loads (#142)." }
 			},
 			"required": ["agentId"]
 		},
@@ -29,7 +30,13 @@
 			"properties": {
 				"agentId": { "type": "string" },
 				"address": { "type": "string", "description": "Canonical <ownerDID>/g/<agentId> address" },
-				"status": { "type": "string" }
+				"status": { "type": "string" },
+				"running": { "type": "boolean", "description": "Whether a transition was already in flight when the update landed." },
+				"warnings": {
+					"type": "array",
+					"items": { "type": "string" },
+					"description": "Operator-facing configuration advisories. Absent when there is nothing to flag."
+				}
 			}
 		}
 	}

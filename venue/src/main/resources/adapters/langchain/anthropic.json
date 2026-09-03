@@ -4,6 +4,7 @@
 	"creator": "Covia",
 	"operation": {
 		"adapter": "langchain:anthropic",
+		"readOnly": false,
 		"default": {
 			"maxTokens": 8192
 		},
@@ -38,11 +39,15 @@
 				},
 				"temperature": {
 					"type": "number",
-					"description": "Sampling temperature (e.g. 0 for deterministic extraction); provider default when omitted"
+					"description": "Sampling temperature; provider default when omitted. Leave unset when using Claude 5 adaptive thinking."
 				},
 				"topP": {
 					"type": "number",
 					"description": "Nucleus sampling top_p; provider default when omitted"
+				},
+				"providerOptions": {
+					"type": "object",
+					"description": "Provider-native request body fields forwarded unchanged; omitted fields retain Anthropic defaults. Do not repeat the shared model/messages/tools/max_tokens/temperature/top_p envelope here. Example for Claude 5: {thinking:{type:'adaptive'}, output_config:{effort:'low'}}"
 				},
 				"systemPrompt": {
 					"type": "string",
@@ -81,6 +86,10 @@
 				},
 				"toolCalls": {
 					"type": "array"
+				},
+				"providerState": {
+					"type": "object",
+					"description": "Opaque provider continuation state on a tool-use reply. Preserve it unchanged with that assistant message; Covia restores it only for the same provider and model."
 				},
 				"finishReason": {
 					"type": "string",

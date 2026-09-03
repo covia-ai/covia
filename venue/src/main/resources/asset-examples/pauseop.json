@@ -4,6 +4,7 @@
 	"dateCreated": "2026-02-06T00:00:00Z",
 	"operation": {
 		"adapter": "test:pause",
+		"readOnly": false,
 		"input": {
 			"type": "object",
 			"description": "Arbitrary input, returned as output on resume"

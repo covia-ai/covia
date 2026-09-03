@@ -23,6 +23,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import covia.api.Fields;
 
 /**
  * Unit tests for the session cycle-epoch primitives (lattice-resident frames,
@@ -71,6 +72,50 @@ public class AgentStateSessionCycleTest {
 	}
 
 	// ========== beginSessionCycle ==========
+
+	@Test
+	public void testInitialLoadsAreStoredOnRootFrame() {
+		Blob loadedSid = Blob.fromHex("11112222333344445555666677778888");
+		AMap<AString, ACell> loads = Maps.of("w/rules", Maps.of("budget", 500L));
+		AMap<AString, ACell> session = agent.ensureSession(loadedSid, userDid, loads);
+
+		assertNull(session.get(Fields.LOADS), "session has no parallel loads slot");
+		assertEquals(loads, RT.getIn(session,
+			AgentState.KEY_FRAMES, CVMLong.ZERO, Fields.LOADS));
+	}
+
+	@Test
+	public void testBeginCycleMigratesLegacyLoadsUnderExistingRootLoads() {
+		Blob legacySid = Blob.fromHex("9999aaaabbbbccccddddeeeeffff0000");
+		AMap<AString, ACell> legacyLoads = Maps.of(
+			"w/outer", "legacy",
+			"w/shadow", "old",
+			"w/masked", "old");
+		AMap<AString, ACell> frameLoads = Maps.of(
+			"w/shadow", "new",
+			"w/frame", "frame");
+		frameLoads = frameLoads.assoc(Strings.create("w/masked"), null);
+		AMap<AString, ACell> root = Maps.of(
+			AgentState.KEY_DESCRIPTION, Strings.EMPTY,
+			AgentState.KEY_CONVERSATION, Vectors.empty(),
+			Fields.LOADS, frameLoads);
+		AMap<AString, ACell> legacySession = Maps.of(
+			"c", Maps.empty(), "pending", Vectors.empty(),
+			Fields.FRAMES, Vectors.of(root), Fields.LOADS, legacyLoads);
+		agent.putRecord(agent.getRecord().assoc(AgentState.KEY_SESSIONS,
+			agent.getSessions().assoc(legacySid, legacySession)));
+
+		assertTrue(agent.beginSessionCycle(legacySid, EPOCH_A, null, 0));
+		AMap<AString, ACell> migrated = agent.getSession(legacySid);
+		assertNull(migrated.get(Fields.LOADS));
+		AMap<AString, ACell> loads = RT.ensureMap(RT.getIn(migrated,
+			AgentState.KEY_FRAMES, CVMLong.ZERO, Fields.LOADS));
+		assertEquals(Strings.create("legacy"), loads.get(Strings.create("w/outer")));
+		assertEquals(Strings.create("new"), loads.get(Strings.create("w/shadow")));
+		assertEquals(Strings.create("frame"), loads.get(Strings.create("w/frame")));
+		assertFalse(loads.containsKey(Strings.create("w/masked")),
+			"the former inner nil mask removes the legacy outer value");
+	}
 
 	@Test
 	public void testBeginCycleClaimsAppendsAndDrainsAtomically() {
@@ -239,7 +284,7 @@ public class AgentStateSessionCycleTest {
 	private void mergeMinimalCycle() {
 		AMap<AString, ACell> timelineEntry = Maps.of(
 			Strings.create("op"), Strings.create("test-cycle"));
-		agent.mergeRunResult(Maps.empty(), null,
-			timelineEntry, sid, null, 0, null, null, null);
+		agent.mergeRunResult(null, Maps.empty(), null,
+			timelineEntry, sid, null, 0, null, null);
 	}
 }

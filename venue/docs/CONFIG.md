@@ -76,6 +76,39 @@ Venue state (lattice, agents, secrets, DLFS) is persisted via Etch store:
 - `store`: `"temp"` (default, deleted on exit), `"memory"`, or file path
 - `seed`: Ed25519 hex seed for stable venue identity. If omitted with a persistent store, auto-generated and saved to `venue.key` alongside the store file. On POSIX filesystems this raw seed is created with owner-only permissions (`0600`), and existing key-file permissions are repaired on each launch. On non-POSIX filesystems it inherits the platform ACL policy.
 
+### Garbage collection at startup (`etch.gc.onStart`)
+
+Etch is append-only: superseded lattice roots, timeline entries and job
+records stay in the file forever, so a long-running venue's store only grows.
+Setting `etch.gc.onStart` collects the store **before the venue serves** —
+the one moment nothing holds a reference into it, so collection is trivially
+safe and the reclaimed space comes back at once:
+
+```json
+{
+  "store": "/data/venue.etch",
+  "etch": { "gc": { "onStart": true } }
+}
+```
+
+The venue drives Convex's own cycle (`startGC → transferGC → verifyGC →
+completeGC`; see `convex-core/docs/ETCH_GC.md`): everything reachable from the
+root is copied into `<store>~`, both files are cleanly closed, and the
+collected file is installed under the original name (where memory mappings
+still pin the old file — Windows — the venue opens the collected file directly
+and the rename completes on a later start). Before and after sizes are logged
+at INFO. The cycle needs free disk of roughly the current file size while it
+runs.
+
+Collection is maintenance and never stops a venue from starting: a failure
+before cutover cancels the cycle and boots on the untouched original (logged
+at ERROR). `temp`/`memory` stores and a store with no root yet are skipped.
+The flag pairs with `venue:restart` — restart with it set and the successor
+process collects on its way up. Collecting a **running** venue without a
+restart is `v/ops/venue/gc` — see [Store garbage collection
+(online)](#store-garbage-collection-online). The `gc` block sits alongside
+the creation policy fields below and is not passed through to Convex.
+
 ### Etch store policy (`etch`)
 
 An optional `etch` block (Convex 0.8.11+) sets the Etch creation policy for
@@ -291,6 +324,56 @@ This is process-wide authority, distinct from adapter management. Direct venue
 execution is allowed; delegation requires `venue/restart` on
 `<venue DID>/process` (as well as `invoke` on the operation). There is no
 configuration bypass or enable flag.
+
+## Shutdown (`shutdown.graceMs`)
+
+```json
+{ "shutdown": { "graceMs": 2000 } }
+```
+
+How long `Engine.close()` lets in-flight jobs finish before their adapters
+are asked to suspend them. An upper bound: shutdown proceeds as soon as
+nothing is in flight. Default 2000; `0` suspends at once. What "suspend"
+means is the adapter's decision — bounded in-process work is cancelled
+("Venue shut down"), a job whose adapter registered a pause hook is paused,
+and a durable wait is recorded and restored at the next boot. See
+[JOBS.md § Shutdown](JOBS.md#shutdown).
+
+## Store garbage collection (online)
+
+`v/ops/venue/gc` collects the Etch store **while the venue keeps serving**
+(covia#452). It drives Convex's online cycle: from the start of the cycle
+writes go to a fresh target file and reads fall back to the old one; the
+root-reachable tree is swept across alongside live writes, verified, and the
+venue cuts over. The venue then keeps using its original store handle as a
+view over both files, so nothing in memory has to be rebound; the successor
+is retained only to be cleanly closed at shutdown, when the superseded file
+is deleted (or on the following start where the platform still pins it) and
+the collected file is adopted under the store's name.
+
+```json
+{}                      // collect; the Job stays STARTED for the sweep
+{"status": true}       // {file, bytes, inProgress, sweepComplete, completed, collectedFile?, collectedBytes?}
+{"cancel": true}       // roll a running cycle back; nothing written during it is lost
+{"restart": true}      // restart after cutover so the disk comes back now
+```
+
+The result carries `bytesBefore`, `bytesAfter`, `reclaimed`, `elapsedMillis`,
+`collectedFile` and `reclaimedAt` (`shutdown`, or `restart`). Cancelling the
+Job cancels the cycle. Constraints:
+
+- **One collection per process.** The successor cannot be threaded into the
+  running node, so a second `gc` is refused until the venue restarts — which
+  adopts the collected file and, with `etch.gc.onStart`, collects again on the
+  way up. `restart: true` chains the two.
+- Needs free disk of about the current file size; about 2× disk is used until
+  the superseded file is deleted, and reads cost a little more during the
+  cycle. `temp`/`memory` stores are refused.
+- **Venue-owned**: `venue/gc` on `<venueDID>/store`, checked like
+  `venue/restart` — direct venue execution, or a venue-issued delegation;
+  the venue's own agents are not admitted without one. `restart: true`
+  additionally requires `venue/restart` on `<venueDID>/process` and a
+  `MainVenue`-managed process, both checked before any collection starts.
 
 ## Embedded route policy
 
@@ -904,7 +987,7 @@ registered-client model, not open registration. Refresh tokens and
 authorization codes are held in memory, so a venue restart invalidates
 outstanding refresh tokens (clients re-authorize); persistence is a follow-up.
 
-## Legacy private invoke setting
+## Explicit private runs
 
 ```json
 {
@@ -912,11 +995,15 @@ outstanding refresh tokens (clients re-authorize); persistence is a follow-up.
 }
 ```
 
-Deprecated compatibility setting; it no longer enables `private: true` on
-`/invoke`. Invoke now always creates a durable Job. Use `/api/v1/run` (or the
-SDK's `run`) when only the result is required. Whether run's internal Job is
-transient is controlled by operation metadata and
-`recordReadOnlyOperations`, not by a caller-selected privacy flag.
+Allows a caller to set `private: true` on `/api/v1/run`, or use the SDK's
+`runPrivate` method. This forces the internal Job wrapper to remain transient,
+even for a mutating, unclassified, or lifecycle-bearing operation. The call
+returns only the result and must remain connected through completion: there is
+no persistent Job ID to poll or recover. Operation side effects are unchanged;
+only the enclosing Job record is omitted. The setting is off by default and a
+private run fails rather than silently creating a durable Job when it is off.
+
+`/invoke` always creates a durable Job and rejects `private: true`.
 
 ## Result-oriented operation runs
 
@@ -930,7 +1017,8 @@ non-persisted Job for `run` and `invokeInternal` by default. Mutating or
 unclassified operations invoked through `run` remain durable. An operation can
 declare `operation.internal: false` when its lifecycle itself must be recorded
 (for example, a human-in-the-loop request); this forces a durable Job on both
-result-oriented paths.
+result-oriented paths unless the caller explicitly requests a private run on a
+venue with `enablePrivateJobs: true`.
 
 Operators can force read-only runs and internal calls to be recorded:
 
@@ -1041,15 +1129,21 @@ text-only tool results are preserved (structured content wins when present).
 ## LLM providers (langchain)
 
 `v/ops/langchain/*` inputs carry `model` / `url` / `apiKey` / `maxTokens` /
-`temperature` / `topP` / `tools` / `responseFormat`. `temperature` and `topP`
+`temperature` / `topP` / `providerOptions` / `tools` / `responseFormat`.
+`temperature` and `topP`
 pass through to every provider (#218 — accepts integer or double, so
-`temperature: 0` works for deterministic extraction); `maxTokens` is
+`temperature: 0` works for deterministic extraction on models which support
+it; leave temperature unset for Claude 5 adaptive thinking); `maxTokens` is
 honoured by the anthropic provider. Anthropic requires the field on the wire,
 so its operation metadata supplies an overridable default of 8192; a model
 preset may override that default, and explicit caller input wins over both.
-Agent config forwards `maxTokens`, `temperature`, `topP`, and `cache` to each
-level-3 call. These are presets and call parameters, not policy; use a
-capability gate for limits.
+Agent config forwards `maxTokens`, `temperature`, `topP`, `cache`, and
+`providerOptions` to each level-3 call. `providerOptions` is an opaque map of
+provider-native request fields for hosted providers; for example Claude 5 can
+take `{"thinking":{"type":"adaptive"},"output_config":{"effort":"low"}}`.
+Nothing is synthesised when it is absent, so provider defaults remain in
+control. These are presets and call parameters, not policy; use a capability
+gate for limits.
 
 `defaultLlmOperation` selects the operation used when an agent config does not
 name one; the built-in fallback is the model operation
@@ -1115,64 +1209,34 @@ Modules can also be loaded and unloaded on a running venue — see
 
 ### Using released modules from an embedded host
 
-Released module classifiers are ordinary Maven Central artifacts. Resolve the
-shaded jar by its `module` classifier and copy it into the application
-distribution; do not put either the thin jar or shaded module jar on the host
-application classpath. For example, an embedding application's POM can copy
-Telegram and Discord during `package`:
+Shaded module jars (`covia-<module>-<version>-module.jar`) are GitHub Releases
+artifacts, each paired with a `.sha256` checksum file; they are not published
+to Maven Central. (Releases up to 0.9.6 also attached them there under a
+`module` classifier; 0.9.7 onwards do not.) Maven Central carries only each
+module's slim jar, sources and javadoc, for hosts that compile against a
+module's classes. Do not put either the slim jar or the shaded module jar on
+the host application classpath.
 
-```xml
-<properties>
-  <covia.version>0.9.5</covia.version>
-</properties>
-<build>
-  <plugins>
-    <plugin>
-      <groupId>org.apache.maven.plugins</groupId>
-      <artifactId>maven-dependency-plugin</artifactId>
-      <version>3.11.0</version>
-      <executions>
-        <execution>
-          <id>copy-covia-modules</id>
-          <phase>prepare-package</phase>
-          <goals><goal>copy</goal></goals>
-          <configuration>
-            <artifactItems>
-              <artifactItem>
-                <groupId>ai.covia</groupId>
-                <artifactId>covia-telegram</artifactId>
-                <version>${covia.version}</version>
-                <type>jar</type>
-                <classifier>module</classifier>
-              </artifactItem>
-              <artifactItem>
-                <groupId>ai.covia</groupId>
-                <artifactId>covia-discord</artifactId>
-                <version>${covia.version}</version>
-                <type>jar</type>
-                <classifier>module</classifier>
-              </artifactItem>
-            </artifactItems>
-            <outputDirectory>${project.build.directory}/covia-modules</outputDirectory>
-          </configuration>
-        </execution>
-      </executions>
-    </plugin>
-  </plugins>
-</build>
-```
-
-Package those copied files with the application, place them in its data or
-module directory at install time, and supply their filesystem paths in
-`modules` before creating the `Engine`. A host that deliberately loads after
-startup can call the existing `Modules.load(engine, path, sha256, config)` API
-with the copied jar. Both routes retain the module classloader's dependency
+Download the module jar from the release matching the venue version in use,
+verify the checksum, package it with the application, place it in the
+application's data or module directory at install time, and supply its
+filesystem path in `modules` before creating the `Engine` — pinning
+`modules[].sha256` to the published checksum. A host that deliberately loads
+after startup can call the existing `Modules.load(engine, path, sha256, config)`
+API with the same jar. Both routes retain the module classloader's dependency
 isolation and require no venue-side Maven resolver.
 
-The Maven dependency-plugin `artifact` argument form is
-`ai.covia:<module-artifact>:<version>:jar:module`. Released classifiers are
-also signed; GitHub Releases pair operator downloads with SHA-256 checksum
-files when an application wants to pin `modules[].sha256`.
+For example, fetching the Telegram module for release `$v`:
+
+```bash
+base=https://github.com/covia-ai/covia/releases/download/$v
+curl -fsSLO "$base/covia-telegram-$v-module.jar"
+curl -fsSLO "$base/covia-telegram-$v-module.jar.sha256"
+sha256sum -c "covia-telegram-$v-module.jar.sha256"
+```
+
+Checksum files from 0.9.8 onwards name the bare jar; those of 0.9.7 and
+earlier embed a build path, so compare their hash column by hand.
 
 First module: **covia-sql** (#227) — `v/ops/sql/query` / `v/ops/sql/execute`
 over venue-local convex-db databases (per-user, lattice-backed, created on

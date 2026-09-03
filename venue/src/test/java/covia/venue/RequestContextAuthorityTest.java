@@ -4,16 +4,20 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import covia.api.Abilities;
 import covia.grid.Authority;
+import covia.exception.AuthException;
 import covia.lattice.CapabilityChecker;
 
 /** Covers RequestContext wrapping an Authority (getAuthority / ofAuthority) and
@@ -57,6 +61,18 @@ public class RequestContextAuthorityTest {
 		assertEquals(1, ctx.getAuthority().getGrants().count());
 		// null restores unrestricted
 		assertNull(ctx.withCaps(null).getCaps());
+	}
+
+	@Test
+	public void testExplicitCapabilityDoesNotTreatNullScopeAsConsent() {
+		RequestContext unrestricted = RequestContext.of(ALICE);
+		assertThrows(AuthException.class, () -> unrestricted.requireExplicitCapability(
+			Strings.create("w/skills/arbitrary"), Abilities.SKILL_LOAD));
+
+		RequestContext granted = unrestricted.withCaps(Vectors.of(Capability.create(
+			Strings.create("w/skills"), Abilities.SKILL_LOAD)));
+		granted.requireExplicitCapability(
+			Strings.create("w/skills/arbitrary"), Abilities.SKILL_LOAD);
 	}
 
 	@Test

@@ -1105,6 +1105,45 @@ public class CoviaAdapterTest {
 			"secret re-created after deletion");
 	}
 
+	@Test
+	public void testSecretSetRequiresExplicitOverwrite() {
+		engine.jobs().invokeOperation("v/ops/secret/set",
+			Maps.of(Fields.NAME, "protected", Fields.VALUE, Strings.create("original")),
+			ALICE).awaitResult(5000);
+
+		Job refused = engine.jobs().invokeOperation("v/ops/secret/set",
+			Maps.of(Fields.NAME, "protected", Fields.VALUE, Strings.create("accidental")),
+			ALICE);
+		assertThrows(Exception.class, () -> refused.awaitResult(5000));
+		assertTrue(refused.getErrorMessage().contains("overwrite:true"));
+		assertEquals("original", engine.resolveSecret("s/protected", ALICE));
+
+		engine.jobs().invokeOperation("v/ops/secret/set",
+			Maps.of(Fields.NAME, "protected", Fields.VALUE, Strings.create("replacement"),
+				Fields.OVERWRITE, CVMBool.TRUE),
+			ALICE).awaitResult(5000);
+		assertEquals("replacement", engine.resolveSecret("s/protected", ALICE));
+	}
+
+	@Test
+	public void testSecretSetRejectsNonBooleanOverwrite() {
+		Job job = engine.jobs().invokeOperation("v/ops/secret/set",
+			Maps.of(Fields.NAME, "typed-overwrite", Fields.VALUE, Strings.create("value"),
+				Fields.OVERWRITE, Strings.create("true")),
+			ALICE);
+		assertThrows(Exception.class, () -> job.awaitResult(5000));
+		assertTrue(job.getErrorMessage().contains("overwrite must be a boolean"));
+	}
+
+	@Test
+	public void testSecretSetRejectsPathAsName() {
+		Job job = engine.jobs().invokeOperation("v/ops/secret/set",
+			Maps.of(Fields.NAME, "nested/key", Fields.VALUE, Strings.create("value")),
+			ALICE);
+		assertThrows(Exception.class, () -> job.awaitResult(5000));
+		assertFalse(engine.getVenueState().users().get(ALICE_DID).secrets().exists("nested/key"));
+	}
+
 	// ========== covia:write/read — isolation ==========
 
 	@Test

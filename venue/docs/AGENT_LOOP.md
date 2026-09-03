@@ -227,7 +227,7 @@ timeline entry does not keep.
 | `cycle:start` | A cycle picked its work and is invoking the transition | `op`, `tasks`, `messages`, `pending` (counts), `jobs?` (chat job ids presented) |
 | `inference:start` | A model call is starting on an assembled prompt | `op`, `model?`, `messages`, `tools` (counts), `bytes`, `budget` |
 | `inference:end` | The call returned, or failed | `ms`, `content?`, `toolCalls?: [{id, name}]`, `tokens?`, `model?` — or `ms`, `error` |
-| `tool:start` | A tool call is being dispatched | `id`, `name`, `detail: {input}` |
+| `tool:start` | A tool call is being dispatched | `id`, `name`, `activityLabel` (operation metadata → asset name → raw tool name), `detail: {input}` |
 | `tool:result` | The call finished | `id`, `name`, `ms`, `isError?`, `detail: {result}` |
 | `cycle:end` | The merge committed — timeline entry and session turns are persisted | `ms`, `response?` \| `error?`, `tokens?`, `timeline` (index of the entry), `detail: {turns?}`; a cycle stopped by suspend/delete carries `error` and `cancelled` |
 | `run:end` | The run loop exited | `run`, `status` (the rest state reached), `cycles` |
@@ -537,8 +537,9 @@ Any venue operation can be a tool. Common categories:
 | **Assets** | `v/ops/asset/store`, `get`, `list`, `pin`, `content` |
 | **Schema** | `v/ops/schema/validate`, `infer` |
 
-Each tool's description includes its operation path (e.g. `Operation: v/ops/covia/read`)
-so the LLM can reason about provenance and discover related operations.
+Provider descriptions are the operation asset descriptions unchanged. Catalog
+paths and source provenance remain available through agent-context inspection;
+they are not repeated in every provider-facing tool schema.
 
 #### Capability enforcement
 
@@ -839,7 +840,14 @@ on the agent's lattice cell, so concurrent operations against the same
 agent serialise cleanly without explicit locking. The run loop's cycle
 is a read → transition → merge sequence; concurrency with external
 mutations is handled by reading the current record inside the merge
-(not the pre-transition snapshot) so late writes are never lost.
+(not the pre-transition snapshot) so late writes are never lost. That
+holds for `state` too: the transition's result is applied as its *change*
+against the snapshot it fired with (`AgentState.applyStateChange`) — keys it
+changed or removed win, keys it left alone keep the record's current value.
+So `agent:update` never waits for, or refuses, a running agent: config
+applies to future transitions (a started transition keeps its fire-time
+snapshot), state merges, and `agent:suspend` is how a transition in flight
+is halted.
 
 **Status invariants:**
 
@@ -952,6 +960,12 @@ RUNNING marker before scheduling remaining work.
 Durable Jobs, queued inputs, stable lifecycle state, and external interaction
 records survive independently. Recovery may start a fresh attempt from a
 durable boundary; it never treats a persisted executor bit as resumable state.
+
+Request and chat Jobs survive a restart: the adapter's `recoverJob` keeps a
+request whose task is still in `tasks` and a chat whose envelope is
+still pending on its session, so the boot wake completes them. Venue shutdown
+likewise leaves them `STARTED` (`suspendJob`) and stops the run loop without
+relaunching it (see JOBS.md § Shutdown).
 
 ### 6.2 Effects
 
@@ -1276,12 +1290,9 @@ After D-4, §8 is empty. The body of the doc reflects the new model and the bann
 
 1. **Should the step input carry `cause` at all?** Pro: gives the adapter a hint without forcing a lattice diff. Con: adapters might over-trust it. Lean: include it as a non-authoritative hint.
 
-2. **Where does `loads` live post-D-3?** Options:
-   - `K_LOADS` on the agent record (peer of `K_CONFIG`)
-   - Under an `adapters/` namespace map on the agent record
-   - In the session record (per-session loads — different semantics, bigger redesign)
-
-   Lean: `K_LOADS` on the record for parity with `K_CONFIG`.
+2. **Where does `loads` live post-D-3?** Resolved: dynamic loads live on the
+   active durable frame, while operator loads remain in config. The canonical
+   state and scope rules are in [AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §1.1 and §7.
 
 3. **Backwards compatibility for persistent agents.** Resolved (#144): fail-loudly — `agent:create`/`agent:update` reject `state.config` with a clear error; no migration (alpha, agents re-creatable).
 

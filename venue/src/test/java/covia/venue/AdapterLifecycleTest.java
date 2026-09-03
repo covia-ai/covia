@@ -116,6 +116,24 @@ public class AdapterLifecycleTest {
 	}
 
 	@Test
+	public void testConnectionCatalogOwnershipFollowsAdapterLifecycle() throws Exception {
+		Engine engine = boot(null);
+		try {
+			assertNotNull(venueRead(engine, "v/adapters/connections/skills/notion"));
+			assertNotNull(venueRead(engine, "v/adapters/connections/ops/list"));
+			assertTrue(engine.disableAdapter("connections"));
+			assertNull(venueRead(engine, "v/adapters/connections"),
+				"disabling retracts the live owner surface");
+			assertNotNull(venueRead(engine, "v/skills/connections/notion"),
+				"canonical metadata remains stable for already-rendered session history");
+			assertTrue(engine.enableAdapter("connections"));
+			assertNotNull(venueRead(engine, "v/adapters/connections/skills/notion"));
+		} finally {
+			engine.close();
+		}
+	}
+
+	@Test
 	public void testAdapterOwnedSubtreeFollowsLifecycleAndRedactsConfig() throws Exception {
 		Engine engine = Engine.createTemp(Maps.of(
 			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
@@ -442,7 +460,7 @@ public class AdapterLifecycleTest {
 			for (String op : new String[] {"v/ops/venue/adapters", "v/ops/venue/adapter/disable",
 					"v/ops/venue/adapter/enable", "v/ops/venue/adapter/configure",
 					"v/ops/venue/module/load", "v/ops/venue/module/unload",
-					"v/ops/venue/restart"}) {
+					"v/ops/venue/restart", "v/ops/venue/gc"}) {
 				ExecutionException denied = assertThrows(ExecutionException.class,
 					() -> engine.jobs().invokeInternal(op,
 						Maps.of(Strings.create("name"), Strings.create("test"),
@@ -454,6 +472,9 @@ public class AdapterLifecycleTest {
 				if (op.endsWith("/restart")) {
 					assertTrue(denied.getCause().getMessage().contains("venue/restart"), op);
 					assertTrue(denied.getCause().getMessage().contains("/process"), op);
+				} else if (op.endsWith("/gc")) {
+					assertTrue(denied.getCause().getMessage().contains("venue/gc"), op);
+					assertTrue(denied.getCause().getMessage().contains("/store"), op);
 				} else {
 					assertTrue(denied.getCause().getMessage().contains("adapter/manage"), op);
 					assertTrue(denied.getCause().getMessage().contains("/adapters"), op);

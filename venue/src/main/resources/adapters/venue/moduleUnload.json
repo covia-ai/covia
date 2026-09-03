@@ -3,6 +3,7 @@
   "description": "Unloads a module from the running venue: removes live adapters and v/info entries, closes resources and its classloader, and leaves durable catalog metadata in place. Requires dynamicModules.enabled. In-flight jobs on its adapters fail at their next point of use; JVM class unloading is best-effort. Not persisted across restarts — a boot-declared module returns on restart. Venue-owned: requires adapter/manage on <venue DID>/adapters.",
   "operation": {
     "adapter": "venue:module-unload",
+    "readOnly": false,
     "input": {
       "type": "object",
       "properties": {

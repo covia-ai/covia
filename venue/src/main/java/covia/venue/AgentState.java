@@ -36,7 +36,7 @@ public class AgentState extends ALatticeComponent<ACell> {
 	private static final AString K_STATE    = Strings.intern("state");
 	private static final AString K_TASKS    = Strings.intern("tasks");
 	private static final AString K_SESSIONS = Strings.intern("sessions");
-	/** Session-tier loads — the context scope chain's session level (#142). */
+	/** Legacy pre-frame loads slot. Read only by the cycle-start migration. */
 	private static final AString K_LOADS = Strings.intern("loads");
 	private static final AString K_PENDING  = Strings.intern("pending");
 	private static final AString K_TIMELINE = Strings.intern("timeline");
@@ -291,9 +291,9 @@ public class AgentState extends ALatticeComponent<ACell> {
 	}
 
 	/**
-	 * Ensures a session exists, seeding its session-tier loads (#142) when it
-	 * is minted here. {@code initialLoads} applies only on creation — an
-	 * existing session's loads are never touched by this method.
+	 * Ensures a session exists, seeding the root frame's loads when it is
+	 * minted here. {@code initialLoads} applies only on creation — an existing
+	 * session's loads are never touched by this method.
 	 */
 	public AMap<AString, ACell> ensureSession(Blob sid, AString caller,
 			AMap<AString, ACell> initialLoads) {
@@ -310,14 +310,14 @@ public class AgentState extends ALatticeComponent<ACell> {
 			AMap<AString, ACell> rootFrame = Maps.of(
 				K_DESCRIPTION,  Strings.EMPTY,
 				K_CONVERSATION, Vectors.empty());
+			if (initialLoads != null && initialLoads.count() > 0) {
+				rootFrame = rootFrame.assoc(K_LOADS, initialLoads);
+			}
 			AMap<AString, ACell> session = Maps.of(
 				K_C,       Maps.empty(),
 				K_PENDING, Vectors.empty(),
 				K_FRAMES,  Vectors.of(rootFrame),
 				K_META,    meta);
-			if (initialLoads != null && initialLoads.count() > 0) {
-				session = session.assoc(K_LOADS, initialLoads);
-			}
 			return r.assoc(K_SESSIONS, sessions.assoc(sid, session));
 		});
 		return getSession(sid);
@@ -393,7 +393,8 @@ public class AgentState extends ALatticeComponent<ACell> {
 				? (Index<Blob, ACell>) idx : Index.none();
 			ACell sv = sessions.get(sid);
 			if (!(sv instanceof AMap)) return r;
-			AMap<AString, ACell> session = (AMap<AString, ACell>) sv;
+			AMap<AString, ACell> session = migrateLegacySessionLoads(
+				(AMap<AString, ACell>) sv);
 
 			session = session.assoc(K_IN_CYCLE, epoch);
 			if (turns != null && turns.count() > 0) {
@@ -406,6 +407,50 @@ public class AgentState extends ALatticeComponent<ACell> {
 			return r.assoc(K_SESSIONS, sessions.assoc(sid, session));
 		});
 		return applied.get();
+	}
+
+	/**
+	 * Moves the former {@code session.loads} tier into the root frame. Existing
+	 * root-frame entries retain their old inner-scope precedence, including nil
+	 * masks. Flattening the effective value preserves behaviour while giving
+	 * both LLM runtimes one durable frame shape. Pure and safe under CAS retry.
+	 */
+	@SuppressWarnings("unchecked")
+	private static AMap<AString, ACell> migrateLegacySessionLoads(
+			AMap<AString, ACell> session) {
+		if (!session.containsKey(K_LOADS)) return session;
+		AMap<AString, ACell> legacy = (session.get(K_LOADS) instanceof AMap lm)
+			? (AMap<AString, ACell>) lm : Maps.empty();
+		AVector<ACell> frames = (session.get(K_FRAMES) instanceof AVector fv)
+			? (AVector<ACell>) fv : Vectors.empty();
+		AMap<AString, ACell> root;
+		if (frames.isEmpty() || !(frames.get(0) instanceof AMap)) {
+			root = Maps.of(
+				K_DESCRIPTION, Strings.EMPTY,
+				K_CONVERSATION, Vectors.empty());
+			frames = Vectors.of(root);
+		} else {
+			root = (AMap<AString, ACell>) frames.get(0);
+		}
+		AMap<AString, ACell> frameLoads = (root.get(K_LOADS) instanceof AMap fm)
+			? (AMap<AString, ACell>) fm : Maps.empty();
+		AMap<AString, ACell> merged = mergeLoadTiers(legacy, frameLoads);
+		root = merged.isEmpty() ? root.dissoc(K_LOADS) : root.assoc(K_LOADS, merged);
+		return session.assoc(K_FRAMES, frames.assoc(0, root)).dissoc(K_LOADS);
+	}
+
+	/** Applies load tiers outer-to-inner; nil entries mask an outer value. */
+	@SafeVarargs
+	private static AMap<AString, ACell> mergeLoadTiers(AMap<AString, ACell>... tiers) {
+		AMap<AString, ACell> result = Maps.empty();
+		for (AMap<AString, ACell> tier : tiers) {
+			for (var entry : tier.entrySet()) {
+				result = (entry.getValue() == null)
+					? result.dissoc(entry.getKey())
+					: result.assoc(entry.getKey(), entry.getValue());
+			}
+		}
+		return result;
 	}
 
 	/**
@@ -490,6 +535,12 @@ public class AgentState extends ALatticeComponent<ACell> {
 				return r;   // no change — skip the write (and the K_TS bump)
 			}
 			session = session.assoc(K_FRAMES, updatedFrames);
+			AVector<ACell> beforeRoot = rootConversation(frames);
+			AVector<ACell> afterRoot = rootConversation(updatedFrames);
+			if (afterRoot.count() > beforeRoot.count()) {
+				session = bumpTurnMeta(session,
+					(AVector<ACell>) afterRoot.slice(beforeRoot.count(), afterRoot.count()));
+			}
 			applied.set(true);
 			return r.assoc(K_SESSIONS, sessions.assoc(sid, session));
 		});
@@ -571,20 +622,37 @@ public class AgentState extends ALatticeComponent<ACell> {
 		rootFrame = rootFrame.assoc(K_CONVERSATION, rootConv);
 		frames = frames.assoc(0, rootFrame);
 		session = session.assoc(K_FRAMES, frames);
+		return bumpTurnMeta(session, turnsToAppend);
+	}
 
+	/** Updates root-turn count and timestamp metadata for an appended suffix. */
+	@SuppressWarnings("unchecked")
+	private static AMap<AString, ACell> bumpTurnMeta(AMap<AString, ACell> session,
+			AVector<ACell> appended) {
 		if (session.get(K_META) instanceof AMap) {
 			AMap<AString, ACell> meta = (AMap<AString, ACell>) session.get(K_META);
 			long current = (meta.get(K_TURNS) instanceof CVMLong cl) ? cl.longValue() : 0;
-			meta = meta.assoc(K_TURNS, CVMLong.create(current + turnsToAppend.count()));
+			meta = meta.assoc(K_TURNS, CVMLong.create(current + appended.count()));
 			long updated = (meta.get(Fields.UPDATED) instanceof CVMLong cl) ? cl.longValue() : 0;
-			for (long i = 0; i < turnsToAppend.count(); i++) {
-				ACell ts = RT.getIn(turnsToAppend.get(i), K_TURN_TS);
+			for (long i = 0; i < appended.count(); i++) {
+				ACell ts = RT.getIn(appended.get(i), K_TURN_TS);
 				if (ts instanceof CVMLong cl) updated = Math.max(updated, cl.longValue());
 			}
 			if (updated > 0) meta = meta.assoc(Fields.UPDATED, CVMLong.create(updated));
 			session = session.assoc(K_META, meta);
 		}
 		return session;
+	}
+
+	/** Root conversation or an empty vector for an absent/malformed root. */
+	@SuppressWarnings("unchecked")
+	private static AVector<ACell> rootConversation(AVector<ACell> frames) {
+		if (frames == null || frames.isEmpty() || !(frames.get(0) instanceof AMap root)) {
+			return Vectors.empty();
+		}
+		ACell conversation = ((AMap<AString, ACell>) root).get(K_CONVERSATION);
+		return (conversation instanceof AVector cv)
+			? (AVector<ACell>) cv : Vectors.empty();
 	}
 
 	/**
@@ -1126,6 +1194,44 @@ public class AgentState extends ALatticeComponent<ACell> {
 		});
 	}
 
+	/**
+	 * A transition's state change, applied to the record's <em>current</em>
+	 * state. Every writer of the record is a function serialised by the
+	 * cursor's CAS; a transition read its state minutes ago and must not
+	 * overwrite what arrived meanwhile, so its result is applied as the
+	 * difference from the snapshot it fired with. Per key of the result:
+	 * <ul>
+	 *   <li>changed or added by the transition (differs from the snapshot) →
+	 *       the transition's value;</li>
+	 *   <li>present in the snapshot, absent from the result → removed (the
+	 *       transition dropped it);</li>
+	 *   <li>untouched by the transition → whatever the record holds now, so an
+	 *       external update survives.</li>
+	 * </ul>
+	 * A null result is no change. When any of the three is not a map the
+	 * result replaces the state wholesale.
+	 */
+	@SuppressWarnings("unchecked")
+	public static ACell applyStateChange(ACell current, ACell snapshot, ACell returned) {
+		if (returned == null) return current;
+		if (!(returned instanceof AMap) || !(snapshot instanceof AMap) || !(current instanceof AMap)) {
+			return returned;
+		}
+		AMap<ACell, ACell> snap = (AMap<ACell, ACell>) snapshot;
+		AMap<ACell, ACell> ret = (AMap<ACell, ACell>) returned;
+		AMap<ACell, ACell> out = (AMap<ACell, ACell>) current;
+		for (java.util.Map.Entry<ACell, ACell> e : ret.entrySet()) {
+			ACell k = e.getKey();
+			if (!snap.containsKey(k) || !java.util.Objects.equals(snap.get(k), e.getValue())) {
+				out = out.assoc(k, e.getValue());
+			}
+		}
+		for (ACell k : snap.keySet()) {
+			if (!ret.containsKey(k)) out = out.dissoc(k);
+		}
+		return out;
+	}
+
 	/** Shallow-merge: incoming keys override existing, existing keys preserved. */
 	@SuppressWarnings("unchecked")
 	private static AMap<AString, ACell> merge(AMap<AString, ACell> existing, AMap<AString, ACell> incoming) {
@@ -1178,10 +1284,19 @@ public class AgentState extends ALatticeComponent<ACell> {
 	 * intake (drained pending envelopes → user turns at root) co-exists
 	 * with adapter-owned stack emission.</p>
 	 *
+	 * <p>{@code state} is merged, not replaced: the transition's result is
+	 * applied as its <em>change</em> against {@code snapshotState} — the value
+	 * it fired with — onto whatever the record holds now
+	 * ({@link #applyStateChange}). An {@code agent:update} that landed while
+	 * the transition ran therefore survives on every key the transition did
+	 * not touch, and the transition wins a genuine same-key conflict. A null
+	 * result means the transition made no state change.</p>
+	 *
 	 * @return The new record (check status to determine if loop should continue)
 	 */
 	@SuppressWarnings("unchecked")
 	public AMap<AString, ACell> mergeRunResult(
+			ACell snapshotState,
 			ACell newState,
 			AMap<AString, ACell> taskResults,
 			AMap<AString, ACell> timelineEntry,
@@ -1189,7 +1304,6 @@ public class AgentState extends ALatticeComponent<ACell> {
 			AVector<ACell> turnsToAppend,
 			long presentedSessionPendingCount,
 			AVector<ACell> newFrames,
-			AMap<AString, ACell> sessionLoads,
 			AMap<AString, ACell> cycleTokens) {
 		return update(r -> {
 			// Remove completed tasks, detect new ones
@@ -1199,18 +1313,17 @@ public class AgentState extends ALatticeComponent<ACell> {
 			AVector<ACell> timeline = extractTimeline(r);
 
 			AMap<AString, ACell> updated = r
-				.assoc(K_STATE, newState)
+				.assoc(K_STATE, applyStateChange(r.get(K_STATE), snapshotState, newState))
 				.assoc(K_TASKS, remainingTasks)
 				.assoc(K_TIMELINE, timeline.conj(timelineEntry))
 				.dissoc(K_ERROR);
 
 			// Atomic frames[0].conversation append + session.pending drain +
-			// session-tier loads write + inCycle clear for the picked session.
+			// inCycle clear for the picked session.
 			// All touch the same session record so we fold them into one assoc.
 			boolean hasTurns = turnsToAppend != null && turnsToAppend.count() > 0;
 			boolean hasDrain = presentedSessionPendingCount > 0;
 			boolean hasNewFrames = newFrames != null;
-			boolean hasLoads = sessionLoads != null;
 			if (historySid != null) {
 				Index<Blob, ACell> sessions = (updated.get(K_SESSIONS) instanceof Index idx)
 					? (Index<Blob, ACell>) idx : Index.none();
@@ -1224,13 +1337,6 @@ public class AgentState extends ALatticeComponent<ACell> {
 					// so concurrent-intake user turns end up at root.
 					if (hasNewFrames) {
 						session = session.assoc(K_FRAMES, newFrames);
-					}
-
-					// Session-tier loads (#142): whole-replace with the cycle's
-					// final working set (tombstones included). Single-writer per
-					// tier — only the run loop writes this slot.
-					if (hasLoads) {
-						session = session.assoc(K_LOADS, sessionLoads);
 					}
 
 					if (hasTurns) {

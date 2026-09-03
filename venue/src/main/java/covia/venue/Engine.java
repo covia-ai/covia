@@ -56,6 +56,7 @@ import covia.adapter.AssetAdapter;
 import covia.adapter.AuthAdapter;
 import covia.adapter.UserAdapter;
 import covia.adapter.ConvexAdapter;
+import covia.adapter.ConnectionsAdapter;
 import covia.adapter.CoviaAdapter;
 import covia.adapter.GridAdapter;
 import covia.adapter.HTTPAdapter;
@@ -129,6 +130,8 @@ public class Engine {
 
 	/** MainVenue process control; absent for embedded and test engines. */
 	private volatile VenueProcess processControl;
+	/** Host-installed store maintenance seam (covia#452); null when the host installed none. */
+	private volatile StoreControl storeControl;
 
 	/**
 	 * Per-venue grid scheduler. Fires any deferred grid operation at a future
@@ -599,6 +602,12 @@ public class Engine {
 	 * persist.</p>
 	 */
 	public void syncState() {
+		if (lifecycle == Lifecycle.CLOSING || lifecycle == Lifecycle.CLOSED || lifecycle == Lifecycle.FAILED) {
+			// A request unwinding across shutdown must not write to a closing store;
+			// close() has taken (or will take) the final flush.
+			log.debug("syncState skipped: engine is {}", lifecycle);
+			return;
+		}
 		venueState.sync();
 		publishApplicationRoot();
 	}
@@ -703,19 +712,31 @@ public class Engine {
 	 * reads from the root cursor. {@code VenueServer.close()} handles this
 	 * ordering.</p>
 	 *
+	 * <p>In-flight jobs first get {@code shutdown.graceMs} to finish, then
+	 * their adapters suspend them ({@link covia.adapter.AAdapter#suspendJob});
+	 * see {@link JobManager#shutdown}.</p>
+	 *
 	 * <p>Idempotent — calling close more than once is safe.</p>
 	 */
-	public synchronized void close() {
-		if (lifecycle == Lifecycle.CLOSED || lifecycle == Lifecycle.CLOSING) return;
-		boolean flush = lifecycle == Lifecycle.STARTED;
-		lifecycle = Lifecycle.CLOSING;
-		closeStartedResources(flush, null);
-		lifecycle = Lifecycle.CLOSED;
+	public void close() {
+		boolean flush;
+		synchronized (this) {
+			if (lifecycle == Lifecycle.CLOSED || lifecycle == Lifecycle.CLOSING) return;
+			flush = lifecycle == Lifecycle.STARTED;
+			lifecycle = Lifecycle.CLOSING;
+		}
+		// Jobs first, outside the engine monitor: work finishing inside the
+		// grace window may need engine services that synchronise on it.
+		if (flush) jobManager.shutdown(config.getShutdownGraceMs());
+		synchronized (this) {
+			closeStartedResources(flush, null);
+			lifecycle = Lifecycle.CLOSED;
+		}
 	}
 
 	/** Releases resources in the reverse of {@link #start()} acquisition order. */
 	private void closeStartedResources(boolean flush, Throwable startupFailure) {
-		jobManager.beginShutdown();
+		jobManager.closeAdmission();
 
 		// Release adapter-owned native/session resources before module classloaders.
 		for (AAdapter adapter : adapters.values()) {
@@ -807,6 +828,11 @@ public class Engine {
 		return lifecycle == Lifecycle.STARTED;
 	}
 
+	/** True once close began: the venue is releasing work, not taking any on. */
+	public boolean isClosing() {
+		return lifecycle == Lifecycle.CLOSING || lifecycle == Lifecycle.CLOSED;
+	}
+
 	/** Installs process control before MainVenue publishes restart authority. */
 	void setProcessControl(VenueProcess processControl) {
 		if (this.processControl != null && this.processControl != processControl) {
@@ -826,11 +852,39 @@ public class Engine {
 		return control.requestRestart(successor, sha256, startupTimeoutMillis, job);
 	}
 
+	/** Whether a standalone MainVenue process manages this venue, so restart requests can be honoured. */
+	public boolean hasProcessControl() {
+		return processControl != null;
+	}
+
+	/** Installs the host's store maintenance seam (covia#452); the host owns the store, the Engine only relays. */
+	public void setStoreControl(StoreControl storeControl) {
+		if (this.storeControl != null && this.storeControl != storeControl) {
+			throw new IllegalStateException("Venue store control is already installed");
+		}
+		this.storeControl = java.util.Objects.requireNonNull(storeControl);
+	}
+
+	/**
+	 * The host's store maintenance seam, for venue-owned operations.
+	 *
+	 * @throws IllegalStateException when the host installed none
+	 */
+	public StoreControl storeControl() {
+		StoreControl control = storeControl;
+		if (control == null) {
+			throw new IllegalStateException(
+				"Store maintenance is unavailable: this venue's host installed no store control");
+		}
+		return control;
+	}
+
 	public static void addDemoAssets(Engine venue) {
 		venue.registerAdapter(new TestAdapter());
 		venue.registerAdapter(new HTTPAdapter());
 		venue.registerAdapter(new OAuthAdapter());
 		venue.registerAdapter(new JVMAdapter());
+		venue.registerAdapter(new ConnectionsAdapter());
 		venue.registerAdapter(new FileAdapter());
 		venue.registerAdapter(new covia.adapter.ArchiveAdapter());
 		venue.registerAdapter(new SchemaAdapter());
@@ -3027,7 +3081,7 @@ public class Engine {
 	 * The single cross-user authorisation gate (covia#102): may this caller
 	 * act on a resource belonging to another user?
 	 *
-	 * <p>Two rights compose, checked in order:</p>
+	 * <p>Three rights compose, checked in order:</p>
 	 * <ol>
 	 *   <li><b>Ambient public access</b> (covia#254) — a resource owned by the
 	 *       venue's PUBLIC identity follows the public capability grant scope for
@@ -3035,6 +3089,12 @@ public class Engine {
 	 *       the anonymous one. Checked only when the resource is actually
 	 *       public-owned; tracks operator policy ({@code auth.public.caps} —
 	 *       default read-only, widened at the operator's own risk).</li>
+	 *   <li><b>Target-side admission</b> (covia#447) — an agent record's
+	 *       {@code config.accepts}: the owner's standing policy for who may
+	 *       talk to that agent ({@code agent/request}, {@code agent/message})
+	 *       without a delegation — the venue operator, or exact principal
+	 *       DIDs. Consulted for that one resource shape and those abilities
+	 *       only; never admits the public principal. See {@link Admission}.</li>
 	 *   <li><b>Presented UCAN proofs</b> — the pure fail-closed delegation
 	 *       check ({@link covia.lattice.CapabilityChecker#proofsCover}).</li>
 	 * </ol>
@@ -3060,7 +3120,51 @@ public class Engine {
 				}
 			}
 		}
+		if (admissionAllows(ctx, resource, ability)) return true;
 		return proofsCover(ctx, resource, ability, System.currentTimeMillis() / 1000);
+	}
+
+	/** The abilities that mean "talk to this agent": submit a request or a message. */
+	private static boolean isTalkAbility(AString ability) {
+		return Abilities.AGENT_REQUEST.equals(ability) || Abilities.AGENT_MESSAGE.equals(ability);
+	}
+
+	/**
+	 * Target-side admission (covia#447): the resource owner's own standing policy
+	 * for who may talk to their agent, consulted for exactly one resource shape —
+	 * an agent record {@code <owner>/g/<id>} — and the two talk abilities. The
+	 * policy algebra is {@link Admission}; this method only locates the record.
+	 * The public principal is never admitted here: anonymous exposure stays
+	 * A2A's {@code a2a.public} + {@code a2a.caps}.
+	 */
+	private boolean admissionAllows(RequestContext ctx, AString resource, AString ability) {
+		if (!isTalkAbility(ability)) return false;
+		AString caller = ctx.getCallerDID();
+		if (caller == null || isPublicPrincipal(caller)) return false;
+		AString owner = ownerOf(resource);
+		if (owner == null) return false;
+		String rest = resource.toString().substring(owner.toString().length());
+		if (!rest.startsWith("/g/")) return false;
+		String agentId = rest.substring(3);
+		if (agentId.isEmpty() || agentId.indexOf('/') >= 0) return false;
+		User user = venueState.users().get(owner);
+		AgentState agent = (user != null) ? user.agent(agentId) : null;
+		if (agent == null) return false;
+		ACell accepts = RT.getIn(agent.getConfig(), Fields.ACCEPTS);
+		return Admission.admits(accepts, caller, isVenuePrincipal(ctx.getUserDID()));
+	}
+
+	/**
+	 * Whether {@code principal} is the venue operator's own user identity — the
+	 * venue's canonical DID or its {@code did:web} alias. Agents the venue owns
+	 * have this as their user, so "the venue" as an admission class means the
+	 * operator and the operator's agents, never every user hosted here.
+	 */
+	public boolean isVenuePrincipal(AString principal) {
+		if (principal == null) return false;
+		if (principal.equals(getDIDString())) return true;
+		AString web = config.getWebDID();
+		return web != null && principal.equals(web);
 	}
 
 	/**
@@ -3133,7 +3237,9 @@ public class Engine {
 			throw new covia.exception.AuthException("Access denied: " + ability + " on " + resource
 				+ " — accessing another user's resource requires " + ability + " rights"
 				+ ((proofs == null || proofs.isEmpty())
-					? " (no proof presented)" : " (the presented proofs do not cover it)"));
+					? " (no proof presented)" : " (the presented proofs do not cover it)")
+				+ (isTalkAbility(ability)
+					? "; the target's accepts policy does not admit this caller" : ""));
 		}
 		return ownerOf(resource);                               // authorised cross-user → the owner's store
 	}

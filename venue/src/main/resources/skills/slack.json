@@ -1,0 +1,23 @@
+{
+	"name": "slack",
+	"description": "Read and post in Slack with the user's workspace bot or user token. Load when a task involves Slack messages, channels, or users.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Slack\nCalls go through `v/ops/http/get` / `v/ops/http/post` against `https://slack.com/api/<method>` with `bearerSecret: \"s/SLACK_BOT_TOKEN\"` (an `xoxb-` bot token, or `s/SLACK_USER_TOKEN` for an `xoxp-` user token when the task needs the user's own view, such as search). The token comes from a Slack app the user created and installed in their workspace (api.slack.com/apps, optionally from a manifest). Only the secret reference goes in the request.\n\nCommon methods:\n- Post a message: `POST chat.postMessage` headers `{\"Content-Type\": \"application/json; charset=utf-8\"}` body `{channel, text, thread_ts?, blocks?}`\n- List channels: `GET conversations.list?types=public_channel,private_channel&limit=200` (paginate with `cursor`)\n- Read history: `GET conversations.history?channel=C123&limit=50` (the bot must be a member; `conversations.join` for public channels)\n- Users: `GET users.list`, `GET users.info?user=U123`\n- Search (user token only): `GET search.messages?query=...`\n- Files: `GET files.list`; uploading needs `files.getUploadURLExternal` then `files.completeUploadExternal`\n\nRules:\n- Every response has `ok`; when `ok` is false, `error` names the cause (`missing_scope`, `not_in_channel`, `channel_not_found`). Report the scope or membership needed rather than retrying.\n- Channel ids (`C...`) and user ids (`U...`) are stable; names change. Resolve names to ids once, then use ids.\n- Mentions are `<@U123>`; links are `<https://url|text>`; keep messages short and thread replies with `thread_ts`.\n- Rate limits are per method tier; on HTTP 429 honour `Retry-After`.\n- Posting is visible to real people: confirm channel and content before `chat.postMessage` unless the task explicitly authorises posting.\n"
+	},
+	"connection": {
+		"baseUrl": "https://slack.com/api",
+		"auth": {
+			"kind": "bearer-secret",
+			"alternatives": ["s/SLACK_BOT_TOKEN", "s/SLACK_USER_TOKEN"]
+		}
+	},
+	"skill": {
+		"tools": [
+			"v/ops/connections/status",
+			"v/ops/http/get",
+			"v/ops/http/post",
+			"v/ops/jvm/url-encode"
+		]
+	}
+}

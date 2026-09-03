@@ -136,10 +136,13 @@ Abilities follow UCAN's slash-delimited convention with no leading slash. `*` is
 | `agent/message` | — | Send message to agent session |
 | `agent/fork` | — | Fork an agent |
 | `agent/write` | — | Update or administer an existing agent |
+| `skill/load` | — | Admit a skill outside an agent's advertised skill surface as trusted instructions |
+| `tool/load` | — | Add an operation outside an agent's declared/advertised tool surface |
 | `asset` | every `asset/*` | All asset operations |
 | `asset/store` | — | Store a new content-addressed asset |
 | `asset/read` | — | Get / list content-addressed assets |
 | `venue/restart` | — | Restart a standalone venue process or hand off to a successor jar |
+| `venue/gc` | — | Garbage-collect the venue's Etch store online (`<venueDID>/store`) |
 | `secret/decrypt` | — | Decrypt a secret |
 | `ucan/delegate` | — | Sub-delegate capabilities |
 | `ucan/revoke` | — | Revoke a UCAN |
@@ -574,10 +577,27 @@ Venue:
 | `agent:chat` / `agent:step` (cross-user) | `{ with: "<ownerDID>/g/<id>", can: "agent/message" }` |
 | `agent:fork` (cross-user source) | `{ with: "<ownerDID>/g/<id>", can: "agent/fork" }` |
 | `agent:update` / suspend / resume / delete / task-session administration (cross-user) | `{ with: "<ownerDID>/g/<id>", can: "agent/write" }` |
+| `skill_load {ref}` outside the effective advertised index | `{ with: "<skill-ref>", can: "skill/load" }`, explicitly present even for an otherwise unrestricted agent; read authority remains separate |
+| `more_tools` outside config, active loads and effective advertised skills | `{ with: "<operation-ref>", can: "tool/load" }`, explicitly present even for an otherwise unrestricted agent; `invoke` remains separate |
 | `asset:store` | `{ with: "<any>", can: "asset/store" }` |
 | `asset:get` / `asset:list` | `{ with: "<any>", can: "asset/read" }` |
 | Grid operation invoke | `{ with: "/o/<op>", can: "invoke" }` |
 | Sub-delegation | `{ with: "<path>", can: "ucan/delegate" }` |
+
+**Target-side admission (#447).** Before proofs are consulted, the two "talk"
+rows — `agent/request` (`agent:request`, `agent:trigger`) and `agent/message`
+(`agent:message`, `agent:chat`, `agent:step`) on `<ownerDID>/g/<id>` — may be
+admitted by the agent record's own `config.accepts`: `"owner"` (default:
+nobody without a delegation), `"venue"` (the venue operator — the venue
+principal and the agents it owns, never every user hosted here), or an array
+of principal DIDs matched exactly (a user DID admits that user only,
+`<userDID>:g:<agentId>` admits that one agent only; `"venue"` may appear as an
+entry). Admission is the owner's standing statement, evaluated inside the same
+single cross-user gate as proofs (`Engine.crossUserAllows`, see `Admission`),
+and it covers talking only: `crud/read`, `agent/write` and `agent/fork` still
+need a delegation. The public principal is never admitted — anonymous exposure
+remains A2A's `a2a.public` + `a2a.caps`. A malformed policy is rejected at
+`agent:create` / `agent:update`.
 
 File resources use URI form so they parse as standard hierarchical
 identifiers (per UCAN convention for `with`): the configured root is the URI

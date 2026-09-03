@@ -32,7 +32,8 @@ public class PrivateJobsTest {
 	@BeforeAll
 	public void setup() {
 		engine = Engine.createTemp(Maps.of(
-			Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
+			Config.ENABLE_PRIVATE_JOBS, true));
 		Engine.addDemoAssets(engine);
 		ALICE = Strings.create("did:key:zPrivateJobsTestAlice");
 	}
@@ -84,7 +85,7 @@ public class PrivateJobsTest {
 	}
 
 	@Test
-	public void testJobRequiredRunPersists() throws Exception {
+	public void testJobRequiredOrdinaryRunPersists() throws Exception {
 		engine.jobs().invokeOperation("v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "private-agent",
 				Fields.CONFIG, Maps.of(
@@ -102,6 +103,46 @@ public class PrivateJobsTest {
 
 		assertEquals(before + 1, jobCount(),
 			"operation.internal=false must keep lifecycle-bearing run durable");
+	}
+
+	@Test
+	public void testExplicitPrivateRunOverridesLifecycleMetadata() throws Exception {
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "ephemeral-agent",
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/llmagent/chat",
+					Strings.create("llmOperation"), Strings.create("v/test/ops/llm"))),
+			RequestContext.of(ALICE)).awaitResult(5000);
+		long before = jobCount();
+
+		ACell result = engine.jobs().runOperation(
+			Strings.create("v/ops/agent/chat"),
+			Maps.of(Fields.AGENT_ID, "ephemeral-agent",
+				Fields.MESSAGE, Strings.create("confidential question")),
+			RequestContext.of(ALICE), true).get();
+		assertNotNull(RT.getIn(result, Fields.RESPONSE), "private chat answered: " + result);
+
+		assertEquals(before, jobCount(),
+			"an explicit private run must leave no durable Job record");
+	}
+
+	@Test
+	public void testPrivateRunFailsClosedWithoutVenueOptIn() {
+		Engine disabled = Engine.createTemp(Maps.of(
+				Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
+		try {
+			Engine.addDemoAssets(disabled);
+			RequestContext ctx = RequestContext.of(Strings.create("did:key:zPrivateDisabled"));
+			long before = disabled.jobs().getJobs(ctx).count();
+			Exception error = assertThrows(Exception.class, () -> disabled.jobs().runOperation(
+				"v/test/ops/echo", Maps.of("value", "secret"), ctx, true).get());
+			assertTrue(String.valueOf(error.getCause()).contains("Private runs are disabled"),
+				String.valueOf(error));
+			assertEquals(before, disabled.jobs().getJobs(ctx).count(),
+				"a disabled private request must not silently downgrade to persistence");
+		} finally {
+			disabled.close();
+		}
 	}
 
 	/** The legacy REST wire field is rejected: invoke always means durable. */

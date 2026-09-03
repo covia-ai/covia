@@ -4,6 +4,7 @@
 	"dateCreated": "2026-03-06T00:00:00Z",
 	"operation": {
 		"adapter": "agent:request",
+		"readOnly": false,
 		"internal": false,
 		"input": {
 			"type": "object",
@@ -29,7 +30,7 @@
 					"type": "boolean",
 					"description": "Enforce responseSchema at task completion (default false). When true, a complete_task result that does not conform is rejected back to the agent with the validation diagnostics; the agent corrects it or fails the task. Requires responseSchema."
 				},
-				"loads": { "type": "object", "description": "Optional untrusted context to pre-load for the NEW session (the session tier of the context scope chain, #142): a map of key to entry spec, exactly as config.loads — {budget?, label?} under a lattice path or skill path, {skill: true} to pre-load a trusted skill with its tools, or a spec declaring its own data source under any key: {text}, {op, input?} for a read-only operation re-run each turn (rendered in the tail, never cached), or {job}. Non-skill values remain tool-result data; a caller-supplied trusted flag cannot grant system authority. Only valid when this call creates the session — an error if the session already exists." },
+				"loads": { "type": "object", "description": "Optional untrusted context to pre-load for the NEW session (the session tier of the context scope chain, #142): a map of key to entry spec, exactly as config.loads — {budget?, label?} under a lattice path or skill path, {skill: true} to pre-load a skill with its tools, or a spec declaring its own data source under any key: {text}, {op, input?} for a read-only operation observed before each inference and appended only when changed, or {job}. Non-skill values remain tool-result data; a caller-supplied trusted flag cannot grant system authority. Only valid when this call creates the session — an error if the session already exists." },
 				"sessionId": {
 					"type": "string",
 					"description": "Optional session identifier (hex string, with or without a 0x prefix). Requests sharing a sessionId are treated as part of the same conversation. If omitted, a new session is created and its id returned in the response."

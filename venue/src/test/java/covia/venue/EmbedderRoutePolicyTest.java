@@ -22,6 +22,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestInstance.Lifecycle;
+import org.junit.jupiter.api.parallel.Isolated;
 
 import convex.auth.ucan.UCAN;
 import convex.core.crypto.AKeyPair;
@@ -42,7 +43,12 @@ import io.javalin.security.RouteRole;
 /**
  * Black-box coverage for the public route-policy seam used by embedding venue
  * operators such as GetMine (#309). All tests share one venue fixture.
+ *
+ * <p>Runs alone: one test provokes an unhandled route exception, which the
+ * venue rightly logs at ERROR, and silences that logger while it does
+ * ({@link TestLogs}).</p>
  */
+@Isolated
 @TestInstance(Lifecycle.PER_CLASS)
 class EmbedderRoutePolicyTest {
 
@@ -198,20 +204,24 @@ class EmbedderRoutePolicyTest {
 	@Test
 	void unexpectedErrorsUseJavalinRepresentationsWithDiagnostics()
 			throws Exception {
-		HttpResponse<String> json = getAccept(
-			strictServer, FAILURE, "application/json");
-		assertEquals(500, json.statusCode(), json.body());
-		assertContentType("application/json", json);
-		assertTrue(json.body().contains("\"status\": 500"), json.body());
-		assertTrue(json.body().contains("IllegalStateException"), json.body());
+		// The venue logs the unhandled exception at ERROR with its stack —
+		// correct in production; here it is provoked on purpose.
+		TestLogs.quiet(VenueServer.class, () -> {
+			HttpResponse<String> json = getAccept(
+				strictServer, FAILURE, "application/json");
+			assertEquals(500, json.statusCode(), json.body());
+			assertContentType("application/json", json);
+			assertTrue(json.body().contains("\"status\": 500"), json.body());
+			assertTrue(json.body().contains("IllegalStateException"), json.body());
 
-		HttpResponse<String> html = getAccept(
-			strictServer, FAILURE, "text/html");
-		assertEquals(500, html.statusCode(), html.body());
-		assertContentType("text/html", html);
-		assertTrue(html.body().contains(
-			"extension &lt;failed&gt; &amp; diagnostic"), html.body());
-		assertFalse(html.body().contains("extension <failed>"), html.body());
+			HttpResponse<String> html = getAccept(
+				strictServer, FAILURE, "text/html");
+			assertEquals(500, html.statusCode(), html.body());
+			assertContentType("text/html", html);
+			assertTrue(html.body().contains(
+				"extension &lt;failed&gt; &amp; diagnostic"), html.body());
+			assertFalse(html.body().contains("extension <failed>"), html.body());
+		});
 	}
 
 	@Test

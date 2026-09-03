@@ -5,18 +5,14 @@
 	<parent>
 		<groupId>ai.covia</groupId>
 		<artifactId>covia</artifactId>
-		<version>0.9.7</version>
+		<version>0.9.8</version>
 	</parent>
 	<artifactId>covia-telegram</artifactId>
 
 	<name>Covia Telegram Module</name>
-	<description>Telegram bot adapter for Covia venues — operator-declared bots that route Telegram chats to agents or operations and let agents send Telegram messages. Packaged as a loadable venue module (the shaded "module" classifier jar), not part of covia.jar.</description>
+	<description>Telegram bot adapter for Covia venues — operator-declared bots that route Telegram chats to agents or operations and let agents send Telegram messages. Packaged as a loadable venue module (the shaded -module.jar), not part of covia.jar.</description>
 
 	<properties>
-		<!-- Skip ordinary deploy-plugin publication. The Central publishing
-		     extension bundles reactor artifacts independently, including the
-		     signed shaded module classifier used by venue operators. -->
-		<maven.deploy.skip>true</maven.deploy.skip>
 		<telegram.version>10.1.0</telegram.version>
 	</properties>
 
@@ -75,7 +71,7 @@
 				</executions>
 			</plugin>
 			<!-- The loadable module jar: covia-telegram + the Telegram client
-			     and its dependencies, attached with the "module" classifier.
+			     and its dependencies, written to target/ as -module.jar.
 			     The plain jar remains the Maven artifact. -->
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
@@ -90,8 +86,11 @@
 						<configuration>
 							<!-- The fat module jar is a GitHub Releases artifact, not a Maven Central
 							     one: shade writes it under the -module name but does not attach it, so
-							     `mvn deploy` publishes only this module's slim jar. -->
+							     `mvn deploy` publishes only this module's slim jar, with its real POM
+							     (no dependency-reduced POM, which would strip the shaded dependencies
+							     from the published artifact). -->
 							<outputFile>${project.build.directory}/${project.build.finalName}-module.jar</outputFile>
+							<createDependencyReducedPom>false</createDependencyReducedPom>
 							<artifactSet>
 								<excludes>
 									<!-- Host API and Convex cell/runtime identity are parent-first. -->

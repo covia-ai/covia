@@ -31,8 +31,12 @@ import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.output.FinishReason;
 import dev.langchain4j.model.output.TokenUsage;
+import dev.langchain4j.model.anthropic.AnthropicChatModel;
+import dev.langchain4j.model.anthropic.AnthropicChatRequestParameters;
 import dev.langchain4j.model.anthropic.internal.api.AnthropicMessage;
+import dev.langchain4j.model.anthropic.internal.api.AnthropicRedactedThinkingContent;
 import dev.langchain4j.model.anthropic.internal.api.AnthropicRole;
+import dev.langchain4j.model.anthropic.internal.api.AnthropicThinkingContent;
 import dev.langchain4j.model.anthropic.internal.api.AnthropicToolResultContent;
 import dev.langchain4j.model.anthropic.internal.mapper.AnthropicMapper;
 import dev.langchain4j.model.chat.request.json.JsonArraySchema;
@@ -48,9 +52,12 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import com.sun.net.httpserver.HttpServer;
 
@@ -290,6 +297,88 @@ public class LangChainAdapterTest {
 	}
 
 	@Test
+	public void testToAssistantMessageNormalisesInvalidProviderToolCallId() {
+		AiMessage ai = new AiMessage(null, List.of(ToolExecutionRequest.builder()
+			.id("provider:id/1").name("search").arguments("{}").build()));
+
+		AString id = RT.ensureString(RT.getIn(
+			LangChainAdapter.toAssistantMessage(ai), "toolCalls", 0L, "id"));
+		assertTrue(id.toString().matches("[A-Za-z0-9_-]+"), id.toString());
+	}
+
+	@Test
+	public void testAnthropicToolReplyRoundTripsOptionalProviderState() {
+		AiMessage ai = AiMessage.builder()
+			.text("I will inspect it.")
+			.thinking("Check the relevant source.")
+			.toolExecutionRequests(List.of(ToolExecutionRequest.builder()
+				.id("toolu_1").name("covia_read").arguments("{\"path\":\"w/report\"}").build()))
+			.attributes(Map.of(
+				AnthropicMapper.THINKING_SIGNATURE_KEY, "signed-state",
+				AnthropicMapper.REDACTED_THINKING_KEY, List.of("opaque-redacted-state")))
+			.build();
+
+		ACell stored = LangChainAdapter.toAssistantMessage(ai, "anthropic", "claude-sonnet-5");
+		assertEquals("anthropic", RT.getIn(stored, "providerState", "provider").toString());
+		assertEquals("claude-sonnet-5", RT.getIn(stored, "providerState", "model").toString());
+		assertEquals("thinking", RT.getIn(stored, "providerState", "blocks", 0L, "type").toString());
+		assertEquals("signed-state",
+			RT.getIn(stored, "providerState", "blocks", 0L, "signature").toString());
+		assertEquals("redacted_thinking",
+			RT.getIn(stored, "providerState", "blocks", 1L, "type").toString());
+
+		List<ChatMessage> restored = LangChainAdapter.toChatMessages(
+			Vectors.of(stored), Set.of(0L), "anthropic", "claude-sonnet-5");
+		AiMessage replay = assertInstanceOf(AiMessage.class, restored.get(0));
+		assertEquals("Check the relevant source.", replay.thinking());
+		assertEquals("signed-state", replay.attributes().get(AnthropicMapper.THINKING_SIGNATURE_KEY));
+		assertEquals(List.of("opaque-redacted-state"),
+			replay.attributes().get(AnthropicMapper.REDACTED_THINKING_KEY));
+		assertEquals("ephemeral", replay.attributes().get("cache_control"),
+			"cache marking must compose with, not replace, provider state");
+
+		List<AnthropicMessage> wire = AnthropicMapper.toAnthropicMessages(restored, true);
+		assertInstanceOf(AnthropicThinkingContent.class, wire.get(0).content.get(0));
+		assertInstanceOf(AnthropicRedactedThinkingContent.class, wire.get(0).content.get(1));
+	}
+
+	@Test
+	public void testProviderStateIsOptionalAndBoundToProviderAndModel() {
+		AiMessage toolReply = AiMessage.builder()
+			.thinking("private continuation")
+			.toolExecutionRequests(List.of(ToolExecutionRequest.builder()
+				.id("call_1").name("search").arguments("{}").build()))
+			.attributes(Map.of(AnthropicMapper.THINKING_SIGNATURE_KEY, "sig"))
+			.build();
+		ACell anthropic = LangChainAdapter.toAssistantMessage(
+			toolReply, "anthropic", "claude-sonnet-5");
+
+		AiMessage otherModel = assertInstanceOf(AiMessage.class,
+			LangChainAdapter.toChatMessages(Vectors.of(anthropic), Set.of(),
+				"anthropic", "claude-opus-5").get(0));
+		AiMessage otherProvider = assertInstanceOf(AiMessage.class,
+			LangChainAdapter.toChatMessages(Vectors.of(anthropic), Set.of(),
+				"openai", "claude-sonnet-5").get(0));
+		assertNull(otherModel.thinking(), "state from a different model must not be replayed");
+		assertNull(otherProvider.thinking(), "state from a different provider must not be replayed");
+
+		assertNull(RT.getIn(LangChainAdapter.toAssistantMessage(
+			toolReply, "openai", "gpt-5.6-terra"), Fields.PROVIDER_STATE));
+		assertNull(RT.getIn(LangChainAdapter.toAssistantMessage(
+			AiMessage.builder().text("done").thinking("finished").build(),
+			"anthropic", "claude-sonnet-5"), Fields.PROVIDER_STATE),
+			"terminal replies do not need continuation state");
+
+		// Existing conversation entries have no providerState and remain valid.
+		AiMessage legacy = assertInstanceOf(AiMessage.class,
+			LangChainAdapter.toChatMessages(Vectors.of(Maps.of(
+				"role", "assistant", "content", "old record")), Set.of(),
+				"anthropic", "claude-sonnet-5").get(0));
+		assertEquals("old record", legacy.text());
+		assertNull(legacy.thinking());
+	}
+
+	@Test
 	public void testToAssistantMessageWithTokens() {
 		ChatResponse response = ChatResponse.builder()
 			.aiMessage(AiMessage.from("Hi"))
@@ -386,6 +475,22 @@ public class LangChainAdapterTest {
 		List<ChatMessage> result = LangChainAdapter.toChatMessages(messages);
 		assertEquals(1, result.size());
 		assertInstanceOf(ToolExecutionResultMessage.class, result.get(0));
+	}
+
+	@Test
+	public void testToChatMessagesRepairsLegacyIdsWithoutBreakingPairing() {
+		String legacy = "context:2:skills/review";
+		var messages = Vectors.of(
+			Maps.of("role", "assistant", "toolCalls", Vectors.of(Maps.of(
+				"id", legacy, "name", "loaded_context", "arguments", Maps.empty()))),
+			Maps.of("role", "tool", "id", legacy, "name", "loaded_context", "content", "data"));
+
+		List<ChatMessage> converted = LangChainAdapter.toChatMessages(messages);
+		String callId = assertInstanceOf(AiMessage.class, converted.get(0))
+			.toolExecutionRequests().get(0).id();
+		String resultId = assertInstanceOf(ToolExecutionResultMessage.class, converted.get(1)).id();
+		assertTrue(callId.matches("[A-Za-z0-9_-]+"), callId);
+		assertEquals(callId, resultId);
 	}
 
 	@Test
@@ -1428,7 +1533,8 @@ public class LangChainAdapterTest {
 			(ACell) Maps.of("name", Strings.create("covia_read"),
 				"description", Strings.create("read a value")));
 
-		ACell result = LangChainAdapter.callModelForcedTool(stub, messages, workTools, RF_SCHEMA, java.util.Set.of());
+		ACell result = LangChainAdapter.callModelForcedTool(
+			"anthropic", "test-model", stub, messages, workTools, RF_SCHEMA, java.util.Set.of());
 
 		// Request shape: both tools present, choice forced
 		var request = captured.get();
@@ -1450,7 +1556,7 @@ public class LangChainAdapterTest {
 
 	@Test
 	public void testTuningReachesProviderModels() {
-		LangChainAdapter.ModelTuning tuning = new LangChainAdapter.ModelTuning(2048, 0.0, 0.9, null);
+		LangChainAdapter.ModelTuning tuning = new LangChainAdapter.ModelTuning(2048, 0.0, 0.9, null, null);
 
 		var ollama = LangChainAdapter.buildOllamaModel("http://localhost:11434", "qwen",
 			java.time.Duration.ofSeconds(5), tuning);
@@ -1461,6 +1567,13 @@ public class LangChainAdapterTest {
 			java.time.Duration.ofSeconds(5), tuning);
 		assertEquals(0.0, openai.defaultRequestParameters().temperature());
 		assertEquals(0.9, openai.defaultRequestParameters().topP());
+		LangChainAdapter.ModelTuning nativeTuning = LangChainAdapter.extractTuning(JSON.parse(
+			"{\"providerOptions\":{\"reasoning_effort\":\"low\"}}"));
+		var nativeOpenAi = LangChainAdapter.buildOpenAiModel("key", "https://api.openai.com/v1",
+			"gpt-5.4-mini", java.time.Duration.ofSeconds(5), nativeTuning);
+		var nativeParameters = (dev.langchain4j.model.openai.OpenAiChatRequestParameters)
+			nativeOpenAi.defaultRequestParameters();
+		assertEquals("low", nativeParameters.customParameters().get("reasoning_effort"));
 
 		var anthropic = LangChainAdapter.buildAnthropicModel("key", "https://api.anthropic.com/v1/",
 			"claude-sonnet-5", java.time.Duration.ofSeconds(5), tuning);
@@ -1477,6 +1590,11 @@ public class LangChainAdapterTest {
 		var plain = LangChainAdapter.buildOllamaModel("http://localhost:11434", "qwen",
 			java.time.Duration.ofSeconds(5), LangChainAdapter.ModelTuning.NONE);
 		assertNull(plain.defaultRequestParameters().temperature());
+		assertNull(plain.defaultRequestParameters().topP());
+		assertThrows(IllegalArgumentException.class,
+			() -> LangChainAdapter.buildOllamaModel("http://localhost:11434", "qwen",
+				java.time.Duration.ofSeconds(5), nativeTuning),
+			"an unsupported providerOptions map must fail rather than disappear silently");
 	}
 
 	@Test
@@ -1552,6 +1670,67 @@ public class LangChainAdapterTest {
 			() -> LangChainAdapter.extractTuning(JSON.parse("{\"maxTokens\": 2147483648}")));
 		assertThrows(IllegalArgumentException.class,
 			() -> LangChainAdapter.extractTuning(JSON.parse("{\"maxTokens\": \"1024\"}")));
+		assertThrows(IllegalArgumentException.class,
+			() -> LangChainAdapter.extractTuning(JSON.parse("{\"providerOptions\": true}")));
+	}
+
+	@Test
+	public void testAnthropicProviderOptionsReachWireAndOmissionPreservesDefaults() throws Exception {
+		AtomicReference<ACell> request = new AtomicReference<>();
+		HttpServer provider = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+		provider.createContext("/v1/messages", exchange -> {
+			request.set(JSON.parse(new String(exchange.getRequestBody().readAllBytes(),
+				java.nio.charset.StandardCharsets.UTF_8)));
+			byte[] body = ("{\"id\":\"msg\",\"type\":\"message\",\"role\":\"assistant\","
+				+ "\"model\":\"claude-sonnet-5\",\"content\":[{\"type\":\"text\",\"text\":\"ok\"}],"
+				+ "\"stop_reason\":\"end_turn\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}")
+				.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+			exchange.getResponseHeaders().set("content-type", "application/json");
+			exchange.sendResponseHeaders(200, body.length);
+			try (var out = exchange.getResponseBody()) {
+				out.write(body);
+			}
+		});
+		provider.start();
+		try {
+			LangChainAdapter.ModelTuning tuning = LangChainAdapter.extractTuning(JSON.parse("""
+				{"maxTokens":8192,"providerOptions":{
+				  "thinking":{"type":"adaptive"},
+				  "output_config":{"effort":"low"}
+				}}
+				"""));
+			var model = LangChainAdapter.buildAnthropicModel("key",
+				"http://127.0.0.1:" + provider.getAddress().getPort() + "/v1/",
+				"claude-sonnet-5", Duration.ofSeconds(5), tuning);
+			AnthropicChatRequestParameters defaults = assertInstanceOf(AnthropicChatModel.class, model)
+				.defaultRequestParameters();
+			assertEquals(Boolean.TRUE, defaults.returnThinking());
+			assertEquals(Boolean.TRUE, defaults.sendThinking());
+			model.chat(UserMessage.from("hello"));
+
+			assertEquals("adaptive", RT.getIn(request.get(), "thinking", "type").toString());
+			assertEquals("low", RT.getIn(request.get(), "output_config", "effort").toString());
+			assertNull(RT.getIn(request.get(), "temperature"),
+				"omitting shared tuning must leave the provider default alone");
+
+			request.set(null);
+			LangChainAdapter.ModelTuning omitted = LangChainAdapter.extractTuning(
+				JSON.parse("{\"maxTokens\":8192,\"providerOptions\":{}}"));
+			var defaulted = LangChainAdapter.buildAnthropicModel("key",
+				"http://127.0.0.1:" + provider.getAddress().getPort() + "/v1/",
+				"claude-sonnet-5", Duration.ofSeconds(5), omitted);
+			defaulted.chat(UserMessage.from("hello again"));
+
+			assertNotNull(request.get());
+			assertNull(RT.getIn(request.get(), "temperature"));
+			assertNull(RT.getIn(request.get(), "top_p"));
+			assertNull(RT.getIn(request.get(), "thinking"));
+			assertNull(RT.getIn(request.get(), "output_config"));
+			assertEquals(8192L, RT.ensureLong(RT.getIn(request.get(), "max_tokens")).longValue(),
+				"Anthropic's required declared output bound remains the one explicit default");
+		} finally {
+			provider.stop(0);
+		}
 	}
 
 	// ========== #224 — Ollama base URL resolution + connect hint ==========

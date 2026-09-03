@@ -5,19 +5,12 @@
 	<parent>
 		<groupId>ai.covia</groupId>
 		<artifactId>covia</artifactId>
-		<version>0.9.7</version>
+		<version>0.9.8</version>
 	</parent>
 	<artifactId>covia-claude-code</artifactId>
 
 	<name>Covia Claude Code Module</name>
-	<description>Claude Code adapter for Covia venues — lets agents and jobs drive the Claude Code CLI in operator-authorised project directories: one-shot runs, long-lived resumable sessions, and a bounded pool of live processes. Packaged as a loadable venue module (the shaded "module" classifier jar), not part of covia.jar.</description>
-
-	<properties>
-		<!-- Skip ordinary deploy-plugin publication. The Central publishing
-		     extension bundles reactor artifacts independently, including the
-		     signed shaded module classifier used by venue operators. -->
-		<maven.deploy.skip>true</maven.deploy.skip>
-	</properties>
+	<description>Claude Code adapter for Covia venues — lets agents and jobs drive the Claude Code CLI in operator-authorised project directories: one-shot runs, long-lived resumable sessions, and a bounded pool of live processes. Packaged as a loadable venue module (the shaded -module.jar), not part of covia.jar.</description>
 
 	<dependencies>
 		<!-- The venue SPI — provided by the loading venue, never bundled -->
@@ -65,7 +58,7 @@
 					</execution>
 				</executions>
 			</plugin>
-			<!-- The loadable module jar, attached with the "module" classifier.
+			<!-- The loadable module jar, written to target/ as -module.jar.
 			     The module has no third-party dependencies; shading keeps the
 			     packaging identical to the other venue modules. -->
 			<plugin>
@@ -81,8 +74,11 @@
 						<configuration>
 							<!-- The fat module jar is a GitHub Releases artifact, not a Maven Central
 							     one: shade writes it under the -module name but does not attach it, so
-							     `mvn deploy` publishes only this module's slim jar. -->
+							     `mvn deploy` publishes only this module's slim jar, with its real POM
+							     (no dependency-reduced POM, which would strip the shaded dependencies
+							     from the published artifact). -->
 							<outputFile>${project.build.directory}/${project.build.finalName}-module.jar</outputFile>
+							<createDependencyReducedPom>false</createDependencyReducedPom>
 							<artifactSet>
 								<excludes>
 									<!-- Host API and Convex cell/runtime identity are parent-first. -->

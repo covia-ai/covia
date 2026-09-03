@@ -31,6 +31,8 @@ import covia.adapter.AAdapter;
 import covia.adapter.AgentAdapter;
 import covia.adapter.AssetAdapter;
 import covia.adapter.CoviaAdapter;
+import covia.adapter.UserAdapter;
+import covia.adapter.DLFSAdapter;
 import convex.core.util.JSON;
 import covia.api.Abilities;
 import covia.api.Fields;
@@ -44,6 +46,7 @@ import covia.venue.api.model.ErrorResponse;
 import covia.venue.api.model.InvokeRequest;
 import covia.venue.api.model.InvokeResult;
 import covia.venue.AssetStore;
+import covia.venue.Config;
 import covia.venue.RequestContext;
 import covia.venue.SecretStore;
 import covia.venue.User;
@@ -167,6 +170,20 @@ public class CoviaAPI extends ACoviaAPI {
 		// per read. scheduler:list remains the operation form.
 		routes.get(ROUTE+"schedules", this::getSchedules, COVIA_API);
 
+		// Users — job-free reads (#255), operator-gated (a 403 here means "not
+		// an operator", not a broken page). Reuses UserAdapter's own
+		// requireVenueUserAuthority checks, so authorization never duplicates.
+		routes.get(ROUTE+"users", this::getUsers, COVIA_API);
+		routes.get(ROUTE+"users/{did}", this::getUserInfo, COVIA_API);
+		routes.get(ROUTE+"users/{did}/authentications", this::getUserAuthentications, COVIA_API);
+
+		// DLFS — job-free reads (#253), read-first MVP. Reuses DLFSAdapter's own
+		// dispatch()/requireDlfsCap authority checks; a 403 relays the real
+		// Capability-denied message, not a canned string. File content itself
+		// is already job-free via the generic content/<ref> route below.
+		routes.get(ROUTE+"dlfs/drives", this::getDlfsDrives, COVIA_API);
+		routes.get(ROUTE+"dlfs/list", this::getDlfsList, COVIA_API);
+
 		// Secrets
 		routes.get(ROUTE+"secrets", this::listSecrets, COVIA_API);
 		routes.put(ROUTE+"secrets/{name}", this::putSecret, COVIA_API);
@@ -195,6 +212,15 @@ public class CoviaAPI extends ACoviaAPI {
 		stats = stats.assoc(Strings.intern("userJobs"),
 			RT.cvm(engine().jobs().getJobs(rctx).count()));
 		result=result.assoc(STATS_FIELD,stats);
+
+		// Curated admission-policy fields (#255) — safe to state to any caller,
+		// same accessors VenueAdapter.showConfig() already exposes via the
+		// operation form. Lets a Users admin UI state autoCreate truthfully
+		// without a dedicated show-config REST route.
+		Config config = engine().config();
+		result = result.assoc(Fields.ACCESS, Maps.of(
+			Strings.intern("public"), CVMBool.create(config.isPublicAccess()),
+			Strings.intern("userAutoCreate"), CVMBool.create(config.isUserAutoCreate())));
 
 		buildResult(ctx,200,result);
 	}
@@ -690,7 +716,10 @@ public class CoviaAPI extends ACoviaAPI {
 			}
 			sendContent(ctx, (meta!=null)?meta.get(Fields.CONTENT):null, resolved);
 		} catch (AuthException e) {
-			buildError(ctx,403,"Not authorised to read asset content: "+id);
+			// Relay the real Capability-denied message (#253) rather than a
+			// canned string — this is the one job-free route DLFS content
+			// preview/download go through, and callers need to see why.
+			buildError(ctx,403,e.getMessage());
 		} catch (IOException e) {
 			buildError(ctx,500,"Error retrieving asset content: "+e.getMessage());
 		}
@@ -791,7 +820,10 @@ public class CoviaAPI extends ACoviaAPI {
 					+ "uses the normal Job lifecycle internally: mutating or unclassified "
 					+ "operations are recorded, while operation.readOnly=true may use a "
 					+ "transient Job unless operation.internal=false or venue policy forces "
-					+ "read-only recording. The Java API is asynchronous (CompletableFuture); "
+					+ "read-only recording. Set private=true to force a transient Job when the "
+					+ "venue enables private jobs; the call must then run to completion because "
+					+ "there is no persistent Job ID to recover or poll. The Java API is "
+					+ "asynchronous (CompletableFuture); "
 					+ "this HTTP request remains open until the operation completes.",
 			requestBody = @OpenApiRequestBody(
 				description = "Run request: operation reference and its input",
@@ -818,12 +850,18 @@ public class CoviaAPI extends ACoviaAPI {
 			return;
 		}
 		ACell input = RT.getIn(req, Fields.INPUT);
+		ACell privateCell = RT.getIn(req, Fields.PRIVATE);
+		if (privateCell != null && !(privateCell instanceof CVMBool)) {
+			buildError(ctx, 400, "Run request 'private' parameter must be a Boolean");
+			return;
+		}
+		boolean privateJob = CVMBool.TRUE.equals(privateCell);
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 		AVector<ACell> ucans = RT.getIn(req, Fields.UCANS);
 		rctx = AuthMiddleware.withTransportGrants(rctx, ucans, engine().didVerifier());
 
 		try {
-			ACell result = engine().jobs().runOperation(op, input, rctx).join();
+			ACell result = engine().jobs().runOperation(op, input, rctx, privateJob).join();
 			buildResult(ctx, 200, result);
 		} catch (java.util.concurrent.CompletionException e) {
 			Throwable cause = (e.getCause() != null) ? e.getCause() : e;
@@ -1909,6 +1947,145 @@ public class CoviaAPI extends ACoviaAPI {
 		buildResult(ctx, 200, info);
 	}
 
+	@OpenApi(path = ROUTE + "users",
+			methods = HttpMethod.GET,
+			tags = { "Covia" },
+			summary = "List registered venue users — the user:list payload (job-free, #255). "
+				+ "Operator-only: a non-operator, signed-in caller gets 403, not a partial list.",
+			operationId = "getUsers")
+	protected void getUsers(Context ctx) {
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		if (rctx.getCallerDID() == null) {
+			buildError(ctx, 401, "Authentication required");
+			return;
+		}
+		UserAdapter user = (UserAdapter) engine().getAdapter("user");
+		try {
+			buildResult(ctx, 200, user.list(rctx));
+		} catch (AuthException e) {
+			buildError(ctx, 403, e.getMessage());
+		} catch (IllegalArgumentException e) {
+			buildError(ctx, 400, e.getMessage());
+		} catch (RuntimeException e) {
+			buildError(ctx, 500, "Read failed: " + e.getMessage());
+		}
+	}
+
+	@OpenApi(path = ROUTE + "users/{did}",
+			methods = HttpMethod.GET,
+			tags = { "Covia" },
+			summary = "Get one registered user — the user:info payload (job-free, #255). "
+				+ "The caller's own DID needs no operator authority; any other DID does.",
+			operationId = "getUserInfo",
+			pathParams = { @OpenApiParam(name = "did", description = "User DID") })
+	protected void getUserInfo(Context ctx) {
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		if (rctx.getCallerDID() == null) {
+			buildError(ctx, 401, "Authentication required");
+			return;
+		}
+		String did = ctx.pathParam("did");
+		UserAdapter user = (UserAdapter) engine().getAdapter("user");
+		AMap<AString, ACell> input = Maps.of(Fields.DID, Strings.create(did));
+		try {
+			buildResult(ctx, 200, user.info(rctx, input));
+		} catch (AuthException e) {
+			buildError(ctx, 403, e.getMessage());
+		} catch (IllegalArgumentException e) {
+			buildError(ctx, 404, e.getMessage());
+		} catch (RuntimeException e) {
+			buildError(ctx, 500, "Read failed: " + e.getMessage());
+		}
+	}
+
+	@OpenApi(path = ROUTE + "users/{did}/authentications",
+			methods = HttpMethod.GET,
+			tags = { "Covia" },
+			summary = "List a venue-managed user's authenticators, active and revoked "
+				+ "tombstones alike — the user:authentication-list payload (job-free, #255). "
+				+ "The caller's own DID needs no operator authority; any other DID does.",
+			operationId = "getUserAuthentications",
+			pathParams = { @OpenApiParam(name = "did", description = "User DID") })
+	protected void getUserAuthentications(Context ctx) {
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		if (rctx.getCallerDID() == null) {
+			buildError(ctx, 401, "Authentication required");
+			return;
+		}
+		String did = ctx.pathParam("did");
+		UserAdapter user = (UserAdapter) engine().getAdapter("user");
+		AMap<AString, ACell> input = Maps.of(Fields.DID, Strings.create(did));
+		try {
+			buildResult(ctx, 200, user.authenticationList(rctx, input));
+		} catch (AuthException e) {
+			buildError(ctx, 403, e.getMessage());
+		} catch (IllegalArgumentException e) {
+			buildError(ctx, 400, e.getMessage());
+		} catch (RuntimeException e) {
+			buildError(ctx, 500, "Read failed: " + e.getMessage());
+		}
+	}
+
+	@OpenApi(path = ROUTE + "dlfs/drives",
+			methods = HttpMethod.GET,
+			tags = { "Covia" },
+			summary = "List the caller's DLFS drives, vault included — the dlfs:listDrives "
+				+ "payload (job-free, #253). Read-first MVP: no drive management here.",
+			operationId = "getDlfsDrives")
+	protected void getDlfsDrives(Context ctx) {
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		if (rctx.getCallerDID() == null) {
+			buildError(ctx, 401, "Authentication required");
+			return;
+		}
+		DLFSAdapter dlfs = (DLFSAdapter) engine().getAdapter("dlfs");
+		try {
+			buildResult(ctx, 200, dlfs.listDrives(rctx));
+		} catch (AuthException e) {
+			buildError(ctx, 403, e.getMessage());
+		} catch (IllegalArgumentException e) {
+			buildError(ctx, 400, e.getMessage());
+		} catch (Exception e) {
+			buildError(ctx, 500, "Read failed: " + e.getMessage());
+		}
+	}
+
+	@OpenApi(path = ROUTE + "dlfs/list",
+			methods = HttpMethod.GET,
+			tags = { "Covia" },
+			summary = "List one directory of a DLFS drive — the dlfs:list payload "
+				+ "(job-free, #253). Read-first MVP: own drives by bare name only, "
+				+ "no cross-user DID-URL drive addressing.",
+			operationId = "getDlfsList",
+			queryParams = {
+					@OpenApiParam(name = "drive", required = true, description = "Drive name"),
+					@OpenApiParam(name = "path", description = "Directory path within the drive; omit for the root")
+			})
+	protected void getDlfsList(Context ctx) {
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		if (rctx.getCallerDID() == null) {
+			buildError(ctx, 401, "Authentication required");
+			return;
+		}
+		String drive = ctx.queryParam("drive");
+		if (drive == null || drive.isEmpty()) {
+			buildError(ctx, 400, "Missing 'drive' query parameter");
+			return;
+		}
+		AMap<AString, ACell> input = Maps.of(Fields.DRIVE, Strings.create(drive));
+		String path = ctx.queryParam("path");
+		if (path != null) input = input.assoc(Fields.PATH, Strings.create(path));
+		DLFSAdapter dlfs = (DLFSAdapter) engine().getAdapter("dlfs");
+		try {
+			buildResult(ctx, 200, dlfs.listDirectory(rctx, input));
+		} catch (AuthException e) {
+			buildError(ctx, 403, e.getMessage());
+		} catch (IllegalArgumentException e) {
+			buildError(ctx, 400, e.getMessage());
+		} catch (Exception e) {
+			buildError(ctx, 500, "Read failed: " + e.getMessage());
+		}
+	}
 
 	@OpenApi(path = ROUTE + "agents/{id}/sse",
 			methods = HttpMethod.GET,
@@ -2047,7 +2224,9 @@ public class CoviaAPI extends ACoviaAPI {
 			return;
 		}
 
-		ACell input = Maps.of("name", name, "value", value);
+		// PUT already expresses replacement intent at the HTTP resource boundary.
+		ACell input = Maps.of("name", name, "value", value,
+			Fields.OVERWRITE, convex.core.data.prim.CVMBool.TRUE);
 		Job job = engine().jobs().invokeOperation(Strings.create("v/ops/secret/set"), input, rctx);
 		ACell result = job.awaitResult();
 		if (result == null) {

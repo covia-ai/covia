@@ -1,0 +1,36 @@
+{
+	"name": "Generate Convex Key",
+	"description": "Generate a new Ed25519 key pair and store its seed encrypted in the caller's secret store. The seed is never returned. Refuses to replace an existing secret unless overwrite is explicitly true.",
+	"operation": {
+		"adapter": "convex:generate-key",
+		"readOnly": false,
+		"activityLabel": "Generating Convex key",
+		"input": {
+			"type": "object",
+			"properties": {
+				"name": {
+					"type": "string",
+					"minLength": 1,
+					"pattern": "^[^/\\\\]+$",
+					"description": "Name for the encrypted seed in the caller's secret store, for example CONVEX_SIGNER"
+				},
+				"overwrite": {
+					"type": "boolean",
+					"default": false,
+					"description": "Set true to replace an existing secret. Omitted or false protects the existing key."
+				}
+			},
+			"required": ["name"],
+			"additionalProperties": false
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"secret": { "type": "string", "description": "Secret reference containing the seed, for example s/CONVEX_SIGNER" },
+				"accountKey": { "type": "string", "description": "Public Ed25519 account key as a 32-byte Convex hex blob" }
+			},
+			"required": ["secret", "accountKey"],
+			"additionalProperties": false
+		}
+	}
+}

@@ -1,14 +1,18 @@
 {
 	"name": "convex",
-	"description": "Query and transact on the Convex lattice network (CVM) — balances, contracts, on-chain state. Load for anything blockchain-side.",
+	"description": "Query and transact on the Convex lattice network (CVM), manage signing keys, and encode or decode CAD3 data.",
 	"content": {
 		"contentType": "text/markdown",
-		"inline": "## Convex\n- query `{source, address?, peer?}` — read-only CVM execution, free, no signature. Example: `(balance #128)`.\n- transact `{source, address, seed?, peer?}` — a signed transaction that changes state; costs juice. Credentials via secret refs, never inline.\n\nWriting CVM (Convex Lisp) source:\n- NEVER use `import` in generated source — it mutates the account environment and wastes juice.\n- Single call: `(@convex.fungible/transfer #128 #13 100)` — `@name.path` resolves via CNS at runtime.\n- Multiple calls: `(let [fun @convex.fungible] (fun/transfer ...) (fun/balance ...))`.\n- Addresses are `#123` literals. The native coin is CVM: 1 CVM = 10^9 copper (all on-chain amounts are copper).\n\nPrefer query for anything read-only — transactions are irreversible and metered. Echo the exact source you executed when reporting results."
+		"inline": "## Convex\n- query `{source, address?, peer?}` — read-only CVM execution, free, no signature. Example: `(balance #128)`.\n- generate-key `{name, overwrite?}` — creates an Ed25519 key, stores the private seed encrypted as `s/<name>`, and returns only that reference plus the public account key. It does not create or fund an on-chain account. Never set `overwrite: true` unless replacement is deliberate.\n- transact `{source, address, seed, peer?}` — a signed transaction that changes state and costs juice. Pass the generated `s/<name>` reference as `seed`; never put a raw seed in a prompt or call.\n- sign `{seed, message, encoding?}` — signs UTF-8 text or hex bytes with a stored seed and returns the public account key and signature, never the seed.\n- decode-cad3 `{encoding}` — decodes a complete hex CAD3 message directly to its native value; self-contained multi-cell encodings are supported.\n- encode-cad3 `{value}` — returns a complete 0x-prefixed CAD3 message, including child cells needed to decode large values.\n\nAccount creation, transfers, CNS calls and contract operations are CVM forms executed through query/transact rather than separate tools.\n\nWriting CVM (Convex Lisp) source:\n- NEVER use `import` in generated source — it mutates the account environment and wastes juice.\n- Single call: `(@convex.fungible/transfer #128 #13 100)` — `@name.path` resolves via CNS at runtime.\n- Multiple calls: `(let [fun @convex.fungible] (fun/transfer ...) (fun/balance ...))`.\n- Addresses are `#123` literals. The native coin is CVM: 1 CVM = 10^9 copper (all on-chain amounts are copper).\n\nPrefer query for anything read-only — transactions are irreversible and metered. Echo the exact source you executed when reporting results."
 	},
 	"skill": {
 		"tools": [
 			"v/ops/convex/query",
-			"v/ops/convex/transact"
+			"v/ops/convex/transact",
+			"v/ops/convex/generate-key",
+			"v/ops/convex/sign",
+			"v/ops/convex/decode-cad3",
+			"v/ops/convex/encode-cad3"
 		]
 	}
 }

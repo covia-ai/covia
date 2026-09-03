@@ -3,6 +3,7 @@
 	"description": "Fetch the current status of an EXISTING Covia Job. Call this operation directly with the exact id returned by a delegated request or asynchronous invocation; do not wrap it in the generic operation runner. This polls state without waiting for completion or starting new work.",
 	"operation": {
 		"adapter": "grid:jobStatus",
+		"readOnly": true,
 		"toolName": "grid_job_status",
 		"input": {
 			"type": "object",

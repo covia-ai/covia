@@ -11,6 +11,7 @@
   },
   "operation": {
     "adapter": "user:authentication-add",
+    "readOnly": false,
     "input": {
       "type": "object",
       "properties": {

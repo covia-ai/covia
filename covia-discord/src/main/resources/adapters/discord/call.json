@@ -1,7 +1,7 @@
 {
   "name":"Call Discord API",
   "description":"Calls a Discord REST API route with the selected bot. Gateway and OAuth routes are refused. Requires discord/call on <bot user>/discord/<bot>.",
-  "operation":{"adapter":"discord:call","input":{"type":"object","properties":{
+  "operation":{"adapter":"discord:call","readOnly":false,"input":{"type":"object","properties":{
     "bot":{"type":"string"},"method":{"type":"string","enum":["GET","POST","PUT","PATCH","DELETE"]},
     "route":{"type":"string","description":"API-v10-relative route, e.g. /channels/123/messages?limit=10"},
     "body":{"description":"Optional JSON request body"}

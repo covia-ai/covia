@@ -11,6 +11,7 @@
   },
   "operation": {
     "adapter": "user:authentication-revoke",
+    "readOnly": false,
     "input": {
       "type": "object",
       "properties": {

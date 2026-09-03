@@ -1,0 +1,20 @@
+{
+	"name": "intercom",
+	"description": "Work with Intercom contacts and conversations using an access token. Load for contact lookups, searches, and reading conversations.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Intercom\nCalls go through `v/ops/http/get` / `v/ops/http/post` against `https://api.intercom.io` with `bearerSecret: \"s/INTERCOM_TOKEN\"` and the header `Intercom-Version: 2.11`. The token is a workspace access token (Intercom -> Settings -> Developers -> Developer Hub -> your app -> Authentication). Only the secret reference goes in the request.\n\nCommon calls:\n- Me / workspace: `GET /me`\n- Search contacts: `POST /contacts/search` body `{query: {field: \"email\", operator: \"=\", value: \"a@b.com\"}}`\n- One contact: `GET /contacts/{id}`\n- List conversations: `GET /conversations?per_page=50`\n- One conversation: `GET /conversations/{id}`\n- Reply: `POST /conversations/{id}/reply` body `{message_type: \"comment\"|\"note\", type: \"admin\", admin_id, body}`\n\nRules:\n- Check `status`; errors are `{type: \"error.list\", errors: [{code, message}]}`. 401 = bad token; 429 = rate limited.\n- Search is a POST with a query object; simple `GET /contacts` lists without filters. Ids are strings.\n"
+	},
+	"connection": {
+		"baseUrl": "https://api.intercom.io",
+		"auth": { "kind": "bearer-secret", "alternatives": ["s/INTERCOM_TOKEN"] }
+	},
+	"skill": {
+		"tools": [
+			"v/ops/connections/status",
+			"v/ops/http/get",
+			"v/ops/http/post",
+			"v/ops/jvm/url-encode"
+		]
+	}
+}

@@ -502,9 +502,10 @@ public class TestAdapter extends AAdapter {
 				"role", Strings.create("assistant"),
 				"toolCalls", Vectors.of(Maps.of(
 					"id", sawRejection ? "call_valid_complete" : "call_invalid_complete",
-					"name", "complete",
+					"name", "complete_task",
 					"arguments", sawRejection
-						? "{\"answer\":\"corrected\"}" : "{\"answer\":42}")));
+						? "{\"result\":{\"answer\":\"corrected\"}}"
+						: "{\"result\":{\"answer\":42}}")));
 		}
 		if (model != null && "parallel-complete-test".equals(model.toString())) {
 			// Anthropic-compatibility fixture: a terminal harness call can arrive
@@ -582,6 +583,8 @@ public class TestAdapter extends AAdapter {
     @SuppressWarnings("unchecked")
     private ACell handleToolLlm(ACell input) {
         ACell messagesCell = RT.getIn(input, "messages");
+		AString model = RT.ensureString(RT.getIn(input, Fields.MODEL));
+		boolean providerStateTest = model != null && "provider-state-test".equals(model.toString());
         if (messagesCell instanceof AVector) {
             AVector<ACell> messages = (AVector<ACell>) messagesCell;
             // Check if any tool result messages exist
@@ -594,9 +597,17 @@ public class TestAdapter extends AAdapter {
 						ACell structured = RT.getIn(messages.get(i), "structuredContent");
 						if (structured != null) toolContent = convex.core.util.JSON.print(structured);
 					}
-                    return Maps.of(
+					boolean statePresent = false;
+					if (providerStateTest) {
+						for (long j = 0; j < messages.count(); j++) {
+							statePresent |= RT.getIn(messages.get(j), Fields.PROVIDER_STATE) != null;
+						}
+					}
+					return Maps.of(
                         "role", Strings.create("assistant"),
-                        "content", Strings.create("Tool returned: " + toolContent)
+						"content", Strings.create(providerStateTest
+							? (statePresent ? "Provider state retained" : "Provider state missing")
+							: "Tool returned: " + toolContent)
                     );
                 }
             }
@@ -628,14 +639,21 @@ public class TestAdapter extends AAdapter {
                 toolName = "covia_list";
                 arguments = "{\"path\":\"w/issue-334/sources\",\"fields\":[\"status\"]}";
             }
-            return Maps.of(
+			AMap<AString, ACell> reply = Maps.of(
                 "role", Strings.create("assistant"),
                 "toolCalls", Vectors.of(Maps.of(
                     "id", Strings.create("call_1"),
                     "name", Strings.create(toolName),
                     "arguments", Strings.create(arguments)
-                ))
-            );
+				)));
+			if (providerStateTest) {
+				reply = reply.assoc(Fields.PROVIDER_STATE, Maps.of(
+					Fields.PROVIDER, "anthropic",
+					Fields.MODEL, "claude-sonnet-5",
+					"blocks", Vectors.of(Maps.of(
+						"type", "thinking", "thinking", "private", "signature", "sig"))));
+			}
+			return reply;
         }
         return Maps.of("role", Strings.create("assistant"), "content", Strings.create("(no messages)"));
     }
@@ -647,8 +665,8 @@ public class TestAdapter extends AAdapter {
      * actually DISPATCH. State machine over the input messages/tools:
      * <ol>
      *   <li>fresh → call {@code skill_load {name: "alpha"}}</li>
-     *   <li>skill_load result seen → if the palette now offers
-     *       {@code covia_read} (the skill's tool), CALL it on {@code w/probe};
+     *   <li>skill_load result seen → if a tool-state event now offers
+     *       {@code covia_read}, CALL it through {@code invoke_tool} on {@code w/probe};
      *       else respond {@code SKILL_TOOLS_MISSING}</li>
      *   <li>covia_read result seen → respond
      *       {@code SKILL_TOOL_RESULT: <content>} — proves load → palette →
@@ -702,6 +720,7 @@ public class TestAdapter extends AAdapter {
 			if ("user".equals(String.valueOf(RT.getIn(messages.get(i), "role")))) currentCycleStart = i;
 		}
 		boolean skillBodyPresent = false, skillLoadResult = false, coviaReadResult = false;
+		boolean coviaReadAdded = false;
         String coviaReadContent = "";
         for (long i = 0; i < messages.count(); i++) {
             ACell msg = messages.get(i);
@@ -711,6 +730,11 @@ public class TestAdapter extends AAdapter {
 			if ("system".equals(role.toString()) && content != null
 					&& content.toString().contains(SKILL_LLM_BODY)) {
 				skillBodyPresent = true;
+			}
+			AVector<ACell> additions = RT.ensureVector(RT.getIn(msg, "toolAddition"));
+			for (long j = 0; additions != null && j < additions.count(); j++) {
+				coviaReadAdded |= "covia_read".equals(
+					String.valueOf(RT.getIn(additions.get(j), "name")));
 			}
 			if (i > currentCycleStart && "tool".equals(role.toString())) {
 				AString name = RT.ensureString(RT.getIn(msg, "name"));
@@ -798,22 +822,23 @@ public class TestAdapter extends AAdapter {
                 return Maps.of("role", Strings.create("assistant"),
                     "content", Strings.create("SKILL_BODY_MISSING"));
             }
-			if (!hasTool(tools, "covia_read")) {
+			if (!coviaReadAdded || !hasTool(tools, "invoke_tool")) {
 				return Maps.of("role", Strings.create("assistant"),
 					"content", Strings.create("SKILL_TOOLS_MISSING"));
 			}
 			return Maps.of("role", Strings.create("assistant"),
 				"toolCalls", Vectors.of(Maps.of(
 					"id", Strings.create("call_read"),
-					"name", Strings.create("covia_read"),
-					"arguments", Strings.create("{\"path\":\"w/probe\"}"))));
+					"name", Strings.create("invoke_tool"),
+					"arguments", Strings.create(
+						"{\"name\":\"covia_read\",\"input\":{\"path\":\"w/probe\"}}"))));
         }
         if (skillBodyPresent) {
             // A later turn: the persisted loads entry re-rendered the body and
             // re-contributed the tools.
 			return Maps.of("role", Strings.create("assistant"),
 				"content", Strings.create("SKILL_BODY_PRESENT "
-					+ (hasTool(tools, "covia_read")
+					+ (coviaReadAdded && hasTool(tools, "invoke_tool")
 						? "SKILL_TOOLS_ACTIVE" : "SKILL_TOOLS_MISSING")));
         }
         return Maps.of("role", Strings.create("assistant"),

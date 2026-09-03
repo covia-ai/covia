@@ -8,7 +8,7 @@ This document describes how to build the Covia project using Maven.
 - **Maven 3.7+**: Minimum Maven version required (enforced by maven-enforcer-plugin)
 - **Git**: For cloning the repository
 
-Covia targets Convex 0.8.15. Maven resolves the release from the local repository or configured remote repositories in the normal way.
+Covia targets Convex 0.8.16. Maven resolves the release from the local repository or configured remote repositories in the normal way.
 
 ## Project Structure
 
@@ -38,7 +38,7 @@ covia/
 │       ├── main/java/     # GUI source code
 │       └── main/resources/ # GUI resources
 ├── covia-sql/             # Optional loadable SQL adapter module
-│   ├── pom.xml            # Venue SPI provided; shaded module classifier
+│   ├── pom.xml            # Venue SPI provided; convex-db + Calcite shaded
 │   └── src/               # SQL operation adapter and tests
 ├── covia-telegram/        # Optional loadable Telegram bot module
 │   ├── pom.xml            # Venue SPI provided; Telegram client shaded
@@ -319,8 +319,10 @@ groupId. `ai.covia:covia-core`, `ai.covia:covia-python`, `ai.covia:venue`, and
 the standard venue. Their slim jars are published so an embedding host can
 depend on a module through Maven; the shaded `-module.jar`s are GitHub Releases
 artifacts only and are never deployed to Central (the shade plugin writes them
-without attaching them). GitHub Releases remain the canonical operator download, pairing
-each module jar with its checksum. The executable `covia.jar` is an unattached
+without attaching them, and leaves the slim jar's POM intact so the published
+POM carries the module's real dependencies). GitHub Releases remain the
+canonical operator download, pairing each module jar with a `sha256sum -c`
+compatible checksum file. The executable `covia.jar` is an unattached
 assembly and is **not** published to Central.
 
 Publishing uses the [Sonatype Central Publishing plugin](https://central.sonatype.org/publish/publish-portal-maven/)
@@ -373,13 +375,15 @@ mvn clean deploy    # -SNAPSHOT version → routes to the Central snapshot repo
 
 **Publish a release** — only after the GitHub Release for the tag is live:
 ```bash
-mvn clean deploy -Prelease
+mvn clean deploy -P release,gpg
+```
+In PowerShell, quote the combined profile argument:
+```powershell
+mvn clean deploy '-Prelease,gpg'
 ```
 `-Prelease` GPG-signs every artifact; the Central plugin bundles all reactor
-modules (main + sources + javadoc + pom + signatures, including attached
-classifier artifacts) and, with `autoPublish=true`, publishes them to Maven
-Central. `maven.deploy.skip` only controls the standard Maven deploy plugin; it
-does not exclude a reactor module from the Central bundle. Then verify at
+modules (main + sources + javadoc + pom + signatures) and, with
+`autoPublish=true`, publishes them to Maven Central. Then verify at
 `https://central.sonatype.com/artifact/ai.covia/covia-core`.
 
 ### Release Artifacts

@@ -47,6 +47,7 @@ import covia.adapter.agent.Loads;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.venue.Admission;
 import covia.venue.AgentState;
 import covia.venue.AgentEvents;
 import covia.api.Abilities;
@@ -102,7 +103,6 @@ public class AgentAdapter extends AAdapter {
 	private static final AString K_OUTPUTS          = Strings.intern("outputs");
 	private static final AString K_RESPONSE_FORMAT  = Strings.intern("responseFormat");
 	private static final AString K_API_KEY          = Strings.intern("apiKey");
-	private static final AString K_PROVIDER_OPTIONS = Strings.intern("providerOptions");
 	private static final AString K_AGENT_FACET      = Strings.intern("agent");
 	private static final AString K_SESSIONS         = Strings.intern("sessions");
 	private static final AString K_FOUND            = Strings.intern("found");
@@ -116,6 +116,7 @@ public class AgentAdapter extends AAdapter {
 	private static final AString K_FRAMES           = Strings.intern("frames");
 	private static final AString K_TITLE            = Strings.intern("title");
 	private static final AString K_CREATED          = Strings.intern("created");
+	private static final AString K_RUNNING          = Strings.intern("running");
 	private static final int MAX_CONFIG_LAYER_DEPTH = 32;
 	/** Persisted, non-secret requester scope used to reconstruct an output
 	 * handoff after a venue restart. Live requests use the complete immutable
@@ -744,7 +745,7 @@ public class AgentAdapter extends AAdapter {
 		// Config has exactly one home: record.config, written by the principal;
 		// state is written by the runtime (#144). A config map smuggled inside
 		// state would be silently inert — reject loudly. Likewise loads (#142):
-		// they live on the context scope chain (config.loads / session loads),
+		// they live on the context scope chain (config.loads / frame loads),
 		// never in agent-level state.
 		if (RT.getIn(initialState, AgentState.KEY_CONFIG) != null) {
 			job.fail("state.config is not supported — pass agent configuration via the 'config' parameter");
@@ -813,7 +814,56 @@ public class AgentAdapter extends AAdapter {
 		if (keyWarn != null) warnings = warnings.conj(keyWarn);
 		AString promptWarn = systemPromptWarning(config, ctx);
 		if (promptWarn != null) warnings = warnings.conj(promptWarn);
+		AString contextOpWarn = unclassifiedContextOperationsWarning(config, ctx);
+		if (contextOpWarn != null) warnings = warnings.conj(contextOpWarn);
 		return warnings;
+	}
+
+	/**
+	 * Operator-facing compatibility advisory for context operations supplied by
+	 * older or external assets. Runtime accepts an absent classification, but
+	 * authoring diagnostics belong on create/update results rather than in every
+	 * inference context.
+	 */
+	private AString unclassifiedContextOperationsWarning(
+			AMap<AString, ACell> config, RequestContext ctx) {
+		if (config == null) return null;
+		java.util.Set<String> refs = new java.util.LinkedHashSet<>();
+		AVector<ACell> context = RT.ensureVector(config.get(K_CONTEXT));
+		if (context != null) {
+			for (long i = 0; i < context.count(); i++) {
+				collectContextOperation(context.get(i), refs);
+			}
+		}
+		ACell loadsCell = config.get(Fields.LOADS);
+		if (loadsCell instanceof AMap<?, ?> loads) {
+			for (var entry : loads.entrySet()) collectContextOperation(entry.getValue(), refs);
+		}
+		if (refs.isEmpty()) return null;
+
+		java.util.List<String> unclassified = new java.util.ArrayList<>();
+		for (String ref : refs) {
+			try {
+				Asset asset = engine.resolveAsset(Strings.create(ref), ctx);
+				if (asset != null && RT.getIn(asset.meta(), Fields.OPERATION, Fields.READ_ONLY) == null) {
+					unclassified.add(ref);
+				}
+			} catch (RuntimeException e) {
+				// Resolution failures are reported by the normal context machinery;
+				// this advisory is only about metadata we can inspect now.
+			}
+		}
+		if (unclassified.isEmpty()) return null;
+		return Strings.create("config context operation(s) have no operation.readOnly classification: "
+			+ String.join(", ", unclassified)
+			+ ". They will run for compatibility; classify externally supplied operation metadata"
+			+ " as true or false.");
+	}
+
+	private static void collectContextOperation(ACell entry, java.util.Set<String> refs) {
+		if (!(entry instanceof AMap<?, ?> map)) return;
+		AString op = RT.ensureString(map.get(Fields.OP));
+		if (op != null) refs.add(op.toString());
 	}
 
 	/**
@@ -2078,20 +2128,15 @@ public class AgentAdapter extends AAdapter {
 
 		AgentState agent = lookupAgent(job, target);
 		if (agent == null) return;
-		if (isRunning(target.key())) {
-			// A running transition has already captured its config (including caps)
-			// for the duration of its tool loop, so mutating the record mid-run
-			// would not affect it and is refused by design. To revoke authority or
-			// otherwise reconfigure a running agent, HALT it first: agent:suspend
-			// cancels the in-flight transition promptly (no further tool call
-			// runs), the update then applies to the stopped agent, and agent:resume
-			// restarts it under the new config. This is the kill-switch pattern —
-			// the caller halts, then updates.
-			job.fail("Cannot update agent " + agentId + ": currently RUNNING. "
-				+ "Suspend it first (agent:suspend) to halt the run, then update and resume; "
-				+ "or delete it with remove=true before creating a replacement.");
-			return;
-		}
+		// Config changes apply to future transitions: a transition already
+		// running keeps the snapshot it fired with (transitionInput.config) and
+		// the next cycle re-reads the record. State is merged by the run loop as
+		// the transition's change against its fire-time snapshot
+		// (AgentState.applyStateChange), so an update landing mid-transition
+		// survives on every key the transition does not touch. Nothing here
+		// needs the loop to be idle: the result says whether a transition is in
+		// flight, and agent:suspend remains the way to halt one now.
+		boolean running = isRunning(target.key());
 
 		ACell configInput = RT.getIn(input, Fields.CONFIG);
 		AMap<AString, ACell> newConfig = null;
@@ -2129,12 +2174,30 @@ public class AgentAdapter extends AAdapter {
 		}
 
 		agent.updateConfigAndState(newConfig, newState);
-		if (newConfig != null) {
-			ContextAssembler.refreshSkillCatalogs(agent, engine, ctx, newConfig);
-		}
 
+		AMap<AString, ACell> result = Maps.of(
+			Fields.STATUS, agent.getStatus(),
+			K_RUNNING, CVMBool.create(running));
+		AVector<ACell> warnings = Vectors.empty();
+		if (newConfig != null) {
+			AString contextOpWarn = unclassifiedContextOperationsWarning(newConfig, ctx);
+			if (contextOpWarn != null) warnings = warnings.conj(contextOpWarn);
+		}
+		if (running && newConfig != null && newConfig.containsKey(K_CAPS)) {
+			// Honest about authority: the transition in flight keeps the caps it
+			// fired with until it ends.
+			warnings = warnings.conj(Strings.create(
+				"A transition is running under the caps it fired with; the new caps apply"
+				+ " from the next transition. Use agent:suspend to halt it now."));
+		}
+		if (!warnings.isEmpty()) {
+			result = result.assoc(Fields.WARNINGS, warnings);
+			for (long i = 0; i < warnings.count(); i++) {
+				log.info("agent:update {} — {}", agentId, warnings.get(i));
+			}
+		}
 		job.setStatus(Status.STARTED);
-		job.completeWith(identify(target, Maps.of(Fields.STATUS, agent.getStatus())));
+		job.completeWith(identify(target, result));
 	}
 
 	private void handleCancelTask(Job job, ACell input, RequestContext ctx) {
@@ -2351,7 +2414,7 @@ public class AgentAdapter extends AAdapter {
 
 	/** Explicit owner-side provider-prefix rebuild for one idle session. The
 	 * conversation and loads are untouched; only materialised renderedContext
-	 * cells are removed, so the next inference uses current config and sources. */
+	 * cells are removed, so equal config can be refreshed from current sources. */
 	@SuppressWarnings("unchecked")
 	private void handleReloadContext(Job job, ACell input, RequestContext ctx) {
 		AgentTarget target = resolveAgentTarget(ctx, input, Fields.AGENT_ID,
@@ -2716,6 +2779,69 @@ public class AgentAdapter extends AAdapter {
 		return (sid != null) ? receipt.assoc(Fields.SESSION_ID, sid) : receipt;
 	}
 
+	// ========== Durability: tasks and chats outlive the process ==========
+
+	/**
+	 * A request Job is the task itself and a chat Job is answered from the
+	 * session's durable pending envelope: neither holds a thread, and both
+	 * are queued on the agent record. They therefore survive the process —
+	 * left as they are at shutdown, and at boot kept whenever their intake is
+	 * still on the agent (a chat re-registers as a waiter so the next cycle
+	 * answers it). Anything else — a trigger wait holds a thread for one
+	 * cycle — takes the framework default.
+	 */
+	@Override
+	public void suspendJob(Job job) {
+		if (intakeStillQueued(job, false)) return;
+		super.suspendJob(job);
+	}
+
+	@Override
+	public void recoverJob(Job job) {
+		if (intakeStillQueued(job, true)) return;
+		super.recoverJob(job);
+	}
+
+	/**
+	 * True when {@code job} is a queued (PENDING or STARTED) request whose task
+	 * is still in the agent's tasks Index, or a chat whose envelope is still pending
+	 * on its session. With {@code reattach}, a chat is re-registered as a
+	 * waiter on the session so the next cycle completes it.
+	 */
+	private boolean intakeStillQueued(Job job, boolean reattach) {
+		AString status = job.getStatus();
+		if (!Status.PENDING.equals(status) && !Status.STARTED.equals(status)) return false;
+		AMap<AString, ACell> data = job.getData();
+		AString address = RT.ensureString(data.get(Fields.ADDRESS));
+		AString agentId = RT.ensureString(data.get(Fields.AGENT_ID));
+		if (address == null || agentId == null) return false;
+		int split = address.toString().lastIndexOf("/g/");
+		if (split < 0) return false;
+		AString ownerDID = Strings.create(address.toString().substring(0, split));
+		AgentState agent = getAgent(ownerDID, agentId);
+		if (agent == null) return false;
+		Blob jobId = job.getID();
+		Index<Blob, ACell> tasks = agent.getTasks();
+		if (tasks != null && tasks.containsKey(jobId)) return true;
+		Blob sid = parseSessionId(RT.ensureString(data.get(Fields.SESSION_ID)));
+		if (sid == null) return false;
+		AVector<ACell> pending = agent.getSessionPending(sid);
+		if (pending == null) return false;
+		AString jobIdHex = Strings.create(jobId.toHexString());
+		for (long i = 0; i < pending.count(); i++) {
+			if (!jobIdHex.equals(RT.getIn(pending.get(i), Fields.JOB_ID))) continue;
+			if (reattach) {
+				ConcurrentHashMap<Blob, Job> chats = activeChats
+					.computeIfAbsent(new AgentKey(ownerDID, agentId), k -> new ConcurrentHashMap<>())
+					.computeIfAbsent(sid, k -> new ConcurrentHashMap<>());
+				chats.put(jobId, job);
+				job.setCancelHook(() -> chats.remove(jobId, job));
+			}
+			return true;
+		}
+		return false;
+	}
+
 	// ========== Wake and run management ==========
 
 	/**
@@ -2851,6 +2977,8 @@ public class AgentAdapter extends AAdapter {
 	public CompletableFuture<ACell> wakeAgent(AString ownerDID, AString agentId, boolean force) {
 		AgentState agent = getAgent(ownerDID, agentId);
 		if (agent == null) return null;
+		// Shutdown: no new loop. Queued work waits durably for the next boot.
+		if (engine.isClosing()) return null;
 
 		final AgentKey key = new AgentKey(ownerDID, agentId);
 
@@ -3036,6 +3164,10 @@ public class AgentAdapter extends AAdapter {
 						|| AgentState.TERMINATED.equals(curStatus)) {
 					break;
 				}
+
+				// Shutdown: stop here. Tasks and chats stay queued durably; the
+				// next boot restores their Jobs and wakes the agent (recoverJob).
+				if (engine.isClosing()) break;
 
 				// On subsequent iterations, exit cleanly if no work remains.
 				// The finally block performs a post-exit re-check that closes
@@ -3236,6 +3368,14 @@ public class AgentAdapter extends AAdapter {
 					activeCancellations.remove(key, cancelToken);
 				}
 
+				// Engine shutdown is a process boundary, not a transition result.
+				// JobManager may settle/cancel the internal transition while close()
+				// is in progress; never merge that administrative interruption as an
+				// agent error. Leave the durable intake and any live frame checkpoint
+				// for startup reconciliation, exactly as if the process had stopped
+				// before the transition returned.
+				if (engine.isClosing()) break;
+
 				// A cancelled transition is an administrative stop (agent:suspend
 				// or agent:delete cancelled it), not an agent failure — it must
 				// NOT flow into the merge + fail-fast path, which would stamp
@@ -3272,7 +3412,7 @@ public class AgentAdapter extends AAdapter {
 				}
 
 				IterResult merged = mergeAndPostProcess(
-					agent, agentId, ownerDID, transitionOp, framesOwned, transitionResult, pickedTask,
+					agent, agentId, ownerDID, transitionOp, framesOwned, transitionResult, currentState, pickedTask,
 					pickedTaskInput, formattedTasks, pickedSession,
 					pickedSessionBlob, filteredInbox, resolvedPending,
 					presentedSessionPendingCount, startTs, allTaskResults, llmTimedOut, cycle);
@@ -3338,7 +3478,7 @@ public class AgentAdapter extends AAdapter {
 	private IterResult mergeAndPostProcess(
 			AgentState agent, AString agentId, AString callerDID,
 			AString transitionOp, boolean framesOwned,
-			ACell transitionResult, Map.Entry<Blob, ACell> pickedTask,
+			ACell transitionResult, ACell snapshotState, Map.Entry<Blob, ACell> pickedTask,
 			ACell pickedTaskInput, AVector<ACell> formattedTasks,
 			AString pickedSession, Blob pickedSessionBlob,
 			AVector<ACell> filteredInbox, ACell pending, long presentedSessionPendingCount,
@@ -3349,7 +3489,8 @@ public class AgentAdapter extends AAdapter {
 		ACell newState = RT.getIn(transitionResult, AgentState.KEY_STATE);
 		ACell leanResponse = RT.getIn(transitionResult, Fields.RESPONSE);
 		ACell leanError = RT.getIn(transitionResult, Fields.ERROR);
-		if (llmTimedOut && newState == null) newState = agent.getState();
+		// A null state result is "no change" (AgentState.applyStateChange), so a
+		// timed-out transition simply leaves the record's state alone.
 		// A transition may still return frames for direct-call compatibility.
 		// Live session ownership is declared by the adapter's FramesOwning marker,
 		// not inferred from this optional output.
@@ -3502,14 +3643,8 @@ public class AgentAdapter extends AAdapter {
 			}
 		}
 
-		// Session-tier loads (#142): the transition's final working set for the
-		// picked session (tombstones included), written in the same CAS below.
-		AMap<AString, ACell> sessionLoads =
-			(RT.getIn(transitionResult, Fields.LOADS) instanceof AMap<?, ?> lm)
-				? (AMap<AString, ACell>) lm : null;
-
 		// Merge results atomically (timeline, state, task cleanup, history,
-		// session pending drain, session loads). History append lands in the
+		// session pending drain). History append lands in the
 		// same CAS as the timeline, so external readers never see a cycle
 		// that wrote one but not the other.
 		//
@@ -3521,11 +3656,11 @@ public class AgentAdapter extends AAdapter {
 		// live-write in testing). The merge still clears the session's
 		// inCycle claim, appends the timeline entry and removes completed tasks.
 		AMap<AString, ACell> merged = agent.mergeRunResult(
-			newState, taskResults,
+			snapshotState, newState, taskResults,
 			timelineEntry, pickedSessionBlob, turnsToAppend,
 			framesOwned ? 0 : presentedSessionPendingCount,
 			framesOwned ? null : adapterFrames,
-			sessionLoads, cycleTokens);
+			cycleTokens);
 
 		// The live tap's commit event (#394): the entry and turns are
 		// persisted; callers are released below, so a consumer awaiting the
@@ -4115,7 +4250,8 @@ public class AgentAdapter extends AAdapter {
 				if (isRunning(key)) continue;
 				// No executor survives venue startup. Clear the durable dirty
 				// marker before deciding whether remaining queued work merits a
-				// fresh attempt; recoverJobs has already failed interrupted Jobs.
+				// fresh attempt; recoverJobs has settled interrupted Jobs and kept
+				// queued request/chat Jobs for this wake to complete.
 				if (AgentState.RUNNING.equals(agent.getStatus())) {
 					agent.sleep();
 					staleRuns++;
@@ -4421,10 +4557,16 @@ public class AgentAdapter extends AAdapter {
 		requireConfigType(config, K_API_KEY, AString.class, "a string secret reference");
 		requireConfigType(config, K_DEFAULT_TOOLS, CVMBool.class, "a boolean");
 		requireConfigType(config, K_CAPS, AVector.class, "an array of capability objects");
+		// Admission is security configuration: a policy that would fail closed at
+		// runtime must fail loudly here instead (#447).
+		String acceptsProblem = Admission.problem(config.get(Fields.ACCEPTS));
+		if (acceptsProblem != null) {
+			throw new IllegalArgumentException("config.accepts " + acceptsProblem);
+		}
 		requireConfigType(config, K_CONTEXT, AVector.class, "an array of context entries");
 		requireConfigType(config, Fields.LOADS, AMap.class, "a map of path to load options");
 		requireConfigType(config, K_OUTPUTS, AMap.class, "a map of output declarations");
-		requireConfigType(config, K_PROVIDER_OPTIONS, AMap.class, "a map");
+		requireConfigType(config, AbstractLLMAdapter.K_PROVIDER_OPTIONS, AMap.class, "a map");
 
 		ACell responseFormat = config.get(K_RESPONSE_FORMAT);
 		if (responseFormat != null && !(responseFormat instanceof AString)

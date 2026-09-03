@@ -3,6 +3,7 @@
 	"description": "Stops and removes one of the bots you created with telegram:create — its venue-private adapter record and per-chat conversation sessions are deleted; the Telegram-side bot and its token are untouched. Bots declared in the venue config cannot be deleted here (change the config or use v/ops/venue/adapter/configure). Requires telegram/manage on <you>/telegram/<name>.",
 	"operation": {
 		"adapter": "telegram:delete",
+		"readOnly": false,
 		"input": {
 			"type": "object",
 			"properties": {

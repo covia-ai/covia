@@ -8,6 +8,8 @@ import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -70,6 +72,12 @@ public class MCP extends McpServer {
 	 * must still be made by the same caller that initialized the session.
 	 */
 	private final ConcurrentHashMap<String, AString> sessionOwners = new ConcurrentHashMap<>();
+
+	/** Set once {@link #close()} begins: new streams are refused and open ones end. */
+	private volatile boolean closing;
+
+	/** SSE stream handlers currently blocked in {@link #handleMcpGet}. */
+	private final AtomicInteger activeStreams = new AtomicInteger();
 
 	/**
 	 * Default allowlist of adapter-name groups exposed via MCP. Operations
@@ -564,6 +572,33 @@ public class MCP extends McpServer {
 	// ==================== SSE sessions ====================
 
 	/**
+	 * Ends every open SSE stream and refuses new ones. The venue calls this
+	 * first in shutdown so the blocking GET handlers unwind — running their
+	 * route after-hooks against a live engine — before the HTTP server, engine
+	 * and store are released. Waits briefly for the handlers to unwind.
+	 */
+	public void close() {
+		closing = true;
+		for (McpSession session : sessions.values()) session.close();
+		long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+		while (activeStreams.get() > 0 && System.nanoTime() < deadline) {
+			try {
+				Thread.sleep(5);
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				break;
+			}
+		}
+		int stragglers = activeStreams.get();
+		if (stragglers > 0) log.warn("{} MCP stream(s) still open after close", stragglers);
+	}
+
+	/** SSE stream handlers currently blocked in {@link #handleMcpGet}. */
+	int activeStreams() {
+		return activeStreams.get();
+	}
+
+	/**
 	 * GET /mcp — Open SSE stream for server-to-client messages.
 	 */
 	private void handleMcpGet(Context ctx) {
@@ -579,6 +614,10 @@ public class MCP extends McpServer {
 			ctx.status(400);
 			return;
 		}
+		if (closing) {
+			ctx.status(503);
+			return;
+		}
 
 		try {
 			HttpServletResponse res = ctx.res();
@@ -591,12 +630,17 @@ public class MCP extends McpServer {
 			PrintWriter writer = res.getWriter();
 			SseConnection conn = new SseConnection(writer);
 			session.sseConnections.add(conn);
+			activeStreams.incrementAndGet();
 			try {
-				while (!conn.isClosed()) {
+				// The request thread is held for the life of the stream. Waiting on
+				// the connection rather than sleeping means close() ends the stream
+				// at once, so this handler — and the route's after-hook — finishes
+				// before the venue releases the engine and store.
+				while (!closing && !conn.isClosed()) {
 					writer.write(": keepalive\n\n");
 					writer.flush();
 					if (writer.checkError()) break;
-					Thread.sleep(SSE_KEEPALIVE_MS);
+					if (conn.awaitClosed(SSE_KEEPALIVE_MS, TimeUnit.MILLISECONDS)) break;
 				}
 			} catch (InterruptedException e) {
 				Thread.currentThread().interrupt();
@@ -606,6 +650,7 @@ public class MCP extends McpServer {
 				if (session.sseConnections.isEmpty()) {
 					session.clearWatches();
 				}
+				activeStreams.decrementAndGet();
 			}
 		} catch (IOException e) {
 			log.debug("SSE connection setup failed", e);

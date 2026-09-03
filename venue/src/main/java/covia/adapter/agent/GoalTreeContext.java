@@ -52,9 +52,13 @@ public class GoalTreeContext {
 	/** Frame-scoped loads (map of path → load metadata) */
 	static final AString K_LOADS = Strings.intern("loads");
 
-	/** Exact initial provider-facing vectors for this frame. Their presence is
-	 * the cache invariant: ordinary source mutation cannot rewrite the prefix. */
+	/** Optional initial provider-facing cache projection for this frame.
+	 * Semantic session state never depends on its presence. */
 	static final AString K_RENDERED_CONTEXT = Strings.intern("renderedContext");
+
+	/** Latest canonical value and exact appended messages for each watched
+	 * context declaration. This is durable frame state, not a runtime cache. */
+	static final AString K_OBSERVATIONS = Strings.intern("observations");
 
 	/** Frame lifecycle status: absent while live; {@link #STATUS_COMPLETE} /
 	 *  {@link #STATUS_FAILED} written in the same CAS as the terminal turn,
@@ -252,11 +256,7 @@ public class GoalTreeContext {
 	 * Creates a new frame with description and initial loads (inherited from parent).
 	 */
 	public static AMap<AString, ACell> createFrame(String description, AMap<AString, ACell> loads) {
-		AMap<AString, ACell> frame = createFrame(description);
-		if (loads != null && loads.count() > 0) {
-			frame = frame.assoc(K_LOADS, loads);
-		}
-		return frame;
+		return withLoads(createFrame(description), loads);
 	}
 
 	// ========== Root goal description generators ==========
@@ -491,9 +491,18 @@ public class GoalTreeContext {
 			}
 		}
 		AVector<ACell> newConversation = Vectors.of((ACell) segment);
-		// Compaction is an explicit prefix rewrite boundary. The next inference
-		// materialises a new initial representation around the compacted history.
-		return frame.assoc(K_CONVERSATION, newConversation).dissoc(K_RENDERED_CONTEXT);
+		// Compaction starts a fresh provider-visible context around the summary.
+		// Keep the active load declarations, but invalidate their materialised
+		// bodies, contributions and tool schemas; watched values likewise get a
+		// fresh baseline. The next inference resolves all of that outside the
+		// atomic state update and installs the replacement prefix in one shot.
+		AMap<AString, ACell> compacted = frame
+			.assoc(K_CONVERSATION, newConversation)
+			.dissoc(K_RENDERED_CONTEXT)
+			.dissoc(K_OBSERVATIONS);
+		AMap<AString, ACell> loads = getLoads(compacted);
+		AMap<AString, ACell> reloads = Loads.invalidateAgentMaterialisation(loads);
+		return (reloads == loads) ? compacted : withLoads(compacted, reloads);
 	}
 
 	/** Persists the exact initial vectors on a frame. */
@@ -517,6 +526,109 @@ public class GoalTreeContext {
 		AVector<ACell> conversation = (AVector<ACell>) frame.get(K_CONVERSATION);
 		if (conversation == null) conversation = Vectors.empty();
 		return frame.assoc(K_CONVERSATION, conversation.conj(turn));
+	}
+
+	// ========== Watched context observations ==========
+
+	/**
+	 * Atomically-applicable pure frame transform for watched context. Candidate
+	 * values were materialised before this call. Equal canonical values retain
+	 * the exact prior messages and append nothing; changes append the new
+	 * provider messages and removals append one venue-authored state event.
+	 */
+	@SuppressWarnings("unchecked")
+	static AMap<AString, ACell> applyObservations(AMap<AString, ACell> frame,
+			AVector<ACell> candidates, long timestamp) {
+		if (frame == null) return null;
+		AMap<AString, ACell> previous = (frame.get(K_OBSERVATIONS) instanceof AMap<?, ?> raw)
+			? (AMap<AString, ACell>) raw : Maps.empty();
+		AMap<AString, ACell> next = previous;
+		AVector<ACell> conversation = (frame.get(K_CONVERSATION) instanceof AVector<?> raw)
+			? (AVector<ACell>) raw : Vectors.empty();
+		java.util.Set<AString> active = new java.util.HashSet<>();
+
+		for (long i = 0; candidates != null && i < candidates.count(); i++) {
+			AMap<AString, ACell> candidate = RT.ensureMap(candidates.get(i));
+			if (candidate == null) continue;
+			AString id = RT.ensureString(candidate.get(ContextAssembler.K_OBSERVATION_ID));
+			AVector<ACell> value = RT.ensureVector(
+				candidate.get(ContextAssembler.K_OBSERVATION_VALUE));
+			if (id == null || value == null || !active.add(id)) continue;
+			ACell order = candidate.get(ContextAssembler.K_OBSERVATION_ORDER);
+			AMap<AString, ACell> old = RT.ensureMap(previous.get(id));
+			if (old != null && value.equals(old.get(ContextAssembler.K_OBSERVATION_VALUE))) {
+				AMap<AString, ACell> retained = old;
+				if (order != null && !order.equals(old.get(ContextAssembler.K_OBSERVATION_ORDER))) {
+					retained = retained.assoc(ContextAssembler.K_OBSERVATION_ORDER, order);
+				}
+				if (retained != old) next = next.assoc(id, retained);
+				continue;
+			}
+
+			AVector<ACell> messages = stampObservationMessages(value, timestamp);
+			conversation = (AVector<ACell>) conversation.concat(messages);
+			AMap<AString, ACell> observation = Maps.of(
+				ContextAssembler.K_OBSERVATION_VALUE, value,
+				ContextAssembler.K_OBSERVATION_MESSAGES, messages,
+				ContextAssembler.K_OBSERVATION_ORDER,
+				(order != null) ? order : CVMLong.create(i));
+			next = next.assoc(id, observation);
+		}
+
+		java.util.List<java.util.Map.Entry<AString, ACell>> removed = new java.util.ArrayList<>();
+		for (var entry : previous.entrySet()) {
+			if (!active.contains(entry.getKey())) removed.add(entry);
+		}
+		removed.sort(java.util.Comparator
+			.comparingLong((java.util.Map.Entry<AString, ACell> e) -> observationOrder(e.getValue()))
+			.thenComparing(e -> e.getKey().toString()));
+		for (var entry : removed) {
+			AVector<ACell> event = stampObservationMessages(Vectors.of(
+				ContextAssembler.observationRemoved(entry.getKey())), timestamp);
+			conversation = (AVector<ACell>) conversation.concat(event);
+			next = next.dissoc(entry.getKey());
+		}
+
+		AMap<AString, ACell> updated = frame;
+		AVector<ACell> oldConversation = RT.ensureVector(frame.get(K_CONVERSATION));
+		if (oldConversation == null || !conversation.equals(oldConversation)) {
+			updated = updated.assoc(K_CONVERSATION, conversation);
+		}
+		if (next.isEmpty()) {
+			if (updated.get(K_OBSERVATIONS) != null) updated = updated.dissoc(K_OBSERVATIONS);
+		} else if (!next.equals(previous)) {
+			updated = updated.assoc(K_OBSERVATIONS, next);
+		}
+		return updated;
+	}
+
+	private static long observationOrder(ACell value) {
+		ACell order = RT.getIn(value, ContextAssembler.K_OBSERVATION_ORDER);
+		return (order instanceof CVMLong n) ? n.longValue() : Long.MAX_VALUE;
+	}
+
+	/** Adds audit metadata after canonical comparison; it never participates in
+	 * change detection and therefore cannot create clock-driven observations. */
+	@SuppressWarnings("unchecked")
+	private static AVector<ACell> stampObservationMessages(
+			AVector<ACell> messages, long timestamp) {
+		AVector<ACell> stamped = Vectors.empty();
+		for (long i = 0; messages != null && i < messages.count(); i++) {
+			ACell value = messages.get(i);
+			if (!(value instanceof AMap<?, ?> raw)) {
+				stamped = stamped.conj(value);
+				continue;
+			}
+			AMap<AString, ACell> message = (AMap<AString, ACell>) raw;
+			AString role = RT.ensureString(message.get(K_ROLE));
+			AString source = ROLE_TOOL.equals(role)
+				? covia.venue.AgentState.SOURCE_TOOL
+				: covia.venue.AgentState.SOURCE_TRANSITION;
+			stamped = stamped.conj(message
+				.assoc(covia.venue.AgentState.K_TURN_TS, CVMLong.create(timestamp))
+				.assoc(covia.venue.AgentState.K_SOURCE, source));
+		}
+		return stamped;
 	}
 
 	/**
@@ -544,6 +656,32 @@ public class GoalTreeContext {
 		return (loads instanceof AMap) ? (AMap<AString, ACell>) loads : Maps.empty();
 	}
 
+	/** Returns the root frame's loads, or empty for an absent/malformed root. */
+	@SuppressWarnings("unchecked")
+	public static AMap<AString, ACell> rootLoads(AVector<ACell> frames) {
+		if (frames == null || frames.isEmpty() || !(frames.get(0) instanceof AMap root)) {
+			return Maps.empty();
+		}
+		return getLoads((AMap<AString, ACell>) root);
+	}
+
+	/** Replaces the root frame's loads, preserving every other frame field. */
+	@SuppressWarnings("unchecked")
+	public static AVector<ACell> withRootLoads(AVector<ACell> frames,
+			AMap<AString, ACell> loads) {
+		if (frames == null || frames.isEmpty() || !(frames.get(0) instanceof AMap root)) {
+			return frames;
+		}
+		return frames.assoc(0, withLoads((AMap<AString, ACell>) root, loads));
+	}
+
+	/** Replaces a frame's loads, omitting the optional field when empty. */
+	public static AMap<AString, ACell> withLoads(AMap<AString, ACell> frame,
+			AMap<AString, ACell> loads) {
+		return (loads == null || loads.isEmpty())
+			? frame.dissoc(K_LOADS) : frame.assoc(K_LOADS, loads);
+	}
+
 	/**
 	 * Adds or replaces a load entry in a frame's loads map.
 	 *
@@ -555,7 +693,7 @@ public class GoalTreeContext {
 	public static AMap<AString, ACell> addLoad(AMap<AString, ACell> frame,
 			AString path, AMap<AString, ACell> meta) {
 		AMap<AString, ACell> loads = getLoads(frame);
-		return frame.assoc(K_LOADS, loads.assoc(path, meta));
+		return withLoads(frame, loads.assoc(path, meta));
 	}
 
 	/**
@@ -568,10 +706,7 @@ public class GoalTreeContext {
 	public static AMap<AString, ACell> removeLoad(AMap<AString, ACell> frame, AString path) {
 		AMap<AString, ACell> loads = getLoads(frame);
 		AMap<AString, ACell> updated = loads.dissoc(path);
-		if (updated.count() == 0) {
-			return frame.dissoc(K_LOADS);
-		}
-		return frame.assoc(K_LOADS, updated);
+		return withLoads(frame, updated);
 	}
 
 	// ========== Internal helpers ==========

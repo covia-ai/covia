@@ -12,6 +12,7 @@
   },
   "operation": {
     "adapter": "file:move",
+    "readOnly": false,
     "toolName": "file_move",
     "input": {
       "type": "object",

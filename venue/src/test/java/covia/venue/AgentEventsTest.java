@@ -167,7 +167,10 @@ public class AgentEventsTest {
 		String id = "tooler";
 		createAgent(id, Maps.of(
 			Fields.OPERATION, "v/ops/llmagent/chat",
-			"llmOperation", "v/test/ops/toolllm"));
+			"llmOperation", "v/test/ops/toolllm",
+			Fields.TOOLS, Vectors.of(Maps.of(
+				Fields.OPERATION, "v/test/ops/echo",
+				Fields.NAME, "v/test/ops/echo"))));
 		Capture c = new Capture();
 		Job chat;
 		try (AgentEvents.Subscription s = engine.agentEvents().subscribe(did, Strings.create(id), c)) {
@@ -232,6 +235,8 @@ public class AgentEventsTest {
 		Event toolStart = c.first(AgentEvents.TOOL_START);
 		assertEquals(Strings.create("call_1"), str(toolStart, Fields.ID));
 		assertEquals(Strings.create("v/test/ops/echo"), str(toolStart, Fields.NAME));
+		assertEquals(Strings.create("Echo Operation"), str(toolStart, Fields.ACTIVITY_LABEL),
+			"the operation asset name is the default activity label");
 		assertEquals(Strings.create("hello events"),
 			RT.getIn(toolStart.data(), Fields.DETAIL, Fields.INPUT, "echo"),
 			"the decoded input rides under detail");
@@ -246,6 +251,7 @@ public class AgentEventsTest {
 		Event safe = toolStart.withoutDetail();
 		assertNull(safe.data().get(Fields.DETAIL));
 		assertEquals(str(toolStart, Fields.NAME), str(safe, Fields.NAME));
+		assertEquals(str(toolStart, Fields.ACTIVITY_LABEL), str(safe, Fields.ACTIVITY_LABEL));
 		assertEquals(toolStart.seq(), safe.seq());
 		assertTrue(cycleStart.withoutDetail() == cycleStart, "no detail: same event");
 

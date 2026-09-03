@@ -58,7 +58,10 @@ public class JobManager {
 	private final Engine engine;
 
 	/** Admission gate closed before engine shutdown begins. */
-	private final AtomicBoolean accepting = new AtomicBoolean(true);
+	/** Public top-level admission: closed first at shutdown. */
+	private final AtomicBoolean acceptingTopLevel = new AtomicBoolean(true);
+	/** Internal composition (sub-jobs of in-flight work): stays open through the grace window. */
+	private final AtomicBoolean acceptingInternal = new AtomicBoolean(true);
 
 	/** In-memory cache of active (non-terminal) jobs */
 	private final ConcurrentHashMap<Blob, Job> activeJobs = new ConcurrentHashMap<>();
@@ -300,7 +303,7 @@ public class JobManager {
 	private Prepared prepareOperation(AMap<AString, ACell> meta, ACell input,
 			RequestContext ctx, boolean memoryOnly, boolean applyAdmission,
 			boolean resultOriented) {
-		requireAccepting();
+		requireAccepting(applyAdmission);
 		// Fill in the operation's declared argument defaults BEFORE gate
 		// arming and job creation, so gates, job records and the adapter all
 		// see the one effective input.
@@ -377,13 +380,33 @@ public class JobManager {
 	 * <p>A declared {@code operation.readOnly:true} runs with a transient Job by
 	 * default. Mutating or unclassified operations are recorded. An explicit
 	 * {@code operation.internal:false}, or the venue's
-	 * {@code recordReadOnlyOperations} policy, forces recording.</p>
+	 * {@code recordReadOnlyOperations} policy, forces recording. A caller that
+	 * explicitly requests a private run gets a transient wrapper regardless of
+	 * operation metadata, provided the venue has opted in with
+	 * {@code enablePrivateJobs:true}.</p>
 	 */
 	public CompletableFuture<ACell> runOperation(String ref, ACell input, RequestContext ctx) {
-		return runOperation(Strings.create(ref), input, ctx);
+		return runOperation(Strings.create(ref), input, ctx, false);
+	}
+
+	/**
+	 * Runs an operation to completion and returns only its result, optionally
+	 * forcing the Job wrapper to remain transient. A private run has no durable
+	 * Job handle to recover or poll; callers must keep awaiting this future.
+	 *
+	 * @param privateJob true to leave no Job record, subject to venue opt-in
+	 */
+	public CompletableFuture<ACell> runOperation(String ref, ACell input,
+			RequestContext ctx, boolean privateJob) {
+		return runOperation(Strings.create(ref), input, ctx, privateJob);
 	}
 
 	public CompletableFuture<ACell> runOperation(AString ref, ACell input, RequestContext ctx) {
+		return runOperation(ref, input, ctx, false);
+	}
+
+	public CompletableFuture<ACell> runOperation(AString ref, ACell input,
+			RequestContext ctx, boolean privateJob) {
 		if (ref == null) return CompletableFuture.failedFuture(
 			new IllegalArgumentException("Operation must be specified"));
 		try {
@@ -393,7 +416,7 @@ public class JobManager {
 			Operation op = Operation.from(asset);
 			if (op == null) return CompletableFuture.failedFuture(
 				new IllegalArgumentException("Asset is not an operation: " + asset.getID()));
-			return runOperation(op.meta(), input, ctx.withOp(ref));
+			return runOperation(op.meta(), input, ctx.withOp(ref), privateJob);
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
 		}
@@ -401,10 +424,19 @@ public class JobManager {
 
 	public CompletableFuture<ACell> runOperation(AMap<AString, ACell> meta,
 			ACell input, RequestContext ctx) {
+		return runOperation(meta, input, ctx, false);
+	}
+
+	public CompletableFuture<ACell> runOperation(AMap<AString, ACell> meta,
+			ACell input, RequestContext ctx, boolean privateJob) {
 		try {
-			boolean memoryOnly = isReadOnly(meta)
+			if (privateJob && !engine.config().isPrivateJobsEnabled()) {
+				return CompletableFuture.failedFuture(new IllegalStateException(
+					"Private runs are disabled on this venue (enablePrivateJobs=false)"));
+			}
+			boolean memoryOnly = privateJob || (isReadOnly(meta)
 				&& allowsInternal(meta)
-				&& !engine.config().isRecordReadOnlyOperations();
+				&& !engine.config().isRecordReadOnlyOperations());
 			Job job = dispatchOperation(meta, input, ctx, memoryOnly, true, true);
 			return operationResultFuture(job, meta, input);
 		} catch (Exception e) {
@@ -1081,32 +1113,24 @@ public class JobManager {
 	// ========== Job Recovery ==========
 
 	/**
-	 * Stabilises jobs from the lattice after a restart. Execution attempts do
-	 * not survive the venue process; durable waiting Jobs do.
-	 *
-	 * <ul>
-	 *   <li>PENDING — failed: execution never began; the caller retries.</li>
-	 *   <li>STARTED — failed with a message saying effects may
-	 *       or may not have applied. Re-execution would double side effects
-	 *       (e.g. {@code convex:transact}, {@code http:post}); the caller
-	 *       verifies and retries.</li>
-	 *   <li>PAUSED / INPUT_REQUIRED / AUTH_REQUIRED — restored (unchanged).</li>
-	 * </ul>
-	 *
-	 * <p>Adapters reconcile their own durable intake after this generic Job
-	 * pass; JobManager has no knowledge of adapter-specific queue structures.</p>
+	 * Recovers durable Jobs from the lattice after a restart. The decision is
+	 * the owning adapter's ({@link AAdapter#recoverJob}): the framework
+	 * rebuilds each non-terminal Job from its record, registers it, and calls
+	 * the hook — whatever state the Job is in afterwards is the durable truth.
+	 * Jobs still non-terminal are restored live and re-occupy their caller's
+	 * concurrency permit. A Job whose adapter is absent (module not loaded,
+	 * boot-disabled) gets the default: PENDING and STARTED fail as interrupted
+	 * and are never re-executed; the paused family is restored.
 	 */
 	@SuppressWarnings("unchecked")
 	public void recoverJobs() {
 		AMap<AString, ACell> userData = engine.getVenueState().users().getAll();
 		if (userData == null || userData.isEmpty()) return;
-
 		int stabilised = 0, kept = 0;
 		for (var entry : userData.entrySet()) {
 			AString did = (AString) entry.getKey();
 			User user = engine.getVenueState().users().get(did);
 			if (user == null) continue;
-
 			Index<Blob, ACell> userJobs = user.getJobs();
 			long n = userJobs.count();
 			for (long i = 0; i < n; i++) {
@@ -1115,59 +1139,51 @@ public class JobManager {
 				ACell value = jobEntry.getValue();
 				if (!(value instanceof AMap)) continue;
 				AMap<AString, ACell> record = (AMap<AString, ACell>) value;
-
-				// Skip jobs already in memory
-				if (activeJobs.containsKey(jobID)) continue;
-
-				// Skip terminal jobs
+				if (activeJobs.containsKey(jobID)) continue; // already live
 				if (Job.isFinished(record)) continue;
-
-				AString status = RT.ensureString(record.get(Fields.STATUS));
-				if (Status.PENDING.equals(status) || Status.STARTED.equals(status)) {
-					stabiliseJob(jobID, record, status, did);
+				VenueJob job = restoreJob(jobID, record, did);
+				AAdapter adapter = adapterFor(job);
+				try {
+					if (adapter != null) adapter.recoverJob(job);
+					else AAdapter.defaultRecover(job);
+				} catch (RuntimeException e) {
+					log.warn("Adapter {} failed recovering job {}: {}",
+						(adapter != null) ? adapter.getName() : "<none>", jobID, e.toString());
+					if (!job.isFinished()) AAdapter.defaultRecover(job);
+				}
+				if (job.isFinished()) {
 					stabilised++;
 				} else {
-					restoreJob(jobID, record, did);
+					reserveRecoveredPermit(jobID, did);
 					kept++;
 				}
 			}
 		}
-
 		if (stabilised > 0 || kept > 0) {
-			log.info("Job recovery: {} failed as interrupted, {} restored live", stabilised, kept);
+			log.info("Job recovery: {} stabilised, {} restored live", stabilised, kept);
 		}
 	}
 
 	/**
-	 * Fails one PENDING/STARTED Job found at boot.
+	 * Rebuilds a non-terminal Job from its record and registers it as active
+	 * before any verb runs on it: persistence resolves the Job through the
+	 * active cache.
 	 */
-	private void stabiliseJob(Blob jobID, AMap<AString, ACell> record, AString status, AString callerDID) {
-		if (Status.PENDING.equals(status)) {
-			markJobFailed(jobID, record,
-				"Venue restarted before execution began — retry if desired", callerDID);
-			return;
-		}
-
-		markJobFailed(jobID, record,
-			"Venue restarted during execution — effects may or may not have applied;"
-			+ " verify state before retrying", callerDID);
-	}
-
-	/**
-	 * Restores a paused/waiting job into the in-memory cache.
-	 */
-	private void restoreJob(Blob jobID, AMap<AString, ACell> record, AString callerDID) {
+	private VenueJob restoreJob(Blob jobID, AMap<AString, ACell> record, AString callerDID) {
 		AString opRef = RT.ensureString(record.get(Fields.OP));
 		Operation op = null;
 		if (opRef != null) {
 			Asset asset = engine.resolveAsset(opRef);
 			op = (asset != null) ? Operation.from(asset) : null;
 		}
-
 		AMap<AString, ACell> meta = (op != null) ? op.meta() : null;
 		VenueJob job = new VenueJob(record, meta, callerDID, this);
-
 		activeJobs.put(jobID, job);
+		return job;
+	}
+
+	/** A restored non-terminal Job re-occupies its caller's concurrency permit. */
+	private void reserveRecoveredPermit(Blob jobID, AString callerDID) {
 		if (jobCapEnabled && callerDID != null) {
 			JobSemaphore sem = jobPermits.computeIfAbsent(callerDID,
 				k -> new JobSemaphore(maxConcurrentJobs));
@@ -1176,13 +1192,11 @@ public class JobManager {
 		}
 	}
 
-	private void markJobFailed(Blob jobID, AMap<AString, ACell> record, String reason, AString callerDID) {
-		AMap<AString, ACell> failedRecord = record
-				.assoc(Fields.STATUS, Status.FAILED)
-				.assoc(Fields.ERROR, Strings.create(reason))
-				.assoc(Fields.UPDATED, CVMLong.create(Utils.getCurrentTimestamp()));
-		persistJobRecord(jobID, failedRecord, callerDID);
-		log.warn("Job {} failed on recovery: {}", jobID, reason);
+	/** The live adapter owning a Job's operation, or null when absent or disabled. */
+	private AAdapter adapterFor(VenueJob job) {
+		AMap<AString, ACell> meta = job.meta();
+		String name = (meta != null) ? AAdapter.getAdapterName(meta) : null;
+		return (name != null) ? engine.getAdapter(name) : null;
 	}
 
 	// ========== Persistence ==========
@@ -1210,6 +1224,9 @@ public class JobManager {
 	void evictActive(Blob jobID) {
 		activeJobs.remove(jobID);
 		releaseJobPermit(jobID);
+		synchronized (drain) {
+			drain.notifyAll();
+		}
 	}
 
 	// ========== Adapter Resolution ==========
@@ -1296,13 +1313,87 @@ public class JobManager {
 		return engine.getDIDString();
 	}
 
-	/** Stops all new top-level and internal dispatch before persistence shutdown. */
+	/**
+	 * Closes public top-level admission. Internal composition stays open so
+	 * in-flight work can still run the sub-operations it needs to finish.
+	 */
 	void beginShutdown() {
-		accepting.set(false);
+		acceptingTopLevel.set(false);
 	}
 
-	private void requireAccepting() {
-		if (!accepting.get()) {
+	/** Closes all admission, top-level and internal, before persistence shutdown. */
+	void closeAdmission() {
+		acceptingTopLevel.set(false);
+		acceptingInternal.set(false);
+	}
+
+	/**
+	 * Shutdown sequence for Jobs: close top-level admission, let in-flight
+	 * work finish for up to {@code graceMs} — returning as soon as nothing is
+	 * in flight — then ask each remaining Job's adapter to suspend it
+	 * ({@link AAdapter#suspendJob}): in-process work is bounded and is
+	 * cancelled, a durable wait is recorded and its thread let go. Finally
+	 * admission closes completely and every waiter still parked on a
+	 * surviving Job's in-memory future is released without touching the
+	 * record, so no thread outlives the venue on a Job's account.
+	 *
+	 * @param graceMs upper bound on the wait for in-flight work; 0 suspends at once
+	 */
+	void shutdown(long graceMs) {
+		beginShutdown();
+		awaitDrain(graceMs);
+		for (Job job : activeJobs.values()) {
+			if (job.isFinished()) continue;
+			AAdapter adapter = (job instanceof VenueJob vj) ? adapterFor(vj) : null;
+			try {
+				if (adapter != null) adapter.suspendJob(job);
+				else AAdapter.defaultSuspend(job);
+			} catch (RuntimeException e) {
+				log.warn("Adapter {} failed suspending job {}: {}",
+					(adapter != null) ? adapter.getName() : "<none>", job.getID(), e.toString());
+			}
+		}
+		closeAdmission();
+		for (Job job : activeJobs.values()) {
+			if (!job.isFinished()) job.pollingFailed(new IllegalStateException(AAdapter.VENUE_SHUT_DOWN));
+		}
+	}
+
+	/** Signalled whenever a Job leaves the active set, so a shutdown drain wakes at once. */
+	private final Object drain = new Object();
+
+	/** Cap on one drain wait: catches status-only changes (a Job parking itself) that do not evict. */
+	private static final long DRAIN_POLL_NANOS = TimeUnit.MILLISECONDS.toNanos(20);
+
+	/** True while some active Job is PENDING or STARTED — a thread may be working. */
+	private boolean inFlight() {
+		for (Job job : activeJobs.values()) {
+			AString s = job.getStatus();
+			if (Status.PENDING.equals(s) || Status.STARTED.equals(s)) return true;
+		}
+		return false;
+	}
+
+	/** Waits until nothing is in flight or {@code graceMs} has elapsed, whichever is first. */
+	private void awaitDrain(long graceMs) {
+		long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(graceMs);
+		synchronized (drain) {
+			while (inFlight()) {
+				long remaining = deadline - System.nanoTime();
+				if (remaining <= 0) return;
+				try {
+					TimeUnit.NANOSECONDS.timedWait(drain, Math.min(remaining, DRAIN_POLL_NANOS));
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+					return;
+				}
+			}
+		}
+	}
+
+	private void requireAccepting(boolean topLevel) {
+		AtomicBoolean gate = topLevel ? acceptingTopLevel : acceptingInternal;
+		if (!gate.get()) {
 			throw new IllegalStateException("Venue is shutting down; new operations are not accepted");
 		}
 	}

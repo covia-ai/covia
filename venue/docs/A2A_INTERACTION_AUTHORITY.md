@@ -129,7 +129,15 @@ distinct scopes; the alternative collapses them. This is the decision to ratify.
   resource with boundary-aware matching so a grant on `…/g/agent` cannot cover a
   sibling `…/g/agentX`).
 
-Both levers are pure **admission**; neither changes the execution identity (still
+- **Native admission policy** — `config.accepts` on the agent record
+  (covia#447): the owner's standing statement of who may talk to the agent —
+  the venue operator (`"venue"`: the venue principal and its agents, never
+  every user hosted here) or exact principal DIDs. The native agent ops
+  consult it inside the single cross-user gate, before proofs; it covers
+  `agent/request` and `agent/message` only. A2A does not consult it yet — its
+  non-owner path remains the public lever above.
+
+All three levers are pure **admission**; none changes the execution identity (still
 the owner) — they only decide whether a run happens and, for the public lever,
 which scope applies.
 

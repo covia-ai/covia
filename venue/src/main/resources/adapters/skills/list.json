@@ -4,6 +4,7 @@
 	"dateCreated": "2026-08-20T00:00:00Z",
 	"operation": {
 		"adapter": "skills:list",
+		"readOnly": true,
 		"toolName": "skills_list",
 		"input": {
 			"type": "object",

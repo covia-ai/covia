@@ -84,6 +84,7 @@ class VenueProcessTest {
 			Path.of("java"), List.of(), List.of(), successor, current,
 			sha(successor), sha(current), Long.MAX_VALUE, 1_000, dir.resolve("helper.ready"));
 		List<Path> attempts = new ArrayList<>();
+		List<String> report = new ArrayList<>();
 
 		int exit = VenueRelauncher.run(spec, (ignored, jar, ready) -> {
 			attempts.add(jar);
@@ -91,10 +92,14 @@ class VenueProcessTest {
 			FakeChild fallback = new FakeChild(11, true);
 			Files.writeString(ready, Long.toString(fallback.pid()));
 			return fallback;
-		});
+		}, report::add);
 
 		assertEquals(0, exit);
 		assertEquals(List.of(successor, current), attempts);
+		assertEquals(List.of(
+			"Started venue jar " + successor + " as pid 10",
+			"Covia successor failed to become ready; starting fallback jar: " + current,
+			"Started venue jar " + current + " as pid 11"), report);
 	}
 
 	@Test
@@ -106,10 +111,13 @@ class VenueProcessTest {
 			Path.of("java"), List.of(), List.of(), successor, current,
 			sha(successor), sha(current), Long.MAX_VALUE, 1_000, dir.resolve("helper.ready"));
 
+		List<String> report = new ArrayList<>();
 		int exit = VenueRelauncher.run(spec,
-			(ignored, jar, ready) -> new FakeChild(20, false));
+			(ignored, jar, ready) -> new FakeChild(20, false), report::add);
 
 		assertEquals(70, exit);
+		assertEquals("Covia fallback failed to become ready: " + current,
+			report.get(report.size() - 1));
 	}
 
 	@Test
@@ -123,16 +131,19 @@ class VenueProcessTest {
 		Files.writeString(successor, "replaced after acceptance");
 		List<Path> attempts = new ArrayList<>();
 
+		List<String> report = new ArrayList<>();
 		int exit = VenueRelauncher.run(spec, (ignored, jar, ready) -> {
 			attempts.add(jar);
 			FakeChild fallback = new FakeChild(31, true);
 			Files.writeString(ready, Long.toString(fallback.pid()));
 			return fallback;
-		});
+		}, report::add);
 
 		assertEquals(0, exit);
 		assertEquals(List.of(current), attempts,
 			"the mutated successor must be rejected before ProcessBuilder sees it");
+		assertEquals("Venue jar changed after restart was accepted; refusing to execute: " + successor,
+			report.get(0));
 	}
 
 	@Test
@@ -148,8 +159,10 @@ class VenueProcessTest {
 			sha(probeJar), sha(probeJar), Long.MAX_VALUE, 5_000,
 			dir.resolve("helper.ready"));
 
-		assertEquals(0, VenueRelauncher.run(spec));
+		List<String> report = new ArrayList<>();
+		assertEquals(0, VenueRelauncher.run(spec, report::add));
 		long pid = Long.parseLong(Files.readString(result).trim());
+		assertEquals(List.of("Started venue jar " + probeJar + " as pid " + pid), report);
 		ProcessHandle child = ProcessHandle.of(pid).orElseThrow();
 		try {
 			assertTrue(child.isAlive(), "readiness is accepted only while the child remains alive");

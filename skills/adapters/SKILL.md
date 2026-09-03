@@ -78,6 +78,7 @@ The `venue` adapter changes the adapter set of a *running* venue, no restart:
 | `load <jar>` | `v/ops/venue/module/load` | `{"module": "<jar name>", "sha256": "<hex>", "config": {…}}` — `sha256` and `config` optional |
 | `unload <name>` | `v/ops/venue/module/unload` | `{"name": "<jar name without .jar>"}` |
 | `restart [jar]` | `v/ops/venue/restart` | `{"jar": "<successor covia jar>", "sha256": "<hex>", "startupTimeout": 60000}` — all optional; omitting `jar` restarts the current version |
+| `gc` | `v/ops/venue/gc` | `{}` collects the Etch store while the venue keeps serving; `{"status": true}` reports state; `{"cancel": true}` rolls a running cycle back; `{"restart": true}` restarts after cutover so disk comes back now. One collection per process |
 
 All are invoked with `grid_run operation=v/ops/venue/... input=...`. `show-config` is read-only under the public `v/` scope and reports identity, agent/Job/storage/protocol/limit policy, active adapters, and only adapter settings explicitly allow-listed by `publicConfig()`. Enable/disable/configure return `{name, enabled, changed}` / `{name, config}` — `changed: false` means it was already in that state (idempotent). Load returns `{name, path, sha256, adapters}`; unload returns `{name, path, adapters, unloaded}`.
 
@@ -86,7 +87,7 @@ All are invoked with `grid_run operation=v/ops/venue/... input=...`. `show-confi
 The administrative commands below are **venue-owned**; `show-config` is the
 public read-only exception. Adapter/module lifecycle requires `adapter/manage`
 on `<venueDID>/adapters`; process restart instead requires `venue/restart` on
-`<venueDID>/process`. A null (unrestricted) capability scope is deliberately
+`<venueDID>/process`, and store collection `venue/gc` on `<venueDID>/store`. A null (unrestricted) capability scope is deliberately
 *not* enough, so **the default local MCP connection — which acts as the venue's
 public user — is denied**. That is by design, not a misconfiguration. Do not
 loop retrying; explain and pick a route:
@@ -104,6 +105,9 @@ loop retrying; explain and pick a route:
 
 `venue/restart` is deliberately separate process authority: it requires
 `venue/restart` on `<venueDID>/process`, plus invoke authority for the operation.
+`venue/gc` is likewise separate store authority (`venue/gc` on `<venueDID>/store`);
+with `restart: true` it needs both. Neither is held by the venue's own agents:
+an agent acting as the venue must present a venue-issued delegation.
 It is available only when running the executable `MainVenue` jar. The operation
 finishes its Job before closing all venues; a helper starts the successor and
 falls back to the current jar if startup does not reach readiness. Use immutable,
@@ -113,14 +117,13 @@ versioned jar paths and leave the current jar available for rollback.
 
 `module/load` and `module/unload` additionally require the operator opt-in `dynamicModules.enabled: true` (default **off**) in the venue config; otherwise they fail with a policy error regardless of authority. By default `module` must be a **jar name inside the staging directory** `dynamicModules.dir` (default `modules`, relative to the venue's working directory) — no absolute paths, no `..`, and the resolved real path must stay inside the directory. `dynamicModules.anyPath: true` widens this to any filesystem path (a relative one still resolves against `dir`).
 
-Released shaded jars are resolvable from Maven Central with classifier
-`module`; for example, the Maven dependency-plugin argument is
-`ai.covia:covia-telegram:<version>:jar:module`. An embedded host should use its
-build tool to copy that artifact into its application distribution or data
-directory, then name the resulting filesystem path in boot `modules` (or call
-the public `Modules.load` API). Keep the jar off the host classpath so the
-module classloader retains dependency isolation. The complete Maven
-dependency-plugin recipe is in `venue/docs/CONFIG.md`.
+Released shaded jars (`covia-<module>-<version>-module.jar`, with a `.sha256`
+checksum file alongside) are GitHub Releases artifacts, not Maven Central
+ones. An embedded host should download the jar for its venue version into its
+application distribution or data directory, then name the resulting filesystem
+path in boot `modules` (or call the public `Modules.load` API). Keep the jar
+off the host classpath so the module classloader retains dependency isolation.
+The download recipe is in `venue/docs/CONFIG.md`.
 
 Loading covia-sql at runtime, end to end:
 

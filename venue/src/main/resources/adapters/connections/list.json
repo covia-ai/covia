@@ -1,0 +1,66 @@
+{
+	"name": "List Connections",
+	"description": "Lists the service connections known to this venue. Each immutable provider descriptor comes from its connection skill and includes the credential reference names and tools it uses. Live transport availability is reported separately from caller authority. No credential value is read.",
+	"dateCreated": "2026-09-01T00:00:00Z",
+	"operation": {
+		"adapter": "connections:list",
+		"readOnly": true,
+		"toolName": "connections_list",
+		"input": {
+			"type": "object",
+			"properties": {},
+			"additionalProperties": false
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"providers": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"properties": {
+							"provider": { "type": "string" },
+							"description": { "type": "string" },
+							"skill": { "type": "string" },
+							"connection": {
+								"type": "object",
+								"properties": {
+									"baseUrl": { "type": "string" },
+									"auth": {
+										"type": "object",
+										"properties": {
+											"kind": { "type": "string" },
+											"alternatives": { "type": "array", "items": { "type": "string" } }
+										},
+										"required": ["kind", "alternatives"],
+										"additionalProperties": false
+									}
+								},
+								"required": ["baseUrl", "auth"],
+								"additionalProperties": false
+							},
+							"tools": { "type": "array", "items": { "type": "string" } },
+							"available": { "type": "boolean", "description": "Whether every declared tool's adapter is live; this does not imply caller authority." },
+							"unavailableTools": {
+								"type": "array",
+								"items": {
+									"type": "object",
+									"properties": {
+										"operation": { "type": "string" },
+										"reason": { "type": "string" }
+									},
+									"required": ["operation", "reason"],
+									"additionalProperties": false
+								}
+							}
+						},
+						"required": ["provider", "description", "skill", "connection", "tools", "available", "unavailableTools"],
+						"additionalProperties": false
+					}
+				}
+			},
+			"required": ["providers"],
+			"additionalProperties": false
+		}
+	}
+}

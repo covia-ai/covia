@@ -4,6 +4,7 @@
     "dateCreated": "2026-04-16T00:00:00Z",
     "operation": {
         "adapter": "agent:failTask",
+        "readOnly": false,
         "toolName": "agent_fail_task",
         "input": {
             "type": "object",

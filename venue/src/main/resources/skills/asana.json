@@ -1,0 +1,20 @@
+{
+	"name": "asana",
+	"description": "Work with Asana tasks, projects, and workspaces using a personal access token. Load for task lists, reads, and creating/updating tasks.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Asana\nCalls go through `v/ops/http/get` / `v/ops/http/post` against `https://app.asana.com/api/1.0` with `bearerSecret: \"s/ASANA_TOKEN\"` (a personal access token from app.asana.com -> Settings -> Apps -> Developer apps -> Personal access tokens). Responses wrap results in `{data: ...}`. Only the secret reference goes in the request.\n\nCommon calls:\n- Me: `GET /users/me`\n- Workspaces: `GET /workspaces`\n- My tasks: `GET /tasks?assignee=me&workspace={gid}&completed_since=now&opt_fields=name,due_on,completed`\n- Project tasks: `GET /projects/{project_gid}/tasks?opt_fields=name,assignee.name,due_on`\n- One task: `GET /tasks/{task_gid}?opt_fields=name,notes,assignee.name,due_on,completed`\n- Create: `POST /tasks` body `{data: {name, workspace, projects?, assignee?, due_on?, notes?}}`\n- Update: `POST /tasks/{task_gid}` with `method: \"PUT\"` and body `{data: {...}}`\n\nRules:\n- Check `status`; errors are `{errors: [{message}]}`. 401 = bad token; 403 = no access to that resource.\n- Ask for `opt_fields` explicitly - Asana returns only gid+name by default. Ids are `gid` strings.\n"
+	},
+	"connection": {
+		"baseUrl": "https://app.asana.com/api/1.0",
+		"auth": { "kind": "bearer-secret", "alternatives": ["s/ASANA_TOKEN"] }
+	},
+	"skill": {
+		"tools": [
+			"v/ops/connections/status",
+			"v/ops/http/get",
+			"v/ops/http/post",
+			"v/ops/jvm/url-encode"
+		]
+	}
+}

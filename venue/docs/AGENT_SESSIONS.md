@@ -76,6 +76,11 @@ g/<agent>/
       c/              — session-scoped user scratch (the `c/` shorthand)
 ```
 
+This diagram defines the session container, not the encoding of model context.
+The exact context-bearing cells under `frames` and the session/frame load tiers
+are defined only by [AGENT_CONTEXT.md §1.1](./AGENT_CONTEXT.md#11-durable-context-state-contract);
+this document does not repeat them.
+
 Other framework-managed fields on the agent record (status, scheduling, error, caps, timeline entries) are documented where they are authoritative — see [GRID_LATTICE_DESIGN.md §4.3](./GRID_LATTICE_DESIGN.md) for the top-level shape, [SCHEDULER.md](./SCHEDULER.md) for wake state, and [AGENT_LOOP.md](./AGENT_LOOP.md) for timeline entry structure.
 
 **User scratch space** for the agent, session, and task lives in the virtual namespaces `n/`, `c/`, and `t/` respectively — see [GRID_LATTICE_DESIGN.md §4.5](./GRID_LATTICE_DESIGN.md). Task scratch is stored once on the task Job at `j/<taskId>/temp/`; it is not duplicated on the transient `g/<agent>/tasks` queue row. These are for arbitrary user data; framework-managed state (status, `wakeTime`, task input/result, etc.) is accessed through dedicated APIs, not via these shortcuts.
@@ -143,7 +148,7 @@ Session-id inputs accept both canonical hexadecimal and the `0x`-prefixed repres
 - `sessionId` omitted on `agent_request` / `agent_chat` → venue mints a new session, returns the id
 - `sessionId` omitted on `agent_message` → **error** (messages require a session)
 - `session={title: ..., parties: [...]}` on `agent_request` → create new session with explicit metadata; the response includes the minted id
-- `loads={...}` on `agent_request` / `agent_chat` → the minted session's declared loads (AGENT_CONTEXT.md §7.2): skills to pre-load, notes, re-run operations, job results, extra tools and skill sources. Mint-time only; the A2A front door and `agent_message` cannot pass it — pre-mint a session with `agent_request`/`agent_chat` and hand out its id
+- `loads={...}` on `agent_request` / `agent_chat` → declared loads on the minted session's root frame ([AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §7.2): skills to pre-load, notes, re-run operations, job results, extra tools and skill sources. Mint-time only; the A2A front door and `agent_message` cannot pass it — pre-mint a session with `agent_request`/`agent_chat` and hand out its id
 
 **Why three ops, not flags on one op.** Each op encodes a distinct caller intent (long-running task vs. wait-for-reply vs. notify). The agent doesn't have to declare its mode — the framework already knows what to do with the agent's response based on which queue picked the work. This eliminates the "is this response a task completion or a chat reply or both?" ambiguity that comes from a single intake op + per-call flags.
 
@@ -164,7 +169,12 @@ The projection contains completed user/final-assistant turns and, by default, co
 
 `agent:compactSession` is the explicit owner management surface and requires agent-write authority. It only mutates a quiescent session. The old immutable conversation vector becomes the segment's `items`, provenance is stamped on that segment, and the Job returns only bounded metadata rather than a second copy of the transcript. Future turns append after the segment normally. The in-band `compact` harness tool applies the same representation from either built-in LLM runtime.
 
-`agent:reloadContext` is the rarer cache-invalidation boundary for a host that updated an agent's identity, model shape, fixed tools or pinned declarations and wants an existing conversation to adopt them. It also requires agent-write authority and a quiescent session. It removes only each frame's `renderedContext`; the durable conversation and loads vectors are unchanged, and the next inference materialises the new prefix once. Ordinary `agent:update` does not rewrite existing prefixes.
+`agent:reloadContext` is the explicit same-config refresh operation. It requires
+agent-write authority and a quiescent session, and delegates entirely to the
+cache-projection rules in [AGENT_CONTEXT.md §1.1](./AGENT_CONTEXT.md#11-durable-context-state-contract).
+It never changes durable conversation or loads. Declarative config changes are
+handled automatically on the next inference; uncached models have no retained
+projection to refresh.
 
 Trusted venue modules may register an `AgentAdapter.SessionVisibilityPolicy`. Policies compose by intersection: any veto hides the session, and policy failure hides it as well. This gives applications a narrow private-conversation rule without duplicating transcript rendering or granting agents raw session-tree access.
 
@@ -261,6 +271,8 @@ When one agent messages another as part of a shared pipeline run, the orchestrat
 
 When agents correspond outside an orchestration (Bob asks Carol a question on his own initiative), each participant's `agent_message` / `agent_request` still follows the mint-on-missing rule: the first outbound call mints a session, subsequent calls echo the id. The two agents share one session because they share the id, not because of any special "agent-to-agent" machinery.
 
+Across users, the target decides. An agent may talk to another user's agent when the target's owner has admitted it — `config.accepts` on the target record: `"venue"` for the venue operator and its agents, or an exact list of principal DIDs such as `<userDID>:g:<agentId>` — or when the caller presents a delegation for `agent/request` / `agent/message` on `<ownerDID>/g/<id>` (UCAN.md §5.3, #447). Either way the request stays the caller's own Job and the target agent runs as itself; the target sees who asked as venue-verified turn provenance (`relationship=other-user-agent:<id>; user=<did>; venue=<did>`), never as a claim inside the message.
+
 Shared pipeline sessions already have >2 parties in practice; formalising multi-party semantics is a future question (§9.3).
 
 ---
@@ -323,12 +335,11 @@ There is no `agent:yield` op — yield is the natural state when no completion o
 
 | Field | Writer | When |
 |-------|--------|------|
-| `pending` | intake (`appendSessionPending`) appends; the presenting cycle drains | drain happens in the same CAS that lands the drained envelopes' user turns — at cycle start for `FramesOwning` adapters (goaltree, via `beginSessionCycle`), at merge for framework-managed conversations (llmagent) |
-| `frames` | the owning cycle | live epoch-fenced writes for `FramesOwning` adapters; the merge's turn-append for framework-managed conversations. The framework merge never touches frames for `FramesOwning` transitions |
+| `pending` | intake (`appendSessionPending`) appends; the presenting cycle drains | drain happens in the same CAS that lands the drained envelopes' user turns — at cycle start for both built-in LLM runtimes |
+| `frames` | the owning cycle | live epoch-fenced writes for both built-in LLM runtimes; the framework merge never rewrites their frames. Context-bearing frame fields are defined only in [AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §1.1 |
 | `inCycle` | the owning attempt sets it at claim; merge/suspend/startup clear it | write fence only; it is never a wake signal or resume checkpoint |
-| `loads` | the merge (session-tier working set) | unchanged |
-| `meta.turns` | whoever appends root turns (shared helper) | bumped in the same CAS as the append |
-| `meta.updated` | whoever appends root turns (shared helper) | ratcheted to the newest persisted turn timestamp in the same CAS |
+| `meta.turns` | the common frame store / framework append | bumped in the same CAS as a root-conversation append |
+| `meta.updated` | the common frame store / framework append | ratcheted to the newest persisted root-turn timestamp in the same CAS |
 
 **Completion ordering.** `agent:complete_task` / `agent:fail_task` do not finish the caller's pending Job inline. The completion envelope is parked and drained after the transition's timeline + state writes commit. Only then is the pending Job completed. This ordering is load-bearing: any caller awaiting its task observes the timeline and lattice writes for its task before its await returns. Without the deferral, the venue op would race the framework's timeline write and callers could see an empty `taskResults` immediately after unblocking.
 

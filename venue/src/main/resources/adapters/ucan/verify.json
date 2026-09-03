@@ -4,6 +4,7 @@
 	"dateCreated": "2026-07-09T00:00:00Z",
 	"operation": {
 		"adapter": "ucan:verify",
+		"readOnly": true,
 		"toolName": "ucan_verify",
 		"input": {
 			"type": "object",
