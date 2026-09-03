@@ -36,10 +36,10 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Fixed
 
-- Agent tool dispatch now treats the materialised palette as an authority
-  boundary: a model cannot invoke an arbitrary operation merely by naming its
-  path (#477). Loading an arbitrary skill or tool likewise requires either the
-  corresponding catalog entry or an explicit load capability.
+- Agent-controlled skill and tool loading now requires either the exact item
+  to be present in the advertised surface or an explicit resource-scoped
+  `skill/load` or `tool/load` capability. Invocation remains independently
+  authorised by the target operation at its point of action (#477).
 - Cached tool bindings retain their exact operation and skill provenance;
   loaded skill tools are appended once without pre-declaring every gated JSON
   schema, and provider tool-call ids are valid across replayed context
