@@ -2215,7 +2215,9 @@ public class CoviaAPI extends ACoviaAPI {
 			return;
 		}
 
-		ACell input = Maps.of("name", name, "value", value);
+		// PUT already expresses replacement intent at the HTTP resource boundary.
+		ACell input = Maps.of("name", name, "value", value,
+			Fields.OVERWRITE, convex.core.data.prim.CVMBool.TRUE);
 		Job job = engine().jobs().invokeOperation(Strings.create("v/ops/secret/set"), input, rctx);
 		ACell result = job.awaitResult();
 		if (result == null) {

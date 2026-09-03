@@ -12,6 +12,7 @@ import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.api.Abilities;
+import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.SecretStore;
 import covia.venue.User;
@@ -77,7 +78,27 @@ public class SecretAdapter extends AAdapter {
 
 		AString value = RT.ensureString(RT.getIn(input, K_VALUE));
 		if (value == null) throw new IllegalArgumentException("value is required");
+		ACell overwriteValue = RT.getIn(input, Fields.OVERWRITE);
+		if (overwriteValue != null && !(overwriteValue instanceof CVMBool)) {
+			throw new IllegalArgumentException("overwrite must be a boolean");
+		}
+		boolean overwrite = CVMBool.TRUE.equals(overwriteValue);
 
+		store(engine, ctx, name, value, overwrite);
+		return Maps.of(Fields.NAME, name, K_STORED, CVMBool.TRUE);
+	}
+
+	/** Shared secret-write boundary for operations that generate credentials
+	 * without ever returning their plaintext. The capability check and
+	 * collision rule therefore cannot drift from {@code secret:set}. */
+	static void store(Engine engine, RequestContext ctx, AString name,
+			AString value, boolean overwrite) {
+		if (ctx.getCallerDID() == null) {
+			throw new IllegalArgumentException("Secret operations require an authenticated caller");
+		}
+		if (name == null || name.toString().isBlank()) {
+			throw new IllegalArgumentException("name is required");
+		}
 		// Pin the capability to the action: writing a secret requires
 		// secret/write on the secret resource. A null grant scope (authenticated /
 		// internal) is unrestricted; a read-only scope (the public profile)
@@ -88,8 +109,11 @@ public class SecretAdapter extends AAdapter {
 		// gated above by secret/write in its capability scope.
 		User user = engine.getVenueState().users().ensure(ctx.getUserDID());
 		byte[] encKey = SecretStore.deriveKey(engine.getKeyPair());
-		user.secrets().store(name, value, encKey);
-
-		return Maps.of(Fields.NAME, name, K_STORED, CVMBool.TRUE);
+		if (overwrite) {
+			user.secrets().store(name, value, encKey);
+		} else if (!user.secrets().storeIfAbsent(name, value, encKey)) {
+			throw new IllegalArgumentException("Secret s/" + name
+				+ " already exists; pass overwrite:true to replace it");
+		}
 	}
 }
