@@ -10,6 +10,10 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Added
 
+- Result-oriented `POST /api/v1/run` accepts `private: true` on venues with
+  `enablePrivateJobs: true`, forcing even lifecycle-bearing operations to use
+  a transient Job wrapper. The call runs to completion and returns only the
+  operation result; there is no persistent Job ID to poll or recover.
 - Agent and hosted-provider calls can carry an optional `providerOptions` map
   of provider-native request fields (for example Claude adaptive thinking and
   effort). Omitted fields continue to use provider defaults.

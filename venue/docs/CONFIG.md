@@ -987,7 +987,7 @@ registered-client model, not open registration. Refresh tokens and
 authorization codes are held in memory, so a venue restart invalidates
 outstanding refresh tokens (clients re-authorize); persistence is a follow-up.
 
-## Legacy private invoke setting
+## Explicit private runs
 
 ```json
 {
@@ -995,11 +995,15 @@ outstanding refresh tokens (clients re-authorize); persistence is a follow-up.
 }
 ```
 
-Deprecated compatibility setting; it no longer enables `private: true` on
-`/invoke`. Invoke now always creates a durable Job. Use `/api/v1/run` (or the
-SDK's `run`) when only the result is required. Whether run's internal Job is
-transient is controlled by operation metadata and
-`recordReadOnlyOperations`, not by a caller-selected privacy flag.
+Allows a caller to set `private: true` on `/api/v1/run`, or use the SDK's
+`runPrivate` method. This forces the internal Job wrapper to remain transient,
+even for a mutating, unclassified, or lifecycle-bearing operation. The call
+returns only the result and must remain connected through completion: there is
+no persistent Job ID to poll or recover. Operation side effects are unchanged;
+only the enclosing Job record is omitted. The setting is off by default and a
+private run fails rather than silently creating a durable Job when it is off.
+
+`/invoke` always creates a durable Job and rejects `private: true`.
 
 ## Result-oriented operation runs
 
@@ -1013,7 +1017,8 @@ non-persisted Job for `run` and `invokeInternal` by default. Mutating or
 unclassified operations invoked through `run` remain durable. An operation can
 declare `operation.internal: false` when its lifecycle itself must be recorded
 (for example, a human-in-the-loop request); this forces a durable Job on both
-result-oriented paths.
+result-oriented paths unless the caller explicitly requests a private run on a
+venue with `enablePrivateJobs: true`.
 
 Operators can force read-only runs and internal calls to be recorded:
 

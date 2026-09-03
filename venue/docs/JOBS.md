@@ -134,9 +134,12 @@ inbound messages durably in `session.pending` — see AGENT_SESSIONS.md).
   `redactJobSecrets` — both `input` and `output` redacted per the
   operation's `secretFields` — on **every durable write**, since adapters
   may update records after submission.
-- Transient Job wrappers used by result-oriented read-only runs and ordinary
-  internal composition are never persisted: memory-only, no recovery, gone
-  when terminal or on restart. Public invoke always persists.
+- Transient Job wrappers used by result-oriented read-only runs, explicit
+  private runs, and ordinary internal composition are never persisted:
+  memory-only, no recovery, gone when terminal or on restart. Public invoke
+  always persists. Explicit private runs require the operator's
+  `enablePrivateJobs` opt-in and omit only the Job record, not operation side
+  effects.
 - `VenueJob.completeWith` runs output-schema validation first; in strict
   mode a violation fails the job instead of completing it. This covers every
   completion path, including job-aware adapter overrides.
@@ -231,7 +234,9 @@ whether the Job is durable:
   LLM calls, tool calls, and capability gates. Returns the operation result
   future and is exempt from top-level admission.
 
-`runOperation` uses a transient, non-persisted Job only when the operation
-declares `operation.readOnly: true`. `invokeInternal` is transient by default.
-`operation.internal: false` forces a durable Job on either result-oriented
-path; `recordReadOnlyOperations: true` forces read-only Jobs to be durable too.
+`runOperation` uses a transient, non-persisted Job when the operation declares
+`operation.readOnly: true`, or when the caller explicitly requests a private
+run and the venue enables private jobs. `invokeInternal` is transient by
+default. `operation.internal: false` forces an ordinary result-oriented Job to
+be durable, as does `recordReadOnlyOperations: true` for classified reads; an
+explicit operator-enabled private run overrides those recording hints.

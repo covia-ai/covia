@@ -380,13 +380,33 @@ public class JobManager {
 	 * <p>A declared {@code operation.readOnly:true} runs with a transient Job by
 	 * default. Mutating or unclassified operations are recorded. An explicit
 	 * {@code operation.internal:false}, or the venue's
-	 * {@code recordReadOnlyOperations} policy, forces recording.</p>
+	 * {@code recordReadOnlyOperations} policy, forces recording. A caller that
+	 * explicitly requests a private run gets a transient wrapper regardless of
+	 * operation metadata, provided the venue has opted in with
+	 * {@code enablePrivateJobs:true}.</p>
 	 */
 	public CompletableFuture<ACell> runOperation(String ref, ACell input, RequestContext ctx) {
-		return runOperation(Strings.create(ref), input, ctx);
+		return runOperation(Strings.create(ref), input, ctx, false);
+	}
+
+	/**
+	 * Runs an operation to completion and returns only its result, optionally
+	 * forcing the Job wrapper to remain transient. A private run has no durable
+	 * Job handle to recover or poll; callers must keep awaiting this future.
+	 *
+	 * @param privateJob true to leave no Job record, subject to venue opt-in
+	 */
+	public CompletableFuture<ACell> runOperation(String ref, ACell input,
+			RequestContext ctx, boolean privateJob) {
+		return runOperation(Strings.create(ref), input, ctx, privateJob);
 	}
 
 	public CompletableFuture<ACell> runOperation(AString ref, ACell input, RequestContext ctx) {
+		return runOperation(ref, input, ctx, false);
+	}
+
+	public CompletableFuture<ACell> runOperation(AString ref, ACell input,
+			RequestContext ctx, boolean privateJob) {
 		if (ref == null) return CompletableFuture.failedFuture(
 			new IllegalArgumentException("Operation must be specified"));
 		try {
@@ -396,7 +416,7 @@ public class JobManager {
 			Operation op = Operation.from(asset);
 			if (op == null) return CompletableFuture.failedFuture(
 				new IllegalArgumentException("Asset is not an operation: " + asset.getID()));
-			return runOperation(op.meta(), input, ctx.withOp(ref));
+			return runOperation(op.meta(), input, ctx.withOp(ref), privateJob);
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
 		}
@@ -404,10 +424,19 @@ public class JobManager {
 
 	public CompletableFuture<ACell> runOperation(AMap<AString, ACell> meta,
 			ACell input, RequestContext ctx) {
+		return runOperation(meta, input, ctx, false);
+	}
+
+	public CompletableFuture<ACell> runOperation(AMap<AString, ACell> meta,
+			ACell input, RequestContext ctx, boolean privateJob) {
 		try {
-			boolean memoryOnly = isReadOnly(meta)
+			if (privateJob && !engine.config().isPrivateJobsEnabled()) {
+				return CompletableFuture.failedFuture(new IllegalStateException(
+					"Private runs are disabled on this venue (enablePrivateJobs=false)"));
+			}
+			boolean memoryOnly = privateJob || (isReadOnly(meta)
 				&& allowsInternal(meta)
-				&& !engine.config().isRecordReadOnlyOperations();
+				&& !engine.config().isRecordReadOnlyOperations());
 			Job job = dispatchOperation(meta, input, ctx, memoryOnly, true, true);
 			return operationResultFuture(job, meta, input);
 		} catch (Exception e) {

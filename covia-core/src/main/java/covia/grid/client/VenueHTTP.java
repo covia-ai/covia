@@ -24,6 +24,7 @@ import org.slf4j.LoggerFactory;
 import convex.auth.did.DID;
 import convex.core.data.ACell;
 import convex.core.data.prim.CVMLong;
+import convex.core.data.prim.CVMBool;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
@@ -148,8 +149,8 @@ public class VenueHTTP extends Venue {
 
 	/**
 	 * Deprecated. Invoke now always means a durable Job. Use {@link #run(String,
-	 * ACell)} when the caller only wants the operation result; metadata and venue
-	 * policy decide whether run's internal Job is durable.
+	 * ACell)} when the caller only wants the operation result, or
+	 * {@link #runPrivate(String, ACell)} when it must leave no durable Job.
 	 */
 	@Deprecated
 	public void setPrivate(boolean enabled) {
@@ -488,9 +489,20 @@ public class VenueHTTP extends Venue {
 	 */
 	@Override
 	public CompletableFuture<ACell> run(String operation, ACell input) {
+		return runRequest(operation, input, false);
+	}
+
+	@Override
+	public CompletableFuture<ACell> runPrivate(String operation, ACell input) {
+		return runRequest(operation, input, true);
+	}
+
+	private CompletableFuture<ACell> runRequest(String operation, ACell input,
+			boolean privateJob) {
 		AMap<AString, ACell> reqBody = Maps.of(
 			Fields.OPERATION, Strings.create(operation),
 			Fields.INPUT, input);
+		if (privateJob) reqBody = reqBody.assoc(Fields.PRIVATE, CVMBool.TRUE);
 		AVector<ACell> proofTokens = this.ucans;
 		if (proofTokens != null) reqBody = reqBody.assoc(Fields.UCANS, proofTokens);
 
@@ -511,6 +523,11 @@ public class VenueHTTP extends Venue {
 	@Override
 	public CompletableFuture<ACell> run(Hash assetID, ACell input) {
 		return run(assetID.toCVMHexString().toString(), input);
+	}
+
+	@Override
+	public CompletableFuture<ACell> runPrivate(Hash assetID, ACell input) {
+		return runPrivate(assetID.toCVMHexString().toString(), input);
 	}
 	
 	/**

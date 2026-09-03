@@ -15,6 +15,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
+import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.auth.UcanTokens;
 import covia.venue.TestServer;
@@ -38,6 +39,28 @@ public class PrivateJobsClientTest {
 		AMap<AString,ACell> input = Maps.of(Strings.create("greeting"), Strings.create("private-hello"));
 		ACell result = client.run("v/test/ops/echo", input).get();
 		assertEquals(input, result);
+	}
+
+	@Test
+	public void testPrivateRunWireReturnsOnlyOutput() throws Exception {
+		ACell result = freshClient().runPrivate("v/test/ops/echo",
+			Maps.of("private", Strings.create("payload"))).get();
+		assertEquals(Strings.create("payload"), RT.getIn(result, "private"));
+		assertNull(RT.getIn(result, Fields.JOB_ID), String.valueOf(result));
+	}
+
+	@Test
+	public void testPrivateRunWireRejectsNonBooleanFlagBeforeExecution() throws Exception {
+		java.net.http.HttpResponse<String> response = java.net.http.HttpClient.newHttpClient().send(
+			java.net.http.HttpRequest.newBuilder(
+				java.net.URI.create(TestServer.BASE_URL + "/api/v1/run"))
+				.header("Content-Type", "application/json")
+				.POST(java.net.http.HttpRequest.BodyPublishers.ofString(
+					"{\"operation\":\"v/test/ops/echo\",\"input\":{},\"private\":\"yes\"}"))
+				.build(),
+			java.net.http.HttpResponse.BodyHandlers.ofString());
+		assertEquals(400, response.statusCode(), response.body());
+		assertTrue(response.body().contains("must be a Boolean"), response.body());
 	}
 
 	@Test

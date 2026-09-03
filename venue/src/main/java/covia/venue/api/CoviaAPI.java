@@ -820,7 +820,10 @@ public class CoviaAPI extends ACoviaAPI {
 					+ "uses the normal Job lifecycle internally: mutating or unclassified "
 					+ "operations are recorded, while operation.readOnly=true may use a "
 					+ "transient Job unless operation.internal=false or venue policy forces "
-					+ "read-only recording. The Java API is asynchronous (CompletableFuture); "
+					+ "read-only recording. Set private=true to force a transient Job when the "
+					+ "venue enables private jobs; the call must then run to completion because "
+					+ "there is no persistent Job ID to recover or poll. The Java API is "
+					+ "asynchronous (CompletableFuture); "
 					+ "this HTTP request remains open until the operation completes.",
 			requestBody = @OpenApiRequestBody(
 				description = "Run request: operation reference and its input",
@@ -847,12 +850,18 @@ public class CoviaAPI extends ACoviaAPI {
 			return;
 		}
 		ACell input = RT.getIn(req, Fields.INPUT);
+		ACell privateCell = RT.getIn(req, Fields.PRIVATE);
+		if (privateCell != null && !(privateCell instanceof CVMBool)) {
+			buildError(ctx, 400, "Run request 'private' parameter must be a Boolean");
+			return;
+		}
+		boolean privateJob = CVMBool.TRUE.equals(privateCell);
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 		AVector<ACell> ucans = RT.getIn(req, Fields.UCANS);
 		rctx = AuthMiddleware.withTransportGrants(rctx, ucans, engine().didVerifier());
 
 		try {
-			ACell result = engine().jobs().runOperation(op, input, rctx).join();
+			ACell result = engine().jobs().runOperation(op, input, rctx, privateJob).join();
 			buildResult(ctx, 200, result);
 		} catch (java.util.concurrent.CompletionException e) {
 			Throwable cause = (e.getCause() != null) ? e.getCause() : e;
