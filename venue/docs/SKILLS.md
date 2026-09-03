@@ -36,7 +36,7 @@ Skills solve this with **progressive disclosure**: a compact index (one line per
    - The venue op follows the `memory` adapter idiom: one command-dispatched tool, minimal tool-context footprint.
    - The index block and ownership-specific `[Pinned skill: …]` / `[Loaded skill: …]` labels follow the shared context rendering conventions.
 
-4. **Progressive disclosure, appended once.** Loading resolves a skill once and appends its instructions and contributed context to the conversation. Source mutation alone does not rewrite prior model input; an explicit reload appends the newer version. Tool paths and contributed skill-source refs are snapshotted on the loads entry (§5.3); an agent-loaded stable skill also materialises exact operation/schema bindings there, so later inference does not re-resolve them.
+4. **Progressive disclosure, appended once.** Loading resolves a skill once and appends its instructions and contributed context to the conversation. Source mutation alone does not rewrite prior model input; an explicit reload appends the newer version. Tool paths, contributed skill-source refs and exact operation/schema bindings are snapshotted on the loads entry between initial-context rebuilds. Compaction returns active loads to the shared initial-load path defined in [AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §5.6 and §7.1.
 
 5. **Fail-visible.** Absent sources and skills are skipped quietly; resolution *errors* render a visible diagnosable line; malformed shapes (a non-vector `config.skills`/`config.skillsets`, a non-string tools or child-ref entry) throw. A persistent skill that vanishes keeps its ownership label and adds `unavailable: …` rather than silently disappearing — a missing skill changes behaviour too much to hide.
 
@@ -321,8 +321,8 @@ Key = the skill's canonical path (what the index shows). Value:
  "skills": ["v/skills/pdf-specialists"], "skillsets": []}
 ```
 
-- The **body is not duplicated on the entry** — its rendered instruction event is already in conversation. `appended: true` tells later assembly not to resolve or re-inject it.
-- The **tool paths and child skill-source refs are snapshotted** onto the entry, including empty vectors and the skill's own path as a tool when it is an operation. Editing the body, context or these lists requires an explicit reload, which appends the new material rather than rewriting history.
+- The **body is not duplicated on the entry** — its rendered instruction event is already in conversation. `appended: true` tells later assembly not to resolve or re-inject it before the next compaction.
+- The **tool paths and child skill-source refs are snapshotted** onto the entry, including empty vectors and the skill's own path as a tool when it is an operation. Editing the body, context or these lists does not affect the active context until an explicit reload or compaction; reload appends the new material, while compaction rebuilds initial context under the canonical rules linked above.
 - A `volatile: true` entry omits `appended`: its body and bundled context are re-resolved and compared as one canonical provider-visible value. Equality adds no prompt bytes; a change appends the new exact messages while retaining earlier versions as history. Tools and child-source refs remain the load-time snapshots above. The durable observation shape and compaction rules are defined once in [AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §1.1 and §5.5.
 - Because the entry is a plain loads-map entry, everything in the scope chain applies unchanged: explicit ownership, advisory budget accounting, and explicit unloading of agent-managed entries.
 - **Skills dedup by content identity, not path.** A skill's identity is its resolved metadata's value hash — the asset identity Convex already computes and memoises on every cell. Identity is compared when an explicit load/reload resolves the candidate. Loading the same skill from a second address (a directory ref vs the asset hash, mirrored directories) is a no-op naming the existing entry; reloading under the same path appends the newer body and updates its budget.
@@ -344,7 +344,7 @@ When a skill is loaded or explicitly reloaded:
 4. Materialise exact bindings for genuinely new tools (deduplicated against the fixed palette and earlier loads).
 5. Contribute its immediate `skill.skills` refs to the next skills index and named lookup scope.
 
-A skill that fails to resolve appends a visible ownership-specific label with `unavailable: <reason>`. Advisory aggregate budget pressure never makes a persistent skill silently disappear. Later inferences reuse the appended cells; only an explicit reload resolves a normal skill again. A `volatile` skill follows the watched observation rule linked in §5.3.
+A skill that fails to resolve appends a visible ownership-specific label with `unavailable: <reason>`. Advisory aggregate budget pressure never makes a persistent skill silently disappear. Between initial-context rebuilds, later inferences reuse the appended cells and an explicit reload is the only operation that refreshes the skill. Compaction follows the shared rebuild rule linked in §5.3. A `volatile` skill follows the watched observation rule linked there.
 
 ---
 

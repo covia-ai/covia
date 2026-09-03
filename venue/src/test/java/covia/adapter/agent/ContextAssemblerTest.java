@@ -485,7 +485,7 @@ public class ContextAssemblerTest {
 			(ACell) Maps.of("role", "tool", "id", "read-1", "name", "covia_read",
 				"content", ordinaryRead));
 		Prompt p = ContextAssembler.assemble(spec(config)
-			.withLoads(loads, Vectors.empty(), effective)
+			.withLoads(loads, Vectors.empty())
 			.withToolLoop(ordinary));
 
 		assertEquals("system", role(p.messages().get(1)));
@@ -579,7 +579,8 @@ public class ContextAssemblerTest {
 			Strings.intern("skillsets"), Vectors.of((ACell) Strings.create("w/skills")));
 		AMap<AString, ACell> effectiveLoads = Maps.of(Strings.create("w/skills/alpha"), Maps.of(
 			Strings.create("skill"), CVMBool.TRUE, Strings.create("budget"), CVMLong.create(2000)));
-		Spec s = spec(config).withLoads(Loads.Snapshot.EMPTY, Vectors.empty(), effectiveLoads);
+		Loads.Snapshot loads = Loads.describe(engine, ctx, effectiveLoads, java.util.Set.of());
+		Spec s = spec(config).withLoads(loads, Vectors.empty());
 		assertTrue(allContent(ContextAssembler.assemble(s)).contains("- alpha — Alpha skill (loaded)"));
 	}
 
@@ -593,8 +594,9 @@ public class ContextAssemblerTest {
 		Skills.ResolvedSkill root = Skills.resolveRef(engine, ctx, Strings.create("w/root-skill"));
 		AMap<AString, ACell> loads = Maps.of(root.path(), Skills.buildSkillLoadMeta(2000, root));
 
+		Loads.Snapshot described = Loads.describe(engine, ctx, loads, java.util.Set.of());
 		String all = allContent(ContextAssembler.assemble(
-			spec(null).withLoads(Loads.Snapshot.EMPTY, Vectors.empty(), loads)));
+			spec(null).withLoads(described, Vectors.empty())));
 		assertTrue(all.contains("- reviewer — Review a result"), all);
 		assertTrue(all.contains("may reveal later tools or more skills"), all);
 		assertFalse(all.contains("- root-skill —"),
@@ -673,7 +675,7 @@ public class ContextAssemblerTest {
 		Loads.Snapshot loads = Loads.resolve(engine, ctx, alphaSkillLoads(), java.util.Set.of(), Labels.BRACKET);
 		Spec s = new Spec(engine, ctx, null, null, null, null, 300, null,
 			null, null, null, null, null, null, true, null, null, null, null, null)
-			.withLoads(loads, Vectors.empty(), alphaSkillLoads());
+			.withLoads(loads, Vectors.empty());
 		Prompt p = ContextAssembler.assemble(s);
 		Skills.ResolvedSkill alpha = Skills.resolveRef(engine, ctx, Strings.create("w/skills/alpha"));
 		String all = allContent(p);

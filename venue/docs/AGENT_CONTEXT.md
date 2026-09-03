@@ -188,9 +188,11 @@ Observation := {
 An observation's map key is its stable declaration identity:
 `config.context:<index>` or `loads:<effective-load-key>`. `value` excludes
 timestamps and other ambient audit fields. `messages` contains those fields and
-is the exact immutable vector whose entries were appended; compaction reuses it
-without resolving or rendering the source again. This index is application
-state in the frame lattice cell, not a Java-side cache or a second transcript.
+is the exact immutable vector whose entries were appended. At compaction the
+old observation index is archived with the conversation and removed from the
+live frame; the ordinary pre-inference observation pass then resolves current
+values and establishes a new baseline. This index is application state in the
+frame lattice cell, not a Java-side cache or a second transcript.
 
 The provider projection retains the provider fields on `Turn` and removes its
 framework/audit fields. `providerState` is optional and absent from legacy
@@ -218,15 +220,17 @@ The representation has these invariants:
    the sole durable transcript; there is no hidden cache object or second transcript.
 2. With caching, equal `sourceConfig` reuses the exact persisted `tools`, `toolIndex` and
    `messages` cells. A missing or unequal stamp causes the next inference to
-   replace only `renderedContext`; `conversation` and both loads tiers remain
-   unchanged. Without caching, no stamp is consulted or stored.
+   replace `renderedContext`; a config-driven replacement leaves conversation
+   and both loads tiers unchanged. Without caching, no stamp is consulted or stored.
 3. Ambient mutation never invalidates a cached rendering. An explicit
    same-config reload clears `renderedContext`; a declarative config change makes
    it inapplicable by equality. Ephemeral assembly has no invalidation concept:
    it simply resolves the current snapshot on each inference.
 4. Conversation changes append canonical entries. Compaction is the explicit
-   exception: it nests the exact replaced vector under `items` and clears
-   `renderedContext` so the next inference materialises a new prefix.
+   exception: it nests the exact replaced vector under `items`, clears
+   `renderedContext` and the old observation baseline, and invalidates the
+   derived fields of active agent-managed loads. The next inference then uses
+   the ordinary initial-load path to materialise a new prefix from current sources.
 5. A volatile declaration persists in its owning config/loads tier. Before each
    inference it is resolved and compared with `frame.observations`. Equality is
    a no-op. A change atomically updates the observation and appends its exact
@@ -696,7 +700,7 @@ immutable vector plus newly appended events and the working turn. Calls and
 results remain paired and byte-identical in durable state. No end-of-cycle
 scratch-elision pass rewrites the conversation.
 
-**Compaction is the one ordinary rewrite.** The complete visible conversation vector collapses into one `[Compacted: N turns] summary` assistant-memory message whose summary the agent wrote, because only the agent knows what mattered. The exact replaced vector is retained under that segment's `items`; it is not copied into the Job result. The exact `messages` vector of each currently active observation is then reused after the segment, without re-resolving its source, so compaction cannot make current watched state disappear. A later compaction nests the earlier segment together with all turns appended since it, keeping the provider-visible representation bounded without rewriting or discarding the audit history. The frame's rendered prefix is then rebuilt once around the new segment. The shared `compact` tool works in both LLM runtimes, and `agent:compactSession` applies the same transform to an idle session for an authorised owner.
+**Compaction is the one ordinary rewrite.** The complete visible conversation vector collapses into one `[Compacted: N turns] summary` assistant-memory message whose summary the agent wrote, because only the agent knows what mattered. The exact replaced vector is retained under that segment's `items`; it is not copied into the Job result. The live observation index and the derived materialisation of active agent-managed loads are cleared, while their declarations and all pinned declarations remain. The next inference therefore looks just like the first inference of a conversation: the shared initial-load resolver reads current stable bodies, skill contributions and tool schemas/routes, and the shared observation pass reads current watched values. Those completed immutable results and the replacement prefix are installed through the normal atomic frame updates; compaction itself performs no source reads. A later compaction nests the earlier segment together with all turns appended since it, keeping the provider-visible representation bounded without discarding the audit history. The shared `compact` tool works in both LLM runtimes, and `agent:compactSession` applies the same transform to an idle session for an authorised owner.
 
 Everything else is an append. Context state is obtained by folding its events in order; a repeated load makes its newest result current without pretending the model never saw the older one. That small amount of stale history is normal for an LLM conversation, while recency puts the relevant value nearest the reply. Compacted segments are `assistant` turns because their summaries are agent-authored and may describe untrusted tool data; persisting them never promotes them to operator instruction. Runtime diagnostics retain their own semantic role, and the edge keeps every event in place on every provider (§3.2.1).
 
@@ -803,13 +807,23 @@ runtime-owned fields. This is their canonical definition:
 | `ts` | Long? | Load-order timestamp, stamped only at a persistence boundary |
 | `agentManaged` | Boolean | Whether the active agent owns and may unload the entry |
 | `trusted` | Boolean | Whether a trusted operator boundary admitted its content as instruction |
-| `appended` | Boolean? | The non-volatile result has already been committed to conversation |
+| `appended` | Boolean? | The non-volatile result is present in the current uncompacted conversation; absent on an initial load and cleared at compaction |
 | `skill` | Boolean? | The entry represents a loaded skill rather than an ordinary context value |
 | `tools` | Vector<String>? | Snapshotted operation refs contributed by the entry |
 | `kind` | `"tools"`? | Tool-only projection: the entry contributes no message content |
 | `toolBindings` | Vector<{`definition`: Map, `operation`: String, `activityLabel`?: String}>? | Materialised route, exact provider schema, and optional UI-only activity label for stable load tools; the single durable source for rendering, dispatch, and activity events. The label is omitted when it equals the provider tool name; legacy bindings without it use that same fallback |
 | `skills` | Vector<String>? | Snapshotted individual skill sources contributed by a loaded skill |
 | `skillsets` | Vector<String>? | Snapshotted skillset sources contributed by a loaded skill |
+
+For an agent-managed entry, `tools`, `toolBindings`, `skills`, `skillsets` and
+the derived skill label are materialised when the entry is loaded. Compaction
+removes those derived skill/tool fields and `appended`, but retains the source
+declaration, ownership, trust, budget and order. The next inference runs the
+same initial-load resolver as a new conversation. A cached model atomically
+stores the refreshed derived fields with the replacement `renderedContext`; an
+uncached model keeps both projections ephemeral and repeats the same pure
+resolution when needed. Pinned entries are not rewritten; when their
+declarations need resolution, the same resolver uses them directly.
 
 New writers always stamp `agentManaged` and `trusted`; timestamp-based ownership
 inference exists only to read older sessions. A `null` map value is a legacy
@@ -839,12 +853,13 @@ inner child frames. Rules:
 
 The chain is resolved when initial context is rendered. Later loads and reloads
 resolve only their requested keys and append results to `frame.conversation`.
-Agent-managed tool declarations are resolved to `toolBindings` once when the
-load changes, regardless of whether its content is volatile; subsequent calls
-project them without consulting the operation catalog. A
+Between initial-context rebuilds, agent-managed tool declarations use the
+persisted `toolBindings` established when the load changed; subsequent calls
+project them without consulting the operation catalog. Compaction returns the
+active declarations to the initial-load path defined in §5.6 and §7.1. A
 tool write to an already-loaded path does **not** change the model's context on
 the next inference unless that declaration is volatile; otherwise the agent or
-owner must load it again, or read the current value with an ordinary tool call.
+owner must load it again, compact, or read the current value with an ordinary tool call.
 This is the freshness boundary that protects the cache from unrelated mutable
 state.
 

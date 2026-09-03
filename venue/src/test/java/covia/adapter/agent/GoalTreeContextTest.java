@@ -11,8 +11,10 @@ import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import covia.api.Fields;
 
 /**
  * Tests for GoalTreeContext — the pure rendering functions for the goal tree.
@@ -474,7 +476,7 @@ public class GoalTreeContextTest {
 	}
 
 	@Test
-	public void testObservationsAppendOnChangeAndSurviveCompaction() {
+	public void testObservationsReloadCurrentValueAfterCompaction() {
 		AString id = Strings.create("loads:status");
 		AVector<ACell> firstValue = Vectors.of((ACell) Maps.of(
 			"role", "system", "content", "status one"));
@@ -499,21 +501,70 @@ public class GoalTreeContextTest {
 		assertEquals(2, changedConversation.count());
 		assertEquals("status two", RT.getIn(changedConversation.get(1), "content").toString());
 
-		ACell exactLatest = RT.getIn(changed, GoalTreeContext.K_OBSERVATIONS,
-			id, ContextAssembler.K_OBSERVATION_MESSAGES, 0L);
 		AMap<AString, ACell> compacted = GoalTreeContext.compactFrame(changed, "latest status is two");
 		AVector<ACell> compactedConversation = RT.ensureVector(
 			compacted.get(GoalTreeContext.K_CONVERSATION));
-		assertEquals(2, compactedConversation.count(), "archive plus current observation");
-		assertSame(exactLatest, compactedConversation.get(1),
-			"compaction reuses the persisted observation without resolving or rendering");
+		assertEquals(1, compactedConversation.count(), "only the archive remains visible");
+		assertNull(compacted.get(GoalTreeContext.K_OBSERVATIONS),
+			"the next ordinary observation pass establishes a current baseline");
 
-		AMap<AString, ACell> removed = GoalTreeContext.applyObservations(compacted,
-			Vectors.empty(), 40L);
+		AMap<AString, ACell> reloaded = GoalTreeContext.applyObservations(compacted,
+			second, 40L);
+		AVector<ACell> reloadedConversation = RT.ensureVector(
+			reloaded.get(GoalTreeContext.K_CONVERSATION));
+		assertEquals(2, reloadedConversation.count(), "archive plus freshly loaded current value");
+		assertEquals("status two", RT.getIn(reloadedConversation.get(1), "content").toString());
+
+		AMap<AString, ACell> removed = GoalTreeContext.applyObservations(reloaded,
+			Vectors.empty(), 50L);
 		assertNull(removed.get(GoalTreeContext.K_OBSERVATIONS));
 		String removal = RT.getIn(removed, GoalTreeContext.K_CONVERSATION,
 			2L, "content").toString();
 		assertTrue(removal.contains("no longer active"), removal);
+	}
+
+	@Test
+	public void testCompactionReturnsAgentLoadsToInitialDeclarationState() {
+		AString pinnedKey = Strings.create("pinned");
+		AMap<AString, ACell> pinned = Maps.of(
+			Loads.K_AGENT_MANAGED, CVMBool.FALSE,
+			Loads.K_APPENDED, CVMBool.TRUE,
+			Loads.K_TOOL_BINDINGS, Vectors.of(Strings.create("keep")));
+		AString contextKey = Strings.create("working-note");
+		AMap<AString, ACell> context = Maps.of(
+			Loads.K_AGENT_MANAGED, CVMBool.TRUE,
+			Loads.K_TRUSTED, CVMBool.FALSE,
+			Loads.K_TEXT, Strings.create("current note"),
+			Loads.K_APPENDED, CVMBool.TRUE);
+		AString skillKey = Strings.create("w/skills/current");
+		AMap<AString, ACell> skill = Maps.of(
+			Loads.K_AGENT_MANAGED, CVMBool.TRUE,
+			Loads.K_TRUSTED, CVMBool.FALSE,
+			Skills.K_SKILL, CVMBool.TRUE,
+			AbstractLLMAdapter.K_LABEL, Strings.create("old-name"),
+			Fields.TOOLS, Vectors.of(Strings.create("v/ops/old")),
+			Skills.K_SKILLS, Vectors.of(Strings.create("w/old-child")),
+			Skills.K_SKILLSETS, Vectors.empty(),
+			Loads.K_TOOL_BINDINGS, Vectors.of(Strings.create("old-binding")),
+			Loads.K_APPENDED, CVMBool.TRUE);
+
+		AMap<AString, ACell> frame = GoalTreeContext.createFrame("reload",
+			Maps.of(pinnedKey, pinned, contextKey, context, skillKey, skill));
+		frame = GoalTreeContext.appendTurn(frame,
+			Maps.of("role", "assistant", "content", "loaded state was used"));
+		AMap<AString, ACell> compacted = GoalTreeContext.compactFrame(frame, "summary");
+		AMap<AString, ACell> loads = GoalTreeContext.getLoads(compacted);
+
+		assertSame(pinned, loads.get(pinnedKey), "pinned declarations are not rewritten");
+		assertNull(RT.getIn(loads.get(contextKey), Loads.K_APPENDED));
+		assertEquals("current note", RT.getIn(loads.get(contextKey), Loads.K_TEXT).toString(),
+			"the source declaration remains intact");
+		assertNull(RT.getIn(loads.get(skillKey), Loads.K_APPENDED));
+		assertNull(RT.getIn(loads.get(skillKey), Loads.K_TOOL_BINDINGS));
+		assertNull(RT.getIn(loads.get(skillKey), Fields.TOOLS));
+		assertNull(RT.getIn(loads.get(skillKey), Skills.K_SKILLS));
+		assertNull(RT.getIn(loads.get(skillKey), Skills.K_SKILLSETS));
+		assertNull(RT.getIn(loads.get(skillKey), AbstractLLMAdapter.K_LABEL));
 	}
 
 	// ========== Turn counting and size ==========

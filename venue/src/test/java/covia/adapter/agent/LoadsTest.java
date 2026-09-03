@@ -425,7 +425,7 @@ public class LoadsTest {
 			Vectors.empty(), Vectors.empty(), Vectors.empty(), loads,
 			Vectors.of((ACell) frame), Vectors.empty(), Vectors.empty(), true,
 			loop, null, Vectors.empty(), null, null)
-			.withLoads(snap, Vectors.empty(), loads);
+			.withLoads(snap, Vectors.empty());
 		frame = GoalTreeContext.applyObservations(frame,
 			ContextAssembler.observations(s, snap), 1L);
 		s = s.withFrames(Vectors.of((ACell) frame));
@@ -464,7 +464,7 @@ public class LoadsTest {
 			Vectors.empty(), Vectors.empty(), Vectors.empty(), loads,
 			Vectors.of((ACell) frame), Vectors.empty(), Vectors.empty(), true,
 			Vectors.empty(), null, Vectors.empty(), null, null)
-			.withLoads(snapshot, Vectors.empty(), loads);
+			.withLoads(snapshot, Vectors.empty());
 		frame = GoalTreeContext.applyObservations(frame,
 			ContextAssembler.observations(s, snapshot), 1L);
 		s = s.withFrames(Vectors.of((ACell) frame));
@@ -618,6 +618,78 @@ public class LoadsTest {
 		AVector<ACell> history = (AVector<ACell>) first.messages().concat(second.messages());
 		assertEquals(first.messages(), history.slice(0, first.messages().count()),
 			"reload preserves the old vector as an exact prefix");
+	}
+
+	@Test
+	public void testCompactionUsesTheOrdinaryInitialLoadPathWithCurrentSources() {
+		AString path = Strings.create("w/skills/rebuild-current");
+		write(path.toString(), Maps.of(
+			Fields.DESCRIPTION, Strings.create("Old skill"),
+			Fields.CONTENT, Maps.of("inline", "OLD BODY"),
+			Skills.K_SKILL, Maps.of(
+				Fields.TOOLS, Vectors.of(Strings.create("v/test/ops/echo")),
+				Skills.K_SKILLS, Vectors.of(Strings.create("w/skills/old-child")))));
+		Skills.ResolvedSkill old = Skills.resolveRef(engine, ctx, path);
+		AMap<AString, ACell> declarations = Maps.of(path,
+			Skills.buildSkillLoadMeta(2000, old));
+		Loads.Append loaded = Loads.append(engine, ctx, declarations, path,
+			Labels.BRACKET, Strings.create("context:old"));
+		assertTrue(all(loaded.messages()).contains("OLD BODY"));
+		assertEquals("test_echo", RT.getIn(
+			loaded.loads().get(path), Loads.K_TOOL_BINDINGS, 0L,
+			Fields.DEFINITION, Fields.NAME).toString());
+
+		AMap<AString, ACell> frame = GoalTreeContext.createFrame("reload", loaded.loads());
+		for (long i = 0; i < loaded.messages().count(); i++) {
+			frame = GoalTreeContext.appendTurn(frame, loaded.messages().get(i));
+		}
+
+		// Compaction is the reset boundary: edits before it become the current
+		// initial context, exactly as they would for a newly-created conversation.
+		write(path.toString(), Maps.of(
+			Fields.DESCRIPTION, Strings.create("Current skill"),
+			Fields.CONTENT, Maps.of("inline", "CURRENT BODY"),
+			Skills.K_SKILL, Maps.of(
+				Fields.TOOLS, Vectors.of(Strings.create("v/ops/covia/read")),
+				Skills.K_SKILLS, Vectors.of(Strings.create("w/skills/current-child")))));
+		AMap<AString, ACell> compacted = GoalTreeContext.compactFrame(frame, "kept the result");
+		AMap<AString, ACell> compactedLoads = GoalTreeContext.getLoads(compacted);
+		assertNull(RT.getIn(compactedLoads.get(path), Loads.K_APPENDED));
+		assertNull(RT.getIn(compactedLoads.get(path), Loads.K_TOOL_BINDINGS));
+
+		Loads.Snapshot initial = Loads.resolveForInference(engine, ctx, compactedLoads,
+			(name, owner) -> false, Labels.BRACKET, true);
+		assertTrue(all(initial.instructionElements()).contains("CURRENT BODY"));
+		assertFalse(all(initial.instructionElements()).contains("OLD BODY"));
+		assertEquals("covia_read", RT.getIn(initial.tools().get(0), Fields.NAME).toString());
+		assertEquals("v/ops/covia/read", RT.getIn(
+			initial.effectiveLoads().get(path), Fields.TOOLS, 0L).toString());
+		assertEquals("w/skills/current-child", RT.getIn(
+			initial.effectiveLoads().get(path), Skills.K_SKILLS, 0L).toString());
+
+		Spec rebuild = new Spec(engine, ctx, ctx, Maps.empty(), null, null,
+			100_000, Labels.BRACKET, true, initial.tools(), null,
+			initial.effectiveLoads(), Vectors.of((ACell) compacted),
+			Vectors.empty(), Vectors.empty(), true, Vectors.empty(), null,
+			Vectors.empty(), null, null)
+			.withLoads(initial, initial.tools());
+		ContextAssembler.Rendered rendered = ContextAssembler.initialise(rebuild);
+		AMap<AString, ACell> persisted = ContextAssembler.applyRendering(
+			compacted, rebuild, rendered);
+		assertNotNull(persisted.get(GoalTreeContext.K_RENDERED_CONTEXT));
+		assertEquals("covia_read", RT.getIn(
+			GoalTreeContext.getLoads(persisted).get(path), Loads.K_TOOL_BINDINGS,
+			0L, Fields.DEFINITION, Fields.NAME).toString(),
+			"the same atomic update retains the current dispatch binding");
+
+		Loads.Snapshot cached = Loads.resolveForInference(engine, ctx,
+			GoalTreeContext.getLoads(persisted), (name, owner) -> false,
+			Labels.BRACKET, false);
+		assertEquals(1, cached.tools().count());
+		assertEquals("v/ops/covia/read", cached.operation("covia_read").toString(),
+			"later calls use the binding installed with the rebuilt prefix");
+		assertTrue(cached.instructionElements().isEmpty(),
+			"the body now comes from renderedContext rather than being appended again");
 	}
 
 	@Test

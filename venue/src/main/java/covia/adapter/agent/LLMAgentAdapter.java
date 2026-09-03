@@ -187,15 +187,14 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// context matches a live inference by construction. The pre-split
 		// elements dropped every loads-derived exchange from inspection (#418).
 		AVector<ACell> offered = concatTools(fixedTools, loads.tools());
-		AMap<AString, ACell> effectiveLoads = ContextChain.effective(configLoads, frameLoads);
 		ContextAssembler.Spec spec = new ContextAssembler.Spec(
 			engine, ctx, capsCtx, config,
 			ContextAssembler.sessionHex(RT.getIn(in.session(), Fields.ID)), null,
 			profile.budget(), profile.labels(), profile.toolCalling(),
-			offered, null, effectiveLoads,
+			offered, null, loads.effectiveLoads(),
 			previewFrames, in.pending(), null, hasInput, null, task,
 			fixed.unavailable(), null, null)
-			.withLoads(loads, offered, effectiveLoads)
+			.withLoads(loads, offered)
 			.withSourceConfig(sourceConfig)
 			.withCachePrefix(cachePrefix);
 		if (!toolCtx.store.observe(0, ContextAssembler.observations(spec, loads),
@@ -251,9 +250,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 			calls, 0, toolRegistry(), toolCtx, sink, log);
 		AVector<ACell> turns = Vectors.of((ACell) reply).concat(sink.turns());
 
-		Loads.Snapshot loads = toolCtx.refreshLoadSnapshot(engine, p.spec().labels());
 		ACell task = toolCtx.tasks.message();
-		AVector<ACell> tools = concatTools(p.fixedTools(), loads.tools());
 		ContextAssembler.Spec next;
 		boolean compacted = toolCtx.pendingCompactSummary != null;
 		if (compacted) {
@@ -266,12 +263,15 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 			}
 			frames = frames.assoc(0,
 				GoalTreeContext.compactFrame(root, toolCtx.pendingCompactSummary));
+			toolCtx.adoptFrames(frames);
 			next = p.spec().afterCompaction(frames);
 		} else {
 			next = p.spec().withToolLoop(turns);
 		}
+		Loads.Snapshot loads = toolCtx.refreshLoadSnapshot(engine, p.spec().labels());
+		AVector<ACell> tools = concatTools(p.fixedTools(), loads.tools());
 		next = next
-			.withLoads(loads, tools, ContextChain.effective(toolCtx.outerLoads, toolCtx.getLoads()))
+			.withLoads(loads, tools)
 			.withTask(task);
 		next = observeStep(next, loads, compacted);
 		return new Step(reply, turns, sink, batch.terminalStatus(), batch.terminalValue(), null, next).report();
@@ -557,13 +557,11 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 			toolCtx.adoptFrames(toolCtx.store.frames());
 			// Existing messages stay intact; this cycle's turns and any changed
 			// observations extend them.
-			AMap<AString, ACell> effectiveLoads =
-				ContextChain.effective(toolCtx.outerLoads, toolCtx.getLoads());
 			Loads.Snapshot loads = toolCtx.refreshLoadSnapshot(engine, spec.labels());
 			ACell taskMessage = toolCtx.tasks.message();
 			AVector<ACell> tools = concatTools(fixedTools, loads.tools());
 			ContextAssembler.Spec inference = spec
-				.withLoads(loads, tools, effectiveLoads)
+				.withLoads(loads, tools)
 				.withFrames(toolCtx.frames)
 				.withToolLoop(Vectors.empty())
 				.withTask(taskMessage);

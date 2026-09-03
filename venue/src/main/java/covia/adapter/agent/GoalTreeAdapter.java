@@ -333,7 +333,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			profile.budget(), profile.labels(), profile.toolCalling(),
 			offered, null, indexLoads,
 			rootFrames, null, null, true, null, taskTools.message(), fixed.unavailable(), null, null)
-			.withLoads(loads, offered, indexLoads)
+			.withLoads(loads, offered)
 			.withSourceConfig(sourceConfig)
 			.withCachePrefix(cachePrefix);
 		AMap<AString, ACell> observedRoot = GoalTreeContext.applyObservations(
@@ -1244,7 +1244,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			.withFrames(stack);
 		if (frameTools.compacted) base = base.afterCompaction(stack);
 		ContextAssembler.Spec inference = base
-			.withLoads(loads, concatTools(fixedTools, loads.tools()), effectiveLoads)
+			.withLoads(loads, concatTools(fixedTools, loads.tools()))
 			.withNotice(notice)
 			.withTask(root ? frameTools.cycle.tasks().message() : null);
 		if (!frameTools.store.observe(frameTools.frameIndex,

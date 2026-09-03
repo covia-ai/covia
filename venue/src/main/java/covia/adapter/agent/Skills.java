@@ -1018,37 +1018,25 @@ public final class Skills {
 		return meta;
 	}
 
-	/**
-	 * Resolves tool declarations for skill-marked loads that did not already
-	 * declare {@code tools}. Runtime {@code skill_load} entries denormalise this
-	 * field when written; operator-pinned {@code config.loads} entries may be
-	 * hand-written and therefore need the same contribution resolved
-	 * ephemerally. An explicit {@code tools} value, including empty or null,
-	 * remains authoritative.
-	 *
-	 * <p>Resolution failures remain visible through the normal skill-element
-	 * diagnostic and contribute no tools; this helper never makes a pinned
-	 * context entry disappear or fail the whole prompt.</p>
-	 */
-	@SuppressWarnings("unchecked")
-	public static AMap<AString, ACell> resolveLoadTools(Engine engine,
-			RequestContext ctx, AMap<AString, ACell> loads) {
-		if (loads == null || loads.count() == 0) return loads;
-		AMap<AString, ACell> resolved = loads;
-		for (var entry : loads.entrySet()) {
-			if (!(entry.getValue() instanceof AMap<?, ?> raw)) continue;
-			AMap<AString, ACell> meta = (AMap<AString, ACell>) raw;
-			if (!isSkillEntry(meta) || meta.containsKey(Fields.TOOLS)) continue;
-			try {
-				AVector<ACell> tools = resolveRef(engine, ctx, entry.getKey()).toolOps();
-				if (tools.count() > 0) {
-					resolved = resolved.assoc(entry.getKey(), meta.assoc(Fields.TOOLS, tools));
-				}
-			} catch (RuntimeException e) {
-				// Loads.element reports the same resolution failure in model-visible context.
-			}
+	/** Refreshes the fields derived from a loaded skill's current source while
+	 * retaining the load's identity, budget, ordering and ownership. Missing or
+	 * broken skills contribute no tools or child sources; their visible
+	 * unavailable instruction is produced by the ordinary loads renderer. */
+	static AMap<AString, ACell> materialiseLoadMeta(Engine engine, RequestContext ctx,
+			AString path, AMap<AString, ACell> meta) {
+		try {
+			ResolvedSkill skill = resolveRef(engine, ctx, path);
+			if (!meta.containsKey(K_LABEL)) meta = meta.assoc(K_LABEL, Strings.create(skill.name()));
+			if (!meta.containsKey(Fields.TOOLS)) meta = meta.assoc(Fields.TOOLS, skill.toolOps());
+			if (!meta.containsKey(K_SKILLS)) meta = meta.assoc(K_SKILLS, skill.skills());
+			if (!meta.containsKey(K_SKILLSETS)) meta = meta.assoc(K_SKILLSETS, skill.skillsets());
+			return meta;
+		} catch (RuntimeException e) {
+			if (!meta.containsKey(Fields.TOOLS)) meta = meta.assoc(Fields.TOOLS, Vectors.empty());
+			if (!meta.containsKey(K_SKILLS)) meta = meta.assoc(K_SKILLS, Vectors.empty());
+			if (!meta.containsKey(K_SKILLSETS)) meta = meta.assoc(K_SKILLSETS, Vectors.empty());
+			return meta;
 		}
-		return resolved;
 	}
 
 	/** No-engine form: contributes only child refs already denormalised onto
@@ -1074,7 +1062,7 @@ public final class Skills {
 	 * (a runtime {@code skill_load}) or live only in the skill's facet (a
 	 * hand-written {@code config.loads} pin, #415): for a pin missing a kind,
 	 * the skill is re-resolved and its facet children are contributed — the
-	 * sources counterpart of {@link #resolveLoadTools}. An explicit
+	 * sources counterpart of initial load materialisation. An explicit
 	 * {@code skills} / {@code skillsets} on the entry, including an empty vector
 	 * or null, stays authoritative. Needs {@code engine} + {@code ctx}; the
 	 * no-arg overload skips this repair.</p>

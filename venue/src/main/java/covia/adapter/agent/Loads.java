@@ -109,8 +109,9 @@ public final class Loads {
 	public record Snapshot(AVector<ACell> instructionElements, AVector<ACell> exchanges,
 			AVector<ACell> observations,
 			ToolPalette.Palette toolPalette, AMap<AString, ACell> pinnedToolIndex,
-			AVector<ACell> diagnostics) {
-		public static final Snapshot EMPTY = new Snapshot(null, null, null, null, null, null);
+			AVector<ACell> diagnostics, AMap<AString, ACell> effectiveLoads) {
+		public static final Snapshot EMPTY = new Snapshot(
+			null, null, null, null, null, null, null);
 
 		public Snapshot {
 			instructionElements = (instructionElements != null) ? instructionElements : Vectors.empty();
@@ -119,6 +120,7 @@ public final class Loads {
 			toolPalette = (toolPalette != null) ? toolPalette : ToolPalette.Palette.EMPTY;
 			pinnedToolIndex = (pinnedToolIndex != null) ? pinnedToolIndex : Maps.empty();
 			diagnostics = (diagnostics != null) ? diagnostics : Vectors.empty();
+			effectiveLoads = (effectiveLoads != null) ? effectiveLoads : Maps.empty();
 		}
 
 		public AVector<ACell> tools() { return toolPalette.tools(); }
@@ -320,24 +322,115 @@ public final class Loads {
 			AMap<AString, ACell> effectiveLoads, BiPredicate<String, AString> excluded,
 			boolean resolvePinned) {
 		if (effectiveLoads == null || effectiveLoads.count() == 0) return Snapshot.EMPTY;
-		AMap<AString, ACell> toolLoads = resolvePinned
-			? Skills.resolveLoadTools(engine, ctx, effectiveLoads) : effectiveLoads;
+		if (resolvePinned) effectiveLoads = materialiseInitial(engine, ctx, effectiveLoads);
 		ToolPalette.LoadPalette tools = ToolPalette.loadPalette(
-			engine, ctx, toolLoads, excluded, resolvePinned);
-		return new Snapshot(null, null, null, tools.active(), tools.pinnedIndex(), null);
+			engine, ctx, effectiveLoads, excluded, resolvePinned);
+		return new Snapshot(null, null, null, tools.active(), tools.pinnedIndex(), null,
+			effectiveLoads);
 	}
 
 	private static Snapshot resolve(Engine engine, RequestContext ctx,
 			AMap<AString, ACell> effectiveLoads, BiPredicate<String, AString> excluded, AString dialect,
 			boolean materialiseLive) {
 		if (effectiveLoads == null || effectiveLoads.count() == 0) return Snapshot.EMPTY;
-		AMap<AString, ACell> toolLoads = materialiseLive
-			? Skills.resolveLoadTools(engine, ctx, effectiveLoads) : effectiveLoads;
+		if (materialiseLive) effectiveLoads = materialiseInitial(engine, ctx, effectiveLoads);
 		ToolPalette.LoadPalette tools = ToolPalette.loadPalette(
-			engine, ctx, toolLoads, excluded, materialiseLive);
+			engine, ctx, effectiveLoads, excluded, materialiseLive);
 		Resolved resolved = resolveElements(engine, ctx, effectiveLoads, dialect, materialiseLive);
 		return new Snapshot(resolved.instructions(), resolved.exchanges(), resolved.observations(),
-			tools.active(), tools.pinnedIndex(), resolved.diagnostics());
+			tools.active(), tools.pinnedIndex(), resolved.diagnostics(), effectiveLoads);
+	}
+
+	/**
+	 * Invalidates the derived part of agent-managed loads at a compaction
+	 * boundary. Their declaration and ownership stay active, but the next
+	 * initial render must resolve current content, skill contributions and tool
+	 * definitions because the earlier appended events are now behind the
+	 * compacted summary. Pinned entries remain byte-identical.
+	 */
+	@SuppressWarnings("unchecked")
+	static AMap<AString, ACell> invalidateAgentMaterialisation(AMap<AString, ACell> loads) {
+		if (loads == null || loads.isEmpty()) return (loads != null) ? loads : Maps.empty();
+		AMap<AString, ACell> updated = loads;
+		for (var entry : loads.entrySet()) {
+			if (!(entry.getValue() instanceof AMap<?, ?> raw)) continue;
+			AMap<AString, ACell> meta = (AMap<AString, ACell>) raw;
+			if (!isAgentManaged(meta)) continue;
+			AMap<AString, ACell> reset = meta
+				.dissoc(K_APPENDED)
+				.dissoc(K_TOOL_BINDINGS);
+			if (Skills.isSkillEntry(meta)) {
+				reset = reset
+					.dissoc(Fields.TOOLS)
+					.dissoc(Skills.K_SKILLS)
+					.dissoc(Skills.K_SKILLSETS)
+					.dissoc(AbstractLLMAdapter.K_LABEL);
+			}
+			if (reset != meta) updated = updated.assoc(entry.getKey(), reset);
+		}
+		return updated;
+	}
+
+	/** Materialises the declarations used by any initial context load. This is
+	 * the common path for a new frame, a cache rebuild and post-compaction
+	 * loading. All source reads happen before the caller enters its atomic frame
+	 * update. */
+	@SuppressWarnings("unchecked")
+	private static AMap<AString, ACell> materialiseInitial(Engine engine,
+			RequestContext ctx, AMap<AString, ACell> loads) {
+		AMap<AString, ACell> updated = loads;
+		for (var entry : loads.entrySet()) {
+			if (!(entry.getValue() instanceof AMap<?, ?> raw)) continue;
+			AMap<AString, ACell> meta = (AMap<AString, ACell>) raw;
+			meta = materialiseEntry(engine, ctx, entry.getKey(), meta);
+			if (meta != entry.getValue()) updated = updated.assoc(entry.getKey(), meta);
+		}
+		return updated;
+	}
+
+	/** One declaration through the same materialisation path used by both an
+	 * explicit load and an initial context render. */
+	private static AMap<AString, ACell> materialiseEntry(Engine engine,
+			RequestContext ctx, AString key, AMap<AString, ACell> meta) {
+		boolean incompleteSkill = Skills.isSkillEntry(meta)
+			&& (!meta.containsKey(Fields.TOOLS)
+				|| !meta.containsKey(Skills.K_SKILLS)
+				|| !meta.containsKey(Skills.K_SKILLSETS));
+		if (incompleteSkill) meta = Skills.materialiseLoadMeta(engine, ctx, key, meta);
+		if (meta.get(Fields.TOOLS) != null && !meta.containsKey(K_TOOL_BINDINGS)) {
+			meta = ToolPalette.materialiseLoadToolBindings(engine, ctx, meta);
+		}
+		return meta;
+	}
+
+	/** Installs refreshed derived metadata onto matching frame-owned entries.
+	 * This is a pure transform for the same atomic update that installs the
+	 * replacement rendered prefix. */
+	@SuppressWarnings("unchecked")
+	static AMap<AString, ACell> applyMaterialisedMetadata(
+			AMap<AString, ACell> frameLoads, AMap<AString, ACell> effectiveLoads) {
+		if (frameLoads == null || frameLoads.isEmpty() || effectiveLoads == null) {
+			return (frameLoads != null) ? frameLoads : Maps.empty();
+		}
+		AMap<AString, ACell> updated = frameLoads;
+		for (var entry : frameLoads.entrySet()) {
+			if (!(entry.getValue() instanceof AMap<?, ?> raw)) continue;
+			AMap<AString, ACell> current = (AMap<AString, ACell>) raw;
+			if (!isAgentManaged(current)) continue;
+			boolean needsMetadata = (Skills.isSkillEntry(current)
+				&& (!current.containsKey(Fields.TOOLS)
+					|| !current.containsKey(Skills.K_SKILLS)
+					|| !current.containsKey(Skills.K_SKILLSETS)))
+				|| (current.get(Fields.TOOLS) != null
+					&& !current.containsKey(K_TOOL_BINDINGS));
+			if (!needsMetadata) continue;
+			ACell replacement = effectiveLoads.get(entry.getKey());
+			if (replacement instanceof AMap<?, ?> && isAgentManaged(replacement)
+					&& !replacement.equals(current)) {
+				updated = updated.assoc(entry.getKey(), replacement);
+			}
+		}
+		return updated;
 	}
 
 	/**
@@ -354,9 +447,10 @@ public final class Loads {
 			return new Append((loads != null) ? loads : Maps.empty(), Vectors.empty());
 		}
 		AMap<AString, ACell> meta = (AMap<AString, ACell>) raw;
-		// Tool metadata follows load state, not content volatility: resolve it once
-		// when the load changes and retain it even when content is watched.
-		meta = ToolPalette.materialiseLoadToolBindings(engine, ctx, meta);
+		// Explicit and initial loads share one materialisation path. Tool metadata
+		// follows load state, not content volatility, and is retained even when
+		// content is watched.
+		meta = materialiseEntry(engine, ctx, key, meta);
 		loads = loads.assoc(key, meta);
 		if (isVolatile(meta)) return new Append(loads, Vectors.empty());
 		Resolved resolved = resolveElements(engine, ctx, Maps.of(key, meta), dialect, true);

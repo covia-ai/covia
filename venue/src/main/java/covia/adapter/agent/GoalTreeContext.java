@@ -490,14 +490,19 @@ public class GoalTreeContext {
 				}
 			}
 		}
-		// A compacted summary replaces history, not current watched state. Reuse
-		// the exact latest observation messages after the archive so no source is
-		// re-read and the model still has the active snapshot.
 		AVector<ACell> newConversation = Vectors.of((ACell) segment);
-		newConversation = (AVector<ACell>) newConversation.concat(latestObservationMessages(frame));
-		// Compaction is an explicit prefix rewrite boundary. The next inference
-		// materialises a new initial representation around the compacted history.
-		return frame.assoc(K_CONVERSATION, newConversation).dissoc(K_RENDERED_CONTEXT);
+		// Compaction starts a fresh provider-visible context around the summary.
+		// Keep the active load declarations, but invalidate their materialised
+		// bodies, contributions and tool schemas; watched values likewise get a
+		// fresh baseline. The next inference resolves all of that outside the
+		// atomic state update and installs the replacement prefix in one shot.
+		AMap<AString, ACell> compacted = frame
+			.assoc(K_CONVERSATION, newConversation)
+			.dissoc(K_RENDERED_CONTEXT)
+			.dissoc(K_OBSERVATIONS);
+		AMap<AString, ACell> loads = getLoads(compacted);
+		AMap<AString, ACell> reloads = Loads.invalidateAgentMaterialisation(loads);
+		return (reloads == loads) ? compacted : withLoads(compacted, reloads);
 	}
 
 	/** Persists the exact initial vectors on a frame. */
@@ -624,25 +629,6 @@ public class GoalTreeContext {
 				.assoc(covia.venue.AgentState.K_SOURCE, source));
 		}
 		return stamped;
-	}
-
-	/** Exact latest observation messages in their current declaration order. */
-	@SuppressWarnings("unchecked")
-	private static AVector<ACell> latestObservationMessages(AMap<AString, ACell> frame) {
-		if (!(frame.get(K_OBSERVATIONS) instanceof AMap<?, ?> raw)) return Vectors.empty();
-		AMap<AString, ACell> observations = (AMap<AString, ACell>) raw;
-		java.util.List<java.util.Map.Entry<AString, ACell>> ordered = new java.util.ArrayList<>();
-		for (var entry : observations.entrySet()) ordered.add(entry);
-		ordered.sort(java.util.Comparator
-			.comparingLong((java.util.Map.Entry<AString, ACell> e) -> observationOrder(e.getValue()))
-			.thenComparing(e -> e.getKey().toString()));
-		AVector<ACell> messages = Vectors.empty();
-		for (var entry : ordered) {
-			AVector<ACell> value = RT.ensureVector(RT.getIn(
-				entry.getValue(), ContextAssembler.K_OBSERVATION_MESSAGES));
-			if (value != null) messages = (AVector<ACell>) messages.concat(value);
-		}
-		return messages;
 	}
 
 	/**

@@ -330,10 +330,12 @@ public final class ContextAssembler {
 		}
 
 		/** The per-inference stable loads and their contributed tools. Watched
-		 * values are applied to frame observations before this Spec is assembled. */
-		public Spec withLoads(Loads.Snapshot loads, AVector<ACell> tools, AMap<AString, ACell> effectiveLoads) {
+		 * values are applied to frame observations before this Spec is assembled.
+		 * The resolver result owns both the rendered elements and the effective
+		 * declaration view, so rebuilt metadata cannot drift from its prompt. */
+		public Spec withLoads(Loads.Snapshot loads, AVector<ACell> tools) {
 			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling, cachePrefix,
-				tools, loads.instructionElements(), loads.exchanges(), effectiveLoads,
+				tools, loads.instructionElements(), loads.exchanges(), loads.effectiveLoads(),
 				frames, pending, input, hasInput, toolLoop, task, unavailable, notice, now, sourceConfig);
 		}
 
@@ -633,6 +635,10 @@ public final class ContextAssembler {
 		if (current != null && current.matchesConfig(spec.sourceConfig())) return frame;
 		if (candidate == null) throw new IllegalArgumentException(
 			"A cached context replacement requires a rendered candidate");
+		AMap<AString, ACell> frameLoads = GoalTreeContext.getLoads(frame);
+		AMap<AString, ACell> refreshed = Loads.applyMaterialisedMetadata(
+			frameLoads, spec.effectiveLoads());
+		if (refreshed != frameLoads) frame = GoalTreeContext.withLoads(frame, refreshed);
 		return GoalTreeContext.withRenderedContext(frame, candidate);
 	}
 
