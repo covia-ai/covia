@@ -5147,6 +5147,8 @@ public class AgentAdapterTest {
 			() -> "agent did not enter RUNNING (status=" + observableStatus(old) + ")");
 		assertEquals(AgentState.RUNNING, observableStatus(old));
 		assertEquals(AgentState.RUNNING, old.getStatus());
+		TestEngine.awaitCondition(() -> Status.STARTED.equals(stuck.getStatus()), 5000,
+			() -> "request job did not enter STARTED (status=" + stuck.getStatus() + ")");
 
 		// Config and state changes land on the record now and apply to future
 		// transitions; the never-completing transition keeps the snapshot it
