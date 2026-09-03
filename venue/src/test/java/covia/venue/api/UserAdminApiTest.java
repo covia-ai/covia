@@ -36,7 +36,7 @@ import covia.venue.User;
  * against the shared {@link TestServer} as a unique authenticated caller.
  */
 @TestInstance(Lifecycle.PER_CLASS)
-public class UserApiTest {
+public class UserAdminApiTest {
 
 	private String jwt;
 	private String callerDID;
