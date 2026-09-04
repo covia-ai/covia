@@ -55,7 +55,7 @@
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-compiler-plugin</artifactId>
-				<version>3.15.0</version>
+				<version>3.16.0</version>
 				<configuration>
 					<!-- Stable FFM starts in Java 22. Keep the public API and fallback
 					     Java-21-loadable; the profile below adds this package on 22+. -->
@@ -76,7 +76,7 @@
 					<plugin>
 						<groupId>org.apache.maven.plugins</groupId>
 						<artifactId>maven-compiler-plugin</artifactId>
-						<version>3.15.0</version>
+						<version>3.16.0</version>
 						<executions>
 							<execution>
 								<id>compile-python-ffm</id>
