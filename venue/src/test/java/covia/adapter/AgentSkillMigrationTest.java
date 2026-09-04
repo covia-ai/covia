@@ -55,7 +55,7 @@ public class AgentSkillMigrationTest {
 	private static final AString K_SOURCE   = Fields.SOURCE;
 	private static final AString K_AGENT_ID = Strings.intern("agentId");
 	private static final AString K_CONFIG   = Strings.intern("config");
-	private static final AString K_SKILLS   = Strings.intern("skills");
+	private static final AString K_SKILLSETS = Skills.K_SKILLSETS;
 
 	/** A realistic ported skill: Anthropic Agent Skills frontmatter + a tool the skill declares. */
 	private static final String REFUND_SKILL = """
@@ -130,7 +130,7 @@ public class AgentSkillMigrationTest {
 		AMap<AString, ACell> config = Maps.of(
 			Strings.intern("operation"), Strings.create("v/ops/llmagent/chat"),
 			Strings.intern("systemPrompt"), Strings.create(SYSTEM_PROMPT),
-			K_SKILLS, Vectors.of(Strings.create("w/skills")));
+			K_SKILLSETS, Vectors.of(Strings.create("w/skills")));
 		ACell created = call("v/ops/agent/create", Maps.of(
 			K_AGENT_ID, Strings.create("refund-bot"), K_CONFIG, config));
 		assertEquals("refund-bot", str(created, "agentId"));
@@ -140,15 +140,16 @@ public class AgentSkillMigrationTest {
 		ACell info = call("v/ops/agent/info", Maps.of(K_AGENT_ID, Strings.create("refund-bot")));
 		assertEquals(SYSTEM_PROMPT, str(info, "config", "systemPrompt"));
 		assertEquals("v/ops/llmagent/chat", str(info, "config", "operation"));
-		AVector<ACell> agentSkills = RT.ensureVector(RT.getIn(info, "config", "skills"));
-		assertNotNull(agentSkills, "migrated agent must carry a skills index");
-		assertTrue(agentSkills.contains(Strings.create("w/skills")),
-			"agent config indexes the skillset the skill was imported into: " + agentSkills);
+		AMap<AString, ACell> agentConfig = RT.ensureMap(RT.getIn(info, "config"));
+		AVector<ACell> agentSkillsets = RT.ensureVector(agentConfig.get(K_SKILLSETS));
+		assertNotNull(agentSkillsets, "migrated agent must declare a skillset");
+		assertTrue(agentSkillsets.contains(Strings.create("w/skills")),
+			"agent config declares the skillset the skill was imported into: " + agentSkillsets);
 
-		// 4. The wedge's real claim: the agent's skillset resolves the migrated
-		//    skill, so the ported know-how is genuinely in the agent's scope.
+		// 4. The wedge's real claim: through the discovery surface the runtime
+		//    builds from the agent's own config, the migrated skill is in scope.
 		List<Skills.SkillIndexEntry> index = Skills.listSkills(engine, ctx,
-			Skills.SkillSources.ofSkillsets(agentSkills));
+			Skills.sourcesOf(agentConfig));
 		Skills.SkillIndexEntry refund = index.stream()
 			.filter(e -> "refund-policy".equals(e.name())).findFirst().orElse(null);
 		assertNotNull(refund, "the migrated skill must resolve in the agent's index: " + index);
