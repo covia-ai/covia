@@ -403,7 +403,16 @@ public class SkillsAdapter extends AAdapter {
 				+ " give a 'source', or keep content 'inline' for text");
 		}
 
-		String skillText = (source != null) ? readSkillText(ctx, source) : text.toString();
+		// Exactly one of source/text is set (checked above); the explicit branch
+		// keeps text's non-nullness provable rather than relying on that invariant.
+		String skillText;
+		if (source != null) {
+			skillText = readSkillText(ctx, source);
+		} else if (text != null) {
+			skillText = text.toString();
+		} else {
+			throw new IllegalArgumentException("provide exactly one of 'source' or 'text'");
+		}
 		Skills.ParsedSkill parsed = Skills.parseSkillText(skillText, source, inline);
 		AString path = Strings.create(dir + "/" + parsed.name());
 		ACell written = write(ctx, path, parsed.metadata());
