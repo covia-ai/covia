@@ -96,7 +96,8 @@ public class AgentAdapter extends AAdapter {
 	private static final AString K_SYSTEM_PROMPT    = Strings.intern("systemPrompt");
 	private static final AString K_LLM_OPERATION    = Strings.intern("llmOperation");
 	private static final AString K_MODEL            = Strings.intern("model");
-	private static final AString K_SKILLS           = Strings.intern("skills");
+	private static final AString K_SKILLS           = Skills.K_SKILLS;
+	private static final AString K_SKILLSETS        = Skills.K_SKILLSETS;
 	private static final AString K_SKILLSET         = Strings.intern("skillset");
 	private static final AString K_IMPORTED_SKILLS  = Strings.intern("importedSkills");
 	private static final AString DEFAULT_SKILLSET   = Strings.intern("w/skills");
@@ -1171,7 +1172,8 @@ public class AgentAdapter extends AAdapter {
 
 		// 2. Build the create config: an optional caller-supplied base, plus the
 		//    migrated system prompt, optional transition/model overrides, and a
-		//    skills index that includes the skillset the skills landed in.
+		//    skillsets declaration that includes the directory the skills landed in
+		//    (a directory under config.skills would be one broken skill, never walked).
 		ACell configArg = RT.getIn(input, Fields.CONFIG);
 		AMap<AString, ACell> config;
 		if (configArg == null) config = Maps.empty();
@@ -1187,10 +1189,10 @@ public class AgentAdapter extends AAdapter {
 			AString v = RT.ensureString(RT.getIn(input, k));
 			if (v != null && !config.containsKey(k)) config = config.assoc(k, v);
 		}
-		AVector<ACell> skillsIndex = RT.ensureVector(config.get(K_SKILLS));
-		if (skillsIndex == null) skillsIndex = Vectors.empty();
-		if (!skillsIndex.contains(skillset)) skillsIndex = skillsIndex.conj(skillset);
-		config = config.assoc(K_SKILLS, skillsIndex);
+		AVector<ACell> skillsets = RT.ensureVector(config.get(K_SKILLSETS));
+		if (skillsets == null) skillsets = Vectors.empty();
+		if (!skillsets.contains(skillset)) skillsets = skillsets.conj(skillset);
+		config = config.assoc(K_SKILLSETS, skillsets);
 
 		// 3. Create the native agent through the canonical op (unused-name and
 		//    config validation are enforced there, once).

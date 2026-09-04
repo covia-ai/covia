@@ -121,15 +121,22 @@ public class AgentFromSkillsTest {
 		assertTrue(imported.contains(Strings.create("w/skills/refund-policy")),
 			"the imported skill path is reported: " + imported);
 
-		// The agent exists, carries the prompt, and indexes the skillset.
+		// The directory is declared as a skillset, so agent:create raises no
+		// kind-mismatch advisory (covia#491).
+		AVector<ACell> warnings = RT.ensureVector(RT.getIn(out, Fields.WARNINGS));
+		assertTrue(warnings == null || warnings.toString().indexOf("skillset") < 0,
+			"no skill/skillset advisory on a port: " + warnings);
+
+		// The agent exists, carries the prompt, and declares the skillset.
 		ACell info = call("v/ops/agent/info", Maps.of(K_AGENT_ID, Strings.create("refund-bot")));
 		assertEquals(SYSTEM_PROMPT, str(info, "config", "systemPrompt"));
-		AVector<ACell> agentSkills = RT.ensureVector(RT.getIn(info, "config", "skills"));
-		assertTrue(agentSkills.contains(Strings.create("w/skills")), "agent indexes the skillset: " + agentSkills);
+		AMap<AString, ACell> agentConfig = RT.ensureMap(RT.getIn(info, "config"));
+		AVector<ACell> agentSkillsets = RT.ensureVector(agentConfig.get(Skills.K_SKILLSETS));
+		assertTrue(agentSkillsets.contains(Strings.create("w/skills")), "agent declares the skillset: " + agentSkillsets);
 
-		// And the migrated skill resolves in the agent's live index.
-		List<Skills.SkillIndexEntry> index = Skills.listSkills(engine, ctx,
-			Skills.SkillSources.ofSkillsets(agentSkills));
+		// And the migrated skill resolves through the discovery surface the
+		// runtime builds from the agent's own config.
+		List<Skills.SkillIndexEntry> index = Skills.listSkills(engine, ctx, Skills.sourcesOf(agentConfig));
 		assertTrue(index.stream().anyMatch(e -> "refund-policy".equals(e.name()) && e.error() == null),
 			"the migrated skill resolves for the agent: " + index);
 	}
@@ -147,7 +154,7 @@ public class AgentFromSkillsTest {
 
 		ACell info = call("v/ops/agent/info", Maps.of(K_AGENT_ID, Strings.create("greeter")));
 		List<Skills.SkillIndexEntry> index = Skills.listSkills(engine, ctx,
-			Skills.SkillSources.ofSkillsets(RT.ensureVector(RT.getIn(info, "config", "skills"))));
+			Skills.sourcesOf(RT.ensureMap(RT.getIn(info, "config"))));
 		assertTrue(index.stream().anyMatch(e -> "greeting".equals(e.name()) && e.error() == null),
 			"the inline-text skill resolves for the agent: " + index);
 	}
