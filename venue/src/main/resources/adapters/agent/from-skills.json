@@ -1,0 +1,54 @@
+{
+  "name": "Create Agent from Skills",
+  "description": "Creates a native agent from an existing agent's know-how in one call: imports each SKILL.md (Anthropic Agent Skills format) into the caller's skillset, then creates the agent with that skillset declared and the given system prompt. The migration wedge for bringing an agent onto Covia (skills:import + agent:create composed), so the ported agent runs on Covia's own loop and inherits the grid. Each skills entry is either a source reference (a string: 'file://<root>/<dir>/SKILL.md', 'dlfs/<drive>/<path>' or 'a/<hash>') or a map forwarded to skills:import (carrying 'source' or 'text', and optionally 'content' and 'skillset'). Sub-operations enforce their own capabilities: importing requires write to the skillset, and creating requires agent-create authority. The agentId must be unused, exactly as agent:create requires. Tools and memory are not migrated here.",
+  "dateCreated": "2026-09-03T00:00:00Z",
+  "operation": {
+    "adapter": "agent:fromSkills",
+    "readOnly": false,
+    "internal": false,
+    "toolName": "agent_from_skills",
+    "input": {
+      "type": "object",
+      "properties": {
+        "agentId": {
+          "type": "string",
+          "description": "Target agent reference: a bare human-readable name for the caller's namespace, g/<id>, /g/<id>, or <ownerDID>/g/<id>. Must be unused."
+        },
+        "systemPrompt": {
+          "type": "string",
+          "description": "The ported agent's system prompt, defining its role and behaviour. Written to config.systemPrompt; llmOperation defaults are applied as in agent:create."
+        },
+        "skills": {
+          "type": "array",
+          "description": "SKILL.md files to import, one per entry. Each entry is a source reference string ('file://<root>/<dir>/SKILL.md', 'dlfs/<drive>/<path>', 'a/<hash>') or a map forwarded to skills:import (with 'source' or 'text', and optionally 'content' and 'skillset'). Each is imported into <skillset>/<name>, and the skillset is declared under the agent's config.skillsets.",
+          "items": {}
+        },
+        "skillset": {
+          "type": "string",
+          "description": "Writable directory the skills are imported into and that the agent declares as a skillset. Defaults to 'w/skills', the personal skills directory standard templates declare first."
+        },
+        "operation": {
+          "type": "string",
+          "description": "Transition operation for the agent (a resolvable lattice path, e.g. 'v/ops/llmagent/chat'). Defaults to the venue's default transition operation."
+        },
+        "llmOperation": {
+          "type": "string",
+          "description": "LLM operation path, e.g. 'v/models/anthropic/claude-sonnet-5'. Defaults to the venue default; bring-your-own-model by overriding it."
+        },
+        "model": {
+          "type": "string",
+          "description": "Optional LLM model name override for the selected provider."
+        },
+        "config": {
+          "type": "object",
+          "description": "Optional base agent configuration, merged under the derived fields (systemPrompt, skillsets, operation/llmOperation/model). Use it to pass any other agent:create config such as tools, caps, or accepts."
+        }
+      },
+      "required": ["agentId"]
+    },
+    "output": {
+      "type": "object",
+      "description": "{agentId, address, status, importedSkills, skillset} — the created agent (as agent:create returns it) plus the skill paths imported and the skillset they landed in. Fails, creating no agent, if any skill import fails or if the agentId is already in use."
+    }
+  }
+}

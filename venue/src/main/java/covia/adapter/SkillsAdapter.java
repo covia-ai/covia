@@ -365,23 +365,27 @@ public class SkillsAdapter extends AAdapter {
 
 	/**
 	 * Parses one SKILL.md and writes the result to {@code <skillset>/<name>}.
-	 * The source is always one file, never a directory: importing a library
-	 * means naming each SKILL.md, so nothing is walked and nothing lands
+	 * The SKILL.md comes from exactly one of {@code source} (one content
+	 * reference, never a directory) or {@code text} (the body itself, for a
+	 * caller that already has it in hand, such as a UI paste). Importing a
+	 * library means naming each SKILL.md, so nothing is walked and nothing lands
 	 * unasked. The name is the frontmatter's (the directory key is canonical
 	 * for a skillset member, so the two cannot disagree), and the skillset
 	 * defaults to the caller's own {@code w/skills}.
 	 *
-	 * <p>Read and parse complete before the write, so a bad source writes
+	 * <p>Read and parse complete before the write, so a bad input writes
 	 * nothing. The write goes through the lattice write seam, which enforces
-	 * the namespace rules and the {@code crud/write} pin; the source read is
-	 * pinned by its provider or as a metadata read.</p>
+	 * the namespace rules and the {@code crud/write} pin; a {@code source} read
+	 * is pinned by its provider or as a metadata read. {@code text} carries no
+	 * source, so only {@code content: inline} is possible with it.</p>
 	 */
 	private ACell handleImport(RequestContext ctx, ACell input) {
 		AString source = RT.ensureString(RT.getIn(input, Fields.SOURCE));
-		if (source == null) {
-			throw new IllegalArgumentException("source must be one content reference to a SKILL.md —"
-				+ " e.g. file://<root>/<dir>/SKILL.md, dlfs/<drive>/<path> or a/<hash>."
-				+ " Import one skill per call: a directory is not a source, name each SKILL.md");
+		AString text = RT.ensureString(RT.getIn(input, Fields.TEXT));
+		if ((source == null) == (text == null)) {
+			throw new IllegalArgumentException("provide exactly one of 'source' (one content reference to a"
+				+ " SKILL.md, e.g. file://<root>/<dir>/SKILL.md, dlfs/<drive>/<path> or a/<hash>)"
+				+ " or 'text' (the SKILL.md itself). Import one skill per call: a directory is not a source.");
 		}
 		ACell rawSkillset = RT.getIn(input, K_SKILLSET);
 		AString skillset = RT.ensureString(rawSkillset);
@@ -394,8 +398,22 @@ public class SkillsAdapter extends AAdapter {
 			throw new IllegalArgumentException("skillset must be a directory path such as 'w/skills'");
 		}
 		boolean inline = inlineBody(input);
+		if (!inline && source == null) {
+			throw new IllegalArgumentException("content 'ref' binds the body to a source —"
+				+ " give a 'source', or keep content 'inline' for text");
+		}
 
-		Skills.ParsedSkill parsed = Skills.parseSkillText(readSkillText(ctx, source), source, inline);
+		// Exactly one of source/text is set (checked above); the explicit branch
+		// keeps text's non-nullness provable rather than relying on that invariant.
+		String skillText;
+		if (source != null) {
+			skillText = readSkillText(ctx, source);
+		} else if (text != null) {
+			skillText = text.toString();
+		} else {
+			throw new IllegalArgumentException("provide exactly one of 'source' or 'text'");
+		}
+		Skills.ParsedSkill parsed = Skills.parseSkillText(skillText, source, inline);
 		AString path = Strings.create(dir + "/" + parsed.name());
 		ACell written = write(ctx, path, parsed.metadata());
 
@@ -403,9 +421,9 @@ public class SkillsAdapter extends AAdapter {
 			Fields.PATH, path,
 			Fields.NAME, Strings.create(parsed.name()),
 			Fields.DESCRIPTION, Strings.create(parsed.description()),
-			Fields.SOURCE, source,
 			Fields.CONTENT, inline ? Fields.INLINE : Fields.REF,
 			K_EXISTED, CVMBool.of(RT.bool(RT.getIn(written, K_EXISTED))));
+		if (source != null) out = out.assoc(Fields.SOURCE, source);
 		return withIgnored(out, parsed.ignored());
 	}
 

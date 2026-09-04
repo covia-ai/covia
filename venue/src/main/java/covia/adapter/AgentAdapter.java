@@ -96,6 +96,11 @@ public class AgentAdapter extends AAdapter {
 	private static final AString K_SYSTEM_PROMPT    = Strings.intern("systemPrompt");
 	private static final AString K_LLM_OPERATION    = Strings.intern("llmOperation");
 	private static final AString K_MODEL            = Strings.intern("model");
+	private static final AString K_SKILLS           = Skills.K_SKILLS;
+	private static final AString K_SKILLSETS        = Skills.K_SKILLSETS;
+	private static final AString K_SKILLSET         = Strings.intern("skillset");
+	private static final AString K_IMPORTED_SKILLS  = Strings.intern("importedSkills");
+	private static final AString DEFAULT_SKILLSET   = Strings.intern("w/skills");
 	private static final AString K_TOOLS            = Strings.intern("tools");
 	private static final AString K_DEFAULT_TOOLS    = Strings.intern("defaultTools");
 	private static final AString K_CAPS             = Strings.intern("caps");
@@ -378,6 +383,7 @@ public class AgentAdapter extends AAdapter {
 		installSkill("root/agents", "/skills/agents.json");
 		String BASE = "/adapters/agent/";
 		installAsset("agent/create",      BASE + "create.json");
+		installAsset("agent/from-skills", BASE + "from-skills.json");
 		installAsset("agent/fork",        BASE + "fork.json");
 		installAsset("agent/request",     BASE + "request.json");
 		installAsset("agent/chat",        BASE + "chat.json");
@@ -614,6 +620,7 @@ public class AgentAdapter extends AAdapter {
 			}
 			switch (subOp) {
 				case "create"  -> handleCreate(job, input, ctx);
+				case "fromSkills" -> handleFromSkills(job, input, ctx);
 				case "fork"    -> handleFork(job, input, ctx);
 				case "request" -> handleRequest(job, input, ctx);
 				case "chat"    -> handleChat(job, input, ctx);
@@ -1112,6 +1119,98 @@ public class AgentAdapter extends AAdapter {
 		} catch (java.util.concurrent.ExecutionException ignored) {
 			// Exceptional completion still means the run loop exited.
 		}
+	}
+
+	/**
+	 * The migration wedge (covia#484): import an existing agent's SKILL.md
+	 * skills and stand up a native agent from them plus a system prompt, in one
+	 * call. It composes the canonical {@code skills:import} and
+	 * {@code agent:create} operations unchanged, so their parsing, naming and
+	 * capability checks all apply — import needs write on the skillset, create
+	 * needs agent-create authority. Tools and memory are out of scope here.
+	 */
+	@SuppressWarnings("unchecked")
+	private void handleFromSkills(Job job, ACell input, RequestContext ctx) {
+		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
+		if (agentId == null || agentId.isEmpty()) {
+			job.fail("agent:from-skills requires an agentId"); return;
+		}
+		AString skillsetArg = RT.ensureString(RT.getIn(input, K_SKILLSET));
+		AString skillset = (skillsetArg != null && !skillsetArg.isEmpty()) ? skillsetArg : DEFAULT_SKILLSET;
+
+		// 1. Import each SKILL.md through the canonical op, collecting where each
+		//    landed. A failed import fails the whole call before any agent exists.
+		AVector<ACell> importedPaths = Vectors.empty();
+		ACell skillsArg = RT.getIn(input, K_SKILLS);
+		if (skillsArg != null) {
+			AVector<ACell> skills = RT.ensureVector(skillsArg);
+			if (skills == null) { job.fail("'skills' must be an array of SKILL.md sources"); return; }
+			for (long i = 0; i < skills.count(); i++) {
+				ACell entry = skills.get(i);
+				AMap<AString, ACell> importInput;
+				if (entry instanceof AString s) {
+					importInput = Maps.of(Fields.SOURCE, s, K_SKILLSET, skillset);
+				} else if (entry instanceof AMap<?, ?> m) {
+					AMap<AString, ACell> em = (AMap<AString, ACell>) m;
+					importInput = (em.get(K_SKILLSET) == null) ? em.assoc(K_SKILLSET, skillset) : em;
+				} else {
+					job.fail("Each 'skills' entry must be a source string or a map with 'source' or 'text'");
+					return;
+				}
+				ACell res;
+				try {
+					res = engine.jobs().invokeInternal("v/ops/skills/import", importInput, ctx)
+						.get(60, java.util.concurrent.TimeUnit.SECONDS);
+				} catch (Exception e) {
+					job.fail("Skill import failed for entry " + (i + 1) + ": " + describeFailure(e));
+					return;
+				}
+				AString path = RT.ensureString(RT.getIn(res, Fields.PATH));
+				if (path != null) importedPaths = importedPaths.conj(path);
+			}
+		}
+
+		// 2. Build the create config: an optional caller-supplied base, plus the
+		//    migrated system prompt, optional transition/model overrides, and a
+		//    skillsets declaration that includes the directory the skills landed in
+		//    (a directory under config.skills would be one broken skill, never walked).
+		ACell configArg = RT.getIn(input, Fields.CONFIG);
+		AMap<AString, ACell> config;
+		if (configArg == null) config = Maps.empty();
+		else if (configArg instanceof AMap<?, ?> cm) config = (AMap<AString, ACell>) cm;
+		else { job.fail("'config' must be a map of agent configuration"); return; }
+
+		AString systemPrompt = RT.ensureString(RT.getIn(input, K_SYSTEM_PROMPT));
+		if (systemPrompt != null && !config.containsKey(K_SYSTEM_PROMPT)) {
+			config = config.assoc(K_SYSTEM_PROMPT, systemPrompt);
+		}
+		AString[] passthrough = { Fields.OPERATION, K_LLM_OPERATION, K_MODEL };
+		for (AString k : passthrough) {
+			AString v = RT.ensureString(RT.getIn(input, k));
+			if (v != null && !config.containsKey(k)) config = config.assoc(k, v);
+		}
+		AVector<ACell> skillsets = RT.ensureVector(config.get(K_SKILLSETS));
+		if (skillsets == null) skillsets = Vectors.empty();
+		if (!skillsets.contains(skillset)) skillsets = skillsets.conj(skillset);
+		config = config.assoc(K_SKILLSETS, skillsets);
+
+		// 3. Create the native agent through the canonical op (unused-name and
+		//    config validation are enforced there, once).
+		ACell created;
+		try {
+			created = engine.jobs().invokeInternal("v/ops/agent/create",
+				Maps.of(Fields.AGENT_ID, agentId, Fields.CONFIG, config), ctx)
+				.get(60, java.util.concurrent.TimeUnit.SECONDS);
+		} catch (Exception e) {
+			job.fail("Agent create failed: " + describeFailure(e)); return;
+		}
+
+		// 4. Return the created agent plus what was migrated into it.
+		AMap<AString, ACell> result = (created instanceof AMap<?, ?> cr)
+			? (AMap<AString, ACell>) cr : Maps.empty();
+		result = result.assoc(K_IMPORTED_SKILLS, importedPaths).assoc(K_SKILLSET, skillset);
+		job.setStatus(Status.STARTED);
+		job.completeWith(result);
 	}
 
 	/**

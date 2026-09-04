@@ -8,6 +8,13 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- `agent:from-skills` composes `skills:import` and `agent:create` into one
+  call, porting SKILL.md skills plus a system prompt into a native agent
+  (#484, #490).
+- `skills:import` accepts inline `text` as an alternative to `source`.
+
 ## [0.9.8] - 2026-09-03
 
 ### Added
