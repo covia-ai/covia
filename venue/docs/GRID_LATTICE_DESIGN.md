@@ -206,7 +206,7 @@ Stateful actors with pluggable transition functions. Each agent is a state machi
 
 Agent IDs are human-readable strings chosen by the user (e.g. `"my-assistant"`, `"code-reviewer"`). The canonical lattice address is `did:key:zAlice.../g/my-assistant`.
 
-Each agent is a single atomic LWW value — the entire agent record is replaced on every write, with the latest timestamp winning on merge. All writes are serialised on the hosting venue; there are no concurrent writers.
+Each agent is a single atomic record — local mutations replace the record through compare-and-swap, so concurrent venue threads cannot lose updates. The record's `ts` is last-modified metadata, not a nested merge discriminator: replication merges the complete signed venue `:value` snapshot through the outer whole-value LWW lattice.
 
 **What users see.** The user-visible agent surface is:
 
@@ -351,7 +351,7 @@ Encrypted, capability-gated data. Different encryption and access semantics from
 
 ### 4.5 Virtual Namespaces
 
-Some path prefixes are not backed by a dedicated lattice namespace. Instead they are **virtual** — resolved at runtime by a `NamespaceResolver` that maps the prefix to the correct lattice location based on the `RequestContext`. This avoids path string rewriting, creates no temporary allocations, and keeps scoping explicit.
+Some path prefixes are not backed by a dedicated lattice namespace. Instead they are **virtual** — resolved at runtime by a `NamespaceResolver` that maps the prefix to the correct lattice location based on the `RequestContext`. The resolver returns a cursor at the containing record plus the remaining physical path, keeping scoping explicit while reusing normal cursor navigation.
 
 **Virtual namespaces are user-level scratch space.** They expose a location for operation code and agent tool calls to read and write arbitrary data. They do **not** expose framework-managed system fields (status, `wakeTime`, task input/result, timeline). Those fields are accessed through dedicated APIs — `RequestContext`, engine accessors, venue ops — never by writing under a virtual namespace prefix. This split keeps the user-writable surface clean of state the framework owns and keeps the framework free to restructure its own storage without breaking user code.
 
@@ -420,7 +420,16 @@ public interface NamespaceResolver {
 }
 ```
 
-Resolvers are registered on CoviaAdapter at startup. Path resolution checks virtual resolvers first (O(1) lookup by prefix), then falls through to the standard user lattice cursor for physical namespaces. No string concatenation, no path rebuilding — the resolver returns the cursor positioned at the right location.
+Resolvers are registered on CoviaAdapter at startup. Path resolution checks virtual resolvers first (O(1) lookup by prefix), then falls through to the standard user lattice cursor for physical namespaces. The resolver returns the cursor positioned at the right location and a short array of remaining keys.
+
+A resolved target has the **same shape as a physical path**: a cursor at the
+record that holds the namespace, plus keys whose first element names the
+container within it (`t/x` → the Job record + `["temp", "x"]`, `c/x` → the
+session record + `["c", "x"]`, `n/x` → the agent record + `["n", "x"]`).
+Reads and writes therefore run one navigation rule for every namespace,
+virtual or physical. Scoped resolvers mark their target
+`requireExistingRecord`: `n/`, `c/`, and `t/` may update an existing agent,
+session, or Job record, but can never mint that owning record as a side effect.
 
 ---
 
@@ -979,15 +988,22 @@ of independent concurrent writers. "Newest coherent snapshot wins" is the right
 CRDT for that; per-entry LWW would add no value and would resurrect deleted keys.
 
 The **interior** of `:value` (`:assets`, `:storage`, `:did`, `:users`, `:schedule`,
-`:user-data → <DID> → {j, g, s, w, o, h, a}`) is **plain navigable JSON**: it is
-walked and written structurally but carries no independent merge semantics — the
-merge happens only at the `:value` root. Writes are stamped on the way up by a
+`:user-data → <DID> → {j, g, s, w, o, h, a}`) is structurally navigable but
+carries no independent merge semantics — the merge happens only at the `:value`
+root. Writes are stamped on the way up by a
 **stamp-on-write boundary** that sources its timestamp from the write clock on the
 `LatticeContext` (the convex `StampingLattice` / `StampedCursor`). The `w`/`o`/`h`
-user namespaces are stored as a transparent `{updated, data}` container: content
-lives under `data` (callers address `w/foo`, which translates to `w/data/foo`;
-they never see `data`), and `updated` is per-namespace last-modified metadata,
-auto-stamped by the same boundary.
+user namespaces are `WrapperLattice` regions, stored as a `{updated, data}`
+container whose `data` is the caller-visible value. The container is a **view
+boundary in the lattice**, not a path convention: navigating `w/foo` crosses it
+and reads or replaces `w.data.foo`. Changed writes preserve the physical
+container and ratchet `updated` from the same write clock, using the ordinary
+stamp-on-write cursor machinery. Callers — and the code above the lattice —
+never address `data`.
+
+The `:schedule` child retains its extensible `{updated, events, ...}` record
+shape. Its `events` child is structurally navigable through a stamp-on-write
+boundary, so event mutations preserve sibling metadata and refresh `updated`.
 
 ### User meta record
 
@@ -1037,28 +1053,34 @@ identity metadata stays in one documented place with one ownership rule.
 | Region | Merge | Rationale |
 |--------|-------|-----------|
 | `:grid → :venues` | OwnerLattice — per-AccountKey, signature-verified | One authoritative signing key per venue |
-| Venue `:value` (whole node) | SignedLattice authenticity wrapping **whole-value LWW** by `:timestamp`, tie → own | Single-writer lineage; deletions durable; interior is plain navigable JSON |
+| Venue `:value` (whole node) | SignedLattice authenticity wrapping **whole-value LWW** by `:timestamp`, tie → own | Single-writer lineage; deletions durable; interior is structurally navigable but not independently merged |
 | `:grid → :meta` | CASLattice (union) | Genuinely shared, multi-writer content-addressed metadata |
 | `:dlfs` (sibling region) | Per-user OwnerLattice → per-file rsync-like DLFS merge | Independent per-user drives — the one legitimate fine-grained CRDT |
 
-All merges satisfy CRDT properties:
-- **Commutative:** `merge(a, b) == merge(b, a)`
-- **Associative:** `merge(merge(a, b), c) == merge(a, merge(b, c))`
-- **Idempotent:** `merge(a, a) == a`
+The genuinely multi-writer regions (`:meta` and DLFS) use ordinary
+commutative/associative/idempotent CRDT joins. Venue `:value` reconciliation is
+deliberately directional on an equal timestamp (`own` wins), relying on its
+single authoritative writer and the fork/sync rule that presents the local edit
+as `own`. Distinct concurrent authorities must not write the same venue entry.
 
 ### A.3 Update Logic
 
-**Fork/sync pattern:** Engine operations that need multiple coordinated writes fork an isolated working copy, perform updates, then sync back:
+**Fork/sync pattern:** Engine keeps one long-lived unsigned venue fork. Requests
+mutate that fork with atomic cursor updates; publication syncs its newest coherent
+snapshot back through the signed parent:
 
 ```
-Request A: fork → update job X → sync
-Request B: fork → update job Y → sync   (no conflict — different keys)
-Request C: fork → update job X → sync   (timestamp merge — later wins)
+startup: connected venue → fork
+request A: atomic update job X ┐
+request B: atomic update job Y ├─ same live fork
+request C: atomic update job X ┘
+publication: fork.sync() → whole snapshot merge → one signature
 ```
 
-Fork/sync is always safe because lattice merge is a total function. There are no merge conflicts in the traditional sense — every merge produces a deterministic result.
-
-For simple operations that touch a single record, forking is unnecessary — a direct `updateAndGet` on the appropriate sub-cursor suffices. Fork/sync is valuable when an operation needs multiple coordinated writes that should appear atomically.
+Direct `updateAndGet` calls on sub-cursors remain atomic because they ultimately
+replace the shared fork root with compare-and-swap. A short-lived child fork is
+reserved for cases such as bootstrap materialisation that must validate several
+writes before publishing them together.
 
 ### A.4 Signing Strategy: Sign Late, Verify Early
 
@@ -1087,7 +1109,7 @@ The venue's Ed25519 keypair signs the venue state at the point of **persistence*
 - **Periodic** — Write every N seconds or N operations
 - **On shutdown** — Minimum IO, risk of data loss on crash
 
-**Crash recovery:** If a venue crashes between persistence points, it loses operations since the last sync. This is acceptable because the lattice always converges to a valid state (no partial writes or corruption), clients polling for job status will see the job revert to its last persisted state, and replicated venues can merge in state from peers to recover further.
+**Crash recovery:** If a venue crashes between persistence points, it loses operations since the last sync. The persisted lattice still contains a coherent snapshot (never a partial write); clients polling for job status may see the job revert to that point. A backup may restore a newer authentic snapshot previously signed by the same venue authority.
 
 ### A.6 Sharing and Replication
 
@@ -1102,9 +1124,17 @@ Venues are **not required** to share their lattice state. The default is private
 | `:assets` + `:meta` | Operations with full metadata | Federated operation discovery |
 | Full venue state | Everything including jobs and users | Public venue or backup replica |
 
-Selective sharing is implemented by constructing a partial lattice value containing only the components the venue wishes to export, signing it, and publishing or sending to peers.
+Selective sharing is an application-level read/export policy. A partial view is
+not merged back into the authoritative venue entry: because `:value` is one
+whole-snapshot LWW node, treating a subset as an update would delete the omitted
+regions.
 
-**Replication protocol:** Two venues exchange signed lattice values and merge. Because merge is commutative and idempotent, it doesn't matter if messages are duplicated, reordered, or if only one direction succeeds. The system converges.
+**Replication protocol:** A replica of a venue accepts authentic complete
+snapshots signed by that venue's authority and retains the newer `:timestamp`.
+Equal-stamp reconciliation is directional (`own` wins), so publication code must
+preserve lineage ordering as described in Appendix A.2. Independently owned
+entries under `:venues`, shared `:meta`, and DLFS drives retain their normal
+multi-writer lattice joins.
 
 **Public venues** expose their state openly — appropriate for shared infrastructure or transparent AI services. **Private venues** keep state local and participate via API calls only. **Hybrid venues** share some components (e.g. published assets) while keeping others private (e.g. job history, user records).
 
@@ -1128,19 +1158,27 @@ Selective sharing is implemented by constructing a partial lattice value contain
 | `LWWLattice<V>` | **Whole-value** last-writer-wins merge layer by extracted timestamp (non-recursive; tie → own); delegates navigation to an inner lattice |
 | `StampingLattice<V>` | Stamp-on-write boundary — inserts a `StampedCursor` that re-stamps a value on write, sourcing the timestamp from `LatticeContext`; delegates merge and navigation to an inner lattice |
 | `FunctionLattice<V>` | Custom merge function (e.g. first-writer-wins) |
+| `WrapperLattice` (Covia) | View boundary — presents a `{updated, data}` container as its `data`, stamping `updated` on write; navigation and merge are the inner JSON region's |
 | `LatticeContext` | Live application policy for clock, signing and owner verification; installed once at the hosted root and resolved per logical write |
 | `ACursor<V>` | Mutable reference with atomic get/set/update/fork/sync |
 
 ### Covia Definitions
 
-The `covia.lattice.Covia` class defines the complete lattice hierarchy using standard convex-core generics (no custom lattice subclasses):
+The `covia.lattice.Covia` class defines the complete lattice hierarchy using
+standard convex-core generics plus one narrow Covia view component for the
+legacy-compatible workspace envelope:
 
 | Definition | Type | Purpose |
 |------------|------|---------|
 | `Covia.ROOT` | `KeyedLattice` | Root — `:grid` (containing `:venues` and `:meta`) and the sibling `:dlfs` region |
 | `Covia.VENUE` | `StampingLattice` → `LWWLattice` → `KeyedLattice` | The whole per-venue `:value` as a single navigable **whole-value-LWW** node with a stamp-on-write boundary |
 | `:grid → :venues` | `OwnerLattice` → `SignedLattice` → `Covia.VENUE` | Per-AccountKey signed venue state (one authoritative signing key) |
-| Venue interior | `KeyedLattice` (plain-JSON children) | `:assets`, `:storage`, `:did`, `:users`, `:schedule`, `:user-data` — navigated structurally; merged only at `:value` |
-| `:user-data → <DID>` | `MapLattice` → `StringKeyedLattice` | Per-user record: `j`/`g`/`s`/`a` are plain navigable JSON; `w`/`o`/`h` are stamped `{updated, data}` containers (`StampingLattice` over `data`) |
+| Venue interior | `KeyedLattice` (structural children) | `:assets`, `:storage`, `:did`, `:users`, `:schedule`, `:user-data` — navigated structurally; merged only at `:value` |
+| `:schedule` | `StampingLattice` → `StringKeyedLattice` | Extensible `{updated, events, ...}` record; writes under `events` refresh `updated` and preserve sibling metadata |
+| `:user-data → <DID>` | `MapLattice` → `StampingLattice` → `StringKeyedLattice` | Per-user record; every deep write refreshes `meta.updated` |
+| `j` / each Job | `IndexLattice` → `StampingLattice` → `JSONLattice` | Existing Job map shape; deep writes such as `t/` refresh `updated` |
+| `g` / each agent | `MapLattice` → `StampingLattice` → `JSONLattice` | Existing agent map shape; deep writes such as `n/` and `c/` refresh `ts` |
+| `s` / `a` | `JSONLattice` | Plain structural navigation |
+| `w` / `o` / `h` | `WrapperLattice` | Existing `{updated, data}` container presented as its `data` |
 | `:grid → :meta` | `CASLattice` | Shared content-addressed metadata (multi-writer union) |
 | `:dlfs` | `OwnerLattice` → `MapLattice(DLFSLattice)` | Per-user signed drives, per-file rsync-like merge |

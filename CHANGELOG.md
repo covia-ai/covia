@@ -8,12 +8,37 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- Workspace namespaces (`w`/`o`/`h`) are a `WrapperLattice` view boundary
+  rather than a path convention re-implemented above the lattice; virtual
+  namespaces (`t/`, `c/`, `n/`) resolve to ordinary cursor paths, so every
+  namespace shares one read/write rule.
+- Scheduler event mutations navigate through the existing extensible
+  `{updated, events}` record; `LatticeStorage` has a single cursor-backed write
+  path.
+- Job and agent records now use stamped lattice boundaries for deep `t/`, `n/`,
+  and `c/` writes, preserving their existing `updated`/`ts` fields and physical
+  record shapes.
+
 ### Added
 
 - `agent:from-skills` composes `skills:import` and `agent:create` into one
   call, porting SKILL.md skills plus a system prompt into a native agent
   (#484, #490).
 - `skills:import` accepts inline `text` as an alternative to `source`.
+
+### Fixed
+
+- `agent:create` and `agent:fork` are exclusive at the record itself, so two
+  concurrent creates of the same agent no longer both report success.
+- Adding a task or appending a session message is one atomic intake with
+  session creation, so neither can land against an agent that has just been
+  removed.
+- Deleting a Job fences its live handle: a late update from work still in
+  flight can no longer recreate the deleted row.
+- Last-modified stamps on jobs, agents, secrets and user rows are ratcheted
+  from the lattice write clock and never move backwards.
 
 ## [0.9.8] - 2026-09-03
 

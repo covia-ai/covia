@@ -53,6 +53,7 @@ import covia.venue.storage.LatticeStorage;
  * <ul>
  *   <li>{@link #assets()} — content-addressed asset store</li>
  *   <li>{@link #users()} — per-user data store</li>
+ *   <li>{@link #scheduleCursor()} — extensible scheduler record</li>
  *   <li>{@link #storage()} — content-addressed blob storage</li>
  * </ul>
  *
@@ -192,11 +193,11 @@ public class VenueState extends ALatticeComponent<ACell> {
 	}
 
 	/**
-	 * Gets the lattice cursor at the per-venue {@code :schedule} index, the
-	 * time-ordered store of scheduled events. Used by {@link Scheduler} to
-	 * read, insert, and remove events.
+	 * Gets the lattice cursor at the per-venue {@code :schedule} record. Its
+	 * {@code events} field is the time-ordered store used by {@link Scheduler};
+	 * sibling fields hold record metadata and leave room for future additions.
 	 *
-	 * @return Cursor at the :schedule level (value is an {@code Index})
+	 * @return Cursor at the :schedule level (value is a record)
 	 */
 	public ALatticeCursor<ACell> scheduleCursor() {
 		return cursor.path(Covia.SCHEDULE);
@@ -214,7 +215,7 @@ public class VenueState extends ALatticeComponent<ACell> {
 	/**
 	 * Gets the raw venue state value.
 	 *
-	 * @return Venue state (typically an Index), or null if uninitialised
+	 * @return Map-shaped venue value, or null if uninitialised
 	 */
 	public ACell get() {
 		return cursor.get();

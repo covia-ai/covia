@@ -15,7 +15,6 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
-import convex.core.util.Utils;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.cursor.ALatticeCursor;
 import covia.api.Fields;
@@ -133,6 +132,8 @@ public class AgentState extends ALatticeComponent<ACell> {
 	/** Identity of a schedulable thread within an agent — a session or a task.
 	 *  Selects which index {@link #setThreadWakeTime} writes the wakeTime into. */
 	public enum ThreadKind { SESSION, TASK }
+	/** Result of an atomic session intake mutation. */
+	public enum SessionIntake { APPLIED, MISSING, LOADS_ON_EXISTING }
 
 	private final AString agentId;
 
@@ -156,31 +157,53 @@ public class AgentState extends ALatticeComponent<ACell> {
 
 	/** Replaces the entire record. Use for initialisation only. */
 	public void putRecord(AMap<AString, ACell> record) {
-		cursor.set(record.assoc(K_TS, CVMLong.create(Utils.getCurrentTimestamp())));
+		CVMLong ts = now();
+		cursor.updateAndGet(current -> record.assoc(K_TS, ratchetTimestamp(current, ts)));
+	}
+
+	/**
+	 * The write clock for this component: the lattice context resolves it once
+	 * per logical write, so a mutation stamps the same instant however many
+	 * times its CAS lambda retries under contention.
+	 */
+	private CVMLong now() {
+		return cursor.getContext().currentTimestamp();
+	}
+
+	@SuppressWarnings("unchecked")
+	private static CVMLong ratchetTimestamp(ACell current, CVMLong proposed) {
+		if (current instanceof AMap<?, ?> map) {
+			ACell previous = ((AMap<AString, ACell>) map).get(K_TS);
+			if (previous instanceof CVMLong old
+					&& old.longValue() > proposed.longValue()) return old;
+		}
+		return proposed;
 	}
 
 	// ========== Atomic update (private) ==========
 
 	@SuppressWarnings("unchecked")
 	private AMap<AString, ACell> update(UnaryOperator<AMap<AString, ACell>> fn) {
+		CVMLong ts = now();
 		ACell result = cursor.updateAndGet(current -> {
 			if (!(current instanceof AMap)) return current;
 			AMap<AString, ACell> r = (AMap<AString, ACell>) current;
 			AMap<AString, ACell> updated = fn.apply(r);
-			if (updated == r) return r;
-			return updated.assoc(K_TS, CVMLong.create(Utils.getCurrentTimestamp()));
+			if (Objects.equals(updated, r)) return r;
+			return updated.assoc(K_TS, ratchetTimestamp(r, ts));
 		});
 		return (result instanceof AMap) ? (AMap<AString, ACell>) result : null;
 	}
 
 	@SuppressWarnings("unchecked")
 	private AMap<AString, ACell> getAndUpdate(UnaryOperator<AMap<AString, ACell>> fn) {
+		CVMLong ts = now();
 		ACell old = cursor.getAndUpdate(current -> {
 			if (!(current instanceof AMap)) return current;
 			AMap<AString, ACell> r = (AMap<AString, ACell>) current;
 			AMap<AString, ACell> updated = fn.apply(r);
-			if (updated == r) return r;
-			return updated.assoc(K_TS, CVMLong.create(Utils.getCurrentTimestamp()));
+			if (Objects.equals(updated, r)) return r;
+			return updated.assoc(K_TS, ratchetTimestamp(r, ts));
 		});
 		return (old instanceof AMap) ? (AMap<AString, ACell>) old : null;
 	}
@@ -188,7 +211,11 @@ public class AgentState extends ALatticeComponent<ACell> {
 	// ========== Initialisation ==========
 
 	public void initialise(AMap<AString, ACell> config, ACell initialState) {
-		if (exists()) return;
+		initialiseIfAbsent(config, initialState);
+	}
+
+	/** Atomically initialises this record, returning false if it already exists. */
+	boolean initialiseIfAbsent(AMap<AString, ACell> config, ACell initialState) {
 		AMap<AString, ACell> record = Maps.of(
 			K_STATUS, SLEEPING,
 			K_TASKS, Index.none(),
@@ -197,7 +224,8 @@ public class AgentState extends ALatticeComponent<ACell> {
 			K_TIMELINE, Vectors.empty());
 		if (config != null) record = record.assoc(K_CONFIG, config);
 		if (initialState != null) record = record.assoc(K_STATE, initialState);
-		putRecord(record);
+		AMap<AString, ACell> initial = record.assoc(K_TS, now());
+		return cursor.getAndUpdate(current -> (current == null) ? initial : current) == null;
 	}
 
 	/**
@@ -207,7 +235,12 @@ public class AgentState extends ALatticeComponent<ACell> {
 	 * exists.
 	 */
 	public void initialiseFromFork(AMap<AString, ACell> config, ACell state, AVector<ACell> timeline) {
-		if (exists()) return;
+		initialiseFromForkIfAbsent(config, state, timeline);
+	}
+
+	/** Atomically initialises a fork record, returning false if it already exists. */
+	boolean initialiseFromForkIfAbsent(AMap<AString, ACell> config, ACell state,
+			AVector<ACell> timeline) {
 		AMap<AString, ACell> record = Maps.of(
 			K_STATUS, SLEEPING,
 			K_TASKS, Index.none(),
@@ -216,7 +249,8 @@ public class AgentState extends ALatticeComponent<ACell> {
 			K_TIMELINE, (timeline != null) ? timeline : Vectors.empty());
 		if (config != null) record = record.assoc(K_CONFIG, config);
 		if (state != null) record = record.assoc(K_STATE, state);
-		putRecord(record);
+		AMap<AString, ACell> initial = record.assoc(K_TS, now());
+		return cursor.getAndUpdate(current -> (current == null) ? initial : current) == null;
 	}
 
 	// ========== Read accessors ==========
@@ -297,30 +331,100 @@ public class AgentState extends ALatticeComponent<ACell> {
 	 */
 	public AMap<AString, ACell> ensureSession(Blob sid, AString caller,
 			AMap<AString, ACell> initialLoads) {
+		final CVMLong created = now();
 		update(r -> {
 			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index idx)
 				? (Index<Blob, ACell>) idx : Index.none();
 			if (sessions.get(sid) != null) return r;
-			long created = Utils.getCurrentTimestamp();
-			AMap<AString, ACell> meta = Maps.of(
-				K_CREATED, CVMLong.create(created),
-				Fields.UPDATED, CVMLong.create(created),
-				K_TURNS,   CVMLong.create(0),
-				K_PARTIES, (caller != null) ? Vectors.of(caller) : Vectors.empty());
-			AMap<AString, ACell> rootFrame = Maps.of(
-				K_DESCRIPTION,  Strings.EMPTY,
-				K_CONVERSATION, Vectors.empty());
-			if (initialLoads != null && initialLoads.count() > 0) {
-				rootFrame = rootFrame.assoc(K_LOADS, initialLoads);
-			}
-			AMap<AString, ACell> session = Maps.of(
-				K_C,       Maps.empty(),
-				K_PENDING, Vectors.empty(),
-				K_FRAMES,  Vectors.of(rootFrame),
-				K_META,    meta);
+			AMap<AString, ACell> session = newSession(caller, initialLoads, created);
 			return r.assoc(K_SESSIONS, sessions.assoc(sid, session));
 		});
 		return getSession(sid);
+	}
+
+	private static AMap<AString, ACell> newSession(AString caller,
+			AMap<AString, ACell> initialLoads, CVMLong created) {
+		AMap<AString, ACell> meta = Maps.of(
+			K_CREATED, created,
+			Fields.UPDATED, created,
+			K_TURNS,   CVMLong.create(0),
+			K_PARTIES, (caller != null) ? Vectors.of(caller) : Vectors.empty());
+		AMap<AString, ACell> rootFrame = Maps.of(
+			K_DESCRIPTION,  Strings.EMPTY,
+			K_CONVERSATION, Vectors.empty());
+		if (initialLoads != null && initialLoads.count() > 0) {
+			rootFrame = rootFrame.assoc(K_LOADS, initialLoads);
+		}
+		return Maps.of(
+			K_C,       Maps.empty(),
+			K_PENDING, Vectors.empty(),
+			K_FRAMES,  Vectors.of(rootFrame),
+			K_META,    meta);
+	}
+
+	/**
+	 * Atomically creates/reuses a session and adds a task to it. This prevents
+	 * agent removal or competing session creation from landing between the two
+	 * record changes.
+	 */
+	@SuppressWarnings("unchecked")
+	public SessionIntake addTaskInSession(Blob sid, AString caller,
+			AMap<AString, ACell> initialLoads, Blob taskId, ACell taskData) {
+		java.util.concurrent.atomic.AtomicReference<SessionIntake> result =
+			new java.util.concurrent.atomic.AtomicReference<>(SessionIntake.MISSING);
+		CVMLong created = now();
+		update(r -> {
+			result.set(SessionIntake.MISSING);
+			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index<?, ?> idx)
+				? (Index<Blob, ACell>) idx : Index.none();
+			ACell rawSession = sessions.get(sid);
+			if (rawSession != null && initialLoads != null) {
+				result.set(SessionIntake.LOADS_ON_EXISTING);
+				return r;
+			}
+			if (rawSession == null) {
+				rawSession = newSession(caller, initialLoads, created);
+				sessions = sessions.assoc(sid, rawSession);
+			}
+			if (!(rawSession instanceof AMap<?, ?>)) return r;
+			result.set(SessionIntake.APPLIED);
+			return r
+				.assoc(K_SESSIONS, sessions)
+				.assoc(K_TASKS, extractTasks(r).assoc(taskId, taskData));
+		});
+		return result.get();
+	}
+
+	/** Atomically creates/reuses a session and appends one pending envelope. */
+	@SuppressWarnings("unchecked")
+	public SessionIntake appendSessionPending(Blob sid, AString caller,
+			AMap<AString, ACell> initialLoads, ACell envelope,
+			boolean createIfMissing) {
+		java.util.concurrent.atomic.AtomicReference<SessionIntake> result =
+			new java.util.concurrent.atomic.AtomicReference<>(SessionIntake.MISSING);
+		CVMLong created = now();
+		update(r -> {
+			result.set(SessionIntake.MISSING);
+			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index<?, ?> idx)
+				? (Index<Blob, ACell>) idx : Index.none();
+			ACell rawSession = sessions.get(sid);
+			if (rawSession != null && initialLoads != null) {
+				result.set(SessionIntake.LOADS_ON_EXISTING);
+				return r;
+			}
+			if (rawSession == null) {
+				if (!createIfMissing) return r;
+				rawSession = newSession(caller, initialLoads, created);
+			}
+			if (!(rawSession instanceof AMap<?, ?> map)) return r;
+			AMap<AString, ACell> session = (AMap<AString, ACell>) map;
+			AVector<ACell> pending = (session.get(K_PENDING) instanceof AVector<?> vector)
+				? (AVector<ACell>) vector : Vectors.empty();
+			session = session.assoc(K_PENDING, pending.conj(envelope));
+			result.set(SessionIntake.APPLIED);
+			return r.assoc(K_SESSIONS, sessions.assoc(sid, session));
+		});
+		return result.get();
 	}
 
 	@SuppressWarnings("unchecked")
@@ -355,17 +459,7 @@ public class AgentState extends ALatticeComponent<ACell> {
 	 */
 	@SuppressWarnings("unchecked")
 	public void appendSessionPending(Blob sid, ACell envelope) {
-		update(r -> {
-			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index idx)
-				? (Index<Blob, ACell>) idx : Index.none();
-			ACell sv = sessions.get(sid);
-			if (!(sv instanceof AMap)) return r;
-			AMap<AString, ACell> session = (AMap<AString, ACell>) sv;
-			AVector<ACell> pending = (session.get(K_PENDING) instanceof AVector pv)
-				? (AVector<ACell>) pv : Vectors.empty();
-			session = session.assoc(K_PENDING, pending.conj(envelope));
-			return r.assoc(K_SESSIONS, sessions.assoc(sid, session));
-		});
+		appendSessionPending(sid, null, null, envelope, false);
 	}
 
 	/**

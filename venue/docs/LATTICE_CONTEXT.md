@@ -19,32 +19,39 @@ Five shorthands, one per scope. Each resolves to a single state bucket. Data is 
 | `w/` | `<DID>/w/...` | User shared data | Always |
 | `o/` | `<DID>/o/...` | User operations registry | Always |
 
-`t/`, `c/`, `n/` are only valid in agent scope. Full paths (e.g. `g/{agent}/timeline/0`) work everywhere.
+`n/` requires agent scope and `c/` requires agent plus session scope. `t/`
+requires either a focused agent task or an ordinary Job scope. Full paths (e.g.
+`g/{agent}/timeline/0`) work everywhere permitted by capability checks.
 
-**Note:** `t/` means **task scratch** where "task" is the Covia external unit of work — a job assigned to the agent via `agent_request`. `t/key` resolves to the `t` field inside the taskdata map at `g/{agent}/tasks/{taskId}` (the same Index that's existed since Phase B5). Do not confuse with **goal-tree nodes** (internal recursive context scoping — see "Goal tree" below), which have no top-level shorthand.
+**Note:** `t/` means **Job scratch**. For an agent task, the task ID is the
+caller-facing `agent:request` Job ID, so `t/key` resolves to
+`j/{taskId}/temp/key`. The agent's `tasks` Index remains its in-flight work
+queue; it is not a second scratch store. Do not confuse tasks with **goal-tree
+nodes** (internal recursive context scoping — see "Goal tree" below), which
+have no top-level shorthand.
 
 **Data persists.** Tasks, sessions, and goals are not wiped at any lifecycle boundary — completion, pop, archive, and termination all leave the data at its full lattice path for audit. "Scope" in the table above governs only where *writes via shorthand* are currently directed, not when data is removed.
 
 ### Lattice Storage
 
 Per-user state under `:user-data/<DID>`. These are **interior nodes of the venue
-`:value`** — plain navigable JSON with no independent merge semantics. The merge
+`:value`** — structurally navigable cells with record-local stamp/view boundaries
+but no independent production merge semantics. The merge
 happens only at the venue `:value` root, which is a single whole-value-LWW node
 (newer `:timestamp` wins wholesale, deletions durable — see
 [GRID_LATTICE_DESIGN.md](./GRID_LATTICE_DESIGN.md) §A.2). The `w`/`o`/`h`
-namespaces are stored as a transparent `{updated, data}` container: content lives
-under `data` (callers address `w/foo`, which translates to `w/data/foo`) and
-`updated` is per-namespace last-modified metadata, auto-stamped on write by the
-`StampingLattice` boundary.
+namespaces are `WrapperLattice` regions: a `{updated, data}` container presented
+as its `data`, so navigating `w/foo` crosses the view boundary to `w.data.foo`
+and preserves the container while ratcheting `updated` on changed writes.
 
 | Key | Storage shape | Contents |
 |-----|---------------|----------|
-| `"g"` | navigable JSON | Agent records (one atomic map per agent) |
-| `"w"` | `{updated, data}` stamped container | User workspace |
-| `"o"` | `{updated, data}` stamped container | User operations registry |
+| `"g"` | map of stamped plain records | Agent records (one atomic map per agent; deep writes refresh `ts`) |
+| `"w"` | `WrapperLattice` (`{updated, data}`) | User workspace |
+| `"o"` | `WrapperLattice` (`{updated, data}`) | User operations registry |
 | `"s"` | navigable JSON | Encrypted secrets |
-| `"j"` | navigable JSON | Job references |
-| `"h"` | `{updated, data}` stamped container | HITL requests |
+| `"j"` | index of stamped plain records | Job records (deep writes refresh `updated`) |
+| `"h"` | `WrapperLattice` (`{updated, data}`) | HITL requests |
 | `"a"` | navigable JSON | Content-addressed asset references |
 
 ### Agent Record
@@ -57,8 +64,8 @@ g/alice/
   ├── config          ← harness-owned (transition op, tools, LLM params)
   ├── tasks           ← Index of tasks (Covia jobs assigned to this agent).
   │                     Each entry is a taskdata map with input, status,
-  │                     result, sessionId?, goals?, and a t/ field used by
-  │                     the `t/` shorthand.
+  │                     result, sessionId?, goals?, and continuation state.
+  │                     Task scratch lives once on the corresponding Job.
   ├── sessions        ← Index of sessions (conversational scopes). See
   │                     AGENT_SESSIONS.md for shape.
   ├── n/              ← agent-private workspace (agent read/write)
@@ -127,7 +134,7 @@ Tool results (`explore`, `compare`) are not "loaded" — they appear in the goal
 
 ## Goal-Scoped Conversation
 
-Each goal has its own conversation history. This is the fundamental mechanism that keeps context clean. Goals live inside a task; a single task can host a whole goal tree. Task-level state (the `t/` shorthand and the rest of taskdata) is orthogonal to goal scope.
+Each goal has its own conversation history. This is the fundamental mechanism that keeps context clean. Goals live inside a task; a single task can host a whole goal tree. Task-level scratch (the `t/` shorthand backed by the task Job's `temp` field) is orthogonal to goal scope.
 
 ### Push (start child goal)
 
@@ -614,7 +621,10 @@ plan({path: "/unblock/api-spec",
   update: {status: "complete", result: "auth design recommended"}})
 ```
 
-→ Pop: scoped loads leave active context. `t/auth-options` remains in taskdata (`t/` is task-level, not goal-level — it persists across goal pops within the same task). The `n/auth-recommendation` note is visible from every subsequent goal in every subsequent task on this agent.
+→ Pop: scoped loads leave active context. `t/auth-options` remains in the task
+Job's `temp` field (`t/` is task-level, not goal-level — it persists across goal
+pops within the same task). The `n/auth-recommendation` note is visible from
+every subsequent goal in every subsequent task on this agent.
 
 Parent conversation gets: `[api-spec completed: "auth design recommended"]`
 
@@ -663,7 +673,10 @@ Marketing goal auto-unblocked.
 
 **Progressive data resolution.** CellExplorer is unique. A 50MB lattice structure rendered at 500 bytes with structural annotations. No other framework offers budget-controlled views of arbitrary data.
 
-**Task-level scratch.** `t/` scratch stored inside each task's taskdata, shared across all goals within that task. Persists as audit after the task completes. No fork or overlay mechanics. Claude Code has manual file checkpoints but they're not Covia-task-scoped.
+**Task-level scratch.** `t/` scratch is stored in the task Job's `temp` field and
+shared across all goals within that task. It persists as audit after the task
+completes. No fork or overlay mechanics. Claude Code has manual file checkpoints
+but they're not Covia-task-scoped.
 
 **Structural change detection.** `compare()` skips unchanged subtrees via hash comparison. Orders of magnitude more efficient than re-reading or searching recall memory.
 
@@ -718,7 +731,7 @@ Covia: RAII for attention (records stay; only the active window contracts and ex
 5. **Tool results are just conversation.** No special result tracking. `explore()` and `compare()` results live in the goal conversation; on pop they leave the active context with the conversation and remain on the lattice.
 6. **Push = fresh active context.** When `plan()` sets a child to `active`, the harness persists the current conversation to its goal node, activates the child, and starts a fresh conversation. The agent never pushes directly.
 7. **Parent sees summaries only.** Format: `[{path} completed: "{result}"]` or `[{path} failed: "{error}"]`.
-8. **Namespaces.** Three layers: lattice storage (per-user `g`, `w`, `o`, `j`, `s`, `h`, `a`), agent-visible shorthands (`n/`, `t/`, `c/`, `w/`, `o/`), and resolution rules (harness maps prefixes to lattice locations in agent scope, requiring a focused task for `t/` and an active session for `c/`).
+8. **Namespaces.** Three layers: lattice storage (per-user `g`, `w`, `o`, `j`, `s`, `h`, `a`), agent-visible shorthands (`n/`, `t/`, `c/`, `w/`, `o/`), and resolution rules (`n/` requires an agent, `c/` an active session, and `t/` a focused task or ordinary Job).
 9. **Agent record is the unit.** Complete state at `g/{agentId}`: status, config, tasks (Covia jobs Index), sessions, `n` (agent workspace), timeline, ts, error, wake. Messages arrive via `session.pending`. Tasks and sessions are orthogonal.
 10. **Task vs goal.** A **task** is a Covia external job (entry in `g/{agent}/tasks`). A **goal** is an internal planning node inside a task's `goals` Index. `t/` is task-level; goals have no shorthand.
 11. **Goal tree storage.** Flat Index inside taskdata (`g/{agent}/tasks/{taskId}/goals`), keyed by Blob ID. Each goal is a map with required `status`, optional `result`, `conversation`, `parent`, `children`, `name`, plus arbitrary metadata. Harness renders flat index as a tree; `plan()` uses paths, harness maps to IDs.
@@ -726,7 +739,7 @@ Covia: RAII for attention (records stay; only the active window contracts and ex
 13. **Goal tree at bottom of context.** Adjacent to current turn for recency attention.
 14. **Harness continuation prompt.** Always appended. States current goal, scoped loads, and suggested next step.
 15. **Context map is simple.** Paths + budgets + scopes. No result tracking, no TTL countdowns.
-16. **Destination shorthand (agent scope only).** `n/` → `g/{agent}/n/`, `t/` → current task Job's scratch (`j/{taskId}/temp/`; task ID = `agent:request` Job ID), `c/` → current session's scratch (`g/{agent}/sessions/{sid}/c/`), `w/` → `<DID>/w/`, `o/` → `<DID>/o/`. Full paths work everywhere.
+16. **Destination shorthand.** `n/` → `g/{agent}/n/`, `t/` → the focused task or current Job's scratch (`j/{jobId}/temp/`; a task ID is its `agent:request` Job ID), `c/` → current session scratch (`g/{agent}/sessions/{sid}/c/`), `w/` → `<DID>/w/`, `o/` → `<DID>/o/`. Full paths work everywhere permitted by capabilities.
 17. **Single root goal in active context.** Harness manages a queue of pending tasks. Each new Covia task starts with a fresh root goal.
 18. **Safety valve.** 70%: harness warns in continuation prompt. 90%: auto-prune — unload global loads (most recently loaded first), then truncate oldest conversation turns from the active view. Never touches pinned or scoped loads, and never alters the lattice record.
 19. **Scope incentivises decomposition.** Want automatic active-context shrinkage? Break work into goals.

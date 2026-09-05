@@ -8,25 +8,28 @@ import convex.core.data.Blob;
 import convex.core.data.Hash;
 import convex.core.data.Index;
 import convex.lattice.cursor.ACursor;
+import convex.lattice.cursor.Cursors;
 import covia.grid.AContent;
 import covia.grid.impl.BlobContent;
 import convex.lattice.generic.CASLattice;
 
 /**
- * Content-addressed storage backed by a CASLattice and lattice cursor.
+ * Content-addressed storage backed by a lattice cursor.
  *
  * <p>LatticeStorage extends {@link AStorage} to provide content storage that:
  * <ul>
  *   <li>Is backed by a lattice cursor into the venue state</li>
  *   <li>Uses content hashes as keys (content-addressed)</li>
- *   <li>Supports CRDT merge semantics via the underlying CASLattice</li>
- *   <li>Can sync state across distributed venues</li>
+ *   <li>Uses a {@link CASLattice} cursor when created standalone</li>
+ *   <li>Participates in the enclosing venue snapshot when venue-backed</li>
  * </ul>
  *
  * <h2>Integration with Venue Lattice</h2>
  * <p>This storage is designed to use a cursor into the venue's :storage path.
- * Changes to storage are reflected in the lattice state and can be merged
- * with other venues.
+ * Changes are reflected in that venue's lattice state. Merge policy belongs to
+ * the cursor's enclosing lattice: venue-backed storage is part of the venue's
+ * single-writer whole-value LWW snapshot, while detached storage uses the
+ * standalone {@link CASLattice} exposed by {@link #getLattice()}.
  *
  * <h2>Example Usage</h2>
  * <pre>
@@ -43,21 +46,10 @@ import convex.lattice.generic.CASLattice;
  */
 public class LatticeStorage extends AStorage {
 
-	/**
-	 * The underlying CASLattice defining merge semantics
-	 */
+	/** CAS merge definition used by detached storage and retained by the public API. */
 	private final CASLattice<ABlob, ABlob> lattice;
-
-	/**
-	 * Cursor into the lattice for storage state.
-	 * May be null if using standalone mode without a lattice cursor.
-	 */
+	/** Cursor holding the content-addressed index. Never null. */
 	private final ACursor<Index<ABlob, ABlob>> cursor;
-
-	/**
-	 * Local storage state (used when cursor is null or for caching)
-	 */
-	private Index<ABlob, ABlob> localState;
 
 	private boolean initialised = false;
 
@@ -66,24 +58,21 @@ public class LatticeStorage extends AStorage {
 	 *
 	 * <p>Changes to storage will be reflected in the cursor's lattice state.
 	 *
-	 * @param cursor Cursor into the venue's :storage path
+	 * @param cursor Cursor into the venue's :storage path, or null for a detached store
 	 */
 	public LatticeStorage(ACursor<Index<ABlob, ABlob>> cursor) {
 		this.lattice = CASLattice.create();
-		this.cursor = cursor;
-		this.localState = null; // Will use cursor
+		this.cursor = (cursor != null) ? cursor : Cursors.createLattice(lattice);
 	}
 
 	/**
-	 * Create a standalone LatticeStorage without a lattice cursor.
-	 *
-	 * <p>This mode is useful for testing or when lattice integration
-	 * is not needed. State is stored locally only.
+	 * Create a standalone LatticeStorage over its own detached
+	 * {@link CASLattice} cursor — useful for tests and for embedded use where
+	 * the content index is not part of a venue's replicated state. The storage
+	 * logic is identical: there is one write path, not a second local mode.
 	 */
 	public LatticeStorage() {
-		this.lattice = CASLattice.create();
-		this.cursor = null;
-		this.localState = lattice.zero();
+		this(null);
 	}
 
 	@Override
@@ -132,16 +121,11 @@ public class LatticeStorage extends AStorage {
 	/**
 	 * Store a blob with the given hash.
 	 */
-	@SuppressWarnings("unchecked")
 	private void storeBlob(Hash hash, ABlob blob) {
-		if (cursor != null) {
-			cursor.updateAndGet(current -> {
-				Index<ABlob, ABlob> idx = (current != null) ? (Index<ABlob, ABlob>) current : Index.none();
-				return idx.assoc(hash, blob);
-			});
-		} else {
-			localState = localState.assoc(hash, blob);
-		}
+		cursor.updateAndGet(current -> {
+			Index<ABlob, ABlob> idx = (current != null) ? current : Index.none();
+			return idx.assoc(hash, blob);
+		});
 	}
 
 	@Override
@@ -177,21 +161,9 @@ public class LatticeStorage extends AStorage {
 			throw new IllegalArgumentException("Hash cannot be null");
 		}
 
-		// Note: In a true CRDT, deletes are not supported (grow-only).
-		// This implementation removes locally but may be restored on merge.
-		if (!exists(hash)) {
-			return false;
-		}
-		if (cursor != null) {
-			cursor.updateAndGet(current -> {
-				@SuppressWarnings("unchecked")
-				Index<ABlob, ABlob> idx = (current != null) ? (Index<ABlob, ABlob>) current : Index.none();
-				return idx.dissoc(hash);
-			});
-		} else {
-			localState = localState.dissoc(hash);
-		}
-		return true;
+		Index<ABlob, ABlob> old = cursor.getAndUpdate(current ->
+			(current != null) ? current.dissoc(hash) : current);
+		return old != null && old.containsKey(hash);
 	}
 
 	@Override
@@ -221,11 +193,8 @@ public class LatticeStorage extends AStorage {
 	 * @return Current state as an Index
 	 */
 	public Index<ABlob, ABlob> getState() {
-		if (cursor != null) {
-			Index<ABlob, ABlob> cursorState = cursor.get();
-			return cursorState != null ? cursorState : lattice.zero();
-		}
-		return localState;
+		Index<ABlob, ABlob> state = cursor.get();
+		return (state != null) ? state : Index.none();
 	}
 
 	/**
@@ -246,20 +215,12 @@ public class LatticeStorage extends AStorage {
 		return getState().isEmpty();
 	}
 
-	/**
-	 * Get the underlying CASLattice.
-	 *
-	 * @return The CASLattice defining merge semantics
-	 */
+	/** @return the CAS lattice defining storage merge semantics */
 	public CASLattice<ABlob, ABlob> getLattice() {
 		return lattice;
 	}
 
-	/**
-	 * Get the lattice cursor (may be null if standalone mode).
-	 *
-	 * @return The cursor, or null
-	 */
+	/** @return the non-null cursor holding this storage's state */
 	public ACursor<Index<ABlob, ABlob>> getCursor() {
 		return cursor;
 	}

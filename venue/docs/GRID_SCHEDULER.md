@@ -53,12 +53,12 @@ It is a plain field of the venue `:value`, alongside `:assets`, `:storage`,
 :grid → :venues → <venueDID> → :value   (a single whole-value-LWW node)
                                 ├── :assets    (content-addressed refs)
                                 ├── :storage   (content-addressed blobs)
-                                ├── :schedule   { updated, events }
+                                ├── :schedule   { updated, events, ... }
                                 ├── :users
                                 └── :user-data → <DID> → { j, g, s, w, o, h, a }
 ```
 
-The `:schedule` value is a single `{ updated, events }` map:
+The `:schedule` value is a single extensible `{ updated, events, ... }` map:
 
 ```
 events = Index keyed by  time (8-byte big-endian unsigned millis) ‖ id (unique bytes)
@@ -80,16 +80,18 @@ fork into the parent with a **lattice join**. The venue `:value` is a single
 whole value wins wholesale, so a removed event (cancel or fire) stays removed —
 there is no per-entry `Index` *union* to re-introduce it. `:schedule` is a plain
 field inside that node; its `Index` exists purely for ordering, not merge. The
-`{updated, events}` shape and the strictly-increasing `updated` stamp are
-retained by the scheduler as the events container and a last-mutation marker;
-deletion durability itself comes from the venue-level whole-value LWW.
+`{updated, events, ...}` shape is retained by the scheduler as an extensible
+events container and a last-mutation marker. Navigating to `events` crosses a
+stamp-on-write boundary, which refreshes `updated` from the lattice write clock
+while preserving sibling metadata. Deletion durability itself comes from the
+venue-level whole-value LWW.
 
 **Single-writer.** The scheduler's single timer thread (§4) is the sole mutator
 of `:schedule`, so there is no concurrency downside. Cross-venue federation of
 schedules is out of scope.
 
 **The lattice is the source of truth.** The in-memory firing mechanism (§4) holds
-no durable state beyond the stamp counter — it is rebuilt from the index on boot.
+no durable state — it is rebuilt from the index on boot.
 
 ---
 
@@ -139,11 +141,14 @@ costs nothing — there is no scan of sleeping events.
    covers everything the fire changes about the schedule: a one-shot event is
    **removed**; a recurring event is **re-inserted** under the same `id` at
    its next due slot with `lastFired = now` and, for a tracked fire, `lastJob`.
-   To make `lastJob` part of that same write, a tracked fire's Job is
+   To make `lastJob` part of that schedule write, a tracked fire's Job is
    *prepared* first, on the timer thread: minted, PENDING, persisted in the
-   owner's history — the adapter is **not** started. So there is no state in
-   which an event has been consumed but its Job is unknown, and nothing an
-   observer can see between "scheduled" and "fired with Job X". Because the
+   owner's history — the adapter is **not** started. Job preparation and the
+   schedule claim are two ordered lattice updates because they touch different
+   records. A crash between them can leave an unstarted PENDING Job while the
+   event remains; recovery fails that Job and a later fire prepares a new one.
+   There is still no state in which an event has been consumed but its Job is
+   unknown. Because the
    claim and every other mutation run on this one thread, a `trigger` of the
    same event either already ran (drain skips it) or runs after. This gives
    **at-most-once** firing with no locking.
@@ -318,7 +323,7 @@ A scheduled `agent:trigger` is exactly as lightweight as a direct wake (transien
 
 ## 9. Boundaries and future work
 
-**In scope:** per-venue `:schedule` index; `schedule` / `cancel` / `trigger` /
+**In scope:** per-venue `:schedule` record and its event index; `schedule` / `cancel` / `trigger` /
 `list`; one-shot and fixed-interval (`repeat.every`) events with handles stable
 across re-keying; **captured authority — stapled UCAN proofs replayed at fire
 time, no escalation (§5)**; transient or tracked fires per event and venue
@@ -350,7 +355,7 @@ claim-then-invoke (at-most-once); a 1 s floor on `repeat.every`.
 3. **Handle encoding** — the index key surfaced as an opaque hex string
    (`0x…`); `cancel`/`trigger` accept it as a hex string or blob, and follow
    the `id` when a recurring event has been re-keyed (§3).
-4. **`:schedule` is a plain `{updated, events}` field inside the venue `:value`**,
+4. **`:schedule` is an extensible `{updated, events, ...}` field inside the venue `:value`**,
    which is a single whole-value-LWW node — so removals survive the fork-merge
    wholesale, with no per-entry `Index` union to re-introduce them (§2).
 5. **No execution history in the scheduler** — outcomes live on Jobs; the

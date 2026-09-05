@@ -3,6 +3,7 @@ package covia.venue;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -19,6 +20,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
+import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.adapter.AAdapter;
@@ -536,6 +538,98 @@ public class JobManagerTest {
 			"deleted job must not reappear via the lattice fallback");
 		assertFalse(engine.jobs().deleteJob(job.getID(), ctx),
 			"second delete finds nothing");
+	}
+
+	@Test
+	public void testConcurrentTerminalHistoryAppendCannotResurrectDeletedJob() throws Exception {
+		Job job = engine.jobs().invokeOperation(
+			"v/test/ops/echo", Maps.of("hello", "history"), ctx);
+		job.awaitResult(5000);
+		AMap<AString, ACell> message = Maps.of(
+			Fields.MESSAGE_ID, Strings.create("concurrent-history"),
+			Fields.MESSAGE, Strings.create("hello"));
+		CountDownLatch ready = new CountDownLatch(2);
+		CountDownLatch start = new CountDownLatch(1);
+
+		CompletableFuture<Boolean> append = CompletableFuture.supplyAsync(() -> {
+			ready.countDown();
+			try {
+				start.await();
+				engine.jobs().appendToHistory(job.getID(), message, ctx);
+				return true;
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				throw new AssertionError(e);
+			} catch (IllegalArgumentException deletedFirst) {
+				return false;
+			}
+		});
+		CompletableFuture<Boolean> delete = CompletableFuture.supplyAsync(() -> {
+			ready.countDown();
+			try {
+				start.await();
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				throw new AssertionError(e);
+			}
+			return engine.jobs().deleteJob(job.getID(), ctx);
+		});
+		assertTrue(ready.await(5, TimeUnit.SECONDS));
+		start.countDown();
+
+		append.get(5, TimeUnit.SECONDS); // either linearisation order is valid
+		assertTrue(delete.get(5, TimeUnit.SECONDS));
+		assertNull(engine.getVenueState().users().get(did).getJob(job.getID()),
+			"the durable-history path must update-if-present, never recreate after delete");
+	}
+
+	@Test
+	public void testDeleteFencesLateActiveJobPersistence() throws Exception {
+		Job job = engine.jobs().invokeOperation(
+			"v/test/ops/never", Maps.empty(), ctx);
+		VenueJob venueJob = assertInstanceOf(VenueJob.class, job);
+		AString marker = Strings.create("late-update");
+		Thread updater;
+		synchronized (venueJob) {
+			updater = Thread.ofVirtual().start(() ->
+				job.update(data -> data.assoc(marker, CVMLong.ONE)));
+			long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+			while (!CVMLong.ONE.equals(job.getData().get(marker))
+					&& System.nanoTime() < deadline) Thread.onSpinWait();
+			assertEquals(CVMLong.ONE, job.getData().get(marker));
+			assertTrue(engine.jobs().deleteJob(job.getID(), ctx));
+		}
+		updater.join(TimeUnit.SECONDS.toMillis(5));
+		assertFalse(updater.isAlive());
+		assertNull(engine.getVenueState().users().get(did).getJob(job.getID()),
+			"an update committed before deletion must not persist after deletion");
+		job.cancel("test cleanup");
+	}
+
+	@Test
+	public void testConcurrentActiveDeleteHasExactlyOneWinner() throws Exception {
+		Job job = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), ctx);
+		CountDownLatch ready = new CountDownLatch(2);
+		CountDownLatch start = new CountDownLatch(1);
+		java.util.function.Supplier<Boolean> delete = () -> {
+			ready.countDown();
+			try {
+				start.await();
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				throw new AssertionError(e);
+			}
+			return engine.jobs().deleteJob(job.getID(), ctx);
+		};
+		CompletableFuture<Boolean> first = CompletableFuture.supplyAsync(delete);
+		CompletableFuture<Boolean> second = CompletableFuture.supplyAsync(delete);
+		assertTrue(ready.await(5, TimeUnit.SECONDS));
+		start.countDown();
+
+		assertEquals(1, (first.get(5, TimeUnit.SECONDS) ? 1 : 0)
+			+ (second.get(5, TimeUnit.SECONDS) ? 1 : 0));
+		assertNull(engine.getVenueState().users().get(did).getJob(job.getID()));
+		job.cancel("test cleanup");
 	}
 
 	// ========== Argument defaults (operation.default) ==========

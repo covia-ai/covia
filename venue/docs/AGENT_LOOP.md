@@ -2,7 +2,7 @@
 
 Design for Covia agent state and the transitions that mutate it.
 
-**Status:** April 2026 (current behaviour). See **§8 Architectural Direction** for the in-flight redesign of the framework↔harness contract; §1–§7 describe how the code works today.
+**Status:** Current behaviour. See **§8 Architectural Direction** for the in-flight redesign of the framework↔harness contract; §1–§7 describe how the code works today.
 
 See GRID_LATTICE_DESIGN.md for: per-user namespace layout (§4.3), agent addressing
 (`/g/<agent-id>`, §4.3.4), secret store (`/s/`, §4.3.6), and implementation phasing (§12).
@@ -11,18 +11,19 @@ See GRID_LATTICE_DESIGN.md for: per-user namespace layout (§4.3), agent address
 
 ## 1. Principles
 
-1. **Single atomic value.** An agent's entire state is one map. Every operation
-   (create, message, run, config update) atomically replaces the whole map. No child
-   lattices, no per-field merge. The map is the unit of state.
+1. **Single atomic record.** An agent's entire state is one map. Every operation
+   (create, message, run, config update) atomically replaces the whole map. The map
+   is the local compare-and-swap unit; there is no per-field merge.
 
-2. **Last writer wins.** If two copies of an agent need to merge, the one with the
-   later `ts` wins. All writes are serialised on the hosting venue, so `ts` is
-   monotonic within an agent's lifetime.
+2. **Whole-venue replication.** The signed venue `:value` is the replication unit.
+   Its outer `:timestamp` selects the newer complete venue snapshot through a
+   whole-value LWW lattice. An agent's `ts` is ratcheted last-modified metadata; it
+   does not independently choose a merge winner.
 
 3. **Single venue writes.** An agent lives on one venue. All writes — message delivery,
    agent runs, config updates — are serialised on that venue via atomic
-   compare-and-swap on the agent record. Cross-venue sync is replication: the
-   more-recent state replaces the stale one.
+   compare-and-swap on the agent record. Cross-venue sync selects the newer complete
+   signed venue snapshot.
 
 4. **Three levels.** The agent update (level 1) manages framework bookkeeping:
    status, timeline, sessions. The agent transition (level 2) manages domain logic:
@@ -59,12 +60,19 @@ An agent lives at `:user-data → <owner-DID> → "g" → <agent-id>`.
 ### 2.1 Lattice Shape
 
 ```
-"g" → MapLattice (agent-id → per-agent value)
-  <agent-id> → LWW (latest ts wins)
+signed venue :value
+  → StampingLattice (:timestamp)
+  → whole-value LWW
+  → typed venue interior
+      :user-data → MapLattice (DID → stamped user record)
+        "g" → MapLattice (agent-id → stamped agent record)
+          <agent-id> → StampingLattice (ts) → JSONLattice
 ```
 
-One value. The LWW lattice compares `ts` and selects the winning map whole.
-Inside the map there are no lattices — just fields, atomically replaced together.
+The inner agent component supplies typed navigation and maintains `ts` when a
+deep cursor write enters the record (including `n/` and `c/`). It adds no stored
+envelope: the physical value remains the same plain map. Merge stops at the outer
+venue LWW and therefore never combines individual agents or their fields.
 
 ### 2.2 The Agent Record
 
@@ -72,7 +80,7 @@ The agent's value is a plain map. Every write replaces the entire map atomically
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `ts` | long | Timestamp of the last write. **The merge discriminator.** Set on every write. |
+| `ts` | long | Ratcheted timestamp of the last write to the agent record. Metadata, not a merge discriminator. |
 | `status` | string | `"SLEEPING"` \| `"RUNNING"` \| `"SUSPENDED"` \| `"TERMINATED"`. `RUNNING` is a persisted execution marker, validated against the live executor by the hosting venue. |
 | `config` | map | Framework-level configuration. Includes `operation` (default transition op). |
 | `state` | any | User-defined state. Opaque to the framework. Passed to and returned from the transition function. Transition-function-specific configuration (e.g. LLM provider, model) lives here, not in `config`. Set at creation via optional initial state. Conversation content lives on the session record (`session.frames[0].conversation`), not here. |
@@ -916,38 +924,33 @@ without affecting the agent contract or MCP interface.
 
 ---
 
-## 5. Merge Semantics
+## 5. Atomic Updates and Merge Semantics
 
-### 5.1 Last Writer Wins
+### 5.1 Local Agent Updates
 
-The LWW lattice compares `ts` values. The record with the later timestamp wins
-unconditionally.
+All writes to an agent are serialised on one venue through atomic compare-and-swap
+on the agent's record slot. Message delivery, task addition, and run-loop updates
+all contend against the same slot, so concurrent venue threads do not lose updates.
+Each successful mutation writes a complete coherent agent map and refreshes `ts`.
 
-- **Monotonic:** ts only increases on the hosting venue → state only advances.
-- **Complete:** the winner is a full consistent snapshot, never a mix of fields.
-- **Simple:** standard LWW lattice, no custom merge function.
+The run loop never holds a lock. It reads a snapshot at the top of each iteration,
+runs the transition (which may take seconds or minutes), then applies its result
+atomically against the current record. Concurrent task additions and session
+message appends proceed while the transition runs; the merge code preserves them
+by reading the current sessions/tasks rather than the stale pre-transition snapshot.
 
-### 5.2 Why One Value?
+### 5.2 Cross-Venue Replication
 
-All writes to an agent are serialised on one venue through atomic
-compare-and-swap on the agent's lattice slot. Message delivery, task
-addition, and run loop merges all contend against the same slot, so there
-are no lost updates even though multiple threads may write concurrently.
-
-The run loop never holds a lock. It reads a snapshot at the top of each
-iteration, runs the transition (which may take seconds or minutes), then
-merges the result atomically. Concurrent task additions and session
-message appends proceed while the transition runs; their writes are
-preserved because the merge reads the *current* sessions/tasks (not the
-stale pre-transition snapshot).
-
-Cross-venue sync is replication: the venue hosting the agent always has the latest
-ts. Replicas receive the complete state.
+Cross-venue sync does not merge agent records independently. The venue's outer
+whole-value LWW lattice compares the venue `:timestamp`; the newer complete signed
+`:value` snapshot wins. This is valid because the venue signing key is the single
+authoritative writer for that state lineage. Replicas receive a coherent venue
+state, including the complete agent map that actually existed on the host.
 
 Per-field merge (a previous design) was wrong because it could produce Frankenstein
 states — status from venue A, timeline from venue B, session fragments from both. An
-inconsistent state that never actually existed. With a single atomic value, the winner
-is always a state that genuinely existed on the hosting venue.
+inconsistent state that never actually existed. Whole-snapshot replication ensures
+the winner is always a state that genuinely existed on the hosting venue.
 
 ---
 

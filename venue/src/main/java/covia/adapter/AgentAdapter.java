@@ -780,7 +780,12 @@ public class AgentAdapter extends AAdapter {
 			return;
 		}
 
-		AgentState agent = user.ensureAgent(agentId, config, initialState);
+		AgentState agent = user.createAgent(agentId, config, initialState);
+		if (agent == null) {
+			job.fail("Agent already exists: " + agentId
+				+ "; update it, or delete it with remove=true before creating it again");
+			return;
+		}
 
 		AMap<AString, ACell> result = identify(target, Maps.of(
 			Fields.STATUS, agent.getStatus()));
@@ -1233,10 +1238,11 @@ public class AgentAdapter extends AAdapter {
 		// Resolve source agent
 		User sourceUser = sourceTarget.user();
 		AgentState source = (sourceUser != null) ? sourceUser.agent(sourceId) : null;
-		if (source == null || !source.exists()) {
+		AMap<AString, ACell> sourceRecord = (source != null) ? source.getRecord() : null;
+		if (sourceRecord == null) {
 			job.fail("Source agent not found: " + sourceId); return;
 		}
-		if (AgentState.TERMINATED.equals(source.getStatus())) {
+		if (AgentState.TERMINATED.equals(sourceRecord.get(AgentState.KEY_STATUS))) {
 			job.fail("Cannot fork TERMINATED agent: " + sourceId); return;
 		}
 		AgentTarget targetTarget = resolveAgentTarget(ctx, input, Fields.AGENT_ID,
@@ -1250,7 +1256,8 @@ public class AgentAdapter extends AAdapter {
 		} catch (IllegalArgumentException e) {
 			job.fail(describeFailure(e)); return;
 		}
-		AMap<AString, ACell> sourceConfig = source.getConfig();
+		AMap<AString, ACell> sourceConfig = RT.ensureMap(
+			sourceRecord.get(AgentState.KEY_CONFIG));
 		AMap<AString, ACell> forkConfig = (overrideConfig == null) ? sourceConfig
 			: (sourceConfig != null ? mergeConfigMaps(sourceConfig, overrideConfig) : overrideConfig);
 		try {
@@ -1260,9 +1267,11 @@ public class AgentAdapter extends AAdapter {
 			return;
 		}
 
-		ACell sourceState = source.getState();
-		AVector<ACell> sourceTimeline = CVMBool.TRUE.equals(RT.getIn(input, K_INCLUDE_TIMELINE))
-			? source.getTimeline() : null;
+		ACell sourceState = sourceRecord.get(AgentState.KEY_STATE);
+		AVector<ACell> sourceTimeline = null;
+		if (CVMBool.TRUE.equals(RT.getIn(input, K_INCLUDE_TIMELINE))) {
+			sourceTimeline = RT.ensureVector(sourceRecord.get(AgentState.KEY_TIMELINE));
+		}
 
 		// Fork is an exclusive create: replacement is delete(remove=true) + fork.
 		User targetUser = targetTarget.user();
@@ -1274,6 +1283,11 @@ public class AgentAdapter extends AAdapter {
 		}
 
 		AgentState target = targetUser.forkAgent(agentId, forkConfig, sourceState, sourceTimeline);
+		if (target == null) {
+			job.fail("Target agent already exists: " + agentId
+				+ "; delete it with remove=true before forking into this name");
+			return;
+		}
 
 		AMap<AString, ACell> result = identify(targetTarget, Maps.of(
 			Fields.STATUS, target.getStatus(),
@@ -1309,9 +1323,6 @@ public class AgentAdapter extends AAdapter {
 		// Mint or reuse a session for this request. Stage 1 scaffold — the
 		// sid is recorded on the task row and returned in the response
 		// envelope, but the transition function does not yet consume it.
-		Blob sid = resolveOrMintSession(job, agent, input, ctx.getCallerDID());
-		if (sid == null) return;
-
 		// Build canonical taskdata map: {input, caller, created, sessionId, responseSchema?}
 		// Task rows are transient — status/result/error live on the Job record
 		// and in the agent timeline's taskResults snapshot. Per-task t/ scratch
@@ -1335,6 +1346,9 @@ public class AgentAdapter extends AAdapter {
 			job.fail("strict requires a responseSchema to enforce");
 			return;
 		}
+		SessionSpec session = resolveOrMintSession(job, input);
+		if (session == null) return;
+		Blob sid = session.id();
 		AMap<AString, ACell> taskData = Maps.of(
 			Fields.INPUT,      taskInput,
 			Fields.CALLER,     ctx.getCallerDID(),
@@ -1348,9 +1362,18 @@ public class AgentAdapter extends AAdapter {
 			taskData = taskData
 				.assoc(Fields.OUTPUT_PATH, outputPath)
 				.assoc(K_OUTPUT_CONTEXT, snapshotOutputContext(ctx));
-			outputContexts.put(taskId, ctx);
 		}
-		agent.addTask(taskId, taskData);
+		AgentState.SessionIntake intake = agent.addTaskInSession(sid,
+			ctx.getCallerDID(), session.loads(), taskId, taskData);
+		if (intake == AgentState.SessionIntake.LOADS_ON_EXISTING) {
+			job.fail("loads can only be passed when a session is created — this session already exists");
+			return;
+		}
+		if (intake != AgentState.SessionIntake.APPLIED) {
+			job.fail("Agent no longer exists: " + agentId);
+			return;
+		}
+		if (outputPath != null) outputContexts.put(taskId, ctx);
 
 		// Record the session on the task Job so consumers can recover it for the
 		// task's whole lifecycle (the A2A layer maps A2A contextId = session).
@@ -1378,6 +1401,7 @@ public class AgentAdapter extends AAdapter {
 
 		AString taskIdHex = RT.ensureString(RT.getIn(input, Fields.TASK_ID));
 		Blob taskId = null;
+		SessionSpec session = null;
 		Blob sid;
 		if (taskIdHex != null) {
 			taskId = Blob.fromHex(taskIdHex.toString());
@@ -1397,8 +1421,9 @@ public class AgentAdapter extends AAdapter {
 				}
 			}
 		} else {
-			sid = resolveOrMintSession(job, agent, input, ctx.getCallerDID());
-			if (sid == null) return;
+			session = resolveOrMintSession(job, input);
+			if (session == null) return;
+			sid = session.id();
 		}
 
 		AString sidHex = Strings.create(sid.toHexString());
@@ -1415,7 +1440,16 @@ public class AgentAdapter extends AAdapter {
 				return;
 			}
 		} else {
-			agent.appendSessionPending(sid, envelope);
+			AgentState.SessionIntake intake = agent.appendSessionPending(sid,
+				ctx.getCallerDID(), session.loads(), envelope, true);
+			if (intake == AgentState.SessionIntake.LOADS_ON_EXISTING) {
+				job.fail("loads can only be passed when a session is created — this session already exists");
+				return;
+			}
+			if (intake != AgentState.SessionIntake.APPLIED) {
+				job.fail("Agent no longer exists: " + agentId);
+				return;
+			}
 		}
 		wakeAgent(target.ownerDID(), agentId, true);
 
@@ -1462,8 +1496,9 @@ public class AgentAdapter extends AAdapter {
 		if (agent == null) return;
 		if (failIfSuspended(job, agent, agentId)) return;
 
-		Blob sid = resolveSessionForChat(job, agent, input, ctx.getCallerDID());
-		if (sid == null) return;
+		SessionSpec session = resolveSessionForChat(job, input);
+		if (session == null) return;
+		Blob sid = session.id();
 		AString sidHex = Strings.create(sid.toHexString());
 
 		// Chats are not serialised: register this one as a waiter on the session
@@ -1489,7 +1524,20 @@ public class AgentAdapter extends AAdapter {
 			Fields.SESSION_ID, sidHex,
 			Fields.MESSAGE,    messageContent,
 			Fields.JOB_ID,     jobIdHex);
-		agent.appendSessionPending(sid, envelope);
+		AgentState.SessionIntake intake = agent.appendSessionPending(sid,
+			ctx.getCallerDID(), session.loads(), envelope, !session.supplied());
+		if (intake != AgentState.SessionIntake.APPLIED) {
+			chatsRef.remove(jobRef.getID(), jobRef);
+			if (intake == AgentState.SessionIntake.LOADS_ON_EXISTING) {
+				job.fail("loads can only be passed when a session is created — this session already exists");
+			} else if (session.supplied()) {
+				job.fail("Unknown sessionId: " + sid.toHexString()
+					+ " — omit sessionId to start a new session");
+			} else {
+				job.fail("Agent no longer exists: " + agentId);
+			}
+			return;
+		}
 
 		// Record the (possibly just-minted) sessionId on the job so a caller
 		// finding this job failed after a venue restart knows which session to
@@ -3149,13 +3197,15 @@ public class AgentAdapter extends AAdapter {
 	public boolean deliverSessionMessage(AString ownerDID, AString agentId, Blob sessionId,
 			AString caller, AString jobId, ACell message) {
 		AgentState agent = getAgent(ownerDID, agentId);
-		if (agent == null || agent.getSession(sessionId) == null) return false;
+		if (agent == null) return false;
 		AMap<AString, ACell> envelope = Maps.of(
 			Fields.CALLER, caller,
 			Fields.SESSION_ID, Strings.create(sessionId.toHexString()),
 			Fields.MESSAGE, message);
 		if (jobId != null) envelope = envelope.assoc(Fields.JOB_ID, jobId);
-		agent.appendSessionPending(sessionId, envelope);
+		AgentState.SessionIntake intake = agent.appendSessionPending(
+			sessionId, caller, null, envelope, false);
+		if (intake != AgentState.SessionIntake.APPLIED) return false;
 		wakeAgent(ownerDID, agentId, true);
 		return true;
 	}
@@ -4764,8 +4814,8 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Resolves the sessionId from input, minting a new one if absent, and
-	 * ensures a session record exists on the agent. Returns the sid, or
+	 * Resolves the sessionId from input, minting a new one if absent. Session
+	 * creation is deferred to the atomic intake mutation. Returns the spec, or
 	 * {@code null} if the input's sessionId is malformed (job is failed).
 	 *
 	 * <p>An optional {@code loads} input seeds the new session's tier of the
@@ -4773,7 +4823,9 @@ public class AgentAdapter extends AAdapter {
 	 * here; passing it against an existing session is an error, never a
 	 * silent ignore.</p>
 	 */
-	private Blob resolveOrMintSession(Job job, AgentState agent, ACell input, AString caller) {
+	private record SessionSpec(Blob id, AMap<AString, ACell> loads, boolean supplied) {}
+
+	private SessionSpec resolveOrMintSession(Job job, ACell input) {
 		AMap<AString, ACell> initialLoads;
 		try {
 			initialLoads = mintLoads(input);
@@ -4791,15 +4843,10 @@ public class AgentAdapter extends AAdapter {
 				job.fail("Invalid sessionId format: " + s);
 				return null;
 			}
-			if (initialLoads != null && agent.getSession(sid) != null) {
-				job.fail("loads can only be passed when a session is created — this session already exists");
-				return null;
-			}
 		} else {
 			sid = generateSessionId();
 		}
-		agent.ensureSession(sid, caller, initialLoads);
-		return sid;
+		return new SessionSpec(sid, initialLoads, sidCell != null);
 	}
 
 	/**
@@ -4814,14 +4861,12 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Chat-specific session resolution. Differs from {@link #resolveOrMintSession}
-	 * in one critical way: a {@code sessionId} that is provided but does not
-	 * exist on the agent is rejected — we do not silently create a session
-	 * for the caller. This matches §5.5 (agent_chat row): {@code sessionId
-	 * present and unknown → Error}. Mint-on-missing only happens when the
+	 * Chat-specific session resolution. Whether a supplied id exists is checked
+	 * by the subsequent atomic append, avoiding a check-then-mutate race. A
+	 * missing supplied id is rejected; mint-on-missing happens only when the
 	 * caller supplied no {@code sessionId} at all.
 	 */
-	private Blob resolveSessionForChat(Job job, AgentState agent, ACell input, AString caller) {
+	private SessionSpec resolveSessionForChat(Job job, ACell input) {
 		AMap<AString, ACell> initialLoads;
 		try {
 			initialLoads = mintLoads(input);
@@ -4835,18 +4880,9 @@ public class AgentAdapter extends AAdapter {
 			if (s == null) { job.fail("sessionId must be a hex string"); return null; }
 			Blob sid = parseSessionId(s);
 			if (sid == null) { job.fail("Invalid sessionId format: " + s); return null; }
-			if (agent.getSession(sid) == null) {
-				job.fail("Unknown sessionId: " + s + " — omit sessionId to start a new session");
-				return null;
-			}
-			if (initialLoads != null) {
-				job.fail("loads can only be passed when a session is created — this session already exists");
-				return null;
-			}
-			return sid;
+			return new SessionSpec(sid, initialLoads, true);
 		}
 		Blob sid = generateSessionId();
-		agent.ensureSession(sid, caller, initialLoads);
-		return sid;
+		return new SessionSpec(sid, initialLoads, false);
 	}
 }

@@ -187,8 +187,8 @@ public class JobManager {
 	 * but is exempt from top-level admission like {@link #invokeInternal}: the
 	 * venue itself is dispatching, not a user request. The Job is recorded in
 	 * the owner's history (PENDING) regardless of operation metadata, so the
-	 * caller can commit its ID alongside its own state <i>before</i> any work
-	 * begins, then {@link Prepared#start()} the adapter.
+	 * caller can persist the ID in its own state <i>before</i> any work begins,
+	 * then {@link Prepared#start()} the adapter.
 	 *
 	 * @param ref Operation reference (hex hash, DID URL, workspace path, etc.)
 	 * @param input Input parameters
@@ -203,9 +203,8 @@ public class JobManager {
 	/**
 	 * A Job that exists — PENDING, and persisted when durable — whose adapter
 	 * has not yet been invoked. Separating creation from start lets a caller
-	 * record the Job's ID atomically with its own state (the scheduler writes
-	 * it into the same lattice replace that claims the event) and only then
-	 * hand the work to the adapter. {@link #start()} runs exactly once.
+	 * record the Job's ID in its next atomic state update and only then hand the
+	 * work to the adapter. {@link #start()} runs exactly once.
 	 */
 	static final class Prepared {
 		private final Job job;
@@ -984,20 +983,22 @@ public class JobManager {
 		AMap<AString, ACell> data = getJobData(id, ctx);
 		if (data == null) return false;
 		requireJobOwner(ctx, id, data); // mutation: owner-only
+		Job live = activeJobs.get(id);
+		if (live instanceof VenueJob venueJob && !venueJob.markDeleted()) return false;
 		AString ownerDID = RT.ensureString(data.get(Fields.CALLER));
+		boolean removed = false;
 		if (ownerDID != null) {
 			User user = engine.getVenueState().users().get(ownerDID);
-			if (user != null) user.removeJob(id);
+			if (user != null) removed = user.removeJob(id);
 		}
 		// Remove from active cache if present (may already be evicted for terminal jobs)
-		deleteJob(id);
-		return true;
+		return deleteJob(id) || removed;
 	}
 
 	public boolean deleteJob(Blob id) {
-		activeJobs.remove(id);
+		boolean removed = activeJobs.remove(id) != null;
 		releaseJobPermit(id);
-		return true;
+		return removed;
 	}
 
 	// ========== Message Delivery ==========
@@ -1087,8 +1088,13 @@ public class JobManager {
 		if (job != null) {
 			job.update(data -> appendHistoryRecord(data, record));
 		} else {
-			// Persisted into the owning user's lattice, not the acting agent's.
-			persistJobRecord(jobID, newData, ctx.getUserDID());
+			// Mutate the durable row in place. A concurrent delete either happens
+			// before this update (so no row is recreated) or after it (so deletion
+			// wins); there is no stale whole-record resurrection window.
+			User user = engine.getVenueState().users().get(ctx.getUserDID());
+			if (user != null) {
+				user.updateJobIfPresent(jobID, data -> appendHistoryRecord(data, record));
+			}
 		}
 	}
 

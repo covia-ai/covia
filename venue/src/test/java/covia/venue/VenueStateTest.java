@@ -212,6 +212,76 @@ public class VenueStateTest {
 	}
 
 	@Test
+	public void testUserJobUpdatePreservesExplicitNullTemp() {
+		VenueState vs = VenueState.create(AKeyPair.generate());
+		User user = vs.users().ensure("did:key:zNullTemp");
+		Blob jobID = Blob.parse("0x0001");
+		AString temp = Strings.intern("temp");
+		user.persistJob(jobID, Maps.of(
+			Fields.STATUS, Status.PENDING,
+			temp, null));
+
+		user.persistJob(jobID, Maps.of(Fields.STATUS, Status.COMPLETE));
+
+		AMap<AString, ACell> record = user.getJob(jobID);
+		assertTrue(record.containsKey(temp));
+		assertNull(record.get(temp));
+	}
+
+	@Test
+	public void testUpdateJobIfPresentNeverCreatesOrResurrectsARow() throws Exception {
+		VenueState vs = VenueState.create(AKeyPair.generate());
+		User user = vs.users().ensure("did:key:zConditionalJobUpdate");
+		Blob jobID = Blob.parse("0x0001");
+		AString marker = Strings.intern("marker");
+
+		assertFalse(user.updateJobIfPresent(jobID,
+			record -> record.assoc(marker, Strings.create("missing"))));
+		assertNull(user.getJob(jobID), "an absent conditional update must not create a row");
+
+		user.persistJob(jobID, Maps.of(Fields.STATUS, Status.PENDING));
+		assertTrue(user.updateJobIfPresent(jobID,
+			record -> record.assoc(marker, Strings.create("present"))));
+		assertEquals(Strings.create("present"), user.getJob(jobID).get(marker));
+
+		java.util.concurrent.CountDownLatch ready = new java.util.concurrent.CountDownLatch(2);
+		java.util.concurrent.CountDownLatch start = new java.util.concurrent.CountDownLatch(1);
+		java.util.concurrent.CompletableFuture<Boolean> update =
+			java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+				ready.countDown();
+				try {
+					start.await();
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+					throw new AssertionError(e);
+				}
+				return user.updateJobIfPresent(jobID,
+					record -> record.assoc(marker, Strings.create("raced")));
+			});
+		java.util.concurrent.CompletableFuture<Boolean> remove =
+			java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+				ready.countDown();
+				try {
+					start.await();
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+					throw new AssertionError(e);
+				}
+				return user.removeJob(jobID);
+			});
+		assertTrue(ready.await(5, java.util.concurrent.TimeUnit.SECONDS));
+		start.countDown();
+		update.get(5, java.util.concurrent.TimeUnit.SECONDS);
+		assertTrue(remove.get(5, java.util.concurrent.TimeUnit.SECONDS));
+
+		assertNull(user.getJob(jobID),
+			"delete and conditional update must linearise without resurrection");
+		assertFalse(user.updateJobIfPresent(jobID,
+			record -> record.assoc(marker, Strings.create("late"))));
+		assertNull(user.getJob(jobID));
+	}
+
+	@Test
 	public void testUserJobGetNonExistent() {
 		AKeyPair kp = AKeyPair.generate();
 		VenueState vs = VenueState.create(kp);

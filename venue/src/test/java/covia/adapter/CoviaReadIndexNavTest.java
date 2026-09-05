@@ -17,8 +17,8 @@ import convex.core.data.prim.CVMLong;
 /**
  * Regression for {@code covia_read} navigating into a Blob-keyed {@link Index}
  * by a hex path segment — the shape of {@code g/<agent>/sessions/<sid>/wakeTime}
- * (the sessions Index lives inside the agent's opaque LWW value, so the lattice
- * resolver never sees it; {@code deepGet}/{@code navigateInto} does the walk).
+ * (the sessions Index is inside the agent record's JSON leaf, so typed lattice
+ * navigation stops there; {@code deepGet}/{@code navigateInto} does the walk).
  *
  * <p>An {@code AString} key is tried as a blob-like key first (AString is itself
  * {@code ABlobLike}, covering a string-keyed index) and then parsed as hex into a

@@ -39,15 +39,13 @@ import covia.exception.AuthException;
  * {@code venue/docs/GRID_SCHEDULER.md}.
  *
  * <p>Authoritative state lives on the lattice in the per-venue {@code :schedule}
- * slot, a whole {@code {updated, events}} value where {@code events} is an
- * {@link Index} keyed by {@code wakeTime||id} so its head is always the next
- * event due. The slot is replaced <i>as a unit</i> on every mutation (the
- * {@code LWW} slot lattice keeps the value with the higher {@code updated}
- * stamp, with no per-entry merge) — so a removal can't be undone by a union
- * when a concurrent persistence sweep forces the fork-merge path. The stamp is
- * strictly increasing, so the latest write always wins. This in-memory service
- * is a dumb alarm pointed at the events head, rebuilt from the lattice on boot.
- * See {@code venue/docs/GRID_SCHEDULER.md §8}.</p>
+ * record, whose {@code events} field is an {@link Index} keyed by
+ * {@code wakeTime||id}, so its head is always the next event due. The record
+ * retains its stable {@code {updated, events, ...}} shape so scheduler metadata
+ * can grow without another storage migration. Deletions are durable because
+ * the venue value merges whole-value by its own timestamp. This in-memory
+ * service is a dumb alarm pointed at the events head, rebuilt from the lattice
+ * on boot. See {@code venue/docs/GRID_SCHEDULER.md §8}.</p>
  *
  * <p><b>Concurrency.</b> A single-thread {@link ScheduledThreadPoolExecutor}
  * owns the alarm <i>and</i> every index mutation (schedule / cancel / trigger /
@@ -67,8 +65,10 @@ import covia.exception.AuthException;
  * its ID ({@code lastJob} on a recurring record). No outcome, status or error
  * is ever stored here — that is what the Job is for. The Job is
  * {@link JobManager#prepareTracked prepared} (minted, PENDING, persisted) on
- * the timer thread so that claiming the event and recording its Job ID are
- * one lattice write; only then does the adapter start, off-thread.</p>
+ * the timer thread before the schedule is atomically claimed. For recurrence,
+ * that one schedule update also records the prepared Job ID; only then does
+ * the adapter start, off-thread. Job preparation and schedule claim are two
+ * ordered record updates because they have different lattice owners.</p>
  *
  * <p><b>No escalation.</b> An event captures the owner's DID plus the proofs and
  * caps presented at schedule time, and firing replays exactly those via
@@ -113,10 +113,7 @@ public class Scheduler {
 	/** Event record field: ID of the durable Job produced by the most recent
 	 *  tracked fire (Blob) — the one link from a schedule to its executions. */
 	static final AString K_LAST_JOB = Strings.intern("lastJob");
-	/** Slot wrapper field: strictly-increasing stamp; the whole value with the
-	 *  higher stamp wins the (rare) merge, so deletions survive (CVMLong). */
-	static final AString K_UPDATED = Strings.intern("updated");
-	/** Slot wrapper field: the events {@link Index} (key = wakeTime||id). */
+	/** Scheduler-record field holding the time-ordered events {@link Index}. */
 	static final AString K_EVENTS = Strings.intern("events");
 	/** List-result field: the event handle (its index key). */
 	static final AString K_HANDLE = Strings.intern("handle");
@@ -134,11 +131,6 @@ public class Scheduler {
 	/** The single outstanding alarm (fires {@link #drainDue}); null when idle. */
 	private ScheduledFuture<?> armed;
 	private volatile boolean shutdown = false;
-
-	/** Strictly-increasing stamp for the slot wrapper. Touched only on the timer
-	 *  thread, so no synchronisation is needed. Seeded from the persisted value
-	 *  in {@link #start()} so it keeps increasing across restarts. */
-	private long lastStamp = 0L;
 
 	/** An event as it stands in the index. */
 	private record Entry(Blob key, AMap<AString, ACell> rec) {}
@@ -258,15 +250,7 @@ public class Scheduler {
 
 	/** Arm the alarm from the (already-loaded) lattice index. Call once on boot. */
 	public void start() {
-		onTimer(() -> {
-			ACell cur = store().get();
-			if (cur instanceof AMap) {
-				ACell u = asMap(cur).get(K_UPDATED);
-				if (u instanceof CVMLong l) lastStamp = Math.max(lastStamp, l.longValue());
-			}
-			armNext();
-			return null;
-		});
+		onTimer(() -> { armNext(); return null; });
 	}
 
 	/** Stop the alarm thread. Fires already dispatched to virtual threads continue. */
@@ -366,8 +350,11 @@ public class Scheduler {
 	 *     {@code advance} (the alarm path), or left at its current time when not
 	 *     (an early {@code trigger} does not disturb the schedule).</li>
 	 * </ul>
-	 * There is no state in which the event has been consumed but its Job is
-	 * unknown. If the Job cannot be prepared (unresolvable op, capability
+	 * The prepared Job is persisted before this schedule update, so there is no
+	 * state in which the event has been consumed but its Job is unknown. A crash
+	 * between the two updates can leave a PENDING Job while retaining the event;
+	 * recovery fails that unstarted Job, and a later fire prepares a new one.
+	 * If the Job cannot be prepared (unresolvable op, capability
 	 * denied), the event is still claimed exactly as an untracked failure
 	 * would be, and the error travels with the claim for the caller to see.
 	 */
@@ -449,24 +436,19 @@ public class Scheduler {
 	}
 
 	/**
-	 * Replace the whole {@code {updated, events}} slot value as a unit, applying
-	 * {@code op} to the current events and stamping a strictly-increasing
-	 * {@code updated} so the new value wins the slot's LWW merge — the rare
-	 * fork-merge path then keeps this removal/addition rather than re-unioning.
-	 * The stamp is computed once outside the update lambda so the lambda stays
-	 * pure under CAS retry. Re-arms the alarm. Runs on the timer thread.
+	 * Apply {@code op} to the scheduler record's events field and re-arm the
+	 * alarm. Navigating through the field crosses the schedule record's lattice
+	 * stamping boundary, which refreshes {@code updated} while preserving any
+	 * present or future sibling metadata. Runs on the timer thread.
 	 */
 	private void putEvents(UnaryOperator<Index<Blob, ACell>> op) {
-		long ts = nextStamp();
-		store().updateAndGet(cur -> wrap(ts, op.apply(eventsOf(cur))));
+		eventsStore().updateAndGet(cur -> {
+			@SuppressWarnings("unchecked")
+			Index<Blob, ACell> events = (cur instanceof Index<?, ?>)
+				? (Index<Blob, ACell>) cur : Index.none();
+			return op.apply(events);
+		});
 		armNext();
-	}
-
-	/** Strictly-increasing stamp (timer thread only). */
-	private long nextStamp() {
-		long t = clock.getAsLong();
-		lastStamp = (t > lastStamp) ? t : lastStamp + 1;
-		return lastStamp;
 	}
 
 	/** (Re)arm the alarm for the current index head. Runs on the timer thread. */
@@ -549,24 +531,18 @@ public class Scheduler {
 		return engine.getVenueState().scheduleCursor();
 	}
 
-	/** Current events index, unwrapped from the {@code {updated, events}} slot value. */
+	/** Cursor at the event index inside the extensible scheduler record. */
+	private ALatticeCursor<ACell> eventsStore() {
+		return store().path(K_EVENTS);
+	}
+
+	/** Current events index from the scheduler record. */
 	private Index<Blob, ACell> index() {
-		return eventsOf(store().get());
-	}
-
-	/** Extract the events {@link Index} from a slot wrapper (empty if absent/zero). */
-	@SuppressWarnings("unchecked")
-	private static Index<Blob, ACell> eventsOf(ACell wrapper) {
-		if (wrapper instanceof AMap) {
-			ACell ev = asMap(wrapper).get(K_EVENTS);
-			if (ev instanceof Index) return (Index<Blob, ACell>) ev;
-		}
-		return Index.none();
-	}
-
-	/** Build a {@code {updated, events}} slot wrapper stamped at {@code ts}. */
-	private static AMap<AString, ACell> wrap(long ts, Index<Blob, ACell> events) {
-		return Maps.of(K_UPDATED, CVMLong.create(ts), K_EVENTS, events);
+		ACell value = eventsStore().get();
+		if (!(value instanceof Index<?, ?>)) return Index.none();
+		@SuppressWarnings("unchecked")
+		Index<Blob, ACell> events = (Index<Blob, ACell>) value;
+		return events;
 	}
 
 	@SuppressWarnings("unchecked")

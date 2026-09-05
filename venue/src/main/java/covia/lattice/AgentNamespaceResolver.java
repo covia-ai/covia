@@ -12,11 +12,17 @@ import covia.venue.RequestContext;
  * Resolves the {@code n/} virtual namespace to the running agent's private
  * workspace within its agent record.
  *
- * <p>{@code n/notes/foo} resolves to the user cursor with rewritten keys
- * {@code ["g", agentId, "n", "notes", "foo"]}. This preserves compatibility
- * with the existing cursor-based write/read logic in CoviaAdapter.</p>
+ * <p>{@code n/notes/foo} resolves to the agent-record cursor at
+ * {@code g/<agentId>} with remaining keys {@code ["n", "notes", "foo"]}.
+ * Positioning at the containing record gives every virtual namespace the same
+ * resolver contract and lets the agent record lattice stamp the deep write.</p>
  */
 public class AgentNamespaceResolver implements NamespaceResolver {
+
+	/** Agent-record field holding the agent's private workspace. */
+	private static final AString K_N = Strings.intern("n");
+	/** Agent-record last-modified field, ratcheted by a workspace write. */
+	private static final AString K_TS = Strings.intern("ts");
 
 	@Override
 	public ResolvedNamespace resolve(RequestContext ctx, CoviaAdapter adapter, ACell[] keys) {
@@ -25,13 +31,11 @@ public class AgentNamespaceResolver implements NamespaceResolver {
 			throw new WrongScopeException("Cannot use 'n/' prefix outside agent scope");
 		}
 
-		// Return user cursor with rewritten keys: n/foo/bar → g/{agentId}/n/foo/bar
-		ALatticeCursor<ACell> userCursor = adapter.ensureUserCursor(ctx);
-		ACell[] rewritten = new ACell[keys.length + 2];
-		rewritten[0] = Strings.create("g");
-		rewritten[1] = agentId;
-		System.arraycopy(keys, 0, rewritten, 2, keys.length);
-		return new ResolvedNamespace(userCursor, rewritten);
+		ALatticeCursor<ACell> agentCursor = adapter.ensureUserCursor(ctx)
+			.path(Namespace.G, agentId);
+		ACell[] rewritten = keys.clone();
+		rewritten[0] = K_N;
+		return new ResolvedNamespace(agentCursor, rewritten, true, K_TS);
 	}
 
 	@Override

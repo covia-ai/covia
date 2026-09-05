@@ -148,7 +148,10 @@ This has structural problems on at least four axes:
 |---|---|---|
 | `UserWorkspace` (returned by `User.workspace()`) | `CoviaAdapter` direct cursor writes for `w/` and `o/` namespaces | `write(path, value)`, `delete(path)`, `append(path, element)`, `slice(path, from, to)` |
 | `UserDLFS` (returned by `User.dlfs()`) | `DLFSAdapter` direct `driveCursor.set(null)` and ad-hoc cursor navigation | `createDrive`, `deleteDrive`, `listDrives`; file ops delegate to `DLFSLocal` |
-| `JobTemp` (held by a `Job`) | `CoviaAdapter` direct `TempNamespaceResolver.updateTemp` for `t/` namespace | `set(key, value)`, `update(key, fn)`, `delete(key)`. Lifetime = the job. |
+
+`JobTemp` is no longer needed: the `t/` namespace resolves to the Job record's
+`temp` slot as an ordinary cursor path, so it takes the same deep read/write as
+every other namespace.
 
 ### 4.2 Component contract
 

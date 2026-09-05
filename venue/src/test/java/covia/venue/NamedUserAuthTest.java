@@ -7,7 +7,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URI;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
@@ -91,6 +93,45 @@ public class NamedUserAuthTest {
 		assertEquals(aliceDID, engine.getAuth().getUser(Strings.create("alice")).get(Fields.DID));
 		assertTrue(engine.getAuth().isAuthenticationKeyActive(
 			Strings.create("alice"), aliceKeyDID));
+	}
+
+	@Test
+	void concurrentUserFieldUpdatesDoNotReplaceEachOther() throws Exception {
+		Auth auth = server.getEngine().getAuth();
+		AString id = Strings.create("concurrent_" + System.nanoTime());
+		AString did = server.getEngine().managedUserDID(id);
+		AString retainedField = Strings.create("retainedField");
+		auth.putUser(id, Maps.of(
+			Fields.DID, did,
+			retainedField, Strings.create("keep")));
+		CountDownLatch ready = new CountDownLatch(2);
+		CountDownLatch start = new CountDownLatch(1);
+		AString firstField = Strings.create("firstField");
+		AString secondField = Strings.create("secondField");
+		java.util.function.BiConsumer<AString, AString> update = (field, value) -> {
+			ready.countDown();
+			try {
+				start.await();
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				throw new AssertionError(e);
+			}
+			auth.updateUser(id, current -> current.assoc(field, value));
+		};
+		CompletableFuture<Void> first = CompletableFuture.runAsync(
+			() -> update.accept(firstField, Strings.create("first")));
+		CompletableFuture<Void> second = CompletableFuture.runAsync(
+			() -> update.accept(secondField, Strings.create("second")));
+		assertTrue(ready.await(5, TimeUnit.SECONDS));
+		start.countDown();
+		CompletableFuture.allOf(first, second).get(5, TimeUnit.SECONDS);
+
+		AMap<AString, ACell> record = auth.getUser(id);
+		assertEquals(did, record.get(Fields.DID));
+		assertEquals(Strings.create("keep"), record.get(retainedField),
+			"field updates must preserve existing account/authentication data");
+		assertEquals(Strings.create("first"), record.get(firstField));
+		assertEquals(Strings.create("second"), record.get(secondField));
 	}
 
 	@Test

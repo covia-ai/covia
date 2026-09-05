@@ -2,7 +2,6 @@ package covia.lattice;
 
 import convex.core.data.ACell;
 import convex.core.data.AString;
-import convex.core.data.Blob;
 import convex.lattice.cursor.ALatticeCursor;
 import covia.adapter.CoviaAdapter;
 import covia.venue.RequestContext;
@@ -13,8 +12,8 @@ import covia.venue.RequestContext;
  * <p>Virtual namespaces (e.g. {@code n/} for agent workspace, {@code t/} for
  * goal-scoped temp) are not backed by a dedicated top-level lattice namespace.
  * Instead, a NamespaceResolver navigates directly to the correct lattice
- * location based on the {@link RequestContext}, without path string rewriting
- * or temporary allocations.</p>
+ * location based on the {@link RequestContext} and returns the remaining
+ * physical path from that cursor.</p>
  *
  * <p>Resolvers are registered on {@link CoviaAdapter} by prefix. Path resolution
  * checks registered resolvers first (O(1) lookup by prefix), then falls through
@@ -51,21 +50,28 @@ public interface NamespaceResolver {
 	}
 
 	/**
-	 * Result of namespace resolution: a cursor positioned at the namespace root
-	 * and the remaining path keys to navigate within it. Atomic embedded scopes
-	 * carry their selector ids so the adapter can update their parent record
-	 * safely rather than trying to cursor through an opaque LWW value.
+	 * Result of namespace resolution: a cursor positioned at the record that
+	 * holds the namespace, and the keys to navigate from there. The first
+	 * remaining key names the namespace container within that record (e.g.
+	 * {@code n} for {@code n/}, {@code temp} for {@code t/}, {@code c} for
+	 * {@code c/}), so every resolved path has the same shape as a physical
+	 * {@code w/...} path and the adapter needs one navigation rule.
+	 *
+	 * @param requireExistingRecord the record at {@code cursor} must already exist — a
+	 *        write never materialises it (a session's scratch must not mint a
+	 *        phantom session); reads of a missing record are simply absent
+	 * @param recordTimestampKey optional timestamp field to ratchet when the cursor
+	 *        is positioned exactly at a stamped record boundary
 	 */
 	record ResolvedNamespace(ALatticeCursor<ACell> cursor, ACell[] remainingKeys,
-			Blob jobId, AString agentId, Blob sessionId) {
-		/** Constructor for ordinary cursor-based namespaces. */
+			boolean requireExistingRecord, AString recordTimestampKey) {
 		ResolvedNamespace(ALatticeCursor<ACell> cursor, ACell[] remainingKeys) {
-			this(cursor, remainingKeys, null, null, null);
+			this(cursor, remainingKeys, false, null);
 		}
 
-		/** Constructor for a Job-backed namespace. */
-		ResolvedNamespace(ALatticeCursor<ACell> cursor, ACell[] remainingKeys, Blob jobId) {
-			this(cursor, remainingKeys, jobId, null, null);
+		ResolvedNamespace(ALatticeCursor<ACell> cursor, ACell[] remainingKeys,
+				boolean requireExistingRecord) {
+			this(cursor, remainingKeys, requireExistingRecord, null);
 		}
 	}
 }

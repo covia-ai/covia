@@ -4,12 +4,17 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -26,12 +31,11 @@ import convex.core.crypto.Hashing;
 import convex.lattice.cursor.ACursor;
 import convex.lattice.cursor.Cursors;
 import covia.grid.AContent;
-import convex.lattice.generic.CASLattice;
 import covia.lattice.Covia;
 
 /**
- * Tests for LatticeStorage - content-addressed storage extending AStorage,
- * backed by CASLattice.
+ * Tests for LatticeStorage - cursor-backed content-addressed storage extending
+ * AStorage (with a CASLattice-owned cursor in standalone mode).
  */
 public class LatticeStorageTest {
 
@@ -53,6 +57,18 @@ public class LatticeStorageTest {
 		assertTrue(s.isEmpty());
 		assertEquals(0, s.count());
 		assertTrue(s.isInitialised());
+		assertNotNull(s.getLattice());
+		assertNotNull(s.getCursor());
+	}
+
+	@Test
+	public void testNullCursorRetainsStandaloneCompatibility() throws IOException {
+		LatticeStorage s = new LatticeStorage(null);
+		s.initialise();
+		Hash hash = Hashing.sha256("standalone".getBytes());
+		s.store(hash, new ByteArrayInputStream("standalone".getBytes()));
+		assertTrue(s.exists(hash));
+		assertNotNull(s.getCursor());
 	}
 
 	@Test
@@ -111,6 +127,36 @@ public class LatticeStorageTest {
 	public void testDeleteNonExistent() throws IOException {
 		Hash hash = Hash.fromHex("2222222222222222222222222222222222222222222222222222222222222222");
 		assertFalse(storage.delete(hash));
+	}
+
+	@Test
+	public void testConcurrentDeleteHasExactlyOneWinner() throws Exception {
+		byte[] data = "delete once".getBytes();
+		Hash hash = Hashing.sha256(data);
+		storage.store(hash, new ByteArrayInputStream(data));
+		int workers = 8;
+		CountDownLatch ready = new CountDownLatch(workers);
+		CountDownLatch start = new CountDownLatch(1);
+		ArrayList<CompletableFuture<Boolean>> deletes = new ArrayList<>();
+		for (int i = 0; i < workers; i++) {
+			deletes.add(CompletableFuture.supplyAsync(() -> {
+				ready.countDown();
+				try {
+					start.await();
+					return storage.delete(hash);
+				} catch (Exception e) {
+					throw new RuntimeException(e);
+				}
+			}));
+		}
+		assertTrue(ready.await(5, TimeUnit.SECONDS));
+		start.countDown();
+		long winners = 0;
+		for (CompletableFuture<Boolean> deletion : deletes) {
+			if (deletion.get(5, TimeUnit.SECONDS)) winners++;
+		}
+		assertEquals(1, winners);
+		assertFalse(storage.exists(hash));
 	}
 
 	// ========== Initialization State ==========
@@ -200,6 +246,9 @@ public class LatticeStorageTest {
 		// Create storage backed by cursor
 		LatticeStorage cursorStorage = new LatticeStorage(storageCursor);
 		cursorStorage.initialise();
+		assertSame(storageCursor, cursorStorage.getCursor(),
+			"the accessor must expose the cursor that backs this storage instance");
+		assertNotNull(cursorStorage.getLattice());
 
 		// Store some data
 		byte[] data = "cursor backed storage".getBytes();
@@ -230,12 +279,6 @@ public class LatticeStorageTest {
 	}
 
 	// ========== Misc ==========
-
-	@Test
-	public void testGetLattice() {
-		assertNotNull(storage.getLattice());
-		assertTrue(storage.getLattice() instanceof CASLattice);
-	}
 
 	@Test
 	public void testToString() throws IOException {

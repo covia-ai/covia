@@ -192,17 +192,14 @@ public class LoginProviders {
 
 			// 3. Create or update user in lattice
 			AString userId = Strings.create(identity.toUserId());
-			AMap<AString, ACell> userRecord = engine.getAuth().getUser(userId);
-			if (userRecord == null) {
-				userRecord = Maps.empty();
-			}
+			AMap<AString, ACell> profile = Maps.empty();
 			if (identity.email != null) {
-				userRecord = userRecord.assoc(Fields.EMAIL, Strings.create(identity.email));
+				profile = profile.assoc(Fields.EMAIL, Strings.create(identity.email));
 			}
 			if (identity.name != null) {
-				userRecord = userRecord.assoc(Fields.NAME, Strings.create(identity.name));
+				profile = profile.assoc(Fields.NAME, Strings.create(identity.name));
 			}
-			userRecord = userRecord
+			profile = profile
 				.assoc(Fields.PROVIDER, Strings.create(providerName))
 				.assoc(Fields.PROVIDER_SUB, Strings.create(identity.sub));
 
@@ -211,10 +208,19 @@ public class LoginProviders {
 			// arbitrary DIDs for self-sovereign identities provisioned elsewhere.
 			// Preserve an existing account DID across upgrades / hostname changes;
 			// only new managed users receive the current did:web-derived ID.
+			AMap<AString, ACell> profileFields = profile;
+			AString managedDID = engine.managedUserDID(userId);
+			AMap<AString, ACell> userRecord = engine.getAuth().updateUser(userId, current -> {
+				AMap<AString, ACell> updated = (current != null) ? current : Maps.empty();
+				for (var entry : profileFields.entrySet()) {
+					updated = updated.assoc(entry.getKey(), entry.getValue());
+				}
+				if (RT.ensureString(updated.get(Fields.DID)) == null) {
+					updated = updated.assoc(Fields.DID, managedDID);
+				}
+				return updated;
+			});
 			AString userDID = RT.ensureString(userRecord.get(Fields.DID));
-			if (userDID == null) userDID = engine.managedUserDID(userId);
-			userRecord = userRecord.assoc(Fields.DID, userDID);
-			engine.getAuth().putUser(userId, userRecord);
 			engine.getVenueState().users().ensure(userDID);
 
 			// 4. Issue venue-signed EdDSA JWT

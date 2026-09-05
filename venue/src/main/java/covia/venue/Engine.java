@@ -1668,10 +1668,8 @@ public class Engine {
 		// like "w/notes" and "/v/ops/x" like "v/ops/x".
 		AString navRef = localRef;
 
-		// 4. Virtual namespace prefix (n/, v/, ...) — delegate to the
-		// registered resolver via CoviaAdapter. Handles cursor-based
-		// virtual namespaces uniformly. (t/ — job-scoped temp — is not
-		// handled here; covia:read has its own t/ branch.)
+		// 4. Virtual namespace prefix (n/, v/, t/, c/, ...) — delegate to the
+		// registered resolver via CoviaAdapter.
 		ACell virtualValue = resolveVirtualNamespace(navRef, ctx);
 		if (virtualValue != null) return virtualValue;
 

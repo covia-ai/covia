@@ -1,6 +1,7 @@
 package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -10,18 +11,27 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
 import convex.core.data.ACell;
-import convex.core.data.Maps;
+import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.Maps;
+import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import convex.lattice.LatticeContext;
+import convex.lattice.cursor.ALatticeCursor;
+import convex.lattice.cursor.Cursors;
 import covia.api.Fields;
+import covia.lattice.Covia;
+import covia.lattice.Namespace;
+import covia.lattice.WrapperLattice;
 
 /**
  * The {@code w}/{@code o}/{@code h} namespaces are stored as a
- * {@code {updated, data}} container — a storage shape only (NOT a lattice; the
- * old {@code LWWWrapperLattice} is gone and deletion durability comes from the
- * venue-value whole-value LWW). These tests lock in that the wrapper is
+ * {@code {updated, data}} container presented through a {@link WrapperLattice}
+ * view boundary. Deletion durability comes from the venue-value whole-value
+ * LWW; the wrapper owns navigation and write-time metadata only. These tests
+ * lock in that the wrapper is
  * <b>transparent</b>: callers address keys inside {@code data}, never see the
  * wrapper fields, and can use keys named {@code data}/{@code updated} without
  * colliding with the container. {@code updated} is maintained as per-namespace
@@ -118,6 +128,62 @@ public class WorkspaceWrapperTest {
 		write("w/b", CVMLong.create(2));
 		long t2 = ((CVMLong) RT.getIn(storedNamespace("w"), "updated")).longValue();
 		assertTrue(t2 >= t1, "updated metadata must not go backwards across writes");
+	}
+
+	@Test
+	@SuppressWarnings("unchecked")
+	public void testWrapperPreservesMetadataAndRatchetsContextClock() {
+		var container = Cursors.createLattice(WrapperLattice.INSTANCE);
+		container.setContext(LatticeContext.create(CVMLong.create(200), null));
+		ALatticeCursor<ACell> data = container.path(WrapperLattice.VIEW);
+		data.set(Maps.of("a", CVMLong.ONE));
+
+		// Metadata alongside data belongs to the physical envelope and must
+		// survive a caller-visible data update.
+		AString marker = Strings.intern("marker");
+		container.updateAndGet(raw -> ((AMap<ACell, ACell>) raw)
+			.assoc(marker, Strings.create("keep")));
+
+		// A fixed/overridden context may be older than persisted state. The
+		// metadata stamp follows the same one-way rule as the venue stamp.
+		container.setContext(LatticeContext.create(CVMLong.create(100), null));
+		data.updateAndGet(current -> ((AMap<AString, ACell>) current)
+			.assoc(Strings.intern("b"), CVMLong.create(2)));
+
+		ACell stored = container.get();
+		assertEquals(CVMLong.create(200), RT.getIn(stored, WrapperLattice.UPDATED));
+		assertEquals(Strings.create("keep"), RT.getIn(stored, marker));
+		assertEquals(CVMLong.create(2), RT.getIn(stored,
+			WrapperLattice.DATA, Strings.intern("b")));
+	}
+
+	@Test
+	public void testCoviaChildReturnsTheCallerVisibleWrappedValue() {
+		User user = engine.getVenueState().users().ensure(DID);
+		ALatticeCursor<ACell> workspace = Covia.child(user.cursor(), Namespace.W);
+		workspace.path(Strings.intern("through-child")).set(CVMLong.create(9));
+
+		assertEquals(CVMLong.create(9), workspace.path(Strings.intern("through-child")).get());
+		assertEquals(CVMLong.create(9), RT.getIn(user.cursor().get(),
+			"w", WrapperLattice.DATA, "through-child"));
+		assertTrue(RT.getIn(user.cursor().get(), "w", WrapperLattice.UPDATED) instanceof CVMLong,
+			"the public child accessor must cross the wrapper's stamping boundary");
+	}
+
+	@Test
+	public void testWrapperBoundaryAppliesOnlyAtNamespaceRoot() {
+		var container = Cursors.createLattice(WrapperLattice.INSTANCE);
+		container.setContext(LatticeContext.create(CVMLong.create(300), null));
+
+		ALatticeCursor<ACell> nested = container.path(Strings.intern("nested"));
+		assertFalse(nested.getLattice() instanceof WrapperLattice,
+			"children below the namespace use ordinary recursive JSON structure");
+		nested.path(Strings.intern("value")).set(CVMLong.ONE);
+
+		assertEquals(CVMLong.ONE,
+			RT.getIn(container.get(), WrapperLattice.DATA, "nested", "value"));
+		assertEquals(CVMLong.create(300),
+			RT.getIn(container.get(), WrapperLattice.UPDATED));
 	}
 
 	@Test

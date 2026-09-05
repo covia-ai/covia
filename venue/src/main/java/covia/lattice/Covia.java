@@ -7,8 +7,10 @@ import convex.core.data.Keyword;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.lattice.ALattice;
+import convex.lattice.cursor.ALatticeCursor;
 import convex.lattice.generic.CASLattice;
 import convex.lattice.generic.JSONLattice;
+import convex.lattice.generic.IndexLattice;
 import convex.lattice.generic.KeyedLattice;
 import convex.lattice.generic.LWWLattice;
 import convex.lattice.generic.MapLattice;
@@ -16,6 +18,7 @@ import convex.lattice.generic.OwnerLattice;
 import convex.lattice.generic.StampingLattice;
 import convex.lattice.generic.StringKeyedLattice;
 import convex.lattice.fs.DLFSLattice;
+import covia.api.Fields;
 
 
 /**
@@ -31,31 +34,30 @@ import convex.lattice.fs.DLFSLattice;
  *   :grid  ->  KeyedLattice
  *     :venues  ->  OwnerLattice (per-AccountKey signed state)
  *       &lt;AccountKey&gt;  ->  SignedLattice
- *         :value  ->  KeyedLattice (venue state)
- *           :assets   ->  CASLattice (union merge, content-addressed)
- *           :storage  ->  CASLattice (union merge, content-addressed blobs)
- *           :did      ->  FunctionLattice (first-writer-wins, set once)
- *           :state    ->  navigable whole-value-LWW (all mutable state)
- *             :timestamp   &lt;wall-clock millis&gt;  (re-stamped on every write)
- *             :users       login directory (Auth)
- *             :schedule    scheduled-event store
- *             :user-data   &lt;DID-string&gt; -> per-user record { j, g, s, w, o, h, a }
+ *         :value  ->  StampingLattice -> whole-value LWW -> KeyedLattice
+ *           :timestamp   &lt;wall-clock millis&gt;  (re-stamped on every write)
+ *           :assets      content-addressed asset store
+ *           :storage     content-addressed blob store
+ *           :did         venue DID
+ *           :users       login directory (Auth)
+ *           :schedule    extensible {updated, events, ...} record
+ *           :user-data   &lt;DID-string&gt; -> per-user record {j, g, s, w, o, h, a, meta}
  *     :meta  ->  CASLattice (shared content-addressable metadata)
+ *   :dlfs  ->  OwnerLattice -> SignedLattice -> per-user drive map
  * </pre>
  *
- * <h2>The {@code :state} region</h2>
- * <p>All mutable, deletable venue state lives under a single {@code :state} node
- * composed from three orthogonal convex lattice layers (see convex#593):</p>
+ * <h2>The venue {@code :value} region</h2>
+ * <p>All mutable, deletable venue state is the signed venue {@code :value},
+ * composed from three orthogonal Convex lattice layers (see convex#593):</p>
  * <ul>
  *   <li>{@link StampingLattice} — re-stamps {@code :timestamp} with real
  *       wall-clock time on every deep write (never inflated, never {@code +1});</li>
  *   <li>{@link LWWLattice} — whole-value merge: the newer {@code :timestamp}
  *       wins wholesale (tie → own), never recursing, so <b>deletions survive</b>
  *       the propagator's merge-back;</li>
- *   <li>{@link JSONLattice} — structural navigation: stock cursors descend and
- *       write the JSON interior, building each intermediate from the key shape
- *       (keyword/blob → {@code Index}, string → map, integer → vector); keys are
- *       used exactly as given (no coercion).</li>
+ *   <li>typed keyed/map/index lattices with {@link JSONLattice} leaves —
+ *       structural navigation and record-local write-stamping; keys are used
+ *       exactly as given (no coercion).</li>
  * </ul>
  *
  * <p>This is correct because a venue's {@code :value} has a single authoritative
@@ -109,16 +111,13 @@ public final class Covia {
 	/** Timestamp keyword re-stamped on every write to the venue value; LWW picks the newest. */
 	static final Keyword K_TIMESTAMP = LWWLattice.KEY_TIMESTAMP;   // :timestamp
 
-	/** Wrapper metadata key for {@code w}/{@code o}/{@code h}: last-modified time (auto-stamped). */
-	static final AString K_UPDATED = Strings.intern("updated");
-	/** Wrapper payload key for {@code w}/{@code o}/{@code h}: the namespace content. */
-	public static final AString K_DATA = Strings.intern("data");
-
 	/** User-record metadata slot — framework-owned (not a writable namespace).
 	 *  See {@code GRID_LATTICE_DESIGN.md} §"User meta record". */
 	public static final AString K_META = Strings.intern("meta");
 	/** User-record first-write time, minted once by the stamp. */
 	public static final AString K_CREATED = Strings.intern("created");
+	/** Agent-record last-modified field. */
+	private static final AString K_AGENT_TS = Strings.intern("ts");
 
 	/** Unchecked cast helper: a typed navigation lattice used only for structure. */
 	@SuppressWarnings("unchecked")
@@ -169,12 +168,22 @@ public final class Covia {
 		return v;
 	}
 
-	/** Injects the write-clock timestamp into a {@code w}/{@code o}/{@code h} value's {@code updated} field. */
+	/** Injects a last-modified stamp into an extensible string-keyed record. */
 	@SuppressWarnings("unchecked")
 	private static ACell stampUpdated(ACell v, CVMLong ts) {
 		if (v instanceof AMap<?,?>) {
 			AMap<ACell, ACell> m = (AMap<ACell, ACell>) v;
-			return m.assoc(K_UPDATED, ratchet(m.get(K_UPDATED), ts));
+			return m.assoc(Fields.UPDATED, ratchet(m.get(Fields.UPDATED), ts));
+		}
+		return v;
+	}
+
+	/** Injects the existing agent record's {@code ts} last-modified stamp. */
+	@SuppressWarnings("unchecked")
+	private static ACell stampAgent(ACell v, CVMLong ts) {
+		if (v instanceof AMap<?,?>) {
+			AMap<ACell, ACell> m = (AMap<ACell, ACell>) v;
+			return m.assoc(K_AGENT_TS, ratchet(m.get(K_AGENT_TS), ts));
 		}
 		return v;
 	}
@@ -206,43 +215,62 @@ public final class Covia {
 			? (AMap<ACell, ACell>) m
 			: (AMap<ACell, ACell>) (AMap<?, ?>) convex.core.data.Maps.empty();
 		if (meta.get(K_CREATED) == null) meta = meta.assoc(K_CREATED, ts);
-		meta = meta.assoc(K_UPDATED, ratchet(meta.get(K_UPDATED), ts));
+		meta = meta.assoc(Fields.UPDATED, ratchet(meta.get(Fields.UPDATED), ts));
 		return user.assoc(K_META, meta);
 	}
 
 	/**
-	 * The {@code w}/{@code o}/{@code h} namespaces: stored as {@code {updated, data}},
-	 * with content under {@code data} (navigable JSON) and {@code updated}
-	 * auto-stamped on every write by the {@code StampedCursor} that
-	 * {@link StampingLattice} inserts. A path {@code w/foo} resolves to
-	 * {@code w/data/foo}, so callers never address {@code data}; {@code updated} is
-	 * metadata and is not merged (whole-value merge happens at {@code :value}).
-	 */
-	private static final ALattice<ACell> WRAPPED_NS = StampingLattice.create(
-		ac(StringKeyedLattice.create("data", JSONLattice.INSTANCE)),
-		Covia::stampUpdated);
-
-	/**
-	 * Per-DID user record. Framework namespaces ({@code j}/{@code g}/{@code s}/{@code a})
-	 * are plain navigable JSON; user-writable {@code w}/{@code o}/{@code h} are the
-	 * stamped {@code {updated, data}} wrappers. Merge is whole-value at {@code :value},
-	 * so these child lattices are used only for navigation and write-stamping.
+	 * Per-DID user record. Jobs and agents have typed record boundaries that
+	 * maintain their existing {@code updated}/{@code ts} last-modified fields;
+	 * framework namespaces {@code s}/{@code a} are plain navigable JSON; and
+	 * user-writable {@code w}/{@code o}/{@code h} are
+	 * {@link WrapperLattice} regions ({@code {updated, data}} containers whose
+	 * {@code data} is the caller-visible value). Merge is whole-value at
+	 * {@code :value}, so these child lattices are used only for navigation and
+	 * write-stamping.
 	 *
 	 * <p>The whole record sits behind its own stamping boundary: every deep
 	 * write refreshes the record's {@code meta} slot ({@code created} minted
 	 * once, {@code updated} bumped) — see {@link #stampUserMeta} and the
 	 * "User meta record" section of {@code GRID_LATTICE_DESIGN.md}.</p>
 	 */
+	private static final ALattice<ACell> JOB_RECORD = StampingLattice.create(
+		JSONLattice.INSTANCE,
+		Covia::stampUpdated);
+
+	private static final ALattice<ACell> AGENT_RECORD = StampingLattice.create(
+		JSONLattice.INSTANCE,
+		Covia::stampAgent);
+
 	private static final ALattice<ACell> USER_RECORD = StampingLattice.create(
 		ac(StringKeyedLattice.create(
-			"j", JSONLattice.INSTANCE,
-			"g", JSONLattice.INSTANCE,
+			"j", IndexLattice.create(JOB_RECORD),
+			"g", MapLattice.create(AGENT_RECORD),
 			"s", JSONLattice.INSTANCE,
 			"a", JSONLattice.INSTANCE,
-			"w", WRAPPED_NS,
-			"o", WRAPPED_NS,
-			"h", WRAPPED_NS)),
+			"w", WrapperLattice.INSTANCE,
+			"o", WrapperLattice.INSTANCE,
+			"h", WrapperLattice.INSTANCE)),
 		Covia::stampUserMeta);
+
+	/**
+	 * Extensible scheduler record. Its stable physical shape is
+	 * {@code {updated, events, ...}}; writes below {@code events} refresh the
+	 * record's last-modified stamp without rebuilding or narrowing the record.
+	 */
+	private static final ALattice<ACell> SCHEDULE_RECORD = StampingLattice.create(
+		ac(StringKeyedLattice.create("events", JSONLattice.INSTANCE)),
+		Covia::stampUpdated);
+
+	/**
+	 * Cursor at the caller-visible value of {@code key} below {@code base}: through
+	 * the {@link WrapperLattice#VIEW data view} when the child is a wrapped region,
+	 * plain navigation otherwise. Reads and writes at the returned cursor see and
+	 * replace exactly what a caller addressing {@code key} would.
+	 */
+	public static ALatticeCursor<ACell> child(ALatticeCursor<ACell> base, ACell key) {
+		return WrapperLattice.wraps(base, key) ? base.path(key, WrapperLattice.VIEW) : base.path(key);
+	}
 
 	/**
 	 * Venue interior — keyword-keyed regions; {@code :user-data} maps each DID to a
@@ -254,7 +282,7 @@ public final class Covia {
 		STORAGE, JSONLattice.INSTANCE,
 		DID, JSONLattice.INSTANCE,
 		USERS, JSONLattice.INSTANCE,
-		SCHEDULE, JSONLattice.INSTANCE,
+		SCHEDULE, SCHEDULE_RECORD,
 		USER_DATA, MapLattice.create(USER_RECORD)));
 
 	/**

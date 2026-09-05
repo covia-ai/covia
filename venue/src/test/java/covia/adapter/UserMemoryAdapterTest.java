@@ -18,6 +18,7 @@ import covia.exception.JobFailedException;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
+import covia.venue.User;
 
 /**
  * Tests for the UserMemoryAdapter — one editing tool ({@code v/ops/memory}) dispatched by
@@ -146,6 +147,9 @@ public class UserMemoryAdapterTest {
 
 	@Test
 	public void testAgentLocalMemoryAtNPath() {
+		User user = engine.getVenueState().users().ensure(ALICE.getUserDID());
+		user.ensureAgent("memory-agent-a", Maps.empty(), null);
+		user.ensureAgent("memory-agent-b", Maps.empty(), null);
 		RequestContext agentA = RequestContext.ofAgent(ALICE.getUserDID(), Strings.create("memory-agent-a"));
 		RequestContext agentB = RequestContext.ofAgent(ALICE.getUserDID(), Strings.create("memory-agent-b"));
 		AMap<AString, ACell> remember = Maps.of(

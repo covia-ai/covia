@@ -7,11 +7,15 @@ import org.junit.jupiter.api.Test;
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AHashMap;
+import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.prim.CVMLong;
+import convex.core.lang.RT;
+import covia.api.Fields;
 import covia.lattice.Covia;
 import covia.lattice.Namespace;
 
@@ -80,6 +84,29 @@ public class SecretStoreTest {
 
 		AVector<AString> names = secrets.list();
 		assertEquals(1, names.count(), "Should still be one secret");
+	}
+
+	@Test
+	@SuppressWarnings("unchecked")
+	public void testOverwriteDoesNotRegressSecretTimestamp() {
+		AKeyPair kp = AKeyPair.generate();
+		VenueState vs = VenueState.create(kp);
+		User user = vs.users().ensure("did:key:zAlice");
+		SecretStore secrets = user.secrets();
+		byte[] key = SecretStore.deriveKey(kp);
+		AString name = Strings.create(SECRET_NAME);
+		secrets.store(name, Strings.create("old-value"), key);
+		CVMLong future = CVMLong.create(System.currentTimeMillis() + 60_000);
+		user.cursor().path(Namespace.S).updateAndGet(value -> {
+			AMap<AString, ACell> all = (AMap<AString, ACell>) value;
+			AMap<AString, ACell> record = (AMap<AString, ACell>) all.get(name);
+			return all.assoc(name, record.assoc(Fields.UPDATED, future));
+		});
+
+		secrets.store(name, Strings.create("new-value"), key);
+
+		assertEquals(future, RT.getIn(user.cursor().get(), Namespace.S, name, Fields.UPDATED));
+		assertEquals("new-value", secrets.decrypt(name, key).toString());
 	}
 
 	// ========== Exists ==========
