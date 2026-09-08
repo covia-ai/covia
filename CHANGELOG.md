@@ -39,6 +39,10 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   flight can no longer recreate the deleted row.
 - Last-modified stamps on jobs, agents, secrets and user rows are ratcheted
   from the lattice write clock and never move backwards.
+- A UCAN bearer credential that fails validation now returns the validator's
+  specific reason in the 401 (`UCAN bearer rejected: …`) instead of one opaque
+  message. Reasons describe only the presented token's own claims; audience
+  and att policy are still checked only after the signature verifies (#503).
 
 ## [0.9.8] - 2026-09-03
 

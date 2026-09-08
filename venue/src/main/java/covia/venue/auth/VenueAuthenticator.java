@@ -59,6 +59,9 @@ public final class VenueAuthenticator {
 	/** Clock-skew leeway for JWT temporal bounds, in seconds. */
 	private static final long CLOCK_SKEW_SECONDS = 60;
 
+	/** Prefix on every 401 message that carries a UCAN bearer's specific rejection reason. */
+	static final String UCAN_REJECTED_PREFIX = "UCAN bearer rejected: ";
+
 	private final AccountKey venueKey;
 	private final AString venueDID;
 	private final Auth venueAuth;
@@ -180,8 +183,11 @@ public final class VenueAuthenticator {
 			boolean ucanShaped = hasUCANAtt(token);
 			VerifiedPrincipal principal = tryVerifyUCAN(token);
 			if (principal == null && ucanShaped) {
-				throw new AuthException(
-					"A UCAN bearer credential must be valid, audience-bound, and have empty att");
+				// Only reachable for a UCAN-shaped token the validator did not
+				// reject itself (e.g. att present but null); specific reasons are
+				// thrown from tryVerifyUCAN.
+				throw new AuthException(UCAN_REJECTED_PREFIX
+					+ "a bearer credential must be valid, audience-bound, and have empty att");
 			}
 			if (principal == null) principal = tryVerifySelfIssued(token);
 			if (principal == null && venueKey != null) {
@@ -251,12 +257,25 @@ public final class VenueAuthenticator {
 		long now = System.currentTimeMillis() / 1000;
 		// Signature + temporal bounds under the venue's DID verifier, so a
 		// did:web-identified issuer (covia#343) verifies exactly like did:key.
-		UCAN token = UcanJwtValidator.validateJWT(jwt, now, engine.didVerifier());
-		if (token == null) return null;
+		UcanJwtValidator.Validation validation =
+			UcanJwtValidator.validate(jwt, now, engine.didVerifier());
+		if (!validation.valid()) {
+			// The reason describes only the presented token's own bytes and
+			// claims (algorithm, claim shapes, its issuer and exp values), never
+			// venue state, so it is safe to return to an unauthenticated caller
+			// (covia#503). Checks that depend on venue state (audience, att
+			// policy) run only after the signature has verified.
+			throw new AuthException(UCAN_REJECTED_PREFIX + validation.reason());
+		}
+		UCAN token = validation.token();
 		AString issuer = token.getIssuer();
 		if (issuer == null) return null;
 		AVector<ACell> capabilities = token.getCapabilities();
-		if (capabilities == null || !capabilities.isEmpty()) return null;
+		if (capabilities == null || !capabilities.isEmpty()) {
+			throw new AuthException(UCAN_REJECTED_PREFIX
+				+ "a bearer credential must have empty att; present capability "
+				+ "tokens as transport proofs, not as the Authorization bearer");
+		}
 		requireAudience(token.getAudience());
 		return new VerifiedPrincipal(issuer, issuer);
 	}

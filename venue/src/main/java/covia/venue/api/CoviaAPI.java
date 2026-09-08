@@ -428,13 +428,29 @@ public class CoviaAPI extends ACoviaAPI {
 			tags = { "Covia"},
 			summary = "Get Covia asset metadata given an asset reference.",
 			operationId = CoviaAPI.GET_ASSET,
+			queryParams = {
+					@OpenApiParam(
+							name = "namespace",
+							description = "Set to \"venue\" to look a bare hash up in the venue's "
+									+ "own asset catalog (equivalent to <venueDID>/a/<hash>) "
+									+ "instead of the caller's namespace.",
+							required = false,
+							type = String.class,
+							example = "venue") },
 			pathParams = {
 					@OpenApiParam(
 							name = "ref",
-							description = "Asset reference: a bare CAD3 hash, a content-addressed "
-									+ "address (a/<hash>), a workspace/operation path (w/…, o/…), "
-									+ "or a DID URL. Resolved the same way invoke resolves "
-									+ "operation references.",
+							description = "Asset reference, resolved the same way invoke resolves "
+									+ "operation references. A bare CAD3 hash or a/<hash> is "
+									+ "caller-relative: it names the asset in the requesting "
+									+ "caller's own a/ namespace (<callerDID>/a/<hash>), so a "
+									+ "hash registered by another principal, or requested "
+									+ "anonymously, is 404 here. There is no global lookup by "
+									+ "hash. Address another owner's asset explicitly as "
+									+ "<ownerDID>/a/<hash> (a UCAN grant is required for a "
+									+ "non-public owner), or use ?namespace=venue for the venue "
+									+ "catalog. Workspace/operation paths (w/…, o/…) and DID "
+									+ "URLs resolve with their explicit owner semantics.",
 							required = true,
 							type = String.class,
 							example = "a/1234567812345678123456781234567812345678123456781234567812345678") })
