@@ -284,6 +284,10 @@ public class Fields {
 	 *  unchanged and no migration is implied. Attribution only: ownership,
 	 *  access control and quota all key on {@code caller}. */
 	public static final StringShort ACTOR = Strings.intern("actor");
+	/** On a job record: the id of the nearest <em>recorded</em> job inside whose
+	 *  execution this job was dispatched. Absent on top-level jobs. Only the
+	 *  up-link is stored; a client reconstructs a job tree by tracing parents. */
+	public static final StringShort PARENT = Strings.intern("parent");
 	public static final StringShort ROLES = Strings.intern("roles");
 	public static final StringShort REQUIRES = Strings.intern("requires");
 	public static final StringShort EMAIL = Strings.intern("email");

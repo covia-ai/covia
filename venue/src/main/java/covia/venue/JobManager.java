@@ -335,14 +335,17 @@ public class JobManager {
 		// Sub-jobs (current Job or inherited jobId set) and internal callers are exempt.
 		boolean permit = applyAdmission && acquireJobPermit(ctx, ownerDID);
 
-		// Persist the bare hex hash of the metadata as the op reference.
-		// Hex hashes are universally resolvable via the resolvePath bare-hex
-		// branch and survive any change in catalog naming or adapter registry.
-		AString opID = Strings.create(meta.getHash().toHexString());
+		// The record's `op` is the reference that was actually invoked (e.g.
+		// v/ops/json/merge, or a bare hash when the caller pinned a definition
+		// explicitly). Only an inline definition has no reference, in which
+		// case the metadata's own hash stands in (#499).
+		AString opID = ctx.getOp();
+		if (opID == null) opID = Strings.create(meta.getHash().toHexString());
+		Blob parentID = parentJobID(ctx);
 		Job job;
 		try {
 			job = submitJob(opID, meta, input, ownerDID, ctx.getCallerDID(),
-				memoryOnly, resultOriented);
+				parentID, memoryOnly, resultOriented);
 		} catch (RuntimeException e) {
 			// Never obtained a jobID to track — release the permit directly.
 			if (permit && ownerDID != null) {
@@ -366,6 +369,22 @@ public class JobManager {
 			jobCtx = jobCtx.withJobId(job.getID());
 		}
 		return new Prepared(job, adapter, jobCtx, meta, input);
+	}
+
+	/**
+	 * The nearest recorded job enclosing a dispatch (#500). The immediate Job
+	 * on the context wins when it is recorded; a transient wrapper forwards
+	 * the parent it was itself stamped with. With no immediate Job, an
+	 * explicitly inherited durable scope ({@code withJobId}) is the parent.
+	 */
+	private static Blob parentJobID(RequestContext ctx) {
+		Job enclosing = ctx.getJob();
+		if (enclosing != null) {
+			if (enclosing.isRecorded()) return enclosing.getID();
+			ACell inherited = enclosing.getData().get(Fields.PARENT);
+			return (inherited != null) ? Job.parseID(inherited) : null;
+		}
+		return ctx.getJobId();
 	}
 
 	// ========== Result-oriented invocation ==========
@@ -741,9 +760,13 @@ public class JobManager {
 	 *        {@link Fields#ACTOR} only when it differs from {@code callerDID},
 	 *        i.e. when an agent sub-principal acted on the owner's behalf, so a
 	 *        job record answers "who did this" and not merely "whose account".
+	 * @param parentID nearest recorded enclosing job, or null for a top-level
+	 *        job. Stamped on transient wrappers too (in memory only) so a
+	 *        recorded grandchild dispatched through a transient layer still
+	 *        links to its nearest recorded ancestor.
 	 */
 	private Job submitJob(AString opID, AMap<AString, ACell> meta, ACell input, AString callerDID,
-			AString actorDID, boolean memoryOnly, boolean resultOriented) {
+			AString actorDID, Blob parentID, boolean memoryOnly, boolean resultOriented) {
 		if (callerDID == null) throw new AuthException("Authentication required");
 
 		long ts = Utils.getCurrentTimestamp();
@@ -761,6 +784,9 @@ public class JobManager {
 		// Attribution: name the acting agent when it is not the owner itself.
 		if (actorDID != null && !actorDID.equals(callerDID)) {
 			status = status.assoc(Fields.ACTOR, actorDID);
+		}
+		if (parentID != null) {
+			status = status.assoc(Fields.PARENT, parentID);
 		}
 
 		AString name = RT.ensureString(RT.getIn(meta, Fields.NAME));
@@ -1179,7 +1205,7 @@ public class JobManager {
 		AString opRef = RT.ensureString(record.get(Fields.OP));
 		Operation op = null;
 		if (opRef != null) {
-			Asset asset = engine.resolveAsset(opRef);
+			Asset asset = resolveRecordedOp(opRef, callerDID);
 			op = (asset != null) ? Operation.from(asset) : null;
 		}
 		AMap<AString, ACell> meta = (op != null) ? op.meta() : null;
@@ -1244,8 +1270,30 @@ public class JobManager {
 	private AMap<AString, ACell> resolveJobMeta(Job job) {
 		AString opStr = RT.ensureString(job.getData().get(Fields.OP));
 		if (opStr == null) return null;
-		Asset asset = engine.resolveAsset(opStr);
+		AString caller = RT.ensureString(job.getData().get(Fields.CALLER));
+		Asset asset = resolveRecordedOp(opStr, caller);
 		return (asset != null) ? asset.meta() : null;
+	}
+
+	/**
+	 * Resolves a job record's {@code op}. A record carries the reference that
+	 * was invoked (#499): venue paths and bare hashes resolve under the venue
+	 * context exactly as before, while a caller-relative reference ({@code o/…},
+	 * {@code w/…}) needs the owning caller's namespace. Never throws — an
+	 * unresolvable reference (renamed catalog entry, unreachable remote) leaves
+	 * the job without metadata rather than aborting recovery.
+	 */
+	private Asset resolveRecordedOp(AString opRef, AString callerDID) {
+		try {
+			Asset asset = engine.resolveAsset(opRef);
+			if (asset == null && callerDID != null) {
+				asset = engine.resolveAsset(opRef, RequestContext.of(callerDID));
+			}
+			return asset;
+		} catch (RuntimeException e) {
+			log.warn("Could not resolve recorded op {}: {}", opRef, e.getMessage());
+			return null;
+		}
 	}
 
 	/**

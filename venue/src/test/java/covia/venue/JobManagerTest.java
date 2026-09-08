@@ -26,6 +26,7 @@ import covia.api.Fields;
 import covia.adapter.AAdapter;
 import covia.adapter.TestAdapter;
 import covia.exception.AuthException;
+import covia.grid.Asset;
 import covia.grid.Job;
 import covia.grid.Status;
 
@@ -700,5 +701,84 @@ public class JobManagerTest {
 		ACell recorded = RT.getIn(engine.jobs().getJobData(job.getID(), ctx), Fields.INPUT);
 		assertEquals(Strings.create("dflt"), RT.getIn(recorded, "a"),
 			"the job record must show what actually ran");
+	}
+
+	// ========== Job record: op reference and parent link (#499, #500) ==========
+
+	@Test
+	public void testJobRecordOpIsTheInvokedReference() {
+		Job job = engine.jobs().invokeOperation("v/test/ops/echo", Maps.empty(), ctx);
+		job.awaitResult(5000);
+		AMap<AString, ACell> record = engine.jobs().getJobData(job.getID(), ctx);
+		assertEquals(Strings.create("v/test/ops/echo"), record.get(Fields.OP),
+			"op is the reference that was invoked, not the resolved hash");
+		assertNull(record.get(Fields.PARENT), "a top-level job has no parent");
+	}
+
+	@Test
+	public void testJobRecordOpIsTheHashWhenInvokedByHash() {
+		Asset echo = engine.resolveAsset(Strings.create("v/test/ops/echo"), ctx);
+		String hash = echo.getID().toHexString();
+		Job job = engine.jobs().invokeOperation(hash, Maps.empty(), ctx);
+		job.awaitResult(5000);
+		AMap<AString, ACell> record = engine.jobs().getJobData(job.getID(), ctx);
+		assertEquals(Strings.create(hash), record.get(Fields.OP),
+			"an explicit pinned invocation records the hash it pinned");
+	}
+
+	@Test
+	public void testJobRecordOpFallsBackToHashForInlineDefinition() {
+		AMap<AString, ACell> meta = echoMeta();
+		Job job = engine.jobs().invokeOperation(meta, Maps.empty(), ctx);
+		job.awaitResult(5000);
+		AMap<AString, ACell> record = engine.jobs().getJobData(job.getID(), ctx);
+		assertEquals(Strings.create(meta.getHash().toHexString()), record.get(Fields.OP),
+			"an inline definition has no reference, so its own hash stands in");
+	}
+
+	@Test
+	public void testSubJobRecordsRecordedParent() throws Exception {
+		Job parent = engine.jobs().invokeOperation("v/test/ops/echo", Maps.empty(), ctx);
+		parent.awaitResult(5000);
+
+		Job child = engine.jobs().invokeOperation("v/test/ops/echo", Maps.empty(),
+			ctx.withJob(parent));
+		child.awaitResult(5000);
+		AMap<AString, ACell> record = engine.jobs().getJobData(child.getID(), ctx);
+		assertEquals(parent.getID(), Job.parseID(record.get(Fields.PARENT)),
+			"a job dispatched inside a recorded job links to it");
+	}
+
+	@Test
+	public void testSubJobThroughTransientLayerLinksToNearestRecordedAncestor() throws Exception {
+		Job root = engine.jobs().invokeOperation("v/test/ops/echo", Maps.empty(), ctx);
+		root.awaitResult(5000);
+
+		// A transient wrapper dispatched inside the recorded job...
+		TestAdapter.CAPTURED_CTX.remove(did);
+		engine.jobs().invokeInternal(captureContextMeta(true, null), Maps.empty(),
+			ctx.withJob(root)).get(5, TimeUnit.SECONDS);
+		RequestContext transientCtx = TestAdapter.CAPTURED_CTX.get(did);
+		assertFalse(transientCtx.getJob().isRecorded());
+
+		// ...forwards the recorded ancestor to a recorded grandchild.
+		Job grandchild = engine.jobs().invokeOperation("v/test/ops/echo", Maps.empty(),
+			transientCtx);
+		grandchild.awaitResult(5000);
+		AMap<AString, ACell> record = engine.jobs().getJobData(grandchild.getID(), ctx);
+		assertEquals(root.getID(), Job.parseID(record.get(Fields.PARENT)),
+			"a transient parent never appears in a record; the link skips to the recorded ancestor");
+	}
+
+	@Test
+	public void testInheritedJobScopeIsTheParentWhenNoImmediateJob() {
+		Job parent = engine.jobs().invokeOperation("v/test/ops/echo", Maps.empty(), ctx);
+		parent.awaitResult(5000);
+
+		Job child = engine.jobs().invokeOperation("v/test/ops/echo", Maps.empty(),
+			ctx.withJobId(parent.getID()));
+		child.awaitResult(5000);
+		AMap<AString, ACell> record = engine.jobs().getJobData(child.getID(), ctx);
+		assertEquals(parent.getID(), Job.parseID(record.get(Fields.PARENT)));
 	}
 }

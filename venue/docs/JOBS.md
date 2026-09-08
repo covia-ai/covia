@@ -56,6 +56,27 @@ total}` when the cycle's LLM calls reported usage (#217) — provider-measured
 counts, stamped before completion so they ride the persisted record. Absence
 means "not measured", never zero.
 
+## Record fields: `op` and `parent`
+
+- **`op`** is the reference that was invoked, verbatim: `v/ops/json/merge`,
+  `o/my-tool`, a DID URL, or a bare hash when the caller pinned a definition
+  explicitly (#499). Only an inline definition has no reference, in which
+  case the metadata's own hash stands in. Records written before 0.9.9
+  always carry the resolved hash; readers must accept both forms. A path is
+  a mutable binding, so on recovery the venue re-resolves it (venue context
+  first, then the owning caller's namespace for `o/`, `w/` forms) and a job
+  whose reference no longer resolves is restored without metadata rather
+  than aborting recovery. Invoke by hash when the record must pin the exact
+  definition that ran.
+- **`parent`** is the id of the nearest *recorded* job inside whose execution
+  this job was dispatched (#500); absent on top-level jobs. Transient
+  wrappers never appear in a record, so a recorded grandchild dispatched
+  through a transient layer links straight to its recorded ancestor. Only
+  the up-link is stored — there is no `root`, no children list and no
+  children query; a client reconstructs a tree by tracing `parent` from each
+  job it holds. Links are venue- and user-local: a job run on another venue
+  through the grid adapter carries none.
+
 ## The update path — CAS-committed, terminal-sticky
 
 All Job mutations funnel through `Job.commitUpdate` (a CAS loop):

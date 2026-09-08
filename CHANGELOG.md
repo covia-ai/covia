@@ -20,6 +20,10 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Job and agent records now use stamped lattice boundaries for deep `t/`, `n/`,
   and `c/` writes, preserving their existing `updated`/`ts` fields and physical
   record shapes.
+- A job record's `op` is now the reference that was invoked (`v/ops/…`, a DID
+  URL, `o/…`) rather than the resolved hash. Invoking by hash still records
+  the hash, so pinned invocations and records written before 0.9.9 read as
+  before (#499).
 
 ### Added
 
@@ -27,6 +31,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   call, porting SKILL.md skills plus a system prompt into a native agent
   (#484, #490).
 - `skills:import` accepts inline `text` as an alternative to `source`.
+- Job records carry `parent`, the id of the nearest recorded job inside whose
+  execution they were dispatched; absent on top-level jobs. Up-link only —
+  clients trace parents to reconstruct a tree (#500).
 
 ### Fixed
 
