@@ -10,6 +10,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Changed
 
+- Venue startup logs one INFO line per adapter; the assets each one stores and
+  the per-adapter install details are DEBUG.
+
 - Workspace namespaces (`w`/`o`/`h`) are a `WrapperLattice` view boundary
   rather than a path convention re-implemented above the lattice; virtual
   namespaces (`t/`, `c/`, `n/`) resolve to ordinary cursor paths, so every
@@ -36,6 +39,11 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   clients trace parents to reconstruct a tree (#500).
 
 ### Fixed
+
+- The test adapter's `iris.csv` and `hamlet.txt` example content was checked
+  out with converted line endings on Windows (`core.autocrlf`), so its declared
+  sha256 no longer matched and every venue launch logged a warning with a
+  stack trace; `.gitattributes` now keeps those fixtures byte-for-byte.
 
 - `agent:create` and `agent:fork` are exclusive at the record itself, so two
   concurrent creates of the same agent no longer both report success.

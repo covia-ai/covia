@@ -224,6 +224,17 @@ schema validation and agent tool use:
 }
 ```
 
+`operation.input` may describe any JSON value — an operation is not obliged
+to take an object. Tools are: MCP `inputSchema` and provider tool schemas
+require `type: object`. An operation whose declared input type excludes
+`object` is therefore published and callable as an operation, and advertised
+as a tool best-effort, but the adapter logs a warning at install because a
+tool client may reject the schema or send an object the operation cannot use.
+Declare an object schema for anything meant to be called as a tool. The
+converse holds too: a string arriving at an operation is a valid input and is
+never parsed into an object; that repair happens only at tool-call boundaries,
+whose schema admits nothing else.
+
 `operation.readOnly` is optional. An explicit `true` permits result-oriented
 execution without a durable job record. `false` or absence retains the normal
 durable-job default, preserving compatibility with existing and external

@@ -13,6 +13,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.util.ThreadUtils;
 import convex.core.data.AString;
+import convex.core.data.AVector;
 import convex.core.data.Hash;
 import convex.core.data.Index;
 import convex.core.lang.RT;
@@ -366,8 +367,44 @@ public abstract class AAdapter {
 
 	/** Records a catalog declaration at its canonical path and in this adapter's own subtree. */
 	private void declare(String prefix, String catalogPath, Hash hash) {
+		if ("v/ops/".equals(prefix) || "v/test/ops/".equals(prefix)) {
+			warnIfInputIsNotAnObject(prefix + catalogPath, hash);
+		}
 		pendingCatalogEntries.put(prefix + catalogPath, hash);
 		ownedCatalogEntries.put(ownedPath(prefix, catalogPath), hash);
+	}
+
+	/**
+	 * A Covia operation may take any JSON value, but every tool protocol the
+	 * venue projects operations into (MCP {@code inputSchema}, provider tool
+	 * use) requires an object. An operation whose declared input type excludes
+	 * {@code object} is therefore published and callable as an operation, and
+	 * advertised as a tool best-effort, but a tool client may reject the schema
+	 * or send an object the operation cannot use — so the author is told at
+	 * install. An absent input schema is not warned about: the projection
+	 * advertises an unconstrained object, which such an operation accepts.
+	 */
+	private void warnIfInputIsNotAnObject(String path, Hash hash) {
+		AString metaString = installedAssets.get(hash);
+		if (metaString == null) return;
+		ACell type;
+		try {
+			type = RT.getIn(JSON.parse(metaString), Fields.OPERATION, Fields.INPUT, Fields.TYPE);
+		} catch (Exception e) {
+			return;   // unparseable metadata is reported by the store step, not here
+		}
+		if (type == null) return;
+		boolean admitsObject = Fields.OBJECT.equals(type);
+		if (!admitsObject && type instanceof AVector<?> types) {
+			for (long i = 0; i < types.count(); i++) {
+				if (Fields.OBJECT.equals(types.get(i))) { admitsObject = true; break; }
+			}
+		}
+		if (admitsObject) return;
+		log.warn("Operation {} declares input type {} rather than an object. It is published and "
+			+ "callable as an operation, and advertised as a tool best-effort, but MCP and provider "
+			+ "tool schemas require object inputs, so tool clients may reject it or send an object "
+			+ "it cannot use.", path, JSON.print(type));
 	}
 
 	/** {@code v/adapters/<name>/<kind>/<rel>} for a canonical catalog declaration. */

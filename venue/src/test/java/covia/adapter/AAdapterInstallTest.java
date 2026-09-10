@@ -74,6 +74,72 @@ public class AAdapterInstallTest {
 				Fields.READ_ONLY, CVMBool.FALSE))));
 	}
 
+	/**
+	 * A Covia operation may take any JSON value, but MCP and provider tool
+	 * schemas require an object. An operation declaring a non-object input is
+	 * still installed and published (best-effort as a tool), and the author is
+	 * warned at install so the mismatch is visible where it can be fixed rather
+	 * than discovered by a tool client.
+	 */
+	@Test
+	public void testNonObjectInputSchemaWarnsAtInstallButStillPublishes() {
+		ProbeAdapter adapter = new ProbeAdapter();
+		adapter.engine = TestEngine.ENGINE;
+		ch.qos.logback.classic.Logger log =
+			(ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(AAdapter.class);
+		ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> captured =
+			new ch.qos.logback.core.read.ListAppender<>();
+		captured.start();
+		log.addAppender(captured);
+		// The test logback config keeps the root at ERROR; the adapter logger
+		// must admit WARN for the appender to see the event.
+		ch.qos.logback.classic.Level previous = log.getLevel();
+		log.setLevel(ch.qos.logback.classic.Level.WARN);
+		try {
+			// A string input: warned, but published — an operation is not a tool.
+			assertNotNull(adapter.installAsset("probe/stringy", op("probe:stringy",
+				Maps.of(Fields.TYPE, Strings.create("string")))));
+			assertTrue(adapter.pendingCatalogEntries.containsKey("v/ops/probe/stringy"),
+				"a non-object input is still published");
+			assertEquals(1, warnings(captured).size(), warnings(captured).toString());
+			assertTrue(warnings(captured).get(0).contains("v/ops/probe/stringy"), warnings(captured).get(0));
+			assertTrue(warnings(captured).get(0).contains("\"string\""), warnings(captured).get(0));
+
+			// Object, multi-type including object, and no declared input: silent.
+			adapter.installAsset("probe/objecty", op("probe:objecty", Maps.of(Fields.TYPE, Fields.OBJECT)));
+			adapter.installAsset("probe/either", op("probe:either", Maps.of(Fields.TYPE,
+				convex.core.data.Vectors.of(Strings.create("string"), Fields.OBJECT))));
+			adapter.installAsset("probe/untyped", op("probe:untyped", null));
+			assertEquals(1, warnings(captured).size(), "only the string input warned: " + warnings(captured));
+
+			// A type list that excludes object warns too.
+			adapter.installAsset("probe/listy", op("probe:listy", Maps.of(Fields.TYPE,
+				convex.core.data.Vectors.of(Strings.create("string"), Strings.create("array")))));
+			assertEquals(2, warnings(captured).size(), warnings(captured).toString());
+		} finally {
+			log.detachAppender(captured);
+			log.setLevel(previous);
+		}
+	}
+
+	private static AMap<AString, ACell> op(String adapter, AMap<AString, ACell> input) {
+		AMap<AString, ACell> operation = Maps.of(Fields.ADAPTER, Strings.create(adapter));
+		if (input != null) operation = operation.assoc(Fields.INPUT, input);
+		return Maps.of(Fields.NAME, Strings.create(adapter), Fields.OPERATION, operation);
+	}
+
+	private static java.util.List<String> warnings(
+			ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> captured) {
+		java.util.List<String> out = new java.util.ArrayList<>();
+		for (ch.qos.logback.classic.spi.ILoggingEvent e : captured.list) {
+			if (e.getLevel() == ch.qos.logback.classic.Level.WARN
+					&& e.getFormattedMessage().contains("rather than an object")) {
+				out.add(e.getFormattedMessage());
+			}
+		}
+		return out;
+	}
+
 	@Test
 	public void testFailureDescriptionIsNonBlankSingleLineAndBounded() {
 		assertEquals("RuntimeException (no detail)",

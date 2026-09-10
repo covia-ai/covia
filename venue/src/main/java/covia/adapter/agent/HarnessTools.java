@@ -12,6 +12,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import convex.core.util.Utils;
+import covia.adapter.ToolCallArguments;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.grid.Asset;
@@ -153,6 +154,21 @@ final class HarnessTools {
 	/** Decoded request for the fixed dynamic-tool dispatcher. */
 	record Invocation(String name, ACell input, ACell error) {}
 
+	/**
+	 * Decodes an {@code invoke_tool} call. {@code input} is the target tool's
+	 * arguments, and a tool's arguments are an object under every tool protocol
+	 * the venue speaks (MCP {@code inputSchema}, provider tool use) and under the
+	 * dispatcher's own schema. A string therefore has exactly one valid
+	 * interpretation — the model serialised the object it meant to send, which
+	 * it does most on large nested payloads (#508) — so it gets the same
+	 * tolerant parse as direct tool-call arguments at the wire boundary. This is
+	 * a tool-call boundary, not an operation: Covia operations may take any JSON
+	 * value and are never coerced, which is why the parse lives here. A string
+	 * can never be kept as a string at this point, and a value that is still not
+	 * an object after parsing is rejected with an error that names what was
+	 * received, so the model corrects the call on its next turn instead of
+	 * chasing the target operation's downstream failure.
+	 */
 	static Invocation invocation(ACell value) {
 		AString name = RT.ensureString(RT.getIn(value, K_NAME));
 		if (name == null || name.toString().isBlank()) {
@@ -160,7 +176,31 @@ final class HarnessTools {
 				Strings.create("Error: invoke_tool requires the exact added tool name"));
 		}
 		ACell input = RT.getIn(value, K_INPUT);
-		return new Invocation(name.toString(), (input != null) ? input : Maps.empty(), null);
+		if (input == null) return new Invocation(name.toString(), Maps.empty(), null);
+		if (input instanceof AString s) {
+			try {
+				input = ToolCallArguments.parse(s);
+			} catch (IllegalArgumentException e) {
+				return new Invocation(null, null, Strings.create(
+					"Error: invoke_tool input must be an object holding the tool's arguments; got a string of "
+					+ s.count() + " characters that is not valid JSON"));
+			}
+		}
+		if (!(input instanceof AMap)) {
+			return new Invocation(null, null, Strings.create(
+				"Error: invoke_tool input must be an object holding the tool's arguments; got "
+				+ describeNonObject(input)));
+		}
+		return new Invocation(name.toString(), input, null);
+	}
+
+	private static String describeNonObject(ACell cell) {
+		String kind = (cell instanceof AVector) ? "an array"
+			: (cell instanceof AString) ? "a string"
+			: "a scalar";
+		String printed = JSON.print(cell).toString();
+		if (printed.length() > 80) printed = printed.substring(0, 77) + "...";
+		return kind + ": " + printed;
 	}
 
 	/** One trusted, append-only tool-state event. Exact definitions are retained
