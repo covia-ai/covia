@@ -29,6 +29,19 @@ import covia.venue.TestEngine;
  */
 public class AAdapterInstallTest {
 
+	@Test
+	public void testAsyncResultProcessingErrorFailsJob() {
+		covia.grid.Job job = new covia.grid.Job(Maps.of(Fields.STATUS, covia.grid.Status.PENDING)) {
+			@Override public void completeWith(ACell result) {
+				throw new NoClassDefFoundError("output/validator/Class");
+			}
+		};
+		new ProbeAdapter().invoke(job, null, Maps.empty(), null);
+		assertEquals(covia.grid.Status.FAILED, job.getStatus());
+		assertTrue(job.future().isCompletedExceptionally());
+		assertTrue(job.getErrorMessage().contains("output/validator/Class"));
+	}
+
 	/** Minimal adapter exposing the protected installAsset for the test. */
 	private static class ProbeAdapter extends AAdapter {
 		@Override public String getName() { return "probe"; }

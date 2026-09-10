@@ -684,16 +684,20 @@ public abstract class AAdapter {
      */
     public void invoke(Job job, RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
         // Default one-shot: wire future to job lifecycle
-        job.setStatus(Status.STARTED);
-		CompletableFuture<ACell> invocation;
-		try {
-			invocation = invokeFuture(ctx, meta, input);
-			if (invocation == null) invocation = CompletableFuture.completedFuture(null);
-		} catch (RuntimeException e) {
-			job.fail(e);
-			throw e;
-		}
-		bridgeToJob(job, invocation);
+		job.start(() -> {
+			CompletableFuture<ACell> invocation;
+			try {
+				invocation = invokeFuture(ctx, meta, input);
+				if (invocation == null) invocation = CompletableFuture.completedFuture(null);
+			} catch (RuntimeException | Error e) {
+				try { settleJob(job, null, e); }
+				catch (RuntimeException | Error reporting) {
+					if (reporting != e) e.addSuppressed(reporting);
+				}
+				throw e;
+			}
+			bridgeToJob(job, invocation);
+		});
 	}
 
 	/**
@@ -795,7 +799,16 @@ public abstract class AAdapter {
 	 * hook. Use when the adapter has already wired a bespoke cancel hook.
 	 */
 	protected static void completeFromJobFuture(Job job, CompletableFuture<ACell> future) {
-		future.whenComplete((result, error) -> settleJob(job, result, error));
+		future.whenComplete((result, error) -> {
+			try {
+				settleJob(job, result, error);
+			} catch (RuntimeException | Error failure) {
+				// A completion hook (e.g. output validation) can fail before it
+				// commits. Do not strand the Job on an ignored dependent future.
+				log.warn("Failed to settle job {}", job.getID(), failure);
+				job.fail(failure);
+			}
+		});
 	}
 
 	/**

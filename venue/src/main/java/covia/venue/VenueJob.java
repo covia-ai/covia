@@ -70,8 +70,10 @@ public class VenueJob extends Job {
 	public void onUpdate(AMap<AString, ACell> newData) {
 		synchronized (this) {
 			if (!memoryOnly && !deleted) {
+				// A later CAS may reach this monitor first. Persist the latest
+				// committed record so a delayed callback cannot roll it back.
 				manager.persistJobRecord(getID(),
-					JobManager.redactJobSecrets(newData, meta), callerDID);
+					JobManager.redactJobSecrets(getData(), meta), callerDID);
 			}
 		}
 		if (observable) manager.notifyGlobalListeners(this);

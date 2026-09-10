@@ -25,6 +25,158 @@ import covia.exception.JobPollingFailedException;
 public class JobTest {
 
 	@Test
+	public void testLateCancelHookRunsExactlyOnceAndSeesCommittedState() {
+		Job job = Job.create(Maps.of(Fields.STATUS, Status.PENDING));
+		job.cancel();
+		var calls = new java.util.concurrent.atomic.AtomicInteger();
+		job.setCancelHook(() -> {
+			assertEquals(Status.CANCELLED, job.getStatus());
+			calls.incrementAndGet();
+		});
+		job.cancel();
+		job.completeWith(Strings.create("too late"));
+		assertEquals(1, calls.get());
+		assertEquals(Status.CANCELLED, job.getStatus());
+	}
+
+	@Test
+	public void testTerminalCleanupPrecedesResultContinuation() {
+		var released = new java.util.concurrent.atomic.AtomicBoolean();
+		Job job = new Job(Maps.of(Fields.STATUS, Status.STARTED)) {
+			@Override public void onFinish(AMap<AString, ACell> next) { released.set(true); }
+		};
+		var next = job.future().thenRun(() -> {
+			assertEquals(Status.COMPLETE, job.getStatus());
+			assertTrue(released.get(), "the next step must not compete with the completed job's permit");
+		});
+		job.completeWith(null);
+		next.join();
+	}
+
+	@Test
+	public void testCancellationLosingToCompletionDoesNotRunHook() throws Exception {
+		var entered = new java.util.concurrent.CountDownLatch(1);
+		var release = new java.util.concurrent.CountDownLatch(1);
+		Job job = new Job(Maps.of(Fields.STATUS, Status.STARTED)) {
+			@Override public AMap<AString, ACell> processUpdate(AMap<AString, ACell> next) {
+				if (Status.CANCELLED.equals(next.get(Fields.STATUS))) {
+					entered.countDown();
+					awaitLatch(release);
+				}
+				return next;
+			}
+		};
+		var calls = new java.util.concurrent.atomic.AtomicInteger();
+		job.setCancelHook(calls::incrementAndGet);
+		var cancelling = CompletableFuture.runAsync(job::cancel);
+		try {
+			assertTrue(entered.await(5, TimeUnit.SECONDS));
+			job.completeWith(Strings.create("winner"));
+		} finally { release.countDown(); }
+		cancelling.get(5, TimeUnit.SECONDS);
+		assertEquals(Status.COMPLETE, job.getStatus());
+		assertEquals(0, calls.get());
+	}
+
+	@Test
+	public void testCompetingCancellationsOnlyRunWinningHook() throws Exception {
+		var ready = new java.util.concurrent.CountDownLatch(2);
+		Job job = new Job(Maps.of(Fields.STATUS, Status.STARTED)) {
+			@Override public AMap<AString, ACell> processUpdate(AMap<AString, ACell> next) {
+				ready.countDown();
+				awaitLatch(ready);
+				return next;
+			}
+		};
+		var calls = new java.util.concurrent.atomic.AtomicInteger();
+		job.setCancelHook(calls::incrementAndGet);
+		var first = CompletableFuture.runAsync(job::cancel);
+		var second = CompletableFuture.runAsync(job::cancel);
+		CompletableFuture.allOf(first, second).get(5, TimeUnit.SECONDS);
+		assertEquals(1, calls.get());
+		assertEquals(Status.CANCELLED, job.getStatus());
+	}
+
+	@Test
+	public void testLosingFailureCannotReplaceWinningCause() {
+		Job job = Job.create(Maps.of(Fields.STATUS, Status.STARTED));
+		job.setPreserveFailureCause(true);
+		var winner = new IllegalArgumentException("winner");
+		job.fail(winner);
+		job.fail(new IllegalStateException("loser"));
+		assertEquals("winner", job.getErrorMessage());
+		var error = assertThrows(java.util.concurrent.CompletionException.class, () -> job.future().join());
+		org.junit.jupiter.api.Assertions.assertSame(winner, error.getCause());
+	}
+
+	@Test
+	public void testFailureCauseIsPublishedWithTerminalState() throws Exception {
+		var committed = new java.util.concurrent.CountDownLatch(1);
+		var release = new java.util.concurrent.CountDownLatch(1);
+		Job job = new Job(Maps.of(Fields.STATUS, Status.STARTED)) {
+			@Override public void onUpdate(AMap<AString, ACell> next) {
+				committed.countDown();
+				awaitLatch(release);
+			}
+		};
+		job.setPreserveFailureCause(true);
+		var winner = new LinkageError("missing class");
+		var update = CompletableFuture.runAsync(() -> job.fail(winner));
+		try {
+			assertTrue(committed.await(5, TimeUnit.SECONDS));
+			job.fail(new IllegalStateException("loser"));
+			var error = assertThrows(java.util.concurrent.CompletionException.class, () -> job.future().join());
+			org.junit.jupiter.api.Assertions.assertSame(winner, error.getCause());
+		} finally { release.countDown(); }
+		update.get(5, TimeUnit.SECONDS);
+	}
+
+	@Test
+	public void testThrowingCancelHookStillCompletesAndFinishesJob() {
+		var finished = new java.util.concurrent.atomic.AtomicInteger();
+		Job job = new Job(Maps.of(Fields.STATUS, Status.STARTED)) {
+			@Override public void onFinish(AMap<AString, ACell> next) { finished.incrementAndGet(); }
+		};
+		var future = job.future();
+		job.setCancelHook(() -> { throw new IllegalStateException("cleanup failed"); });
+		assertThrows(IllegalStateException.class, job::cancel);
+		assertEquals(Status.CANCELLED, job.getStatus());
+		assertTrue(future.isCompletedExceptionally());
+		assertEquals(1, finished.get());
+	}
+
+	@Test
+	public void testStartAndResumeCommitBeforeContinuation() {
+		Job job = Job.create(Maps.of(Fields.STATUS, Status.PENDING));
+		assertTrue(job.start(() -> assertEquals(Status.STARTED, job.getStatus())));
+		assertFalse(job.start(() -> { throw new AssertionError("already started"); }));
+		job.setPauseHook(() -> assertEquals(Status.PAUSED, job.getStatus()));
+		job.pause();
+		job.setResumeHook(() -> {
+			assertEquals(Status.STARTED, job.getStatus());
+			job.setStatus(Status.INPUT_REQUIRED);
+		});
+		job.resume();
+		assertEquals(Status.INPUT_REQUIRED, job.getStatus(), "continuation's next state must not be overwritten");
+	}
+
+	@Test
+	public void testContinuationErrorFailsJobAndCancelledStartDoesNoWork() {
+		Job job = Job.create(Maps.of(Fields.STATUS, Status.PENDING));
+		assertThrows(LinkageError.class, () -> job.start(() -> { throw new LinkageError("broken module"); }));
+		assertEquals(Status.FAILED, job.getStatus());
+		assertTrue(job.future().isCompletedExceptionally());
+		Job cancelled = Job.create(Maps.of(Fields.STATUS, Status.PENDING));
+		cancelled.cancel();
+		assertFalse(cancelled.start(() -> { throw new AssertionError("must not execute"); }));
+	}
+
+	private static void awaitLatch(java.util.concurrent.CountDownLatch latch) {
+		try { assertTrue(latch.await(5, TimeUnit.SECONDS)); }
+		catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new AssertionError(e); }
+	}
+
+	@Test
 	public void testTimedAwaitDoesNotFailAuthoritativeJob() {
 		Job job = Job.create(Maps.of(
 			Fields.ID, Blob.parse("0x00112233445566778899aabbccddeeff"),

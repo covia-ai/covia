@@ -33,14 +33,13 @@ import covia.exception.JobPollingFailedException;
 public class Job {
 
 	/** Job status data — atomic for lock-free concurrent updates */
-	private final AtomicReference<AMap<AString, ACell>> data;
+	private record State(AMap<AString, ACell> data, Throwable failureCause) {}
+	private final AtomicReference<State> state;
 
 	protected volatile boolean cancelled = false;
 
 	/** Lazy result future — atomic for safe publication */
 	private final AtomicReference<CompletableFuture<ACell>> resultFuture = new AtomicReference<>();
-	/** Optional in-process failure cause. Never appears in Job data. */
-	private volatile Throwable failureCause;
 	/** Whether this Job has a durable venue record. Transient invocation wrappers
 	 * still use the complete Job lifecycle, but disappear when execution ends. */
 	private final boolean recorded;
@@ -55,7 +54,7 @@ public class Job {
 	 * interruptible work register a hook such as
 	 * {@code () -> future.cancel(true)}.
 	 */
-	private volatile Runnable onCancel = null;
+	private final AtomicReference<Runnable> onCancel = new AtomicReference<>();
 
 	/**
 	 * Optional pause hook, invoked by {@link #pause()} so the executing adapter
@@ -77,9 +76,9 @@ public class Job {
 
 	/**
 	 * Per-Job listeners invoked on every successful state update. Consumers
-	 * subscribe via {@link #subscribe(Consumer)} and are guaranteed to see
-	 * the Job (not a snapshot) with {@link #getData()} reflecting the state
-	 * just committed by the CAS. Cross-cutting listeners (every Job in a
+	 * subscribe via {@link #subscribe(Consumer)} and see the Job (not a snapshot)
+	 * with {@link #getData()} reflecting the latest committed state, which may
+	 * already include a subsequent transition. Cross-cutting listeners (every Job in a
 	 * venue) belong on {@code JobManager} instead — this list is for
 	 * per-Job consumers like SSE subscriptions.
 	 */
@@ -95,7 +94,7 @@ public class Job {
 	 * server Jobs are recorded by default.
 	 */
 	protected Job(AMap<AString, ACell> status, boolean recorded) {
-		this.data = new AtomicReference<>(status);
+		this.state = new AtomicReference<>(new State(status, null));
 		this.recorded = recorded;
 	}
 
@@ -134,7 +133,7 @@ public class Job {
 	 * @return Job ID as Blob
 	 */
 	public Blob getID() {
-		ACell id = RT.get(data.get(), Fields.ID);
+		ACell id = RT.get(state.get().data(), Fields.ID);
 		if (id == null) return null;
 		return parseID(id);
 	}
@@ -144,7 +143,7 @@ public class Job {
 	 * @return true if finished
 	 */
 	public boolean isFinished() {
-		return isFinished(data.get());
+		return isFinished(state.get().data());
 	}
 
 	/**
@@ -152,7 +151,7 @@ public class Job {
 	 * @return true if complete
 	 */
 	public boolean isComplete() {
-		return Status.COMPLETE.equals(RT.ensureString(data.get().get(Fields.STATUS)));
+		return Status.COMPLETE.equals(RT.ensureString(state.get().data().get(Fields.STATUS)));
 	}
 
 	/**
@@ -180,8 +179,7 @@ public class Job {
 	/**
 	 * Updates the job data atomically. No effect if job is already finished.
 	 *
-	 * <p>Lock-free: {@link #processUpdate} runs first (side effects like
-	 * lattice persistence are idempotent via CRDT merge), then a CAS on the
+	 * <p>Lock-free: the pure {@link #processUpdate} runs first, then a CAS on the
 	 * {@link AtomicReference} ensures terminal states are sticky. Post-update
 	 * hooks (listener, future completion) run only if the update took effect.</p>
 	 *
@@ -196,20 +194,26 @@ public class Job {
 	 * transition that actually commits. The updater may be retried when another
 	 * thread wins the race, so it must be side-effect free.
 	 */
-	private void commitUpdate(UnaryOperator<AMap<AString, ACell>> updater) {
+	private boolean commitUpdate(UnaryOperator<AMap<AString, ACell>> updater) {
+		return commitUpdate(updater, null, null);
+	}
+
+	private boolean commitUpdate(UnaryOperator<AMap<AString, ACell>> updater,
+			Throwable failure, Runnable continuation) {
 		while (true) {
-			AMap<AString, ACell> current = data.get();
-			if (isFinished(current)) return;
+			State before = state.get();
+			AMap<AString, ACell> current = before.data();
+			if (isFinished(current)) return false;
 
 			AMap<AString, ACell> next = updater.apply(current);
-			if (next == null) return;
+			if (next == null) return false;
 			next = processUpdate(next);
-			if (next == null) return;
+			if (next == null) return false;
 			if (current != null && !current.isEmpty()) {
 				next = next.assoc(PREV, current);
 			}
 
-			if (!data.compareAndSet(current, next)) continue;
+			if (!state.compareAndSet(before, new State(next, failure))) continue;
 
 			// Persistence, listeners and eviction observe exactly the value that
 			// won the CAS. A losing terminal update has no external side effects.
@@ -221,13 +225,23 @@ public class Job {
 				try {
 					notifyListeners();
 				} finally {
-					if (isFinished(next)) {
-						completeResultFuture();
-						onFinish(next);
+					try {
+						if (Status.CANCELLED.equals(next.get(Fields.STATUS))) {
+							cancelled = true;
+							runCancelHook();
+						}
+						if (continuation != null) continuation.run();
+					} finally {
+						if (isFinished(next)) {
+							// Release execution resources before inline future
+							// continuations can submit the next operation.
+							try { onFinish(next); }
+							finally { completeResultFuture(); }
+						}
 					}
 				}
 			}
-			return;
+			return true;
 		}
 	}
 
@@ -271,10 +285,11 @@ public class Job {
 	private void completeResultFuture() {
 		CompletableFuture<ACell> f = resultFuture.get();
 		if (f == null) return;
-		if (isComplete()) {
-			f.complete(getOutput());
-		} else if (preserveFailureCause && failureCause != null) {
-			f.completeExceptionally(failureCause);
+		State terminal = state.get();
+		if (Status.COMPLETE.equals(terminal.data().get(Fields.STATUS))) {
+			f.complete(terminal.data().get(Fields.OUTPUT));
+		} else if (preserveFailureCause && terminal.failureCause() != null) {
+			f.completeExceptionally(terminal.failureCause());
 		} else {
 			f.completeExceptionally(new JobFailedException(this));
 		}
@@ -350,7 +365,7 @@ public class Job {
 	}
 
 	public AString getStatus() {
-		return RT.ensureString(RT.get(data.get(), Fields.STATUS));
+		return RT.ensureString(RT.get(state.get().data(), Fields.STATUS));
 	}
 
 	/**
@@ -358,7 +373,7 @@ public class Job {
 	 * @return Job data as a JSON-compatible Map
 	 */
 	public AMap<AString, ACell> getData() {
-		return data.get();
+		return state.get().data();
 	}
 
 	/**
@@ -370,7 +385,7 @@ public class Job {
 	public ACell getOutput() {
 		if (!isFinished()) throw new IllegalStateException("Job has no output, status is " + getStatus());
 		if (!isComplete()) throw new JobFailedException(this);
-		return RT.get(data.get(), Fields.OUTPUT);
+		return RT.get(state.get().data(), Fields.OUTPUT);
 	}
 
 	/**
@@ -380,7 +395,7 @@ public class Job {
 	public String getErrorMessage() {
 		AString status = getStatus();
 		if (status != Status.FAILED && status != Status.REJECTED) return null;
-		ACell errorField = RT.get(data.get(), Fields.ERROR);
+		ACell errorField = RT.get(state.get().data(), Fields.ERROR);
 		return errorField != null ? errorField.toString() : null;
 	}
 
@@ -400,7 +415,7 @@ public class Job {
 	 */
 	@SuppressWarnings("unchecked")
 	public AMap<AString, ACell> getPreviousState() {
-		return (AMap<AString, ACell>) data.get().get(PREV);
+		return (AMap<AString, ACell>) state.get().data().get(PREV);
 	}
 
 	/**
@@ -429,17 +444,14 @@ public class Job {
 	 */
 	public void cancel(String reason) {
 		if (isFinished()) return;
-		cancelled = true;
 		String message = (reason != null && !reason.isBlank())
 			? reason.strip()
-			: "Job cancelled: " + getID().toHexString();
+			: "Job cancelled" + (getID() == null ? "" : ": " + getID().toHexString());
 		update(job -> {
 			job = job.assoc(Fields.STATUS, Status.CANCELLED);
 			job = job.assoc(Fields.ERROR, Strings.create(message));
 			return job;
 		});
-		Runnable hook = onCancel;
-		if (hook != null) hook.run();
 	}
 
 	/**
@@ -449,11 +461,19 @@ public class Job {
 	 * thread. Pass a {@link java.util.concurrent.Future} from
 	 * {@code ExecutorService.submit(...)}, not a {@link CompletableFuture}
 	 * from {@code runAsync} (the latter ignores {@code mayInterruptIfRunning}).
+	 * Registration after cancellation immediately runs the hook. Each registered
+	 * hook is claimed once even when registration races with cancellation.
 	 *
 	 * @param hook the cancel callback, or null to clear
 	 */
 	public void setCancelHook(Runnable hook) {
-		this.onCancel = hook;
+		onCancel.set(hook);
+		if (Status.CANCELLED.equals(getStatus())) runCancelHook();
+	}
+
+	private void runCancelHook() {
+		Runnable hook = onCancel.getAndSet(null);
+		if (hook != null) hook.run();
 	}
 
 	/**
@@ -479,45 +499,68 @@ public class Job {
 	}
 
 	/**
-	 * Pause this Job. Runs the registered {@linkplain #setPauseHook pause hook}
-	 * so the adapter actually suspends its work, then flips STARTED &rarr; PAUSED.
+	 * Pause this Job. Commits STARTED &rarr; PAUSED, then triggers the registered
+	 * {@linkplain #setPauseHook pause hook}. A throwing hook fails the Job.
 	 * @throws IllegalStateException if the job is finished, not STARTED, or has no
 	 *         pause hook registered (a status flip while work continues is not a
 	 *         pause; unsupported pause surfaces as HTTP 409).
 	 */
 	public void pause() {
-		if (isFinished()) throw new IllegalStateException(
-			"Cannot pause job: status is terminal (" + getStatus() + ")");
-		if (!Status.STARTED.equals(getStatus())) {
-			throw new IllegalStateException(
-				"Cannot pause job: status is " + getStatus() + "; expected STARTED");
-		}
 		Runnable hook = onPause;
-		if (hook == null) throw new IllegalStateException(
-			"Cannot pause job: its operation does not support pausing; cancel it if appropriate");
-		hook.run();
-		update(job -> job.assoc(Fields.STATUS, Status.PAUSED));
+		boolean changed = commitUpdate(job -> {
+			if (!Status.STARTED.equals(job.get(Fields.STATUS))) {
+				throw new IllegalStateException("Cannot pause job: expected STARTED");
+			}
+			if (hook == null) throw new IllegalStateException(
+				"Cannot pause job: its operation does not support pausing; cancel it if appropriate");
+			return job.assoc(Fields.STATUS, Status.PAUSED);
+		}, null, () -> runContinuation(hook));
+		if (!changed) throw new IllegalStateException("Cannot pause job: status is terminal (" + getStatus() + ")");
 	}
 
 	/**
-	 * Resume this Job from a paused state (PAUSED, INPUT_REQUIRED, AUTH_REQUIRED).
-	 * Runs the registered {@linkplain #setResumeHook resume hook} to restart the
-	 * adapter's suspended work, then flips back to STARTED.
-	 * @throws IllegalStateException if the job is finished, not paused, or has no
-	 *         resume hook registered (generic resume never re-invokes from stored
-	 *         input; unsupported resume surfaces as HTTP 409).
+	 * Atomically resumes a paused Job, then triggers its continuation. The hook
+	 * observes STARTED and may complete or suspend the Job again immediately.
 	 */
 	public void resume() {
-		if (isFinished()) throw new IllegalStateException(
-			"Cannot resume job: status is terminal (" + getStatus() + ")");
-		if (!isPaused()) throw new IllegalStateException(
-			"Cannot resume job: status is " + getStatus()
-				+ "; expected PAUSED, INPUT_REQUIRED, or AUTH_REQUIRED");
 		Runnable hook = onResume;
-		if (hook == null) throw new IllegalStateException(
-			"Cannot resume job: its operation does not provide a resume action");
-		hook.run();
-		update(job -> job.assoc(Fields.STATUS, Status.STARTED));
+		boolean changed = commitUpdate(job -> {
+			ACell status = job.get(Fields.STATUS);
+			if (!Status.PAUSED.equals(status) && !Status.INPUT_REQUIRED.equals(status)
+					&& !Status.AUTH_REQUIRED.equals(status)) {
+				throw new IllegalStateException("Cannot resume job: expected PAUSED, INPUT_REQUIRED, or AUTH_REQUIRED");
+			}
+			if (hook == null) throw new IllegalStateException(
+				"Cannot resume job: its operation does not provide a resume action");
+			return job.assoc(Fields.STATUS, Status.STARTED);
+		}, null, () -> runContinuation(hook));
+		if (!changed) throw new IllegalStateException("Cannot resume job: status is terminal (" + getStatus() + ")");
+	}
+
+	/**
+	 * Claims a pending Job and triggers execution only for the winning transition.
+	 * @param continuation action that schedules or starts the operation
+	 * @return true if STARTED committed, false if the Job was no longer pending
+	 */
+	public boolean start(Runnable continuation) {
+		java.util.Objects.requireNonNull(continuation);
+		return commitUpdate(job -> Status.PENDING.equals(job.get(Fields.STATUS))
+			? job.assoc(Fields.STATUS, Status.STARTED) : null,
+			null, () -> runContinuation(continuation));
+	}
+
+	private void runContinuation(Runnable continuation) {
+		// A listener may have cancelled the Job after commit but before dispatch.
+		if (isFinished()) return;
+		try {
+			continuation.run();
+		} catch (RuntimeException | Error error) {
+			try { fail(error); }
+			catch (RuntimeException | Error reporting) {
+				if (reporting != error) error.addSuppressed(reporting);
+			}
+			throw error;
+		}
 	}
 
 	public void setStatus(AString newStatus) {
@@ -526,7 +569,6 @@ public class Job {
 	}
 
 	public void completeWith(ACell result) {
-		if (isFinished()) throw new IllegalStateException("Job already finished");
 		update(job -> job
 			.assoc(Fields.STATUS, Status.COMPLETE)
 			.assoc(Fields.OUTPUT, result));
@@ -548,6 +590,7 @@ public class Job {
 				throw (JobFailedException) cause;
 			}
 			if (cause instanceof RuntimeException re) throw re;
+			if (cause instanceof Error error) throw error;
 			throw pollingStopped(cause);
 		}
 	}
@@ -577,6 +620,7 @@ public class Job {
 				throw (JobFailedException) cause;
 			}
 			if (cause instanceof RuntimeException re) throw re;
+			if (cause instanceof Error error) throw error;
 			throw pollingStopped(cause);
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
@@ -629,9 +673,10 @@ public class Job {
 			fail("Operation failed");
 			return;
 		}
-		this.failureCause = cause;
 		String message = cause.getMessage();
-		fail((message != null && !message.isBlank()) ? message : cause.toString());
+		String detail = (message != null && !message.isBlank()) ? message : cause.toString();
+		commitUpdate(job -> job.assoc(Fields.STATUS, Status.FAILED)
+			.assoc(Fields.ERROR, Strings.create(detail)), cause, null);
 	}
 
 	/**

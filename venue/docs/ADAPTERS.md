@@ -25,6 +25,22 @@ suspendable job override the job-aware `invoke` method instead. Blocking I/O
 should run on `AAdapter.VIRTUAL_EXECUTOR`; Covia Jobs have no framework-level
 timeout.
 
+The default invocation path claims `PENDING → STARTED` with `Job.start` before
+calling `invokeFuture`. Job transitions commit atomically; only the winning
+transition triggers its continuation. Start, pause, and resume hooks see the
+committed state and may immediately advance it again. Hooks should schedule
+their next step promptly. A synchronous exception or JVM error fails the Job
+before propagating; late completion cannot replace a terminal state. Typed
+failure causes are committed together with the failure record.
+
+Cancellation hooks run after cancellation commits, including when registered
+after cancellation, and each registration is claimed once. The default bridge
+cancels the returned `CompletableFuture`; this alone does not interrupt blocking
+work. Adapters needing interruption must retain the worker's `Future`, register
+their own cancellation hook, and use `completeFromJobFuture` for completion.
+Terminal cleanup releases job resources before existing result-future
+continuations run.
+
 Capability checks belong at the point of action, before any side effect.
 Invoke-class adapters normally begin with `requireInvoke(ctx)` and add
 resource-specific checks through the relevant `Engine.require*` method. Do

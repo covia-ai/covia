@@ -239,10 +239,15 @@ public class JobManager {
 			started = true;
 			try {
 				adapter.invoke(job, jobCtx, meta, input);
+			} catch (java.util.concurrent.CancellationException e) {
+				job.cancel(e.getMessage());
 			} catch (covia.exception.AuthException e) {
 				job.fail(e);
-			} catch (RuntimeException e) {
-				job.fail(e);
+			} catch (RuntimeException | Error e) {
+				try { job.fail(e); }
+				catch (RuntimeException | Error reporting) {
+					if (reporting != e) e.addSuppressed(reporting);
+				}
 				throw e;
 			}
 			return job;

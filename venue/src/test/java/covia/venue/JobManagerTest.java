@@ -47,6 +47,95 @@ import covia.grid.Status;
  */
 public class JobManagerTest {
 
+	@Test
+	public void testSynchronousAdapterErrorsSettleDurableJobs() {
+		Engine eng = Engine.createTemp(null);
+		try {
+			var invoked = new java.util.concurrent.atomic.AtomicReference<Job>();
+			eng.registerAdapter(new AAdapter() {
+				@Override public String getName() { return "broken-module"; }
+				@Override public String getDescription() { return "test"; }
+				@Override public CompletableFuture<ACell> invokeFuture(RequestContext c,
+						AMap<AString, ACell> m, ACell in) {
+					invoked.set(c.getJob());
+					throw new NoClassDefFoundError("missing/library/Class");
+				}
+				@Override public void invoke(Job job, RequestContext c, AMap<AString, ACell> m, ACell in) {
+					if (Strings.create("custom").equals(in)) {
+						invoked.set(job);
+						throw new NoClassDefFoundError("custom/adapter/Class");
+					}
+					super.invoke(job, c, m, in);
+				}
+			});
+			AMap<AString, ACell> meta = Maps.of(Fields.OPERATION,
+				Maps.of(Fields.ADAPTER, Strings.create("broken-module:run")));
+			for (ACell input : new ACell[] { null, Strings.create("custom") }) {
+				assertThrows(NoClassDefFoundError.class,
+					() -> eng.jobs().invokeOperation(meta, input, eng.venueContext()));
+				Job job = invoked.get();
+				assertEquals(Status.FAILED, job.getStatus());
+				assertTrue(job.future().isCompletedExceptionally());
+				assertEquals(Status.FAILED, eng.jobs().getJobData(job.getID(), eng.venueContext()).get(Fields.STATUS));
+			}
+		} finally { eng.close(); }
+	}
+
+	@Test
+	public void testCancellationDuringInvokeFutureCancelsReturnedFuture() {
+		Engine eng = Engine.createTemp(null);
+		try {
+			CompletableFuture<ACell> processing = new CompletableFuture<>();
+			eng.registerAdapter(new AAdapter() {
+				@Override public String getName() { return "cancel-during-invoke"; }
+				@Override public String getDescription() { return "test"; }
+				@Override public CompletableFuture<ACell> invokeFuture(RequestContext c,
+						AMap<AString, ACell> m, ACell in) {
+					c.getJob().cancel();
+					return processing;
+				}
+			});
+			AMap<AString, ACell> meta = Maps.of(Fields.OPERATION,
+				Maps.of(Fields.ADAPTER, Strings.create("cancel-during-invoke:run")));
+			Job job = eng.jobs().invokeOperation(meta, null, eng.venueContext());
+			assertEquals(Status.CANCELLED, job.getStatus());
+			assertTrue(processing.isCancelled());
+			assertTrue(job.future().isCompletedExceptionally());
+		} finally { eng.close(); }
+	}
+
+	@Test
+	public void testDelayedPersistenceCannotOverwriteCancellation() throws Exception {
+		Engine eng = Engine.createTemp(null);
+		eng.registerAdapter(new TestAdapter());
+		CountDownLatch entered = new CountDownLatch(1);
+		CountDownLatch release = new CountDownLatch(1);
+		try {
+			RequestContext owner = eng.venueContext();
+			AMap<AString, ACell> meta = Maps.of(Fields.OPERATION,
+				Maps.of(Fields.ADAPTER, Strings.create("test:never")));
+			Job original = eng.jobs().invokeOperation(meta, null, owner);
+			Job job = new VenueJob(original.getData(), meta, owner.getUserDID(), eng.jobs()) {
+				@Override public void onUpdate(AMap<AString, ACell> next) {
+					if (Status.PAUSED.equals(next.get(Fields.STATUS))) {
+						entered.countDown();
+						try { assertTrue(release.await(5, TimeUnit.SECONDS)); }
+						catch (InterruptedException e) { throw new AssertionError(e); }
+					}
+					super.onUpdate(next);
+				}
+			};
+			var delayed = CompletableFuture.runAsync(() -> job.setStatus(Status.PAUSED));
+			try {
+				assertTrue(entered.await(5, TimeUnit.SECONDS));
+				job.cancel();
+			} finally { release.countDown(); }
+			delayed.get(5, TimeUnit.SECONDS);
+			assertEquals(Status.CANCELLED,
+				eng.jobs().getJobData(job.getID(), owner).get(Fields.STATUS));
+		} finally { release.countDown(); eng.close(); }
+	}
+
 	private final Engine engine = TestEngine.ENGINE;
 	private AString did;
 	private RequestContext ctx;
