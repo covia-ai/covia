@@ -49,8 +49,8 @@ class A2AAdapterTest {
 		// Parity with the http/mcp adapters (#234): outbound A2A targets pass
 		// the same SSRF checks and operator allow/block lists. A site-local
 		// literal is refused without touching the network.
-		Job card = TestServer.COVIA.startJob(Strings.create("v/ops/a2a/raw/agent-card"), Maps.of(
-			Fields.URL, Strings.create("http://10.0.0.1/agent")));
+		Job card = TestServer.COVIA.invoke("v/ops/a2a/raw/agent-card", Maps.of(
+			Fields.URL, Strings.create("http://10.0.0.1/agent"))).get();
 		assertThrows(Exception.class, () -> card.awaitResult(10000));
 		assertEquals(Status.FAILED, card.getStatus());
 		assertTrue(card.getErrorMessage().contains("private/internal"), card.getErrorMessage());
@@ -135,7 +135,8 @@ class A2AAdapterTest {
 			Fields.MESSAGE, coviaMessageRecord("hello remote Covia agent")));
 		AString remoteTaskId = awaitRemoteTaskId(TwoVenueTestServer.ENGINE_A, send.getID());
 		assertNotNull(remoteTaskId);
-		AMap<AString, ACell> mirror = TwoVenueTestServer.ENGINE_A.jobs().getJobData(send.getID());
+		AMap<AString, ACell> mirror = TwoVenueTestServer.ENGINE_A.jobs().getJobData(send.getID(),
+			RequestContext.of(Strings.create(TwoVenueTestServer.ENGINE_A.getDIDString() + ":public")));
 		assertNotNull(mirror.get(Strings.create("a2aAgentAsset")),
 			"the mirror Job records the exact immutable agent profile used");
 
@@ -150,7 +151,9 @@ class A2AAdapterTest {
 			Fields.ID, remoteTaskId));
 		assertTrue(cancel.getStatus() == Status.COMPLETE || cancel.getStatus() == Status.FAILED,
 			"completed remote task may be non-cancelable");
-		TwoVenueTestServer.COVIA_A.cancelJob(send.getID());
+		// The echo may already have completed and left the active cache.
+		TwoVenueTestServer.ENGINE_A.jobs().getJob(send.getID(),
+			RequestContext.of(Strings.create(TwoVenueTestServer.ENGINE_A.getDIDString() + ":public"))).cancel();
 	}
 
 	// ==================== standard HTTP Bearer auth ====================
@@ -475,11 +478,12 @@ class A2AAdapterTest {
 			throws InterruptedException {
 		long deadline = System.currentTimeMillis() + 5000;
 		while (System.currentTimeMillis() < deadline) {
-			AMap<AString, ACell> data = engine.jobs().getJobData(jobId);
+			AMap<AString, ACell> data = engine.jobs().getJobData(jobId,
+				RequestContext.of(Strings.create(engine.getDIDString() + ":public")));
 			AString taskId = data != null ? RT.ensureString(data.get(Fields.REMOTE_TASK_ID)) : null;
 			if (taskId != null) return taskId;
 			Thread.sleep(50);
 		}
-		throw new AssertionError("A2A mirror never recorded its remote task id");
+		throw new AssertionError("A2A mirror never recorded its remote task id: " + engine.jobs().getJobData(jobId));
 	}
 }

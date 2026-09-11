@@ -30,6 +30,8 @@ import covia.grid.auth.VenueAuth;
 import covia.grid.auth.VenueDID;
 import covia.venue.LocalVenue;
 import covia.venue.RequestContext;
+import covia.venue.RemoteJobs;
+import covia.grid.client.VenueHTTP;
 import covia.venue.UcanJwtValidator;
 
 /**
@@ -74,6 +76,10 @@ public class GridAdapter extends AAdapter {
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		requireInvoke(ctx);
 		String gridOp = getSubOperation(meta);
+		if (("run".equals(gridOp) || ("jobResult".equals(gridOp) && parseTimeoutMs(input) <= 0))
+				&& resolveVenue(meta, input) != null) {
+			return engine.jobs().invokeInternal(meta, input, ctx);
+		}
 		if (gridOp == null) {
 			return CompletableFuture.failedFuture(new IllegalArgumentException("Invalid grid operation: no sub-operation in metadata"));
 		}
@@ -88,8 +94,96 @@ public class GridAdapter extends AAdapter {
 
 	@Override
 	public void invoke(Job job, RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		job.setStatus(Status.STARTED);
-		bridgeToJob(job, invokeFuture(ctx, meta, input));
+		String operation = getSubOperation(meta);
+		if (("run".equals(operation) || ("jobResult".equals(operation) && parseTimeoutMs(input) <= 0))
+				&& resolveVenue(meta, input) != null) {
+			requireInvoke(ctx);
+			job.start(() -> delegate(job, ctx, meta, input));
+		} else {
+			super.invoke(job, ctx, meta, input);
+		}
+	}
+
+	private void delegate(Job job, RequestContext ctx, ACell meta, ACell input) {
+		AString operation = RT.ensureString(RT.getIn(input, Fields.OPERATION));
+		boolean existing = "jobResult".equals(getSubOperation(RT.ensureMap(meta)));
+		Blob existingID = existing ? parseJobId(RT.getIn(input, Fields.ID)) : null;
+		if (existing && existingID == null) throw new IllegalArgumentException("'id' is required");
+		if (!existing && operation == null) throw new IllegalArgumentException("'operation' is required");
+		AString target = resolveVenue(meta, input);
+		RemoteConnection remote = remoteConnection(ctx, target, input);
+		RemoteJobs observer = engine.remoteJobs();
+		observer.prepare(job, "covia", target.toString(), remote.credentials());
+		if (job.isFinished()) return;
+		if (existing) {
+			try { observer.accepted(job, existingID.toHexString()); }
+			finally { watch(job, remote.venue(), existingID); }
+			return;
+		}
+		// Submit once and retain the handle. SDK background polling is a bounded
+		// caller convenience and must not define the delegated Job's lifetime.
+		CompletableFuture<Job> submitted = remote.venue() instanceof VenueHTTP http
+			? http.startJobAsync(operation, RT.getIn(input, Fields.INPUT))
+			: remote.venue().invoke(operation.toString(), RT.getIn(input, Fields.INPUT));
+		submitted.whenComplete((accepted, error) -> {
+			observer.received(job, () -> {
+			if (error != null) { observer.submissionFailed(job, error); return; }
+			try {
+				observer.accepted(job, accepted.getID().toHexString());
+				applyRemote(job, accepted.getData());
+			} catch (RuntimeException | Error failure) {
+				observer.submissionUnknown(job, failure);
+			} finally {
+				ACell id = RemoteJobs.descriptor(job).get(RemoteJobs.REMOTE_ID);
+				if (id != null) watch(job, remote.venue(), Job.parseID(id));
+			}
+			});
+		});
+	}
+
+	private void watch(Job job, Venue venue, Blob id) {
+		engine.remoteJobs().observe(job, () -> venue.getJobStatus(id), snapshot -> applyRemote(job, snapshot));
+	}
+
+	private void applyRemote(Job job, AMap<AString, ACell> snapshot) {
+		AString status = RT.ensureString(snapshot.get(Fields.STATUS));
+		if (status == null) throw new IllegalArgumentException("Remote Job has no status");
+		AMap<AString, ACell> record = RemoteJobs.descriptor(job);
+		Blob expected = Job.parseID(record.get(RemoteJobs.REMOTE_ID));
+		if (!expected.equals(Job.parseID(snapshot.get(Fields.ID)))) throw new IllegalArgumentException("Remote Job ID mismatch");
+		if (Status.COMPLETE.equals(status)) {
+			job.completeWith(snapshot.get(Fields.OUTPUT), data -> RemoteJobs.observed(data, status));
+			return;
+		}
+		if (!(Status.PENDING.equals(status) || Status.STARTED.equals(status)
+			|| Status.PAUSED.equals(status) || Status.INPUT_REQUIRED.equals(status)
+			|| Status.AUTH_REQUIRED.equals(status) || Status.FAILED.equals(status)
+			|| Status.CANCELLED.equals(status) || Status.REJECTED.equals(status))) {
+			throw new IllegalArgumentException("Invalid remote Job status");
+		}
+		// Local processing is STARTED even while the remote worker is queued.
+		AString localStatus = Status.PENDING.equals(status) ? Status.STARTED : status;
+		job.update(data -> {
+			AMap<AString, ACell> next = RemoteJobs.observed(data, status).assoc(Fields.STATUS, localStatus);
+			if (Job.isFinished(snapshot)) next = next.assoc(Fields.ERROR, snapshot.get(Fields.ERROR));
+			return next.equals(data) ? null : next;
+		});
+	}
+
+	@Override public void recoverJob(Job job) {
+		AMap<AString, ACell> record = RemoteJobs.descriptor(job);
+		if (record == null) { super.recoverJob(job); return; }
+		ACell id = record.get(RemoteJobs.REMOTE_ID);
+		if (id == null) { engine.remoteJobs().submissionUnknown(job, null); return; }
+		try {
+			Venue venue = restoreConnection(RT.ensureString(record.get(RemoteJobs.TARGET)), engine.remoteJobs().credentials(job));
+			watch(job, venue, Job.parseID(id));
+		} catch (RuntimeException e) { engine.remoteJobs().unavailable(job, e); }
+	}
+
+	@Override public void suspendJob(Job job) {
+		if (RemoteJobs.descriptor(job) != null) engine.remoteJobs().suspend(job);
+		else super.suspendJob(job);
 	}
 
 	/**
@@ -208,6 +302,12 @@ public class GridAdapter extends AAdapter {
 	}
 
 	private Venue connectRemote(RequestContext ctx, AString venueSpec, ACell input) {
+		return remoteConnection(ctx, venueSpec, input).venue();
+	}
+
+	private record RemoteConnection(Venue venue, AMap<AString, ACell> credentials) {}
+
+	private RemoteConnection remoteConnection(RequestContext ctx, AString venueSpec, ACell input) {
 		AString venueDID = engine.getDIDString();
 		List<UCAN> tokens = parsedRawUcans(ctx, engine.didVerifier());
 		AString modeCell = RT.ensureString(RT.getIn(input, AUTHENTICATE_AS));
@@ -215,6 +315,7 @@ public class GridAdapter extends AAdapter {
 
 		VenueAuth auth;
 		AString principal;
+		AMap<AString, ACell> saved = Maps.of(AUTHENTICATE_AS, Strings.create(mode));
 		switch (mode) {
 			case "anonymous" -> {
 				auth = VenueAuth.none();
@@ -228,6 +329,7 @@ public class GridAdapter extends AAdapter {
 						+ "identity credential issued by the caller to " + targetDID);
 				}
 				auth = VenueAuth.bearer(credential);
+				saved = saved.assoc(Fields.BEARER_TOKEN, Strings.create(credential));
 				principal = ctx.getCallerDID();
 			}
 			case "venue" -> {
@@ -238,6 +340,7 @@ public class GridAdapter extends AAdapter {
 				}
 				auth = VenueAuth.identityKeyPair(engine.getKeyPair(), venueDID.toString(),
 					targetDID.toString());
+				saved = saved.assoc(Fields.VENUE, targetDID);
 				principal = venueDID;
 			}
 			default -> throw new IllegalArgumentException(
@@ -245,7 +348,28 @@ public class GridAdapter extends AAdapter {
 		}
 
 		Venue venue = Grid.connect(venueSpec.toString(), auth);
-		venue.setUcans(admissibleGrants(ctx, tokens, principal));
+		List<String> grants = admissibleGrants(ctx, tokens, principal);
+		venue.setUcans(grants);
+		if (grants != null) saved = saved.assoc(Fields.UCANS, convex.core.data.Vectors.create(grants.stream().map(Strings::create).toList()));
+		return new RemoteConnection(venue, saved);
+	}
+
+	private Venue restoreConnection(AString target, AMap<AString, ACell> saved) {
+		String mode = RT.ensureString(saved.get(AUTHENTICATE_AS)).toString();
+		VenueAuth auth = switch (mode) {
+			case "anonymous" -> VenueAuth.none();
+			case "caller" -> VenueAuth.bearer(RT.ensureString(saved.get(Fields.BEARER_TOKEN)).toString());
+			case "venue" -> VenueAuth.identityKeyPair(engine.getKeyPair(), engine.getDIDString().toString(),
+				RT.ensureString(saved.get(Fields.VENUE)).toString());
+			default -> throw new IllegalArgumentException("Invalid saved remote authentication mode");
+		};
+		Venue venue = Grid.connect(target.toString(), auth);
+		AVector<ACell> grants = RT.ensureVector(saved.get(Fields.UCANS));
+		if (grants != null) {
+			List<String> raw = new ArrayList<>();
+			for (ACell grant : grants) raw.add(grant.toString());
+			venue.setUcans(raw);
+		}
 		return venue;
 	}
 

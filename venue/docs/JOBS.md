@@ -167,6 +167,11 @@ inbound messages durably in `session.pending` — see AGENT_SESSIONS.md).
 
 ## Recovery on restart (#214)
 
+A durable Job is a durable record of an invocation, not a guarantee that its
+adapter's execution survives restart. Rebuilding the record and observing its
+outcome are separate from resuming computation or external effects. Simple
+in-process adapters need no execution checkpointing contract.
+
 Recovery **stabilises, never re-executes** — a venue restart leaves every job
 in a stable, honest state so callers can resume, cancel, or retry as they wish.
 The framework never re-fires an operation: re-execution would double side
@@ -177,8 +182,9 @@ requests, `JobManager.recoverJobs()` rebuilds each non-terminal durable job
 from its record, registers it, and calls `AAdapter.recoverJob(job)`. The job
 carries its record and every verb; whatever state it is in when the hook
 returns is the durable truth, and anything still non-terminal is restored
-live. The default — also applied when the adapter is absent (module not
-loaded, boot-disabled):
+live. For ordinary jobs, the default also applies when the adapter is absent
+(module not loaded, boot-disabled). Delegation records have the observation
+behavior described under [Remote delegation](#remote-delegation).
 
 | State at crash | Default at boot | Caller's move |
 |----------------|-----------------|---------------|
@@ -241,6 +247,51 @@ suspended states.
 - **Per-caller concurrency cap**: see `venue/CLAUDE.md` § Rate limiting.
   Sub-jobs (carrying a parent job id) are exempt.
 
+## Remote delegation
+
+Remote `grid:run`, remote `grid:jobResult` without a caller timeout, and A2A
+sends retain a `delegation` record. It carries the protocol, target, accepted
+`remoteId`, last observed `remoteStatus`, and observation health. Local
+processing stays `STARTED` while a remote job is queued. Remote interruptions
+and terminal outcomes are mirrored; a terminal result and its supporting
+remote status are committed atomically before result continuations run.
+
+Transport timeouts, malformed observations, missing remote records, and 5xx
+responses do not prove execution failed. They set observation health to
+`retrying`; 401/403 observations set `auth-required`. Requests are bounded and
+back off with jitter (including HTTP Retry-After), with at most 32 requests
+globally and four per target. There is no job lifetime deadline. Interrupted
+A2A tasks remain observed, including when resumed directly at the remote peer.
+
+Submissions do not require a repeatable key. Grid submits once to `/invoke`;
+A2A requests `returnImmediately`. If acceptance cannot be established, the
+local job stays non-terminal with `acceptance-unknown`. It is not automatically
+resubmitted, including after restart. A definite protocol rejection can fail
+the local submission. Optional receiver-side deduplication is a later protocol
+extension, described in [REMOTE_JOBS_DESIGN.md](REMOTE_JOBS_DESIGN.md).
+
+Recorded delegations checkpoint intent before submission and the handle before
+observation. Recovery attempts to observe that same handle; it does not resume
+the remote adapter's execution. If the remote venue reports `FAILED` because
+its adapter could not recover after restart, the local mirror fails too. If
+the remote job has disappeared, its outcome remains unknown; a saved ID alone
+cannot recover it. The resolved operation
+metadata and original transport credentials are saved encrypted in the venue
+principal's SecretStore; job state carries an opaque `authRef` secret name.
+Recovery does not resolve a changed catalog binding or silently elevate the
+original authority. Missing credentials or an unavailable adapter leave the
+remote outcome unresolved. Credentials are removed on local termination;
+encrypted orphan records left by a process crash require operator cleanup.
+Secret rotation/reconnection is not automated in this first delivery.
+
+Shutdown suspends observation and fences late callbacks, without claiming
+remote cancellation. Existing explicit cancellation semantics remain tracked
+in [#511](https://github.com/covia-ai/covia/issues/511). Transient/private jobs
+retain their existing recording policy: they can observe remote work while
+the process lives, but have no restart recovery guarantee. Use `/invoke` when
+a durable local record is needed. Neither `/invoke` nor a saved remote handle
+guarantees that the executing adapter can survive its own venue restarting.
+
 ## invokeOperation, runOperation, and invokeInternal
 
 Three dispatch paths with **identical trust, capability, defaults, and gate
@@ -249,6 +300,9 @@ whether the Job is durable:
 
 - `invokeOperation` — creates and persists a tracked Job (the caller-facing
   accountability unit), even for read-only operations.
+  Its `submitOperation` variant, used by HTTP `/invoke`, checkpoints the handle
+  and dispatches execution on a virtual thread before returning the handle;
+  local `invokeOperation` retains its existing immediate-start behavior.
 - `runOperation` — public result-oriented dispatch. Returns the operation
   result rather than a Job handle and applies normal top-level admission.
 - `invokeInternal` — in-process framework composition for agent transitions,

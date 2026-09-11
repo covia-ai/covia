@@ -92,13 +92,13 @@ public class VenueJob extends Job {
 	}
 
 	@Override
-	public void completeWith(ACell result) {
+	public void completeWith(ACell result, java.util.function.UnaryOperator<AMap<AString, ACell>> decorate) {
 		try {
 			manager.validateOutput(meta, result);
-		} catch (RuntimeException e) {
-			fail(e.getMessage() != null ? e.getMessage() : e.toString());
+		} catch (RuntimeException | Error e) {
+			fail(e, decorate);
 			return;
 		}
-		super.completeWith(result);
+		super.completeWith(result, decorate);
 	}
 }

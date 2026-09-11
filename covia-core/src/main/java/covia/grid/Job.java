@@ -569,7 +569,13 @@ public class Job {
 	}
 
 	public void completeWith(ACell result) {
-		update(job -> job
+		completeWith(result, java.util.function.UnaryOperator.identity());
+	}
+
+	/** Publish completion and supporting state in one transition. The decorator
+	 * must be pure: it can run more than once if another update wins the CAS. */
+	public void completeWith(ACell result, java.util.function.UnaryOperator<AMap<AString, ACell>> decorate) {
+		update(job -> decorate.apply(job)
 			.assoc(Fields.STATUS, Status.COMPLETE)
 			.assoc(Fields.OUTPUT, result));
 	}
@@ -669,13 +675,14 @@ public class Job {
 	/** Fail this Job while retaining a non-persisted typed cause for
 	 * result-oriented in-process callers. */
 	public void fail(Throwable cause) {
-		if (cause == null) {
-			fail("Operation failed");
-			return;
-		}
-		String message = cause.getMessage();
+		fail(cause, UnaryOperator.identity());
+	}
+
+	/** Fail with supporting state in the same transition; the decorator must be pure. */
+	protected void fail(Throwable cause, UnaryOperator<AMap<AString, ACell>> decorate) {
+		String message = cause == null ? "Operation failed" : cause.getMessage();
 		String detail = (message != null && !message.isBlank()) ? message : cause.toString();
-		commitUpdate(job -> job.assoc(Fields.STATUS, Status.FAILED)
+		commitUpdate(job -> decorate.apply(job).assoc(Fields.STATUS, Status.FAILED)
 			.assoc(Fields.ERROR, Strings.create(detail)), cause, null);
 	}
 

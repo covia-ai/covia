@@ -127,6 +127,10 @@ public class Engine {
 
 	/** Job lifecycle manager (submission, queries, persistence, recovery) */
 	private final JobManager jobManager;
+	private final RemoteJobs remoteJobs = new RemoteJobs(this);
+
+	/** Bounded network attempts observing long-lived remote Jobs. */
+	public RemoteJobs remoteJobs() { return remoteJobs; }
 
 	/** MainVenue process control; absent for embedded and test engines. */
 	private volatile VenueProcess processControl;
@@ -737,6 +741,7 @@ public class Engine {
 	/** Releases resources in the reverse of {@link #start()} acquisition order. */
 	private void closeStartedResources(boolean flush, Throwable startupFailure) {
 		jobManager.closeAdmission();
+		remoteJobs.close();
 
 		// Release adapter-owned native/session resources before module classloaders.
 		for (AAdapter adapter : adapters.values()) {

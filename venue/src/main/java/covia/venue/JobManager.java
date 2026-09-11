@@ -180,6 +180,26 @@ public class JobManager {
 		return invokeOperation(resolveOperation(ref, ctx).meta(), input, ctx.withOp(ref));
 	}
 
+	/** HTTP submission: acknowledge a durable handle independently of adapter execution. */
+	public Job submitOperation(AString ref, ACell input, RequestContext ctx) {
+		Prepared prepared = prepareOperation(resolveOperation(ref, ctx).meta(), input, ctx.withOp(ref),
+			false, true, false);
+		try {
+			engine.flush();
+			AAdapter.VIRTUAL_EXECUTOR.execute(() -> {
+				try { prepared.start(); }
+				catch (RuntimeException | Error failure) {
+					// start() has already recorded the execution failure on the Job.
+					log.debug("Submitted job {} failed", prepared.job().getID(), failure);
+				}
+			});
+		} catch (RuntimeException | Error failure) {
+			prepared.job().fail(failure);
+			throw failure;
+		}
+		return prepared.job();
+	}
+
 	/**
 	 * Prepare a durable, tracked Job on behalf of a trusted in-process caller
 	 * without starting it — the scheduler's tracked fire path. Resolves and
@@ -237,6 +257,7 @@ public class JobManager {
 		synchronized Job start() {
 			if (started) throw new IllegalStateException("Job already started: " + job.getID());
 			started = true;
+			if (job.isFinished()) return job;
 			try {
 				adapter.invoke(job, jobCtx, meta, input);
 			} catch (java.util.concurrent.CancellationException e) {
@@ -1182,11 +1203,13 @@ public class JobManager {
 				AAdapter adapter = adapterFor(job);
 				try {
 					if (adapter != null) adapter.recoverJob(job);
+					else if (RemoteJobs.descriptor(job) != null) engine.remoteJobs().adapterUnavailable(job);
 					else AAdapter.defaultRecover(job);
 				} catch (RuntimeException e) {
 					log.warn("Adapter {} failed recovering job {}: {}",
 						(adapter != null) ? adapter.getName() : "<none>", jobID, e.toString());
-					if (!job.isFinished()) AAdapter.defaultRecover(job);
+					if (RemoteJobs.descriptor(job) != null) engine.remoteJobs().unavailable(job, e);
+					else if (!job.isFinished()) AAdapter.defaultRecover(job);
 				}
 				if (job.isFinished()) {
 					stabilised++;
@@ -1207,13 +1230,18 @@ public class JobManager {
 	 * active cache.
 	 */
 	private VenueJob restoreJob(Blob jobID, AMap<AString, ACell> record, AString callerDID) {
+		AMap<AString, ACell> delegation = RT.ensureMap(record.get(RemoteJobs.DELEGATION));
 		AString opRef = RT.ensureString(record.get(Fields.OP));
 		Operation op = null;
-		if (opRef != null) {
+		if (opRef != null && delegation == null) {
 			Asset asset = resolveRecordedOp(opRef, callerDID);
 			op = (asset != null) ? Operation.from(asset) : null;
 		}
 		AMap<AString, ACell> meta = (op != null) ? op.meta() : null;
+		if (delegation != null) {
+			try { meta = engine.remoteJobs().recoveryMetadata(delegation); }
+			catch (RuntimeException unavailable) { meta = null; }
+		}
 		VenueJob job = new VenueJob(record, meta, callerDID, this);
 		activeJobs.put(jobID, job);
 		return job;
@@ -1231,6 +1259,13 @@ public class JobManager {
 
 	/** The live adapter owning a Job's operation, or null when absent or disabled. */
 	private AAdapter adapterFor(VenueJob job) {
+		AMap<AString, ACell> delegation = RemoteJobs.descriptor(job);
+		if (delegation != null) {
+			ACell protocol = delegation.get(RemoteJobs.PROTOCOL);
+			if (Strings.create("covia").equals(protocol)) return engine.getAdapter("grid");
+			if (Strings.create("a2a").equals(protocol)) return engine.getAdapter("a2a");
+			return null;
+		}
 		AMap<AString, ACell> meta = job.meta();
 		String name = (meta != null) ? AAdapter.getAdapterName(meta) : null;
 		return (name != null) ? engine.getAdapter(name) : null;
@@ -1406,6 +1441,7 @@ public class JobManager {
 			AAdapter adapter = (job instanceof VenueJob vj) ? adapterFor(vj) : null;
 			try {
 				if (adapter != null) adapter.suspendJob(job);
+				else if (RemoteJobs.descriptor(job) != null) engine.remoteJobs().suspend(job);
 				else AAdapter.defaultSuspend(job);
 			} catch (RuntimeException e) {
 				log.warn("Adapter {} failed suspending job {}: {}",

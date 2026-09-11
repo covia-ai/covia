@@ -25,6 +25,24 @@ suspendable job override the job-aware `invoke` method instead. Blocking I/O
 should run on `AAdapter.VIRTUAL_EXECUTOR`; Covia Jobs have no framework-level
 timeout.
 
+Persisting a Job preserves its record, not its running execution. Adapters are
+not required to continue work after restart. `recoverJob` reconciles the saved
+record with what that adapter can actually recover; it may report failure
+instead of restoring execution. A resumable execution needs an adapter-specific
+checkpoint or an external operation that still exists. A submission key only
+prevents duplicate acceptance; it supplies neither of those capabilities.
+
+Synchronous adapters may return `CompletableFuture.completedFuture(result)`;
+they need no delegation record or repeatable request key. HTTP `/invoke`
+dispatches execution separately from acknowledgement, so even a synchronous
+adapter cannot hold the job-handle response until execution completes.
+
+Remote Grid runs and A2A sends use the engine's `RemoteJobs` observer. An
+accepted remote handle survives individual request failures; a lost submission
+acknowledgement records uncertainty and is never blindly replayed. See
+[JOBS.md](JOBS.md#remote-delegation) for the implemented lifecycle and
+[REMOTE_JOBS_DESIGN.md](REMOTE_JOBS_DESIGN.md) for the further protocol design.
+
 The default invocation path claims `PENDING → STARTED` with `Job.start` before
 calling `invokeFuture`. Job transitions commit atomically; only the winning
 transition triggers its continuation. Start, pause, and resume hooks see the
