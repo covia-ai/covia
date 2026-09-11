@@ -820,6 +820,14 @@ public class JobManager {
 			status = status.assoc(Fields.NAME, name);
 		}
 
+		// The adapter the venue dispatches to (#520): the one job-list fact a
+		// client cannot derive from a hash-valued `op` without a fetch per row,
+		// and it survives the definition becoming unavailable later.
+		String adapterName = AAdapter.getAdapterName(meta);
+		if (adapterName != null) {
+			status = status.assoc(Fields.ADAPTER, Strings.create(adapterName));
+		}
+
 		VenueJob job = new VenueJob(status, meta, callerDID, this, memoryOnly,
 			!memoryOnly);
 		job.setPreserveFailureCause(resultOriented);
@@ -1060,19 +1068,39 @@ public class JobManager {
 	 * @throws AuthException if the caller does not own the job
 	 */
 	public int deliverMessage(Blob jobID, AMap<AString, ACell> message, RequestContext ctx) {
-		AMap<AString, ACell> data = getJobData(jobID);
-		if (data != null && !engine.getAccessControl().canAccessJob(ctx, data)) {
+		Job job = activeJobs.get(jobID);
+		if (job == null) {
+			// Not active: consult the caller's lattice so a job that has completed
+			// and been evicted reports its terminal state rather than "not found"
+			// — the same fallback appendToHistory already uses (#506). A recorded
+			// but inactive job has no live handle to dispatch to, so that is an
+			// error too, just an honest one.
+			Job recorded = getJob(jobID, ctx);
+			if (recorded == null) throw new IllegalArgumentException("Job not found: " + jobID.toHexString());
+			if (!engine.getAccessControl().canAccessJob(ctx, recorded.getData())) {
+				throw new AuthException("Access denied to job: " + jobID.toHexString());
+			}
+			throw new IllegalStateException(recorded.isFinished()
+				? "Job is in terminal state: " + jobID.toHexString()
+				: "Job is not active: " + jobID.toHexString());
+		}
+		if (!engine.getAccessControl().canAccessJob(ctx, job.getData())) {
 			throw new AuthException("Access denied to job: " + jobID.toHexString());
 		}
-		return deliverMessage(jobID, message, ctx.getCallerDID());
+		return deliverMessage(job, message, ctx.getCallerDID());
 	}
 
 	/**
-	 * Delivers a message to a job's message queue.
+	 * Delivers a message to an active job's message queue.
 	 */
 	public int deliverMessage(Blob jobID, AMap<AString, ACell> message, AString source) {
 		Job job = getJob(jobID);
 		if (job == null) throw new IllegalArgumentException("Job not found: " + jobID.toHexString());
+		return deliverMessage(job, message, source);
+	}
+
+	private int deliverMessage(Job job, AMap<AString, ACell> message, AString source) {
+		Blob jobID = job.getID();
 		if (job.isFinished()) throw new IllegalStateException("Job is in terminal state: " + jobID.toHexString());
 
 		long ts = Utils.getCurrentTimestamp();

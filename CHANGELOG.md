@@ -27,6 +27,12 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   URL, `o/…`) rather than the resolved hash. Invoking by hash still records
   the hash, so pinned invocations and records written before 0.9.9 read as
   before (#499).
+- The default tool pack (`defaultTools: true`) carries `covia:inspect`
+  alongside read and list; it is the discovery read those two point at
+  (#514).
+- `skill_load` returns a structural result: the fixed prose `note` is gone,
+  `volatile: true` marks a watched load, and `existing` names the path
+  identical content was already loaded under (#504).
 
 ### Added
 
@@ -37,6 +43,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Job records carry `parent`, the id of the nearest recorded job inside whose
   execution they were dispatched; absent on top-level jobs. Up-link only —
   clients trace parents to reconstruct a tree (#500).
+- Job records carry `adapter`, the adapter the venue dispatched to, so a job
+  list can be keyed by what ran without resolving each record's definition
+  (#520).
 
 ### Fixed
 
@@ -58,6 +67,14 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   specific reason in the 401 (`UCAN bearer rejected: …`) instead of one opaque
   message. Reasons describe only the presented token's own claims; audience
   and att policy are still checked only after the signature verifies (#503).
+- Continuing an A2A task whose job has completed and left the active cache
+  now reports the terminal state instead of `Job not found` (#506).
+- A remote Job whose polling stopped before anyone asked for its future no
+  longer leaves a later waiter hanging; the observation failure is retained
+  and surfaced (#513).
+- The Discord module's skill resource moved to a module-owned classpath path,
+  so it no longer collides with the venue's Discord connection skill when
+  both jars share one classpath (#510).
 
 ## [0.9.8] - 2026-09-03
 

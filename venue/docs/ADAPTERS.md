@@ -293,7 +293,10 @@ whether to install their dependency tree. A module:
 - excludes Covia, Convex, SLF4J, and Logback platform classes;
 - declares every adapter in `META-INF/services/covia.adapter.AAdapter`;
 - uses the services resource transformer when shading;
-- includes its operation JSON, skills, and templates in its own resources;
+- includes its operation JSON, skills, and templates in its own resources,
+  under classpath paths the venue jar does not use (for example
+  `/adapters/<name>/skill.json` rather than `/skills/<name>.json`, which the
+  venue's connection skills occupy), so both jars can share one classpath;
 - has an integration test that loads the actual shaded jar and verifies its
   catalog appears and retracts correctly.
 

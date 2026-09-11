@@ -40,6 +40,9 @@ public class Job {
 
 	/** Lazy result future — atomic for safe publication */
 	private final AtomicReference<CompletableFuture<ACell>> resultFuture = new AtomicReference<>();
+
+	/** Observation failure retained independently of the lazy future (#513). */
+	private final AtomicReference<JobPollingFailedException> observationFailure = new AtomicReference<>();
 	/** Whether this Job has a durable venue record. Transient invocation wrappers
 	 * still use the complete Job lifecycle, but disappear when execution ends. */
 	private final boolean recorded;
@@ -317,11 +320,19 @@ public class Job {
 	 * @param cause the underlying polling failure (must not be null)
 	 */
 	public void pollingFailed(Throwable cause) {
+		// Retain the failure whether or not anyone has asked for the future yet:
+		// once polling has stopped there is no worker left to complete a future
+		// created later, so a late waiter would otherwise hang (#513). First
+		// failure wins; the authoritative record is never touched.
+		observationFailure.compareAndSet(null, pollingStopped(cause));
 		CompletableFuture<ACell> f = resultFuture.get();
-		if (f == null) return;
-		AString status = RT.ensureString(getData().get(Fields.STATUS));
-		String lastKnown = (status != null) ? status.toString() : "UNKNOWN";
-		f.completeExceptionally(new JobPollingFailedException(getID(), lastKnown, cause));
+		if (f != null) settleObservationFailure(f);
+	}
+
+	/** Completes {@code f} with the retained observation failure, if any. */
+	private void settleObservationFailure(CompletableFuture<ACell> f) {
+		JobPollingFailedException failure = observationFailure.get();
+		if (failure != null) f.completeExceptionally(failure);
 	}
 
 	/**
@@ -361,6 +372,8 @@ public class Job {
 		}
 		if (isFinished()) {
 			completeResultFuture();
+		} else {
+			settleObservationFailure(future);
 		}
 	}
 
@@ -654,6 +667,7 @@ public class Job {
 		CompletableFuture<ACell> newFuture = new CompletableFuture<>();
 		if (resultFuture.compareAndSet(null, newFuture)) {
 			if (isFinished()) completeResultFuture();
+			else settleObservationFailure(newFuture);
 			return newFuture;
 		}
 		return resultFuture.get(); // another thread won the race

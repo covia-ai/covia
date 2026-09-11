@@ -56,7 +56,7 @@ total}` when the cycle's LLM calls reported usage (#217) — provider-measured
 counts, stamped before completion so they ride the persisted record. Absence
 means "not measured", never zero.
 
-## Record fields: `op` and `parent`
+## Record fields: `op`, `adapter` and `parent`
 
 - **`op`** is the reference that was invoked, verbatim: `v/ops/json/merge`,
   `o/my-tool`, a DID URL, or a bare hash when the caller pinned a definition
@@ -68,6 +68,11 @@ means "not measured", never zero.
   whose reference no longer resolves is restored without metadata rather
   than aborting recovery. Invoke by hash when the record must pin the exact
   definition that ran.
+- **`adapter`** is the name of the adapter the venue dispatched to (`covia`,
+  `langchain`, `grid`, …), stamped at submission (#520). It is the job-list
+  fact a client cannot derive from a hash-valued `op` without resolving each
+  record's definition, and it survives that definition becoming unavailable.
+  Absent on records written before 0.9.9.
 - **`parent`** is the id of the nearest *recorded* job inside whose execution
   this job was dispatched (#500); absent on top-level jobs. Transient
   wrappers never appear in a record, so a recorded grandchild dispatched

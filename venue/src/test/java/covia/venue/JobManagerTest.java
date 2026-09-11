@@ -16,6 +16,7 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -813,6 +814,37 @@ public class JobManagerTest {
 		AMap<AString, ACell> record = engine.jobs().getJobData(job.getID(), ctx);
 		assertEquals(Strings.create(hash), record.get(Fields.OP),
 			"an explicit pinned invocation records the hash it pinned");
+	}
+
+	@Test
+	public void testJobRecordCarriesDispatchedAdapter() {
+		Asset echo = engine.resolveAsset(Strings.create("v/test/ops/echo"), ctx);
+		Job job = engine.jobs().invokeOperation(echo.getID().toHexString(), Maps.empty(), ctx);
+		job.awaitResult(5000);
+		AMap<AString, ACell> record = engine.jobs().getJobData(job.getID(), ctx);
+		assertEquals(Strings.create("test"), record.get(Fields.ADAPTER),
+			"the adapter the venue dispatched to is on the record even when op is a bare hash (#520)");
+	}
+
+	// ========== Message delivery to an evicted job (#506) ==========
+
+	@Test
+	public void testDeliverMessageToEvictedTerminalJobReportsTerminalState() {
+		Job job = engine.jobs().invokeOperation("v/test/ops/echo", Maps.empty(), ctx);
+		job.awaitResult(5000);
+		engine.jobs().evictActive(job.getID());
+		assertNull(engine.jobs().getJobData(job.getID()), "gone from the active cache");
+		assertNotNull(engine.jobs().getJobData(job.getID(), ctx), "still readable from the lattice");
+
+		IllegalStateException ex = assertThrows(IllegalStateException.class, () ->
+			engine.jobs().deliverMessage(job.getID(),
+				Maps.of(Strings.create("content"), Strings.create("more")), ctx));
+		assertTrue(ex.getMessage().contains("terminal"), ex.getMessage());
+
+		assertThrows(IllegalArgumentException.class, () ->
+			engine.jobs().deliverMessage(Blob.parse("0x00112233445566778899aabbccddeeff"),
+				Maps.empty(), ctx),
+			"an id nobody has ever seen is still not found");
 	}
 
 	@Test

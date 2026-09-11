@@ -2,6 +2,7 @@ package covia.grid;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -200,6 +201,81 @@ public class JobTest {
 
 		assertThrows(JobPollingFailedException.class, job::awaitResult);
 		assertEquals(Status.STARTED, job.getStatus());
+	}
+
+	// ========== Observation failure retained without a future (#513) ==========
+
+	@Test
+	public void testPollingFailureBeforeLazyFutureDoesNotHangLateWaiter() {
+		Job job = Job.create(Maps.of(
+			Fields.ID, Blob.parse("0x00112233445566778899aabbccddee01"),
+			Fields.STATUS, Status.STARTED));
+		RuntimeException cause = new RuntimeException("transport lost");
+		job.pollingFailed(cause);
+
+		CompletableFuture<ACell> f = job.future();
+		assertTrue(f.isCompletedExceptionally(), "a late future must settle, not hang");
+		JobPollingFailedException ex = assertThrows(JobPollingFailedException.class, job::awaitResult);
+		assertSame(cause, ex.getCause());
+		assertEquals(job.getID(), ex.getJobId());
+		assertEquals(Status.STARTED.toString(), ex.getLastKnownStatus());
+		assertEquals(Status.STARTED, job.getStatus(),
+			"loss of observation never touches the authoritative record");
+	}
+
+	@Test
+	public void testPollingFailureIsRetainedForSetFuture() {
+		Job job = Job.create(Maps.of(Fields.STATUS, Status.STARTED));
+		job.pollingFailed(new RuntimeException("transport lost"));
+		CompletableFuture<ACell> f = new CompletableFuture<>();
+		job.setFuture(f);
+		assertTrue(f.isCompletedExceptionally());
+	}
+
+	@Test
+	public void testFirstObservationFailureWins() {
+		Job job = Job.create(Maps.of(Fields.STATUS, Status.STARTED));
+		RuntimeException first = new RuntimeException("first");
+		job.pollingFailed(first);
+		job.pollingFailed(new RuntimeException("second"));
+		JobPollingFailedException ex = assertThrows(JobPollingFailedException.class, job::awaitResult);
+		assertSame(first, ex.getCause());
+	}
+
+	@Test
+	public void testAuthoritativeCompletionWinsForLateWaiter() throws Exception {
+		Job job = Job.create(Maps.of(Fields.STATUS, Status.STARTED));
+		job.pollingFailed(new RuntimeException("transport lost"));
+		job.completeWith(Strings.create("done"));
+		assertEquals(Strings.create("done"), job.future().get(1, TimeUnit.SECONDS),
+			"a waiter arriving after the job actually finished gets the result, not a stale observation failure");
+	}
+
+	@Test
+	public void testConcurrentFutureCreationDuringPollingFailure() throws Exception {
+		for (int round = 0; round < 20; round++) {
+			Job job = Job.create(Maps.of(Fields.STATUS, Status.STARTED));
+			var start = new java.util.concurrent.CountDownLatch(1);
+			var creators = new java.util.ArrayList<CompletableFuture<CompletableFuture<ACell>>>();
+			for (int i = 0; i < 4; i++) {
+				creators.add(CompletableFuture.supplyAsync(() -> {
+					try { start.await(); } catch (InterruptedException e) { throw new AssertionError(e); }
+					return job.future();
+				}));
+			}
+			CompletableFuture<Void> failer = CompletableFuture.runAsync(() -> {
+				try { start.await(); } catch (InterruptedException e) { throw new AssertionError(e); }
+				job.pollingFailed(new RuntimeException("transport lost"));
+			});
+			start.countDown();
+			failer.get(5, TimeUnit.SECONDS);
+			CompletableFuture<ACell> shared = job.future();
+			for (var c : creators) {
+				assertSame(shared, c.get(5, TimeUnit.SECONDS), "one future per job");
+			}
+			assertThrows(ExecutionException.class, () -> shared.get(5, TimeUnit.SECONDS),
+				"every ordering of future creation and polling failure settles the future");
+		}
 	}
 
 	@Test public void testIDParse() {
