@@ -1,0 +1,29 @@
+{
+	"name": "datadog",
+	"description": "Read Datadog monitors, metrics, and events using the user's own API key and application key. Load to see monitor status, alerts, and recent events.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Datadog\nA multi-value connection: Datadog authenticates with **two** headers. Calls go through `v/ops/http/get` / `v/ops/http/post` against `https://api.datadoghq.com/api/v1` with `secretHeaders: {\"DD-API-KEY\": \"s/DATADOG_API_KEY\", \"DD-APPLICATION-KEY\": \"s/DATADOG_APP_KEY\"}` (Organization Settings -> API Keys and -> Application Keys). The venue injects both; neither appears in the request you write. This base URL is the US1 region; other regions (`datadoghq.eu`, `us3`, `us5`) need a different base URL for now.\n\nCommon calls:\n- Sanity check: `GET /validate`\n- Monitors: `GET /monitor?group_states=alert`\n- One monitor: `GET /monitor/{id}`\n- Recent events: `GET /events?start=<unix>&end=<unix>`\n- Dashboards: `GET /dashboard`\n\nRules:\n- Check `status`; errors are `{errors: [\"...\"]}`. 403 usually means the application key is missing or unscoped.\n- Times are Unix seconds. Both keys must be configured for the connection to work.\n"
+	},
+	"connection": {
+		"baseUrl": "https://api.datadoghq.com/api/v1",
+		"auth": {
+			"kind": "secret-header",
+			"alternatives": [
+				"s/DATADOG_API_KEY"
+			]
+		},
+		"required": [
+			"s/DATADOG_API_KEY",
+			"s/DATADOG_APP_KEY"
+		]
+	},
+	"skill": {
+		"tools": [
+			"v/ops/connections/status",
+			"v/ops/http/get",
+			"v/ops/http/post",
+			"v/ops/jvm/url-encode"
+		]
+	}
+}
