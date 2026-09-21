@@ -921,6 +921,51 @@ scopes are *restricted*, so a production client needs Google's verification,
 and an unverified client runs in testing mode with named test users and
 seven-day refresh tokens.
 
+## Login with an external provider (`auth.oauth`)
+
+Sign-in via Google, Microsoft or GitHub. This is the third and last thing named
+"oauth" in this file, and the one users see: `adapters.oauth` lets an agent act
+on a user's data at a provider, `auth.oauth.provider` makes the venue issue its
+own tokens, and `auth.oauth` — here — lets a person prove who they are with an
+account they already have.
+
+```json
+{
+  "auth": {
+    "oauth": {
+      "google":    { "clientId": "1234-abcd.apps.googleusercontent.com", "clientSecret": "s/GOOGLE_LOGIN" },
+      "microsoft": { "clientId": "...", "clientSecret": "s/MICROSOFT_LOGIN" },
+      "github":    { "clientId": "...", "clientSecret": "s/GITHUB_LOGIN" }
+    }
+  }
+}
+```
+
+- `<provider>` — one of `google`, `microsoft`, `github`. Configure only the ones
+  you want; any other key here is rejected under `strictConfig`, and warned
+  about otherwise.
+- `clientId` / `clientSecret` — both are required, and supplying one without
+  the other fails startup with `must provide both clientId and clientSecret`.
+  `clientSecret` may be an
+  `s/NAME` reference to a secret in the venue's own store (preferred, so the
+  literal never sits in the config file) or the literal secret itself. A
+  reference is resolved at the token exchange, so the secret must be set before
+  the first login, not before startup.
+
+**Nothing is served until at least one provider is configured.** `/login` and
+`/auth/{provider}` are registered only when a provider registers successfully;
+until then both 404 and clients see no sign-in options at all — which is the
+expected state of a venue that has not configured any provider, not a fault.
+
+The redirect URI is derived, not configured: `<baseUrl>/auth/<provider>/callback`,
+using the venue's `baseUrl`. That exact string must be registered with the
+provider, so a wrong `baseUrl` fails at the callback rather than at discovery.
+
+Clients discover providers by fetching `/login` and reading its `/auth/<provider>`
+links. A caller may pass `?redirect_uri=` to `/auth/<provider>` to be returned to
+its own callback once login completes; the value is carried through the provider
+round trip in the OAuth `state`.
+
 ## OAuth authorization server (`auth.oauth.provider`)
 
 The venue can act as an OAuth 2.1 authorization server so a third-party or MCP

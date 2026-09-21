@@ -85,11 +85,43 @@ public class LoginProviders {
 
 		AString clientId = RT.ensureString(providerConfig.get(Config.CLIENT_ID));
 		AString clientSecret = RT.ensureString(providerConfig.get(Config.CLIENT_SECRET));
+		// A half-filled block never reaches here: Config.validateAuth rejects
+		// clientId-without-clientSecret (and vice versa) at construction, so
+		// this is the both-absent case — the provider is simply not configured.
 		if (clientId == null || clientSecret == null) return;
 
 		OAuthConfig cfg = factory.create(clientId.toString(), clientSecret.toString(), baseUrl);
 		providers.put(name, cfg);
-		log.info("Registered OAuth provider: {}", name);
+		log.info("Registered OAuth provider: {}{}", name,
+			isSecretRef(cfg.clientSecret) ? " (clientSecret via " + cfg.clientSecret + ")" : "");
+	}
+
+	/** Whether a configured clientSecret is an {@code s/NAME} store reference rather than a literal. */
+	private static boolean isSecretRef(String value) {
+		return value != null && (value.startsWith("s/") || value.startsWith("/s/"));
+	}
+
+	/**
+	 * The provider's client secret, resolving an {@code s/NAME} reference against
+	 * the venue's own secret store.
+	 *
+	 * <p>{@code adapters.oauth} requires the reference form and rejects literals
+	 * outright; login config predates that and is read literally, so a deployment
+	 * had to keep the plaintext secret in its config file. Both forms are accepted
+	 * here — the reference is preferred, the literal stays working — and resolution
+	 * is deferred to the token exchange because the secret store is not populated
+	 * when providers are registered at startup.
+	 */
+	String resolveClientSecret(OAuthConfig provider) {
+		String configured = provider.clientSecret;
+		if (!isSecretRef(configured)) return configured;
+
+		String secret = engine.resolveSecret(configured, engine.venueContext());
+		if (secret == null) {
+			throw new IllegalStateException("auth.oauth." + provider.name + ".clientSecret references "
+				+ configured + ", which is not set in the venue's secret store");
+		}
+		return secret;
 	}
 
 	@FunctionalInterface
@@ -304,7 +336,7 @@ public class LoginProviders {
 			String body = "grant_type=authorization_code"
 				+ "&code=" + URLEncoder.encode(code, StandardCharsets.UTF_8)
 				+ "&client_id=" + URLEncoder.encode(provider.clientId, StandardCharsets.UTF_8)
-				+ "&client_secret=" + URLEncoder.encode(provider.clientSecret, StandardCharsets.UTF_8)
+				+ "&client_secret=" + URLEncoder.encode(resolveClientSecret(provider), StandardCharsets.UTF_8)
 				+ "&redirect_uri=" + URLEncoder.encode(provider.redirectUri, StandardCharsets.UTF_8);
 
 			HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
