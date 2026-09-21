@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URI;
@@ -27,6 +28,8 @@ import covia.api.Fields;
 import covia.venue.Auth;
 import covia.venue.Config;
 import covia.venue.Engine;
+import covia.venue.SecretStore;
+import covia.venue.User;
 import covia.venue.TestServer;
 
 @TestInstance(Lifecycle.PER_CLASS)
@@ -86,6 +89,58 @@ public class OAuthTest {
 		);
 		LoginProviders lp = new LoginProviders(engine, authConfig);
 		assertEquals(3, lp.getProviders().size());
+	}
+
+	@Test
+	void testClientSecretAcceptsStoreReference() {
+		// adapters.oauth takes an s/NAME reference so the literal never sits in
+		// the config file; login config had no such option (frontend#394).
+		// The reference is carried through registration and resolved later, at
+		// the token exchange — the secret store is not populated at startup.
+		AMap<AString, ACell> viaRef = Maps.of(
+			Config.CLIENT_ID, "cid",
+			Config.CLIENT_SECRET, "s/GOOGLE_OAUTH"
+		);
+		AMap<AString, ACell> oauthConfig = Maps.of(
+			Config.BASE_URL, "https://example.com",
+			"google", viaRef
+		);
+		LoginProviders lp = new LoginProviders(engine, Maps.of(Config.OAUTH, oauthConfig));
+		assertTrue(lp.hasProviders());
+		assertEquals("s/GOOGLE_OAUTH", lp.getProviders().get("google").clientSecret);
+	}
+
+	@Test
+	void testLiteralClientSecretStillResolvesToItself() {
+		// Literals must keep working — this is additive, not a migration.
+		OAuthConfig literal = OAuthConfig.google("cid", "plain-secret", "https://venue.example.com");
+		LoginProviders lp = new LoginProviders(engine, null);
+		assertEquals("plain-secret", lp.resolveClientSecret(literal));
+	}
+
+	@Test
+	void testStoreReferenceResolvesToTheStoredSecret() {
+		// The point of the reference form: the real secret lives in the venue's
+		// own store, never in the config file. Resolution runs as the venue
+		// identity, the same context adapters.oauth uses.
+		byte[] encKey = SecretStore.deriveKey(engine.getKeyPair());
+		User venueUser = engine.getVenueState().users().ensure(engine.getDIDString());
+		venueUser.secrets().store("GOOGLE_OAUTH", "resolved-from-store", encKey);
+
+		OAuthConfig viaRef = OAuthConfig.google("cid", "s/GOOGLE_OAUTH", "https://venue.example.com");
+		LoginProviders lp = new LoginProviders(engine, null);
+		assertEquals("resolved-from-store", lp.resolveClientSecret(viaRef));
+	}
+
+	@Test
+	void testUnsetSecretReferenceFailsLoudly() {
+		// A reference to a secret the store does not hold must name the problem,
+		// not silently send an empty client_secret to the provider.
+		OAuthConfig viaRef = OAuthConfig.google("cid", "s/NO_SUCH_SECRET", "https://venue.example.com");
+		LoginProviders lp = new LoginProviders(engine, null);
+		IllegalStateException ex = assertThrows(IllegalStateException.class,
+			() -> lp.resolveClientSecret(viaRef));
+		assertTrue(ex.getMessage().contains("s/NO_SUCH_SECRET"), ex.getMessage());
 	}
 
 	@Test
