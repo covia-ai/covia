@@ -485,10 +485,11 @@ public class VenueServerTest {
 			Fields.MESSAGE, "Test error message"
 		);
 		
-		// Start the operation via the client. Should start but not complete
+		// Start the operation via the client. Should start but not complete.
+		// The 201 record is whatever had committed when it was serialised, so
+		// the run is observed by polling rather than off that first snapshot.
 		Job job = covia.startJob(TestOps.NEVER, input);
-		AString status=job.getStatus();
-		assertEquals(Status.STARTED,status);
+		awaitClientStatus(job, Status.STARTED, 5000);
 		assertFalse(job.isFinished());
 	}
 	
@@ -501,9 +502,8 @@ public class VenueServerTest {
 		
 		// Step 1: Invoke the operation using Covia client
 		Job job=covia.startJob(TestOps.NEVER, input);
-		assertEquals(Status.STARTED,job.getStatus());
-		
-		// Step 2: Re-read the durable status without relying on timing.
+
+		// Step 2: Read the durable status without relying on timing.
 		awaitClientStatus(job, Status.STARTED, 5000);
 
 		Blob jobId = job.getID();
@@ -539,7 +539,7 @@ public class VenueServerTest {
 	public void testPauseAndResumeNeverOp() throws Exception {
 		// Start a never-completing job
 		Job job = covia.startJob(TestOps.NEVER, Maps.of(Fields.MESSAGE, "pause test"));
-		assertEquals(Status.STARTED, job.getStatus(), "Job should be STARTED");
+		awaitClientStatus(job, Status.STARTED, 5000);
 		String jobId = job.getID().toHexString();
 
 		// Pause the running job via API
