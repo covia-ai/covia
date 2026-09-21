@@ -2,6 +2,8 @@ package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.util.List;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
@@ -30,6 +32,7 @@ import covia.exception.AuthException;
 import covia.grid.Asset;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.test.Rendezvous;
 
 /**
  * Unit tests for {@link JobManager#invokeInternal}. Covers the transient-Job
@@ -639,37 +642,18 @@ public class JobManagerTest {
 		AMap<AString, ACell> message = Maps.of(
 			Fields.MESSAGE_ID, Strings.create("concurrent-history"),
 			Fields.MESSAGE, Strings.create("hello"));
-		CountDownLatch ready = new CountDownLatch(2);
-		CountDownLatch start = new CountDownLatch(1);
-
-		CompletableFuture<Boolean> append = CompletableFuture.supplyAsync(() -> {
-			ready.countDown();
-			try {
-				start.await();
-				engine.jobs().appendToHistory(job.getID(), message, ctx);
-				return true;
-			} catch (InterruptedException e) {
-				Thread.currentThread().interrupt();
-				throw new AssertionError(e);
-			} catch (IllegalArgumentException deletedFirst) {
-				return false;
-			}
-		});
-		CompletableFuture<Boolean> delete = CompletableFuture.supplyAsync(() -> {
-			ready.countDown();
-			try {
-				start.await();
-			} catch (InterruptedException e) {
-				Thread.currentThread().interrupt();
-				throw new AssertionError(e);
-			}
-			return engine.jobs().deleteJob(job.getID(), ctx);
-		});
-		assertTrue(ready.await(5, TimeUnit.SECONDS));
-		start.countDown();
-
-		append.get(5, TimeUnit.SECONDS); // either linearisation order is valid
-		assertTrue(delete.get(5, TimeUnit.SECONDS));
+		// either linearisation order is valid for the append; the delete must win
+		List<Boolean> raced = Rendezvous.all(
+			() -> {
+				try {
+					engine.jobs().appendToHistory(job.getID(), message, ctx);
+					return true;
+				} catch (IllegalArgumentException deletedFirst) {
+					return false;
+				}
+			},
+			() -> engine.jobs().deleteJob(job.getID(), ctx));
+		assertTrue(raced.get(1));
 		assertNull(engine.getVenueState().users().get(did).getJob(job.getID()),
 			"the durable-history path must update-if-present, never recreate after delete");
 	}
@@ -700,25 +684,9 @@ public class JobManagerTest {
 	@Test
 	public void testConcurrentActiveDeleteHasExactlyOneWinner() throws Exception {
 		Job job = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), ctx);
-		CountDownLatch ready = new CountDownLatch(2);
-		CountDownLatch start = new CountDownLatch(1);
-		java.util.function.Supplier<Boolean> delete = () -> {
-			ready.countDown();
-			try {
-				start.await();
-			} catch (InterruptedException e) {
-				Thread.currentThread().interrupt();
-				throw new AssertionError(e);
-			}
-			return engine.jobs().deleteJob(job.getID(), ctx);
-		};
-		CompletableFuture<Boolean> first = CompletableFuture.supplyAsync(delete);
-		CompletableFuture<Boolean> second = CompletableFuture.supplyAsync(delete);
-		assertTrue(ready.await(5, TimeUnit.SECONDS));
-		start.countDown();
-
-		assertEquals(1, (first.get(5, TimeUnit.SECONDS) ? 1 : 0)
-			+ (second.get(5, TimeUnit.SECONDS) ? 1 : 0));
+		Callable<Boolean> delete = () -> engine.jobs().deleteJob(job.getID(), ctx);
+		assertEquals(1, Rendezvous.all(delete, delete).stream()
+			.filter(Boolean::booleanValue).count());
 		assertNull(engine.getVenueState().users().get(did).getJob(job.getID()));
 		job.cancel("test cleanup");
 	}
