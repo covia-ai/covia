@@ -218,7 +218,16 @@ public class AgentToolboxTest {
 						"arguments", Maps.of("name", "alpha")),
 					(ACell) Maps.of("id", "call_skill_read", "name", HarnessTools.INVOKE_TOOL,
 						"arguments", Maps.of("name", "covia_read",
-							"input", Maps.of("path", CONTEXT_PATH))))), null);
+							"input", Maps.of("path", CONTEXT_PATH))),
+					// The same call with input serialised as a JSON string — what a
+					// model emits on large payloads (#508). input is the target
+					// tool's arguments and can only be an object, so the string is
+					// parsed and the two calls must behave identically; the
+					// alternative was a null path reaching covia_read and a
+					// misleading error coming back.
+					(ACell) Maps.of("id", "call_skill_read_str", "name", HarnessTools.INVOKE_TOOL,
+						"arguments", Maps.of("name", "covia_read",
+							"input", Strings.create("{\"path\": \"" + CONTEXT_PATH + "\"}"))))), null);
 			exercisedHarness.add(HarnessTools.SKILL_LOAD);
 			exercisedHarness.add(HarnessTools.INVOKE_TOOL);
 			assertTrue(hasSystemContent(skill, SKILL_BODY),
@@ -230,6 +239,9 @@ public class AgentToolboxTest {
 				where + " loaded skill did not append its exact tool definition: " + skill);
 			assertFalse(RT.getIn(call(skill, "call_skill_read"), Fields.RESULT).toString()
 				.startsWith("Error:"), where + " loaded skill route was not active immediately: " + skill);
+			assertEquals(RT.getIn(call(skill, "call_skill_read"), Fields.RESULT),
+				RT.getIn(call(skill, "call_skill_read_str"), Fields.RESULT),
+				where + " stringified invoke_tool input did not dispatch like the object form: " + skill);
 
 			// more_tools is a tool-only load. The parallel dispatcher call proves
 			// the new route is live immediately without rewriting the fixed palette.

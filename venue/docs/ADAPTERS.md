@@ -25,6 +25,40 @@ suspendable job override the job-aware `invoke` method instead. Blocking I/O
 should run on `AAdapter.VIRTUAL_EXECUTOR`; Covia Jobs have no framework-level
 timeout.
 
+Persisting a Job preserves its record, not its running execution. Adapters are
+not required to continue work after restart. `recoverJob` reconciles the saved
+record with what that adapter can actually recover; it may report failure
+instead of restoring execution. A resumable execution needs an adapter-specific
+checkpoint or an external operation that still exists. A submission key only
+prevents duplicate acceptance; it supplies neither of those capabilities.
+
+Synchronous adapters may return `CompletableFuture.completedFuture(result)`;
+they need no delegation record or repeatable request key. HTTP `/invoke`
+dispatches execution separately from acknowledgement, so even a synchronous
+adapter cannot hold the job-handle response until execution completes.
+
+Remote Grid runs and A2A sends use the engine's `RemoteJobs` observer. An
+accepted remote handle survives individual request failures; a lost submission
+acknowledgement records uncertainty and is never blindly replayed. See
+[JOBS.md](JOBS.md#remote-delegation) for the implemented lifecycle and
+[REMOTE_JOBS_DESIGN.md](REMOTE_JOBS_DESIGN.md) for the further protocol design.
+
+The default invocation path claims `PENDING → STARTED` with `Job.start` before
+calling `invokeFuture`. Job transitions commit atomically; only the winning
+transition triggers its continuation. Start, pause, and resume hooks see the
+committed state and may immediately advance it again. Hooks should schedule
+their next step promptly. A synchronous exception or JVM error fails the Job
+before propagating; late completion cannot replace a terminal state. Typed
+failure causes are committed together with the failure record.
+
+Cancellation hooks run after cancellation commits, including when registered
+after cancellation, and each registration is claimed once. The default bridge
+cancels the returned `CompletableFuture`; this alone does not interrupt blocking
+work. Adapters needing interruption must retain the worker's `Future`, register
+their own cancellation hook, and use `completeFromJobFuture` for completion.
+Terminal cleanup releases job resources before existing result-future
+continuations run.
+
 Capability checks belong at the point of action, before any side effect.
 Invoke-class adapters normally begin with `requireInvoke(ctx)` and add
 resource-specific checks through the relevant `Engine.require*` method. Do
@@ -224,6 +258,17 @@ schema validation and agent tool use:
 }
 ```
 
+`operation.input` may describe any JSON value — an operation is not obliged
+to take an object. Tools are: MCP `inputSchema` and provider tool schemas
+require `type: object`. An operation whose declared input type excludes
+`object` is therefore published and callable as an operation, and advertised
+as a tool best-effort, but the adapter logs a warning at install because a
+tool client may reject the schema or send an object the operation cannot use.
+Declare an object schema for anything meant to be called as a tool. The
+converse holds too: a string arriving at an operation is a valid input and is
+never parsed into an object; that repair happens only at tool-call boundaries,
+whose schema admits nothing else.
+
 `operation.readOnly` is optional. An explicit `true` permits result-oriented
 execution without a durable job record. `false` or absence retains the normal
 durable-job default, preserving compatibility with existing and external
@@ -248,7 +293,10 @@ whether to install their dependency tree. A module:
 - excludes Covia, Convex, SLF4J, and Logback platform classes;
 - declares every adapter in `META-INF/services/covia.adapter.AAdapter`;
 - uses the services resource transformer when shading;
-- includes its operation JSON, skills, and templates in its own resources;
+- includes its operation JSON, skills, and templates in its own resources,
+  under classpath paths the venue jar does not use (for example
+  `/adapters/<name>/skill.json` rather than `/skills/<name>.json`, which the
+  venue's connection skills occupy), so both jars can share one classpath;
 - has an integration test that loads the actual shaded jar and verifies its
   catalog appears and retracts correctly.
 

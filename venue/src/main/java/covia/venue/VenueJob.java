@@ -70,8 +70,10 @@ public class VenueJob extends Job {
 	public void onUpdate(AMap<AString, ACell> newData) {
 		synchronized (this) {
 			if (!memoryOnly && !deleted) {
+				// A later CAS may reach this monitor first. Persist the latest
+				// committed record so a delayed callback cannot roll it back.
 				manager.persistJobRecord(getID(),
-					JobManager.redactJobSecrets(newData, meta), callerDID);
+					JobManager.redactJobSecrets(getData(), meta), callerDID);
 			}
 		}
 		if (observable) manager.notifyGlobalListeners(this);
@@ -90,13 +92,13 @@ public class VenueJob extends Job {
 	}
 
 	@Override
-	public void completeWith(ACell result) {
+	public void completeWith(ACell result, java.util.function.UnaryOperator<AMap<AString, ACell>> decorate) {
 		try {
 			manager.validateOutput(meta, result);
-		} catch (RuntimeException e) {
-			fail(e.getMessage() != null ? e.getMessage() : e.toString());
+		} catch (RuntimeException | Error e) {
+			fail(e, decorate);
 			return;
 		}
-		super.completeWith(result);
+		super.completeWith(result, decorate);
 	}
 }
