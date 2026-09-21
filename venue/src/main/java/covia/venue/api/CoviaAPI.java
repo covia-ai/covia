@@ -253,6 +253,13 @@ public class CoviaAPI extends ACoviaAPI {
 		                description = "Set to 'metadata' to return each venue asset as {id, metadata} instead of an id string.",
 		                required = false,
 		                example = "metadata"
+		            ),
+		            @OpenApiParam(
+		                name = "kind",
+		                type = String.class,
+		                description = "Restrict the listing to 'operation' (assets carrying an operation) or 'data' (those that do not). Offsets and total apply to the filtered listing.",
+		                required = false,
+		                example = "data"
 		            )
 		        },
 		        responses = {
@@ -309,7 +316,45 @@ public class CoviaAPI extends ACoviaAPI {
 			return;
 		}
 
-		long n=venue.getAssetCount();
+		// kind restricts the listing to assets that carry an operation, or to
+		// those that do not. Without it nothing changes — same call, same cost.
+		String kind = ctx.queryParam("kind");
+		Boolean wantOperations;
+		if (kind == null) {
+			wantOperations = null;
+		} else if ("operation".equals(kind)) {
+			wantOperations = Boolean.TRUE;
+		} else if ("data".equals(kind)) {
+			wantOperations = Boolean.FALSE;
+		} else {
+			buildError(ctx, 400, "Unsupported asset kind: " + kind);
+			return;
+		}
+
+		// A filtered listing is selected before it is paged: an offset has to
+		// count entries the caller asked for, and `total` has to be the size of
+		// the filtered listing, not of the catalogue it was drawn from. That
+		// means classifying the whole catalogue here — a local pass over
+		// in-memory records, and the point of the exercise is that it replaces
+		// sending every operation definition to a client that discards them.
+		List<Hash> matching = null;
+		if (wantOperations != null) {
+			matching = new ArrayList<>();
+			for (Hash h : venue.listAssetIDs(0, venue.getAssetCount())) {
+				try {
+					Asset a = venue.getAsset(h);
+					if (a == null) continue;
+					boolean isOperation = a.meta().get(Fields.OPERATION) != null;
+					if (isOperation == wantOperations.booleanValue()) matching.add(h);
+				} catch (IOException e) {
+					buildError(ctx, 500, "Error retrieving venue asset "
+						+ engine().assetDIDURL(h) + ": " + e.getMessage());
+					return;
+				}
+			}
+		}
+
+		long n = (matching != null) ? matching.size() : venue.getAssetCount();
 		result.put(Fields.TOTAL, n);
 
 		long start=Math.max(0, offset);
@@ -326,7 +371,9 @@ public class CoviaAPI extends ACoviaAPI {
 		result.put(Fields.OFFSET, start);
 		result.put(Fields.LIMIT, actualLimit);
 
-		List<Hash> assetIDs = venue.listAssetIDs(start, actualLimit);
+		List<Hash> assetIDs = (matching != null)
+			? matching.subList((int) Math.min(start, n), (int) Math.min(start + actualLimit, n))
+			: venue.listAssetIDs(start, actualLimit);
 		ArrayList<Object> assetsList=new ArrayList<>();
 		for (Hash h : assetIDs) {
 			// A venue-CAS listing must round-trip through the general resolver.
