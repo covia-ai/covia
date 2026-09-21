@@ -988,7 +988,7 @@ public class CoviaAPI extends ACoviaAPI {
 				return;
 			}
 
-			Job job=engine().jobs().invokeOperation(op,input,rctx);
+			Job job=engine().jobs().submitOperation(op,input,rctx);
 			if (job==null) {
 				buildError(ctx,404,"Operation does not exist");
 				return;

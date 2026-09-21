@@ -11,7 +11,7 @@
 			"properties": {
 				"path": {
 					"type": "string",
-					"description": "Writable lattice path. Must start with one of: 'w/' (workspace), 'o/' (operation pins), 'n/' (agent scope), 't/' (job temp). Deep paths create intermediate maps."
+					"description": "Writable lattice path. Must start with one of: 'w/' (workspace), 'o/' (operation pins), 'n/' (agent scope), 't/' (job temp — only while working on a task or inside a job; not available in a plain chat turn). Deep paths create intermediate maps."
 				},
 				"value": {
 					"description": "The value to store. Use structured values (objects/arrays/scalars) rather than serialised strings. Null stores a null value (present, distinct from absent); use covia_delete to remove an entry."

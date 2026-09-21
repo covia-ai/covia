@@ -413,44 +413,26 @@ public class HTTPTest {
 	// Error handling — missing/invalid parameters
 	// ====================================================================
 
-	@Test public void testMissingURL() {
-		VenueHTTP covia = TestServer.COVIA;
+	// A bad URL is an input fault the adapter finds at execution time, so it
+	// settles the Job as FAILED carrying the reason, rather than escaping the
+	// invoke as a transport error. failureOf accepts either surfacing.
 
-		// No URL provided — adapter NPEs on url.toString(), server returns 500
-		assertThrows(ExecutionException.class, () -> {
-			covia.invokeSync("v/ops/http/get", Maps.of(), 10_000);
-		}, "Missing URL should cause an error");
+	@Test public void testMissingURL() {
+		assertEquals("url is required", failureOf(Maps.of()));
 	}
 
 	@Test public void testInvalidURLFormat() {
-		VenueHTTP covia = TestServer.COVIA;
-
-		// Malformed URL — URISyntaxException, server returns 500
-		assertThrows(ExecutionException.class, () -> {
-			covia.invokeSync("v/ops/http/get", Maps.of(
-				"url", "not a valid url at all %%% {}"
-			), 10_000);
-		}, "Invalid URL format should cause an error");
+		assertTrue(failureOf(Maps.of("url", "not a valid url at all %%% {}"))
+			.startsWith("Bad URI syntax:"), "Invalid URL format should be reported as such");
 	}
 
 	@Test public void testURLWithNoHost() {
-		VenueHTTP covia = TestServer.COVIA;
-
-		// URL with scheme but no host — validateURL rejects it, server returns 400
-		assertThrows(ExecutionException.class, () -> {
-			covia.invokeSync("v/ops/http/get", Maps.of(
-				"url", "http:///path/only"
-			), 10_000);
-		}, "URL with no host should cause an error");
+		assertEquals("URL has no host: http:///path/only",
+			failureOf(Maps.of("url", "http:///path/only")));
 	}
 
 	@Test public void testEmptyURLString() {
-		VenueHTTP covia = TestServer.COVIA;
-
-		// Empty URL string — validateURL rejects it, server returns 400
-		assertThrows(ExecutionException.class, () -> {
-			covia.invokeSync("v/ops/http/get", Maps.of("url", ""), 10_000);
-		}, "Empty URL string should cause an error");
+		assertEquals("URL has no host: ", failureOf(Maps.of("url", "")));
 	}
 
 	// ====================================================================

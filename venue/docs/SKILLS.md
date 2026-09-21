@@ -247,7 +247,7 @@ Children are **discovered, not auto-loaded**. Loading `workspace` returns the re
 
 Contributed refs are denormalised onto the parent's loads entry, like tool refs. Editing a loaded parent's lists therefore needs unload/reload; the target directories and skill metadata remain live. Unloading the parent retracts its contributed sources. A child already loaded remains loaded independently and continues to contribute its own until it too is unloaded.
 
-**The shipped library uses exactly this.** `v/skills/root` holds eight entry-point skills, each opening its family: `workspace`→`data`, `agents`→`agents`, `grid`→`grid`, `discovery`→`ops-tools`+`adapters`, `auth`→`auth`+`caps-permissions`, `venue`→`venue`+`admin`, `skills`→`building`, `covia`→`convex`. That keeps the always-on index at eight lines while every skill stays one load away.
+**The shipped library uses exactly this.** `v/skills/root` holds the entry-point skills, each opening its family: `workspace`→`data`, `agents`→`agents`, `grid`→`grid`, `discovery`→`ops-tools`+`adapters`, `auth`→`auth`+`caps-permissions`, `venue`→`venue`+`admin`, `skills`→`building`, `covia`→`convex`, `projects`→`projects` (briefing, planning, delegation, reporting, delivery, monitoring — see [PROJECT.md](PROJECT.md)). That keeps the always-on index to one line per family while every skill stays one load away.
 
 An entry point is installed at **both** its family path and its `root/` mirror, from the same resource — so both addresses hold identical metadata, and content-identity dedup (§5.3) treats them as one skill. Mirroring is only safe this way: hand-copying metadata would produce two different hashes and two context entries. Grouping is decided by the owning adapter, so a skillset only ever lists skills whose adapter is actually active, and `v/adapters/<name>/skills` is itself a ready-made skillset for everything one adapter offers.
 
@@ -297,7 +297,7 @@ A `name` that matches nothing fails with a message naming the skills that ARE av
 
    `revealed` exists because the index alone was not enough: the reader already has the turn-start `[Skills]` block and the refreshed index, but must notice they differ. A live agent observably did not — it reported "no new skills" while listing the revealed ones. Naming them removes the inference.
 5. By default, appends the body as a loaded-skill system event and the skill's `skill.context` as one `loaded_context` result under the same key. The next inference in the same tool loop therefore sees both without regenerating either. With `volatile: true`, the persistent declaration is instead watched before each inference: its first value, and only later changed values, append through the same observation lifecycle as other volatile loads.
-6. Returns a compact acknowledgement. The body and contributed data occur only in the appended events, not again in this result:
+6. Returns a compact, purely structural acknowledgement. The body and contributed data occur only in the appended events, not again in this result, and there is no prose: the unload key is `path`, `volatile: true` marks a watched load, and `existing` names the path identical content was already loaded under (the load is then a no-op). `tools`, `revealed`, `skillIndex` and `unresolved` appear only when present:
 
 ```json
 {
@@ -306,8 +306,7 @@ A `name` that matches nothing fails with a message naming the skills that ARE av
   "path": "w/skills/pdf-processing",
   "tools": ["file_read", "schema_validate"],
   "skillIndex": "- pdf-table-extraction — Extract tables from PDFs\n...",
-  "unresolved": ["v/ops/gone/op"],
-  "note": "Skill instructions were appended to context. Its path is the exact unload key if you later need to remove it; ordinary tool results need no cleanup. Tools and contributed skills are active from your next step."
+  "unresolved": ["v/ops/gone/op"]
 }
 ```
 
