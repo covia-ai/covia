@@ -2,6 +2,8 @@ package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.util.List;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
@@ -16,6 +18,7 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -29,6 +32,7 @@ import covia.exception.AuthException;
 import covia.grid.Asset;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.test.Rendezvous;
 
 /**
  * Unit tests for {@link JobManager#invokeInternal}. Covers the transient-Job
@@ -46,6 +50,95 @@ import covia.grid.Status;
 	 * inside one venue is covered by {@code GridAdapterTest}.</p>
  */
 public class JobManagerTest {
+
+	@Test
+	public void testSynchronousAdapterErrorsSettleDurableJobs() {
+		Engine eng = Engine.createTemp(null);
+		try {
+			var invoked = new java.util.concurrent.atomic.AtomicReference<Job>();
+			eng.registerAdapter(new AAdapter() {
+				@Override public String getName() { return "broken-module"; }
+				@Override public String getDescription() { return "test"; }
+				@Override public CompletableFuture<ACell> invokeFuture(RequestContext c,
+						AMap<AString, ACell> m, ACell in) {
+					invoked.set(c.getJob());
+					throw new NoClassDefFoundError("missing/library/Class");
+				}
+				@Override public void invoke(Job job, RequestContext c, AMap<AString, ACell> m, ACell in) {
+					if (Strings.create("custom").equals(in)) {
+						invoked.set(job);
+						throw new NoClassDefFoundError("custom/adapter/Class");
+					}
+					super.invoke(job, c, m, in);
+				}
+			});
+			AMap<AString, ACell> meta = Maps.of(Fields.OPERATION,
+				Maps.of(Fields.ADAPTER, Strings.create("broken-module:run")));
+			for (ACell input : new ACell[] { null, Strings.create("custom") }) {
+				assertThrows(NoClassDefFoundError.class,
+					() -> eng.jobs().invokeOperation(meta, input, eng.venueContext()));
+				Job job = invoked.get();
+				assertEquals(Status.FAILED, job.getStatus());
+				assertTrue(job.future().isCompletedExceptionally());
+				assertEquals(Status.FAILED, eng.jobs().getJobData(job.getID(), eng.venueContext()).get(Fields.STATUS));
+			}
+		} finally { eng.close(); }
+	}
+
+	@Test
+	public void testCancellationDuringInvokeFutureCancelsReturnedFuture() {
+		Engine eng = Engine.createTemp(null);
+		try {
+			CompletableFuture<ACell> processing = new CompletableFuture<>();
+			eng.registerAdapter(new AAdapter() {
+				@Override public String getName() { return "cancel-during-invoke"; }
+				@Override public String getDescription() { return "test"; }
+				@Override public CompletableFuture<ACell> invokeFuture(RequestContext c,
+						AMap<AString, ACell> m, ACell in) {
+					c.getJob().cancel();
+					return processing;
+				}
+			});
+			AMap<AString, ACell> meta = Maps.of(Fields.OPERATION,
+				Maps.of(Fields.ADAPTER, Strings.create("cancel-during-invoke:run")));
+			Job job = eng.jobs().invokeOperation(meta, null, eng.venueContext());
+			assertEquals(Status.CANCELLED, job.getStatus());
+			assertTrue(processing.isCancelled());
+			assertTrue(job.future().isCompletedExceptionally());
+		} finally { eng.close(); }
+	}
+
+	@Test
+	public void testDelayedPersistenceCannotOverwriteCancellation() throws Exception {
+		Engine eng = Engine.createTemp(null);
+		eng.registerAdapter(new TestAdapter());
+		CountDownLatch entered = new CountDownLatch(1);
+		CountDownLatch release = new CountDownLatch(1);
+		try {
+			RequestContext owner = eng.venueContext();
+			AMap<AString, ACell> meta = Maps.of(Fields.OPERATION,
+				Maps.of(Fields.ADAPTER, Strings.create("test:never")));
+			Job original = eng.jobs().invokeOperation(meta, null, owner);
+			Job job = new VenueJob(original.getData(), meta, owner.getUserDID(), eng.jobs()) {
+				@Override public void onUpdate(AMap<AString, ACell> next) {
+					if (Status.PAUSED.equals(next.get(Fields.STATUS))) {
+						entered.countDown();
+						try { assertTrue(release.await(5, TimeUnit.SECONDS)); }
+						catch (InterruptedException e) { throw new AssertionError(e); }
+					}
+					super.onUpdate(next);
+				}
+			};
+			var delayed = CompletableFuture.runAsync(() -> job.setStatus(Status.PAUSED));
+			try {
+				assertTrue(entered.await(5, TimeUnit.SECONDS));
+				job.cancel();
+			} finally { release.countDown(); }
+			delayed.get(5, TimeUnit.SECONDS);
+			assertEquals(Status.CANCELLED,
+				eng.jobs().getJobData(job.getID(), owner).get(Fields.STATUS));
+		} finally { release.countDown(); eng.close(); }
+	}
 
 	private final Engine engine = TestEngine.ENGINE;
 	private AString did;
@@ -549,37 +642,18 @@ public class JobManagerTest {
 		AMap<AString, ACell> message = Maps.of(
 			Fields.MESSAGE_ID, Strings.create("concurrent-history"),
 			Fields.MESSAGE, Strings.create("hello"));
-		CountDownLatch ready = new CountDownLatch(2);
-		CountDownLatch start = new CountDownLatch(1);
-
-		CompletableFuture<Boolean> append = CompletableFuture.supplyAsync(() -> {
-			ready.countDown();
-			try {
-				start.await();
-				engine.jobs().appendToHistory(job.getID(), message, ctx);
-				return true;
-			} catch (InterruptedException e) {
-				Thread.currentThread().interrupt();
-				throw new AssertionError(e);
-			} catch (IllegalArgumentException deletedFirst) {
-				return false;
-			}
-		});
-		CompletableFuture<Boolean> delete = CompletableFuture.supplyAsync(() -> {
-			ready.countDown();
-			try {
-				start.await();
-			} catch (InterruptedException e) {
-				Thread.currentThread().interrupt();
-				throw new AssertionError(e);
-			}
-			return engine.jobs().deleteJob(job.getID(), ctx);
-		});
-		assertTrue(ready.await(5, TimeUnit.SECONDS));
-		start.countDown();
-
-		append.get(5, TimeUnit.SECONDS); // either linearisation order is valid
-		assertTrue(delete.get(5, TimeUnit.SECONDS));
+		// either linearisation order is valid for the append; the delete must win
+		List<Boolean> raced = Rendezvous.all(
+			() -> {
+				try {
+					engine.jobs().appendToHistory(job.getID(), message, ctx);
+					return true;
+				} catch (IllegalArgumentException deletedFirst) {
+					return false;
+				}
+			},
+			() -> engine.jobs().deleteJob(job.getID(), ctx));
+		assertTrue(raced.get(1));
 		assertNull(engine.getVenueState().users().get(did).getJob(job.getID()),
 			"the durable-history path must update-if-present, never recreate after delete");
 	}
@@ -610,25 +684,9 @@ public class JobManagerTest {
 	@Test
 	public void testConcurrentActiveDeleteHasExactlyOneWinner() throws Exception {
 		Job job = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), ctx);
-		CountDownLatch ready = new CountDownLatch(2);
-		CountDownLatch start = new CountDownLatch(1);
-		java.util.function.Supplier<Boolean> delete = () -> {
-			ready.countDown();
-			try {
-				start.await();
-			} catch (InterruptedException e) {
-				Thread.currentThread().interrupt();
-				throw new AssertionError(e);
-			}
-			return engine.jobs().deleteJob(job.getID(), ctx);
-		};
-		CompletableFuture<Boolean> first = CompletableFuture.supplyAsync(delete);
-		CompletableFuture<Boolean> second = CompletableFuture.supplyAsync(delete);
-		assertTrue(ready.await(5, TimeUnit.SECONDS));
-		start.countDown();
-
-		assertEquals(1, (first.get(5, TimeUnit.SECONDS) ? 1 : 0)
-			+ (second.get(5, TimeUnit.SECONDS) ? 1 : 0));
+		Callable<Boolean> delete = () -> engine.jobs().deleteJob(job.getID(), ctx);
+		assertEquals(1, Rendezvous.all(delete, delete).stream()
+			.filter(Boolean::booleanValue).count());
 		assertNull(engine.getVenueState().users().get(did).getJob(job.getID()));
 		job.cancel("test cleanup");
 	}
@@ -724,6 +782,37 @@ public class JobManagerTest {
 		AMap<AString, ACell> record = engine.jobs().getJobData(job.getID(), ctx);
 		assertEquals(Strings.create(hash), record.get(Fields.OP),
 			"an explicit pinned invocation records the hash it pinned");
+	}
+
+	@Test
+	public void testJobRecordCarriesDispatchedAdapter() {
+		Asset echo = engine.resolveAsset(Strings.create("v/test/ops/echo"), ctx);
+		Job job = engine.jobs().invokeOperation(echo.getID().toHexString(), Maps.empty(), ctx);
+		job.awaitResult(5000);
+		AMap<AString, ACell> record = engine.jobs().getJobData(job.getID(), ctx);
+		assertEquals(Strings.create("test"), record.get(Fields.ADAPTER),
+			"the adapter the venue dispatched to is on the record even when op is a bare hash (#520)");
+	}
+
+	// ========== Message delivery to an evicted job (#506) ==========
+
+	@Test
+	public void testDeliverMessageToEvictedTerminalJobReportsTerminalState() {
+		Job job = engine.jobs().invokeOperation("v/test/ops/echo", Maps.empty(), ctx);
+		job.awaitResult(5000);
+		engine.jobs().evictActive(job.getID());
+		assertNull(engine.jobs().getJobData(job.getID()), "gone from the active cache");
+		assertNotNull(engine.jobs().getJobData(job.getID(), ctx), "still readable from the lattice");
+
+		IllegalStateException ex = assertThrows(IllegalStateException.class, () ->
+			engine.jobs().deliverMessage(job.getID(),
+				Maps.of(Strings.create("content"), Strings.create("more")), ctx));
+		assertTrue(ex.getMessage().contains("terminal"), ex.getMessage());
+
+		assertThrows(IllegalArgumentException.class, () ->
+			engine.jobs().deliverMessage(Blob.parse("0x00112233445566778899aabbccddeeff"),
+				Maps.empty(), ctx),
+			"an id nobody has ever seen is still not found");
 	}
 
 	@Test

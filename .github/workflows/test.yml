@@ -19,6 +19,8 @@ concurrency:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    # A wedged test otherwise runs to GitHub's 6h job cap before it reports.
+    timeout-minutes: 30
 
     steps:
     - uses: actions/checkout@v7
@@ -70,6 +72,7 @@ jobs:
 
   java21-fallback:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
     - uses: actions/checkout@v7

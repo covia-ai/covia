@@ -2,6 +2,7 @@ package covia.adapter;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -28,6 +29,7 @@ import covia.grid.Status;
 import covia.venue.AgentState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.test.Rendezvous;
 import covia.venue.TestEngine;
 import covia.venue.User;
 import covia.venue.Users;
@@ -77,25 +79,13 @@ public class AgentConcurrencyTest {
 	public void testExclusiveCreateHasExactlyOneConcurrentWinner() throws Exception {
 		User user = engine.getVenueState().users().ensure(ALICE_DID);
 		AString id = Strings.create("exclusive-create");
-		CountDownLatch ready = new CountDownLatch(2);
-		CountDownLatch start = new CountDownLatch(1);
-		java.util.function.Function<String, AgentState> create = marker -> {
-			ready.countDown();
-			try {
-				start.await();
-			} catch (InterruptedException e) {
-				Thread.currentThread().interrupt();
-				throw new AssertionError(e);
-			}
-			return user.createAgent(id, Maps.of("marker", marker), null);
-		};
-		CompletableFuture<AgentState> first = CompletableFuture.supplyAsync(() -> create.apply("first"));
-		CompletableFuture<AgentState> second = CompletableFuture.supplyAsync(() -> create.apply("second"));
-		assertTrue(ready.await(5, TimeUnit.SECONDS));
-		start.countDown();
-
-		AgentState a = first.get(5, TimeUnit.SECONDS);
-		AgentState b = second.get(5, TimeUnit.SECONDS);
+		java.util.function.Function<String, AgentState> create = marker ->
+			user.createAgent(id, Maps.of("marker", marker), null);
+		List<AgentState> raced = Rendezvous.all(
+			() -> create.apply("first"),
+			() -> create.apply("second"));
+		AgentState a = raced.get(0);
+		AgentState b = raced.get(1);
 		assertEquals(1, (a != null ? 1 : 0) + (b != null ? 1 : 0));
 		assertEquals(a != null ? Strings.create("first") : Strings.create("second"),
 			user.agent(id).getConfig().get(Strings.create("marker")));
@@ -105,28 +95,16 @@ public class AgentConcurrencyTest {
 	public void testExclusiveForkHasExactlyOneConcurrentWinner() throws Exception {
 		User user = engine.getVenueState().users().ensure(ALICE_DID);
 		AString id = Strings.create("exclusive-fork");
-		CountDownLatch ready = new CountDownLatch(2);
-		CountDownLatch start = new CountDownLatch(1);
-		java.util.function.Function<String, AgentState> fork = marker -> {
-			ready.countDown();
-			try {
-				start.await();
-			} catch (InterruptedException e) {
-				Thread.currentThread().interrupt();
-				throw new AssertionError(e);
-			}
-			return user.forkAgent(id,
+		java.util.function.Function<String, AgentState> fork = marker ->
+			user.forkAgent(id,
 				Maps.of("marker", marker),
 				Maps.of("stateMarker", marker),
 				Vectors.of(Maps.of("timelineMarker", marker)));
-		};
-		CompletableFuture<AgentState> first = CompletableFuture.supplyAsync(() -> fork.apply("first"));
-		CompletableFuture<AgentState> second = CompletableFuture.supplyAsync(() -> fork.apply("second"));
-		assertTrue(ready.await(5, TimeUnit.SECONDS));
-		start.countDown();
-
-		AgentState a = first.get(5, TimeUnit.SECONDS);
-		AgentState b = second.get(5, TimeUnit.SECONDS);
+		List<AgentState> raced = Rendezvous.all(
+			() -> fork.apply("first"),
+			() -> fork.apply("second"));
+		AgentState a = raced.get(0);
+		AgentState b = raced.get(1);
 		assertEquals(1, (a != null ? 1 : 0) + (b != null ? 1 : 0));
 		AString winner = Strings.create(a != null ? "first" : "second");
 		AgentState persisted = user.agent(id);
@@ -142,28 +120,14 @@ public class AgentConcurrencyTest {
 		Blob sid = Blob.fromHex("99990001999900019999000199990001");
 		Blob firstTask = Blob.fromHex("1001");
 		Blob secondTask = Blob.fromHex("1002");
-		CountDownLatch ready = new CountDownLatch(2);
-		CountDownLatch start = new CountDownLatch(1);
-		java.util.function.BiFunction<Blob, String, AgentState.SessionIntake> intake = (task, marker) -> {
-			ready.countDown();
-			try {
-				start.await();
-			} catch (InterruptedException e) {
-				Thread.currentThread().interrupt();
-				throw new AssertionError(e);
-			}
-			return agent.addTaskInSession(sid, ALICE_DID,
+		java.util.function.BiFunction<Blob, String, AgentState.SessionIntake> intake = (task, marker) ->
+			agent.addTaskInSession(sid, ALICE_DID,
 				Maps.of("load", marker), task, Maps.of("marker", marker));
-		};
-		CompletableFuture<AgentState.SessionIntake> first = CompletableFuture.supplyAsync(
-			() -> intake.apply(firstTask, "first"));
-		CompletableFuture<AgentState.SessionIntake> second = CompletableFuture.supplyAsync(
+		List<AgentState.SessionIntake> raced = Rendezvous.all(
+			() -> intake.apply(firstTask, "first"),
 			() -> intake.apply(secondTask, "second"));
-		assertTrue(ready.await(5, TimeUnit.SECONDS));
-		start.countDown();
-
-		AgentState.SessionIntake a = first.get(5, TimeUnit.SECONDS);
-		AgentState.SessionIntake b = second.get(5, TimeUnit.SECONDS);
+		AgentState.SessionIntake a = raced.get(0);
+		AgentState.SessionIntake b = raced.get(1);
 		assertEquals(1, (a == AgentState.SessionIntake.APPLIED ? 1 : 0)
 			+ (b == AgentState.SessionIntake.APPLIED ? 1 : 0));
 		assertEquals(1, (a == AgentState.SessionIntake.LOADS_ON_EXISTING ? 1 : 0)

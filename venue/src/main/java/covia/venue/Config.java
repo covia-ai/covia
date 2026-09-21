@@ -348,9 +348,11 @@ public class Config {
 	 * Key for the "Fix MCP Strings" workaround flag (top-level, default true).
 	 * Some MCP clients serialise nested object/array arguments as JSON strings
 	 * instead of the structured types declared in the tool schema. When true,
-	 * the venue defensively re-parses such string values into their declared
-	 * shape at the MCP boundary and at {@code grid:run}/{@code grid:invoke}
-	 * dispatch. Set to false to disable the workaround.
+	 * the venue re-parses such string values into their declared shape at the
+	 * MCP boundary — only for arguments whose schema admits nothing but an
+	 * object or array. Operation inputs themselves are never coerced: a Covia
+	 * operation may take any JSON value, so a string reaching one is a valid
+	 * input. Set to false to disable the workaround.
 	 */
 	public static final AString FIX_MCP_STRINGS = Strings.intern("fixMcpStrings");
 

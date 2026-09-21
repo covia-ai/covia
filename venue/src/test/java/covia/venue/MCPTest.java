@@ -444,8 +444,11 @@ public class MCPTest {
 				AMap<AString, ACell> inputSchema = (AMap<AString, ACell>) tool.get(Fields.INPUT_SCHEMA);
 				assertNotNull(inputSchema, "Tool " + toolName + " should have inputSchema");
 				// MCP tool inputs are always objects. Declared schemas pass
-				// through to clients as written (no silent type-stamping), so
-				// the authoring rule is enforced here instead.
+				// through to clients as written (no silent type-stamping). A
+				// non-object operation input is legal for Covia and is still
+				// advertised best-effort with an install warning
+				// (AAdapterInstallTest); the shipped library itself must stay
+				// object-typed so every built-in tool is well-formed.
 				assertEquals(Fields.OBJECT, inputSchema.get(Fields.TYPE),
 					"Tool " + toolName + " must declare an object input schema");
 				assertSchemaValid(inputSchema, toolName + ".inputSchema", VALID_TYPES, NON_SCHEMA_KEYS);
