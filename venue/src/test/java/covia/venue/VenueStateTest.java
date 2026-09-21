@@ -244,35 +244,12 @@ public class VenueStateTest {
 			record -> record.assoc(marker, Strings.create("present"))));
 		assertEquals(Strings.create("present"), user.getJob(jobID).get(marker));
 
-		java.util.concurrent.CountDownLatch ready = new java.util.concurrent.CountDownLatch(2);
-		java.util.concurrent.CountDownLatch start = new java.util.concurrent.CountDownLatch(1);
-		java.util.concurrent.CompletableFuture<Boolean> update =
-			java.util.concurrent.CompletableFuture.supplyAsync(() -> {
-				ready.countDown();
-				try {
-					start.await();
-				} catch (InterruptedException e) {
-					Thread.currentThread().interrupt();
-					throw new AssertionError(e);
-				}
-				return user.updateJobIfPresent(jobID,
-					record -> record.assoc(marker, Strings.create("raced")));
-			});
-		java.util.concurrent.CompletableFuture<Boolean> remove =
-			java.util.concurrent.CompletableFuture.supplyAsync(() -> {
-				ready.countDown();
-				try {
-					start.await();
-				} catch (InterruptedException e) {
-					Thread.currentThread().interrupt();
-					throw new AssertionError(e);
-				}
-				return user.removeJob(jobID);
-			});
-		assertTrue(ready.await(5, java.util.concurrent.TimeUnit.SECONDS));
-		start.countDown();
-		update.get(5, java.util.concurrent.TimeUnit.SECONDS);
-		assertTrue(remove.get(5, java.util.concurrent.TimeUnit.SECONDS));
+		// either linearisation order is valid for the update; the delete must win
+		java.util.List<Boolean> raced = covia.test.Rendezvous.all(
+			() -> user.updateJobIfPresent(jobID,
+				record -> record.assoc(marker, Strings.create("raced"))),
+			() -> user.removeJob(jobID));
+		assertTrue(raced.get(1));
 
 		assertNull(user.getJob(jobID),
 			"delete and conditional update must linearise without resurrection");

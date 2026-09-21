@@ -7,9 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URI;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
@@ -104,27 +102,15 @@ public class NamedUserAuthTest {
 		auth.putUser(id, Maps.of(
 			Fields.DID, did,
 			retainedField, Strings.create("keep")));
-		CountDownLatch ready = new CountDownLatch(2);
-		CountDownLatch start = new CountDownLatch(1);
 		AString firstField = Strings.create("firstField");
 		AString secondField = Strings.create("secondField");
-		java.util.function.BiConsumer<AString, AString> update = (field, value) -> {
-			ready.countDown();
-			try {
-				start.await();
-			} catch (InterruptedException e) {
-				Thread.currentThread().interrupt();
-				throw new AssertionError(e);
-			}
+		java.util.function.BiFunction<AString, AString, Void> update = (field, value) -> {
 			auth.updateUser(id, current -> current.assoc(field, value));
+			return null;
 		};
-		CompletableFuture<Void> first = CompletableFuture.runAsync(
-			() -> update.accept(firstField, Strings.create("first")));
-		CompletableFuture<Void> second = CompletableFuture.runAsync(
-			() -> update.accept(secondField, Strings.create("second")));
-		assertTrue(ready.await(5, TimeUnit.SECONDS));
-		start.countDown();
-		CompletableFuture.allOf(first, second).get(5, TimeUnit.SECONDS);
+		covia.test.Rendezvous.all(
+			() -> update.apply(firstField, Strings.create("first")),
+			() -> update.apply(secondField, Strings.create("second")));
 
 		AMap<AString, ACell> record = auth.getUser(id);
 		assertEquals(did, record.get(Fields.DID));

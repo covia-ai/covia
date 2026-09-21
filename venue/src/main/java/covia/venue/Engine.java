@@ -127,6 +127,10 @@ public class Engine {
 
 	/** Job lifecycle manager (submission, queries, persistence, recovery) */
 	private final JobManager jobManager;
+	private final RemoteJobs remoteJobs = new RemoteJobs(this);
+
+	/** Bounded network attempts observing long-lived remote Jobs. */
+	public RemoteJobs remoteJobs() { return remoteJobs; }
 
 	/** MainVenue process control; absent for embedded and test engines. */
 	private volatile VenueProcess processControl;
@@ -737,6 +741,7 @@ public class Engine {
 	/** Releases resources in the reverse of {@link #start()} acquisition order. */
 	private void closeStartedResources(boolean flush, Throwable startupFailure) {
 		jobManager.closeAdmission();
+		remoteJobs.close();
 
 		// Release adapter-owned native/session resources before module classloaders.
 		for (AAdapter adapter : adapters.values()) {
@@ -910,6 +915,7 @@ public class Engine {
 		venue.registerAdapter(new LLMAgentAdapter());
 		venue.registerAdapter(new covia.adapter.agent.GoalTreeAdapter());
 		venue.registerAdapter(new covia.adapter.HITLAdapter());
+		venue.registerAdapter(new covia.adapter.ProjectAdapter());
 		venue.registerAdapter(new covia.adapter.VenueAdapter());
 		// Load operator-declared venue modules (external adapter jars) BEFORE
 		// materialisation, so module ops enter the catalog with everyone
@@ -1369,7 +1375,7 @@ public class Engine {
 	 */
 	public Hash storeAsset(AString meta, ACell content) {
 		Hash id = venueState.assets().store(meta, content);
-		log.info("Stored asset {} : {}", id, RT.getIn(JSON.parse(meta), Fields.NAME));
+		log.debug("Stored asset {} : {}", id, RT.getIn(JSON.parse(meta), Fields.NAME));
 		return id;
 	}
 
@@ -2560,7 +2566,7 @@ public class Engine {
 
 		// Store the content using the verified hash
 		contentStorage.store(actualHash, new ByteArrayInputStream(data));
-		log.info("Stored content with SHA256: "+actualHash);
+		log.debug("Stored content with SHA256: "+actualHash);
 		return actualHash;
 	}
 

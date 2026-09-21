@@ -34,6 +34,7 @@ import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.RequestContext;
+import covia.venue.RemoteJobs;
 import covia.venue.api.A2ACodec;
 
 /**
@@ -84,14 +85,6 @@ public class A2AAdapter extends AAdapter {
 	public static Hash GET_TASK_OPERATION;
 	public static Hash CANCEL_OPERATION;
 	public static Hash SEND_OPERATION;
-
-	/** Poll interval for mirroring remote Task state into the local Job. */
-	static final Duration POLL_INTERVAL = Duration.ofMillis(500);
-
-	/** Upper bound on total mirror lifetime — defends against a runaway remote.
-	 *  Covia jobs can be long-lived but a misbehaving remote peer that never
-	 *  terminates shouldn't hold a poller thread forever. */
-	static final Duration POLL_MAX_LIFETIME = Duration.ofMinutes(30);
 
 	private final HttpClient httpClient;
 
@@ -182,8 +175,8 @@ public class A2AAdapter extends AAdapter {
 
 	// ==================== Imported A2A agent assets ====================
 
-	/** Resolved transport authentication. The secret value exists only in
-	 * process memory; imported assets persist the SecretStore reference. */
+	/** Resolved transport authentication. Imported assets carry references;
+	 * durable delegations save this authority encrypted for recovery. */
 	private record RequestAuth(String location, String name, String value) {
 		static RequestAuth bearer(String value) {
 			return value == null ? null : new RequestAuth("header", "Authorization", "Bearer " + value);
@@ -670,27 +663,42 @@ public class A2AAdapter extends AAdapter {
 				.taskId(continuationTaskId)
 				.build();
 
-		MessageSendParams params = new MessageSendParams(outbound, null, null);
+		MessageSendParams params = new MessageSendParams(outbound,
+			new org.a2aproject.sdk.spec.MessageSendConfiguration(null, null, null, true), null);
 		Map<String, Object> envelope = rpcEnvelope(A2AMethods.SEND_MESSAGE_METHOD, params);
 
 		job.setStatus(Status.STARTED);
 
 		HttpRequest req = postEnvelope(rpcUrl, envelope, auth);
+		AMap<AString, ACell> credentials = auth == null ? Maps.empty() : Maps.of(
+			"location", auth.location(), "name", auth.name(), "value", auth.value());
+		engine.remoteJobs().prepare(job, "a2a", rpcUrl, credentials);
+		if (job.isFinished()) return;
 		httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofString())
 				.whenComplete((resp, err) -> {
+					engine.remoteJobs().received(job, () -> {
 					if (err != null) {
 						Throwable cause = (err instanceof java.util.concurrent.CompletionException && err.getCause() != null)
 								? err.getCause() : err;
-						job.fail("SendMessage transport failed: " + describeFailure(cause)
-							+ "; verify 'url' and retry");
+						engine.remoteJobs().submissionUnknown(job, cause);
 						return;
 					}
-					handleSendResponse(job, rpcUrl, auth, resp);
+					try { handleSendResponse(job, rpcUrl, auth, resp); }
+					catch (RuntimeException | Error failure) { engine.remoteJobs().submissionUnknown(job, failure); }
+					finally {
+						AString id = RT.ensureString(RemoteJobs.descriptor(job).get(RemoteJobs.REMOTE_ID));
+						if (id != null && !job.isFinished()) startPoller(job, rpcUrl, id.toString(), auth);
+					}
+					});
 				});
 	}
 
 	private void handleSendResponse(Job job, String rpcUrl, RequestAuth auth, HttpResponse<String> resp) {
 		if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
+			if (resp.statusCode() >= 500 || resp.statusCode() == 408) {
+				engine.remoteJobs().submissionUnknown(job, new IllegalStateException("Remote send unavailable"));
+				return;
+			}
 			job.fail("Remote SendMessage failed: HTTP " + resp.statusCode() + ": "
 				+ conciseDetail(resp.body(), 512));
 			return;
@@ -699,7 +707,7 @@ public class A2AAdapter extends AAdapter {
 		try {
 			envReply = JsonUtil.OBJECT_MAPPER.fromJson(resp.body(), Map.class);
 		} catch (Exception e) {
-			job.fail("Remote SendMessage returned invalid JSON: " + describeFailure(e));
+			engine.remoteJobs().submissionUnknown(job, e);
 			return;
 		}
 		Object error = envReply.get("error");
@@ -709,7 +717,7 @@ public class A2AAdapter extends AAdapter {
 		}
 		Object result = envReply.get("result");
 		if (result == null) {
-			job.fail("Remote SendMessage response has neither result nor error");
+			engine.remoteJobs().submissionUnknown(job, new IllegalArgumentException("Missing remote result"));
 			return;
 		}
 
@@ -721,17 +729,22 @@ public class A2AAdapter extends AAdapter {
 		ACell taskCell;
 		try {
 			String resultJson = JsonUtil.OBJECT_MAPPER.toJson(result);
-			remoteTask = JsonUtil.OBJECT_MAPPER.fromJson(resultJson, Task.class);
+			AMap<AString, ACell> resultMap = RT.ensureMap(JSON.parse(resultJson));
+			if (resultMap != null && resultMap.get(Strings.intern("message")) != null) {
+				job.completeWith(resultMap.get(Strings.intern("message")), data -> RemoteJobs.observed(data, Status.COMPLETE));
+				return;
+			}
 			taskCell = unwrapKind(JSON.parse(resultJson), "task");
+			remoteTask = JsonUtil.OBJECT_MAPPER.fromJson(JSON.print(taskCell).toString(), Task.class);
 		} catch (Exception e) {
-			job.fail("Remote SendMessage result is not a valid Task: " + describeFailure(e));
+			engine.remoteJobs().submissionUnknown(job, e);
 			return;
 		}
 		ACell rawResultCell = taskCell; // renamed, same semantics below
 
 		String remoteTaskId = remoteTask.id();
-		AMap<AString, ACell> current = job.getData();
-		job.updateData(current.assoc(Fields.REMOTE_TASK_ID, Strings.create(remoteTaskId)));
+		engine.remoteJobs().accepted(job, remoteTaskId);
+		job.update(current -> current.assoc(Fields.REMOTE_TASK_ID, Strings.create(remoteTaskId)));
 		job.setCancelHook(() -> fireAndForgetCancel(rpcUrl, remoteTaskId, auth));
 
 		if (remoteTask.status().state().isFinal()) {
@@ -740,55 +753,45 @@ public class A2AAdapter extends AAdapter {
 		}
 		if (remoteTask.status().state().isInterrupted()) {
 			applyInterruptedState(job, remoteTask, rawResultCell);
-			return;
 		}
-		startPoller(job, rpcUrl, remoteTaskId, auth);
 	}
 
 	/**
-	 * Virtual-thread poller that mirrors the remote Task's state onto the
-	 * local Job. Exits when the Job is finished locally (e.g. cancelled) or
-	 * the remote reaches a terminal/interrupted state.
+	 * Reconstructible observation with bounded requests and no task lifetime deadline.
 	 */
 	private void startPoller(Job job, String rpcUrl, String remoteTaskId, RequestAuth auth) {
-		Thread.ofVirtual().name("a2a-mirror-" + remoteTaskId).start(() -> {
-			long deadline = System.currentTimeMillis() + POLL_MAX_LIFETIME.toMillis();
-			while (!job.isFinished() && System.currentTimeMillis() < deadline) {
-				try {
-					Thread.sleep(POLL_INTERVAL.toMillis());
-				} catch (InterruptedException ie) {
-					Thread.currentThread().interrupt();
-					return;
-				}
-				if (job.isFinished()) return;
-
-				PollResult p;
-				try {
-					p = pollRemote(rpcUrl, remoteTaskId, auth);
-				} catch (Exception e) {
-					log.warn("Mirror poll failed for remote task {}: {}", remoteTaskId, e.getMessage());
-					continue; // transient errors don't fail the Job
-				}
-
-				if (p.task().status().state().isFinal()) {
-					finishJobWithRemoteTask(job, p.task(), p.rawResultCell());
-					return;
-				}
-				if (p.task().status().state().isInterrupted()) {
-					applyInterruptedState(job, p.task(), p.rawResultCell());
-					return;
-				}
-				// Non-terminal, non-interrupted: reflect STARTED if not already.
-				if (!Status.STARTED.equals(job.getStatus())) {
-					job.setStatus(Status.STARTED);
-				}
-			}
-			if (!job.isFinished()) {
-				job.fail("A2A mirror timed out after " + POLL_MAX_LIFETIME);
-			}
+		engine.remoteJobs().observe(job, () -> {
+			try { return CompletableFuture.completedFuture(RT.ensureMap(pollRemote(rpcUrl, remoteTaskId, auth).rawResultCell())); }
+			catch (Exception e) { return CompletableFuture.failedFuture(e); }
+		}, snapshot -> {
+			Task task = JsonUtil.OBJECT_MAPPER.fromJson(JSON.print(snapshot).toString(), Task.class);
+			if (!remoteTaskId.equals(task.id())) throw new IllegalArgumentException("Remote task ID mismatch");
+			if (task.status().state().isFinal()) finishJobWithRemoteTask(job, task, snapshot);
+			else applyInterruptedState(job, task, snapshot);
 		});
 	}
 
+	@Override public void recoverJob(Job job) {
+		AMap<AString, ACell> record = RemoteJobs.descriptor(job);
+		if (record == null) { super.recoverJob(job); return; }
+		AString id = RT.ensureString(record.get(RemoteJobs.REMOTE_ID));
+		if (id == null) { engine.remoteJobs().submissionUnknown(job, null); return; }
+		try {
+			String target = RT.ensureString(record.get(RemoteJobs.TARGET)).toString();
+			AMap<AString, ACell> saved = engine.remoteJobs().credentials(job);
+			RequestAuth auth = saved.get(Strings.intern("location")) == null ? null : new RequestAuth(
+				RT.ensureString(saved.get(Strings.intern("location"))).toString(),
+				RT.ensureString(saved.get(Fields.NAME)).toString(),
+				RT.ensureString(saved.get(Fields.VALUE)).toString());
+			job.setCancelHook(() -> fireAndForgetCancel(target, id.toString(), auth));
+			startPoller(job, target, id.toString(), auth);
+		} catch (RuntimeException e) { engine.remoteJobs().unavailable(job, e); }
+	}
+
+	@Override public void suspendJob(Job job) {
+		if (RemoteJobs.descriptor(job) != null) engine.remoteJobs().suspend(job);
+		else super.suspendJob(job);
+	}
 	/**
 	 * Unwrap a StreamingEventKind discriminator ({@code {"task": {...}}} or
 	 * {@code {"message": {...}}}) to the inner map. Returns the cell unchanged
@@ -815,8 +818,7 @@ public class A2AAdapter extends AAdapter {
 		HttpRequest req = postEnvelope(rpcUrl, envelope, auth);
 		HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
 		if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
-			throw new RuntimeException("Remote getTask failed: HTTP " + resp.statusCode()
-				+ ": " + conciseDetail(resp.body(), 512));
+			throw new covia.exception.ResponseException("Remote getTask failed: HTTP " + resp.statusCode(), resp);
 		}
 		@SuppressWarnings("rawtypes")
 		Map envReply = JsonUtil.OBJECT_MAPPER.fromJson(resp.body(), Map.class);
@@ -825,31 +827,33 @@ public class A2AAdapter extends AAdapter {
 		Object result = envReply.get("result");
 		if (result == null) throw new RuntimeException("Remote getTask response has neither result nor error");
 		String resultJson = JsonUtil.OBJECT_MAPPER.toJson(result);
-		Task task = JsonUtil.OBJECT_MAPPER.fromJson(resultJson, Task.class);
 		ACell raw = unwrapKind(JSON.parse(resultJson), "task");
+		Task task = JsonUtil.OBJECT_MAPPER.fromJson(JSON.print(raw).toString(), Task.class);
 		return new PollResult(task, raw);
 	}
 
 	private void finishJobWithRemoteTask(Job job, Task remote, ACell rawTaskCell) {
+		AString coviaStatus = A2ACodec.fromTaskState(remote.status().state());
 		if (remote.status().state() == org.a2aproject.sdk.spec.TaskState.TASK_STATE_COMPLETED) {
-			job.completeWith(rawTaskCell);
+			job.completeWith(rawTaskCell, data -> RemoteJobs.observed(data, coviaStatus));
 		} else {
 			// Failed / cancelled / rejected — terminal non-success. Surface the
 			// remote state on the local Job with the task as output.
-			AMap<AString, ACell> current = job.getData();
-			AString coviaStatus = A2ACodec.fromTaskState(remote.status().state());
-			job.updateData(current
+			job.update(current -> RemoteJobs.observed(current, coviaStatus)
 					.assoc(Fields.STATUS, coviaStatus)
+					.assoc(Fields.ERROR, Strings.create("Remote task " + coviaStatus))
 					.assoc(Fields.OUTPUT, rawTaskCell));
 		}
 	}
 
 	private void applyInterruptedState(Job job, Task remote, ACell rawTaskCell) {
 		AString coviaStatus = A2ACodec.fromTaskState(remote.status().state());
-		AMap<AString, ACell> current = job.getData();
-		job.updateData(current
-				.assoc(Fields.STATUS, coviaStatus)
-				.assoc(Fields.OUTPUT, rawTaskCell));
+		AString localStatus = Status.PENDING.equals(coviaStatus) ? Status.STARTED : coviaStatus;
+		job.update(current -> {
+			AMap<AString, ACell> next = RemoteJobs.observed(current, coviaStatus)
+				.assoc(Fields.STATUS, localStatus).assoc(Fields.OUTPUT, rawTaskCell);
+			return next.equals(current) ? null : next;
+		});
 	}
 
 	private void fireAndForgetCancel(String rpcUrl, String remoteTaskId, RequestAuth auth) {

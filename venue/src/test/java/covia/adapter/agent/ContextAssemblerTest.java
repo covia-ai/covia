@@ -1239,7 +1239,9 @@ public class ContextAssemblerTest {
 		ToolPalette.Palette p2 = ToolPalette.resolve(engine, ctx, config, java.util.Set.of());
 		assertEquals(p1.tools(), p2.tools());
 		assertEquals(p1.toolIndex(), p2.toolIndex());
-		assertEquals(2, p1.toolIndex().count());
+		assertEquals(3, p1.toolIndex().count());
+		assertTrue(p1.toolIndex().containsKey(Strings.create("covia_inspect")),
+			"inspect is the discovery read the read/list descriptions point at (#514)");
 		assertTrue(p1.toolIndex().containsKey(Strings.create("covia_read")));
 		assertTrue(p1.toolIndex().containsKey(Strings.create("covia_list")),
 			"the default pack stays minimal and read-only — add tools via skills instead");
@@ -1275,9 +1277,9 @@ public class ContextAssemblerTest {
 			Strings.intern("tools"), Vectors.of((ACell) Strings.create("v/ops/covia/read"),
 				(ACell) Strings.create("v/ops/covia/write"), (ACell) Strings.create("skip_me")));
 		ToolPalette.Palette p = ToolPalette.resolve(engine, ctx, config, java.util.Set.of("skip_me"));
-		assertEquals(java.util.Set.of("covia_read", "covia_list", "covia_write"), ToolPalette.names(p.tools()));
+		assertEquals(java.util.Set.of("covia_inspect", "covia_read", "covia_list", "covia_write"), ToolPalette.names(p.tools()));
 		assertEquals(0, p.unavailable().count(), "a skipped harness name is not unavailable");
-		assertEquals(3, p.provenance().count());
+		assertEquals(4, p.provenance().count());
 		assertEquals("default", RT.getIn(
 			p.toolIndex().get(Strings.create("covia_read")), Fields.SOURCE).toString());
 		assertEquals("v/ops/covia/write", RT.getIn(

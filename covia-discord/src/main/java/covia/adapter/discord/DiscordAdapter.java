@@ -63,7 +63,9 @@ public class DiscordAdapter extends AAdapter implements AutoCloseable {
 		installAsset("discord/create","/adapters/discord/create.json");
 		installAsset("discord/delete","/adapters/discord/delete.json");
 		installAsset("discord/bots","/adapters/discord/bots.json");
-		installSkill("adapters/discord", "/skills/discord.json");
+		// Module-owned path: the venue jar ships its own /skills/discord.json (the
+		// Connections provider skill), so a shared classpath must not collide (#510).
+		installSkill("adapters/discord", "/adapters/discord/skill.json");
 		installAgentTemplate("discord","/agent-templates/discord.json");
 	}
 

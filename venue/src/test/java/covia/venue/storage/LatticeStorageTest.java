@@ -12,9 +12,7 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.Callable;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -32,6 +30,7 @@ import convex.lattice.cursor.ACursor;
 import convex.lattice.cursor.Cursors;
 import covia.grid.AContent;
 import covia.lattice.Covia;
+import covia.test.Rendezvous;
 
 /**
  * Tests for LatticeStorage - cursor-backed content-addressed storage extending
@@ -135,26 +134,9 @@ public class LatticeStorageTest {
 		Hash hash = Hashing.sha256(data);
 		storage.store(hash, new ByteArrayInputStream(data));
 		int workers = 8;
-		CountDownLatch ready = new CountDownLatch(workers);
-		CountDownLatch start = new CountDownLatch(1);
-		ArrayList<CompletableFuture<Boolean>> deletes = new ArrayList<>();
-		for (int i = 0; i < workers; i++) {
-			deletes.add(CompletableFuture.supplyAsync(() -> {
-				ready.countDown();
-				try {
-					start.await();
-					return storage.delete(hash);
-				} catch (Exception e) {
-					throw new RuntimeException(e);
-				}
-			}));
-		}
-		assertTrue(ready.await(5, TimeUnit.SECONDS));
-		start.countDown();
-		long winners = 0;
-		for (CompletableFuture<Boolean> deletion : deletes) {
-			if (deletion.get(5, TimeUnit.SECONDS)) winners++;
-		}
+		ArrayList<Callable<Boolean>> deletes = new ArrayList<>();
+		for (int i = 0; i < workers; i++) deletes.add(() -> storage.delete(hash));
+		long winners = Rendezvous.all(deletes).stream().filter(Boolean::booleanValue).count();
 		assertEquals(1, winners);
 		assertFalse(storage.exists(hash));
 	}

@@ -1,6 +1,6 @@
 # Agent Sessions
 
-Sessions are the primitive that sits between *agent* (long-lived identity) and *transition* (single compute step). A session is a **scoped interaction between parties with its own history and context, jointly owned by the participants** — a communication channel. Whatever the parties build together (documents, deliverables, long-lived work state) lives elsewhere — see [PROJECTS.md](./PROJECTS.md) for that layer.
+Sessions are the primitive that sits between *agent* (long-lived identity) and *transition* (single compute step). A session is a **scoped interaction between parties with its own history and context, jointly owned by the participants** — a communication channel. Whatever the parties build together (documents, deliverables, long-lived work state) lives elsewhere — see [PROJECT.md](./PROJECT.md) for that layer.
 
 Sessions carry:
 
@@ -32,7 +32,7 @@ A session is *just data* — the framework doesn't enforce a particular shape fo
 - Not a job (jobs are per-request execution units; sessions span many jobs)
 - Not a task (tasks are discrete actionable items, often within a session)
 - Not a transition (transitions are ephemeral compute steps within a session)
-- Not a project (projects are domain state — documents, plans, deliverables — that sessions may reference but don't own; see [PROJECTS.md](./PROJECTS.md))
+- Not a project (projects are domain state — a tree of briefs, plans and deliverables — that sessions may reference but don't own; see [PROJECT.md](./PROJECT.md))
 - Not a memory store (cross-session facts/decisions belong in a separate memory layer — §9.2)
 
 ---
@@ -51,7 +51,7 @@ All variations of the same primitive:
 
 The same agent can run many sessions concurrently — a counterparty may hold several concurrent sessions with the same agent, distinguished by id and title.
 
-Long-lived work (projects, plans, deliverables) that persists beyond any one conversation is not modelled as a session — see [PROJECTS.md](./PROJECTS.md).
+Long-lived work (projects, plans, deliverables) that persists beyond any one conversation is not modelled as a session — see [PROJECT.md](./PROJECT.md).
 
 ---
 
@@ -526,5 +526,5 @@ A single session with multiple counterparties (e.g. a group chat). If supported,
 - [AGENT_LOOP.md](./AGENT_LOOP.md) — agent transition model
 - [GOAL_TREE.md](./GOAL_TREE.md) — frame stack abstraction; session-scoped when `persistent: true`
 - [LATTICE_CONTEXT.md](./LATTICE_CONTEXT.md) — context loading
-- [PROJECTS.md](./PROJECTS.md) — long-lived work state that sessions reference but don't own
+- [PROJECT.md](./PROJECT.md) — long-lived work state that sessions reference but don't own
 - [SCHEDULER.md](./SCHEDULER.md) — wake semantics and backoff policy
