@@ -271,6 +271,31 @@ public class CoviaAdapterTest {
 	}
 
 	@Test
+	public void testWriteAndAppendKeepAJsonLookingStringAsAString() {
+		// A Covia operation's input may be any JSON value, and 'value' declares
+		// no type, so a string is a valid value even when it looks like JSON.
+		// It is stored verbatim: string-to-object parsing is allowed only at
+		// tool-call boundaries whose schema admits nothing but an object (#508).
+		// Repairing it here would make the same call store different types
+		// depending on how the caller happened to encode it (#89).
+		AString jsonish = Strings.create("{\"a\": 1, \"b\": [2, 3]}");
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/verbatim/map-like", Fields.VALUE, jsonish), ALICE)
+			.awaitResult(5000);
+		ACell read = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, "w/verbatim/map-like"), ALICE).awaitResult(5000);
+		assertEquals(jsonish, RT.getIn(read, "value"), "a JSON-looking string is stored as the string it is");
+
+		AString arrayish = Strings.create("[1, 2]");
+		engine.jobs().invokeOperation("v/ops/covia/append",
+			Maps.of(Fields.PATH, "w/verbatim/log", Fields.VALUE, arrayish), ALICE)
+			.awaitResult(5000);
+		ACell log = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, "w/verbatim/log"), ALICE).awaitResult(5000);
+		assertEquals(Vectors.of(arrayish), RT.getIn(log, "value"), "append stores the element verbatim");
+	}
+
+	@Test
 	public void testWriteExplicitNullStoresPresentNull() {
 		// An explicit null is a value, not a delete: it stores a present null,
 		// distinct from an absent path. covia:read reports exists:true, value:null.
@@ -727,43 +752,13 @@ public class CoviaAdapterTest {
 
 	// ========== covia:write — JSON-string coercion ==========
 	//
-	// LLMs frequently call covia:write with `value` as a JSON-encoded string
-	// rather than a structured map/array. The adapter must parse such strings
-	// so the audit trail contains queryable structures, not opaque blobs.
-
-	@Test
-	public void testWriteCoercesJsonObjectString() {
-		String json = "{\"vendor_id\":\"V-1042\",\"status\":\"ACTIVE\",\"score\":0.95}";
-		engine.jobs().invokeOperation("v/ops/covia/write",
-			Maps.of(Fields.PATH, "w/enrichments/INV-001",
-			        Fields.VALUE, Strings.create(json)),
-			ALICE).awaitResult(5000);
-
-		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
-			Maps.of(Fields.PATH, "w/enrichments/INV-001"), ALICE);
-		ACell readResult = readJob.awaitResult(5000);
-		ACell value = RT.getIn(readResult, "value");
-		assertNotNull(value, "value should be present");
-		// If parsing worked, this is a structured map and we can navigate into it
-		assertEquals(Strings.create("V-1042"), RT.getIn(value, "vendor_id"));
-		assertEquals(Strings.create("ACTIVE"), RT.getIn(value, "status"));
-	}
-
-	@Test
-	public void testWriteCoercesJsonArrayString() {
-		String json = "[\"a\",\"b\",\"c\"]";
-		engine.jobs().invokeOperation("v/ops/covia/write",
-			Maps.of(Fields.PATH, "w/tags", Fields.VALUE, Strings.create(json)),
-			ALICE).awaitResult(5000);
-
-		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
-			Maps.of(Fields.PATH, "w/tags"), ALICE);
-		ACell readResult = readJob.awaitResult(5000);
-		AVector<ACell> value = RT.getIn(readResult, "value");
-		assertNotNull(value);
-		assertEquals(3, value.count());
-		assertEquals(Strings.create("b"), value.get(1));
-	}
+	// `value` declares no type, so any JSON value is valid and is stored exactly
+	// as supplied. A string that looks like JSON is still a string: the adapter
+	// used to parse such strings into structures "for the audit trail", which
+	// made the stored type depend on how the caller happened to encode the
+	// call (#89). Structure comes from structured input; string-to-object
+	// parsing lives only at tool-call boundaries whose schema admits nothing
+	// but an object (#508). See testWriteAndAppendKeepAJsonLookingStringAsAString.
 
 	@Test
 	public void testWritePlainStringNotCoerced() {
@@ -790,22 +785,6 @@ public class CoviaAdapterTest {
 			Maps.of(Fields.PATH, "w/note2"), ALICE);
 		assertEquals(Strings.create(malformed),
 			RT.getIn(readJob.awaitResult(5000), "value"));
-	}
-
-	@Test
-	public void testAppendCoercesJsonObjectString() {
-		String json = "{\"event\":\"validated\",\"by\":\"Bob\"}";
-		engine.jobs().invokeOperation("v/ops/covia/append",
-			Maps.of(Fields.PATH, "w/audit", Fields.VALUE, Strings.create(json)),
-			ALICE).awaitResult(5000);
-
-		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
-			Maps.of(Fields.PATH, "w/audit"), ALICE);
-		AVector<ACell> value = RT.getIn(readJob.awaitResult(5000), "value");
-		assertNotNull(value);
-		assertEquals(1, value.count());
-		// Element must be a parsed map, not the raw string
-		assertEquals(Strings.create("validated"), RT.getIn(value.get(0), "event"));
 	}
 
 	@Test

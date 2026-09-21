@@ -686,7 +686,11 @@ public class CoviaAdapter extends AAdapter {
 				"Write requires a 'value' field (received path only). Provide the value to "
 				+ "store (an explicit null stores a null value); to remove an entry use covia:delete.");
 		}
-		ACell value = parseJsonValue(RT.getIn(input, Fields.VALUE));
+		// The value is stored exactly as supplied. A string is a valid value, so
+		// a JSON-looking string stays a string: callers wanting structure send
+		// structure (the tool descriptions say so), and string-to-object parsing
+		// lives only at tool-call boundaries whose schema admits nothing else.
+		ACell value = RT.getIn(input, Fields.VALUE);
 
 		// Cross-user owner cursor, virtual namespace (n/, t/, c/, v/), or own
 		// physical namespace: every target is a cursor plus namespace-prefixed
@@ -851,7 +855,7 @@ public class CoviaAdapter extends AAdapter {
 		requireWriteAccess(ctx, jsonKeys);
 
 		NamespaceResolver.ResolvedNamespace vns = (xu != null) ? null : resolveVirtual(ctx, jsonKeys);
-		ACell element = parseJsonValue(RT.getIn(input, Fields.VALUE));
+		ACell element = RT.getIn(input, Fields.VALUE);   // stored verbatim, as in handleWrite
 
 		// Cross-user owner cursor, virtual namespace, or own physical namespace:
 		// the same deepAppend for all (#176).
@@ -892,31 +896,6 @@ public class CoviaAdapter extends AAdapter {
 	}
 
 	// ========== Write path helpers ==========
-
-	/**
-	 * Coerces a value supplied as a JSON-encoded string into the parsed
-	 * structure. LLMs frequently pass nested objects/arrays as a string
-	 * literal — without this, an enrichment map would be persisted as a
-	 * single string instead of a queryable structure.
-	 *
-	 * <p>Only strings whose first/last non-whitespace characters look like
-	 * JSON object/array delimiters are parsed; everything else is returned
-	 * unchanged. Parse failures fall back to the original value.</p>
-	 */
-	static ACell parseJsonValue(ACell cell) {
-		if (!(cell instanceof AString s)) return cell;
-		String str = s.toString().trim();
-		if (str.isEmpty()) return cell;
-		char first = str.charAt(0);
-		char last = str.charAt(str.length() - 1);
-		if ((first == '{' && last == '}') || (first == '[' && last == ']')) {
-			try {
-				ACell parsed = JSON.parse(str);
-				if (parsed != null) return parsed;
-			} catch (Exception e) { /* not valid JSON, return original */ }
-		}
-		return cell;
-	}
 
 	/**
 	 * Validates that a parsed path targets a writable namespace.

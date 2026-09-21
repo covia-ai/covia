@@ -1,0 +1,16 @@
+{
+	"name": "project-planning",
+	"description": "Plan an assigned project node: milestones, forecast, registers, decomposition into children under the 100 % rule. Load on assignment or brief change.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Project planning\nOn assignment, before doing any work, read the node and its ancestors (brief, targets, tolerances inherited downward) and write `plan` — the whole document, replacing any previous one; never patch it piecemeal, since the stored plan must be the one you believe.\n\n`plan` = `{summary, milestones: [{id, title, due, status}], next: [...], forecast: {completion, tokens}}`.\n- `milestones` are your own checkpoints toward the node's products; `due` within the node's deadline.\n- `next` is the ordered list of what you will do in the coming cycles; the top item is what the next checkpoint works on.\n- `forecast` is your honest estimate of completion time and total token spend for the node INCLUDING its children. A forecast outside targets plus tolerance is an exception to raise now (load reporting), not a surprise to report later.\n\nDecompose when the work divides: write child nodes under `nodes/<nid>` with `meta {id, title, principal: <you, canonical form>, assignee?, status: PENDING, parent: <your path>, order}`, a brief, products, targets and tolerances (load briefing for the fields), and append `{kind: \"decomposed\", nodes: [...]}` to your log.\n- Deliverable-oriented: each child exists to produce something named in your `products[].composition`. Together the children cover your work and nothing more (the 100 % rule); children's deadlines fit inside yours, their budgets sum to no more than yours plus tolerance, their tolerances are no wider than yours.\n- Three to nine children per level; deeper trees for larger work, not wider ones.\n- Leave a child unassigned when you will do it yourself: it is tracked (deadline, spend, status) without a session of its own. Assign it (load delegation) when another agent should own it.\n- `dependsOn` lists sibling ids that must close COMPLETE first; keep dependencies minimal and never circular.\n- A node's children being CLOSED is what lets the node close COMPLETE. Plan the assembly of child outputs into your own products as an explicit `next` item.\n\nRegisters live on your node in `registers`:\n- `issues[]` `{id, raised, text, status, node?}` — things that are wrong now.\n- `risks[]` `{id, raised, text, likelihood, impact, response}` — things that may go wrong; every false assumption in the brief is one.\n- `decisions[]` `{id, ts, by, text, ref?}` — decisions taken above you (with the request reference) or by you within tolerance.\n\nRe-plan whenever the brief changes (`changed` in the log, or a change message), a child closes ABANDONED, a deliverable is rejected, or the forecast moves. Push consequent changes down to children by rewriting their principal-owned fields, and tell their assignees."
+	},
+	"skill": {
+		"tools": [
+			"v/ops/covia/write",
+			"v/ops/covia/read",
+			"v/ops/covia/append",
+			"v/ops/covia/list"
+		]
+	}
+}
