@@ -484,7 +484,17 @@ downstream delegations.
 An unauthenticated caller runs under the venue's public identity, whose
 default scope is **read-only** (`crud/read` on its own namespace + `asset/read`;
 no `invoke`, so `POST /api/v1/invoke` of a compute op returns a `FAILED` job with
-`"Capability denied"`). Two ways to gain invoke/write authority:
+`"Capability denied"`).
+
+One operation is exempt: **`v/ops/ucan/verify`**. It is a declared `readOnly`
+diagnostic — no signing, no side effects — that explains a token to whoever
+already holds it, so it discloses nothing a bearer does not have in hand.
+Keeping it closed mainly made denials undiagnosable for the person hit by one
+(covia#528). Note that invoking it through `POST /api/v1/invoke` still records
+a Job like any other invoke; the SDK's `venue.ucan.verify` goes through the
+result-oriented run path, where a `readOnly` operation stays transient.
+
+Two ways to gain wider invoke/write authority:
 
 1. **Authenticate as yourself** — present a self-issued, empty-`att` UCAN
    identity credential:
