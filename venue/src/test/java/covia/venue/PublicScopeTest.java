@@ -52,6 +52,7 @@ public class PublicScopeTest {
 	private static final AString OP_READ  = Strings.create("v/ops/covia/read");
 	private static final AString OP_SHOW_CONFIG = Strings.create("v/ops/venue/show-config");
 	private static final AString OP_ECHO  = Strings.create("v/test/ops/echo");
+	private static final AString OP_UCAN_VERIFY = Strings.create("v/ops/ucan/verify");
 
 	/** Venue with the secure read-only public default (auth.public.caps absent). */
 	private VenueServer secureServer;
@@ -125,13 +126,43 @@ public class PublicScopeTest {
 
 	@Test
 	public void anonymousInvokeDeniedByDefault() throws Exception {
-		// Invoking any op creates a job (resource-consuming), so the read-only
+		// Invoking an op creates a job (resource-consuming), so the read-only
 		// scope denies it — even an otherwise-harmless echo.
 		VenueHTTP pub = anon(secureBase);
 		Job job = pub.invokeAndWait(OP_ECHO, Maps.of(Strings.create("hi"), Strings.create("there")));
 		assertEquals(Status.FAILED, job.getStatus(), "public invoke must be denied");
 		assertTrue(String.valueOf(job.getErrorMessage()).contains("Capability denied"),
 			"public invoke denial must name the cap, got: " + job.getErrorMessage());
+	}
+
+	@Test
+	public void anonymousUcanVerifyAllowedByDefault() throws Exception {
+		// The one invoke the read-only scope permits. ucan:verify explains a
+		// token to whoever already holds it — a declared readOnly diagnostic,
+		// no signing, no side effects, disclosing nothing a bearer does not
+		// have in hand. Refusing it made denials undiagnosable for the person
+		// hit by one, and left the capability console unusable signed out
+		// (covia#528, covia-ai/frontend#254).
+		VenueHTTP pub = anon(secureBase);
+		Job job = pub.invokeAndWait(OP_UCAN_VERIFY,
+			Maps.of(Strings.create("token"), Strings.create("not-a-token")));
+		assertEquals(Status.COMPLETE, job.getStatus(),
+			"public ucan:verify must run, got: " + job.getErrorMessage());
+		// It ran, and reported the token as bad — a verdict, not a refusal.
+		assertEquals(convex.core.data.prim.CVMBool.FALSE,
+			convex.core.lang.RT.getIn(job.getOutput(), "valid"),
+			"an unparseable token verifies as invalid: " + job.getOutput());
+	}
+
+	@Test
+	public void anonymousInvokeOfOtherOpsStillDenied() throws Exception {
+		// The carve-out is one operation, not a general invoke grant.
+		VenueHTTP pub = anon(secureBase);
+		Job job = pub.invokeAndWait(Strings.create("v/ops/ucan/issue"), Maps.of(
+			Strings.create("aud"), Strings.create("did:key:zNobody"),
+			Strings.create("att"), Vectors.empty()));
+		assertEquals(Status.FAILED, job.getStatus(),
+			"ucan:issue signs, so it stays denied to the public caller");
 	}
 
 	@Test

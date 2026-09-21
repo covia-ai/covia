@@ -374,12 +374,25 @@ public class CapabilityChecker {
 	}
 
 	/**
+	 * The one operation the read-only scope may invoke. {@code ucan:verify} is
+	 * a declared {@code readOnly} diagnostic — no signing, no side effects —
+	 * that explains a token to whoever already holds it, so it discloses
+	 * nothing a bearer does not have in hand. Keeping it closed mainly made
+	 * denials undiagnosable for the person hit by one (covia#528).
+	 */
+	/** The {@code can} of an operation-invocation grant. */
+	private static final AString INVOKE = Strings.intern("invoke");
+
+	private static final AString VERIFY_OP = Strings.intern("v/ops/ucan/verify");
+
+	/**
 	 * The default read-only capability grant scope for an identity: read the
-	 * identity's own (owner-scoped) lattice and venue paths, and read
-	 * content-addressed assets. It grants <em>no</em> write, delete, secret,
-	 * agent, asset-store, or invoke ability — so every mutating operation is
-	 * denied. This is the secure-by-default profile for the public/anonymous
-	 * identity; operators widen it explicitly for permissive venues.
+	 * identity's own (owner-scoped) lattice and venue paths, read
+	 * content-addressed assets, and invoke the {@code ucan:verify} diagnostic.
+	 * It grants <em>no</em> write, delete, secret, agent or asset-store
+	 * ability, and no other invoke — so every mutating operation is denied.
+	 * This is the secure-by-default profile for the public/anonymous identity;
+	 * operators widen it explicitly for permissive venues.
 	 *
 	 * @param scopeDID the identity the read grant is scoped to — must be
 	 *                 non-null (e.g. the venue public DID, {@code "<venueDID>:public"});
@@ -388,7 +401,8 @@ public class CapabilityChecker {
 	public static AVector<ACell> readOnlyScope(AString scopeDID) {
 		return Vectors.of(
 			Capability.create(scopeDID, Capability.CRUD_READ),
-			Capability.create(Strings.create(""), Abilities.ASSET_READ));
+			Capability.create(Strings.create(""), Abilities.ASSET_READ),
+			Capability.create(VERIFY_OP, INVOKE));
 	}
 
 	/**
