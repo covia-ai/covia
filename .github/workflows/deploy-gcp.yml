@@ -64,6 +64,7 @@ jobs:
                 "name": "Covia Test Venue",
                 "hostname": "venue-test.covia.ai",
                 "port": 8080,
+                "trustedProxies": ["loopback", "172.16.0.0/12"],
                 "store": "/data/covia-test-data/venue.etch",
                 "users": { "autoCreate": true },
                 "mcp": {}
@@ -72,6 +73,7 @@ jobs:
                 "name": "Covia Venue 1 (Stable)",
                 "hostname": "venue-1.covia.ai",
                 "port": 8081,
+                "trustedProxies": ["loopback", "172.16.0.0/12"],
                 "store": "/data/covia-1-data/venue.etch",
                 "mcp": {}
               },
@@ -79,6 +81,7 @@ jobs:
                 "name": "Covia Venue 2 (Stable)",
                 "hostname": "venue-2.covia.ai",
                 "port": 8082,
+                "trustedProxies": ["loopback", "172.16.0.0/12"],
                 "store": "/data/covia-2-data/venue.etch",
                 "mcp": {}
               }
@@ -96,6 +99,12 @@ jobs:
 
           path = Path("/srv/covia/config.json")
           config = json.loads(path.read_text(encoding="utf-8"))
+          # Every venue sits behind Caddy on this host and sees it through the
+          # Docker bridge: take the client address from X-Forwarded-For, or every
+          # caller shares one rate-limit bucket and one authentication budget
+          # (covia#539). An operator-set value is left alone.
+          for venue in config.get("venues", []):
+              venue.setdefault("trustedProxies", ["loopback", "172.16.0.0/12"])
           for venue in config.get("venues", []):
               if venue.get("hostname") == "venue-test.covia.ai":
                   users = venue.setdefault("users", {})

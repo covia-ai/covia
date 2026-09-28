@@ -59,10 +59,13 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   authentication in flight at a time (`rateLimit.authConcurrency`); failed
   `did:web` resolutions are remembered for a minute (#539).
 - `trustedProxies`: the reverse proxies whose `X-Forwarded-For` names the
-  client, for everything keyed on the caller's address (#539).
+  client, for everything keyed on the caller's address; the deploy workflows
+  set it for the hosted venues, and a venue that receives the header without
+  it logs one warning (#539).
 - Browser security headers on every response (`securityHeaders`, on by
-  default), and a startup warning for `corsOrigins: "*"` on a non-loopback bind
-  (#537).
+  default), a one-line startup posture summary, a startup warning for
+  `corsOrigins: "*"` on a non-loopback bind, and a documented production
+  profile (#537).
 - `skills:import` records `createdBy: {did, agentId?}` on the skill (#525).
 
 - `agent:from-skills` composes `skills:import` and `agent:create` into one

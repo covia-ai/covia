@@ -206,6 +206,44 @@ naming the store's real owner: venues are keyed by AccountKey, so a wrong key
 would otherwise silently create a fresh empty venue and orphan the existing
 data. Never commit keystore passwords; use env vars or gitignored dev configs.
 
+## Production profile
+
+The defaults suit a venue on a developer's machine. A venue other people reach
+should set at least:
+
+```json
+{
+  "bindAddress": "127.0.0.1",
+  "trustedProxies": ["loopback"],
+  "corsOrigins": ["https://app.covia.ai"],
+  "auth": { "public": { "enabled": false }, "maxTokenLifetime": 2592000 },
+  "users": { "autoCreate": false },
+  "strictConfig": true
+}
+```
+
+- `bindAddress` on loopback, with TLS terminated by a reverse proxy in front
+  (`deploy/Caddyfile`), or a firewall if the venue must listen on an
+  interface itself.
+- `trustedProxies` naming that proxy, so rate limiting and the
+  authentication throttle see the real client (*Trusted proxies*). A venue
+  that receives `X-Forwarded-For` without this set logs one warning.
+- `corsOrigins` as an explicit list. The default `"*"` lets any web page call
+  the venue from a visitor's browser, and logs a warning at startup on a
+  non-loopback bind.
+- `auth.public.enabled: false` unless anonymous read access is wanted, and
+  `auth.maxTokenLifetime` to bound hand-minted bearers (*Bearer expiry*).
+- `users.autoCreate: false` unless any authenticated DID may register itself.
+- `strictConfig: true`, so a typo fails startup instead of being ignored.
+- `Strict-Transport-Security` at the proxy — Caddy needs an explicit
+  `header Strict-Transport-Security "max-age=31536000"` — the venue sends the
+  other browser hardening headers itself (*Browser security headers*).
+- Rate limiting is on by default for a non-loopback bind; leave it on.
+
+At startup the venue logs its posture in one line (`Posture: bind …, public
+access …, CORS …, security headers …, rate limit …, trusted proxies …`), so a
+deployment can be checked from its log.
+
 ## Network binding
 
 ```json

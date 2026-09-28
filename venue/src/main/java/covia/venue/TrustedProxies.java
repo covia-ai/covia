@@ -3,6 +3,10 @@ package covia.venue;
 import java.net.InetAddress;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * The reverse proxies whose {@code X-Forwarded-For} this venue believes, and
@@ -23,6 +27,11 @@ import java.util.List;
  * {@code "loopback"}. Hostnames are refused: trust must not depend on DNS.</p>
  */
 public final class TrustedProxies {
+
+	private static final Logger log = LoggerFactory.getLogger(TrustedProxies.class);
+
+	/** Whether the "forwarded address but no trusted proxies" warning has been logged (once per instance). */
+	private final AtomicBoolean warnedUnconfigured = new AtomicBoolean();
 
 	/** Trust nothing: the connection address is always the client. */
 	public static final TrustedProxies NONE = new TrustedProxies(List.of(), false);
@@ -120,7 +129,19 @@ public final class TrustedProxies {
 	 */
 	public String clientIp(String remote, String forwardedFor) {
 		if (remote == null) remote = "";
-		if (!trusts(remote) || forwardedFor == null || forwardedFor.isBlank()) return remote;
+		if (forwardedFor == null || forwardedFor.isBlank()) return remote;
+		if (isEmpty()) {
+			// A forwarded address on a venue that trusts no proxy is the
+			// signature of a proxy nobody told the venue about: say so once.
+			if (warnedUnconfigured.compareAndSet(false, true)) {
+				log.warn("A request from {} carries X-Forwarded-For but trustedProxies is unset, so that address "
+					+ "counts as the client: every caller behind it shares one rate-limit bucket and one "
+					+ "authentication budget. If {} is your reverse proxy, list it in trustedProxies "
+					+ "(venue/docs/CONFIG.md, Trusted proxies).", remote, remote);
+			}
+			return remote;
+		}
+		if (!trusts(remote)) return remote;
 		String[] hops = forwardedFor.split(",");
 		for (int i = hops.length - 1; i >= 0; i--) {
 			String hop = hops[i].trim();

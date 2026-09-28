@@ -658,6 +658,26 @@ public class VenueServer {
 		javalin=buildApp();
 		start(javalin,port);
 		log.info("Venue server started on port: "+javalin.port());
+		// One line an operator can check a deployment's posture from (#537).
+		log.info("Posture: bind {}, public access {}, CORS {}, security headers {}, rate limit {}, trusted proxies {}",
+			(config.getBindAddress() != null) ? config.getBindAddress() : "0.0.0.0 (all interfaces)",
+			config.isPublicAccess() ? "on" : "off",
+			describe(config.getCorsPolicy()),
+			config.isSecurityHeaders() ? "on" : "off",
+			config.isRateLimitEnabled() ? "on" : "off",
+			config.getTrustedProxies());
+	}
+
+	private static String describe(Config.CorsPolicy cors) {
+		if (!cors.enabled()) return "off";
+		if (cors.anyOrigin()) return "* (any origin)";
+		StringBuilder sb = new StringBuilder();
+		if (cors.loopback()) sb.append("loopback");
+		for (String origin : cors.origins()) {
+			if (sb.length() > 0) sb.append(", ");
+			sb.append(origin);
+		}
+		return sb.length() > 0 ? sb.toString() : "none";
 	}
 	
 	/**
