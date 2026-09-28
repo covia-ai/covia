@@ -42,7 +42,7 @@ docker pull ghcr.io/covia-ai/covia:latest
 docker stop covia-venue && docker rm covia-venue
 docker run -d \
   --name covia-venue \
-  -p 8080:8080 \
+  -p 127.0.0.1:8080:8080 \
   -v /home/ec2-user/covia-data:/data \
   --restart unless-stopped \
   ghcr.io/covia-ai/covia:latest
