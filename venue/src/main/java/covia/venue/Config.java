@@ -124,6 +124,8 @@ public class Config {
 	 * set to {@code "127.0.0.1"} to restrict to loopback.
 	 */
 	public static final AString BIND_ADDRESS = Strings.intern("bindAddress");
+	/** Reverse proxies whose {@code X-Forwarded-For} names the client: IP literals, CIDR ranges, {@code "loopback"}. */
+	public static final AString TRUSTED_PROXIES = Strings.intern("trustedProxies");
 
 	/** Key for the request rate-limiting config block ({@code enabled}, {@code rps},
 	 *  {@code burst}, {@code maxConcurrentJobsPerUser}). */
@@ -391,7 +393,7 @@ public class Config {
 	private static final Set<String> KNOWN_FIELDS = Set.of(
 		"name", "description", "did", "hostname", "rootPage",
 		"defaultLlmOperation", "defaultTransitionOp", "maxToolIterations",
-		"port", "bindAddress", "baseUrl", "rateLimit", "acceptQueueSize",
+		"port", "bindAddress", "trustedProxies", "baseUrl", "rateLimit", "acceptQueueSize",
 		"httpSelectors", "httpAcceptors", "mcp", "a2a", "adapters",
 		"modules", "dynamicModules", "users", "store", "seed", "keystore", "storage", "etch",
 		"maxContentSize", "auth", "webdav", "file", "corsOrigins",
@@ -482,6 +484,7 @@ public class Config {
 		optionalBoolean(config, FIX_MCP_STRINGS, "fixMcpStrings", true);
 		optionalBoolean(config, ALLOW_PRIVATE_NETWORK, "allowPrivateNetwork", false);
 		optionalBoolean(config, SECURITY_HEADERS, "securityHeaders", true);
+		validateTrustedProxies();
 		optionalBoolean(config, ENABLE_PRIVATE_JOBS, "enablePrivateJobs", false);
 		optionalBoolean(config, RECORD_READ_ONLY_OPERATIONS, "recordReadOnlyOperations", false);
 
@@ -587,7 +590,8 @@ public class Config {
 		AMap<AString, ACell> rate = optionalMap(config, RATE_LIMIT, "rateLimit");
 		if (rate == null) return;
 		validateUnknownFields(rate,
-			Set.of("enabled", "rps", "burst", "maxConcurrentJobsPerUser", "blockMs"),
+			Set.of("enabled", "rps", "burst", "maxConcurrentJobsPerUser", "blockMs",
+				"authFailuresPerMinute", "authFailureBurst", "authConcurrency"),
 			"rateLimit", strict);
 		optionalBoolean(rate, ENABLED, "rateLimit.enabled", false);
 		optionalLong(rate, Strings.intern("rps"), "rateLimit.rps", 1, Long.MAX_VALUE);
@@ -595,6 +599,18 @@ public class Config {
 		optionalLong(rate, Strings.intern("maxConcurrentJobsPerUser"),
 			"rateLimit.maxConcurrentJobsPerUser", 0, Integer.MAX_VALUE);
 		optionalLong(rate, Strings.intern("blockMs"), "rateLimit.blockMs", 0, Long.MAX_VALUE);
+		optionalLong(rate, Strings.intern("authFailuresPerMinute"), "rateLimit.authFailuresPerMinute", 1, Long.MAX_VALUE);
+		optionalLong(rate, Strings.intern("authFailureBurst"), "rateLimit.authFailureBurst", 1, Long.MAX_VALUE);
+		optionalLong(rate, Strings.intern("authConcurrency"), "rateLimit.authConcurrency", 1, Integer.MAX_VALUE);
+	}
+
+	private void validateTrustedProxies() {
+		ACell raw = config.get(TRUSTED_PROXIES);
+		if (raw == null) return;
+		if (!(raw instanceof AVector<?>)) {
+			throw new IllegalArgumentException("trustedProxies must be an array of IP literals, CIDR ranges or \"loopback\"");
+		}
+		getTrustedProxies();   // parses every entry; a bad one fails startup with its name
 	}
 
 	private void validateScheduler(boolean strict) {
@@ -1139,6 +1155,54 @@ public class Config {
 	 *  timeouts so a saturated caller gets a clean 429, not a socket timeout. */
 	public long getRateLimitBlockMs() {
 		return rateLimitLong("blockMs", 3000);
+	}
+
+	/** Rejected credentials an address may accumulate per minute before its
+	 *  credentials are refused outright (covia#539). Default 20. Counts
+	 *  failures, never successful authentications. */
+	public double getAuthFailuresPerMinute() {
+		return rateLimitLong("authFailuresPerMinute", 20);
+	}
+
+	/** Burst of rejected credentials an address may accumulate. Default 40. */
+	public double getAuthFailureBurst() {
+		return rateLimitLong("authFailureBurst", 40);
+	}
+
+	/** Authentications an address may have in flight at once. Default 1: a
+	 *  second concurrent attempt waits up to {@code blockMs} for the first,
+	 *  so one address cannot fan out outbound DID resolution in parallel. */
+	public int getAuthConcurrency() {
+		return (int) Math.min(Integer.MAX_VALUE, rateLimitLong("authConcurrency", 1));
+	}
+
+	private volatile TrustedProxies trustedProxies;
+
+	/**
+	 * The reverse proxies whose {@code X-Forwarded-For} names the client
+	 * ({@code trustedProxies}; none by default, so the connection address is
+	 * the client). Behind Caddy on the same host list {@code "loopback"}; for a
+	 * container behind a host proxy list the bridge network, e.g.
+	 * {@code "172.16.0.0/12"}.
+	 */
+	public TrustedProxies getTrustedProxies() {
+		TrustedProxies t = trustedProxies;
+		if (t == null) {
+			List<String> entries = new ArrayList<>();
+			ACell raw = config.get(TRUSTED_PROXIES);
+			if (raw instanceof AVector<?> v) {
+				for (long i = 0; i < v.count(); i++) {
+					AString s = RT.ensureString(v.get(i));
+					if (s == null) throw new IllegalArgumentException("trustedProxies entries must be strings");
+					entries.add(s.toString());
+				}
+			} else if (raw != null) {
+				throw new IllegalArgumentException("trustedProxies must be an array of IP literals, CIDR ranges or \"loopback\"");
+			}
+			t = TrustedProxies.parse(entries);
+			trustedProxies = t;
+		}
+		return t;
 	}
 
 	/**

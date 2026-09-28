@@ -218,6 +218,28 @@ data. Never commit keystore passwords; use env vars or gitignored dev configs.
 - `port`: HTTP listen port (default `8080`).
 - `bindAddress`: network interface the HTTP connector binds to. When omitted, the venue binds **all interfaces** (`0.0.0.0`) — reachable from the LAN. Set to `"127.0.0.1"` to restrict the venue to loopback (recommended when embedding the venue as a local subprocess). This is the socket bind address and is distinct from `hostname`, which is the venue's *advertised* public host used to derive `baseUrl`/DID.
 
+## Trusted proxies (`trustedProxies`)
+
+```json
+{
+  "trustedProxies": ["loopback"]
+}
+```
+
+Everything keyed on the caller's address — the request rate limiter for
+anonymous callers, and the authentication throttle — needs to know who the
+caller is when a reverse proxy sits in front of the venue. Without this
+setting the connection's own address is the client and `X-Forwarded-For` is
+ignored, so behind Caddy every caller would share one bucket. List the
+proxies the venue accepts a forwarded address from: IP literals
+(`203.0.113.5`), CIDR ranges (`10.0.0.0/8`, `fd00::/8`) or `"loopback"`.
+Hostnames are refused, so trust never depends on DNS.
+
+The client is then the rightmost `X-Forwarded-For` hop that is not itself a
+trusted proxy — the one the proxy appended, which the client cannot forge.
+Caddy on the same host: `["loopback"]`. A container published on loopback
+behind a host proxy sees the bridge network instead, e.g. `["172.16.0.0/12"]`.
+
 ## Browser origins (CORS)
 
 `corsOrigins` controls which browser origins may read venue responses. The
@@ -611,6 +633,31 @@ callers share the venue `:public` DID → one bucket).
 `enabled` defaults **on** for a LAN/public bind and **off** for a loopback bind
 (the embedded-venue case, where the only caller is a trusted local process); an
 explicit `enabled` always wins.
+
+**Authentication throttle** (`authFailuresPerMinute`, `authFailureBurst`,
+`authConcurrency`) — under the same `enabled`, backpressure on credential
+checks themselves, keyed on the client address (see *Trusted proxies*), since
+a rejected credential has no DID to key on and has already cost a signature
+check or, for a `did:web` subject, an outbound fetch (#539).
+
+- The **failure budget** counts *rejected* credentials, never attempts: an
+  address may fail `authFailureBurst` times (default 40), refilling at
+  `authFailuresPerMinute` (default 20). Over budget, every credential from
+  that address is answered **429 + `Retry-After`** before any verification —
+  a valid one too — until the budget refills. Requests presenting no
+  credential are never charged. One WARN is logged per address when it
+  crosses the line.
+- **In-flight limit** (`authConcurrency`, default 1): further concurrent
+  authentications from one address wait up to `blockMs` for the one in
+  flight, then shed with 429, so an address cannot fan out outbound DID
+  resolution in parallel. Failed `did:web` resolutions are also remembered
+  for a minute, so a stream of bad tokens for one DID costs one fetch.
+
+```json
+{
+  "rateLimit": { "authFailuresPerMinute": 20, "authFailureBurst": 40, "authConcurrency": 1 }
+}
+```
 
 ## Public access (`auth.public`)
 

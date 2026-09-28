@@ -48,6 +48,13 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Added
 
+- Bad credentials are no longer free to send: per client address, a budget of
+  rejected credentials (`rateLimit.authFailuresPerMinute` / `authFailureBurst`)
+  after which credentials get 429 before any verification, and one
+  authentication in flight at a time (`rateLimit.authConcurrency`); failed
+  `did:web` resolutions are remembered for a minute (#539).
+- `trustedProxies`: the reverse proxies whose `X-Forwarded-For` names the
+  client, for everything keyed on the caller's address (#539).
 - Browser security headers on every response (`securityHeaders`, on by
   default), and a startup warning for `corsOrigins: "*"` on a non-loopback bind
   (#537).

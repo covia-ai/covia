@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Set;
+import java.util.concurrent.Semaphore;
 
 import convex.api.ContentTypes;
 import convex.auth.did.DIDVerifier;
@@ -67,6 +68,8 @@ public class AuthMiddleware {
 	private final AVector<ACell> publicScope;
 	private final Engine engine;
 	private final VenueAuthenticator authenticator;
+	/** Per-address backpressure on credential checks (covia#539); null when rate limiting is off. */
+	private final AuthThrottle throttle;
 
 	private AuthMiddleware(Engine engine, VenueAuthenticator authenticator) {
 		this.engine = engine;
@@ -74,6 +77,11 @@ public class AuthMiddleware {
 		this.publicDID = Strings.create(engine.getDIDString() + ":public");
 		Auth auth = engine.getAuth();
 		this.publicAccessEnabled = auth.isPublicAccessEnabled();
+		Config config = engine.config();
+		this.throttle = config.isRateLimitEnabled()
+			? new AuthThrottle(config.getTrustedProxies(), config.getAuthFailureBurst(),
+				config.getAuthFailuresPerMinute(), config.getAuthConcurrency(), config.getRateLimitBlockMs())
+			: null;
 		// Capability grant scope for public callers — secure read-only by default,
 		// operator-overridable via auth.public.caps. Only relevant when public
 		// access is enabled (otherwise every anonymous request is 401'd, except on
@@ -219,13 +227,43 @@ public class AuthMiddleware {
 			return;
 		}
 
+		// A credential is presented: charge its address (covia#539). Over budget
+		// means no verification at all; otherwise take the address's in-flight
+		// slot so it cannot fan out DID resolution in parallel.
+		String ip = (throttle != null) ? throttle.clientIp(ctx.ip(), ctx.header("X-Forwarded-For")) : null;
+		Semaphore slot = null;
+		if (throttle != null) {
+			long retry = throttle.overBudgetRetryAfter(ip);
+			if (retry > 0) {
+				rejectTooMany(ctx, retry, AuthThrottle.TOO_MANY_FAILURES + retry + "s");
+				return;
+			}
+			slot = throttle.acquire(ip);
+			if (slot == null) {
+				rejectTooMany(ctx, 1, AuthThrottle.TOO_MANY_CONCURRENT);
+				return;
+			}
+		}
 		try {
 			AString venueUserDID = authenticator.authenticate(ctx, Strings.create(token));
 			if (admitUser && !admitAuthenticated(ctx, venueUserDID)) return;
 		} catch (AuthException e) {
+			if (throttle != null) throttle.recordFailure(ip);
 			log.debug("Bearer token rejected: {}", e.getMessage());
 			rejectUnauthorized(ctx, e.getMessage(), resourceMetadata);
+		} finally {
+			if (slot != null) slot.release();
 		}
+	}
+
+	private void rejectTooMany(Context ctx, long retryAfterSeconds, String message) {
+		ctx.header("Retry-After", Long.toString(retryAfterSeconds));
+		reject(ctx, 429, message);
+	}
+
+	/** The authentication throttle in force, or null when rate limiting is off — for tests and status. */
+	public AuthThrottle throttle() {
+		return throttle;
 	}
 
 	/**

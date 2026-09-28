@@ -998,6 +998,9 @@ public class VenueServer {
 			});
 			log.info("Rate limiting enabled: {} req/s, burst {} per caller",
 				(long) config.getRateLimitRps(), (long) config.getRateLimitBurst());
+			log.info("Authentication throttle: {} failures/min (burst {}) and {} in flight per client address; "
+				+ "trusted proxies: {}", (long) config.getAuthFailuresPerMinute(),
+				(long) config.getAuthFailureBurst(), config.getAuthConcurrency(), config.getTrustedProxies());
 		}
 
 		addLoginRoutes(routes);
@@ -1110,7 +1113,8 @@ public class VenueServer {
 	private void enforceRateLimit(Context ctx) {
 		if ("OPTIONS".equalsIgnoreCase(ctx.method().toString())) return;
 		AString did = AuthMiddleware.getVenueUserDID(ctx);
-		String key = (did != null) ? did.toString() : "ip:" + ctx.ip();
+		String key = (did != null) ? did.toString()
+			: "ip:" + config.getTrustedProxies().clientIp(ctx.ip(), ctx.header("X-Forwarded-For"));
 		if (!rateLimiter.tryAcquire(key)) {
 			long retry = rateLimiter.retryAfterSeconds(key);
 			ctx.header("Retry-After", Long.toString(retry));

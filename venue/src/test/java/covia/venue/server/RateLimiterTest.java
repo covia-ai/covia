@@ -79,4 +79,19 @@ public class RateLimiterTest {
 		assertThrows(IllegalArgumentException.class, () -> new RateLimiter(0, 1));
 		assertThrows(IllegalArgumentException.class, () -> new RateLimiter(1, 0));
 	}
+
+	@Test
+	public void testIsExhaustedPeeksWithoutConsuming() {
+		AtomicLong t = new AtomicLong(0);
+		RateLimiter rl = new RateLimiter(2, 1, t::get);
+		assertFalse(rl.isExhausted("k"), "an unseen key is not exhausted");
+		assertTrue(rl.tryAcquire("k"));
+		assertFalse(rl.isExhausted("k"));
+		assertFalse(rl.isExhausted("k"), "peeking consumed nothing");
+		assertTrue(rl.tryAcquire("k"));
+		assertTrue(rl.isExhausted("k"));
+		assertFalse(rl.tryAcquire("k"));
+		t.addAndGet(1000);
+		assertFalse(rl.isExhausted("k"), "refill ends exhaustion");
+	}
 }
