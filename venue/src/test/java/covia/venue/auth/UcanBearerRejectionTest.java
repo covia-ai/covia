@@ -23,6 +23,7 @@ import convex.core.data.prim.CVMDouble;
 import convex.core.data.prim.CVMLong;
 import covia.exception.AuthException;
 import covia.venue.Engine;
+import covia.venue.UcanJwtValidator;
 
 /**
  * A UCAN-shaped bearer credential that fails validation must surface the
@@ -84,7 +85,7 @@ public class UcanBearerRejectionTest {
 			.toString();
 		String message = reject(jwt);
 		assertTrue(message.startsWith(VenueAuthenticator.UCAN_REJECTED_PREFIX), message);
-		assertTrue(message.contains("malformed claim \"exp\""), message);
+		assertTrue(message.contains(UcanJwtValidator.REASON_MALFORMED_CLAIM + "\"exp\""), message);
 	}
 
 	@Test
@@ -93,7 +94,7 @@ public class UcanBearerRejectionTest {
 		String jwt = JWT.signPublic(bearerClaims(CVMLong.create(past)), caller).toString();
 		String message = reject(jwt);
 		assertTrue(message.startsWith(VenueAuthenticator.UCAN_REJECTED_PREFIX), message);
-		assertTrue(message.contains("expired"), message);
+		assertTrue(message.contains(UcanJwtValidator.REASON_EXPIRED), message);
 	}
 
 	@Test
@@ -104,10 +105,10 @@ public class UcanBearerRejectionTest {
 		String forged = JWT.signPublic(claims, AKeyPair.generate()).toString();
 		String message = reject(forged);
 		assertTrue(message.startsWith(VenueAuthenticator.UCAN_REJECTED_PREFIX), message);
-		assertTrue(message.contains("bad signature"), message);
+		assertTrue(message.contains(UcanJwtValidator.REASON_BAD_SIGNATURE), message);
 		// Post-signature detail (audience / att policy) is never reached.
-		assertFalse(message.contains("audience"), message);
-		assertFalse(message.contains("att"), message);
+		assertFalse(message.contains(VenueAuthenticator.Reason.AUDIENCE_NOT_THIS_VENUE), message);
+		assertFalse(message.contains(VenueAuthenticator.Reason.NON_EMPTY_ATT), message);
 	}
 
 	@Test
@@ -118,7 +119,7 @@ public class UcanBearerRejectionTest {
 		String jwt = JWT.signPublic(claims, caller).toString();
 		String message = reject(jwt);
 		assertTrue(message.startsWith(VenueAuthenticator.UCAN_REJECTED_PREFIX), message);
-		assertTrue(message.contains("empty att"), message);
+		assertTrue(message.contains(VenueAuthenticator.Reason.NON_EMPTY_ATT), message);
 	}
 
 	@Test
@@ -129,7 +130,7 @@ public class UcanBearerRejectionTest {
 		String jwt = JWT.signPublic(claims, caller).toString();
 		String message = reject(jwt);
 		assertTrue(message.startsWith(VenueAuthenticator.UCAN_REJECTED_PREFIX), message);
-		assertTrue(message.contains("token audience is not this venue: " + otherVenue), message);
+		assertTrue(message.contains(VenueAuthenticator.Reason.AUDIENCE_NOT_THIS_VENUE + otherVenue), message);
 	}
 
 	@Test
@@ -160,7 +161,7 @@ public class UcanBearerRejectionTest {
 		long past = System.currentTimeMillis() / 1000 - 3600;
 		String message = reject(JWT.signPublic(selfIssuedClaims(past), caller).toString());
 		assertTrue(message.startsWith(VenueAuthenticator.SELF_ISSUED_REJECTED_PREFIX), message);
-		assertTrue(message.contains("token expired at "), message);
+		assertTrue(message.contains(VenueAuthenticator.Reason.EXPIRED), message);
 	}
 
 	@Test
@@ -170,7 +171,7 @@ public class UcanBearerRejectionTest {
 			.assoc(JWT.NBF, CVMLong.create(now + 600));
 		String message = reject(JWT.signPublic(claims, caller).toString());
 		assertTrue(message.startsWith(VenueAuthenticator.SELF_ISSUED_REJECTED_PREFIX), message);
-		assertTrue(message.contains("token not valid before "), message);
+		assertTrue(message.contains(VenueAuthenticator.Reason.NOT_YET_VALID), message);
 	}
 
 	@Test
@@ -180,9 +181,9 @@ public class UcanBearerRejectionTest {
 		String forged = JWT.signPublic(selfIssuedClaims(inAnHour()), AKeyPair.generate(), kid).toString();
 		String message = reject(forged);
 		assertTrue(message.startsWith(VenueAuthenticator.SELF_ISSUED_REJECTED_PREFIX), message);
-		assertTrue(message.contains("signature does not verify for " + callerDID), message);
+		assertTrue(message.contains(VenueAuthenticator.Reason.SIGNATURE_FAILS + callerDID), message);
 		// Post-signature detail (audience) is never reached.
-		assertFalse(message.contains("audience"), message);
+		assertFalse(message.contains(VenueAuthenticator.Reason.AUDIENCE_NOT_THIS_VENUE), message);
 	}
 
 	@Test
@@ -190,7 +191,7 @@ public class UcanBearerRejectionTest {
 		// Correctly signed, but by a key that is not the did:key subject.
 		String message = reject(JWT.signPublic(selfIssuedClaims(inAnHour()), AKeyPair.generate()).toString());
 		assertTrue(message.startsWith(VenueAuthenticator.SELF_ISSUED_REJECTED_PREFIX), message);
-		assertTrue(message.contains("but the subject is " + callerDID), message);
+		assertTrue(message.contains(VenueAuthenticator.Reason.WRONG_KEY_FOR_SUBJECT + callerDID), message);
 	}
 
 	@Test
@@ -199,7 +200,7 @@ public class UcanBearerRejectionTest {
 		AMap<AString, ACell> claims = selfIssuedClaims(inAnHour()).assoc(JWT.AUD, otherVenue);
 		String message = reject(JWT.signPublic(claims, caller).toString());
 		assertTrue(message.startsWith(VenueAuthenticator.SELF_ISSUED_REJECTED_PREFIX), message);
-		assertTrue(message.contains("token audience is not this venue: " + otherVenue), message);
+		assertTrue(message.contains(VenueAuthenticator.Reason.AUDIENCE_NOT_THIS_VENUE + otherVenue), message);
 	}
 
 	@Test
@@ -208,7 +209,7 @@ public class UcanBearerRejectionTest {
 		AMap<AString, ACell> claims = selfIssuedClaims(inAnHour()).assoc(JWT.ISS, engine.getDIDString());
 		String message = reject(JWT.signPublic(claims, caller).toString());
 		assertTrue(message.startsWith(VenueAuthenticator.VENUE_TOKEN_REJECTED_PREFIX), message);
-		assertTrue(message.contains("signature does not verify for this venue's key"), message);
+		assertTrue(message.contains(VenueAuthenticator.Reason.VENUE_SIGNATURE_FAILS), message);
 	}
 
 	@Test
@@ -218,6 +219,6 @@ public class UcanBearerRejectionTest {
 		AMap<AString, ACell> claims = Maps.of(JWT.ISS, callerDID, JWT.EXP, CVMLong.create(inAnHour()));
 		String message = reject(JWT.signPublic(claims, caller).toString());
 		assertTrue(message.startsWith(VenueAuthenticator.TOKEN_REJECTED_PREFIX), message);
-		assertTrue(message.contains("unrecognised credential"), message);
+		assertTrue(message.contains(VenueAuthenticator.Reason.UNRECOGNISED), message);
 	}
 }

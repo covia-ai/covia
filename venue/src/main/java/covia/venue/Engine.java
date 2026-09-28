@@ -423,7 +423,7 @@ public class Engine {
 							other.getValue().get(Fields.AUTHENTICATION_KEYS));
 						if (otherKeys != null && otherKeys.containsKey(key)) {
 							throw new IllegalArgumentException(
-								"Authentication key is already bound to named user "
+								Auth.KEY_ALREADY_BOUND
 								+ other.getKey());
 						}
 					}

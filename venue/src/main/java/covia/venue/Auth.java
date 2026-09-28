@@ -67,6 +67,9 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 	private static final Logger log = LoggerFactory.getLogger(Auth.class);
 	public static final AString ACTIVE = Strings.intern("active");
 	public static final AString REVOKED = Strings.intern("revoked");
+	/** Refusal messages; tests assert against these, never against the wording. */
+	public static final String CANNOT_REVOKE_FINAL_KEY = "Cannot revoke the final active authentication key";
+	public static final String KEY_ALREADY_BOUND = "Authentication key is already bound to named user ";
 
 	/** Default token expiry: 24 hours in seconds */
 	public static final long DEFAULT_TOKEN_EXPIRY = 86400;
@@ -393,7 +396,7 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 		}
 		if (!allowLast && getActiveAuthenticationKeys(id).count() <= 1) {
 			throw new IllegalArgumentException(
-				"Cannot revoke the final active authentication key");
+				CANNOT_REVOKE_FINAL_KEY);
 		}
 		AMap<AString, ACell> revoked = existing
 			.assoc(Fields.STATUS, REVOKED)
@@ -413,7 +416,7 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 				RT.ensureMap(other.getValue().get(Fields.AUTHENTICATION_KEYS));
 			if (otherKeys != null && otherKeys.containsKey(keyDID)) {
 				throw new IllegalArgumentException(
-					"Authentication key is already bound to named user " + other.getKey());
+					KEY_ALREADY_BOUND + other.getKey());
 			}
 		}
 	}

@@ -158,20 +158,20 @@ public class NamedUserAuthTest {
 		// possession of the kid key, which anyone can mint (AUTH.md §11).
 		String strangerKey = reason(namedToken(attacker, aliceDID, aliceDID, venueDID));
 		assertTrue(strangerKey.startsWith(VenueAuthenticator.SELF_ISSUED_REJECTED_PREFIX), strangerKey);
-		assertTrue(strangerKey.contains("is not an active authentication key of " + aliceDID), strangerKey);
+		assertTrue(strangerKey.contains(VenueAuthenticator.Reason.KEY_NOT_ACTIVE + aliceDID), strangerKey);
 		AString nobody = server.getEngine().managedUserDID(Strings.create("nobody"));
 		assertEquals(strangerKey.replace(aliceDID.toString(), nobody.toString()),
 			reason(namedToken(attacker, nobody, nobody, venueDID)),
 			"an unknown user reads exactly like an unregistered key");
 		String wrongSubject = reason(namedToken(aliceKey, bobDID, bobDID, venueDID));
-		assertTrue(wrongSubject.contains("is not an active authentication key of " + bobDID), wrongSubject);
+		assertTrue(wrongSubject.contains(VenueAuthenticator.Reason.KEY_NOT_ACTIVE + bobDID), wrongSubject);
 		String issuerMismatch = reason(namedToken(aliceKey, aliceDID, bobDID, venueDID));
-		assertTrue(issuerMismatch.contains("does not match sub " + aliceDID), issuerMismatch);
+		assertTrue(issuerMismatch.contains(VenueAuthenticator.Reason.ISSUER_MISMATCH + aliceDID), issuerMismatch);
 		String wrongAudience = reason(namedToken(aliceKey, aliceDID, aliceDID,
 			UCAN.toDIDKey(AKeyPair.generate().getAccountKey())));
-		assertTrue(wrongAudience.contains("token audience is not this venue"), wrongAudience);
+		assertTrue(wrongAudience.contains(VenueAuthenticator.Reason.AUDIENCE_NOT_THIS_VENUE), wrongAudience);
 		String foreignSignature = reason(namedToken(aliceKey, foreign, foreign, venueDID));
-		assertTrue(foreignSignature.contains("signature does not verify for " + foreign), foreignSignature);
+		assertTrue(foreignSignature.contains(VenueAuthenticator.Reason.SIGNATURE_FAILS + foreign), foreignSignature);
 	}
 
 	/** The venue's stated reason for refusing a token, straight from the authenticator. */
@@ -200,7 +200,7 @@ public class NamedUserAuthTest {
 		// The revoked key's holder is told so: they own the key, so it discloses
 		// nothing to anyone else.
 		String revoked = reason(namedToken(rotationKey, rotationDID, rotationDID, engine.getDIDString()));
-		assertTrue(revoked.contains("has been revoked for " + rotationDID), revoked);
+		assertTrue(revoked.contains(VenueAuthenticator.Reason.KEY_REVOKED + rotationDID), revoked);
 
 		AMap<AString, ACell> tombstone = convex.core.lang.RT.ensureMap(
 			engine.getAuth().getAuthenticationKeys(Strings.create("rotation")).get(rotationKeyDID));
@@ -211,7 +211,7 @@ public class NamedUserAuthTest {
 			engine.jobs().invokeInternal("v/ops/user/authentication-revoke",
 				Maps.of(Fields.KEY, replacementDID), RequestContext.of(rotationDID))
 				.get(5, TimeUnit.SECONDS));
-		assertTrue(last.getCause().getMessage().contains("final active"));
+		assertTrue(last.getCause().getMessage().contains(Auth.CANNOT_REVOKE_FINAL_KEY));
 	}
 
 	@Test
@@ -230,7 +230,7 @@ public class NamedUserAuthTest {
 			server.getEngine().jobs().invokeInternal("v/ops/user/authentication-add",
 				Maps.of(Fields.DID, bobDID, Fields.KEY, aliceKeyDID),
 				server.getEngine().venueContext()).get(5, TimeUnit.SECONDS));
-		assertTrue(duplicate.getCause().getMessage().contains("already bound"));
+		assertTrue(duplicate.getCause().getMessage().contains(Auth.KEY_ALREADY_BOUND));
 	}
 
 	@Test
