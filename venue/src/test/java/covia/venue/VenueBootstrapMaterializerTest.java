@@ -8,12 +8,15 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.Test;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import covia.api.Fields;
@@ -105,6 +108,35 @@ public class VenueBootstrapMaterializerTest {
 	}
 
 	@Test
+	public void runtimeCatalogTransactionCannotReplaceUnrelatedVenueState() throws Exception {
+		Engine engine = Engine.createTemp(null);
+		BlockingSummaryAdapter adapter = new BlockingSummaryAdapter();
+		CompletableFuture<Void> registration = null;
+		try {
+			Engine.addDemoAssets(engine);
+			registration = CompletableFuture.runAsync(() -> engine.registerAdapter(adapter));
+			assertTrue(adapter.transactionStarted.await(5, TimeUnit.SECONDS));
+
+			AString did = Strings.create("did:test:catalog-concurrency");
+			Blob jobId = Blob.parse("0x0102");
+			User user = engine.getVenueState().users().ensure(did);
+			user.persistJob(jobId, Maps.of(Fields.STATUS, covia.grid.Status.PENDING));
+
+			adapter.allowCommit.countDown();
+			registration.get(5, TimeUnit.SECONDS);
+
+			assertNotNull(user.getJob(jobId),
+				"the workspace transaction must not replace an unrelated user update");
+			assertNotNull(engine.resolvePath(
+				Strings.create("v/info/adapters/blocking-summary"), engine.venueContext()),
+				"the workspace transaction must still commit its catalog update");
+		} finally {
+			adapter.allowCommit.countDown();
+			engine.close();
+		}
+	}
+
+	@Test
 	public void modelLeafCannotAlsoBecomeNamespaceAcrossAdapters() {
 		Engine engine = Engine.createTemp(null);
 		try {
@@ -190,6 +222,35 @@ public class VenueBootstrapMaterializerTest {
 
 		@Override
 		public CompletableFuture<ACell> invokeFuture(
+				RequestContext context, AMap<AString, ACell> metadata, ACell input) {
+			return CompletableFuture.completedFuture(input);
+		}
+	}
+
+	private static final class BlockingSummaryAdapter extends AAdapter {
+		private final CountDownLatch transactionStarted = new CountDownLatch(1);
+		private final CountDownLatch allowCommit = new CountDownLatch(1);
+
+		@Override public String getName() { return "blocking-summary"; }
+
+		@Override public String getDescription() {
+			transactionStarted.countDown();
+			try {
+				if (!allowCommit.await(5, TimeUnit.SECONDS)) {
+					throw new IllegalStateException("Timed out awaiting catalog commit");
+				}
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				throw new IllegalStateException("Interrupted awaiting catalog commit", e);
+			}
+			return "Blocking catalog transaction test adapter";
+		}
+
+		@Override protected void installAssets() {
+			installAsset("blocking-summary/echo", "/asset-examples/echoop.json");
+		}
+
+		@Override public CompletableFuture<ACell> invokeFuture(
 				RequestContext context, AMap<AString, ACell> metadata, ACell input) {
 			return CompletableFuture.completedFuture(input);
 		}

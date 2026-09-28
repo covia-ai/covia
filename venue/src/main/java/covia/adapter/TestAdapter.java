@@ -25,6 +25,7 @@ import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.RequestContext;
 import covia.venue.AgentState;
+import covia.venue.api.A2ACodec;
 
 public class TestAdapter extends AAdapter {
 	
@@ -289,8 +290,7 @@ public class TestAdapter extends AAdapter {
             return;
         }
 
-        ACell message = messageRecord.get(Fields.MESSAGE);
-        ACell content = RT.getIn(message, "content");
+        ACell content = messageText(messageRecord.get(Fields.MESSAGE));
 
         // If message content is "done", complete the job with a summary
         if (content != null && "done".equals(content.toString())) {
@@ -306,6 +306,23 @@ public class TestAdapter extends AAdapter {
                 return data;
             });
         }
+    }
+
+    /**
+     * Text of a delivered message. A REST caller sends {@code {content}}; an A2A
+     * SendMessage arrives as {@code {role, parts: [{type: "text", text}]}} and
+     * carries no {@code content} field at all (#507).
+     */
+    private static ACell messageText(ACell message) {
+        ACell content = RT.getIn(message, "content");
+        if (content != null) return content;
+        AVector<ACell> parts = RT.ensureVector(RT.getIn(message, A2ACodec.PARTS));
+        if (parts == null) return null;
+        for (long i = 0; i < parts.count(); i++) {
+            ACell text = RT.getIn(parts.get(i), Fields.TEXT);
+            if (text != null) return text;
+        }
+        return null;
     }
 
     @Override

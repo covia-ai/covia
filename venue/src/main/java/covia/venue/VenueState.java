@@ -37,17 +37,17 @@ import covia.venue.storage.LatticeStorage;
  *       a single sign through the {@code SignedCursor} chain.</li>
  * </ul>
  *
- * <p>The recommended pattern for Engine is: bootstrap with a connected
- * VenueState (so the DID initialisation is signed), then {@link #fork()}
- * for all subsequent request processing. {@code Engine.syncState()} calls
- * {@link #sync()} once per request.</p>
+ * <p>Engine uses a connected {@code VenueState} as its authoritative state.
+ * That keeps component writes visible to every Engine consumer immediately
+ * and leaves publication and physical durability as separate concerns.</p>
  *
- * <p><b>Why the fork is load-bearing, not an optimisation:</b> a signature is
- * the venue's attestation of a coherent whole-venue snapshot. Individual
- * writes between snapshots are working state — they must NOT be signed,
- * persisted, or propagated one by one. The fork is the snapshot boundary:
- * sync cadence (per request / sweep / flush) defines exactly which states
- * the venue ever attests to.</p>
+ * <p>Forks are explicit, bounded transactions. Use one when several writes
+ * must become visible together: perform the work against the fork, call
+ * {@link #sync()} only after all work succeeds, and discard the fork on
+ * failure. A whole-venue fork also requires an exclusive mutation boundary;
+ * active features should prefer the narrowest component fork that contains
+ * their transaction. A fork should not be retained as a second long-lived copy
+ * of venue state.</p>
  *
  * <p>Provides domain-specific component accessors:</p>
  * <ul>
@@ -65,10 +65,12 @@ import covia.venue.storage.LatticeStorage;
  *
  * // Connected to a root lattice cursor (Engine)
  * VenueState connected = VenueState.fromRoot(rootCursor, accountKey);
- * // ... bootstrap DID ...
- * VenueState forked = connected.fork();  // unsigned local writes
- * forked.assets().store(meta, content);  // local only
- * forked.sync();                         // merge + sign once
+ * connected.assets().store(meta, content); // immediately visible at root
+ *
+ * // Bounded transaction
+ * VenueState transaction = connected.fork();
+ * transaction.assets().store(meta, content); // private until commit
+ * transaction.sync();                        // commit atomically
  * }</pre>
  */
 public class VenueState extends ALatticeComponent<ACell> {
@@ -255,10 +257,12 @@ public class VenueState extends ALatticeComponent<ACell> {
 	 * signing. Call {@link #sync()} to propagate all changes to the parent
 	 * cursor, which triggers a single sign through the SignedCursor chain.
 	 *
-	 * <p>This is the recommended mode for Engine: multiple writes within
-	 * a request (asset stores, job updates) go to the local fork, then
-	 * a single sync() at the end of the request signs and propagates
-	 * all changes at once.</p>
+	 * <p>This is intended for a bounded transaction whose writes must become
+	 * visible together. Call {@code sync()} only on success; dropping the fork
+	 * without syncing discards its local writes. Engine itself keeps a connected
+	 * VenueState rather than a long-lived fork. The caller must exclude concurrent
+	 * parent mutations for a whole-venue transaction; otherwise fork the narrowest
+	 * independently owned component instead.</p>
 	 *
 	 * <p>The forked cursor uses a local {@code Root} backed by
 	 * {@code AtomicReference} — reads and writes are lock-free and

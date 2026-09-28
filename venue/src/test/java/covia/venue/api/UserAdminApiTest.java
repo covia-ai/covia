@@ -95,9 +95,19 @@ public class UserAdminApiTest {
 
 		HttpResponse<String> auths = get("users/" + callerDID + "/authentications", true);
 		// A self-sovereign did:key caller is not a venue-managed named user, so
-		// authentication-list rejects with a 400 (bad request), not 403/500 —
-		// distinguishing "wrong kind of account" from "not authorised".
-		assertEquals(400, auths.statusCode(), auths.body());
+		// the venue holds no authenticators for it: an empty set, not an error,
+		// and clients need no per-account-type special case (#524).
+		assertEquals(200, auths.statusCode(), auths.body());
+		ACell body = JSON.parse(auths.body());
+		assertEquals(Strings.create(callerDID), RT.getIn(body, "did"));
+		assertEquals(Maps.empty(), RT.getIn(body, "authenticationKeys"));
+	}
+
+	@Test
+	public void testAuthenticationsDeniesReadingAnotherUsersRecord() throws Exception {
+		String otherDID = UCAN.toDIDKey(AKeyPair.generate().getAccountKey()).toString();
+		HttpResponse<String> r = get("users/" + otherDID + "/authentications", true);
+		assertEquals(403, r.statusCode(), r.body());
 	}
 
 	@Test

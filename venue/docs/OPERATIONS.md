@@ -565,7 +565,7 @@ Engine startup:
          # installAsset stores immutable meta in /a/<hash> and records the
          # catalog declaration for publication after every adapter is present.
 
-  2. Build the venue-owned bootstrap snapshot on a child VenueState fork
+  2. Build the venue-owned bootstrap snapshot on a child w/global workspace fork
      for each catalog declaration:
        write and read-validate its full v/... path on the child fork
      write and read-validate v/info/name, did, version, started, protocols
@@ -627,7 +627,7 @@ A separate `installTestAsset(catalogPath, resourcePath)` method writes to `/v/te
 | Operation | Mechanism |
 |-----------|-----------|
 | Read `/v/...` | Resolver returns the value unconditionally. No UCAN required. |
-| Write `/v/...` (startup) | Engine owns the venue-user cursor and writes to a child `VenueState` fork before one `sync()`; no external authorization surface or Job is involved. |
+| Write `/v/...` (startup) | Engine owns the venue-user cursor and writes to a narrow `w/global` workspace fork before one `sync()`; no external authorization surface or Job is involved. |
 | Write `/v/...` (operator) | JWT signed by the venue keypair. The auth middleware identifies the caller as the venue's own DID; the resolver allows the write. |
 | Write `/v/...` (anyone else) | Resolver rejects with a permission error. |
 

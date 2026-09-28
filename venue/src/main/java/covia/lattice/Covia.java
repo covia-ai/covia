@@ -145,13 +145,12 @@ public final class Covia {
 	 * contexts safe by construction.
 	 *
 	 * <p>Timestamps are never inflated past the write clock (no {@code +1}
-	 * Lamport-style bumps): a stamp is real wall-clock time. Equal stamps on
-	 * distinct values are resolvable because the merge is DIRECTIONAL — the
-	 * contract documented by Convex 0.8.9 (convex#641): {@code own} wins an
-	 * unresolved tie, and fork/sync reconciliation treats the local edit as
-	 * own. Covia's merge sites order their arguments so the newer side is
-	 * {@code own}, typically via fork + sync of the relevant lattice
-	 * segment. See covia#214.</p>
+	 * Lamport-style bumps): a stamp is real wall-clock time used to reconcile
+	 * external snapshots. Connected local writes do not LWW-merge with their
+	 * predecessor; atomic cursor update order decides the current value, so a
+	 * later local write wins even within the same millisecond. On an external
+	 * equal-stamp merge, the directional Convex contract keeps {@code own} (the
+	 * venue's current authoritative value). See covia#214.</p>
 	 */
 	private static CVMLong ratchet(ACell existing, CVMLong ts) {
 		if (existing instanceof CVMLong prev && prev.longValue() > ts.longValue()) return prev;

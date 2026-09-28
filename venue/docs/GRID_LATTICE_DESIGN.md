@@ -809,7 +809,7 @@ The target state described above will be achieved incrementally. Each phase buil
 Foundation for all lattice-backed state management.
 
 - `VenueState`, `AssetStore`, `User` wrappers over lattice cursors
-- Forked cursors for batched unsigned writes with single-sign sync
+- Connected Engine state plus narrow component forks for bounded transactions
 - `Covia.ROOT` lattice definition with KeyedLattice composition
 - Per-venue OwnerLattice (one signing slot per venue)
 - Job write-through to lattice on every status update
@@ -973,12 +973,13 @@ simply absent from the newer winning value, so it cannot be reintroduced by a
 per-entry union on merge-back (the failure mode of the previous per-entry-LWW
 model).
 
-Distinct values CAN carry equal stamps (writes within one clock tick). That is
-resolvable because ties prefer `own`: **every merge site must order its
-arguments so the newer side is `own`** — covia's responsibility, typically
-discharged by forking the relevant lattice segment and syncing it (the fork
-sync passes local edits as `own` deliberately). See covia#214 and
-Convex-Dev/convex#641 for the analysis.
+Distinct values CAN carry equal stamps (writes within one clock tick). Local
+writes never resolve this through LWW: connected cursor updates are atomically
+ordered, and the last successful local update is the current value. For an
+external equal-stamp snapshot, the directional merge keeps `own` — the venue's
+current authoritative value. Merge sites must therefore place current local
+state in the `own` position. See covia#214 and Convex-Dev/convex#641 for the
+analysis.
 
 This is correct because a venue has a **single authoritative writer**: its signing
 key under `:grid → :venues → OwnerLattice → SignedLattice`. Every merge a venue
@@ -1060,41 +1061,56 @@ identity metadata stays in one documented place with one ownership rule.
 The genuinely multi-writer regions (`:meta` and DLFS) use ordinary
 commutative/associative/idempotent CRDT joins. Venue `:value` reconciliation is
 deliberately directional on an equal timestamp (`own` wins), relying on its
-single authoritative writer and the fork/sync rule that presents the local edit
+single authoritative writer and connected updates that present the local edit
 as `own`. Distinct concurrent authorities must not write the same venue entry.
 
 ### A.3 Update Logic
 
-**Fork/sync pattern:** Engine keeps one long-lived unsigned venue fork. Requests
-mutate that fork with atomic cursor updates; publication syncs its newest coherent
-snapshot back through the signed parent:
+**Connected component pattern:** Engine holds one connected `VenueState` as the
+live representative of the venue. Component mutations atomically replace the
+shared root through the signed owner boundary:
 
 ```
-startup: connected venue → fork
-request A: atomic update job X ┐
-request B: atomic update job Y ├─ same live fork
-request C: atomic update job X ┘
-publication: fork.sync() → whole snapshot merge → one signature
+startup: Engine → connected VenueState
+request A: component update job X → signed root
+request B: component update job Y → signed root
+publication: application.sync() → current root
 ```
 
 Direct `updateAndGet` calls on sub-cursors remain atomic because they ultimately
-replace the shared fork root with compare-and-swap. A short-lived child fork is
-reserved for cases such as bootstrap materialisation that must validate several
-writes before publishing them together.
+replace the shared application root with compare-and-swap. A short-lived child
+fork is reserved for cases such as bootstrap materialisation that must validate
+several writes before committing them together. That transaction forks only the
+venue-owned `w/global` workspace, not the whole venue. Because the JSON regions
+below the venue's LWW node define no merge, such a fork is a staging copy: the
+transaction commits by replaying its validated writes in one `updateAndGet` on
+the connected cursor. Request duration and persistence cadence are not
+transaction boundaries.
 
-### A.4 Signing Strategy: Sign Late, Verify Early
+The timestamp is not a local sequence number. Local writes are not merged with
+the preceding local value: their successful atomic update order determines the
+current root, including multiple updates in the same millisecond. The wall-clock
+timestamp exists to reconcile an externally received snapshot; on an equal stamp
+the venue keeps its own current authoritative value.
 
-Signatures are applied at **sync boundaries** — when state leaves the venue's local process. This avoids the cost of re-signing on every internal operation.
+### A.4 Signing Strategy: Sign Connected Updates, Verify Early
+
+The venue's Ed25519 keypair signs each successful connected component mutation
+as it crosses the `SignedCursor` boundary. A bounded transaction fork accumulates
+private writes and produces one signature when the component commits it — a
+whole-venue `sync()`, or one replayed `updateAndGet` for a narrow fork.
 
 ```
-[Internal operations]  →  unsigned cursor updates (fast)
-           |
-     [Sync boundary]   →  sign venue state with keypair
-           |
-[Persistence / Replication]  →  signed state goes to disk or network
+[Component mutation] → atomic cursor update → sign venue owner value
+                                               |
+                              application.sync() publishes current root
 ```
 
-The venue's Ed25519 keypair signs the venue state at the point of **persistence** (writing to durable storage) and **replication** (sending to another venue). Internal cursor operations remain unsigned for performance. The signing overhead is paid once per sync, not once per operation.
+Signing and persistence are deliberately separate. Signing makes a successful
+state transition authoritative in memory; `application.sync()` publishes the
+current root and `application.flush()` supplies the physical durability barrier.
+This keeps Engine state coherent for local and embedded consumers without a
+second long-lived working copy.
 
 **Verification on merge:** When receiving foreign lattice state (from disk recovery, peer replication, or federation), `SignedLattice.merge()` handles verification automatically — verify Ed25519 signature, merge inner state if valid, re-sign the merged result if it differs from both inputs, reject if signature invalid.
 
@@ -1104,10 +1120,11 @@ The venue's Ed25519 keypair signs the venue state at the point of **persistence*
 
 **Startup:** Load signed state from Etch store via `store.getRootData()`, verify signature (own keypair), and initialise cursors. Job recovery stabilises PENDING/interrupted STARTED Jobs as FAILED and restores the stable waiting family (PAUSED/INPUT_REQUIRED/AUTH_REQUIRED). AgentAdapter then clears stale RUNNING/session fences, removes intake belonging to terminal Jobs, preserves jobless lattice tasks, and wakes only remaining durable queued work. No internal agent execution attempt is resumed.
 
-**Periodic sync:** Sign current venue state, write to Etch via `store.setRootData()`. Frequency is configurable:
-- **On every API request** — Maximum durability, higher IO cost (current default via `app.after("/api/*")`)
-- **Periodic** — Write every N seconds or N operations
-- **On shutdown** — Minimum IO, risk of data loss on crash
+**Periodic publication:** Engine publishes the connected root every 100 ms and
+invokes the store durability barrier every 10 seconds. Role-selected request
+hooks may publish sooner, and callers that require synchronous durability use
+`engine.flush()`. `Engine.close()` performs a final publication and flush before
+the host and store close.
 
 **Crash recovery:** If a venue crashes between persistence points, it loses operations since the last sync. The persisted lattice still contains a coherent snapshot (never a partial write); clients polling for job status may see the job revert to that point. A backup may restore a newer authentic snapshot previously signed by the same venue authority.
 

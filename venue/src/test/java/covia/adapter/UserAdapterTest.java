@@ -190,6 +190,16 @@ class UserAdapterTest {
 		assertTrue(RT.ensureLong(RT.getIn(list, "total")).longValue() >= 2);
 	}
 
+	/** #524: stats.users is the registered population, external DIDs included —
+	 *  not just the venue-managed named accounts. */
+	@Test
+	void statsCountExternalUsers() throws Exception {
+		long before = RT.ensureLong(engine.getStats().get(Strings.create("users"))).longValue();
+		create(Maps.of(Fields.DID, UCAN.toDIDKey(AKeyPair.generate().getAccountKey())));
+		long after = RT.ensureLong(engine.getStats().get(Strings.create("users"))).longValue();
+		assertTrue(after > before, "registering an external DID raises stats.users");
+	}
+
 	@Test
 	void widenedMethodsMatchOperationFormAndReportManagedFlag() throws Exception {
 		// #255: CoviaAPI's job-free REST routes call list()/info()/
@@ -221,6 +231,23 @@ class UserAdapterTest {
 
 		ACell auths = adapter.authenticationList(RequestContext.of(managedDid), Maps.empty());
 		assertEquals(managedDid, RT.getIn(auths, Fields.DID));
+
+		// #524: a registered external DID has no venue-held authenticators — an
+		// empty set for itself and for the operator, never an error; authority
+		// and registration are still enforced.
+		ACell externalAuths = adapter.authenticationList(engine.venueContext(),
+			Maps.of(Fields.DID, selfSovereign));
+		assertEquals(selfSovereign, RT.getIn(externalAuths, Fields.DID));
+		assertEquals(Maps.empty(), RT.getIn(externalAuths, Fields.AUTHENTICATION_KEYS));
+		assertEquals(externalAuths,
+			adapter.authenticationList(RequestContext.of(selfSovereign), Maps.empty()));
+		assertThrows(AuthException.class,
+			() -> adapter.authenticationList(RequestContext.of(selfSovereign),
+				Maps.of(Fields.DID, managedDid)));
+		AString unregistered = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
+		assertThrows(IllegalArgumentException.class,
+			() -> adapter.authenticationList(engine.venueContext(),
+				Maps.of(Fields.DID, unregistered)));
 	}
 
 	@Test

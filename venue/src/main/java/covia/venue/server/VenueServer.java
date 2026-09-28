@@ -945,8 +945,8 @@ public class VenueServer {
 		routes.before(ctx -> applyCorsPolicy(ctx, corsPolicy, allowPrivateNetwork));
 
 		// Native protocol routes and explicitly opted-in embedder routes sync
-		// lattice state after handling. Matching by endpoint role prevents an
-		// unrelated /api/* route from acquiring Covia persistence semantics.
+		// the connected lattice root after handling. Matching by endpoint role
+		// prevents an unrelated /api/* route from acquiring Covia persistence semantics.
 		routes.afterMatched(ctx -> {
 			if (VenueRouteFeature.syncsLattice(ctx.routeRoles())) {
 				engine.syncState();
@@ -1176,9 +1176,9 @@ public class VenueServer {
 	 * Full shutdown: stops HTTP server, drains the engine's persistence sweep
 	 * and runs a final flush, then closes NodeServer and store.
 	 *
-	 * <p>The engine.close() must run BEFORE nodeServer.close() so the
-	 * venueState fork's writes are merged into the root before the
-	 * propagator's shutdown drain reads from it. See
+	 * <p>The engine.close() must run BEFORE nodeServer.close() so its final
+	 * root publication and durability barrier complete while the host remains
+	 * available. See
 	 * {@code venue/docs/PERSISTENCE.md} §5.3.</p>
 	 */
 	/** The MCP endpoint, or null when the venue has no {@code mcp} config block. */

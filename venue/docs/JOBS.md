@@ -148,8 +148,10 @@ for days, weeks, or months (workflows, HITL, agents). Consequences:
 ## Message delivery — no per-job queue
 
 `POST /jobs/{id}` → `JobManager.deliverMessage` → `adapter.handleMessage`,
-dispatched only when the adapter declares `supportsMultiTurn()`. Delivery to
-a terminal job is rejected (409). The base `Job` holds **no message queue**;
+dispatched only when the adapter declares `supportsMultiTurn()`. Delivery is
+synchronous: 202 means the adapter took the message, and an adapter that
+cannot take it throws rather than dropping it. Delivery to a terminal job is
+rejected (409). The base `Job` holds **no message queue**;
 buffering, when needed, is the receiving operation's concern (agents queue
 inbound messages durably in `session.pending` — see AGENT_SESSIONS.md).
 
@@ -267,6 +269,13 @@ responses do not prove execution failed. They set observation health to
 back off with jitter (including HTTP Retry-After), with at most 32 requests
 globally and four per target. There is no job lifetime deadline. Interrupted
 A2A tasks remain observed, including when resumed directly at the remote peer.
+
+An interrupted A2A mirror is waiting on its caller. A message delivered to the
+local job is relayed as a continuation `SendMessage` on the same remote task,
+and the job takes the state in the remote response before delivery returns. A
+remote refusal (4xx, JSON-RPC error) is a 409 to the deliverer; a transport
+failure, 5xx or unreadable reply is a 502, since delivery is then unknown.
+Either way the local job is unchanged and observation continues.
 
 Submissions do not require a repeatable key. Grid submits once to `/invoke`;
 A2A requests `returnImmediately`. If acceptance cannot be established, the

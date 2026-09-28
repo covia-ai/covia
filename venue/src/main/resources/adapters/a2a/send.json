@@ -1,6 +1,6 @@
 {
 	"name": "A2A Send Message",
-	"description": "Send a message to a remote A2A agent. The local Covia Job mirrors the remote Task's lifecycle: status updates propagate, final artifacts become the Job's output. Pass `taskId` to continue an existing remote conversation.",
+	"description": "Send a message to a remote A2A agent. The local Covia Job mirrors the remote Task's lifecycle: status updates propagate, final artifacts become the Job's output. When the remote Task is interrupted (INPUT_REQUIRED, AUTH_REQUIRED) the Job is too: reply by delivering a message to the Job, which is relayed to the Task. `taskId` instead starts a separate Job on an existing remote Task.",
 	"operation": {
 		"adapter": "a2a:send",
 		"readOnly": false,

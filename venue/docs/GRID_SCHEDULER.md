@@ -73,10 +73,10 @@ updated = wall-clock stamp of the last mutation
   sharing a `time` and gives each a stable identity (minted at schedule time,
   same generator as Job IDs).
 
-**Why removals survive the merge.** The venue commits its state through a
-*forked cursor*: `syncState` (and the background persistence sweep) merge the
-fork into the parent with a **lattice join**. The venue `:value` is a single
-**whole-value-LWW node** (see GRID_LATTICE_DESIGN.md §A.2): on merge the newest
+**Why removals survive external merge.** Local scheduler changes update the
+Engine's connected root directly; no lattice merge occurs between successive
+local writes. The venue `:value` is a single **whole-value-LWW node** (see
+GRID_LATTICE_DESIGN.md §A.2): when an external snapshot is reconciled, the newer
 whole value wins wholesale, so a removed event (cancel or fire) stays removed —
 there is no per-entry `Index` *union* to re-introduce it. `:schedule` is a plain
 field inside that node; its `Index` exists purely for ordering, not merge. The

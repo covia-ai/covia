@@ -1176,7 +1176,8 @@ public class CoviaAPI extends ACoviaAPI {
 	@OpenApi(path = ROUTE + "jobs/{id}",
 			methods = HttpMethod.POST,
 			tags = { "Covia"},
-			summary = "Send a message to a running job. Returns 202 Accepted once the message is queued.",
+			summary = "Send a message to a running job. Returns 202 Accepted once the job's adapter has taken the message; "
+				+ "for a job mirroring remote work that means the remote end accepted it.",
 			operationId = CoviaAPI.SEND_MESSAGE,
 			pathParams = {
 					@OpenApiParam(
@@ -1192,7 +1193,8 @@ public class CoviaAPI extends ACoviaAPI {
 					@OpenApiResponse(status = "202", description = "Message accepted and queued"),
 					@OpenApiResponse(status = "403", description = "Caller is not the job owner"),
 					@OpenApiResponse(status = "404", description = "Job not found"),
-					@OpenApiResponse(status = "409", description = "Job is in terminal state")
+					@OpenApiResponse(status = "409", description = "Job is in terminal state, or its adapter refused the message"),
+					@OpenApiResponse(status = "502", description = "The remote end of a mirrored job did not acknowledge the message; delivery is unknown")
 					})
 	protected void sendMessage(Context ctx) {
 		Blob id = Blob.parse(ctx.pathParam("id"));
@@ -1223,6 +1225,8 @@ public class CoviaAPI extends ACoviaAPI {
 			buildError(ctx, 404, e.getMessage());
 		} catch (IllegalStateException e) {
 			buildError(ctx, 409, e.getMessage());
+		} catch (covia.exception.ResponseException e) {
+			buildError(ctx, 502, e.getMessage());
 		}
 	}
 
@@ -2064,8 +2068,9 @@ public class CoviaAPI extends ACoviaAPI {
 	@OpenApi(path = ROUTE + "users/{did}/authentications",
 			methods = HttpMethod.GET,
 			tags = { "Covia" },
-			summary = "List a venue-managed user's authenticators, active and revoked "
+			summary = "List a user's authenticators, active and revoked "
 				+ "tombstones alike — the user:authentication-list payload (job-free, #255). "
+				+ "Only venue-managed users have any; a registered external DID returns an empty set. "
 				+ "The caller's own DID needs no operator authority; any other DID does.",
 			operationId = "getUserAuthentications",
 			pathParams = { @OpenApiParam(name = "did", description = "User DID") })

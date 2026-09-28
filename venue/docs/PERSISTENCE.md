@@ -7,7 +7,7 @@ phases are tracked below.
 
 **Reference docs (upstream):**
 - `convex/convex-peer/docs/PERSISTENCE.md` — NodeServer/propagator design, sync flow, the explicit "scheduled sweep + safety net" pattern this draft implements (lines 251-258), and the known open upstream gap around synchronous commit (lines 652-690).
-- `convex/convex-core/docs/LATTICE_CURSOR_DESIGN.md` — cursor hierarchy, fork semantics, the deliberate `ForkedLatticeCursor.sync() → parent.updateAndGet()` choice that creates the two-sync requirement (line 223).
+- `convex/convex-core/docs/LATTICE_CURSOR_DESIGN.md` — cursor hierarchy and the fork semantics used by bounded component transactions.
 - `convex/convex-core/docs/LATTICE_APPLICATIONS.md` — `RootComponent`,
   `ALatticeApplication`, component-parent policy, publication and durability.
 
@@ -26,7 +26,7 @@ This has structural problems on at least four axes:
 1. **API layer knows about engine internals.** HTTP routes call into `engine.syncState()`. Pure transport layers should not.
 2. **Per-route opt-in.** Any new endpoint (`/mcp`, `/a2a`, `/dlfs/*`, `/auth/*`, future) silently bypasses persistence until someone remembers to add an `after` hook.
 3. **Non-HTTP mutations are not covered.** The agent run loop's `mergeRunResult`, `JobManager.persistJobRecord`, scheduled wakes, federated grid sub-jobs, and `Auth.putUser` all mutate lattice state outside an HTTP request and rely on the next request to flush.
-4. **`venueState` is forked from the root cursor.** Writes go into a `ForkedLatticeCursor`'s `AtomicReference`. The shutdown hook reads from the root, which never sees the fork's writes until `venueState.sync()` runs. Even graceful close loses fork writes if `syncState` wasn't called between the last write and shutdown.
+4. **A long-lived `venueState` fork created a second working copy.** Root readers could observe stale state until `venueState.sync()` ran, and persistence needed an otherwise-unnecessary two-stage sync. Engine now keeps its `VenueState` connected; forks are reserved for bounded transactions.
 
 (`LatticePropagator.persistInterval` is **not** a relevant bound here, despite the name. Cross-check below; it's a boolean enable flag, not a time throttle, so it doesn't add any latency.)
 
@@ -93,20 +93,19 @@ This has structural problems on at least four axes:
                            │ cursor.set / updateAndGet
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  Cursor layer — UNCHANGED                                   │  no observer,
-│  Components write into venueState fork (or other trunks).   │  no fast-path
-│  No notifications, no observer infrastructure.              │  cost
+│  Cursor layer — connected Engine state                      │  atomic root
+│  Successful component writes update the authoritative root. │  updates
+│  Explicit forks exist only for bounded transactions.        │
 └──────────────────────────┬──────────────────────────────────┘
                            │ background sweep + on-demand barriers
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  Engine.persistence — NEW (~50 lines, no new class)         │  • daemon thread
-│  • Daemon thread runs every 100ms: venueState.sync()        │    sweeps periodically
+│  Engine.persistence (~50 lines, no new class)               │  • daemon thread
+│  • Daemon publishes the connected root every 100ms          │    sweeps periodically
 │  • engine.flush(): synchronous, blocks until disk           │  • flush is synchronous
 │  • engine.close(): final flush, then nodeServer.close()     │  • close ordered
 └──────────────────────────┬──────────────────────────────────┘
-                           │ venueState.sync() → root cursor
-                           │ root cursor.sync() → NodeServer.onSync
+                           │ application.sync() → NodeServer.onSync
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  NodeServer + LatticePropagator (existing convex-peer)      │  unchanged.
@@ -121,7 +120,7 @@ This has structural problems on at least four axes:
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**Principle**: components write to cursors and don't care about persistence. Engine sweeps the relevant trunks on a timer. Adapters that need an immediate barrier call `engine.flush()`. Forgetting to call sync is impossible at the component layer because the sweep covers it.
+**Principle**: components update connected state and don't care about persistence. Engine publishes the root on a timer. Adapters that need an immediate durability barrier call `engine.flush()`. A component uses a fork only when a bounded multi-write transaction requires one.
 
 ---
 
@@ -134,7 +133,7 @@ This has structural problems on at least four axes:
 | Component | File | What it owns |
 |---|---|---|
 | `CoviaApplication` | `venue/.../CoviaApplication.java` | complete hosted root; publication and store policy |
-| `VenueState` | `venue/.../VenueState.java` | venue cell, fork root |
+| `VenueState` | `venue/.../VenueState.java` | connected venue subtree; bounded transaction fork factory |
 | `Users` / `User` | `venue/.../Users.java`, `User.java` | per-DID lattice subtrees, child component factories |
 | `AgentState` | `venue/.../AgentState.java` | one agent's record (gold standard for the pattern) |
 | `AssetStore` | `venue/.../AssetStore.java` | content-addressed asset index |
@@ -194,114 +193,87 @@ Compliance audit:
 
 **No new class.** Three pieces, all in `Engine`. No convex-core change.
 
-### 5.0 Why two sync calls — the fork model
+### 5.0 Connected state; forks are transactions
 
-The sweep below calls `venueState.sync()` followed by `application.sync()`. These two
-calls do **different things at different layers** and both are necessary. The
-naming is mildly misleading because "venueState" is on the lattice already, but
-it isn't *connected* to the lattice in the way you'd assume.
-
-`engine.lattice` (`Engine.java:133`) is the root cursor — the cursor that
-NodeServer's propagator is wired to. `engine.venueState` is constructed in
-`initialiseFromCursor` (`Engine.java:210-218`) as:
+`engine.lattice` is the application root cursor and `engine.venueState` is a
+connected, path-derived component at the venue owner boundary:
 
 ```java
-VenueState connected = VenueState.fromRoot(lattice, getAccountKey());
-connected.initialise(getDIDString());           // signs DID write immediately
-this.venueState = connected.fork();              // ← FORK
+this.venueState = application.venue(getAccountKey());
+venueState.initialise(getDIDString());
 ```
 
-So there are three layers:
+A successful component mutation crosses the signed owner boundary and updates
+the authoritative in-memory root immediately. Publication and durability are
+separate operations:
 
-```
-CoviaApplication   (hosted root component; publication policy lives here)
-   ↓ path-derived view via VenueState.fromRoot
-connected          (signed cursor boundary; signs every write)
-   ↓ .fork()
-venueState         (in-memory fork; adapters/components write here)
-```
+| Call | Meaning |
+|---|---|
+| component mutation | atomically updates connected venue state and signs the resulting owner value |
+| `application.sync()` | publishes the current hosted root through the host policy |
+| `application.flush()` | invokes the store's physical durability barrier |
 
-Per the lattice contract, **a fork is independent of its parent** — writes to
-the fork sit in the fork's own `AtomicReference` and **do not appear at the
-parent until `fork.sync()` is explicitly called**.
+Local mutations do not compete through the LWW merge. Their atomic root update
+order decides the current value, including writes sharing a millisecond stamp.
+The wall-clock timestamp is only evidence for external snapshot reconciliation;
+it is not a logical local sequence number.
 
-The two sync calls correspond to the two layer transitions:
+This removes the second long-lived working copy and the two-stage
+`venueState.sync()` → `application.sync()` protocol. `Engine.syncState()` is
+therefore only a publication hint; it is not a state commit.
 
-| Call | What it does | What it does NOT do |
-|---|---|---|
-| `venueState.sync()` | `ForkedLatticeCursor.sync()` at `ForkedLatticeCursor.java:54` deliberately calls **`parent.updateAndGet(...)` (NOT `parent.sync()`)**. This walks the fork's accumulated writes through the chain via `updateAndGet`, crossing the SignedCursor boundary which produces **one Ed25519 signature for the whole batch**, all the way down to the root's `AtomicReference`. After this returns, writes are physically present at the root. | Does NOT call `parent.sync()`. The `RootLatticeCursor.onSync` callback is **not** fired. The propagator hears nothing. |
-| `application.sync()` | Crosses the hosted root publication boundary. A `NodeServer` host publishes through its configured propagator; a standalone host retains the root in its store. | Does NOT provide a physical durability barrier; `application.flush()` is separate. |
-
-Skip the first → fork writes never reach the root → propagator broadcasts stale state.
-Skip the second → root has the writes but the propagator never gets the trigger → no disk write.
-
-The `ForkedLatticeCursor` `parent.updateAndGet` choice is intentional and documented at `convex-core/docs/LATTICE_CURSOR_DESIGN.md:223`. It's there so you can sync the fork mid-life without re-triggering persistence for every upstream component along the chain. The cost is the two-call requirement at the venue layer.
-
-**Why the fork exists.** A signature is the venue's **attestation of a
-coherent whole-venue snapshot** — the states it is willing to persist and
-propagate as its own. Individual writes between snapshots are working state:
-they must NOT be signed, persisted, or broadcast one by one. The fork is the
-snapshot boundary; the sync cadence (per request / sweep / flush) defines
-exactly which states the venue ever attests to. The signature-cost saving
-(one Ed25519 per sync window instead of N per write) is real but secondary.
-
-**Could we drop the fork?** No — a connected `venueState` would sign and
-expose every interim write between snapshots, changing what a venue signature
-*means*, not just what it costs. The fork is load-bearing design, not an
-optimisation.
+`VenueState.fork()` remains available for an explicit bounded transaction, but
+the narrowest component fork is preferred. A component performs all transaction
+writes against the fork, commits on success, and drops the fork on failure.
+How it commits depends on where the fork sits: `sync()` merges only at a level
+whose lattice defines a merge, and below the venue's whole-value LWW node the
+JSON regions define none. A narrow fork there is a staging and validation copy;
+the component commits by replaying its staged writes in one atomic
+`updateAndGet` on the connected cursor, which preserves concurrent unrelated
+writes. The bootstrap materializer demonstrates this for the venue-owned
+`w/global` workspace, so catalog writes become visible together without
+copying unrelated venue state. Request lifetime, persistence cadence, and
+signature batching alone are not transaction boundaries.
 
 ### 5.1 Background sweep
 
-A daemon thread runs a periodic sync. Sweeping means: merge the venueState fork
-into the root, then trigger the propagator. **There is exactly one trunk
-(`venueState`) that needs explicit fork-syncing.** DLFS writes go directly to
-the root cursor (path-derived view from `engine.getRootCursor()` per
-`DLFSAdapter.java:154-166`), so the application-level sync covers them.
+A daemon publishes the connected root every 100 ms. Every 10 seconds it also
+invokes the store durability barrier, bounding the default unclean-shutdown
+loss window independently of the source of a mutation. Ephemeral applications
+and raw-cursor Engines with the no-op persistence handler do not start the
+daemon.
 
 ```java
 // in covia.venue.Engine
 
 private static final long SWEEP_INTERVAL_MS = 100;
-private final ScheduledExecutorService persistenceSweep =
-    Executors.newSingleThreadScheduledExecutor(r -> {
-        Thread t = new Thread(r, "covia-persistence-sweep");
-        t.setDaemon(true);
-        return t;
-    });
-
 private void startPersistenceSweep() {
     persistenceSweep.scheduleWithFixedDelay(
-        this::sweepTrunks,
+        this::sweep,
         SWEEP_INTERVAL_MS,
         SWEEP_INTERVAL_MS,
         TimeUnit.MILLISECONDS);
 }
 
-// Merge venueState fork into the root, then trigger the propagator.
-// Sync is a no-op if nothing changed, so this is cheap on idle venues.
-// See §5.0 for why both calls are needed.
 private void sweep() {
     try {
-        venueState.sync();   // fork → root (signs the batch)
-        application.sync(); // hosted root publication policy
+        publishApplicationRoot();
+        if (System.currentTimeMillis() - lastFlushMillis >= FLUSH_INTERVAL_MS) {
+            flushStore();
+            lastFlushMillis = System.currentTimeMillis();
+        }
     } catch (Exception e) {
         log.warn("Persistence sweep failed", e);
-        // next sweep retries
     }
 }
 ```
 
-If a future feature introduces another independent fork (e.g. a per-job
-transactional sub-fork that needs to outlive the operation), `sweep()` is the
-single place where it gets added. Today there is one trunk and one place to
-audit. DLFS is **not** a trunk — it writes through path views from the root
-cursor, so `application.sync()` already captures DLFS writes without an extra call.
+**Cost when idle**: 10 publication hints/sec plus one durability barrier every
+10 seconds. No venue state is copied or merged.
 
-**Cost when idle**: 10 sync calls/sec, each a no-op when there's nothing to merge. Effectively zero.
-
-**Cost when busy**: 10 sync calls/sec, each merging the accumulated writes since the last sweep. Coalesced naturally by the sweep interval.
-
-**Latency bound**: a write made just after a sweep waits up to 100 ms before the next sweep, then propagates through the existing `LatticePropagator` pipeline. The propagator processes the value within scheduler latency (microseconds to a few ms) — there is **no additional 100ms or 30s bound** despite the `persistInterval` field name (see §5.5). Worst-case crash-loss window ≈ sweep interval (100 ms) + EtchStore write latency.
+**Latency bounds**: root visibility is immediate, host publication waits at
+most 100 ms by default, and physical durability waits at most 10 seconds unless
+the caller requests an explicit `flush()`.
 
 ### 5.2 Synchronous barrier — `engine.flush()`
 
@@ -311,15 +283,14 @@ For mutations that need to be durable before continuing (job completion, audit r
 // in covia.venue.Engine
 
 /**
- * Synchronises the venue fork, publishes the complete hosted root, then asks
- * the host store for its physical durability barrier.
+ * Publishes the complete hosted root, then asks the host store for its
+ * physical durability barrier.
  *
  * Use sparingly — most writes don't need this. Default eventual durability
  * via the background sweep is fine for in-flight job state, conversation
  * history, etc.
  */
 public void flush() {
-    venueState.sync();       // fork → root
     application.sync();     // root publication policy
     application.flush();    // store durability barrier
 }
@@ -329,18 +300,21 @@ Adapters call `engine.flush()` after the rare mutation that needs strong durabil
 
 ### 5.3 Engine.close ordering
 
-`Engine.close()` must run a final synchronous flush **before** `nodeServer.close()` so the venueState fork's writes reach the root before the existing graceful drain reads from it:
+`Engine.close()` must run a final synchronous flush **before**
+`nodeServer.close()` so publication and durability complete while the host is
+still available:
 
 ```java
 public void close() {
     persistenceSweep.shutdown();
-    flush();                // synchronous final sweep + propagator drain
+    flush();                // final publication + durability barrier
     nodeServer.close();     // existing triggerAndClose
     store.close();
 }
 ```
 
-This fixes the existing bug where `nodeServer.close()` reads from the root cursor before venueState has been merged in.
+There is no separate venue-state drain: successful component mutations are
+already in the root.
 
 ### 5.4 Delete the after-hook
 
@@ -377,10 +351,10 @@ This is worth filing as a separate convex-peer cleanup issue (rename to `persist
 
 | Problem from §1 | How this design fixes it |
 |---|---|
-| API layer knows about engine internals | `app.after` hooks deleted; HTTP layer no longer references `engine.syncState()`. |
+| API layer knows about engine internals | The remaining role-selected hook is only a low-latency publication hint; state correctness and eventual publication do not depend on it. |
 | Per-route opt-in | New endpoints don't need persistence wiring at all. The sweep covers any cursor write. |
 | Non-HTTP mutations | Same: any write to a tracked trunk is picked up by the sweep regardless of who made it. |
-| Forked cursor missed by shutdown | `Engine.close()` runs `flush()` before `nodeServer.close()`. |
+| Long-lived fork made root state stale | Engine components use connected venue state; bounded transaction forks commit themselves. |
 | `persistInterval = 30 000` | Non-issue — it's a boolean gate, not a throttle (see §5.5). Disk writes happen on every sync regardless. |
 
 ### 5.7 Future option — observable cursor
@@ -418,7 +392,7 @@ through `RootComponent.sync()` and physical durability through
 
 - `CoviaApplication` connects Covia to the `NodeServer`'s hosted root.
 - **Engine** owns the sweep, flush and close ordering.
-- `Engine.flush()` performs fork sync → application sync → application flush.
+- `Engine.flush()` performs application sync → application flush.
 - Focused tests cover the sweep, explicit barrier and close-time drain.
 - The route-selected sync safety net still coexists with the sweep.
 
@@ -479,8 +453,8 @@ Plus:
 | Sweep interval default | **100 ms** | 10 sync calls/sec on idle venues, indistinguishable from zero. Worst-case latency on bursts ≤ 100 ms. |
 | `persistInterval` (LatticePropagator) | **No change.** Stock 30 000 default is fine. | Cross-check showed it's a boolean gate, not a throttle — lowering it does nothing. See §5.5. |
 | Synchronous durability | **Opt-in `engine.flush()`** | Most writes don't need fsync. Critical writes call `flush()` explicitly. |
-| `venueState.fork()` model | **Keep the fork.** Engine.close drains it before nodeServer.close reads root. | Single-sign optimization is real. The bug it caused is fixed by close ordering. |
-| Component-internal forks | **Allowed and encouraged** for transactional multi-write atomicity. Component is responsible for its own sync. | Forks are the right tool when a component needs N writes to succeed-or-fail together. Sync of the component's fork happens inside the component, not in Engine. |
+| Engine `VenueState` model | **Connected by default.** | Engine is the live representative of venue state; it should not hide a second long-lived working copy beneath itself. |
+| Component-internal forks | **Allowed for bounded transactional multi-write atomicity.** Component is responsible for its own sync. | Forks are appropriate when N writes must become visible together, not as a general request or persistence boundary. |
 | `engine.syncState()` visibility | **Package-private.** Public API is `engine.flush()`. |
 
 ---
@@ -489,7 +463,7 @@ Plus:
 
 All resolved through review:
 
-1. **Trunk cursor enumeration.** ✅ Resolved: only `venueState` needs explicit fork-syncing. DLFS uses path views from `engine.getRootCursor()` (`DLFSAdapter.java:154-166`) which write directly to the root cursor's storage; `application.sync()` already captures them. `sweep()` is exactly two calls, not a registry.
+1. **Trunk cursor enumeration.** ✅ Resolved: Engine has no long-lived forked trunk. Connected component writes update the application root directly; `application.sync()` publishes that root. Bounded transaction forks are committed by their owning component and are not sweep-managed.
 
 2. **`LatticePropagator.persistInterval` default for venues.** ✅ Resolved: no change. Cross-check found the field is a boolean gate, not a time throttle — lowering it does nothing functional. Filed as a separate convex-peer cleanup task (rename + actually thread NodeConfig through), not a Phase 1 dependency. See §5.5.
 

@@ -220,11 +220,23 @@ public class UserAdapter extends AAdapter {
 	/** Job-free REST reads (#255) call this directly, reusing the same
 	 *  capability checks as the {@code user:authentication-list} operation. */
 	public ACell authenticationList(RequestContext ctx, ACell input) {
-		AString did = targetManagedUser(ctx, input, Abilities.USER_READ);
+		AString did = requireDID(targetDID(ctx, input));
+		requireSelfOrVenueUserAuthority(ctx, did, Abilities.USER_READ);
 		AString id = engine.managedUserName(did);
+		if (id != null) {
+			return Maps.of(
+				Fields.DID, did,
+				Fields.AUTHENTICATION_KEYS, engine.getAuth().getAuthenticationKeys(id));
+		}
+		// A registered external DID authenticates with its own key, so the venue
+		// holds no authenticators for it: the answer is empty, not an error, and
+		// clients list every user's authenticators uniformly (#524).
+		if (engine.getVenueState().users().get(did) == null) {
+			throw new IllegalArgumentException("User is not registered at this venue: " + did);
+		}
 		return Maps.of(
 			Fields.DID, did,
-			Fields.AUTHENTICATION_KEYS, engine.getAuth().getAuthenticationKeys(id));
+			Fields.AUTHENTICATION_KEYS, Maps.empty());
 	}
 
 	/**
@@ -233,16 +245,26 @@ public class UserAdapter extends AAdapter {
 	 * goes through the venue-rooted user authority seam.
 	 */
 	private AString targetManagedUser(RequestContext ctx, ACell input, AString ability) {
-		AString did = RT.ensureString(RT.getIn(input, Fields.DID));
-		if (did == null) did = ctx.getCallerDID();
-		if (did == null) throw new AuthException("Authentication required");
+		AString did = targetDID(ctx, input);
 		if (engine.managedUserName(did) == null) {
 			throw new IllegalArgumentException(
 				"Authentication keys belong only to venue-managed named users");
 		}
-		if (did.equals(ctx.getCallerDID()) && ctx.getAgentId() == null) return did;
-		requireVenueUserAuthority(ctx, ability);
+		requireSelfOrVenueUserAuthority(ctx, did, ability);
 		return did;
+	}
+
+	/** The addressed user DID, defaulting to the caller. */
+	private AString targetDID(RequestContext ctx, ACell input) {
+		AString did = RT.ensureString(RT.getIn(input, Fields.DID));
+		if (did == null) did = ctx.getCallerDID();
+		if (did == null) throw new AuthException("Authentication required");
+		return did;
+	}
+
+	private void requireSelfOrVenueUserAuthority(RequestContext ctx, AString did, AString ability) {
+		if (did.equals(ctx.getCallerDID()) && ctx.getAgentId() == null) return;
+		requireVenueUserAuthority(ctx, ability);
 	}
 
 	private AMap<AString, ACell> summary(User user) {

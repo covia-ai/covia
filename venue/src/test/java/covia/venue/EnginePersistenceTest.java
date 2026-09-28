@@ -43,12 +43,12 @@ import covia.test.DurabilityTest;
  *
  * <ul>
  *   <li>{@link Engine#flush()} is synchronous: after it returns, the current
- *       venueState write set is on disk.</li>
+ *       connected venue root is on disk.</li>
  *   <li>{@link Engine#close()} runs a final flush before nodeServer.close()
- *       so the venueState fork's writes are merged into the root before
+ *       so the connected root is published and flushed before
  *       the existing graceful drain reads from it.</li>
  *   <li>The persistence sweep daemon thread fires periodically while the
- *       engine is running, automatically syncing venueState into the root.</li>
+ *       engine is running, automatically publishing the connected root.</li>
  * </ul>
  *
  * <p><b>Determinism.</b> These tests use {@link CountDownLatch} and direct
@@ -122,7 +122,7 @@ public class EnginePersistenceTest {
 			Engine engine = server.getEngine();
 			AccountKey ak = engine.getAccountKey();
 
-			// Write through venueState — creates a user record in the fork
+			// Write through the connected venueState component.
 			engine.getVenueState().users().ensure(ALICE_DID);
 
 			// Synchronous barrier — must return only after the write is on disk
@@ -178,8 +178,8 @@ public class EnginePersistenceTest {
 	}
 
 	// ========================================================================
-	// Test 3 — Background sweep daemon eventually fires venueState.sync()
-	// + lattice.sync() automatically, without any explicit flush() call.
+	// Test 3 — Background sweep daemon eventually publishes the connected
+	// root automatically, without any explicit flush() call.
 	// ========================================================================
 	@Test
 	public void testSweepFiresPeriodically() throws Exception {
@@ -195,8 +195,7 @@ public class EnginePersistenceTest {
 
 			// Sweep observability: write through venueState without calling flush().
 			// If the sweep daemon is running, the value will eventually appear in
-			// the etch store via the sweep's venueState.sync() + lattice.sync()
-			// → propagator path.
+			// the etch store via the sweep's application.sync() → propagator path.
 			engine.getVenueState().users().ensure(ALICE_DID);
 
 			// Poll the store with a bounded timeout. With the default 100ms sweep

@@ -210,9 +210,9 @@ public class Engine {
 	private final PersistenceHandler persistHandler;
 
 	/**
-	 * Background sweep daemon — periodically pulls venueState fork into the
-	 * root and triggers the lattice's sync callback so the propagator
-	 * persists durable. See {@code venue/docs/PERSISTENCE.md}.
+	 * Background sweep daemon — periodically publishes the connected venue
+	 * state and invokes the store durability barrier. See
+	 * {@code venue/docs/PERSISTENCE.md}.
 	 */
 	private ScheduledExecutorService persistenceSweep;
 
@@ -521,11 +521,11 @@ public class Engine {
 	 * Ensures the venue entry exists at [:grid :venues &lt;accountKey&gt; :value].
 	 * Venues are keyed by AccountKey in OwnerLattice; the DID is stored inside venue state.
 	 *
-	 * <p>Bootstrap (DID initialisation) is performed on the connected cursor so
-	 * the write is signed immediately — other peers need a signed DID to accept
-	 * the venue. After bootstrap, the cursor is forked: all subsequent writes
-	 * accumulate locally (unsigned) until {@link #syncState()} calls
-	 * {@link VenueState#sync()}, which merges and signs once.</p>
+	 * <p>The Engine keeps this state connected to the application root. A
+	 * successful component mutation therefore updates the venue's authoritative
+	 * in-memory state immediately. Components may still create a short-lived
+	 * {@link VenueState#fork()} when a bounded group of writes must commit or be
+	 * discarded together.</p>
 	 */
 	protected void initialiseFromCursor() {
 		// Identity guard (#208): booting an existing store with the wrong key
@@ -535,19 +535,14 @@ public class Engine {
 		// can sign for its own persisted state is broken; fail before writing.
 		requireKeyMatchesStore();
 
-		// Bootstrap with connected VenueState (writes signed immediately).
-		// DID initialisation must be signed so other peers accept it.
+		// Keep the Engine's authoritative state connected to the application.
+		// Writes cross the signed owner boundary immediately; explicit forks are
+		// reserved for bounded component transactions.
 		VenueState connected = (application != null)
 			? application.venue(getAccountKey())
 			: VenueState.fromRoot(lattice, getAccountKey());
 		connected.initialise(getDIDString());
-
-		// Fork: subsequent writes accumulate locally (unsigned).
-		// Engine.syncState() calls venueState.sync() to merge + sign once.
-		// The fork captures the root's LatticeContext policy. That policy is
-		// dynamic, so its clock and signer remain live without per-request
-		// context replacement.
-		this.venueState = connected.fork();
+		this.venueState = connected;
 
 		this.auth = new Auth(this, venueState, venueState.authCursor());
 		this.accessControl = new AccessControl();
@@ -589,21 +584,15 @@ public class Engine {
 	}
 
 	/**
-	 * Synchronises venue state to the persistent lattice.
+	 * Publishes the Engine's connected venue state through the hosted application
+	 * boundary (or the legacy root cursor callback). This is a publication hint,
+	 * not a transaction commit: successful mutations are already present in the
+	 * authoritative in-memory root.
 	 *
-	 * <p>Two-phase sync:</p>
-	 * <ol>
-	 *   <li>{@code venueState.sync()} — merges forked (unsigned) writes into
-	 *       the parent cursor chain, triggering a single sign through the
-	 *       SignedCursor boundary.</li>
-	 *   <li>{@code application.sync()} — crosses the hosted root publication
-	 *       boundary. The host decides whether publication is local or networked.</li>
-	 * </ol>
-	 *
-	 * <p>Called by VenueServer's role-selected {@code afterMatched} handler, so
-	 * all writes within one native protocol request—or an embedder route carrying
-	 * {@code VenueRouteFeature.LATTICE_SYNC}—are batched into one sign and
-	 * persist.</p>
+	 * <p>Retained for request-boundary publication by VenueServer and embedded
+	 * venue routes carrying {@code VenueRouteFeature.LATTICE_SYNC}. Physical
+	 * durability remains the responsibility of {@link #flush()} and the
+	 * background sweep.</p>
 	 */
 	public void syncState() {
 		if (lifecycle == Lifecycle.CLOSING || lifecycle == Lifecycle.CLOSED || lifecycle == Lifecycle.FAILED) {
@@ -612,7 +601,6 @@ public class Engine {
 			log.debug("syncState skipped: engine is {}", lifecycle);
 			return;
 		}
-		venueState.sync();
 		publishApplicationRoot();
 	}
 
@@ -621,8 +609,9 @@ public class Engine {
 	 * timestamp context model.
 	 *
 	 * <p>The current Convex context is a live application policy. Covia installs
-	 * it once at startup with a dynamic runtime clock, and forks retain that live
-	 * policy, so there is no timestamp snapshot to refresh.</p>
+	 * it once at startup with a dynamic runtime clock; derived components and
+	 * bounded forks retain that policy, so there is no timestamp snapshot to
+	 * refresh.</p>
 	 */
 	@Deprecated
 	public void refreshWriteClock() {
@@ -643,20 +632,15 @@ public class Engine {
 	// ========================================================================
 
 	/**
-	 * Background sweep step. Merges the venueState fork into the root, then
-	 * fires the root cursor's onSync callback (which the NodeServer wires to
-	 * the propagator). Both calls are required because
-	 * {@code ForkedLatticeCursor.sync()} deliberately does NOT propagate sync
-	 * up the chain — see {@code venue/docs/PERSISTENCE.md} §5.0.
+	 * Background sweep step. Publishes the already-connected root through the
+	 * host policy, then periodically invokes the physical durability barrier.
 	 *
-	 * <p>Called from the persistence sweep daemon and from {@link #flush()}.
-	 * Sync is a no-op when there are no pending writes, so this is cheap on
-	 * idle venues.</p>
+	 * <p>Called from the persistence sweep daemon. Publishing an unchanged root
+	 * is cheap on idle venues.</p>
 	 */
 	private void sweep() {
 		if (lifecycle != Lifecycle.STARTED) return;
 		try {
-			venueState.sync();   // pull fork writes into the root
 			publishApplicationRoot();
 			// Periodic durability barrier. The propagator's setRootData
 			// writes new root data to the mmap'd Etch but does not fsync;
@@ -674,9 +658,9 @@ public class Engine {
 	}
 
 	/**
-	 * Synchronises venue state, publishes the complete hosted root and invokes
-	 * the host store's physical durability barrier. Legacy raw-cursor embedders
-	 * use their supplied {@link PersistenceHandler} for the same boundary.
+	 * Publishes the complete hosted root and invokes the host store's physical
+	 * durability barrier. Legacy raw-cursor embedders use their supplied
+	 * {@link PersistenceHandler} for the same boundary.
 	 *
 	 * <p>Use sparingly — most writes don't need this. Default eventual
 	 * durability via the background sweep is fine for in-flight job state,
@@ -684,7 +668,6 @@ public class Engine {
 	 * audit records, secret rotation, agent TERMINATED, OAuth login.</p>
 	 */
 	public void flush() {
-		venueState.sync(); // pull fork into root
 		try {
 			if (application != null) {
 				application.sync();  // host publication selects the retained root
@@ -711,10 +694,9 @@ public class Engine {
 	 * Stops the persistence sweep, runs a final flush, and releases engine
 	 * resources. After close, the engine cannot be used.
 	 *
-	 * <p>Must be called BEFORE {@code nodeServer.close()} so the venueState
-	 * fork is merged into the root before the propagator's shutdown drain
-	 * reads from the root cursor. {@code VenueServer.close()} handles this
-	 * ordering.</p>
+	 * <p>Must be called BEFORE {@code nodeServer.close()} so final publication
+	 * and durability complete while the host is still available.
+	 * {@code VenueServer.close()} handles this ordering.</p>
 	 *
 	 * <p>In-flight jobs first get {@code shutdown.graceMs} to finish, then
 	 * their adapters suspend them ({@link covia.adapter.AAdapter#suspendJob});
@@ -801,10 +783,8 @@ public class Engine {
 
 		if (flush && venueState != null) {
 			try {
-				venueState.sync();
-				persistHandler.persist(lattice.get());
-				persistHandler.flush();
-			} catch (Exception e) {
+				flush();
+			} catch (RuntimeException e) {
 				recordCloseFailure(startupFailure, "Final persistence flush failed during close", e);
 			}
 		}
@@ -924,8 +904,9 @@ public class Engine {
 		Modules.loadModules(venue);
 
 		// Publish the adapter catalog and venue information as one native lattice
-		// transaction. All writes and validation happen on a child fork; one sync
-		// makes the complete bootstrap snapshot visible without creating Jobs.
+		// transaction. All writes and validation happen on a narrow w/global
+		// workspace fork; one atomic commit makes the complete bootstrap snapshot
+		// visible without creating Jobs.
 		venue.materialiseBootstrapState();
 
 		// Bridge config-declared MCP servers (#80). Config is the source of
@@ -954,8 +935,9 @@ public class Engine {
 	/**
 	 * Materialises the adapter catalog and {@code /v/info/} snapshot together.
 	 * The complete snapshot is built and validated on a child fork, then
-	 * published to the Engine's live fork with one {@code sync()}. A failure
-	 * before that point leaves the live state unchanged and creates no Jobs.
+	 * committed to the Engine's connected state with one atomic update. A
+	 * failure before that point leaves the live state unchanged and creates no
+	 * Jobs.
 	 */
 	public void materialiseBootstrapState() {
 		VenueBootstrapMaterializer.materialiseBootstrapState(this);
@@ -1013,8 +995,8 @@ public class Engine {
 	 * </ul>
 	 *
 	 * <p>Writes use the same cursor path semantics as {@code covia:write}, but
-	 * execute directly on a child lattice fork and publish with one sync. No
-	 * operation invocation or Job is involved.</p>
+	 * are staged on a child {@code w/global} workspace fork and committed with
+	 * one atomic update. No operation invocation or Job is involved.</p>
 	 */
 	public void materialiseVenueInfo() {
 		VenueBootstrapMaterializer.materialiseVenueInformation(this);
@@ -2993,7 +2975,9 @@ public class Engine {
 	}
 
 	public AMap<AString, ACell> getStats() {
-		AMap<AString, AMap<AString, ACell>> usersMap = auth.getUsers();
+		// Every registered user, managed and external alike — the same population
+		// as user:list, not just the venue-managed named accounts (#524).
+		AMap<AString, ACell> usersMap = getVenueState().users().getAll();
 		// Count primitives across all adapters' catalog entries — this is
 		// the canonical "what's in /v/ops/ and /v/test/ops/" total.
 		long opCount = 0;

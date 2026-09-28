@@ -1,5 +1,6 @@
 package covia.adapter;
 
+import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -11,6 +12,8 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
 
 import org.a2aproject.sdk.jsonrpc.common.json.JsonUtil;
 import org.a2aproject.sdk.spec.A2AMethods;
@@ -31,6 +34,7 @@ import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Abilities;
 import covia.api.Fields;
+import covia.exception.ResponseException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.RequestContext;
@@ -44,7 +48,8 @@ import covia.venue.api.A2ACodec;
  * <ul>
  *   <li>{@code a2a:importAgent} — import a standard endpoint or Covia agent as an Asset.</li>
  *   <li>{@code a2a:getAgentCard} — read the imported Agent Card snapshot.</li>
- *   <li>{@code a2a:send} — send a message; one Covia Job mirrors one remote A2A Task.</li>
+ *   <li>{@code a2a:send} — send a message; one Covia Job mirrors one remote A2A Task,
+ *       and a message delivered to the Job continues that Task.</li>
  *   <li>{@code a2a:getTask} / {@code a2a:cancel} — one-shot RPCs against a remote Task.</li>
  *   <li>{@code a2a:raw*} — diagnostic URL/credential-bearing escape hatches.</li>
  * </ul>
@@ -87,6 +92,10 @@ public class A2AAdapter extends AAdapter {
 	public static Hash SEND_OPERATION;
 
 	private final HttpClient httpClient;
+
+	/** The remote Task each live mirror Job is bound to, for cancellation and continuation. */
+	private record RemoteLink(String rpcUrl, String remoteTaskId, RequestAuth auth) {}
+	private final ConcurrentHashMap<Job, RemoteLink> links = new ConcurrentHashMap<>();
 
 	public A2AAdapter() {
 		this.httpClient = HttpClient.newBuilder()
@@ -745,7 +754,7 @@ public class A2AAdapter extends AAdapter {
 		String remoteTaskId = remoteTask.id();
 		engine.remoteJobs().accepted(job, remoteTaskId);
 		job.update(current -> current.assoc(Fields.REMOTE_TASK_ID, Strings.create(remoteTaskId)));
-		job.setCancelHook(() -> fireAndForgetCancel(rpcUrl, remoteTaskId, auth));
+		bind(job, rpcUrl, remoteTaskId, auth);
 
 		if (remoteTask.status().state().isFinal()) {
 			finishJobWithRemoteTask(job, remoteTask, rawResultCell);
@@ -771,6 +780,142 @@ public class A2AAdapter extends AAdapter {
 		});
 	}
 
+	/**
+	 * Bind a mirror Job to its accepted remote Task: local cancellation reaches
+	 * the Task, and a message delivered to the Job continues it.
+	 */
+	private void bind(Job job, String rpcUrl, String remoteTaskId, RequestAuth auth) {
+		job.setCancelHook(() -> fireAndForgetCancel(rpcUrl, remoteTaskId, auth));
+		if (links.put(job, new RemoteLink(rpcUrl, remoteTaskId, auth)) != null) return;
+		Consumer<Job> release = new Consumer<>() {
+			@Override public void accept(Job j) {
+				if (!j.isFinished()) return;
+				links.remove(j);
+				j.unsubscribe(this);
+			}
+		};
+		job.subscribe(release);
+		release.accept(job);
+	}
+
+	// ==================== continuation of a mirrored Task ====================
+
+	@Override
+	public boolean supportsMultiTurn() {
+		return true;
+	}
+
+	/**
+	 * Relay input delivered to a mirror Job to its remote Task (#507). An
+	 * interrupted remote Task is waiting on the caller, so the caller's reply to
+	 * the local Job is a continuation {@code SendMessage} on that Task.
+	 *
+	 * <p>Synchronous: returning normally means the remote agent accepted the
+	 * message and the Job already reflects its response. A rejection or an
+	 * unacknowledged send changes nothing locally and is thrown to the
+	 * deliverer, so a reply is never silently dropped.</p>
+	 */
+	@Override
+	public void handleMessage(Job job, AMap<AString, ACell> messageRecord) {
+		RemoteLink link = links.get(job);
+		if (link == null) {
+			throw new IllegalStateException("Job has no accepted remote A2A task to continue");
+		}
+		MessageSendParams params = new MessageSendParams(
+			continuation(job, link, messageRecord.get(Fields.MESSAGE)),
+			new org.a2aproject.sdk.spec.MessageSendConfiguration(null, null, null, true), null);
+		HttpRequest req = postEnvelope(link.rpcUrl(),
+			rpcEnvelope(A2AMethods.SEND_MESSAGE_METHOD, params), link.auth());
+
+		HttpResponse<String> resp;
+		try {
+			resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			throw unacknowledged(e);
+		} catch (IOException | RuntimeException e) {
+			throw unacknowledged(e);
+		}
+		AMap<AString, ACell> snapshot = continuationSnapshot(resp);
+		if (snapshot == null) return;
+		Task task;
+		try {
+			task = JsonUtil.OBJECT_MAPPER.fromJson(JSON.print(snapshot).toString(), Task.class);
+		} catch (Exception e) {
+			throw unacknowledged(e);
+		}
+		if (!link.remoteTaskId().equals(task.id())) {
+			throw new IllegalStateException("Remote agent answered for a different task");
+		}
+		// Same fence as the initial send: apply the response and re-arm the
+		// observer under the Job lock, so a poll answered before the remote saw
+		// this message cannot regress the newer state.
+		engine.remoteJobs().received(job, () -> {
+			if (task.status().state().isFinal()) finishJobWithRemoteTask(job, task, snapshot);
+			else applyInterruptedState(job, task, snapshot);
+			if (!job.isFinished()) startPoller(job, link.rpcUrl(), link.remoteTaskId(), link.auth());
+		});
+	}
+
+	/**
+	 * The outbound continuation. A delivered {@code {role, parts}} record is
+	 * sent as it is; any other body — REST delivery wraps a bare value as
+	 * {@code {content}} — travels as a single text or data part.
+	 */
+	@SuppressWarnings("unchecked")
+	private static Message continuation(Job job, RemoteLink link, ACell message) {
+		Message parsed = message instanceof AMap
+			? A2ACodec.fromMessageRecord((AMap<AString, ACell>) message, null, link.remoteTaskId()) : null;
+		ACell content = RT.getIn(message, Fields.CONTENT);
+		AString contextId = RT.ensureString(RT.getIn(job.getData(), Fields.OUTPUT, "contextId"));
+		return Message.builder()
+			.role(Message.Role.ROLE_USER)
+			.parts(parsed != null ? parsed.parts()
+				: java.util.List.of(A2ACodec.toPart(content != null ? content : message)))
+			.messageId(parsed != null ? parsed.messageId() : UUID.randomUUID().toString())
+			.contextId(contextId == null ? null : contextId.toString())
+			.taskId(link.remoteTaskId())
+			.build();
+	}
+
+	/**
+	 * The remote Task snapshot after a continuation, or null when the agent
+	 * answered with a bare Message: the Task's own state stays with the observer.
+	 * A 4xx or a JSON-RPC error is a definite refusal; anything else that is not
+	 * a result leaves delivery unknown.
+	 */
+	private static AMap<AString, ACell> continuationSnapshot(HttpResponse<String> resp) {
+		int code = resp.statusCode();
+		if (code >= 500 || code == 408) throw unacknowledged(null);
+		if (code < 200 || code >= 300) {
+			throw new IllegalStateException("Remote agent rejected the message: HTTP " + code
+				+ ": " + conciseDetail(resp.body(), 512));
+		}
+		AMap<AString, ACell> reply;
+		try {
+			reply = RT.ensureMap(JSON.parse(resp.body()));
+		} catch (Exception e) {
+			throw unacknowledged(e);
+		}
+		ACell error = reply == null ? null : reply.get(Fields.ERROR);
+		if (error != null) {
+			throw new IllegalStateException("Remote agent rejected the message: "
+				+ conciseDetail(JSON.print(error), 512));
+		}
+		AMap<AString, ACell> result = reply == null ? null : RT.ensureMap(reply.get(Fields.RESULT));
+		if (result == null) throw unacknowledged(null);
+		if (result.get(Fields.MESSAGE) != null) return null;
+		AMap<AString, ACell> snapshot = RT.ensureMap(unwrapKind(result, "task"));
+		if (snapshot == null) throw unacknowledged(null);
+		return snapshot;
+	}
+
+	/** Delivery is unknown, not refused. Exception text may carry a credential-bearing URL. */
+	private static ResponseException unacknowledged(Throwable cause) {
+		return new ResponseException("Remote agent did not acknowledge the message"
+			+ (cause == null ? "" : ": " + cause.getClass().getSimpleName()));
+	}
+
 	@Override public void recoverJob(Job job) {
 		AMap<AString, ACell> record = RemoteJobs.descriptor(job);
 		if (record == null) { super.recoverJob(job); return; }
@@ -783,7 +928,7 @@ public class A2AAdapter extends AAdapter {
 				RT.ensureString(saved.get(Strings.intern("location"))).toString(),
 				RT.ensureString(saved.get(Fields.NAME)).toString(),
 				RT.ensureString(saved.get(Fields.VALUE)).toString());
-			job.setCancelHook(() -> fireAndForgetCancel(target, id.toString(), auth));
+			bind(job, target, id.toString(), auth);
 			startPoller(job, target, id.toString(), auth);
 		} catch (RuntimeException e) { engine.remoteJobs().unavailable(job, e); }
 	}

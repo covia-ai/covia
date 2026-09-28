@@ -892,13 +892,15 @@ public abstract class AAdapter {
     /**
      * Handles a message delivered to a running job.
      * Override this method in adapters that support multi-turn interactions.
-     * Default implementation does nothing (message remains in queue).
+     * Default implementation does nothing. An exception propagates to the
+     * deliverer, so an adapter that cannot take the message must throw rather
+     * than drop it.
      *
      * @param job The job receiving the message
      * @param messageRecord The message record (contains "message", "source", "ts", "id" fields)
      */
     public void handleMessage(Job job, AMap<AString, ACell> messageRecord) {
-    	// Default: no-op. Message stays in queue for polling by adapter.
+    	// Default: no-op.
     }
 
     /**

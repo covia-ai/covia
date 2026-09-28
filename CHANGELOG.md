@@ -75,6 +75,13 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - The Discord module's skill resource moved to a module-owned classpath path,
   so it no longer collides with the venue's Discord connection skill when
   both jars share one classpath (#510).
+- A reply delivered to an `a2a:send` job whose remote task is `INPUT_REQUIRED`
+  or `AUTH_REQUIRED` is relayed to that task instead of being accepted and
+  dropped; a refused or unacknowledged relay is a 409 / 502 to the deliverer
+  (#507).
+- `GET /users/{did}/authentications` returns an empty set for a registered
+  external DID instead of a 400; `stats.users` counts every registered user,
+  not just venue-managed accounts (#524).
 
 ## [0.9.8] - 2026-09-03
 
