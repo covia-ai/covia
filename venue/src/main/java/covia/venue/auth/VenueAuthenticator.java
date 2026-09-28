@@ -226,7 +226,7 @@ public final class VenueAuthenticator {
 		public static final String WRONG_KEY_HINT = ": a did:key subject signs with its own key";
 		public static final String SIGNATURE_FAILS = "signature does not verify for ";
 		public static final String SIGNATURE_FAILS_PER_DID_DOCUMENT = " (per its DID document)";
-		public static final String DID_METHOD_FAILURE = "could not verify the subject through its DID method: ";
+		public static final String DID_METHOD_FAILURE = "could not verify, through its DID method, the subject ";
 		public static final String KEY_NOT_ACTIVE = "is not an active authentication key of ";
 		public static final String KEY_REVOKED = "has been revoked for ";
 		public static final String ISSUER_MISMATCH = "does not match sub ";
@@ -403,7 +403,10 @@ public final class VenueAuthenticator {
 			Blob signature = Blob.wrap(parsed.getSignatureBytes());
 			verifies = engine.didVerifier().verifies(sub, message, signature);
 		} catch (RuntimeException e) {
-			return Verdict.fail(Reason.DID_METHOD_FAILURE + e.getMessage());
+			// The detail (a fetch error, a proxy, a timeout) is the venue's to
+			// know, not the caller's: the reason names the step, the log the cause.
+			log.debug("DID method verification failed for {}", sub, e);
+			return Verdict.fail(Reason.DID_METHOD_FAILURE + sub);
 		}
 		if (!verifies) return Verdict.fail(Reason.SIGNATURE_FAILS + sub + Reason.SIGNATURE_FAILS_PER_DID_DOCUMENT);
 		String when = temporalProblem(claims, now);
@@ -458,8 +461,9 @@ public final class VenueAuthenticator {
 					continue;
 				}
 			} catch (Exception ex) {
+				// Same rule: the caller learns which step failed, the log why.
 				log.debug("Provider {} key lookup failed", name, ex);
-				reason = Reason.PROVIDER_KEYS_UNAVAILABLE + name + ": " + ex.getMessage();
+				reason = Reason.PROVIDER_KEYS_UNAVAILABLE + name;
 				continue;
 			}
 			AString email = RT.ensureString(claims.get(EMAIL));
