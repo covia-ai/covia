@@ -133,6 +133,7 @@ Base path: `/api/v1/`
 | `/users`, `/users/{did}`, `/users/{did}/authentications` | GET | Job-free user admin reads (#255) — operator-only except a caller's own DID; 403 (not a broken page) for a signed-in non-operator |
 | `/dlfs/drives`, `/dlfs/list` | GET | Job-free DLFS browsing reads (#253) — drive list and one directory's entries; file content itself was already job-free via `/content/dlfs/<drive>/<path>` |
 | `/assets?scope=own` | GET | Job-free listing of the caller's own `a/` assets (#382); default `/assets` is the venue catalog |
+| `/assets?kind=` | GET | Restricts the catalog listing to `operation` (assets carrying an `operation`) or `data` (those that do not). The listing is filtered before it is paged, so `offset` counts filtered entries and `total` is the filtered size |
 | `/jobs` | GET | Caller's jobs as a paged `{items, total, offset, limit}` envelope (#229) |
 | `/jobs/{id}` | GET | Job status. Proofs ride the `X-Covia-Ucans` header on body-less reads (federated observation) |
 | `/jobs/{id}` | POST | Message delivery to a running job (202/403/404/409) |

@@ -3,6 +3,7 @@ package covia.venue.api;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URI;
@@ -138,6 +139,91 @@ public class OwnAssetsApiTest {
 	@Test
 	public void testVenueListingRejectsUnknownExpansion() throws Exception {
 		assertEquals(400, get("assets?expand=everything", true).statusCode());
+	}
+
+	// ---- kind filter (covia-ai/frontend#420) --------------------------------
+	// A client that wants artifacts had to download every operation definition
+	// and throw it away: on venue-3 that is 75% of a 1.6 MB payload.
+
+	@Test
+	public void testKindOperationListsOnlyAssetsCarryingAnOperation() throws Exception {
+		HttpResponse<String> r = get("assets?kind=operation&expand=metadata&limit=50", true);
+		assertEquals(200, r.statusCode(), r.body());
+		AVector<?> items = (AVector<?>) RT.getIn(JSON.parse(r.body()), "items");
+		assertNotNull(items, r.body());
+		assertTrue(items.count() > 0, "the venue publishes operations");
+		for (long i = 0; i < items.count(); i++) {
+			assertNotNull(RT.getIn(items.get(i), "metadata", "operation"),
+				"kind=operation must not list a non-operation: " + items.get(i));
+		}
+	}
+
+	@Test
+	public void testKindDataListsOnlyAssetsWithoutAnOperation() throws Exception {
+		HttpResponse<String> r = get("assets?kind=data&expand=metadata&limit=50", true);
+		assertEquals(200, r.statusCode(), r.body());
+		AVector<?> items = (AVector<?>) RT.getIn(JSON.parse(r.body()), "items");
+		assertNotNull(items, r.body());
+		for (long i = 0; i < items.count(); i++) {
+			assertNull(RT.getIn(items.get(i), "metadata", "operation"),
+				"kind=data must not list an operation: " + items.get(i));
+		}
+	}
+
+	@Test
+	public void testKindTotalsPartitionTheCatalogue() throws Exception {
+		long all = listTotal("assets");
+		long operations = listTotal("assets?kind=operation");
+		long data = listTotal("assets?kind=data");
+		assertEquals(all, operations + data,
+			"every asset is either an operation or it is not");
+		assertTrue(operations > 0 && data > 0, "the fixture venue has both kinds");
+	}
+
+	@Test
+	public void testKindTotalDescribesTheFilteredListingNotTheCatalogue() throws Exception {
+		// The trap this filter has to avoid: paging first and filtering after
+		// would leave `total` describing the catalogue while `items` describe
+		// something smaller, so a caller could never page it correctly.
+		long data = listTotal("assets?kind=data");
+		HttpResponse<String> r = get("assets?kind=data&limit=1000", true);
+		AVector<?> items = (AVector<?>) RT.getIn(JSON.parse(r.body()), "items");
+		assertEquals(data, items.count(),
+			"a single page at the cap must return exactly the filtered total");
+	}
+
+	@Test
+	public void testKindOffsetsCountFilteredEntries() throws Exception {
+		AVector<?> firstTwo = (AVector<?>) RT.getIn(
+			JSON.parse(get("assets?kind=data&limit=2", true).body()), "items");
+		assertEquals(2, firstTwo.count());
+		AVector<?> secondOnly = (AVector<?>) RT.getIn(
+			JSON.parse(get("assets?kind=data&offset=1&limit=1", true).body()), "items");
+		assertEquals(1, secondOnly.count());
+		assertEquals(firstTwo.get(1), secondOnly.get(0),
+			"offset 1 of the filtered listing is its second entry");
+	}
+
+	@Test
+	public void testUnfilteredListingIsUnchanged() throws Exception {
+		HttpResponse<String> r = get("assets?limit=5", true);
+		assertEquals(200, r.statusCode(), r.body());
+		AVector<?> items = (AVector<?>) RT.getIn(JSON.parse(r.body()), "items");
+		assertEquals(5, items.count());
+		assertEquals(listTotal("assets?kind=operation") + listTotal("assets?kind=data"),
+			RT.ensureLong(RT.getIn(JSON.parse(r.body()), "total")).longValue(),
+			"an unfiltered listing still totals the whole catalogue");
+	}
+
+	@Test
+	public void testRejectsUnknownKind() throws Exception {
+		assertEquals(400, get("assets?kind=everything", true).statusCode());
+	}
+
+	private long listTotal(String path) throws Exception {
+		HttpResponse<String> r = get(path, true);
+		assertEquals(200, r.statusCode(), r.body());
+		return RT.ensureLong(RT.getIn(JSON.parse(r.body()), "total")).longValue();
 	}
 
 	@Test
