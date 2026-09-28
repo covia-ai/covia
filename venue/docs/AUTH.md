@@ -390,8 +390,15 @@ venue-auth state.
 ## 11. Security considerations
 
 - **Existence privacy**: authentication errors never disclose whether a
-  named account exists (uniform failure at the seam — already the
-  pattern in `verify`).
+  named account exists. A refusal does say *why* (covia#548) — which
+  credential shape the verifier read, and the first check it failed:
+  algorithm, `kid`, signature, `exp`/`nbf`, audience, key status — but
+  the wording is chosen so that an unknown named user and an unregistered
+  key read the same. Reasons describe the presented token only; anything
+  that depends on venue state is checked after the signature, and on the
+  named-user path the signature proves possession of the `kid` key, which
+  anyone can mint, so nothing venue-side is worded per user. Only the
+  holder of a revoked key is told it was revoked.
 - **Method downgrade**: policy `allowed` lists are enforced at the
   seam, so an attacker cannot authenticate a high-value user via a
   weaker enabled method than policy permits for the surface.

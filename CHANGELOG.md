@@ -10,6 +10,10 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Changed
 
+- A refused bearer token's 401 says why — which credential shape was read
+  and the check it failed (algorithm, `kid`, signature, `exp`/`nbf`,
+  audience, key status) — instead of `Invalid or expired token` (#548).
+
 - Unhandled exceptions answer `500` with the title `Internal server error` and
   the exception class and message under `details.exception` (#540).
 

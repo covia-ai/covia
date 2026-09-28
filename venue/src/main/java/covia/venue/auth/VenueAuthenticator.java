@@ -2,6 +2,7 @@ package covia.venue.auth;
 
 import java.nio.charset.StandardCharsets;
 import java.security.interfaces.RSAPublicKey;
+import java.time.Instant;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
@@ -59,8 +60,17 @@ public final class VenueAuthenticator {
 	/** Clock-skew leeway for JWT temporal bounds, in seconds. */
 	private static final long CLOCK_SKEW_SECONDS = 60;
 
-	/** Prefix on every 401 message that carries a UCAN bearer's specific rejection reason. */
-	static final String UCAN_REJECTED_PREFIX = "UCAN bearer rejected: ";
+	/**
+	 * Prefixes on a 401 message, naming which credential shape the verifier
+	 * read before the reason: a caller who meant to send a UCAN bearer and
+	 * forgot {@code att} learns their token was read as self-issued.
+	 */
+	public static final String UCAN_REJECTED_PREFIX = "UCAN bearer rejected: ";
+	public static final String SELF_ISSUED_REJECTED_PREFIX = "Self-issued token rejected: ";
+	public static final String VENUE_TOKEN_REJECTED_PREFIX = "Venue token rejected: ";
+	public static final String PROVIDER_TOKEN_REJECTED_PREFIX = "Provider token rejected: ";
+	/** For a token no verifier claims, or that does not parse at all. */
+	public static final String TOKEN_REJECTED_PREFIX = "Token rejected: ";
 
 	private final AccountKey venueKey;
 	private final AString venueDID;
@@ -75,11 +85,21 @@ public final class VenueAuthenticator {
 			AString authenticatedIdentity,
 			AString venueUserDID) {}
 
-	private static final class AudienceRejected extends RuntimeException {
-		private static final long serialVersionUID = 1L;
+	/**
+	 * One verifier's answer for a token it has claimed: the principal, or the
+	 * reason the token was rejected — never both. The same null-means-fine
+	 * convention as {@link covia.lattice.CapabilityChecker#allows} and
+	 * {@link UcanJwtValidator.Validation}: a check returns null when it passes
+	 * and a human-readable reason when it does not, and the reason bubbles
+	 * unchanged into the 401.
+	 */
+	private record Verdict(VerifiedPrincipal principal, String reason) {
+		static Verdict ok(AString authenticatedIdentity, AString venueUserDID) {
+			return new Verdict(new VerifiedPrincipal(authenticatedIdentity, venueUserDID), null);
+		}
 
-		AudienceRejected(String message) {
-			super(message);
+		static Verdict fail(String reason) {
+			return new Verdict(null, reason);
 		}
 	}
 
@@ -175,235 +195,329 @@ public final class VenueAuthenticator {
 		return acceptedAudiences;
 	}
 
+	/**
+	 * Claim first, then judge. A credential's shape says which verifier it is
+	 * for — a UCAN bearer carries {@code att}, a provider token is RS256, a
+	 * venue-issued token names this venue as {@code iss}, a self-issued token
+	 * names its subject — so exactly one verifier reads it, and every failure
+	 * after that is a reason rather than a fall-through to the next verifier.
+	 * The reason bubbles unchanged into the 401 (covia#548).
+	 *
+	 * <p>Reasons describe the presented token only: its shape, its own claims,
+	 * whether its signature verifies for the key it asserts. Checks that depend
+	 * on venue state — key status, audience, user records — run after the
+	 * signature, and their wording never says whether a named account exists
+	 * (AUTH.md §11): on the named-user path the signature proves possession of
+	 * the key {@code kid} names, which anyone can mint, so an unknown user and
+	 * an unregistered key read the same.</p>
+	 */
 	private VerifiedPrincipal verify(AString token) {
 		if (token == null || token.toString().isBlank()) {
 			throw new AuthException("Authentication required");
 		}
+		JWT parsed = JWT.parse(token);
+		if (parsed == null) {
+			throw new AuthException(TOKEN_REJECTED_PREFIX
+				+ "unparseable JWT: expected three base64url-encoded segments");
+		}
+		AMap<AString, ACell> claims = parsed.getClaims();
+		if (claims == null) throw new AuthException(TOKEN_REJECTED_PREFIX + "missing JWT claims");
+
+		String prefix;
+		Verdict verdict;
 		try {
-			boolean ucanShaped = hasUCANAtt(token);
-			VerifiedPrincipal principal = tryVerifyUCAN(token);
-			if (principal == null && ucanShaped) {
-				// Only reachable for a UCAN-shaped token the validator did not
-				// reject itself (e.g. att present but null); specific reasons are
-				// thrown from tryVerifyUCAN.
-				throw new AuthException(UCAN_REJECTED_PREFIX
-					+ "a bearer credential must be valid, audience-bound, and have empty att");
+			AString iss = RT.ensureString(claims.get(ISS));
+			if (claims.containsKey(UCAN.ATT)) {
+				prefix = UCAN_REJECTED_PREFIX;
+				verdict = verifyUCAN(token);
+			} else if ("RS256".equals(parsed.getAlgorithm())) {
+				prefix = PROVIDER_TOKEN_REJECTED_PREFIX;
+				verdict = verifyExternalProvider(parsed, claims);
+			} else if (venueDID.equals(iss)) {
+				prefix = VENUE_TOKEN_REJECTED_PREFIX;
+				verdict = verifyVenueSigned(token);
+			} else if (RT.ensureString(claims.get(SUB)) != null) {
+				prefix = SELF_ISSUED_REJECTED_PREFIX;
+				verdict = verifySelfIssued(token, parsed, claims);
+			} else {
+				throw new AuthException(TOKEN_REJECTED_PREFIX + "unrecognised credential: no sub claim, "
+					+ "no att claim, not issued by this venue, alg " + printable(parsed.getAlgorithm())
+					+ " — expected a self-issued JWT (sub = your DID), a UCAN bearer (att), a token "
+					+ "issued by this venue, or an RS256 provider token");
 			}
-			if (principal == null) principal = tryVerifySelfIssued(token);
-			if (principal == null && venueKey != null) {
-				principal = tryVerifyVenueSigned(token);
-			}
-			if (principal == null && externalProviders != null) {
-				principal = tryVerifyExternalProvider(token);
-			}
-			if (principal == null) {
-				throw new AuthException("Invalid or expired token");
-			}
-			return principal;
-		} catch (AudienceRejected e) {
-			throw new AuthException("Token audience not accepted by this venue");
 		} catch (AuthException e) {
 			throw e;
 		} catch (Exception e) {
 			log.warn("Error processing authentication token", e);
 			throw new AuthException("Authentication failed", e);
 		}
+		if (verdict.reason() != null) throw new AuthException(prefix + verdict.reason());
+		return verdict.principal();
 	}
 
-	private static boolean hasUCANAtt(AString jwt) {
-		JWT parsed = JWT.parse(jwt);
-		AMap<AString, ACell> claims = (parsed != null) ? parsed.getClaims() : null;
-		return claims != null && claims.containsKey(UCAN.ATT);
-	}
-
-	private void requireAudience(ACell aud) {
-		if (aud == null) {
-			if ("require".equals(audiencePolicy)) {
-				throw new AudienceRejected("audience (aud) is required but absent");
-			}
-			return;
-		}
-		if (aud instanceof AString s) {
-			if (!acceptedAudienceStrings.contains(s.toString())) {
-				throw new AudienceRejected("token audience is not this venue: " + s);
-			}
-			return;
-		}
-		if (aud instanceof AVector<?> arr) {
-			for (long i = 0; i < arr.count(); i++) {
-				AString member = RT.ensureString(arr.get(i));
-				if (member != null
-						&& acceptedAudienceStrings.contains(member.toString())) return;
-			}
-			throw new AudienceRejected(
-				"token audience list does not include this venue");
-		}
-		throw new AudienceRejected("malformed audience (aud) claim");
-	}
-
-	private static boolean temporalValid(AMap<AString, ACell> claims, long now) {
-		CVMLong exp = RT.ensureLong(claims.get(EXP));
-		if (exp != null && now > exp.longValue() + CLOCK_SKEW_SECONDS) return false;
-		CVMLong nbf = RT.ensureLong(claims.get(NBF));
-		if (nbf != null && now < nbf.longValue() - CLOCK_SKEW_SECONDS) return false;
-		return true;
-	}
-
-	private VerifiedPrincipal tryVerifyUCAN(AString jwt) {
-		JWT parsed = JWT.parse(jwt);
-		AMap<AString, ACell> claims = parsed == null ? null : parsed.getClaims();
-		if (claims == null || claims.get(UCAN.ATT) == null) return null;
-
+	/** A UCAN-shaped bearer: valid, audience-bound, and with empty {@code att}. */
+	private Verdict verifyUCAN(AString jwt) {
 		long now = System.currentTimeMillis() / 1000;
 		// Signature + temporal bounds under the venue's DID verifier, so a
 		// did:web-identified issuer (covia#343) verifies exactly like did:key.
+		// The validator's reason describes only the token's own bytes and
+		// claims (covia#503); audience and att policy run after the signature.
 		UcanJwtValidator.Validation validation =
 			UcanJwtValidator.validate(jwt, now, engine.didVerifier());
-		if (!validation.valid()) {
-			// The reason describes only the presented token's own bytes and
-			// claims (algorithm, claim shapes, its issuer and exp values), never
-			// venue state, so it is safe to return to an unauthenticated caller
-			// (covia#503). Checks that depend on venue state (audience, att
-			// policy) run only after the signature has verified.
-			throw new AuthException(UCAN_REJECTED_PREFIX + validation.reason());
-		}
+		if (!validation.valid()) return Verdict.fail(validation.reason());
 		UCAN token = validation.token();
 		AString issuer = token.getIssuer();
-		if (issuer == null) return null;
+		if (issuer == null) return Verdict.fail("missing issuer");
 		AVector<ACell> capabilities = token.getCapabilities();
 		if (capabilities == null || !capabilities.isEmpty()) {
-			throw new AuthException(UCAN_REJECTED_PREFIX
-				+ "a bearer credential must have empty att; present capability "
+			return Verdict.fail("a bearer credential must have empty att; present capability "
 				+ "tokens as transport proofs, not as the Authorization bearer");
 		}
-		requireAudience(token.getAudience());
-		return new VerifiedPrincipal(issuer, issuer);
+		String audience = audienceProblem(token.getAudience());
+		if (audience != null) return Verdict.fail(audience);
+		return Verdict.ok(issuer, issuer);
 	}
 
-	private VerifiedPrincipal tryVerifySelfIssued(AString jwt) {
-		JWT parsed = JWT.parse(jwt);
-		if (parsed == null || !"EdDSA".equals(parsed.getAlgorithm())) return null;
-		AMap<AString, ACell> claims = parsed.getClaims();
-
+	/**
+	 * An EdDSA token whose subject issued it: a self-certifying {@code did:key},
+	 * a venue-managed named user signing with a registered key, or any other
+	 * DID verified through its method resolver.
+	 */
+	private Verdict verifySelfIssued(AString jwt, JWT parsed, AMap<AString, ACell> claims) {
+		if (!"EdDSA".equals(parsed.getAlgorithm())) {
+			return Verdict.fail("unsupported JWT algorithm: expected EdDSA, got "
+				+ printable(parsed.getAlgorithm()));
+		}
 		AString sub = RT.ensureString(claims.get(SUB));
-		if (sub == null) return null;
-
+		AString iss = RT.ensureString(claims.get(ISS));
 		String subject = sub.toString();
+		long now = System.currentTimeMillis() / 1000;
+
 		if (subject.startsWith("did:key:")) {
-			AString keyDID = authenticationKeyDID(jwt, sub);
-			if (keyDID == null || !sub.equals(keyDID)) return null;
+			// Self-certifying: the subject is its own key, so kid must name it.
+			KeyRef key = signingKeyOf(parsed, sub);
+			if (key.reason() != null) return Verdict.fail(key.reason());
+			if (!sub.equals(key.did())) {
+				return Verdict.fail("kid names key " + key.did() + " but the subject is " + sub
+					+ ": a did:key subject signs with its own key");
+			}
 			AccountKey signingKey = Multikey.decodePublicKey(
-				keyDID.toString().substring("did:key:".length()));
-			if (signingKey == null || JWT.verifyPublic(jwt, signingKey) == null) return null;
-			if (!temporalValid(claims, System.currentTimeMillis() / 1000)) return null;
-			requireAudience(claims.get(AUD));
-			return new VerifiedPrincipal(keyDID, sub);
+				key.did().toString().substring("did:key:".length()));
+			if (signingKey == null || JWT.verifyPublic(jwt, signingKey) == null) {
+				return Verdict.fail("signature does not verify for " + sub);
+			}
+			String when = temporalProblem(claims, now);
+			if (when != null) return Verdict.fail(when);
+			String audience = audienceProblem(claims.get(AUD));
+			if (audience != null) return Verdict.fail(audience);
+			return Verdict.ok(key.did(), sub);
 		}
 
 		AString userId = engine.managedUserName(sub);
 		if (userId != null) {
-			if (!sub.equals(RT.ensureString(claims.get(ISS)))) return null;
-			AString keyDID = authenticationKeyDID(jwt, sub);
-			if (keyDID == null) return null;
+			if (!sub.equals(iss)) return Verdict.fail(issuerMismatch("named-user", sub, iss));
+			KeyRef key = signingKeyOf(parsed, sub);
+			if (key.reason() != null) return Verdict.fail(key.reason());
 			AccountKey signingKey = Multikey.decodePublicKey(
-				keyDID.toString().substring("did:key:".length()));
-			if (signingKey == null || JWT.verifyPublic(jwt, signingKey) == null) return null;
+				key.did().toString().substring("did:key:".length()));
+			if (signingKey == null || JWT.verifyPublic(jwt, signingKey) == null) {
+				return Verdict.fail("signature does not verify for key " + key.did());
+			}
+			// Venue state, only now. One wording whether the user is unknown or
+			// the key is: the signature proved possession of the kid key, which
+			// anyone can mint, so this must not become a username oracle.
 			AMap<AString, ACell> record = venueAuth.getUser(userId);
-			if (record == null || !sub.equals(record.get(Fields.DID))) return null;
-			if (!venueAuth.isAuthenticationKeyActive(userId, keyDID)) return null;
-			if (!temporalValid(claims, System.currentTimeMillis() / 1000)) return null;
-			requireAudience(claims.get(AUD));
-			return new VerifiedPrincipal(keyDID, sub);
+			boolean registered = record != null && sub.equals(record.get(Fields.DID));
+			AMap<AString, ACell> entry = registered
+				? RT.ensureMap(venueAuth.getAuthenticationKeys(userId).get(key.did())) : null;
+			if (entry == null) {
+				return Verdict.fail("key " + key.did() + " is not an active authentication key of " + sub);
+			}
+			if (!Auth.ACTIVE.equals(entry.get(Fields.STATUS))) {
+				return Verdict.fail("key " + key.did() + " has been revoked for " + sub);
+			}
+			String when = temporalProblem(claims, now);
+			if (when != null) return Verdict.fail(when);
+			String audience = audienceProblem(claims.get(AUD));
+			if (audience != null) return Verdict.fail(audience);
+			return Verdict.ok(key.did(), sub);
 		}
 
 		// A non-local DID is authenticated by its method resolver. No caller in
 		// this layer assumes did:web, did:key, or any future DID method. Unlike a
 		// self-certifying did:key subject or a locally registered key, this path
 		// also requires the issuer claim to name the resolved identity explicitly.
-		if (!sub.equals(RT.ensureString(claims.get(ISS)))) return null;
+		if (!sub.equals(iss)) return Verdict.fail(issuerMismatch("resolvable-DID", sub, iss));
 		try {
-			if (DID.fromString(subject) == null) return null;
+			if (DID.fromString(subject) == null) return Verdict.fail("malformed subject DID: " + sub);
+		} catch (RuntimeException e) {
+			return Verdict.fail("malformed subject DID: " + sub);
+		}
+		boolean verifies;
+		try {
 			Blob message = Blob.wrap(parsed.getSigningInput().getBytes(StandardCharsets.UTF_8));
 			Blob signature = Blob.wrap(parsed.getSignatureBytes());
-			if (!engine.didVerifier().verifies(sub, message, signature)) return null;
+			verifies = engine.didVerifier().verifies(sub, message, signature);
 		} catch (RuntimeException e) {
-			return null;
+			return Verdict.fail("could not verify " + sub + " through its DID method: " + e.getMessage());
 		}
-		if (!temporalValid(claims, System.currentTimeMillis() / 1000)) return null;
-		requireAudience(claims.get(AUD));
-		return new VerifiedPrincipal(sub, sub);
+		if (!verifies) return Verdict.fail("signature does not verify for " + sub + " (per its DID document)");
+		String when = temporalProblem(claims, now);
+		if (when != null) return Verdict.fail(when);
+		String audience = audienceProblem(claims.get(AUD));
+		if (audience != null) return Verdict.fail(audience);
+		return Verdict.ok(sub, sub);
 	}
 
-	private VerifiedPrincipal tryVerifyVenueSigned(AString jwt) {
+	/** A token this venue issued (a login session), signed with its own key. */
+	private Verdict verifyVenueSigned(AString jwt) {
+		if (venueKey == null) {
+			return Verdict.fail("this venue has no signing key, so it cannot have issued this token");
+		}
 		AMap<AString, ACell> claims = JWT.verifyPublic(jwt, venueKey);
-		if (claims == null) return null;
-		if (!venueDID.equals(RT.ensureString(claims.get(ISS)))) return null;
-		if (!temporalValid(claims, System.currentTimeMillis() / 1000)) return null;
-		requireAudience(claims.get(AUD));
-
+		if (claims == null) return Verdict.fail("signature does not verify for this venue's key");
+		String when = temporalProblem(claims, System.currentTimeMillis() / 1000);
+		if (when != null) return Verdict.fail(when);
+		String audience = audienceProblem(claims.get(AUD));
+		if (audience != null) return Verdict.fail(audience);
 		AString sub = RT.ensureString(claims.get(SUB));
-		if (sub == null) return null;
+		if (sub == null) return Verdict.fail("missing sub claim");
 		try {
-			if (DID.fromString(sub.toString()) == null) return null;
+			if (DID.fromString(sub.toString()) == null) return Verdict.fail("malformed subject DID: " + sub);
 		} catch (RuntimeException e) {
-			return null;
+			return Verdict.fail("malformed subject DID: " + sub);
 		}
-		return new VerifiedPrincipal(sub, sub);
+		return Verdict.ok(sub, sub);
 	}
 
-	private static AString authenticationKeyDID(AString jwt, AString subject) {
-		try {
-			JWT parsed = JWT.parse(jwt);
-			if (parsed == null) return null;
-			AString kid = RT.ensureString(parsed.getHeader().get(KID));
-			if (kid == null) return null;
-			String value = kid.toString();
-			String multikey;
-			// A DID-URL kid is meaningful only in the asserted subject's DID
-			// document. Its fragment is the Multikey published by UserAPI.
-			int fragment = value.lastIndexOf('#');
-			if (fragment >= 0) {
-				if (!value.substring(0, fragment).equals(subject.toString())) return null;
-				multikey = value.substring(fragment + 1);
-			} else if (value.startsWith("did:key:")) {
-				multikey = value.substring("did:key:".length());
-			} else {
-				multikey = value;
-			}
-			if (Multikey.decodePublicKey(multikey) == null) return null;
-			return Strings.create("did:key:" + multikey);
-		} catch (Exception e) {
-			return null;
+	/**
+	 * An RS256 ID token from a configured external provider, mapped to the
+	 * venue user linked to its email. The email is the caller's own (the
+	 * provider vouched for it), so "no venue user is linked" is theirs to hear.
+	 */
+	private Verdict verifyExternalProvider(JWT parsed, AMap<AString, ACell> claims) {
+		if (externalProviders == null) {
+			return Verdict.fail("no external identity provider is configured on this venue");
 		}
-	}
-
-	private VerifiedPrincipal tryVerifyExternalProvider(AString jwt) {
-		try {
-			JWT parsed = JWT.parse(jwt);
-			if (parsed == null || !"RS256".equals(parsed.getAlgorithm())) return null;
-			String kid = parsed.getKeyID();
-			if (kid == null) return null;
-
-			for (OAuthConfig provider : externalProviders.values()) {
-				if (provider.jwksUri == null) continue;
+		String kid = parsed.getKeyID();
+		if (kid == null) return Verdict.fail("missing kid header: a provider token names its signing key in kid");
+		String reason = "no configured identity provider publishes signing key " + kid;
+		for (Map.Entry<String, OAuthConfig> e : externalProviders.entrySet()) {
+			String name = e.getKey();
+			OAuthConfig provider = e.getValue();
+			if (provider.jwksUri == null) continue;
+			try {
 				RSAPublicKey key = JWKSClient.getKey(provider.jwksUri, kid);
-				if (key == null || !parsed.verifyRS256(key)) continue;
-				if (!parsed.validateClaims(provider.issuer, provider.clientId)) continue;
-
-				AMap<AString, ACell> claims = parsed.getClaims();
-				AString email = RT.ensureString(claims.get(EMAIL));
-				if (email == null) return null;
-				AString venueUserDID = findUserDIDByEmail(email);
-				AString subject = RT.ensureString(claims.get(SUB));
-				if (venueUserDID == null) return null;
-				if (subject == null) subject = email;
-				return new VerifiedPrincipal(subject, venueUserDID);
+				if (key == null) continue;
+				if (!parsed.verifyRS256(key)) {
+					reason = "signature does not verify against " + name + "'s key " + kid;
+					continue;
+				}
+				if (!parsed.validateClaims(provider.issuer, provider.clientId)) {
+					reason = "token issuer or audience does not match provider " + name;
+					continue;
+				}
+			} catch (Exception ex) {
+				log.debug("Provider {} key lookup failed", name, ex);
+				reason = "could not fetch the signing keys of " + name + ": " + ex.getMessage();
+				continue;
 			}
-		} catch (Exception e) {
-			// A provider miss is indistinguishable from the other verifier misses.
-			log.debug("External provider JWT verification failed", e);
+			AString email = RT.ensureString(claims.get(EMAIL));
+			if (email == null) return Verdict.fail("provider token carries no email claim");
+			AString venueUserDID = findUserDIDByEmail(email);
+			if (venueUserDID == null) return Verdict.fail("no venue user is linked to " + email);
+			AString subject = RT.ensureString(claims.get(SUB));
+			return Verdict.ok(subject != null ? subject : email, venueUserDID);
+		}
+		return Verdict.fail(reason);
+	}
+
+	// ------------------------------------------------------------- the checks
+	// Each returns null when it passes and the reason when it does not, the
+	// convention CapabilityChecker.allows and UcanJwtValidator.Validation use.
+
+	/** Null when the token is within its exp / nbf bounds (with clock-skew leeway); otherwise why not. */
+	static String temporalProblem(AMap<AString, ACell> claims, long now) {
+		CVMLong exp = RT.ensureLong(claims.get(EXP));
+		if (exp != null && now > exp.longValue() + CLOCK_SKEW_SECONDS) {
+			return "token expired at " + instant(exp.longValue()) + " (now " + instant(now) + ")";
+		}
+		CVMLong nbf = RT.ensureLong(claims.get(NBF));
+		if (nbf != null && now < nbf.longValue() - CLOCK_SKEW_SECONDS) {
+			return "token not valid before " + instant(nbf.longValue()) + " (now " + instant(now) + ")";
 		}
 		return null;
+	}
+
+	/** Null when the audience names this venue (or is absent and not required); otherwise why not. */
+	private String audienceProblem(ACell aud) {
+		if (aud == null) {
+			return "require".equals(audiencePolicy) ? "audience (aud) is required but absent" : null;
+		}
+		if (aud instanceof AString s) {
+			return acceptedAudienceStrings.contains(s.toString())
+				? null : "token audience is not this venue: " + s;
+		}
+		if (aud instanceof AVector<?> arr) {
+			for (long i = 0; i < arr.count(); i++) {
+				AString member = RT.ensureString(arr.get(i));
+				if (member != null && acceptedAudienceStrings.contains(member.toString())) return null;
+			}
+			return "token audience list does not include this venue";
+		}
+		return "malformed audience (aud) claim";
+	}
+
+	/** The signing key a self-issued token names in {@code kid}, as a {@code did:key}; or why it names none usable. */
+	private record KeyRef(AString did, String reason) {}
+
+	private static KeyRef signingKeyOf(JWT parsed, AString subject) {
+		AString kid = RT.ensureString(parsed.getHeader().get(KID));
+		if (kid == null) {
+			return new KeyRef(null, "missing kid header: a self-issued token names its signing key in kid");
+		}
+		String value = kid.toString();
+		String multikey;
+		// A DID-URL kid is meaningful only in the asserted subject's DID
+		// document. Its fragment is the Multikey published by UserAPI.
+		int fragment = value.lastIndexOf('#');
+		if (fragment >= 0) {
+			if (!value.substring(0, fragment).equals(subject.toString())) {
+				return new KeyRef(null, "kid " + value + " is a key of " + value.substring(0, fragment)
+					+ ", not of the subject " + subject);
+			}
+			multikey = value.substring(fragment + 1);
+		} else if (value.startsWith("did:key:")) {
+			multikey = value.substring("did:key:".length());
+		} else {
+			multikey = value;
+		}
+		try {
+			if (Multikey.decodePublicKey(multikey) == null) {
+				return new KeyRef(null, "kid " + value + " is not a Multikey-encoded Ed25519 public key");
+			}
+		} catch (RuntimeException e) {
+			return new KeyRef(null, "kid " + value + " is not a Multikey-encoded Ed25519 public key");
+		}
+		return new KeyRef(Strings.create("did:key:" + multikey), null);
+	}
+
+	private static String issuerMismatch(String kind, AString sub, AString iss) {
+		return (iss == null)
+			? "missing iss: a " + kind + " token is issued by its subject (iss = sub)"
+			: "iss " + iss + " does not match sub " + sub + ": a " + kind + " token is issued by its subject";
+	}
+
+	private static String instant(long epochSeconds) {
+		try {
+			return Instant.ofEpochSecond(epochSeconds).toString();
+		} catch (RuntimeException e) {
+			return String.valueOf(epochSeconds);
+		}
+	}
+
+	private static String printable(Object value) {
+		return (value == null) ? "none" : "\"" + value + "\"";
 	}
 
 	private AString findUserDIDByEmail(AString email) {

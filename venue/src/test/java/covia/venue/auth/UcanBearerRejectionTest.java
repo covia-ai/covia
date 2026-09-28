@@ -122,17 +122,102 @@ public class UcanBearerRejectionTest {
 	}
 
 	@Test
-	public void wrongAudienceStaysGeneric() {
+	public void wrongAudienceIsNamed() {
 		AString otherVenue = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
 		AMap<AString, ACell> claims = bearerClaims(CVMLong.create(inAnHour()))
 			.assoc(UCAN.AUD, otherVenue);
 		String jwt = JWT.signPublic(claims, caller).toString();
 		String message = reject(jwt);
-		assertEquals("Token audience not accepted by this venue", message);
+		assertTrue(message.startsWith(VenueAuthenticator.UCAN_REJECTED_PREFIX), message);
+		assertTrue(message.contains("token audience is not this venue: " + otherVenue), message);
 	}
 
 	@Test
-	public void nonUcanGarbageStaysGeneric() {
-		assertEquals("Invalid or expired token", reject("not.a.jwt"));
+	public void unparseableTokenIsNamed() {
+		String message = reject("not.a.jwt");
+		assertTrue(message.startsWith(VenueAuthenticator.TOKEN_REJECTED_PREFIX), message);
+	}
+
+	// ---- Every other credential shape gets the same specificity (covia#548).
+	// A verifier claims a token by its shape, then every failure is a reason.
+
+	private static AMap<AString, ACell> selfIssuedClaims(long exp) {
+		return Maps.of(
+			JWT.SUB, callerDID,
+			JWT.ISS, callerDID,
+			JWT.AUD, engine.getDIDString(),
+			JWT.EXP, CVMLong.create(exp));
+	}
+
+	@Test
+	public void selfIssuedTokenAuthenticates() {
+		String jwt = JWT.signPublic(selfIssuedClaims(inAnHour()), caller).toString();
+		assertEquals(callerDID, authenticator.authenticate(Strings.create(jwt)));
+	}
+
+	@Test
+	public void selfIssuedExpiredIsNamed() {
+		long past = System.currentTimeMillis() / 1000 - 3600;
+		String message = reject(JWT.signPublic(selfIssuedClaims(past), caller).toString());
+		assertTrue(message.startsWith(VenueAuthenticator.SELF_ISSUED_REJECTED_PREFIX), message);
+		assertTrue(message.contains("token expired at "), message);
+	}
+
+	@Test
+	public void selfIssuedNotYetValidIsNamed() {
+		long now = System.currentTimeMillis() / 1000;
+		AMap<AString, ACell> claims = selfIssuedClaims(now + 3600)
+			.assoc(JWT.NBF, CVMLong.create(now + 600));
+		String message = reject(JWT.signPublic(claims, caller).toString());
+		assertTrue(message.startsWith(VenueAuthenticator.SELF_ISSUED_REJECTED_PREFIX), message);
+		assertTrue(message.contains("token not valid before "), message);
+	}
+
+	@Test
+	public void selfIssuedForgedSignatureIsNamedWithoutRevealingMore() {
+		// kid names the subject's own key, but another key produced the signature.
+		AString kid = Strings.create(callerDID.toString().substring("did:key:".length()));
+		String forged = JWT.signPublic(selfIssuedClaims(inAnHour()), AKeyPair.generate(), kid).toString();
+		String message = reject(forged);
+		assertTrue(message.startsWith(VenueAuthenticator.SELF_ISSUED_REJECTED_PREFIX), message);
+		assertTrue(message.contains("signature does not verify for " + callerDID), message);
+		// Post-signature detail (audience) is never reached.
+		assertFalse(message.contains("audience"), message);
+	}
+
+	@Test
+	public void selfIssuedWithSomeoneElsesKeyIsNamed() {
+		// Correctly signed, but by a key that is not the did:key subject.
+		String message = reject(JWT.signPublic(selfIssuedClaims(inAnHour()), AKeyPair.generate()).toString());
+		assertTrue(message.startsWith(VenueAuthenticator.SELF_ISSUED_REJECTED_PREFIX), message);
+		assertTrue(message.contains("but the subject is " + callerDID), message);
+	}
+
+	@Test
+	public void selfIssuedWrongAudienceIsNamed() {
+		AString otherVenue = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
+		AMap<AString, ACell> claims = selfIssuedClaims(inAnHour()).assoc(JWT.AUD, otherVenue);
+		String message = reject(JWT.signPublic(claims, caller).toString());
+		assertTrue(message.startsWith(VenueAuthenticator.SELF_ISSUED_REJECTED_PREFIX), message);
+		assertTrue(message.contains("token audience is not this venue: " + otherVenue), message);
+	}
+
+	@Test
+	public void venueTokenWithForeignSignatureIsNamed() {
+		// iss = this venue claims a venue-issued session; the venue did not sign it.
+		AMap<AString, ACell> claims = selfIssuedClaims(inAnHour()).assoc(JWT.ISS, engine.getDIDString());
+		String message = reject(JWT.signPublic(claims, caller).toString());
+		assertTrue(message.startsWith(VenueAuthenticator.VENUE_TOKEN_REJECTED_PREFIX), message);
+		assertTrue(message.contains("signature does not verify for this venue's key"), message);
+	}
+
+	@Test
+	public void unrecognisedShapeIsNamed() {
+		// No sub, no att, not this venue's: no verifier claims it, and the
+		// reason says what was seen and what would have been recognised.
+		AMap<AString, ACell> claims = Maps.of(JWT.ISS, callerDID, JWT.EXP, CVMLong.create(inAnHour()));
+		String message = reject(JWT.signPublic(claims, caller).toString());
+		assertTrue(message.startsWith(VenueAuthenticator.TOKEN_REJECTED_PREFIX), message);
+		assertTrue(message.contains("unrecognised credential"), message);
 	}
 }

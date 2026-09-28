@@ -34,6 +34,7 @@ import covia.exception.ResponseException;
 import covia.grid.Job;
 import covia.grid.auth.VenueAuth;
 import covia.grid.client.VenueHTTP;
+import covia.venue.auth.VenueAuthenticator;
 import covia.venue.server.VenueServer;
 
 /** End-to-end authentication and rotation for venue-managed named users (#296). */
@@ -150,6 +151,34 @@ public class NamedUserAuthTest {
 		server.getEngine().didVerifier().registerMethod("exampletest",
 			(did, message, signature) -> false);
 		assertRejected(namedToken(aliceKey, foreign, foreign, venueDID));
+
+		// …and each refusal says why (covia#548) without saying whether the
+		// named account exists: a stranger's key on a real user and on an
+		// unknown one read the same, because the signature only proved
+		// possession of the kid key, which anyone can mint (AUTH.md §11).
+		String strangerKey = reason(namedToken(attacker, aliceDID, aliceDID, venueDID));
+		assertTrue(strangerKey.startsWith(VenueAuthenticator.SELF_ISSUED_REJECTED_PREFIX), strangerKey);
+		assertTrue(strangerKey.contains("is not an active authentication key of " + aliceDID), strangerKey);
+		AString nobody = server.getEngine().managedUserDID(Strings.create("nobody"));
+		assertEquals(strangerKey.replace(aliceDID.toString(), nobody.toString()),
+			reason(namedToken(attacker, nobody, nobody, venueDID)),
+			"an unknown user reads exactly like an unregistered key");
+		String wrongSubject = reason(namedToken(aliceKey, bobDID, bobDID, venueDID));
+		assertTrue(wrongSubject.contains("is not an active authentication key of " + bobDID), wrongSubject);
+		String issuerMismatch = reason(namedToken(aliceKey, aliceDID, bobDID, venueDID));
+		assertTrue(issuerMismatch.contains("does not match sub " + aliceDID), issuerMismatch);
+		String wrongAudience = reason(namedToken(aliceKey, aliceDID, aliceDID,
+			UCAN.toDIDKey(AKeyPair.generate().getAccountKey())));
+		assertTrue(wrongAudience.contains("token audience is not this venue"), wrongAudience);
+		String foreignSignature = reason(namedToken(aliceKey, foreign, foreign, venueDID));
+		assertTrue(foreignSignature.contains("signature does not verify for " + foreign), foreignSignature);
+	}
+
+	/** The venue's stated reason for refusing a token, straight from the authenticator. */
+	private String reason(String token) {
+		AuthException e = assertThrows(AuthException.class,
+			() -> server.authenticator().authenticate(Strings.create(token)));
+		return e.getMessage();
 	}
 
 	@Test
@@ -168,6 +197,10 @@ public class NamedUserAuthTest {
 			RequestContext.of(rotationDID)).get(5, TimeUnit.SECONDS);
 		assertRejected(namedToken(rotationKey, rotationDID, rotationDID, engine.getDIDString()));
 		assertAccepted(namedToken(replacement, rotationDID, rotationDID, engine.getDIDString()));
+		// The revoked key's holder is told so: they own the key, so it discloses
+		// nothing to anyone else.
+		String revoked = reason(namedToken(rotationKey, rotationDID, rotationDID, engine.getDIDString()));
+		assertTrue(revoked.contains("has been revoked for " + rotationDID), revoked);
 
 		AMap<AString, ACell> tombstone = convex.core.lang.RT.ensureMap(
 			engine.getAuth().getAuthenticationKeys(Strings.create("rotation")).get(rotationKeyDID));
