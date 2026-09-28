@@ -69,7 +69,7 @@ docker rm covia-venue 2>/dev/null || true
 
 docker run -d \
   --name covia-venue \
-  -p 8080:8080 \
+  -p 127.0.0.1:8080:8080 \
   -v /home/azureuser/covia-data:/data \
   --restart unless-stopped \
   --health-cmd='curl -f --max-time 3 http://localhost:8080/' \
