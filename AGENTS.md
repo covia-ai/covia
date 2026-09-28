@@ -169,6 +169,8 @@ Defined in code at `venue/src/main/java/covia/lattice/Covia.java`. Full design i
 - **Jobs:** Use `engine.jobs()` accessor for all job operations (submit, query, cancel, etc.)
 - **Adapters:** Follow `venue/docs/ADAPTERS.md`, including its publication, configuration, private-state, capability, module, and test invariants.
 - **Tests:** JUnit 6, use `Engine.createTemp()` for test instances
+- **Message wording lives in constants:** a refusal or error message is built from a constant on the class that owns it (`VenueAuthenticator.Reason`, `Auth.KEY_ALREADY_BOUND`), and tests assert against the constant, never the wording — a rewording must break no test
+- **Checks return reasons:** a check returns `null` when it passes and a human-readable reason when it does not (`CapabilityChecker.allows`, `UcanJwtValidator.Validation`, `VenueAuthenticator.Verdict`), so the reason bubbles back to the caller unchanged
 - **Prefer editing** existing files over creating new ones
 
 ### Adding a New Adapter
