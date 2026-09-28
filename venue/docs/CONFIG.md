@@ -276,6 +276,26 @@ network), or `false` to refuse them even on loopback. The checked-in
 > local venue is an https venue (or a tunnel); the header unblocks the
 > Chrome/Edge/Firefox majority only.
 
+## Browser security headers (`securityHeaders`)
+
+```json
+{
+  "securityHeaders": true
+}
+```
+
+On by default. Every response carries `X-Content-Type-Options: nosniff` and
+`Referrer-Policy: no-referrer`; HTML responses (the root page, `/login`,
+`/swagger`, `/redoc`, error pages) also carry `X-Frame-Options: DENY` and
+`Content-Security-Policy: frame-ancestors 'none'`, so no other site can frame
+the venue's own pages. Set `false` to turn them off. `Strict-Transport-Security`
+is deliberately not among them: add it at the TLS terminator (`deploy/Caddyfile`
+or equivalent), which knows the origin is https.
+
+A venue bound to a non-loopback address with `corsOrigins` at its default `"*"`
+logs one WARN at startup; the recommended production value is an explicit
+origin list (see *Browser origins* above).
+
 ## System tray
 
 When `MainVenue` runs on a desktop (not headless), each venue gets a system

@@ -415,7 +415,11 @@ public class SkillsAdapter extends AAdapter {
 		}
 		Skills.ParsedSkill parsed = Skills.parseSkillText(skillText, source, inline);
 		AString path = Strings.create(dir + "/" + parsed.name());
-		ACell written = write(ctx, path, parsed.metadata());
+		// Provenance rides in the stored metadata, where the job-free library
+		// listing can read it: the principal that imported, and the agent when
+		// the import came from an agent run (#525). parse stores nothing, so it
+		// carries none.
+		ACell written = write(ctx, path, parsed.metadata().assoc(Fields.CREATED_BY, createdBy(ctx)));
 
 		AMap<AString, ACell> out = Maps.of(
 			Fields.PATH, path,
@@ -425,6 +429,14 @@ public class SkillsAdapter extends AAdapter {
 			K_EXISTED, CVMBool.of(RT.bool(RT.getIn(written, K_EXISTED))));
 		if (source != null) out = out.assoc(Fields.SOURCE, source);
 		return withIgnored(out, parsed.ignored());
+	}
+
+	/** {@code {did, agentId?}}: the calling principal, plus the agent when the call came from an agent run. */
+	static AMap<AString, ACell> createdBy(RequestContext ctx) {
+		AMap<AString, ACell> by = Maps.empty();
+		if (ctx.getCallerDID() != null) by = by.assoc(Fields.DID, ctx.getCallerDID());
+		if (ctx.getAgentId() != null) by = by.assoc(Fields.AGENT_ID, ctx.getAgentId());
+		return by;
 	}
 
 	/** The {@code content} option: {@code inline} (default) or {@code ref}. */

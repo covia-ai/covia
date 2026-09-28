@@ -329,6 +329,8 @@ public class Config {
 
 	/** Key for the Private Network Access opt-in (default: false). */
 	public static final AString ALLOW_PRIVATE_NETWORK = Strings.intern("allowPrivateNetwork");
+	/** Browser hardening headers on every response (nosniff, no referrer, no framing of HTML); default {@code true}. */
+	public static final AString SECURITY_HEADERS = Strings.intern("securityHeaders");
 	public static final AString ENABLE_PRIVATE_JOBS = Strings.intern("enablePrivateJobs");
 	/** Force durable records for read-only run/internal invocations. */
 	public static final AString RECORD_READ_ONLY_OPERATIONS = Strings.intern("recordReadOnlyOperations");
@@ -393,7 +395,7 @@ public class Config {
 		"httpSelectors", "httpAcceptors", "mcp", "a2a", "adapters",
 		"modules", "dynamicModules", "users", "store", "seed", "keystore", "storage", "etch",
 		"maxContentSize", "auth", "webdav", "file", "corsOrigins",
-		"allowPrivateNetwork", "enablePrivateJobs", "recordReadOnlyOperations", "fixMcpStrings",
+		"allowPrivateNetwork", "securityHeaders", "enablePrivateJobs", "recordReadOnlyOperations", "fixMcpStrings",
 		"outputValidation", "secrets", "strictAssets", "strictConfig", "scheduler",
 		"shutdown");
 
@@ -479,6 +481,7 @@ public class Config {
 		optionalBoolean(config, STRICT_ASSETS, "strictAssets", true);
 		optionalBoolean(config, FIX_MCP_STRINGS, "fixMcpStrings", true);
 		optionalBoolean(config, ALLOW_PRIVATE_NETWORK, "allowPrivateNetwork", false);
+		optionalBoolean(config, SECURITY_HEADERS, "securityHeaders", true);
 		optionalBoolean(config, ENABLE_PRIVATE_JOBS, "enablePrivateJobs", false);
 		optionalBoolean(config, RECORD_READ_ONLY_OPERATIONS, "recordReadOnlyOperations", false);
 
@@ -2029,6 +2032,19 @@ public class Config {
 		ACell v = config.get(ALLOW_PRIVATE_NETWORK);
 		if (v != null) return RT.bool(v);   // explicit override, either direction
 		return isLoopbackBind();
+	}
+
+	/**
+	 * Whether every response carries the browser hardening headers
+	 * ({@code X-Content-Type-Options: nosniff}, {@code Referrer-Policy: no-referrer},
+	 * and on HTML responses {@code X-Frame-Options: DENY} with
+	 * {@code Content-Security-Policy: frame-ancestors 'none'}). On by default;
+	 * {@code securityHeaders: false} turns them off. HSTS is not among them:
+	 * only the TLS terminator knows whether the origin is https (#537).
+	 */
+	public boolean isSecurityHeaders() {
+		ACell v = config.get(SECURITY_HEADERS);
+		return v == null || RT.bool(v);
 	}
 
 	/**

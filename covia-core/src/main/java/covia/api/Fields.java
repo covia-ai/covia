@@ -10,6 +10,8 @@ public class Fields {
 	// Job related
 	public static final StringShort CREATED=Strings.intern("created");
 	public static final StringShort UPDATED = Strings.intern("updated");
+	/** Who wrote a record: {@code {did, agentId?}} — the calling principal, and the agent when it wrote from an agent run. */
+	public static final StringShort CREATED_BY = Strings.intern("createdBy");
 	/** Non-fatal advisories attached to an operation result (a vector of message
 	 *  strings, e.g. config sanity warnings). Absent when there are none. */
 	public static final StringShort WARNINGS = Strings.intern("warnings");

@@ -284,6 +284,30 @@ public class SkillsImportTest {
 	}
 
 	@Test
+	public void testImportRecordsWhoWroteIt() {
+		// A user's own import names the principal and no agent…
+		importSkill(Maps.of(K_SOURCE, Strings.create("file://work/agent/SKILL.md")));
+		ACell mine = engine.resolvePath(Strings.create("w/skills/agent"), ctx);
+		assertEquals(did, RT.getIn(mine, Fields.CREATED_BY, Fields.DID));
+		assertNull(RT.getIn(mine, Fields.CREATED_BY, Fields.AGENT_ID));
+
+		// …and an import from an agent run is attributed to the agent (#525): its
+		// own sub-principal DID as the actor, plus the agent id so a library
+		// listing can show provenance without parsing DIDs.
+		ctx = RequestContext.ofAgent(did, Strings.create("author-bot"));
+		importSkill(Maps.of(K_SOURCE, Strings.create("file://work/agent/SKILL.md"),
+			K_SKILLSET, Strings.create("w/authored")));
+		ACell theirs = engine.resolvePath(Strings.create("w/authored/agent"), ctx);
+		assertEquals(ctx.getCallerDID(), RT.getIn(theirs, Fields.CREATED_BY, Fields.DID));
+		assertTrue(ctx.getCallerDID().toString().endsWith(":g:author-bot"), "an agent acts as its own sub-principal");
+		assertEquals(Strings.create("author-bot"), RT.getIn(theirs, Fields.CREATED_BY, Fields.AGENT_ID));
+
+		// parse stores nothing, so it stamps nothing.
+		ACell parsed = parse(Maps.of(K_SOURCE, Strings.create("file://work/agent/SKILL.md")));
+		assertNull(RT.getIn(parsed, "metadata", Fields.CREATED_BY));
+	}
+
+	@Test
 	public void testImportIntoNamedSkillset() {
 		ACell out = importSkill(Maps.of(K_SOURCE, Strings.create("file://work/agent/SKILL.md"),
 			K_SKILLSET, Strings.create("w/team-skills/")));

@@ -10,6 +10,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Changed
 
+- Unhandled exceptions answer `500` with the title `Internal server error` and
+  the exception class and message under `details.exception` (#540).
+
 - Allow-listed Telegram bots only message their allowed users: `telegram:send`
   / `telegram:call` targets must be listed ids or the account a listed
   `@username` resolved to on first contact, and such bots converse only in
@@ -40,6 +43,11 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   identical content was already loaded under (#504).
 
 ### Added
+
+- Browser security headers on every response (`securityHeaders`, on by
+  default), and a startup warning for `corsOrigins: "*"` on a non-loopback bind
+  (#537).
+- `skills:import` records `createdBy: {did, agentId?}` on the skill (#525).
 
 - `agent:from-skills` composes `skills:import` and `agent:create` into one
   call, porting SKILL.md skills plus a system prompt into a native agent

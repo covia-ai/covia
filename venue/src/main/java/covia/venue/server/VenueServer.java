@@ -9,6 +9,7 @@ import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.Consumer;
@@ -796,6 +797,13 @@ public class VenueServer {
 		if (bindAddress != null) connector.setHost(bindAddress);
 		jettyServer.addConnector(connector);
 		log.info("Venue HTTP connector bound to {}:{}", (bindAddress != null) ? bindAddress : "0.0.0.0", port);
+		if (config.getCorsPolicy().anyOrigin() && (bindAddress == null || !isLoopback(bindAddress))) {
+			// Defensible on loopback, where only this machine's pages can reach
+			// the venue; on a reachable bind it means any web page may call the
+			// venue from a visitor's browser (#537).
+			log.warn("corsOrigins is \"*\" on a non-loopback bind: any web page can call this venue from a "
+				+ "visitor's browser. Set corsOrigins to the origins that need it (venue/docs/CONFIG.md, Browser origins).");
+		}
 	}
 
 	/**
@@ -858,6 +866,17 @@ public class VenueServer {
 			return java.net.InetAddress.getByName(host).isLoopbackAddress();
 		} catch (Exception e) {
 			return false;
+		}
+	}
+
+	/** The browser hardening headers ({@link Config#isSecurityHeaders}); framing is denied on HTML responses only. */
+	private static void applySecurityHeaders(Context ctx) {
+		ctx.header("X-Content-Type-Options", "nosniff");
+		ctx.header("Referrer-Policy", "no-referrer");
+		String type = ctx.res().getContentType();
+		if (type != null && type.startsWith("text/html")) {
+			ctx.header("X-Frame-Options", "DENY");
+			ctx.header("Content-Security-Policy", "frame-ancestors 'none'");
 		}
 	}
 
@@ -931,11 +950,13 @@ public class VenueServer {
 
 		routes.exception(Exception.class, (e, ctx) -> {
 			log.error("Unhandled exception in {} {}", ctx.method(), ctx.path(), e);
-			String message = "Unexpected error: " + e.getClass().getSimpleName();
-			if (e.getMessage() != null && !e.getMessage().isBlank()) {
-				message += ": " + e.getMessage();
-			}
-			renderHttpError(new InternalServerErrorResponse(message), ctx);
+			// A generic title with the exception under details: the class and
+			// message stay visible by design, because operators debug from the
+			// response as much as from the log (#540).
+			String exception = e.getClass().getSimpleName();
+			if (e.getMessage() != null && !e.getMessage().isBlank()) exception += ": " + e.getMessage();
+			renderHttpError(new InternalServerErrorResponse("Internal server error",
+				Map.of("exception", exception)), ctx);
 		});
 
 		// One owner for CORS admission and response headers. The old combination
@@ -943,6 +964,13 @@ public class VenueServer {
 		// origin with 400 and then add an allow header anyway. A parsed policy also
 		// lets the loopback sentinel match literal hosts on any port without DNS.
 		routes.before(ctx -> applyCorsPolicy(ctx, corsPolicy, allowPrivateNetwork));
+
+		// Browser hardening on every response (#537): no MIME sniffing, no
+		// referrer leakage, and the venue's own HTML pages cannot be framed.
+		// HSTS is the TLS terminator's to add — only it knows the origin is https.
+		if (this.config.isSecurityHeaders()) {
+			routes.after(VenueServer::applySecurityHeaders);
+		}
 
 		// Native protocol routes and explicitly opted-in embedder routes sync
 		// the connected lattice root after handling. Matching by endpoint role

@@ -288,6 +288,48 @@ public class VenueServerTest {
 		}
 	}
 
+	@Test public void testSecurityHeadersOnByDefaultAndOffByConfig() throws Exception {
+		VenueServer server = VenueServer.launch(Maps.of(Config.PORT, CVMLong.create(0)));
+		try {
+			// JSON: sniffing and referrer protection, no framing headers needed
+			HttpResponse<String> json = plainGet(server, "/api/v1/status");
+			assertEquals(200, json.statusCode(), json.body());
+			assertEquals("nosniff", json.headers().firstValue("x-content-type-options").orElse(null));
+			assertEquals("no-referrer", json.headers().firstValue("referrer-policy").orElse(null));
+			assertTrue(json.headers().firstValue("x-frame-options").isEmpty());
+
+			// HTML: the venue's own pages cannot be framed
+			HttpResponse<String> html = plainGet(server, "/index.html");
+			assertEquals(200, html.statusCode());
+			assertTrue(html.headers().firstValue("content-type").orElse("").startsWith("text/html"));
+			assertEquals("DENY", html.headers().firstValue("x-frame-options").orElse(null));
+			assertEquals("frame-ancestors 'none'",
+				html.headers().firstValue("content-security-policy").orElse(null));
+			assertEquals("nosniff", html.headers().firstValue("x-content-type-options").orElse(null));
+		} finally {
+			server.close();
+		}
+
+		VenueServer off = VenueServer.launch(Maps.of(
+			Config.PORT, CVMLong.create(0),
+			Config.SECURITY_HEADERS, CVMBool.FALSE));
+		try {
+			HttpResponse<String> response = plainGet(off, "/api/v1/status");
+			assertEquals(200, response.statusCode(), response.body());
+			assertTrue(response.headers().firstValue("x-content-type-options").isEmpty(),
+				"securityHeaders: false turns the headers off");
+		} finally {
+			off.close();
+		}
+	}
+
+	private static HttpResponse<String> plainGet(VenueServer server, String path) throws Exception {
+		return TestHTTP.CLIENT.send(HttpRequest.newBuilder()
+			.uri(new URI("http://localhost:" + server.port() + path))
+			.GET().timeout(Duration.ofSeconds(10)).build(),
+			HttpResponse.BodyHandlers.ofString());
+	}
+
 	@Test public void testCorsCanBeDisabledEntirely() throws Exception {
 		VenueServer server = VenueServer.launch(Maps.of(
 			Config.PORT, CVMLong.create(0),
@@ -510,7 +552,7 @@ public class VenueServerTest {
 		assertNotNull(jobId, "Job ID should be returned");
 		String jobIdStr = jobId.toHexString();
 		
-		// Step 3: Confirm that the status of the job is PENDING using Covia.getJobStatus
+		// Step 3: Confirm that the status of the job is STARTED using Covia.getJobStatus
 		AMap<AString, ACell> statusMap = covia.getJobData(jobIdStr).get(5, TimeUnit.SECONDS); 
 		assertNotNull(statusMap, "Job status map should not be null");
 		AString status = RT.ensureString(statusMap.get(Fields.STATUS));
