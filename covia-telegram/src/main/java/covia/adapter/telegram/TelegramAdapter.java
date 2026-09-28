@@ -51,8 +51,13 @@ import covia.venue.RequestContext;
  * interaction; the module keeps no log of its own and never reshapes
  * messages: a target that wants a different input (a SQL write, a webhook,
  * a log somewhere) is reached through a mapping operation the operator
- * owns. Inbound access is fail-closed: only Telegram users on the bot's
- * {@code allow} list are answered unless the bot is {@code open}.</p>
+ * owns. Access is fail-closed in both directions: only Telegram users on the
+ * bot's {@code allow} list are answered unless the bot is {@code open}, and
+ * an allow-listed bot is its user's channel to those people alone — it
+ * converses only in private chats, and {@code telegram:send} /
+ * {@code telegram:call} may only address the ids on its list or the accounts
+ * its listed handles resolved to ({@link BotRunner#requireAllowedTarget},
+ * #532).</p>
  *
  * <p>Because bots are effective adapter configuration, they follow the
  * runtime adapter lifecycle: {@code v/ops/venue/adapter/configure} adds,
@@ -532,6 +537,7 @@ public class TelegramAdapter extends AAdapter implements AutoCloseable {
 		runner.stop();
 		state().delete(userStatePath(owner, "bots/" + name));
 		state().delete(userStatePath(owner, "sessions/" + name));
+		state().delete(userStatePath(owner, "resolved/" + name));
 		deleteLegacyPath(ctx, LEGACY_REGISTRY_PATH + "/" + name);
 		deleteLegacyPath(ctx, BotRunner.legacySessionsPath(name));
 		log.info("Telegram bot '{}' deleted by {}", name, owner);

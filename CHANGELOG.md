@@ -10,6 +10,11 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Changed
 
+- Allow-listed Telegram bots only message their allowed users: `telegram:send`
+  / `telegram:call` targets must be listed ids or the account a listed
+  `@username` resolved to on first contact, and such bots converse only in
+  private chats (#532).
+
 - Venue startup logs one INFO line per adapter; the assets each one stores and
   the per-adapter install details are DEBUG.
 
