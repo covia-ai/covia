@@ -71,6 +71,8 @@ docker run -d \
   --name covia-venue \
   -p 127.0.0.1:8080:8080 \
   -v /home/azureuser/covia-data:/data \
+  --log-opt max-size=50m \
+  --log-opt max-file=5 \
   --restart unless-stopped \
   --health-cmd='curl -f --max-time 3 http://localhost:8080/' \
   --health-interval=30s \

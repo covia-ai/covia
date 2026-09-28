@@ -77,12 +77,17 @@ jobs:
           # Publish on loopback only: nginx terminates TLS and proxies to
           # 127.0.0.1:8080. A bare -p 8080:8080 binds 0.0.0.0, and Docker's
           # iptables rules bypass host firewalls such as ufw.
+          #
+          # Rotate the json-file container log (Docker's default is unbounded):
+          # at most 5 x 50 MB before the oldest is dropped.
           docker run -d \
             --name covia-venue \
             --stop-timeout 30 \
             -p 127.0.0.1:8080:8080 \
             -v /home/azureuser/covia-data:/data \
             -e JAVA_OPTS="-Xmx2g -XX:+UseContainerSupport -XX:+UseG1GC -XX:+UseStringDeduplication -XX:+ExitOnOutOfMemoryError -Djava.security.egd=file:/dev/./urandom -Dfile.encoding=UTF-8" \
+            --log-opt max-size=50m \
+            --log-opt max-file=5 \
             --restart unless-stopped \
             --health-cmd='curl -f --max-time 3 http://localhost:8080/' \
             --health-interval=30s \
