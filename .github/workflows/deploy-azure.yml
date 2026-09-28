@@ -73,10 +73,14 @@ jobs:
           # be just the config path, not a full java command line, or the
           # entrypoint double-invokes java and MainVenue receives "java" as
           # its config path instead of the real one.
+          #
+          # Publish on loopback only: nginx terminates TLS and proxies to
+          # 127.0.0.1:8080. A bare -p 8080:8080 binds 0.0.0.0, and Docker's
+          # iptables rules bypass host firewalls such as ufw.
           docker run -d \
             --name covia-venue \
             --stop-timeout 30 \
-            -p 8080:8080 \
+            -p 127.0.0.1:8080:8080 \
             -v /home/azureuser/covia-data:/data \
             -e JAVA_OPTS="-Xmx2g -XX:+UseContainerSupport -XX:+UseG1GC -XX:+UseStringDeduplication -XX:+ExitOnOutOfMemoryError -Djava.security.egd=file:/dev/./urandom -Dfile.encoding=UTF-8" \
             --restart unless-stopped \
