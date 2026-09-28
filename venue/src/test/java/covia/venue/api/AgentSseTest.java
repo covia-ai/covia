@@ -17,6 +17,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Predicate;
 
@@ -91,6 +93,13 @@ public class AgentSseTest {
 
 	/** Parses frames off an open stream until one satisfies {@code until}
 	 *  (or the stream ends); frames accumulate in {@code frames}. */
+	/**
+	 * Readers run on their own threads, never the common pool: a test thread
+	 * joining a CompletableFuture helps run queued common-pool tasks, and one
+	 * that picked up a reader would block on the stream inside its own join.
+	 */
+	private static final ExecutorService READERS = Executors.newVirtualThreadPerTaskExecutor();
+
 	private static final class Stream {
 		final List<Frame> frames = new CopyOnWriteArrayList<>();
 		final BufferedReader reader;
@@ -122,7 +131,7 @@ public class AgentSseTest {
 				}
 				closed = true;
 				return null;
-			});
+			}, READERS);
 		}
 
 		List<String> events() {
