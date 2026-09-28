@@ -80,6 +80,9 @@ public final class VenueAuthenticator {
 	private final Set<String> acceptedAudienceStrings;
 	private final Set<AString> acceptedAudiences;
 	private final Engine engine;
+	/** Bearer credentials must expire ({@code auth.requireExp}); a cap on how far ahead, 0 = none ({@code auth.maxTokenLifetime}). */
+	private final boolean requireExp;
+	private final long maxLifetimeSeconds;
 
 	private record VerifiedPrincipal(
 			AString authenticatedIdentity,
@@ -116,6 +119,8 @@ public final class VenueAuthenticator {
 		this.externalProviders = venueAuth.getLoginProviders().hasProviders()
 			? venueAuth.getLoginProviders().getProviders() : null;
 		this.audiencePolicy = venueAuth.getAudiencePolicy();
+		this.requireExp = engine.config().isRequireExp();
+		this.maxLifetimeSeconds = engine.config().getMaxTokenLifetime();
 
 		Set<String> audienceStrings = new HashSet<>();
 		audienceStrings.add(venueDID.toString());
@@ -215,6 +220,9 @@ public final class VenueAuthenticator {
 			+ "capability tokens as transport proofs, not as the Authorization bearer";
 		public static final String EXPIRED = "token expired at ";
 		public static final String NOT_YET_VALID = "token not valid before ";
+		public static final String MISSING_EXP = "missing exp: this venue requires bearer credentials to expire (auth.requireExp)";
+		public static final String NON_EXPIRING = "non-expiring credential: this venue requires bearer credentials to expire (auth.requireExp)";
+		public static final String LIFETIME_EXCEEDS = "token expires further ahead than this venue allows (auth.maxTokenLifetime): ";
 		public static final String AUDIENCE_REQUIRED = "audience (aud) is required but absent";
 		public static final String AUDIENCE_NOT_THIS_VENUE = "token audience is not this venue: ";
 		public static final String AUDIENCE_LIST_EXCLUDES_VENUE = "token audience list does not include this venue";
@@ -316,6 +324,16 @@ public final class VenueAuthenticator {
 		UCAN token = validation.token();
 		AString issuer = token.getIssuer();
 		if (issuer == null) return Verdict.fail(Reason.MISSING_ISSUER);
+		// The validator rejected an expired token; the venue's own rules on a
+		// bearer's lifetime apply here, to the bearer only — a transport grant
+		// with exp: null is a delegation, not a credential.
+		Long exp = token.getExpiry();
+		if (exp == null) {
+			if (requireExp) return Verdict.fail(Reason.NON_EXPIRING);
+		} else {
+			String bound = expiryProblem(exp, now);
+			if (bound != null) return Verdict.fail(bound);
+		}
 		AVector<ACell> capabilities = token.getCapabilities();
 		if (capabilities == null || !capabilities.isEmpty()) return Verdict.fail(Reason.NON_EMPTY_ATT);
 		String audience = audienceProblem(token.getAudience());
@@ -480,15 +498,34 @@ public final class VenueAuthenticator {
 	// Each returns null when it passes and the reason when it does not, the
 	// convention CapabilityChecker.allows and UcanJwtValidator.Validation use.
 
-	/** Null when the token is within its exp / nbf bounds (with clock-skew leeway); otherwise why not. */
-	static String temporalProblem(AMap<AString, ACell> claims, long now) {
+	/**
+	 * Null when the token is within its exp / nbf bounds (with clock-skew
+	 * leeway), carries an expiry if the venue requires one, and does not expire
+	 * further ahead than the venue allows; otherwise why not.
+	 */
+	String temporalProblem(AMap<AString, ACell> claims, long now) {
 		CVMLong exp = RT.ensureLong(claims.get(EXP));
-		if (exp != null && now > exp.longValue() + CLOCK_SKEW_SECONDS) {
-			return Reason.EXPIRED + instant(exp.longValue()) + " (now " + instant(now) + ")";
+		if (exp == null) {
+			if (requireExp) return Reason.MISSING_EXP;
+		} else {
+			String bound = expiryProblem(exp.longValue(), now);
+			if (bound != null) return bound;
 		}
 		CVMLong nbf = RT.ensureLong(claims.get(NBF));
 		if (nbf != null && now < nbf.longValue() - CLOCK_SKEW_SECONDS) {
 			return Reason.NOT_YET_VALID + instant(nbf.longValue()) + " (now " + instant(now) + ")";
+		}
+		return null;
+	}
+
+	/** Null when an expiry is neither past nor further ahead than the venue's cap; otherwise why not. */
+	private String expiryProblem(long exp, long now) {
+		if (now > exp + CLOCK_SKEW_SECONDS) {
+			return Reason.EXPIRED + instant(exp) + " (now " + instant(now) + ")";
+		}
+		if (maxLifetimeSeconds > 0 && exp - now > maxLifetimeSeconds) {
+			return Reason.LIFETIME_EXCEEDS + "exp " + instant(exp) + " is more than "
+				+ maxLifetimeSeconds + "s ahead";
 		}
 		return null;
 	}

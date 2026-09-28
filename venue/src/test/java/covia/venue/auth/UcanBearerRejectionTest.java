@@ -22,6 +22,7 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMDouble;
 import convex.core.data.prim.CVMLong;
 import covia.exception.AuthException;
+import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.UcanJwtValidator;
 
@@ -220,5 +221,59 @@ public class UcanBearerRejectionTest {
 		String message = reject(JWT.signPublic(claims, caller).toString());
 		assertTrue(message.startsWith(VenueAuthenticator.TOKEN_REJECTED_PREFIX), message);
 		assertTrue(message.contains(VenueAuthenticator.Reason.UNRECOGNISED), message);
+	}
+
+	// ---- Lifetime rules (covia#534): a bearer must expire unless the venue says
+	// otherwise, and may not expire further ahead than the venue allows.
+
+	@Test
+	public void bearerWithoutExpiryIsRefusedByDefault() {
+		AMap<AString, ACell> noExp = Maps.of(JWT.SUB, callerDID, JWT.ISS, callerDID, JWT.AUD, engine.getDIDString());
+		String jwt = reject(JWT.signPublic(noExp, caller).toString());
+		assertTrue(jwt.startsWith(VenueAuthenticator.SELF_ISSUED_REJECTED_PREFIX), jwt);
+		assertTrue(jwt.contains(VenueAuthenticator.Reason.MISSING_EXP), jwt);
+		// A UCAN bearer with exp: null is the same thing said the UCAN way.
+		String ucan = reject(JWT.signPublic(bearerClaims(null), caller).toString());
+		assertTrue(ucan.startsWith(VenueAuthenticator.UCAN_REJECTED_PREFIX), ucan);
+		assertTrue(ucan.contains(VenueAuthenticator.Reason.NON_EXPIRING), ucan);
+	}
+
+	@Test
+	public void requireExpOffAcceptsNonExpiringBearers() {
+		Engine lenient = Engine.createTemp(Maps.of(Config.AUTH, Maps.of(Config.REQUIRE_EXP, false)));
+		try {
+			VenueAuthenticator relaxed = new VenueAuthenticator(lenient);
+			AMap<AString, ACell> noExp = Maps.of(JWT.SUB, callerDID, JWT.ISS, callerDID, JWT.AUD, lenient.getDIDString());
+			assertEquals(callerDID, relaxed.authenticate(JWT.signPublic(noExp, caller)));
+			AMap<AString, ACell> nonExpiring = Maps.of(
+				UCAN.ISS, callerDID, UCAN.AUD, lenient.getDIDString(), UCAN.EXP, null, UCAN.ATT, Vectors.empty());
+			assertEquals(callerDID, relaxed.authenticate(JWT.signPublic(nonExpiring, caller)));
+		} finally {
+			lenient.close();
+		}
+	}
+
+	@Test
+	public void lifetimeCapRefusesTokensExpiringTooFarAhead() {
+		Engine capped = Engine.createTemp(Maps.of(Config.AUTH, Maps.of(Config.MAX_TOKEN_LIFETIME, 3600L)));
+		try {
+			VenueAuthenticator strict = new VenueAuthenticator(capped);
+			long now = System.currentTimeMillis() / 1000;
+			AMap<AString, ACell> twoDays = Maps.of(JWT.SUB, callerDID, JWT.ISS, callerDID,
+				JWT.AUD, capped.getDIDString(), JWT.EXP, CVMLong.create(now + 2 * 86400));
+			AuthException e = assertThrows(AuthException.class,
+				() -> strict.authenticate(JWT.signPublic(twoDays, caller)));
+			assertTrue(e.getMessage().contains(VenueAuthenticator.Reason.LIFETIME_EXCEEDS), e.getMessage());
+			AMap<AString, ACell> fiveMinutes = twoDays.assoc(JWT.EXP, CVMLong.create(now + 300));
+			assertEquals(callerDID, strict.authenticate(JWT.signPublic(fiveMinutes, caller)));
+			// The same cap on a UCAN bearer.
+			AMap<AString, ACell> ucanTwoDays = Maps.of(UCAN.ISS, callerDID, UCAN.AUD, capped.getDIDString(),
+				UCAN.EXP, CVMLong.create(now + 2 * 86400), UCAN.ATT, Vectors.empty());
+			AuthException u = assertThrows(AuthException.class,
+				() -> strict.authenticate(JWT.signPublic(ucanTwoDays, caller)));
+			assertTrue(u.getMessage().contains(VenueAuthenticator.Reason.LIFETIME_EXCEEDS), u.getMessage());
+		} finally {
+			capped.close();
+		}
 	}
 }

@@ -10,6 +10,11 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Changed
 
+- Bearer credentials must expire: a self-issued JWT without `exp` or a UCAN
+  bearer with `exp: null` is refused (`auth.requireExp`, default on), and
+  `auth.maxTokenLifetime` optionally caps how far ahead a bearer may expire
+  (#534).
+
 - A refused bearer token's 401 says why — which credential shape was read
   and the check it failed (algorithm, `kid`, signature, `exp`/`nbf`,
   audience, key status) — instead of `Invalid or expired token` (#548).

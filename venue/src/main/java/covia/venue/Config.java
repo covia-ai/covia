@@ -281,6 +281,10 @@ public class Config {
 	 *  (default — check aud if present) or {@code "require"} (aud must be present
 	 *  and match). A mismatched aud is always rejected under both. */
 	public static final AString AUDIENCE = Strings.intern("audience");
+	/** Whether a bearer credential must carry an expiry ({@code auth.requireExp}, default true). */
+	public static final AString REQUIRE_EXP = Strings.intern("requireExp");
+	/** Optional cap, in seconds, on how far ahead a bearer credential may expire ({@code auth.maxTokenLifetime}). */
+	public static final AString MAX_TOKEN_LIFETIME = Strings.intern("maxTokenLifetime");
 
 	/** Key for additional accepted JWT audiences, under {@code auth}: an array of
 	 *  strings (e.g. a {@code did:key} form alongside the canonical DID). The
@@ -686,9 +690,12 @@ public class Config {
 		AMap<AString, ACell> auth = optionalMap(config, AUTH, "auth");
 		if (auth == null) return;
 		validateUnknownFields(auth,
-			Set.of("tokenExpiry", "public", "audience", "acceptedAudiences", "oauth"),
+			Set.of("tokenExpiry", "public", "audience", "acceptedAudiences", "oauth",
+				"requireExp", "maxTokenLifetime"),
 			"auth", strict);
 		optionalLong(auth, TOKEN_EXPIRY, "auth.tokenExpiry", 1, Long.MAX_VALUE);
+		optionalBoolean(auth, REQUIRE_EXP, "auth.requireExp", true);
+		optionalLong(auth, MAX_TOKEN_LIFETIME, "auth.maxTokenLifetime", 1, Long.MAX_VALUE);
 
 		AString audience = optionalString(auth, AUDIENCE, "auth.audience");
 		if (audience != null && !Set.of("verify", "require").contains(audience.toString())) {
@@ -1724,6 +1731,37 @@ public class Config {
 			if (v != null && "require".equals(v.toString())) return "require";
 		}
 		return "verify";
+	}
+
+	/**
+	 * Whether a bearer credential must expire ({@code auth.requireExp}, default
+	 * {@code true}): a self-issued JWT without {@code exp}, or a UCAN bearer with
+	 * {@code exp: null}, is refused. Off for a dev venue that wants long-lived
+	 * hand-minted tokens. Transport grants (UCAN proofs) are not bearers and are
+	 * unaffected.
+	 */
+	public boolean isRequireExp() {
+		AMap<AString, ACell> authConfig = getAuthConfig();
+		if (authConfig != null) {
+			ACell v = authConfig.get(REQUIRE_EXP);
+			if (v != null) return RT.bool(v);
+		}
+		return true;
+	}
+
+	/**
+	 * Optional cap on a bearer credential's remaining lifetime in seconds
+	 * ({@code auth.maxTokenLifetime}): a credential expiring further ahead than
+	 * this is refused. 0 (the default) means no cap — a production venue sets
+	 * one; a dev venue need not.
+	 */
+	public long getMaxTokenLifetime() {
+		AMap<AString, ACell> authConfig = getAuthConfig();
+		if (authConfig != null) {
+			CVMLong v = RT.ensureLong(authConfig.get(MAX_TOKEN_LIFETIME));
+			if (v != null) return v.longValue();
+		}
+		return 0;
 	}
 
 	/**

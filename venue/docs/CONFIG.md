@@ -659,6 +659,28 @@ check or, for a `did:web` subject, an outbound fetch (#539).
 }
 ```
 
+## Bearer expiry (`auth.requireExp`, `auth.maxTokenLifetime`)
+
+```json
+{
+  "auth": { "requireExp": true, "maxTokenLifetime": 2592000 }
+}
+```
+
+`requireExp` (default `true`): a bearer credential must expire. A self-issued
+JWT without `exp`, or a UCAN bearer with `exp: null`, is refused with a reason
+naming this setting. The base JWT standard (RFC 7519) leaves `exp` optional
+and tells each application to decide; every profile that defines a JWT as a
+credential — OAuth access tokens (RFC 9068), OpenID ID tokens, UCAN — requires
+it, and so does this venue. Turn it off on a dev venue that wants hand-minted
+long-lived tokens. Transport grants (UCAN proofs presented alongside a request)
+are delegations, not credentials, and are not affected.
+
+`maxTokenLifetime` (seconds; no cap by default): refuse a bearer that expires
+further ahead than this. Deliberately unset by default, since a cap is a
+nuisance in development. Worth setting on a production venue — for example
+30 days (`2592000`), the frontend's longest identity-token option, or lower.
+
 ## Public access (`auth.public`)
 
 ```json
