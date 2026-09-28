@@ -69,10 +69,15 @@ jobs:
           # be just the config path, not a full java command line, or the
           # entrypoint double-invokes java and MainVenue receives "java" as
           # its config path instead of the real one.
+          #
+          # Publish on loopback only: nginx terminates TLS and proxies to
+          # localhost:8080. A bare -p 8080:8080 binds 0.0.0.0, and Docker's
+          # iptables rules bypass host firewalls, leaving the security group
+          # as the only thing keeping the plain-HTTP port off the internet.
           docker run -d \
             --name covia-venue \
             --stop-timeout 30 \
-            -p 8080:8080 \
+            -p 127.0.0.1:8080:8080 \
             -v /home/ec2-user/covia-data:/data \
             -e JAVA_OPTS="-Xmx2g -XX:+UseContainerSupport -XX:+UseG1GC -XX:+UseStringDeduplication -XX:+ExitOnOutOfMemoryError -Djava.security.egd=file:/dev/./urandom -Dfile.encoding=UTF-8" \
             --log-driver=awslogs \
@@ -104,6 +109,15 @@ jobs:
           if [ "$status" != "healthy" ]; then
             echo "::error::covia-venue did not become healthy — deploy failed"
             docker logs --tail 80 covia-venue
+            exit 1
+          fi
+
+          # Prove the public path still works now the port is loopback-only:
+          # HTTPS through nginx on this host, pinned to the local interface.
+          if ! curl -sf --max-time 10 --resolve venue-3.covia.ai:443:127.0.0.1 \
+              https://venue-3.covia.ai/api/v1/status > /dev/null; then
+            echo "::error::venue is healthy but unreachable through nginx: check proxy_pass targets 127.0.0.1:8080"
+            sudo nginx -T 2>/dev/null | grep -n proxy_pass || true
             exit 1
           fi
 
