@@ -63,8 +63,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   set it for the hosted venues, and a venue that receives the header without
   it logs one warning (#539).
 - Browser security headers on every response (`securityHeaders`, on by
-  default), a one-line startup posture summary, a startup warning for
-  `corsOrigins: "*"` on a non-loopback bind, and a documented production
+  default), a one-line startup posture summary, and a documented production
   profile (#537).
 - `skills:import` records `createdBy: {did, agentId?}` on the skill (#525).
 

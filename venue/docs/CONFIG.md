@@ -228,9 +228,11 @@ should set at least:
 - `trustedProxies` naming that proxy, so rate limiting and the
   authentication throttle see the real client (*Trusted proxies*). A venue
   that receives `X-Forwarded-For` without this set logs one warning.
-- `corsOrigins` as an explicit list. The default `"*"` lets any web page call
-  the venue from a visitor's browser, and logs a warning at startup on a
-  non-loopback bind.
+- `corsOrigins`: the default `"*"` is right for a public venue — the venue
+  never allows credentialed cross-origin requests, so a page on another site
+  can only make a visitor's browser do what an anonymous caller could. Set an
+  explicit list for a venue whose anonymous reads are not meant for the whole
+  internet, or one on a private network (*Browser origins*).
 - `auth.public.enabled: false` unless anonymous read access is wanted, and
   `auth.maxTokenLifetime` to bound hand-minted bearers (*Bearer expiry*).
 - `users.autoCreate: false` unless any authenticated DID may register itself.
@@ -352,9 +354,8 @@ the venue's own pages. Set `false` to turn them off. `Strict-Transport-Security`
 is deliberately not among them: add it at the TLS terminator (`deploy/Caddyfile`
 or equivalent), which knows the origin is https.
 
-A venue bound to a non-loopback address with `corsOrigins` at its default `"*"`
-logs one WARN at startup; the recommended production value is an explicit
-origin list (see *Browser origins* above).
+The startup posture line shows the effective `corsOrigins`; `"*"` is the right
+value for a public venue (see *Production profile*).
 
 ## System tray
 

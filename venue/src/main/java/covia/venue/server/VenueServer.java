@@ -817,13 +817,6 @@ public class VenueServer {
 		if (bindAddress != null) connector.setHost(bindAddress);
 		jettyServer.addConnector(connector);
 		log.info("Venue HTTP connector bound to {}:{}", (bindAddress != null) ? bindAddress : "0.0.0.0", port);
-		if (config.getCorsPolicy().anyOrigin() && (bindAddress == null || !isLoopback(bindAddress))) {
-			// Defensible on loopback, where only this machine's pages can reach
-			// the venue; on a reachable bind it means any web page may call the
-			// venue from a visitor's browser (#537).
-			log.warn("corsOrigins is \"*\" on a non-loopback bind: any web page can call this venue from a "
-				+ "visitor's browser. Set corsOrigins to the origins that need it (venue/docs/CONFIG.md, Browser origins).");
-		}
 	}
 
 	/**
