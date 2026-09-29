@@ -395,6 +395,9 @@ public class OAuthProvider {
 			Strings.intern("client_id"), Strings.create(client.id()),
 			Strings.intern("scope"), Strings.create(scopeString));
 		AString jwt = JWT.signPublic(claims, engine.getKeyPair());
+		engine.audit().event(covia.venue.Audit.TOKEN_ISSUED, covia.venue.Audit.K_TYPE, "oauth",
+			covia.venue.Audit.K_SUBJECT, userDID, "client", client.id(),
+			covia.venue.Audit.K_EXP, nowSecs + accessTtlSecs);
 		AMap<AString, ACell> result = Maps.of(
 			Strings.intern("access_token"), jwt,
 			Strings.intern("token_type"), Strings.create("Bearer"),

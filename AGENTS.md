@@ -237,9 +237,6 @@ The list below tracks engineering tasks. For the developer-experience and open-s
   - LangChainAdapter IO timeout
   - Thread safety of `Asset.meta()` (concurrent access)
 
-- [ ] **Structured logging** — Switch to JSON log format for production observability. Add request ID propagation.
-  - File: `venue/src/main/resources/logback.xml`
-
 - [ ] **Metrics export** — Add Prometheus-compatible metrics for operations, jobs, adapters, storage.
 
 ### P3 — Future (design goals from venue/CLAUDE.md)

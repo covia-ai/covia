@@ -135,6 +135,14 @@ public class Config {
 	 *  {@code forceTrackJobs}). See {@code venue/docs/GRID_SCHEDULER.md} §7. */
 	public static final AString SCHEDULER = Strings.intern("scheduler");
 	public static final AString SHUTDOWN = Strings.intern("shutdown");
+	/** Per-venue logging of normal operational events: {@code {audit, access}}, both off by default (covia#538). */
+	public static final AString LOGGING = Strings.intern("logging");
+	public static final AString AUDIT = Strings.intern("audit");
+	public static final AString ACCESS = Strings.intern("access");
+	/** Process-level logging controls at the server-document root: {@code log-config-file}, {@code log-format}. */
+	public static final AString OPERATIONS = Strings.intern("operations");
+	public static final AString LOG_CONFIG_FILE = Strings.intern("log-config-file");
+	public static final AString LOG_FORMAT = Strings.intern("log-format");
 	public static final AString GRACE_MS = Strings.intern("graceMs");
 
 	/** Scheduler block: default for a scheduled event that did not say whether
@@ -403,7 +411,7 @@ public class Config {
 		"maxContentSize", "auth", "webdav", "file", "corsOrigins",
 		"allowPrivateNetwork", "securityHeaders", "enablePrivateJobs", "recordReadOnlyOperations", "fixMcpStrings",
 		"outputValidation", "secrets", "strictAssets", "strictConfig", "scheduler",
-		"shutdown");
+		"shutdown", "logging");
 
 	/**
 	 * Create a Config wrapping the given venue config map.
@@ -434,7 +442,7 @@ public class Config {
 			Set.of("venues", "convex", "operations", "strictConfig"),
 			"server", strict);
 		optionalMap(serverConfig, CONVEX, "convex");
-		optionalMap(serverConfig, Strings.intern("operations"), "operations");
+		validateOperations(serverConfig, strict);
 
 		ACell rawVenues = serverConfig.get(VENUES);
 		if (!(rawVenues instanceof AVector<?> venues) || venues.count() == 0) {
@@ -497,6 +505,7 @@ public class Config {
 		validateRateLimit(strict);
 		validateScheduler(strict);
 		validateShutdown(strict);
+		validateLogging(strict);
 		validateKeystore(strict);
 		validateStorage(strict);
 		validateWebDav(strict);
@@ -606,6 +615,47 @@ public class Config {
 		optionalLong(rate, Strings.intern("authFailuresPerMinute"), "rateLimit.authFailuresPerMinute", 1, Long.MAX_VALUE);
 		optionalLong(rate, Strings.intern("authFailureBurst"), "rateLimit.authFailureBurst", 1, Long.MAX_VALUE);
 		optionalLong(rate, Strings.intern("authConcurrency"), "rateLimit.authConcurrency", 1, Integer.MAX_VALUE);
+	}
+
+	private void validateLogging(boolean strict) {
+		AMap<AString, ACell> logging = optionalMap(config, LOGGING, "logging");
+		if (logging == null) return;
+		validateUnknownFields(logging, Set.of("audit", "access"), "logging", strict);
+		optionalBoolean(logging, AUDIT, "logging.audit", false);
+		optionalBoolean(logging, ACCESS, "logging.access", false);
+	}
+
+	/** The server document's {@code operations} block: process-wide controls shared by every venue it hosts. */
+	private static void validateOperations(AMap<AString, ACell> serverConfig, boolean strict) {
+		AMap<AString, ACell> ops = optionalMap(serverConfig, OPERATIONS, "operations");
+		if (ops == null) return;
+		validateUnknownFields(ops, Set.of("log-config-file", "log-format"), "operations", strict);
+		optionalString(ops, LOG_CONFIG_FILE, "operations.log-config-file");
+		AString format = optionalString(ops, LOG_FORMAT, "operations.log-format");
+		if (format != null && !Set.of("text", "json").contains(format.toString())) {
+			throw malformed("operations.log-format", "must be text or json");
+		}
+	}
+
+	private boolean loggingFlag(AString key) {
+		ACell v = RT.getIn(config, LOGGING, key);
+		return v != null && RT.bool(v);
+	}
+
+	/**
+	 * Whether this venue records its security audit trail ({@code logging.audit},
+	 * default off): sign-ins and refusals, token issue, user and key
+	 * administration, secret writes, GC, restart and adapter changes, on the
+	 * {@code AUDIT} logger. Operators opt in to logging normal operational
+	 * events; system-level logging (startup, warnings, errors) is unaffected.
+	 */
+	public boolean isAuditLogging() {
+		return loggingFlag(AUDIT);
+	}
+
+	/** Whether this venue logs one line per HTTP request ({@code logging.access}, default off) on the {@code ACCESS} logger. */
+	public boolean isAccessLogging() {
+		return loggingFlag(ACCESS);
 	}
 
 	private void validateTrustedProxies() {

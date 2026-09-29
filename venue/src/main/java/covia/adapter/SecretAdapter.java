@@ -118,5 +118,8 @@ public class SecretAdapter extends AAdapter {
 			throw new IllegalArgumentException("Secret s/" + name
 				+ " already exists; pass overwrite:true to replace it");
 		}
+		// The name only, never the value.
+		engine.audit().event(covia.venue.Audit.SECRET_WRITE, covia.venue.Audit.K_DID, ctx.getCallerDID(),
+			covia.venue.Audit.K_NAME, name, covia.venue.Audit.K_TARGET, ctx.getUserDID());
 	}
 }

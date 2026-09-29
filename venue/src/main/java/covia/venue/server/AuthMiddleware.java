@@ -19,6 +19,7 @@ import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.exception.AuthException;
+import covia.venue.Audit;
 import covia.venue.Auth;
 import covia.venue.Config;
 import covia.venue.Engine;
@@ -230,25 +231,32 @@ public class AuthMiddleware {
 		// A credential is presented: charge its address (covia#539). Over budget
 		// means no verification at all; otherwise take the address's in-flight
 		// slot so it cannot fan out DID resolution in parallel.
-		String ip = (throttle != null) ? throttle.clientIp(ctx.ip(), ctx.header("X-Forwarded-For")) : null;
+		String ip = engine.config().getTrustedProxies().clientIp(ctx.ip(), ctx.header("X-Forwarded-For"));
+		Audit audit = engine.audit();
 		Semaphore slot = null;
 		if (throttle != null) {
 			long retry = throttle.overBudgetRetryAfter(ip);
 			if (retry > 0) {
+				audit.event(Audit.AUTH_THROTTLED, Audit.K_IP, ip, Audit.K_REASON, "failure budget spent");
 				rejectTooMany(ctx, retry, AuthThrottle.TOO_MANY_FAILURES + retry + "s");
 				return;
 			}
 			slot = throttle.acquire(ip);
 			if (slot == null) {
+				audit.event(Audit.AUTH_THROTTLED, Audit.K_IP, ip, Audit.K_REASON, "concurrent attempts");
 				rejectTooMany(ctx, 1, AuthThrottle.TOO_MANY_CONCURRENT);
 				return;
 			}
 		}
 		try {
 			AString venueUserDID = authenticator.authenticate(ctx, Strings.create(token));
+			audit.event(Audit.AUTH_SUCCESS, Audit.K_DID, venueUserDID,
+				Audit.K_IDENTITY, getAuthenticatedIdentity(ctx), Audit.K_IP, ip);
 			if (admitUser && !admitAuthenticated(ctx, venueUserDID)) return;
 		} catch (AuthException e) {
 			if (throttle != null) throttle.recordFailure(ip);
+			// The reason describes the presented credential, never its bytes (#548).
+			audit.event(Audit.AUTH_FAILURE, Audit.K_IP, ip, Audit.K_REASON, e.getMessage());
 			log.debug("Bearer token rejected: {}", e.getMessage());
 			rejectUnauthorized(ctx, e.getMessage(), resourceMetadata);
 		} finally {

@@ -1,0 +1,32 @@
+<configuration>
+<!--
+	JSON logging to stdout, one object per line, selected with
+	operations.log-format: "json" (venue/docs/CONFIG.md, Logging).
+
+	Each line carries the logger name, so a log shipper can route the AUDIT
+	and ACCESS loggers to their own retention; key-value pairs and the MDC
+	(including requestId) appear as fields. No file appenders: in JSON mode
+	the process's stdout is the log, collected by whatever runs it.
+-->
+	<appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+		<encoder class="ch.qos.logback.classic.encoder.JsonEncoder">
+			<withFormattedMessage>true</withFormattedMessage>
+			<withMessage>false</withMessage>
+			<withArguments>false</withArguments>
+			<withSequenceNumber>false</withSequenceNumber>
+			<withNanoseconds>false</withNanoseconds>
+			<withContext>false</withContext>
+		</encoder>
+	</appender>
+
+	<root level="info">
+		<appender-ref ref="STDOUT" />
+	</root>
+
+	<logger name="io.javalin" level="WARN" />
+	<logger name="org.eclipse" level="WARN" />
+	<logger name="org.eclipse.jetty" level="WARN" />
+	<logger name="org.eclipse.jetty.http" level="WARN" />
+	<logger name="dev.langchain4j" level="WARN" />
+
+</configuration>

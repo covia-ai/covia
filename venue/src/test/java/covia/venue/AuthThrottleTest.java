@@ -64,7 +64,10 @@ public class AuthThrottleTest {
 				Strings.create("authFailuresPerMinute"), 60L,
 				Strings.create("authFailureBurst"), FAILURE_BURST,
 				Strings.create("authConcurrency"), 1L,
-				Strings.create("blockMs"), 5000L)));
+				// Generous: the test is about one-in-flight, not shedding. Under a
+				// loaded suite queued attempts can wait seconds; only a deadlock
+				// should fail this.
+				Strings.create("blockMs"), 60_000L)));
 		venueDID = server.getEngine().getDIDString();
 		VenueDIDVerifier verifier = server.getEngine().didVerifier();
 		// Stand-ins for a remote DID method: one counts how often it is asked,

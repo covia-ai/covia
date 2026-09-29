@@ -18,6 +18,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.api.Abilities;
 import covia.api.Fields;
+import covia.venue.Audit;
 import covia.venue.Config;
 import covia.venue.Modules;
 import covia.venue.RequestContext;
@@ -148,27 +149,50 @@ public class VenueAdapter extends AAdapter {
 			requireInvoke(ctx);
 			if ("gc".equals(subOperation)) {
 				engine.requireVenueAuthority(ctx, STORE_RESOURCE, Abilities.VENUE_GC);
-				return gc(ctx, input);
+				return audited(Audit.VENUE_GC, ctx, subOperation, input, gc(ctx, input));
 			}
 			if ("restart".equals(subOperation)) {
 				engine.requireVenueAuthority(ctx, PROCESS_RESOURCE, Abilities.VENUE_RESTART);
 			} else {
 				engine.requireVenueAuthority(ctx, RESOURCE, Abilities.ADAPTER_MANAGE);
 			}
-			return CompletableFuture.completedFuture(switch (subOperation) {
-				case "adapters" -> adapters();
-				case "adapter-enable" -> adapterEnable(input);
-				case "adapter-disable" -> adapterDisable(input);
-				case "adapter-configure" -> adapterConfigure(input);
-				case "module-load" -> moduleLoad(input);
-				case "module-unload" -> moduleUnload(input);
-				case "restart" -> restart(ctx, input);
-				default -> throw new IllegalArgumentException(
-					"Unknown venue operation: " + getSubOperation(meta));
-			});
+			if ("adapters".equals(subOperation)) return CompletableFuture.completedFuture(adapters());
+			CompletableFuture<ACell> done;
+			try {
+				done = CompletableFuture.completedFuture(dispatchAdmin(ctx, subOperation, input, meta));
+			} catch (Exception e) {
+				done = CompletableFuture.failedFuture(e);
+			}
+			return audited("restart".equals(subOperation) ? Audit.VENUE_RESTART : Audit.VENUE_ADMIN,
+				ctx, subOperation, input, done);
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
 		}
+	}
+
+	/** Record an administrative operation and its outcome: the operation and the adapter or module it named, nothing more. */
+	private CompletableFuture<ACell> audited(String event, RequestContext ctx, String subOperation,
+			ACell input, CompletableFuture<ACell> result) {
+		if (!engine.audit().enabled()) return result;
+		Object target = RT.getIn(input, Fields.NAME);
+		return result.whenComplete((r, t) -> engine.audit().event(event,
+			Audit.K_DID, ctx.getCallerDID(), Audit.K_OPERATION, subOperation, Audit.K_TARGET, target,
+			Audit.K_OUTCOME, (t == null) ? Audit.OK : Audit.FAILED));
+	}
+
+	private ACell dispatchAdmin(RequestContext ctx, String subOperation, ACell input,
+			AMap<AString, ACell> meta) throws Exception {
+		return (switch (subOperation) {
+			case "adapters" -> adapters();
+			case "adapter-enable" -> adapterEnable(input);
+			case "adapter-disable" -> adapterDisable(input);
+			case "adapter-configure" -> adapterConfigure(input);
+			case "module-load" -> moduleLoad(input);
+			case "module-unload" -> moduleUnload(input);
+			case "restart" -> restart(ctx, input);
+			default -> throw new IllegalArgumentException(
+				"Unknown venue operation: " + getSubOperation(meta));
+		});
 	}
 
 	// ========== public effective configuration ==========

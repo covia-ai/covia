@@ -893,9 +893,19 @@ public class VenueServer {
 		}
 	}
 
+	/** Request ids and the optional access log (covia#538). */
+	private RequestLog requestLog;
+
 	private Javalin buildApp() {
+		String venueName = (this.config.getHostname() != null)
+			? this.config.getHostname() : String.valueOf(engine.getDIDString());
+		requestLog = new RequestLog(this.config.getTrustedProxies(), venueName);
+		final boolean logAccess = this.config.isAccessLogging();
 		Javalin app = Javalin.create(config -> {
 			addOpenApiPlugins(config);
+			// Runs after every request whatever its outcome: writes the access
+			// line when logging.access is on, and always clears the request id.
+			config.requestLogger.http((ctx, ms) -> requestLog.end(ctx, ms, logAccess));
 
 			config.staticFiles.add(staticFiles -> {
 				staticFiles.hostedPath = "/";
@@ -957,6 +967,9 @@ public class VenueServer {
 	private void addHandlers(RoutesConfig routes) {
 		final Config.CorsPolicy corsPolicy = this.config.getCorsPolicy();
 		final boolean allowPrivateNetwork = this.config.isAllowPrivateNetwork();
+
+		// First, so every later handler and log line sees the request's id.
+		routes.before(requestLog::begin);
 
 		routes.exception(HttpResponseException.class,
 			(e, ctx) -> renderHttpError(e, ctx));

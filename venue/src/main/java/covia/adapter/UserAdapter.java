@@ -15,6 +15,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Abilities;
 import covia.api.Fields;
+import covia.venue.Audit;
 import covia.exception.AuthException;
 import covia.lattice.Covia;
 import covia.venue.RequestContext;
@@ -68,9 +69,18 @@ public class UserAdapter extends AAdapter {
 			AMap<AString, ACell> meta, ACell input) {
 		requireInvoke(ctx);
 		String subOperation = getSubOperation(meta);
-		if ("sudo".equals(subOperation)) return sudo(ctx, input);
-		try {
-			return CompletableFuture.completedFuture(switch (subOperation) {
+		String event = switch (subOperation) {
+			case "create" -> Audit.USER_CREATE;
+			case "sudo" -> Audit.USER_SUDO;
+			case "authentication-add" -> Audit.KEY_ADD;
+			case "authentication-revoke" -> Audit.KEY_REVOKE;
+			default -> null;   // reads are not audited
+		};
+		CompletableFuture<ACell> result;
+		if ("sudo".equals(subOperation)) {
+			result = sudo(ctx, input);
+		} else try {
+			result = CompletableFuture.completedFuture(switch (subOperation) {
 				case "create" -> create(ctx, input);
 				case "info" -> info(ctx, input);
 				case "list" -> list(ctx);
@@ -81,8 +91,18 @@ public class UserAdapter extends AAdapter {
 					"Unknown user operation: " + subOperation);
 			});
 		} catch (Exception e) {
-			return CompletableFuture.failedFuture(e);
+			result = CompletableFuture.failedFuture(e);
 		}
+		if (event != null && engine.audit().enabled()) {
+			// The target user, the key, and for sudo the operation run — never its input.
+			Object target = RT.getIn(input, Fields.DID);
+			Object key = RT.getIn(input, Fields.KEY);
+			Object operation = "sudo".equals(subOperation) ? RT.getIn(input, Fields.OPERATION) : null;
+			result.whenComplete((r, t) -> engine.audit().event(event,
+				Audit.K_DID, ctx.getCallerDID(), Audit.K_TARGET, target, "key", key,
+				Audit.K_OPERATION, operation, Audit.K_OUTCOME, (t == null) ? Audit.OK : Audit.FAILED));
+		}
+		return result;
 	}
 
 	/** Explicitly execute one operation in another user's namespace. */

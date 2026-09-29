@@ -2676,6 +2676,26 @@ public class Engine {
 		}
 	}
 
+	private volatile Audit audit;
+
+	/**
+	 * This venue's security audit trail (covia#538). Records nothing unless the
+	 * venue's config sets {@code logging.audit: true}; events are tagged with
+	 * the venue's hostname, or its DID when it has none, so one process's
+	 * stream can be attributed when it hosts several venues.
+	 */
+	public Audit audit() {
+		Audit a = audit;
+		if (a == null) {
+			String name = config().getHostname();
+			a = config().isAuditLogging()
+				? new Audit(true, (name != null) ? name : String.valueOf(getDIDString()))
+				: Audit.OFF;
+			audit = a;
+		}
+		return a;
+	}
+
 	private volatile covia.venue.auth.VenueDIDVerifier didVerifier;
 
 	/**

@@ -246,6 +246,53 @@ At startup the venue logs its posture in one line (`Posture: bind …, public
 access …, CORS …, security headers …, rate limit …, trusted proxies …`), so a
 deployment can be checked from its log.
 
+## Logging
+
+Logging splits along one line: **system-level** events — startup, the
+posture line, warnings, errors — are always logged; logging of **normal
+operational events** is the operator's choice, per venue, and off by default.
+
+```json
+{
+  "operations": { "log-format": "json" },
+  "venues": [
+    { "hostname": "venue.example.com", "logging": { "audit": true, "access": true } }
+  ]
+}
+```
+
+Per venue (`logging`, both default `false`):
+
+- `audit` — the security audit trail, on the logger `AUDIT`: sign-ins and
+  refused credentials (`auth.success`, `auth.failure`, `auth.throttled`),
+  logins (`login`), token issue (`token.issued`), user and key administration
+  (`user.create`, `user.sudo`, `auth.key.add`, `auth.key.revoke`), secret
+  writes (`secret.write`, the name only), and venue administration
+  (`venue.gc`, `venue.restart`, `venue.admin`). Events carry DIDs, the client
+  address, names, outcomes and refusal reasons — never a token, secret value,
+  email or content — so they can be kept longer than operational logs.
+- `access` — one line per HTTP request on the logger `ACCESS`: method, path
+  (never the query string), status, duration, caller DID, client address and
+  a truncated user agent. Never headers, credentials or bodies.
+
+Each line is tagged with the venue's hostname, so a process hosting several
+venues can be attributed. Every request gets an id either way: it is
+returned in `X-Request-Id` and carried by the audit and access lines of that
+request. An inbound `X-Request-Id` is kept only from a trusted proxy
+(*Trusted proxies*) and only if it is a short plain token.
+
+Per process, in the server document's `operations` block — logging is one
+setup for the whole JVM, whichever venues it hosts:
+
+- `log-format`: `"text"` (default) or `"json"`. Text goes to the console and
+  a rotating `~/.covia/logs/main.log` (50 MB files, 7 days, 1 GB cap), with
+  `AUDIT` and `ACCESS` lines also written to `audit.log` (30 days) and
+  `access.log`. JSON writes one object per line to stdout, with the logger
+  name, key-value pairs and request id as fields — the form a log shipper
+  routes on, for example to keep `AUDIT` for its own retention period.
+- `log-config-file`: a Logback XML file that replaces the shipped profile
+  entirely. A missing file is a warning and the shipped profile is used.
+
 ## Network binding
 
 ```json

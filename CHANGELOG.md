@@ -53,6 +53,11 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Added
 
+- Operator-controlled logging of operational events, per venue and off by
+  default: a security audit trail (`logging.audit`, logger `AUDIT`) and an
+  access log (`logging.access`, logger `ACCESS`); request ids on every
+  response (`X-Request-Id`); `operations.log-format: "json"`; the default
+  file log now rotates (#538, #547).
 - Bad credentials are no longer free to send: per client address, a budget of
   rejected credentials (`rateLimit.authFailuresPerMinute` / `authFailureBurst`)
   after which credentials get 429 before any verification, and one
@@ -80,6 +85,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Fixed
 
+- `operations.log-config-file` is honoured; it was read before the config
+  was loaded and so never applied (#538).
 - The test adapter's `iris.csv` and `hamlet.txt` example content was checked
   out with converted line endings on Windows (`core.autocrlf`), so its declared
   sha256 no longer matched and every venue launch logged a warning with a

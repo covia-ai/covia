@@ -260,6 +260,12 @@ public class LoginProviders {
 			AMap<AString, ACell> claims = venueClaims(engine.getDIDString(), userDID,
 				identity.email, nowSecs, nowSecs + engine.getAuth().getTokenExpiry());
 			AString venueJwt = JWT.signPublic(claims, engine.getKeyPair());
+			// The provider and the user's DID — never the email (#448).
+			engine.audit().event(covia.venue.Audit.LOGIN, "provider", providerName,
+				covia.venue.Audit.K_DID, userDID,
+				covia.venue.Audit.K_IP, engine.config().getTrustedProxies().clientIp(ctx.ip(), ctx.header("X-Forwarded-For")));
+			engine.audit().event(covia.venue.Audit.TOKEN_ISSUED, covia.venue.Audit.K_TYPE, "session",
+				covia.venue.Audit.K_SUBJECT, userDID, covia.venue.Audit.K_EXP, claims.get(Strings.intern("exp")));
 
 			// 5. Return JWT to client
 			if (frontendRedirectUri != null) {
