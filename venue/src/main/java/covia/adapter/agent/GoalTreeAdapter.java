@@ -529,19 +529,18 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		//      enforce conformance server-side on the assistant's text
 		//      response. This is the preferred path where supported.
 		//   2. Typed complete/fail tools with the schema as parameters —
-		//      works on Anthropic and other providers without response_format
-		//      JSON schema support. The LLM calls complete(...) and the
-		//      harness extracts the args as the result.
+		//      works on providers without response_format JSON schema
+		//      support. The LLM calls complete(...) and the harness extracts
+		//      the args as the result.
 		// The agent author chooses how to coach the LLM via the system prompt;
 		// the framework wires up both mechanisms. A requester's responseSchema
 		// is deliberately not folded into either: it is session input, rendered
 		// in the outstanding-task turn and enforced by TaskTools / the common
 		// completion seam without changing this frame's persistent prefix.
 		//
-		// Provider handling lives in the ADAPTER (#81): LangChainAdapter
-		// suppresses response_format for providers without native schema
-		// support and realises it via forced tool calling instead, converting
-		// the output-tool call back into schema-conformant text. This harness
+		// Provider handling lives in the ADAPTER (#81): LangChainAdapter picks
+		// each provider's structured-output mechanism (Anthropic's is fixed on
+		// the model so it can merge with output_config.effort). This harness
 		// stays provider-blind — flipping llmOperation between providers
 		// changes nothing here.
 		AMap<AString, ACell> outputs = resolveOutputs(config);

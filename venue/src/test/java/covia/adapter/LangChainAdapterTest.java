@@ -1423,10 +1423,80 @@ public class LangChainAdapterTest {
 
 	@Test
 	public void testProviderCapabilityMap() {
-		assertTrue(LangChainAdapter.lacksSchemaResponseFormat("anthropic"));
+		assertTrue(LangChainAdapter.responseFormatOnModel("anthropic"));
 		for (String p : new String[] {"openai", "ollama", "gemini", "xai", "deepseek", "mistral", "openrouter"}) {
-			assertFalse(LangChainAdapter.lacksSchemaResponseFormat(p),
-				p + " keeps the native response_format path");
+			assertFalse(LangChainAdapter.responseFormatOnModel(p),
+				p + " keeps response_format on the request");
+		}
+	}
+
+	/**
+	 * Anthropic structured output rides output_config.format — never forced
+	 * tool choice, which current Claude models reject — and merges with a
+	 * caller's output_config (effort) into one object rather than a second
+	 * top-level key.
+	 */
+	@Test
+	public void testAnthropicStructuredOutputUsesOutputConfig() throws Exception {
+		AtomicReference<String> body = new AtomicReference<>();
+		HttpServer provider = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+		provider.createContext("/v1/messages", exchange -> {
+			body.set(new String(exchange.getRequestBody().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
+			byte[] reply = ("{\"id\":\"msg\",\"type\":\"message\",\"role\":\"assistant\","
+				+ "\"model\":\"claude-opus-5-5\",\"content\":[{\"type\":\"text\",\"text\":\"{\\\"answer\\\":42}\"}],"
+				+ "\"stop_reason\":\"end_turn\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}")
+				.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+			exchange.getResponseHeaders().set("content-type", "application/json");
+			exchange.sendResponseHeaders(200, reply.length);
+			try (var out = exchange.getResponseBody()) {
+				out.write(reply);
+			}
+		});
+		provider.start();
+		try {
+			String baseUrl = "http://127.0.0.1:" + provider.getAddress().getPort() + "/v1/";
+			convex.core.data.AVector<ACell> messages = Vectors.of(
+				(ACell) Maps.of("role", Strings.create("user"), "content", Strings.create("what is 6*7?")));
+			convex.core.data.AVector<ACell> workTools = Vectors.of(
+				(ACell) Maps.of("name", Strings.create("covia_read"),
+					"description", Strings.create("read a value")));
+
+			// Format alone: LangChain4j's own output_config.format
+			var plain = LangChainAdapter.buildAnthropicModel("key", baseUrl, "claude-opus-5-5",
+				Duration.ofSeconds(5), LangChainAdapter.extractTuning(JSON.parse("{\"maxTokens\":1024}")),
+				LangChainAdapter.toResponseFormat(RF_SCHEMA));
+			ACell result = LangChainAdapter.callModel("anthropic", "claude-opus-5-5", plain,
+				messages, workTools, RF_SCHEMA, java.util.Set.of());
+			assertEquals("{\"answer\":42}", RT.getIn(result, "content").toString());
+			ACell sent = JSON.parse(body.get());
+			assertEquals("json_schema", RT.getIn(sent, "output_config", "format", "type").toString());
+			assertEquals(CVMBool.FALSE, RT.getIn(sent, "output_config", "format", "schema", "additionalProperties"));
+			assertNull(RT.getIn(sent, "tool_choice"), "no forced tool choice");
+			assertNotNull(RT.getIn(sent, "tools"), "work tools still offered");
+
+			// Format with a caller's effort: one merged output_config
+			var withEffort = LangChainAdapter.buildAnthropicModel("key", baseUrl, "claude-opus-5-5",
+				Duration.ofSeconds(5), LangChainAdapter.extractTuning(JSON.parse(
+					"{\"maxTokens\":1024,\"providerOptions\":{\"output_config\":{\"effort\":\"high\"}}}")),
+				LangChainAdapter.toResponseFormat(RF_SCHEMA));
+			LangChainAdapter.callModel("anthropic", "claude-opus-5-5", withEffort,
+				messages, workTools, RF_SCHEMA, java.util.Set.of());
+			assertEquals(1, body.get().split("\"output_config\"", -1).length - 1,
+				"output_config must be sent once: " + body.get());
+			sent = JSON.parse(body.get());
+			assertEquals("high", RT.getIn(sent, "output_config", "effort").toString());
+			assertEquals("json_schema", RT.getIn(sent, "output_config", "format", "type").toString());
+			assertNotNull(RT.getIn(sent, "output_config", "format", "schema", "properties", "answer"));
+
+			// Plain JSON mode has no Anthropic form: dropped, not rejected
+			var json = LangChainAdapter.buildAnthropicModel("key", baseUrl, "claude-opus-5-5",
+				Duration.ofSeconds(5), LangChainAdapter.extractTuning(JSON.parse("{\"maxTokens\":1024}")),
+				LangChainAdapter.toResponseFormat(Strings.create("json")));
+			LangChainAdapter.callModel("anthropic", "claude-opus-5-5", json,
+				messages, null, Strings.create("json"), java.util.Set.of());
+			assertNull(RT.getIn(JSON.parse(body.get()), "output_config"));
+		} finally {
+			provider.stop(0);
 		}
 	}
 
@@ -1455,101 +1525,6 @@ public class LangChainAdapterTest {
 		assertTrue(LangChainAdapter.isOpenAiReasoningModel(resolved),
 			"openai's default model (" + resolved + ") must be recognised as a reasoning model, "
 			+ "since every catalogued openai model is gpt-5.x");
-	}
-
-	@Test
-	public void testSyntheticOutputToolCarriesSchema() {
-		AMap<AString, ACell> tool = LangChainAdapter.syntheticOutputTool(
-			"agent_output", RF_SCHEMA);
-		// Round-trip through the real converter — the schema must land as
-		// the tool's parameters, exactly like any configured tool.
-		List<ToolSpecification> specs = LangChainAdapter.toToolSpecifications(
-			Vectors.of((ACell) tool));
-		assertEquals(1, specs.size());
-		assertEquals("agent_output", specs.get(0).name());
-		assertNotNull(specs.get(0).parameters());
-		assertTrue(specs.get(0).parameters().properties().containsKey("answer"));
-	}
-
-	@Test
-	public void testConvertOutputToolCall() {
-		// The reported Anthropic shape: text preamble + forced tool_use block.
-		ACell msg = Maps.of(
-			"role", Strings.create("assistant"),
-			"content", Strings.create("Sure, here is the answer:"),
-			"toolCalls", Vectors.of(Maps.of(
-				"id", Strings.create("tu_1"),
-				"name", Strings.create("agent_output"),
-				"arguments", Strings.create("{\"answer\": 42}"))),
-			"tokens", Maps.of("input", 10L, "output", 5L, "total", 15L));
-
-		ACell converted = LangChainAdapter.convertOutputToolCall(msg, "agent_output");
-		assertEquals("{\"answer\": 42}", RT.getIn(converted, "content").toString(),
-			"content must be the arguments JSON, preamble discarded");
-		assertNull(RT.getIn(converted, "toolCalls"), "the synthetic call must not leak upstream");
-		assertNotNull(RT.getIn(converted, "tokens"), "usage accounting must survive the rewrite");
-
-		// Ordinary tool calls pass through untouched — agent loops unaffected
-		ACell workCall = Maps.of(
-			"role", Strings.create("assistant"),
-			"toolCalls", Vectors.of(Maps.of(
-				"name", Strings.create("covia_read"),
-				"arguments", Strings.create("{\"path\": \"w/x\"}"))));
-		assertSame(workCall, LangChainAdapter.convertOutputToolCall(workCall, "agent_output"));
-
-		// Text-only responses pass through untouched
-		ACell text = Maps.of("role", Strings.create("assistant"),
-			"content", Strings.create("plain reply"));
-		assertSame(text, LangChainAdapter.convertOutputToolCall(text, "agent_output"));
-	}
-
-	@Test
-	public void testForcedToolStructuredCallEndToEnd() {
-		// Stub provider standing in for Anthropic: captures the request the
-		// adapter built, replies with the multi-block shape (text preamble +
-		// forced tool_use). Verifies the whole branch: schema tool added,
-		// tool choice forced, work tools preserved, response converted to
-		// schema-conformant text with usage intact.
-		var captured = new java.util.concurrent.atomic.AtomicReference<dev.langchain4j.model.chat.request.ChatRequest>();
-		dev.langchain4j.model.chat.ChatModel stub = new dev.langchain4j.model.chat.ChatModel() {
-			@Override
-			public ChatResponse chat(dev.langchain4j.model.chat.request.ChatRequest request) {
-				captured.set(request);
-				AiMessage ai = new AiMessage("Let me deliver the answer.",
-					List.of(dev.langchain4j.agent.tool.ToolExecutionRequest.builder()
-						.id("tu_1").name("agent_output")
-						.arguments("{\"answer\": 42}").build()));
-				return ChatResponse.builder()
-					.aiMessage(ai)
-					.tokenUsage(new TokenUsage(10, 5))
-					.finishReason(FinishReason.TOOL_EXECUTION)
-					.build();
-			}
-		};
-
-		convex.core.data.AVector<ACell> messages = Vectors.of(
-			(ACell) Maps.of("role", Strings.create("user"), "content", Strings.create("what is 6*7?")));
-		convex.core.data.AVector<ACell> workTools = Vectors.of(
-			(ACell) Maps.of("name", Strings.create("covia_read"),
-				"description", Strings.create("read a value")));
-
-		ACell result = LangChainAdapter.callModelForcedTool(
-			"anthropic", "test-model", stub, messages, workTools, RF_SCHEMA, java.util.Set.of());
-
-		// Request shape: both tools present, choice forced
-		var request = captured.get();
-		assertEquals(2, request.toolSpecifications().size(), "work tool + synthetic output tool");
-		assertTrue(request.toolSpecifications().stream().anyMatch(t -> t.name().equals("agent_output")));
-		assertTrue(request.toolSpecifications().stream().anyMatch(t -> t.name().equals("covia_read")));
-		assertEquals(dev.langchain4j.model.chat.request.ToolChoice.REQUIRED, request.toolChoice());
-		assertNull(request.responseFormat(), "no response_format on the forced-tool path");
-
-		// Response: exactly what native response_format would have produced
-		assertEquals("{\"answer\":42}", RT.getIn(result, "content").toString(),
-			"structured arguments are canonically encoded for the synthetic output");
-		assertNull(RT.getIn(result, "toolCalls"));
-		assertEquals(15L, RT.ensureLong(RT.getIn(result, "tokens", "total")).longValue(),
-			"usage must be measured on the forced-tool path too");
 	}
 
 	// ========== #218 — temperature / topP pass-through ==========
@@ -1833,8 +1808,8 @@ public class LangChainAdapterTest {
 			RT.ensureVector(RT.getIn(before, "providers")).get(0));
 		assertEquals("anthropic", RT.getIn(entry, "provider").toString());
 		assertEquals("ANTHROPIC_API_KEY", RT.getIn(entry, "keySecret").toString());
-		assertEquals("claude-sonnet-5", RT.getIn(entry, "defaultModel").toString());
-		assertEquals("claude-haiku-4-5-20251001",
+		assertEquals("claude-sonnet-5-5", RT.getIn(entry, "defaultModel").toString());
+		assertEquals("claude-haiku-4-5",
 			RT.getIn(entry, "recommendations", "economical").toString());
 		assertEquals(convex.core.data.prim.CVMBool.FALSE, RT.getIn(entry, "ready"));
 

@@ -1367,13 +1367,13 @@ gate for limits.
 
 `defaultLlmOperation` selects the operation used when an agent config does not
 name one; the built-in fallback is the model operation
-`v/models/anthropic/claude-sonnet-5`. Standard agent templates are
+`v/models/anthropic/claude-sonnet-5-5`. Standard agent templates are
 provider-neutral, so a later config layer can choose any provider or model
 operation without copying the template. `v/ops/langchain/models` walks the
 `v/models/` catalog and reports caller-relative provider readiness, model
 operation paths, balanced defaults, and workload recommendations (for example
 `economical`, `quality`, or `coding`).
-The built-in balanced defaults are Sonnet 5, GPT-5.6 Terra, Gemini 3.6 Flash,
+The built-in balanced defaults are Sonnet 5.5, GPT-5.6 Terra, Gemini 3.6 Flash,
 DeepSeek V4 Flash, Grok 4.3, Mistral Medium (`mistral-medium-latest`) and, for
 OpenRouter, `openrouter/auto` (any vendor-prefixed OpenRouter model id works).
 These choices live in `adapters/langchain/model-catalog.json`; they are

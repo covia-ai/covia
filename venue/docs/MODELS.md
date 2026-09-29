@@ -16,7 +16,7 @@ mirrors.
 
 Before this change, an agent named its model twice, in two vocabularies: `llmOperation` was a
 lattice path to a *provider* operation (`v/ops/langchain/anthropic`), and
-`model` is that provider's bare id (`claude-sonnet-5`). Everything the venue
+`model` is that provider's bare id (`claude-sonnet-5-5`). Everything the venue
 knows about a particular model lives wherever it happened to be put:
 
 - assembly facts — context budget, tool calling, label dialect — on the
@@ -69,19 +69,19 @@ a user's workspace.
 
 ```json
 {
-  "name": "Claude Sonnet 5",
+  "name": "Claude Sonnet 5.5",
   "description": "Anthropic's balanced model: tool calling, prompt caching, 1M context.",
   "creator": "Covia",
   "operation": {
     "adapter": "langchain:anthropic",
     "secretFields": ["apiKey"],
     "secretKey": "ANTHROPIC_API_KEY",
-    "default": { "model": "claude-sonnet-5", "maxTokens": 16000 },
+    "default": { "model": "claude-sonnet-5-5", "maxTokens": 16000 },
     "input":   { "type": "object", "properties": { "...": "the provider's input schema" } },
     "output":  { "type": "object", "properties": { "...": "the provider's output schema" } }
   },
   "model": {
-    "id": "claude-sonnet-5",
+    "id": "claude-sonnet-5-5",
     "provider": "v/ops/langchain/anthropic",
     "options":  { "toolCalling": true },
     "budget":   { "bytes": 800000 },
@@ -99,10 +99,10 @@ a user's workspace.
 | `model.options`, `model.budget` | The model's assembly facts, in the facet's existing shape; only what differs from the provider's. |
 | `model.tags` | Free vocabulary for discovery (`balanced`, `quality`, `economical`, `coding`, `local`…). |
 
-A model asset is invocable directly — `grid:run v/models/anthropic/claude-sonnet-5 {messages: […]}` — because it is an operation. An agent uses it with the key it already has:
+A model asset is invocable directly — `grid:run v/models/anthropic/claude-sonnet-5-5 {messages: […]}` — because it is an operation. An agent uses it with the key it already has:
 
 ```json
-{ "llmOperation": "v/models/anthropic/claude-sonnet-5" }
+{ "llmOperation": "v/models/anthropic/claude-sonnet-5-5" }
 ```
 
 `config.model`, `url` and `apiKey` keep their meaning and still win over the
@@ -121,8 +121,8 @@ and `v/agents/templates/`, installed through the focused
 `AAdapter.installModel` seam and materialised at boot:
 
 ```
-v/models/anthropic/claude-sonnet-5
-v/models/anthropic/claude-haiku-4-5-20251001
+v/models/anthropic/claude-sonnet-5-5
+v/models/anthropic/claude-haiku-4-5
 v/models/openai/gpt-5.6-terra
 v/models/gemini/gemini-3.6-flash
 v/models/ollama/qwen2.5:7b
@@ -211,10 +211,10 @@ and is published and retracted with the adapter as one unit.
 | Location | Example | What it is |
 |----------|---------|------------|
 | Asset store | `a/<hash>` | The model-operation preset. Immutable, content-addressed and portable to venues with a compatible local adapter. |
-| Venue catalog | `v/models/anthropic/claude-sonnet-5` | The venue's name for it, materialised at boot or declared by the operator. |
+| Venue catalog | `v/models/anthropic/claude-sonnet-5-5` | The venue's name for it, materialised at boot or declared by the operator. |
 | User operations | `o/sonnet` | The user's own name for a model operation — a pin of a venue or remote asset, or an authored definition (a private deployment referring to its own secret, never embedding the credential). `/o/` is the existing user operations registry: typed, validated, pinned to `/a/` on invoke (GRID_LATTICE_DESIGN.md §4.3). |
 | Workspace draft | `w/drafts/my-model` | A definition being iterated with `covia:write`; invocable as any workspace draft operation is. |
-| Remote definition | `did:web:venue.example/v/models/anthropic/claude-sonnet-5` | Another venue's named model definition. Resolution fetches and hash-verifies the definition, then invocation executes locally with local adapters, secrets and context. To run inference on the publishing venue, use explicit `grid:run` with its `venue`. |
+| Remote definition | `did:web:venue.example/v/models/anthropic/claude-sonnet-5-5` | Another venue's named model definition. Resolution fetches and hash-verifies the definition, then invocation executes locally with local adapters, secrets and context. To run inference on the publishing venue, use explicit `grid:run` with its `venue`. |
 
 A model definition a user authors is an *operation* they own, so it lives in
 `/o/` like every other operation they own — not in a `w/models/` region of its
@@ -229,12 +229,12 @@ operation facet as references into the catalog:
 "model": {
   "options": { "systemMessages": "single", "requiresUserMessage": true, "cachePrefix": true },
   "budget":  { "bytes": 400000 },
-  "default": "v/models/anthropic/claude-sonnet-5",
+  "default": "v/models/anthropic/claude-sonnet-5-5",
   "recommended": {
-    "balanced":    "v/models/anthropic/claude-sonnet-5",
-    "quality":     "v/models/anthropic/claude-opus-5",
-    "longRunning": "v/models/anthropic/claude-fable-5",
-    "economical":  "v/models/anthropic/claude-haiku-4-5-20251001"
+    "balanced":    "v/models/anthropic/claude-sonnet-5-5",
+    "quality":     "v/models/anthropic/claude-opus-5-5",
+    "longRunning": "v/models/anthropic/claude-fable-5-1",
+    "economical":  "v/models/anthropic/claude-haiku-4-5"
   }
 }
 ```
@@ -247,7 +247,7 @@ new model-asset hashes on the next publication; existing hashes remain the old
 snapshots.
 
 The venue's default LLM operation (`defaultLlmOperation` in venue config) is
-now `v/models/anthropic/claude-sonnet-5`, with no change to the key or its
+now `v/models/anthropic/claude-sonnet-5-5`, with no change to the key or its
 type: it was always an operation path.
 
 ### 4.6 What is never a path
@@ -342,13 +342,13 @@ may contain `/`. The `models` vector of ids is retained for compatibility;
     "op": "v/ops/langchain/anthropic",
     "provider": "anthropic",
     "ready": true,
-    "default": "v/models/anthropic/claude-sonnet-5",
-    "recommended": { "balanced": "v/models/anthropic/claude-sonnet-5", "...": "..." },
-    "models": ["claude-sonnet-5"],
+    "default": "v/models/anthropic/claude-sonnet-5-5",
+    "recommended": { "balanced": "v/models/anthropic/claude-sonnet-5-5", "...": "..." },
+    "models": ["claude-sonnet-5-5"],
     "entries": [{
-      "op": "v/models/anthropic/claude-sonnet-5",
-      "id": "claude-sonnet-5",
-      "name": "Claude Sonnet 5",
+      "op": "v/models/anthropic/claude-sonnet-5-5",
+      "id": "claude-sonnet-5-5",
+      "name": "Claude Sonnet 5.5",
       "budget": { "bytes": 800000 },
       "options": { "toolCalling": true },
       "tags": ["balanced"],
@@ -372,7 +372,7 @@ small boot-time snapshot.
 
 The plain catalog reads work too: `covia:list v/models` is the serving
 profiles, `covia:list v/models/anthropic` the models, and `covia:read
-v/models/anthropic/claude-sonnet-5` the asset. Namespaced providers require
+v/models/anthropic/claude-sonnet-5-5` the asset. Namespaced providers require
 deeper listing or `llm:models`' recursive enumeration.
 
 ## 7. Seeding and publishing

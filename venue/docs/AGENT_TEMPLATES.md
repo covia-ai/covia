@@ -33,7 +33,7 @@ contract, or final local override without any one asset owning the whole agent:
   "v/agents/templates/worker",
   "w/agent-config/providers/anthropic",
   "w/agent-config/prompts/invoice-review",
-  {"model": "claude-sonnet-5", "temperature": 0}
+  {"model": "claude-sonnet-5-5", "maxTokens": 4096}
 ]
 ```
 

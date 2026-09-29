@@ -21,7 +21,7 @@
 				},
 				"model": {
 					"type": "string",
-					"description": "Model alias or full name (e.g. sonnet, opus, fable, claude-fable-5). Defaults to the project's / adapter's default, else Claude Code's own."
+					"description": "Model alias or full name (e.g. sonnet, opus, fable, claude-fable-5-1). Defaults to the project's / adapter's default, else Claude Code's own."
 				},
 				"fallbackModel": {
 					"type": "string",

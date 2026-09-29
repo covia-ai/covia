@@ -208,7 +208,7 @@ def text_of(output):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--venue", default="http://localhost:8099")
-    ap.add_argument("--model", default="claude-sonnet-5")
+    ap.add_argument("--model", default="claude-sonnet-5-5")
     ap.add_argument("--out", default="test-drive-report.md")
     ap.add_argument("--only", default=None, help="comma-separated task ids")
     args = ap.parse_args()

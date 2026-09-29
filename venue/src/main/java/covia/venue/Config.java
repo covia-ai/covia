@@ -1112,7 +1112,7 @@ public class Config {
 	 */
 	public AString getDefaultLlmOperation() {
 		AString v = RT.ensureString(config.get(DEFAULT_LLM_OPERATION));
-		return (v != null) ? v : Strings.intern("v/models/anthropic/claude-sonnet-5");
+		return (v != null) ? v : Strings.intern("v/models/anthropic/claude-sonnet-5-5");
 	}
 
 	/**

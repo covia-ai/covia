@@ -182,7 +182,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	// ========== Defaults ==========
 
 	public static final AString DEFAULT_LLM_OPERATION = Strings.create(
-		"v/models/anthropic/claude-sonnet-5");
+		"v/models/anthropic/claude-sonnet-5-5");
 
 	// ========== Authority and model profile (AGENT_CONTEXT.md §4, §8) ==========
 

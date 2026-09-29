@@ -33,7 +33,7 @@
         },
         "llmOperation": {
           "type": "string",
-          "description": "LLM operation path, e.g. 'v/models/anthropic/claude-sonnet-5'. Defaults to the venue default; bring-your-own-model by overriding it."
+          "description": "LLM operation path, e.g. 'v/models/anthropic/claude-sonnet-5-5'. Defaults to the venue default; bring-your-own-model by overriding it."
         },
         "model": {
           "type": "string",
