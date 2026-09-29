@@ -25,8 +25,10 @@ The host was rebuilt 2026-06-11 (Docker installed, legacy screen-session
 venues retired, Caddy moved under systemd):
 
 - **Container:** `covia-venue` — one JVM (`-Xmx2g`) hosting three venues
-  on ports 8080 (venue-test), 8081 (venue-1), 8082 (venue-2);
-  `--restart unless-stopped` with a Docker health check
+  on ports 8080 (venue-test), 8081 (venue-1), 8082 (venue-2), published on
+  `127.0.0.1` only so the plain-HTTP ports are reachable just through Caddy;
+  `--restart unless-stopped` with a Docker health check; json-file log
+  rotated at 5 x 50 MB
 - **Config:** `/srv/covia/config.json` (mounted at `/data/config.json`)
   The deployment workflow enforces open first-use registration for
   `venue-test` while preserving all other operator settings in this file.
@@ -89,11 +91,13 @@ sudo docker pull ghcr.io/covia-ai/covia:stable
 sudo docker stop covia-venue && sudo docker rm covia-venue
 sudo docker run -d \
   --name covia-venue \
-  -p 8080:8080 -p 8081:8081 -p 8082:8082 \
+  -p 127.0.0.1:8080:8080 -p 127.0.0.1:8081:8081 -p 127.0.0.1:8082:8082 \
   -v /srv/covia:/data \
+  --log-opt max-size=50m --log-opt max-file=5 \
   --restart unless-stopped \
+  -e JAVA_OPTS="-Xmx2g" \
   ghcr.io/covia-ai/covia:stable \
-  java -Xmx2g -jar covia.jar /data/config.json
+  /data/config.json
 ```
 
 ## Rollback
