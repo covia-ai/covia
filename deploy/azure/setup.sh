@@ -18,7 +18,7 @@ set -euo pipefail
 
 # ── Configuration (edit these) ───────────────────────────────────────────────
 RESOURCE_GROUP="covia-venue-rg"
-LOCATION="koreacentral"
+LOCATION="centralindia"           # must match the deployed VM (venue-4)
 VM_NAME="covia-venue-vm"
 VM_SIZE="Standard_B2s_v2"         # 2 vCPU, 4 GB RAM (x86)
 VM_IMAGE="Canonical:ubuntu-24_04-lts:server:latest"
