@@ -71,7 +71,7 @@ The trio gives a stable federation set for cross-venue work on one host (`35.213
 - **MCP:** https://venue-4.covia.ai/mcp
 - **Swagger:** https://venue-4.covia.ai/swagger
 - **DID:** https://venue-4.covia.ai/.well-known/did.json
-- **Region:** Azure Korea Central
+- **Region:** Azure Central India (Pune)
 - **Spec:** 2 vCPU, 4 GB RAM
 - **TLS:** Let's Encrypt (auto-renew)
 
