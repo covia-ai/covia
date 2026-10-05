@@ -144,6 +144,19 @@ The workbench module produces:
 
 - **Standard JAR**: `workbench/target/workbench-<version>.jar`
 
+The library includes `covia.gui.markdown` (CommonMark to Swing styled text) and
+`covia.gui.components.TextComponents` (text sizing for application-owned layouts).
+Applications supply a `MarkdownStyle`, borders, backgrounds and link callbacks;
+the components do not install a theme, open URLs or fetch images. Swing updates
+and sizing run on the event thread. Code and table rows preserve their columns;
+hosts can wrap the pane in a horizontal `JScrollPane` when needed.
+
+The REPL's venue and FlatLaf dependencies are optional. A consumer of just the
+shared components receives CommonMark and its table/strikethrough extensions,
+without a transitive venue or look and feel. Running `Bench` still requires its
+demo dependencies. Install the module with `mvn -pl workbench install` after the
+normal prerequisite build; consumers depend on `ai.covia:workbench` at that version.
+
 
 ## Build Configuration
 

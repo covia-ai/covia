@@ -39,8 +39,8 @@ covia/                          # ai.covia:covia (parent POM)
 │                               #   file:read mode "extract"; shaded "module" jar)
 ├── covia-claude-code/          # Claude Code CLI venue module (runs/resumable sessions in
 │                               #   authorised project dirs; shaded "module" jar, not in covia.jar)
-├── workbench/                  # Minimal Swing GUI REPL for demo/testing
-│   └── src/main/java/covia/gui/  Bench, ReplPanel, LAF
+├── workbench/                  # Shared Swing components/utilities and a REPL demo
+│   └── src/main/java/covia/gui/  markdown/, components/; Bench, ReplPanel, LAF
 ├── .claude/                    # Claude Code config (settings.json tracked; rest gitignored)
 ├── skills/                     # Claude Code skills (junction .claude/skills → skills/)
 │   ├── adapters/               #   Adapter discovery, invocation, runtime enable/disable/configure, module load/unload
@@ -160,6 +160,12 @@ Defined in code at `venue/src/main/java/covia/lattice/Covia.java`. Full design i
 - **DID** — Decentralized identifiers for venue discovery (`/.well-known/did.json`). A venue may declare `did:web:<hostname>` as its stable identity; otherwise its key-derived `did:key` remains the identity. Consumers preserve the presented DID as-is (`alsoKnownAs` is informational, never a rebinding instruction). Remote routing and signature verification dispatch by DID method: `did:key` and `did:web` are built in, while future methods such as `did:convex` plug in without changing federation or UCAN code (#167, #343).
 
 ## Development Conventions
+
+Workbench's shared `covia.gui.markdown` and `covia.gui.components` packages use
+the JDK and CommonMark only. Hosts supply appearance, layout and link actions;
+do not introduce application colours, fonts, look-and-feel setup or venue calls.
+Use Swing components and text sizing on the event thread. The demo's FlatLaf
+and venue dependencies are optional for consumers of the library.
 
 - **Package naming:** `covia.<module>.<feature>` (e.g., `covia.venue.api`, `covia.adapter`, `covia.grid.auth`)
 - **Constants:** Use `Strings.intern()` for field names and status strings (see `Fields.java`, `Status.java`)
