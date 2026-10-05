@@ -6,7 +6,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
@@ -49,6 +48,9 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.adapter.AAdapter;
+import covia.adapter.messaging.MessagingBot;
+import covia.adapter.messaging.ConversationRouter;
+import covia.adapter.messaging.ConversationSessions;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
 import covia.grid.Job;
@@ -73,7 +75,7 @@ import covia.venue.RequestContext;
  * agent in one chat never blocks another. Every invocation runs as the bot's
  * configured user via {@link RequestContext#of}.</p>
  */
-final class BotRunner {
+final class BotRunner implements MessagingBot<BotSpec> {
 
 	private static final Logger log = LoggerFactory.getLogger(BotRunner.class);
 
@@ -82,7 +84,6 @@ final class BotRunner {
 	/** Long-poll wait requested from Telegram, in seconds. */
 	static final int POLL_TIMEOUT_SECS = 30;
 
-	private static final String AGENT_CHAT = "v/ops/agent/chat";
 
 	static final AString K_STATE = Strings.intern("state");
 	static final AString K_USERNAME = Strings.intern("username");
@@ -101,9 +102,6 @@ final class BotRunner {
 	private static final AString K_MESSAGE_ID = Strings.intern("message_id");
 
 	enum State { STARTING, PENDING, RUNNING, STOPPED }
-
-	/** How the bot came to exist: declared in venue config, or created at runtime by its user. */
-	enum Managed { CONFIG, RUNTIME }
 
 	private final TelegramAdapter adapter;
 	final BotSpec spec;
@@ -131,10 +129,7 @@ final class BotRunner {
 	/** getUpdates offset: one past the last confirmed update. */
 	private int offset = 0;
 
-	/** Per-chat serialisation: the tail of each chat's processing chain. */
-	private final ConcurrentHashMap<Long, CompletableFuture<Void>> chatTails = new ConcurrentHashMap<>();
-	/** chatId → agent session id (hex); mirrors the persisted mapping. */
-	private final ConcurrentHashMap<Long, String> sessions = new ConcurrentHashMap<>();
+	private final ConversationRouter conversations;
 	/** Allow-listed handle (lower-case) → the Telegram account it resolved to; mirrors the persisted map once loaded. */
 	private final ConcurrentHashMap<String, Long> resolved = new ConcurrentHashMap<>();
 	private volatile boolean resolvedLoaded;
@@ -144,11 +139,19 @@ final class BotRunner {
 		this.spec = spec;
 		this.apiUrl = apiUrl;
 		this.managed = managed;
+		ConversationSessions sessionStore = new ConversationSessions(adapter.state(), sessionsRelativePath(),
+			this::legacySession, chat -> {
+				if (managed == Managed.RUNTIME) adapter.deleteLegacyPath(context(), legacySessionsPath(spec.name()) + "/" + chat);
+			});
+		conversations = new ConversationRouter(adapter.engine, spec, sessionStore);
 	}
 
 	// ---------------------------------------------------------------- lifecycle
 
-	void start() {
+	@Override public BotSpec spec() { return spec; }
+	@Override public Managed managed() { return managed; }
+
+	@Override public void start() {
 		AAdapter.VIRTUAL_EXECUTOR.execute(this::tryStart);
 	}
 
@@ -227,7 +230,7 @@ final class BotRunner {
 			|| !java.util.Objects.equals(previousError, why);
 	}
 
-	synchronized void stop() {
+	@Override public synchronized void stop() {
 		stopped = true;
 		ScheduledFuture<?> r = retry;
 		if (r != null) r.cancel(false);
@@ -277,7 +280,7 @@ final class BotRunner {
 	}
 
 	/** Status record for {@code telegram:bots}. The token is never included. */
-	AMap<AString, ACell> status() {
+	@Override public AMap<AString, ACell> status() {
 		AMap<AString, ACell> m = Maps.of(
 			Fields.NAME, Strings.create(spec.name()),
 			BotSpec.K_USER, Strings.create(spec.userRef()),
@@ -365,8 +368,7 @@ final class BotRunner {
 
 	/** Whether all work already accepted for one chat has finished. */
 	boolean isChatIdle(long chatId) {
-		CompletableFuture<Void> tail = chatTails.get(chatId);
-		return tail == null || tail.isDone();
+		return conversations.isIdle(Long.toString(chatId));
 	}
 
 	private void pollError(String why) {
@@ -455,8 +457,10 @@ final class BotRunner {
 				+ (fromName != null ? " (@" + fromName + ")" : ""), m);
 			case "/new" -> {
 				if (spec.routesToAgent()) {
-					forgetSession(chatId, context());
-					sendQuietly(chatId, "Started a new conversation.", m);
+					enqueue(chatId, () -> {
+						conversations.reset(chatId.toString());
+						sendQuietly(chatId, "Started a new conversation.", m);
+					});
 				} else {
 					sendQuietly(chatId, "This bot has no conversation state.", m);
 				}
@@ -517,16 +521,7 @@ final class BotRunner {
 
 	/** Serialise work per chat: the next unit starts when the previous finishes. */
 	private void enqueue(Long chatId, Runnable work) {
-		chatTails.compute(chatId, (id, tail) -> {
-			CompletableFuture<Void> prev = (tail != null) ? tail : CompletableFuture.completedFuture(null);
-			CompletableFuture<Void> next = prev.handleAsync((r, e) -> {
-				work.run();
-				return null;
-			}, AAdapter.VIRTUAL_EXECUTOR);
-			// Forget the tail once it is done and still the tail: idle chats cost nothing.
-			next.whenComplete((r, e) -> chatTails.remove(id, next));
-			return next;
-		});
+		conversations.enqueue(chatId.toString(), work);
 	}
 
 	/**
@@ -538,8 +533,7 @@ final class BotRunner {
 		Long chatId = m.chat().id();
 		try {
 			typing(chatId, m);
-			String reply = TelegramAdapter.renderText(chatAgent(chatId, agentMessage(m, text)));
-			if (reply == null || reply.isBlank()) reply = "(no response)";
+			String reply = ConversationRouter.responseText(conversations.chat(chatId.toString(), agentMessage(m, text)));
 			send(chatId, reply, spec.parseMode(), m.messageId(), threadOf(m), false);
 		} catch (Throwable t) {
 			failed.incrementAndGet();
@@ -558,7 +552,7 @@ final class BotRunner {
 		Long chatId = chatOf(update);
 		try {
 			if (chatId != null && !spec.silent() && spec.fixedReply() == null) typing(chatId, m);
-			ACell result = runJob(spec.operation(), updateRecord(update), context());
+			ACell result = conversations.runOperation(spec.operation(), updateRecord(update));
 			if (chatId != null) replyAfter(chatId, m, result);
 		} catch (Throwable t) {
 			failed.incrementAndGet();
@@ -598,63 +592,13 @@ final class BotRunner {
 		return JSON.parse(BotUtils.toJson(model));
 	}
 
-	private ACell chatAgent(Long chatId, ACell message) {
-		RequestContext ctx = context();
-		String sid = sessionFor(chatId, ctx);
-		AMap<AString, ACell> input = Maps.of(
-			Fields.AGENT_ID, Strings.create(spec.agent()),
-			Fields.MESSAGE, message);
-		if (sid != null) input = input.assoc(Fields.SESSION_ID, Strings.create(sid));
-		ACell result;
-		try {
-			result = runJob(AGENT_CHAT, input, ctx);
-		} catch (RuntimeException e) {
-			// A persisted session the agent no longer knows (deleted, agent
-			// recreated): fall back to a fresh conversation rather than failing
-			// every message from now on.
-			if (sid != null && isUnknownSession(e)) {
-				log.info("Telegram bot '{}': session {} for chat {} is unknown, starting a new one",
-					spec.name(), sid, chatId);
-				forgetSession(chatId, ctx);
-				input = input.dissoc(Fields.SESSION_ID);
-				result = runJob(AGENT_CHAT, input, ctx);
-			} else {
-				throw e;
-			}
-		}
-		AString newSid = RT.ensureString(RT.getIn(result, Fields.SESSION_ID));
-		if (newSid != null && !newSid.toString().equals(sid)) {
-			rememberSession(chatId, newSid.toString(), ctx);
-		}
-		return RT.getIn(result, Fields.RESPONSE);
-	}
-
-	/** Submit an operation as a Job for the bot user and wait for its result. */
-	private ACell runJob(String operation, ACell input, RequestContext ctx) {
-		Job job = adapter.engine.jobs().invokeOperation(operation, input, ctx);
-		ACell result = job.awaitResult();
-		if (job.getStatus() != Status.COMPLETE) {
-			String why = job.getErrorMessage();
-			throw new JobFailedException(operation + " " + job.getStatus()
-				+ (why != null ? ": " + why : ""));
-		}
-		return result;
-	}
-
 	/** The configured reply after the operation handler ran. */
 	private void replyAfter(Long chatId, Message m, ACell result) {
-		if (spec.silent()) return;
-		Integer replyTo = (m != null) ? m.messageId() : null;
-		String fixed = spec.fixedReply();
-		if (fixed != null) {
-			send(chatId, fixed, spec.parseMode(), replyTo, threadOf(m), false);
-			return;
-		}
-		String reply = TelegramAdapter.renderText(result);
-		if (reply == null || reply.isBlank()) reply = "(no response)";
+		String reply = conversations.operationReply(result);
+		if (reply == null) return;
+		Integer replyTo = m == null ? null : m.messageId();
 		send(chatId, reply, spec.parseMode(), replyTo, threadOf(m), false);
 	}
-
 	RequestContext context() {
 		return RequestContext.of(spec.userDID(adapter.engine));
 	}
@@ -676,40 +620,16 @@ final class BotRunner {
 			: adapter.userStatePath(spec.userDID(adapter.engine), "sessions/" + spec.name());
 	}
 
-	private String sessionRelativePath(Long chatId) {
-		return sessionsRelativePath() + "/" + chatId;
-	}
-
-	private String sessionFor(Long chatId, RequestContext ctx) {
-		String sid = sessions.get(chatId);
-		if (sid != null) return sid;
-		AString s = RT.ensureString(adapter.state().read(sessionRelativePath(chatId)));
-		if (s == null && managed == Managed.RUNTIME) {
-			try {
-				s = RT.ensureString(adapter.engine.resolvePath(
-					Strings.create(legacySessionsPath(spec.name()) + "/" + chatId), ctx));
-				if (s != null && !s.isEmpty()) adapter.state().write(sessionRelativePath(chatId), s);
-			} catch (RuntimeException e) {
-				log.debug("Telegram bot '{}': could not migrate persisted session for chat {}: {}",
-					spec.name(), chatId, concise(e));
-			}
+	private String legacySession(String chatId) {
+		if (managed != Managed.RUNTIME) return null;
+		try {
+			AString value = RT.ensureString(adapter.engine.resolvePath(
+				Strings.create(legacySessionsPath(spec.name()) + "/" + chatId), context()));
+			return value == null ? null : value.toString();
+		} catch (RuntimeException e) {
+			log.debug("Telegram bot '{}': could not migrate persisted session for chat {}: {}", spec.name(), chatId, concise(e));
+			return null;
 		}
-		if (s != null && !s.isEmpty()) {
-			sessions.put(chatId, s.toString());
-			return s.toString();
-		}
-		return null;
-	}
-
-	private void rememberSession(Long chatId, String sid, RequestContext ctx) {
-		sessions.put(chatId, sid);
-		adapter.state().write(sessionRelativePath(chatId), Strings.create(sid));
-	}
-
-	private void forgetSession(Long chatId, RequestContext ctx) {
-		sessions.remove(chatId);
-		adapter.state().delete(sessionRelativePath(chatId));
-		if (managed == Managed.RUNTIME) adapter.deleteLegacyPath(ctx, legacySessionsPath(spec.name()) + "/" + chatId);
 	}
 
 	// ---------------------------------------------------------- resolved handles
@@ -781,15 +701,6 @@ final class BotRunner {
 		return resolved;
 	}
 
-	private static boolean isUnknownSession(Throwable t) {
-		Throwable c = t;
-		while (c != null) {
-			String msg = c.getMessage();
-			if (msg != null && msg.contains("Unknown session")) return true;
-			c = (c.getCause() == c) ? null : c.getCause();
-		}
-		return false;
-	}
 
 	// ----------------------------------------------------------------- outbound
 

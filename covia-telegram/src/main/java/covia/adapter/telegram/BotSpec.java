@@ -14,6 +14,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.venue.Engine;
+import covia.adapter.messaging.MessagingBotSpec;
 
 /**
  * One operator-declared bot: the immutable, validated form of an
@@ -55,7 +56,7 @@ public record BotSpec(
 		Set<String> allowNames,
 		boolean open,
 		String parseMode,
-		String greeting) {
+		String greeting) implements MessagingBotSpec {
 
 	static final AString K_TOKEN = Strings.intern("token");
 	static final AString K_USER = Strings.intern("user");
@@ -95,31 +96,6 @@ public record BotSpec(
 				+ "is disabled on this venue (auth.public.enabled) — name an explicit DID");
 		}
 		return Strings.create(engine.getDIDString() + ":public");
-	}
-
-	/** Whether inbound messages go to an agent conversation. */
-	public boolean routesToAgent() {
-		return agent != null;
-	}
-
-	/** Whether inbound messages invoke an operation. */
-	public boolean routesToOperation() {
-		return operation != null;
-	}
-
-	/** Human-readable routing target for status output. */
-	public String target() {
-		return routesToAgent() ? "agent " + agent : "operation " + operation;
-	}
-
-	/** The fixed acknowledgement text, or null when replies are the default or off. */
-	public String fixedReply() {
-		return (reply instanceof AString s) ? s.toString() : null;
-	}
-
-	/** Whether replies are suppressed for the operation handler. */
-	public boolean silent() {
-		return CVMBool.FALSE.equals(reply);
 	}
 
 	/** Whether this Telegram user may talk to the bot. */

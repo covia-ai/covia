@@ -30,6 +30,7 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.adapter.messaging.AMessagingAdapter;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Config;
@@ -438,9 +439,9 @@ public class TelegramAdapterTest {
 
 		// Validation first: literal token, explicit user, no handler
 		assertFailsWith(engine.jobs().invokeOperation("v/ops/telegram/create", Maps.of(
-			"name", "mine", "token", token, "agent", AGENT), RequestContext.of(OWNER)), "secret reference");
+			"name", "mine", "token", token, "agent", AGENT), RequestContext.of(OWNER)), AMessagingAdapter.SECRET_REFERENCE_REQUIRED);
 		assertFailsWith(engine.jobs().invokeOperation("v/ops/telegram/create", Maps.of(
-			"name", "mine", "token", "s/TG_CREATED", "agent", AGENT, "user", OTHER), RequestContext.of(OWNER)), "implicit");
+			"name", "mine", "token", "s/TG_CREATED", "agent", AGENT, "user", OTHER), RequestContext.of(OWNER)), AMessagingAdapter.IMPLICIT_USER);
 		assertFailsWith(engine.jobs().invokeOperation("v/ops/telegram/create", Maps.of(
 			"name", "mine", "token", "s/TG_CREATED"), RequestContext.of(OWNER)), "exactly one of agent");
 
@@ -465,7 +466,7 @@ public class TelegramAdapterTest {
 
 		// Same name again is refused; another user may use the name; bots lists it as runtime
 		assertFailsWith(engine.jobs().invokeOperation("v/ops/telegram/create", Maps.of(
-			"name", "mine", "token", "s/TG_CREATED", "agent", AGENT), RequestContext.of(OWNER)), "already have");
+			"name", "mine", "token", "s/TG_CREATED", "agent", AGENT), RequestContext.of(OWNER)), AMessagingAdapter.DUPLICATE_BOT.formatted("Telegram", "mine"));
 		ACell listing = run(RequestContext.of(OWNER), "v/ops/telegram/bots", Maps.empty());
 		assertTrue(listing.toString().contains("runtime") && listing.toString().contains("\"mine\""), listing.toString());
 
@@ -498,9 +499,9 @@ public class TelegramAdapterTest {
 
 		// Delete: stops it, removes the record and sessions; config bots are refused
 		assertFailsWith(engine.jobs().invokeOperation("v/ops/telegram/delete", Maps.of("name", "echo"),
-			RequestContext.of(OWNER)), "venue config");
+			RequestContext.of(OWNER)), AMessagingAdapter.CONFIG_BOT.formatted("echo"));
 		assertFailsWith(engine.jobs().invokeOperation("v/ops/telegram/delete", Maps.of("name", "nope"),
-			RequestContext.of(OWNER)), "no Telegram bot named");
+			RequestContext.of(OWNER)), AMessagingAdapter.MISSING_BOT.formatted("Telegram", "nope"));
 		ACell deleted = run(RequestContext.of(OWNER), "v/ops/telegram/delete", Maps.of("name", "mine"));
 		assertEquals(convex.core.data.prim.CVMBool.TRUE, RT.getIn(deleted, TelegramAdapter.K_DELETED));
 		assertNull(adapter.runner(OWNER, "mine"));
@@ -676,13 +677,13 @@ public class TelegramAdapterTest {
 			RequestContext.of(OWNER));
 		try { unknown.awaitResult(10_000); } catch (Exception ignored) {}
 		assertEquals(Status.FAILED, unknown.getStatus());
-		assertTrue(String.valueOf(unknown.getErrorMessage()).contains("Unknown Telegram bot"), unknown.getErrorMessage());
+		assertEquals(AMessagingAdapter.UNKNOWN_BOT.formatted("Telegram", "nope"), unknown.getErrorMessage());
 
 		Job none = engine.jobs().invokeOperation("v/ops/telegram/send", Maps.of(
 			"chat_id", CVMLong.create(1), "text", "x"), RequestContext.of(OTHER));
 		try { none.awaitResult(10_000); } catch (Exception ignored) {}
 		assertEquals(Status.FAILED, none.getStatus());
-		assertTrue(String.valueOf(none.getErrorMessage()).contains("No Telegram bot is configured"), none.getErrorMessage());
+		assertEquals(AMessagingAdapter.NO_BOT.formatted("Telegram", OTHER), none.getErrorMessage());
 	}
 
 	@Test

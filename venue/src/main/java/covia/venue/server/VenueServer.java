@@ -889,6 +889,7 @@ public class VenueServer {
 	}
 
 	private void addAPIRoutes(RoutesConfig routes) {
+		WebhookRoutes.addRoutes(routes, engine);
 		api.addRoutes(routes);
 		userApi.addRoutes(routes);
 		webApp.addRoutes(routes);

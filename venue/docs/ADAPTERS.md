@@ -221,6 +221,117 @@ ownership, restart recovery, deletion, config/runtime separation, malformed
 records, and any migration from an older layout. A new schema should define
 which version wins during migration and make repeated migration idempotent.
 
+## Messaging adapters and webhook ingress
+
+`covia.adapter.messaging` is the provider-independent support used by Telegram
+and Discord. These classes live in the venue API; optional modules depend on
+them with `provided` scope and do not bundle their own copies.
+
+- `AMessagingAdapter<S, R>` owns config/runtime bot registration, reconciliation,
+  restoration, selection, per-owner capability gates, secret lookup, retry
+  scheduling and shutdown. Subclasses parse their settings and supply live
+  `MessagingBot` instances; workers start through `start()`, never `install()`.
+  A spec implements `MessagingBotSpec` for identity and agent/operation routing.
+- `ConversationRouter` serializes whole turns and resets per opaque conversation
+  key, invokes Jobs as the binding's configured user, restores agent sessions,
+  and applies the result/silent/fixed reply policy. It imposes no Job timeout.
+  Its queue is in memory and is **not durable acceptance**.
+- `ConversationSessions` stores mappings under the existing private
+  `config/<bot>/sessions` or `users/<did>/sessions/<bot>` roots. Numeric Telegram
+  and Discord keys retain their paths. Other keys are encoded as single safe
+  path segments; `ConversationRouter.key(installation, channel, thread)` builds
+  an unambiguous compound key. Optional legacy callbacks support migration.
+
+Transport, credentials, sender/recipient admission, group visibility, provider
+payloads, formatting, limits, and outbound API schemas stay with the provider.
+An allow-listed sender does not automatically authorize posting into a channel
+visible to others. Operation handlers retain their provider-native payload
+contracts; sharing conversation machinery does not introduce a common wire format.
+Providers with multiple credentials override `validateRuntimeCredentials` to
+require secret references for each one. Public information must not expose
+installation credentials or private recipient policies.
+
+### HTTP callbacks
+
+An adapter may implement `covia.adapter.webhook.WebhookHandler` to receive
+`GET` and `POST /webhooks/{adapter}/{binding}`. The server registers these routes
+once and looks up the active adapter on every request, supporting runtime module
+load, disable, enable and unload. Unavailable/non-webhook adapters return 404;
+already-dispatched requests follow the normal in-flight module semantics.
+There is no retained module handler after a request completes.
+
+The SPI uses JDK types, not Javalin/Servlet classes. `WebhookRequest` preserves
+raw body bytes, case-insensitive headers and query parameters. The route limits
+bodies to 1 MiB and opts into venue HTTP rate limiting. It does **not** require
+a venue bearer, map the caller to a venue user, or assume that a binding name
+authenticates a request. The provider must verify its signature and replay
+constraints, validate the app/installation/destination and sender, and choose
+the `WebhookResponse`. Signature verification must precede parsing that changes
+the signed representation or any side effects. Challenges and unsupported
+event types also need provider-specific handling.
+
+### Receipt durability and retries
+
+`WebhookInbox` is an optional durable receipt primitive, usable by both HTTP
+and socket transports. Give each installation/binding a private root such as
+`config/<binding>/inbox` or `users/<did>/inbox/<binding>` and a provider event ID.
+IDs are hashed into path segments; the original ID remains in the record.
+Records contain `id`, `input`, `status`, `receivedAt` and, on completion,
+`completedAt`. Input must contain the event needed for processing, **not**
+access tokens, signing secrets or credential-bearing HTTP headers.
+
+1. Authenticate/admit the event, then `accept(id, input)`. This writes PENDING
+   and flushes the configured store before returning. Duplicate deliveries
+   retain the original receipt and also flush, covering an earlier failed
+   durability barrier. A failed acceptance must not receive a success ack.
+2. Acknowledge promptly, independently of agent execution. Schedule PENDING
+   receipts even on duplicate delivery; scan them again on startup. No worker
+   is started automatically by the inbox.
+3. Within the conversation queue, `claim(id)` changes PENDING to STARTED and
+   flushes before work begins. Only the winning claim may execute. A failed
+   flush must not proceed to effects.
+4. After processing and any required reply, `complete(id)` flushes COMPLETE.
+   Duplicate callbacks must not resubmit the Job or send another reply.
+
+STARTED records found after an interruption are uncertain: the provider must
+reconcile them with its Job/send checkpoints and external state. The shared
+inbox deliberately offers no automatic replay of started work. Persisting a
+Job does not recover its execution, and an external send cannot be atomically
+committed with the inbox. This is not an exactly-once guarantee. Claims coordinate
+one Engine, not multiple independently running replicas. Memory/temp venues
+retain their normal ephemeral durability. `pruneCompleted(cutoff)` removes only
+completed receipts; the provider chooses retention beyond its retry window and
+must clean binding-owned inbox/checkpoint data in `deleteRuntimeState`.
+
+### Adding WhatsApp or Slack
+
+These are extension designs; neither provider module is installed by this
+infrastructure change.
+
+- **WhatsApp:** bind an app and phone-number ID to the owner/handler. Keep app
+  secret, verification token and outbound token separate. Verify the Meta
+  webhook, split batches into events, deduplicate message IDs within the phone
+  binding, and process delivery status separately from conversation turns.
+  Template messages and the customer service window remain provider policy.
+- **Slack:** make one binding identify an installation, including the workspace
+  and enterprise context where applicable. Support an HTTP Events API receiver
+  or a Socket Mode runner feeding the same inbox/router. HTTP ingress requires
+  Slack signature and timestamp verification against the raw body; Socket Mode
+  authenticates its connection separately. Keep bot and app/signing credentials
+  distinct. Deduplicate Events API `event_id`; the Socket Mode `envelope_id`
+  belongs to acknowledgement. Use installation + channel + thread for channel
+  conversations and an explicit per-DM policy. Preserve timestamp IDs as strings,
+  filter self/bot echoes, enforce channel visibility/recipient policy, and pass
+  `thread_ts` through outgoing replies. OAuth installation management and rich
+  Block Kit/interactivity remain in the Slack module.
+
+Slack's [Events API](https://docs.slack.dev/apis/events-api/) requires HTTP
+acknowledgement within three seconds. Its [request verification guide](https://docs.slack.dev/authentication/verifying-requests-from-slack/)
+defines signed body and replay checks; [Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode/)
+defines envelope acknowledgements. [chat.postMessage](https://docs.slack.dev/reference/methods/chat.postMessage/)
+documents threaded replies. None of these transport details belong in the common
+conversation or registry classes.
+
 ## Writing an adapter
 
 1. Create a class extending `AAdapter` in a `covia.<module>.<feature>` package.
