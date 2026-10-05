@@ -27,7 +27,6 @@ import convex.core.util.JSON;
 import covia.adapter.AAdapter;
 import covia.api.Fields;
 import covia.venue.AdapterWorkspace;
-import covia.venue.Engine;
 import covia.venue.RequestContext;
 
 /**
@@ -209,13 +208,12 @@ public class TelegramAdapter extends AAdapter implements AutoCloseable {
 		}
 		this.apiUrl = url;
 		this.specs = Map.copyOf(parsed);
-		if (engine != null) reconcile();
+		if (engine != null && engine.isStarted()) reconcile();
 		return true;
 	}
 
 	@Override
-	public void install(Engine engine) {
-		super.install(engine);
+	public void start() {
 		reconcile();
 		rearmRuntimeBots();
 	}

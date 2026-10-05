@@ -131,6 +131,8 @@ public class Scheduler {
 	/** The single outstanding alarm (fires {@link #drainDue}); null when idle. */
 	private ScheduledFuture<?> armed;
 	private volatile boolean shutdown = false;
+	/** Timer-thread owned: schedule writes during assembly must not arm alarms. */
+	private boolean started = false;
 
 	/** An event as it stands in the index. */
 	private record Entry(Blob key, AMap<AString, ACell> rec) {}
@@ -250,7 +252,7 @@ public class Scheduler {
 
 	/** Arm the alarm from the (already-loaded) lattice index. Call once on boot. */
 	public void start() {
-		onTimer(() -> { armNext(); return null; });
+		onTimer(() -> { started = true; armNext(); return null; });
 	}
 
 	/** Stop the alarm thread. Fires already dispatched to virtual threads continue. */
@@ -453,7 +455,7 @@ public class Scheduler {
 
 	/** (Re)arm the alarm for the current index head. Runs on the timer thread. */
 	private void armNext() {
-		if (shutdown) return;
+		if (shutdown || !started) return;
 		if (armed != null) { armed.cancel(false); armed = null; }
 		Index<Blob, ACell> idx = index();
 		if (idx.isEmpty()) return;

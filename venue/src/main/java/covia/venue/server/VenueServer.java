@@ -12,7 +12,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ExecutionException;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 import org.eclipse.jetty.server.ServerConnector;
 import org.eclipse.jetty.server.HttpConfiguration;
@@ -171,7 +177,7 @@ public class VenueServer {
 				CoviaApplication.connect(nodeServer.getRootComponent());
 			engine = new Engine(this.config, application, keyPair);
 			engine.setStoreControl(new StoreMaintenance());
-			engine.start();
+			engine.prepare();
 		} catch (Exception e) {
 			// Engine construction is inert; start() owns and rolls back its active
 			// resources. close() remains safe here for NEW or failed engines.
@@ -525,7 +531,7 @@ public class VenueServer {
 	 * @return Launched Venue Server instance
 	 */
 	public static VenueServer launch(AMap<AString,ACell> config) {
-		return launchInternal(config, null, null);
+		return launchInternal(config, null, null, null);
 	}
 
 	/**
@@ -543,7 +549,7 @@ public class VenueServer {
 	 * @return Launched Venue Server instance.
 	 */
 	public static VenueServer launch(AMap<AString,ACell> config, AStore store) {
-		return launchInternal(config, Objects.requireNonNull(store, "store"), null);
+		return launchInternal(config, Objects.requireNonNull(store, "store"), null, null);
 	}
 
 	/**
@@ -557,7 +563,7 @@ public class VenueServer {
 	 */
 	public static VenueServer launch(AMap<AString,ACell> config, AStore store,
 			List<Consumer<RoutesConfig>> extraRoutes) {
-		return launchInternal(config, Objects.requireNonNull(store, "store"), extraRoutes);
+		return launchInternal(config, Objects.requireNonNull(store, "store"), extraRoutes, null);
 	}
 
 	/**
@@ -583,11 +589,91 @@ public class VenueServer {
 	 * @return Launched Venue Server instance
 	 */
 	public static VenueServer launch(AMap<AString,ACell> config, List<Consumer<RoutesConfig>> extraRoutes) {
-		return launchInternal(config, null, extraRoutes);
+		return launchInternal(config, null, extraRoutes, null);
+	}
+
+	/**
+	 * Launches with an asynchronous pre-start hook. The hook receives a prepared
+	 * Engine with built-in and configured module adapters installed. It may bind
+	 * a backend, register adapters, and return a chain of asynchronous setup
+	 * actions. Its stage must complete before catalog publication, recovery,
+	 * background workers and the HTTP listener. Null means no hook.
+	 *
+	 * <p>This method waits for readiness. Use {@link #launchAsync(AMap, List, Function)}
+	 * to compose readiness without blocking the calling thread.</p>
+	 */
+	public static VenueServer launch(AMap<AString,ACell> config,
+			List<Consumer<RoutesConfig>> extraRoutes,
+			Function<Engine, ? extends CompletionStage<?>> beforeStart) {
+		return launchInternal(config, null, extraRoutes, beforeStart);
+	}
+
+	/** Pre-start-hook variant with the store ownership of {@link #launch(AMap, AStore)}. */
+	public static VenueServer launch(AMap<AString,ACell> config, AStore store,
+			List<Consumer<RoutesConfig>> extraRoutes,
+			Function<Engine, ? extends CompletionStage<?>> beforeStart) {
+		return launchInternal(config, Objects.requireNonNull(store, "store"), extraRoutes, beforeStart);
+	}
+
+	/** Launches on a virtual thread; completes when the venue is serving requests. */
+	public static CompletableFuture<VenueServer> launchAsync(AMap<AString,ACell> config) {
+		return launchAsync(config, List.of(), null);
+	}
+
+	/**
+	 * Asynchronously assembles and activates a venue. Actions that must precede
+	 * live work belong in {@code beforeStart}; continuations of the returned
+	 * future observe an already-live venue. Failure closes acquired resources
+	 * before exceptional completion. Cancellation releases a pending hook wait
+	 * and closes the partially assembled server after the current synchronous
+	 * startup step; it does not cancel the hook's own stage.
+	 */
+	public static CompletableFuture<VenueServer> launchAsync(AMap<AString,ACell> config,
+			List<Consumer<RoutesConfig>> extraRoutes,
+			Function<Engine, ? extends CompletionStage<?>> beforeStart) {
+		return launchAsyncInternal(config, null, extraRoutes, beforeStart);
+	}
+
+	/** Async launch adopting a store, with the ownership of {@link #launch(AMap, AStore)}. */
+	public static CompletableFuture<VenueServer> launchAsync(AMap<AString,ACell> config, AStore store,
+			List<Consumer<RoutesConfig>> extraRoutes,
+			Function<Engine, ? extends CompletionStage<?>> beforeStart) {
+		return launchAsyncInternal(config, Objects.requireNonNull(store, "store"), extraRoutes, beforeStart);
+	}
+
+	private static CompletableFuture<VenueServer> launchAsyncInternal(AMap<AString,ACell> config,
+			AStore adoptedStore, List<Consumer<RoutesConfig>> extraRoutes,
+			Function<Engine, ? extends CompletionStage<?>> beforeStart) {
+		CompletableFuture<VenueServer> ready = new CompletableFuture<>();
+		CompletableFuture<Void> cancelled = new CompletableFuture<>();
+		Thread startup = Thread.ofVirtual().name("venue-startup").unstarted(() -> {
+			try {
+				VenueServer server = launchInternal(config, adoptedStore, extraRoutes, beforeStart, cancelled);
+				// Cancellation can race the final listener start. Never orphan a server.
+				if (!ready.complete(server)) server.close();
+			} catch (Throwable failure) {
+				ready.completeExceptionally(failure);
+			}
+		});
+		ready.whenComplete((server, failure) -> {
+			// Never interrupt a store read/write: Java interruptible channels can
+			// close underneath Etch and leave the store dirty during cleanup.
+			if (ready.isCancelled()) cancelled.completeExceptionally(new CancellationException());
+		});
+		startup.start();
+		return ready;
 	}
 
 	private static VenueServer launchInternal(AMap<AString,ACell> config,
-			AStore adoptedStore, List<Consumer<RoutesConfig>> extraRoutes) {
+			AStore adoptedStore, List<Consumer<RoutesConfig>> extraRoutes,
+			Function<Engine, ? extends CompletionStage<?>> beforeStart) {
+		return launchInternal(config, adoptedStore, extraRoutes, beforeStart, null);
+	}
+
+	private static VenueServer launchInternal(AMap<AString,ACell> config,
+			AStore adoptedStore, List<Consumer<RoutesConfig>> extraRoutes,
+			Function<Engine, ? extends CompletionStage<?>> beforeStart,
+			CompletableFuture<?> cancelled) {
 		if (config==null) {
 			config=Maps.of(
 					Fields.NAME,"Test Venue",
@@ -605,23 +691,56 @@ public class VenueServer {
 		VenueServer server = null;
 		try {
 			server = new VenueServer(config, adoptedStore);
+			checkCancellation(cancelled);
 			if (extraRoutes != null) server.extraRouteRegistrars.addAll(extraRoutes);
 
 			// Complete every fallible bootstrap phase before publishing an HTTP
 			// listener. A caller must never observe a half-populated venue.
-			server.bootstrap();
+			server.bootstrap(beforeStart, cancelled);
+			checkCancellation(cancelled);
 			server.start();
 			return server;
 		} catch (RuntimeException | Error failure) {
-			if (server != null) server.closeResources(failure);
+			boolean interrupted = Thread.interrupted();
+			try {
+				if (server != null) server.closeResources(failure);
+			} finally {
+				if (interrupted) Thread.currentThread().interrupt();
+			}
 			throw failure;
 		}
 	}
 
+	private static void checkCancellation(CompletableFuture<?> cancelled) {
+		if (cancelled != null && cancelled.isDone()) throw new CancellationException();
+	}
+
 	/** Complete durable/runtime bootstrap before the server becomes reachable. */
-	private void bootstrap() {
-		Engine.addDemoAssets(engine);
+	private void bootstrap(Function<Engine, ? extends CompletionStage<?>> beforeStart,
+			CompletableFuture<?> cancelled) {
+		Engine.installDefaultAdapters(engine);
+		checkCancellation(cancelled);
+		if (beforeStart != null) {
+			try {
+				CompletableFuture<?> hook = Objects.requireNonNull(
+					beforeStart.apply(engine), "beforeStart stage").toCompletableFuture();
+				if (cancelled == null) hook.get();
+				else CompletableFuture.anyOf(hook, cancelled).get();
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				throw new CompletionException(e);
+			} catch (ExecutionException e) {
+				Throwable cause = e.getCause();
+				if (cause instanceof RuntimeException failure) throw failure;
+				if (cause instanceof Error failure) throw failure;
+				throw new CompletionException(cause);
+			}
+		}
+		checkCancellation(cancelled);
+		engine.materialiseBootstrapState();
 		engine.provisionConfiguredSecrets();
+		engine.seedMcpServers();
+		checkCancellation(cancelled);
 		engine.jobs().recoverJobs();
 
 		// Reconcile agent-owned intake after generic Job recovery: clear stale
@@ -656,6 +775,11 @@ public class VenueServer {
 		}
 
 		javalin=buildApp();
+		try {
+			engine.start();
+		} catch (IOException e) {
+			throw new java.io.UncheckedIOException(e);
+		}
 		start(javalin,port);
 		log.info("Venue server started on port: "+javalin.port());
 		// One line an operator can check a deployment's posture from (#537).

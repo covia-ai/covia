@@ -93,6 +93,32 @@ public class TelegramAdapterTest {
 	// ------------------------------------------------------------ config parsing
 
 	@Test
+	public void preparedEngineDefersBotWorkersUntilActivation() throws Exception {
+		try (FakeTelegramServer fake = new FakeTelegramServer()) {
+			var key = convex.core.crypto.AKeyPair.generate();
+			AMap<AString, ACell> botSettings = Maps.of("apiUrl", fake.apiUrl(), "bots",
+				Maps.of("startup", botConfig(FakeTelegramServer.TOKEN, OWNER.toString(),
+					"operation", "v/test/ops/echo", Vectors.of(CVMLong.create(ALLOWED_ID)))));
+			Engine prepared = new Engine(Maps.of(Config.ADAPTERS, Maps.of("telegram", botSettings)),
+				covia.venue.CoviaApplication.create(key), key).prepare();
+			try {
+				TelegramAdapter deferred = new TelegramAdapter();
+				prepared.registerAdapter(deferred);
+				prepared.configureAdapter("telegram", botSettings);
+				Engine.addDemoAssets(prepared);
+				assertNull(deferred.runner("startup"));
+				assertEquals(0, fake.getMeCalls(FakeTelegramServer.TOKEN));
+				prepared.start();
+				await(() -> deferred.runner("startup").state() == BotRunner.State.RUNNING,
+					10_000, () -> "prepared bot did not activate");
+				assertTrue(fake.getMeCalls(FakeTelegramServer.TOKEN) > 0);
+			} finally {
+				prepared.close();
+			}
+		}
+	}
+
+	@Test
 	public void testSpecValidation() {
 		assertThrows(IllegalArgumentException.class, () -> BotSpec.parse("x", Maps.of("user", "did:test:a", "agent", "a"), false),
 			"token required");

@@ -28,7 +28,6 @@ import covia.adapter.AAdapter;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.venue.AdapterWorkspace;
-import covia.venue.Engine;
 import covia.venue.RequestContext;
 
 /** Discord bots as a venue front door and as an outbound messaging adapter. */
@@ -77,9 +76,9 @@ public class DiscordAdapter extends AAdapter implements AutoCloseable {
 		if(u!=null){if(!(u instanceof AString s)||s.isEmpty())throw new IllegalArgumentException("adapters.discord.apiUrl must be a non-empty string");url=s.toString();if(!url.startsWith("http://")&&!url.startsWith("https://"))throw new IllegalArgumentException("adapters.discord.apiUrl must be an http(s) URL");url=url.replaceAll("/+$","");}
 		Map<String,BotSpec> parsed=new LinkedHashMap<>(); ACell bc=config.get(K_BOTS);
 		if(bc!=null){AMap<AString,ACell> bots=RT.castMap(bc);if(bots==null)throw new IllegalArgumentException("adapters.discord.bots must be an object");for(long i=0;i<bots.count();i++){var e=bots.entryAt(i);String name=String.valueOf(e.getKey());parsed.put(name,BotSpec.parse(name,e.getValue(),strict));}}
-		apiUrl=url;specs=Map.copyOf(parsed);if(engine!=null)reconcile();return true;
+		apiUrl=url;specs=Map.copyOf(parsed);if(engine!=null&&engine.isStarted())reconcile();return true;
 	}
-	@Override public void install(Engine engine){super.install(engine);reconcile();rearmRuntimeBots();}
+	@Override public void start(){reconcile();rearmRuntimeBots();}
 	private synchronized void reconcile(){
 		List<String> stale=new ArrayList<>();for(var e:runners.entrySet()){BotRunner r=e.getValue();if(r.managed!=BotRunner.Managed.CONFIG)continue;BotSpec want=specs.get(e.getKey());if(want==null||!want.equals(r.spec)||!apiUrl.equals(r.apiUrl))stale.add(e.getKey());}
 		for(String k:stale)runners.remove(k).stop();

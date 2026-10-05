@@ -503,6 +503,45 @@ Job cancels the cycle. Constraints:
   additionally requires `venue/restart` on `<venueDID>/process` and a
   `MainVenue`-managed process, both checked before any collection starts.
 
+## Embedded startup readiness
+
+`VenueServer.launch(...)` waits until the venue is ready. `launchAsync(...)`
+returns a `CompletableFuture<VenueServer>` that completes after the HTTP
+listener starts. Both support an engine-aware pre-start hook:
+
+```java
+CompletableFuture<VenueServer> ready = VenueServer.launchAsync(
+    config, routeContributors, engine -> {
+        backend.bind(engine);
+        engine.registerAdapter(new ProductAdapter(backend));
+        return backend.prepareAsync()
+            .thenRun(() -> engine.registerAdapter(new SearchAdapter(backend)));
+    });
+
+VenueServer server = ready.join();
+```
+
+The hook receives a restored, prepared Engine with built-in and configured
+module adapters installed. Its returned stage must finish before the final
+catalogue is published, configured secrets and MCP connections are provisioned,
+and Jobs and queued agents are recovered. Scheduler alarms and adapter-owned
+inbound workers remain stopped during assembly. An already-completed stage
+(`CompletableFuture.completedFuture(null)`) is sufficient for synchronous setup.
+
+Actions that must precede live work belong in the hook's returned chain.
+Continuations attached to `ready` run after the venue is live. Overloads
+accepting a caller-opened `AStore` have the same hook and transfer store
+ownership to the venue. Startup failure closes acquired resources before
+exceptional completion. Cancelling the readiness future releases a pending
+hook wait and initiates cleanup after the current synchronous startup step;
+the embedder remains responsible for its own hook's
+asynchronous work.
+
+Raw Engine embedders can use `prepare()` to open storage and restore state,
+then install adapters, publish the catalogue, provision secrets and recover
+work before `start()` activates workers and scheduler alarms. `start()` alone
+remains a convenience that prepares and immediately activates an Engine.
+
 ## Embedded route policy
 
 `VenueServer.launch(config, routeContributors)` lets a Java application mount

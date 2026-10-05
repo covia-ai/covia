@@ -57,6 +57,29 @@ class DiscordAdapterTest {
 	@AfterAll static void close(){if(engine!=null)engine.close();if(api!=null)api.close();}
 	@BeforeEach void clearRequests(){api.requests.clear();}
 
+	@Test void preparedEngineDefersGatewayUntilActivation() throws Exception {
+		var key=convex.core.crypto.AKeyPair.generate();
+		AMap<AString,ACell> settings=Maps.of("apiUrl",api.url(),"bots",Maps.of("startup",
+			Maps.of("token","startup-token","user",OWNER,"operation","v/test/ops/echo","allow",Vectors.of("alice"))));
+		Engine prepared=new Engine(Maps.of(Config.ADAPTERS,Maps.of("discord",settings)),
+			covia.venue.CoviaApplication.create(key),key).prepare();
+		FakeGatewayHub isolatedGateway=new FakeGatewayHub();
+		try {
+			DiscordAdapter deferred=new DiscordAdapter();
+			deferred.gatewayFactory=isolatedGateway;
+			prepared.registerAdapter(deferred);
+			prepared.configureAdapter("discord",settings);
+			Engine.addDemoAssets(prepared);
+			assertNull(deferred.runnerForTest("startup"));
+			assertTrue(isolatedGateway.sinks.isEmpty());
+			prepared.start();
+			for(int i=0;i<100&&!isolatedGateway.sinks.containsKey("startup-token");i++)Thread.sleep(20);
+			assertTrue(isolatedGateway.sinks.containsKey("startup-token"),"prepared gateway did not activate");
+		} finally {
+			prepared.close();
+		}
+	}
+
 	@Test void validatesSpecsAndDoesNotLeakToken(){
 		assertThrows(IllegalArgumentException.class,()->BotSpec.parse("x",Maps.of("user",OWNER,"agent","a"),false));
 		assertThrows(IllegalArgumentException.class,()->BotSpec.parse("x",Maps.of("token","t","user",OWNER,"agent","a","operation","o"),false));

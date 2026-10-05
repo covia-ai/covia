@@ -217,7 +217,7 @@ public class Engine {
 	private ScheduledExecutorService persistenceSweep;
 
 	/** Explicit lifecycle: construction is inert; start/close own active resources. */
-	private enum Lifecycle { NEW, STARTING, STARTED, FAILED, CLOSING, CLOSED }
+	private enum Lifecycle { NEW, STARTING, PREPARED, STARTED, FAILED, CLOSING, CLOSED }
 	private volatile Lifecycle lifecycle = Lifecycle.NEW;
 
 	/** How often the persistence sweep daemon runs (ms). */
@@ -331,6 +331,41 @@ public class Engine {
 	 */
 	public synchronized Engine start() throws IOException {
 		if (lifecycle == Lifecycle.STARTED) return this;
+		prepare();
+		return activate();
+	}
+
+	private synchronized Engine activate() {
+		if (lifecycle != Lifecycle.PREPARED) {
+			throw new IllegalStateException("Engine cannot activate from state " + lifecycle);
+		}
+		lifecycle = Lifecycle.STARTING;
+		try {
+			// Reconcile wake handles while the alarm is still disarmed. Hosts
+			// prepare the catalog and recover Jobs before activating this engine.
+			rebuildSchedulerFromLattice();
+			for (String name : getAdapterNamesInRegistrationOrder()) {
+				AAdapter adapter = adapters.get(name);
+				if (adapter != null) adapter.start();
+			}
+			gridScheduler.start();
+			lifecycle = Lifecycle.STARTED;
+			return this;
+		} catch (RuntimeException | Error failure) {
+			lifecycle = Lifecycle.FAILED;
+			closeStartedResources(false, failure);
+			throw failure;
+		}
+	}
+
+	/**
+	 * Opens storage and restores state while scheduler alarms and adapter workers
+	 * remain stopped. Hosts finish assembly and recovery before calling start().
+	 * @return this engine
+	 * @throws IOException if content storage cannot be initialised
+	 */
+	public synchronized Engine prepare() throws IOException {
+		if (lifecycle == Lifecycle.PREPARED || lifecycle == Lifecycle.STARTED) return this;
 		if (lifecycle != Lifecycle.NEW) {
 			throw new IllegalStateException("Engine cannot start from state " + lifecycle);
 		}
@@ -347,14 +382,9 @@ public class Engine {
 			this.contentStorage = createStorage();
 			this.contentStorage.initialise();
 
-			// The authoritative schedule is persisted in the lattice. Start its
-			// in-memory alarm, then heal per-agent wake handles from durable state.
-			gridScheduler.start();
-			rebuildSchedulerFromLattice();
-
 			bootstrapUsers();
 			startPersistenceSweep();
-			lifecycle = Lifecycle.STARTED;
+			lifecycle = Lifecycle.PREPARED;
 			return this;
 		} catch (IOException | RuntimeException | Error failure) {
 			lifecycle = Lifecycle.FAILED;
@@ -708,7 +738,7 @@ public class Engine {
 		boolean flush;
 		synchronized (this) {
 			if (lifecycle == Lifecycle.CLOSED || lifecycle == Lifecycle.CLOSING) return;
-			flush = lifecycle == Lifecycle.STARTED;
+			flush = lifecycle == Lifecycle.STARTED || lifecycle == Lifecycle.PREPARED;
 			lifecycle = Lifecycle.CLOSING;
 		}
 		// Jobs first, outside the engine monitor: work finishing inside the
@@ -865,6 +895,13 @@ public class Engine {
 	}
 
 	public static void addDemoAssets(Engine venue) {
+		installDefaultAdapters(venue);
+		venue.materialiseBootstrapState();
+		venue.seedMcpServers();
+	}
+
+	/** Installs built-ins and configured modules without publishing the catalog. */
+	public static void installDefaultAdapters(Engine venue) {
 		venue.registerAdapter(new TestAdapter());
 		venue.registerAdapter(new HTTPAdapter());
 		venue.registerAdapter(new OAuthAdapter());
@@ -902,17 +939,6 @@ public class Engine {
 		// else's. Fail-fast on any load error — explicit config is explicit
 		// intent.
 		Modules.loadModules(venue);
-
-		// Publish the adapter catalog and venue information as one native lattice
-		// transaction. All writes and validation happen on a narrow w/global
-		// workspace fork; one atomic commit makes the complete bootstrap snapshot
-		// visible without creating Jobs.
-		venue.materialiseBootstrapState();
-
-		// Bridge config-declared MCP servers (#80). Config is the source of
-		// truth for the names it declares (secrets-bootstrap rule); entries
-		// it doesn't name — dynamically-added servers — are untouched.
-		venue.seedMcpServers();
 	}
 
 	/**
@@ -1093,6 +1119,8 @@ public class Engine {
 	/** Install (once) and publish an adapter. Caller holds the engine monitor. */
 	private void activate(AAdapter adapter, AAdapter previous) {
 		String name = adapter.getName();
+		boolean previousActive = previous != null && adapters.get(name) == previous;
+		java.util.List<String> previousOrder = java.util.List.copyOf(adapterRegistrationOrder);
 		if (adapter.engine == null) adapter.install(this);
 		if (catalogPublished) {
 			if (previous == null) {
@@ -1106,7 +1134,38 @@ public class Engine {
 		adapterRegistrationOrder.remove(name);
 		adapterRegistrationOrder.add(name);
 		adapterRegistryVersion.incrementAndGet();
-		closeReplacedAdapter(previous);
+		try {
+			if (isStarted()) adapter.start();
+		} catch (RuntimeException | Error failure) {
+			// A failed worker start must not leave a dispatchable partial adapter,
+			// including when module loading has not yet recorded its registration.
+			adapters.remove(name, adapter);
+			adapterRegistrationOrder.clear();
+			adapterRegistrationOrder.addAll(previousOrder);
+			if (previousActive && previous != adapter) adapters.put(name, previous);
+			else adapterRegistrationOrder.remove(name);
+			if (!previousActive && previous != null && previous != adapter) {
+				disabledAdapters.put(name, previous);
+			}
+			try {
+				if (catalogPublished) {
+					if (previousActive && previous != adapter) {
+						VenueBootstrapMaterializer.replaceAdapter(this, adapter, previous);
+					} else {
+						VenueBootstrapMaterializer.dematerialiseAdapter(this, adapter);
+					}
+				}
+			} catch (RuntimeException | Error rollbackFailure) {
+				failure.addSuppressed(rollbackFailure);
+			}
+			if (adapter instanceof AutoCloseable closeable) {
+				try { closeable.close(); }
+				catch (Exception closeFailure) { failure.addSuppressed(closeFailure); }
+			}
+			adapterRegistryVersion.incrementAndGet();
+			throw failure;
+		}
+		if (previous != adapter) closeReplacedAdapter(previous);
 		log.info("Registered adapter: {} ({} primitives)", name,
 			adapter.pendingCatalogEntries.size());
 	}

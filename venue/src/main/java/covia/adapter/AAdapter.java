@@ -121,6 +121,17 @@ public abstract class AAdapter {
 	}
 
 	/**
+	 * Starts adapter-owned inbound/background workers after venue assembly and
+	 * recovery. Installation must only bind state and declare assets; workers
+	 * that can invoke operations belong here. Runtime registration and enable
+	 * call this after publication on an already-started engine. Implementations
+	 * must be idempotent because enable may retain an installed instance.
+	 */
+	public void start() {
+		// Most adapters have no autonomous workers.
+	}
+
+	/**
 	 * Durable state owned by this adapter in the venue principal's private
 	 * workspace at {@code w/adapters/<name>/}. The returned handle is permanently
 	 * bound to both this adapter name and the venue identity; invocation contexts
