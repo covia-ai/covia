@@ -24,7 +24,6 @@ import covia.grid.Asset;
 import convex.core.data.AVector;
 import convex.core.data.Blob;
 import convex.core.data.Cells;
-import convex.core.data.Hash;
 import convex.core.data.Index;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
@@ -86,10 +85,27 @@ public class AgentAdapter extends AAdapter {
 
 	private static final Logger log = LoggerFactory.getLogger(AgentAdapter.class);
 
+	public static final String QUERY_MESSAGE_REQUIRED = "message is required";
+	public static final String QUERY_INVALID_SESSION = "Invalid sessionId format";
+	public static final String QUERY_UNKNOWN_SESSION = "Unknown sessionId";
+	public static final String QUERY_NO_OPERATION = "Agent has no transition operation configured";
+	public static final String QUERY_NO_RESPONSE = "Agent query produced no response";
+	public static final String QUERY_PENDING_TOOL =
+		"Error: this tool call had no result when the query snapshot was taken; its effects may still be in progress.";
+	public static final String SUMMARISE_SESSION_REQUIRED = "sessionId is required for summarise";
+	public static final String SUMMARISE_INVALID_INSTRUCTION = "operation.instruction must be a non-blank string";
+	public static final String SUMMARISE_UNAVAILABLE =
+		"Session was deleted or replaced, or the agent stopped before the summary could be saved";
+	public static final String DEFAULT_SUMMARISE_INSTRUCTION =
+		"Summarise this conversation concisely, preserving the key facts, decisions, outstanding questions and next actions. "
+		+ "Use only the conversation and context already provided; return the summary itself.";
+
 	private static final AString K_START = Strings.intern("start");
 	private static final AString K_END   = Strings.intern("end");
 	private static final AString K_SOURCE_ID        = Strings.intern("sourceId");
 	private static final AString K_INCLUDE_TIMELINE = Strings.intern("includeTimeline");
+	private static final AString K_INCLUDE_STEPS = Strings.intern("includeSteps");
+	private static final AString K_INSTRUCTION = Strings.intern("instruction");
 	private static final AString K_FORKED_FROM      = Strings.intern("forkedFrom");
 	private static final AString K_AGENT_IDS        = Strings.intern("agentIds");
 	private static final AString K_AGENTS           = Strings.intern("agents");
@@ -387,6 +403,8 @@ public class AgentAdapter extends AAdapter {
 		installAsset("agent/fork",        BASE + "fork.json");
 		installAsset("agent/request",     BASE + "request.json");
 		installAsset("agent/chat",        BASE + "chat.json");
+		installAsset("agent/query",       BASE + "query.json");
+		installAsset("agent/summarise",   BASE + "summarise.json");
 		installAsset("agent/message",     BASE + "message.json");
 		installAsset("agent/trigger",     BASE + "trigger.json");
 		installAsset("agent/info",        BASE + "info.json");
@@ -624,9 +642,11 @@ public class AgentAdapter extends AAdapter {
 				case "fork"    -> handleFork(job, input, ctx);
 				case "request" -> handleRequest(job, input, ctx);
 				case "chat"    -> handleChat(job, input, ctx);
+				case "query"   -> handleQuery(job, input, ctx);
+				case "summarise" -> handleSummarise(job, input, ctx, meta);
 				case "message" -> handleMessage(job, input, ctx);
 				case "trigger" -> handleTrigger(job, input, ctx);
-				case "info"    -> handleQuery(job, input, ctx);
+				case "info"    -> handleInfo(job, input, ctx);
 				case "context" -> handleContext(job, input, ctx);
 				case "step"    -> handleStep(job, input, ctx);
 				case "list"    -> handleList(job, input, ctx);
@@ -1554,6 +1574,134 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
+	 * Runs an independent transition against a conversation snapshot. The query
+	 * owns no durable session, task, or run-loop slot, and never merges its
+	 * transition output back into the agent. Configured tools still execute
+	 * normally under the agent's identity and capability scope.
+	 */
+	private void handleQuery(Job job, ACell input, RequestContext ctx) {
+		QuerySnapshot snapshot = querySnapshot(job, input, ctx, Abilities.AGENT_MESSAGE, false);
+		if (snapshot == null) return;
+		ACell message = RT.getIn(input, Fields.MESSAGE);
+		if (message == null) { job.fail(QUERY_MESSAGE_REQUIRED); return; }
+		boolean includeSteps = CVMBool.TRUE.equals(RT.getIn(input, K_INCLUDE_STEPS));
+		job.start(() -> completeFromJobFuture(job,
+			queryTransition(job, snapshot, message, ctx).thenApply(output -> {
+				if (!includeSteps) return output.get(Fields.RESPONSE);
+				return queryDetails(output, true);
+			})));
+	}
+
+	/** Summaries are session metadata: no summary turn is appended to the conversation. */
+	private void handleSummarise(Job job, ACell input, RequestContext ctx, AMap<AString, ACell> meta) {
+		QuerySnapshot snapshot = querySnapshot(job, input, ctx, Abilities.AGENT_WRITE, true);
+		if (snapshot == null) return;
+		ACell instructionValue = RT.getIn(meta, Fields.OPERATION, K_INSTRUCTION);
+		AString instruction = (instructionValue == null) ? Strings.create(DEFAULT_SUMMARISE_INSTRUCTION)
+			: RT.ensureString(instructionValue);
+		if (instruction == null || instruction.toString().isBlank()) {
+			job.fail(SUMMARISE_INVALID_INSTRUCTION);
+			return;
+		}
+		AMap<AString, ACell> cached = AgentState.sessionSummary(snapshot.session(), instruction);
+		boolean includeSteps = CVMBool.TRUE.equals(RT.getIn(input, K_INCLUDE_STEPS));
+		if (AgentState.summaryCovers(cached, AgentState.sessionTurnCount(snapshot.session()))) {
+			job.start(() -> job.completeWith(cached));
+			return;
+		}
+		job.start(() -> completeFromJobFuture(job,
+			queryTransition(job, snapshot, instruction, ctx).thenApply(output -> {
+				if (job.isFinished()) throw new java.util.concurrent.CancellationException();
+				AMap<AString, ACell> saved = snapshot.agent().saveSessionSummary(
+					snapshot.sessionId(), snapshot.session(), instruction, queryDetails(output, includeSteps));
+				if (saved == null) throw new IllegalStateException(SUMMARISE_UNAVAILABLE);
+				return saved;
+			})));
+	}
+
+	private static AMap<AString, ACell> queryDetails(AMap<AString, ACell> output, boolean includeSteps) {
+		AMap<AString, ACell> result = Maps.of(Fields.RESPONSE, output.get(Fields.RESPONSE));
+		if (includeSteps) result = result.assoc(Fields.STEPS, CycleRecord.steps(output.get(Fields.CYCLE)));
+		ACell tokens = output.get(Fields.TOKENS);
+		return (tokens != null) ? result.assoc(Fields.TOKENS, tokens) : result;
+	}
+
+	private record QuerySnapshot(AgentTarget target, AgentState agent, AMap<AString, ACell> record,
+			AString operation, Blob sessionId, AMap<AString, ACell> session) {}
+
+	private QuerySnapshot querySnapshot(Job job, ACell input, RequestContext ctx,
+			AString ability, boolean sessionRequired) {
+		AgentTarget target = resolveAgentTarget(ctx, input, Fields.AGENT_ID, ability, false);
+		AgentState agent = lookupAgent(job, target);
+		if (agent == null || failIfSuspended(job, agent, target.agentId())) return null;
+
+		// One immutable record supplies config, state and session, even if the
+		// live agent is concurrently accepting work or advancing a conversation.
+		AMap<AString, ACell> record = agent.getRecord();
+		AString operation = RT.ensureString(RT.getIn(record, AgentState.KEY_CONFIG, Fields.OPERATION));
+		if (operation == null) { job.fail(QUERY_NO_OPERATION); return null; }
+		AMap<AString, ACell> session = Maps.empty();
+		ACell sessionId = RT.getIn(input, Fields.SESSION_ID);
+		Blob sid = null;
+		if (sessionRequired && sessionId == null) { job.fail(SUMMARISE_SESSION_REQUIRED); return null; }
+		if (sessionId != null) {
+			sid = parseSessionId(RT.ensureString(sessionId));
+			if (sid == null) { job.fail(QUERY_INVALID_SESSION); return null; }
+			session = RT.ensureMap(RT.getIn(record, AgentState.KEY_SESSIONS, sid));
+			if (session == null) { job.fail(QUERY_UNKNOWN_SESSION); return null; }
+		}
+		return new QuerySnapshot(target, agent, record, operation, sid, session);
+	}
+
+	/** The shared local-conversation invocation used by query and summarise. */
+	private CompletableFuture<AMap<AString, ACell>> queryTransition(Job job, QuerySnapshot query,
+			ACell message, RequestContext ctx) {
+		AMap<AString, ACell> session = query.session();
+		AVector<ACell> frames = RT.ensureVector(session.get(Fields.FRAMES));
+		if (frames != null && !frames.isEmpty()) {
+			// A running goal-tree may have child frames or an unanswered tool
+			// call. Read only its root conversation and repair the local copy;
+			// never resume its child work or claim its session epoch.
+			frames = GoalTreeContext.repairDanglingToolCalls(frames.slice(0, 1),
+				Strings.create(QUERY_PENDING_TOOL));
+		}
+		AVector<ACell> messages = Vectors.of(Maps.of(
+			Fields.CALLER, ctx.getCallerDID(), Fields.MESSAGE, message));
+		// An ephemeral conversation tier lets tools load context locally even
+		// without a supplied session. Do not copy its id, pending inbox or tasks.
+		AMap<AString, ACell> snapshot = Maps.of(
+			Fields.FRAMES, frames, Fields.LOADS, session.get(Fields.LOADS),
+			AgentState.KEY_PENDING, messages);
+		AMap<AString, ACell> transitionInput = Maps.of(
+			Fields.AGENT_ID, query.target().agentId(), AgentState.KEY_CONFIG, query.record().get(AgentState.KEY_CONFIG),
+			AgentState.KEY_STATE, query.record().get(AgentState.KEY_STATE),
+			Fields.MESSAGES, messages, Fields.SESSION, snapshot);
+
+		java.util.concurrent.atomic.AtomicBoolean cancelled = new java.util.concurrent.atomic.AtomicBoolean(false);
+		job.setCancelHook(() -> cancelled.set(true));
+		// Fresh agent authority, as in the run loop: caller proofs and
+		// session/task/cycle scopes must not leak into this independent run.
+		RequestContext queryCtx = query.target().executionContext().withCancellation(cancelled);
+		CompletableFuture<ACell> transition = engine.jobs().invokeInternal(
+			query.operation(), transitionInput, queryCtx);
+		job.setCancelHook(() -> {
+			cancelled.set(true);
+			transition.cancel(true);
+		});
+		return transition.thenApply(result -> {
+			AMap<AString, ACell> tokens = RT.ensureMap(RT.getIn(result, Fields.TOKENS));
+			if (tokens != null) attachTokens(job, tokens);
+			ACell error = RT.getIn(result, Fields.ERROR);
+			if (error != null) throw new IllegalStateException(error.toString());
+			AMap<AString, ACell> output = RT.ensureMap(result);
+			if (output == null || !output.containsKey(Fields.RESPONSE)) {
+				throw new IllegalStateException(QUERY_NO_RESPONSE);
+			}
+			return output;
+		});
+	}
+
+	/**
 	 * Fallback kick to nudge the agent's run loop. <b>Not a result-getter.</b>
 	 *
 	 * <p>Trigger carries no payload and makes no guarantee about what the
@@ -1640,7 +1788,7 @@ public class AgentAdapter extends AAdapter {
 		return m.assoc(Fields.SESSION_ID, sidHex);
 	}
 
-	private void handleQuery(Job job, ACell input, RequestContext ctx) {
+	private void handleInfo(Job job, ACell input, RequestContext ctx) {
 		AgentTarget target = resolveAgentTarget(ctx, input, Fields.AGENT_ID,
 			Capability.CRUD_READ, false);
 		AgentState agent = (target.user() != null) ? target.user().agent(target.agentId()) : null;

@@ -67,6 +67,12 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Added
 
+- `agent:query` answers one-off questions using optional session context without
+  appending conversation turns. Callers can request captured execution steps.
+- `agent:summarise` stores timestamped results by exact instruction and reuses
+  them while the session has no new recorded turns. Saved summaries match the
+  Job result exactly; execution steps are omitted unless requested at generation.
+
 - Operator-controlled logging of operational events, per venue and off by
   default: a security audit trail (`logging.audit`, logger `AUDIT`) and an
   access log (`logging.access`, logger `ACCESS`); request ids on every

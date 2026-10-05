@@ -74,6 +74,7 @@ g/<agent>/
         conversation  — vector of persisted turns and compacted segments
       pending         — messages queued for next transition (§5.5.2)
       c/              — session-scoped user scratch (the `c/` shorthand)
+      summaries       — instruction → latest timestamped summary result (§5.1.2)
 ```
 
 This diagram defines the session container, not the encoding of model context.
@@ -151,6 +152,111 @@ Session-id inputs accept both canonical hexadecimal and the `0x`-prefixed repres
 - `loads={...}` on `agent_request` / `agent_chat` → declared loads on the minted session's root frame ([AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §7.2): skills to pre-load, notes, re-run operations, job results, extra tools and skill sources. Mint-time only; the A2A front door and `agent_message` cannot pass it — pre-mint a session with `agent_request`/`agent_chat` and hand out its id
 
 **Why three ops, not flags on one op.** Each op encodes a distinct caller intent (long-running task vs. wait-for-reply vs. notify). The agent doesn't have to declare its mode — the framework already knows what to do with the agent's response based on which queue picked the work. This eliminates the "is this response a task completion or a chat reply or both?" ambiguity that comes from a single intake op + per-call flags.
+
+### 5.1.1 One-off queries
+
+`agent_query` (`v/ops/agent/query`) takes `{agentId, message, sessionId?, includeSteps?}`
+and returns the agent's answer value directly (text or structured output).
+For example, `{agentId: "assistant", message: "Summarise the discussion",
+sessionId: "<existing-session-id>"}` reads that conversation without adding
+the question or summary to it. Omitting `sessionId` uses fresh conversation
+context and creates no session; an unknown supplied id is an error.
+
+Set `includeSteps: true` to receive `{response, steps, tokens?}` instead of the
+answer alone. `steps` contains this query's model-call records in order,
+including the final reply: `{ts, ms, op, model?, reply | error, calls?}`.
+Replies retain any thinking data actually supplied by the provider; tool
+arguments are in `reply.toolCalls`, and executed results in
+`calls: [{id?, name, ms, result?, isError?, frame?}]`. A child goal's `frame`
+contains its own `inferences` array in the same step shape, even after that
+child frame was popped from the local conversation. Standing prompt context,
+input bands and the prior session conversation are not copied into steps.
+This is recorded output, not reconstructed reasoning. Custom transitions
+without a cycle record return `steps: []`. `tokens` is included only when
+usage was measured. Session history and the agent timeline remain untouched.
+
+A query snapshots the agent's configuration, state and optional session root
+conversation, including loaded context. It invokes the configured transition
+under the agent's identity with the same `agent/message` authorization and
+admission as chat. It does not enqueue work, drain pending messages, execute
+unfinished child goals, claim a session cycle, or merge the transition result
+into the agent's state, sessions or timeline. It can run independently while
+the normal run loop is active. Suspended and terminated agents are rejected.
+
+The configured tool loop still runs: tools may have real side effects.
+Context/skill/tool loads and compaction during the query affect only its local
+conversation. Failures fail the query Job without suspending the agent;
+cancellation signals that independent transition. Normal Job recording and
+token accounting still apply. Use chat for a durable conversational turn,
+request for tracked task delegation, and query for an answer that should not
+become part of the conversation.
+
+### 5.1.2 Saved summaries
+
+`agent_summarise` (`v/ops/agent/summarise`, British spelling) takes
+`{agentId, sessionId, includeSteps?}` and returns `{response, ts, turns, steps?, tokens?}`.
+The session must already exist. It uses the same local-conversation runtime
+as query, then saves the result in `sessions/<sid>/summaries`, keyed by the
+exact effective instruction string:
+
+```text
+{
+  "Summarise the agreed actions.": {response, ts, turns, steps?, tokens?},
+  "What questions remain unresolved?": {response, ts, turns, steps?, tokens?}
+}
+```
+
+`ts` is the publication time in epoch milliseconds. `turns` is the session's
+`meta.turns` count captured before generation: how far through the recorded
+root conversation this result covers. This count survives compaction. Repeating
+the instruction without new recorded turns returns the saved result and timestamp
+without inference or a state write, including when turns share a timestamp.
+New turns make a later call refresh that instruction's entry; existing results
+remain readable in the meantime. Each instruction retains its latest result.
+
+There is no source hash or source-snapshot lookup. Queued messages, agent
+config/state changes, scheduling, other sessions and other summaries do not
+expire a result. Refresh is driven by new recorded conversation, not all
+mutable context or external tool data. The summaries are separate from the
+conversation: neither the instruction nor answer is appended as a turn, and
+saving a summary does not compact history or add it to future model prompts.
+
+The default instruction asks for a concise summary of key facts, decisions,
+outstanding questions and next actions. A custom operation definition can
+set a non-blank `operation.instruction`, for example:
+
+```json
+{
+  "name": "Action summary",
+  "operation": {
+    "adapter": "agent:summarise",
+    "instruction": "Summarise the decisions and agreed next actions."
+  }
+}
+```
+
+Conversation can continue during generation: publication preserves that newer
+activity and saves the result with its original covered turn count. The next
+call can refresh it. Concurrent different instructions both persist. For the
+same instruction, a saved result covering as many or more turns wins, preventing
+a late older generation from overwriting newer work. Equivalent generations
+keep the first published result and timestamp. Provider failures, cancellation
+before publication, a deleted/replaced session or a stopped agent leave saved
+results untouched; a late completion never recreates a deleted session.
+
+The stored summary is exactly the Job result. Steps are omitted by default;
+`includeSteps: true` includes them in both memory and the result when generating
+a summary. A cache hit returns the saved result unchanged: it neither reconstructs
+steps that were not retained nor strips explicitly saved steps. Changing this
+flag alone does not invoke the model or rewrite memory. A later refresh uses
+that invocation's requested detail level. Concurrent equivalent generations
+return the first published result, including its chosen detail level.
+
+Returned `tokens`, when present, describe the original generation;
+the cached invocation makes no model call. As with query, tools may have real
+side effects and pending messages are not consumed. Because this operation
+writes session metadata, it requires `agent/write` authority, including when
+the saved result is already current.
 
 ### 5.2 Agent-safe retrospective operations
 

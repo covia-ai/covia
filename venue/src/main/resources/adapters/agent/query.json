@@ -1,0 +1,25 @@
+{
+	"name": "Query Agent",
+	"description": "Ask an agent a one-off question and return its answer directly. Uses the agent's configured transition, model, context and tools. An optional sessionId supplies a snapshot of that session's root conversation; omitting it starts with fresh context and creates no session. Neither the question nor the answer is appended to the session. Does not consume queued messages or tasks, update agent state or timeline, or wake its run loop. Tools execute normally and may have side effects; this is not a read-only sandbox. The query is an ordinary Job, with token usage on the Job record. Unknown sessions and suspended or terminated agents are rejected.",
+	"dateCreated": "2026-10-04T00:00:00Z",
+	"operation": {
+		"adapter": "agent:query",
+		"toolName": "agent_query",
+		"readOnly": false,
+		"internal": false,
+		"input": {
+			"type": "object",
+			"properties": {
+				"agentId": { "type": "string", "description": "Agent reference: a bare name for the caller's agent, g/<id>, /g/<id>, or <ownerDID>/g/<id>. Requires agent/message authority, including the target's admission policy." },
+				"message": { "description": "Question or message to present only for this query. May be any non-null JSON value." },
+				"sessionId": { "type": "string", "description": "Optional existing session identifier (hex, with or without 0x). Reads a snapshot of its conversation and loaded context without updating it or taking over an active cycle. Pending inbox messages and unfinished child goals are not executed." },
+				"includeSteps": { "type": "boolean", "description": "If true, return {response, steps, tokens?} instead of the answer alone. Steps are this query's ordered model-call records: reply (including any provider-supplied thinking), tool calls and results, timings, and child-goal inferences. Includes the final reply. Does not copy the standing prompt or prior conversation. Defaults to false." }
+			},
+			"required": ["agentId", "message"],
+			"additionalProperties": false
+		},
+		"output": {
+			"description": "By default the agent's response value directly (text or structured output). With includeSteps=true: {response, steps, tokens?}. Each step has ts, ms, op, model?, reply or error, and calls? [{id?, name, ms, result?, isError?, frame?: {inferences: [nested steps]}}]; tool arguments are in reply.toolCalls. Steps contain only recorded provider/runtime output, not inferred reasoning; transitions without a cycle record return an empty steps array. Tokens are present only when measured. A transition error fails the query Job."
+		}
+	}
+}

@@ -1,0 +1,32 @@
+{
+	"name": "Summarise Agent Session",
+	"description": "Generate and save a timestamped summary of an existing agent session using the agent's query runtime. Keeps the latest result per exact instruction in session.summaries, separately from the conversation. Reuses it without another model call or timestamp update when no new root conversation turns have been recorded. Results remain readable as the session evolves; conversation advancing during generation does not prevent saving. Custom operation definitions may set operation.instruction to a non-blank summarise prompt. Does not append turns or consume queued work. Agent config/state changes alone do not refresh a saved result. Configured tools still run and may have side effects. Requires agent/write authority.",
+	"dateCreated": "2026-10-04T00:00:00Z",
+	"operation": {
+		"adapter": "agent:summarise",
+		"toolName": "agent_summarise",
+		"readOnly": false,
+		"internal": false,
+		"input": {
+			"type": "object",
+			"properties": {
+				"agentId": { "type": "string", "description": "Agent reference: a bare name, g/<id>, /g/<id>, or <ownerDID>/g/<id>. Requires agent/write authority, including for a cached result." },
+				"sessionId": { "type": "string", "description": "Existing session identifier (hex, with or without 0x). Unknown sessions are rejected; no session is minted." },
+				"includeSteps": { "type": "boolean", "description": "When generating a summary, include recorded model replies and tool results in both the saved summary and Job result, in the same steps shape as agent:query. Defaults to false, omitting steps from memory and output. Cached results are returned exactly as saved; changing this flag does not add or remove their steps or rerun inference." }
+			},
+			"required": ["agentId", "sessionId"],
+			"additionalProperties": false
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"response": { "description": "The saved summary value (text or structured output)." },
+				"ts": { "type": "integer", "description": "Summary publication timestamp, in epoch milliseconds. Unchanged on a cache hit." },
+				"turns": { "type": "integer", "description": "Number of recorded root conversation turns covered by this result. The live session may have advanced during generation." },
+				"steps": { "type": "array", "description": "Recorded generation steps, present only if requested when this saved result was generated. The stored summary and Job output are identical." },
+				"tokens": { "type": "object", "description": "Usage measured during the original generation, if available. A cached result incurs no new model usage." }
+			},
+			"required": ["response", "ts", "turns"]
+		}
+	}
+}

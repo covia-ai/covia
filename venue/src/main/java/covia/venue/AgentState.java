@@ -115,6 +115,8 @@ public class AgentState extends ALatticeComponent<ACell> {
 	public static final AString KEY_CONFIG   = K_CONFIG;
 	public static final AString KEY_TASKS    = K_TASKS;
 	public static final AString KEY_SESSIONS = K_SESSIONS;
+	/** Latest generated result per instruction, separate from conversation frames. */
+	public static final AString KEY_SUMMARIES = Strings.intern("summaries");
 	public static final AString KEY_PENDING  = K_PENDING;
 	public static final AString KEY_TIMELINE = K_TIMELINE;
 	public static final AString KEY_ERROR    = K_ERROR;
@@ -308,6 +310,56 @@ public class AgentState extends ALatticeComponent<ACell> {
 		Index<Blob, ACell> sessions = getSessions();
 		ACell v = sessions.get(sid);
 		return (v instanceof AMap) ? (AMap<AString, ACell>) v : null;
+	}
+
+	/** Number of recorded root conversation turns, retained across compaction. */
+	public static long sessionTurnCount(AMap<AString, ACell> session) {
+		ACell count = RT.getIn(session, K_META, K_TURNS);
+		return (count instanceof CVMLong n) ? n.longValue() : 0;
+	}
+
+	/** A saved result remains readable regardless of subsequent conversation. */
+	public static AMap<AString, ACell> sessionSummary(AMap<AString, ACell> session, AString instruction) {
+		return RT.ensureMap(RT.getIn(session, KEY_SUMMARIES, instruction));
+	}
+
+	/** Reuse depends only on the conversation covered, not mutable agent state. */
+	public static boolean summaryCovers(AMap<AString, ACell> summary, long turns) {
+		return summary != null && summary.get(K_TURNS) instanceof CVMLong covered
+			&& covered.longValue() >= turns;
+	}
+
+	/**
+	 * Saves a result under its exact instruction, even if the conversation has
+	 * advanced during generation. The stored turn count describes the snapshot
+	 * covered; a subsequent request can refresh it. A result covering at least
+	 * as many turns wins over a late publication. Independent instructions merge.
+	 * A deleted/replaced session or stopped agent returns null.
+	 */
+	@SuppressWarnings("unchecked")
+	public AMap<AString, ACell> saveSessionSummary(Blob sid, AMap<AString, ACell> expectedSession,
+			AString instruction, AMap<AString, ACell> summary) {
+		if (expectedSession == null) return null;
+		long turns = sessionTurnCount(expectedSession);
+		ACell created = RT.getIn(expectedSession, K_META, K_CREATED);
+		AMap<AString, ACell> saved = summary.assoc(K_TURNS, CVMLong.create(turns)).assoc(Fields.TS, now());
+		AMap<AString, ACell> result = update(r -> {
+			if (SUSPENDED.equals(r.get(K_STATUS)) || TERMINATED.equals(r.get(K_STATUS))) return r;
+			AMap<AString, ACell> session = RT.ensureMap(RT.getIn(r, K_SESSIONS, sid));
+			if (session == null || !Objects.equals(created, RT.getIn(session, K_META, K_CREATED))) return r;
+			if (summaryCovers(sessionSummary(session, instruction), turns)) return r;
+			AMap<AString, ACell> summaries = RT.ensureMap(session.get(KEY_SUMMARIES));
+			if (summaries == null) summaries = Maps.empty();
+			Index<Blob, ACell> sessions = (Index<Blob, ACell>) r.get(K_SESSIONS);
+			return r.assoc(K_SESSIONS, sessions.assoc(sid,
+				session.assoc(KEY_SUMMARIES, summaries.assoc(instruction, saved))));
+		});
+		// Inspect the committed value, not a side channel from a possibly retried CAS.
+		if (result == null || SUSPENDED.equals(result.get(K_STATUS)) || TERMINATED.equals(result.get(K_STATUS))) return null;
+		AMap<AString, ACell> session = RT.ensureMap(RT.getIn(result, K_SESSIONS, sid));
+		if (session == null || !Objects.equals(created, RT.getIn(session, K_META, K_CREATED))) return null;
+		AMap<AString, ACell> published = sessionSummary(session, instruction);
+		return summaryCovers(published, turns) ? published : null;
 	}
 
 	/**
