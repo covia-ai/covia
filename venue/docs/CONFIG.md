@@ -537,10 +537,45 @@ hook wait and initiates cleanup after the current synchronous startup step;
 the embedder remains responsible for its own hook's
 asynchronous work.
 
-Raw Engine embedders can use `prepare()` to open storage and restore state,
-then install adapters, publish the catalogue, provision secrets and recover
-work before `start()` activates workers and scheduler alarms. `start()` alone
-remains a convenience that prepares and immediately activates an Engine.
+Applications that already own a lattice host use the same startup sequence
+without HTTP through `Engine.launch(...)` or `Engine.launchAsync(...)`:
+
+```java
+// The host must restore its root before connecting the application.
+CoviaApplication application = CoviaApplication.connect(host.getRootComponent());
+Engine engine = new Engine(config, application, keyPair);
+CompletableFuture<Engine> ready = engine.launchAsync(prepared -> {
+    backend.bind(prepared);
+    prepared.registerAdapter(new ProductAdapter(backend));
+    return backend.prepareAsync();
+});
+ready.join();
+```
+
+Call launch once on a new or prepared engine; do not call `start()` first.
+It installs the built-ins and configured modules, awaits the hook, publishes
+the catalogue, provisions configured secrets, seeds MCP, recovers Jobs and
+queued agent work, re-arms HITL expiries, then activates workers and schedules.
+Do not copy this sequence into the application. `prepare()` and `start()`
+remain low-level APIs for manually assembled runtimes and tests: they do not
+provide a complete venue bootstrap.
+
+The hook must return a non-null stage covering all prerequisite setup. It
+must not invoke Jobs, start autonomous workers, perform recovery or wait for
+the running venue. Recovered work can execute after the hook completes,
+before launch returns. The persistence sweep can run during setup. Configured
+secrets are provisioned after the hook, so migrations must account for this
+ordering. Adapters must start autonomous workers in `AAdapter.start()`, not
+their constructor, configuration or installation hooks.
+
+Unlike VenueServer, Engine never takes ownership of the caller's application,
+host or store. Close Engine before the host and store, including during failure
+cleanup. Startup failure closes engine-owned resources but does not roll back
+durable writes or application effects; retry with a new engine. Cancellation
+requests cleanup without interrupting store I/O, does not cancel the supplied
+hook stage, and the cancelled future does not indicate cleanup has finished.
+The application must stop its own setup tasks and prevent late access to the
+closed engine.
 
 ## Embedded route policy
 

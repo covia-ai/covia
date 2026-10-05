@@ -126,6 +126,16 @@ public abstract class AAdapter {
 	 * that can invoke operations belong here. Runtime registration and enable
 	 * call this after publication on an already-started engine. Implementations
 	 * must be idempotent because enable may retain an installed instance.
+	 *
+	 * <p>Constructors, configuration and {@link #install(Engine)} must not start
+	 * autonomous work. During {@link Engine#launch(java.util.function.Function)},
+	 * this hook runs only after application setup, catalogue publication, secret
+	 * provisioning and recovery. Recovering a Job may itself execute work before
+	 * this hook, so recovery prerequisites must be established during installation
+	 * or the application's pre-start hook. Implement {@link AutoCloseable} to
+	 * release workers/resources on disable, replacement, shutdown or failed
+	 * startup; close must be idempotent and tolerate partial installation/activation. Do not block
+	 * here waiting for another adapter's workers or the HTTP listener.</p>
 	 */
 	public void start() {
 		// Most adapters have no autonomous workers.

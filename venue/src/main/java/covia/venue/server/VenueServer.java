@@ -14,9 +14,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CancellationException;
-import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ExecutionException;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -598,6 +596,11 @@ public class VenueServer {
 	 * a backend, register adapters, and return a chain of asynchronous setup
 	 * actions. Its stage must complete before catalog publication, recovery,
 	 * background workers and the HTTP listener. Null means no hook.
+	 * The full hook requirements are defined by {@link Engine#launch(Function)}:
+	 * return a non-null stage covering all prerequisites; do not invoke Jobs,
+	 * activate workers, or wait for the running venue from this hook. Application
+	 * adapters must defer autonomous workers to {@link covia.adapter.AAdapter#start()}.
+	 * Recovered work may execute as soon as the hook completes.
 	 *
 	 * <p>This method waits for readiness. Use {@link #launchAsync(AMap, List, Function)}
 	 * to compose readiness without blocking the calling thread.</p>
@@ -608,7 +611,10 @@ public class VenueServer {
 		return launchInternal(config, null, extraRoutes, beforeStart);
 	}
 
-	/** Pre-start-hook variant with the store ownership of {@link #launch(AMap, AStore)}. */
+	/**
+	 * Pre-start-hook variant with the store ownership of {@link #launch(AMap, AStore)}.
+	 * @see #launch(AMap, List, Function)
+	 */
 	public static VenueServer launch(AMap<AString,ACell> config, AStore store,
 			List<Consumer<RoutesConfig>> extraRoutes,
 			Function<Engine, ? extends CompletionStage<?>> beforeStart) {
@@ -626,7 +632,10 @@ public class VenueServer {
 	 * future observe an already-live venue. Failure closes acquired resources
 	 * before exceptional completion. Cancellation releases a pending hook wait
 	 * and closes the partially assembled server after the current synchronous
-	 * startup step; it does not cancel the hook's own stage.
+	 * startup step; it does not cancel the hook's own stage. The hook has the
+	 * requirements of {@link Engine#launch(Function)}. The future completes only
+	 * after Engine readiness and HTTP listener startup; cancellation does not
+	 * indicate cleanup has finished and does not roll back work already executed.
 	 */
 	public static CompletableFuture<VenueServer> launchAsync(AMap<AString,ACell> config,
 			List<Consumer<RoutesConfig>> extraRoutes,
@@ -634,7 +643,10 @@ public class VenueServer {
 		return launchAsyncInternal(config, null, extraRoutes, beforeStart);
 	}
 
-	/** Async launch adopting a store, with the ownership of {@link #launch(AMap, AStore)}. */
+	/**
+	 * Async launch adopting a store, with the ownership of {@link #launch(AMap, AStore)}.
+	 * @see #launchAsync(AMap, List, Function)
+	 */
 	public static CompletableFuture<VenueServer> launchAsync(AMap<AString,ACell> config, AStore store,
 			List<Consumer<RoutesConfig>> extraRoutes,
 			Function<Engine, ? extends CompletionStage<?>> beforeStart) {
@@ -718,41 +730,15 @@ public class VenueServer {
 	/** Complete durable/runtime bootstrap before the server becomes reachable. */
 	private void bootstrap(Function<Engine, ? extends CompletionStage<?>> beforeStart,
 			CompletableFuture<?> cancelled) {
-		Engine.installDefaultAdapters(engine);
-		checkCancellation(cancelled);
-		if (beforeStart != null) {
-			try {
-				CompletableFuture<?> hook = Objects.requireNonNull(
-					beforeStart.apply(engine), "beforeStart stage").toCompletableFuture();
-				if (cancelled == null) hook.get();
-				else CompletableFuture.anyOf(hook, cancelled).get();
-			} catch (InterruptedException e) {
-				Thread.currentThread().interrupt();
-				throw new CompletionException(e);
-			} catch (ExecutionException e) {
-				Throwable cause = e.getCause();
-				if (cause instanceof RuntimeException failure) throw failure;
-				if (cause instanceof Error failure) throw failure;
-				throw new CompletionException(cause);
-			}
-		}
-		checkCancellation(cancelled);
-		engine.materialiseBootstrapState();
-		engine.provisionConfiguredSecrets();
-		engine.seedMcpServers();
-		checkCancellation(cancelled);
-		engine.jobs().recoverJobs();
-
-		// Reconcile agent-owned intake after generic Job recovery: clear stale
-		// executor markers/fences, remove intake for terminal Jobs, then wake only
-		// remaining durable queued work. Internal execution is never resumed.
-		if (engine.getAdapter("agent") instanceof covia.adapter.AgentAdapter agentAdapter) {
-			agentAdapter.wakeAgentsWithWork();
-		}
-
-		// HITL expiry is durable and must be re-armed before requests are served.
-		if (engine.getAdapter("hitl") instanceof covia.adapter.HITLAdapter hitlAdapter) {
-			hitlAdapter.rearmExpiries();
+		try {
+			engine.launch(prepared -> {
+				checkCancellation(cancelled);
+				CompletableFuture<?> hook = beforeStart == null ? CompletableFuture.completedFuture(null)
+					: Objects.requireNonNull(beforeStart.apply(prepared), "beforeStart stage").toCompletableFuture();
+				return cancelled == null ? hook : CompletableFuture.anyOf(hook, cancelled);
+			});
+		} catch (IOException e) {
+			throw new java.io.UncheckedIOException(e);
 		}
 	}
 

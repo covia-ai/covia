@@ -10,9 +10,15 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -219,6 +225,11 @@ public class Engine {
 	/** Explicit lifecycle: construction is inert; start/close own active resources. */
 	private enum Lifecycle { NEW, STARTING, PREPARED, STARTED, FAILED, CLOSING, CLOSED }
 	private volatile Lifecycle lifecycle = Lifecycle.NEW;
+	private boolean launchClaimed;
+	private boolean launchInProgress;
+	private final CompletableFuture<Void> launchCancelled = new CompletableFuture<>();
+	public static final String LAUNCH_ALREADY_CLAIMED = "Engine launch requires a new or prepared engine and may be called only once";
+	public static final String START_DURING_LAUNCH = "Engine activation is owned by the in-progress launch";
 
 	/** How often the persistence sweep daemon runs (ms). */
 	private static final long SWEEP_INTERVAL_MS = 100;
@@ -245,14 +256,15 @@ public class Engine {
 
 	/**
 	 * Primary constructor: assembles an inert Engine around the caller's cursor.
-	 * Call {@link #start()} before use. Generates a random venue key pair.
+	 * Call {@link #launch()} for a complete venue, or {@link #start()} for a
+	 * manually assembled runtime. Generates a random venue key pair.
 	 */
 	public Engine(AMap<AString, ACell> config, ALatticeCursor<Index<Keyword,ACell>> cursor) throws IOException {
 		this(config, cursor, AKeyPair.generate(), PersistenceHandler.NOOP);
 	}
 
 	/**
-	 * Inert constructor with explicit key pair. Call {@link #start()} before use.
+	 * Inert constructor with explicit key pair. Call {@link #launch()} before use.
 	 * Use when the venue identity must be
 	 * stable across restarts (same AccountKey = same OwnerLattice slot).
 	 *
@@ -265,7 +277,7 @@ public class Engine {
 	}
 
 	/**
-	 * Canonical inert constructor with persistence handler. Call {@link #start()}
+	 * Canonical inert constructor with persistence handler. Call {@link #launch()}
 	 * before use.
 	 *
 	 * <p>The handler is invoked synchronously by {@link #flush()} (and during
@@ -291,6 +303,9 @@ public class Engine {
 	 * Canonical hosted-application constructor. Publication and durability flow
 	 * through the application's {@code RootComponent}; the engine does not need
 	 * to know whether that host is local or networked.
+	 * The host must restore its root before construction. Call {@link #launch(Function)}
+	 * to assemble a complete venue without HTTP. The caller retains ownership of
+	 * the application, host and store, including on startup failure.
 	 */
 	public Engine(Config config, CoviaApplication application, AKeyPair keyPair)
 			throws IOException {
@@ -319,7 +334,10 @@ public class Engine {
 	}
 
 	/**
-	 * Starts this engine and all resources it owns.
+	 * Activates a manually assembled engine and all resources it owns.
+	 * This low-level method does not install adapters, publish the catalogue,
+	 * provision configured secrets or recover Jobs. Production embedders normally
+	 * need {@link #launch(Function)}, which performs those steps before activation.
 	 *
 	 * <p>Construction is deliberately inert so callers retain an Engine
 	 * reference before any storage or threads are started. Startup is
@@ -330,6 +348,7 @@ public class Engine {
 	 * @throws IOException if content storage cannot be initialised
 	 */
 	public synchronized Engine start() throws IOException {
+		if (launchInProgress) throw new IllegalStateException(START_DURING_LAUNCH);
 		if (lifecycle == Lifecycle.STARTED) return this;
 		prepare();
 		return activate();
@@ -352,6 +371,9 @@ public class Engine {
 			lifecycle = Lifecycle.STARTED;
 			return this;
 		} catch (RuntimeException | Error failure) {
+			// Complete launch may already have recovered live Jobs. Its outer
+			// cleanup suspends those outside the Engine monitor before closing adapters.
+			if (launchInProgress) throw failure;
 			lifecycle = Lifecycle.FAILED;
 			closeStartedResources(false, failure);
 			throw failure;
@@ -359,8 +381,184 @@ public class Engine {
 	}
 
 	/**
-	 * Opens storage and restores state while scheduler alarms and adapter workers
-	 * remain stopped. Hosts finish assembly and recovery before calling start().
+	 * Launches a complete embedded venue without HTTP or an application setup hook.
+	 * See {@link #launch(Function)} for ordering, ownership and failure semantics.
+	 * @return this engine, ready for use
+	 * @throws IOException if content storage cannot be initialised
+	 */
+	public Engine launch() throws IOException {
+		return launch(null);
+	}
+
+	/**
+	 * Launches a complete venue over this engine's existing application/cursor,
+	 * without creating a host, store or HTTP listener. May be called once on a
+	 * new or prepared engine; calling {@link #start()} first is an error.
+	 *
+	 * <ol>
+	 * <li>Prepare storage and users; install built-in and configured module adapters.</li>
+	 * <li>Invoke {@code beforeStart} and await its returned stage.</li>
+	 * <li>Publish the complete catalogue, provision configured secrets and seed MCP servers.</li>
+	 * <li>Recover durable Jobs, reconcile queued agent work and re-arm HITL expiries.</li>
+	 * <li>Activate adapter workers and the scheduler, then return.</li>
+	 * </ol>
+	 *
+	 * <p>The hook must bind application backends, register all application adapters,
+	 * and finish any state/secret migrations required by recovered work. Return a
+	 * non-null stage covering <em>all</em> asynchronous setup. Do not start workers,
+	 * invoke Jobs, recover work, publish the catalogue or call start/launch from
+	 * the hook: the venue is not ready yet. Do not wait for work that requires a
+	 * running venue. The persistence sweep may run while setup is pending, but
+	 * inbound adapter workers and scheduled operations remain paused. Configured
+	 * secrets are provisioned after the hook; account for this in migrations.</p>
+	 *
+	 * <p>Recovered work may execute after the hook completes, before this method
+	 * returns. Prerequisites therefore belong in the hook, not after launch or in
+	 * a readiness-future continuation. The hook may replace installed defaults.
+	 * A null hook means no application setup.</p>
+	 *
+	 * <p>Configured-secret provisioning and MCP seeding retain their existing
+	 * best-effort policies; readiness does not guarantee every external MCP
+	 * server is reachable. See {@link #provisionConfiguredSecrets()} and
+	 * {@link #seedMcpServers()}.</p>
+	 *
+	 * <p>Failure releases engine-owned resources and makes this engine unusable;
+	 * create a new engine to retry. Durable writes and external hook effects are
+	 * not rolled back. The caller owns and must clean up its hook tasks, backend,
+	 * application, host and store. Close this engine before closing its host/store,
+	 * both after success and when unwinding a failed launch.</p>
+	 *
+	 * @param beforeStart asynchronous application assembly, or null
+	 * @return this engine after recovery and activation
+	 * @throws IOException if content storage cannot be initialised
+	 * @throws IllegalStateException if launch was already claimed or the engine is active/closed
+	 * @throws CompletionException if the hook fails with a checked exception
+	 */
+	public Engine launch(Function<Engine, ? extends CompletionStage<?>> beforeStart) throws IOException {
+		claimLaunch();
+		return launchInternal(beforeStart);
+	}
+
+	/**
+	 * As {@link #launchAsync(Function)} with no application setup hook.
+	 * @return readiness future for this engine
+	 */
+	public CompletableFuture<Engine> launchAsync() {
+		return launchAsync(null);
+	}
+
+	/**
+	 * Performs {@link #launch(Function)} on a virtual thread. The future completes
+	 * only after recovery and activation; continuations run after readiness and
+	 * cannot supply prerequisites for recovered work. Lifecycle validation occurs
+	 * on the calling thread, before startup is scheduled.
+	 *
+	 * <p>Cancelling the future requests cleanup at startup phase boundaries,
+	 * including while awaiting the hook, without interrupting store I/O. The
+	 * cancelled future is not a cleanup-completion signal. The caller's hook
+	 * stage is not cancelled: the caller must stop its tasks and prevent late
+	 * writes to a closed engine. Work already recovered or started is not undone.
+	 * The engine never closes the caller's host or store.</p>
+	 *
+	 * @param beforeStart application setup hook with the requirements of {@link #launch(Function)}
+	 * @return readiness future, exceptionally completed on startup failure
+	 * @throws IllegalStateException if launch was already claimed or the engine is active/closed
+	 */
+	public CompletableFuture<Engine> launchAsync(Function<Engine, ? extends CompletionStage<?>> beforeStart) {
+		claimLaunch();
+		CompletableFuture<Engine> ready = new CompletableFuture<>();
+		ready.whenComplete((engine, failure) -> {
+			if (ready.isCancelled()) launchCancelled.completeExceptionally(new CancellationException());
+		});
+		Thread.ofVirtual().name("engine-startup").start(() -> {
+			try {
+				Engine engine = launchInternal(beforeStart);
+				if (!ready.complete(engine)) engine.close();
+			} catch (Throwable failure) {
+				ready.completeExceptionally(failure);
+			}
+		});
+		return ready;
+	}
+
+	private synchronized void claimLaunch() {
+		if (launchClaimed || (lifecycle != Lifecycle.NEW && lifecycle != Lifecycle.PREPARED)) {
+			throw new IllegalStateException(LAUNCH_ALREADY_CLAIMED);
+		}
+		launchClaimed = true;
+		launchInProgress = true;
+	}
+
+	private void checkLaunchCancellation() {
+		if (launchCancelled.isDone()) throw new CancellationException();
+	}
+
+	private Engine launchInternal(Function<Engine, ? extends CompletionStage<?>> beforeStart) throws IOException {
+		try {
+			checkLaunchCancellation();
+			prepare();
+			installDefaultAdapters(this);
+			checkLaunchCancellation();
+			if (beforeStart != null) {
+				CompletableFuture<?> hook = java.util.Objects.requireNonNull(
+					beforeStart.apply(this), "beforeStart stage").toCompletableFuture();
+				try {
+					CompletableFuture.anyOf(hook, launchCancelled).get();
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+					throw new CompletionException(e);
+				} catch (ExecutionException e) {
+					Throwable cause = e.getCause();
+					if (cause instanceof RuntimeException failure) throw failure;
+					if (cause instanceof Error failure) throw failure;
+					throw new CompletionException(cause);
+				}
+			}
+			checkLaunchCancellation();
+			materialiseBootstrapState();
+			provisionConfiguredSecrets();
+			seedMcpServers();
+			checkLaunchCancellation();
+			jobs().recoverJobs();
+			if (getAdapter("agent") instanceof AgentAdapter agents) agents.wakeAgentsWithWork();
+			if (getAdapter("hitl") instanceof covia.adapter.HITLAdapter hitl) hitl.rearmExpiries();
+			checkLaunchCancellation();
+			return activate();
+		} catch (IOException | RuntimeException | Error failure) {
+			boolean interrupted = Thread.interrupted();
+			try {
+				boolean cleanup;
+				synchronized (this) {
+					cleanup = lifecycle != Lifecycle.FAILED && lifecycle != Lifecycle.CLOSED && lifecycle != Lifecycle.CLOSING;
+					if (cleanup) lifecycle = Lifecycle.CLOSING;
+				}
+				if (cleanup) {
+					try {
+						jobManager.shutdown(0);
+					} catch (RuntimeException | Error shutdownFailure) {
+						failure.addSuppressed(shutdownFailure);
+					}
+					synchronized (this) {
+						closeStartedResources(false, failure);
+						lifecycle = Lifecycle.FAILED;
+					}
+				}
+			} finally {
+				if (interrupted) Thread.currentThread().interrupt();
+			}
+			throw failure;
+		} finally {
+			synchronized (this) { launchInProgress = false; }
+		}
+	}
+
+	/**
+	 * Restores state and opens storage without firing schedules or starting
+	 * adapter-owned workers. This is a low-level assembly seam; prefer
+	 * {@link #launch(Function)} for the complete shared startup sequence.
+	 * Preparation starts the persistence sweep but does not install adapters or
+	 * recover work. Closing a prepared engine releases all engine-owned resources.
+	 *
 	 * @return this engine
 	 * @throws IOException if content storage cannot be initialised
 	 */
@@ -740,6 +938,7 @@ public class Engine {
 			if (lifecycle == Lifecycle.CLOSED || lifecycle == Lifecycle.CLOSING) return;
 			flush = lifecycle == Lifecycle.STARTED || lifecycle == Lifecycle.PREPARED;
 			lifecycle = Lifecycle.CLOSING;
+			if (launchInProgress) launchCancelled.completeExceptionally(new CancellationException());
 		}
 		// Jobs first, outside the engine monitor: work finishing inside the
 		// grace window may need engine services that synchronise on it.
@@ -843,9 +1042,9 @@ public class Engine {
 		return lifecycle == Lifecycle.STARTED;
 	}
 
-	/** True once close began: the venue is releasing work, not taking any on. */
+	/** True once close began or startup failed: the venue must not take on work. */
 	public boolean isClosing() {
-		return lifecycle == Lifecycle.CLOSING || lifecycle == Lifecycle.CLOSED;
+		return lifecycle == Lifecycle.CLOSING || lifecycle == Lifecycle.CLOSED || lifecycle == Lifecycle.FAILED;
 	}
 
 	/** Installs process control before MainVenue publishes restart authority. */
@@ -894,6 +1093,12 @@ public class Engine {
 		return control;
 	}
 
+	/**
+	 * Legacy catalogue helper for manually started engines and tests. Installs
+	 * defaults, publishes their assets and seeds MCP; does not perform recovery
+	 * or secret provisioning. Use {@link #launch(Function)} for production startup.
+	 * @param venue engine already prepared or started
+	 */
 	public static void addDemoAssets(Engine venue) {
 		installDefaultAdapters(venue);
 		venue.materialiseBootstrapState();

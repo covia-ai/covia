@@ -10,6 +10,12 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Changed
 
+- Embedded startup has a shared readiness boundary (#553): `Engine.launch`
+  and `launchAsync` assemble a complete venue over a caller-owned host without
+  HTTP; VenueServer uses the same sequence. Application setup hooks finish
+  before catalogue publication and recovery. Adapter workers start through
+  `AAdapter.start()` after assembly; readiness continuations run after activation.
+
 - Anthropic defaults move to Claude Sonnet 5.5, Opus 5.5, Fable 5.1 and
   Haiku 4.5; the Claude 5 models stay in the catalog.
 
