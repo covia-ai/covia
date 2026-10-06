@@ -130,6 +130,17 @@ class SlackAdapterTest {
 			f.api.take(); assertNull(f.api.sends.poll(150, TimeUnit.MILLISECONDS));
 		}
 	}
+	@Test void rejectsSuccessfulHttpResponsesWithoutAMessageTimestamp() throws Exception {
+		try (Fixture f = new Fixture(spec())) {
+			for (String response : new String[] {"{\"ok\":true}", "{\"ok\":true,\"ts\":null}", "{\"ok\":true,\"ts\":42}"}) {
+				f.api.response = response;
+				assertEquals(SlackAdapter.INVALID_RESPONSE, assertThrows(IllegalStateException.class,
+					() -> f.adapter.send(f.bot(), Maps.of("channel", "C123", "text", "test receipt"))).getMessage());
+				f.api.take();
+			}
+			assertNull(f.api.sends.poll(150, TimeUnit.MILLISECONDS));
+		}
+	}
 	@Test void persistsRuntimeBindingsAndDeletesTheirPrivateState() throws Exception {
 		try (Fixture f = new Fixture(spec())) {
 			var create = spec().dissoc(Strings.intern("user")).assoc(Fields.NAME, Strings.create("owned"));

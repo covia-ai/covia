@@ -1,6 +1,8 @@
 package covia.adapter.whatsapp;
 
+import java.time.Clock;
 import java.time.Instant;
+import java.util.Objects;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -24,6 +26,9 @@ public final class WhatsAppAdapter extends AWebhookMessagingAdapter<BotSpec> {
 	public static final String WINDOW_EXPIRED = "WhatsApp text reply window has expired; use an approved template through another supported client";
 	public static final String INVALID_RESPONSE = "WhatsApp did not return a message ID; delivery may be uncertain";
 	public static final int MAX_TEXT = 4096;
+	private final Clock clock;
+	public WhatsAppAdapter() { this(Clock.systemUTC()); }
+	WhatsAppAdapter(Clock clock) { this.clock = Objects.requireNonNull(clock); }
 	@Override public String getName() { return NAME; }
 	@Override public String getDescription() { return "WhatsApp Cloud API text messages and signed inbound conversations, bound to an owner and phone number."; }
 	@Override protected String defaultApiUrl() { return "https://graph.facebook.com"; }
@@ -63,7 +68,7 @@ public final class WhatsAppAdapter extends AWebhookMessagingAdapter<BotSpec> {
 					String id = MessagingSettings.required(message, "id");
 					String timestamp = MessagingSettings.id(message, "timestamp", "[0-9]{1,12}");
 					long time = Long.parseLong(timestamp);
-					long now = Instant.now().getEpochSecond();
+					long now = Instant.now(clock).getEpochSecond();
 					if (time > now + 300 || time < now - 86400) continue;
 					String text = MessagingSettings.required(MessagingSettings.object(message.get(MessagingSettings.key("text"))), "body");
 					if (text.codePointCount(0, text.length()) > MAX_TEXT) throw new IllegalArgumentException(TEXT_LENGTH.formatted(MAX_TEXT));
@@ -93,7 +98,7 @@ public final class WhatsAppAdapter extends AWebhookMessagingAdapter<BotSpec> {
 	}
 	@Override protected void sendReply(WebhookBot<BotSpec> bot, AMap<AString, ACell> event, String text) {
 		long timestamp = Long.parseLong(MessagingSettings.required(event, "timestamp"));
-		if (Instant.now().getEpochSecond() - timestamp >= 86400) throw new IllegalStateException(WINDOW_EXPIRED);
+		if (Instant.now(clock).getEpochSecond() - timestamp >= 86400) throw new IllegalStateException(WINDOW_EXPIRED);
 		deliver(bot, MessagingSettings.required(event, "to"), truncate(text, MAX_TEXT), MessagingSettings.required(event, "messageId"));
 	}
 	private ACell deliver(WebhookBot<BotSpec> bot, String to, String text, String replyTo) {

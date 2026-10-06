@@ -80,8 +80,12 @@ final class TestSupport {
   static final class Fixture implements AutoCloseable {
     final FakeAPI api = new FakeAPI();
     final Engine engine = Engine.createTemp(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
-    final WhatsAppAdapter adapter = new WhatsAppAdapter();
+    final WhatsAppAdapter adapter;
     Fixture(AMap<AString,ACell> spec) throws Exception {
+      this(spec, new WhatsAppAdapter());
+    }
+    Fixture(AMap<AString,ACell> spec, WhatsAppAdapter adapter) throws Exception {
+      this.adapter = adapter;
       Engine.addDemoAssets(engine);
       secret(engine, "TOKEN", TOKEN); secret(engine, "SIGNING", SECRET); secret(engine, "VERIFY", "test-verify");
       adapter.retryMillis = 25;

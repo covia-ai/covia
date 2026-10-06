@@ -479,6 +479,24 @@ Run the owning module tests during development and `mvn clean install` before
 release so the full reactor, javadocs, shaded jars, and module integration
 tests are verified.
 
+The messaging suites run locally without provider credentials. WhatsApp and
+Slack module integration tests boot a private venue with the packaged module,
+post signed HTTP callbacks, and capture outgoing requests at a loopback fake API.
+They cover verification challenges, rejected signatures, duplicate delivery,
+reply context, explicit sends, and disabling/unloading the live HTTP receiver.
+Telegram's module test exercises polling and sending against its local fake API.
+The shared `MessagingHttpTest` checks malformed and oversized responses,
+redirects, provider errors, and deadlines before headers and during body reads.
+
+Run the focused messaging tests and packaged-module checks from the root:
+
+```bash
+mvn -pl covia-whatsapp,covia-slack,covia-telegram -am verify -Dtest=MessagingHttpTest,WhatsAppAdapterTest,SlackAdapterTest,TelegramAdapterTest,ConversationRouterTest,WebhookInboxTest,WebhookRoutesTest -Dsurefire.failIfNoSpecifiedTests=false
+```
+
+These are local contract tests; they do not validate live provider credentials,
+subscriptions, permissions, or delivery over the public internet.
+
 ## Related references
 
 - [CONFIG.md](CONFIG.md) — operator configuration and runtime administration

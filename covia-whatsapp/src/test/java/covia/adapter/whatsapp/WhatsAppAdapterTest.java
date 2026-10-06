@@ -5,11 +5,16 @@ import static covia.adapter.whatsapp.TestSupport.*;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.time.Clock;
 import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -18,6 +23,7 @@ import convex.core.crypto.AKeyPair;
 import convex.core.data.*;
 import convex.core.lang.RT;
 import covia.adapter.messaging.*;
+import covia.adapter.AAdapter;
 import covia.adapter.webhook.*;
 import covia.api.Fields;
 import covia.venue.*;
@@ -34,8 +40,11 @@ class WhatsAppAdapterTest {
 		return Maps.of("id", id, "type", "text", "from", "441234567890", "timestamp", Long.toString(Instant.now().getEpochSecond()), "text", Maps.of("body", "hello"));
 	}
 	static AMap<AString, ACell> payload(ACell... messages) {
+		return payloadValue(Maps.of("messaging_product", "whatsapp", "metadata", Maps.of("phone_number_id", "12345"), "messages", Vectors.create(messages)));
+	}
+	static AMap<AString, ACell> payloadValue(ACell value) {
 		return Maps.of("object", "whatsapp_business_account", "entry", Vectors.of(Maps.of("id", "67890", "changes",
-			Vectors.of(Maps.of("field", "messages", "value", Maps.of("messaging_product", "whatsapp", "metadata", Maps.of("phone_number_id", "12345"), "messages", Vectors.of(messages)))))));
+			Vectors.of(Maps.of("field", "messages", "value", value)))));
 	}
 	@Test void validatesConfigurationAndKeepsSecretsPrivate() throws Exception {
 		assertEquals(MessagingSettings.CREDENTIAL.formatted("token"), assertThrows(IllegalArgumentException.class,
@@ -136,6 +145,116 @@ class WhatsAppAdapterTest {
 			f.api.take(); awaitStatus(f.bot(), "enabled", WebhookInbox.COMPLETE);
 		}
 	}
+	@Test void ignoresOtherPhoneNumbersAndDeliveryStatusCallbacks() throws Exception {
+		try (Fixture f = new Fixture(spec())) {
+			assertEquals(200, f.webhook(payloadValue(Maps.of("messaging_product", "whatsapp",
+				"metadata", Maps.of("phone_number_id", "99999"), "messages", Vectors.of(message("wrong-phone"))))).status());
+			assertEquals(200, f.webhook(payloadValue(Maps.of("messaging_product", "whatsapp",
+				"metadata", Maps.of("phone_number_id", "12345"), "statuses", Vectors.of(Maps.of("id", "delivery-only",
+					"status", "delivered", "recipient_id", "441234567890", "timestamp", "1700000000"))))).status());
+			assertNull(f.bot().inbox().get("wrong-phone"));
+			assertNull(f.bot().inbox().get("delivery-only"));
+			assertTrue(f.api.sends.isEmpty());
+		}
+	}
+	@Test void agentSessionsFollowSenderAndPhoneAndSurviveReplacement() throws Exception {
+		var agentSpec = spec().dissoc(Strings.intern("operation")).dissoc(Strings.intern("reply"))
+			.assoc(Strings.intern("agent"), Strings.create("test-agent"))
+			.assoc(Strings.intern("allow"), Vectors.of("441234567890", "441234567891"));
+		try (Fixture f = new Fixture(agentSpec)) {
+			FakeAgent agent = new FakeAgent(); f.engine.registerAdapter(agent);
+			f.engine.configureAdapter(NAME, Maps.of("apiUrl", f.api.url(), "bots", Maps.of("main", agentSpec,
+				"second", agentSpec.assoc(Strings.intern("phoneNumberId"), Strings.create("54321")))));
+			var first = agentTurn(f, f.adapter, agent, "main", "12345", "441234567890", "first");
+			assertNull(first.get(Fields.SESSION_ID));
+			assertEquals(Strings.create("hello"), RT.getIn(first, Fields.MESSAGE, Fields.TEXT));
+			assertEquals(Maps.of("channel", "whatsapp", "bot", "main", "from", "441234567890", "chat", "441234567890",
+				"message_id", "first", "phoneNumberId", "12345", "access", "allow"), RT.getIn(first, Fields.MESSAGE, Strings.intern("via")));
+			assertEquals(OWNER, agent.owner);
+			assertNull(agentTurn(f, f.adapter, agent, "main", "12345", "441234567891", "other-sender").get(Fields.SESSION_ID));
+			assertNull(agentTurn(f, f.adapter, agent, "second", "54321", "441234567890", "other-phone").get(Fields.SESSION_ID));
+			var parsed = BotSpec.parse("main", agentSpec, true);
+			String identity = Strings.create(ConversationRouter.key(OWNER.toString(), parsed.installationKey())).getHash().toHexString();
+			String path = "config/main/sessions/" + identity + "/" + agentSpec.getHash().toHexString() + "/"
+				+ ConversationSessions.segment(ConversationRouter.key(parsed.installationKey(), "441234567890"));
+			assertEquals(Strings.create("session-1"), f.adapter.state().read(path));
+			assertNull(f.engine.resolvePath(Strings.create(f.adapter.state().path(path)), RequestContext.of(OWNER)));
+			WhatsAppAdapter restored = new WhatsAppAdapter(); f.engine.registerAdapter(restored);
+			assertEquals(Strings.create("session-1"), agentTurn(f, restored, agent, "main", "12345", "441234567890", "resumed").get(Fields.SESSION_ID));
+			assertEquals(Strings.create("session-3"), agentTurn(f, restored, agent, "second", "54321", "441234567890", "resumed-other").get(Fields.SESSION_ID));
+		}
+	}
+	private static AMap<AString, ACell> agentTurn(Fixture f, WhatsAppAdapter adapter, FakeAgent agent,
+			String bot, String phone, String from, String id) throws Exception {
+		assertEquals(200, adapter.handleWebhook("c-" + bot, signed(payloadValue(Maps.of("messaging_product", "whatsapp",
+			"metadata", Maps.of("phone_number_id", phone), "messages", Vectors.of(message(id).assoc(Strings.intern("from"), Strings.create(from))))))).status());
+		assertEquals(Strings.create(from), f.api.take().body().get(Strings.intern("to")));
+		awaitStatus(adapter.runner(bot), id, WebhookInbox.COMPLETE);
+		var input = agent.inputs.poll(5, TimeUnit.SECONDS); assertNotNull(input); return input;
+	}
+	@Test void appliesInboundAgeAndFutureSkewLimits() throws Exception {
+		var clock = new MutableClock(); long now = clock.instant().getEpochSecond();
+		try (Fixture f = new Fixture(spec().assoc(Strings.intern("token"), Strings.create("s/LATE")), new WhatsAppAdapter(clock))) {
+			for (long offset : new long[] {-86401, -86399, 300, 301}) {
+				String id = "offset-" + offset;
+				assertEquals(200, f.webhook(payload(message(id).assoc(Strings.intern("timestamp"), Strings.create(Long.toString(now + offset))))).status());
+				if (offset == -86401 || offset == 301) assertNull(f.bot().inbox().get(id));
+				else assertEquals(WebhookInbox.PENDING, f.bot().inbox().get(id).get(Fields.STATUS));
+			}
+			assertTrue(f.api.sends.isEmpty());
+		}
+	}
+	@Test void repliesUntilButNotAtThe24HourBoundary() throws Exception {
+		var clock = new MutableClock(); long timestamp = clock.instant().getEpochSecond();
+		try (Fixture f = new Fixture(spec(), new WhatsAppAdapter(clock))) {
+			AMap<AString, ACell> event = Maps.of("to", "441234567890", "messageId", "boundary", "timestamp", Long.toString(timestamp));
+			clock.now = Instant.ofEpochSecond(timestamp + 86399);
+			f.adapter.sendReply(f.bot(), event, "still in window"); f.api.take();
+			for (long age : new long[] {86400, 86401}) {
+				clock.now = Instant.ofEpochSecond(timestamp + age);
+				assertEquals(WhatsAppAdapter.WINDOW_EXPIRED, assertThrows(IllegalStateException.class,
+					() -> f.adapter.sendReply(f.bot(), event, "expired")).getMessage());
+			}
+			assertTrue(f.api.sends.isEmpty());
+		}
+	}
+	@Test void rechecksTheReplyWindowAfterTheAgentCompletes() throws Exception {
+		var clock = new MutableClock();
+		var agentSpec = spec().dissoc(Strings.intern("operation")).dissoc(Strings.intern("reply")).assoc(Strings.intern("agent"), Strings.create("slow-agent"));
+		try (Fixture f = new Fixture(agentSpec, new WhatsAppAdapter(clock))) {
+			FakeAgent agent = new FakeAgent(); agent.blocked = new CompletableFuture<>(); f.engine.registerAdapter(agent);
+			try {
+				var message = message("slow").assoc(Strings.intern("timestamp"), Strings.create(Long.toString(clock.instant().getEpochSecond())));
+				assertEquals(200, f.webhook(payload(message)).status());
+				assertNotNull(agent.inputs.poll(5, TimeUnit.SECONDS));
+				clock.now = clock.now.plusSeconds(86400);
+				agent.blocked.complete(Maps.of(Fields.SESSION_ID, "late-session", Fields.RESPONSE, "too late"));
+				long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+				while (f.bot().status().get(Fields.ERROR) == null && System.nanoTime() < deadline) Thread.sleep(10);
+				assertEquals(Strings.create(WebhookBot.PROCESSING_FAILED), f.bot().status().get(Fields.ERROR));
+				assertEquals(WebhookInbox.STARTED, f.bot().inbox().get("slow").get(Fields.STATUS));
+				assertTrue(f.api.sends.isEmpty());
+			} finally { agent.blocked.complete(Maps.of(Fields.RESPONSE, "cleanup")); }
+		}
+	}
+	@Test void truncatesAutomaticRepliesWithoutSplittingUnicode() throws Exception {
+		try (Fixture f = new Fixture(spec().assoc(Strings.intern("reply"), Strings.create("🐦".repeat(4097))))) {
+			assertEquals(200, f.webhook(payload(message("long-reply"))).status());
+			assertEquals(Strings.create("🐦".repeat(4095) + "…"), RT.getIn(f.api.take().body(), Strings.intern("text"), Strings.intern("body")));
+			awaitStatus(f.bot(), "long-reply", WebhookInbox.COMPLETE);
+		}
+	}
+	@Test void rejectsSuccessfulHttpResponsesWithoutAMessageId() throws Exception {
+		try (Fixture f = new Fixture(spec())) {
+			for (String response : new String[] {"{}", "{\"messages\":[]}", "{\"messages\":[{\"id\":42}]}"}) {
+				f.api.response = response;
+				assertEquals(WhatsAppAdapter.INVALID_RESPONSE, assertThrows(IllegalStateException.class,
+					() -> f.adapter.send(f.bot(), Maps.of("to", "441234567890", "text", "test receipt"))).getMessage());
+				f.api.take();
+			}
+			assertNull(f.api.sends.poll(150, TimeUnit.MILLISECONDS));
+		}
+	}
 	@Test void durablePendingRecoversAfterRestartButStartedDoesNotReplay() throws Exception {
 		try (FakeAPI api = new FakeAPI()) {
 			AMap<AString, ACell> config = Maps.of(Config.PORT, 0, Config.BIND_ADDRESS, "127.0.0.1", Config.STORE, temp.resolve("whatsapp.etch").toString(),
@@ -158,6 +277,28 @@ class WhatsAppAdapterTest {
 				assertEquals(200, secondAdapter.handleWebhook("c-main", signed(payload(message("pending"), message("uncertain")))).status());
 				assertNull(api.sends.poll(200, TimeUnit.MILLISECONDS));
 			} finally { second.close(); }
+		}
+	}
+	private static final class MutableClock extends Clock {
+		volatile Instant now = Instant.parse("2026-10-06T12:00:00Z");
+		@Override public ZoneId getZone() { return ZoneOffset.UTC; }
+		@Override public Clock withZone(ZoneId zone) { return Clock.fixed(now, zone); }
+		@Override public Instant instant() { return now; }
+	}
+	private static final class FakeAgent extends AAdapter {
+		final LinkedBlockingQueue<AMap<AString, ACell>> inputs = new LinkedBlockingQueue<>();
+		final AtomicInteger sessions = new AtomicInteger();
+		volatile AString owner;
+		volatile CompletableFuture<ACell> blocked;
+		@Override public String getName() { return "agent"; }
+		@Override public String getDescription() { return "Deterministic WhatsApp chat fixture"; }
+		@Override protected void installAssets() { installAsset("agent/chat", Maps.of("name", "Fixture chat", "operation", Maps.of("adapter", "agent:chat"))); }
+		@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+			var in = MessagingSettings.object(input); owner = ctx.getUserDID(); inputs.add(in);
+			if (blocked != null) return blocked;
+			ACell sid = in.get(Fields.SESSION_ID);
+			if (sid == null) sid = Strings.create("session-" + sessions.incrementAndGet());
+			return CompletableFuture.completedFuture(Maps.of(Fields.SESSION_ID, sid, Fields.RESPONSE, "agent reply"));
 		}
 	}
 }
