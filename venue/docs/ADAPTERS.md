@@ -303,10 +303,44 @@ retain their normal ephemeral durability. `pruneCompleted(cutoff)` removes only
 completed receipts; the provider chooses retention beyond its retry window and
 must clean binding-owned inbox/checkpoint data in `deleteRuntimeState`.
 
-### Adding WhatsApp or Slack
+### HTTP messaging workers
 
-These are extension designs; neither provider module is installed by this
-infrastructure change.
+`AWebhookMessagingAdapter` and `WebhookBot` implement the shared HTTP binding
+worker used by the optional [WhatsApp](../../covia-whatsapp/README.md) and
+[Slack](../../covia-slack/README.md) modules. They require credential references,
+keep configuration private, and publish `send`, `create`, `delete` and `bots`.
+Providers implement validation, signed callback parsing, admission and sends.
+`MessagingHttp` uses a bounded response body, request/connection timeouts and
+no redirects or automatic send retries; none of these timeouts limits a Job.
+
+Config callback names are `c-<name>`. Runtime names are `u-<hash>`, derived from
+owner and bot name, and returned as `webhookPath` by create/bots. Names locate
+bindings; provider signatures authenticate them. Runtime records remain at
+`users/<did>/bots/<name>`. Inbox roots are
+`config/<name>/inbox/<identity>` or `users/<did>/inbox/<name>/<identity>`.
+Session roots use `sessions` in place of `inbox`, with a further configuration
+version segment before the encoded conversation key. Identity is the CAD3
+hash of a compound owner/provider-installation key; version is the settings
+map's hash. Resolved credentials are never stored in either record.
+
+The worker scans PENDING receipts on start and periodically for late secret
+provisioning. Whole turns share the conversation queue, claim and flush before
+execution, and complete only after any reply. STARTED receipts remain uncertain
+after failure and are not replayed. Pending records also carry `bindingVersion`;
+after a policy/handler change, an older version stays pending for operator
+inspection rather than executing under the new settings. Completed receipts
+continue deduplicating across those changes. Changing owner/installation
+isolates both inbox and sessions. No automatic receipt pruning is performed.
+
+Stopping a worker prevents queued work, late replies and late session writes.
+Deleting a runtime binding removes its registry, sessions and inbox; this
+also removes its deduplication history. An already dispatched external request
+may finish. Recreating a deleted binding is a new intake lifecycle.
+
+### Provider boundaries
+
+The first modules implement text messaging over HTTP callbacks. The remaining
+provider-specific extension points are:
 
 - **WhatsApp:** bind an app and phone-number ID to the owner/handler. Keep app
   secret, verification token and outbound token separate. Verify the Meta
@@ -315,7 +349,7 @@ infrastructure change.
   Template messages and the customer service window remain provider policy.
 - **Slack:** make one binding identify an installation, including the workspace
   and enterprise context where applicable. Support an HTTP Events API receiver
-  or a Socket Mode runner feeding the same inbox/router. HTTP ingress requires
+  or, in a future extension, a Socket Mode runner feeding the same inbox/router. HTTP ingress requires
   Slack signature and timestamp verification against the raw body; Socket Mode
   authenticates its connection separately. Keep bot and app/signing credentials
   distinct. Deduplicate Events API `event_id`; the Socket Mode `envelope_id`

@@ -46,6 +46,8 @@ covia/
 ├── covia-discord/         # Optional loadable Discord bot module
 │   ├── pom.xml            # Venue SPI provided; JDA shaded
 │   └── src/               # Discord Gateway/REST adapter and deterministic tests
+├── covia-whatsapp/        # Optional WhatsApp Cloud API text/webhook module (JDK HTTP)
+├── covia-slack/           # Optional Slack Events API text/webhook module (JDK HTTP)
 ├── covia-sonnylabs/       # Optional loadable SonnyLabs scanning module
 │   ├── pom.xml            # Venue SPI provided; JDK HTTP client only
 │   └── src/               # Prompt-injection scan adapter and local fake tests
@@ -327,7 +329,8 @@ The reactor modules are published to Maven Central under the `ai.covia`
 groupId. `ai.covia:covia-core`, `ai.covia:covia-python`, `ai.covia:venue`, and
 `ai.covia:workbench` are ordinary library artifacts (along with the
 `ai.covia:covia` parent POM). The operator-facing `covia-python-adapter`,
-`covia-sql`, `covia-telegram`, `covia-discord`, `covia-sonnylabs`, `covia-documents` and
+`covia-sql`, `covia-telegram`, `covia-discord`, `covia-whatsapp`, `covia-slack`,
+`covia-sonnylabs`, `covia-documents` and
 `covia-claude-code` artifacts are loadable venue modules rather than dependencies of
 the standard venue. Their slim jars are published so an embedding host can
 depend on a module through Maven; the shaded `-module.jar`s are GitHub Releases
@@ -413,6 +416,10 @@ Both snapshot and stable releases include:
 - `covia-telegram-<version>-module.jar.sha256` - SHA-256 checksum
 - `covia-discord-<version>-module.jar` - Optional Discord bot venue module
 - `covia-discord-<version>-module.jar.sha256` - SHA-256 checksum
+- `covia-whatsapp-<version>-module.jar` - Optional WhatsApp Cloud API venue module
+- `covia-whatsapp-<version>-module.jar.sha256` - SHA-256 checksum
+- `covia-slack-<version>-module.jar` - Optional Slack Events API venue module
+- `covia-slack-<version>-module.jar.sha256` - SHA-256 checksum
 - `covia-sonnylabs-<version>-module.jar` - Optional SonnyLabs scanning venue module
 - `covia-sonnylabs-<version>-module.jar.sha256` - SHA-256 checksum
 - `covia-documents-<version>-module.jar` - Optional documents (PDF/Office text) venue module

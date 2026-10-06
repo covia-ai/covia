@@ -5,6 +5,7 @@ import java.util.Base64;
 import java.util.Objects;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.BooleanSupplier;
 
 import convex.core.data.AString;
 import convex.core.data.Strings;
@@ -17,6 +18,8 @@ public final class ConversationSessions {
 	private final String root;
 	private final Function<String, String> legacyRead;
 	private final Consumer<String> legacyDelete;
+	private final Object mutationLock;
+	private final BooleanSupplier writable;
 
 	public ConversationSessions(AdapterWorkspace workspace, String root) {
 		this(workspace, root, key -> null, key -> { });
@@ -24,11 +27,23 @@ public final class ConversationSessions {
 
 	public ConversationSessions(AdapterWorkspace workspace, String root,
 			Function<String, String> legacyRead, Consumer<String> legacyDelete) {
+		this(workspace, root, legacyRead, legacyDelete, new Object(), () -> true);
+	}
+
+	/** Coordinate session writes with a binding's stop/delete lifecycle. */
+	public ConversationSessions(AdapterWorkspace workspace, String root, Object mutationLock, BooleanSupplier writable) {
+		this(workspace, root, key -> null, key -> { }, mutationLock, writable);
+	}
+
+	private ConversationSessions(AdapterWorkspace workspace, String root,
+			Function<String, String> legacyRead, Consumer<String> legacyDelete, Object mutationLock, BooleanSupplier writable) {
 		this.workspace = Objects.requireNonNull(workspace);
 		workspace.path(root + "/check");
 		this.root = root;
 		this.legacyRead = Objects.requireNonNull(legacyRead);
 		this.legacyDelete = Objects.requireNonNull(legacyDelete);
+		this.mutationLock = Objects.requireNonNull(mutationLock);
+		this.writable = Objects.requireNonNull(writable);
 	}
 
 	public String get(String conversation) {
@@ -43,13 +58,18 @@ public final class ConversationSessions {
 	}
 
 	public void put(String conversation, String session) {
-		workspace.write(path(conversation), Strings.create(Objects.requireNonNull(session)));
+		synchronized (mutationLock) {
+			if (writable.getAsBoolean()) workspace.write(path(conversation), Strings.create(Objects.requireNonNull(session)));
+		}
 	}
 
 	public void remove(String conversation) {
-		// Clean the old mapping first so a successful removal cannot resurrect it.
-		legacyDelete.accept(conversation);
-		workspace.delete(path(conversation));
+		synchronized (mutationLock) {
+			if (!writable.getAsBoolean()) return;
+			// Clean the old mapping first so a successful removal cannot resurrect it.
+			legacyDelete.accept(conversation);
+			workspace.delete(path(conversation));
+		}
 	}
 
 	private String path(String conversation) { return root + "/" + segment(conversation); }

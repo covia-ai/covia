@@ -1832,6 +1832,33 @@ fixed schema; tokens remain in `s/`, and user-managed content is not moved
 into it. These require `discord/manage`. The module also publishes
 `v/skills/adapters/discord` and `v/agents/templates/discord`.
 
+### WhatsApp and Slack text messaging
+
+The optional **covia-whatsapp** and **covia-slack** modules use signed HTTP
+callbacks at `/webhooks/<adapter>/<binding>`, with shared durable intake,
+ownership gates and conversation sessions. Both publish `send`, `create`,
+`delete` and `bots` operations and module-owned agent skills.
+
+- [WhatsApp setup](../../covia-whatsapp/README.md): Cloud API phone-number
+  bindings, Meta verification/signatures, numeric sender admission and text replies.
+- [Slack setup](../../covia-slack/README.md): workspace-installed apps, signed
+  Events API DMs/channel mentions, separate sender/channel admission and threads.
+
+Configure `adapters.<provider>.bots` with an owner and exactly one `agent` or
+`operation`. All credentials must be `s/NAME` references. `apiUrl` is an
+operator-only endpoint override (HTTPS, or HTTP on loopback for testing),
+never an operation parameter or public setting. `bots` returns the exact
+callback path; config bindings use `c-<name>`, runtime bindings an opaque
+owner-specific name. Runtime creation infers the owner from the caller and
+requires `<provider>/manage`; sends require `<provider>/send` on the binding.
+
+Both fail closed on empty admission lists, acknowledge only after durable
+acceptance and perform Jobs/replies asynchronously. Pending receipts resume;
+started receipts require inspection after an interruption and are never
+blindly replayed. The linked guides describe configuration changes, retention
+and supported provider features. These modules do not install OAuth flows,
+Slack Socket Mode, media handling or WhatsApp templates.
+
 ### Claude Code (covia-claude-code)
 
 The **covia-claude-code** module (`claudecode` adapter) lets agents and jobs

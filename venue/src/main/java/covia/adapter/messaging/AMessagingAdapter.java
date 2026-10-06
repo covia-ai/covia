@@ -186,7 +186,7 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 	public final synchronized R runner(String name) { return runners.get(name); }
 	public final synchronized R runner(AString owner, String name) { return runners.get(runtimeKey(owner, name)); }
 	private static String runtimeKey(AString owner, String name) { return owner + "#" + name; }
-	private synchronized List<R> runnerList() { return new ArrayList<>(runners.values()); }
+	protected final synchronized List<R> runnerList() { return new ArrayList<>(runners.values()); }
 
 	/** Drops the live binding, preserving its durable record for re-arming. */
 	protected final synchronized void forgetRuntimeBot(AString owner, String name) {

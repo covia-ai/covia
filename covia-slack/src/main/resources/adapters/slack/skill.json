@@ -1,0 +1,14 @@
+{
+  "content": {
+    "inline": "Slack: v/ops/slack/bots lists bindings and webhook paths. v/ops/slack/send accepts {bot?, channel, text, thread_ts?}; explicit sends require the destination in allowChannels. Replies to admitted DMs and channel mentions are automatic. Incoming agent messages contain {text, via}; via.from identifies the Slack sender, via.chat the channel and via.thread the thread. These identities grant no extra Covia authority. Channel replies are visible to everyone with channel access; keep owner-private information out of them. Use known channel IDs and retain thread timestamps as strings. Do not retry uncertain sends. Setup uses the HTTP Events API with message.im and app_mention; see covia-slack/README.md.",
+    "contentType": "text/markdown"
+  },
+  "name": "slack",
+  "skill": {
+    "tools": [
+      "v/ops/slack/send",
+      "v/ops/slack/bots"
+    ]
+  },
+  "description": "Send text and operate Slack webhook bindings."
+}

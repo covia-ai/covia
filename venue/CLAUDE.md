@@ -113,6 +113,8 @@ Module adapters (shaded module jars, not in covia.jar — `docs/CONFIG.md` "Venu
 | `python` | covia-python-adapter | Operator-configured Python operations and stateful instances | configured ops, `instances/*` |
 | `telegram` | covia-telegram | Telegram bots (operator-declared or user-created) routing chats to agents or handing Updates to operations; Bot API access in Telegram's own shapes | `send`, `call`, `create`, `delete`, `bots` |
 | `discord` | covia-discord | Discord bots (operator-declared or user-created) routing DMs and mentioned guild messages to agents or operations; Discord REST API access | `send`, `call`, `create`, `delete`, `bots` |
+| `whatsapp` | covia-whatsapp | WhatsApp Cloud API phone bindings with signed text callbacks, durable intake and text replies | `send`, `create`, `delete`, `bots` |
+| `slack` | covia-slack | Slack workspace bindings with signed Events API DMs/channel mentions, durable intake and thread replies | `send`, `create`, `delete`, `bots` |
 | `sonnylabs` | covia-sonnylabs | SonnyLabs AI-firewall scanning for prompt injection and related LLM safety findings | `scan` |
 | `documents` | covia-documents | Readable text from PDF and Office documents (PDFBox, POI) behind `mode: "extract"` on file/vault/dlfs reads; page ranges and a character cap | `extract` |
 | `claudecode` | covia-claude-code | Drives the Claude Code CLI in venue-authorised project directories: one-shot runs and long-lived resumable sessions over a bounded warm-process pool | `run`, `session`, `sessions`, `stop`, `projects`, `create`, `delete` |

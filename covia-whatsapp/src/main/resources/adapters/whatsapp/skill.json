@@ -1,0 +1,14 @@
+{
+  "content": {
+    "inline": "WhatsApp Cloud API: use v/ops/whatsapp/bots to find bindings and webhook paths; v/ops/whatsapp/send accepts {bot?, to, text, reply_to?}. Only admitted numeric WhatsApp IDs are supported. Incoming agent messages contain {text, via}; via.from is the authenticated sender, and grants no additional Covia authority. A reply is delivered to that sender. Text sends are subject to the customer-service window; templates, media and OAuth onboarding are outside this module. Do not retry an uncertain send. Operators configure secret references, the business account, phone-number ID and API version; see covia-whatsapp/README.md.",
+    "contentType": "text/markdown"
+  },
+  "name": "whatsapp",
+  "skill": {
+    "tools": [
+      "v/ops/whatsapp/send",
+      "v/ops/whatsapp/bots"
+    ]
+  },
+  "description": "Send text and operate WhatsApp webhook bindings."
+}

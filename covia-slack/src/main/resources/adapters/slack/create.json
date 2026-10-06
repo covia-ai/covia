@@ -1,0 +1,95 @@
+{
+  "operation": {
+    "adapter": "slack:create",
+    "output": {
+      "type": "object"
+    },
+    "input": {
+      "required": [
+        "name",
+        "token",
+        "signingSecret",
+        "appId",
+        "teamId",
+        "botUserId"
+      ],
+      "additionalProperties": false,
+      "type": "object",
+      "oneOf": [
+        {
+          "required": [
+            "agent"
+          ]
+        },
+        {
+          "required": [
+            "operation"
+          ]
+        }
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "token": {
+          "type": "string",
+          "pattern": "^/?s/[A-Za-z0-9_.-]+$"
+        },
+        "agent": {
+          "type": "string",
+          "minLength": 1
+        },
+        "operation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reply": {
+          "type": [
+            "boolean",
+            "string"
+          ]
+        },
+        "allow": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[UW][A-Z0-9]+$"
+          },
+          "description": "Provider user IDs admitted to this binding; empty denies everyone unless open is true."
+        },
+        "open": {
+          "type": "boolean",
+          "default": false
+        },
+        "signingSecret": {
+          "type": "string",
+          "pattern": "^/?s/[A-Za-z0-9_.-]+$"
+        },
+        "appId": {
+          "type": "string"
+        },
+        "teamId": {
+          "type": "string"
+        },
+        "botUserId": {
+          "type": "string"
+        },
+        "enterpriseId": {
+          "type": "string"
+        },
+        "allowChannels": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[CDG][A-Z0-9]+$"
+          },
+          "description": "Channels allowed for mentions and explicit outbound sends. Sender admission alone does not authorize channel publication."
+        }
+      }
+    },
+    "readOnly": false
+  },
+  "name": "Create Slack binding",
+  "description": "Create a durable caller-owned Slack binding. All credentials must be secret references; user is implicit. Requires slack/manage. Returns its webhookPath."
+}

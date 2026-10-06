@@ -1,0 +1,36 @@
+{
+  "operation": {
+    "adapter": "whatsapp:send",
+    "output": {
+      "type": "object"
+    },
+    "input": {
+      "required": [
+        "to",
+        "text"
+      ],
+      "additionalProperties": false,
+      "type": "object",
+      "properties": {
+        "bot": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string",
+          "pattern": "^[0-9]{5,20}$"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "reply_to": {
+          "type": "string"
+        }
+      }
+    },
+    "readOnly": false
+  },
+  "name": "Send WhatsApp text",
+  "description": "Send a WhatsApp text to an admitted phone-number ID. Requires whatsapp/send on the binding. Meta enforces the customer-service window; this operation does not send templates. A failure can leave delivery uncertain and must not be automatically retried."
+}

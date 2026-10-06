@@ -1,0 +1,93 @@
+{
+  "operation": {
+    "adapter": "whatsapp:create",
+    "output": {
+      "type": "object"
+    },
+    "input": {
+      "required": [
+        "name",
+        "token",
+        "appSecret",
+        "verifyToken",
+        "phoneNumberId",
+        "businessAccountId",
+        "apiVersion"
+      ],
+      "additionalProperties": false,
+      "type": "object",
+      "oneOf": [
+        {
+          "required": [
+            "agent"
+          ]
+        },
+        {
+          "required": [
+            "operation"
+          ]
+        }
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "token": {
+          "type": "string",
+          "pattern": "^/?s/[A-Za-z0-9_.-]+$"
+        },
+        "agent": {
+          "type": "string",
+          "minLength": 1
+        },
+        "operation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reply": {
+          "type": [
+            "boolean",
+            "string"
+          ]
+        },
+        "allow": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9]{5,20}$"
+          },
+          "description": "Provider user IDs admitted to this binding; empty denies everyone unless open is true."
+        },
+        "open": {
+          "type": "boolean",
+          "default": false
+        },
+        "appSecret": {
+          "type": "string",
+          "pattern": "^/?s/[A-Za-z0-9_.-]+$"
+        },
+        "verifyToken": {
+          "type": "string",
+          "pattern": "^/?s/[A-Za-z0-9_.-]+$"
+        },
+        "phoneNumberId": {
+          "type": "string",
+          "pattern": "^[0-9]+$"
+        },
+        "businessAccountId": {
+          "type": "string",
+          "pattern": "^[0-9]+$"
+        },
+        "apiVersion": {
+          "pattern": "^v[0-9]+\\.[0-9]+$",
+          "type": "string",
+          "description": "Explicit supported Graph API version selected by the operator."
+        }
+      }
+    },
+    "readOnly": false
+  },
+  "name": "Create WhatsApp binding",
+  "description": "Create a durable caller-owned WhatsApp binding. All credentials must be secret references; user is implicit. Requires whatsapp/manage. Returns its webhookPath."
+}

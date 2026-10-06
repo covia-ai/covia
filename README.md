@@ -262,6 +262,8 @@ java -jar venue/target/covia.jar
 | `covia-sql` | Optional loadable SQL adapter module |
 | `covia-telegram` | Optional loadable Telegram bot module — operator-declared bots route chats to agents, agents send Telegram messages |
 | `covia-discord` | Optional loadable Discord bot module — operator-declared bots route channels to agents, agents send Discord messages |
+| `covia-whatsapp` | Optional [WhatsApp Cloud API module](covia-whatsapp/README.md) — signed text intake, agent/operation routing and text sends |
+| `covia-slack` | Optional [Slack module](covia-slack/README.md) — signed Events API DMs/channel mentions, threaded conversations and text sends |
 | `covia-sonnylabs` | Optional loadable SonnyLabs module — tests prompts and LLM-facing content for prompt injection and related safety findings |
 | `covia-claude-code` | Optional loadable Claude Code module — drives the Claude Code CLI in venue-authorised project directories (runs and resumable sessions) |
 

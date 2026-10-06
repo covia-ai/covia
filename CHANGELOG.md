@@ -67,6 +67,11 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Added
 
+- Optional WhatsApp Cloud API and Slack Events API text-messaging modules,
+  sharing durable webhook intake, caller-owned bindings and conversation
+  sessions. Both verify provider signatures and deduplicate events; Slack
+  preserves threads and separates sender admission from channel publication.
+
 - `agent:query` answers one-off questions using optional session context without
   appending conversation turns. Callers can request captured execution steps.
 - `agent:summarise` stores timestamped results by exact instruction and reuses

@@ -1,0 +1,23 @@
+{
+  "operation": {
+    "adapter": "whatsapp:delete",
+    "output": {
+      "type": "object"
+    },
+    "input": {
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false,
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "readOnly": false
+  },
+  "name": "Delete WhatsApp binding",
+  "description": "Stop and delete a caller-owned runtime binding, including its sessions and receipts. Requires whatsapp/manage. Config bindings must be removed from venue configuration."
+}

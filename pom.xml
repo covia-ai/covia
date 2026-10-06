@@ -75,6 +75,8 @@
 		<module>covia-sql</module>
 		<module>covia-telegram</module>
 		<module>covia-discord</module>
+		<module>covia-whatsapp</module>
+		<module>covia-slack</module>
 		<module>covia-sonnylabs</module>
 		<module>covia-documents</module>
 		<module>covia-claude-code</module>
