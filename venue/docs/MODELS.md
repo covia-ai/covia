@@ -122,7 +122,7 @@ and `v/agents/templates/`, installed through the focused
 
 ```
 v/models/anthropic/claude-sonnet-5-5
-v/models/anthropic/claude-haiku-4-5
+v/models/anthropic/claude-haiku-5-5
 v/models/openai/gpt-5.6-terra
 v/models/gemini/gemini-3.6-flash
 v/models/ollama/qwen2.5:7b
@@ -234,7 +234,7 @@ operation facet as references into the catalog:
     "balanced":    "v/models/anthropic/claude-sonnet-5-5",
     "quality":     "v/models/anthropic/claude-opus-5-5",
     "longRunning": "v/models/anthropic/claude-fable-5-1",
-    "economical":  "v/models/anthropic/claude-haiku-4-5"
+    "economical":  "v/models/anthropic/claude-haiku-5-5"
   }
 }
 ```

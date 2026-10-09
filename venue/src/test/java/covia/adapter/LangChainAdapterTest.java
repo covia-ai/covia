@@ -1809,7 +1809,7 @@ public class LangChainAdapterTest {
 		assertEquals("anthropic", RT.getIn(entry, "provider").toString());
 		assertEquals("ANTHROPIC_API_KEY", RT.getIn(entry, "keySecret").toString());
 		assertEquals("claude-sonnet-5-5", RT.getIn(entry, "defaultModel").toString());
-		assertEquals("claude-haiku-4-5",
+		assertEquals("claude-haiku-5-5",
 			RT.getIn(entry, "recommendations", "economical").toString());
 		assertEquals(convex.core.data.prim.CVMBool.FALSE, RT.getIn(entry, "ready"));
 

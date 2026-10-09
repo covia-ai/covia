@@ -17,7 +17,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   `AAdapter.start()` after assembly; readiness continuations run after activation.
 
 - Anthropic defaults move to Claude Sonnet 5.5, Opus 5.5, Fable 5.1 and
-  Haiku 4.5; the Claude 5 models stay in the catalog.
+  Haiku 5.5; the Claude 5 and Haiku 4.5 models stay in the catalog.
 
 - Anthropic structured output uses `output_config.format` instead of forced
   tool choice, which current Claude models reject.

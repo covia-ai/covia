@@ -27,13 +27,14 @@
 				"balanced": "claude-sonnet-5-5",
 				"quality": "claude-opus-5-5",
 				"longRunning": "claude-fable-5-1",
-				"economical": "claude-haiku-4-5"
+				"economical": "claude-haiku-5-5"
 			},
 			"models": [
 				{"id": "claude-sonnet-5-5", "tags": ["balanced"]},
 				{"id": "claude-opus-5-5", "tags": ["quality"]},
 				{"id": "claude-fable-5-1", "default": {"maxTokens": 16000}, "tags": ["long-running"]},
-				{"id": "claude-haiku-4-5", "tags": ["economical"]},
+				{"id": "claude-haiku-5-5", "tags": ["economical"]},
+				{"id": "claude-haiku-4-5", "tags": ["previous"]},
 				{"id": "claude-sonnet-5", "tags": ["previous"]},
 				{"id": "claude-opus-5", "tags": ["previous"]},
 				{"id": "claude-fable-5", "default": {"maxTokens": 16000}, "tags": ["previous"]},
