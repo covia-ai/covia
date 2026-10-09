@@ -35,7 +35,7 @@ class ClaudeCodeModuleIT {
 			"logging must resolve parent-first from the venue");
 		assertTrue(containsPrefix(moduleJar, "covia/adapter/claudecode/"),
 			"the adapter classes must be bundled");
-		assertTrue(zipHasEntry(moduleJar, "skills/claudecode.json"),
+		assertTrue(zipHasEntry(moduleJar, "adapters/claudecode/skill.json"),
 			"the module-shipped agent skill must be bundled");
 		Path log = temp.resolve("module-smoke.log");
 
