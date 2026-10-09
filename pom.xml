@@ -4,7 +4,7 @@
 	<modelVersion>4.0.0</modelVersion>
 	<groupId>ai.covia</groupId>
 	<artifactId>covia</artifactId>
-	<version>0.9.9</version>
+	<version>0.9.10-SNAPSHOT</version>
 	<packaging>pom</packaging>
 
 	<name>Covia</name>
