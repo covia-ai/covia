@@ -223,8 +223,8 @@ which version wins during migration and make repeated migration idempotent.
 
 ## Messaging adapters and webhook ingress
 
-`covia.adapter.messaging` is the provider-independent support used by Telegram
-and Discord. These classes live in the venue API; optional modules depend on
+`covia.adapter.messaging` is the provider-independent support used by the Telegram,
+Discord, WhatsApp and Slack modules. These classes live in the venue API; optional modules depend on
 them with `provided` scope and do not bundle their own copies.
 
 - `AMessagingAdapter<S, R>` owns config/runtime bot registration, reconciliation,
@@ -445,7 +445,7 @@ Optional adapters should be separate Maven modules when operators may choose
 whether to install their dependency tree. A module:
 
 - depends on `venue` with `provided` scope;
-- shades only its own runtime dependencies into an attached `*-module.jar`;
+- shades only its own runtime dependencies into a `*-module.jar` written beside the slim jar (not attached, so Maven Central receives only the slim jar);
 - excludes Covia, Convex, SLF4J, and Logback platform classes;
 - declares every adapter in `META-INF/services/covia.adapter.AAdapter`;
 - uses the services resource transformer when shading;

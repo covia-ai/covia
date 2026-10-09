@@ -1283,6 +1283,20 @@ public class AgentState extends ALatticeComponent<ACell> {
 		return SUSPENDED.equals(RT.ensureString(before.get(K_STATUS)));
 	}
 
+	/**
+	 * Atomic CAS: SLEEPING (or a stale RUNNING marker) → RUNNING. Returns false
+	 * when the agent is suspended or terminated, so an administrative stop that
+	 * landed after the caller's status read is never overwritten.
+	 */
+	public boolean tryRun() {
+		AMap<AString, ACell> before = getAndUpdate(r -> {
+			AString cur = RT.ensureString(r.get(K_STATUS));
+			return (SLEEPING.equals(cur) || RUNNING.equals(cur)) ? r.assoc(K_STATUS, RUNNING) : r;
+		});
+		AString was = RT.ensureString(before.get(K_STATUS));
+		return SLEEPING.equals(was) || RUNNING.equals(was);
+	}
+
 	/** Sets SUSPENDED status with error message. */
 	public void suspend(AString error) {
 		update(r -> r.assoc(K_ERROR, error).assoc(K_STATUS, SUSPENDED));

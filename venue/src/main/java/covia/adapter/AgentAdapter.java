@@ -990,7 +990,7 @@ public class AgentAdapter extends AAdapter {
 	 */
 	static AString rawApiKeyWarning(AMap<AString, ACell> config) {
 		if (config == null) return null;
-		AString apiKey = RT.ensureString(config.get(Strings.intern("apiKey")));
+		AString apiKey = RT.ensureString(config.get(K_API_KEY));
 		if (apiKey == null) return null;
 		String v = apiKey.toString();
 		if (v.startsWith("s/") || v.startsWith("/s/")) return null; // secret reference
@@ -3338,7 +3338,13 @@ public class AgentAdapter extends AAdapter {
 		// attributable to the agent rather than to the human who owns it.
 		final RequestContext agentCtx = RequestContext.ofAgent(ownerDID, agentId);
 		try {
-			agent.setStatus(AgentState.RUNNING);
+			if (!agent.tryRun()) {
+				// Suspended or terminated since the status read above: an
+				// administrative stop is never overwritten with RUNNING.
+				runningLoops.remove(key, mine);
+				mine.complete(null);
+				return null;
+			}
 			engine.agentEvents().status(ownerDID, agentId, AgentState.RUNNING, null);
 			final CompletableFuture<ACell> finalCompletion = mine;
 			Thread.ofVirtual().start(
@@ -4126,7 +4132,7 @@ public class AgentAdapter extends AAdapter {
 		for (Throwable t = failure; t != null; t = t.getCause()) {
 			if (t instanceof TimeoutException) timeout = true;
 			String message = t.getMessage();
-			if (message != null && message.startsWith("LLM call timed out after ")) {
+			if (message != null && message.startsWith(AbstractLLMAdapter.LLM_TIMEOUT_PREFIX)) {
 				llmFailure = true;
 			}
 		}

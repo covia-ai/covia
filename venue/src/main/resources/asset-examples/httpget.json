@@ -18,6 +18,13 @@
 					"description": "The URL to make a GET request to",
 					"defaultValue": "https://httpbin.org/get"
 				},
+				"method": {
+					"type": "string",
+					"description": "HTTP method, default GET. The adapter honours an override (POST, PUT, PATCH, DELETE) on any http operation; a capability grant on this operation therefore covers every verb"
+				},
+				"body": {
+					"description": "Optional request body, serialised as JSON"
+				},
 				"headers": {
 					"type": "object",
 					"description": "Optional HTTP headers to include in the request. A User-Agent is sent when none is supplied — the venue's own, published at v/info/adapters/http — and an explicit one always wins."
@@ -56,6 +63,13 @@
 				"body": {
 					"type": "string",
 					"description": "The response body from the HTTP request"
+				},
+				"method": {
+					"type": "string",
+					"description": "HTTP method, default GET. The adapter honours an override (POST, PUT, PATCH, DELETE) on any http operation; a capability grant on this operation therefore covers every verb"
+				},
+				"body": {
+					"description": "Optional request body, serialised as JSON"
 				},
 				"headers": {
 					"type": "object",

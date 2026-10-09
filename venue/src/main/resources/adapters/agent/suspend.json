@@ -1,6 +1,6 @@
 {
 	"name": "Suspend Agent",
-	"description": "Manually suspends an agent, preventing any future runs until explicitly resumed. If the agent is currently running, the current run will complete but no further runs will start.",
+	"description": "Manually suspends an agent, preventing any future runs until explicitly resumed. A transition in flight is cancelled; state, sessions and history are preserved.",
 	"dateCreated": "2026-03-07T00:00:00Z",
 	"operation": {
 		"adapter": "agent:suspend",

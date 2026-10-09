@@ -522,7 +522,7 @@ final class ClaudeSession {
 
 	private void cleanupTemp() {
 		for (Path f : tempFiles) {
-			try { Files.deleteIfExists(f); } catch (IOException ignored) { }
+			try { Files.deleteIfExists(f); } catch (IOException e) { log.debug("Could not delete {}", f, e); }
 		}
 		tempFiles.clear();
 	}
@@ -539,6 +539,8 @@ final class ClaudeSession {
 				state = State.STOPPED;
 				failQueue("Claude Code session stopped: " + reason);
 			}
+			// Option files written before a failed start are owned by nobody else.
+			cleanupTemp();
 			return;
 		}
 		log.info("Stopping Claude Code process {} in project '{}': {}", p.pid(), project.name(), reason);

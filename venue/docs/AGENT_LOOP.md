@@ -83,7 +83,7 @@ The agent's value is a plain map. Every write replaces the entire map atomically
 | `ts` | long | Ratcheted timestamp of the last write to the agent record. Metadata, not a merge discriminator. |
 | `status` | string | `"SLEEPING"` \| `"RUNNING"` \| `"SUSPENDED"` \| `"TERMINATED"`. `RUNNING` is a persisted execution marker, validated against the live executor by the hosting venue. |
 | `config` | map | Framework-level configuration. Includes `operation` (default transition op). |
-| `state` | any | User-defined state. Opaque to the framework. Passed to and returned from the transition function. Transition-function-specific configuration (e.g. LLM provider, model) lives here, not in `config`. Set at creation via optional initial state. Conversation content lives on the session record (`session.frames[0].conversation`), not here. |
+| `state` | any | User-defined state. Opaque to the framework. Passed to and returned from the transition function. Transition-function configuration (LLM operation, model, system prompt, tools, caps) lives in `config`, not here (#144). Set at creation via optional initial state. Conversation content lives on the session record (`session.frames[0].conversation`), not here. |
 | `tasks` | index | `Index<Blob, ACell>` of inbound request Job IDs. Persistent until resolved. Ordered by Job ID. |
 | `pending` | index | `Index<Blob, ACell>` of outbound Job IDs the agent is waiting on. Ordered by Job ID. |
 | `sessions` | index | `Index<Blob, ACell>` of sessions. Each session contains `frames` (the goal-tree frame stack — `frames[0].conversation` is the canonical transcript), pending messages, metadata, and per-session state (`c/`). See AGENT_SESSIONS.md and GOAL_TREE.md. |
@@ -209,7 +209,7 @@ stale; startup clears it before scheduling durable work.
 | Status | Meaning | Run loop | Mutations allowed |
 |--------|---------|----------|-------------------|
 | `SLEEPING` | Durable runnable/idle state. | `wakeAgent` may start a live attempt. | All except config mutation while a live attempt exists. |
-| `RUNNING` | Persisted dirty marker: an attempt was launched. The hosting venue validates it against the live launcher slot. | Running when the matching slot is live; otherwise stale until startup cleanup. | Task/session appends are allowed. In-place config mutation is rejected using the live executor check. |
+| `RUNNING` | Persisted dirty marker: an attempt was launched. The hosting venue validates it against the live launcher slot. | Running when the matching slot is live; otherwise stale until startup cleanup. | Task/session appends are allowed. `agent:update` applies to future transitions; a started transition keeps its fire-time config. |
 | `SUSPENDED` | Last run failed with an error. Dormant — does not auto-retry. State, pending messages, sessions, and history are preserved; failed tasks are drained. | Not running. Resume via `tryResume` to keep the record, or delete it with `remove:true` before creating a replacement. | All. |
 | `TERMINATED` | Logically deleted. Slot still occupies the namespace key (so the ID is reserved) but the agent is dead. | Cannot run. `agent:request` / `agent:message` / `agent:trigger` all fail. | None. Remove the record explicitly with `agent:delete remove:true` before reusing the ID. |
 
@@ -622,7 +622,7 @@ in order:
 2. **User's secret store** (`/s/`), using the secret name declared in the
    operation's metadata (`operation.secretKey`).
 
-The agent's `config` does not contain API keys. The operation metadata owns the
+The agent's `config` holds no key material: a `config.apiKey` is a secret reference (`s/NAME`) resolved at the call. The operation metadata owns the
 credential concern — the agent specifies which operation to use, and the
 operation declares which secret it needs. This keeps agent configuration clean
 and credentials in the encrypted secret store.
@@ -661,10 +661,10 @@ The `config` map supports:
 - `operation` — default transition operation (e.g. `"llmagent:chat"`)
 - Other framework configuration as needed
 
-Initial state allows the creator to seed transition-function-specific configuration
-(e.g. LLM provider, model, system prompt, capabilities) that the transition
-function will read and preserve across runs. This keeps the framework `config`
-clean of transition-function internals, and allows an agent to switch transition
+Initial state seeds transition-function runtime data (loads and similar) that the
+transition function reads and preserves across runs; provider, model, system
+prompt, tools and capabilities are `config` (#144). This keeps `state`
+free of framework fields, and allows an agent to switch transition
 functions.
 
 **Inputs:**
@@ -1036,7 +1036,7 @@ subscribes to the Job for status updates, same as any other Covia job.
 
 ### 6.5 Credential resolution
 
-API keys are not stored in agent config. The operation metadata declares a
+Key material is not stored in agent config; `config.apiKey` is a secret reference. The operation metadata declares a
 `secretKey` name (e.g. `"OPENAI_API_KEY"`); at runtime the adapter looks this
 up in the caller's encrypted secret store (`/s/`). An optional plaintext
 `apiKey` input parameter exists for testing only. No environment variable
@@ -1050,21 +1050,7 @@ See GRID_LATTICE_DESIGN.md §12 for the full roadmap.
 
 | Phase | Focus | Status |
 |-------|-------|--------|
-| **0** | Per-user namespace (`"g"`, `"s"`), SecretStore | ✓ Complete |
-| **A** | AgentState wrapper, AgentAdapter (create/message/run), lattice restructure | ✓ Complete |
-| **B** | LLM transition function (`llmagent:chat`), conversation history, secret store integration, three-level architecture (§3) | ✓ Complete |
-| **B2** | Decouple level 2 from LangChain4j — level 3 via grid operation, message-format API, tool call loop | ✓ Complete |
-| **B3a** | Structured output / responseFormat for level 3, LangChainAdapter unit tests | ✓ Complete |
-| **B3b** | Tool parameter schema mapping refinements (enum, array items, nested objects) | ✓ Complete |
-| **B4** | MCP-first agent experience: default transition op from config, result in run output | ✓ Complete |
-| **B5** | Task-based agent model: `agent:request`, tasks/pending queues, scheduling | ✓ Complete |
-| **B6** | Agent query/list operations: `agent:query`, `agent:list`, RequestContext refactor, Index for tasks/pending | ✓ Complete |
-| **B7** | Lattice-native run loop: per-agent lock, status-based exclusion, merge-at-write-time, `wakeAgent`, `Job.awaitResult(timeout)` | ✓ Complete |
-| **B10** | Agent workspace CRUD: `/w/`, `/o/`, `/h/` namespaces, deep paths, vector indexing, JSONValueLattice, DID URL cross-user paths, default tools | ✓ Complete |
-| **B11** | `/o/` operation resolution, `agent:create` default tool, `covia:adapters`, langchain cleanup, JobManager simplification | ✓ Complete |
-| **C1** | UCAN proofs: owner-signed tokens plus venue-signed custodial tokens (`ucan:issue`), per-request proof verification, full DID URL resources, `Capability.covers()`, cross-user reads with valid proof chain | ✓ Complete |
 | **C2** | Delegation chains — proof chain walking, attenuation validation, agent sub-delegation, revocation | Planned |
-| **D** | HITL requests (`/h/` namespace), cross-user messaging | Planned |
 | **E** | Agent forking, cross-venue migration, federated UCAN validation | Planned |
 
 ---

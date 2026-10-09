@@ -179,7 +179,7 @@ public class ClaudeCodeAdapter extends AAdapter implements AutoCloseable {
 		installAsset("claudecode/projects", "/adapters/claudecode/projects.json");
 		installAsset("claudecode/create", "/adapters/claudecode/create.json");
 		installAsset("claudecode/delete", "/adapters/claudecode/delete.json");
-		installSkill("adapters/claudecode", "/skills/claudecode.json");
+		installSkill("adapters/claudecode", "/adapters/claudecode/skill.json");
 	}
 
 	// ------------------------------------------------------------ configuration

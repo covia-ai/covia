@@ -133,7 +133,7 @@ public class DocumentsAdapter extends AAdapter implements TextExtractor {
 
 	@Override
 	protected void installAssets() {
-		installSkill("data/documents", "/skills/documents.json");
+		installSkill("data/documents", "/adapters/documents/skill.json");
 		installAsset("documents/extract", "/adapters/documents/extract.json");
 	}
 

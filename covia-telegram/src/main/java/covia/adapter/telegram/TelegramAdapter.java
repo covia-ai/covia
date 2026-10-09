@@ -140,8 +140,8 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 		installAsset("telegram/bots", "/adapters/telegram/bots.json");
 		// The skills travel with the capability: ordinary Telegram use stays
 		// lightweight, while the parent reveals bot-management authority on demand.
-		installSkill("adapters/telegram", "/skills/telegram.json");
-		installSkill("adapters/telegram-bot-management", "/skills/telegram-bot-management.json");
+		installSkill("adapters/telegram", "/adapters/telegram/skill.json");
+		installSkill("adapters/telegram-bot-management", "/adapters/telegram/bot-management-skill.json");
 		// …and the agent template for a bot-facing assistant: v/agents/templates/telegram
 		// (mirrored at v/adapters/telegram/templates/telegram), gone with the module.
 		installAgentTemplate("telegram", "/agent-templates/telegram.json");

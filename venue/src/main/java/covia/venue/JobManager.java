@@ -959,13 +959,6 @@ public class JobManager {
 
 	// ========== Job Lifecycle Control ==========
 
-	public void updateJobStatus(Blob jobID, AMap<AString, ACell> newData) {
-		Job job;
-		job = activeJobs.get(jobID);
-		if (job == null) return;
-		job.updateData(newData);
-	}
-
 	/**
 	 * Cancels a Job with request context.
 	 * @throws AuthException if the caller does not own the job
@@ -1012,14 +1005,6 @@ public class JobManager {
 		return job.getData();
 	}
 
-	public AMap<AString, ACell> pauseJob(Blob id) {
-		Job job = activeJobs.get(id);
-		if (job == null) return null;
-		AString caller = RT.ensureString(job.getData().get(Fields.CALLER));
-		RequestContext ctx = (caller != null) ? RequestContext.of(caller) : engine.venueContext();
-		return pauseJob(id, ctx);
-	}
-
 	/**
 	 * Resumes a paused Job with request context.
 	 * @throws AuthException if the caller does not own the job
@@ -1032,15 +1017,6 @@ public class JobManager {
 		if (job == null) return null;
 		job.resume();
 		return job.getData();
-	}
-
-	public AMap<AString, ACell> resumeJob(Blob id) {
-		Job job;
-		job = activeJobs.get(id);
-		if (job == null) return null;
-		AString caller = RT.ensureString(job.getData().get(Fields.CALLER));
-		RequestContext ctx = (caller != null) ? RequestContext.of(caller) : engine.venueContext();
-		return resumeJob(id, ctx);
 	}
 
 	/**
@@ -1077,7 +1053,7 @@ public class JobManager {
 	 * Delivers a message to a job's message queue with request context.
 	 * @throws AuthException if the caller does not own the job
 	 */
-	public int deliverMessage(Blob jobID, AMap<AString, ACell> message, RequestContext ctx) {
+	public void deliverMessage(Blob jobID, AMap<AString, ACell> message, RequestContext ctx) {
 		Job job = activeJobs.get(jobID);
 		if (job == null) {
 			// Not active: consult the caller's lattice so a job that has completed
@@ -1097,19 +1073,10 @@ public class JobManager {
 		if (!engine.getAccessControl().canAccessJob(ctx, job.getData())) {
 			throw new AuthException("Access denied to job: " + jobID.toHexString());
 		}
-		return deliverMessage(job, message, ctx.getCallerDID());
+		deliverMessage(job, message, ctx.getCallerDID());
 	}
 
-	/**
-	 * Delivers a message to an active job's message queue.
-	 */
-	public int deliverMessage(Blob jobID, AMap<AString, ACell> message, AString source) {
-		Job job = getJob(jobID);
-		if (job == null) throw new IllegalArgumentException("Job not found: " + jobID.toHexString());
-		return deliverMessage(job, message, source);
-	}
-
-	private int deliverMessage(Job job, AMap<AString, ACell> message, AString source) {
+	private void deliverMessage(Job job, AMap<AString, ACell> message, AString source) {
 		Blob jobID = job.getID();
 		if (job.isFinished()) throw new IllegalStateException("Job is in terminal state: " + jobID.toHexString());
 
@@ -1131,8 +1098,6 @@ public class JobManager {
 		if (adapter != null && adapter.supportsMultiTurn()) {
 			adapter.handleMessage(job, record);
 		}
-
-		return 0;
 	}
 
 	// ========== History ==========
@@ -1450,13 +1415,6 @@ public class JobManager {
 	}
 
 	// ========== Accessors ==========
-
-	/**
-	 * Gets the venue DID used for internal job ownership.
-	 */
-	public AString getVenueDID() {
-		return engine.getDIDString();
-	}
 
 	/**
 	 * Closes public top-level admission. Internal composition stays open so

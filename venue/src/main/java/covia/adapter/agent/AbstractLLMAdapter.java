@@ -59,6 +59,8 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	public static final AString K_LLM_OPERATION   = Strings.intern("llmOperation");
 	public static final AString K_MODEL           = Strings.intern("model");
 	public static final AString K_SYSTEM_PROMPT   = Strings.intern("systemPrompt");
+	/** Prefix of the timeout failure a run loop treats as recoverable (AgentAdapter). */
+	public static final String LLM_TIMEOUT_PREFIX = "LLM call timed out after ";
 	public static final AString K_URL             = Strings.intern("url");
 	public static final AString K_API_KEY         = Strings.intern("apiKey");
 	public static final AString K_CACHE           = Strings.intern("cache");
@@ -525,7 +527,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			result = invocation.get(llmTimeoutMs, TimeUnit.MILLISECONDS);
 		} catch (TimeoutException e) {
 			invocation.cancel(true);
-			JobFailedException failure = new JobFailedException("LLM call timed out after " + llmTimeoutMs
+			JobFailedException failure = new JobFailedException(LLM_TIMEOUT_PREFIX + llmTimeoutMs
 				+ "ms (" + llmOperation + ")");
 			failure.initCause(e);
 			throw failure;

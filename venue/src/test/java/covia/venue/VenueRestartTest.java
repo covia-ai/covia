@@ -233,7 +233,7 @@ public class VenueRestartTest {
 					"Pause job should still be PAUSED after restart");
 
 			// 4i: Unpause the job by delivering a message → should complete
-			engine2.jobs().deliverMessage(Blob.parse(pauseJobId), Maps.of("content", "resume"), engine2.getDIDString());
+			engine2.jobs().deliverMessage(Blob.parse(pauseJobId), Maps.of("content", "resume"), engine2.venueContext());
 			TestEngine.awaitCondition(() -> {
 				AMap<AString, ACell> data = engine2.jobs().getJobData(
 					Blob.parse(pauseJobId), engine2.venueContext());

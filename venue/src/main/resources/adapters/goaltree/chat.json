@@ -12,15 +12,23 @@
 				"state": { "description": "Previous runtime state (null on first run). Configuration (llmOperation, model, systemPrompt, tools, caps) arrives separately via 'config' (#144)." },
 				"messages": { "type": "array", "description": "Inbox messages to process" },
 				"tasks": { "type": "array", "description": "Pending task requests" },
-				"pending": { "type": "array", "description": "Pending job results" }
+				"pending": { "type": "array", "description": "Pending job results" },
+				"config": { "type": "object", "description": "Agent config at fire time: llmOperation, model, systemPrompt, tools, caps (#144)" },
+				"session": { "description": "The session this cycle runs in" },
+				"newInput": { "description": "Continuation input delivered to the picked task since the last cycle" },
+				"jobId": { "type": "string", "description": "The cycle's job id, for live timeline events" }
 			},
 			"required": ["agentId"]
 		},
 		"output": {
 			"type": "object",
 			"properties": {
-				"state": { "type": "object", "description": "Updated agent state" },
-				"result": { "type": "object", "description": "Contains 'response' with the root goal's result" }
+				"state": { "type": "object", "description": "Updated agent state, applied as a change against the fire-time snapshot" },
+				"response": { "type": "string", "description": "The root goal's result, when the cycle completed it" },
+				"error": { "type": "string", "description": "Why the cycle failed, when it did; exclusive with response" },
+				"cycle": { "type": "object", "description": "The cycle record appended to the agent timeline" },
+				"tokens": { "type": "object", "description": "Token usage of the cycle, when the model reported it" },
+				"frames": { "description": "Session frame stack after the cycle" }
 			}
 		}
 	}
