@@ -108,6 +108,7 @@ public class AAdapterInstallTest {
 		// must admit WARN for the appender to see the event.
 		ch.qos.logback.classic.Level previous = log.getLevel();
 		log.setLevel(ch.qos.logback.classic.Level.WARN);
+		log.setAdditive(false); // captured by the list appender only, never printed
 		try {
 			// A string input: warned, but published — an operation is not a tool.
 			assertNotNull(adapter.installAsset("probe/stringy", op("probe:stringy",
@@ -132,6 +133,7 @@ public class AAdapterInstallTest {
 		} finally {
 			log.detachAppender(captured);
 			log.setLevel(previous);
+			log.setAdditive(true);
 		}
 	}
 

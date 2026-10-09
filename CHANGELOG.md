@@ -174,6 +174,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Fixed
 
+- A request unwinding across venue shutdown (an MCP stream ended by close) no
+  longer syncs the lattice against the store that close is releasing.
 - `llmagent:chat`, `goaltree:chat`, `agent:suspend` and `http:get` describe
   the inputs they read and the outputs they emit.
 - Claude Code option files are removed when the CLI fails to start.

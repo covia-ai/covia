@@ -1127,7 +1127,10 @@ public class VenueServer {
 		// the connected lattice root after handling. Matching by endpoint role
 		// prevents an unrelated /api/* route from acquiring Covia persistence semantics.
 		routes.afterMatched(ctx -> {
-			if (VenueRouteFeature.syncsLattice(ctx.routeRoles())) {
+			// A handler unwinding across shutdown (an SSE stream ended by close) must
+			// not sync a store the same close sequence is releasing; close takes
+			// the final flush.
+			if (!closed.get() && VenueRouteFeature.syncsLattice(ctx.routeRoles())) {
 				engine.syncState();
 			}
 		});
