@@ -1828,6 +1828,7 @@ public class AgentAdapter extends AAdapter {
 
 		AMap<AString, ACell> summary = identify(target, Maps.of(
 			Fields.STATUS, observableStatus(target.ownerDID(), agentId, agent),
+			Fields.AWAITING, awaitingSummary(record),
 			Fields.CONFIG, record.get(AgentState.KEY_CONFIG)));
 
 		if (timeline != null) summary = summary.assoc(Strings.intern("timelineLength"), CVMLong.create(timeline.count()));
@@ -1843,6 +1844,22 @@ public class AgentAdapter extends AAdapter {
 			summary = summary.assoc(Fields.UNAVAILABLE_TOOLS, unavailable);
 		}
 		return summary;
+	}
+
+	/** Only visits this agent's pending job IDs; never scans venue jobs or history. */
+	private AMap<AString, ACell> awaitingSummary(AMap<AString, ACell> record) {
+		long input = 0, auth = 0;
+		if (record.get(AgentState.KEY_PENDING) instanceof Index<?, ?> pending) {
+			for (var entry : pending.entrySet()) {
+				if (!(entry.getKey() instanceof Blob id)) continue;
+				Job job = engine.jobs().getJob(id);
+				if (job == null) continue;
+				AString status = job.getStatus();
+				if (Status.INPUT_REQUIRED.equals(status)) input++;
+				else if (Status.AUTH_REQUIRED.equals(status)) auth++;
+			}
+		}
+		return Maps.of(Fields.INPUT, CVMLong.create(input), Fields.AUTH, CVMLong.create(auth));
 	}
 
 	/**
@@ -2019,6 +2036,7 @@ public class AgentAdapter extends AAdapter {
 						Fields.AGENT_ID, agentId,
 						Fields.ADDRESS, Strings.create(ctx.getUserDID() + "/g/" + agentId),
 						Fields.STATUS, status,
+						Fields.AWAITING, awaitingSummary(record),
 						Fields.TASKS, CVMLong.create(taskCount));
 					ACell error = record.get(AgentState.KEY_ERROR);
 					if (error != null) summary = summary.assoc(Fields.ERROR, error);

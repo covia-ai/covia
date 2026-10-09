@@ -111,11 +111,11 @@ by the run loop on the next transition cycle for that session and appended to
 `session.frames[0].conversation` as user turns. See AGENT_SESSIONS.md for the
 session model.
 
-The record also reserves a **pending** outbound-Job index. The run loop and
-context assembler can present entries already written there, but no generic
-async-invoke tool currently populates it or registers completion wakes
-(§3.4.2). HITL uses the session inbox instead, because its immediate receipt
-already completes the original tool exchange.
+The **pending** outbound-Job index holds job references for outstanding waits.
+HITL registers its request there until settlement, including after recovery;
+the Job owns the current status. HITL still delivers its answer through the
+session inbox, because its immediate receipt already completes the original
+tool exchange. No generic async-invoke tool is exposed yet (§3.4.2).
 
 ### 2.4 Timeline Entry
 
@@ -218,6 +218,17 @@ successful launcher install (SLEEPING→RUNNING), clean completion
 (RUNNING→SLEEPING), run-loop error (RUNNING→SUSPENDED), `agent:resume`
 (SUSPENDED→SLEEPING), and `agent:delete` (any→TERMINATED or absent). Startup
 clears a crash-stale RUNNING marker after confirming there is no live executor.
+
+Agent summaries (`agent:info`, `agent:list`, and their job-free REST reads)
+include `awaiting: {input, auth}` (#557). These count the agent's pending jobs in
+`INPUT_REQUIRED` or `AUTH_REQUIRED`, independently of its lifecycle
+status. They do not assert that the viewer is the intended responder. The counts
+are derived on each read: each pending ID gets one in-memory Job lookup. No
+derived counts are persisted or separately maintained. Cost is O(pending jobs)
+per agent, independent of other venue jobs and completed history, with no payload
+traversal. HITL removes the pending reference on settlement before delivering its
+session response. Existing job notifications can trigger a summary refresh; this adds no
+new agent status or event type.
 
 ### 2.6 Live events
 
@@ -464,11 +475,12 @@ run failed), but the Job result is durable. This matches how other side effects
 
 The transition input and context assembler understand an agent-level `pending`
 Job index and render resolved entries as `get_job_results`, but Covia does not
-currently expose a generic async-invoke harness tool that writes that index.
+currently expose a generic async-invoke harness tool.
 Ordinary operation tools remain synchronous and bounded by `toolCallTimeoutMs`.
 
 HITL is the deliberate long-lived exception (§6.3). A sessioned agent receives
-the durable request ID immediately; the HITL record remembers that session and
+the durable request ID immediately and the job is tracked in its pending index;
+the HITL record remembers that session and
 answer, rejection or expiry is delivered through its durable inbox, which wakes
 the normal run loop. This avoids pretending a human-timescale request is an
 ordinary synchronous tool call while leaving the broader async-operation design

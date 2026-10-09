@@ -169,12 +169,20 @@ public class HITLAdapterTest {
 		Job request = engine.jobs().getJob(Blob.fromHex(id.toString()));
 		assertNotNull(request);
 		assertEquals(Status.INPUT_REQUIRED, request.getStatus());
+		assertTrue(agent.getPending().containsKey(request.getID()));
+		AgentAdapter agents = (AgentAdapter) engine.getAdapter("agent");
+		assertEquals(Maps.of(Fields.INPUT, 1, Fields.AUTH, 0),
+			agents.agentInfo(ALICE, Strings.create("hitl-agent")).get(Fields.AWAITING),
+			"the real agent tool path must expose its parked HITL job");
 		AMap<AString, ACell> record = readRecord(ALICE, id.toString());
 		assertEquals(Strings.create("hitl-agent"), record.get(Hitl.AGENT));
 		assertEquals(Strings.create(sid.toHexString()), record.get(Fields.SESSION_ID));
 
 		respond(ALICE, Hitl.answer(id.toString()).answer("path", "left").build());
 		assertEquals(Status.COMPLETE, request.getStatus());
+		assertFalse(agent.getPending().containsKey(request.getID()));
+		assertEquals(Maps.of(Fields.INPUT, 0, Fields.AUTH, 0),
+			agents.agentInfo(ALICE, Strings.create("hitl-agent")).get(Fields.AWAITING));
 		TestEngine.awaitTimelineCount(agent, 1, 10000);
 		String conversation = RT.getIn(owner.agent("hitl-agent").getSession(sid),
 			Fields.FRAMES, CVMLong.ZERO, Strings.intern("conversation")).toString();
@@ -528,15 +536,20 @@ public class HITLAdapterTest {
 
 	@Test
 	public void testExpiry() {
-		Job job = request(ALICE, Hitl.request("quick")
+		AString agentId = Strings.create("expiry-agent");
+		AgentState agent = engine.getVenueState().users().ensure(ALICE_DID)
+			.ensureAgent(agentId, Maps.empty(), null);
+		Job job = request(RequestContext.ofAgent(ALICE_DID, agentId), Hitl.request("quick")
 			.ask(Hitl.approval("ok", "OK?")).timeout(1).build());
 		String id = job.getID().toHexString();
 		assertEquals(Status.INPUT_REQUIRED, job.getStatus());
+		assertTrue(agent.getPending().containsKey(job.getID()));
 
 		// The expiry timer fails the job; awaitResult surfaces it.
 		assertThrows(JobFailedException.class, () -> job.awaitResult(15000));
 		assertEquals(Status.FAILED, job.getStatus());
 		assertTrue(job.getErrorMessage().contains("expired"));
+		assertFalse(agent.getPending().containsKey(job.getID()));
 		assertEquals(Hitl.EXPIRED, readRecord(ALICE, id).get(Hitl.STATUS));
 
 		// ADVERSARIAL: responding to an expired request must fail.
@@ -556,5 +569,45 @@ public class HITLAdapterTest {
 			"the cancel hook marks the inbox record cancelled");
 		assertThrows(Exception.class, () -> respond(ALICE,
 			Hitl.answer(id).answer("ok", true).build()));
+	}
+
+	@Test
+	public void testRecoveryRestoresAgentPendingAndCancellationCleanup() {
+		Engine isolated = Engine.createTemp(null);
+		try {
+			Engine.addDemoAssets(isolated);
+			AString agentId = Strings.create("recover-hitl");
+			AgentState agent = isolated.getVenueState().users().ensure(ALICE_DID)
+				.ensureAgent(agentId, Maps.empty(), null);
+			Job original = isolated.jobs().invokeOperation("v/ops/hitl/request",
+				Hitl.request("Recover me").ask(Hitl.approval("ok", "OK?")).build(),
+				RequestContext.ofAgent(ALICE_DID, agentId));
+			assertEquals(Status.INPUT_REQUIRED, original.getStatus());
+			assertTrue(agent.getPending().containsKey(original.getID()));
+			Job interrupted = isolated.jobs().invokeOperation("v/ops/hitl/request",
+				Hitl.request("Interrupted").ask(Hitl.approval("ok", "OK?")).build(),
+				RequestContext.ofAgent(ALICE_DID, agentId));
+			interrupted.setStatus(Status.STARTED);
+			isolated.jobs().deleteJob(interrupted.getID());
+			// Restore from the persisted job, including the legacy case with no pending entry.
+			isolated.jobs().deleteJob(original.getID());
+			agent.removePending(original.getID());
+			isolated.jobs().recoverJobs();
+			assertFalse(agent.getPending().containsKey(interrupted.getID()),
+				"a job failed during recovery must also leave pending");
+			Job restored = isolated.jobs().getJob(original.getID());
+			assertNotNull(restored);
+			assertNotSame(original, restored);
+			assertTrue(agent.getPending().containsKey(restored.getID()));
+			AgentAdapter agents = (AgentAdapter) isolated.getAdapter("agent");
+			assertEquals(Maps.of(Fields.INPUT, 1, Fields.AUTH, 0),
+				agents.agentInfo(RequestContext.of(ALICE_DID), agentId).get(Fields.AWAITING));
+			restored.cancel();
+			assertFalse(agent.getPending().containsKey(restored.getID()));
+			assertEquals(Hitl.CANCELLED, isolated.getVenueState().users().get(ALICE_DID)
+				.getHitlRequest(Strings.create(restored.getID().toHexString())).get(Hitl.STATUS));
+		} finally {
+			isolated.close();
+		}
 	}
 }

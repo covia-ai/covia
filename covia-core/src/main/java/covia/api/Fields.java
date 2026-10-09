@@ -182,6 +182,9 @@ public class Fields {
 
 	// Agent related
 	public static final StringShort AGENT_ID = Strings.intern("agentId");
+	/** Derived counts of jobs awaiting input or authorisation. */
+	public static final StringShort AWAITING = Strings.intern("awaiting");
+	public static final StringShort AUTH = Strings.intern("auth");
 	public static final StringShort CONFIG = Strings.intern("config");
 	/** Target-side admission policy on an agent record (covia#447): who, besides
 	 *  the owner, may talk to the agent without a delegation — {@code "owner"},

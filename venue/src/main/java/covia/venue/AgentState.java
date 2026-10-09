@@ -1133,6 +1133,11 @@ public class AgentState extends ALatticeComponent<ACell> {
 		update(r -> r.assoc(K_PENDING, extractPending(r).assoc(jobId, snapshot)));
 	}
 
+	/** Removes an outbound wait whose result has been handled by its delivery path. */
+	public void removePending(Blob jobId) {
+		update(r -> r.assoc(K_PENDING, extractPending(r).dissoc(jobId)));
+	}
+
 	/**
 	 * Single-writer helper for per-thread wake scheduling. Writes
 	 * {@code wakeTime} on the named session or task record, then re-derives

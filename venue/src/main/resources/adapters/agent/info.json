@@ -22,6 +22,15 @@
 				"config": { "type": "object", "description": "Canonical merged agent config: transition/provider selection, prompt, tools, skills, context, loads, caps, outputs, and definition provenance where present" },
 				"timelineLength": { "type": "integer", "description": "Number of completed runs" },
 				"tasks": { "type": "integer", "description": "Number of pending tasks" },
+				"awaiting": {
+					"type": "object",
+					"description": "Pending jobs awaiting input or authorisation; derived on read from this agent's pending job references, independent of lifecycle status. Does not imply the viewer is the intended responder.",
+					"properties": {
+						"input": { "type": "integer", "minimum": 0 },
+						"auth": { "type": "integer", "minimum": 0 }
+					},
+					"required": ["input", "auth"]
+				},
 				"unavailableTools": { "type": "array", "description": "Configured operation tools currently missing or unreadable, with a reason for each" },
 				"error": { "type": "string", "description": "Last error message, if suspended" }
 			}
