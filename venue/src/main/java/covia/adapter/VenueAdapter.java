@@ -241,6 +241,7 @@ public class VenueAdapter extends AAdapter {
 
 		AMap<AString, ACell> access = Maps.of(
 			"public", config.isPublicAccess(),
+			"publicCaps", engine.getAuth().getPublicCapsMode(),
 			"userAutoCreate", config.isUserAutoCreate());
 		AMap<AString, ACell> protocols = Maps.of(
 			"rest", true,

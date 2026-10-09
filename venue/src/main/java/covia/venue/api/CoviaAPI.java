@@ -220,6 +220,7 @@ public class CoviaAPI extends ACoviaAPI {
 		Config config = engine().config();
 		result = result.assoc(Fields.ACCESS, Maps.of(
 			Strings.intern("public"), CVMBool.create(config.isPublicAccess()),
+			Strings.intern("publicCaps"), engine().getAuth().getPublicCapsMode(),
 			Strings.intern("userAutoCreate"), CVMBool.create(config.isUserAutoCreate())));
 
 		buildResult(ctx,200,result);

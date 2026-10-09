@@ -2042,6 +2042,12 @@ may take many minutes; clients poll and reconnect by job id.
 
 ## Agent-visible effective configuration
 
+`GET /api/v1/status` and `v/ops/venue/show-config` include `access.publicCaps`:
+`disabled`, `read-only`, `unrestricted` or `custom`. This summarises anonymous
+access without exposing custom capability resources, owners or paths. Clients
+must not infer permission for a particular write from `custom`; enforcement
+continues at each operation.
+
 `v/ops/venue/show-config` returns the small, effective subset of venue
 configuration that clients and resident agents need in order to behave
 correctly. It is read-only and available under the normal public `v/` read

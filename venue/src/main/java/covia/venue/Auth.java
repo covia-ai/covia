@@ -144,6 +144,15 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 		return publicAccessEnabled;
 	}
 
+	/** Public admission summary only: never disclose custom capability targets. */
+	public AString getPublicCapsMode() {
+		if (!publicAccessEnabled) return Strings.intern("disabled");
+		if (publicCapsConfig instanceof AString s && "unrestricted".equals(s.toString())) {
+			return Strings.intern("unrestricted");
+		}
+		return Strings.intern(publicCapsConfig instanceof AVector ? "custom" : "read-only");
+	}
+
 	/** JWT audience policy: {@code "require"} or {@code "verify"} (default). */
 	public String getAudiencePolicy() {
 		return audiencePolicy;
