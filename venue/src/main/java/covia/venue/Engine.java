@@ -3262,11 +3262,10 @@ public class Engine {
 		// Every registered user, managed and external alike — the same population
 		// as user:list, not just the venue-managed named accounts (#524).
 		AMap<AString, ACell> usersMap = getVenueState().users().getAll();
-		// Count primitives across all adapters' catalog entries — this is
-		// the canonical "what's in /v/ops/ and /v/test/ops/" total.
+		// Count operations only; other declarations include models, skills and templates.
 		long opCount = 0;
 		for (var adapter : adapters.values()) {
-			opCount += adapter.pendingCatalogEntries.size();
+			opCount += adapter.getOperationPaths().size();
 		}
 		return Maps.of(
 				 "assets",getAssets().size(),
