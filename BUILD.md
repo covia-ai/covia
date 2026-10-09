@@ -8,7 +8,7 @@ This document describes how to build the Covia project using Maven.
 - **Maven 3.7+**: Minimum Maven version required (enforced by maven-enforcer-plugin)
 - **Git**: For cloning the repository
 
-Covia targets Convex 0.8.16. Maven resolves the release from the local repository or configured remote repositories in the normal way.
+Covia targets Convex 0.8.17. Maven resolves the release from the local repository or configured remote repositories in the normal way.
 
 ## Project Structure
 
@@ -51,6 +51,9 @@ covia/
 ├── covia-sonnylabs/       # Optional loadable SonnyLabs scanning module
 │   ├── pom.xml            # Venue SPI provided; JDK HTTP client only
 │   └── src/               # Prompt-injection scan adapter and local fake tests
+├── covia-documents/       # Optional loadable documents module (PDF/Office text extraction)
+│   ├── pom.xml            # Venue SPI provided; PDFBox and POI shaded
+│   └── src/               # Documents extract adapter and tests
 └── covia-claude-code/     # Optional loadable Claude Code module
     ├── pom.xml            # Venue SPI provided; no third-party deps
     └── src/               # Claude Code CLI adapter and tests (fake CLI)
@@ -128,7 +131,7 @@ A single heavy test still needs its flag, e.g.
 
 ### Venue Module
 
-The venue module produces several artifacts (`<version>` is the current Maven version, e.g. `0.0.2-SNAPSHOT`):
+The venue module produces several artifacts (`<version>` is the current Maven version, e.g. `0.9.9-SNAPSHOT`):
 
 - **Standard JAR**: `venue/target/venue-<version>.jar`
 - **Executable JAR**: `venue/target/covia.jar` (with dependencies)
@@ -276,42 +279,54 @@ for a push to the `develop` branch. These are available at:
 
 ### Stable Releases
 
-To create a stable release:
+To create a stable release (the flow 0.9.8 used — a release branch, a pull
+request into `master` so the required `build-and-test` check runs before
+`master` moves, and a tag on the merge commit):
 
-1. **Ensure you're on master** with all changes merged from develop:
+1. **Branch from develop** with everything the release should contain:
    ```bash
-   git checkout master
-   git pull origin master
+   git checkout develop
+   git pull origin develop
+   git checkout -b release/1.0.0
    ```
 
-2. **Update the Maven version** in all pom.xml files:
+2. **Update the Maven version** in all pom.xml files and check no `-SNAPSHOT`
+   remains (the Release workflow refuses one, including a snapshot Convex):
    ```bash
    mvn versions:set -DnewVersion=1.0.0
    mvn versions:commit
+   grep -R -n --include='pom.xml' -- '-SNAPSHOT' .
    ```
-   This updates the version in the parent pom.xml and all child modules.
 
-3. **Commit the version change**:
+3. **Complete the release notes**: rename `## [Unreleased]` in `CHANGELOG.md`
+   to `## [1.0.0] - <date>` and add a fresh empty `[Unreleased]` above it.
+
+4. **Commit and open a pull request** into `master`:
    ```bash
    git add -A
    git commit -m "Release 1.0.0"
+   git push -u origin release/1.0.0
+   gh pr create --base master --title "Release 1.0.0"
    ```
+   Merge once `build-and-test` is green.
 
-4. **Create and push a version tag** (must match the Maven version):
+5. **Tag the merge commit** (the tag must match the Maven version and be
+   reachable from `origin/master`):
    ```bash
-   git tag 1.0.0
-   git push origin master --tags
+   git fetch origin
+   git tag 1.0.0 origin/master
+   git push origin 1.0.0
    ```
 
-5. **GitHub Actions will automatically**:
+6. **GitHub Actions will automatically**:
    - Build the project
    - Create a versioned release (e.g., `1.0.0`)
    - Update the `latest` release to point to this version
 
-6. **Prepare for next development cycle** (on develop):
+7. **Prepare for next development cycle** (on develop):
    ```bash
    git checkout develop
-   git merge master
+   git merge origin/master
    mvn versions:set -DnewVersion=1.0.1-SNAPSHOT
    mvn versions:commit
    git add -A

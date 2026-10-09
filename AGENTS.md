@@ -33,6 +33,10 @@ covia/                          # ai.covia:covia (parent POM)
 │                               #   agents/operations, telegram:send; shaded "module" jar)
 ├── covia-discord/              # Discord bot venue module (Gateway inbound + REST outbound;
 │                               #   agents/operations, discord:send; shaded "module" jar)
+├── covia-whatsapp/             # WhatsApp Cloud API venue module (signed webhook intake,
+│                               #   agents/operations, whatsapp:send; shaded "module" jar)
+├── covia-slack/                # Slack Events API venue module (signed webhook intake,
+│                               #   agents/operations, slack:send; shaded "module" jar)
 ├── covia-sonnylabs/            # SonnyLabs prompt-injection scanning venue module
 │                               #   (POST /v1/scans; shaded "module" jar)
 ├── covia-documents/            # PDF/Office text extraction venue module (PDFBox, POI;
@@ -65,7 +69,7 @@ covia/                          # ai.covia:covia (parent POM)
 
 - **Java 21+** (JDK; the published Docker image runs on Java 25)
 - **Maven 3.7+** (enforced by maven-enforcer-plugin)
-- **Convex 0.8.16**
+- **Convex 0.8.17**
 
 ## Build & Run
 
@@ -105,11 +109,11 @@ mvn test -pl covia-core
 
 | Dependency | Version | Purpose |
 |------------|---------|---------|
-| Convex | 0.8.16 | Lattice platform, immutable data, cryptography |
+| Convex | 0.8.17 | Lattice platform, immutable data, cryptography |
 | Javalin | 7.2.3 | HTTP server with OpenAPI/Swagger/ReDoc |
-| LangChain4j | 1.19.0 | LLM orchestration (OpenAI, Ollama, Gemini, DeepSeek) |
+| LangChain4j | 1.22.0 | LLM orchestration (OpenAI, Ollama, Gemini, DeepSeek) |
 | MCP SDK | 2.0.1 | Model Context Protocol |
-| A2A | 1.2.0.Final | Agent-to-Agent protocol |
+| A2A | 1.3.0.Final | Agent-to-Agent protocol |
 | JUnit | 6.1.3 | Testing |
 | SLF4J/Logback | 2.0.18/1.6.3 | Logging |
 
@@ -128,7 +132,7 @@ Engine (core state, adapters, assets, content, identity)
     ├── Content Storage   (lattice / file / memory)
     └── JobManager        (job lifecycle, per-user persistence, recovery)
     |
-Adapter Layer (~25 pluggable adapters — canonical table in venue/CLAUDE.md)
+Adapter Layer (32 built-in adapters plus 9 loadable modules — canonical table in venue/CLAUDE.md)
     ├── Data & state:  covia (lattice CRUD), asset, dlfs, vault, memory, secret, file, archive
     ├── Execution:     langchain (LLMs), mcp, http, convex, jvm, schema, orchestrator, scheduler
     ├── Agents:        agent, llmagent, goaltree, skills, hitl (COG-16 h/ inbox), project (WBS tree; skills only so far)
@@ -252,7 +256,7 @@ The list below tracks engineering tasks. For the developer-experience and open-s
 - [ ] **Capability negotiation** — Discovery endpoint for venue capabilities via DID documents
 - [ ] **Signed operations** — Cryptographic attribution for every job submission
 - [ ] **Compliance reporting** — Data lineage tracking and audit log queries
-- [ ] **Workbench expansion** — Currently a 3-file / ~155-line demo; add configuration, multi-operation support, proper logging
+- [ ] **Workbench expansion** — Currently a REPL demo plus the shared Markdown and text components; add configuration, multi-operation support, proper logging
 - [ ] **Job restart API** — Consider `PUT /api/v1/jobs/{id}/restart` for re-running failed/cancelled/completed jobs. Semantics need thought: new job with same input? Same job ID? How to handle operations that have changed since original invocation? May be better as a client-side convenience (re-invoke with original params) rather than a server primitive.
 
 ## Module-Specific Guides

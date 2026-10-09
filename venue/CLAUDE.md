@@ -26,7 +26,7 @@ venue/
 │   │   ├── api/                 # REST (CoviaAPI), MCP, A2A, UserAPI
 │   │   ├── server/              # HTTP server, AuthMiddleware, SSE
 │   │   └── storage/             # Content storage backends
-│   ├── adapter/         # Adapter implementations (AAdapter base + ~25 adapters)
+│   ├── adapter/         # Adapter implementations (AAdapter base + 32 adapters)
 │   └── lattice/         # Lattice definitions (Covia.java), CapabilityChecker
 ├── src/main/resources/
 │   ├── adapters/        # Operation asset definitions (JSON, per adapter)
@@ -77,6 +77,7 @@ AUTH_REQUIRED).
 | `grid` | Federated grid operations | `run`, `invoke`, `jobStatus`, `jobResult` |
 | `convex` | Convex blockchain, CAD3 conversion, and secret-backed Ed25519 keys | `query`, `transact`, `generate-key`, `sign`, `decode-cad3`, `encode-cad3` |
 | `mcp` | Model Context Protocol | `toolList`, `toolCall`, bridging ops |
+| `a2a` | Agent-to-Agent protocol client — remote agent cards, tasks and message relay | `send`, `get-task`, `cancel`, `agent-card`, `import-agent` |
 | `langchain` | AI/LLM models | `openai`, `ollama`, `anthropic`, `gemini`, `xai`, `deepseek`, `mistral`, `openrouter`, `models` |
 | `http` | HTTP requests (SSRF-protected, bounded validated redirects, default User-Agent; `adapters.http`) | `get`, `post` |
 | `connections` | Service connection catalog; owns provider skills and reports transport/credential presence without reading secrets | `list`, `status` |
@@ -84,8 +85,9 @@ AUTH_REQUIRED).
 | `file` | Filesystem (root-jailed); reads see into archives via `x.zip!/entry` | `roots`, `list`, `tree`, `read`, `write`, `append`, `delete`, `mkdir`, `stat` |
 | `archive` | Zip/jar archives over file roots (zip-slip + zip-bomb guarded) | `list`, `extract`, `zip` |
 | `schema` | JSON Schema | `validate`, `validateAll`, `infer`, `coerce`, `check` |
+| `json` | JSON value utilities | `merge`, `cond`, `assoc`, `select` |
 | `orchestrator` | Multi-step workflows | Custom orchestration |
-| `covia` | Lattice CRUD | `read`, `write`, `delete`, `append`, `slice`, `list`, `inspect`, `aggregate`, `functions`, `describe`, `adapters` |
+| `covia` | Lattice CRUD | `read`, `write`, `copy`, `delete`, `append`, `slice`, `list`, `inspect`, `aggregate` |
 | `asset` | Content-addressed assets | `store`, `get`, `getContent`, `list`, `pin` |
 | `agent` | Agent lifecycle | `create`, `fromSkills`, `fork`, `request`, `message`, `trigger`, `query`, `list`, `delete`, `suspend`, `resume`, `update`, `cancelTask`, `deleteSession` |
 | `llmagent` | LLM agent transitions | `chat` |

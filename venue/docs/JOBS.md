@@ -110,7 +110,7 @@ for days, weeks, or months (workflows, HITL, agents). Consequences:
 - `JobFailedException` is thrown only when the job itself actually failed.
   `JobPollingFailedException` (a sibling, not a subclass) means "your view
   stopped; the job is unaffected" — also used by the client SDK
-  (`VenueHTTP.pollingFailed`) on transport loss.
+  (`Job.pollingFailed`, raised from `VenueHTTP`) on transport loss.
 - Adapters SHOULD bound their own IO (socket timeouts, `llmTimeoutMs` for
   agent LLM calls) — bounding real work is the operation's job, never the
   framework's.

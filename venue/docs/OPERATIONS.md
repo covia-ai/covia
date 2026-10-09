@@ -662,7 +662,6 @@ The refresh does **not** touch `/o/` — user pins are sacred, and a user can pi
 - Unifying budget / overflow semantics across `covia:read`, `covia:slice`, `covia:inspect` — tracked separately as [covia-ai/covia#78](https://github.com/covia-ai/covia/issues/78).
 - Toolsets (named bundles of operations) — tracked separately as [covia-ai/covia#79](https://github.com/covia-ai/covia/issues/79).
 - Bridging external MCP servers into the catalog — tracked separately as [covia-ai/covia#80](https://github.com/covia-ai/covia/issues/80).
-- The rollout plan that takes the system from its current state to this design — see [OPERATIONS_PLAN.md](OPERATIONS_PLAN.md).
 
 ---
 

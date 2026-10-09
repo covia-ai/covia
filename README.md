@@ -265,6 +265,7 @@ java -jar venue/target/covia.jar
 | `covia-whatsapp` | Optional [WhatsApp Cloud API module](covia-whatsapp/README.md) — signed text intake, agent/operation routing and text sends |
 | `covia-slack` | Optional [Slack module](covia-slack/README.md) — signed Events API DMs/channel mentions, threaded conversations and text sends |
 | `covia-sonnylabs` | Optional loadable SonnyLabs module — tests prompts and LLM-facing content for prompt injection and related safety findings |
+| `covia-documents` | Optional loadable documents module — readable text from PDF and Office files (PDFBox, POI) behind `mode: "extract"` on file, vault and DLFS reads |
 | `covia-claude-code` | Optional loadable Claude Code module — drives the Claude Code CLI in venue-authorised project directories (runs and resumable sessions) |
 
 The standard venue and Docker image have no Python dependency. Java 21 builds
