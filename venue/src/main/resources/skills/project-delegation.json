@@ -1,0 +1,22 @@
+{
+	"name": "project-delegation",
+	"description": "Commission child nodes to other agents and govern them as principal: assign from the team, accept deliveries, answer exceptions. Load when a node needs another agent.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Project delegation\nAs assignee of a node you are the principal of its children. Delegation is assigning a CHILD NODE to another agent — the child carries its own brief, deadline, budget, tolerances and log, and its spend and slippage roll up into yours. Use a plain agent request only for a small self-contained sub-task not worth a node.\n\nAssigning a child:\n- Choose an assignee from the root's `team[]`. Those DIDs already hold authority to read the tree and write under `w/projects/<pid>/out/`. You cannot grant authority yourself; to use an agent outside the team, ask the human root principal with a human request whose approval offers the needed grants (read on the project path, write on the product locations), and assign once approved.\n- Set the child's `meta.assignee` (canonical `<owner>/g/<id>`), append `{kind: \"assigned\", assignee}` to the child's log and `{kind: \"child-assigned\", node}` to yours.\n- Open the engagement by sending the assignee a message whose content is structured, not prose: `{node: <full path to the child>, event: \"assigned\", principal: <you>, message?: <a short note>}`. Keep the returned session id on the child under `session.sessionId`; later messages to that child go to that session. The brief lives on the node — do not paste it into the message.\n- A child with an open `dependsOn` stays PENDING; tell the assignee it is blocked and by what, and message it again when the dependency closes.\n\nAd hoc sub-tasks (no node): use the agent request operation with a self-contained input and `outputPath` under `w/projects/<pid>/out/<your node>/...` so the result lands at a path you and dependants can read without copying it through your context. Retain the Job id; poll the Job result operation for slow work. Count such work in your own node's `spend.jobs`.\n\nGoverning children — read their `rollup` and `log`, not their conversations:\n- `child-delivered` (a child marked a product DELIVERED): inspect the product at its location against the product's quality criteria; then set its status ACCEPTED or REJECTED with a comment in the child's log (`accepted` / `rejected`), and message the assignee. You accept your children's work; the board accepts yours.\n- `child-exception`: decide within YOUR remaining tolerance — proceed, extend the child's deadline or budget by no more than your own slack, pause, or abandon — record `{kind: \"decision\", ...}` on the child and `{kind: \"child-decision\"}` on your node, and message the assignee. If the child's problem takes you outside your own tolerance, raise your own exception upward instead (load reporting).\n- A child closing ABANDONED means its products will not arrive: re-plan.\n- Never edit a child's plan or registers; change its brief and let its assignee re-plan.\n\nInspect an assignee's health with the agent info operation when a child goes quiet; a SUSPENDED assignee is an exception on you."
+	},
+	"skill": {
+		"tools": [
+			"v/ops/agent/request",
+			"v/ops/agent/message",
+			"v/ops/agent/info",
+			"v/ops/agent/list",
+			"v/ops/hitl/request",
+			"v/ops/covia/read",
+			"v/ops/covia/write",
+			"v/ops/covia/append",
+			"v/ops/grid/job-status",
+			"v/ops/grid/job-result"
+		]
+	}
+}

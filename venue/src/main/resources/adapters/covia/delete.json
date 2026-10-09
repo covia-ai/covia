@@ -11,7 +11,7 @@
 			"properties": {
 				"path": {
 					"type": "string",
-					"description": "Path to delete. Must start with w/, o/, n/, or t/; s/NAME deletes one of your own secrets (whole records only)."
+					"description": "Path to delete. Must start with w/, o/, n/, or t/ (t/ only while working on a task or inside a job); s/NAME deletes one of your own secrets (whole records only)."
 				}
 			},
 			"required": ["path"]

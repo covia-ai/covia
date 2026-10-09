@@ -1,0 +1,17 @@
+{
+	"name": "project-reporting",
+	"description": "Report on a project node: checkpoints, highlights, honest spend and forecast, exceptions raised one level up before a breach. Load at every checkpoint.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Project reporting\nEvery report is an entry appended to the node's `log`: `{ts, kind, by: <you>, summary, detail?, spend?, forecast?}`. The log is append-only and is the audit trail your principal reads; write it for them, not for yourself.\n\nKinds:\n- `checkpoint` — routine, at the node's `cadence.checkpoint`. What moved since last time, what `plan.next` now holds, your own spend for the node (`spend.cost` and `spend.jobs` are yours to report; token totals are measured, not claimed), and the forecast. A checkpoint with nothing done still says so.\n- `highlight` — at `cadence.highlight`, a summary for the level above: status of your products, the one-line state of each child from its rollup, the open issues and risks that matter to them, and whether you remain within tolerance.\n- `exception` — the instrument for every tolerance. Raise it when the forecast leaves targets plus tolerance for time, cost, scope, quality or risk — BEFORE the breach, not after — and once per cause; do not re-raise a cause whose decision is pending. `detail.options` proposes what your principal can choose (proceed as recommended, extend by a stated amount, drop scope, pause, abandon), with your recommendation first.\n\nWhere an exception goes — one level up, never further:\n- Principal is a human (a user DID): send a human request with a title naming the node, a description containing everything needed to decide (the human sees only that record, never your conversation: remaining time and budget, what is at risk, the options), a `choice` ask over your options and an optional `text` ask for instructions. The answer arrives in your session; record it as `{kind: \"decision\", by, text, ref}` in the log and in `registers.decisions`, then act on it.\n- Principal is an agent (your parent node's assignee): message that agent with `{node: <your path>, event: \"child-exception\", summary, options}`. It decides within its own tolerance or raises its own exception above. Wait for the decision on the work it affects; continue everything else.\n- Set `meta.status` to EXCEPTION while your exception is open and back to ACTIVE when decided (dedicated project operations do this for you when advertised).\n\nHonesty rules: report actual statuses and paths; a forecast you have not recomputed is not a forecast; a partly done deliverable is not delivered; if a child is silent or suspended, say so with its path. Do not summarise a child's conversation — read its rollup and log and report facts from them.\n\nThe framework heartbeat, when present, delivers a `checkpoint` message with remaining time and budget, overdue items and children's rollups. Treat it as the trigger to do a bounded amount of work, report, and yield; without one, schedule your own checkpoint (load monitoring)."
+	},
+	"skill": {
+		"tools": [
+			"v/ops/covia/append",
+			"v/ops/covia/read",
+			"v/ops/covia/write",
+			"v/ops/hitl/request",
+			"v/ops/agent/message"
+		]
+	}
+}

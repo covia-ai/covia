@@ -44,6 +44,22 @@ Can also do:
 sudo caddy start --config /etc/caddy/Caddyfile
 ```
 
+### Tell the venue about the proxy
+
+Behind Caddy every connection reaches the venue from Caddy's own address, so
+anything the venue keys on the caller's address — the request rate limiter,
+the authentication throttle — would put every caller in one bucket. Add the
+proxy to the venue config so it takes the client from `X-Forwarded-For`:
+
+```json
+{ "trustedProxies": ["loopback"] }
+```
+
+For a venue running as a container published on loopback, the connection
+arrives from the Docker bridge instead: use `["172.16.0.0/12"]` (or the
+bridge's actual range). Only IP literals and CIDR ranges are accepted. See
+`venue/docs/CONFIG.md`, *Trusted proxies*.
+
 ## Get the Venue JAR
 
 Download `covia.jar` from the GitHub releases on the server:

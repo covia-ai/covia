@@ -288,6 +288,48 @@ public class VenueServerTest {
 		}
 	}
 
+	@Test public void testSecurityHeadersOnByDefaultAndOffByConfig() throws Exception {
+		VenueServer server = VenueServer.launch(Maps.of(Config.PORT, CVMLong.create(0)));
+		try {
+			// JSON: sniffing and referrer protection, no framing headers needed
+			HttpResponse<String> json = plainGet(server, "/api/v1/status");
+			assertEquals(200, json.statusCode(), json.body());
+			assertEquals("nosniff", json.headers().firstValue("x-content-type-options").orElse(null));
+			assertEquals("no-referrer", json.headers().firstValue("referrer-policy").orElse(null));
+			assertTrue(json.headers().firstValue("x-frame-options").isEmpty());
+
+			// HTML: the venue's own pages cannot be framed
+			HttpResponse<String> html = plainGet(server, "/index.html");
+			assertEquals(200, html.statusCode());
+			assertTrue(html.headers().firstValue("content-type").orElse("").startsWith("text/html"));
+			assertEquals("DENY", html.headers().firstValue("x-frame-options").orElse(null));
+			assertEquals("frame-ancestors 'none'",
+				html.headers().firstValue("content-security-policy").orElse(null));
+			assertEquals("nosniff", html.headers().firstValue("x-content-type-options").orElse(null));
+		} finally {
+			server.close();
+		}
+
+		VenueServer off = VenueServer.launch(Maps.of(
+			Config.PORT, CVMLong.create(0),
+			Config.SECURITY_HEADERS, CVMBool.FALSE));
+		try {
+			HttpResponse<String> response = plainGet(off, "/api/v1/status");
+			assertEquals(200, response.statusCode(), response.body());
+			assertTrue(response.headers().firstValue("x-content-type-options").isEmpty(),
+				"securityHeaders: false turns the headers off");
+		} finally {
+			off.close();
+		}
+	}
+
+	private static HttpResponse<String> plainGet(VenueServer server, String path) throws Exception {
+		return TestHTTP.CLIENT.send(HttpRequest.newBuilder()
+			.uri(new URI("http://localhost:" + server.port() + path))
+			.GET().timeout(Duration.ofSeconds(10)).build(),
+			HttpResponse.BodyHandlers.ofString());
+	}
+
 	@Test public void testCorsCanBeDisabledEntirely() throws Exception {
 		VenueServer server = VenueServer.launch(Maps.of(
 			Config.PORT, CVMLong.create(0),
@@ -485,10 +527,11 @@ public class VenueServerTest {
 			Fields.MESSAGE, "Test error message"
 		);
 		
-		// Start the operation via the client. Should start but not complete
+		// Start the operation via the client. Should start but not complete.
+		// The 201 record is whatever had committed when it was serialised, so
+		// the run is observed by polling rather than off that first snapshot.
 		Job job = covia.startJob(TestOps.NEVER, input);
-		AString status=job.getStatus();
-		assertEquals(Status.STARTED,status);
+		awaitClientStatus(job, Status.STARTED, 5000);
 		assertFalse(job.isFinished());
 	}
 	
@@ -501,16 +544,15 @@ public class VenueServerTest {
 		
 		// Step 1: Invoke the operation using Covia client
 		Job job=covia.startJob(TestOps.NEVER, input);
-		assertEquals(Status.STARTED,job.getStatus());
-		
-		// Step 2: Re-read the durable status without relying on timing.
+
+		// Step 2: Read the durable status without relying on timing.
 		awaitClientStatus(job, Status.STARTED, 5000);
 
 		Blob jobId = job.getID();
 		assertNotNull(jobId, "Job ID should be returned");
 		String jobIdStr = jobId.toHexString();
 		
-		// Step 3: Confirm that the status of the job is PENDING using Covia.getJobStatus
+		// Step 3: Confirm that the status of the job is STARTED using Covia.getJobStatus
 		AMap<AString, ACell> statusMap = covia.getJobData(jobIdStr).get(5, TimeUnit.SECONDS); 
 		assertNotNull(statusMap, "Job status map should not be null");
 		AString status = RT.ensureString(statusMap.get(Fields.STATUS));
@@ -539,7 +581,7 @@ public class VenueServerTest {
 	public void testPauseAndResumeNeverOp() throws Exception {
 		// Start a never-completing job
 		Job job = covia.startJob(TestOps.NEVER, Maps.of(Fields.MESSAGE, "pause test"));
-		assertEquals(Status.STARTED, job.getStatus(), "Job should be STARTED");
+		awaitClientStatus(job, Status.STARTED, 5000);
 		String jobId = job.getID().toHexString();
 
 		// Pause the running job via API
@@ -838,5 +880,33 @@ public class VenueServerTest {
 		assertEquals(400, resp.statusCode(),
 			() -> "Encoded-dot (%2e) path must be rejected — AMBIGUOUS_PATH_ENCODING is not enabled: "
 				+ resp.statusCode() + " " + resp.body());
+	}
+
+	/**
+	 * X-Forwarded-* headers describe the venue's external URL only when they
+	 * come from a trusted proxy. The shared TestServer trusts none, so a direct
+	 * client cannot make the venue publish an attacker-chosen host in its own
+	 * status URL or DID document.
+	 */
+	@Test public void testForwardedHeadersIgnoredFromUntrustedClient() throws Exception {
+		HttpClient client = TestHTTP.CLIENT;
+		for (String path : new String[] { "/api/v1/status", "/.well-known/did.json" }) {
+			HttpRequest req = HttpRequest.newBuilder()
+				.uri(new URI("http://localhost:" + PORT + path))
+				.header("X-Forwarded-Proto", "https")
+				.header("X-Forwarded-Host", "evil.example")
+				.header("X-Forwarded-Port", "443")
+				.header("X-Forwarded-Prefix", "/pwned")
+				.GET().timeout(Duration.ofSeconds(10)).build();
+			HttpResponse<String> resp = client.send(req, HttpResponse.BodyHandlers.ofString());
+			assertEquals(200, resp.statusCode(), path);
+			assertFalse(resp.body().contains("evil.example"), path + " echoed a forwarded host: " + resp.body());
+			assertFalse(resp.body().contains("/pwned"), path + " echoed a forwarded prefix");
+		}
+		ACell status = JSON.parse(client.send(HttpRequest.newBuilder()
+			.uri(new URI("http://localhost:" + PORT + "/api/v1/status")).GET().build(),
+			HttpResponse.BodyHandlers.ofString()).body());
+		assertTrue(RT.getIn(status, "url").toString().startsWith("http://localhost:" + PORT),
+			"the venue's own address stands: " + RT.getIn(status, "url"));
 	}
 }

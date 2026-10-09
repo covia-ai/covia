@@ -7,18 +7,25 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
 import java.net.InetSocketAddress;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
 import com.sun.net.httpserver.HttpServer;
 
 import convex.core.data.ACell;
+import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.grid.Asset;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.lattice.CapabilityChecker;
@@ -149,15 +156,48 @@ public class MCPBridgeTest {
 	public void testRefreshIsIdempotent() {
 		RequestContext ctx = RequestContext.of(ALICE_DID);
 		ACell added = addServer("selff", TestServer.BASE_URL, null, ctx).awaitResult(15000);
-		long count = RT.ensureLong(RT.getIn(added, Fields.TOTAL)).longValue();
+		AVector<ACell> addedTools = RT.ensureVector(RT.getIn(added, "tools"));
+		Map<String, Hash> before = bridgedAssetIds("selff", addedTools, ctx);
+		assertTrue(before.containsKey("test_echo"), "bridged tools should include test_echo");
 
 		Job refresh = engine.jobs().invokeOperation("v/ops/mcp/refresh",
 			Maps.of(Fields.NAME, "selff"), ctx);
 		ACell refreshed = refresh.awaitResult(15000);
 		assertEquals(Status.COMPLETE, refresh.getStatus());
-		assertEquals(count, RT.ensureLong(RT.getIn(refreshed, Fields.TOTAL)).longValue(),
-			"refresh against an unchanged server must be a no-op");
-		assertNotNull(engine.resolveAsset(Strings.create("o/mcp/selff/test_echo"), ctx));
+
+		// The "server" is the shared venue itself, and other concurrently-running
+		// tests may register or remove operations between the two listings, so
+		// the tool COUNT is not a stable oracle. Idempotence is exact on the tools
+		// served both times: refresh rewrites none of them (same metadata, same
+		// asset id), and the bridged subtree ends up holding precisely the tools
+		// refresh reported — nothing stale, nothing missing, nothing duplicated.
+		AVector<ACell> refreshedTools = RT.ensureVector(RT.getIn(refreshed, "tools"));
+		assertEquals(refreshedTools.count(),
+			RT.ensureLong(RT.getIn(refreshed, Fields.TOTAL)).longValue());
+		Map<String, Hash> after = bridgedAssetIds("selff", refreshedTools, ctx);
+		for (Map.Entry<String, Hash> e : before.entrySet()) {
+			Hash now = after.get(e.getKey());
+			if (now == null) continue; // withdrawn by a concurrent test: reconciled away
+			assertEquals(e.getValue(), now,
+				"refresh must not rewrite an unchanged tool: " + e.getKey());
+		}
+		AMap<AString, ACell> subtree = RT.castMap(engine.resolvePath(Strings.create("o/mcp/selff"), ctx));
+		assertNotNull(subtree, "bridged subtree must exist after refresh");
+		Set<String> bridged = new HashSet<>();
+		for (long i = 0; i < subtree.count(); i++) bridged.add(subtree.entryAt(i).getKey().toString());
+		assertEquals(after.keySet(), bridged, "bridged ops must be exactly the tools refresh reported");
+	}
+
+	/** Asset id of each bridged op {@code o/mcp/<server>/<tool>}; every reported tool must resolve. */
+	private Map<String, Hash> bridgedAssetIds(String server, AVector<ACell> tools, RequestContext ctx) {
+		Map<String, Hash> ids = new HashMap<>();
+		for (ACell tool : tools) {
+			String name = tool.toString();
+			Asset asset = engine.resolveAsset(Strings.create("o/mcp/" + server + "/" + name), ctx);
+			assertNotNull(asset, "bridged op must resolve: " + name);
+			ids.put(name, asset.getID());
+		}
+		return ids;
 	}
 
 	@Test

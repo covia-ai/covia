@@ -97,14 +97,14 @@ final class ProviderState {
 			ACell block = blocks.get(i);
 			AString type = RT.ensureString(RT.getIn(block, Fields.TYPE));
 			if (V_THINKING.equals(type)) {
-				// LangChain4j 1.x can faithfully send one non-empty signed thinking
+				// LangChain4j 1.22 can faithfully send one signed thinking
 				// block followed by redacted blocks. Refuse to reinterpret any wider
 				// provider shape; a later codec can add support without migrating state.
 				if (thinking != null || seenRedacted) return message;
 				AString text = RT.ensureString(RT.getIn(block, K_THINKING));
 				AString sig = RT.ensureString(RT.getIn(block, K_SIGNATURE));
-				if (text == null || text.toString().isBlank()) return message;
-				thinking = text.toString();
+				if ((text == null || text.toString().isBlank()) && (sig == null || sig.toString().isBlank())) return message;
+				thinking = text == null ? "" : text.toString();
 				signature = (sig != null) ? sig.toString() : null;
 			} else if (V_REDACTED_THINKING.equals(type)) {
 				seenRedacted = true;

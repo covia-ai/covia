@@ -3,31 +3,57 @@
   <parent>
     <groupId>ai.covia</groupId>
     <artifactId>covia</artifactId>
-    <version>0.9.8</version>
+    <version>0.9.9</version>
   </parent>
   <artifactId>workbench</artifactId>
   <name>Covia Workbench</name>
-  <description>Covia Workbench: a minimal Swing GUI REPL for demoing and testing a venue.</description>
+  <description>Reusable Swing components and utilities, with a venue REPL demo.</description>
 
   <properties>
     <flatlaf.version>3.7.2</flatlaf.version>
+    <commonmark.version>0.30.0</commonmark.version>
   </properties>
   
   <dependencies>
+    <!-- These dependencies belong to the REPL demo, not the shared components. -->
   	<dependency>
 			<groupId>com.formdev</groupId>
 			<artifactId>flatlaf</artifactId>
 			<version>${flatlaf.version}</version>
+			<optional>true</optional>
 		</dependency>
 		<dependency>
 			<groupId>com.formdev</groupId>
 			<artifactId>flatlaf-intellij-themes</artifactId>
 			<version>${flatlaf.version}</version>
+			<optional>true</optional>
 		</dependency>
 		<dependency>
 			<groupId>ai.covia</groupId>
 			<artifactId>venue</artifactId>
 			<version>${project.version}</version>
+			<optional>true</optional>
+		</dependency>
+		<dependency>
+			<groupId>org.commonmark</groupId>
+			<artifactId>commonmark</artifactId>
+			<version>${commonmark.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>org.commonmark</groupId>
+			<artifactId>commonmark-ext-gfm-tables</artifactId>
+			<version>${commonmark.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>org.commonmark</groupId>
+			<artifactId>commonmark-ext-gfm-strikethrough</artifactId>
+			<version>${commonmark.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>org.junit.jupiter</groupId>
+			<artifactId>junit-jupiter</artifactId>
+			<version>${junit.version}</version>
+			<scope>test</scope>
 		</dependency>
   </dependencies>
 </project>

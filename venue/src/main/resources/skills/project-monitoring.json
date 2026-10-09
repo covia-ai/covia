@@ -1,0 +1,20 @@
+{
+	"name": "project-monitoring",
+	"description": "Track a project tree: rollups, at-risk nodes, checkpoint cadence, spend and deadlines, pause or resume subtrees. Load to review a project or drive your cadence.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Project monitoring\nRead the tree top-down and cheaply: inspect the root, read its `meta`, `targets`, `spend` and `rollup`, then descend only into nodes the rollup flags. Listing `nodes/` under a node gives its children; aggregate the subtree to count nodes by status without reading them.\n\n`rollup` on a node is the framework's summary of the subtree (maintained by the dedicated project operations when advertised; if you maintain a tree with only lattice operations, recompute it after every change to a descendant): `spend` (own plus all descendants), `nodes` (counts by status), `products {total, delivered, accepted}`, `forecast.completion` (the latest across the subtree), `atRisk` (descendant paths overdue or outside their own tolerance). Tolerances are judged against the rollup, so a leaf's overspend is the ancestor's overspend the moment it lands.\n\nWhat to look for:\n- `atRisk` non-empty, or `rollup.spend.tokens` approaching `targets.budget.tokens` times one plus `tolerances.cost.percent` — the hard cap pauses the subtree.\n- `forecast.completion` after `targets.deadline` — an exception should already be open; if not, the assignee is not reporting.\n- A `log` whose last `checkpoint` is older than `cadence.checkpoint` — the assignee is silent; check the agent with the agent info operation (SUSPENDED or TERMINATED assignees are exceptions on the node's principal).\n- `EXCEPTION` nodes whose principal is an agent that has not decided — the chain is stuck one level up.\n\nCadence without a framework heartbeat: schedule an agent request to yourself with the node path and your session id in the input, repeating every `cadence.checkpoint` millis, untracked. Each fire is your cue to do a bounded amount of work, report, and yield. Cancel it when the node closes. With the heartbeat present, do not schedule your own; it collapses undelivered checkpoints and re-arms itself.\n\nPause and resume are the principal's acts and apply to the subtree: set `meta.status: PAUSED` with a `paused` log entry carrying the reason, message every assignee in the subtree, and stop cadence; resume reverses it. A node paused by its parent cannot be resumed on its own, and a cap-tripped node needs its budget raised first.\n\nSpend: token totals come from the assignee's session for the node plus Jobs it dispatched; cost and job counts are reported by the assignee. Do not invent either; a gap between forecast and measured spend is itself a finding to report."
+	},
+	"skill": {
+		"tools": [
+			"v/ops/covia/read",
+			"v/ops/covia/list",
+			"v/ops/covia/inspect",
+			"v/ops/covia/aggregate",
+			"v/ops/scheduler/schedule",
+			"v/ops/scheduler/list",
+			"v/ops/scheduler/cancel",
+			"v/ops/agent/info"
+		]
+	}
+}

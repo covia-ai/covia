@@ -3,6 +3,7 @@ package covia.venue;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Consumer;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -16,24 +17,27 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.util.JSON;
 import convex.lattice.cursor.ALatticeCursor;
+import convex.lattice.cursor.Cursors;
 import covia.adapter.AAdapter;
 import covia.adapter.CoviaAdapter;
 import covia.api.Fields;
+import covia.lattice.Covia;
 
 /**
  * Materialises venue-owned bootstrap state as one native lattice transaction.
  *
- * <p>All catalog and {@code v/info} writes execute against a child
- * {@link VenueState} fork using the canonical cursor path writer. A successful
- * run synchronises that fork into the Engine's live fork once; a failure simply
- * discards it. No operation dispatch, Job records, or parallel catalog model is
- * involved.</p>
+ * <p>All catalog and {@code v/info} writes are staged against a child fork of
+ * the venue-owned {@code w/global} workspace using the canonical cursor path
+ * writer, and validated there. A successful run then replays the staged writes
+ * in one atomic update of the Engine's connected workspace cursor; a failure
+ * simply discards the fork. No operation dispatch, Job records, or parallel
+ * catalog model is involved.</p>
  *
-	 * <p>Besides the whole-venue bootstrap snapshot, the same machinery publishes
+	 * <p>Besides the complete bootstrap snapshot, the same machinery publishes
 	 * and updates <em>single</em> adapters and modules for the runtime adapter
  * lifecycle ({@link Engine#enableAdapter}, {@link Engine#disableAdapter},
- * {@link Modules#load}, {@link Modules#unload}) — each change is one fork
- * sync, so the catalog never shows a half-applied adapter.</p>
+ * {@link Modules#load}, {@link Modules#unload}) — each change is one atomic
+ * commit, so the catalog never shows a half-applied adapter.</p>
  */
 final class VenueBootstrapMaterializer {
 
@@ -49,15 +53,21 @@ final class VenueBootstrapMaterializer {
 	private static final AString K_SHA256 = Strings.intern("sha256");
 
 	private final Engine engine;
-	private final VenueState bootstrapFork;
-	private final ALatticeCursor<ACell> venueUserCursor;
+	/** The connected venue-owned {@code w/global} cursor: the commit target. */
+	private final ALatticeCursor<ACell> workspace;
+	/** Private staging copy of {@link #workspace}: every write and validation read runs here. */
+	private final ALatticeCursor<ACell> workspaceFork;
+	/** The staged writes, in order, replayed against the connected cursor at commit. */
+	private final List<Consumer<ALatticeCursor<ACell>>> staged = new ArrayList<>();
 	private final List<String> adapterNames;
 	private final long startedAt;
 
 	private VenueBootstrapMaterializer(Engine engine) {
 		this.engine = engine;
-		this.bootstrapFork = engine.getVenueState().fork();
-		this.venueUserCursor = bootstrapFork.users().ensure(engine.getDIDString()).cursor();
+		ALatticeCursor<ACell> venueUserCursor =
+			engine.getVenueState().users().ensure(engine.getDIDString()).cursor();
+		this.workspace = Covia.child(venueUserCursor, K_W).path(K_GLOBAL);
+		this.workspaceFork = workspace.fork();
 		this.adapterNames = engine.getAdapterNamesInRegistrationOrder();
 		this.startedAt = System.currentTimeMillis();
 	}
@@ -329,9 +339,10 @@ final class VenueBootstrapMaterializer {
 		return summary;
 	}
 
-	/** Writes through the child cursor, then verifies the child view immediately. */
+	/** Stages a write on the fork, then verifies the staged view immediately. */
 	private void writeAndValidateVenuePath(String virtualPath, ACell value) {
-		CoviaAdapter.writePathToCursor(venueUserCursor, toVenueUserPath(virtualPath), value);
+		ACell[] keys = toWorkspacePath(virtualPath);
+		stage(cursor -> CoviaAdapter.writePathToCursor(cursor, keys, value));
 		ACell actual = readVenuePath(virtualPath);
 		if (!Objects.equals(value, actual)) {
 			throw new IllegalStateException(
@@ -340,34 +351,53 @@ final class VenueBootstrapMaterializer {
 	}
 
 	private ACell readVenuePath(String virtualPath) {
-		return CoviaAdapter.readPath(venueUserCursor, toVenueUserPath(virtualPath));
+		return CoviaAdapter.readPath(workspaceFork, toWorkspacePath(virtualPath));
 	}
 
-	/** Deletes through the child cursor, then verifies the path is gone. */
+	/** Stages a delete on the fork, then verifies the path is gone. */
 	private void deleteVenuePath(String virtualPath) {
-		CoviaAdapter.deletePathFromCursor(venueUserCursor, toVenueUserPath(virtualPath));
+		ACell[] keys = toWorkspacePath(virtualPath);
+		stage(cursor -> CoviaAdapter.deletePathFromCursor(cursor, keys));
 		if (readVenuePath(virtualPath) != null) {
 			throw new IllegalStateException(
 				"Bootstrap lattice delete validation failed at /" + virtualPath);
 		}
 	}
 
-	/** Rewrites v/x to the venue user's physical w/global/x path. */
-	private static ACell[] toVenueUserPath(String virtualPath) {
+	/** Rewrites caller-visible v/x to x relative to the forked w/global root. */
+	private static ACell[] toWorkspacePath(String virtualPath) {
 		ACell[] virtualKeys = CoviaAdapter.parseStringPath(virtualPath);
 		if (virtualKeys.length < 2 || !"v".equals(virtualKeys[0].toString())) {
 			throw new IllegalArgumentException("Venue bootstrap path must start with v/: " + virtualPath);
 		}
-		ACell[] physicalKeys = new ACell[virtualKeys.length + 1];
-		physicalKeys[0] = K_W;
-		physicalKeys[1] = K_GLOBAL;
-		System.arraycopy(virtualKeys, 1, physicalKeys, 2, virtualKeys.length - 1);
-		return physicalKeys;
+		ACell[] workspaceKeys = new ACell[virtualKeys.length - 1];
+		System.arraycopy(virtualKeys, 1, workspaceKeys, 0, workspaceKeys.length);
+		return workspaceKeys;
 	}
 
-	/** The only publication point: one merge from child fork to live Engine fork. */
+	/** Applies one write to the staging fork now and records it for the commit replay. */
+	private void stage(Consumer<ALatticeCursor<ACell>> write) {
+		write.accept(workspaceFork);
+		staged.add(write);
+	}
+
+	/**
+	 * The only commit point: the staged writes are replayed in one atomic
+	 * update of the connected {@code w/global} cursor, so they become visible
+	 * together and a concurrent unrelated write to the workspace survives.
+	 *
+	 * <p>The fork is never synced. {@code w/global} lies inside the venue's
+	 * whole-value LWW node, where the JSON lattice defines no merge, so a fork
+	 * sync cannot reconcile a parent that has moved since the fork. The replay
+	 * is a pure function of the current value and is safe under CAS retry.</p>
+	 */
 	private void publish() {
-		bootstrapFork.sync();
+		if (staged.isEmpty()) return;
+		workspace.updateAndGet(current -> {
+			ALatticeCursor<ACell> scratch = Cursors.createLattice(workspace.getLattice(), current);
+			for (Consumer<ALatticeCursor<ACell>> write : staged) write.accept(scratch);
+			return scratch.get();
+		});
 	}
 
 }

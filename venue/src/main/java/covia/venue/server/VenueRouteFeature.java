@@ -12,9 +12,9 @@ import io.javalin.security.RouteRole;
  * of their URL. Adding one of these roles asks the venue to apply the named
  * service to that endpoint. This keeps route ownership with the embedder while
  * making Covia's verified identity, mapped venue user, user admission, rate
- * limiting, and lattice durability available when useful. These features can
- * be combined with an embedder's own {@link RouteRole} values; Covia ignores
- * roles it does not recognise. Extenders may instead own authentication
+ * limiting, and low-latency lattice publication available when useful. These
+ * features can be combined with an embedder's own {@link RouteRole} values;
+ * Covia ignores roles it does not recognise. Extenders may instead own authentication
  * end-to-end and publish its result with
  * {@link VenueAuthenticator#bindIdentity}.</p>
  *
@@ -54,7 +54,7 @@ public enum VenueRouteFeature implements RouteRole {
 	/** Apply the venue's configured per-caller HTTP rate limiter. */
 	RATE_LIMITED,
 
-	/** Sync lattice state after the matched route handler completes. */
+	/** Publish the connected lattice root after the matched route handler completes. */
 	LATTICE_SYNC,
 
 	/**

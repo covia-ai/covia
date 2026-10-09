@@ -1,6 +1,6 @@
 {
   "name": "List user authentication keys",
-  "description": "Lists active and revoked public authenticator records for a venue-managed named user. Defaults to the caller.",
+  "description": "Lists active and revoked public authenticator records for a user. Only venue-managed named users have any; a registered external DID returns an empty set. Defaults to the caller.",
   "mcp": {
     "annotations": {
       "readOnlyHint": true,
@@ -17,7 +17,7 @@
       "properties": {
         "did": {
           "type": "string",
-          "description": "Venue-managed named user DID; defaults to the authenticated caller"
+          "description": "User DID; defaults to the authenticated caller"
         }
       }
     },

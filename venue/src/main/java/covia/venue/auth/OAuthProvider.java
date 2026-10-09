@@ -31,6 +31,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.venue.Engine;
+import covia.venue.api.ACoviaAPI;
 import covia.venue.server.AuthMiddleware;
 
 import io.javalin.config.RoutesConfig;
@@ -224,21 +225,10 @@ public class OAuthProvider {
 		routes.post("/oauth/revoke", this::revoke);
 	}
 
-	/** The issuer identifier: the configured one, else derived from this request. */
+	/** The issuer identifier: the configured one, else this request's external base URL. */
 	public String issuer(Context ctx) {
 		if (issuer != null) return issuer;
-		String scheme = firstHeader(ctx, "X-Forwarded-Proto");
-		if (scheme == null) scheme = ctx.scheme();
-		String host = firstHeader(ctx, "X-Forwarded-Host");
-		if (host == null) host = ctx.host();
-		return scheme + "://" + host;
-	}
-
-	private static String firstHeader(Context ctx, String name) {
-		String v = ctx.header(name);
-		if (v == null || v.isBlank()) return null;
-		int comma = v.indexOf(',');
-		return (comma >= 0 ? v.substring(0, comma) : v).trim();
+		return ACoviaAPI.getExternalBaseUrl(ctx, null, engine.config().getTrustedProxies());
 	}
 
 	/** RFC 8414 authorization-server metadata. */
@@ -395,6 +385,9 @@ public class OAuthProvider {
 			Strings.intern("client_id"), Strings.create(client.id()),
 			Strings.intern("scope"), Strings.create(scopeString));
 		AString jwt = JWT.signPublic(claims, engine.getKeyPair());
+		engine.audit().event(covia.venue.Audit.TOKEN_ISSUED, covia.venue.Audit.K_TYPE, "oauth",
+			covia.venue.Audit.K_SUBJECT, userDID, "client", client.id(),
+			covia.venue.Audit.K_EXP, nowSecs + accessTtlSecs);
 		AMap<AString, ACell> result = Maps.of(
 			Strings.intern("access_token"), jwt,
 			Strings.intern("token_type"), Strings.create("Bearer"),

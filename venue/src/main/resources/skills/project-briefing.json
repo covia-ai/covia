@@ -1,0 +1,16 @@
+{
+	"name": "project-briefing",
+	"description": "Define a project node as its principal: brief, product descriptions, deadline, budget, tolerances, team. Load to create a project or add a child.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Project briefing\nYou are the principal of a node when you create the root, or when you (as assignee of the parent) add a child. Write the node in one lattice write of the whole record, then append `{ts, kind: \"created\", by: <you>}` to its `log`.\n\nBrief — what is wanted and why:\n- `purpose` (one paragraph: the outcome and who it is for), `objectives` (measurable), `scope.in` / `scope.out` (explicit exclusions prevent drift), `background` (a path to reference material, not a copy), `constraints` (data sources, tools, prohibitions), `assumptions` (what you are relying on; each is a risk if false).\n\nProducts — one entry per deliverable, a product description:\n- `id`, `title`, `purpose`, `composition` (what it consists of; a parent's composition names the child nodes whose products it assembles), `format`, `location` (where it will live, conventionally `w/projects/<pid>/out/<node path>/<file>`, resolved in the ROOT principal's namespace), `qualityCriteria[]` — each `{id, text, method}` with method `review` (a human judges it), `op` (an operation decides: `{op, input?}`, pass iff it succeeds) or `test` (an op whose output carries `{pass: true}`), `acceptance {approver: principal | op | <DID>, timeout?}`, `status: PENDING`.\n- Prefer `op` criteria wherever a check can be automated; keep `review` criteria few and concrete.\n\nTargets and tolerances:\n- `targets.deadline` (epoch millis) and `targets.budget {tokens, cost{amount, currency}}`. Tokens are the enforced unit; cost is declared and reported.\n- `tolerances`: `time` (millis of permitted slip), `cost {percent}`, and text for `scope`, `quality`, `risk` saying what the assignee may decide alone and what must come back to you.\n- The 100 % rule for a child: its deadline is no later than the parent's plus the parent's time tolerance; children's token and cost budgets sum to no more than the parent's budget plus cost tolerance; a child's tolerances may be narrower than the parent's, never wider. A child may omit a target to inherit the parent's.\n\nTeam and cadence:\n- `team[]` lists agent DIDs pre-authorised to be assigned anywhere in the tree. Only a human root principal can grant authority, so name the roster at the root; an agent principal can commission only from it.\n- `cadence {checkpoint, highlight}` in millis: how often the assignee must report routinely and summarise upward.\n- `dependsOn[]` names sibling ids that must close COMPLETE before this node starts.\n\nChange control: to change a node you already briefed, rewrite only the principal-owned fields, append `{kind: \"changed\", paths: [...]}` to the log, re-check the 100 % rule against parent and children, and tell the assignee (a message to its session) so it re-plans. Never edit the assignee's plan or registers; change the brief and let them re-plan."
+	},
+	"skill": {
+		"tools": [
+			"v/ops/covia/write",
+			"v/ops/covia/read",
+			"v/ops/covia/list",
+			"v/ops/covia/append"
+		]
+	}
+}

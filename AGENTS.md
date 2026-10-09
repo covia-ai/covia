@@ -33,14 +33,18 @@ covia/                          # ai.covia:covia (parent POM)
 │                               #   agents/operations, telegram:send; shaded "module" jar)
 ├── covia-discord/              # Discord bot venue module (Gateway inbound + REST outbound;
 │                               #   agents/operations, discord:send; shaded "module" jar)
+├── covia-whatsapp/             # WhatsApp Cloud API venue module (signed webhook intake,
+│                               #   agents/operations, whatsapp:send; shaded "module" jar)
+├── covia-slack/                # Slack Events API venue module (signed webhook intake,
+│                               #   agents/operations, slack:send; shaded "module" jar)
 ├── covia-sonnylabs/            # SonnyLabs prompt-injection scanning venue module
 │                               #   (POST /v1/scans; shaded "module" jar)
 ├── covia-documents/            # PDF/Office text extraction venue module (PDFBox, POI;
 │                               #   file:read mode "extract"; shaded "module" jar)
 ├── covia-claude-code/          # Claude Code CLI venue module (runs/resumable sessions in
 │                               #   authorised project dirs; shaded "module" jar, not in covia.jar)
-├── workbench/                  # Minimal Swing GUI REPL for demo/testing
-│   └── src/main/java/covia/gui/  Bench, ReplPanel, LAF
+├── workbench/                  # Shared Swing components/utilities and a REPL demo
+│   └── src/main/java/covia/gui/  markdown/, components/; Bench, ReplPanel, LAF
 ├── .claude/                    # Claude Code config (settings.json tracked; rest gitignored)
 ├── skills/                     # Claude Code skills (junction .claude/skills → skills/)
 │   ├── adapters/               #   Adapter discovery, invocation, runtime enable/disable/configure, module load/unload
@@ -65,7 +69,7 @@ covia/                          # ai.covia:covia (parent POM)
 
 - **Java 21+** (JDK; the published Docker image runs on Java 25)
 - **Maven 3.7+** (enforced by maven-enforcer-plugin)
-- **Convex 0.8.16**
+- **Convex 0.8.17**
 
 ## Build & Run
 
@@ -105,11 +109,11 @@ mvn test -pl covia-core
 
 | Dependency | Version | Purpose |
 |------------|---------|---------|
-| Convex | 0.8.16 | Lattice platform, immutable data, cryptography |
+| Convex | 0.8.17 | Lattice platform, immutable data, cryptography |
 | Javalin | 7.2.3 | HTTP server with OpenAPI/Swagger/ReDoc |
-| LangChain4j | 1.19.0 | LLM orchestration (OpenAI, Ollama, Gemini, DeepSeek) |
+| LangChain4j | 1.22.0 | LLM orchestration (OpenAI, Ollama, Gemini, DeepSeek) |
 | MCP SDK | 2.0.1 | Model Context Protocol |
-| A2A | 1.2.0.Final | Agent-to-Agent protocol |
+| A2A | 1.3.0.Final | Agent-to-Agent protocol |
 | JUnit | 6.1.3 | Testing |
 | SLF4J/Logback | 2.0.18/1.6.3 | Logging |
 
@@ -128,10 +132,10 @@ Engine (core state, adapters, assets, content, identity)
     ├── Content Storage   (lattice / file / memory)
     └── JobManager        (job lifecycle, per-user persistence, recovery)
     |
-Adapter Layer (~25 pluggable adapters — canonical table in venue/CLAUDE.md)
+Adapter Layer (32 built-in adapters plus 9 loadable modules — canonical table in venue/CLAUDE.md)
     ├── Data & state:  covia (lattice CRUD), asset, dlfs, vault, memory, secret, file, archive
     ├── Execution:     langchain (LLMs), mcp, http, convex, jvm, schema, orchestrator, scheduler
-    ├── Agents:        agent, llmagent, goaltree, skills, hitl (COG-16 h/ inbox)
+    ├── Agents:        agent, llmagent, goaltree, skills, hitl (COG-16 h/ inbox), project (WBS tree; skills only so far)
     ├── Federation:    grid (run/invoke/jobStatus), ucan (granting surface, COG-17)
     ├── Admin:         user (registration), venue (runtime adapter/module lifecycle), oauth (connected accounts)
     └── Testing:       test (echo, delay, never, chat, pause, ...)
@@ -161,6 +165,12 @@ Defined in code at `venue/src/main/java/covia/lattice/Covia.java`. Full design i
 
 ## Development Conventions
 
+Workbench's shared `covia.gui.markdown` and `covia.gui.components` packages use
+the JDK and CommonMark only. Hosts supply appearance, layout and link actions;
+do not introduce application colours, fonts, look-and-feel setup or venue calls.
+Use Swing components and text sizing on the event thread. The demo's FlatLaf
+and venue dependencies are optional for consumers of the library.
+
 - **Package naming:** `covia.<module>.<feature>` (e.g., `covia.venue.api`, `covia.adapter`, `covia.grid.auth`)
 - **Constants:** Use `Strings.intern()` for field names and status strings (see `Fields.java`, `Status.java`)
 - **Async:** Return `CompletableFuture` from adapters; use virtual threads for IO-bound work
@@ -169,6 +179,8 @@ Defined in code at `venue/src/main/java/covia/lattice/Covia.java`. Full design i
 - **Jobs:** Use `engine.jobs()` accessor for all job operations (submit, query, cancel, etc.)
 - **Adapters:** Follow `venue/docs/ADAPTERS.md`, including its publication, configuration, private-state, capability, module, and test invariants.
 - **Tests:** JUnit 6, use `Engine.createTemp()` for test instances
+- **Message wording lives in constants:** a refusal or error message is built from a constant on the class that owns it (`VenueAuthenticator.Reason`, `Auth.KEY_ALREADY_BOUND`), and tests assert against the constant, never the wording — a rewording must break no test
+- **Checks return reasons:** a check returns `null` when it passes and a human-readable reason when it does not (`CapabilityChecker.allows`, `UcanJwtValidator.Validation`, `VenueAuthenticator.Verdict`), so the reason bubbles back to the caller unchanged
 - **Prefer editing** existing files over creating new ones
 
 ### Adding a New Adapter
@@ -235,9 +247,6 @@ The list below tracks engineering tasks. For the developer-experience and open-s
   - LangChainAdapter IO timeout
   - Thread safety of `Asset.meta()` (concurrent access)
 
-- [ ] **Structured logging** — Switch to JSON log format for production observability. Add request ID propagation.
-  - File: `venue/src/main/resources/logback.xml`
-
 - [ ] **Metrics export** — Add Prometheus-compatible metrics for operations, jobs, adapters, storage.
 
 ### P3 — Future (design goals from venue/CLAUDE.md)
@@ -247,7 +256,7 @@ The list below tracks engineering tasks. For the developer-experience and open-s
 - [ ] **Capability negotiation** — Discovery endpoint for venue capabilities via DID documents
 - [ ] **Signed operations** — Cryptographic attribution for every job submission
 - [ ] **Compliance reporting** — Data lineage tracking and audit log queries
-- [ ] **Workbench expansion** — Currently a 3-file / ~155-line demo; add configuration, multi-operation support, proper logging
+- [ ] **Workbench expansion** — Currently a REPL demo plus the shared Markdown and text components; add configuration, multi-operation support, proper logging
 - [ ] **Job restart API** — Consider `PUT /api/v1/jobs/{id}/restart` for re-running failed/cancelled/completed jobs. Semantics need thought: new job with same input? Same job ID? How to handle operations that have changed since original invocation? May be better as a client-side convenience (re-invoke with original params) rather than a server primitive.
 
 ## Module-Specific Guides

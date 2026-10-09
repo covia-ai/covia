@@ -13,6 +13,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.util.ThreadUtils;
 import convex.core.data.AString;
+import convex.core.data.AVector;
 import convex.core.data.Hash;
 import convex.core.data.Index;
 import convex.core.lang.RT;
@@ -117,6 +118,27 @@ public abstract class AAdapter {
 		this.engine=engine;
 		this.adapterWorkspace=engine.adapterWorkspace(getName());
 		installAssets();
+	}
+
+	/**
+	 * Starts adapter-owned inbound/background workers after venue assembly and
+	 * recovery. Installation must only bind state and declare assets; workers
+	 * that can invoke operations belong here. Runtime registration and enable
+	 * call this after publication on an already-started engine. Implementations
+	 * must be idempotent because enable may retain an installed instance.
+	 *
+	 * <p>Constructors, configuration and {@link #install(Engine)} must not start
+	 * autonomous work. During {@link Engine#launch(java.util.function.Function)},
+	 * this hook runs only after application setup, catalogue publication, secret
+	 * provisioning and recovery. Recovering a Job may itself execute work before
+	 * this hook, so recovery prerequisites must be established during installation
+	 * or the application's pre-start hook. Implement {@link AutoCloseable} to
+	 * release workers/resources on disable, replacement, shutdown or failed
+	 * startup; close must be idempotent and tolerate partial installation/activation. Do not block
+	 * here waiting for another adapter's workers or the HTTP listener.</p>
+	 */
+	public void start() {
+		// Most adapters have no autonomous workers.
 	}
 
 	/**
@@ -366,8 +388,44 @@ public abstract class AAdapter {
 
 	/** Records a catalog declaration at its canonical path and in this adapter's own subtree. */
 	private void declare(String prefix, String catalogPath, Hash hash) {
+		if ("v/ops/".equals(prefix) || "v/test/ops/".equals(prefix)) {
+			warnIfInputIsNotAnObject(prefix + catalogPath, hash);
+		}
 		pendingCatalogEntries.put(prefix + catalogPath, hash);
 		ownedCatalogEntries.put(ownedPath(prefix, catalogPath), hash);
+	}
+
+	/**
+	 * A Covia operation may take any JSON value, but every tool protocol the
+	 * venue projects operations into (MCP {@code inputSchema}, provider tool
+	 * use) requires an object. An operation whose declared input type excludes
+	 * {@code object} is therefore published and callable as an operation, and
+	 * advertised as a tool best-effort, but a tool client may reject the schema
+	 * or send an object the operation cannot use — so the author is told at
+	 * install. An absent input schema is not warned about: the projection
+	 * advertises an unconstrained object, which such an operation accepts.
+	 */
+	private void warnIfInputIsNotAnObject(String path, Hash hash) {
+		AString metaString = installedAssets.get(hash);
+		if (metaString == null) return;
+		ACell type;
+		try {
+			type = RT.getIn(JSON.parse(metaString), Fields.OPERATION, Fields.INPUT, Fields.TYPE);
+		} catch (Exception e) {
+			return;   // unparseable metadata is reported by the store step, not here
+		}
+		if (type == null) return;
+		boolean admitsObject = Fields.OBJECT.equals(type);
+		if (!admitsObject && type instanceof AVector<?> types) {
+			for (long i = 0; i < types.count(); i++) {
+				if (Fields.OBJECT.equals(types.get(i))) { admitsObject = true; break; }
+			}
+		}
+		if (admitsObject) return;
+		log.warn("Operation {} declares input type {} rather than an object. It is published and "
+			+ "callable as an operation, and advertised as a tool best-effort, but MCP and provider "
+			+ "tool schemas require object inputs, so tool clients may reject it or send an object "
+			+ "it cannot use.", path, JSON.print(type));
 	}
 
 	/** {@code v/adapters/<name>/<kind>/<rel>} for a canonical catalog declaration. */
@@ -647,16 +705,20 @@ public abstract class AAdapter {
      */
     public void invoke(Job job, RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
         // Default one-shot: wire future to job lifecycle
-        job.setStatus(Status.STARTED);
-		CompletableFuture<ACell> invocation;
-		try {
-			invocation = invokeFuture(ctx, meta, input);
-			if (invocation == null) invocation = CompletableFuture.completedFuture(null);
-		} catch (RuntimeException e) {
-			job.fail(e);
-			throw e;
-		}
-		bridgeToJob(job, invocation);
+		job.start(() -> {
+			CompletableFuture<ACell> invocation;
+			try {
+				invocation = invokeFuture(ctx, meta, input);
+				if (invocation == null) invocation = CompletableFuture.completedFuture(null);
+			} catch (RuntimeException | Error e) {
+				try { settleJob(job, null, e); }
+				catch (RuntimeException | Error reporting) {
+					if (reporting != e) e.addSuppressed(reporting);
+				}
+				throw e;
+			}
+			bridgeToJob(job, invocation);
+		});
 	}
 
 	/**
@@ -758,7 +820,16 @@ public abstract class AAdapter {
 	 * hook. Use when the adapter has already wired a bespoke cancel hook.
 	 */
 	protected static void completeFromJobFuture(Job job, CompletableFuture<ACell> future) {
-		future.whenComplete((result, error) -> settleJob(job, result, error));
+		future.whenComplete((result, error) -> {
+			try {
+				settleJob(job, result, error);
+			} catch (RuntimeException | Error failure) {
+				// A completion hook (e.g. output validation) can fail before it
+				// commits. Do not strand the Job on an ignored dependent future.
+				log.warn("Failed to settle job {}", job.getID(), failure);
+				job.fail(failure);
+			}
+		});
 	}
 
 	/**
@@ -842,13 +913,15 @@ public abstract class AAdapter {
     /**
      * Handles a message delivered to a running job.
      * Override this method in adapters that support multi-turn interactions.
-     * Default implementation does nothing (message remains in queue).
+     * Default implementation does nothing. An exception propagates to the
+     * deliverer, so an adapter that cannot take the message must throw rather
+     * than drop it.
      *
      * @param job The job receiving the message
      * @param messageRecord The message record (contains "message", "source", "ts", "id" fields)
      */
     public void handleMessage(Job job, AMap<AString, ACell> messageRecord) {
-    	// Default: no-op. Message stays in queue for polling by adapter.
+    	// Default: no-op.
     }
 
     /**

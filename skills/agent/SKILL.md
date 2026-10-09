@@ -64,7 +64,7 @@ never starts under an unintended backend:
 ```
 agent_create agentId="Bob" config=[
   "v/agents/templates/worker",
-  {"llmOperation": "v/ops/langchain/anthropic", "model": "claude-sonnet-5"}
+  {"llmOperation": "v/ops/langchain/anthropic", "model": "claude-sonnet-5-5"}
 ]
 ```
 

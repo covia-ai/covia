@@ -2,6 +2,7 @@ package covia.adapter;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -28,6 +29,7 @@ import covia.grid.Status;
 import covia.venue.AgentState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.test.Rendezvous;
 import covia.venue.TestEngine;
 import covia.venue.User;
 import covia.venue.Users;
@@ -72,6 +74,120 @@ public class AgentConcurrencyTest {
 	}
 
 	// ========== Unit: AgentState CAS operations ==========
+
+	@Test
+	public void testExclusiveCreateHasExactlyOneConcurrentWinner() throws Exception {
+		User user = engine.getVenueState().users().ensure(ALICE_DID);
+		AString id = Strings.create("exclusive-create");
+		java.util.function.Function<String, AgentState> create = marker ->
+			user.createAgent(id, Maps.of("marker", marker), null);
+		List<AgentState> raced = Rendezvous.all(
+			() -> create.apply("first"),
+			() -> create.apply("second"));
+		AgentState a = raced.get(0);
+		AgentState b = raced.get(1);
+		assertEquals(1, (a != null ? 1 : 0) + (b != null ? 1 : 0));
+		assertEquals(a != null ? Strings.create("first") : Strings.create("second"),
+			user.agent(id).getConfig().get(Strings.create("marker")));
+	}
+
+	@Test
+	public void testExclusiveForkHasExactlyOneConcurrentWinner() throws Exception {
+		User user = engine.getVenueState().users().ensure(ALICE_DID);
+		AString id = Strings.create("exclusive-fork");
+		java.util.function.Function<String, AgentState> fork = marker ->
+			user.forkAgent(id,
+				Maps.of("marker", marker),
+				Maps.of("stateMarker", marker),
+				Vectors.of(Maps.of("timelineMarker", marker)));
+		List<AgentState> raced = Rendezvous.all(
+			() -> fork.apply("first"),
+			() -> fork.apply("second"));
+		AgentState a = raced.get(0);
+		AgentState b = raced.get(1);
+		assertEquals(1, (a != null ? 1 : 0) + (b != null ? 1 : 0));
+		AString winner = Strings.create(a != null ? "first" : "second");
+		AgentState persisted = user.agent(id);
+		assertEquals(winner, persisted.getConfig().get(Strings.create("marker")));
+		assertEquals(winner, RT.getIn(persisted.getState(), "stateMarker"));
+		assertEquals(winner, RT.getIn(persisted.getTimeline(), CVMLong.ZERO, "timelineMarker"));
+	}
+
+	@Test
+	public void testSessionLoadsAndTaskLandInOneExclusiveIntake() throws Exception {
+		User user = engine.getVenueState().users().ensure(ALICE_DID);
+		AgentState agent = user.ensureAgent("session-intake", Maps.empty(), null);
+		Blob sid = Blob.fromHex("99990001999900019999000199990001");
+		Blob firstTask = Blob.fromHex("1001");
+		Blob secondTask = Blob.fromHex("1002");
+		java.util.function.BiFunction<Blob, String, AgentState.SessionIntake> intake = (task, marker) ->
+			agent.addTaskInSession(sid, ALICE_DID,
+				Maps.of("load", marker), task, Maps.of("marker", marker));
+		List<AgentState.SessionIntake> raced = Rendezvous.all(
+			() -> intake.apply(firstTask, "first"),
+			() -> intake.apply(secondTask, "second"));
+		AgentState.SessionIntake a = raced.get(0);
+		AgentState.SessionIntake b = raced.get(1);
+		assertEquals(1, (a == AgentState.SessionIntake.APPLIED ? 1 : 0)
+			+ (b == AgentState.SessionIntake.APPLIED ? 1 : 0));
+		assertEquals(1, (a == AgentState.SessionIntake.LOADS_ON_EXISTING ? 1 : 0)
+			+ (b == AgentState.SessionIntake.LOADS_ON_EXISTING ? 1 : 0));
+		assertEquals(1, agent.getTasks().count());
+		assertNotNull(agent.getSession(sid));
+	}
+
+	@Test
+	public void testPendingIntakeExposesMissingCreateAndLoadsOutcomes() {
+		User user = engine.getVenueState().users().ensure(ALICE_DID);
+		AgentState agent = user.ensureAgent("pending-intake", Maps.empty(), null);
+		Blob sid = Blob.fromHex("99990002999900029999000299990002");
+		ACell firstEnvelope = Maps.of("content", "first");
+
+		assertEquals(AgentState.SessionIntake.MISSING,
+			agent.appendSessionPending(sid, ALICE_DID, null, firstEnvelope, false));
+		assertNull(agent.getSession(sid),
+			"a supplied/strict session path must not mint a missing session");
+
+		AMap<AString, ACell> loads = Maps.of("seed", Strings.create("initial"));
+		assertEquals(AgentState.SessionIntake.APPLIED,
+			agent.appendSessionPending(sid, ALICE_DID, loads, firstEnvelope, true));
+		assertEquals(Strings.create("initial"), RT.getIn(agent.getSession(sid),
+			AgentState.KEY_FRAMES, CVMLong.ZERO, Fields.LOADS, "seed"));
+		assertEquals(1, agent.getSessionPending(sid).count());
+
+		assertEquals(AgentState.SessionIntake.LOADS_ON_EXISTING,
+			agent.appendSessionPending(sid, ALICE_DID, Maps.empty(),
+				Maps.of("content", "rejected"), true));
+		assertEquals(1, agent.getSessionPending(sid).count(),
+			"loads against an existing session reject the whole append");
+
+		assertEquals(AgentState.SessionIntake.APPLIED,
+			agent.appendSessionPending(sid, ALICE_DID, null,
+				Maps.of("content", "second"), false));
+		assertEquals(2, agent.getSessionPending(sid).count());
+	}
+
+	@Test
+	public void testMediatedDeliveryUsesStrictAtomicSessionIntake() {
+		User user = engine.getVenueState().users().ensure(ALICE_DID);
+		AgentState agent = user.ensureAgent("mediated-intake", Maps.empty(), null);
+		AgentAdapter adapter = (AgentAdapter) engine.getAdapter("agent");
+		Blob missing = Blob.fromHex("99990003999900039999000399990003");
+
+		assertFalse(adapter.deliverSessionMessage(ALICE_DID, agent.getAgentId(), missing,
+			ALICE_DID, Strings.create("hitl-missing"), Strings.create("answer")));
+		assertNull(agent.getSession(missing),
+			"venue-mediated delivery must not mint the session it is meant to resume");
+
+		Blob existing = Blob.fromHex("99990004999900049999000499990004");
+		agent.ensureSession(existing, ALICE_DID);
+		agent.suspend(Strings.create("keep the run loop parked for inspection"));
+		assertTrue(adapter.deliverSessionMessage(ALICE_DID, agent.getAgentId(), existing,
+			ALICE_DID, Strings.create("hitl-present"), Strings.create("answer")));
+		assertEquals(1, agent.getSessionPending(existing).count());
+		assertEquals(Strings.create("hitl-present"),
+			RT.getIn(agent.getSessionPending(existing), CVMLong.ZERO, Fields.JOB_ID));
+	}
 
 	@Test
 	public void testTryResumeIdempotence() {

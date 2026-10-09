@@ -42,7 +42,7 @@ docker pull ghcr.io/covia-ai/covia:latest
 docker stop covia-venue && docker rm covia-venue
 docker run -d \
   --name covia-venue \
-  -p 8080:8080 \
+  -p 127.0.0.1:8080:8080 \
   -v /home/ec2-user/covia-data:/data \
   --restart unless-stopped \
   ghcr.io/covia-ai/covia:latest
@@ -73,3 +73,20 @@ Internet → nginx (443 TLS) → localhost:8080 → Docker container (covia-venu
 ```
 
 Nginx handles TLS termination and proxies to the container on port 8080.
+
+The server block must forward the client address, or every caller shares one
+rate-limit bucket and one authentication budget at the venue (covia#539):
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+The venue side is set by the deploy workflow: it reconciles
+`"trustedProxies": ["loopback", "172.16.0.0/12"]` into the persisted config,
+since the container sees nginx through the Docker bridge, not as loopback.

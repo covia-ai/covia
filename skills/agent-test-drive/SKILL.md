@@ -59,7 +59,7 @@ curl -s -X POST "http://localhost:8099/api/v1/invoke?wait=true" \
 
 ```bash
 python skills/agent-test-drive/run.py --venue http://localhost:8099 \
-  --model claude-sonnet-5 --out report.md
+  --model claude-sonnet-5-5 --out report.md
 
 python skills/agent-test-drive/run.py --only skills-missing,caps-denied   # subset
 ```

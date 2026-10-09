@@ -236,6 +236,9 @@ public class UCANAdapter extends AAdapter {
 			UCAN.PRF, Vectors.empty());
 		claims = claims.assoc(UCAN.EXP, (exp == null) ? null : CVMLong.create(exp));
 		AString token = JWT.signPublic(claims, venueKP);
+		engine.audit().event(covia.venue.Audit.TOKEN_ISSUED, covia.venue.Audit.K_TYPE, "ucan",
+			covia.venue.Audit.K_DID, ctx.getCallerDID(), covia.venue.Audit.K_SUBJECT, audDID,
+			covia.venue.Audit.K_EXP, (exp == null) ? "never" : exp);
 
 		return Maps.of("token", token);
 	}

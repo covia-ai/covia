@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Set;
+import java.util.concurrent.Semaphore;
 
 import convex.api.ContentTypes;
 import convex.auth.did.DIDVerifier;
@@ -18,6 +19,7 @@ import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.exception.AuthException;
+import covia.venue.Audit;
 import covia.venue.Auth;
 import covia.venue.Config;
 import covia.venue.Engine;
@@ -67,6 +69,8 @@ public class AuthMiddleware {
 	private final AVector<ACell> publicScope;
 	private final Engine engine;
 	private final VenueAuthenticator authenticator;
+	/** Per-address backpressure on credential checks (covia#539); null when rate limiting is off. */
+	private final AuthThrottle throttle;
 
 	private AuthMiddleware(Engine engine, VenueAuthenticator authenticator) {
 		this.engine = engine;
@@ -74,6 +78,11 @@ public class AuthMiddleware {
 		this.publicDID = Strings.create(engine.getDIDString() + ":public");
 		Auth auth = engine.getAuth();
 		this.publicAccessEnabled = auth.isPublicAccessEnabled();
+		Config config = engine.config();
+		this.throttle = config.isRateLimitEnabled()
+			? new AuthThrottle(config.getTrustedProxies(), config.getAuthFailureBurst(),
+				config.getAuthFailuresPerMinute(), config.getAuthConcurrency(), config.getRateLimitBlockMs())
+			: null;
 		// Capability grant scope for public callers — secure read-only by default,
 		// operator-overridable via auth.public.caps. Only relevant when public
 		// access is enabled (otherwise every anonymous request is 401'd, except on
@@ -165,7 +174,7 @@ public class AuthMiddleware {
 	}
 
 	private void extractMCPIdentity(Context ctx, boolean required, Set<String> allowedDids) {
-		String resourceMetadata = ACoviaAPI.getExternalBaseUrl(ctx, null)
+		String resourceMetadata = ACoviaAPI.getExternalBaseUrl(ctx, null, engine.config().getTrustedProxies())
 			+ "/.well-known/oauth-protected-resource/mcp";
 		extractIdentity(ctx, !required && publicAccessEnabled, resourceMetadata,
 			true);
@@ -182,6 +191,8 @@ public class AuthMiddleware {
 	 * must render the response itself rather than relying on endpoint error handling.
 	 */
 	private void reject(Context ctx, int status, String message) {
+		// RFC 7235: a 401 names its challenge; the MCP path has already set a richer one.
+		if (status == 401 && ctx.res().getHeader("WWW-Authenticate") == null) ctx.header("WWW-Authenticate", "Bearer");
 		String body = "{\"error\": \"" + JSON.escape(message) + "\"}";
 		ctx.status(status)
 			.header("Content-Type", ContentTypes.JSON + "; charset=utf-8")
@@ -219,13 +230,50 @@ public class AuthMiddleware {
 			return;
 		}
 
+		// A credential is presented: charge its address (covia#539). Over budget
+		// means no verification at all; otherwise take the address's in-flight
+		// slot so it cannot fan out DID resolution in parallel.
+		String ip = engine.config().getTrustedProxies().clientIp(ctx.ip(), ctx.header("X-Forwarded-For"));
+		Audit audit = engine.audit();
+		Semaphore slot = null;
+		if (throttle != null) {
+			long retry = throttle.overBudgetRetryAfter(ip);
+			if (retry > 0) {
+				audit.event(Audit.AUTH_THROTTLED, Audit.K_IP, ip, Audit.K_REASON, "failure budget spent");
+				rejectTooMany(ctx, retry, AuthThrottle.TOO_MANY_FAILURES + retry + "s");
+				return;
+			}
+			slot = throttle.acquire(ip);
+			if (slot == null) {
+				audit.event(Audit.AUTH_THROTTLED, Audit.K_IP, ip, Audit.K_REASON, "concurrent attempts");
+				rejectTooMany(ctx, 1, AuthThrottle.TOO_MANY_CONCURRENT);
+				return;
+			}
+		}
 		try {
 			AString venueUserDID = authenticator.authenticate(ctx, Strings.create(token));
+			audit.event(Audit.AUTH_SUCCESS, Audit.K_DID, venueUserDID,
+				Audit.K_IDENTITY, getAuthenticatedIdentity(ctx), Audit.K_IP, ip);
 			if (admitUser && !admitAuthenticated(ctx, venueUserDID)) return;
 		} catch (AuthException e) {
+			if (throttle != null) throttle.recordFailure(ip);
+			// The reason describes the presented credential, never its bytes (#548).
+			audit.event(Audit.AUTH_FAILURE, Audit.K_IP, ip, Audit.K_REASON, e.getMessage());
 			log.debug("Bearer token rejected: {}", e.getMessage());
 			rejectUnauthorized(ctx, e.getMessage(), resourceMetadata);
+		} finally {
+			if (slot != null) slot.release();
 		}
+	}
+
+	private void rejectTooMany(Context ctx, long retryAfterSeconds, String message) {
+		ctx.header("Retry-After", Long.toString(retryAfterSeconds));
+		reject(ctx, 429, message);
+	}
+
+	/** The authentication throttle in force, or null when rate limiting is off — for tests and status. */
+	public AuthThrottle throttle() {
+		return throttle;
 	}
 
 	/**

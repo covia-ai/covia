@@ -49,8 +49,8 @@ class A2AAdapterTest {
 		// Parity with the http/mcp adapters (#234): outbound A2A targets pass
 		// the same SSRF checks and operator allow/block lists. A site-local
 		// literal is refused without touching the network.
-		Job card = TestServer.COVIA.startJob(Strings.create("v/ops/a2a/raw/agent-card"), Maps.of(
-			Fields.URL, Strings.create("http://10.0.0.1/agent")));
+		Job card = TestServer.COVIA.invoke("v/ops/a2a/raw/agent-card", Maps.of(
+			Fields.URL, Strings.create("http://10.0.0.1/agent"))).get();
 		assertThrows(Exception.class, () -> card.awaitResult(10000));
 		assertEquals(Status.FAILED, card.getStatus());
 		assertTrue(card.getErrorMessage().contains("private/internal"), card.getErrorMessage());
@@ -135,7 +135,8 @@ class A2AAdapterTest {
 			Fields.MESSAGE, coviaMessageRecord("hello remote Covia agent")));
 		AString remoteTaskId = awaitRemoteTaskId(TwoVenueTestServer.ENGINE_A, send.getID());
 		assertNotNull(remoteTaskId);
-		AMap<AString, ACell> mirror = TwoVenueTestServer.ENGINE_A.jobs().getJobData(send.getID());
+		AMap<AString, ACell> mirror = TwoVenueTestServer.ENGINE_A.jobs().getJobData(send.getID(),
+			RequestContext.of(Strings.create(TwoVenueTestServer.ENGINE_A.getDIDString() + ":public")));
 		assertNotNull(mirror.get(Strings.create("a2aAgentAsset")),
 			"the mirror Job records the exact immutable agent profile used");
 
@@ -150,7 +151,9 @@ class A2AAdapterTest {
 			Fields.ID, remoteTaskId));
 		assertTrue(cancel.getStatus() == Status.COMPLETE || cancel.getStatus() == Status.FAILED,
 			"completed remote task may be non-cancelable");
-		TwoVenueTestServer.COVIA_A.cancelJob(send.getID());
+		// The echo may already have completed and left the active cache.
+		TwoVenueTestServer.ENGINE_A.jobs().getJob(send.getID(),
+			RequestContext.of(Strings.create(TwoVenueTestServer.ENGINE_A.getDIDString() + ":public"))).cancel();
 	}
 
 	// ==================== standard HTTP Bearer auth ====================
@@ -340,6 +343,94 @@ class A2AAdapterTest {
 		assertEquals(remoteTaskId, RT.ensureString(task.get(Strings.create("id"))));
 	}
 
+	// ==================== continuation — replying to a mirrored task ====================
+
+	/** #507: a reply delivered to the mirror Job is relayed to the remote Task,
+	 *  and the Job reflects the remote agent's response before delivery returns. */
+	@Test
+	void send_relaysDeliveredRepliesToTheRemoteTask() throws Exception {
+		VenueHTTP covia = TestServer.COVIA;
+		Job seed = covia.startJob(Strings.create("v/ops/a2a/raw/send"), Maps.of(
+				Fields.URL, Strings.create(TestServer.BASE_URL),
+				Fields.MESSAGE, coviaMessageRecord("hello from test")));
+		String jobId = seed.getID().toHexString();
+		assertEquals(Status.INPUT_REQUIRED,
+				RT.ensureString(awaitStable(seed.getID()).get(Fields.STATUS)));
+
+		// An A2A-shaped reply: the remote chat op echoes it and asks again.
+		covia.sendMessage(jobId, coviaMessageRecord("second turn"));
+		AMap<AString, ACell> echoed = TestServer.ENGINE.jobs().getJobData(seed.getID());
+		assertEquals(Status.INPUT_REQUIRED, RT.ensureString(echoed.get(Fields.STATUS)));
+		assertTrue(String.valueOf(RT.getIn(echoed, Fields.OUTPUT, "artifacts")).contains("second turn"),
+				"the mirror carries the remote agent's response to the reply: " + echoed.get(Fields.OUTPUT));
+
+		// A bare REST body ({content}) is relayed too, and ends the remote task.
+		covia.sendMessage(jobId, Maps.of(Fields.CONTENT, Strings.create("done")));
+		// A finished job leaves the active cache, so read the owner's record.
+		AMap<AString, ACell> finished = covia.getJobData(seed.getID()).get(5, java.util.concurrent.TimeUnit.SECONDS);
+		assertEquals(Status.COMPLETE, RT.ensureString(finished.get(Fields.STATUS)));
+	}
+
+	/** #507: a reply the remote agent refuses, or never acknowledges, is an error
+	 *  to the deliverer and leaves the mirror exactly where it was. */
+	@Test
+	void send_surfacesUndeliveredRepliesToTheDeliverer() throws Exception {
+		AtomicReference<String> continuationStatus = new AtomicReference<>("rejected");
+		AtomicReference<ACell> continuation = new AtomicReference<>();
+		HttpServer peer = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
+		peer.createContext("/a2a", exchange -> {
+			ACell request = convex.core.util.JSON.parse(
+					new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+			ACell message = RT.getIn(request, "params", "message");
+			boolean isContinuation = message != null && RT.getIn(message, "taskId") != null;
+			if (isContinuation) continuation.set(message);
+			int status = 200;
+			String body = "{\"jsonrpc\":\"2.0\",\"id\":\"reply\",\"result\":{\"task\":{"
+					+ "\"id\":\"a2a-remote\",\"contextId\":\"test-context\","
+					+ "\"status\":{\"state\":\"TASK_STATE_INPUT_REQUIRED\"}}}}";
+			if (isContinuation && "rejected".equals(continuationStatus.get())) {
+				body = "{\"jsonrpc\":\"2.0\",\"id\":\"reply\",\"error\":"
+						+ "{\"code\":-32004,\"message\":\"task is not accepting messages\"}}";
+			} else if (isContinuation) {
+				status = 503;
+			}
+			byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+			exchange.getResponseHeaders().set("Content-Type", "application/json");
+			exchange.sendResponseHeaders(status, bytes.length);
+			try (var out = exchange.getResponseBody()) { out.write(bytes); }
+		});
+		peer.start();
+		VenueHTTP covia = TestServer.COVIA;
+		Job seed = null;
+		try {
+			seed = covia.startJob(Strings.create("v/ops/a2a/raw/send"), Maps.of(
+					Fields.URL, Strings.create("http://localhost:" + peer.getAddress().getPort()),
+					Fields.MESSAGE, coviaMessageRecord("hello fake peer")));
+			String jobId = seed.getID().toHexString();
+			assertEquals(Status.INPUT_REQUIRED,
+					RT.ensureString(awaitStable(seed.getID()).get(Fields.STATUS)));
+
+			// A JSON-RPC error is a definite refusal: 409 to the deliverer.
+			assertThrows(IllegalStateException.class,
+					() -> covia.sendMessage(jobId, coviaMessageRecord("refused")));
+			assertEquals(Strings.create("a2a-remote"), RT.getIn(continuation.get(), "taskId"),
+					"the continuation addresses the mirrored remote task");
+			assertEquals(Strings.create("test-context"), RT.getIn(continuation.get(), "contextId"));
+			assertEquals(Status.INPUT_REQUIRED, RT.ensureString(
+					TestServer.ENGINE.jobs().getJobData(seed.getID()).get(Fields.STATUS)));
+
+			// A 5xx leaves delivery unknown: 502, never a silent success.
+			continuationStatus.set("unavailable");
+			assertThrows(covia.exception.ResponseException.class,
+					() -> covia.sendMessage(jobId, coviaMessageRecord("lost")));
+			assertEquals(Status.INPUT_REQUIRED, RT.ensureString(
+					TestServer.ENGINE.jobs().getJobData(seed.getID()).get(Fields.STATUS)));
+		} finally {
+			if (seed != null) covia.cancelJob(seed.getID());
+			peer.stop(0);
+		}
+	}
+
 	// ==================== getTask — fetch existing remote task ====================
 
 	@Test
@@ -475,11 +566,12 @@ class A2AAdapterTest {
 			throws InterruptedException {
 		long deadline = System.currentTimeMillis() + 5000;
 		while (System.currentTimeMillis() < deadline) {
-			AMap<AString, ACell> data = engine.jobs().getJobData(jobId);
+			AMap<AString, ACell> data = engine.jobs().getJobData(jobId,
+				RequestContext.of(Strings.create(engine.getDIDString() + ":public")));
 			AString taskId = data != null ? RT.ensureString(data.get(Fields.REMOTE_TASK_ID)) : null;
 			if (taskId != null) return taskId;
 			Thread.sleep(50);
 		}
-		throw new AssertionError("A2A mirror never recorded its remote task id");
+		throw new AssertionError("A2A mirror never recorded its remote task id: " + engine.jobs().getJobData(jobId));
 	}
 }

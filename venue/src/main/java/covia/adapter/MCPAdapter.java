@@ -564,7 +564,7 @@ public class MCPAdapter extends AAdapter {
 		boolean venueScope = isVenueScope(ctx, input);
 
 		// SSRF guard — shared with the http adapter, including its allowlist.
-		((HTTPAdapter) engine.getAdapter("http")).requireSafeUrl(url.toString());
+		engine.requireSafeUrl(url.toString());
 
 		// Discover tools under the REGISTRAR's auth (resolved now, not stored raw)
 		String token = resolveAuthRef(ctx, auth);
@@ -637,7 +637,7 @@ public class MCPAdapter extends AAdapter {
 		if (venuePath) engine.requireAuthority(ctx, Abilities.V_MCP, Abilities.MCP_MANAGE);
 
 		// SSRF guard — shared with the http adapter, including its allowlist.
-		((HTTPAdapter) engine.getAdapter("http")).requireSafeUrl(url.toString());
+		engine.requireSafeUrl(url.toString());
 
 		AString auth = RT.ensureString(RT.getIn(input, K_AUTH));
 		String token = resolveAuthRef(ctx, auth);

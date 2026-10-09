@@ -102,7 +102,7 @@ public class ToolPage {
         String description = (descField != null) ? descField.toString() : "";
         String toolNameStr = (toolName != null) ? toolName.toString() : displayName;
 
-        String mcpURL = CoviaAPI.getExternalBaseUrl(ctx, "/mcp");
+        String mcpURL = CoviaAPI.getExternalBaseUrl(ctx, "/mcp", engine.config().getTrustedProxies());
 
         // Generate the page
         standardPage(ctx, html(

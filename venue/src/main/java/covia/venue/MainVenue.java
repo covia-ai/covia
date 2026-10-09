@@ -73,6 +73,9 @@ public class MainVenue {
 		}
 		
 		List<AMap<AString, ACell>> venues = Config.validateServerConfig(config);
+		// Logging was set up with the default before the config could be read;
+		// apply the document's process-wide choice now, before any venue starts.
+		if (config.get(Config.OPERATIONS) != null) configureLogging(config);
 		List<VenueServer> servers=new ArrayList<>();
 		VenueProcess process = VenueProcess.create(args);
 		for (AMap<AString,ACell> venueConfig: venues) {
@@ -99,7 +102,7 @@ public class MainVenue {
 		// On JVM shutdown (e.g. `docker stop` → SIGTERM) flush each venue's
 		// accumulated state before the process exits. Registered on Convex's
 		// shared, priority-ordered Shutdown registry at a priority BELOW SERVER,
-		// so the venue's high-level flush — the venueState fork merge + fsync via
+		// so the venue's high-level flush — final root publication + fsync via
 		// the idempotent Engine.close() — runs before Convex's own NodeServer
 		// persist (SERVER) and Etch flush (ETCH). Deliberately not a second
 		// Runtime.addShutdownHook: that would run concurrently with Convex's
@@ -133,19 +136,25 @@ public class MainVenue {
 		//rootLogger.setLevel(ch.qos.logback.classic.Level.OFF);
 		
 		
-		// configure logging if specified
-		ACell logFile=RT.getIn(config,"operations","log-config-file");
+		// An operator's own Logback file wins; otherwise the shipped profile for
+		// operations.log-format (text by default, or json). Process-wide: every
+		// venue this document hosts shares one logging setup (covia#538).
+		ACell logFile=RT.getIn(config,Config.OPERATIONS,Config.LOG_CONFIG_FILE);
 		if (logFile instanceof AString) {
 			File logConfigFile=FileUtils.getFile(logFile.toString());
 			if (logConfigFile.exists()) {
-				InputStream is=new FileInputStream(logConfigFile);
-				configureLoggingInternal(is);
+				try (InputStream is=new FileInputStream(logConfigFile)) {
+					configureLoggingInternal(is);
+				}
 				log.info("Logging configured from: "+logConfigFile);
 				return;
-			} 
-		} 
-		
-		String resourcePath="/covia/logback-default.xml";
+			}
+			log.warn("operations.log-config-file {} does not exist; using the shipped logging profile", logConfigFile);
+		}
+
+		ACell format=RT.getIn(config,Config.OPERATIONS,Config.LOG_FORMAT);
+		String resourcePath=(format instanceof AString f && "json".equals(f.toString()))
+			? "/covia/logback-json.xml" : "/covia/logback-default.xml";
 		configureLoggingInternal(MainVenue.class.getResourceAsStream(resourcePath));
 		log.info("Logging configured from default resource: "+resourcePath);
 	}

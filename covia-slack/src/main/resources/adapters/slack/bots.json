@@ -1,0 +1,27 @@
+{
+  "operation": {
+    "adapter": "slack:bots",
+    "output": {
+      "required": [
+        "bots"
+      ],
+      "type": "object",
+      "properties": {
+        "bots": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "input": {
+      "additionalProperties": false,
+      "type": "object",
+      "properties": {}
+    },
+    "readOnly": true
+  },
+  "name": "Slack bindings",
+  "description": "List caller-owned bindings (all for the venue principal), readiness, webhook paths and durable pending/started receipt counts. No credentials are returned. STARTED receipts may need manual reconciliation after a failure."
+}

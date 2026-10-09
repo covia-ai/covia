@@ -10,6 +10,8 @@ public class Fields {
 	// Job related
 	public static final StringShort CREATED=Strings.intern("created");
 	public static final StringShort UPDATED = Strings.intern("updated");
+	/** Who wrote a record: {@code {did, agentId?}} — the calling principal, and the agent when it wrote from an agent run. */
+	public static final StringShort CREATED_BY = Strings.intern("createdBy");
 	/** Non-fatal advisories attached to an operation result (a vector of message
 	 *  strings, e.g. config sanity warnings). Absent when there are none. */
 	public static final StringShort WARNINGS = Strings.intern("warnings");
@@ -56,6 +58,8 @@ public class Fields {
 	public static final StringShort CACHE_READ = Strings.intern("cacheRead");
 	/** Prompt-cache tokens written at the write premium (provider-reported). */
 	public static final StringShort CACHE_WRITE = Strings.intern("cacheWrite");
+	public static final StringShort CACHE_WRITE_5M = Strings.intern("cacheWrite5m");
+	public static final StringShort CACHE_WRITE_1H = Strings.intern("cacheWrite1h");
 	public static final StringShort OFFSET = Strings.intern("offset");
 	public static final StringShort LIMIT = Strings.intern("limit");
 	
@@ -178,6 +182,9 @@ public class Fields {
 
 	// Agent related
 	public static final StringShort AGENT_ID = Strings.intern("agentId");
+	/** Derived counts of jobs awaiting input or authorisation. */
+	public static final StringShort AWAITING = Strings.intern("awaiting");
+	public static final StringShort AUTH = Strings.intern("auth");
 	public static final StringShort CONFIG = Strings.intern("config");
 	/** Target-side admission policy on an agent record (covia#447): who, besides
 	 *  the owner, may talk to the agent without a delegation — {@code "owner"},
@@ -284,6 +291,10 @@ public class Fields {
 	 *  unchanged and no migration is implied. Attribution only: ownership,
 	 *  access control and quota all key on {@code caller}. */
 	public static final StringShort ACTOR = Strings.intern("actor");
+	/** On a job record: the id of the nearest <em>recorded</em> job inside whose
+	 *  execution this job was dispatched. Absent on top-level jobs. Only the
+	 *  up-link is stored; a client reconstructs a job tree by tracing parents. */
+	public static final StringShort PARENT = Strings.intern("parent");
 	public static final StringShort ROLES = Strings.intern("roles");
 	public static final StringShort REQUIRES = Strings.intern("requires");
 	public static final StringShort EMAIL = Strings.intern("email");

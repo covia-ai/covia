@@ -265,7 +265,7 @@ public class LocalVenue extends Venue {
 	}
 
 	@Override
-	public int sendMessage(String jobId, AMap<AString, ACell> message) {
-		return engine.jobs().deliverMessage(Blob.parse(jobId), message, context());
+	public void sendMessage(String jobId, AMap<AString, ACell> message) {
+		engine.jobs().deliverMessage(Blob.parse(jobId), message, context());
 	}
 }

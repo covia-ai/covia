@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -58,6 +59,8 @@ public class SharedEngineOnlineGcTest {
 		// rest of the suite happens to be doing.
 		AtomicBoolean stop = new AtomicBoolean();
 		int writerCount = 4;
+		CountDownLatch gcStarted = new CountDownLatch(1);
+		CountDownLatch firstAttempts = new CountDownLatch(writerCount);
 		List<AtomicInteger> counts = new ArrayList<>();
 		List<Thread> writers = new ArrayList<>();
 		List<Throwable> failures = new java.util.concurrent.CopyOnWriteArrayList<>();
@@ -67,10 +70,15 @@ public class SharedEngineOnlineGcTest {
 			counts.add(count);
 			Thread t = Thread.ofVirtual().name("gc-writer-" + w).start(() -> {
 				try {
+					gcStarted.await();
 					while (!stop.get()) {
 						int i = count.get();
-						write(engine, user, "w/gc-load/" + i, big("load-" + i));
-						count.incrementAndGet();
+						try {
+							write(engine, user, "w/gc-load/" + i, big("load-" + i));
+							count.incrementAndGet();
+						} finally {
+							if (i == 0) firstAttempts.countDown();
+						}
 					}
 				} catch (Throwable e) {
 					failures.add(e);
@@ -82,15 +90,21 @@ public class SharedEngineOnlineGcTest {
 		try {
 			store.startGC();
 			assertTrue(store.isGCInProgress());
+			gcStarted.countDown();
+			assertTrue(firstAttempts.await(15, TimeUnit.SECONDS),
+				"each writer must attempt a write during the cycle");
+			assertTrue(failures.isEmpty(), "writers must not fail during the cycle: " + failures);
+			for (AtomicInteger c : counts) assertTrue(c.get() > 0,
+				"each writer must have written during the cycle");
 			store.transferGC();
 			assertTrue(store.isGCComplete());
 			assertTrue(store.verifyGC().isEmpty(), "sweep must leave nothing reachable behind");
 		} finally {
 			stop.set(true);
+			gcStarted.countDown();
 			for (Thread t : writers) t.join(TimeUnit.SECONDS.toMillis(30));
 		}
 		assertTrue(failures.isEmpty(), "writers must not fail during the cycle: " + failures);
-		for (AtomicInteger c : counts) assertTrue(c.get() > 0, "each writer must have written during the cycle");
 
 		// Everything the live root reaches — including what was written during
 		// the sweep — is in the target, then cut over.

@@ -493,7 +493,7 @@ public class AgentAdapterTest {
 		AMap<AString, ACell> context = RT.ensureMap(engine.jobs().invokeOperation(
 			"v/ops/agent/context", Maps.of(Fields.AGENT_ID, "my-assistant"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000));
-		assertEquals(Strings.create("claude-sonnet-5"), context.get(Strings.intern("model")),
+		assertEquals(Strings.create("claude-sonnet-5-5"), context.get(Strings.intern("model")),
 			"inspection should expose the effective model supplied by the model operation");
 	}
 
@@ -4722,6 +4722,68 @@ public class AgentAdapterTest {
 	// ========== agent:list ==========
 
 	@Test
+	public void testAwaitingSummaryTracksPendingJobStatusesWithoutChangingAgentState() {
+		AgentAdapter adapter = (AgentAdapter) engine.getAdapter("agent");
+		AString id = Strings.create("awaiting");
+		AgentState agent = engine.getVenueState().users().ensure(ALICE_DID)
+			.ensureAgent(id, Maps.empty(), null);
+		engine.getVenueState().users().ensure(ALICE_DID)
+			.ensureAgent(Strings.create("idle"), Maps.empty(), null);
+		engine.getVenueState().users().ensure(BOB_DID).ensureAgent(id, Maps.empty(), null);
+		RequestContext ctx = RequestContext.ofAgent(ALICE_DID, id);
+		Job input = engine.jobs().invokeOperation("v/test/ops/chat", Maps.empty(), ctx);
+		Job auth = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), ctx);
+		Job otherUser = engine.jobs().invokeOperation("v/test/ops/chat", Maps.empty(),
+			RequestContext.ofAgent(BOB_DID, id));
+		Job owner = engine.jobs().invokeOperation("v/test/ops/chat", Maps.empty(),
+			RequestContext.of(ALICE_DID));
+		try {
+			agent.addPending(input.getID(), Maps.empty());
+			agent.addPending(auth.getID(), Maps.empty());
+			engine.getVenueState().users().get(BOB_DID).agent(id)
+				.addPending(otherUser.getID(), Maps.empty());
+			AMap<AString, ACell> before = agent.getRecord();
+			assertAwaiting(id, 1, 0);
+			auth.setStatus(Status.AUTH_REQUIRED);
+			assertAwaiting(id, 1, 1);
+			assertAwaiting(Strings.create("idle"), 0, 0);
+			assertEquals(Maps.of(Fields.INPUT, 1, Fields.AUTH, 0),
+				adapter.agentInfo(RequestContext.of(BOB_DID), id).get(Fields.AWAITING));
+
+			input.setStatus(Status.STARTED);
+			assertAwaiting(id, 0, 1);
+			input.setStatus(Status.INPUT_REQUIRED);
+			assertAwaiting(id, 1, 1);
+			input.completeWith(Maps.empty());
+			assertAwaiting(id, 0, 1);
+			auth.cancel();
+			assertAwaiting(id, 0, 0);
+			assertEquals(before, agent.getRecord(), "summaries must not persist derived state");
+		} finally {
+			input.cancel();
+			auth.cancel();
+			otherUser.cancel();
+			owner.cancel();
+		}
+	}
+
+	private void assertAwaiting(AString id, long input, long auth) {
+		AgentAdapter adapter = (AgentAdapter) engine.getAdapter("agent");
+		RequestContext ctx = RequestContext.of(ALICE_DID);
+		AMap<AString, ACell> expected = Maps.of(Fields.INPUT, input, Fields.AUTH, auth);
+		assertEquals(expected, adapter.agentInfo(ctx, id).get(Fields.AWAITING));
+		AVector<ACell> roster = RT.ensureVector(RT.getIn(adapter.listAgents(ctx, false, true), "agents"));
+		ACell entry = null;
+		for (ACell candidate : roster) {
+			if (id.equals(RT.getIn(candidate, Fields.AGENT_ID))) entry = candidate;
+		}
+		assertNotNull(entry);
+		assertEquals(expected, RT.getIn(entry, Fields.AWAITING));
+		assertEquals(AgentState.SLEEPING, RT.getIn(entry, Fields.STATUS),
+			"attention counts are independent of lifecycle status");
+	}
+
+	@Test
 	public void testListAgentsEmpty() {
 		// New user with no agents
 		Job listJob = engine.jobs().invokeOperation(
@@ -5147,6 +5209,8 @@ public class AgentAdapterTest {
 			() -> "agent did not enter RUNNING (status=" + observableStatus(old) + ")");
 		assertEquals(AgentState.RUNNING, observableStatus(old));
 		assertEquals(AgentState.RUNNING, old.getStatus());
+		TestEngine.awaitCondition(() -> Status.STARTED.equals(stuck.getStatus()), 5000,
+			() -> "request job did not enter STARTED (status=" + stuck.getStatus() + ")");
 
 		// Config and state changes land on the record now and apply to future
 		// transitions; the never-completing transition keeps the snapshot it

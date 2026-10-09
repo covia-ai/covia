@@ -10,9 +10,15 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -127,6 +133,10 @@ public class Engine {
 
 	/** Job lifecycle manager (submission, queries, persistence, recovery) */
 	private final JobManager jobManager;
+	private final RemoteJobs remoteJobs = new RemoteJobs(this);
+
+	/** Bounded network attempts observing long-lived remote Jobs. */
+	public RemoteJobs remoteJobs() { return remoteJobs; }
 
 	/** MainVenue process control; absent for embedded and test engines. */
 	private volatile VenueProcess processControl;
@@ -206,15 +216,20 @@ public class Engine {
 	private final PersistenceHandler persistHandler;
 
 	/**
-	 * Background sweep daemon — periodically pulls venueState fork into the
-	 * root and triggers the lattice's sync callback so the propagator
-	 * persists durable. See {@code venue/docs/PERSISTENCE.md}.
+	 * Background sweep daemon — periodically publishes the connected venue
+	 * state and invokes the store durability barrier. See
+	 * {@code venue/docs/PERSISTENCE.md}.
 	 */
 	private ScheduledExecutorService persistenceSweep;
 
 	/** Explicit lifecycle: construction is inert; start/close own active resources. */
-	private enum Lifecycle { NEW, STARTING, STARTED, FAILED, CLOSING, CLOSED }
+	private enum Lifecycle { NEW, STARTING, PREPARED, STARTED, FAILED, CLOSING, CLOSED }
 	private volatile Lifecycle lifecycle = Lifecycle.NEW;
+	private boolean launchClaimed;
+	private boolean launchInProgress;
+	private final CompletableFuture<Void> launchCancelled = new CompletableFuture<>();
+	public static final String LAUNCH_ALREADY_CLAIMED = "Engine launch requires a new or prepared engine and may be called only once";
+	public static final String START_DURING_LAUNCH = "Engine activation is owned by the in-progress launch";
 
 	/** How often the persistence sweep daemon runs (ms). */
 	private static final long SWEEP_INTERVAL_MS = 100;
@@ -241,14 +256,15 @@ public class Engine {
 
 	/**
 	 * Primary constructor: assembles an inert Engine around the caller's cursor.
-	 * Call {@link #start()} before use. Generates a random venue key pair.
+	 * Call {@link #launch()} for a complete venue, or {@link #start()} for a
+	 * manually assembled runtime. Generates a random venue key pair.
 	 */
 	public Engine(AMap<AString, ACell> config, ALatticeCursor<Index<Keyword,ACell>> cursor) throws IOException {
 		this(config, cursor, AKeyPair.generate(), PersistenceHandler.NOOP);
 	}
 
 	/**
-	 * Inert constructor with explicit key pair. Call {@link #start()} before use.
+	 * Inert constructor with explicit key pair. Call {@link #launch()} before use.
 	 * Use when the venue identity must be
 	 * stable across restarts (same AccountKey = same OwnerLattice slot).
 	 *
@@ -261,7 +277,7 @@ public class Engine {
 	}
 
 	/**
-	 * Canonical inert constructor with persistence handler. Call {@link #start()}
+	 * Canonical inert constructor with persistence handler. Call {@link #launch()}
 	 * before use.
 	 *
 	 * <p>The handler is invoked synchronously by {@link #flush()} (and during
@@ -287,6 +303,9 @@ public class Engine {
 	 * Canonical hosted-application constructor. Publication and durability flow
 	 * through the application's {@code RootComponent}; the engine does not need
 	 * to know whether that host is local or networked.
+	 * The host must restore its root before construction. Call {@link #launch(Function)}
+	 * to assemble a complete venue without HTTP. The caller retains ownership of
+	 * the application, host and store, including on startup failure.
 	 */
 	public Engine(Config config, CoviaApplication application, AKeyPair keyPair)
 			throws IOException {
@@ -315,7 +334,10 @@ public class Engine {
 	}
 
 	/**
-	 * Starts this engine and all resources it owns.
+	 * Activates a manually assembled engine and all resources it owns.
+	 * This low-level method does not install adapters, publish the catalogue,
+	 * provision configured secrets or recover Jobs. Production embedders normally
+	 * need {@link #launch(Function)}, which performs those steps before activation.
 	 *
 	 * <p>Construction is deliberately inert so callers retain an Engine
 	 * reference before any storage or threads are started. Startup is
@@ -326,7 +348,224 @@ public class Engine {
 	 * @throws IOException if content storage cannot be initialised
 	 */
 	public synchronized Engine start() throws IOException {
+		if (launchInProgress) throw new IllegalStateException(START_DURING_LAUNCH);
 		if (lifecycle == Lifecycle.STARTED) return this;
+		prepare();
+		return activate();
+	}
+
+	private synchronized Engine activate() {
+		if (lifecycle != Lifecycle.PREPARED) {
+			throw new IllegalStateException("Engine cannot activate from state " + lifecycle);
+		}
+		lifecycle = Lifecycle.STARTING;
+		try {
+			// Reconcile wake handles while the alarm is still disarmed. Hosts
+			// prepare the catalog and recover Jobs before activating this engine.
+			rebuildSchedulerFromLattice();
+			for (String name : getAdapterNamesInRegistrationOrder()) {
+				AAdapter adapter = adapters.get(name);
+				if (adapter != null) adapter.start();
+			}
+			gridScheduler.start();
+			lifecycle = Lifecycle.STARTED;
+			return this;
+		} catch (RuntimeException | Error failure) {
+			// Complete launch may already have recovered live Jobs. Its outer
+			// cleanup suspends those outside the Engine monitor before closing adapters.
+			if (launchInProgress) throw failure;
+			lifecycle = Lifecycle.FAILED;
+			closeStartedResources(false, failure);
+			throw failure;
+		}
+	}
+
+	/**
+	 * Launches a complete embedded venue without HTTP or an application setup hook.
+	 * See {@link #launch(Function)} for ordering, ownership and failure semantics.
+	 * @return this engine, ready for use
+	 * @throws IOException if content storage cannot be initialised
+	 */
+	public Engine launch() throws IOException {
+		return launch(null);
+	}
+
+	/**
+	 * Launches a complete venue over this engine's existing application/cursor,
+	 * without creating a host, store or HTTP listener. May be called once on a
+	 * new or prepared engine; calling {@link #start()} first is an error.
+	 *
+	 * <ol>
+	 * <li>Prepare storage and users; install built-in and configured module adapters.</li>
+	 * <li>Publish the installed catalogue, provision configured secrets and seed MCP servers.</li>
+	 * <li>Invoke {@code beforeStart} and await its returned stage.</li>
+	 * <li>Recover durable Jobs, reconcile queued agent work and re-arm HITL expiries.</li>
+	 * <li>Activate adapter workers and the scheduler, then return.</li>
+	 * </ol>
+	 *
+	 * <p>The hook must bind application backends, register all application adapters,
+	 * and finish any state/secret migrations required by recovered work. Return a
+	 * non-null stage covering <em>all</em> asynchronous setup. Installed operations
+	 * are available, including adapters registered or replaced in the hook. Jobs
+	 * explicitly invoked by the hook execute immediately; await their results when
+	 * subsequent setup or recovered work depends on them. Do not start workers,
+	 * recover work, publish the catalogue or call start/launch from the hook.
+	 * Do not wait for work that requires a running worker or scheduler. The
+	 * persistence sweep may run while setup is pending, but
+	 * inbound adapter workers and scheduled operations remain paused. Configured
+	 * secrets and available configured MCP tools are in place before the hook.</p>
+	 *
+	 * <p>Recovered work may execute after the hook completes, before this method
+	 * returns. Prerequisites therefore belong in the hook, not after launch or in
+	 * a readiness-future continuation. The hook may replace installed defaults.
+	 * A null hook means no application setup.</p>
+	 *
+	 * <p>Configured-secret provisioning and MCP seeding retain their existing
+	 * best-effort policies; readiness does not guarantee every external MCP
+	 * server is reachable. See {@link #provisionConfiguredSecrets()} and
+	 * {@link #seedMcpServers()}.</p>
+	 *
+	 * <p>Failure releases engine-owned resources and makes this engine unusable;
+	 * create a new engine to retry. Durable writes and external hook effects are
+	 * not rolled back. The caller owns and must clean up its hook tasks, backend,
+	 * application, host and store. Close this engine before closing its host/store,
+	 * both after success and when unwinding a failed launch.</p>
+	 *
+	 * @param beforeStart asynchronous application assembly, or null
+	 * @return this engine after recovery and activation
+	 * @throws IOException if content storage cannot be initialised
+	 * @throws IllegalStateException if launch was already claimed or the engine is active/closed
+	 * @throws CompletionException if the hook fails with a checked exception
+	 */
+	public Engine launch(Function<Engine, ? extends CompletionStage<?>> beforeStart) throws IOException {
+		claimLaunch();
+		return launchInternal(beforeStart);
+	}
+
+	/**
+	 * As {@link #launchAsync(Function)} with no application setup hook.
+	 * @return readiness future for this engine
+	 */
+	public CompletableFuture<Engine> launchAsync() {
+		return launchAsync(null);
+	}
+
+	/**
+	 * Performs {@link #launch(Function)} on a virtual thread. The future completes
+	 * only after recovery and activation; continuations run after readiness and
+	 * cannot supply prerequisites for recovered work. Lifecycle validation occurs
+	 * on the calling thread, before startup is scheduled.
+	 *
+	 * <p>Cancelling the future requests cleanup at startup phase boundaries,
+	 * including while awaiting the hook, without interrupting store I/O. The
+	 * cancelled future is not a cleanup-completion signal. The caller's hook
+	 * stage is not cancelled: the caller must stop its tasks and prevent late
+	 * writes to a closed engine. Work already recovered or started is not undone.
+	 * The engine never closes the caller's host or store.</p>
+	 *
+	 * @param beforeStart application setup hook with the requirements of {@link #launch(Function)}
+	 * @return readiness future, exceptionally completed on startup failure
+	 * @throws IllegalStateException if launch was already claimed or the engine is active/closed
+	 */
+	public CompletableFuture<Engine> launchAsync(Function<Engine, ? extends CompletionStage<?>> beforeStart) {
+		claimLaunch();
+		CompletableFuture<Engine> ready = new CompletableFuture<>();
+		ready.whenComplete((engine, failure) -> {
+			if (ready.isCancelled()) launchCancelled.completeExceptionally(new CancellationException());
+		});
+		Thread.ofVirtual().name("engine-startup").start(() -> {
+			try {
+				Engine engine = launchInternal(beforeStart);
+				if (!ready.complete(engine)) engine.close();
+			} catch (Throwable failure) {
+				ready.completeExceptionally(failure);
+			}
+		});
+		return ready;
+	}
+
+	private synchronized void claimLaunch() {
+		if (launchClaimed || (lifecycle != Lifecycle.NEW && lifecycle != Lifecycle.PREPARED)) {
+			throw new IllegalStateException(LAUNCH_ALREADY_CLAIMED);
+		}
+		launchClaimed = true;
+		launchInProgress = true;
+	}
+
+	private void checkLaunchCancellation() {
+		if (launchCancelled.isDone()) throw new CancellationException();
+	}
+
+	private Engine launchInternal(Function<Engine, ? extends CompletionStage<?>> beforeStart) throws IOException {
+		try {
+			checkLaunchCancellation();
+			prepare();
+			installDefaultAdapters(this);
+			materialiseBootstrapState();
+			provisionConfiguredSecrets();
+			seedMcpServers();
+			checkLaunchCancellation();
+			if (beforeStart != null) {
+				CompletableFuture<?> hook = java.util.Objects.requireNonNull(
+					beforeStart.apply(this), "beforeStart stage").toCompletableFuture();
+				try {
+					CompletableFuture.anyOf(hook, launchCancelled).get();
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+					throw new CompletionException(e);
+				} catch (ExecutionException e) {
+					Throwable cause = e.getCause();
+					if (cause instanceof RuntimeException failure) throw failure;
+					if (cause instanceof Error failure) throw failure;
+					throw new CompletionException(cause);
+				}
+			}
+			checkLaunchCancellation();
+			jobs().recoverJobs();
+			if (getAdapter("agent") instanceof AgentAdapter agents) agents.wakeAgentsWithWork();
+			if (getAdapter("hitl") instanceof covia.adapter.HITLAdapter hitl) hitl.rearmExpiries();
+			checkLaunchCancellation();
+			return activate();
+		} catch (IOException | RuntimeException | Error failure) {
+			boolean interrupted = Thread.interrupted();
+			try {
+				boolean cleanup;
+				synchronized (this) {
+					cleanup = lifecycle != Lifecycle.FAILED && lifecycle != Lifecycle.CLOSED && lifecycle != Lifecycle.CLOSING;
+					if (cleanup) lifecycle = Lifecycle.CLOSING;
+				}
+				if (cleanup) {
+					try {
+						jobManager.shutdown(0);
+					} catch (RuntimeException | Error shutdownFailure) {
+						failure.addSuppressed(shutdownFailure);
+					}
+					synchronized (this) {
+						closeStartedResources(false, failure);
+						lifecycle = Lifecycle.FAILED;
+					}
+				}
+			} finally {
+				if (interrupted) Thread.currentThread().interrupt();
+			}
+			throw failure;
+		} finally {
+			synchronized (this) { launchInProgress = false; }
+		}
+	}
+
+	/**
+	 * Restores state and opens storage without firing schedules or starting
+	 * adapter-owned workers. This is a low-level assembly seam; prefer
+	 * {@link #launch(Function)} for the complete shared startup sequence.
+	 * Preparation starts the persistence sweep but does not install adapters or
+	 * recover work. Closing a prepared engine releases all engine-owned resources.
+	 *
+	 * @return this engine
+	 * @throws IOException if content storage cannot be initialised
+	 */
+	public synchronized Engine prepare() throws IOException {
+		if (lifecycle == Lifecycle.PREPARED || lifecycle == Lifecycle.STARTED) return this;
 		if (lifecycle != Lifecycle.NEW) {
 			throw new IllegalStateException("Engine cannot start from state " + lifecycle);
 		}
@@ -343,14 +582,9 @@ public class Engine {
 			this.contentStorage = createStorage();
 			this.contentStorage.initialise();
 
-			// The authoritative schedule is persisted in the lattice. Start its
-			// in-memory alarm, then heal per-agent wake handles from durable state.
-			gridScheduler.start();
-			rebuildSchedulerFromLattice();
-
 			bootstrapUsers();
 			startPersistenceSweep();
-			lifecycle = Lifecycle.STARTED;
+			lifecycle = Lifecycle.PREPARED;
 			return this;
 		} catch (IOException | RuntimeException | Error failure) {
 			lifecycle = Lifecycle.FAILED;
@@ -371,7 +605,7 @@ public class Engine {
 		if (knownUsers != null) {
 			for (var entry : knownUsers.entrySet()) {
 				AString did = RT.ensureString(entry.getValue().get(Fields.DID));
-				if (did != null) this.venueState.users().ensure(did);
+				if (did != null && !venueState.users().isDeleted(did)) this.venueState.users().ensure(did);
 			}
 		}
 		bootstrapConfiguredNamedUsers();
@@ -391,6 +625,7 @@ public class Engine {
 		for (var entry : configured.entrySet()) {
 			AString id = entry.getKey();
 			AString did = managedUserDID(id); // validates username + hostname
+			if (venueState.users().isDeleted(did) || auth.getUser(did) != null) continue; // erased key history is not first use
 			AMap<AString, ACell> existingUser = auth.getUser(id);
 			if (existingUser != null
 					&& !did.equals(RT.ensureString(existingUser.get(Fields.DID)))) {
@@ -419,7 +654,7 @@ public class Engine {
 							other.getValue().get(Fields.AUTHENTICATION_KEYS));
 						if (otherKeys != null && otherKeys.containsKey(key)) {
 							throw new IllegalArgumentException(
-								"Authentication key is already bound to named user "
+								Auth.KEY_ALREADY_BOUND
 								+ other.getKey());
 						}
 					}
@@ -433,6 +668,7 @@ public class Engine {
 		for (var entry : configured.entrySet()) {
 			AString id = entry.getKey();
 			AString did = managedUserDID(id);
+			if (venueState.users().isDeleted(did) || auth.getUser(did) != null) continue;
 			AMap<AString, ACell> spec = RT.ensureMap(entry.getValue());
 			AVector<ACell> keys =
 				RT.ensureVector(spec.get(Fields.AUTHENTICATION_KEYS));
@@ -517,11 +753,11 @@ public class Engine {
 	 * Ensures the venue entry exists at [:grid :venues &lt;accountKey&gt; :value].
 	 * Venues are keyed by AccountKey in OwnerLattice; the DID is stored inside venue state.
 	 *
-	 * <p>Bootstrap (DID initialisation) is performed on the connected cursor so
-	 * the write is signed immediately — other peers need a signed DID to accept
-	 * the venue. After bootstrap, the cursor is forked: all subsequent writes
-	 * accumulate locally (unsigned) until {@link #syncState()} calls
-	 * {@link VenueState#sync()}, which merges and signs once.</p>
+	 * <p>The Engine keeps this state connected to the application root. A
+	 * successful component mutation therefore updates the venue's authoritative
+	 * in-memory state immediately. Components may still create a short-lived
+	 * {@link VenueState#fork()} when a bounded group of writes must commit or be
+	 * discarded together.</p>
 	 */
 	protected void initialiseFromCursor() {
 		// Identity guard (#208): booting an existing store with the wrong key
@@ -531,19 +767,14 @@ public class Engine {
 		// can sign for its own persisted state is broken; fail before writing.
 		requireKeyMatchesStore();
 
-		// Bootstrap with connected VenueState (writes signed immediately).
-		// DID initialisation must be signed so other peers accept it.
+		// Keep the Engine's authoritative state connected to the application.
+		// Writes cross the signed owner boundary immediately; explicit forks are
+		// reserved for bounded component transactions.
 		VenueState connected = (application != null)
 			? application.venue(getAccountKey())
 			: VenueState.fromRoot(lattice, getAccountKey());
 		connected.initialise(getDIDString());
-
-		// Fork: subsequent writes accumulate locally (unsigned).
-		// Engine.syncState() calls venueState.sync() to merge + sign once.
-		// The fork captures the root's LatticeContext policy. That policy is
-		// dynamic, so its clock and signer remain live without per-request
-		// context replacement.
-		this.venueState = connected.fork();
+		this.venueState = connected;
 
 		this.auth = new Auth(this, venueState, venueState.authCursor());
 		this.accessControl = new AccessControl();
@@ -585,21 +816,15 @@ public class Engine {
 	}
 
 	/**
-	 * Synchronises venue state to the persistent lattice.
+	 * Publishes the Engine's connected venue state through the hosted application
+	 * boundary (or the legacy root cursor callback). This is a publication hint,
+	 * not a transaction commit: successful mutations are already present in the
+	 * authoritative in-memory root.
 	 *
-	 * <p>Two-phase sync:</p>
-	 * <ol>
-	 *   <li>{@code venueState.sync()} — merges forked (unsigned) writes into
-	 *       the parent cursor chain, triggering a single sign through the
-	 *       SignedCursor boundary.</li>
-	 *   <li>{@code application.sync()} — crosses the hosted root publication
-	 *       boundary. The host decides whether publication is local or networked.</li>
-	 * </ol>
-	 *
-	 * <p>Called by VenueServer's role-selected {@code afterMatched} handler, so
-	 * all writes within one native protocol request—or an embedder route carrying
-	 * {@code VenueRouteFeature.LATTICE_SYNC}—are batched into one sign and
-	 * persist.</p>
+	 * <p>Retained for request-boundary publication by VenueServer and embedded
+	 * venue routes carrying {@code VenueRouteFeature.LATTICE_SYNC}. Physical
+	 * durability remains the responsibility of {@link #flush()} and the
+	 * background sweep.</p>
 	 */
 	public void syncState() {
 		if (lifecycle == Lifecycle.CLOSING || lifecycle == Lifecycle.CLOSED || lifecycle == Lifecycle.FAILED) {
@@ -608,21 +833,7 @@ public class Engine {
 			log.debug("syncState skipped: engine is {}", lifecycle);
 			return;
 		}
-		venueState.sync();
 		publishApplicationRoot();
-	}
-
-	/**
-	 * Compatibility hook retained for callers built against the former fixed
-	 * timestamp context model.
-	 *
-	 * <p>The current Convex context is a live application policy. Covia installs
-	 * it once at startup with a dynamic runtime clock, and forks retain that live
-	 * policy, so there is no timestamp snapshot to refresh.</p>
-	 */
-	@Deprecated
-	public void refreshWriteClock() {
-		// Dynamic LatticeContext resolves time at each logical write.
 	}
 
 	/** Publishes through the hosted application policy or the legacy root cursor. */
@@ -639,20 +850,15 @@ public class Engine {
 	// ========================================================================
 
 	/**
-	 * Background sweep step. Merges the venueState fork into the root, then
-	 * fires the root cursor's onSync callback (which the NodeServer wires to
-	 * the propagator). Both calls are required because
-	 * {@code ForkedLatticeCursor.sync()} deliberately does NOT propagate sync
-	 * up the chain — see {@code venue/docs/PERSISTENCE.md} §5.0.
+	 * Background sweep step. Publishes the already-connected root through the
+	 * host policy, then periodically invokes the physical durability barrier.
 	 *
-	 * <p>Called from the persistence sweep daemon and from {@link #flush()}.
-	 * Sync is a no-op when there are no pending writes, so this is cheap on
-	 * idle venues.</p>
+	 * <p>Called from the persistence sweep daemon. Publishing an unchanged root
+	 * is cheap on idle venues.</p>
 	 */
 	private void sweep() {
 		if (lifecycle != Lifecycle.STARTED) return;
 		try {
-			venueState.sync();   // pull fork writes into the root
 			publishApplicationRoot();
 			// Periodic durability barrier. The propagator's setRootData
 			// writes new root data to the mmap'd Etch but does not fsync;
@@ -670,9 +876,9 @@ public class Engine {
 	}
 
 	/**
-	 * Synchronises venue state, publishes the complete hosted root and invokes
-	 * the host store's physical durability barrier. Legacy raw-cursor embedders
-	 * use their supplied {@link PersistenceHandler} for the same boundary.
+	 * Publishes the complete hosted root and invokes the host store's physical
+	 * durability barrier. Legacy raw-cursor embedders use their supplied
+	 * {@link PersistenceHandler} for the same boundary.
 	 *
 	 * <p>Use sparingly — most writes don't need this. Default eventual
 	 * durability via the background sweep is fine for in-flight job state,
@@ -680,7 +886,6 @@ public class Engine {
 	 * audit records, secret rotation, agent TERMINATED, OAuth login.</p>
 	 */
 	public void flush() {
-		venueState.sync(); // pull fork into root
 		try {
 			if (application != null) {
 				application.sync();  // host publication selects the retained root
@@ -707,10 +912,9 @@ public class Engine {
 	 * Stops the persistence sweep, runs a final flush, and releases engine
 	 * resources. After close, the engine cannot be used.
 	 *
-	 * <p>Must be called BEFORE {@code nodeServer.close()} so the venueState
-	 * fork is merged into the root before the propagator's shutdown drain
-	 * reads from the root cursor. {@code VenueServer.close()} handles this
-	 * ordering.</p>
+	 * <p>Must be called BEFORE {@code nodeServer.close()} so final publication
+	 * and durability complete while the host is still available.
+	 * {@code VenueServer.close()} handles this ordering.</p>
 	 *
 	 * <p>In-flight jobs first get {@code shutdown.graceMs} to finish, then
 	 * their adapters suspend them ({@link covia.adapter.AAdapter#suspendJob});
@@ -722,8 +926,9 @@ public class Engine {
 		boolean flush;
 		synchronized (this) {
 			if (lifecycle == Lifecycle.CLOSED || lifecycle == Lifecycle.CLOSING) return;
-			flush = lifecycle == Lifecycle.STARTED;
+			flush = lifecycle == Lifecycle.STARTED || lifecycle == Lifecycle.PREPARED;
 			lifecycle = Lifecycle.CLOSING;
+			if (launchInProgress) launchCancelled.completeExceptionally(new CancellationException());
 		}
 		// Jobs first, outside the engine monitor: work finishing inside the
 		// grace window may need engine services that synchronise on it.
@@ -737,6 +942,7 @@ public class Engine {
 	/** Releases resources in the reverse of {@link #start()} acquisition order. */
 	private void closeStartedResources(boolean flush, Throwable startupFailure) {
 		jobManager.closeAdmission();
+		remoteJobs.close();
 
 		// Release adapter-owned native/session resources before module classloaders.
 		for (AAdapter adapter : adapters.values()) {
@@ -796,10 +1002,8 @@ public class Engine {
 
 		if (flush && venueState != null) {
 			try {
-				venueState.sync();
-				persistHandler.persist(lattice.get());
-				persistHandler.flush();
-			} catch (Exception e) {
+				flush();
+			} catch (RuntimeException e) {
 				recordCloseFailure(startupFailure, "Final persistence flush failed during close", e);
 			}
 		}
@@ -828,9 +1032,9 @@ public class Engine {
 		return lifecycle == Lifecycle.STARTED;
 	}
 
-	/** True once close began: the venue is releasing work, not taking any on. */
+	/** True once close began or startup failed: the venue must not take on work. */
 	public boolean isClosing() {
-		return lifecycle == Lifecycle.CLOSING || lifecycle == Lifecycle.CLOSED;
+		return lifecycle == Lifecycle.CLOSING || lifecycle == Lifecycle.CLOSED || lifecycle == Lifecycle.FAILED;
 	}
 
 	/** Installs process control before MainVenue publishes restart authority. */
@@ -879,7 +1083,20 @@ public class Engine {
 		return control;
 	}
 
+	/**
+	 * Legacy catalogue helper for manually started engines and tests. Installs
+	 * defaults, publishes their assets and seeds MCP; does not perform recovery
+	 * or secret provisioning. Use {@link #launch(Function)} for production startup.
+	 * @param venue engine already prepared or started
+	 */
 	public static void addDemoAssets(Engine venue) {
+		installDefaultAdapters(venue);
+		venue.materialiseBootstrapState();
+		venue.seedMcpServers();
+	}
+
+	/** Installs built-ins and configured modules without publishing the catalog. */
+	public static void installDefaultAdapters(Engine venue) {
 		venue.registerAdapter(new TestAdapter());
 		venue.registerAdapter(new HTTPAdapter());
 		venue.registerAdapter(new OAuthAdapter());
@@ -910,46 +1127,21 @@ public class Engine {
 		venue.registerAdapter(new LLMAgentAdapter());
 		venue.registerAdapter(new covia.adapter.agent.GoalTreeAdapter());
 		venue.registerAdapter(new covia.adapter.HITLAdapter());
+		venue.registerAdapter(new covia.adapter.ProjectAdapter());
 		venue.registerAdapter(new covia.adapter.VenueAdapter());
 		// Load operator-declared venue modules (external adapter jars) BEFORE
 		// materialisation, so module ops enter the catalog with everyone
 		// else's. Fail-fast on any load error — explicit config is explicit
 		// intent.
 		Modules.loadModules(venue);
-
-		// Publish the adapter catalog and venue information as one native lattice
-		// transaction. All writes and validation happen on a child fork; one sync
-		// makes the complete bootstrap snapshot visible without creating Jobs.
-		venue.materialiseBootstrapState();
-
-		// Bridge config-declared MCP servers (#80). Config is the source of
-		// truth for the names it declares (secrets-bootstrap rule); entries
-		// it doesn't name — dynamically-added servers — are untouched.
-		venue.seedMcpServers();
-	}
-
-	/**
-	 * Flushes catalog entries that adapters collected via
-	 * {@link covia.adapter.AAdapter#installAsset(String, String)} and
-	 * {@link covia.adapter.AAdapter#installTestAsset(String, String)}. Each
-	 * entry is written to its full target path (e.g. {@code v/ops/json/merge}
-	 * or {@code v/test/ops/echo}) as inline asset metadata on a child lattice
-	 * fork.
-	 *
-	 * <p>This catalog-only method is retained for callers that explicitly need
-	 * it. Normal startup uses {@link #materialiseBootstrapState()} so catalog
-	 * and venue information become visible together.</p>
-	 */
-	public void materialiseVOps() {
-		VenueBootstrapMaterializer.materialiseAdapterCatalog(this);
-		catalogPublished = true;
 	}
 
 	/**
 	 * Materialises the adapter catalog and {@code /v/info/} snapshot together.
 	 * The complete snapshot is built and validated on a child fork, then
-	 * published to the Engine's live fork with one {@code sync()}. A failure
-	 * before that point leaves the live state unchanged and creates no Jobs.
+	 * committed to the Engine's connected state with one atomic update. A
+	 * failure before that point leaves the live state unchanged and creates no
+	 * Jobs.
 	 */
 	public void materialiseBootstrapState() {
 		VenueBootstrapMaterializer.materialiseBootstrapState(this);
@@ -989,29 +1181,6 @@ public class Engine {
 					+ "when the server is reachable", name, e.getMessage());
 			}
 		}
-	}
-
-	/**
-	 * Writes the venue introspection data to {@code /v/info/} sub-paths.
-	 * Called once at startup after all adapters are registered, and any
-	 * time the venue wants to refresh the information.
-	 *
-	 * <p>Per OPERATIONS.md §3, the populated paths are:</p>
-	 * <ul>
-	 *   <li>{@code /v/info/name} — venue display name (from config)</li>
-	 *   <li>{@code /v/info/did} — venue's own DID</li>
-	 *   <li>{@code /v/info/version} — covia jar version</li>
-	 *   <li>{@code /v/info/started} — startup time as epoch milliseconds</li>
-	 *   <li>{@code /v/info/protocols} — array of enabled protocol handlers</li>
-	 *   <li>{@code /v/info/adapters/&lt;name&gt;} — per-adapter summary</li>
-	 * </ul>
-	 *
-	 * <p>Writes use the same cursor path semantics as {@code covia:write}, but
-	 * execute directly on a child lattice fork and publish with one sync. No
-	 * operation invocation or Job is involved.</p>
-	 */
-	public void materialiseVenueInfo() {
-		VenueBootstrapMaterializer.materialiseVenueInformation(this);
 	}
 
 	/**
@@ -1105,6 +1274,8 @@ public class Engine {
 	/** Install (once) and publish an adapter. Caller holds the engine monitor. */
 	private void activate(AAdapter adapter, AAdapter previous) {
 		String name = adapter.getName();
+		boolean previousActive = previous != null && adapters.get(name) == previous;
+		java.util.List<String> previousOrder = java.util.List.copyOf(adapterRegistrationOrder);
 		if (adapter.engine == null) adapter.install(this);
 		if (catalogPublished) {
 			if (previous == null) {
@@ -1118,7 +1289,38 @@ public class Engine {
 		adapterRegistrationOrder.remove(name);
 		adapterRegistrationOrder.add(name);
 		adapterRegistryVersion.incrementAndGet();
-		closeReplacedAdapter(previous);
+		try {
+			if (isStarted()) adapter.start();
+		} catch (RuntimeException | Error failure) {
+			// A failed worker start must not leave a dispatchable partial adapter,
+			// including when module loading has not yet recorded its registration.
+			adapters.remove(name, adapter);
+			adapterRegistrationOrder.clear();
+			adapterRegistrationOrder.addAll(previousOrder);
+			if (previousActive && previous != adapter) adapters.put(name, previous);
+			else adapterRegistrationOrder.remove(name);
+			if (!previousActive && previous != null && previous != adapter) {
+				disabledAdapters.put(name, previous);
+			}
+			try {
+				if (catalogPublished) {
+					if (previousActive && previous != adapter) {
+						VenueBootstrapMaterializer.replaceAdapter(this, adapter, previous);
+					} else {
+						VenueBootstrapMaterializer.dematerialiseAdapter(this, adapter);
+					}
+				}
+			} catch (RuntimeException | Error rollbackFailure) {
+				failure.addSuppressed(rollbackFailure);
+			}
+			if (adapter instanceof AutoCloseable closeable) {
+				try { closeable.close(); }
+				catch (Exception closeFailure) { failure.addSuppressed(closeFailure); }
+			}
+			adapterRegistryVersion.incrementAndGet();
+			throw failure;
+		}
+		if (previous != adapter) closeReplacedAdapter(previous);
 		log.info("Registered adapter: {} ({} primitives)", name,
 			adapter.pendingCatalogEntries.size());
 	}
@@ -1369,7 +1571,7 @@ public class Engine {
 	 */
 	public Hash storeAsset(AString meta, ACell content) {
 		Hash id = venueState.assets().store(meta, content);
-		log.info("Stored asset {} : {}", id, RT.getIn(JSON.parse(meta), Fields.NAME));
+		log.debug("Stored asset {} : {}", id, RT.getIn(JSON.parse(meta), Fields.NAME));
 		return id;
 	}
 
@@ -1668,10 +1870,8 @@ public class Engine {
 		// like "w/notes" and "/v/ops/x" like "v/ops/x".
 		AString navRef = localRef;
 
-		// 4. Virtual namespace prefix (n/, v/, ...) — delegate to the
-		// registered resolver via CoviaAdapter. Handles cursor-based
-		// virtual namespaces uniformly. (t/ — job-scoped temp — is not
-		// handled here; covia:read has its own t/ branch.)
+		// 4. Virtual namespace prefix (n/, v/, t/, c/, ...) — delegate to the
+		// registered resolver via CoviaAdapter.
 		ACell virtualValue = resolveVirtualNamespace(navRef, ctx);
 		if (virtualValue != null) return virtualValue;
 
@@ -2184,14 +2384,6 @@ public class Engine {
 	}
 
 	/**
-	 * Returns the current lattice state root.
-	 * @return Lattice state as ACell, or null if not initialised
-	 */
-	public ACell getLatticeState() {
-		return lattice.get();
-	}
-
-	/**
 	 * Gets a content stream for the given asset
 	 * @param meta Metadata of asset
 	 * @return Content stream, or null if not available / does not exist
@@ -2562,7 +2754,7 @@ public class Engine {
 
 		// Store the content using the verified hash
 		contentStorage.store(actualHash, new ByteArrayInputStream(data));
-		log.info("Stored content with SHA256: "+actualHash);
+		log.debug("Stored content with SHA256: "+actualHash);
 		return actualHash;
 	}
 
@@ -2601,16 +2793,6 @@ public class Engine {
 	 */
 	public AccessControl getAccessControl() {
 		return accessControl;
-	}
-
-	/**
-	 * Get the raw config map.
-	 * @return Config map
-	 * @deprecated Use {@link #config()} for typed access
-	 */
-	@Deprecated
-	public AMap<AString,ACell> getConfig() {
-		return config.getMap();
 	}
 
 	public DID getDID() {
@@ -2688,6 +2870,26 @@ public class Engine {
 					+ (web == null ? "no public hostname" : web) + ")");
 			}
 		}
+	}
+
+	private volatile Audit audit;
+
+	/**
+	 * This venue's security audit trail (covia#538). Records nothing unless the
+	 * venue's config sets {@code logging.audit: true}; events are tagged with
+	 * the venue's hostname, or its DID when it has none, so one process's
+	 * stream can be attributed when it hosts several venues.
+	 */
+	public Audit audit() {
+		Audit a = audit;
+		if (a == null) {
+			String name = config().getHostname();
+			a = config().isAuditLogging()
+				? new Audit(true, (name != null) ? name : String.valueOf(getDIDString()))
+				: Audit.OFF;
+			audit = a;
+		}
+		return a;
 	}
 
 	private volatile covia.venue.auth.VenueDIDVerifier didVerifier;
@@ -2829,10 +3031,44 @@ public class Engine {
 		Users users = venueState.users();
 		User user = users.get(did);
 		if (user != null) return user;
-		if (config.isUserAutoCreate()) return users.ensure(did);
+		if (config.isUserAutoCreate()) {
+			users.create(did);
+			return users.ensure(did);
+		}
 		throw new AuthException("User is not registered at this venue: " + did
 			+ ". Ask a venue administrator to provision it with user:create; "
 			+ "public test venues may enable users.autoCreate.");
+	}
+
+	public static final String PROTECTED_USER = "The venue and public principals cannot be deleted";
+	private final Object userDeletionLock = new Object();
+
+	/** Operator account deletion, with no implicit self-service authority. */
+	public ACell deleteUser(RequestContext ctx, AString did) {
+		requireVenueAuthority(ctx, "users", Abilities.USER_DELETE);
+		requireNotSubPrincipal(did);
+		if (isVenuePrincipal(did) || Strings.create(getDIDString() + ":public").equals(did)) {
+			throw new IllegalArgumentException(PROTECTED_USER);
+		}
+		synchronized (userDeletionLock) {
+			return eraseUser(ctx, did);
+		}
+	}
+
+	private ACell eraseUser(RequestContext ctx, AString did) {
+		VenueState.DeletedUser deleted;
+		synchronized (getAuth()) {
+			deleted = venueState.deleteUser(did, ctx.getCallerDID());
+		}
+		// The durable tombstone closes admission first. Repeating deletion also
+		// retries runtime cleanup after an interrupted earlier request.
+		jobs().cancelUserJobs(did, ctx.getJob());
+		if (getAdapter("agent") instanceof covia.adapter.AgentAdapter agent) agent.stopDeletedUser(did, deleted.agents());
+		gridScheduler().cancelUser(did);
+		venueState.users().finishDeletion(did);
+		flush();
+		log.info("user.delete did={} by={}", did, ctx.getCallerDID());
+		return deleted.tombstone();
 	}
 
 	/**
@@ -2989,12 +3225,13 @@ public class Engine {
 	}
 
 	public AMap<AString, ACell> getStats() {
-		AMap<AString, AMap<AString, ACell>> usersMap = auth.getUsers();
-		// Count primitives across all adapters' catalog entries — this is
-		// the canonical "what's in /v/ops/ and /v/test/ops/" total.
+		// Every registered user, managed and external alike — the same population
+		// as user:list, not just the venue-managed named accounts (#524).
+		AMap<AString, ACell> usersMap = getVenueState().users().getAll();
+		// Count operations only; other declarations include models, skills and templates.
 		long opCount = 0;
 		for (var adapter : adapters.values()) {
-			opCount += adapter.pendingCatalogEntries.size();
+			opCount += adapter.getOperationPaths().size();
 		}
 		return Maps.of(
 				 "assets",getAssets().size(),
@@ -3407,6 +3644,8 @@ public class Engine {
 	 * message when the caller's authority does not cover the request.
 	 */
 	public void requireAuthority(RequestContext ctx, AString resource, AString ability) {
+		if (ctx != null && ctx.getJob() instanceof VenueJob job) job.requireAccount();
+		if (ctx != null) venueState.users().requireNotDeleted(ctx.getUserDID());
 		if (authorityCovers(ctx, resource, ability)) return;
 		String denial = (ctx != null && ctx.getCaps() != null) ? ctx.grantsDenial(resource, ability) : null;
 		throw new covia.exception.AuthException(denial != null ? denial
@@ -3449,6 +3688,24 @@ public class Engine {
 			ability != null ? Strings.create(ability) : null);
 	}
 
+	/**
+	 * Outbound-target policy for every adapter that dials a caller-chosen URL
+	 * (an MCP server, an A2A peer, a model endpoint): the http adapter's SSRF
+	 * guard with the operator's allow and block lists, so no adapter can reach
+	 * what a direct HTTP call could not (#234). Fails closed when the http
+	 * adapter is absent.
+	 *
+	 * @param url URL string to validate
+	 * @throws IllegalArgumentException naming the rule when the URL is refused
+	 * @throws IllegalStateException when the http adapter is not registered
+	 */
+	public void requireSafeUrl(String url) {
+		if (!(getAdapter("http") instanceof HTTPAdapter http)) {
+			throw new IllegalStateException("SSRF validation unavailable: http adapter not registered");
+		}
+		http.requireSafeUrl(url);
+	}
+
 	// ========== Secret resolution ==========
 
 	/**
@@ -3467,15 +3724,24 @@ public class Engine {
 	 * @param ctx Request context (namespace identity for access control)
 	 * @return Decrypted plaintext, or null if not found or not authorised
 	 */
+	/** Whether a value is a reference into a secret store ({@code s/NAME} or {@code /s/NAME}) rather than a literal. */
+	public static boolean isSecretRef(String value) {
+		return value != null && (value.startsWith("s/") || value.startsWith("/s/"));
+	}
+
+	/** The secret name a reference points at: {@code s/} or {@code /s/} stripped, a bare name unchanged. */
+	public static String secretName(String secretRef) {
+		return secretRef.startsWith("/s/") ? secretRef.substring(3)
+			: secretRef.startsWith("s/") ? secretRef.substring(2)
+			: secretRef;
+	}
+
 	public String resolveSecret(String secretRef, RequestContext ctx) {
 		if (secretRef == null || ctx == null) return null;
 		AString callerDID = ctx.getUserDID();
 		if (callerDID == null) return null;
 
-		// Strip s/ or /s/ prefix if present
-		String name = secretRef.startsWith("/s/") ? secretRef.substring(3)
-				: secretRef.startsWith("s/") ? secretRef.substring(2)
-				: secretRef;
+		String name = secretName(secretRef);
 		if (name.isEmpty()) return null;
 
 		User user = venueState.users().get(callerDID);

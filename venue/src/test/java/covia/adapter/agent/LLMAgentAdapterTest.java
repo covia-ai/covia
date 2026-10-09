@@ -958,8 +958,9 @@ public class LLMAgentAdapterTest {
 
 		assertEquals(1, ctx.getLoads().count(), "identical content must not load twice");
 		assertEquals(1, ctx.loadTools(engine).count());
-		assertTrue(second.toString().contains("Already loaded"), second.toString());
-		assertTrue(second.toString().contains("w/skills/alpha"), second.toString());
+		assertEquals(Strings.create("w/skills/alpha"), RT.getIn(second, "existing"),
+			"structural result: existing names the path the identical content is already loaded under (#504)");
+		assertFalse(second.toString().contains("Already loaded"), "no prose note: " + second);
 	}
 
 	@Test public void testRepeatedSkillLoadKeepsSingleEntry() {

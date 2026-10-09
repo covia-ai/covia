@@ -124,6 +124,8 @@ public class Config {
 	 * set to {@code "127.0.0.1"} to restrict to loopback.
 	 */
 	public static final AString BIND_ADDRESS = Strings.intern("bindAddress");
+	/** Reverse proxies whose {@code X-Forwarded-For} names the client: IP literals, CIDR ranges, {@code "loopback"}. */
+	public static final AString TRUSTED_PROXIES = Strings.intern("trustedProxies");
 
 	/** Key for the request rate-limiting config block ({@code enabled}, {@code rps},
 	 *  {@code burst}, {@code maxConcurrentJobsPerUser}). */
@@ -133,6 +135,14 @@ public class Config {
 	 *  {@code forceTrackJobs}). See {@code venue/docs/GRID_SCHEDULER.md} §7. */
 	public static final AString SCHEDULER = Strings.intern("scheduler");
 	public static final AString SHUTDOWN = Strings.intern("shutdown");
+	/** Per-venue logging of normal operational events: {@code {audit, access}}, both off by default (covia#538). */
+	public static final AString LOGGING = Strings.intern("logging");
+	public static final AString AUDIT = Strings.intern("audit");
+	public static final AString ACCESS = Strings.intern("access");
+	/** Process-level logging controls at the server-document root: {@code log-config-file}, {@code log-format}. */
+	public static final AString OPERATIONS = Strings.intern("operations");
+	public static final AString LOG_CONFIG_FILE = Strings.intern("log-config-file");
+	public static final AString LOG_FORMAT = Strings.intern("log-format");
 	public static final AString GRACE_MS = Strings.intern("graceMs");
 
 	/** Scheduler block: default for a scheduled event that did not say whether
@@ -279,6 +289,12 @@ public class Config {
 	 *  (default — check aud if present) or {@code "require"} (aud must be present
 	 *  and match). A mismatched aud is always rejected under both. */
 	public static final AString AUDIENCE = Strings.intern("audience");
+	/** Whether a bearer credential must carry an expiry ({@code auth.requireExp}, default true). */
+	public static final AString REQUIRE_EXP = Strings.intern("requireExp");
+	/** Origins a social login may redirect the session token to, besides the venue's own. */
+	public static final AString LOGIN_REDIRECT_ORIGINS = Strings.intern("loginRedirectOrigins");
+	/** Optional cap, in seconds, on how far ahead a bearer credential may expire ({@code auth.maxTokenLifetime}). */
+	public static final AString MAX_TOKEN_LIFETIME = Strings.intern("maxTokenLifetime");
 
 	/** Key for additional accepted JWT audiences, under {@code auth}: an array of
 	 *  strings (e.g. a {@code did:key} form alongside the canonical DID). The
@@ -329,6 +345,8 @@ public class Config {
 
 	/** Key for the Private Network Access opt-in (default: false). */
 	public static final AString ALLOW_PRIVATE_NETWORK = Strings.intern("allowPrivateNetwork");
+	/** Browser hardening headers on every response (nosniff, no referrer, no framing of HTML); default {@code true}. */
+	public static final AString SECURITY_HEADERS = Strings.intern("securityHeaders");
 	public static final AString ENABLE_PRIVATE_JOBS = Strings.intern("enablePrivateJobs");
 	/** Force durable records for read-only run/internal invocations. */
 	public static final AString RECORD_READ_ONLY_OPERATIONS = Strings.intern("recordReadOnlyOperations");
@@ -348,9 +366,11 @@ public class Config {
 	 * Key for the "Fix MCP Strings" workaround flag (top-level, default true).
 	 * Some MCP clients serialise nested object/array arguments as JSON strings
 	 * instead of the structured types declared in the tool schema. When true,
-	 * the venue defensively re-parses such string values into their declared
-	 * shape at the MCP boundary and at {@code grid:run}/{@code grid:invoke}
-	 * dispatch. Set to false to disable the workaround.
+	 * the venue re-parses such string values into their declared shape at the
+	 * MCP boundary — only for arguments whose schema admits nothing but an
+	 * object or array. Operation inputs themselves are never coerced: a Covia
+	 * operation may take any JSON value, so a string reaching one is a valid
+	 * input. Set to false to disable the workaround.
 	 */
 	public static final AString FIX_MCP_STRINGS = Strings.intern("fixMcpStrings");
 
@@ -387,13 +407,13 @@ public class Config {
 	private static final Set<String> KNOWN_FIELDS = Set.of(
 		"name", "description", "did", "hostname", "rootPage",
 		"defaultLlmOperation", "defaultTransitionOp", "maxToolIterations",
-		"port", "bindAddress", "baseUrl", "rateLimit", "acceptQueueSize",
+		"port", "bindAddress", "trustedProxies", "baseUrl", "rateLimit", "acceptQueueSize",
 		"httpSelectors", "httpAcceptors", "mcp", "a2a", "adapters",
 		"modules", "dynamicModules", "users", "store", "seed", "keystore", "storage", "etch",
 		"maxContentSize", "auth", "webdav", "file", "corsOrigins",
-		"allowPrivateNetwork", "enablePrivateJobs", "recordReadOnlyOperations", "fixMcpStrings",
+		"allowPrivateNetwork", "securityHeaders", "enablePrivateJobs", "recordReadOnlyOperations", "fixMcpStrings",
 		"outputValidation", "secrets", "strictAssets", "strictConfig", "scheduler",
-		"shutdown");
+		"shutdown", "logging");
 
 	/**
 	 * Create a Config wrapping the given venue config map.
@@ -424,7 +444,7 @@ public class Config {
 			Set.of("venues", "convex", "operations", "strictConfig"),
 			"server", strict);
 		optionalMap(serverConfig, CONVEX, "convex");
-		optionalMap(serverConfig, Strings.intern("operations"), "operations");
+		validateOperations(serverConfig, strict);
 
 		ACell rawVenues = serverConfig.get(VENUES);
 		if (!(rawVenues instanceof AVector<?> venues) || venues.count() == 0) {
@@ -477,6 +497,8 @@ public class Config {
 		optionalBoolean(config, STRICT_ASSETS, "strictAssets", true);
 		optionalBoolean(config, FIX_MCP_STRINGS, "fixMcpStrings", true);
 		optionalBoolean(config, ALLOW_PRIVATE_NETWORK, "allowPrivateNetwork", false);
+		optionalBoolean(config, SECURITY_HEADERS, "securityHeaders", true);
+		validateTrustedProxies();
 		optionalBoolean(config, ENABLE_PRIVATE_JOBS, "enablePrivateJobs", false);
 		optionalBoolean(config, RECORD_READ_ONLY_OPERATIONS, "recordReadOnlyOperations", false);
 
@@ -485,6 +507,7 @@ public class Config {
 		validateRateLimit(strict);
 		validateScheduler(strict);
 		validateShutdown(strict);
+		validateLogging(strict);
 		validateKeystore(strict);
 		validateStorage(strict);
 		validateWebDav(strict);
@@ -582,7 +605,8 @@ public class Config {
 		AMap<AString, ACell> rate = optionalMap(config, RATE_LIMIT, "rateLimit");
 		if (rate == null) return;
 		validateUnknownFields(rate,
-			Set.of("enabled", "rps", "burst", "maxConcurrentJobsPerUser", "blockMs"),
+			Set.of("enabled", "rps", "burst", "maxConcurrentJobsPerUser", "blockMs",
+				"authFailuresPerMinute", "authFailureBurst", "authConcurrency"),
 			"rateLimit", strict);
 		optionalBoolean(rate, ENABLED, "rateLimit.enabled", false);
 		optionalLong(rate, Strings.intern("rps"), "rateLimit.rps", 1, Long.MAX_VALUE);
@@ -590,6 +614,59 @@ public class Config {
 		optionalLong(rate, Strings.intern("maxConcurrentJobsPerUser"),
 			"rateLimit.maxConcurrentJobsPerUser", 0, Integer.MAX_VALUE);
 		optionalLong(rate, Strings.intern("blockMs"), "rateLimit.blockMs", 0, Long.MAX_VALUE);
+		optionalLong(rate, Strings.intern("authFailuresPerMinute"), "rateLimit.authFailuresPerMinute", 1, Long.MAX_VALUE);
+		optionalLong(rate, Strings.intern("authFailureBurst"), "rateLimit.authFailureBurst", 1, Long.MAX_VALUE);
+		optionalLong(rate, Strings.intern("authConcurrency"), "rateLimit.authConcurrency", 1, Integer.MAX_VALUE);
+	}
+
+	private void validateLogging(boolean strict) {
+		AMap<AString, ACell> logging = optionalMap(config, LOGGING, "logging");
+		if (logging == null) return;
+		validateUnknownFields(logging, Set.of("audit", "access"), "logging", strict);
+		optionalBoolean(logging, AUDIT, "logging.audit", false);
+		optionalBoolean(logging, ACCESS, "logging.access", false);
+	}
+
+	/** The server document's {@code operations} block: process-wide controls shared by every venue it hosts. */
+	private static void validateOperations(AMap<AString, ACell> serverConfig, boolean strict) {
+		AMap<AString, ACell> ops = optionalMap(serverConfig, OPERATIONS, "operations");
+		if (ops == null) return;
+		validateUnknownFields(ops, Set.of("log-config-file", "log-format"), "operations", strict);
+		optionalString(ops, LOG_CONFIG_FILE, "operations.log-config-file");
+		AString format = optionalString(ops, LOG_FORMAT, "operations.log-format");
+		if (format != null && !Set.of("text", "json").contains(format.toString())) {
+			throw malformed("operations.log-format", "must be text or json");
+		}
+	}
+
+	private boolean loggingFlag(AString key) {
+		ACell v = RT.getIn(config, LOGGING, key);
+		return v != null && RT.bool(v);
+	}
+
+	/**
+	 * Whether this venue records its security audit trail ({@code logging.audit},
+	 * default off): sign-ins and refusals, token issue, user and key
+	 * administration, secret writes, GC, restart and adapter changes, on the
+	 * {@code AUDIT} logger. Operators opt in to logging normal operational
+	 * events; system-level logging (startup, warnings, errors) is unaffected.
+	 */
+	public boolean isAuditLogging() {
+		return loggingFlag(AUDIT);
+	}
+
+	/** Whether this venue logs one line per HTTP request ({@code logging.access}, default off) on the {@code ACCESS} logger. */
+	public boolean isAccessLogging() {
+		return loggingFlag(ACCESS);
+	}
+
+	private void validateTrustedProxies() {
+		ACell raw = config.get(TRUSTED_PROXIES);
+		if (raw == null) return;
+		if (!(raw instanceof AVector<?>)) {
+			throw new IllegalArgumentException("trustedProxies must be an array of IP literals, CIDR ranges or \"loopback\"");
+		}
+		getTrustedProxies();   // parses every entry; a bad one fails startup with its name
 	}
 
 	private void validateScheduler(boolean strict) {
@@ -665,15 +742,19 @@ public class Config {
 		AMap<AString, ACell> auth = optionalMap(config, AUTH, "auth");
 		if (auth == null) return;
 		validateUnknownFields(auth,
-			Set.of("tokenExpiry", "public", "audience", "acceptedAudiences", "oauth"),
+			Set.of("tokenExpiry", "public", "audience", "acceptedAudiences", "oauth",
+				"requireExp", "maxTokenLifetime", "loginRedirectOrigins"),
 			"auth", strict);
 		optionalLong(auth, TOKEN_EXPIRY, "auth.tokenExpiry", 1, Long.MAX_VALUE);
+		optionalBoolean(auth, REQUIRE_EXP, "auth.requireExp", true);
+		optionalLong(auth, MAX_TOKEN_LIFETIME, "auth.maxTokenLifetime", 1, Long.MAX_VALUE);
 
 		AString audience = optionalString(auth, AUDIENCE, "auth.audience");
 		if (audience != null && !Set.of("verify", "require").contains(audience.toString())) {
 			throw malformed("auth.audience", "must be verify or require");
 		}
 		optionalStringVector(auth, ACCEPTED_AUDIENCES, "auth.acceptedAudiences");
+		optionalStringVector(auth, LOGIN_REDIRECT_ORIGINS, "auth.loginRedirectOrigins");
 
 		AMap<AString, ACell> publicConfig = optionalMap(auth, PUBLIC, "auth.public");
 		if (publicConfig != null) {
@@ -1034,7 +1115,7 @@ public class Config {
 	 */
 	public AString getDefaultLlmOperation() {
 		AString v = RT.ensureString(config.get(DEFAULT_LLM_OPERATION));
-		return (v != null) ? v : Strings.intern("v/models/anthropic/claude-sonnet-5");
+		return (v != null) ? v : Strings.intern("v/models/anthropic/claude-sonnet-5-5");
 	}
 
 	/**
@@ -1134,6 +1215,54 @@ public class Config {
 	 *  timeouts so a saturated caller gets a clean 429, not a socket timeout. */
 	public long getRateLimitBlockMs() {
 		return rateLimitLong("blockMs", 3000);
+	}
+
+	/** Rejected credentials an address may accumulate per minute before its
+	 *  credentials are refused outright (covia#539). Default 20. Counts
+	 *  failures, never successful authentications. */
+	public double getAuthFailuresPerMinute() {
+		return rateLimitLong("authFailuresPerMinute", 20);
+	}
+
+	/** Burst of rejected credentials an address may accumulate. Default 40. */
+	public double getAuthFailureBurst() {
+		return rateLimitLong("authFailureBurst", 40);
+	}
+
+	/** Authentications an address may have in flight at once. Default 1: a
+	 *  second concurrent attempt waits up to {@code blockMs} for the first,
+	 *  so one address cannot fan out outbound DID resolution in parallel. */
+	public int getAuthConcurrency() {
+		return (int) Math.min(Integer.MAX_VALUE, rateLimitLong("authConcurrency", 1));
+	}
+
+	private volatile TrustedProxies trustedProxies;
+
+	/**
+	 * The reverse proxies whose {@code X-Forwarded-For} names the client
+	 * ({@code trustedProxies}; none by default, so the connection address is
+	 * the client). Behind Caddy on the same host list {@code "loopback"}; for a
+	 * container behind a host proxy list the bridge network, e.g.
+	 * {@code "172.16.0.0/12"}.
+	 */
+	public TrustedProxies getTrustedProxies() {
+		TrustedProxies t = trustedProxies;
+		if (t == null) {
+			List<String> entries = new ArrayList<>();
+			ACell raw = config.get(TRUSTED_PROXIES);
+			if (raw instanceof AVector<?> v) {
+				for (long i = 0; i < v.count(); i++) {
+					AString s = RT.ensureString(v.get(i));
+					if (s == null) throw new IllegalArgumentException("trustedProxies entries must be strings");
+					entries.add(s.toString());
+				}
+			} else if (raw != null) {
+				throw new IllegalArgumentException("trustedProxies must be an array of IP literals, CIDR ranges or \"loopback\"");
+			}
+			t = TrustedProxies.parse(entries);
+			trustedProxies = t;
+		}
+		return t;
 	}
 
 	/**
@@ -1244,6 +1373,7 @@ public class Config {
 	private static final AString ETCH_KEY = Strings.intern("key");
 	/** Covia-side {@code etch.gc} block: store garbage-collection policy (covia#451). */
 	private static final AString ETCH_GC = Strings.intern("gc");
+	private static final AString ETCH_GC_RETAIN = Strings.intern("retainSuperseded");
 	private static final AString ETCH_GC_ON_START = Strings.intern("onStart");
 
 	/**
@@ -1371,8 +1501,8 @@ public class Config {
 	}
 
 	/**
-	 * Shape-validates the Covia-side {@code etch.gc} block: an object whose only
-	 * field is the boolean {@code onStart}. Fail-closed like the rest of the etch
+	 * Shape-validates the Covia-side {@code etch.gc} block: an object with boolean
+	 * {@code onStart} and {@code retainSuperseded} fields. Fail-closed like the etch
 	 * policy — a misspelt or mistyped field is a startup error, never a silently
 	 * skipped collection.
 	 */
@@ -1381,13 +1511,10 @@ public class Config {
 		AMap<AString, ACell> gc = RT.castMap(raw);
 		if (gc == null) throw malformed("etch.gc", "must be an object");
 		for (AString key : gc.keySet()) {
-			if (!ETCH_GC_ON_START.equals(key)) {
-				throw malformed("etch.gc", "unknown field '" + key + "' (known: onStart)");
+			if (!ETCH_GC_ON_START.equals(key) && !ETCH_GC_RETAIN.equals(key)) {
+				throw malformed("etch.gc", "unknown field '" + key + "' (known: onStart, retainSuperseded)");
 			}
-		}
-		ACell onStart = gc.get(ETCH_GC_ON_START);
-		if (onStart != null && !(onStart instanceof CVMBool)) {
-			throw malformed("etch.gc.onStart", "must be a boolean");
+			if (!(gc.get(key) instanceof CVMBool)) throw malformed("etch.gc." + key, "must be a boolean");
 		}
 	}
 
@@ -1402,6 +1529,11 @@ public class Config {
 		if (etch == null) return false;
 		AMap<AString, ACell> gc = RT.castMap(etch.get(ETCH_GC));
 		return gc != null && CVMBool.TRUE.equals(gc.get(ETCH_GC_ON_START));
+	}
+
+	/** Retain each superseded store as a separately named checkpoint; default false. */
+	public boolean isEtchGcRetainSuperseded() {
+		return CVMBool.TRUE.equals(RT.getIn(config, ETCH, ETCH_GC, ETCH_GC_RETAIN));
 	}
 
 	/** Resolves the {@code etch.key} source to the raw 32-byte encryption key. */
@@ -1658,6 +1790,37 @@ public class Config {
 	}
 
 	/**
+	 * Whether a bearer credential must expire ({@code auth.requireExp}, default
+	 * {@code true}): a self-issued JWT without {@code exp}, or a UCAN bearer with
+	 * {@code exp: null}, is refused. Off for a dev venue that wants long-lived
+	 * hand-minted tokens. Transport grants (UCAN proofs) are not bearers and are
+	 * unaffected.
+	 */
+	public boolean isRequireExp() {
+		AMap<AString, ACell> authConfig = getAuthConfig();
+		if (authConfig != null) {
+			ACell v = authConfig.get(REQUIRE_EXP);
+			if (v != null) return RT.bool(v);
+		}
+		return true;
+	}
+
+	/**
+	 * Optional cap on a bearer credential's remaining lifetime in seconds
+	 * ({@code auth.maxTokenLifetime}): a credential expiring further ahead than
+	 * this is refused. 0 (the default) means no cap — a production venue sets
+	 * one; a dev venue need not.
+	 */
+	public long getMaxTokenLifetime() {
+		AMap<AString, ACell> authConfig = getAuthConfig();
+		if (authConfig != null) {
+			CVMLong v = RT.ensureLong(authConfig.get(MAX_TOKEN_LIFETIME));
+			if (v != null) return v.longValue();
+		}
+		return 0;
+	}
+
+	/**
 	 * Additional accepted JWT audiences from {@code auth.acceptedAudiences} — an
 	 * array of strings extending the allowlist beyond the venue's own DID(s).
 	 * @return the configured array, or null if unset
@@ -1665,6 +1828,17 @@ public class Config {
 	public AVector<ACell> getAcceptedAudiences() {
 		AMap<AString, ACell> authConfig = getAuthConfig();
 		return (authConfig != null) ? RT.ensureVector(authConfig.get(ACCEPTED_AUDIENCES)) : null;
+	}
+
+	/**
+	 * Origins a social login may redirect to with the session token, from
+	 * {@code auth.loginRedirectOrigins}; the venue's own {@code baseUrl} origin is
+	 * always allowed.
+	 * @return the configured array, or null if unset
+	 */
+	public AVector<ACell> getLoginRedirectOrigins() {
+		AMap<AString, ACell> authConfig = getAuthConfig();
+		return (authConfig != null) ? RT.ensureVector(authConfig.get(LOGIN_REDIRECT_ORIGINS)) : null;
 	}
 
 	// ========== Protocol config accessors ==========
@@ -1990,22 +2164,6 @@ public class Config {
 	}
 
 	/**
-	 * Legacy scalar CORS accessor. New code should use {@link #getCorsPolicy()}.
-	 * @return the scalar policy, or null when CORS is disabled
-	 * @throws IllegalStateException when the configured policy cannot be
-	 * represented by one string
-	 */
-	@Deprecated
-	public String getCorsOrigins() {
-		CorsPolicy policy = getCorsPolicy();
-		if (!policy.enabled()) return null;
-		if (policy.anyOrigin()) return "*";
-		if (policy.loopback() && policy.origins().isEmpty()) return "loopback";
-		if (!policy.loopback() && policy.origins().size() == 1) return policy.origins().get(0);
-		throw new IllegalStateException("CORS policy has multiple origins; use getCorsPolicy()");
-	}
-
-	/**
 	 * Whether to emit the {@code access-control-allow-private-network} response
 	 * header, which lets a public web origin reach this venue on a
 	 * private/loopback address from the browser (Chrome Private Network Access).
@@ -2027,6 +2185,19 @@ public class Config {
 		ACell v = config.get(ALLOW_PRIVATE_NETWORK);
 		if (v != null) return RT.bool(v);   // explicit override, either direction
 		return isLoopbackBind();
+	}
+
+	/**
+	 * Whether every response carries the browser hardening headers
+	 * ({@code X-Content-Type-Options: nosniff}, {@code Referrer-Policy: no-referrer},
+	 * and on HTML responses {@code X-Frame-Options: DENY} with
+	 * {@code Content-Security-Policy: frame-ancestors 'none'}). On by default;
+	 * {@code securityHeaders: false} turns them off. HSTS is not among them:
+	 * only the TLS terminator knows whether the origin is https (#537).
+	 */
+	public boolean isSecurityHeaders() {
+		ACell v = config.get(SECURITY_HEADERS);
+		return v == null || RT.bool(v);
 	}
 
 	/**
@@ -2076,18 +2247,5 @@ public class Config {
 		@SuppressWarnings("unchecked")
 		ACell v = ((AMap<AString, ACell>) block).get(key);
 		return (v != null) && RT.bool(v);
-	}
-
-	// ========== Static compatibility ==========
-
-	/**
-	 * Get the base URL for a venue from a raw config map.
-	 * @param config Venue config map
-	 * @return Base URL string (no trailing slash)
-	 * @deprecated Use instance method {@link #getBaseUrl()} instead
-	 */
-	@Deprecated
-	public static String getBaseUrl(AMap<AString, ACell> config) {
-		return new Config(config).getBaseUrl();
 	}
 }

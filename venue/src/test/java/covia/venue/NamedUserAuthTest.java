@@ -34,6 +34,7 @@ import covia.exception.ResponseException;
 import covia.grid.Job;
 import covia.grid.auth.VenueAuth;
 import covia.grid.client.VenueHTTP;
+import covia.venue.auth.VenueAuthenticator;
 import covia.venue.server.VenueServer;
 
 /** End-to-end authentication and rotation for venue-managed named users (#296). */
@@ -94,6 +95,33 @@ public class NamedUserAuthTest {
 	}
 
 	@Test
+	void concurrentUserFieldUpdatesDoNotReplaceEachOther() throws Exception {
+		Auth auth = server.getEngine().getAuth();
+		AString id = Strings.create("concurrent_" + System.nanoTime());
+		AString did = server.getEngine().managedUserDID(id);
+		AString retainedField = Strings.create("retainedField");
+		auth.putUser(id, Maps.of(
+			Fields.DID, did,
+			retainedField, Strings.create("keep")));
+		AString firstField = Strings.create("firstField");
+		AString secondField = Strings.create("secondField");
+		java.util.function.BiFunction<AString, AString, Void> update = (field, value) -> {
+			auth.updateUser(id, current -> current.assoc(field, value));
+			return null;
+		};
+		covia.test.Rendezvous.all(
+			() -> update.apply(firstField, Strings.create("first")),
+			() -> update.apply(secondField, Strings.create("second")));
+
+		AMap<AString, ACell> record = auth.getUser(id);
+		assertEquals(did, record.get(Fields.DID));
+		assertEquals(Strings.create("keep"), record.get(retainedField),
+			"field updates must preserve existing account/authentication data");
+		assertEquals(Strings.create("first"), record.get(firstField));
+		assertEquals(Strings.create("second"), record.get(secondField));
+	}
+
+	@Test
 	void registeredKeyAuthenticatesAsStableNamedDid() throws Exception {
 		AString value = Strings.create("registered-key-access");
 		server.getEngine().jobs().invokeInternal("v/ops/covia/write",
@@ -123,6 +151,34 @@ public class NamedUserAuthTest {
 		server.getEngine().didVerifier().registerMethod("exampletest",
 			(did, message, signature) -> false);
 		assertRejected(namedToken(aliceKey, foreign, foreign, venueDID));
+
+		// …and each refusal says why (covia#548) without saying whether the
+		// named account exists: a stranger's key on a real user and on an
+		// unknown one read the same, because the signature only proved
+		// possession of the kid key, which anyone can mint (AUTH.md §11).
+		String strangerKey = reason(namedToken(attacker, aliceDID, aliceDID, venueDID));
+		assertTrue(strangerKey.startsWith(VenueAuthenticator.SELF_ISSUED_REJECTED_PREFIX), strangerKey);
+		assertTrue(strangerKey.contains(VenueAuthenticator.Reason.KEY_NOT_ACTIVE + aliceDID), strangerKey);
+		AString nobody = server.getEngine().managedUserDID(Strings.create("nobody"));
+		assertEquals(strangerKey.replace(aliceDID.toString(), nobody.toString()),
+			reason(namedToken(attacker, nobody, nobody, venueDID)),
+			"an unknown user reads exactly like an unregistered key");
+		String wrongSubject = reason(namedToken(aliceKey, bobDID, bobDID, venueDID));
+		assertTrue(wrongSubject.contains(VenueAuthenticator.Reason.KEY_NOT_ACTIVE + bobDID), wrongSubject);
+		String issuerMismatch = reason(namedToken(aliceKey, aliceDID, bobDID, venueDID));
+		assertTrue(issuerMismatch.contains(VenueAuthenticator.Reason.ISSUER_MISMATCH + aliceDID), issuerMismatch);
+		String wrongAudience = reason(namedToken(aliceKey, aliceDID, aliceDID,
+			UCAN.toDIDKey(AKeyPair.generate().getAccountKey())));
+		assertTrue(wrongAudience.contains(VenueAuthenticator.Reason.AUDIENCE_NOT_THIS_VENUE), wrongAudience);
+		String foreignSignature = reason(namedToken(aliceKey, foreign, foreign, venueDID));
+		assertTrue(foreignSignature.contains(VenueAuthenticator.Reason.SIGNATURE_FAILS + foreign), foreignSignature);
+	}
+
+	/** The venue's stated reason for refusing a token, straight from the authenticator. */
+	private String reason(String token) {
+		AuthException e = assertThrows(AuthException.class,
+			() -> server.authenticator().authenticate(Strings.create(token)));
+		return e.getMessage();
 	}
 
 	@Test
@@ -141,6 +197,10 @@ public class NamedUserAuthTest {
 			RequestContext.of(rotationDID)).get(5, TimeUnit.SECONDS);
 		assertRejected(namedToken(rotationKey, rotationDID, rotationDID, engine.getDIDString()));
 		assertAccepted(namedToken(replacement, rotationDID, rotationDID, engine.getDIDString()));
+		// The revoked key's holder is told so: they own the key, so it discloses
+		// nothing to anyone else.
+		String revoked = reason(namedToken(rotationKey, rotationDID, rotationDID, engine.getDIDString()));
+		assertTrue(revoked.contains(VenueAuthenticator.Reason.KEY_REVOKED + rotationDID), revoked);
 
 		AMap<AString, ACell> tombstone = convex.core.lang.RT.ensureMap(
 			engine.getAuth().getAuthenticationKeys(Strings.create("rotation")).get(rotationKeyDID));
@@ -151,7 +211,7 @@ public class NamedUserAuthTest {
 			engine.jobs().invokeInternal("v/ops/user/authentication-revoke",
 				Maps.of(Fields.KEY, replacementDID), RequestContext.of(rotationDID))
 				.get(5, TimeUnit.SECONDS));
-		assertTrue(last.getCause().getMessage().contains("final active"));
+		assertTrue(last.getCause().getMessage().contains(Auth.CANNOT_REVOKE_FINAL_KEY));
 	}
 
 	@Test
@@ -170,7 +230,7 @@ public class NamedUserAuthTest {
 			server.getEngine().jobs().invokeInternal("v/ops/user/authentication-add",
 				Maps.of(Fields.DID, bobDID, Fields.KEY, aliceKeyDID),
 				server.getEngine().venueContext()).get(5, TimeUnit.SECONDS));
-		assertTrue(duplicate.getCause().getMessage().contains("already bound"));
+		assertTrue(duplicate.getCause().getMessage().contains(Auth.KEY_ALREADY_BOUND));
 	}
 
 	@Test
@@ -210,6 +270,24 @@ public class NamedUserAuthTest {
 			JWT.AUD, audience,
 			JWT.IAT, CVMLong.create(now),
 			JWT.EXP, CVMLong.create(now + 300)), key).toString();
+	}
+
+	@Test
+	void deletedAccountKeysStayRevokedAfterExplicitRecreation() throws Exception {
+		Engine engine = server.getEngine();
+		AKeyPair key = AKeyPair.generate();
+		AString id = Strings.create("delete-auth");
+		AString did = engine.managedUserDID(id);
+		engine.jobs().invokeInternal("v/ops/user/create", Maps.of("username", id,
+			Fields.AUTHENTICATION_KEYS, Vectors.of(UCAN.toDIDKey(key.getAccountKey()))),
+			engine.venueContext()).get(5, TimeUnit.SECONDS);
+		String token = namedToken(key, did, did, engine.getDIDString());
+		assertAccepted(token);
+		engine.deleteUser(engine.venueContext(), did);
+		assertRejected(token);
+		engine.jobs().invokeInternal("v/ops/user/create", Maps.of("username", id),
+			engine.venueContext()).get(5, TimeUnit.SECONDS);
+		assertRejected(token);
 	}
 
 	private void assertAccepted(String token) throws Exception {

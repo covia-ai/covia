@@ -16,7 +16,7 @@ mirrors.
 
 Before this change, an agent named its model twice, in two vocabularies: `llmOperation` was a
 lattice path to a *provider* operation (`v/ops/langchain/anthropic`), and
-`model` is that provider's bare id (`claude-sonnet-5`). Everything the venue
+`model` is that provider's bare id (`claude-sonnet-5-5`). Everything the venue
 knows about a particular model lives wherever it happened to be put:
 
 - assembly facts — context budget, tool calling, label dialect — on the
@@ -69,19 +69,19 @@ a user's workspace.
 
 ```json
 {
-  "name": "Claude Sonnet 5",
+  "name": "Claude Sonnet 5.5",
   "description": "Anthropic's balanced model: tool calling, prompt caching, 1M context.",
   "creator": "Covia",
   "operation": {
     "adapter": "langchain:anthropic",
     "secretFields": ["apiKey"],
     "secretKey": "ANTHROPIC_API_KEY",
-    "default": { "model": "claude-sonnet-5", "maxTokens": 16000 },
+    "default": { "model": "claude-sonnet-5-5", "maxTokens": 16000 },
     "input":   { "type": "object", "properties": { "...": "the provider's input schema" } },
     "output":  { "type": "object", "properties": { "...": "the provider's output schema" } }
   },
   "model": {
-    "id": "claude-sonnet-5",
+    "id": "claude-sonnet-5-5",
     "provider": "v/ops/langchain/anthropic",
     "options":  { "toolCalling": true },
     "budget":   { "bytes": 800000 },
@@ -99,10 +99,10 @@ a user's workspace.
 | `model.options`, `model.budget` | The model's assembly facts, in the facet's existing shape; only what differs from the provider's. |
 | `model.tags` | Free vocabulary for discovery (`balanced`, `quality`, `economical`, `coding`, `local`…). |
 
-A model asset is invocable directly — `grid:run v/models/anthropic/claude-sonnet-5 {messages: […]}` — because it is an operation. An agent uses it with the key it already has:
+A model asset is invocable directly — `grid:run v/models/anthropic/claude-sonnet-5-5 {messages: […]}` — because it is an operation. An agent uses it with the key it already has:
 
 ```json
-{ "llmOperation": "v/models/anthropic/claude-sonnet-5" }
+{ "llmOperation": "v/models/anthropic/claude-sonnet-5-5" }
 ```
 
 `config.model`, `url` and `apiKey` keep their meaning and still win over the
@@ -121,8 +121,8 @@ and `v/agents/templates/`, installed through the focused
 `AAdapter.installModel` seam and materialised at boot:
 
 ```
-v/models/anthropic/claude-sonnet-5
-v/models/anthropic/claude-haiku-4-5-20251001
+v/models/anthropic/claude-sonnet-5-5
+v/models/anthropic/claude-haiku-5-5
 v/models/openai/gpt-5.6-terra
 v/models/gemini/gemini-3.6-flash
 v/models/ollama/qwen2.5:7b
@@ -211,10 +211,10 @@ and is published and retracted with the adapter as one unit.
 | Location | Example | What it is |
 |----------|---------|------------|
 | Asset store | `a/<hash>` | The model-operation preset. Immutable, content-addressed and portable to venues with a compatible local adapter. |
-| Venue catalog | `v/models/anthropic/claude-sonnet-5` | The venue's name for it, materialised at boot or declared by the operator. |
+| Venue catalog | `v/models/anthropic/claude-sonnet-5-5` | The venue's name for it, materialised at boot or declared by the operator. |
 | User operations | `o/sonnet` | The user's own name for a model operation — a pin of a venue or remote asset, or an authored definition (a private deployment referring to its own secret, never embedding the credential). `/o/` is the existing user operations registry: typed, validated, pinned to `/a/` on invoke (GRID_LATTICE_DESIGN.md §4.3). |
 | Workspace draft | `w/drafts/my-model` | A definition being iterated with `covia:write`; invocable as any workspace draft operation is. |
-| Remote definition | `did:web:venue.example/v/models/anthropic/claude-sonnet-5` | Another venue's named model definition. Resolution fetches and hash-verifies the definition, then invocation executes locally with local adapters, secrets and context. To run inference on the publishing venue, use explicit `grid:run` with its `venue`. |
+| Remote definition | `did:web:venue.example/v/models/anthropic/claude-sonnet-5-5` | Another venue's named model definition. Resolution fetches and hash-verifies the definition, then invocation executes locally with local adapters, secrets and context. To run inference on the publishing venue, use explicit `grid:run` with its `venue`. |
 
 A model definition a user authors is an *operation* they own, so it lives in
 `/o/` like every other operation they own — not in a `w/models/` region of its
@@ -229,12 +229,12 @@ operation facet as references into the catalog:
 "model": {
   "options": { "systemMessages": "single", "requiresUserMessage": true, "cachePrefix": true },
   "budget":  { "bytes": 400000 },
-  "default": "v/models/anthropic/claude-sonnet-5",
+  "default": "v/models/anthropic/claude-sonnet-5-5",
   "recommended": {
-    "balanced":    "v/models/anthropic/claude-sonnet-5",
-    "quality":     "v/models/anthropic/claude-opus-5",
-    "longRunning": "v/models/anthropic/claude-fable-5",
-    "economical":  "v/models/anthropic/claude-haiku-4-5-20251001"
+    "balanced":    "v/models/anthropic/claude-sonnet-5-5",
+    "quality":     "v/models/anthropic/claude-opus-5-5",
+    "longRunning": "v/models/anthropic/claude-fable-5-1",
+    "economical":  "v/models/anthropic/claude-haiku-5-5"
   }
 }
 ```
@@ -247,7 +247,7 @@ new model-asset hashes on the next publication; existing hashes remain the old
 snapshots.
 
 The venue's default LLM operation (`defaultLlmOperation` in venue config) is
-now `v/models/anthropic/claude-sonnet-5`, with no change to the key or its
+now `v/models/anthropic/claude-sonnet-5-5`, with no change to the key or its
 type: it was always an operation path.
 
 ### 4.6 What is never a path
@@ -329,6 +329,95 @@ requires the resulting effective value instead of accepting LangChain4j's
 hidden 1024-token fallback. This remains a default, not a ceiling: deployments
 that need an upper bound enforce it with a capability gate.
 
+### 5.3 Inference options and upstream support
+
+`model.options` supplies inference defaults. A call's `modelOptions` overrides
+individual keys; agents forward `config.modelOptions` to each level-3 call.
+These are distinct from `config.modelProfile`, which controls context assembly.
+Catalog options are also published under the serving provider's `byModel`, so
+provider-plus-id calls and model overrides select the same defaults as presets.
+
+The Anthropic adapter maps these options onto LangChain4j 1.22.0. LangChain4j
+owns HTTP, retries, request serialization and response message conversion.
+
+| Option | Meaning | Current standard Claude defaults |
+|--------|---------|---------------------------------|
+| `nativeSystemMessages` | Keep late instructions as system messages after the incoming user/tool-result turn; false selects the portable text fallback | `true` |
+| `cacheTtl` | TTL for system, tool and conversation cache breakpoints: `5m` or `1h` | `5m` |
+| `automaticCaching` | Use the provider's moving conversation breakpoint instead of explicit `cacheMarks` | `false` |
+| `thinkingPrefixMismatch` | `provider` leaves enforcement unchanged; `error` rejects changed prefixes; `drop` requests dropping invalid thinking | `drop` |
+| `preserveThinking` | Lossless thinking preservation across completed turns | `false`; enabling requires upstream support |
+| `inlineToolChanges` | Native tool-addition/removal content blocks | `false`; enabling requires upstream support |
+| `compaction` | Provider compaction with signed-block replay | `false`; enabling requires upstream support |
+
+These defaults apply to Sonnet, Opus and Haiku 5.5 and Fable 5.1. Older and
+unknown models retain the portable system-message path and provider thinking
+policy. `cache:false` disables all cache breakpoints, including automatic
+caching. Automatic caching is opt-in because Covia already selects conversation
+boundaries; enabling it suppresses the explicit conversation marks to avoid
+exceeding the provider's four-breakpoint limit. One-hour caching may change
+provider charges.
+
+For example, an agent can set:
+
+```json
+"modelOptions": {
+  "cacheTtl": "1h",
+  "automaticCaching": true,
+  "thinkingPrefixMismatch": "error"
+}
+```
+
+The binding policy uses LangChain4j's public beta-header and custom-parameter
+facilities. It merges `thinking.block_binding` with `providerOptions`, with the
+explicit model option taking precedence; existing effort settings remain intact.
+The adapter exposes `inputTransformations` from the SDK's raw response metadata
+for diagnostics. Required single-block tool-turn thinking continues to replay,
+including blocks with an empty thinking string and a nonempty signature.
+
+`thinkingPrefixMismatch` applies only with adaptive thinking. Explicit
+`providerOptions.thinking` modes such as Sonnet 5.5's `between_tools` and
+Haiku 5.5's `disabled` pass through without adding binding controls or their
+beta header (#563). If thinking is unspecified, `drop`/`error` selects adaptive
+thinking and applies the requested binding policy.
+An explicit native `providerOptions.thinking.block_binding.prefix_mismatch_behavior`
+is preserved; the generic option fills it only when absent. Existing agent
+thinking modes, budgets, display options and cache opt-outs remain authoritative.
+
+Anthropic usage includes `tokens.cacheWrite5m` and `tokens.cacheWrite1h` when the
+provider reports its TTL split. These supplement `cacheWrite` (the aggregate),
+not additional tokens to add to it. Measured zeroes are retained; missing fields
+mean unreported usage. The split is preserved in inference, cycle and session
+usage. LangChain4j currently exposes these counters through raw response metadata;
+Covia reads that report without changing the SDK transport or message codec.
+
+#### Upstream audit (2026-10-09)
+
+[LangChain4j 1.22.0](https://github.com/langchain4j/langchain4j/releases/tag/1.22.0)
+adds [automatic caching and TTL support](https://github.com/langchain4j/langchain4j/pull/6598).
+It also contains native mid-conversation system messages and the earlier
+[signature-only thinking fix](https://github.com/langchain4j/langchain4j/pull/6246).
+Inspection of the published `langchain4j-anthropic` source artifact found no
+native compaction or inline tool-change content types. Its mapper still combines
+multiple thinking texts/signatures into one pair, so it cannot guarantee lossless
+replay of arbitrary signed block sequences.
+
+The remaining work belongs upstream, before enabling the reserved options:
+
+1. Preserve ordered thinking and redacted blocks, including empty text and exact
+   signatures, with backward-compatible `AiMessage` attributes. Test round-trip
+   conversion through synchronous, streaming and batch paths.
+2. Add signed compaction response/request blocks, associated stop reasons and
+   typed compaction configuration. Verify exact replay before Covia uses a
+   compaction response to replace conversation history.
+3. Add native system-message tool-addition/removal blocks and associated beta
+   configuration, with equivalent round-trip coverage.
+
+Enabling reserved options currently fails explicitly. Raw compaction requests
+through `providerOptions` are also rejected because receiving a successful
+response without preserving its compaction block would lose continuation state.
+Existing context-budget handling and text tool-change notices remain available.
+
 ## 6. Discovery
 
 `llm:models` enumerates the catalog instead of a Java table. It accepts the
@@ -342,13 +431,13 @@ may contain `/`. The `models` vector of ids is retained for compatibility;
     "op": "v/ops/langchain/anthropic",
     "provider": "anthropic",
     "ready": true,
-    "default": "v/models/anthropic/claude-sonnet-5",
-    "recommended": { "balanced": "v/models/anthropic/claude-sonnet-5", "...": "..." },
-    "models": ["claude-sonnet-5"],
+    "default": "v/models/anthropic/claude-sonnet-5-5",
+    "recommended": { "balanced": "v/models/anthropic/claude-sonnet-5-5", "...": "..." },
+    "models": ["claude-sonnet-5-5"],
     "entries": [{
-      "op": "v/models/anthropic/claude-sonnet-5",
-      "id": "claude-sonnet-5",
-      "name": "Claude Sonnet 5",
+      "op": "v/models/anthropic/claude-sonnet-5-5",
+      "id": "claude-sonnet-5-5",
+      "name": "Claude Sonnet 5.5",
       "budget": { "bytes": 800000 },
       "options": { "toolCalling": true },
       "tags": ["balanced"],
@@ -372,7 +461,7 @@ small boot-time snapshot.
 
 The plain catalog reads work too: `covia:list v/models` is the serving
 profiles, `covia:list v/models/anthropic` the models, and `covia:read
-v/models/anthropic/claude-sonnet-5` the asset. Namespaced providers require
+v/models/anthropic/claude-sonnet-5-5` the asset. Namespaced providers require
 deeper listing or `llm:models`' recursive enumeration.
 
 ## 7. Seeding and publishing

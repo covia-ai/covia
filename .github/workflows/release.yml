@@ -78,10 +78,12 @@ jobs:
         test -f covia-sql/target/covia-sql-*-module.jar
         test -f covia-telegram/target/covia-telegram-*-module.jar
         test -f covia-discord/target/covia-discord-*-module.jar
+        test -f covia-whatsapp/target/covia-whatsapp-*-module.jar
+        test -f covia-slack/target/covia-slack-*-module.jar
         test -f covia-sonnylabs/target/covia-sonnylabs-*-module.jar
         test -f covia-documents/target/covia-documents-*-module.jar
         test -f covia-claude-code/target/covia-claude-code-*-module.jar
-        if jar tf venue/target/covia.jar | grep -Eq '^(covia/python/|covia/adapter/python/|covia/adapter/sql/|covia/adapter/telegram/|covia/adapter/discord/|covia/adapter/sonnylabs/|covia/adapter/documents/|covia/adapter/claudecode/)'; then
+        if jar tf venue/target/covia.jar | grep -Eq '^(covia/python/|covia/adapter/python/|covia/adapter/sql/|covia/adapter/telegram/|covia/adapter/discord/|covia/adapter/whatsapp/|covia/adapter/slack/|covia/adapter/sonnylabs/|covia/adapter/documents/|covia/adapter/claudecode/)'; then
           echo "::error::Optional module classes leaked into covia.jar"
           exit 1
         fi
@@ -94,7 +96,7 @@ jobs:
       run: |
         # Run inside each jar's directory so the checksum file names the bare
         # jar and verifies with `sha256sum -c` next to the downloaded file.
-        for jar in covia-python-adapter/target/*-module.jar covia-sql/target/*-module.jar covia-telegram/target/*-module.jar covia-discord/target/*-module.jar covia-sonnylabs/target/*-module.jar covia-documents/target/*-module.jar covia-claude-code/target/*-module.jar; do
+        for jar in covia-python-adapter/target/*-module.jar covia-sql/target/*-module.jar covia-telegram/target/*-module.jar covia-discord/target/*-module.jar covia-whatsapp/target/*-module.jar covia-slack/target/*-module.jar covia-sonnylabs/target/*-module.jar covia-documents/target/*-module.jar covia-claude-code/target/*-module.jar; do
           (cd "$(dirname "$jar")" && sha256sum "$(basename "$jar")" > "$(basename "$jar").sha256")
         done
 
@@ -127,6 +129,10 @@ jobs:
           covia-telegram/target/*-module.jar.sha256 \
           covia-discord/target/*-module.jar \
           covia-discord/target/*-module.jar.sha256 \
+          covia-whatsapp/target/*-module.jar \
+          covia-whatsapp/target/*-module.jar.sha256 \
+          covia-slack/target/*-module.jar \
+          covia-slack/target/*-module.jar.sha256 \
           covia-sonnylabs/target/*-module.jar \
           covia-sonnylabs/target/*-module.jar.sha256 \
           covia-documents/target/*-module.jar \
@@ -161,6 +167,10 @@ jobs:
           covia-telegram/target/*-module.jar.sha256 \
           covia-discord/target/*-module.jar \
           covia-discord/target/*-module.jar.sha256 \
+          covia-whatsapp/target/*-module.jar \
+          covia-whatsapp/target/*-module.jar.sha256 \
+          covia-slack/target/*-module.jar \
+          covia-slack/target/*-module.jar.sha256 \
           covia-sonnylabs/target/*-module.jar \
           covia-sonnylabs/target/*-module.jar.sha256 \
           covia-documents/target/*-module.jar \

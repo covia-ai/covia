@@ -145,7 +145,9 @@ public class HitlFederationTest {
 				+ RT.getIn(hop.getData(), Fields.ERROR));
 		AMap<AString, ACell> remote = RT.castMap(hop.getOutput());
 		String remoteId = RT.ensureString(remote.get(Strings.intern("id"))).toString();
-		assertEquals(Status.INPUT_REQUIRED, RT.ensureString(remote.get(Fields.STATUS)),
+		// grid:invoke reports the remote record as it stood when the hop
+		// returned, which can still be PENDING; the park is observed durably.
+		assertNotNull(awaitRemoteStatus(bobOnA, remoteId, Status.INPUT_REQUIRED, 10_000),
 			"the remote HITL job parks INPUT_REQUIRED awaiting Alice");
 
 		// The record landed in Alice's inbox ON VENUE B, attributed to Bob.

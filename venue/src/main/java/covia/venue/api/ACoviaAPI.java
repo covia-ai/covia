@@ -8,6 +8,7 @@ import convex.core.util.JSON;
 import covia.grid.Venue;
 import covia.venue.Engine;
 import covia.venue.LocalVenue;
+import covia.venue.TrustedProxies;
 import io.javalin.http.Context;
 
 /*
@@ -18,17 +19,22 @@ public abstract class ACoviaAPI  {
 	private static final Logger log = LoggerFactory.getLogger(ACoviaAPI.class);
 
 	/**
-	 * Utility method to construct the external base URL
+	 * The venue's externally visible base URL for a request. {@code X-Forwarded-*}
+	 * headers describe it only when the connection comes from a trusted reverse
+	 * proxy ({@code trustedProxies}); from any other client they are ignored, so
+	 * a direct caller cannot make the venue publish attacker-chosen endpoints in
+	 * its own DID document, agent cards or OAuth metadata.
 	 * @param ctx Javalin context
 	 * @param basePath Path for base URL e.g. "mcp"
+	 * @param proxies the proxies whose forwarded headers are believed
 	 * @return Base URL for external use (possible localhost if external URL not available from Context)
 	 */
-	public static String getExternalBaseUrl(Context ctx, String basePath) {
-	    // Try to get information from forwarded headers
-	    String proto = ctx.header("X-Forwarded-Proto");
-	    String host = ctx.header("X-Forwarded-Host");
-	    String port = ctx.header("X-Forwarded-Port");
-	    String prefix = ctx.header("X-Forwarded-Prefix");
+	public static String getExternalBaseUrl(Context ctx, String basePath, TrustedProxies proxies) {
+	    boolean forwarded = (proxies != null) && proxies.trusts(ctx.ip());
+	    String proto = forwarded ? ctx.header("X-Forwarded-Proto") : null;
+	    String host = forwarded ? ctx.header("X-Forwarded-Host") : null;
+	    String port = forwarded ? ctx.header("X-Forwarded-Port") : null;
+	    String prefix = forwarded ? ctx.header("X-Forwarded-Prefix") : null;
 	
 	    // Fallback to local request info if headers are missing
 	    if (proto == null) {

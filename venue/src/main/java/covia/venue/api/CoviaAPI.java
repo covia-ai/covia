@@ -175,6 +175,7 @@ public class CoviaAPI extends ACoviaAPI {
 		// requireVenueUserAuthority checks, so authorization never duplicates.
 		routes.get(ROUTE+"users", this::getUsers, COVIA_API);
 		routes.get(ROUTE+"users/{did}", this::getUserInfo, COVIA_API);
+		routes.delete(ROUTE+"users/{did}", this::deleteUser, COVIA_API);
 		routes.get(ROUTE+"users/{did}/authentications", this::getUserAuthentications, COVIA_API);
 
 		// DLFS — job-free reads (#253), read-first MVP. Reuses DLFSAdapter's own
@@ -203,7 +204,7 @@ public class CoviaAPI extends ACoviaAPI {
 		AMap<AString,ACell> result=engine().getStatus();
 
 		// Add the external base URL
-		result=result.assoc(Fields.URL,RT.cvm(getExternalBaseUrl(ctx,null)));
+		result=result.assoc(Fields.URL,RT.cvm(getExternalBaseUrl(ctx, null, engine().config().getTrustedProxies())));
 
 		// Add the stats, plus the caller's own job count (#229) — anonymous
 		// callers see the shared public identity's count.
@@ -220,6 +221,7 @@ public class CoviaAPI extends ACoviaAPI {
 		Config config = engine().config();
 		result = result.assoc(Fields.ACCESS, Maps.of(
 			Strings.intern("public"), CVMBool.create(config.isPublicAccess()),
+			Strings.intern("publicCaps"), engine().getAuth().getPublicCapsMode(),
 			Strings.intern("userAutoCreate"), CVMBool.create(config.isUserAutoCreate())));
 
 		buildResult(ctx,200,result);
@@ -253,6 +255,13 @@ public class CoviaAPI extends ACoviaAPI {
 		                description = "Set to 'metadata' to return each venue asset as {id, metadata} instead of an id string.",
 		                required = false,
 		                example = "metadata"
+		            ),
+		            @OpenApiParam(
+		                name = "kind",
+		                type = String.class,
+		                description = "Restrict the listing to 'operation' (assets carrying an operation) or 'data' (those that do not). Offsets and total apply to the filtered listing.",
+		                required = false,
+		                example = "data"
 		            )
 		        },
 		        responses = {
@@ -309,7 +318,45 @@ public class CoviaAPI extends ACoviaAPI {
 			return;
 		}
 
-		long n=venue.getAssetCount();
+		// kind restricts the listing to assets that carry an operation, or to
+		// those that do not. Without it nothing changes — same call, same cost.
+		String kind = ctx.queryParam("kind");
+		Boolean wantOperations;
+		if (kind == null) {
+			wantOperations = null;
+		} else if ("operation".equals(kind)) {
+			wantOperations = Boolean.TRUE;
+		} else if ("data".equals(kind)) {
+			wantOperations = Boolean.FALSE;
+		} else {
+			buildError(ctx, 400, "Unsupported asset kind: " + kind);
+			return;
+		}
+
+		// A filtered listing is selected before it is paged: an offset has to
+		// count entries the caller asked for, and `total` has to be the size of
+		// the filtered listing, not of the catalogue it was drawn from. That
+		// means classifying the whole catalogue here — a local pass over
+		// in-memory records, and the point of the exercise is that it replaces
+		// sending every operation definition to a client that discards them.
+		List<Hash> matching = null;
+		if (wantOperations != null) {
+			matching = new ArrayList<>();
+			for (Hash h : venue.listAssetIDs(0, venue.getAssetCount())) {
+				try {
+					Asset a = venue.getAsset(h);
+					if (a == null) continue;
+					boolean isOperation = a.meta().get(Fields.OPERATION) != null;
+					if (isOperation == wantOperations.booleanValue()) matching.add(h);
+				} catch (IOException e) {
+					buildError(ctx, 500, "Error retrieving venue asset "
+						+ engine().assetDIDURL(h) + ": " + e.getMessage());
+					return;
+				}
+			}
+		}
+
+		long n = (matching != null) ? matching.size() : venue.getAssetCount();
 		result.put(Fields.TOTAL, n);
 
 		long start=Math.max(0, offset);
@@ -326,7 +373,9 @@ public class CoviaAPI extends ACoviaAPI {
 		result.put(Fields.OFFSET, start);
 		result.put(Fields.LIMIT, actualLimit);
 
-		List<Hash> assetIDs = venue.listAssetIDs(start, actualLimit);
+		List<Hash> assetIDs = (matching != null)
+			? matching.subList((int) Math.min(start, n), (int) Math.min(start + actualLimit, n))
+			: venue.listAssetIDs(start, actualLimit);
 		ArrayList<Object> assetsList=new ArrayList<>();
 		for (Hash h : assetIDs) {
 			// A venue-CAS listing must round-trip through the general resolver.
@@ -428,13 +477,29 @@ public class CoviaAPI extends ACoviaAPI {
 			tags = { "Covia"},
 			summary = "Get Covia asset metadata given an asset reference.",
 			operationId = CoviaAPI.GET_ASSET,
+			queryParams = {
+					@OpenApiParam(
+							name = "namespace",
+							description = "Set to \"venue\" to look a bare hash up in the venue's "
+									+ "own asset catalog (equivalent to <venueDID>/a/<hash>) "
+									+ "instead of the caller's namespace.",
+							required = false,
+							type = String.class,
+							example = "venue") },
 			pathParams = {
 					@OpenApiParam(
 							name = "ref",
-							description = "Asset reference: a bare CAD3 hash, a content-addressed "
-									+ "address (a/<hash>), a workspace/operation path (w/…, o/…), "
-									+ "or a DID URL. Resolved the same way invoke resolves "
-									+ "operation references.",
+							description = "Asset reference, resolved the same way invoke resolves "
+									+ "operation references. A bare CAD3 hash or a/<hash> is "
+									+ "caller-relative: it names the asset in the requesting "
+									+ "caller's own a/ namespace (<callerDID>/a/<hash>), so a "
+									+ "hash registered by another principal, or requested "
+									+ "anonymously, is 404 here. There is no global lookup by "
+									+ "hash. Address another owner's asset explicitly as "
+									+ "<ownerDID>/a/<hash> (a UCAN grant is required for a "
+									+ "non-public owner), or use ?namespace=venue for the venue "
+									+ "catalog. Workspace/operation paths (w/…, o/…) and DID "
+									+ "URLs resolve with their explicit owner semantics.",
 							required = true,
 							type = String.class,
 							example = "a/1234567812345678123456781234567812345678123456781234567812345678") })
@@ -972,7 +1037,7 @@ public class CoviaAPI extends ACoviaAPI {
 				return;
 			}
 
-			Job job=engine().jobs().invokeOperation(op,input,rctx);
+			Job job=engine().jobs().submitOperation(op,input,rctx);
 			if (job==null) {
 				buildError(ctx,404,"Operation does not exist");
 				return;
@@ -1113,7 +1178,8 @@ public class CoviaAPI extends ACoviaAPI {
 	@OpenApi(path = ROUTE + "jobs/{id}",
 			methods = HttpMethod.POST,
 			tags = { "Covia"},
-			summary = "Send a message to a running job. Returns 202 Accepted once the message is queued.",
+			summary = "Send a message to a running job. Returns 202 Accepted once the job's adapter has taken the message; "
+				+ "for a job mirroring remote work that means the remote end accepted it.",
 			operationId = CoviaAPI.SEND_MESSAGE,
 			pathParams = {
 					@OpenApiParam(
@@ -1129,7 +1195,8 @@ public class CoviaAPI extends ACoviaAPI {
 					@OpenApiResponse(status = "202", description = "Message accepted and queued"),
 					@OpenApiResponse(status = "403", description = "Caller is not the job owner"),
 					@OpenApiResponse(status = "404", description = "Job not found"),
-					@OpenApiResponse(status = "409", description = "Job is in terminal state")
+					@OpenApiResponse(status = "409", description = "Job is in terminal state, or its adapter refused the message"),
+					@OpenApiResponse(status = "502", description = "The remote end of a mirrored job did not acknowledge the message; delivery is unknown")
 					})
 	protected void sendMessage(Context ctx) {
 		Blob id = Blob.parse(ctx.pathParam("id"));
@@ -1149,10 +1216,9 @@ public class CoviaAPI extends ACoviaAPI {
 				: Maps.of(Fields.CONTENT, message);
 
 		try {
-			int depth = engine().jobs().deliverMessage(id, msgMap, rctx);
+			engine().jobs().deliverMessage(id, msgMap, rctx);
 			Map<String, Object> response = new HashMap<>();
 			response.put("status", "queued");
-			response.put("queueDepth", depth);
 			buildResult(ctx, 202, response);
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
@@ -1160,6 +1226,8 @@ public class CoviaAPI extends ACoviaAPI {
 			buildError(ctx, 404, e.getMessage());
 		} catch (IllegalStateException e) {
 			buildError(ctx, 409, e.getMessage());
+		} catch (covia.exception.ResponseException e) {
+			buildError(ctx, 502, e.getMessage());
 		}
 	}
 
@@ -1336,7 +1404,8 @@ public class CoviaAPI extends ACoviaAPI {
 		}
 		// Ownership applies to the stream exactly as to GET /jobs/{id}: the
 		// record resolves under the caller's context or not at all.
-		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		RequestContext rctx = AuthMiddleware.withTransportGrants(AuthMiddleware.callerContext(ctx),
+			AuthMiddleware.headerUcans(ctx), engine().didVerifier());
 		try {
 			if (engine().jobs().getJobData(id, rctx) == null) {
 				buildError(ctx, 404, "Job not found: " + id);
@@ -1998,11 +2067,29 @@ public class CoviaAPI extends ACoviaAPI {
 		}
 	}
 
+	@OpenApi(path = ROUTE + "users/{did}", methods = HttpMethod.DELETE,
+			tags = { "Covia" }, operationId = "deleteUser",
+			summary = "Delete an account with venue user/delete authority. Self-deletion has no authority exemption.",
+			pathParams = { @OpenApiParam(name = "did", description = "Exact account DID") })
+	protected void deleteUser(Context ctx) {
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		try {
+			ACell result = engine().jobs().invokeInternal("v/ops/user/delete",
+				Maps.of(Fields.DID, Strings.create(ctx.pathParam("did"))), rctx).join();
+			buildResult(ctx, 200, result);
+		} catch (RuntimeException e) {
+			Throwable cause = e instanceof java.util.concurrent.CompletionException ? e.getCause() : e;
+			buildError(ctx, cause instanceof AuthException ? 403
+				: cause instanceof IllegalArgumentException ? 400 : 500, cause.getMessage());
+		}
+	}
+
 	@OpenApi(path = ROUTE + "users/{did}/authentications",
 			methods = HttpMethod.GET,
 			tags = { "Covia" },
-			summary = "List a venue-managed user's authenticators, active and revoked "
+			summary = "List a user's authenticators, active and revoked "
 				+ "tombstones alike — the user:authentication-list payload (job-free, #255). "
+				+ "Only venue-managed users have any; a registered external DID returns an empty set. "
 				+ "The caller's own DID needs no operator authority; any other DID does.",
 			operationId = "getUserAuthentications",
 			pathParams = { @OpenApiParam(name = "did", description = "User DID") })
@@ -2249,26 +2336,25 @@ public class CoviaAPI extends ACoviaAPI {
 							type = String.class) })
 	protected void deleteSecret(Context ctx) {
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
-		AString callerDID = rctx.getCallerDID();
-		if (callerDID == null) {
+		if (rctx.getCallerDID() == null) {
 			buildError(ctx, 401, "Authentication required");
 			return;
 		}
-
 		String name = ctx.pathParam("name");
-		User user = engine().getVenueState().users().get(callerDID);
-		if (user == null) {
-			buildError(ctx, 404, "Secret not found");
-			return;
+		// The same pinned and audited path as covia:delete s/<name>: crud/delete
+		// on the whole record, never a partial one (see CoviaAdapter).
+		try {
+			ACell result = engine().jobs().invokeInternal("v/ops/covia/delete",
+				Maps.of(Fields.PATH, Strings.create("s/" + name)), rctx).join();
+			if (!RT.bool(RT.getIn(result, "deleted"))) {
+				buildError(ctx, 404, "Secret not found: " + name);
+				return;
+			}
+			ctx.status(200);
+		} catch (RuntimeException e) {
+			Throwable cause = e instanceof java.util.concurrent.CompletionException ? e.getCause() : e;
+			buildError(ctx, cause instanceof AuthException ? 403 : 400, cause.getMessage());
 		}
-
-		AString secretName = Strings.create(name);
-		if (!user.secrets().exists(secretName)) {
-			buildError(ctx, 404, "Secret not found: " + name);
-			return;
-		}
-		user.secrets().delete(secretName);
-		ctx.status(200);
 	}
 
 	@OpenApi(path = "/.well-known/did.json",
@@ -2283,7 +2369,7 @@ public class CoviaAPI extends ACoviaAPI {
 					})	
 	protected void getDIDDocument(Context ctx) {
 		// Create a complete DID document structure
-		AMap<AString, ACell> didDocument = engine().getDIDDocument(getExternalBaseUrl(ctx,ROUTE));
+		AMap<AString, ACell> didDocument = engine().getDIDDocument(getExternalBaseUrl(ctx, ROUTE, engine().config().getTrustedProxies()));
 
 		// Set content type to application/did+json
 		ctx.header("Content-Type", "application/did+json");

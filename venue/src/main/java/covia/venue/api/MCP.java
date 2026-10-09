@@ -39,7 +39,6 @@ import covia.venue.Engine;
 import covia.venue.LocalVenue;
 import covia.venue.RequestContext;
 import covia.venue.server.AuthMiddleware;
-import covia.venue.server.SseServer;
 import io.javalin.config.RoutesConfig;
 import io.javalin.http.Context;
 import jakarta.servlet.http.HttpServletResponse;
@@ -58,7 +57,6 @@ public class MCP extends McpServer {
 	public static final Logger log = LoggerFactory.getLogger(MCP.class);
 
 	private final Venue venue;
-	protected final SseServer sseServer;
 
 	/** Default timeout for MCP tool calls (120 seconds) */
 	private static final long TOOL_CALL_TIMEOUT_MS = 120_000;
@@ -134,7 +132,6 @@ public class MCP extends McpServer {
 	public MCP(Venue venue, AMap<AString, ACell> mcpConfig) {
 		super(buildServerInfo(venue, mcpConfig));
 		this.venue = venue;
-		this.sseServer = new SseServer(engine());
 		this.includedAdapters = readIncludedAdapters(mcpConfig);
 		this.includePathPrefixes = readIncludePathPrefixes(mcpConfig);
 		this.authRequired = engine().config().isMCPAuthRequired();
@@ -352,12 +349,12 @@ public class MCP extends McpServer {
 		);
 	}
 
-	private static String mcpResource(Context ctx) {
-		return ACoviaAPI.getExternalBaseUrl(ctx, null) + "/mcp";
+	private String mcpResource(Context ctx) {
+		return ACoviaAPI.getExternalBaseUrl(ctx, null, engine().config().getTrustedProxies()) + "/mcp";
 	}
 
-	private static String protectedResourceMetadata(Context ctx) {
-		return ACoviaAPI.getExternalBaseUrl(ctx, null)
+	private String protectedResourceMetadata(Context ctx) {
+		return ACoviaAPI.getExternalBaseUrl(ctx, null, engine().config().getTrustedProxies())
 			+ "/.well-known/oauth-protected-resource/mcp";
 	}
 
@@ -420,10 +417,11 @@ public class MCP extends McpServer {
 	 * if the supplied value is an {@link AString} that parses as JSON of the
 	 * matching shape, replace it with the parsed value.
 	 *
-	 * <p>Multi-type schemas (e.g. {@code grid_run.input}'s {@code ["null",
-	 * "boolean", "object", ...]}) are left untouched — string is a valid
-	 * member of that type set, so coercing would change semantics. The
-	 * defensive parse for those values lives in {@code GridAdapter.invokeRun}.
+	 * <p>Multi-type or untyped schemas (e.g. {@code grid_run.input}, any JSON
+	 * value) are left untouched — string is a valid member of that type set,
+	 * so coercing would change semantics. Such values reach the operation
+	 * verbatim; this boundary is the only place a string is turned into an
+	 * object, and only because the MCP tool schema says nothing else is valid.
 	 *
 	 * <p>Returns the original arguments cell unchanged if no coercion is
 	 * needed, the schema is unavailable, or anything fails.
@@ -706,8 +704,11 @@ public class MCP extends McpServer {
 		AMap<AString, ACell> op = RT.ensureMap(RT.getIn(meta, Fields.OPERATION));
 		if (op == null) return null;
 		// MCP requires inputSchema on every tool; an op declaring none takes
-		// an unconstrained object. Declared schemas pass through as written —
-		// testToolSchemasValid enforces that authors declare type: object.
+		// an unconstrained object. Declared schemas pass through as written.
+		// A Covia operation may take any JSON value, so an op whose declared
+		// input is not an object is still advertised, best-effort — the
+		// author was warned at install (AAdapter.warnIfInputIsNotAnObject),
+		// and testToolSchemasValid keeps the shipped library object-typed.
 		AMap<AString, ACell> declaredInput = RT.ensureMap(RT.getIn(op, Fields.INPUT));
 		AMap<AString, ACell> inputSchema = (declaredInput != null)
 			? prepareSchema(declaredInput)

@@ -1,0 +1,37 @@
+{
+  "operation": {
+    "adapter": "slack:send",
+    "output": {
+      "type": "object"
+    },
+    "input": {
+      "required": [
+        "channel",
+        "text"
+      ],
+      "additionalProperties": false,
+      "type": "object",
+      "properties": {
+        "bot": {
+          "type": "string"
+        },
+        "channel": {
+          "type": "string",
+          "pattern": "^[CDG][A-Z0-9]+$"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "thread_ts": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+$"
+        }
+      }
+    },
+    "readOnly": false
+  },
+  "name": "Send Slack text",
+  "description": "Send plain text to an explicitly allowed Slack channel or DM channel. Requires slack/send on the binding. thread_ts preserves a reply thread; timestamps remain strings. A failure can leave delivery uncertain and must not be automatically retried."
+}

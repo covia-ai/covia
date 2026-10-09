@@ -23,7 +23,6 @@ import org.slf4j.LoggerFactory;
 
 import convex.auth.did.DID;
 import convex.core.data.ACell;
-import convex.core.data.prim.CVMLong;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -145,17 +144,6 @@ public class VenueHTTP extends Venue {
 		AVector<ACell> v = Vectors.empty();
 		for (String jwt : jwts) v = v.conj(Strings.create(jwt));
 		this.ucans = v;
-	}
-
-	/**
-	 * Deprecated. Invoke now always means a durable Job. Use {@link #run(String,
-	 * ACell)} when the caller only wants the operation result, or
-	 * {@link #runPrivate(String, ACell)} when it must leave no durable Job.
-	 */
-	@Deprecated
-	public void setPrivate(boolean enabled) {
-		if (enabled) throw new UnsupportedOperationException(
-			"Private invoke mode was replaced by run(...): invoke always creates a durable Job");
 	}
 
 	// Package-private test seams (deterministic retry tests):
@@ -1307,7 +1295,7 @@ public class VenueHTTP extends Venue {
 	}
 
 	@Override
-	public int sendMessage(String jobId, AMap<AString, ACell> message) {
+	public void sendMessage(String jobId, AMap<AString, ACell> message) {
 		HttpRequest req = bodyRequestBuilder("jobs/" + jobId)
 			.header("Content-Type", "application/json")
 			.POST(HttpRequest.BodyPublishers.ofString(JSON.toString(message)))
@@ -1316,15 +1304,8 @@ public class VenueHTTP extends Venue {
 		try {
 			HttpResponse<String> response = sendSync(req);
 			int code = response.statusCode();
-			if (code == 202) {
-				AMap<AString, ACell> body = RT.ensureMap(JSON.parseJSON5(response.body()));
-				if (body != null) {
-					ACell depth = body.get(Strings.create("queueDepth"));
-					CVMLong cl = RT.ensureLong(depth);
-					if (cl != null) return (int) cl.longValue();
-				}
-				return 0;
-			} else if (code == 404) {
+			if (code == 202) return;
+			if (code == 404) {
 				throw new IllegalArgumentException("Job not found: " + jobId);
 			} else if (code == 409) {
 				throw new IllegalStateException("Job is in terminal state: " + jobId);

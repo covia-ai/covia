@@ -41,7 +41,7 @@ public class ConfigTest {
 	@Test
 	public void testDefaultLlmOperationFallback() {
 		// Unset → the built-in balanced model preset.
-		assertEquals("v/models/anthropic/claude-sonnet-5",
+		assertEquals("v/models/anthropic/claude-sonnet-5-5",
 			new Config(null).getDefaultLlmOperation().toString());
 	}
 

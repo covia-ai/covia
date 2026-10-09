@@ -206,6 +206,93 @@ naming the store's real owner: venues are keyed by AccountKey, so a wrong key
 would otherwise silently create a fresh empty venue and orphan the existing
 data. Never commit keystore passwords; use env vars or gitignored dev configs.
 
+## Production profile
+
+The defaults suit a venue on a developer's machine. A venue other people reach
+should set at least:
+
+```json
+{
+  "bindAddress": "127.0.0.1",
+  "trustedProxies": ["loopback"],
+  "corsOrigins": ["https://app.covia.ai"],
+  "auth": { "public": { "enabled": false }, "maxTokenLifetime": 2592000 },
+  "users": { "autoCreate": false },
+  "strictConfig": true
+}
+```
+
+- `bindAddress` on loopback, with TLS terminated by a reverse proxy in front
+  (`deploy/Caddyfile`), or a firewall if the venue must listen on an
+  interface itself.
+- `trustedProxies` naming that proxy, so rate limiting and the
+  authentication throttle see the real client (*Trusted proxies*). A venue
+  that receives `X-Forwarded-For` without this set logs one warning.
+- `corsOrigins`: the default `"*"` is right for a public venue — the venue
+  never allows credentialed cross-origin requests, so a page on another site
+  can only make a visitor's browser do what an anonymous caller could. Set an
+  explicit list for a venue whose anonymous reads are not meant for the whole
+  internet, or one on a private network (*Browser origins*).
+- `auth.public.enabled: false` unless anonymous read access is wanted, and
+  `auth.maxTokenLifetime` to bound hand-minted bearers (*Bearer expiry*).
+- `users.autoCreate: false` unless any authenticated DID may register itself.
+- `strictConfig: true`, so a typo fails startup instead of being ignored.
+- `Strict-Transport-Security` at the proxy — Caddy needs an explicit
+  `header Strict-Transport-Security "max-age=31536000"` — the venue sends the
+  other browser hardening headers itself (*Browser security headers*).
+- Rate limiting is on by default for a non-loopback bind; leave it on.
+
+At startup the venue logs its posture in one line (`Posture: bind …, public
+access …, CORS …, security headers …, rate limit …, trusted proxies …`), so a
+deployment can be checked from its log.
+
+## Logging
+
+Logging splits along one line: **system-level** events — startup, the
+posture line, warnings, errors — are always logged; logging of **normal
+operational events** is the operator's choice, per venue, and off by default.
+
+```json
+{
+  "operations": { "log-format": "json" },
+  "venues": [
+    { "hostname": "venue.example.com", "logging": { "audit": true, "access": true } }
+  ]
+}
+```
+
+Per venue (`logging`, both default `false`):
+
+- `audit` — the security audit trail, on the logger `AUDIT`: sign-ins and
+  refused credentials (`auth.success`, `auth.failure`, `auth.throttled`),
+  logins (`login`), token issue (`token.issued`), user and key administration
+  (`user.create`, `user.sudo`, `auth.key.add`, `auth.key.revoke`), secret
+  writes (`secret.write`, the name only), and venue administration
+  (`venue.gc`, `venue.restart`, `venue.admin`). Events carry DIDs, the client
+  address, names, outcomes and refusal reasons — never a token, secret value,
+  email or content — so they can be kept longer than operational logs.
+- `access` — one line per HTTP request on the logger `ACCESS`: method, path
+  (never the query string), status, duration, caller DID, client address and
+  a truncated user agent. Never headers, credentials or bodies.
+
+Each line is tagged with the venue's hostname, so a process hosting several
+venues can be attributed. Every request gets an id either way: it is
+returned in `X-Request-Id` and carried by the audit and access lines of that
+request. An inbound `X-Request-Id` is kept only from a trusted proxy
+(*Trusted proxies*) and only if it is a short plain token.
+
+Per process, in the server document's `operations` block — logging is one
+setup for the whole JVM, whichever venues it hosts:
+
+- `log-format`: `"text"` (default) or `"json"`. Text goes to the console and
+  a rotating `~/.covia/logs/main.log` (50 MB files, 7 days, 1 GB cap), with
+  `AUDIT` and `ACCESS` lines also written to `audit.log` (30 days) and
+  `access.log`. JSON writes one object per line to stdout, with the logger
+  name, key-value pairs and request id as fields — the form a log shipper
+  routes on, for example to keep `AUDIT` for its own retention period.
+- `log-config-file`: a Logback XML file that replaces the shipped profile
+  entirely. A missing file is a warning and the shipped profile is used.
+
 ## Network binding
 
 ```json
@@ -217,6 +304,28 @@ data. Never commit keystore passwords; use env vars or gitignored dev configs.
 
 - `port`: HTTP listen port (default `8080`).
 - `bindAddress`: network interface the HTTP connector binds to. When omitted, the venue binds **all interfaces** (`0.0.0.0`) — reachable from the LAN. Set to `"127.0.0.1"` to restrict the venue to loopback (recommended when embedding the venue as a local subprocess). This is the socket bind address and is distinct from `hostname`, which is the venue's *advertised* public host used to derive `baseUrl`/DID.
+
+## Trusted proxies (`trustedProxies`)
+
+```json
+{
+  "trustedProxies": ["loopback"]
+}
+```
+
+Everything keyed on the caller's address — the request rate limiter for
+anonymous callers, and the authentication throttle — needs to know who the
+caller is when a reverse proxy sits in front of the venue. Without this
+setting the connection's own address is the client and `X-Forwarded-For` is
+ignored, so behind Caddy every caller would share one bucket. List the
+proxies the venue accepts a forwarded address from: IP literals
+(`203.0.113.5`), CIDR ranges (`10.0.0.0/8`, `fd00::/8`) or `"loopback"`.
+Hostnames are refused, so trust never depends on DNS.
+
+The client is then the rightmost `X-Forwarded-For` hop that is not itself a
+trusted proxy — the one the proxy appended, which the client cannot forge.
+Caddy on the same host: `["loopback"]`. A container published on loopback
+behind a host proxy sees the bridge network instead, e.g. `["172.16.0.0/12"]`.
 
 ## Browser origins (CORS)
 
@@ -275,6 +384,25 @@ network), or `false` to refuse them even on loopback. The checked-in
 > regardless of this header. The universal answer for a hosted page reaching a
 > local venue is an https venue (or a tunnel); the header unblocks the
 > Chrome/Edge/Firefox majority only.
+
+## Browser security headers (`securityHeaders`)
+
+```json
+{
+  "securityHeaders": true
+}
+```
+
+On by default. Every response carries `X-Content-Type-Options: nosniff` and
+`Referrer-Policy: no-referrer`; HTML responses (the root page, `/login`,
+`/swagger`, `/redoc`, error pages) also carry `X-Frame-Options: DENY` and
+`Content-Security-Policy: frame-ancestors 'none'`, so no other site can frame
+the venue's own pages. Set `false` to turn them off. `Strict-Transport-Security`
+is deliberately not among them: add it at the TLS terminator (`deploy/Caddyfile`
+or equivalent), which knows the origin is https.
+
+The startup posture line shows the effective `corsOrigins`; `"*"` is the right
+value for a public venue (see *Production profile*).
 
 ## System tray
 
@@ -356,10 +484,11 @@ the collected file is adopted under the store's name.
 {"status": true}       // {file, bytes, inProgress, sweepComplete, completed, collectedFile?, collectedBytes?}
 {"cancel": true}       // roll a running cycle back; nothing written during it is lost
 {"restart": true}      // restart after cutover so the disk comes back now
+{"backupFile": "/var/backups/covia/checkpoint.etch"} // retain the pre-cycle store
 ```
 
 The result carries `bytesBefore`, `bytesAfter`, `reclaimed`, `elapsedMillis`,
-`collectedFile` and `reclaimedAt` (`shutdown`, or `restart`). Cancelling the
+`collectedFile` and `reclaimedAt` (`shutdown`, `restart`, or `backupRemoval`). Cancelling the
 Job cancels the cycle. Constraints:
 
 - **One collection per process.** The successor cannot be threaded into the
@@ -374,6 +503,139 @@ Job cancels the cycle. Constraints:
   the venue's own agents are not admitted without one. `restart: true`
   additionally requires `venue/restart` on `<venueDID>/process` and a
   `MainVenue`-managed process, both checked before any collection starts.
+
+### Retaining a store checkpoint
+
+Set `etch.gc.retainSuperseded: true` to retain the superseded store during both
+startup GC (`etch.gc.onStart`) and online `venue:gc`. It defaults to false.
+Each retained file gets a unique `<store>.checkpoint-<time>-<uuid>.etch` name
+beside the store, outside Convex's automatic recovery naming scheme. Startup
+GC logs the checkpoint path after closing the old store; online GC returns it.
+Normal reopening neither adopts nor prunes these checkpoints. Operators own
+retention and removal, and retained files continue consuming disk space.
+
+The operation's optional `retainSuperseded` boolean overrides that policy for
+one cycle. `backupFile` selects an explicit destination and implies retention;
+combining it with `retainSuperseded: false` is rejected. Neither retention option
+can accompany `status` or `cancel`.
+
+This retained-file mechanism is separate from the independent online root export
+requested in [Convex #750](https://github.com/Convex-Dev/convex/issues/750).
+An explicit export will have its own API when upstream supports it.
+
+`backupFile` uses Convex's `completeGC(backupFile)` API to retain a hard link to
+the original store. Covia flushes its hosted root before starting the cycle;
+the checkpoint contains the persisted state at that boundary. Workspace and
+DLFS writes made during or after collection go into the live successor, leaving
+the checkpoint at its earlier state. This is a store checkpoint, not a copy of
+external content files, venue configuration, jars or encryption keys.
+
+The destination must be a new filename on the same filesystem, with an existing
+parent directory and hard-link support (the same NTFS volume on Windows).
+Existing paths and Etch recovery filenames are refused. `backupFile` cannot be
+combined with `status` or `cancel`.
+
+The result reports the canonical `backupFile` and `backupReadyAt: "shutdown"`
+(or `"restart"` with `restart:true`). **Job completion does not mean the backup
+is ready to open or copy.** The venue retains the old store handle, and Convex
+requires that handle to close cleanly first. After successful shutdown/restart,
+treat the checkpoint as read-only and copy it to a separate file before restoring
+a venue with the corresponding configuration and encryption keys. Copy it to
+separate storage for an independent backup. An interrupted cycle or unclean
+shutdown does not confirm a usable checkpoint.
+
+Retaining the checkpoint retains the original file's disk allocation, including
+its garbage. `reclaimed` reports potential savings; `reclaimedAt: "backupRemoval"`
+means both the old handle must close and the retained checkpoint must be removed
+before that space can be recovered. The one-cycle-per-process restriction still
+applies, so this API does not yet provide repeated, immediately exportable online
+checkpoints.
+
+`VenueGcOperationTest` exercises the real venue operation while the Convex GC
+cycle is held open: concurrent workspace/DLFS reads and writes, plain/encrypted
+checkpoint restoration, live-store restart, cancellation, and a competing backup
+file creation that must fail without losing writes or replacing the file.
+
+## Embedded startup readiness
+
+`VenueServer.launch(...)` waits until the venue is ready. `launchAsync(...)`
+returns a `CompletableFuture<VenueServer>` that completes after the HTTP
+listener starts. Both support an engine-aware pre-start hook:
+
+```java
+CompletableFuture<VenueServer> ready = VenueServer.launchAsync(
+    config, routeContributors, engine -> {
+        backend.bind(engine);
+        engine.registerAdapter(new ProductAdapter(backend));
+        return backend.prepareAsync()
+            .thenRun(() -> engine.registerAdapter(new SearchAdapter(backend)));
+    });
+
+VenueServer server = ready.join();
+```
+
+The hook receives a restored, prepared Engine with built-in and configured
+module adapters installed and their current catalogue published. Configured secrets
+and available configured MCP tools are provisioned before the hook. Adapters
+registered or replaced in the hook are published immediately. Its returned stage
+must finish before Jobs and queued agents are recovered. Scheduler alarms and adapter-owned
+inbound workers remain stopped during assembly. An already-completed stage
+(`CompletableFuture.completedFuture(null)`) is sufficient for synchronous setup.
+
+Actions that must precede live work belong in the hook's returned chain.
+Continuations attached to `ready` run after the venue is live. Overloads
+accepting a caller-opened `AStore` have the same hook and transfer store
+ownership to the venue. Startup failure closes acquired resources before
+exceptional completion. Cancelling the readiness future releases a pending
+hook wait and initiates cleanup after the current synchronous startup step;
+the embedder remains responsible for its own hook's
+asynchronous work.
+
+Applications that already own a lattice host use the same startup sequence
+without HTTP through `Engine.launch(...)` or `Engine.launchAsync(...)`:
+
+```java
+// The host must restore its root before connecting the application.
+CoviaApplication application = CoviaApplication.connect(host.getRootComponent());
+Engine engine = new Engine(config, application, keyPair);
+CompletableFuture<Engine> ready = engine.launchAsync(prepared -> {
+    backend.bind(prepared);
+    prepared.registerAdapter(new ProductAdapter(backend));
+    return backend.prepareAsync();
+});
+ready.join();
+```
+
+Call launch once on a new or prepared engine; do not call `start()` first.
+It installs the built-ins and configured modules, publishes the catalogue,
+provisions configured secrets, seeds MCP, awaits the hook, recovers Jobs and
+queued agent work, re-arms HITL expiries, then activates workers and schedules.
+Do not copy this sequence into the application. `prepare()` and `start()`
+remain low-level APIs for manually assembled runtimes and tests: they do not
+provide a complete venue bootstrap.
+
+The hook may invoke installed operations, for example `covia:write` to seed skills
+and `agent:create` / `agent:update` to apply configuration before queued work runs.
+Explicitly invoked Jobs execute immediately; include their completion in the
+returned stage when setup depends on their results. The hook must return a non-null
+stage covering all prerequisite setup. It must not start autonomous workers,
+perform recovery or wait for operations requiring running workers or schedules.
+Recovery skips already-live Jobs started by the hook. Recovered work can execute
+after the hook completes, before launch returns. The persistence sweep can run
+during setup. The hook may override configured secrets; startup does not provision
+them again afterwards. Configured MCP discovery retains its best-effort policy:
+the hook is not a guarantee that every remote server was reachable.
+Adapters must start autonomous workers in `AAdapter.start()`, not
+their constructor, configuration or installation hooks.
+
+Unlike VenueServer, Engine never takes ownership of the caller's application,
+host or store. Close Engine before the host and store, including during failure
+cleanup. Startup failure closes engine-owned resources but does not roll back
+durable writes or application effects; retry with a new engine. Cancellation
+requests cleanup without interrupting store I/O, does not cancel the supplied
+hook stage, and the cancelled future does not indicate cleanup has finished.
+The application must stop its own setup tasks and prevent late access to the
+closed engine.
 
 ## Embedded route policy
 
@@ -592,6 +854,53 @@ callers share the venue `:public` DID → one bucket).
 (the embedded-venue case, where the only caller is a trusted local process); an
 explicit `enabled` always wins.
 
+**Authentication throttle** (`authFailuresPerMinute`, `authFailureBurst`,
+`authConcurrency`) — under the same `enabled`, backpressure on credential
+checks themselves, keyed on the client address (see *Trusted proxies*), since
+a rejected credential has no DID to key on and has already cost a signature
+check or, for a `did:web` subject, an outbound fetch (#539).
+
+- The **failure budget** counts *rejected* credentials, never attempts: an
+  address may fail `authFailureBurst` times (default 40), refilling at
+  `authFailuresPerMinute` (default 20). Over budget, every credential from
+  that address is answered **429 + `Retry-After`** before any verification —
+  a valid one too — until the budget refills. Requests presenting no
+  credential are never charged. One WARN is logged per address when it
+  crosses the line.
+- **In-flight limit** (`authConcurrency`, default 1): further concurrent
+  authentications from one address wait up to `blockMs` for the one in
+  flight, then shed with 429, so an address cannot fan out outbound DID
+  resolution in parallel. Failed `did:web` resolutions are also remembered
+  for a minute, so a stream of bad tokens for one DID costs one fetch.
+
+```json
+{
+  "rateLimit": { "authFailuresPerMinute": 20, "authFailureBurst": 40, "authConcurrency": 1 }
+}
+```
+
+## Bearer expiry (`auth.requireExp`, `auth.maxTokenLifetime`)
+
+```json
+{
+  "auth": { "requireExp": true, "maxTokenLifetime": 2592000 }
+}
+```
+
+`requireExp` (default `true`): a bearer credential must expire. A self-issued
+JWT without `exp`, or a UCAN bearer with `exp: null`, is refused with a reason
+naming this setting. The base JWT standard (RFC 7519) leaves `exp` optional
+and tells each application to decide; every profile that defines a JWT as a
+credential — OAuth access tokens (RFC 9068), OpenID ID tokens, UCAN — requires
+it, and so does this venue. Turn it off on a dev venue that wants hand-minted
+long-lived tokens. Transport grants (UCAN proofs presented alongside a request)
+are delegations, not credentials, and are not affected.
+
+`maxTokenLifetime` (seconds; no cap by default): refuse a bearer that expires
+further ahead than this. Deliberately unset by default, since a cap is a
+nuisance in development. Worth setting on a production venue — for example
+30 days (`2592000`), the frontend's longest identity-token option, or lower.
+
 ## Public access (`auth.public`)
 
 ```json
@@ -691,6 +1000,36 @@ built-in adapter; the [deployment guide](../../deploy/README.md#admit-users-at-r
 shows the recorded-job path. An operator-installed adapter may use the same
 mechanism. OAuth callbacks are trusted venue provisioners and create the same
 did:web-managed account explicitly.
+
+### Account deletion
+
+`v/ops/user/delete {"did":"did:..."}` and `DELETE /api/v1/users/{did}`
+require venue-issued `user/delete` authority on `<venueDID>/users`. This applies
+to the caller's own account too: ordinary users cannot delete themselves.
+The venue and shared public principal cannot be deleted. MCP exposes
+`user_delete` when the operator includes the `user` adapter in its tool set.
+
+Deletion cancels accepted jobs, stops agents, removes queued schedules, and
+atomically removes the user's namespace and login profile/aliases. A small
+tombstone records the DID, deletion time and actor; public-key revocations
+remain without profile fields or key labels. Repeating deletion while the
+account is absent is idempotent. An interrupted cleanup can be retried.
+
+The tombstone is **not a permanent registration ban**. Explicit `user:create`,
+automatic admission when `users.autoCreate` is enabled, and existing trusted
+OAuth provisioning can create an empty account under the same DID. Retained
+jobs and cursors from the old account cannot populate the new account. Old
+managed authentication keys stay revoked; new keys must be provisioned.
+Bootstrap declarations remain first-use only and do not resurrect deleted
+accounts on restart. Authentication of a self-sovereign identity remains
+distinct from admission: deletion does not revoke that identity's external key.
+
+Logical deletion makes the removed namespace/profile unreachable from current
+account state. Physical erasure requires store GC; `v/ops/venue/gc {"status":true}`
+reports collection state. Retained checkpoints, backups, replicas and copies
+of data in other accounts or externally managed resources have independent
+retention. GC of the live store does not erase those copies. See
+[store checkpoint retention](#retaining-a-store-checkpoint).
 
 A venue-managed named user may authenticate with any active public key bound
 to its authentication-directory record. The self-issued JWT uses the stable
@@ -921,6 +1260,58 @@ scopes are *restricted*, so a production client needs Google's verification,
 and an unverified client runs in testing mode with named test users and
 seven-day refresh tokens.
 
+## Login with an external provider (`auth.oauth`)
+
+Sign-in via Google, Microsoft or GitHub. This is the third and last thing named
+"oauth" in this file, and the one users see: `adapters.oauth` lets an agent act
+on a user's data at a provider, `auth.oauth.provider` makes the venue issue its
+own tokens, and `auth.oauth` — here — lets a person prove who they are with an
+account they already have.
+
+```json
+{
+  "auth": {
+    "oauth": {
+      "google":    { "clientId": "1234-abcd.apps.googleusercontent.com", "clientSecret": "s/GOOGLE_LOGIN" },
+      "microsoft": { "clientId": "...", "clientSecret": "s/MICROSOFT_LOGIN" },
+      "github":    { "clientId": "...", "clientSecret": "s/GITHUB_LOGIN" }
+    }
+  }
+}
+```
+
+- `<provider>` — one of `google`, `microsoft`, `github`. Configure only the ones
+  you want; any other key here is rejected under `strictConfig`, and warned
+  about otherwise.
+- `clientId` / `clientSecret` — both are required, and supplying one without
+  the other fails startup with `must provide both clientId and clientSecret`.
+  `clientSecret` may be an
+  `s/NAME` reference to a secret in the venue's own store (preferred, so the
+  literal never sits in the config file) or the literal secret itself. A
+  reference is resolved at the token exchange, so the secret must be set before
+  the first login, not before startup.
+
+**Nothing is served until at least one provider is configured.** `/login` and
+`/auth/{provider}` are registered only when a provider registers successfully;
+until then both 404 and clients see no sign-in options at all — which is the
+expected state of a venue that has not configured any provider, not a fault.
+
+The redirect URI is derived, not configured: `<baseUrl>/auth/<provider>/callback`,
+using the venue's `baseUrl`. That exact string must be registered with the
+provider, so a wrong `baseUrl` fails at the callback rather than at discovery.
+
+Clients discover providers by fetching `/login` and reading its `/auth/<provider>`
+links. A caller may pass `?redirect_uri=` to `/auth/<provider>` to be returned to
+its own callback once login completes; the value is carried through the provider
+round trip in the OAuth `state`.
+
+The `redirect_uri` is checked at login and again at the callback (the OAuth
+`state` that carries it is unsigned): it must be a path on the venue (`/app`)
+or an absolute URL whose origin is the venue's own `baseUrl` origin or one
+listed in `auth.loginRedirectOrigins`, an array of origins such as
+`["https://app.example.com"]`. Anything else is refused with 400, so a crafted
+link cannot send a user's session token to another host.
+
 ## OAuth authorization server (`auth.oauth.provider`)
 
 The venue can act as an OAuth 2.1 authorization server so a third-party or MCP
@@ -1129,7 +1520,7 @@ text-only tool results are preserved (structured content wins when present).
 ## LLM providers (langchain)
 
 `v/ops/langchain/*` inputs carry `model` / `url` / `apiKey` / `maxTokens` /
-`temperature` / `topP` / `providerOptions` / `tools` / `responseFormat`.
+`temperature` / `topP` / `providerOptions` / `modelOptions` / `tools` / `responseFormat`.
 `temperature` and `topP`
 pass through to every provider (#218 — accepts integer or double, so
 `temperature: 0` works for deterministic extraction on models which support
@@ -1138,22 +1529,29 @@ honoured by the anthropic provider. Anthropic requires the field on the wire,
 so its operation metadata supplies an overridable default of 8192; a model
 preset may override that default, and explicit caller input wins over both.
 Agent config forwards `maxTokens`, `temperature`, `topP`, `cache`, and
-`providerOptions` to each level-3 call. `providerOptions` is an opaque map of
+`providerOptions` and `modelOptions` to each level-3 call. `providerOptions` is an opaque map of
 provider-native request fields for hosted providers; for example Claude 5 can
 take `{"thinking":{"type":"adaptive"},"output_config":{"effort":"low"}}`.
-Nothing is synthesised when it is absent, so provider defaults remain in
-control. These are presets and call parameters, not policy; use a capability
-gate for limits.
+`modelOptions` overrides individual inference defaults from the selected model's
+`model.options`. Anthropic supports `nativeSystemMessages`, `cacheTtl` (`5m` or
+`1h`), `automaticCaching`, and `thinkingPrefixMismatch` (`provider`, `error`,
+`drop`) through LangChain4j. Current Claude presets use native system messages,
+five-minute explicit caching, and dropping thinking whose signed prefix no
+longer matches. `cache:false` disables all caching. Compaction, inline tool
+changes and full cross-turn thinking preservation remain disabled pending
+upstream support. See [MODELS.md §5.3](MODELS.md#53-inference-options-and-upstream-support)
+for defaults and the upstream audit. These are presets and call parameters;
+use a capability gate for limits.
 
 `defaultLlmOperation` selects the operation used when an agent config does not
 name one; the built-in fallback is the model operation
-`v/models/anthropic/claude-sonnet-5`. Standard agent templates are
+`v/models/anthropic/claude-sonnet-5-5`. Standard agent templates are
 provider-neutral, so a later config layer can choose any provider or model
 operation without copying the template. `v/ops/langchain/models` walks the
 `v/models/` catalog and reports caller-relative provider readiness, model
 operation paths, balanced defaults, and workload recommendations (for example
 `economical`, `quality`, or `coding`).
-The built-in balanced defaults are Sonnet 5, GPT-5.6 Terra, Gemini 3.6 Flash,
+The built-in balanced defaults are Sonnet 5.5, GPT-5.6 Terra, Gemini 3.6 Flash,
 DeepSeek V4 Flash, Grok 4.3, Mistral Medium (`mistral-medium-latest`) and, for
 OpenRouter, `openrouter/auto` (any vendor-prefixed OpenRouter model id works).
 These choices live in `adapters/langchain/model-catalog.json`; they are
@@ -1538,6 +1936,33 @@ fixed schema; tokens remain in `s/`, and user-managed content is not moved
 into it. These require `discord/manage`. The module also publishes
 `v/skills/adapters/discord` and `v/agents/templates/discord`.
 
+### WhatsApp and Slack text messaging
+
+The optional **covia-whatsapp** and **covia-slack** modules use signed HTTP
+callbacks at `/webhooks/<adapter>/<binding>`, with shared durable intake,
+ownership gates and conversation sessions. Both publish `send`, `create`,
+`delete` and `bots` operations and module-owned agent skills.
+
+- [WhatsApp setup](../../covia-whatsapp/README.md): Cloud API phone-number
+  bindings, Meta verification/signatures, numeric sender admission and text replies.
+- [Slack setup](../../covia-slack/README.md): workspace-installed apps, signed
+  Events API DMs/channel mentions, separate sender/channel admission and threads.
+
+Configure `adapters.<provider>.bots` with an owner and exactly one `agent` or
+`operation`. All credentials must be `s/NAME` references. `apiUrl` is an
+operator-only endpoint override (HTTPS, or HTTP on loopback for testing),
+never an operation parameter or public setting. `bots` returns the exact
+callback path; config bindings use `c-<name>`, runtime bindings an opaque
+owner-specific name. Runtime creation infers the owner from the caller and
+requires `<provider>/manage`; sends require `<provider>/send` on the binding.
+
+Both fail closed on empty admission lists, acknowledge only after durable
+acceptance and perform Jobs/replies asynchronously. Pending receipts resume;
+started receipts require inspection after an interruption and are never
+blindly replayed. The linked guides describe configuration changes, retention
+and supported provider features. These modules do not install OAuth flows,
+Slack Socket Mode, media handling or WhatsApp templates.
+
 ### Claude Code (covia-claude-code)
 
 The **covia-claude-code** module (`claudecode` adapter) lets agents and jobs
@@ -1660,6 +2085,12 @@ adapter, never a call): `addDirs`, `mcpConfig`, `strictMcpConfig`,
 may take many minutes; clients poll and reconnect by job id.
 
 ## Agent-visible effective configuration
+
+`GET /api/v1/status` and `v/ops/venue/show-config` include `access.publicCaps`:
+`disabled`, `read-only`, `unrestricted` or `custom`. This summarises anonymous
+access without exposing custom capability resources, owners or paths. Clients
+must not infer permission for a particular write from `custom`; enforcement
+continues at each operation.
 
 `v/ops/venue/show-config` returns the small, effective subset of venue
 configuration that clients and resident agents need in order to behave

@@ -390,8 +390,15 @@ venue-auth state.
 ## 11. Security considerations
 
 - **Existence privacy**: authentication errors never disclose whether a
-  named account exists (uniform failure at the seam — already the
-  pattern in `verify`).
+  named account exists. A refusal does say *why* (covia#548) — which
+  credential shape the verifier read, and the first check it failed:
+  algorithm, `kid`, signature, `exp`/`nbf`, audience, key status — but
+  the wording is chosen so that an unknown named user and an unregistered
+  key read the same. Reasons describe the presented token only; anything
+  that depends on venue state is checked after the signature, and on the
+  named-user path the signature proves possession of the `kid` key, which
+  anyone can mint, so nothing venue-side is worded per user. Only the
+  holder of a revoked key is told it was revoked.
 - **Method downgrade**: policy `allowed` lists are enforced at the
   seam, so an attacker cannot authenticate a high-value user via a
   weaker enabled method than policy permits for the surface.
@@ -399,6 +406,12 @@ venue-auth state.
   be centrally revoked mid-lifetime — they are short-lived by
   construction (minutes), and named-user keys are revocable at the
   registry. Session revocation covers the long-lived class.
+- **Bounded lifetimes** (covia#534): a bearer credential must expire —
+  `auth.requireExp`, on by default, refuses a self-issued JWT without `exp`
+  or a UCAN bearer with `exp: null` — and `auth.maxTokenLifetime`
+  optionally caps how far ahead one may expire (unset by default; a
+  production venue sets it). Transport grants keep their own expiry rules;
+  non-expiring delegations are the subject of #197.
 - **Audit**: authentication records (key registry, provider bindings,
   session records) are venue-owned state; users cannot edit them via
   their own namespaces.

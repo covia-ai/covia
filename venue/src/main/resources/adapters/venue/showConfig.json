@@ -54,9 +54,10 @@
           "type": "object",
           "properties": {
             "public": { "type": "boolean" },
+            "publicCaps": { "type": "string", "enum": ["disabled", "read-only", "unrestricted", "custom"], "description": "Effective anonymous access mode only. Custom capability targets are not disclosed; custom does not imply permission for a specific action." },
             "userAutoCreate": { "type": "boolean" }
           },
-          "required": ["public", "userAutoCreate"]
+          "required": ["public", "publicCaps", "userAutoCreate"]
         },
         "protocols": {
           "type": "object",

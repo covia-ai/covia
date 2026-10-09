@@ -310,9 +310,8 @@ public abstract class Venue {
 	 *
 	 * @param jobId Job ID
 	 * @param message Message content as a map
-	 * @return Queue depth after delivery, or negative value on error
 	 */
-	public int sendMessage(String jobId, AMap<AString, ACell> message) {
+	public void sendMessage(String jobId, AMap<AString, ACell> message) {
 		throw new UnsupportedOperationException("sendMessage not supported by this venue type");
 	}
 }

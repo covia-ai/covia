@@ -8,6 +8,230 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.9.9] - 2026-10-09
+
+### Security
+
+- Social login refuses a `redirect_uri` outside the venue's own origin or
+  `auth.loginRedirectOrigins`, at login and again at the callback.
+- Discord allow-lists match user ids and usernames only; a user-settable
+  global display name never admits anyone.
+- LangChain operations send the venue's provisioned key only to the
+  operation's own endpoint: a caller-chosen `url` passes the SSRF guard and
+  needs an inline `apiKey`.
+- `X-Forwarded-*` headers shape the venue's published URLs (DID document,
+  agent cards, OAuth metadata) only from a `trustedProxies` address.
+- `DELETE /api/v1/secrets/{name}` is pinned to `crud/delete` and audited as
+  `secret.delete`, through the same path as `covia:delete s/<name>`.
+
+### Changed
+
+- Convex 0.8.17.
+- One `Engine.requireSafeUrl` seam carries the outbound SSRF policy for the
+  http, MCP, A2A and LangChain adapters.
+- `/jobs/{id}/sse` and `/agents/{id}/sse` honour `X-Covia-Ucans` proofs as the
+  sibling GET does.
+- CORS allows `X-Covia-Ucans` and `Mcp-Session-Id` and exposes `ETag`,
+  `Location`, `Retry-After`, `X-Request-Id` and `Mcp-Session-Id`; REST 401s
+  carry `WWW-Authenticate`.
+- An agent wake never overwrites a suspend that landed after its status read.
+- Module skills live under `/adapters/<name>/skill.json` in every module, so
+  the Telegram skill no longer shadows the venue's connection skill.
+- `Venue.sendMessage` and `JobManager.deliverMessage` return nothing; the
+  message delivery response no longer carries a `queueDepth` (always zero).
+  SDK mirrors follow.
+- Respect explicit non-adaptive Anthropic thinking modes: prefix binding and
+  its beta header are added only with adaptive thinking (#563), avoiding
+  invalid requests for Sonnet 5.5 `between_tools` and Haiku 5.5 `disabled`.
+
+- Complete release follow-ups: keep A2A observation across input/auth interruptions
+  (#512), count only operations in venue stats (#555), preserve Anthropic cache
+  creation usage by TTL (#487), and exercise skills migration with a stub model
+  (#484). Public status and show-config report only the anonymous access mode,
+  without disclosing custom capability targets (#562).
+
+- Online `venue:gc` can retain a pre-cycle store checkpoint with `backupFile`,
+  using Convex's GC backup API. The result reports when the checkpoint is safe
+  to copy (after clean shutdown/restart); its hard link retains the original
+  disk allocation until removed. Venue tests cover concurrent workspace/DLFS
+  access, plain/encrypted restoration, cancellation and backup-path collisions.
+  `etch.gc.retainSuperseded` applies retention to startup and online collection;
+  per-call `retainSuperseded` overrides it (#556).
+
+- Embedded startup has a shared readiness boundary (#553): `Engine.launch`
+  and `launchAsync` assemble a complete venue over a caller-owned host without
+  HTTP; VenueServer uses the same sequence. Application setup hooks finish
+  before catalogue publication and recovery. Adapter workers start through
+  `AAdapter.start()` after assembly; readiness continuations run after activation.
+
+- Anthropic defaults move to Claude Sonnet 5.5, Opus 5.5, Fable 5.1 and
+  Haiku 5.5; the Claude 5 and Haiku 4.5 models stay in the catalog.
+
+- Anthropic structured output uses `output_config.format` instead of forced
+  tool choice, which current Claude models reject.
+
+- LangChain4j 1.22.0. Anthropic inference options now map onto the SDK's native
+  system messages, cache TTL and automatic caching, with configurable thinking
+  prefix handling. Model definitions supply defaults; calls and agents can
+  override individual `modelOptions`. Signature-only thinking survives tool-turn
+  replay. Compaction, inline tool changes and lossless cross-turn thinking remain
+  disabled pending upstream support; no separate provider client is introduced.
+
+- Bearer credentials must expire: a self-issued JWT without `exp` or a UCAN
+  bearer with `exp: null` is refused (`auth.requireExp`, default on), and
+  `auth.maxTokenLifetime` optionally caps how far ahead a bearer may expire
+  (#534).
+
+- A refused bearer token's 401 says why — which credential shape was read
+  and the check it failed (algorithm, `kid`, signature, `exp`/`nbf`,
+  audience, key status) — instead of `Invalid or expired token` (#548).
+
+- Unhandled exceptions answer `500` with the title `Internal server error` and
+  the exception class and message under `details.exception` (#540).
+
+- Allow-listed Telegram bots only message their allowed users: `telegram:send`
+  / `telegram:call` targets must be listed ids or the account a listed
+  `@username` resolved to on first contact, and such bots converse only in
+  private chats (#532).
+
+- Venue startup logs one INFO line per adapter; the assets each one stores and
+  the per-adapter install details are DEBUG.
+
+- Workspace namespaces (`w`/`o`/`h`) are a `WrapperLattice` view boundary
+  rather than a path convention re-implemented above the lattice; virtual
+  namespaces (`t/`, `c/`, `n/`) resolve to ordinary cursor paths, so every
+  namespace shares one read/write rule.
+- Scheduler event mutations navigate through the existing extensible
+  `{updated, events}` record; `LatticeStorage` has a single cursor-backed write
+  path.
+- Job and agent records now use stamped lattice boundaries for deep `t/`, `n/`,
+  and `c/` writes, preserving their existing `updated`/`ts` fields and physical
+  record shapes.
+- A job record's `op` is now the reference that was invoked (`v/ops/…`, a DID
+  URL, `o/…`) rather than the resolved hash. Invoking by hash still records
+  the hash, so pinned invocations and records written before 0.9.9 read as
+  before (#499).
+- The default tool pack (`defaultTools: true`) carries `covia:inspect`
+  alongside read and list; it is the discovery read those two point at
+  (#514).
+- `skill_load` returns a structural result: the fixed prose `note` is gone,
+  `volatile: true` marks a watched load, and `existing` names the path
+  identical content was already loaded under (#504).
+
+### Added
+
+- `auth.loginRedirectOrigins`: origins a social login may return the session
+  token to, besides the venue's own.
+- `agent:info` and `agent:list` report `awaiting` input and authorisation
+  counts derived from the agent's live jobs (#557).
+- `DELETE /users/{did}` and `user:delete`: operator-authorised account
+  deletion (#536).
+- `GET /assets?kind=operation|data` filters the catalog listing (#530).
+- `auth.oauth.<provider>.clientSecret` accepts an `s/NAME` reference (#522).
+- The `project` adapter and its `project-*` skill family (`docs/PROJECT.md`).
+- Workbench `covia.gui.markdown` and `TextComponents`: host-styled Swing
+  Markdown components with no venue dependency.
+- Remote jobs carry a `delegation` record with observation health and bounded
+  retries (`docs/REMOTE_JOBS_DESIGN.md`).
+- Optional WhatsApp Cloud API and Slack Events API text-messaging modules,
+  sharing durable webhook intake, caller-owned bindings and conversation
+  sessions. Both verify provider signatures and deduplicate events; Slack
+  preserves threads and separates sender admission from channel publication.
+
+- `agent:query` answers one-off questions using optional session context without
+  appending conversation turns. Callers can request captured execution steps.
+- `agent:summarise` stores timestamped results by exact instruction and reuses
+  them while the session has no new recorded turns. Saved summaries match the
+  Job result exactly; execution steps are omitted unless requested at generation.
+
+- Operator-controlled logging of operational events, per venue and off by
+  default: a security audit trail (`logging.audit`, logger `AUDIT`) and an
+  access log (`logging.access`, logger `ACCESS`); request ids on every
+  response (`X-Request-Id`); `operations.log-format: "json"`; the default
+  file log now rotates (#538, #547).
+- Bad credentials are no longer free to send: per client address, a budget of
+  rejected credentials (`rateLimit.authFailuresPerMinute` / `authFailureBurst`)
+  after which credentials get 429 before any verification, and one
+  authentication in flight at a time (`rateLimit.authConcurrency`); failed
+  `did:web` resolutions are remembered for a minute (#539).
+- `trustedProxies`: the reverse proxies whose `X-Forwarded-For` names the
+  client, for everything keyed on the caller's address; the deploy workflows
+  set it for the hosted venues, and a venue that receives the header without
+  it logs one warning (#539).
+- Browser security headers on every response (`securityHeaders`, on by
+  default), a one-line startup posture summary, and a documented production
+  profile (#537).
+- `skills:import` records `createdBy: {did, agentId?}` on the skill (#525).
+
+- `agent:from-skills` composes `skills:import` and `agent:create` into one
+  call, porting SKILL.md skills plus a system prompt into a native agent
+  (#484, #490).
+- `skills:import` accepts inline `text` as an alternative to `source`.
+- Job records carry `parent`, the id of the nearest recorded job inside whose
+  execution they were dispatched; absent on top-level jobs. Up-link only —
+  clients trace parents to reconstruct a tree (#500).
+- Job records carry `adapter`, the adapter the venue dispatched to, so a job
+  list can be keyed by what ran without resolving each record's definition
+  (#520).
+
+### Fixed
+
+- A request unwinding across venue shutdown (an MCP stream ended by close) no
+  longer syncs the lattice against the store that close is releasing.
+- `llmagent:chat`, `goaltree:chat`, `agent:suspend` and `http:get` describe
+  the inputs they read and the outputs they emit.
+- Claude Code option files are removed when the CLI fails to start.
+- The PR workflow checks the documents module boundary like the release
+  workflow.
+- HTTP credential references (`{s/NAME}`) are preserved in persisted job
+  inputs (#561).
+- Authentication refusals no longer echo exception text.
+- `operations.log-config-file` is honoured; it was read before the config
+  was loaded and so never applied (#538).
+- The test adapter's `iris.csv` and `hamlet.txt` example content was checked
+  out with converted line endings on Windows (`core.autocrlf`), so its declared
+  sha256 no longer matched and every venue launch logged a warning with a
+  stack trace; `.gitattributes` now keeps those fixtures byte-for-byte.
+
+- `agent:create` and `agent:fork` are exclusive at the record itself, so two
+  concurrent creates of the same agent no longer both report success.
+- Adding a task or appending a session message is one atomic intake with
+  session creation, so neither can land against an agent that has just been
+  removed.
+- Deleting a Job fences its live handle: a late update from work still in
+  flight can no longer recreate the deleted row.
+- Last-modified stamps on jobs, agents, secrets and user rows are ratcheted
+  from the lattice write clock and never move backwards.
+- A UCAN bearer credential that fails validation now returns the validator's
+  specific reason in the 401 (`UCAN bearer rejected: …`) instead of one opaque
+  message. Reasons describe only the presented token's own claims; audience
+  and att policy are still checked only after the signature verifies (#503).
+- Continuing an A2A task whose job has completed and left the active cache
+  now reports the terminal state instead of `Job not found` (#506).
+- A remote Job whose polling stopped before anyone asked for its future no
+  longer leaves a later waiter hanging; the observation failure is retained
+  and surfaced (#513).
+- The Discord module's skill resource moved to a module-owned classpath path,
+  so it no longer collides with the venue's Discord connection skill when
+  both jars share one classpath (#510).
+- A reply delivered to an `a2a:send` job whose remote task is `INPUT_REQUIRED`
+  or `AUTH_REQUIRED` is relayed to that task instead of being accepted and
+  dropped; a refused or unacknowledged relay is a 409 / 502 to the deliverer
+  (#507).
+- `GET /users/{did}/authentications` returns an empty set for a registered
+  external DID instead of a 400; `stats.users` counts every registered user,
+  not just venue-managed accounts (#524).
+
+### Removed
+
+- `VenueHTTP.setPrivate`, `Engine.refreshWriteClock`, `Engine.getConfig()`,
+  `Engine.getLatticeState`, `Engine.materialiseVOps`,
+  `Engine.materialiseVenueInfo`, `Config.getCorsOrigins`, static
+  `Config.getBaseUrl(AMap)`, `JobManager.getVenueDID`,
+  `JobManager.updateJobStatus` and the context-free `pauseJob`, `resumeJob`
+  and `deliverMessage` overloads: deprecated or without a caller.
+- `venue/docs/OPERATIONS_PLAN.md`: its rollout is complete.
+
 ## [0.9.8] - 2026-09-03
 
 ### Added
@@ -949,7 +1173,9 @@ Initial public release: venue server with the adapter framework, lattice-backed
 content-addressed assets, the async job model with SSE, multi-protocol surface
 (REST / MCP / A2A / DID), and strategy-based authentication.
 
-[Unreleased]: https://github.com/covia-ai/covia/compare/0.9.7...HEAD
+[Unreleased]: https://github.com/covia-ai/covia/compare/0.9.9...HEAD
+[0.9.9]: https://github.com/covia-ai/covia/compare/0.9.8...0.9.9
+[0.9.8]: https://github.com/covia-ai/covia/compare/0.9.7...0.9.8
 [0.9.7]: https://github.com/covia-ai/covia/compare/0.9.6...0.9.7
 [0.9.6]: https://github.com/covia-ai/covia/compare/0.9.5...0.9.6
 [0.9.5]: https://github.com/covia-ai/covia/compare/0.9.4...0.9.5

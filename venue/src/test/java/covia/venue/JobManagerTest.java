@@ -2,7 +2,10 @@ package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.util.List;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -15,17 +18,21 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
+import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.adapter.AAdapter;
 import covia.adapter.TestAdapter;
 import covia.exception.AuthException;
+import covia.grid.Asset;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.test.Rendezvous;
 
 /**
  * Unit tests for {@link JobManager#invokeInternal}. Covers the transient-Job
@@ -43,6 +50,95 @@ import covia.grid.Status;
 	 * inside one venue is covered by {@code GridAdapterTest}.</p>
  */
 public class JobManagerTest {
+
+	@Test
+	public void testSynchronousAdapterErrorsSettleDurableJobs() {
+		Engine eng = Engine.createTemp(null);
+		try {
+			var invoked = new java.util.concurrent.atomic.AtomicReference<Job>();
+			eng.registerAdapter(new AAdapter() {
+				@Override public String getName() { return "broken-module"; }
+				@Override public String getDescription() { return "test"; }
+				@Override public CompletableFuture<ACell> invokeFuture(RequestContext c,
+						AMap<AString, ACell> m, ACell in) {
+					invoked.set(c.getJob());
+					throw new NoClassDefFoundError("missing/library/Class");
+				}
+				@Override public void invoke(Job job, RequestContext c, AMap<AString, ACell> m, ACell in) {
+					if (Strings.create("custom").equals(in)) {
+						invoked.set(job);
+						throw new NoClassDefFoundError("custom/adapter/Class");
+					}
+					super.invoke(job, c, m, in);
+				}
+			});
+			AMap<AString, ACell> meta = Maps.of(Fields.OPERATION,
+				Maps.of(Fields.ADAPTER, Strings.create("broken-module:run")));
+			for (ACell input : new ACell[] { null, Strings.create("custom") }) {
+				assertThrows(NoClassDefFoundError.class,
+					() -> eng.jobs().invokeOperation(meta, input, eng.venueContext()));
+				Job job = invoked.get();
+				assertEquals(Status.FAILED, job.getStatus());
+				assertTrue(job.future().isCompletedExceptionally());
+				assertEquals(Status.FAILED, eng.jobs().getJobData(job.getID(), eng.venueContext()).get(Fields.STATUS));
+			}
+		} finally { eng.close(); }
+	}
+
+	@Test
+	public void testCancellationDuringInvokeFutureCancelsReturnedFuture() {
+		Engine eng = Engine.createTemp(null);
+		try {
+			CompletableFuture<ACell> processing = new CompletableFuture<>();
+			eng.registerAdapter(new AAdapter() {
+				@Override public String getName() { return "cancel-during-invoke"; }
+				@Override public String getDescription() { return "test"; }
+				@Override public CompletableFuture<ACell> invokeFuture(RequestContext c,
+						AMap<AString, ACell> m, ACell in) {
+					c.getJob().cancel();
+					return processing;
+				}
+			});
+			AMap<AString, ACell> meta = Maps.of(Fields.OPERATION,
+				Maps.of(Fields.ADAPTER, Strings.create("cancel-during-invoke:run")));
+			Job job = eng.jobs().invokeOperation(meta, null, eng.venueContext());
+			assertEquals(Status.CANCELLED, job.getStatus());
+			assertTrue(processing.isCancelled());
+			assertTrue(job.future().isCompletedExceptionally());
+		} finally { eng.close(); }
+	}
+
+	@Test
+	public void testDelayedPersistenceCannotOverwriteCancellation() throws Exception {
+		Engine eng = Engine.createTemp(null);
+		eng.registerAdapter(new TestAdapter());
+		CountDownLatch entered = new CountDownLatch(1);
+		CountDownLatch release = new CountDownLatch(1);
+		try {
+			RequestContext owner = eng.venueContext();
+			AMap<AString, ACell> meta = Maps.of(Fields.OPERATION,
+				Maps.of(Fields.ADAPTER, Strings.create("test:never")));
+			Job original = eng.jobs().invokeOperation(meta, null, owner);
+			Job job = new VenueJob(original.getData(), meta, owner.getUserDID(), eng.jobs()) {
+				@Override public void onUpdate(AMap<AString, ACell> next) {
+					if (Status.PAUSED.equals(next.get(Fields.STATUS))) {
+						entered.countDown();
+						try { assertTrue(release.await(5, TimeUnit.SECONDS)); }
+						catch (InterruptedException e) { throw new AssertionError(e); }
+					}
+					super.onUpdate(next);
+				}
+			};
+			var delayed = CompletableFuture.runAsync(() -> job.setStatus(Status.PAUSED));
+			try {
+				assertTrue(entered.await(5, TimeUnit.SECONDS));
+				job.cancel();
+			} finally { release.countDown(); }
+			delayed.get(5, TimeUnit.SECONDS);
+			assertEquals(Status.CANCELLED,
+				eng.jobs().getJobData(job.getID(), owner).get(Fields.STATUS));
+		} finally { release.countDown(); eng.close(); }
+	}
 
 	private final Engine engine = TestEngine.ENGINE;
 	private AString did;
@@ -538,6 +634,63 @@ public class JobManagerTest {
 			"second delete finds nothing");
 	}
 
+	@Test
+	public void testConcurrentTerminalHistoryAppendCannotResurrectDeletedJob() throws Exception {
+		Job job = engine.jobs().invokeOperation(
+			"v/test/ops/echo", Maps.of("hello", "history"), ctx);
+		job.awaitResult(5000);
+		AMap<AString, ACell> message = Maps.of(
+			Fields.MESSAGE_ID, Strings.create("concurrent-history"),
+			Fields.MESSAGE, Strings.create("hello"));
+		// either linearisation order is valid for the append; the delete must win
+		List<Boolean> raced = Rendezvous.all(
+			() -> {
+				try {
+					engine.jobs().appendToHistory(job.getID(), message, ctx);
+					return true;
+				} catch (IllegalArgumentException deletedFirst) {
+					return false;
+				}
+			},
+			() -> engine.jobs().deleteJob(job.getID(), ctx));
+		assertTrue(raced.get(1));
+		assertNull(engine.getVenueState().users().get(did).getJob(job.getID()),
+			"the durable-history path must update-if-present, never recreate after delete");
+	}
+
+	@Test
+	public void testDeleteFencesLateActiveJobPersistence() throws Exception {
+		Job job = engine.jobs().invokeOperation(
+			"v/test/ops/never", Maps.empty(), ctx);
+		VenueJob venueJob = assertInstanceOf(VenueJob.class, job);
+		AString marker = Strings.create("late-update");
+		Thread updater;
+		synchronized (venueJob) {
+			updater = Thread.ofVirtual().start(() ->
+				job.update(data -> data.assoc(marker, CVMLong.ONE)));
+			long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+			while (!CVMLong.ONE.equals(job.getData().get(marker))
+					&& System.nanoTime() < deadline) Thread.onSpinWait();
+			assertEquals(CVMLong.ONE, job.getData().get(marker));
+			assertTrue(engine.jobs().deleteJob(job.getID(), ctx));
+		}
+		updater.join(TimeUnit.SECONDS.toMillis(5));
+		assertFalse(updater.isAlive());
+		assertNull(engine.getVenueState().users().get(did).getJob(job.getID()),
+			"an update committed before deletion must not persist after deletion");
+		job.cancel("test cleanup");
+	}
+
+	@Test
+	public void testConcurrentActiveDeleteHasExactlyOneWinner() throws Exception {
+		Job job = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), ctx);
+		Callable<Boolean> delete = () -> engine.jobs().deleteJob(job.getID(), ctx);
+		assertEquals(1, Rendezvous.all(delete, delete).stream()
+			.filter(Boolean::booleanValue).count());
+		assertNull(engine.getVenueState().users().get(did).getJob(job.getID()));
+		job.cancel("test cleanup");
+	}
+
 	// ========== Argument defaults (operation.default) ==========
 
 	private static AMap<AString, ACell> echoWithDefaults(AMap<AString, ACell> defaults) {
@@ -606,5 +759,115 @@ public class JobManagerTest {
 		ACell recorded = RT.getIn(engine.jobs().getJobData(job.getID(), ctx), Fields.INPUT);
 		assertEquals(Strings.create("dflt"), RT.getIn(recorded, "a"),
 			"the job record must show what actually ran");
+	}
+
+	// ========== Job record: op reference and parent link (#499, #500) ==========
+
+	@Test
+	public void testJobRecordOpIsTheInvokedReference() {
+		Job job = engine.jobs().invokeOperation("v/test/ops/echo", Maps.empty(), ctx);
+		job.awaitResult(5000);
+		AMap<AString, ACell> record = engine.jobs().getJobData(job.getID(), ctx);
+		assertEquals(Strings.create("v/test/ops/echo"), record.get(Fields.OP),
+			"op is the reference that was invoked, not the resolved hash");
+		assertNull(record.get(Fields.PARENT), "a top-level job has no parent");
+	}
+
+	@Test
+	public void testJobRecordOpIsTheHashWhenInvokedByHash() {
+		Asset echo = engine.resolveAsset(Strings.create("v/test/ops/echo"), ctx);
+		String hash = echo.getID().toHexString();
+		Job job = engine.jobs().invokeOperation(hash, Maps.empty(), ctx);
+		job.awaitResult(5000);
+		AMap<AString, ACell> record = engine.jobs().getJobData(job.getID(), ctx);
+		assertEquals(Strings.create(hash), record.get(Fields.OP),
+			"an explicit pinned invocation records the hash it pinned");
+	}
+
+	@Test
+	public void testJobRecordCarriesDispatchedAdapter() {
+		Asset echo = engine.resolveAsset(Strings.create("v/test/ops/echo"), ctx);
+		Job job = engine.jobs().invokeOperation(echo.getID().toHexString(), Maps.empty(), ctx);
+		job.awaitResult(5000);
+		AMap<AString, ACell> record = engine.jobs().getJobData(job.getID(), ctx);
+		assertEquals(Strings.create("test"), record.get(Fields.ADAPTER),
+			"the adapter the venue dispatched to is on the record even when op is a bare hash (#520)");
+	}
+
+	// ========== Message delivery to an evicted job (#506) ==========
+
+	@Test
+	public void testDeliverMessageToEvictedTerminalJobReportsTerminalState() {
+		Job job = engine.jobs().invokeOperation("v/test/ops/echo", Maps.empty(), ctx);
+		job.awaitResult(5000);
+		engine.jobs().evictActive(job.getID());
+		assertNull(engine.jobs().getJobData(job.getID()), "gone from the active cache");
+		assertNotNull(engine.jobs().getJobData(job.getID(), ctx), "still readable from the lattice");
+
+		IllegalStateException ex = assertThrows(IllegalStateException.class, () ->
+			engine.jobs().deliverMessage(job.getID(),
+				Maps.of(Strings.create("content"), Strings.create("more")), ctx));
+		assertTrue(ex.getMessage().contains("terminal"), ex.getMessage());
+
+		assertThrows(IllegalArgumentException.class, () ->
+			engine.jobs().deliverMessage(Blob.parse("0x00112233445566778899aabbccddeeff"),
+				Maps.empty(), ctx),
+			"an id nobody has ever seen is still not found");
+	}
+
+	@Test
+	public void testJobRecordOpFallsBackToHashForInlineDefinition() {
+		AMap<AString, ACell> meta = echoMeta();
+		Job job = engine.jobs().invokeOperation(meta, Maps.empty(), ctx);
+		job.awaitResult(5000);
+		AMap<AString, ACell> record = engine.jobs().getJobData(job.getID(), ctx);
+		assertEquals(Strings.create(meta.getHash().toHexString()), record.get(Fields.OP),
+			"an inline definition has no reference, so its own hash stands in");
+	}
+
+	@Test
+	public void testSubJobRecordsRecordedParent() throws Exception {
+		Job parent = engine.jobs().invokeOperation("v/test/ops/echo", Maps.empty(), ctx);
+		parent.awaitResult(5000);
+
+		Job child = engine.jobs().invokeOperation("v/test/ops/echo", Maps.empty(),
+			ctx.withJob(parent));
+		child.awaitResult(5000);
+		AMap<AString, ACell> record = engine.jobs().getJobData(child.getID(), ctx);
+		assertEquals(parent.getID(), Job.parseID(record.get(Fields.PARENT)),
+			"a job dispatched inside a recorded job links to it");
+	}
+
+	@Test
+	public void testSubJobThroughTransientLayerLinksToNearestRecordedAncestor() throws Exception {
+		Job root = engine.jobs().invokeOperation("v/test/ops/echo", Maps.empty(), ctx);
+		root.awaitResult(5000);
+
+		// A transient wrapper dispatched inside the recorded job...
+		TestAdapter.CAPTURED_CTX.remove(did);
+		engine.jobs().invokeInternal(captureContextMeta(true, null), Maps.empty(),
+			ctx.withJob(root)).get(5, TimeUnit.SECONDS);
+		RequestContext transientCtx = TestAdapter.CAPTURED_CTX.get(did);
+		assertFalse(transientCtx.getJob().isRecorded());
+
+		// ...forwards the recorded ancestor to a recorded grandchild.
+		Job grandchild = engine.jobs().invokeOperation("v/test/ops/echo", Maps.empty(),
+			transientCtx);
+		grandchild.awaitResult(5000);
+		AMap<AString, ACell> record = engine.jobs().getJobData(grandchild.getID(), ctx);
+		assertEquals(root.getID(), Job.parseID(record.get(Fields.PARENT)),
+			"a transient parent never appears in a record; the link skips to the recorded ancestor");
+	}
+
+	@Test
+	public void testInheritedJobScopeIsTheParentWhenNoImmediateJob() {
+		Job parent = engine.jobs().invokeOperation("v/test/ops/echo", Maps.empty(), ctx);
+		parent.awaitResult(5000);
+
+		Job child = engine.jobs().invokeOperation("v/test/ops/echo", Maps.empty(),
+			ctx.withJobId(parent.getID()));
+		child.awaitResult(5000);
+		AMap<AString, ACell> record = engine.jobs().getJobData(child.getID(), ctx);
+		assertEquals(parent.getID(), Job.parseID(record.get(Fields.PARENT)));
 	}
 }

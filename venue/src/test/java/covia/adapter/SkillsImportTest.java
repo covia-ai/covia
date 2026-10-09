@@ -284,6 +284,30 @@ public class SkillsImportTest {
 	}
 
 	@Test
+	public void testImportRecordsWhoWroteIt() {
+		// A user's own import names the principal and no agent…
+		importSkill(Maps.of(K_SOURCE, Strings.create("file://work/agent/SKILL.md")));
+		ACell mine = engine.resolvePath(Strings.create("w/skills/agent"), ctx);
+		assertEquals(did, RT.getIn(mine, Fields.CREATED_BY, Fields.DID));
+		assertNull(RT.getIn(mine, Fields.CREATED_BY, Fields.AGENT_ID));
+
+		// …and an import from an agent run is attributed to the agent (#525): its
+		// own sub-principal DID as the actor, plus the agent id so a library
+		// listing can show provenance without parsing DIDs.
+		ctx = RequestContext.ofAgent(did, Strings.create("author-bot"));
+		importSkill(Maps.of(K_SOURCE, Strings.create("file://work/agent/SKILL.md"),
+			K_SKILLSET, Strings.create("w/authored")));
+		ACell theirs = engine.resolvePath(Strings.create("w/authored/agent"), ctx);
+		assertEquals(ctx.getCallerDID(), RT.getIn(theirs, Fields.CREATED_BY, Fields.DID));
+		assertTrue(ctx.getCallerDID().toString().endsWith(":g:author-bot"), "an agent acts as its own sub-principal");
+		assertEquals(Strings.create("author-bot"), RT.getIn(theirs, Fields.CREATED_BY, Fields.AGENT_ID));
+
+		// parse stores nothing, so it stamps nothing.
+		ACell parsed = parse(Maps.of(K_SOURCE, Strings.create("file://work/agent/SKILL.md")));
+		assertNull(RT.getIn(parsed, "metadata", Fields.CREATED_BY));
+	}
+
+	@Test
 	public void testImportIntoNamedSkillset() {
 		ACell out = importSkill(Maps.of(K_SOURCE, Strings.create("file://work/agent/SKILL.md"),
 			K_SKILLSET, Strings.create("w/team-skills/")));
@@ -321,6 +345,27 @@ public class SkillsImportTest {
 		ACell out = importSkill(Maps.of(K_SOURCE, Strings.create("dlfs/skills/pdf/SKILL.md")));
 		assertEquals("w/skills/pdf", str(out, "path"));               // name from the directory
 		assertEquals("PDF handling.", str(out, "description"));
+	}
+
+	@Test
+	public void testImportFromText() {
+		// A caller that already holds the SKILL.md (e.g. a UI paste) imports it
+		// directly, with no source to stage first.
+		ACell out = importSkill(Maps.of(K_TEXT, Strings.create(
+			"---\nname: quick\ndescription: A quick skill.\n---\nBody here.\n")));
+		assertEquals("w/skills/quick", str(out, "path"));
+		assertEquals("quick", str(out, "name"));
+		assertEquals("inline", str(out, "content"));
+		assertNull(RT.getIn(out, K_SOURCE), "a text import echoes no source");
+		ACell read = call("v/ops/skills/read", Maps.of(K_SKILL, Strings.create("w/skills/quick")));
+		assertTrue(str(read, K_BODY).startsWith("Body here."));
+
+		// Exactly one of source/text; a live 'ref' still needs a source to bind to.
+		assertThrows(IllegalArgumentException.class, () -> importSkill(Maps.of(
+			K_SOURCE, Strings.create("file://work/agent/SKILL.md"),
+			K_TEXT, Strings.create("---\nname: x\ndescription: y\n---\n"))));
+		assertThrows(IllegalArgumentException.class, () -> importSkill(Maps.of(
+			K_TEXT, Strings.create("---\nname: x\ndescription: y\n---\nB\n"), Fields.CONTENT, Fields.REF)));
 	}
 
 	@Test

@@ -59,6 +59,35 @@ public final class CycleRecord {
 	 *  included — or null when no reply reported usage. */
 	public record Result(AMap<AString, ACell> cycle, AMap<AString, ACell> tokens) {}
 
+	/**
+	 * The generated steps of one query: model replies, tool outcomes and nested
+	 * child inferences. Keeps provider-supplied reply fields verbatim, including
+	 * any thinking/continuation data. Does not return standing prompt context,
+	 * sent input bands, or a copy of the session's prior conversation.
+	 * A transition without a cycle record has no captured steps.
+	 */
+	public static AVector<ACell> steps(ACell cycle) {
+		AVector<ACell> inferences = RT.ensureVector(RT.getIn(cycle, Fields.INFERENCES));
+		AVector<ACell> result = Vectors.empty();
+		for (long i = 0; inferences != null && i < inferences.count(); i++) {
+			AMap<AString, ACell> inference = RT.ensureMap(inferences.get(i));
+			if (inference == null) continue;
+			inference = inference.dissoc(Fields.SENT);
+			AVector<ACell> calls = RT.ensureVector(inference.get(Fields.CALLS));
+			if (calls != null) {
+				for (long j = 0; j < calls.count(); j++) {
+					AMap<AString, ACell> call = RT.ensureMap(calls.get(j));
+					if (call == null || call.get(Fields.FRAME) == null) continue;
+					calls = calls.assoc(j, call.assoc(Fields.FRAME,
+						Maps.of(Fields.INFERENCES, steps(call.get(Fields.FRAME)))));
+				}
+				inference = inference.assoc(Fields.CALLS, calls);
+			}
+			result = result.conj(inference);
+		}
+		return result;
+	}
+
 	/** One frame's record. */
 	private static final class Frame {
 		AVector<ACell> context = Vectors.empty();
@@ -78,8 +107,9 @@ public final class CycleRecord {
 	private final Set<ACell> sent = new HashSet<>();
 	private final ArrayDeque<Frame> frames = new ArrayDeque<>();
 	private final Map<AString, AMap<AString, ACell>> children = new HashMap<>();
-	/** input, output, total, measured, cacheRead, cacheWrite */
-	private final long[] tally = new long[6];
+	/** input, output, total, measured, cacheRead, cacheWrite, cacheWrite5m, cacheWrite1h */
+	private final long[] tally = new long[8];
+	private boolean measured5m, measured1h;
 	/** The live tap of the run-loop cycle this record belongs to, or null
 	 *  outside a run loop (#394). */
 	private final AgentEvents.Cycle tap;
@@ -273,6 +303,10 @@ public final class CycleRecord {
 		CVMLong write = RT.ensureLong(RT.getIn(tokens, Fields.CACHE_WRITE));
 		if (read != null) tally[4] += read.longValue();
 		if (write != null) tally[5] += write.longValue();
+		CVMLong fiveMinutes = RT.ensureLong(RT.getIn(tokens, Fields.CACHE_WRITE_5M));
+		CVMLong oneHour = RT.ensureLong(RT.getIn(tokens, Fields.CACHE_WRITE_1H));
+		if (fiveMinutes != null) { tally[6] += fiveMinutes.longValue(); measured5m = true; }
+		if (oneHour != null) { tally[7] += oneHour.longValue(); measured1h = true; }
 	}
 
 	/** The cycle's totals, or null when no reply reported usage — absent
@@ -285,6 +319,8 @@ public final class CycleRecord {
 			Fields.TOTAL,  CVMLong.create(tally[2]));
 		if (tally[4] > 0) totals = totals.assoc(Fields.CACHE_READ, CVMLong.create(tally[4]));
 		if (tally[5] > 0) totals = totals.assoc(Fields.CACHE_WRITE, CVMLong.create(tally[5]));
+		if (measured5m) totals = totals.assoc(Fields.CACHE_WRITE_5M, CVMLong.create(tally[6]));
+		if (measured1h) totals = totals.assoc(Fields.CACHE_WRITE_1H, CVMLong.create(tally[7]));
 		return totals;
 	}
 

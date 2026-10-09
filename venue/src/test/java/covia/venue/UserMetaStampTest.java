@@ -121,6 +121,20 @@ public class UserMetaStampTest {
 	}
 
 	@Test
+	@SuppressWarnings("unchecked")
+	public void testAgentTimestampNeverMovesBackward() {
+		AgentState agent = user.ensureAgent("ratchet-agent", Maps.empty(), null);
+		AString ts = Strings.intern("ts");
+		CVMLong future = CVMLong.create(System.currentTimeMillis() + 60_000);
+		agent.cursor().updateAndGet(value ->
+			((convex.core.data.AMap<AString, ACell>) value).assoc(ts, future));
+
+		agent.setStatus(AgentState.SUSPENDED);
+
+		assertEquals(future, agent.getRecord().get(ts));
+	}
+
+	@Test
 	public void testMetaReadableViaOrdinaryReadPath() {
 		// The doc promises meta is readable (covia:read <did>/meta) though
 		// framework-owned (not a writable namespace).

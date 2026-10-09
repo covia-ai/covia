@@ -1,0 +1,19 @@
+{
+	"name": "project-delivery",
+	"description": "Deliver a node's products against their quality criteria, obtain acceptance, handle rejection, close nodes in order. Load when a deliverable is ready.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Project delivery\nA product is delivered when it exists at its `location` and its quality criteria have been checked; it is complete only when its approver has ACCEPTED it.\n\nDelivering a product:\n1. Write the product at `products[].location` (resolved in the root principal's namespace, conventionally `w/projects/<pid>/out/<node path>/<file>`). Do not put it anywhere else and call it delivered.\n2. Run every `op` and `test` criterion yourself: invoke the named operation with the product's location merged into its input (for schemas, the schema validation operation). A failing `op` criterion means the product is NOT deliverable — fix it and re-run; do not argue with the check in prose.\n3. Append `{kind: \"delivered\", product, location, checks: {<criterionId>: PASS | FAIL | <report>}, note?}` to the log and set the product's `status` to DELIVERED. `review` criteria are listed as `review` in `checks`; they are for the approver.\n4. Request acceptance according to `acceptance.approver`:\n   - `op`: all automated criteria passed and there are no `review` criteria — set status ACCEPTED yourself and log `{kind: \"accepted\", by: \"op\"}`.\n   - `principal`, a human: send a human request titled `Accept: <pid> / <node> / <product>` whose description carries the product description, location, the check results and your note, with one `approval` ask and an optional `text` ask for comments. Never accept on their behalf; silence is not acceptance.\n   - `principal`, an agent: message the parent's assignee `{node, event: \"child-delivered\", product, location, checks}` and wait.\n   - a DID: a human request to that reviewer.\n5. On `accepted`: set product status ACCEPTED. On `rejected`: set status IN_PROGRESS, put the rejection comment at the top of `plan.next`, and re-deliver when fixed.\n\nOrder in a tree: assemble accepted CHILD products into your own before delivering yours — your `composition` names them. Do not deliver a parent product built on unaccepted child products unless the brief allows a draft.\n\nClosing:\n- A node closes COMPLETE only when every product is ACCEPTED and every child is CLOSED COMPLETE. Write `meta.status: CLOSED`, `meta.outcome: COMPLETE`, log `closed`, and log `child-closed` on the parent (dedicated project operations do this cascade for you when advertised).\n- Closing is the principal's act: as assignee, deliver and report; as principal of a child, close it once you have accepted everything.\n- ABANDONED (by the principal, or a decision above) cascades to open children; record the comment and stop work on the subtree.\n- CLOSED is never reopened; further work is a new sibling node that `dependsOn` the closed one."
+	},
+	"skill": {
+		"tools": [
+			"v/ops/covia/write",
+			"v/ops/covia/read",
+			"v/ops/covia/append",
+			"v/ops/schema/validate",
+			"v/ops/grid/run",
+			"v/ops/hitl/request",
+			"v/ops/agent/message"
+		]
+	}
+}

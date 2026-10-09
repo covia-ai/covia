@@ -24,6 +24,7 @@ import covia.lattice.NamespaceResolver;
 import covia.venue.AgentState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.User;
 import covia.venue.TestEngine;
 
 /**
@@ -131,8 +132,8 @@ public class CoviaAdapterTest {
 
 	/**
 	 * Regression: covia:read navigating a Blob-keyed {@code Index} by its hex
-	 * key. The sessions Index lives inside the agent's opaque LWW value, so the
-	 * lattice resolver can't descend it — the read falls back to deepGet, whose
+	 * key. The sessions Index is a JSON leaf inside the agent record, so typed
+	 * lattice navigation stops there — the read falls back to deepGet, whose
 	 * Index branch must parse the hex path segment into the Blob key. This path
 	 * silently returned {@code exists:false} until fixed (found live over MCP,
 	 * not by the map/vector tests above — see CoviaReadIndexNavTest for the
@@ -267,6 +268,31 @@ public class CoviaAdapterTest {
 			Maps.of(Fields.PATH, "w/novalue"), ALICE);
 		assertEquals(CVMBool.FALSE, RT.getIn(read.awaitResult(5000), "exists"),
 			"a failed write must not create the path");
+	}
+
+	@Test
+	public void testWriteAndAppendKeepAJsonLookingStringAsAString() {
+		// A Covia operation's input may be any JSON value, and 'value' declares
+		// no type, so a string is a valid value even when it looks like JSON.
+		// It is stored verbatim: string-to-object parsing is allowed only at
+		// tool-call boundaries whose schema admits nothing but an object (#508).
+		// Repairing it here would make the same call store different types
+		// depending on how the caller happened to encode it (#89).
+		AString jsonish = Strings.create("{\"a\": 1, \"b\": [2, 3]}");
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/verbatim/map-like", Fields.VALUE, jsonish), ALICE)
+			.awaitResult(5000);
+		ACell read = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, "w/verbatim/map-like"), ALICE).awaitResult(5000);
+		assertEquals(jsonish, RT.getIn(read, "value"), "a JSON-looking string is stored as the string it is");
+
+		AString arrayish = Strings.create("[1, 2]");
+		engine.jobs().invokeOperation("v/ops/covia/append",
+			Maps.of(Fields.PATH, "w/verbatim/log", Fields.VALUE, arrayish), ALICE)
+			.awaitResult(5000);
+		ACell log = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, "w/verbatim/log"), ALICE).awaitResult(5000);
+		assertEquals(Vectors.of(arrayish), RT.getIn(log, "value"), "append stores the element verbatim");
 	}
 
 	@Test
@@ -726,43 +752,13 @@ public class CoviaAdapterTest {
 
 	// ========== covia:write — JSON-string coercion ==========
 	//
-	// LLMs frequently call covia:write with `value` as a JSON-encoded string
-	// rather than a structured map/array. The adapter must parse such strings
-	// so the audit trail contains queryable structures, not opaque blobs.
-
-	@Test
-	public void testWriteCoercesJsonObjectString() {
-		String json = "{\"vendor_id\":\"V-1042\",\"status\":\"ACTIVE\",\"score\":0.95}";
-		engine.jobs().invokeOperation("v/ops/covia/write",
-			Maps.of(Fields.PATH, "w/enrichments/INV-001",
-			        Fields.VALUE, Strings.create(json)),
-			ALICE).awaitResult(5000);
-
-		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
-			Maps.of(Fields.PATH, "w/enrichments/INV-001"), ALICE);
-		ACell readResult = readJob.awaitResult(5000);
-		ACell value = RT.getIn(readResult, "value");
-		assertNotNull(value, "value should be present");
-		// If parsing worked, this is a structured map and we can navigate into it
-		assertEquals(Strings.create("V-1042"), RT.getIn(value, "vendor_id"));
-		assertEquals(Strings.create("ACTIVE"), RT.getIn(value, "status"));
-	}
-
-	@Test
-	public void testWriteCoercesJsonArrayString() {
-		String json = "[\"a\",\"b\",\"c\"]";
-		engine.jobs().invokeOperation("v/ops/covia/write",
-			Maps.of(Fields.PATH, "w/tags", Fields.VALUE, Strings.create(json)),
-			ALICE).awaitResult(5000);
-
-		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
-			Maps.of(Fields.PATH, "w/tags"), ALICE);
-		ACell readResult = readJob.awaitResult(5000);
-		AVector<ACell> value = RT.getIn(readResult, "value");
-		assertNotNull(value);
-		assertEquals(3, value.count());
-		assertEquals(Strings.create("b"), value.get(1));
-	}
+	// `value` declares no type, so any JSON value is valid and is stored exactly
+	// as supplied. A string that looks like JSON is still a string: the adapter
+	// used to parse such strings into structures "for the audit trail", which
+	// made the stored type depend on how the caller happened to encode the
+	// call (#89). Structure comes from structured input; string-to-object
+	// parsing lives only at tool-call boundaries whose schema admits nothing
+	// but an object (#508). See testWriteAndAppendKeepAJsonLookingStringAsAString.
 
 	@Test
 	public void testWritePlainStringNotCoerced() {
@@ -789,22 +785,6 @@ public class CoviaAdapterTest {
 			Maps.of(Fields.PATH, "w/note2"), ALICE);
 		assertEquals(Strings.create(malformed),
 			RT.getIn(readJob.awaitResult(5000), "value"));
-	}
-
-	@Test
-	public void testAppendCoercesJsonObjectString() {
-		String json = "{\"event\":\"validated\",\"by\":\"Bob\"}";
-		engine.jobs().invokeOperation("v/ops/covia/append",
-			Maps.of(Fields.PATH, "w/audit", Fields.VALUE, Strings.create(json)),
-			ALICE).awaitResult(5000);
-
-		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
-			Maps.of(Fields.PATH, "w/audit"), ALICE);
-		AVector<ACell> value = RT.getIn(readJob.awaitResult(5000), "value");
-		assertNotNull(value);
-		assertEquals(1, value.count());
-		// Element must be a parsed map, not the raw string
-		assertEquals(Strings.create("validated"), RT.getIn(value.get(0), "event"));
 	}
 
 	@Test
@@ -1512,6 +1492,29 @@ public class CoviaAdapterTest {
 		assertEquals(CVMLong.create(2), RT.getIn(result, "y"));
 	}
 
+	@Test
+	public void testDeepDeleteMissingBranchIsExactNoOp() {
+		ACell root = Maps.of("present", Maps.of("value", CVMLong.ONE));
+		ACell[] keys = CoviaAdapter.parseStringPath("w/missing/leaf");
+
+		ACell result = CoviaAdapter.deepDelete(root, keys, 1);
+
+		assertSame(root, result, "delete must not materialise a missing branch as null");
+	}
+
+	@Test
+	public void testDeleteMissingWrappedPathDoesNotMaterialiseNamespace() {
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		assertFalse(((AMap<?, ?>) user.cursor().get()).containsKey(Strings.intern("w")));
+
+		ACell result = engine.jobs().invokeOperation("v/ops/covia/delete",
+			Maps.of(Fields.PATH, "w/missing/leaf"), ALICE).awaitResult(5000);
+
+		assertEquals(CVMBool.FALSE, RT.getIn(result, "deleted"));
+		assertFalse(((AMap<?, ?>) user.cursor().get()).containsKey(Strings.intern("w")),
+			"an idempotent delete must not create a null wrapper branch");
+	}
+
 	// ========== covia:read/write — vector index navigation ==========
 
 	@Test
@@ -2034,6 +2037,26 @@ public class CoviaAdapterTest {
 	}
 
 	@Test
+	public void testAgentWorkspaceWriteRefreshesAgentTimestamp() {
+		User user = engine.getVenueState().users().get(ALICE.getUserDID());
+		AString agentId = Strings.create("test-agent");
+		AgentState agent = user.agent(agentId);
+		user.cursor().path(Strings.intern("g"), agentId).updateAndGet(current ->
+			((AMap<AString, ACell>) current).assoc(Strings.intern("ts"), CVMLong.ZERO));
+		assertEquals(0, agent.getTs());
+
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "n/stamp-probe", Fields.VALUE, Strings.create("written")),
+			ALICE.withAgentId(agentId)).awaitResult(5000);
+
+		assertEquals(Strings.create("written"),
+			RT.getIn(agent.getRecord(), "n", "stamp-probe"),
+			"the stamped component must not add an envelope to the agent record");
+		assertTrue(agent.getTs() > 0,
+			"a deep n/ write should refresh the enclosing agent record's ts");
+	}
+
+	@Test
 	public void testAgentWorkspaceDelete() {
 		RequestContext agentCtx = ALICE.withAgentId(Strings.create("test-agent"));
 
@@ -2399,6 +2422,25 @@ public class CoviaAdapterTest {
 		return job.getID();
 	}
 
+	@Test
+	public void testTempWriteRefreshesJobTimestamp() {
+		Blob jobId = newJob();
+		User user = engine.getVenueState().users().get(ALICE.getUserDID());
+		user.persistJob(jobId, user.getJob(jobId).assoc(Fields.UPDATED, CVMLong.ZERO));
+		assertEquals(CVMLong.ZERO, user.getJob(jobId).get(Fields.UPDATED));
+
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "t/stamp-probe", Fields.VALUE, Strings.create("written")),
+			ALICE.withJobId(jobId)).awaitResult(5000);
+
+		assertEquals(Strings.create("written"),
+			RT.getIn(user.getJob(jobId), "temp", "stamp-probe"),
+			"the stamped component must not add an envelope to the Job record");
+		CVMLong updated = (CVMLong) user.getJob(jobId).get(Fields.UPDATED);
+		assertTrue(updated.longValue() > 0,
+			"a deep t/ write should refresh the enclosing Job record's updated field");
+	}
+
 	private ACell read(RequestContext ctx, String path) {
 		return engine.jobs().invokeOperation("v/ops/covia/read",
 			Maps.of(Fields.PATH, path), ctx).awaitResult(5000);
@@ -2600,9 +2642,91 @@ public class CoviaAdapterTest {
 	}
 
 	@Test
+	public void testSessionScratchNeverMintsPhantomSession() {
+		// c/ addresses state inside a session the framework created. A write
+		// must refuse rather than auto-vivify a session with no meta or frames.
+		RequestContext ctx = ALICE.withAgentId(Strings.create("no-such-agent"))
+			.withSessionId(Blob.fromHex("dead0000beef0000"));
+		Job job = engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "c/x", Fields.VALUE, Strings.create("nope")), ctx);
+		assertThrows(Exception.class, () -> job.awaitResult(5000));
+
+		User user = engine.getVenueState().users().get(ALICE.getUserDID());
+		assertNull(user.agent("no-such-agent"), "no phantom agent or session may be created");
+	}
+
+	@Test
+	public void testSessionScratchRequiresSessionRecordNotExistingScratchSlot() {
+		User user = engine.getVenueState().users().get(ALICE.getUserDID());
+		AgentState agent = user.agent("test-agent");
+		Blob sessionId = Blob.fromHex("aa11bb22cc33dd45");
+		agent.ensureSession(sessionId, ALICE_DID, Maps.empty());
+
+		// Simulate a valid older/session record whose optional scratch slot has
+		// not been materialised. The guard applies to the session, not c itself.
+		AMap<AString, ACell> session = agent.getSession(sessionId);
+		agent.putRecord(agent.getRecord().assoc(AgentState.KEY_SESSIONS,
+			agent.getSessions().assoc(sessionId, session.dissoc(Strings.intern("c")))));
+
+		RequestContext ctx = ALICE.withAgentId(Strings.create("test-agent"))
+			.withSessionId(sessionId);
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "c/x", Fields.VALUE, Strings.create("written")), ctx)
+			.awaitResult(5000);
+
+		assertEquals(Strings.create("written"),
+			RT.getIn(agent.getSession(sessionId), "c", "x"));
+	}
+
+	@Test
+	public void testSessionScratchWriteRefreshesAgentTimestamp() {
+		User user = engine.getVenueState().users().get(ALICE.getUserDID());
+		AString agentId = Strings.create("test-agent");
+		AgentState agent = user.agent(agentId);
+		Blob sessionId = Blob.fromHex("aa11bb22cc33dd46");
+		agent.ensureSession(sessionId, ALICE_DID, Maps.empty());
+		user.cursor().path(Strings.intern("g"), agentId).updateAndGet(current ->
+			((AMap<AString, ACell>) current).assoc(Strings.intern("ts"), CVMLong.ZERO));
+		assertEquals(0, agent.getTs());
+
+		RequestContext ctx = ALICE.withAgentId(agentId).withSessionId(sessionId);
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "c/stamp-probe", Fields.VALUE, Strings.create("written")), ctx)
+			.awaitResult(5000);
+
+		assertEquals(Strings.create("written"),
+			RT.getIn(agent.getSession(sessionId), "c", "stamp-probe"),
+			"session scratch must remain in the existing session record shape");
+		assertTrue(agent.getTs() > 0,
+			"a deep c/ write should refresh the enclosing agent record's ts");
+	}
+
+	@Test
+	public void testWorkspaceStoredAsUpdatedDataContainer() {
+		// w/o/h are a lattice view boundary over {updated, data}: callers address
+		// the data, and every write re-stamps `updated`. Pinned here because the
+		// stored shape must stay readable by venues persisted before the move.
+		RequestContext ctx = ALICE;
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/wrap-probe", Fields.VALUE, Strings.create("one")),
+			ctx).awaitResult(5000);
+
+		User user = engine.getVenueState().users().get(ctx.getUserDID());
+		ACell container = user.cursor().path(Strings.create("w")).get();
+		assertInstanceOf(AMap.class, container, "w must be stored as a container");
+		AMap<AString, ACell> m = (AMap<AString, ACell>) container;
+		assertNotNull(m.get(Strings.create("data")), "content lives under data");
+		ACell first = m.get(Strings.create("updated"));
+		assertInstanceOf(CVMLong.class, first, "container carries an updated stamp");
+		// Callers never see the container.
+		assertEquals(Strings.create("one"), RT.getIn(read(ctx, "w/wrap-probe"), "value"));
+		assertNull(RT.getIn(read(ctx, "w/data"), "value"), "data is not addressable");
+	}
+
+	@Test
 	public void testSessionResolverCarriesAtomicScope() {
-		// Sessions live inside an atomic agent LWW record. The resolver positions
-		// at the agent and carries the session selector for specialised access.
+		// The resolver positions at the session record and rewrites c/ to the
+		// record's ordinary scratch child; the resolver guards that record.
 		AString agentId = Strings.create("test-agent");
 		Blob sessionId = Blob.fromHex("aa11bb22cc33dd44");
 		RequestContext ctx = ALICE.withAgentId(agentId).withSessionId(sessionId);
@@ -2611,11 +2735,46 @@ public class CoviaAdapterTest {
 		ACell[] keys = CoviaAdapter.parseStringPath("c/draft");
 		NamespaceResolver.ResolvedNamespace vns = covia.resolveVirtual(ctx, keys);
 		assertNotNull(vns);
-		assertEquals(agentId, vns.agentId());
-		assertEquals(sessionId, vns.sessionId());
-		ACell[] rk = vns.remainingKeys();
-		assertEquals(1, rk.length);
-		assertEquals("draft", rk[0].toString());
+		// The cursor sits at the session record; the keys name its scratch slot.
+		assertEquals("c", vns.remainingKeys()[0].toString());
+		assertEquals("draft", vns.remainingKeys()[1].toString());
+		assertEquals(2, vns.remainingKeys().length);
+		// Scoped scratch must never mint a phantom session.
+		assertTrue(vns.requireExistingRecord());
+		assertNull(vns.recordTimestampKey(),
+			"the enclosing agent lattice stamps a session write");
+	}
+
+	@Test
+	public void testAgentResolverUsesAgentRecordBoundary() {
+		AString agentId = Strings.create("test-agent");
+		RequestContext ctx = ALICE.withAgentId(agentId);
+
+		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
+		NamespaceResolver.ResolvedNamespace vns = covia.resolveVirtual(ctx,
+			CoviaAdapter.parseStringPath("n/draft"));
+
+		assertNotNull(vns);
+		assertEquals(engine.getVenueState().users().get(ALICE.getUserDID())
+			.agent(agentId).getRecord(), vns.cursor().get());
+		assertArrayEquals(new ACell[] {Strings.intern("n"), Strings.intern("draft")},
+			vns.remainingKeys());
+		assertTrue(vns.requireExistingRecord());
+		assertEquals(Strings.intern("ts"), vns.recordTimestampKey(),
+			"a resolver positioned at the agent boundary must identify its record stamp");
+	}
+
+	@Test
+	public void testAgentWorkspaceWriteCannotMintMissingAgent() {
+		AString missing = Strings.create("missing-agent");
+		RequestContext agentCtx = ALICE.withAgentId(missing);
+
+		assertThrows(RuntimeException.class, () ->
+			engine.jobs().invokeOperation("v/ops/covia/write",
+				Maps.of(Fields.PATH, "n/draft", Fields.VALUE, "no phantom"),
+				agentCtx).awaitResult(5000));
+
+		assertNull(engine.getVenueState().users().get(ALICE_DID).agent(missing));
 	}
 
 	@Test
@@ -2626,33 +2785,56 @@ public class CoviaAdapterTest {
 		Blob taskId = Blob.fromHex("01020304");
 		RequestContext ctx = ALICE.withAgentId(agentId).withTaskId(taskId)
 			.withJobId(Blob.fromHex("ffeeddcc"));
+		User user = engine.getVenueState().users().get(ctx.getUserDID());
+		user.persistJob(taskId, Maps.of(Fields.ID, taskId));
 
 		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
 		ACell[] keys = CoviaAdapter.parseStringPath("t/draft");
 		NamespaceResolver.ResolvedNamespace vns = covia.resolveVirtual(ctx, keys);
 		assertNotNull(vns);
-		assertEquals(taskId, vns.jobId(), "focused task Job must beat transition job");
-		ACell[] rk = vns.remainingKeys();
-		assertEquals(1, rk.length);
-		assertEquals("draft", rk[0].toString());
+		assertEquals("temp", vns.remainingKeys()[0].toString());
+		assertEquals("draft", vns.remainingKeys()[1].toString());
+		assertTrue(vns.requireExistingRecord());
+		assertEquals(Fields.UPDATED, vns.recordTimestampKey(),
+			"a resolver positioned at the Job boundary must identify its record stamp");
+
+		// The cursor must be the FOCUSED TASK's Job record, not the transition Job's.
+		assertEquals(user.getJob(taskId), vns.cursor().get(),
+			"t/ must resolve to the focused task Job");
 	}
 
 	@Test
 	public void testTempResolverFallsBackToJobScope() {
-		// jobId set but no agentId/taskId — legacy job-scoped flow with
-		// jobId returned in ResolvedNamespace and remainingKeys stripped of
-		// the t/ prefix.
+		// jobId set but no agentId/taskId — ordinary job scope: the resolver
+		// targets that Job record and rewrites the t/ prefix to its temp slot.
 		Blob jobId = Blob.fromHex("ffeeddcc");
 		RequestContext ctx = ALICE.withJobId(jobId);
+		User user = engine.getVenueState().users().get(ctx.getUserDID());
+		user.persistJob(jobId, Maps.of(Fields.ID, jobId));
 
 		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
 		ACell[] keys = CoviaAdapter.parseStringPath("t/draft");
 		NamespaceResolver.ResolvedNamespace vns = covia.resolveVirtual(ctx, keys);
 		assertNotNull(vns);
-		assertEquals(jobId, vns.jobId());
-		ACell[] rk = vns.remainingKeys();
-		assertEquals(1, rk.length);
-		assertEquals("draft", rk[0].toString());
+		assertEquals("temp", vns.remainingKeys()[0].toString());
+		assertTrue(vns.requireExistingRecord());
+		assertEquals(Fields.UPDATED, vns.recordTimestampKey());
+
+		assertEquals(user.getJob(jobId), vns.cursor().get(),
+			"t/ must resolve to the current Job record");
+	}
+
+	@Test
+	public void testTempWriteCannotMintMissingJob() {
+		Blob missing = Blob.fromHex("0102030405060708");
+		RequestContext jobCtx = ALICE.withJobId(missing);
+
+		assertThrows(RuntimeException.class, () ->
+			engine.jobs().invokeOperation("v/ops/covia/write",
+				Maps.of(Fields.PATH, "t/draft", Fields.VALUE, "no phantom"),
+				jobCtx).awaitResult(5000));
+
+		assertNull(engine.getVenueState().users().get(ALICE_DID).getJob(missing));
 	}
 
 	// Regression: concurrent appends to the same vector path used to lose

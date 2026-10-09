@@ -14,6 +14,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.venue.Engine;
+import covia.adapter.messaging.MessagingBotSpec;
 
 /**
  * One operator-declared bot: the immutable, validated form of an
@@ -33,9 +34,13 @@ import covia.venue.Engine;
  * @param reply      For an operation handler: null = default (the result
  *                   rendered as text), {@code CVMBool.FALSE} = never reply, an
  *                   {@code AString} = that fixed acknowledgement
- * @param allowIds   Telegram user ids permitted to talk to the bot
- * @param allowNames Telegram usernames (lower-case, no {@code @}) permitted
- * @param open       Whether anyone may talk to the bot
+ * @param allowIds   Telegram user ids permitted to talk to the bot — and, unless
+ *                   the bot is {@code open}, the only parties it may message
+ *                   (see {@link #allowsTarget})
+ * @param allowNames Telegram usernames (lower-case, no {@code @}) permitted to
+ *                   talk to the bot; each resolves to an account the first time
+ *                   that person writes (kept by the runner, never written back here)
+ * @param open       Whether anyone may talk to the bot, and the bot to anyone
  * @param parseMode  Outbound formatting: {@code Markdown}, {@code MarkdownV2},
  *                   {@code HTML}, or null for plain text
  * @param greeting   Reply to {@code /start}, or null for the default
@@ -51,7 +56,7 @@ public record BotSpec(
 		Set<String> allowNames,
 		boolean open,
 		String parseMode,
-		String greeting) {
+		String greeting) implements MessagingBotSpec {
 
 	static final AString K_TOKEN = Strings.intern("token");
 	static final AString K_USER = Strings.intern("user");
@@ -93,37 +98,41 @@ public record BotSpec(
 		return Strings.create(engine.getDIDString() + ":public");
 	}
 
-	/** Whether inbound messages go to an agent conversation. */
-	public boolean routesToAgent() {
-		return agent != null;
-	}
-
-	/** Whether inbound messages invoke an operation. */
-	public boolean routesToOperation() {
-		return operation != null;
-	}
-
-	/** Human-readable routing target for status output. */
-	public String target() {
-		return routesToAgent() ? "agent " + agent : "operation " + operation;
-	}
-
-	/** The fixed acknowledgement text, or null when replies are the default or off. */
-	public String fixedReply() {
-		return (reply instanceof AString s) ? s.toString() : null;
-	}
-
-	/** Whether replies are suppressed for the operation handler. */
-	public boolean silent() {
-		return CVMBool.FALSE.equals(reply);
-	}
-
 	/** Whether this Telegram user may talk to the bot. */
 	public boolean allows(Long userId, String username) {
 		if (open) return true;
 		if (userId != null && allowIds.contains(userId)) return true;
 		if (username != null && allowNames.contains(username.toLowerCase(Locale.ROOT))) return true;
 		return false;
+	}
+
+	/**
+	 * Whether the configuration alone lets the bot address this chat or user (a
+	 * {@code chat_id}, {@code from_chat_id} or {@code user_id} as given to the
+	 * Bot API). An {@code open} bot may address anyone. An allow-listed bot is
+	 * its user's channel to the people on the list and never talks to anyone
+	 * else, so it addresses only their numeric ids — a private chat's id is the
+	 * user's id, so those are exactly the chats it may message. A person listed
+	 * by {@code @username} becomes addressable once the handle has resolved to
+	 * their account ({@link BotRunner#allowsTarget}); the spec never rewrites
+	 * {@code allow}.
+	 */
+	public boolean allowsTarget(Object target) {
+		if (open) return true;
+		Long id = targetId(target);
+		return id != null && allowIds.contains(id);
+	}
+
+	/** A Bot API chat or user target as a Telegram id; null for anything else ({@code @channel}, blank…). */
+	static Long targetId(Object target) {
+		if (target == null) return null;
+		String s = String.valueOf(target).trim();
+		if (!s.matches("-?\\d+")) return null;
+		try {
+			return Long.parseLong(s);
+		} catch (NumberFormatException e) {
+			return null;
+		}
 	}
 
 	/**

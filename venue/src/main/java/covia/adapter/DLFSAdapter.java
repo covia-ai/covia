@@ -148,7 +148,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		installAsset("dlfs/mkdir",        ASSETS_PATH + "mkdir.json");
 		installAsset("dlfs/delete",       ASSETS_PATH + "delete.json");
 		installAsset("dlfs/stat",         ASSETS_PATH + "stat.json");
-		log.info("DLFS adapter installed with {} operations", pendingCatalogEntries.size());
+		log.debug("DLFS adapter installed with {} operations", pendingCatalogEntries.size());
 	}
 
 	// ==================== Key Management ====================

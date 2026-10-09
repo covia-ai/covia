@@ -31,6 +31,7 @@ import covia.grid.Principals;
 import covia.grid.Status;
 import covia.grid.hitl.Hitl;
 import covia.venue.RequestContext;
+import covia.venue.AgentState;
 import covia.venue.UcanJwtValidator;
 import covia.venue.User;
 
@@ -180,10 +181,44 @@ public class HITLAdapter extends AAdapter {
 		}
 		targetUser.putHitlRequest(id, record);
 		Blob jobId = job.getID();
+		trackPending(job);
 		job.setCancelHook(() -> markResolved(targetDID, id, Hitl.CANCELLED, null));
 		job.setStatus(Status.INPUT_REQUIRED);
 		if (timeoutSecs != null) scheduleExpiry(targetDID, id, jobId, timeoutSecs * 1000);
 		log.info("HITL request {} delivered to {} (from {})", id, targetDID, caller);
+	}
+
+	/** HITL's result is delivered through the session inbox; pending holds only its handle. */
+	private void trackPending(Job job) {
+		AMap<AString, ACell> data = job.getData();
+		AString agentId = Principals.agentIdOf(RT.ensureString(data.get(Fields.ACTOR)));
+		if (agentId == null) return;
+		User owner = engine.getVenueState().users().get(RT.ensureString(data.get(Fields.CALLER)));
+		AgentState agent = owner == null ? null : owner.agent(agentId);
+		if (agent == null || agent.getRecord() == null) return;
+		agent.addPending(job.getID(), Maps.empty());
+		var cleanup = new java.util.function.Consumer<Job>() {
+			@Override public void accept(Job updated) {
+				if (!updated.isFinished()) return;
+				agent.removePending(updated.getID());
+				updated.unsubscribe(this);
+			}
+		};
+		job.subscribe(cleanup);
+		cleanup.accept(job); // closes completion before listener registration
+	}
+
+	@Override
+	public void recoverJob(Job job) {
+		trackPending(job); // restores legacy waits and arms cleanup if recovery fails
+		super.recoverJob(job);
+		if (job.isFinished()) return;
+		AMap<AString, ACell> data = job.getData();
+		AString target = RT.ensureString(RT.getIn(data, Fields.INPUT, Hitl.USER));
+		if (target == null) target = RT.ensureString(data.get(Fields.CALLER));
+		AString targetDID = target;
+		AString id = Strings.create(job.getID().toHexString());
+		job.setCancelHook(() -> markResolved(targetDID, id, Hitl.CANCELLED, null));
 	}
 
 	/** An ask within the caller's own user family is always permitted — a user

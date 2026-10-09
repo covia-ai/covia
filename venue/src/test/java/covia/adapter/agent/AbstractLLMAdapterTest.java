@@ -210,13 +210,13 @@ public class AbstractLLMAdapterTest {
 		AMap<AString, ACell> config = Maps.of(
 			Strings.create("model"), Strings.create("gpt-4o"));
 		AString op = AbstractLLMAdapter.getLLMOperation(config);
-		assertEquals("v/models/anthropic/claude-sonnet-5", op.toString());
+		assertEquals("v/models/anthropic/claude-sonnet-5-5", op.toString());
 	}
 
 	@Test
 	public void testGetLLMOperationNullConfig() {
 		AString op = AbstractLLMAdapter.getLLMOperation(null);
-		assertEquals("v/models/anthropic/claude-sonnet-5", op.toString());
+		assertEquals("v/models/anthropic/claude-sonnet-5-5", op.toString());
 	}
 
 	// ========== copyIfPresent ==========
@@ -269,6 +269,7 @@ public class AbstractLLMAdapterTest {
 			"temperature", 0,
 			"topP", 1,
 			"cache", false,
+			"modelOptions", Maps.of("cacheTtl", "1h", "automaticCaching", true),
 			"providerOptions", Maps.of(
 				"thinking", Maps.of("type", "adaptive"),
 				"output_config", Maps.of("effort", "low")));
@@ -278,6 +279,7 @@ public class AbstractLLMAdapterTest {
 		assertEquals(0L, RT.ensureLong(RT.getIn(input, "temperature")).longValue());
 		assertEquals(1L, RT.ensureLong(RT.getIn(input, "topP")).longValue());
 		assertEquals(CVMBool.FALSE, RT.getIn(input, "cache"));
+		assertEquals(config.get(AbstractLLMAdapter.K_MODEL_OPTIONS), input.get(AbstractLLMAdapter.K_MODEL_OPTIONS));
 		assertEquals(Strings.create("adaptive"),
 			RT.getIn(input, "providerOptions", "thinking", "type"));
 		assertEquals(Strings.create("low"),

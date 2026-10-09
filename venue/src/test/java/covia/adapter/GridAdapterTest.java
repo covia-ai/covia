@@ -190,23 +190,26 @@ class GridAdapterTest {
 	}
 
 	/**
-	 * Some MCP clients serialise nested object arguments as JSON strings.
-	 * The {@code grid:run} input field is polymorphic (accepts any type),
-	 * so the schema-driven coercion at the MCP boundary deliberately lets
-	 * those strings through. {@code GridAdapter.invokeRun} re-parses them
-	 * when {@code Config.fixMcpStrings} is enabled (default).
+	 * The {@code grid:run} inner input is the target operation's input, and a
+	 * Covia operation's input may be any JSON value — so a string is a valid
+	 * input and is passed through verbatim, even when it looks like JSON.
+	 * String-to-object parsing is allowed only at tool-call boundaries whose
+	 * schema admits nothing but an object (MCP arguments, {@code invoke_tool});
+	 * a client that stringifies the inner input gets exactly the string it
+	 * sent, not a repaired object (#508, #89).
 	 */
 	@Test
-	void runLocalOperationWithJsonStringInput() throws Exception {
+	void runLocalOperationPassesStringInputVerbatim() throws Exception {
 		VenueHTTP covia = TestServer.COVIA;
+		AString jsonish = Strings.create("{\"first\":\"Json\",\"second\":\"String\"}");
 
 		Job job = covia.invokeSync("v/ops/grid/run", Maps.of(
-				Fields.OPERATION, "v/ops/jvm/string-concat",
-				Fields.INPUT, Strings.create("{\"first\":\"Json\",\"second\":\"String\"}")));
+				Fields.OPERATION, "v/test/ops/echo",
+				Fields.INPUT, jsonish));
 
 		assertNotNull(job, "Job should not be null");
-		assertEquals(Status.COMPLETE, job.getStatus(), "Local grid run should parse JSON-string input");
-		assertEquals("JsonString", RT.getIn(job.getOutput(), "result").toString());
+		assertEquals(Status.COMPLETE, job.getStatus(), "echo accepts any input");
+		assertEquals(jsonish, job.getOutput(), "the string reached the operation unparsed");
 	}
 
 	/**

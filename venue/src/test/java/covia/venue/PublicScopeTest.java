@@ -178,6 +178,42 @@ public class PublicScopeTest {
 	}
 
 	// ========================= operator opt-out =========================
+	@Test
+	public void publicStatusDoesNotDiscloseCustomCapabilityTargets() throws Exception {
+		String privateTarget = "did:example:private-owner/w/internal-ledger";
+		VenueServer custom = VenueServer.launch(Maps.of(Config.PORT, 0,
+			Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(Config.ENABLED, true, "caps",
+				Vectors.of(Maps.of("with", privateTarget, "can", "data/read"))))));
+		try {
+			var response = java.net.http.HttpClient.newHttpClient().send(
+				java.net.http.HttpRequest.newBuilder(URI.create("http://localhost:" + custom.port() + "/api/v1/status")).build(),
+				java.net.http.HttpResponse.BodyHandlers.ofString());
+			assertEquals(200, response.statusCode());
+			assertEquals(Strings.create("custom"), convex.core.lang.RT.getIn(
+				convex.core.util.JSON.parse(response.body()), "access", "publicCaps"));
+			assertTrue(!response.body().contains(privateTarget));
+			var shown = custom.getEngine().jobs().invokeInternal(OP_SHOW_CONFIG.toString(), Maps.empty(),
+				custom.getEngine().venueContext()).get(5, TimeUnit.SECONDS);
+			assertEquals(Strings.create("custom"), convex.core.lang.RT.getIn(shown, "access", "publicCaps"));
+			assertTrue(!shown.toString().contains(privateTarget));
+		} finally { custom.close(); }
+	}
+
+	@Test
+	public void publicModeReflectsEffectivePolicy() {
+		Object[] policies = {null, "unrestricted", Vectors.empty()};
+		String[] modes = {"read-only", "unrestricted", "custom"};
+		for (int i = 0; i < policies.length; i++) {
+			Engine engine = Engine.createTemp(Maps.of(Config.AUTH,
+				Maps.of(Config.PUBLIC, Maps.of(Config.ENABLED, true, "caps", policies[i]))));
+			try { assertEquals(Strings.create(modes[i]), engine.getAuth().getPublicCapsMode()); }
+			finally { engine.close(); }
+		}
+		Engine disabled = Engine.createTemp(Maps.of(Config.AUTH,
+			Maps.of(Config.PUBLIC, Maps.of(Config.ENABLED, false, "caps", "unrestricted"))));
+		try { assertEquals(Strings.create("disabled"), disabled.getAuth().getPublicCapsMode()); }
+		finally { disabled.close(); }
+	}
 
 	@Test
 	public void unrestrictedConfigAllowsAnonymousMutation() throws Exception {

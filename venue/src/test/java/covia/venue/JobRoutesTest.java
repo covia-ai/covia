@@ -41,6 +41,35 @@ import covia.grid.auth.VenueAuth;
  * own venue — see {@link CoviaAssetRefTest} for the rationale.</p>
  */
 public class JobRoutesTest {
+	@Test
+	public void invokeAcknowledgesWhileSynchronousAdapterIsStillProcessing() throws Exception {
+		var release = new java.util.concurrent.CountDownLatch(1);
+		var entered = new java.util.concurrent.CountDownLatch(1);
+		TestServer.ENGINE.registerAdapter(new covia.adapter.AAdapter() {
+			@Override public String getName() { return "blocking-submission-test"; }
+			@Override public String getDescription() { return "Submission acknowledgement regression"; }
+			@Override protected void installAssets() {
+				installAsset("blocking-submission-test/run", Maps.of(Fields.OPERATION,
+					Maps.of(Fields.ADAPTER, "blocking-submission-test:run")));
+			}
+			@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx,
+					convex.core.data.AMap<convex.core.data.AString, ACell> meta, ACell input) {
+				entered.countDown();
+				try {
+					if (!release.await(10, TimeUnit.SECONDS)) throw new IllegalStateException("Test did not release adapter");
+				} catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new RuntimeException(e); }
+				return CompletableFuture.completedFuture(input);
+			}
+		});
+		try {
+			Job handle = TestServer.COVIA.startJobAsync(Strings.create("v/ops/blocking-submission-test/run"),
+				Strings.create("simple request")).get(5, TimeUnit.SECONDS);
+			assertTrue(entered.await(5, TimeUnit.SECONDS));
+			assertTrue(!handle.isFinished());
+			release.countDown();
+			assertEquals(Strings.create("simple request"), TestServer.COVIA.awaitJobResult(handle.getID()).get(5, TimeUnit.SECONDS));
+		} finally { release.countDown(); }
+	}
 
 	private final String base = TestServer.BASE_URL;
 	private final HttpClient http = TestHTTP.CLIENT;

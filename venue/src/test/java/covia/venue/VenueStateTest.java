@@ -212,6 +212,53 @@ public class VenueStateTest {
 	}
 
 	@Test
+	public void testUserJobUpdatePreservesExplicitNullTemp() {
+		VenueState vs = VenueState.create(AKeyPair.generate());
+		User user = vs.users().ensure("did:key:zNullTemp");
+		Blob jobID = Blob.parse("0x0001");
+		AString temp = Strings.intern("temp");
+		user.persistJob(jobID, Maps.of(
+			Fields.STATUS, Status.PENDING,
+			temp, null));
+
+		user.persistJob(jobID, Maps.of(Fields.STATUS, Status.COMPLETE));
+
+		AMap<AString, ACell> record = user.getJob(jobID);
+		assertTrue(record.containsKey(temp));
+		assertNull(record.get(temp));
+	}
+
+	@Test
+	public void testUpdateJobIfPresentNeverCreatesOrResurrectsARow() throws Exception {
+		VenueState vs = VenueState.create(AKeyPair.generate());
+		User user = vs.users().ensure("did:key:zConditionalJobUpdate");
+		Blob jobID = Blob.parse("0x0001");
+		AString marker = Strings.intern("marker");
+
+		assertFalse(user.updateJobIfPresent(jobID,
+			record -> record.assoc(marker, Strings.create("missing"))));
+		assertNull(user.getJob(jobID), "an absent conditional update must not create a row");
+
+		user.persistJob(jobID, Maps.of(Fields.STATUS, Status.PENDING));
+		assertTrue(user.updateJobIfPresent(jobID,
+			record -> record.assoc(marker, Strings.create("present"))));
+		assertEquals(Strings.create("present"), user.getJob(jobID).get(marker));
+
+		// either linearisation order is valid for the update; the delete must win
+		java.util.List<Boolean> raced = covia.test.Rendezvous.all(
+			() -> user.updateJobIfPresent(jobID,
+				record -> record.assoc(marker, Strings.create("raced"))),
+			() -> user.removeJob(jobID));
+		assertTrue(raced.get(1));
+
+		assertNull(user.getJob(jobID),
+			"delete and conditional update must linearise without resurrection");
+		assertFalse(user.updateJobIfPresent(jobID,
+			record -> record.assoc(marker, Strings.create("late"))));
+		assertNull(user.getJob(jobID));
+	}
+
+	@Test
 	public void testUserJobGetNonExistent() {
 		AKeyPair kp = AKeyPair.generate();
 		VenueState vs = VenueState.create(kp);

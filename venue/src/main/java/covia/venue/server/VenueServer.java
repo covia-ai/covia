@@ -9,9 +9,14 @@ import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletionStage;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 import org.eclipse.jetty.server.ServerConnector;
 import org.eclipse.jetty.server.HttpConfiguration;
@@ -20,7 +25,6 @@ import org.eclipse.jetty.http.UriCompliance;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import convex.api.Convex;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -77,7 +81,6 @@ import io.javalin.router.exception.HttpResponseExceptionMapper;
  * Contains:
  * - Endpoints for REST API
  * - Javalin HTTP server
- * - Connection to Convex (for CNS etc.)
  * 
  */
 public class VenueServer {
@@ -90,7 +93,6 @@ public class VenueServer {
 	
 	protected final Config config;
 
-	protected Convex convex;
 	protected AStore store;
 	/** Successor store from an online GC cutover (covia#452): the venue keeps
 	 *  using {@link #store} as a view; this is retained only to be cleanly
@@ -143,7 +145,6 @@ public class VenueServer {
 	 */
 	private VenueServer(AMap<AString,ACell> config, AStore adoptedStore) {
 		this.config=new Config(config);
-		this.convex=null; // TODO:
 
 		// Create NodeServer with Covia lattice (local-only, no network port)
 		// Launch immediately so restore happens before Engine reads the cursor.
@@ -170,7 +171,7 @@ public class VenueServer {
 				CoviaApplication.connect(nodeServer.getRootComponent());
 			engine = new Engine(this.config, application, keyPair);
 			engine.setStoreControl(new StoreMaintenance());
-			engine.start();
+			engine.prepare();
 		} catch (Exception e) {
 			// Engine construction is inert; start() owns and rolls back its active
 			// resources. close() remains safe here for NEW or failed engines.
@@ -267,7 +268,7 @@ public class VenueServer {
 			(etchConfig != null) ? " (configured Etch policy)" : "");
 		EtchStore opened = (etchConfig != null) ? EtchStore.create(f, etchConfig) : EtchStore.create(f);
 		if (config.isEtchGcOnStart()) {
-			return collectAtStartup(opened, f, etchConfig);
+			return collectAtStartup(opened, f, etchConfig, config.isEtchGcRetainSuperseded());
 		}
 		return opened;
 	}
@@ -299,6 +300,12 @@ public class VenueServer {
 	 *         original when there was nothing to collect or the cycle failed
 	 */
 	public static EtchStore collectAtStartup(EtchStore store, File file, EtchConfig etchConfig) throws IOException {
+		return collectAtStartup(store, file, etchConfig, false);
+	}
+
+	/** Startup collection with optional retention of the superseded file. */
+	public static EtchStore collectAtStartup(EtchStore store, File file, EtchConfig etchConfig,
+			boolean retainSuperseded) throws IOException {
 		Ref<ACell> root = store.getRootRef();
 		if (root == null || root.getValue() == null) {
 			log.info("Etch GC at startup skipped: {} has no root data yet", file);
@@ -306,7 +313,10 @@ public class VenueServer {
 		}
 		long started = System.currentTimeMillis();
 		long before = store.getEtch().getDataLength();
+		File backup = null;
+		EtchStore collected;
 		try {
+			if (retainSuperseded) backup = store.validateGCBackup(checkpointFile(file));
 			store.startGC();
 			store.transferGC();
 			List<Hash> missing = store.verifyGC();
@@ -314,6 +324,7 @@ public class VenueServer {
 				throw new IOException(missing.size()
 					+ " value(s) reachable from the root are missing from the collected file");
 			}
+			collected = store.completeGC(backup);
 		} catch (IOException | RuntimeException e) {
 			// The original file is untouched: roll the cycle back and boot on it.
 			log.error("Etch GC at startup failed for {}; continuing on the uncollected store", file, e);
@@ -327,16 +338,22 @@ public class VenueServer {
 			}
 			return store;
 		}
-		EtchStore collected = store.completeGC();
 		long after = collected.getEtch().getDataLength();
 		store.close();     // deletes the superseded original, or defers while pinned
 		collected.close(); // clean-close the successor: a dirty v3 file is refused on open
+		if (backup != null) log.info("Etch GC startup checkpoint ready: {}; retained until operator removal", backup);
 		EtchStore reopened = (etchConfig != null) ? EtchStore.create(file, etchConfig) : EtchStore.create(file);
 		long reclaimed = Math.max(0, before - after);
 		log.info("Etch GC at startup: {} -> {} bytes ({}% reclaimed) in {} ms; store file {}",
 			before, after, (before > 0) ? (100 * reclaimed / before) : 0,
 			System.currentTimeMillis() - started, reopened.getFile());
 		return reopened;
+	}
+
+	/** Unique ordinary filename, outside Convex's GC recovery naming scheme. */
+	private static File checkpointFile(File source) {
+		return new File(source.getAbsoluteFile().getParentFile(), source.getName()
+			+ ".checkpoint-" + System.currentTimeMillis() + "-" + java.util.UUID.randomUUID() + ".etch");
 	}
 
 	/**
@@ -524,7 +541,7 @@ public class VenueServer {
 	 * @return Launched Venue Server instance
 	 */
 	public static VenueServer launch(AMap<AString,ACell> config) {
-		return launchInternal(config, null, null);
+		return launchInternal(config, null, null, null);
 	}
 
 	/**
@@ -542,7 +559,7 @@ public class VenueServer {
 	 * @return Launched Venue Server instance.
 	 */
 	public static VenueServer launch(AMap<AString,ACell> config, AStore store) {
-		return launchInternal(config, Objects.requireNonNull(store, "store"), null);
+		return launchInternal(config, Objects.requireNonNull(store, "store"), null, null);
 	}
 
 	/**
@@ -556,7 +573,7 @@ public class VenueServer {
 	 */
 	public static VenueServer launch(AMap<AString,ACell> config, AStore store,
 			List<Consumer<RoutesConfig>> extraRoutes) {
-		return launchInternal(config, Objects.requireNonNull(store, "store"), extraRoutes);
+		return launchInternal(config, Objects.requireNonNull(store, "store"), extraRoutes, null);
 	}
 
 	/**
@@ -582,11 +599,107 @@ public class VenueServer {
 	 * @return Launched Venue Server instance
 	 */
 	public static VenueServer launch(AMap<AString,ACell> config, List<Consumer<RoutesConfig>> extraRoutes) {
-		return launchInternal(config, null, extraRoutes);
+		return launchInternal(config, null, extraRoutes, null);
+	}
+
+	/**
+	 * Launches with an asynchronous pre-start hook. The hook receives a prepared
+	 * Engine with built-in and configured module adapters installed and published.
+	 * Configured secrets and available configured MCP tools are provisioned first.
+	 * It may bind a backend, register adapters, invoke installed operations, and
+	 * return a chain of asynchronous setup actions. Its stage must complete before recovery,
+	 * background workers and the HTTP listener. Null means no hook.
+	 * The full hook requirements are defined by {@link Engine#launch(Function)}:
+	 * return a non-null stage covering all prerequisites. Explicitly invoked Jobs
+	 * execute immediately; do not activate workers or wait for operations requiring
+	 * running workers or schedules from this hook. Application
+	 * adapters must defer autonomous workers to {@link covia.adapter.AAdapter#start()}.
+	 * Recovered work may execute as soon as the hook completes.
+	 *
+	 * <p>This method waits for readiness. Use {@link #launchAsync(AMap, List, Function)}
+	 * to compose readiness without blocking the calling thread.</p>
+	 */
+	public static VenueServer launch(AMap<AString,ACell> config,
+			List<Consumer<RoutesConfig>> extraRoutes,
+			Function<Engine, ? extends CompletionStage<?>> beforeStart) {
+		return launchInternal(config, null, extraRoutes, beforeStart);
+	}
+
+	/**
+	 * Pre-start-hook variant with the store ownership of {@link #launch(AMap, AStore)}.
+	 * @see #launch(AMap, List, Function)
+	 */
+	public static VenueServer launch(AMap<AString,ACell> config, AStore store,
+			List<Consumer<RoutesConfig>> extraRoutes,
+			Function<Engine, ? extends CompletionStage<?>> beforeStart) {
+		return launchInternal(config, Objects.requireNonNull(store, "store"), extraRoutes, beforeStart);
+	}
+
+	/** Launches on a virtual thread; completes when the venue is serving requests. */
+	public static CompletableFuture<VenueServer> launchAsync(AMap<AString,ACell> config) {
+		return launchAsync(config, List.of(), null);
+	}
+
+	/**
+	 * Asynchronously assembles and activates a venue. Actions that must precede
+	 * live work belong in {@code beforeStart}; continuations of the returned
+	 * future observe an already-live venue. Failure closes acquired resources
+	 * before exceptional completion. Cancellation releases a pending hook wait
+	 * and closes the partially assembled server after the current synchronous
+	 * startup step; it does not cancel the hook's own stage. The hook has the
+	 * requirements of {@link Engine#launch(Function)}. The future completes only
+	 * after Engine readiness and HTTP listener startup; cancellation does not
+	 * indicate cleanup has finished and does not roll back work already executed.
+	 */
+	public static CompletableFuture<VenueServer> launchAsync(AMap<AString,ACell> config,
+			List<Consumer<RoutesConfig>> extraRoutes,
+			Function<Engine, ? extends CompletionStage<?>> beforeStart) {
+		return launchAsyncInternal(config, null, extraRoutes, beforeStart);
+	}
+
+	/**
+	 * Async launch adopting a store, with the ownership of {@link #launch(AMap, AStore)}.
+	 * @see #launchAsync(AMap, List, Function)
+	 */
+	public static CompletableFuture<VenueServer> launchAsync(AMap<AString,ACell> config, AStore store,
+			List<Consumer<RoutesConfig>> extraRoutes,
+			Function<Engine, ? extends CompletionStage<?>> beforeStart) {
+		return launchAsyncInternal(config, Objects.requireNonNull(store, "store"), extraRoutes, beforeStart);
+	}
+
+	private static CompletableFuture<VenueServer> launchAsyncInternal(AMap<AString,ACell> config,
+			AStore adoptedStore, List<Consumer<RoutesConfig>> extraRoutes,
+			Function<Engine, ? extends CompletionStage<?>> beforeStart) {
+		CompletableFuture<VenueServer> ready = new CompletableFuture<>();
+		CompletableFuture<Void> cancelled = new CompletableFuture<>();
+		Thread startup = Thread.ofVirtual().name("venue-startup").unstarted(() -> {
+			try {
+				VenueServer server = launchInternal(config, adoptedStore, extraRoutes, beforeStart, cancelled);
+				// Cancellation can race the final listener start. Never orphan a server.
+				if (!ready.complete(server)) server.close();
+			} catch (Throwable failure) {
+				ready.completeExceptionally(failure);
+			}
+		});
+		ready.whenComplete((server, failure) -> {
+			// Never interrupt a store read/write: Java interruptible channels can
+			// close underneath Etch and leave the store dirty during cleanup.
+			if (ready.isCancelled()) cancelled.completeExceptionally(new CancellationException());
+		});
+		startup.start();
+		return ready;
 	}
 
 	private static VenueServer launchInternal(AMap<AString,ACell> config,
-			AStore adoptedStore, List<Consumer<RoutesConfig>> extraRoutes) {
+			AStore adoptedStore, List<Consumer<RoutesConfig>> extraRoutes,
+			Function<Engine, ? extends CompletionStage<?>> beforeStart) {
+		return launchInternal(config, adoptedStore, extraRoutes, beforeStart, null);
+	}
+
+	private static VenueServer launchInternal(AMap<AString,ACell> config,
+			AStore adoptedStore, List<Consumer<RoutesConfig>> extraRoutes,
+			Function<Engine, ? extends CompletionStage<?>> beforeStart,
+			CompletableFuture<?> cancelled) {
 		if (config==null) {
 			config=Maps.of(
 					Fields.NAME,"Test Venue",
@@ -604,35 +717,42 @@ public class VenueServer {
 		VenueServer server = null;
 		try {
 			server = new VenueServer(config, adoptedStore);
+			checkCancellation(cancelled);
 			if (extraRoutes != null) server.extraRouteRegistrars.addAll(extraRoutes);
 
 			// Complete every fallible bootstrap phase before publishing an HTTP
 			// listener. A caller must never observe a half-populated venue.
-			server.bootstrap();
+			server.bootstrap(beforeStart, cancelled);
+			checkCancellation(cancelled);
 			server.start();
 			return server;
 		} catch (RuntimeException | Error failure) {
-			if (server != null) server.closeResources(failure);
+			boolean interrupted = Thread.interrupted();
+			try {
+				if (server != null) server.closeResources(failure);
+			} finally {
+				if (interrupted) Thread.currentThread().interrupt();
+			}
 			throw failure;
 		}
 	}
 
+	private static void checkCancellation(CompletableFuture<?> cancelled) {
+		if (cancelled != null && cancelled.isDone()) throw new CancellationException();
+	}
+
 	/** Complete durable/runtime bootstrap before the server becomes reachable. */
-	private void bootstrap() {
-		Engine.addDemoAssets(engine);
-		engine.provisionConfiguredSecrets();
-		engine.jobs().recoverJobs();
-
-		// Reconcile agent-owned intake after generic Job recovery: clear stale
-		// executor markers/fences, remove intake for terminal Jobs, then wake only
-		// remaining durable queued work. Internal execution is never resumed.
-		if (engine.getAdapter("agent") instanceof covia.adapter.AgentAdapter agentAdapter) {
-			agentAdapter.wakeAgentsWithWork();
-		}
-
-		// HITL expiry is durable and must be re-armed before requests are served.
-		if (engine.getAdapter("hitl") instanceof covia.adapter.HITLAdapter hitlAdapter) {
-			hitlAdapter.rearmExpiries();
+	private void bootstrap(Function<Engine, ? extends CompletionStage<?>> beforeStart,
+			CompletableFuture<?> cancelled) {
+		try {
+			engine.launch(prepared -> {
+				checkCancellation(cancelled);
+				CompletableFuture<?> hook = beforeStart == null ? CompletableFuture.completedFuture(null)
+					: Objects.requireNonNull(beforeStart.apply(prepared), "beforeStart stage").toCompletableFuture();
+				return cancelled == null ? hook : CompletableFuture.anyOf(hook, cancelled);
+			});
+		} catch (IOException e) {
+			throw new java.io.UncheckedIOException(e);
 		}
 	}
 
@@ -655,8 +775,33 @@ public class VenueServer {
 		}
 
 		javalin=buildApp();
+		try {
+			engine.start();
+		} catch (IOException e) {
+			throw new java.io.UncheckedIOException(e);
+		}
 		start(javalin,port);
 		log.info("Venue server started on port: "+javalin.port());
+		// One line an operator can check a deployment's posture from (#537).
+		log.info("Posture: bind {}, public access {}, CORS {}, security headers {}, rate limit {}, trusted proxies {}",
+			(config.getBindAddress() != null) ? config.getBindAddress() : "0.0.0.0 (all interfaces)",
+			config.isPublicAccess() ? "on" : "off",
+			describe(config.getCorsPolicy()),
+			config.isSecurityHeaders() ? "on" : "off",
+			config.isRateLimitEnabled() ? "on" : "off",
+			config.getTrustedProxies());
+	}
+
+	private static String describe(Config.CorsPolicy cors) {
+		if (!cors.enabled()) return "off";
+		if (cors.anyOrigin()) return "* (any origin)";
+		StringBuilder sb = new StringBuilder();
+		if (cors.loopback()) sb.append("loopback");
+		for (String origin : cors.origins()) {
+			if (sb.length() > 0) sb.append(", ");
+			sb.append(origin);
+		}
+		return sb.length() > 0 ? sb.toString() : "none";
 	}
 	
 	/**
@@ -744,6 +889,7 @@ public class VenueServer {
 	}
 
 	private void addAPIRoutes(RoutesConfig routes) {
+		WebhookRoutes.addRoutes(routes, engine);
 		api.addRoutes(routes);
 		userApi.addRoutes(routes);
 		webApp.addRoutes(routes);
@@ -861,9 +1007,30 @@ public class VenueServer {
 		}
 	}
 
+	/** The browser hardening headers ({@link Config#isSecurityHeaders}); framing is denied on HTML responses only. */
+	private static void applySecurityHeaders(Context ctx) {
+		ctx.header("X-Content-Type-Options", "nosniff");
+		ctx.header("Referrer-Policy", "no-referrer");
+		String type = ctx.res().getContentType();
+		if (type != null && type.startsWith("text/html")) {
+			ctx.header("X-Frame-Options", "DENY");
+			ctx.header("Content-Security-Policy", "frame-ancestors 'none'");
+		}
+	}
+
+	/** Request ids and the optional access log (covia#538). */
+	private RequestLog requestLog;
+
 	private Javalin buildApp() {
+		String venueName = (this.config.getHostname() != null)
+			? this.config.getHostname() : String.valueOf(engine.getDIDString());
+		requestLog = new RequestLog(this.config.getTrustedProxies(), venueName);
+		final boolean logAccess = this.config.isAccessLogging();
 		Javalin app = Javalin.create(config -> {
 			addOpenApiPlugins(config);
+			// Runs after every request whatever its outcome: writes the access
+			// line when logging.access is on, and always clears the request id.
+			config.requestLogger.http((ctx, ms) -> requestLog.end(ctx, ms, logAccess));
 
 			config.staticFiles.add(staticFiles -> {
 				staticFiles.hostedPath = "/";
@@ -926,16 +1093,21 @@ public class VenueServer {
 		final Config.CorsPolicy corsPolicy = this.config.getCorsPolicy();
 		final boolean allowPrivateNetwork = this.config.isAllowPrivateNetwork();
 
+		// First, so every later handler and log line sees the request's id.
+		routes.before(requestLog::begin);
+
 		routes.exception(HttpResponseException.class,
 			(e, ctx) -> renderHttpError(e, ctx));
 
 		routes.exception(Exception.class, (e, ctx) -> {
 			log.error("Unhandled exception in {} {}", ctx.method(), ctx.path(), e);
-			String message = "Unexpected error: " + e.getClass().getSimpleName();
-			if (e.getMessage() != null && !e.getMessage().isBlank()) {
-				message += ": " + e.getMessage();
-			}
-			renderHttpError(new InternalServerErrorResponse(message), ctx);
+			// A generic title with the exception under details: the class and
+			// message stay visible by design, because operators debug from the
+			// response as much as from the log (#540).
+			String exception = e.getClass().getSimpleName();
+			if (e.getMessage() != null && !e.getMessage().isBlank()) exception += ": " + e.getMessage();
+			renderHttpError(new InternalServerErrorResponse("Internal server error",
+				Map.of("exception", exception)), ctx);
 		});
 
 		// One owner for CORS admission and response headers. The old combination
@@ -944,11 +1116,21 @@ public class VenueServer {
 		// lets the loopback sentinel match literal hosts on any port without DNS.
 		routes.before(ctx -> applyCorsPolicy(ctx, corsPolicy, allowPrivateNetwork));
 
+		// Browser hardening on every response (#537): no MIME sniffing, no
+		// referrer leakage, and the venue's own HTML pages cannot be framed.
+		// HSTS is the TLS terminator's to add — only it knows the origin is https.
+		if (this.config.isSecurityHeaders()) {
+			routes.after(VenueServer::applySecurityHeaders);
+		}
+
 		// Native protocol routes and explicitly opted-in embedder routes sync
-		// lattice state after handling. Matching by endpoint role prevents an
-		// unrelated /api/* route from acquiring Covia persistence semantics.
+		// the connected lattice root after handling. Matching by endpoint role
+		// prevents an unrelated /api/* route from acquiring Covia persistence semantics.
 		routes.afterMatched(ctx -> {
-			if (VenueRouteFeature.syncsLattice(ctx.routeRoles())) {
+			// A handler unwinding across shutdown (an SSE stream ended by close) must
+			// not sync a store the same close sequence is releasing; close takes
+			// the final flush.
+			if (!closed.get() && VenueRouteFeature.syncsLattice(ctx.routeRoles())) {
 				engine.syncState();
 			}
 		});
@@ -970,6 +1152,9 @@ public class VenueServer {
 			});
 			log.info("Rate limiting enabled: {} req/s, burst {} per caller",
 				(long) config.getRateLimitRps(), (long) config.getRateLimitBurst());
+			log.info("Authentication throttle: {} failures/min (burst {}) and {} in flight per client address; "
+				+ "trusted proxies: {}", (long) config.getAuthFailuresPerMinute(),
+				(long) config.getAuthFailureBurst(), config.getAuthConcurrency(), config.getTrustedProxies());
 		}
 
 		addLoginRoutes(routes);
@@ -1031,7 +1216,7 @@ public class VenueServer {
 			// advertise '*'. Specific policies cannot choose a value without Origin.
 			if (policy.anyOrigin()) {
 				ctx.header("Access-Control-Allow-Origin", "*");
-				ctx.header("Access-Control-Expose-Headers", "X-Covia-User");
+				ctx.header("Access-Control-Expose-Headers", "ETag, Location, Retry-After, X-Request-Id, Mcp-Session-Id");
 				if (allowPrivateNetwork) {
 					ctx.header("Access-Control-Allow-Private-Network", "true");
 				}
@@ -1047,7 +1232,7 @@ public class VenueServer {
 		}
 
 		ctx.header("Access-Control-Allow-Origin", allowed);
-		ctx.header("Access-Control-Expose-Headers", "X-Covia-User");
+		ctx.header("Access-Control-Expose-Headers", "ETag, Location, Retry-After, X-Request-Id, Mcp-Session-Id");
 		if (!"*".equals(allowed)) ctx.header("Vary", "Origin");
 		// Private Network Access lets a public web origin reach a venue on a
 		// private/loopback address from the browser. Off by default and emitted
@@ -1064,7 +1249,7 @@ public class VenueServer {
 			ctx.status(204);
 			ctx.removeHeader("Content-type");
 			ctx.header("Access-Control-Allow-Headers",
-				"content-type, authorization, x-covia-user");
+				"content-type, authorization, x-covia-ucans, mcp-session-id");
 			ctx.header("Access-Control-Allow-Methods", "GET,HEAD,PUT,PATCH,POST,DELETE");
 			ctx.header("Vary", "Origin, Access-Control-Request-Headers");
 			ctx.skipRemainingHandlers();
@@ -1082,7 +1267,8 @@ public class VenueServer {
 	private void enforceRateLimit(Context ctx) {
 		if ("OPTIONS".equalsIgnoreCase(ctx.method().toString())) return;
 		AString did = AuthMiddleware.getVenueUserDID(ctx);
-		String key = (did != null) ? did.toString() : "ip:" + ctx.ip();
+		String key = (did != null) ? did.toString()
+			: "ip:" + config.getTrustedProxies().clientIp(ctx.ip(), ctx.header("X-Forwarded-For"));
 		if (!rateLimiter.tryAcquire(key)) {
 			long retry = rateLimiter.retryAfterSeconds(key);
 			ctx.header("Retry-After", Long.toString(retry));
@@ -1176,9 +1362,9 @@ public class VenueServer {
 	 * Full shutdown: stops HTTP server, drains the engine's persistence sweep
 	 * and runs a final flush, then closes NodeServer and store.
 	 *
-	 * <p>The engine.close() must run BEFORE nodeServer.close() so the
-	 * venueState fork's writes are merged into the root before the
-	 * propagator's shutdown drain reads from it. See
+	 * <p>The engine.close() must run BEFORE nodeServer.close() so its final
+	 * root publication and durability barrier complete while the host remains
+	 * available. See
 	 * {@code venue/docs/PERSISTENCE.md} §5.3.</p>
 	 */
 	/** The MCP endpoint, or null when the venue has no {@code mcp} config block. */
@@ -1281,8 +1467,26 @@ public class VenueServer {
 
 		@Override
 		public Result collect() throws IOException {
+			return collect(null);
+		}
+
+		@Override
+		public Result collect(String backupFile) throws IOException {
+			return collect(backupFile, null);
+		}
+
+		@Override
+		public Result collect(String backupFile, Boolean retainSuperseded) throws IOException {
 			EtchStore etch = etchStore();
 			File file = etch.getFile();
+			boolean retain = retainSuperseded == null ? config.isEtchGcRetainSuperseded() : retainSuperseded;
+			if (backupFile != null && Boolean.FALSE.equals(retainSuperseded)) {
+				throw new IllegalArgumentException(covia.adapter.VenueAdapter.BACKUP_RETENTION_DISABLED);
+			}
+			// Reject occupied/reserved paths before starting a cycle. Convex
+			// validates again and creates the link without replacing anything.
+			File requested = backupFile == null ? (retain ? checkpointFile(file) : null) : new File(backupFile);
+			File backup = requested == null ? null : etch.validateGCBackup(requested);
 			synchronized (cycleLock) {
 				if (collectedStore != null) {
 					throw new IllegalStateException("The store was already collected in this process;"
@@ -1303,6 +1507,10 @@ public class VenueServer {
 			long started = System.currentTimeMillis();
 			long before = etch.getEtch().getDataLength();
 			try {
+				// Include acknowledged in-memory venue state in the pre-cycle root.
+				// Subsequent concurrent writes belong to the collected live store.
+				engine.flush();
+				before = etch.getEtch().getDataLength();
 				etch.startGC();
 				etch.transferGC();
 				List<Hash> missing = etch.verifyGC();
@@ -1310,13 +1518,14 @@ public class VenueServer {
 					throw new IOException(missing.size()
 						+ " value(s) reachable from the root are missing from the collected file");
 				}
-				EtchStore successor = etch.completeGC();
+				EtchStore successor = etch.completeGC(backup);
 				collectedStore = successor; // closed after the old handle in close()
 				long after = successor.getEtch().getDataLength();
 				long elapsed = System.currentTimeMillis() - started;
-				log.info("Etch GC online: {} -> {} bytes in {} ms; now writing to {} (superseded file reclaimed at shutdown)",
-					before, after, elapsed, successor.getFile());
-				return new Result(before, after, elapsed, file.getPath(), successor.getFile().getPath());
+				log.info("Etch GC online: {} -> {} bytes in {} ms; now writing to {}; retained checkpoint: {}",
+					before, after, elapsed, successor.getFile(), backup);
+				return new Result(before, after, elapsed, file.getPath(), successor.getFile().getPath(),
+					backup == null ? null : backup.getPath());
 			} catch (IOException | RuntimeException e) {
 				// The original file is untouched: roll the cycle back (unless a
 				// cancel already is) so the store is exactly as before

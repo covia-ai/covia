@@ -1,6 +1,6 @@
 {
 	"name": "LLM Agent Chat",
-	"description": "LLM-backed transition function for agents. The default and recommended choice for plain persona-style chat agents (customer support, character agents, summarisers, etc.) — for hierarchical goal decomposition with subgoal/complete/fail/compact tools, use v/ops/goaltree/chat instead. Maintains conversation history in agent state (state.config for llmOperation/model/systemPrompt/url, state.history for conversation). Invokes the configured level 3 grid operation for LLM calls — credentials are resolved by the level 3 operation from the user's secret store.",
+	"description": "LLM-backed transition function for agents. The default and recommended choice for plain persona-style chat agents (customer support, character agents, summarisers, etc.) — for hierarchical goal decomposition with subgoal/complete/fail/compact tools, use v/ops/goaltree/chat instead. Conversation history lives on the agent's sessions; configuration (llmOperation, model, systemPrompt, url) arrives via 'config'. Invokes the configured level 3 grid operation for LLM calls — credentials are resolved by the level 3 operation from the user's secret store.",
 	"dateCreated": "2026-02-27T00:00:00Z",
 	"operation": {
 		"adapter": "llmagent:chat",
@@ -10,15 +10,23 @@
 			"properties": {
 				"agentId": { "type": "string", "description": "Agent identifier" },
 				"state": { "description": "Previous runtime state (null on first run) — loads and other runtime data. Configuration (llmOperation, model, systemPrompt) arrives separately via 'config' (#144)." },
-				"messages": { "type": "array", "description": "Inbox messages to process as user turns" }
+				"messages": { "type": "array", "description": "Inbox messages to process as user turns" },
+				"config": { "type": "object", "description": "Agent config at fire time: llmOperation, model, systemPrompt, tools, caps (#144)" },
+				"session": { "description": "The session this cycle runs in" },
+				"newInput": { "description": "Continuation input delivered to the picked task since the last cycle" },
+				"jobId": { "type": "string", "description": "The cycle's job id, for live timeline events" }
 			},
 			"required": ["agentId"]
 		},
 		"output": {
 			"type": "object",
 			"properties": {
-				"state": { "type": "object", "description": "Updated conversation state with appended history" },
-				"result": { "type": "object", "description": "Contains 'response' with the assistant's reply text" }
+				"state": { "type": "object", "description": "Updated agent state, applied as a change against the fire-time snapshot" },
+				"response": { "type": "string", "description": "The assistant's reply text" },
+				"cycle": { "type": "object", "description": "The cycle record appended to the agent timeline" },
+				"tokens": { "type": "object", "description": "Token usage of the cycle, when the model reported it" },
+				"turns": { "type": "array", "description": "Conversation turns the harness appended live, when any" },
+				"frames": { "description": "Session frame stack after the cycle, when the harness owns frames" }
 			}
 		}
 	}

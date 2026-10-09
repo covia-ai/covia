@@ -32,7 +32,7 @@ agent_create  agentId=TestBot  config=[
   "v/agents/templates/worker",
   {
     "llmOperation": "v/ops/langchain/anthropic",
-    "model": "claude-sonnet-5",
+    "model": "claude-sonnet-5-5",
     "systemPrompt": "You are TestBot. ...",
     "caps": [{"with": "w/output/", "can": "crud/write"}, {"with": "w/", "can": "crud/read"}]
   }

@@ -24,7 +24,7 @@ Every inference is one call with one input:
 
 ```json
 {
-  "model": "claude-sonnet-5",
+  "model": "claude-sonnet-5-5",
   "messages": [ {"role": "system", "content": "..."}, ... ],
   "tools": [ ... ]
 }

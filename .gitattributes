@@ -1,0 +1,3 @@
+# Content fixtures whose sha256 is declared in their metadata: checked out byte-for-byte on every platform.
+venue/src/main/resources/asset-examples/*.csv -text
+venue/src/main/resources/asset-examples/*.txt -text

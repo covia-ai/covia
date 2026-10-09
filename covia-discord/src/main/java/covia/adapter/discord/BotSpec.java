@@ -14,11 +14,12 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.venue.Engine;
+import covia.adapter.messaging.MessagingBotSpec;
 
 /** Immutable and validated configuration for one Discord bot. */
 public record BotSpec(String name, String tokenRef, String userRef, String agent,
 		String operation, ACell reply, Set<String> allowIds, Set<String> allowNames,
-		boolean open, boolean mentionOnly, String greeting) {
+		boolean open, boolean mentionOnly, String greeting) implements MessagingBotSpec {
 	static final AString K_TOKEN=Strings.intern("token"), K_USER=Strings.intern("user"),
 		K_AGENT=Strings.intern("agent"), K_OPERATION=Strings.intern("operation"),
 		K_REPLY=Strings.intern("reply"), K_ALLOW=Strings.intern("allow"),
@@ -38,14 +39,12 @@ public record BotSpec(String name, String tokenRef, String userRef, String agent
 			"bot '"+name+"' acts as public but public access is disabled");
 		return Strings.create(engine.getDIDString()+":public");
 	}
-	public boolean routesToAgent(){return agent!=null;}
-	public String target(){return routesToAgent()?"agent "+agent:"operation "+operation;}
-	public boolean silent(){return CVMBool.FALSE.equals(reply);}
-	public String fixedReply(){return reply instanceof AString s?s.toString():null;}
-	public boolean allows(String id,String username,String globalName){
+	/** Allow-list check: numeric ids and unique Discord usernames only. The global
+	 *  display name is user-settable and non-unique, so it never admits anyone. */
+	public boolean allows(String id,String username){
 		if(open) return true;
 		if(id!=null && allowIds.contains(id)) return true;
-		return matches(username)||matches(globalName);
+		return matches(username);
 	}
 	private boolean matches(String name){return name!=null&&allowNames.contains(name.toLowerCase(Locale.ROOT));}
 

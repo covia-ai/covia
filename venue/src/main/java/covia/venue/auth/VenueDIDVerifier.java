@@ -10,6 +10,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -54,6 +55,9 @@ public final class VenueDIDVerifier implements DIDVerifier {
 	 *  stale a rotated remote key set can be at this venue. */
 	private static final long REMOTE_CACHE_TTL_MILLIS = 300_000;
 	private static final long MISMATCH_REFRESH_COOLDOWN_MILLIS = 30_000;
+	/** Failed resolutions are remembered this long, so a stream of bad tokens
+	 *  for one unresolvable did:web costs one fetch, not one per token (covia#539). */
+	private static final long NEGATIVE_CACHE_TTL_MILLIS = 60_000;
 
 	private static final Duration FETCH_TIMEOUT = Duration.ofSeconds(5);
 	private static final HttpClient HTTP = HttpClient.newBuilder()
@@ -65,7 +69,10 @@ public final class VenueDIDVerifier implements DIDVerifier {
 		new ConcurrentHashMap<>();
 	private final ConcurrentHashMap<String, CachedKeys> remoteCache = new ConcurrentHashMap<>();
 	private final ConcurrentHashMap<String, Long> mismatchRefreshes = new ConcurrentHashMap<>();
+	/** Outbound document fetches attempted — for tests and metrics. */
+	final AtomicLong remoteFetches = new AtomicLong();
 
+	/** A resolution outcome: the document's keys, or no keys for a failed resolution remembered for a while. */
 	private record CachedKeys(List<AccountKey> keys, long expiresAtMillis) {}
 
 	public VenueDIDVerifier(Engine engine) {
@@ -133,7 +140,7 @@ public final class VenueDIDVerifier implements DIDVerifier {
 		if (!value.startsWith("did:web:")) return false;
 		long now = System.currentTimeMillis();
 		CachedKeys before = remoteCache.get(value);
-		boolean usedFreshCache = before != null && now < before.expiresAtMillis();
+		boolean usedFreshCache = before != null && now < before.expiresAtMillis() && !before.keys().isEmpty();
 		List<AccountKey> keys = resolveRemoteKeys(value, false);
 		if (keys == null) return false;
 		for (AccountKey key : keys) {
@@ -158,31 +165,51 @@ public final class VenueDIDVerifier implements DIDVerifier {
 		return false;
 	}
 
-	/** Resolves a remote did:web document's verification keys, cached on success. */
+	/**
+	 * Resolves a remote did:web document's verification keys: cached on success
+	 * for {@link #REMOTE_CACHE_TTL_MILLIS}, and a failure is remembered for
+	 * {@link #NEGATIVE_CACHE_TTL_MILLIS} so repeated bad tokens for one
+	 * unresolvable DID do not each cost an outbound fetch. Null when the DID
+	 * has no usable keys.
+	 */
 	private List<AccountKey> resolveRemoteKeys(String did, boolean bypassCache) {
 		CachedKeys cached = remoteCache.get(did);
 		long now = System.currentTimeMillis();
-		if (!bypassCache && cached != null && now < cached.expiresAtMillis()) return cached.keys();
+		if (!bypassCache && cached != null && now < cached.expiresAtMillis()) {
+			return cached.keys().isEmpty() ? null : cached.keys();
+		}
 
 		String url = didWebDocumentURL(did);
-		if (url == null) return null;
+		if (url == null) return null;   // not resolvable by shape: nothing to fetch, nothing to remember
+		remoteFetches.incrementAndGet();
 		try {
 			HttpResponse<String> resp = HTTP.send(
 				HttpRequest.newBuilder(URI.create(url)).timeout(FETCH_TIMEOUT).GET().build(),
 				HttpResponse.BodyHandlers.ofString());
-			if (resp.statusCode() != 200) return null;
+			if (resp.statusCode() != 200) return unresolved(did, cached, now);
 			ACell doc = JSON.parse(resp.body());
 			// Resolution integrity: the document must be about the DID we asked for.
 			AString id = RT.ensureString(RT.getIn(doc, "id"));
-			if (id == null || !did.equals(id.toString())) return null;
+			if (id == null || !did.equals(id.toString())) return unresolved(did, cached, now);
 			List<AccountKey> keys = authorisedVerificationKeys(doc);
-			if (keys.isEmpty()) return null;
+			if (keys.isEmpty()) return unresolved(did, cached, now);
 			remoteCache.put(did, new CachedKeys(List.copyOf(keys), now + REMOTE_CACHE_TTL_MILLIS));
 			return keys;
 		} catch (Exception e) {
 			log.debug("did:web resolution failed for {}: {}", did, e.getMessage());
-			return null;
+			return unresolved(did, cached, now);
 		}
+	}
+
+	/**
+	 * Remember a failed resolution — unless a still-valid positive entry exists,
+	 * since a refresh that failed must not discard the keys already known.
+	 */
+	private List<AccountKey> unresolved(String did, CachedKeys cached, long now) {
+		if (cached == null || cached.keys().isEmpty() || now >= cached.expiresAtMillis()) {
+			remoteCache.put(did, new CachedKeys(List.of(), now + NEGATIVE_CACHE_TTL_MILLIS));
+		}
+		return null;
 	}
 
 	/** Extracts only verification methods authorised for a signing purpose. */

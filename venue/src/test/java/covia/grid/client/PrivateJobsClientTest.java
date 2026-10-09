@@ -80,14 +80,6 @@ public class PrivateJobsClientTest {
 	}
 
 	@Test
-	public void testLegacyPrivateModeDirectsCallerToRun() {
-		VenueHTTP client = freshClient();
-		assertThrows(UnsupportedOperationException.class, () -> client.setPrivate(true));
-		client.setPrivate(false);
-		assertDoesNotThrow(() -> client.invoke("v/test/ops/echo", Maps.empty()).join());
-	}
-
-	@Test
 	public void testVerifyUcan() throws Exception {
 		VenueHTTP client = freshClient();
 

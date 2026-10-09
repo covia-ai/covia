@@ -21,7 +21,6 @@ import convex.core.data.MapEntry;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
-import convex.core.util.JSON;
 import convex.core.util.ThreadUtils;
 import convex.core.util.Utils;
 import covia.api.Abilities;
@@ -150,8 +149,6 @@ public class Orchestrator extends AAdapter {
 			scanSpec(new HashSet<Integer>(), resultSpec, n, Vectors.empty(), false);
 		}
 
-		private static final boolean DEBUG_ORCH=false;
-		
 		@Override
 		public void run() {
 			try {
@@ -176,7 +173,6 @@ public class Orchestrator extends AAdapter {
 					
 					for (SubTask task:ready) {
 						ThreadUtils.runVirtual("subtask "+task.stepNum,task);
-						if (DEBUG_ORCH) System.err.println("Started subtask "+task.stepNum);
 						todo.remove(task);
 					}
 					
@@ -194,7 +190,6 @@ public class Orchestrator extends AAdapter {
 							if (job.isFinished()) return; // this includes CANCELLED, either way we're all done :-)
 							continue;
 						}
-						if (DEBUG_ORCH) System.out.println("Step completed "+JSON.printPretty(t.statusData));
 						newlyComplete.add(t);
 						completionQueue.drainTo(newlyComplete);
 					}
@@ -531,7 +526,6 @@ public class Orchestrator extends AAdapter {
 						runForeach();
 					}
 				} catch (Exception e) {
-					if (DEBUG_ORCH) System.err.println(e);
 					recordFailure(describeFailure(e));
 				} finally {
 					completionQueue.add(this);

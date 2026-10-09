@@ -31,6 +31,7 @@ public final class Abilities {
 	/** Add an operation outside an agent's already declared tool surface. */
 	public static final AString TOOL_LOAD     = Strings.intern("tool/load");
 	public static final AString USER_CREATE   = Strings.intern("user/create");
+	public static final AString USER_DELETE   = Strings.intern("user/delete");
 	public static final AString USER_READ     = Strings.intern("user/read");
 	/** Authorise an explicit sudo request into a user's namespace. Scoped to the
 	 *  target user DID itself; grants no operation or action authority. */

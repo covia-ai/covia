@@ -21,6 +21,7 @@ import java.io.IOException;
  * next start.</p>
  */
 public interface StoreControl {
+	String BACKUP_UNSUPPORTED = "Store checkpoints are unavailable on this host";
 
 	/** Where the store's collection stands. */
 	record Status(String file, long bytes, boolean inProgress, boolean sweepComplete,
@@ -28,7 +29,11 @@ public interface StoreControl {
 
 	/** Outcome of a completed online cycle. */
 	record Result(long bytesBefore, long bytesAfter, long elapsedMillis, String file,
-			String collectedFile) {}
+			String collectedFile, String backupFile) {
+		public Result(long bytesBefore, long bytesAfter, long elapsedMillis, String file, String collectedFile) {
+			this(bytesBefore, bytesAfter, elapsedMillis, file, collectedFile, null);
+		}
+	}
 
 	/**
 	 * Reports the store's collection state.
@@ -48,6 +53,20 @@ public interface StoreControl {
 	 *         original file remains authoritative
 	 */
 	Result collect() throws IOException;
+
+	/** Retains the pre-cycle store at a new path on the same filesystem.
+	 * The checkpoint is ready to open/copy only after the original store closes.
+	 * Existing embedded hosts must opt in explicitly. */
+	default Result collect(String backupFile) throws IOException {
+		if (backupFile != null) throw new UnsupportedOperationException(BACKUP_UNSUPPORTED);
+		return collect();
+	}
+
+	/** Null retention inherits host policy; false opts out; true chooses a fresh backup path. */
+	default Result collect(String backupFile, Boolean retainSuperseded) throws IOException {
+		if (Boolean.TRUE.equals(retainSuperseded)) throw new UnsupportedOperationException(BACKUP_UNSUPPORTED);
+		return collect(backupFile);
+	}
 
 	/** Cancels a running cycle, rolling the store back to its original file; a no-op when none is running. */
 	void cancel() throws IOException;

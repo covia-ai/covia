@@ -174,6 +174,29 @@ public class A2ATest {
 	}
 
 	// ============================================================
+	// SendMessage — continuation (taskId set)
+	// ============================================================
+
+	/** A continuation's text reaches the multi-turn adapter in the A2A
+	 *  {role, parts} shape, so "done" completes the chat task (#507). */
+	@Test
+	public void sendMessage_continuationDrivesMultiTurnTaskToCompletion() throws Exception {
+		Task created = extractTask(rpcCall("req-5", "SendMessage",
+				new MessageSendParams(userMessage("hello"), null, null)));
+		assertEquals(TaskState.TASK_STATE_INPUT_REQUIRED, created.status().state());
+
+		Task echoed = extractTask(rpcCall("req-5a", "SendMessage",
+				new MessageSendParams(continuation(created, "more"), null, null)));
+		assertEquals(created.id(), echoed.id());
+		assertEquals(TaskState.TASK_STATE_INPUT_REQUIRED, echoed.status().state());
+
+		Task finished = extractTask(rpcCall("req-5b", "SendMessage",
+				new MessageSendParams(continuation(created, "done"), null, null)));
+		assertEquals(created.id(), finished.id());
+		assertEquals(TaskState.TASK_STATE_COMPLETED, finished.status().state());
+	}
+
+	// ============================================================
 	// CancelTask
 	// ============================================================
 
@@ -250,6 +273,16 @@ public class A2ATest {
 				.role(Message.Role.ROLE_USER)
 				.parts(List.<Part<?>>of(new TextPart(text, null)))
 				.messageId("msg-" + UUID.randomUUID())
+				.build();
+	}
+
+	private Message continuation(Task task, String text) {
+		return Message.builder()
+				.role(Message.Role.ROLE_USER)
+				.parts(List.<Part<?>>of(new TextPart(text, null)))
+				.messageId("msg-" + UUID.randomUUID())
+				.taskId(task.id())
+				.contextId(task.contextId())
 				.build();
 	}
 

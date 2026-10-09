@@ -72,6 +72,17 @@ public final class RateLimiter {
 		}
 	}
 
+	/** Whether {@code key} has no token available right now — a peek, consuming
+	 *  nothing. A key never seen is not exhausted. */
+	public boolean isExhausted(String key) {
+		Bucket b = buckets.get(key);
+		if (b == null) return false;
+		synchronized (b) {
+			refill(b, clock.getAsLong());
+			return b.tokens < 1.0;
+		}
+	}
+
 	/** Whole seconds until at least one token is available for {@code key}
 	 *  (minimum 1 when currently exhausted), suitable for a {@code Retry-After}
 	 *  header. Returns 0 if a token is already available. */

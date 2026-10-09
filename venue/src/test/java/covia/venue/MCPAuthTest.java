@@ -305,6 +305,20 @@ public class MCPAuthTest {
 	}
 
 	@Test
+	void accountDeletionNeedsVenueGrantOverMcp() throws Exception {
+		String token = namedToken(namedKey, namedDid, server);
+		assertToolError(toolCall(baseUrl, token, "user_delete", Maps.of(Fields.DID, namedDid)));
+		AString target = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
+		server.getEngine().getVenueState().users().create(target);
+		assertToolError(toolCall(baseUrl, token, "user_delete", Maps.of(Fields.DID, target)));
+		String grant = delegation(server, namedDid, server.getEngine().getDIDString() + "/users",
+			covia.api.Abilities.USER_DELETE);
+		assertToolSuccess(toolCall(baseUrl, token, "user_delete", Maps.of(Fields.DID, target,
+			Fields.UCANS, Vectors.of(grant))));
+		assertTrue(server.getEngine().getVenueState().users().isDeleted(target));
+	}
+
+	@Test
 	void mcpSecretCallsDoNotPersistBearerOrPlaintext() throws Exception {
 		String token = namedToken(namedKey, namedDid, server);
 		String plaintext = "mcp-secret-" + System.nanoTime();

@@ -1,0 +1,18 @@
+{
+	"name": "projects",
+	"description": "Work on a project tree as principal or assignee: nodes with briefs, deliverables, deadlines, budgets, tolerances. Load before touching w/projects/.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Projects\nA project is a long-running objective kept as a TREE (a work breakdown structure) at `w/projects/<pid>` in the root principal's workspace. Children live under `nodes/<nid>`, so a grandchild is `w/projects/<pid>/nodes/<a>/nodes/<b>`. Every node has the same shape; the root differs only in having no parent. Node ids are slugs (`[a-z][a-z0-9-]*`).\n\nRoles are per node:\n- `meta.principal` — accountable from above. Authors the brief, deliverables, targets and tolerances; assigns; accepts deliverables; answers exceptions; closes. The root principal is the human (or agent) who created the project.\n- `meta.assignee` — the agent (`<owner>/g/<id>`) doing the node. Plans, executes, decomposes into children, commissions them, reports, delivers, raises exceptions.\n- The assignee of a node IS the principal of its children. A node with no assignee is executed by the nearest assigned ancestor as one of its own plan items.\n\nNode record: `meta {id, title, principal, assignee, status, parent, order}`, `brief {purpose, objectives, scope{in,out}, background?, constraints, assumptions}`, `targets {deadline, budget{tokens, cost{amount,currency}}}`, `tolerances {time, cost{percent}, scope, quality, risk}`, `products[]`, `cadence {checkpoint, highlight}`, `team[]`, `dependsOn[]`, `plan`, `registers {issues, risks, decisions}`, `spend`, `rollup`, `session`, `log[]`. Instants are epoch millis; durations are millis.\n\nStatus per node: `PENDING` → `ACTIVE` → `DELIVERED` → `CLOSED` (`meta.outcome` COMPLETE or ABANDONED), with `EXCEPTION` (an exception is open with the principal) and `PAUSED` (no work). A node cannot close COMPLETE while a child is open; abandoning a node abandons its open children; pausing applies to the subtree; CLOSED is never reopened.\n\nAuthorship — never write a field you do not own:\n- Principal-owned: brief, targets, tolerances, products (except status), cadence, team, dependsOn, meta.assignee, meta.order.\n- Assignee-owned: plan, registers, product status up to DELIVERED, and the existence and principal-owned fields of CHILD nodes.\n- Framework-owned: meta.status/principal/parent, spend, rollup, session, log. Dedicated project operations maintain these when they are advertised in your palette; if you have only the lattice operations, keep them yourself, honestly — append log entries `{ts, kind, by, ...}`, never rewrite history, never fabricate spend.\n\nFinding work: list `w/projects` and read each node's `meta`; you are party to a node when `meta.principal` or `meta.assignee` is you. Read `rollup` before reading children — it summarises the subtree. Load the sub-skills for the activity at hand: briefing (defining a node), planning (plan and decomposition), delegation (commissioning children), reporting (checkpoints and exceptions), delivery (deliverables and acceptance), monitoring (tracking a tree)."
+	},
+	"skill": {
+		"tools": [
+			"v/ops/covia/read",
+			"v/ops/covia/list",
+			"v/ops/covia/inspect"
+		],
+		"skillsets": [
+			"v/skills/projects"
+		]
+	}
+}

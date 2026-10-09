@@ -11,7 +11,9 @@ import java.time.Duration;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,6 +21,7 @@ import org.slf4j.LoggerFactory;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.auth.jwt.JWT;
@@ -48,6 +51,7 @@ public class LoginProviders {
 
 	private final Engine engine;
 	private final Map<String, OAuthConfig> providers;
+	private final Set<String> redirectOrigins;
 
 	private static final HttpClient client = HttpClient.newBuilder()
 		.connectTimeout(Duration.ofSeconds(10))
@@ -57,7 +61,7 @@ public class LoginProviders {
 	 * Create LoginProviders from auth config.
 	 * Reads the "oauth" sub-section and registers configured providers.
 	 * The base URL for redirect URIs is derived from the venue config
-	 * via {@link Config#getBaseUrl(AMap)}.
+	 * via {@link Config#getBaseUrl()}.
 	 *
 	 * @param engine The venue engine
 	 * @param authConfig The "auth" config section, or null if not configured
@@ -65,6 +69,7 @@ public class LoginProviders {
 	public LoginProviders(Engine engine, AMap<AString, ACell> authConfig) {
 		this.engine = engine;
 		this.providers = new HashMap<>();
+		this.redirectOrigins = redirectOrigins(engine.config().getBaseUrl(), authConfig);
 
 		if (authConfig == null) return;
 
@@ -85,11 +90,43 @@ public class LoginProviders {
 
 		AString clientId = RT.ensureString(providerConfig.get(Config.CLIENT_ID));
 		AString clientSecret = RT.ensureString(providerConfig.get(Config.CLIENT_SECRET));
+		// A half-filled block never reaches here: Config.validateAuth rejects
+		// clientId-without-clientSecret (and vice versa) at construction, so
+		// this is the both-absent case — the provider is simply not configured.
 		if (clientId == null || clientSecret == null) return;
 
 		OAuthConfig cfg = factory.create(clientId.toString(), clientSecret.toString(), baseUrl);
 		providers.put(name, cfg);
-		log.info("Registered OAuth provider: {}", name);
+		log.info("Registered OAuth provider: {}{}", name,
+			isSecretRef(cfg.clientSecret) ? " (clientSecret via " + cfg.clientSecret + ")" : "");
+	}
+
+	/** Whether a configured clientSecret is an {@code s/NAME} store reference rather than a literal. */
+	private static boolean isSecretRef(String value) {
+		return value != null && (value.startsWith("s/") || value.startsWith("/s/"));
+	}
+
+	/**
+	 * The provider's client secret, resolving an {@code s/NAME} reference against
+	 * the venue's own secret store.
+	 *
+	 * <p>{@code adapters.oauth} requires the reference form and rejects literals
+	 * outright; login config predates that and is read literally, so a deployment
+	 * had to keep the plaintext secret in its config file. Both forms are accepted
+	 * here — the reference is preferred, the literal stays working — and resolution
+	 * is deferred to the token exchange because the secret store is not populated
+	 * when providers are registered at startup.
+	 */
+	String resolveClientSecret(OAuthConfig provider) {
+		String configured = provider.clientSecret;
+		if (!isSecretRef(configured)) return configured;
+
+		String secret = engine.resolveSecret(configured, engine.venueContext());
+		if (secret == null) {
+			throw new IllegalStateException("auth.oauth." + provider.name + ".clientSecret references "
+				+ configured + ", which is not set in the venue's secret store");
+		}
+		return secret;
 	}
 
 	@FunctionalInterface
@@ -119,6 +156,11 @@ public class LoginProviders {
 
 		String redirectUri = ctx.queryParam("redirect_uri");
 		if (redirectUri != null) {
+			String refused = checkRedirect(redirectUri);
+			if (refused != null) {
+				ctx.status(400).result(refused);
+				return;
+			}
 			// Encode redirect_uri into OAuth state as base64 JSON
 			String stateJson = "{\"redirect_uri\":\"" + redirectUri.replace("\"", "\\\"") + "\"}";
 			String state = Base64.getUrlEncoder().withoutPadding()
@@ -160,6 +202,13 @@ public class LoginProviders {
 				log.debug("Could not decode OAuth state parameter", e);
 			}
 		}
+		if (frontendRedirectUri != null) {
+			String refused = checkRedirect(frontendRedirectUri);
+			if (refused != null) {
+				ctx.status(400).result(refused);
+				return;
+			}
+		}
 
 		try {
 			// 1. Exchange code for tokens
@@ -192,17 +241,14 @@ public class LoginProviders {
 
 			// 3. Create or update user in lattice
 			AString userId = Strings.create(identity.toUserId());
-			AMap<AString, ACell> userRecord = engine.getAuth().getUser(userId);
-			if (userRecord == null) {
-				userRecord = Maps.empty();
-			}
+			AMap<AString, ACell> profile = Maps.empty();
 			if (identity.email != null) {
-				userRecord = userRecord.assoc(Fields.EMAIL, Strings.create(identity.email));
+				profile = profile.assoc(Fields.EMAIL, Strings.create(identity.email));
 			}
 			if (identity.name != null) {
-				userRecord = userRecord.assoc(Fields.NAME, Strings.create(identity.name));
+				profile = profile.assoc(Fields.NAME, Strings.create(identity.name));
 			}
-			userRecord = userRecord
+			profile = profile
 				.assoc(Fields.PROVIDER, Strings.create(providerName))
 				.assoc(Fields.PROVIDER_SUB, Strings.create(identity.sub));
 
@@ -211,17 +257,20 @@ public class LoginProviders {
 			// arbitrary DIDs for self-sovereign identities provisioned elsewhere.
 			// Preserve an existing account DID across upgrades / hostname changes;
 			// only new managed users receive the current did:web-derived ID.
+			AMap<AString, ACell> userRecord = engine.getAuth().provisionLogin(userId, profile);
 			AString userDID = RT.ensureString(userRecord.get(Fields.DID));
-			if (userDID == null) userDID = engine.managedUserDID(userId);
-			userRecord = userRecord.assoc(Fields.DID, userDID);
-			engine.getAuth().putUser(userId, userRecord);
-			engine.getVenueState().users().ensure(userDID);
 
 			// 4. Issue venue-signed EdDSA JWT
 			long nowSecs = System.currentTimeMillis() / 1000;
 			AMap<AString, ACell> claims = venueClaims(engine.getDIDString(), userDID,
 				identity.email, nowSecs, nowSecs + engine.getAuth().getTokenExpiry());
 			AString venueJwt = JWT.signPublic(claims, engine.getKeyPair());
+			// The provider and the user's DID — never the email (#448).
+			engine.audit().event(covia.venue.Audit.LOGIN, "provider", providerName,
+				covia.venue.Audit.K_DID, userDID,
+				covia.venue.Audit.K_IP, engine.config().getTrustedProxies().clientIp(ctx.ip(), ctx.header("X-Forwarded-For")));
+			engine.audit().event(covia.venue.Audit.TOKEN_ISSUED, covia.venue.Audit.K_TYPE, "session",
+				covia.venue.Audit.K_SUBJECT, userDID, covia.venue.Audit.K_EXP, claims.get(Strings.intern("exp")));
 
 			// 5. Return JWT to client
 			if (frontendRedirectUri != null) {
@@ -298,7 +347,7 @@ public class LoginProviders {
 			String body = "grant_type=authorization_code"
 				+ "&code=" + URLEncoder.encode(code, StandardCharsets.UTF_8)
 				+ "&client_id=" + URLEncoder.encode(provider.clientId, StandardCharsets.UTF_8)
-				+ "&client_secret=" + URLEncoder.encode(provider.clientSecret, StandardCharsets.UTF_8)
+				+ "&client_secret=" + URLEncoder.encode(resolveClientSecret(provider), StandardCharsets.UTF_8)
 				+ "&redirect_uri=" + URLEncoder.encode(provider.redirectUri, StandardCharsets.UTF_8);
 
 			HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
@@ -431,5 +480,76 @@ public class LoginProviders {
 			}
 			return sub;
 		}
+	}
+
+	// ========== Login redirect allow-list ==========
+
+	/** Refusal for a {@code redirect_uri} outside the allowed origins. */
+	public static final String REDIRECT_REFUSED =
+		"redirect_uri must be a path on this venue or an absolute URL whose origin is the venue's "
+		+ "baseUrl or is listed in auth.loginRedirectOrigins";
+
+	/**
+	 * The origins a login may return the session token to: the venue's own
+	 * {@code baseUrl} origin plus {@code auth.loginRedirectOrigins}.
+	 */
+	private static Set<String> redirectOrigins(String baseUrl, AMap<AString, ACell> authConfig) {
+		Set<String> origins = new HashSet<>();
+		String own = originOf(baseUrl);
+		if (own != null) origins.add(own);
+		AVector<ACell> configured = (authConfig == null) ? null
+			: RT.ensureVector(authConfig.get(Config.LOGIN_REDIRECT_ORIGINS));
+		if (configured != null) {
+			for (long i = 0; i < configured.count(); i++) {
+				AString s = RT.ensureString(configured.get(i));
+				String origin = (s == null) ? null : originOf(s.toString());
+				if (origin == null) {
+					log.warn("auth.loginRedirectOrigins entry ignored (not an http(s) origin): {}", s);
+				} else {
+					origins.add(origin);
+				}
+			}
+		}
+		return Collections.unmodifiableSet(origins);
+	}
+
+	/** {@code scheme://host[:port]} of an absolute http(s) URL, lower-cased; null otherwise. */
+	static String originOf(String url) {
+		if (url == null) return null;
+		URI uri;
+		try {
+			uri = new URI(url.trim());
+		} catch (Exception e) {
+			return null;
+		}
+		String scheme = uri.getScheme(), host = uri.getHost();
+		if (scheme == null || host == null) return null;
+		scheme = scheme.toLowerCase(java.util.Locale.ROOT);
+		if (!scheme.equals("http") && !scheme.equals("https")) return null;
+		String origin = scheme + "://" + host.toLowerCase(java.util.Locale.ROOT);
+		int port = uri.getPort();
+		boolean standard = (port == -1) || (scheme.equals("http") && port == 80)
+			|| (scheme.equals("https") && port == 443);
+		return standard ? origin : origin + ":" + port;
+	}
+
+	/**
+	 * Checks a caller-supplied {@code redirect_uri}: null when it may receive
+	 * the login result, otherwise the reason it may not. A relative path on
+	 * this venue is always allowed; an absolute URL only when its origin is
+	 * the venue's own or a configured one. Checked at login and again at the
+	 * callback, because the OAuth {@code state} that carries it is unsigned.
+	 */
+	public String checkRedirect(String redirectUri) {
+		if (redirectUri == null) return null;
+		String uri = redirectUri.trim();
+		if (uri.startsWith("/")) {
+			// A path on this venue — but never a scheme-relative URL.
+			if (uri.startsWith("//") || uri.startsWith("/\\")) return REDIRECT_REFUSED + ": " + uri;
+			return null;
+		}
+		String origin = originOf(uri);
+		if (origin != null && redirectOrigins.contains(origin)) return null;
+		return REDIRECT_REFUSED + ": " + uri;
 	}
 }

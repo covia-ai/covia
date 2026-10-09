@@ -91,8 +91,9 @@ public class CrossVenueTest {
 		assertNotNull(job);
 		assertEquals(Status.COMPLETE, job.getStatus());
 		// grid:invoke returns the remote job's status map
-		assertEquals(Status.COMPLETE,
-			RT.ensureString(RT.getIn(job.getOutput(), Fields.STATUS)));
+		assertNotNull(RT.getIn(job.getOutput(), Fields.ID));
+		assertEquals("AsyncFederate", RT.getIn(TwoVenueTestServer.COVIA_B.awaitJobResult(
+			Job.parseID(RT.getIn(job.getOutput(), Fields.ID))).get(), "result").toString());
 	}
 
 	// ============== Direct cross-venue traffic via VenueHTTP ==============
@@ -140,11 +141,11 @@ public class CrossVenueTest {
 
 	@Test
 	public void remoteVenueOperationFailureSurfacesAsFailed() throws Exception {
-		// TestAdapter has v/test/ops/fail — invoke it on B via A and verify
+		// TestAdapter has v/test/ops/error — invoke it on B via A and verify
 		// the failure crosses the venue boundary intact.
 		Job job = TwoVenueTestServer.COVIA_A.invokeAndWait(OP_GRID_RUN, Maps.of(
 			Fields.VENUE, TwoVenueTestServer.BASE_URL_B,
-			Fields.OPERATION, "v/test/ops/fail",
+			Fields.OPERATION, "v/test/ops/error",
 			Fields.INPUT, Maps.of("message", "intentional-cross-venue-failure")));
 
 		assertNotNull(job);
@@ -156,29 +157,20 @@ public class CrossVenueTest {
 	}
 
 	@Test
-	public void unreachableRemoteVenueFailsWithoutHanging() throws Exception {
-		// Point A at a port nothing is listening on. Must FAIL within the
-		// VenueHTTP timeout (5s), not hang the test.
-		String deadURL = "http://localhost:1"; // privileged port, refused
-
-		long start = System.currentTimeMillis();
-		Job job = TwoVenueTestServer.COVIA_A.invokeAndWait(OP_GRID_RUN, Maps.of(
-			Fields.VENUE, deadURL,
+	public void unreachableRemoteVenueRecordsUncertainAcceptance() throws Exception {
+		Job seed = TwoVenueTestServer.COVIA_A.startJob(OP_GRID_RUN, Maps.of(
+			Fields.VENUE, "http://localhost:1",
 			Fields.OPERATION, "v/ops/jvm/string-concat",
 			Fields.INPUT, Maps.of("first", "x", "second", "y")));
-		long elapsed = System.currentTimeMillis() - start;
-
-		assertNotNull(job);
-		assertEquals(Status.FAILED, job.getStatus(),
-			"Unreachable remote venue must FAIL, not hang");
-		assertTrue(elapsed < 30_000,
-			"Failure must surface well before the test framework gives up; took " + elapsed + "ms");
-
-		AString err = RT.ensureString(RT.getIn(job.getData(), Fields.ERROR));
-		assertNotNull(err, "Connect failure must carry a non-null error message");
-		assertTrue(!err.toString().isBlank(),
-			"Connect failure must carry a non-blank error message — regression for "
-			+ "GridAdapter#describeFailure handling of null-message ConnectException");
+		try {
+			long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+			Job local = TwoVenueTestServer.ENGINE_A.jobs().getJob(seed.getID(), TwoVenueTestServer.ENGINE_A.venueContext());
+			while (System.nanoTime() < deadline && !Strings.create("acceptance-unknown").equals(
+				RT.getIn(local.getData(), "delegation", "observation"))) Thread.sleep(5);
+			assertEquals(Status.STARTED, local.getStatus());
+			assertEquals(Strings.create("acceptance-unknown"), RT.getIn(local.getData(), "delegation", "observation"));
+			assertTrue(!local.future().isDone());
+		} finally { TwoVenueTestServer.COVIA_A.cancelJob(seed.getID()); }
 	}
 
 	// ============== UCAN issuer policy across venues (Phase C1) ==============

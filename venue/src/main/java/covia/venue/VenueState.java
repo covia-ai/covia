@@ -11,6 +11,8 @@ import convex.core.cvm.Keywords;
 import convex.core.data.ABlob;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
+import convex.core.data.AString;
+import convex.core.data.Maps;
 import convex.core.data.AccountKey;
 import convex.core.data.Index;
 import convex.core.data.Keyword;
@@ -20,6 +22,8 @@ import convex.core.store.AStore;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.cursor.ALatticeCursor;
 import covia.lattice.Covia;
+import covia.api.Fields;
+import covia.lattice.Namespace;
 import covia.venue.storage.LatticeStorage;
 
 /**
@@ -37,22 +41,23 @@ import covia.venue.storage.LatticeStorage;
  *       a single sign through the {@code SignedCursor} chain.</li>
  * </ul>
  *
- * <p>The recommended pattern for Engine is: bootstrap with a connected
- * VenueState (so the DID initialisation is signed), then {@link #fork()}
- * for all subsequent request processing. {@code Engine.syncState()} calls
- * {@link #sync()} once per request.</p>
+ * <p>Engine uses a connected {@code VenueState} as its authoritative state.
+ * That keeps component writes visible to every Engine consumer immediately
+ * and leaves publication and physical durability as separate concerns.</p>
  *
- * <p><b>Why the fork is load-bearing, not an optimisation:</b> a signature is
- * the venue's attestation of a coherent whole-venue snapshot. Individual
- * writes between snapshots are working state — they must NOT be signed,
- * persisted, or propagated one by one. The fork is the snapshot boundary:
- * sync cadence (per request / sweep / flush) defines exactly which states
- * the venue ever attests to.</p>
+ * <p>Forks are explicit, bounded transactions. Use one when several writes
+ * must become visible together: perform the work against the fork, call
+ * {@link #sync()} only after all work succeeds, and discard the fork on
+ * failure. A whole-venue fork also requires an exclusive mutation boundary;
+ * active features should prefer the narrowest component fork that contains
+ * their transaction. A fork should not be retained as a second long-lived copy
+ * of venue state.</p>
  *
  * <p>Provides domain-specific component accessors:</p>
  * <ul>
  *   <li>{@link #assets()} — content-addressed asset store</li>
  *   <li>{@link #users()} — per-user data store</li>
+ *   <li>{@link #scheduleCursor()} — extensible scheduler record</li>
  *   <li>{@link #storage()} — content-addressed blob storage</li>
  * </ul>
  *
@@ -64,10 +69,12 @@ import covia.venue.storage.LatticeStorage;
  *
  * // Connected to a root lattice cursor (Engine)
  * VenueState connected = VenueState.fromRoot(rootCursor, accountKey);
- * // ... bootstrap DID ...
- * VenueState forked = connected.fork();  // unsigned local writes
- * forked.assets().store(meta, content);  // local only
- * forked.sync();                         // merge + sign once
+ * connected.assets().store(meta, content); // immediately visible at root
+ *
+ * // Bounded transaction
+ * VenueState transaction = connected.fork();
+ * transaction.assets().store(meta, content); // private until commit
+ * transaction.sync();                        // commit atomically
  * }</pre>
  */
 public class VenueState extends ALatticeComponent<ACell> {
@@ -182,6 +189,50 @@ public class VenueState extends ALatticeComponent<ACell> {
 		return new Users(this, cursor.path(Covia.USER_DATA));
 	}
 
+	/** Atomically erases the namespace and login aliases, retaining revocation evidence. */
+	@SuppressWarnings("unchecked")
+	DeletedUser deleteUser(AString did, AString actor) {
+		var now = cursor.getContext().currentTimestamp();
+		ACell tombstone = Maps.of(Fields.DID, did, Users.DELETED_AT, now, Users.DELETED_BY, actor);
+		ACell before = cursor.getAndUpdate(value -> {
+			AMap<ACell, ACell> venue = (AMap<ACell, ACell>) value;
+			AMap<AString, ACell> users = RT.ensureMap(venue.get(Covia.USER_DATA));
+			ACell previous = users == null ? null : users.get(did);
+			if (RT.getIn(previous, Covia.K_DELETED) != null) return value;
+			if (previous == null) throw new IllegalArgumentException(UNKNOWN_USER);
+			venue = venue.assoc(Covia.USER_DATA, users.assoc(did, Maps.of(Covia.K_DELETED, tombstone,
+				Users.DELETING, convex.core.data.prim.CVMBool.TRUE)));
+			AMap<AString, ACell> directory = RT.ensureMap(venue.get(Covia.USERS));
+			if (directory != null) {
+				AMap<AString, ACell> revoked = Maps.empty();
+				for (var row : directory.entrySet()) {
+					if (!did.equals(RT.getIn(row.getValue(), Fields.DID))) continue;
+					AMap<AString, ACell> keys = RT.ensureMap(RT.getIn(row.getValue(), Fields.AUTHENTICATION_KEYS));
+					if (keys != null) for (var key : keys.entrySet()) {
+						revoked = revoked.assoc(key.getKey(), Maps.of(
+							Fields.STATUS, Auth.REVOKED,
+							Fields.REVOKED_AT, now, Fields.REVOKED_BY, actor));
+					}
+					directory = directory.dissoc(row.getKey());
+				}
+				// No username alias, profile or key label survives. Keep public-key
+				// revocations so a removed binding cannot be silently reassigned.
+				if (!revoked.isEmpty()) directory = directory.assoc(did, Maps.of(
+					Fields.DID, did, Fields.AUTHENTICATION_KEYS, revoked));
+				venue = venue.assoc(Covia.USERS, directory);
+			}
+			return venue;
+		});
+		ACell previous = RT.getIn(before, Covia.USER_DATA, did);
+		ACell existing = RT.getIn(previous, Covia.K_DELETED);
+		return new DeletedUser(existing != null ? existing : tombstone,
+			RT.ensureMap(RT.getIn(previous, Namespace.G)));
+	}
+
+	record DeletedUser(ACell tombstone, AMap<AString, ACell> agents) {}
+
+	public static final String UNKNOWN_USER = "User is not registered at this venue";
+
 	/**
 	 * Gets a lattice cursor at the {@code :users} level for Auth construction.
 	 *
@@ -192,11 +243,11 @@ public class VenueState extends ALatticeComponent<ACell> {
 	}
 
 	/**
-	 * Gets the lattice cursor at the per-venue {@code :schedule} index, the
-	 * time-ordered store of scheduled events. Used by {@link Scheduler} to
-	 * read, insert, and remove events.
+	 * Gets the lattice cursor at the per-venue {@code :schedule} record. Its
+	 * {@code events} field is the time-ordered store used by {@link Scheduler};
+	 * sibling fields hold record metadata and leave room for future additions.
 	 *
-	 * @return Cursor at the :schedule level (value is an {@code Index})
+	 * @return Cursor at the :schedule level (value is a record)
 	 */
 	public ALatticeCursor<ACell> scheduleCursor() {
 		return cursor.path(Covia.SCHEDULE);
@@ -214,7 +265,7 @@ public class VenueState extends ALatticeComponent<ACell> {
 	/**
 	 * Gets the raw venue state value.
 	 *
-	 * @return Venue state (typically an Index), or null if uninitialised
+	 * @return Map-shaped venue value, or null if uninitialised
 	 */
 	public ACell get() {
 		return cursor.get();
@@ -254,10 +305,12 @@ public class VenueState extends ALatticeComponent<ACell> {
 	 * signing. Call {@link #sync()} to propagate all changes to the parent
 	 * cursor, which triggers a single sign through the SignedCursor chain.
 	 *
-	 * <p>This is the recommended mode for Engine: multiple writes within
-	 * a request (asset stores, job updates) go to the local fork, then
-	 * a single sync() at the end of the request signs and propagates
-	 * all changes at once.</p>
+	 * <p>This is intended for a bounded transaction whose writes must become
+	 * visible together. Call {@code sync()} only on success; dropping the fork
+	 * without syncing discards its local writes. Engine itself keeps a connected
+	 * VenueState rather than a long-lived fork. The caller must exclude concurrent
+	 * parent mutations for a whole-venue transaction; otherwise fork the narrowest
+	 * independently owned component instead.</p>
 	 *
 	 * <p>The forked cursor uses a local {@code Root} backed by
 	 * {@code AtomicReference} — reads and writes are lock-free and

@@ -21,22 +21,22 @@ import covia.api.Fields;
 import covia.lattice.Covia;
 
 /**
- * MECE deletion-durability tests for the whole-{@code :state} LWW venue model.
+ * MECE deletion-durability tests for the whole-{@code :value} LWW venue model.
  *
  * <p>Deletion durability is the reason the venue's mutable state was consolidated
- * under a single navigable whole-value-LWW {@code :state} region. The propagator
+ * under a single navigable whole-value-LWW {@code :value} region. The propagator
  * merges a persisted snapshot back into the live venue on every announce
  * round-trip ({@code cursor.updateAndGet(current -> lattice.merge(current, persisted))},
  * see {@code NodeServer.setMergeCallback}). Under the previous per-entry union
  * merge a deleted key resurrected on that merge-back; under whole-value LWW the
- * newer (live) {@code :state} wins wholesale, so deletions survive.</p>
+ * newer (live) {@code :value} wins wholesale, so deletions survive.</p>
  *
  * <p>Each test replays that merge-back at the venue level with a <b>stale
  * pre-delete snapshot</b> ({@code own = live current}, {@code other = persisted})
  * and asserts the deletion is not undone. Coverage spans the regions where hard
  * deletion was a live or latent bug — user workspace (GetMine-ai/demo#134) and
  * agent hard-delete; operations/secrets/per-user data share the same
- * {@code :state} merge and are covered transitively. An addition case guards the
+ * {@code :value} merge and are covered transitively. An addition case guards the
  * dual property (a write is not lost when an older snapshot merges back).</p>
  */
 public class DeletionDurabilityTest {
@@ -83,7 +83,7 @@ public class DeletionDurabilityTest {
 	 * Replays the propagator's merge-back: merge a (stale) persisted snapshot
 	 * into the live venue value via the venue lattice, exactly as
 	 * {@code NodeServer.setMergeCallback} does — {@code own = live current},
-	 * {@code other = persisted}. Whole-value LWW at {@code :state} keeps the
+	 * {@code other = persisted}. Whole-value LWW at {@code :value} keeps the
 	 * live (newer) value, so a deletion applied after the snapshot survives.
 	 *
 	 * <p>Safe on the shared test engine: the live value is always newer than a

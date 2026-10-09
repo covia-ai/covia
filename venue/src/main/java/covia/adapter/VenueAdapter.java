@@ -18,6 +18,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.api.Abilities;
 import covia.api.Fields;
+import covia.venue.Audit;
 import covia.venue.Config;
 import covia.venue.Modules;
 import covia.venue.RequestContext;
@@ -98,6 +99,13 @@ public class VenueAdapter extends AAdapter {
 	private static final AString K_CANCEL = Strings.intern("cancel");
 	private static final AString K_RESTART = Strings.intern("restart");
 	private static final AString K_FILE = Strings.intern("file");
+	private static final AString K_BACKUP_FILE = Strings.intern("backupFile");
+	private static final AString K_RETAIN_SUPERSEDED = Strings.intern("retainSuperseded");
+	public static final String INVALID_RETENTION = "retainSuperseded must be a boolean";
+	public static final String BACKUP_RETENTION_DISABLED = "backupFile cannot be combined with retainSuperseded=false";
+	private static final AString K_BACKUP_READY_AT = Strings.intern("backupReadyAt");
+	public static final String INVALID_BACKUP_FILE = "backupFile must be a non-empty string";
+	public static final String BACKUP_WITH_STATUS = "backupFile and retainSuperseded cannot be combined with status or cancel";
 	private static final AString K_BYTES = Strings.intern("bytes");
 	private static final AString K_BYTES_BEFORE = Strings.intern("bytesBefore");
 	private static final AString K_BYTES_AFTER = Strings.intern("bytesAfter");
@@ -148,27 +156,50 @@ public class VenueAdapter extends AAdapter {
 			requireInvoke(ctx);
 			if ("gc".equals(subOperation)) {
 				engine.requireVenueAuthority(ctx, STORE_RESOURCE, Abilities.VENUE_GC);
-				return gc(ctx, input);
+				return audited(Audit.VENUE_GC, ctx, subOperation, input, gc(ctx, input));
 			}
 			if ("restart".equals(subOperation)) {
 				engine.requireVenueAuthority(ctx, PROCESS_RESOURCE, Abilities.VENUE_RESTART);
 			} else {
 				engine.requireVenueAuthority(ctx, RESOURCE, Abilities.ADAPTER_MANAGE);
 			}
-			return CompletableFuture.completedFuture(switch (subOperation) {
-				case "adapters" -> adapters();
-				case "adapter-enable" -> adapterEnable(input);
-				case "adapter-disable" -> adapterDisable(input);
-				case "adapter-configure" -> adapterConfigure(input);
-				case "module-load" -> moduleLoad(input);
-				case "module-unload" -> moduleUnload(input);
-				case "restart" -> restart(ctx, input);
-				default -> throw new IllegalArgumentException(
-					"Unknown venue operation: " + getSubOperation(meta));
-			});
+			if ("adapters".equals(subOperation)) return CompletableFuture.completedFuture(adapters());
+			CompletableFuture<ACell> done;
+			try {
+				done = CompletableFuture.completedFuture(dispatchAdmin(ctx, subOperation, input, meta));
+			} catch (Exception e) {
+				done = CompletableFuture.failedFuture(e);
+			}
+			return audited("restart".equals(subOperation) ? Audit.VENUE_RESTART : Audit.VENUE_ADMIN,
+				ctx, subOperation, input, done);
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
 		}
+	}
+
+	/** Record an administrative operation and its outcome: the operation and the adapter or module it named, nothing more. */
+	private CompletableFuture<ACell> audited(String event, RequestContext ctx, String subOperation,
+			ACell input, CompletableFuture<ACell> result) {
+		if (!engine.audit().enabled()) return result;
+		Object target = RT.getIn(input, Fields.NAME);
+		return result.whenComplete((r, t) -> engine.audit().event(event,
+			Audit.K_DID, ctx.getCallerDID(), Audit.K_OPERATION, subOperation, Audit.K_TARGET, target,
+			Audit.K_OUTCOME, (t == null) ? Audit.OK : Audit.FAILED));
+	}
+
+	private ACell dispatchAdmin(RequestContext ctx, String subOperation, ACell input,
+			AMap<AString, ACell> meta) throws Exception {
+		return (switch (subOperation) {
+			case "adapters" -> adapters();
+			case "adapter-enable" -> adapterEnable(input);
+			case "adapter-disable" -> adapterDisable(input);
+			case "adapter-configure" -> adapterConfigure(input);
+			case "module-load" -> moduleLoad(input);
+			case "module-unload" -> moduleUnload(input);
+			case "restart" -> restart(ctx, input);
+			default -> throw new IllegalArgumentException(
+				"Unknown venue operation: " + getSubOperation(meta));
+		});
 	}
 
 	// ========== public effective configuration ==========
@@ -210,6 +241,7 @@ public class VenueAdapter extends AAdapter {
 
 		AMap<AString, ACell> access = Maps.of(
 			"public", config.isPublicAccess(),
+			"publicCaps", engine.getAuth().getPublicCapsMode(),
 			"userAutoCreate", config.isUserAutoCreate());
 		AMap<AString, ACell> protocols = Maps.of(
 			"rest", true,
@@ -363,6 +395,19 @@ public class VenueAdapter extends AAdapter {
 	 * collecting, so a cycle never runs for a restart that cannot follow.
 	 */
 	private CompletableFuture<ACell> gc(RequestContext ctx, ACell input) throws IOException {
+		ACell retainCell = RT.getIn(input, K_RETAIN_SUPERSEDED);
+		if (retainCell != null && !(retainCell instanceof CVMBool)) throw new IllegalArgumentException(INVALID_RETENTION);
+		Boolean retain = retainCell == null ? null : CVMBool.TRUE.equals(retainCell);
+		ACell backupCell = RT.getIn(input, K_BACKUP_FILE);
+		AString backup = RT.ensureString(backupCell);
+		if (backupCell != null && (backup == null || backup.toString().isBlank())) {
+			throw new IllegalArgumentException(INVALID_BACKUP_FILE);
+		}
+		if (backup != null && Boolean.FALSE.equals(retain)) throw new IllegalArgumentException(BACKUP_RETENTION_DISABLED);
+		if ((backup != null || retain != null) && (CVMBool.TRUE.equals(RT.getIn(input, K_STATUS))
+				|| CVMBool.TRUE.equals(RT.getIn(input, K_CANCEL)))) {
+			throw new IllegalArgumentException(BACKUP_WITH_STATUS);
+		}
 		StoreControl control = engine.storeControl();
 		if (CVMBool.TRUE.equals(RT.getIn(input, K_STATUS))) {
 			return CompletableFuture.completedFuture(status(control.status()));
@@ -401,7 +446,7 @@ public class VenueAdapter extends AAdapter {
 		});
 		Thread.ofVirtual().name("covia-store-gc").start(() -> {
 			try {
-				StoreControl.Result r = control.collect();
+				StoreControl.Result r = control.collect(backup == null ? null : backup.toString(), retain);
 				AMap<AString, ACell> out = Maps.of(
 					K_FILE, Strings.create(r.file()),
 					K_BYTES_BEFORE, convex.core.data.prim.CVMLong.create(r.bytesBefore()),
@@ -410,11 +455,17 @@ public class VenueAdapter extends AAdapter {
 					K_ELAPSED, convex.core.data.prim.CVMLong.create(r.elapsedMillis()),
 					K_COLLECTED_FILE, Strings.create(r.collectedFile()),
 					K_RECLAIMED_AT, Strings.create("shutdown"));
+				if (r.backupFile() != null) {
+					out = out.assoc(K_BACKUP_FILE, Strings.create(r.backupFile()))
+						.assoc(K_BACKUP_READY_AT, Strings.create(restart ? "restart" : "shutdown"))
+						.assoc(K_RECLAIMED_AT, Strings.create("backupRemoval"));
+				}
 				if (restart) {
 					// Registered before this Job completes: the handoff follows its
 					// successful, persisted result, exactly as venue/restart does
 					var plan = engine.requestProcessRestart(null, null, timeout, job);
-					out = out.assoc(K_RECLAIMED_AT, Strings.create("restart")).assoc(K_RESTART, Maps.of(
+					if (r.backupFile() == null) out = out.assoc(K_RECLAIMED_AT, Strings.create("restart"));
+					out = out.assoc(K_RESTART, Maps.of(
 						K_ACCEPTED, CVMBool.TRUE,
 						K_JAR, Strings.create(plan.successorJar().toString()),
 						K_SHA256, Strings.create(plan.successorSha256()),

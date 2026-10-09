@@ -5,7 +5,7 @@
 	<parent>
 		<groupId>ai.covia</groupId>
 		<artifactId>covia</artifactId>
-		<version>0.9.8</version>
+		<version>0.9.9</version>
 	</parent>
 	<artifactId>covia-documents</artifactId>
 
@@ -13,8 +13,9 @@
 	<description>Readable text from PDF and Office documents (PDFBox, POI) behind mode 'extract' on file reads, packaged as an optional loadable venue module.</description>
 
 	<properties>
-		<pdfbox.version>3.0.5</pdfbox.version>
-		<poi.version>5.4.1</poi.version>
+		<pdfbox.version>3.0.8</pdfbox.version>
+		<poi.version>5.5.1</poi.version>
+		<log4j.version>2.26.1</log4j.version>
 	</properties>
 
 	<dependencies>
@@ -42,11 +43,17 @@
 		<!-- POI and PDFBox log through the Log4j API. Bridge it to SLF4J — the
 		     venue's logback, parent-first — so neither a venue loading this module
 		     nor its tests print "Log4j API could not find a logging provider".
-		     Version matches the log4j-api POI ${poi.version} brings. -->
+		     The API is pinned to the bridge's version so the pair never drifts; it
+		     overrides the older log4j-api POI brings, which is API-compatible. -->
+		<dependency>
+			<groupId>org.apache.logging.log4j</groupId>
+			<artifactId>log4j-api</artifactId>
+			<version>${log4j.version}</version>
+		</dependency>
 		<dependency>
 			<groupId>org.apache.logging.log4j</groupId>
 			<artifactId>log4j-to-slf4j</artifactId>
-			<version>2.24.3</version>
+			<version>${log4j.version}</version>
 		</dependency>
 		<dependency>
 			<groupId>org.junit.jupiter</groupId>

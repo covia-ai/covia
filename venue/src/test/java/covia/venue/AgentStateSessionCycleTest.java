@@ -74,6 +74,19 @@ public class AgentStateSessionCycleTest {
 	// ========== beginSessionCycle ==========
 
 	@Test
+	public void cacheTtlMeasurementsAccumulateInSessionWithoutInventingMissingUsage() {
+		agent.mergeRunResult(null, null, null, Maps.empty(), sid, null, 0, null,
+			Maps.of(Fields.INPUT, 10, Fields.CACHE_WRITE, 12, Fields.CACHE_WRITE_5M, 0, Fields.CACHE_WRITE_1H, 12));
+		assertEquals(CVMLong.ZERO, RT.getIn(agent.getSession(sid), "meta", "tokens", "cacheWrite5m"));
+		assertNull(RT.getIn(agent.getSession(sid), "meta", "tokens", "cacheRead"));
+		agent.mergeRunResult(null, null, null, Maps.empty(), sid, null, 0, null,
+			Maps.of(Fields.INPUT, 5, Fields.CACHE_WRITE, 8, Fields.CACHE_WRITE_5M, 3, Fields.CACHE_WRITE_1H, 5));
+		assertEquals(CVMLong.create(20), RT.getIn(agent.getSession(sid), "meta", "tokens", "cacheWrite"));
+		assertEquals(CVMLong.create(3), RT.getIn(agent.getSession(sid), "meta", "tokens", "cacheWrite5m"));
+		assertEquals(CVMLong.create(17), RT.getIn(agent.getSession(sid), "meta", "tokens", "cacheWrite1h"));
+	}
+
+	@Test
 	public void testInitialLoadsAreStoredOnRootFrame() {
 		Blob loadedSid = Blob.fromHex("11112222333344445555666677778888");
 		AMap<AString, ACell> loads = Maps.of("w/rules", Maps.of("budget", 500L));

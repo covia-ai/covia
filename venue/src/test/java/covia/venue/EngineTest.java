@@ -18,6 +18,7 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import convex.core.cvm.Keywords;
 import convex.core.crypto.Hashing;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -30,6 +31,7 @@ import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import convex.core.util.Utils;
@@ -177,6 +179,33 @@ public class EngineTest {
 		assertTrue(engine.storage.closed, "close must release storage acquired by start");
 		assertThrows(IllegalStateException.class, engine::start,
 			"a closed engine cannot be restarted with already-closed resources");
+	}
+
+	@Test
+	public void testConnectedVenueStateUsesAtomicLocalWriteOrderAtSameTimestamp() throws Exception {
+		RootLatticeCursor<Index<Keyword, ACell>> cursor = Cursors.createLattice(Covia.ROOT);
+		cursor.setContext(cursor.getContext().withTimestamp(CVMLong.create(1_000L)));
+		LifecycleTestEngine engine = new LifecycleTestEngine(cursor, false);
+		AString did = Strings.create("did:test:connected-engine-state");
+		Blob jobId = Blob.parse("0x0001");
+
+		try {
+			engine.start();
+			User user = engine.getVenueState().users().ensure(did);
+			user.persistJob(jobId, Maps.of(
+				Fields.STATUS, Status.PENDING, Fields.UPDATED, CVMLong.create(1_000L)));
+			user.persistJob(jobId, Maps.of(
+				Fields.STATUS, Status.STARTED, Fields.UPDATED, CVMLong.create(1_000L)));
+
+			assertNotNull(RT.getIn(cursor.get(),
+				Covia.GRID, Covia.VENUES, engine.getAccountKey(), Keywords.VALUE,
+				Covia.USER_DATA, did),
+				"component writes must update the Engine's authoritative root immediately");
+			assertEquals(Status.STARTED, RT.getIn(user.getJob(jobId), Fields.STATUS),
+				"local write order, not wall-clock resolution, decides the current value");
+		} finally {
+			engine.close();
+		}
 	}
 
 	@Test

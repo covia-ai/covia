@@ -1,15 +1,59 @@
 <configuration>
-<!-- Default logback configuration -->
+<!--
+	Default logging for a standalone venue process. Replace it with
+	operations.log-config-file, or switch to the JSON profile with
+	operations.log-format: "json" (venue/docs/CONFIG.md, Logging).
+
+	System-level logging (startup, posture, warnings, errors) is always on.
+	The AUDIT and ACCESS loggers stay silent unless a venue opts in with
+	logging.audit / logging.access; when it does, their lines also go to
+	audit.log / access.log so they can be retained on their own schedule.
+-->
+	<property name="LOG_DIR" value="${user.home}/.covia/logs" />
+	<property name="PATTERN" value="%date{yyyy-MM-dd'T'HH:mm:ss.SSSX, UTC} %-5level [%thread] %logger{36} -%kvp- %msg%n" />
+
 	<appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
 		<encoder>
-			<pattern>%date{yyyy-MM-dd'T'HH:mm:ss.SSSX, UTC} %-5level [%thread] %logger{36} -%kvp- %msg%n</pattern>
+			<pattern>${PATTERN}</pattern>
 		</encoder>
 	</appender>
 
-	<appender name="MAIN_FILE" class="ch.qos.logback.core.FileAppender">
-		<file>${user.home}/.covia/logs/main.log</file>
+	<appender name="MAIN_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+		<file>${LOG_DIR}/main.log</file>
+		<rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+			<fileNamePattern>${LOG_DIR}/main.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+			<maxFileSize>50MB</maxFileSize>
+			<maxHistory>7</maxHistory>
+			<totalSizeCap>1GB</totalSizeCap>
+		</rollingPolicy>
 		<encoder>
-			<pattern>%date{yyyy-MM-dd'T'HH:mm:ss.SSSX, UTC} %-5level [%thread] %logger{36} -%kvp- %msg%n</pattern>
+			<pattern>${PATTERN}</pattern>
+		</encoder>
+	</appender>
+
+	<appender name="AUDIT_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+		<file>${LOG_DIR}/audit.log</file>
+		<rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+			<fileNamePattern>${LOG_DIR}/audit.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+			<maxFileSize>50MB</maxFileSize>
+			<maxHistory>30</maxHistory>
+			<totalSizeCap>1GB</totalSizeCap>
+		</rollingPolicy>
+		<encoder>
+			<pattern>${PATTERN}</pattern>
+		</encoder>
+	</appender>
+
+	<appender name="ACCESS_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+		<file>${LOG_DIR}/access.log</file>
+		<rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+			<fileNamePattern>${LOG_DIR}/access.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+			<maxFileSize>50MB</maxFileSize>
+			<maxHistory>7</maxHistory>
+			<totalSizeCap>1GB</totalSizeCap>
+		</rollingPolicy>
+		<encoder>
+			<pattern>${PATTERN}</pattern>
 		</encoder>
 	</appender>
 
@@ -18,15 +62,18 @@
 		<appender-ref ref="STDOUT" />
 	</root>
 
+	<!-- Also to the console and main.log (additive), so a container's stdout carries them. -->
+	<logger name="AUDIT" level="info">
+		<appender-ref ref="AUDIT_FILE" />
+	</logger>
+	<logger name="ACCESS" level="info">
+		<appender-ref ref="ACCESS_FILE" />
+	</logger>
+
 	<logger name="io.javalin" level="WARN" />
-
 	<logger name="org.eclipse" level="WARN" />
-
 	<logger name="org.eclipse.jetty" level="WARN" />
 	<logger name="org.eclipse.jetty.http" level="WARN" />
-	
 	<logger name="dev.langchain4j" level="WARN" />
-
-
 
 </configuration>

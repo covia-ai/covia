@@ -198,6 +198,8 @@ GET /api/v1/content/<ref>  content bytes
 
 The reference is the complete wildcard tail and may contain any number of path segments. SDKs URL-encode each segment and remove only the optional leading slash (`/w/x` and `w/x` are the same lattice address). `assets/content/<ref>` is intentionally not an alias because it collides with metadata lookup for a reference beginning `content/`. Metadata responses carry the resolved immutable CAD3 hash in `ETag`; the reference remains the address the caller supplied. Thus an SDK asset has two distinct facts: its `reference` (for example `v/ops/json/merge`) and its immutable `id`/hash for the value currently found there.
 
+**Content-addressed forms are caller-relative, not global.** A bare hash or `a/<hash>` names the asset in the *requesting caller's* own `a/` namespace, exactly as `<callerDID>/a/<hash>` would. Covia has no global lookup by hash: the same bytes registered by two principals are two records, each readable only under its owner's authority. So `GET /api/v1/assets/<hash>` returns 404 for a hash registered by someone else, or for an anonymous request. To read another owner's asset, address it explicitly as `<ownerDID>/a/<hash>` (presenting a UCAN grant unless the owner is public), and to read the venue's own catalog use `<venueDID>/a/<hash>` or `?namespace=venue`. Clients must therefore not cache a bare hash as a venue- or caller-independent reference; the fully qualified `<ownerDID>/a/<hash>` form is the portable one.
+
 `GET /api/v1/assets` is a venue-CAS listing, not a named-catalog listing. Its `items` are fully qualified `<venue-DID>/a/<hash>` references so every returned item can be passed directly to the resolver without changing owner. `GET /api/v1/assets?scope=own` lists the caller's CAS and supplies both the bare hash (`id`) and fully qualified owner address (`ref`). Named catalogs are enumerated by their lattice paths (`v/ops`, `v/skills`, `v/agents/templates`, and adapter-owned views), retaining those paths through detail lookup. No hash-to-path reverse lookup exists: one immutable value may be mounted at zero, one, or many paths.
 
 Metadata and bytes deliberately have different domains. `assets/<ref>` requires the reference to resolve to asset metadata. `content/<ref>` calls `Engine.resolveContent` and accepts either an asset reference or a raw storage-provider reference. Consequently a `file://tmp/report.pdf` or `dlfs/docs/report.pdf` content request can succeed while the corresponding `assets/...` request returns 404: the file has bytes, but it is not an asset until metadata points to or snapshots it.
@@ -542,7 +544,7 @@ All examples use the same primitives, parameterised by path. Pagination, federat
 
 ### From an agent's perspective
 
-Agents that declare these tools (or opt into the default pack with `defaultTools: true`, which carries `covia_read` and `covia_list`) have the lattice read primitives available for discovery — **no discovery-specific tools needed.** When granted, the agent system prompt includes a one-line hint:
+Agents that declare these tools (or opt into the default pack with `defaultTools: true`, which carries `covia_inspect`, `covia_read` and `covia_list`) have the lattice read primitives available for discovery — **no discovery-specific tools needed.** When granted, the agent system prompt includes a one-line hint:
 
 > Operations live in `/v/ops/` (venue defaults) and your own `/o/` (your pins). Adapter info lives in `/v/info/adapters/`. Use `covia:list` to discover, `covia:read` to read details.
 
@@ -563,7 +565,7 @@ Engine startup:
          # installAsset stores immutable meta in /a/<hash> and records the
          # catalog declaration for publication after every adapter is present.
 
-  2. Build the venue-owned bootstrap snapshot on a child VenueState fork
+  2. Build the venue-owned bootstrap snapshot on a child w/global workspace fork
      for each catalog declaration:
        write and read-validate its full v/... path on the child fork
      write and read-validate v/info/name, did, version, started, protocols
@@ -625,7 +627,7 @@ A separate `installTestAsset(catalogPath, resourcePath)` method writes to `/v/te
 | Operation | Mechanism |
 |-----------|-----------|
 | Read `/v/...` | Resolver returns the value unconditionally. No UCAN required. |
-| Write `/v/...` (startup) | Engine owns the venue-user cursor and writes to a child `VenueState` fork before one `sync()`; no external authorization surface or Job is involved. |
+| Write `/v/...` (startup) | Engine owns the venue-user cursor and writes to a narrow `w/global` workspace fork before one `sync()`; no external authorization surface or Job is involved. |
 | Write `/v/...` (operator) | JWT signed by the venue keypair. The auth middleware identifies the caller as the venue's own DID; the resolver allows the write. |
 | Write `/v/...` (anyone else) | Resolver rejects with a permission error. |
 
@@ -660,7 +662,6 @@ The refresh does **not** touch `/o/` — user pins are sacred, and a user can pi
 - Unifying budget / overflow semantics across `covia:read`, `covia:slice`, `covia:inspect` — tracked separately as [covia-ai/covia#78](https://github.com/covia-ai/covia/issues/78).
 - Toolsets (named bundles of operations) — tracked separately as [covia-ai/covia#79](https://github.com/covia-ai/covia/issues/79).
 - Bridging external MCP servers into the catalog — tracked separately as [covia-ai/covia#80](https://github.com/covia-ai/covia/issues/80).
-- The rollout plan that takes the system from its current state to this design — see [OPERATIONS_PLAN.md](OPERATIONS_PLAN.md).
 
 ---
 

@@ -56,12 +56,30 @@ jobs:
                 "name": "Covia Venue (Azure)",
                 "hostname": "venue-4.covia.ai",
                 "store": "/data/venue.etch",
+                "trustedProxies": ["loopback", "172.16.0.0/12"],
                 "mcp": {}
               }
             ]
           }
           CONF
           fi
+          # The venue sits behind nginx on this host and sees it through the
+          # Docker bridge: it must take the client address from X-Forwarded-For,
+          # or every caller shares one rate-limit bucket and one authentication
+          # budget (covia#539). Reconcile the persisted config, leaving any
+          # operator-set value alone.
+          sudo python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("/home/azureuser/covia-data/config.json")
+          config = json.loads(path.read_text(encoding="utf-8"))
+          for venue in config.get("venues", []):
+              venue.setdefault("trustedProxies", ["loopback", "172.16.0.0/12"])
+          temporary = path.with_suffix(".json.tmp")
+          temporary.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+          temporary.replace(path)
+          PY
           sudo chown -R 1001:1001 /home/azureuser/covia-data
 
           # Stop and remove existing container
@@ -73,12 +91,21 @@ jobs:
           # be just the config path, not a full java command line, or the
           # entrypoint double-invokes java and MainVenue receives "java" as
           # its config path instead of the real one.
+          #
+          # Publish on loopback only: nginx terminates TLS and proxies to
+          # 127.0.0.1:8080. A bare -p 8080:8080 binds 0.0.0.0, and Docker's
+          # iptables rules bypass host firewalls such as ufw.
+          #
+          # Rotate the json-file container log (Docker's default is unbounded):
+          # at most 5 x 50 MB before the oldest is dropped.
           docker run -d \
             --name covia-venue \
             --stop-timeout 30 \
-            -p 8080:8080 \
+            -p 127.0.0.1:8080:8080 \
             -v /home/azureuser/covia-data:/data \
             -e JAVA_OPTS="-Xmx2g -XX:+UseContainerSupport -XX:+UseG1GC -XX:+UseStringDeduplication -XX:+ExitOnOutOfMemoryError -Djava.security.egd=file:/dev/./urandom -Dfile.encoding=UTF-8" \
+            --log-opt max-size=50m \
+            --log-opt max-file=5 \
             --restart unless-stopped \
             --health-cmd='curl -f --max-time 3 http://localhost:8080/' \
             --health-interval=30s \

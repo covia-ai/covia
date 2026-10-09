@@ -11,7 +11,7 @@
 			"properties": {
 				"path": {
 					"type": "string",
-					"description": "Writable path to a vector (creates one if missing). Must start with w/, o/, n/, or t/. Deep paths create intermediate maps."
+					"description": "Writable path to a vector (creates one if missing). Must start with w/, o/, n/, or t/ (t/ only while working on a task or inside a job). Deep paths create intermediate maps."
 				},
 				"value": {
 					"description": "The element to append. You should normally use structured values rather than serialised strings."

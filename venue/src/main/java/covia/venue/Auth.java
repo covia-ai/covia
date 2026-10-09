@@ -1,5 +1,9 @@
 package covia.venue;
 
+import java.util.Objects;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.UnaryOperator;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -63,11 +67,15 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 	private static final Logger log = LoggerFactory.getLogger(Auth.class);
 	public static final AString ACTIVE = Strings.intern("active");
 	public static final AString REVOKED = Strings.intern("revoked");
+	/** Refusal messages; tests assert against these, never against the wording. */
+	public static final String CANNOT_REVOKE_FINAL_KEY = "Cannot revoke the final active authentication key";
+	public static final String KEY_ALREADY_BOUND = "Authentication key is already bound to named user ";
 
 	/** Default token expiry: 24 hours in seconds */
 	public static final long DEFAULT_TOKEN_EXPIRY = 86400;
 
 	private final LoginProviders loginProviders;
+	private final Engine engine;
 	private final long tokenExpiry;
 	private final boolean publicAccessEnabled;
 	private final ACell publicCapsConfig;
@@ -89,6 +97,7 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 			(ALatticeCursor<AMap<AString, AMap<AString, ACell>>>) cursor);
 
 		Config config = engine.config();
+		this.engine = engine;
 		this.tokenExpiry = config.getTokenExpiry();
 		this.publicAccessEnabled = config.isPublicAccess();
 		this.publicCapsConfig = config.getPublicCapsConfig();
@@ -135,6 +144,15 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 	 */
 	public boolean isPublicAccessEnabled() {
 		return publicAccessEnabled;
+	}
+
+	/** Public admission summary only: never disclose custom capability targets. */
+	public AString getPublicCapsMode() {
+		if (!publicAccessEnabled) return Strings.intern("disabled");
+		if (publicCapsConfig instanceof AString s && "unrestricted".equals(s.toString())) {
+			return Strings.intern("unrestricted");
+		}
+		return Strings.intern(publicCapsConfig instanceof AVector ? "custom" : "read-only");
 	}
 
 	/** JWT audience policy: {@code "require"} or {@code "verify"} (default). */
@@ -191,14 +209,57 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 	 * @param id User identifier as AString (e.g. "alice_gmail_com")
 	 * @param record User record map (should contain "did" and any other fields)
 	 */
-	public void putUser(AString id, AMap<AString, ACell> record) {
-		AMap<AString, ACell> stamped = record.assoc(
-			Fields.UPDATED, CVMLong.create(Utils.getCurrentTimestamp()));
+	public synchronized void putUser(AString id, AMap<AString, ACell> record) {
+		engine.getVenueState().users().requireNotDeleted(RT.ensureString(record.get(Fields.DID)));
+		CVMLong timestamp = cursor.getContext().currentTimestamp();
 		cursor.updateAndGet(current -> {
 			@SuppressWarnings("unchecked")
 			AMap<AString, AMap<AString, ACell>> m = (AMap<AString, AMap<AString, ACell>>) (AMap<?,?>) RT.castMap(current);
 			if (m == null) m = Maps.empty();
-			return m.assoc(id, stamped);
+			AMap<AString, ACell> previous = m.get(id);
+			return m.assoc(id, stampUser(record, previous, timestamp));
+		});
+	}
+
+	/** Atomically updates one user row without replacing unrelated fields. */
+	public synchronized AMap<AString, ACell> updateUser(AString id,
+			UnaryOperator<AMap<AString, ACell>> updater) {
+		CVMLong timestamp = cursor.getContext().currentTimestamp();
+		AMap<AString, AMap<AString, ACell>> result = cursor.updateAndGet(current -> {
+			@SuppressWarnings("unchecked")
+			AMap<AString, AMap<AString, ACell>> users =
+				(AMap<AString, AMap<AString, ACell>>) (AMap<?, ?>) RT.castMap(current);
+			if (users == null) users = Maps.empty();
+			AMap<AString, ACell> previous = users.get(id);
+			AMap<AString, ACell> updated = updater.apply(previous);
+			if (updated == null || Objects.equals(previous, updated)) return users;
+			engine.getVenueState().users().requireNotDeleted(RT.ensureString(updated.get(Fields.DID)));
+			return users.assoc(id, stampUser(updated, previous, timestamp));
+		});
+		return (result != null) ? result.get(id) : null;
+	}
+
+	private static AMap<AString, ACell> stampUser(AMap<AString, ACell> record,
+			AMap<AString, ACell> previous, CVMLong proposed) {
+		if (previous != null) {
+			ACell oldValue = previous.get(Fields.UPDATED);
+			if (oldValue instanceof CVMLong old
+					&& old.longValue() > proposed.longValue()) proposed = old;
+		}
+		return record.assoc(Fields.UPDATED, proposed);
+	}
+
+	/** Trusted OAuth provisioning retains its existing authority to create accounts. */
+	public synchronized AMap<AString, ACell> provisionLogin(AString id, AMap<AString, ACell> profile) {
+		AMap<AString, ACell> existing = getUser(id);
+		AString did = existing == null ? null : RT.ensureString(existing.get(Fields.DID));
+		if (did == null) did = engine.managedUserDID(id);
+		engine.getVenueState().users().create(did);
+		AString accountDID = did;
+		return updateUser(id, current -> {
+			AMap<AString, ACell> updated = current != null ? current : Maps.empty();
+			for (var entry : profile.entrySet()) updated = updated.assoc(entry.getKey(), entry.getValue());
+			return updated.assoc(Fields.DID, accountDID);
 		});
 	}
 
@@ -209,17 +270,30 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 	 * @return true when the row was created
 	 */
 	public synchronized boolean ensureManagedUser(AString id, AString did) {
-		AMap<AString, ACell> existing = getUser(id);
-		if (existing != null) {
-			AString stored = RT.ensureString(existing.get(Fields.DID));
-			if (!did.equals(stored)) {
-				throw new IllegalStateException("Named user " + id
-					+ " is already bound to a different DID: " + stored);
+		engine.getVenueState().users().requireNotDeleted(did);
+		CVMLong timestamp = cursor.getContext().currentTimestamp();
+		AtomicBoolean created = new AtomicBoolean(false);
+		cursor.updateAndGet(current -> {
+			@SuppressWarnings("unchecked")
+			AMap<AString, AMap<AString, ACell>> users =
+				(AMap<AString, AMap<AString, ACell>>) (AMap<?, ?>) RT.castMap(current);
+			if (users == null) users = Maps.empty();
+			AMap<AString, ACell> existing = users.get(id);
+			if (existing != null) {
+				created.set(false);
+				AString stored = RT.ensureString(existing.get(Fields.DID));
+				if (!did.equals(stored)) {
+					throw new IllegalStateException("Named user " + id
+						+ " is already bound to a different DID: " + stored);
+				}
+				return users;
 			}
-			return false;
-		}
-		putUser(id, Maps.of(Fields.DID, did, Fields.NAME, id));
-		return true;
+			created.set(true);
+			AMap<AString, ACell> record = stampUser(
+				Maps.of(Fields.DID, did, Fields.NAME, id), null, timestamp);
+			return users.assoc(id, record);
+		});
+		return created.get();
 	}
 
 	/** Public authenticator lifecycle records for one named user. */
@@ -278,7 +352,8 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 			Fields.ADDED_AT, CVMLong.create(now),
 			Fields.ADDED_BY, actorDID);
 		if (label != null && !label.isEmpty()) state = state.assoc(Fields.LABEL, label);
-		putUser(id, user.assoc(Fields.AUTHENTICATION_KEYS, keys.assoc(keyDID, state)));
+		AMap<AString, ACell> updatedKeys = keys.assoc(keyDID, state);
+		updateUser(id, current -> current.assoc(Fields.AUTHENTICATION_KEYS, updatedKeys));
 		return true;
 	}
 
@@ -324,7 +399,8 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 			added++;
 		}
 		if (added > 0) {
-			putUser(id, user.assoc(Fields.AUTHENTICATION_KEYS, keys));
+			AMap<AString, ACell> updatedKeys = keys;
+			updateUser(id, current -> current.assoc(Fields.AUTHENTICATION_KEYS, updatedKeys));
 		}
 		return added;
 	}
@@ -348,13 +424,14 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 		}
 		if (!allowLast && getActiveAuthenticationKeys(id).count() <= 1) {
 			throw new IllegalArgumentException(
-				"Cannot revoke the final active authentication key");
+				CANNOT_REVOKE_FINAL_KEY);
 		}
 		AMap<AString, ACell> revoked = existing
 			.assoc(Fields.STATUS, REVOKED)
 			.assoc(Fields.REVOKED_AT, CVMLong.create(Utils.getCurrentTimestamp()))
 			.assoc(Fields.REVOKED_BY, actorDID);
-		putUser(id, user.assoc(Fields.AUTHENTICATION_KEYS, keys.assoc(keyDID, revoked)));
+		AMap<AString, ACell> updatedKeys = keys.assoc(keyDID, revoked);
+		updateUser(id, current -> current.assoc(Fields.AUTHENTICATION_KEYS, updatedKeys));
 		return true;
 	}
 
@@ -367,7 +444,7 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 				RT.ensureMap(other.getValue().get(Fields.AUTHENTICATION_KEYS));
 			if (otherKeys != null && otherKeys.containsKey(keyDID)) {
 				throw new IllegalArgumentException(
-					"Authentication key is already bound to named user " + other.getKey());
+					KEY_ALREADY_BOUND + other.getKey());
 			}
 		}
 	}

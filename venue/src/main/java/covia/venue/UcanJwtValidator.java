@@ -35,6 +35,11 @@ public final class UcanJwtValidator {
 	private static final AString JWT_TYPE = Strings.intern("JWT");
 	private static final int ED25519_SIGNATURE_LENGTH = 64;
 
+	/** Reason fragments the validator states; tests assert against these, never against the wording. */
+	public static final String REASON_MALFORMED_CLAIM = "malformed claim ";
+	public static final String REASON_EXPIRED = "expired: exp ";
+	public static final String REASON_BAD_SIGNATURE = "bad signature for issuer ";
+
 	private UcanJwtValidator() {}
 
 	/** Result of validation, including a safe diagnostic on failure. */
@@ -85,17 +90,17 @@ public final class UcanJwtValidator {
 		}
 		ACell expiry = claims.get(UCAN.EXP);
 		if (expiry != null && !(expiry instanceof CVMLong)) {
-			return failure("malformed claim \"exp\": expected an integer Unix timestamp or null");
+			return failure(REASON_MALFORMED_CLAIM + "\"exp\": expected an integer Unix timestamp or null");
 		}
 		if (claims.containsKey(UCAN.NBF) && !(claims.get(UCAN.NBF) instanceof CVMLong)) {
-			return failure("malformed claim \"nbf\": expected an integer Unix timestamp");
+			return failure(REASON_MALFORMED_CLAIM + "\"nbf\": expected an integer Unix timestamp");
 		}
 		if (!(claims.get(UCAN.ATT) instanceof AVector)) {
 			return failure("missing or malformed required claim \"att\": expected an array");
 		}
 		ACell proofsCell = claims.get(UCAN.PRF);
 		if (claims.containsKey(UCAN.PRF) && !(proofsCell instanceof AVector)) {
-			return failure("malformed claim \"prf\": expected an array");
+			return failure(REASON_MALFORMED_CLAIM + "\"prf\": expected an array");
 		}
 
 		Blob signingInput = Blob.wrap(jwt.getSigningInput().getBytes(StandardCharsets.UTF_8));
@@ -106,7 +111,7 @@ public final class UcanJwtValidator {
 		} catch (Throwable t) {
 			signatureValid = false;
 		}
-		if (!signatureValid) return failure("bad signature for issuer " + issuer);
+		if (!signatureValid) return failure(REASON_BAD_SIGNATURE + issuer);
 
 		// Normalise only after verifying the bytes the client actually signed.
 		AMap<AString, ACell> normalised = claims;
@@ -122,7 +127,7 @@ public final class UcanJwtValidator {
 
 		Long exp = token.getExpiry();
 		if (exp != null && exp <= nowSeconds) {
-			return failure("expired: exp " + exp + " is not after current time " + nowSeconds);
+			return failure(REASON_EXPIRED + exp + " is not after current time " + nowSeconds);
 		}
 		Long nbf = token.getNotBefore();
 		if (nbf != null && nbf > nowSeconds) {

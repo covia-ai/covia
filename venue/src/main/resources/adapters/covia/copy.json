@@ -13,7 +13,7 @@
 				},
 				"to": {
 					"type": "string",
-					"description": "Destination path. Must be writable: w/, o/, n/, or t/."
+					"description": "Destination path. Must be writable: w/, o/, n/, or t/ (t/ only while working on a task or inside a job)."
 				}
 			},
 			"required": ["from", "to"]

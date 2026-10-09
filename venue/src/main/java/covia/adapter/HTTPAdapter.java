@@ -322,7 +322,7 @@ public class HTTPAdapter extends AAdapter {
 		installExampleAsset(BASE + "google-search-advanced-orch.json");
 		installExampleAsset(BASE + "google-search-practical-orch.json");
 
-		log.info("HTTP adapter assets installed successfully");
+		log.debug("HTTP adapter assets installed successfully");
 	}
 
 	// ========== Requests ==========

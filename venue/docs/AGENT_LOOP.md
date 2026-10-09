@@ -2,7 +2,7 @@
 
 Design for Covia agent state and the transitions that mutate it.
 
-**Status:** April 2026 (current behaviour). See **§8 Architectural Direction** for the in-flight redesign of the framework↔harness contract; §1–§7 describe how the code works today.
+**Status:** Current behaviour. See **§8 Architectural Direction** for the in-flight redesign of the framework↔harness contract; §1–§7 describe how the code works today.
 
 See GRID_LATTICE_DESIGN.md for: per-user namespace layout (§4.3), agent addressing
 (`/g/<agent-id>`, §4.3.4), secret store (`/s/`, §4.3.6), and implementation phasing (§12).
@@ -11,18 +11,19 @@ See GRID_LATTICE_DESIGN.md for: per-user namespace layout (§4.3), agent address
 
 ## 1. Principles
 
-1. **Single atomic value.** An agent's entire state is one map. Every operation
-   (create, message, run, config update) atomically replaces the whole map. No child
-   lattices, no per-field merge. The map is the unit of state.
+1. **Single atomic record.** An agent's entire state is one map. Every operation
+   (create, message, run, config update) atomically replaces the whole map. The map
+   is the local compare-and-swap unit; there is no per-field merge.
 
-2. **Last writer wins.** If two copies of an agent need to merge, the one with the
-   later `ts` wins. All writes are serialised on the hosting venue, so `ts` is
-   monotonic within an agent's lifetime.
+2. **Whole-venue replication.** The signed venue `:value` is the replication unit.
+   Its outer `:timestamp` selects the newer complete venue snapshot through a
+   whole-value LWW lattice. An agent's `ts` is ratcheted last-modified metadata; it
+   does not independently choose a merge winner.
 
 3. **Single venue writes.** An agent lives on one venue. All writes — message delivery,
    agent runs, config updates — are serialised on that venue via atomic
-   compare-and-swap on the agent record. Cross-venue sync is replication: the
-   more-recent state replaces the stale one.
+   compare-and-swap on the agent record. Cross-venue sync selects the newer complete
+   signed venue snapshot.
 
 4. **Three levels.** The agent update (level 1) manages framework bookkeeping:
    status, timeline, sessions. The agent transition (level 2) manages domain logic:
@@ -59,12 +60,19 @@ An agent lives at `:user-data → <owner-DID> → "g" → <agent-id>`.
 ### 2.1 Lattice Shape
 
 ```
-"g" → MapLattice (agent-id → per-agent value)
-  <agent-id> → LWW (latest ts wins)
+signed venue :value
+  → StampingLattice (:timestamp)
+  → whole-value LWW
+  → typed venue interior
+      :user-data → MapLattice (DID → stamped user record)
+        "g" → MapLattice (agent-id → stamped agent record)
+          <agent-id> → StampingLattice (ts) → JSONLattice
 ```
 
-One value. The LWW lattice compares `ts` and selects the winning map whole.
-Inside the map there are no lattices — just fields, atomically replaced together.
+The inner agent component supplies typed navigation and maintains `ts` when a
+deep cursor write enters the record (including `n/` and `c/`). It adds no stored
+envelope: the physical value remains the same plain map. Merge stops at the outer
+venue LWW and therefore never combines individual agents or their fields.
 
 ### 2.2 The Agent Record
 
@@ -72,10 +80,10 @@ The agent's value is a plain map. Every write replaces the entire map atomically
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `ts` | long | Timestamp of the last write. **The merge discriminator.** Set on every write. |
+| `ts` | long | Ratcheted timestamp of the last write to the agent record. Metadata, not a merge discriminator. |
 | `status` | string | `"SLEEPING"` \| `"RUNNING"` \| `"SUSPENDED"` \| `"TERMINATED"`. `RUNNING` is a persisted execution marker, validated against the live executor by the hosting venue. |
 | `config` | map | Framework-level configuration. Includes `operation` (default transition op). |
-| `state` | any | User-defined state. Opaque to the framework. Passed to and returned from the transition function. Transition-function-specific configuration (e.g. LLM provider, model) lives here, not in `config`. Set at creation via optional initial state. Conversation content lives on the session record (`session.frames[0].conversation`), not here. |
+| `state` | any | User-defined state. Opaque to the framework. Passed to and returned from the transition function. Transition-function configuration (LLM operation, model, system prompt, tools, caps) lives in `config`, not here (#144). Set at creation via optional initial state. Conversation content lives on the session record (`session.frames[0].conversation`), not here. |
 | `tasks` | index | `Index<Blob, ACell>` of inbound request Job IDs. Persistent until resolved. Ordered by Job ID. |
 | `pending` | index | `Index<Blob, ACell>` of outbound Job IDs the agent is waiting on. Ordered by Job ID. |
 | `sessions` | index | `Index<Blob, ACell>` of sessions. Each session contains `frames` (the goal-tree frame stack — `frames[0].conversation` is the canonical transcript), pending messages, metadata, and per-session state (`c/`). See AGENT_SESSIONS.md and GOAL_TREE.md. |
@@ -103,11 +111,11 @@ by the run loop on the next transition cycle for that session and appended to
 `session.frames[0].conversation` as user turns. See AGENT_SESSIONS.md for the
 session model.
 
-The record also reserves a **pending** outbound-Job index. The run loop and
-context assembler can present entries already written there, but no generic
-async-invoke tool currently populates it or registers completion wakes
-(§3.4.2). HITL uses the session inbox instead, because its immediate receipt
-already completes the original tool exchange.
+The **pending** outbound-Job index holds job references for outstanding waits.
+HITL registers its request there until settlement, including after recovery;
+the Job owns the current status. HITL still delivers its answer through the
+session inbox, because its immediate receipt already completes the original
+tool exchange. No generic async-invoke tool is exposed yet (§3.4.2).
 
 ### 2.4 Timeline Entry
 
@@ -201,7 +209,7 @@ stale; startup clears it before scheduling durable work.
 | Status | Meaning | Run loop | Mutations allowed |
 |--------|---------|----------|-------------------|
 | `SLEEPING` | Durable runnable/idle state. | `wakeAgent` may start a live attempt. | All except config mutation while a live attempt exists. |
-| `RUNNING` | Persisted dirty marker: an attempt was launched. The hosting venue validates it against the live launcher slot. | Running when the matching slot is live; otherwise stale until startup cleanup. | Task/session appends are allowed. In-place config mutation is rejected using the live executor check. |
+| `RUNNING` | Persisted dirty marker: an attempt was launched. The hosting venue validates it against the live launcher slot. | Running when the matching slot is live; otherwise stale until startup cleanup. | Task/session appends are allowed. `agent:update` applies to future transitions; a started transition keeps its fire-time config. |
 | `SUSPENDED` | Last run failed with an error. Dormant — does not auto-retry. State, pending messages, sessions, and history are preserved; failed tasks are drained. | Not running. Resume via `tryResume` to keep the record, or delete it with `remove:true` before creating a replacement. | All. |
 | `TERMINATED` | Logically deleted. Slot still occupies the namespace key (so the ID is reserved) but the agent is dead. | Cannot run. `agent:request` / `agent:message` / `agent:trigger` all fail. | None. Remove the record explicitly with `agent:delete remove:true` before reusing the ID. |
 
@@ -210,6 +218,17 @@ successful launcher install (SLEEPING→RUNNING), clean completion
 (RUNNING→SLEEPING), run-loop error (RUNNING→SUSPENDED), `agent:resume`
 (SUSPENDED→SLEEPING), and `agent:delete` (any→TERMINATED or absent). Startup
 clears a crash-stale RUNNING marker after confirming there is no live executor.
+
+Agent summaries (`agent:info`, `agent:list`, and their job-free REST reads)
+include `awaiting: {input, auth}` (#557). These count the agent's pending jobs in
+`INPUT_REQUIRED` or `AUTH_REQUIRED`, independently of its lifecycle
+status. They do not assert that the viewer is the intended responder. The counts
+are derived on each read: each pending ID gets one in-memory Job lookup. No
+derived counts are persisted or separately maintained. Cost is O(pending jobs)
+per agent, independent of other venue jobs and completed history, with no payload
+traversal. HITL removes the pending reference on settlement before delivering its
+session response. Existing job notifications can trigger a summary refresh; this adds no
+new agent status or event type.
 
 ### 2.6 Live events
 
@@ -346,7 +365,7 @@ swap the level 3 operation to change provider, use a remote venue via federation
 or a test mock.
 
 The level 3 operation to invoke is specified in `config.llmOperation`
-(built-in fallback: `v/models/anthropic/claude-sonnet-5`; venues may override it with
+(built-in fallback: `v/models/anthropic/claude-sonnet-5-5`; venues may override it with
 `defaultLlmOperation`). The agent creator picks both the agent loop
 strategy (level 2) and the LLM backend (level 3).
 
@@ -456,11 +475,12 @@ run failed), but the Job result is durable. This matches how other side effects
 
 The transition input and context assembler understand an agent-level `pending`
 Job index and render resolved entries as `get_job_results`, but Covia does not
-currently expose a generic async-invoke harness tool that writes that index.
+currently expose a generic async-invoke harness tool.
 Ordinary operation tools remain synchronous and bounded by `toolCallTimeoutMs`.
 
 HITL is the deliberate long-lived exception (§6.3). A sessioned agent receives
-the durable request ID immediately; the HITL record remembers that session and
+the durable request ID immediately and the job is tracked in its pending index;
+the HITL record remembers that session and
 answer, rejection or expiry is delivered through its durable inbox, which wakes
 the normal run loop. This avoids pretending a human-timescale request is an
 ordinary synchronous tool call while leaving the broader async-operation design
@@ -602,7 +622,7 @@ in order:
 2. **User's secret store** (`/s/`), using the secret name declared in the
    operation's metadata (`operation.secretKey`).
 
-The agent's `config` does not contain API keys. The operation metadata owns the
+The agent's `config` holds no key material: a `config.apiKey` is a secret reference (`s/NAME`) resolved at the call. The operation metadata owns the
 credential concern — the agent specifies which operation to use, and the
 operation declares which secret it needs. This keeps agent configuration clean
 and credentials in the encrypted secret store.
@@ -641,10 +661,10 @@ The `config` map supports:
 - `operation` — default transition operation (e.g. `"llmagent:chat"`)
 - Other framework configuration as needed
 
-Initial state allows the creator to seed transition-function-specific configuration
-(e.g. LLM provider, model, system prompt, capabilities) that the transition
-function will read and preserve across runs. This keeps the framework `config`
-clean of transition-function internals, and allows an agent to switch transition
+Initial state seeds transition-function runtime data (loads and similar) that the
+transition function reads and preserves across runs; provider, model, system
+prompt, tools and capabilities are `config` (#144). This keeps `state`
+free of framework fields, and allows an agent to switch transition
 functions.
 
 **Inputs:**
@@ -916,38 +936,33 @@ without affecting the agent contract or MCP interface.
 
 ---
 
-## 5. Merge Semantics
+## 5. Atomic Updates and Merge Semantics
 
-### 5.1 Last Writer Wins
+### 5.1 Local Agent Updates
 
-The LWW lattice compares `ts` values. The record with the later timestamp wins
-unconditionally.
+All writes to an agent are serialised on one venue through atomic compare-and-swap
+on the agent's record slot. Message delivery, task addition, and run-loop updates
+all contend against the same slot, so concurrent venue threads do not lose updates.
+Each successful mutation writes a complete coherent agent map and refreshes `ts`.
 
-- **Monotonic:** ts only increases on the hosting venue → state only advances.
-- **Complete:** the winner is a full consistent snapshot, never a mix of fields.
-- **Simple:** standard LWW lattice, no custom merge function.
+The run loop never holds a lock. It reads a snapshot at the top of each iteration,
+runs the transition (which may take seconds or minutes), then applies its result
+atomically against the current record. Concurrent task additions and session
+message appends proceed while the transition runs; the merge code preserves them
+by reading the current sessions/tasks rather than the stale pre-transition snapshot.
 
-### 5.2 Why One Value?
+### 5.2 Cross-Venue Replication
 
-All writes to an agent are serialised on one venue through atomic
-compare-and-swap on the agent's lattice slot. Message delivery, task
-addition, and run loop merges all contend against the same slot, so there
-are no lost updates even though multiple threads may write concurrently.
-
-The run loop never holds a lock. It reads a snapshot at the top of each
-iteration, runs the transition (which may take seconds or minutes), then
-merges the result atomically. Concurrent task additions and session
-message appends proceed while the transition runs; their writes are
-preserved because the merge reads the *current* sessions/tasks (not the
-stale pre-transition snapshot).
-
-Cross-venue sync is replication: the venue hosting the agent always has the latest
-ts. Replicas receive the complete state.
+Cross-venue sync does not merge agent records independently. The venue's outer
+whole-value LWW lattice compares the venue `:timestamp`; the newer complete signed
+`:value` snapshot wins. This is valid because the venue signing key is the single
+authoritative writer for that state lineage. Replicas receive a coherent venue
+state, including the complete agent map that actually existed on the host.
 
 Per-field merge (a previous design) was wrong because it could produce Frankenstein
 states — status from venue A, timeline from venue B, session fragments from both. An
-inconsistent state that never actually existed. With a single atomic value, the winner
-is always a state that genuinely existed on the hosting venue.
+inconsistent state that never actually existed. Whole-snapshot replication ensures
+the winner is always a state that genuinely existed on the hosting venue.
 
 ---
 
@@ -1021,7 +1036,7 @@ subscribes to the Job for status updates, same as any other Covia job.
 
 ### 6.5 Credential resolution
 
-API keys are not stored in agent config. The operation metadata declares a
+Key material is not stored in agent config; `config.apiKey` is a secret reference. The operation metadata declares a
 `secretKey` name (e.g. `"OPENAI_API_KEY"`); at runtime the adapter looks this
 up in the caller's encrypted secret store (`/s/`). An optional plaintext
 `apiKey` input parameter exists for testing only. No environment variable
@@ -1035,21 +1050,7 @@ See GRID_LATTICE_DESIGN.md §12 for the full roadmap.
 
 | Phase | Focus | Status |
 |-------|-------|--------|
-| **0** | Per-user namespace (`"g"`, `"s"`), SecretStore | ✓ Complete |
-| **A** | AgentState wrapper, AgentAdapter (create/message/run), lattice restructure | ✓ Complete |
-| **B** | LLM transition function (`llmagent:chat`), conversation history, secret store integration, three-level architecture (§3) | ✓ Complete |
-| **B2** | Decouple level 2 from LangChain4j — level 3 via grid operation, message-format API, tool call loop | ✓ Complete |
-| **B3a** | Structured output / responseFormat for level 3, LangChainAdapter unit tests | ✓ Complete |
-| **B3b** | Tool parameter schema mapping refinements (enum, array items, nested objects) | ✓ Complete |
-| **B4** | MCP-first agent experience: default transition op from config, result in run output | ✓ Complete |
-| **B5** | Task-based agent model: `agent:request`, tasks/pending queues, scheduling | ✓ Complete |
-| **B6** | Agent query/list operations: `agent:query`, `agent:list`, RequestContext refactor, Index for tasks/pending | ✓ Complete |
-| **B7** | Lattice-native run loop: per-agent lock, status-based exclusion, merge-at-write-time, `wakeAgent`, `Job.awaitResult(timeout)` | ✓ Complete |
-| **B10** | Agent workspace CRUD: `/w/`, `/o/`, `/h/` namespaces, deep paths, vector indexing, JSONValueLattice, DID URL cross-user paths, default tools | ✓ Complete |
-| **B11** | `/o/` operation resolution, `agent:create` default tool, `covia:adapters`, langchain cleanup, JobManager simplification | ✓ Complete |
-| **C1** | UCAN proofs: owner-signed tokens plus venue-signed custodial tokens (`ucan:issue`), per-request proof verification, full DID URL resources, `Capability.covers()`, cross-user reads with valid proof chain | ✓ Complete |
 | **C2** | Delegation chains — proof chain walking, attenuation validation, agent sub-delegation, revocation | Planned |
-| **D** | HITL requests (`/h/` namespace), cross-user messaging | Planned |
 | **E** | Agent forking, cross-venue migration, federated UCAN validation | Planned |
 
 ---

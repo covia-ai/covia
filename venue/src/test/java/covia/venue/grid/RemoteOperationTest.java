@@ -209,13 +209,12 @@ public class RemoteOperationTest {
 		assertEquals(Status.COMPLETE, job.getStatus());
 		assertEquals("NamedBinding", RT.getIn(job.getOutput(), "result").toString());
 
-		// The name resolved to a HASH at invoke time, and the job record
-		// carries that hash — provenance survives although the fetch is
-		// transient. (A mutable name in a job record would say nothing;
-		// the hash says exactly which definition ran.)
+		// The job record carries the reference that was invoked — here the
+		// remote catalog name (#499). A caller who wants the record to pin the
+		// exact definition invokes by hash instead.
 		ACell jobData = TwoVenueTestServer.ENGINE_A.jobs().getJobData(job.getID(), caller);
-		assertEquals(opId.toHexString(), RT.getIn(jobData, Fields.OP).toString(),
-			"Job record must carry the hash the name resolved to at invoke time");
+		assertEquals(namedRef, RT.getIn(jobData, Fields.OP).toString(),
+			"Job record must carry the reference that was invoked");
 
 		// Transient: neither binding nor definition was adopted by A, and
 		// the publisher served reads only.

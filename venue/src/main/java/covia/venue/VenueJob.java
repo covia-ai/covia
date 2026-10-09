@@ -19,10 +19,13 @@ public class VenueJob extends Job {
 	private final JobManager manager;
 	private final AMap<AString, ACell> meta;
 	private final AString callerDID;
+	private final User account;
 	/** Transient Job wrapper: never persisted, gone when terminal or on restart. */
 	private final boolean memoryOnly;
 	/** Whether venue-wide observers (SSE/MCP telemetry) should see updates. */
 	private final boolean observable;
+	/** Durable deletion fence. Guarded by this instance's monitor. */
+	private boolean deleted;
 
 	VenueJob(AMap<AString, ACell> record, AMap<AString, ACell> meta,
 			AString callerDID, JobManager manager) {
@@ -41,6 +44,7 @@ public class VenueJob extends Job {
 		this.manager = manager;
 		this.meta = meta;
 		this.callerDID = callerDID;
+		this.account = manager.account(callerDID);
 		this.memoryOnly = memoryOnly;
 		this.observable = observable;
 	}
@@ -50,6 +54,11 @@ public class VenueJob extends Job {
 		return !isRecorded();
 	}
 
+	User account() { return account; }
+
+	/** Fence nested work from a deleted lifecycle even after the DID is recreated. */
+	void requireAccount() { account.get(); }
+
 	/** Resolved operation metadata, or null when the operation could not be resolved. */
 	AMap<AString, ACell> meta() {
 		return meta;
@@ -57,16 +66,31 @@ public class VenueJob extends Job {
 
 	@Override
 	public AMap<AString, ACell> processUpdate(AMap<AString, ACell> newData) {
-		return newData.assoc(Fields.UPDATED, CVMLong.create(Utils.getCurrentTimestamp()));
+		CVMLong timestamp = CVMLong.create(Utils.getCurrentTimestamp());
+		ACell previous = newData.get(Fields.UPDATED);
+		if (previous instanceof CVMLong old
+				&& old.longValue() > timestamp.longValue()) timestamp = old;
+		return newData.assoc(Fields.UPDATED, timestamp);
 	}
 
 	@Override
 	public void onUpdate(AMap<AString, ACell> newData) {
-		if (!memoryOnly) {
-			manager.persistJobRecord(getID(),
-				JobManager.redactJobSecrets(newData, meta), callerDID);
+		synchronized (this) {
+			if (!memoryOnly && !deleted) {
+				// A later CAS may reach this monitor first. Persist the latest
+				// committed record so a delayed callback cannot roll it back.
+				manager.persistJobRecord(getID(),
+					JobManager.redactJobSecrets(getData(), meta), account);
+			}
 		}
 		if (observable) manager.notifyGlobalListeners(this);
+	}
+
+	/** Prevents any later update from recreating this Job's durable row. */
+	synchronized boolean markDeleted() {
+		if (deleted) return false;
+		deleted = true;
+		return true;
 	}
 
 	@Override
@@ -75,13 +99,13 @@ public class VenueJob extends Job {
 	}
 
 	@Override
-	public void completeWith(ACell result) {
+	public void completeWith(ACell result, java.util.function.UnaryOperator<AMap<AString, ACell>> decorate) {
 		try {
 			manager.validateOutput(meta, result);
-		} catch (RuntimeException e) {
-			fail(e.getMessage() != null ? e.getMessage() : e.toString());
+		} catch (RuntimeException | Error e) {
+			fail(e, decorate);
 			return;
 		}
-		super.completeWith(result);
+		super.completeWith(result, decorate);
 	}
 }

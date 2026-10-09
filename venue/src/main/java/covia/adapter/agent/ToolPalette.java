@@ -56,9 +56,12 @@ public final class ToolPalette {
 	private static final AString SOURCE_LOAD     = Strings.intern("load");
 
 	/** Default tool operations — deliberately minimal: read-only situational
-	 *  awareness. Everything with side effects arrives via skills or the agent's
-	 *  explicit {@code tools} allowlist. Opt-in with {@code defaultTools: true}. */
+	 *  awareness. {@code inspect} is the bounded, hierarchical discovery read
+	 *  that the read and list tool descriptions point at (#514). Everything
+	 *  with side effects arrives via skills or the agent's explicit
+	 *  {@code tools} allowlist. Opt-in with {@code defaultTools: true}. */
 	static final AVector<ACell> DEFAULT_TOOL_OPS = (AVector<ACell>) Vectors.of(
+		(ACell) Strings.create("v/ops/covia/inspect"),
 		(ACell) Strings.create("v/ops/covia/read"),
 		(ACell) Strings.create("v/ops/covia/list"));
 

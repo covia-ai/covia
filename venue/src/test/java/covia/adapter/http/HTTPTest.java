@@ -193,7 +193,15 @@ public class HTTPTest {
 		}
 	}
 
-	@Test public void testSecretHeadersResolveOverrideAndStayOutOfJobRecords() throws Exception {
+	@Test public void testGetPreservesSecretReferencesWithoutResolvedValues() throws Exception {
+		checkSecretReferencesWithoutResolvedValues("get");
+	}
+
+	@Test public void testPostPreservesSecretReferencesWithoutResolvedValues() throws Exception {
+		checkSecretReferencesWithoutResolvedValues("post");
+	}
+
+	private void checkSecretReferencesWithoutResolvedValues(String method) throws Exception {
 		AString caller = Strings.create("did:test:http:secret-headers:" + System.nanoTime());
 		User user = TestServer.ENGINE.getVenueState().users().ensure(caller);
 		byte[] key = SecretStore.deriveKey(TestServer.ENGINE.getKeyPair());
@@ -218,17 +226,30 @@ public class HTTPTest {
 					"X-API-Key", "s/API_KEY",
 					"Authorization", "s/BASIC_AUTH"));
 			Job job = TestServer.ENGINE.jobs().invokeOperation(
-				"v/ops/http/get", input, RequestContext.of(caller));
+				"v/ops/http/" + method, input, RequestContext.of(caller));
 			ACell output = job.awaitResult(5000);
 
 			assertEquals("ok", RT.getIn(output, Fields.BODY).toString());
 			assertEquals("resolved-api-key|Basic dXNlcjp0b2tlbg==", received.get());
-			assertEquals(Fields.HIDDEN,
+			assertEquals(RT.getIn(input, Fields.SECRET_HEADERS),
 				RT.getIn(job.getData(), Fields.INPUT, Fields.SECRET_HEADERS));
 			String durable = job.getData().toString();
 			assertFalse(durable.contains("resolved-api-key"), durable);
 			assertFalse(durable.contains("dXNlcjp0b2tlbg"), durable);
-			assertFalse(durable.contains("s/API_KEY"), durable);
+			assertTrue(durable.contains("s/API_KEY"), durable);
+
+			// Bearer references follow the same rule: resolution only changes the
+			// outbound request, never the recorded operation input.
+			ACell bearerInput = Maps.of(
+				Fields.URL, "http://localhost:" + echo.getAddress().getPort() + "/headers",
+				Fields.BEARER_SECRET, "s/API_KEY");
+			Job bearerJob = TestServer.ENGINE.jobs().invokeOperation(
+				"v/ops/http/" + method, bearerInput, RequestContext.of(caller));
+			bearerJob.awaitResult(5000);
+			assertEquals("null|Bearer resolved-api-key", received.get());
+			assertEquals(Strings.create("s/API_KEY"),
+				RT.getIn(bearerJob.getData(), Fields.INPUT, Fields.BEARER_SECRET));
+			assertFalse(bearerJob.getData().toString().contains("resolved-api-key"));
 		} finally {
 			echo.stop(0);
 		}
@@ -295,18 +316,6 @@ public class HTTPTest {
 				Fields.BEARER_SECRET, "s/TOKEN"), RequestContext.of(caller)));
 		assertTrue(error.getMessage().contains("either secretHeaders or bearerSecret"),
 			error.getMessage());
-	}
-
-	@Test public void testHTTPGetAndPostDeclareSecretHeadersForRedaction() {
-		RequestContext ctx = RequestContext.of(Strings.create(
-			"did:test:http:secret-schema:" + System.nanoTime()));
-		for (String ref : new String[] {"v/ops/http/get", "v/ops/http/post"}) {
-			ACell operation = TestServer.ENGINE.resolvePath(Strings.create(ref), ctx);
-			AVector<ACell> secretFields = RT.ensureVector(
-				RT.getIn(operation, Fields.OPERATION, "secretFields"));
-			assertNotNull(secretFields, ref);
-			assertTrue(secretFields.contains(Fields.SECRET_HEADERS), ref);
-		}
 	}
 
 	// ====================================================================
@@ -413,44 +422,26 @@ public class HTTPTest {
 	// Error handling — missing/invalid parameters
 	// ====================================================================
 
-	@Test public void testMissingURL() {
-		VenueHTTP covia = TestServer.COVIA;
+	// A bad URL is an input fault the adapter finds at execution time, so it
+	// settles the Job as FAILED carrying the reason, rather than escaping the
+	// invoke as a transport error. failureOf accepts either surfacing.
 
-		// No URL provided — adapter NPEs on url.toString(), server returns 500
-		assertThrows(ExecutionException.class, () -> {
-			covia.invokeSync("v/ops/http/get", Maps.of(), 10_000);
-		}, "Missing URL should cause an error");
+	@Test public void testMissingURL() {
+		assertEquals("url is required", failureOf(Maps.of()));
 	}
 
 	@Test public void testInvalidURLFormat() {
-		VenueHTTP covia = TestServer.COVIA;
-
-		// Malformed URL — URISyntaxException, server returns 500
-		assertThrows(ExecutionException.class, () -> {
-			covia.invokeSync("v/ops/http/get", Maps.of(
-				"url", "not a valid url at all %%% {}"
-			), 10_000);
-		}, "Invalid URL format should cause an error");
+		assertTrue(failureOf(Maps.of("url", "not a valid url at all %%% {}"))
+			.startsWith("Bad URI syntax:"), "Invalid URL format should be reported as such");
 	}
 
 	@Test public void testURLWithNoHost() {
-		VenueHTTP covia = TestServer.COVIA;
-
-		// URL with scheme but no host — validateURL rejects it, server returns 400
-		assertThrows(ExecutionException.class, () -> {
-			covia.invokeSync("v/ops/http/get", Maps.of(
-				"url", "http:///path/only"
-			), 10_000);
-		}, "URL with no host should cause an error");
+		assertEquals("URL has no host: http:///path/only",
+			failureOf(Maps.of("url", "http:///path/only")));
 	}
 
 	@Test public void testEmptyURLString() {
-		VenueHTTP covia = TestServer.COVIA;
-
-		// Empty URL string — validateURL rejects it, server returns 400
-		assertThrows(ExecutionException.class, () -> {
-			covia.invokeSync("v/ops/http/get", Maps.of("url", ""), 10_000);
-		}, "Empty URL string should cause an error");
+		assertEquals("URL has no host: ", failureOf(Maps.of("url", "")));
 	}
 
 	// ====================================================================

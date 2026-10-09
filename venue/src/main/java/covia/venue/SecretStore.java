@@ -27,8 +27,8 @@ import convex.lattice.cursor.ALatticeCursor;
  * venue's Ed25519 seed, so only the venue that encrypted them can decrypt.</p>
  *
  * <p>Each secret is stored as a map with {@code "encrypted"} (Blob) and
- * {@code "updated"} (CVMLong timestamp) fields. The {@code "updated"} field
- * enables LWW merge semantics.</p>
+ * {@code "updated"} (CVMLong, last-modified millis from the lattice write
+ * clock) fields.</p>
  *
  * <p>Follows the same lattice app wrapper pattern as {@link AssetStore}.</p>
  */
@@ -69,13 +69,19 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> {
 
 	public void store(AString name, AString plaintext, byte[] encryptionKey) {
 		byte[] encrypted = AESGCM.encrypt(encryptionKey, plaintext.toString().getBytes(StandardCharsets.UTF_8));
-		AMap<AString, ACell> record = Maps.of(
-			ENCRYPTED_KEY, Blob.wrap(encrypted),
-			UPDATED_KEY, CVMLong.create(System.currentTimeMillis())
-		);
+		Blob encryptedBlob = Blob.wrap(encrypted);
+		CVMLong timestamp = cursor.getContext().currentTimestamp();
 		cursor.updateAndGet(current -> {
 			AMap<AString, ACell> m = RT.castMap(current);
 			if (m == null) m = Maps.empty();
+			CVMLong effective = timestamp;
+			ACell existing = m.get(name);
+			if (existing instanceof AMap<?, ?> oldRecord
+					&& oldRecord.get(UPDATED_KEY) instanceof CVMLong old
+					&& old.longValue() > effective.longValue()) effective = old;
+			AMap<AString, ACell> record = Maps.of(
+				ENCRYPTED_KEY, encryptedBlob,
+				UPDATED_KEY, effective);
 			return m.assoc(name, record);
 		});
 	}
@@ -96,7 +102,7 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> {
 		byte[] encrypted = AESGCM.encrypt(encryptionKey, plaintext.toString().getBytes(StandardCharsets.UTF_8));
 		AMap<AString, ACell> record = Maps.of(
 			ENCRYPTED_KEY, Blob.wrap(encrypted),
-			UPDATED_KEY, CVMLong.create(System.currentTimeMillis())
+			UPDATED_KEY, cursor.getContext().currentTimestamp()
 		);
 		AtomicBoolean wrote = new AtomicBoolean(false);
 		cursor.updateAndGet(current -> {

@@ -4,7 +4,7 @@
 	<modelVersion>4.0.0</modelVersion>
 	<groupId>ai.covia</groupId>
 	<artifactId>covia</artifactId>
-	<version>0.9.8</version>
+	<version>0.9.9</version>
 	<packaging>pom</packaging>
 
 	<name>Covia</name>
@@ -44,16 +44,16 @@
 		<maven.compiler.release>21</maven.compiler.release>
 		<maven.compiler.source>21</maven.compiler.source>
 		<junit.version>6.1.3</junit.version>
-		<convex.version>0.8.16</convex.version>
+		<convex.version>0.8.17</convex.version>
 		<maven.compiler.target>21</maven.compiler.target>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 		
 		<logback.version>1.6.3</logback.version>
 		<slf4j.version>2.0.18</slf4j.version>
 		<javalin.version>7.2.3</javalin.version>
-		<langchain.version>1.19.0</langchain.version>
+		<langchain.version>1.22.0</langchain.version>
 		<mcp.version>2.0.1</mcp.version>
-		<a2a.version>1.2.0.Final</a2a.version>
+		<a2a.version>1.3.0.Final</a2a.version>
 		<!-- Flags for every forked test JVM (surefire and failsafe; modules with
 		     their own argLine splice this in). JDK 24+ warns once per JVM when a
 		     library touches sun.misc.Unsafe memory access (JEP 471); protobuf-java
@@ -75,6 +75,8 @@
 		<module>covia-sql</module>
 		<module>covia-telegram</module>
 		<module>covia-discord</module>
+		<module>covia-whatsapp</module>
+		<module>covia-slack</module>
 		<module>covia-sonnylabs</module>
 		<module>covia-documents</module>
 		<module>covia-claude-code</module>

@@ -137,7 +137,7 @@ This applies wherever the content comes from — a SKILL.md pasted into `content
 
 **A content ref to a SKILL.md is itself a skill ref.** `file://<root>/<dir>/SKILL.md` and `dlfs/<drive>/<path>` are accepted wherever a skill ref is — a `config.skills` entry, a skillset member value (`w/skills/agent = "file://reference/skills/agent/SKILL.md"`), or a `skill_load {ref}`. The content provider pins its own read (`crud/read` on the `file://` resource), the frontmatter is the metadata, and identity is the hash of that synthesised metadata, so two addresses of one file dedup as one skill. The file is read when the index is initialised or the skill is explicitly loaded/reloaded; an edit does not rewrite an active conversation implicitly. `skills:import` lifts `name`/`description` into stored metadata so discovery does not depend on a live file read.
 
-**Importing.** `skills:import {source}` parses one SKILL.md and writes `<skillset>/<name>` (§8); `skills:parse` returns the same metadata without storing it. Both translate the file **as a single skill**: supporting files (`references/`, `scripts/`, `assets/`) are not walked or copied. A body that links to them relatively will point at nothing once imported; bind the ones an agent needs as `skill.context` entries with `file://` refs, or keep the whole skill live with `content: "ref"` so the agent's `file_read` can follow the same root. Nothing derives the name from anything but the frontmatter, except a SKILL.md that declares none, which takes its directory's name (the Agent Skills rule that the two match).
+**Importing.** `skills:import {source}` (or `{text}`, for a SKILL.md already in hand) parses one SKILL.md and writes `<skillset>/<name>` (§8); `skills:parse` returns the same metadata without storing it. Both translate the file **as a single skill**: supporting files (`references/`, `scripts/`, `assets/`) are not walked or copied. A body that links to them relatively will point at nothing once imported; bind the ones an agent needs as `skill.context` entries with `file://` refs, or keep the whole skill live with `content: "ref"` so the agent's `file_read` can follow the same root. Nothing derives the name from anything but the frontmatter, except a SKILL.md that declares none, which takes its directory's name (the Agent Skills rule that the two match).
 
 ### 3.4 A skill can also be an operation
 
@@ -247,7 +247,7 @@ Children are **discovered, not auto-loaded**. Loading `workspace` returns the re
 
 Contributed refs are denormalised onto the parent's loads entry, like tool refs. Editing a loaded parent's lists therefore needs unload/reload; the target directories and skill metadata remain live. Unloading the parent retracts its contributed sources. A child already loaded remains loaded independently and continues to contribute its own until it too is unloaded.
 
-**The shipped library uses exactly this.** `v/skills/root` holds eight entry-point skills, each opening its family: `workspace`→`data`, `agents`→`agents`, `grid`→`grid`, `discovery`→`ops-tools`+`adapters`, `auth`→`auth`+`caps-permissions`, `venue`→`venue`+`admin`, `skills`→`building`, `covia`→`convex`. That keeps the always-on index at eight lines while every skill stays one load away.
+**The shipped library uses exactly this.** `v/skills/root` holds the entry-point skills, each opening its family: `workspace`→`data`, `agents`→`agents`, `grid`→`grid`, `discovery`→`ops-tools`+`adapters`, `auth`→`auth`+`caps-permissions`, `venue`→`venue`+`admin`, `skills`→`building`, `covia`→`convex`, `projects`→`projects` (briefing, planning, delegation, reporting, delivery, monitoring — see [PROJECT.md](PROJECT.md)). That keeps the always-on index to one line per family while every skill stays one load away.
 
 An entry point is installed at **both** its family path and its `root/` mirror, from the same resource — so both addresses hold identical metadata, and content-identity dedup (§5.3) treats them as one skill. Mirroring is only safe this way: hand-copying metadata would produce two different hashes and two context entries. Grouping is decided by the owning adapter, so a skillset only ever lists skills whose adapter is actually active, and `v/adapters/<name>/skills` is itself a ready-made skillset for everything one adapter offers.
 
@@ -297,7 +297,7 @@ A `name` that matches nothing fails with a message naming the skills that ARE av
 
    `revealed` exists because the index alone was not enough: the reader already has the turn-start `[Skills]` block and the refreshed index, but must notice they differ. A live agent observably did not — it reported "no new skills" while listing the revealed ones. Naming them removes the inference.
 5. By default, appends the body as a loaded-skill system event and the skill's `skill.context` as one `loaded_context` result under the same key. The next inference in the same tool loop therefore sees both without regenerating either. With `volatile: true`, the persistent declaration is instead watched before each inference: its first value, and only later changed values, append through the same observation lifecycle as other volatile loads.
-6. Returns a compact acknowledgement. The body and contributed data occur only in the appended events, not again in this result:
+6. Returns a compact, purely structural acknowledgement. The body and contributed data occur only in the appended events, not again in this result, and there is no prose: the unload key is `path`, `volatile: true` marks a watched load, and `existing` names the path identical content was already loaded under (the load is then a no-op). `tools`, `revealed`, `skillIndex` and `unresolved` appear only when present:
 
 ```json
 {
@@ -306,8 +306,7 @@ A `name` that matches nothing fails with a message naming the skills that ARE av
   "path": "w/skills/pdf-processing",
   "tools": ["file_read", "schema_validate"],
   "skillIndex": "- pdf-table-extraction — Extract tables from PDFs\n...",
-  "unresolved": ["v/ops/gone/op"],
-  "note": "Skill instructions were appended to context. Its path is the exact unload key if you later need to remove it; ordinary tool results need no cleanup. Tools and contributed skills are active from your next step."
+  "unresolved": ["v/ops/gone/op"]
 }
 ```
 
@@ -371,13 +370,15 @@ Four ops, one question each, because a single command-dispatched union could onl
 | `v/ops/skills/list` | `skills_list` | `skillset?` — one directory of skills; omitted → the venue's configured entry skillsets | A map from each skill's resolved **path** to `{name, description, id}` |
 | `v/ops/skills/read` | `skills_read` | `skill` — one resolved path, asset ref, or content ref | `{name, description, path, id, tools, body?, skills?, skillsets?, context?}` |
 | `v/ops/skills/parse` | `skills_parse` | exactly one of `source` (one content ref to a SKILL.md) or `text` (the SKILL.md itself); `content?` = `inline` (default) \| `ref` | `{metadata, name, description, ignored?}` — `metadata` is the map `covia:write` / `asset:store` accept as-is. Nothing stored |
-| `v/ops/skills/import` | `skills_import` | `source` — one content ref to a SKILL.md; `skillset?` (default `w/skills`); `content?` = `inline` \| `ref` | `{path, name, description, source, content, existed, ignored?}` — written to `<skillset>/<name>` |
+| `v/ops/skills/import` | `skills_import` | exactly one of `source` (one content ref to a SKILL.md) or `text` (the SKILL.md itself); `skillset?` (default `w/skills`); `content?` = `inline` (default) | `ref` (`ref` needs `source`) | `{path, name, description, source?, content, existed, ignored?}` — written to `<skillset>/<name>` |\| `ref` | `{path, name, description, source, content, existed, ignored?}` — written to `<skillset>/<name>` |
 
 **Single arity.** One skillset per list, one skill per read, one SKILL.md per parse or import. That removes partial failure entirely — there is no "three of five worked" to represent — and the error says what to pass instead. The one plural case is the default: omit `skillset` and the venue's configured entry skillsets are listed, because "where should I start" is inherently a set.
 
 **Import names one file, never a directory.** A library is imported by naming each SKILL.md. There is deliberately no tree walk: what lands in a skillset is exactly what the caller asked for, the read pin is on one precise resource, and "which of these forty were skills" never has to be reported. The target is a **skillset** rather than a path, so the entry's key is always the frontmatter name — the key is canonical for a skillset member (§3.1), and letting the two disagree would produce an index line that `skill_load {name}` cannot load. Read and parse complete before the write, so a bad source writes nothing; the write is `covia:write`'s own seam, so the namespace rules and the `crud/write` pin are the same ones. Re-importing overwrites (`existed: true`).
 
 **Inline or ref.** `content: "inline"` copies the body into the stored metadata — self-contained, and the facet carries the frontmatter's `tools`/`skills`/`skillsets` since the frontmatter is gone from an inline body. `content: "ref"` binds `content.ref` to the source — the body stays live in the file, the facet is left to the live frontmatter, and only `name`/`description` are snapshots (re-import to refresh the index line). Neither pins bytes; add `content.sha256` with `covia:write` to freeze a ref.
+
+**Provenance.** The record `import` writes carries `createdBy: {did, agentId?}` — the principal that acted (an agent's own sub-principal, `<ownerDID>:g:<agentId>`, when the import came from an agent run), plus the agent id so nothing has to parse a DID — so a library listing can tell an agent-authored skill from a hand-written one without a second lookup. It rides in the stored metadata like `license` and `compatibility`; `parse` stores nothing and stamps nothing, and a skill written directly with `covia:write` carries whatever its author put there.
 
 **Why parse exists beside import.** `parse` is the translator alone: for a SKILL.md the caller already holds as text, for review before storing, or to feed `asset:store` for an immutable `a/<hash>`. `import` is the same translation plus the write, and its reason to exist is that the body never passes through a model's context — the alternative, `file_read` then `covia_write`, round-trips every byte through the tool call.
 

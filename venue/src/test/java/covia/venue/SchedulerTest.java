@@ -2,6 +2,7 @@ package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -21,11 +22,13 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Blob;
+import convex.core.data.Index;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
+import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -72,6 +75,29 @@ public class SchedulerTest {
 	}
 
 	// ----------------------------------------------------------- fire via trigger
+
+	@Test
+	@SuppressWarnings("unchecked")
+	public void testScheduleRetainsExtensibleRecordShape() {
+		Blob first = sched.schedule(s("v/test/ops/echo"), s("one"), ctx, future());
+		var cursor = engine.getVenueState().scheduleCursor();
+		AMap<AString, ACell> record = assertInstanceOf(AMap.class, cursor.get());
+		assertInstanceOf(CVMLong.class, record.get(Fields.UPDATED));
+		assertInstanceOf(Index.class, record.get(Scheduler.K_EVENTS));
+
+		// An events mutation must update the field in place, not rebuild the
+		// scheduler record and discard future sibling metadata.
+		AString marker = Strings.create("test-marker-" + did);
+		cursor.updateAndGet(value -> ((AMap<AString, ACell>) value)
+			.assoc(marker, Strings.create("keep")));
+		Blob second = sched.schedule(s("v/test/ops/echo"), s("two"), ctx, future() + 1);
+		assertEquals(Strings.create("keep"),
+			((AMap<AString, ACell>) cursor.get()).get(marker));
+
+		assertTrue(sched.cancel(first, ctx));
+		assertTrue(sched.cancel(second, ctx));
+		cursor.updateAndGet(value -> ((AMap<AString, ACell>) value).dissoc(marker));
+	}
 
 	@Test
 	public void testTriggerRunsOperation() throws Exception {

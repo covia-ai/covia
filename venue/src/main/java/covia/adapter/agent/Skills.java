@@ -1605,12 +1605,13 @@ public final class Skills {
 		// Same content already loaded under another address → no-op naming it.
 		AString existing = findLoadedDuplicate(engine, ctx, effectiveLoads, skill.id());
 		if (existing != null && !existing.equals(skill.path())) {
+			// Structural (#504): `existing` names the path the identical content
+			// is already loaded under, which is the unload key.
 			return new LoadOutcome(existing, null, Maps.of(
 				Strings.intern("loaded"), CVMBool.TRUE,
 				K_SKILL, Strings.create(skill.name()),
 				Strings.intern("path"), existing,
-				Strings.intern("note"), Strings.create(
-					"Already loaded (as " + existing + ") — identical skill content; nothing added.")));
+				Strings.intern("existing"), existing));
 		}
 
 		// Budget precedence: caller > skill.budget facet > skill default.
@@ -1650,19 +1651,14 @@ public final class Skills {
 			}
 		}
 
-		boolean watched = Loads.isVolatile(entryMeta);
+		// Purely structural (#504): the appended events and the tool description
+		// already carry the unload key and the tool-result policy, and clients
+		// render tool results to people.
 		AMap<AString, ACell> result = Maps.of(
 			Strings.intern("loaded"), CVMBool.TRUE,
 			K_SKILL, Strings.create(skill.name()),
-			Strings.intern("path"), skill.path(),
-			Strings.intern("note"), Strings.create(
-				(watched
-					? "Skill instructions are watched and append to context when their rendered value changes. "
-					: "Skill instructions were appended to context. ")
-				+ "Its path is the exact unload key if you "
-				+ "later need to remove it; ordinary tool results need no cleanup. Already advertised "
-				+ "tools remain callable; genuinely new tools and contributed skills are available from "
-				+ "your next step. Loading grants no authority."));
+			Strings.intern("path"), skill.path());
+		if (Loads.isVolatile(entryMeta)) result = result.assoc(Loads.K_VOLATILE, CVMBool.TRUE);
 		if (toolNames.count() > 0) result = result.assoc(Fields.TOOLS, toolNames);
 		if (skill.contributesSources()) {
 			if (skill.skills().count() > 0) result = result.assoc(K_SKILLS, skill.skills());

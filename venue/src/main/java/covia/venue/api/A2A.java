@@ -45,7 +45,6 @@ import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.User;
 import covia.venue.server.AuthMiddleware;
-import covia.venue.server.SseServer;
 import io.javalin.config.RoutesConfig;
 import io.javalin.http.Context;
 import io.javalin.http.sse.SseHandler;
@@ -92,12 +91,9 @@ public class A2A extends ACoviaAPI {
 	private final String agentVersion;
 	private final AgentProvider agentProvider;
 
-	@SuppressWarnings("unused")
-	protected final SseServer sseServer;
 
 	public A2A(Venue venue, AMap<AString, ACell> a2aConfig) {
 		super(venue);
-		this.sseServer = new SseServer(engine());
 
 		// defaultChatOp may be omitted; absence is only fatal when a client
 		// actually calls SendMessage on a fresh task (checked in doSendMessage).
@@ -133,7 +129,7 @@ public class A2A extends ACoviaAPI {
 
 	protected void getAgentCard(Context ctx) {
 		try {
-			String baseUrl = getExternalBaseUrl(ctx, "");
+			String baseUrl = getExternalBaseUrl(ctx, "", engine().config().getTrustedProxies());
 			AgentCard card = buildAgentCard(baseUrl);
 			writeJson(ctx, 200, card);
 		} catch (Exception e) {
@@ -185,7 +181,7 @@ public class A2A extends ACoviaAPI {
 		AMap<AString, ACell> config = agent.getConfig();
 		String name = stringOr(config, "name", ref.agentId());
 		String description = stringOr(config, "description", "Covia agent " + ref.agentId());
-		String endpoint = A2ACodec.agentEndpointUrl(getExternalBaseUrl(ctx, ""), ref.ownerDid(), ref.agentId());
+		String endpoint = A2ACodec.agentEndpointUrl(getExternalBaseUrl(ctx, "", engine().config().getTrustedProxies()), ref.ownerDid(), ref.agentId());
 		return A2ACodec.agentCard(name, description, agentVersion, agentProvider, endpoint);
 	}
 
@@ -710,7 +706,7 @@ public class A2A extends ACoviaAPI {
 	 */
 	private void doGetExtendedCard(Context ctx, Object id) {
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
-		String endpoint = getExternalBaseUrl(ctx, "") + "/a2a";
+		String endpoint = getExternalBaseUrl(ctx, "", engine().config().getTrustedProxies()) + "/a2a";
 		List<AgentSkill> skills = isAnonymousCaller(rctx) ? List.of() : catalogueSkills(rctx);
 		writeResult(ctx, id, A2ACodec.agentCard(agentName, agentDescription, agentVersion,
 				agentProvider, endpoint, skills));
