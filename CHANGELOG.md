@@ -10,6 +10,24 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Changed
 
+- Respect explicit non-adaptive Anthropic thinking modes: prefix binding and
+  its beta header are added only with adaptive thinking (#563), avoiding
+  invalid requests for Sonnet 5.5 `between_tools` and Haiku 5.5 `disabled`.
+
+- Complete release follow-ups: keep A2A observation across input/auth interruptions
+  (#512), count only operations in venue stats (#555), preserve Anthropic cache
+  creation usage by TTL (#487), and exercise skills migration with a stub model
+  (#484). Public status and show-config report only the anonymous access mode,
+  without disclosing custom capability targets (#562).
+
+- Online `venue:gc` can retain a pre-cycle store checkpoint with `backupFile`,
+  using Convex's GC backup API. The result reports when the checkpoint is safe
+  to copy (after clean shutdown/restart); its hard link retains the original
+  disk allocation until removed. Venue tests cover concurrent workspace/DLFS
+  access, plain/encrypted restoration, cancellation and backup-path collisions.
+  `etch.gc.retainSuperseded` applies retention to startup and online collection;
+  per-call `retainSuperseded` overrides it (#556).
+
 - Embedded startup has a shared readiness boundary (#553): `Engine.launch`
   and `launchAsync` assemble a complete venue over a caller-owned host without
   HTTP; VenueServer uses the same sequence. Application setup hooks finish
