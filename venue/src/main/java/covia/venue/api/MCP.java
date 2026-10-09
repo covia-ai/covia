@@ -39,7 +39,6 @@ import covia.venue.Engine;
 import covia.venue.LocalVenue;
 import covia.venue.RequestContext;
 import covia.venue.server.AuthMiddleware;
-import covia.venue.server.SseServer;
 import io.javalin.config.RoutesConfig;
 import io.javalin.http.Context;
 import jakarta.servlet.http.HttpServletResponse;
@@ -58,7 +57,6 @@ public class MCP extends McpServer {
 	public static final Logger log = LoggerFactory.getLogger(MCP.class);
 
 	private final Venue venue;
-	protected final SseServer sseServer;
 
 	/** Default timeout for MCP tool calls (120 seconds) */
 	private static final long TOOL_CALL_TIMEOUT_MS = 120_000;
@@ -134,7 +132,6 @@ public class MCP extends McpServer {
 	public MCP(Venue venue, AMap<AString, ACell> mcpConfig) {
 		super(buildServerInfo(venue, mcpConfig));
 		this.venue = venue;
-		this.sseServer = new SseServer(engine());
 		this.includedAdapters = readIncludedAdapters(mcpConfig);
 		this.includePathPrefixes = readIncludePathPrefixes(mcpConfig);
 		this.authRequired = engine().config().isMCPAuthRequired();
@@ -352,12 +349,12 @@ public class MCP extends McpServer {
 		);
 	}
 
-	private static String mcpResource(Context ctx) {
-		return ACoviaAPI.getExternalBaseUrl(ctx, null) + "/mcp";
+	private String mcpResource(Context ctx) {
+		return ACoviaAPI.getExternalBaseUrl(ctx, null, engine().config().getTrustedProxies()) + "/mcp";
 	}
 
-	private static String protectedResourceMetadata(Context ctx) {
-		return ACoviaAPI.getExternalBaseUrl(ctx, null)
+	private String protectedResourceMetadata(Context ctx) {
+		return ACoviaAPI.getExternalBaseUrl(ctx, null, engine().config().getTrustedProxies())
 			+ "/.well-known/oauth-protected-resource/mcp";
 	}
 

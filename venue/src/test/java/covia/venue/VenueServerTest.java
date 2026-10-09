@@ -881,4 +881,32 @@ public class VenueServerTest {
 			() -> "Encoded-dot (%2e) path must be rejected — AMBIGUOUS_PATH_ENCODING is not enabled: "
 				+ resp.statusCode() + " " + resp.body());
 	}
+
+	/**
+	 * X-Forwarded-* headers describe the venue's external URL only when they
+	 * come from a trusted proxy. The shared TestServer trusts none, so a direct
+	 * client cannot make the venue publish an attacker-chosen host in its own
+	 * status URL or DID document.
+	 */
+	@Test public void testForwardedHeadersIgnoredFromUntrustedClient() throws Exception {
+		HttpClient client = TestHTTP.CLIENT;
+		for (String path : new String[] { "/api/v1/status", "/.well-known/did.json" }) {
+			HttpRequest req = HttpRequest.newBuilder()
+				.uri(new URI("http://localhost:" + PORT + path))
+				.header("X-Forwarded-Proto", "https")
+				.header("X-Forwarded-Host", "evil.example")
+				.header("X-Forwarded-Port", "443")
+				.header("X-Forwarded-Prefix", "/pwned")
+				.GET().timeout(Duration.ofSeconds(10)).build();
+			HttpResponse<String> resp = client.send(req, HttpResponse.BodyHandlers.ofString());
+			assertEquals(200, resp.statusCode(), path);
+			assertFalse(resp.body().contains("evil.example"), path + " echoed a forwarded host: " + resp.body());
+			assertFalse(resp.body().contains("/pwned"), path + " echoed a forwarded prefix");
+		}
+		ACell status = JSON.parse(client.send(HttpRequest.newBuilder()
+			.uri(new URI("http://localhost:" + PORT + "/api/v1/status")).GET().build(),
+			HttpResponse.BodyHandlers.ofString()).body());
+		assertTrue(RT.getIn(status, "url").toString().startsWith("http://localhost:" + PORT),
+			"the venue's own address stands: " + RT.getIn(status, "url"));
+	}
 }

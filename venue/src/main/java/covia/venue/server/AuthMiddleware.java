@@ -174,7 +174,7 @@ public class AuthMiddleware {
 	}
 
 	private void extractMCPIdentity(Context ctx, boolean required, Set<String> allowedDids) {
-		String resourceMetadata = ACoviaAPI.getExternalBaseUrl(ctx, null)
+		String resourceMetadata = ACoviaAPI.getExternalBaseUrl(ctx, null, engine.config().getTrustedProxies())
 			+ "/.well-known/oauth-protected-resource/mcp";
 		extractIdentity(ctx, !required && publicAccessEnabled, resourceMetadata,
 			true);
@@ -191,6 +191,8 @@ public class AuthMiddleware {
 	 * must render the response itself rather than relying on endpoint error handling.
 	 */
 	private void reject(Context ctx, int status, String message) {
+		// RFC 7235: a 401 names its challenge; the MCP path has already set a richer one.
+		if (status == 401 && ctx.res().getHeader("WWW-Authenticate") == null) ctx.header("WWW-Authenticate", "Bearer");
 		String body = "{\"error\": \"" + JSON.escape(message) + "\"}";
 		ctx.status(status)
 			.header("Content-Type", ContentTypes.JSON + "; charset=utf-8")

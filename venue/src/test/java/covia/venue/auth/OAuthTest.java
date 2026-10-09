@@ -23,6 +23,7 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.auth.jwt.JWT;
 import covia.api.Fields;
 import covia.venue.Auth;
@@ -333,5 +334,42 @@ public class OAuthTest {
 
 		HttpResponse<String> resp = client.send(req, HttpResponse.BodyHandlers.ofString());
 		assertEquals(200, resp.statusCode(), "Anonymous access should be allowed when public is enabled");
+	}
+
+	@Test
+	void testLoginRedirectAllowList() {
+		// The venue's own origin is always allowed; configured origins extend it.
+		AMap<AString, ACell> authConfig = Maps.of(
+			Config.OAUTH, Maps.of("google", Maps.of(
+				Config.CLIENT_ID, "cid", Config.CLIENT_SECRET, "secret")),
+			Config.LOGIN_REDIRECT_ORIGINS, Vectors.of(
+				Strings.create("https://app.example.com"),
+				Strings.create("HTTP://Other.example:8080/ignored/path"),
+				Strings.create("not a url")));
+		LoginProviders lp = new LoginProviders(engine, authConfig);
+
+		// Allowed: a path on the venue, the venue's own origin, a configured origin.
+		assertNull(lp.checkRedirect(null));
+		assertNull(lp.checkRedirect("/app/callback?x=1"));
+		assertNull(lp.checkRedirect(engine.config().getBaseUrl() + "/cb"));
+		assertNull(lp.checkRedirect("https://app.example.com/cb"));
+		assertNull(lp.checkRedirect("https://APP.example.com:443/cb"));
+		assertNull(lp.checkRedirect("http://other.example:8080/cb"));
+
+		// Refused: anything that would carry the session token elsewhere.
+		String reason = lp.checkRedirect("https://evil.example/");
+		assertNotNull(reason);
+		assertTrue(reason.startsWith(LoginProviders.REDIRECT_REFUSED), reason);
+		assertNotNull(lp.checkRedirect("//evil.example/"));
+		assertNotNull(lp.checkRedirect("/\\evil.example/"));
+		assertNotNull(lp.checkRedirect("https://app.example.com.evil.example/"));
+		assertNotNull(lp.checkRedirect("https://app.example.com:8443/"));
+		assertNotNull(lp.checkRedirect("javascript:alert(1)"));
+		assertNotNull(lp.checkRedirect("ftp://app.example.com/"));
+
+		// Without configuration only the venue's own origin remains.
+		LoginProviders bare = new LoginProviders(engine, null);
+		assertNull(bare.checkRedirect("/"));
+		assertNotNull(bare.checkRedirect("https://app.example.com/cb"));
 	}
 }

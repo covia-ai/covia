@@ -1305,6 +1305,13 @@ links. A caller may pass `?redirect_uri=` to `/auth/<provider>` to be returned t
 its own callback once login completes; the value is carried through the provider
 round trip in the OAuth `state`.
 
+The `redirect_uri` is checked at login and again at the callback (the OAuth
+`state` that carries it is unsigned): it must be a path on the venue (`/app`)
+or an absolute URL whose origin is the venue's own `baseUrl` origin or one
+listed in `auth.loginRedirectOrigins`, an array of origins such as
+`["https://app.example.com"]`. Anything else is refused with 400, so a crafted
+link cannot send a user's session token to another host.
+
 ## OAuth authorization server (`auth.oauth.provider`)
 
 The venue can act as an OAuth 2.1 authorization server so a third-party or MCP

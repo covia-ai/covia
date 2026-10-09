@@ -29,6 +29,7 @@ import covia.adapter.agent.ToolCallIds;
 import covia.api.Fields;
 import covia.grid.Asset;
 import covia.grid.Status;
+import covia.venue.Engine;
 import covia.venue.RequestContext;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
@@ -366,6 +367,11 @@ public class LangChainAdapter extends AAdapter {
 			return CompletableFuture.completedFuture(
 				Status.failure("Model not specified for provider '" + provider + "'"));
 		}
+
+		// A url the caller chose is an outbound target like any other and must
+		// never carry the venue's own key: see checkCallerUrl.
+		String urlRefused = checkCallerUrl(provider, urlParam, meta, input);
+		if (urlRefused != null) return CompletableFuture.completedFuture(Status.failure(urlRefused));
 
 		// Optional sampling/bounds parameters (#218): temperature and topP pass
 		// through to every provider; maxTokens (covia#198) is honoured by the
@@ -1035,7 +1041,7 @@ public class LangChainAdapter extends AAdapter {
 			// caller's secret store. If resolution fails we MUST return null
 			// rather than the literal reference — passing "/s/foo" through as
 			// an API key produces a misleading 401 from the provider (see #91).
-			if (s.startsWith("/s/") || s.startsWith("s/")) {
+			if (Engine.isSecretRef(s)) {
 				return engine.resolveSecret(s, ctx);
 			}
 			return s;
@@ -1059,6 +1065,37 @@ public class LangChainAdapter extends AAdapter {
 		return (environment != null && !environment.isBlank()) ? environment : null;
 	}
 
+
+	/** Refusal for a caller-chosen url combined with the venue's provisioned key. */
+	static final String URL_NEEDS_CALLER_KEY = "a url other than the operation's own endpoint "
+		+ "needs an inline apiKey: the key resolved from operation.secretKey is never sent elsewhere";
+
+	/**
+	 * A url that is not the operation's own default is the caller's choice of
+	 * outbound target: it passes the venue's SSRF guard like any http call, and
+	 * for a keyed provider it needs an inline {@code apiKey} — the key resolved
+	 * from {@code operation.secretKey} (the caller's store, the public store or
+	 * the environment) goes only to the endpoint the operator configured.
+	 *
+	 * @return null when the url may be used, otherwise the reason it may not
+	 */
+	String checkCallerUrl(String provider, AString urlParam, AMap<AString, ACell> meta, ACell input) {
+		if (urlParam == null) return null;
+		String url = urlParam.toString();
+		AString own = RT.ensureString(RT.getIn(meta, Fields.OPERATION, "default", "url"));
+		if (own == null) own = RT.ensureString(RT.getIn(meta, Fields.OPERATION, "input", "properties", "url", "default"));
+		if (own != null && url.equals(own.toString())) return null;
+		if (providerNeedsApiKey(provider)) {
+			AString apiKey = RT.ensureString(RT.getIn(input, "apiKey"));
+			if (apiKey == null || Engine.isSecretRef(apiKey.toString())) return URL_NEEDS_CALLER_KEY + ": " + url;
+		}
+		try {
+			engine.requireSafeUrl(url);
+		} catch (IllegalArgumentException e) {
+			return e.getMessage();
+		}
+		return null;
+	}
 	// ========== LLM invocation ==========
 
 	/**

@@ -2242,4 +2242,51 @@ public class LangChainAdapterTest {
 			assertEquals(CVMLong.create(18), totals.get(Fields.TOTAL));
 		} finally { covia.adapter.agent.CycleRecord.end(); }
 	}
+
+	/**
+	 * A caller-chosen url is an outbound target like any other: it passes the
+	 * SSRF guard, and for a keyed provider it never carries a key the caller
+	 * did not supply inline — the venue's provisioned key stays with the
+	 * operation's own endpoint.
+	 */
+	@Test
+	public void testCallerUrlPolicy() throws Exception {
+		Engine engine = Engine.createTemp(null);
+		try {
+			Engine.addDemoAssets(engine);
+			LangChainAdapter adapter = (LangChainAdapter) engine.getAdapter("langchain");
+			// Allow-listed hosts skip resolution, so the "allowed" cases need no DNS.
+			((HTTPAdapter) engine.getAdapter("http")).addAllowedHost("evil.example");
+			AMap<AString, ACell> meta = Maps.of(Strings.create("operation"), Maps.of(
+				Strings.create("adapter"), Strings.create("langchain:openai"),
+				Strings.create("secretKey"), Strings.create("OPENAI_API_KEY"),
+				Strings.create("default"), Maps.of(Strings.create("url"), Strings.create("https://proxy.example/v1"))));
+			AString evil = Strings.create("https://evil.example/v1");
+			AString loopback = Strings.create("http://127.0.0.1:1/");
+
+			// No url, or the operation's own url: nothing to check.
+			assertNull(adapter.checkCallerUrl("openai", null, meta, Maps.empty()));
+			assertNull(adapter.checkCallerUrl("openai", Strings.create("https://proxy.example/v1"), meta, Maps.empty()));
+
+			// Another url with the venue's key (no apiKey, or a store reference): refused.
+			String noKey = adapter.checkCallerUrl("openai", evil, meta, Maps.empty());
+			assertNotNull(noKey);
+			assertTrue(noKey.startsWith(LangChainAdapter.URL_NEEDS_CALLER_KEY), noKey);
+			assertNotNull(adapter.checkCallerUrl("openai", evil, meta,
+				Maps.of(Strings.create("apiKey"), Strings.create("s/OPENAI_API_KEY"))));
+
+			// An inline key makes the url the caller's own choice, still SSRF-guarded.
+			ACell inline = Maps.of(Strings.create("apiKey"), Strings.create("sk-caller"));
+			assertNull(adapter.checkCallerUrl("openai", evil, meta, inline));
+			String ssrf = adapter.checkCallerUrl("openai", loopback, meta, inline);
+			assertNotNull(ssrf);
+			assertFalse(ssrf.contains("sk-caller"), ssrf);
+
+			// A keyless provider only meets the SSRF guard.
+			assertNull(adapter.checkCallerUrl("ollama", evil, meta, Maps.empty()));
+			assertNotNull(adapter.checkCallerUrl("ollama", loopback, meta, Maps.empty()));
+		} finally {
+			engine.close();
+		}
+	}
 }

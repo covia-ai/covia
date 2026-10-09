@@ -836,20 +836,6 @@ public class Engine {
 		publishApplicationRoot();
 	}
 
-	/**
-	 * Compatibility hook retained for callers built against the former fixed
-	 * timestamp context model.
-	 *
-	 * <p>The current Convex context is a live application policy. Covia installs
-	 * it once at startup with a dynamic runtime clock; derived components and
-	 * bounded forks retain that policy, so there is no timestamp snapshot to
-	 * refresh.</p>
-	 */
-	@Deprecated
-	public void refreshWriteClock() {
-		// Dynamic LatticeContext resolves time at each logical write.
-	}
-
 	/** Publishes through the hosted application policy or the legacy root cursor. */
 	private void publishApplicationRoot() {
 		if (application != null) {
@@ -1151,23 +1137,6 @@ public class Engine {
 	}
 
 	/**
-	 * Flushes catalog entries that adapters collected via
-	 * {@link covia.adapter.AAdapter#installAsset(String, String)} and
-	 * {@link covia.adapter.AAdapter#installTestAsset(String, String)}. Each
-	 * entry is written to its full target path (e.g. {@code v/ops/json/merge}
-	 * or {@code v/test/ops/echo}) as inline asset metadata on a child lattice
-	 * fork.
-	 *
-	 * <p>This catalog-only method is retained for callers that explicitly need
-	 * it. Normal startup uses {@link #materialiseBootstrapState()} so catalog
-	 * and venue information become visible together.</p>
-	 */
-	public void materialiseVOps() {
-		VenueBootstrapMaterializer.materialiseAdapterCatalog(this);
-		catalogPublished = true;
-	}
-
-	/**
 	 * Materialises the adapter catalog and {@code /v/info/} snapshot together.
 	 * The complete snapshot is built and validated on a child fork, then
 	 * committed to the Engine's connected state with one atomic update. A
@@ -1212,29 +1181,6 @@ public class Engine {
 					+ "when the server is reachable", name, e.getMessage());
 			}
 		}
-	}
-
-	/**
-	 * Writes the venue introspection data to {@code /v/info/} sub-paths.
-	 * Called once at startup after all adapters are registered, and any
-	 * time the venue wants to refresh the information.
-	 *
-	 * <p>Per OPERATIONS.md §3, the populated paths are:</p>
-	 * <ul>
-	 *   <li>{@code /v/info/name} — venue display name (from config)</li>
-	 *   <li>{@code /v/info/did} — venue's own DID</li>
-	 *   <li>{@code /v/info/version} — covia jar version</li>
-	 *   <li>{@code /v/info/started} — startup time as epoch milliseconds</li>
-	 *   <li>{@code /v/info/protocols} — array of enabled protocol handlers</li>
-	 *   <li>{@code /v/info/adapters/&lt;name&gt;} — per-adapter summary</li>
-	 * </ul>
-	 *
-	 * <p>Writes use the same cursor path semantics as {@code covia:write}, but
-	 * are staged on a child {@code w/global} workspace fork and committed with
-	 * one atomic update. No operation invocation or Job is involved.</p>
-	 */
-	public void materialiseVenueInfo() {
-		VenueBootstrapMaterializer.materialiseVenueInformation(this);
 	}
 
 	/**
@@ -2438,14 +2384,6 @@ public class Engine {
 	}
 
 	/**
-	 * Returns the current lattice state root.
-	 * @return Lattice state as ACell, or null if not initialised
-	 */
-	public ACell getLatticeState() {
-		return lattice.get();
-	}
-
-	/**
 	 * Gets a content stream for the given asset
 	 * @param meta Metadata of asset
 	 * @return Content stream, or null if not available / does not exist
@@ -2855,16 +2793,6 @@ public class Engine {
 	 */
 	public AccessControl getAccessControl() {
 		return accessControl;
-	}
-
-	/**
-	 * Get the raw config map.
-	 * @return Config map
-	 * @deprecated Use {@link #config()} for typed access
-	 */
-	@Deprecated
-	public AMap<AString,ACell> getConfig() {
-		return config.getMap();
 	}
 
 	public DID getDID() {
@@ -3760,6 +3688,24 @@ public class Engine {
 			ability != null ? Strings.create(ability) : null);
 	}
 
+	/**
+	 * Outbound-target policy for every adapter that dials a caller-chosen URL
+	 * (an MCP server, an A2A peer, a model endpoint): the http adapter's SSRF
+	 * guard with the operator's allow and block lists, so no adapter can reach
+	 * what a direct HTTP call could not (#234). Fails closed when the http
+	 * adapter is absent.
+	 *
+	 * @param url URL string to validate
+	 * @throws IllegalArgumentException naming the rule when the URL is refused
+	 * @throws IllegalStateException when the http adapter is not registered
+	 */
+	public void requireSafeUrl(String url) {
+		if (!(getAdapter("http") instanceof HTTPAdapter http)) {
+			throw new IllegalStateException("SSRF validation unavailable: http adapter not registered");
+		}
+		http.requireSafeUrl(url);
+	}
+
 	// ========== Secret resolution ==========
 
 	/**
@@ -3778,15 +3724,24 @@ public class Engine {
 	 * @param ctx Request context (namespace identity for access control)
 	 * @return Decrypted plaintext, or null if not found or not authorised
 	 */
+	/** Whether a value is a reference into a secret store ({@code s/NAME} or {@code /s/NAME}) rather than a literal. */
+	public static boolean isSecretRef(String value) {
+		return value != null && (value.startsWith("s/") || value.startsWith("/s/"));
+	}
+
+	/** The secret name a reference points at: {@code s/} or {@code /s/} stripped, a bare name unchanged. */
+	public static String secretName(String secretRef) {
+		return secretRef.startsWith("/s/") ? secretRef.substring(3)
+			: secretRef.startsWith("s/") ? secretRef.substring(2)
+			: secretRef;
+	}
+
 	public String resolveSecret(String secretRef, RequestContext ctx) {
 		if (secretRef == null || ctx == null) return null;
 		AString callerDID = ctx.getUserDID();
 		if (callerDID == null) return null;
 
-		// Strip s/ or /s/ prefix if present
-		String name = secretRef.startsWith("/s/") ? secretRef.substring(3)
-				: secretRef.startsWith("s/") ? secretRef.substring(2)
-				: secretRef;
+		String name = secretName(secretRef);
 		if (name.isEmpty()) return null;
 
 		User user = venueState.users().get(callerDID);

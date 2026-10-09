@@ -204,7 +204,7 @@ public class CoviaAPI extends ACoviaAPI {
 		AMap<AString,ACell> result=engine().getStatus();
 
 		// Add the external base URL
-		result=result.assoc(Fields.URL,RT.cvm(getExternalBaseUrl(ctx,null)));
+		result=result.assoc(Fields.URL,RT.cvm(getExternalBaseUrl(ctx, null, engine().config().getTrustedProxies())));
 
 		// Add the stats, plus the caller's own job count (#229) — anonymous
 		// callers see the shared public identity's count.
@@ -1216,10 +1216,9 @@ public class CoviaAPI extends ACoviaAPI {
 				: Maps.of(Fields.CONTENT, message);
 
 		try {
-			int depth = engine().jobs().deliverMessage(id, msgMap, rctx);
+			engine().jobs().deliverMessage(id, msgMap, rctx);
 			Map<String, Object> response = new HashMap<>();
 			response.put("status", "queued");
-			response.put("queueDepth", depth);
 			buildResult(ctx, 202, response);
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
@@ -1405,7 +1404,8 @@ public class CoviaAPI extends ACoviaAPI {
 		}
 		// Ownership applies to the stream exactly as to GET /jobs/{id}: the
 		// record resolves under the caller's context or not at all.
-		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		RequestContext rctx = AuthMiddleware.withTransportGrants(AuthMiddleware.callerContext(ctx),
+			AuthMiddleware.headerUcans(ctx), engine().didVerifier());
 		try {
 			if (engine().jobs().getJobData(id, rctx) == null) {
 				buildError(ctx, 404, "Job not found: " + id);
@@ -2336,26 +2336,25 @@ public class CoviaAPI extends ACoviaAPI {
 							type = String.class) })
 	protected void deleteSecret(Context ctx) {
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
-		AString callerDID = rctx.getCallerDID();
-		if (callerDID == null) {
+		if (rctx.getCallerDID() == null) {
 			buildError(ctx, 401, "Authentication required");
 			return;
 		}
-
 		String name = ctx.pathParam("name");
-		User user = engine().getVenueState().users().get(callerDID);
-		if (user == null) {
-			buildError(ctx, 404, "Secret not found");
-			return;
+		// The same pinned and audited path as covia:delete s/<name>: crud/delete
+		// on the whole record, never a partial one (see CoviaAdapter).
+		try {
+			ACell result = engine().jobs().invokeInternal("v/ops/covia/delete",
+				Maps.of(Fields.PATH, Strings.create("s/" + name)), rctx).join();
+			if (!RT.bool(RT.getIn(result, "deleted"))) {
+				buildError(ctx, 404, "Secret not found: " + name);
+				return;
+			}
+			ctx.status(200);
+		} catch (RuntimeException e) {
+			Throwable cause = e instanceof java.util.concurrent.CompletionException ? e.getCause() : e;
+			buildError(ctx, cause instanceof AuthException ? 403 : 400, cause.getMessage());
 		}
-
-		AString secretName = Strings.create(name);
-		if (!user.secrets().exists(secretName)) {
-			buildError(ctx, 404, "Secret not found: " + name);
-			return;
-		}
-		user.secrets().delete(secretName);
-		ctx.status(200);
 	}
 
 	@OpenApi(path = "/.well-known/did.json",
@@ -2370,7 +2369,7 @@ public class CoviaAPI extends ACoviaAPI {
 					})	
 	protected void getDIDDocument(Context ctx) {
 		// Create a complete DID document structure
-		AMap<AString, ACell> didDocument = engine().getDIDDocument(getExternalBaseUrl(ctx,ROUTE));
+		AMap<AString, ACell> didDocument = engine().getDIDDocument(getExternalBaseUrl(ctx, ROUTE, engine().config().getTrustedProxies()));
 
 		// Set content type to application/did+json
 		ctx.header("Content-Type", "application/did+json");

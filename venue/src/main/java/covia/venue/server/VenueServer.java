@@ -25,7 +25,6 @@ import org.eclipse.jetty.http.UriCompliance;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import convex.api.Convex;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -82,7 +81,6 @@ import io.javalin.router.exception.HttpResponseExceptionMapper;
  * Contains:
  * - Endpoints for REST API
  * - Javalin HTTP server
- * - Connection to Convex (for CNS etc.)
  * 
  */
 public class VenueServer {
@@ -95,7 +93,6 @@ public class VenueServer {
 	
 	protected final Config config;
 
-	protected Convex convex;
 	protected AStore store;
 	/** Successor store from an online GC cutover (covia#452): the venue keeps
 	 *  using {@link #store} as a view; this is retained only to be cleanly
@@ -148,7 +145,6 @@ public class VenueServer {
 	 */
 	private VenueServer(AMap<AString,ACell> config, AStore adoptedStore) {
 		this.config=new Config(config);
-		this.convex=null; // TODO:
 
 		// Create NodeServer with Covia lattice (local-only, no network port)
 		// Launch immediately so restore happens before Engine reads the cursor.
@@ -1217,7 +1213,7 @@ public class VenueServer {
 			// advertise '*'. Specific policies cannot choose a value without Origin.
 			if (policy.anyOrigin()) {
 				ctx.header("Access-Control-Allow-Origin", "*");
-				ctx.header("Access-Control-Expose-Headers", "X-Covia-User");
+				ctx.header("Access-Control-Expose-Headers", "ETag, Location, Retry-After, X-Request-Id, Mcp-Session-Id");
 				if (allowPrivateNetwork) {
 					ctx.header("Access-Control-Allow-Private-Network", "true");
 				}
@@ -1233,7 +1229,7 @@ public class VenueServer {
 		}
 
 		ctx.header("Access-Control-Allow-Origin", allowed);
-		ctx.header("Access-Control-Expose-Headers", "X-Covia-User");
+		ctx.header("Access-Control-Expose-Headers", "ETag, Location, Retry-After, X-Request-Id, Mcp-Session-Id");
 		if (!"*".equals(allowed)) ctx.header("Vary", "Origin");
 		// Private Network Access lets a public web origin reach a venue on a
 		// private/loopback address from the browser. Off by default and emitted
@@ -1250,7 +1246,7 @@ public class VenueServer {
 			ctx.status(204);
 			ctx.removeHeader("Content-type");
 			ctx.header("Access-Control-Allow-Headers",
-				"content-type, authorization, x-covia-user");
+				"content-type, authorization, x-covia-ucans, mcp-session-id");
 			ctx.header("Access-Control-Allow-Methods", "GET,HEAD,PUT,PATCH,POST,DELETE");
 			ctx.header("Vary", "Origin, Access-Control-Request-Headers");
 			ctx.skipRemainingHandlers();

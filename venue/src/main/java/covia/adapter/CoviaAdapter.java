@@ -830,6 +830,11 @@ public class CoviaAdapter extends AAdapter {
 			deleted[0] = leafExisted(current, keys, from);
 			return deepDelete(current, keys, from);
 		});
+		if (deleted[0] && keys.length == 2 && NS_SECRETS.equals(keys[0].toString())) {
+			// The name only, never the value — the same trail as secret:set.
+			engine.audit().event(covia.venue.Audit.SECRET_DELETE, covia.venue.Audit.K_DID, ctx.getCallerDID(),
+				covia.venue.Audit.K_NAME, keys[1], covia.venue.Audit.K_TARGET, ctx.getUserDID());
+		}
 		return Maps.of(K_DELETED, CVMBool.of(deleted[0]));
 	}
 

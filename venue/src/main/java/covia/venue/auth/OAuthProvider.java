@@ -31,6 +31,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.venue.Engine;
+import covia.venue.api.ACoviaAPI;
 import covia.venue.server.AuthMiddleware;
 
 import io.javalin.config.RoutesConfig;
@@ -224,21 +225,10 @@ public class OAuthProvider {
 		routes.post("/oauth/revoke", this::revoke);
 	}
 
-	/** The issuer identifier: the configured one, else derived from this request. */
+	/** The issuer identifier: the configured one, else this request's external base URL. */
 	public String issuer(Context ctx) {
 		if (issuer != null) return issuer;
-		String scheme = firstHeader(ctx, "X-Forwarded-Proto");
-		if (scheme == null) scheme = ctx.scheme();
-		String host = firstHeader(ctx, "X-Forwarded-Host");
-		if (host == null) host = ctx.host();
-		return scheme + "://" + host;
-	}
-
-	private static String firstHeader(Context ctx, String name) {
-		String v = ctx.header(name);
-		if (v == null || v.isBlank()) return null;
-		int comma = v.indexOf(',');
-		return (comma >= 0 ? v.substring(0, comma) : v).trim();
+		return ACoviaAPI.getExternalBaseUrl(ctx, null, engine.config().getTrustedProxies());
 	}
 
 	/** RFC 8414 authorization-server metadata. */

@@ -87,7 +87,7 @@ public class CoviaWebApp  {
 	}
 	
 	private void indexPage(Context ctx) {
-		String BASE_URL=CoviaAPI.getExternalBaseUrl(ctx, "");
+		String BASE_URL=CoviaAPI.getExternalBaseUrl(ctx, "", engine.config().getTrustedProxies());
 		standardPage(ctx,html(
 				Layout.makeHeader("Covia AI: Grid Venue"),
 				body(
@@ -99,7 +99,7 @@ public class CoviaWebApp  {
 								h4("Venue Overview"),
 								p("Version: "+Utils.getVersion()),
 								p("Name: "+engine.config().getName()),
-								p(new Text("DID: "),code(engine.getDID().toString())), // TODO: venue DID?
+								p(new Text("DID: "),code(engine.getDID().toString())),
 								p(
 									new Text("Registered adapters: "+engine.getAdapterNames().size()+" ("),
 									a("view details").withHref("/adapters"),
@@ -261,12 +261,12 @@ public class CoviaWebApp  {
 	protected void siteMap(Context ctx) { 
 		DomContent content= tag("urlset").with(
 				tag("url").with(
-						tag("loc").withText(CoviaAPI.getExternalBaseUrl(ctx, "")+"/"),
+						tag("loc").withText(CoviaAPI.getExternalBaseUrl(ctx, "", engine.config().getTrustedProxies())+"/"),
 						tag("lastmod").withText(new SimpleDateFormat("yyyy-MM-dd").format(new Date())),
 						tag("priority").withText("1.0")
 				),
 				tag("url").with(
-						tag("loc").withText(CoviaAPI.getExternalBaseUrl(ctx, "")+"/swagger"),
+						tag("loc").withText(CoviaAPI.getExternalBaseUrl(ctx, "", engine.config().getTrustedProxies())+"/swagger"),
 						tag("lastmod").withText(new SimpleDateFormat("yyyy-MM-dd").format(new Date())),
 						tag("priority").withText("0.7")
 				)
@@ -285,7 +285,7 @@ public class CoviaWebApp  {
 		sb.append("> Covia Grid venues provide pluggable access to AI agents and orchestration capabilities.\n");
 		sb.append("\n");
 		sb.append("Name : "+engine.getName()+"\n");
-		sb.append("Web Address : "+CoviaAPI.getExternalBaseUrl(ctx, "")+"\n");
+		sb.append("Web Address : "+CoviaAPI.getExternalBaseUrl(ctx, "", engine.config().getTrustedProxies())+"\n");
 		sb.append("\n");
 		sb.append("## Links\n");
 		sb.append("\n");

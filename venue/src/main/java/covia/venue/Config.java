@@ -291,6 +291,8 @@ public class Config {
 	public static final AString AUDIENCE = Strings.intern("audience");
 	/** Whether a bearer credential must carry an expiry ({@code auth.requireExp}, default true). */
 	public static final AString REQUIRE_EXP = Strings.intern("requireExp");
+	/** Origins a social login may redirect the session token to, besides the venue's own. */
+	public static final AString LOGIN_REDIRECT_ORIGINS = Strings.intern("loginRedirectOrigins");
 	/** Optional cap, in seconds, on how far ahead a bearer credential may expire ({@code auth.maxTokenLifetime}). */
 	public static final AString MAX_TOKEN_LIFETIME = Strings.intern("maxTokenLifetime");
 
@@ -741,7 +743,7 @@ public class Config {
 		if (auth == null) return;
 		validateUnknownFields(auth,
 			Set.of("tokenExpiry", "public", "audience", "acceptedAudiences", "oauth",
-				"requireExp", "maxTokenLifetime"),
+				"requireExp", "maxTokenLifetime", "loginRedirectOrigins"),
 			"auth", strict);
 		optionalLong(auth, TOKEN_EXPIRY, "auth.tokenExpiry", 1, Long.MAX_VALUE);
 		optionalBoolean(auth, REQUIRE_EXP, "auth.requireExp", true);
@@ -752,6 +754,7 @@ public class Config {
 			throw malformed("auth.audience", "must be verify or require");
 		}
 		optionalStringVector(auth, ACCEPTED_AUDIENCES, "auth.acceptedAudiences");
+		optionalStringVector(auth, LOGIN_REDIRECT_ORIGINS, "auth.loginRedirectOrigins");
 
 		AMap<AString, ACell> publicConfig = optionalMap(auth, PUBLIC, "auth.public");
 		if (publicConfig != null) {
@@ -1827,6 +1830,17 @@ public class Config {
 		return (authConfig != null) ? RT.ensureVector(authConfig.get(ACCEPTED_AUDIENCES)) : null;
 	}
 
+	/**
+	 * Origins a social login may redirect to with the session token, from
+	 * {@code auth.loginRedirectOrigins}; the venue's own {@code baseUrl} origin is
+	 * always allowed.
+	 * @return the configured array, or null if unset
+	 */
+	public AVector<ACell> getLoginRedirectOrigins() {
+		AMap<AString, ACell> authConfig = getAuthConfig();
+		return (authConfig != null) ? RT.ensureVector(authConfig.get(LOGIN_REDIRECT_ORIGINS)) : null;
+	}
+
 	// ========== Protocol config accessors ==========
 
 	/**
@@ -2150,22 +2164,6 @@ public class Config {
 	}
 
 	/**
-	 * Legacy scalar CORS accessor. New code should use {@link #getCorsPolicy()}.
-	 * @return the scalar policy, or null when CORS is disabled
-	 * @throws IllegalStateException when the configured policy cannot be
-	 * represented by one string
-	 */
-	@Deprecated
-	public String getCorsOrigins() {
-		CorsPolicy policy = getCorsPolicy();
-		if (!policy.enabled()) return null;
-		if (policy.anyOrigin()) return "*";
-		if (policy.loopback() && policy.origins().isEmpty()) return "loopback";
-		if (!policy.loopback() && policy.origins().size() == 1) return policy.origins().get(0);
-		throw new IllegalStateException("CORS policy has multiple origins; use getCorsPolicy()");
-	}
-
-	/**
 	 * Whether to emit the {@code access-control-allow-private-network} response
 	 * header, which lets a public web origin reach this venue on a
 	 * private/loopback address from the browser (Chrome Private Network Access).
@@ -2249,18 +2247,5 @@ public class Config {
 		@SuppressWarnings("unchecked")
 		ACell v = ((AMap<AString, ACell>) block).get(key);
 		return (v != null) && RT.bool(v);
-	}
-
-	// ========== Static compatibility ==========
-
-	/**
-	 * Get the base URL for a venue from a raw config map.
-	 * @param config Venue config map
-	 * @return Base URL string (no trailing slash)
-	 * @deprecated Use instance method {@link #getBaseUrl()} instead
-	 */
-	@Deprecated
-	public static String getBaseUrl(AMap<AString, ACell> config) {
-		return new Config(config).getBaseUrl();
 	}
 }

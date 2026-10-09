@@ -31,6 +31,7 @@ import covia.adapter.messaging.ConversationRouter;
 import covia.adapter.messaging.ConversationSessions;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
+import covia.venue.Engine;
 import covia.venue.RequestContext;
 
 /** Live Gateway/REST side of one Discord bot. */
@@ -66,7 +67,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 
 	private void receive(InboundMessage m){
 		if(stopped||!adapter.isActive())return;received.incrementAndGet();
-		if(!spec.allows(m.authorId(),m.username(),m.globalName())){log.info("Discord bot '{}': unauthorised message {} from {}",spec.name(),m.id(),m.authorId());if(m.direct())sendQuietly(m.channelId(),"Not authorised to use this bot. Your Discord user id is "+m.authorId(),m.id());return;}
+		if(!spec.allows(m.authorId(),m.username())){log.info("Discord bot '{}': unauthorised message {} from {}",spec.name(),m.id(),m.authorId());if(m.direct())sendQuietly(m.channelId(),"Not authorised to use this bot. Your Discord user id is "+m.authorId(),m.id());return;}
 		if(!m.direct()&&spec.mentionOnly()&&!m.mentionedBot())return;
 		String text=stripMention(m.content());if(command(m,text))return;if(text==null||text.isBlank())return;
 		enqueue(m.channelId(),()->{if(spec.routesToAgent())respondAgent(m,text);else respondOperation(m);});
@@ -75,16 +76,13 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	private String greeting(){if(spec.greeting()!=null)return spec.greeting();return spec.routesToAgent()?"Connected to agent '"+spec.agent()+"'. Send a message to talk; !new starts a fresh conversation.":"Messages are handled by "+spec.operation()+".";}
 	private String stripMention(String text){if(text==null)return "";if(botId!=null){text=text.replace("<@"+botId+">","").replace("<@!"+botId+">","");}return text.trim();}
 	private void enqueue(String id,Runnable work){conversations.enqueue(id,work);}
-	private void respondAgent(InboundMessage m){respondAgent(m,m.content());}
 	private void respondAgent(InboundMessage m,String text){try{String reply=ConversationRouter.responseText(conversations.chat(m.channelId(),agentMessage(m,text)));send(m.channelId(),reply,m.id());}catch(Throwable t){failed.incrementAndGet();logFailure("failed to respond",m,t);sendQuietly(m.channelId(),"⚠️ "+concise(t),m.id());}}
 	private void respondOperation(InboundMessage m){try{ACell result=conversations.runOperation(spec.operation(),messageRecord(m));String reply=conversations.operationReply(result);if(reply!=null)send(m.channelId(),reply,m.id());}catch(Throwable t){failed.incrementAndGet();logFailure("handler failed",m,t);sendQuietly(m.channelId(),"⚠️ "+concise(t),m.id());}}
 
 	AMap<AString,ACell> messageRecord(InboundMessage m){AMap<AString,ACell> out=Maps.of(K_BOT,Strings.create(spec.name()),K_ID,Strings.create(m.id()),K_CHANNEL_ID,Strings.create(m.channelId()),Strings.intern("channel_type"),Strings.create(m.channelType()),K_FROM,userRecord(m),Fields.TEXT,Strings.create(m.content()==null?"":m.content()),K_ATTACHMENTS,m.attachments());if(m.channelName()!=null)out=out.assoc(Strings.intern("channel_name"),Strings.create(m.channelName()));if(m.guildId()!=null)out=out.assoc(K_GUILD,Maps.of(K_ID,Strings.create(m.guildId()),K_NAME,Strings.create(m.guildName())));return out;}
 	AMap<AString,ACell> agentMessage(InboundMessage m,String text){AMap<AString,ACell> channel=Maps.of(K_ID,Strings.create(m.channelId()),K_TYPE,Strings.create(m.channelType()));if(m.channelName()!=null)channel=channel.assoc(K_NAME,Strings.create(m.channelName()));AMap<AString,ACell> via=Maps.of(K_CHANNEL,Strings.create("discord"),K_BOT,Strings.create(spec.name()),K_ACCESS,Strings.create(spec.open()?"open":"allow"),K_FROM,userRecord(m),Strings.intern("chat"),channel,K_MESSAGE_ID,Strings.create(m.id()));if(m.guildId()!=null)via=via.assoc(K_GUILD,Maps.of(K_ID,Strings.create(m.guildId()),K_NAME,Strings.create(m.guildName())));return Maps.of(Fields.TEXT,Strings.create(text),K_VIA,via,K_ATTACHMENTS,m.attachments());}
 	private static AMap<AString,ACell> userRecord(InboundMessage m){AMap<AString,ACell> u=Maps.of(K_ID,Strings.create(m.authorId()),K_USERNAME,Strings.create(m.username()));if(m.globalName()!=null)u=u.assoc(Strings.intern("global_name"),Strings.create(m.globalName()));return u;}
-	RequestContext context(){return RequestContext.of(spec.userDID(adapter.engine));}
 
-	String sessionsPath(){return adapter.state().path(sessionsRelativePath());}
 	private String sessionsRelativePath(){return managed==Managed.CONFIG
 		? "config/"+spec.name()+"/sessions"
 		: adapter.userStatePath(spec.userDID(adapter.engine),"sessions/"+spec.name());}
@@ -94,7 +92,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 
 	ACell call(String method,String route,ACell body){HttpClient client=http;String tok=token;if(client==null||tok==null)throw new IllegalStateException("Discord bot '"+spec.name()+"' is not running"+(error!=null?": "+error:""));return execute(client,tok,method,route,body,true);}
 	private ACell execute(HttpClient client,String tok,String method,String route,ACell body,boolean retry429){
-		try{HttpRequest.Builder b=HttpRequest.newBuilder(URI.create(apiUrl+route)).timeout(Duration.ofSeconds(45)).header("Authorization","Bot "+tok).header("User-Agent","Covia (https://covia.ai, 0.9)");String json=body==null?"":JSON.print(body).toString();if(body!=null)b.header("Content-Type","application/json");b.method(method,body==null?HttpRequest.BodyPublishers.noBody():HttpRequest.BodyPublishers.ofString(json));HttpResponse<String> r=client.send(b.build(),HttpResponse.BodyHandlers.ofString());
+		try{HttpRequest.Builder b=HttpRequest.newBuilder(URI.create(apiUrl+route)).timeout(Duration.ofSeconds(45)).header("Authorization","Bot "+tok).header("User-Agent","DiscordBot (https://covia.ai, "+Engine.jarVersion()+")");String json=body==null?"":JSON.print(body).toString();if(body!=null)b.header("Content-Type","application/json");b.method(method,body==null?HttpRequest.BodyPublishers.noBody():HttpRequest.BodyPublishers.ofString(json));HttpResponse<String> r=client.send(b.build(),HttpResponse.BodyHandlers.ofString());
 			if(r.statusCode()==429&&retry429){long wait=1000;try{ACell parsed=JSON.parse(r.body());Object ra=JSON.json(RT.getIn(parsed,Strings.intern("retry_after")));if(ra instanceof Number n)wait=Math.min(30_000,Math.max(100,Math.round(n.doubleValue()*1000)));}catch(RuntimeException ignored){}Thread.sleep(wait);return execute(client,tok,method,route,body,false);}
 			if(r.statusCode()<200||r.statusCode()>=300){failed.incrementAndGet();throw new JobFailedException("Discord "+method+" "+route+" failed: HTTP "+r.statusCode()+" "+trim(r.body()));}
 			if(r.body()==null||r.body().isBlank())return CVMBool.TRUE;return JSON.parse(r.body());

@@ -265,7 +265,7 @@ public class A2AAdapter extends AAdapter {
 					K_VENUE, Strings.create(venue),
 					K_AGENT, Strings.create(address));
 			}
-			requireSafeUrl(normaliseAgentCardUrl(cardBase));
+			engine.requireSafeUrl(normaliseAgentCardUrl(cardBase));
 		} catch (RuntimeException e) {
 			return CompletableFuture.failedFuture(e);
 		}
@@ -285,7 +285,7 @@ public class A2AAdapter extends AAdapter {
 			}
 			AMap<AString, ACell> card = (AMap<AString, ACell>) cardCell;
 			String endpoint = endpointFromCard(card);
-			requireSafeUrl(endpoint);
+			engine.requireSafeUrl(endpoint);
 			// Validate the stored scheme and secret now, while importing, so a bad
 			// binding cannot become a dormant asset that fails only during a task.
 			resolveAssetAuth(storedAuth, card, ctx);
@@ -387,7 +387,7 @@ public class A2AAdapter extends AAdapter {
 		if (endpoint == null || card == null) {
 			throw new IllegalArgumentException("A2A agent asset requires a card and endpoint");
 		}
-		requireSafeUrl(endpoint.toString());
+		engine.requireSafeUrl(endpoint.toString());
 		AMap<AString, ACell> authBinding = RT.ensureMap(a2a.get(K_AUTH));
 		RequestAuth auth = resolveAssetAuth(authBinding, card, ctx);
 		return new AgentTarget(endpoint.toString(), card, auth, metadata.getHash());
@@ -397,7 +397,7 @@ public class A2AAdapter extends AAdapter {
 		AString url = RT.ensureString(RT.getIn(input, Fields.URL));
 		if (url == null) throw new IllegalArgumentException("'agent' is required (or 'url' on a raw A2A operation)");
 		String rpcUrl = normaliseRpcUrl(url.toString());
-		requireSafeUrl(rpcUrl);
+		engine.requireSafeUrl(rpcUrl);
 		return new AgentTarget(rpcUrl, null, RequestAuth.bearer(resolveBearer(input, ctx)), null);
 	}
 
@@ -496,7 +496,7 @@ public class A2AAdapter extends AAdapter {
 
 	private CompletableFuture<ACell> fetchAgentCardUrl(String baseUrl, RequestAuth auth) {
 		String url = normaliseAgentCardUrl(baseUrl);
-		requireSafeUrl(url);
+		engine.requireSafeUrl(url);
 		HttpRequest.Builder builder = HttpRequest.newBuilder(authUri(url, auth))
 				.GET()
 				.timeout(Duration.ofSeconds(30));
@@ -517,16 +517,6 @@ public class A2AAdapter extends AAdapter {
 				});
 	}
 
-	/** SSRF guard shared with the http adapter, including its operator
-	 *  allow/block lists (#234): an A2A target can never reach anything a
-	 *  direct HTTP call couldn't. Fails closed if the http adapter is absent. */
-	private void requireSafeUrl(String url) {
-		AAdapter http = engine.getAdapter("http");
-		if (!(http instanceof HTTPAdapter h)) {
-			throw new IllegalStateException("SSRF validation unavailable: http adapter not registered");
-		}
-		h.requireSafeUrl(url);
-	}
 
 	private static String normaliseAgentCardUrl(String url) {
 		if (url == null || url.isBlank()) {

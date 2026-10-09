@@ -87,5 +87,4 @@ public class DiscordAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 		if(!p.startsWith("/")||p.contains("://")||p.contains("..")||p.startsWith("/gateway")||p.startsWith("/oauth2"))throw new IllegalArgumentException("route must be a safe Discord API path; Gateway and OAuth routes are managed/refused");
 		return r.call(m,p,RT.getIn(input,K_BODY));
 	}
-	static String renderText(ACell value){return ConversationRouter.renderText(value);}
 }

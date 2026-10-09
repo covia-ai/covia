@@ -39,10 +39,12 @@ public record BotSpec(String name, String tokenRef, String userRef, String agent
 			"bot '"+name+"' acts as public but public access is disabled");
 		return Strings.create(engine.getDIDString()+":public");
 	}
-	public boolean allows(String id,String username,String globalName){
+	/** Allow-list check: numeric ids and unique Discord usernames only. The global
+	 *  display name is user-settable and non-unique, so it never admits anyone. */
+	public boolean allows(String id,String username){
 		if(open) return true;
 		if(id!=null && allowIds.contains(id)) return true;
-		return matches(username)||matches(globalName);
+		return matches(username);
 	}
 	private boolean matches(String name){return name!=null&&allowNames.contains(name.toLowerCase(Locale.ROOT));}
 
