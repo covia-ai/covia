@@ -8,8 +8,36 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Security
+
+- Social login refuses a `redirect_uri` outside the venue's own origin or
+  `auth.loginRedirectOrigins`, at login and again at the callback.
+- Discord allow-lists match user ids and usernames only; a user-settable
+  global display name never admits anyone.
+- LangChain operations send the venue's provisioned key only to the
+  operation's own endpoint: a caller-chosen `url` passes the SSRF guard and
+  needs an inline `apiKey`.
+- `X-Forwarded-*` headers shape the venue's published URLs (DID document,
+  agent cards, OAuth metadata) only from a `trustedProxies` address.
+- `DELETE /api/v1/secrets/{name}` is pinned to `crud/delete` and audited as
+  `secret.delete`, through the same path as `covia:delete s/<name>`.
+
 ### Changed
 
+- Convex 0.8.17.
+- One `Engine.requireSafeUrl` seam carries the outbound SSRF policy for the
+  http, MCP, A2A and LangChain adapters.
+- `/jobs/{id}/sse` and `/agents/{id}/sse` honour `X-Covia-Ucans` proofs as the
+  sibling GET does.
+- CORS allows `X-Covia-Ucans` and `Mcp-Session-Id` and exposes `ETag`,
+  `Location`, `Retry-After`, `X-Request-Id` and `Mcp-Session-Id`; REST 401s
+  carry `WWW-Authenticate`.
+- An agent wake never overwrites a suspend that landed after its status read.
+- Module skills live under `/adapters/<name>/skill.json` in every module, so
+  the Telegram skill no longer shadows the venue's connection skill.
+- `Venue.sendMessage` and `JobManager.deliverMessage` return nothing; the
+  message delivery response no longer carries a `queueDepth` (always zero).
+  SDK mirrors follow.
 - Respect explicit non-adaptive Anthropic thinking modes: prefix binding and
   its beta header are added only with adaptive thinking (#563), avoiding
   invalid requests for Sonnet 5.5 `between_tools` and Haiku 5.5 `disabled`.
@@ -90,6 +118,19 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Added
 
+- `auth.loginRedirectOrigins`: origins a social login may return the session
+  token to, besides the venue's own.
+- `agent:info` and `agent:list` report `awaiting` input and authorisation
+  counts derived from the agent's live jobs (#557).
+- `DELETE /users/{did}` and `user:delete`: operator-authorised account
+  deletion (#536).
+- `GET /assets?kind=operation|data` filters the catalog listing (#530).
+- `auth.oauth.<provider>.clientSecret` accepts an `s/NAME` reference (#522).
+- The `project` adapter and its `project-*` skill family (`docs/PROJECT.md`).
+- Workbench `covia.gui.markdown` and `TextComponents`: host-styled Swing
+  Markdown components with no venue dependency.
+- Remote jobs carry a `delegation` record with observation health and bounded
+  retries (`docs/REMOTE_JOBS_DESIGN.md`).
 - Optional WhatsApp Cloud API and Slack Events API text-messaging modules,
   sharing durable webhook intake, caller-owned bindings and conversation
   sessions. Both verify provider signatures and deduplicate events; Slack
@@ -133,6 +174,14 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Fixed
 
+- `llmagent:chat`, `goaltree:chat`, `agent:suspend` and `http:get` describe
+  the inputs they read and the outputs they emit.
+- Claude Code option files are removed when the CLI fails to start.
+- The PR workflow checks the documents module boundary like the release
+  workflow.
+- HTTP credential references (`{s/NAME}`) are preserved in persisted job
+  inputs (#561).
+- Authentication refusals no longer echo exception text.
 - `operations.log-config-file` is honoured; it was read before the config
   was loaded and so never applied (#538).
 - The test adapter's `iris.csv` and `hamlet.txt` example content was checked
@@ -168,6 +217,16 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `GET /users/{did}/authentications` returns an empty set for a registered
   external DID instead of a 400; `stats.users` counts every registered user,
   not just venue-managed accounts (#524).
+
+### Removed
+
+- `VenueHTTP.setPrivate`, `Engine.refreshWriteClock`, `Engine.getConfig()`,
+  `Engine.getLatticeState`, `Engine.materialiseVOps`,
+  `Engine.materialiseVenueInfo`, `Config.getCorsOrigins`, static
+  `Config.getBaseUrl(AMap)`, `JobManager.getVenueDID`,
+  `JobManager.updateJobStatus` and the context-free `pauseJob`, `resumeJob`
+  and `deliverMessage` overloads: deprecated or without a caller.
+- `venue/docs/OPERATIONS_PLAN.md`: its rollout is complete.
 
 ## [0.9.8] - 2026-09-03
 
