@@ -159,6 +159,23 @@ public class AgentFromSkillsTest {
 			"the inline-text skill resolves for the agent: " + index);
 	}
 
+	/** Two imports reach the native agent loop using a deterministic stub model. */
+	@Test
+	public void testImportedSkillsRunOnNativeLoopWithStubModel() {
+		String greeting = "---\nname: greeting\ndescription: Say hello warmly.\n---\nAlways greet by name.\n";
+		call("v/ops/agent/from-skills", Maps.of(
+			K_AGENT_ID, "migrated-stub", K_SYSTEM_PROMPT, SYSTEM_PROMPT,
+			"operation", "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm",
+			K_SKILLS, Vectors.of(Maps.of("text", REFUND_SKILL), Maps.of("text", greeting))));
+		ACell info = call("v/ops/agent/info", Maps.of(K_AGENT_ID, "migrated-stub"));
+		List<Skills.SkillIndexEntry> skills = Skills.listSkills(engine, ctx,
+			Skills.sourcesOf(RT.ensureMap(RT.getIn(info, "config"))));
+		assertTrue(skills.stream().anyMatch(e -> "refund-policy".equals(e.name()) && e.error() == null));
+		assertTrue(skills.stream().anyMatch(e -> "greeting".equals(e.name()) && e.error() == null));
+		ACell reply = call("v/ops/agent/chat", Maps.of(K_AGENT_ID, "migrated-stub", "message", "migration probe"));
+		assertTrue(reply.toString().contains("migration probe"), "stub reply traverses the native agent loop");
+	}
+
 	/** The composed op inherits agent:create's guard: an existing name is an error. */
 	@Test
 	public void testFailsWhenAgentNameAlreadyExists() {
