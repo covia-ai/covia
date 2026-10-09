@@ -2223,5 +2223,23 @@ public class LangChainAdapterTest {
 			.aiMessage(dev.langchain4j.data.message.AiMessage.from("hi"))
 			.tokenUsage(new TokenUsage(12, 3, 15)).build();
 		assertNull(RT.getIn(LangChainAdapter.toAssistantMessage(plain), "tokens", "cacheRead"));
+		assertNull(RT.getIn(LangChainAdapter.toAssistantMessage(plain), "tokens", "cacheWrite5m"));
+		assertNull(RT.getIn(LangChainAdapter.toAssistantMessage(plain), "tokens", "cacheWrite1h"));
+	}
+
+	@Test
+	public void testCacheTtlUsageAccumulatesWithoutDoubleCounting() {
+		covia.adapter.agent.CycleRecord.begin();
+		try {
+			covia.adapter.agent.CycleRecord.tally(Maps.of("tokens", Maps.of(
+				"input", 10, "output", 2, "cacheWrite", 12, "cacheWrite5m", 0, "cacheWrite1h", 12)));
+			covia.adapter.agent.CycleRecord.tally(Maps.of("tokens", Maps.of(
+				"input", 5, "output", 1, "cacheWrite", 8, "cacheWrite5m", 3, "cacheWrite1h", 5)));
+			var totals = covia.adapter.agent.CycleRecord.end().tokens();
+			assertEquals(CVMLong.create(20), totals.get(Fields.CACHE_WRITE));
+			assertEquals(CVMLong.create(3), totals.get(Fields.CACHE_WRITE_5M));
+			assertEquals(CVMLong.create(17), totals.get(Fields.CACHE_WRITE_1H));
+			assertEquals(CVMLong.create(18), totals.get(Fields.TOTAL));
+		} finally { covia.adapter.agent.CycleRecord.end(); }
 	}
 }

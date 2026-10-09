@@ -58,6 +58,8 @@ public class Fields {
 	public static final StringShort CACHE_READ = Strings.intern("cacheRead");
 	/** Prompt-cache tokens written at the write premium (provider-reported). */
 	public static final StringShort CACHE_WRITE = Strings.intern("cacheWrite");
+	public static final StringShort CACHE_WRITE_5M = Strings.intern("cacheWrite5m");
+	public static final StringShort CACHE_WRITE_1H = Strings.intern("cacheWrite1h");
 	public static final StringShort OFFSET = Strings.intern("offset");
 	public static final StringShort LIMIT = Strings.intern("limit");
 	

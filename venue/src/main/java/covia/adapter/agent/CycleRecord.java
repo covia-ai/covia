@@ -107,8 +107,9 @@ public final class CycleRecord {
 	private final Set<ACell> sent = new HashSet<>();
 	private final ArrayDeque<Frame> frames = new ArrayDeque<>();
 	private final Map<AString, AMap<AString, ACell>> children = new HashMap<>();
-	/** input, output, total, measured, cacheRead, cacheWrite */
-	private final long[] tally = new long[6];
+	/** input, output, total, measured, cacheRead, cacheWrite, cacheWrite5m, cacheWrite1h */
+	private final long[] tally = new long[8];
+	private boolean measured5m, measured1h;
 	/** The live tap of the run-loop cycle this record belongs to, or null
 	 *  outside a run loop (#394). */
 	private final AgentEvents.Cycle tap;
@@ -302,6 +303,10 @@ public final class CycleRecord {
 		CVMLong write = RT.ensureLong(RT.getIn(tokens, Fields.CACHE_WRITE));
 		if (read != null) tally[4] += read.longValue();
 		if (write != null) tally[5] += write.longValue();
+		CVMLong fiveMinutes = RT.ensureLong(RT.getIn(tokens, Fields.CACHE_WRITE_5M));
+		CVMLong oneHour = RT.ensureLong(RT.getIn(tokens, Fields.CACHE_WRITE_1H));
+		if (fiveMinutes != null) { tally[6] += fiveMinutes.longValue(); measured5m = true; }
+		if (oneHour != null) { tally[7] += oneHour.longValue(); measured1h = true; }
 	}
 
 	/** The cycle's totals, or null when no reply reported usage — absent
@@ -314,6 +319,8 @@ public final class CycleRecord {
 			Fields.TOTAL,  CVMLong.create(tally[2]));
 		if (tally[4] > 0) totals = totals.assoc(Fields.CACHE_READ, CVMLong.create(tally[4]));
 		if (tally[5] > 0) totals = totals.assoc(Fields.CACHE_WRITE, CVMLong.create(tally[5]));
+		if (measured5m) totals = totals.assoc(Fields.CACHE_WRITE_5M, CVMLong.create(tally[6]));
+		if (measured1h) totals = totals.assoc(Fields.CACHE_WRITE_1H, CVMLong.create(tally[7]));
 		return totals;
 	}
 

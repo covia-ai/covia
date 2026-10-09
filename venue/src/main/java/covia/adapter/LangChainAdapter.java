@@ -750,20 +750,29 @@ public class LangChainAdapter extends AAdapter {
 				|| String.valueOf(providerOptions.get("context_management")).contains("compact_20260112"))) {
 			throw new IllegalArgumentException("compaction" + ModelCallOptions.UPSTREAM_REQUIRED);
 		}
+		// Thinking blocks are bound only under adaptive thinking: Anthropic refuses
+		// block_binding beside any other type (Sonnet 5.5's between_tools, Haiku
+		// 5.5's disabled), so a caller that turns thinking off keeps its setting.
+		boolean bindThinking = false;
 		if (!"provider".equals(tuning.options().thinkingPrefixMismatch())) {
-			providerOptions = providerOptions == null ? new LinkedHashMap<>() : new LinkedHashMap<>(providerOptions);
 			Map<String, Object> thinking = new LinkedHashMap<>();
-			if (providerOptions.get("thinking") instanceof Map<?, ?> configured) {
+			if (providerOptions != null && providerOptions.get("thinking") instanceof Map<?, ?> configured) {
 				configured.forEach((k, v) -> thinking.put(String.valueOf(k), v));
 			}
 			thinking.putIfAbsent("type", "adaptive");
-			Map<String, Object> binding = new LinkedHashMap<>();
-			if (thinking.get("block_binding") instanceof Map<?, ?> configured) {
-				configured.forEach((k, v) -> binding.put(String.valueOf(k), v));
+			if ("adaptive".equals(thinking.get("type"))) {
+				Map<String, Object> binding = new LinkedHashMap<>();
+				if (thinking.get("block_binding") instanceof Map<?, ?> configured) {
+					configured.forEach((k, v) -> binding.put(String.valueOf(k), v));
+				}
+				// Explicit native settings may already be stored on an agent.
+				// Model defaults must not replace that caller-selected policy.
+				binding.putIfAbsent("prefix_mismatch_behavior", "drop".equals(tuning.options().thinkingPrefixMismatch()) ? "drop_block" : "error");
+				thinking.put("block_binding", binding);
+				providerOptions = providerOptions == null ? new LinkedHashMap<>() : new LinkedHashMap<>(providerOptions);
+				providerOptions.put("thinking", thinking);
+				bindThinking = true;
 			}
-			binding.put("prefix_mismatch_behavior", "drop".equals(tuning.options().thinkingPrefixMismatch()) ? "drop_block" : "error");
-			thinking.put("block_binding", binding);
-			providerOptions.put("thinking", thinking);
 		}
 		if (responseFormat != null && responseFormat.jsonSchema() == null) responseFormat = null;
 		if (responseFormat != null && providerOptions != null
@@ -799,7 +808,7 @@ public class LangChainAdapter extends AAdapter {
 			// replay it; providers/models that return none add no state at all.
 			.returnThinking(true)
 			.sendThinking(true);
-		if (!"provider".equals(tuning.options().thinkingPrefixMismatch())) builder.beta(ModelCallOptions.BINDING_BETA);
+		if (bindThinking) builder.beta(ModelCallOptions.BINDING_BETA);
 		// Anthropic requires max_tokens on every request. Built-in provider and
 		// model operations declare an overridable operation.default; requiring the
 		// effective value here also keeps authored operations from silently falling
@@ -1207,6 +1216,15 @@ public class LangChainAdapter extends AAdapter {
 			ACell raw = JSON.parse(anthropic.rawHttpResponse().body());
 			ACell transformations = RT.getIn(raw, "input_transformations");
 			if (transformations != null) msg = msg.assoc(Strings.intern("inputTransformations"), transformations);
+			AMap<AString, ACell> tokens = RT.ensureMap(msg.get(K_TOKENS));
+			if (tokens == null) tokens = Maps.empty();
+			// The SDK does not yet expose TTL-specific creation counters. Preserve
+			// provider measurements; never infer the split from the requested TTL.
+			CVMLong fiveMinutes = RT.ensureLong(RT.getIn(raw, "usage", "cache_creation", "ephemeral_5m_input_tokens"));
+			CVMLong oneHour = RT.ensureLong(RT.getIn(raw, "usage", "cache_creation", "ephemeral_1h_input_tokens"));
+			if (fiveMinutes != null && fiveMinutes.longValue() >= 0) tokens = tokens.assoc(Fields.CACHE_WRITE_5M, fiveMinutes);
+			if (oneHour != null && oneHour.longValue() >= 0) tokens = tokens.assoc(Fields.CACHE_WRITE_1H, oneHour);
+			if (!tokens.isEmpty()) msg = msg.assoc(K_TOKENS, tokens);
 		}
 
 		return msg;

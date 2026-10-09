@@ -108,7 +108,8 @@ class ModelCallOptionsTest {
 				{"id":"msg","type":"message","role":"assistant","model":"claude-sonnet-5-5",
 				 "content":[{"type":"thinking","thinking":"","signature":"opaque-signed-state"},
 				            {"type":"tool_use","id":"call_1","name":"lookup","input":{}}],
-				 "stop_reason":"tool_use","usage":{"input_tokens":10,"output_tokens":2},
+				 "stop_reason":"tool_use","usage":{"input_tokens":10,"output_tokens":2,
+				 "cache_creation_input_tokens":12,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":12}},
 				 "input_transformations":[{"type":"thinking_dropped"}]}
 				""".getBytes(StandardCharsets.UTF_8);
 			exchange.getResponseHeaders().set("content-type", "application/json");
@@ -143,6 +144,9 @@ class ModelCallOptionsTest {
 
 			ACell stored = LangChainAdapter.toAssistantMessage(response, "anthropic", "claude-sonnet-5-5");
 			assertNotNull(RT.getIn(stored, "inputTransformations"));
+			assertEquals(0L, RT.ensureLong(RT.getIn(stored, "tokens", "cacheWrite5m")).longValue());
+			assertEquals(12L, RT.ensureLong(RT.getIn(stored, "tokens", "cacheWrite1h")).longValue());
+			assertEquals(12L, RT.ensureLong(RT.getIn(stored, "tokens", "cacheWrite")).longValue());
 			var replay = LangChainAdapter.toChatMessages(canonical.conj(stored), Set.of(), "anthropic", "claude-sonnet-5-5");
 			replay.add(ToolExecutionResultMessage.from("call_1", "lookup", "found"));
 			model.chat(ChatRequest.builder().messages(replay).toolSpecifications(tool).build());
@@ -160,6 +164,80 @@ class ModelCallOptionsTest {
 				if (cache) assertEquals("1h", RT.getIn(request.get(), "cache_control", "ttl").toString());
 				else assertFalse(request.get().toString().contains("cache_control"));
 			}
+		} finally {
+			server.stop(0);
+		}
+	}
+
+	@Test
+	void thinkingIsBoundOnlyWhenAdaptive() throws Exception {
+		// Anthropic refuses block_binding beside a non-adaptive thinking type
+		// (Sonnet 5.5's between_tools, Haiku 5.5's disabled): such a setting goes
+		// out as the caller wrote it, without the binding or its beta.
+		AtomicReference<ACell> request = new AtomicReference<>();
+		AtomicReference<String> beta = new AtomicReference<>();
+		HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+		server.createContext("/v1/messages", exchange -> {
+			request.set(JSON.parse(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8)));
+			beta.set(exchange.getRequestHeaders().getFirst("anthropic-beta"));
+			byte[] response = """
+				{"id":"msg","type":"message","role":"assistant","model":"claude-sonnet-5-5",
+				 "content":[{"type":"text","text":"ok"}],
+				 "stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":2}}
+				""".getBytes(StandardCharsets.UTF_8);
+			exchange.getResponseHeaders().set("content-type", "application/json");
+			exchange.sendResponseHeaders(200, response.length);
+			try (var out = exchange.getResponseBody()) { out.write(response); }
+		});
+		server.start();
+		try {
+			String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/v1/";
+			var messages = LangChainAdapter.toChatMessages(RT.ensureVector(JSON.parse(
+				"[{\"role\":\"user\",\"content\":\"question\"}]")), Set.of());
+			AMap<AString, ACell> profile = Maps.of("options", Maps.of("thinkingPrefixMismatch", "drop"));
+			for (String policy : List.of("drop", "error", "provider")) {
+				for (String type : List.of("between_tools", "disabled", "adaptive", "enabled")) {
+					beta.set(null);
+					AMap<AString, ACell> configuredThinking = Maps.of("type", type);
+					if ("enabled".equals(type)) configuredThinking = configuredThinking.assoc(Strings.intern("budget_tokens"), RT.cvm(1024));
+					AMap<AString, ACell> config = Maps.of("maxTokens", 2048, "cache", false,
+						"modelOptions", Maps.of("thinkingPrefixMismatch", policy),
+						"providerOptions", Maps.of("thinking", configuredThinking, "output_config", Maps.of("effort", "low")));
+					ACell input = AbstractLLMAdapter.buildL3Input(config,
+						convex.core.data.Vectors.of(Maps.of("role", "user", "content", "question")), null);
+					String model = switch (type) {
+						case "disabled" -> "claude-haiku-5-5";
+						case "enabled" -> "claude-haiku-4-5";
+						default -> "claude-sonnet-5-5";
+					};
+					LangChainAdapter.buildAnthropicModel("key", url, model, Duration.ofSeconds(5),
+						LangChainAdapter.extractTuning(input, profile)).chat(ChatRequest.builder().messages(messages).build());
+					ACell thinking = RT.getIn(request.get(), "thinking");
+					assertEquals(type, RT.getIn(thinking, "type").toString());
+					boolean bound = "adaptive".equals(type) && !"provider".equals(policy);
+					assertEquals(bound, RT.getIn(thinking, "block_binding") != null, type);
+					assertEquals(bound, beta.get() != null && beta.get().contains(ModelCallOptions.BINDING_BETA), type);
+					if (bound) assertEquals("drop".equals(policy) ? "drop_block" : "error",
+						RT.getIn(thinking, "block_binding", "prefix_mismatch_behavior").toString());
+					else assertEquals(configuredThinking, thinking);
+					assertEquals(RT.cvm(2048), RT.getIn(request.get(), "max_tokens"));
+					assertEquals(Strings.create("low"), RT.getIn(request.get(), "output_config", "effort"));
+					assertFalse(request.get().toString().contains("cache_control"));
+					assertEquals(config.get(Strings.intern("providerOptions")), RT.getIn(input, "providerOptions"));
+				}
+			}
+			// An existing agent may have set a native binding policy before model
+			// defaults gained a drop policy. Preserve its explicit error setting.
+			AMap<AString, ACell> explicitThinking = Maps.of("type", "adaptive", "display", "omitted",
+				"block_binding", Maps.of("prefix_mismatch_behavior", "error"));
+			AMap<AString, ACell> configured = Maps.of("maxTokens", 2048,
+				"providerOptions", Maps.of("thinking", explicitThinking));
+			ACell input = AbstractLLMAdapter.buildL3Input(configured,
+				convex.core.data.Vectors.of(Maps.of("role", "user", "content", "question")), null);
+			LangChainAdapter.buildAnthropicModel("key", url, "claude-sonnet-5-5", Duration.ofSeconds(5),
+				LangChainAdapter.extractTuning(input, profile)).chat(ChatRequest.builder().messages(messages).build());
+			assertEquals(explicitThinking, RT.getIn(request.get(), "thinking"));
+			assertTrue(beta.get().contains(ModelCallOptions.BINDING_BETA));
 		} finally {
 			server.stop(0);
 		}

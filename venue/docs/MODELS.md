@@ -375,6 +375,22 @@ The adapter exposes `inputTransformations` from the SDK's raw response metadata
 for diagnostics. Required single-block tool-turn thinking continues to replay,
 including blocks with an empty thinking string and a nonempty signature.
 
+`thinkingPrefixMismatch` applies only with adaptive thinking. Explicit
+`providerOptions.thinking` modes such as Sonnet 5.5's `between_tools` and
+Haiku 5.5's `disabled` pass through without adding binding controls or their
+beta header (#563). If thinking is unspecified, `drop`/`error` selects adaptive
+thinking and applies the requested binding policy.
+An explicit native `providerOptions.thinking.block_binding.prefix_mismatch_behavior`
+is preserved; the generic option fills it only when absent. Existing agent
+thinking modes, budgets, display options and cache opt-outs remain authoritative.
+
+Anthropic usage includes `tokens.cacheWrite5m` and `tokens.cacheWrite1h` when the
+provider reports its TTL split. These supplement `cacheWrite` (the aggregate),
+not additional tokens to add to it. Measured zeroes are retained; missing fields
+mean unreported usage. The split is preserved in inference, cycle and session
+usage. LangChain4j currently exposes these counters through raw response metadata;
+Covia reads that report without changing the SDK transport or message codec.
+
 #### Upstream audit (2026-10-09)
 
 [LangChain4j 1.22.0](https://github.com/langchain4j/langchain4j/releases/tag/1.22.0)

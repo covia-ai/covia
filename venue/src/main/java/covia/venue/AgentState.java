@@ -817,9 +817,9 @@ public class AgentState extends ALatticeComponent<ACell> {
 		AMap<AString, ACell> totals = (meta.get(Fields.TOKENS) instanceof AMap tm)
 			? (AMap<AString, ACell>) tm : Maps.empty();
 		for (AString k : new AString[] {Fields.INPUT, Fields.OUTPUT, Fields.TOTAL,
-				Fields.CACHE_READ, Fields.CACHE_WRITE}) {
-			long add = (cycleTokens.get(k) instanceof CVMLong cl) ? cl.longValue() : 0;
-			if (add == 0) continue;
+				Fields.CACHE_READ, Fields.CACHE_WRITE, Fields.CACHE_WRITE_5M, Fields.CACHE_WRITE_1H}) {
+			if (!(cycleTokens.get(k) instanceof CVMLong measured)) continue;
+			long add = measured.longValue();
 			long current = (totals.get(k) instanceof CVMLong cl) ? cl.longValue() : 0;
 			totals = totals.assoc(k, CVMLong.create(current + add));
 		}
