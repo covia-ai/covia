@@ -8,6 +8,14 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- The Docker publish workflow no longer runs a post-publish anonymous pull and
+  invocation check, and its concurrency group is keyed on the triggering
+  branch so a develop publish cannot cancel a master one (#567).
+- `mvn clean deploy -Prelease` is the release command; the `gpg` settings
+  profile is active by default.
+
 ## [0.9.9] - 2026-10-09
 
 ### Security
