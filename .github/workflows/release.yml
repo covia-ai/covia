@@ -70,7 +70,7 @@ jobs:
     - name: Build and test with Maven
       # Opt into the @DurabilityTest crash/restart group. @IntegrationTest
       # (external services) stays off.
-      run: mvn clean install -Dcovia.tests.durability=true
+      run: mvn clean install -T 1C -Dcovia.tests.durability=true
 
     - name: Verify optional module boundaries
       run: |

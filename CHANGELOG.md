@@ -10,6 +10,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Changed
 
+- CI is quicker: the gate builds modules in parallel, the snapshot and Docker
+  publishers reuse the jars the Test run built instead of rebuilding, and
+  CodeQL analyses without a build. The Docker publisher is workflow_run only.
 - The Docker publish workflow no longer runs a post-publish anonymous pull and
   invocation check, and its concurrency group is keyed on the triggering
   branch so a develop publish cannot cancel a master one (#567).
