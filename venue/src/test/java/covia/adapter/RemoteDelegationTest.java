@@ -164,7 +164,12 @@ class RemoteDelegationTest {
 		}
 	}
 
-	@Test void a2aKeepsObservingInterruptedTasksAcrossTransportFailure() throws Exception {
+	@Test void a2aInitialInputRequired() throws Exception { interruptedTask("INPUT_REQUIRED", true); }
+	@Test void a2aInitialAuthRequired() throws Exception { interruptedTask("AUTH_REQUIRED", true); }
+	@Test void a2aInputRequiredDuringPolling() throws Exception { interruptedTask("INPUT_REQUIRED", false); }
+	@Test void a2aAuthRequiredDuringPolling() throws Exception { interruptedTask("AUTH_REQUIRED", false); }
+
+	private void interruptedTask(String interrupted, boolean initiallyInterrupted) throws Exception {
 		HttpServer peer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
 		AtomicInteger submits = new AtomicInteger();
 		AtomicInteger polls = new AtomicInteger();
@@ -181,7 +186,8 @@ class RemoteDelegationTest {
 				returnImmediately.set(convex.core.data.prim.CVMBool.TRUE.equals(
 					convex.core.lang.RT.getIn(body, "params", "configuration", "returnImmediately")));
 			} else if (polls.incrementAndGet() == 1) status = 503;
-			String state = complete.get() ? "TASK_STATE_COMPLETED" : "TASK_STATE_INPUT_REQUIRED";
+			String state = complete.get() ? "TASK_STATE_COMPLETED"
+				: send && !initiallyInterrupted ? "TASK_STATE_WORKING" : "TASK_STATE_" + interrupted;
 			byte[] response = ("{\"jsonrpc\":\"2.0\",\"id\":\"reply\",\"result\":{\"task\":{"
 				+ "\"id\":\"a2a-remote\",\"contextId\":\"test-context\",\"status\":{\"state\":\"" + state + "\"}}}}")
 				.getBytes(StandardCharsets.UTF_8);
@@ -199,9 +205,10 @@ class RemoteDelegationTest {
 			ACell message = Maps.of("role", "user", "parts", convex.core.data.Vectors.of(Maps.of("type", "text", "text", "hello")));
 			Job job = engine.jobs().invokeOperation(meta, Maps.of(Fields.URL,
 				"http://127.0.0.1:" + peer.getAddress().getPort(), Fields.MESSAGE, message), engine.venueContext());
-			try { await(() -> polls.get() >= 2); }
+			AString expected = Strings.create(interrupted);
+			try { await(() -> polls.get() >= 2 && expected.equals(job.getStatus())); }
 			catch (AssertionError e) { throw new AssertionError("submits=" + submits + ", polls=" + polls + ", job=" + job.getData(), e); }
-			assertEquals(Status.INPUT_REQUIRED, job.getStatus());
+			assertEquals(expected, job.getStatus());
 			assertFalse(job.future().isDone());
 			assertTrue(returnImmediately.get());
 			complete.set(true);
