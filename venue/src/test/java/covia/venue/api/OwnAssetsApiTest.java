@@ -185,11 +185,15 @@ public class OwnAssetsApiTest {
 		// The trap this filter has to avoid: paging first and filtering after
 		// would leave `total` describing the catalogue while `items` describe
 		// something smaller, so a caller could never page it correctly.
-		long data = listTotal("assets?kind=data");
 		HttpResponse<String> r = get("assets?kind=data&limit=1000", true);
-		AVector<?> items = (AVector<?>) RT.getIn(JSON.parse(r.body()), "items");
-		assertEquals(data, items.count(),
-			"a single page at the cap must return exactly the filtered total");
+		assertEquals(200, r.statusCode(), r.body());
+		ACell response = JSON.parse(r.body());
+		AVector<?> items = (AVector<?>) RT.getIn(response, "items");
+		long total = RT.ensureLong(RT.getIn(response, "total")).longValue();
+		// Other tests publish assets concurrently. Compare one response's page
+		// with its own total, not a catalogue snapshot from an earlier request.
+		assertEquals(Math.min(total, 1000), items.count(),
+			"the filtered page must agree with its own total and page cap");
 	}
 
 	@Test
