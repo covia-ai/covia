@@ -430,6 +430,12 @@ never sent in the model provider's tool definition. The runtime falls back to
 the asset's top-level `name`, then to the raw tool name when the metadata omits
 it.
 
+`operation.secretFields` marks inputs containing secret values for job-record
+redaction. Reference-only inputs such as HTTP `bearerSecret` and `secretHeaders`
+retain their references; resolving credentials must not replace those inputs
+with plaintext. The recorded operation and inputs identify the credential used
+without a separate provenance field.
+
 See [OPERATIONS.md](OPERATIONS.md) for defaults, discovery, reference
 resolution, and full metadata rules.
 

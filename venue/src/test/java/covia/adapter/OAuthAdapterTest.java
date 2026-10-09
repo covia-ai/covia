@@ -230,12 +230,13 @@ public class OAuthAdapterTest {
 				assertTrue(RT.ensureLong(RT.getIn(after.get(0), "expiresAt")).longValue() > System.currentTimeMillis());
 				assertNull(RT.getIn(after.get(0), "accessToken"), "status never carries tokens");
 
-				// http:* attaches the token; the job record never carries it.
+				// http:* attaches the token without substituting it into job input.
 				Job call = run(engine, "v/ops/http/get",
 					Maps.of("url", fake.base() + "/api/me", "bearerSecret", "oauth/fake"), alice);
 				assertEquals("Bearer access-1", RT.getIn(ok(call), "body").toString());
 				String record = call.getData().toString();
-				assertEquals(Fields.HIDDEN, RT.getIn(call.getData(), "input", "bearerSecret"), "the reference is redacted in the record");
+				assertEquals(Strings.create("oauth/fake"), RT.getIn(call.getData(), "input", "bearerSecret"), "the record preserves the credential reference");
+				assertFalse(RT.getIn(call.getData(), Fields.INPUT).toString().contains("access-1"));
 				assertFalse(record.contains("refresh-1"), record);
 
 				// Another user has no such connection.

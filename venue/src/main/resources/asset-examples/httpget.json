@@ -8,7 +8,6 @@
 		"info":{
 		    "featured":true
 		},
-		"secretFields": ["bearerSecret", "secretHeaders"],
 
 
 		"input": {
@@ -41,7 +40,7 @@
 				},
 				"secretHeaders": {
 					"type": "object",
-					"description": "Optional map of HTTP header name to secret reference. Each resolved secret is used as the complete header value, so store values such as 'Basic <base64>' or the API key itself. Resolved headers override matching literal headers and this entire field is redacted from job records.",
+					"description": "Optional map of HTTP header name to secret reference. Each resolved secret is used as the complete header value, so store values such as 'Basic <base64>' or the API key itself. Resolved headers override matching literal headers. Job inputs retain the references, never the resolved values.",
 					"additionalProperties": { "type": "string" }
 				}
 			},
