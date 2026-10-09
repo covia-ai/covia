@@ -603,7 +603,7 @@ public class Engine {
 		if (knownUsers != null) {
 			for (var entry : knownUsers.entrySet()) {
 				AString did = RT.ensureString(entry.getValue().get(Fields.DID));
-				if (did != null) this.venueState.users().ensure(did);
+				if (did != null && !venueState.users().isDeleted(did)) this.venueState.users().ensure(did);
 			}
 		}
 		bootstrapConfiguredNamedUsers();
@@ -623,6 +623,7 @@ public class Engine {
 		for (var entry : configured.entrySet()) {
 			AString id = entry.getKey();
 			AString did = managedUserDID(id); // validates username + hostname
+			if (venueState.users().isDeleted(did) || auth.getUser(did) != null) continue; // erased key history is not first use
 			AMap<AString, ACell> existingUser = auth.getUser(id);
 			if (existingUser != null
 					&& !did.equals(RT.ensureString(existingUser.get(Fields.DID)))) {
@@ -665,6 +666,7 @@ public class Engine {
 		for (var entry : configured.entrySet()) {
 			AString id = entry.getKey();
 			AString did = managedUserDID(id);
+			if (venueState.users().isDeleted(did) || auth.getUser(did) != null) continue;
 			AMap<AString, ACell> spec = RT.ensureMap(entry.getValue());
 			AVector<ACell> keys =
 				RT.ensureVector(spec.get(Fields.AUTHENTICATION_KEYS));
@@ -3099,10 +3101,44 @@ public class Engine {
 		Users users = venueState.users();
 		User user = users.get(did);
 		if (user != null) return user;
-		if (config.isUserAutoCreate()) return users.ensure(did);
+		if (config.isUserAutoCreate()) {
+			users.create(did);
+			return users.ensure(did);
+		}
 		throw new AuthException("User is not registered at this venue: " + did
 			+ ". Ask a venue administrator to provision it with user:create; "
 			+ "public test venues may enable users.autoCreate.");
+	}
+
+	public static final String PROTECTED_USER = "The venue and public principals cannot be deleted";
+	private final Object userDeletionLock = new Object();
+
+	/** Operator account deletion, with no implicit self-service authority. */
+	public ACell deleteUser(RequestContext ctx, AString did) {
+		requireVenueAuthority(ctx, "users", Abilities.USER_DELETE);
+		requireNotSubPrincipal(did);
+		if (isVenuePrincipal(did) || Strings.create(getDIDString() + ":public").equals(did)) {
+			throw new IllegalArgumentException(PROTECTED_USER);
+		}
+		synchronized (userDeletionLock) {
+			return eraseUser(ctx, did);
+		}
+	}
+
+	private ACell eraseUser(RequestContext ctx, AString did) {
+		VenueState.DeletedUser deleted;
+		synchronized (getAuth()) {
+			deleted = venueState.deleteUser(did, ctx.getCallerDID());
+		}
+		// The durable tombstone closes admission first. Repeating deletion also
+		// retries runtime cleanup after an interrupted earlier request.
+		jobs().cancelUserJobs(did, ctx.getJob());
+		if (getAdapter("agent") instanceof covia.adapter.AgentAdapter agent) agent.stopDeletedUser(did, deleted.agents());
+		gridScheduler().cancelUser(did);
+		venueState.users().finishDeletion(did);
+		flush();
+		log.info("user.delete did={} by={}", did, ctx.getCallerDID());
+		return deleted.tombstone();
 	}
 
 	/**
@@ -3678,6 +3714,8 @@ public class Engine {
 	 * message when the caller's authority does not cover the request.
 	 */
 	public void requireAuthority(RequestContext ctx, AString resource, AString ability) {
+		if (ctx != null && ctx.getJob() instanceof VenueJob job) job.requireAccount();
+		if (ctx != null) venueState.users().requireNotDeleted(ctx.getUserDID());
 		if (authorityCovers(ctx, resource, ability)) return;
 		String denial = (ctx != null && ctx.getCaps() != null) ? ctx.grantsDenial(resource, ability) : null;
 		throw new covia.exception.AuthException(denial != null ? denial

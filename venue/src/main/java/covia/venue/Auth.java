@@ -75,6 +75,7 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 	public static final long DEFAULT_TOKEN_EXPIRY = 86400;
 
 	private final LoginProviders loginProviders;
+	private final Engine engine;
 	private final long tokenExpiry;
 	private final boolean publicAccessEnabled;
 	private final ACell publicCapsConfig;
@@ -96,6 +97,7 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 			(ALatticeCursor<AMap<AString, AMap<AString, ACell>>>) cursor);
 
 		Config config = engine.config();
+		this.engine = engine;
 		this.tokenExpiry = config.getTokenExpiry();
 		this.publicAccessEnabled = config.isPublicAccess();
 		this.publicCapsConfig = config.getPublicCapsConfig();
@@ -207,7 +209,8 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 	 * @param id User identifier as AString (e.g. "alice_gmail_com")
 	 * @param record User record map (should contain "did" and any other fields)
 	 */
-	public void putUser(AString id, AMap<AString, ACell> record) {
+	public synchronized void putUser(AString id, AMap<AString, ACell> record) {
+		engine.getVenueState().users().requireNotDeleted(RT.ensureString(record.get(Fields.DID)));
 		CVMLong timestamp = cursor.getContext().currentTimestamp();
 		cursor.updateAndGet(current -> {
 			@SuppressWarnings("unchecked")
@@ -219,7 +222,7 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 	}
 
 	/** Atomically updates one user row without replacing unrelated fields. */
-	public AMap<AString, ACell> updateUser(AString id,
+	public synchronized AMap<AString, ACell> updateUser(AString id,
 			UnaryOperator<AMap<AString, ACell>> updater) {
 		CVMLong timestamp = cursor.getContext().currentTimestamp();
 		AMap<AString, AMap<AString, ACell>> result = cursor.updateAndGet(current -> {
@@ -230,6 +233,7 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 			AMap<AString, ACell> previous = users.get(id);
 			AMap<AString, ACell> updated = updater.apply(previous);
 			if (updated == null || Objects.equals(previous, updated)) return users;
+			engine.getVenueState().users().requireNotDeleted(RT.ensureString(updated.get(Fields.DID)));
 			return users.assoc(id, stampUser(updated, previous, timestamp));
 		});
 		return (result != null) ? result.get(id) : null;
@@ -245,6 +249,20 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 		return record.assoc(Fields.UPDATED, proposed);
 	}
 
+	/** Trusted OAuth provisioning retains its existing authority to create accounts. */
+	public synchronized AMap<AString, ACell> provisionLogin(AString id, AMap<AString, ACell> profile) {
+		AMap<AString, ACell> existing = getUser(id);
+		AString did = existing == null ? null : RT.ensureString(existing.get(Fields.DID));
+		if (did == null) did = engine.managedUserDID(id);
+		engine.getVenueState().users().create(did);
+		AString accountDID = did;
+		return updateUser(id, current -> {
+			AMap<AString, ACell> updated = current != null ? current : Maps.empty();
+			for (var entry : profile.entrySet()) updated = updated.assoc(entry.getKey(), entry.getValue());
+			return updated.assoc(Fields.DID, accountDID);
+		});
+	}
+
 	/**
 	 * Creates the venue-owned authentication-directory row for a managed user,
 	 * or verifies the existing row still names the same stable DID.
@@ -252,6 +270,7 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 	 * @return true when the row was created
 	 */
 	public synchronized boolean ensureManagedUser(AString id, AString did) {
+		engine.getVenueState().users().requireNotDeleted(did);
 		CVMLong timestamp = cursor.getContext().currentTimestamp();
 		AtomicBoolean created = new AtomicBoolean(false);
 		cursor.updateAndGet(current -> {

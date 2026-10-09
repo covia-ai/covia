@@ -175,6 +175,7 @@ public class CoviaAPI extends ACoviaAPI {
 		// requireVenueUserAuthority checks, so authorization never duplicates.
 		routes.get(ROUTE+"users", this::getUsers, COVIA_API);
 		routes.get(ROUTE+"users/{did}", this::getUserInfo, COVIA_API);
+		routes.delete(ROUTE+"users/{did}", this::deleteUser, COVIA_API);
 		routes.get(ROUTE+"users/{did}/authentications", this::getUserAuthentications, COVIA_API);
 
 		// DLFS — job-free reads (#253), read-first MVP. Reuses DLFSAdapter's own
@@ -2063,6 +2064,23 @@ public class CoviaAPI extends ACoviaAPI {
 			buildError(ctx, 404, e.getMessage());
 		} catch (RuntimeException e) {
 			buildError(ctx, 500, "Read failed: " + e.getMessage());
+		}
+	}
+
+	@OpenApi(path = ROUTE + "users/{did}", methods = HttpMethod.DELETE,
+			tags = { "Covia" }, operationId = "deleteUser",
+			summary = "Delete an account with venue user/delete authority. Self-deletion has no authority exemption.",
+			pathParams = { @OpenApiParam(name = "did", description = "Exact account DID") })
+	protected void deleteUser(Context ctx) {
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		try {
+			ACell result = engine().jobs().invokeInternal("v/ops/user/delete",
+				Maps.of(Fields.DID, Strings.create(ctx.pathParam("did"))), rctx).join();
+			buildResult(ctx, 200, result);
+		} catch (RuntimeException e) {
+			Throwable cause = e instanceof java.util.concurrent.CompletionException ? e.getCause() : e;
+			buildError(ctx, cause instanceof AuthException ? 403
+				: cause instanceof IllegalArgumentException ? 400 : 500, cause.getMessage());
 		}
 	}
 

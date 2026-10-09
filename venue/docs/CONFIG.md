@@ -994,6 +994,36 @@ shows the recorded-job path. An operator-installed adapter may use the same
 mechanism. OAuth callbacks are trusted venue provisioners and create the same
 did:web-managed account explicitly.
 
+### Account deletion
+
+`v/ops/user/delete {"did":"did:..."}` and `DELETE /api/v1/users/{did}`
+require venue-issued `user/delete` authority on `<venueDID>/users`. This applies
+to the caller's own account too: ordinary users cannot delete themselves.
+The venue and shared public principal cannot be deleted. MCP exposes
+`user_delete` when the operator includes the `user` adapter in its tool set.
+
+Deletion cancels accepted jobs, stops agents, removes queued schedules, and
+atomically removes the user's namespace and login profile/aliases. A small
+tombstone records the DID, deletion time and actor; public-key revocations
+remain without profile fields or key labels. Repeating deletion while the
+account is absent is idempotent. An interrupted cleanup can be retried.
+
+The tombstone is **not a permanent registration ban**. Explicit `user:create`,
+automatic admission when `users.autoCreate` is enabled, and existing trusted
+OAuth provisioning can create an empty account under the same DID. Retained
+jobs and cursors from the old account cannot populate the new account. Old
+managed authentication keys stay revoked; new keys must be provisioned.
+Bootstrap declarations remain first-use only and do not resurrect deleted
+accounts on restart. Authentication of a self-sovereign identity remains
+distinct from admission: deletion does not revoke that identity's external key.
+
+Logical deletion makes the removed namespace/profile unreachable from current
+account state. Physical erasure requires store GC; `v/ops/venue/gc {"status":true}`
+reports collection state. Retained checkpoints, backups, replicas and copies
+of data in other accounts or externally managed resources have independent
+retention. GC of the live store does not erase those copies. See
+[store checkpoint retention](#retaining-a-store-checkpoint).
+
 A venue-managed named user may authenticate with any active public key bound
 to its authentication-directory record. The self-issued JWT uses the stable
 named DID for both `iss` and `sub`, the target venue DID as `aud`, and the

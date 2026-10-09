@@ -114,6 +114,8 @@ public final class Covia {
 	/** User-record metadata slot — framework-owned (not a writable namespace).
 	 *  See {@code GRID_LATTICE_DESIGN.md} §"User meta record". */
 	public static final AString K_META = Strings.intern("meta");
+	/** Framework-owned account tombstone, outside every writable namespace. */
+	public static final AString K_DELETED = Strings.intern("deleted");
 	/** User-record first-write time, minted once by the stamp. */
 	public static final AString K_CREATED = Strings.intern("created");
 	/** Agent-record last-modified field. */
@@ -210,6 +212,11 @@ public final class Covia {
 	private static ACell stampUserMeta(ACell v, CVMLong ts) {
 		if (!(v instanceof AMap<?,?>)) return v;
 		AMap<ACell, ACell> user = (AMap<ACell, ACell>) v;
+		// A late job/agent/secret/workspace write through a retained cursor must
+		// never resurrect a deleted account. Preserve only its original tombstone.
+		if (user.get(K_DELETED) != null) {
+			return convex.core.data.Maps.of(K_DELETED, user.get(K_DELETED));
+		}
 		AMap<ACell, ACell> meta = (user.get(K_META) instanceof AMap<?,?> m)
 			? (AMap<ACell, ACell>) m
 			: (AMap<ACell, ACell>) (AMap<?, ?>) convex.core.data.Maps.empty();

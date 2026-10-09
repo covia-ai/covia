@@ -69,6 +69,28 @@ public class UserAdminApiTest {
 	}
 
 	@Test
+	public void deleteRequiresVenueAuthorityEvenForSelf() throws Exception {
+		HttpRequest denied = HttpRequest.newBuilder()
+			.uri(URI.create(TestServer.BASE_URL + "/api/v1/users/" + callerDID))
+			.header("Authorization", "Bearer " + jwt).DELETE().build();
+		assertEquals(403, covia.venue.TestHTTP.CLIENT.send(denied, HttpResponse.BodyHandlers.ofString()).statusCode());
+
+		AKeyPair key = AKeyPair.generate();
+		var did = UCAN.toDIDKey(key.getAccountKey());
+		TestServer.ENGINE.getVenueState().users().create(did);
+		AKeyPair venueKey = TestServer.ENGINE.getKeyPair();
+		String operator = UCAN.create(venueKey, TestServer.ENGINE.getAccountKey(),
+			System.currentTimeMillis() / 1000 + 3600, Vectors.empty(), Vectors.empty()).toJWT(venueKey).toString();
+		HttpRequest deletion = HttpRequest.newBuilder()
+			.uri(URI.create(TestServer.BASE_URL + "/api/v1/users/" + did))
+			.header("Authorization", "Bearer " + operator).DELETE().build();
+		HttpResponse<String> result = covia.venue.TestHTTP.CLIENT.send(deletion, HttpResponse.BodyHandlers.ofString());
+		assertEquals(200, result.statusCode(), result.body());
+		assertEquals(did, RT.getIn(JSON.parse(result.body()), "did"));
+		assertTrue(TestServer.ENGINE.getVenueState().users().isDeleted(did));
+	}
+
+	@Test
 	public void testListDeniesOrdinaryRegisteredCaller() throws Exception {
 		// Registered, but not the venue itself and holding no venue-issued
 		// delegation over <venueDID>/users — exactly "signed in, not an

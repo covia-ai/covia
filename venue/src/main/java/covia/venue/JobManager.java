@@ -220,6 +220,12 @@ public class JobManager {
 			false, false, false);
 	}
 
+	/** Bind even an untracked scheduled fire to the account lifecycle at claim time. */
+	Prepared prepareUntracked(AString ref, ACell input, RequestContext ctx) {
+		return prepareOperation(resolveOperation(ref, ctx).meta(), input, ctx.withOp(ref),
+			true, false, true);
+	}
+
 	/**
 	 * A Job that exists — PENDING, and persisted when durable — whose adapter
 	 * has not yet been invoked. Separating creation from start lets a caller
@@ -259,6 +265,7 @@ public class JobManager {
 			started = true;
 			if (job.isFinished()) return job;
 			try {
+				if (job instanceof VenueJob venueJob) venueJob.requireAccount();
 				adapter.invoke(job, jobCtx, meta, input);
 			} catch (java.util.concurrent.CancellationException e) {
 				job.cancel(e.getMessage());
@@ -370,8 +377,13 @@ public class JobManager {
 		Blob parentID = parentJobID(ctx);
 		Job job;
 		try {
-			job = submitJob(opID, meta, input, ownerDID, ctx.getCallerDID(),
-				parentID, memoryOnly, resultOriented);
+			synchronized (engine.getAuth()) {
+				job = submitJob(opID, meta, input, ownerDID, ctx.getCallerDID(),
+					parentID, memoryOnly, resultOriented);
+				// Deletion cannot cancel the accepted job before its quota permit
+				// has been attached for terminal cleanup.
+				if (permit) permitHolders.put(job.getID(), ownerDID);
+			}
 		} catch (RuntimeException e) {
 			// Never obtained a jobID to track — release the permit directly.
 			if (permit && ownerDID != null) {
@@ -380,11 +392,6 @@ public class JobManager {
 			}
 			throw e;
 		}
-		// Track the permit against the job so it is released exactly once when the
-		// job reaches a terminal state (evictActive) or is deleted. Recorded
-		// before dispatch so a synchronously-completing adapter still finds it.
-		if (permit) permitHolders.put(job.getID(), ownerDID);
-
 		// Every adapter sees the immediate Job wrapper, including a transient one.
 		// jobId is narrower: it names a durable t/ temp scope. Preserve an inherited
 		// parent scope for internal composition, and establish a new scope only for
@@ -684,6 +691,7 @@ public class JobManager {
 	 * @throws IllegalStateException adapter not registered
 	 */
 	private AAdapter prepareInvocation(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
+		if (ctx.getJob() instanceof VenueJob parent) parent.requireAccount();
 		if (meta == null) throw new IllegalArgumentException("Metadata must be specified");
 		AString callerDID = ctx.getCallerDID();
 		if (callerDID == null) throw new AuthException("Authentication required");
@@ -831,10 +839,12 @@ public class JobManager {
 		VenueJob job = new VenueJob(status, meta, callerDID, this, memoryOnly,
 			!memoryOnly);
 		job.setPreserveFailureCause(resultOriented);
-		activeJobs.put(jobID, job);
-
-		// Persist initial record (a no-op for a transient Job wrapper).
-		persistJobRecord(jobID, status, callerDID);
+		synchronized (engine.getAuth()) {
+			engine.getVenueState().users().requireNotDeleted(callerDID);
+			activeJobs.put(jobID, job);
+			// Serialise acceptance with the account deletion admission barrier.
+			persistJobRecord(jobID, status, job.account());
+		}
 
 		if (memoryOnly) log.debug("Started transient job: {}", jobID);
 		else log.info("Submitted job: {}", jobID);
@@ -1305,7 +1315,7 @@ public class JobManager {
 	 * Persists a job record to the user's per-user lattice.
 	 * This is the single source of truth for all jobs.
 	 */
-	void persistJobRecord(Blob jobID, AMap<AString, ACell> record, AString callerDID) {
+	void persistJobRecord(Blob jobID, AMap<AString, ACell> record, User account) {
 		// Transient (memory-only) Job: the single persistence choke point
 		// is a no-op — nothing about the job ever touches the lattice. The job
 		// is still in the active cache here for every persist trigger (initial
@@ -1313,8 +1323,21 @@ public class JobManager {
 		// AFTER the final persist call.
 		Job j = activeJobs.get(jobID);
 		if (j instanceof VenueJob vj && vj.isMemoryOnly()) return;
-		User user = engine.getVenueState().users().ensure(callerDID);
-		user.persistJob(jobID, record);
+		try {
+			account.persistJob(jobID, record);
+		} catch (AuthException deleted) {
+			// An account cursor is invalidated by erasure; late Job updates must
+			// still settle their in-memory futures without persisting old data.
+		}
+	}
+
+	User account(AString did) { return engine.getVenueState().users().ensure(did); }
+
+	/** Cancel all accepted work owned by a now-deleted account, including transient jobs. */
+	void cancelUserJobs(AString did, Job deletion) {
+		for (Job job : activeJobs.values()) {
+			if (job != deletion && did.equals(job.getData().get(Fields.CALLER))) job.cancel();
+		}
 	}
 
 	/**

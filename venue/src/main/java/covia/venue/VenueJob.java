@@ -19,6 +19,7 @@ public class VenueJob extends Job {
 	private final JobManager manager;
 	private final AMap<AString, ACell> meta;
 	private final AString callerDID;
+	private final User account;
 	/** Transient Job wrapper: never persisted, gone when terminal or on restart. */
 	private final boolean memoryOnly;
 	/** Whether venue-wide observers (SSE/MCP telemetry) should see updates. */
@@ -43,6 +44,7 @@ public class VenueJob extends Job {
 		this.manager = manager;
 		this.meta = meta;
 		this.callerDID = callerDID;
+		this.account = manager.account(callerDID);
 		this.memoryOnly = memoryOnly;
 		this.observable = observable;
 	}
@@ -51,6 +53,11 @@ public class VenueJob extends Job {
 	public boolean isMemoryOnly() {
 		return !isRecorded();
 	}
+
+	User account() { return account; }
+
+	/** Fence nested work from a deleted lifecycle even after the DID is recreated. */
+	void requireAccount() { account.get(); }
 
 	/** Resolved operation metadata, or null when the operation could not be resolved. */
 	AMap<AString, ACell> meta() {
@@ -73,7 +80,7 @@ public class VenueJob extends Job {
 				// A later CAS may reach this monitor first. Persist the latest
 				// committed record so a delayed callback cannot roll it back.
 				manager.persistJobRecord(getID(),
-					JobManager.redactJobSecrets(getData(), meta), callerDID);
+					JobManager.redactJobSecrets(getData(), meta), account);
 			}
 		}
 		if (observable) manager.notifyGlobalListeners(this);

@@ -202,6 +202,19 @@ public class Scheduler {
 		return onTimer(() -> doCancel(handle, ctx.getUserDID()));
 	}
 
+	/** Remove queued input and recurring work for an erased account. */
+	void cancelUser(AString did) {
+		onTimer(() -> {
+			putEvents(events -> {
+				for (var entry : events.entrySet()) {
+					if (did.equals(RT.getIn(entry.getValue(), K_OWNER))) events = events.dissoc(entry.getKey());
+				}
+				return events;
+			});
+			return null;
+		});
+	}
+
 	/**
 	 * Fire a scheduled event now, ahead of its time. Owner-only. A one-shot
 	 * event is consumed; a recurring one stays scheduled at its unchanged next
@@ -307,6 +320,7 @@ public class Scheduler {
 	private Blob doSchedule(AString opRef, ACell input, AString owner, AString actor,
 			AVector<ACell> proofs, AVector<ACell> caps, long wakeTime,
 			AMap<AString, ACell> repeat, Boolean track) {
+		engine.getVenueState().users().requireNotDeleted(owner);
 		Blob key = mintKey(wakeTime);
 		AMap<AString, ACell> rec = Maps.of(
 			K_OP, opRef,
@@ -363,13 +377,14 @@ public class Scheduler {
 	private Claimed claim(Blob key, AMap<AString, ACell> rec, long now, boolean advance) {
 		JobManager.Prepared job = null;
 		RuntimeException error = null;
-		if (isTracked(rec)) {
-			try {
-				job = engine.jobs().prepareTracked(
-					RT.ensureString(rec.get(K_OP)), rec.get(K_INPUT), fireContext(rec));
-			} catch (RuntimeException e) {
-				error = e;
-			}
+		boolean tracked = isTracked(rec);
+		try {
+			engine.getVenueState().users().requireNotDeleted(RT.ensureString(rec.get(K_OWNER)));
+			job = tracked ? engine.jobs().prepareTracked(
+				RT.ensureString(rec.get(K_OP)), rec.get(K_INPUT), fireContext(rec))
+				: engine.jobs().prepareUntracked(RT.ensureString(rec.get(K_OP)), rec.get(K_INPUT), fireContext(rec));
+		} catch (RuntimeException e) {
+			error = e;
 		}
 		AMap<AString, ACell> repeat = repeatOf(rec);
 		if (repeat == null) {
@@ -377,7 +392,7 @@ public class Scheduler {
 			return new Claimed(rec, job, error);
 		}
 		AMap<AString, ACell> next = rec.assoc(K_LAST_FIRED, CVMLong.create(now));
-		if (job != null) next = next.assoc(K_LAST_JOB, job.job().getID());
+		if (tracked && job != null) next = next.assoc(K_LAST_JOB, job.job().getID());
 		Blob nextKey = key;
 		if (advance) {
 			long t = nextTime(repeat, timeOf(rec), now);

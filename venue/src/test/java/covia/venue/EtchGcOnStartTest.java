@@ -193,4 +193,52 @@ public class EtchGcOnStartTest {
 		assertThrows(IllegalArgumentException.class, () -> new Config(
 			Maps.of(Config.ETCH, Maps.of(GC, true))));
 	}
+
+	@Test
+	public void deletedProfileLeavesCollectedStoreAndStaysDeletedOnRestart() throws Exception {
+		File file = storeFile("user-erasure-gc");
+		String marker = "erased-" + java.util.UUID.randomUUID() + "@example.test";
+		AString id = Strings.create("erasure");
+		var key = convex.auth.ucan.UCAN.toDIDKey(convex.core.crypto.AKeyPair.generate().getAccountKey());
+		AMap<AString, ACell> cfg = config(file.getAbsolutePath(), false)
+			.assoc(Config.HOSTNAME, Strings.create("erasure.example"))
+			.assoc(Config.USERS, Maps.of(Config.AUTO_CREATE, false, Config.BOOTSTRAP,
+				Maps.of(id, Maps.of(Fields.AUTHENTICATION_KEYS, Vectors.of(key)))));
+		AString did;
+		VenueServer venue = VenueServer.launch(cfg);
+		try {
+			Engine engine = venue.getEngine();
+			did = engine.managedUserDID(id);
+			engine.getAuth().updateUser(id, row -> row.assoc(Fields.EMAIL, Strings.create(marker)));
+			engine.flush();
+		} finally { venue.close(); }
+		assertTrue(new String(java.nio.file.Files.readAllBytes(file.toPath()),
+			java.nio.charset.StandardCharsets.ISO_8859_1).contains(marker));
+		VenueServer deleting = VenueServer.launch(cfg);
+		try { deleting.getEngine().deleteUser(deleting.getEngine().venueContext(), did); }
+		finally { deleting.close(); }
+		AMap<AString, ACell> gcConfig = cfg.assoc(Config.ETCH, Maps.of(GC, Maps.of(ON_START, true)));
+		VenueServer collected = VenueServer.launch(gcConfig);
+		File live;
+		try {
+			assertNull(collected.getEngine().getVenueState().users().get(did));
+			assertNull(collected.getEngine().getAuth().getUser(id));
+			assertThrows(covia.exception.AuthException.class, () -> collected.getEngine().admitUser(did));
+			live = ((EtchStore) collected.getStore()).getFile();
+		} finally { collected.close(); }
+		assertFalse(new String(java.nio.file.Files.readAllBytes(live.toPath()),
+			java.nio.charset.StandardCharsets.ISO_8859_1).contains(marker));
+		VenueServer recreated = VenueServer.launch(cfg);
+		try {
+			Engine engine = recreated.getEngine();
+			engine.jobs().invokeInternal("v/ops/user/create", Maps.of("username", id),
+				engine.venueContext()).get(5, TimeUnit.SECONDS);
+		} finally { recreated.close(); }
+		VenueServer restarted = VenueServer.launch(cfg);
+		try {
+			assertNotNull(restarted.getEngine().getVenueState().users().get(did));
+			assertFalse(restarted.getEngine().getAuth().isAuthenticationKeyActive(id, key),
+				"an old bootstrap declaration cannot reinstall the erased account's key");
+		} finally { restarted.close(); }
+	}
 }

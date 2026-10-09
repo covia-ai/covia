@@ -101,7 +101,7 @@ AUTH_REQUIRED).
 | `scheduler` | Deferred grid-op invocation, one-shot or `repeat.every`; tracked fires are durable Jobs (`docs/GRID_SCHEDULER.md`) | `schedule`, `cancel`, `trigger`, `list` |
 | `auth` | Authentication ops | login/token flows |
 | `oauth` | Connected accounts — OAuth 2.0 grants held for users; `http:*` attaches tokens via `bearerSecret: "oauth/<provider>"` | `connect`, `status`, `disconnect` |
-| `user` | Explicit user registration and discovery (arbitrary DIDs; venue-managed did:web usernames) | `create`, `info`, `list` |
+| `user` | Explicit user registration, operator account deletion and discovery (arbitrary DIDs; venue-managed did:web usernames) | `create`, `delete`, `info`, `list` |
 | `venue` | Venue administration — runtime adapter/module lifecycle and process restart (venue-owned; `docs/CONFIG.md`) | `adapters`, `adapter/enable`, `adapter/disable`, `adapter/configure`, `module/load`, `module/unload`, `restart`, `gc` |
 | `test` | Testing | `echo`, `delay`, `fail`, `never`, `random`, `chat`, `pause`, `taskComplete` |
 

@@ -1,0 +1,22 @@
+{
+  "name": "Delete user account",
+  "description": "Erase a venue account, profile, login aliases and namespace; cancel its jobs, agents and schedules. Requires venue-issued user/delete authority on <venueDID>/users, even for the caller's own account. Retains a minimal account tombstone and public key revocations. Recreation follows the existing venue admission policy and starts with an empty account. Physical erasure requires collecting unreferenced data and expiring retained checkpoints/backups.",
+  "operation": {
+    "adapter": "user:delete",
+    "readOnly": false,
+    "input": {
+      "type": "object",
+      "properties": {"did": {"type": "string", "description": "Exact DID of the account to delete"}},
+      "required": ["did"],
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "did": {"type": "string"},
+        "deletedAt": {"type": "integer"},
+        "deletedBy": {"type": "string"}
+      }
+    }
+  }
+}

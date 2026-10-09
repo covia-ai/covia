@@ -11,6 +11,8 @@ import convex.core.cvm.Keywords;
 import convex.core.data.ABlob;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
+import convex.core.data.AString;
+import convex.core.data.Maps;
 import convex.core.data.AccountKey;
 import convex.core.data.Index;
 import convex.core.data.Keyword;
@@ -20,6 +22,8 @@ import convex.core.store.AStore;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.cursor.ALatticeCursor;
 import covia.lattice.Covia;
+import covia.api.Fields;
+import covia.lattice.Namespace;
 import covia.venue.storage.LatticeStorage;
 
 /**
@@ -184,6 +188,50 @@ public class VenueState extends ALatticeComponent<ACell> {
 	public Users users() {
 		return new Users(this, cursor.path(Covia.USER_DATA));
 	}
+
+	/** Atomically erases the namespace and login aliases, retaining revocation evidence. */
+	@SuppressWarnings("unchecked")
+	DeletedUser deleteUser(AString did, AString actor) {
+		var now = cursor.getContext().currentTimestamp();
+		ACell tombstone = Maps.of(Fields.DID, did, Users.DELETED_AT, now, Users.DELETED_BY, actor);
+		ACell before = cursor.getAndUpdate(value -> {
+			AMap<ACell, ACell> venue = (AMap<ACell, ACell>) value;
+			AMap<AString, ACell> users = RT.ensureMap(venue.get(Covia.USER_DATA));
+			ACell previous = users == null ? null : users.get(did);
+			if (RT.getIn(previous, Covia.K_DELETED) != null) return value;
+			if (previous == null) throw new IllegalArgumentException(UNKNOWN_USER);
+			venue = venue.assoc(Covia.USER_DATA, users.assoc(did, Maps.of(Covia.K_DELETED, tombstone,
+				Users.DELETING, convex.core.data.prim.CVMBool.TRUE)));
+			AMap<AString, ACell> directory = RT.ensureMap(venue.get(Covia.USERS));
+			if (directory != null) {
+				AMap<AString, ACell> revoked = Maps.empty();
+				for (var row : directory.entrySet()) {
+					if (!did.equals(RT.getIn(row.getValue(), Fields.DID))) continue;
+					AMap<AString, ACell> keys = RT.ensureMap(RT.getIn(row.getValue(), Fields.AUTHENTICATION_KEYS));
+					if (keys != null) for (var key : keys.entrySet()) {
+						revoked = revoked.assoc(key.getKey(), Maps.of(
+							Fields.STATUS, Auth.REVOKED,
+							Fields.REVOKED_AT, now, Fields.REVOKED_BY, actor));
+					}
+					directory = directory.dissoc(row.getKey());
+				}
+				// No username alias, profile or key label survives. Keep public-key
+				// revocations so a removed binding cannot be silently reassigned.
+				if (!revoked.isEmpty()) directory = directory.assoc(did, Maps.of(
+					Fields.DID, did, Fields.AUTHENTICATION_KEYS, revoked));
+				venue = venue.assoc(Covia.USERS, directory);
+			}
+			return venue;
+		});
+		ACell previous = RT.getIn(before, Covia.USER_DATA, did);
+		ACell existing = RT.getIn(previous, Covia.K_DELETED);
+		return new DeletedUser(existing != null ? existing : tombstone,
+			RT.ensureMap(RT.getIn(previous, Namespace.G)));
+	}
+
+	record DeletedUser(ACell tombstone, AMap<AString, ACell> agents) {}
+
+	public static final String UNKNOWN_USER = "User is not registered at this venue";
 
 	/**
 	 * Gets a lattice cursor at the {@code :users} level for Auth construction.

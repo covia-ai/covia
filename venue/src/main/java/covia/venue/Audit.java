@@ -34,6 +34,7 @@ public final class Audit {
 	public static final String LOGIN = "login";
 	public static final String TOKEN_ISSUED = "token.issued";
 	public static final String USER_CREATE = "user.create";
+	public static final String USER_DELETE = "user.delete";
 	public static final String USER_SUDO = "user.sudo";
 	public static final String KEY_ADD = "auth.key.add";
 	public static final String KEY_REVOKE = "auth.key.revoke";

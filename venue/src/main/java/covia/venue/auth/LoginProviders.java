@@ -240,20 +240,8 @@ public class LoginProviders {
 			// arbitrary DIDs for self-sovereign identities provisioned elsewhere.
 			// Preserve an existing account DID across upgrades / hostname changes;
 			// only new managed users receive the current did:web-derived ID.
-			AMap<AString, ACell> profileFields = profile;
-			AString managedDID = engine.managedUserDID(userId);
-			AMap<AString, ACell> userRecord = engine.getAuth().updateUser(userId, current -> {
-				AMap<AString, ACell> updated = (current != null) ? current : Maps.empty();
-				for (var entry : profileFields.entrySet()) {
-					updated = updated.assoc(entry.getKey(), entry.getValue());
-				}
-				if (RT.ensureString(updated.get(Fields.DID)) == null) {
-					updated = updated.assoc(Fields.DID, managedDID);
-				}
-				return updated;
-			});
+			AMap<AString, ACell> userRecord = engine.getAuth().provisionLogin(userId, profile);
 			AString userDID = RT.ensureString(userRecord.get(Fields.DID));
-			engine.getVenueState().users().ensure(userDID);
 
 			// 4. Issue venue-signed EdDSA JWT
 			long nowSecs = System.currentTimeMillis() / 1000;

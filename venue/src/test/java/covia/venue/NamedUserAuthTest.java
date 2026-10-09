@@ -272,6 +272,24 @@ public class NamedUserAuthTest {
 			JWT.EXP, CVMLong.create(now + 300)), key).toString();
 	}
 
+	@Test
+	void deletedAccountKeysStayRevokedAfterExplicitRecreation() throws Exception {
+		Engine engine = server.getEngine();
+		AKeyPair key = AKeyPair.generate();
+		AString id = Strings.create("delete-auth");
+		AString did = engine.managedUserDID(id);
+		engine.jobs().invokeInternal("v/ops/user/create", Maps.of("username", id,
+			Fields.AUTHENTICATION_KEYS, Vectors.of(UCAN.toDIDKey(key.getAccountKey()))),
+			engine.venueContext()).get(5, TimeUnit.SECONDS);
+		String token = namedToken(key, did, did, engine.getDIDString());
+		assertAccepted(token);
+		engine.deleteUser(engine.venueContext(), did);
+		assertRejected(token);
+		engine.jobs().invokeInternal("v/ops/user/create", Maps.of("username", id),
+			engine.venueContext()).get(5, TimeUnit.SECONDS);
+		assertRejected(token);
+	}
+
 	private void assertAccepted(String token) throws Exception {
 		Job job = client(token).invokeAndWait(OP_ECHO, Maps.of(Fields.VALUE, "ok"));
 		assertNotNull(job);

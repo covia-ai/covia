@@ -56,6 +56,7 @@ public class UserAdapter extends AAdapter {
 		// The adapter's own skill: v/skills/users lives and dies with this adapter.
 		installSkill("admin/users", "/skills/users.json");
 		installAsset("user/create", "/adapters/user/create.json");
+		installAsset("user/delete", "/adapters/user/delete.json");
 		installAsset("user/sudo", "/adapters/user/sudo.json");
 		installAsset("user/info", "/adapters/user/info.json");
 		installAsset("user/list", "/adapters/user/list.json");
@@ -71,6 +72,7 @@ public class UserAdapter extends AAdapter {
 		String subOperation = getSubOperation(meta);
 		String event = switch (subOperation) {
 			case "create" -> Audit.USER_CREATE;
+			case "delete" -> Audit.USER_DELETE;
 			case "sudo" -> Audit.USER_SUDO;
 			case "authentication-add" -> Audit.KEY_ADD;
 			case "authentication-revoke" -> Audit.KEY_REVOKE;
@@ -82,6 +84,7 @@ public class UserAdapter extends AAdapter {
 		} else try {
 			result = CompletableFuture.completedFuture(switch (subOperation) {
 				case "create" -> create(ctx, input);
+				case "delete" -> engine.deleteUser(ctx, requireDID(RT.ensureString(RT.getIn(input, Fields.DID))));
 				case "info" -> info(ctx, input);
 				case "list" -> list(ctx);
 				case "authentication-add" -> authenticationAdd(ctx, input);
@@ -302,7 +305,7 @@ public class UserAdapter extends AAdapter {
 
 	private AString requireDID(AString value) {
 		try {
-			if (DID.fromString(value.toString()) != null) return value;
+			if (value != null && DID.fromString(value.toString()) != null) return value;
 		} catch (RuntimeException ignored) {
 			// Converted below into a short, caller-recoverable validation error.
 		}

@@ -4464,6 +4464,25 @@ public class AgentAdapter extends AAdapter {
 		}
 	}
 
+	/** Stop loops after the account tombstone has atomically removed their state. */
+	@SuppressWarnings("unchecked")
+	public void stopDeletedUser(AString did, AMap<AString, ACell> removedAgents) {
+		HashSet<AgentKey> keys = new HashSet<>(runningLoops.keySet());
+		keys.addAll(activeChats.keySet());
+		keys.addAll(deferredCompletions.keySet());
+		if (removedAgents != null) for (var entry : removedAgents.entrySet()) {
+			keys.add(new AgentKey(did, entry.getKey()));
+			ACell tasks = RT.getIn(entry.getValue(), AgentState.KEY_TASKS);
+			if (tasks instanceof Index<?, ?> index) failQueuedTasks((Index<Blob, ACell>) index, Users.ACCOUNT_DELETED);
+		}
+		for (AgentKey key : keys) {
+			if (!did.equals(key.owner())) continue;
+			cancelActiveTransition(key);
+			failAllPendingForAgent(did, key.id(), Users.ACCOUNT_DELETED);
+			engine.agentEvents().status(did, key.id(), AgentState.TERMINATED, null);
+		}
+	}
+
 	private void suspendOnError(AString callerDID, AString agentId, Exception e) {
 		try {
 			AgentState agent = getAgent(callerDID, agentId);
