@@ -484,10 +484,11 @@ the collected file is adopted under the store's name.
 {"status": true}       // {file, bytes, inProgress, sweepComplete, completed, collectedFile?, collectedBytes?}
 {"cancel": true}       // roll a running cycle back; nothing written during it is lost
 {"restart": true}      // restart after cutover so the disk comes back now
+{"backupFile": "/var/backups/covia/checkpoint.etch"} // retain the pre-cycle store
 ```
 
 The result carries `bytesBefore`, `bytesAfter`, `reclaimed`, `elapsedMillis`,
-`collectedFile` and `reclaimedAt` (`shutdown`, or `restart`). Cancelling the
+`collectedFile` and `reclaimedAt` (`shutdown`, `restart`, or `backupRemoval`). Cancelling the
 Job cancels the cycle. Constraints:
 
 - **One collection per process.** The successor cannot be threaded into the
@@ -502,6 +503,58 @@ Job cancels the cycle. Constraints:
   the venue's own agents are not admitted without one. `restart: true`
   additionally requires `venue/restart` on `<venueDID>/process` and a
   `MainVenue`-managed process, both checked before any collection starts.
+
+### Retaining a store checkpoint
+
+Set `etch.gc.retainSuperseded: true` to retain the superseded store during both
+startup GC (`etch.gc.onStart`) and online `venue:gc`. It defaults to false.
+Each retained file gets a unique `<store>.checkpoint-<time>-<uuid>.etch` name
+beside the store, outside Convex's automatic recovery naming scheme. Startup
+GC logs the checkpoint path after closing the old store; online GC returns it.
+Normal reopening neither adopts nor prunes these checkpoints. Operators own
+retention and removal, and retained files continue consuming disk space.
+
+The operation's optional `retainSuperseded` boolean overrides that policy for
+one cycle. `backupFile` selects an explicit destination and implies retention;
+combining it with `retainSuperseded: false` is rejected. Neither retention option
+can accompany `status` or `cancel`.
+
+This retained-file mechanism is separate from the independent online root export
+requested in [Convex #750](https://github.com/Convex-Dev/convex/issues/750).
+An explicit export will have its own API when upstream supports it.
+
+`backupFile` uses Convex's `completeGC(backupFile)` API to retain a hard link to
+the original store. Covia flushes its hosted root before starting the cycle;
+the checkpoint contains the persisted state at that boundary. Workspace and
+DLFS writes made during or after collection go into the live successor, leaving
+the checkpoint at its earlier state. This is a store checkpoint, not a copy of
+external content files, venue configuration, jars or encryption keys.
+
+The destination must be a new filename on the same filesystem, with an existing
+parent directory and hard-link support (the same NTFS volume on Windows).
+Existing paths and Etch recovery filenames are refused. `backupFile` cannot be
+combined with `status` or `cancel`.
+
+The result reports the canonical `backupFile` and `backupReadyAt: "shutdown"`
+(or `"restart"` with `restart:true`). **Job completion does not mean the backup
+is ready to open or copy.** The venue retains the old store handle, and Convex
+requires that handle to close cleanly first. After successful shutdown/restart,
+treat the checkpoint as read-only and copy it to a separate file before restoring
+a venue with the corresponding configuration and encryption keys. Copy it to
+separate storage for an independent backup. An interrupted cycle or unclean
+shutdown does not confirm a usable checkpoint.
+
+Retaining the checkpoint retains the original file's disk allocation, including
+its garbage. `reclaimed` reports potential savings; `reclaimedAt: "backupRemoval"`
+means both the old handle must close and the retained checkpoint must be removed
+before that space can be recovered. The one-cycle-per-process restriction still
+applies, so this API does not yet provide repeated, immediately exportable online
+checkpoints.
+
+`VenueGcOperationTest` exercises the real venue operation while the Convex GC
+cycle is held open: concurrent workspace/DLFS reads and writes, plain/encrypted
+checkpoint restoration, live-store restart, cancellation, and a competing backup
+file creation that must fail without losing writes or replacing the file.
 
 ## Embedded startup readiness
 

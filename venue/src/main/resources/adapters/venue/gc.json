@@ -1,12 +1,14 @@
 {
   "name": "Garbage-collect venue store",
-  "description": "Collects the venue's Etch store while the venue keeps serving: everything reachable from the lattice root is copied into a fresh file and the venue cuts over to it, with reads and writes continuing throughout. The superseded file is deleted when the venue next closes (or on the following start if the platform still pins it), and the collected file is adopted under the store's name on the next start — so disk comes back at shutdown unless restart is set. One collection per process: a second needs a restart first (etch.gc.onStart collects at boot). Needs free disk of about the current file size. Venue-owned: requires venue/gc on <venue DID>/store; restart additionally requires venue/restart on <venue DID>/process.",
+  "description": "Collects the venue's Etch store while the venue keeps serving: everything reachable from the lattice root is copied into a fresh file and the venue cuts over to it, with reads and writes continuing throughout. The superseded file is deleted when the venue next closes (or on the following start if the platform still pins it), and the collected file is adopted under the store's name on the next start — so disk comes back at shutdown unless restart is set. With backupFile, the pre-cycle store is retained: it is safe to open/copy only after clean shutdown/restart, and keeps its disk allocation until the checkpoint is removed. One collection per process: a second needs a restart first (etch.gc.onStart collects at boot). Needs free disk of about the current file size. Venue-owned: requires venue/gc on <venue DID>/store; restart additionally requires venue/restart on <venue DID>/process.",
   "operation": {
     "adapter": "venue:gc",
     "readOnly": false,
     "input": {
       "type": "object",
       "properties": {
+        "retainSuperseded": { "type": "boolean", "description": "Override etch.gc.retainSuperseded for this cycle. True retains the old store at an automatically generated checkpoint filename beside the store unless backupFile is supplied; false disables retention. Omission inherits config (default false). Cannot be combined with status/cancel, or false with backupFile." },
+        "backupFile": { "type": "string", "minLength": 1, "description": "Retain a pre-cycle store checkpoint at this new path on the same filesystem (hard links required). Never overwrites a file. The checkpoint becomes safe to open or copy only after venue shutdown/restart closes the old store handle. It keeps the original disk space allocated; treat it as read-only and restore from a copy. Cannot be combined with status/cancel." },
         "status": { "type": "boolean", "description": "Report the store's collection state without collecting." },
         "cancel": { "type": "boolean", "description": "Cancel a collection in progress — the store rolls back to its original file, nothing written during the cycle is lost — and report state." },
         "restart": { "type": "boolean", "default": false, "description": "After cutover, restart the process with the current jar (as venue/restart) so the reclaimed disk comes back now; the successor adopts the collected file on its way up." },
@@ -19,10 +21,12 @@
         "file": { "type": "string", "description": "The store file the venue opened." },
         "bytesBefore": { "type": "integer", "description": "Data length of the store before collection." },
         "bytesAfter": { "type": "integer", "description": "Data length of the collected file at cutover." },
-        "reclaimed": { "type": "integer", "description": "bytesBefore - bytesAfter (never negative)." },
+        "reclaimed": { "type": "integer", "description": "Potential space saving: bytesBefore - bytesAfter (never negative). With backupFile, the original space remains allocated until the venue closes and the checkpoint is removed." },
         "elapsedMillis": { "type": "integer" },
         "collectedFile": { "type": "string", "description": "The collected file the venue now writes to; adopted under the store's name on the next start." },
-        "reclaimedAt": { "type": "string", "enum": ["shutdown", "restart"], "description": "When the superseded file's disk comes back." },
+        "reclaimedAt": { "type": "string", "enum": ["shutdown", "restart", "backupRemoval"], "description": "When the superseded file's disk comes back; backupRemoval requires both closing the old store and removing its checkpoint." },
+        "backupFile": { "type": "string", "description": "Canonical path to the retained pre-cycle checkpoint." },
+        "backupReadyAt": { "type": "string", "enum": ["shutdown", "restart"], "description": "The checkpoint is not yet ready at Job completion: wait for successful shutdown/restart before opening or copying it. An interrupted cycle or unclean shutdown does not confirm a usable backup." },
         "restart": { "type": "object", "description": "With restart: the accepted restart plan (jar, sha256, fallback, startupTimeout)." },
         "bytes": { "type": "integer", "description": "status/cancel: current data length of the opened store file." },
         "inProgress": { "type": "boolean", "description": "status/cancel: a cycle is running." },

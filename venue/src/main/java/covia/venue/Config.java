@@ -1370,6 +1370,7 @@ public class Config {
 	private static final AString ETCH_KEY = Strings.intern("key");
 	/** Covia-side {@code etch.gc} block: store garbage-collection policy (covia#451). */
 	private static final AString ETCH_GC = Strings.intern("gc");
+	private static final AString ETCH_GC_RETAIN = Strings.intern("retainSuperseded");
 	private static final AString ETCH_GC_ON_START = Strings.intern("onStart");
 
 	/**
@@ -1497,8 +1498,8 @@ public class Config {
 	}
 
 	/**
-	 * Shape-validates the Covia-side {@code etch.gc} block: an object whose only
-	 * field is the boolean {@code onStart}. Fail-closed like the rest of the etch
+	 * Shape-validates the Covia-side {@code etch.gc} block: an object with boolean
+	 * {@code onStart} and {@code retainSuperseded} fields. Fail-closed like the etch
 	 * policy — a misspelt or mistyped field is a startup error, never a silently
 	 * skipped collection.
 	 */
@@ -1507,13 +1508,10 @@ public class Config {
 		AMap<AString, ACell> gc = RT.castMap(raw);
 		if (gc == null) throw malformed("etch.gc", "must be an object");
 		for (AString key : gc.keySet()) {
-			if (!ETCH_GC_ON_START.equals(key)) {
-				throw malformed("etch.gc", "unknown field '" + key + "' (known: onStart)");
+			if (!ETCH_GC_ON_START.equals(key) && !ETCH_GC_RETAIN.equals(key)) {
+				throw malformed("etch.gc", "unknown field '" + key + "' (known: onStart, retainSuperseded)");
 			}
-		}
-		ACell onStart = gc.get(ETCH_GC_ON_START);
-		if (onStart != null && !(onStart instanceof CVMBool)) {
-			throw malformed("etch.gc.onStart", "must be a boolean");
+			if (!(gc.get(key) instanceof CVMBool)) throw malformed("etch.gc." + key, "must be a boolean");
 		}
 	}
 
@@ -1528,6 +1526,11 @@ public class Config {
 		if (etch == null) return false;
 		AMap<AString, ACell> gc = RT.castMap(etch.get(ETCH_GC));
 		return gc != null && CVMBool.TRUE.equals(gc.get(ETCH_GC_ON_START));
+	}
+
+	/** Retain each superseded store as a separately named checkpoint; default false. */
+	public boolean isEtchGcRetainSuperseded() {
+		return CVMBool.TRUE.equals(RT.getIn(config, ETCH, ETCH_GC, ETCH_GC_RETAIN));
 	}
 
 	/** Resolves the {@code etch.key} source to the raw 32-byte encryption key. */

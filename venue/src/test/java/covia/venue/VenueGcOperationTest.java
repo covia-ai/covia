@@ -3,6 +3,9 @@ package covia.venue;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.Test;
@@ -16,6 +19,8 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.etch.EtchStore;
+import convex.etch.Etch;
+import covia.adapter.VenueAdapter;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
 import covia.grid.Job;
@@ -39,6 +44,194 @@ public class VenueGcOperationTest {
 	private static final AString USER = Strings.create("did:key:z6Mk-test-venue-gc");
 	private static final String OP = "v/ops/venue/gc";
 	private static final AMap<AString, ACell> STATUS = Maps.of("status", CVMBool.TRUE);
+	private static final String KEY_HEX = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+
+	/** Pause the actual Convex cycle after writes redirect, without timing races
+	 * or changes to the production host. All venue calls use the real adapter. */
+	private static final class PausedSweepStore extends EtchStore {
+		final CountDownLatch entered = new CountDownLatch(1);
+		final CountDownLatch resume = new CountDownLatch(1);
+
+		PausedSweepStore(File file, AMap<AString, ACell> config) throws IOException {
+			super(config.get(Config.ETCH) == null ? Etch.create(file)
+				: Etch.create(file, new Config(config).getEtchConfig()));
+		}
+
+		@Override
+		public void transferGC() throws IOException {
+			entered.countDown();
+			try {
+				if (!resume.await(15, TimeUnit.SECONDS)) throw new IOException("Test sweep was not released");
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				throw new IOException(e);
+			}
+			super.transferGC();
+		}
+	}
+
+	private static void writeFile(VenueServer venue, String text) {
+		venue.getEngine().jobs().invokeOperation("v/ops/dlfs/write",
+			Maps.of("drive", "checkpoint", "path", "proof.txt", "content", text),
+			RequestContext.of(USER)).awaitResult(5000);
+	}
+
+	private static void assertFile(VenueServer venue, String expected) {
+		ACell result = venue.getEngine().jobs().invokeOperation("v/ops/dlfs/read",
+			Maps.of("drive", "checkpoint", "path", "proof.txt"),
+			RequestContext.of(USER)).awaitResult(5000);
+		assertEquals(Strings.create(expected), RT.getIn(result, "content"));
+	}
+
+	@Test
+	void onlineCheckpointRestoresPreCycleStateWhileLiveWritesSurvive() throws Exception {
+		checkpointRoundTrip(false);
+	}
+
+	@Test
+	void encryptedOnlineCheckpointRestoresWithOriginalKey() throws Exception {
+		checkpointRoundTrip(true);
+	}
+
+	private void checkpointRoundTrip(boolean encrypted) throws Exception {
+		File dir = TestTemp.dir("venue-gc-checkpoint").toFile();
+		File live = new File(dir, "live.etch");
+		File backup = new File(dir, "checkpoint.etch");
+		AMap<AString, ACell> cfg = config(live.getAbsolutePath());
+		if (encrypted) cfg = cfg.assoc(Config.ETCH, Maps.of("version", 3,
+			"cipher", "aes-256-ctr", "encryptIndex", true, "key", KEY_HEX));
+		PausedSweepStore store = new PausedSweepStore(live, cfg);
+		VenueServer venue = VenueServer.launch(cfg, store);
+		try {
+			write(venue, "w/proof", Strings.create("before"));
+			writeFile(venue, "before");
+			Engine engine = venue.getEngine();
+			// No test-side flush: the maintenance boundary must publish the root.
+			Job cycle = engine.jobs().invokeOperation(OP, Maps.of("backupFile", backup.getAbsolutePath()), engine.venueContext());
+			assertTrue(store.entered.await(5, TimeUnit.SECONDS));
+			assertEquals(CVMBool.TRUE, RT.getIn(gc(engine, engine.venueContext(), STATUS), "inProgress"));
+			assertEquals(Strings.create("before"), read(venue, "w/proof"));
+			write(venue, "w/proof", Strings.create("during"));
+			writeFile(venue, "during");
+			engine.flush();
+			assertEquals(Strings.create("during"), read(venue, "w/proof"));
+			assertFile(venue, "during");
+			store.resume.countDown();
+			ACell result = cycle.awaitResult(60_000);
+			assertEquals(Strings.create(backup.getCanonicalPath()), RT.getIn(result, "backupFile"));
+			assertEquals(Strings.create("shutdown"), RT.getIn(result, "backupReadyAt"));
+			assertEquals(Strings.create("backupRemoval"), RT.getIn(result, "reclaimedAt"));
+			assertTrue(backup.isFile());
+			write(venue, "w/after", Strings.create("after"));
+			engine.flush();
+		} finally {
+			store.resume.countDown();
+			venue.close();
+		}
+		// Clean shutdown seals the checkpoint. Restore from an independent copy,
+		// never open the retained hard link as a writable live store.
+		File restoredFile = new File(dir, "restored.etch");
+		Files.copy(backup.toPath(), restoredFile.toPath());
+		byte[] checkpointBytes = Files.readAllBytes(backup.toPath());
+		VenueServer restored = VenueServer.launch(cfg.assoc(Config.STORE, Strings.create(restoredFile.getAbsolutePath())));
+		try {
+			assertEquals(Strings.create("before"), read(restored, "w/proof"));
+			assertFile(restored, "before");
+			assertNull(read(restored, "w/after"));
+		} finally {
+			restored.close();
+		}
+		VenueServer reopened = VenueServer.launch(cfg);
+		try {
+			assertEquals(Strings.create("during"), read(reopened, "w/proof"));
+			assertEquals(Strings.create("after"), read(reopened, "w/after"));
+			assertFile(reopened, "during");
+		} finally {
+			reopened.close();
+		}
+		assertArrayEquals(checkpointBytes, Files.readAllBytes(backup.toPath()),
+			"restoring a copy and reopening the live store must not mutate the checkpoint");
+	}
+
+	@Test
+	void failedBackupCreationRollsBackConcurrentWrites() throws Exception {
+		abortedCheckpointRoundTrip(false);
+	}
+
+	@Test
+	void cancelledCheckpointRollsBackConcurrentWrites() throws Exception {
+		abortedCheckpointRoundTrip(true);
+	}
+
+	private void abortedCheckpointRoundTrip(boolean cancel) throws Exception {
+		File dir = TestTemp.dir("venue-gc-failed-backup").toFile();
+		File live = new File(dir, "live.etch");
+		File backup = new File(dir, "checkpoint.etch");
+		AMap<AString, ACell> cfg = config(live.getAbsolutePath());
+		PausedSweepStore store = new PausedSweepStore(live, cfg);
+		VenueServer venue = VenueServer.launch(cfg, store);
+		try {
+			write(venue, "w/proof", Strings.create("before"));
+			Engine engine = venue.getEngine();
+			Job cycle = engine.jobs().invokeOperation(OP, Maps.of("backupFile", backup.getAbsolutePath()), engine.venueContext());
+			assertTrue(store.entered.await(5, TimeUnit.SECONDS));
+			write(venue, "w/proof", Strings.create("during"));
+			engine.flush();
+			// A competing creator wins after preflight. Convex must never replace
+			// this file; the failed checkpoint must roll the live writes back safely.
+			if (cancel) gc(engine, engine.venueContext(), Maps.of("cancel", true));
+			else Files.writeString(backup.toPath(), "do not replace");
+			store.resume.countDown();
+			assertThrows(JobFailedException.class, () -> cycle.awaitResult(60_000));
+			if (cancel) assertFalse(backup.exists(), "an aborted cycle must not publish a checkpoint");
+			else assertEquals("do not replace", Files.readString(backup.toPath()));
+			assertFalse(store.isGCInProgress());
+			assertEquals(CVMBool.FALSE, RT.getIn(gc(engine, engine.venueContext(), STATUS), "completed"));
+			assertEquals(Strings.create("during"), read(venue, "w/proof"));
+		} finally {
+			store.resume.countDown();
+			venue.close();
+		}
+		VenueServer reopened = VenueServer.launch(cfg);
+		try {
+			assertEquals(Strings.create("during"), read(reopened, "w/proof"));
+		} finally {
+			reopened.close();
+		}
+	}
+
+	@Test
+	void checkpointInputCannotSilentlyBecomeAStatusRequest() {
+		Engine engine = TestEngine.ENGINE;
+		for (String action : new String[] {"status", "cancel"}) {
+			assertEquals(VenueAdapter.BACKUP_WITH_STATUS, gcFails(engine, engine.venueContext(),
+				Maps.of("backupFile", "checkpoint.etch", action, true)));
+		}
+		assertEquals(VenueAdapter.INVALID_BACKUP_FILE, gcFails(engine, engine.venueContext(),
+			Maps.of("backupFile", " ")));
+		assertEquals(VenueAdapter.INVALID_RETENTION, gcFails(engine, engine.venueContext(),
+			Maps.of("retainSuperseded", "true")));
+		assertEquals(VenueAdapter.BACKUP_RETENTION_DISABLED, gcFails(engine, engine.venueContext(),
+			Maps.of("backupFile", "checkpoint.etch", "retainSuperseded", false)));
+	}
+
+	@Test
+	void onlineRetentionInheritsConfigAndCanBeOverridden() throws Exception {
+		for (Boolean override : new Boolean[] {null, Boolean.FALSE, Boolean.TRUE}) {
+			File file = new File(TestTemp.dir("gc-retention-policy").toFile(), "venue.etch");
+			AMap<AString, ACell> cfg = config(file.getAbsolutePath()).assoc(Config.ETCH,
+				Maps.of("gc", Maps.of("retainSuperseded", override != Boolean.TRUE)));
+			VenueServer venue = VenueServer.launch(cfg);
+			try {
+				write(venue, "w/proof", Strings.create("retained"));
+				ACell result = gc(venue.getEngine(), venue.getEngine().venueContext(),
+					override == null ? Maps.empty() : Maps.of("retainSuperseded", override));
+				ACell backup = RT.getIn(result, "backupFile");
+				if (Boolean.FALSE.equals(override)) assertNull(backup);
+				else { assertNotNull(backup); assertTrue(new File(backup.toString()).isFile()); }
+			} finally { venue.close(); }
+		}
+	}
 
 	private static AMap<AString, ACell> config(String store) {
 		return Maps.of(
@@ -182,6 +375,8 @@ public class VenueGcOperationTest {
 				RequestContext.of(Strings.create(venue + ":public"))}) {
 			String denied = gcFails(engine, caller, STATUS);
 			assertTrue(denied.contains("venue/gc") || denied.contains("denied"), denied);
+			String backupDenied = gcFails(engine, caller, Maps.of("backupFile", "unauthorised.etch"));
+			assertTrue(backupDenied.contains("venue/gc") || backupDenied.contains("denied"), backupDenied);
 		}
 		// The venue itself passes authority; this engine's host installed no
 		// store seam, which is the next thing the operation reports.

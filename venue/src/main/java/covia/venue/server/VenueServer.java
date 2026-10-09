@@ -272,7 +272,7 @@ public class VenueServer {
 			(etchConfig != null) ? " (configured Etch policy)" : "");
 		EtchStore opened = (etchConfig != null) ? EtchStore.create(f, etchConfig) : EtchStore.create(f);
 		if (config.isEtchGcOnStart()) {
-			return collectAtStartup(opened, f, etchConfig);
+			return collectAtStartup(opened, f, etchConfig, config.isEtchGcRetainSuperseded());
 		}
 		return opened;
 	}
@@ -304,6 +304,12 @@ public class VenueServer {
 	 *         original when there was nothing to collect or the cycle failed
 	 */
 	public static EtchStore collectAtStartup(EtchStore store, File file, EtchConfig etchConfig) throws IOException {
+		return collectAtStartup(store, file, etchConfig, false);
+	}
+
+	/** Startup collection with optional retention of the superseded file. */
+	public static EtchStore collectAtStartup(EtchStore store, File file, EtchConfig etchConfig,
+			boolean retainSuperseded) throws IOException {
 		Ref<ACell> root = store.getRootRef();
 		if (root == null || root.getValue() == null) {
 			log.info("Etch GC at startup skipped: {} has no root data yet", file);
@@ -311,7 +317,10 @@ public class VenueServer {
 		}
 		long started = System.currentTimeMillis();
 		long before = store.getEtch().getDataLength();
+		File backup = null;
+		EtchStore collected;
 		try {
+			if (retainSuperseded) backup = store.validateGCBackup(checkpointFile(file));
 			store.startGC();
 			store.transferGC();
 			List<Hash> missing = store.verifyGC();
@@ -319,6 +328,7 @@ public class VenueServer {
 				throw new IOException(missing.size()
 					+ " value(s) reachable from the root are missing from the collected file");
 			}
+			collected = store.completeGC(backup);
 		} catch (IOException | RuntimeException e) {
 			// The original file is untouched: roll the cycle back and boot on it.
 			log.error("Etch GC at startup failed for {}; continuing on the uncollected store", file, e);
@@ -332,16 +342,22 @@ public class VenueServer {
 			}
 			return store;
 		}
-		EtchStore collected = store.completeGC();
 		long after = collected.getEtch().getDataLength();
 		store.close();     // deletes the superseded original, or defers while pinned
 		collected.close(); // clean-close the successor: a dirty v3 file is refused on open
+		if (backup != null) log.info("Etch GC startup checkpoint ready: {}; retained until operator removal", backup);
 		EtchStore reopened = (etchConfig != null) ? EtchStore.create(file, etchConfig) : EtchStore.create(file);
 		long reclaimed = Math.max(0, before - after);
 		log.info("Etch GC at startup: {} -> {} bytes ({}% reclaimed) in {} ms; store file {}",
 			before, after, (before > 0) ? (100 * reclaimed / before) : 0,
 			System.currentTimeMillis() - started, reopened.getFile());
 		return reopened;
+	}
+
+	/** Unique ordinary filename, outside Convex's GC recovery naming scheme. */
+	private static File checkpointFile(File source) {
+		return new File(source.getAbsoluteFile().getParentFile(), source.getName()
+			+ ".checkpoint-" + System.currentTimeMillis() + "-" + java.util.UUID.randomUUID() + ".etch");
 	}
 
 	/**
@@ -1450,8 +1466,26 @@ public class VenueServer {
 
 		@Override
 		public Result collect() throws IOException {
+			return collect(null);
+		}
+
+		@Override
+		public Result collect(String backupFile) throws IOException {
+			return collect(backupFile, null);
+		}
+
+		@Override
+		public Result collect(String backupFile, Boolean retainSuperseded) throws IOException {
 			EtchStore etch = etchStore();
 			File file = etch.getFile();
+			boolean retain = retainSuperseded == null ? config.isEtchGcRetainSuperseded() : retainSuperseded;
+			if (backupFile != null && Boolean.FALSE.equals(retainSuperseded)) {
+				throw new IllegalArgumentException(covia.adapter.VenueAdapter.BACKUP_RETENTION_DISABLED);
+			}
+			// Reject occupied/reserved paths before starting a cycle. Convex
+			// validates again and creates the link without replacing anything.
+			File requested = backupFile == null ? (retain ? checkpointFile(file) : null) : new File(backupFile);
+			File backup = requested == null ? null : etch.validateGCBackup(requested);
 			synchronized (cycleLock) {
 				if (collectedStore != null) {
 					throw new IllegalStateException("The store was already collected in this process;"
@@ -1472,6 +1506,10 @@ public class VenueServer {
 			long started = System.currentTimeMillis();
 			long before = etch.getEtch().getDataLength();
 			try {
+				// Include acknowledged in-memory venue state in the pre-cycle root.
+				// Subsequent concurrent writes belong to the collected live store.
+				engine.flush();
+				before = etch.getEtch().getDataLength();
 				etch.startGC();
 				etch.transferGC();
 				List<Hash> missing = etch.verifyGC();
@@ -1479,13 +1517,14 @@ public class VenueServer {
 					throw new IOException(missing.size()
 						+ " value(s) reachable from the root are missing from the collected file");
 				}
-				EtchStore successor = etch.completeGC();
+				EtchStore successor = etch.completeGC(backup);
 				collectedStore = successor; // closed after the old handle in close()
 				long after = successor.getEtch().getDataLength();
 				long elapsed = System.currentTimeMillis() - started;
-				log.info("Etch GC online: {} -> {} bytes in {} ms; now writing to {} (superseded file reclaimed at shutdown)",
-					before, after, elapsed, successor.getFile());
-				return new Result(before, after, elapsed, file.getPath(), successor.getFile().getPath());
+				log.info("Etch GC online: {} -> {} bytes in {} ms; now writing to {}; retained checkpoint: {}",
+					before, after, elapsed, successor.getFile(), backup);
+				return new Result(before, after, elapsed, file.getPath(), successor.getFile().getPath(),
+					backup == null ? null : backup.getPath());
 			} catch (IOException | RuntimeException e) {
 				// The original file is untouched: roll the cycle back (unless a
 				// cancel already is) so the store is exactly as before

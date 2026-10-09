@@ -153,6 +153,35 @@ public class EtchGcOnStartTest {
 	}
 
 	@Test
+	public void startupRetentionKeepsIndependentRecoveryName() throws Exception {
+		File file = storeFile("etch-gc-retained");
+		AMap<AString, ACell> cfg = config(file.getAbsolutePath(), false);
+		VenueServer original = VenueServer.launch(cfg);
+		try { write(original, "w/checkpoint", Strings.create("before")); }
+		finally { original.close(); }
+		AMap<AString, ACell> retained = cfg.assoc(Config.ETCH,
+			Maps.of(GC, Maps.of(ON_START, true, "retainSuperseded", true)));
+		VenueServer live = VenueServer.launch(retained);
+		File[] backups;
+		try {
+			backups = file.getParentFile().listFiles((dir, name) -> name.contains(".checkpoint-"));
+			assertNotNull(backups);
+			assertEquals(1, backups.length);
+			write(live, "w/checkpoint", Strings.create("after"));
+		} finally { live.close(); }
+		byte[] bytes = java.nio.file.Files.readAllBytes(backups[0].toPath());
+		File restore = new File(file.getParentFile(), "restore.etch");
+		java.nio.file.Files.copy(backups[0].toPath(), restore.toPath());
+		VenueServer restored = VenueServer.launch(config(restore.getAbsolutePath(), false));
+		try { assertEquals(Strings.create("before"), read(restored, "w/checkpoint")); }
+		finally { restored.close(); }
+		VenueServer reopened = VenueServer.launch(cfg);
+		try { assertEquals(Strings.create("after"), read(reopened, "w/checkpoint")); }
+		finally { reopened.close(); }
+		assertArrayEquals(bytes, java.nio.file.Files.readAllBytes(backups[0].toPath()));
+	}
+
+	@Test
 	public void gcBlockIsValidatedFailClosed() {
 		assertTrue(new Config(Maps.of(Config.ETCH, Maps.of(GC, Maps.of(ON_START, true)))).isEtchGcOnStart());
 		assertFalse(new Config(Maps.of(Config.ETCH, Maps.of(GC, Maps.of(ON_START, false)))).isEtchGcOnStart());
