@@ -22,7 +22,12 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Anthropic structured output uses `output_config.format` instead of forced
   tool choice, which current Claude models reject.
 
-- LangChain4j 1.20.2.
+- LangChain4j 1.22.0. Anthropic inference options now map onto the SDK's native
+  system messages, cache TTL and automatic caching, with configurable thinking
+  prefix handling. Model definitions supply defaults; calls and agents can
+  override individual `modelOptions`. Signature-only thinking survives tool-turn
+  replay. Compaction, inline tool changes and lossless cross-turn thinking remain
+  disabled pending upstream support; no separate provider client is introduced.
 
 - Bearer credentials must expire: a self-issued JWT without `exp` or a UCAN
   bearer with `exp: null` is refused (`auth.requireExp`, default on), and

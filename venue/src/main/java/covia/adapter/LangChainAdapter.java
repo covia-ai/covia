@@ -48,6 +48,7 @@ import dev.langchain4j.model.chat.request.json.JsonSchema;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.output.FinishReason;
 import dev.langchain4j.model.anthropic.AnthropicTokenUsage;
+import dev.langchain4j.model.anthropic.AnthropicChatResponseMetadata;
 import dev.langchain4j.model.output.TokenUsage;
 import dev.langchain4j.model.chat.request.json.JsonArraySchema;
 import dev.langchain4j.model.chat.request.json.JsonBooleanSchema;
@@ -182,6 +183,21 @@ public class LangChainAdapter extends AAdapter {
 			AMap<AString, ACell> providerFacet = AbstractLLMAdapter.modelFacet(executable)
 				.assoc(Fields.DEFAULT, modelPath(provider, defaultModel))
 				.assoc(K_RECOMMENDED, modelPaths(provider, RT.ensureMap(spec.get(K_RECOMMENDED))));
+			// Provider+model calls and caller model overrides use the same defaults
+			// as directly invoked presets; definitions remain the single source.
+			AMap<AString, ACell> byModel = RT.ensureMap(providerFacet.get(AbstractLLMAdapter.K_BY_MODEL));
+			if (byModel == null) byModel = Maps.empty();
+			for (long j = 0; j < models.count(); j++) {
+				ACell modelSpec = models.get(j);
+				AString id = RT.ensureString(RT.getIn(modelSpec, K_ID));
+				AMap<AString, ACell> options = RT.ensureMap(RT.getIn(modelSpec, AbstractLLMAdapter.K_OPTIONS));
+				if (id != null && options != null) {
+					AMap<AString, ACell> old = RT.ensureMap(byModel.get(id));
+					byModel = byModel.assoc(id, layerModelProfile(old == null ? Maps.empty() : old,
+						Maps.of(AbstractLLMAdapter.K_OPTIONS, options)));
+				}
+			}
+			providerFacet = providerFacet.assoc(AbstractLLMAdapter.K_BY_MODEL, byModel);
 			AMap<AString, ACell> providerMeta = executable.assoc(
 				AbstractLLMAdapter.K_MODEL_FACET, providerFacet);
 			installAsset("langchain/" + provider, providerMeta);
@@ -355,7 +371,7 @@ public class LangChainAdapter extends AAdapter {
 		// through to every provider; maxTokens (covia#198) is honoured by the
 		// anthropic provider (its API requires max_tokens; the client default
 		// stands otherwise) and currently ignored by the others.
-		final ModelTuning tuning = extractTuning(input);
+		final ModelTuning tuning = extractTuning(input, resolvedModel.executionProfile());
 
 		// Ollama base URL resolution (#224): explicit url > venue config >
 		// OLLAMA_BASE_URL env > localhost default — agents stay
@@ -408,7 +424,9 @@ public class LangChainAdapter extends AAdapter {
 		// (AGENT_CONTEXT.md §3.5): a system message after the conversation has
 		// begun must not be hoisted into the cached head.
 		final Set<Long> canonicalCacheMarks = cacheMarksOf(input, tuning);
-		final NormalisedMessages normalised = normaliseSystemMessages(
+		final NormalisedMessages normalised = "anthropic".equals(provider) && tuning.options().nativeSystemMessages()
+			? normaliseNativeSystemMessages(serialiseToolResultsForProvider(messages), canonicalCacheMarks)
+			: normaliseSystemMessages(
 			serialiseToolResultsForProvider(messages), canonicalCacheMarks,
 			AbstractLLMAdapter.modelOptionText(resolvedModel.executionProfile(), OPT_SYSTEM_MESSAGES),
 			AbstractLLMAdapter.labelDialect(resolvedModel.executionProfile()));
@@ -468,7 +486,10 @@ public class LangChainAdapter extends AAdapter {
 	 *  {@code maxTokens}; its operation metadata supplies the built-in default
 	 *  before this edge. */
 	record ModelTuning(Integer maxTokens, Double temperature, Double topP, Boolean cache,
-			AMap<?, ?> providerOptions) {
+			AMap<?, ?> providerOptions, ModelCallOptions options) {
+		ModelTuning(Integer maxTokens, Double temperature, Double topP, Boolean cache, AMap<?, ?> providerOptions) {
+			this(maxTokens, temperature, topP, cache, providerOptions, ModelCallOptions.DEFAULT);
+		}
 		static final ModelTuning NONE = new ModelTuning(null, null, null, null, null);
 
 		/** Prompt caching is on unless the call says {@code cache: false}. */
@@ -489,6 +510,10 @@ public class LangChainAdapter extends AAdapter {
 	 *  a long from JSON and must not be dropped (it's the deterministic-
 	 *  extraction case that motivated #218). */
 	static ModelTuning extractTuning(ACell input) {
+		return extractTuning(input, Maps.empty());
+	}
+
+	static ModelTuning extractTuning(ACell input, AMap<AString, ACell> profile) {
 		Integer maxTokens = asPositiveInt(RT.getIn(input, "maxTokens"), "maxTokens");
 		ACell cacheCell = RT.getIn(input, K_CACHE);
 		Boolean cache = (cacheCell instanceof CVMBool b) ? b.booleanValue() : null;
@@ -499,7 +524,7 @@ public class LangChainAdapter extends AAdapter {
 		return new ModelTuning(maxTokens,
 			asDouble(RT.getIn(input, "temperature"), "temperature"),
 			asDouble(RT.getIn(input, "topP"), "topP"),
-			cache, (AMap<?, ?>) optionsCell);
+			cache, (AMap<?, ?>) optionsCell, ModelCallOptions.resolve(profile, input));
 	}
 
 	private static Integer asPositiveInt(ACell value, String field) {
@@ -524,6 +549,9 @@ public class LangChainAdapter extends AAdapter {
 	 * runtime sends the band boundaries of AGENT_CONTEXT.md §3.1.
 	 */
 	static Set<Long> cacheMarksOf(ACell input, ModelTuning tuning) {
+		// Automatic caching owns the moving conversation mark; retaining both
+		// automatic and explicit conversation marks can exceed the four slots.
+		if (tuning.options().automaticCaching()) return Set.of();
 		if (!tuning.caching()) return Set.of();
 		AVector<ACell> marks = RT.ensureVector(RT.getIn(input, AbstractLLMAdapter.K_CACHE_MARKS));
 		if (marks == null || marks.isEmpty()) return Set.of();
@@ -718,6 +746,25 @@ public class LangChainAdapter extends AAdapter {
 	static ChatModel buildAnthropicModel(String apiKey, String baseUrl, String model, Duration timeout,
 			ModelTuning tuning, ResponseFormat responseFormat) {
 		Map<String, Object> providerOptions = tuning.nativeOptions();
+		if (providerOptions != null && (providerOptions.containsKey("compaction")
+				|| String.valueOf(providerOptions.get("context_management")).contains("compact_20260112"))) {
+			throw new IllegalArgumentException("compaction" + ModelCallOptions.UPSTREAM_REQUIRED);
+		}
+		if (!"provider".equals(tuning.options().thinkingPrefixMismatch())) {
+			providerOptions = providerOptions == null ? new LinkedHashMap<>() : new LinkedHashMap<>(providerOptions);
+			Map<String, Object> thinking = new LinkedHashMap<>();
+			if (providerOptions.get("thinking") instanceof Map<?, ?> configured) {
+				configured.forEach((k, v) -> thinking.put(String.valueOf(k), v));
+			}
+			thinking.putIfAbsent("type", "adaptive");
+			Map<String, Object> binding = new LinkedHashMap<>();
+			if (thinking.get("block_binding") instanceof Map<?, ?> configured) {
+				configured.forEach((k, v) -> binding.put(String.valueOf(k), v));
+			}
+			binding.put("prefix_mismatch_behavior", "drop".equals(tuning.options().thinkingPrefixMismatch()) ? "drop_block" : "error");
+			thinking.put("block_binding", binding);
+			providerOptions.put("thinking", thinking);
+		}
 		if (responseFormat != null && responseFormat.jsonSchema() == null) responseFormat = null;
 		if (responseFormat != null && providerOptions != null
 				&& providerOptions.get(ANTHROPIC_OUTPUT_CONFIG) instanceof Map<?, ?> outputConfig) {
@@ -744,11 +791,15 @@ public class LangChainAdapter extends AAdapter {
 			// place the conversation breakpoints — see toChatMessages.
 			.cacheSystemMessages(tuning.caching())
 			.cacheTools(tuning.caching())
+			.cacheTtl(tuning.options().cacheTtl())
+			.cacheAutomatically(tuning.caching() && tuning.options().automaticCaching())
+			.midConversationSystemMessages(tuning.options().nativeSystemMessages())
 			// Thinking is provider continuation state, not assistant content.
 			// Ask LangChain4j to retain it so tool-use replies can persist and
 			// replay it; providers/models that return none add no state at all.
 			.returnThinking(true)
 			.sendThinking(true);
+		if (!"provider".equals(tuning.options().thinkingPrefixMismatch())) builder.beta(ModelCallOptions.BINDING_BETA);
 		// Anthropic requires max_tokens on every request. Built-in provider and
 		// model operations declare an overridable operation.default; requiring the
 		// effective value here also keeps authored operations from silently falling
@@ -1148,6 +1199,15 @@ public class LangChainAdapter extends AAdapter {
 			msg = msg.assoc(K_FINISH_REASON,
 				Strings.create(fr.name().toLowerCase()));
 		}
+		// Diagnostic fields do not yet have typed SDK accessors. The SDK owns
+		// transport and all message parsing; read only this report from its public
+		// raw-response metadata so prefix-drop policies remain observable.
+		if (response.metadata() instanceof AnthropicChatResponseMetadata anthropic
+				&& anthropic.rawHttpResponse() != null) {
+			ACell raw = JSON.parse(anthropic.rawHttpResponse().body());
+			ACell transformations = RT.getIn(raw, "input_transformations");
+			if (transformations != null) msg = msg.assoc(Strings.intern("inputTransformations"), transformations);
+		}
 
 		return msg;
 	}
@@ -1270,6 +1330,43 @@ public class LangChainAdapter extends AAdapter {
 	/** Provider messages together with cache marks translated from canonical
 	 * message indices to the corresponding provider-message indices. */
 	static record NormalisedMessages(AVector<ACell> messages, Set<Long> cacheMarks) {}
+
+	/** Retains the instruction role while placing each batch of late system
+	 * messages after its user/tool-result turn, as required by Anthropic. The
+	 * SDK handles the native wire representation. Canonical history is untouched. */
+	static NormalisedMessages normaliseNativeSystemMessages(AVector<ACell> messages, Set<Long> cacheMarks) {
+		AVector<ACell> out = Vectors.empty();
+		List<ACell> pending = new ArrayList<>();
+		Set<Long> marks = new java.util.LinkedHashSet<>();
+		boolean started = false;
+		for (long i = 0; i < messages.count(); i++) {
+			ACell message = messages.get(i);
+			ACell role = RT.getIn(message, K_ROLE);
+			if (ROLE_SYSTEM.equals(role) && started) {
+				pending.add(message);
+				continue;
+			}
+			if (ROLE_ASSISTANT.equals(role) && !pending.isEmpty()) {
+				out = appendNativeSystem(out, pending);
+			}
+			if (cacheMarks.contains(i) && !ROLE_SYSTEM.equals(role)) marks.add(out.count());
+			out = out.conj(message);
+			if (!ROLE_SYSTEM.equals(role)) started = true;
+		}
+		out = appendNativeSystem(out, pending);
+		return new NormalisedMessages(out, marks);
+	}
+
+	private static AVector<ACell> appendNativeSystem(AVector<ACell> messages, List<ACell> pending) {
+		if (pending.isEmpty()) return messages;
+		ACell preceding = messages.isEmpty() ? null : RT.getIn(messages.get(messages.count() - 1), K_ROLE);
+		if (!ROLE_USER.equals(preceding) && !ROLE_TOOL.equals(preceding)) {
+			throw new IllegalArgumentException(ModelCallOptions.INVALID_SYSTEM_POSITION);
+		}
+		for (ACell message : pending) messages = messages.conj(message);
+		pending.clear();
+		return messages;
+	}
 
 	@SuppressWarnings("unchecked")
 	static NormalisedMessages normaliseSystemMessages(AVector<ACell> messages,

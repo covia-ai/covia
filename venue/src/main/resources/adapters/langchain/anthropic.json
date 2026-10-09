@@ -49,6 +49,20 @@
 					"type": "object",
 					"description": "Provider-native request body fields forwarded unchanged; omitted fields retain Anthropic defaults. Do not repeat the shared model/messages/tools/max_tokens/temperature/top_p envelope here. Example for current Claude models: {output_config:{effort:'low'}} (thinking is always on for Opus 5.5 and Fable 5.1; do not send thinking:{type:'disabled'})"
 				},
+				"modelOptions": {
+					"type": "object",
+					"description": "Per-call overrides of model.options in the effective model definition. Agents forward config.modelOptions. Implemented with LangChain4j, including its message mapping and transport.",
+					"additionalProperties": false,
+					"properties": {
+						"nativeSystemMessages": {"type": "boolean", "description": "Send late instructions in-position as native system messages after the user/tool-result turn; false uses the portable text fallback."},
+						"automaticCaching": {"type": "boolean", "description": "Use the provider's moving conversation cache breakpoint instead of Covia's explicit conversation cacheMarks. System/tool caching remains enabled. Ignored when cache:false."},
+						"thinkingPrefixMismatch": {"type": "string", "enum": ["provider", "error", "drop"], "description": "Leave provider enforcement unchanged, explicitly reject edited thinking prefixes, or drop invalid thinking and report inputTransformations (beta)."},
+						"cacheTtl": {"type": "string", "enum": ["5m", "1h"], "description": "Duration of every enabled cache breakpoint. Defaults to 5m; cache:false disables all caching."},
+						"preserveThinking": {"type": "boolean", "const": false, "description": "Reserved for lossless cross-turn thinking preservation; disabled pending upstream support. Required single-block tool-turn state is already retained."},
+						"inlineToolChanges": {"type": "boolean", "const": false, "description": "Reserved; disabled pending LangChain4j support for native tool-addition/removal blocks."},
+						"compaction": {"type": "boolean", "const": false, "description": "Reserved; disabled pending LangChain4j support for signed and threshold compaction blocks."}
+					}
+				},
 				"systemPrompt": {
 					"type": "string",
 					"description": "System prompt"
@@ -71,7 +85,7 @@
 					"items": {
 						"type": "integer"
 					},
-					"description": "Indices of messages to mark as prompt-cache breakpoints (ephemeral, 5-minute TTL), placed on each message's last content block. The agent runtime marks the conversation as it stood when the cycle began and the tool loop so far; with the system prompt and tools that is the maximum of four."
+					"description": "Indices of conversation cache breakpoints. Duration comes from modelOptions.cacheTtl (default 5m). Ignored when automaticCaching is enabled, which uses the provider's moving breakpoint instead."
 				}
 			}
 		},
@@ -94,6 +108,10 @@
 				"finishReason": {
 					"type": "string",
 					"description": "Provider finish reason in lower case (for example stop, length, or tool_execution). A length response reached maxTokens and is incomplete."
+				},
+				"inputTransformations": {
+					"type": "array",
+					"description": "Provider-reported input transformations, including thinking dropped after a prefix edit."
 				},
 				"tokens": {
 					"type": "object",

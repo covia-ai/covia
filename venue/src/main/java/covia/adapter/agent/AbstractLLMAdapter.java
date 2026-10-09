@@ -63,6 +63,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	public static final AString K_API_KEY         = Strings.intern("apiKey");
 	public static final AString K_CACHE           = Strings.intern("cache");
 	public static final AString K_PROVIDER_OPTIONS = Strings.intern("providerOptions");
+	public static final AString K_MODEL_OPTIONS = Strings.intern("modelOptions");
 	public static final AString K_TOOLS           = Strings.intern("tools");
 	public static final AString K_RESPONSE_FORMAT = Strings.intern("responseFormat");
 	public static final AString K_CAPS            = Strings.intern("caps");
@@ -834,7 +835,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		AMap<AString, ACell> l3Input = Maps.of(K_MESSAGES, messages);
 		l3Input = copyIfPresent(config, l3Input, K_MODEL, K_URL, K_API_KEY, K_RESPONSE_FORMAT,
 			Strings.intern("maxTokens"), Strings.intern("temperature"), Strings.intern("topP"),
-			K_CACHE, K_PROVIDER_OPTIONS);
+			K_CACHE, K_PROVIDER_OPTIONS, K_MODEL_OPTIONS);
 		if (tools != null && tools.count() > 0) {
 			l3Input = l3Input.assoc(K_TOOLS, tools);
 		}

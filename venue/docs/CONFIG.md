@@ -1423,7 +1423,7 @@ text-only tool results are preserved (structured content wins when present).
 ## LLM providers (langchain)
 
 `v/ops/langchain/*` inputs carry `model` / `url` / `apiKey` / `maxTokens` /
-`temperature` / `topP` / `providerOptions` / `tools` / `responseFormat`.
+`temperature` / `topP` / `providerOptions` / `modelOptions` / `tools` / `responseFormat`.
 `temperature` and `topP`
 pass through to every provider (#218 — accepts integer or double, so
 `temperature: 0` works for deterministic extraction on models which support
@@ -1432,12 +1432,19 @@ honoured by the anthropic provider. Anthropic requires the field on the wire,
 so its operation metadata supplies an overridable default of 8192; a model
 preset may override that default, and explicit caller input wins over both.
 Agent config forwards `maxTokens`, `temperature`, `topP`, `cache`, and
-`providerOptions` to each level-3 call. `providerOptions` is an opaque map of
+`providerOptions` and `modelOptions` to each level-3 call. `providerOptions` is an opaque map of
 provider-native request fields for hosted providers; for example Claude 5 can
 take `{"thinking":{"type":"adaptive"},"output_config":{"effort":"low"}}`.
-Nothing is synthesised when it is absent, so provider defaults remain in
-control. These are presets and call parameters, not policy; use a capability
-gate for limits.
+`modelOptions` overrides individual inference defaults from the selected model's
+`model.options`. Anthropic supports `nativeSystemMessages`, `cacheTtl` (`5m` or
+`1h`), `automaticCaching`, and `thinkingPrefixMismatch` (`provider`, `error`,
+`drop`) through LangChain4j. Current Claude presets use native system messages,
+five-minute explicit caching, and dropping thinking whose signed prefix no
+longer matches. `cache:false` disables all caching. Compaction, inline tool
+changes and full cross-turn thinking preservation remain disabled pending
+upstream support. See [MODELS.md §5.3](MODELS.md#53-inference-options-and-upstream-support)
+for defaults and the upstream audit. These are presets and call parameters;
+use a capability gate for limits.
 
 `defaultLlmOperation` selects the operation used when an agent config does not
 name one; the built-in fallback is the model operation

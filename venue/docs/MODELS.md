@@ -329,6 +329,79 @@ requires the resulting effective value instead of accepting LangChain4j's
 hidden 1024-token fallback. This remains a default, not a ceiling: deployments
 that need an upper bound enforce it with a capability gate.
 
+### 5.3 Inference options and upstream support
+
+`model.options` supplies inference defaults. A call's `modelOptions` overrides
+individual keys; agents forward `config.modelOptions` to each level-3 call.
+These are distinct from `config.modelProfile`, which controls context assembly.
+Catalog options are also published under the serving provider's `byModel`, so
+provider-plus-id calls and model overrides select the same defaults as presets.
+
+The Anthropic adapter maps these options onto LangChain4j 1.22.0. LangChain4j
+owns HTTP, retries, request serialization and response message conversion.
+
+| Option | Meaning | Current standard Claude defaults |
+|--------|---------|---------------------------------|
+| `nativeSystemMessages` | Keep late instructions as system messages after the incoming user/tool-result turn; false selects the portable text fallback | `true` |
+| `cacheTtl` | TTL for system, tool and conversation cache breakpoints: `5m` or `1h` | `5m` |
+| `automaticCaching` | Use the provider's moving conversation breakpoint instead of explicit `cacheMarks` | `false` |
+| `thinkingPrefixMismatch` | `provider` leaves enforcement unchanged; `error` rejects changed prefixes; `drop` requests dropping invalid thinking | `drop` |
+| `preserveThinking` | Lossless thinking preservation across completed turns | `false`; enabling requires upstream support |
+| `inlineToolChanges` | Native tool-addition/removal content blocks | `false`; enabling requires upstream support |
+| `compaction` | Provider compaction with signed-block replay | `false`; enabling requires upstream support |
+
+These defaults apply to Sonnet, Opus and Haiku 5.5 and Fable 5.1. Older and
+unknown models retain the portable system-message path and provider thinking
+policy. `cache:false` disables all cache breakpoints, including automatic
+caching. Automatic caching is opt-in because Covia already selects conversation
+boundaries; enabling it suppresses the explicit conversation marks to avoid
+exceeding the provider's four-breakpoint limit. One-hour caching may change
+provider charges.
+
+For example, an agent can set:
+
+```json
+"modelOptions": {
+  "cacheTtl": "1h",
+  "automaticCaching": true,
+  "thinkingPrefixMismatch": "error"
+}
+```
+
+The binding policy uses LangChain4j's public beta-header and custom-parameter
+facilities. It merges `thinking.block_binding` with `providerOptions`, with the
+explicit model option taking precedence; existing effort settings remain intact.
+The adapter exposes `inputTransformations` from the SDK's raw response metadata
+for diagnostics. Required single-block tool-turn thinking continues to replay,
+including blocks with an empty thinking string and a nonempty signature.
+
+#### Upstream audit (2026-10-09)
+
+[LangChain4j 1.22.0](https://github.com/langchain4j/langchain4j/releases/tag/1.22.0)
+adds [automatic caching and TTL support](https://github.com/langchain4j/langchain4j/pull/6598).
+It also contains native mid-conversation system messages and the earlier
+[signature-only thinking fix](https://github.com/langchain4j/langchain4j/pull/6246).
+Inspection of the published `langchain4j-anthropic` source artifact found no
+native compaction or inline tool-change content types. Its mapper still combines
+multiple thinking texts/signatures into one pair, so it cannot guarantee lossless
+replay of arbitrary signed block sequences.
+
+The remaining work belongs upstream, before enabling the reserved options:
+
+1. Preserve ordered thinking and redacted blocks, including empty text and exact
+   signatures, with backward-compatible `AiMessage` attributes. Test round-trip
+   conversion through synchronous, streaming and batch paths.
+2. Add signed compaction response/request blocks, associated stop reasons and
+   typed compaction configuration. Verify exact replay before Covia uses a
+   compaction response to replace conversation history.
+3. Add native system-message tool-addition/removal blocks and associated beta
+   configuration, with equivalent round-trip coverage.
+
+Enabling reserved options currently fails explicitly. Raw compaction requests
+through `providerOptions` are also rejected because receiving a successful
+response without preserving its compaction block would lose continuation state.
+Existing context-budget handling and text tool-change notices remain available.
+
 ## 6. Discovery
 
 `llm:models` enumerates the catalog instead of a Java table. It accepts the
