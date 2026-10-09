@@ -608,13 +608,15 @@ public class VenueServer {
 
 	/**
 	 * Launches with an asynchronous pre-start hook. The hook receives a prepared
-	 * Engine with built-in and configured module adapters installed. It may bind
-	 * a backend, register adapters, and return a chain of asynchronous setup
-	 * actions. Its stage must complete before catalog publication, recovery,
+	 * Engine with built-in and configured module adapters installed and published.
+	 * Configured secrets and available configured MCP tools are provisioned first.
+	 * It may bind a backend, register adapters, invoke installed operations, and
+	 * return a chain of asynchronous setup actions. Its stage must complete before recovery,
 	 * background workers and the HTTP listener. Null means no hook.
 	 * The full hook requirements are defined by {@link Engine#launch(Function)}:
-	 * return a non-null stage covering all prerequisites; do not invoke Jobs,
-	 * activate workers, or wait for the running venue from this hook. Application
+	 * return a non-null stage covering all prerequisites. Explicitly invoked Jobs
+	 * execute immediately; do not activate workers or wait for operations requiring
+	 * running workers or schedules from this hook. Application
 	 * adapters must defer autonomous workers to {@link covia.adapter.AAdapter#start()}.
 	 * Recovered work may execute as soon as the hook completes.
 	 *

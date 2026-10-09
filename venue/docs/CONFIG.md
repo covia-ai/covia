@@ -575,9 +575,10 @@ VenueServer server = ready.join();
 ```
 
 The hook receives a restored, prepared Engine with built-in and configured
-module adapters installed. Its returned stage must finish before the final
-catalogue is published, configured secrets and MCP connections are provisioned,
-and Jobs and queued agents are recovered. Scheduler alarms and adapter-owned
+module adapters installed and their current catalogue published. Configured secrets
+and available configured MCP tools are provisioned before the hook. Adapters
+registered or replaced in the hook are published immediately. Its returned stage
+must finish before Jobs and queued agents are recovered. Scheduler alarms and adapter-owned
 inbound workers remain stopped during assembly. An already-completed stage
 (`CompletableFuture.completedFuture(null)`) is sufficient for synchronous setup.
 
@@ -606,19 +607,25 @@ ready.join();
 ```
 
 Call launch once on a new or prepared engine; do not call `start()` first.
-It installs the built-ins and configured modules, awaits the hook, publishes
-the catalogue, provisions configured secrets, seeds MCP, recovers Jobs and
+It installs the built-ins and configured modules, publishes the catalogue,
+provisions configured secrets, seeds MCP, awaits the hook, recovers Jobs and
 queued agent work, re-arms HITL expiries, then activates workers and schedules.
 Do not copy this sequence into the application. `prepare()` and `start()`
 remain low-level APIs for manually assembled runtimes and tests: they do not
 provide a complete venue bootstrap.
 
-The hook must return a non-null stage covering all prerequisite setup. It
-must not invoke Jobs, start autonomous workers, perform recovery or wait for
-the running venue. Recovered work can execute after the hook completes,
-before launch returns. The persistence sweep can run during setup. Configured
-secrets are provisioned after the hook, so migrations must account for this
-ordering. Adapters must start autonomous workers in `AAdapter.start()`, not
+The hook may invoke installed operations, for example `covia:write` to seed skills
+and `agent:create` / `agent:update` to apply configuration before queued work runs.
+Explicitly invoked Jobs execute immediately; include their completion in the
+returned stage when setup depends on their results. The hook must return a non-null
+stage covering all prerequisite setup. It must not start autonomous workers,
+perform recovery or wait for operations requiring running workers or schedules.
+Recovery skips already-live Jobs started by the hook. Recovered work can execute
+after the hook completes, before launch returns. The persistence sweep can run
+during setup. The hook may override configured secrets; startup does not provision
+them again afterwards. Configured MCP discovery retains its best-effort policy:
+the hook is not a guarantee that every remote server was reachable.
+Adapters must start autonomous workers in `AAdapter.start()`, not
 their constructor, configuration or installation hooks.
 
 Unlike VenueServer, Engine never takes ownership of the caller's application,

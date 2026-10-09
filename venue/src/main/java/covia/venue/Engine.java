@@ -397,20 +397,23 @@ public class Engine {
 	 *
 	 * <ol>
 	 * <li>Prepare storage and users; install built-in and configured module adapters.</li>
+	 * <li>Publish the installed catalogue, provision configured secrets and seed MCP servers.</li>
 	 * <li>Invoke {@code beforeStart} and await its returned stage.</li>
-	 * <li>Publish the complete catalogue, provision configured secrets and seed MCP servers.</li>
 	 * <li>Recover durable Jobs, reconcile queued agent work and re-arm HITL expiries.</li>
 	 * <li>Activate adapter workers and the scheduler, then return.</li>
 	 * </ol>
 	 *
 	 * <p>The hook must bind application backends, register all application adapters,
 	 * and finish any state/secret migrations required by recovered work. Return a
-	 * non-null stage covering <em>all</em> asynchronous setup. Do not start workers,
-	 * invoke Jobs, recover work, publish the catalogue or call start/launch from
-	 * the hook: the venue is not ready yet. Do not wait for work that requires a
-	 * running venue. The persistence sweep may run while setup is pending, but
+	 * non-null stage covering <em>all</em> asynchronous setup. Installed operations
+	 * are available, including adapters registered or replaced in the hook. Jobs
+	 * explicitly invoked by the hook execute immediately; await their results when
+	 * subsequent setup or recovered work depends on them. Do not start workers,
+	 * recover work, publish the catalogue or call start/launch from the hook.
+	 * Do not wait for work that requires a running worker or scheduler. The
+	 * persistence sweep may run while setup is pending, but
 	 * inbound adapter workers and scheduled operations remain paused. Configured
-	 * secrets are provisioned after the hook; account for this in migrations.</p>
+	 * secrets and available configured MCP tools are in place before the hook.</p>
 	 *
 	 * <p>Recovered work may execute after the hook completes, before this method
 	 * returns. Prerequisites therefore belong in the hook, not after launch or in
@@ -498,6 +501,9 @@ public class Engine {
 			checkLaunchCancellation();
 			prepare();
 			installDefaultAdapters(this);
+			materialiseBootstrapState();
+			provisionConfiguredSecrets();
+			seedMcpServers();
 			checkLaunchCancellation();
 			if (beforeStart != null) {
 				CompletableFuture<?> hook = java.util.Objects.requireNonNull(
@@ -514,10 +520,6 @@ public class Engine {
 					throw new CompletionException(cause);
 				}
 			}
-			checkLaunchCancellation();
-			materialiseBootstrapState();
-			provisionConfiguredSecrets();
-			seedMcpServers();
 			checkLaunchCancellation();
 			jobs().recoverJobs();
 			if (getAdapter("agent") instanceof AgentAdapter agents) agents.wakeAgentsWithWork();

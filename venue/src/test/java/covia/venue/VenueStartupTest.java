@@ -9,6 +9,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.Test;
 
@@ -19,6 +20,8 @@ import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
+import convex.core.lang.RT;
 import convex.etch.EtchStore;
 import covia.adapter.AAdapter;
 import covia.api.Fields;
@@ -77,6 +80,84 @@ public class VenueStartupTest {
 	}
 
 	@Test
+	public void newStoreHookCanUseConfiguredCoviaAndRegisterOperations() {
+		AKeyPair key = AKeyPair.generate();
+		AMap<AString, ACell> cfg = config(key, 0)
+			.assoc(Config.SECRETS, Maps.of("venue", Maps.of("bootstrap", "configured")))
+			.assoc(Config.ADAPTERS, Maps.of("http", Maps.of("allowedHosts", Vectors.of("localhost"))))
+			.assoc(Config.MCP, Maps.of("servers", Maps.of("startup",
+				Maps.of("url", TestServer.BASE_URL))));
+		StartupAdapter adapter = new StartupAdapter();
+		VenueServer server = VenueServer.launch(cfg, List.of(), engine -> {
+			assertFalse(engine.isStarted());
+			RequestContext ctx = engine.venueContext();
+			assertEquals("configured", engine.resolveSecret("s/bootstrap", ctx));
+			assertNotNull(engine.resolveAsset(Strings.create("v/ops/mcp/startup/test_echo"), ctx),
+				"configured MCP discovery must finish before application setup");
+			engine.jobs().invokeOperation("v/ops/covia/write",
+				Maps.of(Fields.PATH, "w/mina/skills/release", Fields.VALUE, Maps.of("version", "new")), ctx)
+				.awaitResult(5000);
+			engine.registerAdapter(adapter);
+			assertNotNull(engine.resolveAsset(OP, ctx));
+			engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(
+				Fields.AGENT_ID, "mina", Fields.CONFIG, Maps.of(Fields.OPERATION, OP)), ctx).awaitResult(5000);
+			engine.jobs().invokeOperation("v/ops/agent/update", Maps.of(
+				Fields.AGENT_ID, "mina", Fields.CONFIG, Maps.of(Fields.OPERATION, OP, "release", "new")), ctx)
+				.awaitResult(5000);
+			engine.jobs().invokeOperation("v/ops/secret/set",
+				Maps.of("name", "bootstrap", "value", "hook", "overwrite", true), ctx).awaitResult(5000);
+			assertEquals(0, adapter.starts.get(), "setup operations must not activate workers");
+			assertEquals(0, adapter.calls.get(), "configuring an agent must not run it");
+			return CompletableFuture.completedFuture(null);
+		});
+		try {
+			Engine engine = server.getEngine();
+			assertEquals("hook", engine.resolveSecret("s/bootstrap", engine.venueContext()),
+				"configured secrets must not overwrite application setup afterwards");
+			assertEquals(Strings.create("new"), RT.getIn(engine.getVenueState().users()
+				.get(engine.getDIDString()).agent("mina").getConfig(), "release"));
+		} finally {
+			server.close();
+		}
+	}
+
+	@Test
+	public void hookCanReplaceDefaultAndItsLiveJobIsNotRecovered() {
+		CompletableFuture<ACell> work = new CompletableFuture<>();
+		AtomicReference<Job> submitted = new AtomicReference<>();
+		StartupAdapter replacement = new StartupAdapter() {
+			@Override public String getName() { return "test"; }
+			@Override protected void installAssets() {
+				installAsset("startup-test/echo", Maps.of(Fields.NAME, "Replacement",
+					Fields.OPERATION, Maps.of(Fields.ADAPTER, "test:echo")));
+			}
+			@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx,
+					AMap<AString, ACell> meta, ACell input) {
+				calls.incrementAndGet();
+				return work;
+			}
+		};
+		VenueServer server = VenueServer.launch(config(AKeyPair.generate(), 0), List.of(), engine -> {
+			engine.registerAdapter(replacement);
+			assertEquals(Strings.create("Replacement"), engine.resolveAsset(OP, engine.venueContext()).meta().get(Fields.NAME));
+			submitted.set(engine.jobs().invokeOperation(OP, Maps.empty(), engine.venueContext()));
+			assertEquals(Status.STARTED, submitted.get().getStatus());
+			assertEquals(0, replacement.starts.get());
+			return CompletableFuture.completedFuture(null);
+		});
+		try {
+			assertSame(replacement, server.getEngine().getAdapter("test"));
+			assertFalse(replacement.recovered, "recovery must leave a hook's live job alone");
+			assertEquals(1, replacement.calls.get());
+			assertEquals(Status.STARTED, submitted.get().getStatus());
+			work.complete(Strings.create("done"));
+			assertEquals(Strings.create("done"), submitted.get().awaitResult(5000));
+		} finally {
+			server.close();
+		}
+	}
+
+	@Test
 	public void asyncHookCompletesBeforeRecoveryWorkersSchedulesAndListener() throws Exception {
 		AKeyPair key = AKeyPair.generate();
 		EtchStore store = EtchStore.createTemp("startup-order");
@@ -130,28 +211,47 @@ public class VenueStartupTest {
 	}
 
 	@Test
-	public void queuedAgentSeesAdapterRegisteredByAsyncHook() throws Exception {
+	public void queuedAgentRunsOnceWithConfigAndSkillsAppliedByAsyncHook() throws Exception {
 		AKeyPair key = AKeyPair.generate();
+		EtchStore store = EtchStore.createTemp("startup-agent-config");
+		AMap<AString, ACell> cfg = config(key, 0);
+		Engine seed = new Engine(cfg, CoviaApplication.open(store, key), key).prepare();
+		try {
+			AString owner = seed.getDIDString();
+			AgentState agent = seed.getVenueState().users().ensure(owner).ensureAgent(
+				"startup-agent", Maps.of(Fields.OPERATION, OP, "release", "old"), null);
+			Blob sid = Blob.fromHex("05640001");
+			agent.ensureSession(sid, owner);
+			agent.appendSessionPending(sid, Maps.of(Fields.SESSION_ID, sid.toHexString(),
+				Fields.MESSAGE, Maps.of("content", "queued before update")));
+		} finally {
+			seed.close();
+		}
 		CompletableFuture<Void> release = new CompletableFuture<>();
 		CompletableFuture<AgentState> queued = new CompletableFuture<>();
 		StartupAdapter adapter = new StartupAdapter() {
 			@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx,
 					AMap<AString, ACell> metadata, ACell input) {
+				assertEquals(Strings.create("new"), RT.getIn(input, Fields.CONFIG, Strings.create("release")));
+				assertEquals(Strings.create("new skills"), engine.resolvePath(Strings.create("w/mina/skills/release"), ctx));
+				calls.incrementAndGet();
 				fired.complete(input);
-				return CompletableFuture.completedFuture(input);
+				return CompletableFuture.completedFuture(Maps.empty());
 			}
 		};
-		CompletableFuture<VenueServer> launch = VenueServer.launchAsync(config(key, 0),
+		CompletableFuture<VenueServer> launch = VenueServer.launchAsync(cfg, store,
 			List.of(), engine -> {
 				AString owner = engine.getDIDString();
-				AgentState agent = engine.getVenueState().users().ensure(owner).ensureAgent(
-					"startup-agent", Maps.of(Fields.OPERATION, OP), null);
-				Blob sid = Blob.fromHex("05530001");
-				agent.ensureSession(sid, owner);
-				agent.appendSessionPending(sid, Maps.of(Fields.SESSION_ID, sid.toHexString(),
-					Fields.MESSAGE, Maps.of("content", "queued before registration")));
+				AgentState agent = engine.getVenueState().users().get(owner).agent("startup-agent");
+				engine.registerAdapter(adapter);
+				engine.jobs().invokeOperation("v/ops/covia/write",
+					Maps.of(Fields.PATH, "w/mina/skills/release", Fields.VALUE, "new skills"), engine.venueContext())
+					.awaitResult(5000);
+				engine.jobs().invokeOperation("v/ops/agent/update", Maps.of(Fields.AGENT_ID, "startup-agent",
+					Fields.CONFIG, Maps.of(Fields.OPERATION, OP, "release", "new")), engine.venueContext())
+					.awaitResult(5000);
 				queued.complete(agent);
-				return release.thenRun(() -> engine.registerAdapter(adapter));
+				return release;
 			});
 		VenueServer server = null;
 		try {
@@ -163,6 +263,7 @@ public class VenueStartupTest {
 			assertNotNull(adapter.fired.get(5, TimeUnit.SECONDS));
 			TestEngine.awaitAgentIdle(agent, 5_000);
 			assertNull(agent.getError());
+			assertEquals(1, adapter.calls.get(), "queued input must run exactly once after setup");
 		} finally {
 			if (server != null) server.close();
 			else launch.cancel(true);
@@ -175,16 +276,19 @@ public class VenueStartupTest {
 		EtchStore store = EtchStore.createTemp("startup-failure");
 		java.io.File file = store.getFile();
 		StartupAdapter adapter = new StartupAdapter();
+		AtomicReference<Job> hookJob = new AtomicReference<>();
 		IllegalStateException failure = new IllegalStateException(HOOK_FAILURE);
 		CompletableFuture<VenueServer> launch = VenueServer.launchAsync(config(key, 0), store,
 			List.of(), engine -> {
 				engine.registerAdapter(adapter);
+				hookJob.set(engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), engine.venueContext()));
 				return CompletableFuture.failedFuture(failure);
 			});
 		assertSame(failure, assertThrows(ExecutionException.class,
 			() -> launch.get(10, TimeUnit.SECONDS)).getCause());
 		assertTrue(adapter.closed.await(5, TimeUnit.SECONDS));
 		assertEquals(0, adapter.starts.get());
+		assertEquals(Status.PAUSED, hookJob.get().getStatus(), "failed launch must suspend work started by the hook");
 		try (EtchStore reopened = EtchStore.create(file)) {
 			assertNotNull(reopened);
 		}
@@ -216,9 +320,11 @@ public class VenueStartupTest {
 		StartupAdapter adapter = new StartupAdapter();
 		CompletableFuture<Void> hook = new CompletableFuture<>();
 		CompletableFuture<Engine> prepared = new CompletableFuture<>();
+		AtomicReference<Job> hookJob = new AtomicReference<>();
 		CompletableFuture<VenueServer> launch = VenueServer.launchAsync(config(key, 0), store,
 			List.of(), engine -> {
 				engine.registerAdapter(adapter);
+				hookJob.set(engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), engine.venueContext()));
 				prepared.complete(engine);
 				return hook;
 			});
@@ -228,6 +334,7 @@ public class VenueStartupTest {
 			assertTrue(adapter.closed.await(5, TimeUnit.SECONDS));
 			TestEngine.awaitCondition(engine::isClosing, 5_000, () -> "Engine was not closed");
 			assertEquals(0, adapter.starts.get());
+			assertEquals(Status.PAUSED, hookJob.get().getStatus(), "cancelled launch must suspend hook work");
 			assertFalse(hook.isDone(), "the embedder owns the supplied stage");
 		} finally {
 			launch.cancel(true);
