@@ -121,29 +121,29 @@ public class AuthenticatedPublicAccessTest {
 		assertEquals(PUBLIC_DID, RT.getIn(read, "value", Fields.CALLER.toString()));
 	}
 
-	// ========== Public-store secrets: an operation's key, never a caller's reference ==========
+	// ========== Public-store secrets: use needs a grant, never a fallback ==========
 
 	@Test
-	public void testPublicSecretsResolveOnlyForOperations() {
+	public void testPublicSecretsAreNobodysWithoutAGrant() {
 		// Operator-style provisioning into the public store.
 		engine.jobs().invokeOperation("v/ops/secret/set",
 			Maps.of("name", "PUB_FALLBACK_KEY", "value", "public-value"),
 			PUBLIC).awaitResult(5000);
 
-		// A reference resolves in the caller's own store only: the public caller
-		// owns the public store, an authenticated caller never reaches it.
+		// The public principal with an unrestricted scope owns the store...
 		assertEquals("public-value", engine.resolveSecret("s/PUB_FALLBACK_KEY", PUBLIC));
-		assertNull(engine.resolveSecret("s/PUB_FALLBACK_KEY", ALICE));
+		// ...but under the default read-only public scope even it may not use a
+		// secret, and an authenticated caller never reaches the public store,
+		// by name or by DID, without a grant.
+		RequestContext anonymous = PUBLIC.withCaps(covia.lattice.CapabilityChecker.readOnlyScope(PUBLIC_DID));
+		assertThrows(AuthException.class, () -> engine.resolveSecret("s/PUB_FALLBACK_KEY", anonymous));
+		assertThrows(AuthException.class, () -> engine.resolveSecret(PUBLIC_DID + "/s/PUB_FALLBACK_KEY", ALICE));
+		assertNull(engine.resolveSecret("s/PUB_FALLBACK_KEY", ALICE), "Alice's own store holds no such secret");
 
-		// The key an operation names for itself falls back to the public store
-		// (covia#254, use-only at the operation's own endpoint)...
-		assertEquals("public-value", engine.resolveOperationSecret("PUB_FALLBACK_KEY", ALICE));
-
-		// ...and the caller's OWN secret of the same name shadows it.
+		// Alice's own secret of the same name is hers.
 		engine.jobs().invokeOperation("v/ops/secret/set",
 			Maps.of("name", "PUB_FALLBACK_KEY", "value", "alice-own"),
 			ALICE).awaitResult(5000);
-		assertEquals("alice-own", engine.resolveOperationSecret("PUB_FALLBACK_KEY", ALICE));
 		assertEquals("alice-own", engine.resolveSecret("s/PUB_FALLBACK_KEY", ALICE));
 	}
 

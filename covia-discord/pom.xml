@@ -11,7 +11,7 @@
 	<name>Covia Discord Module</name>
 	<description>Discord bot adapter for Covia venues, packaged as an optional loadable venue module.</description>
 	<properties>
-		<jda.version>6.5.0</jda.version>
+		<jda.version>6.6.0</jda.version>
 	</properties>
 	<dependencies>
 		<dependency>

@@ -33,6 +33,7 @@ import convex.core.crypto.ASignature;
 import convex.core.cvm.Address;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
+import covia.venue.Engine;
 import covia.venue.RequestContext;
 
 /**
@@ -259,7 +260,7 @@ public class ConvexAdapter extends AAdapter {
 		AString supplied = RT.ensureString(RT.getIn(input, Fields.SEED));
 		if (supplied == null) throw new JobFailedException("No Ed25519 signing seed provided");
 		String value = supplied.toString();
-		boolean secretRef = value.startsWith("s/") || value.startsWith("/s/");
+		boolean secretRef = Engine.isSecretRef(value);
 		if (requireSecretRef && !secretRef) {
 			throw new IllegalArgumentException("seed must be an s/<name> secret reference");
 		}

@@ -884,6 +884,9 @@ public class VenueServer {
 
 		DLFSWebDAV webdav = new DLFSWebDAV(webdavManager);
 		webdav.addRoutes(routes);
+		// WebDAV serves stored files as this origin, like the content endpoints,
+		// so the same nosniff default applies, scoped to the venue's own mount.
+		routes.after(Config.WEBDAV_PATH + "*", ctx -> SecurityHeaders.content(ctx, config));
 
 		log.info("DLFS WebDAV mounted at {}", Config.WEBDAV_PATH);
 	}
@@ -1007,17 +1010,6 @@ public class VenueServer {
 		}
 	}
 
-	/** The browser hardening headers ({@link Config#isSecurityHeaders}); framing is denied on HTML responses only. */
-	private static void applySecurityHeaders(Context ctx) {
-		ctx.header("X-Content-Type-Options", "nosniff");
-		ctx.header("Referrer-Policy", "no-referrer");
-		String type = ctx.res().getContentType();
-		if (type != null && type.startsWith("text/html")) {
-			ctx.header("X-Frame-Options", "DENY");
-			ctx.header("Content-Security-Policy", "frame-ancestors 'none'");
-		}
-	}
-
 	/** Request ids and the optional access log (covia#538). */
 	private RequestLog requestLog;
 
@@ -1116,12 +1108,9 @@ public class VenueServer {
 		// lets the loopback sentinel match literal hosts on any port without DNS.
 		routes.before(ctx -> applyCorsPolicy(ctx, corsPolicy, allowPrivateNetwork));
 
-		// Browser hardening on every response (#537): no MIME sniffing, no
-		// referrer leakage, and the venue's own HTML pages cannot be framed.
-		// HSTS is the TLS terminator's to add — only it knows the origin is https.
-		if (this.config.isSecurityHeaders()) {
-			routes.after(VenueServer::applySecurityHeaders);
-		}
+		// Browser hardening headers are not applied here, or anywhere globally:
+		// the venue's own sign-in page and content endpoints set them as
+		// defaults (SecurityHeaders), and an embedder's routes are left alone.
 
 		// Native protocol routes and explicitly opted-in embedder routes sync
 		// the connected lattice root after handling. Matching by endpoint role
@@ -1318,8 +1307,10 @@ public class VenueServer {
         // Callback route for any provider
         app.get("/auth/{provider}/callback", loginProviders::handleCallback);
 
-        // Simple login page listing configured providers
+        // Simple login page listing configured providers: the one venue page
+        // another site could usefully frame, so it carries the hardening defaults.
         app.get("/login", ctx -> {
+            SecurityHeaders.page(ctx, config);
             ctx.html(loginProviders.renderLoginPage());
         });
 	}

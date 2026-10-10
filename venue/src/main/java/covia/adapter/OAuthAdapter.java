@@ -36,6 +36,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
+import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.SecretStore;
 import covia.venue.User;
@@ -235,7 +236,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 		String clientId = text(settings, K_CLIENT_ID);
 		if (clientId == null) throw new IllegalArgumentException("adapters.oauth.providers." + name + ".clientId is required");
 		String secretRef = text(settings, K_CLIENT_SECRET);
-		if (secretRef != null && !secretRef.startsWith("s/") && !secretRef.startsWith("/s/")) {
+		if (secretRef != null && !Engine.isSecretRef(secretRef)) {
 			throw new IllegalArgumentException("adapters.oauth.providers." + name
 				+ ".clientSecret must be an s/NAME reference to a venue secret, never the literal secret");
 		}

@@ -1,6 +1,6 @@
 {
 	"name": "Anthropic Chat",
-	"description": "Chat with Anthropic Claude models using the native Anthropic API. API key resolution prefers the caller/public secret store (ANTHROPIC_API_KEY by default), then the venue process environment; override by passing apiKey explicitly or as 's/<SECRET_NAME>'. Supports system prompts, tools, and structured output. Prompt caching is on by default: tools, system prompt and the caller's cacheMarks are cache breakpoints; usage reports cacheRead and cacheWrite tokens.",
+	"description": "Chat with Anthropic Claude models using the native Anthropic API. The API key is your own stored ANTHROPIC_API_KEY by default; pass apiKey as 's/<SECRET_NAME>' for another of your secrets, '<did>/s/<SECRET_NAME>' for one granted to you with secret/use, or a literal. Supports system prompts, tools, and structured output. Prompt caching is on by default: tools, system prompt and the caller's cacheMarks are cache breakpoints; usage reports cacheRead and cacheWrite tokens.",
 	"creator": "Covia",
 	"operation": {
 		"adapter": "langchain:anthropic",

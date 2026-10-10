@@ -143,6 +143,7 @@ Abilities follow UCAN's slash-delimited convention with no leading slash. `*` is
 | `asset/read` | — | Get / list content-addressed assets |
 | `venue/restart` | — | Restart a standalone venue process or hand off to a successor jar |
 | `venue/gc` | — | Garbage-collect the venue's Etch store online (`<venueDID>/store`) |
+| `secret/use` | — | Use a secret's value in an operation without seeing it; bindable to a destination with `nb.url` |
 | `secret/decrypt` | — | Decrypt a secret |
 | `ucan/delegate` | — | Sub-delegate capabilities |
 | `ucan/revoke` | — | Revoke a UCAN |
@@ -164,13 +165,13 @@ Constraint semantics are application-defined. Convex verifies the signed
 delegation structure and supplies each complete root-to-leaf capability path;
 Covia interprets the constraints on the selected path. A malformed or unknown
 constraint fails closed — it never becomes an unconditional grant. The examples
-above are illustrative future vocabulary; `gate` is the constraint implemented
-today.
+above are illustrative future vocabulary; `gate` and `url` are the constraints
+implemented today, and a grant carrying both applies only when both hold.
 
 #### Capability gates (`nb.gate`) — covia#216
 
-The one `nb` constraint covia enforces today is the **gate**: a reference to
-an operation that decides, per invocation, whether the capability applies.
+The first `nb` constraint is the **gate**: a reference to an operation that
+decides, per invocation, whether the capability applies.
 
 ```
 { with: "o/glassbox/pay-invoice", can: "invoke",
@@ -213,6 +214,26 @@ Semantics (see `CapabilityChecker.allows` and `JobManager.evaluateGate`):
   `{operation, input, caller}` decision. Path collection is provided by
   Convex-Dev/convex#643.
 
+#### Destinations (`nb.url`)
+
+A grant of `secret/use` may name where the value may go:
+
+```
+{ with: "did:key:zAlice.../s/FOO", can: "secret/use",
+  nb: { url: "https://safe.com/api" } }
+```
+
+The adapter about to send the secret supplies the request url, and the
+capability applies iff that url falls under the prefix: the same scheme, host
+and effective port, and a path equal to the caveat's or below it at a `/`
+boundary (a caveat path ending in `/` covers everything under it; query and
+fragment never matter). A use that supplies no destination, such as signing
+with a stored seed, never satisfies a `url` caveat. On a delegation path every
+link's `url` must cover the use, so a re-delegation can never widen it. The
+check is made once, on the request url: the http adapter drops credential
+headers on a cross-origin redirect, but a same-origin redirect may land on a
+path outside the prefix on the covered host.
+
 ### 3.4 Risk Hierarchy
 
 | Capability | Risk |
@@ -221,6 +242,7 @@ Semantics (see `CapabilityChecker.allows` and `JobManager.evaluateGate`):
 | `{with: "did:.../w/key", can: "crud/read"}` | Medium — reading specific data |
 | `{with: "did:.../o/op", can: "invoke"}` | Medium — consumes compute |
 | `{with: "did:.../w/", can: "crud/write"}` | High — mutating workspace |
+| `{with: "did:.../s/key", can: "secret/use", nb: {url: "https://api.example/"}}` | High — the value is sent, unseen, to that destination only |
 | `{with: "did:.../s/key", can: "secret/decrypt"}` | Highest — reveals plaintext credentials |
 | `{with: "did:...", can: "*"}` | Maximum — full delegation |
 
@@ -569,6 +591,7 @@ Venue:
 | `dlfs:write` / `dlfs:append` / `dlfs:mkdir` / `dlfs:createDrive` | `{ with: "dlfs/<drive>/<path>", can: "crud/write" }` |
 | `dlfs:delete` / `dlfs:deleteDrive` | `{ with: "dlfs/<drive>/<path>", can: "crud/delete" }` |
 | `secret:extract` | `{ with: "/s/<name>", can: "secret/decrypt" }` |
+| Any adapter sending a secret (`apiKey`, `bearerSecret`, `secretHeaders`, `{s/NAME}`, MCP `auth`, A2A auth) | `{ with: "<ownerDID>/s/<name>", can: "secret/use" }`, its `nb.url` checked against the request's destination |
 | `agent:create` | `{ with: "<ownerDID>/g/<id>", can: "agent/create" }` |
 | `agent:info` / `agent:context` (cross-user) | `{ with: "<ownerDID>/g/<id>", can: "crud/read" }` |
 | `agent:request` (cross-user) | `{ with: "<ownerDID>/g/<id>", can: "agent/request" }` |

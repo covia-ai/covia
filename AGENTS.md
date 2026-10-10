@@ -113,9 +113,9 @@ mvn test -pl covia-core
 | Javalin | 7.2.3 | HTTP server with OpenAPI/Swagger/ReDoc |
 | LangChain4j | 1.22.0 | LLM orchestration (OpenAI, Ollama, Gemini, DeepSeek) |
 | MCP SDK | 2.0.1 | Model Context Protocol |
-| A2A | 1.3.0.Final | Agent-to-Agent protocol |
+| A2A | 1.3.1.Final | Agent-to-Agent protocol |
 | JUnit | 6.1.3 | Testing |
-| SLF4J/Logback | 2.0.18/1.6.3 | Logging |
+| SLF4J/Logback | 2.0.19/1.6.3 | Logging |
 
 ## Architecture Overview
 
@@ -222,7 +222,7 @@ The list below tracks engineering tasks. For the developer-experience and open-s
 
 ### P1 — High (security and reliability)
 
-- [x] Secure credential handling — per-user encrypted SecretStore, `secretFields` redaction, `s/NAME` resolution in the caller's own store, operation keys falling back to the public store (#254); capability-gated `secret:extract` still pending.
+- [x] Secure credential handling — per-user encrypted SecretStore, `secretFields` redaction, `s/NAME` resolution under `secret/use` (another principal's as `<did>/s/NAME`, grants bindable to a url); capability-gated `secret:extract` still pending.
 
 - [ ] **Per-operation rate limiting** — request-rate and concurrent-job caps exist (see `venue/docs/CONFIG.md`); per-operation limits do not.
 

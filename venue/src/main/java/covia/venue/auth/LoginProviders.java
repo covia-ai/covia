@@ -103,7 +103,7 @@ public class LoginProviders {
 
 	/** Whether a configured clientSecret is an {@code s/NAME} store reference rather than a literal. */
 	private static boolean isSecretRef(String value) {
-		return value != null && (value.startsWith("s/") || value.startsWith("/s/"));
+		return Engine.isSecretRef(value);
 	}
 
 	/**

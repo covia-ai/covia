@@ -52,6 +52,7 @@ import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.client.VenueHTTP;
 import covia.grid.impl.BlobContent;
+import covia.venue.server.SecurityHeaders;
 import covia.venue.server.VenueServer;
 
 @TestInstance(Lifecycle.PER_CLASS)
@@ -288,36 +289,80 @@ public class VenueServerTest {
 		}
 	}
 
-	@Test public void testSecurityHeadersOnByDefaultAndOffByConfig() throws Exception {
-		VenueServer server = VenueServer.launch(Maps.of(Config.PORT, CVMLong.create(0)));
+	/**
+	 * The browser hardening headers are defaults on the venue's own sign-in
+	 * page and content endpoints, and on nothing else: an embedder's routes
+	 * keep their own policy, or none (#537, #569).
+	 */
+	@Test public void testSecurityHeadersAreVenueDefaultsOnly() throws Exception {
+		AMap<AString, ACell> login = Maps.of(Config.OAUTH, Maps.of("google",
+			Maps.of(Config.CLIENT_ID, "cid", Config.CLIENT_SECRET, "secret")));
+		java.util.function.Consumer<io.javalin.config.RoutesConfig> embedder = routes -> {
+			// An embedder page with its own policy, and one that states none.
+			routes.get("/embedder/strict", ctx -> {
+				ctx.header("Content-Security-Policy", "default-src 'none'; script-src 'self'");
+				ctx.header("X-Frame-Options", "SAMEORIGIN");
+				ctx.html("<p>strict</p>");
+			});
+			routes.get("/embedder/plain", ctx -> ctx.html("<p>plain</p>"));
+			// An embedder that wants the floor on its own responses applies it itself.
+			routes.get("/embedder/floor", ctx -> {
+				ctx.header("Referrer-Policy", "same-origin");
+				SecurityHeaders.response(ctx, new Config(Maps.empty()));
+				ctx.result("ok");
+			});
+		};
+		VenueServer server = VenueServer.launch(
+			Maps.of(Config.PORT, CVMLong.create(0), Config.AUTH, login), List.of(embedder));
 		try {
-			// JSON: sniffing and referrer protection, no framing headers needed
-			HttpResponse<String> json = plainGet(server, "/api/v1/status");
-			assertEquals(200, json.statusCode(), json.body());
-			assertEquals("nosniff", json.headers().firstValue("x-content-type-options").orElse(null));
-			assertEquals("no-referrer", json.headers().firstValue("referrer-policy").orElse(null));
-			assertTrue(json.headers().firstValue("x-frame-options").isEmpty());
+			// The venue's sign-in page carries the defaults.
+			HttpResponse<String> page = plainGet(server, "/login");
+			assertEquals(200, page.statusCode(), page.body());
+			assertEquals("DENY", page.headers().firstValue("x-frame-options").orElse(null));
+			assertEquals("frame-ancestors 'none'", page.headers().firstValue("content-security-policy").orElse(null));
+			assertEquals("no-referrer", page.headers().firstValue("referrer-policy").orElse(null));
 
-			// HTML: the venue's own pages cannot be framed
-			HttpResponse<String> html = plainGet(server, "/index.html");
-			assertEquals(200, html.statusCode());
-			assertTrue(html.headers().firstValue("content-type").orElse("").startsWith("text/html"));
-			assertEquals("DENY", html.headers().firstValue("x-frame-options").orElse(null));
-			assertEquals("frame-ancestors 'none'",
-				html.headers().firstValue("content-security-policy").orElse(null));
-			assertEquals("nosniff", html.headers().firstValue("x-content-type-options").orElse(null));
+			// Stored bytes leave with nosniff (an anonymous read names the public user's own a/).
+			Engine engine = server.getEngine();
+			convex.core.data.Hash stored = engine.storeUserAsset(
+				Strings.create("{\"name\":\"sniff\",\"content\":{\"contentType\":\"text/plain\"}}"),
+				Blob.wrap("<html>".getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+				RequestContext.of(Strings.create(engine.getDIDString() + ":public")));
+			HttpResponse<String> content = plainGet(server, "/api/v1/content/" + stored.toHexString());
+			assertEquals(200, content.statusCode(), content.body());
+			assertEquals("nosniff", content.headers().firstValue("x-content-type-options").orElse(null));
+
+			// Everything else is left alone: the API, the venue's root page, an embedder's page.
+			for (String path : new String[] {"/api/v1/status", "/index.html", "/embedder/plain"}) {
+				HttpResponse<String> other = plainGet(server, path);
+				assertEquals(200, other.statusCode(), path);
+				assertTrue(other.headers().firstValue("x-frame-options").isEmpty(), path);
+				assertTrue(other.headers().firstValue("content-security-policy").isEmpty(), path);
+				assertTrue(other.headers().firstValue("x-content-type-options").isEmpty(), path);
+				assertTrue(other.headers().firstValue("referrer-policy").isEmpty(), path);
+			}
+			HttpResponse<String> strict = plainGet(server, "/embedder/strict");
+			assertEquals(200, strict.statusCode());
+			assertEquals("default-src 'none'; script-src 'self'",
+				strict.headers().firstValue("content-security-policy").orElse(null));
+			assertEquals("SAMEORIGIN", strict.headers().firstValue("x-frame-options").orElse(null));
+			HttpResponse<String> floor = plainGet(server, "/embedder/floor");
+			assertEquals("nosniff", floor.headers().firstValue("x-content-type-options").orElse(null));
+			assertEquals("same-origin", floor.headers().firstValue("referrer-policy").orElse(null),
+				"the embedder's own value is kept");
 		} finally {
 			server.close();
 		}
 
 		VenueServer off = VenueServer.launch(Maps.of(
 			Config.PORT, CVMLong.create(0),
+			Config.AUTH, login,
 			Config.SECURITY_HEADERS, CVMBool.FALSE));
 		try {
-			HttpResponse<String> response = plainGet(off, "/api/v1/status");
-			assertEquals(200, response.statusCode(), response.body());
-			assertTrue(response.headers().firstValue("x-content-type-options").isEmpty(),
-				"securityHeaders: false turns the headers off");
+			HttpResponse<String> page = plainGet(off, "/login");
+			assertEquals(200, page.statusCode(), page.body());
+			assertTrue(page.headers().firstValue("x-frame-options").isEmpty(),
+				"securityHeaders: false turns the defaults off");
 		} finally {
 			off.close();
 		}

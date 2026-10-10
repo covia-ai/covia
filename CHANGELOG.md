@@ -10,19 +10,30 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Security
 
-- A secret reference a caller writes (`s/NAME`, `bearerSecret`,
-  `secretHeaders`, `{s/NAME}`) resolves in the caller's own store only, never
-  the public store. The key an operation names (`operation.secretKey`) still
-  falls back to the public store and the process environment, and goes only
-  to the provider's own endpoint.
+- Using a secret is an action on `<owner>/s/NAME` requiring `secret/use`: a
+  caller's reference names its own secret, another principal's needs a grant,
+  and nothing falls back to the public store or the environment.
+- A `secret/use` grant may be bound to a destination with `nb: {url}`; every
+  adapter that sends a secret passes the request url to the check.
 
 ### Fixed
 
 - LangChain accepts a caller's own `s/NAME` key with a caller-chosen `url`
   (#568).
+- Browser hardening headers are defaults on the venue's own sign-in page and
+  content endpoints only; an embedder's own policy is never replaced (#569).
+- `Engine.materialiseVOps` and `materialiseVenueInfo` are back, deprecated,
+  for embedders that still call them; 0.9.9 removed them.
 
 ### Changed
 
+- A provider key shared through `secrets.public` needs a `secret/use` grant in
+  `auth.public.caps`, and callers name it as `<venueDID>:public/s/NAME`; an
+  operation's `secretKey` default names the caller's own secret.
+- A key injected through the venue environment is the venue's own, usable by
+  venue-owned work unless granted.
+- An MCP bridge backed by a venue secret serves other callers only under a
+  `secret/use` grant; the venue-or-self exception is gone.
 - CI is quicker: the gate builds modules in parallel, the snapshot and Docker
   publishers reuse the jars the Test run built instead of rebuilding, and
   CodeQL analyses without a build. The Docker publisher is workflow_run only.
@@ -31,6 +42,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   branch so a develop publish cannot cancel a master one (#567).
 - `mvn clean deploy -Prelease` is the release command; the `gpg` settings
   profile is active by default.
+- SLF4J 2.0.19, A2A 1.3.1.Final, JDA 6.6.0, maven-failsafe-plugin 3.6.0.
 
 ## [0.9.9] - 2026-10-09
 

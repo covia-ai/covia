@@ -172,11 +172,16 @@ public class OwnAssetsApiTest {
 
 	@Test
 	public void testKindTotalsPartitionTheCatalogue() throws Exception {
-		long all = listTotal("assets");
+		// Other tests register assets on the shared venue between these
+		// requests, and the catalogue only grows, so the two kind totals taken
+		// in between must sum to a size the catalogue passed through.
+		long before = listTotal("assets");
 		long operations = listTotal("assets?kind=operation");
 		long data = listTotal("assets?kind=data");
-		assertEquals(all, operations + data,
-			"every asset is either an operation or it is not");
+		long after = listTotal("assets");
+		assertTrue(before <= operations + data && operations + data <= after,
+			"every asset is either an operation or it is not: catalogue " + before + ".." + after
+				+ ", kinds " + operations + " + " + data);
 		assertTrue(operations > 0 && data > 0, "the fixture venue has both kinds");
 	}
 
