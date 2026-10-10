@@ -393,13 +393,19 @@ network), or `false` to refuse them even on loopback. The checked-in
 }
 ```
 
-On by default. Every response carries `X-Content-Type-Options: nosniff` and
-`Referrer-Policy: no-referrer`; HTML responses (the root page, `/login`,
-`/swagger`, `/redoc`, error pages) also carry `X-Frame-Options: DENY` and
-`Content-Security-Policy: frame-ancestors 'none'`, so no other site can frame
-the venue's own pages. Set `false` to turn them off. `Strict-Transport-Security`
-is deliberately not among them: add it at the TLS terminator (`deploy/Caddyfile`
-or equivalent), which knows the origin is https.
+On by default. The venue's own sign-in page (`/login`) carries
+`X-Frame-Options: DENY`, `Content-Security-Policy: frame-ancestors 'none'` and
+`Referrer-Policy: no-referrer`, so no other site can frame it; the content and
+asset endpoints carry `X-Content-Type-Options: nosniff`, so a browser never
+runs stored bytes as the venue's origin. Each is a default: a handler that has
+set the header keeps its value. Nothing is applied to other responses, and an
+embedder's own routes are never touched; an embedder that wants these defaults
+on a page of its own calls `SecurityHeaders.page` or `SecurityHeaders.content`,
+and one that wants `nosniff` and `no-referrer` on every response of its own
+calls `SecurityHeaders.response` from an after-handler it registers.
+Set `false` to turn them off. `Strict-Transport-Security` is deliberately not
+among them: add it at the TLS terminator (`deploy/Caddyfile` or equivalent),
+which knows the origin is https.
 
 The startup posture line shows the effective `corsOrigins`; `"*"` is the right
 value for a public venue (see *Production profile*).
@@ -2294,16 +2300,37 @@ Top-level keys resolve as follows:
 
 Each named secret overwrites any existing value under that name for that user — config is the source of truth at launch. Names not listed are left untouched. Per-secret failures log a warning but do not fail startup. Values are never logged.
 
-Secret resolution at invocation time checks the caller's own store first,
-then falls back to the public store (covia#254, use-only — `secret:extract`
-stays closed).
+A user, and the agents acting in its namespace, use the user's own secrets as
+of right: a reference a caller writes (`s/NAME` in an input, `bearerSecret`,
+`secretHeaders`, a `{s/NAME}` url placeholder, an operation's `secretKey`
+default) names the caller's own secret, which it may send anywhere the SSRF
+guard allows. Using anyone else's is an action on `<owner>/s/NAME` requiring
+the `secret/use` ability, checked wherever a secret is resolved. Another
+principal's secret is named as `<did>/s/NAME` and needs a `secret/use` grant
+from its owner, which may be bound to a destination: a UCAN whose capability
+carries `nb: {url: "https://api.example/"}` lets the holder use the secret
+only in requests to that url prefix, for the token's lifetime. There is no
+fallback: nothing resolves from the public store or the venue's store unless
+a grant says so.
 
-For LangChain hosted providers, if the operation's named secret is absent from
-both stores, the venue process environment is the final fallback using that
-same conventional name (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.). Store
-values take precedence. This supports process/container secret injection
-without persisting a credential in Covia config or agent state; the environment
-credential is venue-wide, so use a per-user SecretStore when tenant-specific
-provider credentials are required.
+The venue's own secrets are the `"venue"` store above plus the venue process
+environment under the same conventional names (`ANTHROPIC_API_KEY`,
+`OPENAI_API_KEY`, etc.), which supports process/container secret injection
+without persisting a credential in Covia config. Venue-owned agents and
+operations use them as their own; anyone else needs a grant from the venue.
+To share a key with every caller, provision it under `"public"` and grant its
+use in `auth.public.caps`, bound to the provider:
+
+```json
+"auth": { "public": { "caps": [
+  { "with": "s/ANTHROPIC_API_KEY", "can": "secret/use",
+    "nb": { "url": "https://api.anthropic.com/" } }
+] } }
+```
+
+Callers then name it as `<venueDID>:public/s/ANTHROPIC_API_KEY`. The default
+read-only public scope grants no secret use to anyone; a null `auth.public.caps`
+(unrestricted public access) lets every caller use every public-store secret
+at any destination.
 
 **Never commit production secrets here.** Intended for personal dev configs in gitignored locations (e.g. `dev/local.json`).

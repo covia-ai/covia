@@ -121,21 +121,26 @@ public class AuthenticatedPublicAccessTest {
 		assertEquals(PUBLIC_DID, RT.getIn(read, "value", Fields.CALLER.toString()));
 	}
 
-	// ========== Secret resolution fallback (use-only, never disclosure) ==========
+	// ========== Public-store secrets: use needs a grant, never a fallback ==========
 
 	@Test
-	public void testSecretResolutionFallsBackToPublicStore() {
+	public void testPublicSecretsAreNobodysWithoutAGrant() {
 		// Operator-style provisioning into the public store.
 		engine.jobs().invokeOperation("v/ops/secret/set",
 			Maps.of("name", "PUB_FALLBACK_KEY", "value", "public-value"),
 			PUBLIC).awaitResult(5000);
 
-		// Authenticated resolution falls back to the public store...
-		assertEquals("public-value", engine.resolveSecret("s/PUB_FALLBACK_KEY", ALICE));
-		// ...and the public caller still resolves its own store directly.
+		// The public principal with an unrestricted scope owns the store...
 		assertEquals("public-value", engine.resolveSecret("s/PUB_FALLBACK_KEY", PUBLIC));
+		// ...but under the default read-only public scope even it may not use a
+		// secret, and an authenticated caller never reaches the public store,
+		// by name or by DID, without a grant.
+		RequestContext anonymous = PUBLIC.withCaps(covia.lattice.CapabilityChecker.readOnlyScope(PUBLIC_DID));
+		assertThrows(AuthException.class, () -> engine.resolveSecret("s/PUB_FALLBACK_KEY", anonymous));
+		assertThrows(AuthException.class, () -> engine.resolveSecret(PUBLIC_DID + "/s/PUB_FALLBACK_KEY", ALICE));
+		assertNull(engine.resolveSecret("s/PUB_FALLBACK_KEY", ALICE), "Alice's own store holds no such secret");
 
-		// The caller's OWN secret of the same name always shadows the public one.
+		// Alice's own secret of the same name is hers.
 		engine.jobs().invokeOperation("v/ops/secret/set",
 			Maps.of("name", "PUB_FALLBACK_KEY", "value", "alice-own"),
 			ALICE).awaitResult(5000);

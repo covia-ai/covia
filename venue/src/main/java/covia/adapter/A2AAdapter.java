@@ -37,6 +37,7 @@ import covia.api.Fields;
 import covia.exception.ResponseException;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.RemoteJobs;
 import covia.venue.api.A2ACodec;
@@ -274,7 +275,7 @@ public class A2AAdapter extends AAdapter {
 		// Card-named schemes are resolved only after the public card is known.
 		RequestAuth discoveryAuth;
 		try {
-			discoveryAuth = directBearerAuth(storedAuth, ctx);
+			discoveryAuth = directBearerAuth(storedAuth, ctx, cardBase);
 		} catch (RuntimeException e) {
 			return CompletableFuture.failedFuture(e);
 		}
@@ -288,7 +289,7 @@ public class A2AAdapter extends AAdapter {
 			engine.requireSafeUrl(endpoint);
 			// Validate the stored scheme and secret now, while importing, so a bad
 			// binding cannot become a dormant asset that fails only during a task.
-			resolveAssetAuth(storedAuth, card, ctx);
+			resolveAssetAuth(storedAuth, card, ctx, endpoint);
 
 			AMap<AString, ACell> a2a = Maps.of(
 				K_CARD, card,
@@ -325,7 +326,7 @@ public class A2AAdapter extends AAdapter {
 		if (!(raw instanceof AMap<?, ?>)) throw new IllegalArgumentException("'auth' must be an object");
 		AMap<AString, ACell> auth = (AMap<AString, ACell>) raw;
 		AString secret = RT.ensureString(auth.get(K_SECRET));
-		if (secret == null || !(secret.toString().startsWith("s/") || secret.toString().startsWith("/s/"))) {
+		if (secret == null || !Engine.isSecretRef(secret.toString())) {
 			throw new IllegalArgumentException("auth.secret must be a SecretStore reference such as s/PARTNER_KEY");
 		}
 		AString kind = RT.ensureString(auth.get(K_KIND));
@@ -389,7 +390,7 @@ public class A2AAdapter extends AAdapter {
 		}
 		engine.requireSafeUrl(endpoint.toString());
 		AMap<AString, ACell> authBinding = RT.ensureMap(a2a.get(K_AUTH));
-		RequestAuth auth = resolveAssetAuth(authBinding, card, ctx);
+		RequestAuth auth = resolveAssetAuth(authBinding, card, ctx, endpoint.toString());
 		return new AgentTarget(endpoint.toString(), card, auth, metadata.getHash());
 	}
 
@@ -398,21 +399,21 @@ public class A2AAdapter extends AAdapter {
 		if (url == null) throw new IllegalArgumentException("'agent' is required (or 'url' on a raw A2A operation)");
 		String rpcUrl = normaliseRpcUrl(url.toString());
 		engine.requireSafeUrl(rpcUrl);
-		return new AgentTarget(rpcUrl, null, RequestAuth.bearer(resolveBearer(input, ctx)), null);
+		return new AgentTarget(rpcUrl, null, RequestAuth.bearer(resolveBearer(input, ctx, rpcUrl)), null);
 	}
 
-	private RequestAuth directBearerAuth(AMap<AString, ACell> auth, RequestContext ctx) {
+	private RequestAuth directBearerAuth(AMap<AString, ACell> auth, RequestContext ctx, String destination) {
 		if (auth == null) return null;
 		AString kind = RT.ensureString(auth.get(K_KIND));
 		if (kind == null || !"bearer".equalsIgnoreCase(kind.toString())) return null;
-		return RequestAuth.bearer(resolveSecretRef(auth, ctx));
+		return RequestAuth.bearer(resolveSecretRef(auth, ctx, destination));
 	}
 
 	@SuppressWarnings("unchecked")
 	private RequestAuth resolveAssetAuth(AMap<AString, ACell> auth,
-			AMap<AString, ACell> card, RequestContext ctx) {
+			AMap<AString, ACell> card, RequestContext ctx, String destination) {
 		if (auth == null) return null;
-		RequestAuth direct = directBearerAuth(auth, ctx);
+		RequestAuth direct = directBearerAuth(auth, ctx, destination);
 		if (direct != null) return direct;
 
 		AString schemeName = RT.ensureString(auth.get(K_SCHEME));
@@ -422,7 +423,7 @@ public class A2AAdapter extends AAdapter {
 			throw new IllegalArgumentException("Agent Card does not declare security scheme '" + schemeName + "'");
 		}
 		AMap<AString, ACell> scheme = (AMap<AString, ACell>) schemeCell;
-		String secret = resolveSecretRef(auth, ctx);
+		String secret = resolveSecretRef(auth, ctx, destination);
 
 		AMap<AString, ACell> apiKey = RT.ensureMap(scheme.get(K_API_KEY_SCHEME));
 		if (apiKey != null) {
@@ -446,9 +447,9 @@ public class A2AAdapter extends AAdapter {
 			+ "'; supported: API key and HTTP Bearer");
 	}
 
-	private String resolveSecretRef(AMap<AString, ACell> auth, RequestContext ctx) {
+	private String resolveSecretRef(AMap<AString, ACell> auth, RequestContext ctx, String destination) {
 		AString ref = RT.ensureString(auth.get(K_SECRET));
-		String value = ref != null ? engine.resolveSecret(ref.toString(), ctx) : null;
+		String value = ref != null ? engine.resolveSecret(ref.toString(), ctx, destination) : null;
 		if (value == null) throw new IllegalArgumentException(
 			"Cannot resolve A2A auth secret '" + ref + "' from the caller's SecretStore");
 		return value;
@@ -488,7 +489,7 @@ public class A2AAdapter extends AAdapter {
 				"'url' is required (remote A2A base or RPC URL)"));
 		}
 		try {
-			return fetchAgentCardUrl(urlCell.toString(), RequestAuth.bearer(resolveBearer(input, ctx)));
+			return fetchAgentCardUrl(urlCell.toString(), RequestAuth.bearer(resolveBearer(input, ctx, urlCell.toString())));
 		} catch (RuntimeException e) {
 			return CompletableFuture.failedFuture(e);
 		}
@@ -1042,7 +1043,7 @@ public class A2AAdapter extends AAdapter {
 	 * a literal token is accepted for one-off interoperability. These inputs are
 	 * transport credentials only — they are never added to the A2A payload.
 	 */
-	String resolveBearer(ACell input, RequestContext ctx) {
+	String resolveBearer(ACell input, RequestContext ctx, String destination) {
 		AString secret = RT.ensureString(RT.getIn(input, Fields.BEARER_SECRET));
 		AString literal = RT.ensureString(RT.getIn(input, Fields.BEARER_TOKEN));
 		if (secret != null && literal != null) {
@@ -1056,7 +1057,7 @@ public class A2AAdapter extends AAdapter {
 		if (secret == null) return null;
 		String ref = secret.toString();
 		if (ref.isBlank()) throw new IllegalArgumentException("'bearerSecret' must not be empty");
-		String token = engine.resolveSecret(ref, ctx);
+		String token = engine.resolveSecret(ref, ctx, destination);
 		if (token == null) {
 			throw new IllegalArgumentException("Cannot resolve bearerSecret '" + ref
 				+ "'; store it with secret:set or pass an existing s/<name> reference");

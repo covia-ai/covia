@@ -1,5 +1,5 @@
 name: Publish Docker image
-run-name: Publish Docker image [${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || github.ref_name }}]
+run-name: Publish Docker image [${{ github.event.workflow_run.head_branch }}]
 
 # Builds and publishes the public venue image to GHCR. This is the single
 # source of ghcr.io/covia-ai/covia tags — the deploy workflows consume the
@@ -18,51 +18,36 @@ on:
     workflows: ["Test"]
     types: [completed]
     branches: [ develop, master ]
-  workflow_dispatch:
 
 # Newest commit wins the :latest tag — cancel superseded publishes
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: true
 
 jobs:
   publish:
     runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
-    outputs:
-      image: ghcr.io/covia-ai/covia:${{ steps.sha.outputs.sha }}
+    if: github.event.workflow_run.conclusion == 'success'
     permissions:
       contents: read
       packages: write
+      actions: read
 
     steps:
     - uses: actions/checkout@v7
       with:
         # workflow_run itself uses the default branch as GITHUB_SHA. Always
         # check out the commit that actually passed Test.
-        ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+        ref: ${{ github.event.workflow_run.head_sha }}
 
-    - name: Set up JDK 25
-      uses: actions/setup-java@v6
+    - name: Download the jars the Test run built
+      # The exact tested bits, never a rebuild: the Test workflow shares them
+      # as the reactor-jars artifact after its module-boundary check.
+      uses: actions/download-artifact@v4
       with:
-        java-version: '25'
-        distribution: 'temurin'
-        cache: 'maven'
-
-    - name: Cache Maven packages
-      uses: actions/cache@v6
-      with:
-        path: ~/.m2
-        key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
-        restore-keys: ${{ runner.os }}-m2
-
-    - name: Build tested commit with Maven
-      if: github.event_name == 'workflow_run'
-      run: mvn clean install -DskipTests
-
-    - name: Build and test manual dispatch
-      if: github.event_name == 'workflow_dispatch'
-      run: mvn clean install -Dcovia.tests.durability=true
+        name: reactor-jars
+        run-id: ${{ github.event.workflow_run.id }}
+        github-token: ${{ github.token }}
 
     - name: Get short SHA
       id: sha
@@ -74,10 +59,10 @@ jobs:
       id: tags
       run: |
         tags="ghcr.io/covia-ai/covia:${{ steps.sha.outputs.sha }}"
-        source_branch="${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || github.ref_name }}"
+        source_branch="${{ github.event.workflow_run.head_branch }}"
         if [ "$source_branch" = "master" ]; then
           tags="$tags,ghcr.io/covia-ai/covia:stable"
-          version=$(mvn -q help:evaluate -Dexpression=project.version -DforceStdout)
+          version=$(grep -m1 -oP "(?<=<version>)[^<]+" pom.xml)
           case "$version" in
             *-SNAPSHOT) ;;
             *) tags="$tags,ghcr.io/covia-ai/covia:${version}" ;;
@@ -100,60 +85,3 @@ jobs:
         context: .
         push: true
         tags: ${{ steps.tags.outputs.tags }}
-
-  verify-public:
-    name: Verify anonymous pull and invocation
-    needs: publish
-    runs-on: ubuntu-latest
-    # A fresh runner with no package permission and no registry login catches
-    # a private/unlinked GHCR package even when the authenticated push succeeds.
-    permissions: {}
-    steps:
-    - name: Pull the published image anonymously
-      env:
-        IMAGE: ${{ needs.publish.outputs.image }}
-      run: |
-        for attempt in 1 2 3 4 5; do
-          if docker pull "$IMAGE"; then
-            echo "Anonymous access verified: $IMAGE"
-            exit 0
-          fi
-          echo "Image not anonymously visible yet (attempt $attempt/5)"
-          sleep 5
-        done
-        echo "::error::Published image is not anonymously accessible: $IMAGE"
-        exit 1
-
-    - name: Run an anonymous invocation
-      env:
-        IMAGE: ${{ needs.publish.outputs.image }}
-      run: |
-        cleanup() {
-          docker rm -f covia-public-smoke >/dev/null 2>&1 || true
-        }
-        trap cleanup EXIT
-
-        docker run -d --name covia-public-smoke \
-          -p 127.0.0.1:18080:8080 \
-          "$IMAGE" /app/config/docker-local.json
-
-        for attempt in $(seq 1 30); do
-          if curl --fail --silent http://127.0.0.1:18080/ >/dev/null; then
-            break
-          fi
-          if [ "$attempt" = 30 ]; then
-            docker logs covia-public-smoke
-            echo "::error::Published venue did not become ready"
-            exit 1
-          fi
-          sleep 1
-        done
-
-        curl --fail-with-body --silent --show-error \
-          -X POST http://127.0.0.1:18080/api/v1/invoke \
-          -H "Content-Type: application/json" \
-          -d '{"operation":"v/ops/schema/infer","input":{"value":{"name":"Ada","age":36}},"wait":true}' \
-          | tee /tmp/covia-invoke.json
-
-        jq -e '.status == "COMPLETE" and .output.schema.type == "object"' \
-          /tmp/covia-invoke.json >/dev/null

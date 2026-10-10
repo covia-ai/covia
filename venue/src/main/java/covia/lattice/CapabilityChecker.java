@@ -36,6 +36,7 @@ import covia.api.Abilities;
 public class CapabilityChecker {
 
 	private static final AString GATE = Strings.intern("gate");
+	private static final AString URL = Strings.intern("url");
 
 	/**
 	 * Cross-user proof check: do the caller's presented {@code proofs} authorise
@@ -84,6 +85,17 @@ public class CapabilityChecker {
 	public static boolean proofsCover(AVector<ACell> proofs, AString caller, RootAuthorityPolicy rootPolicy,
 			AString resource, AString ability, long now, AString opRef,
 			ACell invocationInput, CapabilityGate gate) {
+		return proofsCover(proofs, caller, rootPolicy, resource, ability, now, opRef, invocationInput, gate, null);
+	}
+
+	/**
+	 * As above for a use that sends a value to {@code destination}: a
+	 * {@code nb.url} caveat on any capability of the path must cover it, and a
+	 * use with no destination never satisfies one.
+	 */
+	public static boolean proofsCover(AVector<ACell> proofs, AString caller, RootAuthorityPolicy rootPolicy,
+			AString resource, AString ability, long now, AString opRef,
+			ACell invocationInput, CapabilityGate gate, AString destination) {
 		if (caller == null || rootPolicy == null || resource == null || ability == null) return false;
 		// Bare `with` paths mean the TOKEN ISSUER's own namespace — resolved here,
 		// at evaluation, against the signed `iss` that travels with every token.
@@ -91,7 +103,7 @@ public class CapabilityChecker {
 		// signatures and treats resources as opaque, so the relying party
 		// normalises its view of the verified claims before the authority check.
 		Predicate<AVector<ACell>> caveats = new ProofCaveatEvaluator(
-			opRef, invocationInput, caller, gate);
+			opRef, invocationInput, caller, gate, destination);
 		return UCANValidator.isAuthorised(normaliseProofs(proofs), caller, resource,
 			ability, rootPolicy, now, caveats);
 	}
@@ -109,24 +121,74 @@ public class CapabilityChecker {
 			ability, rootPolicy, now);
 	}
 
-	private record Caveats(boolean valid, AString gate) {
-		private static final Caveats NONE = new Caveats(true, null);
-		private static final Caveats INVALID = new Caveats(false, null);
+	private record Caveats(boolean valid, AString gate, String url) {
+		private static final Caveats NONE = new Caveats(true, null, null);
+		private static final Caveats INVALID = new Caveats(false, null, null);
+
+		/** Whether the grant depends on the use at all. */
+		boolean conditional() {
+			return gate != null || url != null;
+		}
+
+		/** Null when the url caveat, if any, covers {@code destination}; else why not. */
+		String urlDenial(AString destination) {
+			if (url == null) return null;
+			if (destination != null && urlCovers(url, destination.toString())) return null;
+			return "url caveat " + url + " does not cover "
+				+ (destination != null ? destination : "a use with no destination");
+		}
 	}
 
 	/**
-	 * Parse the caveats Covia knows how to enforce. Unknown or malformed caveats
-	 * are invalid rather than silently becoming an unconditional grant.
+	 * Parse the caveats Covia knows how to enforce: {@code gate}, an operation
+	 * that must succeed for the invocation, and {@code url}, a prefix the use's
+	 * destination must fall under. Unknown or malformed caveats are invalid
+	 * rather than silently becoming an unconditional grant.
 	 */
 	private static Caveats caveatsOf(AMap<AString, ACell> cap) {
 		if (cap == null || !cap.containsKey(Capability.NB)) return Caveats.NONE;
 		AMap<AString, ACell> nb = RT.castMap(cap.get(Capability.NB));
 		if (nb == null) return Caveats.INVALID;
 		if (nb.isEmpty()) return Caveats.NONE;
-		if (nb.count() != 1 || !nb.containsKey(GATE)) return Caveats.INVALID;
-		AString gateOp = RT.ensureString(nb.get(GATE));
-		if (gateOp == null || gateOp.count() == 0) return Caveats.INVALID;
-		return new Caveats(true, gateOp);
+		AString gateOp = null;
+		String url = null;
+		for (var entry : nb.entrySet()) {
+			AString value = RT.ensureString(entry.getValue());
+			if (value == null || value.count() == 0) return Caveats.INVALID;
+			if (GATE.equals(entry.getKey())) gateOp = value;
+			else if (URL.equals(entry.getKey())) url = value.toString();
+			else return Caveats.INVALID;
+		}
+		return new Caveats(true, gateOp, url);
+	}
+
+	/**
+	 * Whether a {@code nb.url} caveat covers a destination: the same scheme,
+	 * host and effective port, and a path equal to the caveat's or below it at
+	 * a {@code /} boundary. A caveat path ending in {@code /} covers everything
+	 * under it. Query and fragment never matter; anything unparseable is not
+	 * covered.
+	 */
+	public static boolean urlCovers(String prefix, String destination) {
+		try {
+			java.net.URI p = new java.net.URI(prefix);
+			java.net.URI d = new java.net.URI(destination);
+			if (p.getScheme() == null || p.getHost() == null || d.getScheme() == null || d.getHost() == null) return false;
+			if (!p.getScheme().equalsIgnoreCase(d.getScheme()) || !p.getHost().equalsIgnoreCase(d.getHost())) return false;
+			if (effectivePort(p) != effectivePort(d)) return false;
+			String pp = (p.getPath() == null || p.getPath().isEmpty()) ? "/" : p.getPath();
+			String dp = (d.getPath() == null || d.getPath().isEmpty()) ? "/" : d.getPath();
+			if (pp.endsWith("/")) return dp.startsWith(pp) || (dp + "/").equals(pp);
+			return dp.equals(pp) || dp.startsWith(pp + "/");
+		} catch (java.net.URISyntaxException e) {
+			return false;
+		}
+	}
+
+	private static int effectivePort(java.net.URI uri) {
+		if (uri.getPort() >= 0) return uri.getPort();
+		String scheme = uri.getScheme();
+		return "https".equalsIgnoreCase(scheme) ? 443 : "http".equalsIgnoreCase(scheme) ? 80 : -1;
 	}
 
 	/** Stateful per-decision predicate passed to convex-core's proof walker. */
@@ -135,14 +197,16 @@ public class CapabilityChecker {
 		private final ACell input;
 		private final AString caller;
 		private final CapabilityGate gate;
+		private final AString destination;
 		private final Map<AString, Boolean> gateResults = new HashMap<>();
 
 		private ProofCaveatEvaluator(AString opRef, ACell input, AString caller,
-				CapabilityGate gate) {
+				CapabilityGate gate, AString destination) {
 			this.opRef = opRef;
 			this.input = input;
 			this.caller = caller;
 			this.gate = gate;
+			this.destination = destination;
 		}
 
 		@Override
@@ -153,7 +217,7 @@ public class CapabilityChecker {
 				AMap<AString, ACell> cap = RT.castMap(path.get(i));
 				if (cap == null) return false;
 				Caveats caveats = caveatsOf(cap);
-				if (!caveats.valid()) return false;
+				if (!caveats.valid() || caveats.urlDenial(destination) != null) return false;
 				if (caveats.gate() != null) gates.add(caveats.gate());
 			}
 			if (gates.isEmpty()) return true;
@@ -304,6 +368,16 @@ public class CapabilityChecker {
 	 */
 	public static String allows(AVector<ACell> caps, AString resource, AString ability, AString ownerDID,
 			AString opRef, ACell invocationInput, CapabilityGate gate) {
+		return allows(caps, resource, ability, ownerDID, opRef, invocationInput, gate, null);
+	}
+
+	/**
+	 * As above for a use that sends a value to {@code destination} (an
+	 * outbound url): a grant's {@code nb.url} caveat must cover it. A caveated
+	 * grant authorises only when every caveat it carries is satisfied.
+	 */
+	public static String allows(AVector<ACell> caps, AString resource, AString ability, AString ownerDID,
+			AString opRef, ACell invocationInput, CapabilityGate gate, AString destination) {
 		if (caps == null) return null;              // no scope = unrestricted (no bounding grants)
 		String canonResource = canonicalResource(resource != null ? resource.toString() : null, ownerDID);
 		if (canonResource == null) canonResource = "";
@@ -312,33 +386,34 @@ public class CapabilityChecker {
 		AString abilityStr = Strings.create(ab);
 
 		// Pass 1: any covering, valid grant WITHOUT a caveat authorises outright.
-		if (coveredUngated(caps, resourceStr, abilityStr, ownerDID)) return null;
+		if (coveredUnconditional(caps, resourceStr, abilityStr, ownerDID)) return null;
 
-		// Pass 2: covering grants WITH a gate — evaluated in declaration order,
-		// first passing gate wins. Denial details accumulate so a refused
-		// caller sees why each applicable gate said no.
-		StringBuilder gateDenials = null;
+		// Pass 2: covering grants WITH caveats — evaluated in declaration order,
+		// the first grant whose every caveat holds wins. Denial details
+		// accumulate so a refused caller sees why each applicable grant said no.
+		StringBuilder denials = null;
 		for (long i = 0; i < caps.count(); i++) {
 			if (!(caps.get(i) instanceof AMap<?, ?> capMap)) continue;
 			@SuppressWarnings("unchecked")
 			AMap<AString, ACell> cap = (AMap<AString, ACell>) capMap;
 			Caveats caveats = caveatsOf(cap);
-			if (!caveats.valid() || caveats.gate() == null) continue;
-			AString gateOp = caveats.gate();
+			if (!caveats.valid() || !caveats.conditional()) continue;
 			if (!grantCovers(cap, resourceStr, abilityStr, ownerDID)) continue;
-			String detail;
-			if (gate == null) {
-				detail = "gate " + gateOp + " cannot be evaluated in this context";
-			} else {
-				detail = gate.evaluate(gateOp, opRef, invocationInput, ownerDID);
-				if (detail == null) return null;                // gate passed — authorised
+			String detail = caveats.urlDenial(destination);
+			if (detail == null && caveats.gate() != null) {
+				detail = (gate == null)
+					? "gate " + caveats.gate() + " cannot be evaluated in this context"
+					: gate.evaluate(caveats.gate(), opRef, invocationInput, ownerDID);
 			}
-			if (gateDenials == null) gateDenials = new StringBuilder();
-			else gateDenials.append("; ");
-			gateDenials.append(detail);
+			if (detail == null) return null;                    // every caveat holds — authorised
+			if (denials == null) denials = new StringBuilder();
+			else denials.append("; ");
+			denials.append(detail);
 		}
-		if (gateDenials != null) {
-			return "Capability denied by gate: " + gateDenials
+		if (denials != null) {
+			// The prefix is wording embedders match on; a url caveat is a gate on
+			// the use in the same sense, so it keeps the same prefix.
+			return "Capability denied by gate: " + denials
 				+ ". The grant covering " + (ab.isEmpty() ? "(any ability)" : ab)
 				+ " on " + (canonResource.isEmpty() ? "(any)" : canonResource)
 				+ " is conditional on its gate operation succeeding.";
@@ -399,14 +474,14 @@ public class CapabilityChecker {
 	 * vector therefore grants nothing — only a {@code null} scope is "full
 	 * access" (handled by the callers).
 	 */
-	private static boolean coveredUngated(AVector<ACell> caps, AString resourceStr,
+	private static boolean coveredUnconditional(AVector<ACell> caps, AString resourceStr,
 			AString abilityStr, AString ownerDID) {
 		for (long i = 0; i < caps.count(); i++) {
 			if (!(caps.get(i) instanceof AMap<?,?> capMap)) continue;
 			@SuppressWarnings("unchecked")
 			AMap<AString, ACell> cap = (AMap<AString, ACell>) capMap;
 			Caveats caveats = caveatsOf(cap);
-			if (!caveats.valid() || caveats.gate() != null) continue;
+			if (!caveats.valid() || caveats.conditional()) continue;
 			if (grantCovers(cap, resourceStr, abilityStr, ownerDID)) return true;
 		}
 		return false;

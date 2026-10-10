@@ -27,6 +27,7 @@ import convex.core.lang.RT;
 import covia.adapter.agent.AbstractLLMAdapter;
 import covia.adapter.agent.ToolCallIds;
 import covia.api.Fields;
+import covia.exception.AuthException;
 import covia.grid.Asset;
 import covia.grid.Status;
 import covia.venue.Engine;
@@ -345,8 +346,16 @@ public class LangChainAdapter extends AAdapter {
 		final String finalModelName = (resolvedModel.modelId() != null)
 			? resolvedModel.modelId().toString() : null;
 
-		// Resolve API key
-		final String apiKey = resolveApiKey(meta, input, ctx);
+		// Resolve the API key for the endpoint it is going to: the url the caller
+		// named, else the provider's own. A granted key's url caveat is checked
+		// against that destination; a denial is a failure, never a thrown error.
+		final String destination = (urlParam != null) ? urlParam.toString() : defaultBaseUrl(provider);
+		final String apiKey;
+		try {
+			apiKey = resolveApiKey(meta, input, ctx, destination);
+		} catch (AuthException e) {
+			return CompletableFuture.completedFuture(Status.failure(e.getMessage()));
+		}
 
 		// Providers that need a key must fail fast with a clear message —
 		// without this, langchain4j's Anthropic builder throws synchronously
@@ -355,9 +364,9 @@ public class LangChainAdapter extends AAdapter {
 		// an API key" error from OpenAI's server. See #91.
 		if (providerNeedsApiKey(provider) && (apiKey == null || apiKey.isBlank())) {
 			AString apiKeyParam = RT.ensureString(RT.getIn(input, "apiKey"));
-			AString secretName = RT.ensureString(RT.getIn(meta, "operation", "secretKey"));
+			String keyRef = keyReference(meta);
 			String hint = apiKeyParam != null ? apiKeyParam.toString()
-					: secretName != null ? "/s/" + secretName
+					: keyRef != null ? keyRef
 					: "<no apiKey or operation.secretKey configured>";
 			return CompletableFuture.completedFuture(
 				Status.failure("API key not found for provider '" + provider + "' at " + hint)
@@ -368,9 +377,8 @@ public class LangChainAdapter extends AAdapter {
 				Status.failure("Model not specified for provider '" + provider + "'"));
 		}
 
-		// A url the caller chose is an outbound target like any other and must
-		// never carry the venue's own key: see checkCallerUrl.
-		String urlRefused = checkCallerUrl(provider, urlParam, meta, input);
+		// A url is an outbound target like any other: it passes the venue's SSRF guard.
+		String urlRefused = checkUrl(urlParam);
 		if (urlRefused != null) return CompletableFuture.completedFuture(Status.failure(urlRefused));
 
 		// Optional sampling/bounds parameters (#218): temperature and topP pass
@@ -657,36 +665,17 @@ public class LangChainAdapter extends AAdapter {
 
 	private ChatModel buildProviderModel(String provider, String modelName, String apiKey, AString urlParam,
 			ModelTuning tuning, ResponseFormat responseFormat) {
-		if ("ollama".equals(provider)) {
-			String baseUrl = (urlParam != null) ? urlParam.toString() : "http://localhost:11434";
-			return buildOllamaModel(baseUrl, modelName, IO_TIMEOUT, tuning);
-		} else if ("openai".equals(provider)) {
-			String baseUrl = (urlParam != null) ? urlParam.toString() : "https://api.openai.com/v1";
-			return buildOpenAiModel(apiKey, baseUrl, modelName, IO_TIMEOUT, tuning);
-		} else if ("anthropic".equals(provider)) {
-			String baseUrl = (urlParam != null) ? urlParam.toString() : "https://api.anthropic.com/v1/";
-			return buildAnthropicModel(apiKey, baseUrl, modelName, IO_TIMEOUT, tuning, responseFormat);
-		} else if ("gemini".equals(provider)) {
-			String baseUrl = (urlParam != null) ? urlParam.toString() : "https://generativelanguage.googleapis.com/v1beta/openai/";
-			return buildOpenAiModel(apiKey, baseUrl, modelName, IO_TIMEOUT, tuning);
-		} else if ("xai".equals(provider)) {
-			String baseUrl = (urlParam != null) ? urlParam.toString() : "https://api.x.ai/v1";
-			return buildOpenAiModel(apiKey, baseUrl, modelName, IO_TIMEOUT, tuning);
-		} else if ("deepseek".equals(provider)) {
-			String baseUrl = (urlParam != null) ? urlParam.toString() : "https://api.deepseek.com/v1";
-			return buildOpenAiModel(apiKey, baseUrl, modelName, IO_TIMEOUT, tuning);
-		} else if ("mistral".equals(provider)) {
-			// Mistral's API is OpenAI-compatible (chat completions, tools, JSON mode).
-			String baseUrl = (urlParam != null) ? urlParam.toString() : "https://api.mistral.ai/v1";
-			return buildOpenAiModel(apiKey, baseUrl, modelName, IO_TIMEOUT, tuning);
-		} else if ("openrouter".equals(provider)) {
-			// OpenRouter fronts many vendors behind one OpenAI-compatible endpoint;
-			// model ids are vendor-prefixed (anthropic/…, openai/…) and
-			// openrouter/auto lets the router choose.
-			String baseUrl = (urlParam != null) ? urlParam.toString() : "https://openrouter.ai/api/v1";
-			return buildOpenAiModel(apiKey, baseUrl, modelName, IO_TIMEOUT, tuning);
-		}
-		return null;
+		String baseUrl = (urlParam != null) ? urlParam.toString() : defaultBaseUrl(provider);
+		if (baseUrl == null) return null;
+		return switch (provider) {
+			case "ollama" -> buildOllamaModel(baseUrl, modelName, IO_TIMEOUT, tuning);
+			case "anthropic" -> buildAnthropicModel(apiKey, baseUrl, modelName, IO_TIMEOUT, tuning, responseFormat);
+			// OpenAI, and the OpenAI-compatible APIs: Gemini's compatibility
+			// endpoint, xAI, DeepSeek, Mistral and OpenRouter (which fronts many
+			// vendors; model ids are vendor-prefixed and openrouter/auto lets
+			// the router choose).
+			default -> buildOpenAiModel(apiKey, baseUrl, modelName, IO_TIMEOUT, tuning);
+		};
 	}
 
 	// Request/response logging is disabled by default — these flags would
@@ -949,8 +938,7 @@ public class LangChainAdapter extends AAdapter {
 		boolean ready = keySecret == null;
 		if (keySecret != null) {
 			try {
-				ready = preferStoredSecret(engine.resolveSecret(keySecret.toString(), ctx),
-					System.getenv(keySecret.toString())) != null;
+				ready = engine.resolveSecret(keyReference(providerMeta), ctx) != null;
 			} catch (RuntimeException e) {
 				ready = false;
 			}
@@ -1033,62 +1021,54 @@ public class LangChainAdapter extends AAdapter {
 		return entry;
 	}
 
-	private String resolveApiKey(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
+	/**
+	 * The API key for a call: the caller's {@code apiKey} (a literal, or a
+	 * reference resolved under the caller's authority for {@code destination}),
+	 * else the operation's default key reference ({@link #keyReference}).
+	 * A reference that does not resolve yields null rather than the literal:
+	 * "/s/foo" sent as an API key produces a misleading 401 from the provider
+	 * (see #91).
+	 */
+	String resolveApiKey(AMap<AString, ACell> meta, ACell input, RequestContext ctx, String destination) {
 		AString apiKeyParam = RT.ensureString(RT.getIn(input, "apiKey"));
-		if (apiKeyParam != null) {
-			String s = apiKeyParam.toString();
-			// A "/s/..." or "s/..." prefix means this is a reference into the
-			// caller's secret store. If resolution fails we MUST return null
-			// rather than the literal reference — passing "/s/foo" through as
-			// an API key produces a misleading 401 from the provider (see #91).
-			if (Engine.isSecretRef(s)) {
-				return engine.resolveSecret(s, ctx);
-			}
-			return s;
-		}
-		AString secretName = RT.ensureString(RT.getIn(meta, "operation", "secretKey"));
-		if (secretName != null) {
-			String name = secretName.toString();
-			// Caller/public SecretStore remains authoritative. An operator may
-			// alternatively inject the conventional provider variable into the
-			// venue process (for example ANTHROPIC_API_KEY in local development or
-			// a container secret) without writing it to Covia config or agent state.
-			return preferStoredSecret(
-				engine.resolveSecret(name, ctx), System.getenv(name));
-		}
-		return null;
+		if (apiKeyParam != null && !Engine.isSecretRef(apiKeyParam.toString())) return apiKeyParam.toString();
+		String ref = (apiKeyParam != null) ? apiKeyParam.toString() : keyReference(meta);
+		return (ref != null) ? engine.resolveSecret(ref, ctx, destination) : null;
 	}
 
-	/** Selects the caller/public store before the venue-wide process fallback. */
-	static String preferStoredSecret(String stored, String environment) {
-		if (stored != null && !stored.isBlank()) return stored;
-		return (environment != null && !environment.isBlank()) ? environment : null;
+	/** The operation's default key reference, {@code s/<operation.secretKey>}:
+	 *  the caller's own secret of that conventional name, or null when the
+	 *  operation names none. */
+	static String keyReference(AMap<AString, ACell> meta) {
+		AString secretKey = RT.ensureString(RT.getIn(meta, Fields.OPERATION, "secretKey"));
+		return (secretKey != null) ? "s/" + secretKey : null;
 	}
 
-
-	/** Refusal for a caller-chosen url combined with the venue's provisioned key. */
-	static final String URL_NEEDS_CALLER_KEY = "a url other than the operation's own endpoint "
-		+ "needs an inline apiKey: the key resolved from operation.secretKey is never sent elsewhere";
+	/** The provider's own endpoint, used when the caller names no url. */
+	static String defaultBaseUrl(String provider) {
+		return switch (provider) {
+			case "ollama" -> "http://localhost:11434";
+			case "openai" -> "https://api.openai.com/v1";
+			case "anthropic" -> "https://api.anthropic.com/v1/";
+			case "gemini" -> "https://generativelanguage.googleapis.com/v1beta/openai/";
+			case "xai" -> "https://api.x.ai/v1";
+			case "deepseek" -> "https://api.deepseek.com/v1";
+			case "mistral" -> "https://api.mistral.ai/v1";
+			case "openrouter" -> "https://openrouter.ai/api/v1";
+			default -> null;
+		};
+	}
 
 	/**
-	 * A url that is not the operation's own default is the caller's choice of
-	 * outbound target: it passes the venue's SSRF guard like any http call, and
-	 * for a keyed provider it needs an inline {@code apiKey} — the key resolved
-	 * from {@code operation.secretKey} (the caller's store, the public store or
-	 * the environment) goes only to the endpoint the operator configured.
+	 * A url the caller named is an outbound target like any other: it passes
+	 * the venue's SSRF guard. Which key may travel to it is the secret's
+	 * owner's decision, enforced where the key is resolved.
 	 *
 	 * @return null when the url may be used, otherwise the reason it may not
 	 */
-	String checkCallerUrl(String provider, AString urlParam, AMap<AString, ACell> meta, ACell input) {
+	String checkUrl(AString urlParam) {
 		if (urlParam == null) return null;
 		String url = urlParam.toString();
-		AString own = RT.ensureString(RT.getIn(meta, Fields.OPERATION, "default", "url"));
-		if (own == null) own = RT.ensureString(RT.getIn(meta, Fields.OPERATION, "input", "properties", "url", "default"));
-		if (own != null && url.equals(own.toString())) return null;
-		if (providerNeedsApiKey(provider)) {
-			AString apiKey = RT.ensureString(RT.getIn(input, "apiKey"));
-			if (apiKey == null || Engine.isSecretRef(apiKey.toString())) return URL_NEEDS_CALLER_KEY + ": " + url;
-		}
 		try {
 			engine.requireSafeUrl(url);
 		} catch (IllegalArgumentException e) {

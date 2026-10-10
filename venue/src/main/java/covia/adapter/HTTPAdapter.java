@@ -492,7 +492,7 @@ public class HTTPAdapter extends AAdapter {
 						throw new IllegalArgumentException(
 							"secretHeaders contains the same header more than once: " + header);
 					}
-					putHeader(outHeaders, header.toString(), resolveSecret(secret, ctx, "secretHeaders"));
+					putHeader(outHeaders, header.toString(), resolveSecret(secret, ctx, "secretHeaders", finalUrl));
 					credentials.add(canonical);
 				}
 			}
@@ -507,7 +507,7 @@ public class HTTPAdapter extends AAdapter {
 				String ref = bearerSecret.toString();
 				String bearer = ref.startsWith(TokenSource.PREFIX)
 					? connectionToken(ctx, ref.substring(TokenSource.PREFIX.length()))
-					: resolveSecret(bearerSecret, ctx, "bearerSecret");
+					: resolveSecret(bearerSecret, ctx, "bearerSecret", finalUrl);
 				putHeader(outHeaders, "Authorization", "Bearer " + bearer);
 			}
 
@@ -664,11 +664,14 @@ public class HTTPAdapter extends AAdapter {
 	private String resolveUrlSecrets(String rawUrl, RequestContext ctx, Map<String, String> redactions) {
 		Matcher m = URL_SECRET.matcher(rawUrl);
 		if (!m.find()) return rawUrl;
+		// The destination a grant is checked against is the url itself with its
+		// placeholders blanked, which still names the host and path.
+		String destination = m.replaceAll("secret");
 		StringBuilder out = new StringBuilder();
 		m.reset();
 		while (m.find()) {
 			String placeholder = m.group();
-			String resolved = resolveSecret(Strings.create(m.group(1)), ctx, "url secret");
+			String resolved = resolveSecret(Strings.create(m.group(1)), ctx, "url secret", destination);
 			redactions.put(resolved, placeholder);
 			m.appendReplacement(out, Matcher.quoteReplacement(resolved));
 		}
@@ -692,11 +695,14 @@ public class HTTPAdapter extends AAdapter {
 		return out;
 	}
 
-	private String resolveSecret(AString reference, RequestContext ctx, String field) {
+	/** Resolves a credential reference for the request to {@code destination}:
+	 *  the caller's own secret, or another principal's under a {@code secret/use}
+	 *  grant whose url caveat, if any, must cover the destination. */
+	private String resolveSecret(AString reference, RequestContext ctx, String field, String destination) {
 		if (engine == null || ctx == null) {
 			throw new IllegalStateException(field + " requires engine and request context");
 		}
-		String resolved = engine.resolveSecret(reference.toString(), ctx);
+		String resolved = engine.resolveSecret(reference.toString(), ctx, destination);
 		if (resolved == null) {
 			throw new IllegalArgumentException("Cannot resolve " + field + " reference '"
 				+ reference + "'; store it with secret:set or pass an existing s/<name> reference");

@@ -1149,6 +1149,30 @@ public class Engine {
 	}
 
 	/**
+	 * Materialises the adapter catalog on its own.
+	 *
+	 * @deprecated The venue publishes the catalog itself, with the venue
+	 *             information, before an embedder's startup hook runs (#564);
+	 *             kept for embedders that still call it, for whom the call is
+	 *             harmless and unnecessary.
+	 */
+	@Deprecated
+	public void materialiseVOps() {
+		VenueBootstrapMaterializer.materialiseAdapterCatalog(this);
+		catalogPublished = true;
+	}
+
+	/**
+	 * Materialises the {@code /v/info/} snapshot on its own.
+	 *
+	 * @deprecated As {@link #materialiseVOps()}: the venue does this itself.
+	 */
+	@Deprecated
+	public void materialiseVenueInfo() {
+		VenueBootstrapMaterializer.materialiseVenueInformation(this);
+	}
+
+	/**
 	 * Bridges MCP servers declared in the {@code mcp.servers} config block
 	 * (#80): each is registered at VENUE scope, its tools materialised at
 	 * {@code v/ops/mcp/<name>/<tool>}. Best-effort per server — a server that
@@ -3002,8 +3026,15 @@ public class Engine {
 
 	/** Evaluate presented proofs under this venue's complete root policy. */
 	public boolean proofsCover(RequestContext ctx, AString resource, AString ability, long now) {
+		return proofsCover(ctx, resource, ability, now, null);
+	}
+
+	/** As above for a use that sends a value to {@code destination}: a proof's
+	 *  {@code nb.url} caveat must cover it. */
+	public boolean proofsCover(RequestContext ctx, AString resource, AString ability, long now,
+			AString destination) {
 		if (ctx == null) return false;
-		return ctx.delegatedProofsCover(rootAuthorityPolicy(), resource, ability, now);
+		return ctx.delegatedProofsCover(rootAuthorityPolicy(), resource, ability, now, destination);
 	}
 
 	/**
@@ -3337,6 +3368,12 @@ public class Engine {
 	 * </ol>
 	 */
 	public boolean crossUserAllows(RequestContext ctx, AString resource, AString ability) {
+		return crossUserAllows(ctx, resource, ability, null);
+	}
+
+	/** As above for a use that sends a value to {@code destination}: a grant's
+	 *  {@code nb.url} caveat, in the public scope or a presented proof, must cover it. */
+	public boolean crossUserAllows(RequestContext ctx, AString resource, AString ability, AString destination) {
 		if (ctx == null || resource == null || ability == null) return false;
 		// The venue's explicitly addressed asset catalog is public. This is NOT
 		// true of another user's /a/: knowing a hash is not authorisation to read
@@ -3351,14 +3388,14 @@ public class Engine {
 				AString publicDID = Strings.create(publicDIDStr);
 				convex.core.data.AVector<ACell> publicScope = auth.getPublicScope(publicDID);
 				// null scope = operator-configured unrestricted public access
-				if (publicScope == null || covia.lattice.CapabilityChecker.allows(
-						publicScope, resource, ability, publicDID) == null) {
+				if (publicScope == null
+						|| ctx.denialUnder(publicScope, resource, ability, publicDID, destination) == null) {
 					return true;
 				}
 			}
 		}
 		if (admissionAllows(ctx, resource, ability)) return true;
-		return proofsCover(ctx, resource, ability, System.currentTimeMillis() / 1000);
+		return proofsCover(ctx, resource, ability, System.currentTimeMillis() / 1000, destination);
 	}
 
 	/** The abilities that mean "talk to this agent": submit a request or a message. */
@@ -3465,11 +3502,18 @@ public class Engine {
 	 * by asking that venue.</p>
 	 */
 	public AString requireLocalAccess(RequestContext ctx, AString resource, AString ability) {
+		return requireLocalAccess(ctx, resource, ability, null);
+	}
+
+	/** As above for a use that sends the resource's value to {@code destination}
+	 *  (a secret into an outbound request): a grant's {@code nb.url} caveat must
+	 *  cover it. */
+	public AString requireLocalAccess(RequestContext ctx, AString resource, AString ability, AString destination) {
 		if (ownedByCaller(ctx, resource)) {
-			requireAuthority(ctx, resource, ability);           // own namespace → scope seam
+			requireAuthority(ctx, resource, ability, destination);   // own namespace → scope seam
 			return (ctx != null) ? ctx.getUserDID() : null;
 		}
-		if (!crossUserAllows(ctx, resource, ability)) {
+		if (!crossUserAllows(ctx, resource, ability, destination)) {
 			convex.core.data.AVector<ACell> proofs = (ctx != null) ? ctx.getProofs() : null;
 			throw new covia.exception.AuthException("Access denied: " + ability + " on " + resource
 				+ " — accessing another user's resource requires " + ability + " rights"
@@ -3622,6 +3666,12 @@ public class Engine {
 	 * the {@code null}-scope fast path.
 	 */
 	public boolean authorityCovers(RequestContext ctx, AString resource, AString ability) {
+		return authorityCovers(ctx, resource, ability, null);
+	}
+
+	/** As above for a use that sends a value to {@code destination}: a grant's
+	 *  {@code nb.url} caveat must cover it. */
+	public boolean authorityCovers(RequestContext ctx, AString resource, AString ability, AString destination) {
 		if (ctx == null) return false;
 		// Fast path FIRST — the common case by far. A null scope is unrestricted:
 		// the caller carries no capability restriction, so they are authorised over
@@ -3634,8 +3684,8 @@ public class Engine {
 		// Restricted (agent) scope. Grants are additive: a presented cross-user
 		// proof (or the public read grant) authorises independently of the caller's
 		// scope; otherwise a grant in the scope must cover the resource.
-		if (crossUserAllows(ctx, resource, ability)) return true;
-		return ctx.grantsDenial(resource, ability) == null;
+		if (crossUserAllows(ctx, resource, ability, destination)) return true;
+		return ctx.grantsDenial(resource, ability, destination) == null;
 	}
 
 	/**
@@ -3644,10 +3694,15 @@ public class Engine {
 	 * message when the caller's authority does not cover the request.
 	 */
 	public void requireAuthority(RequestContext ctx, AString resource, AString ability) {
+		requireAuthority(ctx, resource, ability, null);
+	}
+
+	/** As above for a use that sends a value to {@code destination}. */
+	public void requireAuthority(RequestContext ctx, AString resource, AString ability, AString destination) {
 		if (ctx != null && ctx.getJob() instanceof VenueJob job) job.requireAccount();
 		if (ctx != null) venueState.users().requireNotDeleted(ctx.getUserDID());
-		if (authorityCovers(ctx, resource, ability)) return;
-		String denial = (ctx != null && ctx.getCaps() != null) ? ctx.grantsDenial(resource, ability) : null;
+		if (authorityCovers(ctx, resource, ability, destination)) return;
+		String denial = (ctx != null && ctx.getCaps() != null) ? ctx.grantsDenial(resource, ability, destination) : null;
 		throw new covia.exception.AuthException(denial != null ? denial
 			: "Capability denied: requires " + (ability != null ? ability : "(any ability)")
 				+ " on " + (resource != null ? resource : "(any)")
@@ -3708,25 +3763,12 @@ public class Engine {
 
 	// ========== Secret resolution ==========
 
-	/**
-	 * Resolves a secret from the calling user's secret store.
-	 *
-	 * <p>Accepts both {@code "/s/NAME"} and bare {@code "NAME"} formats.
-	 * The store is the caller's <em>user</em> namespace ({@code ctx.getUserDID()})
-	 * — only that user's own secrets are accessible. An agent sub-principal
-	 * resolves its owner's secrets, which is the whole point of it running inside
-	 * the owner's namespace: an agent has no store of its own, and keying this on
-	 * the acting identity instead would make every agent's secrets vanish. Which
-	 * secrets an agent may actually use is bounded by its capability scope, not by
-	 * which store it reads.</p>
-	 *
-	 * @param secretRef Secret name or "/s/NAME" reference
-	 * @param ctx Request context (namespace identity for access control)
-	 * @return Decrypted plaintext, or null if not found or not authorised
-	 */
-	/** Whether a value is a reference into a secret store ({@code s/NAME} or {@code /s/NAME}) rather than a literal. */
+	/** Whether a value is a reference into a secret store rather than a literal:
+	 *  {@code s/NAME} or {@code /s/NAME} (the caller's own), or {@code <did>/s/NAME}
+	 *  (another principal's, usable under a {@code secret/use} grant). */
 	public static boolean isSecretRef(String value) {
-		return value != null && (value.startsWith("s/") || value.startsWith("/s/"));
+		return value != null && (value.startsWith("s/") || value.startsWith("/s/")
+			|| (value.startsWith("did:") && value.contains("/s/")));
 	}
 
 	/** The secret name a reference points at: {@code s/} or {@code /s/} stripped, a bare name unchanged. */
@@ -3736,48 +3778,83 @@ public class Engine {
 			: secretRef;
 	}
 
+	/**
+	 * Resolves a secret reference for use, under the caller's authority.
+	 *
+	 * <p>A user, and the agents acting in its namespace, use the user's own
+	 * secrets ({@code s/NAME}, {@code /s/NAME} or a bare {@code NAME}) as of
+	 * right. Using anyone else's, named {@code <did>/s/NAME}, is an action on
+	 * that resource requiring {@link Abilities#SECRET_USE}, checked here and
+	 * nowhere else: a presented proof, or the public scope for the public store,
+	 * whose operator-provisioned secrets are nobody's own. A grant may be bound to a
+	 * destination with {@code nb.url}; {@link #resolveSecret(String,
+	 * RequestContext, String)} is the form adapters use when they know where the
+	 * value is going, and a use with no destination never satisfies such a
+	 * caveat. The venue's own secrets are its configured store and its process
+	 * environment. There is no fallback of any kind.</p>
+	 *
+	 * @param secretRef Secret name, {@code s/NAME} or {@code <did>/s/NAME}
+	 * @param ctx Request context (identity and authority)
+	 * @return Decrypted plaintext, or null when the store holds no such secret
+	 * @throws covia.exception.AuthException when the caller's authority does not cover the use
+	 */
 	public String resolveSecret(String secretRef, RequestContext ctx) {
-		if (secretRef == null || ctx == null) return null;
-		AString callerDID = ctx.getUserDID();
-		if (callerDID == null) return null;
+		return resolveSecret(secretRef, ctx, null);
+	}
 
-		String name = secretName(secretRef);
-		if (name.isEmpty()) return null;
+	/**
+	 * As {@link #resolveSecret(String, RequestContext)} for a value that is
+	 * about to be sent to {@code destination}, an outbound url the adapter can
+	 * vouch for: a {@code secret/use} grant bound to a url prefix covers the use
+	 * only when the destination falls under it.
+	 */
+	public String resolveSecret(String secretRef, RequestContext ctx, String destination) {
+		if (secretRef == null || ctx == null || ctx.getUserDID() == null) return null;
+		AString owner = ctx.getUserDID();
+		String name;
+		if (secretRef.startsWith("did:")) {
+			// <did>/s/NAME: the owner is the whole DID, never a path under one.
+			int idx = secretRef.indexOf("/s/");
+			if (idx < 0 || secretRef.lastIndexOf('/', idx - 1) >= 0) return null;
+			owner = Strings.create(secretRef.substring(0, idx));
+			name = secretRef.substring(idx + 3);
+		} else {
+			name = secretName(secretRef);
+		}
+		if (name.isEmpty() || name.indexOf('/') >= 0) return null;   // one secret name, as secret:set requires
+		// A user's own secrets are its own to use, and so its agents' (UCAN.md
+		// §5.1). The public principal's store is provisioned by the operator and
+		// nobody's own, so it needs a grant like any other principal's.
+		if (!owner.equals(ctx.getUserDID()) || isPublicPrincipal(owner)) {
+			requireLocalAccess(ctx, Strings.create(owner + "/s/" + name), Abilities.SECRET_USE,
+				destination != null ? Strings.create(destination) : null);
+		}
+		return decryptSecret(owner, name);
+	}
 
-		User user = venueState.users().get(callerDID);
-
-		AString value = null;
+	/** One user's secret of one name, decrypted; null when the user or the secret
+	 *  is absent. The venue's own secrets also come from its process environment. */
+	private String decryptSecret(AString userDID, String name) {
+		User user = venueState.users().get(userDID);
+		if (user == null) return isVenuePrincipal(userDID) ? environmentSecret(name) : null;
+		AString value;
 		try {
-			byte[] encKey = SecretStore.deriveKey(keyPair);
-			if (user != null) {
-				value = user.secrets().decrypt(Strings.create(name), encKey);
-			}
-			// covia#254: fall back to the PUBLIC user's store — the anonymous
-			// public caller resolves these as their own, and an authenticated
-			// caller is at least as privileged. RESOLUTION-ONLY: the value flows
-			// into operations (secretFields-redacted in records); secret:extract
-			// remains gated separately, so this never enables disclosure. The
-			// caller's own secret of the same name always shadows the public one.
-			if (value == null) {
-				String publicDIDStr = getDIDString().toString() + ":public";
-				if (!publicDIDStr.equals(callerDID.toString())) {
-					User publicUser = venueState.users().get(Strings.create(publicDIDStr));
-					if (publicUser != null) {
-						value = publicUser.secrets().decrypt(Strings.create(name), encKey);
-					}
-				}
-			}
+			value = user.secrets().decrypt(Strings.create(name), SecretStore.deriveKey(keyPair));
 		} catch (Exception e) {
-			// A decrypt/key failure is NOT the same as "secret not set".
-			// Collapsing both to null (the old behaviour) masked real errors as
-			// absence and made #91-class identity/key misconfigurations
-			// undiagnosable — a failed resolution looked identical to a missing
-			// key. Surface it loudly instead. Values are never logged.
-			log.warn("Secret '{}' resolution errored for caller {}: {}",
-				name, callerDID, e.toString());
+			// A decrypt/key failure is NOT the same as "secret not set". Collapsing
+			// both to null masked #91-class identity/key misconfigurations as
+			// absence. Surface it loudly instead. Values are never logged.
+			log.warn("Secret '{}' resolution errored for {}: {}", name, userDID, e.toString());
 			throw new CoviaException("Secret resolution failed for '" + name + "'", e);
 		}
-		return (value != null) ? value.toString() : null;   // null == genuinely absent
+		if (value != null) return value.toString();
+		return isVenuePrincipal(userDID) ? environmentSecret(name) : null;   // null == genuinely absent
+	}
+
+	/** The venue process environment as the venue principal's second secret source. */
+	private static String environmentSecret(String name) {
+		String value = System.getenv(name);
+		return (value == null || value.isBlank()) ? null : value;
 	}
 
 	/**

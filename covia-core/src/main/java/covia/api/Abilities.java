@@ -19,6 +19,9 @@ public final class Abilities {
 	public static final AString ASSET_READ    = Strings.intern("asset/read");
 	public static final AString ASSET_STORE   = Strings.intern("asset/store");
 	public static final AString SECRET_WRITE  = Strings.intern("secret/write");
+	/** Use a secret's value in an operation without seeing it. A grant of it
+	 *  may be bound to a destination url prefix ({@code nb.url}). */
+	public static final AString SECRET_USE    = Strings.intern("secret/use");
 	public static final AString MCP_MANAGE    = Strings.intern("mcp/manage");
 	public static final AString HITL_REQUEST  = Strings.intern("hitl/request");
 	public static final AString AGENT_CREATE  = Strings.intern("agent/create");

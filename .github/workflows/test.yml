@@ -43,19 +43,12 @@ jobs:
         test -f "$library"
         echo "COVIA_PYTHON_LIBRARY=$library" >> "$GITHUB_ENV"
 
-    - name: Cache Maven packages
-      uses: actions/cache@v6
-      with:
-        path: ~/.m2
-        key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
-        restore-keys: ${{ runner.os }}-m2
-
     - name: Build and test (full reactor)
       # Opt into the durability group (@DurabilityTest — crash/restart survival
       # tests that fork real JVMs): off in the local `mvn test` inner loop for
       # speed, but must gate every push. @IntegrationTest (external services:
       # network/Ollama) stays off — enable with -Dcovia.tests.integration=true.
-      run: mvn clean install -Dcovia.tests.durability=true
+      run: mvn clean install -T 1C -Dcovia.tests.durability=true
 
     - name: Verify optional module boundaries
       run: |
@@ -72,6 +65,16 @@ jobs:
           echo "::error::Optional module classes leaked into covia.jar"
           exit 1
         fi
+
+    - name: Share the tested jars with the snapshot and Docker publishers
+      uses: actions/upload-artifact@v4
+      with:
+        name: reactor-jars
+        path: |
+          venue/target/covia.jar
+          */target/*-module.jar
+        retention-days: 3
+        if-no-files-found: error
 
   java21-fallback:
     runs-on: ubuntu-latest

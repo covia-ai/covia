@@ -2188,12 +2188,13 @@ public class Config {
 	}
 
 	/**
-	 * Whether every response carries the browser hardening headers
-	 * ({@code X-Content-Type-Options: nosniff}, {@code Referrer-Policy: no-referrer},
-	 * and on HTML responses {@code X-Frame-Options: DENY} with
-	 * {@code Content-Security-Policy: frame-ancestors 'none'}). On by default;
-	 * {@code securityHeaders: false} turns them off. HSTS is not among them:
-	 * only the TLS terminator knows whether the origin is https (#537).
+	 * Whether the venue's own sign-in page and content endpoints carry the
+	 * browser hardening defaults ({@code covia.venue.server.SecurityHeaders}:
+	 * framing denied and no referrer on {@code /login}, {@code nosniff} on
+	 * stored content). Defaults only, never applied to an embedder's routes.
+	 * On by default; {@code securityHeaders: false} turns them off. HSTS is not
+	 * among them: only the TLS terminator knows whether the origin is https
+	 * (#537, #569).
 	 */
 	public boolean isSecurityHeaders() {
 		ACell v = config.get(SECURITY_HEADERS);

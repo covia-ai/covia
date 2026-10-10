@@ -993,7 +993,7 @@ public class AgentAdapter extends AAdapter {
 		AString apiKey = RT.ensureString(config.get(K_API_KEY));
 		if (apiKey == null) return null;
 		String v = apiKey.toString();
-		if (v.startsWith("s/") || v.startsWith("/s/")) return null; // secret reference
+		if (Engine.isSecretRef(v)) return null; // secret reference
 		return Strings.intern("config.apiKey holds a raw credential — agent config"
 			+ " persists unredacted on the lattice. Store the key with the"
 			+ " v/ops/secret/set operation and reference it as s/<name> instead;"

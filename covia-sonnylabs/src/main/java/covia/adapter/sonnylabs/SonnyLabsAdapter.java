@@ -22,6 +22,7 @@ import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.adapter.AAdapter;
 import covia.exception.JobFailedException;
+import covia.venue.Engine;
 import covia.venue.RequestContext;
 
 /** SonnyLabs AI-firewall adapter backed by {@code POST /v1/scans}. */
@@ -214,7 +215,7 @@ public class SonnyLabsAdapter extends AAdapter {
 		validateSecretRef(ref, callerRef == null
 			? "adapters.sonnylabs.apiKey" : "apiKey");
 		RequestContext secretOwner = callerRef == null ? engine.venueContext() : ctx;
-		String value = engine.resolveSecret(ref, secretOwner);
+		String value = engine.resolveSecret(ref, secretOwner, baseUrl + "/v1/scans");
 		if (value == null || value.isBlank()) {
 			String location = callerRef == null
 				? "the configured venue secret-store location"
@@ -301,8 +302,7 @@ public class SonnyLabsAdapter extends AAdapter {
 	}
 
 	private static void validateSecretRef(String ref, String field) {
-		if (ref == null || !(ref.startsWith("s/") || ref.startsWith("/s/"))
-				|| ref.length() <= (ref.startsWith("/") ? 3 : 2)) {
+		if (!Engine.isSecretRef(ref) || ref.endsWith("/")) {
 			throw new IllegalArgumentException(field
 				+ " must be an s/NAME secret reference, never a raw API key");
 		}

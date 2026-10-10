@@ -102,6 +102,20 @@ ucan_issue
 # (via REST API ucans field or agent proof context)
 ```
 
+## Example: Lend a Secret for One API
+
+```
+# Alice lets Bob call one API with her key for an hour, without seeing it
+ucan_issue
+  aud: "did:key:zBob..."
+  att: [{ "with": "s/FOO", "can": "secret/use",
+          "nb": { "url": "https://safe.com/api" } }]
+  exp: <now + 3600>
+
+# Bob names it as did:key:zAlice.../s/FOO in apiKey, bearerSecret or
+# secretHeaders; the venue sends it only to urls under the nb.url prefix
+```
+
 ## Solo Demo (No Second User)
 
 If demoing alone without a second DID, you can still show the flow:

@@ -197,7 +197,7 @@ public class OAuthProvider {
 		}
 		String secretRef = str(settings.get(K_SECRET));
 		boolean isPublic = Boolean.TRUE.equals(bool(settings.get(K_PUBLIC)));
-		if (secretRef != null && (!secretRef.startsWith("s/") && !secretRef.startsWith("/s/"))) {
+		if (secretRef != null && !Engine.isSecretRef(secretRef)) {
 			throw new IllegalArgumentException("auth.oauth.provider.clients." + id + ".secret must be an s/NAME reference");
 		}
 		if (secretRef == null && !isPublic) {

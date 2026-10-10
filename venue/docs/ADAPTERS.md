@@ -181,7 +181,9 @@ There are three separate concerns:
    fixed well-known location `<venue-did>/w/adapters/<adapter>/` and is
    accessed through `adapterWorkspace()`.
 3. **Secrets.** Secret material remains in `s/`. Adapter records contain only
-   `s/NAME` references.
+   `s/NAME` references. An adapter that sends a secret resolves it with the
+   request's destination (`engine.resolveSecret(ref, ctx, url)`), so a
+   `secret/use` grant bound to a url is honoured.
 
 `AdapterWorkspace` is bound to the adapter name and venue principal during
 `install`; an invocation context cannot redirect it into the caller's

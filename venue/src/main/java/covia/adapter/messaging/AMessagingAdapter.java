@@ -26,6 +26,7 @@ import covia.adapter.messaging.MessagingBot.Managed;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.venue.AdapterWorkspace;
+import covia.venue.Engine;
 import covia.venue.RequestContext;
 
 /**
@@ -177,7 +178,7 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 	}
 
 	protected static boolean isSecretReference(String value) {
-		return value != null && (value.startsWith("s/") || value.startsWith("/s/"));
+		return Engine.isSecretRef(value);
 	}
 
 	public final AdapterWorkspace state() { return adapterWorkspace(); }

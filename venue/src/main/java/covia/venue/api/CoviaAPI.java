@@ -795,8 +795,10 @@ public class CoviaAPI extends ACoviaAPI {
 	 * the resolver's declared type), optional inline disposition and filename —
 	 * and streams the resolved content.
 	 */
-	private static void sendContent(Context ctx, ACell contentMeta,
+	private void sendContent(Context ctx, ACell contentMeta,
 			covia.venue.storage.ContentProvider.Resolved resolved) throws IOException {
+		// Stored bytes leave as this origin: never let a browser sniff them into script.
+		covia.venue.server.SecurityHeaders.content(ctx, engine().config());
 		ACell contentType=(contentMeta==null)?null:RT.getIn(contentMeta,Fields.CONTENT_TYPE);
 		if (contentType instanceof AString ct) {
 			ctx.contentType(ct.toString());

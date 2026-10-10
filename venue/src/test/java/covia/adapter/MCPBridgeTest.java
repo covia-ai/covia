@@ -228,6 +228,33 @@ public class MCPBridgeTest {
 	}
 
 	@Test
+	public void testAuthRefOfAnotherUserNeedsAUrlBoundGrant() {
+		var aliceKP = convex.core.crypto.AKeyPair.generate();
+		AString aliceDID = convex.auth.ucan.UCAN.toDIDKey(aliceKP.getAccountKey());
+		AString bobDID = convex.auth.ucan.UCAN.toDIDKey(convex.core.crypto.AKeyPair.generate().getAccountKey());
+		engine.getVenueState().users().ensure(aliceDID).secrets().store("GITHUB_TOKEN", "alice-token",
+			covia.venue.SecretStore.deriveKey(engine.getKeyPair()));
+		MCPAdapter adapter = (MCPAdapter) engine.getAdapter("mcp");
+		AString ref = Strings.create(aliceDID + "/s/GITHUB_TOKEN");
+		AString server = Strings.create("https://mcp.example/sse");
+
+		assertEquals("literal", adapter.resolveAuthRef(RequestContext.of(bobDID), Strings.create("literal"), server));
+		assertThrows(covia.exception.AuthException.class,
+			() -> adapter.resolveAuthRef(RequestContext.of(bobDID), ref, server));
+
+		var grant = convex.auth.ucan.UCAN.create(aliceKP, convex.auth.ucan.UCAN.fromDIDKey(bobDID),
+			System.currentTimeMillis() / 1000 + 3600,
+			convex.core.data.Vectors.of(convex.auth.ucan.Capability.create(ref, covia.api.Abilities.SECRET_USE,
+				convex.core.data.Maps.of(Strings.create("url"), Strings.create("https://mcp.example")))),
+			convex.core.data.Vectors.empty());
+		RequestContext bob = RequestContext.of(bobDID).withProofs(convex.core.data.Vectors.of(grant.toMap()));
+		assertEquals("alice-token", adapter.resolveAuthRef(bob, ref, server));
+		assertThrows(covia.exception.AuthException.class,
+			() -> adapter.resolveAuthRef(bob, ref, Strings.create("https://evil.example/sse")));
+		assertThrows(covia.exception.AuthException.class, () -> adapter.resolveAuthRef(bob, ref, null));
+	}
+
+	@Test
 	public void testToolsListInitializationFailureIsActionable() throws Exception {
 		HttpServer rejecting = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
 		AtomicReference<String> requestedPath = new AtomicReference<>();

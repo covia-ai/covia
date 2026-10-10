@@ -276,18 +276,10 @@ public class ConnectionsAdapter extends AAdapter {
 		String name = secretName(ref);
 		if (name == null) return CredentialPresence.missing();
 
+		// A credential reference resolves in the caller's own store only.
 		User user = engine.getVenueState().users().get(userDID);
-		if (user != null && user.secrets().exists(name)) {
-			return new CredentialPresence(true, "user");
-		}
-		AString publicDID = Strings.create(engine.getDIDString() + ":public");
-		if (!publicDID.equals(userDID)) {
-			User publicUser = engine.getVenueState().users().get(publicDID);
-			if (publicUser != null && publicUser.secrets().exists(name)) {
-				return new CredentialPresence(true, "public");
-			}
-		}
-		return CredentialPresence.missing();
+		return (user != null && user.secrets().exists(name))
+			? new CredentialPresence(true, "user") : CredentialPresence.missing();
 	}
 
 	/** The secret-record name corresponding to an HTTP/OAuth credential ref. */

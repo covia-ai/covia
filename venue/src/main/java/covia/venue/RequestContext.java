@@ -466,8 +466,14 @@ public class RequestContext {
 	 */
 	boolean delegatedProofsCover(RootAuthorityPolicy rootPolicy, AString resource,
 			AString ability, long now) {
+		return delegatedProofsCover(rootPolicy, resource, ability, now, null);
+	}
+
+	/** As above for a use that sends a value to {@code destination}. */
+	boolean delegatedProofsCover(RootAuthorityPolicy rootPolicy, AString resource,
+			AString ability, long now, AString destination) {
 		return CapabilityChecker.proofsCover(authority.getProofs(), authority.getDID(),
-			rootPolicy, proofResource(resource), ability, now, op, invocationInput, gate);
+			rootPolicy, proofResource(resource), ability, now, op, invocationInput, gate, destination);
 	}
 
 	/** Bare capability resources execute in a sub-principal's user namespace. */
@@ -566,7 +572,21 @@ public class RequestContext {
 	 * {@code with} in a token binds to that token's signed {@code iss}.</p>
 	 */
 	String grantsDenial(AString resource, AString ability) {
-		return CapabilityChecker.allows(authority.getGrants(), resource, ability, authority.getUserDID(), op, invocationInput, gate);
+		return grantsDenial(resource, ability, null);
+	}
+
+	/** As {@link #grantsDenial(AString, AString)} for a use that sends a value to
+	 *  {@code destination}: a grant's {@code nb.url} caveat must cover it. */
+	String grantsDenial(AString resource, AString ability, AString destination) {
+		return denialUnder(authority.getGrants(), resource, ability, authority.getUserDID(), destination);
+	}
+
+	/** The denial of {@code (resource, ability)} under an explicit grant scope,
+	 *  evaluated with this context's invocation facts (operation, input, gate)
+	 *  and the use's {@code destination}; null when the scope covers it. */
+	String denialUnder(AVector<ACell> scope, AString resource, AString ability, AString ownerDID,
+			AString destination) {
+		return CapabilityChecker.allows(scope, resource, ability, ownerDID, op, invocationInput, gate, destination);
 	}
 
 	/**

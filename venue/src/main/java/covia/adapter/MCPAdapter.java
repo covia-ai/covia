@@ -22,6 +22,7 @@ import convex.core.util.JSON;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
 import covia.api.Abilities;
+import covia.venue.Engine;
 import covia.venue.RequestContext;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
@@ -131,7 +132,7 @@ public class MCPAdapter extends AAdapter {
 						AString token=RT.getIn(input, Fields.TOKEN);
 						String accessToken=(token!=null)?token.toString()
 							: resolveAuthRef(ctx, RT.ensureString(
-								RT.getIn(meta, Fields.OPERATION, K_AUTH)));
+								RT.getIn(meta, Fields.OPERATION, K_AUTH)), serverUrl);
 
 						// Make the MCP tool call
 						return callMCPTool(serverUrl, remoteToolName.toString(), toolArguments, accessToken);
@@ -244,42 +245,21 @@ public class MCPAdapter extends AAdapter {
 	 *   <li>{@code s/NAME} / {@code /s/NAME} — resolved in the CALLER's secret
 	 *       store (per-caller credentials for a shared bridge)</li>
 	 *   <li>{@code did:…/s/NAME} — DID-qualified secret location, resolved in
-	 *       that identity's store. Phase 1 allows only the venue's own DID or
-	 *       the caller's — anything else fails with a clear message.</li>
+	 *       that identity's store under a {@code secret/use} grant to the
+	 *       caller, which may be bound to the server url ({@code nb.url}).</li>
 	 *   <li>anything else — treated as a literal token (works, discouraged —
 	 *       same stance as raw {@code apiKey} in agent config)</li>
 	 * </ul>
 	 * Fail-closed: a reference that names a missing secret throws rather than
 	 * silently connecting unauthenticated.
 	 */
-	String resolveAuthRef(RequestContext ctx, AString auth) {
+	String resolveAuthRef(RequestContext ctx, AString auth, AString serverUrl) {
 		if (auth == null) return null;
 		String ref = auth.toString();
-		if (ref.startsWith("s/") || ref.startsWith("/s/")) {
-			String value = engine.resolveSecret(ref, ctx);
-			if (value == null) throw new JobFailedException(
-				"MCP server auth secret not found in your store: " + ref);
-			return value;
-		}
-		if (ref.startsWith("did:")) {
-			int idx = ref.indexOf("/s/");
-			if (idx < 0) throw new JobFailedException(
-				"DID-qualified auth reference must be <did>/s/<name>: " + ref);
-			String ownerDid = ref.substring(0, idx);
-			String name = ref.substring(idx + 3);
-			AString venueDid = engine.getDIDString();
-			boolean allowed = ownerDid.equals(venueDid != null ? venueDid.toString() : null)
-				|| ownerDid.equals(ctx.getUserDID() != null ? ctx.getUserDID().toString() : null);
-			if (!allowed) throw new JobFailedException(
-				"MCP server auth secret is owned by " + ownerDid
-				+ " — only the venue's or your own secrets can back a bridged server");
-			String value = engine.resolveSecret("s/" + name,
-				RequestContext.of(Strings.create(ownerDid)));
-			if (value == null) throw new JobFailedException(
-				"MCP server auth secret not found: " + ref);
-			return value;
-		}
-		return ref; // literal token
+		if (!Engine.isSecretRef(ref)) return ref; // literal token
+		String value = engine.resolveSecret(ref, ctx, serverUrl != null ? serverUrl.toString() : null);
+		if (value == null) throw new JobFailedException("MCP server auth secret not found: " + ref);
+		return value;
 	}
 	
 	/**
@@ -567,7 +547,7 @@ public class MCPAdapter extends AAdapter {
 		engine.requireSafeUrl(url.toString());
 
 		// Discover tools under the REGISTRAR's auth (resolved now, not stored raw)
-		String token = resolveAuthRef(ctx, auth);
+		String token = resolveAuthRef(ctx, auth, url);
 		List<Tool> tools = listRemoteTools(url, token);
 
 		// Normalise a bare secret ref to the registrar's DID-qualified form so
@@ -640,7 +620,7 @@ public class MCPAdapter extends AAdapter {
 		engine.requireSafeUrl(url.toString());
 
 		AString auth = RT.ensureString(RT.getIn(input, K_AUTH));
-		String token = resolveAuthRef(ctx, auth);
+		String token = resolveAuthRef(ctx, auth, url);
 		List<Tool> tools = listRemoteTools(url, token);
 		Tool tool = null;
 		for (Tool t : tools) {
@@ -762,7 +742,7 @@ public class MCPAdapter extends AAdapter {
 			+ " (no registry entry at " + registryPath(venueScope, name) + ")");
 		AString auth = RT.ensureString(RT.getIn(reg, K_AUTH));
 
-		String token = resolveAuthRef(ctx, auth);
+		String token = resolveAuthRef(ctx, auth, url);
 		List<Tool> tools = listRemoteTools(url, token);
 
 		// Reconcile: write the fresh set, delete entries no longer served.
@@ -827,7 +807,7 @@ public class MCPAdapter extends AAdapter {
 
 			java.util.Map<String, Tool> fresh = new java.util.HashMap<>();
 			try {
-				String token = resolveAuthRef(ctx, auth);
+				String token = resolveAuthRef(ctx, auth, url);
 				for (Tool t : listRemoteTools(url, token)) fresh.put(t.name(), t);
 			} catch (Exception e) {
 				errors = errors.conj(Maps.of(

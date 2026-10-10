@@ -379,12 +379,13 @@ Maven Central publishes are irreversible.
    ```xml
    <profile>
      <id>gpg</id>
+     <activation><activeByDefault>true</activeByDefault></activation>
      <properties>
        <gpg.executable>C:\Program Files (x86)\GnuPG\bin\gpg.exe</gpg.executable>
      </properties>
    </profile>
    ```
-   and include it in release commands: `mvn deploy -P release,gpg`.
+   mark it `activeByDefault` (as above) so `mvn deploy -Prelease` finds it, or name it on the command line: `mvn deploy -P release,gpg`.
 3. **Central token** — generate a user token in the Central Portal and add it to
    `~/.m2/settings.xml`:
    ```xml
@@ -406,11 +407,7 @@ mvn clean deploy    # -SNAPSHOT version → routes to the Central snapshot repo
 
 **Publish a release** — only after the GitHub Release for the tag is live:
 ```bash
-mvn clean deploy -P release,gpg
-```
-In PowerShell, quote the combined profile argument:
-```powershell
-mvn clean deploy '-Prelease,gpg'
+mvn clean deploy -Prelease
 ```
 `-Prelease` GPG-signs every artifact; the Central plugin bundles all reactor
 modules (main + sources + javadoc + pom + signatures) and, with

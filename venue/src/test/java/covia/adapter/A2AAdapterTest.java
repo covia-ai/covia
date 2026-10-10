@@ -203,7 +203,7 @@ class A2AAdapterTest {
 		A2AAdapter adapter = (A2AAdapter) TestServer.ENGINE.getAdapter("a2a");
 		String resolved = adapter.resolveBearer(
 				Maps.of(Fields.BEARER_SECRET, Strings.create("s/PARTNER_TOKEN")),
-				RequestContext.of(caller));
+				RequestContext.of(caller), "https://partner.example/a2a");
 
 		assertEquals("stored-token", resolved);
 	}
@@ -215,8 +215,33 @@ class A2AAdapterTest {
 				() -> adapter.resolveBearer(Maps.of(
 						Fields.BEARER_SECRET, Strings.create("s/PARTNER_TOKEN"),
 						Fields.BEARER_TOKEN, Strings.create("literal-token")),
-						RequestContext.of(Strings.create("did:test:a2a:conflict"))));
+						RequestContext.of(Strings.create("did:test:a2a:conflict")), "https://partner.example/a2a"));
 		assertTrue(error.getMessage().contains("only one"), error.getMessage());
+	}
+
+	@Test
+	void bearerSecret_ofAnotherUserNeedsAUrlBoundGrant() {
+		var aliceKP = convex.core.crypto.AKeyPair.generate();
+		AString aliceDID = convex.auth.ucan.UCAN.toDIDKey(aliceKP.getAccountKey());
+		AString bobDID = convex.auth.ucan.UCAN.toDIDKey(convex.core.crypto.AKeyPair.generate().getAccountKey());
+		TestServer.ENGINE.getVenueState().users().ensure(aliceDID).secrets().store("PARTNER_TOKEN", "alice-token",
+				SecretStore.deriveKey(TestServer.ENGINE.getKeyPair()));
+		A2AAdapter adapter = (A2AAdapter) TestServer.ENGINE.getAdapter("a2a");
+		AString ref = Strings.create(aliceDID + "/s/PARTNER_TOKEN");
+		var input = Maps.of(Fields.BEARER_SECRET, ref);
+
+		assertThrows(covia.exception.AuthException.class,
+				() -> adapter.resolveBearer(input, RequestContext.of(bobDID), "https://partner.example/a2a"));
+
+		var grant = convex.auth.ucan.UCAN.create(aliceKP, convex.auth.ucan.UCAN.fromDIDKey(bobDID),
+				System.currentTimeMillis() / 1000 + 3600,
+				convex.core.data.Vectors.of(convex.auth.ucan.Capability.create(ref, covia.api.Abilities.SECRET_USE,
+						Maps.of(Strings.create("url"), Strings.create("https://partner.example/a2a")))),
+				convex.core.data.Vectors.empty());
+		RequestContext bob = RequestContext.of(bobDID).withProofs(convex.core.data.Vectors.of(grant.toMap()));
+		assertEquals("alice-token", adapter.resolveBearer(input, bob, "https://partner.example/a2a/rpc"));
+		assertThrows(covia.exception.AuthException.class,
+				() -> adapter.resolveBearer(input, bob, "https://other.example/a2a"));
 	}
 
 	@Test
