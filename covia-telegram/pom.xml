@@ -13,7 +13,7 @@
 	<description>Telegram bot adapter for Covia venues — operator-declared bots that route Telegram chats to agents or operations and let agents send Telegram messages. Packaged as a loadable venue module (the shaded -module.jar), not part of covia.jar.</description>
 
 	<properties>
-		<telegram.version>10.1.0</telegram.version>
+		<telegram.version>10.3.0</telegram.version>
 	</properties>
 
 	<dependencies>
@@ -53,7 +53,6 @@
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-failsafe-plugin</artifactId>
-				<version>3.5.6</version>
 				<configuration>
 					<systemPropertyVariables>
 						<covia.module.jar>${project.build.directory}/${project.build.finalName}-module.jar</covia.module.jar>

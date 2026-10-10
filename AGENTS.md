@@ -113,9 +113,9 @@ mvn test -pl covia-core
 | Javalin | 7.2.3 | HTTP server with OpenAPI/Swagger/ReDoc |
 | LangChain4j | 1.22.0 | LLM orchestration (OpenAI, Ollama, Gemini, DeepSeek) |
 | MCP SDK | 2.0.1 | Model Context Protocol |
-| A2A | 1.3.1.Final | Agent-to-Agent protocol |
+| A2A | 1.4.0.Final | Agent-to-Agent protocol |
 | JUnit | 6.1.3 | Testing |
-| SLF4J/Logback | 2.0.19/1.6.3 | Logging |
+| SLF4J/Logback | 2.0.20/1.6.5 | Logging |
 
 ## Architecture Overview
 

@@ -8,6 +8,11 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- SLF4J 2.0.20, Logback 1.6.5, A2A 1.4.0.Final, JDA 6.7.0, Telegram Bot API
+  10.3.0; Surefire and Failsafe 3.6.0 in every module.
+
 ## [0.9.10] - 2026-10-10
 
 ### Security
