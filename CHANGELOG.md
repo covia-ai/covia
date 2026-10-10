@@ -8,6 +8,19 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Security
+
+- A secret reference a caller writes (`s/NAME`, `bearerSecret`,
+  `secretHeaders`, `{s/NAME}`) resolves in the caller's own store only, never
+  the public store. The key an operation names (`operation.secretKey`) still
+  falls back to the public store and the process environment, and goes only
+  to the provider's own endpoint.
+
+### Fixed
+
+- LangChain accepts a caller's own `s/NAME` key with a caller-chosen `url`
+  (#568).
+
 ### Changed
 
 - CI is quicker: the gate builds modules in parallel, the snapshot and Docker

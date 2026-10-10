@@ -23,7 +23,7 @@
 						"properties": {
 							"provider": { "type": "string" },
 							"skill": { "type": "string" },
-							"configured": { "type": "boolean", "description": "True when at least one credential alternative exists for this caller (including the public fallback)." },
+							"configured": { "type": "boolean", "description": "True when at least one credential alternative exists in this caller's own store." },
 							"credentials": {
 								"type": "array",
 								"items": {

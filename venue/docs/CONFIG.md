@@ -2294,16 +2294,21 @@ Top-level keys resolve as follows:
 
 Each named secret overwrites any existing value under that name for that user — config is the source of truth at launch. Names not listed are left untouched. Per-secret failures log a warning but do not fail startup. Values are never logged.
 
-Secret resolution at invocation time checks the caller's own store first,
-then falls back to the public store (covia#254, use-only — `secret:extract`
-stays closed).
+A reference a caller writes (`s/NAME` in an input, `bearerSecret`,
+`secretHeaders`, a `{s/NAME}` url placeholder) resolves in the caller's own
+store only. The caller chooses where that value goes, so it is never another
+user's secret or the operator's. The anonymous public caller's own store is
+the public store.
 
-For LangChain hosted providers, if the operation's named secret is absent from
-both stores, the venue process environment is the final fallback using that
-same conventional name (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.). Store
-values take precedence. This supports process/container secret injection
-without persisting a credential in Covia config or agent state; the environment
-credential is venue-wide, so use a per-user SecretStore when tenant-specific
-provider credentials are required.
+The key an operation names for itself (`operation.secretKey`, as the LangChain
+providers do) is resolved from the caller's own store, then the public store
+(covia#254, use-only — `secret:extract` stays closed), then the venue process
+environment under that same conventional name (`ANTHROPIC_API_KEY`,
+`OPENAI_API_KEY`, etc.). That key goes only to the provider's own endpoint: a
+call that names a `url` must carry the caller's own `apiKey`. The environment
+fallback supports process/container secret injection without persisting a
+credential in Covia config or agent state; the environment credential is
+venue-wide, so use a per-user SecretStore when tenant-specific provider
+credentials are required.
 
 **Never commit production secrets here.** Intended for personal dev configs in gitignored locations (e.g. `dev/local.json`).

@@ -3708,22 +3708,6 @@ public class Engine {
 
 	// ========== Secret resolution ==========
 
-	/**
-	 * Resolves a secret from the calling user's secret store.
-	 *
-	 * <p>Accepts both {@code "/s/NAME"} and bare {@code "NAME"} formats.
-	 * The store is the caller's <em>user</em> namespace ({@code ctx.getUserDID()})
-	 * — only that user's own secrets are accessible. An agent sub-principal
-	 * resolves its owner's secrets, which is the whole point of it running inside
-	 * the owner's namespace: an agent has no store of its own, and keying this on
-	 * the acting identity instead would make every agent's secrets vanish. Which
-	 * secrets an agent may actually use is bounded by its capability scope, not by
-	 * which store it reads.</p>
-	 *
-	 * @param secretRef Secret name or "/s/NAME" reference
-	 * @param ctx Request context (namespace identity for access control)
-	 * @return Decrypted plaintext, or null if not found or not authorised
-	 */
 	/** Whether a value is a reference into a secret store ({@code s/NAME} or {@code /s/NAME}) rather than a literal. */
 	public static boolean isSecretRef(String value) {
 		return value != null && (value.startsWith("s/") || value.startsWith("/s/"));
@@ -3736,45 +3720,64 @@ public class Engine {
 			: secretRef;
 	}
 
+	/**
+	 * Resolves a reference to a secret in the caller's own store.
+	 *
+	 * <p>Accepts both {@code "/s/NAME"} and bare {@code "NAME"} formats. The
+	 * store is the caller's <em>user</em> namespace ({@code ctx.getUserDID()})
+	 * and nothing else: a reference a caller writes into an input names the
+	 * caller's own secret, which the caller may point wherever it likes, so it
+	 * never resolves to another user's or the operator's. An agent sub-principal
+	 * resolves its owner's secrets, which is the whole point of it running inside
+	 * the owner's namespace: an agent has no store of its own, and keying this on
+	 * the acting identity instead would make every agent's secrets vanish. Which
+	 * secrets an agent may actually use is bounded by its capability scope, not by
+	 * which store it reads. The anonymous public caller's own store is the public
+	 * store, which the operator provisions (covia#254). The key an operation
+	 * names for itself is resolved by {@link #resolveOperationSecret}.</p>
+	 *
+	 * @param secretRef Secret name or "/s/NAME" reference
+	 * @param ctx Request context (namespace identity for access control)
+	 * @return Decrypted plaintext, or null if the caller holds no such secret
+	 */
 	public String resolveSecret(String secretRef, RequestContext ctx) {
-		if (secretRef == null || ctx == null) return null;
-		AString callerDID = ctx.getUserDID();
-		if (callerDID == null) return null;
+		if (secretRef == null || ctx == null || ctx.getUserDID() == null) return null;
+		return decryptSecret(ctx.getUserDID(), secretName(secretRef));
+	}
 
-		String name = secretName(secretRef);
+	/**
+	 * Resolves the key an operation names for itself ({@code operation.secretKey}):
+	 * the caller's own secret of that name, else the operator's from the public
+	 * store (covia#254, use-only: {@code secret:extract} stays closed), else the
+	 * venue process environment. The operator's key is the operator's to point,
+	 * so an adapter sends it only to the endpoint the operation itself defines,
+	 * never to one the caller chose.
+	 *
+	 * @param name Secret name, as the operation declares it
+	 * @param ctx Request context (namespace identity for the caller's own store)
+	 * @return The key, or null when no store and no environment variable holds one
+	 */
+	public String resolveOperationSecret(String name, RequestContext ctx) {
+		if (name == null) return null;
+		String value = (ctx != null && ctx.getUserDID() != null) ? decryptSecret(ctx.getUserDID(), name) : null;
+		if (value == null || value.isBlank()) value = decryptSecret(Strings.create(getDIDString() + ":public"), name);
+		if (value == null || value.isBlank()) value = System.getenv(name);
+		return (value == null || value.isBlank()) ? null : value;
+	}
+
+	/** One user's secret of one name, decrypted; null when the user or the secret is absent. */
+	private String decryptSecret(AString userDID, String name) {
 		if (name.isEmpty()) return null;
-
-		User user = venueState.users().get(callerDID);
-
-		AString value = null;
+		User user = venueState.users().get(userDID);
+		if (user == null) return null;
+		AString value;
 		try {
-			byte[] encKey = SecretStore.deriveKey(keyPair);
-			if (user != null) {
-				value = user.secrets().decrypt(Strings.create(name), encKey);
-			}
-			// covia#254: fall back to the PUBLIC user's store — the anonymous
-			// public caller resolves these as their own, and an authenticated
-			// caller is at least as privileged. RESOLUTION-ONLY: the value flows
-			// into operations (secretFields-redacted in records); secret:extract
-			// remains gated separately, so this never enables disclosure. The
-			// caller's own secret of the same name always shadows the public one.
-			if (value == null) {
-				String publicDIDStr = getDIDString().toString() + ":public";
-				if (!publicDIDStr.equals(callerDID.toString())) {
-					User publicUser = venueState.users().get(Strings.create(publicDIDStr));
-					if (publicUser != null) {
-						value = publicUser.secrets().decrypt(Strings.create(name), encKey);
-					}
-				}
-			}
+			value = user.secrets().decrypt(Strings.create(name), SecretStore.deriveKey(keyPair));
 		} catch (Exception e) {
-			// A decrypt/key failure is NOT the same as "secret not set".
-			// Collapsing both to null (the old behaviour) masked real errors as
-			// absence and made #91-class identity/key misconfigurations
-			// undiagnosable — a failed resolution looked identical to a missing
-			// key. Surface it loudly instead. Values are never logged.
-			log.warn("Secret '{}' resolution errored for caller {}: {}",
-				name, callerDID, e.toString());
+			// A decrypt/key failure is NOT the same as "secret not set". Collapsing
+			// both to null masked #91-class identity/key misconfigurations as
+			// absence. Surface it loudly instead. Values are never logged.
+			log.warn("Secret '{}' resolution errored for {}: {}", name, userDID, e.toString());
 			throw new CoviaException("Secret resolution failed for '" + name + "'", e);
 		}
 		return (value != null) ? value.toString() : null;   // null == genuinely absent

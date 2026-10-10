@@ -121,24 +121,29 @@ public class AuthenticatedPublicAccessTest {
 		assertEquals(PUBLIC_DID, RT.getIn(read, "value", Fields.CALLER.toString()));
 	}
 
-	// ========== Secret resolution fallback (use-only, never disclosure) ==========
+	// ========== Public-store secrets: an operation's key, never a caller's reference ==========
 
 	@Test
-	public void testSecretResolutionFallsBackToPublicStore() {
+	public void testPublicSecretsResolveOnlyForOperations() {
 		// Operator-style provisioning into the public store.
 		engine.jobs().invokeOperation("v/ops/secret/set",
 			Maps.of("name", "PUB_FALLBACK_KEY", "value", "public-value"),
 			PUBLIC).awaitResult(5000);
 
-		// Authenticated resolution falls back to the public store...
-		assertEquals("public-value", engine.resolveSecret("s/PUB_FALLBACK_KEY", ALICE));
-		// ...and the public caller still resolves its own store directly.
+		// A reference resolves in the caller's own store only: the public caller
+		// owns the public store, an authenticated caller never reaches it.
 		assertEquals("public-value", engine.resolveSecret("s/PUB_FALLBACK_KEY", PUBLIC));
+		assertNull(engine.resolveSecret("s/PUB_FALLBACK_KEY", ALICE));
 
-		// The caller's OWN secret of the same name always shadows the public one.
+		// The key an operation names for itself falls back to the public store
+		// (covia#254, use-only at the operation's own endpoint)...
+		assertEquals("public-value", engine.resolveOperationSecret("PUB_FALLBACK_KEY", ALICE));
+
+		// ...and the caller's OWN secret of the same name shadows it.
 		engine.jobs().invokeOperation("v/ops/secret/set",
 			Maps.of("name", "PUB_FALLBACK_KEY", "value", "alice-own"),
 			ALICE).awaitResult(5000);
+		assertEquals("alice-own", engine.resolveOperationSecret("PUB_FALLBACK_KEY", ALICE));
 		assertEquals("alice-own", engine.resolveSecret("s/PUB_FALLBACK_KEY", ALICE));
 	}
 

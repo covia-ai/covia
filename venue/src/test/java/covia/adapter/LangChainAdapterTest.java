@@ -74,17 +74,6 @@ import covia.venue.RequestContext;
  */
 public class LangChainAdapterTest {
 
-	@Test
-	public void testProviderKeyPrefersSecretStoreThenProcessEnvironment() {
-		assertEquals("caller-key",
-			LangChainAdapter.preferStoredSecret("caller-key", "operator-key"));
-		assertEquals("operator-key",
-			LangChainAdapter.preferStoredSecret(null, "operator-key"));
-		assertEquals("operator-key",
-			LangChainAdapter.preferStoredSecret("  ", "operator-key"));
-		assertNull(LangChainAdapter.preferStoredSecret(null, "  "));
-	}
-
 	// ========== #91 regression: silent fallback when secret resolution fails ==========
 
 	/**
@@ -2244,10 +2233,9 @@ public class LangChainAdapterTest {
 	}
 
 	/**
-	 * A caller-chosen url is an outbound target like any other: it passes the
-	 * SSRF guard, and for a keyed provider it never carries a key the caller
-	 * did not supply inline — the venue's provisioned key stays with the
-	 * operation's own endpoint.
+	 * A url is an outbound target the caller chose: it passes the SSRF guard,
+	 * and for a keyed provider it carries only the caller's own key. The key an
+	 * operation names for itself stays with the provider's own endpoint.
 	 */
 	@Test
 	public void testCallerUrlPolicy() throws Exception {
@@ -2257,36 +2245,110 @@ public class LangChainAdapterTest {
 			LangChainAdapter adapter = (LangChainAdapter) engine.getAdapter("langchain");
 			// Allow-listed hosts skip resolution, so the "allowed" cases need no DNS.
 			((HTTPAdapter) engine.getAdapter("http")).addAllowedHost("evil.example");
-			AMap<AString, ACell> meta = Maps.of(Strings.create("operation"), Maps.of(
-				Strings.create("adapter"), Strings.create("langchain:openai"),
-				Strings.create("secretKey"), Strings.create("OPENAI_API_KEY"),
-				Strings.create("default"), Maps.of(Strings.create("url"), Strings.create("https://proxy.example/v1"))));
 			AString evil = Strings.create("https://evil.example/v1");
 			AString loopback = Strings.create("http://127.0.0.1:1/");
+			ACell inline = Maps.of(Strings.create("apiKey"), Strings.create("sk-caller"));
+			ACell stored = Maps.of(Strings.create("apiKey"), Strings.create("s/MY_KEY"));
 
-			// No url, or the operation's own url: nothing to check.
-			assertNull(adapter.checkCallerUrl("openai", null, meta, Maps.empty()));
-			assertNull(adapter.checkCallerUrl("openai", Strings.create("https://proxy.example/v1"), meta, Maps.empty()));
+			// No url: the operation's own key goes to the provider's own endpoint.
+			assertNull(adapter.checkCallerUrl("openai", null, Maps.empty()));
 
-			// Another url with the venue's key (no apiKey, or a store reference): refused.
-			String noKey = adapter.checkCallerUrl("openai", evil, meta, Maps.empty());
+			// A url without the caller's key would carry the operation's key elsewhere: refused.
+			String noKey = adapter.checkCallerUrl("openai", evil, Maps.empty());
 			assertNotNull(noKey);
 			assertTrue(noKey.startsWith(LangChainAdapter.URL_NEEDS_CALLER_KEY), noKey);
-			assertNotNull(adapter.checkCallerUrl("openai", evil, meta,
-				Maps.of(Strings.create("apiKey"), Strings.create("s/OPENAI_API_KEY"))));
 
-			// An inline key makes the url the caller's own choice, still SSRF-guarded.
-			ACell inline = Maps.of(Strings.create("apiKey"), Strings.create("sk-caller"));
-			assertNull(adapter.checkCallerUrl("openai", evil, meta, inline));
-			String ssrf = adapter.checkCallerUrl("openai", loopback, meta, inline);
+			// The caller's own key, inline or from the caller's store, makes the url
+			// the caller's own choice, still SSRF-guarded.
+			assertNull(adapter.checkCallerUrl("openai", evil, inline));
+			assertNull(adapter.checkCallerUrl("openai", evil, stored));
+			String ssrf = adapter.checkCallerUrl("openai", loopback, inline);
 			assertNotNull(ssrf);
 			assertFalse(ssrf.contains("sk-caller"), ssrf);
 
 			// A keyless provider only meets the SSRF guard.
-			assertNull(adapter.checkCallerUrl("ollama", evil, meta, Maps.empty()));
-			assertNotNull(adapter.checkCallerUrl("ollama", loopback, meta, Maps.empty()));
+			assertNull(adapter.checkCallerUrl("ollama", evil, Maps.empty()));
+			assertNotNull(adapter.checkCallerUrl("ollama", loopback, Maps.empty()));
 		} finally {
 			engine.close();
+		}
+	}
+
+	/**
+	 * #568: a caller's own stored key goes wherever the caller points it, as
+	 * GetMine does with its token and its proxy. The operator's key never leaves
+	 * for a caller-chosen url, and a reference never borrows it from the public
+	 * store.
+	 */
+	@Test
+	public void testCallerUrlCarriesOnlyTheCallersOwnKey() throws Exception {
+		AtomicReference<String> keySeen = new AtomicReference<>();
+		HttpServer proxy = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+		proxy.createContext("/v1/messages", exchange -> {
+			keySeen.set(exchange.getRequestHeaders().getFirst("x-api-key"));
+			exchange.getRequestBody().readAllBytes();
+			byte[] body = ("{\"id\":\"msg\",\"type\":\"message\",\"role\":\"assistant\","
+				+ "\"model\":\"claude-sonnet-5-5\",\"content\":[{\"type\":\"text\",\"text\":\"ok\"}],"
+				+ "\"stop_reason\":\"end_turn\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}")
+				.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+			exchange.getResponseHeaders().set("content-type", "application/json");
+			exchange.sendResponseHeaders(200, body.length);
+			try (var out = exchange.getResponseBody()) {
+				out.write(body);
+			}
+		});
+		proxy.start();
+		Engine engine = Engine.createTemp(null);
+		try {
+			Engine.addDemoAssets(engine);
+			((HTTPAdapter) engine.getAdapter("http")).addAllowedHost("127.0.0.1");
+			LangChainAdapter adapter = (LangChainAdapter) engine.getAdapter("langchain");
+			AString callerDID = Strings.create("did:key:z6MkCallerUrl568");
+			RequestContext caller = RequestContext.of(callerDID);
+			byte[] encKey = covia.venue.SecretStore.deriveKey(engine.getKeyPair());
+			engine.getVenueState().users().ensure(callerDID).secrets().store("MY_TOKEN", "caller-token", encKey);
+			var publicUser = engine.getVenueState().users().ensure(Strings.create(engine.getDIDString() + ":public"));
+			publicUser.secrets().store("MY_TOKEN", "operator-token", encKey);
+			publicUser.secrets().store("ANTHROPIC_API_KEY", "operator-key", encKey);
+
+			AMap<AString, ACell> meta = Maps.of(Strings.create("operation"), Maps.of(
+				Strings.create("adapter"), Strings.create("langchain:anthropic"),
+				Strings.create("secretKey"), Strings.create("ANTHROPIC_API_KEY")));
+			AMap<AString, ACell> base = Maps.of(
+				Strings.create("prompt"), Strings.create("hi"),
+				Strings.create("model"), Strings.create("claude-sonnet-5-5"),
+				Strings.create("maxTokens"), CVMLong.create(64),
+				Strings.create("url"), Strings.create("http://127.0.0.1:" + proxy.getAddress().getPort() + "/v1/"));
+			AString apiKey = Strings.create("apiKey");
+
+			// The caller's own token to the caller's own proxy: the caller's value, never the public one.
+			ACell result = adapter.invokeFuture(caller, meta, base.assoc(apiKey, Strings.create("/s/MY_TOKEN")))
+				.get(10, TimeUnit.SECONDS);
+			assertEquals("ok", RT.getIn(result, "response").toString(), result.toString());
+			assertEquals("caller-token", keySeen.get());
+
+			// An agent of the caller resolves its owner's token.
+			keySeen.set(null);
+			adapter.invokeFuture(RequestContext.ofAgent(callerDID, Strings.create("bot")), meta,
+				base.assoc(apiKey, Strings.create("s/MY_TOKEN"))).get(10, TimeUnit.SECONDS);
+			assertEquals("caller-token", keySeen.get());
+
+			// No apiKey: the operation's key is the operator's and never leaves for a caller's url.
+			keySeen.set(null);
+			assertFailureMentioning(adapter.invokeFuture(caller, meta, base).get(10, TimeUnit.SECONDS),
+				LangChainAdapter.URL_NEEDS_CALLER_KEY);
+			assertNull(keySeen.get());
+
+			// A reference to a key held only in the public store never borrows it.
+			assertFailureMentioning(adapter.invokeFuture(caller, meta, base.assoc(apiKey, Strings.create("s/ANTHROPIC_API_KEY")))
+				.get(10, TimeUnit.SECONDS), "s/ANTHROPIC_API_KEY");
+			assertNull(keySeen.get());
+
+			// Without a url the operation's key is still the operator's, at the provider's own endpoint.
+			assertEquals("operator-key", engine.resolveOperationSecret("ANTHROPIC_API_KEY", caller));
+		} finally {
+			engine.close();
+			proxy.stop(0);
 		}
 	}
 }

@@ -222,7 +222,7 @@ The list below tracks engineering tasks. For the developer-experience and open-s
 
 ### P1 — High (security and reliability)
 
-- [x] Secure credential handling — per-user encrypted SecretStore, `secretFields` redaction, `s/NAME` resolution (public-store fallback, #254); capability-gated `secret:extract` still pending.
+- [x] Secure credential handling — per-user encrypted SecretStore, `secretFields` redaction, `s/NAME` resolution in the caller's own store, operation keys falling back to the public store (#254); capability-gated `secret:extract` still pending.
 
 - [ ] **Per-operation rate limiting** — request-rate and concurrent-job caps exist (see `venue/docs/CONFIG.md`); per-operation limits do not.
 
