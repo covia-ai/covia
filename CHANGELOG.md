@@ -8,6 +8,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.9.10] - 2026-10-10
+
 ### Security
 
 - Using a secret is an action on `<owner>/s/NAME` requiring `secret/use`: a
@@ -1209,7 +1211,8 @@ Initial public release: venue server with the adapter framework, lattice-backed
 content-addressed assets, the async job model with SSE, multi-protocol surface
 (REST / MCP / A2A / DID), and strategy-based authentication.
 
-[Unreleased]: https://github.com/covia-ai/covia/compare/0.9.9...HEAD
+[Unreleased]: https://github.com/covia-ai/covia/compare/0.9.10...HEAD
+[0.9.10]: https://github.com/covia-ai/covia/compare/0.9.9...0.9.10
 [0.9.9]: https://github.com/covia-ai/covia/compare/0.9.8...0.9.9
 [0.9.8]: https://github.com/covia-ai/covia/compare/0.9.7...0.9.8
 [0.9.7]: https://github.com/covia-ai/covia/compare/0.9.6...0.9.7
