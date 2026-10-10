@@ -2298,7 +2298,9 @@ A reference a caller writes (`s/NAME` in an input, `bearerSecret`,
 `secretHeaders`, a `{s/NAME}` url placeholder) resolves in the caller's own
 store only. The caller chooses where that value goes, so it is never another
 user's secret or the operator's. The anonymous public caller's own store is
-the public store.
+the public store, so anything provisioned under `"public"` is usable by any
+anonymous caller at any destination `auth.public.caps` lets it reach; with
+the default read-only public scope that is nowhere.
 
 The key an operation names for itself (`operation.secretKey`, as the LangChain
 providers do) is resolved from the caller's own store, then the public store
