@@ -19,8 +19,12 @@ import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.lattice.cursor.ALatticeCursor;
+import convex.lattice.cursor.Cursors;
 import covia.api.Fields;
 import covia.adapter.AAdapter;
+import covia.adapter.CoviaAdapter;
+import covia.lattice.Covia;
 
 /** Tests native, Job-free publication of venue-owned bootstrap state. */
 public class VenueBootstrapMaterializerTest {
@@ -148,6 +152,65 @@ public class VenueBootstrapMaterializerTest {
 		} finally {
 			engine.close();
 		}
+	}
+
+	/**
+	 * #572: canonical catalog paths are written in place, so an operation its
+	 * adapter retired (the skills:manage umbrella at v/ops/skills) outlived it.
+	 */
+	@Test
+	public void bootstrapRetractsOperationsTheirAdapterNoLongerDeclares() {
+		Engine engine = Engine.createTemp(null);
+		try {
+			Engine.addDemoAssets(engine);
+			assertNotNull(engine.getAdapter("skills"));
+			// The retired umbrella, written over the live skills/* entries.
+			writeVenuePath(engine, "v/ops/skills/name", Strings.create("Skills"));
+			writeVenuePath(engine, "v/ops/skills/operation",
+				Maps.of(Fields.ADAPTER, Strings.create("skills:manage")));
+			// A retired leaf in the same namespace.
+			writeVenuePath(engine, "v/ops/skills/manage",
+				Maps.of(Fields.OPERATION, Maps.of(Fields.ADAPTER, Strings.create("skills:manage"))));
+			// An adapter that isn't installed: durable, so kept.
+			writeVenuePath(engine, "v/ops/gone/op",
+				Maps.of(Fields.OPERATION, Maps.of(Fields.ADAPTER, Strings.create("gone:op"))));
+			// Outside the adapter's namespace, as an operator might write: kept.
+			writeVenuePath(engine, "v/ops/custom/list-skills",
+				Maps.of(Fields.OPERATION, Maps.of(Fields.ADAPTER, Strings.create("skills:list"))));
+
+			engine.materialiseBootstrapState();
+
+			assertNull(resolve(engine, "v/ops/skills/operation"), "the retired umbrella is retracted");
+			assertNull(resolve(engine, "v/ops/skills/name"), "with all of its own metadata");
+			assertNull(resolve(engine, "v/ops/skills/manage"), "a retired leaf is removed");
+			for (String live : new String[] {"list", "read", "parse", "import"}) {
+				assertNotNull(resolve(engine, "v/ops/skills/" + live + "/operation"),
+					"the operations that replaced the umbrella stay: " + live);
+			}
+			assertNotNull(resolve(engine, "v/ops/gone/op"), "an uninstalled adapter's entry is durable");
+			assertNotNull(resolve(engine, "v/ops/custom/list-skills"),
+				"an entry outside the adapter's namespace is left to the operator");
+			assertNotNull(resolve(engine, "v/ops/covia/write"), "declared operations are untouched");
+		} finally {
+			engine.close();
+		}
+	}
+
+	private static ACell resolve(Engine engine, String path) {
+		return engine.resolvePath(Strings.create(path), engine.venueContext());
+	}
+
+	/** Writes straight into the venue's w/global, as stale lattice state would be. */
+	private static void writeVenuePath(Engine engine, String virtualPath, ACell value) {
+		ALatticeCursor<ACell> workspace = Covia.child(
+				engine.getVenueState().users().ensure(engine.getDIDString()).cursor(), Strings.create("w"))
+			.path(Strings.create("global"));
+		ACell[] keys = CoviaAdapter.parseStringPath(virtualPath.substring("v/".length()));
+		workspace.updateAndGet(current -> {
+			ALatticeCursor<ACell> scratch = Cursors.createLattice(workspace.getLattice(), current);
+			CoviaAdapter.writePathToCursor(scratch, keys, value);
+			return scratch.get();
+		});
 	}
 
 	private static long venueJobCount(Engine engine) {

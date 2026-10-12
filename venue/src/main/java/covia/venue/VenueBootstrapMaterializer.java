@@ -1,8 +1,10 @@
 package covia.venue;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import java.util.function.Consumer;
 
 import convex.core.data.ACell;
@@ -160,6 +162,101 @@ final class VenueBootstrapMaterializer {
 			if (adapter == null) continue;
 			writeAdapterDeclarations(adapter);
 		}
+		retractRetiredOperations();
+	}
+
+	/** Operation catalog roots whose entries are adapter declarations. */
+	private static final List<String> OPERATION_ROOTS = List.of("v/ops", "v/test/ops");
+
+	/**
+	 * Retracts canonical operation entries their own adapter no longer declares
+	 * (#572). Canonical paths are written in place and otherwise never cleared,
+	 * so an operation an adapter retires (e.g. the {@code skills:manage}
+	 * umbrella at {@code v/ops/skills}) outlives the code that served it.
+	 *
+	 * <p>An entry is retracted only when it names an <em>installed</em> adapter
+	 * and sits in that adapter's own namespace ({@code v/ops/<adapter>…}): the
+	 * adapter has just declared everything it serves there, so an undeclared
+	 * path is retired. Everything else stays: entries of adapters not installed
+	 * now (disabled, or a module not loaded), entries naming no adapter, and
+	 * entries elsewhere in the tree that an operator may have written, as the
+	 * durable venue metadata {@link #dematerialiseAdapter} documents.</p>
+	 *
+	 * <p>A retired entry with catalog entries beneath it keeps them and loses
+	 * only its own metadata, so retiring an umbrella never hides the operations
+	 * that replaced it.</p>
+	 */
+	private void retractRetiredOperations() {
+		Set<String> installed = new HashSet<>();
+		Set<String> declared = new HashSet<>();
+		for (String adapterName : adapterNames) {
+			AAdapter adapter = engine.getAdapter(adapterName);
+			if (adapter == null) continue;
+			installed.add(adapterName);
+			declared.addAll(adapter.getOperationPaths());
+		}
+		List<String> retired = new ArrayList<>();
+		for (String root : OPERATION_ROOTS) {
+			collectRetired(readVenuePath(root), root, root, installed, declared, retired);
+		}
+		// Deepest first, so retracting a parent never removes a path still to visit.
+		retired.sort((a, b) -> Integer.compare(b.length(), a.length()));
+		for (String path : retired) {
+			ACell node = readVenuePath(path);
+			if (!(node instanceof AMap<?, ?> map)) continue;
+			AMap<AString, ACell> children = catalogChildren(map);
+			if (children.isEmpty()) {
+				deleteVenuePath(path);
+			} else {
+				writeAndValidateVenuePath(path, children);
+			}
+			log.info("Retracted retired catalog operation /{}", path);
+		}
+	}
+
+	private static void collectRetired(ACell node, String root, String path,
+			Set<String> installed, Set<String> declared, List<String> retired) {
+		if (!(node instanceof AMap<?, ?> map)) return;
+		boolean operation = map.get(Fields.OPERATION) instanceof AMap;
+		if (operation) {
+			@SuppressWarnings("unchecked")
+			String adapterName = AAdapter.getAdapterName((AMap<AString, ACell>) map);
+			if (adapterName != null && installed.contains(adapterName)
+					&& inNamespace(root, path, adapterName) && !declared.contains(path)) {
+				retired.add(path);
+			}
+		}
+		for (var entry : map.entrySet()) {
+			if (operation && Fields.OPERATION.equals(entry.getKey())) continue;
+			collectRetired(entry.getValue(), root, path + "/" + entry.getKey(), installed, declared, retired);
+		}
+	}
+
+	/** Whether {@code path} is {@code <root>/<adapter>} or below it. */
+	private static boolean inNamespace(String root, String path, String adapterName) {
+		String namespace = root + "/" + adapterName;
+		return path.equals(namespace) || path.startsWith(namespace + "/");
+	}
+
+	/** The entries beneath a catalog node that hold catalog operations, without the node's own metadata. */
+	private static AMap<AString, ACell> catalogChildren(AMap<?, ?> node) {
+		AMap<AString, ACell> children = Maps.empty();
+		for (var entry : node.entrySet()) {
+			if (Fields.OPERATION.equals(entry.getKey())) continue;
+			if (entry.getKey() instanceof AString key && holdsOperation(entry.getValue())) {
+				children = children.assoc(key, entry.getValue());
+			}
+		}
+		return children;
+	}
+
+	private static boolean holdsOperation(ACell node) {
+		if (!(node instanceof AMap<?, ?> map)) return false;
+		if (map.get(Fields.OPERATION) instanceof AMap) return true;
+		for (var entry : map.entrySet()) {
+			if (holdsOperation(entry.getValue())) return true;
+		}
+		return false;
 	}
 
 	/** An adapter's catalog declarations at their canonical paths and in its own {@code v/adapters/<name>/} subtree. */

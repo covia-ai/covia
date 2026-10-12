@@ -8,6 +8,14 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- Bootstrap retracts `v/ops` and `v/test/ops` entries that their own,
+  installed adapter no longer declares in its namespace, such as the retired
+  `skills:manage` umbrella at `v/ops/skills`. Operations beneath a retracted
+  entry stay. Entries of adapters not installed, and entries outside an
+  adapter's namespace, are kept (#572).
+
 ### Changed
 
 - SLF4J 2.0.20, Logback 1.6.5, A2A 1.4.0.Final, JDA 6.7.0, Telegram Bot API
