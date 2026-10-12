@@ -220,9 +220,14 @@ public class User extends ALatticeComponent<ACell> {
 	 */
 	public AgentState createAgent(AString agentId, AMap<AString, ACell> config,
 			ACell initialState) {
+		return createAgent(agentId, config, initialState, null);
+	}
+
+	public AgentState createAgent(AString agentId, AMap<AString, ACell> config,
+			ACell initialState, AMap<AString, ACell> definition) {
 		ALatticeCursor<ACell> c = cursor.path(Namespace.G, agentId);
 		AgentState state = new AgentState(this, c, agentId);
-		return state.initialiseIfAbsent(config, initialState) ? state : null;
+		return state.initialiseIfAbsent(config, initialState, definition) ? state : null;
 	}
 
 	/**

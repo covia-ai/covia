@@ -44,6 +44,7 @@ import covia.adapter.agent.Skills;
 import covia.adapter.agent.ContextLoader;
 import covia.adapter.agent.Loads;
 import covia.api.Fields;
+import covia.adapter.agent.ExternalAgents;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Admission;
@@ -82,6 +83,25 @@ import covia.venue.Users;
  * safety. Startup clears stale RUNNING markers before scheduling work.</p>
  */
 public class AgentAdapter extends AAdapter {
+	private ExternalAgents externalAgents() {
+		return new ExternalAgents(engine);
+	}
+
+	private void requireNative(AgentState agent, String operation) {
+		if (externalAgents().isExternal(agent))
+			throw new UnsupportedOperationException(ExternalAgents.UNSUPPORTED + operation);
+	}
+
+	private boolean externalTurn(Job job, RequestContext ctx, AgentTarget target,
+			AgentState agent, String operation, ACell input) {
+		if (!externalAgents().isExternal(agent)) return false;
+		SessionSpec session = resolveSessionForChat(job, input);
+		if (session != null) job.start(() -> externalAgents().start(job, ctx,
+			target.ownerDID(), target.agentId(), target.address(), agent, operation,
+			input, session.id(), session.supplied()));
+		return true;
+	}
+
 
 	private static final Logger log = LoggerFactory.getLogger(AgentAdapter.class);
 
@@ -616,6 +636,7 @@ public class AgentAdapter extends AAdapter {
 	private ACell doKick(RequestContext ctx, ACell input) {
 		AgentTarget target = resolveAgentTarget(ctx, input, Fields.AGENT_ID,
 			Abilities.AGENT_REQUEST, false);
+		requireNative(getAgent(target.ownerDID(), target.agentId()), "trigger");
 		wakeAgent(target.ownerDID(), target.agentId(), parseForce(input));
 		AgentState agent = getAgent(target.ownerDID(), target.agentId());
 		return identify(target, Maps.of(
@@ -686,6 +707,34 @@ public class AgentAdapter extends AAdapter {
 		if (existing != null && existing.exists()) {
 			job.fail("Agent already exists: " + agentId
 				+ "; update it, or delete it with remove=true before creating it again");
+			return;
+		}
+
+		AMap<AString, ACell> supplied = RT.ensureMap(input);
+		ACell facet = supplied == null ? null : supplied.get(AgentState.KEY_AGENT);
+		boolean explicitFacet = supplied != null && supplied.containsKey(AgentState.KEY_AGENT);
+		if (!explicitFacet) {
+			AString reference = RT.ensureString(RT.getIn(input, Fields.DEFINITION));
+			if (reference != null) {
+				Asset definition = engine.resolveAsset(reference, ctx);
+				ACell metadata = definition == null ? engine.resolvePath(reference, ctx) : definition.meta();
+				AMap<AString, ACell> candidate = RT.ensureMap(RT.getIn(metadata, AgentState.KEY_AGENT));
+				if (candidate != null && candidate.containsKey(Fields.ADAPTER)) {
+					facet = candidate;
+					explicitFacet = true;
+				}
+			}
+		}
+		if (explicitFacet) {
+			AMap<AString, ACell> definition = externalAgents().validate(facet);
+			AMap<AString, ACell> config = parseConfigArg(RT.getIn(input, Fields.CONFIG), ctx);
+			if (config == null) config = Maps.empty();
+			validateComposedConfig(config);
+			AgentState created = user.createAgent(agentId, config,
+				RT.getIn(input, AgentState.KEY_STATE), definition);
+			if (created == null) throw new IllegalArgumentException("Agent already exists: " + agentId);
+			job.setStatus(Status.STARTED);
+			job.completeWith(identify(target, Maps.of(Fields.STATUS, created.getStatus(), AgentState.KEY_AGENT, definition)));
 			return;
 		}
 
@@ -1254,6 +1303,7 @@ public class AgentAdapter extends AAdapter {
 		AgentTarget sourceTarget = resolveAgentTarget(ctx, input, K_SOURCE_ID,
 			Abilities.AGENT_FORK, false);
 		AString sourceId = sourceTarget.agentId();
+		requireNative(getAgent(sourceTarget.ownerDID(), sourceId), "fork");
 
 		// Resolve source agent
 		User sourceUser = sourceTarget.user();
@@ -1339,6 +1389,7 @@ public class AgentAdapter extends AAdapter {
 		AgentState agent = lookupAgent(job, target);
 		if (agent == null) return;
 		if (failIfSuspended(job, agent, agentId)) return;
+		if (externalTurn(job, ctx, target, agent, "request", input)) return;
 
 		// Mint or reuse a session for this request. Stage 1 scaffold — the
 		// sid is recorded on the task row and returned in the response
@@ -1418,6 +1469,22 @@ public class AgentAdapter extends AAdapter {
 
 		ACell messageContent = RT.getIn(input, Fields.MESSAGE);
 		if (messageContent == null) { job.fail("message is required"); return; }
+
+		if (externalAgents().isExternal(agent)) {
+			if (failIfSuspended(job, agent, agentId)) return;
+			ACell task = RT.getIn(input, Fields.TASK_ID);
+			Blob sid = parseSessionId(RT.ensureString(RT.getIn(input, Fields.SESSION_ID)));
+			if (sid == null && task != null) {
+				Job parent = engine.jobs().getJob(Job.parseID(task));
+				if (parent != null) sid = parseSessionId(RT.ensureString(parent.getData().get(Fields.SESSION_ID)));
+			}
+			if (sid == null) throw new IllegalArgumentException(ExternalAgents.NO_ACTIVE_TURN);
+			externalAgents().deliver(agent, task, sid, messageContent);
+			job.setStatus(Status.STARTED);
+			job.completeWith(identify(target, Maps.of(Fields.SESSION_ID, Strings.create(sid.toHexString()),
+				Strings.intern("delivered"), CVMBool.TRUE)));
+			return;
+		}
 
 		AString taskIdHex = RT.ensureString(RT.getIn(input, Fields.TASK_ID));
 		Blob taskId = null;
@@ -1515,6 +1582,7 @@ public class AgentAdapter extends AAdapter {
 		AgentState agent = lookupAgent(job, target);
 		if (agent == null) return;
 		if (failIfSuspended(job, agent, agentId)) return;
+		if (externalTurn(job, ctx, target, agent, "chat", input)) return;
 
 		SessionSpec session = resolveSessionForChat(job, input);
 		if (session == null) return;
@@ -1634,6 +1702,7 @@ public class AgentAdapter extends AAdapter {
 		AgentTarget target = resolveAgentTarget(ctx, input, Fields.AGENT_ID, ability, false);
 		AgentState agent = lookupAgent(job, target);
 		if (agent == null || failIfSuspended(job, agent, target.agentId())) return null;
+		requireNative(agent, "query/summarise");
 
 		// One immutable record supplies config, state and session, even if the
 		// live agent is concurrently accepting work or advancing a conversation.
@@ -1724,6 +1793,7 @@ public class AgentAdapter extends AAdapter {
 
 		AgentState agent = lookupAgent(job, target);
 		if (agent == null) return;
+		requireNative(agent, "trigger");
 		if (failIfSuspended(job, agent, agentId)) return;
 
 		// Trigger never creates a session. A supplied sessionId is resolved
@@ -1831,6 +1901,7 @@ public class AgentAdapter extends AAdapter {
 			Fields.AWAITING, awaitingSummary(record),
 			Fields.CONFIG, record.get(AgentState.KEY_CONFIG)));
 
+		if (record.containsKey(AgentState.KEY_AGENT)) summary = summary.assoc(AgentState.KEY_AGENT, record.get(AgentState.KEY_AGENT));
 		if (timeline != null) summary = summary.assoc(Strings.intern("timelineLength"), CVMLong.create(timeline.count()));
 		if (tasks != null) summary = summary.assoc(Strings.intern("tasks"), CVMLong.create(tasks.count()));
 		ACell error = record.get(AgentState.KEY_ERROR);
@@ -1926,6 +1997,7 @@ public class AgentAdapter extends AAdapter {
 		AgentState agent = user.agent(agentId);
 		if (agent == null) { job.fail("Agent not found: " + agentId); return null; }
 
+		requireNative(agent, "context/step");
 		AMap<AString, ACell> record = agent.getRecord();
 		AMap<AString, ACell> recordConfig = (record.get(AgentState.KEY_CONFIG) instanceof AMap m)
 			? (AMap<AString, ACell>) m : null;
@@ -2381,6 +2453,7 @@ public class AgentAdapter extends AAdapter {
 			if (!haltAgent(job, user, agent, agentId, ctx,
 					"Agent deleted: " + agentId, "delete")) return null;
 		}
+		if (externalAgents().isExternal(agent)) externalAgents().cancelAll(agent);
 		if (remove) {
 			user.removeAgent(agentId);
 			return identify(target, Maps.of(Fields.REMOVED, CVMBool.TRUE));
@@ -2397,6 +2470,7 @@ public class AgentAdapter extends AAdapter {
 		if (agent == null) return;
 
 		agent.setStatus(AgentState.SUSPENDED);
+		if (externalAgents().isExternal(agent)) externalAgents().cancelAll(agent);
 		engine.agentEvents().status(target.ownerDID(), agentId, AgentState.SUSPENDED, null);
 
 		// Cancel any active transition so the agent stops promptly (the token
@@ -2441,6 +2515,8 @@ public class AgentAdapter extends AAdapter {
 
 		AgentState agent = lookupAgent(job, target);
 		if (agent == null) return;
+		if (RT.ensureMap(input).containsKey(AgentState.KEY_AGENT))
+			throw new IllegalArgumentException(ExternalAgents.IMMUTABLE_DEFINITION);
 		// Config changes apply to future transitions: a transition already
 		// running keeps the snapshot it fired with (transitionInput.config) and
 		// the next cycle re-reads the record. State is merged by the run loop as
@@ -2523,6 +2599,7 @@ public class AgentAdapter extends AAdapter {
 
 		AgentState agent = lookupAgent(job, target);
 		if (agent == null) return;
+		requireNative(agent, "cancelTask");
 
 		// Parse hex task ID to Blob
 		Blob taskId;
@@ -2595,6 +2672,7 @@ public class AgentAdapter extends AAdapter {
 
 		AgentState agent = lookupAgent(job, target);
 		if (agent == null) return;
+		requireNative(agent, "deleteSession");
 
 		Blob sid = parseSessionId(sidHex);
 		if (sid == null) { job.fail("Invalid sessionId format: " + sidHex); return; }
@@ -2642,6 +2720,7 @@ public class AgentAdapter extends AAdapter {
 
 		AgentState agent = lookupAgent(job, target);
 		if (agent == null) return;
+		requireNative(agent, "renameSession");
 
 		Blob sid = parseSessionId(sidHex);
 		if (sid == null) { job.fail("Invalid sessionId format: " + sidHex); return; }
@@ -2682,6 +2761,7 @@ public class AgentAdapter extends AAdapter {
 
 		AgentState agent = lookupAgent(job, target);
 		if (agent == null) return;
+		requireNative(agent, "compactSession");
 		Blob sid = parseSessionId(sidHex);
 		if (sid == null) { job.fail("Invalid sessionId format: " + sidHex); return; }
 		if (agent.getSession(sid) == null) { job.fail("Session not found: " + sidHex); return; }
@@ -2737,6 +2817,7 @@ public class AgentAdapter extends AAdapter {
 
 		AgentState agent = lookupAgent(job, target);
 		if (agent == null) return;
+		requireNative(agent, "reloadContext");
 		Blob sid = parseSessionId(sidHex);
 		if (sid == null) { job.fail("Invalid sessionId format: " + sidHex); return; }
 		if (agent.getSession(sid) == null) { job.fail("Session not found: " + sidHex); return; }
@@ -3094,6 +3175,19 @@ public class AgentAdapter extends AAdapter {
 
 	// ========== Durability: tasks and chats outlive the process ==========
 
+	@Override public boolean supportsMultiTurn() { return true; }
+
+	@Override public void handleMessage(Job job, AMap<AString, ACell> messageRecord) {
+		if (!externalAgents().owns(job)) { super.handleMessage(job, messageRecord); return; }
+		ACell childId = job.getData().get(ExternalAgents.CHILD);
+		Job child = childId == null ? null : engine.jobs().getJob(Job.parseID(childId));
+		if (child == null) throw new IllegalStateException(ExternalAgents.MISSING_CHILD);
+		AString owner = RT.ensureString(job.getData().get(Strings.intern("agentOwner")));
+		AgentState agent = getAgent(owner, RT.ensureString(job.getData().get(Fields.AGENT_ID)));
+		externalAgents().backend(externalAgents().validate(agent.getRecord().get(AgentState.KEY_AGENT)))
+			.handleMessage(child, messageRecord);
+	}
+
 	/**
 	 * A request Job is the task itself and a chat Job is answered from the
 	 * session's durable pending envelope: neither holds a thread, and both
@@ -3105,12 +3199,14 @@ public class AgentAdapter extends AAdapter {
 	 */
 	@Override
 	public void suspendJob(Job job) {
+		if (externalAgents().owns(job)) return;
 		if (intakeStillQueued(job, false)) return;
 		super.suspendJob(job);
 	}
 
 	@Override
 	public void recoverJob(Job job) {
+		if (externalAgents().recover(job)) return;
 		if (intakeStillQueued(job, true)) return;
 		super.recoverJob(job);
 	}
@@ -3290,6 +3386,7 @@ public class AgentAdapter extends AAdapter {
 	public CompletableFuture<ACell> wakeAgent(AString ownerDID, AString agentId, boolean force) {
 		AgentState agent = getAgent(ownerDID, agentId);
 		if (agent == null) return null;
+		if (externalAgents().isExternal(agent)) return null;
 		// Shutdown: no new loop. Queued work waits durably for the next boot.
 		if (engine.isClosing()) return null;
 
@@ -3369,7 +3466,7 @@ public class AgentAdapter extends AAdapter {
 	public boolean deliverSessionMessage(AString ownerDID, AString agentId, Blob sessionId,
 			AString caller, AString jobId, ACell message) {
 		AgentState agent = getAgent(ownerDID, agentId);
-		if (agent == null) return false;
+		if (agent == null || externalAgents().isExternal(agent)) return false;
 		AMap<AString, ACell> envelope = Maps.of(
 			Fields.CALLER, caller,
 			Fields.SESSION_ID, Strings.create(sessionId.toHexString()),
@@ -4584,6 +4681,7 @@ public class AgentAdapter extends AAdapter {
 				AString agentId = agentEntry.getKey();
 				AgentState agent = getAgent(did, agentId);
 				if (agent == null) continue;   // terminated / missing
+				if (externalAgents().isExternal(agent)) { externalAgents().reconcile(agent); continue; }
 				AgentKey key = new AgentKey(did, agentId);
 				// This method is a startup hook, but keep it safe if an embedding
 				// invokes it after launch: never reconcile beneath a live executor.

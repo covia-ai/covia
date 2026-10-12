@@ -69,6 +69,12 @@ layer. `agent.config` may itself be a map, a reference, or an ordered layer
 vector. For compatibility, flat config maps remain valid in workspace and as
 inline layers. An optional `agent.state` supplies initial state.
 
+This construction-time `agent.config` facet remains distinct from the optional
+live `g/<id>/agent` implementation selector. Native templates continue to create
+native agents without that live selector. External definitions with
+`agent.adapter` and `agent:create.definition` are described in
+[AGENT_LOOP.md §2.2.1](./AGENT_LOOP.md#221-agent-definitions-and-external-implementations).
+
 ### Templates live where data lives
 
 Templates are stored in the same places as all other user data:

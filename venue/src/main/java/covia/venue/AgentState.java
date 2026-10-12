@@ -28,6 +28,9 @@ import covia.api.Fields;
  */
 public class AgentState extends ALatticeComponent<ACell> {
 
+	public static final AString KEY_AGENT = Strings.intern("agent");
+	public static final AString KEY_EXTERNAL = Strings.intern("external");
+
 	// Record field keys
 	private static final AString K_TS       = Strings.intern("ts");
 	private static final AString K_STATUS   = Strings.intern("status");
@@ -218,6 +221,10 @@ public class AgentState extends ALatticeComponent<ACell> {
 
 	/** Atomically initialises this record, returning false if it already exists. */
 	boolean initialiseIfAbsent(AMap<AString, ACell> config, ACell initialState) {
+		return initialiseIfAbsent(config, initialState, null);
+	}
+
+	boolean initialiseIfAbsent(AMap<AString, ACell> config, ACell initialState, AMap<AString, ACell> definition) {
 		AMap<AString, ACell> record = Maps.of(
 			K_STATUS, SLEEPING,
 			K_TASKS, Index.none(),
@@ -226,6 +233,7 @@ public class AgentState extends ALatticeComponent<ACell> {
 			K_TIMELINE, Vectors.empty());
 		if (config != null) record = record.assoc(K_CONFIG, config);
 		if (initialState != null) record = record.assoc(K_STATE, initialState);
+		if (definition != null) record = record.assoc(KEY_AGENT, definition);
 		AMap<AString, ACell> initial = record.assoc(K_TS, now());
 		return cursor.getAndUpdate(current -> (current == null) ? initial : current) == null;
 	}
@@ -392,6 +400,45 @@ public class AgentState extends ALatticeComponent<ACell> {
 			return r.assoc(K_SESSIONS, sessions.assoc(sid, session));
 		});
 		return getSession(sid);
+	}
+
+	/** Claim one external turn per session. A retained claim after restart prevents blind replay. */
+	@SuppressWarnings("unchecked")
+	public boolean claimExternalTurn(Blob sid, Blob jobId, AString caller, ACell content, boolean create) {
+		AMap<AString, ACell> result = update(r -> {
+			if (TERMINATED.equals(r.get(K_STATUS)) || SUSPENDED.equals(r.get(K_STATUS))) return r;
+			Index<Blob, ACell> sessions = (Index<Blob, ACell>) r.get(K_SESSIONS);
+			AMap<AString, ACell> session = RT.ensureMap(sessions.get(sid));
+			if (session == null) {
+				if (!create) return r;
+				session = newSession(caller, null, now());
+			}
+			AMap<AString, ACell> external = RT.ensureMap(session.get(KEY_EXTERNAL));
+			if (external == null) external = Maps.empty();
+			if (external.get(Fields.JOB_ID) != null) return r;
+			session = appendTurnsToRoot(session, Vectors.of(Maps.of(K_ROLE, ROLE_USER,
+				K_CONTENT, content, K_SOURCE, SOURCE_CHAT, K_TURN_TS, now())));
+			session = session.assoc(KEY_EXTERNAL, external.assoc(Fields.JOB_ID, jobId));
+			return r.assoc(K_SESSIONS, sessions.assoc(sid, session));
+		});
+		return result != null && jobId.equals(RT.getIn(result, K_SESSIONS, sid, KEY_EXTERNAL, Fields.JOB_ID));
+	}
+
+	/** Persist identity before exposing completion; only the claiming job may release the session. */
+	@SuppressWarnings("unchecked")
+	public void finishExternalTurn(Blob sid, Blob jobId, ACell remoteSession, ACell response) {
+		update(r -> {
+			Index<Blob, ACell> sessions = (Index<Blob, ACell>) r.get(K_SESSIONS);
+			AMap<AString, ACell> session = RT.ensureMap(sessions.get(sid));
+			if (session == null) return r;
+			AMap<AString, ACell> external = RT.ensureMap(session.get(KEY_EXTERNAL));
+			if (external == null || !jobId.equals(external.get(Fields.JOB_ID))) return r;
+			external = external.dissoc(Fields.JOB_ID);
+			if (remoteSession != null) external = external.assoc(Fields.SESSION_ID, remoteSession);
+			if (response != null) session = appendTurnsToRoot(session, Vectors.of(Maps.of(K_ROLE,
+				ROLE_ASSISTANT, K_CONTENT, response, K_SOURCE, SOURCE_CHAT, K_TURN_TS, now())));
+			return r.assoc(K_SESSIONS, sessions.assoc(sid, session.assoc(KEY_EXTERNAL, external)));
+		});
 	}
 
 	private static AMap<AString, ACell> newSession(AString caller,

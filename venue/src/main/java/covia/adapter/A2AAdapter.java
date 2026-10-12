@@ -12,8 +12,6 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.Consumer;
 
 import org.a2aproject.sdk.jsonrpc.common.json.JsonUtil;
 import org.a2aproject.sdk.spec.A2AMethods;
@@ -32,6 +30,8 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
+import covia.adapter.remote.ARemoteAgentAdapter;
+import covia.adapter.remote.RemoteInteraction;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.ResponseException;
@@ -61,7 +61,7 @@ import covia.venue.api.A2ACodec;
  * the card-driven transport configuration here, and going direct keeps
  * error handling explicit.</p>
  */
-public class A2AAdapter extends AAdapter {
+public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 
 	public static final Logger log = LoggerFactory.getLogger(A2AAdapter.class);
 
@@ -95,8 +95,11 @@ public class A2AAdapter extends AAdapter {
 	private final HttpClient httpClient;
 
 	/** The remote Task each live mirror Job is bound to, for cancellation and continuation. */
-	private record RemoteLink(String rpcUrl, String remoteTaskId, RequestAuth auth) {}
-	private final ConcurrentHashMap<Job, RemoteLink> links = new ConcurrentHashMap<>();
+	private record RemoteLink(A2AAdapter adapter, Job job, String rpcUrl, String remoteTaskId,
+		RequestAuth auth) implements RemoteInteraction {
+		@Override public void deliver(AMap<AString, ACell> message) { adapter.deliver(job, this, message); }
+		@Override public void cancel() { adapter.fireAndForgetCancel(rpcUrl, remoteTaskId, auth); }
+	}
 
 	public A2AAdapter() {
 		this.httpClient = HttpClient.newBuilder()
@@ -141,16 +144,34 @@ public class A2AAdapter extends AAdapter {
 	 * default future-based dispatch.
 	 */
 	@Override
-	public void invoke(Job job, RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		// The send branch bypasses AAdapter's future-based default, so pin the
-		// operation capability before it performs any outbound work.
-		requireInvoke(ctx);
-		String subOp = getSubOperation(meta);
-		if ("send".equals(subOp) || "rawSend".equals(subOp)) {
-			doSendMirrored(job, ctx, input, "rawSend".equals(subOp));
-			return;
-		}
-		super.invoke(job, ctx, meta, input);
+	protected boolean isInteractionOperation(String operation) {
+		return "send".equals(operation) || "rawSend".equals(operation);
+	}
+
+	@Override public void validateAgent(AMap<AString, ACell> definition) {
+		if (RT.ensureString(definition.get(K_ENDPOINT)) == null || RT.ensureMap(definition.get(K_CARD)) == null)
+			throw new IllegalArgumentException(INVALID_AGENT_DEFINITION + "A2A requires endpoint and card");
+	}
+
+	@Override public AgentInvocation agentInvocation(String operation, AMap<AString, ACell> definition,
+			ACell content, ACell session) {
+		if (!"chat".equals(operation) && !"request".equals(operation))
+			return super.agentInvocation(operation, definition, content, session);
+		AMap<AString, ACell> part = content instanceof AString
+			? Maps.of(Fields.TYPE, "text", Fields.TEXT, content)
+			: Maps.of(Fields.TYPE, "data", "data", content);
+		AMap<AString, ACell> message = Maps.of("parts", convex.core.data.Vectors.of(part));
+		if (session != null) message = message.assoc(Strings.intern("contextId"), session);
+		return new AgentInvocation("send", Maps.of(K_AGENT, Maps.of(K_AGENT, definition), Fields.MESSAGE, message));
+	}
+
+	@Override public ACell agentSession(Job job) {
+		return RT.getIn(job.getData(), Fields.OUTPUT, "contextId");
+	}
+
+	@Override
+	protected void startInteraction(Job job, RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+		doSendMirrored(job, ctx, input, "rawSend".equals(getSubOperation(meta)));
 	}
 
 	@Override
@@ -303,7 +324,8 @@ public class A2AAdapter extends AAdapter {
 			AMap<AString, ACell> metadata = Maps.of(
 				Fields.NAME, displayName != null ? displayName : nameCell,
 				Fields.TYPE, TYPE_A2A_AGENT,
-				Fields.A2A, a2a);
+				Fields.A2A, a2a,
+				K_AGENT, a2a.assoc(Fields.ADAPTER, Strings.create("a2a")));
 			if (description != null) metadata = metadata.assoc(Fields.DESCRIPTION, description);
 
 			Hash id = engine.storeUserAsset(JSON.printPretty(metadata), null, ctx);
@@ -378,10 +400,17 @@ public class A2AAdapter extends AAdapter {
 			throw new IllegalArgumentException("Cannot resolve A2A agent asset: " + ref);
 		}
 		AMap<AString, ACell> metadata = (AMap<AString, ACell>) value;
-		if (!TYPE_A2A_AGENT.equals(RT.ensureString(metadata.get(Fields.TYPE)))) {
-			throw new IllegalArgumentException("Asset is not type 'a2a-agent': " + ref);
+		AMap<AString, ACell> a2a;
+		if (metadata.containsKey(K_AGENT)) {
+			a2a = RT.ensureMap(metadata.get(K_AGENT));
+			if (a2a == null || !Strings.create("a2a").equals(a2a.get(Fields.ADAPTER)))
+				throw new IllegalArgumentException(INVALID_AGENT_DEFINITION + "expected a2a adapter");
+		} else {
+			if (!TYPE_A2A_AGENT.equals(RT.ensureString(metadata.get(Fields.TYPE)))) {
+				throw new IllegalArgumentException("Asset is not type 'a2a-agent': " + ref);
+			}
+			a2a = RT.ensureMap(metadata.get(Fields.A2A));
 		}
-		AMap<AString, ACell> a2a = RT.ensureMap(metadata.get(Fields.A2A));
 		if (a2a == null) throw new IllegalArgumentException("A2A agent asset has no 'a2a' profile");
 		AString endpoint = RT.ensureString(a2a.get(K_ENDPOINT));
 		AMap<AString, ACell> card = RT.ensureMap(a2a.get(K_CARD));
@@ -667,7 +696,6 @@ public class A2AAdapter extends AAdapter {
 			new org.a2aproject.sdk.spec.MessageSendConfiguration(null, null, null, true), null);
 		Map<String, Object> envelope = rpcEnvelope(A2AMethods.SEND_MESSAGE_METHOD, params);
 
-		job.setStatus(Status.STARTED);
 
 		HttpRequest req = postEnvelope(rpcUrl, envelope, auth);
 		AMap<AString, ACell> credentials = auth == null ? Maps.empty() : Maps.of(
@@ -776,25 +804,10 @@ public class A2AAdapter extends AAdapter {
 	 * the Task, and a message delivered to the Job continues it.
 	 */
 	private void bind(Job job, String rpcUrl, String remoteTaskId, RequestAuth auth) {
-		job.setCancelHook(() -> fireAndForgetCancel(rpcUrl, remoteTaskId, auth));
-		if (links.put(job, new RemoteLink(rpcUrl, remoteTaskId, auth)) != null) return;
-		Consumer<Job> release = new Consumer<>() {
-			@Override public void accept(Job j) {
-				if (!j.isFinished()) return;
-				links.remove(j);
-				j.unsubscribe(this);
-			}
-		};
-		job.subscribe(release);
-		release.accept(job);
+		bindInteraction(job, new RemoteLink(this, job, rpcUrl, remoteTaskId, auth));
 	}
 
 	// ==================== continuation of a mirrored Task ====================
-
-	@Override
-	public boolean supportsMultiTurn() {
-		return true;
-	}
 
 	/**
 	 * Relay input delivered to a mirror Job to its remote Task (#507). An
@@ -806,12 +819,7 @@ public class A2AAdapter extends AAdapter {
 	 * unacknowledged send changes nothing locally and is thrown to the
 	 * deliverer, so a reply is never silently dropped.</p>
 	 */
-	@Override
-	public void handleMessage(Job job, AMap<AString, ACell> messageRecord) {
-		RemoteLink link = links.get(job);
-		if (link == null) {
-			throw new IllegalStateException("Job has no accepted remote A2A task to continue");
-		}
+	private void deliver(Job job, RemoteLink link, AMap<AString, ACell> messageRecord) {
 		MessageSendParams params = new MessageSendParams(
 			continuation(job, link, messageRecord.get(Fields.MESSAGE)),
 			new org.a2aproject.sdk.spec.MessageSendConfiguration(null, null, null, true), null);

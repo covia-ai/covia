@@ -8,13 +8,10 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Consumer;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,7 +27,8 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
-import covia.adapter.AAdapter;
+import covia.adapter.remote.ARemoteAgentAdapter;
+import covia.adapter.remote.RemoteInteraction;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.grid.Job;
@@ -82,11 +80,12 @@ import covia.venue.RequestContext;
  *       project registry (venue authority).</li>
  * </ul>
  */
-public class ClaudeCodeAdapter extends AAdapter implements AutoCloseable {
+public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> implements AutoCloseable {
 
 	private static final Logger log = LoggerFactory.getLogger(ClaudeCodeAdapter.class);
 
 	public static final String NAME = "claudecode";
+	public static final String MESSAGE_REQUIRED = "Claude Code message requires text";
 
 	static final AString K_COMMAND = Strings.intern("command");
 	static final AString K_ENV = RunOptions.ENV;
@@ -141,8 +140,6 @@ public class ClaudeCodeAdapter extends AAdapter implements AutoCloseable {
 	private final Set<ClaudeSession> pool = new LinkedHashSet<>();
 	/** Sessions by Claude Code session id, once known. Guarded by {@code pool}. */
 	private final Map<String, ClaudeSession> byId = new LinkedHashMap<>();
-	/** Live {@code claudecode:session} jobs. */
-	private final Map<Blob, SessionJob> sessionJobs = new ConcurrentHashMap<>();
 
 	private final ScheduledExecutorService reaper = Executors.newSingleThreadScheduledExecutor(r -> {
 		Thread t = new Thread(r, "claudecode-reaper");
@@ -312,7 +309,7 @@ public class ClaudeCodeAdapter extends AAdapter implements AutoCloseable {
 			byId.clear();
 		}
 		for (ClaudeSession s : all) s.stop("adapter closed");
-		sessionJobs.clear();
+		clearInteractions();
 	}
 
 	// ----------------------------------------------------------- session support
@@ -443,7 +440,7 @@ public class ClaudeCodeAdapter extends AAdapter implements AutoCloseable {
 
 	/** Test hook: drop a session job's live state (simulates a venue restart). */
 	void forgetSessionJobForTest(Blob jobId) {
-		sessionJobs.remove(jobId);
+		forgetInteraction(jobId);
 	}
 
 	/** The known sessions (live and stopped), oldest first. */
@@ -499,24 +496,36 @@ public class ClaudeCodeAdapter extends AAdapter implements AutoCloseable {
 	// ---------------------------------------------------------------- operations
 
 	@Override
-	public boolean supportsMultiTurn() {
-		return true;
+	protected boolean isInteractionOperation(String operation) {
+		return "run".equals(operation) || "session".equals(operation);
 	}
 
+	@Override public void validateAgent(AMap<AString, ACell> definition) {
+		AString project = RT.ensureString(definition.get(K_PROJECT));
+		if (project == null || project.toString().isBlank())
+			throw new IllegalArgumentException(INVALID_AGENT_DEFINITION + "Claude Code requires project");
+	}
+
+	@Override public AgentInvocation agentInvocation(String operation, AMap<AString, ACell> definition,
+			ACell content, ACell session) {
+		if (!"chat".equals(operation) && !"request".equals(operation))
+			return super.agentInvocation(operation, definition, content, session);
+		AMap<AString, ACell> input = definition.dissoc(Fields.ADAPTER).dissoc(K_SESSION)
+			.assoc(K_PROMPT, content instanceof AString ? content : Strings.create(convex.core.util.JSON.toString(content)));
+		if (session != null) input = input.assoc(K_SESSION, session);
+		return new AgentInvocation("run", input);
+	}
+
+	@Override public ACell agentSession(Job job) {
+		ACell session = RT.getIn(job.getData(), Fields.OUTPUT, K_SESSION);
+		return session == null ? job.getData().get(K_SESSION) : session;
+	}
+
+	@Override public ACell agentOutput(Job job) { return RT.getIn(job.getOutput(), Fields.RESULT); }
+
 	@Override
-	public void invoke(Job job, RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		String subOp = getSubOperation(meta);
-		if ("run".equals(subOp) || "session".equals(subOp)) {
-			try {
-				requireInvoke(ctx);
-				startTurnJob(job, ctx, input, "session".equals(subOp));
-			} catch (RuntimeException e) {
-				job.fail(e);
-				throw e;
-			}
-			return;
-		}
-		super.invoke(job, ctx, meta, input);
+	protected void startInteraction(Job job, RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+		startTurnJob(job, ctx, input, "session".equals(getSubOperation(meta)));
 	}
 
 	@Override
@@ -541,22 +550,8 @@ public class ClaudeCodeAdapter extends AAdapter implements AutoCloseable {
 	 * stays alive for further turns. {@code run} exposes the job's output.
 	 */
 	@Override
-	public CompletableFuture<ACell> resultFuture(Job job, AMap<AString, ACell> meta, ACell input) {
-		if (!"session".equals(getSubOperation(meta))) return job.future();
-		CompletableFuture<ACell> first = new CompletableFuture<>();
-		Consumer<Job> listener = j -> {
-			if (Status.INPUT_REQUIRED.equals(j.getStatus())) {
-				first.complete(j.getData().get(Fields.OUTPUT));
-			} else if (j.isFinished()) {
-				if (Status.COMPLETE.equals(j.getStatus())) first.complete(j.getData().get(Fields.OUTPUT));
-				else first.completeExceptionally(new covia.exception.JobFailedException(
-					j.getErrorMessage() == null ? "Claude Code session ended" : j.getErrorMessage()));
-			}
-		};
-		job.subscribe(listener);
-		listener.accept(job);
-		first.whenComplete((r, e) -> job.unsubscribe(listener));
-		return first;
+	protected boolean returnsFirstReply(String operation) {
+		return "session".equals(operation);
 	}
 
 	// ---- run / session
@@ -657,27 +652,18 @@ public class ClaudeCodeAdapter extends AAdapter implements AutoCloseable {
 	private void startTurnJob(Job job, RequestContext ctx, ACell input, boolean multiTurn) {
 		Plan plan = plan(ctx, input, !multiTurn);
 		SessionJob sj = multiTurn ? new SessionJob(job, ctx, plan) : null;
-		if (sj != null) sessionJobs.put(job.getID(), sj);
-		AtomicReference<CompletableFuture<AMap<AString, ACell>>> turnRef = new AtomicReference<>();
-		AtomicReference<ClaudeSession> sessionRef = new AtomicReference<>();
-		job.setCancelHook(() -> {
-			if (sj != null) sessionJobs.remove(job.getID());
-			ClaudeSession s = sessionRef.get();
-			CompletableFuture<AMap<AString, ACell>> t = turnRef.get();
-			if (s != null && t != null) s.cancel(t);
-			if (sj != null && s != null) s.stop("session job cancelled");
-			synchronized (pool) { pool.notifyAll(); }
-		});
+		TurnInteraction turnBinding = sj != null ? sj : new TurnInteraction();
+		bindInteraction(job, turnBinding);
+
 		job.update(d -> {
 			d = d.assoc(K_PROJECT, Strings.create(plan.project().name()));
 			if (multiTurn) d = d.assoc(K_KIND, KIND_SESSION);
 			if (plan.resumeId() != null) d = d.assoc(K_SESSION, Strings.create(plan.resumeId()));
 			return d;
 		});
-		job.setStatus(Status.STARTED);
+		if (job.isFinished()) return;
 		ClaudeSession session = resolveSession(ctx, plan);
-		sessionRef.set(session);
-		if (sj != null) sj.session = session;
+		turnBinding.session = session;
 		VIRTUAL_EXECUTOR.execute(() -> {
 			try {
 				ClaudeSession s = session;
@@ -689,7 +675,7 @@ public class ClaudeCodeAdapter extends AAdapter implements AutoCloseable {
 					return;
 				}
 				CompletableFuture<AMap<AString, ACell>> turn = s.submit(plan.prompt(), progress -> publishProgress(job, progress));
-				turnRef.set(turn);
+				turnBinding.turn = turn;
 				if (job.isFinished()) { s.cancel(turn); return; }
 				turn.whenComplete((res, err) -> {
 					if (sj != null) sj.turnDone(res, err);
@@ -703,15 +689,6 @@ public class ClaudeCodeAdapter extends AAdapter implements AutoCloseable {
 				}
 			}
 		});
-	}
-
-	private static void publishProgress(Job job, AMap<AString, ACell> progress) {
-		if (job.isFinished()) return;
-		try {
-			job.update(d -> d.assoc(K_PROGRESS, progress));
-		} catch (RuntimeException e) {
-			// job may have just finished; progress is best-effort
-		}
 	}
 
 	/** Complete or fail a {@code run} job from a turn's outcome. */
@@ -750,12 +727,24 @@ public class ClaudeCodeAdapter extends AAdapter implements AutoCloseable {
 
 	// ---- long-lived session jobs
 
+	/** Cancellation covers the currently running turn, including later session turns. */
+	private class TurnInteraction implements RemoteInteraction {
+		volatile ClaudeSession session;
+		volatile CompletableFuture<AMap<AString, ACell>> turn;
+		@Override public void cancel() {
+			ClaudeSession s = session;
+			CompletableFuture<?> t = turn;
+			if (s != null && t != null) s.cancel(t);
+			if (this instanceof SessionJob && s != null) s.stop("session job cancelled");
+			synchronized (pool) { pool.notifyAll(); }
+		}
+	}
+
 	/** The live state of one {@code claudecode:session} job. */
-	private final class SessionJob {
+	private final class SessionJob extends TurnInteraction {
 		final Job job;
 		final RequestContext ctx;
 		final Plan plan;
-		volatile ClaudeSession session;
 		final AtomicInteger pending = new AtomicInteger();
 		int turns;
 
@@ -763,6 +752,14 @@ public class ClaudeCodeAdapter extends AAdapter implements AutoCloseable {
 			this.job = job;
 			this.ctx = ctx;
 			this.plan = plan;
+		}
+
+		@Override public void deliver(AMap<AString, ACell> record) {
+			ACell body = record.get(Fields.MESSAGE);
+			if (RT.bool(RT.getIn(body, K_END))) { end(); return; }
+			String prompt = messageText(body);
+			if (prompt == null) throw new IllegalArgumentException(MESSAGE_REQUIRED);
+			message(prompt);
 		}
 
 		/** Sit in INPUT_REQUIRED with {@code output} as the visible reply. */
@@ -779,7 +776,7 @@ public class ClaudeCodeAdapter extends AAdapter implements AutoCloseable {
 		void turnDone(AMap<AString, ACell> res, Throwable err) {
 			if (job.isFinished()) return;
 			if (err != null) {
-				sessionJobs.remove(job.getID());
+				forgetInteraction(job.getID());
 				settleJob(job, null, err);
 				return;
 			}
@@ -809,11 +806,14 @@ public class ClaudeCodeAdapter extends AAdapter implements AutoCloseable {
 						session = s;
 					}
 					acquireSlot(job, s);        // immediate when the process is still warm
+					if (job.isFinished()) return;
 					CompletableFuture<AMap<AString, ACell>> turn = s.submit(prompt, progress -> publishProgress(job, progress));
+					this.turn = turn;
+					if (job.isFinished()) { s.cancel(turn); return; }
 					turn.whenComplete((res, err) -> { pending.decrementAndGet(); turnDone(res, err); });
 				} catch (Throwable e) {
 					pending.decrementAndGet();
-					sessionJobs.remove(job.getID());
+					forgetInteraction(job.getID());
 					if (unwrap(e) instanceof CancellationException) job.cancel();
 					else job.fail(unwrap(e));
 				}
@@ -826,7 +826,7 @@ public class ClaudeCodeAdapter extends AAdapter implements AutoCloseable {
 		}
 
 		void end() {
-			sessionJobs.remove(job.getID());
+			forgetInteraction(job.getID());
 			ClaudeSession s = session;
 			AMap<AString, ACell> summary = Maps.of(
 				K_PROJECT, Strings.create(plan.project().name()),
@@ -838,34 +838,14 @@ public class ClaudeCodeAdapter extends AAdapter implements AutoCloseable {
 		}
 	}
 
-	@Override
-	public void handleMessage(Job job, AMap<AString, ACell> messageRecord) {
-		SessionJob sj = sessionJobs.get(job.getID());
-		if (sj == null) {
-			// Not one of ours (a run job), or a session job restored after a venue restart.
-			if (!isSessionJob(job)) return;
-			sj = restoreSessionJob(job);
-			if (sj == null) return;
-		}
-		ACell message = messageRecord.get(Fields.MESSAGE);
-		if (RT.bool(RT.getIn(message, K_END))) {
-			sj.end();
-			return;
-		}
-		String prompt = messageText(message);
-		if (prompt == null) {
-			log.debug("Claude Code session job {}: ignoring message without text", job.getID());
-			return;
-		}
-		sj.message(prompt);
-	}
-
 	private static boolean isSessionJob(Job job) {
 		return KIND_SESSION.equals(job.getData().get(K_KIND));
 	}
 
 	/** Rebuild the live state of a session job restored from the lattice (INPUT_REQUIRED at boot). */
-	private SessionJob restoreSessionJob(Job job) {
+	@Override
+	protected RemoteInteraction restoreInteraction(Job job) {
+		if (!isSessionJob(job)) return null;
 		AMap<AString, ACell> data = job.getData();
 		ACell projectName = data.get(K_PROJECT);
 		ProjectSpec project = project(projectName == null ? null : projectName.toString());
@@ -887,9 +867,7 @@ public class ClaudeCodeAdapter extends AAdapter implements AutoCloseable {
 		}
 		ACell sid = data.get(K_SESSION);
 		Plan plan = new Plan(project, defaults.overlay(project.options()), sid == null ? null : sid.toString(), null);
-		SessionJob sj = new SessionJob(job, ctx, plan);
-		SessionJob prev = sessionJobs.putIfAbsent(job.getID(), sj);
-		return prev != null ? prev : sj;
+		return new SessionJob(job, ctx, plan);
 	}
 
 	/** The text of a job message: its {@code prompt}/{@code content}/{@code text}/{@code message} string, or a bare string. */

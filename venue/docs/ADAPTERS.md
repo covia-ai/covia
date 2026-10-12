@@ -223,6 +223,75 @@ ownership, restart recovery, deletion, config/runtime separation, malformed
 records, and any migration from an older layout. A new schema should define
 which version wins during migration and make repeated migration idempotent.
 
+## External agent interactions
+
+`covia.adapter.remote.ARemoteAgentAdapter<I extends RemoteInteraction>` is the
+shared Job-facing base for outbound A2A, Claude Code and native Covia agent
+proxies. External means execution controlled outside Covia's own agent loop;
+the transport may be HTTP, a local CLI, or an SDK.
+
+Subclasses select interaction operations with `isInteractionOperation` and
+implement `startInteraction`. The base claims `Job.start` once, checks invoke
+authority, routes messages, binds cancellation and removes live bindings on
+terminal completion. Administrative operations retain `invokeFuture` dispatch.
+Providers validate their target, credentials, options and resource authority
+before effects. Construct a passive `RemoteInteraction` and bind it with
+`bindInteraction` before starting work, or on remote acceptance when its handle
+first becomes known. Late acceptance after local cancellation still invokes
+the binding's cancel hook.
+
+An interaction implements `deliver(messageRecord)` and `cancel()`. Delivery
+receives the original structured Job message; it must throw on unsupported or
+unacknowledged delivery. Returning means accepted, not completed. Local queue
+acceptance is not durable external acceptance. A task, turn and conversation
+have different completion rules: A2A mirrors the remote task, Claude `run`
+completes after one turn, and Claude `session` waits in INPUT_REQUIRED after
+each reply. Only conversation operations opt into `returnsFirstReply`.
+Progress uses the shared `publishProgress` helper; provider-native results,
+message parts and session/task identifiers are preserved.
+
+Recovery stays explicit. A2A and `remoteagent` compose `RemoteJobs` for durable
+submission intent, protected transport authority and reattachment to an
+accepted task. Observation failure cannot manufacture execution failure or
+authorize replay. Claude may reconstruct an idle conversation through
+`restoreInteraction`; resuming a transcript does not recover an interrupted
+turn. There is no default resubmission, polling loop or lifetime timeout in
+the base. Cancellation is a request, not proof of remote cessation.
+
+`VenueRemoteAgent` is a Java proxy over any authenticated `Venue`, including
+`LocalVenue`. Its `request` returns a task handle without SDK result polling;
+`task`, `deliver` and `cancel` operate on that handle. The built-in
+`remoteagent:request` is an internal transport operation; applications use
+`agent:request` or `agent:chat` on an [agent definition](./AGENT_LOOP.md#221-agent-definitions-and-external-implementations). It accepts the native
+`agent:request` fields plus optional `venue` and `authenticateAs`, and preserves
+the destination task's output envelope. A new request with `sessionId` starts
+a new task in that conversation; a message to an existing proxy Job continues
+that task. The Job records `sessionId` separately from `delegation.remoteId`.
+
+Native remote connections share `VenueConnection` with Grid: anonymous by
+default, explicit target-bound caller identity, or an explicitly delegated
+venue relay. Omitting `venue` carries the complete current RequestContext to
+the local agent. A local proxy cannot reconstruct that attenuated context from
+a caller DID after restart, so its recovery fails explicitly and leaves the
+original task ID for inspection; it never substitutes venue authority. Remote
+proxies recover their saved transport authority and observe the same task.
+
+### Agent dispatch hooks
+
+Adapters implement `validateAgent`, `agentInvocation`, `agentSession` and,
+when needed, `agentOutput` on the shared base. `agentInvocation` is a pure
+translation into a backend operation and input; it must not submit work. The
+base's existing interaction lifecycle handles that backend Job. `agentSession`
+must work for failed and cancelled Jobs too. Parent recovery attaches to the
+saved child; child recovery belongs to its provider. Neither path resubmits an
+uncertain invocation. Startup restores all job handles before adapter recovery
+so parent subscriptions attach to the actual recovered child.
+
+Agent metadata, creation, admission and supported operations are defined in
+[AGENT_LOOP.md §2.2.1](./AGENT_LOOP.md#221-agent-definitions-and-external-implementations).
+Conversation identity, continuation and recovery behaviour are defined in
+[AGENT_SESSIONS.md §2.2](./AGENT_SESSIONS.md#22-external-agent-sessions).
+
 ## Messaging adapters and webhook ingress
 
 `covia.adapter.messaging` is the provider-independent support used by the Telegram,

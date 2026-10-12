@@ -31,6 +31,8 @@ class ClaudeCodeModuleIT {
 			"venue-provided convex-core must not be bundled in the module");
 		assertFalse(containsPrefix(moduleJar, "covia/venue/"),
 			"venue implementation must not be bundled in the module");
+		assertFalse(containsPrefix(moduleJar, "covia/adapter/remote/"),
+			"shared remote-agent SPI must resolve from the venue");
 		assertFalse(containsPrefix(moduleJar, "org/slf4j/"),
 			"logging must resolve parent-first from the venue");
 		assertTrue(containsPrefix(moduleJar, "covia/adapter/claudecode/"),

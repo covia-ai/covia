@@ -2,6 +2,10 @@
 
 Design for Covia agent state and the transitions that mutate it.
 
+The agent record may select an external implementation through its optional
+`agent` facet (§2.2.1). The run-loop and transition contracts elsewhere in this
+document describe the native Covia runtime, selected when that facet is absent.
+
 **Status:** Current behaviour. See **§8 Architectural Direction** for the in-flight redesign of the framework↔harness contract; §1–§7 describe how the code works today.
 
 See GRID_LATTICE_DESIGN.md for: per-user namespace layout (§4.3), agent addressing
@@ -82,6 +86,7 @@ The agent's value is a plain map. Every write replaces the entire map atomically
 |-------|------|-------------|
 | `ts` | long | Ratcheted timestamp of the last write to the agent record. Metadata, not a merge discriminator. |
 | `status` | string | `"SLEEPING"` \| `"RUNNING"` \| `"SUSPENDED"` \| `"TERMINATED"`. `RUNNING` is a persisted execution marker, validated against the live executor by the hosting venue. |
+| `agent` | map? | Optional external implementation selector; absent for the native Covia runtime. See §2.2.1. |
 | `config` | map | Framework-level configuration. Includes `operation` (default transition op). |
 | `state` | any | User-defined state. Opaque to the framework. Passed to and returned from the transition function. Transition-function configuration (LLM operation, model, system prompt, tools, caps) lives in `config`, not here (#144). Set at creation via optional initial state. Conversation content lives on the session record (`session.frames[0].conversation`), not here. |
 | `tasks` | index | `Index<Blob, ACell>` of inbound request Job IDs. Persistent until resolved. Ordered by Job ID. |
@@ -94,6 +99,76 @@ The agent's value is a plain map. Every write replaces the entire map atomically
 All fields are framework-managed except `state`, which is owned by the transition
 function. CAD3 structural sharing means the timeline (which only appends) shares
 all existing entries with the previous version.
+
+### 2.2.1 Agent definitions and external implementations
+
+The optional `agent` facet selects an external implementation. It follows the
+same asset convention as `operation`: the framework understands the discriminator
+and the selected adapter understands its remaining fields. It creates no
+per-agent operation definitions and does not require an `operation` facet.
+
+```json
+{
+  "agent": { "adapter": "claudecode", "project": "my-project", "model": "sonnet" },
+  "config": { "accepts": [] },
+  "state": {},
+  "sessions": "<framework-managed session index>"
+}
+```
+
+This is a live record at `g/<id>`. Its definition can also be carried by an
+ordinary immutable asset and passed to `agent:create` as `definition`. The
+adapter facet is copied, not the source's runtime sessions or tasks. Hashing a
+whole live record produces a snapshot whose hash changes with its state; the
+stable reference remains `g/<id>`.
+
+Compatibility is deliberate:
+
+- **No `agent` key in the live record:** existing native Covia runtime, including
+  its config, task queue, sessions and run loop. No migration is required.
+- **`agent` present:** it must be an object with `adapter` naming an available
+  `ARemoteAgentAdapter`. Null, malformed, unknown and disabled adapters fail;
+  they never fall back to native execution.
+- Existing native template assets with `agent.config` remain construction-time
+  config layers. Their facet is consumed by the existing template resolver and
+  is not copied into the live record as an external implementation selector.
+
+Create and call a Claude agent through the ordinary operations:
+
+```jsonc
+// v/ops/agent/create
+{"agentId":"coder","agent":{"adapter":"claudecode","project":"my-project"}}
+// v/ops/agent/chat
+{"agentId":"coder","message":"Explain this project's entry points"}
+// Continue with the Covia sessionId returned by chat
+{"agentId":"coder","sessionId":"<Covia session hex>","message":"Explain the tests too"}
+```
+
+Supported definitions:
+
+| `agent.adapter` | Adapter-specific fields |
+|---|---|
+| `a2a` | `endpoint`, `card`, optional `auth` secret binding; `a2a:import-agent` supplies the new facet while retaining its legacy profile |
+| `claudecode` | `project` and ordinary Claude run options; provider sessions are framework-managed |
+| `remoteagent` | Destination `agentId`, optional `venue` and `authenticateAs`; omitted venue uses the local venue |
+
+`agent:chat` and `agent:request` preserve their existing result envelopes.
+The common dispatcher checks normal agent admission and executes as the resident
+agent with its `config.caps`. Requester credentials do not become the agent's
+authority. Provider-specific project, secret and destination checks still apply.
+See [AGENT_SESSIONS.md §2.2](./AGENT_SESSIONS.md#22-external-agent-sessions)
+for conversation mapping, turn execution, messages and recovery.
+
+Suspend and delete cancel active backend jobs; resume permits new calls.
+Shared `config` and `state` updates remain available, but replacing `agent`
+metadata requires creating a new agent, keeping established sessions bound to
+their original implementation. Native-only operations (trigger, query, context,
+step and fork), and external `loads`, `responseSchema`, `strict` and `outputPath`
+options currently fail explicitly. Native agents retain their existing behaviour.
+External session mutation restrictions are listed in the session contract above.
+
+Adapter authors implement the shared dispatch hooks described in
+[ADAPTERS.md](./ADAPTERS.md#agent-dispatch-hooks).
 
 ### 2.3 Tasks vs Messages
 

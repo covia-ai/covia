@@ -26,7 +26,7 @@ venue/
 │   │   ├── api/                 # REST (CoviaAPI), MCP, A2A, UserAPI
 │   │   ├── server/              # HTTP server, AuthMiddleware, SSE
 │   │   └── storage/             # Content storage backends
-│   ├── adapter/         # Adapter implementations (AAdapter base + 32 adapters)
+│   ├── adapter/         # Adapter implementations (AAdapter base + 33 adapters)
 │   └── lattice/         # Lattice definitions (Covia.java), CapabilityChecker
 ├── src/main/resources/
 │   ├── adapters/        # Operation asset definitions (JSON, per adapter)
@@ -75,6 +75,7 @@ AUTH_REQUIRED).
 | Adapter | Purpose | Operations |
 |---------|---------|------------|
 | `grid` | Federated grid operations | `run`, `invoke`, `jobStatus`, `jobResult` |
+| `remoteagent` | Covia agent proxy on a local or remote venue; selected by `g/<id>/agent.adapter`, used through `agent:chat` / `agent:request` | internal transport |
 | `convex` | Convex blockchain, CAD3 conversion, and secret-backed Ed25519 keys | `query`, `transact`, `generate-key`, `sign`, `decode-cad3`, `encode-cad3` |
 | `mcp` | Model Context Protocol | `toolList`, `toolCall`, bridging ops |
 | `a2a` | Agent-to-Agent protocol client — remote agent cards, tasks and message relay | `send`, `get-task`, `cancel`, `agent-card`, `import-agent` |
