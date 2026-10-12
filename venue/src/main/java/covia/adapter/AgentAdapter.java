@@ -108,6 +108,10 @@ public class AgentAdapter extends AAdapter {
 	public static final String QUERY_MESSAGE_REQUIRED = "message is required";
 	public static final String QUERY_INVALID_SESSION = "Invalid sessionId format";
 	public static final String QUERY_UNKNOWN_SESSION = "Unknown sessionId";
+	/** Optional agent-adapter code: a supplied session does not exist. */
+	public static final String UNKNOWN_SESSION_CODE = "agent:unknown-session";
+	public static final String CHAT_UNKNOWN_SESSION = "Unknown sessionId: %s — omit sessionId to start a new session";
+	public static final String CONTEXT_UNKNOWN_SESSION = "Unknown session: %s";
 	public static final String QUERY_NO_OPERATION = "Agent has no transition operation configured";
 	public static final String QUERY_NO_RESPONSE = "Agent query produced no response";
 	public static final String QUERY_PENDING_TOOL =
@@ -1619,8 +1623,7 @@ public class AgentAdapter extends AAdapter {
 			if (intake == AgentState.SessionIntake.LOADS_ON_EXISTING) {
 				job.fail("loads can only be passed when a session is created — this session already exists");
 			} else if (session.supplied()) {
-				job.fail("Unknown sessionId: " + sid.toHexString()
-					+ " — omit sessionId to start a new session");
+				job.fail(UNKNOWN_SESSION_CODE, CHAT_UNKNOWN_SESSION.formatted(sid.toHexString()));
 			} else {
 				job.fail("Agent no longer exists: " + agentId);
 			}
@@ -1717,7 +1720,7 @@ public class AgentAdapter extends AAdapter {
 			sid = parseSessionId(RT.ensureString(sessionId));
 			if (sid == null) { job.fail(QUERY_INVALID_SESSION); return null; }
 			session = RT.ensureMap(RT.getIn(record, AgentState.KEY_SESSIONS, sid));
-			if (session == null) { job.fail(QUERY_UNKNOWN_SESSION); return null; }
+			if (session == null) { job.fail(UNKNOWN_SESSION_CODE, QUERY_UNKNOWN_SESSION); return null; }
 		}
 		return new QuerySnapshot(target, agent, record, operation, sid, session);
 	}
@@ -2033,7 +2036,7 @@ public class AgentAdapter extends AAdapter {
 			Blob sid = parseSessionId(sidHex);
 			if (sid == null) { job.fail("Invalid sessionId format: " + sidHex); return null; }
 			session = agent.getSession(sid);
-			if (session == null) { job.fail("Unknown session: " + sidHex); return null; }
+			if (session == null) { job.fail(UNKNOWN_SESSION_CODE, CONTEXT_UNKNOWN_SESSION.formatted(sidHex)); return null; }
 			agentCtx = agentCtx.withSessionId(sid);
 		}
 

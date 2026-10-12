@@ -15,8 +15,40 @@ import convex.core.data.ACell;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import covia.venue.Engine;
+import covia.adapter.AgentAdapter;
+import covia.api.Fields;
+import covia.exception.JobFailedException;
+import covia.grid.Job;
+import covia.grid.Status;
 
 class ConversationRouterTest {
+	@Test void recoveryUsesOnlyTheAgentCodeRegardlessOfWording() {
+		Job missing = Job.create(Maps.of(Fields.STATUS, Status.STARTED));
+		missing.fail(AgentAdapter.UNKNOWN_SESSION_CODE, "This conversation has expired");
+		assertTrue(ConversationRouter.isUnknownSession(new java.util.concurrent.CompletionException(
+			new JobFailedException(missing))));
+		assertFalse(ConversationRouter.isUnknownSession(new JobFailedException("Unknown session")));
+		Job other = Job.create(Maps.of(Fields.STATUS, Status.STARTED));
+		other.fail("other:unknown-session", "Unknown session");
+		assertFalse(ConversationRouter.isUnknownSession(new JobFailedException(other)));
+	}
+
+	@Test void staleSessionIsReplacedThroughTheRealAgentFailure() {
+		Engine engine = Engine.createTemp(Maps.empty());
+		try {
+			Engine.addDemoAssets(engine);
+			engine.getVenueState().users().ensure(Strings.create("did:test:owner"));
+			var sessions = new ConversationSessions(engine.adapterWorkspace("messaging-test"), "config/bot/sessions");
+			var router = new ConversationRouter(engine, new Spec("bot", "did:test:owner", "retry-agent", null, null), sessions);
+			router.runOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "retry-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm")));
+			String stale = "00000000000000000000000000000000";
+			sessions.put("chat", stale);
+			assertNotNull(router.chat("chat", Strings.create("hello")));
+			assertNotNull(sessions.get("chat"));
+			assertNotEquals(stale, sessions.get("chat"));
+		} finally { engine.close(); }
+	}
 	private record Spec(String name, String userRef, String agent, String operation, ACell reply)
 			implements MessagingBotSpec { }
 

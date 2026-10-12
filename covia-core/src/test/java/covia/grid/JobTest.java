@@ -2,6 +2,7 @@ package covia.grid;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -24,6 +25,27 @@ import covia.exception.JobFailedException;
 import covia.exception.JobPollingFailedException;
 
 public class JobTest {
+
+	@Test
+	public void optionalProducerCodeSurvivesSnapshotAndExceptionWithoutClassifyingOtherFailures() {
+		String code = "example:retry-later";
+		Job job = Job.create(Maps.of(Fields.STATUS, Status.STARTED));
+		job.fail(code, "An explanation the producer may reword");
+		Job restored = Job.create(job.getData());
+		JobFailedException failure = assertThrows(JobFailedException.class, restored::getOutput);
+		assertEquals(code, failure.getErrorCode());
+		job.fail("other:failure", "A late failure must not replace the winning code");
+		assertEquals(code, job.getErrorCode());
+
+		Job unclassified = Job.create(Maps.of(Fields.STATUS, Status.STARTED));
+		unclassified.fail("Unknown session");
+		assertFalse(unclassified.getData().containsKey(Fields.ERROR_CODE));
+		assertNull(new JobFailedException(unclassified).getErrorCode());
+		Job exceptional = Job.create(Maps.of(Fields.STATUS, Status.STARTED));
+		exceptional.fail(new IllegalArgumentException("Unknown session"));
+		assertFalse(exceptional.getData().containsKey(Fields.ERROR_CODE));
+		assertNull(exceptional.getErrorCode());
+	}
 
 	@Test
 	public void testLateCancelHookRunsExactlyOnceAndSeesCommittedState() {

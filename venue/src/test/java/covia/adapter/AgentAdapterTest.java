@@ -2207,6 +2207,7 @@ public class AgentAdapterTest {
 			fail("Chat with unknown sessionId must fail");
 		} catch (Exception e) {
 			assertEquals(Status.FAILED, chatJob.getStatus());
+			assertEquals(AgentAdapter.UNKNOWN_SESSION_CODE, chatJob.getErrorCode());
 		}
 	}
 

@@ -23,4 +23,9 @@ public class JobFailedException extends CoviaException {
 	public Job getJob() {
 		return job;
 	}
+
+	/** Optional adapter-specific code, or null for an unclassified failure. */
+	public String getErrorCode() {
+		return job.getErrorCode();
+	}
 }

@@ -8,6 +8,13 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- Optional, adapter-specific job `errorCode` and Java accessors (#462).
+  Ordinary failures remain uncoded. The agent adapter supplies
+  `agent:unknown-session`; messaging recovery uses that code rather than
+  matching error wording.
+
 ### Changed
 
 - SLF4J 2.0.20, Logback 1.6.5, A2A 1.4.0.Final, JDA 6.7.0, Telegram Bot API

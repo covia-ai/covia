@@ -51,6 +51,15 @@ their next step promptly. A synchronous exception or JVM error fails the Job
 before propagating; late completion cannot replace a terminal state. Typed
 failure causes are committed together with the failure record.
 
+Error codes are **optional and adapter-specific**. Ordinary `job.fail(message)`
+and `job.fail(exception)` produce no `errorCode`. An adapter may opt in with
+`job.fail("adapter:condition", message)` for a condition it explicitly defines
+and supports as a stable machine-readable contract. The human-readable `error`
+remains available. There is no mandatory taxonomy or inference from prose;
+consumers must handle missing and unfamiliar codes as generic failures. See
+[JOBS.md](JOBS.md#optional-adapter-specific-error-codes-462) for the job surface
+and the agent adapter's `agent:unknown-session` example.
+
 Cancellation hooks run after cancellation commits, including when registered
 after cancellation, and each registration is claimed once. The default bridge
 cancels the returned `CompletableFuture`; this alone does not interrupt blocking
