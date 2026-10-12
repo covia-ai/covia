@@ -14,6 +14,10 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   Ordinary failures remain uncoded. The agent adapter supplies
   `agent:unknown-session`; messaging recovery uses that code rather than
   matching error wording.
+- `GET /api/v1/adapters/{name}/operations` returns adapter-local names mapped
+  to complete asset metadata. `AAdapter.getOperations()` exposes the same map,
+  and adapters can publish named operations without a catalogue binding.
+  Existing operation listings, adapter-info path arrays and counts are unchanged.
 
 ### Changed
 

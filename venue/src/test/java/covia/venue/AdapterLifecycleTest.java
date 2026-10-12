@@ -15,6 +15,7 @@ import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
+import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.auth.ucan.UCAN;
 import covia.adapter.AAdapter;
@@ -33,6 +34,62 @@ import covia.lattice.CapabilityChecker;
  * would race every other test.</p>
  */
 public class AdapterLifecycleTest {
+
+	@Test
+	public void operationDiscoveryDoesNotDependOnOrModifyOperatorBindings() throws Exception {
+		Engine engine = boot(null);
+		try {
+			AAdapter adapter = new AAdapter() {
+				@Override public String getName() { return "discovery-probe"; }
+				@Override public String getDescription() { return "Discovery test"; }
+				@Override protected void installAssets() {
+					installOperation("standalone", Maps.of("extension", Maps.of("kept", true),
+						"operation", Maps.of("adapter", "discovery-probe:echo")));
+				}
+				@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx,
+						AMap<AString, ACell> meta, ACell input) {
+					return CompletableFuture.completedFuture(input);
+				}
+			};
+			long before = ((CVMLong) RT.getIn(engine.getStats(), "ops")).longValue();
+			engine.registerAdapter(adapter);
+			assertEquals(CVMLong.create(before), RT.getIn(engine.getStats(), "ops"),
+				"the legacy count still counts catalogue bindings");
+			AMap<AString, ACell> metadata = adapter.getOperations().get(Strings.create("standalone"));
+			assertNull(venueRead(engine, "v/ops/discovery-probe"));
+			assertTrue(RT.ensureVector(RT.getIn(venueRead(engine,
+				"v/adapters/discovery-probe/info"), "operations")).isEmpty(), "legacy info remains a path vector");
+			assertEquals(Maps.of("hello", "world"), engine.jobs().invokeOperation(
+				metadata, Maps.of("hello", "world"), engine.venueContext()).awaitResult(5000));
+			var testOperations = engine.getAdapter("test").getOperations();
+			asVenue(engine, "v/ops/covia/write", Maps.of("path", ECHO, "value", "operator replacement"));
+			engine.configureAdapter("test", Maps.empty());
+			assertEquals(testOperations, engine.getAdapter("test").getOperations());
+			assertEquals(Strings.create("operator replacement"), venueRead(engine, ECHO));
+
+			// An arbitrary operation-shaped operator value is not a discovery declaration.
+			asVenue(engine, "v/ops/covia/write", Maps.of("path", "v/ops/discovery-probe/custom", "value", metadata));
+			engine.configureAdapter("discovery-probe", Maps.empty());
+			assertEquals(1, adapter.getOperations().count());
+			assertEquals(metadata, venueRead(engine, "v/ops/discovery-probe/custom"));
+			ACell listing = asVenue(engine, "v/ops/venue/adapters", Maps.empty());
+			assertTrue(hasAdapterEntry(listing, "discovery-probe", true));
+			var entries = RT.ensureVector(RT.getIn(listing, "adapters"));
+			for (ACell entry : entries) {
+				if (Strings.create("discovery-probe").equals(RT.getIn(entry, "name"))) {
+					assertTrue(RT.ensureVector(RT.getIn(entry, "operations")).isEmpty());
+				}
+			}
+			engine.disableAdapter("discovery-probe");
+			assertNull(venueRead(engine, "v/info/adapters/discovery-probe"));
+			assertEquals(metadata, venueRead(engine, "v/ops/discovery-probe/custom"));
+			assertEquals(CVMLong.create(before), RT.getIn(engine.getStats(), "ops"));
+			engine.enableAdapter("discovery-probe");
+			assertEquals(metadata, engine.getAdapter("discovery-probe").getOperations().get(Strings.create("standalone")));
+			assertTrue(RT.ensureVector(RT.getIn(venueRead(engine,
+				"v/info/adapters/discovery-probe"), "operations")).isEmpty());
+		} finally { engine.close(); }
+	}
 
 	private static final String ECHO = "v/test/ops/echo";
 

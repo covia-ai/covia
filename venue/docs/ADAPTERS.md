@@ -169,6 +169,63 @@ segments must match `[a-z][a-z0-9-]*`. Asset resources are loaded through the
 adapter's own classloader first, which lets the same helpers work from a
 module jar.
 
+### Operation discovery
+
+`AAdapter.getOperations()` returns an immutable
+`AMap<AString, AMap<AString, ACell>>`: **adapter-local name → full asset
+metadata**. The new `GET /api/v1/adapters/{name}/operations` endpoint returns
+this map directly. Schemas, descriptions, defaults and extension fields stay
+inside the original metadata; clients need no hash lookup or catalogue tree
+traversal. For example, `/api/v1/adapters/skills/operations` returns:
+
+```json
+{
+  "list": {
+    "name": "List skills",
+    "operation": {
+      "adapter": "skills:list",
+      "input": {"type": "object"}
+    }
+  }
+}
+```
+
+Declare an operation without a mutable binding with
+`installOperation("local-name", metadata)` inside `installAssets()`. Existing
+`installAsset(catalogPath, ...)` and `installTestAsset(...)` helpers also
+publish operations: the local name is the declared catalogue name with the
+adapter's own leading segment removed, if present. For example,
+`skills/list` becomes `list` and `venue/adapter/disable` becomes the single
+map key `adapter/disable`. These keys are opaque names, not paths to traverse
+or invoke. The new `installOperation` helper rejects a conflicting definition
+of an existing local name; repeating identical metadata is harmless. Legacy
+catalogue helpers retain their existing permissive behavior: if declarations
+map to the same local name, the last operation declaration wins in discovery,
+matching the adapter-owned mirror's precedence. All original catalogue
+bindings remain available. Non-operation assets at legacy catalogue paths
+keep their bindings but do not enter the operation metadata map.
+
+Only explicitly published operations enter this map. Skills, agent templates,
+model-catalogue entries and example assets keep their separate discovery
+surfaces. Mutable operator bindings neither add to nor replace these
+declarations. Reading discovery does not rewrite or delete those bindings.
+Identical metadata can appear in several lattice locations without creating
+independent definitions.
+
+An active adapter with no published operations returns `{}`; an unknown or
+disabled adapter returns 404. Publication describes what is offered, not what
+a caller is authorised to execute. The Java engine accepts the returned
+metadata for invocation; reference-based clients continue to use explicitly
+chosen bindings.
+
+This API is additive. `GET /api/v1/operations` still returns its existing
+array of named summaries, and `GET /api/v1/operations/{name}` is unchanged.
+The `operations` fields in adapter info and the admin listing remain arrays
+of catalogue paths from `getOperationPaths()`. `stats.ops` keeps counting
+those bindings, so an operation published without a path is discoverable via
+the new endpoint but does not increase that legacy count. Existing SDKs do
+not need an update; new helpers can opt into the metadata endpoint.
+
 Override `info()` for stable facts a client needs until the next reconfigure,
 such as a mount point or enabled protocol feature. Live status, sessions,
 connection counts, and mutable health belong behind operations, not in

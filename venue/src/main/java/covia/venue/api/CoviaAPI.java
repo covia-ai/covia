@@ -74,6 +74,7 @@ public class CoviaAPI extends ACoviaAPI {
 
 	public static final String GET_ASSET = "getAsset";
 	public static final String GET_ASSETS = "getAssets";
+	public static final String ADAPTER_NOT_ACTIVE = "Adapter is not active: ";
 
 	public static final String ADD_ASSET="addAsset";
 
@@ -131,6 +132,7 @@ public class CoviaAPI extends ACoviaAPI {
 		routes.post(ROUTE+"run", this::runOperation, COVIA_API);
 		routes.get(ROUTE+"operations", this::getOperations, COVIA_API);
 		routes.get(ROUTE+"operations/{name}", this::getOperation, COVIA_API);
+		routes.get(ROUTE+"adapters/{name}/operations", this::getAdapterOperations, COVIA_API);
 		// Job ids are single-segment hex strings, so the job routes use the
 		// segment matcher {id}: a greedy <id> on the GET route also matches
 		// "…/sse", shadowing the SSE route and making job streaming
@@ -1541,6 +1543,23 @@ public class CoviaAPI extends ACoviaAPI {
 			}
 		}
 		buildResult(ctx, 200, result);
+	}
+
+	@OpenApi(path = ROUTE + "adapters/{name}/operations",
+			methods = HttpMethod.GET,
+			tags = { "Covia"},
+			summary = "Get an active adapter's operation names mapped to full asset metadata.",
+			pathParams = {@OpenApiParam(name = "name", type = String.class, required = true,
+					description = "Publishing adapter name, e.g. skills.")},
+			operationId = "getAdapterOperations")
+	protected void getAdapterOperations(Context ctx) {
+		String name = ctx.pathParam("name");
+		AAdapter adapter = engine().getAdapter(name);
+		if (adapter == null) {
+			buildError(ctx, 404, ADAPTER_NOT_ACTIVE + name);
+			return;
+		}
+		buildResult(ctx, 200, adapter.getOperations());
 	}
 
 	@OpenApi(path = ROUTE + "operations/{name}",
