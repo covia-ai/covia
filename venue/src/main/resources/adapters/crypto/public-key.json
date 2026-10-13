@@ -1,0 +1,41 @@
+{
+  "name": "Inspect Ed25519 public key",
+  "description": "Resolve a secret-backed Ed25519 seed and return only its public AccountKey and DID.",
+  "operation": {
+    "adapter": "crypto:public-key",
+    "readOnly": true,
+    "activityLabel": "Inspect Ed25519 public key",
+    "input": {
+      "type": "object",
+      "properties": {
+        "seed": {
+          "type": "string",
+          "description": "Secret reference to a 32-byte hexadecimal Ed25519 private seed: s/NAME or <did>/s/NAME. Never pass a raw seed."
+        }
+      },
+      "required": [
+        "seed"
+      ],
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "accountKey": {
+          "type": "string",
+          "description": "Native 32-byte Ed25519 AccountKey; JSON renders it as a 0x-prefixed hexadecimal string.",
+          "pattern": "^0x(?:[0-9a-f]{2})*$"
+        },
+        "did": {
+          "type": "string",
+          "description": "Ed25519 did:key for this public key."
+        }
+      },
+      "required": [
+        "accountKey",
+        "did"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

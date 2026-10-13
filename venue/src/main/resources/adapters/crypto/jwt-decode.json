@@ -1,0 +1,78 @@
+{
+  "name": "Decode JWT without verification",
+  "description": "Inspect a compact JWT without verifying its signature, algorithm, claims or authority. Always returns verified:false. Never use this result as evidence of identity or access. Use jwt-verify for trusted-key checks.",
+  "operation": {
+    "adapter": "crypto:jwt-decode",
+    "readOnly": true,
+    "activityLabel": "Decode unverified JWT",
+    "input": {
+      "type": "object",
+      "properties": {
+        "token": {
+          "type": "string",
+          "description": "Compact JWT as AString/text, not a hex blob. Redacted from recorded input. Supply either token or tokenSecret.",
+          "maxLength": 1048576
+        },
+        "tokenSecret": {
+          "type": "string",
+          "description": "Secret reference containing the compact JWT: s/NAME or <did>/s/NAME. Supply either token or tokenSecret."
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "token"
+          ],
+          "not": {
+            "required": [
+              "tokenSecret"
+            ]
+          }
+        },
+        {
+          "required": [
+            "tokenSecret"
+          ],
+          "not": {
+            "required": [
+              "token"
+            ]
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "verified": {
+          "type": "boolean",
+          "const": false
+        },
+        "header": {
+          "type": "object",
+          "description": "Decoded JOSE header."
+        },
+        "claims": {
+          "type": "object",
+          "description": "Decoded JWT claims."
+        },
+        "signature": {
+          "type": "string",
+          "description": "Native signature blob; JSON renders as 0x-prefixed hexadecimal. No signature verification is performed.",
+          "pattern": "^0x(?:[0-9a-f]{2})*$"
+        }
+      },
+      "required": [
+        "verified",
+        "header",
+        "claims",
+        "signature"
+      ],
+      "additionalProperties": false
+    },
+    "secretFields": [
+      "token"
+    ]
+  }
+}

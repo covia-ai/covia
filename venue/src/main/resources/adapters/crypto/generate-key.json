@@ -1,0 +1,52 @@
+{
+  "name": "Generate Ed25519 key",
+  "description": "Generate a secure random Ed25519 seed directly into the encrypted secret store. Returns its reference, public AccountKey and DID. Compatible with Convex signing and ECIES.",
+  "operation": {
+    "adapter": "crypto:generate-key",
+    "readOnly": false,
+    "activityLabel": "Generate Ed25519 key",
+    "input": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Destination secret name (single name, not a path). Stored encrypted in the caller's user namespace.",
+          "minLength": 1
+        },
+        "overwrite": {
+          "type": "boolean",
+          "default": false,
+          "description": "Explicitly replace an existing destination secret. Otherwise collisions fail atomically."
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "secret": {
+          "type": "string",
+          "description": "Secret reference; private material is never returned."
+        },
+        "accountKey": {
+          "type": "string",
+          "description": "Native 32-byte Ed25519 AccountKey; JSON renders it as a 0x-prefixed hexadecimal string.",
+          "pattern": "^0x(?:[0-9a-f]{2})*$"
+        },
+        "did": {
+          "type": "string",
+          "description": "Ed25519 did:key for this public key."
+        }
+      },
+      "required": [
+        "secret",
+        "accountKey",
+        "did"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

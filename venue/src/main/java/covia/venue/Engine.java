@@ -1117,6 +1117,7 @@ public class Engine {
 		venue.registerAdapter(new covia.adapter.A2AAdapter());
 		venue.registerAdapter(new covia.adapter.RemoteAgentAdapter());
 		venue.registerAdapter(new ConvexAdapter());
+		venue.registerAdapter(new covia.adapter.CryptoAdapter());
 		venue.registerAdapter(new AgentAdapter());
 		venue.registerAdapter(new SecretAdapter());
 		venue.registerAdapter(new covia.adapter.SchedulerAdapter());

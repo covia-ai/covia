@@ -26,7 +26,7 @@ venue/
 │   │   ├── api/                 # REST (CoviaAPI), MCP, A2A, UserAPI
 │   │   ├── server/              # HTTP server, AuthMiddleware, SSE
 │   │   └── storage/             # Content storage backends
-│   ├── adapter/         # Adapter implementations (AAdapter base + 33 adapters)
+│   ├── adapter/         # Adapter implementations (AAdapter base + 34 adapters)
 │   └── lattice/         # Lattice definitions (Covia.java), CapabilityChecker
 ├── src/main/resources/
 │   ├── adapters/        # Operation asset definitions (JSON, per adapter)
@@ -77,6 +77,7 @@ AUTH_REQUIRED).
 | `grid` | Federated grid operations | `run`, `invoke`, `jobStatus`, `jobResult` |
 | `remoteagent` | Covia agent proxy on a local or remote venue; selected by `g/<id>/agent.adapter`, used through `agent:chat` / `agent:request` | internal transport |
 | `convex` | Convex blockchain, CAD3 conversion, and secret-backed Ed25519 keys | `query`, `transact`, `generate-key`, `sign`, `decode-cad3`, `encode-cad3` |
+| `crypto` | Local cryptography in Convex formats; secret-backed keys, JWTs and BIP39 phrases (see `docs/CONFIG.md#cryptography-crypto`) | `hash`, `generate-key`, `public-key`, `sign`, `verify`, `encrypt`, `decrypt`, `generate-mnemonic`, `validate-mnemonic`, `derive-key`, `jwt-sign`, `jwt-verify`, `jwt-decode` |
 | `mcp` | Model Context Protocol | `toolList`, `toolCall`, bridging ops |
 | `a2a` | Agent-to-Agent protocol client — remote agent cards, tasks and message relay | `send`, `get-task`, `cancel`, `agent-card`, `import-agent` |
 | `langchain` | AI/LLM models | `openai`, `ollama`, `anthropic`, `gemini`, `xai`, `deepseek`, `mistral`, `openrouter`, `models` |

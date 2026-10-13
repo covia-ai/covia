@@ -1200,6 +1200,189 @@ Currently defined:
   new agents to follow should also update the `config.skillsets` in its agent
   templates (`v/agents/templates/*`).
 
+## Cryptography (`crypto`)
+
+The built-in `CryptoAdapter` uses the pinned Convex crypto implementation; no
+additional provider configuration or dependencies are needed. Disable with
+`adapters.crypto.enabled: false`. Operations live at `v/ops/crypto/<operation>`;
+the agent instruction/tool bundle is `v/skills/crypto/crypto`.
+
+| Operation | Input | Result |
+|-----------|-------|--------|
+| `hash` | blob `data`, optional string `encoding`, `algorithm` | `algorithm`, native `digest` blob |
+| `generate-key` | secret `name`, optional `overwrite` | `secret`, public `accountKey`, `did` |
+| `public-key` | `seed` secret reference | public `accountKey`, `did` |
+| `sign` | `seed` reference, `data`, optional `encoding` | public `accountKey`, `did`, detached `signature` |
+| `verify` | `accountKey`, `signature`, `data`, optional `encoding` | `valid` (false for signature mismatch; malformed input fails) |
+| `encrypt` | recipient `accountKey`, blob `data`, optional string `encoding` | native `ciphertext` blob, `encoding: blob` |
+| `decrypt` | `seed` reference, blob `ciphertext`, optional output `encoding`, destination `name`, `overwrite` | `secret` when a name is supplied, otherwise native plaintext `data` by default; plus `encoding` |
+| `generate-mnemonic` | secret `name`, optional `words`, `overwrite` | `secret`, `words`; phrase remains encrypted |
+| `validate-mnemonic` | `mnemonic` secret reference | `valid`, without revealing words |
+| `derive-key` | `mnemonic` reference, destination `name`, optional `path`, `passphraseSecret`, `overwrite` | `secret`, public `accountKey`, `did`, effective hardened `path` |
+| `jwt-sign` | `seed` reference, `claims` map, optional `kid`, destination `name`, `overwrite` | public `accountKey`, `did`, and compact `token` or stored `secret` reference |
+| `jwt-verify` | `token` or `tokenSecret` reference, trusted `accountKey`, optional `expectedIssuer`, `expectedAudience`, `requireExpiration` | `valid`; on success `header`, `claims`; on rejection `reason` without claims |
+| `jwt-decode` | `token` or `tokenSecret` reference | `verified: false`, unverified `header`, `claims`, native `signature` blob |
+
+### Formats and compatibility
+
+- Binary inputs accept native `ABlob` values (including `Hash`, `AccountKey`,
+  signatures and `BlobTree`) or hexadecimal strings, with an optional `0x`
+  prefix. String `data` defaults to `encoding: hex`; UTF-8 text or base64 must
+  be selected explicitly. Encoding applies only to strings; a blob already
+  contains the exact bytes. Messages are limited to 1 MiB; ECIES envelopes
+  allow the additional 48 bytes of overhead.
+- Digests, public keys, signatures, ciphertext and default decrypted data are
+  native blobs in adapter results and lattice state. Convex's JSON renderer
+  handles their `"0x..."` representation at the HTTP/MCP/model boundary; the
+  adapter accepts that representation back without requiring extra conversion.
+  Published JSON schemas describe this wire representation as strings, with
+  native blob support documented in field descriptions. Text values and
+  references use `AString`; Java strings are used at APIs that require them.
+- Decrypt defaults to `encoding: blob`. Explicit `utf8`, `hex` or `base64`
+  returns an `AString` instead. UTF-8 decoding is strict. With a destination
+  `name`, blob mode stores hexadecimal text and reports `encoding: hex`,
+  because SecretStore currently stores strings. Explicit `encoding: utf8`
+  stores decoded text for downstream operations expecting a text secret.
+- Ed25519 private seeds and public AccountKeys are 32 bytes; detached signatures
+  are 64 bytes. Seeds in the secret store are hexadecimal, compatible with
+  `convex:generate-key`, `convex:sign` and `convex:transact`. These are raw keys,
+  not PEM, PKCS8, a 64-byte expanded private key, or the 64-byte BIP39 seed.
+- Signing covers the exact supplied bytes, without an implicit hash. Convex
+  `SignedData` instead signs the CAD3 value hash: obtain the intended value's
+  hash and sign those bytes explicitly. JSON text hashing or hashing a complete
+  multi-cell transport encoding is not a substitute for the CAD3 value hash.
+- Hash algorithms are `sha256`, `sha512`, `sha3-256` (default) and `keccak256`.
+  SHA3-256 is the FIPS SHA-3 variant used by Convex; Ethereum's Keccak-256 has
+  different padding and produces different hashes. `hash` hashes raw bytes,
+  not a CAD3 value. SHA-1 and MD5 are deliberately absent.
+- ECIES delegates directly to `convex.core.crypto.ECIES` in Convex 0.8.17:
+  [RFC 9180 HPKE](https://www.rfc-editor.org/rfc/rfc9180) Base mode with
+  DHKEM(X25519, HKDF-SHA256), HKDF-SHA256 and AES-128-GCM. Convex converts
+  Ed25519 account keys to X25519 using its libsodium-compatible conversion.
+  The envelope is `enc[32] || ciphertext || tag[16]`, with empty info and AAD.
+  It carries no suite identifier and is not generic secp256k1 ECIES or a
+  libsodium sealed box. Integrity is authenticated; sender identity is not.
+- English [BIP39](https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki)
+  phrases support 12/15/18/21/24 words (128/160/192/224/256 entropy bits).
+  Generation defaults to 12, matching GetMine. Validation checks the word list
+  and checksum before derivation; Convex's `BIP39.getSeed` alone does not.
+  Full words are required. Case and whitespace are normalised, with NFKD for
+  the phrase and optional passphrase. No mnemonic words appear in errors.
+- Derivation follows [CAD025](https://docs.convex.world/docs/cad/wallet): BIP39
+  PBKDF2-HMAC-SHA512 (2048 iterations, 64 bytes), then Ed25519 SLIP-0010. All
+  path components are hardened; `m/44/864/0/0/0` and `m/44'/864'/0'/0'/0'`
+  are equivalent. **864 is Convex's official SLIP-44 coin type**, used only
+  as the default. Derivation accepts any valid SLIP-10 path, without restricting
+  the purpose, coin type or path shape to BIP44 or Convex.
+  Default account 0 matches Convex CLI and GetMine venue
+  identity. GetMine install DID uses account 1 (`m/44/864/1/0/0`). Both use an
+  empty BIP39 passphrase. Explicit `m` selects the master for legacy recovery;
+  it is never selected as a fallback for an invalid path. Indexes must be
+  0..2147483647, with at most 255 components.
+
+The CAD025 web page's test vector currently prints path `m/44/864/1234/0/1`
+with expected seed `2172bb...`, but Convex's `SLIP10Test.testCAD25` uses
+`m/44/888/1234/0/1` for that expected seed. The 864 path yields `23a427...`.
+Adapter tests pin both results and GetMine's account-0/account-1 vectors;
+the default remains coin type 864.
+
+### Agent workflows and secret boundaries
+
+#### JWTs
+
+`jwt-sign` uses Convex's Ed25519 JWS format (`alg: EdDSA`, `typ: JWT`,
+base64url compact serialization). Its default `kid` is the public multikey;
+an optional `kid` is copied as an identifier, without asserting an identity
+binding. Tokens are `AString`, claims and headers are Convex maps, and decoded
+signatures are blobs. Native blob values within signing claims use their
+normal JSON hex-string projection. Tokens are limited to 1 MiB.
+
+For example, create an application token with:
+
+```json
+{
+  "seed": "s/SIGNER",
+  "claims": {"iss": "my-app", "aud": "my-service", "sub": "alice", "exp": 1800000000},
+  "name": "APP_TOKEN"
+}
+```
+
+The expiry is an illustrative Unix timestamp; choose a suitable future expiry
+when calling. Signing adds no issuer, audience, timestamps, or expiry. Supplying
+`name` returns `secret: "s/APP_TOKEN"` instead of a token. Omit `name` only when
+returning the token into Job output and potentially model history is intended.
+Use that secret with downstream `bearerSecret` inputs, or inspect it locally
+using `tokenSecret: "s/APP_TOKEN"`. Verify/decode require exactly one of `token`
+and `tokenSecret`; token references use the same capability gates as key seeds.
+
+`jwt-verify` requires an independently trusted `accountKey` (Blob or hex).
+It never obtains a key from `kid`, `jwk`, `jku` or `x5u`. Only EdDSA is accepted;
+critical JOSE extensions and `b64` overrides are rejected. Verification checks
+the signature, registered claim types, and any supplied issuer/audience
+constraints. `expectedAudience` matches either a single `aud` string or an
+entry in its string array; comparisons are exact and case-sensitive. Supply
+both expectations for application tokens when the application defines them.
+
+`exp` and `nbf`, when present, are checked against venue time in Unix seconds
+without clock-skew allowance. NumericDate fractions are supported, expiration
+is exclusive, and not-before is inclusive. `iat` must be numeric when present
+but does not impose a not-before restriction. Present null or nonnumeric dates
+are rejected. Expiry is optional for generic JWTs; set `requireExpiration: true`
+when accepting expiring access tokens. Invalid signatures, unsupported
+algorithms and failed claim checks return `valid: false` with a reason and no
+claims. Malformed tokens, keys or operation arguments fail the Job.
+
+`jwt-decode` performs no verification and always reports `verified: false`,
+even for a correctly signed token. Its decoded claims are untrusted. JWT
+verification does not perform venue authentication, bind identities to DIDs,
+or validate UCAN delegation/capabilities; use the authentication system or
+`ucan:verify` for those policies. This adapter adds no generic HS256/RS256
+signing or verification operations.
+
+Raw `token` inputs and signing `claims` are redacted from Job inputs;
+reference-only `seed` and `tokenSecret` remain references. Successful verify
+and decode results contain claims, so use them only where that disclosure is
+intended. For protocol details see [RFC 7519](https://www.rfc-editor.org/rfc/rfc7519.html)
+and [JWT best practices](https://www.rfc-editor.org/rfc/rfc8725.html).
+
+#### Keys, recovery phrases and encrypted messages
+
+Generate a phrase with `generate-mnemonic {"name":"RECOVERY"}`, then derive
+with `derive-key {"mnemonic":"s/RECOVERY","name":"SIGNER"}`. Sign with
+`sign {"seed":"s/SIGNER","data":"hello","encoding":"utf8"}`. For a GetMine-compatible sibling
+key, derive from the same phrase with `path: "m/44/864/1/0/0"` and a different
+destination name. Generation returns references, never private material.
+
+For an arbitrary application-selected coin type, for example:
+`derive-key {"mnemonic":"s/RECOVERY","name":"APP_KEY","path":"m/44/1234567/0/0/0"}`.
+The example's `1234567` is an arbitrary index, not a claim of a SLIP-44
+registration. A custom hierarchy such as `m/7/1234567/2147483647` also works;
+the same hardened Ed25519 derivation applies to every valid path.
+
+Private inputs (`seed`, `mnemonic`, `passphraseSecret`) accept secret references
+only. Import through the existing secret-store boundary, not through crypto
+tool arguments or prompts. Resolution uses `Engine.resolveSecret` with the
+request context. Own-user access follows the existing secret-use rules;
+cross-user references require `secret/use`, and URL-bound grants cannot be
+used for local crypto because there is no outbound destination. Generated
+secrets use the same `secret/write` check and atomic collision protection as
+`secret:set`. Replacing a secret requires `overwrite: true`. Every crypto
+operation also requires invocation authority.
+
+For sensitive decrypted data, supply `name` so plaintext is written directly
+to the secret store. **Without `name`, decrypted plaintext is returned and may
+be persisted in Job output or agent history.** Signing and encryption declare
+`data` as a secret field for Job input redaction; this does not remove data
+already placed in an agent prompt. Private-key references remain references
+in records. No resolved private key, phrase or passphrase is copied to output.
+
+SecretStore encryption protects material at rest under the venue identity;
+this is not an HSM or isolation from the venue process/operator. Java and the
+upstream crypto APIs use immutable strings and managed memory, so the adapter
+does not promise deterministic memory erasure. Human recovery-phrase display
+and backup/export require a separate trusted interface; these agent operations
+do not expose plaintext phrases or enable `secret:extract`.
+
 ## Connected accounts (`adapters.oauth`)
 
 The `oauth` adapter holds OAuth 2.0 grants on behalf of venue users so an

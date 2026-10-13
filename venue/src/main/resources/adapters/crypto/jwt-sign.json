@@ -1,0 +1,83 @@
+{
+  "name": "Sign an Ed25519 JWT",
+  "description": "Sign JWT claims with a secret-backed Ed25519 seed using Convex's EdDSA format. Optional name stores the token as a secret without returning it. This signs caller-supplied claims; it does not grant venue authority or issue UCAN capabilities.",
+  "operation": {
+    "adapter": "crypto:jwt-sign",
+    "readOnly": false,
+    "activityLabel": "Sign JWT",
+    "input": {
+      "type": "object",
+      "properties": {
+        "seed": {
+          "type": "string",
+          "description": "Secret reference to a 32-byte hexadecimal Ed25519 private seed. Never pass raw key material."
+        },
+        "claims": {
+          "type": "object",
+          "description": "JWT claims as a map with string keys, serialized as JSON. Dates exp/nbf/iat are finite Unix seconds (fractions allowed); aud is a string or string array. No claims, timestamps, expiry or identity are added automatically."
+        },
+        "kid": {
+          "type": "string",
+          "description": "Optional JOSE key identifier. Defaults to Convex's public multikey. An identifier does not establish trust.",
+          "maxLength": 1048576
+        },
+        "name": {
+          "type": "string",
+          "description": "Optional destination secret name. Returns secret instead of token; use this to avoid placing a bearer token into Job output or model history."
+        },
+        "overwrite": {
+          "type": "boolean",
+          "default": false,
+          "description": "Permit replacing the named destination secret."
+        }
+      },
+      "required": [
+        "seed",
+        "claims"
+      ],
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "token": {
+          "type": "string",
+          "description": "Compact signed JWT AString. Returned only when name is omitted."
+        },
+        "secret": {
+          "type": "string",
+          "description": "Stored token reference. Returned only when name is supplied."
+        },
+        "accountKey": {
+          "type": "string",
+          "description": "Native 32-byte Ed25519 AccountKey; JSON renders as 0x-prefixed hexadecimal.",
+          "pattern": "^0x[0-9a-f]{64}$"
+        },
+        "did": {
+          "type": "string",
+          "description": "Ed25519 did:key for the signing public key."
+        }
+      },
+      "required": [
+        "accountKey",
+        "did"
+      ],
+      "oneOf": [
+        {
+          "required": [
+            "token"
+          ]
+        },
+        {
+          "required": [
+            "secret"
+          ]
+        }
+      ],
+      "additionalProperties": false
+    },
+    "secretFields": [
+      "claims"
+    ]
+  }
+}

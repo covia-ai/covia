@@ -1,0 +1,63 @@
+{
+  "name": "Generate BIP39 mnemonic",
+  "description": "Generate an English BIP39 phrase directly into the encrypted secret store. Defaults to 12 words (128 bits entropy), as GetMine; 24 words gives 256 bits. Returns only a reference. This operation does not display a human recovery backup.",
+  "operation": {
+    "adapter": "crypto:generate-mnemonic",
+    "readOnly": false,
+    "activityLabel": "Generate BIP39 mnemonic",
+    "input": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Destination secret name (single name, not a path). Stored encrypted in the caller's user namespace.",
+          "minLength": 1
+        },
+        "overwrite": {
+          "type": "boolean",
+          "default": false,
+          "description": "Explicitly replace an existing destination secret. Otherwise collisions fail atomically."
+        },
+        "words": {
+          "type": "integer",
+          "enum": [
+            12,
+            15,
+            18,
+            21,
+            24
+          ],
+          "default": 12
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "secret": {
+          "type": "string",
+          "description": "Secret reference; private material is never returned."
+        },
+        "words": {
+          "type": "integer",
+          "enum": [
+            12,
+            15,
+            18,
+            21,
+            24
+          ]
+        }
+      },
+      "required": [
+        "secret",
+        "words"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,0 +1,54 @@
+{
+  "name": "Verify Ed25519 signature",
+  "description": "Verify a detached Ed25519 signature over exact bytes. A well-formed signature mismatch returns valid:false; malformed encodings or lengths fail.",
+  "operation": {
+    "adapter": "crypto:verify",
+    "readOnly": true,
+    "activityLabel": "Verify Ed25519 signature",
+    "input": {
+      "type": "object",
+      "properties": {
+        "accountKey": {
+          "type": "string",
+          "description": "32-byte Ed25519 AccountKey/blob, or its hexadecimal JSON representation (optional 0x prefix). Not PEM or an X25519 key."
+        },
+        "signature": {
+          "type": "string",
+          "description": "64-byte detached Ed25519 signature blob, or its hexadecimal JSON representation (optional 0x prefix)."
+        },
+        "data": {
+          "type": "string",
+          "description": "Native blob bytes. JSON/MCP callers pass hexadecimal (0x prefix recommended), or select encoding:utf8/base64 for text input. No implicit hash, CAD3 conversion or JSON canonicalisation."
+        },
+        "encoding": {
+          "type": "string",
+          "description": "Applies to string input only: hex by default (optional 0x prefix), or explicit utf8/base64. Native ABlob input is used directly.",
+          "enum": [
+            "utf8",
+            "hex",
+            "base64"
+          ],
+          "default": "hex"
+        }
+      },
+      "required": [
+        "accountKey",
+        "signature",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "valid": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "valid"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

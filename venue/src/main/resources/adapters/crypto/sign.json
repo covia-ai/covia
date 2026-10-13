@@ -1,0 +1,65 @@
+{
+  "name": "Sign bytes with Ed25519",
+  "description": "Sign exact bytes with a secret-backed Ed25519 key. No implicit hash or CAD3 conversion. Returns a detached 64-byte signature.",
+  "operation": {
+    "adapter": "crypto:sign",
+    "readOnly": false,
+    "activityLabel": "Sign bytes with Ed25519",
+    "input": {
+      "type": "object",
+      "properties": {
+        "seed": {
+          "type": "string",
+          "description": "Secret reference to a 32-byte hexadecimal Ed25519 private seed: s/NAME or <did>/s/NAME. Never pass a raw seed."
+        },
+        "data": {
+          "type": "string",
+          "description": "Native blob bytes. JSON/MCP callers pass hexadecimal (0x prefix recommended), or select encoding:utf8/base64 for text input. No implicit hash, CAD3 conversion or JSON canonicalisation."
+        },
+        "encoding": {
+          "type": "string",
+          "description": "Applies to string input only: hex by default (optional 0x prefix), or explicit utf8/base64. Native ABlob input is used directly.",
+          "enum": [
+            "utf8",
+            "hex",
+            "base64"
+          ],
+          "default": "hex"
+        }
+      },
+      "required": [
+        "seed",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "accountKey": {
+          "type": "string",
+          "description": "Native 32-byte Ed25519 AccountKey; JSON renders it as a 0x-prefixed hexadecimal string.",
+          "pattern": "^0x(?:[0-9a-f]{2})*$"
+        },
+        "did": {
+          "type": "string",
+          "description": "Ed25519 did:key for this public key."
+        },
+        "signature": {
+          "type": "string",
+          "description": "Native 64-byte detached Ed25519 signature blob; JSON renders it as a 0x-prefixed hexadecimal string.",
+          "pattern": "^0x(?:[0-9a-f]{2})*$"
+        }
+      },
+      "required": [
+        "accountKey",
+        "did",
+        "signature"
+      ],
+      "additionalProperties": false
+    },
+    "secretFields": [
+      "data"
+    ]
+  }
+}

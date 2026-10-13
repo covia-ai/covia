@@ -1,0 +1,34 @@
+{
+  "name": "Validate BIP39 mnemonic",
+  "description": "Check an English BIP39 phrase in the secret store: standard word count, word list and checksum. Returns only validity; never echoes a word.",
+  "operation": {
+    "adapter": "crypto:validate-mnemonic",
+    "readOnly": true,
+    "activityLabel": "Validate BIP39 mnemonic",
+    "input": {
+      "type": "object",
+      "properties": {
+        "mnemonic": {
+          "type": "string",
+          "description": "Secret reference holding an English BIP39 phrase. Full words required; case and whitespace are normalised. Never pass the phrase inline."
+        }
+      },
+      "required": [
+        "mnemonic"
+      ],
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "valid": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "valid"
+      ],
+      "additionalProperties": false
+    }
+  }
+}
