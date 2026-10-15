@@ -58,6 +58,8 @@ final class FakeTelegramServer implements AutoCloseable {
 	final Map<String, byte[]> files = new ConcurrentHashMap<>();
 	final java.util.Set<String> chunkedFiles = ConcurrentHashMap.newKeySet();
 	final AtomicInteger downloads = new AtomicInteger();
+	final java.util.Set<Long> failSendChats = ConcurrentHashMap.newKeySet();
+	final AtomicInteger failedSends = new AtomicInteger();
 	final Map<String, Long> declaredSizes = new ConcurrentHashMap<>();
 	final Map<String, String> uploadTypes = new ConcurrentHashMap<>();
 	final Map<String, String> lastFilters = new ConcurrentHashMap<>();
@@ -271,6 +273,11 @@ final class FakeTelegramServer implements AutoCloseable {
 					reply(ex, 200, ok(result));
 				}
 				case "sendMessage" -> {
+					if (failSendChats.contains(Long.parseLong(form.get("chat_id")))) {
+						failedSends.incrementAndGet();
+						reply(ex, 503, error(503, "Injected send failure"));
+						return;
+					}
 					String text = form.getOrDefault("text", "");
 					String parseMode = form.get("parse_mode");
 					if (parseMode != null && text.contains(BAD_MARKUP)) {

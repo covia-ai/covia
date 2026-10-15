@@ -75,6 +75,35 @@ not infer authority from an operation name or confuse `ctx.getCallerDID()`
 (who acted) with `ctx.getUserDID()` (whose namespace the action uses). See
 [UCAN.md](UCAN.md) for the authority model.
 
+## Atomic local session delivery
+
+Messaging adapters can use `ConversationRouter.deliver` with a trusted
+`RequestContext.SessionDelivery` participant. Agent intake runs on a native
+`Users.transact` draft, so the session input, adapter receipt and conversation
+mapping publish together. The callback must use only draft-bound components,
+perform no I/O, and tolerate retries. Returning false discards the draft as a
+duplicate. The engine flushes before waking the agent and returns the chat Job
+without waiting for its result. `ConversationRouter.onResponse` observes replies
+on the shared virtual executor, handles failed Jobs and skips duplicate deliveries.
+The router holds the binding lifecycle lock through admission, so stopped/deleted
+bindings cannot recreate private session mappings after cleanup.
+
+Telegram, Slack and WhatsApp use this contract for local agent receipts. Discord
+uses the same admission/reply separation and atomic session mapping, but its Gateway
+intake has no durable inbox or duplicate-message guarantee.
+
+HITL uses the same native `Users` transaction to resolve a request and append its
+answer, rejection or expiry notification to the requesting local session. Competing
+resolutions cannot overwrite the winner or append another notification. Signing and
+validation happen before the transaction; Job notification and agent wake follow the
+flush. A session notification is independent of the completed HITL Job and survives
+restart before wake. If the requesting session is gone, the request still resolves
+and the adapter reports the unavailable destination.
+
+This is a local handoff contract, not an exactly-once external-effects claim.
+Remote agent facades cannot join the transaction. Keep their existing provider
+protocol, and keep preprocessing and outbound delivery outside the transaction.
+
 ## Reference-addressed content
 
 Storage adapters implement `ContentProvider` so consumers can resolve and write
@@ -477,9 +506,14 @@ hash of a compound owner/provider-installation key; version is the settings
 map's hash. Resolved credentials are never stored in either record.
 
 The worker scans PENDING receipts on start and periodically for late secret
-provisioning. Whole turns share the conversation queue, claim and flush before
-execution, and complete only after any reply. STARTED receipts remain uncertain
-after failure and are not replayed. Pending records also carry `bindingVersion`;
+provisioning. For local agents, the conversation queue serializes admission:
+PENDING becomes COMPLETE in the transaction that appends the input and saves the
+session mapping. Further inputs can be admitted while the agent is thinking. Replies
+run independently; a turn/send failure cannot reopen or replay a delivered receipt.
+Reply callbacks are not a durable outbound queue, so a process interruption can lose
+a reply. Operation handlers and remote agents retain claim-before-execution and
+complete-after-reply behavior; their STARTED receipts remain uncertain after failure
+and are not replayed. Pending records also carry `bindingVersion`;
 after a policy/handler change, an older version stays pending for operator
 inspection rather than executing under the new settings. Completed receipts
 continue deduplicating across those changes. Changing owner/installation

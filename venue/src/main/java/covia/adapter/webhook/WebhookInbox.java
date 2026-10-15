@@ -24,6 +24,8 @@ import covia.venue.Engine;
  * after restart; STARTED receipts require provider-specific reconciliation and
  * are never automatically replayed. Completing an external send and recording
  * completion cannot be atomic: this does not promise exactly-once effects.
+ * Local session delivery can instead use {@link #deliver} on the same Users
+ * transaction as input admission; its COMPLETE means delivered, not replied.
  * Durability is that of the venue's configured store (memory/temp are ephemeral).
  * Claims coordinate a single Engine, not independent replicated venue processes.</p>
  */
@@ -34,6 +36,7 @@ public final class WebhookInbox {
 	public static final AString RECEIVED_AT = Strings.intern("receivedAt");
 	public static final AString COMPLETED_AT = Strings.intern("completedAt");
 	public static final String EVENT_REQUIRED = "Webhook event ID is required";
+	public static final String NOT_PENDING = "Session delivery receipt must be pending";
 	public static final String NOT_STARTED = "Webhook receipt must be started before completion";
 	public static final String UNKNOWN_EVENT = "Unknown webhook receipt";
 	public static final String INVALID_RECEIPT = "Invalid webhook receipt";
@@ -86,6 +89,20 @@ public final class WebhookInbox {
 				.assoc(COMPLETED_AT, CVMLong.create(System.currentTimeMillis())));
 			engine.flush();
 		}
+	}
+
+	/** Complete a local session handoff inside its Users transaction. The input
+	 * and this receipt commit together; replies do not participate. No flush here. */
+	public boolean deliver(covia.venue.Users draft, String eventId, AString sessionId, AString jobId) {
+		AdapterWorkspace state = workspace.withUsers(draft);
+		AMap<AString, ACell> record = RT.ensureMap(state.read(path(eventId)));
+		if (record == null) throw new IllegalArgumentException(UNKNOWN_EVENT);
+		if (COMPLETE.equals(record.get(Fields.STATUS))) return false;
+		if (!PENDING.equals(record.get(Fields.STATUS))) throw new IllegalStateException(NOT_PENDING);
+		state.write(path(eventId), record.assoc(Fields.STATUS, COMPLETE)
+			.assoc(Fields.SESSION_ID, sessionId).assoc(Fields.JOB_ID, jobId)
+			.assoc(COMPLETED_AT, CVMLong.create(System.currentTimeMillis())));
+		return true;
 	}
 
 	public AMap<AString, ACell> get(String eventId) {

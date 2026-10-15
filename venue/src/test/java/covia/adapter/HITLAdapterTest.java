@@ -190,6 +190,72 @@ public class HITLAdapterTest {
 			"the human answer must arrive in the asking session: " + conversation);
 	}
 
+	@Test
+	public void resolutionAndSessionDeliveryRollbackTogetherAndSurviveRestart(@org.junit.jupiter.api.io.TempDir java.nio.file.Path temp) throws Exception {
+		AMap<AString, ACell> config = Maps.of(Config.PORT, 0, Config.BIND_ADDRESS, "127.0.0.1",
+			Config.STORE, temp.resolve("hitl.etch").toString(), Config.SEED, AKeyPair.createSeeded(7481).getSeed().toHexString());
+		AString owner = Strings.create("did:test:atomic-hitl");
+		Blob sid = Blob.fromHex("a11ce000a11ce000a11ce000a11ce000");
+		var failAppend = new java.util.concurrent.atomic.AtomicBoolean(true);
+		var requestId = new java.util.concurrent.atomic.AtomicReference<AString>();
+		var wakes = new java.util.concurrent.atomic.AtomicInteger();
+		var first = covia.venue.server.VenueServer.launch(config);
+		try {
+			Engine e = first.getEngine();
+			Engine.addDemoAssets(e);
+			e.getVenueState().users().ensure(owner);
+			e.registerAdapter(new AgentAdapter() {
+				@Override public boolean appendSessionMessage(covia.venue.Users draft, AString user, AString agent, Blob session,
+						AString caller, AString job, ACell message) {
+					if (failAppend.get()) {
+						assertEquals(Hitl.OPEN, e.getVenueState().users().get(owner).getHitlRequest(requestId.get()).get(Hitl.STATUS));
+						assertTrue(e.getVenueState().users().get(owner).agent("asker").getSessionPending(sid).isEmpty());
+					}
+					boolean appended = super.appendSessionMessage(draft,user,agent,session,caller,job,message);
+					if (failAppend.get()) throw new IllegalStateException("injected delivery failure");
+					return appended;
+				}
+				@Override public java.util.concurrent.CompletableFuture<ACell> wakeAgent(AString user, AString agent, boolean force) {
+					wakes.incrementAndGet(); return java.util.concurrent.CompletableFuture.completedFuture(null);
+				}
+			});
+			var ctx = RequestContext.of(owner);
+			e.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "asker", Fields.CONFIG,
+				Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm")), ctx).awaitResult(5000);
+			var agent = e.getVenueState().users().get(owner).agent("asker");
+			agent.ensureSession(sid, owner);
+			Job ask = e.jobs().invokeOperation("v/ops/hitl/request", Hitl.request("Atomic answer")
+				.ask(Hitl.approval("yes", "Continue?").required()).build(), ctx.withAgentId(Strings.create("asker")).withSessionId(sid));
+			requestId.set(Strings.create(ask.getID().toHexString()));
+			var answer = Hitl.answer(requestId.get().toString()).answer("yes", true).build();
+			assertThrows(JobFailedException.class, () -> e.jobs().invokeOperation("v/ops/hitl/respond", answer, ctx).awaitResult(5000));
+			assertEquals(Hitl.OPEN, e.getVenueState().users().get(owner).getHitlRequest(requestId.get()).get(Hitl.STATUS));
+			assertTrue(agent.getSessionPending(sid).isEmpty());
+			assertEquals(Status.INPUT_REQUIRED, ask.getStatus());
+			failAppend.set(false);
+			wakes.set(0);
+			var responses = new java.util.ArrayList<java.util.concurrent.CompletableFuture<Boolean>>();
+			for (int n=0; n<6; n++) responses.add(java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+				try { e.jobs().invokeOperation("v/ops/hitl/respond", answer, ctx).awaitResult(5000); return true; }
+				catch (JobFailedException expected) { return false; }
+			}));
+			int accepted = 0;
+			for (var response : responses) if (response.get(10, java.util.concurrent.TimeUnit.SECONDS)) accepted++;
+			assertEquals(1, accepted);
+			assertEquals(1, wakes.get());
+			assertEquals(1, agent.getSessionPending(sid).count());
+			assertNull(RT.getIn(agent.getSessionPending(sid).get(0), Fields.JOB_ID), "a resolved request must not make its independent message disposable");
+			assertEquals(Status.COMPLETE, ask.getStatus());
+		} finally { first.close(); }
+		var second = covia.venue.server.VenueServer.launch(config);
+		try {
+			var agent = second.getEngine().getVenueState().users().get(owner).agent("asker");
+			TestEngine.awaitTimelineCount(agent, 1, 10000);
+			assertTrue(agent.getSession(sid).toString().contains(requestId.get().toString()), "the resolved answer must survive restart before wake");
+			assertEquals(Hitl.ANSWERED, second.getEngine().getVenueState().users().get(owner).getHitlRequest(requestId.get()).get(Hitl.STATUS));
+		} finally { second.close(); }
+	}
+
 	// ========== Token transport (COG-19): self-sovereign cross-venue tokens ==========
 
 	/** Builds a self-ask request carrying one token ask audienced to {@code aud}. */

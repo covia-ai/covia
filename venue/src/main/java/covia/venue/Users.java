@@ -24,7 +24,8 @@ import convex.core.lang.RT;
  * {@link convex.lattice.generic.StringKeyedLattice} with AString keys
  * for JSON compatibility.</p>
  */
-public class Users extends ALatticeComponent<AMap<AString, ACell>> {
+public class Users extends ALatticeComponent<AMap<AString, ACell>>
+		implements convex.lattice.TransactionalComponent<AMap<AString, ACell>, Users> {
 	public static final String ACCOUNT_DELETED = "User account has been deleted";
 	static final AString GENERATION = Strings.intern("generation");
 	static final AString DELETING = Strings.intern("deleting");
@@ -51,6 +52,11 @@ public class Users extends ALatticeComponent<AMap<AString, ACell>> {
 	Users(ALatticeComponent<?> parent, AForkableCursor<AMap<AString, ACell>> cursor) {
 		super(cursor);
 		setContext(parent.getContext());
+	}
+
+	@Override
+	public Users withCursor(AForkableCursor<AMap<AString, ACell>> draft) {
+		return new Users(this, draft);
 	}
 
 	/**

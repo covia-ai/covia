@@ -157,6 +157,49 @@ class WhatsAppAdapterTest {
 			assertTrue(f.api.sends.isEmpty());
 		}
 	}
+	@Test void localDeliveryDoesNotWaitForResponsesOrReplayFailedReplies() throws Exception {
+		var agentSpec = spec().dissoc(Strings.intern("operation")).dissoc(Strings.intern("reply"))
+			.assoc(Strings.intern("agent"), Strings.create("local-agent"));
+		var response = new CompletableFuture<ACell>();
+		var entered = new java.util.concurrent.CountDownLatch(1);
+		try (Fixture f = new Fixture(agentSpec)) {
+			f.engine.registerAdapter(new AAdapter() {
+				@Override public String getName() { return "held"; }
+				@Override public String getDescription() { return "Held model"; }
+				@Override protected void installAssets() { installAsset("held/llm", Maps.of("operation", Maps.of("adapter", "held:llm"))); }
+				@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+					entered.countDown(); return response;
+				}
+			});
+			TestSupport.run(f.engine, OWNER, "v/ops/agent/create", Maps.of(Fields.AGENT_ID, "local-agent", Fields.CONFIG,
+				Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/ops/held/llm")));
+			assertEquals(200, f.webhook(payload(message("local-first"))).status());
+			assertTrue(entered.await(8, TimeUnit.SECONDS));
+			awaitStatus(f.bot(), "local-first", WebhookInbox.COMPLETE);
+			assertEquals(200, f.webhook(payload(message("local-second"))).status());
+			awaitStatus(f.bot(), "local-second", WebhookInbox.COMPLETE);
+			var sid = f.bot().inbox().get("local-first").get(Fields.SESSION_ID);
+			assertEquals(sid, f.bot().inbox().get("local-second").get(Fields.SESSION_ID));
+			assertFalse(response.isDone());
+			assertTrue(f.api.sends.isEmpty());
+			var agent = f.engine.getVenueState().users().get(OWNER).agent("local-agent");
+			var before = agent.getRecord();
+			assertEquals(200, f.webhook(payload(message("local-second"))).status());
+			assertEquals(before, agent.getRecord(), "duplicate callbacks must not append input");
+			f.api.status = 503;
+			response.complete(Maps.of("role", "assistant", "content", "reply"));
+			f.api.take(); f.api.take();
+			long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(8);
+			while (!Strings.create(WebhookBot.REPLY_FAILED).equals(f.bot().status().get(Fields.ERROR)) && System.nanoTime() < deadline) Thread.sleep(10);
+			assertEquals(Strings.create(WebhookBot.REPLY_FAILED), f.bot().status().get(Fields.ERROR));
+			awaitStatus(f.bot(), "local-first", WebhookInbox.COMPLETE);
+			awaitStatus(f.bot(), "local-second", WebhookInbox.COMPLETE);
+			f.configure(agentSpec);
+			assertEquals(200, f.webhook(payload(message("local-first"), message("local-second"))).status());
+			assertNull(f.api.sends.poll(200, TimeUnit.MILLISECONDS), "failed replies must not replay admission");
+		} finally { response.complete(Maps.of("role", "assistant", "content", "cleanup")); }
+	}
+
 	@Test void agentSessionsFollowSenderAndPhoneAndSurviveReplacement() throws Exception {
 		var agentSpec = spec().dissoc(Strings.intern("operation")).dissoc(Strings.intern("reply"))
 			.assoc(Strings.intern("agent"), Strings.create("test-agent"))

@@ -385,7 +385,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		return offline;
 	}
 
-	/** Whether all work already accepted for one chat has finished. */
+	/** Whether queued intake for one chat has finished (replies may still be pending). */
 	boolean isChatIdle(long chatId) {
 		return conversations.isIdle(Long.toString(chatId));
 	}
@@ -457,18 +457,35 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	private void schedule(Update update) {
 		String id = Integer.toString(update.updateId());
 		conversations.enqueue(conversationKey(update.message(), chatOf(update)), () -> {
-			if (stopped || !adapter.isActive() || !inbox.claim(id)) return;
+			if (stopped || !adapter.isActive()) return;
 			try {
-				dispatch(update);
-				inbox.complete(id);
+				boolean sessionDelivery = isSessionDelivery(update);
+				if (sessionDelivery ? !WebhookInbox.PENDING.equals(inbox.get(id).get(Fields.STATUS)) : !inbox.claim(id)) return;
+				dispatch(update, sessionDelivery);
+				if (!sessionDelivery) inbox.complete(id);
 			} catch (Throwable t) {
 				failed.incrementAndGet();
 				error = "Update " + id + " requires inspection: " + concise(t);
 				logFailure("update " + id + " requires inspection", chatOf(update), t);
-				// STARTED is deliberately retained: neither a Job nor an external
-				// send may be repeated safely after an uncertain outcome.
+				if (spec.routesToAgent()) sendQuietly(chatOf(update), "⚠️ " + concise(t), update.message());
+				// Session input stays PENDING until atomic handoff; operation/command
+				// STARTED receipts retain their existing uncertain-outcome policy.
 			}
 		});
+	}
+
+	/** Only session delivery can share a local transaction with its recipient. */
+	private boolean isSessionDelivery(Update update) {
+		Message m = update.message();
+		if (!spec.routesToAgent() || m == null) return false;
+		String text = m.text() != null ? m.text() : m.caption();
+		if (text != null && !text.isBlank()) {
+			text = stripMention(text.trim());
+			if (addressedToAnotherBot(text)) return false;
+			if (java.util.Set.of("/start", "/help", "/id", "/new").contains(commandOf(text))) return false;
+			return conversations.supportsSessionDelivery();
+		}
+		return !TelegramMedia.attachments(m).isEmpty() && conversations.supportsSessionDelivery();
 	}
 
 	private void recoverPending() {
@@ -479,7 +496,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		}
 	}
 
-	private void dispatch(Update update) {
+	private void dispatch(Update update, boolean sessionDelivery) {
 		Message m = update.message();
 		Long chatId = chatOf(update);
 		User from = senderOf(update);
@@ -501,7 +518,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 				if (isPrivate(m)) sendQuietly(chatId, "Send text, a voice note, a photo or a file.", m);
 				return;
 			}
-			respondAgent(m, text == null ? "" : text);
+			respondAgent(Integer.toString(update.updateId()), m, text == null ? "" : text, sessionDelivery);
 		} else {
 			respondOperation(update);
 		}
@@ -586,25 +603,43 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	 * user's job index (the canonical record of the interaction), the response
 	 * sent back as a reply.
 	 */
-	private void respondAgent(Message m, String text) {
+	private void respondAgent(String updateId, Message m, String text, boolean sessionDelivery) {
 		Long chatId = m.chat().id();
-		try {
+		ACell input = prepareMessage(m, text);
+		if (!sessionDelivery) {
+			// Remote agent facades cannot join a local lattice transaction. Preserve
+			// their existing claimed-receipt protocol until the remote result arrives.
 			typing(chatId, m);
-			ACell response = conversations.chat(conversationKey(m, chatId), prepareMessage(m, text));
-			String reply;
-			if (spec.replyOperation() == null) {
-				reply = ConversationRouter.responseText(response);
-			} else {
-				ACell formatted = conversations.runOperation(spec.replyOperation(), Maps.of(
-					Fields.RESPONSE, response, K_VIA, agentMessage(m, text).get(K_VIA)));
-				reply = formattedReply(formatted);
-			}
-			send(chatId, reply, spec.parseMode(), m.messageId(), threadOf(m), false);
-		} catch (Throwable t) {
-			logFailure("failed to respond", chatId, t);
-			sendQuietly(chatId, "⚠️ " + concise(t), m);
-			throw new JobFailedException(concise(t));
+			sendAgentReply(m, text, conversations.chat(conversationKey(m, chatId), input));
+			return;
 		}
+		covia.grid.Job job = conversations.deliver(conversationKey(m, chatId), input,
+			(draft, sid, jid) -> inbox.deliver(draft, updateId, sid, jid));
+		if (job == null) return; // Already delivered; never send a duplicate reply.
+		// Delivery is now durable. Waiting, formatting and sending are independent
+		// of the receipt and cannot block another message's admission to the session.
+		ConversationRouter.onResponse(job, response -> {
+			if (!stopped) sendAgentReply(m, text, response);
+		}, t -> {
+			if (stopped) return;
+			failed.incrementAndGet();
+			error = "Reply for update " + updateId + " failed: " + concise(t);
+			logFailure("reply for update " + updateId + " failed", chatId, t);
+			sendQuietly(chatId, "⚠️ " + concise(t), m);
+		});
+		typing(chatId, m);
+	}
+
+	private void sendAgentReply(Message m, String text, ACell response) {
+		String reply;
+		if (spec.replyOperation() == null) {
+			reply = ConversationRouter.responseText(response);
+		} else {
+			ACell formatted = conversations.runOperation(spec.replyOperation(), Maps.of(
+				Fields.RESPONSE, response, K_VIA, agentMessage(m, text).get(K_VIA)));
+			reply = formattedReply(formatted);
+		}
+		send(m.chat().id(), reply, spec.parseMode(), m.messageId(), threadOf(m), false);
 	}
 
 	static String formattedReply(ACell result) {

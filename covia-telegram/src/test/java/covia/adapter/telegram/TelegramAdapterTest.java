@@ -580,6 +580,61 @@ public class TelegramAdapterTest {
 	}
 
 	@Test
+	public void sessionDeliveryCompletesBeforeTheTurnAndSurvivesReplyFailure() throws Exception {
+		long chat = 17001;
+		var entered = new java.util.concurrent.CountDownLatch(1);
+		var response = new java.util.concurrent.CompletableFuture<ACell>();
+		var modelCalls = new java.util.concurrent.atomic.AtomicInteger();
+		engine.registerAdapter(new covia.adapter.AAdapter() {
+			@Override public String getName() { return "telegram-held"; }
+			@Override public String getDescription() { return "Holds the model response after intake"; }
+			@Override protected void installAssets() {
+				installAsset("telegram-held/llm", Maps.of("name", "Held model", "operation", Maps.of("adapter", "telegram-held:llm")));
+			}
+			@Override public java.util.concurrent.CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+				modelCalls.incrementAndGet();
+				entered.countDown();
+				return response;
+			}
+		});
+		run(RequestContext.of(OWNER), "v/ops/agent/create", Maps.of(Fields.AGENT_ID, "tg-held", Fields.CONFIG,
+			Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/ops/telegram-held/llm")));
+		var inbox = new covia.adapter.webhook.WebhookInbox(engine, engine.adapterWorkspace("telegram"),
+			"config/echo/inbox/" + OWNER.getHash().toHexString() + "/42");
+		var config = echoBotConfig().assoc(BotSpec.K_AGENT, Strings.create("tg-held"));
+		int failedBefore = telegram.failedSends.get();
+		try {
+			configureBots(Maps.of("echo", config));
+			awaitState("echo", BotRunner.State.RUNNING, 10_000);
+			String first = Integer.toString(telegram.push(chat, ALLOWED_ID, "alice", "First input"));
+			assertTrue(entered.await(10, java.util.concurrent.TimeUnit.SECONDS));
+			assertEquals(covia.adapter.webhook.WebhookInbox.COMPLETE, inbox.get(first).get(Fields.STATUS));
+			assertFalse(response.isDone());
+			String second = Integer.toString(telegram.push(chat, ALLOWED_ID, "alice", "Second input while thinking"));
+			await(() -> inbox.get(second) != null && covia.adapter.webhook.WebhookInbox.COMPLETE.equals(inbox.get(second).get(Fields.STATUS)),
+				10_000, () -> "second input was blocked behind the first response");
+			assertEquals(inbox.get(first).get(Fields.SESSION_ID), inbox.get(second).get(Fields.SESSION_ID));
+			assertFalse(response.isDone());
+			telegram.failSendChats.add(chat);
+			response.complete(Maps.of("role", "assistant", "content", "Generated response"));
+			await(() -> telegram.failedSends.get() >= failedBefore + 4, 10_000, () -> "both replies and failure notices should fail");
+			assertEquals(covia.adapter.webhook.WebhookInbox.COMPLETE, inbox.get(first).get(Fields.STATUS));
+			assertEquals(covia.adapter.webhook.WebhookInbox.COMPLETE, inbox.get(second).get(Fields.STATUS));
+			int calls = modelCalls.get();
+			configureBots(Maps.empty());
+			configureBots(Maps.of("echo", config));
+			awaitState("echo", BotRunner.State.RUNNING, 10_000);
+			assertNull(telegram.awaitSent(600));
+			assertEquals(calls, modelCalls.get(), "a failed outbound reply must not redeliver session input");
+		} finally {
+			response.complete(Maps.of("role", "assistant", "content", "Generated response"));
+			configureBots(Maps.of("echo", echoBotConfig()));
+			awaitState("echo", BotRunner.State.RUNNING, 10_000);
+			telegram.failSendChats.remove(chat);
+		}
+	}
+
+	@Test
 	public void pendingReceiptSurvivesRunnerRestartAndCompletedReceiptIsNotReplayed() throws Exception {
 		configureBots(Maps.empty());
 		var inbox = new covia.adapter.webhook.WebhookInbox(engine, engine.adapterWorkspace("telegram"), "config/echo/inbox/" + OWNER.getHash().toHexString() + "/42");

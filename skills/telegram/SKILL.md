@@ -96,11 +96,17 @@ in `params.media` and matching `files` entries. Downloads and total upload bytes
 are bounded to 20 MiB. No token-bearing file URLs or local filesystem paths are
 needed. Downloaded files remain after deleting the bot; the owner manages them.
 
-Durable receipts precede Telegram acknowledgement. Pending updates recover after
-restart; STARTED updates are never blindly replayed. `bots` reports `pendingUpdates`
-and `startedUpdates` (in flight or interrupted); inspect Jobs and errors for the
-latter. This is not exactly-once delivery. Topics keep separate sessions; albums
-retain their group ID but are processed as separate turns.
+Durable receipts precede Telegram acknowledgement. Local agent delivery atomically
+adds session input, saves the chat/session mapping and completes the receipt,
+then flushes before waking the agent. It does not wait for the turn or reply;
+later inputs can be delivered while the agent is working. Pending intake resumes
+after restart; delivered input is not replayed because a reply failed. Completed
+receipts deduplicate for seven days. Preprocessing precedes admission and may be
+retried for unfinished intake. Commands, operation handlers, remote agent facades
+and old STARTED receipts retain their inspection-based recovery policy.
+`bots` reports `pendingUpdates` and `startedUpdates`. Outbound replies have no
+durable outbox or automatic restart recovery. Topics keep separate sessions;
+albums retain their group ID but are processed as separate messages.
 
 ## `create <bot-name>` / `delete <bot-name>` — Manage your own bots
 

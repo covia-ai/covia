@@ -17,7 +17,8 @@ import covia.api.Fields;
 /** A durable webhook binding. Uncertain STARTED work is reported, never blindly retried. */
 public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<S> {
 	public static final AString VERSION = Strings.intern("bindingVersion");
-	public static final String PROCESSING_FAILED = "Processing failed; inspect the STARTED receipt before any manual retry";
+	public static final String PROCESSING_FAILED = "Processing failed; inspect the receipt before any manual retry";
+	public static final String REPLY_FAILED = "Reply failed after session delivery";
 	private final AWebhookMessagingAdapter<S> adapter;
 	private final S spec;
 	private final Managed managed;
@@ -116,6 +117,20 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 		String conversation = MessagingSettings.required(event, "conversation");
 		if (!queued.add(id)) return;
 		router.enqueue(conversation, () -> {
+			if (spec.routesToAgent() && router.supportsSessionDelivery()) {
+				covia.grid.Job job;
+				synchronized (adapter.engine) {
+					synchronized (this) {
+						if (!ready()) return;
+						ACell message = Maps.of("text", MessagingSettings.required(event, "text"), "via", event.get(MessagingSettings.key("via")));
+						job = router.deliver(conversation, message, (draft, sid, jid) -> inbox.deliver(draft, id, sid, jid));
+					}
+				}
+				ConversationRouter.onResponse(job, response -> {
+					if (running && adapter.isActive()) adapter.sendReply(this, event, ConversationRouter.responseText(response));
+				}, failure -> { if (running) lastError = REPLY_FAILED; });
+				return;
+			}
 			if (!claim(id)) return;
 			ACell input = event.get(Fields.INPUT);
 			String reply;

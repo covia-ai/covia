@@ -47,7 +47,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 
 	private final ConversationRouter conversations;
 
-	BotRunner(DiscordAdapter adapter,BotSpec spec,String apiUrl,Managed managed){this.adapter=adapter;this.spec=spec;this.apiUrl=apiUrl;this.managed=managed;conversations=new ConversationRouter(adapter.engine,spec,new ConversationSessions(adapter.state(),sessionsRelativePath()));}
+	BotRunner(DiscordAdapter adapter,BotSpec spec,String apiUrl,Managed managed){this.adapter=adapter;this.spec=spec;this.apiUrl=apiUrl;this.managed=managed;conversations=new ConversationRouter(adapter.engine,spec,new ConversationSessions(adapter.state(),sessionsRelativePath(),this,()->!stopped&&adapter.isActive()));}
 	@Override public BotSpec spec(){return spec;}
 	@Override public Managed managed(){return managed;}
 	@Override public void start(){AAdapter.VIRTUAL_EXECUTOR.execute(this::tryStart);}
@@ -76,7 +76,26 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	private String greeting(){if(spec.greeting()!=null)return spec.greeting();return spec.routesToAgent()?"Connected to agent '"+spec.agent()+"'. Send a message to talk; !new starts a fresh conversation.":"Messages are handled by "+spec.operation()+".";}
 	private String stripMention(String text){if(text==null)return "";if(botId!=null){text=text.replace("<@"+botId+">","").replace("<@!"+botId+">","");}return text.trim();}
 	private void enqueue(String id,Runnable work){conversations.enqueue(id,work);}
-	private void respondAgent(InboundMessage m,String text){try{String reply=ConversationRouter.responseText(conversations.chat(m.channelId(),agentMessage(m,text)));send(m.channelId(),reply,m.id());}catch(Throwable t){failed.incrementAndGet();logFailure("failed to respond",m,t);sendQuietly(m.channelId(),"⚠️ "+concise(t),m.id());}}
+	private void respondAgent(InboundMessage m,String text) {
+		try {
+			if (stopped || !adapter.isActive()) return;
+			if (conversations.supportsSessionDelivery()) {
+				// Gateway delivery has no durable receipt yet. Still commit the
+				// input and session mapping together and release the intake queue.
+				var job = conversations.deliver(m.channelId(), agentMessage(m,text), (draft,sid,jid) -> true);
+				ConversationRouter.onResponse(job, response -> {
+					if (!stopped && adapter.isActive()) send(m.channelId(),ConversationRouter.responseText(response),m.id());
+				}, t -> agentFailure(m,t));
+			} else {
+				String reply = ConversationRouter.responseText(conversations.chat(m.channelId(),agentMessage(m,text)));
+				if (!stopped && adapter.isActive()) send(m.channelId(),reply,m.id());
+			}
+		} catch (Throwable t) { agentFailure(m,t); }
+	}
+	private void agentFailure(InboundMessage m,Throwable t) {
+		if (stopped || !adapter.isActive()) return;
+		failed.incrementAndGet();logFailure("failed to respond",m,t);sendQuietly(m.channelId(),"⚠️ "+concise(t),m.id());
+	}
 	private void respondOperation(InboundMessage m){try{ACell result=conversations.runOperation(spec.operation(),messageRecord(m));String reply=conversations.operationReply(result);if(reply!=null)send(m.channelId(),reply,m.id());}catch(Throwable t){failed.incrementAndGet();logFailure("handler failed",m,t);sendQuietly(m.channelId(),"⚠️ "+concise(t),m.id());}}
 
 	AMap<AString,ACell> messageRecord(InboundMessage m){AMap<AString,ACell> out=Maps.of(K_BOT,Strings.create(spec.name()),K_ID,Strings.create(m.id()),K_CHANNEL_ID,Strings.create(m.channelId()),Strings.intern("channel_type"),Strings.create(m.channelType()),K_FROM,userRecord(m),Fields.TEXT,Strings.create(m.content()==null?"":m.content()),K_ATTACHMENTS,m.attachments());if(m.channelName()!=null)out=out.assoc(Strings.intern("channel_name"),Strings.create(m.channelName()));if(m.guildId()!=null)out=out.assoc(K_GUILD,Maps.of(K_ID,Strings.create(m.guildId()),K_NAME,Strings.create(m.guildName())));return out;}

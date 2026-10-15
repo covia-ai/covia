@@ -34,6 +34,22 @@ public class RequestContext {
 	 *  {@link Authority#ANONYMOUS}). */
 	private final Authority authority;
 
+	/** Trusted local intake participant; never deserialised from operation input.
+	 * Called on a transaction draft, possibly repeatedly. No I/O or live writes.
+	 * False means this delivery was already accepted and must not append input. */
+	@FunctionalInterface
+	public interface SessionDelivery {
+		boolean accept(Users draft, AString sessionId, AString jobId);
+	}
+	private final SessionDelivery sessionDelivery;
+
+	public SessionDelivery getSessionDelivery() { return sessionDelivery; }
+
+	public RequestContext withSessionDelivery(SessionDelivery delivery) {
+		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op,
+			cancellation, invocationInput, gate, gateEvaluation, job, taskRevision, cycle, delivery);
+	}
+
 	private final AString agentId;
 	private final Blob jobId;
 	private final Blob sessionId;
@@ -122,6 +138,16 @@ public class RequestContext {
 			java.util.concurrent.atomic.AtomicBoolean cancellation,
 			ACell invocationInput, CapabilityGate gate, boolean gateEvaluation, Job job,
 			long taskRevision, AgentEvents.Cycle cycle) {
+		this(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation,
+			invocationInput, gate, gateEvaluation, job, taskRevision, cycle, null);
+	}
+
+	private RequestContext(Authority authority, AString agentId, Blob jobId, Blob sessionId,
+			Blob taskId, AVector<ACell> rawUcans, AString op,
+			java.util.concurrent.atomic.AtomicBoolean cancellation,
+			ACell invocationInput, CapabilityGate gate, boolean gateEvaluation, Job job,
+			long taskRevision, AgentEvents.Cycle cycle, SessionDelivery sessionDelivery) {
+		this.sessionDelivery = sessionDelivery;
 		this.authority = (authority != null) ? authority : Authority.ANONYMOUS;
 		this.agentId = agentId;
 		this.jobId = jobId;
@@ -206,7 +232,7 @@ public class RequestContext {
 	 * CAD3-signed tokens directly are implicitly trusted by construction.</p>
 	 */
 	public RequestContext withProofs(AVector<ACell> proofs) {
-		return new RequestContext(authority.withProofs(proofs), agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, taskRevision, cycle);
+		return new RequestContext(authority.withProofs(proofs), agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, taskRevision, cycle, sessionDelivery);
 	}
 
 	/**
@@ -220,7 +246,7 @@ public class RequestContext {
 		if (delegated == authority) return this;
 		return new RequestContext(delegated, agentId, jobId, sessionId,
 			taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job,
-			taskRevision, cycle);
+			taskRevision, cycle, sessionDelivery);
 	}
 
 	/**
@@ -231,7 +257,7 @@ public class RequestContext {
 	 * sub-operations. {@code null} = unrestricted.
 	 */
 	public RequestContext withCaps(AVector<ACell> caps) {
-		return new RequestContext(authority.withGrantScope(caps), agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, taskRevision, cycle);
+		return new RequestContext(authority.withGrantScope(caps), agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, taskRevision, cycle, sessionDelivery);
 	}
 
 	/**
@@ -239,7 +265,7 @@ public class RequestContext {
 	 * resolves to the agent's private workspace at {@code g/{agentId}/n/}.
 	 */
 	public RequestContext withAgentId(AString agentId) {
-		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, taskRevision, cycle);
+		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, taskRevision, cycle, sessionDelivery);
 	}
 
 	/**
@@ -249,7 +275,7 @@ public class RequestContext {
 	 * id) takes precedence over an internal transition Job id.
 	 */
 	public RequestContext withJobId(Blob jobId) {
-		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, taskRevision, cycle);
+		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, taskRevision, cycle, sessionDelivery);
 	}
 
 	/**
@@ -259,7 +285,7 @@ public class RequestContext {
 	 * durable Job id may remain the temp scope of an internal sub-invocation.
 	 */
 	public RequestContext withJob(Job job) {
-		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, taskRevision, cycle);
+		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, taskRevision, cycle, sessionDelivery);
 	}
 
 	/**
@@ -268,7 +294,7 @@ public class RequestContext {
 	 * conversation-scoped slot at {@code g/{agentId}/sessions/{sessionId}/c/}.
 	 */
 	public RequestContext withSessionId(Blob sessionId) {
-		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, taskRevision, cycle);
+		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, taskRevision, cycle, sessionDelivery);
 	}
 
 	/**
@@ -279,12 +305,12 @@ public class RequestContext {
 	 * work queue.
 	 */
 	public RequestContext withTaskId(Blob taskId) {
-		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, -1L, cycle);
+		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, -1L, cycle, sessionDelivery);
 	}
 
 	/** Returns a context focused on the task row revision presented this cycle. */
 	public RequestContext withTaskId(Blob taskId, long taskRevision) {
-		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, taskRevision, cycle);
+		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, taskRevision, cycle, sessionDelivery);
 	}
 
 	/**
@@ -297,7 +323,7 @@ public class RequestContext {
 	 * (#211): {@code {"with": "v/ops/getmine", "can": "invoke"}}.
 	 */
 	public RequestContext withOp(AString op) {
-		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, taskRevision, cycle);
+		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, taskRevision, cycle, sessionDelivery);
 	}
 
 	/**
@@ -319,7 +345,7 @@ public class RequestContext {
 	 * evaluator treat gated grants as unable to authorise (fail-closed).
 	 */
 	public RequestContext withInvocation(ACell invocationInput, CapabilityGate gate) {
-		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, taskRevision, cycle);
+		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, taskRevision, cycle, sessionDelivery);
 	}
 
 	/**
@@ -337,7 +363,7 @@ public class RequestContext {
 		}
 		Authority gateAuthority = authority.withGrantScope(grants).withProofs(null);
 		return new RequestContext(gateAuthority, agentId, jobId, sessionId, taskId,
-			null, gateOp, cancellation, null, null, true, job, taskRevision, cycle);
+			null, gateOp, cancellation, null, null, true, job, taskRevision, cycle, null);
 	}
 
 	boolean isGateEvaluation() {
@@ -351,7 +377,7 @@ public class RequestContext {
 	 * stop the running transition thread by itself.
 	 */
 	public RequestContext withCancellation(java.util.concurrent.atomic.AtomicBoolean cancellation) {
-		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, taskRevision, cycle);
+		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, taskRevision, cycle, sessionDelivery);
 	}
 
 	/**
@@ -369,7 +395,7 @@ public class RequestContext {
 	 * signal; the transition adapter opens its {@code CycleRecord} on it.
 	 */
 	public RequestContext withCycle(AgentEvents.Cycle cycle) {
-		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, taskRevision, cycle);
+		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, taskRevision, cycle, sessionDelivery);
 	}
 
 	/**
@@ -492,7 +518,7 @@ public class RequestContext {
 	 * forwarding — the parsed {@link #getProofs() proofs} cannot be re-signed.
 	 */
 	public RequestContext withRawUcans(AVector<ACell> rawUcans) {
-		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, taskRevision, cycle);
+		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, taskRevision, cycle, sessionDelivery);
 	}
 
 	/**

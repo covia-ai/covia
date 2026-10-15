@@ -63,6 +63,20 @@ public final class ConversationSessions {
 		}
 	}
 
+	/** Hold the binding lifecycle lock until a transaction has published. */
+	<T> T mutate(java.util.function.Supplier<T> work) {
+		synchronized (mutationLock) {
+			if (!writable.getAsBoolean()) throw new IllegalStateException("Conversation binding is stopped");
+			return work.get();
+		}
+	}
+
+	/** Writes the mapping in the same transaction as agent intake and its receipt. */
+	public void put(covia.venue.Users draft, String conversation, String session) {
+		if (!writable.getAsBoolean()) throw new IllegalStateException("Conversation binding is stopped");
+		workspace.withUsers(draft).write(path(conversation), Strings.create(session));
+	}
+
 	public void remove(String conversation) {
 		synchronized (mutationLock) {
 			if (!writable.getAsBoolean()) return;

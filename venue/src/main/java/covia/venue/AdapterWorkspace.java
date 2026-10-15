@@ -24,14 +24,25 @@ public final class AdapterWorkspace {
 	private final Engine engine;
 	private final String adapterName;
 	private final String rootPath;
+	private final Users users;
 
 	AdapterWorkspace(Engine engine,String adapterName) {
+		this(engine, adapterName, null);
+	}
+
+	private AdapterWorkspace(Engine engine, String adapterName, Users users) {
+		this.users=users;
 		this.engine=Objects.requireNonNull(engine,"engine");
 		if(adapterName==null||!ADAPTER_NAME.matcher(adapterName).matches()) {
 			throw new IllegalArgumentException("Adapter workspace name must match [a-z][a-z0-9-]*: "+adapterName);
 		}
 		this.adapterName=adapterName;
 		this.rootPath=ROOT+adapterName;
+	}
+
+	/** Callback-confined view for an atomic transaction spanning user components. */
+	public AdapterWorkspace withUsers(Users draft) {
+		return new AdapterWorkspace(engine, adapterName, Objects.requireNonNull(draft));
 	}
 
 	public String adapterName(){return adapterName;}
@@ -68,7 +79,7 @@ public final class AdapterWorkspace {
 		return venueUser().deleteInternalPath(keys(path(relative)));
 	}
 
-	private User venueUser(){return engine.getVenueState().users().ensure(engine.getDIDString());}
+	private User venueUser(){return (users == null ? engine.getVenueState().users() : users).ensure(engine.getDIDString());}
 	private static ACell[] keys(String path){return CoviaAdapter.parseStringPath(path);}
 
 	private static String validateRelative(String relative,boolean allowEmpty){

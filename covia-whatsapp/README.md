@@ -95,6 +95,13 @@ automatic retry, including rate-limit responses.
 
 ## State and recovery
 
+For a local agent, COMPLETE means the input and session mapping were committed
+atomically with the receipt. It does not wait for the agent's turn or outgoing
+reply. Later inputs can arrive while the agent is thinking; failed replies never
+redeliver input. Reply callbacks are not a durable outbound queue. Operation
+handlers and remote agents retain STARTED until processing and replies finish.
+
+
 The shared [webhook worker](../venue/docs/ADAPTERS.md#http-messaging-workers)
 owns receipts and sessions. Pending events resume when credentials become
 available or the venue restarts. Started events remain visible for manual
