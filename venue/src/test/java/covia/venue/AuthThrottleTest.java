@@ -114,10 +114,12 @@ public class AuthThrottleTest {
 	}
 
 	private static HttpRequest status(String fromIp, String bearer) {
+		// Outlasts the venue's 60s queue wait (blockMs), so a slow queue under load
+		// answers rather than timing out client-side; a deadlock still fails as a 429.
 		HttpRequest.Builder b = HttpRequest.newBuilder(
 				URI.create("http://127.0.0.1:" + server.port() + "/api/v1/status"))
 			.header("X-Forwarded-For", fromIp)
-			.timeout(Duration.ofSeconds(15)).GET();
+			.timeout(Duration.ofSeconds(75)).GET();
 		if (bearer != null) b.header("Authorization", "Bearer " + bearer);
 		return b.build();
 	}
@@ -164,7 +166,7 @@ public class AuthThrottleTest {
 		List<CompletableFuture<HttpResponse<String>>> sent = new ArrayList<>();
 		for (int i = 0; i < FAILURE_BURST; i++) sent.add(sendAsync("203.0.113.20", remoteToken("did:slow:a")));
 		for (CompletableFuture<HttpResponse<String>> f : sent) {
-			HttpResponse<String> r = f.get(20, TimeUnit.SECONDS);
+			HttpResponse<String> r = f.get(90, TimeUnit.SECONDS);
 			assertEquals(401, r.statusCode(), r.body());
 		}
 		assertEquals(1, maxInFlight.get(), "a further attempt from the same address waits for the one in flight");
@@ -172,8 +174,8 @@ public class AuthThrottleTest {
 		maxInFlight.set(0);
 		CompletableFuture<HttpResponse<String>> a = sendAsync("203.0.113.21", remoteToken("did:slow:a"));
 		CompletableFuture<HttpResponse<String>> b = sendAsync("203.0.113.22", remoteToken("did:slow:a"));
-		assertEquals(401, a.get(20, TimeUnit.SECONDS).statusCode());
-		assertEquals(401, b.get(20, TimeUnit.SECONDS).statusCode());
+		assertEquals(401, a.get(90, TimeUnit.SECONDS).statusCode());
+		assertEquals(401, b.get(90, TimeUnit.SECONDS).statusCode());
 		assertEquals(2, maxInFlight.get(), "the gate is per address: two addresses verify in parallel");
 	}
 }
