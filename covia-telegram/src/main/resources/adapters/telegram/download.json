@@ -1,0 +1,62 @@
+{
+	"name": "Download Telegram attachment",
+	"description": "Downloads a Telegram file_id into an optional destination directory. Returns ref, fileName (actual stored name), file_id and size, with file_name (original name) and contentType when known. Optional fileName overrides the original filename retained from an admitted message; otherwise a safe original name is preferred, with a generated fallback. Conflicts use report(1).pdf, report(2).pdf, etc.; files are never overwritten. Omit destination for the bot owner's private DLFS telegram drive. Explicit directories use caller write authority and a content provider supporting create-only writes (DLFS or configured file roots); parent directories must exist. Requires telegram/call on the bot. Maximum 20 MiB; no token-bearing URL is returned.",
+	"operation": {
+		"adapter": "telegram:download",
+		"readOnly": false,
+		"input": {
+			"type": "object",
+			"properties": {
+				"bot": {
+					"type": "string"
+				},
+				"file_id": {
+					"type": "string"
+				},
+				"destination": {
+					"type": "string",
+					"minLength": 1,
+					"description": "Optional directory reference, e.g. dlfs/imports or file://inbox (trailing slash optional). Uses caller write authority. Omit for the bot owner's private DLFS telegram drive."
+				},
+				"fileName": {
+					"type": "string",
+					"minLength": 1,
+					"description": "Optional safe basename, not a path (at most 200 UTF-8 bytes). Overrides the remembered Telegram filename; conflicts receive a numeric suffix without added spaces."
+				}
+			},
+			"required": [
+				"file_id"
+			]
+		},
+		"output": {
+			"type": "object",
+			"additionalProperties": true,
+			"properties": {
+				"ref": {
+					"type": "string"
+				},
+				"fileName": {
+					"type": "string"
+				},
+				"file_id": {
+					"type": "string"
+				},
+				"size": {
+					"type": "integer"
+				},
+				"file_name": {
+					"type": "string"
+				},
+				"contentType": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"ref",
+				"fileName",
+				"file_id",
+				"size"
+			]
+		}
+	}
+}

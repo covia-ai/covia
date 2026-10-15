@@ -183,7 +183,7 @@ public class JobManager {
 	/** HTTP submission: acknowledge a durable handle independently of adapter execution. */
 	public Job submitOperation(AString ref, ACell input, RequestContext ctx) {
 		Prepared prepared = prepareOperation(resolveOperation(ref, ctx).meta(), input, ctx.withOp(ref),
-			false, true, false);
+			false, Invocation.INVOKE);
 		try {
 			engine.flush();
 			AAdapter.VIRTUAL_EXECUTOR.execute(() -> {
@@ -217,13 +217,18 @@ public class JobManager {
 	 */
 	Prepared prepareTracked(AString ref, ACell input, RequestContext ctx) {
 		return prepareOperation(resolveOperation(ref, ctx).meta(), input, ctx.withOp(ref),
-			false, false, false);
+			false, Invocation.TRACKED);
+	}
+
+	/** Prepare a durable backend job so its parent can checkpoint the handle before submission. */
+	public Prepared prepareAgentInteraction(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
+		return prepareOperation(meta, input, ctx, false, Invocation.TRACKED);
 	}
 
 	/** Bind even an untracked scheduled fire to the account lifecycle at claim time. */
 	Prepared prepareUntracked(AString ref, ACell input, RequestContext ctx) {
 		return prepareOperation(resolveOperation(ref, ctx).meta(), input, ctx.withOp(ref),
-			true, false, true);
+			true, Invocation.INTERNAL);
 	}
 
 	/**
@@ -232,7 +237,7 @@ public class JobManager {
 	 * record the Job's ID in its next atomic state update and only then hand the
 	 * work to the adapter. {@link #start()} runs exactly once.
 	 */
-	static final class Prepared {
+	public static final class Prepared {
 		private final Job job;
 		private final AAdapter adapter;
 		private final RequestContext jobCtx;
@@ -250,7 +255,7 @@ public class JobManager {
 		}
 
 		/** The Job, already visible in the owner's history if durable. */
-		Job job() {
+		public Job job() {
 			return job;
 		}
 
@@ -260,7 +265,7 @@ public class JobManager {
 		 * failure is recorded on the Job and then rethrown, so a Job is never
 		 * stranded PENDING with no worker.
 		 */
-		synchronized Job start() {
+		public synchronized Job start() {
 			if (started) throw new IllegalStateException("Job already started: " + job.getID());
 			started = true;
 			if (job.isFinished()) return job;
@@ -308,22 +313,25 @@ public class JobManager {
 	 * @return Job tracking the execution
 	 */
 	public Job invokeOperation(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
-		return dispatchOperation(meta, input, ctx, false, true, false);
+		return dispatchOperation(meta, input, ctx, false, Invocation.INVOKE);
 	}
 
-	/**
-	 * Executes an operation through the canonical Job machinery.
-	 *
-	 * @param memoryOnly true for a transient, non-persisted Job wrapper
-	 * @param applyAdmission whether this is a public top-level entry point subject
-	 *        to concurrent-job admission; internal composition passes false
-	 * @param resultOriented whether the caller receives only a result future and
-	 *        therefore needs original typed in-process failures preserved
-	 */
+	/** Trusted dispatch intent; never supplied by operation metadata. */
+	private enum Invocation {
+		INVOKE(true, false), RUN(true, true), TOOL(true, true),
+		INTERNAL(false, true), TRACKED(false, false);
+		final boolean admission;
+		final boolean result;
+		Invocation(boolean admission, boolean result) {
+			this.admission = admission;
+			this.result = result;
+		}
+	}
+
+	/** Executes an operation through the canonical Job machinery. */
 	private Job dispatchOperation(AMap<AString, ACell> meta, ACell input,
-			RequestContext ctx, boolean memoryOnly, boolean applyAdmission,
-			boolean resultOriented) {
-		return prepareOperation(meta, input, ctx, memoryOnly, applyAdmission, resultOriented).start();
+			RequestContext ctx, boolean memoryOnly, Invocation invocation) {
+		return prepareOperation(meta, input, ctx, memoryOnly, invocation).start();
 	}
 
 	/**
@@ -333,8 +341,9 @@ public class JobManager {
 	 * {@link Prepared#start()} needs to run it.
 	 */
 	private Prepared prepareOperation(AMap<AString, ACell> meta, ACell input,
-			RequestContext ctx, boolean memoryOnly, boolean applyAdmission,
-			boolean resultOriented) {
+			RequestContext ctx, boolean memoryOnly, Invocation invocation) {
+		boolean applyAdmission = invocation.admission;
+		boolean resultOriented = invocation.result;
 		requireAccepting(applyAdmission);
 		// Fill in the operation's declared argument defaults BEFORE gate
 		// arming and job creation, so gates, job records and the adapter all
@@ -379,7 +388,8 @@ public class JobManager {
 		try {
 			synchronized (engine.getAuth()) {
 				job = submitJob(opID, meta, input, ownerDID, ctx.getCallerDID(),
-					parentID, memoryOnly, resultOriented);
+					parentID, memoryOnly, resultOriented,
+					invocation == Invocation.RUN && ctx.getJob() == null && ctx.getJobId() == null);
 				// Deletion cannot cancel the accepted job before its quota permit
 				// has been attached for terminal cleanup.
 				if (permit) permitHolders.put(job.getID(), ownerDID);
@@ -458,6 +468,16 @@ public class JobManager {
 
 	public CompletableFuture<ACell> runOperation(AString ref, ACell input,
 			RequestContext ctx, boolean privateJob) {
+		return runOperation(ref, input, ctx, privateJob, Invocation.RUN);
+	}
+
+	/** Public tool dispatch retains admission and result semantics, but cannot reveal owner-only results. */
+	public CompletableFuture<ACell> runToolOperation(AString ref, ACell input, RequestContext ctx) {
+		return runOperation(ref, input, ctx, false, Invocation.TOOL);
+	}
+
+	private CompletableFuture<ACell> runOperation(AString ref, ACell input,
+			RequestContext ctx, boolean privateJob, Invocation invocation) {
 		if (ref == null) return CompletableFuture.failedFuture(
 			new IllegalArgumentException("Operation must be specified"));
 		try {
@@ -467,7 +487,7 @@ public class JobManager {
 			Operation op = Operation.from(asset);
 			if (op == null) return CompletableFuture.failedFuture(
 				new IllegalArgumentException("Asset is not an operation: " + asset.getID()));
-			return runOperation(op.meta(), input, ctx.withOp(ref), privateJob);
+			return runOperation(op.meta(), input, ctx.withOp(ref), privateJob, invocation);
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
 		}
@@ -480,6 +500,11 @@ public class JobManager {
 
 	public CompletableFuture<ACell> runOperation(AMap<AString, ACell> meta,
 			ACell input, RequestContext ctx, boolean privateJob) {
+		return runOperation(meta, input, ctx, privateJob, Invocation.RUN);
+	}
+
+	private CompletableFuture<ACell> runOperation(AMap<AString, ACell> meta,
+			ACell input, RequestContext ctx, boolean privateJob, Invocation invocation) {
 		try {
 			if (privateJob && !engine.config().isPrivateJobsEnabled()) {
 				return CompletableFuture.failedFuture(new IllegalStateException(
@@ -488,7 +513,7 @@ public class JobManager {
 			boolean memoryOnly = privateJob || (isReadOnly(meta)
 				&& allowsInternal(meta)
 				&& !engine.config().isRecordReadOnlyOperations());
-			Job job = dispatchOperation(meta, input, ctx, memoryOnly, true, true);
+			Job job = dispatchOperation(meta, input, ctx, memoryOnly, invocation);
 			return operationResultFuture(job, meta, input);
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
@@ -558,7 +583,7 @@ public class JobManager {
 		try {
 			boolean memoryOnly = allowsInternal(meta)
 				&& !(isReadOnly(meta) && engine.config().isRecordReadOnlyOperations());
-			Job job = dispatchOperation(meta, input, ctx, memoryOnly, false, true);
+			Job job = dispatchOperation(meta, input, ctx, memoryOnly, Invocation.INTERNAL);
 			return operationResultFuture(job, meta, input);
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
@@ -800,7 +825,7 @@ public class JobManager {
 	 *        links to its nearest recorded ancestor.
 	 */
 	private Job submitJob(AString opID, AMap<AString, ACell> meta, ACell input, AString callerDID,
-			AString actorDID, Blob parentID, boolean memoryOnly, boolean resultOriented) {
+			AString actorDID, Blob parentID, boolean memoryOnly, boolean resultOriented, boolean directRun) {
 		if (callerDID == null) throw new AuthException("Authentication required");
 
 		long ts = Utils.getCurrentTimestamp();
@@ -837,7 +862,7 @@ public class JobManager {
 		}
 
 		VenueJob job = new VenueJob(status, meta, callerDID, this, memoryOnly,
-			!memoryOnly);
+			!memoryOnly, directRun);
 		job.setPreserveFailureCause(resultOriented);
 		synchronized (engine.getAuth()) {
 			engine.getVenueState().users().requireNotDeleted(callerDID);
@@ -859,9 +884,11 @@ public class JobManager {
 	 * @throws AuthException if the caller does not own the job
 	 */
 	public AMap<AString, ACell> getJobData(Blob jobID, RequestContext ctx) {
+		// Transient results belong only to their awaiting caller, not job-query APIs.
 		// 1. Hot cache (active jobs)
 		Job job;
 		job = activeJobs.get(jobID);
+		if (job != null && !job.isRecorded()) return null;
 		if (job != null) {
 			if (!canReadJob(ctx, jobID, job.getData())) {
 				throw new AuthException("Access denied to job: " + jobID.toHexString());
@@ -1188,6 +1215,7 @@ public class JobManager {
 		AMap<AString, ACell> userData = engine.getVenueState().users().getAll();
 		if (userData == null || userData.isEmpty()) return;
 		int stabilised = 0, kept = 0;
+		java.util.List<VenueJob> restored = new java.util.ArrayList<>();
 		for (var entry : userData.entrySet()) {
 			AString did = (AString) entry.getKey();
 			User user = engine.getVenueState().users().get(did);
@@ -1203,23 +1231,30 @@ public class JobManager {
 				if (activeJobs.containsKey(jobID)) continue; // already live
 				if (Job.isFinished(record)) continue;
 				VenueJob job = restoreJob(jobID, record, did);
-				AAdapter adapter = adapterFor(job);
-				try {
-					if (adapter != null) adapter.recoverJob(job);
-					else if (RemoteJobs.descriptor(job) != null) engine.remoteJobs().adapterUnavailable(job);
-					else AAdapter.defaultRecover(job);
-				} catch (RuntimeException e) {
-					log.warn("Adapter {} failed recovering job {}: {}",
-						(adapter != null) ? adapter.getName() : "<none>", jobID, e.toString());
-					if (RemoteJobs.descriptor(job) != null) engine.remoteJobs().unavailable(job, e);
-					else if (!job.isFinished()) AAdapter.defaultRecover(job);
-				}
-				if (job.isFinished()) {
-					stabilised++;
-				} else {
-					reserveRecoveredPermit(jobID, did);
-					kept++;
-				}
+				restored.add(job);
+			}
+		}
+		// Parent interactions may reference children owned by another user. Restore
+		// every handle first so subscriptions bind to the canonical live object.
+		for (VenueJob job : restored) {
+			if (job.isFinished()) continue;
+			Blob jobID = job.getID();
+			AAdapter adapter = adapterFor(job);
+			try {
+				if (adapter != null) adapter.recoverJob(job);
+				else if (RemoteJobs.descriptor(job) != null) engine.remoteJobs().adapterUnavailable(job);
+				else AAdapter.defaultRecover(job);
+			} catch (RuntimeException e) {
+				log.warn("Adapter {} failed recovering job {}: {}",
+					(adapter != null) ? adapter.getName() : "<none>", jobID, e.toString());
+				if (RemoteJobs.descriptor(job) != null) engine.remoteJobs().unavailable(job, e);
+				else if (!job.isFinished()) AAdapter.defaultRecover(job);
+			}
+			if (job.isFinished()) {
+				stabilised++;
+			} else {
+				reserveRecoveredPermit(jobID, RT.ensureString(job.getData().get(Fields.CALLER)));
+				kept++;
 			}
 		}
 		if (stabilised > 0 || kept > 0) {
@@ -1262,16 +1297,21 @@ public class JobManager {
 
 	/** The live adapter owning a Job's operation, or null when absent or disabled. */
 	private AAdapter adapterFor(VenueJob job) {
+		// Live jobs and recovered delegations retain their resolved operation
+		// metadata (protected with the saved transport authority). Route by that
+		// owner so new remote-agent adapters do not need a protocol switch here.
+		AMap<AString, ACell> meta = job.meta();
+		String name = (meta != null) ? AAdapter.getAdapterName(meta) : null;
+		if (name != null) return engine.getAdapter(name);
 		AMap<AString, ACell> delegation = RemoteJobs.descriptor(job);
 		if (delegation != null) {
+			// Compatibility for older records or temporarily unavailable metadata.
 			ACell protocol = delegation.get(RemoteJobs.PROTOCOL);
 			if (Strings.create("covia").equals(protocol)) return engine.getAdapter("grid");
 			if (Strings.create("a2a").equals(protocol)) return engine.getAdapter("a2a");
 			return null;
 		}
-		AMap<AString, ACell> meta = job.meta();
-		String name = (meta != null) ? AAdapter.getAdapterName(meta) : null;
-		return (name != null) ? engine.getAdapter(name) : null;
+		return null;
 	}
 
 	// ========== Persistence ==========
@@ -1289,7 +1329,10 @@ public class JobManager {
 		Job j = activeJobs.get(jobID);
 		if (j instanceof VenueJob vj && vj.isMemoryOnly()) return;
 		try {
-			account.persistJob(jobID, record);
+			// Cancellation evidence can arrive after terminal eviction, when
+			// deleteJob can no longer mark the old live handle. Fence it atomically
+			// at the lattice row rather than retaining terminal Jobs in memory.
+			account.persistJob(jobID, record, !record.containsKey(Fields.CANCELLATION));
 		} catch (AuthException deleted) {
 			// An account cursor is invalidated by erasure; late Job updates must
 			// still settle their in-memory futures without persisting old data.

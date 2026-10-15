@@ -30,6 +30,65 @@ import covia.venue.TestEngine;
 public class AAdapterInstallTest {
 
 	@Test
+	public void namedOperationsCarryFullMetadataWithoutCatalogBindings() {
+		ProbeAdapter adapter = new ProbeAdapter();
+		adapter.engine = TestEngine.ENGINE;
+		AMap<AString, ACell> metadata = op("probe:echo", Maps.of(Fields.TYPE, Fields.OBJECT))
+			.assoc(Strings.create("extension"), Maps.of("arbitrary", "preserved"));
+		adapter.installOperation("tools/echo", metadata);
+		assertEquals(Maps.of("tools/echo", metadata), adapter.getOperations());
+		assertTrue(adapter.pendingCatalogEntries.isEmpty(), "no mutable path is required");
+		assertTrue(adapter.ownedCatalogEntries.isEmpty());
+		adapter.installOperation("tools/echo", metadata); // identical declaration is harmless
+		assertThrows(IllegalArgumentException.class, () -> adapter.installOperation("tools/echo",
+			metadata.assoc(Fields.DESCRIPTION, Strings.create("different"))));
+		assertThrows(IllegalArgumentException.class, () -> adapter.installOperation("empty", Maps.empty()));
+		assertThrows(IllegalArgumentException.class, () -> adapter.installOperation(" ", metadata));
+		assertEquals(Maps.of("tools/echo", metadata), adapter.getOperations(), "invalid declarations preserve the registry");
+	}
+
+	@Test
+	public void legacyCatalogDeclarationsRemainPermissiveWhenDiscoveryNamesCollide() {
+		ProbeAdapter adapter = new ProbeAdapter();
+		adapter.engine = TestEngine.ENGINE;
+		AMap<AString, ACell> first = op("probe:first", null);
+		AMap<AString, ACell> second = op("probe:second", null);
+		Hash firstHash = adapter.installAsset("probe/echo", first);
+		Hash secondHash = adapter.installAsset("echo", second);
+		assertEquals(firstHash, adapter.pendingCatalogEntries.get("v/ops/probe/echo"));
+		assertEquals(secondHash, adapter.pendingCatalogEntries.get("v/ops/echo"));
+		assertEquals(second, adapter.getOperations().get(Strings.create("echo")));
+		assertEquals(2, adapter.getOperationPaths().size());
+
+		// Replacing a declaration at the same legacy path also remains legal.
+		adapter.installAsset("echo", first);
+		assertEquals(firstHash, adapter.pendingCatalogEntries.get("v/ops/echo"));
+		assertEquals(first, adapter.getOperations().get(Strings.create("echo")));
+		// The legacy helper never required an operation facet.
+		Hash asset = adapter.installAsset("probe/data", Maps.of("description", "ordinary data"));
+		assertEquals(asset, adapter.pendingCatalogEntries.get("v/ops/probe/data"));
+		assertNull(adapter.getOperations().get(Strings.create("data")));
+		assertEquals(3, adapter.getOperationPaths().size());
+	}
+
+	@Test
+	public void catalogHelpersPublishLocalNamesAndExcludeOtherAssetKinds() {
+		ProbeAdapter adapter = new ProbeAdapter();
+		adapter.engine = TestEngine.ENGINE;
+		AMap<AString, ACell> metadata = op("probe:dispatch", null);
+		adapter.installAsset("probe/local-name", metadata);
+		adapter.installAsset("shared/another-name", metadata);
+		adapter.installTestAsset("test-name", "/asset-examples/echoop.json");
+		adapter.probeModel("provider/model");
+		adapter.probeInstall(op("probe:unpublished", null));
+		adapter.installSkill("probe", "/skills/covia.json");
+		assertEquals(3, adapter.getOperations().count());
+		assertEquals(metadata, adapter.getOperations().get(Strings.create("local-name")));
+		assertEquals(metadata, adapter.getOperations().get(Strings.create("shared/another-name")));
+		assertNotNull(adapter.getOperations().get(Strings.create("test-name")));
+	}
+
+	@Test
 	public void testAsyncResultProcessingErrorFailsJob() {
 		covia.grid.Job job = new covia.grid.Job(Maps.of(Fields.STATUS, covia.grid.Status.PENDING)) {
 			@Override public void completeWith(ACell result) {
@@ -102,6 +161,7 @@ public class AAdapterInstallTest {
 			(ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(AAdapter.class);
 		ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> captured =
 			new ch.qos.logback.core.read.ListAppender<>();
+		captured.list = new java.util.concurrent.CopyOnWriteArrayList<>();
 		captured.start();
 		log.addAppender(captured);
 		// The test logback config keeps the root at ERROR; the adapter logger
@@ -148,6 +208,7 @@ public class AAdapterInstallTest {
 		java.util.List<String> out = new java.util.ArrayList<>();
 		for (ch.qos.logback.classic.spi.ILoggingEvent e : captured.list) {
 			if (e.getLevel() == ch.qos.logback.classic.Level.WARN
+					&& e.getFormattedMessage().contains("v/ops/probe/")
 					&& e.getFormattedMessage().contains("rather than an object")) {
 				out.add(e.getFormattedMessage());
 			}

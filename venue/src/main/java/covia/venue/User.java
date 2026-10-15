@@ -120,6 +120,12 @@ public class User extends ALatticeComponent<ACell> {
 	 */
 	@SuppressWarnings("unchecked")
 	public void persistJob(Blob jobID, AMap<AString, ACell> record) {
+		persistJob(jobID, record, true);
+	}
+
+	/** Late diagnostics may update an existing row, but cannot recreate it. */
+	@SuppressWarnings("unchecked")
+	void persistJob(Blob jobID, AMap<AString, ACell> record, boolean createIfAbsent) {
 		final AMap<AString, ACell> rec = record;
 		cursor.path(Namespace.J).updateAndGet(jobs -> {
 			Index<Blob, ACell> idx = (jobs instanceof Index)
@@ -127,6 +133,7 @@ public class User extends ALatticeComponent<ACell> {
 				: Index.none();
 			AMap<AString, ACell> merged = rec;
 			ACell existing = idx.get(jobID);
+			if (existing == null && !createIfAbsent) return jobs;
 			if (existing instanceof AMap<?,?> existingMap) {
 				AMap<AString, ACell> existingRecord = (AMap<AString, ACell>) existingMap;
 				if (existingRecord.containsKey(K_TEMP)) {
@@ -220,9 +227,14 @@ public class User extends ALatticeComponent<ACell> {
 	 */
 	public AgentState createAgent(AString agentId, AMap<AString, ACell> config,
 			ACell initialState) {
+		return createAgent(agentId, config, initialState, null);
+	}
+
+	public AgentState createAgent(AString agentId, AMap<AString, ACell> config,
+			ACell initialState, AMap<AString, ACell> definition) {
 		ALatticeCursor<ACell> c = cursor.path(Namespace.G, agentId);
 		AgentState state = new AgentState(this, c, agentId);
-		return state.initialiseIfAbsent(config, initialState) ? state : null;
+		return state.initialiseIfAbsent(config, initialState, definition) ? state : null;
 	}
 
 	/**

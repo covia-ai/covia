@@ -1,0 +1,86 @@
+{
+  "name": "Decrypt Convex ECIES",
+  "description": "Decrypt a Convex ECIES blob using a secret-backed Ed25519 seed. Returns a native plaintext blob by default. Supply name to store plaintext securely (hex by default) and return only a reference. Without name, plaintext may be recorded in jobs or agent history. Wrong key or tampering fails authentication.",
+  "operation": {
+    "adapter": "crypto:decrypt",
+    "readOnly": false,
+    "activityLabel": "Decrypt Convex ECIES",
+    "input": {
+      "type": "object",
+      "properties": {
+        "seed": {
+          "type": "string",
+          "description": "Secret reference to a 32-byte hexadecimal Ed25519 private seed: s/NAME or <did>/s/NAME. Never pass a raw seed."
+        },
+        "ciphertext": {
+          "type": "string",
+          "description": "Convex ECIES envelope as a native blob or hexadecimal JSON string (optional 0x prefix)."
+        },
+        "encoding": {
+          "type": "string",
+          "enum": [
+            "blob",
+            "utf8",
+            "hex",
+            "base64"
+          ],
+          "default": "blob",
+          "description": "Return a native blob by default; JSON renders it as 0x-prefixed hex. Explicit utf8/hex/base64 returns encoded text. With name, blob mode stores hex because SecretStore is string-valued. UTF-8 decoding is strict."
+        },
+        "name": {
+          "type": "string",
+          "description": "Destination secret name (single name, not a path). Stored encrypted in the caller's user namespace.",
+          "minLength": 1
+        },
+        "overwrite": {
+          "type": "boolean",
+          "default": false,
+          "description": "Explicitly replace an existing destination secret. Otherwise collisions fail atomically."
+        }
+      },
+      "required": [
+        "seed",
+        "ciphertext"
+      ],
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "string",
+          "description": "Native decrypted blob by default (0x-prefixed hex in JSON); encoded text when explicitly requested. Present only when name is omitted."
+        },
+        "secret": {
+          "type": "string",
+          "description": "Secret reference; private material is never returned."
+        },
+        "encoding": {
+          "type": "string",
+          "enum": [
+            "blob",
+            "utf8",
+            "hex",
+            "base64"
+          ]
+        }
+      },
+      "required": [
+        "encoding"
+      ],
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": [
+            "data"
+          ]
+        },
+        {
+          "required": [
+            "secret"
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -413,6 +413,20 @@ public class Job {
 	}
 
 	/**
+	 * Optional adapter-specific code for a failed or rejected job. Codes are
+	 * defined by their producer, not a universal Job taxonomy. Callers must
+	 * handle absent and unfamiliar codes as unclassified failures.
+	 * @return The producer's code, or null when none is supplied
+	 */
+	public String getErrorCode() {
+		AMap<AString, ACell> data = state.get().data();
+		ACell status = data.get(Fields.STATUS);
+		if (!Status.FAILED.equals(status) && !Status.REJECTED.equals(status)) return null;
+		AString code = RT.ensureString(data.get(Fields.ERROR_CODE));
+		return code == null ? null : code.toString();
+	}
+
+	/**
 	 * Gets the caller DID associated with this job, if identified.
 	 * @return Caller DID string, or null if anonymous
 	 */
@@ -487,6 +501,27 @@ public class Job {
 	private void runCancelHook() {
 		Runnable hook = onCancel.getAndSet(null);
 		if (hook != null) hook.run();
+	}
+
+	/**
+	 * Record best-effort backend cancellation evidence after local cancellation.
+	 * Only this diagnostic field can change; the terminal result stays fixed and
+	 * neither cancellation nor terminal cleanup is run again.
+	 * @param details adapter cancellation evidence, without credentials
+	 */
+	public void recordCancellation(AMap<AString, ACell> details) {
+		java.util.Objects.requireNonNull(details);
+		while (true) {
+			State before = state.get();
+			AMap<AString, ACell> current = before.data();
+			if (!Status.CANCELLED.equals(current.get(Fields.STATUS))) return;
+			if (details.equals(current.get(Fields.CANCELLATION))) return;
+			AMap<AString, ACell> next = processUpdate(current.assoc(Fields.CANCELLATION, details)).assoc(PREV, current);
+			if (!state.compareAndSet(before, new State(next, before.failureCause()))) continue;
+			try { onUpdate(next); }
+			finally { notifyListeners(); }
+			return;
+		}
 	}
 
 	/**
@@ -678,10 +713,23 @@ public class Job {
 	 * @param message Error message
 	 */
 	public void fail(String message) {
+		fail(null, message);
+	}
+
+	/**
+	 * Fails with an optional adapter-specific code, committed with the message.
+	 * Producers should namespace codes (for example {@code agent:unknown-session})
+	 * and document their meaning. No code is inferred from error wording.
+	 * @param code Optional producer-defined code; null leaves the field absent
+	 * @param message Human-readable explanation
+	 */
+	public void fail(String code, String message) {
 		if (isFinished()) return;
 		update(job -> {
 			job = job.assoc(Fields.STATUS, Status.FAILED);
 			job = job.assoc(Fields.ERROR, Strings.create(message));
+			job = code == null ? job.dissoc(Fields.ERROR_CODE)
+				: job.assoc(Fields.ERROR_CODE, Strings.create(code));
 			return job;
 		});
 	}
@@ -697,7 +745,7 @@ public class Job {
 		String message = cause == null ? "Operation failed" : cause.getMessage();
 		String detail = (message != null && !message.isBlank()) ? message : cause.toString();
 		commitUpdate(job -> decorate.apply(job).assoc(Fields.STATUS, Status.FAILED)
-			.assoc(Fields.ERROR, Strings.create(detail)), cause, null);
+			.assoc(Fields.ERROR, Strings.create(detail)).dissoc(Fields.ERROR_CODE), cause, null);
 	}
 
 	/**

@@ -161,6 +161,20 @@ public class VenueHTTPTest {
 		AString err = RT.ensureString(RT.getIn(job.getData(), Fields.ERROR));
 		assertNotNull(err, "failure must carry a non-null error message");
 		assertFalse(err.toString().isBlank(), "error message must not be blank");
+		assertNull(job.getErrorCode(), "unclassified failures have no code");
+	}
+
+	@Test
+	public void adapterErrorCodeSurvivesHttpAndStoredJobRead() throws Exception {
+		String agent = "http-error-code-agent";
+		client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(Fields.AGENT_ID, agent));
+		Job failed = client.invokeAndWait(Strings.create("v/ops/agent/chat"), Maps.of(
+			Fields.AGENT_ID, agent, Fields.SESSION_ID, "00000000000000000000000000000000", Fields.MESSAGE, "hello"));
+		assertEquals(covia.adapter.AgentAdapter.UNKNOWN_SESSION_CODE, failed.getErrorCode());
+		Job stored = client.getJob(failed.getID()).get(5, TimeUnit.SECONDS);
+		assertEquals(failed.getErrorCode(), stored.getErrorCode());
+		var failure = assertThrows(covia.exception.JobFailedException.class, stored::getOutput);
+		assertEquals(failed.getErrorCode(), failure.getErrorCode());
 	}
 
 	// ===================== Polling / timeout / backoff ==================

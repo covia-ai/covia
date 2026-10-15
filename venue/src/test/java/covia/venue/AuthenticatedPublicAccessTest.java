@@ -148,16 +148,16 @@ public class AuthenticatedPublicAccessTest {
 	}
 
 	@Test
-	public void testSecretExtractionRemainsClosed() {
-		// covia#254 ruling: extraction is SCOPE-governed, not hard-coded —
-		// today it is universally denied (gated implementation pending). When
-		// implemented it must require secret/decrypt, which the DEFAULT public
-		// scope withholds; an operator widening auth.public.caps to include
-		// it gets exactly what they asked for (caveat emptor). This test pins
-		// the closed state so that change is a conscious decision.
+	public void testRecordedSecretExtractionRemainsClosed() {
+		// Recorded jobs never reveal plaintext, even for an unrestricted owner.
+		// The default public scope also cannot use the direct result-only path.
+		RequestContext anonymous = PUBLIC.withCaps(covia.lattice.CapabilityChecker.readOnlyScope(PUBLIC_DID));
 		engine.jobs().invokeOperation("v/ops/secret/set",
 			Maps.of("name", "NO_EXTRACT", "value", "sensitive"),
 			PUBLIC).awaitResult(5000);
+		var denied = assertThrows(java.util.concurrent.CompletionException.class,
+			() -> engine.jobs().runOperation("v/ops/secret/extract", Maps.of("name", "NO_EXTRACT"), anonymous).join());
+		assertTrue(denied.getCause() instanceof AuthException);
 
 		Job asPublic = engine.jobs().invokeOperation("v/ops/secret/extract",
 			Maps.of("name", "NO_EXTRACT"), PUBLIC);

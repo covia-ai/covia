@@ -43,6 +43,7 @@ public class Fields {
 	public static final StringShort DELAY = Strings.intern("delay");
 	public static final StringShort ID = Strings.intern("id");
 	public static final StringShort STATUS = Strings.intern("status");	
+	public static final StringShort CANCELLATION = Strings.intern("cancellation");
 	public static final StringShort OP = Strings.intern("op");
 
 	/** Token usage map {@code {input, output, total}} — reported by LLM ops on
@@ -123,6 +124,8 @@ public class Fields {
 	public static final StringShort DID = Strings.intern("did");
 	public static final StringShort VENUES = Strings.intern("venues");
 	public static final StringShort ERROR = Strings.intern("error");
+	/** Optional adapter-specific failure code; absent for unclassified failures. */
+	public static final StringShort ERROR_CODE = Strings.intern("errorCode");
 	
 	// MCP stuff
 	public static final StringShort ADAPTER = Strings.intern("adapter");

@@ -51,8 +51,22 @@ their next step promptly. A synchronous exception or JVM error fails the Job
 before propagating; late completion cannot replace a terminal state. Typed
 failure causes are committed together with the failure record.
 
+Error codes are **optional and adapter-specific**. Ordinary `job.fail(message)`
+and `job.fail(exception)` produce no `errorCode`. An adapter may opt in with
+`job.fail("adapter:condition", message)` for a condition it explicitly defines
+and supports as a stable machine-readable contract. The human-readable `error`
+remains available. There is no mandatory taxonomy or inference from prose;
+consumers must handle missing and unfamiliar codes as generic failures. See
+[JOBS.md](JOBS.md#optional-adapter-specific-error-codes-462) for the job surface
+and the agent adapter's `agent:unknown-session` example.
+
 Cancellation hooks run after cancellation commits, including when registered
-after cancellation, and each registration is claimed once. The default bridge
+late, and each registration is claimed once. Hooks must signal promptly:
+propagate to owned local children directly,
+and dispatch network cancellation asynchronously with
+`RemoteJobs.attemptCancellation`. The adapter interprets its backend response;
+the helper retains sanitised evidence without changing the local terminal result.
+See [JOBS.md](JOBS.md#remote-delegation). The default bridge
 cancels the returned `CompletableFuture`; this alone does not interrupt blocking
 work. Adapters needing interruption must retain the worker's `Future`, register
 their own cancellation hook, and use `completeFromJobFuture` for completion.
@@ -65,6 +79,22 @@ resource-specific checks through the relevant `Engine.require*` method. Do
 not infer authority from an operation name or confuse `ctx.getCallerDID()`
 (who acted) with `ctx.getUserDID()` (whose namespace the action uses). See
 [UCAN.md](UCAN.md) for the authority model.
+
+## Reference-addressed content
+
+Storage adapters implement `ContentProvider` so consumers can resolve and write
+content through `Engine` using the provider's reference namespace and authority
+checks. `getContent` returns null for unrecognised references; optional
+`putContent` and `createContent` return false when unsupported. Recognised
+references that fail authorization must throw, never degrade to another provider.
+
+`createContent` is the create-only contract: providers must atomically reserve a
+new filename and throw `FileAlreadyExistsException` on conflict. Do not implement
+it as an existence check followed by an overwriting write, or fall back to
+`putContent`. File and DLFS providers use native `CREATE_NEW`; callers such as
+Telegram can retry a different filename without risking existing content.
+DID-scoped DLFS references use URL-encoded paths, decoded once before path
+normalisation and authorization; relative DLFS paths retain their literal spelling.
 
 ## Lifecycle and configuration
 
@@ -160,6 +190,63 @@ segments must match `[a-z][a-z0-9-]*`. Asset resources are loaded through the
 adapter's own classloader first, which lets the same helpers work from a
 module jar.
 
+### Operation discovery
+
+`AAdapter.getOperations()` returns an immutable
+`AMap<AString, AMap<AString, ACell>>`: **adapter-local name → full asset
+metadata**. The new `GET /api/v1/adapters/{name}/operations` endpoint returns
+this map directly. Schemas, descriptions, defaults and extension fields stay
+inside the original metadata; clients need no hash lookup or catalogue tree
+traversal. For example, `/api/v1/adapters/skills/operations` returns:
+
+```json
+{
+  "list": {
+    "name": "List skills",
+    "operation": {
+      "adapter": "skills:list",
+      "input": {"type": "object"}
+    }
+  }
+}
+```
+
+Declare an operation without a mutable binding with
+`installOperation("local-name", metadata)` inside `installAssets()`. Existing
+`installAsset(catalogPath, ...)` and `installTestAsset(...)` helpers also
+publish operations: the local name is the declared catalogue name with the
+adapter's own leading segment removed, if present. For example,
+`skills/list` becomes `list` and `venue/adapter/disable` becomes the single
+map key `adapter/disable`. These keys are opaque names, not paths to traverse
+or invoke. The new `installOperation` helper rejects a conflicting definition
+of an existing local name; repeating identical metadata is harmless. Legacy
+catalogue helpers retain their existing permissive behavior: if declarations
+map to the same local name, the last operation declaration wins in discovery,
+matching the adapter-owned mirror's precedence. All original catalogue
+bindings remain available. Non-operation assets at legacy catalogue paths
+keep their bindings but do not enter the operation metadata map.
+
+Only explicitly published operations enter this map. Skills, agent templates,
+model-catalogue entries and example assets keep their separate discovery
+surfaces. Mutable operator bindings neither add to nor replace these
+declarations. Reading discovery does not rewrite or delete those bindings.
+Identical metadata can appear in several lattice locations without creating
+independent definitions.
+
+An active adapter with no published operations returns `{}`; an unknown or
+disabled adapter returns 404. Publication describes what is offered, not what
+a caller is authorised to execute. The Java engine accepts the returned
+metadata for invocation; reference-based clients continue to use explicitly
+chosen bindings.
+
+This API is additive. `GET /api/v1/operations` still returns its existing
+array of named summaries, and `GET /api/v1/operations/{name}` is unchanged.
+The `operations` fields in adapter info and the admin listing remain arrays
+of catalogue paths from `getOperationPaths()`. `stats.ops` keeps counting
+those bindings, so an operation published without a path is discoverable via
+the new endpoint but does not increase that legacy count. Existing SDKs do
+not need an update; new helpers can opt into the metadata endpoint.
+
 Override `info()` for stable facts a client needs until the next reconfigure,
 such as a mount point or enabled protocol feature. Live status, sessions,
 connection counts, and mutable health belong behind operations, not in
@@ -222,6 +309,75 @@ State schemas need explicit tests. Cover the exact canonical paths, venue
 ownership, restart recovery, deletion, config/runtime separation, malformed
 records, and any migration from an older layout. A new schema should define
 which version wins during migration and make repeated migration idempotent.
+
+## External agent interactions
+
+`covia.adapter.remote.ARemoteAgentAdapter<I extends RemoteInteraction>` is the
+shared Job-facing base for outbound A2A, Claude Code and native Covia agent
+proxies. External means execution controlled outside Covia's own agent loop;
+the transport may be HTTP, a local CLI, or an SDK.
+
+Subclasses select interaction operations with `isInteractionOperation` and
+implement `startInteraction`. The base claims `Job.start` once, checks invoke
+authority, routes messages, binds cancellation and removes live bindings on
+terminal completion. Administrative operations retain `invokeFuture` dispatch.
+Providers validate their target, credentials, options and resource authority
+before effects. Construct a passive `RemoteInteraction` and bind it with
+`bindInteraction` before starting work, or on remote acceptance when its handle
+first becomes known. Late acceptance after local cancellation still invokes
+the binding's cancel hook.
+
+An interaction implements `deliver(messageRecord)` and `cancel()`. Delivery
+receives the original structured Job message; it must throw on unsupported or
+unacknowledged delivery. Returning means accepted, not completed. Local queue
+acceptance is not durable external acceptance. A task, turn and conversation
+have different completion rules: A2A mirrors the remote task, Claude `run`
+completes after one turn, and Claude `session` waits in INPUT_REQUIRED after
+each reply. Only conversation operations opt into `returnsFirstReply`.
+Progress uses the shared `publishProgress` helper; provider-native results,
+message parts and session/task identifiers are preserved.
+
+Recovery stays explicit. A2A and `remoteagent` compose `RemoteJobs` for durable
+submission intent, protected transport authority and reattachment to an
+accepted task. Observation failure cannot manufacture execution failure or
+authorize replay. Claude may reconstruct an idle conversation through
+`restoreInteraction`; resuming a transcript does not recover an interrupted
+turn. There is no default resubmission, polling loop or lifetime timeout in
+the base. Cancellation is a request, not proof of remote cessation.
+
+`VenueRemoteAgent` is a Java proxy over any authenticated `Venue`, including
+`LocalVenue`. Its `request` returns a task handle without SDK result polling;
+`task`, `deliver` and `cancel` operate on that handle. The built-in
+`remoteagent:request` is an internal transport operation; applications use
+`agent:request` or `agent:chat` on an [agent definition](./AGENT_LOOP.md#221-agent-definitions-and-external-implementations). It accepts the native
+`agent:request` fields plus optional `venue` and `authenticateAs`, and preserves
+the destination task's output envelope. A new request with `sessionId` starts
+a new task in that conversation; a message to an existing proxy Job continues
+that task. The Job records `sessionId` separately from `delegation.remoteId`.
+
+Native remote connections share `VenueConnection` with Grid: anonymous by
+default, explicit target-bound caller identity, or an explicitly delegated
+venue relay. Omitting `venue` carries the complete current RequestContext to
+the local agent. A local proxy cannot reconstruct that attenuated context from
+a caller DID after restart, so its recovery fails explicitly and leaves the
+original task ID for inspection; it never substitutes venue authority. Remote
+proxies recover their saved transport authority and observe the same task.
+
+### Agent dispatch hooks
+
+Adapters implement `validateAgent`, `agentInvocation`, `agentSession` and,
+when needed, `agentOutput` on the shared base. `agentInvocation` is a pure
+translation into a backend operation and input; it must not submit work. The
+base's existing interaction lifecycle handles that backend Job. `agentSession`
+must work for failed and cancelled Jobs too. Parent recovery attaches to the
+saved child; child recovery belongs to its provider. Neither path resubmits an
+uncertain invocation. Startup restores all job handles before adapter recovery
+so parent subscriptions attach to the actual recovered child.
+
+Agent metadata, creation, admission and supported operations are defined in
+[AGENT_LOOP.md §2.2.1](./AGENT_LOOP.md#221-agent-definitions-and-external-implementations).
+Conversation identity, continuation and recovery behaviour are defined in
+[AGENT_SESSIONS.md §2.2](./AGENT_SESSIONS.md#22-external-agent-sessions).
 
 ## Messaging adapters and webhook ingress
 

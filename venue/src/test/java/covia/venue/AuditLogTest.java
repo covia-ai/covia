@@ -197,6 +197,26 @@ public class AuditLogTest {
 				.filter(m -> Audit.SECRET_WRITE.equals(m.get(Audit.K_EVENT))).findFirst().orElseThrow();
 			assertEquals("AUDITED", write.get(Audit.K_NAME));
 
+			long jobsBefore = server.getEngine().jobs().getJobs(RequestContext.of(Strings.create(did))).count();
+			HttpRequest extract = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + server.port() + "/api/v1/run"))
+				.header("Authorization", "Bearer " + jwt).header("Content-Type", "application/json")
+				.POST(HttpRequest.BodyPublishers.ofString("{\"operation\":\"v/ops/secret/extract\",\"input\":{\"name\":\"AUDITED\"}}"))
+				.build();
+			HttpResponse<String> extracted = TestHTTP.CLIENT.send(extract, HttpResponse.BodyHandlers.ofString());
+			assertEquals(200, extracted.statusCode(), extracted.body());
+			assertTrue(extracted.body().contains(secretValue));
+			assertEquals("private, no-store", extracted.headers().firstValue("Cache-Control").orElseThrow());
+			assertEquals(jobsBefore, server.getEngine().jobs().getJobs(RequestContext.of(Strings.create(did))).count());
+			assertTrue(events(Audit.LOGGER, venue).stream().anyMatch(m -> Audit.SECRET_EXTRACT.equals(m.get(Audit.K_EVENT))
+				&& Audit.OK.equals(m.get(Audit.K_OUTCOME)) && "AUDITED".equals(m.get(Audit.K_NAME))));
+			Job refusedExtract = client.invokeAndWait(Strings.create("v/ops/secret/extract"), Maps.of(Fields.NAME, "AUDITED"));
+			assertEquals(Status.FAILED, refusedExtract.getStatus());
+			assertTrue(events(Audit.LOGGER, venue).stream().anyMatch(m -> Audit.SECRET_EXTRACT.equals(m.get(Audit.K_EVENT))
+				&& Audit.FAILED.equals(m.get(Audit.K_OUTCOME))));
+			assertFalse(server.getEngine().jobs().getJobs(RequestContext.of(Strings.create(did))).toString().contains(secretValue));
+			client.invokeAndWait(Strings.create("v/ops/secret/delete"), Maps.of(Fields.NAME, "AUDITED"));
+			assertTrue(events(Audit.LOGGER, venue).stream().anyMatch(m -> Audit.SECRET_DELETE.equals(m.get(Audit.K_EVENT))));
+
 			// Redaction: nothing the venue logged, at any level, holds a credential,
 			// a secret value, or a query string.
 			String everything = allLogText();

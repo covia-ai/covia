@@ -277,142 +277,157 @@ public class A2AAgentCardTest {
 		VenueHTTP client = VenueHTTP.create(URI.create(BASE_URL), VenueAuth.bearer(jwt));
 		client.setTimeout(5000);
 
-		// The test transition explicitly completes tasks. Its config delay holds
-		// revision 0 open while two identical continuation requests race.
-		Job created = client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
-			Fields.AGENT_ID, Strings.create("Continuer"),
-			Fields.CONFIG, Maps.of(
-				Fields.OPERATION, Strings.create("v/test/ops/taskcomplete"),
-				Fields.DELAY, convex.core.data.prim.CVMLong.create(300))));
-		assertEquals(Status.COMPLETE, created.getStatus(), created.getErrorMessage());
+		String gateName = "continuation-" + UUID.randomUUID();
+		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
+			// Hold revision 0 until all continuation requests have been accepted.
+			// Their ordering must not depend on HTTP finishing within a sleep window.
+			Job created = client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
+				Fields.AGENT_ID, Strings.create("Continuer"),
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, Strings.create("v/test/ops/taskcomplete"),
+					"testGate", Strings.create(gateName))));
+			assertEquals(Status.COMPLETE, created.getStatus(), created.getErrorMessage());
 
-		String endpoint = "/a2a/" + ownerDid + "/g/Continuer";
-		Map<String, Object> initialResponse = parse(post(endpoint,
-			rpcEnvelope("start", "SendMessage",
-				new MessageSendParams(userMessage("first"), null, null)), jwt));
-		Task initial = extractTask(initialResponse);
-		assertNotNull(initial);
+			String endpoint = "/a2a/" + ownerDid + "/g/Continuer";
+			Map<String, Object> initialResponse = parse(post(endpoint,
+				rpcEnvelope("start", "SendMessage",
+					new MessageSendParams(userMessage("first"), null, null)), jwt));
+			Task initial = extractTask(initialResponse);
+			assertNotNull(initial);
+			assertTrue(gate.awaitEntered(5, TimeUnit.SECONDS),
+				"initial task did not reach the transition gate");
 
-		Message continuation = Message.builder()
-			.role(Message.Role.ROLE_USER)
-			.parts(List.<Part<?>>of(new TextPart("second", null)))
-			.messageId("same-continuation")
-			.contextId(initial.contextId())
-			.taskId(initial.id())
-			.build();
-		Object continuationRpc = rpcEnvelope("continue", "SendMessage",
-			new MessageSendParams(continuation, null, null));
-		Message otherContinuation = Message.builder()
-			.role(Message.Role.ROLE_USER)
-			.parts(List.<Part<?>>of(new TextPart("third", null)))
-			.messageId("other-continuation")
-			.contextId(initial.contextId())
-			.taskId(initial.id())
-			.build();
-		Object otherContinuationRpc = rpcEnvelope("continue-other", "SendMessage",
-			new MessageSendParams(otherContinuation, null, null));
-		CompletableFuture<HttpResponse<String>> one = CompletableFuture.supplyAsync(
-			() -> postUnchecked(endpoint, continuationRpc, jwt));
-		CompletableFuture<HttpResponse<String>> two = CompletableFuture.supplyAsync(
-			() -> postUnchecked(endpoint, continuationRpc, jwt));
-		CompletableFuture<HttpResponse<String>> three = CompletableFuture.supplyAsync(
-			() -> postUnchecked(endpoint, otherContinuationRpc, jwt));
-		assertEquals(200, one.join().statusCode());
-		assertEquals(200, two.join().statusCode());
-		assertEquals(200, three.join().statusCode());
+			Message continuation = Message.builder()
+				.role(Message.Role.ROLE_USER)
+				.parts(List.<Part<?>>of(new TextPart("second", null)))
+				.messageId("same-continuation")
+				.contextId(initial.contextId())
+				.taskId(initial.id())
+				.build();
+			Object continuationRpc = rpcEnvelope("continue", "SendMessage",
+				new MessageSendParams(continuation, null, null));
+			Message otherContinuation = Message.builder()
+				.role(Message.Role.ROLE_USER)
+				.parts(List.<Part<?>>of(new TextPart("third", null)))
+				.messageId("other-continuation")
+				.contextId(initial.contextId())
+				.taskId(initial.id())
+				.build();
+			Object otherContinuationRpc = rpcEnvelope("continue-other", "SendMessage",
+				new MessageSendParams(otherContinuation, null, null));
+			CompletableFuture<HttpResponse<String>> one = CompletableFuture.supplyAsync(
+				() -> postUnchecked(endpoint, continuationRpc, jwt));
+			CompletableFuture<HttpResponse<String>> two = CompletableFuture.supplyAsync(
+				() -> postUnchecked(endpoint, continuationRpc, jwt));
+			CompletableFuture<HttpResponse<String>> three = CompletableFuture.supplyAsync(
+				() -> postUnchecked(endpoint, otherContinuationRpc, jwt));
+			assertEquals(200, one.join().statusCode());
+			assertEquals(200, two.join().statusCode());
+			assertEquals(200, three.join().statusCode());
+			gate.release();
 
-		Task completed = awaitTask(endpoint, initial.id(), jwt, TaskState.TASK_STATE_COMPLETED);
-		assertEquals(3, completed.history().size(),
-			"retrying the same messageId must not duplicate Task history");
-		AgentState continued = TestServer.ENGINE.getVenueState().users().get(ownerDid)
-			.agent("Continuer");
-		assertEquals(3, continued.getTimeline().count(),
-			"the stale cycle and both distinct continuations each run exactly once");
-		var session = continued.getSession(Blob.fromHex(initial.contextId()));
-		var frames = (convex.core.data.AVector<?>) session.get(AgentState.KEY_FRAMES);
-		var conversation = (convex.core.data.AVector<?>)
-			((convex.core.data.AMap<?, ?>) frames.get(0)).get(AgentState.KEY_CONVERSATION);
-		assertEquals(6, conversation.count(),
-			"three user turns and three agent turns must be recorded without duplicate frames");
+			Task completed = awaitTask(endpoint, initial.id(), jwt, TaskState.TASK_STATE_COMPLETED);
+			assertEquals(3, completed.history().size(),
+				"retrying the same messageId must not duplicate Task history");
+			AgentState continued = TestServer.ENGINE.getVenueState().users().get(ownerDid)
+				.agent("Continuer");
+			assertEquals(3, continued.getTimeline().count(),
+				"the stale cycle and both distinct continuations each run exactly once");
+			var session = continued.getSession(Blob.fromHex(initial.contextId()));
+			var frames = (convex.core.data.AVector<?>) session.get(AgentState.KEY_FRAMES);
+			var conversation = (convex.core.data.AVector<?>)
+				((convex.core.data.AMap<?, ?>) frames.get(0)).get(AgentState.KEY_CONVERSATION);
+			assertEquals(6, conversation.count(),
+				"three user turns and three agent turns must be recorded without duplicate frames");
 
-		// The endpoint's caller/publication gate runs before continuation lookup.
-		assertEquals(403, post(endpoint, continuationRpc,
-			bearerFor(AKeyPair.generate())).statusCode());
+			// The endpoint's caller/publication gate runs before continuation lookup.
+			assertEquals(403, post(endpoint, continuationRpc,
+				bearerFor(AKeyPair.generate())).statusCode());
 
-		Message mismatched = Message.builder()
-			.role(Message.Role.ROLE_USER)
-			.parts(List.<Part<?>>of(new TextPart("mismatch", null)))
-			.messageId("mismatched-context")
-			.contextId("00".repeat(initial.contextId().length() / 2))
-			.taskId(initial.id())
-			.build();
-		Map<String, Object> mismatch = parse(post(endpoint,
-			rpcEnvelope("mismatch", "SendMessage",
-				new MessageSendParams(mismatched, null, null)), jwt));
-		assertEquals(org.a2aproject.sdk.spec.A2AErrorCodes.INVALID_PARAMS.code(),
-			errorCode(mismatch));
+			Message mismatched = Message.builder()
+				.role(Message.Role.ROLE_USER)
+				.parts(List.<Part<?>>of(new TextPart("mismatch", null)))
+				.messageId("mismatched-context")
+				.contextId("00".repeat(initial.contextId().length() / 2))
+				.taskId(initial.id())
+				.build();
+			Map<String, Object> mismatch = parse(post(endpoint,
+				rpcEnvelope("mismatch", "SendMessage",
+					new MessageSendParams(mismatched, null, null)), jwt));
+			assertEquals(org.a2aproject.sdk.spec.A2AErrorCodes.INVALID_PARAMS.code(),
+				errorCode(mismatch));
 
-		Message unknown = Message.builder()
-			.role(Message.Role.ROLE_USER)
-			.parts(List.<Part<?>>of(new TextPart("unknown", null)))
-			.messageId("unknown-task")
-			.taskId("00".repeat(initial.id().length() / 2))
-			.build();
-		Map<String, Object> unknownResponse = parse(post(endpoint,
-			rpcEnvelope("unknown", "SendMessage",
-				new MessageSendParams(unknown, null, null)), jwt));
-		assertEquals(org.a2aproject.sdk.spec.A2AErrorCodes.TASK_NOT_FOUND.code(),
-			errorCode(unknownResponse));
+			Message unknown = Message.builder()
+				.role(Message.Role.ROLE_USER)
+				.parts(List.<Part<?>>of(new TextPart("unknown", null)))
+				.messageId("unknown-task")
+				.taskId("00".repeat(initial.id().length() / 2))
+				.build();
+			Map<String, Object> unknownResponse = parse(post(endpoint,
+				rpcEnvelope("unknown", "SendMessage",
+					new MessageSendParams(unknown, null, null)), jwt));
+			assertEquals(org.a2aproject.sdk.spec.A2AErrorCodes.TASK_NOT_FOUND.code(),
+				errorCode(unknownResponse));
 
-		// A taskId is bound to its publishing agent, even for the same owner.
-		client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
-			Fields.AGENT_ID, Strings.create("OtherContinuer"),
-			Fields.CONFIG, Maps.of(Fields.OPERATION, Strings.create("v/test/ops/echo"))));
-		Map<String, Object> crossAgent = parse(post(
-			"/a2a/" + ownerDid + "/g/OtherContinuer", continuationRpc, jwt));
-		assertEquals(org.a2aproject.sdk.spec.A2AErrorCodes.TASK_NOT_FOUND.code(),
-			errorCode(crossAgent));
+			// A taskId is bound to its publishing agent, even for the same owner.
+			client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
+				Fields.AGENT_ID, Strings.create("OtherContinuer"),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, Strings.create("v/test/ops/echo"))));
+			Map<String, Object> crossAgent = parse(post(
+				"/a2a/" + ownerDid + "/g/OtherContinuer", continuationRpc, jwt));
+			assertEquals(org.a2aproject.sdk.spec.A2AErrorCodes.TASK_NOT_FOUND.code(),
+				errorCode(crossAgent));
 
-		// Once terminal, taskId continuation is forbidden.
-		Map<String, Object> terminal = parse(post(endpoint, continuationRpc, jwt));
-		assertEquals(org.a2aproject.sdk.spec.A2AErrorCodes.UNSUPPORTED_OPERATION.code(),
-			errorCode(terminal));
+			// Once terminal, taskId continuation is forbidden.
+			Map<String, Object> terminal = parse(post(endpoint, continuationRpc, jwt));
+			assertEquals(org.a2aproject.sdk.spec.A2AErrorCodes.UNSUPPORTED_OPERATION.code(),
+				errorCode(terminal));
 
-		// contextId alone means a new Job/Task in the same conversation.
-		Message nextTurn = Message.builder()
-			.role(Message.Role.ROLE_USER)
-			.parts(List.<Part<?>>of(new TextPart("fourth", null)))
-			.messageId("context-followup")
-			.contextId(initial.contextId())
-			.build();
-		Task next = extractTask(parse(post(endpoint,
-			rpcEnvelope("next", "SendMessage", new MessageSendParams(nextTurn, null, null)), jwt)));
-		assertNotNull(next);
-		assertNotEquals(initial.id(), next.id());
-		assertEquals(initial.contextId(), next.contextId());
-		awaitTask(endpoint, next.id(), jwt, TaskState.TASK_STATE_COMPLETED);
+			// contextId alone means a new Job/Task in the same conversation.
+			Message nextTurn = Message.builder()
+				.role(Message.Role.ROLE_USER)
+				.parts(List.<Part<?>>of(new TextPart("fourth", null)))
+				.messageId("context-followup")
+				.contextId(initial.contextId())
+				.build();
+			Task next = extractTask(parse(post(endpoint,
+				rpcEnvelope("next", "SendMessage", new MessageSendParams(nextTurn, null, null)), jwt)));
+			assertNotNull(next);
+			assertNotEquals(initial.id(), next.id());
+			assertEquals(initial.contextId(), next.contextId());
+			awaitTask(endpoint, next.id(), jwt, TaskState.TASK_STATE_COMPLETED);
 
-		// Two contextId sends queued before the agent runs are two tasks, two
-		// cycles and two replies — never one shared chat reply (#416).
-		AgentState agentState = TestServer.ENGINE.getVenueState().users().get(ownerDid).agent("Continuer");
-		long cyclesBefore = agentState.getTimeline().count();
-		Message fifthTurn = Message.builder().role(Message.Role.ROLE_USER)
-			.parts(List.<Part<?>>of(new TextPart("fifth", null))).messageId("context-fifth")
-			.contextId(initial.contextId()).build();
-		Message sixthTurn = Message.builder().role(Message.Role.ROLE_USER)
-			.parts(List.<Part<?>>of(new TextPart("sixth", null))).messageId("context-sixth")
-			.contextId(initial.contextId()).build();
-		Task fifth = extractTask(parse(post(endpoint,
-			rpcEnvelope("fifth", "SendMessage", new MessageSendParams(fifthTurn, null, null)), jwt)));
-		Task sixth = extractTask(parse(post(endpoint,
-			rpcEnvelope("sixth", "SendMessage", new MessageSendParams(sixthTurn, null, null)), jwt)));
-		assertNotEquals(fifth.id(), sixth.id());
-		assertEquals(initial.contextId(), fifth.contextId());
-		assertEquals(initial.contextId(), sixth.contextId());
-		awaitTask(endpoint, fifth.id(), jwt, TaskState.TASK_STATE_COMPLETED);
-		awaitTask(endpoint, sixth.id(), jwt, TaskState.TASK_STATE_COMPLETED);
-		assertEquals(cyclesBefore + 2, agentState.getTimeline().count(),
-			"each queued send is its own task and runs its own cycle");
+			// Two contextId sends overlapping in one session are two tasks, two
+			// cycles and two replies — never one shared chat reply (#416).
+			AgentState agentState = TestServer.ENGINE.getVenueState().users().get(ownerDid).agent("Continuer");
+			String queuedGateName = "queued-" + UUID.randomUUID();
+			try (TestAdapter.TestGate queuedGate = TestAdapter.createGate(queuedGateName)) {
+				agentState.updateConfigAndState(
+					agentState.getConfig().assoc(Strings.intern("testGate"), Strings.create(queuedGateName)),
+					agentState.getState());
+				long cyclesBefore = agentState.getTimeline().count();
+				Message fifthTurn = Message.builder().role(Message.Role.ROLE_USER)
+					.parts(List.<Part<?>>of(new TextPart("fifth", null))).messageId("context-fifth")
+					.contextId(initial.contextId()).build();
+				Message sixthTurn = Message.builder().role(Message.Role.ROLE_USER)
+					.parts(List.<Part<?>>of(new TextPart("sixth", null))).messageId("context-sixth")
+					.contextId(initial.contextId()).build();
+				Task fifth = extractTask(parse(post(endpoint,
+					rpcEnvelope("fifth", "SendMessage", new MessageSendParams(fifthTurn, null, null)), jwt)));
+				assertTrue(queuedGate.awaitEntered(5, TimeUnit.SECONDS),
+					"first queued task did not reach the transition gate");
+				Task sixth = extractTask(parse(post(endpoint,
+					rpcEnvelope("sixth", "SendMessage", new MessageSendParams(sixthTurn, null, null)), jwt)));
+				assertNotEquals(fifth.id(), sixth.id());
+				assertEquals(initial.contextId(), fifth.contextId());
+				assertEquals(initial.contextId(), sixth.contextId());
+				queuedGate.release();
+				awaitTask(endpoint, fifth.id(), jwt, TaskState.TASK_STATE_COMPLETED);
+				awaitTask(endpoint, sixth.id(), jwt, TaskState.TASK_STATE_COMPLETED);
+				assertEquals(cyclesBefore + 2, agentState.getTimeline().count(),
+					"each queued send is its own task and runs its own cycle");
+			}
+		}
 	}
 
 	/**
@@ -516,17 +531,33 @@ public class A2AAgentCardTest {
 
 	private Task awaitTask(String endpoint, String taskId, String jwt, TaskState wanted)
 			throws Exception {
-		long deadline = System.currentTimeMillis() + 5000;
-		Task task = null;
-		do {
-			task = extractTask(parse(post(endpoint,
-				rpcEnvelope("poll-" + UUID.randomUUID(), "GetTask",
-					new TaskQueryParams(taskId, null)), jwt)));
-			if (task != null && wanted.equals(task.status().state())) return task;
-			Thread.sleep(20);
-		} while (System.currentTimeMillis() < deadline);
-		throw new AssertionError("Task " + taskId + " did not reach " + wanted
-			+ "; last state=" + (task == null ? null : task.status().state()));
+		// Await the actual completion signal, then check the HTTP projection once.
+		// The bound is only a test watchdog; it never cancels or fails the Job.
+		Job live = TestServer.ENGINE.jobs().getJob(Blob.fromHex(taskId));
+		if (live != null) {
+			try {
+				live.future().get(5, TimeUnit.SECONDS);
+			} catch (Exception e) {
+				throw new AssertionError("Task completion failed: " + taskId
+					+ "; live status=" + live.getStatus()
+					+ "; agent=" + agentDiagnostics(endpoint), e);
+			}
+		}
+		Task task = extractTask(parse(post(endpoint,
+			rpcEnvelope("completed-" + UUID.randomUUID(), "GetTask",
+				new TaskQueryParams(taskId, null)), jwt)));
+		assertNotNull(task);
+		assertEquals(wanted, task.status().state(),
+			() -> "GetTask disagrees with completion for " + taskId
+				+ "; agent=" + agentDiagnostics(endpoint));
+		return task;
+	}
+
+	private Object agentDiagnostics(String endpoint) {
+		String[] address = endpoint.substring("/a2a/".length()).split("/g/", 2);
+		var user = TestServer.ENGINE.getVenueState().users().get(Strings.create(address[0]));
+		var agent = user == null ? null : user.agent(address[1]);
+		return agent == null ? null : agent.getRecord();
 	}
 
 	private TaskStatusUpdateEvent awaitFinalStatusUpdate(String endpoint,

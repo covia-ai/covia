@@ -1115,7 +1115,9 @@ public class Engine {
 		venue.registerAdapter(new AssetAdapter());
 		venue.registerAdapter(new GridAdapter());
 		venue.registerAdapter(new covia.adapter.A2AAdapter());
+		venue.registerAdapter(new covia.adapter.RemoteAgentAdapter());
 		venue.registerAdapter(new ConvexAdapter());
+		venue.registerAdapter(new covia.adapter.CryptoAdapter());
 		venue.registerAdapter(new AgentAdapter());
 		venue.registerAdapter(new SecretAdapter());
 		venue.registerAdapter(new covia.adapter.SchedulerAdapter());
@@ -2732,6 +2734,18 @@ public class Engine {
 		for (AAdapter a : adapters.values()) {
 			if (a instanceof covia.venue.storage.ContentProvider p) {
 				if (p.putContent(ref, data, contentType, ctx)) return true;
+			}
+		}
+		return false;
+	}
+
+	/** Create-only counterpart of reference-addressed putContent; provider write checks still apply. */
+	public boolean createContent(AString ref, InputStream data, String contentType,
+			RequestContext ctx) throws IOException {
+		if (ref == null) return false;
+		for (AAdapter a : adapters.values()) {
+			if (a instanceof covia.venue.storage.ContentProvider p) {
+				if (p.createContent(ref, data, contentType, ctx)) return true;
 			}
 		}
 		return false;

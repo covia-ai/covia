@@ -2,6 +2,7 @@ package covia.grid;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -24,6 +25,56 @@ import covia.exception.JobFailedException;
 import covia.exception.JobPollingFailedException;
 
 public class JobTest {
+
+	@Test void cancellationEvidenceDoesNotReopenOrFinishTheJobAgain() {
+		var finishes = new java.util.concurrent.atomic.AtomicInteger();
+		var hooks = new java.util.concurrent.atomic.AtomicInteger();
+		var notifications = new java.util.concurrent.atomic.AtomicInteger();
+		Job job = new Job(Maps.of(Fields.STATUS, Status.STARTED)) {
+			@Override public void onFinish(AMap<AString, ACell> data) { finishes.incrementAndGet(); }
+		};
+		AMap<AString, ACell> evidence = Maps.of("outcome", "acknowledged");
+		job.recordCancellation(evidence);
+		assertNull(job.getData().get(Fields.CANCELLATION));
+		job.setCancelHook(hooks::incrementAndGet);
+		job.subscribe(j -> notifications.incrementAndGet());
+		job.cancel("stop");
+		var future = job.future();
+		Throwable failure = assertThrows(Exception.class, future::join);
+		job.recordCancellation(evidence);
+		job.recordCancellation(evidence);
+		job.completeWith(Strings.create("late result"));
+		job.fail("late failure");
+		assertEquals(Status.CANCELLED, job.getStatus());
+		assertEquals(Strings.create("stop"), job.getData().get(Fields.ERROR));
+		assertNull(job.getData().get(Fields.OUTPUT));
+		assertEquals(evidence, job.getData().get(Fields.CANCELLATION));
+		assertSame(failure.getCause(), assertThrows(Exception.class, future::join).getCause());
+		assertEquals(1, finishes.get());
+		assertEquals(1, hooks.get());
+		assertEquals(2, notifications.get());
+	}
+
+	@Test
+	public void optionalProducerCodeSurvivesSnapshotAndExceptionWithoutClassifyingOtherFailures() {
+		String code = "example:retry-later";
+		Job job = Job.create(Maps.of(Fields.STATUS, Status.STARTED));
+		job.fail(code, "An explanation the producer may reword");
+		Job restored = Job.create(job.getData());
+		JobFailedException failure = assertThrows(JobFailedException.class, restored::getOutput);
+		assertEquals(code, failure.getErrorCode());
+		job.fail("other:failure", "A late failure must not replace the winning code");
+		assertEquals(code, job.getErrorCode());
+
+		Job unclassified = Job.create(Maps.of(Fields.STATUS, Status.STARTED));
+		unclassified.fail("Unknown session");
+		assertFalse(unclassified.getData().containsKey(Fields.ERROR_CODE));
+		assertNull(new JobFailedException(unclassified).getErrorCode());
+		Job exceptional = Job.create(Maps.of(Fields.STATUS, Status.STARTED));
+		exceptional.fail(new IllegalArgumentException("Unknown session"));
+		assertFalse(exceptional.getData().containsKey(Fields.ERROR_CODE));
+		assertNull(exceptional.getErrorCode());
+	}
 
 	@Test
 	public void testLateCancelHookRunsExactlyOnceAndSeesCommittedState() {

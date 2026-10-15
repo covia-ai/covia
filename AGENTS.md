@@ -113,9 +113,9 @@ mvn test -pl covia-core
 | Javalin | 7.2.3 | HTTP server with OpenAPI/Swagger/ReDoc |
 | LangChain4j | 1.22.0 | LLM orchestration (OpenAI, Ollama, Gemini, DeepSeek) |
 | MCP SDK | 2.0.1 | Model Context Protocol |
-| A2A | 1.3.1.Final | Agent-to-Agent protocol |
+| A2A | 1.4.0.Final | Agent-to-Agent protocol |
 | JUnit | 6.1.3 | Testing |
-| SLF4J/Logback | 2.0.19/1.6.3 | Logging |
+| SLF4J/Logback | 2.0.20/1.6.5 | Logging |
 
 ## Architecture Overview
 
@@ -132,12 +132,12 @@ Engine (core state, adapters, assets, content, identity)
     ├── Content Storage   (lattice / file / memory)
     └── JobManager        (job lifecycle, per-user persistence, recovery)
     |
-Adapter Layer (32 built-in adapters plus 9 loadable modules — canonical table in venue/CLAUDE.md)
+Adapter Layer (34 built-in adapters plus 9 loadable modules — canonical table in venue/CLAUDE.md)
     ├── Data & state:  covia (lattice CRUD), asset, dlfs, vault, memory, secret, file, archive
-    ├── Execution:     langchain (LLMs), mcp, http, convex, jvm, schema, orchestrator, scheduler
+    ├── Execution:     langchain (LLMs), mcp, http, convex, crypto, jvm, schema, json, orchestrator, scheduler
     ├── Agents:        agent, llmagent, goaltree, skills, hitl (COG-16 h/ inbox), project (WBS tree; skills only so far)
-    ├── Federation:    grid (run/invoke/jobStatus), ucan (granting surface, COG-17)
-    ├── Admin:         user (registration), venue (runtime adapter/module lifecycle), oauth (connected accounts)
+    ├── Federation:    grid (run/invoke/jobStatus), a2a, remoteagent, ucan (granting surface, COG-17)
+    ├── Admin:         user (registration), auth, venue (runtime adapter/module lifecycle), oauth (connected accounts), connections
     └── Testing:       test (echo, delay, never, chat, pause, ...)
 ```
 
@@ -222,7 +222,7 @@ The list below tracks engineering tasks. For the developer-experience and open-s
 
 ### P1 — High (security and reliability)
 
-- [x] Secure credential handling — per-user encrypted SecretStore, `secretFields` redaction, `s/NAME` resolution under `secret/use` (another principal's as `<did>/s/NAME`, grants bindable to a url); capability-gated `secret:extract` still pending.
+- [x] Secure credential handling — per-user encrypted SecretStore, `secretFields` redaction, `s/NAME` resolution under `secret/use` (another principal's as `<did>/s/NAME`, grants bindable to a url); capability-gated `secret:extract` restricted to direct owner calls (no agents, MCP tools or recorded jobs).
 
 - [ ] **Per-operation rate limiting** — request-rate and concurrent-job caps exist (see `venue/docs/CONFIG.md`); per-operation limits do not.
 

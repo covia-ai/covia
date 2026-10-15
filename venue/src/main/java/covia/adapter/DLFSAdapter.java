@@ -373,7 +373,10 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 			if (!ref.contains("/dlfs/")) return null;
 			DIDURL didURL = DIDURL.create(ref);
 			owner = Strings.create(didURL.getDID().toString());
+			// DIDURL exposes a raw URL path. Decode once before normalisation and
+			// authority checks; unlike form decoding, URI paths preserve literal '+'.
 			rest = didURL.getPath();
+			if (rest != null) rest = java.net.URI.create(rest).getPath();
 			if (rest != null && rest.startsWith("/")) rest = rest.substring(1);
 		}
 		if (rest == null) return null;
@@ -486,17 +489,40 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	@Override
 	public boolean putContent(AString ref, java.io.InputStream data, String contentType,
 			RequestContext ctx) throws IOException {
+		return writeContent(ref, data, ctx, false);
+	}
+
+	@Override
+	public boolean createContent(AString ref, java.io.InputStream data, String contentType,
+			RequestContext ctx) throws IOException {
+		return writeContent(ref, data, ctx, true);
+	}
+
+	private boolean writeContent(AString ref, java.io.InputStream data, RequestContext ctx,
+			boolean createOnly) throws IOException {
 		if (ref == null) return false;
 		AuthorisedPath target = resolveAuthorisedPath(ctx, ref.toString(), Capability.CRUD_WRITE);
 		if (target == null) return false;
 		Path path = target.path();
-		try (java.io.OutputStream os = Files.newOutputStream(path,
+		java.io.OutputStream opened;
+		// Opening reserves the name. Convex 0.8.17 checks CREATE_NEW against a
+		// snapshot and serialises only within one DLFSLocal, and each request
+		// connects its own, so two creates could both claim one name. Opens are
+		// serialised here; the data transfer is not.
+		synchronized (contentOpenLock) {
+			opened = Files.newOutputStream(path, createOnly
+				? FileOperations.createOptions(path) : new java.nio.file.OpenOption[] {
 				StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
-				StandardOpenOption.WRITE)) {
+				StandardOpenOption.WRITE });
+		}
+		try (java.io.OutputStream os = opened) {
 			data.transferTo(os);
 		}
 		return true;
 	}
+
+	/** Serialises reference-addressed content opens; see {@link #writeContent}. */
+	private final Object contentOpenLock = new Object();
 
 	/**
 	 * The resolved target of a DLFS file op: either the caller's own drive

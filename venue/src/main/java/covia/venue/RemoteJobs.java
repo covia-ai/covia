@@ -17,6 +17,7 @@ import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
 import covia.grid.Job;
+import covia.grid.Status;
 
 /**
  * Engine-owned observation of remote work. Each attempt is bounded by its
@@ -24,6 +25,8 @@ import covia.grid.Job;
  * adapters reconstruct them from the delegation record on recovery.
  */
 public final class RemoteJobs implements AutoCloseable {
+	public static final String INVALID_CANCELLATION_STATUS = "Invalid remote cancellation status";
+	public static final String CANCELLATION_ID_MISMATCH = "Remote cancellation job ID mismatch";
 	public static final AString DELEGATION = Strings.intern("delegation");
 	public static final AString PROTOCOL = Strings.intern("protocol");
 	public static final AString TARGET = Strings.intern("target");
@@ -32,6 +35,16 @@ public final class RemoteJobs implements AutoCloseable {
 	public static final AString AUTH_REF = Strings.intern("authRef");
 	public static final AString ERROR_TYPE = Strings.intern("observationErrorType");
 	public static final AString REMOTE_STATUS = Strings.intern("remoteStatus");
+	public static final AString OWNS_REMOTE = Strings.intern("ownsRemote");
+	public static final AString OUTCOME = Strings.intern("outcome");
+	public static final AString HTTP_STATUS = Strings.intern("httpStatus");
+	public static final AString CANCELLATION_ERROR_TYPE = Strings.intern("errorType");
+	/** Cancellation outcomes recorded under {@link #OUTCOME}. */
+	public static final AString OUTCOME_REQUESTED = Strings.intern("requested");
+	public static final AString OUTCOME_ACKNOWLEDGED = Strings.intern("acknowledged");
+	public static final AString OUTCOME_FINISHED = Strings.intern("finished");
+	public static final AString OUTCOME_REJECTED = Strings.intern("rejected");
+	public static final AString OUTCOME_UNKNOWN = Strings.intern("unknown");
 	private static final AString SUBMITTING = Strings.intern("submitting");
 	private static final AString HEALTHY = Strings.intern("healthy");
 	private static final AString RETRYING = Strings.intern("retrying");
@@ -68,9 +81,15 @@ public final class RemoteJobs implements AutoCloseable {
 
 	/** Checkpoint intent and protected transport credentials before submitting once. */
 	public void prepare(Job job, String protocol, String target, AMap<AString, ACell> credentials) {
+		prepare(job, protocol, target, credentials, true);
+	}
+
+	/** Observation of an existing job does not confer cancellation ownership. */
+	public void prepare(Job job, String protocol, String target, AMap<AString, ACell> credentials, boolean ownsRemote) {
 		if (closed) throw new IllegalStateException("Remote observation is closed");
 		AMap<AString, ACell> record = Maps.of(PROTOCOL, Strings.create(protocol),
-			TARGET, Strings.create(target), OBSERVATION, SUBMITTING);
+			TARGET, Strings.create(target), OBSERVATION, SUBMITTING,
+			OWNS_REMOTE, convex.core.data.prim.CVMBool.create(ownsRemote));
 		if (job.isRecorded()) {
 			if (job instanceof VenueJob hosted) credentials = credentials.assoc(OPERATION_METADATA, hosted.meta());
 			AString ref = Strings.create("remote-job-" + job.getID().toHexString());
@@ -152,6 +171,63 @@ public final class RemoteJobs implements AutoCloseable {
 
 	/** Loss of an acknowledgement is uncertainty, not an execution failure. No replay. */
 	public void submissionUnknown(Job job, Throwable error) { health(job, UNKNOWN, error); }
+
+	/**
+	 * One asynchronous, transport-bounded cancellation attempt. The adapter owns
+	 * protocol interpretation; local cancellation never waits for the peer.
+	 * Captured transport authority remains usable after terminal secret cleanup.
+	 */
+	public void attemptCancellation(Job job, String remoteId,
+			java.util.concurrent.Callable<AMap<AString, ACell>> request) {
+		covia.adapter.AAdapter.VIRTUAL_EXECUTOR.execute(() -> {
+			try {
+				recordCancellation(job, remoteId, Maps.of(OUTCOME, OUTCOME_REQUESTED));
+			} finally {
+				AMap<AString, ACell> result;
+				try { result = request.call(); }
+				catch (Exception error) {
+					Throwable cause = unwrap(error);
+					result = cause instanceof covia.exception.ResponseException re
+						&& re.response instanceof java.net.http.HttpResponse<?> response
+						? cancellationHttpFailure(response.statusCode())
+						: Maps.of(OUTCOME, OUTCOME_UNKNOWN, CANCELLATION_ERROR_TYPE, cause.getClass().getSimpleName());
+					if (cause instanceof InterruptedException) Thread.currentThread().interrupt();
+				}
+				recordCancellation(job, remoteId, result);
+			}
+		});
+	}
+
+	private void recordCancellation(Job job, String remoteId, AMap<AString, ACell> result) {
+		job.recordCancellation(result.assoc(REMOTE_ID, Strings.create(remoteId)));
+		if (job.isRecorded()) engine.flush();
+	}
+
+	/** A terminal response is evidence, never a change to the cancelled local result. */
+	public static AMap<AString, ACell> cancellationResult(AString status) {
+		if (!(Status.CANCELLED.equals(status) || Status.COMPLETE.equals(status)
+			|| Status.FAILED.equals(status) || Status.REJECTED.equals(status)
+			|| Status.PENDING.equals(status) || Status.STARTED.equals(status)
+			|| Status.PAUSED.equals(status) || Status.INPUT_REQUIRED.equals(status) || Status.AUTH_REQUIRED.equals(status))) {
+			throw new IllegalArgumentException(INVALID_CANCELLATION_STATUS);
+		}
+		AString outcome = Status.CANCELLED.equals(status) ? OUTCOME_ACKNOWLEDGED
+			: Job.isFinished(Maps.of(Fields.STATUS, status)) ? OUTCOME_FINISHED : OUTCOME_UNKNOWN;
+		return Maps.of(OUTCOME, outcome, REMOTE_STATUS, status);
+	}
+
+	/** Validated response from a Covia job cancellation endpoint. */
+	public static AMap<AString, ACell> cancellationResult(convex.core.data.Blob id, AMap<AString, ACell> snapshot) {
+		if (snapshot == null || !id.equals(Job.parseID(snapshot.get(Fields.ID)))) {
+			throw new IllegalArgumentException(CANCELLATION_ID_MISMATCH);
+		}
+		return cancellationResult(RT.ensureString(snapshot.get(Fields.STATUS)));
+	}
+
+	public static AMap<AString, ACell> cancellationHttpFailure(int code) {
+		return Maps.of(OUTCOME, code >= 400 && code < 500 && code != 408 ? OUTCOME_REJECTED : OUTCOME_UNKNOWN,
+			HTTP_STATUS, code);
+	}
 
 	/** A protocol rejection proves non-acceptance; a timeout or 5xx does not. */
 	public void submissionFailed(Job job, Throwable error) {

@@ -8,6 +8,43 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.9.11] - 2026-10-15
+
+### Security
+
+- `secret:extract` (ability `secret/extract`, formerly `secret/decrypt`) runs
+  only as a direct owner `/run` call, never for the public principal.
+- `/api/v1/run` responses are `Cache-Control: private, no-store`.
+
+### Added
+
+- Telegram media: attachments saved to DLFS, images passed to the model,
+  `telegram/download`, `mediaOperation` and `replyOperation`.
+- `crypto` adapter: hashes, Ed25519 and JWT signatures, encryption, BIP39 keys.
+- `remoteagent` adapter; agents backed by A2A, Claude Code or remote Covia
+  agents (`agent.adapter`).
+- `secret:list` and `secret:delete`.
+- Adapter-specific job `errorCode` (#462).
+- `GET /api/v1/adapters/{name}/operations` and `AAdapter.getOperations()`.
+- `ContentProvider.createContent` for create-only writes.
+
+### Changed
+
+- Cancelling a grid, A2A or remote-agent job completes locally at once; the
+  remote outcome is recorded as `cancellation`.
+- `A2AAdapter.invoke`, `supportsMultiTurn` and `handleMessage` are final.
+- Unrecorded jobs, such as `/run` calls, no longer appear in job status queries
+  while in flight.
+- Secret names reject `.`, `..` and control characters.
+- SLF4J 2.0.20, Logback 1.6.5, A2A 1.4.0.Final, JDA 6.7.0, Telegram Bot API
+  10.3.0, commonmark 0.30.1; Surefire and Failsafe 3.6.0 in every module.
+
+### Fixed
+
+- Shutdown no longer suspends a running agent or fails its queued tasks.
+- DLFS DID URL references with encoded paths resolve.
+- Garbled dashes in the `remoteagent:request` description.
+
 ## [0.9.10] - 2026-10-10
 
 ### Security
@@ -1211,7 +1248,8 @@ Initial public release: venue server with the adapter framework, lattice-backed
 content-addressed assets, the async job model with SSE, multi-protocol surface
 (REST / MCP / A2A / DID), and strategy-based authentication.
 
-[Unreleased]: https://github.com/covia-ai/covia/compare/0.9.10...HEAD
+[Unreleased]: https://github.com/covia-ai/covia/compare/0.9.11...HEAD
+[0.9.11]: https://github.com/covia-ai/covia/compare/0.9.10...0.9.11
 [0.9.10]: https://github.com/covia-ai/covia/compare/0.9.9...0.9.10
 [0.9.9]: https://github.com/covia-ai/covia/compare/0.9.8...0.9.9
 [0.9.8]: https://github.com/covia-ai/covia/compare/0.9.7...0.9.8

@@ -240,7 +240,7 @@ Internal framework fields (sessions, tasks, pending, timeline, caps, scheduling 
 | Complete/fail task | Complete or fail a Job assigned to an agent | Job must be assigned to the agent |
 | Message agent | Append to an agent session's pending queue | `{ with: "did:.../g/<id>", can: "agent/message" }` |
 | Invoke operation | Invoke any grid operation (creates a Job) | `{ with: "did:.../o/op-name", can: "invoke" }` |
-| Decrypt secret | Decrypt a secret from the user's store | `{ with: "did:.../s/key", can: "secret/decrypt" }` |
+| Extract secret | Reveal an owned secret through a direct owner call (see UCAN.md) | `{ with: "did:.../s/key", can: "secret/extract" }` |
 | Spawn agent | Create a new agent | `{ with: "did:.../g/", can: "crud/write" }` |
 | Fork agent | Fork an existing agent | `{ with: "did:.../g/<id>", can: "agent/fork" }` |
 | Delegate caps | Sub-delegate UCAN capabilities | `{ with: "did:...", can: "ucan/delegate" }` |
@@ -472,7 +472,7 @@ Capabilities inherit the namespace path hierarchy. The risk profile follows from
 | `with: did:.../w/projects/foo/`, `can: crud/read` | Medium-High |
 | `with: did:.../w/`, `can: crud/read` | High — live working state |
 | `with: did:.../s/`, `can: crud/read` | Low — returns ciphertext only |
-| `with: did:.../s/key`, `can: secret/decrypt` | Highest — reveals plaintext |
+| `with: did:.../s/key`, `can: secret/extract` | Highest — reveals plaintext |
 | `with: did:.../w/results/`, `can: crud/write` | Medium |
 | `with: did:...`, `can: *` | Maximum — trusted agents only |
 
@@ -522,7 +522,7 @@ Capabilities are expressed as lattice-native UCAN tokens following the UCAN spec
 
 - **Lattice-native.** UCANs are content-addressable values in `/a/`. CAD3 value hash is the canonical identifier. (Transport uses the JWT encoding — see UCAN.md §4.3; the lattice-native CAD3 form is the storage/canonical representation.)
 - **DID URL resources.** Resource URIs are DID URLs scoping into the user's lattice namespace (e.g. `did:key:zAlice.../w/projects/foo`). Sub-paths attenuate parents.
-- **Standard abilities.** `*` is the top ability. Abilities are slash-delimited without leading slash: `crud/read`, `invoke`, `secret/decrypt`, `agent/message`, `ucan/delegate`. Prefix hierarchy — `crud` proves `crud/read`.
+- **Standard abilities.** `*` is the top ability. Abilities are slash-delimited without leading slash: `crud/read`, `invoke`, `secret/extract`, `agent/message`, `ucan/delegate`. Prefix hierarchy — `crud` proves `crud/read`.
 - **Delegation chains.** Agents sub-delegate narrower capabilities via proof chain references. Attenuation only — never widen.
 - **Self-contained verification.** No callbacks or token servers. The UCAN, its proof chain, and DID→key resolution are sufficient.
 - **Revocation.** Signed records referencing the UCAN's CAD3 hash, propagated through the lattice.

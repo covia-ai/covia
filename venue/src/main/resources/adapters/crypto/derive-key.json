@@ -1,0 +1,71 @@
+{
+  "name": "Derive BIP39 Ed25519 key",
+  "description": "Validate a secret-backed English BIP39 mnemonic, derive via PBKDF2-HMAC-SHA512 then hardened SLIP-0010, and store the 32-byte Ed25519 seed. Default path matches Convex/GetMine venue identity. GetMine install DID uses m/44/864/1/0/0. GetMine uses the empty passphrase.",
+  "operation": {
+    "adapter": "crypto:derive-key",
+    "readOnly": false,
+    "activityLabel": "Derive BIP39 Ed25519 key",
+    "input": {
+      "type": "object",
+      "properties": {
+        "mnemonic": {
+          "type": "string",
+          "description": "Secret reference holding an English BIP39 phrase. Full words required; case and whitespace are normalised. Never pass the phrase inline."
+        },
+        "passphraseSecret": {
+          "type": "string",
+          "description": "Optional secret reference for a BIP39 passphrase (NFKD-normalised); omitted means empty. Different passphrases produce different keys."
+        },
+        "path": {
+          "type": "string",
+          "description": "Any SLIP-10 path: m for master, or up to 255 non-negative 31-bit indexes. No restriction on purpose, coin type or path shape. Apostrophes are optional; all indexes are hardened. The default uses Convex's official SLIP-44 coin type 864.",
+          "default": "m/44/864/0/0/0"
+        },
+        "name": {
+          "type": "string",
+          "description": "Destination secret name (single name, not a path). Stored encrypted in the caller's user namespace.",
+          "minLength": 1
+        },
+        "overwrite": {
+          "type": "boolean",
+          "default": false,
+          "description": "Explicitly replace an existing destination secret. Otherwise collisions fail atomically."
+        }
+      },
+      "required": [
+        "mnemonic",
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "secret": {
+          "type": "string",
+          "description": "Secret reference; private material is never returned."
+        },
+        "accountKey": {
+          "type": "string",
+          "description": "Native 32-byte Ed25519 AccountKey; JSON renders it as a 0x-prefixed hexadecimal string.",
+          "pattern": "^0x(?:[0-9a-f]{2})*$"
+        },
+        "did": {
+          "type": "string",
+          "description": "Ed25519 did:key for this public key."
+        },
+        "path": {
+          "type": "string",
+          "description": "Effective derivation path with explicit hardened apostrophes."
+        }
+      },
+      "required": [
+        "secret",
+        "accountKey",
+        "did",
+        "path"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

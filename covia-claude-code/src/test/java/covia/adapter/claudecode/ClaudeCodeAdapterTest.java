@@ -108,6 +108,24 @@ public class ClaudeCodeAdapterTest {
 
 	// ------------------------------------------------------------ config parsing
 
+	@Test void agentFacetChatResumesThroughCommonSessionId() throws Exception {
+		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "coding-facet",
+			"agent", Maps.of(Fields.ADAPTER, "claudecode", "project", "alpha")), OWNER_CTX).awaitResult(5000);
+		ACell first = engine.jobs().invokeOperation("v/ops/agent/chat", Maps.of(Fields.AGENT_ID,
+			"coding-facet", Fields.MESSAGE, "first facade turn"), OWNER_CTX).awaitResult(10000);
+		ACell sid = RT.getIn(first, Fields.SESSION_ID);
+		assertNotNull(sid);
+		assertNotNull(RT.getIn(first, Fields.RESPONSE));
+		ACell next = engine.jobs().invokeOperation("v/ops/agent/chat", Maps.of(Fields.AGENT_ID,
+			"coding-facet", Fields.MESSAGE, "second facade turn", Fields.SESSION_ID, sid), OWNER_CTX).awaitResult(10000);
+		assertEquals(sid, RT.getIn(next, Fields.SESSION_ID));
+		assertTrue(RT.getIn(next, Fields.RESPONSE).toString().contains("second facade turn"));
+		var state = engine.getVenueState().users().get(OWNER).agent(Strings.create("coding-facet"));
+		ACell providerId = RT.getIn(state.getSession(Job.parseID(sid)), "external", Fields.SESSION_ID);
+		assertNotNull(providerId);
+		assertNotEquals(sid, providerId);
+	}
+
 	@Test
 	public void testProjectSpecValidation() {
 		assertThrows(IllegalArgumentException.class, () -> ProjectSpec.parse("x", Maps.of("user", "did:test:a"), true,
@@ -538,6 +556,20 @@ public class ClaudeCodeAdapterTest {
 	}
 
 	// ------------------------------------------------------------------ helpers
+
+	@Test
+	public void testRestoredSessionCancellationStopsTheNextTurn() throws Exception {
+		Job job = engine.jobs().invokeOperation("v/ops/claudecode/session", Maps.of("project", "alpha", "prompt", "count"), OWNER_CTX);
+		await(() -> Status.INPUT_REQUIRED.equals(job.getStatus()), 30_000);
+		String id = str(output(job), "session");
+		adapter.forgetSessionJobForTest(job.getID());
+		run(OWNER_CTX, "v/ops/claudecode/stop", Maps.of("session", id));
+		engine.jobs().deliverMessage(job.getID(), Maps.of("prompt", "sleep 20000"), OWNER_CTX);
+		await(() -> adapter.knownSessions().stream().anyMatch(s -> id.equals(s.sessionId()) && s.state() == ClaudeSession.State.BUSY), 5000);
+		job.cancel();
+		await(() -> adapter.knownSessions().stream().noneMatch(s -> id.equals(s.sessionId()) && s.isLive()), 5000);
+		assertEquals(Status.CANCELLED, job.getStatus());
+	}
 
 	@Test
 	public void testMessageTextAndFailureOf() {

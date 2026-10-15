@@ -12,6 +12,7 @@ import convex.core.data.Strings;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.adapter.AAdapter;
+import covia.adapter.AgentAdapter;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
 import covia.grid.Job;
@@ -26,7 +27,6 @@ import covia.venue.RequestContext;
  */
 public final class ConversationRouter {
 	private static final String AGENT_CHAT = "v/ops/agent/chat";
-	private static final String UNKNOWN_SESSION = "Unknown session";
 	public static final String NO_RESPONSE = "(no response)";
 	private static final AString[] TEXT_KEYS = {
 		Fields.TEXT, Fields.RESPONSE, Strings.intern("content"), Fields.MESSAGE, Fields.RESULT };
@@ -91,8 +91,7 @@ public final class ConversationRouter {
 		Job job = engine.jobs().invokeOperation(operation, input, context());
 		ACell result = job.awaitResult();
 		if (job.getStatus() != Status.COMPLETE) {
-			String why = job.getErrorMessage();
-			throw new JobFailedException(operation + " " + job.getStatus() + (why == null ? "" : ": " + why));
+			throw new JobFailedException(job);
 		}
 		return result;
 	}
@@ -129,9 +128,10 @@ public final class ConversationRouter {
 		return result.toString();
 	}
 
-	private static boolean isUnknownSession(Throwable t) {
+	static boolean isUnknownSession(Throwable t) {
 		for (Throwable cause = t; cause != null && cause.getCause() != cause; cause = cause.getCause()) {
-			if (cause.getMessage() != null && cause.getMessage().contains(UNKNOWN_SESSION)) return true;
+			if (cause instanceof JobFailedException failure
+					&& AgentAdapter.UNKNOWN_SESSION_CODE.equals(failure.getErrorCode())) return true;
 		}
 		return false;
 	}

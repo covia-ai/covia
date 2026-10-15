@@ -5,7 +5,7 @@
 	<parent>
 		<groupId>ai.covia</groupId>
 		<artifactId>covia</artifactId>
-		<version>0.9.10</version>
+		<version>0.9.11</version>
 	</parent>
 	<artifactId>covia-sql</artifactId>
 
@@ -62,7 +62,6 @@
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-failsafe-plugin</artifactId>
-				<version>3.5.6</version>
 				<configuration>
 					<systemPropertyVariables>
 						<covia.module.jar>${project.build.directory}/${project.build.finalName}-module.jar</covia.module.jar>

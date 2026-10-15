@@ -20,6 +20,7 @@
 				"address": { "type": "string", "description": "Canonical <ownerDID>/g/<agentId> address" },
 				"status": { "type": "string", "description": "SLEEPING, RUNNING, SUSPENDED, or TERMINATED" },
 				"config": { "type": "object", "description": "Canonical merged agent config: transition/provider selection, prompt, tools, skills, context, loads, caps, outputs, and definition provenance where present" },
+				"agent": { "type": "object", "description": "External adapter definition when present; absent for the native Covia agent runtime." },
 				"timelineLength": { "type": "integer", "description": "Number of completed runs" },
 				"tasks": { "type": "integer", "description": "Number of pending tasks" },
 				"awaiting": {

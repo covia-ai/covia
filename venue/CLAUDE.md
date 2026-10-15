@@ -26,7 +26,7 @@ venue/
 │   │   ├── api/                 # REST (CoviaAPI), MCP, A2A, UserAPI
 │   │   ├── server/              # HTTP server, AuthMiddleware, SSE
 │   │   └── storage/             # Content storage backends
-│   ├── adapter/         # Adapter implementations (AAdapter base + 32 adapters)
+│   ├── adapter/         # Adapter implementations (AAdapter base + 34 adapters)
 │   └── lattice/         # Lattice definitions (Covia.java), CapabilityChecker
 ├── src/main/resources/
 │   ├── adapters/        # Operation asset definitions (JSON, per adapter)
@@ -75,7 +75,9 @@ AUTH_REQUIRED).
 | Adapter | Purpose | Operations |
 |---------|---------|------------|
 | `grid` | Federated grid operations | `run`, `invoke`, `jobStatus`, `jobResult` |
+| `remoteagent` | Covia agent proxy on a local or remote venue; selected by `g/<id>/agent.adapter`, used through `agent:chat` / `agent:request` | internal transport |
 | `convex` | Convex blockchain, CAD3 conversion, and secret-backed Ed25519 keys | `query`, `transact`, `generate-key`, `sign`, `decode-cad3`, `encode-cad3` |
+| `crypto` | Local cryptography in Convex formats; secret-backed keys, JWTs and BIP39 phrases (see `docs/CONFIG.md#cryptography-crypto`) | `hash`, `generate-key`, `public-key`, `sign`, `verify`, `encrypt`, `decrypt`, `generate-mnemonic`, `validate-mnemonic`, `derive-key`, `jwt-sign`, `jwt-verify`, `jwt-decode` |
 | `mcp` | Model Context Protocol | `toolList`, `toolCall`, bridging ops |
 | `a2a` | Agent-to-Agent protocol client — remote agent cards, tasks and message relay | `send`, `get-task`, `cancel`, `agent-card`, `import-agent` |
 | `langchain` | AI/LLM models | `openai`, `ollama`, `anthropic`, `gemini`, `xai`, `deepseek`, `mistral`, `openrouter`, `models` |
@@ -96,7 +98,7 @@ AUTH_REQUIRED).
 | `project` | Projects as a work breakdown tree at `w/projects/<pid>` (`docs/PROJECT.md`); publishes the `projects` skill family | none yet — skills only |
 | `dlfs` | Decentralised file system | `listDrives`, `createDrive`, `deleteDrive`, `list`, `read`, `write`, `mkdir`, `delete` |
 | `vault` | Personal vault (configurable-drive DLFS wrapper) | `read`, `write`, `list`, `mkdir`, `delete` |
-| `secret` | Secret store | `set`, `extract` (removal via `covia:delete s/<name>`) |
+| `secret` | Secret store | `set`, `list`, `delete`, `extract` (direct owner `/run` only, never the public principal) |
 | `memory` | Per-user agent memory (one LWW vector, default `w/memory`) | `recall`, `remember`, `update`, `forget` |
 | `skills` | Agent skills discovery and SKILL.md import (see `docs/SKILLS.md`) | `list`, `read`, `parse`, `import` |
 | `ucan` | Capability tokens — granting surface (COG-17) | `issue`, `verify` |
@@ -113,7 +115,7 @@ Module adapters (shaded module jars, not in covia.jar — `docs/CONFIG.md` "Venu
 |---------|--------|---------|------------|
 | `sql` | covia-sql | Venue-local convex-db and operator-registered JDBC databases | `query`, `execute` |
 | `python` | covia-python-adapter | Operator-configured Python operations and stateful instances | configured ops, `instances/*` |
-| `telegram` | covia-telegram | Telegram bots (operator-declared or user-created) routing chats to agents or handing Updates to operations; Bot API access in Telegram's own shapes | `send`, `call`, `create`, `delete`, `bots` |
+| `telegram` | covia-telegram | Telegram bots (operator-declared or user-created) routing chats and media to agents or handing Updates to operations; Bot API access in Telegram's own shapes | `send`, `call`, `download`, `create`, `delete`, `bots` |
 | `discord` | covia-discord | Discord bots (operator-declared or user-created) routing DMs and mentioned guild messages to agents or operations; Discord REST API access | `send`, `call`, `create`, `delete`, `bots` |
 | `whatsapp` | covia-whatsapp | WhatsApp Cloud API phone bindings with signed text callbacks, durable intake and text replies | `send`, `create`, `delete`, `bots` |
 | `slack` | covia-slack | Slack workspace bindings with signed Events API DMs/channel mentions, durable intake and thread replies | `send`, `create`, `delete`, `bots` |
@@ -130,6 +132,8 @@ Base path: `/api/v1/`
 | `/status` | GET | Venue status and health; `access.{public,userAutoCreate}` states the admission policy truthfully (#255) |
 | `/assets/{ref}` | GET | Asset metadata for any ref form; `/content/{ref}` GET returns content (#368); `/assets` POST registers; `/assets/{id}/content` GET/PUT (hash-only, deprecated GET) |
 | `/invoke` | POST | Execute an operation — async by default (201 + job record); `?wait=true` blocks up to the 120s cap, `?wait=<ms>` up to that many ms |
+| `/run` | POST | Execute an operation and return only its result; the one route for `secret:extract` |
+| `/adapters/{name}/operations` | GET | The adapter's local operation names mapped to their full asset metadata |
 | `/values/{read,list,slice,inspect,aggregate,count}` | GET | Job-free lattice reads (#177) — synchronous, capability-checked, no job persisted. See `docs/READ_API.md` |
 | `/agents`, `/agents/{id}` | GET | Job-free agent listings (#180, #233) |
 | `/agents/{id}/sse` | GET | Server-sent live agent run-loop events (#394; owner-level, `?sessionId=` narrows to one session, closes on TERMINATED) — `docs/AGENT_LOOP.md` §2.6 |

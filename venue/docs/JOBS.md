@@ -15,6 +15,7 @@ operation:
 Blob getID();                              // unique identity
 AString getStatus();                       // current status (snapshot)
 AMap<AString, ACell> getData();            // current record snapshot
+String getErrorCode();                     // optional producer-specific code, or null
 CompletableFuture<ACell> future();         // lazy result future
 ACell awaitResult();                       // block until terminal
 ACell awaitResult(long timeoutMs);         // bounded caller-side wait
@@ -40,21 +41,43 @@ What each terminal status means, as the venue actually emits them:
 | Status | Meaning |
 |--------|---------|
 | `COMPLETE` | The op succeeded; `output` carries the result. |
-| `FAILED` | The op failed — the `error` message carries the reason. This is the **single failure status** the invoke / agent dispatch path emits: execution errors, schema / invalid-input errors, **and authorisation/capability denials** (`"Capability denied: requires <ability> on <resource>. …"`). Distinguish the kind of failure by the error string, not the status. |
+| `FAILED` | The op failed — the `error` message carries the reason. This is the **single failure status** the invoke / agent dispatch path emits: execution errors, schema / invalid-input errors, **and authorisation/capability denials** (`"Capability denied: requires <ability> on <resource>. …"`). An adapter may additionally supply an optional `errorCode` for programmatic handling; the status alone does not classify failures. |
 | `CANCELLED` | The caller cancelled the job (`cancel()` / `jobs/{id}/cancel`). |
 | `REJECTED` | Reserved for a policy/protocol rejection distinct from an execution failure. Core invoke/agent dispatch **does not emit it today** — it is defined in the lifecycle and used by the A2A protocol mapping (`TASK_STATE_REJECTED` ↔ `REJECTED`). A capability denial is a `FAILED` job with a detailed error string, **not** a `REJECTED` job. |
 
 This is **ruled, not open** (covia#209, closed): denials stay `FAILED` because
 nested jobs make a status-level distinction impossible — a child sub-job's
-denial surfaces as a `FAILED` parent, so error introspection is unavoidable and
-a partial denial status would be wrong at exactly that boundary. Treat `FAILED`
-+ the error string (which names the withheld resource + ability) as the
-authoritative signal; `REJECTED` is reserved for the A2A protocol mapping.
+denial surfaces as a `FAILED` parent, so a partial denial status would be wrong
+at exactly that boundary. The error message names the withheld resource and
+ability for the caller; denials have no error code by default. `REJECTED` is
+reserved for the A2A protocol mapping.
 
 Agent task/chat job records additionally carry `tokens: {input, output,
 total}` when the cycle's LLM calls reported usage (#217) — provider-measured
 counts, stamped before completion so they ride the persisted record. Absence
 means "not measured", never zero.
+
+### Optional adapter-specific error codes (#462)
+
+`error` remains the human-readable explanation. `errorCode` is an optional
+string whose meaning is defined by the producing adapter, not a universal
+Covia error taxonomy. By default there is no code: `job.fail(message)` and
+`job.fail(exception)` leave it absent, and the framework never infers one from
+message wording or exception type. Adapters opt in with
+`job.fail(code, message)`; use an adapter prefix to avoid collisions.
+
+For example, the agent adapter supplies `agent:unknown-session` when chat,
+query or context rejects a supplied session that does not exist. A client that
+understands that specific contract can choose to start a fresh conversation.
+Other agent failures are not automatically coded; `agent:message` can create a
+missing session and does not reject it on that basis.
+
+The code travels with the persisted job record and REST job snapshots.
+`Job.getErrorCode()` and `JobFailedException.getErrorCode()` return it, or
+`null` when absent. Consumers must treat absent or unfamiliar codes as generic
+failures and must not guess from the message. Codes do not change status,
+authorise retries, or automatically propagate through wrapper jobs; recovery
+remains the application's choice.
 
 ## Record fields: `op`, `adapter` and `parent`
 
@@ -84,7 +107,7 @@ means "not measured", never zero.
 
 ## The update path — CAS-committed, terminal-sticky
 
-All Job mutations funnel through `Job.commitUpdate` (a CAS loop):
+Lifecycle mutations funnel through `Job.commitUpdate` (a CAS loop):
 
 - The **updater and `processUpdate` are side-effect free** — they may be
   retried when another thread wins the race. `VenueJob.processUpdate` only
@@ -298,9 +321,37 @@ remote outcome unresolved. Credentials are removed on local termination;
 encrypted orphan records left by a process crash require operator cleanup.
 Secret rotation/reconnection is not automated in this first delivery.
 
+Cancellation commits locally and propagates through owned local child hooks
+without waiting for network IO. Grid runs, A2A sends and remote-agent calls
+then attempt backend cancellation once, asynchronously, with their captured
+transport authority. A handle arriving after local cancellation still triggers
+the attempt. A `grid:jobResult` observer does not own the remote execution:
+cancelling that local wait never cancels the remote job. `delegation.ownsRemote`
+preserves this distinction during recovery; older Grid records without it do
+not gain cancellation authority.
+
+The optional `cancellation` record contains `remoteId`, `outcome`, and available
+`remoteStatus`, `httpStatus` or protocol `errorCode` evidence:
+
+- `requested`: the attempt started; no response has established its outcome.
+- `acknowledged`: the peer returned a cancelled task/job.
+- `finished`: the peer returned another terminal state (for example, completion
+  won the race).
+- `rejected`: the peer refused the cancellation request.
+- `unknown`: a transport failure, unreadable response or nonterminal response
+  did not establish cancellation.
+
+This evidence can be persisted after local termination through the narrow
+`Job.recordCancellation` method. It never changes the terminal status, result
+or error, and never repeats terminal cleanup or cancellation hooks. Raw error
+text, response bodies and credentials are not recorded. A missing cancellation
+record is not confirmation that remote work stopped. If acceptance is lost and
+no remote ID arrives, no cancellation can be addressed. There is no confirmation
+polling or automatic retry; a process crash can leave an attempt unresolved.
+Even an acknowledgement cannot undo effects already performed remotely.
+
 Shutdown suspends observation and fences late callbacks, without claiming
-remote cancellation. Existing explicit cancellation semantics remain tracked
-in [#511](https://github.com/covia-ai/covia/issues/511). Transient/private jobs
+remote cancellation. Transient/private jobs
 retain their existing recording policy: they can observe remote work while
 the process lives, but have no restart recovery guarantee. Use `/invoke` when
 a durable local record is needed. Neither `/invoke` nor a saved remote handle

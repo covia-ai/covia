@@ -1,0 +1,134 @@
+{
+  "name": "Verify an Ed25519 JWT against a trusted key",
+  "description": "Verify an EdDSA JWT using an explicit trusted accountKey, optional expected issuer/audience, and exp/nbf when present. Returns valid:false and a reason on signature, algorithm or claim rejection, without releasing claims. Malformed input fails. This is JWT validation, not venue authentication or UCAN authorization.",
+  "operation": {
+    "adapter": "crypto:jwt-verify",
+    "readOnly": true,
+    "activityLabel": "Verify JWT",
+    "input": {
+      "type": "object",
+      "properties": {
+        "token": {
+          "type": "string",
+          "description": "Compact JWT as AString/text, not a hex blob. Redacted from recorded input. Supply either token or tokenSecret.",
+          "maxLength": 1048576
+        },
+        "tokenSecret": {
+          "type": "string",
+          "description": "Secret reference containing the compact JWT: s/NAME or <did>/s/NAME. Supply either token or tokenSecret."
+        },
+        "accountKey": {
+          "type": "string",
+          "description": "Trusted 32-byte Ed25519 AccountKey/blob, or hexadecimal string with optional 0x prefix. Obtain this key independently of the token; token headers never select a verification key."
+        },
+        "expectedIssuer": {
+          "type": "string",
+          "description": "Require an exact, case-sensitive iss match."
+        },
+        "expectedAudience": {
+          "type": "string",
+          "description": "Require an exact, case-sensitive match to aud or an entry in its string array."
+        },
+        "requireExpiration": {
+          "type": "boolean",
+          "default": false,
+          "description": "Require exp to be present. An exp that is present must always be numeric and unexpired. Set true for expiring access tokens."
+        }
+      },
+      "required": [
+        "accountKey"
+      ],
+      "oneOf": [
+        {
+          "required": [
+            "token"
+          ],
+          "not": {
+            "required": [
+              "tokenSecret"
+            ]
+          }
+        },
+        {
+          "required": [
+            "tokenSecret"
+          ],
+          "not": {
+            "required": [
+              "token"
+            ]
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "valid": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Rejection reason; never contains token data."
+        },
+        "header": {
+          "type": "object",
+          "description": "Decoded JOSE header."
+        },
+        "claims": {
+          "type": "object",
+          "description": "Decoded JWT claims."
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "valid": {
+              "const": true
+            }
+          },
+          "required": [
+            "valid",
+            "header",
+            "claims"
+          ],
+          "not": {
+            "required": [
+              "reason"
+            ]
+          }
+        },
+        {
+          "properties": {
+            "valid": {
+              "const": false
+            }
+          },
+          "required": [
+            "valid",
+            "reason"
+          ],
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "header"
+                ]
+              },
+              {
+                "required": [
+                  "claims"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "secretFields": [
+      "token"
+    ]
+  }
+}

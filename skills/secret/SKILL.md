@@ -25,18 +25,27 @@ Secret values are encrypted at rest and redacted in job records.
 ### `list` — List stored secrets
 
 ```
-covia_list  path=s
+secret_list  prefix=<optional-prefix>  offset=0  limit=100
 ```
 
-Shows secret names (not values). Values cannot be read back via MCP — they are resolved internally at invocation time.
+Returns `names`, matching `total`, `offset` and `nextOffset` when more remain. `prefix` and pagination are optional; limit defaults to 100 and is capped at 1000. Requires `crud/read` on `s/`. `covia:list {path:"s"}` remains available. Values cannot be read back via MCP — integrations resolve `s/NAME` references internally.
 
 ### `delete <name>` — Remove a secret
 
 ```
-covia_delete  path=s/<NAME>
+secret_delete  name=<NAME>
 ```
 
-Removes the caller's own secret — whole records only (`s/<NAME>`; deeper paths are rejected). Idempotent: deleting a name that doesn't exist succeeds silently. To rotate a secret, just `set` it again — no delete needed.
+Only delete an exact credential the user has explicitly asked to remove. Deletion can break agents and integrations that reference it; do not use it for speculative cleanup. Requires `crud/delete` on `s/NAME`. Returns `{name,deleted}`; an absent name gives `deleted:false`. This removes the stored copy, not the credential at its provider. To rotate, use `secret_set` with `overwrite:true`; no delete is needed. `covia:delete {path:"s/NAME"}` remains available.
+
+## Extraction
+
+`secret:extract` is for direct owner calls, not this agent/MCP workflow. It
+requires `secret/extract` on `s/NAME` and refuses recorded jobs, tool calls,
+agent/session/task contexts and nested operations. Do not route it through a
+conversation or paste its result into prompts, history or durable configuration.
+Owners can use the published `v/ops/secret/extract` operation through the REST
+result-only `/api/v1/run` endpoint. See `venue/docs/UCAN.md` for the restrictions.
 
 ## Common Secrets
 

@@ -267,7 +267,8 @@ Per venue (`logging`, both default `false`):
   refused credentials (`auth.success`, `auth.failure`, `auth.throttled`),
   logins (`login`), token issue (`token.issued`), user and key administration
   (`user.create`, `user.sudo`, `auth.key.add`, `auth.key.revoke`), secret
-  writes (`secret.write`, the name only), and venue administration
+  writes, deletions and extraction attempts (`secret.write`, `secret.delete`,
+  `secret.extract`, names and outcomes only), and venue administration
   (`venue.gc`, `venue.restart`, `venue.admin`). Events carry DIDs, the client
   address, names, outcomes and refusal reasons — never a token, secret value,
   email or content — so they can be kept longer than operational logs.
@@ -1200,6 +1201,189 @@ Currently defined:
   new agents to follow should also update the `config.skillsets` in its agent
   templates (`v/agents/templates/*`).
 
+## Cryptography (`crypto`)
+
+The built-in `CryptoAdapter` uses the pinned Convex crypto implementation; no
+additional provider configuration or dependencies are needed. Disable with
+`adapters.crypto.enabled: false`. Operations live at `v/ops/crypto/<operation>`;
+the agent instruction/tool bundle is `v/skills/crypto/crypto`.
+
+| Operation | Input | Result |
+|-----------|-------|--------|
+| `hash` | blob `data`, optional string `encoding`, `algorithm` | `algorithm`, native `digest` blob |
+| `generate-key` | secret `name`, optional `overwrite` | `secret`, public `accountKey`, `did` |
+| `public-key` | `seed` secret reference | public `accountKey`, `did` |
+| `sign` | `seed` reference, `data`, optional `encoding` | public `accountKey`, `did`, detached `signature` |
+| `verify` | `accountKey`, `signature`, `data`, optional `encoding` | `valid` (false for signature mismatch; malformed input fails) |
+| `encrypt` | recipient `accountKey`, blob `data`, optional string `encoding` | native `ciphertext` blob, `encoding: blob` |
+| `decrypt` | `seed` reference, blob `ciphertext`, optional output `encoding`, destination `name`, `overwrite` | `secret` when a name is supplied, otherwise native plaintext `data` by default; plus `encoding` |
+| `generate-mnemonic` | secret `name`, optional `words`, `overwrite` | `secret`, `words`; phrase remains encrypted |
+| `validate-mnemonic` | `mnemonic` secret reference | `valid`, without revealing words |
+| `derive-key` | `mnemonic` reference, destination `name`, optional `path`, `passphraseSecret`, `overwrite` | `secret`, public `accountKey`, `did`, effective hardened `path` |
+| `jwt-sign` | `seed` reference, `claims` map, optional `kid`, destination `name`, `overwrite` | public `accountKey`, `did`, and compact `token` or stored `secret` reference |
+| `jwt-verify` | `token` or `tokenSecret` reference, trusted `accountKey`, optional `expectedIssuer`, `expectedAudience`, `requireExpiration` | `valid`; on success `header`, `claims`; on rejection `reason` without claims |
+| `jwt-decode` | `token` or `tokenSecret` reference | `verified: false`, unverified `header`, `claims`, native `signature` blob |
+
+### Formats and compatibility
+
+- Binary inputs accept native `ABlob` values (including `Hash`, `AccountKey`,
+  signatures and `BlobTree`) or hexadecimal strings, with an optional `0x`
+  prefix. String `data` defaults to `encoding: hex`; UTF-8 text or base64 must
+  be selected explicitly. Encoding applies only to strings; a blob already
+  contains the exact bytes. Messages are limited to 1 MiB; ECIES envelopes
+  allow the additional 48 bytes of overhead.
+- Digests, public keys, signatures, ciphertext and default decrypted data are
+  native blobs in adapter results and lattice state. Convex's JSON renderer
+  handles their `"0x..."` representation at the HTTP/MCP/model boundary; the
+  adapter accepts that representation back without requiring extra conversion.
+  Published JSON schemas describe this wire representation as strings, with
+  native blob support documented in field descriptions. Text values and
+  references use `AString`; Java strings are used at APIs that require them.
+- Decrypt defaults to `encoding: blob`. Explicit `utf8`, `hex` or `base64`
+  returns an `AString` instead. UTF-8 decoding is strict. With a destination
+  `name`, blob mode stores hexadecimal text and reports `encoding: hex`,
+  because SecretStore currently stores strings. Explicit `encoding: utf8`
+  stores decoded text for downstream operations expecting a text secret.
+- Ed25519 private seeds and public AccountKeys are 32 bytes; detached signatures
+  are 64 bytes. Seeds in the secret store are hexadecimal, compatible with
+  `convex:generate-key`, `convex:sign` and `convex:transact`. These are raw keys,
+  not PEM, PKCS8, a 64-byte expanded private key, or the 64-byte BIP39 seed.
+- Signing covers the exact supplied bytes, without an implicit hash. Convex
+  `SignedData` instead signs the CAD3 value hash: obtain the intended value's
+  hash and sign those bytes explicitly. JSON text hashing or hashing a complete
+  multi-cell transport encoding is not a substitute for the CAD3 value hash.
+- Hash algorithms are `sha256`, `sha512`, `sha3-256` (default) and `keccak256`.
+  SHA3-256 is the FIPS SHA-3 variant used by Convex; Ethereum's Keccak-256 has
+  different padding and produces different hashes. `hash` hashes raw bytes,
+  not a CAD3 value. SHA-1 and MD5 are deliberately absent.
+- ECIES delegates directly to `convex.core.crypto.ECIES` in Convex 0.8.17:
+  [RFC 9180 HPKE](https://www.rfc-editor.org/rfc/rfc9180) Base mode with
+  DHKEM(X25519, HKDF-SHA256), HKDF-SHA256 and AES-128-GCM. Convex converts
+  Ed25519 account keys to X25519 using its libsodium-compatible conversion.
+  The envelope is `enc[32] || ciphertext || tag[16]`, with empty info and AAD.
+  It carries no suite identifier and is not generic secp256k1 ECIES or a
+  libsodium sealed box. Integrity is authenticated; sender identity is not.
+- English [BIP39](https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki)
+  phrases support 12/15/18/21/24 words (128/160/192/224/256 entropy bits).
+  Generation defaults to 12, matching GetMine. Validation checks the word list
+  and checksum before derivation; Convex's `BIP39.getSeed` alone does not.
+  Full words are required. Case and whitespace are normalised, with NFKD for
+  the phrase and optional passphrase. No mnemonic words appear in errors.
+- Derivation follows [CAD025](https://docs.convex.world/docs/cad/wallet): BIP39
+  PBKDF2-HMAC-SHA512 (2048 iterations, 64 bytes), then Ed25519 SLIP-0010. All
+  path components are hardened; `m/44/864/0/0/0` and `m/44'/864'/0'/0'/0'`
+  are equivalent. **864 is Convex's official SLIP-44 coin type**, used only
+  as the default. Derivation accepts any valid SLIP-10 path, without restricting
+  the purpose, coin type or path shape to BIP44 or Convex.
+  Default account 0 matches Convex CLI and GetMine venue
+  identity. GetMine install DID uses account 1 (`m/44/864/1/0/0`). Both use an
+  empty BIP39 passphrase. Explicit `m` selects the master for legacy recovery;
+  it is never selected as a fallback for an invalid path. Indexes must be
+  0..2147483647, with at most 255 components.
+
+The CAD025 web page's test vector currently prints path `m/44/864/1234/0/1`
+with expected seed `2172bb...`, but Convex's `SLIP10Test.testCAD25` uses
+`m/44/888/1234/0/1` for that expected seed. The 864 path yields `23a427...`.
+Adapter tests pin both results and GetMine's account-0/account-1 vectors;
+the default remains coin type 864.
+
+### Agent workflows and secret boundaries
+
+#### JWTs
+
+`jwt-sign` uses Convex's Ed25519 JWS format (`alg: EdDSA`, `typ: JWT`,
+base64url compact serialization). Its default `kid` is the public multikey;
+an optional `kid` is copied as an identifier, without asserting an identity
+binding. Tokens are `AString`, claims and headers are Convex maps, and decoded
+signatures are blobs. Native blob values within signing claims use their
+normal JSON hex-string projection. Tokens are limited to 1 MiB.
+
+For example, create an application token with:
+
+```json
+{
+  "seed": "s/SIGNER",
+  "claims": {"iss": "my-app", "aud": "my-service", "sub": "alice", "exp": 1800000000},
+  "name": "APP_TOKEN"
+}
+```
+
+The expiry is an illustrative Unix timestamp; choose a suitable future expiry
+when calling. Signing adds no issuer, audience, timestamps, or expiry. Supplying
+`name` returns `secret: "s/APP_TOKEN"` instead of a token. Omit `name` only when
+returning the token into Job output and potentially model history is intended.
+Use that secret with downstream `bearerSecret` inputs, or inspect it locally
+using `tokenSecret: "s/APP_TOKEN"`. Verify/decode require exactly one of `token`
+and `tokenSecret`; token references use the same capability gates as key seeds.
+
+`jwt-verify` requires an independently trusted `accountKey` (Blob or hex).
+It never obtains a key from `kid`, `jwk`, `jku` or `x5u`. Only EdDSA is accepted;
+critical JOSE extensions and `b64` overrides are rejected. Verification checks
+the signature, registered claim types, and any supplied issuer/audience
+constraints. `expectedAudience` matches either a single `aud` string or an
+entry in its string array; comparisons are exact and case-sensitive. Supply
+both expectations for application tokens when the application defines them.
+
+`exp` and `nbf`, when present, are checked against venue time in Unix seconds
+without clock-skew allowance. NumericDate fractions are supported, expiration
+is exclusive, and not-before is inclusive. `iat` must be numeric when present
+but does not impose a not-before restriction. Present null or nonnumeric dates
+are rejected. Expiry is optional for generic JWTs; set `requireExpiration: true`
+when accepting expiring access tokens. Invalid signatures, unsupported
+algorithms and failed claim checks return `valid: false` with a reason and no
+claims. Malformed tokens, keys or operation arguments fail the Job.
+
+`jwt-decode` performs no verification and always reports `verified: false`,
+even for a correctly signed token. Its decoded claims are untrusted. JWT
+verification does not perform venue authentication, bind identities to DIDs,
+or validate UCAN delegation/capabilities; use the authentication system or
+`ucan:verify` for those policies. This adapter adds no generic HS256/RS256
+signing or verification operations.
+
+Raw `token` inputs and signing `claims` are redacted from Job inputs;
+reference-only `seed` and `tokenSecret` remain references. Successful verify
+and decode results contain claims, so use them only where that disclosure is
+intended. For protocol details see [RFC 7519](https://www.rfc-editor.org/rfc/rfc7519.html)
+and [JWT best practices](https://www.rfc-editor.org/rfc/rfc8725.html).
+
+#### Keys, recovery phrases and encrypted messages
+
+Generate a phrase with `generate-mnemonic {"name":"RECOVERY"}`, then derive
+with `derive-key {"mnemonic":"s/RECOVERY","name":"SIGNER"}`. Sign with
+`sign {"seed":"s/SIGNER","data":"hello","encoding":"utf8"}`. For a GetMine-compatible sibling
+key, derive from the same phrase with `path: "m/44/864/1/0/0"` and a different
+destination name. Generation returns references, never private material.
+
+For an arbitrary application-selected coin type, for example:
+`derive-key {"mnemonic":"s/RECOVERY","name":"APP_KEY","path":"m/44/1234567/0/0/0"}`.
+The example's `1234567` is an arbitrary index, not a claim of a SLIP-44
+registration. A custom hierarchy such as `m/7/1234567/2147483647` also works;
+the same hardened Ed25519 derivation applies to every valid path.
+
+Private inputs (`seed`, `mnemonic`, `passphraseSecret`) accept secret references
+only. Import through the existing secret-store boundary, not through crypto
+tool arguments or prompts. Resolution uses `Engine.resolveSecret` with the
+request context. Own-user access follows the existing secret-use rules;
+cross-user references require `secret/use`, and URL-bound grants cannot be
+used for local crypto because there is no outbound destination. Generated
+secrets use the same `secret/write` check and atomic collision protection as
+`secret:set`. Replacing a secret requires `overwrite: true`. Every crypto
+operation also requires invocation authority.
+
+For sensitive decrypted data, supply `name` so plaintext is written directly
+to the secret store. **Without `name`, decrypted plaintext is returned and may
+be persisted in Job output or agent history.** Signing and encryption declare
+`data` as a secret field for Job input redaction; this does not remove data
+already placed in an agent prompt. Private-key references remain references
+in records. No resolved private key, phrase or passphrase is copied to output.
+
+SecretStore encryption protects material at rest under the venue identity;
+this is not an HSM or isolation from the venue process/operator. Java and the
+upstream crypto APIs use immutable strings and managed memory, so the adapter
+does not promise deterministic memory erasure. Human recovery-phrase display
+and backup/export require a separate trusted interface; these agent operations
+do not expose plaintext phrases or enable `secret:extract`.
+
 ## Connected accounts (`adapters.oauth`)
 
 The `oauth` adapter holds OAuth 2.0 grants on behalf of venue users so an
@@ -1791,7 +1975,7 @@ Per bot:
   anonymous MCP client on a public venue), which is what a local dev venue's
   agents are owned by.
 - `agent` **or** `operation` — the **inbound handler**. With `agent`, each
-  Telegram chat is one `agent:chat` session, persisted at
+  Telegram chat (or forum topic) is one `agent:chat` session, persisted at
   `<venue-did>/w/adapters/telegram/config/<bot>/sessions/<chatId>` so
   conversations survive restarts; `/new` starts a fresh one. The agent
   receives each turn as `{text, via: {channel: "telegram", bot, access:
@@ -1812,10 +1996,18 @@ Per bot:
   for a target whose input is not an Update — a deterministic SQL write, a
   webhook, a log to some location — point `operation` at a small **mapping
   operation you own** (an orchestration, a pinned op…) that takes the Update
-  and does the work. Agent bots receive only text messages (captions count);
-  operation bots receive every update type Telegram delivers. Either way each inbound message runs
-  as a **Job in the bot user's job index**, which is the canonical record of
-  the interaction; the module keeps no log of its own.
+  and does the work. Agent bots also download photos, voice/audio, documents,
+  video/video notes, animations and stickers into the owner's DLFS `telegram`
+  drive after admission. Each turn retains its caption and `attachments`
+  descriptors (`kind`, `file_id`, `ref`, `mediaType`, provider metadata).
+  Images reach the LLM as asset-reference image blocks; the agent needs
+  `crud/read` on the referenced DLFS files and a vision-capable model.
+  Other media remains available by protected reference. No speech provider,
+  document extraction or video understanding is enabled implicitly.
+  Operation bots retain the SDK-decoded Telegram update shape and can call
+  `telegram/download` explicitly. Telegram update fields unknown to the SDK
+  may be absent. Jobs remain the execution record; a private inbox records
+  durable intake and delivery state.
 - `reply` — for an `operation` handler: `true` (default: the result
   rendered as text — a string as-is, a map's
   `text`/`response`/`content`/`message`/`result`, else pretty JSON),
@@ -1830,6 +2022,33 @@ Per bot:
 - `parseMode` — `Markdown`, `MarkdownV2` or `HTML` for replies; omit for
   plain text. Markup Telegram rejects is resent as plain text.
 - `greeting` — the `/start` reply (default names the agent and venue).
+- `mediaOperation` — optional, agent bots only. Runs once per downloaded
+  attachment as the bot owner. Input is the attachment descriptor plus
+  `caption` (empty when absent) and `via` (bot, sender, chat, topic/reply IDs).
+  Return an object: `{}` leaves this attachment untouched; optional non-empty
+  `text` supplies a transcription/extraction. The full non-empty result is
+  retained under `attachment.result`, so application record IDs, language and
+  other structured output survive. Output cannot overwrite the original
+  `ref`, media type or Telegram metadata. Use an application operation to
+  select handling by `kind` or `mediaType`; a speech-only handler can return
+  `{}` for photos and documents. Malformed results and processing failures
+  fail the turn visibly rather than silently dropping the attachment.
+- `replyOperation` — optional, agent bots only. Takes `{response, via}` after
+  the agent completes and returns a non-empty string or `{text: "..."}`.
+  This is the application's place to render structured responses or remove
+  internal UI notation for Telegram. The stored agent response is unchanged.
+  Formatting failure reports an error; it never sends the raw response as a
+  fallback. Normal Telegram text splitting, formatting and topic replies
+  still apply afterwards.
+
+Both hooks invoke ordinary Covia operation references as the bot owner, with
+normal Jobs, secret resolution and capability checks, and no turn timeout.
+They may be application adapters, orchestrations or other operations; Telegram
+has no built-in speech provider or application-specific reply syntax. Runtime
+`telegram/create` persists both references and restores them on restart.
+For complete control of intake, routing and outbound media/buttons, configure
+an `operation` handler instead of `agent`; it receives provider-shaped updates
+and can use the same `telegram/download`, `send` and `call` operations.
 
 `apiUrl` overrides the Bot API base (a proxy, or a test double); it defaults
 to Telegram's. Built-in commands: `/start`, `/help`, `/new`, `/id`. Messages
@@ -1842,7 +2061,7 @@ backlog when it is enabled again.
 
 Bots can also be **created at runtime by their user**: `v/ops/telegram/create
 {name, token: "s/…", agent | operation, reply?, allow?, open?, parseMode?,
-greeting?}` makes a bot that acts as the caller (no `user` — a user cannot
+greeting?, mediaOperation?, replyOperation?}` makes a bot that acts as the caller (no `user` — a user cannot
 create a bot acting as someone else; the token must be a secret reference),
 records it at
 `<venue-did>/w/adapters/telegram/users/<caller-did>/bots/<name>`, starts it,
@@ -1877,6 +2096,53 @@ last error and counters, tokens never included. The module ships a lightweight
 and status. It reveals `telegram-bot-management` only when an agent needs to
 create, repair or delete a user-owned bot; that child in turn reveals the
 encrypted-secret skill used to store BotFather tokens.
+
+Telegram transfer operations:
+
+- `telegram/download {bot?, file_id, destination?, fileName?}` returns
+  `{file_id, ref, fileName, size}`, plus `file_name` (original name) and
+  `contentType` when known. `destination` is a directory reference, e.g.
+  `dlfs/imports` or `file://inbox`, with an optional trailing slash. Omit it
+  for the bot owner's DLFS `telegram` drive. Explicit directories use the
+  caller's authority through `Engine.createContent`; DLFS and configured
+  file roots support this, as can other providers implementing create-only
+  writes. Parent directories must exist. Readable asset/HTTP references are
+  not automatically writable destinations.
+  Optional `fileName` is a safe basename (at most 200 UTF-8 bytes), not a path.
+  Otherwise the adapter prefers a safe original filename retained from an
+  admitted message, then a generated name. Conflicts receive a numeric suffix
+  before the extension: `report(1).pdf`, `report(2).pdf`, etc. Existing files
+  are never replaced, including concurrent downloads. The returned `fileName`
+  is the actual stored spelling; DID URL references encode spaces and Unicode.
+  Telegram's [`getFile`](https://core.telegram.org/bots/api#getfile) may lose
+  the original filename and MIME type, so both are retained in private bot
+  state from admitted messages and survive restarts. A previously unseen
+  `file_id` needs an explicit `fileName` to preserve a name known to the caller.
+  Runtime bot deletion removes this metadata along with its receipts, while
+  downloaded files remain. Requires `telegram/call` on the bot; reading the
+  result remains separately authorized by its provider. Token-bearing download
+  URLs are never returned.
+- `telegram/call` accepts `files: {partName: {ref, filename?}}`. References
+  resolve under the caller's authority. For `sendVoice`, use `files.voice`
+  and omit `params.voice`; for albums use `attach://partName` in
+  `params.media`. Up to ten parts and 20 MiB total upload bytes are allowed.
+  Downloads are bounded to 20 MiB, including streaming bodies with no size.
+  HTTP redirects and automatic transport retries are disabled.
+
+Accepted updates are flushed through `WebhookInbox` before advancing the poll
+acknowledgement. Pending receipts resume in update order at startup/re-enable;
+completed receipts deduplicate redelivery and are retained for seven days.
+Receipts are private and scoped to the Covia owner and Telegram bot account.
+`telegram:bots` reports `pendingUpdates` and `startedUpdates`. STARTED includes
+in-flight work and interrupted/failed work: inspect the Jobs and bot error before
+recovery. Started work is never automatically replayed, and this does **not**
+promise exactly-once execution or delivery. Reattaching to interrupted Jobs and
+reconciling an uncertain Telegram send remain follow-up work. Removing a runtime
+bot removes its receipts, but downloaded files remain in its owner's DLFS drive.
+Store durability follows the venue configuration (temporary venues remain
+ephemeral). Media albums retain `media_group_id` but each message is a separate
+turn; `/new` resets only the current topic. `via` also includes topic and reply
+message IDs when supplied by Telegram.
 
 ### Discord bots (covia-discord)
 

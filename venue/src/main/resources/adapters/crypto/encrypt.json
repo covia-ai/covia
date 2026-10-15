@@ -1,0 +1,59 @@
+{
+  "name": "Encrypt Convex ECIES",
+  "description": "Encrypt bytes for an Ed25519 AccountKey using Convex ECIES: RFC 9180 HPKE Base, X25519/HKDF-SHA256/AES-128-GCM. Fresh randomness per call; authenticates ciphertext integrity, not sender identity.",
+  "operation": {
+    "adapter": "crypto:encrypt",
+    "readOnly": false,
+    "activityLabel": "Encrypt Convex ECIES",
+    "input": {
+      "type": "object",
+      "properties": {
+        "accountKey": {
+          "type": "string",
+          "description": "32-byte Ed25519 AccountKey/blob, or its hexadecimal JSON representation (optional 0x prefix). Not PEM or an X25519 key."
+        },
+        "data": {
+          "type": "string",
+          "description": "Native blob bytes. JSON/MCP callers pass hexadecimal (0x prefix recommended), or select encoding:utf8/base64 for text input. No implicit hash, CAD3 conversion or JSON canonicalisation."
+        },
+        "encoding": {
+          "type": "string",
+          "description": "Applies to string input only: hex by default (optional 0x prefix), or explicit utf8/base64. Native ABlob input is used directly.",
+          "enum": [
+            "utf8",
+            "hex",
+            "base64"
+          ],
+          "default": "hex"
+        }
+      },
+      "required": [
+        "accountKey",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "ciphertext": {
+          "type": "string",
+          "description": "Native Convex ECIES blob: 32-byte encapsulated key || ciphertext || 16-byte GCM tag. JSON renders it as a 0x-prefixed hexadecimal string.",
+          "pattern": "^0x(?:[0-9a-f]{2})*$"
+        },
+        "encoding": {
+          "type": "string",
+          "const": "blob"
+        }
+      },
+      "required": [
+        "ciphertext",
+        "encoding"
+      ],
+      "additionalProperties": false
+    },
+    "secretFields": [
+      "data"
+    ]
+  }
+}

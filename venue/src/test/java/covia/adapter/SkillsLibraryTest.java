@@ -270,7 +270,8 @@ public class SkillsLibraryTest {
 		ACell secretsMeta = convex.core.util.JSON.parse(readResource("/skills/secrets.json"));
 		AVector<ACell> secretTools = RT.ensureVector(
 			RT.getIn(secretsMeta, "skill", "tools"));
-		assertEquals(Vectors.of((ACell) Strings.create("v/ops/secret/set")), secretTools,
+		assertEquals(Vectors.of((ACell) Strings.create("v/ops/secret/set"),
+			Strings.create("v/ops/secret/list"), Strings.create("v/ops/secret/delete")), secretTools,
 			"ordinary secrets skill must not advertise plaintext extraction");
 	}
 

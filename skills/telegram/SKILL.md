@@ -46,19 +46,61 @@ Walk the user through these steps; each is idempotent. Steps 1–3 are common; s
    }
    ```
    - `user` (config only) is the identity the bot acts as — the **owner of the agent**. `"public"` is right for a local dev venue whose agents were created over MCP; on a real venue name the owner's DID. The bot has that user's full authority, so choose deliberately. Created bots always act as their creator.
-   - **Pick the inbound handler** (ask the user which they want; exactly one). Every inbound message runs as a Job in the bot user's job index — that is the record of the interaction; the module keeps no log of its own:
-     - `"agent": "<agentId>"` — each Telegram chat is one `agent:chat` conversation with that agent. Always replies. **Create the agent from the module's template** — it already knows the phone-chat register, `via`, per-chat sessions, memory (pinned into context) and the telegram/venue/covia skills:
+   - **Pick the inbound handler** (ask the user which they want; exactly one). Every inbound message runs as a Job in the bot user's job index — that is the record of the interaction; a private durable inbox tracks update intake and delivery:
+     - `"agent": "<agentId>"` — each Telegram chat or forum topic is one `agent:chat` conversation with that agent. Always replies. **Create the agent from the module's template** — it already knows the phone-chat register, `via`, per-chat sessions, memory (pinned into context) and the telegram/venue/covia skills:
        ```
        agent_create  agentId="Assistant"  config=["v/agents/templates/telegram", {"llmOperation": "v/ops/langchain/anthropic", "model": "claude-sonnet-5-5"}]
        ```
        Then tell it who is who as memory, not prompt surgery — as the bot's user: `grid_run operation=v/ops/memory input={"command": "remember", "text": "Telegram @mikera (id 648055019) is Mike, my owner."}` (memory is per user and pinned into every turn; the template trusts such a note only when `via.from` matches it). The module states facts (`via`), the venue states who submitted (attribution note), memory states who they are.
-     - `"operation": "<ref>"` — every update invokes that operation with the **Telegram `Update` exactly as sent** (snake_case: `update.message.text`, `update.message.photo[].file_id`, `update.callback_query.data`, …) plus `bot`. For a deterministic target whose input is *not* an Update (a `sql/execute` insert, an HTTP webhook, a classify-then-store step) point it at a small **mapping op the user owns** — an orchestration (`/orchestrate create`), a pinned op — that takes the record and does the work; the same goes for logging messages somewhere (an op that appends to the path its metadata names). The Telegram module never reshapes or logs messages. `"reply": true` (default) sends the result rendered as text, `false` sends nothing, `"Recorded."` sends that fixed acknowledgement.
+     - `"operation": "<ref>"` — every update invokes that operation with the **Telegram `Update` exactly as sent** (snake_case: `update.message.text`, `update.message.photo[].file_id`, `update.callback_query.data`, …) plus `bot`. For a deterministic target whose input is *not* an Update (a `sql/execute` insert, an HTTP webhook, a classify-then-store step) point it at a small **mapping op the user owns** — an orchestration (`/orchestrate create`), a pinned op — that takes the record and does the work; the same goes for logging messages somewhere (an op that appends to the path its metadata names). Operation handlers receive the SDK-decoded Telegram shape; delivery receipts are retained privately. `"reply": true` (default) sends the result rendered as text, `false` sends nothing, `"Recorded."` sends that fixed acknowledgement.
    - Leave `allow` empty for now; step 6 fills it. Do **not** set `"open": true` unless anyone on Telegram should be able to reach this handler (defensible for a bot whose operation is safe for strangers; dangerous for an agent with authority).
    - Optional: `"parseMode": "Markdown"` for formatted replies, `"greeting": "…"` for `/start`.
 
 5. **Check it came up:** `grid_run operation=v/ops/telegram/bots` → the bot should be `RUNNING` with its Telegram `username`. `PENDING` means it could not start — the `error` field says why (secret missing, bad token/401, API unreachable); it retries (2 s, then every 30 s), so fixing the cause is enough, no restart needed.
 
 6. **Allow yourself.** Send the bot any message in Telegram. Because `allow` is empty it answers *"Not authorised … Your Telegram user id is N"*. For a created bot: `v/ops/telegram/delete {name}` then `create` again with `"allow": [N]` (there is no update op yet); for a config bot edit `allow` and re-apply. Message it again — this time the handler runs. `/id` in the chat shows chat and user ids at any time.
+
+## Voice and attachments
+
+Agent bots retain text/captions and download admitted media into the bot owner's
+DLFS `telegram` drive. Turns contain `attachments` with `kind`, `file_id`, `ref`,
+`mediaType` and Telegram metadata. Photos/image documents also become image blocks
+for a vision-capable LLM; grant the agent `crud/read` on the relevant DLFS files.
+For speech or document extraction configure `mediaOperation` on the bot: it runs
+as the owner per attachment, with its descriptor plus `caption` and `via` context.
+Return an object: `{}` passes an attachment through; optional non-empty `text`
+supplies transcription/extraction. Structured output is retained under
+`attachment.result`; it cannot replace original file references or provider metadata.
+There is no implicit speech provider. `replyOperation` optionally takes
+`{response, via}` and returns a non-empty string or `{text: "formatted reply"}`.
+Use it for application reply rendering; formatting failures never send raw
+application output as a fallback. Both hooks are normal operations without turn
+timeouts, persisted by runtime create and restored at boot. Operation handlers can use
+`telegram/download {bot?, file_id, destination?, fileName?}`. Both destination
+and fileName are optional: destination is a directory reference such as
+`dlfs/imports` or `file://inbox`, with or without a trailing slash. Omit it for
+the bot owner's DLFS `telegram` drive. Explicit destinations use the caller's
+write authority and a content provider supporting create-only writes; parent
+directories must exist. DLFS and configured file roots support this contract.
+The name is explicit fileName, then a safe original name retained from an
+admitted Telegram message, then a generated fallback. Original names and MIME
+types survive bot restarts; `getFile` alone does not preserve them. Conflicts
+use `report(1).pdf`, `report(2).pdf`, etc., without overwriting. Returns actual
+`ref`, `fileName`, `size`, `file_id`, plus original `file_name` and `contentType`
+when known. No arbitrary host paths or writable asset/HTTP references are implied.
+
+Upload privately held media with `telegram/call`, for example
+`{method:"sendVoice", params:{chat_id:123}, files:{voice:{ref:"dlfs/telegram/note.ogg", filename:"note.ogg"}}}`.
+References resolve under the caller's authority. Albums use `attach://partName`
+in `params.media` and matching `files` entries. Downloads and total upload bytes
+are bounded to 20 MiB. No token-bearing file URLs or local filesystem paths are
+needed. Downloaded files remain after deleting the bot; the owner manages them.
+
+Durable receipts precede Telegram acknowledgement. Pending updates recover after
+restart; STARTED updates are never blindly replayed. `bots` reports `pendingUpdates`
+and `startedUpdates` (in flight or interrupted); inspect Jobs and errors for the
+latter. This is not exactly-once delivery. Topics keep separate sessions; albums
+retain their group ID but are processed as separate turns.
 
 ## `create <bot-name>` / `delete <bot-name>` — Manage your own bots
 
@@ -88,7 +130,7 @@ grid_run  operation=v/ops/telegram/call  input={"method": "sendPhoto", "params":
 grid_run  operation=v/ops/telegram/call  input={"method": "editMessageText", "params": {"chat_id": <id>, "message_id": <mid>, "text": "updated"}}
 ```
 
-`send` takes the `sendMessage` parameters as-is (`chat_id`, `text`, `parse_mode`, `reply_parameters`, `reply_markup`, `disable_notification`, `message_thread_id`, …) and returns the sent `Message`; text over 4096 chars is split and rejected markup falls back to plain. `call` runs any other Bot API method (`sendPhoto`/`sendDocument`/`sendVoice` by `file_id` or public URL, `sendMediaGroup`, `editMessageText`, `deleteMessage`, `answerCallbackQuery`, `getChat`, …) and returns Telegram's result; `getUpdates`/`setWebhook`/`deleteWebhook`/`logOut`/`close` are refused. `bot` may be omitted when the caller owns exactly one. `chat_id` is a numeric chat id — a person's private chat is their user id, groups are negative (`/id` in the chat prints it) — or an `@channelusername` the bot administers. An allow-listed bot only messages its allowed users: `chat_id` (and `from_chat_id` / `user_id` in `call`) must be an id on its `allow` list or the account a listed `@username` resolved to, whatever the caller's authority. Gates: `telegram/send` for `send`, the broader `telegram/call` for `call`, both on `<bot user>/telegram/<bot>`: the bot's user and their agents may use them; another user gets *Access denied* unless the owner delegated it (`/ucan`).
+`send` takes the `sendMessage` parameters as-is (`chat_id`, `text`, `parse_mode`, `reply_parameters`, `reply_markup`, `disable_notification`, `message_thread_id`, …) and returns the sent `Message`; text over 4096 chars is split and rejected markup falls back to plain. `call` runs any other Bot API method (`sendPhoto`/`sendDocument`/`sendVoice` by `file_id`, public URL or multipart `files` references, `sendMediaGroup`, `editMessageText`, `deleteMessage`, `answerCallbackQuery`, `getChat`, …) and returns Telegram's result; `getUpdates`/`setWebhook`/`deleteWebhook`/`logOut`/`close` are refused. `bot` may be omitted when the caller owns exactly one. `chat_id` is a numeric chat id — a person's private chat is their user id, groups are negative (`/id` in the chat prints it) — or an `@channelusername` the bot administers. An allow-listed bot only messages its allowed users: `chat_id` (and `from_chat_id` / `user_id` in `call`) must be an id on its `allow` list or the account a listed `@username` resolved to, whatever the caller's authority. Gates: `telegram/send` for `send`, the broader `telegram/call` for `call`, both on `<bot user>/telegram/<bot>`: the bot's user and their agents may use them; another user gets *Access denied* unless the owner delegated it (`/ucan`).
 
 ## `allow <bot-name>` — Manage who the bot talks to
 

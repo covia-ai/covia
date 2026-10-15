@@ -76,6 +76,93 @@ public class VenueServerTest {
 	}
 
 	@Test
+	public void adapterOperationDiscoveryIsAdditiveToTheLegacyApi() throws Exception {
+		HttpResponse<String> all = TestHTTP.CLIENT.send(HttpRequest.newBuilder()
+			.uri(new URI(BASE_URL + "/api/v1/operations")).GET().build(), HttpResponse.BodyHandlers.ofString());
+		assertEquals(200, all.statusCode());
+		AVector<?> legacy = RT.ensureVector(JSON.parse(all.body()));
+		assertNotNull(legacy, "existing SDKs still receive an array of named summaries");
+		assertTrue(legacy.count() > 0);
+		for (ACell entry : legacy) {
+			assertTrue(RT.getIn(entry, "name") instanceof AString);
+			assertTrue(RT.getIn(entry, "asset") instanceof AString);
+		}
+		for (String name : new String[] {"skills", "agent", "project"}) {
+			HttpResponse<String> scoped = TestHTTP.CLIENT.send(HttpRequest.newBuilder()
+				.uri(new URI(BASE_URL + "/api/v1/adapters/" + name + "/operations")).GET().build(),
+				HttpResponse.BodyHandlers.ofString());
+			assertEquals(200, scoped.statusCode());
+			AMap<AString, ACell> operations = RT.ensureMap(JSON.parse(scoped.body()));
+			assertEquals(venue.getAdapter(name).getOperations(), operations);
+			for (ACell metadata : operations.values()) {
+				assertTrue(RT.getIn(metadata, Fields.OPERATION) instanceof AMap);
+			}
+		}
+		HttpResponse<String> absent = TestHTTP.CLIENT.send(HttpRequest.newBuilder()
+			.uri(new URI(BASE_URL + "/api/v1/adapters/nonexistent-discovery-adapter/operations")).GET().build(),
+			HttpResponse.BodyHandlers.ofString());
+		assertEquals(404, absent.statusCode());
+	}
+
+	@Test
+	public void adapterOperationDiscoveryTracksLiveAdapterLifecycle() throws Exception {
+		class DiscoveryAdapter extends covia.adapter.AAdapter {
+			private final String operationName;
+			DiscoveryAdapter(String operationName) { this.operationName = operationName; }
+			@Override public String getName() { return "discovery-http"; }
+			@Override public String getDescription() { return "HTTP discovery probe"; }
+			@Override protected void installAssets() {
+				installOperation(operationName, Maps.of("operation", Maps.of("adapter", "discovery-http:echo")));
+			}
+			@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx,
+					AMap<AString, ACell> metadata, ACell input) {
+				return CompletableFuture.completedFuture(input);
+			}
+		}
+		VenueServer server = VenueServer.launch(Maps.of(Config.PORT, 0,
+			Config.BIND_ADDRESS, "127.0.0.1"));
+		try {
+			Engine engine = server.getEngine();
+			engine.registerAdapter(new DiscoveryAdapter("before"));
+			HttpRequest request = HttpRequest.newBuilder()
+				.uri(new URI("http://127.0.0.1:" + server.port() + "/api/v1/adapters/discovery-http/operations"))
+				.GET().timeout(Duration.ofSeconds(5)).build();
+			HttpResponse<String> initial = TestHTTP.CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
+			assertEquals(200, initial.statusCode());
+			assertNotNull(RT.getIn(JSON.parse(initial.body()), "before", "operation"));
+			engine.disableAdapter("discovery-http");
+			assertEquals(404, TestHTTP.CLIENT.send(request, HttpResponse.BodyHandlers.ofString()).statusCode());
+			engine.enableAdapter("discovery-http");
+			HttpResponse<String> enabled = TestHTTP.CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
+			assertEquals(200, enabled.statusCode());
+			assertEquals(JSON.parse(initial.body()), JSON.parse(enabled.body()));
+			engine.registerAdapter(new DiscoveryAdapter("after"));
+			HttpResponse<String> replaced = TestHTTP.CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
+			assertEquals(200, replaced.statusCode());
+			ACell metadata = JSON.parse(replaced.body());
+			assertNull(RT.getIn(metadata, "before"));
+			assertNotNull(RT.getIn(metadata, "after", "operation"));
+			engine.removeAdapter("discovery-http");
+			assertEquals(404, TestHTTP.CLIENT.send(request, HttpResponse.BodyHandlers.ofString()).statusCode());
+		} finally { server.close(); }
+	}
+
+	@Test
+	public void adapterOperationDiscoveryRequiresAuthenticationOnPrivateVenues() throws Exception {
+		VenueServer server = VenueServer.launch(Maps.of(Config.PORT, 0,
+			Config.BIND_ADDRESS, "127.0.0.1",
+			Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(Config.ENABLED, false))));
+		try {
+			for (String path : new String[] {"operations", "adapters/skills/operations"}) {
+				HttpResponse<String> response = TestHTTP.CLIENT.send(HttpRequest.newBuilder()
+					.uri(new URI("http://127.0.0.1:" + server.port() + "/api/v1/" + path))
+					.GET().timeout(Duration.ofSeconds(5)).build(), HttpResponse.BodyHandlers.ofString());
+				assertEquals(401, response.statusCode(), path);
+			}
+		} finally { server.close(); }
+	}
+
+	@Test
 	public void testOperatorRootPageRedirectKeepsBuiltInIndex() throws Exception {
 		VenueServer server = VenueServer.launch(Maps.of(
 			Config.PORT, CVMLong.create(0),

@@ -1,0 +1,64 @@
+{
+  "name": "Request Remote Agent",
+  "description": "Run a task on a Covia agent on this or another venue. One local Job mirrors one destination task. Continue an interrupted task by sending a message to the local Job; use sessionId on a new request for a new task in the same conversation.",
+  "operation": {
+    "adapter": "remoteagent:request",
+    "internal": true,
+    "readOnly": false,
+    "input": {
+      "type": "object",
+      "properties": {
+        "agentId": {
+          "type": "string",
+          "description": "Agent reference: a bare name for the caller's agent, g/<id>, /g/<id>, or <ownerDID>/g/<id>"
+        },
+        "input": {
+          "type": "object",
+          "description": "The request payload. MUST contain the actual instructions, data, or parameters the agent needs. NEVER pass an empty object {} \u2014 the worker has nothing to act on. Use field 'task' for free-form instructions; add other fields the worker needs (data, paths, options). Example: {task: 'summarise w/notes/daily', format: 'bullet list'}."
+        },
+        "outputPath": {
+          "type": "string",
+          "description": "Optional mutable Covia path for structural result handoff (for example w/pipeline/run1/chapter1, t/stage1, or an authorised DID-URL path). On successful completion the framework writes the worker's full result there under the requester's captured authority and returns a small {status, outputPath, bytes} receipt instead of the payload. Remote did:web paths are resolved through federation. If omitted, the existing direct output response is unchanged. Failed or cancelled tasks write nothing."
+        },
+        "responseSchema": {
+          "type": "object",
+          "description": "Optional JSON Schema for the task result. Shown to the agent as the target shape; advisory unless strict is set. Overrides the agent's config-level responseFormat for this task."
+        },
+        "strict": {
+          "type": "boolean",
+          "description": "Enforce responseSchema at task completion (default false). When true, a complete_task result that does not conform is rejected back to the agent with the validation diagnostics; the agent corrects it or fails the task. Requires responseSchema."
+        },
+        "loads": {
+          "type": "object",
+          "description": "Optional untrusted context to pre-load for the NEW session (the session tier of the context scope chain, #142): a map of key to entry spec, exactly as config.loads \u2014 {budget?, label?} under a lattice path or skill path, {skill: true} to pre-load a skill with its tools, or a spec declaring its own data source under any key: {text}, {op, input?} for a read-only operation observed before each inference and appended only when changed, or {job}. Non-skill values remain tool-result data; a caller-supplied trusted flag cannot grant system authority. Only valid when this call creates the session \u2014 an error if the session already exists."
+        },
+        "sessionId": {
+          "type": "string",
+          "description": "Optional session identifier (hex string, with or without a 0x prefix). Requests sharing a sessionId are treated as part of the same conversation. If omitted, a new session is created and its id returned in the response."
+        },
+        "venue": {
+          "type": "string",
+          "description": "Destination venue URL or DID. Omit for the local venue under the complete current request context."
+        },
+        "authenticateAs": {
+          "type": "string",
+          "enum": [
+            "anonymous",
+            "caller",
+            "venue"
+          ],
+          "description": "Remote authentication, as for grid:run. Default anonymous. Caller requires a target-audienced identity credential; venue requires an explicit relay grant."
+        }
+      },
+      "required": [
+        "agentId",
+        "input"
+      ]
+    },
+    "output": {
+      "type": "object",
+      "description": "The destination agent task result. The Job record also carries its sessionId and delegation.remoteId."
+    },
+    "activityLabel": "Requesting remote agent"
+  }
+}

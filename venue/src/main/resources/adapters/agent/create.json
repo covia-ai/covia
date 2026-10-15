@@ -13,6 +13,12 @@
 					"type": "string",
 					"description": "Target agent reference: a bare human-readable name for the caller's namespace, g/<id>, /g/<id>, or <ownerDID>/g/<id>"
 				},
+				"agent": {
+					"type": "object",
+					"description": "Optional external-agent definition stored at g/<id>/agent. adapter is a registered remote-agent adapter name (a2a, claudecode, remoteagent); remaining fields belong to that adapter. Omit for the existing native Covia agent runtime. Null, malformed or unavailable adapters are errors. Common authority and admission settings remain in config.",
+					"properties": { "adapter": { "type": "string", "minLength": 1 } },
+					"required": ["adapter"]
+				},
 				"config": {
 					"description": "One config layer, or an ordered array of additive layers. A layer is an inline map or a string reference resolving to a flat config map or an asset with agent.config. Later layers override earlier values; nested maps merge recursively, arrays replace. Null is not a layer; put null inside a map to clear an inherited field. References include workspace paths, asset refs, DID URLs, and venue templates. A resolved composition may include state, used as initial agent state.",
 					"oneOf": [

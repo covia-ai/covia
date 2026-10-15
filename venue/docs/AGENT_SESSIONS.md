@@ -2,6 +2,11 @@
 
 Sessions are the primitive that sits between *agent* (long-lived identity) and *transition* (single compute step). A session is a **scoped interaction between parties with its own history and context, jointly owned by the participants** — a communication channel. Whatever the parties build together (documents, deliverables, long-lived work state) lives elsewhere — see [PROJECT.md](./PROJECT.md) for that layer.
 
+Both native and external agents expose Covia session IDs. External agents map
+that ID to a provider conversation and retain the exchanges observed by Covia;
+see [§2.2](#22-external-agent-sessions). The transition, context, pending-message
+and session-mutation contracts elsewhere in this document describe native agents.
+
 Sessions carry:
 
 - **Conversation continuity** — turn N+1 is linked to turn N by shared session id
@@ -34,6 +39,62 @@ A session is *just data* — the framework doesn't enforce a particular shape fo
 - Not a transition (transitions are ephemeral compute steps within a session)
 - Not a project (projects are domain state — a tree of briefs, plans and deliverables — that sessions may reference but don't own; see [PROJECT.md](./PROJECT.md))
 - Not a memory store (cross-session facts/decisions belong in a separate memory layer — §9.2)
+
+---
+
+### 2.2 External agent sessions
+
+An agent with an explicit implementation facet uses the same `agent:chat` and
+`agent:request` operations as a native agent. See
+[AGENT_LOOP.md §2.2.1](./AGENT_LOOP.md#221-agent-definitions-and-external-implementations)
+for its definition and creation.
+
+Omit `sessionId` on the first call to create a Covia session. Reuse the returned
+Covia `sessionId` on later calls to continue that conversation. A supplied unknown
+ID is rejected; omitting it starts a separate conversation. Provider IDs never
+replace this public Covia ID.
+
+| Implementation | Provider conversation identity |
+|---|---|
+| Claude Code | Claude session ID, passed to subsequent run turns for resumption |
+| A2A | Remote `contextId`; a task ID identifies work within that context |
+| Covia venue proxy | Destination agent's Covia session ID |
+
+The hosting venue persists the mapping under
+`g/<agent>/sessions/<sid>/external/sessionId`. While a turn is active,
+`external/jobId` holds its local parent Job ID. The parent checkpoints a separate
+backend Job before starting provider work. Each new chat or request therefore
+creates new Jobs while retaining the conversation identity. A task ID and a
+session ID have different lifetimes.
+
+The local session records the initial input and returned reply in its frames.
+`agent:sessions` and `agent:session-read` expose those local records, not the
+provider's complete internal history or every continuation message. The provider
+owns its working context; subsequent calls use its saved conversation ID rather
+than replaying the local transcript.
+
+**Turn and message rules.** One turn may be active per external session; a second
+chat or request for that session is rejected until it finishes. Different sessions
+remain independent. `agent:message` can continue an active task or session turn
+where the backend supports delivery (A2A and Covia task proxies). Claude run turns
+reject delivery, and idle notifications are unsupported. Once a turn finishes,
+continue with another chat or request using the same Covia `sessionId`.
+
+**Cancellation and recovery.** Ordinary Job cancellation requests cancellation of
+the backend task; it does not erase the conversation or prove remote cessation.
+On restart, the parent reattaches to its recorded backend Job, and the provider
+adapter determines whether that Job can be recovered. Missing handles and
+uncertain submissions are not replayed. Remote Covia proxies recover saved
+transport authority; a local proxy currently fails recovery explicitly because
+its attenuated execution context cannot be reconstructed from a caller DID.
+Resuming a provider conversation on a later turn does not recover an interrupted
+turn. Any provider session identity extractable on failure or cancellation is
+retained for later calls.
+
+**Current limits.** Native session mutations, including compaction, deletion,
+renaming, context reload and task cancellation through native agent operations,
+are rejected for external agents. Use Job cancellation for active external work.
+The native session behaviour documented below remains unchanged.
 
 ---
 

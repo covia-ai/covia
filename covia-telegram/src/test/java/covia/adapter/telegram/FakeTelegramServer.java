@@ -55,6 +55,13 @@ final class FakeTelegramServer implements AutoCloseable {
 		Bot(String username) { this.username = username; }
 	}
 
+	final Map<String, byte[]> files = new ConcurrentHashMap<>();
+	final java.util.Set<String> chunkedFiles = ConcurrentHashMap.newKeySet();
+	final AtomicInteger downloads = new AtomicInteger();
+	final Map<String, Long> declaredSizes = new ConcurrentHashMap<>();
+	final Map<String, String> uploadTypes = new ConcurrentHashMap<>();
+	final Map<String, String> lastFilters = new ConcurrentHashMap<>();
+	final Map<String, Integer> offsets = new ConcurrentHashMap<>();
 	private final HttpServer server;
 	private final ExecutorService executor;
 	private final Map<String, Bot> bots = new ConcurrentHashMap<>();
@@ -72,6 +79,7 @@ final class FakeTelegramServer implements AutoCloseable {
 		server.setExecutor(executor);
 		server.start();
 		registerBot(TOKEN, BOT_USERNAME);
+		files.put("AgACbig", "image-bytes".getBytes(StandardCharsets.UTF_8));
 	}
 
 	/** The {@code apiUrl} to configure the adapter with. */
@@ -157,7 +165,7 @@ final class FakeTelegramServer implements AutoCloseable {
 		return from;
 	}
 
-	private Map<String, Object> message(long chatId, String chatType, long fromId, String fromUsername) {
+	Map<String, Object> message(long chatId, String chatType, long fromId, String fromUsername) {
 		Map<String, Object> chat = new HashMap<>();
 		chat.put("id", chatId);
 		chat.put("type", chatType);
@@ -202,7 +210,16 @@ final class FakeTelegramServer implements AutoCloseable {
 	private void handle(HttpExchange ex) throws IOException {
 		try {
 			String path = ex.getRequestURI().getPath();          // /bot<token>/<method>
-			Map<String, String> form = parseForm(ex.getRequestBody());
+			if (path.startsWith("/file/bot")) {
+				String fileId = path.substring(path.lastIndexOf('/') + 1).replaceFirst("\\.bin$", "");
+				byte[] bytes = files.get(fileId);
+				if (bytes == null) { reply(ex, 404, error(404, "No file")); return; }
+				downloads.incrementAndGet();
+				ex.sendResponseHeaders(200, chunkedFiles.contains(fileId) ? 0 : bytes.length);
+				try (var out = ex.getResponseBody()) { out.write(bytes); }
+				return;
+			}
+			Map<String, String> form = parseRequest(ex);
 			if (!path.startsWith("/bot")) {
 				reply(ex, 404, error(404, "Not Found"));
 				return;
@@ -225,8 +242,17 @@ final class FakeTelegramServer implements AutoCloseable {
 					me.put("username", bot.username);
 					reply(ex, 200, ok(me));
 				}
+				case "getFile" -> {
+					String id = form.get("file_id");
+					byte[] bytes = files.get(id);
+					if (bytes == null) reply(ex, 400, error(400, "file not found"));
+					else reply(ex, 200, ok(Map.of("file_id", id, "file_unique_id", id + "u",
+						"file_size", declaredSizes.getOrDefault(id, (long) bytes.length), "file_path", "files/" + id + ".bin")));
+				}
 				case "getUpdates" -> {
+					if (form.containsKey("allowed_updates")) lastFilters.put(token, form.get("allowed_updates"));
 					int offset = form.containsKey("offset") ? Integer.parseInt(form.get("offset")) : 0;
+					offsets.put(token, offset);
 					long timeoutSecs = form.containsKey("timeout") ? Long.parseLong(form.get("timeout")) : 0;
 					// Telegram semantics: an offset confirms (drops) everything below it;
 					// everything at or above it is (re)delivered. Honour long polling,
@@ -298,6 +324,25 @@ final class FakeTelegramServer implements AutoCloseable {
 		} catch (Exception e) {
 			reply(ex, 500, error(500, e.toString()));
 		}
+	}
+
+	private Map<String, String> parseRequest(HttpExchange ex) throws IOException {
+		String type = ex.getRequestHeaders().getFirst("Content-Type");
+		if (type == null || !type.startsWith("multipart/")) return parseForm(ex.getRequestBody());
+		String boundary = type.substring(type.indexOf("boundary=") + 9);
+		String raw = new String(ex.getRequestBody().readAllBytes(), StandardCharsets.ISO_8859_1);
+		Map<String, String> form = new HashMap<>();
+		for (String part : raw.split(java.util.regex.Pattern.quote("--" + boundary))) {
+			int split = part.indexOf("\r\n\r\n");
+			if (split < 0) continue;
+			String headers = part.substring(0, split);
+			var matcher = java.util.regex.Pattern.compile("name=\"([^\"]+)\"").matcher(headers);
+			if (!matcher.find()) continue;
+			String name = matcher.group(1);
+			form.put(name, part.substring(split + 4, part.length() - 2));
+			uploadTypes.put(name, headers);
+		}
+		return form;
 	}
 
 	private static Map<String, String> parseForm(InputStream body) throws IOException {

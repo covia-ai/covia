@@ -1,0 +1,62 @@
+{
+  "name": "Hash bytes",
+  "description": "Hash exact bytes with SHA-256, SHA-512, SHA3-256 (default), or Keccak-256. SHA3-256 differs from Ethereum Keccak-256. This is NOT a CAD3 value hash.",
+  "operation": {
+    "adapter": "crypto:hash",
+    "readOnly": true,
+    "activityLabel": "Hash bytes",
+    "input": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "string",
+          "description": "Native blob bytes. JSON/MCP callers pass hexadecimal (0x prefix recommended), or select encoding:utf8/base64 for text input. No implicit hash, CAD3 conversion or JSON canonicalisation."
+        },
+        "encoding": {
+          "type": "string",
+          "description": "Applies to string input only: hex by default (optional 0x prefix), or explicit utf8/base64. Native ABlob input is used directly.",
+          "enum": [
+            "utf8",
+            "hex",
+            "base64"
+          ],
+          "default": "hex"
+        },
+        "algorithm": {
+          "type": "string",
+          "description": "Digest algorithm.",
+          "enum": [
+            "sha256",
+            "sha512",
+            "sha3-256",
+            "keccak256"
+          ],
+          "default": "sha3-256"
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "algorithm": {
+          "type": "string",
+          "description": "Selected algorithm."
+        },
+        "digest": {
+          "type": "string",
+          "description": "Native digest blob (Hash for 256-bit algorithms); JSON renders it as a 0x-prefixed hexadecimal string.",
+          "pattern": "^0x(?:[0-9a-f]{2})*$"
+        }
+      },
+      "required": [
+        "algorithm",
+        "digest"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

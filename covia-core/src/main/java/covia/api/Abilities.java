@@ -22,6 +22,8 @@ public final class Abilities {
 	/** Use a secret's value in an operation without seeing it. A grant of it
 	 *  may be bound to a destination url prefix ({@code nb.url}). */
 	public static final AString SECRET_USE    = Strings.intern("secret/use");
+	/** Reveal plaintext to its owner through a direct, non-recorded call. */
+	public static final AString SECRET_EXTRACT = Strings.intern("secret/extract");
 	public static final AString MCP_MANAGE    = Strings.intern("mcp/manage");
 	public static final AString HITL_REQUEST  = Strings.intern("hitl/request");
 	public static final AString AGENT_CREATE  = Strings.intern("agent/create");

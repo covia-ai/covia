@@ -38,6 +38,11 @@ public abstract class AAdapter {
 
 	public Engine engine;
 	private AdapterWorkspace adapterWorkspace;
+	/** Explicit public operation declarations, independent of mutable catalogue bindings. */
+	private AMap<AString, AMap<AString, ACell>> operations = Maps.empty();
+	public static final String INVALID_OPERATION_NAME = "Operation name must not be blank";
+	public static final String INVALID_OPERATION_METADATA = "Published operation metadata must contain an operation map";
+	public static final String DUPLICATE_OPERATION_NAME = "Conflicting operation declaration: ";
 
 	/**
 	 * Configures an adapter discovered from a venue module before it is
@@ -170,12 +175,10 @@ public abstract class AAdapter {
 	/**
 	 * Helper method to install a single asset from a resource path.
 	 *
-	 * <p><b>Legacy form.</b> Stores the asset in the venue CAS and adds an
-	 * entry to the per-adapter operation registry indexed by
-	 * {@code operation.adapter}. Per OPERATIONS.md, the new
-	 * {@link #installAsset(String, String)} overload should be preferred —
-	 * it adds an explicit catalog path that places the asset in
-	 * {@code /v/ops/&lt;catalogPath&gt;}.</p>
+	 * <p>Stores the asset without publishing an operation declaration. Use
+	 * {@link #installOperation(String, AMap)} for named metadata discovery, or
+	 * {@link #installAsset(String, String)} to also create an explicit catalogue
+	 * binding at {@code /v/ops/&lt;catalogPath&gt;}.</p>
 	 *
 	 * @param resourcePath The resource path to read the asset from
 	 */
@@ -253,6 +256,33 @@ public abstract class AAdapter {
 		}
 		declare("v/ops/", catalogPath, hash);
 		return hash;
+	}
+
+	/**
+	 * Publishes a named operation with its full asset metadata, without creating
+	 * a catalogue path. Names are local to this adapter and are opaque map keys.
+	 * Call during {@link #installAssets()}; invocation uses the metadata itself.
+	 * @param name Adapter-local discovery name
+	 * @param metadata Complete operation asset metadata
+	 * @return Hash of the stored asset (not part of the discovery representation)
+	 */
+	protected Hash installOperation(String name, AMap<AString, ACell> metadata) {
+		validateOperation(name, metadata);
+		Hash hash = installAsset(metadata);
+		warnIfInputIsNotAnObject(getName() + ":" + name, hash);
+		operations = operations.assoc(Strings.create(name), metadata);
+		return hash;
+	}
+
+	private void validateOperation(String name, AMap<AString, ACell> metadata) {
+		if (name == null || name.isBlank()) throw new IllegalArgumentException(INVALID_OPERATION_NAME);
+		if (metadata == null || !(metadata.get(Fields.OPERATION) instanceof AMap)) {
+			throw new IllegalArgumentException(INVALID_OPERATION_METADATA);
+		}
+		AMap<AString, ACell> existing = operations.get(Strings.create(name));
+		if (existing != null && !existing.equals(metadata)) {
+			throw new IllegalArgumentException(DUPLICATE_OPERATION_NAME + name);
+		}
 	}
 
 	/**
@@ -390,6 +420,15 @@ public abstract class AAdapter {
 	private void declare(String prefix, String catalogPath, Hash hash) {
 		if ("v/ops/".equals(prefix) || "v/test/ops/".equals(prefix)) {
 			warnIfInputIsNotAnObject(prefix + catalogPath, hash);
+			String name = catalogPath.startsWith(getName() + "/")
+				? catalogPath.substring(getName().length() + 1) : catalogPath;
+			AMap<AString, ACell> metadata = RT.ensureMap(JSON.parse(installedAssets.get(hash)));
+			// Legacy catalogue declarations are permissive and their adapter-owned
+			// mirror uses last-declaration precedence. Discovery must not turn a
+			// previously valid installation into a failure when local names collide.
+			if (metadata != null && metadata.get(Fields.OPERATION) instanceof AMap) {
+				operations = operations.assoc(Strings.create(name), metadata);
+			}
 		}
 		pendingCatalogEntries.put(prefix + catalogPath, hash);
 		ownedCatalogEntries.put(ownedPath(prefix, catalogPath), hash);
@@ -485,6 +524,17 @@ public abstract class AAdapter {
 
 
 	/**
+	 * Returns this adapter's explicit operation names mapped to complete asset
+	 * metadata. This immutable discovery map has no dependency on mutable venue
+	 * paths and excludes skills, templates, models and unpublished example assets.
+	 * A slash in a name is part of the key, not a nested catalogue to traverse.
+	 * @return Adapter-local name to full operation asset metadata
+	 */
+	public AMap<AString, AMap<AString, ACell>> getOperations() {
+		return operations;
+	}
+
+	/**
 	 * Returns the catalog paths of this adapter's installed <em>operations</em>
 	 * ({@code v/ops/...} and {@code v/test/ops/...} entries), in installation
 	 * order. Non-operation catalog entries such as agent templates
@@ -492,6 +542,8 @@ public abstract class AAdapter {
 	 * not invocable operations.
 	 *
 	 * @return List of full catalog paths, each invocable via {@code grid:run}
+	 * This binding list also supplies the legacy adapter-info and count APIs.
+	 * Use {@link #getOperations()} for path-independent metadata discovery.
 	 */
 	public java.util.List<String> getOperationPaths() {
 		java.util.ArrayList<String> paths = new java.util.ArrayList<>();
