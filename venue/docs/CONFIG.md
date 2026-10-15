@@ -267,7 +267,8 @@ Per venue (`logging`, both default `false`):
   refused credentials (`auth.success`, `auth.failure`, `auth.throttled`),
   logins (`login`), token issue (`token.issued`), user and key administration
   (`user.create`, `user.sudo`, `auth.key.add`, `auth.key.revoke`), secret
-  writes (`secret.write`, the name only), and venue administration
+  writes, deletions and extraction attempts (`secret.write`, `secret.delete`,
+  `secret.extract`, names and outcomes only), and venue administration
   (`venue.gc`, `venue.restart`, `venue.admin`). Events carry DIDs, the client
   address, names, outcomes and refusal reasons — never a token, secret value,
   email or content — so they can be kept longer than operational logs.

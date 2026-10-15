@@ -10,6 +10,12 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Added
 
+- `secret:list` returns names with prefix filtering and pagination;
+  `secret:delete` removes an exact name with `crud/delete` authority.
+  `secret:extract` requires `secret/extract` authority and a direct owner
+  result-only call. Recorded jobs, MCP tools, agents and nested calls are
+  refused; plaintext stays out of job history and venue telemetry.
+
 - Optional, adapter-specific job `errorCode` and Java accessors (#462).
   Ordinary failures remain uncoded. The agent adapter supplies
   `agent:unknown-session`; messaging recovery uses that code rather than

@@ -24,6 +24,8 @@ public class VenueJob extends Job {
 	private final boolean memoryOnly;
 	/** Whether venue-wide observers (SSE/MCP telemetry) should see updates. */
 	private final boolean observable;
+	/** Set only by public top-level result dispatch, never from operation metadata. */
+	private final boolean directRun;
 	/** Durable deletion fence. Guarded by this instance's monitor. */
 	private boolean deleted;
 
@@ -40,6 +42,12 @@ public class VenueJob extends Job {
 	VenueJob(AMap<AString, ACell> record, AMap<AString, ACell> meta,
 			AString callerDID, JobManager manager, boolean memoryOnly,
 			boolean observable) {
+		this(record, meta, callerDID, manager, memoryOnly, observable, false);
+	}
+
+	VenueJob(AMap<AString, ACell> record, AMap<AString, ACell> meta,
+			AString callerDID, JobManager manager, boolean memoryOnly,
+			boolean observable, boolean directRun) {
 		super(record, !memoryOnly);
 		this.manager = manager;
 		this.meta = meta;
@@ -47,7 +55,11 @@ public class VenueJob extends Job {
 		this.account = manager.account(callerDID);
 		this.memoryOnly = memoryOnly;
 		this.observable = observable;
+		this.directRun = directRun;
 	}
+
+	/** Direct result-only call with no durable Job or venue-wide telemetry. */
+	public boolean isDirectRun() { return directRun && memoryOnly && !observable; }
 
 	/** True for a transient Job wrapper; persistence is a no-op for it. */
 	public boolean isMemoryOnly() {

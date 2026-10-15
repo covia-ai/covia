@@ -144,7 +144,7 @@ Abilities follow UCAN's slash-delimited convention with no leading slash. `*` is
 | `venue/restart` | — | Restart a standalone venue process or hand off to a successor jar |
 | `venue/gc` | — | Garbage-collect the venue's Etch store online (`<venueDID>/store`) |
 | `secret/use` | — | Use a secret's value in an operation without seeing it; bindable to a destination with `nb.url` |
-| `secret/decrypt` | — | Decrypt a secret |
+| `secret/extract` | — | Reveal an owned secret through a direct owner call |
 | `ucan/delegate` | — | Sub-delegate capabilities |
 | `ucan/revoke` | — | Revoke a UCAN |
 
@@ -243,7 +243,7 @@ path outside the prefix on the covered host.
 | `{with: "did:.../o/op", can: "invoke"}` | Medium — consumes compute |
 | `{with: "did:.../w/", can: "crud/write"}` | High — mutating workspace |
 | `{with: "did:.../s/key", can: "secret/use", nb: {url: "https://api.example/"}}` | High — the value is sent, unseen, to that destination only |
-| `{with: "did:.../s/key", can: "secret/decrypt"}` | Highest — reveals plaintext credentials |
+| `{with: "did:.../s/key", can: "secret/extract"}` | Highest — reveals plaintext credentials |
 | `{with: "did:...", can: "*"}` | Maximum — full delegation |
 
 ---
@@ -575,6 +575,33 @@ Venue:
   5. Allow or deny
 ```
 
+### Secret extraction
+
+`secret:extract` reveals an exact name from the caller's own encrypted store.
+It requires `secret/extract` on `s/NAME`; `secret/use`, `secret/write`,
+`crud/read` and `invoke` do not imply this ability. An unrestricted owner
+retains their normal own-resource authority. Another principal's grant does
+not make extraction cross-user: names cannot be paths or DID URLs.
+
+Extraction is restricted to a direct result-only call, for example
+`POST /api/v1/run` with `{"operation":"v/ops/secret/extract","input":{"name":"KEY"}}`.
+Recorded `/invoke` jobs, MCP tools, agent/session/task contexts and nested
+operation calls are refused, even with an extraction grant. Use the published
+operation definition unchanged; custom output schemas and removed redaction
+metadata are rejected before decryption. This keeps plaintext out of job
+history, venue-wide events and schema-validation logs. Transient results
+cannot be fetched through public job-status APIs. HTTP run responses use
+`Cache-Control: private, no-store`.
+
+With `recordReadOnlyOperations:true`, ordinary extraction fails closed. An
+explicit private run is possible only if the venue enables private jobs; it
+must still meet every owner/direct-call restriction. Audit logging, when
+configured, records the name, actor and success/failure, never the value.
+The caller remains responsible for the returned plaintext. Do not give owner
+credentials to an external agent: a client using those credentials over REST
+is indistinguishable from the owner. Integrations should keep using `s/NAME`
+references with `secret/use` instead.
+
 ### 5.3 Enforcement Points
 
 | Point | Required Capability |
@@ -590,7 +617,9 @@ Venue:
 | `dlfs:read` / `dlfs:list` / `dlfs:stat` / `dlfs:listDrives` | `{ with: "dlfs/<drive>/<path>", can: "crud/read" }` |
 | `dlfs:write` / `dlfs:append` / `dlfs:mkdir` / `dlfs:createDrive` | `{ with: "dlfs/<drive>/<path>", can: "crud/write" }` |
 | `dlfs:delete` / `dlfs:deleteDrive` | `{ with: "dlfs/<drive>/<path>", can: "crud/delete" }` |
-| `secret:extract` | `{ with: "/s/<name>", can: "secret/decrypt" }` |
+| `secret:list` | `{ with: "s/", can: "crud/read" }` (names only) |
+| `secret:delete` | `{ with: "s/<name>", can: "crud/delete" }` |
+| `secret:extract` | `{ with: "s/<name>", can: "secret/extract" }`, plus the direct-owner restriction below |
 | Any adapter sending a secret (`apiKey`, `bearerSecret`, `secretHeaders`, `{s/NAME}`, MCP `auth`, A2A auth) | `{ with: "<ownerDID>/s/<name>", can: "secret/use" }`, its `nb.url` checked against the request's destination |
 | `agent:create` | `{ with: "<ownerDID>/g/<id>", can: "agent/create" }` |
 | `agent:info` / `agent:context` (cross-user) | `{ with: "<ownerDID>/g/<id>", can: "crud/read" }` |

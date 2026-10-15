@@ -177,11 +177,17 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> {
 	}
 
 	public void delete(AString name) {
-		cursor.updateAndGet(current -> {
+		deleteIfPresent(name);
+	}
+
+	/** Atomically removes an entry and reports whether it existed. */
+	public boolean deleteIfPresent(AString name) {
+		AMap<AString, ACell> previous = cursor.getAndUpdate(current -> {
 			AMap<AString,ACell> m = RT.ensureMap(current);
 			if (m == null) return null;
 			return m.dissoc(name);
 		});
+		return previous != null && previous.containsKey(name);
 	}
 
 	/**

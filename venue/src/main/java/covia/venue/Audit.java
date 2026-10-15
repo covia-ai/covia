@@ -40,6 +40,7 @@ public final class Audit {
 	public static final String KEY_REVOKE = "auth.key.revoke";
 	public static final String SECRET_WRITE = "secret.write";
 	public static final String SECRET_DELETE = "secret.delete";
+	public static final String SECRET_EXTRACT = "secret.extract";
 	public static final String VENUE_GC = "venue.gc";
 	public static final String VENUE_RESTART = "venue.restart";
 	public static final String VENUE_ADMIN = "venue.admin";

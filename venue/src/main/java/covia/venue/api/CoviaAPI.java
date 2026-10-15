@@ -905,6 +905,8 @@ public class CoviaAPI extends ACoviaAPI {
 				@OpenApiResponse(status = "403", description = "Operation not authorised")
 			})
 	protected void runOperation(Context ctx) {
+		// Direct operation results may contain owner-requested plaintext secrets.
+		ctx.header("Cache-Control", "private, no-store");
 		ACell req;
 		try {
 			req = JSON.parseJSON5(ctx.body());
