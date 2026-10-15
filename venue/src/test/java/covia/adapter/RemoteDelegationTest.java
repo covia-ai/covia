@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -30,6 +31,228 @@ import covia.venue.Engine;
 import covia.venue.RemoteJobs;
 
 class RemoteDelegationTest {
+	/** Gates prove local cancellation completes while remote IO remains blocked. */
+	private static final class CancellationPeer implements AutoCloseable {
+		final HttpServer server;
+		final Engine engine = Engine.createTemp(null);
+		final String protocol;
+		final CountDownLatch submitted = new CountDownLatch(1);
+		final CountDownLatch cancelReceived = new CountDownLatch(1);
+		final CountDownLatch cancelResponse = new CountDownLatch(1);
+		final AtomicInteger cancels = new AtomicInteger();
+		volatile CountDownLatch acceptance = new CountDownLatch(0);
+		volatile int cancelCode = 200;
+		volatile String cancelStatus = "CANCELLED";
+		volatile boolean rpcReject;
+		volatile boolean malformed;
+		volatile boolean wrongId;
+		volatile String a2aCancelState;
+		CancellationPeer(String protocol) throws Exception {
+			this.protocol = protocol;
+			server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+			server.setExecutor(AAdapter.VIRTUAL_EXECUTOR);
+			server.createContext("/", exchange -> {
+				String request = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+				String path = exchange.getRequestURI().getPath();
+				boolean a2a = protocol.equals("a2a");
+				String method = a2a ? convex.core.lang.RT.getIn(convex.core.util.JSON.parse(request), "method").toString() : "";
+				boolean submit = a2a ? org.a2aproject.sdk.spec.A2AMethods.SEND_MESSAGE_METHOD.equals(method) : path.endsWith("/invoke");
+				boolean cancel = a2a ? org.a2aproject.sdk.spec.A2AMethods.CANCEL_TASK_METHOD.equals(method) : path.endsWith("/cancel");
+				try {
+					if (submit) { submitted.countDown(); acceptance.await(); }
+					if (cancel) { cancels.incrementAndGet(); cancelReceived.countDown(); cancelResponse.await(); }
+				} catch (InterruptedException e) { Thread.currentThread().interrupt(); exchange.close(); return; }
+				String state = cancel ? cancelStatus : "STARTED";
+				String responseId = cancel && wrongId ? "ffeeddccbbaa99887766554433221100" : ID;
+				String body = "{\"id\":\"" + responseId + "\",\"status\":\"" + state + "\"}";
+				if (a2a) {
+					String taskState = state.equals("STARTED") ? "WORKING" : state.equals("COMPLETE") ? "COMPLETED" : "CANCELED";
+					if (cancel && a2aCancelState != null) taskState = a2aCancelState;
+					body = "{\"jsonrpc\":\"2.0\",\"id\":\"reply\",\"result\":{\"task\":{\"id\":\"" + responseId
+						+ "\",\"contextId\":\"ctx\",\"status\":{\"state\":\"TASK_STATE_" + taskState + "\"}}}}";
+					if (cancel && rpcReject) body = "{\"jsonrpc\":\"2.0\",\"id\":\"reply\",\"error\":{\"code\":-32002,\"message\":\"private-token\"}}";
+				}
+				if (cancel && malformed) body = "invalid private-token response";
+				byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+				exchange.sendResponseHeaders(cancel ? cancelCode : submit && !a2a ? 201 : 200, bytes.length);
+				try (var out = exchange.getResponseBody()) { out.write(bytes); }
+			});
+			server.start();
+			engine.registerAdapter(new GridAdapter());
+			engine.registerAdapter(new RemoteAgentAdapter());
+			engine.registerAdapter(new A2AAdapter());
+			HTTPAdapter http = new HTTPAdapter();
+			engine.registerAdapter(http);
+			http.addAllowedHost("127.0.0.1");
+		}
+		String url() { return "http://127.0.0.1:" + server.getAddress().getPort(); }
+		Job submit() {
+			String op = protocol.equals("a2a") ? "a2a:rawSend" : protocol.equals("grid") ? "grid:run" : "remoteagent:request";
+			ACell message = Maps.of("role", "user", "parts", convex.core.data.Vectors.of(Maps.of("type", "text", "text", "hello")));
+			return engine.jobs().invokeOperation(Maps.of(Fields.OPERATION, Maps.of(Fields.ADAPTER, op)),
+				Maps.of(Fields.VENUE, url(), Fields.URL, url(), Fields.OPERATION, "v/ops/work",
+					Fields.AGENT_ID, "g/worker", Fields.INPUT, Maps.of("task", "work"), Fields.MESSAGE, message), engine.venueContext());
+		}
+		@Override public void close() {
+			acceptance.countDown(); cancelResponse.countDown(); engine.close(); server.stop(0);
+		}
+	}
+
+	@Test void gridCancellationIsImmediate() throws Exception { cancellationPropagatesLocallyBeforeRemoteAcknowledgement("grid"); }
+	@Test void a2aCancellationIsImmediate() throws Exception { cancellationPropagatesLocallyBeforeRemoteAcknowledgement("a2a"); }
+	@Test void remoteagentCancellationIsImmediate() throws Exception { cancellationPropagatesLocallyBeforeRemoteAcknowledgement("remoteagent"); }
+
+	private void cancellationPropagatesLocallyBeforeRemoteAcknowledgement(String protocol) throws Exception {
+		try (CancellationPeer peer = new CancellationPeer(protocol)) {
+			Job child = peer.submit();
+			await(() -> RemoteJobs.descriptor(child) != null && RemoteJobs.descriptor(child).get(RemoteJobs.REMOTE_ID) != null);
+			Job parent = Job.create(Maps.of(Fields.STATUS, Status.STARTED));
+			parent.setCancelHook(child::cancel);
+			java.util.concurrent.CompletableFuture.runAsync(parent::cancel).get(2, TimeUnit.SECONDS);
+			assertEquals(Status.CANCELLED, child.getStatus());
+			assertTrue(parent.future().isDone());
+			assertTrue(child.future().isDone());
+			assertTrue(peer.cancelReceived.await(5, TimeUnit.SECONDS));
+			assertEquals(Strings.create("requested"), convex.core.lang.RT.getIn(child.getData(), Fields.CANCELLATION, RemoteJobs.OUTCOME));
+			peer.cancelResponse.countDown();
+			awaitOutcome(child, "acknowledged");
+			await(() -> Strings.create("acknowledged").equals(convex.core.lang.RT.getIn(
+				peer.engine.jobs().getJobData(child.getID(), peer.engine.venueContext()), Fields.CANCELLATION, RemoteJobs.OUTCOME)));
+			child.completeWith(Strings.create("late result"));
+			child.cancel();
+			assertEquals(Status.CANCELLED, child.getStatus());
+			assertEquals(1, peer.cancels.get());
+		}
+	}
+
+	@Test void gridLateAcceptance() throws Exception { lateAcceptanceStillCancelsRemoteWork("grid"); }
+	@Test void a2aLateAcceptance() throws Exception { lateAcceptanceStillCancelsRemoteWork("a2a"); }
+	@Test void remoteagentLateAcceptance() throws Exception { lateAcceptanceStillCancelsRemoteWork("remoteagent"); }
+
+	private void lateAcceptanceStillCancelsRemoteWork(String protocol) throws Exception {
+		try (CancellationPeer peer = new CancellationPeer(protocol)) {
+			peer.acceptance = new CountDownLatch(1);
+			Job job = peer.submit();
+			assertTrue(peer.submitted.await(5, TimeUnit.SECONDS));
+			job.cancel();
+			assertTrue(job.future().isDone());
+			peer.acceptance.countDown();
+			assertTrue(peer.cancelReceived.await(5, TimeUnit.SECONDS));
+			peer.cancelResponse.countDown();
+			awaitOutcome(job, "acknowledged");
+			assertEquals(Strings.create(ID), convex.core.lang.RT.getIn(job.getData(), Fields.CANCELLATION, RemoteJobs.REMOTE_ID));
+			assertEquals(Status.CANCELLED, job.getStatus());
+			assertEquals(1, peer.cancels.get());
+		}
+	}
+
+	@Test void gridCancellationOutcomes() throws Exception { rejectionUncertaintyAndRemoteCompletionDoNotChangeLocalCancellation("grid"); }
+	@Test void a2aCancellationOutcomes() throws Exception { rejectionUncertaintyAndRemoteCompletionDoNotChangeLocalCancellation("a2a"); }
+	@Test void remoteagentCancellationOutcomes() throws Exception { rejectionUncertaintyAndRemoteCompletionDoNotChangeLocalCancellation("remoteagent"); }
+
+	private void rejectionUncertaintyAndRemoteCompletionDoNotChangeLocalCancellation(String protocol) throws Exception {
+		for (int scenario = 0; scenario < 6; scenario++) {
+			try (CancellationPeer peer = new CancellationPeer(protocol)) {
+				peer.cancelCode = scenario == 0 ? 409 : scenario == 1 ? 503 : 200;
+				peer.malformed = scenario == 2;
+				peer.cancelStatus = scenario == 3 ? "COMPLETE" : scenario == 4 ? "STARTED" : "CANCELLED";
+				peer.wrongId = scenario == 5;
+				Job job = peer.submit();
+				await(() -> RemoteJobs.descriptor(job) != null && RemoteJobs.descriptor(job).get(RemoteJobs.REMOTE_ID) != null);
+				job.cancel(); peer.cancelResponse.countDown();
+				awaitOutcome(job, scenario == 0 ? "rejected" : scenario == 3 ? "finished" : "unknown");
+				assertEquals(Status.CANCELLED, job.getStatus());
+				assertFalse(job.getData().toString().contains("private-token"));
+				assertEquals(1, peer.cancels.get());
+			}
+		}
+	}
+
+	@Test void a2aProtocolRejectionIsRetainedWithoutErrorText() throws Exception {
+		try (CancellationPeer peer = new CancellationPeer("a2a")) {
+			peer.rpcReject = true;
+			Job job = peer.submit();
+			await(() -> RemoteJobs.descriptor(job) != null && RemoteJobs.descriptor(job).get(RemoteJobs.REMOTE_ID) != null);
+			job.cancel(); peer.cancelResponse.countDown();
+			awaitOutcome(job, "rejected");
+			assertEquals(convex.core.data.prim.CVMLong.create(-32002), convex.core.lang.RT.getIn(job.getData(), Fields.CANCELLATION, Fields.ERROR_CODE));
+			assertFalse(job.getData().toString().contains("private-token"));
+		}
+	}
+
+	@Test void unspecifiedA2aStateIsNotEvidenceOfRemoteCompletion() throws Exception {
+		try (CancellationPeer peer = new CancellationPeer("a2a")) {
+			peer.a2aCancelState = "UNSPECIFIED";
+			Job job = peer.submit();
+			await(() -> RemoteJobs.descriptor(job) != null && RemoteJobs.descriptor(job).get(RemoteJobs.REMOTE_ID) != null);
+			job.cancel(); peer.cancelResponse.countDown();
+			awaitOutcome(job, "unknown");
+			assertNull(convex.core.lang.RT.getIn(job.getData(), Fields.CANCELLATION, RemoteJobs.REMOTE_STATUS));
+		}
+	}
+
+	@Test void cancellingExistingJobObserverDoesNotCancelRemoteWork() throws Exception {
+		try (CancellationPeer peer = new CancellationPeer("grid")) {
+			Job job = peer.engine.jobs().invokeOperation(Maps.of(Fields.OPERATION, Maps.of(Fields.ADAPTER, "grid:jobResult")),
+				Maps.of(Fields.VENUE, peer.url(), Fields.ID, ID), peer.engine.venueContext());
+			await(() -> RemoteJobs.descriptor(job) != null && RemoteJobs.descriptor(job).get(RemoteJobs.REMOTE_ID) != null);
+			// Recovery must preserve the same ownership boundary.
+			peer.engine.getAdapter("grid").recoverJob(job);
+			job.cancel();
+			assertFalse(peer.cancelReceived.await(150, TimeUnit.MILLISECONDS));
+			assertNull(job.getData().get(Fields.CANCELLATION));
+		}
+	}
+
+	@Test void lateCancellationEvidenceDoesNotRecreateDeletedJob() throws Exception {
+		try (CancellationPeer peer = new CancellationPeer("grid")) {
+			Job job = peer.submit();
+			await(() -> RemoteJobs.descriptor(job) != null && RemoteJobs.descriptor(job).get(RemoteJobs.REMOTE_ID) != null);
+			job.cancel();
+			assertTrue(peer.cancelReceived.await(5, TimeUnit.SECONDS));
+			assertTrue(peer.engine.jobs().deleteJob(job.getID(), peer.engine.venueContext()));
+			CountDownLatch persisted = new CountDownLatch(1);
+			job.subscribe(j -> {
+				if (Strings.create("acknowledged").equals(convex.core.lang.RT.getIn(j.getData(), Fields.CANCELLATION, RemoteJobs.OUTCOME))) persisted.countDown();
+			});
+			peer.cancelResponse.countDown();
+			assertTrue(persisted.await(5, TimeUnit.SECONDS));
+			// The in-memory evidence can change, but the durable row stays deleted.
+			assertNull(peer.engine.jobs().getJobData(job.getID(), peer.engine.venueContext()));
+		}
+	}
+
+	@Test void recoveredGridRunRetainsCancellationOwnership() throws Exception {
+		try (CancellationPeer peer = new CancellationPeer("grid")) {
+			Root<Index<Keyword, ACell>> cursor = Cursors.root(Covia.ROOT);
+			AKeyPair key = AKeyPair.generate();
+			AMap<AString, ACell> config = Maps.of(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0));
+			Engine first = new Engine(config, cursor, key).start();
+			Engine.addDemoAssets(first);
+			Job job;
+			try {
+				job = first.jobs().invokeOperation("v/ops/grid/run", Maps.of(Fields.VENUE, peer.url(), Fields.OPERATION, "v/ops/work"), first.venueContext());
+				await(() -> RemoteJobs.descriptor(job) != null && RemoteJobs.descriptor(job).get(RemoteJobs.REMOTE_ID) != null);
+			} finally { first.close(); }
+			assertEquals(0, peer.cancels.get());
+			Engine second = new Engine(config, cursor, key).start();
+			try {
+				Engine.addDemoAssets(second);
+				second.jobs().recoverJobs();
+				Job recovered = second.jobs().getJob(job.getID(), second.venueContext());
+				recovered.cancel();
+				assertTrue(peer.cancelReceived.await(5, TimeUnit.SECONDS));
+				peer.cancelResponse.countDown();
+				awaitOutcome(recovered, "acknowledged");
+				assertEquals(1, peer.cancels.get());
+			} finally { second.close(); }
+		}
+	}
+
+	private static void awaitOutcome(Job job, String outcome) throws Exception {
+		await(() -> Strings.create(outcome).equals(convex.core.lang.RT.getIn(job.getData(), Fields.CANCELLATION, RemoteJobs.OUTCOME)));
+	}
+
 	private static final String ID = "00112233445566778899aabbccddeeff";
 	private static final AMap<AString, ACell> META = Maps.of(Fields.OPERATION, Maps.of(Fields.ADAPTER, "grid:run"));
 

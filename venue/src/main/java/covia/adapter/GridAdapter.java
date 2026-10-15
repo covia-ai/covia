@@ -109,7 +109,7 @@ public class GridAdapter extends AAdapter {
 		AString target = resolveVenue(meta, input);
 		VenueConnection remote = remoteConnection(ctx, target, input);
 		RemoteJobs observer = engine.remoteJobs();
-		observer.prepare(job, "covia", target.toString(), remote.credentials());
+		observer.prepare(job, "covia", target.toString(), remote.credentials(), !existing);
 		if (job.isFinished()) return;
 		if (existing) {
 			try { observer.accepted(job, existingID.toHexString()); }
@@ -126,6 +126,8 @@ public class GridAdapter extends AAdapter {
 			if (error != null) { observer.submissionFailed(job, error); return; }
 			try {
 				observer.accepted(job, accepted.getID().toHexString());
+				bindCancellation(job, remote.venue(), accepted.getID());
+				if (job.isFinished()) return;
 				applyRemote(job, accepted.getData());
 			} catch (RuntimeException | Error failure) {
 				observer.submissionUnknown(job, failure);
@@ -139,6 +141,11 @@ public class GridAdapter extends AAdapter {
 
 	private void watch(Job job, Venue venue, Blob id) {
 		engine.remoteJobs().observe(job, () -> venue.getJobStatus(id), snapshot -> applyRemote(job, snapshot));
+	}
+
+	private void bindCancellation(Job job, Venue venue, Blob id) {
+		job.setCancelHook(() -> engine.remoteJobs().attemptCancellation(job, id.toHexString(),
+			() -> RemoteJobs.cancellationResult(id, venue.cancelJob(id))));
 	}
 
 	private void applyRemote(Job job, AMap<AString, ACell> snapshot) {
@@ -173,6 +180,9 @@ public class GridAdapter extends AAdapter {
 		if (id == null) { engine.remoteJobs().submissionUnknown(job, null); return; }
 		try {
 			Venue venue = restoreConnection(RT.ensureString(record.get(RemoteJobs.TARGET)), engine.remoteJobs().credentials(job));
+			if (convex.core.data.prim.CVMBool.TRUE.equals(record.get(RemoteJobs.OWNS_REMOTE))) {
+				bindCancellation(job, venue, Job.parseID(id));
+			}
 			watch(job, venue, Job.parseID(id));
 		} catch (RuntimeException e) { engine.remoteJobs().unavailable(job, e); }
 	}

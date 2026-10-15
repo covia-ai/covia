@@ -107,7 +107,7 @@ remains the application's choice.
 
 ## The update path — CAS-committed, terminal-sticky
 
-All Job mutations funnel through `Job.commitUpdate` (a CAS loop):
+Lifecycle mutations funnel through `Job.commitUpdate` (a CAS loop):
 
 - The **updater and `processUpdate` are side-effect free** — they may be
   retried when another thread wins the race. `VenueJob.processUpdate` only
@@ -321,9 +321,37 @@ remote outcome unresolved. Credentials are removed on local termination;
 encrypted orphan records left by a process crash require operator cleanup.
 Secret rotation/reconnection is not automated in this first delivery.
 
+Cancellation commits locally and propagates through owned local child hooks
+without waiting for network IO. Grid runs, A2A sends and remote-agent calls
+then attempt backend cancellation once, asynchronously, with their captured
+transport authority. A handle arriving after local cancellation still triggers
+the attempt. A `grid:jobResult` observer does not own the remote execution:
+cancelling that local wait never cancels the remote job. `delegation.ownsRemote`
+preserves this distinction during recovery; older Grid records without it do
+not gain cancellation authority.
+
+The optional `cancellation` record contains `remoteId`, `outcome`, and available
+`remoteStatus`, `httpStatus` or protocol `errorCode` evidence:
+
+- `requested`: the attempt started; no response has established its outcome.
+- `acknowledged`: the peer returned a cancelled task/job.
+- `finished`: the peer returned another terminal state (for example, completion
+  won the race).
+- `rejected`: the peer refused the cancellation request.
+- `unknown`: a transport failure, unreadable response or nonterminal response
+  did not establish cancellation.
+
+This evidence can be persisted after local termination through the narrow
+`Job.recordCancellation` method. It never changes the terminal status, result
+or error, and never repeats terminal cleanup or cancellation hooks. Raw error
+text, response bodies and credentials are not recorded. A missing cancellation
+record is not confirmation that remote work stopped. If acceptance is lost and
+no remote ID arrives, no cancellation can be addressed. There is no confirmation
+polling or automatic retry; a process crash can leave an attempt unresolved.
+Even an acknowledgement cannot undo effects already performed remotely.
+
 Shutdown suspends observation and fences late callbacks, without claiming
-remote cancellation. Existing explicit cancellation semantics remain tracked
-in [#511](https://github.com/covia-ai/covia/issues/511). Transient/private jobs
+remote cancellation. Transient/private jobs
 retain their existing recording policy: they can observe remote work while
 the process lives, but have no restart recovery guarantee. Use `/invoke` when
 a durable local record is needed. Neither `/invoke` nor a saved remote handle

@@ -137,6 +137,12 @@ public class User extends ALatticeComponent<ACell> {
 	 */
 	@SuppressWarnings("unchecked")
 	public void persistJob(Blob jobID, AMap<AString, ACell> record) {
+		persistJob(jobID, record, true);
+	}
+
+	/** Late diagnostics may update an existing row, but cannot recreate it. */
+	@SuppressWarnings("unchecked")
+	void persistJob(Blob jobID, AMap<AString, ACell> record, boolean createIfAbsent) {
 		final AMap<AString, ACell> rec = record;
 		cursor.child(Namespace.J, IndexLattice.<Blob, ACell>create(Covia.JOB_RECORD)).updateAndGet(jobs -> {
 			Index<Blob, ACell> idx = (jobs instanceof Index)
@@ -144,6 +150,7 @@ public class User extends ALatticeComponent<ACell> {
 				: Index.none();
 			AMap<AString, ACell> merged = rec;
 			ACell existing = idx.get(jobID);
+			if (existing == null && !createIfAbsent) return jobs;
 			if (existing instanceof AMap<?,?> existingMap) {
 				AMap<AString, ACell> existingRecord = (AMap<AString, ACell>) existingMap;
 				if (existingRecord.containsKey(K_TEMP)) {

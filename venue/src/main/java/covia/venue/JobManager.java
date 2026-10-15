@@ -1307,7 +1307,10 @@ public class JobManager {
 		Job j = activeJobs.get(jobID);
 		if (j instanceof VenueJob vj && vj.isMemoryOnly()) return;
 		try {
-			account.persistJob(jobID, record);
+			// Cancellation evidence can arrive after terminal eviction, when
+			// deleteJob can no longer mark the old live handle. Fence it atomically
+			// at the lattice row rather than retaining terminal Jobs in memory.
+			account.persistJob(jobID, record, !record.containsKey(Fields.CANCELLATION));
 		} catch (AuthException deleted) {
 			// An account cursor is invalidated by erasure; late Job updates must
 			// still settle their in-memory futures without persisting old data.

@@ -43,6 +43,7 @@ public class Fields {
 	public static final StringShort DELAY = Strings.intern("delay");
 	public static final StringShort ID = Strings.intern("id");
 	public static final StringShort STATUS = Strings.intern("status");	
+	public static final StringShort CANCELLATION = Strings.intern("cancellation");
 	public static final StringShort OP = Strings.intern("op");
 
 	/** Token usage map {@code {input, output, total}} — reported by LLM ops on

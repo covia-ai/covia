@@ -21,6 +21,10 @@ public interface RemoteInteraction {
 		throw new UnsupportedOperationException(MESSAGE_UNSUPPORTED);
 	}
 
-	/** Request cancellation. Local cancellation does not prove remote cessation. */
+	/**
+	 * Signal cancellation promptly; dispatch network attempts asynchronously.
+	 * Local cancellation does not prove remote cessation. Remote adapters use
+	 * RemoteJobs.attemptCancellation to retain the outcome of their attempt.
+	 */
 	void cancel();
 }
