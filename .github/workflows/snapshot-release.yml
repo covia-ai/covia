@@ -30,7 +30,7 @@ jobs:
     - name: Download the jars the Test run built
       # The exact tested bits, never a rebuild: the Test workflow shares them
       # as the reactor-jars artifact after its module-boundary check.
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v8
       with:
         name: reactor-jars
         run-id: ${{ github.event.workflow_run.id }}
