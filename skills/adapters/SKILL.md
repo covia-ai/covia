@@ -62,7 +62,7 @@ grid_invoke  operation=v/ops/<adapter>/<op>  input=<json>     # async, returns a
 
 Examples: `grid_run operation=v/test/ops/echo input={"ping":"pong"}`, `grid_run operation=v/ops/langchain/anthropic input={"prompt":"…"}`. Add `venue=<url>` to run on a remote venue (see `/federation`).
 
-If the run fails with *"Cannot resolve operation"*, the adapter is disabled, unloaded, or the path is wrong — `inspect` it. If it fails with a capability denial, the operation is gated (e.g. `secret/decrypt`, `agent/message`) — see `/ucan`.
+If the run fails with *"Cannot resolve operation"*, the adapter is disabled, unloaded, or the path is wrong — `inspect` it. If it fails with a capability denial, the operation is gated (e.g. `secret/extract`, `agent/message`) — see `/ucan`.
 
 ## Runtime lifecycle (venue administration)
 

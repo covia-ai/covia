@@ -8,27 +8,39 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Security
+
+- `secret:extract` (ability `secret/extract`, formerly `secret/decrypt`) runs
+  only as a direct owner `/run` call, never for the public principal.
+- `/api/v1/run` responses are `Cache-Control: private, no-store`.
+
 ### Added
 
-- `secret:list` returns names with prefix filtering and pagination;
-  `secret:delete` removes an exact name with `crud/delete` authority.
-  `secret:extract` requires `secret/extract` authority and a direct owner
-  result-only call. Recorded jobs, MCP tools, agents and nested calls are
-  refused; plaintext stays out of job history and venue telemetry.
-
-- Optional, adapter-specific job `errorCode` and Java accessors (#462).
-  Ordinary failures remain uncoded. The agent adapter supplies
-  `agent:unknown-session`; messaging recovery uses that code rather than
-  matching error wording.
-- `GET /api/v1/adapters/{name}/operations` returns adapter-local names mapped
-  to complete asset metadata. `AAdapter.getOperations()` exposes the same map,
-  and adapters can publish named operations without a catalogue binding.
-  Existing operation listings, adapter-info path arrays and counts are unchanged.
+- Telegram media: attachments saved to DLFS, images passed to the model,
+  `telegram/download`, `mediaOperation` and `replyOperation`.
+- `crypto` adapter: hashes, Ed25519 and JWT signatures, encryption, BIP39 keys.
+- `remoteagent` adapter; agents backed by A2A, Claude Code or remote Covia
+  agents (`agent.adapter`).
+- `secret:list` and `secret:delete`.
+- Adapter-specific job `errorCode` (#462).
+- `GET /api/v1/adapters/{name}/operations` and `AAdapter.getOperations()`.
+- `ContentProvider.createContent` for create-only writes.
 
 ### Changed
 
+- Cancelling a grid, A2A or remote-agent job completes locally at once; the
+  remote outcome is recorded as `cancellation`.
+- `A2AAdapter.invoke`, `supportsMultiTurn` and `handleMessage` are final.
+- Unrecorded jobs, such as `/run` calls, no longer appear in job status queries
+  while in flight.
+- Secret names reject `.`, `..` and control characters.
 - SLF4J 2.0.20, Logback 1.6.5, A2A 1.4.0.Final, JDA 6.7.0, Telegram Bot API
   10.3.0; Surefire and Failsafe 3.6.0 in every module.
+
+### Fixed
+
+- DLFS DID URL references with encoded paths resolve.
+- Garbled dashes in the `remoteagent:request` description.
 
 ## [0.9.10] - 2026-10-10
 

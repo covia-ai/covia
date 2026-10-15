@@ -132,12 +132,12 @@ Engine (core state, adapters, assets, content, identity)
     ├── Content Storage   (lattice / file / memory)
     └── JobManager        (job lifecycle, per-user persistence, recovery)
     |
-Adapter Layer (32 built-in adapters plus 9 loadable modules — canonical table in venue/CLAUDE.md)
+Adapter Layer (34 built-in adapters plus 9 loadable modules — canonical table in venue/CLAUDE.md)
     ├── Data & state:  covia (lattice CRUD), asset, dlfs, vault, memory, secret, file, archive
-    ├── Execution:     langchain (LLMs), mcp, http, convex, jvm, schema, orchestrator, scheduler
+    ├── Execution:     langchain (LLMs), mcp, http, convex, crypto, jvm, schema, json, orchestrator, scheduler
     ├── Agents:        agent, llmagent, goaltree, skills, hitl (COG-16 h/ inbox), project (WBS tree; skills only so far)
-    ├── Federation:    grid (run/invoke/jobStatus), ucan (granting surface, COG-17)
-    ├── Admin:         user (registration), venue (runtime adapter/module lifecycle), oauth (connected accounts)
+    ├── Federation:    grid (run/invoke/jobStatus), a2a, remoteagent, ucan (granting surface, COG-17)
+    ├── Admin:         user (registration), auth, venue (runtime adapter/module lifecycle), oauth (connected accounts), connections
     └── Testing:       test (echo, delay, never, chat, pause, ...)
 ```
 

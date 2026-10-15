@@ -42,7 +42,8 @@ Resources are DID URL paths into a user's namespace:
 | `crud/delete` | Delete data |
 | `invoke` | Execute operations |
 | `agent/message` | Send messages to an agent |
-| `secret/decrypt` | Read a secret value |
+| `secret/use` | Use a secret in an operation without seeing it |
+| `secret/extract` | Reveal a secret value (direct owner call only) |
 | `ucan/delegate` | Sub-delegate capabilities |
 
 ## Commands

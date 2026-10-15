@@ -30,7 +30,7 @@ An honest snapshot, so newcomers know what to expect and contributors know where
 
 | Area | State | Notes |
 |------|-------|-------|
-| Core engine & adapters | 💪 Solid | Clean `AAdapter` abstraction, 32 built-in adapters plus 9 loadable modules, lattice-backed state |
+| Core engine & adapters | 💪 Solid | Clean `AAdapter` abstraction, 34 built-in adapters plus 9 loadable modules, lattice-backed state |
 | Test suite (engine) | 💪 Solid | 2,000+ tests, fast in-JVM parallel run |
 | REST API reference docs | 💪 Solid | Comprehensive, hand-written, examples throughout |
 | TypeScript SDK | 💪 Solid | Published to npm, typed, tested |

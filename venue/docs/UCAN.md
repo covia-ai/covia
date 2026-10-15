@@ -581,7 +581,9 @@ Venue:
 It requires `secret/extract` on `s/NAME`; `secret/use`, `secret/write`,
 `crud/read` and `invoke` do not imply this ability. An unrestricted owner
 retains their normal own-resource authority. Another principal's grant does
-not make extraction cross-user: names cannot be paths or DID URLs.
+not make extraction cross-user: names cannot be paths or DID URLs. The public
+principal never extracts, even under unrestricted public access: its store
+holds the operator's shared keys, which callers use under a grant.
 
 Extraction is restricted to a direct result-only call, for example
 `POST /api/v1/run` with `{"operation":"v/ops/secret/extract","input":{"name":"KEY"}}`.
@@ -619,7 +621,7 @@ references with `secret/use` instead.
 | `dlfs:delete` / `dlfs:deleteDrive` | `{ with: "dlfs/<drive>/<path>", can: "crud/delete" }` |
 | `secret:list` | `{ with: "s/", can: "crud/read" }` (names only) |
 | `secret:delete` | `{ with: "s/<name>", can: "crud/delete" }` |
-| `secret:extract` | `{ with: "s/<name>", can: "secret/extract" }`, plus the direct-owner restriction below |
+| `secret:extract` | `{ with: "s/<name>", can: "secret/extract" }`, plus the direct-owner restriction in *Secret extraction* above |
 | Any adapter sending a secret (`apiKey`, `bearerSecret`, `secretHeaders`, `{s/NAME}`, MCP `auth`, A2A auth) | `{ with: "<ownerDID>/s/<name>", can: "secret/use" }`, its `nb.url` checked against the request's destination |
 | `agent:create` | `{ with: "<ownerDID>/g/<id>", can: "agent/create" }` |
 | `agent:info` / `agent:context` (cross-user) | `{ with: "<ownerDID>/g/<id>", can: "crud/read" }` |
