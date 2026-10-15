@@ -222,7 +222,7 @@ The list below tracks engineering tasks. For the developer-experience and open-s
 
 ### P1 — High (security and reliability)
 
-- [x] Secure credential handling — per-user encrypted SecretStore, `secretFields` redaction, `s/NAME` resolution under `secret/use` (another principal's as `<did>/s/NAME`, grants bindable to a url); capability-gated `secret:extract` still pending.
+- [x] Secure credential handling — per-user encrypted SecretStore, `secretFields` redaction, `s/NAME` resolution under `secret/use` (another principal's as `<did>/s/NAME`, grants bindable to a url); capability-gated `secret:extract` restricted to direct owner calls (no agents, MCP tools or recorded jobs).
 
 - [ ] **Per-operation rate limiting** — request-rate and concurrent-job caps exist (see `venue/docs/CONFIG.md`); per-operation limits do not.
 

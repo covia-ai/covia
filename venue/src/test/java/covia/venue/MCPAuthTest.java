@@ -338,6 +338,10 @@ public class MCPAuthTest {
 		assertFalse(response.body().contains(token),
 			"the Authorization bearer must never enter the tool result");
 
+		var extraction = toolCall(baseUrl, token, "secret_extract", Maps.of(Fields.NAME, "MCP_TEST_SECRET"));
+		assertToolError(extraction);
+		assertFalse(extraction.toString().contains(plaintext));
+
 		var jobs = server.getEngine().jobs().getJobs(RequestContext.of(namedDid));
 		assertTrue(jobs.count() > before);
 		String persisted = jobs.toString();

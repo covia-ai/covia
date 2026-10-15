@@ -115,7 +115,7 @@ public class MCP extends McpServer {
 	/**
 	 * Registry of MCP-exposed tools: sanitised MCP tool name → op reference path
 	 * (e.g. {@code "v/ops/json/merge"}). Listing walks this map; tool calls
-	 * route through it via {@code engine.jobs().runOperation(opRef, ...)}.
+	 * route through it via {@code engine.jobs().runToolOperation(opRef, ...)}.
 	 *
 	 * <p>Built lazily on first access — MCP is constructed before
 	 * {@code addDemoAssets} populates adapter catalogs, so eager construction
@@ -509,7 +509,7 @@ public class MCP extends McpServer {
 					arguments = coerceJsonStringArgs(arguments, opRef);
 				}
 
-				ACell result = engine().jobs().runOperation(opRef, arguments, rctx)
+				ACell result = engine().jobs().runToolOperation(opRef, arguments, rctx)
 					.get(TOOL_CALL_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
 				// Scalar (non-map) results render as an MCP text result in the
 				// protocol layer (Convex 0.8.9) — no covia-side wrapping needed.
