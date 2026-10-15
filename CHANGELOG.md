@@ -35,10 +35,11 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   while in flight.
 - Secret names reject `.`, `..` and control characters.
 - SLF4J 2.0.20, Logback 1.6.5, A2A 1.4.0.Final, JDA 6.7.0, Telegram Bot API
-  10.3.0; Surefire and Failsafe 3.6.0 in every module.
+  10.3.0, commonmark 0.30.1; Surefire and Failsafe 3.6.0 in every module.
 
 ### Fixed
 
+- Shutdown no longer suspends a running agent or fails its queued tasks.
 - DLFS DID URL references with encoded paths resolve.
 - Garbled dashes in the `remoteagent:request` description.
 
