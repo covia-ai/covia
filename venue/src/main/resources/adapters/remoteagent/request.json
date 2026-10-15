@@ -14,7 +14,7 @@
         },
         "input": {
           "type": "object",
-          "description": "The request payload. MUST contain the actual instructions, data, or parameters the agent needs. NEVER pass an empty object {} \u00e2\u20ac\u201d the worker has nothing to act on. Use field 'task' for free-form instructions; add other fields the worker needs (data, paths, options). Example: {task: 'summarise w/notes/daily', format: 'bullet list'}."
+          "description": "The request payload. MUST contain the actual instructions, data, or parameters the agent needs. NEVER pass an empty object {} \u2014 the worker has nothing to act on. Use field 'task' for free-form instructions; add other fields the worker needs (data, paths, options). Example: {task: 'summarise w/notes/daily', format: 'bullet list'}."
         },
         "outputPath": {
           "type": "string",
@@ -30,7 +30,7 @@
         },
         "loads": {
           "type": "object",
-          "description": "Optional untrusted context to pre-load for the NEW session (the session tier of the context scope chain, #142): a map of key to entry spec, exactly as config.loads \u00e2\u20ac\u201d {budget?, label?} under a lattice path or skill path, {skill: true} to pre-load a skill with its tools, or a spec declaring its own data source under any key: {text}, {op, input?} for a read-only operation observed before each inference and appended only when changed, or {job}. Non-skill values remain tool-result data; a caller-supplied trusted flag cannot grant system authority. Only valid when this call creates the session \u00e2\u20ac\u201d an error if the session already exists."
+          "description": "Optional untrusted context to pre-load for the NEW session (the session tier of the context scope chain, #142): a map of key to entry spec, exactly as config.loads \u2014 {budget?, label?} under a lattice path or skill path, {skill: true} to pre-load a skill with its tools, or a spec declaring its own data source under any key: {text}, {op, input?} for a read-only operation observed before each inference and appended only when changed, or {job}. Non-skill values remain tool-result data; a caller-supplied trusted flag cannot grant system authority. Only valid when this call creates the session \u2014 an error if the session already exists."
         },
         "sessionId": {
           "type": "string",

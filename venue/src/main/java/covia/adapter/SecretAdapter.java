@@ -31,15 +31,9 @@ import covia.venue.VenueJob;
  */
 public class SecretAdapter extends AAdapter {
 
-	private static final AString K_VALUE = Strings.intern("value");
-	private static final AString K_STORED = Strings.intern("stored");
 	private static final AString K_NAMES = Strings.intern("names");
 	private static final AString K_PREFIX = Strings.intern("prefix");
-	private static final AString K_OFFSET = Strings.intern("offset");
-	private static final AString K_LIMIT = Strings.intern("limit");
-	private static final AString K_TOTAL = Strings.intern("total");
 	private static final AString K_NEXT_OFFSET = Strings.intern("nextOffset");
-	private static final AString K_DELETED = Strings.intern("deleted");
 	private static final AString EXTRACT = Strings.intern("extract");
 	public static final String AUTH_REQUIRED = "Secret operations require an authenticated caller";
 	public static final String NAME_REQUIRED = "name is required";
@@ -52,6 +46,7 @@ public class SecretAdapter extends AAdapter {
 	public static final String UNKNOWN_OPERATION = "Unknown secret operation: ";
 	public static final String EXTRACT_DIRECT_ONLY = "Secret extraction requires a direct owner run with no recorded job, agent or session context";
 	public static final String EXTRACT_DEFINITION_REQUIRED = "Secret extraction requires the published operation definition";
+	public static final String EXTRACT_NOT_PUBLIC = "The public principal's secrets are provisioned by the operator: they can be used under a grant, never extracted";
 	public static final String SECRET_UNAVAILABLE = "Secret is missing or cannot be decrypted";
 
 	@Override
@@ -109,7 +104,7 @@ public class SecretAdapter extends AAdapter {
 	private ACell handleSet(RequestContext ctx, ACell input) {
 		AString name = name(input);
 
-		AString value = RT.ensureString(RT.getIn(input, K_VALUE));
+		AString value = RT.ensureString(RT.getIn(input, Fields.VALUE));
 		if (value == null) throw new IllegalArgumentException(VALUE_REQUIRED);
 		ACell overwriteValue = RT.getIn(input, Fields.OVERWRITE);
 		if (overwriteValue != null && !(overwriteValue instanceof CVMBool)) {
@@ -118,7 +113,7 @@ public class SecretAdapter extends AAdapter {
 		boolean overwrite = CVMBool.TRUE.equals(overwriteValue);
 
 		storeSecret(engine, ctx, name, value, overwrite);
-		return Maps.of(Fields.NAME, name, K_STORED, CVMBool.TRUE);
+		return Maps.of(Fields.NAME, name, Fields.STORED, CVMBool.TRUE);
 	}
 
 	private ACell handleList(RequestContext ctx, ACell input) {
@@ -126,8 +121,8 @@ public class SecretAdapter extends AAdapter {
 		ACell filter = RT.getIn(input, K_PREFIX);
 		if (filter != null && !(filter instanceof AString)) throw new IllegalArgumentException(INVALID_PREFIX);
 		String prefix = filter == null ? "" : filter.toString();
-		long offset = pageNumber(input, K_OFFSET, 0, Long.MAX_VALUE);
-		long limit = pageNumber(input, K_LIMIT, 100, 1000);
+		long offset = pageNumber(input, Fields.OFFSET, 0, Long.MAX_VALUE);
+		long limit = pageNumber(input, Fields.LIMIT, 100, 1000);
 		if (limit == 0) throw new IllegalArgumentException(INVALID_PAGE);
 		User user = engine.getVenueState().users().get(ctx.getUserDID());
 		AVector<AString> names = user == null ? Vectors.empty() : user.secrets().list();
@@ -137,7 +132,7 @@ public class SecretAdapter extends AAdapter {
 			if (!name.toString().startsWith(prefix)) continue;
 			if (total++ >= offset && page.count() < limit) page = page.append(name);
 		}
-		AMap<AString, ACell> result = Maps.of(K_NAMES, page, K_TOTAL, total, K_OFFSET, offset);
+		AMap<AString, ACell> result = Maps.of(K_NAMES, page, Fields.TOTAL, total, Fields.OFFSET, offset);
 		if (offset < total && page.count() < total - offset) result = result.assoc(K_NEXT_OFFSET, CVMLong.create(offset + page.count()));
 		return result;
 	}
@@ -156,7 +151,7 @@ public class SecretAdapter extends AAdapter {
 		boolean deleted = user != null && user.secrets().deleteIfPresent(name);
 		if (deleted) engine.audit().event(Audit.SECRET_DELETE, Audit.K_DID, ctx.getCallerDID(),
 			Audit.K_NAME, name, Audit.K_TARGET, ctx.getUserDID());
-		return Maps.of(Fields.NAME, name, K_DELETED, CVMBool.create(deleted));
+		return Maps.of(Fields.NAME, name, Fields.DELETED, CVMBool.create(deleted));
 	}
 
 	private ACell handleExtract(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
@@ -165,6 +160,9 @@ public class SecretAdapter extends AAdapter {
 			if (!(ctx.getJob() instanceof VenueJob job) || !job.isDirectRun()
 					|| ctx.getAgentId() != null || ctx.getSessionId() != null || ctx.getTaskId() != null
 					|| !ctx.getCallerDID().equals(ctx.getUserDID())) throw new AuthException(EXTRACT_DIRECT_ONLY);
+			// Anonymous callers act as the public principal, whose store holds the
+			// operator's shared keys. Even unrestricted public access never reads them out.
+			if (engine.isPublicPrincipal(ctx.getUserDID())) throw new AuthException(EXTRACT_NOT_PUBLIC);
 			engine.requireResourceAccess(ctx, resource(name), Abilities.SECRET_EXTRACT);
 			// A caller-controlled output schema could put plaintext in validation logs.
 			// Use the adapter-owned definition, including its safe output schema.
@@ -178,7 +176,7 @@ public class SecretAdapter extends AAdapter {
 			} catch (RuntimeException e) { throw new IllegalStateException(SECRET_UNAVAILABLE); }
 			if (value == null) throw new IllegalStateException(SECRET_UNAVAILABLE);
 			engine.audit().event(Audit.SECRET_EXTRACT, Audit.K_DID, ctx.getCallerDID(), Audit.K_NAME, name, Audit.K_OUTCOME, Audit.OK);
-			return Maps.of(Fields.NAME, name, K_VALUE, value);
+			return Maps.of(Fields.NAME, name, Fields.VALUE, value);
 		} catch (RuntimeException e) {
 			engine.audit().event(Audit.SECRET_EXTRACT, Audit.K_DID, ctx.getCallerDID(), Audit.K_NAME, name, Audit.K_OUTCOME, Audit.FAILED);
 			throw e;

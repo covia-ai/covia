@@ -79,6 +79,8 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 	private static final AString K_COVIA_AGENT = Strings.intern("coviaAgent");
 	private static final AString K_VENUE = Strings.intern("venue");
 	private static final AString K_SUPPORTED_INTERFACES = Strings.intern("supportedInterfaces");
+	/** The numeric code of a JSON-RPC error object. */
+	private static final AString K_RPC_CODE = Strings.intern("code");
 	private static final AString K_SECURITY_SCHEMES = Strings.intern("securitySchemes");
 	private static final AString K_API_KEY_SCHEME = Strings.intern("apiKeySecurityScheme");
 	private static final AString K_HTTP_AUTH_SCHEME = Strings.intern("httpAuthSecurityScheme");
@@ -1011,14 +1013,14 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 			return RemoteJobs.cancellationHttpFailure(response.statusCode());
 		}
 		AMap<AString, ACell> reply = RT.ensureMap(JSON.parse(response.body()));
-		AMap<AString, ACell> error = RT.ensureMap(reply.get(Strings.intern("error")));
+		AMap<AString, ACell> error = RT.ensureMap(reply.get(Fields.ERROR));
 		if (error != null) {
 			// Error text/data may contain secrets; retain only the protocol code.
-			ACell code = error.get(Strings.intern("code"));
+			ACell code = error.get(K_RPC_CODE);
 			if (!(code instanceof convex.core.data.prim.CVMLong)) throw new IllegalArgumentException(INVALID_CANCELLATION_RESPONSE);
-			return Maps.of(RemoteJobs.OUTCOME, "rejected", Fields.ERROR_CODE, code);
+			return Maps.of(RemoteJobs.OUTCOME, RemoteJobs.OUTCOME_REJECTED, Fields.ERROR_CODE, code);
 		}
-		ACell raw = unwrapKind(reply.get(Strings.intern("result")), "task");
+		ACell raw = unwrapKind(reply.get(Fields.RESULT), "task");
 		Task task = JsonUtil.OBJECT_MAPPER.fromJson(JSON.print(raw).toString(), Task.class);
 		if (!remoteTaskId.equals(task.id())) throw new IllegalArgumentException(INVALID_CANCELLATION_RESPONSE);
 		if (task.status() == null || task.status().state() == null

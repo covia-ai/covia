@@ -171,6 +171,18 @@ class SecretAdapterTest {
 		assertThrows(CompletionException.class, () -> run("extract", Maps.of("name", "KEY", "owner", owner.getUserDID()), other).join());
 	}
 
+	@Test void publicPrincipalNeverExtractsEvenWithUnrestrictedAccess() {
+		AString publicDID = Strings.create(engine.getDIDString() + ":public");
+		engine.getVenueState().users().ensure(publicDID).secrets()
+			.store("SHARED_KEY", VALUE, SecretStore.deriveKey(engine.getKeyPair()));
+		// No caps is the unrestricted scope (auth.public.caps: "unrestricted"), and the
+		// public caller is its own owner, so only the public-principal rule refuses this.
+		RequestContext anonymous = RequestContext.of(publicDID);
+		assertDoesNotThrow(() -> engine.requireResourceAccess(anonymous, Strings.create("s/SHARED_KEY"), Abilities.SECRET_EXTRACT));
+		assertEquals(SecretAdapter.EXTRACT_NOT_PUBLIC,
+			failure(run("extract", Maps.of("name", "SHARED_KEY"), anonymous)).getMessage());
+	}
+
 	@Test void extractionCannotBeDelegatedEvenWithAValidOwnerGrant() {
 		AKeyPair other = AKeyPair.generate();
 		AString did = UCAN.toDIDKey(other.getAccountKey());

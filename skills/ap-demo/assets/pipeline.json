@@ -3,7 +3,7 @@
   "value": {
     "name": "AP Invoice Pipeline",
     "type": "orchestration",
-    "description": "Three-step accounts payable pipeline: Alice (extract) \u00e2\u2020\u2019 Bob (enrich) \u00e2\u2020\u2019 Carol (approve). Pass invoice_text as input. Returns extraction, enrichment, and approval decision.",
+    "description": "Three-step accounts payable pipeline: Alice (extract) \u2192 Bob (enrich) \u2192 Carol (approve). Pass invoice_text as input. Returns extraction, enrichment, and approval decision.",
     "operation": {
       "adapter": "orchestrator",
       "input": {

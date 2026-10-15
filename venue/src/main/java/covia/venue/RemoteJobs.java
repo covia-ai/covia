@@ -39,6 +39,12 @@ public final class RemoteJobs implements AutoCloseable {
 	public static final AString OUTCOME = Strings.intern("outcome");
 	public static final AString HTTP_STATUS = Strings.intern("httpStatus");
 	public static final AString CANCELLATION_ERROR_TYPE = Strings.intern("errorType");
+	/** Cancellation outcomes recorded under {@link #OUTCOME}. */
+	public static final AString OUTCOME_REQUESTED = Strings.intern("requested");
+	public static final AString OUTCOME_ACKNOWLEDGED = Strings.intern("acknowledged");
+	public static final AString OUTCOME_FINISHED = Strings.intern("finished");
+	public static final AString OUTCOME_REJECTED = Strings.intern("rejected");
+	public static final AString OUTCOME_UNKNOWN = Strings.intern("unknown");
 	private static final AString SUBMITTING = Strings.intern("submitting");
 	private static final AString HEALTHY = Strings.intern("healthy");
 	private static final AString RETRYING = Strings.intern("retrying");
@@ -175,7 +181,7 @@ public final class RemoteJobs implements AutoCloseable {
 			java.util.concurrent.Callable<AMap<AString, ACell>> request) {
 		covia.adapter.AAdapter.VIRTUAL_EXECUTOR.execute(() -> {
 			try {
-				recordCancellation(job, remoteId, Maps.of(OUTCOME, "requested"));
+				recordCancellation(job, remoteId, Maps.of(OUTCOME, OUTCOME_REQUESTED));
 			} finally {
 				AMap<AString, ACell> result;
 				try { result = request.call(); }
@@ -184,7 +190,7 @@ public final class RemoteJobs implements AutoCloseable {
 					result = cause instanceof covia.exception.ResponseException re
 						&& re.response instanceof java.net.http.HttpResponse<?> response
 						? cancellationHttpFailure(response.statusCode())
-						: Maps.of(OUTCOME, "unknown", CANCELLATION_ERROR_TYPE, cause.getClass().getSimpleName());
+						: Maps.of(OUTCOME, OUTCOME_UNKNOWN, CANCELLATION_ERROR_TYPE, cause.getClass().getSimpleName());
 					if (cause instanceof InterruptedException) Thread.currentThread().interrupt();
 				}
 				recordCancellation(job, remoteId, result);
@@ -205,8 +211,8 @@ public final class RemoteJobs implements AutoCloseable {
 			|| Status.PAUSED.equals(status) || Status.INPUT_REQUIRED.equals(status) || Status.AUTH_REQUIRED.equals(status))) {
 			throw new IllegalArgumentException(INVALID_CANCELLATION_STATUS);
 		}
-		String outcome = Status.CANCELLED.equals(status) ? "acknowledged"
-			: Job.isFinished(Maps.of(Fields.STATUS, status)) ? "finished" : "unknown";
+		AString outcome = Status.CANCELLED.equals(status) ? OUTCOME_ACKNOWLEDGED
+			: Job.isFinished(Maps.of(Fields.STATUS, status)) ? OUTCOME_FINISHED : OUTCOME_UNKNOWN;
 		return Maps.of(OUTCOME, outcome, REMOTE_STATUS, status);
 	}
 
@@ -219,7 +225,7 @@ public final class RemoteJobs implements AutoCloseable {
 	}
 
 	public static AMap<AString, ACell> cancellationHttpFailure(int code) {
-		return Maps.of(OUTCOME, code >= 400 && code < 500 && code != 408 ? "rejected" : "unknown",
+		return Maps.of(OUTCOME, code >= 400 && code < 500 && code != 408 ? OUTCOME_REJECTED : OUTCOME_UNKNOWN,
 			HTTP_STATUS, code);
 	}
 

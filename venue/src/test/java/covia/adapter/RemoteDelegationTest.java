@@ -113,10 +113,10 @@ class RemoteDelegationTest {
 			assertTrue(parent.future().isDone());
 			assertTrue(child.future().isDone());
 			assertTrue(peer.cancelReceived.await(5, TimeUnit.SECONDS));
-			assertEquals(Strings.create("requested"), convex.core.lang.RT.getIn(child.getData(), Fields.CANCELLATION, RemoteJobs.OUTCOME));
+			assertEquals(RemoteJobs.OUTCOME_REQUESTED, convex.core.lang.RT.getIn(child.getData(), Fields.CANCELLATION, RemoteJobs.OUTCOME));
 			peer.cancelResponse.countDown();
-			awaitOutcome(child, "acknowledged");
-			await(() -> Strings.create("acknowledged").equals(convex.core.lang.RT.getIn(
+			awaitOutcome(child, RemoteJobs.OUTCOME_ACKNOWLEDGED);
+			await(() -> RemoteJobs.OUTCOME_ACKNOWLEDGED.equals(convex.core.lang.RT.getIn(
 				peer.engine.jobs().getJobData(child.getID(), peer.engine.venueContext()), Fields.CANCELLATION, RemoteJobs.OUTCOME)));
 			child.completeWith(Strings.create("late result"));
 			child.cancel();
@@ -139,7 +139,7 @@ class RemoteDelegationTest {
 			peer.acceptance.countDown();
 			assertTrue(peer.cancelReceived.await(5, TimeUnit.SECONDS));
 			peer.cancelResponse.countDown();
-			awaitOutcome(job, "acknowledged");
+			awaitOutcome(job, RemoteJobs.OUTCOME_ACKNOWLEDGED);
 			assertEquals(Strings.create(ID), convex.core.lang.RT.getIn(job.getData(), Fields.CANCELLATION, RemoteJobs.REMOTE_ID));
 			assertEquals(Status.CANCELLED, job.getStatus());
 			assertEquals(1, peer.cancels.get());
@@ -160,7 +160,8 @@ class RemoteDelegationTest {
 				Job job = peer.submit();
 				await(() -> RemoteJobs.descriptor(job) != null && RemoteJobs.descriptor(job).get(RemoteJobs.REMOTE_ID) != null);
 				job.cancel(); peer.cancelResponse.countDown();
-				awaitOutcome(job, scenario == 0 ? "rejected" : scenario == 3 ? "finished" : "unknown");
+				awaitOutcome(job, scenario == 0 ? RemoteJobs.OUTCOME_REJECTED
+					: scenario == 3 ? RemoteJobs.OUTCOME_FINISHED : RemoteJobs.OUTCOME_UNKNOWN);
 				assertEquals(Status.CANCELLED, job.getStatus());
 				assertFalse(job.getData().toString().contains("private-token"));
 				assertEquals(1, peer.cancels.get());
@@ -174,7 +175,7 @@ class RemoteDelegationTest {
 			Job job = peer.submit();
 			await(() -> RemoteJobs.descriptor(job) != null && RemoteJobs.descriptor(job).get(RemoteJobs.REMOTE_ID) != null);
 			job.cancel(); peer.cancelResponse.countDown();
-			awaitOutcome(job, "rejected");
+			awaitOutcome(job, RemoteJobs.OUTCOME_REJECTED);
 			assertEquals(convex.core.data.prim.CVMLong.create(-32002), convex.core.lang.RT.getIn(job.getData(), Fields.CANCELLATION, Fields.ERROR_CODE));
 			assertFalse(job.getData().toString().contains("private-token"));
 		}
@@ -186,7 +187,7 @@ class RemoteDelegationTest {
 			Job job = peer.submit();
 			await(() -> RemoteJobs.descriptor(job) != null && RemoteJobs.descriptor(job).get(RemoteJobs.REMOTE_ID) != null);
 			job.cancel(); peer.cancelResponse.countDown();
-			awaitOutcome(job, "unknown");
+			awaitOutcome(job, RemoteJobs.OUTCOME_UNKNOWN);
 			assertNull(convex.core.lang.RT.getIn(job.getData(), Fields.CANCELLATION, RemoteJobs.REMOTE_STATUS));
 		}
 	}
@@ -213,7 +214,7 @@ class RemoteDelegationTest {
 			assertTrue(peer.engine.jobs().deleteJob(job.getID(), peer.engine.venueContext()));
 			CountDownLatch persisted = new CountDownLatch(1);
 			job.subscribe(j -> {
-				if (Strings.create("acknowledged").equals(convex.core.lang.RT.getIn(j.getData(), Fields.CANCELLATION, RemoteJobs.OUTCOME))) persisted.countDown();
+				if (RemoteJobs.OUTCOME_ACKNOWLEDGED.equals(convex.core.lang.RT.getIn(j.getData(), Fields.CANCELLATION, RemoteJobs.OUTCOME))) persisted.countDown();
 			});
 			peer.cancelResponse.countDown();
 			assertTrue(persisted.await(5, TimeUnit.SECONDS));
@@ -243,14 +244,14 @@ class RemoteDelegationTest {
 				recovered.cancel();
 				assertTrue(peer.cancelReceived.await(5, TimeUnit.SECONDS));
 				peer.cancelResponse.countDown();
-				awaitOutcome(recovered, "acknowledged");
+				awaitOutcome(recovered, RemoteJobs.OUTCOME_ACKNOWLEDGED);
 				assertEquals(1, peer.cancels.get());
 			} finally { second.close(); }
 		}
 	}
 
-	private static void awaitOutcome(Job job, String outcome) throws Exception {
-		await(() -> Strings.create(outcome).equals(convex.core.lang.RT.getIn(job.getData(), Fields.CANCELLATION, RemoteJobs.OUTCOME)));
+	private static void awaitOutcome(Job job, AString outcome) throws Exception {
+		await(() -> outcome.equals(convex.core.lang.RT.getIn(job.getData(), Fields.CANCELLATION, RemoteJobs.OUTCOME)));
 	}
 
 	private static final String ID = "00112233445566778899aabbccddeeff";
