@@ -50,6 +50,35 @@ class ConversationRouterTest {
 			assertNotEquals(stale, sessions.get("chat"));
 		} finally { engine.close(); }
 	}
+
+	@Test void agentsThatCannotTakeInputAreRefusedBeforeAnyJob() {
+		Engine engine = Engine.createTemp(Maps.empty());
+		try {
+			Engine.addDemoAssets(engine);
+			var owner = Strings.create("did:test:refusal");
+			engine.getVenueState().users().ensure(owner);
+			var state = engine.adapterWorkspace("messaging-test");
+			var router = new ConversationRouter(engine, new Spec("bot", owner.toString(), "resting", null, null),
+				new ConversationSessions(state, "refusal/sessions"));
+			assertEquals(AgentAdapter.DELIVERY_AGENT_MISSING.formatted("resting"), router.deliveryRefusal());
+			assertTrue(router.supportsSessionDelivery(), "a missing agent is refused by session delivery, not chatted to");
+			router.runOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "resting",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm")));
+			assertNull(router.deliveryRefusal());
+			assertTrue(router.supportsSessionDelivery());
+			router.runOperation("v/ops/agent/suspend", Maps.of(Fields.AGENT_ID, "resting"));
+			long jobs = engine.jobs().getJobs(router.context()).count();
+			assertEquals(AgentAdapter.DELIVERY_AGENT_SUSPENDED.formatted("resting"), router.deliveryRefusal());
+			assertTrue(router.supportsSessionDelivery());
+			assertEquals(jobs, engine.jobs().getJobs(router.context()).count(), "checking mints no Job");
+
+			var strangerDID = Strings.create("did:test:stranger");
+			engine.getVenueState().users().ensure(strangerDID);
+			var stranger = new ConversationRouter(engine, new Spec("bot", strangerDID.toString(), owner + "/g/resting", null, null),
+				new ConversationSessions(state, "refusal/stranger"));
+			assertNotNull(stranger.deliveryRefusal(), "another user's agent that does not admit the caller");
+		} finally { engine.close(); }
+	}
 	@Test void deliveryCommitsInputReceiptAndMappingTogetherAndRollsBackOnFailure() throws Exception {
 		Engine engine = Engine.createTemp(Maps.empty());
 		try {

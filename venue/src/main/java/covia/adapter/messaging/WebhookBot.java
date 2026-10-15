@@ -4,6 +4,8 @@ import java.util.Comparator;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Supplier;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -14,11 +16,13 @@ import convex.core.data.prim.CVMLong;
 import covia.adapter.webhook.WebhookInbox;
 import covia.api.Fields;
 
-/** A durable webhook binding. Uncertain STARTED work is reported, never blindly retried. */
+/** A durable webhook binding. Uncertain STARTED work is reported, never blindly retried;
+ * local session delivery is retried only within its bounded window ({@link DeliveryRetry}). */
 public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<S> {
 	public static final AString VERSION = Strings.intern("bindingVersion");
 	public static final String PROCESSING_FAILED = "Processing failed; inspect the receipt before any manual retry";
 	public static final String REPLY_FAILED = "Reply failed after session delivery";
+	public static final String RECONFIGURED = "Bot settings changed after this message was accepted";
 	private final AWebhookMessagingAdapter<S> adapter;
 	private final S spec;
 	private final Managed managed;
@@ -27,6 +31,8 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 	private final String binding;
 	private final AString version;
 	private final Set<String> queued = ConcurrentHashMap.newKeySet();
+	/** Receipts with a scheduled retry wake, so periodic recovery adds no second one. */
+	private final Set<String> waiting = ConcurrentHashMap.newKeySet();
 	private volatile boolean running;
 	private volatile String lastError;
 	private ScheduledFuture<?> wake;
@@ -97,6 +103,12 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 			synchronized (this) { if (running) inbox.complete(id); }
 		}
 	}
+	/** Receipt writes cannot recreate state after stop/delete; null once stopped. */
+	private AMap<AString, ACell> guarded(Supplier<AMap<AString, ACell>> write) {
+		synchronized (adapter.engine) {
+			synchronized (this) { return running && adapter.isActive() ? write.get() : null; }
+		}
+	}
 	private void recoverPending() {
 		try {
 			if (ready()) inbox.records(WebhookInbox.PENDING).stream()
@@ -110,25 +122,24 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 	private void queue(AMap<AString, ACell> receipt) {
 		if (!WebhookInbox.PENDING.equals(receipt.get(Fields.STATUS)) || !ready()) return;
 		var event = MessagingSettings.object(receipt.get(Fields.INPUT));
-		// Reconfiguration cannot execute old accepted work using a different handler
-		// or admission policy. Keep these pending receipts visible for the operator.
-		if (!version.equals(event.get(VERSION))) return;
 		String id = MessagingSettings.required(receipt, "id");
+		// Reconfiguration cannot execute old accepted work using a different handler
+		// or admission policy. Fail it once; the receipt stays visible for the operator.
+		if (!version.equals(event.get(VERSION))) {
+			if (guarded(() -> inbox.fail(id, RECONFIGURED, null, System.currentTimeMillis())) != null) lastError = RECONFIGURED;
+			return;
+		}
 		String conversation = MessagingSettings.required(event, "conversation");
 		if (!queued.add(id)) return;
+		var retryIn = new AtomicLong(-1);
 		router.enqueue(conversation, () -> {
 			if (spec.routesToAgent() && router.supportsSessionDelivery()) {
-				covia.grid.Job job;
-				synchronized (adapter.engine) {
-					synchronized (this) {
-						if (!ready()) return;
-						ACell message = Maps.of("text", MessagingSettings.required(event, "text"), "via", event.get(MessagingSettings.key("via")));
-						job = router.deliver(conversation, message, (draft, sid, jid) -> inbox.deliver(draft, id, sid, jid));
-					}
-				}
-				ConversationRouter.onResponse(job, response -> {
-					if (running && adapter.isActive()) adapter.sendReply(this, event, ConversationRouter.responseText(response));
-				}, failure -> { if (running) lastError = REPLY_FAILED; });
+				var result = adapter.deliveryRetry().attempt(inbox, id, this::guarded, new DeliveryRetry.Target() {
+					@Override public String refusal() { return router.deliveryRefusal(); }
+					@Override public void deliver() { deliverSession(id, event, conversation); }
+				});
+				if (result.outcome() == DeliveryRetry.Outcome.WAITING) retryIn.set(result.waitMillis());
+				if (result.outcome() == DeliveryRetry.Outcome.FAILED) lastError = result.reason();
 				return;
 			}
 			if (!claim(id)) return;
@@ -144,13 +155,40 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 		}).whenComplete((ignored, failure) -> {
 			queued.remove(id);
 			if (failure != null) lastError = PROCESSING_FAILED;
+			// Wake only after leaving the queued set, so the retry cannot be dropped as a duplicate.
+			if (retryIn.get() >= 0) wakeAfter(id, retryIn.get());
 		});
+	}
+	/** One atomic handoff: input, session mapping and COMPLETE receipt commit together. */
+	private void deliverSession(String id, AMap<AString, ACell> event, String conversation) {
+		ACell message = Maps.of("text", MessagingSettings.required(event, "text"), "via", event.get(MessagingSettings.key("via")));
+		covia.grid.Job job;
+		synchronized (adapter.engine) {
+			synchronized (this) {
+				if (!ready()) throw new IllegalStateException(AWebhookMessagingAdapter.UNAVAILABLE);
+				job = router.deliver(conversation, message, (draft, sid, jid) -> inbox.deliver(draft, id, sid, jid));
+			}
+		}
+		ConversationRouter.onResponse(job, response -> {
+			if (running && adapter.isActive()) adapter.sendReply(this, event, ConversationRouter.responseText(response));
+		}, failure -> { if (running) lastError = REPLY_FAILED; });
+	}
+	private void wakeAfter(String id, long millis) {
+		if (!running || !waiting.add(id)) return;
+		ScheduledFuture<?> scheduled = adapter.scheduleRetry(() -> {
+			waiting.remove(id);
+			try {
+				AMap<AString, ACell> receipt = inbox.get(id);
+				if (receipt != null) queue(receipt);
+			} catch (RuntimeException e) { lastError = PROCESSING_FAILED; }
+		}, millis);
+		if (scheduled == null) waiting.remove(id);
 	}
 	@Override public AMap<AString, ACell> status() {
 		return Maps.of("name", spec.name(), "user", spec.userDID(adapter.engine),
 			"managed", managed == Managed.CONFIG ? "config" : "runtime", "state", ready() ? "RUNNING" : "PENDING",
 			"webhookPath", "/webhooks/" + adapter.getName() + "/" + binding,
 			"pending", inbox.records(WebhookInbox.PENDING).size(), "started", inbox.records(WebhookInbox.STARTED).size(),
-			"queued", queued.size(), "error", lastError);
+			"failed", inbox.records(WebhookInbox.FAILED).size(), "queued", queued.size(), "error", lastError);
 	}
 }

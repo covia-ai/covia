@@ -58,6 +58,7 @@ final class FakeTelegramServer implements AutoCloseable {
 	final Map<String, byte[]> files = new ConcurrentHashMap<>();
 	final java.util.Set<String> chunkedFiles = ConcurrentHashMap.newKeySet();
 	final AtomicInteger downloads = new AtomicInteger();
+	final Map<String, AtomicInteger> getFileCalls = new ConcurrentHashMap<>();
 	final java.util.Set<Long> failSendChats = ConcurrentHashMap.newKeySet();
 	final AtomicInteger failedSends = new AtomicInteger();
 	final Map<String, Long> declaredSizes = new ConcurrentHashMap<>();
@@ -246,6 +247,7 @@ final class FakeTelegramServer implements AutoCloseable {
 				}
 				case "getFile" -> {
 					String id = form.get("file_id");
+					getFileCalls.computeIfAbsent(id, k -> new AtomicInteger()).incrementAndGet();
 					byte[] bytes = files.get(id);
 					if (bytes == null) reply(ex, 400, error(400, "file not found"));
 					else reply(ex, 200, ok(Map.of("file_id", id, "file_unique_id", id + "u",

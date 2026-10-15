@@ -314,6 +314,25 @@ public class AgentAdapter extends AAdapter {
 		return agent != null && !externalAgents().isExternal(agent);
 	}
 
+	public static final String DELIVERY_AGENT_MISSING = "Agent '%s' was not found or is terminated";
+	public static final String DELIVERY_AGENT_SUSPENDED = "Agent '%s' is suspended; resume it with agent:resume";
+
+	/** Null when the agent can take a delivered message now; otherwise why it cannot
+	 * (missing, terminated, suspended, or not admitting this caller). Checking first
+	 * keeps a refused delivery from minting a failed chat Job per attempt. */
+	public String sessionDeliveryRefusal(RequestContext ctx, AString ref) {
+		AgentTarget target;
+		try {
+			target = resolveAgentTarget(ctx, ref, Abilities.AGENT_MESSAGE, false);
+		} catch (covia.exception.AuthException | IllegalArgumentException refused) {
+			return describeFailure(refused);
+		}
+		AgentState agent = getAgent(target.ownerDID(), target.agentId());
+		if (agent == null) return DELIVERY_AGENT_MISSING.formatted(target.agentId());
+		if (AgentState.SUSPENDED.equals(agent.getStatus())) return DELIVERY_AGENT_SUSPENDED.formatted(target.agentId());
+		return null;
+	}
+
 	/** Admit a local session delivery through normal Job dispatch, then durably
 	 * publish before waking. Flush failure must not fail the already accepted Job:
 	 * its pending input remains recoverable, and a duplicate retry can flush/wake it. */

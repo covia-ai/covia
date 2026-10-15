@@ -83,9 +83,18 @@ public final class ConversationRouter {
 		return RT.getIn(result, Fields.RESPONSE);
 	}
 
+	/** Whether this binding's agent takes input by atomic session delivery: a local
+	 * agent, or one that cannot take input at all, whose delivery is then refused
+	 * once. False for an external agent facade, which keeps its claimed-chat protocol. */
 	public boolean supportsSessionDelivery() {
 		return engine.getAdapter("agent") instanceof AgentAdapter adapter
-			&& adapter.supportsSessionDelivery(context(), Strings.create(spec.agent()));
+			&& (deliveryRefusal() != null || adapter.supportsSessionDelivery(context(), Strings.create(spec.agent())));
+	}
+
+	/** Null when this binding's agent can take a delivered message now; otherwise why not. */
+	public String deliveryRefusal() {
+		return engine.getAdapter("agent") instanceof AgentAdapter adapter
+			? adapter.sessionDeliveryRefusal(context(), Strings.create(spec.agent())) : null;
 	}
 
 	/** Admit input without waiting for a response. The participant and session map
