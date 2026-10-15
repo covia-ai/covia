@@ -255,6 +255,22 @@ class RemoteAgentAdapterTest {
 		} finally { engine.close(); }
 	}
 
+	@Test void localCancellationHasReachedTheChildWhenItReturns() throws Exception {
+		Engine engine = engine();
+		try {
+			RequestContext ctx = engine.venueContext();
+			engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "waiting",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/never")), ctx).awaitResult(5000);
+			Job mirror = engine.jobs().invokeOperation(OP, Maps.of(Fields.AGENT_ID, "waiting", Fields.INPUT, Maps.of("task", "wait")), ctx);
+			await(() -> RemoteJobs.descriptor(mirror) != null && RemoteJobs.descriptor(mirror).get(RemoteJobs.REMOTE_STATUS) != null);
+			Job child = engine.jobs().getJob(Job.parseID(RemoteJobs.descriptor(mirror).get(RemoteJobs.REMOTE_ID)), ctx);
+			mirror.cancel();
+			assertEquals(Status.CANCELLED, child.getStatus());
+			assertTrue(child.future().isDone());
+			assertEquals(Status.CANCELLED, mirror.getStatus());
+		} finally { engine.close(); }
+	}
+
 	private static void await(BooleanSupplier condition) throws Exception {
 		long end = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
 		while (!condition.getAsBoolean() && System.nanoTime() < end) Thread.sleep(10);

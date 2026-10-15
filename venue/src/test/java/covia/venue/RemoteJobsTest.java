@@ -20,6 +20,25 @@ import covia.grid.Job;
 import covia.grid.Status;
 
 class RemoteJobsTest {
+	@Test void transportFailureRetainsOnlySafeEvidence() throws Exception {
+		Engine engine = Engine.createTemp(null);
+		try (RemoteJobs observer = new RemoteJobs(engine, 1, 2)) {
+			Job job = job();
+			CountDownLatch recorded = new CountDownLatch(1);
+			job.subscribe(j -> {
+				if (Strings.create("unknown").equals(convex.core.lang.RT.getIn(j.getData(), Fields.CANCELLATION, RemoteJobs.OUTCOME))) recorded.countDown();
+			});
+			job.setCancelHook(() -> observer.attemptCancellation(job, "remote", () -> {
+				throw new java.io.IOException("private-token at secret URL");
+			}));
+			job.cancel();
+			assertTrue(recorded.await(5, TimeUnit.SECONDS));
+			assertEquals(Strings.create("IOException"), convex.core.lang.RT.getIn(job.getData(), Fields.CANCELLATION, RemoteJobs.CANCELLATION_ERROR_TYPE));
+			assertFalse(job.getData().toString().contains("private-token"));
+			assertEquals(Status.CANCELLED, job.getStatus());
+		} finally { engine.close(); }
+	}
+
 	private static Job job() {
 		return Job.create(Maps.of(Fields.ID, Blob.fromHex("00112233445566778899aabbccddeeff"), Fields.STATUS, Status.STARTED));
 	}

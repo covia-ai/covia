@@ -93,12 +93,16 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 	public static Hash SEND_OPERATION;
 
 	private final HttpClient httpClient;
+	public static final String INVALID_CANCELLATION_RESPONSE = "Invalid remote cancellation response";
 
 	/** The remote Task each live mirror Job is bound to, for cancellation and continuation. */
 	private record RemoteLink(A2AAdapter adapter, Job job, String rpcUrl, String remoteTaskId,
 		RequestAuth auth) implements RemoteInteraction {
 		@Override public void deliver(AMap<AString, ACell> message) { adapter.deliver(job, this, message); }
-		@Override public void cancel() { adapter.fireAndForgetCancel(rpcUrl, remoteTaskId, auth); }
+		@Override public void cancel() {
+			adapter.engine.remoteJobs().attemptCancellation(job, remoteTaskId,
+				() -> adapter.cancelRemote(rpcUrl, remoteTaskId, auth));
+		}
 	}
 
 	public A2AAdapter() {
@@ -1000,14 +1004,28 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		});
 	}
 
-	private void fireAndForgetCancel(String rpcUrl, String remoteTaskId, RequestAuth auth) {
-		try {
-			Map<String, Object> params = Map.of("id", remoteTaskId);
-			Map<String, Object> envelope = rpcEnvelope(A2AMethods.CANCEL_TASK_METHOD, params);
-			httpClient.sendAsync(postEnvelope(rpcUrl, envelope, auth), HttpResponse.BodyHandlers.discarding());
-		} catch (Exception e) {
-			log.warn("Best-effort remote cancel failed for {}: {}", remoteTaskId, e.getMessage());
+	private AMap<AString, ACell> cancelRemote(String rpcUrl, String remoteTaskId, RequestAuth auth) throws Exception {
+		Map<String, Object> envelope = rpcEnvelope(A2AMethods.CANCEL_TASK_METHOD, Map.of("id", remoteTaskId));
+		HttpResponse<String> response = httpClient.send(postEnvelope(rpcUrl, envelope, auth), HttpResponse.BodyHandlers.ofString());
+		if (response.statusCode() < 200 || response.statusCode() >= 300) {
+			return RemoteJobs.cancellationHttpFailure(response.statusCode());
 		}
+		AMap<AString, ACell> reply = RT.ensureMap(JSON.parse(response.body()));
+		AMap<AString, ACell> error = RT.ensureMap(reply.get(Strings.intern("error")));
+		if (error != null) {
+			// Error text/data may contain secrets; retain only the protocol code.
+			ACell code = error.get(Strings.intern("code"));
+			if (!(code instanceof convex.core.data.prim.CVMLong)) throw new IllegalArgumentException(INVALID_CANCELLATION_RESPONSE);
+			return Maps.of(RemoteJobs.OUTCOME, "rejected", Fields.ERROR_CODE, code);
+		}
+		ACell raw = unwrapKind(reply.get(Strings.intern("result")), "task");
+		Task task = JsonUtil.OBJECT_MAPPER.fromJson(JSON.print(raw).toString(), Task.class);
+		if (!remoteTaskId.equals(task.id())) throw new IllegalArgumentException(INVALID_CANCELLATION_RESPONSE);
+		if (task.status() == null || task.status().state() == null
+				|| task.status().state() == org.a2aproject.sdk.spec.TaskState.TASK_STATE_UNSPECIFIED) {
+			throw new IllegalArgumentException(INVALID_CANCELLATION_RESPONSE);
+		}
+		return RemoteJobs.cancellationResult(A2ACodec.fromTaskState(task.status().state()));
 	}
 
 	// ==================== envelope + HTTP helpers ====================

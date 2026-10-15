@@ -504,6 +504,27 @@ public class Job {
 	}
 
 	/**
+	 * Record best-effort backend cancellation evidence after local cancellation.
+	 * Only this diagnostic field can change; the terminal result stays fixed and
+	 * neither cancellation nor terminal cleanup is run again.
+	 * @param details adapter cancellation evidence, without credentials
+	 */
+	public void recordCancellation(AMap<AString, ACell> details) {
+		java.util.Objects.requireNonNull(details);
+		while (true) {
+			State before = state.get();
+			AMap<AString, ACell> current = before.data();
+			if (!Status.CANCELLED.equals(current.get(Fields.STATUS))) return;
+			if (details.equals(current.get(Fields.CANCELLATION))) return;
+			AMap<AString, ACell> next = processUpdate(current.assoc(Fields.CANCELLATION, details)).assoc(PREV, current);
+			if (!state.compareAndSet(before, new State(next, before.failureCause()))) continue;
+			try { onUpdate(next); }
+			finally { notifyListeners(); }
+			return;
+		}
+	}
+
+	/**
 	 * Register a pause hook invoked by {@link #pause()}. Adapters that can
 	 * genuinely suspend work register one when they start executing; the hook
 	 * performs the suspension. Registering a hook is what makes a job pausable.

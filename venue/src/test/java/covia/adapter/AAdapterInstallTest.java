@@ -161,6 +161,7 @@ public class AAdapterInstallTest {
 			(ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(AAdapter.class);
 		ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> captured =
 			new ch.qos.logback.core.read.ListAppender<>();
+		captured.list = new java.util.concurrent.CopyOnWriteArrayList<>();
 		captured.start();
 		log.addAppender(captured);
 		// The test logback config keeps the root at ERROR; the adapter logger
@@ -207,6 +208,7 @@ public class AAdapterInstallTest {
 		java.util.List<String> out = new java.util.ArrayList<>();
 		for (ch.qos.logback.classic.spi.ILoggingEvent e : captured.list) {
 			if (e.getLevel() == ch.qos.logback.classic.Level.WARN
+					&& e.getFormattedMessage().contains("v/ops/probe/")
 					&& e.getFormattedMessage().contains("rather than an object")) {
 				out.add(e.getFormattedMessage());
 			}

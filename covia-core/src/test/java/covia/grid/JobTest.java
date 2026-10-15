@@ -26,6 +26,35 @@ import covia.exception.JobPollingFailedException;
 
 public class JobTest {
 
+	@Test void cancellationEvidenceDoesNotReopenOrFinishTheJobAgain() {
+		var finishes = new java.util.concurrent.atomic.AtomicInteger();
+		var hooks = new java.util.concurrent.atomic.AtomicInteger();
+		var notifications = new java.util.concurrent.atomic.AtomicInteger();
+		Job job = new Job(Maps.of(Fields.STATUS, Status.STARTED)) {
+			@Override public void onFinish(AMap<AString, ACell> data) { finishes.incrementAndGet(); }
+		};
+		AMap<AString, ACell> evidence = Maps.of("outcome", "acknowledged");
+		job.recordCancellation(evidence);
+		assertNull(job.getData().get(Fields.CANCELLATION));
+		job.setCancelHook(hooks::incrementAndGet);
+		job.subscribe(j -> notifications.incrementAndGet());
+		job.cancel("stop");
+		var future = job.future();
+		Throwable failure = assertThrows(Exception.class, future::join);
+		job.recordCancellation(evidence);
+		job.recordCancellation(evidence);
+		job.completeWith(Strings.create("late result"));
+		job.fail("late failure");
+		assertEquals(Status.CANCELLED, job.getStatus());
+		assertEquals(Strings.create("stop"), job.getData().get(Fields.ERROR));
+		assertNull(job.getData().get(Fields.OUTPUT));
+		assertEquals(evidence, job.getData().get(Fields.CANCELLATION));
+		assertSame(failure.getCause(), assertThrows(Exception.class, future::join).getCause());
+		assertEquals(1, finishes.get());
+		assertEquals(1, hooks.get());
+		assertEquals(2, notifications.get());
+	}
+
 	@Test
 	public void optionalProducerCodeSurvivesSnapshotAndExceptionWithoutClassifyingOtherFailures() {
 		String code = "example:retry-later";

@@ -100,6 +100,7 @@ public class RemoteAgentAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 				try {
 					observer.accepted(job, accepted.getID().toHexString());
 					bind(job, proxy, accepted.getID());
+					if (job.isFinished()) return;
 					apply(job, accepted.getData());
 				} catch (RuntimeException | Error failure) { observer.submissionUnknown(job, failure); }
 				finally {
@@ -121,10 +122,12 @@ public class RemoteAgentAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 				engine.remoteJobs().received(job, () -> { if (!job.isFinished()) watch(job, proxy, id); });
 			}
 			@Override public void cancel() {
-				VIRTUAL_EXECUTOR.execute(() -> {
-					try { proxy.cancel(id); }
-					catch (RuntimeException e) { /* Local cancellation does not confirm remote cessation. */ }
-				});
+				if (LOCAL_PROTOCOL.equals(RemoteJobs.descriptor(job).get(RemoteJobs.PROTOCOL))) {
+					proxy.cancel(id); // In-process child: propagate before returning.
+					return;
+				}
+				engine.remoteJobs().attemptCancellation(job, id.toHexString(),
+					() -> RemoteJobs.cancellationResult(id, proxy.cancel(id)));
 			}
 		});
 	}

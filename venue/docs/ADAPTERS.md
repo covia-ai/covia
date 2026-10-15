@@ -61,7 +61,12 @@ consumers must handle missing and unfamiliar codes as generic failures. See
 and the agent adapter's `agent:unknown-session` example.
 
 Cancellation hooks run after cancellation commits, including when registered
-after cancellation, and each registration is claimed once. The default bridge
+late, and each registration is claimed once. Hooks must signal promptly:
+propagate to owned local children directly,
+and dispatch network cancellation asynchronously with
+`RemoteJobs.attemptCancellation`. The adapter interprets its backend response;
+the helper retains sanitised evidence without changing the local terminal result.
+See [JOBS.md](JOBS.md#remote-delegation). The default bridge
 cancels the returned `CompletableFuture`; this alone does not interrupt blocking
 work. Adapters needing interruption must retain the worker's `Future`, register
 their own cancellation hook, and use `completeFromJobFuture` for completion.
