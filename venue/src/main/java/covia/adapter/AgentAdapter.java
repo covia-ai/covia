@@ -3865,6 +3865,15 @@ public class AgentAdapter extends AAdapter {
 				Fields.TASK_RESULTS, allTaskResults));
 		} catch (Exception e) {
 			String failure = describeFailure(e);
+			if (engine.isClosing()) {
+				// Shutdown, typically the store closing under this loop: as at the
+				// isClosing breaks above, tasks and chats stay queued durably for the
+				// next boot. Suspending the agent or failing its tasks here would be
+				// wrong, and would write to a store that may already be closed.
+				run.end(AgentState.SLEEPING);
+				completion.completeExceptionally(new RuntimeException(failure, e));
+				return;
+			}
 			suspendOnError(ownerDID, agentId, e);
 			failAllPendingForAgent(ownerDID, agentId, failure);
 			run.end(AgentState.SUSPENDED);
@@ -3875,10 +3884,14 @@ public class AgentAdapter extends AAdapter {
 			// only clears the slot if it still holds OUR completion — a
 			// concurrent wakeAgent that already took over won't be disturbed.
 			runningLoops.remove(key, completion);
-			AgentState agent = getAgent(ownerDID, agentId);
-			if (agent != null && AgentState.SLEEPING.equals(agent.getStatus())
-					&& hasWork(agent)) {
-				wakeAgent(ownerDID, agentId, false);
+			// No re-check during shutdown: wakeAgent refuses new loops, and the
+			// store may already be closed.
+			if (!engine.isClosing()) {
+				AgentState agent = getAgent(ownerDID, agentId);
+				if (agent != null && AgentState.SLEEPING.equals(agent.getStatus())
+						&& hasWork(agent)) {
+					wakeAgent(ownerDID, agentId, false);
+				}
 			}
 		}
 	}
