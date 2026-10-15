@@ -6,7 +6,7 @@ import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.lattice.ALatticeComponent;
-import convex.lattice.cursor.ALatticeCursor;
+import convex.lattice.cursor.AForkableCursor;
 import covia.exception.AuthException;
 import covia.lattice.Covia;
 import convex.core.lang.RT;
@@ -48,8 +48,9 @@ public class Users extends ALatticeComponent<AMap<AString, ACell>> {
 		return current != null ? current : Maps.empty();
 	}
 
-	Users(ALatticeComponent<?> parent, ALatticeCursor<AMap<AString, ACell>> cursor) {
-		super(parent, cursor);
+	Users(ALatticeComponent<?> parent, AForkableCursor<AMap<AString, ACell>> cursor) {
+		super(cursor);
+		setContext(parent.getContext());
 	}
 
 	/**
@@ -64,10 +65,11 @@ public class Users extends ALatticeComponent<AMap<AString, ACell>> {
 	}
 
 	public User get(AString did) {
-		ALatticeCursor<ACell> userCursor = cursor.path(did);
+		AForkableCursor<ACell> userCursor = cursor.path(did);
 		ACell current = userCursor.get();
 		if (current == null || RT.getIn(current, Covia.K_DELETED) != null) return null;
-		return new User(this, new AccountCursor(userCursor), did);
+		return new User(this, convex.lattice.cursor.StampedCursor.create(new AccountCursor(userCursor),
+			Covia.USER_RECORD, getContext()::currentTimestamp), did);
 	}
 
 	/**
@@ -83,12 +85,13 @@ public class Users extends ALatticeComponent<AMap<AString, ACell>> {
 	}
 
 	public User ensure(AString did) {
-		ALatticeCursor<ACell> userCursor = cursor.path(did);
+		AForkableCursor<ACell> userCursor = cursor.path(did);
 		// Atomic init: read-then-set is racy under concurrent first-touches —
 		// a late reader could observe null and set(zero), clobbering an earlier
 		// writer's committed user data (jobs, secrets, agents).
 		userCursor.updateAndGet(Users::initialise);
-		return new User(this, new AccountCursor(userCursor), did);
+		return new User(this, convex.lattice.cursor.StampedCursor.create(new AccountCursor(userCursor),
+			Covia.USER_RECORD, getContext()::currentTimestamp), did);
 	}
 
 	/**
@@ -103,7 +106,7 @@ public class Users extends ALatticeComponent<AMap<AString, ACell>> {
 	 * @return true when a new registration was created
 	 */
 	public boolean create(AString did) {
-		ALatticeCursor<ACell> userCursor = cursor.path(did);
+		AForkableCursor<ACell> userCursor = cursor.path(did);
 		ACell fresh = Maps.of(GENERATION, Strings.create(java.util.UUID.randomUUID().toString()));
 		ACell previous = userCursor.getAndUpdate(
 			current -> {

@@ -994,11 +994,10 @@ carries no independent merge semantics — the merge happens only at the `:value
 root. Writes are stamped on the way up by a
 **stamp-on-write boundary** that sources its timestamp from the write clock on the
 `LatticeContext` (the convex `StampingLattice` / `StampedCursor`). The `w`/`o`/`h`
-user namespaces are `WrapperLattice` regions, stored as a `{updated, data}`
-container whose `data` is the caller-visible value. The container is a **view
-boundary in the lattice**, not a path convention: navigating `w/foo` crosses it
-and reads or replaces `w.data.foo`. Changed writes preserve the physical
-container and ratchet `updated` from the same write clock, using the ordinary
+user namespaces use `Covia.WORKSPACE_RECORD`, a standard `StampingLattice` over
+a `{updated, data}` container. `WorkspaceRoot` explicitly composes the stamped
+cursor and its `data` child: navigating `w/foo` reads or replaces `w.data.foo`.
+Changed writes preserve the physical container and ratchet `updated` from the same write clock, using the ordinary
 stamp-on-write cursor machinery. Callers — and the code above the lattice —
 never address `data`.
 
@@ -1173,17 +1172,18 @@ multi-writer lattice joins.
 | `CASLattice<K,V>` | Content-addressed union merge |
 | `JSONLattice` | Structural navigation only — builds a container per key shape; recursive `path`; `merge` throws (merge belongs to the enclosing node, never per-key) |
 | `LWWLattice<V>` | **Whole-value** last-writer-wins merge layer by extracted timestamp (non-recursive; tie → own); delegates navigation to an inner lattice |
-| `StampingLattice<V>` | Stamp-on-write boundary — inserts a `StampedCursor` that re-stamps a value on write, sourcing the timestamp from `LatticeContext`; delegates merge and navigation to an inner lattice |
+| `StampingLattice<V>` | Declares a stamp rule and inner shape; components explicitly bind it to `StampedCursor` with their context clock |
 | `FunctionLattice<V>` | Custom merge function (e.g. first-writer-wins) |
-| `WrapperLattice` (Covia) | View boundary — presents a `{updated, data}` container as its `data`, stamping `updated` on write; navigation and merge are the inner JSON region's |
-| `LatticeContext` | Live application policy for clock, signing and owner verification; installed once at the hosted root and resolved per logical write |
-| `ACursor<V>` | Mutable reference with atomic get/set/update/fork/sync |
+| `LatticeContext` | Component policy for clock, signing and owner verification; resolved explicitly when constructing children or authoring cursors |
+| `ACursor<V>` | Mutable reference with atomic get/set/update |
+| `AForkableCursor<V>` | Cursor with fork/sync boundaries; domain components supply merge and publication policy |
+| `TransactionalComponent<V,C>` | Rebinds a domain component to a private draft; commits atomically with conflict retries and discards failed attempts |
 
 ### Covia Definitions
 
 The `covia.lattice.Covia` class defines the complete lattice hierarchy using
-standard convex-core generics plus one narrow Covia view component for the
-legacy-compatible workspace envelope:
+standard convex-core generics. `WorkspaceRoot` supplies the caller-visible view
+of the existing workspace envelope without a custom lattice type:
 
 | Definition | Type | Purpose |
 |------------|------|---------|
@@ -1196,6 +1196,22 @@ legacy-compatible workspace envelope:
 | `j` / each Job | `IndexLattice` → `StampingLattice` → `JSONLattice` | Existing Job map shape; deep writes such as `t/` refresh `updated` |
 | `g` / each agent | `MapLattice` → `StampingLattice` → `JSONLattice` | Existing agent map shape; deep writes such as `n/` and `c/` refresh `ts` |
 | `s` / `a` | `JSONLattice` | Plain structural navigation |
-| `w` / `o` / `h` | `WrapperLattice` | Existing `{updated, data}` container presented as its `data` |
+| `w` / `o` / `h` | `StampingLattice` → `StringKeyedLattice` → `JSONLattice` | `Covia.WORKSPACE_RECORD`: existing `{updated, data}` container exposed through `WorkspaceRoot` |
 | `:grid → :meta` | `CASLattice` | Shared content-addressed metadata (multi-writer union) |
 | `:dlfs` | `OwnerLattice` → `MapLattice(DLFSLattice)` | Per-user signed drives, per-file rsync-like merge |
+
+### Component and publication boundaries
+
+`CoviaApplication` adopts the host's live root cursor. `VenueState` explicitly
+composes immediate signing and stamping, so all Engine consumers observe writes
+through the same authoritative state. `RootComponent` owns store durability.
+Convex's deferred `SignedComponent` is an alternative publication model with
+private working state; adopting it would require coordinated checkpointing and
+incoming-merge routing, rather than replacing the live signing cursor directly.
+
+Bootstrap and runtime catalog updates use `TransactionalComponent` over the
+narrow `w/global` workspace. Convex supplies draft isolation, atomic commit and
+conflict retries; Covia no longer stages and replays writes itself. The callback
+may run again after a conflict, so adapter introspection must remain free of
+external side effects. DLFS creation, listing and deletion use `DLFSDrives`,
+including its deletion tombstones and shared drive-name validation.

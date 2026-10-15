@@ -1,7 +1,6 @@
 package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -19,16 +18,16 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.lattice.LatticeContext;
-import convex.lattice.cursor.ALatticeCursor;
+import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.Cursors;
 import covia.api.Fields;
 import covia.lattice.Covia;
 import covia.lattice.Namespace;
-import covia.lattice.WrapperLattice;
+import covia.lattice.WorkspaceRoot;
 
 /**
  * The {@code w}/{@code o}/{@code h} namespaces are stored as a
- * {@code {updated, data}} container presented through a {@link WrapperLattice}
+ * {@code {updated, data}} container presented through a {@link Covia#WORKSPACE_RECORD}
  * view boundary. Deletion durability comes from the venue-value whole-value
  * LWW; the wrapper owns navigation and write-time metadata only. These tests
  * lock in that the wrapper is
@@ -133,9 +132,13 @@ public class WorkspaceWrapperTest {
 	@Test
 	@SuppressWarnings("unchecked")
 	public void testWrapperPreservesMetadataAndRatchetsContextClock() {
-		var container = Cursors.createLattice(WrapperLattice.INSTANCE);
-		container.setContext(LatticeContext.create(CVMLong.create(200), null));
-		ALatticeCursor<ACell> data = container.path(WrapperLattice.VIEW);
+		var userRoot = Cursors.root(Covia.USER_RECORD);
+		var policy = new java.util.concurrent.atomic.AtomicLong(200);
+		LatticeContext context = new LatticeContext() {
+			@Override public CVMLong currentTimestamp() { return CVMLong.create(policy.get()); }
+		};
+		AForkableCursor<ACell> data = new WorkspaceRoot(userRoot, context, true).child(Namespace.W);
+		AForkableCursor<ACell> container = userRoot.path(Namespace.W);
 		data.set(Maps.of("a", CVMLong.ONE));
 
 		// Metadata alongside data belongs to the physical envelope and must
@@ -146,44 +149,45 @@ public class WorkspaceWrapperTest {
 
 		// A fixed/overridden context may be older than persisted state. The
 		// metadata stamp follows the same one-way rule as the venue stamp.
-		container.setContext(LatticeContext.create(CVMLong.create(100), null));
+		policy.set(100);
 		data.updateAndGet(current -> ((AMap<AString, ACell>) current)
 			.assoc(Strings.intern("b"), CVMLong.create(2)));
 
 		ACell stored = container.get();
-		assertEquals(CVMLong.create(200), RT.getIn(stored, WrapperLattice.UPDATED));
+		assertEquals(CVMLong.create(200), RT.getIn(stored, Fields.UPDATED));
 		assertEquals(Strings.create("keep"), RT.getIn(stored, marker));
 		assertEquals(CVMLong.create(2), RT.getIn(stored,
-			WrapperLattice.DATA, Strings.intern("b")));
+			Covia.WORKSPACE_DATA, Strings.intern("b")));
 	}
 
 	@Test
 	public void testCoviaChildReturnsTheCallerVisibleWrappedValue() {
 		User user = engine.getVenueState().users().ensure(DID);
-		ALatticeCursor<ACell> workspace = Covia.child(user.cursor(), Namespace.W);
+		AForkableCursor<ACell> workspace = user.workspaceRoot().child(Namespace.W);
 		workspace.path(Strings.intern("through-child")).set(CVMLong.create(9));
 
 		assertEquals(CVMLong.create(9), workspace.path(Strings.intern("through-child")).get());
 		assertEquals(CVMLong.create(9), RT.getIn(user.cursor().get(),
-			"w", WrapperLattice.DATA, "through-child"));
-		assertTrue(RT.getIn(user.cursor().get(), "w", WrapperLattice.UPDATED) instanceof CVMLong,
+			"w", Covia.WORKSPACE_DATA, "through-child"));
+		assertTrue(RT.getIn(user.cursor().get(), "w", Fields.UPDATED) instanceof CVMLong,
 			"the public child accessor must cross the wrapper's stamping boundary");
 	}
 
 	@Test
 	public void testWrapperBoundaryAppliesOnlyAtNamespaceRoot() {
-		var container = Cursors.createLattice(WrapperLattice.INSTANCE);
-		container.setContext(LatticeContext.create(CVMLong.create(300), null));
+		var userRoot = Cursors.root(Covia.USER_RECORD);
+		var data = new WorkspaceRoot(userRoot, LatticeContext.create(CVMLong.create(300), null), true).child(Namespace.W);
+		AForkableCursor<ACell> container = userRoot.path(Namespace.W);
 
-		ALatticeCursor<ACell> nested = container.path(Strings.intern("nested"));
-		assertFalse(nested.getLattice() instanceof WrapperLattice,
+		AForkableCursor<ACell> nested = data.child(Strings.intern("nested"), convex.lattice.generic.JSONLattice.INSTANCE);
+		assertEquals(convex.lattice.generic.JSONLattice.INSTANCE, nested.shape(),
 			"children below the namespace use ordinary recursive JSON structure");
 		nested.path(Strings.intern("value")).set(CVMLong.ONE);
 
 		assertEquals(CVMLong.ONE,
-			RT.getIn(container.get(), WrapperLattice.DATA, "nested", "value"));
+			RT.getIn(container.get(), Covia.WORKSPACE_DATA, "nested", "value"));
 		assertEquals(CVMLong.create(300),
-			RT.getIn(container.get(), WrapperLattice.UPDATED));
+			RT.getIn(container.get(), Fields.UPDATED));
 	}
 
 	@Test

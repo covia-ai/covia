@@ -10,10 +10,14 @@ import convex.core.data.Blob;
 import convex.core.data.Index;
 import convex.core.data.Strings;
 import convex.lattice.ALatticeComponent;
-import convex.lattice.cursor.ALatticeCursor;
+import convex.lattice.cursor.AForkableCursor;
 import covia.adapter.CoviaAdapter;
 import covia.lattice.Covia;
 import covia.lattice.Namespace;
+import covia.lattice.WorkspaceRoot;
+import convex.lattice.cursor.StampedCursor;
+import convex.lattice.generic.IndexLattice;
+import convex.lattice.generic.MapLattice;
 
 /**
  * Cursor wrapper for a single user's state within a venue.
@@ -30,9 +34,9 @@ import covia.lattice.Namespace;
  *   <li>{@code "j"} — user's job references</li>
  *   <li>{@code "g"} — user's agents</li>
  *   <li>{@code "s"} — user's encrypted credentials</li>
- *   <li>{@code "w"} — user's workspace data ({@link covia.lattice.WrapperLattice})</li>
- *   <li>{@code "o"} — user's operations ({@link covia.lattice.WrapperLattice})</li>
- *   <li>{@code "h"} — HITL requests ({@link covia.lattice.WrapperLattice})</li>
+ *   <li>{@code "w"} — user's workspace data ({@link covia.lattice.Covia#WORKSPACE_RECORD})</li>
+ *   <li>{@code "o"} — user's operations ({@link covia.lattice.Covia#WORKSPACE_RECORD})</li>
+ *   <li>{@code "h"} — HITL requests ({@link covia.lattice.Covia#WORKSPACE_RECORD})</li>
  *   <li>{@code "a"} — content-addressed assets</li>
  * </ul>
  * Merge is whole-value at the venue {@code :value}; these namespaces are
@@ -44,29 +48,42 @@ public class User extends ALatticeComponent<ACell> {
 
 	/** Framework-internal navigation for trusted venue-owned workspace state. */
 	ACell readInternalPath(ACell[] keys) {
-		return CoviaAdapter.readPath(cursor, keys);
+		return CoviaAdapter.readPath(workspaceRoot(), keys);
 	}
 
 	/** Framework-internal atomic write; authority is possession of this user cursor. */
 	void writeInternalPath(ACell[] keys, ACell value) {
-		CoviaAdapter.writePathToCursor(cursor, keys, value);
+		CoviaAdapter.writePathToCursor(workspaceRoot(), keys, value);
 	}
 
 	/** Framework-internal atomic delete; authority is possession of this user cursor. */
 	boolean deleteInternalPath(ACell[] keys) {
-		return CoviaAdapter.deletePathFromCursor(cursor, keys);
+		return CoviaAdapter.deletePathFromCursor(workspaceRoot(), keys);
 	}
 
-	User(ALatticeComponent<?> parent, ALatticeCursor<ACell> cursor, AString did) {
-		super(parent, cursor);
+	User(ALatticeComponent<?> parent, AForkableCursor<ACell> cursor, AString did) {
+		super(cursor);
+		setContext(parent.getContext());
 		this.did = did;
 	}
 
-	/**
-	 * Gets the user's DID string.
-	 *
-	 * @return User DID
-	 */
+	/** Caller-visible workspace namespaces with this user's write policy. */
+	public WorkspaceRoot workspaceRoot() {
+		return new WorkspaceRoot(cursor, getContext(), true);
+	}
+
+	/** Scoped agent/job navigation retains record stamps and typed indexes. */
+	public AForkableCursor<ACell> recordCursor(ACell namespace, ACell id) {
+		if (Namespace.G.equals(namespace)) return StampedCursor.create(
+			cursor.child(namespace, MapLattice.create(Covia.AGENT_RECORD)).child(id, Covia.AGENT_RECORD),
+			Covia.AGENT_RECORD, getContext()::currentTimestamp);
+		if (Namespace.J.equals(namespace)) return StampedCursor.create(
+			cursor.child(namespace, IndexLattice.<Blob, ACell>create(Covia.JOB_RECORD)).child(id, Covia.JOB_RECORD),
+			Covia.JOB_RECORD, getContext()::currentTimestamp);
+		throw new IllegalArgumentException("Not an agent or job namespace: " + namespace);
+	}
+
+	/** Gets the user's DID string. */
 	public AString getDID() {
 		return did;
 	}
@@ -78,7 +95,7 @@ public class User extends ALatticeComponent<ACell> {
 	 */
 	@SuppressWarnings("unchecked")
 	public Index<Blob, ACell> getJobs() {
-		ACell value = cursor.path(Namespace.J).get();
+		ACell value = cursor.child(Namespace.J, IndexLattice.<Blob, ACell>create(Covia.JOB_RECORD)).get();
 		return (value instanceof Index) ? (Index<Blob, ACell>) value : Index.none();
 	}
 
@@ -104,7 +121,7 @@ public class User extends ALatticeComponent<ACell> {
 	 */
 	@SuppressWarnings("unchecked")
 	public boolean removeJob(Blob jobID) {
-		ACell old = cursor.path(Namespace.J).getAndUpdate(jobs -> {
+		ACell old = cursor.child(Namespace.J, IndexLattice.<Blob, ACell>create(Covia.JOB_RECORD)).getAndUpdate(jobs -> {
 			if (!(jobs instanceof Index)) return jobs;
 			return ((Index<Blob, ACell>) jobs).dissoc(jobID);
 		});
@@ -121,7 +138,7 @@ public class User extends ALatticeComponent<ACell> {
 	@SuppressWarnings("unchecked")
 	public void persistJob(Blob jobID, AMap<AString, ACell> record) {
 		final AMap<AString, ACell> rec = record;
-		cursor.path(Namespace.J).updateAndGet(jobs -> {
+		cursor.child(Namespace.J, IndexLattice.<Blob, ACell>create(Covia.JOB_RECORD)).updateAndGet(jobs -> {
 			Index<Blob, ACell> idx = (jobs instanceof Index)
 				? (Index<Blob, ACell>) jobs
 				: Index.none();
@@ -145,7 +162,7 @@ public class User extends ALatticeComponent<ACell> {
 	@SuppressWarnings("unchecked")
 	public boolean updateJobIfPresent(Blob jobID,
 			UnaryOperator<AMap<AString, ACell>> updater) {
-		ACell old = cursor.path(Namespace.J).getAndUpdate(jobs -> {
+		ACell old = cursor.child(Namespace.J, IndexLattice.<Blob, ACell>create(Covia.JOB_RECORD)).getAndUpdate(jobs -> {
 			if (!(jobs instanceof Index<?, ?>)) return jobs;
 			Index<Blob, ACell> idx = (Index<Blob, ACell>) jobs;
 			ACell value = idx.get(jobID);
@@ -189,7 +206,7 @@ public class User extends ALatticeComponent<ACell> {
 	}
 
 	public AgentState agent(AString agentId) {
-		ALatticeCursor<ACell> c = cursor.path(Namespace.G, agentId);
+		AForkableCursor<ACell> c = cursor.child(Namespace.G, MapLattice.create(Covia.AGENT_RECORD)).child(agentId, Covia.AGENT_RECORD);
 		if (c.get() == null) return null;
 		return new AgentState(this, c, agentId);
 	}
@@ -207,7 +224,7 @@ public class User extends ALatticeComponent<ACell> {
 	}
 
 	public AgentState ensureAgent(AString agentId, AMap<AString, ACell> config, ACell initialState) {
-		ALatticeCursor<ACell> c = cursor.path(Namespace.G, agentId);
+		AForkableCursor<ACell> c = cursor.child(Namespace.G, MapLattice.create(Covia.AGENT_RECORD)).child(agentId, Covia.AGENT_RECORD);
 		AgentState state = new AgentState(this, c, agentId);
 		state.initialiseIfAbsent(config, initialState);
 		return state;
@@ -225,7 +242,7 @@ public class User extends ALatticeComponent<ACell> {
 
 	public AgentState createAgent(AString agentId, AMap<AString, ACell> config,
 			ACell initialState, AMap<AString, ACell> definition) {
-		ALatticeCursor<ACell> c = cursor.path(Namespace.G, agentId);
+		AForkableCursor<ACell> c = cursor.child(Namespace.G, MapLattice.create(Covia.AGENT_RECORD)).child(agentId, Covia.AGENT_RECORD);
 		AgentState state = new AgentState(this, c, agentId);
 		return state.initialiseIfAbsent(config, initialState, definition) ? state : null;
 	}
@@ -243,7 +260,7 @@ public class User extends ALatticeComponent<ACell> {
 	 */
 	public AgentState forkAgent(AString agentId, AMap<AString, ACell> config,
 			ACell state, convex.core.data.AVector<ACell> timeline) {
-		ALatticeCursor<ACell> c = cursor.path(Namespace.G, agentId);
+		AForkableCursor<ACell> c = cursor.child(Namespace.G, MapLattice.create(Covia.AGENT_RECORD)).child(agentId, Covia.AGENT_RECORD);
 		AgentState fork = new AgentState(this, c, agentId);
 		return fork.initialiseFromForkIfAbsent(config, state, timeline) ? fork : null;
 	}
@@ -254,7 +271,7 @@ public class User extends ALatticeComponent<ACell> {
 	 * @param agentId Agent identifier to remove
 	 */
 	public void removeAgent(AString agentId) {
-		cursor.path(Namespace.G, agentId).set(null);
+		cursor.child(Namespace.G, MapLattice.create(Covia.AGENT_RECORD)).child(agentId, Covia.AGENT_RECORD).set(null);
 	}
 
 	/**
@@ -285,7 +302,7 @@ public class User extends ALatticeComponent<ACell> {
 	 */
 	@SuppressWarnings("unchecked")
 	public AMap<AString, ACell> getHitlRequests() {
-		ACell v = Covia.child(cursor, Namespace.H).get();
+		ACell v = workspaceRoot().child(Namespace.H).get();
 		return (v instanceof AMap) ? (AMap<AString, ACell>) v : convex.core.data.Maps.empty();
 	}
 
@@ -311,7 +328,7 @@ public class User extends ALatticeComponent<ACell> {
 	 */
 	@SuppressWarnings("unchecked")
 	public void putHitlRequest(AString id, AMap<AString, ACell> record) {
-		Covia.child(cursor, Namespace.H).updateAndGet(data -> {
+		workspaceRoot().child(Namespace.H).updateAndGet(data -> {
 			AMap<AString, ACell> m = (data instanceof AMap)
 				? (AMap<AString, ACell>) data
 				: convex.core.data.Maps.empty();

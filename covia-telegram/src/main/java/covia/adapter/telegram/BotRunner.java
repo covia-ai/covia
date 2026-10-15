@@ -42,12 +42,15 @@ import okhttp3.Response;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.AVector;
+import convex.core.data.Vectors;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.adapter.AAdapter;
+import covia.adapter.webhook.WebhookInbox;
 import covia.adapter.messaging.MessagingBot;
 import covia.adapter.messaging.ConversationRouter;
 import covia.adapter.messaging.ConversationSessions;
@@ -83,6 +86,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	static final int MAX_MESSAGE_LENGTH = 4096;
 	/** Long-poll wait requested from Telegram, in seconds. */
 	static final int POLL_TIMEOUT_SECS = 30;
+	static final String INVALID_REPLY = "replyOperation must return a non-empty string or an object with non-empty text";
 
 
 	static final AString K_STATE = Strings.intern("state");
@@ -130,6 +134,8 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	private int offset = 0;
 
 	private final ConversationRouter conversations;
+	private volatile WebhookInbox inbox;
+	private volatile String fileMetadataRoot;
 	/** Allow-listed handle (lower-case) → the Telegram account it resolved to; mirrors the persisted map once loaded. */
 	private final ConcurrentHashMap<String, Long> resolved = new ConcurrentHashMap<>();
 	private volatile boolean resolvedLoaded;
@@ -144,6 +150,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 				if (managed == Managed.RUNTIME) adapter.deleteLegacyPath(context(), legacySessionsPath(spec.name()) + "/" + chat);
 			});
 		conversations = new ConversationRouter(adapter.engine, spec, sessionStore);
+		inbox = new WebhookInbox(adapter.engine, adapter.state(), statePath("inbox") + "/unbound");
 	}
 
 	// ---------------------------------------------------------------- lifecycle
@@ -172,6 +179,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		// Our own client so stop() can cancel the in-flight long poll; the read
 		// timeout must outlast the poll wait or every idle poll is an error.
 		OkHttpClient client = new OkHttpClient.Builder()
+			.followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false)
 			.connectTimeout(20, TimeUnit.SECONDS)
 			.readTimeout(POLL_TIMEOUT_SECS + 15, TimeUnit.SECONDS)
 			.writeTimeout(30, TimeUnit.SECONDS)
@@ -194,6 +202,11 @@ final class BotRunner implements MessagingBot<BotSpec> {
 			release(candidate, client);
 			return;
 		}
+		// Bot names and secret references can be reused for another account.
+		// Receipts must be scoped to the actual Telegram identity and Covia owner.
+		String binding = spec.userDID(adapter.engine).getHash().toHexString() + "/" + me.user().id();
+		inbox = new WebhookInbox(adapter.engine, adapter.state(), statePath("inbox") + "/" + binding);
+		fileMetadataRoot = statePath("files") + "/" + binding;
 		username = me.user().username();
 		bot = candidate;
 		http = client;
@@ -290,6 +303,8 @@ final class BotRunner implements MessagingBot<BotSpec> {
 			K_RECEIVED, CVMLong.create(received.get()),
 			K_SENT, CVMLong.create(sent.get()),
 			K_FAILED, CVMLong.create(failed.get()));
+		m = m.assoc(Strings.intern("pendingUpdates"), CVMLong.create(inbox.records(WebhookInbox.PENDING).size()))
+			.assoc(Strings.intern("startedUpdates"), CVMLong.create(inbox.records(WebhookInbox.STARTED).size()));
 		if (username != null) m = m.assoc(K_USERNAME, Strings.create(username));
 		if (error != null) m = m.assoc(Fields.ERROR, Strings.create(error));
 		if (!spec.open() && !spec.allowNames().isEmpty()) {
@@ -312,21 +327,29 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	 * redelivers when the adapter is enabled again.
 	 */
 	private void pollLoop() {
+		boolean recover = true;
+		long nextPrune = 0;
 		long backoff = 2_000;
 		while (!stopped) {
 			TelegramBot b = bot;
 			if (b == null) return;
 			if (!adapter.isActive()) {
 				offline = true;
+				recover = true;
 				sleep(1_000);
 				continue;
 			}
 			offline = false;
 			try {
+				if (recover) { recoverPending(); recover = false; }
+				if (System.currentTimeMillis() >= nextPrune) {
+					inbox.pruneCompleted(System.currentTimeMillis() - TimeUnit.DAYS.toMillis(7));
+					nextPrune = System.currentTimeMillis() + TimeUnit.HOURS.toMillis(1);
+				}
 				GetUpdates req = new GetUpdates().offset(offset).timeout(POLL_TIMEOUT_SECS);
 				// A conversation only needs messages; an operation handler gets every
 				// update type Telegram delivers by default (callback queries, edits…).
-				if (spec.routesToAgent()) req.allowedUpdates("message");
+				req.allowedUpdates(spec.routesToAgent() ? new String[] {"message"} : new String[0]);
 				GetUpdatesResponse r = b.execute(req);
 				if (stopped) return;
 				if (r == null || !r.isOk()) {
@@ -344,11 +367,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 				for (Update u : updates) {
 					// Went offline mid-batch: leave the rest unconfirmed for redelivery.
 					if (!adapter.isActive()) break;
-					try {
-						handle(u);
-					} catch (RuntimeException e) {
-						log.warn("Telegram bot '{}' failed to handle update {}", spec.name(), u.updateId(), e);
-					}
+					handle(u); // A failed durable acceptance must leave this update unconfirmed.
 					if (u.updateId() != null) offset = u.updateId() + 1;
 				}
 			} catch (Throwable e) {
@@ -394,7 +413,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	 * Route one Telegram {@code Update}. Access is checked against the update's
 	 * sender; the built-in commands are answered here for text messages; then an
 	 * agent bot gets the message text as a conversation turn, and an operation
-	 * bot gets the whole Update exactly as Telegram sent it (plus {@code bot}) —
+	 * bot gets the SDK-decoded Update in Telegram wire format (plus {@code bot}) —
 	 * photos, documents, callback queries and all — so the handler sees what a
 	 * webhook would.
 	 */
@@ -427,6 +446,49 @@ final class BotRunner implements MessagingBot<BotSpec> {
 				spec.name(), update.updateId(), fromId, chat.type(), chatId);
 			return;
 		}
+		rememberMedia(update.message() != null ? update.message()
+			: update.editedMessage() != null ? update.editedMessage()
+			: update.channelPost() != null ? update.channelPost() : update.editedChannelPost());
+		String id = Integer.toString(update.updateId());
+		inbox.accept(id, updateRecord(update));
+		schedule(update);
+	}
+
+	private void schedule(Update update) {
+		String id = Integer.toString(update.updateId());
+		conversations.enqueue(conversationKey(update.message(), chatOf(update)), () -> {
+			if (stopped || !adapter.isActive() || !inbox.claim(id)) return;
+			try {
+				dispatch(update);
+				inbox.complete(id);
+			} catch (Throwable t) {
+				failed.incrementAndGet();
+				error = "Update " + id + " requires inspection: " + concise(t);
+				logFailure("update " + id + " requires inspection", chatOf(update), t);
+				// STARTED is deliberately retained: neither a Job nor an external
+				// send may be repeated safely after an uncertain outcome.
+			}
+		});
+	}
+
+	private void recoverPending() {
+		var pending = new ArrayList<>(inbox.records(WebhookInbox.PENDING));
+		pending.sort(java.util.Comparator.comparingLong(r -> Long.parseLong(r.get(Fields.ID).toString())));
+		for (var receipt : pending) {
+			schedule(BotUtils.GSON.fromJson(JSON.print(receipt.get(Fields.INPUT)).toString(), Update.class));
+		}
+	}
+
+	private void dispatch(Update update) {
+		Message m = update.message();
+		Long chatId = chatOf(update);
+		User from = senderOf(update);
+		Long fromId = from == null ? null : from.id();
+		String fromName = from == null ? null : from.username();
+		Chat chat = chatOfUpdate(update);
+		if (!admits(fromId, fromName) || (!spec.open() && chat != null && chat.type() != Chat.Type.Private)) {
+			throw new IllegalStateException("Accepted Telegram update is no longer admitted by this bot's policy");
+		}
 		String text = (m == null) ? null : (m.text() != null) ? m.text() : m.caption();
 		if (text != null && !text.isBlank()) {
 			text = stripMention(text.trim());
@@ -434,35 +496,31 @@ final class BotRunner implements MessagingBot<BotSpec> {
 			if (handleCommand(m, chatId, fromId, fromName, text)) return;
 		}
 		if (spec.routesToAgent()) {
-			// A conversation needs words: anything else in a private chat gets a
-			// short notice; in groups (and for non-message updates) stay silent.
-			if (m == null || text == null || text.isBlank()) {
-				if (isPrivate(m)) sendQuietly(chatId, "I can only read text messages and captions.", m);
+			// Text and supported media become turns; other update types stay provider-specific.
+			if (m == null || ((text == null || text.isBlank()) && TelegramMedia.attachments(m).isEmpty())) {
+				if (isPrivate(m)) sendQuietly(chatId, "Send text, a voice note, a photo or a file.", m);
 				return;
 			}
-			final String body = text;
-			enqueue(chatId, () -> respondAgent(m, body));
+			respondAgent(m, text == null ? "" : text);
 		} else {
-			enqueue((chatId != null) ? chatId : 0L, () -> respondOperation(update));
+			respondOperation(update);
 		}
 	}
 
 	/** The built-in commands; true when the message was one and has been answered. */
 	private boolean handleCommand(Message m, Long chatId, Long fromId, String fromName, String text) {
 		switch (commandOf(text)) {
-			case "/start" -> sendQuietly(chatId, greeting(), m);
-			case "/help" -> sendQuietly(chatId, greeting() + "\n\nCommands:\n/new — start a new conversation\n"
+			case "/start" -> commandReply(chatId, greeting(), m);
+			case "/help" -> commandReply(chatId, greeting() + "\n\nCommands:\n/new — start a new conversation\n"
 				+ "/id — show this chat's id and your user id\n/help — this message", m);
-			case "/id" -> sendQuietly(chatId, "Chat id: " + chatId + "\nYour user id: " + fromId
+			case "/id" -> commandReply(chatId, "Chat id: " + chatId + "\nYour user id: " + fromId
 				+ (fromName != null ? " (@" + fromName + ")" : ""), m);
 			case "/new" -> {
 				if (spec.routesToAgent()) {
-					enqueue(chatId, () -> {
-						conversations.reset(chatId.toString());
-						sendQuietly(chatId, "Started a new conversation.", m);
-					});
+					conversations.reset(conversationKey(m, chatId));
+					send(chatId, "Started a new conversation.", null, null, threadOf(m), false);
 				} else {
-					sendQuietly(chatId, "This bot has no conversation state.", m);
+					commandReply(chatId, "This bot has no conversation state.", m);
 				}
 			}
 			default -> {
@@ -470,6 +528,10 @@ final class BotRunner implements MessagingBot<BotSpec> {
 			}
 		}
 		return true;
+	}
+
+	private void commandReply(Long chat, String text, Message message) {
+		send(chat, text, null, null, threadOf(message), false);
 	}
 
 	/** The user behind an update, for the allow-list; null when it has none (channel posts, polls…). */
@@ -519,11 +581,6 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		return "Connected to " + venue + ". Messages are handled by " + spec.operation() + ".";
 	}
 
-	/** Serialise work per chat: the next unit starts when the previous finishes. */
-	private void enqueue(Long chatId, Runnable work) {
-		conversations.enqueue(chatId.toString(), work);
-	}
-
 	/**
 	 * One conversation turn: {@code agent:chat} as a durable Job in the bot
 	 * user's job index (the canonical record of the interaction), the response
@@ -533,13 +590,27 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		Long chatId = m.chat().id();
 		try {
 			typing(chatId, m);
-			String reply = ConversationRouter.responseText(conversations.chat(chatId.toString(), agentMessage(m, text)));
+			ACell response = conversations.chat(conversationKey(m, chatId), prepareMessage(m, text));
+			String reply;
+			if (spec.replyOperation() == null) {
+				reply = ConversationRouter.responseText(response);
+			} else {
+				ACell formatted = conversations.runOperation(spec.replyOperation(), Maps.of(
+					Fields.RESPONSE, response, K_VIA, agentMessage(m, text).get(K_VIA)));
+				reply = formattedReply(formatted);
+			}
 			send(chatId, reply, spec.parseMode(), m.messageId(), threadOf(m), false);
 		} catch (Throwable t) {
-			failed.incrementAndGet();
 			logFailure("failed to respond", chatId, t);
 			sendQuietly(chatId, "⚠️ " + concise(t), m);
+			throw new JobFailedException(concise(t));
 		}
+	}
+
+	static String formattedReply(ACell result) {
+		ACell text = result instanceof AString ? result : result instanceof AMap<?, ?> ? RT.getIn(result, Fields.TEXT) : null;
+		if (!(text instanceof AString string) || string.toString().isBlank()) throw new IllegalArgumentException(INVALID_REPLY);
+		return string.toString();
 	}
 
 	/**
@@ -555,13 +626,13 @@ final class BotRunner implements MessagingBot<BotSpec> {
 			ACell result = conversations.runOperation(spec.operation(), updateRecord(update));
 			if (chatId != null) replyAfter(chatId, m, result);
 		} catch (Throwable t) {
-			failed.incrementAndGet();
 			logFailure("handler failed for update " + update.updateId(), chatId, t);
 			if (chatId != null) sendQuietly(chatId, "⚠️ " + concise(t), m);
+			throw new JobFailedException(concise(t));
 		}
 	}
 
-	/** The Update exactly as Telegram sent it (snake_case, nested objects), plus {@code bot}. */
+	/** The SDK-decoded Update in Telegram wire format (snake_case, nested objects), plus {@code bot}. */
 	AMap<AString, ACell> updateRecord(Update update) {
 		AMap<AString, ACell> record = RT.castMap(JSON.parse(BotUtils.toJson(update)));
 		if (record == null) record = Maps.empty();
@@ -583,6 +654,9 @@ final class BotRunner implements MessagingBot<BotSpec> {
 			K_ACCESS, Strings.create(spec.open() ? "open" : "allow"));
 		if (m.from() != null) via = via.assoc(K_FROM, telegramCell(m.from()));
 		if (m.chat() != null) via = via.assoc(K_CHAT, telegramCell(m.chat()));
+		if (threadOf(m) != null) via = via.assoc(Strings.intern("message_thread_id"), CVMLong.create(threadOf(m)));
+		if (m.replyToMessage() != null) via = via.assoc(Strings.intern("reply_to_message_id"), CVMLong.create(m.replyToMessage().messageId()));
+		if (m.mediaGroupId() != null) via = via.assoc(Strings.intern("media_group_id"), Strings.create(m.mediaGroupId()));
 		if (m.messageId() != null) via = via.assoc(K_MESSAGE_ID, CVMLong.create(m.messageId()));
 		return Maps.of(Fields.TEXT, Strings.create(text), K_VIA, via);
 	}
@@ -601,6 +675,124 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	}
 	RequestContext context() {
 		return RequestContext.of(spec.userDID(adapter.engine));
+	}
+
+	private String statePath(String region) {
+		return managed == Managed.CONFIG ? "config/" + spec.name() + "/" + region
+			: adapter.userStatePath(spec.userDID(adapter.engine), region + "/" + spec.name());
+	}
+
+	static String conversationKey(Message message, Long chat) {
+		String chatId = chat == null ? "0" : chat.toString();
+		Long topic = threadOf(message);
+		return topic == null ? chatId : ConversationRouter.key(chatId, topic.toString());
+	}
+
+	/** Download privately, then give the agent references rather than token-bearing URLs or bytes. */
+	private ACell prepareMessage(Message m, String text) {
+		rememberMedia(m);
+		AMap<AString, ACell> message = agentMessage(m, text);
+		AVector<ACell> attachments = Vectors.empty();
+		AVector<ACell> images = Vectors.empty();
+		for (JsonObject media : TelegramMedia.attachments(m)) {
+			if (media.has("file_size") && media.get("file_size").getAsLong() > TelegramMedia.MAX_BYTES) {
+				throw new IllegalArgumentException(TelegramMedia.TOO_LARGE);
+			}
+			AMap<AString, ACell> attachment = download(media.get("file_id").getAsString())
+				.merge(RT.castMap(JSON.parse(media.toString())));
+			if (spec.mediaOperation() != null) {
+				ACell processed = conversations.runOperation(spec.mediaOperation(), attachment
+					.assoc(Strings.intern("caption"), Strings.create(text)).assoc(K_VIA, message.get(K_VIA)));
+				attachment = TelegramMedia.processed(attachment, processed);
+			}
+			attachments = attachments.conj(attachment);
+			String mime = media.get("mediaType").getAsString();
+			if (mime.startsWith("image/")) images = images.conj(Maps.of("type", "image", "source",
+				Maps.of("type", "asset", "ref", attachment.get(Fields.REF), "mediaType", mime)));
+		}
+		if (!attachments.isEmpty()) message = message.assoc(Strings.intern("attachments"), attachments);
+		if (!images.isEmpty()) message = message.assoc(Fields.CONTENT, images);
+		return message;
+	}
+
+	/** getFile loses names/MIME types: persist message metadata before acknowledging intake. */
+	private void rememberMedia(Message message) {
+		for (JsonObject media : TelegramMedia.attachments(message)) {
+			String fileId = media.get("file_id").getAsString();
+			AMap<AString, ACell> previous = RT.castMap(adapter.state().read(fileMetadataPath(fileId)));
+			adapter.state().write(fileMetadataPath(fileId), previous.merge(RT.castMap(JSON.parse(media.toString()))));
+		}
+	}
+
+	private String fileMetadataPath(String fileId) {
+		return fileMetadataRoot + "/" + Strings.create(fileId).getHash().toHexString();
+	}
+
+	AMap<AString, ACell> download(String fileId) {
+		return download(fileId, null, null, context());
+	}
+
+	/** Explicit destinations use caller authority; automatic intake uses the bot owner's context. */
+	AMap<AString, ACell> download(String fileId, AString destination, String fileName, RequestContext writeContext) {
+		ACell info = call("getFile", Map.of("file_id", fileId));
+		AString path = RT.ensureString(RT.getIn(info, "file_path"));
+		if (path == null || !path.toString().matches("[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*")
+				|| path.toString().contains("..")) throw new IllegalArgumentException(TelegramMedia.INVALID_PATH);
+		ACell size = RT.getIn(info, "file_size");
+		if (size instanceof CVMLong n && n.longValue() > TelegramMedia.MAX_BYTES) throw new IllegalArgumentException(TelegramMedia.TOO_LARGE);
+		// Both official and local Bot API servers use /file/bot<token>/<path>.
+		if (!apiUrl.endsWith("/bot")) throw new IllegalArgumentException("Telegram downloads require an apiUrl ending in /bot");
+		String base = apiUrl.substring(0, apiUrl.length() - 4) + "/file/bot";
+		OkHttpClient client = http;
+		String liveToken = token;
+		if (client == null || liveToken == null) throw new IllegalStateException("Telegram bot is not running");
+		Request request = new Request.Builder().url(base + liveToken + "/" + path).build();
+		try (Response response = client.newCall(request).execute()) {
+			if (!response.isSuccessful() || response.body() == null) throw new JobFailedException(TelegramMedia.DOWNLOAD_FAILED);
+			if (response.body().contentLength() > TelegramMedia.MAX_BYTES) throw new IllegalArgumentException(TelegramMedia.TOO_LARGE);
+			byte[] bytes = response.body().byteStream().readNBytes(TelegramMedia.MAX_BYTES + 1);
+			if (bytes.length > TelegramMedia.MAX_BYTES) throw new IllegalArgumentException(TelegramMedia.TOO_LARGE);
+			ACell metadata = fileMetadataRoot == null ? null : adapter.state().read(fileMetadataPath(fileId));
+			AString originalName = RT.ensureString(RT.getIn(metadata, "file_name"));
+			AString originalType = RT.ensureString(RT.getIn(metadata, "mime_type"));
+			String contentType = originalType != null ? originalType.toString()
+				: response.body().contentType() == null ? null : response.body().contentType().toString();
+			String name = fileName;
+			if (name == null && originalName != null && TelegramMedia.safeFileName(originalName.toString())) name = originalName.toString();
+			if (name == null) {
+				String remoteName = path.toString().substring(path.toString().lastIndexOf('/') + 1);
+				int dot = remoteName.lastIndexOf('.');
+				String extension = dot < 0 ? ".bin" : remoteName.substring(dot);
+				if (!extension.matches("\\.[A-Za-z0-9]{1,10}")) extension = ".bin";
+				name = spec.name().substring(0, Math.min(64, spec.name().length())) + "-" + Strings.create(fileId).getHash().toHexString() + extension;
+			}
+			String directory = destination == null ? spec.userDID(adapter.engine) + "/dlfs/telegram/" : destination.toString();
+			if (!directory.endsWith("/")) directory += "/";
+			for (int attempt = 0; attempt < 1000; attempt++) {
+				String actualName = TelegramMedia.collisionName(name, attempt);
+				// DID references are URLs; encode the filename while preserving its stored spelling.
+				String referenceName = directory.startsWith("did:")
+					? java.net.URLEncoder.encode(actualName, java.nio.charset.StandardCharsets.UTF_8).replace("+", "%20")
+					: actualName;
+				AString ref = Strings.create(directory + referenceName);
+				try {
+					if (!adapter.engine.createContent(ref, new java.io.ByteArrayInputStream(bytes), contentType, writeContext)) {
+						throw new IllegalArgumentException(TelegramMedia.UNSUPPORTED_DESTINATION + ": " + directory);
+					}
+				} catch (java.nio.file.FileAlreadyExistsException conflict) {
+					continue;
+				}
+				adapter.engine.flush();
+				AMap<AString, ACell> result = Maps.of("file_id", fileId, "ref", ref, "size", bytes.length, Fields.FILE_NAME, actualName);
+				if (originalName != null) result = result.assoc(Strings.intern("file_name"), originalName);
+				if (contentType != null) result = result.assoc(Fields.CONTENT_TYPE, Strings.create(contentType));
+				return result;
+			}
+			throw new IllegalStateException(TelegramMedia.NAME_CONFLICT);
+		} catch (java.io.IOException e) {
+			// HTTP client exceptions can contain the URL and hence the bot token.
+			throw new JobFailedException(TelegramMedia.DOWNLOAD_FAILED);
+		}
 	}
 
 	// ----------------------------------------------------------- session state
@@ -750,9 +942,15 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	 * @throws JobFailedException when Telegram answers {@code ok: false}
 	 * @throws IllegalStateException when the bot is not running
 	 */
+	record Upload(String filename, String contentType, byte[] bytes) {}
+
 	ACell call(String method, Map<String, Object> params) {
+		return call(method, params, Map.of());
+	}
+
+	ACell call(String method, Map<String, Object> params, Map<String, Upload> uploads) {
 		requireAllowedTarget(method, params);
-		ApiResponse r = execute(method, params);
+		ApiResponse r = execute(method, params, uploads);
 		if (!r.ok()) {
 			failed.incrementAndGet();
 			throw new JobFailedException("Telegram " + method + " failed: " + r.describe());
@@ -826,6 +1024,10 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	 * text and maps/lists as JSON (the same encoding the pengrad client uses).
 	 */
 	private ApiResponse execute(String method, Map<String, Object> params) {
+		return execute(method, params, Map.of());
+	}
+
+	private ApiResponse execute(String method, Map<String, Object> params, Map<String, Upload> uploads) {
 		OkHttpClient c = http;
 		String tok = token;
 		if (c == null || tok == null) {
@@ -838,17 +1040,25 @@ final class BotRunner implements MessagingBot<BotSpec> {
 				if (e.getValue() != null) form.add(e.getKey(), paramValue(e.getValue()));
 			}
 		}
-		Request request = new Request.Builder().url(apiUrl + tok + "/" + method).post(form.build()).build();
+		okhttp3.RequestBody body = form.build();
+		if (!uploads.isEmpty()) {
+			okhttp3.MultipartBody.Builder multipart = new okhttp3.MultipartBody.Builder().setType(okhttp3.MultipartBody.FORM);
+			if (params != null) params.forEach((key, value) -> { if (value != null) multipart.addFormDataPart(key, paramValue(value)); });
+			uploads.forEach((key, file) -> multipart.addFormDataPart(key, file.filename(), okhttp3.RequestBody.create(
+				okhttp3.MediaType.parse(file.contentType() == null ? "application/octet-stream" : file.contentType()), file.bytes())));
+			body = multipart.build();
+		}
+		Request request = new Request.Builder().url(apiUrl + tok + "/" + method).post(body).build();
 		try (Response response = c.newCall(request).execute()) {
-			String body = (response.body() != null) ? response.body().string() : "";
-			JsonObject o = JsonParser.parseString(body.isBlank() ? "{}" : body).getAsJsonObject();
+			String responseBody = (response.body() != null) ? response.body().string() : "";
+			JsonObject o = JsonParser.parseString(responseBody.isBlank() ? "{}" : responseBody).getAsJsonObject();
 			boolean ok = o.has("ok") && o.get("ok").getAsBoolean();
 			int code = o.has("error_code") ? o.get("error_code").getAsInt() : (ok ? 200 : response.code());
 			String description = o.has("description") ? o.get("description").getAsString()
 				: (ok ? "" : "HTTP " + response.code());
 			return new ApiResponse(ok, code, description, o.get("result"));
 		} catch (java.io.IOException | RuntimeException e) {
-			throw new JobFailedException("Telegram " + method + " failed: " + concise(e));
+			throw new JobFailedException("Telegram " + method + " transport failed");
 		}
 	}
 

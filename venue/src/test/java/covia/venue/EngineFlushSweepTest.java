@@ -23,7 +23,7 @@ import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.lattice.cursor.Cursors;
-import convex.lattice.cursor.RootLatticeCursor;
+import convex.lattice.cursor.Root;
 import covia.lattice.Covia;
 
 /**
@@ -107,7 +107,7 @@ public class EngineFlushSweepTest {
 	}
 
 	private static Engine engineWith(CountingHandler handler) throws Exception {
-		RootLatticeCursor<Index<Keyword, ACell>> cursor = Cursors.createLattice(Covia.ROOT);
+		Root<Index<Keyword, ACell>> cursor = Cursors.root(Covia.ROOT);
 		return new Engine(testConfig(), cursor, AKeyPair.generate(), handler).start();
 	}
 
@@ -208,7 +208,7 @@ public class EngineFlushSweepTest {
 		// guard in Engine.start(); behavioural verification of the
 		// "no sweep thread" path is covered by the existing
 		// EnginePersistenceTest suite.
-		RootLatticeCursor<Index<Keyword, ACell>> cursor = Cursors.createLattice(Covia.ROOT);
+		Root<Index<Keyword, ACell>> cursor = Cursors.root(Covia.ROOT);
 		Engine engine = new Engine(testConfig(), cursor, AKeyPair.generate(), PersistenceHandler.NOOP).start();
 		// engine.flush() on a NOOP-handler engine must still work and not throw.
 		engine.flush();

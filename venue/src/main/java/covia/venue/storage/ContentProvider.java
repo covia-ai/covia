@@ -43,4 +43,15 @@ public interface ContentProvider {
 			RequestContext ctx) throws IOException {
 		return false;
 	}
+
+	/**
+	 * Creates content without replacing an existing destination. Providers must
+	 * perform an atomic create (not an existence check followed by overwrite),
+	 * enforce write authority, and throw {@link java.nio.file.FileAlreadyExistsException}
+	 * on conflict. False means unsupported; there is no fallback to putContent.
+	 */
+	default boolean createContent(AString ref, InputStream data, String contentType,
+			RequestContext ctx) throws IOException {
+		return false;
+	}
 }

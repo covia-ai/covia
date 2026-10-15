@@ -8,7 +8,27 @@ This document describes how to build the Covia project using Maven.
 - **Maven 3.7+**: Minimum Maven version required (enforced by maven-enforcer-plugin)
 - **Git**: For cloning the repository
 
-Covia targets Convex 0.8.17. Maven resolves the release from the local repository or configured remote repositories in the normal way.
+This branch targets **Convex 0.8.18-SNAPSHOT** while its component/cursor API is
+being stabilised. Install all required Convex modules from the same source tree
+before building Covia; an older cached artifact with the same snapshot version
+is not sufficient:
+
+```bash
+# In the Convex checkout (use .\\mvnw.cmd on Windows)
+./mvnw -B -pl convex-core,convex-peer,convex-dlfs,convex-java,convex-restapi,convex-db -am install -DskipTests
+# In Covia; offline mode prevents remote snapshot replacement during validation
+mvn -B -o clean install -Dcovia.tests.durability=true
+```
+
+Record the Convex commit and any local source changes alongside validation
+results. A snapshot version is not an immutable dependency pin. Once the release
+lands, change `convex.version` in the parent POM to the released version and rerun
+the clean build with durability tests against those release artifacts.
+
+The migration uses component-owned context, explicit signing/stamping and
+workspace views, and host-owned publication/flush. Covia keeps one live root;
+private component forks remain bounded transactions. The stored workspace
+containers and owner-signed venue layout are unchanged.
 
 ## Project Structure
 

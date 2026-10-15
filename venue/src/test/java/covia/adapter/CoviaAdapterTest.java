@@ -2741,8 +2741,6 @@ public class CoviaAdapterTest {
 		assertEquals(2, vns.remainingKeys().length);
 		// Scoped scratch must never mint a phantom session.
 		assertTrue(vns.requireExistingRecord());
-		assertNull(vns.recordTimestampKey(),
-			"the enclosing agent lattice stamps a session write");
 	}
 
 	@Test
@@ -2756,12 +2754,10 @@ public class CoviaAdapterTest {
 
 		assertNotNull(vns);
 		assertEquals(engine.getVenueState().users().get(ALICE.getUserDID())
-			.agent(agentId).getRecord(), vns.cursor().get());
+			.agent(agentId).getRecord(), vns.cursor().cursor().get());
 		assertArrayEquals(new ACell[] {Strings.intern("n"), Strings.intern("draft")},
 			vns.remainingKeys());
 		assertTrue(vns.requireExistingRecord());
-		assertEquals(Strings.intern("ts"), vns.recordTimestampKey(),
-			"a resolver positioned at the agent boundary must identify its record stamp");
 	}
 
 	@Test
@@ -2795,11 +2791,9 @@ public class CoviaAdapterTest {
 		assertEquals("temp", vns.remainingKeys()[0].toString());
 		assertEquals("draft", vns.remainingKeys()[1].toString());
 		assertTrue(vns.requireExistingRecord());
-		assertEquals(Fields.UPDATED, vns.recordTimestampKey(),
-			"a resolver positioned at the Job boundary must identify its record stamp");
 
 		// The cursor must be the FOCUSED TASK's Job record, not the transition Job's.
-		assertEquals(user.getJob(taskId), vns.cursor().get(),
+		assertEquals(user.getJob(taskId), vns.cursor().cursor().get(),
 			"t/ must resolve to the focused task Job");
 	}
 
@@ -2818,9 +2812,8 @@ public class CoviaAdapterTest {
 		assertNotNull(vns);
 		assertEquals("temp", vns.remainingKeys()[0].toString());
 		assertTrue(vns.requireExistingRecord());
-		assertEquals(Fields.UPDATED, vns.recordTimestampKey());
 
-		assertEquals(user.getJob(jobId), vns.cursor().get(),
+		assertEquals(user.getJob(jobId), vns.cursor().cursor().get(),
 			"t/ must resolve to the current Job record");
 	}
 

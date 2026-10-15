@@ -102,13 +102,13 @@ A single `covia:slice v/info` round trip gives an agent or tool a complete venue
 
 ### `/v/` is a venue-scoped resolver — a new pattern
 
-The existing virtual namespaces (`n/` and `t/`) are **caller-scoped**: they navigate to a sub-region inside the *caller's own* user data based on `RequestContext` (`agentId` for `n/`, `jobId` for `t/`). Both implementations call `adapter.ensureUserCursor(ctx)` to get the caller's cursor, then rewrite or navigate within it.
+The existing virtual namespaces (`n/` and `t/`) are **caller-scoped**: they navigate to a sub-region inside the *caller's own* user data based on `RequestContext` (`agentId` for `n/`, `jobId` for `t/`). Both implementations obtain the caller's `User` through `adapter.ensureUser(ctx)`, then use its stamped `recordCursor(...)` for the scoped record.
 
 `/v/` is **venue-scoped**: it navigates to a *fixed user* — the venue user — regardless of who is calling. `v/ops/json/merge` always resolves to `<venue-DID>/w/global/ops/json/merge`, whether read by Alice, Bob, or an anonymous client.
 
 This is a new pattern in the resolver framework. To support it, two small interface extensions are required:
 
-1. **`CoviaAdapter.ensureUserCursor(AString did)`** — a parallel to the existing `ensureUserCursor(ctx)`, returning the cursor for a *named* user rather than the calling user. Used by the `/v/` resolver to get the venue user's cursor.
+1. **`CoviaAdapter.ensureWorkspaceRoot(AString did)`** — a parallel to `ensureWorkspaceRoot(ctx)`, returning the workspace view for a *named* user rather than the calling user. Used by the `/v/` resolver to get the venue user's workspace.
 
 2. **`NamespaceResolver.canWrite(RequestContext ctx)`** — a per-call write check. Existing resolvers have `boolean isWritable()` which is a static yes/no, fine for caller-scoped namespaces (the caller writes to their own data; if they're authorised at all, they're authorised). Venue-scoped `/v/` needs to check the calling identity at write time. Existing resolvers get a default implementation that defers to `isWritable()`, so no behavioural change for `n/` and `t/`.
 

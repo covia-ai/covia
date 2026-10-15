@@ -11,7 +11,7 @@ import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import convex.lattice.ALatticeComponent;
-import convex.lattice.cursor.ALatticeCursor;
+import convex.lattice.cursor.AForkableCursor;
 
 /**
  * Cursor wrapper for the venue's asset store.
@@ -35,8 +35,9 @@ public class AssetStore extends ALatticeComponent<Index<AString, AVector<ACell>>
 	public static final long POS_META = 2;
 
 	AssetStore(ALatticeComponent<?> parent,
-			ALatticeCursor<Index<AString, AVector<ACell>>> cursor) {
-		super(parent, cursor);
+			AForkableCursor<Index<AString, AVector<ACell>>> cursor) {
+		super(cursor);
+		setContext(parent.getContext());
 	}
 
 	/**

@@ -16,7 +16,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.lattice.ALatticeComponent;
-import convex.lattice.cursor.ALatticeCursor;
+import convex.lattice.cursor.AForkableCursor;
 import covia.api.Fields;
 
 /**
@@ -142,9 +142,10 @@ public class AgentState extends ALatticeComponent<ACell> {
 
 	private final AString agentId;
 
-	AgentState(ALatticeComponent<?> parent, ALatticeCursor<ACell> cursor,
+	AgentState(ALatticeComponent<?> parent, AForkableCursor<ACell> cursor,
 			AString agentId) {
-		super(parent, cursor);
+		super(cursor);
+		setContext(parent.getContext());
 		this.agentId = agentId;
 	}
 
@@ -172,7 +173,7 @@ public class AgentState extends ALatticeComponent<ACell> {
 	 * times its CAS lambda retries under contention.
 	 */
 	private CVMLong now() {
-		return cursor.getContext().currentTimestamp();
+		return getContext().currentTimestamp();
 	}
 
 	@SuppressWarnings("unchecked")

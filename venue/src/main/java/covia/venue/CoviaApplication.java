@@ -25,10 +25,15 @@ public final class CoviaApplication
 		extends ALatticeApplication<Index<Keyword, ACell>> {
 
 	private final boolean ephemeral;
+	private final RootComponent<Index<Keyword, ACell>> host;
 
 	private CoviaApplication(RootComponent<Index<Keyword, ACell>> host,
 			boolean ephemeral) {
-		super(host);
+		// Use the live-cursor constructor. The host-based constructor creates a
+		// private working copy, which would split Engine's authoritative state.
+		super(Covia.ROOT, host.cursor());
+		this.host = host;
+		setContext(host.getContext());
 		this.ephemeral = ephemeral;
 	}
 
@@ -45,7 +50,7 @@ public final class CoviaApplication
 		}
 		RootComponent<Index<Keyword, ACell>> root =
 			RootComponent.create(Covia.ROOT, new MemoryStore());
-		root.cursor().setContext(LatticeContext.create(null, keyPair));
+		root.setContext(LatticeContext.create(null, keyPair));
 		return new CoviaApplication(root, true);
 	}
 
@@ -60,7 +65,7 @@ public final class CoviaApplication
 		}
 		RootComponent<Index<Keyword, ACell>> root =
 			RootComponent.open(Covia.ROOT, store);
-		root.cursor().setContext(LatticeContext.create(null, keyPair));
+		root.setContext(LatticeContext.create(null, keyPair));
 		return connect(root);
 	}
 
@@ -71,7 +76,12 @@ public final class CoviaApplication
 
 	/** Returns the caller-owned host store for internal adapter integration. */
 	AStore hostStore() {
-		return host().store();
+		return host.store();
+	}
+
+	/** Host-owned persistence and durability boundary. */
+	public RootComponent<Index<Keyword, ACell>> host() {
+		return host;
 	}
 
 	/** Whether this application was created as an in-memory ephemeral host. */

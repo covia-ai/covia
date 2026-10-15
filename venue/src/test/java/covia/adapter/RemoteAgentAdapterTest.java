@@ -182,7 +182,7 @@ class RemoteAgentAdapterTest {
 
 	@Test void freshEngineReattachesWithoutResubmitting() throws Exception {
 		try (Peer peer = new Peer()) {
-			var cursor = convex.lattice.cursor.Cursors.createLattice(Covia.ROOT);
+			var cursor = convex.lattice.cursor.Cursors.root(Covia.ROOT);
 			AKeyPair key = AKeyPair.generate();
 			AMap<AString, ACell> config = Maps.of(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0));
 			Engine first = new Engine(config, cursor, key).start();
@@ -209,7 +209,7 @@ class RemoteAgentAdapterTest {
 
 	@Test void agentFacadeRecoversParentAndChildWithoutResubmission() throws Exception {
 		try (Peer peer = new Peer()) {
-			var cursor = convex.lattice.cursor.Cursors.createLattice(Covia.ROOT);
+			var cursor = convex.lattice.cursor.Cursors.root(Covia.ROOT);
 			AKeyPair key = AKeyPair.generate();
 			AMap<AString, ACell> config = Maps.of(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0));
 			Engine first = new Engine(config, cursor, key).start();

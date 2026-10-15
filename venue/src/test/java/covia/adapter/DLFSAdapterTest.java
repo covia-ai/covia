@@ -21,7 +21,6 @@ import java.util.function.BiPredicate;
 
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
-import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AccountKey;
 import convex.core.data.AVector;
@@ -30,7 +29,7 @@ import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.lang.RT;
 import convex.lattice.LatticeContext;
-import convex.lattice.cursor.ALatticeCursor;
+import convex.lattice.cursor.AForkableCursor;
 import covia.lattice.Covia;
 import covia.venue.CoviaApplication;
 import covia.venue.Engine;
@@ -258,9 +257,16 @@ public class DLFSAdapterTest {
 	public void testDeleteDrive() {
 		run("v/ops/dlfs/create-drive", Maps.of("name", "test-remove"));
 		run("v/ops/dlfs/write", Maps.of("drive", "test-remove", "path", "data.txt", "content", "hello"));
+		var beforeDelete = engine.getRootCursor().get();
 
 		ACell result = run("v/ops/dlfs/delete-drive", Maps.of("name", "test-remove"));
 		assertTrue(RT.bool(RT.getIn(result, "deleted")));
+		engine.getRootCursor().updateAndGet(own ->
+			Covia.ROOT.merge(engine.getLatticeContext(), own, beforeDelete));
+		AVector<?> names = RT.ensureVector(RT.getIn(
+			run("v/ops/dlfs/list-drives", Maps.empty()), "drives"));
+		assertFalse(names.toString().contains("test-remove"),
+			"a stale replica must not resurrect a deleted drive or list its tombstone");
 
 		// Drive tombstoned on lattice — re-accessing creates a fresh empty drive
 		result = run("v/ops/dlfs/list", Maps.of("drive", "test-remove"));
@@ -275,7 +281,7 @@ public class DLFSAdapterTest {
 		run("v/ops/dlfs/write", Maps.of("drive", "sync-test", "path", "hello.txt", "content", "sync check"));
 
 		// Verify the root cursor has DLFS data
-		ALatticeCursor<Index<Keyword, ACell>> root = engine.getRootCursor();
+		AForkableCursor<Index<Keyword, ACell>> root = engine.getRootCursor();
 		ACell dlfsRegion = root.get().get(Covia.DLFS);
 		assertNotNull(dlfsRegion, "Root cursor should have :dlfs region after DLFS write");
 	}
@@ -283,12 +289,14 @@ public class DLFSAdapterTest {
 	@Test
 	public void testDLFSSyncReachesRootOnSyncCallback() {
 		// Hook an onSync callback on the root cursor (simulates NodeServer propagator)
-		ALatticeCursor<Index<Keyword, ACell>> root = engine.getRootCursor();
+		AForkableCursor<Index<Keyword, ACell>> root = engine.getRootCursor();
 		AtomicInteger syncCount = new AtomicInteger();
-		if (root instanceof convex.lattice.cursor.RootLatticeCursor<?> rlc) {
-			rlc.onSync(value -> { syncCount.incrementAndGet(); return value; });
+		if (root instanceof convex.lattice.cursor.Root<?> rlc) {
+			((convex.lattice.cursor.Root<Index<Keyword, ACell>>) rlc).onSync(
+				value -> { syncCount.incrementAndGet(); return value; },
+				(own, other) -> Covia.ROOT.merge(engine.getLatticeContext(), own, other));
 		} else {
-			fail("Engine root cursor should be a RootLatticeCursor, was: " + root.getClass().getName());
+			fail("Engine root cursor should be a Root, was: " + root.getClass().getName());
 		}
 
 		// Write via adapter
@@ -329,8 +337,8 @@ public class DLFSAdapterTest {
 			Files.delete(file);
 
 			var root = isolated.getRootCursor();
-			assertInstanceOf(convex.lattice.cursor.RootLatticeCursor.class, root);
-			((convex.lattice.cursor.RootLatticeCursor<?>) root).onSync(value -> {
+			assertInstanceOf(convex.lattice.cursor.Root.class, root);
+			((convex.lattice.cursor.Root<Index<Keyword, ACell>>) root).onSync(value -> {
 				if (blockNextSync.compareAndSet(true, false)) {
 					syncEntered.countDown();
 					try {
@@ -343,7 +351,7 @@ public class DLFSAdapterTest {
 					}
 				}
 				return value;
-			});
+			}, (own, other) -> Covia.ROOT.merge(isolated.getLatticeContext(), own, other));
 
 			blockNextSync.set(true);
 			syncThread = Thread.startVirtualThread(() -> {
@@ -372,9 +380,9 @@ public class DLFSAdapterTest {
 	public void testLongLivedDriveUsesCurrentVenueClock() throws Exception {
 		DLFSAdapter adapter = (DLFSAdapter) engine.getAdapter("dlfs");
 		var drive = adapter.getDriveForIdentity(ALICE_DID.toString(), "live-clock");
-		long before = drive.getCursor().getContext().currentTimestamp().longValue();
+		long before = drive.getContext().currentTimestamp().longValue();
 		Thread.sleep(3);
-		long after = drive.getCursor().getContext().currentTimestamp().longValue();
+		long after = drive.getContext().currentTimestamp().longValue();
 		assertTrue(after > before, "long-lived drive timestamp must advance with the venue clock");
 	}
 
@@ -383,7 +391,7 @@ public class DLFSAdapterTest {
 		AKeyPair venueKey = AKeyPair.generate();
 		CoviaApplication application = CoviaApplication.create(venueKey);
 		BiPredicate<ACell, AccountKey> ownerVerifier = (owner, signer) -> false;
-		application.cursor().setContext(LatticeContext.EMPTY
+		application.setContext(LatticeContext.EMPTY
 			.withOwnerVerifier(ownerVerifier)
 			.withMaxFutureTimestampSkew(1234)
 			.withSigningKey(venueKey));
@@ -396,7 +404,7 @@ public class DLFSAdapterTest {
 			DLFSAdapter adapter = (DLFSAdapter) isolated.getAdapter("dlfs");
 			LatticeContext driveContext = adapter.getDriveForIdentity(
 				TestEngine.uniqueDID("dlfs-host-policy").toString(), "policy")
-				.getCursor().getContext();
+				.getContext();
 
 			assertSame(ownerVerifier, driveContext.getOwnerVerifier());
 			assertEquals(1234, driveContext.getMaxFutureTimestampSkew(-1));
@@ -625,6 +633,28 @@ public class DLFSAdapterTest {
 			"drive", "dst", "path", "b.txt", "contentRef", "dlfs/src/a.txt"));
 		ACell read = run("v/ops/dlfs/read", Maps.of("drive", "dst", "path", "b.txt"));
 		assertEquals("across drives", RT.getIn(read, "content").toString());
+	}
+
+	@Test
+	public void didContentReferencesDecodeNamesBeforeAccessChecks() throws Exception {
+		var ctx = covia.venue.RequestContext.of(ALICE_DID);
+		String name = "Lab report+日本語(1).txt";
+		String encoded = java.net.URLEncoder.encode(name, java.nio.charset.StandardCharsets.UTF_8).replace("+", "%20");
+		var ref = convex.core.data.Strings.create(ALICE_DID + "/dlfs/names/" + encoded);
+		assertTrue(engine.createContent(ref, new java.io.ByteArrayInputStream(new byte[] {42}), null, ctx));
+		assertArrayEquals(new byte[] {42}, engine.resolveContent(ref, ctx).content().getBlob().getBytes());
+		// A path operation must see the original name, not its percent-encoded URL spelling.
+		ACell read = run("v/ops/dlfs/read", Maps.of("drive", "names", "path", name));
+		assertEquals("*", RT.getIn(read, "content").toString());
+		assertThrows(java.nio.file.FileAlreadyExistsException.class, () -> engine.createContent(ref,
+			new java.io.ByteArrayInputStream(new byte[] {9}), null, ctx));
+		assertThrows(IllegalArgumentException.class, () -> engine.resolveContent(
+			convex.core.data.Strings.create(ALICE_DID + "/dlfs/names/%2e%2e/escape"), ctx));
+		var scoped = ctx.withCaps(convex.core.data.Vectors.of(convex.auth.ucan.Capability.create(
+			convex.core.data.Strings.create("dlfs/names/" + name), convex.auth.ucan.Capability.CRUD_READ)));
+		assertArrayEquals(new byte[] {42}, engine.resolveContent(ref, scoped).content().getBlob().getBytes());
+		assertThrows(RuntimeException.class, () -> engine.resolveContent(
+			convex.core.data.Strings.create(ALICE_DID + "/dlfs/names/allowed/%2e%2e/other.txt"), scoped));
 	}
 
 	@Test

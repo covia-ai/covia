@@ -1,10 +1,11 @@
 package covia.adapter;
 
+import static convex.dlfs.DLFSDriveManager.isValidDriveName;
+
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileSystem;
 import java.nio.file.Files;
-import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.concurrent.CompletableFuture;
@@ -21,22 +22,17 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.AccountKey;
 import convex.core.data.Blob;
-import convex.core.data.Index;
-import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
-import convex.lattice.LatticeContext;
-import convex.lattice.cursor.ALatticeCursor;
 import convex.lattice.fs.impl.DLFSLocal;
 import covia.api.Fields;
 import covia.lattice.CapabilityChecker;
 import covia.lattice.Covia;
 import covia.utils.MimeUtils;
 import covia.venue.Config;
-import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.SecretStore;
 import covia.venue.User;
@@ -200,28 +196,6 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	// ==================== Drive Access ====================
 
 	/**
-	 * Gets the DLFS cursor for a user's signed region in the :dlfs lattice.
-	 * Navigates root → :dlfs → OwnerLattice(AccountKey) → :value (signed drives map).
-	 *
-	 * <p>The returned cursor carries only the caller's DLFS signing key. Its
-	 * timestamp remains live; connected drive views obtain the venue's current
-	 * write timestamp for every mutation.</p>
-	 */
-	private ALatticeCursor<?> getUserDLFSCursor(AKeyPair dlfsKey) {
-		ALatticeCursor<Index<Keyword, ACell>> rootCursor = engine.getRootCursor();
-		ALatticeCursor<?> dlfsCursor = rootCursor.path(Covia.DLFS);
-
-		// Override only the signer. Delegating from the host policy preserves its
-		// live clock, owner verifier and future-timestamp-skew limit (Convex
-		// 0.8.14); constructing a fresh context here would silently discard them.
-		LatticeContext lctx = dlfsCursor.getContext().withSigningKey(dlfsKey);
-		dlfsCursor.setContext(lctx);
-
-		AccountKey ak = dlfsKey.getAccountKey();
-		return dlfsCursor.path(ak, convex.core.cvm.Keywords.VALUE);
-	}
-
-	/**
 	 * Gets a connected DLFS drive for the given DID. Public so WebDAV can
 	 * access drives by identity string.
 	 */
@@ -244,26 +218,21 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 				"DLFS drive name must be non-empty and contain no '/', '\\', or ':'");
 		}
 		AKeyPair dlfsKey = ensureUserKeyPair(ctx);
-		ALatticeCursor<?> userCursor = getUserDLFSCursor(dlfsKey);
-		// Convex 0.8.14 resolves each DLFS mutation timestamp through the cursor's
-		// inherited live policy, so long-lived views see the current application
-		// clock on every write (#387).
-		return engine.connectDLFSDrive(userCursor, Strings.create(driveName));
+		var drives = engine.getDLFSDrives(dlfsKey);
+		var drive = drives.drive(driveName);
+		if (drive == null) drive = drives.createDrive(driveName);
+		if (drive == null) drive = drives.drive(driveName); // a concurrent creator won
+		if (drive == null) throw new IllegalStateException("Cannot open DLFS drive: " + driveName);
+		return (DLFSLocal) drive.fileSystem();
 	}
 
 	/**
-	 * Lists drive names by inspecting the user's DLFS cursor.
+	 * Lists live drives through the domain component, excluding tombstones.
 	 */
 	private AVector<ACell> listDriveNames(RequestContext ctx) {
-		AKeyPair dlfsKey = ensureUserKeyPair(ctx);
-		ALatticeCursor<?> userCursor = getUserDLFSCursor(dlfsKey);
-		ACell value = userCursor.get();
-
 		AVector<ACell> names = Vectors.empty();
-		if (value instanceof AMap<?,?> map) {
-			for (var entry : ((AMap<AString,ACell>) map).entrySet()) {
-				names = names.conj(entry.getKey());
-			}
+		for (String name : engine.getDLFSDrives(ensureUserKeyPair(ctx)).driveNames()) {
+			names = names.conj(Strings.create(name));
 		}
 		return names;
 	}
@@ -373,7 +342,10 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 			if (!ref.contains("/dlfs/")) return null;
 			DIDURL didURL = DIDURL.create(ref);
 			owner = Strings.create(didURL.getDID().toString());
+			// DIDURL exposes a raw URL path. Decode once before normalisation and
+			// authority checks; unlike form decoding, URI paths preserve literal '+'.
 			rest = didURL.getPath();
+			if (rest != null) rest = java.net.URI.create(rest).getPath();
 			if (rest != null && rest.startsWith("/")) rest = rest.substring(1);
 		}
 		if (rest == null) return null;
@@ -386,11 +358,6 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 			? "" : rest.substring(slash + 1);
 		if (!isValidDriveName(drive)) return null;
 		return new DlfsFileRef(owner, drive, normaliseRelativePath(path));
-	}
-
-	private static boolean isValidDriveName(String name) {
-		return name != null && !name.isBlank()
-			&& name.indexOf('/') < 0 && name.indexOf('\\') < 0 && name.indexOf(':') < 0;
 	}
 
 	private static String normaliseRelativePath(String path) {
@@ -486,13 +453,25 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	@Override
 	public boolean putContent(AString ref, java.io.InputStream data, String contentType,
 			RequestContext ctx) throws IOException {
+		return writeContent(ref, data, ctx, false);
+	}
+
+	@Override
+	public boolean createContent(AString ref, java.io.InputStream data, String contentType,
+			RequestContext ctx) throws IOException {
+		return writeContent(ref, data, ctx, true);
+	}
+
+	private boolean writeContent(AString ref, java.io.InputStream data, RequestContext ctx,
+			boolean createOnly) throws IOException {
 		if (ref == null) return false;
 		AuthorisedPath target = resolveAuthorisedPath(ctx, ref.toString(), Capability.CRUD_WRITE);
 		if (target == null) return false;
 		Path path = target.path();
-		try (java.io.OutputStream os = Files.newOutputStream(path,
+		try (java.io.OutputStream os = Files.newOutputStream(path, createOnly
+				? FileOperations.createOptions(path) : new java.nio.file.OpenOption[] {
 				StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
-				StandardOpenOption.WRITE)) {
+				StandardOpenOption.WRITE })) {
 			data.transferTo(os);
 		}
 		return true;
@@ -637,7 +616,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		if (name == null) name = RT.ensureString(input.get(FIELD_DRIVE));
 		if (name == null) throw new IllegalArgumentException("'name' or 'drive' is required");
 
-		// getDrive auto-creates via DLFS.connect() (initialises empty tree if absent)
+		// Opening a missing drive creates it through DLFSDrives.
 		getDrive(ctx, name.toString());
 		return Maps.of(
 			"created", CVMBool.TRUE,
@@ -654,10 +633,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 				"DLFS drive name must be non-empty and contain no '/', '\\', or ':'");
 		}
 
-		AKeyPair dlfsKey = ensureUserKeyPair(ctx);
-		ALatticeCursor<?> userCursor = getUserDLFSCursor(dlfsKey);
-		ALatticeCursor<?> driveCursor = userCursor.path(name);
-		driveCursor.set(null);
+		engine.getDLFSDrives(ensureUserKeyPair(ctx)).deleteDrive(name.toString());
 
 		return Maps.of("deleted", CVMBool.TRUE);
 	}

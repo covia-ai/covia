@@ -274,6 +274,7 @@ public class TelegramAdapterTest {
 			Strings.create("op"), botConfig(token, OWNER.toString(), "operation", "v/test/ops/echo", null)
 				.assoc(BotSpec.K_OPEN, convex.core.data.prim.CVMBool.TRUE)));
 		awaitState("op", BotRunner.State.RUNNING, 10_000);
+		await(() -> "[]".equals(telegram.lastFilters.get(token)), 10_000, () -> "operation bot did not reset allowed_updates");
 		try {
 			// open bot: a stranger is answered; echo returns its input — the Telegram
 			// Update as sent, plus bot — which is rendered as JSON for the reply
@@ -409,12 +410,427 @@ public class TelegramAdapterTest {
 	}
 
 	@Test
-	public void testAgentBotIgnoresNonTextInPrivateWithNotice() throws Exception {
-		telegram.pushPhoto(FakeTelegramServer.TOKEN, 1006L, ALLOWED_ID, "alice", null);
-		FakeTelegramServer.Sent notice = telegram.awaitSent(10_000);
-		assertNotNull(notice);
-		assertTrue(notice.text().startsWith("I can only read text"), notice.text());
-		assertNull(readSession("echo", 1006L), "no conversation turn for a photo without caption");
+	public void testAgentBotReceivesPhotoWithoutCaption() throws Exception {
+		var seen = new java.util.concurrent.atomic.AtomicReference<ACell>();
+		engine.registerAdapter(new covia.adapter.AAdapter() {
+			@Override public String getName() { return "telegram-vision"; }
+			@Override public String getDescription() { return "Captures a multimodal LLM request"; }
+			@Override protected void installAssets() {
+				installAsset("telegram-vision/llm", Maps.of("name", "Vision fixture", "operation", Maps.of("adapter", "telegram-vision:llm")));
+			}
+			@Override public java.util.concurrent.CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+				seen.set(input);
+				return java.util.concurrent.CompletableFuture.completedFuture(Maps.of("role", "assistant", "content", "Photo received"));
+			}
+		});
+		run(RequestContext.of(OWNER), "v/ops/agent/create", Maps.of(Fields.AGENT_ID, "tg-vision", Fields.CONFIG,
+			Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/ops/telegram-vision/llm")));
+		try {
+			configureBots(Maps.of("echo", echoBotConfig().assoc(BotSpec.K_AGENT, Strings.create("tg-vision"))));
+			awaitState("echo", BotRunner.State.RUNNING, 10_000);
+			telegram.pushPhoto(FakeTelegramServer.TOKEN, 1006L, ALLOWED_ID, "alice", null);
+			FakeTelegramServer.Sent reply = telegram.awaitSent(15_000);
+			assertNotNull(reply);
+			assertEquals("Photo received", reply.text());
+			assertNotNull(readSession("echo", 1006L));
+			AVector<ACell> messages = RT.ensureVector(RT.getIn(seen.get(), "messages"));
+			boolean imageAtModel = false;
+			for (ACell message : messages) {
+				AVector<ACell> blocks = RT.ensureVector(RT.getIn(message, "content"));
+				if (blocks == null) continue;
+				for (ACell block : blocks) {
+					if (!Strings.create("image").equals(RT.getIn(block, "type"))) continue;
+					assertEquals(Strings.create("image/jpeg"), RT.getIn(block, "source", "mediaType"));
+					assertTrue(RT.getIn(block, "source", "ref").toString().contains("/dlfs/telegram/"));
+					imageAtModel = true;
+				}
+			}
+			assertTrue(imageAtModel, "photo reference reaches the LLM as an image block: " + seen.get());
+		} finally {
+			configureBots(Maps.of("echo", echoBotConfig()));
+			awaitState("echo", BotRunner.State.RUNNING, 10_000);
+		}
+	}
+
+	@Test
+	public void mediaProcessorReadsBytesAsOwnerAndTranscriptionReachesAgent() throws Exception {
+		String fileId = "transcription_test";
+		telegram.files.put(fileId, "recorded voice".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+		engine.registerAdapter(new covia.adapter.AAdapter() {
+			@Override public String getName() { return "telegram-test"; }
+			@Override public String getDescription() { return "Test transcription fixture"; }
+			@Override protected void installAssets() {
+				installAsset("telegram-test/transcribe", Maps.of("name", "Transcribe fixture", "operation", Maps.of("adapter", "telegram-test:transcribe")));
+			}
+			@Override public java.util.concurrent.CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+				assertEquals(OWNER, ctx.getUserDID());
+				assertEquals(CVMLong.create(15001), RT.getIn(input, "via", "chat", "id"));
+				assertEquals(Strings.create("echo"), RT.getIn(input, "via", "bot"));
+				if (Strings.create("document").equals(RT.getIn(input, "kind"))) {
+					return java.util.concurrent.CompletableFuture.completedFuture(Maps.empty());
+				}
+				assertEquals(Strings.create("voice"), RT.getIn(input, "kind"));
+				assertEquals(Strings.create("Transcribe this note"), RT.getIn(input, "caption"));
+				try {
+					var content = engine.resolveContent(RT.ensureString(RT.getIn(input, "ref")), ctx);
+					assertEquals("recorded voice", new String(content.content().getBlob().getBytes(), java.nio.charset.StandardCharsets.UTF_8));
+				} catch (java.io.IOException e) { throw new RuntimeException(e); }
+				return java.util.concurrent.CompletableFuture.completedFuture(Maps.of("text", "Please remind me about my appointment", "language", "en", "recordId", "application-record-17"));
+			}
+		});
+		try {
+			configureBots(Maps.of("echo", echoBotConfig().assoc(BotSpec.K_MEDIA_OPERATION, Strings.create("v/ops/telegram-test/transcribe"))));
+			awaitState("echo", BotRunner.State.RUNNING, 10_000);
+			var message = telegram.message(15001, "private", ALLOWED_ID, "alice");
+			message.put("voice", java.util.Map.of("file_id", fileId, "file_unique_id", "voiceu", "duration", 3));
+			message.put("caption", "Transcribe this note");
+			telegram.pushUpdate(FakeTelegramServer.TOKEN, new java.util.HashMap<>(java.util.Map.of("message", message)));
+			var reply = telegram.awaitSent(15_000);
+			assertNotNull(reply);
+			assertTrue(reply.text().contains("Please remind me about my appointment"), reply.text());
+			assertTrue(reply.text().contains("application-record-17"), "structured application result is retained");
+			// A speech-only operation need not invent text for every other media type.
+			message = telegram.message(15001, "private", ALLOWED_ID, "alice");
+			message.put("document", java.util.Map.of("file_id", fileId, "file_unique_id", "docu", "file_name", "note.ogg"));
+			message.put("caption", "Keep this original file");
+			telegram.pushUpdate(FakeTelegramServer.TOKEN, new java.util.HashMap<>(java.util.Map.of("message", message)));
+			reply = telegram.awaitSent(15_000);
+			assertNotNull(reply);
+			assertTrue(reply.text().contains("Keep this original file") && reply.text().contains("/dlfs/telegram/"), reply.text());
+		} finally {
+			configureBots(Maps.of("echo", echoBotConfig()));
+			awaitState("echo", BotRunner.State.RUNNING, 10_000);
+		}
+	}
+
+	@Test
+	public void processorResultsKeepTransportMetadataAndRejectMalformedText() {
+		AMap<AString, ACell> attachment = Maps.of("ref", "dlfs/telegram/original.ogg", "kind", "voice");
+		assertEquals(attachment, TelegramMedia.processed(attachment, Maps.empty()));
+		var result = TelegramMedia.processed(attachment, Maps.of("ref", "application-ref", "recordId", "r1"));
+		assertEquals(attachment.get(Fields.REF), result.get(Fields.REF));
+		assertEquals(Strings.create("r1"), RT.getIn(result, "result", "recordId"));
+		for (ACell invalid : new ACell[] {null, Strings.create("bare transcript"), Maps.of("text", null), Maps.of("text", 12), Maps.of("text", " ")}) {
+			assertEquals(TelegramMedia.PROCESSOR_RESULT,
+				assertThrows(IllegalArgumentException.class, () -> TelegramMedia.processed(attachment, invalid)).getMessage());
+		}
+		assertEquals("Rendered", BotRunner.formattedReply(Strings.create("Rendered")));
+		assertEquals("Rendered", BotRunner.formattedReply(Maps.of("text", "Rendered")));
+		for (ACell invalid : new ACell[] {null, Maps.empty(), Maps.of("internalCard", "do not leak"), Strings.EMPTY}) {
+			assertEquals(BotRunner.INVALID_REPLY,
+				assertThrows(IllegalArgumentException.class, () -> BotRunner.formattedReply(invalid)).getMessage());
+		}
+		for (AString option : List.of(BotSpec.K_MEDIA_OPERATION, BotSpec.K_REPLY_OPERATION)) {
+			assertThrows(IllegalArgumentException.class, () -> BotSpec.parse("bad", Maps.of("token", "t", "user", OWNER,
+				"operation", "v/test/ops/echo").assoc(option, Strings.create("v/test/ops/echo")), true));
+		}
+	}
+
+	@Test
+	public void runtimeProcessingAndReplyHooksSurviveRearming() throws Exception {
+		String token = "778:HOOKS-BOT";
+		telegram.registerBot(token, "hooks_bot");
+		run(RequestContext.of(OWNER), "v/ops/secret/set", Maps.of("name", "TG_HOOKS", "value", token));
+		var calls = new java.util.concurrent.atomic.AtomicInteger();
+		var malformed = new java.util.concurrent.atomic.AtomicBoolean();
+		engine.registerAdapter(new covia.adapter.AAdapter() {
+			@Override public String getName() { return "telegram-format"; }
+			@Override public String getDescription() { return "Application reply formatter fixture"; }
+			@Override protected void installAssets() {
+				installAsset("telegram-format/reply", Maps.of("name", "Format fixture", "operation", Maps.of("adapter", "telegram-format:reply")));
+			}
+			@Override public java.util.concurrent.CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+				assertEquals(OWNER, ctx.getUserDID());
+				assertEquals(Strings.create("hooks"), RT.getIn(input, "via", "bot"));
+				assertEquals(CVMLong.create(ALLOWED_ID), RT.getIn(input, "via", "chat", "id"));
+				assertTrue(RT.getIn(input, "response").toString().contains("APPLICATION_CARD"));
+				calls.incrementAndGet();
+				if (malformed.get()) return java.util.concurrent.CompletableFuture.completedFuture(Maps.of("internalCard", "APPLICATION_CARD"));
+				return java.util.concurrent.CompletableFuture.completedFuture(Maps.of("text", "Readable application reply"));
+			}
+		});
+		run(RequestContext.of(OWNER), "v/ops/telegram/create", Maps.of("name", "hooks", "token", "s/TG_HOOKS", "agent", AGENT,
+			"allow", Vectors.of(ALLOWED_ID), "mediaOperation", "v/test/ops/echo", "replyOperation", "v/ops/telegram-format/reply"));
+		try {
+			for (int attempt = 0; attempt < 2; attempt++) {
+				BotRunner runner = adapter.runner(OWNER, "hooks");
+				await(() -> runner.state() == BotRunner.State.RUNNING, 10_000, () -> "hooks bot did not start");
+				assertEquals("v/test/ops/echo", runner.spec().mediaOperation());
+				assertEquals("v/ops/telegram-format/reply", runner.spec().replyOperation());
+				telegram.push(token, ALLOWED_ID, "private", ALLOWED_ID, "alice", "APPLICATION_CARD");
+				var reply = telegram.awaitSent(token, 15_000);
+				assertNotNull(reply);
+				assertEquals("Readable application reply", reply.text());
+				await(() -> runner.isChatIdle(ALLOWED_ID), 10_000, () -> "reply did not finish");
+				if (attempt == 0) {
+					adapter.forgetForTest(OWNER, "hooks");
+					adapter.rearmForTest();
+				}
+			}
+			assertEquals(2, calls.get());
+			malformed.set(true);
+			telegram.push(token, ALLOWED_ID, "private", ALLOWED_ID, "alice", "APPLICATION_CARD");
+			var failure = telegram.awaitSent(token, 15_000);
+			assertNotNull(failure);
+			assertTrue(failure.text().contains(BotRunner.INVALID_REPLY), failure.text());
+			assertFalse(failure.text().contains("APPLICATION_CARD"), "invalid formatting must not send the original response");
+		} finally {
+			run(RequestContext.of(OWNER), "v/ops/telegram/delete", Maps.of("name", "hooks"));
+		}
+	}
+
+	@Test
+	public void pendingReceiptSurvivesRunnerRestartAndCompletedReceiptIsNotReplayed() throws Exception {
+		configureBots(Maps.empty());
+		var inbox = new covia.adapter.webhook.WebhookInbox(engine, engine.adapterWorkspace("telegram"), "config/echo/inbox/" + OWNER.getHash().toHexString() + "/42");
+		var message = telegram.message(15002, "private", ALLOWED_ID, "alice");
+		message.put("text", "Recover this pending turn");
+		ACell update = convex.core.util.JSON.parse(convex.core.util.JSON.toString(java.util.Map.of("update_id", 900001, "message", message)));
+		inbox.accept("900001", update);
+		inbox.accept("900002", update);
+		inbox.claim("900002");
+		configureBots(Maps.of("echo", echoBotConfig()));
+		awaitState("echo", BotRunner.State.RUNNING, 10_000);
+		var reply = telegram.awaitSent(15_000);
+		assertNotNull(reply);
+		assertTrue(reply.text().contains("Recover this pending turn"), reply.text());
+		await(() -> covia.adapter.webhook.WebhookInbox.COMPLETE.equals(inbox.get("900001").get(Fields.STATUS)), 10_000, () -> "receipt did not complete");
+		inbox.accept("900001", update);
+		configureBots(Maps.empty());
+		configureBots(Maps.of("echo", echoBotConfig()));
+		awaitState("echo", BotRunner.State.RUNNING, 10_000);
+		assertNull(telegram.awaitSent(600), "completed or uncertain receipts must not run again");
+		assertEquals(covia.adapter.webhook.WebhookInbox.STARTED, inbox.get("900002").get(Fields.STATUS));
+	}
+
+	@Test
+	public void voiceAndDocumentBytesAreStoredPrivately() throws Exception {
+		for (String kind : List.of("voice", "document")) {
+			String fileId = "test_" + kind;
+			byte[] bytes = ("bytes for " + kind).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+			telegram.files.put(fileId, bytes);
+			var message = telegram.message(14001, "private", ALLOWED_ID, "alice");
+			message.put(kind, java.util.Map.of("file_id", fileId, "file_unique_id", fileId + "u", "duration", 2,
+				"mime_type", kind.equals("voice") ? "audio/ogg" : "application/pdf", "file_name", "document-transport.pdf"));
+			message.put("caption", "Please read this");
+			telegram.pushUpdate(FakeTelegramServer.TOKEN, new java.util.HashMap<>(java.util.Map.of("message", message)));
+			var reply = telegram.awaitSent(15_000);
+			assertNotNull(reply);
+			assertTrue(reply.text().contains(fileId) && reply.text().contains("Please read this"), reply.text());
+			String ref = OWNER + "/dlfs/telegram/" + (kind.equals("document") ? "document-transport.pdf" : "echo-" + Strings.create(fileId).getHash().toHexString() + ".bin");
+			var stored = engine.resolveContent(Strings.create(ref), RequestContext.of(OWNER));
+			org.junit.jupiter.api.Assertions.assertArrayEquals(bytes, stored.content().getBlob().getBytes());
+			assertThrows(RuntimeException.class, () -> engine.resolveContent(Strings.create(ref), RequestContext.of(OTHER)));
+			assertFalse(reply.text().contains(FakeTelegramServer.TOKEN));
+		}
+	}
+
+	@Test
+	public void unauthorisedMediaIsNotDownloaded() throws Exception {
+		int before = telegram.downloads.get();
+		telegram.pushPhoto(FakeTelegramServer.TOKEN, 14002, STRANGER_ID, "stranger", "private photo");
+		assertNotNull(telegram.awaitSent(10_000));
+		assertEquals(before, telegram.downloads.get());
+	}
+
+	@Test
+	public void downloadAndMultipartUploadUseProtectedReferences() throws Exception {
+		telegram.files.put("outbound", "voice-bytes".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+		ACell downloaded = run(RequestContext.of(OWNER), "v/ops/telegram/download", Maps.of("file_id", "outbound"));
+		ACell ref = RT.getIn(downloaded, Fields.REF);
+		run(RequestContext.of(OWNER), "v/ops/telegram/call", Maps.of("method", "sendVoice",
+			"params", Maps.of("chat_id", ALLOWED_ID), "files", Maps.of("voice", Maps.of("ref", ref, "filename", "note.ogg"))));
+		var sent = telegram.awaitSent(10_000);
+		assertEquals("sendVoice", sent.method());
+		assertEquals("voice-bytes", sent.form().get("voice"));
+		assertTrue(telegram.uploadTypes.get("voice").contains("filename=\"note.ogg\""));
+		// A caller cannot use a file part as a substitute for the checked target parameter.
+		assertThrows(RuntimeException.class, () -> run(RequestContext.of(OWNER), "v/ops/telegram/call", Maps.of("method", "sendVoice",
+			"params", Maps.of("chat_id", STRANGER_ID), "files", Maps.of("voice", Maps.of("ref", ref)))));
+	}
+
+	@Test
+	public void downloadAcceptsContentDestinationsAndPreservesCallerWriteScope() throws Exception {
+		byte[] bytes = "downloaded-content".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+		telegram.files.put("destination_test", bytes);
+		RequestContext owner = RequestContext.of(OWNER);
+		ACell result = run(owner, "v/ops/telegram/download", Maps.of("file_id", "destination_test", "destination", "dlfs/imports", "fileName", "note.ogg"));
+		assertEquals(Strings.create("dlfs/imports/note.ogg"), RT.getIn(result, Fields.REF));
+		org.junit.jupiter.api.Assertions.assertArrayEquals(bytes,
+			engine.resolveContent(Strings.create("dlfs/imports/note.ogg"), owner).content().getBlob().getBytes());
+
+		AString file = Strings.create("file://tmp/telegram-download.ogg");
+		RequestContext scoped = owner.withCaps(Vectors.of(
+			convex.auth.ucan.Capability.create(Strings.create("v/ops/telegram/download"), Strings.create("invoke")),
+			convex.auth.ucan.Capability.create(Strings.create(OWNER + "/telegram/echo"), TelegramAdapter.ABILITY_CALL),
+			convex.auth.ucan.Capability.create(file, convex.auth.ucan.Capability.CRUD_WRITE)));
+		result = run(scoped, "v/ops/telegram/download", Maps.of("file_id", "destination_test", "destination", "file://tmp/", "fileName", "telegram-download.ogg"));
+		assertEquals(file, RT.getIn(result, Fields.REF));
+		org.junit.jupiter.api.Assertions.assertArrayEquals(bytes, engine.resolveContent(file, owner).content().getBlob().getBytes());
+
+		// Bot authority must not replace the caller's scope for an explicit destination.
+		AString outside = Strings.create("file://tmp/telegram-outside-scope.ogg");
+		assertTrue(engine.putContent(outside, new java.io.ByteArrayInputStream(new byte[] {7}), null, owner));
+		assertThrows(RuntimeException.class, () -> run(scoped, "v/ops/telegram/download",
+			Maps.of("file_id", "destination_test", "destination", "file://tmp", "fileName", "telegram-outside-scope.ogg")));
+		org.junit.jupiter.api.Assertions.assertArrayEquals(new byte[] {7}, engine.resolveContent(outside, owner).content().getBlob().getBytes());
+		assertThrows(RuntimeException.class, () -> run(owner, "v/ops/telegram/download",
+			Maps.of("file_id", "destination_test", "destination", OTHER + "/dlfs/imports", "fileName", "note.ogg")));
+	}
+
+	@Test
+	public void originalNamesAndMimeTypesSurviveRestartAndDownloadCollisions() throws Exception {
+		String fileId = "original_named_report";
+		String original = "Lab report 日本語.pdf";
+		byte[] bytes = "original-named-bytes".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+		telegram.files.put(fileId, bytes);
+		var message = telegram.message(16001, "private", ALLOWED_ID, "alice");
+		message.put("document", java.util.Map.of("file_id", fileId, "file_unique_id", "originalu",
+			"file_name", original, "mime_type", "application/pdf"));
+		telegram.pushUpdate(FakeTelegramServer.TOKEN, new java.util.HashMap<>(java.util.Map.of("message", message)));
+		var reply = telegram.awaitSent(15_000);
+		assertNotNull(reply);
+		assertTrue(reply.text().contains(original), reply.text());
+		AString originalRef = Strings.create(OWNER + "/dlfs/telegram/" + java.net.URLEncoder.encode(original, java.nio.charset.StandardCharsets.UTF_8).replace("+", "%20"));
+		org.junit.jupiter.api.Assertions.assertArrayEquals(bytes, engine.resolveContent(originalRef, RequestContext.of(OWNER)).content().getBlob().getBytes());
+		await(() -> adapter.runner("echo").isChatIdle(16001), 10_000, () -> "document turn did not complete");
+		configureBots(Maps.empty());
+		configureBots(Maps.of("echo", echoBotConfig()));
+		awaitState("echo", BotRunner.State.RUNNING, 10_000);
+		ACell saved = run(RequestContext.of(OWNER), "v/ops/telegram/download", Maps.of("file_id", fileId));
+		assertEquals(Strings.create("Lab report 日本語(1).pdf"), RT.getIn(saved, Fields.FILE_NAME));
+		assertEquals(Strings.create(original), RT.getIn(saved, "file_name"));
+		assertEquals(Strings.create("application/pdf"), RT.getIn(saved, Fields.CONTENT_TYPE), "getFile's generated .bin path must not replace message MIME metadata");
+		org.junit.jupiter.api.Assertions.assertArrayEquals(bytes, engine.resolveContent(originalRef, RequestContext.of(OWNER)).content().getBlob().getBytes());
+		saved = run(RequestContext.of(OWNER), "v/ops/telegram/download", Maps.of("file_id", fileId, "fileName", "chosen-name.pdf"));
+		assertEquals(Strings.create("chosen-name.pdf"), RT.getIn(saved, Fields.FILE_NAME));
+		assertEquals(Strings.create(OWNER + "/dlfs/telegram/chosen-name.pdf"), RT.getIn(saved, Fields.REF));
+		saved = run(RequestContext.of(OWNER), "v/ops/telegram/download", Maps.of("file_id", fileId, "destination", "file://tmp"));
+		assertEquals(Strings.create("file://tmp/" + original), RT.getIn(saved, Fields.REF));
+	}
+
+	@Test
+	public void concurrentDownloadsNeverReplaceExistingContent() throws Exception {
+		String fileId = "collision_test";
+		byte[] bytes = "new-file".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+		telegram.files.put(fileId, bytes);
+		RequestContext owner = RequestContext.of(OWNER);
+		for (String directory : List.of("file://tmp", "dlfs/collisions")) {
+			String name = "collision-report.pdf";
+			AString original = Strings.create(directory + "/" + name);
+			assertTrue(engine.putContent(original, new java.io.ByteArrayInputStream(new byte[] {9}), null, owner));
+			var calls = new java.util.ArrayList<java.util.concurrent.CompletableFuture<ACell>>();
+			for (int i = 0; i < 6; i++) calls.add(java.util.concurrent.CompletableFuture.supplyAsync(() ->
+				adapter.handleDownload(owner, Maps.of("file_id", fileId, "destination", directory, "fileName", name))));
+			Set<ACell> refs = new HashSet<>();
+			for (var call : calls) {
+				ACell result = call.get(10, java.util.concurrent.TimeUnit.SECONDS);
+				AString ref = RT.ensureString(RT.getIn(result, Fields.REF));
+				assertTrue(refs.add(ref), "every concurrent download needs a different destination");
+				assertTrue(RT.getIn(result, Fields.FILE_NAME).toString().matches("collision-report\\([1-6]\\)\\.pdf"));
+				org.junit.jupiter.api.Assertions.assertArrayEquals(bytes, engine.resolveContent(ref, owner).content().getBlob().getBytes());
+			}
+			org.junit.jupiter.api.Assertions.assertArrayEquals(new byte[] {9}, engine.resolveContent(original, owner).content().getBlob().getBytes());
+		}
+	}
+
+	@Test
+	public void unsafeNamesAreRejectedOrFallBackWithoutLeavingTheDirectory() throws Exception {
+		String fileId = "unsafe_original";
+		telegram.files.put(fileId, new byte[] {4});
+		for (String name : List.of("../escape.pdf", "a/b.pdf", "a\\b.pdf", "report.pdf:stream", "a%2fb", "a#b", "NUL", "report.", " padded ")) {
+			assertFalse(TelegramMedia.safeFileName(name));
+			assertEquals(TelegramMedia.INVALID_FILE_NAME, assertThrows(IllegalArgumentException.class, () ->
+				adapter.handleDownload(RequestContext.of(OWNER), Maps.of("file_id", fileId, "fileName", name))).getMessage());
+		}
+		var message = telegram.message(16002, "private", ALLOWED_ID, "alice");
+		message.put("document", java.util.Map.of("file_id", fileId, "file_unique_id", "unsafeu", "file_name", "../escape.pdf"));
+		telegram.pushUpdate(FakeTelegramServer.TOKEN, new java.util.HashMap<>(java.util.Map.of("message", message)));
+		assertNotNull(telegram.awaitSent(15_000));
+		String fallback = "echo-" + Strings.create(fileId).getHash().toHexString() + ".bin";
+		assertNotNull(engine.resolveContent(Strings.create(OWNER + "/dlfs/telegram/" + fallback), RequestContext.of(OWNER)));
+		ACell result = run(RequestContext.of(OWNER), "v/ops/telegram/download", Maps.of("file_id", fileId));
+		assertEquals(Strings.create("../escape.pdf"), RT.getIn(result, "file_name"), "original name remains metadata, never a path");
+		assertEquals(Strings.create(TelegramMedia.collisionName(fallback, 1)), RT.getIn(result, Fields.FILE_NAME));
+	}
+
+	@Test
+	public void downloadRejectsMalformedAndUnsupportedDestinations() {
+		telegram.files.put("invalid_destination", new byte[] {1});
+		int before = telegram.downloads.get();
+		for (ACell invalid : new ACell[] {Strings.EMPTY, Strings.create(" "), CVMLong.ONE}) {
+			assertEquals(TelegramMedia.INVALID_DESTINATION, assertThrows(IllegalArgumentException.class,
+				() -> adapter.handleDownload(RequestContext.of(OWNER), Maps.of("file_id", "invalid_destination", "destination", invalid))).getMessage());
+		}
+		assertEquals(before, telegram.downloads.get());
+		var failure = assertThrows(IllegalArgumentException.class, () -> adapter.handleDownload(RequestContext.of(OWNER),
+			Maps.of("file_id", "invalid_destination", "destination", "unsupported://destination")));
+		assertTrue(failure.getMessage().startsWith(TelegramMedia.UNSUPPORTED_DESTINATION));
+	}
+
+	@Test
+	public void downloadRejectsOversizedFilesBeforeTransfer() {
+		telegram.files.put("oversized", new byte[] {1});
+		telegram.declaredSizes.put("oversized", (long) TelegramMedia.MAX_BYTES + 1);
+		int before = telegram.downloads.get();
+		assertThrows(RuntimeException.class, () -> run(RequestContext.of(OWNER), "v/ops/telegram/download", Maps.of("file_id", "oversized")));
+		assertEquals(before, telegram.downloads.get());
+	}
+
+	@Test
+	public void streamingSizeLimitAndMultipartTargetChecksCannotBeBypassed() throws Exception {
+		telegram.files.put("chunked", new byte[TelegramMedia.MAX_BYTES + 1]);
+		telegram.chunkedFiles.add("chunked");
+		try {
+			RuntimeException failure = assertThrows(RuntimeException.class, () -> run(RequestContext.of(OWNER),
+				"v/ops/telegram/download", Maps.of("file_id", "chunked")));
+			assertFalse(failure.toString().contains(FakeTelegramServer.TOKEN));
+		} finally { telegram.files.remove("chunked"); }
+		assertThrows(RuntimeException.class, () -> run(RequestContext.of(OWNER), "v/ops/telegram/call",
+			Maps.of("method", "sendVoice", "files", Maps.of("chat_id", Maps.of("ref", "dlfs/telegram/anything")))));
+	}
+
+	@Test
+	public void forumTopicsHaveIndependentSessionsAndResetOnlyTheirOwnTopic() throws Exception {
+		var sessions = new covia.adapter.messaging.ConversationSessions(engine.adapterWorkspace("telegram"), "config/echo/sessions");
+		for (int topic : List.of(11, 22)) {
+			var message = telegram.message(15003, "private", ALLOWED_ID, "alice");
+			message.put("text", "Hello topic " + topic);
+			message.put("is_topic_message", true);
+			message.put("message_thread_id", topic);
+			telegram.pushUpdate(FakeTelegramServer.TOKEN, new java.util.HashMap<>(java.util.Map.of("message", message)));
+			var reply = telegram.awaitSent(15_000);
+			assertNotNull(reply);
+			assertEquals(Integer.toString(topic), reply.form().get("message_thread_id"));
+		}
+		String firstKey = covia.adapter.messaging.ConversationRouter.key("15003", "11");
+		String secondKey = covia.adapter.messaging.ConversationRouter.key("15003", "22");
+		String second = sessions.get(secondKey);
+		assertNotNull(second);
+		assertNotEquals(sessions.get(firstKey), second);
+		var reset = telegram.message(15003, "private", ALLOWED_ID, "alice");
+		reset.put("text", "/new");
+		reset.put("is_topic_message", true);
+		reset.put("message_thread_id", 11);
+		telegram.pushUpdate(FakeTelegramServer.TOKEN, new java.util.HashMap<>(java.util.Map.of("message", reset)));
+		assertNotNull(telegram.awaitSent(10_000));
+		assertNull(sessions.get(firstKey));
+		assertEquals(second, sessions.get(secondKey));
+	}
+
+	@Test
+	public void topicKeysAndReplyMetadataArePreserved() {
+		var message = telegram.message(-12345, "supergroup", ALLOWED_ID, "alice");
+		message.put("is_topic_message", true);
+		message.put("message_thread_id", 101);
+		message.put("media_group_id", "album1");
+		var parsed = com.pengrad.telegrambot.utility.BotUtils.GSON.fromJson(convex.core.util.JSON.toString(message), com.pengrad.telegrambot.model.Message.class);
+		String key = BotRunner.conversationKey(parsed, -12345L);
+		assertNotEquals("-12345", key);
+		assertEquals(CVMLong.create(101), RT.getIn(adapter.runner("echo").agentMessage(parsed, "hello"), "via", "message_thread_id"));
+		message.put("message_thread_id", 102);
+		parsed = com.pengrad.telegrambot.utility.BotUtils.GSON.fromJson(convex.core.util.JSON.toString(message), com.pengrad.telegrambot.model.Message.class);
+		assertNotEquals(key, BotRunner.conversationKey(parsed, -12345L));
 	}
 
 	@Test

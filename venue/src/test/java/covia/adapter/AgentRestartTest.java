@@ -19,7 +19,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
 import convex.lattice.cursor.Cursors;
-import convex.lattice.cursor.RootLatticeCursor;
+import convex.lattice.cursor.Root;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -59,7 +59,7 @@ public class AgentRestartTest {
 
 	@Test
 	public void requestSurvivesRestartAndCompletesAfterBoot() throws Exception {
-		RootLatticeCursor<Index<Keyword, ACell>> cursor = Cursors.createLattice(Covia.ROOT);
+		Root<Index<Keyword, ACell>> cursor = Cursors.root(Covia.ROOT);
 		AKeyPair keyPair = AKeyPair.generate();
 		RequestContext alice = RequestContext.of(ALICE);
 		String agentId = "survivor";

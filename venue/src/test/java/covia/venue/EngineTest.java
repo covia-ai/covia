@@ -36,7 +36,7 @@ import convex.core.lang.RT;
 import convex.core.util.JSON;
 import convex.core.util.Utils;
 import convex.lattice.cursor.Cursors;
-import convex.lattice.cursor.RootLatticeCursor;
+import convex.lattice.cursor.Root;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
 import covia.grid.Asset;
@@ -77,7 +77,7 @@ public class EngineTest {
 		final TrackingStorage storage = new TrackingStorage();
 		final boolean failAfterSchedulerStart;
 
-		LifecycleTestEngine(RootLatticeCursor<Index<Keyword, ACell>> cursor,
+		LifecycleTestEngine(Root<Index<Keyword, ACell>> cursor,
 				boolean failAfterSchedulerStart) throws IOException {
 			super(null, cursor);
 			this.failAfterSchedulerStart = failAfterSchedulerStart;
@@ -161,7 +161,7 @@ public class EngineTest {
 
 	@Test
 	public void testConstructionIsInertAndCloseMirrorsStart() throws Exception {
-		RootLatticeCursor<Index<Keyword, ACell>> cursor = Cursors.createLattice(Covia.ROOT);
+		Root<Index<Keyword, ACell>> cursor = Cursors.root(Covia.ROOT);
 		LifecycleTestEngine engine = new LifecycleTestEngine(cursor, false);
 
 		assertFalse(engine.isStarted());
@@ -183,9 +183,10 @@ public class EngineTest {
 
 	@Test
 	public void testConnectedVenueStateUsesAtomicLocalWriteOrderAtSameTimestamp() throws Exception {
-		RootLatticeCursor<Index<Keyword, ACell>> cursor = Cursors.createLattice(Covia.ROOT);
-		cursor.setContext(cursor.getContext().withTimestamp(CVMLong.create(1_000L)));
+		Root<Index<Keyword, ACell>> cursor = Cursors.root(Covia.ROOT);
+
 		LifecycleTestEngine engine = new LifecycleTestEngine(cursor, false);
+		engine.latticeContext = convex.lattice.LatticeContext.EMPTY.withTimestamp(CVMLong.create(1_000L));
 		AString did = Strings.create("did:test:connected-engine-state");
 		Blob jobId = Blob.parse("0x0001");
 
@@ -210,7 +211,7 @@ public class EngineTest {
 
 	@Test
 	public void testFailedStartRollsBackAcquiredResources() throws Exception {
-		RootLatticeCursor<Index<Keyword, ACell>> cursor = Cursors.createLattice(Covia.ROOT);
+		Root<Index<Keyword, ACell>> cursor = Cursors.root(Covia.ROOT);
 		LifecycleTestEngine engine = new LifecycleTestEngine(cursor, true);
 
 		IllegalStateException failure = assertThrows(IllegalStateException.class, engine::start);

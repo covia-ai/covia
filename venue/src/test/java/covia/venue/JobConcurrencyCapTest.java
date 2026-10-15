@@ -12,7 +12,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.crypto.AKeyPair;
 import convex.lattice.cursor.Cursors;
-import convex.lattice.cursor.RootLatticeCursor;
+import convex.lattice.cursor.Root;
 import covia.exception.RateLimitException;
 import covia.grid.Job;
 import covia.lattice.Covia;
@@ -131,7 +131,7 @@ public class JobConcurrencyCapTest {
 				Config.ENABLED, true,
 				Strings.create("maxConcurrentJobsPerUser"), 1L,
 				Strings.create("blockMs"), 0L));
-		RootLatticeCursor<Index<Keyword, ACell>> cursor = Cursors.createLattice(Covia.ROOT);
+		Root<Index<Keyword, ACell>> cursor = Cursors.root(Covia.ROOT);
 		AKeyPair keyPair = AKeyPair.generate();
 		RequestContext alice = caller("did:key:zAliceRecoveredCap");
 		Job paused;

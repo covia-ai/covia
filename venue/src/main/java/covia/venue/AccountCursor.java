@@ -4,7 +4,7 @@ import java.util.Objects;
 
 import convex.core.data.ACell;
 import convex.core.lang.RT;
-import convex.lattice.cursor.ALatticeCursor;
+import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.AUpdateCursor;
 import covia.exception.AuthException;
 import covia.lattice.Covia;
@@ -13,8 +13,8 @@ import covia.lattice.Covia;
 final class AccountCursor extends AUpdateCursor<ACell, ACell> {
 	private final ACell generation;
 
-	AccountCursor(ALatticeCursor<ACell> base) {
-		super(base, base.getLattice(), null);
+	AccountCursor(AForkableCursor<ACell> base) {
+		super(base, Covia.USER_RECORD);
 		generation = RT.getIn(base.get(), Users.GENERATION);
 	}
 
@@ -34,8 +34,4 @@ final class AccountCursor extends AUpdateCursor<ACell, ACell> {
 		return value;
 	}
 
-	@Override
-	public ACell merge(ACell other) {
-		return updateAndGet(current -> lattice.merge(getContext(), current, other));
-	}
 }

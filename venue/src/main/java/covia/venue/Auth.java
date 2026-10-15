@@ -20,7 +20,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.Utils;
 import convex.lattice.ALatticeComponent;
-import convex.lattice.cursor.ALatticeCursor;
+import convex.lattice.cursor.AForkableCursor;
 import covia.api.Fields;
 import covia.lattice.CapabilityChecker;
 import covia.venue.auth.LoginProviders;
@@ -92,9 +92,9 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 	 * @param cursor Lattice cursor at the :users level
 	 */
 	@SuppressWarnings("unchecked")
-	Auth(Engine engine, ALatticeComponent<?> parent, ALatticeCursor<?> cursor) {
-		super(parent,
-			(ALatticeCursor<AMap<AString, AMap<AString, ACell>>>) cursor);
+	Auth(Engine engine, ALatticeComponent<?> parent, AForkableCursor<?> cursor) {
+		super((AForkableCursor<AMap<AString, AMap<AString, ACell>>>) cursor);
+		setContext(parent.getContext());
 
 		Config config = engine.config();
 		this.engine = engine;
@@ -211,7 +211,7 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 	 */
 	public synchronized void putUser(AString id, AMap<AString, ACell> record) {
 		engine.getVenueState().users().requireNotDeleted(RT.ensureString(record.get(Fields.DID)));
-		CVMLong timestamp = cursor.getContext().currentTimestamp();
+		CVMLong timestamp = getContext().currentTimestamp();
 		cursor.updateAndGet(current -> {
 			@SuppressWarnings("unchecked")
 			AMap<AString, AMap<AString, ACell>> m = (AMap<AString, AMap<AString, ACell>>) (AMap<?,?>) RT.castMap(current);
@@ -224,7 +224,7 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 	/** Atomically updates one user row without replacing unrelated fields. */
 	public synchronized AMap<AString, ACell> updateUser(AString id,
 			UnaryOperator<AMap<AString, ACell>> updater) {
-		CVMLong timestamp = cursor.getContext().currentTimestamp();
+		CVMLong timestamp = getContext().currentTimestamp();
 		AMap<AString, AMap<AString, ACell>> result = cursor.updateAndGet(current -> {
 			@SuppressWarnings("unchecked")
 			AMap<AString, AMap<AString, ACell>> users =
@@ -271,7 +271,7 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 	 */
 	public synchronized boolean ensureManagedUser(AString id, AString did) {
 		engine.getVenueState().users().requireNotDeleted(did);
-		CVMLong timestamp = cursor.getContext().currentTimestamp();
+		CVMLong timestamp = getContext().currentTimestamp();
 		AtomicBoolean created = new AtomicBoolean(false);
 		cursor.updateAndGet(current -> {
 			@SuppressWarnings("unchecked")

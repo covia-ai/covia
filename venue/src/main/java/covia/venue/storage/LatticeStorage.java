@@ -62,7 +62,7 @@ public class LatticeStorage extends AStorage {
 	 */
 	public LatticeStorage(ACursor<Index<ABlob, ABlob>> cursor) {
 		this.lattice = CASLattice.create();
-		this.cursor = (cursor != null) ? cursor : Cursors.createLattice(lattice);
+		this.cursor = (cursor != null) ? cursor : Cursors.root(lattice);
 	}
 
 	/**

@@ -7,7 +7,6 @@ import convex.core.data.Keyword;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.lattice.ALattice;
-import convex.lattice.cursor.ALatticeCursor;
 import convex.lattice.generic.CASLattice;
 import convex.lattice.generic.JSONLattice;
 import convex.lattice.generic.IndexLattice;
@@ -56,9 +55,12 @@ import covia.api.Fields;
  *       wins wholesale (tie → own), never recursing, so <b>deletions survive</b>
  *       the propagator's merge-back;</li>
  *   <li>typed keyed/map/index lattices with {@link JSONLattice} leaves —
- *       structural navigation and record-local write-stamping; keys are used
+ *       declared structure and record-local stamping functions; keys are used
  *       exactly as given (no coercion).</li>
  * </ul>
+ * <p>These definitions describe shape, merge and stamping functions. Domain
+ * components explicitly compose signed/stamped cursors using their own context;
+ * generic cursor navigation does not install application policy.</p>
  *
  * <p>This is correct because a venue's {@code :value} has a single authoritative
  * writer (its signing key under {@code OwnerLattice}/{@code SignedLattice}), so
@@ -137,8 +139,8 @@ public final class Covia {
 
 	/**
 	 * One-way ratchet for stamp timestamps: never below the stamp the value
-	 * already carries. Derived and forked cursors retain the application's live
-	 * context policy, but fixed test contexts, explicit timestamp overrides or a
+	 * already carries. Components supply the application's live context policy,
+	 * but fixed test contexts, explicit timestamp overrides or a
 	 * backwards host-clock step can still present a timestamp older than the
 	 * value already stored. A plain assoc would REGRESS the stamp, and under
 	 * whole-value LWW a regressed
@@ -225,12 +227,29 @@ public final class Covia {
 		return user.assoc(K_META, meta);
 	}
 
+	/** Caller-visible value inside a stamped workspace record. */
+	public static final AString WORKSPACE_DATA = Strings.intern("data");
+
+	/** Workspace envelope; components expose its data through an explicit view. */
+	public static final StampingLattice<ACell> WORKSPACE_RECORD = StampingLattice.create(
+		ac(StringKeyedLattice.create(WORKSPACE_DATA, JSONLattice.INSTANCE)), Covia::stampUpdated);
+
+	/** Last-modified policy for a job record. */
+	public static final StampingLattice<ACell> JOB_RECORD = StampingLattice.create(
+		JSONLattice.INSTANCE,
+		Covia::stampUpdated);
+
+	/** Last-modified policy for an agent record. */
+	public static final StampingLattice<ACell> AGENT_RECORD = StampingLattice.create(
+		JSONLattice.INSTANCE,
+		Covia::stampAgent);
+
 	/**
 	 * Per-DID user record. Jobs and agents have typed record boundaries that
 	 * maintain their existing {@code updated}/{@code ts} last-modified fields;
 	 * framework namespaces {@code s}/{@code a} are plain navigable JSON; and
 	 * user-writable {@code w}/{@code o}/{@code h} are
-	 * {@link WrapperLattice} regions ({@code {updated, data}} containers whose
+	 * {@link #WORKSPACE_RECORD} regions ({@code {updated, data}} containers whose
 	 * {@code data} is the caller-visible value). Merge is whole-value at
 	 * {@code :value}, so these child lattices are used only for navigation and
 	 * write-stamping.
@@ -240,23 +259,15 @@ public final class Covia {
 	 * once, {@code updated} bumped) — see {@link #stampUserMeta} and the
 	 * "User meta record" section of {@code GRID_LATTICE_DESIGN.md}.</p>
 	 */
-	private static final ALattice<ACell> JOB_RECORD = StampingLattice.create(
-		JSONLattice.INSTANCE,
-		Covia::stampUpdated);
-
-	private static final ALattice<ACell> AGENT_RECORD = StampingLattice.create(
-		JSONLattice.INSTANCE,
-		Covia::stampAgent);
-
-	private static final ALattice<ACell> USER_RECORD = StampingLattice.create(
+	public static final StampingLattice<ACell> USER_RECORD = StampingLattice.create(
 		ac(StringKeyedLattice.create(
 			"j", IndexLattice.create(JOB_RECORD),
 			"g", MapLattice.create(AGENT_RECORD),
 			"s", JSONLattice.INSTANCE,
 			"a", JSONLattice.INSTANCE,
-			"w", WrapperLattice.INSTANCE,
-			"o", WrapperLattice.INSTANCE,
-			"h", WrapperLattice.INSTANCE)),
+			"w", WORKSPACE_RECORD,
+			"o", WORKSPACE_RECORD,
+			"h", WORKSPACE_RECORD)),
 		Covia::stampUserMeta);
 
 	/**
@@ -264,19 +275,9 @@ public final class Covia {
 	 * {@code {updated, events, ...}}; writes below {@code events} refresh the
 	 * record's last-modified stamp without rebuilding or narrowing the record.
 	 */
-	private static final ALattice<ACell> SCHEDULE_RECORD = StampingLattice.create(
+	public static final StampingLattice<ACell> SCHEDULE_RECORD = StampingLattice.create(
 		ac(StringKeyedLattice.create("events", JSONLattice.INSTANCE)),
 		Covia::stampUpdated);
-
-	/**
-	 * Cursor at the caller-visible value of {@code key} below {@code base}: through
-	 * the {@link WrapperLattice#VIEW data view} when the child is a wrapped region,
-	 * plain navigation otherwise. Reads and writes at the returned cursor see and
-	 * replace exactly what a caller addressing {@code key} would.
-	 */
-	public static ALatticeCursor<ACell> child(ALatticeCursor<ACell> base, ACell key) {
-		return WrapperLattice.wraps(base, key) ? base.path(key, WrapperLattice.VIEW) : base.path(key);
-	}
 
 	/**
 	 * Venue interior — keyword-keyed regions; {@code :user-data} maps each DID to a
@@ -307,7 +308,7 @@ public final class Covia {
 	 * newest value already holds all content, making removal/GC durable). Genuinely
 	 * shared multi-writer content lives at grid {@code :meta} (a CAS region).
 	 */
-	public static final ALattice<ACell> VENUE = StampingLattice.create(
+	public static final StampingLattice<ACell> VENUE = StampingLattice.create(
 		LWWLattice.create(INTERIOR, Covia::venueTimestamp),
 		Covia::stampVenue);
 
@@ -325,9 +326,11 @@ public final class Covia {
 	 * state, signed by the venue's key) and {@code :dlfs} (per-user DLFS drives,
 	 * each signed by the user's own key).
 	 */
+	public static final OwnerLattice<ACell> VENUE_OWNERS = OwnerLattice.create(VENUE);
+
 	public static final KeyedLattice ROOT = KeyedLattice.create(
 		GRID, KeyedLattice.create(
-			VENUES, OwnerLattice.create(VENUE),
+			VENUES, VENUE_OWNERS,
 			META, CASLattice.create()
 		),
 		DLFS, DLFS_USERS

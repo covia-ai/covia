@@ -20,7 +20,7 @@ import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.lattice.cursor.Cursors;
-import convex.lattice.cursor.RootLatticeCursor;
+import convex.lattice.cursor.Root;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -109,7 +109,7 @@ class RemoteDelegationTest {
 
 	@Test void observerRestartReattachesToTheSameRemoteJob() throws Exception {
 		try (Peer peer = new Peer()) {
-			RootLatticeCursor<Index<Keyword, ACell>> cursor = Cursors.createLattice(Covia.ROOT);
+			Root<Index<Keyword, ACell>> cursor = Cursors.root(Covia.ROOT);
 			AKeyPair key = AKeyPair.generate();
 			AMap<AString, ACell> config = Maps.of(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0));
 			Engine first = new Engine(config, cursor, key).start();

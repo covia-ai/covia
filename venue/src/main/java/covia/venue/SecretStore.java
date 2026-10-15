@@ -17,7 +17,7 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.lattice.ALatticeComponent;
-import convex.lattice.cursor.ALatticeCursor;
+import convex.lattice.cursor.AForkableCursor;
 
 /**
  * Per-user encrypted secret storage.
@@ -38,8 +38,9 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> {
 	private static final AString UPDATED_KEY = Strings.intern("updated");
 
 	SecretStore(ALatticeComponent<?> parent,
-			ALatticeCursor<AMap<AString, ACell>> cursor) {
-		super(parent, cursor);
+			AForkableCursor<AMap<AString, ACell>> cursor) {
+		super(cursor);
+		setContext(parent.getContext());
 	}
 
 	/**
@@ -70,7 +71,7 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> {
 	public void store(AString name, AString plaintext, byte[] encryptionKey) {
 		byte[] encrypted = AESGCM.encrypt(encryptionKey, plaintext.toString().getBytes(StandardCharsets.UTF_8));
 		Blob encryptedBlob = Blob.wrap(encrypted);
-		CVMLong timestamp = cursor.getContext().currentTimestamp();
+		CVMLong timestamp = getContext().currentTimestamp();
 		cursor.updateAndGet(current -> {
 			AMap<AString, ACell> m = RT.castMap(current);
 			if (m == null) m = Maps.empty();
@@ -102,7 +103,7 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> {
 		byte[] encrypted = AESGCM.encrypt(encryptionKey, plaintext.toString().getBytes(StandardCharsets.UTF_8));
 		AMap<AString, ACell> record = Maps.of(
 			ENCRYPTED_KEY, Blob.wrap(encrypted),
-			UPDATED_KEY, cursor.getContext().currentTimestamp()
+			UPDATED_KEY, getContext().currentTimestamp()
 		);
 		AtomicBoolean wrote = new AtomicBoolean(false);
 		cursor.updateAndGet(current -> {

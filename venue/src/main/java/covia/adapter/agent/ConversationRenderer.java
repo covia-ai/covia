@@ -262,6 +262,25 @@ public final class ConversationRenderer {
 			AString text = (content instanceof AString s) ? s
 				: (content == null) ? Strings.EMPTY : convex.core.util.JSON.print(content);
 			message = message.assoc(GoalTreeContext.K_CONTENT, text);
+			// A user message may carry standard text/image blocks alongside its
+			// structured provenance and attachment references. Retain that metadata
+			// as user text; never promote it to provider/system authority.
+			if (GoalTreeContext.ROLE_USER.equals(role) && content instanceof AMap<?, ?> rawContent) {
+				AMap<AString, ACell> object = (AMap<AString, ACell>) rawContent;
+				AVector<ACell> blocks = RT.ensureVector(object.get(Fields.CONTENT));
+				if (blocks != null && !blocks.isEmpty()) {
+					AVector<ACell> rendered = Vectors.of(Maps.of("type", "text", "text",
+						convex.core.util.JSON.print(object.dissoc(Fields.CONTENT))));
+					for (ACell block : blocks) {
+						ACell type = RT.getIn(block, "type");
+						if (!Strings.create("text").equals(type) && !Strings.create("image").equals(type)) {
+							throw new IllegalArgumentException("User content blocks must have type text or image");
+						}
+						rendered = rendered.conj(block);
+					}
+					message = message.assoc(Fields.CONTENT, rendered);
+				}
+			}
 		}
 		if (source == null) return message;
 		for (AString key : java.util.List.of(
@@ -285,6 +304,10 @@ public final class ConversationRenderer {
 	 * bounded human/agent-safe retrospective projection. */
 	private static AMap<AString, ACell> toHistoricalMessage(ACell value) {
 		AMap<AString, ACell> message = toMessage(value, null);
+		if (message != null && message.get(Fields.CONTENT) instanceof AVector<?>) {
+			// Historical views are bounded text projections, not model requests.
+			message = message.assoc(Fields.CONTENT, convex.core.util.JSON.print(message.get(Fields.CONTENT)));
+		}
 		return (message != null) ? message.dissoc(Fields.PROVIDER_STATE) : null;
 	}
 
