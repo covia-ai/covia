@@ -44,6 +44,8 @@ import covia.adapter.messaging.MessagingBotSpec;
  * @param parseMode  Outbound formatting: {@code Markdown}, {@code MarkdownV2},
  *                   {@code HTML}, or null for plain text
  * @param greeting   Reply to {@code /start}, or null for the default
+ * @param mediaOperation Optional attachment processing operation returning extracted/transcribed text
+ * @param replyOperation Optional agent response formatter returning a string or a text object
  */
 public record BotSpec(
 		String name,
@@ -56,7 +58,9 @@ public record BotSpec(
 		Set<String> allowNames,
 		boolean open,
 		String parseMode,
-		String greeting) implements MessagingBotSpec {
+		String greeting,
+		String mediaOperation,
+		String replyOperation) implements MessagingBotSpec {
 
 	static final AString K_TOKEN = Strings.intern("token");
 	static final AString K_USER = Strings.intern("user");
@@ -67,9 +71,11 @@ public record BotSpec(
 	static final AString K_OPEN = Strings.intern("open");
 	static final AString K_PARSE_MODE = Strings.intern("parseMode");
 	static final AString K_GREETING = Strings.intern("greeting");
+	static final AString K_MEDIA_OPERATION = Strings.intern("mediaOperation");
+	static final AString K_REPLY_OPERATION = Strings.intern("replyOperation");
 
 	private static final Set<AString> KNOWN_KEYS = Set.of(
-		K_TOKEN, K_USER, K_AGENT, K_OPERATION, K_REPLY, K_ALLOW, K_OPEN, K_PARSE_MODE, K_GREETING);
+		K_TOKEN, K_USER, K_AGENT, K_OPERATION, K_REPLY, K_ALLOW, K_OPEN, K_PARSE_MODE, K_GREETING, K_MEDIA_OPERATION, K_REPLY_OPERATION);
 
 	private static final Set<String> PARSE_MODES = Set.of("Markdown", "MarkdownV2", "HTML");
 
@@ -155,7 +161,7 @@ public record BotSpec(
 				ACell k = m.entryAt(i).getKey();
 				if (!(k instanceof AString ks) || !KNOWN_KEYS.contains(ks)) {
 					throw new IllegalArgumentException(where + ": unknown setting " + k
-						+ " (known: token, user, agent, operation, reply, allow, open, parseMode, greeting)");
+						+ " (known: token, user, agent, operation, reply, allow, open, parseMode, greeting, mediaOperation, replyOperation)");
 				}
 			}
 		}
@@ -244,7 +250,14 @@ public record BotSpec(
 
 		String greeting = optString(m, K_GREETING, where);
 
-		return new BotSpec(name, token, userStr, agent, operation, reply, ids, names, open, parseMode, greeting);
+		for (AString key : Set.of(K_MEDIA_OPERATION, K_REPLY_OPERATION)) {
+			String operationRef = optString(m, key, where);
+			if (operationRef != null && (operationRef.isBlank() || agent == null)) {
+				throw new IllegalArgumentException(where + "." + key + " requires an agent and a non-empty operation reference");
+			}
+		}
+		return new BotSpec(name, token, userStr, agent, operation, reply, ids, names, open, parseMode, greeting,
+			optString(m, K_MEDIA_OPERATION, where), optString(m, K_REPLY_OPERATION, where));
 	}
 
 	private static String optString(AMap<AString, ACell> m, AString key, String where) {

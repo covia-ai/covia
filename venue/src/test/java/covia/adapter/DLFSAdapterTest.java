@@ -628,6 +628,28 @@ public class DLFSAdapterTest {
 	}
 
 	@Test
+	public void didContentReferencesDecodeNamesBeforeAccessChecks() throws Exception {
+		var ctx = covia.venue.RequestContext.of(ALICE_DID);
+		String name = "Lab report+日本語(1).txt";
+		String encoded = java.net.URLEncoder.encode(name, java.nio.charset.StandardCharsets.UTF_8).replace("+", "%20");
+		var ref = convex.core.data.Strings.create(ALICE_DID + "/dlfs/names/" + encoded);
+		assertTrue(engine.createContent(ref, new java.io.ByteArrayInputStream(new byte[] {42}), null, ctx));
+		assertArrayEquals(new byte[] {42}, engine.resolveContent(ref, ctx).content().getBlob().getBytes());
+		// A path operation must see the original name, not its percent-encoded URL spelling.
+		ACell read = run("v/ops/dlfs/read", Maps.of("drive", "names", "path", name));
+		assertEquals("*", RT.getIn(read, "content").toString());
+		assertThrows(java.nio.file.FileAlreadyExistsException.class, () -> engine.createContent(ref,
+			new java.io.ByteArrayInputStream(new byte[] {9}), null, ctx));
+		assertThrows(IllegalArgumentException.class, () -> engine.resolveContent(
+			convex.core.data.Strings.create(ALICE_DID + "/dlfs/names/%2e%2e/escape"), ctx));
+		var scoped = ctx.withCaps(convex.core.data.Vectors.of(convex.auth.ucan.Capability.create(
+			convex.core.data.Strings.create("dlfs/names/" + name), convex.auth.ucan.Capability.CRUD_READ)));
+		assertArrayEquals(new byte[] {42}, engine.resolveContent(ref, scoped).content().getBlob().getBytes());
+		assertThrows(RuntimeException.class, () -> engine.resolveContent(
+			convex.core.data.Strings.create(ALICE_DID + "/dlfs/names/allowed/%2e%2e/other.txt"), scoped));
+	}
+
+	@Test
 	public void testEnginePutContentToDlfsPath() throws Exception {
 		// The write half of reference-addressed content: Engine.putContent routes
 		// to the DLFS provider for drive paths.

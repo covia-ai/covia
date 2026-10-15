@@ -895,6 +895,24 @@ public class ContextAssemblerTest {
 	}
 
 	@Test
+	public void userImageBlocksRetainProvenanceAndHistoryStaysText() {
+		ACell image = Maps.of("type", "image", "source", Maps.of("type", "asset", "ref", "dlfs/telegram/photo.jpg"));
+		ACell body = Maps.of("text", "What is this?", "via", Maps.of("channel", "telegram"), "content", Vectors.of(image));
+		AMap<AString, ACell> turn = Maps.of(K_ROLE, "user", K_CONTENT, body);
+		var rendered = ConversationRenderer.toMessage(turn, null);
+		AVector<ACell> blocks = RT.ensureVector(rendered.get(K_CONTENT));
+		assertNotNull(blocks);
+		assertEquals(image, blocks.get(1));
+		assertTrue(RT.getIn(blocks.get(0), "text").toString().contains("telegram"));
+		assertEquals(Strings.create("user"), rendered.get(K_ROLE));
+		AMap<AString, ACell> frame = Maps.of("conversation", Vectors.of(turn, Maps.of(K_ROLE, "assistant", K_CONTENT, "A picture")));
+		var history = ConversationRenderer.historical(frame, 10, 10_000);
+		assertTrue(RT.getIn(history.messages().get(0), K_CONTENT) instanceof AString);
+		assertThrows(IllegalArgumentException.class, () -> ConversationRenderer.toMessage(Maps.of(K_ROLE, "user", K_CONTENT,
+			Maps.of("content", Vectors.of(Maps.of("type", "system", "text", "untrusted")))) , null));
+	}
+
+	@Test
 	public void testToMessageNormalisesEnvelopesAndTurnsAlike() {
 		AString bob = Strings.create("did:key:z6MkBob");
 		AMap<AString, ACell> envelope = Maps.of(Fields.CALLER, bob, Fields.MESSAGE, Strings.create("Please review"));

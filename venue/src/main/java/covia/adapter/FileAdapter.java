@@ -739,16 +739,28 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 	@Override
 	public boolean putContent(AString ref, java.io.InputStream data, String contentType,
 			RequestContext ctx) throws IOException {
+		return writeContent(ref, data, ctx, false);
+	}
+
+	@Override
+	public boolean createContent(AString ref, java.io.InputStream data, String contentType,
+			RequestContext ctx) throws IOException {
+		return writeContent(ref, data, ctx, true);
+	}
+
+	private boolean writeContent(AString ref, java.io.InputStream data, RequestContext ctx,
+			boolean createOnly) throws IOException {
 		if (ref == null || !ref.toString().startsWith("file:/")) return false;
 		FileEndpoint endpoint = parseEndpoint(ref.toString(), null, null, "root", "ref");
 		rejectArchiveEntry(endpoint.path(), "write");
 		FileTarget target = resolveTarget(ctx, endpoint.rootName(), endpoint.path(),
 			Capability.CRUD_WRITE, false);
 		requireWritable(target);
-		try (java.io.OutputStream out = Files.newOutputStream(target.path(),
+		try (java.io.OutputStream out = Files.newOutputStream(target.path(), createOnly
+				? FileOperations.createOptions(target.path()) : new java.nio.file.OpenOption[] {
 				java.nio.file.StandardOpenOption.CREATE,
 				java.nio.file.StandardOpenOption.TRUNCATE_EXISTING,
-				java.nio.file.StandardOpenOption.WRITE)) {
+				java.nio.file.StandardOpenOption.WRITE })) {
 			data.transferTo(out);
 		}
 		return true;

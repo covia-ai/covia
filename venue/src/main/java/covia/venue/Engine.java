@@ -2739,6 +2739,18 @@ public class Engine {
 		return false;
 	}
 
+	/** Create-only counterpart of reference-addressed putContent; provider write checks still apply. */
+	public boolean createContent(AString ref, InputStream data, String contentType,
+			RequestContext ctx) throws IOException {
+		if (ref == null) return false;
+		for (AAdapter a : adapters.values()) {
+			if (a instanceof covia.venue.storage.ContentProvider p) {
+				if (p.createContent(ref, data, contentType, ctx)) return true;
+			}
+		}
+		return false;
+	}
+
 	/**
 	 * Puts content for the given Asset
 	 * @param asset Asset with metadata specifying expected content hash

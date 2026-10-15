@@ -80,6 +80,22 @@ not infer authority from an operation name or confuse `ctx.getCallerDID()`
 (who acted) with `ctx.getUserDID()` (whose namespace the action uses). See
 [UCAN.md](UCAN.md) for the authority model.
 
+## Reference-addressed content
+
+Storage adapters implement `ContentProvider` so consumers can resolve and write
+content through `Engine` using the provider's reference namespace and authority
+checks. `getContent` returns null for unrecognised references; optional
+`putContent` and `createContent` return false when unsupported. Recognised
+references that fail authorization must throw, never degrade to another provider.
+
+`createContent` is the create-only contract: providers must atomically reserve a
+new filename and throw `FileAlreadyExistsException` on conflict. Do not implement
+it as an existence check followed by an overwriting write, or fall back to
+`putContent`. File and DLFS providers use native `CREATE_NEW`; callers such as
+Telegram can retry a different filename without risking existing content.
+DID-scoped DLFS references use URL-encoded paths, decoded once before path
+normalisation and authorization; relative DLFS paths retain their literal spelling.
+
 ## Lifecycle and configuration
 
 The significant lifecycle is:

@@ -1975,7 +1975,7 @@ Per bot:
   anonymous MCP client on a public venue), which is what a local dev venue's
   agents are owned by.
 - `agent` **or** `operation` — the **inbound handler**. With `agent`, each
-  Telegram chat is one `agent:chat` session, persisted at
+  Telegram chat (or forum topic) is one `agent:chat` session, persisted at
   `<venue-did>/w/adapters/telegram/config/<bot>/sessions/<chatId>` so
   conversations survive restarts; `/new` starts a fresh one. The agent
   receives each turn as `{text, via: {channel: "telegram", bot, access:
@@ -1996,10 +1996,18 @@ Per bot:
   for a target whose input is not an Update — a deterministic SQL write, a
   webhook, a log to some location — point `operation` at a small **mapping
   operation you own** (an orchestration, a pinned op…) that takes the Update
-  and does the work. Agent bots receive only text messages (captions count);
-  operation bots receive every update type Telegram delivers. Either way each inbound message runs
-  as a **Job in the bot user's job index**, which is the canonical record of
-  the interaction; the module keeps no log of its own.
+  and does the work. Agent bots also download photos, voice/audio, documents,
+  video/video notes, animations and stickers into the owner's DLFS `telegram`
+  drive after admission. Each turn retains its caption and `attachments`
+  descriptors (`kind`, `file_id`, `ref`, `mediaType`, provider metadata).
+  Images reach the LLM as asset-reference image blocks; the agent needs
+  `crud/read` on the referenced DLFS files and a vision-capable model.
+  Other media remains available by protected reference. No speech provider,
+  document extraction or video understanding is enabled implicitly.
+  Operation bots retain the SDK-decoded Telegram update shape and can call
+  `telegram/download` explicitly. Telegram update fields unknown to the SDK
+  may be absent. Jobs remain the execution record; a private inbox records
+  durable intake and delivery state.
 - `reply` — for an `operation` handler: `true` (default: the result
   rendered as text — a string as-is, a map's
   `text`/`response`/`content`/`message`/`result`, else pretty JSON),
@@ -2014,6 +2022,33 @@ Per bot:
 - `parseMode` — `Markdown`, `MarkdownV2` or `HTML` for replies; omit for
   plain text. Markup Telegram rejects is resent as plain text.
 - `greeting` — the `/start` reply (default names the agent and venue).
+- `mediaOperation` — optional, agent bots only. Runs once per downloaded
+  attachment as the bot owner. Input is the attachment descriptor plus
+  `caption` (empty when absent) and `via` (bot, sender, chat, topic/reply IDs).
+  Return an object: `{}` leaves this attachment untouched; optional non-empty
+  `text` supplies a transcription/extraction. The full non-empty result is
+  retained under `attachment.result`, so application record IDs, language and
+  other structured output survive. Output cannot overwrite the original
+  `ref`, media type or Telegram metadata. Use an application operation to
+  select handling by `kind` or `mediaType`; a speech-only handler can return
+  `{}` for photos and documents. Malformed results and processing failures
+  fail the turn visibly rather than silently dropping the attachment.
+- `replyOperation` — optional, agent bots only. Takes `{response, via}` after
+  the agent completes and returns a non-empty string or `{text: "..."}`.
+  This is the application's place to render structured responses or remove
+  internal UI notation for Telegram. The stored agent response is unchanged.
+  Formatting failure reports an error; it never sends the raw response as a
+  fallback. Normal Telegram text splitting, formatting and topic replies
+  still apply afterwards.
+
+Both hooks invoke ordinary Covia operation references as the bot owner, with
+normal Jobs, secret resolution and capability checks, and no turn timeout.
+They may be application adapters, orchestrations or other operations; Telegram
+has no built-in speech provider or application-specific reply syntax. Runtime
+`telegram/create` persists both references and restores them on restart.
+For complete control of intake, routing and outbound media/buttons, configure
+an `operation` handler instead of `agent`; it receives provider-shaped updates
+and can use the same `telegram/download`, `send` and `call` operations.
 
 `apiUrl` overrides the Bot API base (a proxy, or a test double); it defaults
 to Telegram's. Built-in commands: `/start`, `/help`, `/new`, `/id`. Messages
@@ -2026,7 +2061,7 @@ backlog when it is enabled again.
 
 Bots can also be **created at runtime by their user**: `v/ops/telegram/create
 {name, token: "s/…", agent | operation, reply?, allow?, open?, parseMode?,
-greeting?}` makes a bot that acts as the caller (no `user` — a user cannot
+greeting?, mediaOperation?, replyOperation?}` makes a bot that acts as the caller (no `user` — a user cannot
 create a bot acting as someone else; the token must be a secret reference),
 records it at
 `<venue-did>/w/adapters/telegram/users/<caller-did>/bots/<name>`, starts it,
@@ -2061,6 +2096,53 @@ last error and counters, tokens never included. The module ships a lightweight
 and status. It reveals `telegram-bot-management` only when an agent needs to
 create, repair or delete a user-owned bot; that child in turn reveals the
 encrypted-secret skill used to store BotFather tokens.
+
+Telegram transfer operations:
+
+- `telegram/download {bot?, file_id, destination?, fileName?}` returns
+  `{file_id, ref, fileName, size}`, plus `file_name` (original name) and
+  `contentType` when known. `destination` is a directory reference, e.g.
+  `dlfs/imports` or `file://inbox`, with an optional trailing slash. Omit it
+  for the bot owner's DLFS `telegram` drive. Explicit directories use the
+  caller's authority through `Engine.createContent`; DLFS and configured
+  file roots support this, as can other providers implementing create-only
+  writes. Parent directories must exist. Readable asset/HTTP references are
+  not automatically writable destinations.
+  Optional `fileName` is a safe basename (at most 200 UTF-8 bytes), not a path.
+  Otherwise the adapter prefers a safe original filename retained from an
+  admitted message, then a generated name. Conflicts receive a numeric suffix
+  before the extension: `report(1).pdf`, `report(2).pdf`, etc. Existing files
+  are never replaced, including concurrent downloads. The returned `fileName`
+  is the actual stored spelling; DID URL references encode spaces and Unicode.
+  Telegram's [`getFile`](https://core.telegram.org/bots/api#getfile) may lose
+  the original filename and MIME type, so both are retained in private bot
+  state from admitted messages and survive restarts. A previously unseen
+  `file_id` needs an explicit `fileName` to preserve a name known to the caller.
+  Runtime bot deletion removes this metadata along with its receipts, while
+  downloaded files remain. Requires `telegram/call` on the bot; reading the
+  result remains separately authorized by its provider. Token-bearing download
+  URLs are never returned.
+- `telegram/call` accepts `files: {partName: {ref, filename?}}`. References
+  resolve under the caller's authority. For `sendVoice`, use `files.voice`
+  and omit `params.voice`; for albums use `attach://partName` in
+  `params.media`. Up to ten parts and 20 MiB total upload bytes are allowed.
+  Downloads are bounded to 20 MiB, including streaming bodies with no size.
+  HTTP redirects and automatic transport retries are disabled.
+
+Accepted updates are flushed through `WebhookInbox` before advancing the poll
+acknowledgement. Pending receipts resume in update order at startup/re-enable;
+completed receipts deduplicate redelivery and are retained for seven days.
+Receipts are private and scoped to the Covia owner and Telegram bot account.
+`telegram:bots` reports `pendingUpdates` and `startedUpdates`. STARTED includes
+in-flight work and interrupted/failed work: inspect the Jobs and bot error before
+recovery. Started work is never automatically replayed, and this does **not**
+promise exactly-once execution or delivery. Reattaching to interrupted Jobs and
+reconciling an uncertain Telegram send remain follow-up work. Removing a runtime
+bot removes its receipts, but downloaded files remain in its owner's DLFS drive.
+Store durability follows the venue configuration (temporary venues remain
+ephemeral). Media albums retain `media_group_id` but each message is a separate
+turn; `/new` resets only the current topic. `via` also includes topic and reply
+message IDs when supplied by Telegram.
 
 ### Discord bots (covia-discord)
 

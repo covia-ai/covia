@@ -438,7 +438,7 @@ final class FileOperations {
 		};
 	}
 
-	private static java.nio.file.OpenOption[] createOptions(Path target) {
+	static java.nio.file.OpenOption[] createOptions(Path target) {
 		if (target.getFileSystem() == java.nio.file.FileSystems.getDefault()) {
 			return new java.nio.file.OpenOption[] {
 				StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE,
