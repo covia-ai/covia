@@ -131,7 +131,7 @@ A single heavy test still needs its flag, e.g.
 
 ### Venue Module
 
-The venue module produces several artifacts (`<version>` is the current Maven version, e.g. `0.9.11-SNAPSHOT`):
+The venue module produces several artifacts (`<version>` is the current Maven version, from the root `pom.xml`):
 
 - **Standard JAR**: `venue/target/venue-<version>.jar`
 - **Executable JAR**: `venue/target/covia.jar` (with dependencies)
