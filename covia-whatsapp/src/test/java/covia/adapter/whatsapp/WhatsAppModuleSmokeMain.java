@@ -65,6 +65,11 @@ public final class WhatsAppModuleSmokeMain {
 					"v/ops/" + PROVIDER + "/delete", "v/ops/" + PROVIDER + "/bots", "v/skills/adapters/" + PROVIDER, "v/adapters/" + PROVIDER + "/info"}) {
 					check(engine.resolvePath(Strings.create(path), engine.venueContext()) != null, "Missing " + path);
 				}
+				// The module's second adapter, the relay hub, loads from the same jar.
+				AAdapter relay = engine.getAdapter(WhatsAppRelayAdapter.NAME);
+				check(relay != null && relay.getClass().getClassLoader() == adapter.getClass().getClassLoader(), "Relay adapter did not load from the module");
+				check(relay instanceof covia.adapter.relay.RelayHandler && relay instanceof WebhookHandler, "Relay adapter lacks its routes");
+				check(engine.resolvePath(Strings.create("v/ops/" + WhatsAppRelayAdapter.NAME + "/relays"), engine.venueContext()) != null, "Missing relay operation");
 				URI endpoint = URI.create("http://127.0.0.1:" + server.port() + "/webhooks/" + PROVIDER + "/c-main");
 				var challenge = client.send(HttpRequest.newBuilder(URI.create(endpoint + "?hub.mode=subscribe&hub.verify_token=verify%2Btoken&hub.challenge=challenge%2B%F0%9F%90%A6"))
 					.timeout(Duration.ofSeconds(5)).GET().build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
@@ -103,6 +108,7 @@ public final class WhatsAppModuleSmokeMain {
 				check(post(client, endpoint, body, body).statusCode() == 200, "Reenabled receiver unavailable");
 				Modules.unload(engine, engine.moduleOf(PROVIDER).name());
 				check(engine.getAdapter(PROVIDER) == null, "Adapter survived unload");
+				check(engine.getAdapter(WhatsAppRelayAdapter.NAME) == null, "Relay adapter survived unload");
 				check(engine.resolvePath(Strings.create("v/adapters/" + PROVIDER + "/info"), engine.venueContext()) == null, "Public info survived unload");
 				check(post(client, endpoint, body, body).statusCode() == 404, "Unloaded HTTP route remained active");
 				check(((WebhookHandler) adapter).handleWebhook("c-main", new WebhookRequest("POST", Map.of(), Map.of(), body)).status() == 404, "Held unloaded receiver remained active");

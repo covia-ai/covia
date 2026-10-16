@@ -26,6 +26,14 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Slack agent template, `slack-bot-management` skill and `/slack` operator skill.
 - Slack thread replies continue an agent's conversation without a mention.
 - `scheduler:list` describes each event: `by`, `input`, `description`, `created` (#583).
+- `whatsapp-relay`, a second adapter in the WhatsApp module: one Cloud API number
+  relayed to many principals by DID. Linking by code sent from the phone, messages
+  held in memory for each principal's long poll, one reply per message inside 24
+  hours, optional `admit` and `charge` hooks run without a Job record. Only links
+  are stored.
+- `/relay/{adapter}/{binding}/{action}` on every venue, for adapters implementing
+  `RelayHandler`: the caller's DID is authenticated (no venue user is created) and
+  the adapter is looked up on each request, as for `/webhooks`.
 
 ## [0.9.11] - 2026-10-15
 

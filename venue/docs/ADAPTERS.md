@@ -557,6 +557,28 @@ defines envelope acknowledgements. [chat.postMessage](https://docs.slack.dev/ref
 documents threaded replies. None of these transport details belong in the common
 conversation or registry classes.
 
+### Relays: one provider binding, many principals
+
+An adapter may also implement `covia.adapter.relay.RelayHandler` to serve the
+principals a hub relays to: `GET` and `POST /relay/{adapter}/{binding}/{action}`.
+Every venue registers these routes once and answers 404 while no relay adapter is
+live; like `/webhooks`, they look the adapter up on every request and cap bodies at
+1 MiB. Unlike `/webhooks`, they require a credential the venue accepts (a self-issued
+DID JWT is enough) and pass the caller's DID to the adapter; no venue user is created
+or admitted. Authentication says who calls; what that principal may do is the
+adapter's decision. The handler answers with a future, so an action such as a long
+poll can wait without holding a server thread.
+
+`covia.adapter.relay.MessageRelay` is the provider-neutral core: links between a
+provider sender and a principal (durable, at `<root>/links` and `<root>/principals`
+in the adapter workspace), short-lived linking codes, per-principal mailboxes with a
+hold policy, the message→sender targets that bound replies to their sender and
+window, de-duplication, and one reply per message. It writes no message: text, codes
+and targets are bounded and in memory, so a restart loses only messages not yet
+collected. A relay adapter keeps the provider's signature check, parsing, sends and
+notices, as a webhook adapter does. The WhatsApp module's `whatsapp-relay` is the
+first ([README](../../covia-whatsapp/README.md)).
+
 ## Writing an adapter
 
 1. Create a class extending `AAdapter` in a `covia.<module>.<feature>` package.
