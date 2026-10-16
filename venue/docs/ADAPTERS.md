@@ -569,15 +569,45 @@ or admitted. Authentication says who calls; what that principal may do is the
 adapter's decision. The handler answers with a future, so an action such as a long
 poll can wait without holding a server thread.
 
-`covia.adapter.relay.MessageRelay` is the provider-neutral core: links between a
-provider sender and a principal (durable, at `<root>/links` and `<root>/principals`
-in the adapter workspace), short-lived linking codes, per-principal mailboxes with a
-hold policy, the message→sender targets that bound replies to their sender and
-window, de-duplication, and one reply per message. It writes no message: text, codes
-and targets are bounded and in memory, so a restart loses only messages not yet
-collected. A relay adapter keeps the provider's signature check, parsing, sends and
-notices, as a webhook adapter does. The WhatsApp module's `whatsapp-relay` is the
-first ([README](../../covia-whatsapp/README.md)).
+Every webhook messaging provider (`AWebhookMessagingAdapter`) is a relay handler.
+A binding whose handler is `relay` (`true`, or `{holdSeconds?, maxParts?, admit?,
+charge?, notices?}`), in place of `agent` or `operation`, serves many principals from
+one provider binding. The binding authenticates, parses and sends exactly as any other,
+then `covia.adapter.messaging.RelayBinding` takes over: nothing reaches the durable
+inbox, and no Job records message text. Principals use the binding's own id, as in
+`/relay/whatsapp/c-main` or the `relayPath` that `bots` reports. A provider needs only
+the hooks it wants to change: `maxText` (replies are split to fit), `sendFollowUp`
+(later parts of a split reply), `relayReplyWindowMs`, and `relayContact` and
+`relayLink` (an address such as a phone number, and a link that opens a chat with the
+linking message typed). WhatsApp and Slack both relay this way.
+
+| Action | Request | Answer |
+|---|---|---|
+| `status` | — | `{enabled, linked, …contact}` |
+| `link` | `{}` | `{code, expires_in, link?, …contact}`; the person sends `LINK <code>` to the binding; a code lasts ten minutes and is spent once |
+| `unlink` | `POST {}` | `{unlinked}` |
+| `poll` | `{wait_ms?}` | `{linked, messages[{id, text, timestamp, via}]}`, waiting up to 20 s; `via` holds the provider's `channel`, `from`, `chat` and `thread` |
+| `reply` | `POST {message_id, text}` | `{sent, parts}`: once per message, through the provider's own reply, so its threading and reply window apply; refused with `too_long` beyond `maxParts` (default 10) |
+
+Errors are `{error}` with the codes `RelayBinding` defines. A principal counts as open
+while it has a poll waiting or polled in the last minute. With `holdSeconds` at 60 or
+less (the default), a message for a principal that is not open is refused and its
+sender told so; a longer hold keeps it in memory that long. `STOP` from the sender
+unlinks; an unlinked sender is told how to link; a linked sender of anything but text
+is told only text is relayed. The hub's own replies are `notices` (`linked`,
+`unlinked`, `notLinked`, `codeUnknown`, `notOpen`, `held`, `textOnly`,
+`notAvailable`), each overridable. A relay binding admits every sender unless
+`open: false` narrows it to `allow`, and its owner must be a DID, since both hooks run
+as that user without a Job record: `admit` receives `{principal}` before linking,
+polling and each delivery and answers `{allowed: true}` or `{allowed: false, code?,
+notice?}`; `charge` receives `{principal, parts, message_id}` after a reply is sent.
+
+`covia.adapter.relay.MessageRelay` is the store beneath: links between a provider
+sender and a principal (durable, at `<root>/links` and `<root>/principals`, the root
+being `config/<bot>/relay/<identity>` or the owner's `relay/<bot>/<identity>`),
+linking codes, per-principal mailboxes with the hold policy, each message's opaque
+reply address, de-duplication, and one reply per message. Text, codes and addresses
+are bounded and in memory, so a restart loses only messages not yet collected.
 
 ## Writing an adapter
 

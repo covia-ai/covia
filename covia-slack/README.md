@@ -196,6 +196,16 @@ files, interactive actions and slash commands are not supported. Slack
 `ok: false`, HTTP errors and ambiguous delivery failures fail without an
 automatic retry, including rate-limit responses.
 
+## Relay
+
+A binding with `"relay": true` (or relay settings) in place of `agent` or
+`operation` serves many principals, each known by its DID, from one Slack app:
+a user links by sending `LINK <code>` to the app in a DM, and principals poll
+and reply at `/relay/slack/<binding>/<action>`. A reply goes back where the
+message came from: the DM, or the thread of a channel mention. Nothing but the
+link is stored. The protocol is shared with every webhook provider; see
+[Relays](../venue/docs/ADAPTERS.md#relays-one-provider-binding-many-principals).
+
 ## State and recovery
 
 Each accepted `event_id` is flushed before acknowledgement. Processing and

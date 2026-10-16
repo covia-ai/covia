@@ -12,14 +12,21 @@ import convex.core.data.Maps;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.adapter.messaging.MessagingBot.Managed;
+import covia.adapter.relay.MessageRelay;
+import covia.adapter.relay.RelayHandler;
 import covia.adapter.webhook.WebhookHandler;
 import covia.adapter.webhook.WebhookRequest;
 import covia.adapter.webhook.WebhookResponse;
 import covia.venue.RequestContext;
 
-/** Common operator/runtime bindings and durable workers for signed HTTP providers. */
+/**
+ * Common operator/runtime bindings and durable workers for signed HTTP providers.
+ * A binding's handler is an agent, an operation, or a {@code relay}
+ * ({@link RelayBinding}), which principals reach at {@code /relay/<adapter>/<binding>};
+ * a provider supports the relay with no code beyond the hooks below.
+ */
 public abstract class AWebhookMessagingAdapter<S extends WebhookBotSpec>
-		extends AMessagingAdapter<S, WebhookBot<S>> implements WebhookHandler {
+		extends AMessagingAdapter<S, WebhookBot<S>> implements WebhookHandler, RelayHandler {
 	public static final String UNAVAILABLE = "Webhook binding is unavailable";
 	public static final String UNAUTHORIZED = "Webhook authentication failed";
 	public static final String INVALID_REQUEST = "Invalid webhook request";
@@ -41,6 +48,22 @@ public abstract class AWebhookMessagingAdapter<S extends WebhookBotSpec>
 	protected MessagingConnection openConnection(WebhookBot<S> bot) throws Exception {
 		throw new UnsupportedOperationException(NO_CONNECTION);
 	}
+	/**
+	 * Send a later part of a reply already begun with {@link #sendReply}. By default
+	 * another reply to the event; a provider whose reply quotes the message may send
+	 * the later parts plainly.
+	 */
+	protected void sendFollowUp(WebhookBot<S> bot, AMap<AString, ACell> event, String text) {
+		sendReply(bot, event, text);
+	}
+	/** The longest text one send accepts, in UTF-16 units; a relay splits longer replies. */
+	protected int maxText() { return 4000; }
+	/** How long a reply may follow its message under the provider's rules. */
+	protected long relayReplyWindowMs() { return MessageRelay.DEFAULT_REPLY_WINDOW_MS; }
+	/** How a relay binding is addressed by people, such as a phone number; given to its principals. */
+	protected AMap<AString, ACell> relayContact(WebhookBot<S> bot) { return Maps.empty(); }
+	/** A link that opens a conversation with the binding ready to send {@code LINK <code>}, or null. */
+	protected String relayLink(WebhookBot<S> bot, String code) { return null; }
 
 	@Override public final synchronized boolean configure(AMap<AString, ACell> settings, boolean strict) {
 		if (settings == null) settings = Maps.empty();
@@ -81,6 +104,7 @@ public abstract class AWebhookMessagingAdapter<S extends WebhookBotSpec>
 	}
 	@Override protected final void deleteRuntimeState(RequestContext ctx, String name) {
 		state().delete(userStatePath(ctx.getUserDID(), "inbox/" + name));
+		state().delete(userStatePath(ctx.getUserDID(), "relay/" + name));
 	}
 	@Override public final CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		requireInvoke(ctx);
@@ -100,13 +124,23 @@ public abstract class AWebhookMessagingAdapter<S extends WebhookBotSpec>
 		}, VIRTUAL_EXECUTOR);
 	}
 	@Override public final WebhookResponse handleWebhook(String binding, WebhookRequest request) {
-		if (!isActive()) return WebhookResponse.text(404, UNAVAILABLE);
-		WebhookBot<S> bot = null;
-		for (var candidate : runnerList()) if (candidate.binding().equals(binding)) { bot = candidate; break; }
-		if (bot == null || !bot.running() || !bot.spec().webhookIngress()) return WebhookResponse.text(404, UNAVAILABLE);
+		WebhookBot<S> bot = runningBinding(binding);
+		if (bot == null || !bot.spec().webhookIngress()) return WebhookResponse.text(404, UNAVAILABLE);
 		try { return receive(bot, request); }
 		catch (IllegalArgumentException e) { return WebhookResponse.text(400, INVALID_REQUEST); }
 		catch (RuntimeException e) { return WebhookResponse.text(503, ACCEPT_FAILED); }
+	}
+	/** A principal's relay action, for a running binding whose handler is {@code relay}. */
+	@Override public final CompletableFuture<WebhookResponse> handleRelay(String binding, String action, AString caller, WebhookRequest request) {
+		WebhookBot<S> bot = runningBinding(binding);
+		RelayBinding<S> relay = bot == null ? null : bot.relay();
+		if (relay == null) return CompletableFuture.completedFuture(RelayBinding.error(404, RelayBinding.E_UNKNOWN_RELAY));
+		return relay.handle(action, caller, request);
+	}
+	private WebhookBot<S> runningBinding(String binding) {
+		if (!isActive()) return null;
+		for (var candidate : runnerList()) if (candidate.binding().equals(binding)) return candidate.running() ? candidate : null;
+		return null;
 	}
 	protected static AMap<AString, ACell> json(WebhookRequest request) {
 		try { return MessagingSettings.object(JSON.parse(new String(request.body(), StandardCharsets.UTF_8))); }

@@ -172,9 +172,18 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 
 	/** Provider credentials may have several names (e.g. Slack bot and app tokens). */
 	public final String resolveCredential(String reference, AString owner) {
+		return resolveCredential(reference, owner, null);
+	}
+
+	/**
+	 * As {@link #resolveCredential(String, AString)} for a credential about to be sent
+	 * to {@code destination}: a {@code secret/use} grant bound to a url prefix covers
+	 * another principal's secret only there. Null when the use has no destination.
+	 */
+	public final String resolveCredential(String reference, AString owner, String destination) {
 		if (!isSecretReference(reference)) return reference;
-		String value = engine.resolveSecret(reference, RequestContext.of(owner));
-		return value != null ? value : engine.resolveSecret(reference, engine.venueContext());
+		String value = engine.resolveSecret(reference, RequestContext.of(owner), destination);
+		return value != null ? value : engine.resolveSecret(reference, engine.venueContext(), destination);
 	}
 
 	protected static boolean isSecretReference(String value) {

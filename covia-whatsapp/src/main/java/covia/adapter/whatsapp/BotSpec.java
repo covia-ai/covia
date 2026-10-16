@@ -17,20 +17,28 @@ public record BotSpec(String name, AMap<AString, ACell> settings) implements Web
 	static BotSpec parse(String name, ACell input, boolean strict) {
 		var map = MessagingSettings.object(input);
 		var known = new HashSet<>(MessagingSettings.COMMON);
-		known.addAll(Set.of("appSecret", "verifyToken", "phoneNumberId", "businessAccountId", "apiVersion"));
+		known.addAll(Set.of("appSecret", "verifyToken", "phoneNumberId", "businessAccountId", "apiVersion", "number"));
 		MessagingSettings.validate(name, map, known, CREDENTIALS, strict);
 		MessagingSettings.id(map, "phoneNumberId", "[0-9]+");
 		MessagingSettings.id(map, "businessAccountId", "[0-9]+");
 		MessagingSettings.id(map, "apiVersion", "v[0-9]+\\.[0-9]+");
+		if (MessagingSettings.optional(map, "number") != null) MessagingSettings.id(map, "number", PHONE);
 		MessagingSettings.ids(map, "allow", PHONE);
 		return new BotSpec(name, map);
 	}
 	public String phoneNumberId() { return MessagingSettings.required(settings, "phoneNumberId"); }
 	public String businessAccountId() { return MessagingSettings.required(settings, "businessAccountId"); }
 	public String apiVersion() { return MessagingSettings.required(settings, "apiVersion"); }
-	public boolean allows(String from) {
-		return from != null && from.matches(PHONE) && (MessagingSettings.bool(settings, "open", false)
-			|| MessagingSettings.ids(settings, "allow", PHONE).contains(from));
+	/** The number people send to, in international form without '+'; optional, given to relay principals. */
+	public String number() { return MessagingSettings.optional(settings, "number"); }
+	/** Whether a message from this number is admitted. */
+	public boolean admits(String from) {
+		return from != null && from.matches(PHONE) && (admitsAnySender() || MessagingSettings.ids(settings, "allow", PHONE).contains(from));
+	}
+	/** Whether the send operation may address this number. */
+	public boolean allows(String to) {
+		return to != null && to.matches(PHONE) && (MessagingSettings.bool(settings, "open", false)
+			|| MessagingSettings.ids(settings, "allow", PHONE).contains(to));
 	}
 	@Override public Set<String> credentialFields() { return CREDENTIALS; }
 	@Override public String installationKey() { return ConversationRouter.key(businessAccountId(), phoneNumberId()); }

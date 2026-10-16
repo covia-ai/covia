@@ -1,7 +1,7 @@
 # WhatsApp venue module
 
 `covia-whatsapp` connects a WhatsApp Cloud API business phone number to a
-Covia agent or operation. It supplies `whatsapp:send`, `create`, `delete` and
+Covia agent or operation, or relays it to many principals. It supplies `whatsapp:send`, `create`, `delete` and
 `bots` operations, plus `v/skills/adapters/whatsapp`. It is an optional module,
 not a dependency of `covia.jar`, and uses the JDK HTTP client.
 
@@ -111,18 +111,20 @@ The latter two references describe Meta's archived SDK; this module has no SDK d
 
 ## Relay: one number, many principals
 
-The module's second adapter, `whatsapp-relay`, lets a hub venue hold one Cloud API
-number for many downstream principals: the venues or apps it relays to, each known by
-its DID. WhatsApp delivers only to a public webhook, so a principal without one (an app
-on someone's laptop) reaches WhatsApp through the hub instead of a number of its own.
-Only links are stored: messages wait in memory and are never written to the venue.
+A binding whose handler is `relay`, in place of `agent` or `operation`, lets a hub
+venue hold one Cloud API number for many downstream principals: the venues or apps it
+relays to, each known by its DID. WhatsApp delivers only to a public webhook, so a
+principal without one (an app on someone's laptop) reaches WhatsApp through the hub
+instead of a number of its own. Only links are stored: messages wait in memory and are
+never written to the venue. The relay protocol is the same for every webhook provider;
+see [Relays](../venue/docs/ADAPTERS.md#relays-one-provider-binding-many-principals).
 
 ```json
 {
   "modules": ["modules/covia-whatsapp-<version>-module.jar"],
   "adapters": {
-    "whatsapp-relay": {
-      "relays": {
+    "whatsapp": {
+      "bots": {
         "main": {
           "user": "did:key:YOUR_OWNER_DID",
           "token": "s/WHATSAPP_TOKEN",
@@ -132,10 +134,12 @@ Only links are stored: messages wait in memory and are never written to the venu
           "phoneNumberId": "987654321098765",
           "apiVersion": "v25.0",
           "number": "447700900000",
-          "holdSeconds": 60,
-          "maxParts": 10,
-          "admit": "v/ops/your-adapter/admit",
-          "charge": "v/ops/your-adapter/charge"
+          "relay": {
+            "holdSeconds": 60,
+            "maxParts": 10,
+            "admit": "v/ops/your-adapter/admit",
+            "charge": "v/ops/your-adapter/charge"
+          }
         }
       }
     }
@@ -143,36 +147,20 @@ Only links are stored: messages wait in memory and are never written to the venu
 }
 ```
 
-Meta's callback is `https://YOUR_VENUE/webhooks/whatsapp-relay/c-main`, verified and
-signed exactly as for the `whatsapp` adapter. Principals call
-`/relay/whatsapp-relay/c-main/<action>` with a credential the venue accepts (a
-self-issued DID JWT is enough; no venue user is created):
+`"relay": true` takes the defaults. Meta's callback is
+`https://YOUR_VENUE/webhooks/whatsapp/c-main`, verified and signed as for any binding.
+Principals call `/relay/whatsapp/c-main/<action>`; a runtime binding made with
+`whatsapp:create` reports its own `relayPath`. On WhatsApp:
 
-| Action | Request | Answer |
-|---|---|---|
-| `status` | — | `{enabled, number, linked}` |
-| `link` | `POST {}` | `{code, number, link, expires_in}`: the person sends `LINK <code>` from their phone, which `link` (a `wa.me` URL) writes for them; codes last ten minutes |
-| `unlink` | `POST {}` | `{unlinked}` |
-| `poll` | `POST {wait_ms?}` | `{linked, messages[{id, text, timestamp}]}`, waiting up to 20 s for a message |
-| `reply` | `POST {message_id, text}` | `{sent, parts}`: once per message, to its sender, inside 24 hours; split at 4,096 characters |
+- `number` is the number people message. With it, `link` and `status` return it and
+  `link` adds a `wa.me` URL that opens the chat with `LINK <code>` already typed.
+- A reply must follow its message within WhatsApp's 24-hour window. It is split at
+  4,096 characters; the first part quotes the message and later parts do not.
+- A relay binding admits every number, since linking is its admission; `open: false`
+  narrows it to `allow`. The binding's `whatsapp:send` stays as closed as `open` and
+  `allow` are written.
 
-A text from a linked number goes to that principal's poll. A principal counts as open
-while it has a poll waiting or polled in the last minute; with `holdSeconds` at 60 or
-less (the default, meaning only while the principal is open), a message for a principal
-that is not open is refused and the sender told so; a longer hold keeps it in memory
-that long. A reply longer than `maxParts` messages (default 10, at most 100) is refused
-with `too_long`, so a principal cannot make the hub send without limit. `STOP` from the phone unlinks; a number
-that is not linked is told how to link; non-text messages get a short notice. The
-hub's own replies are the relay's `notices` (`linked`, `unlinked`, `notLinked`,
-`codeUnknown`, `notOpen`, `held`, `textOnly`, `notAvailable`), each overridable.
-
-Both hooks are optional operations, run without a Job record as the relay's `user`.
-`admit` receives `{principal}` before linking, polling and each delivery, and answers
-`{allowed: true}` or `{allowed: false, code?, notice?}`; the code is returned to the
-principal and the notice sent to the phone. `charge` receives
-`{principal, parts, message_id}` after a reply is sent. `v/ops/whatsapp-relay/relays`
-lists the caller's relays (all for the venue principal) without credentials.
-
-Links live at `w/adapters/whatsapp-relay/config/<relay>/links` and `/principals` in the
-venue's private workspace. Message text, codes and the message→sender map are bounded
-and in memory: a restart or reconfiguration loses messages not yet collected, never a link.
+Links live under `w/adapters/whatsapp/config/<bot>/relay/` in the venue's private
+workspace (a runtime binding's under its owner's adapter state). Message text, codes
+and the message→sender map are bounded and in memory: a restart or reconfiguration
+loses messages not yet collected, never a link.

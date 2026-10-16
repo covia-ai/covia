@@ -20,7 +20,9 @@ import covia.api.Fields;
 
 /**
  * A durable binding fed by signed HTTP callbacks, a provider connection, or
- * both. Uncertain STARTED work is reported, never blindly retried.
+ * both. Uncertain STARTED work is reported, never blindly retried. A binding
+ * whose handler is {@code relay} hands its events to a {@link RelayBinding}
+ * instead: nothing reaches the inbox, and only links are stored.
  */
 public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<S> {
 	private static final Logger log = LoggerFactory.getLogger(WebhookBot.class);
@@ -32,6 +34,7 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 	private final Managed managed;
 	private final WebhookInbox inbox;
 	private final ConversationRouter router;
+	private final RelayBinding<S> relay;
 	private final String binding;
 	private final AString version;
 	private final Set<String> queued = ConcurrentHashMap.newKeySet();
@@ -52,22 +55,34 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 			: adapter.userStatePath(owner, "inbox/" + spec.name() + "/" + identity);
 		String sessionsRoot = managed == Managed.CONFIG ? "config/" + spec.name() + "/sessions/" + identity
 			: adapter.userStatePath(owner, "sessions/" + spec.name() + "/" + identity);
+		String relayRoot = managed == Managed.CONFIG ? "config/" + spec.name() + "/relay/" + identity
+			: adapter.userStatePath(owner, "relay/" + spec.name() + "/" + identity);
 		inbox = new WebhookInbox(adapter.engine, adapter.state(), inboxRoot);
 		router = new ConversationRouter(adapter.engine, spec, new ConversationSessions(adapter.state(), sessionsRoot + "/" + version,
 			this, () -> running && adapter.isActive()));
+		relay = spec.routesToRelay() ? new RelayBinding<>(this, adapter, relayRoot) : null;
 	}
 	@Override public S spec() { return spec; }
 	@Override public Managed managed() { return managed; }
 	public String binding() { return binding; }
 	public boolean running() { return running; }
 	public WebhookInbox inbox() { return inbox; }
+	/** This binding's relay, or null when its handler is an agent or operation. */
+	public RelayBinding<S> relay() { return relay; }
 	/**
 	 * Whether this binding's agent already holds a conversation, for providers
 	 * that let a conversation continue without re-addressing the bot.
 	 */
 	public boolean holdsConversation(String conversation) { return router.holds(conversation); }
 	public String credential(String field) {
-		return adapter.resolveCredential(MessagingSettings.required(spec.settings(), field), spec.userDID(adapter.engine));
+		return credential(field, null);
+	}
+	/**
+	 * A credential about to be sent to {@code destination}, so a {@code secret/use}
+	 * grant bound to a url prefix covers it only there.
+	 */
+	public String credential(String field, String destination) {
+		return adapter.resolveCredential(MessagingSettings.required(spec.settings(), field), spec.userDID(adapter.engine), destination);
 	}
 	public void requireReady() {
 		if (!running || !adapter.isActive()) throw new IllegalStateException(AWebhookMessagingAdapter.UNAVAILABLE);
@@ -76,14 +91,15 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 			if (value == null || value.isBlank()) throw new IllegalStateException(MessagingHttp.UNAVAILABLE);
 		}
 	}
-	private boolean ready() {
+	boolean ready() {
 		try { requireReady(); return true; }
 		catch (RuntimeException e) { return false; }
 	}
 	@Override public synchronized void start() {
 		if (running) return;
 		running = true;
-		wake = adapter.scheduleRetry(this::recoverPending, 0);
+		// A relay keeps no inbox, so there is nothing to recover.
+		if (relay == null) wake = adapter.scheduleRetry(this::recoverPending, 0);
 		if (spec.connectionIngress()) scheduleConnect(0);
 	}
 	@Override public void stop() {
@@ -96,6 +112,7 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 			connection = null;
 		}
 		if (open != null) open.close();
+		if (relay != null) relay.close();
 	}
 	private synchronized void scheduleConnect(long millis) {
 		if (running) reconnect = adapter.scheduleRetry(() -> AAdapter.VIRTUAL_EXECUTOR.execute(this::connect), millis);
@@ -128,8 +145,16 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 			scheduleConnect(failure == null ? 0 : adapter.retryMillis);
 		});
 	}
-	/** Durable acceptance and asynchronous execution are deliberately separate. */
+	/**
+	 * Durable acceptance and asynchronous execution are deliberately separate. A
+	 * relay binding writes nothing: its event goes to the relay in memory.
+	 */
 	public void accept(String id, AMap<AString, ACell> event) {
+		if (relay != null) {
+			if (!running || !adapter.isActive()) throw new IllegalStateException(AWebhookMessagingAdapter.UNAVAILABLE);
+			relay.accept(id, event);
+			return;
+		}
 		AMap<AString, ACell> receipt;
 		// Engine precedes the binding monitor, matching adapter registration. Stop
 		// cannot return while an acceptance is still able to recreate deleted state.
@@ -140,6 +165,14 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 			}
 		}
 		queue(receipt);
+	}
+	/**
+	 * An authenticated message of a kind this provider does not route (media, say),
+	 * as an event without {@code text}. A relay tells a linked sender it relays only
+	 * text; other bindings ignore it, as before.
+	 */
+	public void unsupported(String id, AMap<AString, ACell> event) {
+		if (relay != null && running && adapter.isActive()) relay.accept(id, event.dissoc(MessagingSettings.key("text")));
 	}
 	private boolean claim(String id) {
 		synchronized (adapter.engine) {
@@ -195,6 +228,7 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 			"pending", inbox.records(WebhookInbox.PENDING).size(), "started", inbox.records(WebhookInbox.STARTED).size(),
 			"queued", queued.size(), "error", lastError);
 		if (spec.webhookIngress()) status = status.assoc(MessagingSettings.key("webhookPath"), Strings.create("/webhooks/" + adapter.getName() + "/" + binding));
+		if (relay != null) status = status.assoc(MessagingSettings.key("relayPath"), Strings.create("/relay/" + adapter.getName() + "/" + binding));
 		if (spec.connectionIngress()) status = status.assoc(MessagingSettings.key("connection"),
 			Strings.create(connected ? CONNECTED : retrying ? RETRYING : CONNECTING));
 		return status;

@@ -26,6 +26,11 @@
           "required": [
             "operation"
           ]
+        },
+        {
+          "required": [
+            "relay"
+          ]
         }
       ],
       "properties": {
@@ -44,6 +49,18 @@
         "operation": {
           "type": "string",
           "minLength": 1
+        },
+        "relay": {
+          "type": [
+            "boolean",
+            "object"
+          ],
+          "description": "Relay this number to many principals instead of an agent or operation: true, or {holdSeconds?, maxParts?, admit?, charge?, notices?}. Principals use the returned relayPath."
+        },
+        "number": {
+          "type": "string",
+          "pattern": "^[0-9]{5,20}$",
+          "description": "The number people message, without '+'; given to relay principals with a wa.me link."
         },
         "reply": {
           "type": [

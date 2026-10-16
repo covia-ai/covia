@@ -85,7 +85,7 @@ public final class SlackAdapter extends AWebhookMessagingAdapter<BotSpec> {
 		String id = MessagingSettings.required(payload, "event_id");
 		var via = Maps.of("channel", NAME, "bot", bot.spec().name(), "from", user, "chat", channel,
 			"message_id", ts, "event_id", id, "team", bot.spec().teamId(), "thread", thread,
-			"access", MessagingSettings.bool(bot.spec().settings(), "open", false) ? "open" : "allow");
+			"access", bot.spec().admitsAnySender() ? "open" : "allow");
 		bot.accept(id, Maps.of("conversation", ConversationRouter.key(bot.spec().installationKey(), channel, thread == null ? "" : thread),
 			"text", text, "channel", channel, "thread", thread, "via", via,
 			"input", Maps.of("event_id", id, "team_id", bot.spec().teamId(), "api_app_id", bot.spec().appId(), "event", event)));
@@ -130,13 +130,15 @@ public final class SlackAdapter extends AWebhookMessagingAdapter<BotSpec> {
 	@Override protected void sendReply(WebhookBot<BotSpec> bot, AMap<AString, ACell> event, String text) {
 		deliver(bot, MessagingSettings.required(event, "channel"), truncate(text, MAX_TEXT), MessagingSettings.optional(event, "thread"));
 	}
+	@Override protected int maxText() { return MAX_TEXT; }
 	private ACell deliver(WebhookBot<BotSpec> bot, String channel, String text, String thread) {
 		bot.requireReady();
 		text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
 		AMap<AString, ACell> body = Maps.of("channel", channel, "text", text, "mrkdwn", false, "parse", "none", "link_names", false,
 			"unfurl_links", false, "unfurl_media", false);
 		if (thread != null) body = body.assoc(MessagingSettings.key("thread_ts"), convex.core.data.Strings.create(thread));
-		ACell result = MessagingHttp.post(apiUrl() + "/chat.postMessage", bot.credential("token"), body);
+		String url = apiUrl() + "/chat.postMessage";
+		ACell result = MessagingHttp.post(url, bot.credential("token", url), body);
 		if (!CVMBool.TRUE.equals(RT.getIn(result, MessagingSettings.key("ok")))) throw new IllegalStateException(API_ERROR);
 		if (RT.ensureString(RT.getIn(result, MessagingSettings.key("ts"))) == null) throw new IllegalStateException(INVALID_RESPONSE);
 		return result;

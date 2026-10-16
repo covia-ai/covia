@@ -38,7 +38,7 @@ public record BotSpec(String name, AMap<AString, ACell> settings) implements Web
 	public String botUserId() { return MessagingSettings.required(settings, "botUserId"); }
 	public String enterpriseId() { return MessagingSettings.optional(settings, "enterpriseId"); }
 	public boolean allowsUser(String id) {
-		return id != null && id.matches(USER_ID) && (MessagingSettings.bool(settings, "open", false)
+		return id != null && id.matches(USER_ID) && (admitsAnySender()
 			|| MessagingSettings.ids(settings, "allow", USER_ID).contains(id));
 	}
 	public boolean allowsChannel(String id) { return MessagingSettings.ids(settings, "allowChannels", CHANNEL_ID).contains(id); }

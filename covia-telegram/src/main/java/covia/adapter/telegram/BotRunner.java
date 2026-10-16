@@ -52,6 +52,7 @@ import convex.core.util.JSON;
 import covia.adapter.AAdapter;
 import covia.adapter.webhook.WebhookInbox;
 import covia.adapter.messaging.MessagingBot;
+import covia.adapter.messaging.MessagingText;
 import covia.adapter.messaging.ConversationRouter;
 import covia.adapter.messaging.ConversationSessions;
 import covia.api.Fields;
@@ -986,7 +987,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		if (text.isBlank()) throw new IllegalArgumentException("text is required");
 		ACell last = null;
 		boolean first = true;
-		for (String chunk : split(text, MAX_MESSAGE_LENGTH)) {
+		for (String chunk : MessagingText.split(text, MAX_MESSAGE_LENGTH)) {
 			Map<String, Object> p = new LinkedHashMap<>(params);
 			p.put("text", chunk);
 			if (!first) p.remove("reply_parameters");
@@ -1118,22 +1119,6 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	}
 
 	// ------------------------------------------------------------------ helpers
-
-	/** Splits text into chunks of at most {@code max} chars, preferring line breaks. */
-	static List<String> split(String text, int max) {
-		List<String> out = new ArrayList<>();
-		if (text == null) return out;
-		String rest = text;
-		while (rest.length() > max) {
-			int cut = rest.lastIndexOf('\n', max);
-			if (cut < max / 2) cut = rest.lastIndexOf(' ', max);
-			if (cut < max / 2) cut = max;
-			out.add(rest.substring(0, cut));
-			rest = rest.substring(cut).stripLeading();
-		}
-		out.add(rest);
-		return out;
-	}
 
 	/** Removes a leading {@code @botusername} mention (group chats). */
 	private String stripMention(String text) {

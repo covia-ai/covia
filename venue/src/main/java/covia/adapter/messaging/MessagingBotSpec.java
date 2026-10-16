@@ -24,9 +24,16 @@ public interface MessagingBotSpec {
 		return Strings.create(engine.getDIDString() + ":public");
 	}
 
+	/** The binding's {@code relay} settings when it relays to principals ({@link RelayBinding}); null otherwise. */
+	default ACell relay() { return null; }
+
 	default boolean routesToAgent() { return agent() != null; }
 	default boolean routesToOperation() { return operation() != null; }
-	default String target() { return routesToAgent() ? "agent " + agent() : "operation " + operation(); }
+	default boolean routesToRelay() { return relay() != null; }
+	default String target() {
+		if (routesToRelay()) return "relay";
+		return routesToAgent() ? "agent " + agent() : "operation " + operation();
+	}
 	default boolean silent() { return CVMBool.FALSE.equals(reply()); }
 	default String fixedReply() { return reply() instanceof AString s ? s.toString() : null; }
 }

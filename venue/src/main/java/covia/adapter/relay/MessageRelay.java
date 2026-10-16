@@ -40,13 +40,19 @@ import covia.venue.AdapterWorkspace;
  * {@link #OPEN_WINDOW_MS}. A message for a principal that is not open waits only when
  * the configured hold is longer than that window; otherwise it is refused at once
  * ({@link Offer#NOT_OPEN}) so the provider can tell the sender.
+ *
+ * <p>Senders and reply addresses are the provider's own: a sender is whatever
+ * identifies one person to the provider, and a message's reply address is an opaque
+ * value the provider gets back with {@link #target} (a chat, a channel and thread, a
+ * phone number). How long a reply may follow its message is the provider's rule too,
+ * given to the constructor; it also bounds how long targets are remembered.
  */
 public final class MessageRelay {
 
 	/** How recently a principal must have polled to count as open. */
 	public static final long OPEN_WINDOW_MS = 60_000L;
-	/** The longest a reply may follow its message (WhatsApp's free-reply window). */
-	public static final long REPLY_WINDOW_MS = 24L * 60 * 60 * 1000;
+	/** How long a reply may follow its message when the provider sets no other rule. */
+	public static final long DEFAULT_REPLY_WINDOW_MS = 24L * 60 * 60 * 1000;
 	/** Linking codes live this long. */
 	public static final long CODE_TTL_MS = 10 * 60 * 1000L;
 	/** Messages waiting for one principal; past this the oldest is dropped. */
@@ -60,11 +66,28 @@ public final class MessageRelay {
 	private static final AString K_PRINCIPAL = Strings.intern("principal");
 	private static final AString K_LINKED_AT = Strings.intern("linkedAt");
 
-	/** One message as a principal collects it. */
-	public record Inbound(String id, String text, long timestampSec) {}
+	/**
+	 * One message as a principal collects it.
+	 *
+	 * @param via where it came from, as the principal may see it (provider, sender,
+	 *            chat or thread); never null
+	 */
+	public record Inbound(String id, String text, long timestampSec, AMap<AString, ACell> via) {
+		public Inbound {
+			if (via == null) via = Maps.empty();
+		}
 
-	/** Where a message came from, kept only so its reply can go back. */
-	public record Target(AString principal, String sender, long timestampSec) {}
+		public Inbound(String id, String text, long timestampSec) {
+			this(id, text, timestampSec, Maps.empty());
+		}
+	}
+
+	/**
+	 * Where a message came from, kept only so its reply can go back.
+	 *
+	 * @param address the provider's reply address for the message, opaque here
+	 */
+	public record Target(AString principal, String sender, ACell address, long timestampSec) {}
 
 	/** What became of a message offered to a principal. */
 	public enum Offer { DELIVERED, HELD, NOT_OPEN }
@@ -80,6 +103,7 @@ public final class MessageRelay {
 	private final AdapterWorkspace state;
 	private final String root;
 	private final long holdMs;
+	private final long replyWindowMs;
 	private final LongSupplier clock;
 	private final SecureRandom random = new SecureRandom();
 	private final Map<AString, Mailbox> boxes = new LinkedHashMap<>(16, 0.75f, true) {
@@ -95,24 +119,34 @@ public final class MessageRelay {
 
 	/**
 	 * @param state       the adapter's private workspace
-	 * @param root        this relay's root in it, conventionally {@code config/<relay>}
+	 * @param root        this relay's root in it
 	 * @param holdSeconds how long a message may wait for collection
 	 */
 	public MessageRelay(AdapterWorkspace state, String root, int holdSeconds) {
-		this(state, root, holdSeconds, System::currentTimeMillis);
+		this(state, root, holdSeconds, DEFAULT_REPLY_WINDOW_MS, System::currentTimeMillis);
 	}
 
-	public MessageRelay(AdapterWorkspace state, String root, int holdSeconds, LongSupplier clock) {
+	/**
+	 * @param replyWindowMs how long a reply may follow its message, the provider's rule
+	 */
+	public MessageRelay(AdapterWorkspace state, String root, int holdSeconds, long replyWindowMs, LongSupplier clock) {
 		this.state = Objects.requireNonNull(state);
 		this.root = Objects.requireNonNull(root);
 		state.path(root + "/links");   // validates the root
 		if (holdSeconds < 0) throw new IllegalArgumentException("holdSeconds must not be negative");
+		if (replyWindowMs <= 0) throw new IllegalArgumentException("replyWindowMs must be positive");
 		this.holdMs = holdSeconds * 1000L;
+		this.replyWindowMs = replyWindowMs;
 		this.clock = clock;
-		this.targets = new Expiring<>(MAX_MESSAGES, REPLY_WINDOW_MS, clock);
-		this.seen = new Expiring<>(MAX_MESSAGES, REPLY_WINDOW_MS, clock);
-		this.replied = new Expiring<>(MAX_MESSAGES, REPLY_WINDOW_MS, clock);
+		this.targets = new Expiring<>(MAX_MESSAGES, replyWindowMs, clock);
+		this.seen = new Expiring<>(MAX_MESSAGES, replyWindowMs, clock);
+		this.replied = new Expiring<>(MAX_MESSAGES, replyWindowMs, clock);
 		this.codes = new Expiring<>(MAX_PRINCIPALS, CODE_TTL_MS, clock);
+	}
+
+	/** How long a reply may follow its message. */
+	public long replyWindowMs() {
+		return replyWindowMs;
 	}
 
 	// ---- links (the one durable fact) ----
@@ -197,8 +231,12 @@ public final class MessageRelay {
 		return seen.putIfAbsent(messageId, Boolean.TRUE);
 	}
 
-	/** Hand a message from {@code sender} to {@code principal}. */
-	public Offer offer(AString principal, String sender, Inbound message) {
+	/**
+	 * Hand a message from {@code sender} to {@code principal}.
+	 *
+	 * @param address the provider's reply address, returned by {@link #target}
+	 */
+	public Offer offer(AString principal, String sender, Inbound message, ACell address) {
 		long now = clock.getAsLong();
 		CompletableFuture<List<Inbound>> wake;
 		List<Inbound> ready;
@@ -209,7 +247,7 @@ public final class MessageRelay {
 			if (!open && holdMs <= OPEN_WINDOW_MS) return Offer.NOT_OPEN;
 			if (box.queue.size() >= MAX_QUEUE) box.queue.pollFirst();
 			box.queue.addLast(new Queued(message, now + Math.max(holdMs, OPEN_WINDOW_MS)));
-			targets.put(message.id(), new Target(principal, sender, message.timestampSec()));
+			targets.put(message.id(), new Target(principal, sender, address, message.timestampSec()));
 			outcome = open ? Offer.DELIVERED : Offer.HELD;
 			wake = box.waiter;
 			box.waiter = null;
@@ -274,7 +312,7 @@ public final class MessageRelay {
 	public Target target(String messageId) {
 		Target t = targets.get(messageId);
 		if (t == null) return null;
-		if (clock.getAsLong() - t.timestampSec() * 1000L >= REPLY_WINDOW_MS) return null;
+		if (clock.getAsLong() - t.timestampSec() * 1000L >= replyWindowMs) return null;
 		return t;
 	}
 

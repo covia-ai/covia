@@ -31,6 +31,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.adapter.messaging.AMessagingAdapter;
+import covia.adapter.messaging.MessagingText;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Config;
@@ -1122,7 +1123,7 @@ public class TelegramAdapterTest {
 		assertTrue(text.length() > 2 * BotRunner.MAX_MESSAGE_LENGTH);
 		run(RequestContext.of(OWNER), "v/ops/telegram/send", Maps.of(
 			"chat_id", CVMLong.create(ALLOWED_ID), "text", text));
-		List<String> expected = BotRunner.split(text, BotRunner.MAX_MESSAGE_LENGTH);
+		List<String> expected = MessagingText.split(text, BotRunner.MAX_MESSAGE_LENGTH);
 		List<String> actual = new java.util.ArrayList<>(expected.size());
 		for (int i = 0; i < expected.size(); i++) {
 			FakeTelegramServer.Sent sent = telegram.awaitSent(i == 0 ? 10_000 : 0);
@@ -1136,9 +1137,9 @@ public class TelegramAdapterTest {
 	@Test
 	public void testSplitPrefersLineBreaks() {
 		String text = "aaaa\nbbbb\ncccc";
-		assertEquals(java.util.List.of("aaaa\nbbbb", "cccc"), BotRunner.split(text, 10));
-		assertEquals(java.util.List.of("abcdefghij", "klm"), BotRunner.split("abcdefghijklm", 10));
-		assertEquals(java.util.List.of("short"), BotRunner.split("short", 10));
+		assertEquals(java.util.List.of("aaaa\nbbbb", "cccc"), MessagingText.split(text, 10));
+		assertEquals(java.util.List.of("abcdefghij", "klm"), MessagingText.split("abcdefghijklm", 10));
+		assertEquals(java.util.List.of("short"), MessagingText.split("short", 10));
 	}
 
 	@Test

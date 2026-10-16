@@ -48,7 +48,7 @@ class MessageRelayTest {
 
 			relay.poll(ALICE, 0);   // open, so the message is queued in memory
 			assertEquals(MessageRelay.Offer.DELIVERED,
-				relay.offer(ALICE, "447700900001", new MessageRelay.Inbound("m1", "secret health text", now())));
+				relay.offer(ALICE, "447700900001", new MessageRelay.Inbound("m1", "secret health text", now()), null));
 			assertFalse(String.valueOf(engine.resolvePath(Strings.create("w/adapters/relay-test"), engine.venueContext()))
 				.contains("secret health text"), "no message reaches the store");
 
@@ -74,18 +74,18 @@ class MessageRelayTest {
 		try {
 			AdapterWorkspace ws = engine.adapterWorkspace("relay-test");
 			MessageRelay shortHold = new MessageRelay(ws, "config/short", 60);
-			assertEquals(MessageRelay.Offer.NOT_OPEN, shortHold.offer(ALICE, "s", new MessageRelay.Inbound("m1", "hi", now())));
+			assertEquals(MessageRelay.Offer.NOT_OPEN, shortHold.offer(ALICE, "s", new MessageRelay.Inbound("m1", "hi", now()), null));
 
 			CompletableFuture<List<MessageRelay.Inbound>> waiting = shortHold.poll(ALICE, 5_000);
 			assertFalse(waiting.isDone());
-			assertEquals(MessageRelay.Offer.DELIVERED, shortHold.offer(ALICE, "s", new MessageRelay.Inbound("m2", "hello", now())));
+			assertEquals(MessageRelay.Offer.DELIVERED, shortHold.offer(ALICE, "s", new MessageRelay.Inbound("m2", "hello", now()), null));
 			assertEquals("m2", waiting.get(2, TimeUnit.SECONDS).getFirst().id(), "a waiting poll is answered at once");
-			assertEquals(MessageRelay.Offer.DELIVERED, shortHold.offer(ALICE, "s", new MessageRelay.Inbound("m3", "again", now())),
+			assertEquals(MessageRelay.Offer.DELIVERED, shortHold.offer(ALICE, "s", new MessageRelay.Inbound("m3", "again", now()), null),
 				"just polled, still open");
 			assertEquals("m3", shortHold.poll(ALICE, 0).get().getFirst().id());
 
 			MessageRelay longHold = new MessageRelay(ws, "config/long", 3_600);
-			assertEquals(MessageRelay.Offer.HELD, longHold.offer(BOB, "s", new MessageRelay.Inbound("m4", "later", now())));
+			assertEquals(MessageRelay.Offer.HELD, longHold.offer(BOB, "s", new MessageRelay.Inbound("m4", "later", now()), null));
 			assertEquals("m4", longHold.poll(BOB, 0).get().getFirst().id(), "held until collected");
 		} finally {
 			engine.close();
@@ -96,19 +96,22 @@ class MessageRelayTest {
 		Engine engine = Engine.createTemp(Maps.empty());
 		try {
 			AtomicLong clock = new AtomicLong(1_800_000_000_000L);
-			MessageRelay relay = new MessageRelay(engine.adapterWorkspace("relay-test"), "config/main", 60, clock::get);
+			long window = 60 * 60 * 1000L;
+			MessageRelay relay = new MessageRelay(engine.adapterWorkspace("relay-test"), "config/main", 60, window, clock::get);
 			relay.poll(ALICE, 0);
 			long sent = clock.get() / 1000;
-			relay.offer(ALICE, "447700900001", new MessageRelay.Inbound("m1", "hi", sent));
+			AMap<AString, ACell> address = Maps.of("channel", "C123", "thread", "1700000000.000100");
+			relay.offer(ALICE, "U123", new MessageRelay.Inbound("m1", "hi", sent), address);
 			MessageRelay.Target t = relay.target("m1");
 			assertEquals(ALICE, t.principal());
-			assertEquals("447700900001", t.sender());
+			assertEquals("U123", t.sender());
+			assertEquals(address, t.address(), "the provider's reply address comes back as it was given");
 			assertTrue(relay.claimReply("m1"));
 			assertFalse(relay.claimReply("m1"), "one answer per message");
 			relay.releaseReply("m1");
 			assertTrue(relay.claimReply("m1"), "a failed send may be retried");
-			clock.addAndGet(MessageRelay.REPLY_WINDOW_MS);
-			assertNull(relay.target("m1"), "past the window, nothing can be answered");
+			clock.addAndGet(window);
+			assertNull(relay.target("m1"), "past the provider's window, nothing can be answered");
 			assertNull(relay.target("never"));
 		} finally {
 			engine.close();

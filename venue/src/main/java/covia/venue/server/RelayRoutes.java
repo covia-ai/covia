@@ -19,9 +19,11 @@ import io.javalin.http.Context;
  */
 final class RelayRoutes {
 	static final String ROUTE = "/relay/{adapter}/{binding}/{action}";
-	static final int MAX_BODY_BYTES = 1024 * 1024;
+	static final int MAX_BODY_BYTES = WebhookRoutes.MAX_BODY_BYTES;
 	static final String UNAVAILABLE = "Relay endpoint is unavailable";
 	static final String TOO_LARGE = "Relay request body is too large";
+	static final String AUTH_REQUIRED = "Authentication required";
+	static final String FAILED = "Relay request failed";
 	private final Engine engine;
 
 	private RelayRoutes(Engine engine) { this.engine = engine; }
@@ -41,34 +43,22 @@ final class RelayRoutes {
 		AString caller = AuthMiddleware.getVenueUserDID(ctx);
 		if (caller == null) caller = AuthMiddleware.getAuthenticatedIdentity(ctx);
 		if (caller == null) {
-			ctx.status(401).result("Authentication required");
+			ctx.status(401).result(AUTH_REQUIRED);
 			return;
 		}
-		byte[] body = ctx.req().getInputStream().readNBytes(MAX_BODY_BYTES + 1);
-		if (body.length > MAX_BODY_BYTES) {
-			ctx.status(413).result(TOO_LARGE);
-			return;
-		}
-		// Recheck after reading; do not retain a receiver between requests.
-		if (engine.getAdapter(adapter.getName()) != adapter) {
-			ctx.status(404).result(UNAVAILABLE);
-			return;
-		}
+		WebhookRequest request = WebhookRoutes.read(ctx, engine, adapter, UNAVAILABLE, TOO_LARGE);
+		if (request == null) return;
 		CompletableFuture<WebhookResponse> answer;
 		try {
-			answer = relay.handleRelay(ctx.pathParam("binding"), ctx.pathParam("action"), caller,
-				new WebhookRequest(ctx.method().name(), ctx.headerMap(), ctx.queryParamMap(), body));
+			answer = relay.handleRelay(ctx.pathParam("binding"), ctx.pathParam("action"), caller, request);
 		} catch (RuntimeException e) {
 			answer = CompletableFuture.failedFuture(e);
 		}
 		CompletableFuture<WebhookResponse> settled = answer == null
 			? CompletableFuture.completedFuture(WebhookResponse.text(404, UNAVAILABLE)) : answer;
+		// The handler's future holds the response, so a long poll holds no server thread.
 		ctx.future(() -> settled.handle((response, failure) -> {
-			WebhookResponse r = failure != null || response == null
-				? WebhookResponse.text(500, "Relay request failed") : response;
-			ctx.status(r.status()).contentType(r.contentType());
-			r.headers().forEach(ctx::header);
-			ctx.result(r.body());
+			WebhookRoutes.answer(ctx, failure != null || response == null ? WebhookResponse.text(500, FAILED) : response);
 			return null;
 		}));
 	}

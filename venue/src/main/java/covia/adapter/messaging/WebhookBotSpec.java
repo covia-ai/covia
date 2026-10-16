@@ -20,4 +20,12 @@ public interface WebhookBotSpec extends MessagingBotSpec {
 	@Override default String agent() { return MessagingSettings.optional(settings(), "agent"); }
 	@Override default String operation() { return MessagingSettings.optional(settings(), "operation"); }
 	@Override default ACell reply() { return settings().get(MessagingSettings.key("reply")); }
+	@Override default ACell relay() { return settings().get(MessagingSettings.key("relay")); }
+	/**
+	 * Whether any sender's messages are admitted. A relay's links are its admission,
+	 * so a relay binding admits everyone unless {@code open: false} narrows it to
+	 * {@code allow}. Destinations of the {@code send} operation follow {@code open}
+	 * as written, never this default.
+	 */
+	default boolean admitsAnySender() { return MessagingSettings.bool(settings(), "open", routesToRelay()); }
 }

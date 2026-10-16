@@ -20,11 +20,12 @@ public final class MessagingSettings {
 	public static final String UNKNOWN = "Unknown setting: %s";
 	public static final String INVALID_NAME = "Bot name must match [A-Za-z0-9_-]+";
 	public static final String INVALID_USER = "user must be a bare DID or public";
-	public static final String HANDLER = "Exactly one of agent or operation is required";
+	public static final String HANDLER = "Exactly one of agent, operation or relay is required";
 	public static final String REPLY = "reply must be boolean or string and only applies to operation handlers";
 	public static final String CREDENTIAL = "%s must be an s/NAME secret reference";
 	public static final String INVALID_ID = "%s has an invalid ID format";
-	public static final Set<String> COMMON = Set.of("user", "agent", "operation", "reply", "allow", "open", "token");
+	/** Settings every webhook provider's binding accepts. */
+	public static final Set<String> COMMON = Set.of("user", "agent", "operation", "relay", "reply", "allow", "open", "token");
 	private MessagingSettings() { }
 	public static AString key(String name) { return Strings.intern(name); }
 	public static AMap<AString, ACell> object(ACell value) {
@@ -76,9 +77,14 @@ public final class MessagingSettings {
 		String user = required(map, "user");
 		if (!user.equals("public") && (!user.startsWith("did:") || user.contains("/") || user.isBlank())) throw new IllegalArgumentException(INVALID_USER);
 		String agent = optional(map, "agent"), operation = optional(map, "operation");
-		if ((agent == null) == (operation == null)) throw new IllegalArgumentException(HANDLER);
+		ACell relay = map.get(key("relay"));
+		if ((agent != null ? 1 : 0) + (operation != null ? 1 : 0) + (relay != null ? 1 : 0) != 1) throw new IllegalArgumentException(HANDLER);
+		if (relay != null) {
+			RelaySettings.parse(relay, strict);
+			if (user.equals("public")) throw new IllegalArgumentException(RelaySettings.PUBLIC_USER);
+		}
 		ACell reply = map.get(key("reply"));
-		if (reply != null && (agent != null || !(reply instanceof AString || reply instanceof CVMBool))) throw new IllegalArgumentException(REPLY);
+		if (reply != null && (operation == null || !(reply instanceof AString || reply instanceof CVMBool))) throw new IllegalArgumentException(REPLY);
 		bool(map, "open", false);
 		for (String field : credentials) {
 			if (!required(map, field).matches("/?s/[A-Za-z0-9_.-]+")) throw new IllegalArgumentException(CREDENTIAL.formatted(field));

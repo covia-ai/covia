@@ -35,6 +35,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
+import covia.adapter.messaging.MessagingText;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -122,7 +123,7 @@ class DiscordAdapterTest {
 		ACell cfg=RT.getIn(template,"agent","config");
 		assertEquals(Vectors.of((ACell)Strings.create("w/skills"),Strings.create("v/skills/root")),RT.getIn(cfg,"skillsets"));
 		assertNull(RT.getIn(cfg,"skills"));
-		assertEquals(List.of("abc","def"),BotRunner.split("abc def",3));
+		assertEquals(List.of("abc","def"),MessagingText.split("abc def",3));
 	}
 
 	@Test void runtimeBotsRequireSecretReferencesAndCanBeDeleted() throws Exception {

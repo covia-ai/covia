@@ -5,8 +5,6 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
@@ -27,6 +25,7 @@ import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.adapter.AAdapter;
 import covia.adapter.messaging.MessagingBot;
+import covia.adapter.messaging.MessagingText;
 import covia.adapter.messaging.ConversationRouter;
 import covia.adapter.messaging.ConversationSessions;
 import covia.api.Fields;
@@ -86,7 +85,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	private String sessionsRelativePath(){return managed==Managed.CONFIG
 		? "config/"+spec.name()+"/sessions"
 		: adapter.userStatePath(spec.userDID(adapter.engine),"sessions/"+spec.name());}
-	ACell sendMessage(String channelId,AMap<AString,ACell> body){AString content=RT.ensureString(body.get(Strings.intern("content")));if(content==null||content.isBlank())throw new IllegalArgumentException("content is required");ACell last=null;boolean first=true;for(String chunk:split(content.toString(),MAX_MESSAGE_LENGTH)){AMap<AString,ACell> part=body.assoc(Strings.intern("content"),Strings.create(chunk));if(!first)part=part.dissoc(Strings.intern("message_reference"));last=call("POST","/channels/"+channelId+"/messages",part);sent.incrementAndGet();first=false;}return last;}
+	ACell sendMessage(String channelId,AMap<AString,ACell> body){AString content=RT.ensureString(body.get(Strings.intern("content")));if(content==null||content.isBlank())throw new IllegalArgumentException("content is required");ACell last=null;boolean first=true;for(String chunk:MessagingText.split(content.toString(),MAX_MESSAGE_LENGTH)){AMap<AString,ACell> part=body.assoc(Strings.intern("content"),Strings.create(chunk));if(!first)part=part.dissoc(Strings.intern("message_reference"));last=call("POST","/channels/"+channelId+"/messages",part);sent.incrementAndGet();first=false;}return last;}
 	private ACell send(String channel,String text,String reply){AMap<AString,ACell> body=Maps.of(Strings.intern("content"),Strings.create(text));if(reply!=null)body=body.assoc(Strings.intern("message_reference"),Maps.of(Strings.intern("message_id"),Strings.create(reply),Strings.intern("fail_if_not_exists"),CVMBool.FALSE));return sendMessage(channel,body);}
 	private void sendQuietly(String channel,String text,String reply){try{send(channel,text,reply);}catch(RuntimeException e){log.debug("Discord bot '{}': notice failed: {}",spec.name(),concise(e));}}
 
@@ -98,7 +97,6 @@ final class BotRunner implements MessagingBot<BotSpec> {
 			if(r.body()==null||r.body().isBlank())return CVMBool.TRUE;return JSON.parse(r.body());
 		}catch(InterruptedException e){Thread.currentThread().interrupt();throw new JobFailedException("Discord call interrupted");}catch(java.io.IOException|IllegalArgumentException e){throw new JobFailedException("Discord "+method+" "+route+" failed: "+concise(e));}
 	}
-	static List<String> split(String text,int max){List<String> out=new ArrayList<>();String rest=text;while(rest.length()>max){int cut=rest.lastIndexOf('\n',max);if(cut<max/2)cut=rest.lastIndexOf(' ',max);if(cut<max/2)cut=max;out.add(rest.substring(0,cut));rest=rest.substring(cut).stripLeading();}out.add(rest);return out;}
 	static String concise(Throwable t){Throwable c=t;while((c instanceof CompletionException||c instanceof ExecutionException)&&c.getCause()!=null)c=c.getCause();String msg=AAdapter.describeFailure(c);return msg.length()>400?msg.substring(0,400)+"…":msg;}
 	private static String trim(String s){if(s==null)return "";return s.length()>600?s.substring(0,600)+"…":s;}
 	private void logFailure(String what,InboundMessage m,Throwable t){log.warn("Discord bot '{}': {} for message {} in channel {}: {}",spec.name(),what,m.id(),m.channelId(),concise(t));}
