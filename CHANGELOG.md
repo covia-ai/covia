@@ -13,6 +13,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `SecretStore.deriveKey` is deprecated and reads only secrets written before
   key versions; pass `SecretStore.keys(keyPair)` to `store`, `storeIfAbsent` and
   `decrypt`. The `byte[]` `store` and `storeIfAbsent` overloads are removed.
+- A venue rolled back below 0.9.12 cannot read secrets written since the
+  upgrade; configured secrets recover, as startup rewrites them.
 
 ### Security
 

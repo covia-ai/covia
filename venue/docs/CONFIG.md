@@ -226,11 +226,15 @@ version that encrypted it (`keyVersion`):
   secrets are encrypted twice, under different keys.
 - Changing the seed strands every secret. Re-encrypting under a new identity
   key belongs with identity key rotation, which does not exist yet.
+- A venue older than 0.9.12 cannot read version 2 secrets: rolled back, it
+  loses the secrets written since the upgrade until it is upgraded again.
+  Configured secrets recover, as startup rewrites them.
 
-Embedders use the `secret` operations rather than the store. Code inside the
-venue passes `SecretStore.keys(engine.getKeyPair())` to `store`,
-`storeIfAbsent` and `decrypt`. The deprecated `SecretStore.deriveKey` returns
-the version 1 key, which reads version 1 secrets only.
+An embedder may use `SecretStore` directly, passing
+`SecretStore.keys(engine.getKeyPair())` to `store`, `storeIfAbsent` and
+`decrypt`, or the `secret` operations (`set`, `list`, `delete`, `extract`).
+The deprecated `SecretStore.deriveKey` returns the version 1 key, which reads
+version 1 secrets only.
 
 ## Production profile
 
