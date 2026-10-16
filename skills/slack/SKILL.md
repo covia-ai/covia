@@ -14,7 +14,7 @@ A binding connects one Slack app installation (app, workspace, bot user) to a ha
 
 Walk the user through these steps; each is idempotent.
 
-1. **Choose the transport.** Socket Mode (`appToken`) needs no public URL — the right choice for a laptop, NAT or a private network. Events API callbacks (`signingSecret`) need the venue reachable over HTTPS at its `webhookPath`. Enabling Socket Mode on an existing app moves *all* its events to sockets, so check nothing else relies on that app's Request URL first.
+1. **Choose the transport.** Socket Mode (`appToken`) needs no public URL — the right choice for a laptop, NAT or a private network. A venue left running on a desktop should set `"tray": false` in its config (or `COVIA_NO_TRAY=1`): the tray icon's native AWT code can crash the venue when Windows wakes from sleep. Events API callbacks (`signingSecret`) need the venue reachable over HTTPS at its `webhookPath`. Enabling Socket Mode on an existing app moves *all* its events to sockets, so check nothing else relies on that app's Request URL first.
 
 2. **Create or update the Slack app** at https://api.slack.com/apps. For a new app choose *From a manifest*, the workspace, and paste:
    ```json

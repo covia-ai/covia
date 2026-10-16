@@ -445,9 +445,18 @@ Venue** (status page in the browser — double-click does the same), **Close
 Venue** (that venue; the process exits when the last one closes) and **Exit**
 (all venues). Close/Exit run the full shutdown flush, same as SIGTERM.
 
-Strictly best-effort — headless JVMs (Docker, CI, servers) and unsupported
-desktops run without an icon, and a tray failure never takes a venue down.
-Set `COVIA_NO_TRAY=1` to suppress it explicitly. See `covia.venue.Tray`.
+Headless JVMs (Docker, CI, servers) and unsupported desktops run without an
+icon. A Java exception from the tray never takes a venue down, but a crash in
+the JDK's native AWT code ends the whole process. This has happened on
+Windows when the PC woke from Modern Standby: AWT re-reads the display
+devices on wake and its native code failed with an access violation. No JDK
+fix is known.
+
+So run long-running or unattended venues without a tray. A Socket Mode bot
+on a laptop is one. Set `"tray": false` on a venue, or `COVIA_NO_TRAY=1` in the
+environment. Either is checked before any AWT class loads. `"tray": false` on
+any venue in a process keeps the tray out of the whole process, since every
+venue in it shares the crash. See `covia.venue.Tray`.
 
 ## Process restart and executable upgrade
 

@@ -413,7 +413,7 @@ public class Config {
 		"maxContentSize", "auth", "webdav", "file", "corsOrigins",
 		"allowPrivateNetwork", "securityHeaders", "enablePrivateJobs", "recordReadOnlyOperations", "fixMcpStrings",
 		"outputValidation", "secrets", "strictAssets", "strictConfig", "scheduler",
-		"shutdown", "logging");
+		"shutdown", "logging", "tray");
 
 	/**
 	 * Create a Config wrapping the given venue config map.
@@ -501,6 +501,7 @@ public class Config {
 		validateTrustedProxies();
 		optionalBoolean(config, ENABLE_PRIVATE_JOBS, "enablePrivateJobs", false);
 		optionalBoolean(config, RECORD_READ_ONLY_OPERATIONS, "recordReadOnlyOperations", false);
+		optionalBoolean(config, TRAY, "tray", true);
 
 		validateBaseUrl();
 		validateRootPage(strict);
@@ -1011,6 +1012,22 @@ public class Config {
 	 */
 	public AString getDID() {
 		return RT.ensureString(config.get(DID));
+	}
+
+	/** Config key: whether this venue allows a desktop tray icon in its process (default true). */
+	public static final AString TRAY = Strings.intern("tray");
+
+	/**
+	 * Whether this venue allows a system-tray icon, and so AWT, in its process.
+	 * Default true. {@code "tray": false} on any venue keeps AWT out of the whole
+	 * process: a crash in the JDK's native AWT code takes down every venue in it,
+	 * so long-running or unattended venues should set it (see {@code Tray}).
+	 *
+	 * @return true if a tray icon may be installed
+	 */
+	public boolean isTrayEnabled() {
+		ACell v = config.get(TRAY);
+		return (v == null) || RT.bool(v);
 	}
 
 	/** Config key: whether broken adapter asset resources fail startup (default true). */

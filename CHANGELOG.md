@@ -31,6 +31,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   an agent bot's `replyOperation`, or call it from an application's own reply
   hook. A `parse_mode` returned by a reply hook now wins over the bot's
   `parseMode`.
+- Venue `"tray": false` keeps the tray icon and AWT out of the process.
 
 ### Fixed
 

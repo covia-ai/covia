@@ -64,7 +64,10 @@ metadata is distinct from the message's sender.
 
 [Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode/)
 delivers the same events over an outbound WebSocket, so a venue on a laptop or
-behind NAT needs no public URL. Enable Socket Mode on the app and create an
+behind NAT needs no public URL. A venue left running on a Windows desktop
+should set `"tray": false`: the tray icon's native AWT code has crashed the
+venue when the PC woke from sleep (see the venue's CONFIG.md, System tray).
+Enable Socket Mode on the app and create an
 app-level token with the `connections:write` scope. Store it with `secret:set`
 and give its reference as `appToken`, in place of `signingSecret`:
 

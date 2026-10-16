@@ -27,10 +27,15 @@ import covia.venue.server.VenueServer;
  * launcher can see it's running, jump to its status page, and stop it cleanly
  * without hunting for a process. Hovering shows the venue name, port and DID.
  *
- * <p>Strictly best-effort: on a headless JVM (Docker, CI, servers), an
- * unsupported desktop (some Linux DEs), or under {@code COVIA_NO_TRAY=1},
- * {@link #install} quietly installs nothing and the venue runs exactly as
- * before. A tray failure must never take a venue down.
+ * <p>Best-effort: on a headless JVM (Docker, CI, servers), an unsupported
+ * desktop (some Linux DEs), under {@code COVIA_NO_TRAY=1}, or when any venue in
+ * the process sets {@code "tray": false}, {@link #install} installs nothing and
+ * the venue runs exactly as before. A Java exception from the tray never takes
+ * a venue down, but a crash inside the JDK's native AWT code takes down the
+ * whole process. One has: on Windows, AWT re-reads the display devices when the
+ * PC wakes from Modern Standby, and that native code can fail with an access
+ * violation. Long-running or unattended venues should therefore opt out; the
+ * opt-outs are checked before any AWT class loads.
  *
  * <p>"Close Venue" shuts down that one venue; when the last venue in the
  * process closes, the JVM exits (the AWT thread is non-daemon and would
@@ -51,24 +56,45 @@ public final class Tray {
 	/** Windows caps tray tooltips at 127 chars; clamp so long names degrade gracefully. */
 	private static final int TOOLTIP_MAX = 127;
 
+	/** Environment variable that keeps the tray, and AWT, out of the process. */
+	public static final String NO_TRAY_ENV = "COVIA_NO_TRAY";
+	public static final String DISABLED_BY_ENV = "Tray icon disabled by " + NO_TRAY_ENV + "=1";
+	public static final String DISABLED_BY_CONFIG = "Tray icon disabled: a venue in this process sets \"tray\": false";
+
 	private Tray() {
 	}
 
 	/**
 	 * Add a tray icon for each venue, with Open / Close / Exit menu items and a
 	 * name + port + DID tooltip. Returns how many icons were actually installed
-	 * (0 on headless/unsupported desktops or under {@code COVIA_NO_TRAY=1}).
+	 * (0 on headless/unsupported desktops, or when opted out).
 	 */
 	public static int install(List<VenueServer> servers) {
+		// Decided before any AWT class loads, so an opted-out process never starts AWT.
+		String refusal = refusal(System.getenv(NO_TRAY_ENV), servers.stream().map(s -> s.getEngine().config()).toList());
+		if (refusal != null) {
+			log.info(refusal);
+			return 0;
+		}
 		// Must be set before any AWT class initialises: menu-bar-less on macOS.
 		System.setProperty("apple.awt.UIElement", "true");
 		return install(servers, GraphicsEnvironment.isHeadless());
 	}
 
+	/**
+	 * Whether this process may run a tray: null when it may, otherwise why not.
+	 * Any one venue opting out keeps AWT out of the whole process, since a native
+	 * AWT crash takes every venue in it down.
+	 */
+	static String refusal(String noTrayEnv, List<Config> configs) {
+		if ("1".equals(noTrayEnv)) return DISABLED_BY_ENV;
+		for (Config config : configs) if (!config.isTrayEnabled()) return DISABLED_BY_CONFIG;
+		return null;
+	}
+
 	/** The guard seam: tests pass {@code headless} explicitly so they never touch
 	 *  the real desktop (a suite must not add icons to the developer's tray). */
 	static int install(List<VenueServer> servers, boolean headless) {
-		if ("1".equals(System.getenv("COVIA_NO_TRAY"))) return 0;
 		try {
 			if (headless || !SystemTray.isSupported()) {
 				log.info("System tray not available — running without a tray icon");

@@ -120,8 +120,8 @@ public class MainVenue {
 		});
 
 		// Desktop presence: a tray icon per venue with Open / Close / Exit —
-		// best-effort; headless or unsupported desktops (and COVIA_NO_TRAY=1)
-		// run without one. Tray logs why when it installs nothing.
+		// best-effort; headless or unsupported desktops, COVIA_NO_TRAY=1 and any
+		// venue with "tray": false run without one. Tray logs why when it installs nothing.
 		Tray.install(servers);
 
 		// A predecessor only considers this JVM started after all configured venues
