@@ -1,0 +1,27 @@
+{
+  "operation": {
+    "adapter": "whatsapp-relay:relays",
+    "output": {
+      "required": [
+        "relays"
+      ],
+      "type": "object",
+      "properties": {
+        "relays": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "input": {
+      "additionalProperties": false,
+      "type": "object",
+      "properties": {}
+    },
+    "readOnly": true
+  },
+  "name": "WhatsApp relays",
+  "description": "List the relays the caller owns (all for the venue principal): number, webhook and relay paths, and whether their credentials resolve. No credentials, links or messages are returned."
+}
