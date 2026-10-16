@@ -267,7 +267,8 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 
 	/**
 	 * {@code telegram:format}: Markdown to Telegram HTML ({@link TelegramMarkdown}).
-	 * Takes a string, {@code {markdown}}, {@code {text}}, or the reply hook's own
+	 * Takes {@code {markdown}} (or, when that is absent or blank, {@code {text}}), a
+	 * bare string from a Java caller, or the reply hook's own
 	 * input {@code {response, via}}, whose response is read as the adapter reads
 	 * any agent reply ({@link ConversationRouter#responseText}). Returns
 	 * {@code {text, parse_mode: "HTML"}}: as a reply hook's result, the reply is
@@ -287,8 +288,8 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 		if (input instanceof AString s) return s.toString();
 		AMap<AString, ACell> in = RT.ensureMap(input);
 		if (in == null) return null;
-		if (in.get(K_MARKDOWN) instanceof AString s) return s.toString();
-		if (in.get(Fields.TEXT) instanceof AString s) return s.toString();
+		if (in.get(K_MARKDOWN) instanceof AString s && !s.toString().isBlank()) return s.toString();
+		if (in.get(Fields.TEXT) instanceof AString s && !s.toString().isBlank()) return s.toString();
 		if (in.containsKey(Fields.RESPONSE)) return ConversationRouter.responseText(in.get(Fields.RESPONSE));
 		return null;
 	}

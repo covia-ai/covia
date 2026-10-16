@@ -599,6 +599,15 @@ public class TelegramAdapterTest {
 			assertTrue(reply.text().contains("<b>Bold</b>"), reply.text());
 			TelegramMarkdownTest.assertTelegramHtml(reply.text());
 			await(() -> runner.isChatIdle(ALLOWED_ID), 10_000, () -> "reply did not finish");
+
+			// Telegram refuses the HTML: the resend is the words it shows, not its markup.
+			telegram.push(token, ALLOWED_ID, "private", ALLOWED_ID, "alice", "**Bold** " + FakeTelegramServer.BAD_MARKUP);
+			var plain = telegram.awaitSent(token, 15_000);
+			assertNotNull(plain);
+			assertEquals(null, plain.parseMode(), "resent without a parse mode");
+			assertTrue(plain.text().contains("Bold") && plain.text().contains(FakeTelegramServer.BAD_MARKUP), plain.text());
+			assertFalse(plain.text().contains("<b>"), "no markup in the plain resend: " + plain.text());
+			await(() -> runner.isChatIdle(ALLOWED_ID), 10_000, () -> "second reply did not finish");
 		} finally {
 			run(RequestContext.of(OWNER), "v/ops/telegram/delete", Maps.of("name", "formatted"));
 		}

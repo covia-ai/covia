@@ -2122,10 +2122,13 @@ and anyone else needs a delegation from that user; `v/ops/telegram/call
 parameters (`sendPhoto`/`sendDocument` by `file_id` or URL, `editMessageText`,
 `deleteMessage`, `answerCallbackQuery`, `getChat`, …; `getUpdates`,
 `setWebhook`, `deleteWebhook`, `logOut`, `close` are refused as the venue's
-own update loop owns them) — gated on `telegram/call`; and
+own update loop owns them) — gated on `telegram/call`;
 `v/ops/telegram/bots` — the caller's bots
 with state (`STARTING`, `PENDING`, `RUNNING`, `STOPPED`), Telegram username,
-last error and counters, tokens never included. The module ships a lightweight
+last error and counters, tokens never included; and `v/ops/telegram/format
+{markdown}` — Markdown to Telegram HTML with `parse_mode: "HTML"`, read-only
+and ungated, as it touches no bot. Refused HTML is resent as the plain text
+it shows, never as its markup. The module ships a lightweight
 `telegram` agent skill (`v/skills/adapters/telegram`) for ordinary messaging
 and status. It reveals `telegram-bot-management` only when an agent needs to
 create, repair or delete a user-owned bot; that child in turn reveals the

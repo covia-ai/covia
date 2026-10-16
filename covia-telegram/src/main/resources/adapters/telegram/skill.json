@@ -13,7 +13,8 @@
 			"v/ops/telegram/send",
 			"v/ops/telegram/call",
 			"v/ops/telegram/bots",
-			"v/ops/telegram/download"
+			"v/ops/telegram/download",
+			"v/ops/telegram/format"
 		]
 	}
 }

@@ -610,19 +610,18 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		}
 	}
 
-	/** The parse modes Telegram knows; a reply hook naming any other is not obeyed. */
-	static final java.util.Set<String> PARSE_MODES = java.util.Set.of("Markdown", "MarkdownV2", "HTML");
-
 	/**
 	 * The parse mode a reply hook's text is written for, when it says so
 	 * ({@code {text, parse_mode}}, as {@code telegram:format} returns): it wins over
 	 * the bot's own {@code parseMode}, so naming the formatter is the whole setup.
-	 * Otherwise, or for a mode Telegram does not know, the bot's own.
+	 * Matched without regard to case, as Telegram does, and returned as Telegram
+	 * spells it. Otherwise, or for a mode Telegram does not know, the bot's own.
 	 */
 	static String formattedParseMode(ACell result, String botParseMode) {
-		if (result instanceof AMap<?, ?> && RT.getIn(result, TelegramAdapter.K_PARSE_MODE_PARAM) instanceof AString mode
-				&& PARSE_MODES.contains(mode.toString())) {
-			return mode.toString();
+		if (result instanceof AMap<?, ?> && RT.getIn(result, TelegramAdapter.K_PARSE_MODE_PARAM) instanceof AString mode) {
+			for (String known : BotSpec.PARSE_MODES) {
+				if (known.equalsIgnoreCase(mode.toString().strip())) return known;
+			}
 		}
 		return botParseMode;
 	}
@@ -1014,7 +1013,16 @@ final class BotRunner implements MessagingBot<BotSpec> {
 			if (!r.ok() && r.errorCode() == 400 && p.containsKey("parse_mode")) {
 				log.debug("Telegram bot '{}': {} formatting rejected ({}), resending as plain text",
 					spec.name(), p.get("parse_mode"), r.description());
-				p.remove("parse_mode");
+				Object mode = p.remove("parse_mode");
+				// Refused HTML goes as the words it shows, not as its markup.
+				if (TelegramMarkdown.PARSE_MODE.equalsIgnoreCase(String.valueOf(mode))) {
+					String plain = TelegramMarkdown.htmlToPlain(chunk);
+					if (plain.isBlank()) {
+						first = false;
+						continue;
+					}
+					p.put("text", plain);
+				}
 				r = execute("sendMessage", p);
 			}
 			if (!r.ok()) {

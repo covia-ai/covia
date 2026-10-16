@@ -77,7 +77,8 @@ public record BotSpec(
 	private static final Set<AString> KNOWN_KEYS = Set.of(
 		K_TOKEN, K_USER, K_AGENT, K_OPERATION, K_REPLY, K_ALLOW, K_OPEN, K_PARSE_MODE, K_GREETING, K_MEDIA_OPERATION, K_REPLY_OPERATION);
 
-	private static final Set<String> PARSE_MODES = Set.of("Markdown", "MarkdownV2", "HTML");
+	/** The parse modes Telegram knows, as it spells them. */
+	static final Set<String> PARSE_MODES = Set.of("Markdown", "MarkdownV2", "HTML");
 
 	/** The {@code user} value naming the venue's public principal. */
 	static final String PUBLIC_USER = "public";

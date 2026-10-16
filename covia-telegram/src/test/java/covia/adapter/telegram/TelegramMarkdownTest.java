@@ -47,11 +47,44 @@ public class TelegramMarkdownTest {
 		"# One\n### Three\n\n~~old~~ new\n\n---\n\n<div>raw <i>html</i></div>",
 		"- item with **bold\n  across** lines\n\n  second paragraph\n- `code` & <x>",
 		"5. five\n6. six",
-		"line one\nline two");
+		"line one\nline two",
+		"## `config.json` settings\n\n**Run `npm install` first** and *then `npm test`*",
+		"[`foo()`](https://example.com/f) [![badge](https://img.example/b.svg)](https://link.example) [<https://a.example>](https://b.example)",
+		"> Quote\n>\n> ```\n> code < 1\n> ```\n> after",
+		"1. Then run:\n   ```python\n   def f():\n       return 1\n   ```\n2. Done",
+		"- Readings:\n\n  | a | b |\n  |---|---|\n  | 1 | 22 |",
+		"It takes ~30 minutes, from ~5 to 10~15 mg; range 5~10 days. ~~gone~~",
+		"#\n\n```\n```\n\n>",
+		"Ann's **bold `x`** end",
+		"> run `x` and see [docs](https://d.example) or <https://e.example>\n>\n> - step\n>\n>   ```\n>   nested\n>   ```");
 
 	@Test
 	public void everyOutputIsHtmlTelegramAccepts() {
 		for (String fixture : FIXTURES) assertTelegramHtml(TelegramMarkdown.toHtml(fixture));
+	}
+
+	@Test
+	public void generatedMarkdownAlwaysComesOutAsHtmlTelegramAccepts() {
+		// Seeded, so the same inputs every run: the pieces a model's Markdown is made of,
+		// shuffled into shapes no one would write, against the same structural check.
+		String[] pieces = { "**", "*", "_", "`", "```\n", "~~", "~", "#", "## ", "> ", "- ", "1. ",
+			"\n", "\n\n", "   ", "[", "](", ")", "![", "<", ">", "&", "|", "---", " ", "a", "b c",
+			"https://x.example", "javascript:x", "<b>", "</b>", "&amp;", "\\", "\"" };
+		java.util.Random random = new java.util.Random(585);
+		for (int n = 0; n < 5_000; n++) {
+			StringBuilder markdown = new StringBuilder();
+			for (int k = random.nextInt(40) + 1; k > 0; k--) markdown.append(pieces[random.nextInt(pieces.length)]);
+			String html = TelegramMarkdown.toHtml(markdown.toString());
+			try {
+				assertTelegramHtml(html);
+			} catch (AssertionError e) {
+				throw new AssertionError("from " + quoted(markdown.toString()) + ": " + e.getMessage(), e);
+			}
+		}
+	}
+
+	private static String quoted(String text) {
+		return '"' + text.replace("\n", "\\n") + '"';
 	}
 
 	@Test
@@ -73,6 +106,63 @@ public class TelegramMarkdownTest {
 		assertTrue(struck.contains("<b>One</b>") && struck.contains("<b>Three</b>"), struck);
 
 		assertEquals("5. five\n6. six", TelegramMarkdown.toHtml(FIXTURES.get(10)), "a list keeps its own numbering");
+	}
+
+	@Test
+	public void codeStepsOutOfFormattingAndLinksAsTelegramRequires() {
+		String heading = TelegramMarkdown.toHtml(FIXTURES.get(12));
+		assertTrue(heading.contains("<code>config.json</code>"), heading);
+		assertFalse(heading.contains("<b></b>"), "no empty pair is left where code stepped out: " + heading);
+		assertTrue(heading.contains("<b>Run </b><code>npm install</code><b> first</b>"), heading);
+		assertTrue(heading.contains("<i>then </i><code>npm test</code>"), heading);
+
+		String links = TelegramMarkdown.toHtml(FIXTURES.get(13));
+		assertTrue(links.contains("<a href=\"https://example.com/f\">foo()</a>"), "code in a link is its text: " + links);
+		assertTrue(links.contains("<a href=\"https://link.example\">badge</a>"), "an image in a link is its text: " + links);
+		assertTrue(links.contains("<a href=\"https://b.example\">https://a.example</a>"), links);
+
+		String quoted = TelegramMarkdown.toHtml(FIXTURES.get(20));
+		assertTrue(quoted.startsWith("<blockquote>run x and see docs (https://d.example) or https://e.example"), quoted);
+		assertTrue(quoted.contains("nested") && !quoted.contains("<pre>") && !quoted.contains("<code>") && !quoted.contains("<a "),
+			"a quote holds no code, pre or link: " + quoted);
+
+		String quote = TelegramMarkdown.toHtml(FIXTURES.get(14));
+		assertEquals("<blockquote>Quote</blockquote>\n<pre>code &lt; 1</pre>\n<blockquote>after</blockquote>", quote,
+			"a code block closes the quote and stands alone");
+	}
+
+	@Test
+	public void codeAndTablesInAListKeepTheirOwnSpacing() {
+		String steps = TelegramMarkdown.toHtml(FIXTURES.get(15));
+		assertTrue(steps.contains("<pre><code class=\"language-python\">def f():\n    return 1</code></pre>"),
+			"the code's indentation is its own: " + steps);
+		assertTrue(steps.contains("\n2. Done"), steps);
+		String table = TelegramMarkdown.toHtml(FIXTURES.get(16));
+		String grid = table.substring(table.indexOf("<pre>") + 5, table.indexOf("</pre>"));
+		String[] rows = grid.split("\n");
+		assertEquals(rows[0].indexOf('b'), rows[2].indexOf("22"), "columns line up inside a list item: " + table);
+	}
+
+	@Test
+	public void aSingleTildeIsAboutNotStrikethrough() {
+		String text = TelegramMarkdown.toHtml(FIXTURES.get(17));
+		assertTrue(text.contains("~30 minutes") && text.contains("~5 to 10~15 mg") && text.contains("5~10 days"), text);
+		assertEquals(1, count(text, "<s>"), text);
+		assertTrue(text.contains("<s>gone</s>"), text);
+	}
+
+	@Test
+	public void blocksWithNothingToShowAreDropped() {
+		assertEquals("", TelegramMarkdown.toHtml(FIXTURES.get(18)));
+		assertEquals("#", RT.getIn(TelegramAdapter.handleFormat(Maps.of("markdown", "#")), Fields.TEXT).toString(),
+			"Markdown that shows nothing is sent as written");
+	}
+
+	@Test
+	public void refusedHtmlFallsBackToTheWordsItShows() {
+		String html = TelegramMarkdown.toHtml("**a & b** <x> `c`");
+		assertEquals("a & b <x> c", TelegramMarkdown.htmlToPlain(html));
+		assertEquals("", TelegramMarkdown.htmlToPlain(null));
 	}
 
 	@Test
@@ -147,6 +237,10 @@ public class TelegramMarkdownTest {
 		assertEquals("MarkdownV2", BotRunner.formattedParseMode(Maps.of("text", "x"), "MarkdownV2"));
 		assertEquals("MarkdownV2", BotRunner.formattedParseMode(Strings.create("x"), "MarkdownV2"));
 		assertEquals(null, BotRunner.formattedParseMode(Maps.of("text", "x", "parse_mode", "Shouty"), null));
+		assertEquals("HTML", BotRunner.formattedParseMode(Maps.of("text", "x", "parse_mode", "html"), null),
+			"matched as Telegram matches it, sent as Telegram spells it");
+		// A blank markdown gives way to text.
+		assertEquals("<i>i</i>", RT.getIn(TelegramAdapter.handleFormat(Maps.of("markdown", "  ", "text", "*i*")), Fields.TEXT).toString());
 		IllegalArgumentException nothing = assertThrows(IllegalArgumentException.class,
 			() -> TelegramAdapter.handleFormat(Maps.of("via", Maps.empty())));
 		assertEquals(TelegramAdapter.NOTHING_TO_FORMAT, nothing.getMessage());
@@ -154,8 +248,10 @@ public class TelegramMarkdownTest {
 
 	/**
 	 * What Telegram's HTML parser accepts: only its tags, each closed in order, no tag
-	 * inside {@code code} or {@code pre} but {@code pre}'s own {@code code}, no quote in
-	 * a quote, and every {@code <}, {@code >} and {@code &} outside a tag an entity.
+	 * inside {@code code} or {@code pre} but {@code pre}'s own {@code code}, code and pre
+	 * inside nothing, a link in neither a link nor a quote, no quote in a quote, and
+	 * every {@code <}, {@code >} and {@code &} outside a tag an entity (Bot API,
+	 * "Formatting options").
 	 */
 	static void assertTelegramHtml(String html) {
 		Deque<String> open = new ArrayDeque<>();
@@ -172,6 +268,12 @@ public class TelegramMarkdownTest {
 					if ("pre".equals(inside)) assertEquals("code", name, "pre holds only its code: " + html);
 					else assertFalse("code".equals(inside), "nothing inside code: " + html);
 					if (name.equals("blockquote")) assertFalse(open.contains("blockquote"), "a quote in a quote: " + html);
+					if (name.equals("a")) {
+						assertFalse(open.contains("a") || open.contains("blockquote"), "a link inside " + open + ": " + html);
+					}
+					if (name.equals("pre") || (name.equals("code") && !"pre".equals(inside))) {
+						assertTrue(open.isEmpty(), "code or pre inside " + open + ": " + html);
+					}
 					open.push(name);
 				} else {
 					assertFalse(open.isEmpty(), "</" + name + "> closes nothing: " + html);
