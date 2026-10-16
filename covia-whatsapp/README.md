@@ -108,3 +108,71 @@ Provider reference: [Meta Cloud API documentation](https://developers.facebook.c
 [Meta's raw webhook verification description](https://whatsapp.github.io/WhatsApp-Nodejs-SDK/api-reference/webhooks/start/),
 and [text message shape](https://whatsapp.github.io/WhatsApp-Nodejs-SDK/api-reference/messages/text/).
 The latter two references describe Meta's archived SDK; this module has no SDK dependency.
+
+## Relay: one number, many principals
+
+The module's second adapter, `whatsapp-relay`, lets a hub venue hold one Cloud API
+number for many downstream principals: the venues or apps it relays to, each known by
+its DID. WhatsApp delivers only to a public webhook, so a principal without one (an app
+on someone's laptop) reaches WhatsApp through the hub instead of a number of its own.
+Only links are stored: messages wait in memory and are never written to the venue.
+
+```json
+{
+  "modules": ["modules/covia-whatsapp-<version>-module.jar"],
+  "adapters": {
+    "whatsapp-relay": {
+      "relays": {
+        "main": {
+          "user": "did:key:YOUR_OWNER_DID",
+          "token": "s/WHATSAPP_TOKEN",
+          "appSecret": "s/META_APP_SECRET",
+          "verifyToken": "s/WHATSAPP_VERIFY",
+          "businessAccountId": "123456789012345",
+          "phoneNumberId": "987654321098765",
+          "apiVersion": "v25.0",
+          "number": "447700900000",
+          "holdSeconds": 60,
+          "maxParts": 10,
+          "admit": "v/ops/your-adapter/admit",
+          "charge": "v/ops/your-adapter/charge"
+        }
+      }
+    }
+  }
+}
+```
+
+Meta's callback is `https://YOUR_VENUE/webhooks/whatsapp-relay/c-main`, verified and
+signed exactly as for the `whatsapp` adapter. Principals call
+`/relay/whatsapp-relay/c-main/<action>` with a credential the venue accepts (a
+self-issued DID JWT is enough; no venue user is created):
+
+| Action | Request | Answer |
+|---|---|---|
+| `status` | — | `{enabled, number, linked}` |
+| `link` | `POST {}` | `{code, number, link, expires_in}`: the person sends `LINK <code>` from their phone, which `link` (a `wa.me` URL) writes for them; codes last ten minutes |
+| `unlink` | `POST {}` | `{unlinked}` |
+| `poll` | `POST {wait_ms?}` | `{linked, messages[{id, text, timestamp}]}`, waiting up to 20 s for a message |
+| `reply` | `POST {message_id, text}` | `{sent, parts}`: once per message, to its sender, inside 24 hours; split at 4,096 characters |
+
+A text from a linked number goes to that principal's poll. A principal counts as open
+while it has a poll waiting or polled in the last minute; with `holdSeconds` at 60 or
+less (the default, meaning only while the principal is open), a message for a principal
+that is not open is refused and the sender told so; a longer hold keeps it in memory
+that long. A reply longer than `maxParts` messages (default 10, at most 100) is refused
+with `too_long`, so a principal cannot make the hub send without limit. `STOP` from the phone unlinks; a number
+that is not linked is told how to link; non-text messages get a short notice. The
+hub's own replies are the relay's `notices` (`linked`, `unlinked`, `notLinked`,
+`codeUnknown`, `notOpen`, `held`, `textOnly`, `notAvailable`), each overridable.
+
+Both hooks are optional operations, run without a Job record as the relay's `user`.
+`admit` receives `{principal}` before linking, polling and each delivery, and answers
+`{allowed: true}` or `{allowed: false, code?, notice?}`; the code is returned to the
+principal and the notice sent to the phone. `charge` receives
+`{principal, parts, message_id}` after a reply is sent. `v/ops/whatsapp-relay/relays`
+lists the caller's relays (all for the venue principal) without credentials.
+
+Links live at `w/adapters/whatsapp-relay/config/<relay>/links` and `/principals` in the
+venue's private workspace. Message text, codes and the message→sender map are bounded
+and in memory: a restart or reconfiguration loses messages not yet collected, never a link.
