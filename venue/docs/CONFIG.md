@@ -206,6 +206,32 @@ naming the store's real owner: venues are keyed by AccountKey, so a wrong key
 would otherwise silently create a fresh empty venue and orphan the existing
 data. Never commit keystore passwords; use env vars or gitignored dev configs.
 
+### Secret store keys
+
+The per-user secret stores (`s/`) are encrypted with AES-256-GCM under a key
+derived from the identity seed, so a venue that keeps its seed reads its
+secrets after a restart and no other venue can. Each secret records the key
+version that encrypted it (`keyVersion`):
+
+| Version | Key | Use |
+|---------|-----|-----|
+| 2 | HKDF-SHA256 (RFC 5869) of the seed, no salt, info `covia/secret-store/v2` | every write |
+| 1 | SHA-256 of the seed | read only: secrets with no `keyVersion` |
+
+- The info label separates the secrets key from every other use of the seed,
+  such as signing as the venue.
+- A version 1 secret migrates to version 2 on its next write; reading it does
+  not rewrite it.
+- The secrets key is independent of the Etch store key: on an encrypted store,
+  secrets are encrypted twice, under different keys.
+- Changing the seed strands every secret. Re-encrypting under a new identity
+  key belongs with identity key rotation, which does not exist yet.
+
+Embedders use the `secret` operations rather than the store. Code inside the
+venue passes `SecretStore.keys(engine.getKeyPair())` to `store`,
+`storeIfAbsent` and `decrypt`. The deprecated `SecretStore.deriveKey` returns
+the version 1 key, which reads version 1 secrets only.
+
 ## Production profile
 
 The defaults suit a venue on a developer's machine. A venue other people reach

@@ -93,7 +93,7 @@ public class OAuthProviderTest {
 			"exp", nowSecs + 3600), engine.getKeyPair()).toString();
 		// The confidential client's secret lives in the venue identity's store.
 		User venueUser = engine.getVenueState().users().ensure(engine.getDIDString());
-		venueUser.secrets().store("WEBAPP_SECRET", "web-app-secret", SecretStore.deriveKey(engine.getKeyPair()));
+		venueUser.secrets().store("WEBAPP_SECRET", "web-app-secret", SecretStore.keys(engine.getKeyPair()));
 	}
 
 	@AfterAll

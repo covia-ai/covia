@@ -78,7 +78,7 @@ class AuthAdapterTest {
 			Strings.intern("iat"), now,
 			Strings.intern("exp"), now + 300
 		), innerKp);
-		byte[] encKey = SecretStore.deriveKey(engine.getKeyPair());
+		SecretStore.Keys encKey = SecretStore.keys(engine.getKeyPair());
 		outerUser.secrets().store("MY_JWT", jwt.toString(), encKey);
 
 		// Authed client so the outer invocation runs as outerDid (the secret owner).

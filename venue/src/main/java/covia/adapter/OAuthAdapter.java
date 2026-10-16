@@ -476,7 +476,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 		AVector<ACell> out = Vectors.empty();
 		User user = engine.getVenueState().users().get(userDID);
 		if (user != null) {
-			byte[] key = SecretStore.deriveKey(engine.getKeyPair());
+			SecretStore.Keys key = SecretStore.keys(engine.getKeyPair());
 			AVector<AString> names = user.secrets().list();
 			for (long i = 0; i < names.count(); i++) {
 				String name = names.get(i).toString();
@@ -497,7 +497,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 		if (name == null || name.isEmpty()) throw new IllegalArgumentException("provider is required");
 		String provider = name.toString();
 		User user = engine.getVenueState().users().get(userDID);
-		byte[] key = SecretStore.deriveKey(engine.getKeyPair());
+		SecretStore.Keys key = SecretStore.keys(engine.getKeyPair());
 		AMap<AString, ACell> grant = (user != null) ? grant(user, provider, key) : null;
 		if (grant == null) throw new IllegalArgumentException("Not connected to " + provider);
 		boolean revoked = false;
@@ -520,7 +520,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 	public String accessToken(RequestContext ctx, String provider) throws IOException {
 		AString userDID = userOf(ctx, "oauth/" + provider);
 		User user = engine.getVenueState().users().get(userDID);
-		byte[] key = SecretStore.deriveKey(engine.getKeyPair());
+		SecretStore.Keys key = SecretStore.keys(engine.getKeyPair());
 		AMap<AString, ACell> grant = (user != null) ? grant(user, provider, key) : null;
 		if (grant == null) {
 			throw new IllegalArgumentException("Not connected to " + provider + " — run oauth:connect and approve in the browser");
@@ -661,7 +661,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 		String type = str(tokens, Strings.intern("token_type"));
 		if (type != null) grant = grant.assoc(G_TOKEN_TYPE, Strings.create(type));
 		User user = engine.getVenueState().users().ensure(userDID);
-		user.secrets().store(GRANT_PREFIX + p.name(), JSON.toString(grant), SecretStore.deriveKey(engine.getKeyPair()));
+		user.secrets().store(GRANT_PREFIX + p.name(), JSON.toString(grant), SecretStore.keys(engine.getKeyPair()));
 	}
 
 	private static long expiresAt(AMap<AString, ACell> tokens) {
@@ -669,7 +669,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 		return (in != null) ? System.currentTimeMillis() + in.longValue() * 1000 : 0;
 	}
 
-	private static AMap<AString, ACell> grant(User user, String provider, byte[] key) {
+	private static AMap<AString, ACell> grant(User user, String provider, SecretStore.Keys key) {
 		AString raw = user.secrets().decrypt(GRANT_PREFIX + provider, key);
 		if (raw == null) return null;
 		try {

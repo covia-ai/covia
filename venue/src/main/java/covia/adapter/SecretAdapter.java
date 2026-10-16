@@ -172,7 +172,7 @@ public class SecretAdapter extends AAdapter {
 			User user = engine.getVenueState().users().get(ctx.getUserDID());
 			AString value;
 			try {
-				value = user == null ? null : user.secrets().decrypt(name, SecretStore.deriveKey(engine.getKeyPair()));
+				value = user == null ? null : user.secrets().decrypt(name, SecretStore.keys(engine.getKeyPair()));
 			} catch (RuntimeException e) { throw new IllegalStateException(SECRET_UNAVAILABLE); }
 			if (value == null) throw new IllegalStateException(SECRET_UNAVAILABLE);
 			engine.audit().event(Audit.SECRET_EXTRACT, Audit.K_DID, ctx.getCallerDID(), Audit.K_NAME, name, Audit.K_OUTCOME, Audit.OK);
@@ -216,10 +216,10 @@ public class SecretAdapter extends AAdapter {
 		// Secrets live in the user's store; an agent writes into its owner's,
 		// gated above by secret/write in its capability scope.
 		User user = engine.getVenueState().users().ensure(ctx.getUserDID());
-		byte[] encKey = SecretStore.deriveKey(engine.getKeyPair());
+		SecretStore.Keys keys = SecretStore.keys(engine.getKeyPair());
 		if (overwrite) {
-			user.secrets().store(name, value, encKey);
-		} else if (!user.secrets().storeIfAbsent(name, value, encKey)) {
+			user.secrets().store(name, value, keys);
+		} else if (!user.secrets().storeIfAbsent(name, value, keys)) {
 			throw new IllegalArgumentException("Secret s/" + name
 				+ " already exists; pass overwrite:true to replace it");
 		}

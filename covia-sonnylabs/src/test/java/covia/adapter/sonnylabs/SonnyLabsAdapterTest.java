@@ -260,7 +260,7 @@ class SonnyLabsAdapterTest {
 
 	private static void storeSecret(Engine engine, AString owner, String name, String value) {
 		User user = engine.getVenueState().users().ensure(owner);
-		user.secrets().store(name, value, SecretStore.deriveKey(engine.getKeyPair()));
+		user.secrets().store(name, value, SecretStore.keys(engine.getKeyPair()));
 	}
 
 	private static final class FakeSonny implements AutoCloseable {

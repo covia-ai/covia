@@ -8,6 +8,17 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Migration
+
+- `SecretStore.deriveKey` is deprecated and reads only secrets written before
+  key versions; pass `SecretStore.keys(keyPair)` to `store`, `storeIfAbsent` and
+  `decrypt`. The `byte[]` `store` and `storeIfAbsent` overloads are removed.
+
+### Security
+
+- Secret store key derived with HKDF under a domain label; each secret records
+  its key version and migrates on its next write (#535).
+
 ### Added
 
 - Slack Socket Mode (`appToken`), one connection per app token routed by workspace;

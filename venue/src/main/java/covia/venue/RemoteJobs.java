@@ -93,7 +93,7 @@ public final class RemoteJobs implements AutoCloseable {
 		if (job.isRecorded()) {
 			if (job instanceof VenueJob hosted) credentials = credentials.assoc(OPERATION_METADATA, hosted.meta());
 			AString ref = Strings.create("remote-job-" + job.getID().toHexString());
-			secrets().store(ref, JSON.print(credentials), SecretStore.deriveKey(engine.getKeyPair()));
+			secrets().store(ref, JSON.print(credentials), SecretStore.keys(engine.getKeyPair()));
 			record = record.assoc(AUTH_REF, ref);
 			cleanUpOnFinish(job, ref);
 		}
@@ -118,7 +118,7 @@ public final class RemoteJobs implements AutoCloseable {
 
 	private AMap<AString, ACell> credentials(AMap<AString, ACell> record) {
 		AString ref = record == null ? null : RT.ensureString(record.get(AUTH_REF));
-		AString value = ref == null ? null : secrets().decrypt(ref, SecretStore.deriveKey(engine.getKeyPair()));
+		AString value = ref == null ? null : secrets().decrypt(ref, SecretStore.keys(engine.getKeyPair()));
 		if (value == null) throw new IllegalStateException("Remote observation credentials unavailable");
 		return RT.ensureMap(JSON.parse(value));
 	}

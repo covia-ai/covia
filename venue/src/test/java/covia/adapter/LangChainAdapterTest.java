@@ -2287,7 +2287,7 @@ public class LangChainAdapterTest {
 			var callerKP = convex.core.crypto.AKeyPair.generate();
 			AString callerDID = convex.auth.ucan.UCAN.toDIDKey(callerKP.getAccountKey());
 			RequestContext caller = RequestContext.of(callerDID);
-			byte[] encKey = covia.venue.SecretStore.deriveKey(engine.getKeyPair());
+			covia.venue.SecretStore.Keys encKey = covia.venue.SecretStore.keys(engine.getKeyPair());
 			engine.getVenueState().users().ensure(callerDID).secrets().store("MY_TOKEN", "caller-token", encKey);
 			engine.getVenueState().users().ensure(engine.getDIDString()).secrets()
 				.store("ANTHROPIC_API_KEY", "venue-key", encKey);

@@ -84,7 +84,7 @@ class CryptoAdapterTest {
 	}
 	private void put(String name, String value) {
 		engine.getVenueState().users().ensure(ctx.getUserDID()).secrets()
-			.store(name, value, SecretStore.deriveKey(engine.getKeyPair()));
+			.store(name, value, SecretStore.keys(engine.getKeyPair()));
 	}
 	private Job failure(String op, ACell input) {
 		Job job = job(op, input);

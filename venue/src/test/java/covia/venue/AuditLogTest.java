@@ -10,6 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.net.URI;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -29,17 +30,21 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import convex.auth.jwt.JWT;
 import convex.auth.ucan.UCAN;
+import convex.core.crypto.AESGCM;
 import convex.core.crypto.AKeyPair;
 import convex.core.data.AString;
+import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import covia.api.Fields;
+import covia.exception.CoviaException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.auth.VenueAuth;
 import covia.grid.client.VenueHTTP;
+import covia.lattice.Namespace;
 import covia.venue.auth.VenueAuthenticator;
 import covia.venue.server.RequestLog;
 import covia.venue.server.VenueServer;
@@ -248,6 +253,47 @@ public class AuditLogTest {
 				.firstValue(RequestLog.HEADER).orElseThrow(), "an id that is not a plain token is replaced");
 		} finally {
 			proxied.close();
+		}
+	}
+
+	/**
+	 * A version 1 secret read, migrated by a write and read again, and a secret
+	 * no key of the venue opens: nothing logged on the way holds a value or
+	 * any key material (#535).
+	 */
+	@Test
+	public void secretKeyVersionsLogNoValueOrKeyMaterial() {
+		Engine engine = TestEngine.ENGINE;
+		AString did = TestEngine.uniqueDID("secret-key-versions");
+		User user = engine.getVenueState().users().ensure(did);
+		RequestContext ctx = RequestContext.of(did);
+		AKeyPair kp = engine.getKeyPair();
+		SecretStore.Keys keys = SecretStore.keys(kp);
+		String v1Value = "sk-v1-" + System.nanoTime();
+		String v2Value = "sk-v2-" + System.nanoTime();
+
+		// Written as a venue did before key versions existed: no keyVersion.
+		user.cursor().path(Namespace.S, Strings.create("MIGRATING")).set(Maps.of(
+			Strings.create("encrypted"), Blob.wrap(AESGCM.encrypt(keys.forVersion(SecretStore.KEY_VERSION_1),
+				v1Value.getBytes(StandardCharsets.UTF_8))),
+			Fields.UPDATED, CVMLong.create(1000L)));
+		assertEquals(v1Value, engine.resolveSecret("MIGRATING", ctx));
+		engine.jobs().invokeOperation("v/ops/secret/set", Maps.of(
+			Fields.NAME, "MIGRATING", Fields.VALUE, v2Value, Fields.OVERWRITE, true), ctx).awaitResult(5000);
+		assertEquals(v2Value, engine.resolveSecret("MIGRATING", ctx));
+
+		user.secrets().store("FOREIGN", v2Value, SecretStore.keys(AKeyPair.generate()));
+		assertThrows(CoviaException.class, () -> engine.resolveSecret("FOREIGN", ctx));
+		assertTrue(List.copyOf(captured.list).stream().anyMatch(e -> e.getLevel() == Level.WARN
+			&& Engine.class.getName().equals(e.getLoggerName())), "the failed resolution is logged");
+
+		String everything = allLogText();
+		assertFalse(everything.contains(v1Value), "no version 1 value in any log line");
+		assertFalse(everything.contains(v2Value), "no version 2 value in any log line");
+		for (byte[] material : new byte[][] { kp.getSeed().getBytes(),
+				keys.forVersion(SecretStore.KEY_VERSION_1), keys.forVersion(SecretStore.KEY_VERSION_2) }) {
+			assertFalse(everything.toLowerCase().contains(Blob.wrap(material).toHexString()),
+				"no key material in any log line");
 		}
 	}
 

@@ -124,7 +124,7 @@ public class OAuthTest {
 		// The point of the reference form: the real secret lives in the venue's
 		// own store, never in the config file. Resolution runs as the venue
 		// identity, the same context adapters.oauth uses.
-		byte[] encKey = SecretStore.deriveKey(engine.getKeyPair());
+		SecretStore.Keys encKey = SecretStore.keys(engine.getKeyPair());
 		User venueUser = engine.getVenueState().users().ensure(engine.getDIDString());
 		venueUser.secrets().store("GOOGLE_OAUTH", "resolved-from-store", encKey);
 

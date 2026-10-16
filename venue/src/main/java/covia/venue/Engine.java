@@ -3853,7 +3853,7 @@ public class Engine {
 		if (user == null) return isVenuePrincipal(userDID) ? environmentSecret(name) : null;
 		AString value;
 		try {
-			value = user.secrets().decrypt(Strings.create(name), SecretStore.deriveKey(keyPair));
+			value = user.secrets().decrypt(Strings.create(name), SecretStore.keys(keyPair));
 		} catch (Exception e) {
 			// A decrypt/key failure is NOT the same as "secret not set". Collapsing
 			// both to null masked #91-class identity/key misconfigurations as
@@ -3898,7 +3898,7 @@ public class Engine {
 
 		AString venueDID = getDIDString();
 		AString publicDID = Strings.create(venueDID.toString() + ":public");
-		byte[] encKey = SecretStore.deriveKey(keyPair);
+		SecretStore.Keys secretKeys = SecretStore.keys(keyPair);
 
 		int total = 0;
 		for (long i = 0; i < secrets.count(); i++) {
@@ -3941,7 +3941,7 @@ public class Engine {
 					continue;
 				}
 				try {
-					user.secrets().store(name, value, encKey);
+					user.secrets().store(name, value, secretKeys);
 					provisioned++;
 				} catch (Exception e) {
 					log.warn("Failed to provision secret '{}' for user '{}': {}",

@@ -233,7 +233,7 @@ public class MCPBridgeTest {
 		AString aliceDID = convex.auth.ucan.UCAN.toDIDKey(aliceKP.getAccountKey());
 		AString bobDID = convex.auth.ucan.UCAN.toDIDKey(convex.core.crypto.AKeyPair.generate().getAccountKey());
 		engine.getVenueState().users().ensure(aliceDID).secrets().store("GITHUB_TOKEN", "alice-token",
-			covia.venue.SecretStore.deriveKey(engine.getKeyPair()));
+			covia.venue.SecretStore.keys(engine.getKeyPair()));
 		MCPAdapter adapter = (MCPAdapter) engine.getAdapter("mcp");
 		AString ref = Strings.create(aliceDID + "/s/GITHUB_TOKEN");
 		AString server = Strings.create("https://mcp.example/sse");

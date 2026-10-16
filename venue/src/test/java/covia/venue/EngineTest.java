@@ -502,7 +502,7 @@ public class EngineTest {
 	@Test
 	public void testResolveSecret() {
 		User alice = venue.getVenueState().users().ensure(ALICE_DID);
-		byte[] encKey = SecretStore.deriveKey(venue.getKeyPair());
+		SecretStore.Keys encKey = SecretStore.keys(venue.getKeyPair());
 		alice.secrets().store("OPENAI_API_KEY", "sk-test-123", encKey);
 
 		RequestContext ctx = RequestContext.of(ALICE_DID);
@@ -513,7 +513,7 @@ public class EngineTest {
 	@Test
 	public void testResolveSecretWithPrefix() {
 		User alice = venue.getVenueState().users().ensure(ALICE_DID);
-		byte[] encKey = SecretStore.deriveKey(venue.getKeyPair());
+		SecretStore.Keys encKey = SecretStore.keys(venue.getKeyPair());
 		alice.secrets().store("MY_KEY", "secret-value", encKey);
 
 		RequestContext ctx = RequestContext.of(ALICE_DID);
@@ -537,7 +537,7 @@ public class EngineTest {
 
 	@Test
 	public void testResolveSecretUserIsolation() {
-		byte[] encKey = SecretStore.deriveKey(venue.getKeyPair());
+		SecretStore.Keys encKey = SecretStore.keys(venue.getKeyPair());
 
 		User alice = venue.getVenueState().users().ensure(ALICE_DID);
 		alice.secrets().store("MY_KEY", "alice-secret", encKey);
@@ -610,7 +610,7 @@ public class EngineTest {
 
 			// Pre-existing user-set value is overwritten by config
 			User pub = e.getVenueState().users().ensure(publicDID);
-			byte[] encKey = SecretStore.deriveKey(e.getKeyPair());
+			SecretStore.Keys encKey = SecretStore.keys(e.getKeyPair());
 			pub.secrets().store("KEY1", "from-runtime", encKey);
 			assertEquals("from-runtime", e.resolveSecret("KEY1", RequestContext.of(publicDID)));
 
@@ -714,7 +714,7 @@ public class EngineTest {
 		assertEquals(Strings.create("MY_KEY"), RT.getIn(result, "name"));
 
 		User alice = venue.getVenueState().users().get(ALICE_DID);
-		byte[] encKey = SecretStore.deriveKey(venue.getKeyPair());
+		SecretStore.Keys encKey = SecretStore.keys(venue.getKeyPair());
 		assertEquals("my-secret-value", alice.secrets().decrypt("MY_KEY", encKey).toString());
 
 		AMap<AString, ACell> record = venue.jobs().getJobData(job.getID(), aliceCtx);
@@ -724,7 +724,7 @@ public class EngineTest {
 	@Test
 	public void testSecretExtractAlwaysDenied() {
 		User alice = venue.getVenueState().users().ensure(ALICE_DID);
-		byte[] encKey = SecretStore.deriveKey(venue.getKeyPair());
+		SecretStore.Keys encKey = SecretStore.keys(venue.getKeyPair());
 		alice.secrets().store("STOLEN_KEY", "do-not-leak", encKey);
 
 		RequestContext aliceCtx = RequestContext.of(ALICE_DID);

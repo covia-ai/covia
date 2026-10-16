@@ -172,7 +172,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		if (callerDID == null) throw new IllegalArgumentException("Authentication required for DLFS access");
 
 		User user = engine.getVenueState().users().ensure(callerDID);
-		byte[] encKey = SecretStore.deriveKey(engine.getKeyPair());
+		SecretStore.Keys encKey = SecretStore.keys(engine.getKeyPair());
 		SecretStore secrets = user.secrets();
 
 		AString existing = secrets.decrypt(DLFS_KEY_SECRET, encKey);

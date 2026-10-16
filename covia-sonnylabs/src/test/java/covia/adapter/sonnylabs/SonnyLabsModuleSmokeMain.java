@@ -60,7 +60,7 @@ public final class SonnyLabsModuleSmokeMain {
 
 			User venueUser = engine.getVenueState().users().ensure(engine.getDIDString());
 			venueUser.secrets().store("SONNY_LABS", "smoke-token",
-				SecretStore.deriveKey(engine.getKeyPair()));
+				SecretStore.keys(engine.getKeyPair()));
 			Job job = engine.jobs().invokeOperation("v/ops/sonnylabs/scan",
 				Maps.of("text", "hello"), engine.venueContext());
 			ACell output = job.awaitResult(10_000);

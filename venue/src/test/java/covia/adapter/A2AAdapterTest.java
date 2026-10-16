@@ -198,7 +198,7 @@ class A2AAdapterTest {
 		AString caller = Strings.create("did:test:a2a:bearer:" + System.nanoTime());
 		User user = TestServer.ENGINE.getVenueState().users().ensure(caller);
 		user.secrets().store("PARTNER_TOKEN", "stored-token",
-				SecretStore.deriveKey(TestServer.ENGINE.getKeyPair()));
+				SecretStore.keys(TestServer.ENGINE.getKeyPair()));
 
 		A2AAdapter adapter = (A2AAdapter) TestServer.ENGINE.getAdapter("a2a");
 		String resolved = adapter.resolveBearer(
@@ -225,7 +225,7 @@ class A2AAdapterTest {
 		AString aliceDID = convex.auth.ucan.UCAN.toDIDKey(aliceKP.getAccountKey());
 		AString bobDID = convex.auth.ucan.UCAN.toDIDKey(convex.core.crypto.AKeyPair.generate().getAccountKey());
 		TestServer.ENGINE.getVenueState().users().ensure(aliceDID).secrets().store("PARTNER_TOKEN", "alice-token",
-				SecretStore.deriveKey(TestServer.ENGINE.getKeyPair()));
+				SecretStore.keys(TestServer.ENGINE.getKeyPair()));
 		A2AAdapter adapter = (A2AAdapter) TestServer.ENGINE.getAdapter("a2a");
 		AString ref = Strings.create(aliceDID + "/s/PARTNER_TOKEN");
 		var input = Maps.of(Fields.BEARER_SECRET, ref);
@@ -276,7 +276,7 @@ class A2AAdapterTest {
 			AString caller = Strings.create(TestServer.ENGINE.getDIDString() + ":public");
 			User user = TestServer.ENGINE.getVenueState().users().ensure(caller);
 			user.secrets().store("A2A_PARTNER_" + port, "key-value",
-				SecretStore.deriveKey(TestServer.ENGINE.getKeyPair()));
+				SecretStore.keys(TestServer.ENGINE.getKeyPair()));
 			String alias = "api-key-" + port;
 			String secretRef = "s/A2A_PARTNER_" + port;
 

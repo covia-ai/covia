@@ -145,7 +145,7 @@ public class OAuthAdapterTest {
 		Engine.addDemoAssets(engine);
 		((HTTPAdapter) engine.getAdapter("http")).addAllowedHost("localhost");
 		User venueUser = engine.getVenueState().users().ensure(engine.getDIDString());
-		venueUser.secrets().store("FAKE_SECRET", "shh", SecretStore.deriveKey(engine.getKeyPair()));
+		venueUser.secrets().store("FAKE_SECRET", "shh", SecretStore.keys(engine.getKeyPair()));
 		return engine;
 	}
 

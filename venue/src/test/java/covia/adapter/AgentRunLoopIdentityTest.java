@@ -75,7 +75,7 @@ public class AgentRunLoopIdentityTest {
 			RequestContext.of(owner)).awaitResult(5000);
 
 		User user = engine.getVenueState().users().ensure(owner);
-		byte[] encKey = SecretStore.deriveKey(engine.getKeyPair());
+		SecretStore.Keys encKey = SecretStore.keys(engine.getKeyPair());
 		user.secrets().store(secretName, secretValue, encKey);
 
 		AgentState agent = user.agent(name);

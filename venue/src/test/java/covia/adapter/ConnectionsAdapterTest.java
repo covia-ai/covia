@@ -85,7 +85,7 @@ public class ConnectionsAdapterTest {
 
 		String plaintext = "never-return-this-notion-value";
 		engine.getVenueState().users().ensure(userDID).secrets().store(
-			"NOTION_TOKEN", plaintext, SecretStore.deriveKey(engine.getKeyPair()));
+			"NOTION_TOKEN", plaintext, SecretStore.keys(engine.getKeyPair()));
 
 		ACell after = invoke("v/ops/connections/status", Maps.of("provider", "notion"));
 		AMap<AString, ACell> notion = named(after, "connections", "notion");
@@ -99,7 +99,7 @@ public class ConnectionsAdapterTest {
 	@Test
 	public void testSlackCredentialRefsAreAlternatives() throws Exception {
 		engine.getVenueState().users().ensure(userDID).secrets().store(
-			"SLACK_USER_TOKEN", "xoxp-never-return", SecretStore.deriveKey(engine.getKeyPair()));
+			"SLACK_USER_TOKEN", "xoxp-never-return", SecretStore.keys(engine.getKeyPair()));
 		ACell result = invoke("v/ops/connections/status", Maps.of("provider", "slack"));
 		AMap<AString, ACell> slack = named(result, "connections", "slack");
 		assertEquals(CVMBool.TRUE, slack.get(Strings.intern("configured")),

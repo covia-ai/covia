@@ -59,7 +59,7 @@ class SecretAdapterTest {
 	}
 	private void put(String name, String value) {
 		engine.getVenueState().users().ensure(owner.getUserDID()).secrets()
-			.store(name, value, SecretStore.deriveKey(engine.getKeyPair()));
+			.store(name, value, SecretStore.keys(engine.getKeyPair()));
 	}
 	private AMap<AString, ACell> meta(String op) {
 		return engine.getAdapter("secret").getOperations().get(Strings.create(op));
@@ -174,7 +174,7 @@ class SecretAdapterTest {
 	@Test void publicPrincipalNeverExtractsEvenWithUnrestrictedAccess() {
 		AString publicDID = Strings.create(engine.getDIDString() + ":public");
 		engine.getVenueState().users().ensure(publicDID).secrets()
-			.store("SHARED_KEY", VALUE, SecretStore.deriveKey(engine.getKeyPair()));
+			.store("SHARED_KEY", VALUE, SecretStore.keys(engine.getKeyPair()));
 		// No caps is the unrestricted scope (auth.public.caps: "unrestricted"), and the
 		// public caller is its own owner, so only the public-principal rule refuses this.
 		RequestContext anonymous = RequestContext.of(publicDID);
@@ -241,7 +241,7 @@ class SecretAdapterTest {
 
 	@Test void missingAndCorruptSecretsHaveTheSameSanitizedFailure() {
 		engine.getVenueState().users().get(owner.getUserDID()).secrets()
-			.store("CORRUPT", VALUE, SecretStore.deriveKey(AKeyPair.generate()));
+			.store("CORRUPT", VALUE, SecretStore.keys(AKeyPair.generate()));
 		for (String name : new String[] { "MISSING", "CORRUPT" }) {
 			Throwable error = failure(run("extract", Maps.of("name", name), owner));
 			assertEquals(SecretAdapter.SECRET_UNAVAILABLE, error.getMessage());
@@ -255,7 +255,7 @@ class SecretAdapterTest {
 		try {
 			Engine.addDemoAssets(recorded);
 			recorded.getVenueState().users().ensure(owner.getUserDID()).secrets()
-				.store("KEY", VALUE, SecretStore.deriveKey(recorded.getKeyPair()));
+				.store("KEY", VALUE, SecretStore.keys(recorded.getKeyPair()));
 			assertEquals(SecretAdapter.EXTRACT_DIRECT_ONLY, failure(recorded.jobs().runOperation(
 				"v/ops/secret/extract", Maps.of("name", "KEY"), owner)).getMessage());
 			assertFalse(recorded.jobs().getJobs(owner).toString().contains(VALUE));

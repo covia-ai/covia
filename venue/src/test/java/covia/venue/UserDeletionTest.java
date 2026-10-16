@@ -78,7 +78,7 @@ class UserDeletionTest {
 		RequestContext ctx = RequestContext.of(did);
 		User retained = engine.getVenueState().users().get(did);
 		retained.cursor().path(Strings.create("w")).set(Maps.of("private", "personal-data"));
-		retained.secrets().store("credential", "secret-value", SecretStore.deriveKey(engine.getKeyPair()));
+		retained.secrets().store("credential", "secret-value", SecretStore.keys(engine.getKeyPair()));
 		retained.ensureAgent("old-agent", Maps.empty(), Strings.create("old-state"));
 		Job pending = engine.jobs().invokeOperation(Strings.create("v/test/ops/never"), Maps.empty(), ctx);
 		engine.gridScheduler().schedule(Strings.create("v/test/ops/echo"), Strings.create("queued-personal-data"),
