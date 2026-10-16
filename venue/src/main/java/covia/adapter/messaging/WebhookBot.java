@@ -5,19 +5,28 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledFuture;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
+import covia.adapter.AAdapter;
 import covia.adapter.webhook.WebhookInbox;
 import covia.api.Fields;
 
-/** A durable webhook binding. Uncertain STARTED work is reported, never blindly retried. */
+/**
+ * A durable binding fed by signed HTTP callbacks, a provider connection, or
+ * both. Uncertain STARTED work is reported, never blindly retried.
+ */
 public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<S> {
+	private static final Logger log = LoggerFactory.getLogger(WebhookBot.class);
 	public static final AString VERSION = Strings.intern("bindingVersion");
 	public static final String PROCESSING_FAILED = "Processing failed; inspect the STARTED receipt before any manual retry";
+	public static final String CONNECTED = "CONNECTED", CONNECTING = "CONNECTING", RETRYING = "RETRYING";
 	private final AWebhookMessagingAdapter<S> adapter;
 	private final S spec;
 	private final Managed managed;
@@ -28,7 +37,9 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 	private final Set<String> queued = ConcurrentHashMap.newKeySet();
 	private volatile boolean running;
 	private volatile String lastError;
-	private ScheduledFuture<?> wake;
+	private volatile boolean retrying;
+	private ScheduledFuture<?> wake, reconnect;
+	private MessagingConnection connection;
 
 	WebhookBot(AWebhookMessagingAdapter<S> adapter, S spec, Managed managed) {
 		this.adapter = adapter; this.spec = spec; this.managed = managed;
@@ -68,10 +79,49 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 		if (running) return;
 		running = true;
 		wake = adapter.scheduleRetry(this::recoverPending, 0);
+		if (spec.connectionIngress()) scheduleConnect(0);
 	}
-	@Override public synchronized void stop() {
-		running = false;
-		if (wake != null) wake.cancel(false);
+	@Override public void stop() {
+		MessagingConnection open;
+		synchronized (this) {
+			running = false;
+			if (wake != null) wake.cancel(false);
+			if (reconnect != null) reconnect.cancel(false);
+			open = connection;
+			connection = null;
+		}
+		if (open != null) open.close();
+	}
+	private synchronized void scheduleConnect(long millis) {
+		if (running) reconnect = adapter.scheduleRetry(() -> AAdapter.VIRTUAL_EXECUTOR.execute(this::connect), millis);
+	}
+	/** Opening may block, so it runs on a virtual thread; the shared retry thread only schedules. */
+	private void connect() {
+		synchronized (this) { if (!running || connection != null) return; }
+		if (!ready()) { scheduleConnect(adapter.retryMillis); return; }
+		MessagingConnection opened;
+		try { opened = adapter.openConnection(this); }
+		catch (Exception e) {
+			retrying = true;
+			log.warn("{} bot '{}': connection failed: {}", adapter.getName(), spec.name(), e.toString());
+			scheduleConnect(adapter.retryMillis);
+			return;
+		}
+		synchronized (this) {
+			if (!running) { opened.close(); return; }
+			connection = opened;
+			retrying = false;
+		}
+		// A provider-requested refresh reconnects at once; a failure waits for the retry cadence.
+		opened.ended().whenComplete((ignored, failure) -> {
+			synchronized (this) {
+				if (connection != opened) return;
+				connection = null;
+				retrying = failure != null;
+			}
+			if (failure != null) log.warn("{} bot '{}': connection lost: {}", adapter.getName(), spec.name(), failure.toString());
+			scheduleConnect(failure == null ? 0 : adapter.retryMillis);
+		});
 	}
 	/** Durable acceptance and asynchronous execution are deliberately separate. */
 	public void accept(String id, AMap<AString, ACell> event) {
@@ -132,10 +182,16 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 		});
 	}
 	@Override public AMap<AString, ACell> status() {
-		return Maps.of("name", spec.name(), "user", spec.userDID(adapter.engine),
-			"managed", managed == Managed.CONFIG ? "config" : "runtime", "state", ready() ? "RUNNING" : "PENDING",
-			"webhookPath", "/webhooks/" + adapter.getName() + "/" + binding,
+		boolean connected;
+		synchronized (this) { connected = connection != null; }
+		AMap<AString, ACell> status = Maps.of("name", spec.name(), "user", spec.userDID(adapter.engine),
+			"managed", managed == Managed.CONFIG ? "config" : "runtime",
+			"state", ready() && (connected || !spec.connectionIngress()) ? "RUNNING" : "PENDING",
 			"pending", inbox.records(WebhookInbox.PENDING).size(), "started", inbox.records(WebhookInbox.STARTED).size(),
 			"queued", queued.size(), "error", lastError);
+		if (spec.webhookIngress()) status = status.assoc(MessagingSettings.key("webhookPath"), Strings.create("/webhooks/" + adapter.getName() + "/" + binding));
+		if (spec.connectionIngress()) status = status.assoc(MessagingSettings.key("connection"),
+			Strings.create(connected ? CONNECTED : retrying ? RETRYING : CONNECTING));
+		return status;
 	}
 }

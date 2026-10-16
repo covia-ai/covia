@@ -8,7 +8,6 @@
       "required": [
         "name",
         "token",
-        "signingSecret",
         "appId",
         "teamId",
         "botUserId"
@@ -24,6 +23,18 @@
         {
           "required": [
             "operation"
+          ]
+        }
+      ],
+      "anyOf": [
+        {
+          "required": [
+            "signingSecret"
+          ]
+        },
+        {
+          "required": [
+            "appToken"
           ]
         }
       ],
@@ -64,7 +75,13 @@
         },
         "signingSecret": {
           "type": "string",
-          "pattern": "^/?s/[A-Za-z0-9_.-]+$"
+          "pattern": "^/?s/[A-Za-z0-9_.-]+$",
+          "description": "App signing secret reference; enables Events API callbacks at the returned webhookPath."
+        },
+        "appToken": {
+          "type": "string",
+          "pattern": "^/?s/[A-Za-z0-9_.-]+$",
+          "description": "App-level token reference (connections:write); enables Socket Mode, which needs no public URL. Bindings holding the same token share one connection; use one token per app."
         },
         "appId": {
           "type": "string"
@@ -91,5 +108,5 @@
     "readOnly": false
   },
   "name": "Create Slack binding",
-  "description": "Create a durable caller-owned Slack binding. All credentials must be secret references; user is implicit. Requires slack/manage. Returns its webhookPath."
+  "description": "Create a durable caller-owned Slack binding. All credentials must be secret references; user is implicit. Requires slack/manage. signingSecret receives Events API callbacks at the returned webhookPath; appToken receives events over Socket Mode instead, without a public URL."
 }

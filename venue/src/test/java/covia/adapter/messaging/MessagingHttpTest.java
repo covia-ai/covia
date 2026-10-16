@@ -87,6 +87,16 @@ class MessagingHttpTest {
 		}
 	}
 
+	@Test void socketUrlsAreWssOrLoopbackAndKeepTheirTicket() {
+		String ticket = "wss://wss-primary.slack.com/link/?ticket=single-use&app_id=A123";
+		assertEquals(ticket, MessagingHttp.socket(ticket).toString());
+		assertEquals("ws://127.0.0.1:9/link", MessagingHttp.socket("ws://127.0.0.1:9/link").toString());
+		for (String url : new String[] {"ws://example.com/link", "https://example.com/link", "wss://user@example.com/link",
+				"wss://example.com/link#fragment", "wss:///link", "not a url"}) {
+			assertEquals(MessagingHttp.INVALID_SOCKET_URL, assertThrows(IllegalArgumentException.class, () -> MessagingHttp.socket(url)).getMessage(), url);
+		}
+	}
+
 	@Test void timesOutWaitingForHeaders() throws Exception { assertTimeoutAt(false); }
 	@Test void timesOutWhileReadingTheBody() throws Exception { assertTimeoutAt(true); }
 

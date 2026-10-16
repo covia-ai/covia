@@ -35,8 +35,8 @@ covia/                          # ai.covia:covia (parent POM)
 │                               #   agents/operations, discord:send; shaded "module" jar)
 ├── covia-whatsapp/             # WhatsApp Cloud API venue module (signed webhook intake,
 │                               #   agents/operations, whatsapp:send; shaded "module" jar)
-├── covia-slack/                # Slack Events API venue module (signed webhook intake,
-│                               #   agents/operations, slack:send; shaded "module" jar)
+├── covia-slack/                # Slack venue module (signed Events API webhooks or Socket
+│                               #   Mode, agents/operations, slack:send; shaded "module" jar)
 ├── covia-sonnylabs/            # SonnyLabs prompt-injection scanning venue module
 │                               #   (POST /v1/scans; shaded "module" jar)
 ├── covia-documents/            # PDF/Office text extraction venue module (PDFBox, POI;

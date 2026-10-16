@@ -463,8 +463,8 @@ must clean binding-owned inbox/checkpoint data in `deleteRuntimeState`.
 
 ### HTTP messaging workers
 
-`AWebhookMessagingAdapter` and `WebhookBot` implement the shared HTTP binding
-worker used by the optional [WhatsApp](../../covia-whatsapp/README.md) and
+`AWebhookMessagingAdapter` and `WebhookBot` implement the shared binding
+worker, fed by signed HTTP callbacks or a provider connection, used by the optional [WhatsApp](../../covia-whatsapp/README.md) and
 [Slack](../../covia-slack/README.md) modules. They require credential references,
 keep configuration private, and publish `send`, `create`, `delete` and `bots`.
 Providers implement validation, signed callback parsing, admission and sends.
@@ -480,6 +480,29 @@ Session roots use `sessions` in place of `inbox`, with a further configuration
 version segment before the encoded conversation key. Identity is the CAD3
 hash of a compound owner/provider-installation key; version is the settings
 map's hash. Resolved credentials are never stored in either record.
+
+A spec declares its ingress. `webhookIngress()` (default true) enables the
+callback route; otherwise the route answers 404. `connectionIngress()` makes
+the worker hold a provider event connection. The provider opens it through
+`AWebhookMessagingAdapter.openConnection`, returning a `MessagingConnection`.
+The worker opens it once credentials resolve, on a virtual thread, never on
+the shared retry thread. It reconnects at once after a normal end (a provider
+refresh) and after the retry interval following a failure. It closes the
+connection on stop, and `bots` reports `connection` as `CONNECTED`,
+`CONNECTING` or `RETRYING`. The provider authenticates the connection, calls
+`WebhookBot.accept` and acknowledges only after it returns. Both ingresses may
+be enabled; they share one inbox and router. `MessagingHttp.socket` checks a
+provider-issued socket URL (WSS, or WS on loopback).
+
+Some providers balance a credential's events across all of its open
+connections. In that case `openConnection` returns a lease from
+`SharedConnections`. Bindings whose credential resolves to the same value
+share one connection, keyed by the credential's hash in memory only. The
+opener receives the current members and routes each event to the bindings it
+concerns. A lease ends with the shared connection and leaves the group before
+its binding reconnects. The last lease out closes the connection. Possession
+of the credential is the sharing test, so bindings with different credentials
+never share, whatever installation they claim.
 
 The worker scans PENDING receipts on start and periodically for late secret
 provisioning. Whole turns share the conversation queue, claim and flush before
@@ -497,8 +520,8 @@ may finish. Recreating a deleted binding is a new intake lifecycle.
 
 ### Provider boundaries
 
-The first modules implement text messaging over HTTP callbacks. The remaining
-provider-specific extension points are:
+The first modules implement text messaging over HTTP callbacks and, for Slack,
+Socket Mode. The remaining provider-specific extension points are:
 
 - **WhatsApp:** bind an app and phone-number ID to the owner/handler. Keep app
   secret, verification token and outbound token separate. Verify the Meta
@@ -506,10 +529,14 @@ provider-specific extension points are:
   binding, and process delivery status separately from conversation turns.
   Template messages and the customer service window remain provider policy.
 - **Slack:** make one binding identify an installation, including the workspace
-  and enterprise context where applicable. Support an HTTP Events API receiver
-  or, in a future extension, a Socket Mode runner feeding the same inbox/router. HTTP ingress requires
+  and enterprise context where applicable. A signing secret enables the HTTP
+  Events API receiver; an app token enables a Socket Mode connection feeding
+  the same inbox/router. HTTP ingress requires
   Slack signature and timestamp verification against the raw body; Socket Mode
-  authenticates its connection separately. Keep bot and app/signing credentials
+  authenticates its connection with the app token. Slack balances an app's
+  envelopes across all its connections, so bindings resolving to one app token
+  share a connection and each event goes to every binding of its installation;
+  all bindings of an app should use the same token. Keep bot and app/signing credentials
   distinct. Deduplicate Events API `event_id`; the Socket Mode `envelope_id`
   belongs to acknowledgement. Use installation + channel + thread for channel
   conversations and an explicit per-DM policy. Preserve timestamp IDs as strings,

@@ -1,9 +1,10 @@
 # Slack venue module
 
 `covia-slack` connects a workspace-installed Slack app to a Covia agent or
-operation through the HTTP Events API. It supplies `slack:send`, `create`,
-`delete` and `bots`, plus `v/skills/adapters/slack`. The optional module uses
-the JDK HTTP client and is not bundled in `covia.jar`.
+operation through the HTTP Events API or Socket Mode. It supplies
+`slack:send`, `create`, `delete` and `bots`, plus `v/skills/adapters/slack`.
+The optional module uses the JDK HTTP and WebSocket clients and is not bundled
+in `covia.jar`.
 
 ## Setup
 
@@ -52,9 +53,68 @@ signature/timestamp headers; these routes do not require a venue bearer.
 Requests use [Slack HMAC verification](https://docs.slack.dev/authentication/verifying-requests-from-slack/)
 with a five-minute timestamp window. Event callbacks must match `appId` and
 `teamId` and include a workspace authorization. Optional `enterpriseId`
-also constrains that authorization. Enterprise-wide installations, Socket
-Mode and OAuth installation management are outside this version's scope.
-Bot authorization metadata is distinct from the message's sender.
+also constrains that authorization. Enterprise-wide installations and OAuth
+installation management are outside this version's scope. Bot authorization
+metadata is distinct from the message's sender.
+
+### Socket Mode
+
+[Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode/)
+delivers the same events over an outbound WebSocket, so a venue on a laptop or
+behind NAT needs no public URL. Enable Socket Mode on the app and create an
+app-level token with the `connections:write` scope. Store it with `secret:set`
+and give its reference as `appToken`, in place of `signingSecret`:
+
+```json
+"support": {
+  "user": "did:key:YOUR_OWNER_DID",
+  "token": "s/SLACK_BOT_TOKEN",
+  "appToken": "s/SLACK_APP_TOKEN",
+  "appId": "A0123456789",
+  "teamId": "T0123456789",
+  "botUserId": "U0123456789",
+  "agent": "support-agent",
+  "allow": ["U0987654321"],
+  "allowChannels": ["C0123456789"]
+}
+```
+
+The app token authenticates the connection, so no request signature is
+involved. A binding without `signingSecret` has no webhook route: its path
+returns 404 and `bots` reports `connection` instead of `webhookPath`. A
+binding may hold both credentials while an app moves between transports.
+Both feed one inbox, so conversations continue across them and each
+`event_id` runs once.
+
+Slack spreads an app's events across all of its open connections, whatever
+the workspace. So all Socket Mode bindings whose `appToken` resolves to the
+same token share one connection, across owners and including the venue-store
+secret fallback. Each event goes to every binding whose `appId`, `teamId` and
+`enterpriseId` match it, and each applies its own sender and channel
+admission. One app can therefore serve several workspaces. Two bindings for
+the same workspace both act on an event they both admit, so split their
+`allowChannels` or senders to avoid double replies. Events for a workspace
+with no binding are acknowledged and dropped.
+
+Holding the token is the only test for sharing. Anyone with an app token can
+already open a connection and receive all of the app's events, so sharing
+grants nothing new. A binding with a different token, even one claiming the
+same app and workspace, gets its own connection and never receives events
+from another token's connection. Give every binding of one app the same token
+value. A second token for the same app opens a second connection, which
+receives, and drops, a share of the other bindings' events.
+
+A binding opens or joins its token's connection once both tokens resolve, and
+the last binding to leave closes it. Each connection uses a fresh single-use
+URL from `apps.connections.open`.
+Slack's periodic `disconnect` refresh reconnects at once. A failed or silent
+connection is replaced after the retry interval; the module pings every 30
+seconds and treats two silent intervals as lost. `bots` reports `connection` as
+`CONNECTED`, `CONNECTING` or `RETRYING`. Events pass the same app, workspace,
+sender and channel checks as callbacks. Each envelope is acknowledged only
+after every matching binding has durably accepted it. Slack redelivers
+unacknowledged envelopes, and each inbox deduplicates them by `event_id`.
+Slash-command and interactivity envelopes are acknowledged and ignored.
 
 `allow` contains Slack user IDs and defaults to empty; `open: true` opens
 sender admission. Channel publication always requires `allowChannels`, even
@@ -82,9 +142,9 @@ silent; a string supplies a fixed reply.
 | Operation | Input | Authority / result |
 |---|---|---|
 | `v/ops/slack/send` | `{bot?, channel, text, thread_ts?}` | `<owner>/slack/<bot>` × `slack/send`; Slack message receipt |
-| `v/ops/slack/create` | `{name, ...bot settings}` without `user` | Caller-owned binding; `slack/manage`; returns `webhookPath` |
+| `v/ops/slack/create` | `{name, ...bot settings}` without `user` | Caller-owned binding; `slack/manage`; returns `webhookPath` and/or `connection` |
 | `v/ops/slack/delete` | `{name}` | Deletes caller-owned runtime binding and private state; `slack/manage` |
-| `v/ops/slack/bots` | `{}` | Own bindings (all for venue principal), readiness, paths and receipt counts |
+| `v/ops/slack/bots` | `{}` | Own bindings (all for venue principal), readiness, paths, connection state and receipt counts |
 
 For example, invoke `v/ops/slack/send` with:
 

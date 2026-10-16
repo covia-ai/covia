@@ -16,6 +16,7 @@ import convex.core.util.JSON;
 /** Bounded JSON transport. Sends are never automatically retried after uncertain delivery. */
 public final class MessagingHttp {
 	public static final String INVALID_URL = "apiUrl must be HTTPS (HTTP is allowed only on loopback), without credentials, query or fragment";
+	public static final String INVALID_SOCKET_URL = "Provider socket URL must be WSS (WS is allowed only on loopback), without credentials or fragment";
 	public static final String UNAVAILABLE = "Messaging credential is unavailable";
 	public static final String HTTP_ERROR = "Messaging provider returned HTTP %d";
 	public static final String RESPONSE_ERROR = "Messaging provider returned an invalid or oversized response";
@@ -28,11 +29,23 @@ public final class MessagingHttp {
 		try {
 			URI uri = URI.create(value);
 			String host = uri.getHost();
-			boolean local = "localhost".equalsIgnoreCase(host) || "127.0.0.1".equals(host) || "[::1]".equals(host);
 			if (host == null || uri.getUserInfo() != null || uri.getQuery() != null || uri.getFragment() != null
-				|| !("https".equals(uri.getScheme()) || (local && "http".equals(uri.getScheme())))) throw new IllegalArgumentException();
+				|| !("https".equals(uri.getScheme()) || (loopback(host) && "http".equals(uri.getScheme())))) throw new IllegalArgumentException();
 			return value.replaceAll("/+$", "");
 		} catch (IllegalArgumentException e) { throw new IllegalArgumentException(INVALID_URL); }
+	}
+	/** A provider-issued event socket URL. Its query may carry a single-use connection ticket. */
+	public static URI socket(String value) {
+		try {
+			URI uri = URI.create(value);
+			String host = uri.getHost();
+			if (host == null || uri.getUserInfo() != null || uri.getFragment() != null
+				|| !("wss".equals(uri.getScheme()) || (loopback(host) && "ws".equals(uri.getScheme())))) throw new IllegalArgumentException();
+			return uri;
+		} catch (IllegalArgumentException | NullPointerException e) { throw new IllegalArgumentException(INVALID_SOCKET_URL); }
+	}
+	private static boolean loopback(String host) {
+		return "localhost".equalsIgnoreCase(host) || "127.0.0.1".equals(host) || "[::1]".equals(host);
 	}
 	public static ACell post(String url, String token, ACell body) {
 		return post(url, token, body, Duration.ofSeconds(30));

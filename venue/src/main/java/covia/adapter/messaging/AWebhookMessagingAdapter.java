@@ -27,11 +27,20 @@ public abstract class AWebhookMessagingAdapter<S extends WebhookBotSpec>
 	public static final String UNSUPPORTED = "Unsupported messaging operation: %s";
 	public static final String DESTINATION_DENIED = "Messaging destination is not allowed by this binding";
 	public static final String TEXT_LENGTH = "text must contain between 1 and %d characters";
+	public static final String NO_CONNECTION = "This provider does not support connection ingress";
 	private volatile String apiUrl;
 	protected abstract String defaultApiUrl();
 	protected abstract WebhookResponse receive(WebhookBot<S> bot, WebhookRequest request);
 	protected abstract ACell send(WebhookBot<S> bot, AMap<AString, ACell> input);
 	protected abstract void sendReply(WebhookBot<S> bot, AMap<AString, ACell> event, String text);
+	/**
+	 * Open the event connection of a binding whose spec has connection ingress.
+	 * Called off the retry thread once credentials resolve; may block while
+	 * connecting. {@link WebhookBot} replaces it when it ends and closes it on stop.
+	 */
+	protected MessagingConnection openConnection(WebhookBot<S> bot) throws Exception {
+		throw new UnsupportedOperationException(NO_CONNECTION);
+	}
 
 	@Override public final synchronized boolean configure(AMap<AString, ACell> settings, boolean strict) {
 		if (settings == null) settings = Maps.empty();
@@ -83,7 +92,7 @@ public abstract class AWebhookMessagingAdapter<S extends WebhookBotSpec>
 		if (!isActive()) return WebhookResponse.text(404, UNAVAILABLE);
 		WebhookBot<S> bot = null;
 		for (var candidate : runnerList()) if (candidate.binding().equals(binding)) { bot = candidate; break; }
-		if (bot == null || !bot.running()) return WebhookResponse.text(404, UNAVAILABLE);
+		if (bot == null || !bot.running() || !bot.spec().webhookIngress()) return WebhookResponse.text(404, UNAVAILABLE);
 		try { return receive(bot, request); }
 		catch (IllegalArgumentException e) { return WebhookResponse.text(400, INVALID_REQUEST); }
 		catch (RuntimeException e) { return WebhookResponse.text(503, ACCEPT_FAILED); }

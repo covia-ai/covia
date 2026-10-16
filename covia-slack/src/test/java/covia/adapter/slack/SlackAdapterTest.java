@@ -251,7 +251,7 @@ class SlackAdapterTest {
 			assertTrue(f.api.sends.isEmpty());
 		}
 	}
-	private static final class FakeAgent extends AAdapter {
+	static final class FakeAgent extends AAdapter {
 		final LinkedBlockingQueue<AMap<AString, ACell>> inputs = new LinkedBlockingQueue<>();
 		final AtomicInteger sessions = new AtomicInteger();
 		volatile AString owner;
