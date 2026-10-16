@@ -766,9 +766,11 @@ public class JobManager {
 	 * Returns a copy of {@code input} with secret fields replaced by {@link Fields#HIDDEN}.
 	 * Secret fields are declared in {@code meta.operation.secretFields} as a vector of field names.
 	 * If there are no secret fields (or input is not a map), returns input unchanged.
+	 * The scheduler applies it to the inputs it lists, so a listing never shows
+	 * more than the job history would.
 	 */
 	@SuppressWarnings("unchecked")
-	private static ACell redactSecrets(ACell input, AMap<AString, ACell> meta) {
+	static ACell redactSecrets(ACell input, AMap<AString, ACell> meta) {
 		if (!(input instanceof AMap)) return input;
 		ACell sf = RT.getIn(meta, Fields.OPERATION, K_SECRET_FIELDS);
 		if (!(sf instanceof AVector)) return input;
@@ -1382,7 +1384,7 @@ public class JobManager {
 	 * unresolvable reference (renamed catalog entry, unreachable remote) leaves
 	 * the job without metadata rather than aborting recovery.
 	 */
-	private Asset resolveRecordedOp(AString opRef, AString callerDID) {
+	Asset resolveRecordedOp(AString opRef, AString callerDID) {
 		try {
 			Asset asset = engine.resolveAsset(opRef);
 			if (asset == null && callerDID != null) {

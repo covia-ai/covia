@@ -11,6 +11,7 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.venue.RequestContext;
 import covia.venue.Scheduler;
@@ -36,6 +37,7 @@ public class SchedulerAdapter extends AAdapter {
 	private static final AString AFTER = Strings.intern("after");
 	private static final AString REPEAT = Strings.intern("repeat");
 	private static final AString TRACK = Strings.intern("track");
+	private static final AString DESCRIPTION = Fields.DESCRIPTION;
 	private static final AString HANDLE = Strings.intern("handle");
 	private static final AString CANCELLED = Strings.intern("cancelled");
 	private static final AString TRIGGERED = Strings.intern("triggered");
@@ -100,6 +102,7 @@ public class SchedulerAdapter extends AAdapter {
 		ACell opInput = RT.getIn(input, INPUT);
 		AMap<AString, ACell> repeat = parseRepeat(RT.getIn(input, REPEAT));
 		Boolean track = parseTrack(RT.getIn(input, TRACK));
+		AString description = Scheduler.validateDescription(RT.getIn(input, DESCRIPTION));
 		CVMLong timeV = RT.ensureLong(RT.getIn(input, TIME));
 		CVMLong afterV = RT.ensureLong(RT.getIn(input, AFTER));
 		long wakeTime;
@@ -114,7 +117,7 @@ public class SchedulerAdapter extends AAdapter {
 			throw new IllegalArgumentException(
 				"schedule requires 'time' (absolute millis), 'after' (millis from now) or 'repeat'");
 		}
-		Blob handle = engine.gridScheduler().schedule(opRef, opInput, ctx, wakeTime, repeat, track);
+		Blob handle = engine.gridScheduler().schedule(opRef, opInput, ctx, wakeTime, repeat, track, description);
 		AMap<AString, ACell> out = Maps.of(HANDLE, handle, TIME, CVMLong.create(wakeTime));
 		return (repeat != null) ? out.assoc(REPEAT, repeat) : out;
 	}

@@ -15,11 +15,20 @@ per-thread `AgentScheduler` that predated this service has been retired.
 ## 1. Entities
 
 - **Scheduled event** — a deferred invocation, one-shot or recurring:
-  `{ time, id, operation, input, owner, proofs, repeat?, track?, lastFired?, lastJob? }`.
+  `{ time, id, operation, input, owner, by, created, proofs, actor?, description?, repeat?, track?, lastFired?, lastJob? }`.
   - `time` — absolute wall-clock millis at which the event is next due.
   - `operation` — a grid operation reference (asset id or operation path).
   - `input` — the cell passed to that operation when it fires.
-  - `owner` — the DID that scheduled it; the identity the operation runs as.
+  - `owner` — the user DID that owns it: the namespace it runs in and the key
+    for `list`, `cancel` and `trigger`.
+  - `by` — the DID of the caller that scheduled it, always recorded: the
+    owner's own, or that of an agent or delegate acting for them. Attribution
+    only; it repeats `actor` for an agent.
+  - `actor` — the agent sub-principal that scheduled it, when not the owner;
+    the event fires as `actor` when set, otherwise as `owner`.
+  - `created` — wall-clock millis at which it was scheduled.
+  - `description` — optional caller-written display text saying what the event
+    is for, at most 500 characters. Never interpreted.
   - `proofs` — the UCAN proof(s) the owner presented when scheduling, captured so
     firing runs with **exactly** that authority and cannot escalate (§5).
   - `repeat` — optional recurrence spec; absent ⇒ one-shot. It is an object so
@@ -62,7 +71,8 @@ The `:schedule` value is a single extensible `{ updated, events, ... }` map:
 
 ```
 events = Index keyed by  time (8-byte big-endian unsigned millis) ‖ id (unique bytes)
-         value = { op, input, owner, time, proofs?, caps?, repeat?, track?, lastFired?, lastJob? }
+         value = { op, input, owner, by, time, created, actor?, description?, proofs?, caps?,
+                   repeat?, track?, lastFired?, lastJob? }
 updated = wall-clock stamp of the last mutation
 ```
 
@@ -225,15 +235,23 @@ operations, described by intent:
   (relative), with an operation reference and its input; returns a handle.
   Optional `repeat: {every: <millis>}` makes it recurring (with neither `time`
   nor `after`, the first fire is one interval from now); optional `track`
-  chooses durable or transient fires (§7).
+  chooses durable or transient fires (§7); optional `description` (a string
+  of at most 500 characters, refused otherwise) says what the event is for.
 - **cancel** — remove an event by handle.
 - **trigger** — fire an event now by handle, ahead of its time — the
   early-execution / test hook. A one-shot event is consumed; a recurring event
   stays scheduled at its unchanged next due time.
 - **list** — the caller's pending events, in time order: each
-  `{handle, op, time, track}` plus `repeat`, `lastFired` and `lastJob` where
-  present. `track` is the effective tracking the next fire will use, after
-  venue policy.
+  `{handle, op, time, track}` plus `by`, `input`, `description`, `created`,
+  `repeat`, `lastFired` and `lastJob` where present. `track` is the effective
+  tracking the next fire will use, after venue policy. `input` is shown as a
+  job record would hold it: the fields the operation declares in
+  `secretFields` are hidden, resolved as a job record's `op` is, and `input`
+  is withheld when the operation no longer resolves, since its secret fields
+  are then unknown. The stored input is untouched, because firing replays it.
+  Captured `proofs` and `caps` are authority, not description, and are never
+  listed. Events stored before `by`, `created` and `description` were
+  recorded list without them.
 
 All operations are scoped to the caller's identity. Scheduling is itself an
 operation, so an agent can schedule future work (including waking itself) as a

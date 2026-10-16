@@ -2003,9 +2003,10 @@ public class CoviaAPI extends ACoviaAPI {
 			methods = HttpMethod.GET,
 			tags = { "Covia" },
 			summary = "List the authenticated caller's pending scheduled events, each "
-				+ "{handle, op, time, track, repeat?, lastFired?, lastJob?}, ordered by next fire time "
-				+ "(job-free, #369). Includes events queued by the caller's agents. Read lastJob "
-				+ "via /jobs/{id} for a tracked recurring event's most recent outcome.",
+				+ "{handle, op, time, track, by?, input?, description?, created?, repeat?, lastFired?, "
+				+ "lastJob?}, ordered by next fire time (job-free, #369). Includes events queued by the "
+				+ "caller's agents; input hides the operation's secret fields as job records do. Read "
+				+ "lastJob via /jobs/{id} for a tracked recurring event's most recent outcome.",
 			operationId = "getSchedules")
 	protected void getSchedules(Context ctx) {
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);

@@ -39,6 +39,11 @@
         "track": {
           "type": "boolean",
           "description": "Whether each fire runs as a durable Job (visible in your job history, its ID reported as lastJob on a recurring event). Omit to use the venue default; an operator may force tracking on."
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Optional human-readable text saying what the event is for, returned by list. Display text only; it is never interpreted."
         }
       },
       "required": [

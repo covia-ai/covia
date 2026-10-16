@@ -30,7 +30,9 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.Utils;
 import convex.lattice.cursor.ALatticeCursor;
+import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.grid.Asset;
 
 /**
  * Per-venue scheduler for deferred grid-operation invocations. Fires any grid
@@ -92,6 +94,18 @@ public class Scheduler {
 	 *  the event fires as this identity, but the OWNER still administers it, so
 	 *  a user keeps sight of what their agents have queued. */
 	static final AString K_ACTOR = Strings.intern("actor");
+	/** Event record field: the DID of the caller that scheduled this event,
+	 *  always set — the owner's own DID when the user scheduled it directly.
+	 *  Attribution for {@link #list} only; it repeats {@link #K_ACTOR} for an
+	 *  agent, and firing never reads it. Absent on events stored before it was
+	 *  recorded. */
+	static final AString K_BY = Strings.intern("by");
+	/** Event record field: caller-written display text saying what the event is
+	 *  for (AString, at most {@link #MAX_DESCRIPTION_CHARS}). Never interpreted. */
+	static final AString K_DESCRIPTION = Fields.DESCRIPTION;
+	/** Event record field: wall-clock millis at which the event was scheduled
+	 *  (CVMLong). Absent on events stored before it was recorded. */
+	static final AString K_CREATED = Fields.CREATED;
 	/** Event record field: captured UCAN proofs (AVector), replayed at fire time. */
 	static final AString K_PROOFS = Strings.intern("proofs");
 	/** Event record field: captured capability attenuations (AVector). */
@@ -120,6 +134,14 @@ public class Scheduler {
 
 	/** Floor on {@code repeat.every}: the first abuse guard against tight loops. */
 	public static final long MIN_REPEAT_MS = 1_000L;
+
+	/** Longest {@code description} an event may carry, in characters. */
+	public static final int MAX_DESCRIPTION_CHARS = 500;
+	/** Refusal for a {@code description} that is not a string. */
+	public static final String DESCRIPTION_NOT_STRING = "description must be a string";
+	/** Refusal for a {@code description} longer than {@link #MAX_DESCRIPTION_CHARS}. */
+	public static final String DESCRIPTION_TOO_LONG =
+		"description must be at most " + MAX_DESCRIPTION_CHARS + " characters";
 
 	/** Index key length: 8-byte big-endian wake time + 8-byte id. */
 	private static final int KEY_LENGTH = 16;
@@ -186,15 +208,28 @@ public class Scheduler {
 	 */
 	public Blob schedule(AString opRef, ACell input, RequestContext ctx, long wakeTime,
 			AMap<AString, ACell> repeat, Boolean track) {
+		return schedule(opRef, input, ctx, wakeTime, repeat, track, null);
+	}
+
+	/**
+	 * As {@link #schedule(AString, ACell, RequestContext, long, AMap, Boolean)},
+	 * with a caller-written {@code description} (validated by
+	 * {@link #validateDescription}) saying what the event is for, or null for
+	 * none. It is display text for {@link #list}; nothing ever interprets it.
+	 */
+	public Blob schedule(AString opRef, ACell input, RequestContext ctx, long wakeTime,
+			AMap<AString, ACell> repeat, Boolean track, AString description) {
 		AString owner = ctx.getUserDID();
 		if (owner == null) throw new AuthException("Scheduling requires an authenticated caller");
 		AMap<AString, ACell> rep = (repeat == null) ? null : validateRepeat(repeat);
+		AString desc = validateDescription(description);
 		// Owned by the user, fired as whoever scheduled it — so an agent's queued
 		// work stays visible to (and cancellable by) the account it runs in.
 		AString actor = ctx.isSubPrincipal() ? ctx.getCallerDID() : null;
+		AString by = ctx.getCallerDID();
 		AVector<ACell> proofs = ctx.getProofs();
 		AVector<ACell> caps = ctx.getCaps();
-		return onTimer(() -> doSchedule(opRef, input, owner, actor, proofs, caps, wakeTime, rep, track));
+		return onTimer(() -> doSchedule(opRef, input, owner, actor, by, proofs, caps, wakeTime, rep, track, desc));
 	}
 
 	/** Cancel a scheduled event by handle. Owner-only. Returns false if absent. */
@@ -239,8 +274,12 @@ public class Scheduler {
 	/**
 	 * The calling user's pending events, time-ordered — including those queued
 	 * by their agents. Each is {@code {handle, op, time, track}} plus, when
-	 * present, {@code repeat}, {@code lastFired} and {@code lastJob}.
-	 * {@code track} is the effective tracking that the next fire will use.
+	 * present, {@code by}, {@code input}, {@code description}, {@code created},
+	 * {@code repeat}, {@code lastFired} and {@code lastJob}. {@code track} is
+	 * the effective tracking that the next fire will use; {@code input} is
+	 * shown as the owner's job history would show it ({@link #listedInput}).
+	 * Captured {@code proofs} and {@code caps} are authority, not description,
+	 * and are never listed.
 	 */
 	public AVector<ACell> list(RequestContext ctx) {
 		AString caller = ctx.getUserDID();
@@ -258,9 +297,29 @@ public class Scheduler {
 				K_OP, rec.get(K_OP),
 				K_TIME, rec.get(K_TIME),
 				K_TRACK, CVMBool.create(isTracked(rec)));
-			out = out.conj(copyIfPresent(rec, item, K_REPEAT, K_LAST_FIRED, K_LAST_JOB));
+			ACell input = listedInput(rec);
+			if (input != null) item = item.assoc(K_INPUT, input);
+			out = out.conj(copyIfPresent(rec, item,
+				K_BY, K_DESCRIPTION, K_CREATED, K_REPEAT, K_LAST_FIRED, K_LAST_JOB));
 		}
 		return out;
+	}
+
+	/**
+	 * An event's input as a job record for its operation would hold it: the
+	 * fields the operation declares in {@code secretFields} are hidden, by the
+	 * same code and the same resolution of the recorded {@code op} that job
+	 * records use (#228, #499). The stored input is untouched, since firing
+	 * replays it. Null when there is no input, or when the operation does not
+	 * resolve: its secret fields are then unknown, so nothing is shown rather
+	 * than everything.
+	 */
+	private ACell listedInput(AMap<AString, ACell> rec) {
+		ACell input = rec.get(K_INPUT);
+		if (input == null) return null;
+		Asset op = engine.jobs().resolveRecordedOp(RT.ensureString(rec.get(K_OP)),
+			RT.ensureString(rec.get(K_OWNER)));
+		return (op == null) ? null : JobManager.redactSecrets(input, op.meta());
 	}
 
 	/** Arm the alarm from the (already-loaded) lattice index. Call once on boot. */
@@ -295,6 +354,23 @@ public class Scheduler {
 		return Maps.of(K_EVERY, every);
 	}
 
+	/**
+	 * Validate an event description and return it as a string, or null when
+	 * absent. It must be a string of at most {@link #MAX_DESCRIPTION_CHARS}
+	 * characters; anything else is refused with {@link #DESCRIPTION_NOT_STRING}
+	 * or {@link #DESCRIPTION_TOO_LONG}.
+	 */
+	public static AString validateDescription(ACell description) {
+		if (description == null) return null;
+		if (!(description instanceof AString s)) {
+			throw new IllegalArgumentException(DESCRIPTION_NOT_STRING);
+		}
+		if (s.toString().length() > MAX_DESCRIPTION_CHARS) {
+			throw new IllegalArgumentException(DESCRIPTION_TOO_LONG);
+		}
+		return s;
+	}
+
 	/** The fixed interval of a validated {@code {every}} spec. */
 	public static long everyOf(AMap<AString, ACell> repeat) {
 		return RT.ensureLong(repeat.get(K_EVERY)).longValue();
@@ -317,16 +393,19 @@ public class Scheduler {
 
 	// ------------------------------------------------------- timer-thread bodies
 
-	private Blob doSchedule(AString opRef, ACell input, AString owner, AString actor,
+	private Blob doSchedule(AString opRef, ACell input, AString owner, AString actor, AString by,
 			AVector<ACell> proofs, AVector<ACell> caps, long wakeTime,
-			AMap<AString, ACell> repeat, Boolean track) {
+			AMap<AString, ACell> repeat, Boolean track, AString description) {
 		engine.getVenueState().users().requireNotDeleted(owner);
 		Blob key = mintKey(wakeTime);
 		AMap<AString, ACell> rec = Maps.of(
 			K_OP, opRef,
 			K_OWNER, owner,
-			K_TIME, CVMLong.create(wakeTime));
+			K_BY, by,
+			K_TIME, CVMLong.create(wakeTime),
+			K_CREATED, CVMLong.create(clock.getAsLong()));
 		if (actor != null) rec = rec.assoc(K_ACTOR, actor);
+		if (description != null) rec = rec.assoc(K_DESCRIPTION, description);
 		if (input != null) rec = rec.assoc(K_INPUT, input);
 		if (proofs != null) rec = rec.assoc(K_PROOFS, proofs);
 		if (caps != null) rec = rec.assoc(K_CAPS, caps);

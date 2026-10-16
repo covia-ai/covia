@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -21,6 +22,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.Scheduler;
 import covia.venue.TestEngine;
 
 /**
@@ -133,6 +135,52 @@ public class SchedulerAdapterTest {
 		assertThrows(java.util.concurrent.ExecutionException.class, () -> invoke("v/ops/scheduler/schedule",
 			Maps.of(s("operation"), s("v/test/ops/echo"), s("after"), CVMLong.create(HOUR), s("track"), s("yes"))),
 			"track must be a boolean");
+	}
+
+	@Test
+	public void testListDescribesEachEvent() throws Exception {
+		ACell echoInput = Maps.of(s("hello"), s("world"));
+		ACell scheduled = invoke("v/ops/scheduler/schedule", Maps.of(
+			s("operation"), s("v/test/ops/echo"),
+			s("input"), echoInput,
+			s("after"), CVMLong.create(HOUR),
+			s("description"), s("Say hello every so often")));
+
+		ACell listed = invoke("v/ops/scheduler/list", Maps.empty());
+		@SuppressWarnings("unchecked")
+		AVector<ACell> events = (AVector<ACell>) RT.getIn(listed, s("events"));
+		assertEquals(1, events.count());
+		ACell event = events.get(0);
+		assertEquals(did, RT.getIn(event, s("by")));
+		assertEquals(echoInput, RT.getIn(event, s("input")));
+		assertEquals(s("Say hello every so often"), RT.getIn(event, s("description")));
+		assertTrue(RT.getIn(event, s("created")) instanceof CVMLong);
+
+		invoke("v/ops/scheduler/cancel", Maps.of(s("handle"), RT.getIn(scheduled, s("handle"))));
+	}
+
+	@Test
+	public void testScheduleRejectsMalformedDescription() {
+		ExecutionException notString = assertThrows(ExecutionException.class, () -> invoke(
+			"v/ops/scheduler/schedule", Maps.of(s("operation"), s("v/test/ops/echo"),
+				s("after"), CVMLong.create(HOUR), s("description"), CVMLong.create(7))));
+		assertTrue(String.valueOf(notString.getCause().getMessage()).contains(Scheduler.DESCRIPTION_NOT_STRING),
+			String.valueOf(notString.getCause()));
+
+		ExecutionException tooLong = assertThrows(ExecutionException.class, () -> invoke(
+			"v/ops/scheduler/schedule", Maps.of(s("operation"), s("v/test/ops/echo"),
+				s("after"), CVMLong.create(HOUR),
+				s("description"), s("d".repeat(Scheduler.MAX_DESCRIPTION_CHARS + 1)))));
+		assertTrue(String.valueOf(tooLong.getCause().getMessage()).contains(Scheduler.DESCRIPTION_TOO_LONG),
+			String.valueOf(tooLong.getCause()));
+	}
+
+	/** The published schema states the same bound the scheduler enforces. */
+	@Test
+	public void testScheduleSchemaDeclaresDescriptionBound() {
+		ACell meta = engine.resolveAsset(s("v/ops/scheduler/schedule")).meta();
+		assertEquals(CVMLong.create(Scheduler.MAX_DESCRIPTION_CHARS),
+			RT.getIn(meta, s("operation"), s("input"), s("properties"), s("description"), s("maxLength")));
 	}
 
 	@Test

@@ -14,6 +14,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   messaging bindings may hold shared provider connections.
 - Slack agent template, `slack-bot-management` skill and `/slack` operator skill.
 - Slack thread replies continue an agent's conversation without a mention.
+- `scheduler:list` describes each event: `by`, `input`, `description`, `created` (#583).
 
 ## [0.9.11] - 2026-10-15
 

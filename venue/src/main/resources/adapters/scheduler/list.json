@@ -1,6 +1,6 @@
 {
   "name": "List Scheduled Events",
-  "description": "List the caller's pending scheduled events, soonest first. Each entry carries its handle, operation reference, next fire time and effective tracking; a recurring event also carries its repeat spec, lastFired time and — when tracked — the lastJob ID of its most recent fire (read that Job for the outcome).",
+  "description": "List the caller's pending scheduled events, soonest first. Each entry carries its handle, operation reference, next fire time and effective tracking, plus who scheduled it, its input, its description and when it was scheduled, where recorded; a recurring event also carries its repeat spec, lastFired time and — when tracked — the lastJob ID of its most recent fire (read that Job for the outcome).",
   "operation": {
     "adapter": "scheduler:list",
     "readOnly": true,
@@ -13,7 +13,61 @@
       "properties": {
         "events": {
           "type": "array",
-          "description": "Pending events, each as {handle, op, time, track, repeat?, lastFired?, lastJob?}, ordered by next fire time"
+          "description": "Pending events, ordered by next fire time",
+          "items": {
+            "type": "object",
+            "properties": {
+              "handle": {
+                "type": "string",
+                "description": "Handle identifying the event, for trigger and cancel"
+              },
+              "op": {
+                "type": "string",
+                "description": "Reference of the operation invoked when due"
+              },
+              "time": {
+                "type": "integer",
+                "description": "Next fire time, in milliseconds since the epoch"
+              },
+              "track": {
+                "type": "boolean",
+                "description": "Whether the next fire runs as a durable Job, after venue policy"
+              },
+              "by": {
+                "type": "string",
+                "description": "DID of the caller that scheduled the event: the user's own, or that of the agent or delegate acting for them. Absent on events scheduled before it was recorded."
+              },
+              "input": {
+                "description": "Input passed to the operation when it fires, with the operation's declared secret fields hidden as on job records. Absent when there is no input or the operation no longer resolves."
+              },
+              "description": {
+                "type": "string",
+                "description": "The description given when the event was scheduled, if any"
+              },
+              "created": {
+                "type": "integer",
+                "description": "When the event was scheduled, in milliseconds since the epoch. Absent on events scheduled before it was recorded."
+              },
+              "repeat": {
+                "type": "object",
+                "description": "Recurrence spec, when recurring"
+              },
+              "lastFired": {
+                "type": "integer",
+                "description": "When a recurring event last fired, in milliseconds since the epoch"
+              },
+              "lastJob": {
+                "type": "string",
+                "description": "ID of the durable Job from a recurring event's most recent tracked fire"
+              }
+            },
+            "required": [
+              "handle",
+              "op",
+              "time",
+              "track"
+            ]
+          }
         }
       }
     }
