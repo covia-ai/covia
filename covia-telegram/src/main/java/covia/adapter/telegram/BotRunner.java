@@ -593,19 +593,37 @@ final class BotRunner implements MessagingBot<BotSpec> {
 			typing(chatId, m);
 			ACell response = conversations.chat(conversationKey(m, chatId), prepareMessage(m, text));
 			String reply;
+			String parseMode = spec.parseMode();
 			if (spec.replyOperation() == null) {
 				reply = ConversationRouter.responseText(response);
 			} else {
 				ACell formatted = conversations.runOperation(spec.replyOperation(), Maps.of(
 					Fields.RESPONSE, response, K_VIA, agentMessage(m, text).get(K_VIA)));
 				reply = formattedReply(formatted);
+				parseMode = formattedParseMode(formatted, parseMode);
 			}
-			send(chatId, reply, spec.parseMode(), m.messageId(), threadOf(m), false);
+			send(chatId, reply, parseMode, m.messageId(), threadOf(m), false);
 		} catch (Throwable t) {
 			logFailure("failed to respond", chatId, t);
 			sendQuietly(chatId, "⚠️ " + concise(t), m);
 			throw new JobFailedException(concise(t));
 		}
+	}
+
+	/**
+	 * The parse mode a reply hook's text is written for, when it says so
+	 * ({@code {text, parse_mode}}, as {@code telegram:format} returns): it wins over
+	 * the bot's own {@code parseMode}, so naming the formatter is the whole setup.
+	 * Matched without regard to case, as Telegram does, and returned as Telegram
+	 * spells it. Otherwise, or for a mode Telegram does not know, the bot's own.
+	 */
+	static String formattedParseMode(ACell result, String botParseMode) {
+		if (result instanceof AMap<?, ?> && RT.getIn(result, TelegramAdapter.K_PARSE_MODE_PARAM) instanceof AString mode) {
+			for (String known : BotSpec.PARSE_MODES) {
+				if (known.equalsIgnoreCase(mode.toString().strip())) return known;
+			}
+		}
+		return botParseMode;
 	}
 
 	static String formattedReply(ACell result) {
@@ -995,7 +1013,16 @@ final class BotRunner implements MessagingBot<BotSpec> {
 			if (!r.ok() && r.errorCode() == 400 && p.containsKey("parse_mode")) {
 				log.debug("Telegram bot '{}': {} formatting rejected ({}), resending as plain text",
 					spec.name(), p.get("parse_mode"), r.description());
-				p.remove("parse_mode");
+				Object mode = p.remove("parse_mode");
+				// Refused HTML goes as the words it shows, not as its markup.
+				if (TelegramMarkdown.PARSE_MODE.equalsIgnoreCase(String.valueOf(mode))) {
+					String plain = TelegramMarkdown.htmlToPlain(chunk);
+					if (plain.isBlank()) {
+						first = false;
+						continue;
+					}
+					p.put("text", plain);
+				}
 				r = execute("sendMessage", p);
 			}
 			if (!r.ok()) {

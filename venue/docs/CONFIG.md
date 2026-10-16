@@ -2046,7 +2046,9 @@ Per bot:
   add it). `open: true` admits anyone — appropriate only for a bot whose
   target is safe for the public.
 - `parseMode` — `Markdown`, `MarkdownV2` or `HTML` for replies; omit for
-  plain text. Markup Telegram rejects is resent as plain text.
+  plain text. Markup Telegram rejects is resent as plain text. None of the
+  three renders an agent's Markdown as written; for an agent bot use
+  `replyOperation: "v/ops/telegram/format"`, whose `HTML` the reply then uses.
 - `greeting` — the `/start` reply (default names the agent and venue).
 - `mediaOperation` — optional, agent bots only. Runs once per downloaded
   attachment as the bot owner. Input is the attachment descriptor plus
@@ -2060,12 +2062,18 @@ Per bot:
   `{}` for photos and documents. Malformed results and processing failures
   fail the turn visibly rather than silently dropping the attachment.
 - `replyOperation` — optional, agent bots only. Takes `{response, via}` after
-  the agent completes and returns a non-empty string or `{text: "..."}`.
+  the agent completes and returns a non-empty string or `{text: "..."}`,
+  optionally with `parse_mode`, which then wins over `parseMode`.
   This is the application's place to render structured responses or remove
   internal UI notation for Telegram. The stored agent response is unchanged.
   Formatting failure reports an error; it never sends the raw response as a
   fallback. Normal Telegram text splitting, formatting and topic replies
-  still apply afterwards.
+  still apply afterwards. `v/ops/telegram/format` is the stock formatter:
+  it turns the agent's Markdown into Telegram HTML (headings as bold lines,
+  lists as bullet lines, tables as a monospaced block, raw HTML shown as
+  text) and returns `parse_mode: "HTML"`, so naming it is the whole setup.
+  An application with its own hook calls it after its own processing and
+  returns its text and `parse_mode`.
 
 Both hooks invoke ordinary Covia operation references as the bot owner, with
 normal Jobs, secret resolution and capability checks, and no turn timeout.
@@ -2114,10 +2122,13 @@ and anyone else needs a delegation from that user; `v/ops/telegram/call
 parameters (`sendPhoto`/`sendDocument` by `file_id` or URL, `editMessageText`,
 `deleteMessage`, `answerCallbackQuery`, `getChat`, …; `getUpdates`,
 `setWebhook`, `deleteWebhook`, `logOut`, `close` are refused as the venue's
-own update loop owns them) — gated on `telegram/call`; and
+own update loop owns them) — gated on `telegram/call`;
 `v/ops/telegram/bots` — the caller's bots
 with state (`STARTING`, `PENDING`, `RUNNING`, `STOPPED`), Telegram username,
-last error and counters, tokens never included. The module ships a lightweight
+last error and counters, tokens never included; and `v/ops/telegram/format
+{markdown}` — Markdown to Telegram HTML with `parse_mode: "HTML"`, read-only
+and ungated, as it touches no bot. Refused HTML is resent as the plain text
+it shows, never as its markup. The module ships a lightweight
 `telegram` agent skill (`v/skills/adapters/telegram`) for ordinary messaging
 and status. It reveals `telegram-bot-management` only when an agent needs to
 create, repair or delete a user-owned bot; that child in turn reveals the

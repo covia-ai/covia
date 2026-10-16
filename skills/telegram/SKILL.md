@@ -54,7 +54,7 @@ Walk the user through these steps; each is idempotent. Steps 1–3 are common; s
        Then tell it who is who as memory, not prompt surgery — as the bot's user: `grid_run operation=v/ops/memory input={"command": "remember", "text": "Telegram @mikera (id 648055019) is Mike, my owner."}` (memory is per user and pinned into every turn; the template trusts such a note only when `via.from` matches it). The module states facts (`via`), the venue states who submitted (attribution note), memory states who they are.
      - `"operation": "<ref>"` — every update invokes that operation with the **Telegram `Update` exactly as sent** (snake_case: `update.message.text`, `update.message.photo[].file_id`, `update.callback_query.data`, …) plus `bot`. For a deterministic target whose input is *not* an Update (a `sql/execute` insert, an HTTP webhook, a classify-then-store step) point it at a small **mapping op the user owns** — an orchestration (`/orchestrate create`), a pinned op — that takes the record and does the work; the same goes for logging messages somewhere (an op that appends to the path its metadata names). Operation handlers receive the SDK-decoded Telegram shape; delivery receipts are retained privately. `"reply": true` (default) sends the result rendered as text, `false` sends nothing, `"Recorded."` sends that fixed acknowledgement.
    - Leave `allow` empty for now; step 6 fills it. Do **not** set `"open": true` unless anyone on Telegram should be able to reach this handler (defensible for a bot whose operation is safe for strangers; dangerous for an agent with authority).
-   - Optional: `"parseMode": "Markdown"` for formatted replies, `"greeting": "…"` for `/start`.
+   - Optional: for an agent bot, `"replyOperation": "v/ops/telegram/format"` so the agent's Markdown arrives formatted (Telegram's own Markdown modes do not render a model's Markdown as written; the formatter's HTML parse mode wins over `parseMode`); `"greeting": "…"` for `/start`.
 
 5. **Check it came up:** `grid_run operation=v/ops/telegram/bots` → the bot should be `RUNNING` with its Telegram `username`. `PENDING` means it could not start — the `error` field says why (secret missing, bad token/401, API unreachable); it retries (2 s, then every 30 s), so fixing the cause is enough, no restart needed.
 
@@ -72,9 +72,12 @@ Return an object: `{}` passes an attachment through; optional non-empty `text`
 supplies transcription/extraction. Structured output is retained under
 `attachment.result`; it cannot replace original file references or provider metadata.
 There is no implicit speech provider. `replyOperation` optionally takes
-`{response, via}` and returns a non-empty string or `{text: "formatted reply"}`.
+`{response, via}` and returns a non-empty string or `{text: "formatted reply"}`,
+optionally with a `parse_mode` that wins over the bot's `parseMode`.
 Use it for application reply rendering; formatting failures never send raw
-application output as a fallback. Both hooks are normal operations without turn
+application output as a fallback. `v/ops/telegram/format` is the stock one:
+Markdown to Telegram HTML, returned with `parse_mode: "HTML"`; an application's
+own hook can call it after its own processing. Both hooks are normal operations without turn
 timeouts, persisted by runtime create and restored at boot. Operation handlers can use
 `telegram/download {bot?, file_id, destination?, fileName?}`. Both destination
 and fileName are optional: destination is a directory reference such as

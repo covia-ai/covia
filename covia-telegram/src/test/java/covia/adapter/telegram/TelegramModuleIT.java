@@ -39,6 +39,8 @@ class TelegramModuleIT {
 			"the Telegram client must be bundled");
 		assertTrue(containsPrefix(moduleJar, "okhttp3/"),
 			"the Telegram client's HTTP stack must be bundled");
+		assertTrue(containsPrefix(moduleJar, "org/commonmark/"),
+			"telegram:format's Markdown parser must be bundled");
 		Path log = temp.resolve("module-smoke.log");
 
 		String executable = System.getProperty("os.name", "").startsWith("Windows")

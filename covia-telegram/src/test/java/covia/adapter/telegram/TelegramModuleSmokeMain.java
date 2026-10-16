@@ -81,6 +81,16 @@ public final class TelegramModuleSmokeMain {
 				if (!status.toString().contains("RUNNING")) {
 					throw new AssertionError("Bot not RUNNING: " + status);
 				}
+
+				// Formatting: the Markdown parser loads from the module, not the venue.
+				Class<?> parser = Class.forName("org.commonmark.parser.Parser", false, loader);
+				if (parser.getClassLoader() != loader) {
+					throw new AssertionError("CommonMark leaked onto the venue classpath");
+				}
+				ACell formatted = run(engine, user, "v/ops/telegram/format", Maps.of("markdown", "**smoke**"));
+				if (!formatted.toString().contains("<b>smoke</b>")) {
+					throw new AssertionError("Bad format: " + formatted);
+				}
 				System.out.println("TELEGRAM_MODULE_SMOKE_OK");
 			} finally {
 				engine.close();

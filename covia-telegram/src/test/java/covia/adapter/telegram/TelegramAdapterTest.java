@@ -581,6 +581,39 @@ public class TelegramAdapterTest {
 	}
 
 	@Test
+	public void formatAsTheReplyHookSendsTheAgentsMarkdownAsTelegramHtml() throws Exception {
+		String token = "779:FORMAT-BOT";
+		telegram.registerBot(token, "format_bot");
+		run(RequestContext.of(OWNER), "v/ops/secret/set", Maps.of("name", "TG_FORMAT", "value", token));
+		// No parseMode: the formatter's own parse_mode is the whole setup.
+		run(RequestContext.of(OWNER), "v/ops/telegram/create", Maps.of("name", "formatted", "token", "s/TG_FORMAT", "agent", AGENT,
+			"allow", Vectors.of(ALLOWED_ID), "replyOperation", "v/ops/telegram/format"));
+		try {
+			BotRunner runner = adapter.runner(OWNER, "formatted");
+			await(() -> runner.state() == BotRunner.State.RUNNING, 10_000, () -> "formatted bot did not start");
+			// The echo agent repeats the message, Markdown and all.
+			telegram.push(token, ALLOWED_ID, "private", ALLOWED_ID, "alice", "**Bold** & <tag>");
+			var reply = telegram.awaitSent(token, 15_000);
+			assertNotNull(reply);
+			assertEquals(TelegramMarkdown.PARSE_MODE, reply.parseMode(), "sent under the parse mode the hook returned");
+			assertTrue(reply.text().contains("<b>Bold</b>"), reply.text());
+			TelegramMarkdownTest.assertTelegramHtml(reply.text());
+			await(() -> runner.isChatIdle(ALLOWED_ID), 10_000, () -> "reply did not finish");
+
+			// Telegram refuses the HTML: the resend is the words it shows, not its markup.
+			telegram.push(token, ALLOWED_ID, "private", ALLOWED_ID, "alice", "**Bold** " + FakeTelegramServer.BAD_MARKUP);
+			var plain = telegram.awaitSent(token, 15_000);
+			assertNotNull(plain);
+			assertEquals(null, plain.parseMode(), "resent without a parse mode");
+			assertTrue(plain.text().contains("Bold") && plain.text().contains(FakeTelegramServer.BAD_MARKUP), plain.text());
+			assertFalse(plain.text().contains("<b>"), "no markup in the plain resend: " + plain.text());
+			await(() -> runner.isChatIdle(ALLOWED_ID), 10_000, () -> "second reply did not finish");
+		} finally {
+			run(RequestContext.of(OWNER), "v/ops/telegram/delete", Maps.of("name", "formatted"));
+		}
+	}
+
+	@Test
 	public void pendingReceiptSurvivesRunnerRestartAndCompletedReceiptIsNotReplayed() throws Exception {
 		configureBots(Maps.empty());
 		var inbox = new covia.adapter.webhook.WebhookInbox(engine, engine.adapterWorkspace("telegram"), "config/echo/inbox/" + OWNER.getHash().toHexString() + "/42");
