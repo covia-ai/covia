@@ -16,6 +16,9 @@ and `message.im`. Enable the app's direct-message surface if needed. Invite
 the bot into each channel it will use. These subscriptions follow Slack's
 [mention](https://docs.slack.dev/reference/events/app_mention/) and
 [DM](https://docs.slack.dev/reference/events/message.im/) event contracts.
+For thread replies to continue an agent's conversation without a mention, also
+subscribe to `message.channels` with `channels:history` and, for private
+channels, `message.groups` with `groups:history`.
 
 Store the bot access token and app signing secret using `secret:set` as the
 binding's owner. Both settings require `s/NAME` references. Secret lookup has
@@ -122,11 +125,18 @@ with `open: true`. An admitted direct-message sender can receive an automatic
 reply in that DM. Explicit `slack:send` requires the destination channel,
 including DM channel IDs, in `allowChannels`.
 
-Channel conversations require an `app_mention` on each inbound turn, including
-thread replies. Other channel-message subscriptions are ignored to avoid
-handling one message as both `message` and `app_mention`. Edits, deletions,
-bot messages and self echoes do not trigger work. Channel replies stay in the
-originating thread; root mentions start a thread. DMs share a conversation
+A channel conversation starts with an `app_mention`. A root mention starts a
+thread, and replies stay in the originating thread. With `message.channels` or
+`message.groups` subscribed, a later reply in a thread the agent already holds
+continues the conversation without a mention. "Holds" means the agent has a
+stored session for the thread or a turn queued or running in it. The sender
+and the channel must still be admitted. Without those subscriptions, each
+channel turn needs a mention. A root channel message without a mention, or a
+reply in a thread the agent has not joined, is ignored, as are all thread
+replies for operation handlers. A message that does mention the bot arrives
+twice, as `app_mention` and as `message`, with different event IDs. Only the
+`app_mention` copy runs, so one message never executes twice. Edits,
+deletions, bot messages and self echoes do not trigger work. DMs share a conversation
 per channel, with separate conversations for explicitly threaded DMs. Slack
 timestamp IDs remain strings throughout.
 
@@ -136,6 +146,32 @@ channels are visible to other channel members. With `operation` instead of
 `agent`, the input is `{event_id, team_id, api_app_id, event}`. Legacy Slack
 verification tokens are not retained. `reply: false` makes operation handlers
 silent; a string supplies a fixed reply.
+
+## Agents
+
+The module publishes an agent template at `v/agents/templates/slack`. Agents
+made from it understand the `via` fields and that channel replies are public.
+They write plain text, which is how replies are sent. The template gives them
+`slack:send` and pins their memory into context. Choose the model when
+creating the agent, then bind it with `"agent"`. The binding's user must own
+the agent:
+
+```json
+{"agentId": "SlackAssistant",
+ "config": ["v/agents/templates/slack",
+            {"llmOperation": "v/ops/langchain/anthropic", "model": "claude-sonnet-5-5"}]}
+```
+
+Slack supplies user IDs, not names, so record who is who in the agent's
+memory, for example "Slack U0123ABC is Mike, my owner".
+
+Agents find Slack through two skills. `v/skills/adapters/slack` covers sending
+and the `via` fields. It reveals `slack-bot-management`, which covers creating,
+repairing and deleting bindings and in turn reveals the `secrets` skill.
+Reading Slack, such as channel history and user names, belongs to the separate
+`slack` connection skill. It calls the Web API with the owner's
+`s/SLACK_BOT_TOKEN` and needs extra app scopes. In Claude Code, operators use
+the `/slack` skill in `skills/slack`.
 
 ## Operations
 

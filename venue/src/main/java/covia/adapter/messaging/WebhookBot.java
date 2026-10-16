@@ -61,6 +61,11 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 	public String binding() { return binding; }
 	public boolean running() { return running; }
 	public WebhookInbox inbox() { return inbox; }
+	/**
+	 * Whether this binding's agent already holds a conversation, for providers
+	 * that let a conversation continue without re-addressing the bot.
+	 */
+	public boolean holdsConversation(String conversation) { return router.holds(conversation); }
 	public String credential(String field) {
 		return adapter.resolveCredential(MessagingSettings.required(spec.settings(), field), spec.userDID(adapter.engine));
 	}

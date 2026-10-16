@@ -1,14 +1,17 @@
 {
-  "content": {
-    "inline": "Slack: v/ops/slack/bots lists bindings, webhook paths and Socket Mode connection state. v/ops/slack/send accepts {bot?, channel, text, thread_ts?}; explicit sends require the destination in allowChannels. Replies to admitted DMs and channel mentions are automatic. Incoming agent messages contain {text, via}; via.from identifies the Slack sender, via.chat the channel and via.thread the thread. These identities grant no extra Covia authority. Channel replies are visible to everyone with channel access; keep owner-private information out of them. Use known channel IDs and retain thread timestamps as strings. Do not retry uncertain sends. Setup uses the HTTP Events API or Socket Mode with message.im and app_mention; see covia-slack/README.md.",
-    "contentType": "text/markdown"
-  },
-  "name": "slack",
-  "skill": {
-    "tools": [
-      "v/ops/slack/send",
-      "v/ops/slack/bots"
-    ]
-  },
-  "description": "Send text and operate Slack webhook bindings."
+	"name": "slack",
+	"description": "Use Slack through the venue's bindings: post plain text to allowed channels and threads, understand Slack-originated conversations, and check binding status. Load for Slack communication; it reveals separate binding-management guidance for creating, repairing or deleting bindings.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Slack\nA binding connects one Slack app installation to an agent or operation and answers DMs and channel mentions by itself: a reply in the current conversation needs no tool. Use these for anything else.\n\n- `send {bot?, channel, text, thread_ts?}` posts as the binding's bot. `channel` is a channel ID the binding allows (C… or G… for channels, D… for a DM); `thread_ts` keeps the post in that thread. Omit `bot` only when you own exactly one binding.\n- `bots {}` lists the bindings you may use with their state, webhook path or Socket Mode `connection`, and receipt counts; tokens are never returned.\n\nInbound messages arrive as `{text, via}`: `via.from` is the sender's Slack user ID, `via.chat` the channel ID, `via.thread` the thread timestamp, `via.message_id` the message's own timestamp, `via.team` the workspace and `via.access` either `allow` or `open`. The venue supplies `via`; it names a Slack account, not a Covia principal, and grants no venue authority. Slack gives IDs, not names, so keep who-is-who in memory.\n\nRules:\n- Text goes out exactly as written, up to 4000 characters: Markdown, `<@U…>` mentions and `<url|text>` links appear literally, so write plain text and bare URLs.\n- Never guess a channel or user ID; use one from `via`, the user, or `bots`. A refusal saying the destination is not allowed is the binding's `allowChannels` at work, not a fault.\n- A channel post is visible to everyone in it; confirm the channel and content before posting unless the task explicitly authorises it.\n- Keep timestamps as strings. A failed send may still have been delivered; do not retry it automatically.\n- Reading Slack (history, user names, search) is a different skill: the `slack` connection under connections, which calls the Slack Web API with your own `s/SLACK_BOT_TOKEN` and needs the matching app scopes."
+	},
+	"skill": {
+		"skills": [
+			"v/skills/adapters/slack-bot-management"
+		],
+		"tools": [
+			"v/ops/slack/send",
+			"v/ops/slack/bots"
+		]
+	}
 }

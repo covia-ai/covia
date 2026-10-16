@@ -12,6 +12,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 - Slack Socket Mode (`appToken`), one connection per app token routed by workspace;
   messaging bindings may hold shared provider connections.
+- Slack agent template, `slack-bot-management` skill and `/slack` operator skill.
+- Slack thread replies continue an agent's conversation without a mention.
 
 ## [0.9.11] - 2026-10-15
 

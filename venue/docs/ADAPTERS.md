@@ -467,6 +467,9 @@ must clean binding-owned inbox/checkpoint data in `deleteRuntimeState`.
 worker, fed by signed HTTP callbacks or a provider connection, used by the optional [WhatsApp](../../covia-whatsapp/README.md) and
 [Slack](../../covia-slack/README.md) modules. They require credential references,
 keep configuration private, and publish `send`, `create`, `delete` and `bots`.
+A module may also ship `/adapters/<name>/bot-management-skill.json`, published as
+`v/skills/adapters/<name>-bot-management` for its main skill to reveal, and
+`/agent-templates/<name>.json`, published as `v/agents/templates/<name>`.
 Providers implement validation, signed callback parsing, admission and sends.
 `MessagingHttp` uses a bounded response body, request/connection timeouts and
 no redirects or automatic send retries; none of these timeouts limits a Job.
@@ -536,7 +539,10 @@ Socket Mode. The remaining provider-specific extension points are:
   authenticates its connection with the app token. Slack balances an app's
   envelopes across all its connections, so bindings resolving to one app token
   share a connection and each event goes to every binding of its installation;
-  all bindings of an app should use the same token. Keep bot and app/signing credentials
+  all bindings of an app should use the same token. A channel conversation
+  starts with a mention; an un-mentioned reply continues only a thread the
+  agent already holds (`WebhookBot.holdsConversation`), and the `message` copy
+  of a mention is skipped in favour of its `app_mention`. Keep bot and app/signing credentials
   distinct. Deduplicate Events API `event_id`; the Socket Mode `envelope_id`
   belongs to acknowledgement. Use installation + channel + thread for channel
   conversations and an explicit per-DM policy. Preserve timestamp IDs as strings,

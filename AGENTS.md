@@ -56,6 +56,7 @@ covia/                          # ai.covia:covia (parent POM)
 │   ├── workspace/              #   Browse/read/write lattice data
 │   ├── secret/                 #   Manage API keys and credentials
 │   ├── telegram/               #   Connect a venue to Telegram (bots → agents, send, allow-list)
+│   ├── slack/                  #   Connect a venue to Slack (Socket Mode or Events API → agents, send)
 │   ├── federation/             #   Cross-venue grid operations
 │   ├── hitl/                   #   Human-in-the-Loop requests (send, respond, teach agents, test)
 │   └── ucan/                   #   Capability token management

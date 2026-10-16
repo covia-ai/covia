@@ -6,6 +6,7 @@ import static covia.adapter.slack.SlackAdapterTest.spec;
 import static covia.adapter.slack.TestSupport.*;
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
@@ -14,15 +15,18 @@ import org.junit.jupiter.api.Test;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.adapter.messaging.MessagingHttp;
 import covia.adapter.messaging.MessagingSettings;
 import covia.adapter.messaging.WebhookBot;
 import covia.adapter.webhook.WebhookInbox;
 import covia.api.Fields;
+import covia.venue.RequestContext;
 import io.javalin.websocket.WsContext;
 
 class SlackSocketModeTest {
@@ -236,6 +240,34 @@ class SlackSocketModeTest {
 			assertNotNull(f.bot().inbox().get("both")); assertNotNull(f.adapter.runner("echo").inbox().get("both"));
 			var replies = Set.of(f.api.take().body().get(Fields.TEXT), f.api.take().body().get(Fields.TEXT));
 			assertEquals(Set.of(Strings.create("ack"), Strings.create("echo")), replies);
+		}
+	}
+
+	@Test void anAgentFromTheModuleTemplateAnswersOverSocketMode() throws Exception {
+		var agentSpec = socketSpec().dissoc(Strings.intern("operation")).dissoc(Strings.intern("reply")).assoc(Strings.intern("agent"), Strings.create("slack-templated"));
+		try (FakeSocket socket = new FakeSocket(); Fixture f = new Fixture(agentSpec, socket.url())) {
+			RequestContext owner = RequestContext.of(OWNER);
+			ACell cfg = RT.getIn(f.engine.resolvePath(Strings.create("v/agents/templates/slack"), owner), "agent", "config");
+			assertTrue(RT.getIn(cfg, "systemPrompt").toString().contains("via.from"), "the prompt teaches via");
+			assertTrue(RT.getIn(cfg, "systemPrompt").toString().contains("plain text"), "the prompt asks for plain text");
+			assertEquals(Vectors.of(Strings.create("w/skills"), Strings.create("v/skills/root")), RT.getIn(cfg, "skillsets"));
+			// Every tool and revealed skill in the template and the skill hierarchy resolves.
+			ACell skill = f.engine.resolvePath(Strings.create("v/skills/adapters/slack"), owner);
+			ACell management = f.engine.resolvePath(Strings.create("v/skills/adapters/slack-bot-management"), owner);
+			assertEquals(Vectors.of(Strings.create("v/skills/adapters/slack-bot-management")), RT.getIn(skill, "skill", "skills"));
+			List<AVector<ACell>> refs = List.of(RT.ensureVector(RT.getIn(cfg, "tools")), RT.ensureVector(RT.getIn(skill, "skill", "tools")),
+				RT.ensureVector(RT.getIn(management, "skill", "tools")), RT.ensureVector(RT.getIn(management, "skill", "skills")));
+			for (AVector<ACell> paths : refs) for (ACell path : paths) assertNotNull(f.engine.resolvePath((AString) path, owner), "unresolved " + path);
+			// An assistant from the template, with the echoing test LLM, answers a DM through the binding.
+			TestSupport.run(f.engine, OWNER, "v/ops/agent/create", Maps.of(Fields.AGENT_ID, "slack-templated",
+				Fields.CONFIG, Vectors.of(Strings.create("v/agents/templates/slack"), Maps.of("llmOperation", "v/test/ops/llm"))));
+			var dm = Maps.of("type", "message", "channel_type", "im", "channel", "D123", "user", "UALICE", "ts", "4.1", "text", "hello template");
+			socket.connected().send(envelope("e-agent", payload("agent-turn", dm)));
+			assertEquals(ack("e-agent"), socket.ack());
+			var reply = f.api.sends.poll(20, TimeUnit.SECONDS);
+			assertNotNull(reply, "the templated agent answers through the binding");
+			assertEquals(Strings.create("D123"), reply.body().get(Strings.intern("channel")));
+			assertTrue(reply.body().get(Fields.TEXT).toString().contains("hello template"), reply.body().toString());
 		}
 	}
 

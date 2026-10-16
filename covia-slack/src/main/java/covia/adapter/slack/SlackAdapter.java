@@ -66,12 +66,18 @@ public final class SlackAdapter extends AWebhookMessagingAdapter<BotSpec> {
 		if (!bot.spec().allowsUser(user) || bot.spec().botUserId().equals(user)) return true;
 		String channel = MessagingSettings.id(event, "channel", BotSpec.CHANNEL_ID);
 		boolean dm = "im".equals(MessagingSettings.optional(event, "channel_type")) && channel.startsWith("D");
-		// Subscribe to message.im and app_mention. Other channel message subscriptions
-		// are ignored so the same mention cannot execute twice under two event IDs.
-		if (!(dm && eventType.equals("message")) && !(eventType.equals("app_mention") && !channel.startsWith("D") && bot.spec().allowsChannel(channel))) return true;
-		String ts = MessagingSettings.id(event, "ts", BotSpec.TIMESTAMP);
+		boolean channelTurn = !channel.startsWith("D") && bot.spec().allowsChannel(channel);
 		String thread = MessagingSettings.optional(event, "thread_ts");
 		if (thread != null) MessagingSettings.id(event, "thread_ts", BotSpec.TIMESTAMP);
+		// DMs arrive as message.im and channel mentions as app_mention. With message.channels
+		// (or message.groups) subscribed, a reply in a thread the agent already holds continues
+		// without a mention. A message that does mention the bot also arrives as app_mention
+		// under another event ID; only that copy runs, so one message never executes twice.
+		boolean continuation = eventType.equals("message") && channelTurn && thread != null
+			&& !String.valueOf(event.get(MessagingSettings.key("text"))).contains("<@" + bot.spec().botUserId() + ">")
+			&& bot.holdsConversation(ConversationRouter.key(bot.spec().installationKey(), channel, thread));
+		if (!(dm && eventType.equals("message")) && !(eventType.equals("app_mention") && channelTurn) && !continuation) return true;
+		String ts = MessagingSettings.id(event, "ts", BotSpec.TIMESTAMP);
 		if (!dm && thread == null) thread = ts;
 		String text = MessagingSettings.required(event, "text");
 		if (eventType.equals("app_mention")) text = text.replace("<@" + bot.spec().botUserId() + ">", "").strip();

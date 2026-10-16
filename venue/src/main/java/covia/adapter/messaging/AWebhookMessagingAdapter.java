@@ -62,11 +62,22 @@ public abstract class AWebhookMessagingAdapter<S extends WebhookBotSpec>
 	@Override public final AMap<AString, ACell> publicConfig() { return Maps.empty(); }
 	@Override protected final WebhookBot<S> newBot(S spec, Managed managed) { return new WebhookBot<>(this, spec, managed); }
 	@Override protected final boolean configurationMatches(WebhookBot<S> runner) { return true; }
+	/**
+	 * Publishes the four operations and the provider skill. A provider may also
+	 * ship {@code /adapters/<name>/bot-management-skill.json}, published as the
+	 * skill {@code adapters/<name>-bot-management} for its main skill to reveal,
+	 * and {@code /agent-templates/<name>.json}, published as the agent template
+	 * {@code v/agents/templates/<name>}.
+	 */
 	@Override protected final void installAssets() {
 		for (String op : new String[] { "send", "create", "delete", "bots" }) {
 			installAsset(getName() + "/" + op, "/adapters/" + getName() + "/" + op + ".json");
 		}
 		installSkill("adapters/" + getName(), "/adapters/" + getName() + "/skill.json");
+		String management = "/adapters/" + getName() + "/bot-management-skill.json";
+		if (getClass().getResource(management) != null) installSkill("adapters/" + getName() + "-bot-management", management);
+		String template = "/agent-templates/" + getName() + ".json";
+		if (getClass().getResource(template) != null) installAgentTemplate(getName(), template);
 	}
 	@Override protected final void deleteRuntimeState(RequestContext ctx, String name) {
 		state().delete(userStatePath(ctx.getUserDID(), "inbox/" + name));

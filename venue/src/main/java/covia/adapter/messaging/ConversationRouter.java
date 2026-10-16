@@ -64,6 +64,11 @@ public final class ConversationRouter {
 		return tail == null || tail.isDone();
 	}
 
+	/** Whether the agent already holds this conversation: a stored session, or a turn queued or running. */
+	public boolean holds(String conversation) {
+		return spec.routesToAgent() && (!isIdle(conversation) || sessions.get(conversation) != null);
+	}
+
 	/** Call within this conversation's queued turn. */
 	public ACell chat(String conversation, ACell message) {
 		String sid = sessions.get(conversation);

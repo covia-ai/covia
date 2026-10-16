@@ -116,6 +116,49 @@ class SlackAdapterTest {
 			assertNull(dmReply.body().get(Strings.intern("thread_ts")));
 		}
 	}
+	@Test void unmentionedRepliesContinueOnlyThreadsTheAgentHolds() throws Exception {
+		var agentSpec = spec().dissoc(Strings.intern("operation")).dissoc(Strings.intern("reply")).assoc(Strings.intern("agent"), Strings.create("test-agent"));
+		try (Fixture f = new Fixture(agentSpec)) {
+			FakeAgent agent = new FakeAgent(); agent.blocked = new CompletableFuture<>(); f.engine.registerAdapter(agent);
+			assertEquals(200, f.webhook(payload("root", event("1.1"))).status());
+			assertNotNull(agent.inputs.poll(5, TimeUnit.SECONDS));
+			// While the first turn is still running, an un-mentioned reply in its thread is held for that conversation.
+			var reply = Maps.of("type", "message", "channel_type", "channel", "channel", "C123", "user", "UALICE", "ts", "1.2", "thread_ts", "1.1", "text", "and then?");
+			assertEquals(200, f.webhook(payload("in-flight", reply)).status());
+			assertNotNull(f.bot().inbox().get("in-flight"));
+			agent.blocked.complete(Maps.of(Fields.SESSION_ID, "session-1", Fields.RESPONSE, "first"));
+			f.api.take(); f.api.take();
+			awaitStatus(f.bot(), "in-flight", WebhookInbox.COMPLETE);
+			var continued = agent.inputs.poll(5, TimeUnit.SECONDS);
+			assertEquals(Strings.create("session-1"), continued.get(Fields.SESSION_ID));
+			assertEquals(Strings.create("and then?"), RT.getIn(continued, Fields.MESSAGE, Fields.TEXT));
+			// With the session stored, later replies continue too, threaded under the root.
+			agent.blocked = null;
+			assertEquals(200, f.webhook(payload("later", reply.assoc(Strings.intern("ts"), Strings.create("1.3")))).status());
+			assertEquals(Strings.create("1.1"), f.api.take().body().get(Strings.intern("thread_ts")));
+			awaitStatus(f.bot(), "later", WebhookInbox.COMPLETE);
+			// The message copy of a mention is skipped; its app_mention copy runs it.
+			f.webhook(payload("mention-copy", reply.assoc(Strings.intern("ts"), Strings.create("1.4")).assoc(Fields.TEXT, Strings.create("<@UBOT> again"))));
+			// Elsewhere an un-mentioned message is ignored: a thread the agent never joined, a root
+			// message, a channel the binding does not allow, and a sender it does not admit.
+			f.webhook(payload("unjoined", reply.assoc(Strings.intern("thread_ts"), Strings.create("9.9")).assoc(Strings.intern("ts"), Strings.create("9.10"))));
+			f.webhook(payload("root-message", reply.dissoc(Strings.intern("thread_ts")).assoc(Strings.intern("ts"), Strings.create("1.5"))));
+			f.webhook(payload("other-channel", reply.assoc(Strings.intern("channel"), Strings.create("COTHER"))));
+			f.webhook(payload("stranger", reply.assoc(Strings.intern("user"), Strings.create("UMALLORY"))));
+			for (String id : new String[] {"mention-copy", "unjoined", "root-message", "other-channel", "stranger"}) assertNull(f.bot().inbox().get(id), id);
+			assertNull(f.api.sends.poll(150, TimeUnit.MILLISECONDS));
+		}
+	}
+	@Test void operationHandlersStillNeedAMentionInThreads() throws Exception {
+		try (Fixture f = new Fixture(spec())) {
+			assertEquals(200, f.webhook(payload("root", event("1.1"))).status());
+			f.api.take(); awaitStatus(f.bot(), "root", WebhookInbox.COMPLETE);
+			var reply = Maps.of("type", "message", "channel_type", "channel", "channel", "C123", "user", "UALICE", "ts", "1.2", "thread_ts", "1.1", "text", "and then?");
+			assertEquals(200, f.webhook(payload("reply", reply)).status());
+			assertNull(f.bot().inbox().get("reply"));
+			assertNull(f.api.sends.poll(150, TimeUnit.MILLISECONDS));
+		}
+	}
 	@Test void explicitSendsNeedOwnerAndChannelAuthorityAndCannotInjectMentions() throws Exception {
 		try (Fixture f = new Fixture(spec())) {
 			assertThrows(Exception.class, () -> run(f.engine, OTHER, "v/ops/slack/send", Maps.of("bot", "main", "channel", "C123", "text", "x")));
