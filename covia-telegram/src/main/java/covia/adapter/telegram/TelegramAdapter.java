@@ -73,6 +73,11 @@ import covia.venue.RequestContext;
  *   <li>{@code telegram:bots} — status of the caller's bots (all bots for the
  *       venue identity), with {@code managed: config | runtime}. Tokens are
  *       never returned.</li>
+ *   <li>{@code telegram:format} — Markdown, as a model writes it, to the HTML
+ *       Telegram accepts ({@link TelegramMarkdown}). A pure, read-only
+ *       conversion with no bot involved: an agent bot uses it as its
+ *       {@code replyOperation} with {@code parseMode: "HTML"}, and an
+ *       application's own reply hook calls it after its own processing.</li>
  * </ul>
  *
  * <p>Tokens are {@code s/NAME} secret references resolved in the bot user's
@@ -139,6 +144,7 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 		installAsset("telegram/create", "/adapters/telegram/create.json");
 		installAsset("telegram/delete", "/adapters/telegram/delete.json");
 		installAsset("telegram/bots", "/adapters/telegram/bots.json");
+		installAsset("telegram/format", "/adapters/telegram/format.json");
 		// The skills travel with the capability: ordinary Telegram use stays
 		// lightweight, while the parent reveals bot-management authority on demand.
 		installSkill("adapters/telegram", "/adapters/telegram/skill.json");
@@ -247,8 +253,44 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 			case "create" -> CompletableFuture.supplyAsync(() -> handleCreate(ctx, input), VIRTUAL_EXECUTOR);
 			case "delete" -> CompletableFuture.supplyAsync(() -> handleDelete(ctx, input), VIRTUAL_EXECUTOR);
 			case "bots" -> CompletableFuture.supplyAsync(() -> handleBots(ctx), VIRTUAL_EXECUTOR);
+			case "format" -> CompletableFuture.supplyAsync(() -> handleFormat(input), VIRTUAL_EXECUTOR);
 			default -> throw new UnsupportedOperationException("Unsupported telegram operation: " + subOp);
 		};
+	}
+
+	/** Where {@code telegram:format} reads its Markdown, before {@code text} and the
+	 *  reply hook's {@code response}. */
+	static final AString K_MARKDOWN = Strings.intern("markdown");
+	/** {@code telegram:format} given nothing to convert. */
+	public static final String NOTHING_TO_FORMAT =
+		"format expects markdown or text, or a reply hook's {response, via}";
+
+	/**
+	 * {@code telegram:format}: Markdown to Telegram HTML ({@link TelegramMarkdown}).
+	 * Takes a string, {@code {markdown}}, {@code {text}}, or the reply hook's own
+	 * input {@code {response, via}}, whose response is read as the adapter reads
+	 * any agent reply ({@link ConversationRouter#responseText}). Returns
+	 * {@code {text, parse_mode: "HTML"}}: the hook's reply reads {@code text}, and
+	 * the bot sends it under its own {@code parseMode}, which must be {@code HTML}.
+	 */
+	static ACell handleFormat(ACell input) {
+		String markdown = formatSource(input);
+		if (markdown == null || markdown.isBlank()) throw new IllegalArgumentException(NOTHING_TO_FORMAT);
+		String html = TelegramMarkdown.toHtml(markdown);
+		// Markdown that renders to nothing (an empty link, say) is sent as its own text.
+		if (html.isBlank()) html = TelegramMarkdown.escape(markdown.strip());
+		return Maps.of(Fields.TEXT, Strings.create(html),
+			Strings.create(K_PARSE_MODE_PARAM), Strings.create(TelegramMarkdown.PARSE_MODE));
+	}
+
+	private static String formatSource(ACell input) {
+		if (input instanceof AString s) return s.toString();
+		AMap<AString, ACell> in = RT.ensureMap(input);
+		if (in == null) return null;
+		if (in.get(K_MARKDOWN) instanceof AString s) return s.toString();
+		if (in.get(Fields.TEXT) instanceof AString s) return s.toString();
+		if (in.containsKey(Fields.RESPONSE)) return ConversationRouter.responseText(in.get(Fields.RESPONSE));
+		return null;
 	}
 
 	/**

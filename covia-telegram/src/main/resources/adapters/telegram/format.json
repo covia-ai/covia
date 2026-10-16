@@ -1,0 +1,26 @@
+{
+	"name": "Format Markdown for Telegram",
+	"description": "Converts Markdown, as a model writes it, into the HTML Telegram accepts, for sending with parse_mode HTML. Telegram's HTML has only bold, italic, underline, strikethrough, links, code, pre and blockquote, so headings become bold lines, list items bullet or numbered lines, tables a monospaced block and rules a line of dashes; raw HTML in the source is shown as text, and links Telegram cannot open keep their text only. Soft line breaks stay newlines. Takes a string, {markdown}, {text}, or a reply hook's own {response, via}; returns {text, parse_mode: \"HTML\"}. To format an agent bot's replies, create it with \"replyOperation\": \"v/ops/telegram/format\" and \"parseMode\": \"HTML\"; an application with its own replyOperation calls this after its own processing and returns the text. Inline formatting survives the adapter's split of a long reply, which prefers a line break; a code block or quote that spans the split arrives as plain text in that part. A pure conversion: no bot, no ability and no job record.",
+	"operation": {
+		"adapter": "telegram:format",
+		"readOnly": true,
+		"activityLabel": "Formatting for Telegram",
+		"input": {
+			"type": "object",
+			"properties": {
+				"markdown": { "type": "string", "description": "The Markdown to convert" },
+				"text": { "type": "string", "description": "The Markdown to convert, when markdown is absent" },
+				"response": { "description": "A reply hook's agent response: a string, or a map read for text, response, content, message or result, as the adapter reads any reply" },
+				"via": { "type": "object", "description": "A reply hook's context; not used" }
+			},
+			"additionalProperties": true
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"text": { "type": "string", "description": "Telegram HTML" },
+				"parse_mode": { "type": "string", "description": "Always HTML: the parse_mode the text is sent under" }
+			}
+		}
+	}
+}

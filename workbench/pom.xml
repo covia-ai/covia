@@ -11,7 +11,6 @@
 
   <properties>
     <flatlaf.version>3.7.2</flatlaf.version>
-    <commonmark.version>0.30.1</commonmark.version>
   </properties>
   
   <dependencies>

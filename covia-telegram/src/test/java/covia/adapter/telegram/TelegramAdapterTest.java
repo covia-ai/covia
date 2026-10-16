@@ -581,6 +581,29 @@ public class TelegramAdapterTest {
 	}
 
 	@Test
+	public void formatAsTheReplyHookSendsTheAgentsMarkdownAsTelegramHtml() throws Exception {
+		String token = "779:FORMAT-BOT";
+		telegram.registerBot(token, "format_bot");
+		run(RequestContext.of(OWNER), "v/ops/secret/set", Maps.of("name", "TG_FORMAT", "value", token));
+		run(RequestContext.of(OWNER), "v/ops/telegram/create", Maps.of("name", "formatted", "token", "s/TG_FORMAT", "agent", AGENT,
+			"allow", Vectors.of(ALLOWED_ID), "replyOperation", "v/ops/telegram/format", "parseMode", TelegramMarkdown.PARSE_MODE));
+		try {
+			BotRunner runner = adapter.runner(OWNER, "formatted");
+			await(() -> runner.state() == BotRunner.State.RUNNING, 10_000, () -> "formatted bot did not start");
+			// The echo agent repeats the message, Markdown and all.
+			telegram.push(token, ALLOWED_ID, "private", ALLOWED_ID, "alice", "**Bold** & <tag>");
+			var reply = telegram.awaitSent(token, 15_000);
+			assertNotNull(reply);
+			assertEquals(TelegramMarkdown.PARSE_MODE, reply.parseMode(), "sent under the bot's parse mode");
+			assertTrue(reply.text().contains("<b>Bold</b>"), reply.text());
+			TelegramMarkdownTest.assertTelegramHtml(reply.text());
+			await(() -> runner.isChatIdle(ALLOWED_ID), 10_000, () -> "reply did not finish");
+		} finally {
+			run(RequestContext.of(OWNER), "v/ops/telegram/delete", Maps.of("name", "formatted"));
+		}
+	}
+
+	@Test
 	public void pendingReceiptSurvivesRunnerRestartAndCompletedReceiptIsNotReplayed() throws Exception {
 		configureBots(Maps.empty());
 		var inbox = new covia.adapter.webhook.WebhookInbox(engine, engine.adapterWorkspace("telegram"), "config/echo/inbox/" + OWNER.getHash().toHexString() + "/42");

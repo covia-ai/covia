@@ -2046,7 +2046,9 @@ Per bot:
   add it). `open: true` admits anyone — appropriate only for a bot whose
   target is safe for the public.
 - `parseMode` — `Markdown`, `MarkdownV2` or `HTML` for replies; omit for
-  plain text. Markup Telegram rejects is resent as plain text.
+  plain text. Markup Telegram rejects is resent as plain text. None of the
+  three renders an agent's Markdown as written; for an agent bot use `HTML`
+  with `replyOperation: "v/ops/telegram/format"`.
 - `greeting` — the `/start` reply (default names the agent and venue).
 - `mediaOperation` — optional, agent bots only. Runs once per downloaded
   attachment as the bot owner. Input is the attachment descriptor plus
@@ -2065,7 +2067,11 @@ Per bot:
   internal UI notation for Telegram. The stored agent response is unchanged.
   Formatting failure reports an error; it never sends the raw response as a
   fallback. Normal Telegram text splitting, formatting and topic replies
-  still apply afterwards.
+  still apply afterwards. `v/ops/telegram/format` is the stock formatter:
+  it turns the agent's Markdown into Telegram HTML (headings as bold lines,
+  lists as bullet lines, tables as a monospaced block, raw HTML shown as
+  text), for `parseMode: "HTML"`. An application with its own hook calls it
+  after its own processing and returns the text.
 
 Both hooks invoke ordinary Covia operation references as the bot owner, with
 normal Jobs, secret resolution and capability checks, and no turn timeout.

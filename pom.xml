@@ -54,6 +54,9 @@
 		<langchain.version>1.22.0</langchain.version>
 		<mcp.version>2.0.1</mcp.version>
 		<a2a.version>1.4.0.Final</a2a.version>
+		<!-- CommonMark: the workbench's Markdown renderer and the Telegram
+		     module's Markdown to Telegram HTML conversion. -->
+		<commonmark.version>0.30.1</commonmark.version>
 		<!-- Flags for every forked test JVM (surefire and failsafe; modules with
 		     their own argLine splice this in). JDK 24+ warns once per JVM when a
 		     library touches sun.misc.Unsafe memory access (JEP 471); protobuf-java
