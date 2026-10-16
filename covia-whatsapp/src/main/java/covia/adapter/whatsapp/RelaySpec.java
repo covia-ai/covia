@@ -15,12 +15,13 @@ import covia.adapter.messaging.MessagingSettings;
 /** One relayed WhatsApp Cloud API number, as operator configuration declares it. */
 record RelaySpec(String name, AString user, String token, String appSecret, String verifyToken,
 		String businessAccountId, String phoneNumberId, String apiVersion, String number,
-		int holdSeconds, String admit, String charge, Map<String, String> notices) {
+		int holdSeconds, int maxParts, String admit, String charge, Map<String, String> notices) {
 
 	static final Set<String> FIELDS = Set.of("user", "token", "appSecret", "verifyToken", "businessAccountId",
-		"phoneNumberId", "apiVersion", "number", "holdSeconds", "admit", "charge", "notices");
+		"phoneNumberId", "apiVersion", "number", "holdSeconds", "maxParts", "admit", "charge", "notices");
 	static final Set<String> CREDENTIALS = Set.of("token", "appSecret", "verifyToken");
 	static final String HOLD = "holdSeconds must be an integer from 0 to 86400";
+	static final String MAX_PARTS = "maxParts must be an integer from 1 to 100";
 	static final String NOTICES = "notices must map known notice names to non-empty strings";
 	static final String INVALID_NAME = "Relay name must match [A-Za-z0-9_-]+";
 
@@ -53,6 +54,13 @@ record RelaySpec(String name, AString user, String token, String appSecret, Stri
 			if (h == null || h.longValue() < 0 || h.longValue() > 86_400) throw new IllegalArgumentException(HOLD);
 			hold = (int) h.longValue();
 		}
+		int maxParts = 10;
+		ACell partsCell = map.get(MessagingSettings.key("maxParts"));
+		if (partsCell != null) {
+			CVMLong p = RT.ensureLong(partsCell);
+			if (p == null || p.longValue() < 1 || p.longValue() > 100) throw new IllegalArgumentException(MAX_PARTS);
+			maxParts = (int) p.longValue();
+		}
 		Map<String, String> notices = new HashMap<>(DEFAULT_NOTICES);
 		ACell noticeCell = map.get(MessagingSettings.key("notices"));
 		if (noticeCell != null) {
@@ -74,6 +82,7 @@ record RelaySpec(String name, AString user, String token, String appSecret, Stri
 			MessagingSettings.id(map, "apiVersion", "v[0-9]+\\.[0-9]+"),
 			MessagingSettings.id(map, "number", "[0-9]{5,20}"),
 			hold,
+			maxParts,
 			MessagingSettings.optional(map, "admit"),
 			MessagingSettings.optional(map, "charge"),
 			Map.copyOf(notices));

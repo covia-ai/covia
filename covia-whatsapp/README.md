@@ -133,6 +133,7 @@ Only links are stored: messages wait in memory and are never written to the venu
           "apiVersion": "v25.0",
           "number": "447700900000",
           "holdSeconds": 60,
+          "maxParts": 10,
           "admit": "v/ops/your-adapter/admit",
           "charge": "v/ops/your-adapter/charge"
         }
@@ -157,8 +158,10 @@ self-issued DID JWT is enough; no venue user is created):
 
 A text from a linked number goes to that principal's poll. A principal counts as open
 while it has a poll waiting or polled in the last minute; with `holdSeconds` at 60 or
-less, a message for a principal that is not open is refused and the sender told so;
-a longer hold keeps it in memory that long. `STOP` from the phone unlinks; a number
+less (the default, meaning only while the principal is open), a message for a principal
+that is not open is refused and the sender told so; a longer hold keeps it in memory
+that long. A reply longer than `maxParts` messages (default 10, at most 100) is refused
+with `too_long`, so a principal cannot make the hub send without limit. `STOP` from the phone unlinks; a number
 that is not linked is told how to link; non-text messages get a short notice. The
 hub's own replies are the relay's `notices` (`linked`, `unlinked`, `notLinked`,
 `codeUnknown`, `notOpen`, `held`, `textOnly`, `notAvailable`), each overridable.

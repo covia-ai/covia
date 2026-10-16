@@ -192,6 +192,33 @@ class WhatsAppRelayAdapterTest {
 		}
 	}
 
+	@Test void aReplyLongerThanTheCapSendsNothing() throws Exception {
+		try (Relay r = new Relay(Maps.of("maxParts", 1))) {
+			r.link(ALICE);
+			CompletableFuture<WebhookResponse> polling = r.pollAsync(ALICE, 8_000);
+			Thread.sleep(100);
+			r.text(PHONE, "wamid.long", "Tell me everything");
+			polling.get(8, TimeUnit.SECONDS);
+			String answer = "a ".repeat(3_000);   // two parts, over the cap of one
+			AMap<AString, ACell> refused = r.call(ALICE, "reply", "{\"message_id\":\"wamid.long\",\"text\":\"" + answer + "\"}");
+			assertEquals(400, status(refused));
+			assertEquals("too_long", str(refused, "error"));
+			assertNull(r.api.sends.poll(300, TimeUnit.MILLISECONDS), "nothing is sent");
+			assertEquals(200, status(r.call(ALICE, "reply", "{\"message_id\":\"wamid.long\",\"text\":\"short\"}")),
+				"and the message can still be answered");
+		}
+	}
+
+	@Test void rateLimitWindowsStayBoundedWhateverSendersArrive() {
+		WhatsAppRelayAdapter.Windows windows = new WhatsAppRelayAdapter.Windows();
+		for (int i = 0; i < WhatsAppRelayAdapter.Windows.MAX_KEYS + 500; i++) {
+			assertTrue(windows.allow("notice:main:" + i, 1, 60_000L));
+		}
+		assertTrue(windows.size() <= WhatsAppRelayAdapter.Windows.MAX_KEYS);
+		assertFalse(windows.allow("notice:main:" + (WhatsAppRelayAdapter.Windows.MAX_KEYS + 499), 1, 60_000L),
+			"a recent key keeps its count");
+	}
+
 	@Test void malformedRelaySettingsAreRefused() {
 		assertThrows(IllegalArgumentException.class, () -> RelaySpec.parse("main", Maps.of("user", OWNER, "token", "plain-token",
 			"appSecret", "s/SIGNING", "verifyToken", "s/VERIFY", "businessAccountId", "123", "phoneNumberId", "456",

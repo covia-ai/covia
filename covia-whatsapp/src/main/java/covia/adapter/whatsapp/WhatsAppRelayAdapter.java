@@ -4,7 +4,6 @@ import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -83,6 +82,9 @@ public final class WhatsAppRelayAdapter extends AAdapter implements WebhookHandl
 	private volatile Map<String, RelaySpec> specs = Map.of();
 	private final Map<String, MessageRelay> cores = new ConcurrentHashMap<>();
 	private final Windows limits = new Windows();
+	/** Whether each relay's credentials resolve, rechecked at most this often: polls ask every few seconds. */
+	private static final long READY_CACHE_MS = 30_000L;
+	private final Map<String, long[]> readiness = new ConcurrentHashMap<>();
 
 	public WhatsAppRelayAdapter() { this(Clock.systemUTC()); }
 
@@ -114,6 +116,7 @@ public final class WhatsAppRelayAdapter extends AAdapter implements WebhookHandl
 		specs = Map.copyOf(parsed);
 		for (MessageRelay core : cores.values()) core.close();
 		cores.clear();
+		readiness.clear();
 		return true;
 	}
 
@@ -289,23 +292,31 @@ public final class WhatsAppRelayAdapter extends AAdapter implements WebhookHandl
 	}
 
 	private CompletableFuture<WebhookResponse> link(RelaySpec spec, MessageRelay core, AString caller) {
-		Admission a = admit(spec, caller);
-		if (!a.allowed()) return done(error(403, a.code()));
 		if (!limits.allow("link:" + spec.name() + ":" + caller, 10, 60_000L)) return done(error(429, "rate_limited"));
-		String code = core.newCode(caller);
-		return done(json(200, Maps.of("code", code, "number", spec.number(),
-			"link", "https://wa.me/" + spec.number() + "?text=LINK%20" + code,
-			"expires_in", CVMLong.create(MessageRelay.CODE_TTL_MS / 1000))));
+		// The admission hook may be slow: never on the request thread.
+		return CompletableFuture.supplyAsync(() -> {
+			Admission a = admit(spec, caller);
+			if (!a.allowed()) return error(403, a.code());
+			String code = core.newCode(caller);
+			return json(200, Maps.of("code", code, "number", spec.number(),
+				"link", "https://wa.me/" + spec.number() + "?text=LINK%20" + code,
+				"expires_in", CVMLong.create(MessageRelay.CODE_TTL_MS / 1000)));
+		}, VIRTUAL_EXECUTOR);
 	}
 
 	private CompletableFuture<WebhookResponse> poll(RelaySpec spec, MessageRelay core, AString caller, WebhookRequest request) {
-		Admission a = admit(spec, caller);
-		if (!a.allowed()) return done(error(403, a.code()));
 		if (!limits.allow("poll:" + spec.name() + ":" + caller, 60, 60_000L)) return done(error(429, "rate_limited"));
-		long wait = MAX_WAIT_MS;
 		AMap<AString, ACell> body = body(request);
 		CVMLong asked = body == null ? null : RT.ensureLong(body.get(MessagingSettings.key("wait_ms")));
-		if (asked != null) wait = Math.max(0, Math.min(MAX_WAIT_MS, asked.longValue()));
+		long wait = asked == null ? MAX_WAIT_MS : Math.max(0, Math.min(MAX_WAIT_MS, asked.longValue()));
+		// Admission first, off the request thread; then the poll's own future holds the response.
+		return CompletableFuture.supplyAsync(() -> admit(spec, caller), VIRTUAL_EXECUTOR).thenCompose(a -> {
+			if (!a.allowed()) return done(error(403, a.code()));
+			return pollAdmitted(core, caller, wait);
+		});
+	}
+
+	private CompletableFuture<WebhookResponse> pollAdmitted(MessageRelay core, AString caller, long wait) {
 		return core.poll(caller, wait).thenApply(messages -> {
 			List<ACell> out = new ArrayList<>();
 			for (MessageRelay.Inbound m : messages) {
@@ -324,10 +335,11 @@ public final class WhatsAppRelayAdapter extends AAdapter implements WebhookHandl
 		MessageRelay.Target target = core.target(messageId);
 		if (target == null || !target.principal().equals(caller)) return done(error(404, "unknown_message"));
 		if (!limits.allow("reply:" + spec.name() + ":" + caller, 30, 60_000L)) return done(error(429, "rate_limited"));
+		List<String> parts = parts(text);
+		if (parts.size() > spec.maxParts()) return done(error(400, "too_long"));
 		if (!core.claimReply(messageId)) return done(error(409, "already_replied"));
 		// The sends are blocking provider calls: off the server thread.
 		return CompletableFuture.supplyAsync(() -> {
-			List<String> parts = parts(text);
 			int sent = 0;
 			try {
 				for (String part : parts) {
@@ -419,11 +431,16 @@ public final class WhatsAppRelayAdapter extends AAdapter implements WebhookHandl
 	}
 
 	private boolean ready(RelaySpec spec) {
+		long now = System.currentTimeMillis();
+		long[] cached = readiness.get(spec.name());
+		if (cached != null && now - cached[0] < READY_CACHE_MS) return cached[1] == 1;
+		boolean ok = engine != null;
 		for (String ref : new String[] { spec.token(), spec.appSecret(), spec.verifyToken() }) {
-			String v = credential(spec, ref, null);
-			if (v == null || v.isBlank()) return false;
+			String v = ok ? credential(spec, ref, null) : null;
+			if (v == null || v.isBlank()) { ok = false; break; }
 		}
-		return engine != null;
+		readiness.put(spec.name(), new long[] { now, ok ? 1 : 0 });
+		return ok;
 	}
 
 	private RelaySpec specFor(String binding) {
@@ -470,19 +487,30 @@ public final class WhatsAppRelayAdapter extends AAdapter implements WebhookHandl
 		return json(status, Maps.of("error", code));
 	}
 
-	/** Fixed-window counters per key, in memory, bounded by a sweep of expired windows. */
-	private static final class Windows {
-		private final Map<String, long[]> windows = new HashMap<>();
+	/**
+	 * Fixed-window counters per key, in memory. Keys include senders' numbers, which
+	 * anyone can vary, so the table is capped: past the cap the oldest window goes.
+	 */
+	static final class Windows {
+		static final int MAX_KEYS = 20_000;
+		private final LinkedHashMap<String, long[]> windows = new LinkedHashMap<>();
 
 		synchronized boolean allow(String key, int limit, long windowMs) {
 			long now = System.currentTimeMillis();
-			if (windows.size() > 10_000) windows.values().removeIf(v -> now - v[0] >= 60 * 60_000L);
 			long[] w = windows.get(key);
 			if (w == null || now - w[0] >= windowMs) {
+				windows.remove(key);
+				if (windows.size() >= MAX_KEYS) {
+					var oldest = windows.keySet().iterator();
+					oldest.next();
+					oldest.remove();
+				}
 				windows.put(key, new long[] { now, 1 });
 				return true;
 			}
 			return ++w[1] <= limit;
 		}
+
+		synchronized int size() { return windows.size(); }
 	}
 }
