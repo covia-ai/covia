@@ -593,19 +593,38 @@ final class BotRunner implements MessagingBot<BotSpec> {
 			typing(chatId, m);
 			ACell response = conversations.chat(conversationKey(m, chatId), prepareMessage(m, text));
 			String reply;
+			String parseMode = spec.parseMode();
 			if (spec.replyOperation() == null) {
 				reply = ConversationRouter.responseText(response);
 			} else {
 				ACell formatted = conversations.runOperation(spec.replyOperation(), Maps.of(
 					Fields.RESPONSE, response, K_VIA, agentMessage(m, text).get(K_VIA)));
 				reply = formattedReply(formatted);
+				parseMode = formattedParseMode(formatted, parseMode);
 			}
-			send(chatId, reply, spec.parseMode(), m.messageId(), threadOf(m), false);
+			send(chatId, reply, parseMode, m.messageId(), threadOf(m), false);
 		} catch (Throwable t) {
 			logFailure("failed to respond", chatId, t);
 			sendQuietly(chatId, "⚠️ " + concise(t), m);
 			throw new JobFailedException(concise(t));
 		}
+	}
+
+	/** The parse modes Telegram knows; a reply hook naming any other is not obeyed. */
+	static final java.util.Set<String> PARSE_MODES = java.util.Set.of("Markdown", "MarkdownV2", "HTML");
+
+	/**
+	 * The parse mode a reply hook's text is written for, when it says so
+	 * ({@code {text, parse_mode}}, as {@code telegram:format} returns): it wins over
+	 * the bot's own {@code parseMode}, so naming the formatter is the whole setup.
+	 * Otherwise, or for a mode Telegram does not know, the bot's own.
+	 */
+	static String formattedParseMode(ACell result, String botParseMode) {
+		if (result instanceof AMap<?, ?> && RT.getIn(result, TelegramAdapter.K_PARSE_MODE_PARAM) instanceof AString mode
+				&& PARSE_MODES.contains(mode.toString())) {
+			return mode.toString();
+		}
+		return botParseMode;
 	}
 
 	static String formattedReply(ACell result) {

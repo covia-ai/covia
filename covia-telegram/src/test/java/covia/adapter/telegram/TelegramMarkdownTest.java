@@ -141,6 +141,12 @@ public class TelegramMarkdownTest {
 		ACell empty = TelegramAdapter.handleFormat(Maps.of("response", Strings.create("  "), "via", Maps.empty()));
 		assertEquals(TelegramMarkdown.escape(ConversationRouter.NO_RESPONSE),
 			RT.getIn(empty, Fields.TEXT).toString(), "an empty reply reads as the adapter's own no-response text");
+		// A hook's parse_mode wins over the bot's; one Telegram does not know does not.
+		assertEquals(TelegramMarkdown.PARSE_MODE, BotRunner.formattedParseMode(direct, null));
+		assertEquals(TelegramMarkdown.PARSE_MODE, BotRunner.formattedParseMode(direct, "MarkdownV2"));
+		assertEquals("MarkdownV2", BotRunner.formattedParseMode(Maps.of("text", "x"), "MarkdownV2"));
+		assertEquals("MarkdownV2", BotRunner.formattedParseMode(Strings.create("x"), "MarkdownV2"));
+		assertEquals(null, BotRunner.formattedParseMode(Maps.of("text", "x", "parse_mode", "Shouty"), null));
 		IllegalArgumentException nothing = assertThrows(IllegalArgumentException.class,
 			() -> TelegramAdapter.handleFormat(Maps.of("via", Maps.empty())));
 		assertEquals(TelegramAdapter.NOTHING_TO_FORMAT, nothing.getMessage());

@@ -28,8 +28,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `scheduler:list` describes each event: `by`, `input`, `description`, `created` (#583).
 - `relay` handler for WhatsApp and Slack bindings: one number or app, many principals (#584).
 - `telegram:format`: an agent's Markdown to Telegram HTML, read-only. Set it as
-  an agent bot's `replyOperation` with `parseMode: "HTML"`, or call it from an
-  application's own reply hook.
+  an agent bot's `replyOperation`, or call it from an application's own reply
+  hook. A `parse_mode` returned by a reply hook now wins over the bot's
+  `parseMode`.
 
 ### Fixed
 

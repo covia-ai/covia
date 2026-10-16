@@ -76,8 +76,8 @@ import covia.venue.RequestContext;
  *   <li>{@code telegram:format} — Markdown, as a model writes it, to the HTML
  *       Telegram accepts ({@link TelegramMarkdown}). A pure, read-only
  *       conversion with no bot involved: an agent bot uses it as its
- *       {@code replyOperation} with {@code parseMode: "HTML"}, and an
- *       application's own reply hook calls it after its own processing.</li>
+ *       {@code replyOperation}, whose {@code parse_mode} the reply then takes,
+ *       and an application's own reply hook calls it after its own processing.</li>
  * </ul>
  *
  * <p>Tokens are {@code s/NAME} secret references resolved in the bot user's
@@ -270,8 +270,8 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 	 * Takes a string, {@code {markdown}}, {@code {text}}, or the reply hook's own
 	 * input {@code {response, via}}, whose response is read as the adapter reads
 	 * any agent reply ({@link ConversationRouter#responseText}). Returns
-	 * {@code {text, parse_mode: "HTML"}}: the hook's reply reads {@code text}, and
-	 * the bot sends it under its own {@code parseMode}, which must be {@code HTML}.
+	 * {@code {text, parse_mode: "HTML"}}: as a reply hook's result, the reply is
+	 * {@code text}, sent under that {@code parse_mode} whatever the bot's own.
 	 */
 	static ACell handleFormat(ACell input) {
 		String markdown = formatSource(input);
