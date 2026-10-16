@@ -48,7 +48,7 @@ Walk the user through these steps; each is idempotent.
    ```
    grid_run  operation=v/ops/slack/create  input={"name": "<binding-name>", "token": "s/SLACK_BOT_TOKEN", "appToken": "s/SLACK_APP_TOKEN", "appId": "A…", "teamId": "T…", "botUserId": "U…", "agent": "SlackAssistant", "allow": ["U…"], "allowChannels": []}
    ```
-   Use `"signingSecret": "s/SLACK_SIGNING_SECRET"` instead of `appToken` for callbacks, then set the app's Request URL to `https://<venue>` + the returned `webhookPath`. Use `"operation": "<ref>"` (with `"reply": true | false | "fixed text"`) instead of `agent` for a deterministic handler; it receives `{event_id, team_id, api_app_id, event}`. Operator alternative: the same fields plus `"user"` under `adapters.slack.bots.<binding-name>` in the venue config.
+   Use `"signingSecret": "s/SLACK_SIGNING_SECRET"` instead of `appToken` for callbacks, then set the app's Request URL to `https://<venue>` + the returned `webhookPath`. Use `"operation": "<ref>"` (with `"reply": true | false | "fixed text"`) instead of `agent` for a deterministic handler; it receives `{event_id, team_id, api_app_id, event}`. Use `"relay": true` instead to serve many principals, each known by its DID, from this one app; they link by DM and use the returned `relayPath` (see `covia-slack/README.md`). Operator alternative: the same fields plus `"user"` under `adapters.slack.bots.<binding-name>` in the venue config.
 
 8. **Check it came up:** `grid_run operation=v/ops/slack/bots` → `RUNNING`, and for Socket Mode `connection: CONNECTED`. `PENDING` means a token is missing or unresolvable; `RETRYING` means Slack refused the connection (wrong token, Socket Mode off). Both retry automatically once fixed.
 
