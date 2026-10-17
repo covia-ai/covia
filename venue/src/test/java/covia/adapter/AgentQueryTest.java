@@ -369,7 +369,10 @@ public class AgentQueryTest {
 			return CompletableFuture.completedFuture(reply);
 		};
 		AMap<AString, ACell> result = queryWithSteps("question");
-		assertEquals(Strings.create("final answer"), result.get(Fields.RESPONSE));
+		// The flat runtime replies with all it said, the text beside its tool call
+		// included; the goal tree's reply is still its final answer alone.
+		assertEquals(Strings.create("llmagent".equals(runtime) ? "Checking the tool\n\nfinal answer" : "final answer"),
+			result.get(Fields.RESPONSE));
 		AVector<ACell> steps = RT.ensureVector(result.get(Fields.STEPS));
 		assertEquals(2, steps.count());
 		assertEquals(thinking, RT.getIn(steps.get(0), Fields.REPLY, "think"));

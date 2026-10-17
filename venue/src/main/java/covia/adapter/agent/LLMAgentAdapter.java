@@ -418,10 +418,19 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 			newMessagesFiltered = newMessagesFiltered.conj(msg);
 		}
 
-		// Extract text content from the final assistant message
-		ACell lastMsg = newMessages.get(newMessages.count() - 1);
-		AString contentText = RT.ensureString(RT.getIn(lastMsg, K_CONTENT));
-		String responseText = (contentText != null) ? contentText.toString() : "";
+		// The reply is everything the assistant said this cycle, in order. Text
+		// written beside a tool call was written for the reader, and may be the
+		// answer itself ("as above"); taking only the final message lost it.
+		StringBuilder said = new StringBuilder();
+		for (long i = 0; i < newMessages.count(); i++) {
+			ACell msg = newMessages.get(i);
+			if (!ROLE_ASSISTANT.equals(RT.getIn(msg, K_ROLE))) continue;
+			AString content = RT.ensureString(RT.getIn(msg, K_CONTENT));
+			if (content == null || content.toString().isBlank()) continue;
+			if (said.length() > 0) said.append("\n\n");
+			said.append(content.toString().strip());
+		}
+		String responseText = said.toString();
 
 		// The root frame is the sole conversation and dynamic-load record;
 		// agent-level state carries nothing for this
