@@ -2368,6 +2368,7 @@ public class AgentAdapter extends AAdapter {
 			User user = target.user();
 			AgentState agent = (user != null) ? user.agent(agentId) : null;
 			if (agent == null || !agent.exists()) {
+				if (remove && emptyEntry(user, agentId)) continue; // nothing to halt; removal clears it
 				job.fail("Agent not found: " + target.address() + " (no agents were deleted)");
 				return;
 			}
@@ -2438,6 +2439,16 @@ public class AgentAdapter extends AAdapter {
 		return new DeleteRequest(ids, true);
 	}
 
+	/**
+	 * Whether {@code g/<id>} is present but holds nothing: what deleting an
+	 * agent left behind before deletion removed the key. Only removal can
+	 * clear it, there being no agent to halt.
+	 */
+	private static boolean emptyEntry(User user, AString agentId) {
+		AMap<AString, ACell> agents = (user != null) ? user.getAgents() : null;
+		return agents != null && agents.containsKey(agentId) && agents.get(agentId) == null;
+	}
+
 	/** Shared single-agent deletion semantics used by both wire shapes. */
 	private AMap<AString, ACell> deleteOneAgent(Job job, AgentTarget target,
 			RequestContext ctx, boolean remove) {
@@ -2445,6 +2456,10 @@ public class AgentAdapter extends AAdapter {
 		AString agentId = target.agentId();
 		AgentState agent = user.agent(agentId);
 		if (agent == null || !agent.exists()) {
+			if (remove && emptyEntry(user, agentId)) {
+				user.removeAgent(agentId);
+				return identify(target, Maps.of(Fields.REMOVED, CVMBool.TRUE));
+			}
 			job.fail("Agent disappeared during deletion: " + agentId);
 			return null;
 		}

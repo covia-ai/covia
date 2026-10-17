@@ -4898,6 +4898,27 @@ public class AgentAdapterTest {
 	}
 
 	@Test
+	public void testRemoveClearsAnEntryAnOlderDeleteLeftHoldingNothing() {
+		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "stale-agent"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		// What deleting did before it removed the key: null written at g/<id>.
+		user.cursor().path(covia.lattice.Namespace.G, Strings.create("stale-agent")).set(null);
+		assertTrue(user.getAgents().containsKey(Strings.create("stale-agent")));
+
+		assertThrows(Exception.class, () -> engine.jobs().invokeOperation("v/ops/agent/delete",
+			Maps.of(Fields.AGENT_ID, "stale-agent"), RequestContext.of(ALICE_DID)).awaitResult(5000),
+			"without remove there is no agent to terminate");
+		assertTrue(user.getAgents().containsKey(Strings.create("stale-agent")), "so nothing changes");
+
+		ACell removed = engine.jobs().invokeOperation("v/ops/agent/delete",
+			Maps.of(Fields.AGENT_ID, "stale-agent", Fields.REMOVE, CVMBool.TRUE),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(removed, Fields.REMOVED));
+		assertFalse(user.getAgents().containsKey(Strings.create("stale-agent")), "the empty entry is gone");
+	}
+
+	@Test
 	public void testDeleteExactAgentListInOneJob() {
 		for (String id : new String[] {"batch-a", "batch-b", "batch-c"}) {
 			engine.jobs().invokeOperation("v/ops/agent/create",
