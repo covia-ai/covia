@@ -272,6 +272,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		AVector<ACell> tools = concatTools(p.fixedTools(), loads.tools());
 		next = next
 			.withLoads(loads, tools)
+			.withNotice(ContextAssembler.withReplyNotice(null, replying(task, tools)))
 			.withTask(task);
 		next = observeStep(next, loads, compacted);
 		return new Step(reply, turns, sink, batch.terminalStatus(), batch.terminalValue(), null, next).report();
@@ -564,6 +565,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 				.withLoads(loads, tools)
 				.withFrames(toolCtx.frames)
 				.withToolLoop(Vectors.empty())
+				.withNotice(ContextAssembler.withReplyNotice(null, replying(taskMessage, tools)))
 				.withTask(taskMessage);
 			if (!toolCtx.store.observe(0, ContextAssembler.observations(inference, loads),
 					convex.core.util.Utils.getCurrentTimestamp())) {
@@ -893,6 +895,15 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		if (config == null) return defaultValue;
 		AString val = RT.ensureString(config.get(key));
 		return (val != null) ? val : defaultValue;
+	}
+
+	/**
+	 * Whether this turn is answered by its final message: a conversation, not
+	 * a task (whose message says to resolve it with complete_task), and only
+	 * where there are tools to write text alongside.
+	 */
+	private static boolean replying(ACell task, AVector<ACell> tools) {
+		return task == null && tools != null && !tools.isEmpty();
 	}
 
 	@SuppressWarnings("unchecked")

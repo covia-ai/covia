@@ -368,12 +368,15 @@ duplicate.
 | 9 | Tool-loop messages | working turn | `assistant` / `tool` | Assistant/tool turns and context events accumulated within this cycle |
 | 10 | Changed watched context | append-only conversation | `system` or `assistant` / `tool` | A new observation for a `volatile` declaration, emitted only when its canonical rendered value differs (§5.5) |
 | 11 | Budget warning | inference tail | `system` | **Only** when the budget is under pressure (§3.4) |
-| 12 | Current date | inference tail | `system` | One line; changes daily |
-| 13 | Unavailable tools | inference tail | `system` | Configured tools that did not resolve this cycle |
-| 14 | Outstanding task | inference tail | `user` | The task the agent must complete or fail — the last thing before the reply |
+| 12 | Runtime notice | inference tail | `system` | The runtime's word on this turn: goal-tree's compaction nudge, and, on a conversational turn with tools (no task, not a subgoal, no typed outputs), how it is answered — the final message is the reply, so text beside a tool call reaches no one |
+| 13 | Current date | inference tail | `system` | One line; changes daily |
+| 14 | Unavailable tools | inference tail | `system` | Configured tools that did not resolve this cycle |
+| 15 | Outstanding task | inference tail | `user` | The task the agent must complete or fail — the last thing before the reply |
 | — | Empty-state signal | working turn | `user` | Replaces 7–8 when there is nothing to act on |
 
-The *Role* column is the role a section emits — the role that is true of its content. The initial consecutive system sections coalesce when the persisted context is first rendered. Sections 11–13 are **one `system` message**, composed of whichever parts are present: the inference tail is re-rendered every inference, and one message is the cheapest shape for it. How a system message that follows conversation reaches a given provider is the edge's business (§3.2.1, §3.5), never a section's.
+How each kind of turn is answered is said where that turn is defined, beside it: a task by its message (row 15), a subgoal by the child-frame notice, a conversation by the runtime notice (row 12). The head never says it, being the same whatever the turn. A model trained on interfaces that show every text block otherwise writes its answer beside a tool call and closes with "as above"; the text stays in its context as written, and the notice says what reaches the reader.
+
+The *Role* column is the role a section emits — the role that is true of its content. The initial consecutive system sections coalesce when the persisted context is first rendered. Sections 11–14 are **one `system` message**, composed of whichever parts are present: the inference tail is re-rendered every inference, and one message is the cheapest shape for it. How a system message that follows conversation reaches a given provider is the edge's business (§3.2.1, §3.5), never a section's.
 
 ### 3.2.1 The role rule
 

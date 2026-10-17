@@ -2090,6 +2090,41 @@ public class LLMAgentAdapterTest {
 	}
 
 	@Test
+	public void testOnlyAConversationalTurnIsToldItsReplyIsItsFinalMessage() {
+		// A task is answered through complete_task, and its message says so;
+		// telling it a final message is its reply would contradict that.
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+		AString agentId = Strings.create("reply-notice-agent");
+		AMap<AString, ACell> config = Maps.of("llmOperation", "v/test/ops/llm",
+			Fields.TOOLS, Vectors.of(Strings.create("v/test/ops/echo")));
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, agentId, AgentState.KEY_CONFIG, config,
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent(agentId);
+		Blob taskId = Blob.createRandom(new java.util.Random(), 16);
+		agent.addTask(taskId, Maps.of("question", "test?"));
+		RequestContext ctx = RequestContext.of(ALICE_DID).withAgentId(agentId);
+
+		TestAdapter.CAPTURED_LLM_INPUT.remove(agentId);
+		adapter.processChat(ctx.withTaskId(taskId), Maps.of(
+			Fields.AGENT_ID, agentId, AgentState.KEY_CONFIG, config,
+			Fields.TASKS, Vectors.of(Maps.of(
+				Fields.JOB_ID, Strings.create(taskId.toHexString()),
+				Fields.INPUT, Maps.of("question", "test?"))),
+			Fields.MESSAGES, Vectors.empty()));
+		assertFalse(TestAdapter.CAPTURED_LLM_INPUT.get(agentId).toString()
+			.contains(ContextAssembler.REPLY_NOTICE), "a task turn is not told it");
+
+		TestAdapter.CAPTURED_LLM_INPUT.remove(agentId);
+		adapter.processChat(ctx, Maps.of(
+			Fields.AGENT_ID, agentId, AgentState.KEY_CONFIG, config,
+			Fields.MESSAGES, Vectors.of((ACell) Maps.of(Fields.MESSAGE, Strings.create("hello")))));
+		assertTrue(TestAdapter.CAPTURED_LLM_INPUT.get(agentId).toString()
+			.contains(ContextAssembler.REPLY_NOTICE), "a conversational turn is");
+	}
+
+	@Test
 	public void testCompleteTaskDirect() {
 		// Test complete_task via processChat directly (no agent:request pipeline).
 		// Since the venue op `agent:completeTask` reads (agentId, taskId) from

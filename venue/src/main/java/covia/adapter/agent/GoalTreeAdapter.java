@@ -1242,10 +1242,15 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			.forFrame(frameL3Config, (frameTools.frameIndex > 0) ? CHILD_FRAME_NOTICE : null)
 			.withFrames(stack);
 		if (frameTools.compacted) base = base.afterCompaction(stack);
+		ACell task = root ? frameTools.cycle.tasks().message() : null;
+		// The root of a conversation is answered by its final message, as the flat
+		// runtime is; a subgoal has its own notice, a task its message, and typed
+		// outputs complete() as well.
+		boolean replying = root && task == null && frameTools.cycle.typedRootHarnessTools() == null;
 		ContextAssembler.Spec inference = base
 			.withLoads(loads, concatTools(fixedTools, loads.tools()))
-			.withNotice(notice)
-			.withTask(root ? frameTools.cycle.tasks().message() : null);
+			.withNotice(ContextAssembler.withReplyNotice(notice, replying))
+			.withTask(task);
 		if (!frameTools.store.observe(frameTools.frameIndex,
 				ContextAssembler.observations(inference, loads),
 				convex.core.util.Utils.getCurrentTimestamp())) return null;

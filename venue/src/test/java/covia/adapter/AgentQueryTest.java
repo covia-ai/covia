@@ -134,6 +134,19 @@ public class AgentQueryTest {
 		return meta.assoc(Fields.OPERATION, operation.assoc(Strings.intern("instruction"), instruction));
 	}
 
+	@Test public void flatConversationIsToldItsReplyIsItsFinalMessage() { toldItsReplyIsItsFinalMessage("llmagent"); }
+	@Test public void goalTreeConversationIsToldItsReplyIsItsFinalMessage() { toldItsReplyIsItsFinalMessage("goaltree"); }
+
+	/** A conversational turn with tools says how it is answered, as a task's message does for a task. */
+	private void toldItsReplyIsItsFinalMessage(String runtime) {
+		create(runtime, Maps.of(Fields.TOOLS, Vectors.of(Strings.create("v/test/ops/echo"))));
+		query("a question").awaitResult(5000);
+		assertTrue(model.seenInput.toString().contains(covia.adapter.agent.ContextAssembler.REPLY_NOTICE),
+			"sent to the model on a conversational turn");
+		assertFalse(String.valueOf(RT.getIn(model.seenInput, "messages", CVMLong.ZERO))
+			.contains(covia.adapter.agent.ContextAssembler.REPLY_NOTICE), "per turn, not in the cached head");
+	}
+
 	@Test public void freshFlatQuery() { freshQueryUsesAgentConfigWithoutChangingItsRecord("llmagent"); }
 	@Test public void freshGoalTreeQuery() { freshQueryUsesAgentConfigWithoutChangingItsRecord("goaltree"); }
 
