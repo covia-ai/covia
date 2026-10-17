@@ -1004,6 +1004,43 @@ It deliberately does not advertise a fictional `authorization_servers`
 entry. A future OAuth bridge can add that standard field without changing the
 discovery URLs.
 
+## MCP tool calls: how long they wait
+
+MCP leaves timeouts to the sender: a client waits as long as it chooses and
+ends a call with `notifications/cancelled`; a dropped connection is not a
+cancellation. So the venue waits for a tool's job as long as the caller does,
+within limits that keep waiting from tying the venue up:
+
+```json
+{
+  "mcp": {
+    "toolCallTimeout": 3600000,
+    "anonymousToolCallTimeout": 120000,
+    "keepAliveInterval": 15000,
+    "maxConcurrentToolCalls": 16
+  }
+}
+```
+
+- `toolCallTimeout` (ms, default an hour) is the most an authenticated caller
+  waits; `anonymousToolCallTimeout` (default two minutes) the most an
+  unauthenticated one does. Past it the call ends as an error result whose
+  `structuredContent` is `{status: "running", id, message}`: the job runs on,
+  and `grid_job_result` with that `id` collects its result.
+- `maxConcurrentToolCalls` (default 16) is how many calls one caller may have
+  in progress; every anonymous caller counts as one. A call over it is refused
+  with a message saying so.
+- A single `tools/call` from a client that accepts `text/event-stream` and is
+  still running after `keepAliveInterval` (ms, default 15 s) is answered as an
+  SSE stream. It carries `notifications/progress` at that interval when the
+  request's `_meta.progressToken` asks for them, which lets the client reset
+  its own timeout, and an SSE comment otherwise. A write that fails means the
+  caller has gone: the venue stops waiting, frees its place and leaves the job
+  running. A quicker call is answered as plain JSON, as before; a call inside a
+  batch is answered in the batch and cannot stream.
+- `notifications/cancelled` with a call's `requestId`, from the caller that
+  made it in the same MCP session, cancels the call and its job.
+
 ## User registration (`users`)
 
 Authentication proves control of a DID; it does not create a venue account.

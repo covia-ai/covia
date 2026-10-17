@@ -473,23 +473,44 @@ public class JobManager {
 
 	/** Public tool dispatch retains admission and result semantics, but cannot reveal owner-only results. */
 	public CompletableFuture<ACell> runToolOperation(AString ref, ACell input, RequestContext ctx) {
-		return runOperation(ref, input, ctx, false, Invocation.TOOL);
+		return startToolOperation(ref, input, ctx).result();
+	}
+
+	/**
+	 * A run in progress: its Job, null if it failed before one was made, and
+	 * its result. The Job lets a caller that stops waiting say where the
+	 * result will be, or cancel it.
+	 */
+	public record Run(Job job, CompletableFuture<ACell> result) {
+		static Run failed(Throwable t) {
+			return new Run(null, CompletableFuture.failedFuture(t));
+		}
+	}
+
+	/** {@link #runToolOperation}, keeping the Job. */
+	public Run startToolOperation(AString ref, ACell input, RequestContext ctx) {
+		return startOperation(ref, input, ctx, false, Invocation.TOOL);
 	}
 
 	private CompletableFuture<ACell> runOperation(AString ref, ACell input,
 			RequestContext ctx, boolean privateJob, Invocation invocation) {
-		if (ref == null) return CompletableFuture.failedFuture(
+		return startOperation(ref, input, ctx, privateJob, invocation).result();
+	}
+
+	private Run startOperation(AString ref, ACell input,
+			RequestContext ctx, boolean privateJob, Invocation invocation) {
+		if (ref == null) return Run.failed(
 			new IllegalArgumentException("Operation must be specified"));
 		try {
 			Asset asset = engine.resolveAsset(ref, ctx);
-			if (asset == null) return CompletableFuture.failedFuture(
+			if (asset == null) return Run.failed(
 				new IllegalArgumentException("Cannot resolve operation: " + ref));
 			Operation op = Operation.from(asset);
-			if (op == null) return CompletableFuture.failedFuture(
+			if (op == null) return Run.failed(
 				new IllegalArgumentException("Asset is not an operation: " + asset.getID()));
-			return runOperation(op.meta(), input, ctx.withOp(ref), privateJob, invocation);
+			return startOperation(op.meta(), input, ctx.withOp(ref), privateJob, invocation);
 		} catch (Exception e) {
-			return CompletableFuture.failedFuture(e);
+			return Run.failed(e);
 		}
 	}
 
@@ -505,18 +526,23 @@ public class JobManager {
 
 	private CompletableFuture<ACell> runOperation(AMap<AString, ACell> meta,
 			ACell input, RequestContext ctx, boolean privateJob, Invocation invocation) {
+		return startOperation(meta, input, ctx, privateJob, invocation).result();
+	}
+
+	private Run startOperation(AMap<AString, ACell> meta,
+			ACell input, RequestContext ctx, boolean privateJob, Invocation invocation) {
 		try {
 			if (privateJob && !engine.config().isPrivateJobsEnabled()) {
-				return CompletableFuture.failedFuture(new IllegalStateException(
+				return Run.failed(new IllegalStateException(
 					"Private runs are disabled on this venue (enablePrivateJobs=false)"));
 			}
 			boolean memoryOnly = privateJob || (isReadOnly(meta)
 				&& allowsInternal(meta)
 				&& !engine.config().isRecordReadOnlyOperations());
 			Job job = dispatchOperation(meta, input, ctx, memoryOnly, invocation);
-			return operationResultFuture(job, meta, input);
+			return new Run(job, operationResultFuture(job, meta, input));
 		} catch (Exception e) {
-			return CompletableFuture.failedFuture(e);
+			return Run.failed(e);
 		}
 	}
 
