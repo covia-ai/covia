@@ -371,6 +371,17 @@ stopped); run boundaries and other sessions' cycles are omitted, and `seq`
 keeps its gaps. The initial REST frame echoes the filter. Session lifecycle
 events (created, deleted, message queued, turn appended) are not emitted.
 
+**Guards.** The tap watches; a guard decides. An embedding host registers one
+with `engine.toolGuards().add(guard)` to see each operation call an agent is
+about to make — owner, agent, session, tool name, operation, input — and
+return null to let it run or a reason to refuse it. A refused call never runs:
+its tool result is `Error: <reason>`, as for a capability denial, and its
+`tool:result` follows the `tool:start` already announced. A guard may block
+while it decides (holding a risky call while someone is asked), but runs
+within the call's own `toolCallTimeoutMs`; one that times out or throws
+refuses. Harness tools are never guarded. With no guard registered a check
+costs nothing.
+
 ---
 
 ## 3. Three Levels

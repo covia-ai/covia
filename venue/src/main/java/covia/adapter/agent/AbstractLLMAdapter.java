@@ -32,6 +32,7 @@ import covia.grid.Status;
 import covia.venue.AgentState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.ToolGuards;
 
 /**
  * Common base for LLM-backed agent adapters (Level 2 in the three-level architecture).
@@ -901,7 +902,10 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			AString operation, RequestContext ctx, long timeoutMs) {
 		// Capability enforcement happens at the operation's own enforcement point
 		// under the agent's grant scope carried on ctx — no name-keyed gate here.
+		// The host's guards come first: a call they refuse never runs.
 		if (operation != null) {
+			String refused = guard(toolName, operation, input, ctx, timeoutMs);
+			if (refused != null) return Strings.create("Error: " + refused);
 			return invokeOperation(operation, input, ctx, timeoutMs);
 		}
 
@@ -916,7 +920,17 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		}
 
 		// Fall through to grid dispatch
-		return invokeOperation(Strings.create(toolName), input, ctx, timeoutMs);
+		AString named = Strings.create(toolName);
+		String refused = guard(toolName, named, input, ctx, timeoutMs);
+		if (refused != null) return Strings.create("Error: " + refused);
+		return invokeOperation(named, input, ctx, timeoutMs);
+	}
+
+	/** The host's tool guards on this call: null to run it, else why not. */
+	private String guard(String toolName, AString operation, ACell input, RequestContext ctx, long timeoutMs) {
+		ToolGuards.Call call = new ToolGuards.Call(ctx.getUserDID(), ctx.getAgentId(), ctx.getSessionId(),
+			toolName, operation, input);
+		return engine.toolGuards().check(call, timeoutMs);
 	}
 
 	/**

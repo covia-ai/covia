@@ -152,6 +152,8 @@ public class Engine {
 	/** The live agent tap (#394): run-loop, cycle, inference, tool and status
 	 *  events for every agent hosted here. */
 	private final AgentEvents agentEvents = new AgentEvents();
+	/** Guards an embedding host registers on agents' tool calls. */
+	private final ToolGuards toolGuards = new ToolGuards();
 
 	/**
 	 * Map of named adapters that can handle different types of operations or resources
@@ -3324,6 +3326,15 @@ public class Engine {
 	 */
 	public AgentEvents agentEvents() {
 		return agentEvents;
+	}
+
+	/**
+	 * The guards on agents' tool calls: an in-process host registers one to
+	 * pass or refuse each operation call before it runs. See AGENT_LOOP.md §2.6.
+	 * @return ToolGuards instance
+	 */
+	public ToolGuards toolGuards() {
+		return toolGuards;
 	}
 
 	/**
