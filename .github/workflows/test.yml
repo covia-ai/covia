@@ -68,7 +68,7 @@ jobs:
         fi
 
     - name: Share the tested jars with the snapshot and Docker publishers
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: reactor-jars
         path: |
