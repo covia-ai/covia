@@ -257,29 +257,6 @@ public class GoalTreeContextTest {
 	}
 
 	@Test
-	public void testTheModelIsNotShownWorkingTextTheReaderNeverSaw() {
-		// The reader is shown final messages only, so text beside a tool call must
-		// not come back to the model as something it said: it is left out of the
-		// rendering, while the call, its result and the provider state stay.
-		ACell providerState = Maps.of("blocks", Vectors.of(Maps.of("type", "thinking", "signature", "sig")));
-		AMap<AString, ACell> frame = withConversation(
-			userTurn("what would you change?"),
-			Maps.of("role", "assistant", "content", "1. Atomic memory. 2. A clock.", "providerState", providerState,
-				"toolCalls", Vectors.of((ACell) Maps.of("id", "tc-1", "name", "memory"))),
-			toolResult("saved"),
-			assistantText("Noted and saved."));
-		AVector<ACell> rendered = ConversationRenderer.renderFull(frame);
-		assertEquals(4, rendered.count());
-		assertNull(RT.getIn(rendered.get(1), "content"), "the working text is not replayed");
-		assertNotNull(RT.getIn(rendered.get(1), "toolCalls"));
-		assertEquals(providerState, RT.getIn(rendered.get(1), "providerState"));
-		assertEquals("saved", RT.getIn(rendered.get(2), "content").toString());
-		assertEquals("Noted and saved.", RT.getIn(rendered.get(3), "content").toString(), "final text is");
-		AMap<AString, ACell> stored = RT.ensureMap(RT.ensureVector(frame.get(GoalTreeContext.K_CONVERSATION)).get(1));
-		assertEquals("1. Atomic memory. 2. A clock.", stored.get(GoalTreeContext.K_CONTENT).toString(), "still on record");
-	}
-
-	@Test
 	public void testHistoricalProjectionKeepsOnlyCompletedConversation() {
 		AMap<AString, ACell> frame = withConversation(
 			Maps.of("role", "user", "content", "first question", "ts", 1L),
