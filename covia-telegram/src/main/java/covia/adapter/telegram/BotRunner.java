@@ -52,6 +52,7 @@ import convex.core.util.JSON;
 import covia.adapter.AAdapter;
 import covia.adapter.webhook.WebhookInbox;
 import covia.adapter.messaging.MessagingBot;
+import covia.adapter.messaging.MessagingMedia;
 import covia.adapter.messaging.MessagingText;
 import covia.adapter.messaging.ConversationRouter;
 import covia.adapter.messaging.ConversationSessions;
@@ -725,9 +726,8 @@ final class BotRunner implements MessagingBot<BotSpec> {
 				attachment = TelegramMedia.processed(attachment, processed);
 			}
 			attachments = attachments.conj(attachment);
-			String mime = media.get("mediaType").getAsString();
-			if (mime.startsWith("image/")) images = images.conj(Maps.of("type", "image", "source",
-				Maps.of("type", "asset", "ref", attachment.get(Fields.REF), "mediaType", mime)));
+			AMap<AString, ACell> image = MessagingMedia.imageBlock(attachment);
+			if (image != null) images = images.conj(image);
 		}
 		if (!attachments.isEmpty()) message = message.assoc(Strings.intern("attachments"), attachments);
 		if (!images.isEmpty()) message = message.assoc(Fields.CONTENT, images);
@@ -785,29 +785,12 @@ final class BotRunner implements MessagingBot<BotSpec> {
 				if (!extension.matches("\\.[A-Za-z0-9]{1,10}")) extension = ".bin";
 				name = spec.name().substring(0, Math.min(64, spec.name().length())) + "-" + Strings.create(fileId).getHash().toHexString() + extension;
 			}
-			String directory = destination == null ? spec.userDID(adapter.engine) + "/dlfs/telegram/" : destination.toString();
-			if (!directory.endsWith("/")) directory += "/";
-			for (int attempt = 0; attempt < 1000; attempt++) {
-				String actualName = TelegramMedia.collisionName(name, attempt);
-				// DID references are URLs; encode the filename while preserving its stored spelling.
-				String referenceName = directory.startsWith("did:")
-					? java.net.URLEncoder.encode(actualName, java.nio.charset.StandardCharsets.UTF_8).replace("+", "%20")
-					: actualName;
-				AString ref = Strings.create(directory + referenceName);
-				try {
-					if (!adapter.engine.createContent(ref, new java.io.ByteArrayInputStream(bytes), contentType, writeContext)) {
-						throw new IllegalArgumentException(TelegramMedia.UNSUPPORTED_DESTINATION + ": " + directory);
-					}
-				} catch (java.nio.file.FileAlreadyExistsException conflict) {
-					continue;
-				}
-				adapter.engine.flush();
-				AMap<AString, ACell> result = Maps.of("file_id", fileId, "ref", ref, "size", bytes.length, Fields.FILE_NAME, actualName);
-				if (originalName != null) result = result.assoc(Strings.intern("file_name"), originalName);
-				if (contentType != null) result = result.assoc(Fields.CONTENT_TYPE, Strings.create(contentType));
-				return result;
-			}
-			throw new IllegalStateException(TelegramMedia.NAME_CONFLICT);
+			String directory = destination == null
+				? MessagingMedia.ownerDirectory(spec.userDID(adapter.engine), TelegramAdapter.NAME) : destination.toString();
+			AMap<AString, ACell> result = MessagingMedia.store(adapter.engine, bytes, contentType, directory, name, writeContext)
+				.assoc(Strings.intern("file_id"), Strings.create(fileId));
+			if (originalName != null) result = result.assoc(Strings.intern("file_name"), originalName);
+			return result;
 		} catch (java.io.IOException e) {
 			// HTTP client exceptions can contain the URL and hence the bot token.
 			throw new JobFailedException(TelegramMedia.DOWNLOAD_FAILED);

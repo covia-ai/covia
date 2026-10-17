@@ -93,6 +93,32 @@ templates, media, interactive content or provide embedded signup/OAuth.
 Provider errors and ambiguous network failures fail the send without an
 automatic retry, including rate-limit responses.
 
+## Voice notes, photos and files
+
+An agent binding receives images, voice notes and other audio, video, documents
+and stickers as attachments. When the message is handled, the adapter looks the
+media id up and downloads the short-lived link, both with the binding's token, and
+stores the bytes in the owner's private DLFS `whatsapp` drive (at most 20 MiB).
+The turn is `{text, via, attachments, content?}`:
+
+- `text` is the caption, or empty for a bare voice note.
+- Each attachment has `kind` (`audio`, `image`, `video`, `document`, `sticker`),
+  `id`, `mediaType`, `voice: true` for a voice note, `ref`, `size` and `fileName`.
+  A document keeps its own name only when it is a safe single filename; otherwise,
+  and for everything else, the name comes from the binding and the media id.
+- Images also arrive as image blocks for a vision-capable model; the agent needs
+  `crud/read` on the files.
+
+There is no implicit speech provider. Set `mediaOperation` on an agent binding to
+an operation that transcribes or extracts: it runs as the owner once per
+attachment, with the attachment plus `caption` and `via`, and returns `{}` to pass
+the attachment through or an object whose non-empty `text` becomes the
+attachment's `text`; the whole result is kept under `attachment.result` and cannot
+replace the reference or media type. A failed download or hook fails the turn like
+any other processing failure. Operation bindings stay text-only. Reactions are
+ignored. The download link is on a different host from the Graph API, so a
+`secret/use` grant bound to a url must cover both.
+
 ## State and recovery
 
 The shared [webhook worker](../venue/docs/ADAPTERS.md#http-messaging-workers)
@@ -159,6 +185,11 @@ Principals call `/relay/whatsapp/c-main/<action>`; a runtime binding made with
 - A relay binding admits every number, since linking is its admission; `open: false`
   narrows it to `allow`. The binding's `whatsapp:send` stays as closed as `open` and
   `allow` are written.
+- Voice notes, photos and files are relayed too. A polled message lists them under
+  `media` (`kind`, `mediaType`, `fileName`, `voice`) with the caption as its text, and
+  the principal fetches each one's bytes with the `media` action. The hub downloads
+  them from Meta on each request and keeps no copy, so a principal can transcribe a
+  voice note itself.
 
 Links live under `w/adapters/whatsapp/config/<bot>/relay/` in the venue's private
 workspace (a runtime binding's under its owner's adapter state). Message text, codes

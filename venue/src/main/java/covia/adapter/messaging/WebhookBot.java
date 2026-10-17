@@ -11,9 +11,12 @@ import org.slf4j.LoggerFactory;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
+import convex.core.lang.RT;
 import covia.adapter.AAdapter;
 import covia.adapter.webhook.WebhookInbox;
 import covia.api.Fields;
@@ -208,8 +211,7 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 			ACell input = event.get(Fields.INPUT);
 			String reply;
 			if (spec.routesToAgent()) {
-				ACell message = Maps.of("text", MessagingSettings.required(event, "text"), "via", event.get(MessagingSettings.key("via")));
-				reply = ConversationRouter.responseText(router.chat(conversation, message));
+				reply = ConversationRouter.responseText(router.chat(conversation, agentMessage(event)));
 			} else reply = router.operationReply(router.runOperation(spec.operation(), input));
 			if (!running || !adapter.isActive()) return;
 			if (reply != null) adapter.sendReply(this, event, reply);
@@ -218,6 +220,47 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 			queued.remove(id);
 			if (failure != null) lastError = PROCESSING_FAILED;
 		});
+	}
+	/**
+	 * An agent's turn: {@code {text, via, attachments?, content?}}. Each item of the
+	 * event's {@code media} is fetched by the provider and stored in the owner's
+	 * private drive named for the provider, then given to the binding's
+	 * {@code mediaOperation}; images also become image blocks. The text is the
+	 * caption, empty for a bare voice note. A failed fetch fails the turn like any
+	 * other processing failure.
+	 */
+	private AMap<AString, ACell> agentMessage(AMap<AString, ACell> event) {
+		String text = MessagingSettings.optional(event, "text");
+		ACell via = event.get(MessagingSettings.key("via"));
+		AMap<AString, ACell> message = Maps.of(Fields.TEXT, text == null ? "" : text, "via", via);
+		AVector<ACell> media = RT.ensureVector(event.get(MessagingMedia.K_MEDIA));
+		if (media == null || media.isEmpty()) return message;
+		AVector<ACell> attachments = Vectors.empty(), content = Vectors.empty();
+		String directory = MessagingMedia.ownerDirectory(spec.userDID(adapter.engine), adapter.getName());
+		for (ACell cell : media) {
+			AMap<AString, ACell> item = MessagingSettings.object(cell);
+			MessagingMedia.Fetched fetched = adapter.fetchMedia(this, item);
+			String type = MessagingSettings.optional(item, "mediaType");
+			if (type == null) type = fetched.contentType();
+			String name = MessagingSettings.optional(item, "fileName");
+			if (!MessagingMedia.safeFileName(name)) name = MessagingMedia.fallbackName(spec.name(), MessagingSettings.required(item, "id"), type);
+			AMap<AString, ACell> attachment;
+			try {
+				// The stored name, ref and size win over the provider's own description.
+				attachment = item.merge(MessagingMedia.store(adapter.engine, fetched.bytes(), type, directory, name, router.context()));
+			} catch (java.io.IOException e) {
+				throw new IllegalStateException(MessagingMedia.UNSUPPORTED_DESTINATION + ": " + directory);
+			}
+			if (spec.mediaOperation() != null) {
+				attachment = MessagingMedia.processed(attachment, router.runOperation(spec.mediaOperation(),
+					attachment.assoc(MessagingMedia.K_CAPTION, Strings.create(text == null ? "" : text)).assoc(MessagingSettings.key("via"), via)));
+			}
+			attachments = attachments.conj(attachment);
+			AMap<AString, ACell> image = MessagingMedia.imageBlock(attachment);
+			if (image != null) content = content.conj(image);
+		}
+		message = message.assoc(MessagingMedia.K_ATTACHMENTS, attachments);
+		return content.isEmpty() ? message : message.assoc(Fields.CONTENT, content);
 	}
 	@Override public AMap<AString, ACell> status() {
 		boolean connected;

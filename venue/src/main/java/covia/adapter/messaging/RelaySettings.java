@@ -34,7 +34,7 @@ public record RelaySettings(int holdSeconds, int maxParts, String admit, String 
 		RelayBinding.N_CODE_UNKNOWN, "That linking code is not recognised or has expired. Ask the service for a new one.",
 		RelayBinding.N_NOT_OPEN, "Your service is not running, so this message cannot be answered. Send it again once it is.",
 		RelayBinding.N_HELD, "Your service is not running. It will answer when it is.",
-		RelayBinding.N_TEXT_ONLY, "Only text messages can be relayed.",
+		RelayBinding.N_TEXT_ONLY, "This kind of message cannot be relayed. Send text, a voice note, a photo or a file.",
 		RelayBinding.N_NOT_AVAILABLE, "This service cannot answer you at the moment.");
 
 	public RelaySettings {

@@ -7,6 +7,7 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import covia.adapter.messaging.ConversationRouter;
+import covia.adapter.messaging.MessagingMedia;
 import covia.adapter.messaging.MessagingSettings;
 import covia.adapter.messaging.WebhookBotSpec;
 
@@ -17,8 +18,11 @@ public record BotSpec(String name, AMap<AString, ACell> settings) implements Web
 	static BotSpec parse(String name, ACell input, boolean strict) {
 		var map = MessagingSettings.object(input);
 		var known = new HashSet<>(MessagingSettings.COMMON);
-		known.addAll(Set.of("appSecret", "verifyToken", "phoneNumberId", "businessAccountId", "apiVersion", "number"));
+		known.addAll(Set.of("appSecret", "verifyToken", "phoneNumberId", "businessAccountId", "apiVersion", "number", "mediaOperation"));
 		MessagingSettings.validate(name, map, known, CREDENTIALS, strict);
+		if (MessagingSettings.optional(map, "mediaOperation") != null && MessagingSettings.optional(map, "agent") == null) {
+			throw new IllegalArgumentException(MessagingMedia.AGENT_ONLY);
+		}
 		MessagingSettings.id(map, "phoneNumberId", "[0-9]+");
 		MessagingSettings.id(map, "businessAccountId", "[0-9]+");
 		MessagingSettings.id(map, "apiVersion", "v[0-9]+\\.[0-9]+");

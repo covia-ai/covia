@@ -158,16 +158,58 @@ class WhatsAppRelayTest {
 		}
 	}
 
-	@Test void aLinkedSenderIsToldOnlyTextIsRelayed() throws Exception {
+	@Test void aLinkedSenderIsToldWhatCannotBeRelayed_butAReactionPassesQuietly() throws Exception {
 		try (Relay r = new Relay()) {
 			r.link(ALICE);
-			r.message(Maps.of("from", PHONE, "id", "wamid.image", "timestamp", Long.toString(Instant.now().getEpochSecond()),
-				"type", "image", "image", Maps.of("id", "media-1")));
+			r.message(Maps.of("from", PHONE, "id", "wamid.reaction", "timestamp", Long.toString(Instant.now().getEpochSecond()),
+				"type", "reaction", "reaction", Maps.of("message_id", "wamid.earlier", "emoji", "👍")));
+			r.message(Maps.of("from", PHONE, "id", "wamid.location", "timestamp", Long.toString(Instant.now().getEpochSecond()),
+				"type", "location", "location", Maps.of("latitude", 51.5, "longitude", -0.1)));
 			Sent told = r.f.api.take();
 			assertEquals(RelaySettings.DEFAULT_NOTICES.get(RelayBinding.N_TEXT_ONLY), str(RT.getIn(told.body(), "text"), "body"));
+			assertNull(r.f.api.sends.poll(300, TimeUnit.MILLISECONDS), "the reaction drew no notice");
 			AMap<AString, ACell> polled = r.call(ALICE, RelayBinding.POLL, "{\"wait_ms\":0}");
 			assertEquals(0, RT.ensureVector(polled.get(Strings.create("messages"))).count());
 		}
+	}
+
+	@Test void aVoiceNoteIsRelayed_andItsBytesAreFetchedOnRequestButNeverKept() throws Exception {
+		byte[] voice = "OggS-relayed-voice".getBytes(StandardCharsets.UTF_8);
+		try (Relay r = new Relay()) {
+			r.link(ALICE);
+			r.f.api.media.put("70001", new Media(voice, "audio/ogg"));
+			CompletableFuture<WebhookResponse> polling = r.pollAsync(ALICE, 8_000);
+			Thread.sleep(100);
+			r.message(Maps.of("from", PHONE, "id", "wamid.voice", "timestamp", Long.toString(Instant.now().getEpochSecond()),
+				"type", "audio", "audio", Maps.of("id", "70001", "mime_type", "audio/ogg; codecs=opus", "voice", CVMBool.TRUE)));
+			AMap<AString, ACell> got = RT.ensureMap(JSON.parse(new String(polling.get(8, TimeUnit.SECONDS).body(), StandardCharsets.UTF_8)));
+			AVector<ACell> messages = RT.ensureVector(got.get(Strings.create("messages")));
+			assertEquals(1, messages.count(), got.toString());
+			assertEquals("", str(messages.get(0), "text"));
+			AMap<AString, ACell> item = RT.ensureMap(RT.ensureVector(RT.getIn(messages.get(0), "media")).get(0));
+			assertEquals("audio", str(item, "kind"));
+			assertEquals("audio/ogg; codecs=opus", str(item, "mediaType"));
+			assertEquals(CVMBool.TRUE, item.get(Strings.create("voice")));
+			assertNull(item.get(Strings.create("id")), "the provider's media id stays with the hub");
+
+			WebhookResponse fetched = media(r, ALICE, "wamid.voice");
+			assertEquals(200, fetched.status());
+			assertArrayEquals(voice, fetched.body());
+			assertEquals("audio/ogg; codecs=opus", fetched.contentType());
+			assertEquals("Bearer " + TOKEN, r.f.api.gets.poll(1, TimeUnit.SECONDS).authorization());
+			assertEquals(404, media(r, BOB, "wamid.voice").status(), "only its principal may fetch it");
+			assertEquals(404, media(r, ALICE, "wamid.unknown").status());
+
+			ACell stored = r.f.engine.resolvePath(Strings.create("w/adapters/" + WhatsAppAdapter.NAME), r.f.engine.venueContext());
+			assertFalse(String.valueOf(stored).contains("70001"), "no media reference is stored");
+			ACell drives = run(r.f.engine, OWNER, "v/ops/dlfs/list-drives", Maps.empty());
+			assertFalse(String.valueOf(drives).contains(WhatsAppAdapter.NAME), "and no copy in a drive of the owner's: " + drives);
+		}
+	}
+
+	private static WebhookResponse media(Relay r, AString caller, String messageId) throws Exception {
+		return r.f.adapter.handleRelay("c-main", RelayBinding.MEDIA, caller, new WebhookRequest("GET", Map.of(),
+			Map.of("message_id", List.of(messageId)), new byte[0])).get(10, TimeUnit.SECONDS);
 	}
 
 	@Test void aForgedWebhookReachesNobody_andMetaVerifiesWithTheToken() throws Exception {

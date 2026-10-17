@@ -21,6 +21,8 @@ public interface WebhookBotSpec extends MessagingBotSpec {
 	@Override default String operation() { return MessagingSettings.optional(settings(), "operation"); }
 	@Override default ACell reply() { return settings().get(MessagingSettings.key("reply")); }
 	@Override default ACell relay() { return settings().get(MessagingSettings.key("relay")); }
+	/** The operation run on each attachment of an agent binding's turn, or null; see {@link MessagingMedia}. */
+	default String mediaOperation() { return MessagingSettings.optional(settings(), "mediaOperation"); }
 	/**
 	 * Whether any sender's messages are admitted. A relay's links are its admission,
 	 * so a relay binding admits everyone unless {@code open: false} narrows it to

@@ -121,6 +121,35 @@ class MessagingHttpTest {
 		}
 	}
 
+	@Test void getsJsonAndFetchesBoundedBytesWithTheToken() throws Exception {
+		byte[] audio = "OggS-bytes".getBytes(StandardCharsets.UTF_8);
+		try (Server server = new Server(exchange -> {
+			assertEquals("GET", exchange.getRequestMethod());
+			assertEquals("Bearer " + TOKEN, exchange.getRequestHeaders().getFirst("Authorization"));
+			if (exchange.getRequestURI().getQuery() == null) { reply(exchange, 200, "{\"url\":\"link\"}"); return; }
+			exchange.getResponseHeaders().set("Content-Type", "audio/ogg");
+			exchange.sendResponseHeaders(200, audio.length);
+			exchange.getResponseBody().write(audio);
+		})) {
+			assertEquals(Maps.of("url", "link"), MessagingHttp.get(server.url(), TOKEN));
+			MessagingMedia.Fetched fetched = MessagingHttp.fetch(MessagingHttp.download(server.url() + "?hash=signed"), TOKEN, 1024);
+			assertArrayEquals(audio, fetched.bytes());
+			assertEquals("audio/ogg", fetched.contentType());
+			assertEquals(MessagingMedia.TOO_LARGE, assertThrows(IllegalStateException.class,
+				() -> MessagingHttp.fetch(MessagingHttp.download(server.url() + "?hash=signed"), TOKEN, 4)).getMessage(),
+				"a download past its bound is refused as too large");
+		}
+	}
+
+	@Test void downloadLinksKeepTheirQueryButNeedTls() {
+		assertEquals("ext=1&hash=x", MessagingHttp.download("https://lookaside.example/media?ext=1&hash=x").getQuery());
+		for (String bad : new String[] {"http://lookaside.example/media", "https://user@lookaside.example/media",
+				"https://lookaside.example/media#part", "ftp://lookaside.example/media", "not a url"}) {
+			assertEquals(MessagingHttp.INVALID_DOWNLOAD_URL, assertThrows(IllegalArgumentException.class,
+				() -> MessagingHttp.download(bad)).getMessage(), bad);
+		}
+	}
+
 	private static void reply(HttpExchange exchange, int status, String body) throws java.io.IOException {
 		byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
 		exchange.sendResponseHeaders(status, bytes.length);

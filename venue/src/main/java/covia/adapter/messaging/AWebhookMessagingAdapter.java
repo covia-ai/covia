@@ -64,6 +64,14 @@ public abstract class AWebhookMessagingAdapter<S extends WebhookBotSpec>
 	protected AMap<AString, ACell> relayContact(WebhookBot<S> bot) { return Maps.empty(); }
 	/** A link that opens a conversation with the binding ready to send {@code LINK <code>}, or null. */
 	protected String relayLink(WebhookBot<S> bot, String code) { return null; }
+	/**
+	 * Fetch one attachment named by an item of an event's {@code media}, with the
+	 * binding's credentials, at most {@link MessagingMedia#MAX_BYTES}. A provider that
+	 * puts {@code media} on its events implements this; nothing is stored here.
+	 */
+	protected MessagingMedia.Fetched fetchMedia(WebhookBot<S> bot, AMap<AString, ACell> item) {
+		throw new UnsupportedOperationException(MessagingMedia.NOT_FETCHED);
+	}
 
 	@Override public final synchronized boolean configure(AMap<AString, ACell> settings, boolean strict) {
 		if (settings == null) settings = Maps.empty();

@@ -34,6 +34,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   hook. A `parse_mode` returned by a reply hook now wins over the bot's
   `parseMode`.
 - Venue `"tray": false` keeps the tray icon and AWT out of the process.
+- WhatsApp voice notes, photos and files: attachments and `mediaOperation` for agent
+  bindings, `media` on relay polls and a relay `media` action; Telegram's attachment
+  handling is now shared messaging code.
 
 ### Fixed
 

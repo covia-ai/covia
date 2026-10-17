@@ -16,7 +16,9 @@ import java.util.function.LongSupplier;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.AVector;
 import convex.core.data.Maps;
+import convex.core.data.Vectors;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
@@ -69,16 +71,24 @@ public final class MessageRelay {
 	/**
 	 * One message as a principal collects it.
 	 *
-	 * @param via where it came from, as the principal may see it (provider, sender,
-	 *            chat or thread); never null
+	 * @param text  the text or caption; empty for a bare attachment
+	 * @param via   where it came from, as the principal may see it (provider, sender,
+	 *              chat or thread); never null
+	 * @param media its attachments as the principal may see them, fetched on request;
+	 *              never null
 	 */
-	public record Inbound(String id, String text, long timestampSec, AMap<AString, ACell> via) {
+	public record Inbound(String id, String text, long timestampSec, AMap<AString, ACell> via, AVector<ACell> media) {
 		public Inbound {
 			if (via == null) via = Maps.empty();
+			if (media == null) media = Vectors.empty();
+		}
+
+		public Inbound(String id, String text, long timestampSec, AMap<AString, ACell> via) {
+			this(id, text, timestampSec, via, Vectors.empty());
 		}
 
 		public Inbound(String id, String text, long timestampSec) {
-			this(id, text, timestampSec, Maps.empty());
+			this(id, text, timestampSec, Maps.empty(), Vectors.empty());
 		}
 	}
 

@@ -12,53 +12,31 @@ import com.pengrad.telegrambot.utility.BotUtils;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
-import covia.api.Fields;
+import covia.adapter.messaging.MessagingMedia;
 
-/** Telegram media selection; wire metadata stays provider-specific. */
+/**
+ * Telegram media selection; wire metadata stays provider-specific. Storing,
+ * naming and the media hook's result are the shared {@link MessagingMedia}.
+ */
 final class TelegramMedia {
 	static final int MAX_BYTES = 20 * 1024 * 1024;
 	static final String TOO_LARGE = "Telegram attachment exceeds the 20 MiB transfer limit";
 	static final String DOWNLOAD_FAILED = "Telegram attachment download failed";
 	static final String INVALID_PATH = "Telegram returned an invalid file path";
-	static final String INVALID_DESTINATION = "destination must be a non-empty content directory reference";
-	static final String UNSUPPORTED_DESTINATION = "No content provider supports create-only writes at destination";
-	static final String INVALID_FILE_NAME = "fileName must be a safe single filename (at most 200 UTF-8 bytes)";
-	static final String NAME_CONFLICT = "Could not choose an unused filename after 1000 attempts";
-	static final String PROCESSOR_RESULT = "mediaOperation must return an object; text, when present, must be a non-empty string";
+	static final String INVALID_DESTINATION = MessagingMedia.INVALID_DESTINATION;
+	static final String UNSUPPORTED_DESTINATION = MessagingMedia.UNSUPPORTED_DESTINATION;
+	static final String INVALID_FILE_NAME = MessagingMedia.INVALID_FILE_NAME;
+	static final String NAME_CONFLICT = MessagingMedia.NAME_CONFLICT;
+	static final String PROCESSOR_RESULT = MessagingMedia.PROCESSOR_RESULT;
 
 	private TelegramMedia() {}
 
-	/** Conservative portable basename: never interpret sender metadata as a path or URL component. */
-	static boolean safeFileName(String name) {
-		if (name == null || name.isBlank() || name.equals(".") || name.equals("..")
-				|| !name.equals(name.strip()) || name.endsWith(".")
-				|| name.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 200) return false;
-		for (int i = 0; i < name.length(); i++) {
-			char c = name.charAt(i);
-			if (Character.isISOControl(c) || "/\\\\<>:\"|?*#%".indexOf(c) >= 0) return false;
-		}
-		String stem = name.split("\\.", 2)[0];
-		return !stem.matches("(?i)(CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])");
-	}
+	static boolean safeFileName(String name) { return MessagingMedia.safeFileName(name); }
 
-	static String collisionName(String name, int attempt) {
-		if (attempt == 0) return name;
-		int dot = name.lastIndexOf('.');
-		if (dot <= 0) dot = name.length();
-		return name.substring(0, dot) + "(" + attempt + ")" + name.substring(dot);
-	}
+	static String collisionName(String name, int attempt) { return MessagingMedia.collisionName(name, attempt); }
 
-	/** Retain application output without allowing it to overwrite transport metadata. */
 	static AMap<AString, ACell> processed(AMap<AString, ACell> attachment, ACell result) {
-		if (!(result instanceof AMap<?, ?> map)) throw new IllegalArgumentException(PROCESSOR_RESULT);
-		ACell text = map.get(Fields.TEXT);
-		if (map.containsKey(Fields.TEXT)) {
-			if (!(text instanceof AString string) || string.toString().isBlank()) {
-				throw new IllegalArgumentException(PROCESSOR_RESULT);
-			}
-			attachment = attachment.assoc(Fields.TEXT, text);
-		}
-		return map.isEmpty() ? attachment : attachment.assoc(Fields.RESULT, result);
+		return MessagingMedia.processed(attachment, result);
 	}
 
 	static List<JsonObject> attachments(Message message) {

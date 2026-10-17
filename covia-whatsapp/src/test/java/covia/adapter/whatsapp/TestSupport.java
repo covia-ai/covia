@@ -54,15 +54,35 @@ final class TestSupport {
     fail("Receipt did not reach " + status + ": " + bot.inbox().get(id) + "; bot " + bot.status());
   }
   record Sent(String path, String authorization, AMap<AString,ACell> body) { }
+  /** A media item the stand-in serves: a lookup at /<version>/<id>, the bytes at /media/<id>. */
+  record Media(byte[] bytes, String mimeType) { }
   static final class FakeAPI implements AutoCloseable {
     final HttpServer server;
     final LinkedBlockingQueue<Sent> sends = new LinkedBlockingQueue<>();
+    /** GET requests (media lookups and downloads), with their Authorization header. */
+    final LinkedBlockingQueue<Sent> gets = new LinkedBlockingQueue<>();
+    final Map<String, Media> media = new java.util.concurrent.ConcurrentHashMap<>();
     volatile int status = 200;
     volatile String response = NAME.equals("slack") ? "{\"ok\":true,\"ts\":\"1700000000.000001\"}" : "{\"messages\":[{\"id\":\"wamid.sent\"}]}";
     FakeAPI() throws Exception {
       server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
       server.createContext("/", exchange -> {
         try {
+          if ("GET".equals(exchange.getRequestMethod())) {
+            String path = exchange.getRequestURI().getPath();
+            gets.add(new Sent(exchange.getRequestURI().toString(), exchange.getRequestHeaders().getFirst("Authorization"), Maps.empty()));
+            String id = path.substring(path.lastIndexOf('/') + 1);
+            Media item = media.get(id);
+            if (item == null) { exchange.sendResponseHeaders(404, -1); return; }
+            boolean download = path.startsWith("/media/");
+            byte[] bytes = download ? item.bytes() : JSON.print(Maps.of("messaging_product", "whatsapp", "id", id,
+              "url", url() + "/media/" + id + "?ext=1&hash=x", "mime_type", item.mimeType(), "file_size", item.bytes().length))
+              .toString().getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", download ? item.mimeType() : "application/json");
+            exchange.sendResponseHeaders(200, bytes.length);
+            exchange.getResponseBody().write(bytes);
+            return;
+          }
           AMap<AString,ACell> body = RT.castMap(JSON.parse(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8)));
           sends.add(new Sent(exchange.getRequestURI().toString(), exchange.getRequestHeaders().getFirst("Authorization"), body));
           byte[] bytes = response.getBytes(StandardCharsets.UTF_8);

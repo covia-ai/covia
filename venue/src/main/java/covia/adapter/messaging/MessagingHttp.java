@@ -17,6 +17,7 @@ import convex.core.util.JSON;
 public final class MessagingHttp {
 	public static final String INVALID_URL = "apiUrl must be HTTPS (HTTP is allowed only on loopback), without credentials, query or fragment";
 	public static final String INVALID_SOCKET_URL = "Provider socket URL must be WSS (WS is allowed only on loopback), without credentials or fragment";
+	public static final String INVALID_DOWNLOAD_URL = "Provider download URL must be HTTPS (HTTP is allowed only on loopback), without credentials or fragment";
 	public static final String UNAVAILABLE = "Messaging credential is unavailable";
 	public static final String HTTP_ERROR = "Messaging provider returned HTTP %d";
 	public static final String RESPONSE_ERROR = "Messaging provider returned an invalid or oversized response";
@@ -47,27 +48,64 @@ public final class MessagingHttp {
 	private static boolean loopback(String host) {
 		return "localhost".equalsIgnoreCase(host) || "127.0.0.1".equals(host) || "[::1]".equals(host);
 	}
+	/**
+	 * A provider-issued download URL, such as a short-lived media link. Unlike
+	 * {@link #endpoint} its query is kept, since it may carry the link's signature.
+	 */
+	public static URI download(String value) {
+		try {
+			URI uri = URI.create(value);
+			String host = uri.getHost();
+			if (host == null || uri.getUserInfo() != null || uri.getFragment() != null
+				|| !("https".equals(uri.getScheme()) || (loopback(host) && "http".equals(uri.getScheme())))) throw new IllegalArgumentException();
+			return uri;
+		} catch (IllegalArgumentException | NullPointerException e) { throw new IllegalArgumentException(INVALID_DOWNLOAD_URL); }
+	}
 	public static ACell post(String url, String token, ACell body) {
 		return post(url, token, body, Duration.ofSeconds(30));
 	}
 	static ACell post(String url, String token, ACell body, Duration timeout) {
+		HttpRequest request = authorised(url, token, timeout).header("Content-Type", "application/json")
+			.POST(HttpRequest.BodyPublishers.ofString(JSON.print(body).toString(), StandardCharsets.UTF_8)).build();
+		return json(exchange(request, timeout, MAX_RESPONSE, IO_ERROR));
+	}
+	/** A bounded JSON GET with the provider's bearer token. */
+	public static ACell get(String url, String token) {
+		Duration timeout = Duration.ofSeconds(30);
+		return json(exchange(authorised(url, token, timeout).GET().build(), timeout, MAX_RESPONSE, IO_ERROR));
+	}
+	/** Bytes from a provider download URL with the provider's bearer token, at most {@code max} of them. */
+	public static MessagingMedia.Fetched fetch(URI url, String token, int max) {
+		Duration timeout = Duration.ofSeconds(60);
+		HttpResponse<byte[]> response = exchange(authorised(url.toString(), token, timeout).GET().build(), timeout, max,
+			MessagingMedia.TOO_LARGE);
+		return new MessagingMedia.Fetched(response.body(), response.headers().firstValue("Content-Type").orElse(null));
+	}
+	private static HttpRequest.Builder authorised(String url, String token, Duration timeout) {
 		if (token == null || token.isBlank() || token.contains("\r") || token.contains("\n")) throw new IllegalStateException(UNAVAILABLE);
+		return HttpRequest.newBuilder(URI.create(url)).timeout(timeout).header("Authorization", "Bearer " + token);
+	}
+	private static ACell json(HttpResponse<byte[]> response) {
+		try { return MessagingSettings.object(JSON.parse(new String(response.body(), StandardCharsets.UTF_8))); }
+		catch (RuntimeException e) { throw new IllegalStateException(RESPONSE_ERROR); }
+	}
+	/** @param oversize the failure for a body over {@code max}: a send's receipt stays uncertain, a download is too large */
+	private static HttpResponse<byte[]> exchange(HttpRequest request, Duration timeout, int max, String oversize) {
 		try {
-			HttpRequest request = HttpRequest.newBuilder(URI.create(url)).timeout(timeout)
-				.header("Authorization", "Bearer " + token).header("Content-Type", "application/json")
-				.POST(HttpRequest.BodyPublishers.ofString(JSON.print(body).toString(), StandardCharsets.UTF_8)).build();
 			// HttpRequest.timeout does not bound a stalled response body. Bound the
 			// complete exchange and cancel unfinished I/O on timeout or interruption.
-			var pending = CLIENT.sendAsync(request, info -> new LimitedBodySubscriber(MAX_RESPONSE));
+			var pending = CLIENT.sendAsync(request, info -> new LimitedBodySubscriber(max));
 			HttpResponse<byte[]> response;
 			try { response = pending.get(timeout.toNanos(), TimeUnit.NANOSECONDS); }
 			finally { if (!pending.isDone()) pending.cancel(true); }
 			if (response.statusCode() < 200 || response.statusCode() >= 300) throw new IllegalStateException(HTTP_ERROR.formatted(response.statusCode()));
-			try { return MessagingSettings.object(JSON.parse(new String(response.body(), StandardCharsets.UTF_8))); }
-			catch (RuntimeException e) { throw new IllegalStateException(RESPONSE_ERROR); }
+			return response;
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt(); throw new IllegalStateException(IO_ERROR);
-		} catch (ExecutionException | TimeoutException e) { throw new IllegalStateException(IO_ERROR); }
+		} catch (ExecutionException e) {
+			if (e.getCause() instanceof IllegalStateException s && RESPONSE_ERROR.equals(s.getMessage())) throw new IllegalStateException(oversize);
+			throw new IllegalStateException(IO_ERROR);
+		} catch (TimeoutException e) { throw new IllegalStateException(IO_ERROR); }
 	}
 	private static final class LimitedBodySubscriber implements HttpResponse.BodySubscriber<byte[]> {
 		private final java.util.concurrent.CompletableFuture<byte[]> result = new java.util.concurrent.CompletableFuture<>();

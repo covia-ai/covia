@@ -579,22 +579,28 @@ inbox, and no Job records message text. Principals use the binding's own id, as 
 the hooks it wants to change: `maxText` (replies are split to fit), `sendFollowUp`
 (later parts of a split reply), `relayReplyWindowMs`, and `relayContact` and
 `relayLink` (an address such as a phone number, and a link that opens a chat with the
-linking message typed). WhatsApp and Slack both relay this way.
+linking message typed). A provider that puts `media` on its events and implements
+`fetchMedia` relays attachments too, and gives them to agent bindings through
+`covia.adapter.messaging.MessagingMedia`, the attachment layer Telegram also uses:
+private storage in the owner's drive named for the provider, attachment
+descriptors, image blocks and the binding's `mediaOperation`. WhatsApp and Slack
+both relay; WhatsApp also relays and delivers media.
 
 | Action | Request | Answer |
 |---|---|---|
 | `status` | — | `{enabled, linked, …contact}` |
 | `link` | `{}` | `{code, expires_in, link?, …contact}`; the person sends `LINK <code>` to the binding; a code lasts ten minutes and is spent once |
 | `unlink` | `POST {}` | `{unlinked}` |
-| `poll` | `{wait_ms?}` | `{linked, messages[{id, text, timestamp, via}]}`, waiting up to 20 s; `via` holds the provider's `channel`, `from`, `chat` and `thread` |
+| `poll` | `{wait_ms?}` | `{linked, messages[{id, text, timestamp, via, media?}]}`, waiting up to 20 s; `via` holds the provider's `channel`, `from`, `chat` and `thread`; `media` lists attachments as `{kind, mediaType, fileName?, voice?}`, the caption being the text |
 | `reply` | `POST {message_id, text}` | `{sent, parts}`: once per message, through the provider's own reply, so its threading and reply window apply; refused with `too_long` beyond `maxParts` (default 10) |
+| `media` | `?message_id=…&index=…`, or the same as a JSON body | The attachment's bytes with its media type, fetched from the provider on each request and never kept; only for the message's own principal, inside its reply window; `no_media`, `media_too_large` or `media_unavailable` otherwise |
 
 Errors are `{error}` with the codes `RelayBinding` defines. A principal counts as open
 while it has a poll waiting or polled in the last minute. With `holdSeconds` at 60 or
 less (the default), a message for a principal that is not open is refused and its
 sender told so; a longer hold keeps it in memory that long. `STOP` from the sender
-unlinks; an unlinked sender is told how to link; a linked sender of anything but text
-is told only text is relayed. The hub's own replies are `notices` (`linked`,
+unlinks; an unlinked sender is told how to link; a linked sender of something the
+provider cannot relay (a location, say) is told so. The hub's own replies are `notices` (`linked`,
 `unlinked`, `notLinked`, `codeUnknown`, `notOpen`, `held`, `textOnly`,
 `notAvailable`), each overridable. A relay binding admits every sender unless
 `open: false` narrows it to `allow`, and its owner must be a DID, since both hooks run

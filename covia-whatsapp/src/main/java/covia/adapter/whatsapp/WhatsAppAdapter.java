@@ -1,8 +1,10 @@
 package covia.adapter.whatsapp;
 
+import java.net.URI;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.Objects;
+import java.util.Set;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -11,12 +13,16 @@ import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.data.prim.CVMBool;
+import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.messaging.AWebhookMessagingAdapter;
 import covia.adapter.messaging.ConversationRouter;
 import covia.adapter.messaging.MessagingHttp;
+import covia.adapter.messaging.MessagingMedia;
 import covia.adapter.messaging.MessagingSettings;
 import covia.adapter.messaging.WebhookBot;
+import covia.api.Fields;
 import covia.adapter.webhook.WebhookRequest;
 import covia.adapter.webhook.WebhookResponse;
 import covia.adapter.webhook.WebhookSignatures;
@@ -32,6 +38,10 @@ public final class WhatsAppAdapter extends AWebhookMessagingAdapter<BotSpec> {
 	public static final int MAX_TEXT = 4096;
 	/** WhatsApp's customer-service window: free-form text may answer a message this long after it. */
 	public static final long WINDOW_SECONDS = 86_400;
+	public static final String MEDIA_UNAVAILABLE = "WhatsApp did not return a media URL";
+	/** Message types that carry a fetchable attachment. */
+	static final Set<String> MEDIA_TYPES = Set.of("image", "audio", "video", "document", "sticker");
+	static final String MEDIA_ID = "[A-Za-z0-9_.-]{1,128}";
 	private final Clock clock;
 	public WhatsAppAdapter() { this(Clock.systemUTC()); }
 	WhatsAppAdapter(Clock clock) { this.clock = Objects.requireNonNull(clock); }
@@ -65,12 +75,16 @@ public final class WhatsAppAdapter extends AWebhookMessagingAdapter<BotSpec> {
 				if (!"whatsapp".equals(MessagingSettings.optional(value, "messaging_product"))) continue;
 				var metadata = MessagingSettings.object(value.get(MessagingSettings.key("metadata")));
 				if (!bot.spec().phoneNumberId().equals(MessagingSettings.required(metadata, "phone_number_id"))) continue;
-				// Delivery statuses are acknowledged without routing; other message types
-				// reach only a relay, which tells a linked sender it relays text alone.
+				// Delivery statuses and reactions are acknowledged without routing. Media
+				// reaches agent and relay bindings; other kinds reach only a relay, which
+				// tells a linked sender it cannot relay them.
 				for (ACell messageCell : array(value, "messages")) {
 					var message = MessagingSettings.object(messageCell);
-					boolean isText = "text".equals(MessagingSettings.optional(message, "type"));
-					if (!isText && !bot.spec().routesToRelay()) continue;
+					String type = MessagingSettings.optional(message, "type");
+					if ("reaction".equals(type)) continue;
+					boolean isText = "text".equals(type);
+					boolean media = MEDIA_TYPES.contains(type) && (bot.spec().routesToAgent() || bot.spec().routesToRelay());
+					if (!isText && !media && !bot.spec().routesToRelay()) continue;
 					String from = MessagingSettings.required(message, "from");
 					if (!bot.spec().admits(from)) continue;
 					String id = MessagingSettings.required(message, "id");
@@ -84,6 +98,7 @@ public final class WhatsAppAdapter extends AWebhookMessagingAdapter<BotSpec> {
 					AMap<AString, ACell> event = Maps.of("conversation", ConversationRouter.key(bot.spec().installationKey(), from),
 						"to", from, "messageId", id, "timestamp", timestamp, "via", via,
 						"input", Maps.of("message", message, "metadata", metadata, "business_account_id", bot.spec().businessAccountId()));
+					if (media) { bot.accept(id, withMedia(event, type, MessagingSettings.object(message.get(MessagingSettings.key(type))))); continue; }
 					if (!isText) { bot.unsupported(id, event); continue; }
 					String text = MessagingSettings.required(MessagingSettings.object(message.get(MessagingSettings.key("text"))), "body");
 					if (text.codePointCount(0, text.length()) > MAX_TEXT) throw new IllegalArgumentException(TEXT_LENGTH.formatted(MAX_TEXT));
@@ -92,6 +107,44 @@ public final class WhatsAppAdapter extends AWebhookMessagingAdapter<BotSpec> {
 			}
 		}
 		return WebhookResponse.text(200, "");
+	}
+	/**
+	 * The event for an image, voice note, audio, video, document or sticker: its media
+	 * described for {@link MessagingMedia}, and any caption as the text. Bytes are
+	 * fetched only when the message is handled.
+	 */
+	private static AMap<AString, ACell> withMedia(AMap<AString, ACell> event, String kind, AMap<AString, ACell> body) {
+		AMap<AString, ACell> item = Maps.of("id", MessagingSettings.id(body, "id", MEDIA_ID), "kind", kind);
+		String type = described(body, "mime_type");
+		if (type != null) item = item.assoc(MessagingMedia.K_MEDIA_TYPE, Strings.create(type));
+		if (body.get(MessagingSettings.key("voice")) instanceof CVMBool voice && voice.booleanValue()) item = item.assoc(MessagingSettings.key("voice"), CVMBool.TRUE);
+		String fileName = described(body, "filename");
+		if (MessagingMedia.safeFileName(fileName)) item = item.assoc(Fields.FILE_NAME, Strings.create(fileName));
+		event = event.assoc(MessagingMedia.K_MEDIA, Vectors.of(item));
+		String caption = described(body, "caption");
+		if (caption == null) return event;
+		if (caption.codePointCount(0, caption.length()) > MAX_TEXT) throw new IllegalArgumentException(TEXT_LENGTH.formatted(MAX_TEXT));
+		return event.assoc(MessagingSettings.key("text"), Strings.create(caption));
+	}
+	/** A sender-supplied description: absent when missing, blank or not text, never a reason to refuse the batch. */
+	private static String described(AMap<AString, ACell> body, String field) {
+		AString value = RT.ensureString(body.get(MessagingSettings.key(field)));
+		return value == null || value.isBlank() ? null : value.toString();
+	}
+	/** WhatsApp media: the id gives a short-lived URL, the URL the bytes; both requests carry the binding's token. */
+	@Override protected MessagingMedia.Fetched fetchMedia(WebhookBot<BotSpec> bot, AMap<AString, ACell> item) {
+		bot.requireReady();
+		String lookup = apiUrl() + "/" + bot.spec().apiVersion() + "/" + MessagingSettings.id(item, "id", MEDIA_ID);
+		ACell info = MessagingHttp.get(lookup, bot.credential("token", lookup));
+		AString url = RT.ensureString(RT.getIn(info, MessagingSettings.key("url")));
+		if (url == null) throw new IllegalStateException(MEDIA_UNAVAILABLE);
+		CVMLong size = RT.ensureLong(RT.getIn(info, MessagingSettings.key("file_size")));
+		if (size != null && size.longValue() > MessagingMedia.MAX_BYTES) throw new IllegalArgumentException(MessagingMedia.TOO_LARGE);
+		URI download = MessagingHttp.download(url.toString());
+		// The link is on another host: a url-bound secret/use grant must cover it too.
+		MessagingMedia.Fetched fetched = MessagingHttp.fetch(download, bot.credential("token", download.toString()), MessagingMedia.MAX_BYTES);
+		AString type = RT.ensureString(RT.getIn(info, MessagingSettings.key("mime_type")));
+		return type == null ? fetched : new MessagingMedia.Fetched(fetched.bytes(), type.toString());
 	}
 	private static AVector<ACell> array(AMap<AString, ACell> map, String key) {
 		ACell value = map.get(MessagingSettings.key(key));
