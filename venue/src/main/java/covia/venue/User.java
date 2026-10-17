@@ -260,8 +260,13 @@ public class User extends ALatticeComponent<ACell> {
 	 *
 	 * @param agentId Agent identifier to remove
 	 */
+	@SuppressWarnings("unchecked")
 	public void removeAgent(AString agentId) {
-		cursor.path(Namespace.G, agentId).set(null);
+		// Remove the key itself, as covia:delete does: writing null through the
+		// agent's own path would leave g/<id> listed, holding nothing.
+		cursor.path(Namespace.G).updateAndGet(agents -> (agents instanceof AMap<?, ?> map)
+			? ((AMap<AString, ACell>) map).dissoc(agentId)
+			: agents);
 	}
 
 	/**

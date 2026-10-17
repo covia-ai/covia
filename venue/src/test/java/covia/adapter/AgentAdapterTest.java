@@ -4890,6 +4890,11 @@ public class AgentAdapterTest {
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("rem-agent");
 		assertNull(agent, "Agent record should be removed");
+		// Gone, not a key left holding null: a raw listing of g/ no longer names it.
+		assertFalse(user.getAgents().containsKey(Strings.create("rem-agent")), "no key left behind in g/");
+		ACell listed = engine.jobs().invokeOperation("v/ops/covia/list", Maps.of(Fields.PATH, "g"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		assertFalse(String.valueOf(RT.getIn(listed, "keys")).contains("rem-agent"), "covia:list of g/: " + listed);
 	}
 
 	@Test
