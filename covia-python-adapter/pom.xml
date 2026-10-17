@@ -11,6 +11,10 @@
 	<name>Covia Python Adapter Module</name>
 	<description>Optional loadable venue module for operator-configured in-process Python operations.</description>
 
+	<properties>
+		<covia.module.name>covia.python.adapter</covia.module.name>
+	</properties>
+
 	<dependencies>
 		<!-- Venue SPI supplied by the host and never bundled. -->
 		<dependency>

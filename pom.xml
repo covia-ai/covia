@@ -148,6 +148,23 @@
 				</executions>
 			</plugin>
 
+			<!-- Every jar names its Java module, so a module-path consumer gets a
+			     stable name rather than one derived from the file name. Each module
+			     sets covia.module.name: "covia." plus its artifactId without the
+			     "covia-" prefix, hyphens as dots. -->
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-jar-plugin</artifactId>
+				<version>3.4.1</version>
+				<configuration>
+					<archive>
+						<manifestEntries>
+							<Automatic-Module-Name>${covia.module.name}</Automatic-Module-Name>
+						</manifestEntries>
+					</archive>
+				</configuration>
+			</plugin>
+
 			<!-- Central requires a sources jar and a javadoc jar alongside every
 			     published artifact. Attach both for every module. -->
 			<plugin>
@@ -170,6 +187,10 @@
 					     terse doc comments would otherwise block a release. -->
 					<doclint>none</doclint>
 					<failOnError>false</failOnError>
+					<!-- Document on the class path, as the code compiles. Without this
+					     the plugin sees each Automatic-Module-Name and switches to the
+					     module path, where convex.core hides packages the venue uses. -->
+					<legacyMode>true</legacyMode>
 				</configuration>
 				<executions>
 					<execution>

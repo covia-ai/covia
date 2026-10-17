@@ -12,6 +12,10 @@
 	<name>Covia Speech Module</name>
 	<description>Speech-to-text and text-to-speech adapter over an OpenAI-compatible audio API (a cloud provider or a local server), packaged as an optional loadable venue module.</description>
 
+	<properties>
+		<covia.module.name>covia.speech</covia.module.name>
+	</properties>
+
 	<dependencies>
 		<dependency>
 			<groupId>ai.covia</groupId>

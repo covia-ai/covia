@@ -12,6 +12,10 @@
 	<name>Covia Claude Code Module</name>
 	<description>Claude Code adapter for Covia venues — lets agents and jobs drive the Claude Code CLI in operator-authorised project directories: one-shot runs, long-lived resumable sessions, and a bounded pool of live processes. Packaged as a loadable venue module (the shaded -module.jar), not part of covia.jar.</description>
 
+	<properties>
+		<covia.module.name>covia.claude.code</covia.module.name>
+	</properties>
+
 	<dependencies>
 		<!-- The venue SPI — provided by the loading venue, never bundled -->
 		<dependency>

@@ -11,6 +11,10 @@
 	<name>Covia Venue</name>
 	<description>Covia venue server runtime: the grid node that hosts operations, agents, assets, and the REST/MCP/A2A APIs.</description>
 
+	<properties>
+		<covia.module.name>covia.venue</covia.module.name>
+	</properties>
+
 	<build>
 		<plugins>
 			<plugin>

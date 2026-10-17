@@ -11,6 +11,10 @@
   <name>Covia Core</name>
   <description>Covia grid client library and shared abstractions: assets, operations, jobs, venue client, auth.</description>
 
+  <properties>
+    <covia.module.name>covia.core</covia.module.name>
+  </properties>
+
   <dependencies>
 		<!-- Convex / Lattice Tech -->
 		<dependency>

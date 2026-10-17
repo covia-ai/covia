@@ -11,6 +11,10 @@
 	<name>Covia Python</name>
 	<description>Dependency-light CPython FFM bindings and Convex value conversion.</description>
 
+	<properties>
+		<covia.module.name>covia.python</covia.module.name>
+	</properties>
+
 	<dependencies>
 		<!-- Deliberately the only runtime dependency. -->
 		<dependency>

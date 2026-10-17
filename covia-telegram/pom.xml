@@ -14,6 +14,7 @@
 
 	<properties>
 		<telegram.version>10.3.0</telegram.version>
+		<covia.module.name>covia.telegram</covia.module.name>
 	</properties>
 
 	<dependencies>
@@ -122,6 +123,12 @@
 									<!-- Logging resolves parent-first from the venue -->
 									<exclude>org.slf4j:*</exclude>
 									<exclude>ch.qos.logback:*</exclude>
+									<!-- Libraries covia.jar already ships come from the venue, so
+									     the module never carries a second copy of a venue package. -->
+									<exclude>org.jetbrains.kotlin:*</exclude>
+									<exclude>org.jetbrains:annotations</exclude>
+									<exclude>com.google.code.gson:*</exclude>
+									<exclude>com.google.errorprone:*</exclude>
 								</excludes>
 							</artifactSet>
 							<filters>

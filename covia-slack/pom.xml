@@ -10,6 +10,7 @@
 	<artifactId>covia-slack</artifactId>
 	<name>Covia Slack Module</name>
 	<description>Slack bot adapter for Covia venues, packaged as an optional loadable venue module.</description>
+	<properties><covia.module.name>covia.slack</covia.module.name></properties>
 	<dependencies>
 		<dependency>
 			<groupId>ai.covia</groupId><artifactId>venue</artifactId>

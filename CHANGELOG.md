@@ -41,6 +41,13 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   OpenAI-compatible audio API, cloud or local.
 - `speech` local engine: in-process transcription with sherpa-onnx (Parakeet, Moonshine),
   operator-installed or pinned native libraries, Ogg/Opus voice notes.
+- Every jar names its Java module (`Automatic-Module-Name`: `covia.venue`, `covia.core`,
+  `covia.<module>`).
+
+### Changed
+
+- Discord, Telegram and SQL module jars use the venue's Kotlin, Jackson, Gson and Protobuf
+  instead of bundling their own copies.
 
 ### Fixed
 

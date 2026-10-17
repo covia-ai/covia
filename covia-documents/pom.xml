@@ -16,6 +16,7 @@
 		<pdfbox.version>3.0.8</pdfbox.version>
 		<poi.version>5.5.1</poi.version>
 		<log4j.version>2.26.1</log4j.version>
+		<covia.module.name>covia.documents</covia.module.name>
 	</properties>
 
 	<dependencies>

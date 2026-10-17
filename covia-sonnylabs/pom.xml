@@ -12,6 +12,10 @@
 	<name>Covia SonnyLabs Module</name>
 	<description>SonnyLabs prompt-injection scanning adapter, packaged as an optional loadable venue module.</description>
 
+	<properties>
+		<covia.module.name>covia.sonnylabs</covia.module.name>
+	</properties>
+
 	<dependencies>
 		<dependency>
 			<groupId>ai.covia</groupId>

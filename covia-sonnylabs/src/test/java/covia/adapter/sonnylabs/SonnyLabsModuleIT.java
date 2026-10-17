@@ -8,7 +8,12 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.TimeUnit;
+import java.util.jar.JarFile;
+import java.util.stream.Collectors;
+import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 import org.junit.jupiter.api.Assumptions;
@@ -33,6 +38,10 @@ class SonnyLabsModuleIT {
 		assertFalse(containsPrefix(moduleJar, "org/slf4j/"));
 		assertTrue(containsPrefix(moduleJar, "covia/adapter/sonnylabs/"));
 		assertTrue(contains(moduleJar, "META-INF/services/covia.adapter.AAdapter"));
+		assertEquals("covia.sonnylabs", moduleName(moduleJar), "the jar names its Java module");
+		Set<String> shared = packages(moduleJar);
+		shared.retainAll(packages(venueJar));
+		assertTrue(shared.isEmpty(), "covia.jar already ships these packages: " + shared);
 
 		Path log = temp.resolve("sonnylabs-module.log");
 		String executable = System.getProperty("os.name", "").startsWith("Windows")
@@ -65,6 +74,23 @@ class SonnyLabsModuleIT {
 	private static boolean contains(Path jar, String name) throws Exception {
 		try (ZipFile zip = new ZipFile(jar.toFile())) {
 			return zip.getEntry(name) != null;
+		}
+	}
+
+	/** The Automatic-Module-Name the jar declares. */
+	private static String moduleName(Path jar) throws Exception {
+		try (JarFile file = new JarFile(jar.toFile())) {
+			return file.getManifest().getMainAttributes().getValue("Automatic-Module-Name");
+		}
+	}
+
+	/** Packages holding classes in a jar, META-INF aside. */
+	private static Set<String> packages(Path jar) throws Exception {
+		try (ZipFile zip = new ZipFile(jar.toFile())) {
+			return zip.stream().map(ZipEntry::getName)
+				.filter(name -> name.endsWith(".class") && name.indexOf('/') > 0 && !name.startsWith("META-INF/"))
+				.map(name -> name.substring(0, name.lastIndexOf('/')))
+				.collect(Collectors.toCollection(TreeSet::new));
 		}
 	}
 }
