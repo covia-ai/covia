@@ -82,6 +82,7 @@
 		<module>covia-slack</module>
 		<module>covia-sonnylabs</module>
 		<module>covia-documents</module>
+		<module>covia-speech</module>
 		<module>covia-claude-code</module>
 	</modules>
 

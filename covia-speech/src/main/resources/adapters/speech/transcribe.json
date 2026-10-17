@@ -1,0 +1,61 @@
+{
+  "name": "Transcribe speech",
+  "description": "Turns spoken audio at a content reference (a voice note, an uploaded recording, raw 16 kHz PCM) into text. Reads the audio with the caller's own authority. Returns {text, language?, seconds?, model, engine, ms}; silence returns no text. Anything that is not audio returns {}, so this operation serves unchanged as a Telegram or WhatsApp agent binding's mediaOperation. A transcript may mishear names and numbers.",
+  "operation": {
+    "adapter": "speech:transcribe",
+    "readOnly": true,
+    "secretKey": "OPENAI_API_KEY",
+    "secretFields": ["apiKey"],
+    "input": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Content reference of the audio, such as an attachment's ref or dlfs/<drive>/<file>; at most 20 MiB."
+        },
+        "mediaType": {
+          "type": "string",
+          "description": "The audio's media type when the reference does not carry one, such as audio/ogg, audio/mpeg or audio/wav. Raw PCM is audio/L16 (16-bit little-endian mono)."
+        },
+        "kind": {
+          "type": "string",
+          "description": "A messaging attachment's kind; anything but audio or voice returns {}."
+        },
+        "sampleRate": {
+          "type": "integer",
+          "minimum": 8000,
+          "maximum": 48000,
+          "description": "Sample rate of raw PCM input; defaults to 16000."
+        },
+        "language": {
+          "type": "string",
+          "description": "The spoken language as an ISO-639-1 code, such as en, when known; improves accuracy and speed."
+        },
+        "prompt": {
+          "type": "string",
+          "description": "Optional text to guide spelling and style, such as names or terms likely to be said."
+        },
+        "model": {
+          "type": "string",
+          "description": "Transcription model; defaults to the venue's configured model."
+        },
+        "apiKey": {
+          "type": "string",
+          "description": "Optional s/NAME reference to the caller's own key; by default the operator's key, else the caller's s/OPENAI_API_KEY, else none."
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "text": { "type": "string" },
+        "language": { "type": "string" },
+        "seconds": { "type": "number" },
+        "model": { "type": "string" },
+        "engine": { "type": "string" },
+        "ms": { "type": "integer" }
+      }
+    }
+  }
+}

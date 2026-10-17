@@ -1963,6 +1963,61 @@ text formats (returned as themselves). The venue skill `v/skills/data/documents`
 teaches agents to read documents in slices and to treat a scanned PDF as
 unreadable rather than empty.
 
+### Speech (covia-speech)
+
+The optional **covia-speech** module turns audio into text and text into audio
+through an OpenAI-compatible audio API: OpenAI by default, or any server that
+speaks the same `/audio/transcriptions` and `/audio/speech` endpoints. Point it
+at a local server on loopback, such as speaches or LocalAI, and no audio leaves
+the venue's machine; a server that only transcribes keeps `transcribe` local but
+cannot `speak`.
+
+```json
+{
+  "modules": ["modules/covia-speech-<version>-module.jar"],
+  "adapters": {
+    "speech": {
+      "baseUrl": "https://api.openai.com/v1",
+      "transcribeModel": "whisper-1",
+      "speakModel": "tts-1",
+      "voice": "alloy",
+      "timeoutMillis": 120000
+    }
+  }
+}
+```
+
+- `baseUrl` — the API root; HTTPS, or plain HTTP only on loopback. Never a caller input.
+- `apiKey` — optional `s/NAME` reference to an operator-held key, resolved from the
+  venue's own store and used for every caller. Without it each caller's own
+  `s/<keyName>` is used when it exists, and no key at all when it does not, which
+  a local server accepts.
+- `keyName` — the caller secret name used then (default `OPENAI_API_KEY`, the
+  name the `langchain` operations use).
+- `transcribeModel`, `speakModel`, `voice` — defaults a caller may override per call.
+
+Operations:
+
+- `v/ops/speech/transcribe {ref, mediaType?, language?, prompt?, model?}` reads
+  audio at a reference with the caller's own authority (at most 20 MiB) and
+  returns `{text, language?, seconds?, model, engine, ms}`. Silence returns no
+  `text`. Raw PCM is `mediaType: "audio/L16"` (16-bit little-endian mono, 16 kHz
+  unless `sampleRate` or a `rate=` parameter says otherwise) and travels as WAV.
+  Anything that is not audio returns `{}`, so the operation is a ready-made
+  `mediaOperation` for Telegram and WhatsApp agent bindings: a voice note's
+  transcript becomes its attachment's `text`.
+- `v/ops/speech/speak {text, voice?, model?, format?, speed?, instructions?,
+  destination?, fileName?}` synthesises up to 4,096 characters and stores the
+  audio without overwriting anything, by default as Ogg/Opus (a voice note) in
+  the caller's private DLFS `speech` drive; a `destination` directory is written
+  with the caller's authority. It returns `{ref, mediaType, size, fileName,
+  format, voice, model, engine}`; Telegram's `sendVoice` takes the ref.
+- `v/ops/speech/engines {}` says whether the engine is local and whether a key
+  resolves for the caller, without endpoints or keys.
+
+A transcript lives in the operation's Job like any other result. Provider
+failures fail the Job; nothing is retried.
+
 ### Telegram bots (covia-telegram)
 
 The **covia-telegram** module (`telegram` adapter) runs operator-declared
@@ -2042,7 +2097,9 @@ Per bot:
   Images reach the LLM as asset-reference image blocks; the agent needs
   `crud/read` on the referenced DLFS files and a vision-capable model.
   Other media remains available by protected reference. No speech provider,
-  document extraction or video understanding is enabled implicitly.
+  document extraction or video understanding is enabled implicitly; with the
+  speech module loaded, `mediaOperation: "v/ops/speech/transcribe"` transcribes
+  voice notes and passes everything else through.
   Operation bots retain the SDK-decoded Telegram update shape and can call
   `telegram/download` explicitly. Telegram update fields unknown to the SDK
   may be absent. Jobs remain the execution record; a private inbox records

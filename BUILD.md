@@ -52,6 +52,7 @@ covia/
 │   ├── pom.xml            # Venue SPI provided; JDK HTTP client only
 │   └── src/               # Prompt-injection scan adapter and local fake tests
 ├── covia-documents/       # Optional loadable documents module (PDF/Office text extraction)
+├── covia-speech/          # Optional loadable speech module (transcription and speech; JDK HTTP)
 │   ├── pom.xml            # Venue SPI provided; PDFBox and POI shaded
 │   └── src/               # Documents extract adapter and tests
 └── covia-claude-code/     # Optional loadable Claude Code module
@@ -345,7 +346,7 @@ groupId. `ai.covia:covia-core`, `ai.covia:covia-python`, `ai.covia:venue`, and
 `ai.covia:workbench` are ordinary library artifacts (along with the
 `ai.covia:covia` parent POM). The operator-facing `covia-python-adapter`,
 `covia-sql`, `covia-telegram`, `covia-discord`, `covia-whatsapp`, `covia-slack`,
-`covia-sonnylabs`, `covia-documents` and
+`covia-sonnylabs`, `covia-documents`, `covia-speech` and
 `covia-claude-code` artifacts are loadable venue modules rather than dependencies of
 the standard venue. Their slim jars are published so an embedding host can
 depend on a module through Maven; the shaded `-module.jar`s are GitHub Releases
@@ -436,6 +437,8 @@ Both snapshot and stable releases include:
 - `covia-sonnylabs-<version>-module.jar.sha256` - SHA-256 checksum
 - `covia-documents-<version>-module.jar` - Optional documents (PDF/Office text) venue module
 - `covia-documents-<version>-module.jar.sha256` - SHA-256 checksum
+- `covia-speech-<version>-module.jar` - Optional speech (transcription and text-to-speech) venue module
+- `covia-speech-<version>-module.jar.sha256` - SHA-256 checksum
 - `covia-claude-code-<version>-module.jar` - Optional Claude Code venue module
 - `covia-claude-code-<version>-module.jar.sha256` - SHA-256 checksum
 

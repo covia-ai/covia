@@ -41,6 +41,8 @@ covia/                          # ai.covia:covia (parent POM)
 │                               #   (POST /v1/scans; shaded "module" jar)
 ├── covia-documents/            # PDF/Office text extraction venue module (PDFBox, POI;
 │                               #   file:read mode "extract"; shaded "module" jar)
+├── covia-speech/               # Speech venue module: transcribe and speak over an OpenAI-compatible
+│                               #   audio API (cloud or local server); shaded "module" jar
 ├── covia-claude-code/          # Claude Code CLI venue module (runs/resumable sessions in
 │                               #   authorised project dirs; shaded "module" jar, not in covia.jar)
 ├── workbench/                  # Shared Swing components/utilities and a REPL demo

@@ -1,0 +1,19 @@
+{
+  "name": "Speech engines",
+  "description": "Lists the venue's speech engine: whether it runs locally (so audio never leaves the venue's machine), its transcription and speech models, default voice, output formats, and whether a key resolves for the caller. Never returns endpoints or keys.",
+  "operation": {
+    "adapter": "speech:engines",
+    "readOnly": true,
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "engines": { "type": "array", "items": { "type": "object" } }
+      }
+    }
+  }
+}

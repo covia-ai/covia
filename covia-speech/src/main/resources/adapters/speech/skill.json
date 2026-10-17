@@ -1,0 +1,15 @@
+{
+	"name": "speech",
+	"description": "Transcribe audio to text and speak text as audio.",
+	"skill": {
+		"tools": [
+			"v/ops/speech/transcribe",
+			"v/ops/speech/speak",
+			"v/ops/speech/engines"
+		]
+	},
+	"content": {
+		"inline": "## Speech\n- `transcribe {ref, mediaType?, language?, prompt?}` turns audio at a reference you may read into `{text, language?, seconds?}`; no text means silence. Give `language` when you know it and `prompt` with names likely to be said. A transcript may mishear names, doses and numbers: say what you heard and confirm anything that matters before acting on it.\n- `speak {text, voice?, format?}` returns `{ref, mediaType, ...}` for an audio file in your private speech drive; opus (the default) is a voice note. Send it on Telegram with `telegram:call` sendVoice and `{voice: {ref, filename}}`.\n- `engines {}` says whether speech runs locally (audio never leaves the venue's machine) and whether a key resolves for you.\n\nAn attachment's `text` already holds its transcription when its binding transcribes; do not transcribe it again. Without a transcription, do not claim to have heard audio.",
+		"contentType": "text/markdown"
+	}
+}

@@ -110,7 +110,8 @@ The turn is `{text, via, attachments, content?}`:
   `crud/read` on the files.
 
 There is no implicit speech provider. Set `mediaOperation` on an agent binding to
-an operation that transcribes or extracts: it runs as the owner once per
+an operation that transcribes or extracts, such as `v/ops/speech/transcribe` from
+the speech module, which transcribes voice notes and passes other media through: it runs as the owner once per
 attachment, with the attachment plus `caption` and `via`, and returns `{}` to pass
 the attachment through or an object whose non-empty `text` becomes the
 attachment's `text`; the whole result is kept under `attachment.result` and cannot

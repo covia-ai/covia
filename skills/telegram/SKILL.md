@@ -71,7 +71,9 @@ as the owner per attachment, with its descriptor plus `caption` and `via` contex
 Return an object: `{}` passes an attachment through; optional non-empty `text`
 supplies transcription/extraction. Structured output is retained under
 `attachment.result`; it cannot replace original file references or provider metadata.
-There is no implicit speech provider. `replyOperation` optionally takes
+There is no implicit speech provider; with the speech module loaded,
+`"mediaOperation": "v/ops/speech/transcribe"` transcribes voice notes and passes
+other media through. `replyOperation` optionally takes
 `{response, via}` and returns a non-empty string or `{text: "formatted reply"}`,
 optionally with a `parse_mode` that wins over the bot's `parseMode`.
 Use it for application reply rendering; formatting failures never send raw
