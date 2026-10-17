@@ -1,0 +1,29 @@
+{
+	"name": "shopify",
+	"description": "Work with Shopify products, orders, and customers using the user's own store and Admin API token. Load for catalogue/order/customer reads and creating products.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Shopify\nA multi-value connection: your **store** rides the base URL and the Admin API token rides its own header. Calls go through `v/ops/http/get` / `v/ops/http/post` against `https://{s/SHOPIFY_STORE}.myshopify.com/admin/api/2024-10` with `secretHeaders: {\"X-Shopify-Access-Token\": \"s/SHOPIFY_TOKEN\"}` (a custom-app Admin API access token, `shpat_`; Settings -> Apps and sales channels -> Develop apps). The venue substitutes `{s/SHOPIFY_STORE}` and injects the header.\n\nCommon calls:\n- Store: `GET /shop.json`\n- Products: `GET /products.json?limit=50`\n- One product: `GET /products/{id}.json`\n- Orders: `GET /orders.json?status=any&limit=50`\n- Customers: `GET /customers.json?limit=50`\n- Create a product: `POST /products.json` body `{\"product\": {\"title\": \"...\"}}`\n\nRules:\n- Check `status`; errors are `{errors}`. 401 = bad token; 403 = the app lacks that Admin API scope.\n- The `store` is the part before `.myshopify.com`. Results paginate via the `Link` header `rel=\"next\"`.\n- Both the store and the token must be configured for the connection to work.\n"
+	},
+	"connection": {
+		"baseUrl": "https://{s/SHOPIFY_STORE}.myshopify.com/admin/api/2024-10",
+		"auth": {
+			"kind": "secret-header",
+			"alternatives": [
+				"s/SHOPIFY_TOKEN"
+			]
+		},
+		"required": [
+			"s/SHOPIFY_STORE",
+			"s/SHOPIFY_TOKEN"
+		]
+	},
+	"skill": {
+		"tools": [
+			"v/ops/connections/status",
+			"v/ops/http/get",
+			"v/ops/http/post",
+			"v/ops/jvm/url-encode"
+		]
+	}
+}

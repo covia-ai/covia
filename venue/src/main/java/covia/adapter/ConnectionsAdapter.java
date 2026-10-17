@@ -43,6 +43,7 @@ public class ConnectionsAdapter extends AAdapter {
 	private static final AString K_CREDENTIALS = Strings.intern("credentials");
 	private static final AString K_AUTH = Strings.intern("auth");
 	private static final AString K_ALTERNATIVES = Strings.intern("alternatives");
+	private static final AString K_REQUIRED = Strings.intern("required");
 
 	/** Stable presentation order. Provider metadata itself lives in each skill asset. */
 	private static final List<Provider> PROVIDERS = List.of(
@@ -50,6 +51,8 @@ public class ConnectionsAdapter extends AAdapter {
 		new Provider("asana"),
 		new Provider("calendly"),
 		new Provider("clickup"),
+		new Provider("confluence"),
+		new Provider("datadog"),
 		new Provider("discord"),
 		new Provider("github"),
 		new Provider("gitlab"),
@@ -62,10 +65,13 @@ public class ConnectionsAdapter extends AAdapter {
 		new Provider("pagerduty"),
 		new Provider("sendgrid"),
 		new Provider("sentry"),
+		new Provider("shopify"),
 		new Provider("slack"),
 		new Provider("stripe"),
 		new Provider("telegram"),
-		new Provider("twilio"));
+		new Provider("trello"),
+		new Provider("twilio"),
+		new Provider("zendesk"));
 
 	private record Provider(String name) {
 		String skillRef() {
@@ -202,21 +208,31 @@ public class ConnectionsAdapter extends AAdapter {
 	private ACell status(Provider provider, AMap<AString, ACell> skill,
 			AString userDID, RequestContext ctx) {
 		AMap<AString, ACell> connection = (AMap<AString, ACell>) skill.get(K_CONNECTION);
-		AVector<ACell> alternatives = RT.ensureVector(RT.getIn(connection, K_AUTH, K_ALTERNATIVES));
-		if (alternatives == null || alternatives.isEmpty()) {
-			throw new IllegalStateException("Connection skill has no auth alternatives: " + provider.skillRef());
+		// A single-value connection lists auth ALTERNATIVES — any one configures it (OR).
+		// A multi-value connection lists REQUIRED refs — a site subdomain plus a token,
+		// or two keys — and every one must be present (AND). `required` wins when set.
+		AVector<ACell> required = RT.ensureVector(RT.getIn(connection, K_REQUIRED));
+		boolean andMode = required != null && !required.isEmpty();
+		AVector<ACell> refs = andMode
+			? required
+			: RT.ensureVector(RT.getIn(connection, K_AUTH, K_ALTERNATIVES));
+		if (refs == null || refs.isEmpty()) {
+			throw new IllegalStateException(
+				"Connection skill has no auth alternatives or required refs: " + provider.skillRef());
 		}
 
-		boolean configured = false;
+		boolean configured = andMode; // AND starts true and is narrowed; OR starts false and is widened
 		AVector<ACell> credentials = Vectors.empty();
-		for (long i = 0; i < alternatives.count(); i++) {
-			AString ref = RT.ensureString(alternatives.get(i));
+		for (long i = 0; i < refs.count(); i++) {
+			AString ref = RT.ensureString(refs.get(i));
 			if (ref == null || ref.isEmpty()) {
-				throw new IllegalStateException("Connection auth alternatives must be non-empty refs: "
+				throw new IllegalStateException("Connection credential refs must be non-empty: "
 					+ provider.skillRef());
 			}
 			CredentialPresence presence = credentialPresence(userDID, ref.toString());
-			configured |= presence.configured();
+			configured = andMode
+				? (configured && presence.configured())
+				: (configured || presence.configured());
 			AMap<AString, ACell> credential = Maps.of(
 				Fields.REF, ref,
 				K_CONFIGURED, CVMBool.create(presence.configured()));
