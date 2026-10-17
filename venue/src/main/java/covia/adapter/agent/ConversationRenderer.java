@@ -209,6 +209,13 @@ public final class ConversationRenderer {
 		return renderFull(frame, Labels.BRACKET);
 	}
 
+	/**
+	 * Renders a frame's conversation for the model. An assistant turn that
+	 * calls tools is rendered without its text: that text is working, kept in
+	 * the record but never shown to the reader (whose reply and history are
+	 * final messages only), so the model must not see it as something it has
+	 * said. Its calls, their results and its provider state are kept.
+	 */
 	@SuppressWarnings("unchecked")
 	public static AVector<ACell> renderFull(AMap<AString, ACell> frame, AString dialect) {
 		AVector<ACell> conversation = (AVector<ACell>) frame.get(GoalTreeContext.K_CONVERSATION);
@@ -220,7 +227,10 @@ public final class ConversationRenderer {
 			if (GoalTreeContext.isSegment(entry)) {
 				messages = messages.conj(renderSegment(entry, dialect));
 			} else if (GoalTreeContext.isLiveTurn(entry)) {
-				messages = messages.conj(entry);
+				AMap<AString, ACell> turn = (AMap<AString, ACell>) entry;
+				boolean working = GoalTreeContext.ROLE_ASSISTANT.equals(RT.ensureString(turn.get(GoalTreeContext.K_ROLE)))
+					&& hasToolCalls(turn);
+				messages = messages.conj(working ? turn.dissoc(GoalTreeContext.K_CONTENT) : turn);
 			}
 		}
 		return messages;
