@@ -33,10 +33,8 @@ public final class ConversationRenderer {
 	/**
 	 * Safe, bounded projection of a stored conversation for retrospective use.
 	 * Only completed conversational cycles are exposed: user turns followed by
-	 * the assistant's text, ending with its final text turn. Text the assistant
-	 * wrote beside a tool call is kept, as a text-only message, because it was
-	 * written for the reader and may hold the answer itself; the tool calls,
-	 * tool results, diagnostics and an unanswered tail are omitted. Compacted segments are already summaries and
+	 * a final assistant text turn. Tool calls, tool results, diagnostics and an
+	 * unanswered tail are omitted. Compacted segments are already summaries and
 	 * remain visible as assistant messages; an agent-authored summary never gains
 	 * system authority merely because the venue persisted it.
 	 */
@@ -76,7 +74,6 @@ public final class ConversationRenderer {
 		ArrayDeque<AMap<AString, ACell>> tail = new ArrayDeque<>();
 		ArrayDeque<AMap<AString, ACell>> pending = new ArrayDeque<>();
 		long pendingCount = 0;
-		long pendingSaid = 0; // assistant text beside tool calls, in the open cycle
 		long pendingUpdated = 0;
 		AString pendingFirst = null;
 		AString firstCompletedUser = null;
@@ -106,19 +103,11 @@ public final class ConversationRenderer {
 				retain(pending, message, maxTurns);
 				continue;
 			}
-			if (!GoalTreeContext.ROLE_ASSISTANT.equals(role) || pendingCount == 0) continue;
-			if (hasToolCalls(turn)) {
-				// Its words, not its calls: shown once the cycle it belongs to completes.
-				AMap<AString, ACell> said = toHistoricalText(turn);
-				if (said != null) {
-					pendingSaid++;
-					retain(pending, said, maxTurns);
-				}
-				continue;
-			}
+			if (!GoalTreeContext.ROLE_ASSISTANT.equals(role) || hasToolCalls(turn)
+					|| pendingCount == 0) continue;
 
 			if (firstCompletedUser == null) firstCompletedUser = pendingFirst;
-			turnCount += pendingCount + pendingSaid + 1;
+			turnCount += pendingCount + 1;
 			for (AMap<AString, ACell> message : pending) {
 				retain(tail, message, maxTurns);
 			}
@@ -126,7 +115,6 @@ public final class ConversationRenderer {
 			updated = Math.max(updated, Math.max(pendingUpdated, timestamp(turn)));
 			pending.clear();
 			pendingCount = 0;
-			pendingSaid = 0;
 			pendingUpdated = 0;
 			pendingFirst = null;
 		}
@@ -321,14 +309,6 @@ public final class ConversationRenderer {
 			message = message.assoc(Fields.CONTENT, convex.core.util.JSON.print(message.get(Fields.CONTENT)));
 		}
 		return (message != null) ? message.dissoc(Fields.PROVIDER_STATE) : null;
-	}
-
-	/** An assistant turn's text alone, as a plain assistant message; null if it said nothing. */
-	private static AMap<AString, ACell> toHistoricalText(AMap<AString, ACell> turn) {
-		AString content = RT.ensureString(turn.get(GoalTreeContext.K_CONTENT));
-		if (content == null || content.toString().isBlank()) return null;
-		AMap<AString, ACell> message = toHistoricalMessage(turn.dissoc(GoalTreeContext.K_TOOL_CALLS));
-		return (message != null) ? message.dissoc(GoalTreeContext.K_TOOL_CALLS) : null;
 	}
 
 	@SuppressWarnings("unchecked")

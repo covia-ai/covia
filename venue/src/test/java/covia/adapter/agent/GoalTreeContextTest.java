@@ -285,34 +285,6 @@ public class GoalTreeContextTest {
 	}
 
 	@Test
-	public void testHistoricalProjectionKeepsWhatWasSaidBesideAToolCall() {
-		// The answer written beside a tool call ("noted, saving it") is the reader's;
-		// the call and its result are not. Unfinished, nothing of the cycle shows.
-		AMap<AString, ACell> frame = withConversation(
-			Maps.of("role", "user", "content", "what would you change?", "ts", 1L),
-			Maps.of("role", "assistant", "content", "1. Atomic memory. 2. A clock.", "ts", 2L,
-				"toolCalls", Vectors.of((ACell) Maps.of("id", "tc-1", "name", "memory"))),
-			toolResult("private scratch"),
-			Maps.of("role", "assistant", "content", "Noted and saved.", "ts", 3L),
-			Maps.of("role", "user", "content", "unfinished", "ts", 4L),
-			Maps.of("role", "assistant", "content", "half a thought", "ts", 5L,
-				"toolCalls", Vectors.of((ACell) Maps.of("id", "tc-2", "name", "lookup"))));
-
-		ConversationRenderer.HistoricalView view = ConversationRenderer.historical(frame, 20, 1000);
-		AVector<ACell> messages = view.messages();
-		assertEquals(3, messages.count(), messages.toString());
-		assertEquals("1. Atomic memory. 2. A clock.", RT.getIn(messages.get(1), "content").toString());
-		assertEquals("assistant", RT.getIn(messages.get(1), "role").toString());
-		assertEquals("Noted and saved.", RT.getIn(messages.get(2), "content").toString());
-		assertEquals(3, view.turnCount());
-		for (ACell message : messages) {
-			assertNull(RT.getIn(message, "toolCalls"));
-			assertFalse(message.toString().contains("private scratch"));
-			assertFalse(message.toString().contains("half a thought"));
-		}
-	}
-
-	@Test
 	public void testHistoricalProjectionBoundsNewestContentIncludingOversizedTurn() {
 		AMap<AString, ACell> frame = withConversation(
 			Maps.of("role", "user", "content", "question-one", "ts", 1L),
