@@ -52,6 +52,8 @@ class SlackAdapterTest {
 			String status = f.run("bots", Maps.empty()).toString();
 			assertFalse(status.contains(TOKEN)); assertFalse(status.contains("SIGNING")); assertFalse(status.contains("UALICE"));
 			assertTrue(status.contains("/webhooks/slack/c-main"));
+			assertNotNull(f.engine.resolvePath(Strings.create("v/ops/slack/send"), f.engine.venueContext()));
+			assertNull(f.engine.resolvePath(Strings.create("v/ops/slack/download"), f.engine.venueContext()), "Slack ships no download operation");
 			assertThrows(IllegalArgumentException.class, () -> f.engine.configureAdapter(NAME, Maps.of("statePath", "w/other")));
 			assertThrows(IllegalArgumentException.class, () -> f.engine.configureAdapter(NAME, Maps.of("apiUrl", "http://remote.example")));
 		}

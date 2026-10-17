@@ -28,11 +28,18 @@ import covia.adapter.webhook.WebhookResponse;
 import covia.adapter.webhook.WebhookSignatures;
 
 /**
- * Optional WhatsApp Cloud API module: signed text intake and capability-gated sends.
- * A binding whose handler is {@code relay} serves many principals from one number.
+ * Optional WhatsApp Cloud API module: signed text and media intake, capability-gated
+ * sends and media downloads ({@code whatsapp:download}, run by the shared layer
+ * through {@link #fetchMedia}). A binding whose handler is {@code relay} serves many
+ * principals from one number.
  */
 public final class WhatsAppAdapter extends AWebhookMessagingAdapter<BotSpec> {
 	public static final String NAME = "whatsapp";
+	/**
+	 * Ability {@code whatsapp:download} requires on {@code <owner>/whatsapp/<bot>}.
+	 * Reading what people sent is not sending, so {@code whatsapp/send} does not grant it.
+	 */
+	public static final AString ABILITY_DOWNLOAD = Strings.intern(NAME + "/download");
 	public static final String WINDOW_EXPIRED = "WhatsApp text reply window has expired; use an approved template through another supported client";
 	public static final String INVALID_RESPONSE = "WhatsApp did not return a message ID; delivery may be uncertain";
 	public static final int MAX_TEXT = 4096;
@@ -46,7 +53,7 @@ public final class WhatsAppAdapter extends AWebhookMessagingAdapter<BotSpec> {
 	public WhatsAppAdapter() { this(Clock.systemUTC()); }
 	WhatsAppAdapter(Clock clock) { this.clock = Objects.requireNonNull(clock); }
 	@Override public String getName() { return NAME; }
-	@Override public String getDescription() { return "WhatsApp Cloud API text messages and signed inbound conversations, bound to an owner and phone number."; }
+	@Override public String getDescription() { return "WhatsApp Cloud API text messages, media downloads and signed inbound conversations, bound to an owner and phone number."; }
 	@Override protected String defaultApiUrl() { return "https://graph.facebook.com"; }
 	@Override protected BotSpec parseBot(String name, ACell settings, boolean strict) { return BotSpec.parse(name, settings, strict); }
 	@Override protected WebhookResponse receive(WebhookBot<BotSpec> bot, WebhookRequest request) {
@@ -76,14 +83,16 @@ public final class WhatsAppAdapter extends AWebhookMessagingAdapter<BotSpec> {
 				var metadata = MessagingSettings.object(value.get(MessagingSettings.key("metadata")));
 				if (!bot.spec().phoneNumberId().equals(MessagingSettings.required(metadata, "phone_number_id"))) continue;
 				// Delivery statuses and reactions are acknowledged without routing. Media
-				// reaches agent and relay bindings; other kinds reach only a relay, which
-				// tells a linked sender it cannot relay them.
+				// reaches every binding: an agent gets attachments, an operation the raw
+				// message (whatsapp:download fetches its media by id), a relay its media
+				// list. Other kinds reach only a relay, which tells a linked sender it
+				// cannot relay them.
 				for (ACell messageCell : array(value, "messages")) {
 					var message = MessagingSettings.object(messageCell);
 					String type = MessagingSettings.optional(message, "type");
 					if ("reaction".equals(type)) continue;
 					boolean isText = "text".equals(type);
-					boolean media = MEDIA_TYPES.contains(type) && (bot.spec().routesToAgent() || bot.spec().routesToRelay());
+					boolean media = MEDIA_TYPES.contains(type);
 					if (!isText && !media && !bot.spec().routesToRelay()) continue;
 					String from = MessagingSettings.required(message, "from");
 					if (!bot.spec().admits(from)) continue;
@@ -111,7 +120,8 @@ public final class WhatsAppAdapter extends AWebhookMessagingAdapter<BotSpec> {
 	/**
 	 * The event for an image, voice note, audio, video, document or sticker: its media
 	 * described for {@link MessagingMedia}, and any caption as the text. Bytes are
-	 * fetched only when the message is handled.
+	 * fetched only when an agent's turn runs, a relay principal asks for them, or an
+	 * operation calls {@code whatsapp:download}.
 	 */
 	private static AMap<AString, ACell> withMedia(AMap<AString, ACell> event, String kind, AMap<AString, ACell> body) {
 		AMap<AString, ACell> item = Maps.of("id", MessagingSettings.id(body, "id", MEDIA_ID), "kind", kind);

@@ -1,0 +1,63 @@
+{
+  "operation": {
+    "adapter": "whatsapp:download",
+    "output": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "ref": {
+          "type": "string"
+        },
+        "fileName": {
+          "type": "string"
+        },
+        "media_id": {
+          "type": "string"
+        },
+        "size": {
+          "type": "integer"
+        },
+        "contentType": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ref",
+        "fileName",
+        "media_id",
+        "size"
+      ]
+    },
+    "input": {
+      "required": [
+        "media_id"
+      ],
+      "additionalProperties": false,
+      "type": "object",
+      "properties": {
+        "bot": {
+          "type": "string",
+          "description": "The binding's name; may be omitted when the caller owns exactly one."
+        },
+        "media_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]{1,128}$",
+          "description": "The id in an inbound message's image, audio, video, document or sticker object."
+        },
+        "destination": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional directory reference, e.g. dlfs/imports or file://inbox (trailing slash optional). Uses caller write authority. Omit for the binding owner's private DLFS whatsapp drive."
+        },
+        "fileName": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional safe basename, not a path (at most 200 UTF-8 bytes), such as a document's own filename. Conflicts receive a numeric suffix without added spaces."
+        }
+      }
+    },
+    "readOnly": false
+  },
+  "name": "Download WhatsApp media",
+  "description": "Downloads the media of an inbound WhatsApp message by its media id: the id is looked up and its short-lived link fetched with the binding's token. Returns ref, fileName (the stored name), media_id and size, with contentType when known. Meta does not return a filename, so without fileName the name comes from the binding and the media id; conflicts use report(1).pdf, report(2).pdf, etc., and files are never overwritten. Omit destination for the binding owner's private DLFS whatsapp drive; reading the file there needs the owner's authority. Explicit directories use caller write authority and a content provider supporting create-only writes (DLFS or configured file roots). Requires whatsapp/download on the binding; whatsapp/send does not grant it. Maximum 20 MiB; no token-bearing URL is returned."
+}

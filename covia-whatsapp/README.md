@@ -1,7 +1,7 @@
 # WhatsApp venue module
 
 `covia-whatsapp` connects a WhatsApp Cloud API business phone number to a
-Covia agent or operation, or relays it to many principals. It supplies `whatsapp:send`, `create`, `delete` and
+Covia agent or operation, or relays it to many principals. It supplies `whatsapp:send`, `download`, `create`, `delete` and
 `bots` operations, plus `v/skills/adapters/whatsapp`. It is an optional module,
 not a dependency of `covia.jar`, and uses the JDK HTTP client.
 
@@ -51,10 +51,10 @@ No venue bearer is needed on this provider-authenticated route.
 
 GET challenges require the verification token. POST callbacks require the
 raw-body `X-Hub-Signature-256` HMAC using the app secret. Account and phone
-IDs must match the binding. Each admitted text message in a batch gets its
-own durable receipt, keyed by WhatsApp message ID. Delivery statuses, media,
-other accounts/numbers and unadmitted senders are acknowledged without
-invoking a Job. Texts older than 24 hours or dated more than five minutes in
+IDs must match the binding. Each admitted text or media message in a batch gets its
+own durable receipt, keyed by WhatsApp message ID. Delivery statuses, reactions,
+other message kinds, other accounts/numbers and unadmitted senders are acknowledged without
+invoking a Job. Messages older than 24 hours or dated more than five minutes in
 the future are ignored. Sender IDs are numeric WhatsApp phone identifiers;
 usernames and business-scoped user IDs are not supported in this version.
 
@@ -70,11 +70,20 @@ provider message object. The result is rendered as text; `reply: false`
 suppresses a reply, or a string supplies a fixed reply. Agent handlers cannot
 set `reply`.
 
+An operation binding receives image, audio (including voice notes), video,
+document and sticker messages as well as text, each as WhatsApp sent it:
+`message.type` names the kind, and `message.<type>.id` is the media id that
+`whatsapp:download` saves. The binding fetches nothing itself, and an operation
+written for text alone should check `message.type`. The operation
+runs as the binding's owner, so it holds `whatsapp/download`; it names the
+binding as `bot` when the owner has more than one.
+
 ## Operations
 
 | Operation | Input | Authority / result |
 |---|---|---|
 | `v/ops/whatsapp/send` | `{bot?, to, text, reply_to?}` | `<owner>/whatsapp/<bot>` × `whatsapp/send`; provider message receipt |
+| `v/ops/whatsapp/download` | `{bot?, media_id, destination?, fileName?}` | `<owner>/whatsapp/<bot>` × `whatsapp/download`; `{ref, fileName, size, media_id, contentType?}` |
 | `v/ops/whatsapp/create` | `{name, ...bot settings}` without `user` | Caller-owned binding; `whatsapp/manage`; returns `webhookPath` |
 | `v/ops/whatsapp/delete` | `{name}` | Deletes caller-owned runtime binding and private state; `whatsapp/manage` |
 | `v/ops/whatsapp/bots` | `{}` | Own bindings (all for venue principal), readiness, paths and receipt counts |
@@ -116,9 +125,19 @@ attachment, with the attachment plus `caption` and `via`, and returns `{}` to pa
 the attachment through or an object whose non-empty `text` becomes the
 attachment's `text`; the whole result is kept under `attachment.result` and cannot
 replace the reference or media type. A failed download or hook fails the turn like
-any other processing failure. Operation bindings stay text-only. Reactions are
-ignored. The download link is on a different host from the Graph API, so a
-`secret/use` grant bound to a url must cover both.
+any other processing failure. Reactions are ignored. The download link is on a
+different host from the Graph API, so a `secret/use` grant bound to a url must cover both.
+
+`whatsapp:download` fetches one message's media the same way, by its media id, for
+an operation binding or anyone else holding `whatsapp/download` on the binding;
+`whatsapp/send` does not grant it. Without `destination` the file goes to the
+owner's private `whatsapp` drive, written with the owner's authority, so a caller
+other than the owner needs read authority there to open it. An explicit directory
+(`dlfs/imports`, `file://inbox`) is written with the caller's own authority and
+must support create-only writes. Meta's lookup returns no filename, so the stored
+name is `fileName` when given (a document's own `filename`, say) and otherwise comes
+from the binding and the media id; a taken name gets `(1)`, `(2)` and so on, and
+nothing is overwritten. The 20 MiB limit applies.
 
 ## State and recovery
 

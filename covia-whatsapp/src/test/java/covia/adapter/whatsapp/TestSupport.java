@@ -54,8 +54,13 @@ final class TestSupport {
     fail("Receipt did not reach " + status + ": " + bot.inbox().get(id) + "; bot " + bot.status());
   }
   record Sent(String path, String authorization, AMap<AString,ACell> body) { }
-  /** A media item the stand-in serves: a lookup at /<version>/<id>, the bytes at /media/<id>. */
-  record Media(byte[] bytes, String mimeType) { }
+  /**
+   * A media item the stand-in serves: a lookup at /<version>/<id>, the bytes at /media/<id>.
+   * The lookup reports {@code size}, which may claim more than the bytes it serves.
+   */
+  record Media(byte[] bytes, String mimeType, long size) {
+    Media(byte[] bytes, String mimeType) { this(bytes, mimeType, bytes.length); }
+  }
   static final class FakeAPI implements AutoCloseable {
     final HttpServer server;
     final LinkedBlockingQueue<Sent> sends = new LinkedBlockingQueue<>();
@@ -76,7 +81,7 @@ final class TestSupport {
             if (item == null) { exchange.sendResponseHeaders(404, -1); return; }
             boolean download = path.startsWith("/media/");
             byte[] bytes = download ? item.bytes() : JSON.print(Maps.of("messaging_product", "whatsapp", "id", id,
-              "url", url() + "/media/" + id + "?ext=1&hash=x", "mime_type", item.mimeType(), "file_size", item.bytes().length))
+              "url", url() + "/media/" + id + "?ext=1&hash=x", "mime_type", item.mimeType(), "file_size", item.size()))
               .toString().getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().set("Content-Type", download ? item.mimeType() : "application/json");
             exchange.sendResponseHeaders(200, bytes.length);

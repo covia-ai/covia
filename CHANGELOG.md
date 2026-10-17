@@ -37,6 +37,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - WhatsApp voice notes, photos and files: attachments and `mediaOperation` for agent
   bindings, `media` on relay polls and a relay `media` action; Telegram's attachment
   handling is now shared messaging code.
+- `whatsapp:download` (ability `whatsapp/download`); WhatsApp operation bindings now receive media messages.
 - `covia-speech` module: `speech:transcribe`, `speech:speak` and `speech:engines` over an
   OpenAI-compatible audio API, cloud or local.
 - `speech` local engine: in-process transcription with sherpa-onnx (Parakeet, Moonshine),

@@ -467,7 +467,10 @@ must clean binding-owned inbox/checkpoint data in `deleteRuntimeState`.
 worker, fed by signed HTTP callbacks or a provider connection, used by the optional [WhatsApp](../../covia-whatsapp/README.md) and
 [Slack](../../covia-slack/README.md) modules. They require credential references,
 keep configuration private, and publish `send`, `create`, `delete` and `bots`.
-A module may also ship `/adapters/<name>/bot-management-skill.json`, published as
+A module that implements `fetchMedia` may also ship `/adapters/<name>/download.json`,
+published as `<name>:download` (`{bot?, media_id, destination?, fileName?}`, gated on
+`<name>/download`), which the shared class runs: without the file there is no such
+operation. A module may also ship `/adapters/<name>/bot-management-skill.json`, published as
 `v/skills/adapters/<name>-bot-management` for its main skill to reveal, and
 `/agent-templates/<name>.json`, published as `v/agents/templates/<name>`.
 Providers implement validation, signed callback parsing, admission and sends.
@@ -584,7 +587,7 @@ linking message typed). A provider that puts `media` on its events and implement
 `covia.adapter.messaging.MessagingMedia`, the attachment layer Telegram also uses:
 private storage in the owner's drive named for the provider, attachment
 descriptors, image blocks and the binding's `mediaOperation`. WhatsApp and Slack
-both relay; WhatsApp also relays and delivers media.
+both relay; WhatsApp also relays and delivers media, and offers `download`.
 
 | Action | Request | Answer |
 |---|---|---|

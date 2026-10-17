@@ -32,7 +32,8 @@ import covia.venue.RequestContext;
  * token (lookup, then the short-lived link), stored in the owner's private
  * {@code whatsapp} drive, given to the binding's {@code mediaOperation}, and reaches
  * the agent as an attachment; a captioned photo also arrives as an image block;
- * operation bindings stay text-only; {@code mediaOperation} belongs to agent bindings.
+ * an operation binding gets the raw message and saves its media with
+ * {@code whatsapp:download}; {@code mediaOperation} belongs to agent bindings.
  */
 class WhatsAppMediaTest {
 
@@ -136,14 +137,26 @@ class WhatsAppMediaTest {
 		}
 	}
 
-	@Test void operationBindingsStayTextOnly_andMediaOperationNeedsAnAgent() throws Exception {
+	@Test void anOperationBindingGetsTheRawMessageAndDownloadsItsMedia_andMediaOperationNeedsAnAgent() throws Exception {
 		AMap<AString, ACell> operation = agentSpec(null).dissoc(MessagingSettings.key("agent"))
-			.assoc(MessagingSettings.key("operation"), Strings.create("v/test/ops/echo"));
+			.assoc(MessagingSettings.key("operation"), Strings.create("v/ops/saver/run")).assoc(MessagingSettings.key("reply"), CVMBool.FALSE);
 		try (Fixture f = new Fixture(operation)) {
+			Saver saver = new Saver(); f.engine.registerAdapter(saver);
 			f.api.media.put("90005", new Media(VOICE, "audio/ogg"));
-			assertEquals(200, f.webhook(payload(media("wamid.op-voice", "audio", Maps.of("id", "90005", "mime_type", "audio/ogg")))).status());
-			assertNull(f.bot().inbox().get("wamid.op-voice"), "nothing is accepted");
-			assertNull(f.api.gets.poll(200, TimeUnit.MILLISECONDS), "nothing is fetched");
+			assertEquals(200, f.webhook(payload(media("wamid.op-voice", "audio",
+				Maps.of("id", "90005", "mime_type", "audio/ogg", "voice", CVMBool.TRUE)))).status());
+			AMap<AString, ACell> input = saver.inputs.poll(8, TimeUnit.SECONDS);
+			assertEquals("audio", RT.getIn(input, "message", "type").toString(), "the message as WhatsApp sent it");
+			assertEquals(CVMBool.TRUE, RT.getIn(input, "message", "audio", "voice"));
+			ACell saved = saver.saved.poll(8, TimeUnit.SECONDS);
+			String ref = RT.getIn(saved, "ref").toString();
+			assertTrue(ref.startsWith(MessagingMedia.ownerDirectory(OWNER, WhatsAppAdapter.NAME)), ref);
+			assertArrayEquals(VOICE, f.engine.resolveContent(Strings.create(ref), RequestContext.of(OWNER)).content().getInputStream().readAllBytes());
+			awaitStatus(f.bot(), "wamid.op-voice", WebhookInbox.COMPLETE);
+			assertNotNull(f.api.gets.poll(1, TimeUnit.SECONDS), "the operation's lookup");
+			assertNotNull(f.api.gets.poll(1, TimeUnit.SECONDS), "the operation's download");
+			assertNull(f.api.gets.poll(100, TimeUnit.MILLISECONDS), "the binding fetches nothing itself");
+			assertNull(f.api.sends.poll(100, TimeUnit.MILLISECONDS), "reply: false");
 		}
 		assertEquals(MessagingMedia.AGENT_ONLY, assertThrows(IllegalArgumentException.class, () -> BotSpec.parse("main",
 			operation.assoc(MessagingSettings.key("mediaOperation"), Strings.create("v/test/ops/echo")), true)).getMessage());
@@ -162,6 +175,28 @@ class WhatsAppMediaTest {
 		@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 			inputs.add(MessagingSettings.object(input));
 			return CompletableFuture.completedFuture(Maps.of(Fields.SESSION_ID, "media-session", Fields.RESPONSE, "heard you"));
+		}
+	}
+
+	/** An operation handler that saves its message's media itself, with whatsapp:download. */
+	static final class Saver extends AAdapter {
+		final LinkedBlockingQueue<AMap<AString, ACell>> inputs = new LinkedBlockingQueue<>();
+		final LinkedBlockingQueue<ACell> saved = new LinkedBlockingQueue<>();
+		@Override public String getName() { return "saver"; }
+		@Override public String getDescription() { return "Media-saving operation fixture"; }
+		@Override protected void installAssets() { installAsset("saver/run", Maps.of("name", "Fixture saver", "operation", Maps.of("adapter", "saver:run"))); }
+		@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+			AMap<AString, ACell> in = MessagingSettings.object(input);
+			inputs.add(in);
+			String type = RT.getIn(in, "message", "type").toString();
+			ACell id = RT.getIn(in, "message", type, "id");
+			return CompletableFuture.supplyAsync(() -> {
+				try {
+					ACell result = engine.jobs().invokeOperation("v/ops/whatsapp/download", Maps.of("media_id", id), ctx).awaitResult(10_000);
+					saved.add(result);
+					return result;
+				} catch (Exception e) { throw new java.util.concurrent.CompletionException(e); }
+			}, VIRTUAL_EXECUTOR);
 		}
 	}
 

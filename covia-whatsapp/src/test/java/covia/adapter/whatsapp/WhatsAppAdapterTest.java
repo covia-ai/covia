@@ -99,7 +99,7 @@ class WhatsAppAdapterTest {
 	@Test void ignoresUnadmittedSendersOtherBindingsStatusesAndStaleMessages() throws Exception {
 		try (Fixture f = new Fixture(spec())) {
 			assertEquals(200, f.webhook(payload(message("denied").assoc(Strings.intern("from"), Strings.create("449999999999")))).status());
-			assertEquals(200, f.webhook(payload(message("media").assoc(Strings.intern("type"), Strings.create("image")))).status());
+			assertEquals(200, f.webhook(payload(message("reaction").assoc(Strings.intern("type"), Strings.create("reaction")))).status());
 			assertEquals(200, f.webhook(payload(message("old").assoc(Strings.intern("timestamp"), Strings.create("1")))).status());
 			assertEquals(200, f.webhook(Maps.of("object", "whatsapp_business_account", "entry", Vectors.of(Maps.of("id", "other")))).status());
 			assertEquals(200, f.webhook(payload()).status());

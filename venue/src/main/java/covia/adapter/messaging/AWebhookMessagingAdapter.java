@@ -9,6 +9,7 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Maps;
+import convex.core.data.Strings;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.adapter.messaging.MessagingBot.Managed;
@@ -68,6 +69,7 @@ public abstract class AWebhookMessagingAdapter<S extends WebhookBotSpec>
 	 * Fetch one attachment named by an item of an event's {@code media}, with the
 	 * binding's credentials, at most {@link MessagingMedia#MAX_BYTES}. A provider that
 	 * puts {@code media} on its events implements this; nothing is stored here.
+	 * Validating the item's {@code id} is the provider's.
 	 */
 	protected MessagingMedia.Fetched fetchMedia(WebhookBot<S> bot, AMap<AString, ACell> item) {
 		throw new UnsupportedOperationException(MessagingMedia.NOT_FETCHED);
@@ -94,7 +96,10 @@ public abstract class AWebhookMessagingAdapter<S extends WebhookBotSpec>
 	@Override protected final WebhookBot<S> newBot(S spec, Managed managed) { return new WebhookBot<>(this, spec, managed); }
 	@Override protected final boolean configurationMatches(WebhookBot<S> runner) { return true; }
 	/**
-	 * Publishes the four operations and the provider skill. A provider may also
+	 * Publishes the four operations and the provider skill. A provider that
+	 * implements {@link #fetchMedia} may also ship {@code /adapters/<name>/download.json},
+	 * published as {@code <name>:download}, which this class runs; without the file
+	 * the operation does not exist. A provider may also
 	 * ship {@code /adapters/<name>/bot-management-skill.json}, published as the
 	 * skill {@code adapters/<name>-bot-management} for its main skill to reveal,
 	 * and {@code /agent-templates/<name>.json}, published as the agent template
@@ -104,6 +109,7 @@ public abstract class AWebhookMessagingAdapter<S extends WebhookBotSpec>
 		for (String op : new String[] { "send", "create", "delete", "bots" }) {
 			installAsset(getName() + "/" + op, "/adapters/" + getName() + "/" + op + ".json");
 		}
+		if (offersDownload()) installAsset(getName() + "/download", downloadResource());
 		installSkill("adapters/" + getName(), "/adapters/" + getName() + "/skill.json");
 		String management = "/adapters/" + getName() + "/bot-management-skill.json";
 		if (getClass().getResource(management) != null) installSkill("adapters/" + getName() + "-bot-management", management);
@@ -128,8 +134,46 @@ public abstract class AWebhookMessagingAdapter<S extends WebhookBotSpec>
 				bot.requireReady();
 				yield send(bot, in);
 			}
+			case "download" -> {
+				if (!offersDownload()) throw new UnsupportedOperationException(UNSUPPORTED.formatted(op));
+				yield handleDownload(ctx, MessagingSettings.object(input));
+			}
 			default -> throw new UnsupportedOperationException(UNSUPPORTED.formatted(op));
 		}, VIRTUAL_EXECUTOR);
+	}
+	private String downloadResource() { return "/adapters/" + getName() + "/download.json"; }
+	private boolean offersDownload() { return getClass().getResource(downloadResource()) != null; }
+	/**
+	 * {@code <name>:download} {@code {bot?, media_id, destination?, fileName?}}: one
+	 * attachment by the provider's media id, gated on {@code <owner>/<name>/<bot>} ×
+	 * {@code <name>/download}. An explicit {@code destination} is written with the
+	 * caller's authority; by default the file goes to the binding owner's private drive
+	 * named for the provider, as an agent binding's attachments do. Without
+	 * {@code fileName} the name comes from the binding and the media id.
+	 *
+	 * @return {@code {ref, fileName, size, media_id, contentType?}}
+	 */
+	private ACell handleDownload(RequestContext ctx, AMap<AString, ACell> in) {
+		MessagingSettings.known(in, Set.of("bot", "media_id", "destination", "fileName"));
+		WebhookBot<S> bot = selectBot(ctx, RT.ensureString(in.get(MessagingSettings.key("bot"))));
+		requireBotAccess(ctx, bot, MessagingSettings.key(getName() + "/download"));
+		String id = MessagingSettings.required(in, "media_id");
+		ACell destination = in.get(MessagingSettings.key("destination"));
+		if (destination != null && (!(destination instanceof AString d) || d.isBlank())) throw new IllegalArgumentException(MessagingMedia.INVALID_DESTINATION);
+		ACell fileName = in.get(MessagingSettings.key("fileName"));
+		if (fileName != null && !(fileName instanceof AString f && MessagingMedia.safeFileName(f.toString()))) {
+			throw new IllegalArgumentException(MessagingMedia.INVALID_FILE_NAME);
+		}
+		MessagingMedia.Fetched fetched = fetchMedia(bot, Maps.of("id", id));
+		AString owner = bot.spec().userDID(engine);
+		String directory = destination == null ? MessagingMedia.ownerDirectory(owner, getName()) : destination.toString();
+		String name = fileName == null ? MessagingMedia.fallbackName(bot.spec().name(), id, fetched.contentType()) : fileName.toString();
+		try {
+			return MessagingMedia.store(engine, fetched.bytes(), fetched.contentType(), directory, name,
+				destination == null ? RequestContext.of(owner) : ctx).assoc(MessagingSettings.key("media_id"), Strings.create(id));
+		} catch (java.io.IOException e) {
+			throw new IllegalStateException(MessagingMedia.UNSUPPORTED_DESTINATION + ": " + directory);
+		}
 	}
 	@Override public final WebhookResponse handleWebhook(String binding, WebhookRequest request) {
 		WebhookBot<S> bot = runningBinding(binding);
