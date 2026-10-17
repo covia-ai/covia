@@ -115,7 +115,12 @@
 			<artifactId>convex-restapi</artifactId>
 			<version>${convex.version}</version>
 		</dependency>
-		
+		<dependency>
+			<groupId>world.convex</groupId>
+			<artifactId>convex-p2p</artifactId>
+			<version>${convex.version}</version>
+		</dependency>
+
 		<!-- Testing -->
 		<dependency>
 			<groupId>org.junit.jupiter</groupId>

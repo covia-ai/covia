@@ -1,0 +1,52 @@
+{
+  "name": "P2P peers",
+  "description": "Lists this venue's own node on the Convex P2P network and every other node it knows: each node's did:key, the name and any other DID it publishes (alsoKnownAs, a claim the node signs, not a verified identity), whether it is connected now, how it is reached (outbound or inbound route, through relays it lists, or none), its transport URLs and software version. Entries are open maps; more fields may appear. joined is false, with no peers, when the venue has not joined the network. Venue-owned: requires p2p/read on <venue DID>/p2p.",
+  "operation": {
+    "adapter": "p2p:peers",
+    "readOnly": true,
+    "activityLabel": "Listing P2P peers",
+    "input": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "joined": { "type": "boolean" },
+        "self": {
+          "type": "object",
+          "properties": {
+            "did": { "type": "string" },
+            "name": { "type": "string" },
+            "alsoKnownAs": { "type": "array", "items": { "type": "string" } },
+            "transports": { "type": "array", "items": { "type": "string" } },
+            "relay": { "type": "boolean" },
+            "version": { "type": "string" },
+            "updated": { "type": "integer" }
+          },
+          "required": ["did"]
+        },
+        "peers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "did": { "type": "string" },
+              "name": { "type": "string" },
+              "alsoKnownAs": { "type": "array", "items": { "type": "string" } },
+              "connected": { "type": "boolean" },
+              "reach": { "type": "string", "enum": ["outbound", "inbound", "relay", "none"] },
+              "transports": { "type": "array", "items": { "type": "string" } },
+              "relay": { "type": "boolean" },
+              "version": { "type": "string" },
+              "updated": { "type": "integer" }
+            },
+            "required": ["did", "connected", "reach"]
+          }
+        }
+      },
+      "required": ["joined", "peers"]
+    }
+  }
+}

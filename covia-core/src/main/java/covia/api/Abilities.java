@@ -52,6 +52,12 @@ public final class Abilities {
 	/** Online garbage collection of the venue's Etch store (covia#452) — guarded
 	 *  on {@code <venue DID>/store}. */
 	public static final AString VENUE_GC = Strings.intern("venue/gc");
+	/** See the venue's P2P node and the peers it knows (covia#587) — guarded
+	 *  on {@code <venue DID>/p2p}. */
+	public static final AString P2P_READ = Strings.intern("p2p/read");
+	/** Connect the venue's P2P node to a peer (covia#587) — guarded on
+	 *  {@code <venue DID>/p2p}. */
+	public static final AString P2P_MANAGE = Strings.intern("p2p/manage");
 
 	/** The venue-scoped MCP management resource guarded by {@link #MCP_MANAGE}. */
 	public static final AString V_MCP = Strings.intern("v/mcp");

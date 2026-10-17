@@ -2706,6 +2706,54 @@ and HTTP-Bearer schemes. UCAN authority is not relayed over A2A; use native Grid
 operations for Covia-to-Covia authority and identity. All outbound URLs pass
 the HTTP adapter's SSRF checks and operator allow/block lists.
 
+## P2P network (`adapters.p2p`)
+
+```json
+{
+  "adapters": {
+    "p2p": {
+      "join": true,
+      "peers": [
+        { "did": "did:key:z6Mk...", "address": "peers.example.com:18888" }
+      ]
+    }
+  }
+}
+```
+
+Runs a Convex P2P node inside the venue (`convex-p2p`). Off by default: with
+`join` absent or false no node starts, no port opens and `p2p/peers` reports
+`joined: false`. The node uses the venue's key, so its identity on the network
+is the venue's key-derived `did:key`; it publishes the venue's `name` and any
+declared `did` in its signed identity record, where peers list the declared
+DID as `alsoKnownAs` (a claim, not a verified identity). It keeps its own
+in-memory store and serves only the network's node and identity records, so
+no venue state is replicated.
+
+- `join` — run the node.
+- `peers` — bootstrap nodes dialled at start, each `{did, address}` with a
+  `did:key` and `host:port`. Convex keeps redialling them.
+- `port` — listen for inbound connections. Without it the node only dials
+  out, which suits a venue behind NAT; peers then reach it over its own
+  connection. `0` takes any free port. The listener binds every interface,
+  over plain TCP; nodes authenticate each other by key.
+- `url` — the address peers should dial, e.g. `tcp://venue.example.com:18888`;
+  needs `port`. Loopback and private addresses are refused unless
+  `allowPrivateURL` is true.
+- `pollMs` — the longest a connection change waits to raise an event
+  (default 1000). Changes to what nodes publish raise one as soon as they
+  replicate.
+
+The node dials nodes it learns about from its peers, as Convex P2P does.
+`p2p/peers` (read-only) lists them with whether each is connected and how it
+is reached; `p2p/connect` connects to one more for the life of the node, not
+across restarts. Connection state is the venue's own and is never published:
+what a node shares is only its signed records. The adapter is network
+infrastructure; social follows belong to the social layer, not here. Both are venue-owned: they need `p2p/read` or `p2p/manage`
+on `<venue DID>/p2p`. An embedding host subscribes to peer changes with
+`engine.findAdapter(P2PAdapter.class).subscribe(listener)`. Disabling the
+adapter takes the node offline; reconfiguring it restarts the node.
+
 ## Secrets bootstrap
 
 Per-venue config can pre-populate the encrypted per-user secret stores at startup:

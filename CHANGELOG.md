@@ -23,6 +23,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Added
 
+- `p2p` adapter: an opt-in Convex P2P node in the venue, `p2p:peers`, `p2p:connect` and peer events (#587).
 - Slack Socket Mode (`appToken`), one connection per app token routed by workspace;
   messaging bindings may hold shared provider connections.
 - Slack agent template, `slack-bot-management` skill and `/slack` operator skill.
