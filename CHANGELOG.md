@@ -39,6 +39,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   handling is now shared messaging code.
 - `covia-speech` module: `speech:transcribe`, `speech:speak` and `speech:engines` over an
   OpenAI-compatible audio API, cloud or local.
+- `speech` local engine: in-process transcription with sherpa-onnx (Parakeet, Moonshine),
+  operator-installed or pinned native libraries, Ogg/Opus voice notes.
 
 ### Fixed
 

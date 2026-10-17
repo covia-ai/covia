@@ -56,7 +56,7 @@ import covia.venue.storage.ContentProvider;
  * {@code s/OPENAI_API_KEY}) when it exists, and none at all when it does not, which a
  * local server accepts. Keys are resolved for the engine's endpoint.
  */
-public class SpeechAdapter extends AAdapter {
+public class SpeechAdapter extends AAdapter implements AutoCloseable {
 
 	public static final String NAME = "speech";
 	static final String DEFAULT_BASE_URL = "https://api.openai.com/v1";
@@ -99,8 +99,22 @@ public class SpeechAdapter extends AAdapter {
 	private static final AString K_SPEAK_MODEL = Strings.intern("speakModel");
 	private static final AString K_VOICE = Strings.intern("voice");
 	private static final AString K_TIMEOUT = Strings.intern("timeoutMillis");
+	private static final AString K_ENGINE = Strings.intern("engine");
+	private static final AString K_LOCAL = Strings.intern("local");
 	private static final Set<AString> CONFIG_KEYS = Set.of(K_ENABLED, K_BASE_URL, K_API_KEY, K_KEY_NAME,
-		K_TRANSCRIBE_MODEL, K_SPEAK_MODEL, K_VOICE, K_TIMEOUT);
+		K_TRANSCRIBE_MODEL, K_SPEAK_MODEL, K_VOICE, K_TIMEOUT, K_ENGINE, K_LOCAL);
+	private static final AString K_NATIVE_PATH = Strings.intern("nativePath");
+	private static final AString K_FETCH_NATIVES = Strings.intern("fetchNatives");
+	private static final AString K_CACHE_DIR = Strings.intern("cacheDir");
+	private static final AString K_PREFETCH = Strings.intern("prefetch");
+	private static final AString K_THREADS = Strings.intern("threads");
+	private static final Set<AString> LOCAL_KEYS = Set.of(K_TRANSCRIBE_MODEL, K_NATIVE_PATH, K_FETCH_NATIVES, K_CACHE_DIR,
+		K_PREFETCH, K_THREADS);
+	public static final String INVALID_ENGINE = "adapters.speech.engine must be openai or local";
+	public static final String UNKNOWN_LOCAL_SETTING = "adapters.speech.local: unknown setting %s (known: %s)";
+	public static final String UNKNOWN_MODEL = "adapters.speech.local.transcribeModel must be one of %s";
+	public static final String INVALID_THREADS = "adapters.speech.local.threads must be an integer from 1 to 16";
+	public static final String INVALID_FLAG = "adapters.speech.local.%s must be true or false";
 
 	/** Messaging attachment kinds that are speech. */
 	private static final Set<String> AUDIO_KINDS = Set.of("audio", "voice");
@@ -113,8 +127,10 @@ public class SpeechAdapter extends AAdapter {
 		"webm", "audio/webm", "aac", "audio/aac", "pcm", "audio/L16");
 
 	private record Settings(SpeechEngine engine, String apiKeyRef, String keyName, String transcribeModel,
-		String speakModel, String voice) {}
+		String speakModel, String voice, boolean prefetch) {}
 
+	/** This adapter instance's native libraries: loaded once, into its own class loader. */
+	private final NativeLibraries natives = new NativeLibraries();
 	private volatile Settings settings = settings(Maps.empty());
 
 	@Override public String getName() { return NAME; }
@@ -140,11 +156,35 @@ public class SpeechAdapter extends AAdapter {
 				}
 			}
 		}
+		Settings previous = settings;
 		settings = settings(config);
+		if (previous.engine() instanceof LocalSpeechEngine old) old.close();
+		if (engine != null && engine.isStarted()) prefetch();
 		return true;
 	}
 
-	private static Settings settings(AMap<AString, ACell> config) {
+	/** Fetch the local engine's model and libraries in the background when configured to. */
+	@Override public void start() { prefetch(); }
+
+	private void prefetch() {
+		Settings s = settings;
+		if (s.prefetch() && s.engine() instanceof LocalSpeechEngine local) {
+			VIRTUAL_EXECUTOR.execute(() -> {
+				try { local.prepare(); }
+				catch (RuntimeException e) { org.slf4j.LoggerFactory.getLogger(SpeechAdapter.class).warn("speech: prefetch failed: {}", e.getMessage()); }
+			});
+		}
+	}
+
+	/** Release the local engine; its native libraries stay loaded until its class loader goes. */
+	public void close() {
+		if (settings.engine() instanceof LocalSpeechEngine local) local.close();
+	}
+
+	private Settings settings(AMap<AString, ACell> config) {
+		String engineName = setting(config, K_ENGINE, "openai");
+		if (!engineName.equals("openai") && !engineName.equals(LocalSpeechEngine.NAME)) throw new IllegalArgumentException(INVALID_ENGINE);
+		if (engineName.equals(LocalSpeechEngine.NAME)) return local(config);
 		String baseUrl = setting(config, K_BASE_URL, DEFAULT_BASE_URL);
 		try {
 			URI uri = URI.create(baseUrl);
@@ -168,7 +208,46 @@ public class SpeechAdapter extends AAdapter {
 		if (millis < 1000 || millis > 600_000) throw new IllegalArgumentException(INVALID_TIMEOUT);
 		SpeechEngine engine = new OpenAiSpeechEngine(baseUrl, Duration.ofMillis(millis), MAX_BYTES, keyName);
 		return new Settings(engine, apiKeyRef, keyName, setting(config, K_TRANSCRIBE_MODEL, DEFAULT_TRANSCRIBE_MODEL),
-			setting(config, K_SPEAK_MODEL, DEFAULT_SPEAK_MODEL), setting(config, K_VOICE, DEFAULT_VOICE));
+			setting(config, K_SPEAK_MODEL, DEFAULT_SPEAK_MODEL), setting(config, K_VOICE, DEFAULT_VOICE), false);
+	}
+
+	/** The in-process engine: {@code local: {transcribeModel, nativePath, fetchNatives, cacheDir, prefetch, threads}}. */
+	private Settings local(AMap<AString, ACell> config) {
+		ACell localCell = config.get(K_LOCAL);
+		AMap<AString, ACell> local = localCell instanceof AMap<?, ?> m ? RT.castMap(m) : Maps.empty();
+		if (localCell != null && !(localCell instanceof AMap<?, ?>)) throw new IllegalArgumentException(INVALID_STRING.formatted("adapters.speech.local"));
+		for (var entry : local.entrySet()) {
+			if (!LOCAL_KEYS.contains(entry.getKey())) throw new IllegalArgumentException(UNKNOWN_LOCAL_SETTING.formatted(entry.getKey(), LOCAL_KEYS));
+		}
+		String modelId = setting(local, K_TRANSCRIBE_MODEL, SpeechModels.DEFAULT);
+		SpeechModels.Model model = SpeechModels.byId(modelId);
+		if (model == null) throw new IllegalArgumentException(UNKNOWN_MODEL.formatted(SpeechModels.ALL.stream().map(SpeechModels.Model::id).toList()));
+		String nativePath = setting(local, K_NATIVE_PATH, null);
+		String cacheDir = setting(local, K_CACHE_DIR, null);
+		CVMLong threadsCell = RT.ensureLong(local.get(K_THREADS));
+		long threads = local.get(K_THREADS) == null ? Math.max(2, Math.min(4, Runtime.getRuntime().availableProcessors() / 2))
+			: threadsCell == null ? -1 : threadsCell.longValue();
+		if (threads < 1 || threads > 16) throw new IllegalArgumentException(INVALID_THREADS);
+		LocalSpeechEngine engine = new LocalSpeechEngine(model, nativePath == null ? null : java.nio.file.Path.of(nativePath),
+			flag(local, K_FETCH_NATIVES), () -> cacheDirectory(cacheDir), (int) threads, natives, LocalSpeechEngine.Sherpa::new);
+		return new Settings(engine, null, DEFAULT_KEY_NAME, model.id(), null, null, flag(local, K_PREFETCH));
+	}
+
+	private static boolean flag(AMap<AString, ACell> local, AString key) {
+		ACell value = local.get(key);
+		if (value == null) return false;
+		if (!(value instanceof CVMBool b)) throw new IllegalArgumentException(INVALID_FLAG.formatted(key));
+		return b.booleanValue();
+	}
+
+	/** Beside a persistent store (where venue.key lives), else the user's ~/.covia; or as configured. */
+	private java.nio.file.Path cacheDirectory(String configured) {
+		if (configured != null) return java.nio.file.Path.of(configured);
+		String store = engine == null ? null : engine.config().getStore();
+		if (store != null && !store.equals("temp") && !store.equals("memory")) {
+			return java.nio.file.Path.of(store).toAbsolutePath().resolveSibling("cache").resolve(NAME);
+		}
+		return java.nio.file.Path.of(System.getProperty("user.home"), ".covia", "cache", NAME);
 	}
 
 	@Override
@@ -320,6 +399,7 @@ public class SpeechAdapter extends AAdapter {
 	// ---- engines ----
 
 	ACell engines(RequestContext ctx, Settings s) {
+		if (s.engine() instanceof LocalSpeechEngine local) return Maps.of("engines", Vectors.of(local.status()));
 		boolean keyed;
 		try { keyed = key(ctx, s, Maps.empty()) != null; }
 		catch (RuntimeException e) { keyed = false; }
@@ -341,6 +421,8 @@ public class SpeechAdapter extends AAdapter {
 	 */
 	private String key(RequestContext ctx, Settings s, AMap<AString, ACell> in) {
 		String endpoint = s.engine().endpoint();
+		// An engine that calls no endpoint needs no key, and none is resolved for it.
+		if (endpoint == null) return null;
 		String callerRef = string(in, "apiKey");
 		if (callerRef != null) {
 			if (!Engine.isSecretRef(callerRef) || callerRef.endsWith("/")) throw new IllegalArgumentException(INVALID_SECRET_REF.formatted("apiKey"));

@@ -186,6 +186,41 @@ class SpeechAdapterTest {
 		assertEquals("Bearer operator-key", api.take().authorization(), "the operator's key serves every caller");
 	}
 
+	@Test void theLocalEngineIsChosenByConfigAndReportsWhyItIsNotReady(@org.junit.jupiter.api.io.TempDir java.nio.file.Path cache) throws Exception {
+		org.junit.jupiter.api.Assumptions.assumeTrue(NativeLibraries.platform() != null, "sherpa-onnx has no libraries for this platform");
+		engine.configureAdapter(SpeechAdapter.NAME, Maps.of("engine", "local",
+			"local", Maps.of("transcribeModel", "moonshine-tiny", "cacheDir", cache.toString())));
+		AMap<AString, ACell> status = RT.castMap(RT.ensureVector(RT.getIn(run(owner, "engines", Maps.empty()), "engines")).get(0));
+		assertEquals(LocalSpeechEngine.NAME, RT.getIn(status, "name").toString());
+		assertEquals(CVMBool.TRUE, status.get(Strings.create("local")));
+		assertEquals("moonshine-tiny", RT.getIn(status, "model", "id").toString());
+		assertEquals("MIT, Useful Sensors", RT.getIn(status, "model", "licence").toString(), "the model is credited");
+		assertEquals("not downloaded", RT.getIn(status, "state").toString());
+		assertNotNull(status.get(Strings.create("nativeAccess")));
+		assertFalse(String.valueOf(status).contains(cache.toString()), "no paths are disclosed");
+
+		String ref = save("local.wav", SpeechAdapter.wav(new byte[3200], 16_000), "audio/wav");
+		assertTrue(failure(() -> run(owner, "transcribe", Maps.of("ref", ref)))
+			.contains(LocalSpeechEngine.NOT_READY.formatted(NativeLibraries.NOT_INSTALLED)), "the libraries are named before any model is fetched");
+		assertFalse(java.nio.file.Files.exists(cache.resolve("models")), "nothing was downloaded");
+		assertTrue(api.requests.isEmpty(), "and no audio left for a provider");
+		assertTrue(failure(() -> run(owner, "speak", Maps.of("text", "hello"))).contains(LocalSpeechEngine.SPEAK_UNAVAILABLE));
+		assertTrue(failure(() -> run(owner, "transcribe", Maps.of("ref", ref, "model", "parakeet-tdt-v3")))
+			.contains(LocalSpeechEngine.OTHER_MODEL.formatted("moonshine-tiny")), "a caller cannot make the venue fetch another model");
+
+		for (var bad : new Object[][] {
+				{Maps.of("engine", "whisper"), SpeechAdapter.INVALID_ENGINE},
+				{Maps.of("engine", "local", "local", Maps.of("transcribeModel", "large")), SpeechAdapter.UNKNOWN_MODEL.formatted(
+					SpeechModels.ALL.stream().map(SpeechModels.Model::id).toList())},
+				{Maps.of("engine", "local", "local", Maps.of("threads", 0)), SpeechAdapter.INVALID_THREADS},
+				{Maps.of("engine", "local", "local", Maps.of("prefetch", "yes")), SpeechAdapter.INVALID_FLAG.formatted("prefetch")}}) {
+			AMap<AString, ACell> config = RT.castMap((ACell) bad[0]);
+			assertEquals(bad[1], assertThrows(IllegalArgumentException.class, () -> new SpeechAdapter().configure(config, true)).getMessage());
+		}
+		assertTrue(assertThrows(IllegalArgumentException.class, () -> new SpeechAdapter().configure(
+			RT.castMap(Maps.of("engine", "local", "local", Maps.of("mystery", 1))), true)).getMessage().startsWith("adapters.speech.local: unknown setting"));
+	}
+
 	@Test void unsafeSettingsAreRefused() {
 		for (var bad : new Object[][] {
 				{Maps.of("baseUrl", "http://speech.example/v1"), SpeechAdapter.INVALID_BASE_URL},

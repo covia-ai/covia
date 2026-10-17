@@ -2018,6 +2018,56 @@ Operations:
 A transcript lives in the operation's Job like any other result. Provider
 failures fail the Job; nothing is retried.
 
+#### Local transcription inside the venue
+
+`"engine": "local"` transcribes inside the venue's own JVM with sherpa-onnx, so
+audio never leaves the machine and no server is needed. It runs on glibc Linux
+(x64, arm64), macOS (Apple Silicon, Intel) and Windows x64; not on musl systems
+such as the Alpine Docker image, where `engines` says so. It does not speak yet:
+`speak` refuses while the local engine is configured.
+
+```json
+{
+  "adapters": {
+    "speech": {
+      "engine": "local",
+      "local": {
+        "transcribeModel": "parakeet-tdt-v3",
+        "nativePath": "/opt/covia/speech-natives",
+        "prefetch": true
+      }
+    }
+  }
+}
+```
+
+- `transcribeModel` — `parakeet-tdt-v3` (default; 25 European languages, about
+  670 MB), `parakeet-tdt-v2` (English), `moonshine-base` or `moonshine-tiny`
+  (English, smaller). The venue fetches the model once, file by file at a pinned
+  revision and SHA-256, the first time it is needed (or at start with
+  `prefetch: true`); `engines` shows the progress. Only the configured model runs.
+- `nativePath` — a directory holding sherpa-onnx 1.13.8's native libraries for the
+  platform (`onnxruntime` and `sherpa-onnx-jni`), installed by the operator or
+  embedder; signed copies are fine. Alternatively `fetchNatives: true` lets the
+  venue download sherpa-onnx's own build for the platform, pinned by SHA-256. A venue
+  fetches no native code unless told to.
+- `cacheDir` — where models and fetched libraries live; by default `cache/speech`
+  beside a persistent store, otherwise `~/.covia/cache/speech`.
+- `threads` — decoding threads, 1–16 (default half the cores, 2–4).
+
+Run the venue with `--enable-native-access=ALL-UNNAMED` (as for the Python
+module); without it Java 24 and later print a warning when the libraries load,
+and `engines` reports `nativeAccess: false`. A note longer than 30 seconds is
+split on its pauses; notes over 10 minutes are refused. WAV, raw PCM and Ogg/Opus
+voice notes are read; other formats are refused. The model is loaded when first
+used, takes about 1 GB of memory outside the Java heap, decodes one note at a
+time, and is released after 5 minutes unused.
+
+Credits: sherpa-onnx (Apache-2.0; its Java API is vendored in the module with its
+licence), ONNX Runtime (MIT), Silero VAD (MIT), Concentus (BSD), Parakeet TDT
+(CC-BY-4.0, NVIDIA), Moonshine (MIT, Useful Sensors). The models are fetched by
+the venue from Hugging Face, not distributed with Covia.
+
 ### Telegram bots (covia-telegram)
 
 The **covia-telegram** module (`telegram` adapter) runs operator-declared
