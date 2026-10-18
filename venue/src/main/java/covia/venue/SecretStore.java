@@ -53,6 +53,7 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> {
 
 	/** Refusal for a record whose key version this venue cannot derive. */
 	public static final String UNKNOWN_KEY_VERSION = "Secret is encrypted under an unknown key version";
+	public static final String INVALID_RECORD = "Secret store entry in wrong format";
 
 	/** Refusal for the deprecated single-key API meeting a record it cannot read. */
 	public static final String LEGACY_KEY_READS_V1_ONLY =
@@ -256,7 +257,8 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> {
 	/** The ciphertext of a secret record, or null when there is none. */
 	private static Blob encrypted(AMap<AString, ACell> record) {
 		if (record == null) return null;
-		return (record.get(ENCRYPTED_KEY) instanceof Blob blob) ? blob : null;
+		if (record.get(ENCRYPTED_KEY) instanceof Blob blob) return blob;
+		throw new IllegalStateException(INVALID_RECORD);
 	}
 
 	/** A record's key version: absent predates versioning (version 1); malformed is -1, which no key matches. */
@@ -329,7 +331,7 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> {
 		ACell value = all.get(name);
 		if (!(value instanceof AMap)) {
 			if (!all.containsKey(name)) return null;
-			throw new IllegalStateException("Secret store entry in wrong format");
+			throw new IllegalStateException(INVALID_RECORD);
 		}
 		return (AMap<AString, ACell>) value;
 	}

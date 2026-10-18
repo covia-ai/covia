@@ -595,6 +595,14 @@ history, venue-wide events and schema-validation logs. Transient results
 cannot be fetched through public job-status APIs. HTTP run responses use
 `Cache-Control: private, no-store`.
 
+After authorization, a missing secret fails with `SecretAdapter.SECRET_UNAVAILABLE`;
+an unreadable key version, corrupt ciphertext or malformed record fails with
+`SecretAdapter.SECRET_DECRYPT_FAILED`. Decryption failures expose no underlying
+exception or secret value. `secret:set` uses the atomic store-if-absent operation
+and refuses collisions with `SecretAdapter.SECRET_EXISTS` unless `overwrite:true`
+is supplied. Java callers can compare against these constants without embedding
+message wording or listing names before attempting a write.
+
 With `recordReadOnlyOperations:true`, ordinary extraction fails closed. An
 explicit private run is possible only if the venue enables private jobs; it
 must still meet every owner/direct-call restriction. Audit logging, when

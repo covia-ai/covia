@@ -211,6 +211,21 @@ public class SecretStoreTest {
 
 	// ========== Empty List ==========
 
+	@SuppressWarnings("deprecation")
+	@Test
+	public void testMalformedRecordsAreNotReportedAsMissing() {
+		AKeyPair kp = AKeyPair.generate();
+		User user = VenueState.create(kp).users().ensure("did:key:zAlice");
+		var entry = user.cursor().path(Namespace.S, Strings.create(SECRET_NAME));
+		for (ACell malformed : new ACell[] { null, Strings.create("invalid"), Maps.empty(), Maps.of(ENCRYPTED, "invalid") }) {
+			entry.set(malformed);
+			assertEquals(SecretStore.INVALID_RECORD, assertThrows(IllegalStateException.class,
+				() -> user.secrets().decrypt(SECRET_NAME, SecretStore.keys(kp))).getMessage());
+			assertEquals(SecretStore.INVALID_RECORD, assertThrows(IllegalStateException.class,
+				() -> user.secrets().decrypt(SECRET_NAME, SecretStore.deriveKey(kp))).getMessage());
+		}
+	}
+
 	@Test
 	public void testEmptyList() {
 		AKeyPair kp = AKeyPair.generate();

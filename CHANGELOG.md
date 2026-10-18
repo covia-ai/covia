@@ -59,6 +59,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Fixed
 
+- Secret operations expose distinct refusal constants for an existing name,
+  a missing secret and a decryption failure, including unreadable key versions
+  and malformed records (#586).
 - DLFS drive creation, deletion and listing use Convex's existing tombstone-aware
   registry. Deleted drives survive a root save in flight and disappear from
   listings, while file-level merge semantics remain intact (#589).

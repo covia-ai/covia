@@ -34,6 +34,7 @@ import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.grid.Job;
+import covia.lattice.Namespace;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -239,12 +240,42 @@ class SecretAdapterTest {
 		}
 	}
 
-	@Test void missingAndCorruptSecretsHaveTheSameSanitizedFailure() {
-		engine.getVenueState().users().get(owner.getUserDID()).secrets()
-			.store("CORRUPT", VALUE, SecretStore.keys(AKeyPair.generate()));
-		for (String name : new String[] { "MISSING", "CORRUPT" }) {
+	@Test void existingSecretHasRecognizableRefusalAndExplicitOverwriteStillWorks() {
+		assertEquals(SecretAdapter.SECRET_EXISTS,
+			failure(run("set", Maps.of("name", "KEY", "value", "replacement"), owner)).getMessage());
+		assertEquals(VALUE, engine.resolveSecret("s/KEY", owner));
+		denied(run("set", Maps.of("name", "KEY", "value", "replacement"), scope("s/KEY", Capability.CRUD_READ)));
+		assertEquals(CVMBool.TRUE, RT.getIn(run("set",
+			Maps.of("name", "KEY", "value", "replacement", "overwrite", true)), "stored"));
+		assertEquals("replacement", engine.resolveSecret("s/KEY", owner));
+	}
+
+	@Test void concurrentSetHasOneWinnerAndRecognizableCollisions() {
+		List<CompletableFuture<ACell>> calls = new ArrayList<>();
+		for (int i = 0; i < 12; i++) calls.add(run("set", Maps.of("name", "RACE", "value", VALUE), owner));
+		int stored = 0;
+		for (var call : calls) {
+			try {
+				assertEquals(CVMBool.TRUE, RT.getIn(call.join(), "stored"));
+				stored++;
+			} catch (CompletionException e) {
+				assertEquals(SecretAdapter.SECRET_EXISTS, e.getCause().getMessage());
+			}
+		}
+		assertEquals(1, stored);
+		assertEquals(VALUE, engine.resolveSecret("s/RACE", owner));
+	}
+
+	@Test void missingAndUnreadableSecretsHaveDistinctSanitizedFailures() {
+		var user = engine.getVenueState().users().get(owner.getUserDID());
+		user.secrets().store("CORRUPT", VALUE, SecretStore.keys(AKeyPair.generate()));
+		put("UNKNOWN_VERSION", VALUE);
+		user.cursor().path(Namespace.S, Strings.create("UNKNOWN_VERSION"), Strings.create("keyVersion")).set(CVMLong.create(7));
+		user.cursor().path(Namespace.S, Strings.create("MALFORMED")).set(Maps.empty());
+		for (String name : new String[] { "MISSING", "CORRUPT", "UNKNOWN_VERSION", "MALFORMED" }) {
 			Throwable error = failure(run("extract", Maps.of("name", name), owner));
-			assertEquals(SecretAdapter.SECRET_UNAVAILABLE, error.getMessage());
+			assertEquals("MISSING".equals(name) ? SecretAdapter.SECRET_UNAVAILABLE : SecretAdapter.SECRET_DECRYPT_FAILED,
+				error.getMessage());
 			assertNull(error.getCause());
 			denied(run("extract", Maps.of("name", name), scope("s/", Capability.CRUD_READ)));
 		}
