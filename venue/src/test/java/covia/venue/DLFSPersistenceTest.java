@@ -85,6 +85,11 @@ public class DLFSPersistenceTest {
 				RequestContext.of(ALICE_DID)
 			).awaitResult(5000);
 			assertNotNull(result, "DLFS write should succeed");
+			engine.jobs().invokeOperation("v/ops/dlfs/write",
+				Maps.of("drive", "deleted-drive", "path", "gone.txt", "content", "gone"),
+				RequestContext.of(ALICE_DID)).awaitResult(5000);
+			engine.jobs().invokeOperation("v/ops/dlfs/delete-drive",
+				Maps.of("name", "deleted-drive"), RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 			// Verify root cursor has DLFS region with actual content
 			ACell rootValue = node.getCursor().get();
@@ -150,6 +155,9 @@ public class DLFSPersistenceTest {
 
 			// Get the DLFSAdapter and check drive access
 			DLFSAdapter dlfsAdapter = (DLFSAdapter) engine.getAdapter("dlfs");
+			assertEquals(convex.core.data.Vectors.of("test-drive"), RT.getIn(
+				dlfsAdapter.listDrives(RequestContext.of(ALICE_DID)), "drives"),
+				"deletion and the filtered drive listing survive a store reopen");
 			var drive = dlfsAdapter.getDriveForIdentity(ALICE_DID.toString(), "test-drive");
 			assertNotNull(drive, "Drive should be accessible after restore");
 

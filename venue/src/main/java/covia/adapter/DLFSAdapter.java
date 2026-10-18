@@ -16,6 +16,7 @@ import convex.auth.did.DIDURL;
 import convex.auth.ucan.Capability;
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
+import convex.core.data.AHashMap;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
@@ -28,6 +29,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
+import convex.dlfs.DLFSDrives;
 import convex.lattice.LatticeContext;
 import convex.lattice.cursor.ALatticeCursor;
 import convex.lattice.fs.impl.DLFSLocal;
@@ -71,6 +73,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 
 	private static final String ASSETS_PATH = "/adapters/dlfs/";
 	private static final String DLFS_KEY_SECRET = "DLFS_KEY";
+	public static final String DRIVE_UNAVAILABLE = "Unable to open or create DLFS drive: ";
 
 	private static final AString FIELD_DRIVE = Strings.intern("drive");
 	private static final AString FIELD_PATH = Strings.intern("path");
@@ -207,7 +210,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	 * timestamp remains live; connected drive views obtain the venue's current
 	 * write timestamp for every mutation.</p>
 	 */
-	private ALatticeCursor<?> getUserDLFSCursor(AKeyPair dlfsKey) {
+	private ALatticeCursor<AHashMap<AString, AVector<ACell>>> getUserDLFSCursor(AKeyPair dlfsKey) {
 		ALatticeCursor<Index<Keyword, ACell>> rootCursor = engine.getRootCursor();
 		ALatticeCursor<?> dlfsCursor = rootCursor.path(Covia.DLFS);
 
@@ -244,7 +247,13 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 				"DLFS drive name must be non-empty and contain no '/', '\\', or ':'");
 		}
 		AKeyPair dlfsKey = ensureUserKeyPair(ctx);
-		ALatticeCursor<?> userCursor = getUserDLFSCursor(dlfsKey);
+		var userCursor = getUserDLFSCursor(dlfsKey);
+		// Convex owns drive creation/recreation and its deletion tombstones.
+		var drives = DLFSDrives.wrap(userCursor);
+		drives.createDrive(driveName);
+		if (drives.drive(driveName) == null) {
+			throw new IllegalArgumentException(DRIVE_UNAVAILABLE + driveName);
+		}
 		// Convex 0.8.14 resolves each DLFS mutation timestamp through the cursor's
 		// inherited live policy, so long-lived views see the current application
 		// clock on every write (#387).
@@ -252,18 +261,13 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	}
 
 	/**
-	 * Lists drive names by inspecting the user's DLFS cursor.
+	 * Lists live drives using Convex's registry lifecycle semantics.
 	 */
 	private AVector<ACell> listDriveNames(RequestContext ctx) {
 		AKeyPair dlfsKey = ensureUserKeyPair(ctx);
-		ALatticeCursor<?> userCursor = getUserDLFSCursor(dlfsKey);
-		ACell value = userCursor.get();
-
 		AVector<ACell> names = Vectors.empty();
-		if (value instanceof AMap<?,?> map) {
-			for (var entry : ((AMap<AString,ACell>) map).entrySet()) {
-				names = names.conj(entry.getKey());
-			}
+		for (String name : DLFSDrives.wrap(getUserDLFSCursor(dlfsKey)).driveNames()) {
+			names = names.conj(Strings.create(name));
 		}
 		return names;
 	}
@@ -663,7 +667,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		if (name == null) name = RT.ensureString(input.get(FIELD_DRIVE));
 		if (name == null) throw new IllegalArgumentException("'name' or 'drive' is required");
 
-		// getDrive auto-creates via DLFS.connect() (initialises empty tree if absent)
+		// getDrive delegates creation/recreation to Convex's drive registry.
 		getDrive(ctx, name.toString());
 		return Maps.of(
 			"created", CVMBool.TRUE,
@@ -681,9 +685,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		}
 
 		AKeyPair dlfsKey = ensureUserKeyPair(ctx);
-		ALatticeCursor<?> userCursor = getUserDLFSCursor(dlfsKey);
-		ALatticeCursor<?> driveCursor = userCursor.path(name);
-		driveCursor.set(null);
+		DLFSDrives.wrap(getUserDLFSCursor(dlfsKey)).deleteDrive(name.toString());
 
 		return Maps.of("deleted", CVMBool.TRUE);
 	}

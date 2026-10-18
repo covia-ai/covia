@@ -168,6 +168,11 @@ Defined in code at `venue/src/main/java/covia/lattice/Covia.java`. Full design i
 
 ## Development Conventions
 
+- **Upstream first:** Before adding a fix or abstraction, inspect the dependency's
+  existing APIs and fixes at the version we use. Prefer upstream functionality
+  over local workarounds. If the required capability is missing, request an
+  upstream improvement rather than implementing a competing workaround in Covia.
+
 Workbench's shared `covia.gui.markdown` and `covia.gui.components` packages use
 the JDK and CommonMark only. Hosts supply appearance, layout and link actions;
 do not introduce application colours, fonts, look-and-feel setup or venue calls.

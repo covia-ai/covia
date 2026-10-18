@@ -110,6 +110,13 @@ public class AgentAdapter extends AAdapter {
 	public static final String QUERY_UNKNOWN_SESSION = "Unknown sessionId";
 	/** Optional agent-adapter code: a supplied session does not exist. */
 	public static final String UNKNOWN_SESSION_CODE = "agent:unknown-session";
+	public static final String SUSPENDED_CODE = "agent:suspended";
+	public static final String SUSPEND_REASON_INVALID = "Suspension reason must be a string";
+	public static final String SUSPEND_AGENT_GONE = "Agent was removed or terminated before suspension";
+	public static final String TRANSITION_CANCELLED = "Transition cancelled";
+	public static final String SUSPENDED_REFUSAL = "Agent '%s' is suspended%s; %s";
+	public static final String SUSPENDED_RESUME_ADVICE = "fix the cause, then use agent:resume";
+	public static final String SUSPENDED_ASK_ADVICE = "ask whoever stopped the agent before using agent:resume";
 	public static final String CHAT_UNKNOWN_SESSION = "Unknown sessionId: %s — omit sessionId to start a new session";
 	public static final String CONTEXT_UNKNOWN_SESSION = "Unknown session: %s";
 	public static final String QUERY_NO_OPERATION = "Agent has no transition operation configured";
@@ -1909,6 +1916,8 @@ public class AgentAdapter extends AAdapter {
 		if (tasks != null) summary = summary.assoc(Strings.intern("tasks"), CVMLong.create(tasks.count()));
 		ACell error = record.get(AgentState.KEY_ERROR);
 		if (error != null) summary = summary.assoc(AgentState.KEY_ERROR, error);
+		ACell suspension = record.get(AgentState.KEY_SUSPENSION);
+		if (suspension != null) summary = summary.assoc(AgentState.KEY_SUSPENSION, suspension);
 		@SuppressWarnings("unchecked")
 		AMap<AString, ACell> config = (record.get(AgentState.KEY_CONFIG) instanceof AMap<?, ?> m)
 			? (AMap<AString, ACell>) m : null;
@@ -2115,6 +2124,8 @@ public class AgentAdapter extends AAdapter {
 						Fields.TASKS, CVMLong.create(taskCount));
 					ACell error = record.get(AgentState.KEY_ERROR);
 					if (error != null) summary = summary.assoc(Fields.ERROR, error);
+					ACell suspension = record.get(AgentState.KEY_SUSPENSION);
+					if (suspension != null) summary = summary.assoc(AgentState.KEY_SUSPENSION, suspension);
 					agents = agents.conj(summary);
 				}
 			}
@@ -2487,16 +2498,26 @@ public class AgentAdapter extends AAdapter {
 		AgentState agent = lookupAgent(job, target);
 		if (agent == null) return;
 
-		agent.setStatus(AgentState.SUSPENDED);
+		ACell reason = RT.getIn(input, Fields.REASON);
+		if (reason != null && !(reason instanceof AString)) {
+			throw new IllegalArgumentException(SUSPEND_REASON_INVALID);
+		}
+		AMap<AString, ACell> stopped = agent.suspend(ctx.getCallerDID(), (AString) reason);
+		if (stopped == null) {
+			job.fail(SUSPEND_AGENT_GONE);
+			return;
+		}
 		if (externalAgents().isExternal(agent)) externalAgents().cancelAll(agent);
-		engine.agentEvents().status(target.ownerDID(), agentId, AgentState.SUSPENDED, null);
 
 		// Cancel any active transition so the agent stops promptly (the token
 		// stops the transition thread itself; cancel unblocks the run loop)
 		cancelActiveTransition(target.key());
+		engine.agentEvents().status(target.ownerDID(), agentId, AgentState.SUSPENDED,
+			AgentState.suspensionDetail(stopped));
 
 		job.setStatus(Status.STARTED);
-		job.completeWith(identify(target, Maps.of(Fields.STATUS, AgentState.SUSPENDED)));
+		job.completeWith(identify(target, Maps.of(Fields.STATUS, AgentState.SUSPENDED,
+			AgentState.KEY_SUSPENSION, stopped.get(AgentState.KEY_SUSPENSION))));
 	}
 
 	private void handleResume(Job job, ACell input, RequestContext ctx) {
@@ -3781,8 +3802,7 @@ public class AgentAdapter extends AAdapter {
 					transitionResult = transitionFuture.join();
 				} catch (java.util.concurrent.CancellationException ce) {
 					transitionCancelled = true;
-					transitionResult = Maps.of(Fields.ERROR,
-						Strings.create("Transition cancelled"));
+					transitionResult = null; // handled separately from transition failures below
 				} catch (java.util.concurrent.CompletionException e) {
 					Throwable cause = (e.getCause() != null) ? e.getCause() : e;
 					// A failure that carries its cycle record (#392) still
@@ -3819,29 +3839,22 @@ public class AgentAdapter extends AAdapter {
 				// recreated agent under the same id (#202). Settle per initiator
 				// and exit; the finally-block re-check handles any new work.
 				if (transitionCancelled) {
-					cycle.end(Maps.of(
-						Fields.ERROR, Strings.create("Transition cancelled"),
-						Fields.CANCELLED, CVMBool.TRUE));
-					AString statusNow = agent.getStatus();
-					if (AgentState.SUSPENDED.equals(statusNow)) {
-						// agent:suspend stopped this cycle — record the cause,
-						// drop the queue and fail queued callers, exactly as the
-						// error path settled a suspend-cancel before (#88).
-						AString errStr = Strings.create("Transition cancelled");
-						Index<Blob, ACell> tasksAtCancel = agent.getTasks();
-						agent.suspendAndDrain(errStr);
-						engine.agentEvents().status(ownerDID, agentId, AgentState.SUSPENDED, errStr);
-						failQueuedTasks(tasksAtCancel, errStr.toString());
-						failAllPendingForAgent(ownerDID, agentId, errStr.toString());
-						// Settle the session's cycle claim: an administrative
-						// stop is not a crash — the session must not register
-						// as interrupted work (no auto-resume), and the claim
-						// release fences any zombie writes from the stopped
-						// transition thread.
-						if (pickedSessionBlob != null) {
-							agent.clearSessionCycle(pickedSessionBlob);
-						}
+					AString detail = Strings.create(TRANSITION_CANCELLED);
+					AMap<AString, ACell> entry = Maps.of(
+						K_START, CVMLong.create(startTs), K_END, CVMLong.create(System.currentTimeMillis()),
+						Fields.OP, transitionOp, Fields.RESULT, detail, Fields.CANCELLED, CVMBool.TRUE);
+					if (pickedSession != null) entry = entry.assoc(Fields.SESSION_ID, pickedSession);
+					if (formattedTasks != null && !formattedTasks.isEmpty()) entry = entry.assoc(Fields.TASKS, formattedTasks);
+					AMap<AString, ACell> stopped = agent.finishSuspendedCycle(entry, pickedSessionBlob);
+					if (stopped != null) {
+						AString cause = AgentState.suspensionDetail(stopped);
+						if (cause != null) detail = cause;
+						@SuppressWarnings("unchecked")
+						Index<Blob, ACell> tasksAtCancel = (Index<Blob, ACell>) stopped.get(AgentState.KEY_TASKS);
+						failQueuedTasks(tasksAtCancel, detail.toString());
+						failAllPendingForAgent(ownerDID, agentId, detail.toString());
 					}
+					cycle.end(Maps.of(Fields.ERROR, detail, Fields.CANCELLED, CVMBool.TRUE));
 					// TERMINATED / removed / replaced: agent:delete has already
 					// settled the record and notified the queued callers.
 					break;
@@ -4799,12 +4812,14 @@ public class AgentAdapter extends AAdapter {
 	 * @return true if the agent was suspended and the Job has been failed
 	 */
 	private boolean failIfSuspended(Job job, AgentState agent, AString agentId) {
-		if (!AgentState.SUSPENDED.equals(agent.getStatus())) return false;
-		AString error = agent.getError();
-		StringBuilder sb = new StringBuilder("Agent '").append(agentId).append("' is suspended");
-		if (error != null) sb.append(": ").append(conciseDetail(error, 512));
-		sb.append("; fix the cause, then use agent:resume");
-		job.fail(sb.toString());
+		AMap<AString, ACell> record = agent.getRecord();
+		if (record == null || !AgentState.SUSPENDED.equals(record.get(Fields.STATUS))) return false;
+		AString stop = AgentState.suspensionDetail(record);
+		ACell error = record.get(AgentState.KEY_ERROR);
+		String detail = stop != null ? ": " + stop
+			: error != null ? ": " + conciseDetail(error, 512) : "";
+		job.fail(SUSPENDED_CODE, SUSPENDED_REFUSAL.formatted(agentId, detail,
+			stop != null ? SUSPENDED_ASK_ADVICE : SUSPENDED_RESUME_ADVICE));
 		return true;
 	}
 

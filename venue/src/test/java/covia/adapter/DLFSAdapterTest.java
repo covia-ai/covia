@@ -254,6 +254,117 @@ public class DLFSAdapterTest {
 		);
 	}
 
+	/** #589: the root save must not restore a drive deleted after it took its snapshot. */
+	@Test
+	public void testDriveDeleteSurvivesSaveInFlight() throws Exception {
+		Engine isolated = Engine.createTemp(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
+		try {
+			Engine.addDemoAssets(isolated);
+			DLFSAdapter adapter = (DLFSAdapter) isolated.getAdapter("dlfs");
+			var drive = adapter.getDriveForIdentity(ALICE_DID.toString(), "deleted");
+			Files.writeString(drive.getPath("/old.txt"), "must stay deleted");
+			var kept = adapter.getDriveForIdentity(ALICE_DID.toString(), "kept");
+			Files.writeString(kept.getPath("/keep.txt"), "keep");
+			var root = (convex.lattice.cursor.RootLatticeCursor<Index<Keyword, ACell>>) isolated.getRootCursor();
+			// Equal timestamps exercise the local-authoritative tie rule as well.
+			root.setContext(root.getContext().withTimestamp(root.getContext().currentTimestamp()));
+			CountDownLatch saving = new CountDownLatch(1);
+			CountDownLatch release = new CountDownLatch(1);
+			var save = java.util.concurrent.CompletableFuture.runAsync(() -> root.sync(snapshot -> {
+				saving.countDown();
+				try {
+					assertTrue(release.await(5, TimeUnit.SECONDS));
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+					throw new AssertionError(e);
+				}
+				return snapshot;
+			}));
+			try {
+				assertTrue(saving.await(5, TimeUnit.SECONDS));
+				isolated.jobs().invokeOperation("v/ops/dlfs/delete-drive", Maps.of("name", "deleted"),
+					RequestContext.of(ALICE_DID)).awaitResult(5000);
+				assertFalse(convex.lattice.fs.DLFSNode.isDirectory(drive.getCursor().get()));
+			} finally {
+				release.countDown();
+				save.get(5, TimeUnit.SECONDS);
+			}
+			assertFalse(convex.lattice.fs.DLFSNode.isDirectory(drive.getCursor().get()),
+				"stale root save must not resurrect the tree");
+			assertEquals("keep", Files.readString(kept.getPath("/keep.txt")));
+			assertEquals(convex.core.data.Vectors.of("kept"), RT.getIn(
+				adapter.listDrives(RequestContext.of(ALICE_DID)), "drives"));
+			var deleted = root.get();
+			var recreated = adapter.getDriveForIdentity(ALICE_DID.toString(), "deleted");
+			Files.writeString(recreated.getPath("/new.txt"), "new");
+			root.merge(deleted);
+			assertEquals("new", Files.readString(recreated.getPath("/new.txt")));
+			assertFalse(Files.exists(recreated.getPath("/old.txt")));
+		} finally {
+			isolated.close();
+		}
+	}
+
+	@Test
+	public void testDriveDeletionWinsOlderSnapshot() throws Exception {
+		Engine isolated = Engine.createTemp(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
+		try {
+			Engine.addDemoAssets(isolated);
+			DLFSAdapter adapter = (DLFSAdapter) isolated.getAdapter("dlfs");
+			var drive = adapter.getDriveForIdentity(ALICE_DID.toString(), "legacy");
+			Files.writeString(drive.getPath("/old.txt"), "legacy content");
+			var root = isolated.getRootCursor();
+			var legacy = root.get();
+			assertEquals("legacy content", Files.readString(drive.getPath("/old.txt")));
+			// A strictly newer deletion wins in either merge direction; equal times
+			// deliberately keep the local operand in Convex (covered by the save race).
+			root.setContext(root.getContext().withTimestamp(convex.core.data.prim.CVMLong.create(
+				drive.getCursor().getContext().currentTimestamp().longValue() + 1)));
+			isolated.jobs().invokeOperation("v/ops/dlfs/delete-drive", Maps.of("name", "legacy"),
+				RequestContext.of(ALICE_DID)).awaitResult(5000);
+			var deleted = root.get();
+			assertEquals(deleted.get(Covia.DLFS), Covia.ROOT.merge(root.getContext(), legacy, deleted).get(Covia.DLFS));
+			root.merge(legacy);
+			assertFalse(convex.lattice.fs.DLFSNode.isDirectory(drive.getCursor().get()));
+		} finally {
+			isolated.close();
+		}
+	}
+
+	@Test
+	public void testIndependentFileEditsStillMerge() throws Exception {
+		Engine isolated = Engine.createTemp(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
+		try {
+			Engine.addDemoAssets(isolated);
+			DLFSAdapter adapter = (DLFSAdapter) isolated.getAdapter("dlfs");
+			var drive = adapter.getDriveForIdentity(ALICE_DID.toString(), "shared");
+			var root = isolated.getRootCursor();
+			var base = root.get();
+			Files.writeString(drive.getPath("/left.txt"), "left");
+			var left = root.get();
+			root.set(base);
+			Files.writeString(drive.getPath("/right.txt"), "right");
+			// The owner signs the merged map, retaining both independently edited files.
+			root.set(Covia.ROOT.merge(drive.getCursor().getContext(), root.get(), left));
+			assertEquals("left", Files.readString(drive.getPath("/left.txt")));
+			assertEquals("right", Files.readString(drive.getPath("/right.txt")));
+		} finally {
+			isolated.close();
+		}
+	}
+
+	@Test
+	public void testUpstreamRejectedDriveNamesAreNotCreated() throws Exception {
+		DLFSAdapter adapter = (DLFSAdapter) engine.getAdapter("dlfs");
+		for (String name : new String[] {".", "..", " padded ", "x".repeat(129)}) {
+			var error = assertThrows(IllegalArgumentException.class,
+				() -> adapter.getDriveForIdentity(ALICE_DID.toString(), name));
+			assertEquals(DLFSAdapter.DRIVE_UNAVAILABLE + name, error.getMessage());
+		}
+		assertEquals(0, RT.ensureVector(RT.getIn(adapter.listDrives(RequestContext.of(ALICE_DID)),
+			"drives")).count());
+	}
+
 	@Test
 	public void testDeleteDrive() {
 		run("v/ops/dlfs/create-drive", Maps.of("name", "test-remove"));
@@ -261,8 +372,10 @@ public class DLFSAdapterTest {
 
 		ACell result = run("v/ops/dlfs/delete-drive", Maps.of("name", "test-remove"));
 		assertTrue(RT.bool(RT.getIn(result, "deleted")));
+		assertEquals(0, RT.ensureVector(RT.getIn(
+			run("v/ops/dlfs/list-drives", Maps.empty()), "drives")).count());
 
-		// Drive tombstoned on lattice — re-accessing creates a fresh empty drive
+		// Re-accessing creates a fresh empty drive.
 		result = run("v/ops/dlfs/list", Maps.of("drive", "test-remove"));
 		AVector<?> entries = RT.ensureVector(RT.getIn(result, "entries"));
 		assertEquals(0, entries.count(), "Deleted drive should be empty when re-accessed");

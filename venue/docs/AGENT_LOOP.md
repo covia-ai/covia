@@ -95,6 +95,7 @@ The agent's value is a plain map. Every write replaces the entire map atomically
 | `timeline` | vector | Append-only log of cycle records (§2.4), one per cycle whose transition ran — the complete record of each cycle's exchange with the model. |
 | `caps` | map | Capability attenuations — UCAN scoping for agent tool calls. See [UCAN.md §5.4](./UCAN.md) for Model A (user-scoped) vs Model B (independent DID). |
 | `error` | string? | Last error message, or null. Set when the transition function fails. |
+| `suspension` | map? | Deliberate stop: `{by: <actual caller DID>, reason?: <up to 512 characters>, ts: <epoch millis>}`. Set by `agent:suspend`, separate from faults; cleared on resume. |
 
 All fields are framework-managed except `state`, which is owned by the transition
 function. CAD3 structural sharing means the timeline (which only appends) shares
@@ -285,7 +286,7 @@ stale; startup clears it before scheduling durable work.
 |--------|---------|----------|-------------------|
 | `SLEEPING` | Durable runnable/idle state. | `wakeAgent` may start a live attempt. | All except config mutation while a live attempt exists. |
 | `RUNNING` | Persisted dirty marker: an attempt was launched. The hosting venue validates it against the live launcher slot. | Running when the matching slot is live; otherwise stale until startup cleanup. | Task/session appends are allowed. `agent:update` applies to future transitions; a started transition keeps its fire-time config. |
-| `SUSPENDED` | Last run failed with an error. Dormant — does not auto-retry. State, pending messages, sessions, and history are preserved; failed tasks are drained. | Not running. Resume via `tryResume` to keep the record, or delete it with `remove:true` before creating a replacement. | All. |
+| `SUSPENDED` | Deliberately stopped (`suspension`) or last run failed (`error`). Dormant — does not auto-retry. State, pending messages, sessions, and history are preserved; interrupted tasks are drained. | Not running. Resume via `tryResume` to keep the record, or delete it with `remove:true` before creating a replacement. | All. |
 | `TERMINATED` | Logically deleted. Slot still occupies the namespace key (so the ID is reserved) but the agent is dead. | Cannot run. `agent:request` / `agent:message` / `agent:trigger` all fail. | None. Remove the record explicitly with `agent:delete remove:true` before reusing the ID. |
 
 **Durable state transitions** are documented in §4: `create` (→SLEEPING), a
@@ -934,12 +935,20 @@ the response visible to callers without querying agent state separately.
 | Operation | Trigger | Effect | Allowed status | New status |
 |-----------|---------|--------|----------------|------------|
 | **Suspend** | run loop error (§4.4) | Set `error`, set status → SUSPENDED. State, tasks, pending, sessions unchanged. | RUNNING (internal) | SUSPENDED |
-| **Resume** | `agent:resume` | CAS SUSPENDED→SLEEPING via `tryResume`, clear `error`. Then wake via §4.6 if there is work. | SUSPENDED only | SLEEPING |
-| **Suspend (manual)** | `agent:suspend` | Set status → SUSPENDED with caller-supplied reason. Stops the agent from being woken. | SLEEPING | SUSPENDED |
+| **Resume** | `agent:resume` | CAS SUSPENDED→SLEEPING via `tryResume`, clear `error` and `suspension`. Then wake via §4.6 if there is work. | SUSPENDED only | SLEEPING |
+| **Suspend (manual)** | `agent:suspend` | Atomically set SUSPENDED and `suspension`, clear `error`; latest stop replaces previous actor/reason. Cancel an active transition, recording the stop on its timeline and notifying waiting callers. | SLEEPING, RUNNING, SUSPENDED | SUSPENDED |
 | **Trigger** | `agent:trigger` | Wake the agent and (optionally) wait for the run loop to drain. Fails on TERMINATED. See §4.6. | SLEEPING, RUNNING | RUNNING then SLEEPING |
 | **Cancel task** | `agent:cancelTask` | Remove a pending task from the agent's `tasks` index. Does not affect the run loop directly. | any except TERMINATED | unchanged |
 | **Delete** | `agent:delete` | Accepts exactly one `agentId` or an exact `agentIds` list (maximum 100; no prefixes/wildcards). One Job halts each named agent. Default: set status → TERMINATED (record retained for audit). With `remove:true`: physically remove each lattice slot, making unreachable storage eligible for Etch GC. The full list is validated before deletion starts. | any | TERMINATED (or absent) |
 | **Fork** | `agent:fork` | Create a NEW agent at a different `agentId` from this one's config + optional state + optional timeline. The source is untouched and the target slot must be empty. | source must not be TERMINATED | new agent SLEEPING |
+
+`agent:info`, the REST agent summary, and `agent:list` expose `suspension`.
+Clients distinguish a deliberate stop by that field, never by error wording.
+Legacy records without it remain unclassified. New requests/chats to a
+suspended agent fail with `errorCode: "agent:suspended"`; their message names
+the stop and advises asking the stopping caller, or retains fault-recovery
+advice for an ordinary failure. `by` is `ctx.getCallerDID()`, including through
+sudo; an intermediary is not relabelled as the agent on whose behalf it acted.
 
 **All mutations are atomic.** Each operation is a single compare-and-swap
 on the agent's lattice cell, so concurrent operations against the same

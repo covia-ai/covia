@@ -30,6 +30,11 @@ public class AgentState extends ALatticeComponent<ACell> {
 
 	public static final AString KEY_AGENT = Strings.intern("agent");
 	public static final AString KEY_EXTERNAL = Strings.intern("external");
+	/** Present only for a deliberate stop; faults use {@link #KEY_ERROR}. */
+	public static final AString KEY_SUSPENSION = Strings.intern("suspension");
+	public static final AString SUSPENSION_BY = Strings.intern("by");
+	public static final int MAX_SUSPEND_REASON_LENGTH = 512;
+	public static final String SUSPENDED_BY = "Suspended by %s";
 
 	// Record field keys
 	private static final AString K_TS       = Strings.intern("ts");
@@ -773,18 +778,21 @@ public class AgentState extends ALatticeComponent<ACell> {
 	 * claim is released so the session does not register as crashed work,
 	 * and any zombie writes from the stopped cycle are fenced out.
 	 */
-	@SuppressWarnings("unchecked")
 	public void clearSessionCycle(Blob sid) {
-		update(r -> {
-			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index idx)
-				? (Index<Blob, ACell>) idx : Index.none();
-			ACell sv = sessions.get(sid);
-			if (!(sv instanceof AMap)) return r;
-			AMap<AString, ACell> session = (AMap<AString, ACell>) sv;
-			AMap<AString, ACell> cleared = session.dissoc(K_IN_CYCLE);
-			if (cleared == session) return r;
-			return r.assoc(K_SESSIONS, sessions.assoc(sid, cleared));
-		});
+		update(r -> clearSessionCycle(r, sid));
+	}
+
+	@SuppressWarnings("unchecked")
+	private static AMap<AString, ACell> clearSessionCycle(AMap<AString, ACell> r, Blob sid) {
+		if (sid == null) return r;
+		Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index idx)
+			? (Index<Blob, ACell>) idx : Index.none();
+		ACell sv = sessions.get(sid);
+		if (!(sv instanceof AMap)) return r;
+		AMap<AString, ACell> session = (AMap<AString, ACell>) sv;
+		AMap<AString, ACell> cleared = session.dissoc(K_IN_CYCLE);
+		if (cleared == session) return r;
+		return r.assoc(K_SESSIONS, sessions.assoc(sid, cleared));
 	}
 
 	/**
@@ -1003,6 +1011,17 @@ public class AgentState extends ALatticeComponent<ACell> {
 	public AString getError() {
 		AMap<AString, ACell> r = getRecord();
 		return (r != null) ? RT.ensureString(r.get(K_ERROR)) : null;
+	}
+
+	/** One description for the stop event, cancelled cycle and waiting callers. */
+	public static AString suspensionDetail(AMap<AString, ACell> record) {
+		if (record == null) return null;
+		ACell suspension = record.get(KEY_SUSPENSION);
+		AString by = RT.ensureString(RT.getIn(suspension, SUSPENSION_BY));
+		if (by == null) return null;
+		AString reason = RT.ensureString(RT.getIn(suspension, Fields.REASON));
+		return Strings.create(SUSPENDED_BY.formatted(by)
+			+ (reason == null || reason.isEmpty() ? "" : ": " + reason));
 	}
 
 	public long getTs() {
@@ -1322,11 +1341,11 @@ public class AgentState extends ALatticeComponent<ACell> {
 
 	// ========== CAS operations ==========
 
-	/** Atomic CAS: SUSPENDED → SLEEPING, clear error. Returns true if resumed. */
+	/** Atomic CAS: SUSPENDED → SLEEPING, clear fault and deliberate stop. */
 	public boolean tryResume() {
 		AMap<AString, ACell> before = getAndUpdate(r ->
 			SUSPENDED.equals(RT.ensureString(r.get(K_STATUS)))
-				? r.assoc(K_STATUS, SLEEPING).dissoc(K_ERROR) : r);
+				? r.assoc(K_STATUS, SLEEPING).dissoc(K_ERROR).dissoc(KEY_SUSPENSION) : r);
 		return SUSPENDED.equals(RT.ensureString(before.get(K_STATUS)));
 	}
 
@@ -1344,9 +1363,32 @@ public class AgentState extends ALatticeComponent<ACell> {
 		return SLEEPING.equals(was) || RUNNING.equals(was);
 	}
 
-	/** Sets SUSPENDED status with error message. */
+	/**
+	 * Records a deliberate stop atomically. Repeated stops replace its provenance.
+	 * Returns the committed record, or null if deletion won the race.
+	 */
+	public AMap<AString, ACell> suspend(AString by, AString reason) {
+		Objects.requireNonNull(by);
+		AMap<AString, ACell> stop = Maps.of(SUSPENSION_BY, by, K_TS, now());
+		if (reason != null) {
+			String text = reason.toString();
+			stop = stop.assoc(Fields.REASON, Strings.create(
+				text.substring(0, Math.min(text.length(), MAX_SUSPEND_REASON_LENGTH))));
+		}
+		AMap<AString, ACell> suspension = stop;
+		AMap<AString, ACell> stopped = update(r -> TERMINATED.equals(r.get(K_STATUS)) ? r
+			: r.assoc(K_STATUS, SUSPENDED).assoc(KEY_SUSPENSION, suspension).dissoc(K_ERROR));
+		return stopped != null && SUSPENDED.equals(stopped.get(K_STATUS)) ? stopped : null;
+	}
+
+	/** Sets a fault suspension without overwriting a deliberate stop racing the failure. */
 	public void suspend(AString error) {
-		update(r -> r.assoc(K_ERROR, error).assoc(K_STATUS, SUSPENDED));
+		update(r -> faultSuspension(r, error));
+	}
+
+	private static AMap<AString, ACell> faultSuspension(AMap<AString, ACell> r, AString error) {
+		if (r.containsKey(KEY_SUSPENSION) || TERMINATED.equals(r.get(K_STATUS))) return r;
+		return r.assoc(K_ERROR, error).assoc(K_STATUS, SUSPENDED);
 	}
 
 	/**
@@ -1358,10 +1400,26 @@ public class AgentState extends ALatticeComponent<ACell> {
 	 * clean state; callers re-submit if they want to retry.
 	 */
 	public void suspendAndDrain(AString error) {
-		update(r -> r
-			.assoc(K_ERROR, error)
-			.assoc(K_STATUS, SUSPENDED)
-			.assoc(K_TASKS, Index.none()));
+		update(r -> faultSuspension(r, error).assoc(K_TASKS, Index.none()));
+	}
+
+	/**
+	 * Records an administratively cancelled cycle, drains its queued tasks and
+	 * releases the session claim in one write. Never re-suspends a resumed agent.
+	 * Returns the previous record for notifying exactly the callers we drained.
+	 */
+	public AMap<AString, ACell> finishSuspendedCycle(AMap<AString, ACell> entry, Blob sid) {
+		AMap<AString, ACell> before = getAndUpdate(r -> {
+			if (!SUSPENDED.equals(r.get(K_STATUS))) return r;
+			AMap<AString, ACell> stopped = entry;
+			ACell suspension = r.get(KEY_SUSPENSION);
+			if (suspension != null) stopped = stopped.assoc(KEY_SUSPENSION, suspension)
+				.assoc(Fields.RESULT, suspensionDetail(r));
+			return clearSessionCycle(r, sid)
+				.assoc(K_TASKS, Index.none())
+				.assoc(K_TIMELINE, extractTimeline(r).conj(stopped));
+		});
+		return before != null && SUSPENDED.equals(before.get(K_STATUS)) ? before : null;
 	}
 
 	/**

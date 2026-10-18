@@ -180,6 +180,8 @@ public class AgentAdapterTest {
 		ACell suspended = engine.jobs().invokeOperation("v/ops/agent/suspend",
 			Maps.of(Fields.AGENT_ID, address), delegated).awaitResult(5000);
 		assertEquals(AgentState.SUSPENDED, RT.getIn(suspended, Fields.STATUS));
+		assertEquals(delegateDID, RT.getIn(suspended, AgentState.KEY_SUSPENSION, AgentState.SUSPENSION_BY),
+			"the actual caller stopped the agent, not its namespace owner");
 		assertNotNull(engine.getVenueState().users().get(ownerDID).agent("delegated-agent"));
 		User delegate = engine.getVenueState().users().get(delegateDID);
 		assertTrue(delegate == null || delegate.agent("delegated-agent") == null,
@@ -3487,6 +3489,88 @@ public class AgentAdapterTest {
 
 	// ========== #201 / #202 — suspended / deleted agents must not hang callers ==========
 
+	@Test
+	public void testDeliberateSuspensionIsTypedAndClearedOnResume() {
+		RequestContext ctx = RequestContext.of(ALICE_DID);
+		AString id = Strings.create("deliberate-stop");
+		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, id,
+			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")), ctx).awaitResult(5000);
+		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent(id);
+		String longReason = "r".repeat(600);
+		ACell result = engine.jobs().invokeOperation("v/ops/agent/suspend",
+			Maps.of(Fields.AGENT_ID, id, Fields.REASON, longReason), ctx).awaitResult(5000);
+		ACell stop = RT.getIn(result, AgentState.KEY_SUSPENSION);
+		assertEquals(ALICE_DID, RT.getIn(stop, AgentState.SUSPENSION_BY));
+		assertEquals(Strings.create(longReason.substring(0, AgentState.MAX_SUSPEND_REASON_LENGTH)),
+			RT.getIn(stop, Fields.REASON));
+		assertInstanceOf(CVMLong.class, RT.getIn(stop, Fields.TS));
+		assertNull(agent.getError());
+		assertEquals(stop, RT.getIn(engine.jobs().invokeOperation("v/ops/agent/info",
+			Maps.of(Fields.AGENT_ID, id), ctx).awaitResult(5000), AgentState.KEY_SUSPENSION));
+		ACell listed = engine.jobs().invokeOperation("v/ops/agent/list", Maps.empty(), ctx).awaitResult(5000);
+		assertEquals(stop, RT.getIn(listed, "agents", CVMLong.ZERO, AgentState.KEY_SUSPENSION));
+		for (String op : new String[] {"request", "chat"}) {
+			Job refused = engine.jobs().invokeOperation("v/ops/agent/" + op,
+				Maps.of(Fields.AGENT_ID, id, Fields.INPUT, Maps.empty(), Fields.MESSAGE, "hello"), ctx);
+			assertThrows(covia.exception.JobFailedException.class, () -> refused.awaitResult(5000));
+			assertEquals(AgentAdapter.SUSPENDED_CODE, refused.getErrorCode());
+			assertEquals(AgentAdapter.SUSPENDED_REFUSAL.formatted(id,
+				": " + AgentState.suspensionDetail(agent.getRecord()), AgentAdapter.SUSPENDED_ASK_ADVICE),
+				refused.getErrorMessage());
+		}
+		// Latest stop wins, including removal of the previous optional reason.
+		engine.jobs().invokeOperation("v/ops/agent/suspend", Maps.of(Fields.AGENT_ID, id), ctx).awaitResult(5000);
+		assertNull(RT.getIn(agent.getRecord(), AgentState.KEY_SUSPENSION, Fields.REASON));
+		engine.jobs().invokeOperation("v/ops/agent/resume",
+			Maps.of(Fields.AGENT_ID, id, Fields.AUTO_WAKE, false), ctx).awaitResult(5000);
+		assertNull(agent.getRecord().get(AgentState.KEY_SUSPENSION));
+		assertNull(agent.getError());
+		assertEquals(AgentState.SLEEPING, agent.getStatus());
+	}
+
+	@Test
+	public void testDeliberateStopSettlesActiveChatAndQueuedTask() throws Exception {
+		RequestContext ctx = RequestContext.of(ALICE_DID);
+		AString id = Strings.create("stop-active-chat");
+		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, id,
+			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/never")), ctx).awaitResult(5000);
+		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent(id);
+		var started = new CompletableFuture<Void>();
+		var events = new java.util.concurrent.CopyOnWriteArrayList<covia.venue.AgentEvents.Event>();
+		try (var subscription = engine.agentEvents().subscribe(ALICE_DID, id, event -> {
+			events.add(event);
+			if (covia.venue.AgentEvents.CYCLE_START.equals(event.type())) started.complete(null);
+		})) {
+			Job chat = engine.jobs().invokeOperation("v/ops/agent/chat",
+				Maps.of(Fields.AGENT_ID, id, Fields.MESSAGE, "wait"), ctx);
+			started.get(5, java.util.concurrent.TimeUnit.SECONDS);
+			Job queued = engine.jobs().invokeOperation("v/ops/agent/request",
+				Maps.of(Fields.AGENT_ID, id, Fields.INPUT, Maps.of("q", "queued")), ctx);
+			engine.jobs().invokeOperation("v/ops/agent/suspend",
+				Maps.of(Fields.AGENT_ID, id, Fields.REASON, "Owner is reviewing this agent"), ctx).awaitResult(5000);
+			assertEquals(AgentState.SUSPENDED, awaitFinished(agent));
+			AString detail = AgentState.suspensionDetail(agent.getRecord());
+			for (Job caller : new Job[] {chat, queued}) {
+				assertThrows(covia.exception.JobFailedException.class, () -> caller.awaitResult(5000));
+				assertEquals(detail.toString(), caller.getErrorMessage());
+			}
+			assertNull(agent.getError(), "a deliberate cancellation is not a fault");
+			assertEquals(0, agent.getTasks().count());
+			assertEquals(1, agent.getTimeline().count());
+			ACell entry = agent.getTimeline().get(0);
+			assertEquals(CVMBool.TRUE, RT.getIn(entry, Fields.CANCELLED));
+			assertEquals(detail, RT.getIn(entry, Fields.RESULT));
+			assertEquals(agent.getRecord().get(AgentState.KEY_SUSPENSION), RT.getIn(entry, AgentState.KEY_SUSPENSION));
+			for (var session : agent.getSessions().entrySet()) {
+				assertNull(RT.getIn(session.getValue(), AgentState.KEY_IN_CYCLE));
+			}
+			assertTrue(events.stream().anyMatch(e -> covia.venue.AgentEvents.STATUS.equals(e.type())
+				&& detail.equals(e.data().get(Fields.ERROR))));
+			assertTrue(events.stream().anyMatch(e -> covia.venue.AgentEvents.CYCLE_END.equals(e.type())
+				&& detail.equals(e.data().get(Fields.ERROR))));
+		}
+	}
+
 	/**
 	 * A request to a SUSPENDED agent must fail fast with the suspension cause
 	 * and the remedy in the message — not sit STARTED indefinitely (#201).
@@ -6021,6 +6105,7 @@ public class AgentAdapterTest {
 		assertEquals(AgentState.SUSPENDED, agent.getStatus(),
 			"agent must be SUSPENDED after a transition error");
 		assertNotNull(agent.getError(), "SUSPENDED agent must record the error");
+		assertNull(agent.getRecord().get(AgentState.KEY_SUSPENSION), "a fault has no deliberate-stop provenance");
 		assertEquals(0, agent.getTasks().count(),
 			"task queue must be drained on fail-fast (no retry on resume)");
 

@@ -23,6 +23,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Added
 
+- `agent:suspend` records the actual caller, optional reason and time separately
+  from faults. Info/list expose the record; resume clears it. Suspended request/chat
+  refusals carry `agent:suspended` (#590).
 - `p2p` adapter: an opt-in Convex P2P node in the venue, `p2p:peers`, `p2p:connect` and peer events (#587).
 - Tool guards (`engine.toolGuards()`): an embedding host sees each operation
   call an agent is about to make and passes or refuses it, holding it if need
@@ -56,6 +59,11 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Fixed
 
+- DLFS drive creation, deletion and listing use Convex's existing tombstone-aware
+  registry. Deleted drives survive a root save in flight and disappear from
+  listings, while file-level merge semantics remain intact (#589).
+- A deliberate agent stop survives late failures; cancelled cycles record its
+  cause and settle queued callers without recording a fault (#590).
 - Discord splits long messages without breaking surrogate pairs.
 - Messaging sends honour url-bound `secret/use` grants.
 
