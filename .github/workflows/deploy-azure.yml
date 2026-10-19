@@ -31,7 +31,7 @@ jobs:
 
     steps:
     - name: Deploy to Azure VM
-      uses: appleboy/ssh-action@v1
+      uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
       env:
         GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
