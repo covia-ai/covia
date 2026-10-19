@@ -9,9 +9,10 @@ see `UCAN.md`.
 
 Status: design agreed 2026-08-10, revised after review 2026-10-19.
 This document specifies the target design, not shipped behaviour; §2 records
-the current baseline. The revision tightens proof/freshness semantics, session
-handling, migration and delivery phases. Phase 1 (§10) remains a bounded
-refactor; later phases must satisfy their acceptance criteria before activation.
+the current baseline. The revision separates the method-independent core from
+protocol payloads and tightens proof/freshness, sessions, migration and delivery.
+Phase 1 (§10) remains a bounded refactor; later phases must satisfy their
+acceptance criteria before activation.
 
 ## 1. Principles
 
@@ -37,6 +38,11 @@ refactor; later phases must satisfy their acceptance criteria before activation.
    reusable capabilities upstream. Covia owns identity mapping, admission,
    policy and its public API, rather than another implementation of those
    generic mechanisms.
+7. **Protocol-independent core.** Identity, verified evidence, optional sessions
+   and policy do not depend on OAuth, OIDC, JWT or a browser. Protocol modules
+   own their claims, ceremonies, delivery and error formats. Use standard field
+   names at each protocol boundary without imposing that protocol on other
+   methods. Session continuity and client authorisation grants are separate.
 
 ## 2. Baseline (what exists on develop)
 
@@ -50,46 +56,86 @@ The implementation is further along than #297/#296 suggest:
 | DID document publication (#296) | `UserAPI.getUserDIDDocument` | Active user-held keys published under `verificationMethod` + `authentication`, controller = user DID |
 | Key enrolment surface (#296) | `UserAdapter` (`user:create` keys, add/revoke ops), `Engine` creation path | Venue-authorised, audited (`addedBy`/`revokedBy`) |
 | Session minting | `LoginProviders` OAuth callback | Inline `JWT.signPublic` — no session id, no revocation, no amr/auth_time |
+| OAuth authorization server | `OAuthProvider` | Existing code/PKCE, token, refresh and revocation endpoints; scopes recorded for audit, not yet enforced as capability restrictions |
 | Audience policy | `Auth` config + `requireAudience` | `verify`/`require`, `acceptedAudiences`, did:web alias |
 | Public capability scope | `auth.public.*` (COG-10) | Unchanged by this design |
 
 **Gaps this design closes:** per-method enable/disable and policy
-config; a common method result (method reference, `amr`, assurance,
-`auth_time`); a central session issuer with revocation; provider
+config; a common method result (identity, evidence and typed method details);
+an optional central session service with revocation; provider
 identity keyed by `(issuer, subject)` instead of email; account-linking
 rules; route-class assurance enforcement.
 
 ## 3. The method contract
 
-Every authentication method produces one `AuthResult`:
+Every authentication method produces one `AuthResult`. This is an internal
+contract, not an OAuth token response or a bag of JWT claims. The following
+logical shape guides implementation; reuse existing identity and value types
+rather than introducing a general claims framework:
 
 | Field | Meaning |
 |-------|---------|
 | `userDID` | Stable venue user DID — the identity that acts |
 | `authenticatedIdentity` | Identity directly proven by the credential (key `did:key`, provider `(iss,sub)`, session subject) |
-| `credentialType` | Credential presented on this request: key JWT, UCAN bearer, session or provider token |
-| `method` | Originating authentication method, retained when a session carries it (see §5) |
-| `amr` | Verified RFC 8176 authentication-method references; absent evidence never becomes `pop`, `mfa` or hardware protection |
-| `assurance` | Venue level derived from verified evidence and trusted method/provider policy (§6) |
-| `authTime` | Time of a verified authentication event (Unix s), absent when unknown |
-| `credentialIssuedAt` | Validated credential issuance time, if available; distinct from authentication time |
-| `proofTime` | Time of a fresh, replay-protected possession proof, if this request supplies one |
-| `properties` | Verified properties such as MFA, phishing resistance, hardware protection, user verification and fresh key possession |
-| `provider` | Validated issuer/subject provenance for binding and policy; never itself a capability or role |
+| `credential` | Presented credential description: `type`, optional validated `issuedAt` / `expiresAt`; no secret bytes |
+| `authentication` | Verified event: originating `method`, optional `binding`, optional `authenticatedAt`, verified `properties`, optional typed `details` |
+| `proof` | Optional request-bound possession evidence: `verifiedAt` and verified properties; never inherited as fresh from a session |
+| `sessionId` | Optional non-secret reference to managed continuity state (§4); absent for direct/stateless authentication |
+
+`authentication.binding` identifies the venue-owned authenticator/provider
+binding for revocation and configuration checks. `authenticatedIdentity` is
+typed so a key identity or provider identity need not masquerade as the other.
+`properties` contains only established facts (for example `mfa`,
+`phishingResistant`, `hardwareProtected`, `userPresent`, `userVerified`), not
+client assertions. Absence means unproven. Policy derives local assurance
+from those facts and trusted provenance under current configuration (§6);
+there is no independent caller-supplied assurance label to trust.
+
+**Method-specific payloads.** The registered method selects the schema of
+`authentication.details`; it is not an unrestricted claim bag:
+
+- OIDC details retain a bounded, validated selection of provider claims:
+  `iss`, `sub`, optional `auth_time`, `amr`, `acr`. Provider configuration and
+  the binding identify the verifier/trust policy. Map accepted evidence into
+  common properties; never interpret an arbitrary provider `acr` as a local
+  assurance level. Keep the provider subject distinct from `userDID`.
+- WebAuthn details retain relevant verified credential/ceremony metadata,
+  including UP/UV and backup/attestation evidence. Shared policy consumes the
+  resulting presence, verification and protection properties without parsing
+  WebAuthn structures. Hardware protection requires independent evidence.
+- Key and UCAN verifiers retain the relevant verified key/proof references;
+  UCAN authority continues through the existing capability path, not these
+  authentication details. Password/email methods retain only bounded method
+  metadata, never passwords, OTPs, bearer links or password verifiers.
+
+Only trusted verifiers construct successful results. Retain enough provenance
+to re-evaluate changed trust policy, or reject dependent sessions when it
+changes; do not persist raw provider tokens or unconstrained claim sets.
+Do not combine properties from unrelated events to manufacture MFA or a fresh
+authentication time. A composed ceremony must establish the same principal,
+transaction binding and factor independence before asserting combined evidence.
+
+Core and store names follow Covia's camelCase conventions. Authentication,
+proof and credential timestamps are distinct; serialized values here use Unix
+seconds with explicit units. Unknown times are absent. Protocol serializers
+own standard names and exact formats (§4.2); no universal `iss`/`sub`/`aud`,
+`amr`/`acr` or OAuth client is required in the core.
 
 Two event shapes share the contract:
 
 - **Interactive login** (OIDC, email, WebAuthn, password) — produces an
-  `AuthResult` once, then a **session** carries it (§4).
+  `AuthResult`; a caller may request managed continuity through a **session**
+  (§4). The method neither mints the credential nor requires OAuth to do so.
 - **Stateless credential** (self-issued key JWT, UCAN bearer) — verified
   on each request without creating a session. A signature authenticates the
   issuer's statement; presenting a reusable bearer does not establish fresh
   possession of the signing key. `iat` describes issuance, not necessarily
-  human authentication. Never substitute request time for unknown `authTime`.
+  human authentication. Never substitute request time for unknown
+  `authentication.authenticatedAt`.
 
 Fresh key possession requires an independently verified challenge or
 request-bound proof with replay protection, using a supported upstream
-protocol. That evidence may establish `proofTime`; it does not establish
+protocol. That evidence may establish `proof.verifiedAt`; it does not establish
 human presence or authentication time unless the protocol proves those too.
 Machine/agent credentials remain valid for ordinary authorised operations,
 but do not acquire evidence of a human authentication event by delegation.
@@ -119,43 +165,51 @@ One issuer mints every venue session; methods never mint credentials
 themselves (`LoginProviders` currently signs JWTs inline — it re-routes
 here).
 
-**Sessions are opaque venue-issued credentials, not JWTs** (decided).
+**A session records authentication continuity; its credential is an opaque
+venue-issued token, not a JWT** (decided). The session is optional: direct
+credentials and trusted embedded authentication do not need a synthetic session.
 The venue's own state is the source of truth, so a signed,
 claims-bearing token would add parsing surface and a readable payload
 for no benefit — signature verification is redundant once verification
-requires a record. Opaque server-side session ids are the standard
-pattern (RFC 6750 does not require JWT bearers; this is the
-reference-token model of RFC 7662).
+requires a record. The server-side session pattern does not require an OAuth
+grant or an HTTP introspection endpoint. Protocol modules may use opaque
+credentials too, but their token purpose and authorisation must remain explicit.
 
 - **Token**: `covia_<base64url(128-bit random)>`. The prefix makes
-  leaked tokens secret-scannable; the body is the raw session key. The
+  leaked tokens secret-scannable; the body is a random credential secret. Use
+  unpadded base64url and an exact canonical encoding. The
   token carries no information at all — no user, no claims, no
   structure beyond the prefix.
 - **Lookup**: a venue-owned lattice `Index` keyed by the SHA-256 digest
-  of the complete, canonically encoded token → `{userId, sid}`. Use the
+  of the complete, canonically encoded token →
+  `{userId, sessionId, issuedAt, expiresAt}`. Token expiry cannot exceed session
+  expiry. Keep token issuance time distinct from session creation. Use the
   existing Convex hashing primitive. Persist the digest only; the bearer is
   delivered once and excluded from logs and audit records. The random token's
   entropy permits a fast digest rather than password hashing. A read-only
   store leak then reveals no directly usable session bearer; write access to
   authentication state remains a compromise of the authority.
 - **Session records are per-user** (decided): a `sessions` map on the
-  venue-owned auth user record, `sid → {status, iat, exp, auth_time?,
-  method, provider?, binding, amr, acr, properties, revokedAt?, revokedBy?}`,
-  tombstone-style like the key registry. `sid` is a short random display/audit identifier —
+  venue-owned auth user record,
+  `sessionId → {status, createdAt, expiresAt, authentication, revokedAt?, revokedBy?}`,
+  tombstone-style like the key registry. `authentication` is the verified event
+  from §3, including its typed method payload and binding. `sessionId` is a
+  random display/audit identifier unique within the venue —
   never the token — so session listings and logs never contain
   credentials. Managed under the venue's update policy; never writable
   through the user's own namespace.
 - **Verification**: validate token encoding → digest → Index lookup →
-  the user's `sessions[sid]` must be `active` and unexpired. Read index and
-  record from one authoritative snapshot. A dangling index entry, disabled
+  the user's `sessions[sessionId]` and credential must be active and unexpired.
+  Read index and record from one authoritative snapshot. A dangling index entry, disabled
   originating method/provider, revoked authenticator binding or rejected
   account admission fails closed. Session records retain the originating
   binding reference needed for those checks.
-- **Assurance data lives in the record** — `amr`, `acr`, `auth_time`,
-  originating `method`, provider and verified properties are read by the
-  policy seam (§9). Request-specific proof is verified anew, never inherited
-  as fresh from a session record. Clients get their login metadata from the
-  login response, not by decoding the token.
+- **Authentication evidence lives in the record** — originating method,
+  binding, authentication time, properties and typed details feed the policy
+  seam (§9). Assurance is evaluated under current trust policy. Request proof
+  is verified anew, never inherited as fresh from a session record. Clients
+  get permitted session metadata through the relevant interface, not by
+  decoding the token; provider payloads are not automatically public.
 - **Revocation**: flip the record — one session, or all of a user's by
   iterating their own map. Account-level kill remains the admission
   layer (a disabled user fails admission on every request, whatever
@@ -189,6 +243,9 @@ success. A rotation retires the old lookup and establishes the replacement in
 that same transaction; concurrent logout or revocation cannot be undone by a
 late reauthentication callback. An issued token that never reaches its client
 may expire normally, but a token must never refer to a partially committed pair.
+Initially one session has one live session credential. Rotation preserves its
+non-secret session id while replacing the credential; a new independent login
+creates a new session. Do not give multiple clients a shared session bearer.
 
 The initial deployment has one authoritative session writer/verifier. An
 eventually consistent replica must not independently serve authentication
@@ -204,46 +261,95 @@ prove that no later revocation occurred. The restore procedure must also close
 the legacy-session-JWT compatibility window; clearing opaque sessions alone
 does not invalidate those JWTs. Test crash recovery and restore separately.
 
-**Delivery** (decided): one token endpoint, response-body delivery
-everywhere; session tokens never travel in URLs (#298).
+### 4.1 Delivery and protocol ownership
 
-- `POST /api/v1/auth/login` — the single token endpoint. Accepts a
-  method credential (password, OTP, WebAuthn assertion) *or* a
-  single-use code (OIDC callback, email magic link) and returns
-  `{token, did, exp}` in the response body.
-- Redirect-based methods adapt to the endpoint via **single-use
-  codes**: the venue's OIDC callback redirects to the frontend's
-  registered `redirect_uri` with `?code=<single-use, seconds-lived>`,
-  and the frontend exchanges it at the login endpoint. Bind the code to the
-  initiating client, exact registered redirect URI, browser transaction and
-  S256 PKCE challenge; validate the verifier at exchange. The identity provider's
-  PKCE leg does not replace this frontend-to-venue binding. Consume the code
-  atomically so concurrent exchanges cannot both succeed. Short expiry and
-  single use alone do not prevent an interceptor redeeming first.
-  Codes are held by the authoritative exchange service and discarded on restart;
-  clients restart login. Keep codes/verifiers out of logs and referrers.
-  Reuse existing OAuth exchange and upstream primitives after checking their
-  contracts, rather than creating a parallel handoff protocol. Email login
-  must define its browser/cross-device binding under #299 before activation;
-  it cannot assume a bearer link has PKCE protection.
-- `POST /api/v1/auth/logout` — revokes the presented session's record.
-- Stateless credentials (`key`, `ucan`) never touch the login surface:
-  per-request `Authorization` headers, no session minted.
-- Cookies are embedder/BFF territory: an embedder owning the frontend
-  origin may exchange the code server-side and set its own `HttpOnly`
-  cookie. The venue primitive stays origin-agnostic.
+One internal session service does **not** imply one universal HTTP login or
+token endpoint. Methods own their challenge/response ceremonies; transports
+invoke the common verifier, optional session service and policy seam. Direct
+key/UCAN requests and embedded callers work with the OAuth server disabled.
+
+- The earlier catch-all `POST /api/v1/auth/login → {token, did, exp}` proposal
+  is withdrawn. Native login/session-management routes use an explicit Covia
+  contract when implemented; they do not pretend to be OAuth grants. Reuse
+  method routes and upstream ceremonies instead of adding a new handoff protocol.
+- OAuth clients use the existing `/oauth/authorize`, `/oauth/token` and
+  `/oauth/revoke` interfaces, with standard discovery, parameters and errors.
+  Interactive methods can satisfy authentication within that flow; password,
+  OTP and WebAuthn inputs do not become custom OAuth grant types. Inspect and
+  harden the existing implementation before reusing it for browser delivery.
+- Browser redirects carry only transaction-bound, single-use codes, never
+  session/access/refresh tokens. Bind the frontend exchange to the initiating
+  client, exact registered redirect URI, browser transaction and S256 PKCE.
+  The identity provider's PKCE leg does not replace frontend-to-venue binding.
+  Consume codes atomically; discard outstanding codes on restart. Short expiry
+  alone does not prevent an interceptor redeeming first. Keep codes/verifiers
+  out of logs/referrers. #299 must specify email cross-device binding separately.
+- Deliver bearer credentials in a protected response body with no-store
+  caching. An embedder/BFF may instead hold the credential server-side and
+  establish its own Secure/HttpOnly cookie with SameSite and CSRF protections.
+  Cookie ownership is a transport decision, not a dependency of core auth.
+- The proposed `POST /api/v1/auth/logout` revokes the presented managed session.
+  Session list/revoke-all operations expose only safe identifiers and metadata
+  under existing ownership/authorisation gates. OAuth token revocation is a
+  separate operation; local logout does not imply logout at an external IdP.
+
+### 4.2 Standards at protocol boundaries
+
+| Boundary | Contract |
+|----------|----------|
+| OAuth token response | `access_token`, `token_type: "Bearer"`, `expires_in` (seconds); optional `scope` (space-separated) and `refresh_token` only when supported |
+| OAuth requests/errors | Standard form-encoded token/revocation requests and JSON `error` / `error_description`; resource HTTP challenges use RFC 6750 and, for supported step-up requirements, RFC 9470 |
+| OIDC provider evidence | Validated `iss`, `sub`, `auth_time`, `amr`, `acr` remain in OIDC method details; trusted mappings produce core evidence |
+| JWT/OIDC serializers | `iat`/`exp`/`auth_time` use NumericDate seconds; `amr` is a string array; `acr` is a policy identifier, not a portable numerical rank |
+| Session identifiers | Core `sessionId` is non-secret; expose OIDC `sid` only under an explicit issuer-scoped session/logout mapping, never as the bearer or token `jti` |
+| General discovery (#367) | Enumerate enabled methods and their protocol-specific entry points; reference OAuth metadata rather than copying it or requiring OAuth for every method |
+
+AMR mappings use registered values where applicable (`pwd`, `otp`, `mfa`,
+`hwk`, `swk`, etc.) only with evidence. Registered `user` means presence,
+not user verification. Email magic links do not automatically become `otp`.
+Local assurance profiles are not provider `acr` values; any outward mapping
+must define its semantics explicitly. OAuth/OIDC payloads keep their standard
+spellings; no wholesale rename of private Java/config fields is needed.
+
+Consuming OIDC does not make the venue an OpenID Provider. Adding that role
+would require its own conformant HTTPS issuer, metadata and ID-token contract;
+the existing DID-valued JWT issuer cannot simply be relabelled as an OIDC
+issuer. ID tokens and API access tokens remain distinct credentials.
+
+### 4.3 OAuth grants are separate from authentication sessions
+
+An OAuth grant records a client's authorised access to a resource. Its
+protocol-owned payload holds client, scope, audience, access/refresh-token
+lifecycle and relevant consent, with references to the subject and, when
+applicable, an authentication session/event. These are not universal fields
+on `AuthResult` or the session record. Reuse existing records and add only
+needed fields; a generic grant framework is not a prerequisite for #297.
+
+The grant owner must enforce granted authority on use and renewal, and define
+token revocation versus grant revocation versus session logout. If a grant
+depends on a live session, check that dependency on access and refresh; if it
+can survive logout, require explicit authorisation and independent revocation.
+Never upgrade an already issued client credential merely because a linked
+session subsequently steps up; bind its evidence to the issuance event.
+Shared storage utilities do not permit accepting a grant token as an
+unrestricted login-session credential.
+
+`OAuthProvider` currently puts `scope` on its token for audit; resource-side
+restriction is pending in #595, separately from #297's method-neutral refactor.
+Likewise, outbound connected-account grants (§8.1)
+remain separate from both login and the venue's authorization-server grants.
 
 ## 5. Methods
 
-| `method` id | Credential | User mapping | amr | Session? | Issue |
+| `method` id | Credential | User mapping | Verified evidence | Session? | Issue |
 |-------------|-----------|--------------|-----|----------|-------|
 | `key` | Self-issued EdDSA JWT | `did:key` direct; named user via active registered key | Only what the verified protocol establishes; bearer presentation alone is not `pop` | No — stateless | #296 |
 | `ucan` | UCAN bearer (aud = venue) | Issuer DID | No fresh possession or human authentication inferred | No — stateless | — |
-| originating method, carried by `session` credential type | Opaque venue token (`covia_…`) | Index → per-user record | inherited verified evidence | Is the session | — |
-| `oidc` | Authorization Code + PKCE | `(issuer, subject)` binding (§7) | provider-dependent (`mfa` iff proven) | Yes | #298 |
-| `email` | Magic link / OTP | Verified address on the user record | `otp` | Yes | #299 |
-| `webauthn` | Passkey assertion | Registered credential id | Derived from verified flags and attestation; hardware never presumed | Yes | #300 |
-| `password` | Password (+ recovery) | Stored verifier | `pwd` | Yes | #301 |
+| originating method, carried by `session` credential type | Opaque venue token (`covia_…`) | Index → per-user record | retained event, evaluated under current policy | Is the session | — |
+| `oidc` | Authorization Code + PKCE | `(issuer, subject)` binding (§7) | provider-dependent, under explicit trust mapping | Optional continuity | #298 |
+| `email` | Magic link / OTP | Verified address on the user record | Address control; no MFA or phishing resistance inferred | Optional continuity | #299 |
+| `webauthn` | Passkey assertion | Registered credential id | Derived from verified flags and attestation; hardware never presumed | Optional continuity | #300 |
+| `password` | Password (+ recovery) | Stored verifier | Password verification; no MFA inferred | Optional continuity | #301 |
 
 Named-user and `did:key` self-issued login share the `key` method
 deliberately: same credential class, same signature verification, same
@@ -309,8 +415,10 @@ their requirements. For example, `policy.enrolment` may require `strong` plus
 `maxAuthenticationAgeSeconds:900`; a machine-oriented surface may instead
 require `requiredProperties:["freshKeyPossession"]` with `maxProofAgeSeconds`.
 These are separate requirements. `requiredProperties` names verified facts
-from the common result, such as `mfa`, `phishingResistant`, `hardwareProtected`,
-`userVerified` or `freshKeyPossession`; unknown properties fail validation.
+from `authentication.properties`, such as `mfa`, `phishingResistant`,
+`hardwareProtected` or `userVerified`. `freshKeyPossession` specifically requires
+request-bound `proof` and its age check; it is never a persisted session fact.
+Unknown properties fail validation.
 The operator must have an attainable recovery/enrolment path
 before enabling them; a plain key JWT cannot silently satisfy either freshness
 requirement. The `allowed` list names originating methods, never `session`.
@@ -320,8 +428,12 @@ Rules:
 - **Defaults** (no new configuration): current credential acceptance — `key`
   and `ucan` enabled; session acceptance enabled; `oidc` enabled iff providers
   are configured
-  (`auth.oauth` remains a deprecated alias for `methods.oidc.providers`
-  for one release). `email`/`webauthn`/`password` default off.
+  (legacy external-login entries under `auth.oauth` remain aliases for their
+  matching method/provider configuration for one release). Do not alias the
+  entire block: `auth.oauth.provider` configures the venue's OAuth authorization
+  server and remains independent. Inventory legacy OAuth-only providers too;
+  do not silently classify a non-OIDC provider as OIDC. Reject conflicting old
+  and new settings. `email`/`webauthn`/`password` default off.
 - **Disabled = absent**: routes not registered, credentials of that method
   rejected at the seam. Sessions retain the originating method, provider and
   binding: disabling any of those blocks their sessions too, even when the
@@ -345,7 +457,7 @@ Rules:
   authentication layer does not introduce a role system. Check viability
   against actual method evidence and enabled policy, not just key counts.
 - **Policy names label surface classes, not user roles** (§9): `admin`
-  above means "surfaces the operator designates admin-grade", never a
+  means "surfaces the operator designates admin-grade", never a
   role held by users.
 
 **Assurance profiles.** Retain three local names for policy convenience, with
@@ -360,9 +472,10 @@ signature algorithm alone does not establish a level above `standard`.
 
 MFA and phishing resistance are distinct properties. A surface needing one
 specifically must require that property in addition to a level; `strong` alone
-does not imply both. A session may inherit an authentication event's verified
-level, but its bearer remains replayable if stolen. Fresh proof is a separate
-request requirement. Plain `key` and `ucan` bearers have no automatic elevation.
+does not imply both. A session retains the authentication event's evidence
+for policy evaluation, but its bearer remains replayable if stolen. Fresh proof
+is a separate request requirement. Plain `key` and `ucan` bearers have no
+automatic elevation.
 
 Method declarations specify attainable evidence, while each request must
 actually present it. An OIDC provider's claims are accepted only under its
@@ -371,9 +484,9 @@ software/synced passkeys do not become hardware-bound by using WebAuthn.
 Unsupported levels or required properties fail configuration validation. Do
 not enable policies requiring proof mechanisms that are not implemented.
 
-## 7. Provider identity binding (#298 prerequisite)
+## 7. OIDC provider identity binding (#298 prerequisite)
 
-Provider logins bind by immutable `(issuer, subject)`, held in a
+OIDC logins bind by immutable `(issuer, subject)`, held in a
 venue-owned index: `(iss, sub) → userId`, one user per pair. Email and
 display name are mutable attributes on the user record, refreshed at
 login (given `email_verified`), **never lookup keys**. Records already
@@ -399,7 +512,9 @@ Cross-provider email matches never link accounts; §8 requires proof of both sid
 `BIND | CONFIRM | REJECT`. Embedders may consult an authoritative migration
 source, such as an HR directory, but must supply independent continuity
 evidence to bind a legacy account. There is no built-in email-only auto-bind
-mode. Configuration selects the policy by name; unknown names fail closed.
+mode. This is an OIDC binding extension, not a mandatory interface for every
+authentication method. Other methods retain their own stable identity and
+binding rules. Configuration selects the policy by name; unknown names fail closed.
 Binding/confirmation decisions are audited without logging credentials.
 
 ## 8. Account linking
@@ -438,27 +553,35 @@ application routes.
 
 **Step-up** (decided) — the standard sudo-mode pattern:
 
-- A failed check rejects with the RFC 9470 challenge —
-  `WWW-Authenticate: Bearer error="insufficient_user_authentication"`,
-  naming the required `acr_values` / `max_age` — so clients know
-  exactly what quality of re-authentication to perform.
-- Re-authentication is a re-run of login with stricter parameters
+- The core checker returns `null` on success or the owning constant's
+  human-readable reason on refusal, retaining the existing checks-return-reasons
+  convention. The selected policy supplies the required evidence/freshness;
+  the core constructs no HTTP headers or OAuth claims. Transports serialize
+  the refusal in their own contract. An OAuth resource boundary uses RFC 9470
+  `insufficient_user_authentication` with `acr_values` / `max_age` only where
+  explicit mappings express the required policy. A method-specific proof
+  requirement must not be disguised as an unrelated OAuth assurance class.
+- Re-authentication is a re-run of the method with stricter parameters
   (OIDC: `max_age=0` / `prompt=login`, optionally `acr_values`;
-  password/WebAuthn: re-present at the login endpoint). Verify the returned
-  subject matches the session user, the transaction is bound to that client,
+  password/WebAuthn: complete that method's ceremony). Verify the returned
+  subject matches the current principal (and session user, when present),
+  the transaction is bound to the requesting context,
   and the actual evidence meets the requested policy. Sending `prompt=login`
   or requesting an `acr` is not itself proof that the provider complied.
-- Successful reauthentication **rotates the session token**, atomically
-  retiring the old lookup and persisting the verified `auth_time`/`amr`/`acr`
-  and properties with the replacement. Deliver the new token through the
-  response body; the client retries with it. Never upgrade a stolen old
+- For managed sessions, successful reauthentication **rotates the session
+  token**, atomically retiring the old lookup and persisting the new verified `authentication`
+  event, including its properties and typed details, with the replacement.
+  Deliver the new token through the selected safe transport; the client retries
+  with it. Stateless callers instead supply new verified evidence without
+  creating a session. Never upgrade a stolen old
   bearer along with the legitimate client's session. Preserve an auditable
   session lineage without exposing either token. A revoked session cannot
   be upgraded by a late callback; a new login is a separate transaction.
-- `maxAuthenticationAgeSeconds` uses verified `authTime`; missing, future
-  beyond allowed skew or stale evidence fails the freshness check. Token
-  renewal must not reset it. `maxProofAgeSeconds` instead checks a verified,
-  replay-protected possession proof; it implies no human authentication.
+- `maxAuthenticationAgeSeconds` uses verified `authentication.authenticatedAt`;
+  missing, future beyond allowed skew or stale evidence fails the freshness
+  check. Token renewal must not reset it. `maxProofAgeSeconds` checks
+  `proof.verifiedAt` for a verified, replay-protected possession proof; it
+  implies no human authentication.
   Plain `key`/`ucan` bearer presentation satisfies neither automatically.
   Return a reason when a credential cannot meet a policy. Request fresh proof
   through an existing supported protocol; do not invent a local workaround
@@ -468,23 +591,25 @@ application routes.
 never user roles — authentication proves an authenticator and grants
 nothing (§1). Anything role-shaped is downstream authorisation, owned
 by the application or embedder, which performs its own role check and
-then calls this same seam with its own policy name. #297's per-role
-acceptance criterion is met exactly that way: the venue enforces the
+then calls this same seam with its own policy name. The venue enforces the
 assurance a surface demands; who counts as an admin is never
 venue-auth state.
 
 ## 10. Phasing
 
-0. **Upstream/API audit and immediate OAuth fixes.** Inventory the existing
+0. **Upstream/API audit and immediate protocol fixes.** Inventory the existing
    Convex APIs, `VenueAuthenticator`, `OAuthProvider` code/PKCE exchange and
    connected-account OAuth plumbing. Document what can be reused and request
    missing generic capabilities upstream. Assess #298's existing weaknesses
    for independently shippable fixes; do not defer a contained fix merely
    because the whole method registry is not ready. Reuse mechanisms while
    keeping login, connected-account grants and token issuance policies distinct.
+   Keep OAuth grant enforcement as its own authorisation work item (§4.3).
 1. **Phase 1 — common result, unchanged credential behaviour.** Extend
    `VerifiedPrincipal` into the common result and route existing verifiers
-   through it. Preserve acceptance rules, token formats, endpoints and current
+   through it using neutral identity/evidence fields and typed method payloads.
+   Keep protocol claims and transport errors outside the core. Preserve
+   acceptance rules, token formats, endpoints and current
    enrolment gates. Leave unknown evidence unknown. Add contract tests for all
    existing credential classes and embedders. Remove superseded verification
    glue; no new session issuer or enforcement switch ships in this phase.
@@ -497,9 +622,10 @@ venue-auth state.
 3. **Phase 3 — complete session lifecycle and safe delivery.** Ship opaque
    tokens with hashed lookup, atomic persistence, expiry, logout, per-session
    and per-user revocation, token rotation, restore invalidation and migration
-   cutoff together. Integrate the client-bound code exchange and frontend
-   response-body delivery at cutover; do not send the new token through the
-   old redirect-query flow. Rehearse legacy JWT compatibility and rollback.
+   cutoff together. The service must work without OAuth. Any browser flow
+   migrated at cutover must integrate its protocol's client-bound exchange
+   and safe delivery; do not send the new token through the old redirect-query
+   flow. Rehearse legacy JWT compatibility and rollback.
    If an upstream primitive needed for atomicity is unavailable, this phase
    waits for that capability rather than adding local replay machinery.
 4. **Phase 4 — finish #298 and enable sensitive-action policy.** Complete
@@ -514,15 +640,29 @@ venue-auth state.
 
 ### Acceptance criteria for the changed contracts
 
-- Replaying an accepted key/UCAN bearer never refreshes `authTime` or yields
-  fresh possession. Missing/future timestamps fail policies that require them.
+- Core contract tests exercise a trusted non-OAuth method, direct key/UCAN
+  requests, and session issuance/verification with OAuth disabled. Core results
+  require no OAuth client or protocol claims; direct paths create no session.
+- Under the same method allowlist and trust policy, equivalent verified
+  properties produce equivalent evidence-policy decisions across methods.
+  Provider claims stay in typed details; missing/untrusted evidence
+  remains unproven. No payload bypasses verifier, admission or capability gates.
+- Replaying an accepted key/UCAN bearer never refreshes
+  `authentication.authenticatedAt` or yields fresh possession. Missing/future
+  timestamps fail policies that require them.
   An untrusted `amr`/`acr` claim or plugin method name cannot elevate assurance.
 - Policies inspect the originating method of sessions. Disabled methods,
   providers and revoked bindings reject dependent sessions; re-enable versus
   permanent revocation follows §6. Existing admission/capability gates still run.
-- Two concurrent code exchanges yield at most one session. Wrong client,
+- Each protocol's code exchange is single-use under concurrency. Wrong client,
   redirect, browser transaction, PKCE verifier, expired code and replay fail.
   Cover the frontend-to-venue exchange separately from the provider leg.
+- Protocol contract tests cover standard field names, types, time units,
+  errors and discovery without imposing them on internal records. Config
+  migration preserves the independent OAuth server and non-OIDC providers.
+- OAuth grant tests separately cover enforced resource/scope restrictions,
+  refresh narrowing, revocation and declared session dependency. A session
+  step-up cannot silently elevate a previously issued client token.
 - After successful step-up the old token fails, and a token stolen before
   step-up gains no assurance. A different provider subject cannot upgrade the
   session. Logout/rotation races and delayed callbacks cannot revive it.
@@ -575,13 +715,21 @@ venue-auth state.
 - `CONFIG.md` — operator configuration reference (gains §6 on landing)
 - COG-3 / COG-10 — token classes, self-issued rules, public capability scope
 - covia#297 (this design), #296, #298, #299, #300, #301, #323, #269
+- covia#367 (method/protocol discovery), #595 (OAuth grant enforcement)
 - [RFC 9700](https://www.rfc-editor.org/rfc/rfc9700.html) — client/transaction
   binding, PKCE and replay protection; a signed bearer alone is not a
   sender-constrained token
 - [RFC 9470](https://www.rfc-editor.org/rfc/rfc9470.html) — step-up challenges
   and authentication time, which is not reset by token renewal
 - [OpenID Connect Core](https://openid.net/specs/openid-connect-core-1_0.html#ClaimStability)
-  — stable issuer/subject binding
+  — provider claim semantics and stable issuer/subject binding
+- [RFC 6749](https://www.rfc-editor.org/rfc/rfc6749.html) — OAuth grants and
+  token response formats belong to the OAuth boundary
+- [RFC 6750](https://www.rfc-editor.org/rfc/rfc6750.html) and
+  [RFC 7009](https://www.rfc-editor.org/rfc/rfc7009.html) — bearer challenges
+  and token revocation, distinct from a universal session API
+- [IANA AMR registry](https://www.iana.org/assignments/authentication-method-reference-values)
+  — registered method references for protocol mappings, not a core method enum
 - [NIST SP 800-63B](https://pages.nist.gov/800-63-4/sp800-63b.html#phishres)
   — phishing resistance requires protocol evidence; local assurance profiles
   in this design make no AAL-equivalence claim
