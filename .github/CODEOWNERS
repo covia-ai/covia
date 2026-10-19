@@ -1,0 +1,41 @@
+# Reviewers for security-sensitive paths (POL-03 §5.7). GitHub requests a
+# review from these owners on any pull request that touches them. Later
+# lines take precedence over earlier ones.
+
+# CI, release and dependency automation
+/.github/                                           @mikera @brittleboye
+
+# Deployment: image, host config and deploy workflows
+/Dockerfile                                         @mikera @brittleboye @anutechrepo77
+/deploy/                                            @mikera @brittleboye @anutechrepo77
+/.github/workflows/deploy-*.yml                     @mikera @brittleboye @anutechrepo77
+/.github/workflows/publish-docker.yml               @mikera @brittleboye @anutechrepo77
+
+# Authentication, sessions and tokens
+/covia-core/src/main/java/covia/grid/auth/          @mikera @brittleboye
+/venue/src/main/java/covia/venue/auth/              @mikera @brittleboye
+/venue/src/main/java/covia/venue/Auth.java          @mikera @brittleboye
+/venue/src/main/java/covia/venue/UcanJwtValidator.java @mikera @brittleboye
+/venue/src/main/java/covia/venue/server/AuthMiddleware.java @mikera @brittleboye
+/venue/src/main/java/covia/venue/server/AuthThrottle.java @mikera @brittleboye
+/venue/src/main/java/covia/adapter/AuthAdapter.java @mikera @brittleboye
+/venue/src/main/java/covia/adapter/OAuthAdapter.java @mikera @brittleboye
+/venue/src/main/java/covia/adapter/UCANAdapter.java @mikera @brittleboye
+
+# Access control and admission
+/venue/src/main/java/covia/venue/AccessControl.java @mikera @brittleboye
+/venue/src/main/java/covia/venue/Admission.java     @mikera @brittleboye
+/venue/src/main/java/covia/venue/ToolGuards.java    @mikera @brittleboye
+/venue/src/main/java/covia/venue/TrustedProxies.java @mikera @brittleboye
+/venue/src/main/java/covia/venue/Users.java         @mikera @brittleboye
+/venue/src/main/java/covia/adapter/UserAdapter.java @mikera @brittleboye
+
+# Keys, cryptography and the secret store
+/venue/src/main/java/covia/venue/SecretStore.java   @mikera @brittleboye
+/venue/src/main/java/covia/adapter/CryptoAdapter.java @mikera @brittleboye
+/venue/src/main/java/covia/adapter/SecretAdapter.java @mikera @brittleboye
+/venue/src/main/java/covia/adapter/VaultAdapter.java @mikera @brittleboye
+
+# Response hardening and abuse limits
+/venue/src/main/java/covia/venue/server/SecurityHeaders.java @mikera @brittleboye
+/venue/src/main/java/covia/venue/server/RateLimiter.java @mikera @brittleboye
