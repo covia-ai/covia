@@ -64,16 +64,22 @@ jobs:
           # The venue sits behind nginx on this host and sees it through the
           # Docker bridge: it must take the client address from X-Forwarded-For,
           # or every caller shares one rate-limit bucket and one authentication
-          # budget (covia#539). Reconcile the persisted config, leaving any
-          # operator-set value alone.
+          # budget (covia#539). It also keeps the security audit trail and
+          # the per-request access log, as JSON lines a log shipper can route
+          # on (security#10, venue/docs/CONFIG.md "Logging"). Reconcile the
+          # persisted config, leaving any operator-set value alone.
           sudo python3 - <<'PY'
           import json
           from pathlib import Path
 
           path = Path("/home/ec2-user/covia-data/config.json")
           config = json.loads(path.read_text(encoding="utf-8"))
+          config.setdefault("operations", {}).setdefault("log-format", "json")
           for venue in config.get("venues", []):
               venue.setdefault("trustedProxies", ["loopback", "172.16.0.0/12"])
+              logging = venue.setdefault("logging", {})
+              logging.setdefault("audit", True)
+              logging.setdefault("access", True)
           temporary = path.with_suffix(".json.tmp")
           temporary.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
           temporary.replace(path)
