@@ -8,8 +8,8 @@ authorisation (capabilities, roles) is downstream and out of scope —
 see `UCAN.md`.
 
 Status: design agreed 2026-08-10, revised after review 2026-10-19.
-This document specifies the target design, not shipped behaviour; §2 records
-the current baseline. The revision separates the method-independent core from
+This document specifies the target design; §2 and the Phase 1 note below
+record the implemented subset. The revision separates the method-independent core from
 protocol payloads and tightens proof/freshness, sessions, migration and delivery.
 Phase 1 (§10) remains a bounded refactor; later phases must satisfy their
 acceptance criteria before activation.
@@ -51,6 +51,7 @@ The implementation is further along than #297/#296 suggest:
 | Piece | Where | State |
 |-------|-------|-------|
 | Single verification seam | `VenueAuthenticator.verify` | Four credential classes: UCAN bearer, self-issued EdDSA, venue-signed session JWT, external provider RS256 |
+| Common result (Phase 1) | `AuthResult`, `VenueAuthenticator.verify` / `bindResult` | Neutral identity, credential and event records with typed provenance; existing acceptance unchanged, unknown evidence absent |
 | Named-user key registry (#296) | `Auth.addAuthenticationKey(s)` / `revokeAuthenticationKey` | Active/revoked tombstones, one-subject-per-key, no silent reactivation, last-active-key guard (`allowLast` for venue recovery) |
 | Named-user self-issued login (#296) | `VenueAuthenticator` self-issued verification | `sub` = local `did:web:…:u:<id>`, requires `iss == sub`, record DID match, **active** registered key, audience + temporal bounds |
 | DID document publication (#296) | `UserAPI.getUserDIDDocument` | Active user-held keys published under `verificationMethod` + `authentication`, controller = user DID |
@@ -140,9 +141,42 @@ human presence or authentication time unless the protocol proves those too.
 Machine/agent credentials remain valid for ordinary authorised operations,
 but do not acquire evidence of a human authentication event by delegation.
 
-`VenueAuthenticator.VerifiedPrincipal` grows into this record; the
-existing two-identity model (`authenticatedIdentity` vs `venueUserDID`)
-is already the right split and is retained.
+**Phase 1 implementation (2026-10-20).** `AuthResult` replaces the private
+`VerifiedPrincipal`. `verify(token)` returns it; existing `authenticate`
+overloads keep returning the venue user DID. HTTP authentication also binds the
+result for `authenticationResult(context)`. Trusted embedders may `bindResult`
+after their own verification. Both identity-only binding APIs discard any
+earlier evidence, even when rebinding the same identity.
+
+The compatibility identity fields remain `AString`; typed `KeyDetails`,
+`UcanDetails` and `ProviderDetails` carry method-specific provenance. Provider
+subject/email mapping remains the existing behaviour until #298. Provider
+`iss` is absent when issuer validation was skipped; a signed subject is not
+misrepresented as an established issuer/subject account binding.
+
+Existing verifiers do not validate `iat` as issuance evidence or establish a
+human authentication event, MFA or a replay-protected request proof. Therefore
+`issuedAt`, `authenticatedAt`, `proof` and `sessionId` remain absent, properties
+empty, and untrusted `amr`/`acr`/`auth_time` are not copied. Integer expiry is
+projected after the existing temporal checks. Fractional provider NumericDate
+expiry remains accepted by upstream but is omitted from this integer metadata
+projection rather than rounded. Legacy venue JWTs have unknown originating
+method, including tokens minted by the OAuth server.
+
+This phase introduces no registry, trust mapping, policy enforcement, session
+storage or new wire format. The result is available to direct callers and HTTP
+embedders; propagation into action-policy contexts belongs to the enforcement
+phase, not implicit evidence inheritance through jobs or agent delegation.
+
+**Upstream audit.** Reviewed the installed Convex **0.8.17 sources** (the
+dependency selected by the POM, not the neighbouring 0.8.18-SNAPSHOT checkout).
+`JWT.verifyPublic` returns signature-verified claims; `JWT.validateClaims`
+checks configured issuer/audience and optional NumericDate expiry, not
+authentication time or MFA. `DIDVerifier` supplies signature verification;
+`UCAN` exposes issuer/audience/expiry and verified payload access through
+Covia's existing compatibility validator. These primitives remain in use.
+None owns Covia's local-user mapping or host authentication-result contract,
+so no competing verifier or upstream change is needed for this phase.
 
 **Embedders plug in at the same contract.** The method set is a
 registry, not a closed enum: an embedder may register additional

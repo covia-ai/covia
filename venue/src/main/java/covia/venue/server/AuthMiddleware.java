@@ -293,14 +293,7 @@ public class AuthMiddleware {
 	 */
 	public static void setRequestIdentity(Context ctx,
 			AString authenticatedIdentity, AString venueUserDID) {
-		if (authenticatedIdentity == null) {
-			throw new IllegalArgumentException("authenticatedIdentity is required");
-		}
-		if (venueUserDID == null) {
-			throw new IllegalArgumentException("venueUserDID is required");
-		}
-		ctx.attribute(AUTHENTICATED_IDENTITY_ATTR, authenticatedIdentity);
-		ctx.attribute(CALLER_DID_ATTR, venueUserDID);
+		VenueAuthenticator.setRequestIdentity(ctx, authenticatedIdentity, venueUserDID);
 	}
 
 	/**

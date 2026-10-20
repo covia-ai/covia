@@ -48,6 +48,7 @@ public final class VenueAuthenticator {
 
 	private static final String AUTHENTICATED_IDENTITY_ATTR = "authenticatedIdentity";
 	private static final String VENUE_USER_ATTR = "callerDID";
+	private static final String AUTH_RESULT_ATTR = "covia.authResult";
 
 	private static final AString SUB = Fields.SUB;
 	private static final AString KID = Fields.KID;
@@ -71,6 +72,7 @@ public final class VenueAuthenticator {
 	public static final String PROVIDER_TOKEN_REJECTED_PREFIX = "Provider token rejected: ";
 	/** For a token no verifier claims, or that does not parse at all. */
 	public static final String TOKEN_REJECTED_PREFIX = "Token rejected: ";
+	public static final String RESULT_REQUIRED = "result is required";
 
 	private final AccountKey venueKey;
 	private final AString venueDID;
@@ -84,10 +86,6 @@ public final class VenueAuthenticator {
 	private final boolean requireExp;
 	private final long maxLifetimeSeconds;
 
-	private record VerifiedPrincipal(
-			AString authenticatedIdentity,
-			AString venueUserDID) {}
-
 	/**
 	 * One verifier's answer for a token it has claimed: the principal, or the
 	 * reason the token was rejected — never both. The same null-means-fine
@@ -96,9 +94,13 @@ public final class VenueAuthenticator {
 	 * and a human-readable reason when it does not, and the reason bubbles
 	 * unchanged into the 401.
 	 */
-	private record Verdict(VerifiedPrincipal principal, String reason) {
-		static Verdict ok(AString authenticatedIdentity, AString venueUserDID) {
-			return new Verdict(new VerifiedPrincipal(authenticatedIdentity, venueUserDID), null);
+	private record Verdict(AuthResult principal, String reason) {
+		static Verdict ok(AString authenticatedIdentity, AString venueUserDID,
+				AString credentialType, Long expiresAt, AString method, AuthResult.Details details) {
+			return new Verdict(new AuthResult(venueUserDID, authenticatedIdentity,
+				new AuthResult.Credential(credentialType, null, expiresAt),
+				new AuthResult.Authentication(method, null, null, Set.of(), details),
+				null, null), null);
 		}
 
 		static Verdict fail(String reason) {
@@ -111,13 +113,19 @@ public final class VenueAuthenticator {
 	 * this instance from {@code VenueServer.authenticator()}.
 	 */
 	public VenueAuthenticator(Engine engine) {
+		this(engine, null);
+	}
+
+	/** Internal provider seam, also allowing verifier tests with a local JWKS. */
+	VenueAuthenticator(Engine engine, Map<String, OAuthConfig> providers) {
 		if (engine == null) throw new IllegalArgumentException("engine is required");
 		this.engine = engine;
 		this.venueKey = engine.getAccountKey();
 		this.venueDID = engine.getDIDString();
 		this.venueAuth = engine.getAuth();
-		this.externalProviders = venueAuth.getLoginProviders().hasProviders()
-			? venueAuth.getLoginProviders().getProviders() : null;
+		this.externalProviders = providers != null ? Map.copyOf(providers)
+			: venueAuth.getLoginProviders().hasProviders()
+				? venueAuth.getLoginProviders().getProviders() : null;
 		this.audiencePolicy = venueAuth.getAudiencePolicy();
 		this.requireExp = engine.config().isRequireExp();
 		this.maxLifetimeSeconds = engine.config().getMaxTokenLifetime();
@@ -150,7 +158,7 @@ public final class VenueAuthenticator {
 	 *         valid, incorrectly audienced, or otherwise not accepted
 	 */
 	public AString authenticate(AString token) throws AuthException {
-		return verify(token).venueUserDID();
+		return verify(token).userDID();
 	}
 
 	/**
@@ -163,9 +171,9 @@ public final class VenueAuthenticator {
 	 */
 	public AString authenticate(Context context, AString token) throws AuthException {
 		if (context == null) throw new IllegalArgumentException("context is required");
-		VerifiedPrincipal principal = verify(token);
-		bindIdentity(context, principal.authenticatedIdentity(), principal.venueUserDID());
-		return principal.venueUserDID();
+		AuthResult principal = verify(token);
+		bindResult(context, principal);
+		return principal.userDID();
 	}
 
 	/**
@@ -173,6 +181,12 @@ public final class VenueAuthenticator {
 	 * This is attribution only: it does not verify credentials or admit a user.
 	 */
 	public void bindIdentity(Context context, AString authenticatedIdentity,
+			AString venueUserDID) {
+		setRequestIdentity(context, authenticatedIdentity, venueUserDID);
+	}
+
+	/** Shared identity-only binding for the legacy middleware and embedder APIs. */
+	public static void setRequestIdentity(Context context, AString authenticatedIdentity,
 			AString venueUserDID) {
 		if (context == null) throw new IllegalArgumentException("context is required");
 		if (authenticatedIdentity == null) {
@@ -183,6 +197,23 @@ public final class VenueAuthenticator {
 		}
 		context.attribute(AUTHENTICATED_IDENTITY_ATTR, authenticatedIdentity);
 		context.attribute(VENUE_USER_ATTR, venueUserDID);
+		// Rebinding even the same identity must discard earlier credential evidence.
+		context.attribute(AUTH_RESULT_ATTR, AuthResult.identity(authenticatedIdentity, venueUserDID));
+	}
+
+	/**
+	 * Binds a result established by trusted host verification. Not a client
+	 * deserialisation API; does not verify, admit, or grant authority.
+	 */
+	public void bindResult(Context context, AuthResult result) {
+		if (result == null) throw new IllegalArgumentException(RESULT_REQUIRED);
+		setRequestIdentity(context, result.authenticatedIdentity(), result.userDID());
+		context.attribute(AUTH_RESULT_ATTR, result);
+	}
+
+	/** Returns request authentication evidence, or null when none is bound. */
+	public AuthResult authenticationResult(Context context) {
+		return context.attribute(AUTH_RESULT_ATTR);
 	}
 
 	/** Returns the identity directly proven by the request credential. */
@@ -268,11 +299,15 @@ public final class VenueAuthenticator {
 	 * whether its signature verifies for the key it asserts. Checks that depend
 	 * on venue state — key status, audience, user records — run after the
 	 * signature, and their wording never says whether a named account exists
-	 * (AUTH.md §11): on the named-user path the signature proves possession of
-	 * the key {@code kid} names, which anyone can mint, so an unknown user and
+	 * (AUTH.md §11): on the named-user path the signature authenticates a
+	 * statement by the key {@code kid} names, so an unknown user and
 	 * an unregistered key read the same.</p>
+	 *
+	 * @return verified identities and established evidence, without retaining
+	 *         the credential or admitting a user
+	 * @throws AuthException if the credential is not accepted
 	 */
-	private VerifiedPrincipal verify(AString token) {
+	public AuthResult verify(AString token) {
 		if (token == null || token.toString().isBlank()) {
 			throw new AuthException("Authentication required");
 		}
@@ -338,7 +373,8 @@ public final class VenueAuthenticator {
 		if (capabilities == null || !capabilities.isEmpty()) return Verdict.fail(Reason.NON_EMPTY_ATT);
 		String audience = audienceProblem(token.getAudience());
 		if (audience != null) return Verdict.fail(audience);
-		return Verdict.ok(issuer, issuer);
+		return Verdict.ok(issuer, issuer, AuthResult.UCAN_BEARER, exp,
+			AuthResult.UCAN, new AuthResult.UcanDetails(issuer, token.getAudience()));
 	}
 
 	/**
@@ -372,7 +408,7 @@ public final class VenueAuthenticator {
 			if (when != null) return Verdict.fail(when);
 			String audience = audienceProblem(claims.get(AUD));
 			if (audience != null) return Verdict.fail(audience);
-			return Verdict.ok(key.did(), sub);
+			return keyResult(key.did(), sub, claims);
 		}
 
 		AString userId = engine.managedUserName(sub);
@@ -402,7 +438,7 @@ public final class VenueAuthenticator {
 			if (when != null) return Verdict.fail(when);
 			String audience = audienceProblem(claims.get(AUD));
 			if (audience != null) return Verdict.fail(audience);
-			return Verdict.ok(key.did(), sub);
+			return keyResult(key.did(), sub, claims);
 		}
 
 		// A non-local DID is authenticated by its method resolver. No caller in
@@ -431,7 +467,7 @@ public final class VenueAuthenticator {
 		if (when != null) return Verdict.fail(when);
 		String audience = audienceProblem(claims.get(AUD));
 		if (audience != null) return Verdict.fail(audience);
-		return Verdict.ok(sub, sub);
+		return keyResult(sub, sub, claims);
 	}
 
 	/** A token this venue issued (a login session), signed with its own key. */
@@ -450,7 +486,10 @@ public final class VenueAuthenticator {
 		} catch (RuntimeException e) {
 			return Verdict.fail(Reason.MALFORMED_SUBJECT + sub);
 		}
-		return Verdict.ok(sub, sub);
+		// A venue signature identifies the credential issuer, not the login
+		// method. Legacy login and OAuth-issued JWTs share this verifier.
+		return Verdict.ok(sub, sub, AuthResult.VENUE_JWT, expiryMetadata(claims),
+			null, null);
 	}
 
 	/**
@@ -489,7 +528,10 @@ public final class VenueAuthenticator {
 			AString venueUserDID = findUserDIDByEmail(email);
 			if (venueUserDID == null) return Verdict.fail(Reason.NO_USER_FOR_EMAIL + email);
 			AString subject = RT.ensureString(claims.get(SUB));
-			return Verdict.ok(subject != null ? subject : email, venueUserDID);
+			return Verdict.ok(subject != null ? subject : email, venueUserDID,
+				AuthResult.PROVIDER_TOKEN, expiryMetadata(claims), AuthResult.OIDC,
+				new AuthResult.ProviderDetails(name,
+					provider.issuer == null ? null : RT.ensureString(claims.get(ISS)), subject));
 		}
 		return Verdict.fail(reason);
 	}
@@ -497,6 +539,21 @@ public final class VenueAuthenticator {
 	// ------------------------------------------------------------- the checks
 	// Each returns null when it passes and the reason when it does not, the
 	// convention CapabilityChecker.allows and UcanJwtValidator.Validation use.
+
+	private static Verdict keyResult(AString signingIdentity, AString userDID,
+			AMap<AString, ACell> claims) {
+		return Verdict.ok(signingIdentity, userDID, AuthResult.KEY_JWT,
+			expiryMetadata(claims), AuthResult.KEY, new AuthResult.KeyDetails(signingIdentity));
+	}
+
+	/**
+	 * Conservative projection after the existing verifier's temporal checks.
+	 * Phase 1 does not change acceptance or round fractional provider expiry.
+	 * iat is not checked by existing verifiers and is deliberately not projected.
+	 */
+	private static Long expiryMetadata(AMap<AString, ACell> claims) {
+		return claims.get(EXP) instanceof CVMLong exp ? exp.longValue() : null;
+	}
 
 	/**
 	 * Null when the token is within its exp / nbf bounds (with clock-skew
