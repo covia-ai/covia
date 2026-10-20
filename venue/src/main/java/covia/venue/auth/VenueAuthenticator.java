@@ -20,6 +20,8 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.AccountKey;
 import convex.core.data.Blob;
+import convex.core.data.Maps;
+import convex.core.data.Sets;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
@@ -57,6 +59,18 @@ public final class VenueAuthenticator {
 	private static final AString AUD = Strings.intern("aud");
 	private static final AString EXP = Strings.intern("exp");
 	private static final AString NBF = Strings.intern("nbf");
+
+	// Method identifiers and payload schemas belong to the verifiers, not
+	// AuthResult. New trusted methods can use their own ids and detail maps.
+	public static final AString KEY = Strings.intern("key");
+	public static final AString UCAN_METHOD = Strings.intern("ucan");
+	public static final AString OIDC = Strings.intern("oidc");
+	public static final AString KEY_JWT = Strings.intern("keyJwt");
+	public static final AString UCAN_BEARER = Strings.intern("ucanBearer");
+	public static final AString VENUE_JWT = Strings.intern("venueJwt");
+	public static final AString PROVIDER_TOKEN = Strings.intern("providerToken");
+	static final AString SIGNING_IDENTITY = Strings.intern("signingIdentity");
+	static final AString PROVIDER = Strings.intern("provider");
 
 	/** Clock-skew leeway for JWT temporal bounds, in seconds. */
 	private static final long CLOCK_SKEW_SECONDS = 60;
@@ -96,10 +110,10 @@ public final class VenueAuthenticator {
 	 */
 	private record Verdict(AuthResult principal, String reason) {
 		static Verdict ok(AString authenticatedIdentity, AString venueUserDID,
-				AString credentialType, Long expiresAt, AString method, AuthResult.Details details) {
+				AString credentialType, Long expiresAt, AString method, AMap<AString, ACell> details) {
 			return new Verdict(new AuthResult(venueUserDID, authenticatedIdentity,
 				new AuthResult.Credential(credentialType, null, expiresAt),
-				new AuthResult.Authentication(method, null, null, Set.of(), details),
+				new AuthResult.Authentication(method, null, null, Sets.empty(), details),
 				null, null), null);
 		}
 
@@ -373,8 +387,8 @@ public final class VenueAuthenticator {
 		if (capabilities == null || !capabilities.isEmpty()) return Verdict.fail(Reason.NON_EMPTY_ATT);
 		String audience = audienceProblem(token.getAudience());
 		if (audience != null) return Verdict.fail(audience);
-		return Verdict.ok(issuer, issuer, AuthResult.UCAN_BEARER, exp,
-			AuthResult.UCAN, new AuthResult.UcanDetails(issuer, token.getAudience()));
+		return Verdict.ok(issuer, issuer, UCAN_BEARER, exp,
+			UCAN_METHOD, Maps.of(ISS, issuer, AUD, token.getAudience()));
 	}
 
 	/**
@@ -488,7 +502,7 @@ public final class VenueAuthenticator {
 		}
 		// A venue signature identifies the credential issuer, not the login
 		// method. Legacy login and OAuth-issued JWTs share this verifier.
-		return Verdict.ok(sub, sub, AuthResult.VENUE_JWT, expiryMetadata(claims),
+		return Verdict.ok(sub, sub, VENUE_JWT, expiryMetadata(claims),
 			null, null);
 	}
 
@@ -528,10 +542,12 @@ public final class VenueAuthenticator {
 			AString venueUserDID = findUserDIDByEmail(email);
 			if (venueUserDID == null) return Verdict.fail(Reason.NO_USER_FOR_EMAIL + email);
 			AString subject = RT.ensureString(claims.get(SUB));
+			// Only checked provenance; no raw claims, tokens or inferred assurance.
+			AMap<AString, ACell> details = Maps.of(PROVIDER, Strings.create(name));
+			if (provider.issuer != null) details = details.assoc(ISS, RT.ensureString(claims.get(ISS)));
+			if (subject != null) details = details.assoc(SUB, subject);
 			return Verdict.ok(subject != null ? subject : email, venueUserDID,
-				AuthResult.PROVIDER_TOKEN, expiryMetadata(claims), AuthResult.OIDC,
-				new AuthResult.ProviderDetails(name,
-					provider.issuer == null ? null : RT.ensureString(claims.get(ISS)), subject));
+				PROVIDER_TOKEN, expiryMetadata(claims), OIDC, details);
 		}
 		return Verdict.fail(reason);
 	}
@@ -542,8 +558,8 @@ public final class VenueAuthenticator {
 
 	private static Verdict keyResult(AString signingIdentity, AString userDID,
 			AMap<AString, ACell> claims) {
-		return Verdict.ok(signingIdentity, userDID, AuthResult.KEY_JWT,
-			expiryMetadata(claims), AuthResult.KEY, new AuthResult.KeyDetails(signingIdentity));
+		return Verdict.ok(signingIdentity, userDID, KEY_JWT,
+			expiryMetadata(claims), KEY, Maps.of(SIGNING_IDENTITY, signingIdentity));
 	}
 
 	/**

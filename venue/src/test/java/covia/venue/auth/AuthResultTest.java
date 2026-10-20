@@ -2,7 +2,6 @@ package covia.venue.auth;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -18,9 +17,7 @@ import java.security.interfaces.RSAPublicKey;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Map;
-import java.util.Set;
 
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterAll;
@@ -32,16 +29,21 @@ import convex.auth.ucan.UCAN;
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
+import convex.core.data.ASet;
 import convex.core.data.AString;
 import convex.core.data.Maps;
+import convex.core.data.Sets;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMDouble;
+import convex.core.data.prim.CVMLong;
+import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.venue.Config;
 import covia.venue.Engine;
+import covia.venue.RequestContext;
 import covia.venue.server.AuthMiddleware;
 import io.javalin.http.Context;
 
@@ -57,6 +59,7 @@ class AuthResultTest {
 	@BeforeAll
 	static void setup() {
 		engine = Engine.createTemp(Maps.of(Config.HOSTNAME, "auth-result.example"));
+		Engine.addDemoAssets(engine);
 		auth = new VenueAuthenticator(engine);
 		key = AKeyPair.generate();
 		did = UCAN.toDIDKey(key.getAccountKey());
@@ -91,11 +94,10 @@ class AuthResultTest {
 		AuthResult result = auth.verify(token);
 		assertEquals(did, result.userDID());
 		assertEquals(did, result.authenticatedIdentity());
-		assertEquals(AuthResult.KEY_JWT, result.credential().type());
+		assertEquals(VenueAuthenticator.KEY_JWT, result.credential().type());
 		assertEquals(expiry, result.credential().expiresAt());
-		assertEquals(AuthResult.KEY, result.authentication().method());
-		assertEquals(did, assertInstanceOf(AuthResult.KeyDetails.class,
-			result.authentication().details()).signingIdentity());
+		assertEquals(VenueAuthenticator.KEY, result.authentication().method());
+		assertEquals(did, result.authentication().details().get(VenueAuthenticator.SIGNING_IDENTITY));
 		assertUnknownEvidence(result);
 		assertEquals(result, auth.verify(token), "replay must not manufacture a new event");
 		assertEquals(result.userDID(), auth.authenticate(token));
@@ -121,9 +123,9 @@ class AuthResultTest {
 		AString token = JWT.signPublic(claims().assoc(UCAN.ATT, Vectors.empty()), key);
 		AuthResult result = auth.verify(token);
 		assertEquals(did, result.userDID());
-		assertEquals(AuthResult.UCAN_BEARER, result.credential().type());
-		assertEquals(AuthResult.UCAN, result.authentication().method());
-		assertEquals(new AuthResult.UcanDetails(did, engine.getDIDString()),
+		assertEquals(VenueAuthenticator.UCAN_BEARER, result.credential().type());
+		assertEquals(VenueAuthenticator.UCAN_METHOD, result.authentication().method());
+		assertEquals(Maps.of(UCAN.ISS, did, UCAN.AUD, engine.getDIDString()),
 			result.authentication().details());
 		assertEquals(expiry, result.credential().expiresAt());
 		assertUnknownEvidence(result);
@@ -134,9 +136,9 @@ class AuthResultTest {
 	void venueSignatureDoesNotInventLoginOrigin() {
 		AString token = JWT.signPublic(claims()
 			.assoc(Strings.intern("iss"), engine.getDIDString())
-			.assoc(Strings.intern("method"), AuthResult.OIDC), engine.getKeyPair());
+			.assoc(Strings.intern("method"), VenueAuthenticator.OIDC), engine.getKeyPair());
 		AuthResult result = auth.verify(token);
-		assertEquals(AuthResult.VENUE_JWT, result.credential().type());
+		assertEquals(VenueAuthenticator.VENUE_JWT, result.credential().type());
 		assertNull(result.authentication().method());
 		assertNull(result.authentication().details());
 		assertUnknownEvidence(result);
@@ -184,19 +186,19 @@ class AuthResultTest {
 		assertEquals(did, AuthMiddleware.getVenueUserDID(ctx));
 	}
 
-	private record HostDetails(String account) implements AuthResult.Details {}
-
 	@Test
 	void trustedEmbedderUsesTheContractWithoutOAuthOrASession() {
-		Set<String> properties = new HashSet<>(Set.of("userVerified"));
+		ASet<AString> properties = Sets.of("userVerified");
+		AMap<AString, ACell> details = Maps.of("account", "host-account",
+			"ceremony", Maps.of("device", "terminal", "version", 1));
 		AuthResult result = new AuthResult(did, Strings.create("host-account"),
 			new AuthResult.Credential(Strings.intern("hostCredential"), null, null),
 			new AuthResult.Authentication(Strings.intern("host"), null, now,
-				properties, new HostDetails("host-account")), null, null);
-		properties.clear();
-		assertEquals(Set.of("userVerified"), result.authentication().properties());
-		assertThrows(UnsupportedOperationException.class,
-			() -> result.authentication().properties().add("mfa"));
+				properties, details), null, null);
+		assertFalse(properties.include(Strings.intern("mfa")).equals(properties));
+		assertEquals(Sets.of("userVerified"), result.authentication().properties());
+		assertFalse(details.assoc(Strings.intern("changed"), did).equals(details));
+		assertSame(details, result.authentication().details());
 		Context ctx = context();
 		assertNull(auth.authenticationResult(ctx));
 		auth.bindResult(ctx, result);
@@ -204,6 +206,51 @@ class AuthResultTest {
 		assertEquals(result.authenticatedIdentity(), auth.authenticatedIdentity(ctx));
 		assertEquals(did, auth.authenticatedUser(ctx));
 		assertNull(result.sessionId());
+	}
+
+	@Test
+	void latticeDataSurvivesGridOperationsAndPrivateStorage() {
+		AMap<AString, ACell> details = Maps.of("account", "host-account",
+			"ceremony", Maps.of("device", "terminal", "version", 1));
+		AuthResult result = new AuthResult(did, Strings.create("host-account"),
+			new AuthResult.Credential(Strings.intern("hostCredential"), now, expiry),
+			new AuthResult.Authentication(Strings.intern("host"), Strings.create("binding"),
+				now, Sets.of("userVerified"), details),
+			new AuthResult.Proof(now, Sets.of("possession")), Strings.create("session"));
+		AMap<AString, ACell> data = result.toData();
+		assertEquals(details, RT.getIn(data, "authentication", "details"));
+		assertEquals(CVMLong.create(now), RT.getIn(data, "credential", "issuedAt"));
+		assertEquals(CVMLong.create(expiry), RT.getIn(data, "credential", "expiresAt"));
+		assertEquals(CVMLong.create(now), RT.getIn(data, "proof", "verifiedAt"));
+		assertEquals(Strings.create("binding"), RT.getIn(data, "authentication", "binding"));
+		assertEquals(result.sessionId(), data.get(AuthResult.SESSION_ID));
+		assertEquals(result.proof().properties(), RT.getIn(data, "proof", "properties"));
+
+		// Existing grid operations and upstream CAD3 carry arbitrary method
+		// payloads without Java serialisation or a method-specific codec.
+		RequestContext caller = engine.venueContext();
+		ACell encoded = engine.jobs().invokeOperation("v/ops/convex/encode-cad3",
+			Maps.of("value", data), caller).awaitResult(5000);
+		ACell restored = engine.jobs().invokeOperation("v/ops/convex/decode-cad3",
+			encoded, caller).awaitResult(5000);
+		assertEquals(data, restored);
+		assertEquals(data.getHash(), restored.getHash());
+		var state = engine.adapterWorkspace("auth-result-test");
+		state.write("event", restored);
+		assertEquals(data, state.read("event"));
+		assertEquals(details, engine.resolvePath(
+			Strings.create(state.path("event/authentication/details")), engine.venueContext()));
+	}
+
+	@Test
+	void unknownFieldsAreAbsentFromLatticeProjection() {
+		AMap<AString, ACell> data = AuthResult.identity(did, did).toData();
+		assertFalse(data.containsKey(AuthResult.CREDENTIAL));
+		assertFalse(data.containsKey(AuthResult.PROOF));
+		assertFalse(data.containsKey(AuthResult.SESSION_ID));
+		assertEquals(Maps.of(AuthResult.PROPERTIES, Sets.empty()), data.get(AuthResult.AUTHENTICATION));
+		assertEquals(Maps.of(AuthResult.TYPE, VenueAuthenticator.KEY_JWT),
+			new AuthResult.Credential(VenueAuthenticator.KEY_JWT, null, null).toData());
 	}
 
 	@Test
@@ -241,12 +288,12 @@ class AuthResultTest {
 				AuthResult result = verifier.verify(token);
 				assertEquals(did, result.userDID());
 				assertEquals(Strings.create("provider-subject"), result.authenticatedIdentity());
-				assertEquals(AuthResult.PROVIDER_TOKEN, result.credential().type());
-				AuthResult.ProviderDetails details = assertInstanceOf(
-					AuthResult.ProviderDetails.class, result.authentication().details());
-				assertEquals("test", details.provider());
-				assertEquals(expectedIssuer == null ? null : Strings.create(issuer), details.iss());
-				assertEquals(Strings.create("provider-subject"), details.sub());
+				assertEquals(VenueAuthenticator.PROVIDER_TOKEN, result.credential().type());
+				AMap<AString, ACell> details = result.authentication().details();
+				assertEquals(Strings.create("test"), details.get(VenueAuthenticator.PROVIDER));
+				assertEquals(expectedIssuer == null ? null : Strings.create(issuer), details.get(UCAN.ISS));
+				assertEquals(Strings.create("provider-subject"), details.get(Fields.SUB));
+				assertEquals(expectedIssuer == null ? 2 : 3, details.count());
 				assertUnknownEvidence(result);
 				assertEquals(did, verifier.authenticate(token));
 				assertFalse(result.toString().contains(token.toString()));
@@ -256,7 +303,7 @@ class AuthResultTest {
 				assertNull(fractional.credential().expiresAt());
 				AuthResult fallback = verifier.verify(signRSA(payload.dissoc(Fields.SUB), rsa));
 				assertEquals(email, fallback.authenticatedIdentity());
-				assertNull(((AuthResult.ProviderDetails) fallback.authentication().details()).sub());
+				assertFalse(fallback.authentication().details().containsKey(Fields.SUB));
 			}
 		} finally {
 			server.stop(0);

@@ -23,10 +23,13 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Added
 
-- Common `AuthResult` from `VenueAuthenticator.verify`, with typed credential
+- Common `AuthResult` from `VenueAuthenticator.verify`, with method-owned credential
   provenance and conservative authentication evidence (#297 Phase 1). Existing
   authentication APIs and acceptance rules remain unchanged; trusted embedders
   can bind results, while identity-only rebinding clears earlier evidence.
+  Core records project directly to immutable Convex lattice data; method details
+  use maps and evidence properties use sets, without protocol-specific types
+  or a method-specific codec in the core.
 - `agent:suspend` records the actual caller, optional reason and time separately
   from faults. Info/list expose the record; resume clears it. Suspended request/chat
   refusals carry `agent:suspended` (#590).

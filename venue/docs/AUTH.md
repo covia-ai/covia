@@ -148,8 +148,9 @@ result for `authenticationResult(context)`. Trusted embedders may `bindResult`
 after their own verification. Both identity-only binding APIs discard any
 earlier evidence, even when rebinding the same identity.
 
-The compatibility identity fields remain `AString`; typed `KeyDetails`,
-`UcanDetails` and `ProviderDetails` carry method-specific provenance. Provider
+The compatibility identity fields remain `AString`. Method-owned immutable
+`AMap<AString, ACell>` payloads carry provenance; the core declares no built-in
+method ids, protocol fields or Java payload subclasses. Provider
 subject/email mapping remains the existing behaviour until #298. Provider
 `iss` is absent when issuer validation was skipped; a signed subject is not
 misrepresented as an established issuer/subject account binding.
@@ -164,7 +165,7 @@ projection rather than rounded. Legacy venue JWTs have unknown originating
 method, including tokens minted by the OAuth server.
 
 This phase introduces no registry, trust mapping, policy enforcement, session
-storage or new wire format. The result is available to direct callers and HTTP
+storage or new credential wire format. The result is available to direct callers and HTTP
 embedders; propagation into action-policy contexts belongs to the enforcement
 phase, not implicit evidence inheritance through jobs or agent delegation.
 
@@ -178,7 +179,70 @@ Covia's existing compatibility validator. These primitives remain in use.
 None owns Covia's local-user mapping or host authentication-result contract,
 so no competing verifier or upstream change is needed for this phase.
 
-**Embedders plug in at the same contract.** The method set is a
+### 3.1 Grid-native data and operations
+
+**Implemented data boundary.** `AuthResult.toData()` projects the common
+record into an immutable `AMap<AString, ACell>`. Nested records are maps,
+identifiers are `AString`, times are integer Unix seconds, properties are
+`ASet<AString>`, and optional unknown fields are omitted. Details are already
+Convex values, preserved without core interpretation. Existing CAD3 encoding,
+content hashes, lattice cursors and operation inputs/outputs work directly;
+no Java serialisation, class-name discriminator or per-method codec is needed.
+JSON boundaries render sets as arrays; they must validate property collections
+when reading them, rather than treating JSON parsing as evidence verification.
+The result's map is data, never a bearer credential or a proof of authenticity.
+
+The method owns its detail schema and validation. The current key verifier
+retains `signingIdentity`, UCAN retains `iss`/`aud`, and the provider verifier
+retains `provider` and checked `iss`/signed `sub` when available. A new method
+may supply a different bounded map without editing the core. A method whose
+stored schema evolves owns its versioning and migration inside that payload.
+Core policy reads verified common properties, not arbitrary details. Convex
+values guarantee immutability, not confidentiality or evidentiary validity;
+trusted verifiers remain responsible for the allowlisted projection.
+
+**Method registration and operation integration (Phase 2 contract).** Reuse
+the adapter/module lifecycle and operation metadata in [ADAPTERS.md](ADAPTERS.md)
+and [OPERATIONS.md](OPERATIONS.md):
+
+- A trusted host registers a method id, its verifier and evidence policy,
+  and any method-owned ceremony operations. A method need not be HTTP-based,
+  interactive, JWT-based or session-producing. Do not impose a universal
+  begin/finish or OAuth grant interface on stateless and interactive methods.
+- Ceremony operations use normal content-addressed operation assets, schemas
+  and `ACell` inputs/outputs. Publish only safe method metadata and operation
+  references through the existing adapter catalog. Browsers and protocol
+  callbacks are transport bindings to the same method implementation.
+- Registration is independent of discovery: publishing an asset or receiving
+  a map from a job, remote venue or user workspace cannot register a verifier
+  or authenticate a caller. Only the trusted verification boundary may bind
+  an `AuthResult`. Arbitrary adapter/agent output is not evidence.
+- Capability checks still apply to enrolled-user administration and session
+  revocation. Unauthenticated ceremony entry points need a deliberately
+  narrow admission path with throttling and method-specific replay checks;
+  they must not grant general anonymous operation execution.
+- Challenge state and authenticator bindings are private, venue-owned lattice
+  records, using the existing auth store or a method adapter's
+  `AdapterWorkspace`, never caller-writable evidence. Reuse existing key
+  bindings instead of creating parallel registries. Secret material follows
+  `SecretStore` rules; job input/output, public catalog metadata and event
+  details must not contain passwords, OTPs, private keys or bearer tokens.
+  Sensitive exchange steps therefore need the established direct, unrecorded
+  path rather than normal durable jobs.
+- Authentication events are coherent whole records. Never merge properties
+  or proofs across unrelated events by set union. Use the existing venue
+  single-writer lattice and upstream atomic update mechanisms for consume,
+  rotate and revoke; the fact that values replicate does not make a stale
+  replica authoritative for authentication or immediate revocation (§4).
+- Adapter disable/unload must withdraw its verifier as well as discovery;
+  dependent credentials/sessions must fail closed under current policy.
+  A job retaining an old adapter instance cannot keep authentication enabled.
+
+The data projection is implemented and tested through existing CAD3 operations
+and private lattice storage. The registry, ceremony dispatch and lifecycle
+policy above remain Phase 2 work; no new login operation is exposed yet.
+
+**Embedders plug in at the same contract.** The planned method set is a
 registry, not a closed enum: an embedder may register additional
 methods implementing the same interface — each produces an
 `AuthResult`, appears under its own id in `auth.methods` (registered
@@ -649,7 +713,9 @@ venue-auth state.
    glue; no new session issuer or enforcement switch ships in this phase.
 2. **Phase 2 — method configuration and policy evaluation.** Add the trusted
    registry, enable/disable controls, evidence mappings and fail-closed config
-   validation. Define originating-method versus credential-type handling.
+   validation. Follow the grid-native ownership and operation contract in §3.1,
+   including disable/unload and the unrecorded sensitive exchange boundary.
+   Define originating-method versus credential-type handling.
    Preserve existing defaults when no new settings are supplied; explicit
    restrictions are intentional behaviour changes. Exercise the policy checker
    before enabling new sensitive-action requirements.
