@@ -157,6 +157,13 @@ explicit allow-list and defaults to publishing nothing; the helper
 private endpoints, allow-lists, and other operator-private values must not
 appear there.
 
+Authentication method contributions are planned in [AUTH.md §3.1](AUTH.md#31-grid-native-data-and-operations).
+Their method-specific settings belong under the owning adapter's existing
+configuration, and their availability follows this lifecycle. Core auth keeps
+shared policy and sessions; there is no separate method-management surface.
+The extension is not yet implemented. Public operation assets alone cannot
+register a trusted authentication verifier.
+
 ## Public catalog and introspection
 
 An active adapter can contribute these public lattice surfaces:

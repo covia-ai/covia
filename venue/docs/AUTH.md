@@ -7,7 +7,7 @@ WebAuthn, #301 passwords). Registration/admission is separate (#269);
 authorisation (capabilities, roles) is downstream and out of scope —
 see `UCAN.md`.
 
-Status: design agreed 2026-08-10, revised after review 2026-10-19.
+Status: design agreed 2026-08-10, revised after review 2026-10-21.
 This document specifies the target design; §2 and the Phase 1 note below
 record the implemented subset. The revision separates the method-independent core from
 protocol payloads and tightens proof/freshness, sessions, migration and delivery.
@@ -205,8 +205,11 @@ trusted verifiers remain responsible for the allowlisted projection.
 the adapter/module lifecycle and operation metadata in [ADAPTERS.md](ADAPTERS.md)
 and [OPERATIONS.md](OPERATIONS.md):
 
-- A trusted host registers a method id, its verifier and evidence policy,
-  and any method-owned ceremony operations. A method need not be HTTP-based,
+- Trusted adapter code contributes method ids, verifiers, evidence declarations
+  and any method-owned ceremony operations through an authentication extension
+  interface. Effective configuration lives under `adapters.<name>` and uses
+  the existing configuration and lifecycle hooks. One adapter may contribute
+  several methods; method ids are not adapter names. A method need not be HTTP-based,
   interactive, JWT-based or session-producing. Do not impose a universal
   begin/finish or OAuth grant interface on stateless and interactive methods.
 - Ceremony operations use normal content-addressed operation assets, schemas
@@ -237,18 +240,26 @@ and [OPERATIONS.md](OPERATIONS.md):
 - Adapter disable/unload must withdraw its verifier as well as discovery;
   dependent credentials/sessions must fail closed under current policy.
   A job retaining an old adapter instance cannot keep authentication enabled.
+- Core maintains a derived lookup of contributions from active adapters, not
+  a separately configured or persisted method registry. Duplicate method ids
+  fail validation rather than overriding another adapter. Reconfiguration
+  validates the complete proposed contribution before publication; rejection
+  leaves the previous configuration intact. Disabling a method takes effect
+  at the authentication boundary even for an in-flight ceremony completion.
+  Policy declarations must be validated against available methods before
+  serving requests; unknown methods and unattainable requirements fail closed.
 
 The data projection is implemented and tested through existing CAD3 operations
-and private lattice storage. The registry, ceremony dispatch and lifecycle
+and private lattice storage. Adapter contributions, ceremony dispatch and lifecycle
 policy above remain Phase 2 work; no new login operation is exposed yet.
 
-**Embedders plug in at the same contract.** The planned method set is a
-registry, not a closed enum: an embedder may register additional
-methods implementing the same interface — each produces an
-`AuthResult`, appears under its own id in `auth.methods` (registered
-before config validation, so fail-closed checks accept it), and is
-subject to the same policy machinery, session issuance, and step-up
-rules as the built-ins. Registration is a trusted host action. Each method
+**Embedders plug in at the same contract.** An embedder may install an adapter
+contributing additional methods through the same interface. Each produces an
+`AuthResult`, owns its configuration under that adapter and is subject to the
+same shared policy, session issuance and step-up rules as the built-ins.
+There is no parallel `auth.methods` configuration tree or registration API
+with an independent enable/disable lifecycle. Installing adapter code is a
+trusted host action, not something an operation asset can request. Each method
 declares the evidence it can verify; central policy caps the assurance it may
 assert. Provider-supplied `amr`/`acr` require an explicit trusted-provider
 mapping, not acceptance of arbitrary claims or a method's name.
@@ -486,23 +497,33 @@ Two notes:
 
 ## 6. Configuration
 
-Extends the existing `auth` block (`public`, `tokenExpiry`, `audience`,
-`acceptedAudiences` unchanged). New `methods`, `sessions` and `policy` sections:
+Method settings belong to their implementing adapter under `adapters.<name>`:
+provider configuration, ceremony options, evidence mappings and any selection
+among multiple methods that adapter contributes. The framework owns the
+adapter's reserved `enabled` flag; a multi-method adapter owns its internal
+method settings and validation. Reuse `configure`, enable/disable and module
+load/unload rather than adding a second management surface.
+
+The central `auth` block retains shared policy and session settings. Existing
+`public`, `tokenExpiry`, `audience` and `acceptedAudiences` keep their current
+meaning during migration. Policy may refer to method ids without owning their
+implementation configuration.
+
+Illustrative target configuration (these new method adapters and policy settings
+are not yet implemented; the example assumes existing key/UCAN contributions):
 
 ```json
-"auth": {
-  "sessions": { "enabled": true },
-  "methods": {
-    "key":      { "enabled": true },
-    "ucan":     { "enabled": true },
-    "oidc":     { "enabled": false,
-                  "providers": { "google": { "clientId": "…", "clientSecret": "s/google-oauth" } } },
+{
+  "adapters": {
     "email":    { "enabled": false, "modes": ["magic-link", "otp"] },
     "webauthn": { "enabled": false, "rpId": "venue.example" },
     "password": { "enabled": false }
   },
-  "policy": {
-    "default": { "allowed": ["key", "ucan"] }
+  "auth": {
+    "sessions": { "enabled": true },
+    "policy": {
+      "default": { "allowed": ["key", "ucan"] }
+    }
   }
 }
 ```
@@ -527,7 +548,7 @@ Rules:
   and `ucan` enabled; session acceptance enabled; `oidc` enabled iff providers
   are configured
   (legacy external-login entries under `auth.oauth` remain aliases for their
-  matching method/provider configuration for one release). Do not alias the
+  matching owning-adapter configuration for one release). Do not alias the
   entire block: `auth.oauth.provider` configures the venue's OAuth authorization
   server and remains independent. Inventory legacy OAuth-only providers too;
   do not silently classify a non-OIDC provider as OIDC. Reject conflicting old
@@ -546,6 +567,11 @@ Rules:
   blocks, non-HTTPS/unsafe redirect origins, and impossible policy
   (a policy whose `allowed` methods cannot reach its
   `minimumAssurance`) are configuration errors, not warnings.
+  The same validation applies to proposed adapter reconfiguration. Runtime
+  disable/unload still withdraws the method immediately: a policy referring to
+  it cannot fall back to weaker evidence. Re-enabling validates configuration
+  before restoring contributions. No second copy of enabled-method state is
+  persisted under `auth` or in the lattice.
 - **Secrets stay external**: provider secrets by `s/<name>` reference
   (SecretStore), never inline in tracked config.
 - The **last viable strong authenticator** of a venue administrator
@@ -711,9 +737,11 @@ venue-auth state.
    enrolment gates. Leave unknown evidence unknown. Add contract tests for all
    existing credential classes and embedders. Remove superseded verification
    glue; no new session issuer or enforcement switch ships in this phase.
-2. **Phase 2 — method configuration and policy evaluation.** Add the trusted
-   registry, enable/disable controls, evidence mappings and fail-closed config
-   validation. Follow the grid-native ownership and operation contract in §3.1,
+2. **Phase 2 — adapter method contributions and policy evaluation.** Add the
+   trusted adapter extension and derived verifier lookup, using existing
+   adapter configuration/lifecycle for method settings and evidence mappings.
+   Keep shared policy and sessions under `auth`; do not add `auth.methods`.
+   Follow the grid-native ownership and operation contract in §3.1,
    including disable/unload and the unrecorded sensitive exchange boundary.
    Define originating-method versus credential-type handling.
    Preserve existing defaults when no new settings are supplied; explicit
@@ -740,6 +768,10 @@ venue-auth state.
 
 ### Acceptance criteria for the changed contracts
 
+- A custom adapter can contribute multiple methods without core edits or a
+  parallel registration/configuration path. Duplicate ids, rejected config,
+  disable/enable and unload are tested, including in-flight completions and
+  dependent sessions; rejected config cannot partially replace live verifiers.
 - Core contract tests exercise a trusted non-OAuth method, direct key/UCAN
   requests, and session issuance/verification with OAuth disabled. Core results
   require no OAuth client or protocol claims; direct paths create no session.
