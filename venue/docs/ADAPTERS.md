@@ -158,9 +158,11 @@ private endpoints, allow-lists, and other operator-private values must not
 appear there.
 
 Authentication method contributions are planned in [AUTH.md §3.1](AUTH.md#31-grid-native-data-and-operations).
-Their method-specific settings belong under the owning adapter's existing
-configuration, and their availability follows this lifecycle. Core auth keeps
-shared policy and sessions; there is no separate method-management surface.
+Their protocol settings belong under the owning adapter's existing configuration,
+and their availability follows this lifecycle. `auth.methods` binds venue method
+ids to trusted adapter implementations, with a local implementation selector
+when needed. A binding cannot load or enable an adapter. Core auth also keeps
+shared policy and sessions; implementation lifecycle remains adapter-owned.
 The extension is not yet implemented. Public operation assets alone cannot
 register a trusted authentication verifier.
 
