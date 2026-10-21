@@ -52,6 +52,7 @@ The implementation is further along than #297/#296 suggest:
 |-------|-------|-------|
 | Single verification seam | `VenueAuthenticator.verify` | Four credential classes: UCAN bearer, self-issued EdDSA, venue-signed session JWT, external provider RS256 |
 | Common result (Phase 1) | `AuthResult`, `VenueAuthenticator.verify` / `bindResult` | Neutral identity, credential and event records with typed provenance; existing acceptance unchanged, unknown evidence absent |
+| Adapter method bindings (Phase 2 subset) | `AuthenticationMethods`, `AuthMethods`, `auth.methods` | Explicit resolution, adapter lifecycle checks, transient `ACell` verification; evidence policy and new ceremonies remain pending |
 | Named-user key registry (#296) | `Auth.addAuthenticationKey(s)` / `revokeAuthenticationKey` | Active/revoked tombstones, one-subject-per-key, no silent reactivation, last-active-key guard (`allowLast` for venue recovery) |
 | Named-user self-issued login (#296) | `VenueAuthenticator` self-issued verification | `sub` = local `did:web:…:u:<id>`, requires `iss == sub`, record DID match, **active** registered key, audience + temporal bounds |
 | DID document publication (#296) | `UserAPI.getUserDIDDocument` | Active user-held keys published under `verificationMethod` + `authentication`, controller = user DID |
@@ -253,9 +254,39 @@ and [OPERATIONS.md](OPERATIONS.md):
   Policy declarations must be validated against available methods before
   serving requests; unknown methods and unattainable requirements fail closed.
 
-The data projection is implemented and tested through existing CAD3 operations
-and private lattice storage. Adapter contributions, ceremony dispatch and lifecycle
-policy above remain Phase 2 work; no new login operation is exposed yet.
+**Implemented binding subset (2026-10-21).** `AuthenticationMethods` is the
+trusted adapter extension. Its immutable map contains locally named verifier
+functions; declarations stay fixed for an installed instance. Configuration
+changes behaviour through the existing adapter hook, while declaration changes
+use adapter replacement. These Java functions are executable host code, not
+lattice values; their inputs and result projections remain Convex data.
+
+`AuthMethods` resolves the binding table against active adapters. Config shape
+is checked eagerly; `Engine.launch` resolves references after the host assembly
+hook and before recovery/workers/listeners. A manually assembled engine's host
+can call `VenueAuthenticator.validateMethods()` once installation is complete.
+Live replacement validates references before publishing the new adapter.
+Verification runs outside the engine monitor and rejects completion if the
+existing adapter revision changed, including disable/re-enable and successful
+reconfiguration. This conservative check also rejects a verification overlapping
+an unrelated adapter change; retry against the current configuration.
+
+The built-in `auth` adapter supplies `keyJwt`, `ucanBearer` and `providerToken`,
+delegating to the existing verifiers and Convex primitives. It is installed
+during Engine preparation so low-level embedders use the same lifecycle.
+`verify(token)` retains the existing bearer classifier and routes to method ids
+`key`, `ucan`, `oidc`. `verify(methodId, ACell)` supports explicitly selected
+custom methods and aliases without imposing a bearer format or recording a job.
+The returned method must match the selected id. Trusted embedder attribution
+through `bindIdentity` / `bindResult` remains a separate host-owned seam.
+
+When `auth.methods` is omitted, compatibility bindings preserve current bearer
+acceptance. Explicit selection rejects legacy venue JWTs with unknown login
+origin, including those minted by existing browser login flows; it cannot
+prove they came from an allowed method. The compatibility verifier is tied
+to the active `auth` adapter and is not a selectable originating method.
+No new login operation, evidence-policy enforcement, provider-config migration
+or managed-session lifecycle ships in this subset. Those remain later work.
 
 **Embedders plug in at the same contract.** An embedder may install an adapter
 contributing additional implementations through the same interface and select

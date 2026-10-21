@@ -23,6 +23,11 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Added
 
+- Adapter-backed authentication bindings (`auth.methods`) select trusted
+  implementations through `AuthenticationMethods`, with direct Convex input,
+  startup validation and rejection of stale in-flight verification after
+  lifecycle/configuration changes (#297). Omitted selection preserves current
+  credentials; explicit selection rejects legacy venue JWTs of unknown origin.
 - Common `AuthResult` from `VenueAuthenticator.verify`, with method-owned credential
   provenance and conservative authentication evidence (#297 Phase 1). Existing
   authentication APIs and acceptance rules remain unchanged; trusted embedders

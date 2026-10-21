@@ -40,6 +40,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
+import covia.adapter.AuthAdapter;
 import covia.exception.AuthException;
 import covia.venue.Config;
 import covia.venue.Engine;
@@ -283,7 +284,12 @@ class AuthResultTest {
 			for (String expectedIssuer : new String[] {issuer, null}) {
 				OAuthConfig config = new OAuthConfig("test", "client", "unused",
 					null, null, null, jwksUri, expectedIssuer, null, null);
-				VenueAuthenticator verifier = new VenueAuthenticator(engine, Map.of("test", config));
+				engine.registerAdapter(new AuthAdapter() {
+					@Override protected VenueAuthenticator createAuthenticator() {
+						return new VenueAuthenticator(engine, Map.of("test", config));
+					}
+				});
+				VenueAuthenticator verifier = new VenueAuthenticator(engine);
 				AString token = signRSA(payload, rsa);
 				AuthResult result = verifier.verify(token);
 				assertEquals(did, result.userDID());
@@ -307,6 +313,7 @@ class AuthResultTest {
 			}
 		} finally {
 			server.stop(0);
+			engine.registerAdapter(new AuthAdapter());
 		}
 	}
 

@@ -744,8 +744,9 @@ public class Config {
 		if (auth == null) return;
 		validateUnknownFields(auth,
 			Set.of("tokenExpiry", "public", "audience", "acceptedAudiences", "oauth",
-				"requireExp", "maxTokenLifetime", "loginRedirectOrigins"),
+				"requireExp", "maxTokenLifetime", "loginRedirectOrigins", "methods"),
 			"auth", strict);
+		covia.venue.auth.AuthMethods.validateConfig(auth);
 		optionalLong(auth, TOKEN_EXPIRY, "auth.tokenExpiry", 1, Long.MAX_VALUE);
 		optionalBoolean(auth, REQUIRE_EXP, "auth.requireExp", true);
 		optionalLong(auth, MAX_TOKEN_LIFETIME, "auth.maxTokenLifetime", 1, Long.MAX_VALUE);

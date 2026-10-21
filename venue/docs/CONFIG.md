@@ -925,6 +925,48 @@ check or, for a `did:web` subject, an outbound fetch (#539).
 }
 ```
 
+## Authentication method implementations (`auth.methods`)
+
+An explicit `auth.methods` object selects trusted authentication implementations
+from installed adapters. For example, to accept existing key and UCAN bearers:
+
+```json
+{
+  "auth": {
+    "methods": {
+      "key": { "adapter": "auth", "implementation": "keyJwt" },
+      "ucan": { "adapter": "auth", "implementation": "ucanBearer" }
+    }
+  }
+}
+```
+
+The built-in `auth` adapter also contributes `providerToken` for the `oidc`
+method. Its existing provider configuration remains under `auth.oauth` during
+this compatibility phase. Custom adapters own their protocol settings under
+`adapters.<name>` and implement `AuthenticationMethods`; a public operation
+asset cannot register a verifier. Omit `implementation` only for an adapter
+contributing exactly one implementation. References never load or enable code.
+
+The explicit object is the whole selection: `{}` selects no methods. Omitting
+`auth.methods` preserves existing defaults, including legacy venue JWTs.
+**Any explicit selection rejects those legacy JWTs**, whose originating login
+method is unknown; existing browser-login JWTs cannot satisfy a method allowlist.
+This setting does not change public/anonymous access, admission or capabilities.
+
+Invalid shapes, unknown adapters/selectors and ambiguous references fail startup.
+Host-installed adapters may be supplied in the pre-start hook. Disabling or
+removing an adapter immediately withdraws its verifiers; enabling it restores
+valid references. Verifications overlapping an adapter registry/configuration
+change are rejected and may be retried. Successful reconfiguration invalidates
+in-flight verification; rejected configuration leaves the old settings intact.
+Bindings themselves are startup configuration, with no separate runtime registry.
+
+`VenueAuthenticator.verify(methodId, input)` accepts transient Convex values
+for custom methods. Automatic HTTP bearer classification still selects `key`,
+`ucan` or `oidc`; custom transports choose a method explicitly. The extension
+does not yet add new ceremonies, assurance policy or revocable sessions.
+
 ## Bearer expiry (`auth.requireExp`, `auth.maxTokenLifetime`)
 
 ```json

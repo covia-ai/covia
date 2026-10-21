@@ -157,14 +157,22 @@ explicit allow-list and defaults to publishing nothing; the helper
 private endpoints, allow-lists, and other operator-private values must not
 appear there.
 
-Authentication method contributions are planned in [AUTH.md §3.1](AUTH.md#31-grid-native-data-and-operations).
+Adapters can implement `covia.venue.auth.AuthenticationMethods` to contribute
+named trusted verifiers (`Map<AString, Verifier>`). Each verifier receives the
+selected venue method id and transient `ACell` input, returns an `AuthResult`
+for that method, or throws `AuthException`. Declarations must be immutable and
+stable for the installed adapter instance; use replacement to change them.
+Configuration hooks validate before changing verifier behaviour, as for other
+adapter settings. See [AUTH.md §3.1](AUTH.md#31-grid-native-data-and-operations).
 Their protocol settings belong under the owning adapter's existing configuration,
 and their availability follows this lifecycle. `auth.methods` binds venue method
 ids to trusted adapter implementations, with a local implementation selector
 when needed. A binding cannot load or enable an adapter. Core auth also keeps
 shared policy and sessions; implementation lifecycle remains adapter-owned.
-The extension is not yet implemented. Public operation assets alone cannot
-register a trusted authentication verifier.
+Public operation assets alone cannot register a trusted authentication verifier.
+Verification runs outside the engine lifecycle monitor. A successful result
+is rejected if the adapter registry/configuration revision changed while it
+was being verified, including disable/re-enable of the same instance.
 
 ## Public catalog and introspection
 

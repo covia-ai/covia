@@ -523,6 +523,7 @@ public class Engine {
 				}
 			}
 			checkLaunchCancellation();
+			new covia.venue.auth.AuthMethods(this).validate();
 			jobs().recoverJobs();
 			if (getAdapter("agent") instanceof AgentAdapter agents) agents.wakeAgentsWithWork();
 			if (getAdapter("hitl") instanceof covia.adapter.HITLAdapter hitl) hitl.rearmExpiries();
@@ -585,6 +586,9 @@ public class Engine {
 			this.contentStorage.initialise();
 
 			bootstrapUsers();
+			// Authentication also serves manually assembled engines without a
+			// public operation catalogue. Its availability follows normal lifecycle.
+			registerAdapter(new AuthAdapter());
 			startPersistenceSweep();
 			lifecycle = Lifecycle.PREPARED;
 			return this;
@@ -1124,7 +1128,7 @@ public class Engine {
 		venue.registerAdapter(new AgentAdapter());
 		venue.registerAdapter(new SecretAdapter());
 		venue.registerAdapter(new covia.adapter.SchedulerAdapter());
-		venue.registerAdapter(new AuthAdapter());
+		if (venue.getRegisteredAdapter("auth") == null) venue.registerAdapter(new AuthAdapter());
 		venue.registerAdapter(new UserAdapter());
 		venue.registerAdapter(new UCANAdapter());
 		venue.registerAdapter(new DLFSAdapter());
@@ -1306,6 +1310,7 @@ public class Engine {
 		boolean previousActive = previous != null && adapters.get(name) == previous;
 		java.util.List<String> previousOrder = java.util.List.copyOf(adapterRegistrationOrder);
 		if (adapter.engine == null) adapter.install(this);
+		new covia.venue.auth.AuthMethods(this).validateAdapter(adapter);
 		if (catalogPublished) {
 			if (previous == null) {
 				VenueBootstrapMaterializer.materialiseAdapter(this, adapter);
@@ -1444,6 +1449,8 @@ public class Engine {
 			throw new IllegalArgumentException("Adapter '" + name + "' rejected the configuration");
 		}
 		runtimeAdapterConfig.put(name, cfg);
+		// Authentication finishing under the previous configuration must retry.
+		adapterRegistryVersion.incrementAndGet();
 		// The adapter's published facts (AAdapter.info) follow its effective config.
 		if (catalogPublished && adapters.containsKey(name)) {
 			VenueBootstrapMaterializer.materialiseAdapterInfo(this, adapter);

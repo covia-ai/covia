@@ -96,6 +96,7 @@ public final class VenueAuthenticator {
 	private final Set<String> acceptedAudienceStrings;
 	private final Set<AString> acceptedAudiences;
 	private final Engine engine;
+	private final AuthMethods methods;
 	/** Bearer credentials must expire ({@code auth.requireExp}); a cap on how far ahead, 0 = none ({@code auth.maxTokenLifetime}). */
 	private final boolean requireExp;
 	private final long maxLifetimeSeconds;
@@ -134,6 +135,7 @@ public final class VenueAuthenticator {
 	VenueAuthenticator(Engine engine, Map<String, OAuthConfig> providers) {
 		if (engine == null) throw new IllegalArgumentException("engine is required");
 		this.engine = engine;
+		this.methods = new AuthMethods(engine);
 		this.venueKey = engine.getAccountKey();
 		this.venueDID = engine.getDIDString();
 		this.venueAuth = engine.getAuth();
@@ -322,6 +324,51 @@ public final class VenueAuthenticator {
 	 * @throws AuthException if the credential is not accepted
 	 */
 	public AuthResult verify(AString token) {
+		JWT parsed = parseCredential(token);
+		AString method = methodFor(parsed);
+		return method == null ? methods.verifyLegacy(token) : verify(method, token);
+	}
+
+	private AString methodFor(JWT parsed) {
+		AMap<AString, ACell> claims = parsed.getClaims();
+		if (claims.containsKey(UCAN.ATT)) return UCAN_METHOD;
+		if ("RS256".equals(parsed.getAlgorithm())) return OIDC;
+		if (venueDID.equals(RT.ensureString(claims.get(ISS)))) return null;
+		if (RT.ensureString(claims.get(SUB)) != null) return KEY;
+		throw new AuthException(TOKEN_REJECTED_PREFIX + Reason.UNRECOGNISED
+			+ printable(parsed.getAlgorithm()) + Reason.UNRECOGNISED_HINT);
+	}
+
+	/** Verify transient method-owned Convex input without HTTP or a recorded job. */
+	public AuthResult verify(AString method, ACell input) {
+		return methods.verify(method, input);
+	}
+
+	/** Validate explicit bindings once all host adapters have been installed. */
+	public void validateMethods() { methods.validate(); }
+
+	/** Trusted built-in adapter contributions; no new cryptographic implementation. */
+	public Map<AString, AuthenticationMethods.Verifier> builtInMethods() {
+		return Map.of(KEY_JWT, builtIn(KEY), UCAN_BEARER, builtIn(UCAN_METHOD),
+			PROVIDER_TOKEN, builtIn(OIDC));
+	}
+
+	private AuthenticationMethods.Verifier builtIn(AString origin) {
+		return (method, input) -> {
+			AuthResult result = verifyOriginal(input, origin);
+			AuthResult.Authentication event = result.authentication();
+			return new AuthResult(result.userDID(), result.authenticatedIdentity(), result.credential(),
+				new AuthResult.Authentication(method, event.binding(), event.authenticatedAt(),
+					event.properties(), event.details()), result.proof(), result.sessionId());
+		};
+	}
+
+	/** Trusted compatibility verifier; the dispatch layer controls its availability. */
+	public AuthResult verifyLegacyCredential(ACell input) {
+		return verifyOriginal(input, null);
+	}
+
+	private static JWT parseCredential(AString token) {
 		if (token == null || token.toString().isBlank()) {
 			throw new AuthException("Authentication required");
 		}
@@ -329,26 +376,30 @@ public final class VenueAuthenticator {
 		if (parsed == null) throw new AuthException(TOKEN_REJECTED_PREFIX + Reason.UNPARSEABLE);
 		AMap<AString, ACell> claims = parsed.getClaims();
 		if (claims == null) throw new AuthException(TOKEN_REJECTED_PREFIX + Reason.MISSING_CLAIMS);
+		return parsed;
+	}
+
+	private AuthResult verifyOriginal(ACell input, AString origin) {
+		AString token = RT.ensureString(input);
+		JWT parsed = parseCredential(token);
+		AMap<AString, ACell> claims = parsed.getClaims();
+		if (!java.util.Objects.equals(origin, methodFor(parsed))) throw new AuthException(AuthMethods.INVALID_RESULT);
 
 		String prefix;
 		Verdict verdict;
 		try {
-			AString iss = RT.ensureString(claims.get(ISS));
-			if (claims.containsKey(UCAN.ATT)) {
+			if (UCAN_METHOD.equals(origin)) {
 				prefix = UCAN_REJECTED_PREFIX;
 				verdict = verifyUCAN(token);
-			} else if ("RS256".equals(parsed.getAlgorithm())) {
+			} else if (OIDC.equals(origin)) {
 				prefix = PROVIDER_TOKEN_REJECTED_PREFIX;
 				verdict = verifyExternalProvider(parsed, claims);
-			} else if (venueDID.equals(iss)) {
+			} else if (origin == null) {
 				prefix = VENUE_TOKEN_REJECTED_PREFIX;
 				verdict = verifyVenueSigned(token);
-			} else if (RT.ensureString(claims.get(SUB)) != null) {
+			} else {
 				prefix = SELF_ISSUED_REJECTED_PREFIX;
 				verdict = verifySelfIssued(token, parsed, claims);
-			} else {
-				throw new AuthException(TOKEN_REJECTED_PREFIX + Reason.UNRECOGNISED
-					+ printable(parsed.getAlgorithm()) + Reason.UNRECOGNISED_HINT);
 			}
 		} catch (AuthException e) {
 			throw e;

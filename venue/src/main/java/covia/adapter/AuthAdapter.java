@@ -1,6 +1,7 @@
 package covia.adapter;
 
 import java.util.concurrent.CompletableFuture;
+import java.util.Map;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -9,15 +10,29 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import covia.api.Fields;
 import covia.venue.RequestContext;
+import covia.venue.auth.AuthenticationMethods;
+import covia.venue.auth.AuthResult;
+import covia.venue.auth.VenueAuthenticator;
 
 /**
- * Adapter for authentication-related introspection.
+ * Built-in authentication implementations and identity introspection.
  *
  * <p>{@code auth:whoami} — returns the caller DID as resolved by the venue's
  * auth middleware. Useful for diagnostics and for tests that need to verify
  * which identity the venue authenticated a request as.</p>
  */
-public class AuthAdapter extends AAdapter {
+public class AuthAdapter extends AAdapter implements AuthenticationMethods {
+	private VenueAuthenticator verifier;
+	private Map<AString, Verifier> methods = Map.of();
+
+	/** Built-in verification stays in the existing venue authentication service. */
+	protected VenueAuthenticator createAuthenticator() { return new VenueAuthenticator(engine); }
+
+	@Override
+	public Map<AString, Verifier> authenticationMethods() { return methods; }
+
+	/** Legacy venue JWTs have unknown origin and are not a named method. */
+	public AuthResult verifyLegacyCredential(ACell input) { return verifier.verifyLegacyCredential(input); }
 
 	private static final AString K_AUTHENTICATED = Strings.intern("authenticated");
 	private static final AString K_INTERNAL = Strings.intern("internal");
@@ -36,6 +51,8 @@ public class AuthAdapter extends AAdapter {
 
 	@Override
 	protected void installAssets() {
+		verifier = createAuthenticator();
+		methods = verifier.builtInMethods();
 		// The adapter's own skill: v/skills/auth lives and dies with this adapter.
 		installSkill("auth/auth", "/skills/auth.json");
 		installSkill("root/auth", "/skills/auth.json");
