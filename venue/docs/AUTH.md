@@ -52,7 +52,8 @@ The implementation is further along than #297/#296 suggest:
 |-------|-------|-------|
 | Single verification seam | `VenueAuthenticator.verify` | Four credential classes: UCAN bearer, self-issued EdDSA, venue-signed session JWT, external provider RS256 |
 | Common result (Phase 1) | `AuthResult`, `VenueAuthenticator.verify` / `bindResult` | Neutral identity, credential and event records with typed provenance; existing acceptance unchanged, unknown evidence absent |
-| Adapter method bindings (Phase 2 subset) | `AuthenticationMethods`, `AuthMethods`, `auth.methods` | Explicit resolution, adapter lifecycle checks, transient `ACell` verification; evidence policy and new ceremonies remain pending |
+| Adapter method bindings (Phase 2 subset) | `AuthenticationMethods`, `AuthMethods`, `auth.methods` | Explicit resolution, adapter lifecycle checks, transient `ACell` verification; new ceremonies remain pending |
+| Evidence evaluation (Phase 2 subset) | `EvidencePolicy.allows(result, now)` | Method-independent requirements on a trusted result; policy configuration, trust mappings and action enforcement remain pending (§9.1) |
 | Named-user key registry (#296) | `Auth.addAuthenticationKey(s)` / `revokeAuthenticationKey` | Active/revoked tombstones, one-subject-per-key, no silent reactivation, last-active-key guard (`allowLast` for venue recovery) |
 | Named-user self-issued login (#296) | `VenueAuthenticator` self-issued verification | `sub` = local `did:web:…:u:<id>`, requires `iss == sub`, record DID match, **active** registered key, audience + temporal bounds |
 | DID document publication (#296) | `UserAPI.getUserDIDDocument` | Active user-held keys published under `verificationMethod` + `authentication`, controller = user DID |
@@ -568,7 +569,7 @@ not shipped implementations or configuration):
     },
     "sessions": { "enabled": true },
     "policy": {
-      "default": { "allowed": ["key", "ucan", "webauthn"] }
+      "default": { "allowedMethods": ["key", "ucan", "webauthn"] }
     }
   }
 }
@@ -581,15 +582,17 @@ merely because they are installed. Sensitive policies
 are enabled with the enforcement phase, after an installed method can prove
 their requirements. For example, `policy.enrolment` may require `strong` plus
 `maxAuthenticationAgeSeconds:900`; a machine-oriented surface may instead
-require `requiredProperties:["freshKeyPossession"]` with `maxProofAgeSeconds`.
+require `requiredProofProperties:["freshKeyPossession"]` with `maxProofAgeSeconds`.
 These are separate requirements. `requiredProperties` names verified facts
 from `authentication.properties`, such as `mfa`, `phishingResistant`,
 `hardwareProtected` or `userVerified`. `freshKeyPossession` specifically requires
 request-bound `proof` and its age check; it is never a persisted session fact.
-Unknown properties fail validation.
+The evaluator matches exact property names without a central method/property
+registry. Future configuration validation must check declared attainable evidence;
+at evaluation time, a property not established by the verifier always fails.
 The operator must have an attainable recovery/enrolment path
 before enabling them; a plain key JWT cannot silently satisfy either freshness
-requirement. The `allowed` list names originating methods, never `session`.
+requirement. The `allowedMethods` list names originating methods, never `session`.
 
 Rules:
 
@@ -623,10 +626,10 @@ Rules:
   permanent logout revoke those sessions as well. `auth.sessions.enabled:false`
   blocks session issuance and acceptance, including legacy session JWTs during
   migration. The session service is not an originating login method or a way
-  to bypass a method's `allowed` policy.
+  to bypass a method's `allowedMethods` policy.
 - **Fail closed at startup**: unknown method names, malformed provider
   blocks, non-HTTPS/unsafe redirect origins, and impossible policy
-  (a policy whose `allowed` methods cannot reach its
+  (a policy whose `allowedMethods` cannot reach its
   `minimumAssurance`) are configuration errors, not warnings.
   The same validation applies to proposed adapter reconfiguration. Runtime
   disable/unload still withdraws the method immediately: a policy referring to
@@ -646,7 +649,7 @@ Rules:
   means "surfaces the operator designates admin-grade", never a
   role held by users.
 
-**Assurance profiles.** Retain three local names for policy convenience, with
+**Assurance profiles (future convenience only).** Three proposed local names, with
 no claimed equivalence to NIST AALs or OpenID `phr`/`phrh`. A method name or
 signature algorithm alone does not establish a level above `standard`.
 
@@ -729,7 +732,7 @@ nothing else.
 
 ## 9. Assurance policy enforcement
 
-One Engine-owned seam: `engine.requireAssurance(ctx, policyName)` —
+Planned enforcement seam: `engine.requireAssurance(ctx, policyName)` —
 resolves the request's originating method, assurance, authentication time,
 required properties and any fresh possession proof against the named policy.
 Protected venue surfaces (key enrolment, user admin,
@@ -764,7 +767,7 @@ application routes.
   session lineage without exposing either token. A revoked session cannot
   be upgraded by a late callback; a new login is a separate transaction.
 - `maxAuthenticationAgeSeconds` uses verified `authentication.authenticatedAt`;
-  missing, future beyond allowed skew or stale evidence fails the freshness
+  missing, future or stale evidence fails the freshness
   check. Token renewal must not reset it. `maxProofAgeSeconds` checks
   `proof.verifiedAt` for a verified, replay-protected possession proof; it
   implies no human authentication.
@@ -780,6 +783,61 @@ by the application or embedder, which performs its own role check and
 then calls this same seam with its own policy name. The venue enforces the
 assurance a surface demands; who counts as an admin is never
 venue-auth state.
+
+### 9.1 Implemented evidence evaluator
+
+`EvidencePolicy` is a small immutable requirements record. Trusted host code calls
+`policy.allows(result, now)` with a freshly verified `AuthResult` and the current
+Unix time in seconds. It returns `null` or an owning constant's refusal reason.
+It has five fields:
+
+| Field | Requirement |
+|---|---|
+| `allowedMethods` | Originating method must be in the set. Null leaves origin unrestricted; an empty set permits none. Credential type and session id do not substitute for origin. |
+| `requiredProperties` | All named facts must be in `authentication.properties`. |
+| `requiredProofProperties` | All named facts must be in this request's `proof.properties`. |
+| `maxAuthenticationAgeSeconds` | Optional maximum age of verified `authentication.authenticatedAt`. |
+| `maxProofAgeSeconds` | Optional maximum age of this request's `proof.verifiedAt`. |
+
+All supplied requirements must pass. The two property sets are required, possibly
+empty, immutable Convex sets. Property names are exact non-blank strings; a custom
+method or agreed property needs no evaluator changes. Common meaning is a contract
+between the trusted verifier and the policy author. The checker does not inspect
+`details`, interpret protocol claims, infer assurance levels, combine unrelated
+events or copy facts between event and proof. The proposed profile names in §6
+are not implemented as ranks or built-in shortcuts.
+
+Age limits are non-negative; null means no age requirement. Zero requires the
+same Unix second. The age boundary is inclusive; missing, negative or future times
+fail a requested freshness check, with no implicit clock-skew allowance. Known
+credential expiry is exclusive and always checked (`now >= expiresAt` fails).
+Credential issuance/expiry never supplies an authentication or proof time. Direct
+methods need no credential record. Both property checks and age checks are explicit:
+proof properties alone do not impose an age limit, and proof age alone does not
+require a particular property.
+
+For example, a host can require MFA within 15 minutes and separate possession
+proof within 30 seconds:
+
+```java
+var policy = new EvidencePolicy(null,
+    Sets.of(Strings.create("mfa")),
+    Sets.of(Strings.create("freshKeyPossession")), 900L, 30L);
+String reason = policy.allows(verifiedResult, nowSeconds);
+```
+
+`toData()` projects the requirements directly to a Convex map with sets and integer
+seconds. It preserves absent versus empty method selection. This is data for the
+grid, not a new JSON policy language, job operation or evidence decoder.
+
+This is a pure evidence check. The trusted caller still owns current verifier,
+binding, session and revocation checks and must never reuse request proof on a
+different request. Missing results fail; an unrestricted policy can accept an
+identity-only result because it demands no additional evidence. Success neither
+establishes credential validity nor grants access. Admission and capability checks
+remain separate. `auth.policy` configuration, named profiles, Engine/context
+integration, step-up and sensitive-action gates remain future work, enabled only
+once their evidence and recovery paths are attainable.
 
 ## 10. Phasing
 

@@ -23,6 +23,10 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Added
 
+- Method-independent `EvidencePolicy` checks trusted authentication results against
+  originating methods, separate event/proof properties and freshness limits,
+  returning a refusal reason or `null`. Requirements project to immutable Convex
+  data. Sensitive-action enforcement and policy configuration remain pending (#297).
 - Adapter-backed authentication bindings (`auth.methods`) select trusted
   implementations through `AuthenticationMethods`, with direct Convex input,
   startup validation and rejection of stale in-flight verification after

@@ -87,6 +87,12 @@ class AuthResultTest {
 		assertNull(result.credential().issuedAt(), "iat has no existing validation policy");
 		assertNull(result.proof());
 		assertNull(result.sessionId());
+		assertEquals(EvidencePolicy.MISSING_PROPERTIES,
+			new EvidencePolicy(null, Sets.of(Strings.create("mfa")), Sets.empty(), null, null).allows(result, now));
+		assertEquals(EvidencePolicy.AUTHENTICATION_NOT_FRESH,
+			new EvidencePolicy(null, Sets.empty(), Sets.empty(), 900L, null).allows(result, now));
+		assertEquals(EvidencePolicy.PROOF_NOT_FRESH,
+			new EvidencePolicy(null, Sets.empty(), Sets.empty(), null, 60L).allows(result, now));
 	}
 
 	@Test
