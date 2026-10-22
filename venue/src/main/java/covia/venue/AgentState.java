@@ -18,6 +18,7 @@ import convex.core.lang.RT;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.cursor.ALatticeCursor;
 import covia.api.Fields;
+import covia.adapter.agent.GoalTreeContext;
 
 /**
  * Cursor wrapper for a single agent's state within a user's lattice.
@@ -35,6 +36,7 @@ public class AgentState extends ALatticeComponent<ACell> {
 	public static final AString SUSPENSION_BY = Strings.intern("by");
 	public static final int MAX_SUSPEND_REASON_LENGTH = 512;
 	public static final String SUSPENDED_BY = "Suspended by %s";
+	public static final String INVALID_SESSION_FRAMES = "Session frames must be a vector";
 
 	// Record field keys
 	private static final AString K_TS       = Strings.intern("ts");
@@ -86,7 +88,7 @@ public class AgentState extends ALatticeComponent<ACell> {
 	private static final AString K_DESCRIPTION  = Strings.intern("description");
 	private static final AString K_CONVERSATION = Strings.intern("conversation");
 
-	// Turn record field keys (entries in session.frames[0].conversation, and
+	// Turn record field keys (entries in session root frame history, and
 	// in child frame conversations when the goal-tree adapter pushes them).
 	// See GOAL_TREE.md §Conversation Structure for the full spec.
 	public static final AString K_ROLE      = Strings.intern("role");
@@ -453,9 +455,7 @@ public class AgentState extends ALatticeComponent<ACell> {
 			Fields.UPDATED, created,
 			K_TURNS,   CVMLong.create(0),
 			K_PARTIES, (caller != null) ? Vectors.of(caller) : Vectors.empty());
-		AMap<AString, ACell> rootFrame = Maps.of(
-			K_DESCRIPTION,  Strings.EMPTY,
-			K_CONVERSATION, Vectors.empty());
+		AMap<AString, ACell> rootFrame = GoalTreeContext.createFrame("");
 		if (initialLoads != null && initialLoads.count() > 0) {
 			rootFrame = rootFrame.assoc(K_LOADS, initialLoads);
 		}
@@ -569,7 +569,7 @@ public class AgentState extends ALatticeComponent<ACell> {
 	/**
 	 * Atomically claims a session for a transition cycle: sets the
 	 * {@code inCycle} epoch, appends the cycle's input turns to
-	 * {@code frames[0].conversation} (bumping {@code meta.turns}), and drains
+	 * the root frame history (bumping {@code meta.turns}), and drains
 	 * the first {@code drainCount} entries of {@code session.pending} — all in
 	 * ONE CAS, so an envelope is removed from pending only in the write that
 	 * lands its user turn (crash between the two is impossible).
@@ -591,9 +591,12 @@ public class AgentState extends ALatticeComponent<ACell> {
 				? (Index<Blob, ACell>) idx : Index.none();
 			ACell sv = sessions.get(sid);
 			if (!(sv instanceof AMap)) return r;
-			AMap<AString, ACell> session = migrateLegacySessionLoads(
-				(AMap<AString, ACell>) sv);
-
+			AMap<AString, ACell> session = (AMap<AString, ACell>) sv;
+			if (session.containsKey(K_FRAMES)) {
+				AVector<ACell> frames = sessionFrames(session);
+				session = session.assoc(K_FRAMES, GoalTreeContext.migrateFrames(frames));
+			}
+			session = migrateLegacySessionLoads(session);
 			session = session.assoc(K_IN_CYCLE, epoch);
 			if (turns != null && turns.count() > 0) {
 				session = appendTurnsToRoot(session, turns);
@@ -619,13 +622,10 @@ public class AgentState extends ALatticeComponent<ACell> {
 		if (!session.containsKey(K_LOADS)) return session;
 		AMap<AString, ACell> legacy = (session.get(K_LOADS) instanceof AMap lm)
 			? (AMap<AString, ACell>) lm : Maps.empty();
-		AVector<ACell> frames = (session.get(K_FRAMES) instanceof AVector fv)
-			? (AVector<ACell>) fv : Vectors.empty();
+		AVector<ACell> frames = sessionFrames(session);
 		AMap<AString, ACell> root;
 		if (frames.isEmpty() || !(frames.get(0) instanceof AMap)) {
-			root = Maps.of(
-				K_DESCRIPTION, Strings.EMPTY,
-				K_CONVERSATION, Vectors.empty());
+			root = GoalTreeContext.createFrame("");
 			frames = Vectors.of(root);
 		} else {
 			root = (AMap<AString, ACell>) frames.get(0);
@@ -709,6 +709,14 @@ public class AgentState extends ALatticeComponent<ACell> {
 		return updateSessionFrames(sid, null, true, fn);
 	}
 
+	/** Storage-only migration of an idle, unchanged frame snapshot. The same
+	 * CAS checks idleness/snapshot and publishes all converted frames together. */
+	public boolean migrateSessionHistory(Blob sid, AVector<ACell> expectedFrames) {
+		if (expectedFrames == null) return false;
+		return updateQuiescentSessionFrames(sid, current ->
+			expectedFrames.equals(current) ? GoalTreeContext.migrateFrames(current) : null);
+	}
+
 	@SuppressWarnings("unchecked")
 	private boolean updateSessionFrames(Blob sid, ACell expectedEpoch,
 			boolean requireQuiescent, UnaryOperator<AVector<ACell>> fn) {
@@ -725,19 +733,25 @@ public class AgentState extends ALatticeComponent<ACell> {
 			if (expectedEpoch != null && !expectedEpoch.equals(session.get(K_IN_CYCLE))) {
 				return r;   // fence: this cycle no longer owns the session
 			}
-			AVector<ACell> frames = (session.get(K_FRAMES) instanceof AVector fv)
-				? (AVector<ACell>) fv : Vectors.empty();
+			AVector<ACell> frames = sessionFrames(session);
 			AVector<ACell> updatedFrames = fn.apply(frames);
 			if (updatedFrames == null || updatedFrames == frames) {
 				applied.set(updatedFrames != null);
 				return r;   // no change — skip the write (and the K_TS bump)
 			}
+			GoalTreeContext.validateFramesUpdate(frames, updatedFrames);
 			session = session.assoc(K_FRAMES, updatedFrames);
-			AVector<ACell> beforeRoot = rootConversation(frames);
-			AVector<ACell> afterRoot = rootConversation(updatedFrames);
+			// Compare retained suffixes for history frames. Compaction adds a
+			// summary, not a turn; migration must not count flattened archives again.
+			AVector<ACell> beforeRoot = rootHistory(frames);
+			AVector<ACell> afterRoot = rootHistory(updatedFrames);
 			if (afterRoot.count() > beforeRoot.count()) {
-				session = bumpTurnMeta(session,
-					(AVector<ACell>) afterRoot.slice(beforeRoot.count(), afterRoot.count()));
+				AVector<ACell> appended = Vectors.empty();
+				for (long i = beforeRoot.count(); i < afterRoot.count(); i++) {
+					ACell entry = afterRoot.get(i);
+					if (!GoalTreeContext.isSegment(entry)) appended = appended.conj(entry);
+				}
+				if (!appended.isEmpty()) session = bumpTurnMeta(session, appended);
 			}
 			applied.set(true);
 			return r.assoc(K_SESSIONS, sessions.assoc(sid, session));
@@ -796,7 +810,7 @@ public class AgentState extends ALatticeComponent<ACell> {
 	}
 
 	/**
-	 * Appends turns to the session's {@code frames[0].conversation} and bumps
+	 * Appends turns to the session's the root frame history and bumps
 	 * {@code meta.turns}. Shared by {@link #beginSessionCycle} and
 	 * {@link #mergeRunResult} so the two paths cannot drift. Defensive: mints
 	 * a root frame if the session predates frames. Pure — safe under CAS retry.
@@ -804,23 +818,15 @@ public class AgentState extends ALatticeComponent<ACell> {
 	@SuppressWarnings("unchecked")
 	private static AMap<AString, ACell> appendTurnsToRoot(AMap<AString, ACell> session,
 			AVector<ACell> turnsToAppend) {
-		AVector<ACell> frames = (session.get(K_FRAMES) instanceof AVector fv)
-			? (AVector<ACell>) fv : Vectors.empty();
+		AVector<ACell> frames = sessionFrames(session);
 		AMap<AString, ACell> rootFrame;
 		if (frames.count() == 0) {
-			rootFrame = Maps.of(
-				K_DESCRIPTION,  Strings.EMPTY,
-				K_CONVERSATION, Vectors.empty());
+			rootFrame = GoalTreeContext.createFrame("");
 			frames = Vectors.of(rootFrame);
 		} else {
 			rootFrame = (AMap<AString, ACell>) frames.get(0);
 		}
-		AVector<ACell> rootConv = (rootFrame.get(K_CONVERSATION) instanceof AVector cv)
-			? (AVector<ACell>) cv : Vectors.empty();
-		for (long i = 0; i < turnsToAppend.count(); i++) {
-			rootConv = rootConv.conj(turnsToAppend.get(i));
-		}
-		rootFrame = rootFrame.assoc(K_CONVERSATION, rootConv);
+		rootFrame = GoalTreeContext.appendTurns(rootFrame, turnsToAppend);
 		frames = frames.assoc(0, rootFrame);
 		session = session.assoc(K_FRAMES, frames);
 		return bumpTurnMeta(session, turnsToAppend);
@@ -845,15 +851,24 @@ public class AgentState extends ALatticeComponent<ACell> {
 		return session;
 	}
 
-	/** Root conversation or an empty vector for an absent/malformed root. */
+	/** Missing pre-frame state is supported; malformed state must never be reset. */
+	private static AVector<ACell> sessionFrames(AMap<AString, ACell> session) {
+		if (!session.containsKey(K_FRAMES)) return Vectors.empty();
+		AVector<ACell> frames = RT.ensureVector(session.get(K_FRAMES));
+		if (frames == null) throw new IllegalArgumentException(INVALID_SESSION_FRAMES);
+		return frames;
+	}
+
+	/** Comparable retained history; migration itself contributes no new turns. */
 	@SuppressWarnings("unchecked")
-	private static AVector<ACell> rootConversation(AVector<ACell> frames) {
+	private static AVector<ACell> rootHistory(AVector<ACell> frames) {
 		if (frames == null || frames.isEmpty() || !(frames.get(0) instanceof AMap root)) {
 			return Vectors.empty();
 		}
-		ACell conversation = ((AMap<AString, ACell>) root).get(K_CONVERSATION);
-		return (conversation instanceof AVector cv)
-			? (AVector<ACell>) cv : Vectors.empty();
+		AMap<AString, ACell> frame = (AMap<AString, ACell>) root;
+		AVector<ACell> conversation = GoalTreeContext.history(frame.containsKey(K_CONVERSATION)
+			? GoalTreeContext.migrateFrame(frame) : frame);
+		return conversation != null ? conversation : Vectors.empty();
 	}
 
 	/**
@@ -1529,7 +1544,7 @@ public class AgentState extends ALatticeComponent<ACell> {
 	 * <p>When {@code historySid != null}:
 	 * <ul>
 	 *   <li>If {@code turnsToAppend} is non-empty, turns are appended to
-	 *       {@code sessions[historySid].frames[0].conversation} and
+	 *       the root frame history of {@code sessions[historySid]} and
 	 *       {@code meta.turns} is bumped. (The root frame is minted lazily
 	 *       here if the session has no frames yet.)</li>
 	 *   <li>The first {@code presentedSessionPendingCount} entries of
@@ -1550,7 +1565,7 @@ public class AgentState extends ALatticeComponent<ACell> {
 	 * {@code frames} vector is replaced wholesale before any turn append —
 	 * the adapter owns its own frame-stack changes (subgoal pushes/pops,
 	 * tool turns, compactions). Any {@code turnsToAppend} are still applied
-	 * to {@code frames[0].conversation} on top, which is how concurrent
+	 * to the root frame history on top, which is how concurrent
 	 * intake (drained pending envelopes → user turns at root) co-exists
 	 * with adapter-owned stack emission.</p>
 	 *
@@ -1588,7 +1603,7 @@ public class AgentState extends ALatticeComponent<ACell> {
 				.assoc(K_TIMELINE, timeline.conj(timelineEntry))
 				.dissoc(K_ERROR);
 
-			// Atomic frames[0].conversation append + session.pending drain +
+			// Atomic root frame history append + session.pending drain +
 			// inCycle clear for the picked session.
 			// All touch the same session record so we fold them into one assoc.
 			boolean hasTurns = turnsToAppend != null && turnsToAppend.count() > 0;
@@ -1606,6 +1621,7 @@ public class AgentState extends ALatticeComponent<ACell> {
 					// turn append. Turn append below still lands on frames[0]
 					// so concurrent-intake user turns end up at root.
 					if (hasNewFrames) {
+						GoalTreeContext.validateFramesUpdate(sessionFrames(session), newFrames);
 						session = session.assoc(K_FRAMES, newFrames);
 					}
 

@@ -132,7 +132,9 @@ g/<agent>/
     <sid>/
       meta            — {parties, title?, created, updated, turns, tokens?}
       frames/0/
-        conversation  — vector of persisted turns and compacted segments
+        historyVersion — storage version (1)
+        history        — append-only turns and summary references
+        contextStart   — first position selected for model context
       pending         — messages queued for next transition (§5.5.2)
       c/              — session-scoped user scratch (the `c/` shorthand)
       summaries       — instruction → latest timestamped summary result (§5.1.2)
@@ -321,6 +323,13 @@ the saved result is already current.
 
 ### 5.2 Agent-safe retrospective operations
 
+This section describes the current operations. The common history foundation
+for [#597](https://github.com/covia-ai/covia/issues/597) is specified in
+[AGENT_CONTEXT.md §1.3](./AGENT_CONTEXT.md#13-append-only-history-and-active-context-597):
+append-only retained history, a separate active context selection, pure
+rendering and the remaining design for complete policy-aware navigation. Full execution replay and
+historical execution checkpoints are not required.
+
 | Op | Purpose |
 |----|---------|
 | `agent:sessions` | List bounded session metadata, newest first; owners pass `agentId`, the running agent may omit it |
@@ -477,7 +486,7 @@ output: ACell           — the response value (or null), appended to frames[0].
 
 If the return value is non-null, the framework appends it as the terminal turn in `frames[0].conversation`. A transition may also return `turns`: non-terminal assistant tool-call and tool-result messages that the framework inserts immediately before that terminal turn. This keeps one chronologically ordered audit transcript without making the framework understand provider-specific tool execution. For chat work, the return value also completes the chat Job. For task work, completion is **explicit**: the agent (or LLM tool loop) invokes `agent:complete_task` to finish; if no completion op was invoked during the transition, the task yields and stays in the queue.
 
-**Stored history and model context.** The session retains and replays the complete transcript: user input, assistant tool calls, tool results, durable failure diagnostics, and the final assistant response. Existing turns remain byte-identical and in order until explicit compaction or reset replaces them. Tool calls therefore stay paired with their results, and a later inference extends the previous provider-shaped prefix instead of rebuilding a shorter projection of it.
+**Stored history and model context.** The session retains and replays the complete transcript: user input, assistant tool calls, tool results, durable failure diagnostics, and the final assistant response. Existing history turns remain byte-identical and in order; compaction appends a summary and changes the active context selection. Tool calls therefore stay paired with their results, and a later inference extends the previous provider-shaped prefix instead of rebuilding a shorter projection of it.
 
 **State updates during a transition.** All routed by RequestContext scoped to `(agent, session, task?)`:
 

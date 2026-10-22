@@ -93,6 +93,7 @@ interface FrameStore {
 		if (frames == null || frames.isEmpty()) {
 			frames = Vectors.of((ACell) GoalTreeContext.createFrame(rootDescription));
 		}
+		frames = GoalTreeContext.migrateFrames(frames);
 		frames = GoalTreeContext.withRootLoads(frames,
 			ContextChain.sessionRootLoads(RT.getIn(input, Fields.SESSION)));
 		frames = appendCycleInputTurns(frames, messages, input, cycleTs, recordCaller);
@@ -289,7 +290,9 @@ interface FrameStore {
 		@Override
 		public boolean update(UnaryOperator<AVector<ACell>> fn) {
 			AVector<ACell> updated = fn.apply(frames);
-			if (updated != null) frames = updated;
+			if (updated == null) return false;
+			GoalTreeContext.validateFramesUpdate(frames, updated);
+			frames = updated;
 			return true;
 		}
 

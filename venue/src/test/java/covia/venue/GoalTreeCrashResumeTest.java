@@ -110,7 +110,7 @@ public class GoalTreeCrashResumeTest {
 	private static AVector<ACell> rootConversation(Engine engine, String agentId, Blob sid) {
 		AMap<AString, ACell> session = agent(engine, agentId).getSession(sid);
 		AVector<ACell> frames = (AVector<ACell>) session.get(AgentState.KEY_FRAMES);
-		return RT.ensureVector(RT.getIn(frames.get(0), "conversation"));
+		return covia.adapter.agent.GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0)));
 	}
 
 	private static boolean parkedInTool(Engine engine, String agentId, Blob sid) {

@@ -63,13 +63,14 @@ import covia.venue.RequestContext;
  * config {@code maxToolIterations}, default 30, overridable per agent via
  * {@code config.maxToolIterations}). The shared {@code compact} harness tool
  * replaces the visible prefix with assistant memory while retaining the exact
- * old vector beneath the archive record.</p>
+ * old vector through a backward history reference.</p>
  *
  * <h3>Conversation structure</h3>
  * <pre>
  * { "frames": [{
  *   "description": "Process incoming work",
- *   "conversation": [
+ *   "historyVersion": 1, "contextStart": 0,
+ *   "history": [
  *     { "role": "user",      "content": "Hello" },
  *     { "role": "assistant", "content": "Hi there!" }
  *   ]
@@ -291,17 +292,17 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		AVector<ACell> frames = spec.frames();
 		if (frames.isEmpty()) return spec;
 		AMap<AString, ACell> frame = (AMap<AString, ACell>) frames.get(0);
-		AVector<ACell> before = RT.ensureVector(frame.get(GoalTreeContext.K_CONVERSATION));
+		AVector<ACell> before = GoalTreeContext.activeConversation(frame);
 		if (before == null) before = Vectors.empty();
 		AMap<AString, ACell> observed = GoalTreeContext.applyObservations(frame,
 			ContextAssembler.observations(spec, loads),
 			convex.core.util.Utils.getCurrentTimestamp());
 		if (compacted) return spec.withFrames(frames.assoc(0, observed));
 
-		AVector<ACell> after = RT.ensureVector(observed.get(GoalTreeContext.K_CONVERSATION));
+		AVector<ACell> after = GoalTreeContext.activeConversation(observed);
 		AVector<ACell> appended = (after != null && after.count() > before.count())
 			? (AVector<ACell>) after.slice(before.count(), after.count()) : Vectors.empty();
-		AMap<AString, ACell> stateOnly = observed.assoc(GoalTreeContext.K_CONVERSATION, before);
+		AMap<AString, ACell> stateOnly = GoalTreeContext.observationState(frame, observed);
 		return spec.withFrames(frames.assoc(0, stateOnly))
 			.withToolLoop((AVector<ACell>) spec.toolLoop().concat(appended));
 	}
@@ -704,9 +705,11 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 
 	@SuppressWarnings("unchecked")
 	private static void compactRoot(ToolContext toolCtx, String summary) {
+		AMap<AString, ACell> expected = toolCtx.activeFrame;
 		if (!toolCtx.store.update(frames -> {
 			if (frames.isEmpty()) return frames;
 			AMap<AString, ACell> root = (AMap<AString, ACell>) frames.get(0);
+			if (!root.equals(expected)) return null;
 			return frames.assoc(0, GoalTreeContext.compactFrame(root, summary));
 		})) {
 			throw new JobFailedException("Session cycle was superseded while compacting conversation");

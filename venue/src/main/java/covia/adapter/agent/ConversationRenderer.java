@@ -20,9 +20,9 @@ import covia.venue.AgentState;
  *
  * <p>Both flat LLM agents and goal-tree agents persist the active conversation
  * in the same frame shape. This class owns the shared provider-facing view:
- * compacted segments become assistant memory messages, completed tool exchanges are
- * elided by default, and the current in-flight tool cycle remains structurally
- * intact. The durable frame is never mutated.</p>
+ * compacted segments become assistant memory messages and live tool exchanges
+ * remain intact. The separate retrospective projection filters tool exchanges
+ * and unfinished cycles. The durable frame is never mutated.</p>
  */
 public final class ConversationRenderer {
 
@@ -64,8 +64,7 @@ public final class ConversationRenderer {
 		if (archiveDepth < 0) {
 			throw new IllegalArgumentException("Archive depth must be non-negative");
 		}
-		AVector<ACell> conversation = (frame != null)
-			? RT.ensureVector(frame.get(GoalTreeContext.K_CONVERSATION)) : null;
+		AVector<ACell> conversation = GoalTreeContext.archivedConversation(frame);
 		if (conversation == null || conversation.isEmpty()) {
 			return new HistoricalView(Vectors.empty(), null, 0, 0, false);
 		}
@@ -209,9 +208,8 @@ public final class ConversationRenderer {
 		return renderFull(frame, Labels.BRACKET);
 	}
 
-	@SuppressWarnings("unchecked")
 	public static AVector<ACell> renderFull(AMap<AString, ACell> frame, AString dialect) {
-		AVector<ACell> conversation = (AVector<ACell>) frame.get(GoalTreeContext.K_CONVERSATION);
+		AVector<ACell> conversation = GoalTreeContext.activeConversation(frame);
 		if (conversation == null || conversation.count() == 0) return Vectors.empty();
 
 		AVector<ACell> messages = Vectors.empty();

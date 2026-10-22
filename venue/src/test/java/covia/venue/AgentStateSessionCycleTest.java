@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -24,6 +25,7 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.adapter.agent.GoalTreeContext;
 
 /**
  * Unit tests for the session cycle-epoch primitives (lattice-resident frames,
@@ -68,10 +70,80 @@ public class AgentStateSessionCycleTest {
 	private AVector<ACell> rootConversation() {
 		AMap<AString, ACell> session = agent.getSession(sid);
 		AVector<ACell> frames = (AVector<ACell>) session.get(AgentState.KEY_FRAMES);
-		return RT.ensureVector(RT.getIn(frames.get(0), "conversation"));
+		return covia.adapter.agent.GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0)));
 	}
 
 	// ========== beginSessionCycle ==========
+	private AVector<ACell> seedLegacyHistory() {
+		AMap<AString, ACell> old = Maps.of("description", "legacy", "conversation",
+			Vectors.of(GoalTreeContext.createSegment("summary", Vectors.of(turn("old"))), turn("live")));
+		AVector<ACell> frames = Vectors.of(old);
+		AMap<AString, ACell> session = agent.getSession(sid).assoc(Fields.FRAMES, frames);
+		agent.putRecord(agent.getRecord().assoc(AgentState.KEY_SESSIONS, agent.getSessions().assoc(sid, session)));
+		return frames;
+	}
+
+	@Test
+	public void migrationIsIdempotentAndRequiresIdleMatchingSnapshot() {
+		AVector<ACell> legacy = seedLegacyHistory();
+		ACell meta = agent.getSession(sid).get(Strings.intern("meta"));
+		assertFalse(agent.migrateSessionHistory(sid, Vectors.empty()));
+		assertTrue(agent.migrateSessionHistory(sid, legacy));
+		AVector<ACell> current = RT.ensureVector(agent.getSession(sid).get(Fields.FRAMES));
+		assertEquals(GoalTreeContext.activeConversation(RT.ensureMap(legacy.get(0))),
+			GoalTreeContext.archivedConversation(RT.ensureMap(current.get(0))));
+		assertEquals(meta, agent.getSession(sid).get(Strings.intern("meta")));
+		assertTrue(agent.migrateSessionHistory(sid, current));
+		assertFalse(agent.migrateSessionHistory(sid, legacy));
+		assertTrue(agent.beginSessionCycle(sid, EPOCH_A, null, 0));
+		assertFalse(agent.migrateSessionHistory(sid, current));
+	}
+
+	@Test
+	public void failedMigrationPreservesEveryFramePendingInputAndEpoch() {
+		AVector<ACell> legacy = seedLegacyHistory();
+		AMap<AString, ACell> unsupported = Maps.of("historyVersion", 2L, "history", Vectors.empty(), "contextStart", 0L);
+		AVector<ACell> frames = legacy.conj(unsupported);
+		AMap<AString, ACell> before = agent.getSession(sid).assoc(Fields.FRAMES, frames)
+			.assoc(Strings.intern("pending"), Vectors.of(envelope("waiting")));
+		agent.putRecord(agent.getRecord().assoc(AgentState.KEY_SESSIONS, agent.getSessions().assoc(sid, before)));
+		assertThrows(IllegalArgumentException.class, () -> agent.migrateSessionHistory(sid, frames));
+		assertEquals(before, agent.getSession(sid));
+		assertThrows(IllegalArgumentException.class,
+			() -> agent.beginSessionCycle(sid, EPOCH_B, Vectors.of(turn("new")), 1));
+		assertEquals(before, agent.getSession(sid));
+	}
+
+	@Test
+	public void cycleMigrationAndCompactionCountOnlyNewTurnsAndRejectStaleReplacement() {
+		seedLegacyHistory();
+		assertTrue(agent.beginSessionCycle(sid, EPOCH_A, Vectors.of(turn("new")), 0));
+		assertEquals(CVMLong.ONE, RT.getIn(agent.getSession(sid), "meta", "turns"));
+		AVector<ACell> snapshot = RT.ensureVector(agent.getSession(sid).get(Fields.FRAMES));
+		assertTrue(agent.updateSessionFrames(sid, EPOCH_A, frames -> frames.assoc(0,
+			GoalTreeContext.compactFrame(GoalTreeContext.appendTurn(RT.ensureMap(frames.get(0)), turn("later")), "all"))));
+		assertEquals(CVMLong.create(2), RT.getIn(agent.getSession(sid), "meta", "turns"));
+		AMap<AString, ACell> saved = agent.getSession(sid);
+		assertEquals(GoalTreeContext.HISTORY_REWRITE, assertThrows(IllegalArgumentException.class,
+			() -> agent.updateSessionFrames(sid, EPOCH_A, frames -> snapshot)).getMessage());
+		assertEquals(saved, agent.getSession(sid));
+		assertThrows(IllegalArgumentException.class,
+			() -> agent.updateSessionFrames(sid, EPOCH_A, frames -> Vectors.empty()));
+		AMap<AString, ACell> record = agent.getRecord();
+		assertThrows(IllegalArgumentException.class,
+			() -> agent.mergeRunResult(null, null, null, Maps.empty(), sid, null, 0, snapshot, null));
+		assertEquals(record, agent.getRecord(), "stale cycle completion must not publish even its timeline entry");
+	}
+
+	@Test
+	public void malformedFramesCannotBeResetByMigrationOrAppend() {
+		AMap<AString, ACell> session = agent.getSession(sid).assoc(Fields.FRAMES, Strings.create("damaged"));
+		agent.putRecord(agent.getRecord().assoc(AgentState.KEY_SESSIONS, agent.getSessions().assoc(sid, session)));
+		assertEquals(AgentState.INVALID_SESSION_FRAMES, assertThrows(IllegalArgumentException.class,
+			() -> agent.migrateSessionHistory(sid, Vectors.empty())).getMessage());
+		assertThrows(IllegalArgumentException.class, () -> agent.appendSessionRootTurn(sid, null, turn("new")));
+		assertEquals(session, agent.getSession(sid));
+	}
 
 	@Test
 	public void cacheTtlMeasurementsAccumulateInSessionWithoutInventingMissingUsage() {

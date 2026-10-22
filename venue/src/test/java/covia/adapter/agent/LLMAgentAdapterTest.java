@@ -559,8 +559,7 @@ public class LLMAgentAdapterTest {
 
 		assertEquals("Provider state retained", RT.getIn(output, Fields.RESPONSE).toString(),
 			"the next inference must receive the opaque state with its assistant tool turn");
-		AVector<ACell> conversation = RT.ensureVector(RT.getIn(
-			output, Fields.FRAMES, CVMLong.ZERO, AgentState.KEY_CONVERSATION));
+		AVector<ACell> conversation = GoalTreeContext.activeConversation(RT.ensureMap(RT.getIn(output, Fields.FRAMES, CVMLong.ZERO)));
 		assertNotNull(RT.getIn(conversation.get(1), Fields.PROVIDER_STATE),
 			"the session frame is the durable source of continuation state");
 		assertNotNull(RT.getIn(conversation.get(1), "toolCalls"));
@@ -577,8 +576,7 @@ public class LLMAgentAdapterTest {
 
 		assertTrue(RT.getIn(output, Fields.RESPONSE).toString().contains("Compact verified"));
 		AVector<ACell> frames = RT.ensureVector(RT.getIn(output, Fields.FRAMES));
-		AVector<ACell> conversation = RT.ensureVector(
-			RT.getIn(frames.get(0), AgentState.KEY_CONVERSATION));
+		AVector<ACell> conversation = GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0)));
 		assertEquals(2, conversation.count(), "compacted prefix + later assistant reply");
 		assertTrue(GoalTreeContext.isSegment(conversation.get(0)));
 		assertEquals("assistant", RT.getIn(conversation.get(1), "role").toString());
@@ -661,8 +659,7 @@ public class LLMAgentAdapterTest {
 			.agent("issue-334-persist-agent");
 		AMap<AString, ACell> session = persistedAgent.getSession(Blob.fromHex(sid.toString()));
 		AVector<ACell> frames = RT.ensureVector(RT.getIn(session, Fields.FRAMES));
-		AVector<ACell> conversation = RT.ensureVector(
-			RT.getIn(frames.get(0), AgentState.KEY_CONVERSATION));
+		AVector<ACell> conversation = GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0)));
 		ACell persistedToolTurn = conversation.get(2);
 		assertEquals("tool", RT.getIn(persistedToolTurn, "role").toString());
 		assertEquals(signals,
@@ -1119,8 +1116,7 @@ public class LLMAgentAdapterTest {
 		session = agent.getSession(sid);
 		assertEquals(initialMessages, RT.getIn(session, Fields.FRAMES, CVMLong.ZERO,
 			GoalTreeContext.K_RENDERED_CONTEXT, Strings.intern("messages")));
-		assertFalse(RT.getIn(session, Fields.FRAMES, CVMLong.ZERO,
-			Strings.intern("conversation")).toString().contains("Beta catalog refresh"));
+		assertFalse(GoalTreeContext.activeConversation(RT.ensureMap(RT.getIn(session, Fields.FRAMES, CVMLong.ZERO))).toString().contains("Beta catalog refresh"));
 
 		// Beta was not in this session's immutable initial manifest. Loading it
 		// therefore appends a genuine tool addition; it must not rewrite tools.
@@ -1138,14 +1134,12 @@ public class LLMAgentAdapterTest {
 		String nextMessages = RT.ensureVector(next.get(Fields.MESSAGES)).toString();
 		assertTrue(nextMessages.contains("toolAddition") && nextMessages.contains("covia_write"),
 			"a later catalog tool must be appended as tool state: " + nextMessages);
-		long turnsAfterAmbientUpdate = RT.ensureVector(RT.getIn(session, Fields.FRAMES, CVMLong.ZERO,
-			Strings.intern("conversation"))).count();
+		long turnsAfterAmbientUpdate = GoalTreeContext.activeConversation(RT.ensureMap(RT.getIn(session, Fields.FRAMES, CVMLong.ZERO))).count();
 		engine.jobs().invokeOperation("v/ops/agent/update", Maps.of(
 			Fields.AGENT_ID, "skill-e2e-agent",
 			Fields.CONFIG, Maps.of("skillsets", Vectors.of(Strings.create("w/skills")))),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
-		assertEquals(turnsAfterAmbientUpdate, RT.ensureVector(RT.getIn(agent.getSession(sid),
-			Fields.FRAMES, CVMLong.ZERO, Strings.intern("conversation"))).count(),
+		assertEquals(turnsAfterAmbientUpdate, GoalTreeContext.activeConversation(RT.ensureMap(RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO))).count(),
 			"an equal config must not append ambient catalog state");
 	}
 
@@ -1491,8 +1485,7 @@ public class LLMAgentAdapterTest {
 		assertNotNull(sid);
 		AMap<AString, ACell> session = agent.getSession(Blob.fromHex(sid.toString()));
 		AVector<ACell> frames = RT.ensureVector(session.get(Fields.FRAMES));
-		AVector<ACell> conversation = RT.ensureVector(
-			RT.getIn(frames.get(0), AgentState.KEY_CONVERSATION));
+		AVector<ACell> conversation = GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0)));
 
 		long callTurn = -1;
 		for (long i = 0; i < conversation.count(); i++) {

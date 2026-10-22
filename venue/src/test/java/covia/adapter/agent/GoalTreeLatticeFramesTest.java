@@ -95,7 +95,7 @@ public class GoalTreeLatticeFramesTest {
 	}
 
 	private static AVector<ACell> conversation(ACell frame) {
-		AVector<ACell> conv = RT.ensureVector(RT.getIn(frame, "conversation"));
+		AVector<ACell> conv = covia.adapter.agent.GoalTreeContext.activeConversation(RT.ensureMap(frame));
 		return (conv != null) ? conv : Vectors.empty();
 	}
 

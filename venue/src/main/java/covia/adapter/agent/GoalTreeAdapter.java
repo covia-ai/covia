@@ -402,7 +402,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 				GoalTreeContext.describeTransitionInput(null, null, null)));
 		}
 		AMap<AString, ACell> activeFrame = (AMap<AString, ACell>) frames.get(0);
-		if (RT.ensureVector(activeFrame.get(GoalTreeContext.K_CONVERSATION)).isEmpty()) {
+		if (GoalTreeContext.activeConversation(activeFrame).isEmpty()) {
 			AMap<AString, ACell> goalMsg = GoalTreeContext.renderGoal(activeFrame);
 			if (goalMsg != null) activeFrame = GoalTreeContext.appendTurn(activeFrame, goalMsg);
 		}
@@ -1023,7 +1023,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 				"Frame stack no longer holds frame " + frameIndex + " — cycle superseded"), frames);
 		}
 		AMap<AString, ACell> activeFrame = (AMap<AString, ACell>) frames.get(frameIndex);
-		if (RT.ensureVector(activeFrame.get(GoalTreeContext.K_CONVERSATION)).isEmpty()) {
+		if (GoalTreeContext.activeConversation(activeFrame).isEmpty()) {
 			AMap<AString, ACell> goalMsg = GoalTreeContext.renderGoal(activeFrame);
 			if (goalMsg != null) {
 				activeFrame = GoalTreeContext.appendTurn(activeFrame, goalMsg);

@@ -29,6 +29,10 @@ import covia.venue.TestEngine;
  * (ToolPalette, Loads, attribution). AGENT_CONTEXT.md §3 as tests.
  */
 public class ContextAssemblerTest {
+	private static AMap<AString, ACell> legacyFrame(String description) {
+		return Maps.of(GoalTreeContext.K_DESCRIPTION, description, GoalTreeContext.K_CONVERSATION, Vectors.empty());
+	}
+
 
 	private final Engine engine = TestEngine.ENGINE;
 	private RequestContext ctx;
@@ -942,7 +946,7 @@ public class ContextAssemblerTest {
 			.get(Fields.PROVIDER_STATE),
 			"caller input must not be able to manufacture provider continuation state");
 
-		AMap<AString, ACell> frame = GoalTreeContext.createFrame("test")
+		AMap<AString, ACell> frame = legacyFrame("test")
 			.assoc(GoalTreeContext.K_CONVERSATION, Vectors.of(
 				Maps.of("role", "user", "content", "work"), assistant));
 		ConversationRenderer.HistoricalView historical = ConversationRenderer.historical(frame, 10, 10_000);
@@ -1063,6 +1067,72 @@ public class ContextAssemblerTest {
 		assertTrue(content(m.get(0)).startsWith("[Ancestor Context]"), content(m.get(0)));
 		assertTrue(content(m.get(0)).contains("root goal"));
 		assertEquals("child goal", content(m.get(1)));
+	}
+
+	@Test
+	public void testEquivalentActiveSelectionsPreserveCachedPromptAndAppendPrefix() {
+		AVector<ACell> original = Vectors.of(
+			Maps.of("role", "user", "content", "archived question"),
+			Maps.of("role", "assistant", "content", "archived answer"));
+		AVector<ACell> later = Vectors.of(
+			Maps.of("role", "user", "content", "later question"),
+			Maps.of("role", "assistant", "content", "later answer"));
+		AMap<AString, ACell> first = GoalTreeContext.createSegment("first memory", original);
+		AMap<AString, ACell> nested = GoalTreeContext.createSegment("current memory",
+			Vectors.<ACell>of(first).concat(later));
+		AVector<ACell> live = Vectors.of(
+			Maps.of("role", "user", "content", "current question", "ts", 1L),
+			Maps.of("role", "assistant", "toolCalls", Vectors.of(
+				Maps.of("id", "c1", "name", "context_load", "arguments", "{}"))),
+			Maps.of("role", "tool", "id", "c1", "name", "context_load",
+				"structuredContent", Maps.of("value", "current result")),
+			Maps.of("role", "assistant", "content", "current answer"));
+
+		// Convert real nested archives and compare their provider-visible inputs.
+		for (AString dialect : java.util.List.of(Labels.BRACKET, Labels.XML, Labels.HEADER)) {
+			AMap<AString, ACell> frame = legacyFrame("active")
+				.assoc(GoalTreeContext.K_CONVERSATION, Vectors.<ACell>of(nested).concat(live));
+			Spec base = new Spec(engine, ctx, null, Maps.of("systemPrompt", "fixed identity"),
+				null, null, 0, dialect,
+				Vectors.of((ACell) HarnessTools.DEF_CONTEXT_LOAD), null, null,
+				Vectors.of((ACell) frame), null, null, true, null, null, null, null,
+				java.time.LocalDate.of(2026, 1, 1));
+			ContextAssembler.Rendered cached = ContextAssembler.initialise(base);
+			AMap<AString, ACell> legacy = GoalTreeContext.withRenderedContext(frame, cached);
+			AMap<AString, ACell> equivalent = GoalTreeContext.migrateFrame(legacy);
+			AMap<AString, ACell> parent = frame.assoc(GoalTreeContext.K_DESCRIPTION, Strings.create("parent"));
+			AMap<AString, ACell> selectedParent = equivalent
+				.assoc(GoalTreeContext.K_DESCRIPTION, Strings.create("parent"));
+
+			for (boolean child : new boolean[] {false, true}) {
+				AVector<ACell> legacyFrames = child ? Vectors.of(parent, legacy) : Vectors.of(legacy);
+				AVector<ACell> selectedFrames = child ? Vectors.of(selectedParent, equivalent) : Vectors.of(equivalent);
+				assertEquals(GoalTreeContext.renderAncestors(legacyFrames, dialect),
+					GoalTreeContext.renderAncestors(selectedFrames, dialect));
+				assertEquals(ContextAssembler.assemble(base.withCachePrefix(false).withFrames(legacyFrames)).toL3Input(null),
+					ContextAssembler.assemble(base.withCachePrefix(false).withFrames(selectedFrames)).toL3Input(null),
+					"migration preserves uncached input as well as cached prefixes");
+				Prompt before = ContextAssembler.assemble(base.withFrames(legacyFrames));
+				Prompt after = ContextAssembler.assemble(base.withFrames(selectedFrames));
+				assertEquals(before.toL3Input(null).getEncoding(), after.toL3Input(null).getEncoding(),
+					"equivalent selection must preserve messages, tools and cache marks");
+				assertEquals(cached.messages(), after.messages().slice(0, cached.messages().count()));
+				assertEquals(cached.tools(), after.tools());
+				assertSame(legacy.get(GoalTreeContext.K_RENDERED_CONTEXT),
+					equivalent.get(GoalTreeContext.K_RENDERED_CONTEXT));
+
+				// Appending after migration preserves the previously committed prefix.
+				AMap<AString, ACell> appended = GoalTreeContext.appendTurn(equivalent,
+					Maps.of("role", "user", "content", "next question"));
+				Prompt next = ContextAssembler.assemble(base.withFrames(
+					selectedFrames.assoc(selectedFrames.count() - 1, appended)));
+				int prefixEnd = after.marks().get(ContextAssembler.Band.CONVERSATION);
+				assertEquals(after.messages().slice(0, prefixEnd), next.messages().slice(0, prefixEnd),
+					"appending must preserve the committed prefix, excluding inference-local notices");
+				assertEquals(after.tools(), next.tools());
+				assertEquals("next question", content(next.messages().get(prefixEnd)));
+			}
+		}
 	}
 
 	@Test

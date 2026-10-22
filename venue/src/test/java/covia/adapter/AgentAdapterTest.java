@@ -1176,8 +1176,7 @@ public class AgentAdapterTest {
 			assertNull(RT.getIn(inferences.get(1), Fields.TOOLS),
 				runtime + " emitted a per-inference tools delta");
 			ACell session = agent.getSessions().entrySet().iterator().next().getValue();
-			assertTrue(RT.getIn(session, Fields.FRAMES, CVMLong.ZERO,
-				Strings.intern("conversation")).toString().contains("toolAddition"),
+			assertTrue(GoalTreeContext.activeConversation(RT.ensureMap(RT.getIn(session, Fields.FRAMES, CVMLong.ZERO))).toString().contains("toolAddition"),
 				runtime + " did not persist appended tool state");
 			AMap<AString, ACell> loads = RT.ensureMap(RT.getIn(session, Fields.LOADS));
 			if (loads == null) loads = RT.ensureMap(
@@ -1336,7 +1335,7 @@ public class AgentAdapterTest {
 		AMap<AString, ACell> session = agent.getSession(
 			Blob.fromHex(RT.getIn(chat, Fields.SESSION_ID).toString()));
 		AVector<ACell> frames = RT.ensureVector(RT.getIn(session, Fields.FRAMES));
-		AVector<ACell> conversation = RT.ensureVector(RT.getIn(frames.get(0), "conversation"));
+		AVector<ACell> conversation = covia.adapter.agent.GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0)));
 		ACell last = conversation.get(conversation.count() - 1);
 		assertEquals("assistant", RT.getIn(last, "role").toString());
 		assertEquals(RT.getIn(second, Fields.REPLY, Fields.TOKENS), RT.getIn(last, Fields.TOKENS));
@@ -2331,7 +2330,7 @@ public class AgentAdapterTest {
 		AVector<ACell> frames = (AVector<ACell>) session.get(AgentState.KEY_FRAMES);
 		assertNotNull(frames, "Session must have frames");
 		AMap<AString, ACell> rootFrame = (AMap<AString, ACell>) frames.get(0);
-		AVector<ACell> history = (AVector<ACell>) rootFrame.get(AgentState.KEY_CONVERSATION);
+		AVector<ACell> history = GoalTreeContext.activeConversation(rootFrame);
 		assertNotNull(history, "Root frame must have a conversation vector");
 		assertEquals(2, history.count(),
 			"Chat cycle appends user turn (chat message) + assistant turn");
@@ -2380,8 +2379,7 @@ public class AgentAdapterTest {
 			.agent("tool-history-agent");
 		AMap<AString, ACell> session = agent.getSession(Blob.fromHex(sid.toString()));
 		AVector<ACell> frames = RT.ensureVector(session.get(Fields.FRAMES));
-		AVector<ACell> conversation = RT.ensureVector(
-			RT.getIn(frames.get(0), AgentState.KEY_CONVERSATION));
+		AVector<ACell> conversation = GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0)));
 		assertEquals(4, conversation.count(),
 			"user + assistant(tool call) + tool result + final assistant: "
 				+ convex.core.util.JSON.toString(conversation));
@@ -2414,8 +2412,7 @@ public class AgentAdapterTest {
 		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("caller-agent");
 		AVector<ACell> frames = (AVector<ACell>) agent.getSession(Blob.fromHex(sidHex.toString()))
 			.get(AgentState.KEY_FRAMES);
-		AVector<ACell> history = (AVector<ACell>) ((AMap<AString, ACell>) frames.get(0))
-			.get(AgentState.KEY_CONVERSATION);
+		AVector<ACell> history = GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0)));
 
 		AMap<AString, ACell> userTurn = (AMap<AString, ACell>) history.get(0);
 		assertEquals(ALICE_DID, userTurn.get(Fields.CALLER),
@@ -2462,7 +2459,7 @@ public class AgentAdapterTest {
 		AMap<AString, ACell> session = agent.getSession(sid);
 		AVector<ACell> frames = (AVector<ACell>) session.get(AgentState.KEY_FRAMES);
 		AMap<AString, ACell> rootFrame = (AMap<AString, ACell>) frames.get(0);
-		AVector<ACell> history = (AVector<ACell>) rootFrame.get(AgentState.KEY_CONVERSATION);
+		AVector<ACell> history = GoalTreeContext.activeConversation(rootFrame);
 		assertEquals(2, history.count(),
 			"Picked task + response cycle appends two turns (user, assistant)");
 
@@ -2517,7 +2514,7 @@ public class AgentAdapterTest {
 			AMap<AString, ACell> session = (AMap<AString, ACell>) entry.getValue();
 			AVector<ACell> frames = (AVector<ACell>) session.get(AgentState.KEY_FRAMES);
 			AMap<AString, ACell> rootFrame = (AMap<AString, ACell>) frames.get(0);
-			AVector<ACell> history = (AVector<ACell>) rootFrame.get(AgentState.KEY_CONVERSATION);
+			AVector<ACell> history = GoalTreeContext.activeConversation(rootFrame);
 			assertEquals(1, history.count(),
 				"failed inference retains the presented input for audit");
 			assertEquals(AgentState.ROLE_USER,
@@ -2555,7 +2552,7 @@ public class AgentAdapterTest {
 		AMap<AString, ACell> session = agent.getSession(Blob.fromHex(sidHex.toString()));
 		AVector<ACell> frames = (AVector<ACell>) session.get(AgentState.KEY_FRAMES);
 		AMap<AString, ACell> rootFrame = (AMap<AString, ACell>) frames.get(0);
-		AVector<ACell> history = (AVector<ACell>) rootFrame.get(AgentState.KEY_CONVERSATION);
+		AVector<ACell> history = GoalTreeContext.activeConversation(rootFrame);
 		assertEquals(4, history.count(),
 			"Two chat cycles: each appends user+assistant = 4 turns total");
 
@@ -2604,7 +2601,7 @@ public class AgentAdapterTest {
 		AMap<AString, ACell> root = (AMap<AString, ACell>) frames.get(0);
 		assertEquals(Strings.EMPTY, root.get(AgentState.KEY_DESCRIPTION),
 			"Root frame description starts empty");
-		AVector<ACell> conv = (AVector<ACell>) root.get(AgentState.KEY_CONVERSATION);
+		AVector<ACell> conv = GoalTreeContext.activeConversation(root);
 		assertNotNull(conv, "Root frame must carry a conversation vector");
 		assertEquals(0, conv.count(), "Fresh root frame conversation is empty");
 	}
@@ -2634,7 +2631,7 @@ public class AgentAdapterTest {
 		AVector<ACell> frames = (AVector<ACell>) session.get(AgentState.KEY_FRAMES);
 		assertEquals(1, frames.count(), "No subgoal — stack depth is 1");
 		AMap<AString, ACell> root = (AMap<AString, ACell>) frames.get(0);
-		AVector<ACell> conv = (AVector<ACell>) root.get(AgentState.KEY_CONVERSATION);
+		AVector<ACell> conv = GoalTreeContext.activeConversation(root);
 
 		assertEquals(2, conv.count(),
 			"Chat cycle appends user turn + assistant turn to root frame conversation");
@@ -2678,7 +2675,7 @@ public class AgentAdapterTest {
 
 		AVector<ACell> frames = (AVector<ACell>) session.get(AgentState.KEY_FRAMES);
 		AMap<AString, ACell> root = (AMap<AString, ACell>) frames.get(0);
-		AVector<ACell> conv = (AVector<ACell>) root.get(AgentState.KEY_CONVERSATION);
+		AVector<ACell> conv = GoalTreeContext.activeConversation(root);
 
 		assertEquals(4, conv.count(), "Two chat cycles append 4 turns total");
 		assertEquals(Strings.create("one"), RT.getIn(conv.get(0), AgentState.K_CONTENT));
@@ -3772,7 +3769,7 @@ public class AgentAdapterTest {
 		AMap<AString, ACell> session = agent.getSession(Blob.fromHex(sidHex.toString()));
 		AVector<ACell> frames = RT.ensureVector(RT.getIn(session, Fields.FRAMES));
 		assertNotNull(frames, "session must carry frames");
-		AVector<ACell> conversation = RT.ensureVector(RT.getIn(frames.get(0), "conversation"));
+		AVector<ACell> conversation = covia.adapter.agent.GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0)));
 		int failureTurns = 0;
 		for (long i = 0; i < conversation.count(); i++) {
 			ACell turn = conversation.get(i);
@@ -6544,8 +6541,7 @@ public class AgentAdapterTest {
 		Blob sid = Blob.fromHex(sidHex.toString());
 		AMap<AString, ACell> beforeRoot = RT.ensureMap(
 			RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO));
-		AVector<ACell> before = RT.ensureVector(
-			beforeRoot.get(AgentState.KEY_CONVERSATION));
+		AVector<ACell> before = GoalTreeContext.activeConversation(beforeRoot);
 		assertEquals(4, before.count());
 		assertNotNull(beforeRoot.get(Strings.intern("renderedContext")));
 
@@ -6558,12 +6554,11 @@ public class AgentAdapterTest {
 
 		AMap<AString, ACell> compactedRoot = RT.ensureMap(
 			RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO));
-		AVector<ACell> compacted = RT.ensureVector(
-			compactedRoot.get(AgentState.KEY_CONVERSATION));
+		AVector<ACell> compacted = GoalTreeContext.activeConversation(compactedRoot);
 		assertEquals(1, compacted.count());
 		AMap<AString, ACell> archive = RT.ensureMap(compacted.get(0));
 		assertTrue(GoalTreeContext.isSegment(archive));
-		assertEquals(before, RT.ensureVector(archive.get(Strings.intern("items"))),
+		assertEquals(before, RT.getIn(GoalTreeContext.archivedConversation(compactedRoot).get(0), "items"),
 			"the archive retains the exact replaced vector");
 		assertEquals(Strings.create(compact.getID().toHexString()), archive.get(Fields.JOB_ID));
 		assertEquals(ALICE_DID, archive.get(Fields.CALLER));
@@ -6589,8 +6584,7 @@ public class AgentAdapterTest {
 		engine.jobs().invokeOperation("v/ops/agent/chat",
 			Maps.of(Fields.AGENT_ID, "compact-session-agent", Fields.SESSION_ID, sidHex,
 				Fields.MESSAGE, "third"), alice).awaitResult(5000);
-		AVector<ACell> appended = RT.ensureVector(RT.getIn(
-			agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO, AgentState.KEY_CONVERSATION));
+		AVector<ACell> appended = GoalTreeContext.activeConversation(RT.ensureMap(RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO)));
 		assertEquals(3, appended.count(), "archive + new user + new assistant");
 		assertEquals(archive, appended.get(0), "future turns append after the sealed archive");
 	}
@@ -6613,8 +6607,7 @@ public class AgentAdapterTest {
 			.agent("reload-context-agent");
 		AMap<AString, ACell> beforeRoot = RT.ensureMap(
 			RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO));
-		AVector<ACell> conversation = RT.ensureVector(
-			beforeRoot.get(AgentState.KEY_CONVERSATION));
+		AVector<ACell> conversation = GoalTreeContext.activeConversation(beforeRoot);
 		assertTrue(RT.getIn(beforeRoot, "renderedContext", "messages", 0, "content")
 			.toString().contains("OLD_IDENTITY"));
 
@@ -6640,8 +6633,7 @@ public class AgentAdapterTest {
 			.toString().contains("NEW_IDENTITY"));
 		assertEquals("NEW_IDENTITY",
 			RT.getIn(rebuilt, "renderedContext", "sourceConfig", "systemPrompt").toString());
-		AVector<ACell> rebuiltConversation = RT.ensureVector(
-			rebuilt.get(AgentState.KEY_CONVERSATION));
+		AVector<ACell> rebuiltConversation = GoalTreeContext.activeConversation(rebuilt);
 		assertEquals(conversation, rebuiltConversation.slice(0, conversation.count()),
 			"config re-render keeps all prior session turns verbatim");
 
@@ -6653,7 +6645,7 @@ public class AgentAdapterTest {
 		AMap<AString, ACell> cleared = RT.ensureMap(
 			RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO));
 		assertNull(RT.getIn(cleared, "renderedContext"));
-		assertEquals(rebuiltConversation, cleared.get(AgentState.KEY_CONVERSATION),
+		assertEquals(rebuiltConversation, GoalTreeContext.activeConversation(cleared),
 			"reload changes only the materialised prefix");
 
 		engine.jobs().invokeOperation("v/ops/agent/chat",
@@ -7024,7 +7016,7 @@ public class AgentAdapterTest {
 		final AVector<ACell> stored = conversation;
 		assertTrue(agent.updateSessionFrames(sid, null, frames -> {
 			AMap<AString, ACell> root = (AMap<AString, ACell>) frames.get(0);
-			return frames.assoc(0, root.assoc(AgentState.KEY_CONVERSATION, stored));
+			return frames.assoc(0, GoalTreeContext.appendTurns(root, stored));
 		}));
 	}
 }

@@ -184,8 +184,8 @@ public class HITLAdapterTest {
 		assertEquals(Maps.of(Fields.INPUT, 0, Fields.AUTH, 0),
 			agents.agentInfo(ALICE, Strings.create("hitl-agent")).get(Fields.AWAITING));
 		TestEngine.awaitTimelineCount(agent, 1, 10000);
-		String conversation = RT.getIn(owner.agent("hitl-agent").getSession(sid),
-			Fields.FRAMES, CVMLong.ZERO, Strings.intern("conversation")).toString();
+		String conversation = covia.adapter.agent.GoalTreeContext.activeConversation(RT.ensureMap(
+			RT.getIn(owner.agent("hitl-agent").getSession(sid), Fields.FRAMES, CVMLong.ZERO))).toString();
 		assertTrue(conversation.contains(id.toString()) && conversation.contains("left"),
 			"the human answer must arrive in the asking session: " + conversation);
 	}
