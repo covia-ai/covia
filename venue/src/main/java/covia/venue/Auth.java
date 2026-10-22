@@ -29,9 +29,9 @@ import covia.venue.auth.LoginProviders;
  * Authentication and user management for a Covia venue.
  *
  * <p>Wraps a lattice cursor at the {@code :users} level and manages OAuth
- * login providers. Users are stored as maps keyed by user ID (e.g.
- * "alice_gmail_com") with fields like "did", "email", "name", "provider",
- * "updated".
+ * login providers. Users are maps keyed by stable local account ID, with
+ * core fields such as "did" and "updated". External-login details live in
+ * the method-owned "externalIdentity" payload; email/name are profile metadata.
  *
  * <h2>Config format</h2>
  * <pre>
@@ -51,7 +51,7 @@ import covia.venue.auth.LoginProviders;
  *                                     //   for a did:web venue)
  *   "oauth": {
  *     "google": { "clientId": "...", "clientSecret": "..." },
- *     "microsoft": { "clientId": "...", "clientSecret": "..." },
+ *     "microsoft": { "clientId": "...", "clientSecret": "...", "tenantId": "..." },
  *     "github": { "clientId": "...", "clientSecret": "..." }
  *   }
  * }

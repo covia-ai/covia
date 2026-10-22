@@ -1,7 +1,6 @@
 package covia.venue.auth;
 
 import java.nio.charset.StandardCharsets;
-import java.security.interfaces.RSAPublicKey;
 import java.time.Instant;
 import java.util.HashSet;
 import java.util.Map;
@@ -54,7 +53,6 @@ public final class VenueAuthenticator {
 
 	private static final AString SUB = Fields.SUB;
 	private static final AString KID = Fields.KID;
-	private static final AString EMAIL = Fields.EMAIL;
 	private static final AString ISS = Strings.intern("iss");
 	private static final AString AUD = Strings.intern("aud");
 	private static final AString EXP = Strings.intern("exp");
@@ -296,11 +294,8 @@ public final class VenueAuthenticator {
 		public static final String NO_PROVIDERS = "no external identity provider is configured on this venue";
 		public static final String MISSING_PROVIDER_KID = "missing kid header: a provider token names its signing key in kid";
 		public static final String NO_PROVIDER_FOR_KEY = "no configured identity provider publishes signing key ";
-		public static final String PROVIDER_SIGNATURE_FAILS = "signature does not verify against the key published by ";
-		public static final String PROVIDER_CLAIMS_MISMATCH = "token issuer or audience does not match provider ";
-		public static final String PROVIDER_KEYS_UNAVAILABLE = "could not fetch the signing keys of ";
-		public static final String NO_EMAIL_CLAIM = "provider token carries no email claim";
-		public static final String NO_USER_FOR_EMAIL = "no venue user is linked to ";
+		public static final String PROVIDER_CLAIMS_MISMATCH = "provider ID token validation failed for ";
+		public static final String NO_PROVIDER_BINDING = "no venue user is bound to this provider issuer and subject";
 
 		private Reason() {}
 	}
@@ -559,48 +554,27 @@ public final class VenueAuthenticator {
 			null, null);
 	}
 
-	/**
-	 * An RS256 ID token from a configured external provider, mapped to the
-	 * venue user linked to its email. The email is the caller's own (the
-	 * provider vouched for it), so "no venue user is linked" is theirs to hear.
-	 */
+	/** Provider credentials share the browser verifier and stable issuer/subject lookup. */
 	private Verdict verifyExternalProvider(JWT parsed, AMap<AString, ACell> claims) {
 		if (externalProviders == null) return Verdict.fail(Reason.NO_PROVIDERS);
 		String kid = parsed.getKeyID();
 		if (kid == null) return Verdict.fail(Reason.MISSING_PROVIDER_KID);
 		String reason = Reason.NO_PROVIDER_FOR_KEY + kid;
-		for (Map.Entry<String, OAuthConfig> e : externalProviders.entrySet()) {
-			String name = e.getKey();
-			OAuthConfig provider = e.getValue();
+		for (var entry : externalProviders.entrySet()) {
+			OAuthConfig provider = entry.getValue();
 			if (provider.jwksUri == null) continue;
 			try {
-				RSAPublicKey key = JWKSClient.getKey(provider.jwksUri, kid);
-				if (key == null) continue;
-				if (!parsed.verifyRS256(key)) {
-					reason = Reason.PROVIDER_SIGNATURE_FAILS + name;
-					continue;
-				}
-				if (!parsed.validateClaims(provider.issuer, provider.clientId)) {
-					reason = Reason.PROVIDER_CLAIMS_MISMATCH + name;
-					continue;
-				}
+				var verified = provider.validateIdToken(parsed.getRaw().toString(), null);
+				String subject = verified.getSubject().getValue();
+				AString did = LoginProviders.findIdentity(engine.getAuth(), provider.issuer, subject);
+				if (did == null) return Verdict.fail(Reason.NO_PROVIDER_BINDING);
+				engine.getVenueState().users().requireNotDeleted(did);
+				return Verdict.ok(Strings.create(subject), did, PROVIDER_TOKEN, expiryMetadata(claims), OIDC,
+					Maps.of(PROVIDER, entry.getKey(), ISS, provider.issuer, SUB, subject));
 			} catch (Exception ex) {
-				// Same rule: the caller learns which step failed, the log why.
-				log.debug("Provider {} key lookup failed", name, ex);
-				reason = Reason.PROVIDER_KEYS_UNAVAILABLE + name;
-				continue;
+				log.debug("Provider {} validation failed ({})", entry.getKey(), ex.getClass().getSimpleName());
+				reason = Reason.PROVIDER_CLAIMS_MISMATCH + entry.getKey();
 			}
-			AString email = RT.ensureString(claims.get(EMAIL));
-			if (email == null) return Verdict.fail(Reason.NO_EMAIL_CLAIM);
-			AString venueUserDID = findUserDIDByEmail(email);
-			if (venueUserDID == null) return Verdict.fail(Reason.NO_USER_FOR_EMAIL + email);
-			AString subject = RT.ensureString(claims.get(SUB));
-			// Only checked provenance; no raw claims, tokens or inferred assurance.
-			AMap<AString, ACell> details = Maps.of(PROVIDER, Strings.create(name));
-			if (provider.issuer != null) details = details.assoc(ISS, RT.ensureString(claims.get(ISS)));
-			if (subject != null) details = details.assoc(SUB, subject);
-			return Verdict.ok(subject != null ? subject : email, venueUserDID,
-				PROVIDER_TOKEN, expiryMetadata(claims), OIDC, details);
 		}
 		return Verdict.fail(reason);
 	}
@@ -618,7 +592,8 @@ public final class VenueAuthenticator {
 	/**
 	 * Conservative projection after the existing verifier's temporal checks.
 	 * Phase 1 does not change acceptance or round fractional provider expiry.
-	 * iat is not checked by existing verifiers and is deliberately not projected.
+	 * Provider iat is checked for token validity but deliberately not projected
+	 * as common event/issuance evidence during this consolidation.
 	 */
 	private static Long expiryMetadata(AMap<AString, ACell> claims) {
 		return claims.get(EXP) instanceof CVMLong exp ? exp.longValue() : null;
@@ -725,18 +700,5 @@ public final class VenueAuthenticator {
 
 	private static String printable(Object value) {
 		return (value == null) ? "none" : "\"" + value + "\"";
-	}
-
-	private AString findUserDIDByEmail(AString email) {
-		AMap<AString, AMap<AString, ACell>> users = venueAuth.getUsers();
-		if (users == null) return null;
-		for (var entry : users.entrySet()) {
-			AMap<AString, ACell> record = entry.getValue();
-			if (email.equals(record.get(EMAIL))) {
-				AString did = RT.ensureString(record.get(Fields.DID));
-				if (did != null) return did;
-			}
-		}
-		return null;
 	}
 }

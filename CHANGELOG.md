@@ -10,6 +10,12 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Migration
 
+- External login (#298): replace `auth.loginRedirectOrigins` with exact
+  `auth.loginRedirectUris`; configure Microsoft `tenantId`; use HTTPS except on
+  loopback. Frontend redirects now carry a single-use code exchanged with PKCE,
+  not a bearer. Legacy email-based accounts require explicit identity-link
+  confirmation; provider bearer lookup now requires an issuer/subject binding.
+
 - `SecretStore.deriveKey` is deprecated and reads only secrets written before
   key versions; pass `SecretStore.keys(keyPair)` to `store`, `storeIfAbsent` and
   `decrypt`. The `byte[]` `store` and `storeIfAbsent` overloads are removed.
@@ -17,6 +23,11 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   upgrade; configured secrets recover, as startup rewrites them.
 
 ### Security
+
+- External login uses browser-bound single-use state, S256 PKCE and verified
+  OIDC nonce; Nimbus validates provider tokens and manages JWKS. Invalid ID
+  tokens never fall back to user-info. New accounts retain a stable DID across
+  email changes, and matching emails never auto-link providers (#298).
 
 - Key and venue JWT verification rejects malformed supplied `exp`/`nbf` claims
   even when expiry is optional, and avoids clock-skew overflow on extreme

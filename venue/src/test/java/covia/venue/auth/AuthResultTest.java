@@ -84,7 +84,7 @@ class AuthResultTest {
 	private static void assertUnknownEvidence(AuthResult result) {
 		assertNull(result.authentication().authenticatedAt());
 		assertTrue(result.authentication().properties().isEmpty());
-		assertNull(result.credential().issuedAt(), "iat has no existing validation policy");
+		assertNull(result.credential().issuedAt(), "common issuance metadata remains conservative");
 		assertNull(result.proof());
 		assertNull(result.sessionId());
 		assertEquals(EvidencePolicy.MISSING_PROPERTIES,
@@ -310,7 +310,7 @@ class AuthResultTest {
 	}
 
 	@Test
-	void providerEvidenceIsBoundedAndIssuerIsUnknownWhenUnchecked() throws Exception {
+	void providerEvidenceUsesVerifiedIssuerAndSubject() throws Exception {
 		KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
 		generator.initialize(2048);
 		KeyPair rsa = generator.generateKeyPair();
@@ -330,13 +330,14 @@ class AuthResultTest {
 			String issuer = "https://provider.example";
 			AString email = Strings.create("auth-result@example.test");
 			engine.getAuth().putUser(Strings.create("result_provider"),
-				Maps.of(Fields.DID, did, Fields.EMAIL, email));
+				Maps.of(Fields.DID, did, Fields.EMAIL, email, LoginProviders.EXTERNAL_IDENTITY,
+					Maps.of("iss", issuer, "sub", "provider-subject")));
 			AMap<AString, ACell> payload = claims()
 				.assoc(Strings.intern("iss"), Strings.create(issuer))
 				.assoc(Strings.intern("aud"), Strings.create("client"))
 				.assoc(Fields.SUB, Strings.create("provider-subject"))
 				.assoc(Fields.EMAIL, email);
-			for (String expectedIssuer : new String[] {issuer, null}) {
+			for (String expectedIssuer : new String[] {issuer}) {
 				OAuthConfig config = new OAuthConfig("test", "client", "unused",
 					null, null, null, jwksUri, expectedIssuer, null, null);
 				engine.registerAdapter(new AuthAdapter() {
@@ -352,9 +353,9 @@ class AuthResultTest {
 				assertEquals(VenueAuthenticator.PROVIDER_TOKEN, result.credential().type());
 				AMap<AString, ACell> details = result.authentication().details();
 				assertEquals(Strings.create("test"), details.get(VenueAuthenticator.PROVIDER));
-				assertEquals(expectedIssuer == null ? null : Strings.create(issuer), details.get(UCAN.ISS));
+				assertEquals(Strings.create(issuer), details.get(UCAN.ISS));
 				assertEquals(Strings.create("provider-subject"), details.get(Fields.SUB));
-				assertEquals(expectedIssuer == null ? 2 : 3, details.count());
+				assertEquals(3, details.count());
 				assertUnknownEvidence(result);
 				assertEquals(did, verifier.authenticate(token));
 				assertFalse(result.toString().contains(token.toString()));
@@ -362,9 +363,10 @@ class AuthResultTest {
 				AuthResult fractional = verifier.verify(signRSA(
 					payload.assoc(UCAN.EXP, CVMDouble.create(expiry + 0.5)), rsa));
 				assertNull(fractional.credential().expiresAt());
-				AuthResult fallback = verifier.verify(signRSA(payload.dissoc(Fields.SUB), rsa));
-				assertEquals(email, fallback.authenticatedIdentity());
-				assertFalse(fallback.authentication().details().containsKey(Fields.SUB));
+				assertThrows(AuthException.class, () -> verifier.verify(signRSA(payload.dissoc(Fields.SUB), rsa)));
+				assertThrows(AuthException.class, () -> verifier.verify(signRSA(payload.assoc(Fields.SUB, Strings.create("unbound")), rsa)));
+				assertEquals(did, verifier.verify(signRSA(payload.dissoc(Fields.EMAIL), rsa)).userDID());
+
 			}
 		} finally {
 			server.stop(0);

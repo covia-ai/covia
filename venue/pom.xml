@@ -75,6 +75,13 @@
 	</build>
 
 	<dependencies>
+		<!-- Standard external-login protocol validation and PKCE. Convex remains
+		     the venue credential and lattice implementation. -->
+		<dependency>
+			<groupId>com.nimbusds</groupId>
+			<artifactId>oauth2-oidc-sdk</artifactId>
+			<version>11.38.2</version>
+		</dependency>
 		<!-- Covia deps -->
 		<dependency>
 			<groupId>ai.covia</groupId>

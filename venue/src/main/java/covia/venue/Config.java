@@ -291,8 +291,10 @@ public class Config {
 	public static final AString AUDIENCE = Strings.intern("audience");
 	/** Whether a bearer credential must carry an expiry ({@code auth.requireExp}, default true). */
 	public static final AString REQUIRE_EXP = Strings.intern("requireExp");
-	/** Origins a social login may redirect the session token to, besides the venue's own. */
+	/** Obsolete option recognised only to report its required migration. */
 	public static final AString LOGIN_REDIRECT_ORIGINS = Strings.intern("loginRedirectOrigins");
+	/** Exact frontend destinations for single-use login handoff codes. */
+	public static final AString LOGIN_REDIRECT_URIS = Strings.intern("loginRedirectUris");
 	/** Optional cap, in seconds, on how far ahead a bearer credential may expire ({@code auth.maxTokenLifetime}). */
 	public static final AString MAX_TOKEN_LIFETIME = Strings.intern("maxTokenLifetime");
 
@@ -744,7 +746,7 @@ public class Config {
 		if (auth == null) return;
 		validateUnknownFields(auth,
 			Set.of("tokenExpiry", "public", "audience", "acceptedAudiences", "oauth",
-				"requireExp", "maxTokenLifetime", "loginRedirectOrigins", "methods"),
+				"requireExp", "maxTokenLifetime", "loginRedirectOrigins", "loginRedirectUris", "methods"),
 			"auth", strict);
 		covia.venue.auth.AuthMethods.validateConfig(auth);
 		optionalLong(auth, TOKEN_EXPIRY, "auth.tokenExpiry", 1, Long.MAX_VALUE);
@@ -757,6 +759,10 @@ public class Config {
 		}
 		optionalStringVector(auth, ACCEPTED_AUDIENCES, "auth.acceptedAudiences");
 		optionalStringVector(auth, LOGIN_REDIRECT_ORIGINS, "auth.loginRedirectOrigins");
+		if (auth.containsKey(LOGIN_REDIRECT_ORIGINS)) {
+			throw malformed("auth.loginRedirectOrigins", "replace with exact destinations in auth.loginRedirectUris");
+		}
+		optionalStringVector(auth, LOGIN_REDIRECT_URIS, "auth.loginRedirectUris");
 
 		AMap<AString, ACell> publicConfig = optionalMap(auth, PUBLIC, "auth.public");
 		if (publicConfig != null) {
@@ -782,7 +788,8 @@ public class Config {
 				AMap<AString, ACell> providerConfig = optionalMap(
 					oauth, Strings.intern(provider), "auth.oauth." + provider);
 				if (providerConfig == null) continue;
-				validateUnknownFields(providerConfig, Set.of("clientId", "clientSecret"),
+				validateUnknownFields(providerConfig, provider.equals("microsoft")
+					? Set.of("clientId", "clientSecret", "tenantId") : Set.of("clientId", "clientSecret"),
 					"auth.oauth." + provider, strict);
 				AString clientId = optionalString(providerConfig, CLIENT_ID,
 					"auth.oauth." + provider + ".clientId");
@@ -791,6 +798,11 @@ public class Config {
 				if ((clientId == null) != (clientSecret == null)) {
 					throw malformed("auth.oauth." + provider,
 						"must provide both clientId and clientSecret");
+				}
+				if (provider.equals("microsoft") && clientId != null) {
+					AString tenant = optionalString(providerConfig, Strings.intern("tenantId"), "auth.oauth.microsoft.tenantId");
+					covia.venue.auth.OAuthConfig.microsoft(clientId.toString(), clientSecret.toString(),
+						getBaseUrl(), tenant == null ? null : tenant.toString());
 				}
 			}
 		}
@@ -1849,14 +1861,12 @@ public class Config {
 	}
 
 	/**
-	 * Origins a social login may redirect to with the session token, from
-	 * {@code auth.loginRedirectOrigins}; the venue's own {@code baseUrl} origin is
-	 * always allowed.
+	 * Exact destinations for a login handoff code, from {@code auth.loginRedirectUris}.
 	 * @return the configured array, or null if unset
 	 */
-	public AVector<ACell> getLoginRedirectOrigins() {
+	public AVector<ACell> getLoginRedirectUris() {
 		AMap<AString, ACell> authConfig = getAuthConfig();
-		return (authConfig != null) ? RT.ensureVector(authConfig.get(LOGIN_REDIRECT_ORIGINS)) : null;
+		return (authConfig != null) ? RT.ensureVector(authConfig.get(LOGIN_REDIRECT_URIS)) : null;
 	}
 
 	// ========== Protocol config accessors ==========

@@ -1302,6 +1302,8 @@ public class VenueServer {
 
 		if (!loginProviders.hasProviders()) return;
 
+        app.post("/auth/exchange", loginProviders::handleExchange);
+
         // Login route for any provider
         app.get("/auth/{provider}", loginProviders::handleLogin);
 

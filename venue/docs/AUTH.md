@@ -68,8 +68,8 @@ The implementation is further along than #297/#296 suggest:
 **Gaps this design closes:** per-method enable/disable and policy
 config; a common method result (identity, evidence and typed method details);
 an optional central session service with revocation; provider
-identity keyed by `(issuer, subject)` instead of email; account-linking
-rules; route-class assurance enforcement.
+account-linking/migration rules; route-class assurance enforcement. Basic
+issuer/subject binding is now implemented (§2.3).
 
 ### 2.1 Consolidation review (2026-10-22)
 
@@ -141,9 +141,64 @@ Convex 0.8.17 and current upstream `JWT.validateClaims` were checked before the
 fix. Reusable explicit-clock/skew `exp`/`nbf` validation is requested in
 [Convex #766](https://github.com/Convex-Dev/convex/issues/766), to replace existing
 local duplication rather than grow a new validator. External provider/browser
-login remains incomplete under #298, including provider validation, stable
-identity binding, callback transaction binding and safe credential delivery.
-Managed-session revocation and evidence-policy integration remain unimplemented.
+login was still incomplete at that audit; the subsequent hardening is recorded
+in §2.3. Managed-session revocation and evidence-policy integration remain
+unimplemented.
+
+### 2.3 External login consolidation (#298, 2026-10-22)
+
+The concrete login flow is hardened independently of managed-session or
+assurance design. Nimbus OAuth/OIDC SDK **11.38.2** supplies ID-token validation,
+JWKS key selection/cache/refresh/rate limiting, secure state/nonce generation and
+PKCE. Its sources were checked: the OIDC verifier covers required issuer,
+subject, audience, expiry, issuance time and requested nonce; the standard JWT
+verifier adds optional `nbf`. Covia supplies the client-specific `azp` check,
+explicit provider configuration and local account mapping. The former local
+`JWKSClient` is removed. Convex **0.8.17** still owns venue JWTs and immutable
+lattice data; its generic temporal-validator request remains upstream #766.
+
+Browser callbacks and direct RS256 provider-token verification share the same
+strict provider validator and issuer/subject lookup. OIDC validation failure
+never falls back to user-info. Microsoft requires a configured tenant UUID;
+Google's two documented issuer spellings map to one canonical issuer. GitHub
+remains OAuth-only and uses its stable numeric ID, without trusting `/user`
+email as verified metadata.
+
+New bindings live in a method-owned `externalIdentity: {provider, iss, sub}`
+map on the venue-owned account lattice record. The account key is derived from
+the canonical Convex vector `[issuer subject]` hash; metadata changes do not
+change its DID. No email-based linking or automatic legacy migration occurs.
+Explicit linking, a migration operation and multiple bindings per user remain
+design work. Conflicting bindings are rejected.
+
+The provider transaction uses browser-bound random state, S256 PKCE and an OIDC
+nonce. Frontend handoff has a separate PKCE challenge, exact destination and
+client state; only a single-use code appears in the return URL. Credentials are
+returned as no-store JSON. Protocol transactions/codes are bounded, process-local
+and expire on restart; their atomic consumption has one node as authority.
+Replicating a CRDT map would not establish global single-use semantics. Durable
+identity bindings remain lattice data. This refines the earlier proposed blanket
+requirement to persist challenges in the lattice; distributed ceremonies need
+an explicit authority/consumption design before being added.
+
+`issueCredential` isolates the existing venue-bearer issuance for later session
+integration. There is no new session service, `auth.policy`, evidence propagation
+or permissive assurance stub. Provider `iat` is checked for token validity but
+is not converted into human authentication time, MFA or request proof. Browser
+login remains the existing provisioning/issuance transport, not a new pluggable
+ceremony SPI. Runtime provider lifecycle, generalized adapter ceremonies,
+managed-session revocation, multi-tenant Microsoft admission and assurance
+mapping remain open. See CONFIG.md for breaking config/client migration.
+
+Validation: the full core/venue run passed (102 core, 3,039 venue; zero
+failures/errors, 47 skips). A subsequent focused run passed all 13 browser-flow
+regressions, including the added OAuth-only user-info path. These use local HTTP
+providers and signed tokens; live Google/Microsoft/GitHub account smoke tests
+have not been performed.
+
+Upstream references: [Nimbus ID-token validation](https://connect2id.com/blog/how-to-validate-an-openid-connect-id-token),
+[GitHub PKCE support](https://github.blog/changelog/2025-07-14-pkce-support-for-oauth-and-github-app-authentication/).
+
 
 ## 3. The method contract
 
@@ -228,13 +283,13 @@ earlier evidence, even when rebinding the same identity.
 
 The compatibility identity fields remain `AString`. Method-owned immutable
 `AMap<AString, ACell>` payloads carry provenance; the core declares no built-in
-method ids, protocol fields or Java payload subclasses. Provider
-subject/email mapping remains the existing behaviour until #298. Provider
-`iss` is absent when issuer validation was skipped; a signed subject is not
-misrepresented as an established issuer/subject account binding.
+method ids, protocol fields or Java payload subclasses. After §2.3, provider
+`iss` and `sub` are verified and must match an existing issuer/subject account
+binding; email is never a lookup key.
 
-Existing verifiers do not validate `iat` as issuance evidence or establish a
-human authentication event, MFA or a replay-protected request proof. Therefore
+Existing verifiers do not establish a human authentication event, MFA or a
+replay-protected request proof. OIDC now checks `iat` for token validity, but
+common issuance metadata remains conservative pending integration. Therefore
 `issuedAt`, `authenticatedAt`, `proof` and `sessionId` remain absent, properties
 empty, and untrusted `amr`/`acr`/`auth_time` are not copied. Integer expiry is
 projected after the existing temporal checks. Fractional provider NumericDate

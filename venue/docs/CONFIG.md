@@ -1570,55 +1570,90 @@ seven-day refresh tokens.
 
 ## Login with an external provider (`auth.oauth`)
 
-Sign-in via Google, Microsoft or GitHub. This is the third and last thing named
-"oauth" in this file, and the one users see: `adapters.oauth` lets an agent act
-on a user's data at a provider, `auth.oauth.provider` makes the venue issue its
-own tokens, and `auth.oauth` — here — lets a person prove who they are with an
-account they already have.
+Sign-in via Google, Microsoft or GitHub. This is separate from outbound
+connected accounts (`adapters.oauth`) and the venue authorization server
+(`auth.oauth.provider`).
 
 ```json
 {
+  "baseUrl": "https://venue.example.com",
   "auth": {
+    "loginRedirectUris": ["https://app.example.com/callback"],
     "oauth": {
-      "google":    { "clientId": "1234-abcd.apps.googleusercontent.com", "clientSecret": "s/GOOGLE_LOGIN" },
-      "microsoft": { "clientId": "...", "clientSecret": "s/MICROSOFT_LOGIN" },
-      "github":    { "clientId": "...", "clientSecret": "s/GITHUB_LOGIN" }
+      "google": { "clientId": "1234-abcd.apps.googleusercontent.com", "clientSecret": "s/GOOGLE_LOGIN" },
+      "microsoft": { "clientId": "...", "clientSecret": "s/MICROSOFT_LOGIN", "tenantId": "11111111-1111-1111-1111-111111111111" },
+      "github": { "clientId": "...", "clientSecret": "s/GITHUB_LOGIN" }
     }
   }
 }
 ```
 
-- `<provider>` — one of `google`, `microsoft`, `github`. Configure only the ones
-  you want; any other key here is rejected under `strictConfig`, and warned
-  about otherwise.
-- `clientId` / `clientSecret` — both are required, and supplying one without
-  the other fails startup with `must provide both clientId and clientSecret`.
-  `clientSecret` may be an
-  `s/NAME` reference to a secret in the venue's own store (preferred, so the
-  literal never sits in the config file) or the literal secret itself. A
-  reference is resolved at the token exchange, so the secret must be set before
-  the first login, not before startup.
+Configure only the providers you use. Each needs both `clientId` and
+`clientSecret`. An `s/NAME` secret-store reference is preferred; existing literal
+secrets remain accepted. Secret references resolve at token exchange, so the
+secret must exist before the first login. Microsoft requires an explicit tenant
+UUID; `common`/`organizations` and implicit admission of arbitrary tenants are
+not supported. The tenant determines both the endpoints and expected issuer.
 
-**Nothing is served until at least one provider is configured.** `/login` and
-`/auth/{provider}` are registered only when a provider registers successfully;
-until then both 404 and clients see no sign-in options at all — which is the
-expected state of a venue that has not configured any provider, not a fault.
+Register `<baseUrl>/auth/<provider>/callback` with the provider. `baseUrl` must
+use HTTPS; HTTP is allowed only on loopback for development. `/login`,
+`/auth/{provider}`, callbacks and `POST /auth/exchange` are registered only when
+at least one provider is configured.
 
-The redirect URI is derived, not configured: `<baseUrl>/auth/<provider>/callback`,
-using the venue's `baseUrl`. That exact string must be registered with the
-provider, so a wrong `baseUrl` fails at the callback rather than at discovery.
+The venue uses authorization code + S256 PKCE for all three providers, with an
+independent random, single-use state bound to an HttpOnly, SameSite=Lax browser
+cookie (Secure and `__Host-` prefixed on HTTPS). OIDC callbacks also require the
+original nonce and a valid signed ID token; a rejected or missing ID token never
+falls back to user-info. Google and Microsoft share the Nimbus OIDC validator
+with direct provider-token authentication. GitHub uses its numeric user ID and
+does not assert verified email from its `/user` response.
 
-Clients discover providers by fetching `/login` and reading its `/auth/<provider>`
-links. A caller may pass `?redirect_uri=` to `/auth/<provider>` to be returned to
-its own callback once login completes; the value is carried through the provider
-round trip in the OAuth `state`.
+**Frontend handoff:**
 
-The `redirect_uri` is checked at login and again at the callback (the OAuth
-`state` that carries it is unsigned): it must be a path on the venue (`/app`)
-or an absolute URL whose origin is the venue's own `baseUrl` origin or one
-listed in `auth.loginRedirectOrigins`, an array of origins such as
-`["https://app.example.com"]`. Anything else is refused with 400, so a crafted
-link cannot send a user's session token to another host.
+1. Generate a PKCE verifier and corresponding S256 challenge, and a fresh client
+   state. Keep the verifier and state private to the initiating client.
+2. Navigate to `/auth/<provider>?redirect_uri=...&state=...&code_challenge=...&code_challenge_method=S256`.
+   The destination must exactly match an entry in `auth.loginRedirectUris`.
+   Entries are absolute HTTPS URLs (HTTP only on loopback), with no query,
+   fragment or user-info. No origin-wide or implicit same-venue allowance exists.
+3. The callback redirects to that destination with `code` and the original
+   client `state`. Validate state before exchanging the code.
+4. POST form-encoded `code`, `code_verifier` and the identical `redirect_uri` to
+   `/auth/exchange`. The response is the existing `{token, did}` JSON shape.
+   A cross-origin browser client needs the normal configured CORS access;
+   a frontend backend may perform the exchange instead. The code expires after
+   60 seconds and every exchange attempt consumes it.
+
+Without a frontend destination, the browser-bound callback returns the same
+JSON directly. Credentials never appear in redirect URLs. Responses are
+`Cache-Control: no-store`; clients must not persist bearers in browser local
+storage. The browser cookie is only login-transaction binding: it does not
+authenticate later API requests. Transactions expire after five minutes; both
+transactions and handoff codes are bounded, process-local and lost on restart.
+A multi-node deployment must route a transaction and its exchange to the same
+node. These are not replicated or managed auth sessions.
+
+**Identity and migration:** new external accounts use a stable lattice record
+key derived from the canonical `(issuer, subject)` pair. The method-owned
+`externalIdentity` map stores `{provider, iss, sub}` on the account record;
+email/name are mutable metadata, and only explicitly verified OIDC email is
+retained. Changing email preserves the venue DID. Another issuer or subject
+with the same email creates a separate account, never an automatic link.
+Existing email-based records are not migrated automatically. Potential legacy
+matches require independently authenticated owner/operator confirmation before
+an identity binding can be installed; no self-service linking/migration endpoint
+is implemented yet. Ambiguous bindings fail closed.
+
+**Compatibility changes:** replace `auth.loginRedirectOrigins` with exact
+`auth.loginRedirectUris` (the old option fails startup), configure the Microsoft
+tenant, and update frontend clients from `?token=...` to the code exchange above.
+Direct provider tokens must contain required OIDC claims and match an existing
+issuer/subject binding; email-only matching is removed. The current issued
+credential is still a venue JWT with no central session revocation or assurance
+policy. `LoginProviders.issueCredential` is the narrow future integration point;
+#297 tracks managed sessions and evidence policy, and #298 retains explicit
+linking/migration and multi-tenant login work. Explicit `auth.methods` selection
+still rejects these legacy venue JWTs of unknown originating method.
 
 ## OAuth authorization server (`auth.oauth.provider`)
 
