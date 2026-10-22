@@ -120,6 +120,7 @@
 									     the module never carries a second copy of a venue package. -->
 									<exclude>com.fasterxml.jackson.core:*</exclude>
 									<exclude>com.google.protobuf:*</exclude>
+									<exclude>net.minidev:*</exclude>
 									<exclude>org.ow2.asm:*</exclude>
 									<exclude>com.google.errorprone:*</exclude>
 									<exclude>org.jspecify:*</exclude>
