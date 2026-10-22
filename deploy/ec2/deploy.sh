@@ -5,8 +5,12 @@
 # Pulls the published image and (re)starts the container; exits non-zero if
 # the venue does not come up healthy behind nginx.
 
-# Pull latest image (public on GHCR: no login needed)
-docker pull ghcr.io/covia-ai/covia:latest
+# Pull latest image (public on GHCR: no login needed). Stop here if the pull
+# fails, or the old image would be restarted behind a green deploy.
+if ! docker pull ghcr.io/covia-ai/covia:latest; then
+  echo "::error::docker pull failed — deploy stopped, running container left as is"
+  exit 1
+fi
 
 # Stop legacy systemd service if still present
 sudo systemctl stop covia-venue.service 2>/dev/null || true
