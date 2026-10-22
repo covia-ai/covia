@@ -173,8 +173,9 @@ design work. Conflicting bindings are rejected.
 
 The provider transaction uses browser-bound random state, S256 PKCE and an OIDC
 nonce. Frontend handoff has a separate PKCE challenge, exact destination and
-client state; only a single-use code appears in the return URL. Credentials are
-returned as no-store JSON. Protocol transactions/codes are bounded, process-local
+client state; only a single-use code appears in the return URL. Exchange rechecks
+the issuer/subject binding and account before issuing a credential. Credentials
+are returned as no-store JSON. Protocol transactions/codes are bounded, process-local
 and expire on restart; their atomic consumption has one node as authority.
 Replicating a CRDT map would not establish global single-use semantics. Durable
 identity bindings remain lattice data. This refines the earlier proposed blanket
@@ -191,10 +192,13 @@ managed-session revocation, multi-tenant Microsoft admission and assurance
 mapping remain open. See CONFIG.md for breaking config/client migration.
 
 Validation: the full core/venue run passed (102 core, 3,039 venue; zero
-failures/errors, 47 skips). A subsequent focused run passed all 13 browser-flow
-regressions, including the added OAuth-only user-info path. These use local HTTP
-providers and signed tokens; live Google/Microsoft/GitHub account smoke tests
-have not been performed.
+failures/errors, 47 skips). Subsequent consolidation passed 95 focused tests,
+including 14 browser-flow regressions, OAuth-only user-info and identity changes
+during frontend handoff. These use local HTTP providers and signed tokens.
+The frontend now exchanges codes with browser-generated S256 PKCE, removes legacy
+persisted bearers and keeps bearer credentials in memory until sign-out/reload.
+Live Google/Microsoft/GitHub validation is assigned to Anu in
+[#600](https://github.com/covia-ai/covia/issues/600); it has not been performed.
 
 Upstream references: [Nimbus ID-token validation](https://connect2id.com/blog/how-to-validate-an-openid-connect-id-token),
 [GitHub PKCE support](https://github.blog/changelog/2025-07-14-pkce-support-for-oauth-and-github-app-authentication/).

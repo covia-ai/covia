@@ -35,6 +35,7 @@ import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
+import covia.exception.AuthException;
 import covia.venue.Auth;
 import covia.venue.Config;
 import covia.venue.Engine;
@@ -77,7 +78,7 @@ public class LoginProviders {
 
 	private record Transaction(String provider, String browser, CodeVerifier verifier, Nonce nonce,
 			String redirect, String challenge, String clientState, long expiresAt) {}
-	private record Exchange(AString userDID, String email, String redirect, String challenge, long expiresAt) {}
+	private record Exchange(AString userDID, UserIdentity identity, String redirect, String challenge, long expiresAt) {}
 
 	public LoginProviders(Engine engine, AMap<AString, ACell> authConfig) {
 		this(engine, authConfig, configuredProviders(engine, authConfig), System::currentTimeMillis);
@@ -201,7 +202,7 @@ public class LoginProviders {
 				synchronized (this) {
 					prune();
 					if (exchanges.size() >= MAX_PENDING) { ctx.status(503).result(TOO_MANY_PENDING); return; }
-					exchanges.put(exchangeCode, new Exchange(did, identity.email(), transaction.redirect(),
+					exchanges.put(exchangeCode, new Exchange(did, identity, transaction.redirect(),
 							transaction.challenge(), clock.getAsLong() + EXCHANGE_TTL));
 				}
 				ctx.redirect(transaction.redirect() + "?code=" + enc(exchangeCode) + "&state=" + enc(transaction.clientState()));
@@ -228,8 +229,12 @@ public class LoginProviders {
 						new CodeVerifier(ctx.formParam("code_verifier"))).getValue())) {
 				fail(ctx, INVALID_EXCHANGE); return;
 			}
-			issueCredential(ctx, exchange.userDID(), exchange.email());
-		} catch (IllegalArgumentException e) { fail(ctx, INVALID_EXCHANGE); }
+			// A binding removed or rebound during the handoff cannot issue a credential.
+			if (!exchange.userDID().equals(findIdentity(engine.getAuth(), exchange.identity().issuer(), exchange.identity().sub()))) {
+				fail(ctx, INVALID_EXCHANGE); return;
+			}
+			issueCredential(ctx, exchange.userDID(), exchange.identity().email());
+		} catch (IllegalArgumentException | IllegalStateException | AuthException e) { fail(ctx, INVALID_EXCHANGE); }
 	}
 
 	/** Current credential delivery seam. Managed-session issuance and assurance remain unimplemented. */

@@ -183,6 +183,32 @@ class LoginFlowTest {
 		}
 	}
 
+	@Test void exchangeRechecksTheIdentityBindingAndAccountAfterTheCallback() throws Exception {
+		try (Fixture f = new Fixture()) {
+			for (String change : new String[] {"unbound", "rebound", "deleted"}) {
+				CodeVerifier verifier = new CodeVerifier();
+				var start = f.start("?redirect_uri=" + enc(REDIRECT) + "&state=state&code_challenge_method=S256&code_challenge=" + challenge(verifier));
+				var callback = f.callback(start);
+				String code = params(URI.create(callback.headers().firstValue("Location").orElseThrow()).getRawQuery()).get("code");
+				var identity = new LoginProviders.UserIdentity(f.config.issuer, "subject", null, null);
+				AString id = identity.toUserId();
+				AMap<AString, ACell> record = f.engine.getAuth().getUser(id);
+				if (change.equals("deleted")) {
+					f.engine.deleteUser(f.engine.venueContext(), RT.ensureString(record.get(Fields.DID)));
+				} else {
+					f.engine.getAuth().putUser(id, change.equals("unbound")
+							? record.dissoc(LoginProviders.EXTERNAL_IDENTITY)
+							: record.assoc(Fields.DID, Strings.create("did:key:replacement")));
+				}
+				var response = f.exchange(code, verifier.getValue(), REDIRECT);
+				assertEquals(400, response.statusCode(), change);
+				assertEquals(LoginProviders.INVALID_EXCHANGE, response.body());
+				assertEquals(400, f.exchange(code, verifier.getValue(), REDIRECT).statusCode());
+				if (!change.equals("deleted")) f.engine.getAuth().putUser(id, record);
+			}
+		}
+	}
+
 	@Test void stateIsRequiredBrowserBoundProviderBoundExpiringAndSingleUse() throws Exception {
 		try (Fixture f = new Fixture()) {
 			assertEquals(LoginProviders.INVALID_TRANSACTION, f.get("/auth/test/callback?code=x", null).body());
