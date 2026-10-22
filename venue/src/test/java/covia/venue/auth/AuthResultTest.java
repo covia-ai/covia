@@ -179,6 +179,55 @@ class AuthResultTest {
 	}
 
 	@Test
+	void optionalExpiryDoesNotMakeMalformedTemporalClaimsOptional() {
+		Engine relaxed = Engine.createTemp(Maps.of(Config.AUTH, Maps.of("requireExp", false)));
+		try {
+			VenueAuthenticator verifier = new VenueAuthenticator(relaxed);
+			for (boolean venueSigned : new boolean[] {false, true}) {
+				AKeyPair signer = venueSigned ? relaxed.getKeyPair() : key;
+				AMap<AString, ACell> base = Maps.of("sub", did,
+					"iss", venueSigned ? relaxed.getDIDString() : did, "exp", expiry);
+				for (String field : new String[] {"exp", "nbf"}) {
+					for (ACell invalid : new ACell[] {Strings.create("tomorrow"), Maps.empty(), Vectors.empty()}) {
+						AString token = JWT.signPublic(base.assoc(Strings.create(field), invalid), signer);
+						String prefix = venueSigned ? VenueAuthenticator.VENUE_TOKEN_REJECTED_PREFIX
+							: VenueAuthenticator.SELF_ISSUED_REJECTED_PREFIX;
+						String reason = field.equals("exp") ? VenueAuthenticator.Reason.MALFORMED_EXP
+							: VenueAuthenticator.Reason.MALFORMED_NBF;
+						assertEquals(prefix + reason,
+							assertThrows(AuthException.class, () -> verifier.verify(token), field).getMessage());
+					}
+				}
+			}
+		} finally { relaxed.close(); }
+	}
+
+	@Test
+	void temporalBoundsDoNotOverflowWhenApplyingClockSkew() {
+		// These checks use a fixed realistic host time and the existing leeway.
+		assertNull(auth.temporalProblem(claims().assoc(Strings.create("nbf"), CVMLong.MIN_VALUE), now));
+		assertNull(auth.temporalProblem(claims().assoc(Strings.create("exp"), CVMLong.MAX_VALUE), now));
+		assertTrue(auth.temporalProblem(claims().assoc(Strings.create("exp"), CVMLong.MIN_VALUE), now)
+			.startsWith(VenueAuthenticator.Reason.EXPIRED));
+		Engine capped = Engine.createTemp(Maps.of(Config.AUTH, Maps.of("maxTokenLifetime", 3600)));
+		try {
+			assertTrue(new VenueAuthenticator(capped).temporalProblem(
+				claims().assoc(Strings.create("exp"), CVMLong.MAX_VALUE), now)
+				.startsWith(VenueAuthenticator.Reason.LIFETIME_EXCEEDS));
+		} finally { capped.close(); }
+	}
+
+	@Test
+	void temporalChecksPreserveTheExistingClockSkewBoundaries() {
+		assertNull(auth.temporalProblem(claims().assoc(Strings.create("exp"), CVMLong.create(now - 60)), now));
+		assertTrue(auth.temporalProblem(claims().assoc(Strings.create("exp"), CVMLong.create(now - 61)), now)
+			.startsWith(VenueAuthenticator.Reason.EXPIRED));
+		assertNull(auth.temporalProblem(claims().assoc(Strings.create("nbf"), CVMLong.create(now + 60)), now));
+		assertTrue(auth.temporalProblem(claims().assoc(Strings.create("nbf"), CVMLong.create(now + 61)), now)
+			.startsWith(VenueAuthenticator.Reason.NOT_YET_VALID));
+	}
+
+	@Test
 	void identityOnlyRebindingDiscardsEarlierEvidence() {
 		Context ctx = context();
 		AString token = JWT.signPublic(claims(), key);

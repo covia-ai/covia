@@ -120,6 +120,31 @@ isolated pending that reassessment. Session implementation and broad enforcement
 are deferred; the later sections retain design material for review, not an
 instruction to implement each proposed layer in order.
 
+### 2.2 Basic verification audit (2026-10-22)
+
+Reviewed the current signature/identity paths, audience and temporal checks,
+method selection, adapter lifecycle and request binding against their regression
+coverage. Two new negative tests failed before correction: supplied malformed
+`exp` was treated as absent under `requireExp:false`, and subtracting clock skew
+from `Long.MIN_VALUE` `nbf` overflowed. The same review found overflow in
+`exp + skew`. Existing local checks now reject malformed supplied `exp`/`nbf`
+and compare bounds without overflowing claim arithmetic. Missing/null expiry
+still follows `requireExp`; existing 60-second skew boundaries are preserved.
+This changes neither the method architecture nor evidence propagation.
+
+After correction, `mvn test -pl venue -am` reports 102 core and 3,027 venue tests,
+zero failures/errors and 47 skips. Focused regressions cover key and venue-signed
+credentials, malformed bounds, extreme timestamps, the lifetime cap and leeway.
+These are regression results, not certification of every authentication flow.
+
+Convex 0.8.17 and current upstream `JWT.validateClaims` were checked before the
+fix. Reusable explicit-clock/skew `exp`/`nbf` validation is requested in
+[Convex #766](https://github.com/Convex-Dev/convex/issues/766), to replace existing
+local duplication rather than grow a new validator. External provider/browser
+login remains incomplete under #298, including provider validation, stable
+identity binding, callback transaction binding and safe credential delivery.
+Managed-session revocation and evidence-policy integration remain unimplemented.
+
 ## 3. The method contract
 
 Every authentication method produces one `AuthResult`. This is an internal

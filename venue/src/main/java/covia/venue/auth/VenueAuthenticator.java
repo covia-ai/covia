@@ -268,6 +268,8 @@ public final class VenueAuthenticator {
 		public static final String EXPIRED = "token expired at ";
 		public static final String NOT_YET_VALID = "token not valid before ";
 		public static final String MISSING_EXP = "missing exp: this venue requires bearer credentials to expire (auth.requireExp)";
+		public static final String MALFORMED_EXP = "malformed exp: expected an integer Unix timestamp";
+		public static final String MALFORMED_NBF = "malformed nbf: expected an integer Unix timestamp";
 		public static final String NON_EXPIRING = "non-expiring credential: this venue requires bearer credentials to expire (auth.requireExp)";
 		public static final String LIFETIME_EXCEEDS = "token expires further ahead than this venue allows (auth.maxTokenLifetime): ";
 		public static final String AUDIENCE_REQUIRED = "audience (aud) is required but absent";
@@ -630,13 +632,15 @@ public final class VenueAuthenticator {
 	String temporalProblem(AMap<AString, ACell> claims, long now) {
 		CVMLong exp = RT.ensureLong(claims.get(EXP));
 		if (exp == null) {
+			if (claims.get(EXP) != null) return Reason.MALFORMED_EXP;
 			if (requireExp) return Reason.MISSING_EXP;
 		} else {
 			String bound = expiryProblem(exp.longValue(), now);
 			if (bound != null) return bound;
 		}
 		CVMLong nbf = RT.ensureLong(claims.get(NBF));
-		if (nbf != null && now < nbf.longValue() - CLOCK_SKEW_SECONDS) {
+		if (nbf == null && claims.get(NBF) != null) return Reason.MALFORMED_NBF;
+		if (nbf != null && nbf.longValue() > now && now < nbf.longValue() - CLOCK_SKEW_SECONDS) {
 			return Reason.NOT_YET_VALID + instant(nbf.longValue()) + " (now " + instant(now) + ")";
 		}
 		return null;
@@ -644,7 +648,8 @@ public final class VenueAuthenticator {
 
 	/** Null when an expiry is neither past nor further ahead than the venue's cap; otherwise why not. */
 	private String expiryProblem(long exp, long now) {
-		if (now > exp + CLOCK_SKEW_SECONDS) {
+		// Compare to the host clock, not exp + skew (which can overflow).
+		if (exp < now - CLOCK_SKEW_SECONDS) {
 			return Reason.EXPIRED + instant(exp) + " (now " + instant(now) + ")";
 		}
 		if (maxLifetimeSeconds > 0 && exp - now > maxLifetimeSeconds) {
