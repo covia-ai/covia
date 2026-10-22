@@ -81,6 +81,13 @@
 			<groupId>com.nimbusds</groupId>
 			<artifactId>oauth2-oidc-sdk</artifactId>
 			<version>11.38.2</version>
+			<exclusions>
+				<!-- json-smart's older ASM must not override Jetty's ASM family. -->
+				<exclusion>
+					<groupId>org.ow2.asm</groupId>
+					<artifactId>asm</artifactId>
+				</exclusion>
+			</exclusions>
 		</dependency>
 		<!-- Covia deps -->
 		<dependency>
