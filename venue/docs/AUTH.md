@@ -7,7 +7,9 @@ WebAuthn, #301 passwords). Registration/admission is separate (#269);
 authorisation (capabilities, roles) is downstream and out of scope —
 see `UCAN.md`.
 
-Status: design agreed 2026-08-10, revised after review 2026-10-21.
+Status: design reopened for consolidation 2026-10-22; earlier decisions and
+implementation reviewed below. Section 2.1 takes precedence over the proposed
+integration and rollout sequence elsewhere in this document.
 This document specifies the target design; §2 and the Phase 1 note below
 record the implemented subset. The revision separates the method-independent core from
 protocol payloads and tightens proof/freshness, sessions, migration and delivery.
@@ -68,6 +70,55 @@ config; a common method result (identity, evidence and typed method details);
 an optional central session service with revocation; provider
 identity keyed by `(issuer, subject)` instead of email; account-linking
 rules; route-class assurance enforcement.
+
+### 2.1 Consolidation review (2026-10-22)
+
+**Next work is consolidation, not policy configuration or request-context
+integration.** The evaluator tests establish its local behaviour; they do not
+validate the surrounding security architecture. No production caller currently
+uses `EvidencePolicy`. Existing verifiers establish identity and credential
+metadata, but do not populate event time, assurance properties or request proof.
+The examples in §9.1 therefore exercise a contract, not an available step-up flow.
+
+Keep the method-independent identity/result boundary, method-owned details,
+adapter lifecycle and explicit binding selection. Keep authentication separate
+from admission and capabilities. Challenge the following before extending them:
+
+| Finding in the current implementation | Consolidation direction / unresolved decision |
+|---|---|
+| Built-in dispatch is `VenueAuthenticator -> AuthMethods -> AuthAdapter -> another VenueAuthenticator`. The inner service constructs its own resolver even though built-in verification bypasses it; ordinary bearer dispatch also parses the credential twice. | Separate built-in credential verification from dispatch/request binding with the smallest change possible. Keep one verification implementation and existing acceptance semantics; do not add a second auth framework or new crypto. |
+| `EvidencePolicy` checks credential expiry while leaving binding, verifier and session validity to its caller. An unrestricted policy also accepts identity-only attribution. | It is an evidence predicate, not a complete authentication decision. Decide the owner and time of validity checks before introducing a general `requireAssurance` API. Prefer credential validity in the verification boundary; assess removal of the evaluator's partial expiry check as part of that decision. |
+| `Proof` contains only a timestamp and properties; the verifier takes only a method id and method-owned input. | Request binding/replay protection is currently a trusted-verifier obligation, not an enforced core mechanism. Before copying proof into execution contexts, demonstrate a concrete verifier binding it to its intended request/action. An age check alone does not prove that binding. Do not add guessed generic nonce/request fields. |
+| Policies accept arbitrary exact property names, while the target design promises validation of attainable evidence and central assurance caps. `AuthenticationMethods` declares verifier functions only. | Those promises are not implemented. Agree the meaning and trusted issuer of the first properties using a real method. Do not grow a declaration registry or assurance hierarchy merely to support speculative configuration validation. |
+| `RequestContext` already wraps authority and has explicit propagation into nested operations, jobs and agents. `CapabilityGate` already evaluates operation-based conditions on grants. | Trace the first protected action through these existing paths before adding another propagation/enforcement system. Capability caveats only constrain the grants carrying them, so they cannot automatically substitute for a venue-wide evidence requirement. Decide where the mandatory action condition belongs and which evidence survives each transition. |
+| The adapter revision check rejects verification across any adapter change, but returns no durable verifier/configuration provenance in the result. | This provides conservative in-flight invalidation only. It neither revokes returned results nor establishes session continuity across replacement. Keep that limit explicit; do not add per-method epochs or session migration machinery before a concrete consumer requires them. |
+| `toData()` gives results and requirements immutable Convex representations, including a projection of request proof. | Representation is not persistence policy or portable trust. Define authoritative ownership, allowed reads/writes, and what may be persisted for each actual record. Never restore request proof as fresh evidence from a stored projection. No new lattice region is needed for this review. |
+
+The `standard`/`strong`/`hard` profiles, `auth.policy` configuration and
+`engine.requireAssurance(ctx, policyName)` remain proposals. They are not prerequisites
+for pluggable authentication, and should not be treated as settled APIs. In
+particular, the current conjunction-only evaluator does not implement the proposed
+`strong` profile's alternatives. Decide whether any profile abstraction is needed
+from actual action requirements, rather than introducing a policy language now.
+
+**Review sequence:**
+
+1. Consolidate built-in verification ownership and compatibility dispatch, using
+   the existing credential and lifecycle tests to preserve behaviour. Inspect the
+   installed Convex APIs before moving or replacing any verification logic.
+2. Use the existing `user:authentication-add` action as the design case. Trace
+   direct caller, venue-delegated administrator and agent paths; identify the threat,
+   existing authority gate, required evidence, checking instant and supported
+   upstream ceremony. Include delayed execution and replay. This is a design
+   exercise, not permission to turn on an unattainable requirement.
+3. Reassess the result and evaluator against that case. Remove or narrow unused
+   abstractions where appropriate. Choose policy ownership and proof lifetime
+   before deciding whether configuration or context changes are needed.
+
+Runtime behaviour is unchanged by this review. The existing evaluator remains
+isolated pending that reassessment. Session implementation and broad enforcement
+are deferred; the later sections retain design material for review, not an
+instruction to implement each proposed layer in order.
 
 ## 3. The method contract
 
@@ -732,7 +783,7 @@ nothing else.
 
 ## 9. Assurance policy enforcement
 
-Planned enforcement seam: `engine.requireAssurance(ctx, policyName)` —
+Proposed enforcement seam (under review, §2.1): `engine.requireAssurance(ctx, policyName)` —
 resolves the request's originating method, assurance, authentication time,
 required properties and any fresh possession proof against the named policy.
 Protected venue surfaces (key enrolment, user admin,
@@ -840,6 +891,9 @@ integration, step-up and sensitive-action gates remain future work, enabled only
 once their evidence and recovery paths are attainable.
 
 ## 10. Phasing
+
+The consolidation review in §2.1 precedes this earlier rollout proposal. Phase
+numbers do not imply that policy configuration or enforcement is the next step.
 
 0. **Upstream/API audit and immediate protocol fixes.** Inventory the existing
    Convex APIs, `VenueAuthenticator`, `OAuthProvider` code/PKCE exchange and
