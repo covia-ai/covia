@@ -18,12 +18,14 @@ import convex.core.data.Index;
 import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.etch.EtchStore;
 import convex.node.NodeConfig;
 import convex.node.NodeServer;
 import covia.adapter.AgentAdapter;
+import covia.adapter.agent.GoalTreeContext;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -116,6 +118,70 @@ public class GoalTreeCrashResumeTest {
 	private static boolean parkedInTool(Engine engine, String agentId, Blob sid) {
 		AVector<ACell> conversation = rootConversation(engine, agentId, sid);
 		return conversation != null && String.valueOf(conversation).contains("toolCalls");
+	}
+
+	@Test
+	public void testLegacyHistoryMigrationCompactionAndAppendSurviveStoreReopen() throws Exception {
+		EtchStore store = EtchStore.createTemp();
+		java.io.File file = store.getFile();
+		AKeyPair keyPair = AKeyPair.generate();
+		AMap<AString, ACell> config = config(keyPair);
+		Blob sid = Blob.fromHex("cc112233445566778899aabbccddee40");
+		String agentId = "history-migration-agent";
+		RequestContext alice = RequestContext.of(ALICE);
+		AVector<ACell> archived = Vectors.of(Maps.of("role", "user", "content", "old question"),
+			Maps.of("role", "assistant", "content", "old answer"));
+		AVector<ACell> selected = Vectors.of(GoalTreeContext.createSegment("old summary", archived),
+			Maps.of("role", "user", "content", "recent question"),
+			Maps.of("role", "assistant", "content", "recent answer"));
+		AMap<AString, ACell> legacy = Maps.of("description", "persisted legacy session", "conversation", selected);
+
+		Engine first = start(store, keyPair, config);
+		AgentState initial = first.getVenueState().users().ensure(ALICE).ensureAgent(agentId,
+			Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm"), null);
+		AMap<AString, ACell> session = initial.ensureSession(sid, ALICE).assoc(Fields.FRAMES, Vectors.of(legacy));
+		AMap<AString, ACell> meta = RT.ensureMap(session.get(Strings.intern("meta")));
+		session = session.assoc(Strings.intern("meta"), meta.assoc(Strings.intern("turns"), CVMLong.create(4)));
+		initial.putRecord(initial.getRecord().assoc(AgentState.KEY_SESSIONS, initial.getSessions().assoc(sid, session)));
+		first.flush();
+		closeActivePhase();
+		store.close();
+		activeStore = null;
+
+		Engine second = start(EtchStore.create(file), keyPair, config);
+		AgentState restored = agent(second, agentId);
+		AVector<ACell> oldFrames = RT.ensureVector(restored.getSession(sid).get(Fields.FRAMES));
+		assertEquals(legacy, oldFrames.get(0), "read/restart alone does not rewrite legacy state");
+		assertTrue(restored.migrateSessionHistory(sid, oldFrames));
+		assertEquals(selected, GoalTreeContext.archivedConversation(RT.ensureMap(
+			RT.getIn(restored.getSession(sid), Fields.FRAMES, CVMLong.ZERO))));
+		second.jobs().invokeOperation("v/ops/agent/chat", Maps.of(Fields.AGENT_ID, agentId,
+			Fields.SESSION_ID, sid.toHexString(), Fields.MESSAGE, "after migration"), alice).awaitResult(5000);
+		await(() -> restored.getSessionCycleEpoch(sid) == null, 5000, "migrated chat committed");
+		second.jobs().invokeOperation("v/ops/agent/compact-session", Maps.of(Fields.AGENT_ID, agentId,
+			Fields.SESSION_ID, sid.toHexString(), "summary", "keep all completed exchanges"), alice).awaitResult(5000);
+		AMap<AString, ACell> compacted = RT.ensureMap(RT.getIn(restored.getSession(sid), Fields.FRAMES, CVMLong.ZERO));
+		assertEquals(6, GoalTreeContext.countTurns(compacted));
+		assertEquals(1, GoalTreeContext.activeConversation(compacted).count());
+		second.flush();
+		closeActivePhase();
+		activeStore.close();
+		activeStore = null;
+
+		Engine third = start(EtchStore.create(file), keyPair, config);
+		AgentState reopened = agent(third, agentId);
+		assertEquals(compacted, RT.getIn(reopened.getSession(sid), Fields.FRAMES, CVMLong.ZERO));
+		third.jobs().invokeOperation("v/ops/agent/chat", Maps.of(Fields.AGENT_ID, agentId,
+			Fields.SESSION_ID, sid.toHexString(), Fields.MESSAGE, "after restart"), alice).awaitResult(5000);
+		await(() -> reopened.getSessionCycleEpoch(sid) == null, 5000, "reopened chat committed");
+		AMap<AString, ACell> appended = RT.ensureMap(RT.getIn(reopened.getSession(sid), Fields.FRAMES, CVMLong.ZERO));
+		AVector<ACell> retained = GoalTreeContext.history(compacted);
+		assertEquals(retained, GoalTreeContext.history(appended).slice(0, retained.count()));
+		assertEquals(8, GoalTreeContext.countTurns(appended));
+		assertEquals(CVMLong.create(8), RT.getIn(reopened.getSession(sid), "meta", "turns"));
+		ACell read = third.jobs().invokeOperation("v/ops/agent/session-read", Maps.of(Fields.AGENT_ID, agentId,
+			Fields.SESSION_ID, sid.toHexString(), "archiveDepth", 2L), alice).awaitResult(5000);
+		assertEquals(8, RT.ensureVector(RT.getIn(read, Fields.MESSAGES)).count());
 	}
 
 	@Test
