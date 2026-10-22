@@ -52,6 +52,26 @@ class MarkdownPaneTest {
 	}
 
 	@Test
+	void aPaneRenderingWhenShowingKeepsItsLastRenderOutOfView() throws Exception {
+		EventQueue.invokeAndWait(() -> {
+			try {
+				var style = new AtomicReference<>(style(Color.RED));
+				var pane = new MarkdownPane(style::get, "**Bold**").renderWhenShowing();
+				// The first render is immediate, so a host can measure the pane before showing it.
+				assertEquals("Bold", pane.getDocument().getText(0, pane.getDocument().getLength()));
+				style.set(style(Color.GREEN));
+				pane.updateUI();
+				assertEquals(Color.RED, StyleConstants.getForeground(pane.getStyledDocument().getCharacterElement(0).getAttributes()),
+					"a look-and-feel change out of view waits for the pane to be shown");
+				pane.setMarkdown("Plain");
+				assertEquals("Plain", pane.getMarkdown(), "the source is current at once");
+				assertEquals("Bold", pane.getDocument().getText(0, pane.getDocument().getLength()),
+					"the render waits for the pane to be shown");
+			} catch (Exception failure) { throw new AssertionError(failure); }
+		});
+	}
+
+	@Test
 	void linksAreDeliveredOnlyToTheHostHandler() throws Exception {
 		EventQueue.invokeAndWait(() -> {
 			try {
