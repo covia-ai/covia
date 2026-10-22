@@ -5,8 +5,15 @@
 # stored key. Pulls the published image and (re)starts the container; exits
 # non-zero if the venue does not come up healthy.
 
-# Pull latest image (public on GHCR: no login needed)
-docker pull ghcr.io/covia-ai/covia:latest
+# Pull latest image (public on GHCR: no login needed). Pull with an empty
+# client config: the old SSH deploys left expired GHCR logins in root's and
+# azureuser's ~/.docker/config.json, and the registry denies those rather
+# than falling back to an anonymous pull. Stop here if the pull fails, or the
+# old image would be restarted behind a green deploy.
+if ! DOCKER_CONFIG=$(mktemp -d) docker pull ghcr.io/covia-ai/covia:latest; then
+  echo "::error::docker pull failed — deploy stopped, running container left as is"
+  exit 1
+fi
 
 # Ensure config exists (venues array format)
 mkdir -p /home/azureuser/covia-data
