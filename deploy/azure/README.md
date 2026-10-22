@@ -45,45 +45,31 @@ EOF
 sudo chown -R 1001:1001 ~/covia-data
 ```
 
-## GitHub Secrets Required
+## Automated Deploys (no SSH)
 
-Add these to the `covia-ai/covia` repository settings:
+`.github/workflows/deploy-azure.yml` deploys after every successful image
+publish from `develop`, or on manual dispatch. It runs
+[`deploy.sh`](deploy.sh) on the VM through `az vm run-command` (security#12):
 
-| Secret | Value |
-|--------|-------|
-| `AZURE_VM_HOST` | Static public IP from setup script |
-| `AZURE_VM_USER` | `azureuser` |
-| `AZURE_VM_SSH_KEY` | Contents of the SSH private key |
+- The job signs in with `azure/login` over GitHub OIDC as the user-assigned
+  managed identity `covia-deploy-venue-4` (in `covia-venue-rg`). Its
+  federated credential trusts only `repo:covia-ai/covia:ref:refs/heads/develop`.
+- The identity holds one custom role, "Covia VM Run Command"
+  (`virtualMachines/read` and `virtualMachines/runCommand/action`),
+  assigned on `covia-venue-vm` only.
+- No SSH key, client secret or registry token is stored: the image on GHCR
+  is public.
+- run-command does not return the script's exit code, so the job checks for
+  a `COVIA_DEPLOY_RESULT=ok` line. Only the last 4 KB of output come back.
 
 ## Manual Deploy
 
+Admin access is through run-command (port 22 is closed):
+
 ```bash
-ssh azureuser@<public-ip>
-
-# On VM:
-echo $GHCR_TOKEN | docker login ghcr.io -u github --password-stdin
-
-docker pull ghcr.io/covia-ai/covia:latest
-docker stop covia-venue 2>/dev/null || true
-docker rm covia-venue 2>/dev/null || true
-
-docker run -d \
-  --name covia-venue \
-  -p 127.0.0.1:8080:8080 \
-  -v /home/azureuser/covia-data:/data \
-  --log-opt max-size=50m \
-  --log-opt max-file=5 \
-  --restart unless-stopped \
-  --health-cmd='curl -f --max-time 3 http://localhost:8080/' \
-  --health-interval=30s \
-  --health-timeout=5s \
-  --health-start-period=15s \
-  --health-retries=3 \
-  ghcr.io/covia-ai/covia:latest \
-  java -Xmx2g -XX:+UseContainerSupport -XX:+UseG1GC \
-  -XX:+UseStringDeduplication -XX:+ExitOnOutOfMemoryError \
-  -Djava.security.egd=file:/dev/./urandom \
-  -Dfile.encoding=UTF-8 -jar covia.jar /data/config.json
+az vm run-command invoke -g covia-venue-rg -n covia-venue-vm \
+  --command-id RunShellScript --scripts @deploy/azure/deploy.sh \
+  --query 'value[0].message' -o tsv
 ```
 
 ## Verification
