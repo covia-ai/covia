@@ -52,7 +52,7 @@
 		<slf4j.version>2.0.20</slf4j.version>
 		<javalin.version>7.2.3</javalin.version>
 		<langchain.version>1.22.0</langchain.version>
-		<mcp.version>2.0.1</mcp.version>
+		<mcp.version>2.1.0</mcp.version>
 		<a2a.version>1.4.0.Final</a2a.version>
 		<!-- CommonMark: the workbench's Markdown renderer and the Telegram
 		     module's Markdown to Telegram HTML conversion. -->
