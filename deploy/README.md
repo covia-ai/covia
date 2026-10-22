@@ -6,6 +6,28 @@ This guide is for Venue operators who want to deploy a minimal working venue for
 
 ## Server Setup
 
+### Agent history format upgrade
+
+Release the history-aware SDK (1.24.1 or later) and update clients before deploying
+the venue's version-1 agent history format. Clients should use the SDK session
+transcript accessor, not read a frame's storage fields directly.
+
+The Azure and EC2 dev-venue deploy scripts take a one-time stopped-store backup
+under `/home/azureuser/covia-before-history-v1/data` or
+`/home/ec2-user/covia-before-history-v1/data` before starting the upgraded venue.
+The private backup includes the complete data directory and identity/encryption
+keys. It is published only after copying succeeds, and subsequent deploys never
+overwrite it. A running venue or failed copy prevents the new binary starting.
+
+For other deployments, take an equivalent backup while the venue is stopped.
+Rolling back to a binary without history support requires restoring the entire
+backup with its matching keys while stopped, then starting the old image. Keep
+the current data separately: restoring the backup loses changes since it was
+taken. Prefer fixing forward when possible. See
+[agent context migration](../venue/docs/AGENT_CONTEXT.md#13-append-only-history-and-active-context-597).
+
+### Host prerequisites
+
 Have a VM instance with a modern Linux Distro, e.g. Ubuntu 25
 
 ```

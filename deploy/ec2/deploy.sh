@@ -21,6 +21,23 @@ docker rm covia-venue 2>/dev/null || true
 docker ps -q --filter publish=8080 | xargs -r docker stop
 docker ps -aq --filter publish=8080 | xargs -r docker rm
 
+# Preserve the stopped store and its keys before the first history-v1 migration.
+# Publish the backup directory only after a complete copy; retries never replace it.
+backup=/home/ec2-user/covia-before-history-v1
+if [ -d /home/ec2-user/covia-data ] && [ ! -d "$backup" ]; then
+  running=$(docker ps -q --filter publish=8080) || exit 1
+  if [ -n "$running" ] || systemctl is-active --quiet covia-venue.service; then
+    echo "::error::venue is still running; refusing an inconsistent migration backup"
+    exit 1
+  fi
+  backup_tmp=$(mktemp -d "${backup}.XXXXXX") || exit 1
+  if ! cp -a /home/ec2-user/covia-data "$backup_tmp/data" || ! mv -T "$backup_tmp" "$backup"; then
+    echo "::error::migration backup failed; new venue has not been started"
+    exit 1
+  fi
+  echo "Pre-migration store and keys saved at $backup"
+fi
+
 # Ensure data directory exists with correct config (preserve existing etch store)
 mkdir -p /home/ec2-user/covia-data
 if [ ! -f /home/ec2-user/covia-data/config.json ]; then

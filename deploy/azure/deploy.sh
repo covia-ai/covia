@@ -59,6 +59,23 @@ sudo chown -R 1001:1001 /home/azureuser/covia-data
 
 # Stop and remove existing container
 docker stop covia-venue 2>/dev/null || true
+
+# Preserve the stopped store and its keys before the first history-v1 migration.
+# Publish the backup directory only after a complete copy; retries never replace it.
+backup=/home/azureuser/covia-before-history-v1
+if [ ! -d "$backup" ]; then
+  running=$(docker ps -q --filter name=^/covia-venue$) || exit 1
+  if [ -n "$running" ]; then
+    echo "::error::venue is still running; refusing an inconsistent migration backup"
+    exit 1
+  fi
+  backup_tmp=$(mktemp -d "${backup}.XXXXXX") || exit 1
+  if ! cp -a /home/azureuser/covia-data "$backup_tmp/data" || ! mv -T "$backup_tmp" "$backup"; then
+    echo "::error::migration backup failed; new venue has not been started"
+    exit 1
+  fi
+  echo "Pre-migration store and keys saved at $backup"
+fi
 docker rm covia-venue 2>/dev/null || true
 
 # Run new container. The image's ENTRYPOINT already invokes java and
