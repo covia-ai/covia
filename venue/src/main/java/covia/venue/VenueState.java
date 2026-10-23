@@ -19,6 +19,7 @@ import convex.core.data.MapEntry;
 import convex.core.lang.RT;
 import convex.core.store.AStore;
 import convex.lattice.ALatticeComponent;
+import convex.lattice.TransactionalComponent;
 import static convex.lattice.LatticeComponent.resolve;
 import convex.lattice.LatticeContext;
 import convex.lattice.cursor.StampedCursor;
@@ -30,57 +31,34 @@ import covia.lattice.Namespace;
 import covia.venue.storage.LatticeStorage;
 
 /**
- * Cursor wrapper for a single venue's state.
+ * Venue state and its domain components, backed by a signed lattice value.
  *
- * <p>A {@code VenueState} wraps a lattice cursor at the venue level
- * (through the OwnerLattice/SignedLattice boundary at {@code :value}).
- * The cursor chain determines when writes are signed:</p>
- * <ul>
- *   <li><b>Connected</b> (from {@link #fromRoot}): every write propagates
- *       through {@code SignedCursor} and is signed immediately.</li>
- *   <li><b>Forked</b> (from {@link #fork()}): writes accumulate in a local
- *       {@code Root} cursor (unsigned). Call {@link #sync()} to merge all
- *       changes into the parent cursor in one atomic operation — triggering
- *       a single sign through the {@code SignedCursor} chain.</li>
- * </ul>
+ * <p>Ordinary domain mutations are atomic and immediately visible locally.
+ * Use {@link #transact} for compound changes: its callback receives an isolated
+ * venue with the same domain API, including children bound to that draft.
+ * Success commits the whole change; exceptions discard it and conflicts retry
+ * the callback. Use only the supplied draft and keep external I/O outside it.
+ * Local commit does not imply host publication or physical durability.</p>
  *
- * <p>Engine uses a connected {@code VenueState} as its authoritative state.
- * That keeps component writes visible to every Engine consumer immediately
- * and leaves publication and physical durability as separate concerns.</p>
- *
- * <p>Forks are explicit, bounded transactions. Use one when several writes
- * must become visible together: perform the work against the fork, call
- * {@link #sync()} only after all work succeeds, and discard the fork on
- * failure. A whole-venue fork also requires an exclusive mutation boundary;
- * active features should prefer the narrowest component fork that contains
- * their transaction. A fork should not be retained as a second long-lived copy
- * of venue state.</p>
- *
- * <p>Provides domain-specific component accessors:</p>
- * <ul>
- *   <li>{@link #assets()} — content-addressed asset store</li>
- *   <li>{@link #users()} — per-user data store</li>
- *   <li>{@link #scheduleCursor()} — extensible scheduler record</li>
- *   <li>{@link #storage()} — content-addressed blob storage</li>
- * </ul>
- *
- * <h2>Usage</h2>
  * <pre>{@code
- * // Standalone (tests, demos)
- * VenueState vs = VenueState.create(keyPair);
- * vs.assets().store(meta, content);
- *
- * // Connected to a root lattice cursor (Engine)
- * VenueState connected = VenueState.fromRoot(rootCursor, accountKey, context);
- * connected.assets().store(meta, content); // immediately visible at root
- *
- * // Bounded transaction
- * VenueState transaction = connected.fork();
- * transaction.assets().store(meta, content); // private until commit
- * transaction.sync();                        // commit atomically
+ * venue.transact(draft -> {
+ *     var user = draft.users().ensure(did);
+ *     user.ensureAgent("assistant", config, null);
+ *     user.workspaceRoot().write(path, value);
+ * });
  * }</pre>
+ *
+ * <p>{@link #fork()} creates an independent working copy for explicit lattice
+ * reconciliation. Its {@link #sync()} uses whole-venue last-write-wins selection,
+ * not transactional conflict retry. Use {@code transact} for local compound edits.
+ * Only the venue defines this publication policy; children offer transactions
+ * rather than independent publication boundaries.</p>
  */
-public class VenueState extends ALatticeComponent<ACell> {
+public class VenueState extends ALatticeComponent<ACell> implements TransactionalComponent<ACell, VenueState> {
+	@Override
+	public VenueState withCursor(AForkableCursor<ACell> draft) {
+		return new VenueState(draft, ownerKey, context);
+	}
 
 	private final AccountKey ownerKey;
 	private final LatticeContext context;
@@ -202,7 +180,7 @@ public class VenueState extends ALatticeComponent<ACell> {
 	 * @return Users cursor wrapper
 	 */
 	public Users users() {
-		return new Users(this, resolve(cursor(), Covia.VENUE, Covia.USER_DATA));
+		return new Users(context, resolve(cursor(), Covia.VENUE, Covia.USER_DATA));
 	}
 
 	/** Atomically erases the namespace and login aliases, retaining revocation evidence. */
@@ -265,7 +243,7 @@ public class VenueState extends ALatticeComponent<ACell> {
 	 *
 	 * @return Cursor at the :schedule level (value is a record)
 	 */
-	public AForkableCursor<ACell> scheduleCursor() {
+	AForkableCursor<ACell> scheduleCursor() {
 		return StampedCursor.create(resolve(cursor(), Covia.VENUE, Covia.SCHEDULE),
 			getContext()::currentTimestamp, Covia::stampUpdated);
 	}
@@ -275,7 +253,7 @@ public class VenueState extends ALatticeComponent<ACell> {
 	 *
 	 * @return LatticeStorage instance backed by this venue's cursor
 	 */
-	public LatticeStorage storage() {
+	public LatticeStorage contentStorage() {
 		return new LatticeStorage(resolve(cursor(), Covia.VENUE, Covia.STORAGE));
 	}
 
@@ -318,26 +296,13 @@ public class VenueState extends ALatticeComponent<ACell> {
 	}
 
 	/**
-	 * Creates a forked VenueState that accumulates writes locally without
-	 * signing. Call {@link #sync()} to propagate all changes to the parent
-	 * cursor, which triggers a single sign through the SignedCursor chain.
-	 *
-	 * <p>This is intended for a bounded transaction whose writes must become
-	 * visible together. Call {@code sync()} only on success; dropping the fork
-	 * without syncing discards its local writes. Engine itself keeps a connected
-	 * VenueState rather than a long-lived fork. The caller must exclude concurrent
-	 * parent mutations for a whole-venue transaction; otherwise fork the narrowest
-	 * independently owned component instead.</p>
-	 *
-	 * <p>The forked cursor uses a local {@code Root} backed by
-	 * {@code AtomicReference} — reads and writes are lock-free and
-	 * never touch the parent cursor chain until sync.</p>
-	 *
-	 * @return A new VenueState backed by a forked cursor
+	 * Creates independent working state. Sync reconciles it with the destination
+	 * using whole-venue LWW, which may select one complete concurrent version.
+	 * For compound local edits with conflict retry, use {@link #transact}.
 	 */
 	@Override
 	public VenueState fork() {
-		return new VenueState(storage.fork(), ownerKey, context);
+		return withCursor(storage.fork());
 	}
 
 }

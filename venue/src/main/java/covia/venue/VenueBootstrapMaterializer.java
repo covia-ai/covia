@@ -19,7 +19,6 @@ import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.TransactionalComponent;
 import covia.lattice.WorkspaceRoot;
 import covia.adapter.AAdapter;
-import covia.adapter.CoviaAdapter;
 import covia.api.Fields;
 
 /**
@@ -72,7 +71,7 @@ final class VenueBootstrapMaterializer implements TransactionalComponent<ACell, 
 	}
 
 	@Override
-	public AForkableCursor<ACell> cursor() { return workspace.cursor(); }
+	public AForkableCursor<ACell> storage() { return workspace.cursor(); }
 
 	@Override
 	public VenueBootstrapMaterializer withCursor(AForkableCursor<ACell> draft) {
@@ -345,7 +344,7 @@ final class VenueBootstrapMaterializer implements TransactionalComponent<ACell, 
 	/** Writes to the draft, then verifies the staged view immediately. */
 	private void writeAndValidateVenuePath(String virtualPath, ACell value) {
 		ACell[] keys = toWorkspacePath(virtualPath);
-		CoviaAdapter.writePathToCursor(workspace, keys, value);
+		workspace.write(keys, value);
 		ACell actual = readVenuePath(virtualPath);
 		if (!Objects.equals(value, actual)) {
 			throw new IllegalStateException(
@@ -354,13 +353,13 @@ final class VenueBootstrapMaterializer implements TransactionalComponent<ACell, 
 	}
 
 	private ACell readVenuePath(String virtualPath) {
-		return CoviaAdapter.readPath(workspace, toWorkspacePath(virtualPath));
+		return workspace.read(toWorkspacePath(virtualPath));
 	}
 
 	/** Deletes from the draft, then verifies the path is gone. */
 	private void deleteVenuePath(String virtualPath) {
 		ACell[] keys = toWorkspacePath(virtualPath);
-		CoviaAdapter.deletePathFromCursor(workspace, keys);
+		workspace.delete(keys);
 		if (readVenuePath(virtualPath) != null) {
 			throw new IllegalStateException(
 				"Bootstrap lattice delete validation failed at /" + virtualPath);
@@ -369,7 +368,7 @@ final class VenueBootstrapMaterializer implements TransactionalComponent<ACell, 
 
 	/** Rewrites caller-visible v/x to x relative to the transactional w/global root. */
 	private static ACell[] toWorkspacePath(String virtualPath) {
-		ACell[] virtualKeys = CoviaAdapter.parseStringPath(virtualPath);
+		ACell[] virtualKeys = WorkspaceRoot.parseStringPath(virtualPath);
 		if (virtualKeys.length < 2 || !"v".equals(virtualKeys[0].toString())) {
 			throw new IllegalArgumentException("Venue bootstrap path must start with v/: " + virtualPath);
 		}

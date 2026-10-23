@@ -6,6 +6,7 @@ import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.lattice.ALatticeComponent;
+import convex.lattice.TransactionalComponent;
 import convex.lattice.LatticeContext;
 import convex.lattice.cursor.AForkableCursor;
 import covia.exception.AuthException;
@@ -25,7 +26,12 @@ import convex.core.lang.RT;
  * {@link convex.lattice.generic.StringKeyedLattice} with AString keys
  * for JSON compatibility.</p>
  */
-public class Users extends ALatticeComponent<AMap<AString, ACell>> {
+public class Users extends ALatticeComponent<AMap<AString, ACell>> implements TransactionalComponent<AMap<AString, ACell>, Users> {
+	@Override
+	public Users withCursor(AForkableCursor<AMap<AString, ACell>> draft) {
+		return new Users(context, draft);
+	}
+
 	private final LatticeContext context;
 
 	public LatticeContext getContext() { return context; }
@@ -53,9 +59,9 @@ public class Users extends ALatticeComponent<AMap<AString, ACell>> {
 		return current != null ? current : Maps.empty();
 	}
 
-	Users(VenueState parent, AForkableCursor<AMap<AString, ACell>> cursor) {
+	Users(LatticeContext context, AForkableCursor<AMap<AString, ACell>> cursor) {
 		super(cursor);
-		this.context = parent.getContext();
+		this.context = context;
 	}
 
 	/**
@@ -73,8 +79,7 @@ public class Users extends ALatticeComponent<AMap<AString, ACell>> {
 		AForkableCursor<ACell> userCursor = cursor().withDefault(Maps.empty()).path(did);
 		ACell current = userCursor.get();
 		if (current == null || RT.getIn(current, Covia.K_DELETED) != null) return null;
-		return new User(this, convex.lattice.cursor.StampedCursor.create(new AccountCursor(userCursor),
-			getContext()::currentTimestamp, Covia::stampUserMeta), did);
+		return new User(context, new AccountCursor(userCursor), did);
 	}
 
 	/**
@@ -95,8 +100,7 @@ public class Users extends ALatticeComponent<AMap<AString, ACell>> {
 		// a late reader could observe null and set(zero), clobbering an earlier
 		// writer's committed user data (jobs, secrets, agents).
 		userCursor.updateAndGet(Users::initialise);
-		return new User(this, convex.lattice.cursor.StampedCursor.create(new AccountCursor(userCursor),
-			getContext()::currentTimestamp, Covia::stampUserMeta), did);
+		return new User(context, new AccountCursor(userCursor), did);
 	}
 
 	/**

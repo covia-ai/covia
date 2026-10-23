@@ -1,5 +1,6 @@
 package covia.venue;
 
+import covia.lattice.WorkspaceRoot;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -750,7 +751,7 @@ public class Engine {
 			if (!Config.STORAGE_TYPE_LATTICE.equals(storageType)) {
 				log.warn("Unknown storage type '{}', defaulting to lattice", storageType);
 			}
-			return venueState.storage();
+			return venueState.contentStorage();
 		}
 	}
 
@@ -1820,10 +1821,10 @@ public class Engine {
 		if (ref.startsWith(NS_DID)) {
 			DIDURL didURL = DIDURL.create(ref.toString());
 			ownerDID = Strings.create(didURL.getDID().toString());
-			pathKeys = CoviaAdapter.parseStringPath(didURL.getPath());
+			pathKeys = WorkspaceRoot.parseStringPath(didURL.getPath());
 		} else {
 			ownerDID = ctx.getUserDID();
-			pathKeys = CoviaAdapter.parseStringPath(stripLeadingSlash(ref).toString());
+			pathKeys = WorkspaceRoot.parseStringPath(stripLeadingSlash(ref).toString());
 		}
 
 		if (pathKeys.length == 0) {
@@ -2037,7 +2038,7 @@ public class Engine {
 		// nothing — none of which throw). Anything that throws is a real failure —
 		// an abnormal navigation error, or a lower-level store fault — and it
 		// propagates rather than collapsing to a phantom "path not found" (#175).
-		return covia.adapter.CoviaAdapter.readPath(user.workspaceRoot(), pathKeys);
+		return user.workspaceRoot().read(pathKeys);
 	}
 
 	/**

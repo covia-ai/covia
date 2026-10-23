@@ -9,8 +9,8 @@ This document describes how to build the Covia project using Maven.
 - **Git**: For cloning the repository
 
 This experimental branch targets local Convex `codex/lattice-application` commit
-`538f3be0688553c931e9b957671d140e3b25a29e`, installed as
-`0.8.18-538f3be06-SNAPSHOT`. The commit-specific version avoids silently picking up
+`b97deda1d0944dc424da5ae8e5428296193e82e1`, installed as
+`0.8.18-b97deda1d-SNAPSHOT`. The commit-specific version avoids silently picking up
 another developer's install of `0.8.18-SNAPSHOT`. These artifacts are local; a
 fresh checkout must build them before building Covia. This is not a release dependency.
 
@@ -18,9 +18,9 @@ From a local Convex checkout, create a detached worktree and build the selected
 source (use `mvnw.cmd` on Windows):
 
 ```sh
-git worktree add --detach ../convex-covia-snapshot 538f3be0688553c931e9b957671d140e3b25a29e
+git worktree add --detach ../convex-covia-snapshot b97deda1d0944dc424da5ae8e5428296193e82e1
 cd ../convex-covia-snapshot
-./mvnw versions:set -DnewVersion=0.8.18-538f3be06-SNAPSHOT -DgenerateBackupPoms=false
+./mvnw versions:set -DnewVersion=0.8.18-b97deda1d-SNAPSHOT -DgenerateBackupPoms=false
 ./mvnw clean install -DskipTests
 ```
 
@@ -52,7 +52,8 @@ Keep a baseline `covia.jar` built with Convex 0.8.17. Compile
 once, then run the resulting class with the baseline, experimental, and baseline
 jars in that order. Pass the same **disposable** Etch path and marker pairs
 `- before`, `before snapshot`, and `snapshot rollback`. A fourth run of the
-experimental jar with `rollback reopened` checks the return path again. Each run
+experimental jar with `snapshot reopened` checks the return path after the
+expected rollback failure (which does not write the rollback marker). Each run
 checks workspace data, encrypted secrets, DLFS content, agent records and
 persisted jobs, writes a fresh marker, and flushes before closing. The probe uses
 a fixed public test seed and must never open a real venue store. No schema rewrite

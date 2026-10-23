@@ -16,20 +16,32 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.lattice.ALatticeComponent;
+import convex.lattice.TransactionalComponent;
 import convex.lattice.LatticeContext;
 import convex.lattice.cursor.AForkableCursor;
+import convex.lattice.cursor.StampedCursor;
+import covia.lattice.Covia;
 import covia.api.Fields;
 import covia.adapter.agent.GoalTreeContext;
 
 /**
- * Cursor wrapper for a single agent's state within a user's lattice.
+ * Agent state with named atomic mutations and compound transactions.
  *
  * <p>All mutations use atomic {@code cursor().updateAndGet} — no external
  * locking needed. The {@code update} method is private; callers use
  * named mutation methods that encapsulate the record structure.</p>
  */
-public class AgentState extends ALatticeComponent<ACell> {
+public class AgentState extends ALatticeComponent<ACell> implements TransactionalComponent<ACell, AgentState> {
+	@Override
+	public AgentState withCursor(AForkableCursor<ACell> draft) {
+		return new AgentState(context, draft, agentId);
+	}
+
 	private final LatticeContext context;
+	private final AForkableCursor<ACell> edits;
+
+	@Override
+	public AForkableCursor<ACell> cursor() { return edits; }
 
 	public LatticeContext getContext() { return context; }
 
@@ -153,11 +165,12 @@ public class AgentState extends ALatticeComponent<ACell> {
 
 	private final AString agentId;
 
-	AgentState(User parent, AForkableCursor<ACell> cursor,
+	AgentState(LatticeContext context, AForkableCursor<ACell> cursor,
 			AString agentId) {
 		super(cursor);
-		this.context = parent.getContext();
+		this.context = context;
 		this.agentId = agentId;
+		this.edits = StampedCursor.create(cursor, context::currentTimestamp, Covia::stampAgent);
 	}
 
 	public AString getAgentId() { return agentId; }

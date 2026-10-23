@@ -1,11 +1,11 @@
 package covia.venue;
 
+import covia.lattice.WorkspaceRoot;
 import java.util.Objects;
 import java.util.regex.Pattern;
 
 import convex.core.data.ACell;
 import convex.core.data.AString;
-import covia.adapter.CoviaAdapter;
 
 /**
  * Venue-private durable storage bound to one adapter.
@@ -69,7 +69,7 @@ public final class AdapterWorkspace {
 	}
 
 	private User venueUser(){return engine.getVenueState().users().ensure(engine.getDIDString());}
-	private static ACell[] keys(String path){return CoviaAdapter.parseStringPath(path);}
+	private static ACell[] keys(String path){return WorkspaceRoot.parseStringPath(path);}
 
 	private static String validateRelative(String relative,boolean allowEmpty){
 		if(relative==null)throw new IllegalArgumentException("Adapter workspace path is required");

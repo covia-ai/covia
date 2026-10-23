@@ -2,7 +2,7 @@
 
 ## Snapshot implementation contract
 
-On the Convex `538f3be06` experimental branch, `LatticeHost` owns publication
+On the Convex `b97deda1d` experimental branch, `LatticeHost` owns publication
 and persistence. Covia registers its live `LatticeApplication` on that host;
 `NodeServer` attaches the host's publisher. Components explicitly bind their
 clock and signing policy and share storage; there is no component-parent policy
@@ -13,11 +13,42 @@ in order for its sweeps and explicit flush. A concurrent write remains pending
 when the host finishes publishing an older snapshot; the host does not merge
 that stale snapshot back into current state.
 
-`VenueState.fork()` is a bounded, explicitly published working copy. Incoming
-venue merges preserve remote stamps; local edits pass through `StampedCursor`.
-Bootstrap catalog changes use upstream `TransactionalComponent`, which retries
-conflicts and commits the narrow workspace atomically. DLFS file writes are live
-component edits; publication still belongs to Engine's host sweep or flush.
+`VenueState`, `Users`, `User`, `AgentState`, `AssetStore`, `SecretStore` and
+`WorkspaceRoot` implement upstream `TransactionalComponent`. Ordinary domain
+mutations are atomic; `transact(draft -> ...)` groups several operations into one
+local commit. Choose the component containing all data the operation reads or
+writes, obtain its children from the supplied draft, and keep external I/O out
+of the callback. Conflicts rerun the callback; exceptions discard the attempt.
+Retained draft objects remain isolated after completion. Nested transactions
+commit into their enclosing draft, not into live state.
+
+```java
+venue.transact(draft -> {
+    var user = draft.users().ensure(did);
+    user.ensureAgent("assistant", config, null);
+    user.workspaceRoot().write(WorkspaceRoot.parseStringPath("w/ready"), CVMBool.TRUE);
+});
+```
+
+Components bind their editing policies once. Rebinding reconstructs timestamped
+views over draft storage; commit targets bound storage, avoiding double stamping.
+User storage retains the account-generation guard at the destination, so a
+transaction cannot commit into a deleted or recreated account. A changed venue
+transaction signs its completed value on commit; a signing failure leaves live
+state unchanged. Committing does not publish the host or flush the store.
+
+`VenueState.fork()` is a separate, explicitly reconciled working copy. Its
+`sync()` uses whole-venue LWW selection; it must not be used as a transaction
+substitute for concurrent local writes. Interior components expose transactions,
+not independent fork/publication policies. Incoming venue merges preserve remote
+stamps; local edits pass through `StampedCursor`.
+
+Workspace path operations live in `WorkspaceRoot`; adapters handle request
+routing and authority checks before calling this domain API. Raw cursor access
+remains an internal integration primitive, not an authorised public endpoint.
+Bootstrap catalog changes use the same upstream transaction engine over the
+narrow venue-owned workspace. DLFS file writes are live component edits;
+publication still belongs to Engine's host sweep or flush.
 
 The design history below describes the earlier 0.8.17 implementation and deferred
 ideas. Its `RootComponent`, cursor callbacks and implicit parent-policy APIs are

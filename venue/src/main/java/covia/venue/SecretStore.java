@@ -18,6 +18,7 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.lattice.ALatticeComponent;
+import convex.lattice.TransactionalComponent;
 import convex.lattice.LatticeContext;
 import convex.lattice.cursor.AForkableCursor;
 
@@ -40,7 +41,12 @@ import convex.lattice.cursor.AForkableCursor;
  *
  * <p>Follows the same lattice app wrapper pattern as {@link AssetStore}.</p>
  */
-public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> {
+public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> implements TransactionalComponent<AMap<AString, ACell>, SecretStore> {
+	@Override
+	public SecretStore withCursor(AForkableCursor<AMap<AString, ACell>> draft) {
+		return new SecretStore(context, draft);
+	}
+
 	private final LatticeContext context;
 
 	public LatticeContext getContext() { return context; }
@@ -70,10 +76,10 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> {
 	private static final AString KEY_VERSION_KEY = Strings.intern("keyVersion");
 	private static final CVMLong CURRENT_KEY_VERSION_CELL = CVMLong.create(CURRENT_KEY_VERSION);
 
-	SecretStore(User parent,
+	SecretStore(LatticeContext context,
 			AForkableCursor<AMap<AString, ACell>> cursor) {
 		super(cursor);
-		this.context = parent.getContext();
+		this.context = context;
 	}
 
 	/**

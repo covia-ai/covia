@@ -10,24 +10,23 @@ import convex.core.data.Blob;
 import convex.core.data.Index;
 import convex.core.data.Strings;
 import convex.lattice.ALatticeComponent;
+import convex.lattice.TransactionalComponent;
 import convex.lattice.LatticeContext;
 import convex.lattice.cursor.AForkableCursor;
-import covia.adapter.CoviaAdapter;
 import covia.lattice.Covia;
 import covia.lattice.Namespace;
 import covia.lattice.WorkspaceRoot;
 import convex.lattice.cursor.StampedCursor;
 
 /**
- * Cursor wrapper for a single user's state within a venue.
+ * Per-user domain state, with atomic mutations and compound transactions.
  *
  * <p>Wraps a lattice cursor at {@code :user-data → <did>} within the
  * venue state. Provides typed accessors for per-user data. Created by
  * {@link Users#get(AString)} (returns null if the user doesn't exist) or
  * {@link Users#ensure(AString)} (creates if needed).</p>
  *
- * <p>Follows the same lattice app wrapper pattern as {@link AssetStore}.
- * The per-user lattice uses short AString-compatible keys from
+ * <p>The per-user lattice uses short AString-compatible keys from
  * {@link Namespace} for JSON compliance:</p>
  * <ul>
  *   <li>{@code "j"} — user's job references</li>
@@ -41,8 +40,17 @@ import convex.lattice.cursor.StampedCursor;
  * Merge is whole-value at the venue {@code :value}; these namespaces are
  * navigation structure only.
  */
-public class User extends ALatticeComponent<ACell> {
+public class User extends ALatticeComponent<ACell> implements TransactionalComponent<ACell, User> {
+	@Override
+	public User withCursor(AForkableCursor<ACell> draft) {
+		return new User(context, draft, did);
+	}
+
 	private final LatticeContext context;
+	private final AForkableCursor<ACell> edits;
+
+	@Override
+	public AForkableCursor<ACell> cursor() { return edits; }
 
 	public LatticeContext getContext() { return context; }
 
@@ -50,23 +58,24 @@ public class User extends ALatticeComponent<ACell> {
 
 	/** Framework-internal navigation for trusted venue-owned workspace state. */
 	ACell readInternalPath(ACell[] keys) {
-		return CoviaAdapter.readPath(workspaceRoot(), keys);
+		return workspaceRoot().read(keys);
 	}
 
 	/** Framework-internal atomic write; authority is possession of this user cursor. */
 	void writeInternalPath(ACell[] keys, ACell value) {
-		CoviaAdapter.writePathToCursor(workspaceRoot(), keys, value);
+		workspaceRoot().write(keys, value);
 	}
 
 	/** Framework-internal atomic delete; authority is possession of this user cursor. */
 	boolean deleteInternalPath(ACell[] keys) {
-		return CoviaAdapter.deletePathFromCursor(workspaceRoot(), keys);
+		return workspaceRoot().delete(keys);
 	}
 
-	User(Users parent, AForkableCursor<ACell> cursor, AString did) {
+	User(LatticeContext context, AForkableCursor<ACell> cursor, AString did) {
 		super(cursor);
-		this.context = parent.getContext();
+		this.context = context;
 		this.did = did;
+		this.edits = StampedCursor.create(cursor, context::currentTimestamp, Covia::stampUserMeta);
 	}
 
 	/** Caller-visible workspace namespaces with this user's write policy. */
@@ -74,15 +83,17 @@ public class User extends ALatticeComponent<ACell> {
 		return new WorkspaceRoot(cursor(), getContext(), true);
 	}
 
-	/** Scoped agent/job navigation retains record stamps and typed indexes. */
+	/** Internal namespace-resolution bridge; domain callers use agent and job methods. */
 	public AForkableCursor<ACell> recordCursor(ACell namespace, ACell id) {
-		if (Namespace.G.equals(namespace)) return StampedCursor.create(
-			convex.lattice.LatticeComponent.resolve(cursor(), Covia.USER_RECORD, namespace, id),
-			getContext()::currentTimestamp, Covia::stampAgent);
+		if (Namespace.G.equals(namespace)) return new AgentState(context, agentStorage(id), (AString) id).cursor();
 		if (Namespace.J.equals(namespace)) return StampedCursor.create(
 			convex.lattice.LatticeComponent.resolve(cursor(), Covia.USER_RECORD, namespace, id),
 			getContext()::currentTimestamp, Covia::stampUpdated);
 		throw new IllegalArgumentException("Not an agent or job namespace: " + namespace);
+	}
+
+	private AForkableCursor<ACell> agentStorage(ACell id) {
+		return convex.lattice.LatticeComponent.resolve(cursor(), Covia.USER_RECORD, Namespace.G, id);
 	}
 
 	/** Gets the user's DID string. */
@@ -201,7 +212,7 @@ public class User extends ALatticeComponent<ACell> {
 	 * @return SecretStore wrapping the user's "s" cursor
 	 */
 	public SecretStore secrets() {
-		return new SecretStore(this, cursor().path(Namespace.S));
+		return new SecretStore(context, cursor().path(Namespace.S));
 	}
 
 	/**
@@ -215,9 +226,9 @@ public class User extends ALatticeComponent<ACell> {
 	}
 
 	public AgentState agent(AString agentId) {
-		AForkableCursor<ACell> c = recordCursor(Namespace.G, agentId);
+		AForkableCursor<ACell> c = agentStorage(agentId);
 		if (c.get() == null) return null;
-		return new AgentState(this, c, agentId);
+		return new AgentState(context, c, agentId);
 	}
 
 	/**
@@ -233,8 +244,8 @@ public class User extends ALatticeComponent<ACell> {
 	}
 
 	public AgentState ensureAgent(AString agentId, AMap<AString, ACell> config, ACell initialState) {
-		AForkableCursor<ACell> c = recordCursor(Namespace.G, agentId);
-		AgentState state = new AgentState(this, c, agentId);
+		AForkableCursor<ACell> c = agentStorage(agentId);
+		AgentState state = new AgentState(context, c, agentId);
 		state.initialiseIfAbsent(config, initialState);
 		return state;
 	}
@@ -251,8 +262,8 @@ public class User extends ALatticeComponent<ACell> {
 
 	public AgentState createAgent(AString agentId, AMap<AString, ACell> config,
 			ACell initialState, AMap<AString, ACell> definition) {
-		AForkableCursor<ACell> c = recordCursor(Namespace.G, agentId);
-		AgentState state = new AgentState(this, c, agentId);
+		AForkableCursor<ACell> c = agentStorage(agentId);
+		AgentState state = new AgentState(context, c, agentId);
 		return state.initialiseIfAbsent(config, initialState, definition) ? state : null;
 	}
 
@@ -269,8 +280,8 @@ public class User extends ALatticeComponent<ACell> {
 	 */
 	public AgentState forkAgent(AString agentId, AMap<AString, ACell> config,
 			ACell state, convex.core.data.AVector<ACell> timeline) {
-		AForkableCursor<ACell> c = recordCursor(Namespace.G, agentId);
-		AgentState fork = new AgentState(this, c, agentId);
+		AForkableCursor<ACell> c = agentStorage(agentId);
+		AgentState fork = new AgentState(context, c, agentId);
 		return fork.initialiseFromForkIfAbsent(config, state, timeline) ? fork : null;
 	}
 

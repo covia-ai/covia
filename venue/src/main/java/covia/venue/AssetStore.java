@@ -11,6 +11,7 @@ import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import convex.lattice.ALatticeComponent;
+import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 
 /**
@@ -23,7 +24,12 @@ import convex.lattice.cursor.AForkableCursor;
  *
  * <p>Each asset record is a 3-element vector: [json, content, metaMap].</p>
  */
-public class AssetStore extends ALatticeComponent<Index<AString, AVector<ACell>>> {
+public class AssetStore extends ALatticeComponent<Index<AString, AVector<ACell>>> implements TransactionalComponent<Index<AString, AVector<ACell>>, AssetStore> {
+	@Override
+	public AssetStore withCursor(AForkableCursor<Index<AString, AVector<ACell>>> draft) {
+		return new AssetStore(draft);
+	}
+
 
 	/** Position of JSON metadata string in asset record vector */
 	public static final long POS_JSON = 0;

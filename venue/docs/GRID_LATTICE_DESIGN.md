@@ -1089,14 +1089,17 @@ publication: application.host().sync() → current root
 ```
 
 Direct `updateAndGet` calls on sub-cursors remain atomic because they ultimately
-replace the shared application root with compare-and-swap. A short-lived child
-fork is reserved for cases such as bootstrap materialisation that must validate
-several writes before committing them together. That transaction forks only the
-venue-owned `w/global` workspace, not the whole venue. Because the JSON regions
-below the venue's LWW node define no merge, such a fork is a staging copy: the
-transaction commits by replaying its validated writes in one `updateAndGet` on
-the connected cursor. Request duration and persistence cadence are not
-transaction boundaries.
+replace the shared application root with compare-and-swap. Compound domain edits
+use upstream `TransactionalComponent.transact`: callbacks operate on isolated
+views of the same domain objects, and commit retries the domain operations if
+concurrent state changed. Exceptions discard the attempt. Bootstrap uses this
+contract over the venue-owned `w/global` workspace. No manual write replay or
+local transaction framework is involved. Request duration and persistence cadence
+are not transaction boundaries.
+
+`VenueState.fork().sync()` is explicit lattice reconciliation using whole-venue
+LWW, not a substitute for a retrying local transaction. Interior components have
+no independent publication policy; use their typed `transact` API instead.
 
 The timestamp is not a local sequence number. Local writes are not merged with
 the preceding local value: their successful atomic update order determines the
@@ -1107,9 +1110,11 @@ the venue keeps its own current authoritative value.
 ### A.4 Signing Strategy: Sign Connected Updates, Verify Early
 
 The venue's Ed25519 keypair signs each successful connected component mutation
-as it crosses the `SignedCursor` boundary. A bounded transaction fork accumulates
-private writes and produces one signature when the component commits it — a
-whole-venue `sync()`, or one replayed `updateAndGet` for a narrow fork.
+as it crosses the `SignedCursor` boundary. A transaction accumulates private
+writes and signs the completed venue value at commit. An uncontended changed
+transaction signs once; an unchanged transaction does not sign. Signing failure
+leaves live state unchanged. Rebinding restores editing policies on the draft,
+while commit targets bound storage so those policies are not applied twice.
 
 ```
 [Component mutation] → atomic cursor update → sign venue owner value

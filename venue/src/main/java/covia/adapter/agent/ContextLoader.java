@@ -378,7 +378,7 @@ public class ContextLoader {
 
 	/**
 	 * Reads a value from the user's lattice namespace using the internal
-	 * cursor-based path resolution (same as CoviaAdapter.readPath).
+	 * cursor-based path resolution (same as WorkspaceRoot.read).
 	 */
 	String resolveWorkspacePath(String path, RequestContext ctx) {
 		try {

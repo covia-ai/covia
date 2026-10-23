@@ -1,5 +1,6 @@
 package covia.adapter;
 
+import covia.lattice.WorkspaceRoot;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
@@ -43,11 +44,11 @@ public class CoviaReadIndexNavTest {
 		String hex = sid.toHexString();   // bare hex, no 0x
 
 		// sessions/<hex>/wakeTime
-		ACell wt = CoviaAdapter.deepGet(root, new ACell[]{ s("sessions"), s(hex), s("wakeTime") }, 0);
+		ACell wt = WorkspaceRoot.deepGet(root, new ACell[]{ s("sessions"), s(hex), s("wakeTime") }, 0);
 		assertEquals(CVMLong.create(1790000000000L), wt, "hex segment must resolve the Blob key");
 
 		// sessions/<hex> → whole session record
-		ACell rec = CoviaAdapter.deepGet(root, new ACell[]{ s("sessions"), s(hex) }, 0);
+		ACell rec = WorkspaceRoot.deepGet(root, new ACell[]{ s("sessions"), s(hex) }, 0);
 		assertEquals(s("wakeTime"), ((AMap<?, ?>) rec).getKeys().get(0), "whole record resolves too");
 	}
 
@@ -56,7 +57,7 @@ public class CoviaReadIndexNavTest {
 		Blob sid = Blob.fromHex("0000019e921a468d0000000000000000");
 		ACell root = fixture(sid);
 		// keys render outward as "0x…" via ALattice.toJSONKey — accept that form
-		ACell wt = CoviaAdapter.deepGet(root,
+		ACell wt = WorkspaceRoot.deepGet(root,
 			new ACell[]{ s("sessions"), s("0x" + sid.toHexString()), s("wakeTime") }, 0);
 		assertEquals(CVMLong.create(1790000000000L), wt, "0x-prefixed hex must resolve too");
 	}
@@ -65,7 +66,7 @@ public class CoviaReadIndexNavTest {
 	public void testUnknownKeyMisses() {
 		Blob sid = Blob.fromHex("0000019e921a468d0000000000000000");
 		ACell root = fixture(sid);
-		ACell miss = CoviaAdapter.deepGet(root,
+		ACell miss = WorkspaceRoot.deepGet(root,
 			new ACell[]{ s("sessions"), s("ffffffffffffffffffffffffffffffff"), s("wakeTime") }, 0);
 		assertNull(miss, "a hex key not present in the index resolves to null, not a throw");
 	}
