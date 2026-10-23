@@ -60,13 +60,13 @@ public class ConnectionsAdapterTest {
 	public void testListIsDerivedFromProviderSkills() throws Exception {
 		ACell result = invoke("v/ops/connections/list", Maps.empty());
 		AVector<ACell> providers = RT.ensureVector(RT.getIn(result, "providers"));
-		assertEquals(20, providers.count());
+		assertEquals(25, providers.count());
 		assertEquals(Strings.create("airtable"), RT.getIn(providers.get(0), "provider"));
-		assertEquals(Strings.create("calendly"), RT.getIn(providers.get(2), "provider"));
-		assertEquals(Strings.create("gitlab"), RT.getIn(providers.get(6), "provider"));
-		assertEquals(Strings.create("notion"), RT.getIn(providers.get(12), "provider"));
-		assertEquals(Strings.create("slack"), RT.getIn(providers.get(16), "provider"));
-		assertEquals(Strings.create("twilio"), RT.getIn(providers.get(19), "provider"));
+		assertEquals(Strings.create("confluence"), RT.getIn(providers.get(4), "provider"));
+		assertEquals(Strings.create("gitlab"), RT.getIn(providers.get(8), "provider"));
+		assertEquals(Strings.create("notion"), RT.getIn(providers.get(14), "provider"));
+		assertEquals(Strings.create("slack"), RT.getIn(providers.get(19), "provider"));
+		assertEquals(Strings.create("zendesk"), RT.getIn(providers.get(24), "provider"));
 
 		AMap<AString, ACell> notion = named(result, "providers", "notion");
 		assertEquals(Strings.create("v/skills/connections/notion"), notion.get(Strings.intern("skill")));
@@ -108,6 +108,31 @@ public class ConnectionsAdapterTest {
 		assertEquals(2, credentials.count());
 		assertEquals(CVMBool.FALSE, RT.getIn(credentials.get(0), "configured"));
 		assertEquals(CVMBool.TRUE, RT.getIn(credentials.get(1), "configured"));
+	}
+
+	@Test
+	public void testMultiValueConnectionRequiresAllCredentials() throws Exception {
+		var key = SecretStore.deriveKey(engine.getKeyPair());
+		var secrets = engine.getVenueState().users().ensure(userDID).secrets();
+
+		// A multi-value connection (Zendesk: a subdomain + a Basic-auth header)
+		// lists both under `required`; it is configured only when all are present.
+		AMap<AString, ACell> none = named(
+			invoke("v/ops/connections/status", Maps.of("provider", "zendesk")), "connections", "zendesk");
+		assertEquals(CVMBool.FALSE, none.get(Strings.intern("configured")));
+		assertEquals(2, RT.ensureVector(none.get(Strings.intern("credentials"))).count());
+
+		secrets.store("ZENDESK_SITE", "acme", key);
+		AMap<AString, ACell> partial = named(
+			invoke("v/ops/connections/status", Maps.of("provider", "zendesk")), "connections", "zendesk");
+		assertEquals(CVMBool.FALSE, partial.get(Strings.intern("configured")),
+			"a site alone does not configure a multi-value connection");
+
+		secrets.store("ZENDESK_AUTH", "Basic never-return", key);
+		AMap<AString, ACell> both = named(
+			invoke("v/ops/connections/status", Maps.of("provider", "zendesk")), "connections", "zendesk");
+		assertEquals(CVMBool.TRUE, both.get(Strings.intern("configured")),
+			"both required credentials present configures it");
 	}
 
 	@Test
