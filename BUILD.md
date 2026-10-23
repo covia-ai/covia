@@ -8,7 +8,55 @@ This document describes how to build the Covia project using Maven.
 - **Maven 3.7+**: Minimum Maven version required (enforced by maven-enforcer-plugin)
 - **Git**: For cloning the repository
 
-Covia targets Convex 0.8.17. Maven resolves the release from the local repository or configured remote repositories in the normal way.
+This experimental branch targets local Convex `codex/lattice-application` commit
+`538f3be0688553c931e9b957671d140e3b25a29e`, installed as
+`0.8.18-538f3be06-SNAPSHOT`. The commit-specific version avoids silently picking up
+another developer's install of `0.8.18-SNAPSHOT`. These artifacts are local; a
+fresh checkout must build them before building Covia. This is not a release dependency.
+
+From a local Convex checkout, create a detached worktree and build the selected
+source (use `mvnw.cmd` on Windows):
+
+```sh
+git worktree add --detach ../convex-covia-snapshot 538f3be0688553c931e9b957671d140e3b25a29e
+cd ../convex-covia-snapshot
+./mvnw versions:set -DnewVersion=0.8.18-538f3be06-SNAPSHOT -DgenerateBackupPoms=false
+./mvnw clean install -DskipTests
+```
+
+Then run `mvn clean install` in Covia. The upstream cursor/component/DLFS checks
+can be run in the detached Convex checkout with:
+
+```sh
+./mvnw test -pl convex-core,convex-dlfs -am '-Dtest=*CursorTest,*ComponentTest,*ApplicationTest,*HostTest,DLFS*Test' '-Dsurefire.failIfNoSpecifiedTests=false'
+```
+
+### Snapshot compatibility status
+
+The full Covia reactor and focused upstream cursor/component/DLFS tests pass.
+The disposable-store upgrade from Convex 0.8.17 also passes. **Rollback fails
+once this snapshot writes DLFS content:** it adds an optional modification-time
+slot (`POS_MTIME = 5`), producing six-element nodes that 0.8.17 rejects (that
+reader accepts only four/five-element nodes). This is an upstream DLFS format
+change, not an Etch encoding change or a Covia secret-record migration. Test
+with disposable stores or copies; returning to 0.8.17 requires restoring the
+pre-upgrade store. Do not merge this experiment as a safe in-place upgrade until
+the compatibility contract is resolved upstream.
+The reproduced failure is recorded on
+[Convex #688](https://github.com/Convex-Dev/convex/issues/688#issuecomment-6371051510).
+
+### Store compatibility rehearsal
+
+Keep a baseline `covia.jar` built with Convex 0.8.17. Compile
+`venue/src/test/java/covia/venue/SnapshotCompatibilityProbe.java` against that jar
+once, then run the resulting class with the baseline, experimental, and baseline
+jars in that order. Pass the same **disposable** Etch path and marker pairs
+`- before`, `before snapshot`, and `snapshot rollback`. A fourth run of the
+experimental jar with `rollback reopened` checks the return path again. Each run
+checks workspace data, encrypted secrets, DLFS content, agent records and
+persisted jobs, writes a fresh marker, and flushes before closing. The probe uses
+a fixed public test seed and must never open a real venue store. No schema rewrite
+is intended by this migration; the rehearsal verifies actual cross-version reads.
 
 ## Project Structure
 

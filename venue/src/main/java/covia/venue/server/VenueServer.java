@@ -43,7 +43,6 @@ import convex.core.data.Ref;
 import convex.etch.EtchConfig;
 import convex.etch.EtchStore;
 import convex.core.util.Utils;
-import convex.lattice.LatticeContext;
 import convex.node.NodeConfig;
 import convex.node.NodeServer;
 import covia.api.Fields;
@@ -164,11 +163,9 @@ public class VenueServer {
 				this.store = createStore(this.config);
 			}
 			AKeyPair keyPair = resolveKeyPair(this.config, storePreexisted);
-			this.nodeServer = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
-			nodeServer.setMergeContext(LatticeContext.create(null, keyPair));
-			nodeServer.launch(); // restore from store BEFORE Engine init
-			CoviaApplication application =
-				CoviaApplication.connect(nodeServer.getRootComponent());
+			CoviaApplication application = CoviaApplication.open(store, keyPair);
+			this.nodeServer = new NodeServer<>(application.host(), NodeConfig.port(-1));
+			nodeServer.launch();
 			engine = new Engine(this.config, application, keyPair);
 			engine.setStoreControl(new StoreMaintenance());
 			engine.prepare();

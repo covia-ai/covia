@@ -182,10 +182,10 @@ public class P2PAdapterTest {
 			AKeyPair other = AKeyPair.generate();
 			AString otherDid = UCAN.toDIDKey(other.getAccountKey());
 			var cursor = adapter.node().getNodeServer().getCursor();
-			cursor.path(P2PLattice.KEY_P2P, P2PLattice.KEY_NODES).merge(convex.lattice.P2PLattice.createSignedEntry(other,
-				convex.lattice.P2PLattice.createNodeInfo(Vectors.empty(), Strings.create("test"), Strings.create("1"),
-					Vectors.empty(), false, cursor.getContext().currentTimestampValue())));
-			cursor.sync();
+			adapter.node().getApplication().mergeAt(convex.lattice.p2p.P2PLattice.createSignedEntry(other,
+				convex.lattice.p2p.P2PLattice.createNodeInfo(Vectors.empty(), Strings.create("test"), Strings.create("1"),
+					Vectors.empty(), false, convex.core.util.Utils.getCurrentTimestamp())), P2PLattice.KEY_P2P, P2PLattice.KEY_NODES);
+			adapter.node().getNodeServer().getHost().sync();
 			assertEquals(P2PAdapter.APPEARED, await(events, e -> otherDid.equals(e.did()), "the merged record").type());
 
 			engine.configureAdapter("p2p", Maps.empty());

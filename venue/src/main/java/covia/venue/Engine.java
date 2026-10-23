@@ -6,7 +6,6 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -52,10 +51,9 @@ import convex.core.lang.RT;
 import convex.core.util.JSON;
 import convex.core.util.Utils;
 import convex.lattice.LatticeContext;
-import convex.lattice.cursor.ALatticeCursor;
+import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.fs.DLFS;
 import convex.lattice.fs.DLFileSystem;
-import convex.lattice.fs.impl.DLFSLocal;
 import covia.adapter.AAdapter;
 import covia.adapter.AgentAdapter;
 import covia.adapter.AssetAdapter;
@@ -118,9 +116,10 @@ public class Engine {
 
 	/**
 	 * Venue lattice using Covia.ROOT structure see COG-004.
-	 * ALatticeCursor provides lattice-aware merge and sync semantics.
+	 * Components supply merge policy; the cursor supplies atomic updates and sync.
  	 */
-	protected ALatticeCursor<Index<Keyword,ACell>> lattice;
+	protected AForkableCursor<Index<Keyword,ACell>> lattice;
+	protected LatticeContext latticeContext = LatticeContext.EMPTY;
 
 	/** Venue state wrapper providing typed access to assets, jobs, and child cursors */
 	protected VenueState venueState;
@@ -261,7 +260,7 @@ public class Engine {
 	 * Call {@link #launch()} for a complete venue, or {@link #start()} for a
 	 * manually assembled runtime. Generates a random venue key pair.
 	 */
-	public Engine(AMap<AString, ACell> config, ALatticeCursor<Index<Keyword,ACell>> cursor) throws IOException {
+	public Engine(AMap<AString, ACell> config, AForkableCursor<Index<Keyword,ACell>> cursor) throws IOException {
 		this(config, cursor, AKeyPair.generate(), PersistenceHandler.NOOP);
 	}
 
@@ -272,9 +271,9 @@ public class Engine {
 	 *
 	 * <p>This raw-cursor overload is retained for compatibility. New hosted
 	 * integrations should construct a {@link CoviaApplication} from their
-	 * {@code RootComponent} and use the application constructor.</p>
+	 * {@code LatticeHost} and use the application constructor.</p>
 	 */
-	public Engine(AMap<AString, ACell> config, ALatticeCursor<Index<Keyword,ACell>> cursor, AKeyPair keyPair) throws IOException {
+	public Engine(AMap<AString, ACell> config, AForkableCursor<Index<Keyword,ACell>> cursor, AKeyPair keyPair) throws IOException {
 		this(config, cursor, keyPair, PersistenceHandler.NOOP);
 	}
 
@@ -286,7 +285,7 @@ public class Engine {
 	 * the close-time final flush) to make the venue's lattice value durable.
 	 * Pass {@link PersistenceHandler#NOOP} for in-memory venues.</p>
 	 */
-	public Engine(AMap<AString, ACell> config, ALatticeCursor<Index<Keyword,ACell>> cursor,
+	public Engine(AMap<AString, ACell> config, AForkableCursor<Index<Keyword,ACell>> cursor,
 			AKeyPair keyPair, PersistenceHandler persistHandler) throws IOException {
 		this(new Config(config), null, cursor, keyPair, persistHandler);
 	}
@@ -296,14 +295,14 @@ public class Engine {
 	 * its Config. VenueServer uses this to reuse the same instance without
 	 * validating twice (and duplicating unknown-field warnings).
 	 */
-	public Engine(Config config, ALatticeCursor<Index<Keyword,ACell>> cursor,
+	public Engine(Config config, AForkableCursor<Index<Keyword,ACell>> cursor,
 			AKeyPair keyPair, PersistenceHandler persistHandler) throws IOException {
 		this(config, null, cursor, keyPair, persistHandler);
 	}
 
 	/**
 	 * Canonical hosted-application constructor. Publication and durability flow
-	 * through the application's {@code RootComponent}; the engine does not need
+	 * through the application's {@code LatticeHost}; the engine does not need
 	 * to know whether that host is local or networked.
 	 * The host must restore its root before construction. Call {@link #launch(Function)}
 	 * to assemble a complete venue without HTTP. The caller retains ownership of
@@ -322,7 +321,7 @@ public class Engine {
 	}
 
 	private Engine(Config config, CoviaApplication application,
-			ALatticeCursor<Index<Keyword,ACell>> cursor, AKeyPair keyPair,
+			AForkableCursor<Index<Keyword,ACell>> cursor, AKeyPair keyPair,
 			PersistenceHandler persistHandler) throws IOException {
 		this.config=java.util.Objects.requireNonNull(config, "config");
 		this.application=application;
@@ -575,11 +574,12 @@ public class Engine {
 		lifecycle = Lifecycle.STARTING;
 		try {
 			// Set signing context only when active startup begins.
-			// Preserve host policy (future-skew checks, owner verification, custom
-			// clock) and override only Covia's signing capability.
-			LatticeContext ctx = this.lattice.getContext()
+			// Preserve application owner verification and clock policy, overriding
+			// only Covia's signing capability.
+			LatticeContext ctx = (application == null ? latticeContext : application.getContext())
 				.withSigningKey(this.keyPair);
-			this.lattice.setContext(ctx);
+			this.latticeContext = ctx;
+			if (application != null) application.setContext(ctx);
 			initialiseFromCursor();
 
 			this.contentStorage = createStorage();
@@ -778,7 +778,7 @@ public class Engine {
 		// reserved for bounded component transactions.
 		VenueState connected = (application != null)
 			? application.venue(getAccountKey())
-			: VenueState.fromRoot(lattice, getAccountKey());
+			: VenueState.fromRoot(lattice, getAccountKey(), latticeContext);
 		connected.initialise(getDIDString());
 		this.venueState = connected;
 
@@ -846,8 +846,9 @@ public class Engine {
 	private void publishApplicationRoot() {
 		if (application != null) {
 			application.sync();
+			application.host().sync();
 		} else {
-			lattice.sync();
+			lattice.sync((own, other) -> Covia.ROOT.merge(latticeContext, own, other));
 		}
 	}
 
@@ -894,8 +895,9 @@ public class Engine {
 	public void flush() {
 		try {
 			if (application != null) {
-				application.sync();  // host publication selects the retained root
-				application.flush(); // physical durability barrier
+				application.sync();
+				application.host().sync();  // host publication selects the retained root
+				application.host().flush(); // physical durability barrier
 			} else {
 				persistHandler.persist(lattice.get());
 				persistHandler.flush();
@@ -908,7 +910,7 @@ public class Engine {
 
 	private void flushStore() throws IOException {
 		if (application != null) {
-			application.flush();
+			application.host().flush();
 		} else {
 			persistHandler.flush();
 		}
@@ -2035,7 +2037,7 @@ public class Engine {
 		// nothing — none of which throw). Anything that throws is a real failure —
 		// an abnormal navigation error, or a lower-level store fault — and it
 		// propagates rather than collapsing to a phantom "path not found" (#175).
-		return covia.adapter.CoviaAdapter.readPath(user.cursor(), pathKeys);
+		return covia.adapter.CoviaAdapter.readPath(user.workspaceRoot(), pathKeys);
 	}
 
 	/**
@@ -3255,24 +3257,29 @@ public class Engine {
 		return agent;
 	}
 
-	/**
-	 * Gets the root lattice cursor. Used by adapters that need access to
-	 * top-level lattice regions (e.g. DLFSAdapter for the :dlfs region).
-	 */
-	public ALatticeCursor<Index<Keyword, ACell>> getRootCursor() {
+	/** Signing and live write-clock policy supplied to venue components. */
+	public LatticeContext getLatticeContext() {
+		return latticeContext;
+	}
+
+	/** Gets the live root cursor for top-level lattice regions. */
+	public AForkableCursor<Index<Keyword, ACell>> getRootCursor() {
 		return lattice;
 	}
 
 	/**
-	 * Connects a DLFS drive to the hosted lattice, enabling incremental blob
+	 * Connects an owner's DLFS drives to the hosted lattice, enabling incremental blob
 	 * persistence when this engine has a store-backed application host.
 	 *
 	 * <p>Legacy raw-cursor embedders have no store policy available here and
-	 * retain the heap-backed behaviour of the two-argument Convex API.</p>
+	 * retain heap-backed behaviour.</p>
 	 */
-	public DLFSLocal connectDLFSDrive(ALatticeCursor<?> parent, AString driveName) {
-		if (application == null) return DLFS.connect(parent, driveName);
-		return DLFS.connect(parent, driveName, application.hostStore());
+	public convex.dlfs.DLFSDrives getDLFSDrives(AKeyPair ownerKey) {
+		var region = convex.dlfs.DLFSRegion.connect(
+			convex.lattice.LatticeComponent.resolve(lattice, Covia.ROOT, Covia.DLFS),
+			application == null ? null : application.hostStore(), ownerKey::signData,
+			latticeContext::currentTimestamp);
+		return region.drives(ownerKey.getAccountKey());
 	}
 
 	public AString getName() {

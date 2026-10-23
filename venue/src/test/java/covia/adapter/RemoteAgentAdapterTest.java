@@ -20,7 +20,6 @@ import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.auth.UcanTokens;
-import covia.lattice.Covia;
 import covia.venue.*;
 
 class RemoteAgentAdapterTest {
@@ -182,7 +181,7 @@ class RemoteAgentAdapterTest {
 
 	@Test void freshEngineReattachesWithoutResubmitting() throws Exception {
 		try (Peer peer = new Peer()) {
-			var cursor = convex.lattice.cursor.Cursors.createLattice(Covia.ROOT);
+			var cursor = convex.lattice.cursor.Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
 			AKeyPair key = AKeyPair.generate();
 			AMap<AString, ACell> config = Maps.of(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0));
 			Engine first = new Engine(config, cursor, key).start();
@@ -209,7 +208,7 @@ class RemoteAgentAdapterTest {
 
 	@Test void agentFacadeRecoversParentAndChildWithoutResubmission() throws Exception {
 		try (Peer peer = new Peer()) {
-			var cursor = convex.lattice.cursor.Cursors.createLattice(Covia.ROOT);
+			var cursor = convex.lattice.cursor.Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
 			AKeyPair key = AKeyPair.generate();
 			AMap<AString, ACell> config = Maps.of(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0));
 			Engine first = new Engine(config, cursor, key).start();

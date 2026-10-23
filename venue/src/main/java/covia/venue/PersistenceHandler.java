@@ -26,8 +26,8 @@ import convex.core.data.ACell;
  * </ul>
  *
  * <p>New integrations should connect a {@link CoviaApplication} to a hosted
- * {@code RootComponent}; publication and durability then flow through
- * application {@code sync()} and {@code flush()}. This interface remains for
+ * {@code LatticeHost}; publication and durability then flow through
+ * host {@code sync()} and {@code flush()}. This interface remains for
  * source-compatible embedders that supply only a raw cursor.</p>
  *
  * <p>See {@code venue/docs/PERSISTENCE.md} for the architectural rationale.</p>

@@ -17,7 +17,6 @@ import convex.core.crypto.AKeyPair;
 import convex.core.lang.RT;
 import convex.core.store.AStore;
 import convex.etch.EtchStore;
-import convex.lattice.LatticeContext;
 import convex.node.NodeConfig;
 import convex.node.NodeServer;
 import covia.adapter.DLFSAdapter;
@@ -70,12 +69,11 @@ public class DLFSPersistenceTest {
 		{
 			store = EtchStore.create(etchFile);
 			node =
-				new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
-			node.setMergeContext(LatticeContext.create(null, venueKey));
+				new NodeServer<>(CoviaApplication.open(store, venueKey).host(), NodeConfig.port(-1));
 			node.launch();
 
 			engine = new Engine(Maps.of(
-				Config.USERS, Maps.of(Config.AUTO_CREATE, true)), node.getCursor(), venueKey).start();
+				Config.USERS, Maps.of(Config.AUTO_CREATE, true)), CoviaApplication.connect(node.getHost()), venueKey).start();
 			Engine.addDemoAssets(engine);
 
 			// Write via DLFS adapter
@@ -133,8 +131,7 @@ public class DLFSPersistenceTest {
 		{
 			store = EtchStore.create(etchFile);
 			node =
-				new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
-			node.setMergeContext(LatticeContext.create(null, venueKey));
+				new NodeServer<>(CoviaApplication.open(store, venueKey).host(), NodeConfig.port(-1));
 			node.launch();
 
 			// Verify restore — root level
@@ -145,7 +142,7 @@ public class DLFSPersistenceTest {
 
 			// Check the cursor chain that DLFSAdapter would use
 			engine = new Engine(Maps.of(
-				Config.USERS, Maps.of(Config.AUTO_CREATE, true)), node.getCursor(), venueKey).start();
+				Config.USERS, Maps.of(Config.AUTO_CREATE, true)), CoviaApplication.connect(node.getHost()), venueKey).start();
 			Engine.addDemoAssets(engine);
 
 			// Navigate the same path DLFSAdapter.getUserDLFSCursor() takes

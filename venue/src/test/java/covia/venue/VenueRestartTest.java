@@ -27,8 +27,6 @@ import convex.node.NodeServer;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
-import covia.lattice.Covia;
-import covia.venue.RequestContext;
 import covia.test.DurabilityTest;
 
 /**
@@ -91,10 +89,10 @@ public class VenueRestartTest {
 		// ========== Stage 1: Create engine via NodeServer, register adapters, run operations ==========
 
 		{
-			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
+			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(CoviaApplication.open(store, kp).host(), NodeConfig.port(-1));
 			activeNode = ns;
 			ns.launch();
-			Engine engine = new Engine(config, ns.getCursor(), kp).start();
+			Engine engine = new Engine(config, CoviaApplication.connect(ns.getHost()), kp).start();
 			activeEngine = engine;
 			Engine.addDemoAssets(engine);
 
@@ -164,7 +162,7 @@ public class VenueRestartTest {
 		// ========== Stage 3: Restart with the same store ==========
 
 		{
-			NodeServer<Index<Keyword, ACell>> ns2 = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
+			NodeServer<Index<Keyword, ACell>> ns2 = new NodeServer<>(CoviaApplication.open(store, kp).host(), NodeConfig.port(-1));
 			activeNode = ns2;
 			ns2.launch(); // restores from store
 			Engine engine2 = new Engine(config, ns2.getCursor(), kp).start();

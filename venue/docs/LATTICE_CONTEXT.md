@@ -40,18 +40,18 @@ but no independent production merge semantics. The merge
 happens only at the venue `:value` root, which is a single whole-value-LWW node
 (newer `:timestamp` wins wholesale, deletions durable — see
 [GRID_LATTICE_DESIGN.md](./GRID_LATTICE_DESIGN.md) §A.2). The `w`/`o`/`h`
-namespaces are `WrapperLattice` regions: a `{updated, data}` container presented
+namespaces are `WorkspaceRoot` regions: a `{updated, data}` container presented
 as its `data`, so navigating `w/foo` crosses the view boundary to `w.data.foo`
 and preserves the container while ratcheting `updated` on changed writes.
 
 | Key | Storage shape | Contents |
 |-----|---------------|----------|
 | `"g"` | map of stamped plain records | Agent records (one atomic map per agent; deep writes refresh `ts`) |
-| `"w"` | `WrapperLattice` (`{updated, data}`) | User workspace |
-| `"o"` | `WrapperLattice` (`{updated, data}`) | User operations registry |
+| `"w"` | `WorkspaceRoot` (`{updated, data}`) | User workspace |
+| `"o"` | `WorkspaceRoot` (`{updated, data}`) | User operations registry |
 | `"s"` | navigable JSON | Encrypted secrets |
 | `"j"` | index of stamped plain records | Job records (deep writes refresh `updated`) |
-| `"h"` | `WrapperLattice` (`{updated, data}`) | HITL requests |
+| `"h"` | `WorkspaceRoot` (`{updated, data}`) | HITL requests |
 | `"a"` | navigable JSON | Content-addressed asset references |
 
 ### Agent Record

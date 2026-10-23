@@ -18,7 +18,8 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.lattice.ALatticeComponent;
-import convex.lattice.cursor.ALatticeCursor;
+import convex.lattice.LatticeContext;
+import convex.lattice.cursor.AForkableCursor;
 
 /**
  * Per-user encrypted secret storage.
@@ -40,6 +41,9 @@ import convex.lattice.cursor.ALatticeCursor;
  * <p>Follows the same lattice app wrapper pattern as {@link AssetStore}.</p>
  */
 public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> {
+	private final LatticeContext context;
+
+	public LatticeContext getContext() { return context; }
 
 	/** Key version 1: SHA-256 of the venue seed. Read only; nothing encrypts under it. */
 	public static final int KEY_VERSION_1 = 1;
@@ -66,9 +70,10 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> {
 	private static final AString KEY_VERSION_KEY = Strings.intern("keyVersion");
 	private static final CVMLong CURRENT_KEY_VERSION_CELL = CVMLong.create(CURRENT_KEY_VERSION);
 
-	SecretStore(ALatticeComponent<?> parent,
-			ALatticeCursor<AMap<AString, ACell>> cursor) {
-		super(parent, cursor);
+	SecretStore(User parent,
+			AForkableCursor<AMap<AString, ACell>> cursor) {
+		super(cursor);
+		this.context = parent.getContext();
 	}
 
 	/**
@@ -148,8 +153,8 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> {
 
 	public void store(AString name, AString plaintext, Keys keys) {
 		Blob encryptedBlob = encrypt(plaintext, keys);
-		CVMLong timestamp = cursor.getContext().currentTimestamp();
-		cursor.updateAndGet(current -> {
+		CVMLong timestamp = getContext().currentTimestamp();
+		cursor().updateAndGet(current -> {
 			AMap<AString, ACell> m = RT.castMap(current);
 			if (m == null) m = Maps.empty();
 			CVMLong effective = timestamp;
@@ -175,9 +180,9 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> {
 	@SuppressWarnings({ "unchecked", "rawtypes" })
 	public boolean storeIfAbsent(AString name, AString plaintext, Keys keys) {
 		AMap<AString, ACell> record = record(encrypt(plaintext, keys),
-			cursor.getContext().currentTimestamp());
+			getContext().currentTimestamp());
 		AtomicBoolean wrote = new AtomicBoolean(false);
-		cursor.updateAndGet(current -> {
+		cursor().updateAndGet(current -> {
 			AMap m = RT.castMap(current);
 			if (m == null) m = Maps.empty();
 			if (m.containsKey(name)) {
@@ -294,7 +299,7 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> {
 	 * @return Vector of secret names, or empty vector if none
 	 */
 	public AVector<AString> list() {
-		AMap<AString, ACell> all = cursor.get();
+		AMap<AString, ACell> all = cursor().get();
 		if (all == null || all.isEmpty()) return Vectors.empty();
 		return all.getKeys();
 
@@ -315,7 +320,7 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> {
 
 	/** Atomically removes an entry and reports whether it existed. */
 	public boolean deleteIfPresent(AString name) {
-		AMap<AString, ACell> previous = cursor.getAndUpdate(current -> {
+		AMap<AString, ACell> previous = cursor().getAndUpdate(current -> {
 			AMap<AString,ACell> m = RT.ensureMap(current);
 			if (m == null) return null;
 			return m.dissoc(name);
@@ -328,7 +333,7 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> {
 	 */
 	@SuppressWarnings("unchecked")
 	private AMap<AString, ACell> getRecord(AString name) {
-		AMap<AString, ACell> all = cursor.get();
+		AMap<AString, ACell> all = cursor().get();
 		if (all == null) return null;
 		ACell value = all.get(name);
 		if (!(value instanceof AMap)) {

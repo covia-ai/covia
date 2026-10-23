@@ -16,18 +16,22 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.lattice.ALatticeComponent;
-import convex.lattice.cursor.ALatticeCursor;
+import convex.lattice.LatticeContext;
+import convex.lattice.cursor.AForkableCursor;
 import covia.api.Fields;
 import covia.adapter.agent.GoalTreeContext;
 
 /**
  * Cursor wrapper for a single agent's state within a user's lattice.
  *
- * <p>All mutations use atomic {@code cursor.updateAndGet} — no external
+ * <p>All mutations use atomic {@code cursor().updateAndGet} — no external
  * locking needed. The {@code update} method is private; callers use
  * named mutation methods that encapsulate the record structure.</p>
  */
 public class AgentState extends ALatticeComponent<ACell> {
+	private final LatticeContext context;
+
+	public LatticeContext getContext() { return context; }
 
 	public static final AString KEY_AGENT = Strings.intern("agent");
 	public static final AString KEY_EXTERNAL = Strings.intern("external");
@@ -149,28 +153,29 @@ public class AgentState extends ALatticeComponent<ACell> {
 
 	private final AString agentId;
 
-	AgentState(ALatticeComponent<?> parent, ALatticeCursor<ACell> cursor,
+	AgentState(User parent, AForkableCursor<ACell> cursor,
 			AString agentId) {
-		super(parent, cursor);
+		super(cursor);
+		this.context = parent.getContext();
 		this.agentId = agentId;
 	}
 
 	public AString getAgentId() { return agentId; }
 
-	public boolean exists() { return cursor.get() != null; }
+	public boolean exists() { return cursor().get() != null; }
 
 	// ========== Record access ==========
 
 	@SuppressWarnings("unchecked")
 	public AMap<AString, ACell> getRecord() {
-		ACell v = cursor.get();
+		ACell v = cursor().get();
 		return (v instanceof AMap) ? (AMap<AString, ACell>) v : null;
 	}
 
 	/** Replaces the entire record. Use for initialisation only. */
 	public void putRecord(AMap<AString, ACell> record) {
 		CVMLong ts = now();
-		cursor.updateAndGet(current -> record.assoc(K_TS, ratchetTimestamp(current, ts)));
+		cursor().updateAndGet(current -> record.assoc(K_TS, ratchetTimestamp(current, ts)));
 	}
 
 	/**
@@ -179,7 +184,7 @@ public class AgentState extends ALatticeComponent<ACell> {
 	 * times its CAS lambda retries under contention.
 	 */
 	private CVMLong now() {
-		return cursor.getContext().currentTimestamp();
+		return getContext().currentTimestamp();
 	}
 
 	@SuppressWarnings("unchecked")
@@ -197,7 +202,7 @@ public class AgentState extends ALatticeComponent<ACell> {
 	@SuppressWarnings("unchecked")
 	private AMap<AString, ACell> update(UnaryOperator<AMap<AString, ACell>> fn) {
 		CVMLong ts = now();
-		ACell result = cursor.updateAndGet(current -> {
+		ACell result = cursor().updateAndGet(current -> {
 			if (!(current instanceof AMap)) return current;
 			AMap<AString, ACell> r = (AMap<AString, ACell>) current;
 			AMap<AString, ACell> updated = fn.apply(r);
@@ -210,7 +215,7 @@ public class AgentState extends ALatticeComponent<ACell> {
 	@SuppressWarnings("unchecked")
 	private AMap<AString, ACell> getAndUpdate(UnaryOperator<AMap<AString, ACell>> fn) {
 		CVMLong ts = now();
-		ACell old = cursor.getAndUpdate(current -> {
+		ACell old = cursor().getAndUpdate(current -> {
 			if (!(current instanceof AMap)) return current;
 			AMap<AString, ACell> r = (AMap<AString, ACell>) current;
 			AMap<AString, ACell> updated = fn.apply(r);
@@ -242,7 +247,7 @@ public class AgentState extends ALatticeComponent<ACell> {
 		if (initialState != null) record = record.assoc(K_STATE, initialState);
 		if (definition != null) record = record.assoc(KEY_AGENT, definition);
 		AMap<AString, ACell> initial = record.assoc(K_TS, now());
-		return cursor.getAndUpdate(current -> (current == null) ? initial : current) == null;
+		return cursor().getAndUpdate(current -> (current == null) ? initial : current) == null;
 	}
 
 	/**
@@ -267,7 +272,7 @@ public class AgentState extends ALatticeComponent<ACell> {
 		if (config != null) record = record.assoc(K_CONFIG, config);
 		if (state != null) record = record.assoc(K_STATE, state);
 		AMap<AString, ACell> initial = record.assoc(K_TS, now());
-		return cursor.getAndUpdate(current -> (current == null) ? initial : current) == null;
+		return cursor().getAndUpdate(current -> (current == null) ? initial : current) == null;
 	}
 
 	// ========== Read accessors ==========

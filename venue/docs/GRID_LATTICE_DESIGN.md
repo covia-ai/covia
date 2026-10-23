@@ -1,5 +1,16 @@
 # Covia Grid Lattice Structure
 
+**Snapshot branch:** Convex commit `538f3be06` separates storage cursors from
+component policy. `CoviaApplication` uses the upstream `LatticeApplication`
+adapter for `Covia.ROOT`, sharing its host's live cursor. `VenueState` binds a
+signed storage view and a stamped editing view; incoming merges bypass local
+stamping. `Users` supplies lifecycle-guarded, stamped user views, and
+`User.recordCursor` supplies job/agent stamps. `WorkspaceRoot` exposes the existing
+`{updated, data}` envelopes. Use these accessors for writes: raw paths do not
+apply record policy or create missing containers. Bootstrap uses upstream
+`TransactionalComponent`; DLFS uses upstream `DLFSRegion`/`DLFSDrives`.
+
+
 Design document for the Covia venue-backed grid. Phases 0–2 are implemented (Phase 2 partially — per-user cursors done, capability enforcement pending); later phases are target state.
 
 ## Design Document — February 2026 (living document)
@@ -993,8 +1004,8 @@ The **interior** of `:value` (`:assets`, `:storage`, `:did`, `:users`, `:schedul
 carries no independent merge semantics — the merge happens only at the `:value`
 root. Writes are stamped on the way up by a
 **stamp-on-write boundary** that sources its timestamp from the write clock on the
-`LatticeContext` (the convex `StampingLattice` / `StampedCursor`). The `w`/`o`/`h`
-user namespaces are `WrapperLattice` regions, stored as a `{updated, data}`
+`LatticeContext` (the convex `StampedCursor`). The `w`/`o`/`h`
+user namespaces are `WorkspaceRoot` regions, stored as a `{updated, data}`
 container whose `data` is the caller-visible value. The container is a **view
 boundary in the lattice**, not a path convention: navigating `w/foo` crosses it
 and reads or replaces `w.data.foo`. Changed writes preserve the physical
@@ -1074,7 +1085,7 @@ shared root through the signed owner boundary:
 startup: Engine → connected VenueState
 request A: component update job X → signed root
 request B: component update job Y → signed root
-publication: application.sync() → current root
+publication: application.host().sync() → current root
 ```
 
 Direct `updateAndGet` calls on sub-cursors remain atomic because they ultimately
@@ -1103,11 +1114,11 @@ whole-venue `sync()`, or one replayed `updateAndGet` for a narrow fork.
 ```
 [Component mutation] → atomic cursor update → sign venue owner value
                                                |
-                              application.sync() publishes current root
+                              application.host().sync() publishes current root
 ```
 
 Signing and persistence are deliberately separate. Signing makes a successful
-state transition authoritative in memory; `application.sync()` publishes the
+state transition authoritative in memory; `application.host().sync()` publishes the
 current root and `application.flush()` supplies the physical durability barrier.
 This keeps Engine state coherent for local and embedded consumers without a
 second long-lived working copy.
@@ -1173,9 +1184,9 @@ multi-writer lattice joins.
 | `CASLattice<K,V>` | Content-addressed union merge |
 | `JSONLattice` | Structural navigation only — builds a container per key shape; recursive `path`; `merge` throws (merge belongs to the enclosing node, never per-key) |
 | `LWWLattice<V>` | **Whole-value** last-writer-wins merge layer by extracted timestamp (non-recursive; tie → own); delegates navigation to an inner lattice |
-| `StampingLattice<V>` | Stamp-on-write boundary — inserts a `StampedCursor` that re-stamps a value on write, sourcing the timestamp from `LatticeContext`; delegates merge and navigation to an inner lattice |
+| `StampedCursor<V>` | Explicit editing view — applies the owning component's timestamp function on changed writes; merge remains on the component |
 | `FunctionLattice<V>` | Custom merge function (e.g. first-writer-wins) |
-| `WrapperLattice` (Covia) | View boundary — presents a `{updated, data}` container as its `data`, stamping `updated` on write; navigation and merge are the inner JSON region's |
+| `WorkspaceRoot` (Covia) | View boundary — presents a `{updated, data}` container as its `data`, stamping `updated` on write; merge remains at the enclosing venue |
 | `LatticeContext` | Live application policy for clock, signing and owner verification; installed once at the hosted root and resolved per logical write |
 | `ACursor<V>` | Mutable reference with atomic get/set/update/fork/sync |
 
@@ -1188,14 +1199,14 @@ legacy-compatible workspace envelope:
 | Definition | Type | Purpose |
 |------------|------|---------|
 | `Covia.ROOT` | `KeyedLattice` | Root — `:grid` (containing `:venues` and `:meta`) and the sibling `:dlfs` region |
-| `Covia.VENUE` | `StampingLattice` → `LWWLattice` → `KeyedLattice` | The whole per-venue `:value` as a single navigable **whole-value-LWW** node with a stamp-on-write boundary |
+| `Covia.VENUE` | `StampedCursor` → `LWWLattice` → `KeyedLattice` | The whole per-venue `:value` as a single navigable **whole-value-LWW** node with a stamp-on-write boundary |
 | `:grid → :venues` | `OwnerLattice` → `SignedLattice` → `Covia.VENUE` | Per-AccountKey signed venue state (one authoritative signing key) |
 | Venue interior | `KeyedLattice` (structural children) | `:assets`, `:storage`, `:did`, `:users`, `:schedule`, `:user-data` — navigated structurally; merged only at `:value` |
-| `:schedule` | `StampingLattice` → `StringKeyedLattice` | Extensible `{updated, events, ...}` record; writes under `events` refresh `updated` and preserve sibling metadata |
-| `:user-data → <DID>` | `MapLattice` → `StampingLattice` → `StringKeyedLattice` | Per-user record; every deep write refreshes `meta.updated` |
-| `j` / each Job | `IndexLattice` → `StampingLattice` → `JSONLattice` | Existing Job map shape; deep writes such as `t/` refresh `updated` |
-| `g` / each agent | `MapLattice` → `StampingLattice` → `JSONLattice` | Existing agent map shape; deep writes such as `n/` and `c/` refresh `ts` |
+| `:schedule` | `StampedCursor` → `StringKeyedLattice` | Extensible `{updated, events, ...}` record; writes under `events` refresh `updated` and preserve sibling metadata |
+| `:user-data → <DID>` | `MapLattice` → `StampedCursor` → `StringKeyedLattice` | Per-user record; every deep write refreshes `meta.updated` |
+| `j` / each Job | `IndexLattice` → `StampedCursor` → `JSONLattice` | Existing Job map shape; deep writes such as `t/` refresh `updated` |
+| `g` / each agent | `MapLattice` → `StampedCursor` → `JSONLattice` | Existing agent map shape; deep writes such as `n/` and `c/` refresh `ts` |
 | `s` / `a` | `JSONLattice` | Plain structural navigation |
-| `w` / `o` / `h` | `WrapperLattice` | Existing `{updated, data}` container presented as its `data` |
+| `w` / `o` / `h` | `WorkspaceRoot` | Existing `{updated, data}` container presented as its `data` |
 | `:grid → :meta` | `CASLattice` | Shared content-addressed metadata (multi-writer union) |
 | `:dlfs` | `OwnerLattice` → `MapLattice(DLFSLattice)` | Per-user signed drives, per-file rsync-like merge |

@@ -7,7 +7,6 @@ import java.util.Objects;
 import java.util.Set;
 
 import convex.core.crypto.AKeyPair;
-import convex.core.cvm.Keywords;
 import convex.core.data.ABlob;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -20,7 +19,11 @@ import convex.core.data.MapEntry;
 import convex.core.lang.RT;
 import convex.core.store.AStore;
 import convex.lattice.ALatticeComponent;
-import convex.lattice.cursor.ALatticeCursor;
+import static convex.lattice.LatticeComponent.resolve;
+import convex.lattice.LatticeContext;
+import convex.lattice.cursor.StampedCursor;
+import convex.lattice.cursor.SignedCursor;
+import convex.lattice.cursor.AForkableCursor;
 import covia.lattice.Covia;
 import covia.api.Fields;
 import covia.lattice.Namespace;
@@ -68,7 +71,7 @@ import covia.venue.storage.LatticeStorage;
  * vs.assets().store(meta, content);
  *
  * // Connected to a root lattice cursor (Engine)
- * VenueState connected = VenueState.fromRoot(rootCursor, accountKey);
+ * VenueState connected = VenueState.fromRoot(rootCursor, accountKey, context);
  * connected.assets().store(meta, content); // immediately visible at root
  *
  * // Bounded transaction
@@ -80,17 +83,30 @@ import covia.venue.storage.LatticeStorage;
 public class VenueState extends ALatticeComponent<ACell> {
 
 	private final AccountKey ownerKey;
+	private final LatticeContext context;
+	private final AForkableCursor<ACell> edits;
 
-	VenueState(ALatticeComponent<?> parent, ALatticeCursor<ACell> cursor,
-			AccountKey ownerKey) {
-		super(parent, cursor);
-		this.ownerKey = ownerKey;
+	public LatticeContext getContext() { return context; }
+
+	@Override
+	public AForkableCursor<ACell> cursor() { return edits; }
+
+	@Override
+	public ACell merge(ACell incoming) {
+		return storage.updateAndGet(own -> Covia.VENUE.merge(context, own, incoming));
 	}
 
-	/** Compatibility constructor for a standalone raw-cursor component. */
-	private VenueState(ALatticeCursor<ACell> cursor, AccountKey ownerKey) {
+	@Override
+	protected ACell mergePublication(ACell own, ACell other) {
+		return Covia.VENUE.merge(context, own, other);
+	}
+
+	/** Binds storage and its explicit signing/clock policy. */
+	private VenueState(AForkableCursor<ACell> cursor, AccountKey ownerKey, LatticeContext context) {
 		super(cursor);
 		this.ownerKey = ownerKey;
+		this.context = context;
+		this.edits = StampedCursor.create(cursor, context::currentTimestamp, Covia::stampVenue);
 	}
 
 	/**
@@ -106,10 +122,10 @@ public class VenueState extends ALatticeComponent<ACell> {
 
 	/**
 	 * Connects a venue component beneath a containing Covia application.
-	 * Component policy (including persistence) delegates through the parent,
-	 * while cursor navigation crosses the owner-signing boundary normally.
+	 * The component copies its parent's policy and explicitly composes the
+	 * signing and timestamp boundaries. Publication belongs to the host.
 	 */
-	public static VenueState connect(ALatticeComponent<?> parent,
+	public static VenueState connect(CoviaApplication parent,
 			AccountKey ownerKey) {
 		if (parent == null) {
 			throw new IllegalArgumentException("Parent component must not be null");
@@ -117,9 +133,7 @@ public class VenueState extends ALatticeComponent<ACell> {
 		if (ownerKey == null) {
 			throw new IllegalArgumentException("Venue owner key must not be null");
 		}
-		ALatticeCursor<ACell> venueCursor = parent.cursor().path(
-			Covia.GRID, Covia.VENUES, ownerKey, Keywords.VALUE);
-		return new VenueState(parent, venueCursor, ownerKey);
+		return fromRoot(parent.cursor(), ownerKey, parent.getContext());
 	}
 
 	/**
@@ -128,12 +142,14 @@ public class VenueState extends ALatticeComponent<ACell> {
 	 *
 	 * @param root Root lattice cursor
 	 * @param ownerKey Venue owner's account key
+	 * @param context Signing and timestamp policy for this component
 	 * @return VenueState connected to the root cursor
 	 */
-	public static VenueState fromRoot(ALatticeCursor<?> root, AccountKey ownerKey) {
-		ALatticeCursor<ACell> venueCursor = root.path(
-			Covia.GRID, Covia.VENUES, ownerKey, Keywords.VALUE);
-		return new VenueState(venueCursor, ownerKey);
+	public static VenueState fromRoot(AForkableCursor<?> root, AccountKey ownerKey, LatticeContext context) {
+		var owners = resolve(root, Covia.ROOT, Covia.GRID, Covia.VENUES);
+		var signing = Covia.VENUE_OWNERS.signingFor(ownerKey);
+		var signed = SignedCursor.<ACell>create(resolve(owners, Covia.VENUE_OWNERS, ownerKey), value -> signing.sign(context, value));
+		return new VenueState(signed, ownerKey, context);
 	}
 
 	/**
@@ -177,7 +193,7 @@ public class VenueState extends ALatticeComponent<ACell> {
 	 * @return AssetStore cursor wrapper
 	 */
 	public AssetStore assets() {
-		return new AssetStore(this, cursor.path(Covia.ASSETS));
+		return new AssetStore(resolve(cursor(), Covia.VENUE, Covia.ASSETS));
 	}
 
 	/**
@@ -186,15 +202,15 @@ public class VenueState extends ALatticeComponent<ACell> {
 	 * @return Users cursor wrapper
 	 */
 	public Users users() {
-		return new Users(this, cursor.path(Covia.USER_DATA));
+		return new Users(this, resolve(cursor(), Covia.VENUE, Covia.USER_DATA));
 	}
 
 	/** Atomically erases the namespace and login aliases, retaining revocation evidence. */
 	@SuppressWarnings("unchecked")
 	DeletedUser deleteUser(AString did, AString actor) {
-		var now = cursor.getContext().currentTimestamp();
+		var now = getContext().currentTimestamp();
 		ACell tombstone = Maps.of(Fields.DID, did, Users.DELETED_AT, now, Users.DELETED_BY, actor);
-		ACell before = cursor.getAndUpdate(value -> {
+		ACell before = cursor().getAndUpdate(value -> {
 			AMap<ACell, ACell> venue = (AMap<ACell, ACell>) value;
 			AMap<AString, ACell> users = RT.ensureMap(venue.get(Covia.USER_DATA));
 			ACell previous = users == null ? null : users.get(did);
@@ -238,8 +254,8 @@ public class VenueState extends ALatticeComponent<ACell> {
 	 *
 	 * @return Cursor at the :users level
 	 */
-	ALatticeCursor<ACell> authCursor() {
-		return cursor.path(Covia.USERS);
+	AForkableCursor<ACell> authCursor() {
+		return resolve(cursor(), Covia.VENUE, Covia.USERS);
 	}
 
 	/**
@@ -249,8 +265,9 @@ public class VenueState extends ALatticeComponent<ACell> {
 	 *
 	 * @return Cursor at the :schedule level (value is a record)
 	 */
-	public ALatticeCursor<ACell> scheduleCursor() {
-		return cursor.path(Covia.SCHEDULE);
+	public AForkableCursor<ACell> scheduleCursor() {
+		return StampedCursor.create(resolve(cursor(), Covia.VENUE, Covia.SCHEDULE),
+			getContext()::currentTimestamp, Covia::stampUpdated);
 	}
 
 	/**
@@ -259,7 +276,7 @@ public class VenueState extends ALatticeComponent<ACell> {
 	 * @return LatticeStorage instance backed by this venue's cursor
 	 */
 	public LatticeStorage storage() {
-		return new LatticeStorage(cursor.path(Covia.STORAGE));
+		return new LatticeStorage(resolve(cursor(), Covia.VENUE, Covia.STORAGE));
 	}
 
 	/**
@@ -268,7 +285,7 @@ public class VenueState extends ALatticeComponent<ACell> {
 	 * @return Map-shaped venue value, or null if uninitialised
 	 */
 	public ACell get() {
-		return cursor.get();
+		return cursor().get();
 	}
 
 	/**
@@ -282,7 +299,7 @@ public class VenueState extends ALatticeComponent<ACell> {
 		// clobber state another thread already wrote. The venue value is a
 		// keyword-keyed Index; the whole-value-LWW lattice's zero() is null, so
 		// materialise an empty Index for a fresh venue and test by DID presence.
-		cursor.updateAndGet(current -> {
+		cursor().updateAndGet(current -> {
 			@SuppressWarnings("unchecked")
 			Index<Keyword, ACell> v = (current instanceof Index<?,?>)
 				? (Index<Keyword, ACell>) current
@@ -318,8 +335,9 @@ public class VenueState extends ALatticeComponent<ACell> {
 	 *
 	 * @return A new VenueState backed by a forked cursor
 	 */
+	@Override
 	public VenueState fork() {
-		return new VenueState(parent(), cursor.fork(), ownerKey);
+		return new VenueState(storage.fork(), ownerKey, context);
 	}
 
 }

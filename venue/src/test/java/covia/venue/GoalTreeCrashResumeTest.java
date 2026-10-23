@@ -29,7 +29,6 @@ import covia.adapter.agent.GoalTreeContext;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
-import covia.lattice.Covia;
 import covia.test.DurabilityTest;
 
 /**
@@ -83,10 +82,10 @@ public class GoalTreeCrashResumeTest {
 			throws Exception {
 		activeStore = store;
 		NodeServer<Index<Keyword, ACell>> node =
-			new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
+			new NodeServer<>(CoviaApplication.open(store, keyPair).host(), NodeConfig.port(-1));
 		activeNode = node;
 		node.launch();
-		Engine engine = new Engine(config, node.getCursor(), keyPair).start();
+		Engine engine = new Engine(config, CoviaApplication.connect(node.getHost()), keyPair).start();
 		activeEngine = engine;
 		Engine.addDemoAssets(engine);
 		return engine;

@@ -3,7 +3,7 @@ package covia.lattice;
 import convex.core.data.ACell;
 import convex.core.data.AString;
 import convex.core.data.Strings;
-import convex.lattice.cursor.ALatticeCursor;
+import convex.lattice.cursor.AForkableCursor;
 import covia.adapter.CoviaAdapter;
 import covia.exception.WrongScopeException;
 import covia.venue.RequestContext;
@@ -21,8 +21,6 @@ public class AgentNamespaceResolver implements NamespaceResolver {
 
 	/** Agent-record field holding the agent's private workspace. */
 	private static final AString K_N = Strings.intern("n");
-	/** Agent-record last-modified field, ratcheted by a workspace write. */
-	private static final AString K_TS = Strings.intern("ts");
 
 	@Override
 	public ResolvedNamespace resolve(RequestContext ctx, CoviaAdapter adapter, ACell[] keys) {
@@ -31,11 +29,11 @@ public class AgentNamespaceResolver implements NamespaceResolver {
 			throw new WrongScopeException("Cannot use 'n/' prefix outside agent scope");
 		}
 
-		ALatticeCursor<ACell> agentCursor = adapter.ensureUserCursor(ctx)
-			.path(Namespace.G, agentId);
+		AForkableCursor<ACell> agentCursor = adapter.ensureUser(ctx)
+			.recordCursor(Namespace.G, agentId);
 		ACell[] rewritten = keys.clone();
 		rewritten[0] = K_N;
-		return new ResolvedNamespace(agentCursor, rewritten, true, K_TS);
+		return new ResolvedNamespace(new WorkspaceRoot(agentCursor, adapter.engine.getLatticeContext(), false), rewritten, true);
 	}
 
 	@Override

@@ -1,10 +1,11 @@
 package covia.adapter;
 
+import static convex.dlfs.DLFSDriveManager.isValidDriveName;
+
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileSystem;
 import java.nio.file.Files;
-import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.concurrent.CompletableFuture;
@@ -16,29 +17,21 @@ import convex.auth.did.DIDURL;
 import convex.auth.ucan.Capability;
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
-import convex.core.data.AHashMap;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
-import convex.core.data.AccountKey;
 import convex.core.data.Blob;
-import convex.core.data.Index;
-import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
-import convex.dlfs.DLFSDrives;
-import convex.lattice.LatticeContext;
-import convex.lattice.cursor.ALatticeCursor;
 import convex.lattice.fs.impl.DLFSLocal;
 import covia.api.Fields;
 import covia.lattice.CapabilityChecker;
 import covia.lattice.Covia;
 import covia.utils.MimeUtils;
 import covia.venue.Config;
-import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.SecretStore;
 import covia.venue.User;
@@ -72,6 +65,8 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	private static final Logger log = LoggerFactory.getLogger(DLFSAdapter.class);
 
 	private static final String ASSETS_PATH = "/adapters/dlfs/";
+	public static final String INVALID_DRIVE_NAME = "Invalid DLFS drive name";
+
 	private static final String DLFS_KEY_SECRET = "DLFS_KEY";
 	public static final String DRIVE_UNAVAILABLE = "Unable to open or create DLFS drive: ";
 
@@ -203,28 +198,6 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	// ==================== Drive Access ====================
 
 	/**
-	 * Gets the DLFS cursor for a user's signed region in the :dlfs lattice.
-	 * Navigates root → :dlfs → OwnerLattice(AccountKey) → :value (signed drives map).
-	 *
-	 * <p>The returned cursor carries only the caller's DLFS signing key. Its
-	 * timestamp remains live; connected drive views obtain the venue's current
-	 * write timestamp for every mutation.</p>
-	 */
-	private ALatticeCursor<AHashMap<AString, AVector<ACell>>> getUserDLFSCursor(AKeyPair dlfsKey) {
-		ALatticeCursor<Index<Keyword, ACell>> rootCursor = engine.getRootCursor();
-		ALatticeCursor<?> dlfsCursor = rootCursor.path(Covia.DLFS);
-
-		// Override only the signer. Delegating from the host policy preserves its
-		// live clock, owner verifier and future-timestamp-skew limit (Convex
-		// 0.8.14); constructing a fresh context here would silently discard them.
-		LatticeContext lctx = dlfsCursor.getContext().withSigningKey(dlfsKey);
-		dlfsCursor.setContext(lctx);
-
-		AccountKey ak = dlfsKey.getAccountKey();
-		return dlfsCursor.path(ak, convex.core.cvm.Keywords.VALUE);
-	}
-
-	/**
 	 * Gets a connected DLFS drive for the given DID. Public so WebDAV can
 	 * access drives by identity string.
 	 */
@@ -244,20 +217,12 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	public DLFSLocal getDrive(RequestContext ctx, String driveName) {
 		if (!isValidDriveName(driveName)) {
 			throw new IllegalArgumentException(
-				"DLFS drive name must be non-empty and contain no '/', '\\', or ':'");
+				INVALID_DRIVE_NAME);
 		}
 		AKeyPair dlfsKey = ensureUserKeyPair(ctx);
-		var userCursor = getUserDLFSCursor(dlfsKey);
-		// Convex owns drive creation/recreation and its deletion tombstones.
-		var drives = DLFSDrives.wrap(userCursor);
-		drives.createDrive(driveName);
-		if (drives.drive(driveName) == null) {
-			throw new IllegalArgumentException(DRIVE_UNAVAILABLE + driveName);
-		}
-		// Convex 0.8.14 resolves each DLFS mutation timestamp through the cursor's
-		// inherited live policy, so long-lived views see the current application
-		// clock on every write (#387).
-		return engine.connectDLFSDrive(userCursor, Strings.create(driveName));
+		var drive = engine.getDLFSDrives(dlfsKey).getOrCreateDrive(driveName);
+		if (drive == null) throw new IllegalArgumentException(DRIVE_UNAVAILABLE + driveName);
+		return (DLFSLocal) drive.fileSystem();
 	}
 
 	/**
@@ -266,7 +231,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	private AVector<ACell> listDriveNames(RequestContext ctx) {
 		AKeyPair dlfsKey = ensureUserKeyPair(ctx);
 		AVector<ACell> names = Vectors.empty();
-		for (String name : DLFSDrives.wrap(getUserDLFSCursor(dlfsKey)).driveNames()) {
+		for (String name : engine.getDLFSDrives(dlfsKey).driveNames()) {
 			names = names.conj(Strings.create(name));
 		}
 		return names;
@@ -395,11 +360,6 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		return new DlfsFileRef(owner, drive, normaliseRelativePath(path));
 	}
 
-	private static boolean isValidDriveName(String name) {
-		return name != null && !name.isBlank()
-			&& name.indexOf('/') < 0 && name.indexOf('\\') < 0 && name.indexOf(':') < 0;
-	}
-
 	private static String normaliseRelativePath(String path) {
 		if (path == null || path.isEmpty()) return "";
 		String p = path;
@@ -508,25 +468,15 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		AuthorisedPath target = resolveAuthorisedPath(ctx, ref.toString(), Capability.CRUD_WRITE);
 		if (target == null) return false;
 		Path path = target.path();
-		java.io.OutputStream opened;
-		// Opening reserves the name. Convex 0.8.17 checks CREATE_NEW against a
-		// snapshot and serialises only within one DLFSLocal, and each request
-		// connects its own, so two creates could both claim one name. Opens are
-		// serialised here; the data transfer is not.
-		synchronized (contentOpenLock) {
-			opened = Files.newOutputStream(path, createOnly
+		try (java.io.OutputStream os = Files.newOutputStream(path, createOnly
 				? FileOperations.createOptions(path) : new java.nio.file.OpenOption[] {
 				StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
-				StandardOpenOption.WRITE });
-		}
-		try (java.io.OutputStream os = opened) {
+				StandardOpenOption.WRITE })) {
 			data.transferTo(os);
 		}
 		return true;
 	}
 
-	/** Serialises reference-addressed content opens; see {@link #writeContent}. */
-	private final Object contentOpenLock = new Object();
 
 	/**
 	 * The resolved target of a DLFS file op: either the caller's own drive
@@ -613,7 +563,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		DriveTarget target = parseDriveRef(ctx, input);
 		if (target.driveName() != null && !isValidDriveName(target.driveName())) {
 			throw new IllegalArgumentException(
-				"DLFS drive name must be non-empty and contain no '/', '\\', or ':'");
+				INVALID_DRIVE_NAME);
 		}
 		RequestContext driveCtx = ctx;
 		if (target.ownerDID() != null) {
@@ -681,11 +631,11 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		if (name == null) throw new IllegalArgumentException("'name' or 'drive' is required");
 		if (!isValidDriveName(name.toString())) {
 			throw new IllegalArgumentException(
-				"DLFS drive name must be non-empty and contain no '/', '\\', or ':'");
+				INVALID_DRIVE_NAME);
 		}
 
 		AKeyPair dlfsKey = ensureUserKeyPair(ctx);
-		DLFSDrives.wrap(getUserDLFSCursor(dlfsKey)).deleteDrive(name.toString());
+		engine.getDLFSDrives(dlfsKey).deleteDrive(name.toString());
 
 		return Maps.of("deleted", CVMBool.TRUE);
 	}

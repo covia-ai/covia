@@ -385,7 +385,7 @@ public class VenueStartupTest {
 				engine.close();
 			}
 			// Engine borrows the application/host/store, unlike VenueServer's adopted store.
-			application.flush();
+			application.host().flush();
 			Engine probe = new Engine(config, application, key).prepare();
 			try {
 				assertSame(probe, probe.launch());
@@ -415,7 +415,7 @@ public class VenueStartupTest {
 			} finally {
 				engine.close();
 			}
-			application.flush();
+			application.host().flush();
 		}
 	}
 
@@ -453,7 +453,7 @@ public class VenueStartupTest {
 			} finally {
 				engine.close();
 			}
-			application.flush();
+			application.host().flush();
 		}
 	}
 
@@ -480,7 +480,7 @@ public class VenueStartupTest {
 			} finally {
 				engine.close();
 			}
-			application.flush();
+			application.host().flush();
 		}
 	}
 

@@ -6,7 +6,8 @@ import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.lattice.ALatticeComponent;
-import convex.lattice.cursor.ALatticeCursor;
+import convex.lattice.LatticeContext;
+import convex.lattice.cursor.AForkableCursor;
 import covia.exception.AuthException;
 import covia.lattice.Covia;
 import convex.core.lang.RT;
@@ -25,6 +26,10 @@ import convex.core.lang.RT;
  * for JSON compatibility.</p>
  */
 public class Users extends ALatticeComponent<AMap<AString, ACell>> {
+	private final LatticeContext context;
+
+	public LatticeContext getContext() { return context; }
+
 	public static final String ACCOUNT_DELETED = "User account has been deleted";
 	static final AString GENERATION = Strings.intern("generation");
 	static final AString DELETING = Strings.intern("deleting");
@@ -36,7 +41,7 @@ public class Users extends ALatticeComponent<AMap<AString, ACell>> {
 	}
 
 	public ACell tombstone(AString did) {
-		return did == null ? null : RT.getIn(cursor.get(), did, Covia.K_DELETED);
+		return did == null ? null : RT.getIn(cursor().get(), did, Covia.K_DELETED);
 	}
 
 	public void requireNotDeleted(AString did) {
@@ -48,8 +53,9 @@ public class Users extends ALatticeComponent<AMap<AString, ACell>> {
 		return current != null ? current : Maps.empty();
 	}
 
-	Users(ALatticeComponent<?> parent, ALatticeCursor<AMap<AString, ACell>> cursor) {
-		super(parent, cursor);
+	Users(VenueState parent, AForkableCursor<AMap<AString, ACell>> cursor) {
+		super(cursor);
+		this.context = parent.getContext();
 	}
 
 	/**
@@ -64,10 +70,11 @@ public class Users extends ALatticeComponent<AMap<AString, ACell>> {
 	}
 
 	public User get(AString did) {
-		ALatticeCursor<ACell> userCursor = cursor.path(did);
+		AForkableCursor<ACell> userCursor = cursor().withDefault(Maps.empty()).path(did);
 		ACell current = userCursor.get();
 		if (current == null || RT.getIn(current, Covia.K_DELETED) != null) return null;
-		return new User(this, new AccountCursor(userCursor), did);
+		return new User(this, convex.lattice.cursor.StampedCursor.create(new AccountCursor(userCursor),
+			getContext()::currentTimestamp, Covia::stampUserMeta), did);
 	}
 
 	/**
@@ -83,12 +90,13 @@ public class Users extends ALatticeComponent<AMap<AString, ACell>> {
 	}
 
 	public User ensure(AString did) {
-		ALatticeCursor<ACell> userCursor = cursor.path(did);
+		AForkableCursor<ACell> userCursor = cursor().withDefault(Maps.empty()).path(did);
 		// Atomic init: read-then-set is racy under concurrent first-touches —
 		// a late reader could observe null and set(zero), clobbering an earlier
 		// writer's committed user data (jobs, secrets, agents).
 		userCursor.updateAndGet(Users::initialise);
-		return new User(this, new AccountCursor(userCursor), did);
+		return new User(this, convex.lattice.cursor.StampedCursor.create(new AccountCursor(userCursor),
+			getContext()::currentTimestamp, Covia::stampUserMeta), did);
 	}
 
 	/**
@@ -103,7 +111,7 @@ public class Users extends ALatticeComponent<AMap<AString, ACell>> {
 	 * @return true when a new registration was created
 	 */
 	public boolean create(AString did) {
-		ALatticeCursor<ACell> userCursor = cursor.path(did);
+		AForkableCursor<ACell> userCursor = cursor().withDefault(Maps.empty()).path(did);
 		ACell fresh = Maps.of(GENERATION, Strings.create(java.util.UUID.randomUUID().toString()));
 		ACell previous = userCursor.getAndUpdate(
 			current -> {
@@ -115,7 +123,7 @@ public class Users extends ALatticeComponent<AMap<AString, ACell>> {
 
 	/** Opens recreation only after runtime cleanup has completed. */
 	void finishDeletion(AString did) {
-		cursor.path(did).updateAndGet(current -> {
+		cursor().withDefault(Maps.empty()).path(did).updateAndGet(current -> {
 			AMap<AString, ACell> record = RT.ensureMap(current);
 			return record != null ? record.dissoc(DELETING) : current;
 		});
@@ -127,7 +135,7 @@ public class Users extends ALatticeComponent<AMap<AString, ACell>> {
 	 * @return Map of DID string to user state, or null if none
 	 */
 	public AMap<AString, ACell> getAll() {
-		AMap<AString, ACell> all = cursor.get();
+		AMap<AString, ACell> all = cursor().get();
 		if (all == null) return null;
 		for (var entry : all.entrySet()) {
 			if (RT.getIn(entry.getValue(), Covia.K_DELETED) != null) all = all.dissoc(entry.getKey());

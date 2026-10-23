@@ -17,12 +17,11 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
 import convex.lattice.cursor.Cursors;
-import convex.lattice.cursor.RootLatticeCursor;
+import convex.lattice.cursor.Root;
 import covia.adapter.AAdapter;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
-import covia.lattice.Covia;
 
 /**
  * Venue shutdown and the Jobs in flight at the time (JOBS.md § Shutdown):
@@ -98,7 +97,7 @@ public class JobShutdownTest {
 	@Test
 	public void pausableJobIsPausedAndRestoredAtBoot() throws Exception {
 		AMap<AString, ACell> config = config(0);
-		RootLatticeCursor<Index<Keyword, ACell>> cursor = Cursors.createLattice(Covia.ROOT);
+		Root<Index<Keyword, ACell>> cursor = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
 		AKeyPair keyPair = AKeyPair.generate();
 		RequestContext alice = RequestContext.of(Strings.create("did:key:zAliceShutdownParked"));
 

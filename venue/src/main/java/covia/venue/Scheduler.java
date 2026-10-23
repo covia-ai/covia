@@ -29,7 +29,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.Utils;
-import convex.lattice.cursor.ALatticeCursor;
+import convex.lattice.cursor.AForkableCursor;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.grid.Asset;
@@ -623,13 +623,13 @@ public class Scheduler {
 
 	// ------------------------------------------------------------------ helpers
 
-	private ALatticeCursor<ACell> store() {
+	private AForkableCursor<ACell> store() {
 		return engine.getVenueState().scheduleCursor();
 	}
 
 	/** Cursor at the event index inside the extensible scheduler record. */
-	private ALatticeCursor<ACell> eventsStore() {
-		return store().path(K_EVENTS);
+	private AForkableCursor<ACell> eventsStore() {
+		return store().withDefault(Maps.empty()).path(K_EVENTS);
 	}
 
 	/** Current events index from the scheduler record. */

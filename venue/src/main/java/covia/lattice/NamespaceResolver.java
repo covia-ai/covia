@@ -1,8 +1,6 @@
 package covia.lattice;
 
 import convex.core.data.ACell;
-import convex.core.data.AString;
-import convex.lattice.cursor.ALatticeCursor;
 import covia.adapter.CoviaAdapter;
 import covia.venue.RequestContext;
 
@@ -60,18 +58,11 @@ public interface NamespaceResolver {
 	 * @param requireExistingRecord the record at {@code cursor} must already exist — a
 	 *        write never materialises it (a session's scratch must not mint a
 	 *        phantom session); reads of a missing record are simply absent
-	 * @param recordTimestampKey optional timestamp field to ratchet when the cursor
-	 *        is positioned exactly at a stamped record boundary
 	 */
-	record ResolvedNamespace(ALatticeCursor<ACell> cursor, ACell[] remainingKeys,
-			boolean requireExistingRecord, AString recordTimestampKey) {
-		ResolvedNamespace(ALatticeCursor<ACell> cursor, ACell[] remainingKeys) {
-			this(cursor, remainingKeys, false, null);
-		}
-
-		ResolvedNamespace(ALatticeCursor<ACell> cursor, ACell[] remainingKeys,
-				boolean requireExistingRecord) {
-			this(cursor, remainingKeys, requireExistingRecord, null);
+	record ResolvedNamespace(WorkspaceRoot cursor, ACell[] remainingKeys,
+			boolean requireExistingRecord) {
+		ResolvedNamespace(WorkspaceRoot cursor, ACell[] remainingKeys) {
+			this(cursor, remainingKeys, false);
 		}
 	}
 }

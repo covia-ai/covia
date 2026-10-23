@@ -5,6 +5,8 @@ import static org.junit.jupiter.api.Assertions.*;
 import org.junit.jupiter.api.Test;
 
 import convex.core.crypto.AKeyPair;
+import convex.core.cvm.Keywords;
+import convex.core.lang.RT;
 import convex.core.data.ABlob;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -18,11 +20,10 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.store.MemoryStore;
 import convex.lattice.LatticeContext;
-import convex.lattice.RootComponent;
+import convex.lattice.LatticeHost;
 import convex.lattice.cursor.Cursors;
 import covia.api.Fields;
 import covia.grid.Status;
-import covia.lattice.Covia;
 import covia.venue.AgentState;
 
 /**
@@ -47,11 +48,11 @@ public class VenueStateTest {
 	@Test
 	public void testFromRoot() {
 		AKeyPair kp = AKeyPair.generate();
-		var root = Cursors.createLattice(Covia.ROOT);
-		root.setContext(convex.lattice.LatticeContext.create(
-			CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()), kp));
+		var root = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
+		var context = convex.lattice.LatticeContext.create(
+			CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()), kp);
 
-		VenueState vs = VenueState.fromRoot(root, kp.getAccountKey());
+		VenueState vs = VenueState.fromRoot(root, kp.getAccountKey(), context);
 
 		assertNotNull(vs);
 		assertEquals(kp.getAccountKey(), vs.getOwnerKey());
@@ -61,21 +62,22 @@ public class VenueStateTest {
 	public void testHostedComponentTreeUsesRootPolicy() throws Exception {
 		AKeyPair kp = AKeyPair.generate();
 		try (MemoryStore store = new MemoryStore()) {
-			RootComponent<Index<convex.core.data.Keyword, ACell>> root =
-				RootComponent.create(Covia.ROOT, store);
-			root.cursor().setContext(LatticeContext.create(null, kp));
+			LatticeHost<Index<convex.core.data.Keyword, ACell>> root =
+				LatticeHost.create(Index.none(), store);
 			CoviaApplication application = CoviaApplication.connect(root);
+			application.setContext(LatticeContext.create(null, kp));
 			VenueState venue = application.venue(kp.getAccountKey());
 
 			venue.initialise(Strings.create("did:key:test"));
 			AssetStore assets = venue.assets();
 			assets.store(Strings.create("{\"name\":\"Hosted\"}"), null);
 
-			assertNotNull(assets.persist(),
-				"nested component persistence must delegate to the root host");
+			assertNull(store.getRootData(), "component writes alone must not publish the host");
 			application.sync();
+			assertNull(store.getRootData(), "application sync does not publish the host");
+			root.sync();
 			assertEquals(application.cursor().get(), store.getRootData(),
-				"application sync must publish the complete hosted root");
+				"host sync must publish the complete hosted root");
 		}
 	}
 
@@ -301,11 +303,11 @@ public class VenueStateTest {
 	@Test
 	public void testWritesPropagateToRoot() {
 		AKeyPair kp = AKeyPair.generate();
-		var root = Cursors.createLattice(Covia.ROOT);
-		root.setContext(convex.lattice.LatticeContext.create(
-			CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()), kp));
+		var root = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
+		var context = convex.lattice.LatticeContext.create(
+			CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()), kp);
 
-		VenueState vs = VenueState.fromRoot(root, kp.getAccountKey());
+		VenueState vs = VenueState.fromRoot(root, kp.getAccountKey(), context);
 		vs.assets().store(Strings.create("{\"name\":\"Propagated\"}"), null);
 
 		// Root cursor should have data
@@ -316,13 +318,37 @@ public class VenueStateTest {
 	// ========== Fork / Sync ==========
 
 	@Test
+	public void testForkStampsPrivateWritesBeforePublication() {
+		AKeyPair kp = AKeyPair.generate();
+		var clock = new java.util.concurrent.atomic.AtomicLong(1000);
+		var context = new convex.lattice.LatticeContext() {
+			@Override
+			public CVMLong currentTimestamp() { return CVMLong.create(clock.get()); }
+		}.withSigningKey(kp);
+		var root = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
+		VenueState connected = VenueState.fromRoot(root, kp.getAccountKey(), context);
+		connected.initialise(Strings.create("did:key:fork-clock"));
+		VenueState forked = connected.fork();
+
+		clock.set(2000);
+		forked.assets().store(Strings.create("{\"name\":\"Private stamped write\"}"), null);
+		assertEquals(CVMLong.create(2000), RT.getIn(forked.get(), Keywords.TIMESTAMP),
+			"private writes need their own timestamp before publication/merge");
+		assertEquals(CVMLong.create(1000), RT.getIn(connected.get(), Keywords.TIMESTAMP),
+			"the parent must remain unchanged until sync");
+		forked.sync();
+		assertEquals(CVMLong.create(2000), RT.getIn(connected.get(), Keywords.TIMESTAMP));
+		assertEquals(1, connected.assets().count());
+	}
+
+	@Test
 	public void testForkWritesNotVisibleBeforeSync() {
 		AKeyPair kp = AKeyPair.generate();
-		var root = Cursors.createLattice(Covia.ROOT);
-		root.setContext(convex.lattice.LatticeContext.create(
-			CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()), kp));
+		var root = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
+		var context = convex.lattice.LatticeContext.create(
+			CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()), kp);
 
-		VenueState connected = VenueState.fromRoot(root, kp.getAccountKey());
+		VenueState connected = VenueState.fromRoot(root, kp.getAccountKey(), context);
 		ACell rootBefore = root.get();
 
 		// Fork and write to the fork
@@ -341,11 +367,11 @@ public class VenueStateTest {
 	@Test
 	public void testForkSyncPropagates() {
 		AKeyPair kp = AKeyPair.generate();
-		var root = Cursors.createLattice(Covia.ROOT);
-		root.setContext(convex.lattice.LatticeContext.create(
-			CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()), kp));
+		var root = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
+		var context = convex.lattice.LatticeContext.create(
+			CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()), kp);
 
-		VenueState connected = VenueState.fromRoot(root, kp.getAccountKey());
+		VenueState connected = VenueState.fromRoot(root, kp.getAccountKey(), context);
 		VenueState forked = connected.fork();
 
 		// Write asset and job through the fork
@@ -372,11 +398,11 @@ public class VenueStateTest {
 	@Test
 	public void testForkMultipleWritesSingleSync() {
 		AKeyPair kp = AKeyPair.generate();
-		var root = Cursors.createLattice(Covia.ROOT);
-		root.setContext(convex.lattice.LatticeContext.create(
-			CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()), kp));
+		var root = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
+		var context = convex.lattice.LatticeContext.create(
+			CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()), kp);
 
-		VenueState connected = VenueState.fromRoot(root, kp.getAccountKey());
+		VenueState connected = VenueState.fromRoot(root, kp.getAccountKey(), context);
 		VenueState forked = connected.fork();
 
 		// Multiple asset writes
@@ -506,10 +532,10 @@ public class VenueStateTest {
 	@Test
 	public void testConcurrentEnsureSameUser() throws Exception {
 		AKeyPair kp = AKeyPair.generate();
-		var root = Cursors.createLattice(Covia.ROOT);
-		root.setContext(convex.lattice.LatticeContext.create(
-			CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()), kp));
-		VenueState vs = VenueState.fromRoot(root, kp.getAccountKey());
+		var root = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
+		var context = convex.lattice.LatticeContext.create(
+			CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()), kp);
+		VenueState vs = VenueState.fromRoot(root, kp.getAccountKey(), context);
 
 		String did = "did:key:zRace";
 		int writers = 8;
@@ -548,11 +574,11 @@ public class VenueStateTest {
 	@Test
 	public void testForkSyncIdempotent() {
 		AKeyPair kp = AKeyPair.generate();
-		var root = Cursors.createLattice(Covia.ROOT);
-		root.setContext(convex.lattice.LatticeContext.create(
-			CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()), kp));
+		var root = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
+		var context = convex.lattice.LatticeContext.create(
+			CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()), kp);
 
-		VenueState connected = VenueState.fromRoot(root, kp.getAccountKey());
+		VenueState connected = VenueState.fromRoot(root, kp.getAccountKey(), context);
 		VenueState forked = connected.fork();
 
 		forked.assets().store(Strings.create("{\"name\":\"Once\"}"), null);

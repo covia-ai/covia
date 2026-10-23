@@ -8,7 +8,6 @@ import convex.core.data.Blob;
 import convex.core.data.Hash;
 import convex.core.data.Index;
 import convex.lattice.cursor.ACursor;
-import convex.lattice.cursor.Cursors;
 import covia.grid.AContent;
 import covia.grid.impl.BlobContent;
 import convex.lattice.generic.CASLattice;
@@ -62,7 +61,7 @@ public class LatticeStorage extends AStorage {
 	 */
 	public LatticeStorage(ACursor<Index<ABlob, ABlob>> cursor) {
 		this.lattice = CASLattice.create();
-		this.cursor = (cursor != null) ? cursor : Cursors.createLattice(lattice);
+		this.cursor = (cursor != null) ? cursor : convex.lattice.cursor.Root.create(Index.none());
 	}
 
 	/**

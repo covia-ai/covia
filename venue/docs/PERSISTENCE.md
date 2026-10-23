@@ -1,5 +1,31 @@
 # Persistence and Lattice Component Layering
 
+## Snapshot implementation contract
+
+On the Convex `538f3be06` experimental branch, `LatticeHost` owns publication
+and persistence. Covia registers its live `LatticeApplication` on that host;
+`NodeServer` attaches the host's publisher. Components explicitly bind their
+clock and signing policy and share storage; there is no component-parent policy
+inheritance. `application.sync()` only reconciles application working state.
+`application.host().sync()` publishes the current root, and
+`application.host().flush()` supplies the durability barrier. Engine calls these
+in order for its sweeps and explicit flush. A concurrent write remains pending
+when the host finishes publishing an older snapshot; the host does not merge
+that stale snapshot back into current state.
+
+`VenueState.fork()` is a bounded, explicitly published working copy. Incoming
+venue merges preserve remote stamps; local edits pass through `StampedCursor`.
+Bootstrap catalog changes use upstream `TransactionalComponent`, which retries
+conflicts and commits the narrow workspace atomically. DLFS file writes are live
+component edits; publication still belongs to Engine's host sweep or flush.
+
+The design history below describes the earlier 0.8.17 implementation and deferred
+ideas. Its `RootComponent`, cursor callbacks and implicit parent-policy APIs are
+superseded by the contract above; they are not APIs available on this branch.
+
+## Design history (Convex 0.8.17)
+
+
 **Status:** Draft v5 — hosted component model implemented; remaining migration
 phases are tracked below.
 **Owner:** venue team
