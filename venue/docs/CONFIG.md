@@ -222,10 +222,18 @@ version that encrypted it (`keyVersion`):
   such as signing as the venue.
 - A version 1 secret migrates to version 2 on its next write; reading it does
   not rewrite it.
+- `keyVersion` identifies the derivation scheme, not a key generation. Two
+  different identity seeds both produce version 2 keys, and the record does
+  not currently identify which seed encrypted it. Holding both seeds alone
+  is therefore not a complete rotation protocol.
 - The secrets key is independent of the Etch store key: on an encrypted store,
   secrets are encrypted twice, under different keys.
 - Changing the seed strands every secret. Re-encrypting under a new identity
   key belongs with identity key rotation, which does not exist yet.
+- Venue lattice state is also owned by the identity's public key. Keeping a
+  `did:web` name unchanged does not migrate that ownership: startup rejects a
+  key that does not own the existing venue state. Rotation must coordinate
+  signed-state ownership and secret re-encryption (#535, #582).
 - A venue older than 0.9.12 cannot read version 2 secrets: rolled back, it
   loses the secrets written since the upgrade until it is upgraded again.
   Configured secrets recover, as startup rewrites them.

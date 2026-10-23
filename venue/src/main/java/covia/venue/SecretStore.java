@@ -31,7 +31,9 @@ import convex.lattice.cursor.ALatticeCursor;
  * {@code "updated"} (CVMLong, last-modified millis from the lattice write
  * clock) and {@code "keyVersion"} (CVMLong) fields. The key version names the
  * derivation that encrypted the blob (see {@link Keys}); a record without one
- * predates versioning and is version 1. Every write encrypts under
+	 * predates versioning and is version 1. It does not identify a particular
+	 * venue seed or rotated key generation; {@link Keys} derives both versions
+	 * from one seed. Every write encrypts under
  * {@link #CURRENT_KEY_VERSION}, so an older secret migrates on its next
  * write.</p>
  *
