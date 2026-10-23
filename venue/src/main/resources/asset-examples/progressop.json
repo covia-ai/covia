@@ -1,0 +1,16 @@
+{
+	"name": "Progress Operation",
+	"description": "Publishes progress on its Job from its own thread, as a long-running operation does, then completes",
+	"dateCreated": "2026-10-23T00:00:00Z",
+	"operation": {
+		"adapter": "test:progress",
+		"readOnly": false,
+		"input": {
+			"type": "object",
+			"properties": {}
+		},
+		"output": {
+			"description": "{done} once every step has been published."
+		}
+	}
+}

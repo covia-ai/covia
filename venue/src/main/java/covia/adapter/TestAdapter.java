@@ -24,6 +24,7 @@ import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.RequestContext;
+import covia.venue.AgentEvents;
 import covia.venue.AgentState;
 import covia.venue.api.A2ACodec;
 
@@ -234,6 +235,7 @@ public class TestAdapter extends AAdapter {
 			installTestAsset("amountgate",   BASE+"testamountgate.json");
 			installTestAsset("never",        BASE+"neverop.json");
 			installTestAsset("delay",        BASE+"delayop.json");
+			installTestAsset("progress",     BASE+"progressop.json");
 			installTestAsset("error",        BASE+"failop.json");
 			installTestAsset("chat",         BASE+"chatop.json");
 			installTestAsset("pause",        BASE+"pauseop.json");
@@ -267,6 +269,16 @@ public class TestAdapter extends AAdapter {
             // Delay: needs Job for caller DID propagation to sub-invocation
 			job.setStatus(Status.STARTED);
             handleDelay(job, ctx, input);
+        } else if ("progress".equals(subOp)) {
+            // Reports progress from its own thread as a long-running operation
+            // does — two steps, the second published twice — then completes.
+            job.setStatus(Status.STARTED);
+            VIRTUAL_EXECUTOR.submit(() -> {
+                for (String step : new String[] {"step 1", "step 2", "step 2"}) {
+                    job.update(data -> data.assoc(AgentEvents.K_PROGRESS, Maps.of("lastTool", step)));
+                }
+                job.completeWith(Maps.of("done", Strings.create("all steps")));
+            });
         } else if ("never".equals(subOp)) {
             // Never completes. Run the default one-shot path (starts the
             // never-completing future and wires the cancel hook), then register
@@ -649,7 +661,10 @@ public class TestAdapter extends AAdapter {
             // through the agent tool loop while keeping the L3 provider fully
             // deterministic. LangChain's provider boundary has separate tests
             // for its provider-only JSON rendering.
-            if (lastUserMsg.contains("issue-334-read")) {
+            if (lastUserMsg.contains("progress-relay")) {
+                toolName = "v/test/ops/progress";
+                arguments = "{}";
+            } else if (lastUserMsg.contains("issue-334-read")) {
                 toolName = "covia_read";
                 arguments = "{\"path\":\"w/issue-334/signals\"}";
             } else if (lastUserMsg.contains("issue-334-list")) {

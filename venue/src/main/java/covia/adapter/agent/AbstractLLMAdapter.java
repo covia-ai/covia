@@ -983,13 +983,16 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * level); {@link #dispatchTool} has additionally checked the call against
 	 * the agent's own config caps. Times out via
 	 * {@link java.util.concurrent.CompletableFuture#get(long, TimeUnit)} so a
-	 * stuck downstream op cannot hang the agent loop forever.
+	 * stuck downstream op cannot hang the agent loop forever. Inside a cycle
+	 * with a live tap, the progress the operation publishes while it runs is
+	 * announced against the tool call that invoked it.
 	 */
 	protected ACell invokeOperation(AString operation, ACell input, RequestContext ctx, long timeoutMs) {
 		// Internal dispatch preserves types exactly — no coercion here. Tool
 		// arguments were already normalised once at the LLM wire boundary
 		// (parseToolArguments); a wrong-shaped input is the caller's error and
 		// surfaces from the op's own validation (#89).
+		ToolCycleEngine.ProgressRelay relay = ToolCycleEngine.relayForRunningCall();
 		try {
 			// HITL is naturally longer-lived than a model turn. Its operation
 			// already owns a durable Job, so a sessioned agent receives that handle
@@ -1007,13 +1010,16 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 				if (title != null) receipt = receipt.assoc(Fields.TITLE, title);
 				return receipt;
 			}
-			ACell result = engine.jobs().invokeInternal(operation, input, ctx)
+			ACell result = engine.jobs().invokeInternal(operation, input, ctx,
+					(relay != null) ? relay::watch : null)
 				.get(timeoutMs, TimeUnit.MILLISECONDS);
 			return (result != null) ? result : Maps.empty();
 		} catch (TimeoutException e) {
 			return Strings.create("Error: tool call timed out after " + timeoutMs + "ms");
 		} catch (Exception e) {
 			return Strings.create("Error: " + unwrap(e).getMessage());
+		} finally {
+			if (relay != null) relay.close();
 		}
 	}
 

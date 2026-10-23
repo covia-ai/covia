@@ -48,8 +48,9 @@ import covia.venue.AgentEvents;
  *
  * <p><b>Live tap.</b> Each call that reaches its handler is announced on the
  * cycle's {@link AgentEvents.Cycle} — {@code tool:start} as it is dispatched,
- * {@code tool:result} as it finishes — from whichever thread runs it, so a
- * parallel wave shows its calls in flight independently (#394). The handle
+ * {@code tool:progress} as the operation it invoked publishes progress on its
+ * Job, {@code tool:result} as it finishes — from whichever thread runs it, so
+ * a parallel wave shows its calls in flight independently (#394). The handle
  * and frame depth come from this thread's record; calls fenced after a
  * terminal request never ran and are not announced.</p>
  *
@@ -66,6 +67,70 @@ final class ToolCycleEngine {
 
 	/** A decoded provider tool call. */
 	record ToolCall(AString id, String name, ACell input, int iteration) {}
+
+	/**
+	 * The tool call dispatching on this thread, with the live tap to report it
+	 * on — set by {@link #execute} around the handler, so an operation the
+	 * call invokes can relay what it publishes as it runs. Null outside a call,
+	 * and where the cycle has no tap.
+	 */
+	private static final ThreadLocal<Running> RUNNING = new ThreadLocal<>();
+
+	/** A running tool call and where its activity is announced. */
+	private record Running(AgentEvents.Cycle tap, AString id, String name, int depth) {}
+
+	/**
+	 * A relay for an operation the tool call dispatching on this thread is
+	 * about to invoke, or null outside a call or a tap. Everything it needs is
+	 * captured now: the Job's updates arrive on the operation's own thread.
+	 */
+	static ProgressRelay relayForRunningCall() {
+		Running call = RUNNING.get();
+		return (call != null) ? new ProgressRelay(call) : null;
+	}
+
+	/**
+	 * Announces each change to the {@code progress} an invoked operation
+	 * publishes on its Job as {@code tool:progress} for the tool call, from
+	 * {@link #watch} until {@link #close}.
+	 */
+	static final class ProgressRelay implements java.util.function.Consumer<covia.grid.Job> {
+		private final Running call;
+		private covia.grid.Job job;
+		private ACell last;
+		private boolean closed;
+
+		private ProgressRelay(Running call) {
+			this.call = call;
+		}
+
+		/** Starts relaying {@code job}'s progress; the Job exists but its adapter has not yet started. */
+		synchronized void watch(covia.grid.Job job) {
+			if (closed) return;
+			this.job = job;
+			job.subscribe(this);
+			accept(job);
+		}
+
+		@Override
+		public synchronized void accept(covia.grid.Job j) {
+			if (closed) return;
+			AMap<AString, ACell> data = j.getData();
+			ACell progress = (data != null) ? data.get(AgentEvents.K_PROGRESS) : null;
+			if (progress == null || progress.equals(last)) return;
+			last = progress;
+			call.tap().toolProgress(call.id(), call.name(), progress, call.depth());
+		}
+
+		/**
+		 * The call has its result: nothing more is relayed. An announcement
+		 * under way finishes first, so none follows the call's {@code tool:result}.
+		 */
+		synchronized void close() {
+			closed = true;
+			if (job != null) job.unsubscribe(this);
+		}
+	}
 
 	/**
 	 * Result returned by a registered harness handler.
@@ -293,6 +358,11 @@ final class ToolCycleEngine {
 		long started = System.nanoTime();
 		ToolOutcome outcome = d.early();
 		if (outcome == null) {
+			// The call is this thread's running call while it dispatches, so the
+			// operation it invokes can report progress against it. A subgoal's
+			// calls run nested on this same thread; each restores the one it found.
+			Running outer = RUNNING.get();
+			RUNNING.set((tap != null) ? new Running(tap, call.id(), call.name(), depth) : null);
 			try {
 				outcome = registry.dispatch(call, context);
 				if (outcome == null) {
@@ -303,6 +373,8 @@ final class ToolCycleEngine {
 				String detail = describe(e);
 				outcome = ToolOutcome.result(Strings.create("Error: " + detail));
 				log.warn("Tool execution failed: {} — {}", call.name(), detail);
+			} finally {
+				RUNNING.set(outer);
 			}
 		}
 		long millis = (System.nanoTime() - started) / 1_000_000;

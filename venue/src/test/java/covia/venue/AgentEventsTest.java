@@ -271,6 +271,41 @@ public class AgentEventsTest {
 	}
 
 	@Test
+	public void testRunningToolRelaysTheProgressItsOperationPublishes() {
+		String id = "progresser";
+		createAgent(id, Maps.of(
+			Fields.OPERATION, "v/ops/llmagent/chat",
+			"llmOperation", "v/test/ops/toolllm",
+			Fields.TOOLS, Vectors.of(Maps.of(
+				Fields.OPERATION, "v/test/ops/progress",
+				Fields.NAME, "v/test/ops/progress"))));
+		Capture c = new Capture();
+		try (AgentEvents.Subscription s = engine.agentEvents().subscribe(did, Strings.create(id), c)) {
+			engine.jobs().invokeOperation("v/ops/agent/chat",
+				Maps.of(Fields.AGENT_ID, id, Fields.MESSAGE, "progress-relay please"), ctx).awaitResult(10_000);
+			c.await(AgentEvents.RUN_END, null, 5_000);
+		}
+
+		// The operation published two steps, the second twice, from its own
+		// thread: each change is announced once, inside the call.
+		List<String> tool = new ArrayList<>();
+		for (String type : c.types()) if (type.startsWith("tool:")) tool.add(type);
+		assertEquals(List.of("tool:start", "tool:progress", "tool:progress", "tool:result"), tool);
+		assertSeqStrictlyIncreasing(c.events);
+
+		List<Event> progress = c.all(AgentEvents.TOOL_PROGRESS);
+		Event first = progress.get(0);
+		assertEquals(Strings.create("call_1"), str(first, Fields.ID), "correlated with the call that invoked it");
+		assertEquals(Strings.create("v/test/ops/progress"), str(first, Fields.NAME));
+		assertEquals(1, num(first, Fields.CYCLE));
+		assertEquals(Strings.create("step 1"),
+			RT.getIn(first.data(), Fields.DETAIL, AgentEvents.K_PROGRESS, "lastTool"));
+		assertEquals(Strings.create("step 2"),
+			RT.getIn(progress.get(1).data(), Fields.DETAIL, AgentEvents.K_PROGRESS, "lastTool"));
+		assertNull(first.withoutDetail().data().get(Fields.DETAIL), "what the operation reports is detail");
+	}
+
+	@Test
 	public void testTransitionOutsideRunLoopEmitsNothing() {
 		// A direct harness invocation carries no cycle handle, so nothing is
 		// attributed to the agent — the tap is a run-loop surface.

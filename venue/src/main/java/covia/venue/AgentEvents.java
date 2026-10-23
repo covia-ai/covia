@@ -59,6 +59,8 @@ import covia.api.Fields;
 public final class AgentEvents {
 
 	private static final Logger log = LoggerFactory.getLogger(AgentEvents.class);
+	/** The Job field an operation publishes its progress under, provider-neutrally. */
+	public static final AString K_PROGRESS = Strings.intern("progress");
 
 	// ========== Event types ==========
 
@@ -84,6 +86,11 @@ public final class AgentEvents {
 	public static final AString TOOL_START = Strings.intern("tool:start");
 	/** A tool call finished. {@code {id, name, ms, isError?, depth?, detail: {result}}} */
 	public static final AString TOOL_RESULT = Strings.intern("tool:result");
+	/** A running tool call's operation published progress on its Job — Claude
+	 *  Code's latest step, say — each change once, between the call's
+	 *  {@code tool:start} and its {@code tool:result}.
+	 *  {@code {id, name, depth?, detail: {progress}}} */
+	public static final AString TOOL_PROGRESS = Strings.intern("tool:progress");
 	/** The agent's persisted status changed. {@code {status, error?}} */
 	public static final AString STATUS = Strings.intern("status");
 
@@ -380,6 +387,17 @@ public final class AgentEvents {
 			AMap<AString, ACell> detail = Maps.empty();
 			if (input != null) detail = detail.assoc(Fields.INPUT, input);
 			emit(TOOL_START, depth(m.assoc(Fields.DETAIL, detail), depth));
+		}
+
+		/**
+		 * A running tool call's operation published {@code progress} — whatever
+		 * it reports under its Job's {@link #K_PROGRESS} field — which rides
+		 * under {@code detail}, as the call's input and result do.
+		 */
+		public void toolProgress(AString id, String name, ACell progress, int depth) {
+			AMap<AString, ACell> m = Maps.of(Fields.NAME, Strings.create(name));
+			if (id != null) m = m.assoc(Fields.ID, id);
+			emit(TOOL_PROGRESS, depth(m.assoc(Fields.DETAIL, Maps.of(K_PROGRESS, progress)), depth));
 		}
 
 		/** A tool call finished; its result rides under {@code detail}. */
