@@ -1984,7 +1984,13 @@ over venue-local convex-db databases (per-user, lattice-backed, created on
 first use; ONE instance = one store, per-user isolation via the `database=`
 param) and operator-registered JDBC connections
 (`adapters.sql.databases.<name>`, passwords as `s/` secret refs). Callers name a `db`, never a URL. Caps:
-`sql/<db>` × `sql/query`|`sql/execute`. The module ships its own `sql`
+`sql/<db>` × `sql/query`|`sql/execute`. `sql/query` never changes data:
+convex-db statements must parse as a single query, and other drivers run the
+query in a read-only transaction that is always rolled back. PostgreSQL and
+MySQL refuse writes in that transaction; for a driver that ignores read-only,
+statements that commit on their own (DDL on some databases, non-transactional
+tables) are not undone, so register such a database with a read-only database
+user. The module ships its own `sql`
 agent skill from its jar (materialises at `v/skills/data/sql` exactly when the
 module is loaded — the module-shipped-skill pattern, see `docs/SKILLS.md`).
 

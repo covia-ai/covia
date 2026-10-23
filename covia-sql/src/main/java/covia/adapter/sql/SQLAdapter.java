@@ -5,10 +5,15 @@ import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
+import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.Properties;
 import java.util.concurrent.CompletableFuture;
 
+import org.apache.calcite.sql.SqlKind;
+import org.apache.calcite.sql.SqlNode;
+import org.apache.calcite.sql.parser.SqlParseException;
+import org.apache.calcite.sql.parser.SqlParser;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -24,6 +29,8 @@ import convex.core.data.prim.CVMDouble;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
+import convex.db.calcite.ConvexDdlExecutor;
+import convex.db.jdbc.ConvexDriver;
 import covia.adapter.AAdapter;
 import covia.exception.JobFailedException;
 import covia.venue.RequestContext;
@@ -51,6 +58,18 @@ import covia.venue.RequestContext;
  * {@code sql/query} or {@code sql/execute} — a UCAN grant can delegate one
  * database, and capability gates / argument defaults compose as with any
  * operation.</p>
+ *
+ * <p>{@code sql/query} never changes data, so the two abilities stay
+ * distinct. A statement for convex-db (every venue-local database, and any
+ * registered {@code jdbc:convex:} URL) is parsed with convex-db's own grammar
+ * and refused before it reaches the database unless it is a single query.
+ * Other drivers' dialects need not parse in that grammar, so their queries
+ * run in a read-only transaction that is always rolled back. PostgreSQL and
+ * MySQL refuse writes in a read-only transaction; elsewhere the rollback
+ * undoes transactional writes. Statements that commit on their own (DDL on
+ * some databases, non-transactional tables, functions with external effects)
+ * are beyond what JDBC guarantees: register such a database with a read-only
+ * database user.</p>
  */
 public class SQLAdapter extends AAdapter {
 
@@ -68,6 +87,16 @@ public class SQLAdapter extends AAdapter {
 	private static final AString K_COUNT = Strings.intern("count");
 	private static final AString K_TRUNCATED = Strings.intern("truncated");
 	private static final AString K_UPDATE_COUNT = Strings.intern("updateCount");
+
+	/** Refusal of a sql:query statement that parses as something other than a query. */
+	static final String NOT_A_QUERY = "sql:query runs only queries such as SELECT; use sql:execute to change data";
+
+	/** Refusal of a sql:query statement that does not parse as a single query. */
+	static final String NOT_ONE_QUERY = "sql:query runs a single query, and this statement does not parse as one";
+
+	/** The parser convex-db's driver itself uses. */
+	private static final SqlParser.Config QUERY_PARSER = SqlParser.config()
+		.withParserFactory(ConvexDdlExecutor.PARSER_FACTORY);
 
 	static {
 		// The convex-db JDBC driver ships inside this module jar — load it
@@ -124,21 +153,16 @@ public class SQLAdapter extends AAdapter {
 		AVector<ACell> params = RT.ensureVector(RT.getIn(input, K_PARAMS));
 		long maxRows = maxRows(input);
 
-		try (Connection conn = openConnection(ctx, db)) {
-			if (params == null || params.count() == 0) {
-				try (Statement st = conn.createStatement()) {
-					setMaxRowsHint(st, maxRows);
-					try (ResultSet rs = st.executeQuery(statement)) {
-						return readResults(rs, maxRows);
-					}
+		try {
+			Database target = resolveDatabase(ctx, db);
+			if (target.isConvexDb()) {
+				requireQuery(statement);
+				try (Connection conn = target.connect()) {
+					return runQuery(conn, statement, params, maxRows);
 				}
 			}
-			try (PreparedStatement ps = conn.prepareStatement(statement)) {
-				bindParams(ps, params);
-				setMaxRowsHint(ps, maxRows);
-				try (ResultSet rs = ps.executeQuery()) {
-					return readResults(rs, maxRows);
-				}
+			try (Connection conn = target.connect()) {
+				return runRolledBack(conn, statement, params, maxRows);
 			}
 		} catch (JobFailedException e) {
 			throw e;
@@ -153,7 +177,7 @@ public class SQLAdapter extends AAdapter {
 		String statement = requireStatement(input);
 		AVector<ACell> params = RT.ensureVector(RT.getIn(input, K_PARAMS));
 
-		try (Connection conn = openConnection(ctx, db)) {
+		try (Connection conn = resolveDatabase(ctx, db).connect()) {
 			long updateCount;
 			if (params == null || params.count() == 0) {
 				try (Statement st = conn.createStatement()) {
@@ -173,26 +197,96 @@ public class SQLAdapter extends AAdapter {
 		}
 	}
 
-	// ========== Database resolution ==========
+	/**
+	 * Refuses a statement unless it parses as a single query in convex-db's
+	 * own grammar, so the check classifies exactly what the database would run.
+	 */
+	private static void requireQuery(String statement) {
+		SqlNode node;
+		try {
+			node = SqlParser.create(statement, QUERY_PARSER).parseStmt();
+		} catch (SqlParseException e) {
+			// The first line locates the problem; the rest lists every token Calcite expected
+			String where = String.valueOf(e.getMessage()).lines().findFirst().orElse("");
+			throw new IllegalArgumentException(NOT_ONE_QUERY + ": " + where);
+		}
+		if (!node.getKind().belongsTo(SqlKind.QUERY)) {
+			throw new IllegalArgumentException(NOT_A_QUERY + " (statement kind: " + node.getKind() + ")");
+		}
+	}
 
 	/**
-	 * Resolves a database name to a live connection. Operator-registered
-	 * entries win; otherwise the name is a venue-local convex-db database
-	 * namespaced by caller DID (created on first use).
+	 * Runs a query on another driver's connection in a read-only transaction
+	 * that is always rolled back. JDBC makes read-only a hint: PostgreSQL and
+	 * MySQL refuse writes under it, and where a driver ignores it the rollback
+	 * still undoes whatever the database can undo.
 	 */
-	private Connection openConnection(RequestContext ctx, String db) throws Exception {
+	private static ACell runRolledBack(Connection conn, String statement, AVector<ACell> params, long maxRows) throws Exception {
+		try {
+			conn.setReadOnly(true);
+		} catch (SQLException e) {
+			// a hint only: SQLite, for one, refuses it once the connection is open
+		}
+		conn.setAutoCommit(false);
+		try {
+			return runQuery(conn, statement, params, maxRows);
+		} finally {
+			conn.rollback();
+		}
+	}
+
+	private static ACell runQuery(Connection conn, String statement, AVector<ACell> params, long maxRows) throws Exception {
+		if (params == null || params.count() == 0) {
+			try (Statement st = conn.createStatement()) {
+				setMaxRowsHint(st, maxRows);
+				try (ResultSet rs = st.executeQuery(statement)) {
+					return readResults(rs, maxRows);
+				}
+			}
+		}
+		try (PreparedStatement ps = conn.prepareStatement(statement)) {
+			bindParams(ps, params);
+			setMaxRowsHint(ps, maxRows);
+			try (ResultSet rs = ps.executeQuery()) {
+				return readResults(rs, maxRows);
+			}
+		}
+	}
+
+	// ========== Database resolution ==========
+
+	/** A database name resolved to the JDBC URL and properties to connect with. */
+	private record Database(String url, Properties props) {
+
+		/** True when convex-db's driver serves this URL: every venue-local
+		 *  database, and any registered {@code jdbc:convex:} connection. */
+		boolean isConvexDb() {
+			return url.startsWith(ConvexDriver.PREFIX);
+		}
+
+		Connection connect() throws SQLException {
+			return DriverManager.getConnection(url, props);
+		}
+	}
+
+	/**
+	 * Resolves a database name. Operator-registered entries win; otherwise
+	 * the name is a venue-local convex-db database namespaced by caller DID
+	 * (created on first use).
+	 */
+	private Database resolveDatabase(RequestContext ctx, String db) {
 		AMap<AString, ACell> cfg = engine.adapterConfig("sql");
 		ACell external = RT.getIn(cfg, "databases", db);
+		Properties props = new Properties();
 		if (external != null) {
 			AString url = RT.ensureString(RT.getIn(external, "url"));
 			if (url == null) throw new JobFailedException(
 				"Configured SQL database '" + db + "' has no url in venue config");
-			Properties props = new Properties();
 			AString user = RT.ensureString(RT.getIn(external, "user"));
 			if (user != null) props.setProperty("user", user.toString());
 			AString password = RT.ensureString(RT.getIn(external, "password"));
 			if (password != null) props.setProperty("password", resolvePassword(db, password));
-			return DriverManager.getConnection(url.toString(), props);
+			return new Database(url.toString(), props);
 		}
 
 		// Scoped to the USER: an agent shares its owner's venue-local database
@@ -209,7 +303,7 @@ public class SQLAdapter extends AAdapter {
 		String url = (path != null)
 			? "jdbc:convex:file:" + path + ";database=" + scoped
 			: "jdbc:convex:mem:covia_sql;database=" + scoped;
-		return DriverManager.getConnection(url);
+		return new Database(url, props);
 	}
 
 	/** Password entries should be secret references ({@code s/<name>}),

@@ -34,6 +34,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   timestamps. Existing missing-expiry policy and 60-second leeway are preserved.
 - Secret store key derived with HKDF under a domain label; each secret records
   its key version and migrates on its next write (#535).
+- `sql:query` no longer applies data-changing statements.
 
 ### Added
 

@@ -2,6 +2,10 @@ package covia.adapter.sql;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -33,32 +37,40 @@ import covia.venue.RequestContext;
 public class SQLAdapterTest {
 
 	private static Engine engine;
+	private static Path sqliteFile;
 	private AString did;
 	private RequestContext ctx;
 
 	@BeforeAll
-	static void boot() {
+	static void boot() throws IOException {
 		// One operator-registered "external" connection for the shared-db
 		// test — itself a convex-db mem database, so the suite stays
 		// self-contained. Deliberately a SEPARATE instance from the venue-local
 		// one: convex-db 0.8.9 fixed cross-instance DML routing
 		// (Convex-Dev/convex#645), and running the shared-db tests against a
 		// second instance keeps that fix regression-guarded from our side.
+		// A second registered connection uses SQLite, a driver other than
+		// convex-db whose executeQuery runs a write before reporting that it
+		// returned no rows, as PostgreSQL's does.
+		sqliteFile = Files.createTempFile("covia-sql-test", ".db");
 		AMap<AString, ACell> config = Maps.of(
 			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 			Config.ADAPTERS, Maps.of(
 				Strings.create("sql"), Maps.of(
 					Strings.create("databases"), Maps.of(
 						Strings.create("shareddb"), Maps.of(
-							Strings.create("url"), Strings.create("jdbc:convex:mem:shared_ext;database=shared_ext_test"))))));
+							Strings.create("url"), Strings.create("jdbc:convex:mem:shared_ext;database=shared_ext_test")),
+						Strings.create("sqlitedb"), Maps.of(
+							Strings.create("url"), Strings.create("jdbc:sqlite:" + sqliteFile))))));
 		engine = Engine.createTemp(config);
 		engine.registerAdapter(new SQLAdapter());
 		Engine.addDemoAssets(engine);
 	}
 
 	@AfterAll
-	static void shutdown() {
+	static void shutdown() throws IOException {
 		engine.close();
+		Files.deleteIfExists(sqliteFile);
 	}
 
 	@BeforeEach
@@ -184,6 +196,109 @@ public class SQLAdapterTest {
 		assertEquals(3, RT.ensureLong(RT.getIn(out, "count")).longValue());
 		assertEquals(convex.core.data.prim.CVMBool.TRUE, RT.getIn(out, "truncated"),
 			"more rows were available than maxRows — must be flagged, never silent");
+	}
+
+	// ========== Query only ==========
+
+	/** Statements that change data or schema, including disguised ones. */
+	private static final String[] WRITES = {
+		"DELETE FROM guarded WHERE id = 2",
+		"UPDATE guarded SET name = 'changed'",
+		"INSERT INTO guarded VALUES (3, 'Carol')",
+		"DROP TABLE guarded",
+		"CREATE TABLE intruder (id INTEGER)",
+		"/* x */ DELETE FROM guarded WHERE id = 2",
+		"-- x\nDELETE FROM guarded WHERE id = 2",
+		"SELECT 1; DELETE FROM guarded WHERE id = 2",
+		"WITH doomed AS (SELECT id FROM guarded) DELETE FROM guarded WHERE id = 2"};
+
+	@Test
+	public void testQueryRefusesWritesOnVenueLocalDatabase() {
+		assertQueryOnly("guard", true);
+	}
+
+	@Test
+	public void testQueryRefusesWritesOnRegisteredConvexDatabase() {
+		assertQueryOnly("shareddb", true);
+	}
+
+	/**
+	 * Other drivers run sql:query in a read-only transaction that is always
+	 * rolled back. SQLite ignores the read-only hint, runs a write passed to
+	 * executeQuery and then fails, and runs only the first of several
+	 * statements, so here the property is that nothing persists.
+	 */
+	@Test
+	public void testQueryLeavesExternalDatabaseUnchanged() {
+		assertQueryOnly("sqlitedb", false);
+	}
+
+	@Test
+	public void testQueryAcceptsQueryForms() {
+		exec(ctx, "forms", "CREATE TABLE t (id INTEGER, name VARCHAR)");
+		exec(ctx, "forms", "INSERT INTO t VALUES (1, 'Alice')");
+		exec(ctx, "forms", "INSERT INTO t VALUES (2, 'Bob')");
+		for (String q : new String[] {
+				"select name from t where id = 1 order by name",
+				"/* note */ SELECT name FROM t WHERE id = 1",
+				"WITH picked AS (SELECT name FROM t WHERE id = 1) SELECT name FROM picked",
+				"SELECT name FROM t WHERE id = 1 UNION SELECT name FROM t WHERE id = 1"}) {
+			ACell out = query(ctx, "forms", q, null, null);
+			assertEquals("Alice", RT.ensureVector(rows(out).get(0)).get(0).toString(), q);
+		}
+	}
+
+	/**
+	 * Sends every write through sql:query and requires that the table is
+	 * exactly as it was after each one. For convex-db databases the statement
+	 * must also be refused before it reaches the database.
+	 */
+	private void assertQueryOnly(String db, boolean refusedBeforeExecution) {
+		exec(ctx, db, "CREATE TABLE guarded (id INTEGER, name VARCHAR)");
+		exec(ctx, db, "INSERT INTO guarded VALUES (1, 'Alice')");
+		exec(ctx, db, "INSERT INTO guarded VALUES (2, 'Bob')");
+		AVector<ACell> before = contents(db);
+		assertEquals(2, before.count());
+
+		for (String write : WRITES) {
+			Job job = attemptQuery(db, write, null);
+			assertEquals(before, contents(db), "sql:query applied: " + write);
+			if (refusedBeforeExecution) assertRefused(job, write);
+		}
+		Job bound = attemptQuery(db, "DELETE FROM guarded WHERE id = ?",
+			convex.core.data.Vectors.of(convex.core.data.prim.CVMLong.create(2)));
+		assertEquals(before, contents(db), "sql:query applied a parameterised DELETE");
+		if (refusedBeforeExecution) assertRefused(bound, "parameterised DELETE");
+
+		Job intruder = attemptQuery(db, "SELECT COUNT(*) FROM intruder", null);
+		assertEquals(Status.FAILED, intruder.getStatus(), "sql:query created a table");
+	}
+
+	private AVector<ACell> contents(String db) {
+		return rows(query(ctx, db, "SELECT id, name FROM guarded ORDER BY id", null, null));
+	}
+
+	/** Runs a query to its end, successful or not, for the caller to inspect. */
+	private Job attemptQuery(String db, String statement, ACell params) {
+		AMap<AString, ACell> input = Maps.of(
+			Strings.create("db"), Strings.create(db),
+			Strings.create("statement"), Strings.create(statement));
+		if (params != null) input = input.assoc(Strings.create("params"), params);
+		Job job = engine.jobs().invokeOperation("v/ops/sql/query", input, ctx);
+		try {
+			job.awaitResult(15000);
+		} catch (Exception e) {
+			// the job's status and message say what happened
+		}
+		assertTrue(job.isFinished(), statement);
+		return job;
+	}
+
+	private static void assertRefused(Job job, String statement) {
+		assertEquals(Status.FAILED, job.getStatus(), statement);
+		String message = job.getErrorMessage();
+		assertTrue(message.contains(SQLAdapter.NOT_A_QUERY) || message.contains(SQLAdapter.NOT_ONE_QUERY),
+			statement + " → " + message);
 	}
 
 	// ========== Capabilities ==========
