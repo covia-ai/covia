@@ -33,6 +33,7 @@ import convex.db.calcite.ConvexDdlExecutor;
 import convex.db.jdbc.ConvexDriver;
 import covia.adapter.AAdapter;
 import covia.exception.JobFailedException;
+import covia.venue.Config;
 import covia.venue.RequestContext;
 
 /**
@@ -51,7 +52,9 @@ import covia.venue.RequestContext;
  *       {@code adapters.sql.databases.<name>} with {@code url}, optional
  *       {@code user} and {@code password} (a {@code s/<name>} secret
  *       reference, resolved in the venue's store at connect time). Shared
- *       across callers; any JDBC driver on the classpath.</li>
+ *       across callers; any JDBC driver on the classpath. {@code readOnly:
+ *       true} refuses {@code sql/execute} on it for every caller, the venue
+ *       included.</li>
  * </ul>
  *
  * <p>Capabilities are resource-precise: {@code sql/<db>} with ability
@@ -93,6 +96,9 @@ public class SQLAdapter extends AAdapter {
 
 	/** Refusal of a sql:query statement that does not parse as a single query. */
 	static final String NOT_ONE_QUERY = "sql:query runs a single query, and this statement does not parse as one";
+
+	/** Refusal of sql:execute on a database registered with {@code readOnly: true}, after its name. */
+	static final String READ_ONLY_DATABASE = "is read-only; use sql:query to read it";
 
 	/** The parser convex-db's driver itself uses. */
 	private static final SqlParser.Config QUERY_PARSER = SqlParser.config()
@@ -176,6 +182,7 @@ public class SQLAdapter extends AAdapter {
 		engine.requireAuthority(ctx, Strings.create("sql/" + db), Strings.create("sql/execute"));
 		String statement = requireStatement(input);
 		AVector<ACell> params = RT.ensureVector(RT.getIn(input, K_PARAMS));
+		requireWritable(db);
 
 		try (Connection conn = resolveDatabase(ctx, db).connect()) {
 			long updateCount;
@@ -194,6 +201,18 @@ public class SQLAdapter extends AAdapter {
 			throw e;
 		} catch (Exception e) {
 			throw new JobFailedException("SQL statement failed on database '" + db + "': " + rootMessage(e));
+		}
+	}
+
+	/**
+	 * Refuses sql:execute on a database the operator registered with
+	 * {@code readOnly: true}, for every caller including the venue. Venue-local
+	 * databases belong to their user and are never read-only.
+	 */
+	private void requireWritable(String db) {
+		ACell registered = RT.getIn(engine.adapterConfig("sql"), "databases", db);
+		if (registered != null && RT.bool(RT.getIn(registered, Config.READ_ONLY))) {
+			throw new IllegalArgumentException("SQL database '" + db + "' " + READ_ONLY_DATABASE);
 		}
 	}
 

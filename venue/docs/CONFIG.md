@@ -1994,6 +1994,29 @@ user. The module ships its own `sql`
 agent skill from its jar (materialises at `v/skills/data/sql` exactly when the
 module is loaded — the module-shipped-skill pattern, see `docs/SKILLS.md`).
 
+Registered databases are shared: every signed-in user may query them and,
+unless the entry sets `readOnly: true`, change them with `sql/execute`.
+`readOnly` refuses `sql/execute` for every caller, the venue included, before a
+connection opens; `sql/query` is unaffected. Venue-local databases have no such
+flag.
+
+```json
+{
+  "adapters": {
+    "sql": {
+      "databases": {
+        "reports": {
+          "url": "jdbc:postgresql://db.internal/reports",
+          "user": "covia",
+          "password": "s/REPORTS_DB_PASSWORD",
+          "readOnly": true
+        }
+      }
+    }
+  }
+}
+```
+
 ### SonnyLabs prompt scanning (covia-sonnylabs)
 
 The optional **covia-sonnylabs** module exposes `v/ops/sonnylabs/scan`, a

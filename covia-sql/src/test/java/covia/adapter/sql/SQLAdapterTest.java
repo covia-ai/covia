@@ -49,17 +49,22 @@ public class SQLAdapterTest {
 		// one: convex-db 0.8.9 fixed cross-instance DML routing
 		// (Convex-Dev/convex#645), and running the shared-db tests against a
 		// second instance keeps that fix regression-guarded from our side.
-		// A second registered connection uses SQLite, a driver other than
+		// The same database is registered again as read-only "sharedro".
+		// Another registered connection uses SQLite, a driver other than
 		// convex-db whose executeQuery runs a write before reporting that it
 		// returned no rows, as PostgreSQL's does.
 		sqliteFile = Files.createTempFile("covia-sql-test", ".db");
+		AString sharedUrl = Strings.create("jdbc:convex:mem:shared_ext;database=shared_ext_test");
 		AMap<AString, ACell> config = Maps.of(
 			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 			Config.ADAPTERS, Maps.of(
 				Strings.create("sql"), Maps.of(
 					Strings.create("databases"), Maps.of(
 						Strings.create("shareddb"), Maps.of(
-							Strings.create("url"), Strings.create("jdbc:convex:mem:shared_ext;database=shared_ext_test")),
+							Strings.create("url"), sharedUrl),
+						Strings.create("sharedro"), Maps.of(
+							Strings.create("url"), sharedUrl,
+							Config.READ_ONLY, convex.core.data.prim.CVMBool.TRUE),
 						Strings.create("sqlitedb"), Maps.of(
 							Strings.create("url"), Strings.create("jdbc:sqlite:" + sqliteFile))))));
 		engine = Engine.createTemp(config);
@@ -182,6 +187,33 @@ public class SQLAdapterTest {
 
 		ACell out = query(bob, "shareddb", "SELECT txt FROM notes WHERE id = 1", null, null);
 		assertEquals("hello bob", RT.ensureVector(rows(out).get(0)).get(0).toString());
+	}
+
+	@Test
+	public void testReadOnlyDatabaseRefusesExecute() {
+		// Seeded through the writable registration of the same database
+		exec(ctx, "shareddb", "CREATE TABLE ro_notes (id INTEGER, txt VARCHAR)");
+		exec(ctx, "shareddb", "INSERT INTO ro_notes VALUES (1, 'kept')");
+		ACell before = query(ctx, "sharedro", "SELECT id, txt FROM ro_notes ORDER BY id", null, null);
+		assertEquals(1, rows(before).count());
+
+		// A null-scope user and the venue itself are refused alike
+		for (RequestContext caller : new RequestContext[] {ctx, engine.venueContext()}) {
+			for (String write : new String[] {
+					"DELETE FROM ro_notes",
+					"INSERT INTO ro_notes VALUES (2, 'added')",
+					"DROP TABLE ro_notes"}) {
+				Job job = engine.jobs().invokeOperation("v/ops/sql/execute",
+					Maps.of(Strings.create("db"), Strings.create("sharedro"),
+						Strings.create("statement"), Strings.create(write)),
+					caller);
+				assertThrows(Exception.class, () -> job.awaitResult(15000), write);
+				assertEquals(Status.FAILED, job.getStatus(), write);
+				assertTrue(job.getErrorMessage().contains(SQLAdapter.READ_ONLY_DATABASE), job.getErrorMessage());
+			}
+		}
+		assertRefused(attemptQuery("sharedro", "DELETE FROM ro_notes", null), "DELETE through sql:query");
+		assertEquals(before, query(ctx, "sharedro", "SELECT id, txt FROM ro_notes ORDER BY id", null, null));
 	}
 
 	// ========== Result bounds ==========

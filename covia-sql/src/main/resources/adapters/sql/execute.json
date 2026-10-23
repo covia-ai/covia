@@ -1,6 +1,6 @@
 {
 	"name": "SQL Execute",
-	"description": "Executes a SQL DDL or DML statement (CREATE TABLE, INSERT, UPDATE, DELETE, DROP) against a named database. 'db' names a venue-local convex-db database (per-user, lattice-backed, created on first use) or an operator-registered JDBC connection. Use params with ? placeholders for values. Requires the sql/execute ability on the database — reads and writes are separately grantable.",
+	"description": "Executes a SQL DDL or DML statement (CREATE TABLE, INSERT, UPDATE, DELETE, DROP) against a named database. 'db' names a venue-local convex-db database (per-user, lattice-backed, created on first use) or an operator-registered JDBC connection; the operator may register a connection read-only, which refuses this operation. Use params with ? placeholders for values. Requires the sql/execute ability on the database — reads and writes are separately grantable.",
 	"dateCreated": "2026-07-16T00:00:00Z",
 	"operation": {
 		"adapter": "sql:execute",
