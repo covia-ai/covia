@@ -873,7 +873,7 @@ public class AgentAdapter extends AAdapter {
 		// Advisory only: surface anything that looks misconfigured but doesn't
 		// warrant failing create (#205). Emitted as a vector so several checks can
 		// contribute; omitted entirely when clean.
-		AVector<ACell> warnings = collectCreateWarnings(config, ctx);
+		AVector<ACell> warnings = collectConfigWarnings(config, ctx);
 		if (!warnings.isEmpty()) {
 			result = result.assoc(Fields.WARNINGS, warnings);
 			for (long i = 0; i < warnings.count(); i++) {
@@ -886,7 +886,7 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Collects non-fatal create-time advisories for a resolved config. Each entry
+	 * Collects non-fatal create/update advisories for a resolved config. Each entry
 	 * is a human-readable message string; the vector is empty when nothing is
 	 * flagged. New sanity checks append here — the result field ({@code warnings})
 	 * is already a list, so adding one is additive.
@@ -895,7 +895,7 @@ public class AgentAdapter extends AAdapter {
 	 * describes the field generically rather than listing these, so a new check
 	 * needs no schema change — and cannot silently fall out of step with one.</p>
 	 */
-	private AVector<ACell> collectCreateWarnings(AMap<AString, ACell> config, RequestContext ctx) {
+	private AVector<ACell> collectConfigWarnings(AMap<AString, ACell> config, RequestContext ctx) {
 		AVector<ACell> warnings = Vectors.empty();
 		AString toolWarn = toolCapabilityWarning(config, ctx);
 		if (toolWarn != null) warnings = warnings.conj(toolWarn);
@@ -2608,8 +2608,7 @@ public class AgentAdapter extends AAdapter {
 			K_RUNNING, CVMBool.create(running));
 		AVector<ACell> warnings = Vectors.empty();
 		if (newConfig != null) {
-			AString contextOpWarn = unclassifiedContextOperationsWarning(newConfig, ctx);
-			if (contextOpWarn != null) warnings = warnings.conj(contextOpWarn);
+			warnings = collectConfigWarnings(newConfig, ctx);
 		}
 		if (running && newConfig != null && newConfig.containsKey(K_CAPS)) {
 			// Honest about authority: the transition in flight keeps the caps it

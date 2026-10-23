@@ -865,6 +865,27 @@ public class AgentAdapterTest {
 	}
 
 	@Test
+	public void testUpdateSharesCreateWarningsForMergedConfig() {
+		RequestContext caller = RequestContext.of(ALICE_DID);
+		ACell created = engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(
+			Fields.AGENT_ID, "update-warnings",
+			Fields.CONFIG, Maps.of("operation", "v/ops/llmagent/chat",
+				"llmOperation", "v/ops/langchain/openai", "tools", Vectors.of("v/ops/nope"))),
+			caller).awaitResult(5000);
+		ACell expected = RT.getIn(created, Fields.WARNINGS);
+		assertNotNull(expected);
+		ACell updated = engine.jobs().invokeOperation("v/ops/agent/update", Maps.of(
+			Fields.AGENT_ID, "update-warnings", Fields.CONFIG, Maps.of("temperature", 0.5)),
+			caller).awaitResult(5000);
+		assertEquals(expected, RT.getIn(updated, Fields.WARNINGS),
+			"updating another field must still report inherited configuration problems");
+		ACell repaired = engine.jobs().invokeOperation("v/ops/agent/update", Maps.of(
+			Fields.AGENT_ID, "update-warnings", Fields.CONFIG, Maps.of("tools", Vectors.empty())),
+			caller).awaitResult(5000);
+		assertNull(RT.getIn(repaired, Fields.WARNINGS), "repairing the config clears its advisory");
+	}
+
+	@Test
 	public void testConfiguredToolWithoutMetadataReadIsVisibleEverywhere() {
 		String toolPath = "w/ops/risk/issue-limit";
 		AMap<AString, ACell> operation = Maps.of(
