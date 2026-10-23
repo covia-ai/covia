@@ -9,18 +9,21 @@ This document describes how to build the Covia project using Maven.
 - **Git**: For cloning the repository
 
 This experimental branch targets local Convex `codex/lattice-application` commit
-`b97deda1d0944dc424da5ae8e5428296193e82e1`, installed as
-`0.8.18-b97deda1d-SNAPSHOT`. The commit-specific version avoids silently picking up
+`f5d0345f629e06648623519917e76f45a8740505`, installed as
+`0.8.18-f5d0345f6-SNAPSHOT`. The commit-specific version avoids silently picking up
 another developer's install of `0.8.18-SNAPSHOT`. These artifacts are local; a
 fresh checkout must build them before building Covia. This is not a release dependency.
+The pin includes upstream `develop` through `f424d249a`, including asynchronous
+client transaction sequencing and completion outside the client monitor, while
+retaining the experimental lattice component APIs.
 
 From a local Convex checkout, create a detached worktree and build the selected
 source (use `mvnw.cmd` on Windows):
 
 ```sh
-git worktree add --detach ../convex-covia-snapshot b97deda1d0944dc424da5ae8e5428296193e82e1
+git worktree add --detach ../convex-covia-snapshot f5d0345f629e06648623519917e76f45a8740505
 cd ../convex-covia-snapshot
-./mvnw versions:set -DnewVersion=0.8.18-b97deda1d-SNAPSHOT -DgenerateBackupPoms=false
+./mvnw versions:set -DnewVersion=0.8.18-f5d0345f6-SNAPSHOT -DgenerateBackupPoms=false
 ./mvnw clean install -DskipTests
 ```
 

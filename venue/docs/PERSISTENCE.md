@@ -2,7 +2,7 @@
 
 ## Snapshot implementation contract
 
-On the Convex `b97deda1d` experimental branch, `LatticeHost` owns publication
+On the Convex `f5d0345f6` experimental branch, `LatticeHost` owns publication
 and persistence. Covia registers its live `LatticeApplication` on that host;
 `NodeServer` attaches the host's publisher. Components explicitly bind their
 clock and signing policy and share storage; there is no component-parent policy
