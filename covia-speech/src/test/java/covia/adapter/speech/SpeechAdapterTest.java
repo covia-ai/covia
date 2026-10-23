@@ -138,6 +138,29 @@ class SpeechAdapterTest {
 			.contains(SpeechAdapter.INVALID_RATE));
 	}
 
+	@Test void audioTheCallerHoldsTravelsInline() throws Exception {
+		byte[] pcm = new byte[3200];
+		ACell heard = run(owner, "transcribe", Maps.of("bytes", java.util.Base64.getEncoder().encodeToString(pcm),
+			"mediaType", "audio/L16", "sampleRate", 16_000, "language", "en"));
+		assertEquals("Hello world.", RT.getIn(heard, "text").toString());
+		byte[] body = api.take().body();
+		String text = new String(body, StandardCharsets.ISO_8859_1);
+		assertTrue(text.contains("filename=\"audio.wav\""), "raw PCM travels as WAV, as it does from a ref");
+		int riff = text.indexOf("RIFF");
+		assertEquals(16_000, ByteBuffer.wrap(body, riff + 24, 4).order(ByteOrder.LITTLE_ENDIAN).getInt());
+		assertEquals(36 + pcm.length, ByteBuffer.wrap(body, riff + 4, 4).order(ByteOrder.LITTLE_ENDIAN).getInt());
+
+		assertEquals(Maps.empty(), run(owner, "transcribe", Maps.of("bytes", "AAAA", "mediaType", "image/png")),
+			"not audio: passed through");
+		assertTrue(failure(() -> run(owner, "transcribe", Maps.of("bytes", "AAAA"))).contains(SpeechAdapter.TYPE_REQUIRED));
+		assertTrue(failure(() -> run(owner, "transcribe", Maps.of("bytes", "AAAA", "ref", save("both.ogg", VOICE, "audio/ogg"),
+			"mediaType", "audio/ogg"))).contains(SpeechAdapter.ONE_SOURCE));
+		assertTrue(failure(() -> run(owner, "transcribe", Maps.of("bytes", "not base64!", "mediaType", "audio/wav")))
+			.contains(SpeechAdapter.INVALID_BYTES));
+		assertTrue(failure(() -> run(owner, "transcribe", Maps.empty())).contains(SpeechAdapter.REF_REQUIRED));
+		assertTrue(api.requests.isEmpty(), "nothing refused reached the provider");
+	}
+
 	@Test void speechIsStoredAsAVoiceNoteInTheCallersDrive() throws Exception {
 		ACell spoken = run(owner, "speak", Maps.of("text", "Good morning", "voice", "nova", "speed", 1.25));
 		String ref = RT.getIn(spoken, "ref").toString();
@@ -171,6 +194,7 @@ class SpeechAdapterTest {
 		assertEquals(CVMBool.TRUE, engines.get(Strings.create("local")));
 		assertEquals(CVMBool.FALSE, engines.get(Strings.create("keyed")));
 		assertFalse(String.valueOf(engines).contains(api.baseUrl()), "no endpoint is disclosed");
+		assertEquals(run(owner, "engines", Maps.empty()), run(owner, "prepare", Maps.empty()), "a remote engine needs no preparing");
 
 		api.requireKey = true;
 		assertTrue(failure(() -> run(owner, "transcribe", Maps.of("ref", ref)))
@@ -202,6 +226,8 @@ class SpeechAdapterTest {
 		String ref = save("local.wav", SpeechAdapter.wav(new byte[3200], 16_000), "audio/wav");
 		assertTrue(failure(() -> run(owner, "transcribe", Maps.of("ref", ref)))
 			.contains(LocalSpeechEngine.NOT_READY.formatted(NativeLibraries.NOT_INSTALLED)), "the libraries are named before any model is fetched");
+		assertTrue(failure(() -> run(owner, "prepare", Maps.empty()))
+			.contains(LocalSpeechEngine.NOT_READY.formatted(NativeLibraries.NOT_INSTALLED)), "and preparing says the same");
 		assertFalse(java.nio.file.Files.exists(cache.resolve("models")), "nothing was downloaded");
 		assertTrue(api.requests.isEmpty(), "and no audio left for a provider");
 		assertTrue(failure(() -> run(owner, "speak", Maps.of("text", "hello"))).contains(LocalSpeechEngine.SPEAK_UNAVAILABLE));

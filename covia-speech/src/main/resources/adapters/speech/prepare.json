@@ -1,0 +1,19 @@
+{
+  "name": "Prepare speech",
+  "description": "Gets the venue's speech engine ready to transcribe before any audio is in hand. The local engine fetches its pinned model and native libraries once, if they are not yet on this machine, and loads the libraries; that can take minutes, and speech:engines reports the download's progress meanwhile. A remote engine needs nothing. Returns the engine as speech:engines reports it.",
+  "operation": {
+    "adapter": "speech:prepare",
+    "readOnly": true,
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "engines": { "type": "array", "items": { "type": "object" } }
+      }
+    }
+  }
+}

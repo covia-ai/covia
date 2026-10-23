@@ -84,6 +84,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   OpenAI-compatible audio API, cloud or local.
 - `speech` local engine: in-process transcription with sherpa-onnx (Parakeet, Moonshine),
   operator-installed or pinned native libraries, Ogg/Opus voice notes.
+- `speech:transcribe` takes audio the caller holds as inline base64 `bytes`, stored nowhere;
+  `speech:prepare` fetches the local engine's model and libraries before any audio is in hand.
 - Every jar names its Java module (`Automatic-Module-Name`: `covia.venue`, `covia.core`,
   `covia.<module>`).
 

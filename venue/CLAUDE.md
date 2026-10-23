@@ -122,7 +122,7 @@ Module adapters (shaded module jars, not in covia.jar — `docs/CONFIG.md` "Venu
 | `slack` | covia-slack | Slack workspace bindings with DMs/channel mentions over signed Events API callbacks or Socket Mode, durable intake and thread replies; `relay` bindings as for WhatsApp | `send`, `create`, `delete`, `bots` |
 | `sonnylabs` | covia-sonnylabs | SonnyLabs AI-firewall scanning for prompt injection and related LLM safety findings | `scan` |
 | `documents` | covia-documents | Readable text from PDF and Office documents (PDFBox, POI) behind `mode: "extract"` on file/vault/dlfs reads; page ranges and a character cap | `extract` |
-| `speech` | covia-speech | Speech to text and text to speech over an OpenAI-compatible audio API (a cloud provider, or a local server so audio stays on the machine), or transcription in-process with sherpa-onnx (`engine: "local"`); `transcribe` doubles as a messaging `mediaOperation`, `speak` stores Ogg/Opus voice notes | `transcribe`, `speak`, `engines` |
+| `speech` | covia-speech | Speech to text and text to speech over an OpenAI-compatible audio API (a cloud provider, or a local server so audio stays on the machine), or transcription in-process with sherpa-onnx (`engine: "local"`); `transcribe` doubles as a messaging `mediaOperation`, `speak` stores Ogg/Opus voice notes | `transcribe`, `speak`, `engines`, `prepare` |
 | `claudecode` | covia-claude-code | Drives the Claude Code CLI in venue-authorised project directories: one-shot runs and long-lived resumable sessions over a bounded warm-process pool | `run`, `session`, `sessions`, `stop`, `projects`, `create`, `delete` |
 
 ## API Endpoints

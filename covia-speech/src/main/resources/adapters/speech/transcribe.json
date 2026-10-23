@@ -1,6 +1,6 @@
 {
   "name": "Transcribe speech",
-  "description": "Turns spoken audio at a content reference (a voice note, an uploaded recording, raw 16 kHz PCM) into text. Reads the audio with the caller's own authority. Returns {text, language?, seconds?, model, engine, ms}; silence returns no text. Anything that is not audio returns {}, so this operation serves unchanged as a Telegram or WhatsApp agent binding's mediaOperation. A transcript may mishear names and numbers.",
+  "description": "Turns spoken audio at a content reference (a voice note, an uploaded recording, raw 16 kHz PCM) into text. Reads the audio with the caller's own authority; a caller that already holds the audio, such as an app recording a microphone, gives it inline as base64 bytes with its mediaType instead, and nothing is stored. Returns {text, language?, seconds?, model, engine, ms}; silence returns no text. Anything that is not audio returns {}, so this operation serves unchanged as a Telegram or WhatsApp agent binding's mediaOperation. A transcript may mishear names and numbers.",
   "operation": {
     "adapter": "speech:transcribe",
     "readOnly": true,
@@ -12,11 +12,16 @@
         "ref": {
           "type": "string",
           "minLength": 1,
-          "description": "Content reference of the audio, such as an attachment's ref or dlfs/<drive>/<file>; at most 20 MiB."
+          "description": "Content reference of the audio, such as an attachment's ref or dlfs/<drive>/<file>; at most 20 MiB. Give this or bytes."
+        },
+        "bytes": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The audio itself, base64-encoded, at most 20 MiB decoded; needs mediaType. Give this or ref."
         },
         "mediaType": {
           "type": "string",
-          "description": "The audio's media type when the reference does not carry one, such as audio/ogg, audio/mpeg or audio/wav. Raw PCM is audio/L16 (16-bit little-endian mono)."
+          "description": "The audio's media type when the reference does not carry one, and always with bytes, such as audio/ogg, audio/mpeg or audio/wav. Raw PCM is audio/L16 (16-bit little-endian mono)."
         },
         "kind": {
           "type": "string",

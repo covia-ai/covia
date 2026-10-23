@@ -6,6 +6,7 @@ import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.time.Duration;
+import java.util.Base64;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
@@ -40,13 +41,18 @@ import covia.venue.storage.ContentProvider;
  *       seconds?, model, engine, ms}}. Its input may be a messaging attachment, so it
  *       serves unchanged as a Telegram or WhatsApp binding's {@code mediaOperation}:
  *       anything that is not audio returns {@code {}}, and silence returns no
- *       {@code text}.</li>
+ *       {@code text}. A caller already holding the audio, such as an app recording a
+ *       microphone, gives it inline as base64 {@code bytes} with its
+ *       {@code mediaType} instead, and nothing is stored.</li>
  *   <li>{@code speech:speak {text, voice?, model?, format?, speed?, instructions?,
  *       destination?, fileName?}} synthesises speech and stores it, by default as
  *       Ogg/Opus (what a voice note is) in the caller's private DLFS {@code speech}
  *       drive, returning {@code {ref, mediaType, size, fileName, ...}}.</li>
  *   <li>{@code speech:engines} reports the engine, its models and voice, and whether a
  *       key resolves for the caller, without endpoints or keys.</li>
+ *   <li>{@code speech:prepare} gets the engine ready before any audio is in hand: the
+ *       local engine fetches its model and libraries, which can take minutes, while
+ *       {@code engines} reports the progress. It returns what {@code engines} does.</li>
  * </ul>
  *
  * <p>The engine is a {@link SpeechEngine}; today the OpenAI-compatible audio API at
@@ -81,7 +87,10 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 	public static final String INVALID_KEY_NAME = "adapters.speech.keyName must be a secret name such as OPENAI_API_KEY";
 	public static final String INVALID_STRING = "%s must be a non-empty string";
 	public static final String INVALID_TIMEOUT = "adapters.speech.timeoutMillis must be between 1000 and 600000";
-	public static final String REF_REQUIRED = "ref must name the audio to transcribe";
+	public static final String REF_REQUIRED = "ref must name the audio to transcribe, or bytes carry it";
+	public static final String ONE_SOURCE = "Give the audio as ref or as bytes, not both";
+	public static final String TYPE_REQUIRED = "mediaType must say what the bytes are, such as audio/wav or audio/L16";
+	public static final String INVALID_BYTES = "bytes must be base64";
 	public static final String NOT_FOUND = "No audio at %s";
 	public static final String TOO_LARGE = "Audio exceeds the 20 MiB limit";
 	public static final String TEXT_REQUIRED = "text must contain between 1 and 4096 characters";
@@ -144,6 +153,7 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 		installAsset("speech/transcribe", "/adapters/speech/transcribe.json");
 		installAsset("speech/speak", "/adapters/speech/speak.json");
 		installAsset("speech/engines", "/adapters/speech/engines.json");
+		installAsset("speech/prepare", "/adapters/speech/prepare.json");
 		installSkill("adapters/speech", "/adapters/speech/skill.json");
 	}
 
@@ -260,6 +270,7 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 			case "transcribe" -> transcribe(ctx, current, in);
 			case "speak" -> speak(ctx, current, in);
 			case "engines" -> engines(ctx, current);
+			case "prepare" -> prepare(ctx, current);
 			default -> throw new UnsupportedOperationException(UNSUPPORTED.formatted(op));
 		}, VIRTUAL_EXECUTOR);
 	}
@@ -272,22 +283,32 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 		// A messaging attachment that is not speech passes through, as a media hook should.
 		if ((kind != null || declared != null) && !isAudio(kind, declared)) return Maps.empty();
 		String ref = string(in, "ref");
-		if (ref == null) throw new IllegalArgumentException(REF_REQUIRED);
+		String inline = string(in, "bytes");
+		if (ref == null && inline == null) throw new IllegalArgumentException(REF_REQUIRED);
+		if (ref != null && inline != null) throw new IllegalArgumentException(ONE_SOURCE);
 		byte[] bytes;
 		String mediaType = declared;
-		try {
-			ContentProvider.Resolved resolved = engine.resolveContent(Strings.create(ref), ctx);
-			if (resolved == null) throw new IllegalArgumentException(NOT_FOUND.formatted(ref));
-			if (resolved.content().getSize() > MAX_BYTES) throw new IllegalArgumentException(TOO_LARGE);
-			try (InputStream stream = resolved.content().getInputStream()) { bytes = stream.readNBytes(MAX_BYTES + 1); }
-			if (bytes.length > MAX_BYTES) throw new IllegalArgumentException(TOO_LARGE);
-			if (mediaType == null) mediaType = resolved.contentType();
-		} catch (IOException e) {
-			throw new IllegalArgumentException(NOT_FOUND.formatted(ref));
+		if (inline != null) {
+			// Audio the caller holds: decoded here and never stored.
+			if (mediaType == null) throw new IllegalArgumentException(TYPE_REQUIRED);
+			if (inline.length() > (MAX_BYTES + 2) / 3 * 4) throw new IllegalArgumentException(TOO_LARGE);
+			try { bytes = Base64.getDecoder().decode(inline); }
+			catch (IllegalArgumentException e) { throw new IllegalArgumentException(INVALID_BYTES); }
+		} else {
+			try {
+				ContentProvider.Resolved resolved = engine.resolveContent(Strings.create(ref), ctx);
+				if (resolved == null) throw new IllegalArgumentException(NOT_FOUND.formatted(ref));
+				if (resolved.content().getSize() > MAX_BYTES) throw new IllegalArgumentException(TOO_LARGE);
+				try (InputStream stream = resolved.content().getInputStream()) { bytes = stream.readNBytes(MAX_BYTES + 1); }
+				if (bytes.length > MAX_BYTES) throw new IllegalArgumentException(TOO_LARGE);
+				if (mediaType == null) mediaType = resolved.contentType();
+			} catch (IOException e) {
+				throw new IllegalArgumentException(NOT_FOUND.formatted(ref));
+			}
 		}
 		String base = baseType(mediaType);
 		// A store may not keep the type: the file's own extension is the next best witness.
-		if (base.isEmpty() || base.equals("application/octet-stream")) {
+		if (ref != null && (base.isEmpty() || base.equals("application/octet-stream"))) {
 			String inferred = typeOf(ref);
 			if (inferred != null) { mediaType = inferred; base = inferred; }
 		}
@@ -411,6 +432,14 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 			"voice", s.voice(),
 			"formats", Vectors.of("opus", "mp3", "aac", "flac", "wav"),
 			"keyed", CVMBool.create(keyed))));
+	}
+
+	// ---- prepare ----
+
+	/** The local engine's model and libraries fetched and loaded, if not yet; a remote engine needs nothing. */
+	ACell prepare(RequestContext ctx, Settings s) {
+		if (s.engine() instanceof LocalSpeechEngine local) local.prepare();
+		return engines(ctx, s);
 	}
 
 	// ---- keys and inputs ----
