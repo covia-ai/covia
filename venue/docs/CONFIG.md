@@ -2175,10 +2175,13 @@ Operations:
   are live dictation, on the local engine only, for an app that shows the words
   while someone is still speaking. `listen` opens one and returns its `id`;
   each `hear` gives it more raw PCM (half a second or so) and returns
-  `{settled, partial, text}`: the words up to the last pause, decoded once and
-  kept, then those still being spoken, decoded again as they grow. With `end`
-  the rest settles and the dictation closes. Only its caller may feed it, one
-  left unfed for two minutes is dropped, and nothing is stored.
+  `{settled, partial, text, quiet?}`: the words up to the last pause, decoded
+  once and kept, then those still being spoken, decoded again as they grow,
+  and the seconds since speech was last heard, for an app that ends on a long
+  pause. With `end` the rest settles, a short last word such as a lone "go"
+  heard together with the stretch before it, and the dictation closes. Only its
+  caller may feed it, one left unfed for two minutes is dropped, and nothing is
+  stored.
 
 A transcript lives in the operation's Job like any other result. Provider
 failures fail the Job; nothing is retried.
