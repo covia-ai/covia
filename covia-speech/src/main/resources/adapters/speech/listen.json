@@ -1,0 +1,27 @@
+{
+  "name": "Listen for dictation",
+  "description": "Opens a live dictation on the local speech engine, for an app showing the words while someone is still speaking, and returns its id for speech:hear. Only its caller may feed it; one left unfed for two minutes is dropped. Needs the local engine, prepared (speech:prepare); other engines transcribe whole recordings only.",
+  "operation": {
+    "adapter": "speech:listen",
+    "readOnly": true,
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sampleRate": {
+          "type": "integer",
+          "minimum": 8000,
+          "maximum": 48000,
+          "default": 16000,
+          "description": "Sample rate of the raw PCM that speech:hear will be given."
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" }
+      }
+    }
+  }
+}

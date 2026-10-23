@@ -53,6 +53,12 @@ import covia.venue.storage.ContentProvider;
  *   <li>{@code speech:prepare} gets the engine ready before any audio is in hand: the
  *       local engine fetches its model and libraries, which can take minutes, while
  *       {@code engines} reports the progress. It returns what {@code engines} does.</li>
+ *   <li>{@code speech:listen {sampleRate?}} opens a live dictation on the local engine
+ *       and returns its {@code id}; {@code speech:hear {id, bytes?, end?}} gives it more
+ *       raw PCM and returns {@code {settled, partial, text}}: the words up to the last
+ *       pause, which stay, and those still being spoken, which may change. With
+ *       {@code end} the rest settles and the dictation closes. Only its caller may feed
+ *       it, and one left unfed for two minutes is dropped.</li>
  * </ul>
  *
  * <p>The engine is a {@link SpeechEngine}; today the OpenAI-compatible audio API at
@@ -91,6 +97,12 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 	public static final String ONE_SOURCE = "Give the audio as ref or as bytes, not both";
 	public static final String TYPE_REQUIRED = "mediaType must say what the bytes are, such as audio/wav or audio/L16";
 	public static final String INVALID_BYTES = "bytes must be base64";
+	public static final String LIVE_UNAVAILABLE = "Live dictation needs the local speech engine";
+	public static final String ID_REQUIRED = "id must name an open dictation";
+	public static final String NO_DICTATION = "No dictation of yours is open as %s";
+	public static final String INVALID_END = "end must be true or false";
+	/** A dictation nobody has fed for this long is dropped. */
+	static final long DICTATION_IDLE_NANOS = java.util.concurrent.TimeUnit.MINUTES.toNanos(2);
 	public static final String NOT_FOUND = "No audio at %s";
 	public static final String TOO_LARGE = "Audio exceeds the 20 MiB limit";
 	public static final String TEXT_REQUIRED = "text must contain between 1 and 4096 characters";
@@ -138,9 +150,13 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 	private record Settings(SpeechEngine engine, String apiKeyRef, String keyName, String transcribeModel,
 		String speakModel, String voice, boolean prefetch) {}
 
+	/** A live dictation, and whose it is. */
+	private record Listening(AString owner, LocalSpeechEngine.Dictation dictation, int rate) {}
+
 	/** This adapter instance's native libraries: loaded once, into its own class loader. */
 	private final NativeLibraries natives = new NativeLibraries();
 	private volatile Settings settings = settings(Maps.empty());
+	private final Map<String, Listening> dictations = new java.util.concurrent.ConcurrentHashMap<>();
 
 	@Override public String getName() { return NAME; }
 
@@ -154,6 +170,8 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 		installAsset("speech/speak", "/adapters/speech/speak.json");
 		installAsset("speech/engines", "/adapters/speech/engines.json");
 		installAsset("speech/prepare", "/adapters/speech/prepare.json");
+		installAsset("speech/listen", "/adapters/speech/listen.json");
+		installAsset("speech/hear", "/adapters/speech/hear.json");
 		installSkill("adapters/speech", "/adapters/speech/skill.json");
 	}
 
@@ -168,6 +186,7 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 		}
 		Settings previous = settings;
 		settings = settings(config);
+		endDictations();
 		if (previous.engine() instanceof LocalSpeechEngine old) old.close();
 		if (engine != null && engine.isStarted()) prefetch();
 		return true;
@@ -188,7 +207,16 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 
 	/** Release the local engine; its native libraries stay loaded until its class loader goes. */
 	public void close() {
+		endDictations();
 		if (settings.engine() instanceof LocalSpeechEngine local) local.close();
+	}
+
+	/** Every dictation dropped, before the engine they belong to goes. */
+	private void endDictations() {
+		for (String id : dictations.keySet()) {
+			Listening l = dictations.remove(id);
+			if (l != null) l.dictation().discard();
+		}
 	}
 
 	private Settings settings(AMap<AString, ACell> config) {
@@ -271,6 +299,8 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 			case "speak" -> speak(ctx, current, in);
 			case "engines" -> engines(ctx, current);
 			case "prepare" -> prepare(ctx, current);
+			case "listen" -> listen(ctx, current, in);
+			case "hear" -> hear(ctx, in);
 			default -> throw new UnsupportedOperationException(UNSUPPORTED.formatted(op));
 		}, VIRTUAL_EXECUTOR);
 	}
@@ -291,9 +321,7 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 		if (inline != null) {
 			// Audio the caller holds: decoded here and never stored.
 			if (mediaType == null) throw new IllegalArgumentException(TYPE_REQUIRED);
-			if (inline.length() > (MAX_BYTES + 2) / 3 * 4) throw new IllegalArgumentException(TOO_LARGE);
-			try { bytes = Base64.getDecoder().decode(inline); }
-			catch (IllegalArgumentException e) { throw new IllegalArgumentException(INVALID_BYTES); }
+			bytes = inline(inline);
 		} else {
 			try {
 				ContentProvider.Resolved resolved = engine.resolveContent(Strings.create(ref), ctx);
@@ -330,6 +358,13 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 		if (transcript.language() != null) out = out.assoc(Strings.intern("language"), Strings.create(transcript.language()));
 		if (transcript.seconds() != null) out = out.assoc(Strings.intern("seconds"), CVMDouble.create(transcript.seconds()));
 		return out;
+	}
+
+	/** Inline base64 audio, at most {@link #MAX_BYTES} of it. */
+	private static byte[] inline(String base64) {
+		if (base64.length() > (MAX_BYTES + 2) / 3 * 4) throw new IllegalArgumentException(TOO_LARGE);
+		try { return Base64.getDecoder().decode(base64); }
+		catch (IllegalArgumentException e) { throw new IllegalArgumentException(INVALID_BYTES); }
 	}
 
 	/** The audio type a reference's extension names, or null. */
@@ -440,6 +475,43 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 	ACell prepare(RequestContext ctx, Settings s) {
 		if (s.engine() instanceof LocalSpeechEngine local) local.prepare();
 		return engines(ctx, s);
+	}
+
+	// ---- live dictation ----
+
+	ACell listen(RequestContext ctx, Settings s, AMap<AString, ACell> in) {
+		if (!(s.engine() instanceof LocalSpeechEngine local)) throw new JobFailedException(LIVE_UNAVAILABLE);
+		int rate = sampleRate(in, null);
+		for (var entry : dictations.entrySet()) {
+			if (entry.getValue().dictation().idle() > DICTATION_IDLE_NANOS && dictations.remove(entry.getKey(), entry.getValue())) {
+				entry.getValue().dictation().discard();
+			}
+		}
+		local.prepare();
+		String id = UUID.randomUUID().toString();
+		dictations.put(id, new Listening(ctx.getUserDID(), local.dictate(), rate));
+		return Maps.of("id", id);
+	}
+
+	ACell hear(RequestContext ctx, AMap<AString, ACell> in) {
+		String id = string(in, "id");
+		if (id == null) throw new IllegalArgumentException(ID_REQUIRED);
+		Listening l = dictations.get(id);
+		if (l == null || !java.util.Objects.equals(l.owner(), ctx.getUserDID())) throw new IllegalArgumentException(NO_DICTATION.formatted(id));
+		ACell endCell = in.get(Strings.intern("end"));
+		if (endCell != null && !(endCell instanceof CVMBool)) throw new IllegalArgumentException(INVALID_END);
+		boolean end = CVMBool.TRUE.equals(endCell);
+		String given = string(in, "bytes");
+		byte[] pcm = given == null ? new byte[0] : inline(given);
+		// Raw PCM at the dictation's rate, as the decoder hears WAV: 16 kHz, -1 to 1.
+		float[] samples = pcm.length < 2 ? new float[0] : AudioDecoder.decode(wav(pcm, l.rate()));
+		LocalSpeechEngine.Heard heard;
+		try {
+			heard = l.dictation().hear(samples, end);
+		} finally {
+			if (end) dictations.remove(id, l);
+		}
+		return Maps.of("settled", heard.settled(), "partial", heard.partial(), "text", heard.text());
 	}
 
 	// ---- keys and inputs ----

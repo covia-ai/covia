@@ -86,6 +86,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   operator-installed or pinned native libraries, Ogg/Opus voice notes.
 - `speech:transcribe` takes audio the caller holds as inline base64 `bytes`, stored nowhere;
   `speech:prepare` fetches the local engine's model and libraries before any audio is in hand.
+- `speech:listen` and `speech:hear`: live dictation on the local engine, settling words at each
+  pause and returning those still being spoken.
 - Every jar names its Java module (`Automatic-Module-Name`: `covia.venue`, `covia.core`,
   `covia.<module>`).
 

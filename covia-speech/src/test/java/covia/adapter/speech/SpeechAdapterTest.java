@@ -161,6 +161,15 @@ class SpeechAdapterTest {
 		assertTrue(api.requests.isEmpty(), "nothing refused reached the provider");
 	}
 
+	@Test void liveDictationIsTheLocalEnginesAndOnlyItsCallerFeedsOne() throws Exception {
+		assertTrue(failure(() -> run(owner, "listen", Maps.empty())).contains(SpeechAdapter.LIVE_UNAVAILABLE),
+			"a provider elsewhere hears whole recordings only");
+		assertTrue(failure(() -> run(owner, "hear", Maps.of("id", "someone-elses", "bytes", "AAAA")))
+			.contains(SpeechAdapter.NO_DICTATION.formatted("someone-elses")));
+		assertTrue(failure(() -> run(owner, "hear", Maps.empty())).contains(SpeechAdapter.ID_REQUIRED));
+		assertTrue(api.requests.isEmpty(), "and no audio went anywhere");
+	}
+
 	@Test void speechIsStoredAsAVoiceNoteInTheCallersDrive() throws Exception {
 		ACell spoken = run(owner, "speak", Maps.of("text", "Good morning", "voice", "nova", "speed", 1.25));
 		String ref = RT.getIn(spoken, "ref").toString();
@@ -228,6 +237,8 @@ class SpeechAdapterTest {
 			.contains(LocalSpeechEngine.NOT_READY.formatted(NativeLibraries.NOT_INSTALLED)), "the libraries are named before any model is fetched");
 		assertTrue(failure(() -> run(owner, "prepare", Maps.empty()))
 			.contains(LocalSpeechEngine.NOT_READY.formatted(NativeLibraries.NOT_INSTALLED)), "and preparing says the same");
+		assertTrue(failure(() -> run(owner, "listen", Maps.empty()))
+			.contains(LocalSpeechEngine.NOT_READY.formatted(NativeLibraries.NOT_INSTALLED)), "as does listening");
 		assertFalse(java.nio.file.Files.exists(cache.resolve("models")), "nothing was downloaded");
 		assertTrue(api.requests.isEmpty(), "and no audio left for a provider");
 		assertTrue(failure(() -> run(owner, "speak", Maps.of("text", "hello"))).contains(LocalSpeechEngine.SPEAK_UNAVAILABLE));

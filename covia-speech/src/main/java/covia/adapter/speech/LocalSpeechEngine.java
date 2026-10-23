@@ -29,7 +29,8 @@ import covia.exception.JobFailedException;
 /**
  * Speech recognised inside the venue's JVM by sherpa-onnx: no audio leaves the machine.
  * The model is fetched once (pinned), loaded when first needed and released after a
- * quiet spell; a note longer than 30 seconds is split on its pauses. Native work runs on
+ * quiet spell; a note longer than 30 seconds is split on its pauses, and a
+ * {@linkplain Dictation dictation} is heard as it is spoken. Native work runs on
  * one platform thread of its own, one decode at a time, so a long decode never holds a
  * virtual thread's carrier.
  */
@@ -50,8 +51,30 @@ final class LocalSpeechEngine implements SpeechEngine {
 		List<float[]> stretches(float[] samples);
 		/** The words in up to {@value #WHOLE_SECONDS} seconds of 16 kHz audio. */
 		String decode(float[] samples);
+		/** A pause finder fed as audio arrives, closing a stretch at a pause or at {@code maxSeconds}. */
+		Pauses pauses(int maxSeconds);
 		@Override void close();
 	}
+
+	/** Voice-activity detection over audio as it arrives, {@link #WINDOW} samples at a time. */
+	interface Pauses {
+		void accept(float[] window);
+		/** Where each stretch closed since last asked ends, in samples from the start. */
+		List<Integer> closed();
+		/** Whether speech is under way in the stretch not yet closed. */
+		boolean speaking();
+		/** Close the stretch under way, if any: the audio has ended. */
+		void flush();
+		void release();
+	}
+
+	/** The samples a pause finder takes at once. */
+	static final int WINDOW = 512;
+	/** The longest stretch a dictation decodes at once, which bounds each look at the unfinished one. */
+	static final int DICTATION_STRETCH_SECONDS = 20;
+	/** How much new audio warrants another look at the stretch still being spoken. */
+	static final int LOOK_AGAIN_SAMPLES = AudioDecoder.RATE / 2;
+	public static final String DICTATION_CLOSED = "The dictation has ended";
 
 	/** Opens a backend over a ready model's directory. */
 	interface Backends { Backend open(SpeechModels.Model model, Path directory, int threads); }
@@ -116,10 +139,116 @@ final class LocalSpeechEngine implements SpeechEngine {
 			lastUse = System.nanoTime();
 			return text.toString();
 		});
+		return new Transcript(onWorker(heard), null, samples.length / (double) AudioDecoder.RATE);
+	}
+
+	@Override
+	public Speech speak(SpeakRequest request, String key) {
+		throw new JobFailedException(SPEAK_UNAVAILABLE);
+	}
+
+	/** What a dictation has heard so far: {@code settled} up to its last pause, which stays, then {@code partial}, which may change. */
+	record Heard(String settled, String partial) {
+		String text() {
+			return settled.isEmpty() ? partial : partial.isEmpty() ? settled : settled + " " + partial;
+		}
+	}
+
+	/** A dictation, ready for its audio; the engine must be {@linkplain #prepare() prepared}. */
+	Dictation dictate() {
+		return new Dictation();
+	}
+
+	/**
+	 * The words while someone is still speaking. Each stretch up to a pause is decoded
+	 * once and settles; the stretch still being spoken is decoded again once another
+	 * half second has come. Every step runs on the engine's worker, as every decode does.
+	 */
+	final class Dictation {
+		private float[] audio = new float[AudioDecoder.RATE * 10];
+		private int received;
+		private int fed;
+		private int settledTo;
+		private int lookedAt;
+		private final StringBuilder settled = new StringBuilder();
+		private String partial = "";
+		private Pauses pauses;
+		private boolean ended;
+		private volatile long touched = System.nanoTime();
+
+		/**
+		 * More audio (16 kHz, -1 to 1), and what has been heard so far. With {@code end}
+		 * everything left settles and the dictation is over. Audio past
+		 * {@link AudioDecoder#MAX_SECONDS} is not heard.
+		 */
+		Heard hear(float[] samples, boolean end) {
+			touched = System.nanoTime();
+			return onWorker(worker.submit(() -> step(samples, end)));
+		}
+
+		/** Ends the dictation without hearing any more. */
+		void discard() {
+			worker.execute(this::release);
+		}
+
+		/** Nanoseconds since it last heard anything. */
+		long idle() {
+			return System.nanoTime() - touched;
+		}
+
+		private Heard step(float[] samples, boolean end) {
+			if (ended) throw new IllegalStateException(DICTATION_CLOSED);
+			Backend b = backend();
+			if (pauses == null) pauses = b.pauses(DICTATION_STRETCH_SECONDS);
+			int n = Math.max(0, Math.min(AudioDecoder.MAX_SECONDS * AudioDecoder.RATE - received, samples.length));
+			if (received + n > audio.length) audio = java.util.Arrays.copyOf(audio, Math.max(received + n, audio.length * 2));
+			System.arraycopy(samples, 0, audio, received, n);
+			received += n;
+			for (; fed + WINDOW <= received; fed += WINDOW) {
+				pauses.accept(java.util.Arrays.copyOfRange(audio, fed, fed + WINDOW));
+				settle(b);
+			}
+			if (end) {
+				pauses.flush();
+				settle(b);
+				partial = "";
+				release();
+			} else if (received - lookedAt >= LOOK_AGAIN_SAMPLES) {
+				lookedAt = received;
+				partial = pauses.speaking() ? b.decode(java.util.Arrays.copyOfRange(audio, settledTo, received)).strip() : "";
+			}
+			lastUse = System.nanoTime();
+			return new Heard(settled.toString(), partial);
+		}
+
+		/**
+		 * Decode each closed stretch from where the last one ended, not as the finder
+		 * trims it: its trimmed edges cut the starts and ends of words.
+		 */
+		private void settle(Backend b) {
+			for (int end : pauses.closed()) {
+				int to = Math.max(settledTo, Math.min(received, end));
+				String said = b.decode(java.util.Arrays.copyOfRange(audio, settledTo, to)).strip();
+				settledTo = to;
+				if (!said.isEmpty()) settled.append(settled.isEmpty() ? "" : " ").append(said);
+				partial = "";
+			}
+		}
+
+		private void release() {
+			ended = true;
+			if (pauses != null) pauses.release();
+			pauses = null;
+			audio = new float[0];
+		}
+	}
+
+	/** A worker step's result, with its failures as the operation reports them. */
+	private static <T> T onWorker(Future<T> step) {
 		try {
-			return new Transcript(heard.get(), null, samples.length / (double) AudioDecoder.RATE);
+			return step.get();
 		} catch (InterruptedException e) {
-			heard.cancel(false);
+			step.cancel(false);
 			Thread.currentThread().interrupt();
 			throw new JobFailedException(NOT_READY.formatted("interrupted"));
 		} catch (ExecutionException e) {
@@ -127,11 +256,6 @@ final class LocalSpeechEngine implements SpeechEngine {
 			if (cause instanceof RuntimeException r) throw r;
 			throw new JobFailedException(NOT_READY.formatted(cause.getMessage()));
 		}
-	}
-
-	@Override
-	public Speech speak(SpeakRequest request, String key) {
-		throw new JobFailedException(SPEAK_UNAVAILABLE);
 	}
 
 	/** Install the libraries and fetch the model, if not yet done; safe to call from many threads. */
@@ -277,17 +401,41 @@ final class LocalSpeechEngine implements SpeechEngine {
 			vad = d.resolve(SpeechModels.VAD.name());
 		}
 
-		@Override public List<float[]> stretches(float[] samples) {
-			// Close a stretch at a half-second pause, or at the longest piece decoded whole.
-			com.k2fsa.sherpa.onnx.Vad finder = new com.k2fsa.sherpa.onnx.Vad(com.k2fsa.sherpa.onnx.VadModelConfig.builder()
+		/** Silero VAD closing a stretch at a half-second pause, or at {@code maxSeconds}. */
+		private com.k2fsa.sherpa.onnx.Vad finder(int maxSeconds) {
+			return new com.k2fsa.sherpa.onnx.Vad(com.k2fsa.sherpa.onnx.VadModelConfig.builder()
 				.setSileroVadModelConfig(com.k2fsa.sherpa.onnx.SileroVadModelConfig.builder()
 					.setModel(vad.toString()).setThreshold(0.5f).setMinSilenceDuration(0.5f).setMinSpeechDuration(0.25f)
-					.setMaxSpeechDuration(WHOLE_SECONDS).setWindowSize(512).build())
+					.setMaxSpeechDuration(maxSeconds).setWindowSize(WINDOW).build())
 				.setSampleRate(AudioDecoder.RATE).setNumThreads(1).setDebug(false).setProvider("cpu").build());
+		}
+
+		@Override public Pauses pauses(int maxSeconds) {
+			com.k2fsa.sherpa.onnx.Vad finder = finder(maxSeconds);
+			return new Pauses() {
+				@Override public void accept(float[] window) { finder.acceptWaveform(window); }
+				@Override public List<Integer> closed() {
+					List<Integer> ends = new ArrayList<>();
+					while (!finder.empty()) {
+						com.k2fsa.sherpa.onnx.SpeechSegment s = finder.front();
+						ends.add(s.getStart() + s.getSamples().length);
+						finder.pop();
+					}
+					return ends;
+				}
+				@Override public boolean speaking() { return finder.isSpeechDetected(); }
+				@Override public void flush() { finder.flush(); }
+				@Override public void release() { finder.release(); }
+			};
+		}
+
+		@Override public List<float[]> stretches(float[] samples) {
+			// Close a stretch at a half-second pause, or at the longest piece decoded whole.
+			com.k2fsa.sherpa.onnx.Vad finder = finder(WHOLE_SECONDS);
 			List<float[]> out = new ArrayList<>();
 			try {
-				for (int i = 0; i + 512 <= samples.length; i += 512) {
-					finder.acceptWaveform(java.util.Arrays.copyOfRange(samples, i, i + 512));
+				for (int i = 0; i + WINDOW <= samples.length; i += WINDOW) {
+					finder.acceptWaveform(java.util.Arrays.copyOfRange(samples, i, i + WINDOW));
 					while (!finder.empty()) { out.add(finder.front().getSamples()); finder.pop(); }
 				}
 				finder.flush();

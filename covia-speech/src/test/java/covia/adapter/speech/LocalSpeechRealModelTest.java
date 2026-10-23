@@ -79,6 +79,14 @@ class LocalSpeechRealModelTest {
 			float[] samples = AudioDecoder.decode(Files.readAllBytes(wav16k));
 			String voiceNote = text(engine, AudioDecoderTest.oggOpus(samples, AudioDecoder.RATE));
 			assertTrue(voiceNote.contains("yellow lamps"), "as a voice note: " + voiceNote);
+
+			// Dictated half a second at a time, as an app sends a microphone's audio.
+			LocalSpeechEngine.Dictation dictation = engine.dictate();
+			for (int at = 0; at < samples.length; at += AudioDecoder.RATE / 2) {
+				dictation.hear(java.util.Arrays.copyOfRange(samples, at, Math.min(samples.length, at + AudioDecoder.RATE / 2)), false);
+			}
+			String dictated = dictation.hear(new float[0], true).settled().toLowerCase(Locale.ROOT);
+			assertTrue(dictated.contains("yellow lamps") && dictated.contains("nightfall"), "dictated: " + dictated);
 		} finally {
 			engine.close();
 		}
