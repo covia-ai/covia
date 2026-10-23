@@ -70,12 +70,14 @@ class LocalSpeechEngineTest {
 
 	/**
 	 * A recogniser that hears each piece's length, and finds a stretch every 10 seconds
-	 * in a note and a pause every 2 seconds in a dictation.
+	 * in a note and a pause every 2 seconds in a dictation; unless told otherwise, the
+	 * end of a dictation closes the stretch under way.
 	 */
 	static final class Counting implements LocalSpeechEngine.Backend {
 		static final int DICTATED_STRETCH = 2 * AudioDecoder.RATE;
 		final List<Integer> decoded = new CopyOnWriteArrayList<>();
 		volatile boolean pausesReleased;
+		volatile boolean flushCloses = true;
 		@Override public List<float[]> stretches(float[] samples) {
 			List<float[]> out = new ArrayList<>();
 			for (int at = 0; at < samples.length; at += 160_000) out.add(java.util.Arrays.copyOfRange(samples, at, Math.min(samples.length, at + 160_000)));
@@ -100,7 +102,7 @@ class LocalSpeechEngineTest {
 					return out;
 				}
 				@Override public boolean speaking() { return true; }
-				@Override public void flush() { closed.add(fed); }
+				@Override public void flush() { if (flushCloses) closed.add(fed); }
 				@Override public void release() { pausesReleased = true; }
 			};
 		}
@@ -109,6 +111,11 @@ class LocalSpeechEngineTest {
 
 	static float[] seconds(double s) {
 		return new float[(int) (s * AudioDecoder.RATE)];
+	}
+
+	/** Whole windows of the pause finder, so a dictation's end leaves nothing it was not given. */
+	static float[] windows(int n) {
+		return new float[n * LocalSpeechEngine.WINDOW];
 	}
 
 	Path installedLibraries() throws Exception {
@@ -152,11 +159,11 @@ class LocalSpeechEngineTest {
 		try {
 			engine.prepare();
 			LocalSpeechEngine.Dictation dictation = engine.dictate();
-			LocalSpeechEngine.Heard first = dictation.hear(seconds(1), false);
+			LocalSpeechEngine.Heard first = dictation.hear(windows(32), false);
 			assertEquals(new LocalSpeechEngine.Heard("", "heard1"), first, "the words so far, before any pause");
-			assertEquals(first, dictation.hear(seconds(0.25), false), "a quarter second more is not worth another look");
+			assertEquals(first, dictation.hear(windows(8), false), "a quarter second more is not worth another look");
 
-			LocalSpeechEngine.Heard paused = dictation.hear(seconds(1.5), false);
+			LocalSpeechEngine.Heard paused = dictation.hear(windows(48), false);
 			assertEquals("heard2", paused.settled(), "the stretch up to the pause settles, decoded once");
 			assertEquals("heard0", paused.partial(), "and the next is looked at from the pause");
 			assertEquals("heard2 heard0", paused.text());
@@ -164,9 +171,29 @@ class LocalSpeechEngineTest {
 			backend.decoded.clear();
 			LocalSpeechEngine.Heard ended = dictation.hear(new float[0], true);
 			assertEquals(new LocalSpeechEngine.Heard("heard2 heard0", ""), ended, "at the end the rest settles");
-			assertEquals(1, backend.decoded.size(), "only the last stretch is decoded again");
+			assertEquals(1, backend.decoded.size(), "the stretch under way is decoded once more, and nothing else");
 			assertTrue(backend.pausesReleased, "and the pause finder is let go");
 			assertThrows(IllegalStateException.class, () -> dictation.hear(seconds(1), false), "an ended dictation hears no more");
+		} finally {
+			engine.close();
+		}
+	}
+
+	@Test void aShortLastWordIsHeardWithTheStretchBeforeIt() throws Exception {
+		Counting backend = new Counting();
+		backend.flushCloses = false;
+		LocalSpeechEngine engine = engine(model("tokens".getBytes(StandardCharsets.UTF_8)), installedLibraries(), false, NativeLibraries.PACKS, backend);
+		try {
+			engine.prepare();
+			LocalSpeechEngine.Dictation dictation = engine.dictate();
+			assertEquals("heard2", dictation.hear(windows(70), false).settled(), "a stretch closed at a pause");
+
+			// After it, a word too short for the pause finder — a lone "go" — that it never closes.
+			backend.decoded.clear();
+			LocalSpeechEngine.Heard ended = dictation.hear(new float[0], true);
+			assertEquals(List.of(70 * LocalSpeechEngine.WINDOW), backend.decoded,
+				"the last stretch is heard again with what followed it, as one piece");
+			assertEquals(new LocalSpeechEngine.Heard("heard2", ""), ended, "its words replace the stretch's own");
 		} finally {
 			engine.close();
 		}

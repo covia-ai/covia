@@ -169,6 +169,9 @@ final class LocalSpeechEngine implements SpeechEngine {
 		private int received;
 		private int fed;
 		private int settledTo;
+		/** Where the last settled stretch began, and where its words begin in {@link #settled}. */
+		private int lastFrom;
+		private int lastAt;
 		private int lookedAt;
 		private final StringBuilder settled = new StringBuilder();
 		private String partial = "";
@@ -211,6 +214,22 @@ final class LocalSpeechEngine implements SpeechEngine {
 			if (end) {
 				pauses.flush();
 				settle(b);
+				// What the finder judged too short to be speech is still a word: a lone "go"
+				// after a pause. Mid-dictation the next stretch carries it, decoded from where
+				// the last one ended; at the end none comes, and a short word decoded alone
+				// is easily lost. So the last stretch is heard again with what followed it.
+				if (settledTo < received) {
+					int whole = WHOLE_SECONDS * AudioDecoder.RATE;
+					int from = settledTo;
+					if (received - lastFrom <= whole) {
+						from = lastFrom;
+						settled.setLength(lastAt);
+					}
+					for (; from < received; from += whole) {
+						add(b.decode(java.util.Arrays.copyOfRange(audio, from, Math.min(received, from + whole))));
+					}
+					settledTo = received;
+				}
 				partial = "";
 				release();
 			} else if (received - lookedAt >= LOOK_AGAIN_SAMPLES) {
@@ -228,11 +247,19 @@ final class LocalSpeechEngine implements SpeechEngine {
 		private void settle(Backend b) {
 			for (int end : pauses.closed()) {
 				int to = Math.max(settledTo, Math.min(received, end));
-				String said = b.decode(java.util.Arrays.copyOfRange(audio, settledTo, to)).strip();
+				String said = b.decode(java.util.Arrays.copyOfRange(audio, settledTo, to));
+				lastFrom = settledTo;
+				lastAt = settled.length();
 				settledTo = to;
-				if (!said.isEmpty()) settled.append(settled.isEmpty() ? "" : " ").append(said);
+				add(said);
 				partial = "";
 			}
+		}
+
+		/** Words that settle, after those before them. */
+		private void add(String said) {
+			said = said.strip();
+			if (!said.isEmpty()) settled.append(settled.isEmpty() ? "" : " ").append(said);
 		}
 
 		private void release() {
