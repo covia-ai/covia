@@ -40,6 +40,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Added
 
+- MCP `tools/list` includes `_meta["ai.covia/operation"]`, the actual dispatch
+  reference, so clients can join MCP exposure to the venue catalog (#558).
 - Method-independent `EvidencePolicy` checks trusted authentication results against
   originating methods, separate event/proof properties and freshness limits,
   returning a refusal reason or `null`. Requirements project to immutable Convex

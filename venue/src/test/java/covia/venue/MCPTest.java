@@ -101,6 +101,9 @@ public class MCPTest {
 		ListToolsResult lr=mcp.listTools();
 		List<Tool> tools = lr.tools();
 		assertTrue(tools.size()>0);
+		Tool echo = tools.stream().filter(t -> "test_echo".equals(t.name())).findFirst().orElseThrow();
+		assertEquals("v/test/ops/echo", echo.meta().get(MCP.TOOL_OPERATION.toString()),
+			"The standard MCP client must preserve the operation reference over HTTP");
 	}
 
 	/**

@@ -463,6 +463,27 @@ The hash is the version identifier. If the user wants to confirm they have a spe
 
 There is **no special-case discovery API**. The catalog is the lattice; you read it with the lattice ops.
 
+### MCP exposure
+
+MCP `tools/list` identifies each advertised tool's operation reference in the
+standard tool `_meta` extension map (#558):
+
+```json
+{"name": "agent_session_read", "_meta": {"ai.covia/operation": "v/ops/agent/session-read"}}
+```
+
+The value is the exact venue-relative reference in the MCP dispatch registry,
+not a path inferred from the tool name or an asset hash. Clients can join it to
+the same venue's catalog to identify MCP-exposed operations. It reflects
+`mcp.includeAdapters`, `mcp.includePathPrefixes` and the active adapter set;
+disabled or excluded tools are not listed. Older venues may omit this metadata:
+treat absence as unknown, not as evidence that an operation is unavailable.
+
+This is runtime discovery metadata, not part of the immutable operation asset.
+Exposure does not grant permission to invoke an operation: the normal capability
+checks still apply. REST/native invocation remains subject to its own checks
+and operation restrictions, independently of MCP exposure.
+
 ### Lattice primitives
 
 A small fixed set of primitives covers all interaction with operations and the catalog. Read-side ops (left column) accept any resolvable address per §4. Write-side ops (right column) require a writable mutable path.
