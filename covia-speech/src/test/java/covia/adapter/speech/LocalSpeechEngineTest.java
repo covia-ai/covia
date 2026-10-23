@@ -78,6 +78,7 @@ class LocalSpeechEngineTest {
 		final List<Integer> decoded = new CopyOnWriteArrayList<>();
 		volatile boolean pausesReleased;
 		volatile boolean flushCloses = true;
+		volatile boolean speaking = true;
 		@Override public List<float[]> stretches(float[] samples) {
 			List<float[]> out = new ArrayList<>();
 			for (int at = 0; at < samples.length; at += 160_000) out.add(java.util.Arrays.copyOfRange(samples, at, Math.min(samples.length, at + 160_000)));
@@ -101,7 +102,7 @@ class LocalSpeechEngineTest {
 					closed.clear();
 					return out;
 				}
-				@Override public boolean speaking() { return true; }
+				@Override public boolean speaking() { return speaking; }
 				@Override public void flush() { if (flushCloses) closed.add(fed); }
 				@Override public void release() { pausesReleased = true; }
 			};
@@ -160,7 +161,7 @@ class LocalSpeechEngineTest {
 			engine.prepare();
 			LocalSpeechEngine.Dictation dictation = engine.dictate();
 			LocalSpeechEngine.Heard first = dictation.hear(windows(32), false);
-			assertEquals(new LocalSpeechEngine.Heard("", "heard1"), first, "the words so far, before any pause");
+			assertEquals(new LocalSpeechEngine.Heard("", "heard1", 0), first, "the words so far, before any pause");
 			assertEquals(first, dictation.hear(windows(8), false), "a quarter second more is not worth another look");
 
 			LocalSpeechEngine.Heard paused = dictation.hear(windows(48), false);
@@ -170,7 +171,7 @@ class LocalSpeechEngineTest {
 
 			backend.decoded.clear();
 			LocalSpeechEngine.Heard ended = dictation.hear(new float[0], true);
-			assertEquals(new LocalSpeechEngine.Heard("heard2 heard0", ""), ended, "at the end the rest settles");
+			assertEquals(new LocalSpeechEngine.Heard("heard2 heard0", "", 0), ended, "at the end the rest settles");
 			assertEquals(1, backend.decoded.size(), "the stretch under way is decoded once more, and nothing else");
 			assertTrue(backend.pausesReleased, "and the pause finder is let go");
 			assertThrows(IllegalStateException.class, () -> dictation.hear(seconds(1), false), "an ended dictation hears no more");
@@ -193,7 +194,31 @@ class LocalSpeechEngineTest {
 			LocalSpeechEngine.Heard ended = dictation.hear(new float[0], true);
 			assertEquals(List.of(70 * LocalSpeechEngine.WINDOW), backend.decoded,
 				"the last stretch is heard again with what followed it, as one piece");
-			assertEquals(new LocalSpeechEngine.Heard("heard2", ""), ended, "its words replace the stretch's own");
+			assertEquals(new LocalSpeechEngine.Heard("heard2", "", 0), ended, "its words replace the stretch's own");
+		} finally {
+			engine.close();
+		}
+	}
+
+	@Test void theSpeakerIsQuietFromWhereTheirLastStretchEnded() throws Exception {
+		Counting backend = new Counting();
+		LocalSpeechEngine engine = engine(model("tokens".getBytes(StandardCharsets.UTF_8)), installedLibraries(), false, NativeLibraries.PACKS, backend);
+		try {
+			engine.prepare();
+			backend.speaking = false;
+			assertTrue(engine.dictate().hear(windows(10), false).quiet() < 0, "nothing has been said yet");
+
+			backend.speaking = true;
+			LocalSpeechEngine.Dictation dictation = engine.dictate();
+			LocalSpeechEngine.Heard speaking = dictation.hear(windows(70), false);
+			assertEquals(0, speaking.quiet(), "speech is under way");
+			assertEquals("heard0", speaking.partial());
+
+			backend.speaking = false;
+			LocalSpeechEngine.Heard lull = dictation.hear(windows(32), false);
+			assertEquals((102 * LocalSpeechEngine.WINDOW - Counting.DICTATED_STRETCH) / (double) AudioDecoder.RATE, lull.quiet(), 1e-9,
+				"counted from where the last stretch ended");
+			assertEquals("heard0", lull.partial(), "and the words heard since stay in view through the lull");
 		} finally {
 			engine.close();
 		}

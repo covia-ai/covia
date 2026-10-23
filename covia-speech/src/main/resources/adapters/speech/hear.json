@@ -1,6 +1,6 @@
 {
   "name": "Hear dictation",
-  "description": "Gives a live dictation (speech:listen) more of the speaker's audio, as raw 16-bit little-endian mono PCM at its sample rate, and returns what has been heard so far: settled, the words up to the last pause, which stay; partial, the words still being spoken, which may change; and text, the two together. With end, everything left settles, partial is empty and the dictation closes. Nothing is stored. A transcript may mishear names and numbers.",
+  "description": "Gives a live dictation (speech:listen) more of the speaker's audio, as raw 16-bit little-endian mono PCM at its sample rate, and returns what has been heard so far: settled, the words up to the last pause, which stay; partial, the words still being spoken, which may change; text, the two together; and quiet, the seconds since speech was last heard (0 while it is under way, absent before any), so an app can end the dictation on a long pause. With end, everything left settles, partial is empty and the dictation closes. Nothing is stored. A transcript may mishear names and numbers.",
   "operation": {
     "adapter": "speech:hear",
     "readOnly": true,
@@ -31,7 +31,8 @@
       "properties": {
         "settled": { "type": "string" },
         "partial": { "type": "string" },
-        "text": { "type": "string" }
+        "text": { "type": "string" },
+        "quiet": { "type": "number" }
       }
     }
   }

@@ -147,8 +147,13 @@ final class LocalSpeechEngine implements SpeechEngine {
 		throw new JobFailedException(SPEAK_UNAVAILABLE);
 	}
 
-	/** What a dictation has heard so far: {@code settled} up to its last pause, which stays, then {@code partial}, which may change. */
-	record Heard(String settled, String partial) {
+	/**
+	 * What a dictation has heard so far: {@code settled} up to its last pause, which
+	 * stays, then {@code partial}, which may change; and how many seconds the speaker
+	 * has been {@code quiet} since speech was last heard — 0 while it is under way,
+	 * negative before any.
+	 */
+	record Heard(String settled, String partial, double quiet) {
 		String text() {
 			return settled.isEmpty() ? partial : partial.isEmpty() ? settled : settled + " " + partial;
 		}
@@ -173,6 +178,8 @@ final class LocalSpeechEngine implements SpeechEngine {
 		private int lastFrom;
 		private int lastAt;
 		private int lookedAt;
+		/** Where the last stretch of speech ended, or -1 before any has. */
+		private int spokeTo = -1;
 		private final StringBuilder settled = new StringBuilder();
 		private String partial = "";
 		private Pauses pauses;
@@ -214,6 +221,7 @@ final class LocalSpeechEngine implements SpeechEngine {
 			if (end) {
 				pauses.flush();
 				settle(b);
+				double quiet = quiet();
 				// What the finder judged too short to be speech is still a word: a lone "go"
 				// after a pause. Mid-dictation the next stretch carries it, decoded from where
 				// the last one ended; at the end none comes, and a short word decoded alone
@@ -232,12 +240,22 @@ final class LocalSpeechEngine implements SpeechEngine {
 				}
 				partial = "";
 				release();
-			} else if (received - lookedAt >= LOOK_AGAIN_SAMPLES) {
+				lastUse = System.nanoTime();
+				return new Heard(settled.toString(), partial, quiet);
+			}
+			// Words once heard stay in view through a lull, until their stretch settles.
+			if (received - lookedAt >= LOOK_AGAIN_SAMPLES && pauses.speaking()) {
 				lookedAt = received;
-				partial = pauses.speaking() ? b.decode(java.util.Arrays.copyOfRange(audio, settledTo, received)).strip() : "";
+				partial = b.decode(java.util.Arrays.copyOfRange(audio, settledTo, received)).strip();
 			}
 			lastUse = System.nanoTime();
-			return new Heard(settled.toString(), partial);
+			return new Heard(settled.toString(), partial, quiet());
+		}
+
+		/** Seconds since speech was last heard: 0 while it is under way, -1 before any. */
+		private double quiet() {
+			if (pauses.speaking()) return 0;
+			return (spokeTo < 0) ? -1 : (received - spokeTo) / (double) AudioDecoder.RATE;
 		}
 
 		/**
@@ -251,6 +269,7 @@ final class LocalSpeechEngine implements SpeechEngine {
 				lastFrom = settledTo;
 				lastAt = settled.length();
 				settledTo = to;
+				spokeTo = to;
 				add(said);
 				partial = "";
 			}

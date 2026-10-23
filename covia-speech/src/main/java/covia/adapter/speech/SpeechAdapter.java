@@ -55,8 +55,9 @@ import covia.venue.storage.ContentProvider;
  *       {@code engines} reports the progress. It returns what {@code engines} does.</li>
  *   <li>{@code speech:listen {sampleRate?}} opens a live dictation on the local engine
  *       and returns its {@code id}; {@code speech:hear {id, bytes?, end?}} gives it more
- *       raw PCM and returns {@code {settled, partial, text}}: the words up to the last
- *       pause, which stay, and those still being spoken, which may change. With
+ *       raw PCM and returns {@code {settled, partial, text, quiet?}}: the words up to the
+ *       last pause, which stay, those still being spoken, which may change, and the
+ *       seconds since speech was last heard, so an app can end on a long pause. With
  *       {@code end} the rest settles and the dictation closes. Only its caller may feed
  *       it, and one left unfed for two minutes is dropped.</li>
  * </ul>
@@ -511,7 +512,8 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 		} finally {
 			if (end) dictations.remove(id, l);
 		}
-		return Maps.of("settled", heard.settled(), "partial", heard.partial(), "text", heard.text());
+		AMap<AString, ACell> out = Maps.of("settled", heard.settled(), "partial", heard.partial(), "text", heard.text());
+		return heard.quiet() < 0 ? out : out.assoc(Strings.intern("quiet"), CVMDouble.create(heard.quiet()));
 	}
 
 	// ---- keys and inputs ----
