@@ -67,6 +67,30 @@ public class MCPRegistryTest {
 			.collect(Collectors.toSet());
 	}
 
+	private java.util.Map<String, String> toolReferences(MCP mcp) {
+		AVector<ACell> tools = RT.getIn(mcp.listTools(), "tools");
+		return tools.stream().collect(Collectors.toMap(
+			t -> RT.getIn(t, Fields.NAME).toString(),
+			t -> {
+				AString ref = RT.ensureString(RT.getIn(t, Strings.create("_meta"), MCP.TOOL_OPERATION));
+				assertNotNull(ref, "Every advertised tool must identify its dispatch reference");
+				return ref.toString();
+			}));
+	}
+
+	@Test public void testDiscoveryReferencesUseRegistryPathsNotToolNames() {
+		var defaults = toolReferences(mcp(freshEngine(), Maps.empty()));
+		assertEquals("v/ops/agent/session-read", defaults.get("agent_session_read"));
+		assertFalse(defaults.containsValue("v/ops/json/merge"), "excluded operations stay hidden");
+		assertFalse(defaults.containsValue("v/test/ops/echo"), "excluded paths stay hidden");
+
+		var expanded = toolReferences(mcp(freshEngine(), Maps.of(
+			K_INCLUDE_ADAPTERS, Vectors.of("*"),
+			K_INCLUDE_PATH_PREFIXES, Vectors.of("v/ops/", "v/test/ops/"))));
+		assertEquals("v/ops/json/merge", expanded.get("json_merge"));
+		assertEquals("v/test/ops/echo", expanded.get("test_echo"));
+	}
+
 	// ==================== Default include set ====================
 
 	@Test public void testDefaultExposesOnlyAllowlistedGroups() {
@@ -238,14 +262,14 @@ public class MCPRegistryTest {
 		Engine.addDemoAssets(engine);
 		try {
 			MCP mcp = mcp(engine, Maps.of(K_INCLUDE_ADAPTERS, Vectors.of(Strings.create("*"))));
-			assertTrue(toolNames(mcp).contains("json_merge"), "json exposed while enabled");
+			assertEquals("v/ops/json/merge", toolReferences(mcp).get("json_merge"));
 
 			engine.disableAdapter("json");
-			assertFalse(toolNames(mcp).contains("json_merge"), "disabled adapter's tools vanish");
+			assertFalse(toolReferences(mcp).containsValue("v/ops/json/merge"), "disabled references vanish");
 			assertTrue(toolNames(mcp).contains("http_get"), "other adapters unaffected");
 
 			engine.enableAdapter("json");
-			assertTrue(toolNames(mcp).contains("json_merge"), "re-enabled adapter's tools return");
+			assertEquals("v/ops/json/merge", toolReferences(mcp).get("json_merge"));
 		} finally {
 			engine.close();
 		}

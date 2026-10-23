@@ -84,6 +84,10 @@ public class MCP extends McpServer {
 
 	public static final Logger log = LoggerFactory.getLogger(MCP.class);
 
+	/** Tool metadata key for the operation reference used by this venue's dispatcher. */
+	public static final AString TOOL_OPERATION = Strings.intern("ai.covia/operation");
+	private static final AString K_META = Strings.intern("_meta");
+
 	private final Venue venue;
 
 	/** The longest an authenticated caller's tool call waits before it is given the job to collect instead. */
@@ -428,7 +432,8 @@ public class MCP extends McpServer {
 			try {
 				AMap<AString, ACell> meta = engine().resolveAsset(opRef).meta();
 				AMap<AString, ACell> tool = buildToolEntry(toolName, meta);
-				if (tool != null) toolsVector = toolsVector.conj(tool);
+				if (tool != null) toolsVector = toolsVector.conj(
+					tool.assoc(K_META, Maps.of(TOOL_OPERATION, opRef)));
 			} catch (Exception e) {
 				log.warn("Error resolving registered MCP tool {} ({}): {}",
 					toolName, opRef, e.getMessage());
