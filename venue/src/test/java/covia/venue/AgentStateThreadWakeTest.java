@@ -54,12 +54,12 @@ public class AgentStateThreadWakeTest {
 
 	@SuppressWarnings("unchecked")
 	private static long timeOf(ACell event) {
-		return ((CVMLong) ((AMap<AString, ACell>) event).get(Scheduler.K_TIME)).longValue();
+		return ((CVMLong) ((AMap<AString, ACell>) event).get(ScheduleState.K_TIME)).longValue();
 	}
 
 	@SuppressWarnings("unchecked")
 	private static AString opOf(ACell event) {
-		return (AString) ((AMap<AString, ACell>) event).get(Scheduler.K_OP);
+		return (AString) ((AMap<AString, ACell>) event).get(ScheduleState.K_OP);
 	}
 
 	private Blob makeSession(String hex) {

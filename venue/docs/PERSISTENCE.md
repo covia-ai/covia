@@ -13,7 +13,7 @@ in order for its sweeps and explicit flush. A concurrent write remains pending
 when the host finishes publishing an older snapshot; the host does not merge
 that stale snapshot back into current state.
 
-`VenueState`, `Users`, `User`, `AgentState`, `AssetStore`, `SecretStore` and
+`VenueState`, `Users`, `User`, `AgentState`, `AuthState`, `ScheduleState`, `AssetStore`, `SecretStore` and
 `WorkspaceRoot` implement upstream `TransactionalComponent`. Ordinary domain
 mutations are atomic; `transact(draft -> ...)` groups several operations into one
 local commit. Choose the component containing all data the operation reads or
@@ -42,7 +42,7 @@ transaction. Agent wake changes likewise commit the thread's intent, schedule
 event and stored handle together. `AgentState` only changes lattice data;
 `Scheduler` serialises runtime wake requests with firing and arms the timer
 after the venue transaction commits. It preserves the caller's account lifecycle
-guard across that handoff. Code composing wake changes inside a larger venue
+guard inside that same transaction across the timer handoff. Code composing wake changes inside a larger venue
 transaction uses `draft.setAgentThreadWakeTime(...)` and must re-arm the runtime
 scheduler after the outer commit (for example via `rescheduleAgentWake`). No
 runtime scheduler, job dispatch or other external effect belongs in a draft.
@@ -51,6 +51,14 @@ The agent editing cursor is the sole owner of the record's `ts` version stamp.
 Domain methods retain event timestamps where they describe actual events, but
 do not independently re-stamp the containing record. No-op edits retain their
 version; whole-record replacement preserves the prior timestamp floor.
+
+`venue.auth()` owns directory records, authenticator uniqueness/revocation and
+their timestamps. Runtime `Auth` owns providers and admission policy; its monitor
+still coordinates account deletion with runtime cleanup. `venue.schedule()` owns
+event records, handles, recurrence and schedule timestamps; runtime `Scheduler`
+owns the timer, job preparation and dispatch. Both domain components rebind to
+draft storage and have no engine or runtime-service reference. Venue operations
+coordinate changes across these children without constructing their records.
 
 `VenueState.fork()` is a separate, explicitly reconciled working copy. Its
 `sync()` uses whole-venue LWW selection; it must not be used as a transaction
@@ -61,8 +69,9 @@ stamps; local edits pass through `StampedCursor`.
 Workspace path operations live in `WorkspaceRoot`; adapters handle request
 routing and authority checks before calling this domain API. Raw cursor access
 remains an internal integration primitive, not an authorised public endpoint.
-Bootstrap catalog changes use the same upstream transaction engine over the
-narrow venue-owned workspace. DLFS file writes are live component edits;
+Bootstrap catalog changes use `WorkspaceRoot.transact` over the narrow
+venue-owned workspace. The materialiser is ordinary code operating on that draft,
+with no component/storage/rebinding wrapper of its own. DLFS file writes are live component edits;
 publication still belongs to Engine's host sweep or flush.
 
 The design history below describes the earlier 0.8.17 implementation and deferred

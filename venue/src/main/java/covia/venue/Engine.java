@@ -648,7 +648,7 @@ public class Engine {
 			}
 			for (long i = 0; i < keys.count(); i++) {
 				AString key = RT.ensureString(keys.get(i));
-				Auth.requireValidAuthenticationKey(key);
+				AuthState.requireValidAuthenticationKey(key);
 				if (!declaredKeys.add(key)) {
 					throw new IllegalArgumentException(
 						"One authentication key cannot bootstrap two named users");
@@ -783,7 +783,7 @@ public class Engine {
 		connected.initialise(getDIDString());
 		this.venueState = connected;
 
-		this.auth = new Auth(this, venueState, venueState.authCursor());
+		this.auth = new Auth(this);
 		this.accessControl = new AccessControl();
 	}
 

@@ -36,6 +36,65 @@ class DomainTransactionTest {
 	private static ACell[] path(String path) { return WorkspaceRoot.parseStringPath(path); }
 
 	@Test
+	void authAndScheduleChildrenRemainOnTheVenueDraft() {
+		var venue = VenueState.create(AKeyPair.generate());
+		var id = Strings.create("alice");
+		ACell before = venue.get();
+		var authDraft = new AtomicReference<AuthState>();
+		var scheduleDraft = new AtomicReference<ScheduleState>();
+		assertThrows(IllegalStateException.class, () -> venue.transact(draft -> {
+			authDraft.set(draft.auth());
+			scheduleDraft.set(draft.schedule());
+			draft.auth().ensureManagedUser(id, DID);
+			draft.schedule().schedule(Strings.create("v/test/ops/echo"), null, DID, null, DID,
+				null, null, 1000, null, false, null, 100);
+			assertNull(venue.auth().getUser(id));
+			assertTrue(venue.schedule().events().isEmpty());
+			throw new IllegalStateException();
+		}));
+		assertEquals(before, venue.get());
+		authDraft.get().ensureManagedUser(Strings.create("late"), DID);
+		scheduleDraft.get().cancelUser(DID);
+		assertEquals(before, venue.get(), "retained children must not mutate the live venue");
+		venue.transact(draft -> {
+			draft.auth().ensureManagedUser(id, DID);
+			draft.schedule().schedule(Strings.create("v/test/ops/echo"), null, DID, null, DID,
+				null, null, 1000, null, false, null, 100);
+		});
+		assertNotNull(venue.auth().getUser(id));
+		assertEquals(1, venue.schedule().events().count());
+	}
+
+	@Test
+	void concurrentAuthDraftCannotBindTheSameKeyToTwoUsers() throws Exception {
+		var auth = VenueState.create(AKeyPair.generate()).auth();
+		var alice = Strings.create("alice");
+		var bob = Strings.create("bob");
+		auth.ensureManagedUser(alice, DID);
+		auth.ensureManagedUser(bob, Strings.create("did:key:other-user"));
+		var key = convex.auth.ucan.UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
+		var entered = new CountDownLatch(1);
+		var resume = new CountDownLatch(1);
+		try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+			var pending = executor.submit(() -> auth.transact(draft -> {
+				draft.addAuthenticationKey(alice, key, DID, null);
+				entered.countDown();
+				await(resume);
+			}));
+			try {
+				assertTrue(entered.await(10, TimeUnit.SECONDS));
+				assertTrue(auth.addAuthenticationKey(bob, key, DID, null));
+			} finally { resume.countDown(); }
+			var failure = assertThrows(java.util.concurrent.ExecutionException.class,
+				() -> pending.get(10, TimeUnit.SECONDS));
+			assertInstanceOf(IllegalArgumentException.class, failure.getCause());
+			assertEquals(AuthState.KEY_ALREADY_BOUND + bob, failure.getCause().getMessage());
+		}
+		assertFalse(auth.isAuthenticationKeyActive(alice, key));
+		assertTrue(auth.isAuthenticationKeyActive(bob, key));
+	}
+
+	@Test
 	void agentRecordHasOneStampPolicyIncludingReplacementAndNoOps() {
 		var clockReads = new AtomicInteger();
 		var ticks = new AtomicLong(100);
@@ -78,14 +137,14 @@ class DomainTransactionTest {
 		}));
 		assertEquals(before, venue.get(), "aborted wake must leave no event or handle");
 		venue.setAgentThreadWakeTime(DID, agentId, AgentState.ThreadKind.SESSION, sid, 1000);
-		var events = (Index<?, ?>) venue.scheduleCursor().path(Scheduler.K_EVENTS).get();
+		var events = (Index<?, ?>) venue.schedule().cursor().path(ScheduleState.K_EVENTS).get();
 		assertEquals(1, events.count());
 		assertEquals(CVMLong.create(1000), agent.getSession(sid).get(Fields.WAKE_TIME));
 		assertNotNull(events.get(agent.wakeHandle()));
 		venue.setAgentThreadWakeTime(DID, agentId, AgentState.ThreadKind.SESSION, sid, 0);
 		assertNull(agent.wakeHandle());
 		assertNull(agent.getSession(sid).get(Fields.WAKE_TIME));
-		assertTrue(((Index<?, ?>) venue.scheduleCursor().path(Scheduler.K_EVENTS).get()).isEmpty());
+		assertTrue(((Index<?, ?>) venue.schedule().cursor().path(ScheduleState.K_EVENTS).get()).isEmpty());
 	}
 
 	@Test
@@ -114,9 +173,9 @@ class DomainTransactionTest {
 		assertEquals(2, attempts.get());
 		assertEquals(CVMLong.create(2000), agent.getSession(sid).get(Fields.WAKE_TIME));
 		assertEquals(CVMLong.create(1000), agent.getSession(other).get(Fields.WAKE_TIME));
-		var events = (Index<?, ?>) venue.scheduleCursor().path(Scheduler.K_EVENTS).get();
+		var events = (Index<?, ?>) venue.schedule().cursor().path(ScheduleState.K_EVENTS).get();
 		assertEquals(1, events.count());
-		assertEquals(CVMLong.create(1000), convex.core.lang.RT.getIn(events.get(agent.wakeHandle()), Scheduler.K_TIME));
+		assertEquals(CVMLong.create(1000), convex.core.lang.RT.getIn(events.get(agent.wakeHandle()), ScheduleState.K_TIME));
 	}
 
 	@Test

@@ -13,8 +13,6 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.core.data.Maps;
-import convex.core.data.prim.CVMBool;
-import convex.core.data.prim.CVMLong;
 import convex.core.data.AccountKey;
 import convex.core.data.Index;
 import convex.core.data.Keyword;
@@ -30,6 +28,7 @@ import convex.lattice.cursor.SignedCursor;
 import convex.lattice.cursor.AForkableCursor;
 import covia.lattice.Covia;
 import covia.api.Fields;
+import covia.exception.AuthException;
 import covia.lattice.Namespace;
 import covia.venue.storage.LatticeStorage;
 
@@ -194,16 +193,14 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 		Objects.requireNonNull(profile);
 		var result = new java.util.concurrent.atomic.AtomicReference<AMap<AString, ACell>>();
 		transact(draft -> {
-			AMap<AString, ACell> previous = RT.ensureMap(RT.getIn(draft.authCursor().get(), id));
+			AMap<AString, ACell> previous = draft.auth().getUser(id);
 			AString did = previous == null ? null : RT.ensureString(previous.get(Fields.DID));
 			if (did == null) did = defaultDID;
 			draft.users().create(did);
 			AMap<AString, ACell> updated = previous == null ? Maps.empty() : previous;
 			for (var entry : profile.entrySet()) updated = updated.assoc(entry.getKey(), entry.getValue());
-			updated = Auth.stampUser(updated.assoc(Fields.DID, did), previous,
-				draft.context.currentTimestamp());
-			draft.authCursor().withDefault(Maps.empty()).path(id).set(updated);
-			result.set(updated);
+			draft.auth().putUser(id, updated.assoc(Fields.DID, did));
+			result.set(draft.auth().getUser(id));
 		});
 		return result.get();
 	}
@@ -214,9 +211,20 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	 */
 	public void setAgentThreadWakeTime(AString owner, AString agentId,
 			AgentState.ThreadKind kind, Blob threadId, long wakeTime) {
+		User user = users().get(owner);
+		if (user == null) return;
+		setAgentThreadWakeTime(owner, agentId, kind, threadId, wakeTime, RT.getIn(user.get(), Users.GENERATION));
+	}
+
+	/** Runtime calls retain the generation observed before handing work to the timer. */
+	void setAgentThreadWakeTime(AString owner, AString agentId,
+			AgentState.ThreadKind kind, Blob threadId, long wakeTime, ACell generation) {
 		transact(draft -> {
 			User user = draft.users().get(owner);
-			AgentState agent = user == null ? null : user.agent(agentId);
+			if (user == null || !Objects.equals(generation, RT.getIn(user.get(), Users.GENERATION))) {
+				throw new AuthException(Users.ACCOUNT_DELETED);
+			}
+			AgentState agent = user.agent(agentId);
 			if (agent != null && agent.setThreadWakeTime(kind, threadId, wakeTime)) {
 				draft.reconcileAgentWake(owner, agent);
 			}
@@ -234,37 +242,9 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 		return armed[0];
 	}
 
-	/** Called only on a private venue draft: agent and schedule share its commit. */
-	@SuppressWarnings("unchecked")
+	/** Agent intent and event replacement share this private venue draft. */
 	private boolean reconcileAgentWake(AString owner, AgentState agent) {
-		var events = scheduleCursor().withDefault(Maps.empty()).path(Scheduler.K_EVENTS);
-		ACell value = events.get();
-		Index<Blob, ACell> index = value instanceof Index<?, ?>
-			? (Index<Blob, ACell>) value : Index.none();
-		Blob oldHandle = agent.wakeHandle();
-		if (oldHandle != null) {
-			// A malformed/stale agent handle must never remove another owner's event.
-			ACell old = index.get(oldHandle);
-			if (owner.equals(RT.getIn(old, Scheduler.K_OWNER))
-					&& AgentState.TRIGGER_OP.equals(RT.getIn(old, Scheduler.K_OP))
-					&& agent.getAgentId().equals(RT.getIn(old, Scheduler.K_INPUT, Fields.AGENT_ID))) {
-				index = index.dissoc(oldHandle);
-			}
-		}
-		long earliest = agent.earliestWake();
-		Blob handle = null;
-		if (earliest > 0) {
-			handle = Scheduler.mintKey(earliest);
-			index = index.assoc(handle, Maps.of(
-				Scheduler.K_OP, AgentState.TRIGGER_OP,
-				Scheduler.K_OWNER, owner, Scheduler.K_BY, owner,
-				Scheduler.K_TIME, CVMLong.create(earliest),
-				Scheduler.K_CREATED, context.currentTimestamp(),
-				Scheduler.K_TRACK, CVMBool.FALSE,
-				Scheduler.K_INPUT, Maps.of(Fields.AGENT_ID, agent.getAgentId(),
-					Fields.FORCE, CVMBool.FALSE, Fields.WAIT, CVMBool.FALSE)));
-		}
-		if (!(value == null && index.isEmpty())) events.set(index);
+		Blob handle = schedule().replaceAgentWake(owner, agent.getAgentId(), agent.wakeHandle(), agent.earliestWake());
 		agent.setWakeHandle(handle);
 		return handle != null;
 	}
@@ -283,24 +263,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 			venue = venue.assoc(Covia.USER_DATA, users.assoc(did, Maps.of(Covia.K_DELETED, tombstone,
 				Users.DELETING, convex.core.data.prim.CVMBool.TRUE)));
 			AMap<AString, ACell> directory = RT.ensureMap(venue.get(Covia.USERS));
-			if (directory != null) {
-				AMap<AString, ACell> revoked = Maps.empty();
-				for (var row : directory.entrySet()) {
-					if (!did.equals(RT.getIn(row.getValue(), Fields.DID))) continue;
-					AMap<AString, ACell> keys = RT.ensureMap(RT.getIn(row.getValue(), Fields.AUTHENTICATION_KEYS));
-					if (keys != null) for (var key : keys.entrySet()) {
-						revoked = revoked.assoc(key.getKey(), Maps.of(
-							Fields.STATUS, Auth.REVOKED,
-							Fields.REVOKED_AT, now, Fields.REVOKED_BY, actor));
-					}
-					directory = directory.dissoc(row.getKey());
-				}
-				// No username alias, profile or key label survives. Keep public-key
-				// revocations so a removed binding cannot be silently reassigned.
-				if (!revoked.isEmpty()) directory = directory.assoc(did, Maps.of(
-					Fields.DID, did, Fields.AUTHENTICATION_KEYS, revoked));
-				venue = venue.assoc(Covia.USERS, directory);
-			}
+			if (directory != null) venue = venue.assoc(Covia.USERS, AuthState.eraseUser(directory, did, actor, now));
 			return venue;
 		});
 		ACell previous = RT.getIn(before, Covia.USER_DATA, did);
@@ -313,25 +276,14 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 
 	public static final String UNKNOWN_USER = "User is not registered at this venue";
 
-	/**
-	 * Gets a lattice cursor at the {@code :users} level for Auth construction.
-	 *
-	 * @return Cursor at the :users level
-	 */
-	AForkableCursor<ACell> authCursor() {
-		return resolve(cursor(), Covia.VENUE, Covia.USERS);
+	/** Stored authentication directory; provider/runtime policy belongs to Auth. */
+	public AuthState auth() {
+		return new AuthState(context, resolve(cursor(), Covia.VENUE, Covia.USERS));
 	}
 
-	/**
-	 * Gets the lattice cursor at the per-venue {@code :schedule} record. Its
-	 * {@code events} field is the time-ordered store used by {@link Scheduler};
-	 * sibling fields hold record metadata and leave room for future additions.
-	 *
-	 * @return Cursor at the :schedule level (value is a record)
-	 */
-	AForkableCursor<ACell> scheduleCursor() {
-		return StampedCursor.create(resolve(cursor(), Covia.VENUE, Covia.SCHEDULE),
-			getContext()::currentTimestamp, Covia::stampUpdated);
+	/** Stored schedule; timer and execution lifecycle belong to Scheduler. */
+	public ScheduleState schedule() {
+		return new ScheduleState(context, resolve(cursor(), Covia.VENUE, Covia.SCHEDULE));
 	}
 
 	/**

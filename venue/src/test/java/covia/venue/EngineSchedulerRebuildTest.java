@@ -28,7 +28,7 @@ public class EngineSchedulerRebuildTest {
 	}
 
 	private static long timeOf(AVector<ACell> events, long i) {
-		return ((convex.core.data.prim.CVMLong) event(events, i).get(Scheduler.K_TIME)).longValue();
+		return ((convex.core.data.prim.CVMLong) event(events, i).get(ScheduleState.K_TIME)).longValue();
 	}
 
 	@Test
@@ -65,7 +65,7 @@ public class EngineSchedulerRebuildTest {
 			engine.rebuildSchedulerFromLattice();
 			AVector<ACell> after = engine.gridScheduler().list(ctx);
 			assertEquals(1, after.count(), "rebuild must not duplicate the wake");
-			assertEquals(AgentState.TRIGGER_OP, event(after, 0).get(Scheduler.K_OP));
+			assertEquals(AgentState.TRIGGER_OP, event(after, 0).get(ScheduleState.K_OP));
 			assertEquals(sessionWake, timeOf(after, 0));
 		} finally {
 			engine.close();

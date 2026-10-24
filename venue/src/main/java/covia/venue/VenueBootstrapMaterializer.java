@@ -15,8 +15,7 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.util.JSON;
-import convex.lattice.cursor.AForkableCursor;
-import convex.lattice.TransactionalComponent;
+import java.util.function.Consumer;
 import covia.lattice.WorkspaceRoot;
 import covia.adapter.AAdapter;
 import covia.api.Fields;
@@ -24,7 +23,7 @@ import covia.api.Fields;
 /**
  * Materialises venue-owned bootstrap state as one native lattice transaction.
  *
- * <p>Convex's {@link TransactionalComponent} supplies a private draft of the
+ * <p>The {@link WorkspaceRoot} transaction supplies a private draft of the
  * venue-owned {@code w/global} workspace, retries conflicts and commits atomically.
  * Catalog and introspection writes are validated against that draft; an exception
  * discards the entire attempt. No operation dispatch or Job records are involved.</p>
@@ -35,7 +34,7 @@ import covia.api.Fields;
  * {@link Modules#load}, {@link Modules#unload}) — each change is one atomic
  * commit, so the catalog never shows a half-applied adapter.</p>
  */
-final class VenueBootstrapMaterializer implements TransactionalComponent<ACell, VenueBootstrapMaterializer> {
+final class VenueBootstrapMaterializer {
 
 	private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(VenueBootstrapMaterializer.class);
 
@@ -54,33 +53,25 @@ final class VenueBootstrapMaterializer implements TransactionalComponent<ACell, 
 	private final List<String> adapterNames;
 	private final long startedAt;
 
-	private VenueBootstrapMaterializer(Engine engine) {
+	private VenueBootstrapMaterializer(Engine engine, WorkspaceRoot draft, List<String> adapterNames, long startedAt) {
 		this.engine = engine;
-		var venueUser = engine.getVenueState().users().ensure(engine.getDIDString());
-		this.workspace = new WorkspaceRoot(venueUser.workspaceRoot().child(K_W)
-			.withDefault(convex.core.data.Maps.empty()).path(K_GLOBAL), engine.getLatticeContext(), false);
-		this.adapterNames = engine.getAdapterNamesInRegistrationOrder();
-		this.startedAt = System.currentTimeMillis();
+		this.workspace = draft;
+		this.adapterNames = adapterNames;
+		this.startedAt = startedAt;
 	}
 
-	private VenueBootstrapMaterializer(VenueBootstrapMaterializer source, AForkableCursor<ACell> draft) {
-		this.engine = source.engine;
-		this.workspace = new WorkspaceRoot(draft, source.workspace.context(), false);
-		this.adapterNames = source.adapterNames;
-		this.startedAt = source.startedAt;
-	}
-
-	@Override
-	public AForkableCursor<ACell> storage() { return workspace.cursor(); }
-
-	@Override
-	public VenueBootstrapMaterializer withCursor(AForkableCursor<ACell> draft) {
-		return new VenueBootstrapMaterializer(this, draft);
+	private static void materialise(Engine engine, Consumer<VenueBootstrapMaterializer> action) {
+		var user = engine.getVenueState().users().ensure(engine.getDIDString());
+		var workspace = new WorkspaceRoot(user.workspaceRoot().child(K_W)
+			.withDefault(Maps.empty()).path(K_GLOBAL), engine.getLatticeContext(), false);
+		var names = engine.getAdapterNamesInRegistrationOrder();
+		long started = System.currentTimeMillis();
+		workspace.transact(draft -> action.accept(new VenueBootstrapMaterializer(engine, draft, names, started)));
 	}
 
 	/** Materialises catalog and venue information, then commits them together. */
 	static void materialiseBootstrapState(Engine engine) {
-		new VenueBootstrapMaterializer(engine).transact(materializer -> {
+		materialise(engine, materializer -> {
 			materializer.writeAdapterCatalog();
 			materializer.writeVenueInformation();
 		});
@@ -89,13 +80,13 @@ final class VenueBootstrapMaterializer implements TransactionalComponent<ACell, 
 
 	/** Backward-compatible catalog-only entry point, committed as one transaction. */
 	static void materialiseAdapterCatalog(Engine engine) {
-		new VenueBootstrapMaterializer(engine).transact(VenueBootstrapMaterializer::writeAdapterCatalog);
+		materialise(engine, VenueBootstrapMaterializer::writeAdapterCatalog);
 		covia.adapter.agent.Skills.validateVenueLibrary(engine);
 	}
 
 	/** Backward-compatible venue-info-only entry point, committed as one transaction. */
 	static void materialiseVenueInformation(Engine engine) {
-		new VenueBootstrapMaterializer(engine).transact(VenueBootstrapMaterializer::writeVenueInformation);
+		materialise(engine, VenueBootstrapMaterializer::writeVenueInformation);
 	}
 
 	/**
@@ -107,7 +98,7 @@ final class VenueBootstrapMaterializer implements TransactionalComponent<ACell, 
 	 * recently registered adapter wins.
 	 */
 	static void materialiseAdapter(Engine engine, AAdapter adapter) {
-		new VenueBootstrapMaterializer(engine).transact(materializer -> {
+		materialise(engine, materializer -> {
 			materializer.writeAdapterDeclarations(adapter);
 			materializer.writeAdapterOwnedRecords(adapter);
 		});
@@ -115,7 +106,7 @@ final class VenueBootstrapMaterializer implements TransactionalComponent<ACell, 
 
 	/** Atomically replaces one adapter's declarations and introspection. */
 	static void replaceAdapter(Engine engine, AAdapter previous, AAdapter replacement) {
-		new VenueBootstrapMaterializer(engine).transact(materializer -> {
+		materialise(engine, materializer -> {
 			materializer.deleteVenuePath(ADAPTERS_ROOT + previous.getName());
 			materializer.writeAdapterDeclarations(replacement);
 			materializer.writeAdapterOwnedRecords(replacement);
@@ -129,7 +120,7 @@ final class VenueBootstrapMaterializer implements TransactionalComponent<ACell, 
 	 * deleted explicitly by the operator.
 	 */
 	static void dematerialiseAdapter(Engine engine, AAdapter adapter) {
-		new VenueBootstrapMaterializer(engine).transact(materializer -> {
+		materialise(engine, materializer -> {
 			materializer.deleteVenuePath("v/info/adapters/" + adapter.getName());
 			materializer.deleteVenuePath(ADAPTERS_ROOT + adapter.getName());
 		});
@@ -137,7 +128,7 @@ final class VenueBootstrapMaterializer implements TransactionalComponent<ACell, 
 
 	/** Publishes (or refreshes) one module's {@code v/info/modules/<name>} entry. */
 	static void materialiseModule(Engine engine, Modules.LoadedModule module) {
-		new VenueBootstrapMaterializer(engine).transact(materializer -> {
+		materialise(engine, materializer -> {
 			materializer.writeAndValidateVenuePath(
 				"v/info/modules/" + module.name(), moduleSummary(module));
 		});
@@ -145,7 +136,7 @@ final class VenueBootstrapMaterializer implements TransactionalComponent<ACell, 
 
 	/** Retracts one module's {@code v/info/modules/<name>} entry. */
 	static void dematerialiseModule(Engine engine, String moduleName) {
-		new VenueBootstrapMaterializer(engine).transact(materializer -> {
+		materialise(engine, materializer -> {
 			materializer.deleteVenuePath("v/info/modules/" + moduleName);
 		});
 	}
@@ -325,7 +316,7 @@ final class VenueBootstrapMaterializer implements TransactionalComponent<ACell, 
 	 * configuration. Catalog declarations are untouched.
 	 */
 	static void materialiseAdapterInfo(Engine engine, AAdapter adapter) {
-		new VenueBootstrapMaterializer(engine).transact(materializer -> {
+		materialise(engine, materializer -> {
 			materializer.writeAdapterOwnedRecords(adapter);
 		});
 	}
