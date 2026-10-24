@@ -1721,9 +1721,11 @@ public class LangChainAdapter extends AAdapter {
 						}
 						String text = (content != null) ? content.toString() : null;
 						ai = new AiMessage(text, reqs);
-					} else if (content != null) {
+					} else if (content != null && !content.toString().isBlank()) {
 						ai = AiMessage.from(content.toString());
 					} else {
+						// A turn that ended without a reply: nothing was said, so
+						// nothing goes back — providers reject an empty assistant message.
 						break;
 					}
 					ai = ProviderState.restore(provider, modelName,

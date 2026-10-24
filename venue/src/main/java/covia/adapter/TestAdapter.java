@@ -585,6 +585,10 @@ public class TestAdapter extends AAdapter {
 					Maps.of("id", "call_echo_two", "name", "test_echo",
 						"arguments", "{\"echo\":\"two\"}")));
 		}
+		if (model != null && "no-reply-test".equals(model.toString())) {
+			// Ends the turn having said nothing, as a model may.
+			return Maps.of("role", Strings.create("assistant"));
+		}
         String text = "(no user message)";
         ACell messagesCell = RT.getIn(input, "messages");
         if (messagesCell instanceof AVector) {

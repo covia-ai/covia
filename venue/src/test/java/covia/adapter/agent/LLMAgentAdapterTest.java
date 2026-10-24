@@ -667,6 +667,31 @@ public class LLMAgentAdapterTest {
 		assertNull(RT.getIn(persistedToolTurn, "content"));
 	}
 
+	@Test
+	public void testATurnMayEndWithoutAReply() {
+		RequestContext ctx = RequestContext.of(ALICE_DID);
+		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(
+			Fields.AGENT_ID, "no-reply-agent",
+			Fields.CONFIG, Maps.of(
+				Fields.OPERATION, "v/ops/llmagent/chat",
+				"llmOperation", "v/test/ops/llm",
+				"model", "no-reply-test")), ctx).awaitResult(5000);
+		ACell chatResult = engine.jobs().invokeOperation("v/ops/agent/chat", Maps.of(
+			Fields.AGENT_ID, "no-reply-agent",
+			Fields.MESSAGE, "So I was thinking we could"), ctx).awaitResult(10000);
+
+		assertEquals("", RT.getIn(chatResult, Fields.RESPONSE).toString(), "a turn that said nothing, not a failure");
+		AString sid = RT.ensureString(RT.getIn(chatResult, Fields.SESSION_ID));
+		AMap<AString, ACell> session = engine.getVenueState().users().get(ALICE_DID)
+			.agent("no-reply-agent").getSession(Blob.fromHex(sid.toString()));
+		AVector<ACell> conversation = GoalTreeContext.activeConversation(
+			RT.ensureMap(RT.ensureVector(RT.getIn(session, Fields.FRAMES)).get(0)));
+		ACell last = conversation.get(conversation.count() - 1);
+		assertEquals("assistant", RT.getIn(last, "role").toString(), "the turn is recorded, as the agent ending it");
+		assertNull(RT.getIn(last, "content"));
+		assertNull(RT.getIn(last, "toolCalls"));
+	}
+
 	// ========== Skills index (config.skills — SKILLS.md §4) ==========
 
 	@Test
