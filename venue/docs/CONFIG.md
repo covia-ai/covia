@@ -2121,7 +2121,10 @@ through an OpenAI-compatible audio API: OpenAI by default, or any server that
 speaks the same `/audio/transcriptions` and `/audio/speech` endpoints. Point it
 at a local server on loopback, such as speaches or LocalAI, and no audio leaves
 the venue's machine; a server that only transcribes keeps `transcribe` local but
-cannot `speak`.
+cannot `speak`. The module can also do both inside the venue itself
+([below](#local-transcription-and-speech-inside-the-venue)), and each direction
+may use its own engine: what is said can be transcribed on this machine whatever
+speaks.
 
 ```json
 {
@@ -2138,6 +2141,8 @@ cannot `speak`.
 }
 ```
 
+- `engine` — what transcribes: `openai` (default, the API at `baseUrl`) or `local`.
+- `speakEngine` — what speaks: `openai` or `local`; by default the same as `engine`.
 - `baseUrl` — the API root; HTTPS, or plain HTTP only on loopback. Never a caller input.
 - `apiKey` — optional `s/NAME` reference to an operator-held key, resolved from the
   venue's own store and used for every caller. Without it each caller's own
@@ -2160,15 +2165,24 @@ Operations:
   `mediaOperation` for Telegram and WhatsApp agent bindings: a voice note's
   transcript becomes its attachment's `text`.
 - `v/ops/speech/speak {text, voice?, model?, format?, speed?, instructions?,
-  destination?, fileName?}` synthesises up to 4,096 characters and stores the
-  audio without overwriting anything, by default as Ogg/Opus (a voice note) in
-  the caller's private DLFS `speech` drive; a `destination` directory is written
-  with the caller's authority. It returns `{ref, mediaType, size, fileName,
-  format, voice, model, engine}`; Telegram's `sendVoice` takes the ref.
-- `v/ops/speech/engines {}` says whether the engine is local and whether a key
+  language?, destination?, fileName?}` synthesises up to 4,096 characters and
+  stores the audio without overwriting anything, by default as Ogg/Opus (a voice
+  note; WAV from the local engine) in the caller's private DLFS `speech` drive; a
+  `destination` directory is written with the caller's authority. It returns
+  `{ref, mediaType, size, fileName, format, voice, model, engine}`; Telegram's
+  `sendVoice` takes an Ogg/Opus ref.
+- `v/ops/speech/say {text, voice?, model?, format?, speed?, instructions?,
+  language?}` synthesises the same way and returns the audio inline as base64
+  `{bytes, size, mediaType, format, voice, model, engine}`, for an app that plays
+  it at once. It is a read: nothing is stored, and run as a result (not invoked
+  as a tracked Job) it leaves no job record of the words or the audio.
+- `v/ops/speech/engines {}` lists the engines, the one that transcribes first
+  and then the one that speaks when it is another: whether each is local,
+  `transcribes` and `speaks`, its models and default voice, and whether a key
   resolves for the caller, without endpoints or keys.
-- `v/ops/speech/prepare {}` gets the engine ready before any audio is in hand,
-  for an app that asks its owner first: the local engine fetches its model and
+- `v/ops/speech/prepare {for?}` gets an engine ready before any audio or text is
+  in hand, for an app that asks its owner first: the local engine fetches the
+  model to transcribe with (or, with `for: "speak"`, to speak with) and its
   libraries, which can take minutes while `engines` shows the progress. It
   returns what `engines` does; a remote engine needs nothing.
 - `v/ops/speech/listen {sampleRate?}` and `v/ops/speech/hear {id, bytes?, end?}`
@@ -2186,13 +2200,16 @@ Operations:
 A transcript lives in the operation's Job like any other result. Provider
 failures fail the Job; nothing is retried.
 
-#### Local transcription inside the venue
+#### Local transcription and speech inside the venue
 
-`"engine": "local"` transcribes inside the venue's own JVM with sherpa-onnx, so
-audio never leaves the machine and no server is needed. It runs on glibc Linux
-(x64, arm64), macOS (Apple Silicon, Intel) and Windows x64; not on musl systems
-such as the Alpine Docker image, where `engines` says so. It does not speak yet:
-`speak` refuses while the local engine is configured.
+`"engine": "local"` transcribes, and `"speakEngine": "local"` speaks, inside the
+venue's own JVM with sherpa-onnx, so neither audio nor text leaves the machine
+and no server is needed. With `engine: "local"` alone the local engine does
+both; set `speakEngine: "openai"` to keep transcription here and have a provider
+speak, or `engine: "openai"` with `speakEngine: "local"` for the other way about.
+It runs on glibc Linux (x64, arm64), macOS (Apple Silicon, Intel) and Windows
+x64; not on musl systems such as the Alpine Docker image, where `engines` says
+so.
 
 ```json
 {
@@ -2201,6 +2218,8 @@ such as the Alpine Docker image, where `engines` says so. It does not speak yet:
       "engine": "local",
       "local": {
         "transcribeModel": "parakeet-tdt-v3",
+        "speakModel": "vits-ljs",
+        "voice": "0",
         "nativePath": "/opt/covia/speech-natives",
         "prefetch": true
       }
@@ -2214,6 +2233,22 @@ such as the Alpine Docker image, where `engines` says so. It does not speak yet:
   (English, smaller). The venue fetches the model once, file by file at a pinned
   revision and SHA-256, the first time it is needed (or at start with
   `prefetch: true`); `engines` shows the progress. Only the configured model runs.
+- `speakModel` — the voice. Neither needs espeak-ng data, so nothing is unpacked
+  and nothing under the GPL is loaded. Fetched the same way, when first needed or
+  on `prepare {for: "speak"}`; `engines` shows it as `voiceModel` and `voiceState`.
+  - `vits-ljs` (default; English, one voice, about 115 MB, Apache-2.0). It says
+    the words of its lexicon, and sherpa-onnx would drop any other without a
+    sound, so the venue first makes the text sayable: numbers, currency and
+    common symbols become words and accents fold; a Latin word the lexicon lacks
+    is spelled letter by letter and named in the result's `spelled`; anything
+    else fails the request, naming it. Nothing is passed over quietly.
+  - `supertonic-3` (31 languages, several voices, about 145 MB). It reads text
+    as characters, so it says any word, faster and better than `vits-ljs`; its
+    model is OpenRAIL-M, an open licence with use-based restrictions that pass
+    to anyone using it.
+- `voice` — the default voice, a number from 0; a caller may name another per
+  call. A caller's `language` (default `en`) tells `supertonic-3` what language
+  the text is in; `vits-ljs` speaks English only.
 - `nativePath` — a directory holding sherpa-onnx 1.13.8's native libraries for the
   platform (`onnxruntime` and `sherpa-onnx-jni`), installed by the operator or
   embedder; signed copies are fine. Alternatively `fetchNatives: true` lets the
@@ -2229,12 +2264,19 @@ and `engines` reports `nativeAccess: false`. A note longer than 30 seconds is
 split on its pauses; notes over 10 minutes are refused. WAV, raw PCM and Ogg/Opus
 voice notes are read; other formats are refused. The model is loaded when first
 used, takes about 1 GB of memory outside the Java heap, decodes one note at a
-time, and is released after 5 minutes unused.
+time, and is released after 5 minutes unused. The voice speaks 16-bit mono WAV
+at its own rate (22.05 kHz for `vits-ljs`, 44.1 kHz for `supertonic-3`) and nothing else, so `speak` and `say` default to
+`wav` here and refuse other formats; it is loaded and released the same way, and
+shares the one native thread with transcription, so one waits for the other.
 
 Credits: sherpa-onnx (Apache-2.0; its Java API is vendored in the module with its
 licence), ONNX Runtime (MIT), Silero VAD (MIT), Concentus (BSD), Parakeet TDT
-(CC-BY-4.0, NVIDIA), Moonshine (MIT, Useful Sensors). The models are fetched by
-the venue from Hugging Face, not distributed with Covia.
+(CC-BY-4.0, NVIDIA), Moonshine (MIT, Useful Sensors), VITS LJSpeech (Apache-2.0
+as published for sherpa-onnx; VITS is MIT, LJSpeech public domain, its lexicon
+from the CMU Pronouncing Dictionary, BSD), Supertonic (model
+OpenRAIL-M, Supertone: open use with use-based restrictions that pass to anyone
+using it). The models are fetched by the venue from Hugging Face, not
+distributed with Covia.
 
 ### Telegram bots (covia-telegram)
 

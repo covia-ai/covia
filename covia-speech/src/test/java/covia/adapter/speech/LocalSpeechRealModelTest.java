@@ -15,7 +15,8 @@ import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
  * The local engine for real: sherpa-onnx's pinned libraries fetched for this platform,
  * the smallest model (Moonshine tiny, about 124 MB) fetched, and the model's own pinned
  * recordings transcribed, as WAV at 16 kHz and 8 kHz and re-encoded as an Ogg/Opus
- * voice note.
+ * voice note; and the pinned voice (Supertonic 3, about 145 MB) fetched, its speech
+ * heard back. Nothing is played.
  *
  * <p><b>Opt-in</b>, like the venue's {@code @IntegrationTest}: it reaches the network and
  * loads native code, so it runs only with {@code -Dcovia.tests.integration=true}. The
@@ -89,6 +90,35 @@ class LocalSpeechRealModelTest {
 			assertTrue(dictated.contains("yellow lamps") && dictated.contains("nightfall"), "dictated: " + dictated);
 		} finally {
 			engine.close();
+		}
+	}
+
+	@Test void eachVoiceSaysWhatIsHeardBack() throws Exception {
+		for (SpeechModels.Model voice : SpeechModels.VOICES) {
+			LocalSpeechEngine engine = new LocalSpeechEngine(SpeechModels.byId("moonshine-tiny"), voice,
+				null, true, () -> CACHE, 2, new NativeLibraries(), LocalSpeechEngine.Sherpa::new, LocalSpeechEngine.SherpaVoice::new);
+			try {
+				long started = System.nanoTime();
+				SpeechEngine.Speech speech = engine.speak(new SpeechEngine.SpeakRequest(
+					"The yellow lamps would light up here and there, at 4 o'clock, for Brightside.",
+					null, null, "wav", null, null, null), null);
+				long ms = (System.nanoTime() - started) / 1_000_000;
+				java.nio.ByteBuffer wav = java.nio.ByteBuffer.wrap(speech.bytes()).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+				double seconds = wav.getInt(40) / 2.0 / wav.getInt(24);
+				System.out.printf("speech: %s: %.2f s of audio at %d Hz in %d ms (first use, fetching and loading included); spelled %s%n",
+					voice.id(), seconds, wav.getInt(24), ms, speech.spelled());
+				assertTrue(seconds > 1 && seconds < 15, "a sentence's worth: " + seconds);
+				started = System.nanoTime();
+				engine.speak(new SpeechEngine.SpeakRequest("And again, now that the voice is loaded.", null, "0", "wav", null, null, null), null);
+				System.out.printf("speech: %s: again in %d ms%n", voice.id(), (System.nanoTime() - started) / 1_000_000);
+				String heard = text(engine, speech.bytes());
+				System.out.printf("speech: %s: heard back \"%s\"%n", voice.id(), heard);
+				assertTrue(heard.contains("yellow lamps"), voice.id() + " heard back: " + heard);
+				assertTrue(heard.contains("four") || heard.contains("4"), voice.id() + " says the number: " + heard);
+				assertEquals("ready", String.valueOf(convex.core.lang.RT.getIn(engine.status(), "voiceState")));
+			} finally {
+				engine.close();
+			}
 		}
 	}
 

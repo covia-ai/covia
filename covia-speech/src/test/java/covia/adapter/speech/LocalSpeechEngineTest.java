@@ -31,7 +31,8 @@ import covia.exception.JobFailedException;
  * The local engine without sherpa-onnx's natives: a long note is split on its pauses
  * into pieces of at most 30 seconds; the model's files are fetched once, pinned; the
  * libraries come from nativePath or a fetched pinned pack and load from a fresh copy,
- * ONNX Runtime first; anything unpinned, unconfigured or unspoken is refused.
+ * ONNX Runtime first; a voice is fetched the same way and speaks 16-bit WAV at its own
+ * rate; anything unpinned, unconfigured or unspoken is refused.
  */
 class LocalSpeechEngineTest {
 
@@ -134,6 +135,140 @@ class LocalSpeechEngineTest {
 	static SpeechEngine.Audio wav(double seconds) {
 		return new SpeechEngine.Audio(AudioDecoderTest.header(new byte[(int) (seconds * AudioDecoder.RATE) * 2], AudioDecoder.RATE, 1, 1, 16),
 			"audio/wav", "audio.wav");
+	}
+
+	/** A one-file voice model served here, pinned to what is served. */
+	SpeechModels.Model voice(byte[] content) throws Exception {
+		served.put("/voice/voice.bin", content);
+		return new SpeechModels.Model("test-voice", "Test voice", "English", "MIT", SpeechModels.Kind.SUPERTONIC,
+			List.of(new SpeechModels.ModelFile("voice.bin", url("/voice/voice.bin"), content.length, sha256(content))));
+	}
+
+	/** A synthesiser with three voices that says a hundred samples a character, at 24 kHz, and remembers how it was asked. */
+	static final class Saying implements LocalSpeechEngine.Speaker {
+		final List<String> asked = new CopyOnWriteArrayList<>();
+		volatile float level = 0.5f;
+		@Override public int voices() { return 3; }
+		@Override public LocalSpeechEngine.Said say(String text, int sid, float speed, String language) {
+			asked.add(text + "|" + sid + "|" + speed + "|" + language);
+			float[] samples = new float[text.length() * 100];
+			java.util.Arrays.fill(samples, level);
+			return new LocalSpeechEngine.Said(samples, 24_000);
+		}
+		@Override public void close() {}
+	}
+
+	/** An engine that only speaks, with {@code speaker} for its voice. */
+	LocalSpeechEngine speaking(SpeechModels.Model voice, LocalSpeechEngine.Speaker speaker) throws Exception {
+		return new LocalSpeechEngine(null, voice, installedLibraries(), false, () -> temp.resolve("cache"), 2,
+			new NativeLibraries(NativeLibraries.PACKS, loaded::add), (m, d, t) -> new Counting(), (m, d, t) -> speaker);
+	}
+
+	static SpeechEngine.SpeakRequest wavOf(String text, String voice, Double speed, String language) {
+		return new SpeechEngine.SpeakRequest(text, null, voice, "wav", speed, null, language);
+	}
+
+	@Test void aVoiceIsFetchedPinnedAndSpeaksWavAtItsOwnRate() throws Exception {
+		byte[] style = "pinned voice".getBytes(StandardCharsets.UTF_8);
+		Saying speaker = new Saying();
+		LocalSpeechEngine engine = speaking(voice(style), speaker);
+		try {
+			assertEquals(convex.core.data.prim.CVMBool.TRUE, RT.getIn(engine.status(), "speaks"));
+			assertEquals(convex.core.data.prim.CVMBool.FALSE, RT.getIn(engine.status(), "transcribes"));
+			assertEquals("not downloaded", RT.getIn(engine.status(), "voiceState").toString());
+			assertNull(RT.getIn(engine.status(), "state"), "nothing to transcribe with, so no readiness for it");
+			assertEquals("test-voice", RT.getIn(engine.status(), "voiceModel", "id").toString());
+
+			SpeechEngine.Speech speech = engine.speak(wavOf("Hello", "2", 1.5, null), null);
+			assertEquals("audio/wav", speech.mediaType());
+			java.nio.ByteBuffer wav = java.nio.ByteBuffer.wrap(speech.bytes()).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+			assertEquals("RIFF", new String(speech.bytes(), 0, 4, StandardCharsets.US_ASCII));
+			assertEquals(24_000, wav.getInt(24), "at the voice's own rate");
+			assertEquals(1, wav.getShort(22), "mono");
+			assertEquals(16, wav.getShort(34), "16-bit");
+			assertEquals(500 * 2, wav.getInt(40), "every sample");
+			assertEquals(Math.round(0.5f * Short.MAX_VALUE), wav.getShort(44));
+			assertEquals(List.of("Hello|2|1.5|" + LocalSpeechEngine.DEFAULT_LANGUAGE), speaker.asked, "voice, speed and the default language");
+
+			assertArrayEquals(style, Files.readAllBytes(temp.resolve("cache/models/test-voice/voice.bin")));
+			assertEquals("ready", RT.getIn(engine.status(), "voiceState").toString());
+			engine.speak(new SpeechEngine.SpeakRequest("Bonjour", "test-voice", null, "wav", null, "ignored", "fr"), null);
+			assertEquals("Bonjour|0|1.0|fr", speaker.asked.get(1), "voice 0 when none is named; instructions ignored");
+
+			speaker.level = 3f;
+			java.nio.ByteBuffer loud = java.nio.ByteBuffer.wrap(engine.speak(wavOf("x", null, null, null), null).bytes())
+				.order(java.nio.ByteOrder.LITTLE_ENDIAN);
+			assertEquals(Short.MAX_VALUE, loud.getShort(44), "clipped, not wrapped");
+		} finally {
+			engine.close();
+		}
+	}
+
+	@Test void aLexiconVoiceIsGivenOnlyWordsItHasAndSaysWhatItSpelled() throws Exception {
+		byte[] lexicon = String.join("\n", "the t ə", "meeting m i t ɪ ŋ", "is ɪ z", "at æ t", "four f ɔ ɹ", "a e ɪ", "p p i",
+			"i a ɪ", "").getBytes(StandardCharsets.UTF_8);
+		served.put("/lexicon/lexicon.txt", lexicon);
+		SpeechModels.Model vits = new SpeechModels.Model("test-lexicon", "Test lexicon voice", "English", "Apache-2.0",
+			SpeechModels.Kind.VITS, List.of(new SpeechModels.ModelFile("lexicon.txt", url("/lexicon/lexicon.txt"), lexicon.length, sha256(lexicon))));
+		Saying speaker = new Saying();
+		LocalSpeechEngine engine = speaking(vits, speaker);
+		try {
+			SpeechEngine.Speech speech = engine.speak(wavOf("The meeting is at 4. API", null, null, null), null);
+			assertEquals(List.of("the meeting is at four. a p i|0|1.0|en"), speaker.asked, "every word one the voice has");
+			assertEquals(List.of("API"), speech.spelled(), "and what was spelled is said to have been");
+			assertEquals(Lexicon.UNSAYABLE.formatted("東京"), assertThrows(JobFailedException.class,
+				() -> engine.speak(wavOf("The meeting is at 東京", null, null, null), null)).getMessage(), "fails loudly");
+			assertEquals(LocalSpeechEngine.ENGLISH_ONLY.formatted("test-lexicon"), assertThrows(IllegalArgumentException.class,
+				() -> engine.speak(wavOf("the", null, null, "fr"), null)).getMessage());
+			assertEquals(1, speaker.asked.size(), "nothing it could not say reached the voice");
+		} finally {
+			engine.close();
+		}
+	}
+
+	@Test void aVoiceRefusesWhatItCannotSay() throws Exception {
+		Saying speaker = new Saying();
+		LocalSpeechEngine engine = speaking(voice("v".getBytes(StandardCharsets.UTF_8)), speaker);
+		try {
+			assertEquals(LocalSpeechEngine.WAV_ONLY, assertThrows(IllegalArgumentException.class,
+				() -> engine.speak(new SpeechEngine.SpeakRequest("hi", null, null, "opus", null, null, null), null)).getMessage());
+			assertEquals(LocalSpeechEngine.OTHER_MODEL.formatted("test-voice"), assertThrows(IllegalArgumentException.class,
+				() -> engine.speak(new SpeechEngine.SpeakRequest("hi", "supertonic-3", null, "wav", null, null, null), null)).getMessage(),
+				"a caller cannot make the venue fetch another voice");
+			assertEquals(LocalSpeechEngine.VOICE_NUMBER, assertThrows(IllegalArgumentException.class,
+				() -> engine.speak(wavOf("hi", "alloy", null, null), null)).getMessage());
+			assertEquals(LocalSpeechEngine.NO_SUCH_VOICE.formatted("test-voice", 2), assertThrows(IllegalArgumentException.class,
+				() -> engine.speak(wavOf("hi", "3", null, null), null)).getMessage());
+			assertEquals(LocalSpeechEngine.NOTHING_SAID, assertThrows(JobFailedException.class,
+				() -> engine.speak(wavOf("", null, null, null), null)).getMessage(), "no audio is not speech");
+			assertEquals(1, speaker.asked.size(), "only what reached the voice was said");
+
+			assertEquals(LocalSpeechEngine.TRANSCRIBE_UNAVAILABLE, assertThrows(JobFailedException.class,
+				() -> engine.transcribe(wav(1), "test-model", null, null, null)).getMessage(), "it only speaks");
+			assertEquals(LocalSpeechEngine.TRANSCRIBE_UNAVAILABLE, assertThrows(JobFailedException.class, engine::prepare).getMessage());
+			assertEquals(LocalSpeechEngine.TRANSCRIBE_UNAVAILABLE, assertThrows(JobFailedException.class, engine::dictate).getMessage());
+		} finally {
+			engine.close();
+		}
+	}
+
+	@Test void oneEngineTranscribesAndSpeaksWithAModelForEach() throws Exception {
+		Saying speaker = new Saying();
+		LocalSpeechEngine engine = new LocalSpeechEngine(model("tokens".getBytes(StandardCharsets.UTF_8)), voice("v".getBytes(StandardCharsets.UTF_8)),
+			installedLibraries(), false, () -> temp.resolve("cache"), 2, new NativeLibraries(NativeLibraries.PACKS, loaded::add),
+			(m, d, t) -> new Counting(), (m, d, t) -> speaker);
+		try {
+			engine.prepareVoice();
+			assertEquals("ready", RT.getIn(engine.status(), "voiceState").toString());
+			assertEquals("not downloaded", RT.getIn(engine.status(), "state").toString(), "getting the voice ready fetches no transcription model");
+			engine.prepare();
+			assertEquals("ready", RT.getIn(engine.status(), "state").toString());
+			assertEquals(2, loaded.size(), "the libraries load once for both");
+			assertEquals("heard1", engine.transcribe(wav(1), "test-model", null, null, null).text());
+			assertEquals("audio/wav", engine.speak(wavOf("hi", null, null, null), null).mediaType());
+		} finally {
+			engine.close();
+		}
 	}
 
 	@Test void aLongNoteIsSplitOnItsPausesIntoPiecesOfAtMostThirtySeconds() throws Exception {
@@ -287,7 +422,8 @@ class LocalSpeechEngineTest {
 			assertEquals(LocalSpeechEngine.OTHER_MODEL.formatted("test-model"), assertThrows(IllegalArgumentException.class,
 				() -> engine.transcribe(wav(1), "parakeet-tdt-v3", null, null, null)).getMessage());
 			assertEquals(LocalSpeechEngine.SPEAK_UNAVAILABLE, assertThrows(JobFailedException.class,
-				() -> engine.speak(new SpeechEngine.SpeakRequest("hi", null, null, "opus", null, null), null)).getMessage());
+				() -> engine.speak(new SpeechEngine.SpeakRequest("hi", null, null, "wav", null, null, null), null)).getMessage(),
+				"an engine with no voice does not speak");
 		} finally {
 			engine.close();
 		}

@@ -1,6 +1,6 @@
 {
   "name": "Speak text",
-  "description": "Synthesises speech from text and stores it as an audio file, by default Ogg/Opus (the format of a voice note) in the caller's private DLFS speech drive. Returns {ref, mediaType, size, fileName, format, voice, model, engine}; the ref can be sent as a Telegram voice note.",
+  "description": "Synthesises speech from text and stores it as an audio file in the caller's private DLFS speech drive: by default Ogg/Opus (the format of a voice note), or WAV from the local engine, which makes nothing else. Returns {ref, mediaType, size, fileName, format, voice, model, engine}; an Ogg/Opus ref can be sent as a Telegram voice note. To play speech at once without storing it, use speech:say.",
   "operation": {
     "adapter": "speech:speak",
     "readOnly": false,
@@ -19,23 +19,26 @@
         },
         "voice": {
           "type": "string",
-          "description": "Voice name; defaults to the venue's configured voice."
+          "description": "Voice: a name for a provider elsewhere, a number such as 0 for the local engine; defaults to the venue's configured voice."
         },
         "model": {
           "type": "string",
-          "description": "Speech model; defaults to the venue's configured model."
+          "description": "Speech model; defaults to the venue's configured model, the only one the local engine runs."
         },
         "format": {
           "type": "string",
           "enum": ["opus", "mp3", "aac", "flac", "wav"],
-          "default": "opus",
-          "description": "Audio format; opus is Ogg/Opus, as voice notes are."
+          "description": "Audio format; opus (the default, except from the local engine) is Ogg/Opus, as voice notes are. The local engine makes wav only."
         },
         "speed": {
           "type": "number",
           "minimum": 0.25,
           "maximum": 4,
           "description": "Speaking rate; 1 is normal."
+        },
+        "language": {
+          "type": "string",
+          "description": "The text's language as a code such as en or fr, for the local engine (default en); others ignore it."
         },
         "instructions": {
           "type": "string",

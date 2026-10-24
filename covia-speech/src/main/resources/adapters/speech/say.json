@@ -1,0 +1,66 @@
+{
+  "name": "Say text",
+  "description": "Synthesises speech from text and returns it inline as base64 bytes, for an app that plays it at once. Nothing is stored and the operation is a read, so no job record keeps the words or the audio. The local engine speaks WAV (its default) with a numbered voice; another engine's default format is Ogg/Opus. Returns {bytes, size, mediaType, format, voice, model, engine}. To keep the audio as a file, such as a voice note to send, use speech:speak.",
+  "operation": {
+    "adapter": "speech:say",
+    "readOnly": true,
+    "secretKey": "OPENAI_API_KEY",
+    "secretFields": ["apiKey"],
+    "input": {
+      "type": "object",
+      "required": ["text"],
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "description": "What to say."
+        },
+        "voice": {
+          "type": "string",
+          "description": "Voice: a name for a provider elsewhere, a number such as 0 for the local engine; defaults to the venue's configured voice."
+        },
+        "model": {
+          "type": "string",
+          "description": "Speech model; defaults to the venue's configured model, the only one the local engine runs."
+        },
+        "format": {
+          "type": "string",
+          "enum": ["opus", "mp3", "aac", "flac", "wav"],
+          "description": "Audio format: wav from the local engine, which makes nothing else; opus (Ogg/Opus) by default elsewhere."
+        },
+        "speed": {
+          "type": "number",
+          "minimum": 0.25,
+          "maximum": 4,
+          "description": "Speaking rate; 1 is normal."
+        },
+        "language": {
+          "type": "string",
+          "description": "The text's language as a code such as en or fr, for the local engine (default en); others ignore it."
+        },
+        "instructions": {
+          "type": "string",
+          "description": "Optional guidance on tone or delivery, for models that take it; the local engine does not."
+        },
+        "apiKey": {
+          "type": "string",
+          "description": "Optional s/NAME reference to the caller's own key; by default the operator's key, else the caller's s/OPENAI_API_KEY, else none. The local engine needs none."
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "bytes": { "type": "string", "description": "The audio, base64-encoded." },
+        "size": { "type": "integer" },
+        "mediaType": { "type": "string" },
+        "format": { "type": "string" },
+        "voice": { "type": "string" },
+        "model": { "type": "string" },
+        "engine": { "type": "string" }
+      }
+    }
+  }
+}

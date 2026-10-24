@@ -11,6 +11,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 
@@ -27,19 +28,29 @@ import convex.core.data.prim.CVMLong;
 import covia.exception.JobFailedException;
 
 /**
- * Speech recognised inside the venue's JVM by sherpa-onnx: no audio leaves the machine.
- * The model is fetched once (pinned), loaded when first needed and released after a
+ * Speech recognised and spoken inside the venue's JVM by sherpa-onnx: no audio or text
+ * leaves the machine. Each model (one to transcribe, one voice to speak; either may be
+ * absent) is fetched once (pinned), loaded when first needed and released after a
  * quiet spell; a note longer than 30 seconds is split on its pauses, and a
- * {@linkplain Dictation dictation} is heard as it is spoken. Native work runs on
- * one platform thread of its own, one decode at a time, so a long decode never holds a
- * virtual thread's carrier.
+ * {@linkplain Dictation dictation} is heard as it is spoken. Speech comes out as WAV.
+ * Native work runs on one platform thread of its own, one decode or synthesis at a
+ * time, so a long one never holds a virtual thread's carrier.
  */
 final class LocalSpeechEngine implements SpeechEngine {
 	private static final Logger log = LoggerFactory.getLogger(LocalSpeechEngine.class);
 
 	public static final String NAME = "local";
-	public static final String SPEAK_UNAVAILABLE = "The local speech engine does not speak yet; use the openai-compatible engine for speech";
+	public static final String SPEAK_UNAVAILABLE = "The local speech engine is not set to speak; set adapters.speech.speakEngine to local";
+	public static final String TRANSCRIBE_UNAVAILABLE = "The local speech engine is not set to transcribe; set adapters.speech.engine to local";
 	public static final String OTHER_MODEL = "The local speech engine runs only its configured model, %s";
+	public static final String WAV_ONLY = "The local speech engine speaks only wav";
+	public static final String VOICE_NUMBER = "voice must be the number of one of the model's voices, such as 0";
+	public static final String NO_SUCH_VOICE = "%s has voices 0 to %d";
+	public static final String NOTHING_SAID = "The local speech engine made no audio of that text; check its language";
+	public static final String ENGLISH_ONLY = "%s speaks English only";
+	public static final String SPEECH_TOO_LARGE = "The speech exceeds the 20 MiB limit; say less at once";
+	/** The language a voice speaks when the caller names none. */
+	public static final String DEFAULT_LANGUAGE = "en";
 	public static final String NOT_READY = "The local speech engine is not ready: %s";
 	/** Pieces longer than this are decoded apart: memory grows with what is decoded at once. */
 	static final int WHOLE_SECONDS = 30;
@@ -79,15 +90,35 @@ final class LocalSpeechEngine implements SpeechEngine {
 	/** Opens a backend over a ready model's directory. */
 	interface Backends { Backend open(SpeechModels.Model model, Path directory, int threads); }
 
+	/** What the engine needs from a speech synthesiser; sherpa-onnx in use, a fake in tests. */
+	interface Speaker extends AutoCloseable {
+		/** How many voices the model has, numbered from 0. */
+		int voices();
+		/** {@code text} said by voice {@code sid}, {@code speed} times as fast as usual, in {@code language}. */
+		Said say(String text, int sid, float speed, String language);
+		@Override void close();
+	}
+
+	/** Synthesised speech: samples from -1 to 1 at {@code rate} per second. */
+	record Said(float[] samples, int rate) {}
+
+	/** Opens a speaker over a ready voice model's directory. */
+	interface Speakers { Speaker open(SpeechModels.Model model, Path directory, int threads); }
+
+	/** The model it transcribes with, or null when it only speaks. */
 	private final SpeechModels.Model model;
+	/** The model it speaks with, or null when it only transcribes. */
+	private final SpeechModels.Model voice;
 	private final Path nativePath;
 	private final boolean fetchNatives;
 	private final Supplier<Path> cache;
 	private final int threads;
 	private final NativeLibraries natives;
 	private final Backends backends;
+	private final Speakers speakers;
 	private final PinnedDownload download = new PinnedDownload();
 	private final AtomicLong modelProgress = new AtomicLong();
+	private final AtomicLong voiceProgress = new AtomicLong();
 	private final AtomicLong nativeProgress = new AtomicLong();
 	private final ExecutorService worker = Executors.newSingleThreadExecutor(r -> {
 		Thread t = new Thread(r, "speech-local");
@@ -100,30 +131,52 @@ final class LocalSpeechEngine implements SpeechEngine {
 		return t;
 	});
 	private final Object readiness = new Object();
-	private volatile boolean modelReady;
+	private final AtomicBoolean modelReady = new AtomicBoolean();
+	private final AtomicBoolean voiceReady = new AtomicBoolean();
 	private volatile String failure;
+	private volatile String voiceFailure;
 	private Backend backend;
+	private Speaker speaker;
+	/** The voice's lexicon, once read, for a voice that has one. */
+	private volatile Lexicon lexicon;
 	private long lastUse;
+	private long lastSpoke;
 
+	/** An engine that transcribes with {@code model} and does not speak. */
 	LocalSpeechEngine(SpeechModels.Model model, Path nativePath, boolean fetchNatives, Supplier<Path> cache, int threads,
 			NativeLibraries natives, Backends backends) {
+		this(model, null, nativePath, fetchNatives, cache, threads, natives, backends, null);
+	}
+
+	/**
+	 * @param model the model to transcribe with, or null not to transcribe
+	 * @param voice the model to speak with, or null not to speak
+	 */
+	LocalSpeechEngine(SpeechModels.Model model, SpeechModels.Model voice, Path nativePath, boolean fetchNatives,
+			Supplier<Path> cache, int threads, NativeLibraries natives, Backends backends, Speakers speakers) {
 		this.model = model;
+		this.voice = voice;
 		this.nativePath = nativePath;
 		this.fetchNatives = fetchNatives;
 		this.cache = cache;
 		this.threads = threads;
 		this.natives = natives;
 		this.backends = backends;
+		this.speakers = speakers;
 		idle.scheduleWithFixedDelay(this::releaseIfIdle, 60, 60, TimeUnit.SECONDS);
 	}
 
 	@Override public String name() { return NAME; }
 	@Override public boolean local() { return true; }
 	@Override public String endpoint() { return null; }
-	String modelId() { return model.id(); }
+	/** Whether it transcribes, and so hears a dictation. */
+	boolean transcribes() { return model != null; }
+	/** Whether it speaks. */
+	boolean speaks() { return voice != null; }
 
 	@Override
 	public Transcript transcribe(Audio audio, String modelId, String language, String prompt, String key) {
+		if (model == null) throw new JobFailedException(TRANSCRIBE_UNAVAILABLE);
 		if (!model.id().equals(modelId)) throw new IllegalArgumentException(OTHER_MODEL.formatted(model.id()));
 		float[] samples = AudioDecoder.decode(audio.bytes());
 		prepare();
@@ -142,9 +195,71 @@ final class LocalSpeechEngine implements SpeechEngine {
 		return new Transcript(onWorker(heard), null, samples.length / (double) AudioDecoder.RATE);
 	}
 
+	/**
+	 * Speech as 16-bit mono WAV at the voice's own rate. The voice is a number (null is
+	 * voice 0); {@code instructions} are taken by no local voice and are ignored.
+	 */
 	@Override
 	public Speech speak(SpeakRequest request, String key) {
-		throw new JobFailedException(SPEAK_UNAVAILABLE);
+		if (voice == null) throw new JobFailedException(SPEAK_UNAVAILABLE);
+		if (request.model() != null && !voice.id().equals(request.model())) throw new IllegalArgumentException(OTHER_MODEL.formatted(voice.id()));
+		if (!"wav".equals(request.format())) throw new IllegalArgumentException(WAV_ONLY);
+		int sid = voiceNumber(request.voice());
+		float speed = request.speed() == null ? 1f : request.speed().floatValue();
+		String language = request.language() == null ? DEFAULT_LANGUAGE : request.language();
+		if (voice.kind() == SpeechModels.Kind.VITS && !DEFAULT_LANGUAGE.equals(language)) {
+			throw new IllegalArgumentException(ENGLISH_ONLY.formatted(voice.id()));
+		}
+		prepareVoice();
+		// A lexicon voice drops any word it lacks without a sound: make every word sayable first.
+		Lexicon.Sayable sayable = voice.kind() == SpeechModels.Kind.VITS ? lexicon().sayable(request.text())
+			: new Lexicon.Sayable(request.text(), List.of());
+		if (!sayable.spelled().isEmpty()) log.info("speech: spelled out {}", sayable.spelled());
+		Said said = onWorker(worker.submit(() -> {
+			Speaker s = speaker();
+			if (sid >= s.voices()) throw new IllegalArgumentException(NO_SUCH_VOICE.formatted(voice.id(), s.voices() - 1));
+			Said out = s.say(sayable.text(), sid, speed, language);
+			lastSpoke = System.nanoTime();
+			return out;
+		}));
+		if (said.samples().length == 0) throw new JobFailedException(NOTHING_SAID);
+		// Two bytes a sample after a 44-byte header.
+		if (said.samples().length > (SpeechAdapter.MAX_BYTES - 44) / 2) throw new JobFailedException(SPEECH_TOO_LARGE);
+		return new Speech(SpeechAdapter.wav(pcm16(said.samples()), said.rate()), "audio/wav", sayable.spelled());
+	}
+
+	private Lexicon lexicon() {
+		Lexicon l = lexicon;
+		if (l != null) return l;
+		try {
+			l = Lexicon.load(modelDirectory(cache.get(), voice).resolve("lexicon.txt"));
+		} catch (IOException e) {
+			throw new JobFailedException(NOT_READY.formatted(reason(e)));
+		}
+		lexicon = l;
+		return l;
+	}
+
+	private static int voiceNumber(String voice) {
+		if (voice == null) return 0;
+		try {
+			int sid = Integer.parseInt(voice.strip());
+			if (sid < 0) throw new IllegalArgumentException(VOICE_NUMBER);
+			return sid;
+		} catch (NumberFormatException e) {
+			throw new IllegalArgumentException(VOICE_NUMBER);
+		}
+	}
+
+	/** Samples from -1 to 1 as 16-bit little-endian PCM, clipped. */
+	static byte[] pcm16(float[] samples) {
+		byte[] out = new byte[samples.length * 2];
+		for (int i = 0; i < samples.length; i++) {
+			int v = Math.round(Math.max(-1f, Math.min(1f, samples[i])) * Short.MAX_VALUE);
+			out[2 * i] = (byte) v;
+			out[2 * i + 1] = (byte) (v >> 8);
+		}
+		return out;
 	}
 
 	/**
@@ -161,6 +276,7 @@ final class LocalSpeechEngine implements SpeechEngine {
 
 	/** A dictation, ready for its audio; the engine must be {@linkplain #prepare() prepared}. */
 	Dictation dictate() {
+		if (model == null) throw new JobFailedException(TRANSCRIBE_UNAVAILABLE);
 		return new Dictation();
 	}
 
@@ -304,51 +420,95 @@ final class LocalSpeechEngine implements SpeechEngine {
 		}
 	}
 
-	/** Install the libraries and fetch the model, if not yet done; safe to call from many threads. */
+	/**
+	 * Install the libraries and fetch the model it transcribes with, if not yet done;
+	 * safe to call from many threads.
+	 */
 	void prepare() {
-		if (modelReady && natives.loaded()) return;
+		if (model == null) throw new JobFailedException(TRANSCRIBE_UNAVAILABLE);
+		if (modelReady.get() && natives.loaded()) return;
 		synchronized (readiness) {
 			try {
-				Path root = cache.get();
-				Path libraries = natives.install(nativePath, fetchNatives, root, download, nativeProgress);
-				Path directory = modelDirectory(root);
-				for (SpeechModels.ModelFile file : model.files()) {
-					if (!modelReady) download.fetch(file.url(), file.bytes(), file.sha256(), directory.resolve(file.name()), modelProgress);
-				}
-				modelReady = true;
-				if (!natives.loaded()) {
-					Path loads = root.resolve("native").resolve(NativeLibraries.VERSION).resolve("loads");
-					NativeLibraries.sweep(loads);
-					natives.load(libraries, loads);
-				}
+				install(model, modelReady, modelProgress);
 				failure = null;
 			} catch (IOException | RuntimeException | LinkageError e) {
-				failure = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+				failure = reason(e);
 				throw new JobFailedException(NOT_READY.formatted(failure));
 			}
 		}
 	}
 
-	private Path modelDirectory(Path root) {
-		return root.resolve("models").resolve(model.id());
+	/** Install the libraries and fetch the voice it speaks with, if not yet done; safe to call from many threads. */
+	void prepareVoice() {
+		if (voice == null) throw new JobFailedException(SPEAK_UNAVAILABLE);
+		if (voiceReady.get() && natives.loaded()) return;
+		synchronized (readiness) {
+			try {
+				install(voice, voiceReady, voiceProgress);
+				voiceFailure = null;
+			} catch (IOException | RuntimeException | LinkageError e) {
+				voiceFailure = reason(e);
+				throw new JobFailedException(NOT_READY.formatted(voiceFailure));
+			}
+		}
+	}
+
+	/** The libraries in place, {@code m}'s files fetched unless {@code fetched} says they are, then the libraries loaded. */
+	private void install(SpeechModels.Model m, AtomicBoolean fetched, AtomicLong progress) throws IOException {
+		Path root = cache.get();
+		Path libraries = natives.install(nativePath, fetchNatives, root, download, nativeProgress);
+		Path directory = modelDirectory(root, m);
+		for (SpeechModels.ModelFile file : m.files()) {
+			if (!fetched.get()) download.fetch(file.url(), file.bytes(), file.sha256(), directory.resolve(file.name()), progress);
+		}
+		fetched.set(true);
+		if (!natives.loaded()) {
+			Path loads = root.resolve("native").resolve(NativeLibraries.VERSION).resolve("loads");
+			NativeLibraries.sweep(loads);
+			natives.load(libraries, loads);
+		}
+	}
+
+	private static String reason(Throwable e) {
+		return e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+	}
+
+	private static Path modelDirectory(Path root, SpeechModels.Model m) {
+		return root.resolve("models").resolve(m.id());
 	}
 
 	/** Runs on the worker thread only. */
 	private Backend backend() {
 		if (backend == null) {
 			long started = System.nanoTime();
-			backend = backends.open(model, modelDirectory(cache.get()), threads);
+			backend = backends.open(model, modelDirectory(cache.get(), model), threads);
 			log.info("speech: {} loaded in {} ms on {} threads", model.id(), (System.nanoTime() - started) / 1_000_000, threads);
 		}
 		return backend;
 	}
 
+	/** Runs on the worker thread only. */
+	private Speaker speaker() {
+		if (speaker == null) {
+			long started = System.nanoTime();
+			speaker = speakers.open(voice, modelDirectory(cache.get(), voice), threads);
+			log.info("speech: {} loaded in {} ms on {} threads", voice.id(), (System.nanoTime() - started) / 1_000_000, threads);
+		}
+		return speaker;
+	}
+
 	private void releaseIfIdle() {
 		worker.execute(() -> {
-			if (backend != null && System.nanoTime() - lastUse > TimeUnit.MILLISECONDS.toNanos(IDLE_MILLIS)) {
+			long idleNanos = TimeUnit.MILLISECONDS.toNanos(IDLE_MILLIS);
+			if (backend != null && System.nanoTime() - lastUse > idleNanos) {
 				backend.close();
 				backend = null;
 				log.info("speech: {} released after {} minutes unused", model.id(), IDLE_MILLIS / 60_000);
+			}
+			if (speaker != null && System.nanoTime() - lastSpoke > idleNanos) {
+				speaker.close();
+				speaker = null;
+				log.info("speech: {} released after {} minutes unused", voice.id(), IDLE_MILLIS / 60_000);
 			}
 		});
 	}
@@ -381,32 +541,53 @@ final class LocalSpeechEngine implements SpeechEngine {
 		return out;
 	}
 
-	/** What {@code speech:engines} reports: readiness and its reason, never paths. */
+	/**
+	 * What {@code speech:engines} reports: readiness and its reason, never paths. The
+	 * model it transcribes with is {@code model}, ready as {@code state}; the one it
+	 * speaks with is {@code voiceModel}, ready as {@code voiceState}.
+	 */
 	AMap<AString, ACell> status() {
 		String unsupported = natives.unsupported();
-		boolean ready = modelReady && natives.loaded();
-		String state = ready ? "ready" : modelProgress.get() > 0 && failure == null ? "downloading"
-			: present() ? "downloaded" : "not downloaded";
 		AMap<AString, ACell> status = Maps.of(
 			"name", NAME,
 			"local", CVMBool.TRUE,
-			"transcribeModel", model.id(),
-			"model", Maps.of("id", model.id(), "label", model.label(), "languages", model.languages(),
-				"licence", model.licence(), "bytes", CVMLong.create(model.bytes()), "downloaded", CVMLong.create(Math.min(modelProgress.get(), model.bytes()))),
-			"state", state,
 			"nativeAccess", CVMBool.create(NativeLibraries.nativeAccessEnabled()),
-			"speaks", CVMBool.FALSE,
+			"transcribes", CVMBool.create(model != null),
+			"speaks", CVMBool.create(voice != null),
 			"keyed", CVMBool.FALSE);
-		String reason = unsupported != null ? unsupported : failure;
-		if (reason != null) status = status.assoc(Strings.intern("reason"), Strings.create(reason));
+		if (model != null) {
+			status = status.assoc(Strings.intern("transcribeModel"), Strings.create(model.id()))
+				.assoc(Strings.intern("model"), describe(model, modelProgress))
+				.assoc(Strings.intern("state"), Strings.create(state(model, modelReady, modelProgress, failure)));
+			String reason = unsupported != null ? unsupported : failure;
+			if (reason != null) status = status.assoc(Strings.intern("reason"), Strings.create(reason));
+		}
+		if (voice != null) {
+			status = status.assoc(Strings.intern("speakModel"), Strings.create(voice.id()))
+				.assoc(Strings.intern("voiceModel"), describe(voice, voiceProgress))
+				.assoc(Strings.intern("voiceState"), Strings.create(state(voice, voiceReady, voiceProgress, voiceFailure)));
+			String reason = unsupported != null ? unsupported : voiceFailure;
+			if (reason != null) status = status.assoc(Strings.intern("voiceReason"), Strings.create(reason));
+		}
 		return status;
 	}
 
-	/** Whether this engine's files are already in place, without fetching anything. */
-	boolean present() {
+	private static AMap<AString, ACell> describe(SpeechModels.Model m, AtomicLong progress) {
+		return Maps.of("id", m.id(), "label", m.label(), "languages", m.languages(), "licence", m.licence(),
+			"bytes", CVMLong.create(m.bytes()), "downloaded", CVMLong.create(Math.min(progress.get(), m.bytes())));
+	}
+
+	private String state(SpeechModels.Model m, AtomicBoolean ready, AtomicLong progress, String failed) {
+		if (ready.get() && natives.loaded()) return "ready";
+		if (progress.get() > 0 && failed == null) return "downloading";
+		return present(m) ? "downloaded" : "not downloaded";
+	}
+
+	/** Whether a model's files are already in place, without fetching anything. */
+	boolean present(SpeechModels.Model m) {
 		try {
-			Path directory = modelDirectory(cache.get());
-			for (SpeechModels.ModelFile f : model.files()) if (!Files.isRegularFile(directory.resolve(f.name()))) return false;
+			Path directory = modelDirectory(cache.get(), m);
+			for (SpeechModels.ModelFile f : m.files()) if (!Files.isRegularFile(directory.resolve(f.name()))) return false;
 			return true;
 		} catch (RuntimeException e) {
 			return false;
@@ -417,6 +598,8 @@ final class LocalSpeechEngine implements SpeechEngine {
 		worker.execute(() -> {
 			if (backend != null) backend.close();
 			backend = null;
+			if (speaker != null) speaker.close();
+			speaker = null;
 		});
 		worker.shutdown();
 		idle.shutdownNow();
@@ -504,5 +687,46 @@ final class LocalSpeechEngine implements SpeechEngine {
 		}
 
 		@Override public void close() { recogniser.release(); }
+	}
+
+	/** sherpa-onnx's offline synthesiser for a voice model. */
+	static final class SherpaVoice implements Speaker {
+		private final com.k2fsa.sherpa.onnx.OfflineTts tts;
+
+		SherpaVoice(SpeechModels.Model model, Path d, int threads) {
+			com.k2fsa.sherpa.onnx.OfflineTtsModelConfig.Builder config = com.k2fsa.sherpa.onnx.OfflineTtsModelConfig.builder()
+				.setNumThreads(threads).setDebug(false);
+			switch (model.kind()) {
+				case SUPERTONIC -> config.setSupertonic(com.k2fsa.sherpa.onnx.OfflineTtsSupertonicModelConfig.builder()
+					.setDurationPredictor(d.resolve("duration_predictor.int8.onnx").toString())
+					.setTextEncoder(d.resolve("text_encoder.int8.onnx").toString())
+					.setVectorEstimator(d.resolve("vector_estimator.int8.onnx").toString())
+					.setVocoder(d.resolve("vocoder.int8.onnx").toString())
+					.setTtsJson(d.resolve("tts.json").toString())
+					.setUnicodeIndexer(d.resolve("unicode_indexer.bin").toString())
+					.setVoiceStyle(d.resolve("voice.bin").toString()).build());
+				case VITS -> config.setVits(com.k2fsa.sherpa.onnx.OfflineTtsVitsModelConfig.builder()
+					.setModel(d.resolve(model.files().get(0).name()).toString())
+					.setLexicon(d.resolve("lexicon.txt").toString())
+					.setTokens(d.resolve("tokens.txt").toString()).build());
+				default -> throw new IllegalArgumentException(model.id() + " is not a voice");
+			}
+			tts = new com.k2fsa.sherpa.onnx.OfflineTts(com.k2fsa.sherpa.onnx.OfflineTtsConfig.builder().setModel(config.build()).build());
+		}
+
+		/** A single-voice model reports none: it has the one. */
+		@Override public int voices() { return Math.max(1, tts.getNumSpeakers()); }
+
+		@Override public Said say(String text, int sid, float speed, String language) {
+			com.k2fsa.sherpa.onnx.GenerationConfig generation = new com.k2fsa.sherpa.onnx.GenerationConfig();
+			generation.setSid(sid);
+			generation.setSpeed(speed);
+			generation.setExtra(java.util.Map.of("lang", language));
+			com.k2fsa.sherpa.onnx.GeneratedAudio audio = tts.generateWithConfigAndCallback(text, generation,
+				(com.k2fsa.sherpa.onnx.OfflineTtsCallback) samples -> 1);
+			return new Said(audio.getSamples(), audio.getSampleRate());
+		}
+
+		@Override public void close() { tts.release(); }
 	}
 }
