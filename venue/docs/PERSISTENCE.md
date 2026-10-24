@@ -19,7 +19,7 @@ connect to their existing `LatticeHost`, or open an application over their store
 Restart tests use the same host model as production. This is a Java API migration,
 not a change to persisted record formats.
 
-`VenueState`, `Users`, `User`, `AgentState`, `SessionState`, `AuthState`, `ScheduleState`, `AssetStore`, `SecretStore` and
+`VenueState`, `Users`, `User`, `AgentState`, `SessionState`, `JobState`, `AuthState`, `ScheduleState`, `AssetStore`, `SecretStore` and
 `WorkspaceRoot` implement upstream `TransactionalComponent`. Ordinary domain
 mutations are atomic; `transact(draft -> ...)` groups several operations into one
 local commit. Choose the component containing all data the operation reads or
@@ -34,6 +34,15 @@ from the transaction's draft, then perform timers, notifications and network/job
 execution after the outer commit. A commit is not an exactly-once external effect:
 crash-sensitive dispatch still needs its existing durable claim/recovery protocol.
 Do not introduce I/O or runtime service calls inside retryable callbacks.
+
+`user.job(id)` is the primary record of a recorded venue job. Admission creates
+it explicitly; updates only edit an existing row. `VenueJob` reads and mutates
+that component directly, then runs runtime hooks after commit. History edits and
+late cancellation diagnostics share this record, including after runtime-cache
+eviction. There is no persistence callback copying an in-memory record back to
+the lattice. Transient/client handles use local records; a handle whose backing
+row/account was erased may finish locally but cannot recreate storage. See
+[JOBS.md](JOBS.md) for redaction, result and recovery semantics.
 
 `agent.session(id)` is a composable component for an existing session. It owns
 frame history, pending input, summaries, external-turn claims and cycle completion.

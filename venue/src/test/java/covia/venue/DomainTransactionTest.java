@@ -37,6 +37,59 @@ class DomainTransactionTest {
 	private static ACell[] path(String path) { return WorkspaceRoot.parseStringPath(path); }
 
 	@Test
+	void jobHistoryComposesWithWorkspaceAndRetainedDraftsStayIsolated() {
+		var venue = VenueState.create(AKeyPair.generate());
+		var user = venue.users().ensure(DID);
+		var id = Blob.fromHex("01");
+		assertTrue(user.createJob(id, Maps.of(Fields.ID, id, Fields.STATUS, covia.grid.Status.STARTED)));
+		assertFalse(user.createJob(id, Maps.of(Fields.STATUS, covia.grid.Status.FAILED)));
+		AMap<AString, ACell> message = Maps.of(Fields.MESSAGE_ID, "one");
+		var retained = new AtomicReference<JobState>();
+		ACell before = venue.get();
+		assertThrows(IllegalStateException.class, () -> user.transact(draft -> {
+			retained.set(draft.job(id));
+			assertTrue(draft.job(id).appendHistory(message));
+			draft.workspaceRoot().write(path("w/received"), CVMLong.ONE);
+			throw new IllegalStateException();
+		}));
+		assertEquals(before, venue.get());
+		retained.get().appendHistory(Maps.of(Fields.MESSAGE_ID, "late"));
+		assertEquals(before, venue.get());
+		user.transact(draft -> {
+			assertTrue(draft.job(id).appendHistory(message));
+			draft.workspaceRoot().write(path("w/received"), CVMLong.ONE);
+		});
+		assertEquals(convex.core.data.Vectors.of(message), user.getJob(id).get(Fields.HISTORY));
+		assertEquals(CVMLong.ONE, user.workspaceRoot().read(path("w/received")));
+		assertFalse(user.job(id).appendHistory(message));
+	}
+
+	@Test
+	void jobTransactionRetriesAgainstDeletionWithoutRecreatingTheRow() throws Exception {
+		var user = VenueState.create(AKeyPair.generate()).users().ensure(DID);
+		var id = Blob.fromHex("01");
+		user.createJob(id, Maps.of(Fields.ID, id, Fields.STATUS, covia.grid.Status.STARTED));
+		var entered = new CountDownLatch(1);
+		var resume = new CountDownLatch(1);
+		var appended = new AtomicBoolean();
+		try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+			var pending = executor.submit(() -> user.job(id).transact(draft -> {
+				appended.set(draft.appendHistory(Maps.of(Fields.MESSAGE_ID, "raced")));
+				entered.countDown();
+				await(resume);
+			}));
+			try {
+				assertTrue(entered.await(10, TimeUnit.SECONDS));
+				assertTrue(user.removeJob(id));
+			} finally { resume.countDown(); }
+			pending.get(10, TimeUnit.SECONDS);
+		}
+		assertFalse(appended.get());
+		assertNull(user.job(id).getRecord());
+		assertTrue(user.getJobs().isEmpty());
+	}
+
+	@Test
 	void sessionChangesComposeWithAgentChangesAndRollback() {
 		var venue = VenueState.create(AKeyPair.generate());
 		var agent = venue.users().ensure(DID).ensureAgent("sessions", Maps.empty(), null);

@@ -36,11 +36,11 @@ import covia.grid.Operation;
 import covia.grid.Status;
 
 /**
- * Manages job lifecycle, persistence, and in-memory state for active jobs.
+ * Manages job execution, admission, recovery and runtime handles.
  *
  * <p>JobManager is the runtime layer for jobs. It holds an in-memory cache of
- * active (non-terminal) jobs and delegates persistence to per-user lattice
- * storage. Every job has an owner identified by caller DID — there are no
+ * active (non-terminal) handles over primary per-user lattice job components.
+ * Every job has an owner identified by caller DID — there are no
  * anonymous jobs. Venue-internal operations use the venue's own DID.</p>
  *
  * <p>Per-user lattice ({@code :user-data → <DID> → :jobs}) is the single
@@ -54,6 +54,7 @@ import covia.grid.Status;
 public class JobManager {
 
 	private static final Logger log = LoggerFactory.getLogger(JobManager.class);
+	private static final String JOB_ID_EXISTS = "Job ID already exists: ";
 
 	private final Engine engine;
 
@@ -894,9 +895,11 @@ public class JobManager {
 		job.setPreserveFailureCause(resultOriented);
 		synchronized (engine.getAuth()) {
 			engine.getVenueState().users().requireNotDeleted(callerDID);
+			// Create before publishing the runtime handle; updates only edit existing rows.
+			if (!memoryOnly && !job.account().createJob(jobID, status)) {
+				throw new IllegalStateException(JOB_ID_EXISTS + jobID);
+			}
 			activeJobs.put(jobID, job);
-			// Serialise acceptance with the account deletion admission barrier.
-			persistJobRecord(jobID, status, job.account());
 		}
 
 		if (memoryOnly) log.debug("Started transient job: {}", jobID);
@@ -908,7 +911,7 @@ public class JobManager {
 
 	/**
 	 * Gets a snapshot of the current job status data with request context.
-	 * Checks in-memory cache first, falls back to user's lattice.
+	 * Reads the primary lattice record, using a live handle's owner when available.
 	 * @throws AuthException if the caller does not own the job
 	 */
 	public AMap<AString, ACell> getJobData(Blob jobID, RequestContext ctx) {
@@ -918,10 +921,12 @@ public class JobManager {
 		job = activeJobs.get(jobID);
 		if (job != null && !job.isRecorded()) return null;
 		if (job != null) {
-			if (!canReadJob(ctx, jobID, job.getData())) {
+			AMap<AString, ACell> data = ((VenueJob) job).primaryRecord();
+			if (data == null) return null;
+			if (!canReadJob(ctx, jobID, data)) {
 				throw new AuthException("Access denied to job: " + jobID.toHexString());
 			}
-			return job.getData();
+			return data;
 		}
 
 		// 2. User's lattice (authoritative). Scoped to the caller's own jobs;
@@ -1076,16 +1081,13 @@ public class JobManager {
 
 	/**
 	 * Deletes a job permanently with request context: removes the durable
-	 * record from the owning user's job index (mirror of
-	 * {@link #persistJobRecord}) and evicts the active cache.
+	 * record from the owning user's job index and evicts the active cache.
 	 * @throws AuthException if the caller does not own the job
 	 */
 	public boolean deleteJob(Blob id, RequestContext ctx) {
 		AMap<AString, ACell> data = getJobData(id, ctx);
 		if (data == null) return false;
 		requireJobOwner(ctx, id, data); // mutation: owner-only
-		Job live = activeJobs.get(id);
-		if (live instanceof VenueJob venueJob && !venueJob.markDeleted()) return false;
 		AString ownerDID = RT.ensureString(data.get(Fields.CALLER));
 		boolean removed = false;
 		if (ownerDID != null) {
@@ -1093,7 +1095,8 @@ public class JobManager {
 			if (user != null) removed = user.removeJob(id);
 		}
 		// Remove from active cache if present (may already be evicted for terminal jobs)
-		return deleteJob(id) || removed;
+		deleteJob(id);
+		return removed;
 	}
 
 	public boolean deleteJob(Blob id) {
@@ -1176,54 +1179,15 @@ public class JobManager {
 	 */
 	@SuppressWarnings("unchecked")
 	public void appendToHistory(Blob jobID, AMap<AString, ACell> record, RequestContext ctx) {
-		// Read the current record from the active cache, falling back to the
-		// caller's lattice. The ctx-aware read both enforces ownership and finds
-		// a job that has already completed and been evicted from the active
-		// cache — e.g. a synchronously-completing A2A defaultChatOp, which the
-		// old activeJobs-only lookup missed, throwing "Job not found" and
-		// dropping the inbound message from the Task history (#178).
 		AMap<AString, ACell> current = getJobData(jobID, ctx);
-		if (current == null) {
-			throw new IllegalArgumentException("Job not found: " + jobID.toHexString());
+		if (current == null) throw new IllegalArgumentException("Job not found: " + jobID.toHexString());
+		requireJobOwner(ctx, jobID, current);
+		Job live = activeJobs.get(jobID);
+		User user = live instanceof VenueJob job ? job.account()
+			: engine.getVenueState().users().get(ctx.getUserDID());
+		if (user != null && user.job(jobID).appendHistory(record) && live instanceof VenueJob job) {
+			job.historyUpdated();
 		}
-
-		AMap<AString, ACell> newData = appendHistoryRecord(current, record);
-		if (newData == current) return;
-
-		// Write back where the record actually lives: mutate the live job if it
-		// is still active (persisted on completion), otherwise persist the
-		// augmented record straight to the lattice so a finished job's Task
-		// history still carries the inbound message rather than silently losing it.
-		Job job = getJob(jobID);
-		if (job != null) {
-			job.update(data -> appendHistoryRecord(data, record));
-		} else {
-			// Mutate the durable row in place. A concurrent delete either happens
-			// before this update (so no row is recreated) or after it (so deletion
-			// wins); there is no stale whole-record resurrection window.
-			User user = engine.getVenueState().users().get(ctx.getUserDID());
-			if (user != null) {
-				user.updateJobIfPresent(jobID, data -> appendHistoryRecord(data, record));
-			}
-		}
-	}
-
-	/** Appends unless the same caller-provided messageId is already present. */
-	@SuppressWarnings("unchecked")
-	private static AMap<AString, ACell> appendHistoryRecord(
-			AMap<AString, ACell> data, AMap<AString, ACell> record) {
-		ACell histCell = data.get(Fields.HISTORY);
-		AVector<ACell> history = (histCell instanceof AVector<?> v)
-			? (AVector<ACell>) v : convex.core.data.Vectors.empty();
-		ACell messageId = record.get(Fields.MESSAGE_ID);
-		if (messageId != null) {
-			for (long i = 0; i < history.count(); i++) {
-				ACell item = history.get(i);
-				if (item instanceof AMap<?, ?> map
-						&& messageId.equals(map.get(Fields.MESSAGE_ID))) return data;
-			}
-		}
-		return data.assoc(Fields.HISTORY, history.conj(record));
 	}
 
 	// ========== Job Recovery ==========
@@ -1292,8 +1256,8 @@ public class JobManager {
 
 	/**
 	 * Rebuilds a non-terminal Job from its record and registers it as active
-	 * before any verb runs on it: persistence resolves the Job through the
-	 * active cache.
+	 * before any verb runs on it. The handle binds to the existing lattice row;
+	 * recovery never creates or copies a second mutable job record.
 	 */
 	private VenueJob restoreJob(Blob jobID, AMap<AString, ACell> record, AString callerDID) {
 		AMap<AString, ACell> delegation = RT.ensureMap(record.get(RemoteJobs.DELEGATION));
@@ -1344,28 +1308,6 @@ public class JobManager {
 
 	// ========== Persistence ==========
 
-	/**
-	 * Persists a job record to the user's per-user lattice.
-	 * This is the single source of truth for all jobs.
-	 */
-	void persistJobRecord(Blob jobID, AMap<AString, ACell> record, User account) {
-		// Transient (memory-only) Job: the single persistence choke point
-		// is a no-op — nothing about the job ever touches the lattice. The job
-		// is still in the active cache here for every persist trigger (initial
-		// submit, status updates, history appends): terminal eviction happens
-		// AFTER the final persist call.
-		Job j = activeJobs.get(jobID);
-		if (j instanceof VenueJob vj && vj.isMemoryOnly()) return;
-		try {
-			// Cancellation evidence can arrive after terminal eviction, when
-			// deleteJob can no longer mark the old live handle. Fence it atomically
-			// at the lattice row rather than retaining terminal Jobs in memory.
-			account.persistJob(jobID, record, !record.containsKey(Fields.CANCELLATION));
-		} catch (AuthException deleted) {
-			// An account cursor is invalidated by erasure; late Job updates must
-			// still settle their in-memory futures without persisting old data.
-		}
-	}
 
 	User account(AString did) { return engine.getVenueState().users().ensure(did); }
 

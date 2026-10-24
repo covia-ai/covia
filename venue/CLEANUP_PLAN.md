@@ -39,31 +39,18 @@ composes child edits with tasks, status and timeline through upstream transactio
 Record formats remain unchanged. Tests cover failed-completion rollback, retained
 draft isolation, concurrent deletion and summary admission after a concurrent stop.
 
-Jobs are the next design target; the following changes are **not implemented**:
+Recorded jobs now use `user.job(id)` (`JobState`) as their primary record.
+`VenueJob` has no independently updated live record and no persistence callback;
+its hooks run after the lattice update. Admission creates the row explicitly,
+and updates cannot recreate it. History appends share one path for active and
+completed jobs, fixing both reproduced history-loss cases. `JobManager` retains
+execution, recovery, permits and dispatch. Futures, original outputs, typed
+failures and subscriptions remain runtime state. Transient/client records stay
+local, and erased handles may finish detached without restoring storage.
 
-- Replace the live `Job` record plus `VenueJob.onUpdate` persistence copy with one
-  authoritative lattice record for recorded venue jobs. A `user.job(id)` component
-  should own transitions, history and late cancellation evidence, with explicit
-  creation and updates that cannot recreate a deleted row.
-- Keep `JobManager` responsible for execution, recovery, permits and dispatch.
-  Futures, typed failures, original secret-bearing results, cancellation hooks and
-  subscriptions remain runtime concerns. Transient calls and remote client handles
-  still need their current non-persistent semantics.
-- Consolidate active and completed history edits. Currently an append can find an
-  active handle just as it becomes terminal; `Job.update` then refuses the append
-  without trying the durable row. Also, late cancellation evidence copies an older
-  in-memory record over the durable row, preserving `temp` but not independently
-  appended history. Both paths were reproduced against the packaged experimental
-  venue with synthetic jobs. Field-level updates against one record remove both
-  hazards.
-- Preserve terminal-state stickiness, redaction, account-generation guards and
-  restart behaviour. Run external effects only after the enclosing transaction
-  commits, and retain the distinction between local commit and store flush. Use
-  upstream cursor/transaction APIs; do not add a second transaction framework.
-
-Start with regression tests for completion/history and late-cancellation/history
-interleavings, then settle the boundary between the persistent component and the
-runtime handle before changing the shared `covia-core` client API.
+Tests cover terminal/history interleaving, late cancellation/history, primary
+record edits, transaction rollback and retained drafts, concurrent deletion,
+secret redaction and account-generation guards. Job record formats are unchanged.
 
 ---
 

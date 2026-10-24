@@ -635,6 +635,64 @@ public class JobManagerTest {
 	}
 
 	@Test
+	public void testLiveJobEditsPreservePrimaryRecordChanges() {
+		Job job = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), ctx);
+		User user = engine.getVenueState().users().get(did);
+		AMap<AString, ACell> message = Maps.of(Fields.MESSAGE_ID, "component-edit");
+		user.transact(draft -> {
+			draft.job(job.getID()).appendHistory(message);
+			draft.job(job.getID()).update(data -> data.assoc(Strings.intern("temp"), Maps.of("kept", true)));
+		});
+		assertEquals(user.getJob(job.getID()), job.getData());
+		job.setStatus(Status.INPUT_REQUIRED);
+		assertEquals(Vectors.of(message), job.getData().get(Fields.HISTORY));
+		assertEquals(Maps.of("kept", true), job.getData().get(Strings.intern("temp")));
+		AuthException rejection = new AuthException("test updater rejection");
+		assertSame(rejection, assertThrows(AuthException.class, () -> job.update(data -> { throw rejection; })));
+		job.cancel();
+	}
+
+	@Test
+	public void testPrimaryRecordRedactsSecretsButAwaiterReceivesOriginalOutput() {
+		AString token = Strings.create("token");
+		AMap<AString, ACell> meta = Maps.of(Fields.OPERATION, Maps.of(
+			Fields.ADAPTER, "test:echo", Strings.create("secretFields"), Vectors.of(token)));
+		AMap<AString, ACell> input = Maps.of(token, "private-test-value");
+		Job job = engine.jobs().invokeOperation(meta, input, ctx);
+		assertEquals(input, job.awaitResult(5000));
+		assertEquals(input, job.getOutput());
+		AMap<AString, ACell> primary = engine.getVenueState().users().get(did).job(job.getID()).getRecord();
+		assertEquals(primary, job.getData());
+		assertEquals(Fields.HIDDEN, RT.getIn(primary, Fields.INPUT, token));
+		assertEquals(Fields.HIDDEN, RT.getIn(primary, Fields.OUTPUT, token));
+		assertFalse(primary.toString().contains("private-test-value"), "predecessors must not retain plaintext either");
+	}
+
+	@Test
+	public void testHistoryAppendDuringTerminalNotificationIsRetained() {
+		Job job = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), ctx);
+		AMap<AString, ACell> message = Maps.of(Fields.MESSAGE_ID, "during-completion");
+		job.subscribe(updated -> {
+			if (updated.isFinished()) engine.jobs().appendToHistory(job.getID(), message, ctx);
+		});
+		job.cancel();
+		assertEquals(Vectors.of(message), engine.jobs().getJobData(job.getID(), ctx).get(Fields.HISTORY));
+	}
+
+	@Test
+	public void testLateCancellationEvidencePreservesDurableHistory() {
+		Job job = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), ctx);
+		job.cancel();
+		AMap<AString, ACell> message = Maps.of(Fields.MESSAGE_ID, "after-cancellation");
+		engine.jobs().appendToHistory(job.getID(), message, ctx);
+		job.recordCancellation(Maps.of("backend", "stopped"));
+		AMap<AString, ACell> persisted = engine.jobs().getJobData(job.getID(), ctx);
+		assertEquals(Vectors.of(message), persisted.get(Fields.HISTORY));
+		assertEquals(Maps.of("backend", "stopped"), persisted.get(Fields.CANCELLATION));
+		assertEquals(persisted, job.getData(), "the live handle reads the same primary record");
+	}
+
+	@Test
 	public void testConcurrentTerminalHistoryAppendCannotResurrectDeletedJob() throws Exception {
 		Job job = engine.jobs().invokeOperation(
 			"v/test/ops/echo", Maps.of("hello", "history"), ctx);

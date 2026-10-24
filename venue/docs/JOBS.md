@@ -25,8 +25,10 @@ boolean isPaused();                        // paused family?
 ```
 
 `Job` is concrete and serves as the remote/read-only handle (constructed
-from a record snapshot). Venue-side machinery lives in `VenueJob`
-(persistence, redaction, output validation); there are no other subclasses.
+from a record snapshot). `VenueJob` is the execution handle for a recorded venue
+job; its data comes directly from `user.job(id)`, a `JobState` lattice component.
+`JobManager` owns execution, recovery and admission. Transient handles and remote
+client snapshots retain local backing records.
 
 ## Lifecycle and status semantics
 
@@ -107,20 +109,31 @@ remains the application's choice.
 
 ## The update path — CAS-committed, terminal-sticky
 
-Lifecycle mutations funnel through `Job.commitUpdate` (a CAS loop):
+Lifecycle mutations funnel through `Job.commitUpdate` and its atomic backing-record
+update. For recorded venue jobs this edits `JobState`, not an in-memory copy:
 
-- The **updater and `processUpdate` are side-effect free** — they may be
-  retried when another thread wins the race. `VenueJob.processUpdate` only
-  stamps `updated`.
-- **Post-commit hooks observe exactly the committed value**: `onUpdate`
-  (persistence + listeners/SSE) and, on a terminal transition, result-future
-  completion and `onFinish` (active-cache eviction, permit release). A losing
-  update has **no external side effects**.
-- **Terminal states are sticky**: once finished, every further mutation
-  no-ops. Racing resolutions (completion vs cancellation vs expiry) commit
-  exactly one winner.
-- Each committed record embeds its predecessor under `prev`, forming the
-  state-history chain (COG-8's chain model).
+- The **updater and `processUpdate` are side-effect free** and may be retried.
+  `JobState` binds the standard `updated` timestamp policy; account guards and
+  parent timestamp/signing policies apply through its cursor.
+- **Hooks run after the primary record commits**: `onUpdate` sends notifications;
+  terminal completion also evicts the runtime handle, releases its permit and
+  settles the result future. Hooks perform no persistence copy. A losing
+  transition has no external effects.
+- **Terminal lifecycle states are sticky**. Completion, failure and cancellation
+  race for one winner. History and cancellation diagnostics remain independently
+  editable after completion, without replaying terminal hooks.
+- Each lifecycle transition embeds its predecessor under `prev`. History edits
+  use that same chain and preserve concurrent state rather than replacing it.
+- Original outputs and typed failures are runtime outcomes. The primary record
+  is redacted; `awaitResult()` and `getOutput()` on the executing handle retain
+  the original result. Reading `getData()` always reads the primary record while
+  it exists, including changes made through other component views.
+
+`JobState` supports upstream transactions for data edits. Obtain it from the
+transaction's user draft; never invoke runtime `Job` verbs inside a retryable
+transaction. Runtime dispatch, notifications and future completion belong after
+the enclosing commit. A component commit is local; host flush remains the
+separate durability barrier.
 
 ## Waiting and polling — no framework timeout
 
@@ -180,11 +193,18 @@ inbound messages durably in `session.pending` — see AGENT_SESSIONS.md).
 
 ## Persistence, redaction, validation
 
-- `VenueJob.onUpdate` persists the record to the caller's lattice
-  (`:user-data/<DID>/:j/<id>`) **post-commit**, applying
-  `redactJobSecrets` — both `input` and `output` redacted per the
-  operation's `secretFields` — on **every durable write**, since adapters
-  may update records after submission.
+- Admission creates the caller's job record once (`:user-data/<DID>/j/<id>`).
+  Runtime mutations use the existing component and apply `redactJobSecrets`
+  inside its atomic update, before storage. Both `input` and `output` are
+  redacted per `secretFields`; predecessor records therefore contain safe data.
+- History appends use one component operation for both active and completed
+  jobs. Late cancellation evidence edits the latest record and cannot overwrite
+  independent history or scratch updates.
+- Removal cannot be undone by a retained handle. If its row or owning account is
+  erased, that handle detaches permanently and may settle outstanding work in
+  local memory, preserving the existing deletion behaviour. It never recreates
+  storage; public job queries do not expose this detached record. Account
+  generation guards also prevent writes into a recreated account.
 - Transient Job wrappers used by result-oriented read-only runs, explicit
   private runs, and ordinary internal composition are never persisted:
   memory-only, no recovery, gone when terminal or on restart. Public invoke

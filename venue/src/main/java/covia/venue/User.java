@@ -1,6 +1,5 @@
 package covia.venue;
 
-import java.util.Objects;
 import java.util.function.UnaryOperator;
 
 import convex.core.data.ACell;
@@ -86,9 +85,7 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 	/** Internal namespace-resolution bridge; domain callers use agent and job methods. */
 	public AForkableCursor<ACell> recordCursor(ACell namespace, ACell id) {
 		if (Namespace.G.equals(namespace)) return new AgentState(context, agentStorage(id), (AString) id).cursor();
-		if (Namespace.J.equals(namespace)) return StampedCursor.create(
-			convex.lattice.LatticeComponent.resolve(cursor(), Covia.USER_RECORD, namespace, id),
-			getContext()::currentTimestamp, Covia::stampUpdated);
+		if (Namespace.J.equals(namespace)) return job((Blob) id).cursor();
 		throw new IllegalArgumentException("Not an agent or job namespace: " + namespace);
 	}
 
@@ -120,8 +117,23 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 	 */
 	@SuppressWarnings("unchecked")
 	public AMap<AString, ACell> getJob(Blob jobID) {
-		ACell record = getJobs().get(jobID);
-		return (record instanceof AMap) ? (AMap<AString, ACell>) record : null;
+		return job(jobID).getRecord();
+	}
+
+	/** Existing job view, bound to this user or transaction draft. */
+	public JobState job(Blob jobID) {
+		return new JobState(context,
+			convex.lattice.LatticeComponent.resolve(cursor(), Covia.USER_RECORD, Namespace.J, jobID));
+	}
+
+	/** Admission creates a record exactly once; subsequent updates use its component. */
+	boolean createJob(Blob jobID, AMap<AString, ACell> record) {
+		ACell before = cursor().path(Namespace.J).getAndUpdate(value -> {
+			Index<Blob, ACell> jobs = value instanceof Index<?, ?> index
+				? (Index<Blob, ACell>) index : Index.none();
+			return jobs.containsKey(jobID) ? value : jobs.assoc(jobID, record);
+		});
+		return !(before instanceof Index<?, ?> index) || !index.containsKey(jobID);
 	}
 
 	/**
@@ -142,7 +154,8 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 	}
 
 	/**
-	 * Persists a job record to this user's job index. Preserves the {@code temp}
+	 * Imports/replaces a job record (bootstrap and migration). Runtime transitions
+	 * use {@link #job(Blob)} instead. Preserves the {@code temp}
 	 * field from any existing record at the same ID (goal-scoped scratch).
 	 *
 	 * @param jobID Job ID (16-byte Blob: timestamp + counter + random)
@@ -150,12 +163,6 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 	 */
 	@SuppressWarnings("unchecked")
 	public void persistJob(Blob jobID, AMap<AString, ACell> record) {
-		persistJob(jobID, record, true);
-	}
-
-	/** Late diagnostics may update an existing row, but cannot recreate it. */
-	@SuppressWarnings("unchecked")
-	void persistJob(Blob jobID, AMap<AString, ACell> record, boolean createIfAbsent) {
 		final AMap<AString, ACell> rec = record;
 		cursor().path(Namespace.J).updateAndGet(jobs -> {
 			Index<Blob, ACell> idx = (jobs instanceof Index)
@@ -163,7 +170,6 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 				: Index.none();
 			AMap<AString, ACell> merged = rec;
 			ACell existing = idx.get(jobID);
-			if (existing == null && !createIfAbsent) return jobs;
 			if (existing instanceof AMap<?,?> existingMap) {
 				AMap<AString, ACell> existingRecord = (AMap<AString, ACell>) existingMap;
 				if (existingRecord.containsKey(K_TEMP)) {
@@ -182,16 +188,7 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 	@SuppressWarnings("unchecked")
 	public boolean updateJobIfPresent(Blob jobID,
 			UnaryOperator<AMap<AString, ACell>> updater) {
-		ACell old = cursor().path(Namespace.J).getAndUpdate(jobs -> {
-			if (!(jobs instanceof Index<?, ?>)) return jobs;
-			Index<Blob, ACell> idx = (Index<Blob, ACell>) jobs;
-			ACell value = idx.get(jobID);
-			if (!(value instanceof AMap<?, ?> map)) return jobs;
-			AMap<AString, ACell> record = (AMap<AString, ACell>) map;
-			AMap<AString, ACell> updated = updater.apply(record);
-			return Objects.equals(record, updated) ? jobs : idx.assoc(jobID, updated);
-		});
-		return old instanceof Index<?, ?> index && index.get(jobID) instanceof AMap<?, ?>;
+		return job(jobID).update(updater) != null;
 	}
 
 	private static final AString K_TEMP = Strings.intern("temp");

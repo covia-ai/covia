@@ -25,16 +25,21 @@ import covia.exception.JobPollingFailedException;
 /**
  * Class representing a Covia Job.
  *
- * <p>Thread-safe without locks: uses {@link AtomicReference} for the job data
- * so virtual threads are never pinned to carrier threads. The CAS makes
- * terminal states sticky and post-commit hooks run only for the winning
- * transition, keeping persistence and listeners aligned with memory.</p>
+ * <p>Lifecycle transitions atomically update the backing record before running
+ * hooks. Ordinary client/transient handles use local state; recorded venue
+ * handles supply a lattice component. Terminal states are sticky. Futures,
+ * original results and typed failures are runtime state, never persisted.</p>
  */
 public class Job {
 
 	/** Job status data — atomic for lock-free concurrent updates */
-	private record State(AMap<AString, ACell> data, Throwable failureCause) {}
+	protected record State(AMap<AString, ACell> data, Throwable failureCause) {
+		public State {}
+	}
 	private final AtomicReference<State> state;
+	/** Runtime terminal outcome, including original output and typed failure.
+	 * It is not a second mutable job record. */
+	private final AtomicReference<State> terminalOutcome = new AtomicReference<>();
 
 	protected volatile boolean cancelled = false;
 
@@ -95,9 +100,12 @@ public class Job {
 	 * Creates a Job with an explicit recording policy. Venue implementations use
 	 * this for transient result-oriented invocation wrappers; ordinary client and
 	 * server Jobs are recorded by default.
+	 * A null status binds no local record: subclasses must supply both
+	 * {@link #getData()} and {@link #updateState(UnaryOperator, Throwable)}.
 	 */
 	protected Job(AMap<AString, ACell> status, boolean recorded) {
-		this.state = new AtomicReference<>(new State(status, null));
+		this.state = new AtomicReference<>(status == null ? null : new State(status, null));
+		if (status != null && isFinished(status)) terminalOutcome.set(new State(status, null));
 		this.recorded = recorded;
 	}
 
@@ -136,7 +144,7 @@ public class Job {
 	 * @return Job ID as Blob
 	 */
 	public Blob getID() {
-		ACell id = RT.get(state.get().data(), Fields.ID);
+		ACell id = RT.get(getData(), Fields.ID);
 		if (id == null) return null;
 		return parseID(id);
 	}
@@ -146,7 +154,7 @@ public class Job {
 	 * @return true if finished
 	 */
 	public boolean isFinished() {
-		return isFinished(state.get().data());
+		return isFinished(getData());
 	}
 
 	/**
@@ -154,7 +162,7 @@ public class Job {
 	 * @return true if complete
 	 */
 	public boolean isComplete() {
-		return Status.COMPLETE.equals(RT.ensureString(state.get().data().get(Fields.STATUS)));
+		return Status.COMPLETE.equals(RT.ensureString(getData().get(Fields.STATUS)));
 	}
 
 	/**
@@ -182,9 +190,8 @@ public class Job {
 	/**
 	 * Updates the job data atomically. No effect if job is already finished.
 	 *
-	 * <p>Lock-free: the pure {@link #processUpdate} runs first, then a CAS on the
-	 * {@link AtomicReference} ensures terminal states are sticky. Post-update
-	 * hooks (listener, future completion) run only if the update took effect.</p>
+	 * <p>The pure {@link #processUpdate} runs inside the atomic backing-record
+	 * update. Hooks and future completion run only if the update took effect.</p>
 	 *
 	 * @param newData New job status data
 	 */
@@ -201,51 +208,63 @@ public class Job {
 		return commitUpdate(updater, null, null);
 	}
 
-	private boolean commitUpdate(UnaryOperator<AMap<AString, ACell>> updater,
-			Throwable failure, Runnable continuation) {
+	/** Atomic backing-record mutation. Venue handles override this to use their
+	 * lattice component. Null rejects the mutation; callbacks may be retried. */
+	protected State updateState(UnaryOperator<AMap<AString, ACell>> updater, Throwable failure) {
 		while (true) {
 			State before = state.get();
-			AMap<AString, ACell> current = before.data();
-			if (isFinished(current)) return false;
+			AMap<AString, ACell> next = updater.apply(before.data());
+			if (next == null) return null;
+			State after = new State(next, failure);
+			if (state.compareAndSet(before, after)) return after;
+		}
+	}
 
+	/** Once backing storage is erased, an outstanding handle may finish locally.
+	 * This detached record is never written back into the deleted namespace. */
+	protected final void detachRecord(AMap<AString, ACell> lastKnown) {
+		State terminal = terminalOutcome.get();
+		state.compareAndSet(null, terminal != null ? terminal : new State(lastKnown, null));
+	}
+
+	protected final boolean hasLocalRecord() { return state.get() != null; }
+
+	private boolean commitUpdate(UnaryOperator<AMap<AString, ACell>> updater,
+			Throwable failure, Runnable continuation) {
+		State committed = updateState(current -> {
+			if (isFinished(current)) return null;
 			AMap<AString, ACell> next = updater.apply(current);
-			if (next == null) return false;
+			if (next == null) return null;
 			next = processUpdate(next);
-			if (next == null) return false;
-			if (current != null && !current.isEmpty()) {
-				next = next.assoc(PREV, current);
-			}
-
-			if (!state.compareAndSet(before, new State(next, failure))) continue;
-
-			// Persistence, listeners and eviction observe exactly the value that
-			// won the CAS. A losing terminal update has no external side effects.
-			// Terminal completion/eviction must still run if persistence reports an
-			// error; otherwise the committed Job would hang in the active cache.
+			if (next == null) return null;
+			return current.isEmpty() ? next : next.assoc(PREV, current);
+		}, failure);
+		if (committed == null) return false;
+		AMap<AString, ACell> next = committed.data();
+		if (isFinished(next) && !terminalOutcome.compareAndSet(null, committed)) return false;
+		// Effects belong after the primary record commits. Always release resources
+		// and settle waiters even when a notification or execution hook throws.
+		try {
+			onUpdate(next);
+		} finally {
 			try {
-				onUpdate(next);
+				notifyListeners();
 			} finally {
 				try {
-					notifyListeners();
+					if (Status.CANCELLED.equals(next.get(Fields.STATUS))) {
+						cancelled = true;
+						runCancelHook();
+					}
+					if (continuation != null) continuation.run();
 				} finally {
-					try {
-						if (Status.CANCELLED.equals(next.get(Fields.STATUS))) {
-							cancelled = true;
-							runCancelHook();
-						}
-						if (continuation != null) continuation.run();
-					} finally {
-						if (isFinished(next)) {
-							// Release execution resources before inline future
-							// continuations can submit the next operation.
-							try { onFinish(next); }
-							finally { completeResultFuture(); }
-						}
+					if (isFinished(next)) {
+						try { onFinish(next); }
+						finally { completeResultFuture(); }
 					}
 				}
 			}
-			return true;
 		}
+		return true;
 	}
 
 	/**
@@ -270,7 +289,7 @@ public class Job {
 		return listeners.remove(listener);
 	}
 
-	private void notifyListeners() {
+	protected final void notifyListeners() {
 		for (Consumer<Job> l : listeners) {
 			try {
 				l.accept(this);
@@ -288,7 +307,8 @@ public class Job {
 	private void completeResultFuture() {
 		CompletableFuture<ACell> f = resultFuture.get();
 		if (f == null) return;
-		State terminal = state.get();
+		State terminal = terminalOutcome.get();
+		if (terminal == null) return;
 		if (Status.COMPLETE.equals(terminal.data().get(Fields.STATUS))) {
 			f.complete(terminal.data().get(Fields.OUTPUT));
 		} else if (preserveFailureCause && terminal.failureCause() != null) {
@@ -370,7 +390,7 @@ public class Job {
 		if (!resultFuture.compareAndSet(null, future)) {
 			throw new IllegalStateException("Result future already set");
 		}
-		if (isFinished()) {
+		if (terminalOutcome.get() != null) {
 			completeResultFuture();
 		} else {
 			settleObservationFailure(future);
@@ -378,7 +398,7 @@ public class Job {
 	}
 
 	public AString getStatus() {
-		return RT.ensureString(RT.get(state.get().data(), Fields.STATUS));
+		return RT.ensureString(RT.get(getData(), Fields.STATUS));
 	}
 
 	/**
@@ -398,7 +418,10 @@ public class Job {
 	public ACell getOutput() {
 		if (!isFinished()) throw new IllegalStateException("Job has no output, status is " + getStatus());
 		if (!isComplete()) throw new JobFailedException(this);
-		return RT.get(state.get().data(), Fields.OUTPUT);
+		State outcome = terminalOutcome.get();
+		// The primary row can become terminal just before the updating thread
+		// publishes its original in-process result. Never substitute a redacted row.
+		return outcome != null ? outcome.data().get(Fields.OUTPUT) : awaitResult();
 	}
 
 	/**
@@ -408,7 +431,7 @@ public class Job {
 	public String getErrorMessage() {
 		AString status = getStatus();
 		if (status != Status.FAILED && status != Status.REJECTED) return null;
-		ACell errorField = RT.get(state.get().data(), Fields.ERROR);
+		ACell errorField = RT.get(getData(), Fields.ERROR);
 		return errorField != null ? errorField.toString() : null;
 	}
 
@@ -419,7 +442,7 @@ public class Job {
 	 * @return The producer's code, or null when none is supplied
 	 */
 	public String getErrorCode() {
-		AMap<AString, ACell> data = state.get().data();
+		AMap<AString, ACell> data = getData();
 		ACell status = data.get(Fields.STATUS);
 		if (!Status.FAILED.equals(status) && !Status.REJECTED.equals(status)) return null;
 		AString code = RT.ensureString(data.get(Fields.ERROR_CODE));
@@ -442,7 +465,7 @@ public class Job {
 	 */
 	@SuppressWarnings("unchecked")
 	public AMap<AString, ACell> getPreviousState() {
-		return (AMap<AString, ACell>) state.get().data().get(PREV);
+		return (AMap<AString, ACell>) getData().get(PREV);
 	}
 
 	/**
@@ -511,17 +534,14 @@ public class Job {
 	 */
 	public void recordCancellation(AMap<AString, ACell> details) {
 		java.util.Objects.requireNonNull(details);
-		while (true) {
-			State before = state.get();
-			AMap<AString, ACell> current = before.data();
-			if (!Status.CANCELLED.equals(current.get(Fields.STATUS))) return;
-			if (details.equals(current.get(Fields.CANCELLATION))) return;
-			AMap<AString, ACell> next = processUpdate(current.assoc(Fields.CANCELLATION, details)).assoc(PREV, current);
-			if (!state.compareAndSet(before, new State(next, before.failureCause()))) continue;
-			try { onUpdate(next); }
-			finally { notifyListeners(); }
-			return;
-		}
+		State committed = updateState(current -> {
+			if (!Status.CANCELLED.equals(current.get(Fields.STATUS))) return null;
+			if (details.equals(current.get(Fields.CANCELLATION))) return null;
+			return processUpdate(current.assoc(Fields.CANCELLATION, details)).assoc(PREV, current);
+		}, null);
+		if (committed == null) return;
+		try { onUpdate(committed.data()); }
+		finally { notifyListeners(); }
 	}
 
 	/**
@@ -701,7 +721,7 @@ public class Job {
 		if (f != null) return f;
 		CompletableFuture<ACell> newFuture = new CompletableFuture<>();
 		if (resultFuture.compareAndSet(null, newFuture)) {
-			if (isFinished()) completeResultFuture();
+			if (terminalOutcome.get() != null) completeResultFuture();
 			else settleObservationFailure(newFuture);
 			return newFuture;
 		}
