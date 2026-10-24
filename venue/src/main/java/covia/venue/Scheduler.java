@@ -185,6 +185,38 @@ public class Scheduler {
 
 	// ---------------------------------------------------------------- public API
 
+	/** Commit wake intent and the event together, then arm from committed state. */
+	public void setThreadWakeTime(AString owner, AgentState agent,
+			AgentState.ThreadKind kind, Blob threadId, long wakeTime) {
+		User user = engine.getVenueState().users().get(owner);
+		if (user == null) throw new AuthException(Users.ACCOUNT_DELETED);
+		ACell generation = RT.getIn(user.get(), Users.GENERATION);
+		// Validate the retained agent after reading the generation. A run loop
+		// from an erased account must not schedule work for its replacement.
+		if (!agent.exists()) return;
+		onTimer(() -> {
+			engine.getVenueState().transact(draft -> {
+				User current = draft.users().get(owner);
+				if (current == null || !java.util.Objects.equals(generation,
+						RT.getIn(current.get(), Users.GENERATION))) {
+					throw new AuthException(Users.ACCOUNT_DELETED);
+				}
+				draft.setAgentThreadWakeTime(owner, agent.getAgentId(), kind, threadId, wakeTime);
+			});
+			armNext();
+			return null;
+		});
+	}
+
+	/** Rebuild an agent's persisted wake and arm only after the local commit. */
+	public boolean rescheduleAgentWake(AString owner, AString agentId) {
+		return onTimer(() -> {
+			boolean armed = engine.getVenueState().rescheduleAgentWake(owner, agentId);
+			armNext();
+			return armed;
+		});
+	}
+
 	/**
 	 * Schedule a one-shot {@code opRef(input)} to fire at absolute {@code wakeTime}
 	 * millis, running as the caller with the proofs/caps carried in {@code ctx}
@@ -677,7 +709,7 @@ public class Scheduler {
 	}
 
 	/** 16-byte key: 8-byte big-endian wakeTime (orders the index) + 8 random bytes (uniqueness). */
-	private static Blob mintKey(long wakeTime) {
+	static Blob mintKey(long wakeTime) {
 		byte[] bs = new byte[KEY_LENGTH];
 		Utils.writeLong(bs, 0, wakeTime);
 		Utils.writeLong(bs, 8, ThreadLocalRandom.current().nextLong());

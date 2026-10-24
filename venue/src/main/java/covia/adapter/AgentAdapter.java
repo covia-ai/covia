@@ -4159,7 +4159,7 @@ public class AgentAdapter extends AAdapter {
 				boolean hasExisting = pickedRecord != null
 					&& pickedRecord.get(Fields.WAKE_TIME) instanceof CVMLong;
 				if (requestedWake > 0 || hasExisting) {
-					agent.setThreadWakeTime(scheduler, callerDID,
+					scheduler.setThreadWakeTime(callerDID, agent,
 						pickedKind, pickedThreadId, requestedWake);
 				}
 			}

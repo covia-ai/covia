@@ -50,9 +50,9 @@ public class EngineSchedulerRebuildTest {
 			long now = System.currentTimeMillis();
 			long sessionWake = now + 600_000;
 			long taskWake    = now + 1_200_000;
-			agent.setThreadWakeTime(engine.gridScheduler(), userDid,
+			engine.gridScheduler().setThreadWakeTime(userDid, agent,
 				ThreadKind.SESSION, sid, sessionWake);
-			agent.setThreadWakeTime(engine.gridScheduler(), userDid,
+			engine.gridScheduler().setThreadWakeTime(userDid, agent,
 				ThreadKind.TASK, taskId, taskWake);
 
 			// One armed event at the earliest of the two threads.

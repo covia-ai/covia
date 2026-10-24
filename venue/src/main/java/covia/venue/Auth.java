@@ -242,7 +242,7 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 		return (result != null) ? result.get(id) : null;
 	}
 
-	private static AMap<AString, ACell> stampUser(AMap<AString, ACell> record,
+	static AMap<AString, ACell> stampUser(AMap<AString, ACell> record,
 			AMap<AString, ACell> previous, CVMLong proposed) {
 		if (previous != null) {
 			ACell oldValue = previous.get(Fields.UPDATED);
@@ -254,16 +254,9 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 
 	/** Trusted OAuth provisioning retains its existing authority to create accounts. */
 	public synchronized AMap<AString, ACell> provisionLogin(AString id, AMap<AString, ACell> profile) {
-		AMap<AString, ACell> existing = getUser(id);
-		AString did = existing == null ? null : RT.ensureString(existing.get(Fields.DID));
+		AString did = RT.ensureString(RT.getIn(getUser(id), Fields.DID));
 		if (did == null) did = engine.managedUserDID(id);
-		engine.getVenueState().users().create(did);
-		AString accountDID = did;
-		return updateUser(id, current -> {
-			AMap<AString, ACell> updated = current != null ? current : Maps.empty();
-			for (var entry : profile.entrySet()) updated = updated.assoc(entry.getKey(), entry.getValue());
-			return updated.assoc(Fields.DID, accountDID);
-		});
+		return engine.getVenueState().provisionLogin(id, did, profile);
 	}
 
 	/**

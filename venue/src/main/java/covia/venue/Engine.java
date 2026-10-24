@@ -3376,7 +3376,7 @@ public class Engine {
 				if (!(agentEntry.getValue() instanceof AMap)) continue;
 				AgentState agent = user.agent(agentId);
 				if (agent == null) continue;
-				if (agent.rescheduleWake(gridScheduler, userDid)) count++;
+				if (gridScheduler.rescheduleAgentWake(userDid, agentId)) count++;
 			}
 		}
 		if (count > 0) {

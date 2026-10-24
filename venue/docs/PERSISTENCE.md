@@ -37,6 +37,21 @@ transaction cannot commit into a deleted or recreated account. A changed venue
 transaction signs its completed value on commit; a signing failure leaves live
 state unchanged. Committing does not publish the host or flush the store.
 
+Login provisioning commits the account and login directory row in one venue
+transaction. Agent wake changes likewise commit the thread's intent, schedule
+event and stored handle together. `AgentState` only changes lattice data;
+`Scheduler` serialises runtime wake requests with firing and arms the timer
+after the venue transaction commits. It preserves the caller's account lifecycle
+guard across that handoff. Code composing wake changes inside a larger venue
+transaction uses `draft.setAgentThreadWakeTime(...)` and must re-arm the runtime
+scheduler after the outer commit (for example via `rescheduleAgentWake`). No
+runtime scheduler, job dispatch or other external effect belongs in a draft.
+
+The agent editing cursor is the sole owner of the record's `ts` version stamp.
+Domain methods retain event timestamps where they describe actual events, but
+do not independently re-stamp the containing record. No-op edits retain their
+version; whole-record replacement preserves the prior timestamp floor.
+
 `VenueState.fork()` is a separate, explicitly reconciled working copy. Its
 `sync()` uses whole-venue LWW selection; it must not be used as a transaction
 substitute for concurrent local writes. Interior components expose transactions,

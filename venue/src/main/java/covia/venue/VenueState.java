@@ -11,7 +11,10 @@ import convex.core.data.ABlob;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.Blob;
 import convex.core.data.Maps;
+import convex.core.data.prim.CVMBool;
+import convex.core.data.prim.CVMLong;
 import convex.core.data.AccountKey;
 import convex.core.data.Index;
 import convex.core.data.Keyword;
@@ -181,6 +184,89 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	 */
 	public Users users() {
 		return new Users(context, resolve(cursor(), Covia.VENUE, Covia.USER_DATA));
+	}
+
+	/** Atomically provisions account state and its login directory row. */
+	public AMap<AString, ACell> provisionLogin(AString id, AString defaultDID,
+			AMap<AString, ACell> profile) {
+		Objects.requireNonNull(id);
+		Objects.requireNonNull(defaultDID);
+		Objects.requireNonNull(profile);
+		var result = new java.util.concurrent.atomic.AtomicReference<AMap<AString, ACell>>();
+		transact(draft -> {
+			AMap<AString, ACell> previous = RT.ensureMap(RT.getIn(draft.authCursor().get(), id));
+			AString did = previous == null ? null : RT.ensureString(previous.get(Fields.DID));
+			if (did == null) did = defaultDID;
+			draft.users().create(did);
+			AMap<AString, ACell> updated = previous == null ? Maps.empty() : previous;
+			for (var entry : profile.entrySet()) updated = updated.assoc(entry.getKey(), entry.getValue());
+			updated = Auth.stampUser(updated.assoc(Fields.DID, did), previous,
+				draft.context.currentTimestamp());
+			draft.authCursor().withDefault(Maps.empty()).path(id).set(updated);
+			result.set(updated);
+		});
+		return result.get();
+	}
+
+	/**
+	 * Commits wake intent and its scheduled event together. No timer or job is
+	 * touched, including when called inside an enclosing venue transaction.
+	 */
+	public void setAgentThreadWakeTime(AString owner, AString agentId,
+			AgentState.ThreadKind kind, Blob threadId, long wakeTime) {
+		transact(draft -> {
+			User user = draft.users().get(owner);
+			AgentState agent = user == null ? null : user.agent(agentId);
+			if (agent != null && agent.setThreadWakeTime(kind, threadId, wakeTime)) {
+				draft.reconcileAgentWake(owner, agent);
+			}
+		});
+	}
+
+	/** Rebuilds the event from existing wake intent, atomically with its handle. */
+	public boolean rescheduleAgentWake(AString owner, AString agentId) {
+		boolean[] armed = {false};
+		transact(draft -> {
+			User user = draft.users().get(owner);
+			AgentState agent = user == null ? null : user.agent(agentId);
+			armed[0] = agent != null && draft.reconcileAgentWake(owner, agent);
+		});
+		return armed[0];
+	}
+
+	/** Called only on a private venue draft: agent and schedule share its commit. */
+	@SuppressWarnings("unchecked")
+	private boolean reconcileAgentWake(AString owner, AgentState agent) {
+		var events = scheduleCursor().withDefault(Maps.empty()).path(Scheduler.K_EVENTS);
+		ACell value = events.get();
+		Index<Blob, ACell> index = value instanceof Index<?, ?>
+			? (Index<Blob, ACell>) value : Index.none();
+		Blob oldHandle = agent.wakeHandle();
+		if (oldHandle != null) {
+			// A malformed/stale agent handle must never remove another owner's event.
+			ACell old = index.get(oldHandle);
+			if (owner.equals(RT.getIn(old, Scheduler.K_OWNER))
+					&& AgentState.TRIGGER_OP.equals(RT.getIn(old, Scheduler.K_OP))
+					&& agent.getAgentId().equals(RT.getIn(old, Scheduler.K_INPUT, Fields.AGENT_ID))) {
+				index = index.dissoc(oldHandle);
+			}
+		}
+		long earliest = agent.earliestWake();
+		Blob handle = null;
+		if (earliest > 0) {
+			handle = Scheduler.mintKey(earliest);
+			index = index.assoc(handle, Maps.of(
+				Scheduler.K_OP, AgentState.TRIGGER_OP,
+				Scheduler.K_OWNER, owner, Scheduler.K_BY, owner,
+				Scheduler.K_TIME, CVMLong.create(earliest),
+				Scheduler.K_CREATED, context.currentTimestamp(),
+				Scheduler.K_TRACK, CVMBool.FALSE,
+				Scheduler.K_INPUT, Maps.of(Fields.AGENT_ID, agent.getAgentId(),
+					Fields.FORCE, CVMBool.FALSE, Fields.WAIT, CVMBool.FALSE)));
+		}
+		if (!(value == null && index.isEmpty())) events.set(index);
+		agent.setWakeHandle(handle);
+		return handle != null;
 	}
 
 	/** Atomically erases the namespace and login aliases, retaining revocation evidence. */

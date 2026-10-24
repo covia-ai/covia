@@ -16,6 +16,7 @@ import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AString;
 import convex.core.data.AccountKey;
+import convex.core.data.Blob;
 import convex.core.data.Index;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
@@ -24,6 +25,8 @@ import convex.core.data.prim.CVMLong;
 import convex.lattice.LatticeContext;
 import convex.lattice.cursor.Cursors;
 import covia.exception.AuthException;
+import covia.api.Fields;
+import covia.lattice.Covia;
 import covia.lattice.WorkspaceRoot;
 
 /** Domain transactions use the same child APIs, with one local commit boundary. */
@@ -31,6 +34,125 @@ class DomainTransactionTest {
 
 	private static final AString DID = Strings.create("did:key:transaction-user");
 	private static ACell[] path(String path) { return WorkspaceRoot.parseStringPath(path); }
+
+	@Test
+	void agentRecordHasOneStampPolicyIncludingReplacementAndNoOps() {
+		var clockReads = new AtomicInteger();
+		var ticks = new AtomicLong(100);
+		var context = new LatticeContext() {
+			@Override public CVMLong currentTimestamp() {
+				clockReads.incrementAndGet();
+				return CVMLong.create(ticks.get());
+			}
+		};
+		var agent = new AgentState(context, Cursors.root(null), Strings.create("assistant"));
+		agent.initialise(Maps.empty(), null);
+		assertEquals(1, clockReads.getAndSet(0));
+		ticks.set(200);
+		agent.setStatus(AgentState.SUSPENDED);
+		assertEquals(1, clockReads.getAndSet(0));
+		assertEquals(CVMLong.create(200), agent.getRecord().get(AgentState.K_TURN_TS));
+		var before = agent.getRecord();
+		ticks.set(300);
+		agent.setStatus(AgentState.SUSPENDED);
+		assertEquals(before, agent.getRecord(), "no-op must not change the version");
+		ticks.set(50);
+		agent.putRecord(Maps.of(AgentState.KEY_STATUS, AgentState.SLEEPING));
+		assertEquals(CVMLong.create(200), agent.getRecord().get(AgentState.K_TURN_TS),
+			"replacement must preserve the previous version floor when the clock regresses");
+	}
+
+	@Test
+	void wakeIntentEventAndHandleShareTheVenueTransaction() {
+		var venue = VenueState.create(AKeyPair.generate());
+		var agentId = Strings.create("assistant");
+		var agent = venue.users().ensure(DID).ensureAgent(agentId, Maps.empty(), null);
+		var sid = Blob.fromHex("aa");
+		agent.ensureSession(sid, DID);
+		ACell before = venue.get();
+		assertThrows(IllegalStateException.class, () -> venue.transact(draft -> {
+			draft.setAgentThreadWakeTime(DID, agentId, AgentState.ThreadKind.SESSION, sid, 1000);
+			assertEquals(before, venue.get());
+			assertNotNull(draft.users().get(DID).agent(agentId).wakeHandle());
+			throw new IllegalStateException();
+		}));
+		assertEquals(before, venue.get(), "aborted wake must leave no event or handle");
+		venue.setAgentThreadWakeTime(DID, agentId, AgentState.ThreadKind.SESSION, sid, 1000);
+		var events = (Index<?, ?>) venue.scheduleCursor().path(Scheduler.K_EVENTS).get();
+		assertEquals(1, events.count());
+		assertEquals(CVMLong.create(1000), agent.getSession(sid).get(Fields.WAKE_TIME));
+		assertNotNull(events.get(agent.wakeHandle()));
+		venue.setAgentThreadWakeTime(DID, agentId, AgentState.ThreadKind.SESSION, sid, 0);
+		assertNull(agent.wakeHandle());
+		assertNull(agent.getSession(sid).get(Fields.WAKE_TIME));
+		assertTrue(((Index<?, ?>) venue.scheduleCursor().path(Scheduler.K_EVENTS).get()).isEmpty());
+	}
+
+	@Test
+	void concurrentWakeIntentRetriesWithoutOrphanEvents() throws Exception {
+		var venue = VenueState.create(AKeyPair.generate());
+		var agentId = Strings.create("assistant");
+		var agent = venue.users().ensure(DID).ensureAgent(agentId, Maps.empty(), null);
+		var sid = Blob.fromHex("aa");
+		var other = Blob.fromHex("bb");
+		agent.ensureSession(sid, DID);
+		agent.ensureSession(other, DID);
+		var entered = new CountDownLatch(1);
+		var resume = new CountDownLatch(1);
+		var attempts = new AtomicInteger();
+		try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+			var pending = executor.submit(() -> venue.transact(draft -> {
+				draft.setAgentThreadWakeTime(DID, agentId, AgentState.ThreadKind.SESSION, sid, 2000);
+				if (attempts.incrementAndGet() == 1) { entered.countDown(); await(resume); }
+			}));
+			try {
+				assertTrue(entered.await(10, TimeUnit.SECONDS));
+				venue.setAgentThreadWakeTime(DID, agentId, AgentState.ThreadKind.SESSION, other, 1000);
+			} finally { resume.countDown(); }
+			pending.get(10, TimeUnit.SECONDS);
+		}
+		assertEquals(2, attempts.get());
+		assertEquals(CVMLong.create(2000), agent.getSession(sid).get(Fields.WAKE_TIME));
+		assertEquals(CVMLong.create(1000), agent.getSession(other).get(Fields.WAKE_TIME));
+		var events = (Index<?, ?>) venue.scheduleCursor().path(Scheduler.K_EVENTS).get();
+		assertEquals(1, events.count());
+		assertEquals(CVMLong.create(1000), convex.core.lang.RT.getIn(events.get(agent.wakeHandle()), Scheduler.K_TIME));
+	}
+
+	@Test
+	void provisioningIsAtomicAndSignsOnlyOnce() {
+		var key = AKeyPair.generate();
+		var signatures = new AtomicInteger();
+		var fail = new AtomicBoolean();
+		var context = new LatticeContext() {
+			@Override public <T extends ACell> SignedData<T> sign(AccountKey owner, T value) {
+				signatures.incrementAndGet();
+				if (fail.get()) throw new IllegalStateException("test signer unavailable");
+				return key.signData(value);
+			}
+		};
+		var venue = VenueState.fromRoot(Cursors.root(Index.none()), key.getAccountKey(), context);
+		var id = Strings.create("alice");
+		convex.core.data.AMap<AString, ACell> profile = Maps.of(Fields.NAME, Strings.create("Alice"));
+		ACell before = venue.get();
+		assertThrows(IllegalStateException.class, () -> venue.transact(draft -> {
+			draft.provisionLogin(id, DID, profile);
+			assertNull(venue.users().get(DID));
+			throw new IllegalStateException();
+		}));
+		assertEquals(before, venue.get());
+		assertEquals(0, signatures.get());
+		fail.set(true);
+		assertThrows(IllegalStateException.class, () -> venue.provisionLogin(id, DID, profile));
+		assertEquals(before, venue.get(), "failed signing cannot leave an orphan account");
+		fail.set(false);
+		signatures.set(0);
+		var result = venue.provisionLogin(id, DID, profile);
+		assertEquals(1, signatures.get());
+		assertNotNull(venue.users().get(DID));
+		assertEquals(result, convex.core.lang.RT.getIn(venue.get(), Covia.USERS, id));
+		assertEquals(DID, result.get(Fields.DID));
+	}
 
 	@Test
 	void compoundVenueChangeIsPrivateAndRollsBackOnFailure() {

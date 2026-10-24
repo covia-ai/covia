@@ -187,54 +187,31 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 
 	/** Replaces the entire record. Use for initialisation only. */
 	public void putRecord(AMap<AString, ACell> record) {
-		CVMLong ts = now();
-		cursor().updateAndGet(current -> record.assoc(K_TS, ratchetTimestamp(current, ts)));
+		// Preserve the previous version floor when replacing the whole record;
+		// the editing cursor alone supplies the new write timestamp.
+		cursor().updateAndGet(current -> record.assoc(K_TS, RT.getIn(current, K_TS)));
 	}
 
 	/**
-	 * The write clock for this component: the lattice context resolves it once
-	 * per logical write, so a mutation stamps the same instant however many
-	 * times its CAS lambda retries under contention.
+	 * Clock for event provenance. Record version stamps belong to the editing cursor.
 	 */
 	private CVMLong now() {
 		return getContext().currentTimestamp();
-	}
-
-	@SuppressWarnings("unchecked")
-	private static CVMLong ratchetTimestamp(ACell current, CVMLong proposed) {
-		if (current instanceof AMap<?, ?> map) {
-			ACell previous = ((AMap<AString, ACell>) map).get(K_TS);
-			if (previous instanceof CVMLong old
-					&& old.longValue() > proposed.longValue()) return old;
-		}
-		return proposed;
 	}
 
 	// ========== Atomic update (private) ==========
 
 	@SuppressWarnings("unchecked")
 	private AMap<AString, ACell> update(UnaryOperator<AMap<AString, ACell>> fn) {
-		CVMLong ts = now();
-		ACell result = cursor().updateAndGet(current -> {
-			if (!(current instanceof AMap)) return current;
-			AMap<AString, ACell> r = (AMap<AString, ACell>) current;
-			AMap<AString, ACell> updated = fn.apply(r);
-			if (Objects.equals(updated, r)) return r;
-			return updated.assoc(K_TS, ratchetTimestamp(r, ts));
-		});
+		ACell result = cursor().updateAndGet(current ->
+			current instanceof AMap ? fn.apply((AMap<AString, ACell>) current) : current);
 		return (result instanceof AMap) ? (AMap<AString, ACell>) result : null;
 	}
 
 	@SuppressWarnings("unchecked")
 	private AMap<AString, ACell> getAndUpdate(UnaryOperator<AMap<AString, ACell>> fn) {
-		CVMLong ts = now();
-		ACell old = cursor().getAndUpdate(current -> {
-			if (!(current instanceof AMap)) return current;
-			AMap<AString, ACell> r = (AMap<AString, ACell>) current;
-			AMap<AString, ACell> updated = fn.apply(r);
-			if (Objects.equals(updated, r)) return r;
-			return updated.assoc(K_TS, ratchetTimestamp(r, ts));
-		});
+		ACell old = cursor().getAndUpdate(current ->
+			current instanceof AMap ? fn.apply((AMap<AString, ACell>) current) : current);
 		return (old instanceof AMap) ? (AMap<AString, ACell>) old : null;
 	}
 
@@ -259,7 +236,7 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 		if (config != null) record = record.assoc(K_CONFIG, config);
 		if (initialState != null) record = record.assoc(K_STATE, initialState);
 		if (definition != null) record = record.assoc(KEY_AGENT, definition);
-		AMap<AString, ACell> initial = record.assoc(K_TS, now());
+		AMap<AString, ACell> initial = record;
 		return cursor().getAndUpdate(current -> (current == null) ? initial : current) == null;
 	}
 
@@ -284,7 +261,7 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 			K_TIMELINE, (timeline != null) ? timeline : Vectors.empty());
 		if (config != null) record = record.assoc(K_CONFIG, config);
 		if (state != null) record = record.assoc(K_STATE, state);
-		AMap<AString, ACell> initial = record.assoc(K_TS, now());
+		AMap<AString, ACell> initial = record;
 		return cursor().getAndUpdate(current -> (current == null) ? initial : current) == null;
 	}
 
@@ -1238,115 +1215,40 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 	}
 
 	/**
-	 * Single-writer helper for per-thread wake scheduling. Writes
-	 * {@code wakeTime} on the named session or task record, then re-derives
-	 * the agent's single scheduled wake via {@link #rescheduleWake}. See
-	 * {@code venue/docs/GRID_SCHEDULER.md §8}.
-	 *
-	 * <p>Replace-semantics: the new {@code wakeTime} overwrites any prior
-	 * value on that thread. Pass {@code wakeTime <= 0} to clear it. A missing
-	 * session / task is a no-op (no lattice write, no scheduler change) —
-	 * callers should ensure the record exists first.</p>
-	 *
-	 * <p>Per-thread {@code wakeTime} fields stay the authoritative record of
-	 * "this thread wants to wake at T"; the agent holds at most one
-	 * {@code agent:wake} event in the venue grid scheduler, armed at the
-	 * <i>earliest</i> of them. Per-agent concurrency is zero under the
-	 * virtual-thread-per-agent model (one cycle per agent serialises all
-	 * in-cycle writers), so the read-then-write here needs no lock.</p>
-	 *
-	 * @param scheduler Venue grid scheduler to (re)arm the wake on
-	 * @param ownerDID  Agent owner's DID — the wake fires under its authority
-	 * @param kind      SESSION or TASK
-	 * @param threadId  Session or task id (Blob)
-	 * @param wakeTime  Absolute wall-clock millis, or {@code <= 0} to clear
+	 * Changes only this agent's thread wake intent. Safe on live or draft state.
+	 * Returns false for a missing thread. Runtime callers use
+	 * {@link Scheduler#setThreadWakeTime} to commit the intent and schedule together.
 	 */
 	@SuppressWarnings("unchecked")
-	public void setThreadWakeTime(Scheduler scheduler, AString ownerDID,
-			ThreadKind kind, Blob threadId, long wakeTime) {
-		Objects.requireNonNull(scheduler, "scheduler");
-		Objects.requireNonNull(ownerDID, "ownerDID");
+	public boolean setThreadWakeTime(ThreadKind kind, Blob threadId, long wakeTime) {
 		Objects.requireNonNull(kind, "kind");
 		Objects.requireNonNull(threadId, "threadId");
-
-		// Single pre-read so we can skip the write if the target record
-		// is missing. We don't retry on a race — callers ensure existence.
-		AMap<AString, ACell> record = getRecord();
-		if (record == null) return;
-
 		AString key = (kind == ThreadKind.SESSION) ? K_SESSIONS : K_TASKS;
-		Index<Blob, ACell> idx0 = (record.get(key) instanceof Index i)
-			? (Index<Blob, ACell>) i : Index.none();
-		if (!(idx0.get(threadId) instanceof AMap)) return;
-
-		update(r -> {
-			Index<Blob, ACell> idx = (r.get(key) instanceof Index i)
-				? (Index<Blob, ACell>) i : Index.none();
-			ACell existing = idx.get(threadId);
-			if (!(existing instanceof AMap)) return r;
-			AMap<AString, ACell> rec = (AMap<AString, ACell>) existing;
+		AMap<AString, ACell> before = getAndUpdate(r -> {
+			if (!(r.get(key) instanceof Index<?, ?>)) return r;
+			Index<Blob, ACell> idx = (Index<Blob, ACell>) r.get(key);
+			if (!(idx.get(threadId) instanceof AMap<?, ?>)) return r;
+			AMap<AString, ACell> rec = (AMap<AString, ACell>) idx.get(threadId);
 			AMap<AString, ACell> updated = (wakeTime > 0)
 				? rec.assoc(Fields.WAKE_TIME, CVMLong.create(wakeTime))
 				: rec.dissoc(Fields.WAKE_TIME);
 			return r.assoc(key, idx.assoc(threadId, updated));
 		});
-
-		rescheduleWake(scheduler, ownerDID);
+		return RT.getIn(before, key, threadId) instanceof AMap<?, ?>;
 	}
 
-	/**
-	 * Re-derive this agent's single scheduled wake from the authoritative
-	 * per-thread {@code wakeTime} fields. Cancels any previously-armed
-	 * {@code agent:wake} event, then — if any thread still wants a wake —
-	 * arms exactly one event at the earliest of them, recording its handle on
-	 * the agent record. Clears the stored handle when no thread wants a wake.
-	 *
-	 * <p>Idempotent: safe to call on boot to rebuild the schedule from the
-	 * lattice regardless of how the prior run ended (a cancel of a missing or
-	 * already-fired handle is a no-op). See {@code venue/docs/GRID_SCHEDULER.md §8}.</p>
-	 *
-	 * <p>The wake is scheduled under the owner's own authority with no extra
-	 * proofs or caps: the owner waking their own agent is the minimum,
-	 * non-escalating authority — the same as a manual {@code agent:wake}. The
-	 * work the run loop then performs still carries each task/session's own
-	 * captured authority.</p>
-	 *
-	 * @param scheduler Venue grid scheduler to (re)arm the wake on
-	 * @param ownerDID  Agent owner's DID — the wake fires under its authority
-	 * @return {@code true} if a wake was armed, {@code false} if none was due
-	 */
-	public boolean rescheduleWake(Scheduler scheduler, AString ownerDID) {
-		Objects.requireNonNull(scheduler, "scheduler");
-		Objects.requireNonNull(ownerDID, "ownerDID");
+	Blob wakeHandle() {
+		ACell handle = RT.getIn(getRecord(), K_WAKE_HANDLE);
+		return handle instanceof Blob b ? b : null;
+	}
 
+	void setWakeHandle(Blob handle) {
+		update(r -> handle == null ? r.dissoc(K_WAKE_HANDLE) : r.assoc(K_WAKE_HANDLE, handle));
+	}
+
+	long earliestWake() {
 		AMap<AString, ACell> record = getRecord();
-		if (record == null) return false;
-
-		long earliest = earliestWake(record);
-		RequestContext octx = RequestContext.of(ownerDID);
-
-		ACell oldHandle = record.get(K_WAKE_HANDLE);
-		if (oldHandle instanceof Blob ob) {
-			scheduler.cancel(ob, octx);
-		}
-
-		if (earliest > 0) {
-			// Non-forcing (run only if work), non-blocking (fire-and-forget), and
-			// explicitly untracked: a wake is machinery, not user work — the run
-			// loop it starts records its own tasks. Only the operator's
-			// forceTrackJobs makes wakes durable (GRID_SCHEDULER.md §7).
-			Blob handle = scheduler.schedule(TRIGGER_OP,
-				Maps.of(Fields.AGENT_ID, agentId,
-					Fields.FORCE, CVMBool.FALSE,
-					Fields.WAIT, CVMBool.FALSE),
-				octx, earliest, null, Boolean.FALSE);
-			update(r -> r.assoc(K_WAKE_HANDLE, handle));
-			return true;
-		}
-		if (oldHandle != null) {
-			update(r -> r.dissoc(K_WAKE_HANDLE));
-		}
-		return false;
+		return record == null ? 0 : earliestWake(record);
 	}
 
 	/** Earliest positive {@code wakeTime} across all sessions and tasks, or 0 if none. */
