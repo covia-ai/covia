@@ -2771,7 +2771,7 @@ public class AgentAdapter extends AAdapter {
 		AString title = (AString) titleValue;
 		if (title != null && title.toString().isBlank()) title = null;
 
-		if (!agent.setSessionTitle(sid, title)) {
+		if (!agent.session(sid).setTitle(title)) {
 			job.fail("Session not found: " + sidHex);
 			return;
 		}
@@ -2812,7 +2812,7 @@ public class AgentAdapter extends AAdapter {
 			K_CREATED, CVMLong.create(Utils.getCurrentTimestamp()),
 			Fields.CALLER, ctx.getCallerDID(),
 			Fields.JOB_ID, Strings.create(job.getID().toHexString()));
-		boolean applied = agent.updateQuiescentSessionFrames(sid, frames -> {
+		boolean applied = agent.session(sid).updateQuiescentFrames(frames -> {
 			if (frames.isEmpty()) return frames;
 			AMap<AString, ACell> root = RT.ensureMap(frames.get(0));
 			long live = GoalTreeContext.countLiveTurns(root);
@@ -2867,7 +2867,7 @@ public class AgentAdapter extends AAdapter {
 			AMap<AString, ACell> frame = RT.ensureMap(existingFrames.get(i));
 			if (frame != null && GoalTreeContext.reloadContext(frame) != frame) clearable++;
 		}
-		boolean applied = agent.updateQuiescentSessionFrames(sid, frames -> {
+		boolean applied = agent.session(sid).updateQuiescentFrames(frames -> {
 			AVector<ACell> updated = frames;
 			for (long i = 0; i < frames.count(); i++) {
 				AMap<AString, ACell> frame = RT.ensureMap(frames.get(i));
@@ -4784,7 +4784,7 @@ public class AgentAdapter extends AAdapter {
 				ACell rawJob = user.getJob(jobId);
 				if (!(rawJob instanceof AMap<?, ?> map)
 						|| Job.isFinished((AMap<AString, ACell>) map)) {
-					agent.removeSessionPendingJob(sid, jobId);
+					agent.session(sid).removePendingJob(jobId);
 				}
 			}
 		}

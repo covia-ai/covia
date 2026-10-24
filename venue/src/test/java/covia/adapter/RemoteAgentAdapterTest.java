@@ -184,7 +184,7 @@ class RemoteAgentAdapterTest {
 			var cursor = convex.lattice.cursor.Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
 			AKeyPair key = AKeyPair.generate();
 			AMap<AString, ACell> config = Maps.of(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0));
-			Engine first = new Engine(config, cursor, key).start();
+			Engine first = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), key).start();
 			Engine.addDemoAssets(first);
 			Job original;
 			try {
@@ -192,7 +192,7 @@ class RemoteAgentAdapterTest {
 				await(() -> Status.INPUT_REQUIRED.equals(original.getStatus()));
 			} finally { first.close(); }
 			assertFalse(original.isFinished()); assertEquals(0, peer.cancels.get());
-			Engine second = new Engine(config, cursor, key).start();
+			Engine second = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), key).start();
 			try {
 				Engine.addDemoAssets(second);
 				second.jobs().recoverJobs();
@@ -211,7 +211,7 @@ class RemoteAgentAdapterTest {
 			var cursor = convex.lattice.cursor.Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
 			AKeyPair key = AKeyPair.generate();
 			AMap<AString, ACell> config = Maps.of(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0));
-			Engine first = new Engine(config, cursor, key).start();
+			Engine first = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), key).start();
 			Engine.addDemoAssets(first);
 			Job original;
 			try {
@@ -222,7 +222,7 @@ class RemoteAgentAdapterTest {
 				await(() -> Status.INPUT_REQUIRED.equals(original.getStatus()));
 			} finally { first.close(); }
 			assertFalse(original.isFinished());
-			Engine second = new Engine(config, cursor, key).start();
+			Engine second = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), key).start();
 			try {
 				Engine.addDemoAssets(second);
 				second.jobs().recoverJobs();

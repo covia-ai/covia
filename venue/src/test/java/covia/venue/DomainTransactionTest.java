@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
+import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AccountKey;
 import convex.core.data.Blob;
@@ -34,6 +35,90 @@ class DomainTransactionTest {
 
 	private static final AString DID = Strings.create("did:key:transaction-user");
 	private static ACell[] path(String path) { return WorkspaceRoot.parseStringPath(path); }
+
+	@Test
+	void sessionChangesComposeWithAgentChangesAndRollback() {
+		var venue = VenueState.create(AKeyPair.generate());
+		var agent = venue.users().ensure(DID).ensureAgent("sessions", Maps.empty(), null);
+		var sid = Blob.fromHex("01");
+		agent.ensureSession(sid, DID);
+		var retained = new AtomicReference<SessionState>();
+		ACell before = venue.get();
+		assertThrows(IllegalStateException.class, () -> agent.transact(draft -> {
+			retained.set(draft.session(sid));
+			draft.setStatus(AgentState.RUNNING);
+			draft.session(sid).transact(session -> {
+				assertTrue(session.setTitle(Strings.create("draft")));
+				assertTrue(session.beginCycle(CVMLong.ONE, null, 0));
+			});
+			assertEquals(before, venue.get());
+			throw new IllegalStateException();
+		}));
+		assertEquals(before, venue.get());
+		retained.get().setTitle(Strings.create("late"));
+		assertEquals(before, venue.get());
+		agent.transact(draft -> {
+			draft.setStatus(AgentState.RUNNING);
+			draft.session(sid).beginCycle(CVMLong.ONE, null, 0);
+		});
+		assertEquals(AgentState.RUNNING, agent.getStatus());
+		assertEquals(CVMLong.ONE, agent.session(sid).cycleEpoch());
+	}
+
+	@Test
+	void sessionTransactionDoesNotResurrectConcurrentDeletion() throws Exception {
+		var agent = VenueState.create(AKeyPair.generate()).users().ensure(DID)
+			.ensureAgent("sessions", Maps.empty(), null);
+		var sid = Blob.fromHex("01");
+		agent.ensureSession(sid, DID);
+		var session = agent.session(sid);
+		var entered = new CountDownLatch(1);
+		var resume = new CountDownLatch(1);
+		var accepted = new AtomicBoolean();
+		try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+			var pending = executor.submit(() -> session.transact(draft -> {
+				accepted.set(draft.setTitle(Strings.create("pending")));
+				entered.countDown();
+				await(resume);
+			}));
+			try {
+				assertTrue(entered.await(10, TimeUnit.SECONDS));
+				agent.removeSession(sid);
+			} finally { resume.countDown(); }
+			pending.get(10, TimeUnit.SECONDS);
+		}
+		assertFalse(accepted.get());
+		assertNull(agent.getSession(sid));
+		assertFalse(session.beginCycle(CVMLong.ONE, null, 0));
+	}
+
+	@Test
+	void sessionUpdateReportsDeletionOnRetryAndPreservesCycleFence() throws Exception {
+		var agent = VenueState.create(AKeyPair.generate()).users().ensure(DID)
+			.ensureAgent("sessions", Maps.empty(), null);
+		var sid = Blob.fromHex("01");
+		agent.ensureSession(sid, DID);
+		var session = agent.session(sid);
+		session.beginCycle(CVMLong.ONE, null, 0);
+		assertFalse(session.updateFrames(CVMLong.create(2), frames -> frames));
+		assertFalse(session.updateQuiescentFrames(frames -> frames));
+		var entered = new CountDownLatch(1);
+		var resume = new CountDownLatch(1);
+		try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+			var pending = executor.submit(() -> session.updateFrames(CVMLong.ONE, frames -> {
+				entered.countDown();
+				await(resume);
+				return frames.assoc(0, ((AMap<AString, ACell>) frames.get(0))
+					.assoc(Strings.create("description"), Strings.create("changed")));
+			}));
+			try {
+				assertTrue(entered.await(10, TimeUnit.SECONDS));
+				agent.removeSession(sid);
+			} finally { resume.countDown(); }
+			assertFalse(pending.get(10, TimeUnit.SECONDS));
+		}
+		assertNull(agent.getSession(sid));
+	}
 
 	@Test
 	void authAndScheduleChildrenRemainOnTheVenueDraft() {

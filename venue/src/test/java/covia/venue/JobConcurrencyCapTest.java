@@ -135,14 +135,14 @@ public class JobConcurrencyCapTest {
 		RequestContext alice = caller("did:key:zAliceRecoveredCap");
 		Job paused;
 
-		Engine first = new Engine(config, cursor, keyPair).start();
+		Engine first = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), keyPair).start();
 		Engine.addDemoAssets(first);
 		paused = never(first, alice);
 		first.jobs().pauseJob(paused.getID(), alice);
 		first.syncState();
 		first.close();
 
-		Engine second = new Engine(config, cursor, keyPair).start();
+		Engine second = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), keyPair).start();
 		try {
 			Engine.addDemoAssets(second);
 			second.jobs().recoverJobs();

@@ -1,6 +1,7 @@
 package covia.lattice;
 
 import java.util.Arrays;
+import java.util.function.UnaryOperator;
 import convex.core.data.ACell;
 import convex.core.data.ABlobLike;
 import convex.core.data.AMap;
@@ -249,7 +250,14 @@ public record WorkspaceRoot(AForkableCursor<ACell> cursor, LatticeContext contex
 	 */
 	@SuppressWarnings("unchecked")
 	public static ACell deepSet(ACell root, ACell[] keys, int fromIndex, ACell value) {
-		if (fromIndex >= keys.length) return value;
+		return deepUpdate(root, keys, fromIndex, previous -> value);
+	}
+
+	/** Shared map/vector traversal with the workspace's explicit construction policy. */
+	@SuppressWarnings("unchecked")
+	private static ACell deepUpdate(ACell root, ACell[] keys, int fromIndex,
+			UnaryOperator<ACell> update) {
+		if (fromIndex >= keys.length) return update.apply(root);
 		ACell key = keys[fromIndex];
 
 		if (root instanceof AVector<?>) {
@@ -266,7 +274,7 @@ public record WorkspaceRoot(AForkableCursor<ACell> cursor, LatticeContext contex
 					+ "': lists use non-negative integer positions. To store named keys here, replace "
 					+ "the whole node with a map first (write '" + at + "' = {}).");
 			}
-			return vec.assoc(idx, deepSet(vec.get(idx), keys, fromIndex + 1, value));
+			return vec.assoc(idx, deepUpdate(vec.get(idx), keys, fromIndex + 1, update));
 		}
 
 		// Navigating into an existing non-map, non-vector value is a shape
@@ -284,7 +292,7 @@ public record WorkspaceRoot(AForkableCursor<ACell> cursor, LatticeContext contex
 		AMap<AString, ACell> map = (root instanceof AMap)
 			? (AMap<AString, ACell>) root : Maps.empty();
 		AString mapKey = RT.ensureString(key);
-		return map.assoc(mapKey, deepSet(map.get(mapKey), keys, fromIndex + 1, value));
+		return map.assoc(mapKey, deepUpdate(map.get(mapKey), keys, fromIndex + 1, update));
 	}
 
 	/**
@@ -348,41 +356,8 @@ public record WorkspaceRoot(AForkableCursor<ACell> cursor, LatticeContext contex
 	 */
 	@SuppressWarnings("unchecked")
 	public static ACell deepAppend(ACell root, ACell[] keys, int fromIndex, ACell element) {
-		if (fromIndex >= keys.length) return appendToVector(root, element);
-		ACell key = keys[fromIndex];
-
-		if (root instanceof AVector<?>) {
-			AVector<ACell> vec = (AVector<ACell>) root;
-			long idx = parseIndex(key);
-			if (idx < 0 || idx >= vec.count()) {
-				String at = buildSubPath(Arrays.copyOfRange(keys, 0, fromIndex));
-				if (idx >= 0) {   // numeric, just out of range
-					throw new IllegalArgumentException(
-						"List index out of bounds at '" + at + "': " + idx + " (size " + vec.count() + ")");
-				}
-				throw new IllegalArgumentException(   // non-index key on a list = shape conflict
-					"Cannot index the list at '" + at + "' (size " + vec.count() + ") with key '" + key
-					+ "': lists use non-negative integer positions. To store named keys here, replace "
-					+ "the whole node with a map first (write '" + at + "' = {}).");
-			}
-			return vec.assoc(idx, deepAppend(vec.get(idx), keys, fromIndex + 1, element));
-		}
-
-		// Shape conflict: cannot navigate into an existing non-map, non-vector
-		// scalar. Auto-vivify only a genuinely absent (null) intermediate.
-		if (root != null && !(root instanceof AMap)) {
-			String at = buildSubPath(Arrays.copyOfRange(keys, 0, fromIndex));
-			throw new IllegalArgumentException(
-				"Cannot set key '" + key + "' on the scalar value at '" + at
-				+ "': this path holds a value, not a map. To store named keys here, replace "
-				+ "the whole node with a map first (write '" + at + "' = {}).");
-		}
-		AMap<AString, ACell> map = (root instanceof AMap)
-			? (AMap<AString, ACell>) root : Maps.empty();
-		AString mapKey = RT.ensureString(key);
-		return map.assoc(mapKey, deepAppend(map.get(mapKey), keys, fromIndex + 1, element));
+		return deepUpdate(root, keys, fromIndex, current -> appendToVector(current, element));
 	}
-
 	/**
 	 * True if the leaf key of {@code keys} is present in its parent under the
 	 * cursor's (namespace-unwrapped) value — so a stored null value (key present,

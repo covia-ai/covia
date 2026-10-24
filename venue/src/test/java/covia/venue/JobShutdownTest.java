@@ -101,7 +101,7 @@ public class JobShutdownTest {
 		AKeyPair keyPair = AKeyPair.generate();
 		RequestContext alice = RequestContext.of(Strings.create("did:key:zAliceShutdownParked"));
 
-		Engine first = new Engine(config, cursor, keyPair).start();
+		Engine first = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), keyPair).start();
 		Engine.addDemoAssets(first);
 		Job parked = first.jobs().invokeOperation(NEVER, Maps.empty(), alice); // registers a pause hook
 		Job slow = delay(first, alice, 60_000);
@@ -112,7 +112,7 @@ public class JobShutdownTest {
 		assertEquals(Status.PAUSED, parked.getStatus(), "a pausable job is suspended, not cancelled");
 		assertEquals(Status.CANCELLED, slow.getStatus(), "in-process work is cancelled with zero grace");
 
-		Engine second = new Engine(config, cursor, keyPair).start();
+		Engine second = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), keyPair).start();
 		try {
 			Engine.addDemoAssets(second);
 			second.jobs().recoverJobs();

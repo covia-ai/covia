@@ -227,7 +227,7 @@ class RemoteDelegationTest {
 			var cursor = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
 			AKeyPair key = AKeyPair.generate();
 			AMap<AString, ACell> config = Maps.of(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0));
-			Engine first = new Engine(config, cursor, key).start();
+			Engine first = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), key).start();
 			Engine.addDemoAssets(first);
 			Job job;
 			try {
@@ -235,7 +235,7 @@ class RemoteDelegationTest {
 				await(() -> RemoteJobs.descriptor(job) != null && RemoteJobs.descriptor(job).get(RemoteJobs.REMOTE_ID) != null);
 			} finally { first.close(); }
 			assertEquals(0, peer.cancels.get());
-			Engine second = new Engine(config, cursor, key).start();
+			Engine second = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), key).start();
 			try {
 				Engine.addDemoAssets(second);
 				second.jobs().recoverJobs();
@@ -335,7 +335,7 @@ class RemoteDelegationTest {
 			Root<Index<Keyword, ACell>> cursor = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
 			AKeyPair key = AKeyPair.generate();
 			AMap<AString, ACell> config = Maps.of(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0));
-			Engine first = new Engine(config, cursor, key).start();
+			Engine first = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), key).start();
 			Engine.addDemoAssets(first);
 			Job job;
 			try {
@@ -344,7 +344,7 @@ class RemoteDelegationTest {
 			} finally { first.close(); }
 			assertFalse(job.isFinished(), "shutdown must not invent a remote cancellation");
 			peer.complete.set(true);
-			Engine second = new Engine(config, cursor, key).start();
+			Engine second = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), key).start();
 			second.jobs().recoverJobs();
 			try {
 				Job recovered = second.jobs().getJob(job.getID(), second.venueContext());

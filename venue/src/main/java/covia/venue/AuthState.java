@@ -165,29 +165,7 @@ public final class AuthState extends ALatticeComponent<AMap<AString, AMap<AStrin
 	 */
 	private boolean addAuthenticationKeyInDraft(AString id, AString keyDID,
 			AString actorDID, AString label) {
-		requireValidAuthenticationKey(keyDID);
-		requireActorDID(actorDID);
-		AMap<AString, ACell> user = getUser(id);
-		if (user == null) throw new IllegalArgumentException("Unknown named user: " + id);
-		requireKeyNotBoundElsewhere(id, keyDID);
-
-		AMap<AString, ACell> keys = getAuthenticationKeys(id);
-		AMap<AString, ACell> existing = RT.ensureMap(keys.get(keyDID));
-		if (existing != null) {
-			if (ACTIVE.equals(existing.get(Fields.STATUS))) return false;
-			throw new IllegalArgumentException(
-				"Revoked authentication keys cannot be reactivated");
-		}
-
-		CVMLong now = context.currentTimestamp();
-		AMap<AString, ACell> state = Maps.of(
-			Fields.STATUS, ACTIVE,
-			Fields.ADDED_AT, now,
-			Fields.ADDED_BY, actorDID);
-		if (label != null && !label.isEmpty()) state = state.assoc(Fields.LABEL, label);
-		AMap<AString, ACell> updatedKeys = keys.assoc(keyDID, state);
-		updateUser(id, current -> current.assoc(Fields.AUTHENTICATION_KEYS, updatedKeys));
-		return true;
+		return installKeys(id, Vectors.of(keyDID), actorDID, label) > 0;
 	}
 
 	/**
@@ -196,8 +174,8 @@ public final class AuthState extends ALatticeComponent<AMap<AString, AMap<AStrin
 	 *
 	 * @return number of newly installed keys
 	 */
-	private long addAuthenticationKeysInDraft(AString id,
-			AVector<ACell> keyDIDs, AString actorDID) {
+	private long installKeys(AString id,
+			AVector<ACell> keyDIDs, AString actorDID, AString label) {
 		if (keyDIDs == null || keyDIDs.isEmpty()) {
 			throw new IllegalArgumentException("At least one authentication key is required");
 		}
@@ -225,10 +203,10 @@ public final class AuthState extends ALatticeComponent<AMap<AString, AMap<AStrin
 		CVMLong now = context.currentTimestamp();
 		for (AString keyDID : requested) {
 			if (keys.containsKey(keyDID)) continue;
-			keys = keys.assoc(keyDID, Maps.of(
-				Fields.STATUS, ACTIVE,
-				Fields.ADDED_AT, now,
-				Fields.ADDED_BY, actorDID));
+			AMap<AString, ACell> entry = Maps.of(Fields.STATUS, ACTIVE,
+				Fields.ADDED_AT, now, Fields.ADDED_BY, actorDID);
+			if (label != null && !label.isEmpty()) entry = entry.assoc(Fields.LABEL, label);
+			keys = keys.assoc(keyDID, entry);
 			added++;
 		}
 		if (added > 0) {
@@ -322,7 +300,7 @@ public final class AuthState extends ALatticeComponent<AMap<AString, AMap<AStrin
 	/** Atomic directory mutation, including cross-user key constraints. */
 	public long addAuthenticationKeys(AString id, AVector<ACell> keyDIDs, AString actorDID) {
 		var result = new java.util.concurrent.atomic.AtomicLong();
-		transact(draft -> result.set(draft.addAuthenticationKeysInDraft(id, keyDIDs, actorDID)));
+		transact(draft -> result.set(draft.installKeys(id, keyDIDs, actorDID, null)));
 		return result.get();
 	}
 

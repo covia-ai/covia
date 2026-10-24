@@ -13,7 +13,13 @@ in order for its sweeps and explicit flush. A concurrent write remains pending
 when the host finishes publishing an older snapshot; the host does not merge
 that stale snapshot back into current state.
 
-`VenueState`, `Users`, `User`, `AgentState`, `AuthState`, `ScheduleState`, `AssetStore`, `SecretStore` and
+Engine now requires a `CoviaApplication`; the raw-cursor constructors and
+`PersistenceHandler` have been removed on this experimental branch. Embedders
+connect to their existing `LatticeHost`, or open an application over their store.
+Restart tests use the same host model as production. This is a Java API migration,
+not a change to persisted record formats.
+
+`VenueState`, `Users`, `User`, `AgentState`, `SessionState`, `AuthState`, `ScheduleState`, `AssetStore`, `SecretStore` and
 `WorkspaceRoot` implement upstream `TransactionalComponent`. Ordinary domain
 mutations are atomic; `transact(draft -> ...)` groups several operations into one
 local commit. Choose the component containing all data the operation reads or
@@ -21,6 +27,30 @@ writes, obtain its children from the supplied draft, and keep external I/O out
 of the callback. Conflicts rerun the callback; exceptions discard the attempt.
 Retained draft objects remain isolated after completion. Nested transactions
 commit into their enclosing draft, not into live state.
+
+The normal operation shape is **event → atomic domain update → external outputs**.
+Validate invariants against the same snapshot being changed. Obtain child views
+from the transaction's draft, then perform timers, notifications and network/job
+execution after the outer commit. A commit is not an exactly-once external effect:
+crash-sensitive dispatch still needs its existing durable claim/recovery protocol.
+Do not introduce I/O or runtime service calls inside retryable callbacks.
+
+`agent.session(id)` is a composable component for an existing session. It owns
+frame history, pending-input drainage and cycle-fenced edits. Session creation
+and changes spanning agent status, tasks and sessions stay at the agent boundary.
+Session updates never recreate a missing session; retained account guards also
+apply through the child view. Shared pure record operations keep compound agent
+completion on the same history/migration implementation as direct session edits.
+
+```java
+agent.transact(draft -> {
+    if (!draft.session(sessionId).beginCycle(epoch, turns, pendingCount)) {
+        throw new IllegalStateException("Session is no longer available");
+    }
+    draft.setStatus(AgentState.RUNNING);
+});
+// Dispatch runtime work only after this outer transaction returns successfully.
+```
 
 ```java
 venue.transact(draft -> {
@@ -321,8 +351,7 @@ signature batching alone are not transaction boundaries.
 A daemon publishes the connected root every 100 ms. Every 10 seconds it also
 invokes the store durability barrier, bounding the default unclean-shutdown
 loss window independently of the source of a mutation. Ephemeral applications
-and raw-cursor Engines with the no-op persistence handler do not start the
-daemon.
+and applications whose host has no store do not start the daemon.
 
 ```java
 // in covia.venue.Engine

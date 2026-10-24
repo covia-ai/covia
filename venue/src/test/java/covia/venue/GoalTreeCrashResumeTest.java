@@ -151,7 +151,7 @@ public class GoalTreeCrashResumeTest {
 		AgentState restored = agent(second, agentId);
 		AVector<ACell> oldFrames = RT.ensureVector(restored.getSession(sid).get(Fields.FRAMES));
 		assertEquals(legacy, oldFrames.get(0), "read/restart alone does not rewrite legacy state");
-		assertTrue(restored.migrateSessionHistory(sid, oldFrames));
+		assertTrue(restored.session(sid).migrateHistory(oldFrames));
 		assertEquals(selected, GoalTreeContext.archivedConversation(RT.ensureMap(
 			RT.getIn(restored.getSession(sid), Fields.FRAMES, CVMLong.ZERO))));
 		second.jobs().invokeOperation("v/ops/agent/chat", Maps.of(Fields.AGENT_ID, agentId,

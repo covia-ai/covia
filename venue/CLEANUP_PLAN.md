@@ -119,8 +119,8 @@ Add new classes — **propose each design before cutting**. One at a time, suite
 - [ ] **`Engine` decomposition** → extract `AssetResolver`/`PathResolver`,
   `AdapterRegistry`, `ContentRouter`, `SecretService`, and a `VenueProvisioner`
   (breaks the `Engine → JobManager → Engine` startup cycle). Persistence stays
-  an Engine **seam** behind `PersistenceHandler` (see PERSISTENCE.md) — **not**
-  extracted.
+  an Engine integration with upstream `LatticeHost` (see PERSISTENCE.md);
+  the experimental component branch has removed the alternate `PersistenceHandler` path.
 - [ ] **`CoviaAPI`** → `handleJobLifecycle(...)` helper (4 near-identical
   handlers); consider splitting secrets/DID into their own `ACoviaAPI`
   subclasses like `UserAPI`.

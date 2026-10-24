@@ -1,5 +1,7 @@
 package covia.venue;
 
+import static covia.venue.SessionState.*;
+
 import java.util.Objects;
 import java.util.function.UnaryOperator;
 
@@ -61,8 +63,6 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 	private static final AString K_STATE    = Strings.intern("state");
 	private static final AString K_TASKS    = Strings.intern("tasks");
 	private static final AString K_SESSIONS = Strings.intern("sessions");
-	/** Legacy pre-frame loads slot. Read only by the cycle-start migration. */
-	private static final AString K_LOADS = Strings.intern("loads");
 	private static final AString K_PENDING  = Strings.intern("pending");
 	private static final AString K_TIMELINE = Strings.intern("timeline");
 	private static final AString K_ERROR    = Strings.intern("error");
@@ -84,25 +84,6 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 	 *  non-blocking {@code agent:trigger}. Package-visible so scheduler tests
 	 *  assert against the same constant the production wake uses. */
 	static final AString TRIGGER_OP = Strings.intern("v/ops/agent/trigger");
-
-	// Session record field keys (scoped within a single session map)
-	private static final AString K_C        = Strings.intern("c");
-	private static final AString K_FRAMES   = Strings.intern("frames");
-	/** Session attempt epoch: present while a transition owns this session
-	 *  (set by {@link #beginSessionCycle}, cleared by {@link #mergeRunResult}).
-	 *  Serves as a write fence for {@link #updateSessionFrames} (a
-	 *  cancelled cycle's zombie thread cannot write once a new epoch claims the
-	 *  session). A stale epoch after restart is abandoned executor state; a
-	 *  later attempt may supersede it but boot never wakes solely for it. */
-	private static final AString K_IN_CYCLE = Strings.intern("inCycle");
-	private static final AString K_META     = Strings.intern("meta");
-	private static final AString K_PARTIES  = Strings.intern("parties");
-	private static final AString K_CREATED  = Strings.intern("created");
-	private static final AString K_TURNS    = Strings.intern("turns");
-
-	// Frame record field keys (entries in session.frames). See GOAL_TREE.md.
-	private static final AString K_DESCRIPTION  = Strings.intern("description");
-	private static final AString K_CONVERSATION = Strings.intern("conversation");
 
 	// Turn record field keys (entries in session root frame history, and
 	// in child frame conversations when the goal-tree adapter pushes them).
@@ -316,12 +297,13 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 	 * Returns the session record for the given sid, or null if absent.
 	 */
 	@SuppressWarnings("unchecked")
-	public AMap<AString, ACell> getSession(Blob sid) {
-		Index<Blob, ACell> sessions = getSessions();
-		ACell v = sessions.get(sid);
-		return (v instanceof AMap) ? (AMap<AString, ACell>) v : null;
-	}
+	public AMap<AString, ACell> getSession(Blob sid) { return session(sid).getRecord(); }
 
+	/** Session view bound to this agent (including when this agent is a draft).
+	 * Missing sessions read as null; mutations never create or resurrect them. */
+	public SessionState session(Blob sid) {
+		return new SessionState(getContext(), cursor().path(K_SESSIONS, sid), sid);
+	}
 	/** Number of recorded root conversation turns, retained across compaction. */
 	public static long sessionTurnCount(AMap<AString, ACell> session) {
 		ACell count = RT.getIn(session, K_META, K_TURNS);
@@ -443,87 +425,56 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 		});
 	}
 
-	private static AMap<AString, ACell> newSession(AString caller,
-			AMap<AString, ACell> initialLoads, CVMLong created) {
-		AMap<AString, ACell> meta = Maps.of(
-			K_CREATED, created,
-			Fields.UPDATED, created,
-			K_TURNS,   CVMLong.create(0),
-			K_PARTIES, (caller != null) ? Vectors.of(caller) : Vectors.empty());
-		AMap<AString, ACell> rootFrame = GoalTreeContext.createFrame("");
-		if (initialLoads != null && initialLoads.count() > 0) {
-			rootFrame = rootFrame.assoc(K_LOADS, initialLoads);
-		}
-		return Maps.of(
-			K_C,       Maps.empty(),
-			K_PENDING, Vectors.empty(),
-			K_FRAMES,  Vectors.of(rootFrame),
-			K_META,    meta);
-	}
-
 	/**
 	 * Atomically creates/reuses a session and adds a task to it. This prevents
 	 * agent removal or competing session creation from landing between the two
 	 * record changes.
 	 */
-	@SuppressWarnings("unchecked")
 	public SessionIntake addTaskInSession(Blob sid, AString caller,
 			AMap<AString, ACell> initialLoads, Blob taskId, ACell taskData) {
-		java.util.concurrent.atomic.AtomicReference<SessionIntake> result =
-			new java.util.concurrent.atomic.AtomicReference<>(SessionIntake.MISSING);
-		CVMLong created = now();
-		update(r -> {
-			result.set(SessionIntake.MISSING);
-			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index<?, ?> idx)
-				? (Index<Blob, ACell>) idx : Index.none();
-			ACell rawSession = sessions.get(sid);
-			if (rawSession != null && initialLoads != null) {
-				result.set(SessionIntake.LOADS_ON_EXISTING);
-				return r;
-			}
-			if (rawSession == null) {
-				rawSession = newSession(caller, initialLoads, created);
-				sessions = sessions.assoc(sid, rawSession);
-			}
-			if (!(rawSession instanceof AMap<?, ?>)) return r;
-			result.set(SessionIntake.APPLIED);
-			return r
-				.assoc(K_SESSIONS, sessions)
-				.assoc(K_TASKS, extractTasks(r).assoc(taskId, taskData));
-		});
-		return result.get();
+		return intakeSession(sid, caller, initialLoads, true, record ->
+			record.assoc(K_TASKS, extractTasks(record).assoc(taskId, taskData)));
 	}
 
 	/** Atomically creates/reuses a session and appends one pending envelope. */
-	@SuppressWarnings("unchecked")
 	public SessionIntake appendSessionPending(Blob sid, AString caller,
-			AMap<AString, ACell> initialLoads, ACell envelope,
-			boolean createIfMissing) {
-		java.util.concurrent.atomic.AtomicReference<SessionIntake> result =
-			new java.util.concurrent.atomic.AtomicReference<>(SessionIntake.MISSING);
-		CVMLong created = now();
-		update(r -> {
-			result.set(SessionIntake.MISSING);
-			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index<?, ?> idx)
-				? (Index<Blob, ACell>) idx : Index.none();
-			ACell rawSession = sessions.get(sid);
-			if (rawSession != null && initialLoads != null) {
-				result.set(SessionIntake.LOADS_ON_EXISTING);
-				return r;
-			}
-			if (rawSession == null) {
-				if (!createIfMissing) return r;
-				rawSession = newSession(caller, initialLoads, created);
-			}
-			if (!(rawSession instanceof AMap<?, ?> map)) return r;
-			AMap<AString, ACell> session = (AMap<AString, ACell>) map;
-			AVector<ACell> pending = (session.get(K_PENDING) instanceof AVector<?> vector)
-				? (AVector<ACell>) vector : Vectors.empty();
-			session = session.assoc(K_PENDING, pending.conj(envelope));
-			result.set(SessionIntake.APPLIED);
-			return r.assoc(K_SESSIONS, sessions.assoc(sid, session));
+			AMap<AString, ACell> initialLoads, ACell envelope, boolean createIfMissing) {
+		return intakeSession(sid, caller, initialLoads, createIfMissing, record -> {
+			Index<Blob, ACell> sessions = (Index<Blob, ACell>) record.get(K_SESSIONS);
+			AMap<AString, ACell> session = RT.ensureMap(sessions.get(sid));
+			AVector<ACell> pending = RT.ensureVector(session.get(K_PENDING));
+			if (pending == null) pending = Vectors.empty();
+			return record.assoc(K_SESSIONS, sessions.assoc(sid,
+				session.assoc(K_PENDING, pending.conj(envelope))));
 		});
-		return result.get();
+	}
+
+	/** Session admission and the associated agent change observe one atomic snapshot. */
+	private SessionIntake intakeSession(Blob sid, AString caller,
+			AMap<AString, ACell> initialLoads, boolean create,
+			UnaryOperator<AMap<AString, ACell>> change) {
+		SessionIntake[] result = {SessionIntake.MISSING};
+		CVMLong created = now();
+		cursor().updateAndGet(value -> {
+			result[0] = SessionIntake.MISSING;
+			AMap<AString, ACell> record = RT.ensureMap(value);
+			if (record == null) return value;
+			Index<Blob, ACell> sessions = record.get(K_SESSIONS) instanceof Index<?, ?> index
+				? (Index<Blob, ACell>) index : Index.none();
+			ACell raw = sessions.get(sid);
+			if (raw != null && initialLoads != null) {
+				result[0] = SessionIntake.LOADS_ON_EXISTING;
+				return value;
+			}
+			if (raw == null) {
+				if (!create) return value;
+				raw = newSession(caller, initialLoads, created);
+			}
+			if (!(raw instanceof AMap<?, ?>)) return value;
+			result[0] = SessionIntake.APPLIED;
+			return change.apply(record.assoc(K_SESSIONS, sessions.assoc(sid, raw)));
+		});
+		return result[0];
 	}
 
 	@SuppressWarnings("unchecked")
@@ -545,13 +496,7 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 	 * pending entries.</p>
 	 */
 	@SuppressWarnings("unchecked")
-	public AVector<ACell> getSessionPending(Blob sid) {
-		AMap<AString, ACell> session = getSession(sid);
-		if (session == null) return Vectors.empty();
-		ACell v = session.get(K_PENDING);
-		return (v instanceof AVector) ? (AVector<ACell>) v : Vectors.empty();
-	}
-
+	public AVector<ACell> getSessionPending(Blob sid) { return session(sid).pending(); }
 	/**
 	 * Atomically appends an envelope to {@code sessions[sid].pending} (S3b).
 	 * No-op if the session is missing — callers should ensureSession first.
@@ -561,226 +506,10 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 		appendSessionPending(sid, null, null, envelope, false);
 	}
 
-	/**
-	 * Atomically claims a session for a transition cycle: sets the
-	 * {@code inCycle} epoch, appends the cycle's input turns to
-	 * the root frame history (bumping {@code meta.turns}), and drains
-	 * the first {@code drainCount} entries of {@code session.pending} — all in
-	 * ONE CAS, so an envelope is removed from pending only in the write that
-	 * lands its user turn (crash between the two is impossible).
-	 *
-	 * <p>A stale {@code inCycle} left by an abandoned attempt is overwritten.
-	 * The epoch is a write fence, not a checkpoint: claiming it starts a fresh
-	 * attempt and does not restore the former executor.</p>
-	 *
-	 * @return true if the session existed and was claimed; false if the
-	 *         record or session is missing (nothing written)
-	 */
-	@SuppressWarnings("unchecked")
-	public boolean beginSessionCycle(Blob sid, ACell epoch, AVector<ACell> turns, long drainCount) {
-		java.util.concurrent.atomic.AtomicBoolean applied =
-			new java.util.concurrent.atomic.AtomicBoolean(false);
-		update(r -> {
-			applied.set(false);
-			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index idx)
-				? (Index<Blob, ACell>) idx : Index.none();
-			ACell sv = sessions.get(sid);
-			if (!(sv instanceof AMap)) return r;
-			AMap<AString, ACell> session = (AMap<AString, ACell>) sv;
-			if (session.containsKey(K_FRAMES)) {
-				AVector<ACell> frames = sessionFrames(session);
-				session = session.assoc(K_FRAMES, GoalTreeContext.migrateFrames(frames));
-			}
-			session = migrateLegacySessionLoads(session);
-			session = session.assoc(K_IN_CYCLE, epoch);
-			if (turns != null && turns.count() > 0) {
-				session = appendTurnsToRoot(session, turns);
-			}
-			if (drainCount > 0) {
-				session = drainPendingPrefix(session, drainCount);
-			}
-			applied.set(true);
-			return r.assoc(K_SESSIONS, sessions.assoc(sid, session));
-		});
-		return applied.get();
-	}
-
-	/**
-	 * Moves the former {@code session.loads} tier into the root frame. Existing
-	 * root-frame entries retain their old inner-scope precedence, including nil
-	 * masks. Flattening the effective value preserves behaviour while giving
-	 * both LLM runtimes one durable frame shape. Pure and safe under CAS retry.
-	 */
-	@SuppressWarnings("unchecked")
-	private static AMap<AString, ACell> migrateLegacySessionLoads(
-			AMap<AString, ACell> session) {
-		if (!session.containsKey(K_LOADS)) return session;
-		AMap<AString, ACell> legacy = (session.get(K_LOADS) instanceof AMap lm)
-			? (AMap<AString, ACell>) lm : Maps.empty();
-		AVector<ACell> frames = sessionFrames(session);
-		AMap<AString, ACell> root;
-		if (frames.isEmpty() || !(frames.get(0) instanceof AMap)) {
-			root = GoalTreeContext.createFrame("");
-			frames = Vectors.of(root);
-		} else {
-			root = (AMap<AString, ACell>) frames.get(0);
-		}
-		AMap<AString, ACell> frameLoads = (root.get(K_LOADS) instanceof AMap fm)
-			? (AMap<AString, ACell>) fm : Maps.empty();
-		AMap<AString, ACell> merged = mergeLoadTiers(legacy, frameLoads);
-		root = merged.isEmpty() ? root.dissoc(K_LOADS) : root.assoc(K_LOADS, merged);
-		return session.assoc(K_FRAMES, frames.assoc(0, root)).dissoc(K_LOADS);
-	}
-
 	/** Applies load tiers outer-to-inner; nil entries mask an outer value. */
-	@SafeVarargs
-	private static AMap<AString, ACell> mergeLoadTiers(AMap<AString, ACell>... tiers) {
-		AMap<AString, ACell> result = Maps.empty();
-		for (AMap<AString, ACell> tier : tiers) {
-			for (var entry : tier.entrySet()) {
-				result = (entry.getValue() == null)
-					? result.dissoc(entry.getKey())
-					: result.assoc(entry.getKey(), entry.getValue());
-			}
-		}
-		return result;
-	}
-
-	/**
-	 * Atomically presents input after a cycle has claimed and repaired its
-	 * frames. The epoch fence prevents an interrupted runner from draining
-	 * pending messages after a newer cycle has superseded it.
-	 */
-	@SuppressWarnings("unchecked")
-	public boolean presentSessionCycleInput(Blob sid, ACell expectedEpoch,
-			AVector<ACell> turns, long drainCount) {
-		java.util.concurrent.atomic.AtomicBoolean applied =
-			new java.util.concurrent.atomic.AtomicBoolean(false);
-		update(r -> {
-			applied.set(false);
-			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index idx)
-				? (Index<Blob, ACell>) idx : Index.none();
-			ACell sv = sessions.get(sid);
-			if (!(sv instanceof AMap)) return r;
-			AMap<AString, ACell> session = (AMap<AString, ACell>) sv;
-			if (!Objects.equals(expectedEpoch, session.get(K_IN_CYCLE))) return r;
-
-			if (turns != null && turns.count() > 0) {
-				session = appendTurnsToRoot(session, turns);
-			}
-			if (drainCount > 0) {
-				session = drainPendingPrefix(session, drainCount);
-			}
-			applied.set(true);
-			return r.assoc(K_SESSIONS, sessions.assoc(sid, session));
-		});
-		return applied.get();
-	}
-
-	/**
-	 * Atomically updates {@code sessions[sid].frames}, fenced by the cycle
-	 * epoch: the write applies only while {@code session.inCycle} equals
-	 * {@code expectedEpoch}. A transition whose cycle has been superseded
-	 * (cancelled and superseded, agent deleted and recreated, session claimed by
-	 * a fresh cycle) gets {@code false} and must stop — its view of the
-	 * frames is no longer authoritative.
-	 *
-	 * <p>{@code fn} must be pure: the CAS may re-apply it on contention.</p>
-	 *
-	 * @param expectedEpoch the claiming cycle's epoch (from
-	 *        {@link #beginSessionCycle}); null skips the fence for coordinated
-	 *        initialisation and tests. Owner mutations should use
-	 *        {@link #updateQuiescentSessionFrames}.
-	 * @return true if the update applied; false if the record/session is
-	 *         missing or the epoch fence rejected the write
-	 */
-	@SuppressWarnings("unchecked")
-	public boolean updateSessionFrames(Blob sid, ACell expectedEpoch, UnaryOperator<AVector<ACell>> fn) {
-		return updateSessionFrames(sid, expectedEpoch, false, fn);
-	}
-
-	/** Applies an owner-side frame mutation only while the session is idle. */
-	public boolean updateQuiescentSessionFrames(Blob sid, UnaryOperator<AVector<ACell>> fn) {
-		return updateSessionFrames(sid, null, true, fn);
-	}
-
-	/** Storage-only migration of an idle, unchanged frame snapshot. The same
-	 * CAS checks idleness/snapshot and publishes all converted frames together. */
-	public boolean migrateSessionHistory(Blob sid, AVector<ACell> expectedFrames) {
-		if (expectedFrames == null) return false;
-		return updateQuiescentSessionFrames(sid, current ->
-			expectedFrames.equals(current) ? GoalTreeContext.migrateFrames(current) : null);
-	}
-
-	@SuppressWarnings("unchecked")
-	private boolean updateSessionFrames(Blob sid, ACell expectedEpoch,
-			boolean requireQuiescent, UnaryOperator<AVector<ACell>> fn) {
-		java.util.concurrent.atomic.AtomicBoolean applied =
-			new java.util.concurrent.atomic.AtomicBoolean(false);
-		update(r -> {
-			applied.set(false);
-			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index idx)
-				? (Index<Blob, ACell>) idx : Index.none();
-			ACell sv = sessions.get(sid);
-			if (!(sv instanceof AMap)) return r;
-			AMap<AString, ACell> session = (AMap<AString, ACell>) sv;
-			if (requireQuiescent && session.get(K_IN_CYCLE) != null) return r;
-			if (expectedEpoch != null && !expectedEpoch.equals(session.get(K_IN_CYCLE))) {
-				return r;   // fence: this cycle no longer owns the session
-			}
-			AVector<ACell> frames = sessionFrames(session);
-			AVector<ACell> updatedFrames = fn.apply(frames);
-			if (updatedFrames == null || updatedFrames == frames) {
-				applied.set(updatedFrames != null);
-				return r;   // no change — skip the write (and the K_TS bump)
-			}
-			GoalTreeContext.validateFramesUpdate(frames, updatedFrames);
-			session = session.assoc(K_FRAMES, updatedFrames);
-			// Compare retained suffixes for history frames. Compaction adds a
-			// summary, not a turn; migration must not count flattened archives again.
-			AVector<ACell> beforeRoot = rootHistory(frames);
-			AVector<ACell> afterRoot = rootHistory(updatedFrames);
-			if (afterRoot.count() > beforeRoot.count()) {
-				AVector<ACell> appended = Vectors.empty();
-				for (long i = beforeRoot.count(); i < afterRoot.count(); i++) {
-					ACell entry = afterRoot.get(i);
-					if (!GoalTreeContext.isSegment(entry)) appended = appended.conj(entry);
-				}
-				if (!appended.isEmpty()) session = bumpTurnMeta(session, appended);
-			}
-			applied.set(true);
-			return r.assoc(K_SESSIONS, sessions.assoc(sid, session));
-		});
-		return applied.get();
-	}
-
-	/** Appends one root-frame conversation turn under the active cycle fence,
-	 * updating session turn/timestamp metadata atomically with the frame. */
-	@SuppressWarnings("unchecked")
-	public boolean appendSessionRootTurn(Blob sid, ACell expectedEpoch, ACell turn) {
-		java.util.concurrent.atomic.AtomicBoolean applied =
-			new java.util.concurrent.atomic.AtomicBoolean(false);
-		update(r -> {
-			applied.set(false);
-			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index idx)
-				? (Index<Blob, ACell>) idx : Index.none();
-			ACell sv = sessions.get(sid);
-			if (!(sv instanceof AMap)) return r;
-			AMap<AString, ACell> session = (AMap<AString, ACell>) sv;
-			if (expectedEpoch != null && !expectedEpoch.equals(session.get(K_IN_CYCLE))) return r;
-			session = appendTurnsToRoot(session, Vectors.of(turn));
-			applied.set(true);
-			return r.assoc(K_SESSIONS, sessions.assoc(sid, session));
-		});
-		return applied.get();
-	}
 
 	/** Reads {@code sessions[sid].inCycle}, or null when absent. */
-	public ACell getSessionCycleEpoch(Blob sid) {
-		AMap<AString, ACell> session = getSession(sid);
-		return (session != null) ? session.get(K_IN_CYCLE) : null;
-	}
-
+	public ACell getSessionCycleEpoch(Blob sid) { return session(sid).cycleEpoch(); }
 	/**
 	 * Settles a session's cycle claim without a merge — used when an
 	 * interrupted cycle is administratively stopped (operator suspend): the
@@ -788,9 +517,8 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 	 * and any zombie writes from the stopped cycle are fenced out.
 	 */
 	public void clearSessionCycle(Blob sid) {
-		update(r -> clearSessionCycle(r, sid));
+		if (sid != null) session(sid).clearCycle();
 	}
-
 	@SuppressWarnings("unchecked")
 	private static AMap<AString, ACell> clearSessionCycle(AMap<AString, ACell> r, Blob sid) {
 		if (sid == null) return r;
@@ -804,110 +532,11 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 		return r.assoc(K_SESSIONS, sessions.assoc(sid, cleared));
 	}
 
-	/**
-	 * Appends turns to the session's the root frame history and bumps
-	 * {@code meta.turns}. Shared by {@link #beginSessionCycle} and
-	 * {@link #mergeRunResult} so the two paths cannot drift. Defensive: mints
-	 * a root frame if the session predates frames. Pure — safe under CAS retry.
-	 */
-	@SuppressWarnings("unchecked")
-	private static AMap<AString, ACell> appendTurnsToRoot(AMap<AString, ACell> session,
-			AVector<ACell> turnsToAppend) {
-		AVector<ACell> frames = sessionFrames(session);
-		AMap<AString, ACell> rootFrame;
-		if (frames.count() == 0) {
-			rootFrame = GoalTreeContext.createFrame("");
-			frames = Vectors.of(rootFrame);
-		} else {
-			rootFrame = (AMap<AString, ACell>) frames.get(0);
-		}
-		rootFrame = GoalTreeContext.appendTurns(rootFrame, turnsToAppend);
-		frames = frames.assoc(0, rootFrame);
-		session = session.assoc(K_FRAMES, frames);
-		return bumpTurnMeta(session, turnsToAppend);
-	}
-
 	/** Updates root-turn count and timestamp metadata for an appended suffix. */
-	@SuppressWarnings("unchecked")
-	private static AMap<AString, ACell> bumpTurnMeta(AMap<AString, ACell> session,
-			AVector<ACell> appended) {
-		if (session.get(K_META) instanceof AMap) {
-			AMap<AString, ACell> meta = (AMap<AString, ACell>) session.get(K_META);
-			long current = (meta.get(K_TURNS) instanceof CVMLong cl) ? cl.longValue() : 0;
-			meta = meta.assoc(K_TURNS, CVMLong.create(current + appended.count()));
-			long updated = (meta.get(Fields.UPDATED) instanceof CVMLong cl) ? cl.longValue() : 0;
-			for (long i = 0; i < appended.count(); i++) {
-				ACell ts = RT.getIn(appended.get(i), K_TURN_TS);
-				if (ts instanceof CVMLong cl) updated = Math.max(updated, cl.longValue());
-			}
-			if (updated > 0) meta = meta.assoc(Fields.UPDATED, CVMLong.create(updated));
-			session = session.assoc(K_META, meta);
-		}
-		return session;
-	}
-
-	/** Missing pre-frame state is supported; malformed state must never be reset. */
-	private static AVector<ACell> sessionFrames(AMap<AString, ACell> session) {
-		if (!session.containsKey(K_FRAMES)) return Vectors.empty();
-		AVector<ACell> frames = RT.ensureVector(session.get(K_FRAMES));
-		if (frames == null) throw new IllegalArgumentException(INVALID_SESSION_FRAMES);
-		return frames;
-	}
-
 	/** Comparable retained history; migration itself contributes no new turns. */
-	@SuppressWarnings("unchecked")
-	private static AVector<ACell> rootHistory(AVector<ACell> frames) {
-		if (frames == null || frames.isEmpty() || !(frames.get(0) instanceof AMap root)) {
-			return Vectors.empty();
-		}
-		AMap<AString, ACell> frame = (AMap<AString, ACell>) root;
-		AVector<ACell> conversation = GoalTreeContext.history(frame.containsKey(K_CONVERSATION)
-			? GoalTreeContext.migrateFrame(frame) : frame);
-		return conversation != null ? conversation : Vectors.empty();
-	}
-
-	/**
-	 * Adds a cycle's measured token counts — {@code input}, {@code output},
-	 * {@code total} and the cache counts when reported — into the session's
-	 * {@code meta.tokens} running totals (#217). Pure —
-	 * safe under CAS retry. A session without a meta map (shouldn't happen —
-	 * sessions mint meta at creation) is left untouched rather than grown a
-	 * partial one.
-	 */
-	@SuppressWarnings("unchecked")
-	private static AMap<AString, ACell> bumpMetaTokens(AMap<AString, ACell> session,
-			AMap<AString, ACell> cycleTokens) {
-		if (!(session.get(K_META) instanceof AMap)) return session;
-		AMap<AString, ACell> meta = (AMap<AString, ACell>) session.get(K_META);
-		AMap<AString, ACell> totals = (meta.get(Fields.TOKENS) instanceof AMap tm)
-			? (AMap<AString, ACell>) tm : Maps.empty();
-		for (AString k : new AString[] {Fields.INPUT, Fields.OUTPUT, Fields.TOTAL,
-				Fields.CACHE_READ, Fields.CACHE_WRITE, Fields.CACHE_WRITE_5M, Fields.CACHE_WRITE_1H}) {
-			if (!(cycleTokens.get(k) instanceof CVMLong measured)) continue;
-			long add = measured.longValue();
-			long current = (totals.get(k) instanceof CVMLong cl) ? cl.longValue() : 0;
-			totals = totals.assoc(k, CVMLong.create(current + add));
-		}
-		if (totals.count() == 0) return session;
-		return session.assoc(K_META, meta.assoc(Fields.TOKENS, totals));
-	}
-
 	/** Drops the first {@code drainCount} entries of {@code session.pending},
 	 *  preserving the tail (entries that arrived after the snapshot). Shared
-	 *  by {@link #beginSessionCycle} and {@link #mergeRunResult}. Pure. */
-	@SuppressWarnings("unchecked")
-	private static AMap<AString, ACell> drainPendingPrefix(AMap<AString, ACell> session,
-			long drainCount) {
-		AVector<ACell> pending = (session.get(K_PENDING) instanceof AVector pv)
-			? (AVector<ACell>) pv : Vectors.empty();
-		long drop = Math.min(drainCount, pending.count());
-		AVector<ACell> remaining = Vectors.empty();
-		for (long i = drop; i < pending.count(); i++) {
-			remaining = remaining.conj(pending.get(i));
-		}
-		return session.assoc(K_PENDING, remaining);
-	}
-
+	 *  by {@link SessionState#beginCycle} and {@link #mergeRunResult}. Pure. */
 	/**
 	 * Removes the session record at {@code sid} (no-op if absent). The
 	 * removal is durable: the venue merge is whole-value LWW, so the
@@ -922,63 +551,6 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index idx)
 				? (Index<Blob, ACell>) idx : Index.none();
 			return r.assoc(K_SESSIONS, sessions.dissoc(sid));
-		});
-	}
-
-	/**
-	 * Sets (or clears, when {@code title} is null) the free-form human-facing
-	 * title in a session's {@code meta} — the field documented but never
-	 * implemented in the "suggested" shape at AGENT_SESSIONS.md §4.3. A
-	 * no-op if the session doesn't exist (caller should check first if it
-	 * needs to distinguish "not found" from "renamed").
-	 *
-	 * @return true if the session existed and was updated, false otherwise
-	 */
-	@SuppressWarnings("unchecked")
-	public boolean setSessionTitle(Blob sid, AString title) {
-		java.util.concurrent.atomic.AtomicBoolean found =
-			new java.util.concurrent.atomic.AtomicBoolean(false);
-		update(r -> {
-			// updateAndGet may retry the callback after contention. Reset the
-			// side-channel so the return value describes the winning attempt.
-			found.set(false);
-			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index idx)
-				? (Index<Blob, ACell>) idx : Index.none();
-			ACell sessionCell = sessions.get(sid);
-			if (!(sessionCell instanceof AMap)) return r;
-			found.set(true);
-			AMap<AString, ACell> session = (AMap<AString, ACell>) sessionCell;
-			AMap<AString, ACell> meta = (session.get(K_META) instanceof AMap m)
-				? (AMap<AString, ACell>) m : Maps.empty();
-			meta = (title != null) ? meta.assoc(Fields.TITLE, title) : meta.dissoc(Fields.TITLE);
-			session = session.assoc(K_META, meta);
-			return r.assoc(K_SESSIONS, sessions.assoc(sid, session));
-		});
-		return found.get();
-	}
-
-	/** Removes a queued chat envelope by its external Job id. */
-	@SuppressWarnings("unchecked")
-	public void removeSessionPendingJob(Blob sid, Blob jobId) {
-		AString jobIdHex = Strings.create(jobId.toHexString());
-		update(r -> {
-			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index idx)
-				? (Index<Blob, ACell>) idx : Index.none();
-			ACell sv = sessions.get(sid);
-			if (!(sv instanceof AMap<?, ?>)) return r;
-			AMap<AString, ACell> session = (AMap<AString, ACell>) sv;
-			AVector<ACell> pending = (session.get(K_PENDING) instanceof AVector<?> v)
-				? (AVector<ACell>) v : Vectors.empty();
-			AVector<ACell> kept = Vectors.empty();
-			for (long i = 0; i < pending.count(); i++) {
-				ACell envelope = pending.get(i);
-				if (!jobIdHex.equals(RT.getIn(envelope, Fields.JOB_ID))) {
-					kept = kept.conj(envelope);
-				}
-			}
-			if (kept.count() == pending.count()) return r;
-			return r.assoc(K_SESSIONS,
-				sessions.assoc(sid, session.assoc(K_PENDING, kept)));
 		});
 	}
 
@@ -1449,14 +1021,6 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 	}
 
 	// ========== Run loop merge ==========
-
-	/**
-	 * Atomically merges run loop results into the agent record.
-	 *
-	 * <p>Reconciles concurrent modifications and preserves tasks added during
-	 * the transition. Executor status is deliberately absent from this merge:
-	 * the launcher writes {@code RUNNING} once and clears it on final exit.</p>
-	 */
 
 	/**
 	 * Atomic merge with frame-conversation append + session pending drain.

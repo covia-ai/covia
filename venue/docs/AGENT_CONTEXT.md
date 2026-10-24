@@ -486,7 +486,7 @@ state; the existing `agent:fork` continues to create fresh sessions.
 **Storage migration.** `GoalTreeContext.migrateFrame/migrateFrames` are pure,
 idempotent transforms. The normal cycle claim converts all frames in the same
 session CAS that fences the old executor; pending input is drained only after
-successful conversion. `AgentState.migrateSessionHistory` also supports an idle
+successful conversion. `SessionState.migrateHistory` also supports an idle
 session with an exact expected frame snapshot. Busy/stale snapshots do not
 publish, and malformed data or unknown versions leave the entire session,
 pending input and epoch unchanged. Completed cycle snapshots need no eager

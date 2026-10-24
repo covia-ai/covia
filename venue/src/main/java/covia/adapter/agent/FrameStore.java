@@ -52,7 +52,7 @@ interface FrameStore {
 		if (sid != null && agent != null && agent.getSession(sid) != null) {
 			boolean interrupted = agent.getSessionCycleEpoch(sid) != null;
 			ACell epoch = Blob.createRandom(new java.util.Random(), 8);
-			if (!agent.beginSessionCycle(sid, epoch, null, 0)) {
+			if (!agent.session(sid).beginCycle(epoch, null, 0)) {
 				return failed("Session vanished before cycle start: " + sid);
 			}
 			FrameStore store = new LatticeFrameStore(
@@ -83,7 +83,7 @@ interface FrameStore {
 
 			AVector<ACell> turns = cycleInputTurns(messages, input, cycleTs, recordCaller);
 			long drainCount = (messages != null) ? messages.count() : 0;
-			if (!agent.presentSessionCycleInput(sid, epoch, turns, drainCount)) {
+			if (!agent.session(sid).presentCycleInput(epoch, turns, drainCount)) {
 				return failed("Session cycle was superseded before input presentation: " + sid);
 			}
 			return new Opened(store, interrupted, null);
@@ -250,7 +250,7 @@ interface FrameStore {
 		@Override
 		public boolean update(UnaryOperator<AVector<ACell>> fn) {
 			if (aborted()) return false;
-			boolean ok = agent.updateSessionFrames(sid, epoch, fn);
+			boolean ok = agent.session(sid).updateFrames(epoch, fn);
 			if (!ok) aborted = true;
 			return ok;
 		}
@@ -258,7 +258,7 @@ interface FrameStore {
 		@Override
 		public boolean appendRoot(ACell turn) {
 			if (aborted()) return false;
-			boolean ok = agent.appendSessionRootTurn(sid, epoch, turn);
+			boolean ok = agent.session(sid).appendRootTurn(epoch, turn);
 			if (!ok) aborted = true;
 			return ok;
 		}

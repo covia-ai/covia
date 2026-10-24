@@ -79,7 +79,8 @@ public class EngineTest {
 
 		LifecycleTestEngine(Root<Index<Keyword, ACell>> cursor,
 				boolean failAfterSchedulerStart) throws IOException {
-			super(null, cursor);
+			super(new Config(null), CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)),
+				convex.core.crypto.AKeyPair.generate());
 			this.failAfterSchedulerStart = failAfterSchedulerStart;
 		}
 

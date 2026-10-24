@@ -109,7 +109,7 @@ public class AgentQueryTest {
 	}
 
 	private void addSummaryTurn(AgentState agent, String content) {
-		assertTrue(agent.updateQuiescentSessionFrames(SUMMARY_SESSION, frames ->
+		assertTrue(agent.session(SUMMARY_SESSION).updateQuiescentFrames(frames ->
 			frames.assoc(0, GoalTreeContext.appendTurn(RT.ensureMap(frames.get(0)),
 				Maps.of("role", "user", "content", content, Fields.TS, 7)))));
 	}
@@ -186,7 +186,7 @@ public class AgentQueryTest {
 			agent.getSessions().assoc(sid, session)));
 		agent.appendSessionPending(sid, owner.getCallerDID(), null,
 			Maps.of(Fields.MESSAGE, "queued live message"), false);
-		assertTrue(agent.beginSessionCycle(sid, Blob.fromHex("1234"), null, 0));
+		assertTrue(agent.session(sid).beginCycle(Blob.fromHex("1234"), null, 0));
 		ACell before = agent.getRecord();
 		ACell result = engine.jobs().invokeOperation("v/ops/agent/query",
 			Maps.of(Fields.AGENT_ID, AGENT, Fields.MESSAGE, "query-only question",
@@ -529,7 +529,7 @@ public class AgentQueryTest {
 		AgentState agent = createSummarisable("llmagent");
 		addSummaryTurn(agent, "second discussion turn");
 		ACell first = summarise(false).awaitResult(5000);
-		assertTrue(agent.updateQuiescentSessionFrames(SUMMARY_SESSION, frames ->
+		assertTrue(agent.session(SUMMARY_SESSION).updateQuiescentFrames(frames ->
 			frames.assoc(0, GoalTreeContext.compactFrame(RT.ensureMap(frames.get(0)), "earlier discussion"))));
 		assertEquals(2, AgentState.sessionTurnCount(agent.getSession(SUMMARY_SESSION)));
 		assertEquals(first, summarise(false).awaitResult(5000));

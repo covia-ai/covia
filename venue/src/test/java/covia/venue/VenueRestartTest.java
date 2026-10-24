@@ -165,7 +165,7 @@ public class VenueRestartTest {
 			NodeServer<Index<Keyword, ACell>> ns2 = new NodeServer<>(CoviaApplication.open(store, kp).host(), NodeConfig.port(-1));
 			activeNode = ns2;
 			ns2.launch(); // restores from store
-			Engine engine2 = new Engine(config, ns2.getCursor(), kp).start();
+			Engine engine2 = new Engine(config, CoviaApplication.connect(ns2.getHost()), kp).start();
 			activeEngine = engine2;
 			Engine.addDemoAssets(engine2);
 			engine2.jobs().recoverJobs();
