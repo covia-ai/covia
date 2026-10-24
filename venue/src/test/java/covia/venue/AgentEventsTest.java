@@ -298,11 +298,13 @@ public class AgentEventsTest {
 		assertEquals(Strings.create("call_1"), str(first, Fields.ID), "correlated with the call that invoked it");
 		assertEquals(Strings.create("v/test/ops/progress"), str(first, Fields.NAME));
 		assertEquals(1, num(first, Fields.CYCLE));
+		assertEquals(Strings.create("step 1"), str(first, Fields.MESSAGE), "the operation's own line, for a person");
+		assertEquals(Strings.create("step 2"), str(progress.get(1), Fields.MESSAGE));
 		assertEquals(Strings.create("step 1"),
-			RT.getIn(first.data(), Fields.DETAIL, AgentEvents.K_PROGRESS, "lastTool"));
-		assertEquals(Strings.create("step 2"),
-			RT.getIn(progress.get(1).data(), Fields.DETAIL, AgentEvents.K_PROGRESS, "lastTool"));
-		assertNull(first.withoutDetail().data().get(Fields.DETAIL), "what the operation reports is detail");
+			RT.getIn(first.data(), Fields.DETAIL, Fields.PROGRESS, Fields.DATA, "step"), "its record rides under detail");
+		Event safe = first.withoutDetail();
+		assertNull(safe.data().get(Fields.DETAIL));
+		assertEquals(Strings.create("step 1"), str(safe, Fields.MESSAGE), "the line stays in a display-safe view");
 	}
 
 	@Test

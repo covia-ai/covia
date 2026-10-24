@@ -24,7 +24,6 @@ import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.RequestContext;
-import covia.venue.AgentEvents;
 import covia.venue.AgentState;
 import covia.venue.api.A2ACodec;
 
@@ -271,13 +270,15 @@ public class TestAdapter extends AAdapter {
             handleDelay(job, ctx, input);
         } else if ("progress".equals(subOp)) {
             // Reports progress from its own thread as a long-running operation
-            // does — two steps, the second published twice — then completes.
+            // does — two steps, the second published twice — then completes,
+            // or with {hold: true} keeps running until it is sent "done".
             job.setStatus(Status.STARTED);
+            boolean hold = RT.bool(RT.getIn(input, "hold"));
             VIRTUAL_EXECUTOR.submit(() -> {
                 for (String step : new String[] {"step 1", "step 2", "step 2"}) {
-                    job.update(data -> data.assoc(AgentEvents.K_PROGRESS, Maps.of("lastTool", step)));
+                    job.progress(step, Maps.of("step", step));
                 }
-                job.completeWith(Maps.of("done", Strings.create("all steps")));
+                if (!hold) job.completeWith(Maps.of("done", Strings.create("all steps")));
             });
         } else if ("never".equals(subOp)) {
             // Never completes. Run the default one-shot path (starts the

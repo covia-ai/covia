@@ -120,7 +120,35 @@ Lifecycle mutations funnel through `Job.commitUpdate` (a CAS loop):
   no-ops. Racing resolutions (completion vs cancellation vs expiry) commit
   exactly one winner.
 - Each committed record embeds its predecessor under `prev`, forming the
-  state-history chain (COG-8's chain model).
+  state-history chain (COG-8's chain model). Progress is not part of it
+  (below).
+
+## Progress — the work in flight, never the record
+
+- An operation reports what its running work is doing with
+  `job.progress(message, data)`: `message` is one line a person can read,
+  `data` optional detail for a consumer that knows the operation (Claude
+  Code's carries `project`, `toolCalls`, `session`, `model`, `lastTool`,
+  `text`). The Job holds it as `progress: {message, data?}`.
+  `Job.progressMessage` and `Job.progressData` read it however a producer
+  wrote it: a bare string is the message, a map without `message` is all
+  detail.
+- **Current state, not history.** Each record replaces the last. It reaches
+  the Job's listeners and the venue's job observers (`onProgress`) and
+  readers of the running Job, which `getJobData` serves from memory. It is
+  never chained under `prev`, never persisted, and cleared by every
+  terminal transition, so a finished or recovered Job carries none.
+- **Mirrors show it, never record it.** A Job mirroring another —
+  `ExternalAgents` for an external agent's child, `RemoteAgentAdapter` for
+  a remote venue's Job, `A2AAdapter` for a remote Task — records status
+  changes as updates and copies progress with `setProgress`, so a child's
+  progress never makes its parent write.
+- **On the wire.** A2A: a working Task's `status.message` is the Job's
+  progress — an agent message with the line as a TextPart and the detail as
+  a DataPart — so each change is a `TaskStatusUpdateEvent`; inbound, a
+  remote working Task's status message becomes the mirror's progress. MCP:
+  a long call's `notifications/progress` carry the message. The agent tap
+  relays a tool call's as `tool:progress` (AGENT_LOOP.md §2.6).
 
 ## Waiting and polling — no framework timeout
 
@@ -180,8 +208,8 @@ inbound messages durably in `session.pending` — see AGENT_SESSIONS.md).
 
 ## Persistence, redaction, validation
 
-- `VenueJob.onUpdate` persists the record to the caller's lattice
-  (`:user-data/<DID>/:j/<id>`) **post-commit**, applying
+- `VenueJob.onUpdate` persists the record, without its progress, to the
+  caller's lattice (`:user-data/<DID>/:j/<id>`) **post-commit**, applying
   `redactJobSecrets` — both `input` and `output` redacted per the
   operation's `secretFields` — on **every durable write**, since adapters
   may update records after submission.

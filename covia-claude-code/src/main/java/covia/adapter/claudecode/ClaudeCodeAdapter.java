@@ -101,7 +101,7 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 	static final AString K_SESSION = ClaudeSession.K_SESSION;
 	static final AString K_PROMPT = Strings.intern("prompt");
 	static final AString K_OPTIONS = ProjectSpec.K_OPTIONS;
-	static final AString K_PROGRESS = Strings.intern("progress");
+	static final AString K_PROGRESS = Fields.PROGRESS;
 	static final AString K_END = Strings.intern("end");
 	static final AString K_ENDED = Strings.intern("ended");
 	static final AString K_STOPPED = Strings.intern("stopped");
@@ -674,7 +674,8 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 					sj.awaitInput(Maps.of(K_PROJECT, Strings.create(plan.project().name())));
 					return;
 				}
-				CompletableFuture<AMap<AString, ACell>> turn = s.submit(plan.prompt(), progress -> publishProgress(job, progress));
+				CompletableFuture<AMap<AString, ACell>> turn = s.submit(plan.prompt(),
+					progress -> publishProgress(job, progress.message(), progress.data()));
 				turnBinding.turn = turn;
 				if (job.isFinished()) { s.cancel(turn); return; }
 				turn.whenComplete((res, err) -> {
@@ -703,7 +704,7 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 			job.fail(failure);
 			return;
 		}
-		job.update(d -> d.dissoc(K_PROGRESS));
+		// Finishing clears the turn's progress itself.
 		job.completeWith(res);
 	}
 
@@ -807,7 +808,8 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 					}
 					acquireSlot(job, s);        // immediate when the process is still warm
 					if (job.isFinished()) return;
-					CompletableFuture<AMap<AString, ACell>> turn = s.submit(prompt, progress -> publishProgress(job, progress));
+					CompletableFuture<AMap<AString, ACell>> turn = s.submit(prompt,
+						progress -> publishProgress(job, progress.message(), progress.data()));
 					this.turn = turn;
 					if (job.isFinished()) { s.cancel(turn); return; }
 					turn.whenComplete((res, err) -> { pending.decrementAndGet(); turnDone(res, err); });
@@ -833,7 +835,6 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 				K_ENDED, CVMBool.TRUE,
 				Fields.TURNS, CVMLong.create(turns));
 			if (s != null && s.sessionId() != null) summary = summary.assoc(K_SESSION, Strings.create(s.sessionId()));
-			job.update(d -> d.dissoc(K_PROGRESS));
 			job.completeWith(summary);
 		}
 	}

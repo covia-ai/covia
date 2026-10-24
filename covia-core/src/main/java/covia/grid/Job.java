@@ -212,8 +212,11 @@ public class Job {
 			if (next == null) return false;
 			next = processUpdate(next);
 			if (next == null) return false;
+			// Progress is the work in flight, never history: a finished Job has
+			// none, and no earlier state keeps the progress it had.
+			if (isFinished(next)) next = next.dissoc(Fields.PROGRESS);
 			if (current != null && !current.isEmpty()) {
-				next = next.assoc(PREV, current);
+				next = next.assoc(PREV, current.dissoc(Fields.PROGRESS));
 			}
 
 			if (!state.compareAndSet(before, new State(next, failure))) continue;
@@ -360,6 +363,84 @@ public class Job {
 	 * @param finalData final status data of the Job
 	 */
 	public void onFinish(AMap<AString, ACell> finalData) {
+	}
+
+	// ==================== Progress ====================
+
+	/**
+	 * Publishes what the work in flight is doing now: {@code message}, one line
+	 * a person can read, and optional {@code data} — structured detail for a
+	 * consumer that knows the operation. The record is
+	 * {@code {message, data?}} under {@link Fields#PROGRESS}.
+	 *
+	 * <p>Progress is the Job's current state, never its history. Each record
+	 * replaces the last and reaches listeners and readers of the running Job,
+	 * but it is not kept under {@link #PREV}, not persisted with the Job's
+	 * record, and gone once the Job finishes. A null {@code message} clears
+	 * it. No effect on a finished Job.</p>
+	 *
+	 * @return true if the Job's progress changed
+	 */
+	public boolean progress(String message, ACell data) {
+		return setProgress((message == null) ? null : progressRecord(message, data));
+	}
+
+	/** The progress record {@code {message, data?}}, with no data entry when there is none. */
+	public static AMap<AString, ACell> progressRecord(String message, ACell data) {
+		AMap<AString, ACell> record = Maps.of(Fields.MESSAGE, Strings.create(message));
+		return (data != null) ? record.assoc(Fields.DATA, data) : record;
+	}
+
+	/**
+	 * Sets this Job's progress to {@code progress} as it stands — for mirroring
+	 * another Job's, whatever its producer wrote. Null clears it. Otherwise as
+	 * {@link #progress(String, ACell)}.
+	 *
+	 * @return true if the Job's progress changed
+	 */
+	public boolean setProgress(ACell progress) {
+		while (true) {
+			State before = state.get();
+			AMap<AString, ACell> current = before.data();
+			if (current == null || isFinished(current)) return false;
+			if (java.util.Objects.equals(current.get(Fields.PROGRESS), progress)) return false;
+			AMap<AString, ACell> next = (progress == null)
+				? current.dissoc(Fields.PROGRESS) : current.assoc(Fields.PROGRESS, progress);
+			if (!state.compareAndSet(before, new State(next, before.failureCause()))) continue;
+			try { onProgress(next); }
+			finally { notifyListeners(); }
+			return true;
+		}
+	}
+
+	/**
+	 * Hook called after this Job's progress changed. It is observed, not
+	 * recorded: subclasses notify observers here and persist nothing.
+	 * @param newData the Job's data with its new progress
+	 */
+	protected void onProgress(AMap<AString, ACell> newData) {
+	}
+
+	/**
+	 * The line a person can read from a progress value, however its producer
+	 * wrote it: a record's {@code message}; a bare string as it is; else null.
+	 */
+	public static String progressMessage(ACell progress) {
+		if (progress instanceof AString s) return s.toString();
+		AString message = RT.ensureString(RT.getIn(progress, Fields.MESSAGE));
+		return (message != null) ? message.toString() : null;
+	}
+
+	/**
+	 * A progress value's structured detail: a record's {@code data}; a map
+	 * written without a {@code message} entire, since all of it is detail;
+	 * else null.
+	 */
+	public static ACell progressData(ACell progress) {
+		if (!(progress instanceof AMap<?, ?> map)) return null;
+		ACell data = RT.getIn(progress, Fields.DATA);
+		if (data != null) return data;
+		return (RT.getIn(progress, Fields.MESSAGE) == null && map.count() > 0) ? progress : null;
 	}
 
 	/**

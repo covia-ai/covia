@@ -324,7 +324,7 @@ reports, which is only ever the current state of work in flight.
 | `inference:start` | A model call is starting on an assembled prompt | `op`, `model?`, `messages`, `tools` (counts), `bytes`, `budget` |
 | `inference:end` | The call returned, or failed | `ms`, `content?`, `toolCalls?: [{id, name}]`, `tokens?`, `model?` — or `ms`, `error` |
 | `tool:start` | A tool call is being dispatched | `id`, `name`, `activityLabel` (operation metadata → asset name → raw tool name), `detail: {input}` |
-| `tool:progress` | The operation the call invoked published `progress` on its Job — each change once, before the call's `tool:result` | `id`, `name`, `detail: {progress}` (as the operation reports it; Claude Code's carries `lastTool`, `text`, `toolCalls`) |
+| `tool:progress` | The operation the call invoked published `progress` on its Job — each change once, before the call's `tool:result` | `id`, `name`, `message?` (the operation's own line for a person), `detail: {progress}` (the whole `{message, data?}` record, JOBS.md) |
 | `tool:result` | The call finished | `id`, `name`, `ms`, `isError?`, `detail: {result}` |
 | `cycle:end` | The merge committed — timeline entry and session turns are persisted | `ms`, `response?` \| `error?`, `tokens?`, `timeline` (index of the entry), `detail: {turns?}`; a cycle stopped by suspend/delete carries `error` and `cancelled` |
 | `run:end` | The run loop exited | `run`, `status` (the rest state reached), `cycles` |

@@ -113,11 +113,13 @@ final class ClaudeSession {
 	static final class Turn {
 		final String prompt;
 		final CompletableFuture<AMap<AString, ACell>> future = new CompletableFuture<>();
-		final Consumer<AMap<AString, ACell>> onProgress;
+		final Consumer<Progress> onProgress;
 		int toolCalls;
 		String lastTool;
 		String lastText;
-		Turn(String prompt, Consumer<AMap<AString, ACell>> onProgress) {
+		/** Whichever came last — the latest tool step or the first line of the latest text. */
+		String latest;
+		Turn(String prompt, Consumer<Progress> onProgress) {
 			this.prompt = prompt;
 			this.onProgress = onProgress;
 		}
@@ -184,7 +186,7 @@ final class ClaudeSession {
 	 * record (see {@link #resultRecord}) or fails: {@link CancellationException}
 	 * when cancelled, otherwise with the process's diagnostic.
 	 */
-	synchronized CompletableFuture<AMap<AString, ACell>> submit(String prompt, Consumer<AMap<AString, ACell>> onProgress) {
+	synchronized CompletableFuture<AMap<AString, ACell>> submit(String prompt, Consumer<Progress> onProgress) {
 		Turn turn = new Turn(prompt, onProgress);
 		queue.add(turn);
 		lastUsed = System.currentTimeMillis();
@@ -394,16 +396,32 @@ final class ClaudeSession {
 			String bt = str(block.get(J_TYPE));
 			if ("text".equals(bt)) {
 				String text = str(block.get(K_TEXT));
-				if (text != null && !text.isBlank()) { t.lastText = clip(text, MAX_TEXT); changed = true; }
+				if (text != null && !text.isBlank()) {
+					t.lastText = clip(text, MAX_TEXT);
+					t.latest = firstLine(text);
+					changed = true;
+				}
 			} else if ("tool_use".equals(bt)) {
 				t.toolCalls++;
 				String name = str(block.get(J_NAME));
 				String detail = toolDetail(block.get(J_INPUT));
 				t.lastTool = (detail == null) ? name : name + ": " + detail;
+				t.latest = t.lastTool;
 				changed = true;
 			}
 		}
-		if (changed && t.onProgress != null) t.onProgress.accept(progressRecord(t));
+		if (changed && t.onProgress != null) t.onProgress.accept(new Progress(t.latest, progressRecord(t)));
+	}
+
+	/** A turn's progress: what it did or said last, as one line, and the record of where it stands. */
+	record Progress(String message, AMap<AString, ACell> data) {}
+
+	/** The first line of {@code text} with words in it, cut to a detail's length. */
+	private static String firstLine(String text) {
+		for (String line : text.split("\\R")) {
+			if (!line.isBlank()) return clip(line.strip(), MAX_DETAIL);
+		}
+		return clip(text.strip(), MAX_DETAIL);
 	}
 
 	private static String toolDetail(ACell input) {

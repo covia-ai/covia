@@ -116,7 +116,7 @@ final class ToolCycleEngine {
 		public synchronized void accept(covia.grid.Job j) {
 			if (closed) return;
 			AMap<AString, ACell> data = j.getData();
-			ACell progress = (data != null) ? data.get(AgentEvents.K_PROGRESS) : null;
+			ACell progress = (data != null) ? data.get(covia.api.Fields.PROGRESS) : null;
 			if (progress == null || progress.equals(last)) return;
 			last = progress;
 			call.tap().toolProgress(call.id(), call.name(), progress, call.depth());

@@ -91,10 +91,17 @@ public class VenueJob extends Job {
 			if (!memoryOnly && !deleted) {
 				// A later CAS may reach this monitor first. Persist the latest
 				// committed record so a delayed callback cannot roll it back.
+				// Progress is the work in flight, not the record: never persisted.
 				manager.persistJobRecord(getID(),
-					JobManager.redactJobSecrets(getData(), meta), account);
+					JobManager.redactJobSecrets(getData().dissoc(Fields.PROGRESS), meta), account);
 			}
 		}
+		if (observable) manager.notifyGlobalListeners(this);
+	}
+
+	/** Progress reaches the venue's job observers as an update does, and is never persisted. */
+	@Override
+	protected void onProgress(AMap<AString, ACell> newData) {
 		if (observable) manager.notifyGlobalListeners(this);
 	}
 

@@ -54,7 +54,7 @@ class ARemoteAgentAdapterTest {
 		assertSame(record, live.delivered);
 		job.completeWith(Strings.create("done"));
 		assertNull(adapter.interaction(job));
-		ARemoteAgentAdapter.publishProgress(job, Maps.of("late", true));
+		ARemoteAgentAdapter.publishProgress(job, "late", Maps.of("late", true));
 		assertNull(job.getData().get(ARemoteAgentAdapter.PROGRESS));
 		assertThrows(IllegalStateException.class, () -> adapter.handleMessage(job, record));
 	}

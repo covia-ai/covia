@@ -20,6 +20,7 @@ import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
 import covia.exception.JobPollingFailedException;
@@ -53,6 +54,48 @@ public class JobTest {
 		assertEquals(1, finishes.get());
 		assertEquals(1, hooks.get());
 		assertEquals(2, notifications.get());
+	}
+
+	@Test void progressIsTheWorkInFlightNeverItsHistory() {
+		var notifications = new java.util.concurrent.atomic.AtomicInteger();
+		var observed = new java.util.concurrent.atomic.AtomicInteger();
+		Job job = new Job(Maps.of(Fields.STATUS, Status.STARTED)) {
+			@Override protected void onProgress(AMap<AString, ACell> data) { observed.incrementAndGet(); }
+		};
+		job.subscribe(j -> notifications.incrementAndGet());
+
+		assertTrue(job.progress("Reading the files", null));
+		assertEquals(Maps.of(Fields.MESSAGE, Strings.create("Reading the files")), job.getData().get(Fields.PROGRESS),
+			"no data, no data entry");
+		assertFalse(job.progress("Reading the files", null), "the same progress again changes nothing");
+		ACell detail = Maps.of("lastTool", "Bash: run the tests");
+		assertTrue(job.progress("Running the tests", detail));
+		assertEquals("Running the tests", Job.progressMessage(job.getData().get(Fields.PROGRESS)));
+		assertEquals(detail, Job.progressData(job.getData().get(Fields.PROGRESS)));
+		assertNull(job.getData().get(Job.PREV), "a progress change is not a step in the Job's history");
+		assertEquals(2, notifications.get());
+		assertEquals(2, observed.get());
+
+		// A recorded change keeps no progress in the state it supersedes.
+		job.update(d -> d.assoc(Fields.OUTPUT, Strings.create("partial")));
+		assertNull(RT.getIn(job.getData(), Job.PREV, Fields.PROGRESS));
+		assertEquals("Running the tests", Job.progressMessage(job.getData().get(Fields.PROGRESS)), "and the work is still in flight");
+
+		job.completeWith(Strings.create("done"));
+		assertNull(job.getData().get(Fields.PROGRESS), "a finished Job has none");
+		assertNull(RT.getIn(job.getData(), Job.PREV, Fields.PROGRESS));
+		assertFalse(job.progress("too late", null));
+		assertNull(job.getData().get(Fields.PROGRESS));
+	}
+
+	@Test void progressReadsHoweverItWasWritten() {
+		assertEquals("plain", Job.progressMessage(Strings.create("plain")));
+		assertNull(Job.progressData(Strings.create("plain")));
+		ACell flat = Maps.of("lastTool", "Bash: ls", "toolCalls", 3L);
+		assertNull(Job.progressMessage(flat));
+		assertEquals(flat, Job.progressData(flat), "a map without a message is all detail");
+		assertNull(Job.progressMessage(convex.core.data.prim.CVMLong.create(40)));
+		assertNull(Job.progressData(null));
 	}
 
 	@Test
