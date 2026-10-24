@@ -2315,8 +2315,10 @@ Per bot:
 - `reply` — for an `operation` handler: `true` (default: the result
   rendered as text — a string as-is, a map's
   `text`/`response`/`content`/`message`/`result`, else pretty JSON),
-  `false` (never reply), or a fixed acknowledgement string. Agent
-  conversations always reply. Handler failures are always reported to the
+  `false` (never reply), or a fixed acknowledgement string; a result with
+  no text sends nothing. Agent conversations reply with the agent's answer,
+  and send nothing when it ended its turn without one. Handler failures are
+  always reported to the
   sender.
 - `allow` — Telegram user ids and/or `@usernames` permitted to talk to the
   bot. **Fail-closed**: with no `allow` and no `open: true`, everyone is

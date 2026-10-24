@@ -593,11 +593,11 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		try {
 			typing(chatId, m);
 			ACell response = conversations.chat(conversationKey(m, chatId), prepareMessage(m, text));
-			String reply;
+			String reply = ConversationRouter.responseText(response);
+			// The agent ended its turn without a reply: nothing to send, or to format.
+			if (reply == null) return;
 			String parseMode = spec.parseMode();
-			if (spec.replyOperation() == null) {
-				reply = ConversationRouter.responseText(response);
-			} else {
+			if (spec.replyOperation() != null) {
 				ACell formatted = conversations.runOperation(spec.replyOperation(), Maps.of(
 					Fields.RESPONSE, response, K_VIA, agentMessage(m, text).get(K_VIA)));
 				reply = formattedReply(formatted);

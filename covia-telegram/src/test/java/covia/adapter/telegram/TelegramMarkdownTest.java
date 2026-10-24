@@ -19,7 +19,6 @@ import convex.core.data.ACell;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
-import covia.adapter.messaging.ConversationRouter;
 import covia.api.Fields;
 
 /**
@@ -228,9 +227,9 @@ public class TelegramMarkdownTest {
 		ACell hooked = TelegramAdapter.handleFormat(Maps.of(
 			"response", Maps.of("text", "**hi**"), "via", Maps.of("channel", "telegram")));
 		assertEquals("<b>hi</b>", RT.getIn(hooked, Fields.TEXT).toString());
-		ACell empty = TelegramAdapter.handleFormat(Maps.of("response", Strings.create("  "), "via", Maps.empty()));
-		assertEquals(TelegramMarkdown.escape(ConversationRouter.NO_RESPONSE),
-			RT.getIn(empty, Fields.TEXT).toString(), "an empty reply reads as the adapter's own no-response text");
+		assertThrows(IllegalArgumentException.class,
+			() -> TelegramAdapter.handleFormat(Maps.of("response", Strings.create("  "), "via", Maps.empty())),
+			"a turn that ended without a reply has nothing to format, and the bot sends nothing");
 		// A hook's parse_mode wins over the bot's; one Telegram does not know does not.
 		assertEquals(TelegramMarkdown.PARSE_MODE, BotRunner.formattedParseMode(direct, null));
 		assertEquals(TelegramMarkdown.PARSE_MODE, BotRunner.formattedParseMode(direct, "MarkdownV2"));
