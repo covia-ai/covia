@@ -787,6 +787,8 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		}
 		if (remoteTask.status().state().isInterrupted()) {
 			applyInterruptedState(job, remoteTask, rawResultCell);
+		} else {
+			showProgress(job, remoteTask);
 		}
 	}
 
@@ -1004,6 +1006,16 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 				.assoc(Fields.STATUS, localStatus).assoc(Fields.OUTPUT, rawTaskCell);
 			return next.equals(current) ? null : next;
 		});
+		showProgress(job, remote);
+	}
+
+	/**
+	 * A working remote Task's status message is its progress: shown on the
+	 * mirror as any Job's is, never recorded, and gone once it stops working.
+	 */
+	private static void showProgress(Job job, Task remote) {
+		boolean working = remote.status().state() == org.a2aproject.sdk.spec.TaskState.TASK_STATE_WORKING;
+		job.setProgress(working ? A2ACodec.progressOf(remote.status().message()) : null);
 	}
 
 	private AMap<AString, ACell> cancelRemote(String rpcUrl, String remoteTaskId, RequestAuth auth) throws Exception {

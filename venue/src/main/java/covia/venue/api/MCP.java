@@ -39,6 +39,7 @@ import convex.restapi.mcp.McpServer;
 import convex.restapi.mcp.McpSession;
 import convex.restapi.mcp.SseConnection;
 import covia.api.Fields;
+import covia.grid.Job;
 import covia.grid.Venue;
 import covia.venue.Engine;
 import covia.venue.JobManager;
@@ -702,7 +703,7 @@ public class MCP extends McpServer {
 			try {
 				resultOrClose.get(Math.min(left, TimeUnit.MILLISECONDS.toNanos(keepAliveMs)), TimeUnit.NANOSECONDS);
 			} catch (TimeoutException e) {
-				if (stream != null && !stream.keepAlive()) return null;
+				if (stream != null && !stream.keepAlive(doing(run))) return null;
 				continue;
 			} catch (ExecutionException | java.util.concurrent.CancellationException e) {
 				// the result failed or was cancelled: reported below
@@ -719,6 +720,11 @@ public class MCP extends McpServer {
 			Throwable cause = (e.getCause() != null) ? e.getCause() : e;
 			return toolError(cause.toString()); // as a failed get() has always said it
 		}
+	}
+
+	/** What a running call's work is doing now, as its job's progress says; null when it says nothing. */
+	private static String doing(JobManager.Run run) {
+		return (run.job() == null) ? null : Job.progressMessage(run.job().getData().get(Fields.PROGRESS));
 	}
 
 	/** A call that stopped waiting, with where its result will be. */
@@ -755,11 +761,16 @@ public class MCP extends McpServer {
 			return out != null && !gone;
 		}
 
-		/** A progress notification, if the caller asked for them, else a comment. False once the caller has gone. */
-		boolean keepAlive() {
+		/**
+		 * A progress notification, if the caller asked for them, else a comment.
+		 * It says what the work is doing — {@code doing}, the job's progress
+		 * message, when there is one. False once the caller has gone.
+		 */
+		boolean keepAlive(String doing) {
+			String message = (doing != null && !doing.isBlank()) ? doing : "Still working";
 			return write((progressToken != null)
 				? formatSseEvent(Maps.of("jsonrpc", "2.0", "method", "notifications/progress",
-					"params", Maps.of("progressToken", progressToken, "progress", ++progress, "message", "Still working")))
+					"params", Maps.of("progressToken", progressToken, "progress", ++progress, "message", message)))
 				: ": still working\n\n");
 		}
 

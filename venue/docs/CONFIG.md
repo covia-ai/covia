@@ -1083,7 +1083,8 @@ within limits that keep waiting from tying the venue up:
 - A single `tools/call` from a client that accepts `text/event-stream` and is
   still running after `keepAliveInterval` (ms, default 15 s) is answered as an
   SSE stream. It carries `notifications/progress` at that interval when the
-  request's `_meta.progressToken` asks for them, which lets the client reset
+  request's `_meta.progressToken` asks for them — their message the job's
+  progress when it reports any (JOBS.md), else "Still working" — which lets the client reset
   its own timeout, and an SSE comment otherwise. A write that fails means the
   caller has gone: the venue stops waiting, frees its place and leaves the job
   running. A quicker call is answered as plain JSON, as before; a call inside a

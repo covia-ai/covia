@@ -136,6 +136,48 @@ public class A2ACodecTest {
 		assertEquals(1700000000000L, status.timestamp().toInstant().toEpochMilli());
 	}
 
+	// ======== Progress ========
+
+	@Test
+	public void toTaskStatus_workingCarriesProgressAsItsMessage() {
+		AMap<AString, ACell> detail = Maps.of(Strings.create("toolCalls"), CVMLong.create(3));
+		AMap<AString, ACell> jobData = baseJobData(Status.STARTED)
+				.assoc(Fields.PROGRESS, covia.grid.Job.progressRecord("Running the tests", detail));
+		TaskStatus status = A2ACodec.toTaskStatus(jobData);
+		assertEquals(TaskState.TASK_STATE_WORKING, status.state());
+		Message message = status.message();
+		assertNotNull(message, "a working Task says what it is doing");
+		assertEquals(Message.Role.ROLE_AGENT, message.role());
+		assertEquals(jobId().toHexString(), message.taskId());
+		assertEquals("Running the tests", ((TextPart) message.parts().get(0)).text());
+		assertTrue(message.parts().get(1) instanceof DataPart, "and carries its detail as data");
+
+		// Inbound, the same message is the same progress.
+		assertEquals(jobData.get(Fields.PROGRESS), A2ACodec.progressOf(message));
+	}
+
+	@Test
+	public void toTaskStatus_noMessageWithoutProgressOrOnceFinished() {
+		assertNull(A2ACodec.toTaskStatus(baseJobData(Status.STARTED)).message());
+		AMap<AString, ACell> finished = baseJobData(Status.COMPLETE)
+				.assoc(Fields.PROGRESS, covia.grid.Job.progressRecord("stale", null));
+		assertNull(A2ACodec.toTaskStatus(finished).message(), "only a working Task has progress");
+		AMap<AString, ACell> bare = baseJobData(Status.STARTED).assoc(Fields.PROGRESS, Strings.create("written plainly"));
+		assertEquals("written plainly", ((TextPart) A2ACodec.toTaskStatus(bare).message().parts().get(0)).text(),
+			"progress however its producer wrote it");
+	}
+
+	@Test
+	public void progressOf_dataOnlyMessageHasNoLine() {
+		Message dataOnly = Message.builder().role(Message.Role.ROLE_AGENT)
+				.parts(List.of(new DataPart(Map.of("percent", 40), null)))
+				.messageId("m1").build();
+		ACell progress = A2ACodec.progressOf(dataOnly);
+		assertNull(covia.grid.Job.progressMessage(progress));
+		assertEquals(CVMLong.create(40), RT.getIn(covia.grid.Job.progressData(progress), "percent"));
+		assertNull(A2ACodec.progressOf(null));
+	}
+
 	// ======== Part handling ========
 
 	@Test

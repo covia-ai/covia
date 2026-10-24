@@ -244,11 +244,61 @@ public class A2ACodec {
 		return new Task(id, contextId, status, artifacts, history, null);
 	}
 
-	/** Build a TaskStatus from a Job data record. */
+	/**
+	 * Build a TaskStatus from a Job data record. A working Task's status
+	 * carries the Job's progress as its message.
+	 */
 	public static TaskStatus toTaskStatus(AMap<AString, ACell> jobData) {
 		TaskState state = toTaskState(RT.ensureString(jobData.get(Fields.STATUS)));
 		OffsetDateTime ts = extractTimestamp(jobData);
-		return new TaskStatus(state, null, ts);
+		Message progress = (state == TaskState.TASK_STATE_WORKING) ? progressMessage(jobData) : null;
+		return new TaskStatus(state, progress, ts);
+	}
+
+	// ==================== Progress ====================
+
+	/**
+	 * A Job's progress as an agent Message: its line as a TextPart and its
+	 * detail as a DataPart. Null when the Job reports none.
+	 */
+	static Message progressMessage(AMap<AString, ACell> jobData) {
+		ACell progress = jobData.get(Fields.PROGRESS);
+		String text = covia.grid.Job.progressMessage(progress);
+		ACell data = covia.grid.Job.progressData(progress);
+		List<Part<?>> parts = new ArrayList<>();
+		if (text != null) parts.add(new TextPart(text, null));
+		if (data != null) parts.add(new DataPart(JSON.json(data), null));
+		if (parts.isEmpty()) return null;
+		String taskId = extractJobId(jobData).toHexString();
+		return Message.builder()
+				.role(Message.Role.ROLE_AGENT)
+				.parts(parts)
+				.messageId(java.util.UUID.randomUUID().toString())
+				.contextId(extractContextId(jobData, taskId))
+				.taskId(taskId)
+				.build();
+	}
+
+	/**
+	 * A remote Task's status message as Covia progress: its text parts are
+	 * the line, its data parts the detail. Null when it has neither.
+	 */
+	public static ACell progressOf(Message message) {
+		if (message == null || message.parts() == null) return null;
+		StringBuilder text = new StringBuilder();
+		List<ACell> data = new ArrayList<>();
+		for (Part<?> p : message.parts()) {
+			if (p instanceof TextPart t && t.text() != null && !t.text().isBlank()) {
+				if (text.length() > 0) text.append(' ');
+				text.append(t.text().strip());
+			} else if (p instanceof DataPart) {
+				ACell cell = fromPart(p);
+				if (cell != null) data.add(cell);
+			}
+		}
+		ACell detail = data.isEmpty() ? null : (data.size() == 1) ? data.get(0) : Vectors.create(data);
+		if (text.length() > 0) return covia.grid.Job.progressRecord(text.toString(), detail);
+		return (detail != null) ? Maps.of(Fields.DATA, detail) : null;
 	}
 
 	/**
