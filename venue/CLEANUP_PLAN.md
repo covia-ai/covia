@@ -21,14 +21,49 @@ Each item is checkable; build + venue suite must stay green before commit.
 
 ## Scope
 
-Healthy lattice/job core; a handful of recurring structural debts, mostly
+Established lattice/job contracts; a handful of recurring structural debts, mostly
 deviations from the rules above. Tackling the cross-cutting themes first yields
 the most cleanup-per-effort because each is duplicated many times.
 
 Already good — **do not touch**: `A2ACodec` (clean pure-function codec — the
 model to copy), `Config` (disciplined typed accessors), `ContextLoader` &
-`GoalTreeContext` (pure functions), `JobManager` (large but cohesive — not a
-god-class), `RequestContext` (clean immutable value).
+`GoalTreeContext` (pure functions), `RequestContext` (clean immutable value).
+`JobManager` has cohesive runtime responsibilities, but its state ownership needs
+the component review below on the experimental lattice branch.
+
+### Experimental component consolidation
+
+Session record operations now belong to `SessionState`: frames, pending input,
+summaries, external turns and cycle completion. `AgentState` owns admission and
+composes child edits with tasks, status and timeline through upstream transactions.
+Record formats remain unchanged. Tests cover failed-completion rollback, retained
+draft isolation, concurrent deletion and summary admission after a concurrent stop.
+
+Jobs are the next design target; the following changes are **not implemented**:
+
+- Replace the live `Job` record plus `VenueJob.onUpdate` persistence copy with one
+  authoritative lattice record for recorded venue jobs. A `user.job(id)` component
+  should own transitions, history and late cancellation evidence, with explicit
+  creation and updates that cannot recreate a deleted row.
+- Keep `JobManager` responsible for execution, recovery, permits and dispatch.
+  Futures, typed failures, original secret-bearing results, cancellation hooks and
+  subscriptions remain runtime concerns. Transient calls and remote client handles
+  still need their current non-persistent semantics.
+- Consolidate active and completed history edits. Currently an append can find an
+  active handle just as it becomes terminal; `Job.update` then refuses the append
+  without trying the durable row. Also, late cancellation evidence copies an older
+  in-memory record over the durable row, preserving `temp` but not independently
+  appended history. Both paths were reproduced against the packaged experimental
+  venue with synthetic jobs. Field-level updates against one record remove both
+  hazards.
+- Preserve terminal-state stickiness, redaction, account-generation guards and
+  restart behaviour. Run external effects only after the enclosing transaction
+  commits, and retain the distinction between local commit and store flush. Use
+  upstream cursor/transaction APIs; do not add a second transaction framework.
+
+Start with regression tests for completion/history and late-cancellation/history
+interleavings, then settle the boundary between the persistent component and the
+runtime handle before changing the shared `covia-core` client API.
 
 ---
 

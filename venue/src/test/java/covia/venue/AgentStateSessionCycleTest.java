@@ -29,9 +29,9 @@ import covia.adapter.agent.GoalTreeContext;
 
 /**
  * Unit tests for the session cycle-epoch primitives (lattice-resident frames,
- * Stage A): {@link AgentState#beginSessionCycle},
- * {@link AgentState#presentSessionCycleInput},
- * {@link AgentState#updateSessionFrames} (epoch-fenced), the shared
+ * Stage A): {@link SessionState#beginCycle},
+ * {@link SessionState#presentCycleInput},
+ * {@link SessionState#updateFrames} (epoch-fenced), the shared
  * root-turn-append/pending-drain helpers, the {@code inCycle} clear inside
  * {@link AgentState#mergeRunResult}, and the rule that {@code inCycle} is a
  * write fence rather than durable queued work.
@@ -81,6 +81,48 @@ public class AgentStateSessionCycleTest {
 		AMap<AString, ACell> session = agent.getSession(sid).assoc(Fields.FRAMES, frames);
 		agent.putRecord(agent.getRecord().assoc(AgentState.KEY_SESSIONS, agent.getSessions().assoc(sid, session)));
 		return frames;
+	}
+
+	@Test
+	public void invalidCompletionRollsBackAgentAndSessionTogether() {
+		Blob task = Blob.fromHex("01");
+		agent.addTaskInSession(sid, userDid, null, task, Maps.of("input", "work"));
+		agent.session(sid).appendPending(envelope("pending"));
+		agent.session(sid).beginCycle(EPOCH_A, null, 0);
+		ACell before = agent.getRecord();
+		assertThrows(IllegalArgumentException.class, () -> agent.mergeRunResult(
+			null, Maps.of("changed", true), Maps.of(task.toHexString(), "done"),
+			Maps.of("event", "complete"), sid, Vectors.of(turn("response")), 1,
+			Vectors.of(CVMLong.ONE), Maps.of(Fields.TOTAL, 10)));
+		assertEquals(before, agent.getRecord(), "frame validation must roll back tasks, state and timeline too");
+	}
+
+	@Test
+	public void externalCompletionIsClaimedIdempotentAndComposable() {
+		Blob job = Blob.fromHex("01");
+		Blob other = Blob.fromHex("02");
+		assertTrue(agent.claimExternalTurn(sid, job, userDid, Strings.create("request"), false));
+		assertTrue(agent.claimExternalTurn(sid, job, userDid, Strings.create("repeated"), false));
+		assertFalse(agent.claimExternalTurn(sid, other, userDid, Strings.create("competing"), false));
+		assertEquals(1, SessionState.sessionTurnCount(agent.getSession(sid)));
+		ACell claimed = agent.getRecord();
+		agent.session(sid).finishExternalTurn(other, null, Strings.create("wrong job"));
+		assertEquals(claimed, agent.getRecord());
+		assertThrows(IllegalStateException.class, () -> agent.transact(draft -> {
+			draft.session(sid).finishExternalTurn(job, Strings.create("remote"), Strings.create("response"));
+			draft.setStatus(AgentState.SUSPENDED);
+			throw new IllegalStateException();
+		}));
+		assertEquals(claimed, agent.getRecord());
+		agent.session(sid).finishExternalTurn(job, Strings.create("remote"), Strings.create("response"));
+		assertEquals(2, SessionState.sessionTurnCount(agent.getSession(sid)));
+		assertEquals(Strings.create("remote"), RT.getIn(agent.getSession(sid), AgentState.KEY_EXTERNAL, Fields.SESSION_ID));
+		ACell finished = agent.getRecord();
+		agent.session(sid).finishExternalTurn(job, null, Strings.create("duplicate response"));
+		assertEquals(finished, agent.getRecord());
+		agent.removeSession(sid);
+		agent.session(sid).finishExternalTurn(job, null, Strings.create("late response"));
+		assertNull(agent.getSession(sid));
 	}
 
 	@Test

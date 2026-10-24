@@ -201,6 +201,110 @@ public final class SessionState extends ALatticeComponent<ACell>
 		});
 	}
 
+	/** Number of recorded root conversation turns, retained across compaction. */
+	public static long sessionTurnCount(AMap<AString, ACell> session) {
+		ACell count = RT.getIn(session, K_META, K_TURNS);
+		return (count instanceof CVMLong n) ? n.longValue() : 0;
+	}
+
+	/** A saved result remains readable regardless of subsequent conversation. */
+	public static AMap<AString, ACell> sessionSummary(AMap<AString, ACell> session, AString instruction) {
+		return RT.ensureMap(RT.getIn(session, KEY_SUMMARIES, instruction));
+	}
+
+	/** Reuse depends only on the conversation covered, not mutable agent state. */
+	public static boolean summaryCovers(AMap<AString, ACell> summary, long turns) {
+		return summary != null && summary.get(K_TURNS) instanceof CVMLong covered
+			&& covered.longValue() >= turns;
+	}
+
+	/**
+	 * Whether a session record has durable queued work. {@code inCycle} is an
+	 * executor fence, never a wake signal or a resume checkpoint.
+	 */
+	static boolean sessionHasWork(AMap<AString, ACell> session) {
+		ACell pv = session.get(K_PENDING);
+		return pv instanceof AVector<?> v && v.count() > 0;
+	}
+
+
+	/** Publishes against the same session identity; newer coverage wins.
+	 * Agent admission checks belong to the enclosing agent transaction. */
+	AMap<AString, ACell> saveSummary(AMap<AString, ACell> expected,
+			AString instruction, AMap<AString, ACell> summary) {
+		if (expected == null) return null;
+		long turns = sessionTurnCount(expected);
+		ACell created = RT.getIn(expected, K_META, K_CREATED);
+		AMap<AString, ACell> saved = summary.assoc(K_TURNS, CVMLong.create(turns))
+			.assoc(Fields.TS, context.currentTimestamp());
+		ACell committed = cursor().updateAndGet(value -> {
+			AMap<AString, ACell> session = RT.ensureMap(value);
+			if (session == null || !Objects.equals(created, RT.getIn(session, K_META, K_CREATED))) return value;
+			AMap<AString, ACell> existing = sessionSummary(session, instruction);
+			if (summaryCovers(existing, turns)) return session;
+			AMap<AString, ACell> summaries = RT.ensureMap(session.get(KEY_SUMMARIES));
+			if (summaries == null) summaries = Maps.empty();
+			return session.assoc(KEY_SUMMARIES, summaries.assoc(instruction, saved));
+		});
+		AMap<AString, ACell> session = RT.ensureMap(committed);
+		if (session == null || !Objects.equals(created, RT.getIn(session, K_META, K_CREATED))) return null;
+		AMap<AString, ACell> published = sessionSummary(session, instruction);
+		return summaryCovers(published, turns) ? published : null;
+	}
+
+	/** Admission is composed with agent status and optional creation by AgentState. */
+	boolean claimExternalTurn(Blob jobId, ACell content) {
+		CVMLong timestamp = context.currentTimestamp();
+		return update(session -> {
+			AMap<AString, ACell> external = RT.ensureMap(session.get(KEY_EXTERNAL));
+			if (external == null) external = Maps.empty();
+			ACell claimed = external.get(Fields.JOB_ID);
+			if (claimed != null) return jobId.equals(claimed) ? session : null;
+			session = appendTurnsToRoot(session, Vectors.of(Maps.of(K_ROLE, ROLE_USER,
+				K_CONTENT, content, K_SOURCE, SOURCE_CHAT, K_TURN_TS, timestamp)));
+			return session.assoc(KEY_EXTERNAL, external.assoc(Fields.JOB_ID, jobId));
+		});
+	}
+
+	/** Only the claiming job may release the session and record its response. */
+	public void finishExternalTurn(Blob jobId, ACell remoteSession, ACell response) {
+		CVMLong timestamp = context.currentTimestamp();
+		update(session -> {
+			AMap<AString, ACell> external = RT.ensureMap(session.get(KEY_EXTERNAL));
+			if (external == null || !jobId.equals(external.get(Fields.JOB_ID))) return null;
+			external = external.dissoc(Fields.JOB_ID);
+			if (remoteSession != null) external = external.assoc(Fields.SESSION_ID, remoteSession);
+			if (response != null) session = appendTurnsToRoot(session, Vectors.of(Maps.of(K_ROLE,
+				ROLE_ASSISTANT, K_CONTENT, response, K_SOURCE, SOURCE_CHAT, K_TURN_TS, timestamp)));
+			return session.assoc(KEY_EXTERNAL, external);
+		});
+	}
+
+	public boolean appendPending(ACell envelope) {
+		return update(session -> {
+			AVector<ACell> pending = RT.ensureVector(session.get(K_PENDING));
+			if (pending == null) pending = Vectors.empty();
+			return session.assoc(K_PENDING, pending.conj(envelope));
+		});
+	}
+
+	/** Complete the session part of an agent cycle within its transaction.
+	 * Validate replacement frames before appending root turns; only consume
+	 * the presented pending prefix, preserving input received during execution. */
+	void finishCycle(AVector<ACell> frames, AVector<ACell> turns,
+			long drainCount, AMap<AString, ACell> tokens) {
+		update(session -> {
+			if (frames != null) {
+				GoalTreeContext.validateFramesUpdate(sessionFrames(session), frames);
+				session = session.assoc(K_FRAMES, frames);
+			}
+			if (turns != null && !turns.isEmpty()) session = appendTurnsToRoot(session, turns);
+			if (drainCount > 0) session = drainPendingPrefix(session, drainCount);
+			if (tokens != null) session = bumpMetaTokens(session, tokens);
+			return session.dissoc(K_IN_CYCLE);
+		});
+	}
+
 	static AMap<AString, ACell> newSession(AString caller,
 			AMap<AString, ACell> initialLoads, CVMLong created) {
 		AMap<AString, ACell> meta = Maps.of(

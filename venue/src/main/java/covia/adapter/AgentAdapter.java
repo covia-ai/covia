@@ -49,6 +49,7 @@ import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Admission;
 import covia.venue.AgentState;
+import covia.venue.SessionState;
 import covia.venue.AgentEvents;
 import covia.api.Abilities;
 import covia.venue.Engine;
@@ -1681,9 +1682,9 @@ public class AgentAdapter extends AAdapter {
 			job.fail(SUMMARISE_INVALID_INSTRUCTION);
 			return;
 		}
-		AMap<AString, ACell> cached = AgentState.sessionSummary(snapshot.session(), instruction);
+		AMap<AString, ACell> cached = SessionState.sessionSummary(snapshot.session(), instruction);
 		boolean includeSteps = CVMBool.TRUE.equals(RT.getIn(input, K_INCLUDE_STEPS));
-		if (AgentState.summaryCovers(cached, AgentState.sessionTurnCount(snapshot.session()))) {
+		if (SessionState.summaryCovers(cached, SessionState.sessionTurnCount(snapshot.session()))) {
 			job.start(() -> job.completeWith(cached));
 			return;
 		}

@@ -29,6 +29,7 @@ import covia.grid.Job;
 import covia.grid.Principals;
 import covia.grid.Status;
 import covia.venue.AgentState;
+import covia.venue.SessionState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 
@@ -124,7 +125,7 @@ public class AgentQueryTest {
 	}
 
 	private AMap<AString, ACell> savedSummary(AgentState agent) {
-		return AgentState.sessionSummary(agent.getSession(SUMMARY_SESSION),
+		return SessionState.sessionSummary(agent.getSession(SUMMARY_SESSION),
 			Strings.create(AgentAdapter.DEFAULT_SUMMARISE_INSTRUCTION));
 	}
 
@@ -517,10 +518,10 @@ public class AgentQueryTest {
 		addSummaryTurn(agent, "newly agreed action");
 		engine.jobs().invokeOperation(actions, summaryInput(false), owner).awaitResult(5000);
 		assertEquals(3, model.invocations.get());
-		assertEquals(first, AgentState.sessionSummary(agent.getSession(SUMMARY_SESSION),
+		assertEquals(first, SessionState.sessionSummary(agent.getSession(SUMMARY_SESSION),
 			Strings.create("Summarise as three bullets.")),
 			"refreshing one instruction preserves the other result and its timestamp");
-		assertEquals(CVMLong.create(2), AgentState.sessionSummary(agent.getSession(SUMMARY_SESSION),
+		assertEquals(CVMLong.create(2), SessionState.sessionSummary(agent.getSession(SUMMARY_SESSION),
 			Strings.create("Summarise the agreed actions.")).get(Fields.TURNS));
 	}
 
@@ -531,7 +532,7 @@ public class AgentQueryTest {
 		ACell first = summarise(false).awaitResult(5000);
 		assertTrue(agent.session(SUMMARY_SESSION).updateQuiescentFrames(frames ->
 			frames.assoc(0, GoalTreeContext.compactFrame(RT.ensureMap(frames.get(0)), "earlier discussion"))));
-		assertEquals(2, AgentState.sessionTurnCount(agent.getSession(SUMMARY_SESSION)));
+		assertEquals(2, SessionState.sessionTurnCount(agent.getSession(SUMMARY_SESSION)));
 		assertEquals(first, summarise(false).awaitResult(5000));
 		assertEquals(1, model.invocations.get());
 		addSummaryTurn(agent, "discussion after compaction");
@@ -559,7 +560,7 @@ public class AgentQueryTest {
 		assertEquals(CVMLong.create(2), result.get(Fields.TURNS));
 		assertEquals(result, savedSummary(agent));
 		assertEquals(afterConcurrentWrite, agent.getSession(SUMMARY_SESSION).dissoc(AgentState.KEY_SUMMARIES));
-		assertEquals(3, AgentState.sessionTurnCount(agent.getSession(SUMMARY_SESSION)));
+		assertEquals(3, SessionState.sessionTurnCount(agent.getSession(SUMMARY_SESSION)));
 		model.reply = input -> CompletableFuture.completedFuture(Maps.of("role", "assistant", "content", "refreshed"));
 		AMap<AString, ACell> refreshed = RT.ensureMap(summarise(false).awaitResult(5000));
 		assertEquals(CVMLong.create(3), refreshed.get(Fields.TURNS));
@@ -652,9 +653,9 @@ public class AgentQueryTest {
 			summaryInput(false), owner).awaitResult(5000);
 		held.complete(Maps.of("role", "assistant", "content", "slow summary"));
 		ACell slowResult = slow.awaitResult(5000);
-		assertEquals(slowResult, AgentState.sessionSummary(agent.getSession(SUMMARY_SESSION),
+		assertEquals(slowResult, SessionState.sessionSummary(agent.getSession(SUMMARY_SESSION),
 			Strings.create("slow instruction")));
-		assertEquals(fastResult, AgentState.sessionSummary(agent.getSession(SUMMARY_SESSION),
+		assertEquals(fastResult, SessionState.sessionSummary(agent.getSession(SUMMARY_SESSION),
 			Strings.create("different instruction")));
 		assertEquals(2, RT.ensureMap(agent.getSession(SUMMARY_SESSION).get(AgentState.KEY_SUMMARIES)).count());
 	}

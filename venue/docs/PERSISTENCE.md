@@ -36,11 +36,13 @@ crash-sensitive dispatch still needs its existing durable claim/recovery protoco
 Do not introduce I/O or runtime service calls inside retryable callbacks.
 
 `agent.session(id)` is a composable component for an existing session. It owns
-frame history, pending-input drainage and cycle-fenced edits. Session creation
-and changes spanning agent status, tasks and sessions stay at the agent boundary.
-Session updates never recreate a missing session; retained account guards also
-apply through the child view. Shared pure record operations keep compound agent
-completion on the same history/migration implementation as direct session edits.
+frame history, pending input, summaries, external-turn claims and cycle completion.
+Session creation and admission checks stay at the agent boundary. Agent operations
+compose session edits with status checks, task removal and timeline updates in one
+transaction, using children obtained from its draft. Failed frame validation rolls
+back the entire completion. Session updates never recreate a missing session;
+retained account guards also apply through the child view. Stored record formats
+are unchanged, including legacy history/load migration on cycle admission.
 
 ```java
 agent.transact(draft -> {

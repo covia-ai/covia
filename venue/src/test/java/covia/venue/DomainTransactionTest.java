@@ -66,6 +66,33 @@ class DomainTransactionTest {
 	}
 
 	@Test
+	void summaryPublicationRetriesAgentAdmissionAfterConcurrentStop() throws Exception {
+		var agent = VenueState.create(AKeyPair.generate()).users().ensure(DID)
+			.ensureAgent("sessions", Maps.empty(), null);
+		var sid = Blob.fromHex("01");
+		var snapshot = agent.ensureSession(sid, DID);
+		var instruction = Strings.create("summarise");
+		var entered = new CountDownLatch(1);
+		var resume = new CountDownLatch(1);
+		var published = new AtomicReference<AMap<AString, ACell>>();
+		try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+			var pending = executor.submit(() -> agent.transact(draft -> {
+				published.set(draft.saveSessionSummary(sid, snapshot, instruction, Maps.of("result", "summary")));
+				entered.countDown();
+				await(resume);
+			}));
+			try {
+				assertTrue(entered.await(10, TimeUnit.SECONDS));
+				agent.setStatus(AgentState.SUSPENDED);
+			} finally { resume.countDown(); }
+			pending.get(10, TimeUnit.SECONDS);
+		}
+		assertNull(published.get(), "the rejected retry must replace the first attempt's result");
+		assertNull(SessionState.sessionSummary(agent.getSession(sid), instruction));
+		assertEquals(AgentState.SUSPENDED, agent.getStatus());
+	}
+
+	@Test
 	void sessionTransactionDoesNotResurrectConcurrentDeletion() throws Exception {
 		var agent = VenueState.create(AKeyPair.generate()).users().ensure(DID)
 			.ensureAgent("sessions", Maps.empty(), null);

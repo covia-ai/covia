@@ -24,14 +24,13 @@ import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.StampedCursor;
 import covia.lattice.Covia;
 import covia.api.Fields;
-import covia.adapter.agent.GoalTreeContext;
 
 /**
  * Agent state with named atomic mutations and compound transactions.
  *
- * <p>All mutations use atomic {@code cursor().updateAndGet} — no external
- * locking needed. The {@code update} method is private; callers use
- * named mutation methods that encapsulate the record structure.</p>
+ * <p>Named mutations encapsulate the record structure. Single-record edits use
+ * atomic cursor updates; changes spanning sessions and agent state compose
+ * through upstream transactions, without external locking or I/O.</p>
  */
 public class AgentState extends ALatticeComponent<ACell> implements TransactionalComponent<ACell, AgentState> {
 	@Override
@@ -304,23 +303,6 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 	public SessionState session(Blob sid) {
 		return new SessionState(getContext(), cursor().path(K_SESSIONS, sid), sid);
 	}
-	/** Number of recorded root conversation turns, retained across compaction. */
-	public static long sessionTurnCount(AMap<AString, ACell> session) {
-		ACell count = RT.getIn(session, K_META, K_TURNS);
-		return (count instanceof CVMLong n) ? n.longValue() : 0;
-	}
-
-	/** A saved result remains readable regardless of subsequent conversation. */
-	public static AMap<AString, ACell> sessionSummary(AMap<AString, ACell> session, AString instruction) {
-		return RT.ensureMap(RT.getIn(session, KEY_SUMMARIES, instruction));
-	}
-
-	/** Reuse depends only on the conversation covered, not mutable agent state. */
-	public static boolean summaryCovers(AMap<AString, ACell> summary, long turns) {
-		return summary != null && summary.get(K_TURNS) instanceof CVMLong covered
-			&& covered.longValue() >= turns;
-	}
-
 	/**
 	 * Saves a result under its exact instruction, even if the conversation has
 	 * advanced during generation. The stored turn count describes the snapshot
@@ -331,27 +313,13 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 	@SuppressWarnings("unchecked")
 	public AMap<AString, ACell> saveSessionSummary(Blob sid, AMap<AString, ACell> expectedSession,
 			AString instruction, AMap<AString, ACell> summary) {
-		if (expectedSession == null) return null;
-		long turns = sessionTurnCount(expectedSession);
-		ACell created = RT.getIn(expectedSession, K_META, K_CREATED);
-		AMap<AString, ACell> saved = summary.assoc(K_TURNS, CVMLong.create(turns)).assoc(Fields.TS, now());
-		AMap<AString, ACell> result = update(r -> {
-			if (SUSPENDED.equals(r.get(K_STATUS)) || TERMINATED.equals(r.get(K_STATUS))) return r;
-			AMap<AString, ACell> session = RT.ensureMap(RT.getIn(r, K_SESSIONS, sid));
-			if (session == null || !Objects.equals(created, RT.getIn(session, K_META, K_CREATED))) return r;
-			if (summaryCovers(sessionSummary(session, instruction), turns)) return r;
-			AMap<AString, ACell> summaries = RT.ensureMap(session.get(KEY_SUMMARIES));
-			if (summaries == null) summaries = Maps.empty();
-			Index<Blob, ACell> sessions = (Index<Blob, ACell>) r.get(K_SESSIONS);
-			return r.assoc(K_SESSIONS, sessions.assoc(sid,
-				session.assoc(KEY_SUMMARIES, summaries.assoc(instruction, saved))));
+		var result = new java.util.concurrent.atomic.AtomicReference<AMap<AString, ACell>>();
+		transact(draft -> {
+			result.set(null);
+			if (!draft.exists() || SUSPENDED.equals(draft.getStatus()) || TERMINATED.equals(draft.getStatus())) return;
+			result.set(draft.session(sid).saveSummary(expectedSession, instruction, summary));
 		});
-		// Inspect the committed value, not a side channel from a possibly retried CAS.
-		if (result == null || SUSPENDED.equals(result.get(K_STATUS)) || TERMINATED.equals(result.get(K_STATUS))) return null;
-		AMap<AString, ACell> session = RT.ensureMap(RT.getIn(result, K_SESSIONS, sid));
-		if (session == null || !Objects.equals(created, RT.getIn(session, K_META, K_CREATED))) return null;
-		AMap<AString, ACell> published = sessionSummary(session, instruction);
-		return summaryCovers(published, turns) ? published : null;
+		return result.get();
 	}
 
 	/**
@@ -389,40 +357,14 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 	/** Claim one external turn per session. A retained claim after restart prevents blind replay. */
 	@SuppressWarnings("unchecked")
 	public boolean claimExternalTurn(Blob sid, Blob jobId, AString caller, ACell content, boolean create) {
-		AMap<AString, ACell> result = update(r -> {
-			if (TERMINATED.equals(r.get(K_STATUS)) || SUSPENDED.equals(r.get(K_STATUS))) return r;
-			Index<Blob, ACell> sessions = (Index<Blob, ACell>) r.get(K_SESSIONS);
-			AMap<AString, ACell> session = RT.ensureMap(sessions.get(sid));
-			if (session == null) {
-				if (!create) return r;
-				session = newSession(caller, null, now());
-			}
-			AMap<AString, ACell> external = RT.ensureMap(session.get(KEY_EXTERNAL));
-			if (external == null) external = Maps.empty();
-			if (external.get(Fields.JOB_ID) != null) return r;
-			session = appendTurnsToRoot(session, Vectors.of(Maps.of(K_ROLE, ROLE_USER,
-				K_CONTENT, content, K_SOURCE, SOURCE_CHAT, K_TURN_TS, now())));
-			session = session.assoc(KEY_EXTERNAL, external.assoc(Fields.JOB_ID, jobId));
-			return r.assoc(K_SESSIONS, sessions.assoc(sid, session));
+		boolean[] accepted = {false};
+		transact(draft -> {
+			accepted[0] = false;
+			if (!draft.exists() || TERMINATED.equals(draft.getStatus()) || SUSPENDED.equals(draft.getStatus())) return;
+			if (create) draft.ensureSession(sid, caller);
+			accepted[0] = draft.session(sid).claimExternalTurn(jobId, content);
 		});
-		return result != null && jobId.equals(RT.getIn(result, K_SESSIONS, sid, KEY_EXTERNAL, Fields.JOB_ID));
-	}
-
-	/** Persist identity before exposing completion; only the claiming job may release the session. */
-	@SuppressWarnings("unchecked")
-	public void finishExternalTurn(Blob sid, Blob jobId, ACell remoteSession, ACell response) {
-		update(r -> {
-			Index<Blob, ACell> sessions = (Index<Blob, ACell>) r.get(K_SESSIONS);
-			AMap<AString, ACell> session = RT.ensureMap(sessions.get(sid));
-			if (session == null) return r;
-			AMap<AString, ACell> external = RT.ensureMap(session.get(KEY_EXTERNAL));
-			if (external == null || !jobId.equals(external.get(Fields.JOB_ID))) return r;
-			external = external.dissoc(Fields.JOB_ID);
-			if (remoteSession != null) external = external.assoc(Fields.SESSION_ID, remoteSession);
-			if (response != null) session = appendTurnsToRoot(session, Vectors.of(Maps.of(K_ROLE,
-				ROLE_ASSISTANT, K_CONTENT, response, K_SOURCE, SOURCE_CHAT, K_TURN_TS, now())));
-			return r.assoc(K_SESSIONS, sessions.assoc(sid, session.assoc(KEY_EXTERNAL, external)));
-		});
+		return accepted[0];
 	}
 
 	/**
@@ -432,47 +374,37 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 	 */
 	public SessionIntake addTaskInSession(Blob sid, AString caller,
 			AMap<AString, ACell> initialLoads, Blob taskId, ACell taskData) {
-		return intakeSession(sid, caller, initialLoads, true, record ->
-			record.assoc(K_TASKS, extractTasks(record).assoc(taskId, taskData)));
+		return intakeSession(sid, caller, initialLoads, true, draft ->
+			draft.update(record -> record.assoc(K_TASKS, extractTasks(record).assoc(taskId, taskData))));
 	}
 
 	/** Atomically creates/reuses a session and appends one pending envelope. */
 	public SessionIntake appendSessionPending(Blob sid, AString caller,
 			AMap<AString, ACell> initialLoads, ACell envelope, boolean createIfMissing) {
-		return intakeSession(sid, caller, initialLoads, createIfMissing, record -> {
-			Index<Blob, ACell> sessions = (Index<Blob, ACell>) record.get(K_SESSIONS);
-			AMap<AString, ACell> session = RT.ensureMap(sessions.get(sid));
-			AVector<ACell> pending = RT.ensureVector(session.get(K_PENDING));
-			if (pending == null) pending = Vectors.empty();
-			return record.assoc(K_SESSIONS, sessions.assoc(sid,
-				session.assoc(K_PENDING, pending.conj(envelope))));
-		});
+		return intakeSession(sid, caller, initialLoads, createIfMissing,
+			draft -> draft.session(sid).appendPending(envelope));
 	}
 
 	/** Session admission and the associated agent change observe one atomic snapshot. */
 	private SessionIntake intakeSession(Blob sid, AString caller,
 			AMap<AString, ACell> initialLoads, boolean create,
-			UnaryOperator<AMap<AString, ACell>> change) {
+			java.util.function.Consumer<AgentState> change) {
 		SessionIntake[] result = {SessionIntake.MISSING};
-		CVMLong created = now();
-		cursor().updateAndGet(value -> {
+		transact(draft -> {
 			result[0] = SessionIntake.MISSING;
-			AMap<AString, ACell> record = RT.ensureMap(value);
-			if (record == null) return value;
-			Index<Blob, ACell> sessions = record.get(K_SESSIONS) instanceof Index<?, ?> index
-				? (Index<Blob, ACell>) index : Index.none();
-			ACell raw = sessions.get(sid);
+			if (!draft.exists()) return;
+			ACell raw = draft.getSessions().get(sid);
 			if (raw != null && initialLoads != null) {
 				result[0] = SessionIntake.LOADS_ON_EXISTING;
-				return value;
+				return;
 			}
 			if (raw == null) {
-				if (!create) return value;
-				raw = newSession(caller, initialLoads, created);
+				if (!create) return;
+				raw = draft.ensureSession(sid, caller, initialLoads);
 			}
-			if (!(raw instanceof AMap<?, ?>)) return value;
+			if (!(raw instanceof AMap<?, ?>)) return;
+			change.accept(draft);
 			result[0] = SessionIntake.APPLIED;
-			return change.apply(record.assoc(K_SESSIONS, sessions.assoc(sid, raw)));
 		});
 		return result[0];
 	}
@@ -503,10 +435,8 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 	 */
 	@SuppressWarnings("unchecked")
 	public void appendSessionPending(Blob sid, ACell envelope) {
-		appendSessionPending(sid, null, null, envelope, false);
+		session(sid).appendPending(envelope);
 	}
-
-	/** Applies load tiers outer-to-inner; nil entries mask an outer value. */
 
 	/** Reads {@code sessions[sid].inCycle}, or null when absent. */
 	public ACell getSessionCycleEpoch(Blob sid) { return session(sid).cycleEpoch(); }
@@ -519,24 +449,6 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 	public void clearSessionCycle(Blob sid) {
 		if (sid != null) session(sid).clearCycle();
 	}
-	@SuppressWarnings("unchecked")
-	private static AMap<AString, ACell> clearSessionCycle(AMap<AString, ACell> r, Blob sid) {
-		if (sid == null) return r;
-		Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index idx)
-			? (Index<Blob, ACell>) idx : Index.none();
-		ACell sv = sessions.get(sid);
-		if (!(sv instanceof AMap)) return r;
-		AMap<AString, ACell> session = (AMap<AString, ACell>) sv;
-		AMap<AString, ACell> cleared = session.dissoc(K_IN_CYCLE);
-		if (cleared == session) return r;
-		return r.assoc(K_SESSIONS, sessions.assoc(sid, cleared));
-	}
-
-	/** Updates root-turn count and timestamp metadata for an appended suffix. */
-	/** Comparable retained history; migration itself contributes no new turns. */
-	/** Drops the first {@code drainCount} entries of {@code session.pending},
-	 *  preserving the tail (entries that arrived after the snapshot). Shared
-	 *  by {@link SessionState#beginCycle} and {@link #mergeRunResult}. Pure. */
 	/**
 	 * Removes the session record at {@code sid} (no-op if absent). The
 	 * removal is durable: the venue merge is whole-value LWW, so the
@@ -552,15 +464,6 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 				? (Index<Blob, ACell>) idx : Index.none();
 			return r.assoc(K_SESSIONS, sessions.dissoc(sid));
 		});
-	}
-
-	/**
-	 * Whether a session record has durable queued work. {@code inCycle} is an
-	 * executor fence, never a wake signal or a resume checkpoint.
-	 */
-	static boolean sessionHasWork(AMap<AString, ACell> session) {
-		ACell pv = session.get(K_PENDING);
-		return pv instanceof AVector<?> v && v.count() > 0;
 	}
 
 	/**
@@ -916,17 +819,22 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 	 * Returns the previous record for notifying exactly the callers we drained.
 	 */
 	public AMap<AString, ACell> finishSuspendedCycle(AMap<AString, ACell> entry, Blob sid) {
-		AMap<AString, ACell> before = getAndUpdate(r -> {
-			if (!SUSPENDED.equals(r.get(K_STATUS))) return r;
+		var before = new java.util.concurrent.atomic.AtomicReference<AMap<AString, ACell>>();
+		transact(draft -> {
+			before.set(null);
+			AMap<AString, ACell> r = draft.getRecord();
+			if (r == null || !SUSPENDED.equals(r.get(K_STATUS))) return;
+			before.set(r);
 			AMap<AString, ACell> stopped = entry;
 			ACell suspension = r.get(KEY_SUSPENSION);
 			if (suspension != null) stopped = stopped.assoc(KEY_SUSPENSION, suspension)
 				.assoc(Fields.RESULT, suspensionDetail(r));
-			return clearSessionCycle(r, sid)
-				.assoc(K_TASKS, Index.none())
-				.assoc(K_TIMELINE, extractTimeline(r).conj(stopped));
+			AMap<AString, ACell> recorded = stopped;
+			draft.clearSessionCycle(sid);
+			draft.update(current -> current.assoc(K_TASKS, Index.none())
+				.assoc(K_TIMELINE, extractTimeline(current).conj(recorded)));
 		});
-		return before != null && SUSPENDED.equals(before.get(K_STATUS)) ? before : null;
+		return before.get();
 	}
 
 	/**
@@ -1074,69 +982,18 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 			long presentedSessionPendingCount,
 			AVector<ACell> newFrames,
 			AMap<AString, ACell> cycleTokens) {
-		return update(r -> {
-			// Remove completed tasks, detect new ones
-			Index<Blob, ACell> currentTasks = extractTasks(r);
-			Index<Blob, ACell> remainingTasks = removeCompletedTasks(currentTasks, taskResults);
-
-			AVector<ACell> timeline = extractTimeline(r);
-
-			AMap<AString, ACell> updated = r
+		var result = new java.util.concurrent.atomic.AtomicReference<AMap<AString, ACell>>();
+		transact(draft -> {
+			draft.update(r -> r
 				.assoc(K_STATE, applyStateChange(r.get(K_STATE), snapshotState, newState))
-				.assoc(K_TASKS, remainingTasks)
-				.assoc(K_TIMELINE, timeline.conj(timelineEntry))
-				.dissoc(K_ERROR);
-
-			// Atomic root frame history append + session.pending drain +
-			// inCycle clear for the picked session.
-			// All touch the same session record so we fold them into one assoc.
-			boolean hasTurns = turnsToAppend != null && turnsToAppend.count() > 0;
-			boolean hasDrain = presentedSessionPendingCount > 0;
-			boolean hasNewFrames = newFrames != null;
-			if (historySid != null) {
-				Index<Blob, ACell> sessions = (updated.get(K_SESSIONS) instanceof Index idx)
-					? (Index<Blob, ACell>) idx : Index.none();
-				ACell sv = sessions.get(historySid);
-				if (sv instanceof AMap) {
-					AMap<AString, ACell> session = (AMap<AString, ACell>) sv;
-					AMap<AString, ACell> before = session;
-
-					// Adapter-owned frame stack: replace wholesale before any
-					// turn append. Turn append below still lands on frames[0]
-					// so concurrent-intake user turns end up at root.
-					if (hasNewFrames) {
-						GoalTreeContext.validateFramesUpdate(sessionFrames(session), newFrames);
-						session = session.assoc(K_FRAMES, newFrames);
-					}
-
-					if (hasTurns) {
-						session = appendTurnsToRoot(session, turnsToAppend);
-					}
-
-					if (hasDrain) {
-						session = drainPendingPrefix(session, presentedSessionPendingCount);
-					}
-
-					// Session running token totals (#217): the cycle's measured
-					// usage — the sum over its recorded inferences — added to
-					// meta.tokens in the same CAS as the entry.
-					if (cycleTokens != null) {
-						session = bumpMetaTokens(session, cycleTokens);
-					}
-
-					// The cycle is complete — release the session's inCycle
-					// claim (set by beginSessionCycle) in the same CAS, so a
-					// merged cycle is never mistaken for a crashed one.
-					session = session.dissoc(K_IN_CYCLE);
-
-					if (session != before) {
-						updated = updated.assoc(K_SESSIONS, sessions.assoc(historySid, session));
-					}
-				}
-			}
-
-			return updated;
+				.assoc(K_TASKS, removeCompletedTasks(extractTasks(r), taskResults))
+				.assoc(K_TIMELINE, extractTimeline(r).conj(timelineEntry))
+				.dissoc(K_ERROR));
+			if (historySid != null) draft.session(historySid).finishCycle(
+				newFrames, turnsToAppend, presentedSessionPendingCount, cycleTokens);
+			result.set(draft.getRecord());
 		});
+		return result.get();
 	}
 
 	// ========== Private helpers ==========
