@@ -16,10 +16,10 @@ that stale snapshot back into current state.
 Engine now requires a `CoviaApplication`; the raw-cursor constructors and
 `PersistenceHandler` have been removed on this experimental branch. Embedders
 connect to their existing `LatticeHost`, or open an application over their store.
-Restart tests use the same host model as production. This is a Java API migration,
-not a change to persisted record formats.
+Restart tests use the same host model as production. The host API migration
+preserves record formats; the separate adapter storage migration is described below.
 
-`VenueState`, `Users`, `User`, `AgentState`, `SessionState`, `JobState`, `AuthState`, `ScheduleState`, `AssetStore`, `SecretStore` and
+`VenueState`, `Users`, `User`, `AgentState`, `SessionState`, `JobState`, `AuthState`, `ScheduleState`, `AdapterState`, `AssetStore`, `SecretStore` and
 `WorkspaceRoot` implement upstream `TransactionalComponent`. Ordinary domain
 mutations are atomic; `transact(draft -> ...)` groups several operations into one
 local commit. Choose the component containing all data the operation reads or
@@ -78,6 +78,14 @@ transaction cannot commit into a deleted or recreated account. A changed venue
 transaction signs its completed value on commit; a signing failure leaves live
 state unchanged. Committing does not publish the host or flush the store.
 
+Adapter components live directly at `:adapters/<name>` within that same venue
+value. They have no user-workspace envelope and no independent publication
+boundary. Each adapter owns its schema. A user-owned worker receives an
+account-generation-guarded view; its transactions cannot commit after account
+deletion or recreation. Legacy venue-workspace state moves lazily and atomically
+on access, with conflicts reported rather than merged. User cleanup tracking
+belongs to the framework's `:user-deletions` region. See [ADAPTERS.md](ADAPTERS.md).
+
 Login provisioning commits the account and login directory row in one venue
 transaction. Agent wake changes likewise commit the thread's intent, schedule
 event and stored handle together. `AgentState` only changes lattice data;
@@ -101,9 +109,12 @@ owns the timer, job preparation and dispatch. Both domain components rebind to
 draft storage and have no engine or runtime-service reference. Venue operations
 coordinate changes across these children without constructing their records.
 
-`VenueState.fork()` is a separate, explicitly reconciled working copy. Its
-`sync()` uses whole-venue LWW selection; it must not be used as a transaction
-substitute for concurrent local writes. Interior components expose transactions,
+A venue is one atomically updated running lattice application instance.
+`VenueState.fork()` creates an independent snapshot. Its `sync()` uses whole-venue
+LWW selection for backup, replication and failover. It cannot combine arbitrary
+forked executions: application invariants and external effects cannot generally
+be merged. Failover must fence the previous writer; timestamps do not provide
+leader election. Live concurrent work uses atomic updates and retrying transactions. Interior components expose transactions,
 not independent fork/publication policies. Incoming venue merges preserve remote
 stamps; local edits pass through `StampedCursor`.
 

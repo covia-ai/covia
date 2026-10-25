@@ -29,11 +29,11 @@ import covia.venue.RequestContext;
  * <p><b>Bots</b> are declared under {@code adapters.telegram.bots.<name>}
  * (see {@link BotSpec}) by the operator, or created at runtime by a user with
  * {@code telegram:create} (acting as that user, recorded at
- * {@code w/adapters/telegram/users/<did>/bots/<name>} in the venue's private
- * adapter workspace and re-armed at boot;
+ * {@code :adapters/telegram/users/<did>/bots/<name>} in the venue's private
+ * adapter state and re-armed at boot;
  * {@code telegram:delete} removes them). Each runs as its {@code user} with one
  * <b>inbound handler</b>: an agent — one {@code agent:chat} session per
- * Telegram chat, persisted in the same private adapter workspace so
+ * Telegram chat, persisted in the same private adapter state so
  * conversations survive restarts — or an operation,
  * invoked per update with the Telegram {@code Update} exactly as sent
  * (snake_case, {@code message}/{@code callback_query}/… nested as Telegram
@@ -160,7 +160,7 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 	public boolean configure(AMap<AString, ACell> config, boolean strict) {
 		if (config == null) config = Maps.empty();
 		if (config.containsKey(K_STATE_PATH)) {
-			throw new IllegalArgumentException("adapters.telegram.statePath is fixed at w/adapters/telegram");
+			throw new IllegalArgumentException("adapters.telegram.statePath is fixed at :adapters/telegram");
 		}
 		if (strict) {
 			for (long i = 0; i < config.count(); i++) {
@@ -395,9 +395,9 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 
 	@Override
 	protected void deleteRuntimeState(RequestContext ctx, String name) {
-		state().delete(userStatePath(ctx.getUserDID(), "resolved/" + name));
-		state().delete(userStatePath(ctx.getUserDID(), "inbox/" + name));
-		state().delete(userStatePath(ctx.getUserDID(), "files/" + name));
+		state(ctx.getUserDID()).delete(userStatePath(ctx.getUserDID(), "resolved/" + name));
+		state(ctx.getUserDID()).delete(userStatePath(ctx.getUserDID(), "inbox/" + name));
+		state(ctx.getUserDID()).delete(userStatePath(ctx.getUserDID(), "files/" + name));
 		deleteLegacyPath(ctx, LEGACY_REGISTRY_PATH + "/" + name);
 		deleteLegacyPath(ctx, BotRunner.legacySessionsPath(name));
 	}

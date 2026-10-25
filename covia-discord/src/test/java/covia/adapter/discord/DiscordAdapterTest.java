@@ -132,15 +132,15 @@ class DiscordAdapterTest {
 		run(OWNER,"v/ops/discord/create",Maps.of("name","created","token","s/DISCORD_CREATED","operation","v/test/ops/echo","open",true));
 		for(int i=0;i<100&&!gateway.sinks.containsKey("created-token");i++)Thread.sleep(20);
 		assertTrue(gateway.sinks.containsKey("created-token"));
-		String recordPath=adapter.runtimeBotPath(OWNER,"created");
-		ACell record=engine.resolvePath(Strings.create(recordPath),engine.venueContext());
+		String recordPath=adapter.userStatePath(OWNER,"bots/created");
+		ACell record=adapter.state().read(recordPath);
 		assertNotNull(record);assertEquals(Strings.create("s/DISCORD_CREATED"),RT.getIn(record,"token"));assertEquals(null,RT.getIn(record,"user"));
-		assertEquals(null,engine.resolvePath(Strings.create(recordPath),RequestContext.of(OWNER)));
+		assertEquals(null,engine.resolvePath(Strings.create("w/adapters/discord/"+recordPath),RequestContext.of(OWNER)));
 		adapter.forgetForTest(OWNER,"created");assertEquals(null,adapter.runnerForTest(OWNER,"created"));
 		adapter.rearmForTest();assertNotNull(adapter.runnerForTest(OWNER,"created"));
 		ACell deleted=run(OWNER,"v/ops/discord/delete",Maps.of("name","created"));assertEquals(CVMBool.TRUE,RT.getIn(deleted,"deleted"));
 		assertFalse(gateway.sinks.containsKey("created-token"));
-		assertEquals(null,engine.resolvePath(Strings.create(recordPath),engine.venueContext()));
+		assertEquals(null,adapter.state().read(recordPath));
 	}
 
 	private static InboundMessage message(String id,String channel,String username,String text,boolean dm,boolean mention){return new InboundMessage(id,channel,dm?"PRIVATE":"TEXT",dm?username:"general",dm?null:"guild-1",dm?null:"Test Guild","42",username,username,text,dm,mention,Vectors.empty());}

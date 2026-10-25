@@ -341,15 +341,14 @@ Mutable data space for agents and users. Persistent storage for user and agent d
 - Non-JSON structures will store and hash correctly but won't render nicely in UIs or chain through operations cleanly
 
 User-managed data may live at any writable path the user chooses, with
-operation-specific defaults such as `w/memory`. Framework adapters instead
-keep adapter-global durable state in the venue principal's well-known private
-subtree: `<venue-did>/w/adapters/<adapter>/`. Adapter-owned records associated
-with a user are conventionally keyed below `users/<did>/`; that association is
-not an access grant, and the adapter owns and validates the schema. Credentials
-never belong there: records hold `s/NAME` references and secret material stays
-in `/s/`. Public adapter declarations and facts remain separately discoverable
-under `v/adapters/<adapter>/`. The complete adapter storage and publication
-contract is in [ADAPTERS.md](ADAPTERS.md#private-state-and-user-managed-storage).
+operation-specific defaults such as `w/memory`. Adapter-owned state instead lives directly under the venue's
+`:adapters/<name>` region. Each adapter defines its own value and domain
+components; these share the running venue's atomic transaction boundary.
+Messaging uses `users/<did>` and `config/<name>` within its own state, but there
+is no universal adapter schema. Credentials remain in `/s/`. Public adapter
+declarations remain under `v/adapters/<name>/`. See [ADAPTERS.md](ADAPTERS.md)
+for owner-bound worker views, deletion hooks and lazy migration from the older
+venue-principal workspace layout.
 
 #### `/s/` — Secrets
 
@@ -992,14 +991,16 @@ current authoritative value. Merge sites must therefore place current local
 state in the `own` position. See covia#214 and Convex-Dev/convex#641 for the
 analysis.
 
-This is correct because a venue has a **single authoritative writer**: its signing
-key under `:grid → :venues → OwnerLattice → SignedLattice`. Every merge a venue
-performs — propagator merge-back, reload from the Etch store, replica restore — is
-therefore a *stale-vs-fresh snapshot of the same lineage*, never a reconciliation
-of independent concurrent writers. "Newest coherent snapshot wins" is the right
-CRDT for that; per-entry LWW would add no value and would resurrect deleted keys.
+This relies on a venue having **one authoritative running instance**, whose
+updates are atomically ordered. `OwnerLattice → SignedLattice` authenticates its
+snapshots; possession of the signing key does not prevent two processes from
+running. Deployment and failover must fence the previous writer. Supported
+reconciliation compares snapshots of that one lineage for backup, replication
+and recovery. Independently executing forks are outside this contract: choosing
+one snapshot discards the other's changes and cannot undo its external effects.
+Per-entry LWW cannot preserve arbitrary application invariants either.
 
-The **interior** of `:value` (`:assets`, `:storage`, `:did`, `:users`, `:schedule`,
+The **interior** of `:value` (`:assets`, `:storage`, `:did`, `:users`, `:schedule`, `:adapters`, `:user-deletions`,
 `:user-data → <DID> → {j, g, s, w, o, h, a}`) is structurally navigable but
 carries no independent merge semantics — the merge happens only at the `:value`
 root. Writes are stamped on the way up by a
@@ -1097,9 +1098,16 @@ contract over the venue-owned `w/global` workspace. No manual write replay or
 local transaction framework is involved. Request duration and persistence cadence
 are not transaction boundaries.
 
-`VenueState.fork().sync()` is explicit lattice reconciliation using whole-venue
-LWW, not a substitute for a retrying local transaction. Interior components have
-no independent publication policy; use their typed `transact` API instead.
+**Venue execution and snapshot recovery are different operations.** A venue is
+an atomically updated running lattice application instance with one authoritative
+writer. LWW selects a complete venue snapshot for backup, replication and
+failover. It cannot generally merge independently executing forks: cross-component
+invariants, decisions and external outputs have no arbitrary conflict-free merge.
+`VenueState.fork().sync()` therefore selects a snapshot; it is not a way to commit
+concurrent work. Live operations use `transact`, which retries against the current
+state. Interior components, including adapters, have no independent publication
+policy. Failover must fence the old writer before activating its replacement;
+snapshot selection alone neither elects a leader nor reverses external effects.
 
 The timestamp is not a local sequence number. Local writes are not merged with
 the preceding local value: their successful atomic update order determines the
@@ -1206,7 +1214,7 @@ legacy-compatible workspace envelope:
 | `Covia.ROOT` | `KeyedLattice` | Root — `:grid` (containing `:venues` and `:meta`) and the sibling `:dlfs` region |
 | `Covia.VENUE` | `StampedCursor` → `LWWLattice` → `KeyedLattice` | The whole per-venue `:value` as a single navigable **whole-value-LWW** node with a stamp-on-write boundary |
 | `:grid → :venues` | `OwnerLattice` → `SignedLattice` → `Covia.VENUE` | Per-AccountKey signed venue state (one authoritative signing key) |
-| Venue interior | `KeyedLattice` (structural children) | `:assets`, `:storage`, `:did`, `:users`, `:schedule`, `:user-data` — navigated structurally; merged only at `:value` |
+| Venue interior | `KeyedLattice` (structural children) | `:assets`, `:storage`, `:did`, `:users`, `:schedule`, `:adapters`, `:user-deletions`, `:user-data` — navigated structurally; merged only at `:value` |
 | `:schedule` | `StampedCursor` → `StringKeyedLattice` | Extensible `{updated, events, ...}` record; writes under `events` refresh `updated` and preserve sibling metadata |
 | `:user-data → <DID>` | `MapLattice` → `StampedCursor` → `StringKeyedLattice` | Per-user record; every deep write refreshes `meta.updated` |
 | `j` / each Job | `IndexLattice` → `StampedCursor` → `JSONLattice` | Existing Job map shape; deep writes such as `t/` refresh `updated` |

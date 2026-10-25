@@ -10,32 +10,32 @@ import java.util.function.BooleanSupplier;
 import convex.core.data.AString;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
-import covia.venue.AdapterWorkspace;
+import covia.venue.AdapterState;
 
-/** Session mappings in a binding's private workspace, with optional legacy migration. */
+/** Session mappings in a binding's private state, with optional legacy migration. */
 public final class ConversationSessions {
-	private final AdapterWorkspace workspace;
+	private final AdapterState workspace;
 	private final String root;
 	private final Function<String, String> legacyRead;
 	private final Consumer<String> legacyDelete;
 	private final Object mutationLock;
 	private final BooleanSupplier writable;
 
-	public ConversationSessions(AdapterWorkspace workspace, String root) {
+	public ConversationSessions(AdapterState workspace, String root) {
 		this(workspace, root, key -> null, key -> { });
 	}
 
-	public ConversationSessions(AdapterWorkspace workspace, String root,
+	public ConversationSessions(AdapterState workspace, String root,
 			Function<String, String> legacyRead, Consumer<String> legacyDelete) {
 		this(workspace, root, legacyRead, legacyDelete, new Object(), () -> true);
 	}
 
 	/** Coordinate session writes with a binding's stop/delete lifecycle. */
-	public ConversationSessions(AdapterWorkspace workspace, String root, Object mutationLock, BooleanSupplier writable) {
+	public ConversationSessions(AdapterState workspace, String root, Object mutationLock, BooleanSupplier writable) {
 		this(workspace, root, key -> null, key -> { }, mutationLock, writable);
 	}
 
-	private ConversationSessions(AdapterWorkspace workspace, String root,
+	private ConversationSessions(AdapterState workspace, String root,
 			Function<String, String> legacyRead, Consumer<String> legacyDelete, Object mutationLock, BooleanSupplier writable) {
 		this.workspace = Objects.requireNonNull(workspace);
 		workspace.path(root + "/check");

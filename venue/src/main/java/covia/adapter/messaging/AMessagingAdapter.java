@@ -25,7 +25,7 @@ import covia.adapter.AAdapter;
 import covia.adapter.messaging.MessagingBot.Managed;
 import covia.api.Fields;
 import covia.exception.AuthException;
-import covia.venue.AdapterWorkspace;
+import covia.venue.AdapterState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 
@@ -91,7 +91,8 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 	}
 
 	@Override
-	public void deleteUserState(AString did, AdapterWorkspace state) {
+	public void deleteUserState(AString did, AdapterState state) {
+		state.delete(state.userPath(did, ""));
 		// Persisted ownership also covers configurations removed since the bot ran.
 		AMap<AString, ACell> configured = RT.ensureMap(state.read("config"));
 		if (configured != null) for (var entry : configured.entrySet()) {
@@ -134,7 +135,7 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 			if (runners.containsKey(spec.name())) continue;
 			if (engine.getVenueState().users().isDeleted(spec.userDID(engine))) continue;
 			try {
-				AdapterWorkspace state = state().forUser(spec.userDID(engine));
+				AdapterState state = state(spec.userDID(engine));
 				R runner = newBot(spec, Managed.CONFIG);
 				state.write("config/" + spec.name() + "/user", spec.userDID(engine));
 				runners.put(spec.name(), runner);
@@ -173,7 +174,7 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 				AMap<AString, ACell> settings = RT.castMap(entry.getValue());
 				if (settings == null) throw new IllegalArgumentException(SETTINGS_REQUIRED);
 				S spec = parseBot(name, settings.assoc(K_USER, owner), true);
-				if (migrate) state().write(userStatePath(owner, "bots/" + name), settings);
+				if (migrate) state(owner).write(userStatePath(owner, "bots/" + name), settings);
 				R runner = newBot(spec, Managed.RUNTIME);
 				runners.put(key, runner);
 				runner.start();
@@ -228,9 +229,9 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 		return Engine.isSecretRef(value);
 	}
 
-	public final AdapterWorkspace state() { return adapterWorkspace(); }
+	public final AdapterState state() { return adapterState(); }
+	public final AdapterState state(AString owner) { return adapterState(owner); }
 	public final String userStatePath(AString owner, String relative) { return state().userPath(owner, relative); }
-	public final String runtimeBotPath(AString owner, String name) { return state().path(userStatePath(owner, "bots/" + name)); }
 	public final synchronized R runner(String name) { return runners.get(name); }
 	public final synchronized R runner(AString owner, String name) { return runners.get(runtimeKey(owner, name)); }
 	private static String runtimeKey(AString owner, String name) { return owner + "#" + name; }
@@ -294,7 +295,7 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 		String key = runtimeKey(owner, name);
 		if (runners.containsKey(key)) throw new IllegalArgumentException(DUPLICATE_BOT.formatted(providerName(), name));
 		R runner = newBot(spec, Managed.RUNTIME);
-		state().write(userStatePath(owner, "bots/" + name), settings);
+		state(owner).write(userStatePath(owner, "bots/" + name), settings);
 		runners.put(key, runner);
 		runner.start();
 		return runner.status();
@@ -314,8 +315,8 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 			throw new IllegalArgumentException(MISSING_BOT.formatted(providerName(), name));
 		}
 		runner.stop();
-		state().delete(userStatePath(owner, "bots/" + name));
-		state().delete(userStatePath(owner, "sessions/" + name));
+		state(owner).delete(userStatePath(owner, "bots/" + name));
+		state(owner).delete(userStatePath(owner, "sessions/" + name));
 		deleteRuntimeState(ctx, name);
 		return Maps.of(Fields.NAME, nameCell, K_DELETED, CVMBool.TRUE);
 	}

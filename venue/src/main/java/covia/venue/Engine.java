@@ -2778,13 +2778,17 @@ public class Engine {
 	}
 
 	/**
-	 * Returns a durable venue-principal workspace scoped to one adapter at
-	 * {@code w/adapters/<name>/}. Trusted adapter code uses this for private,
+	 * Returns a durable component scoped to one adapter at
+	 * {@code :adapters/<name>} in the venue value. Trusted adapter code uses this for private,
 	 * schema-owned operational state; user-managed storage continues to use
 	 * caller-selected paths through ordinary operations.
 	 */
-	public AdapterWorkspace adapterWorkspace(String adapterName) {
-		return venueState.adapterWorkspace(adapterName);
+	public AdapterState adapterState(String adapterName) {
+		return venueState.adapterState(adapterName);
+	}
+
+	public AdapterState adapterState(String adapterName, AString owner) {
+		return venueState.adapterState(adapterName, owner);
 	}
 
 	/**
@@ -3034,7 +3038,7 @@ public class Engine {
 			registered = new java.util.LinkedHashMap<>(disabledAdapters);
 			registered.putAll(adapters);
 		}
-		java.util.Map<String, java.util.function.Consumer<AdapterWorkspace>> cleanups = new java.util.LinkedHashMap<>();
+		java.util.Map<String, java.util.function.Consumer<AdapterState>> cleanups = new java.util.LinkedHashMap<>();
 		registered.forEach((name, adapter) -> cleanups.put(name, state -> adapter.deleteUserState(did, state)));
 		VenueState.DeletedUser deleted;
 		synchronized (getAuth()) {
@@ -3086,7 +3090,7 @@ public class Engine {
 			AMap<AString, ACell> pending = venueState.pendingUserDeletions(name);
 			for (var entry : pending.entrySet()) {
 				AString did = entry.getKey();
-				venueState.transact(draft -> adapter.deleteUserState(did, draft.adapterWorkspace(name)));
+				venueState.transact(draft -> adapter.deleteUserState(did, draft.adapterState(name)));
 				flush();
 				adapter.onUserDeleted(did, null);
 				venueState.finishUserDeletion(name, did, entry.getValue());

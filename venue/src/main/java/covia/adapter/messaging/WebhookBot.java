@@ -35,7 +35,7 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 	private final AWebhookMessagingAdapter<S> adapter;
 	private final S spec;
 	private final Managed managed;
-	private final covia.venue.AdapterWorkspace state;
+	private final covia.venue.AdapterState state;
 	private final WebhookInbox inbox;
 	private final ConversationRouter router;
 	private final RelayBinding<S> relay;
@@ -51,7 +51,7 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 	WebhookBot(AWebhookMessagingAdapter<S> adapter, S spec, Managed managed) {
 		this.adapter = adapter; this.spec = spec; this.managed = managed;
 		AString owner = spec.userDID(adapter.engine);
-		state = adapter.state().forUser(owner);
+		state = adapter.state(owner);
 		String identity = Strings.create(ConversationRouter.key(owner.toString(), spec.installationKey())).getHash().toHexString();
 		version = Strings.create(spec.settings().getHash().toHexString());
 		binding = managed == Managed.CONFIG ? "c-" + spec.name()
@@ -72,7 +72,7 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 	public String binding() { return binding; }
 	public boolean running() { return running; }
 	public WebhookInbox inbox() { return inbox; }
-	covia.venue.AdapterWorkspace state() { return state; }
+	covia.venue.AdapterState state() { return state; }
 	/** This binding's relay, or null when its handler is an agent or operation. */
 	public RelayBinding<S> relay() { return relay; }
 	/**

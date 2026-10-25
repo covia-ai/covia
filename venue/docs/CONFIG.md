@@ -1147,10 +1147,10 @@ Deletion cancels accepted jobs, stops agents, removes queued schedules, and
 atomically removes the user's namespace and login profile/aliases. A small
 tombstone records the DID, deletion time and actor; public-key revocations
 remain without profile fields or key labels. Repeating deletion while the
-account is absent is idempotent. Adapter-owned `users/<did>` records are removed
-in the same transaction, including those belonging to unloaded adapters.
-Adapter hooks remove other associations and stop their workers (including
-disabled messaging bots). An interrupted cleanup can be retried with the same
+account is absent is idempotent. Adapter hooks remove their user-associated state
+in the same transaction and then stop their workers (including disabled messaging bots). An unloaded adapter
+retains a pending cleanup entry until its implementation is available; the venue
+does not guess its schema. An interrupted cleanup can be retried with the same
 delete operation; unavailable adapters reconcile before their next activation.
 Cleanup failure is reported with access already revoked, and account recreation
 remains blocked until all cleanup completes. See
@@ -2338,7 +2338,7 @@ Per bot:
   agents are owned by.
 - `agent` **or** `operation` — the **inbound handler**. With `agent`, each
   Telegram chat (or forum topic) is one `agent:chat` session, persisted at
-  `<venue-did>/w/adapters/telegram/config/<bot>/sessions/<chatId>` so
+  `:adapters/telegram/config/<bot>/sessions/<chatId>` so
   conversations survive restarts; `/new` starts a fresh one. The agent
   receives each turn as `{text, via: {channel: "telegram", bot, access:
   "allow" | "open", from, chat, message_id}}` — Telegram's authenticated
@@ -2438,7 +2438,7 @@ Bots can also be **created at runtime by their user**: `v/ops/telegram/create
 greeting?, mediaOperation?, replyOperation?}` makes a bot that acts as the caller (no `user` — a user cannot
 create a bot acting as someone else; the token must be a secret reference),
 records it at
-`<venue-did>/w/adapters/telegram/users/<caller-did>/bots/<name>`, starts it,
+`:adapters/telegram/users/<caller-did>/bots/<name>`, starts it,
 and re-arms it on every venue start or module load; `v/ops/telegram/delete
 {name}` stops and removes it (record and sessions). Both are gated on
 `<caller>/telegram/<name>` × `telegram/manage`. Config-declared bots stay
@@ -2557,7 +2557,7 @@ DMs and direct mentions alone are not a substitute for enabling it when the
 bot is expected to process guild text.
 
 Each bot has exactly one `agent` or `operation` handler. Agent conversations
-persist under `<venue-did>/w/adapters/discord/config/<bot>/sessions/<channelId>`
+persist under `:adapters/discord/config/<bot>/sessions/<channelId>`
 and receive
 `{text, via: {channel: "discord", bot, access, from, chat, guild?,
 message_id}, attachments}`. Operation handlers receive a normalized Discord
@@ -2579,7 +2579,7 @@ OAuth, absolute, and traversal routes are refused. HTTP 429 responses honor
 Discord's `retry_after` once. `discord:bots` reports state/counters without
 tokens. Runtime `discord:create` requires an `s/NAME` token reference and
 persists at
-`<venue-did>/w/adapters/discord/users/<caller-did>/bots/<name>`;
+`:adapters/discord/users/<caller-did>/bots/<name>`;
 `discord:delete` removes it and its sessions. The adapter owns this private,
 fixed schema; tokens remain in `s/`, and user-managed content is not moved
 into it. These require `discord/manage`. The module also publishes

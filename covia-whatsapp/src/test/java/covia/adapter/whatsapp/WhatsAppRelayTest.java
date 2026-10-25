@@ -136,7 +136,7 @@ class WhatsAppRelayTest {
 			AMap<AString, ACell> polled = r.call(ALICE, RelayBinding.POLL, "{\"wait_ms\":0}");
 			assertEquals(0, RT.ensureVector(polled.get(Strings.create("messages"))).count());
 
-			ACell stored = r.f.engine.resolvePath(Strings.create("w/adapters/" + WhatsAppAdapter.NAME), r.f.engine.venueContext());
+			ACell stored = r.f.engine.adapterState(WhatsAppAdapter.NAME).get();
 			assertNotNull(RT.getIn(stored, "config", "main", "relay"), "the link is stored");
 			assertNull(RT.getIn(stored, "config", "main", "inbox"), "a relay keeps no inbox");
 			assertFalse(String.valueOf(stored).contains("Hello?"), "no message is stored");
@@ -200,7 +200,7 @@ class WhatsAppRelayTest {
 			assertEquals(404, media(r, BOB, "wamid.voice").status(), "only its principal may fetch it");
 			assertEquals(404, media(r, ALICE, "wamid.unknown").status());
 
-			ACell stored = r.f.engine.resolvePath(Strings.create("w/adapters/" + WhatsAppAdapter.NAME), r.f.engine.venueContext());
+			ACell stored = r.f.engine.adapterState(WhatsAppAdapter.NAME).get();
 			assertFalse(String.valueOf(stored).contains("70001"), "no media reference is stored");
 			ACell drives = run(r.f.engine, OWNER, "v/ops/dlfs/list-drives", Maps.empty());
 			assertFalse(String.valueOf(drives).contains(WhatsAppAdapter.NAME), "and no copy in a drive of the owner's: " + drives);

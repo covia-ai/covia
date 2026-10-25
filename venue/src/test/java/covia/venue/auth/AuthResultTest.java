@@ -291,11 +291,10 @@ class AuthResultTest {
 			encoded, caller).awaitResult(5000);
 		assertEquals(data, restored);
 		assertEquals(data.getHash(), restored.getHash());
-		var state = engine.adapterWorkspace("auth-result-test");
+		var state = engine.adapterState("auth-result-test");
 		state.write("event", restored);
 		assertEquals(data, state.read("event"));
-		assertEquals(details, engine.resolvePath(
-			Strings.create(state.path("event/authentication/details")), engine.venueContext()));
+		assertEquals(details, state.read("event/authentication/details"));
 	}
 
 	@Test

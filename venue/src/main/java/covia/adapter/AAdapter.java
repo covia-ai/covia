@@ -22,7 +22,7 @@ import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Engine;
-import covia.venue.AdapterWorkspace;
+import covia.venue.AdapterState;
 import covia.venue.RequestContext;
 
 public abstract class AAdapter {
@@ -37,7 +37,7 @@ public abstract class AAdapter {
 	public static final ExecutorService VIRTUAL_EXECUTOR = ThreadUtils.getVirtualExecutor();
 
 	public Engine engine;
-	private AdapterWorkspace adapterWorkspace;
+	private AdapterState adapterState;
 	/** Explicit public operation declarations, independent of mutable catalogue bindings. */
 	private AMap<AString, AMap<AString, ACell>> operations = Maps.empty();
 	public static final String INVALID_OPERATION_NAME = "Operation name must not be blank";
@@ -121,7 +121,7 @@ public abstract class AAdapter {
 
 	public void install(Engine engine) {
 		this.engine=engine;
-		this.adapterWorkspace=engine.adapterWorkspace(getName());
+		this.adapterState=engine.adapterState(getName());
 		installAssets();
 	}
 
@@ -148,14 +148,14 @@ public abstract class AAdapter {
 
 	/**
 	 * Remove user-associated durable state in the venue deletion transaction.
-	 * Use only the supplied draft workspace: this callback may be retried and
+	 * Use only the supplied draft component: this callback may be retried and
 	 * must perform no I/O, runtime changes, or writes through the live engine.
-	 * The framework also removes the conventional users/DID subtree, including
-	 * for unloaded adapters. Override for additional adapter-owned indexes.
+	 * Override when this adapter holds user associations: the framework does not
+	 * interpret its schema. Unloaded adapters retain pending cleanup until activation.
 	 * Called for disabled/uninstalled instances too; do not depend on install.
 	 */
-	public void deleteUserState(AString did, AdapterWorkspace state) {
-		// Conventional state is removed by the framework.
+	public void deleteUserState(AString did, AdapterState state) {
+		// Default for adapters with no user-associated state.
 	}
 
 	/**
@@ -170,21 +170,25 @@ public abstract class AAdapter {
 	}
 
 	/**
-	 * Durable state owned by this adapter in the venue principal's private
-	 * workspace at {@code w/adapters/<name>/}. The returned handle is permanently
-	 * bound to both this adapter name and the venue identity; invocation contexts
-	 * cannot redirect it into a caller's workspace.
+	 * Durable component at {@code :adapters/<name>} within the venue value.
+	 * The adapter owns its shape and may bind typed domain components to its cursor.
 	 *
 	 * <p>User-managed content does not belong here. Adapters should accept an
 	 * ordinary caller-authorised path for that data (with a sane {@code w/...}
-	 * default). Credentials remain in {@code s/}; this workspace stores secret
+	 * default). Credentials remain in {@code s/}; this component stores secret
 	 * references only.</p>
 	 */
-	protected final AdapterWorkspace adapterWorkspace() {
-		AdapterWorkspace workspace=adapterWorkspace;
-		if (workspace==null) throw new IllegalStateException(
-			"Adapter workspace is unavailable before install: "+getName());
-		return workspace;
+	protected final AdapterState adapterState() {
+		AdapterState state=adapterState;
+		if (state==null) throw new IllegalStateException(
+			"Adapter state is unavailable before install: "+getName());
+		return state;
+	}
+
+	/** Capture this view once when creating a user-owned worker. */
+	protected final AdapterState adapterState(AString owner) {
+		adapterState(); // require installation
+		return engine.adapterState(getName(), java.util.Objects.requireNonNull(owner));
 	}
 
 	/**

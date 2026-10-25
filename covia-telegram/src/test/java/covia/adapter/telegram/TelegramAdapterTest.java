@@ -616,7 +616,7 @@ public class TelegramAdapterTest {
 	@Test
 	public void pendingReceiptSurvivesRunnerRestartAndCompletedReceiptIsNotReplayed() throws Exception {
 		configureBots(Maps.empty());
-		var inbox = new covia.adapter.webhook.WebhookInbox(engine, engine.adapterWorkspace("telegram"), "config/echo/inbox/" + OWNER.getHash().toHexString() + "/42");
+		var inbox = new covia.adapter.webhook.WebhookInbox(engine, engine.adapterState("telegram"), "config/echo/inbox/" + OWNER.getHash().toHexString() + "/42");
 		var message = telegram.message(15002, "private", ALLOWED_ID, "alice");
 		message.put("text", "Recover this pending turn");
 		ACell update = convex.core.util.JSON.parse(convex.core.util.JSON.toString(java.util.Map.of("update_id", 900001, "message", message)));
@@ -826,7 +826,7 @@ public class TelegramAdapterTest {
 
 	@Test
 	public void forumTopicsHaveIndependentSessionsAndResetOnlyTheirOwnTopic() throws Exception {
-		var sessions = new covia.adapter.messaging.ConversationSessions(engine.adapterWorkspace("telegram"), "config/echo/sessions");
+		var sessions = new covia.adapter.messaging.ConversationSessions(engine.adapterState("telegram"), "config/echo/sessions");
 		for (int topic : List.of(11, 22)) {
 			var message = telegram.message(15003, "private", ALLOWED_ID, "alice");
 			message.put("text", "Hello topic " + topic);
@@ -906,12 +906,12 @@ public class TelegramAdapterTest {
 		assertEquals("created_bot", mine.username());
 
 		// Recorded in venue-private adapter state (settings only — no user, no literal token).
-		String recordPath = adapter.runtimeBotPath(OWNER, "mine");
-		ACell record = engine.resolvePath(Strings.create(recordPath), engine.venueContext());
+		String recordPath = adapter.userStatePath(OWNER, "bots/mine");
+		ACell record = adapter.state().read(recordPath);
 		assertNotNull(record, "registry record");
 		assertEquals(Strings.create("s/TG_CREATED"), RT.getIn(record, BotSpec.K_TOKEN));
 		assertNull(RT.getIn(record, BotSpec.K_USER));
-		assertNull(engine.resolvePath(Strings.create(recordPath), RequestContext.of(OWNER)),
+		assertNull(engine.resolvePath(Strings.create("w/adapters/telegram/" + recordPath), RequestContext.of(OWNER)),
 			"user association does not make adapter-owned state part of that user's workspace");
 
 		// Same name again is refused; another user may use the name; bots lists it as runtime
@@ -956,9 +956,8 @@ public class TelegramAdapterTest {
 		assertEquals(convex.core.data.prim.CVMBool.TRUE, RT.getIn(deleted, TelegramAdapter.K_DELETED));
 		assertNull(adapter.runner(OWNER, "mine"));
 		assertEquals(BotRunner.State.STOPPED, rearmed.state());
-		assertNull(engine.resolvePath(Strings.create(recordPath), engine.venueContext()), "record removed");
-		assertNull(engine.resolvePath(Strings.create(adapter.state().path(
-			adapter.userStatePath(OWNER, "sessions/mine/" + ALLOWED_ID))), engine.venueContext()), "sessions removed");
+		assertNull(adapter.state().read(recordPath), "record removed");
+		assertNull(adapter.state().read(adapter.userStatePath(OWNER, "sessions/mine/" + ALLOWED_ID)), "sessions removed");
 		assertNull(adapter.state().read(resolvedPath), "resolved handles removed");
 	}
 
@@ -975,11 +974,11 @@ public class TelegramAdapterTest {
 		BotRunner legacy=adapter.runner(OTHER,"legacy");
 		assertNotNull(legacy);
 		await(()->legacy.state()==BotRunner.State.RUNNING,10_000,()->"legacy bot did not start: "+legacy.error());
-		assertEquals(settings,engine.resolvePath(Strings.create(adapter.runtimeBotPath(OTHER,"legacy")),engine.venueContext()),
+		assertEquals(settings,adapter.state().read(adapter.userStatePath(OTHER,"bots/legacy")),
 			"legacy record is copied into the canonical venue-private adapter workspace");
 
 		run(RequestContext.of(OTHER),"v/ops/telegram/delete",Maps.of("name","legacy"));
-		assertNull(engine.resolvePath(Strings.create(adapter.runtimeBotPath(OTHER,"legacy")),engine.venueContext()));
+		assertNull(adapter.state().read(adapter.userStatePath(OTHER,"bots/legacy")));
 		assertNull(RT.getIn(run(RequestContext.of(OTHER),"v/ops/covia/read",Maps.of(
 			Fields.PATH,TelegramAdapter.LEGACY_REGISTRY_PATH+"/legacy")),Fields.VALUE));
 	}
@@ -1413,7 +1412,7 @@ public class TelegramAdapterTest {
 		BotRunner runner=adapter.runner(OWNER,bot);
 		if(runner==null)runner=adapter.runner(bot);
 		if(runner==null)return null;
-		ACell v=engine.resolvePath(Strings.create(runner.sessionsPath()+"/"+chatId),engine.venueContext());
+		ACell v=adapter.state().read(runner.sessionsRelativePath()+"/"+chatId);
 		return (v == null) ? null : v.toString();
 	}
 

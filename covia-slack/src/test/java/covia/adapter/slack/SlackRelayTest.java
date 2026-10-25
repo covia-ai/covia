@@ -93,7 +93,7 @@ class SlackRelayTest {
 			assertEquals("1700000000.000200", str(answer.body(), "thread_ts"), "in the message's thread");
 			assertEquals("Nothing yet.", str(answer.body(), "text"));
 
-			ACell stored = f.engine.resolvePath(Strings.create("w/adapters/" + SlackAdapter.NAME), f.engine.venueContext());
+			ACell stored = f.engine.adapterState(SlackAdapter.NAME).get();
 			assertNotNull(RT.getIn(stored, "config", "main", "relay"), "the link is stored");
 			assertFalse(String.valueOf(stored).contains("what is new?"), "no message is stored");
 			AVector<ACell> bots = RT.ensureVector(RT.getIn(f.run("bots", Maps.empty()), "bots"));

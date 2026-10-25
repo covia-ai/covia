@@ -12,7 +12,7 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
-import covia.venue.AdapterWorkspace;
+import covia.venue.AdapterState;
 import covia.venue.Engine;
 
 /**
@@ -38,10 +38,10 @@ public final class WebhookInbox {
 	public static final String UNKNOWN_EVENT = "Unknown webhook receipt";
 	public static final String INVALID_RECEIPT = "Invalid webhook receipt";
 	private final Engine engine;
-	private final AdapterWorkspace workspace;
+	private final AdapterState workspace;
 	private final String root;
 
-	public WebhookInbox(Engine engine, AdapterWorkspace workspace, String root) {
+	public WebhookInbox(Engine engine, AdapterState workspace, String root) {
 		this.engine = Objects.requireNonNull(engine);
 		this.workspace = Objects.requireNonNull(workspace);
 		workspace.path(root + "/check");

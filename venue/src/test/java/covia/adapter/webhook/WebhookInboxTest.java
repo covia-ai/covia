@@ -29,8 +29,8 @@ class WebhookInboxTest {
 	@Test void deduplicatesConcurrentDeliveriesAndClaimsAcrossHandles() throws Exception {
 		Engine engine = Engine.createTemp(Maps.empty());
 		try {
-			var inbox = new WebhookInbox(engine, engine.adapterWorkspace("webhook-test"), "config/bot/inbox");
-			var otherHandle = new WebhookInbox(engine, engine.adapterWorkspace("webhook-test"), "config/bot/inbox");
+			var inbox = new WebhookInbox(engine, engine.adapterState("webhook-test"), "config/bot/inbox");
+			var otherHandle = new WebhookInbox(engine, engine.adapterState("webhook-test"), "config/bot/inbox");
 			var tasks = new ArrayList<CompletableFuture<Boolean>>();
 			for (int i = 0; i < 24; i++) {
 				WebhookInbox handle = i % 2 == 0 ? inbox : otherHandle;
@@ -47,8 +47,8 @@ class WebhookInboxTest {
 			assertEquals(WebhookInbox.COMPLETE, inbox.accept("../../event-1", Maps.of("text", "duplicate")).get(Fields.STATUS));
 			assertEquals(Maps.of("text", "hello"), inbox.get("../../event-1").get(Fields.INPUT));
 			assertFalse(inbox.claim("../../event-1"));
-			assertNull(engine.adapterWorkspace("webhook-test").read("event-1"));
-			assertNull(new WebhookInbox(engine, engine.adapterWorkspace("webhook-test"), "config/other/inbox").get("../../event-1"));
+			assertNull(engine.adapterState("webhook-test").read("event-1"));
+			assertNull(new WebhookInbox(engine, engine.adapterState("webhook-test"), "config/other/inbox").get("../../event-1"));
 			inbox.accept("keep-pending", Maps.empty());
 			inbox.accept("keep-uncertain", Maps.empty());
 			inbox.claim("keep-uncertain");
@@ -63,7 +63,7 @@ class WebhookInboxTest {
 		FlushEngine engine = new FlushEngine(AKeyPair.generate());
 		engine.start();
 		try {
-			WebhookInbox inbox = new WebhookInbox(engine, engine.adapterWorkspace("webhook-test"), "inbox");
+			WebhookInbox inbox = new WebhookInbox(engine, engine.adapterState("webhook-test"), "inbox");
 			engine.failFlush = true;
 			assertThrows(IllegalStateException.class, () -> inbox.accept("event", Maps.empty()));
 			assertNotNull(inbox.get("event"));
@@ -81,7 +81,7 @@ class WebhookInboxTest {
 	@Test void malformedReceiptCannotBeAcknowledgedOrOverwrittenAsANewEvent() {
 		Engine engine = Engine.createTemp(Maps.empty());
 		try {
-			var state = engine.adapterWorkspace("webhook-test");
+			var state = engine.adapterState("webhook-test");
 			var inbox = new WebhookInbox(engine, state, "inbox");
 			String path = "inbox/" + Strings.create("event").getHash().toHexString();
 			state.write(path, Maps.empty());
@@ -98,7 +98,7 @@ class WebhookInboxTest {
 		VenueServer first = VenueServer.launch(config);
 		try {
 			Engine engine = first.getEngine();
-			var inbox = new WebhookInbox(engine, engine.adapterWorkspace("webhook-test"), "config/bot/inbox");
+			var inbox = new WebhookInbox(engine, engine.adapterState("webhook-test"), "config/bot/inbox");
 			inbox.accept("pending", Maps.of("text", "one"));
 			assertEquals(WebhookInbox.PENDING, inbox.get("pending").get(Fields.STATUS), () -> inbox.get("pending").toString());
 			inbox.accept("uncertain", Maps.of("text", "two"));
@@ -110,7 +110,7 @@ class WebhookInboxTest {
 		VenueServer second = VenueServer.launch(config);
 		try {
 			Engine engine = second.getEngine();
-			var inbox = new WebhookInbox(engine, engine.adapterWorkspace("webhook-test"), "config/bot/inbox");
+			var inbox = new WebhookInbox(engine, engine.adapterState("webhook-test"), "config/bot/inbox");
 			assertEquals(Strings.create("pending"), inbox.records(WebhookInbox.PENDING).getFirst().get(Fields.ID));
 			assertEquals(Strings.create("uncertain"), inbox.records(WebhookInbox.STARTED).getFirst().get(Fields.ID));
 			assertFalse(inbox.claim("uncertain"));

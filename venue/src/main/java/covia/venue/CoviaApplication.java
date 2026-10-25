@@ -20,6 +20,10 @@ import covia.lattice.Covia;
  * <p>This is the root-level composition point between a generic lattice host
  * ({@link LatticeHost}) and Covia's path-specific domain components. It owns
  * neither the host nor its store lifecycle.</p>
+ *
+ * <p>Each running venue uses one authoritative connected state and atomic
+ * transactions. Whole-venue LWW selects recovery/replication snapshots; it cannot
+ * reconcile the state or external effects of independently running forks.</p>
  */
 public final class CoviaApplication
 		extends LatticeApplication<Index<Keyword, ACell>> {

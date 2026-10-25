@@ -38,7 +38,7 @@ class ConversationRouterTest {
 		try {
 			Engine.addDemoAssets(engine);
 			engine.getVenueState().users().ensure(Strings.create("did:test:owner"));
-			var sessions = new ConversationSessions(engine.adapterWorkspace("messaging-test"), "config/bot/sessions");
+			var sessions = new ConversationSessions(engine.adapterState("messaging-test"), "config/bot/sessions");
 			var router = new ConversationRouter(engine, new Spec("bot", "did:test:owner", "retry-agent", null, null), sessions);
 			router.runOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "retry-agent",
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm")));
@@ -56,7 +56,7 @@ class ConversationRouterTest {
 		Engine engine = Engine.createTemp(Maps.empty());
 		CountDownLatch release = new CountDownLatch(1);
 		try {
-			var sessions = new ConversationSessions(engine.adapterWorkspace("messaging-test"), "config/bot/sessions");
+			var sessions = new ConversationSessions(engine.adapterState("messaging-test"), "config/bot/sessions");
 			var router = new ConversationRouter(engine, new Spec("bot", "did:test:owner", "agent", null, null), sessions);
 			List<String> calls = Collections.synchronizedList(new ArrayList<>());
 			CountDownLatch entered = new CountDownLatch(1);
@@ -85,7 +85,7 @@ class ConversationRouterTest {
 	@Test void persistsOpaqueKeysWithoutCrossingInstallationsThreadsOrOwners() {
 		Engine engine = Engine.createTemp(Maps.empty());
 		try {
-			var state = engine.adapterWorkspace("slack-test");
+			var state = engine.adapterState("slack-test");
 			String root = state.userPath(Strings.create("did:test:owner"), "sessions/bot");
 			var sessions = new ConversationSessions(state, root);
 			String thread = ConversationRouter.key("T1", "C1", "1700000000.123456");
@@ -110,7 +110,7 @@ class ConversationRouterTest {
 	@Test void migratesLegacySessionsWithCanonicalPrecedenceAndDeletesBoth() {
 		Engine engine = Engine.createTemp(Maps.empty());
 		try {
-			var state = engine.adapterWorkspace("messaging-test");
+			var state = engine.adapterState("messaging-test");
 			var legacy = new java.util.HashMap<String, String>();
 			legacy.put("1", "legacy-session");
 			var sessions = new ConversationSessions(state, "sessions", legacy::get, legacy::remove);

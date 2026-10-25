@@ -232,7 +232,7 @@ Index<Blob, ACell> userJobs = user.getJobs();
 
 ```
 
-Adapter-owned state uses `AdapterWorkspace`; see
+Adapter-owned state uses `AdapterState`; see
 [`docs/ADAPTERS.md`](docs/ADAPTERS.md#private-state-and-user-managed-storage).
 
 ### Testing

@@ -211,7 +211,7 @@ Principals call `/relay/whatsapp/c-main/<action>`; a runtime binding made with
   them from Meta on each request and keeps no copy, so a principal can transcribe a
   voice note itself.
 
-Links live under `w/adapters/whatsapp/config/<bot>/relay/` in the venue's private
-workspace (a runtime binding's under its owner's adapter state). Message text, codes
+Links live under `:adapters/whatsapp/config/<bot>/relay/` in the adapter's private
+state (a runtime binding's under its owner's adapter state). Message text, codes
 and the message→sender map are bounded and in memory: a restart or reconfiguration
 loses messages not yet collected, never a link.

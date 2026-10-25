@@ -62,6 +62,85 @@ import covia.test.DurabilityTest;
 @DurabilityTest
 public class EnginePersistenceTest {
 	@Test
+	public void legacyAdapterStateMovesLazilyAndDoesNotReturnAfterReopen() throws Exception {
+		File file = newTempEtch();
+		var config = testConfig(file.getAbsolutePath().replace('\\', '/'), AKeyPair.createSeeded(612).getSeed().toHexString());
+		var oldPath = covia.lattice.WorkspaceRoot.parseStringPath("w/adapters/unloaded-test");
+		ACell value = convex.core.data.Vectors.of("adapter-defined", Maps.of("nested", 42L));
+		VenueServer server = VenueServer.launch(config);
+		try {
+			Engine engine = server.getEngine();
+			engine.getVenueState().users().ensure(engine.getDIDString()).writeInternalPath(oldPath, value);
+		} finally { server.close(); }
+
+		server = VenueServer.launch(config);
+		try {
+			Engine engine = server.getEngine();
+			User host = engine.getVenueState().users().get(engine.getDIDString());
+			assertEquals(value, host.readInternalPath(oldPath), "startup leaves unloaded adapter state alone");
+			assertNull(RT.getIn(engine.getVenueState().get(), Covia.ADAPTERS, Strings.create("unloaded-test")));
+			assertEquals(value, engine.adapterState("unloaded-test").get());
+			assertNull(host.readInternalPath(oldPath));
+		} finally { server.close(); }
+
+		server = VenueServer.launch(config);
+		try {
+			Engine engine = server.getEngine();
+			assertEquals(value, engine.adapterState("unloaded-test").get(), "exact migrated value survives reopening");
+			assertNull(engine.getVenueState().users().get(engine.getDIDString()).readInternalPath(oldPath));
+			engine.adapterState("unloaded-test").set(null);
+		} finally { server.close(); }
+
+		server = VenueServer.launch(config);
+		try {
+			assertNull(server.getEngine().adapterState("unloaded-test").get(), "deleted state cannot resurrect from the old location");
+		} finally { server.close(); }
+	}
+
+	@Test
+	public void legacyDeletionQueueRecoversThroughAdapterOwnedCleanup() throws Exception {
+		File file = newTempEtch();
+		var config = testConfig(file.getAbsolutePath().replace('\\', '/'), AKeyPair.createSeeded(613).getSeed().toHexString());
+		var oldState = covia.lattice.WorkspaceRoot.parseStringPath("w/adapters/cleanup-test");
+		var oldQueue = covia.lattice.WorkspaceRoot.parseStringPath("w/user-deletions");
+		ACell value = Maps.of("custom", Maps.of(ALICE_DID, "old association"));
+		VenueServer server = VenueServer.launch(config);
+		try {
+			Engine engine = server.getEngine();
+			VenueState venue = engine.getVenueState();
+			venue.users().create(ALICE_DID);
+			var deleted = venue.deleteUser(ALICE_DID, engine.getDIDString());
+			User host = venue.users().ensure(engine.getDIDString());
+			host.writeInternalPath(oldState, value);
+			host.writeInternalPath(oldQueue, Maps.of("cleanup-test", Maps.of(ALICE_DID, deleted.tombstone())));
+		} finally { server.close(); }
+
+		server = VenueServer.launch(config);
+		try {
+			Engine engine = server.getEngine();
+			VenueState venue = engine.getVenueState();
+			User host = venue.users().get(engine.getDIDString());
+			assertEquals(value, host.readInternalPath(oldState));
+			assertNull(host.readInternalPath(oldQueue), "recovery moves the pending index, without scanning adapter values");
+			assertNotNull(venue.pendingUserDeletions("cleanup-test").get(ALICE_DID));
+			assertThrows(covia.exception.AuthException.class, () -> venue.users().create(ALICE_DID));
+			var adapter = new AdapterUserDeletionTest.Probe();
+			engine.registerAdapter(adapter);
+			assertEquals(1, adapter.stopped);
+			assertNull(host.readInternalPath(oldState));
+			assertNull(engine.adapterState("cleanup-test").read("custom/" + ALICE_DID));
+		} finally { server.close(); }
+
+		server = VenueServer.launch(config);
+		try {
+			Engine engine = server.getEngine();
+			assertTrue(engine.getVenueState().pendingUserDeletions("cleanup-test").isEmpty());
+			assertTrue(engine.getVenueState().users().create(ALICE_DID));
+			assertNull(engine.adapterState("cleanup-test").read("custom/" + ALICE_DID));
+		} finally { server.close(); }
+	}
+
+	@Test
 	public void adapterDeletionRetriesSurviveStoreReopen() throws Exception {
 		File file = newTempEtch();
 		var config = testConfig(file.getAbsolutePath().replace('\\', '/'), AKeyPair.createSeeded(609).getSeed().toHexString());
@@ -71,7 +150,7 @@ public class EnginePersistenceTest {
 			engine.getVenueState().users().create(ALICE_DID);
 			var adapter = new AdapterUserDeletionTest.Probe();
 			engine.registerAdapter(adapter);
-			var state = engine.adapterWorkspace(adapter.getName());
+			var state = engine.adapterState(adapter.getName());
 			state.write(state.userPath(ALICE_DID, "bots/old"), Maps.of("token", "s/old"));
 			adapter.failStop = true;
 			assertThrows(IllegalStateException.class, () -> engine.deleteUser(engine.venueContext(), ALICE_DID));
@@ -83,7 +162,7 @@ public class EnginePersistenceTest {
 			assertTrue(engine.getVenueState().users().isDeleted(ALICE_DID));
 			assertThrows(covia.exception.AuthException.class, () -> engine.getVenueState().users().create(ALICE_DID));
 			var adapter = new AdapterUserDeletionTest.Probe();
-			var state = engine.adapterWorkspace(adapter.getName());
+			var state = engine.adapterState(adapter.getName());
 			assertNull(state.read(state.userPath(ALICE_DID, "")));
 			engine.registerAdapter(adapter);
 			assertEquals(1, adapter.stopped);
@@ -98,7 +177,7 @@ public class EnginePersistenceTest {
 			engine.registerAdapter(adapter);
 			assertEquals(0, adapter.stopped, "completed cleanup is not repeated on ordinary startup");
 			assertTrue(engine.getVenueState().users().create(ALICE_DID));
-			assertNull(engine.adapterWorkspace(adapter.getName()).read("users/" + ALICE_DID));
+			assertNull(engine.adapterState(adapter.getName()).read("users/" + ALICE_DID));
 		} finally { server.close(); }
 	}
 

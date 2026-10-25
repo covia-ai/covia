@@ -168,6 +168,13 @@ Defined in code at `venue/src/main/java/covia/lattice/Covia.java`. Full design i
 
 ## Development Conventions
 
+- **Venue execution:** A venue is an atomically updated running lattice application
+  instance. Compose live changes through component updates and transactions.
+  Whole-venue LWW is snapshot selection for backup, replication and failover;
+  it cannot generally merge arbitrary forked executions or their external effects.
+  Failover must fence the previous authoritative writer. Adapter-owned components
+  live under `:adapters`, not user/venue `w`; each adapter owns its schema.
+
 - **Upstream first:** Before adding a fix or abstraction, inspect the dependency's
   existing APIs and fixes at the version we use. Prefer upstream functionality
   over local workarounds. If the required capability is missing, request an
@@ -195,7 +202,7 @@ and venue dependencies are optional for consumers of the library.
 
 The canonical authoring and system contract is
 **`venue/docs/ADAPTERS.md`**. It covers `AAdapter`, configuration hooks,
-catalog publication, `AdapterWorkspace`, capability enforcement, lifecycle,
+catalog publication, `AdapterState`, capability enforcement, lifecycle,
 optional module packaging, and required tests.
 
 Operation metadata examples and rules are in `venue/docs/ADAPTERS.md` and

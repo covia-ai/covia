@@ -28,10 +28,15 @@ import covia.api.Fields;
  * a newer {@code :timestamp} wins, an external tie retains the local value,
  * and deletions survive reconciliation.</p>
  *
+ * <p>A venue is an atomically updated running application instance. LWW is
+ * snapshot selection for backup, replication and failover, not an algorithm
+ * for combining divergent venue executions. Only one instance is authoritative;
+ * atomic local updates and transactions preserve its application invariants.</p>
+ *
  * <p>Components explicitly bind signing and timestamp functions to their editing
  * cursors. These lattice definitions describe merge and structure only. Generic
  * cursor paths neither install write policy nor invent missing containers.
- * Venue payload shapes are unchanged. DLFS format compatibility is governed
+ * Adapter values live directly under :adapters. DLFS format compatibility is governed
  * by the upstream filesystem and checked separately.</p>
  */
 public final class Covia {
@@ -72,6 +77,12 @@ public final class Covia {
 
 	/** Per-venue scheduled-event store. */
 	public static final Keyword SCHEDULE = Keyword.intern("schedule");
+
+	/** Adapter-owned components; each adapter defines the value at its name. */
+	public static final Keyword ADAPTERS = Keyword.intern("adapters");
+
+	/** Framework-owned unfinished user cleanup, indexed by adapter and DID. */
+	public static final Keyword USER_DELETIONS = Keyword.intern("user-deletions");
 
 	// ========== Venue-value whole-value-LWW plumbing ==========
 
@@ -251,6 +262,8 @@ public final class Covia {
 		DID, JSONLattice.INSTANCE,
 		USERS, JSONLattice.INSTANCE,
 		SCHEDULE, SCHEDULE_RECORD,
+		ADAPTERS, MapLattice.create(JSONLattice.INSTANCE),
+		USER_DELETIONS, JSONLattice.INSTANCE,
 		USER_DATA, MapLattice.create(USER_RECORD)));
 
 	/**

@@ -15,7 +15,7 @@ import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
-import covia.venue.AdapterWorkspace;
+import covia.venue.AdapterState;
 import covia.venue.Engine;
 
 /**
@@ -33,7 +33,7 @@ class MessageRelayTest {
 	@Test void linksAreTheOnlyStateAndLiveAtCanonicalVenuePaths() {
 		Engine engine = Engine.createTemp(Maps.empty());
 		try {
-			AdapterWorkspace ws = engine.adapterWorkspace("relay-test");
+			AdapterState ws = engine.adapterState("relay-test");
 			MessageRelay relay = new MessageRelay(ws, "config/main", 60);
 			relay.link("447700900001", ALICE);
 			assertEquals(ALICE, relay.principalFor("447700900001"));
@@ -43,13 +43,13 @@ class MessageRelayTest {
 			AMap<AString, ACell> record = RT.ensureMap(ws.read(linkPath));
 			assertNotNull(record, "the link is at its canonical path");
 			assertEquals(ALICE, record.get(Strings.create("principal")));
-			ACell venueOwned = engine.resolvePath(Strings.create("w/adapters/relay-test/" + linkPath), engine.venueContext());
-			assertEquals(record, venueOwned, "in the venue's own workspace");
+			ACell venueOwned = engine.adapterState("relay-test").read(linkPath);
+			assertEquals(record, venueOwned, "in the adapter component");
 
 			relay.poll(ALICE, 0);   // open, so the message is queued in memory
 			assertEquals(MessageRelay.Offer.DELIVERED,
 				relay.offer(ALICE, "447700900001", new MessageRelay.Inbound("m1", "secret health text", now()), null));
-			assertFalse(String.valueOf(engine.resolvePath(Strings.create("w/adapters/relay-test"), engine.venueContext()))
+			assertFalse(String.valueOf(engine.adapterState("relay-test").get())
 				.contains("secret health text"), "no message reaches the store");
 
 			MessageRelay restarted = new MessageRelay(ws, "config/main", 60);
@@ -72,7 +72,7 @@ class MessageRelayTest {
 	@Test void aClosedPrincipalIsRefused_anOpenOneReceives_andALongHoldWaits() throws Exception {
 		Engine engine = Engine.createTemp(Maps.empty());
 		try {
-			AdapterWorkspace ws = engine.adapterWorkspace("relay-test");
+			AdapterState ws = engine.adapterState("relay-test");
 			MessageRelay shortHold = new MessageRelay(ws, "config/short", 60);
 			assertEquals(MessageRelay.Offer.NOT_OPEN, shortHold.offer(ALICE, "s", new MessageRelay.Inbound("m1", "hi", now()), null));
 
@@ -97,7 +97,7 @@ class MessageRelayTest {
 		try {
 			AtomicLong clock = new AtomicLong(1_800_000_000_000L);
 			long window = 60 * 60 * 1000L;
-			MessageRelay relay = new MessageRelay(engine.adapterWorkspace("relay-test"), "config/main", 60, window, clock::get);
+			MessageRelay relay = new MessageRelay(engine.adapterState("relay-test"), "config/main", 60, window, clock::get);
 			relay.poll(ALICE, 0);
 			long sent = clock.get() / 1000;
 			AMap<AString, ACell> address = Maps.of("channel", "C123", "thread", "1700000000.000100");
@@ -121,7 +121,7 @@ class MessageRelayTest {
 	@Test void codesAreOneShot_andSightingsDeduplicate() {
 		Engine engine = Engine.createTemp(Maps.empty());
 		try {
-			MessageRelay relay = new MessageRelay(engine.adapterWorkspace("relay-test"), "config/main", 60);
+			MessageRelay relay = new MessageRelay(engine.adapterState("relay-test"), "config/main", 60);
 			String code = relay.newCode(ALICE);
 			assertEquals(ALICE, relay.redeem(code.toLowerCase()), "codes are case-insensitive");
 			assertNull(relay.redeem(code), "and spent once");

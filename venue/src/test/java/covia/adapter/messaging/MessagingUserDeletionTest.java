@@ -17,7 +17,7 @@ import convex.core.data.Strings;
 import convex.core.lang.RT;
 import covia.exception.AuthException;
 import covia.adapter.messaging.MessagingBot.Managed;
-import covia.venue.AdapterWorkspace;
+import covia.venue.AdapterState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 
@@ -33,11 +33,11 @@ class MessagingUserDeletionTest {
 	private static class Bot implements MessagingBot<Spec> {
 		final Spec spec;
 		final Managed managed;
-		final AdapterWorkspace state;
+		final AdapterState state;
 		boolean running;
 		Bot(Adapter adapter, Spec spec, Managed managed) {
 			this.spec = spec; this.managed = managed;
-			state = adapter.state().forUser(spec.userDID(adapter.engine));
+			state = adapter.state(spec.userDID(adapter.engine));
 		}
 		@Override public Spec spec() { return spec; }
 		@Override public Managed managed() { return managed; }
@@ -138,7 +138,7 @@ class MessagingUserDeletionTest {
 			Adapter adapter = new Adapter();
 			engine.registerAdapter(adapter);
 			var router = new ConversationRouter(engine, new Spec("runtime", OWNER.toString()),
-				new ConversationSessions(adapter.state().forUser(OWNER), "users/" + OWNER + "/sessions/runtime"));
+				new ConversationSessions(adapter.state(OWNER), "users/" + OWNER + "/sessions/runtime"));
 			var first = router.enqueue("chat", () -> {
 				busy.countDown();
 				try { assertTrue(release.await(5, TimeUnit.SECONDS)); }

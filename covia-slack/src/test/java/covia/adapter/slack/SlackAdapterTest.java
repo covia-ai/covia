@@ -225,9 +225,9 @@ class SlackAdapterTest {
 			String root = "config/main/sessions/" + identity + "/" + version;
 			String sessionPath = root + "/" + ConversationSessions.segment(ConversationRouter.key(parsed.installationKey(), "C123", "1.1"));
 			assertEquals(Strings.create("session-1"), f.adapter.state().read(sessionPath));
-			assertEquals("w/adapters/slack/" + sessionPath, f.adapter.state().path(sessionPath));
-			assertEquals(Strings.create("session-1"), f.engine.resolvePath(Strings.create(f.adapter.state().path(sessionPath)), f.engine.venueContext()));
-			assertNull(f.engine.resolvePath(Strings.create(f.adapter.state().path(sessionPath)), RequestContext.of(OWNER)));
+			assertEquals(":adapters/slack/" + sessionPath, f.adapter.state().path(sessionPath));
+			assertEquals(Strings.create("session-1"), f.adapter.state().read(sessionPath));
+			assertNull(f.engine.resolvePath(Strings.create("w/adapters/slack/" + sessionPath), RequestContext.of(OWNER)));
 			assertNotNull(f.adapter.state().read("config/main/inbox/" + identity + "/" + Strings.create("first").getHash().toHexString()));
 			SlackAdapter restored = new SlackAdapter(); restored.retryMillis = 25; f.engine.registerAdapter(restored);
 			restored.handleWebhook("c-main", signed(payload("same-thread", event("1.2").assoc(Strings.intern("thread_ts"), Strings.create("1.1")))));

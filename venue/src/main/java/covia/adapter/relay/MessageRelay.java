@@ -22,7 +22,7 @@ import convex.core.data.Vectors;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
-import covia.venue.AdapterWorkspace;
+import covia.venue.AdapterState;
 
 /**
  * Provider-neutral core of a message relay: one provider binding (a phone number, a
@@ -34,7 +34,7 @@ import covia.venue.AdapterWorkspace;
  *
  * <p><b>No message is written down.</b> The only durable state is the link between a
  * sender and a principal, under {@code <root>/links} and {@code <root>/principals} in
- * the adapter's private workspace. Message text, linking codes, the message→sender
+ * the adapter's private state. Message text, linking codes, the message→sender
  * targets and the de-duplication set live in bounded memory, so a restart loses
  * messages not yet collected, never a link.
  *
@@ -110,7 +110,7 @@ public final class MessageRelay {
 		long lastPollMs = Long.MIN_VALUE / 2;
 	}
 
-	private final AdapterWorkspace state;
+	private final AdapterState state;
 	private final String root;
 	private final long holdMs;
 	private final long replyWindowMs;
@@ -128,18 +128,18 @@ public final class MessageRelay {
 	private final Expiring<String, AString> codes;
 
 	/**
-	 * @param state       the adapter's private workspace
+	 * @param state       the adapter's private state
 	 * @param root        this relay's root in it
 	 * @param holdSeconds how long a message may wait for collection
 	 */
-	public MessageRelay(AdapterWorkspace state, String root, int holdSeconds) {
+	public MessageRelay(AdapterState state, String root, int holdSeconds) {
 		this(state, root, holdSeconds, DEFAULT_REPLY_WINDOW_MS, System::currentTimeMillis);
 	}
 
 	/**
 	 * @param replyWindowMs how long a reply may follow its message, the provider's rule
 	 */
-	public MessageRelay(AdapterWorkspace state, String root, int holdSeconds, long replyWindowMs, LongSupplier clock) {
+	public MessageRelay(AdapterState state, String root, int holdSeconds, long replyWindowMs, LongSupplier clock) {
 		this.state = Objects.requireNonNull(state);
 		this.root = Objects.requireNonNull(root);
 		state.path(root + "/links");   // validates the root

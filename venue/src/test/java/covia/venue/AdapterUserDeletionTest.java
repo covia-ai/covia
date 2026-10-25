@@ -25,7 +25,7 @@ class AdapterUserDeletionTest {
 	private static final String NAME = "cleanup-test";
 
 	static class Probe extends AAdapter {
-		Consumer<AdapterWorkspace> duringState = state -> { };
+		Consumer<AdapterState> duringState = state -> { };
 		int stopped;
 		boolean failStop;
 		boolean started;
@@ -35,14 +35,15 @@ class AdapterUserDeletionTest {
 		@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 			return CompletableFuture.completedFuture(input);
 		}
-		@Override public void deleteUserState(AString did, AdapterWorkspace state) {
+		@Override public void deleteUserState(AString did, AdapterState state) {
+			state.delete(state.userPath(did, ""));
 			state.delete("custom/" + did);
 			duringState.accept(state);
 		}
 		@Override public void onUserDeleted(AString did, AMap<AString, ACell> previousUser) {
 			if (engine != null) {
 				assertTrue(engine.getVenueState().users().isDeleted(did));
-				assertNull(engine.adapterWorkspace(NAME).read("custom/" + did));
+				assertNull(engine.adapterState(NAME).read("custom/" + did));
 			}
 			sawPreviousUser |= previousUser != null;
 			stopped++;
@@ -54,10 +55,10 @@ class AdapterUserDeletionTest {
 		}
 	}
 
-	private static AdapterWorkspace seed(Engine engine) {
+	private static AdapterState seed(Engine engine) {
 		engine.getVenueState().users().create(OWNER);
 		engine.getVenueState().users().create(OTHER);
-		AdapterWorkspace state = engine.adapterWorkspace(NAME);
+		AdapterState state = engine.adapterState(NAME);
 		state.write(state.userPath(OWNER, "bots/old"), VALUE);
 		state.write(state.userPath(OTHER, "bots/keep"), VALUE);
 		state.write("custom/" + OWNER, VALUE);
@@ -69,18 +70,18 @@ class AdapterUserDeletionTest {
 		try {
 			Probe adapter = new Probe();
 			engine.registerAdapter(adapter);
-			AdapterWorkspace state = seed(engine);
-			AdapterWorkspace retained = state.forUser(OWNER);
+			AdapterState state = seed(engine);
+			AdapterState retained = engine.adapterState(NAME, OWNER);
 			engine.disableAdapter(NAME);
 			ACell tombstone = engine.deleteUser(engine.venueContext(), OWNER);
 			assertTrue(adapter.sawPreviousUser);
 			assertEquals(1, adapter.stopped);
 			assertNull(state.read(state.userPath(OWNER, "")));
 			assertEquals(VALUE, state.read(state.userPath(OTHER, "bots/keep")));
-			assertThrows(AuthException.class, () -> state.write(state.userPath(OWNER, "late"), VALUE));
+			assertThrows(AuthException.class, () -> engine.adapterState(NAME, OWNER).write(state.userPath(OWNER, "late"), VALUE));
 			assertEquals(tombstone, engine.deleteUser(engine.venueContext(), OWNER));
 			assertTrue(engine.getVenueState().users().create(OWNER));
-			state.forUser(OWNER).write("config/fresh/value", VALUE);
+			engine.adapterState(NAME, OWNER).write("config/fresh/value", VALUE);
 			assertThrows(AuthException.class, () -> retained.write("config/fresh/value", VALUE));
 			assertThrows(AuthException.class, () -> retained.delete("config/fresh/value"));
 			assertThrows(AuthException.class, () -> retained.read("config/fresh/value"));
@@ -93,7 +94,7 @@ class AdapterUserDeletionTest {
 		try {
 			Probe adapter = new Probe();
 			engine.registerAdapter(adapter);
-			AdapterWorkspace state = seed(engine);
+			AdapterState state = seed(engine);
 			adapter.failStop = true;
 			assertThrows(IllegalStateException.class, () -> engine.deleteUser(engine.venueContext(), OWNER));
 			assertNull(state.read(state.userPath(OWNER, "")));
@@ -114,7 +115,7 @@ class AdapterUserDeletionTest {
 			Probe adapter = new Probe();
 			engine.registerAdapter(adapter);
 			assertNull(adapter.engine);
-			AdapterWorkspace state = seed(engine);
+			AdapterState state = seed(engine);
 			engine.getVenueState().users().get(OWNER).ensureAgent("old", Maps.empty(), VALUE);
 			engine.deleteUser(engine.venueContext(), OWNER);
 			assertEquals(1, adapter.stopped);
@@ -123,16 +124,16 @@ class AdapterUserDeletionTest {
 		} finally { engine.close(); }
 	}
 
-	@Test void unloadedAdapterStateIsErasedAndCustomCleanupRunsBeforeReactivation() {
+	@Test void unloadedAdapterCleanupRemainsPendingUntilReactivation() {
 		Engine engine = Engine.createTemp(Maps.empty());
 		try {
 			engine.registerAdapter(new Probe());
-			AdapterWorkspace state = seed(engine);
+			AdapterState state = seed(engine);
 			engine.removeAdapter(NAME);
 			IllegalStateException pending = assertThrows(IllegalStateException.class,
 				() -> engine.deleteUser(engine.venueContext(), OWNER));
 			assertEquals(Engine.USER_DELETION_PENDING, pending.getMessage());
-			assertNull(state.read(state.userPath(OWNER, "")));
+			assertEquals(VALUE, state.read(state.userPath(OWNER, "bots/old")), "only the adapter can interpret its data");
 			assertEquals(VALUE, state.read("custom/" + OWNER));
 			assertThrows(AuthException.class, () -> engine.getVenueState().users().create(OWNER));
 			Probe replacement = new Probe();
@@ -150,7 +151,7 @@ class AdapterUserDeletionTest {
 		try {
 			Probe adapter = new Probe();
 			engine.registerAdapter(adapter);
-			AdapterWorkspace state = seed(engine);
+			AdapterState state = seed(engine);
 			adapter.duringState = draft -> { throw new IllegalStateException("test rollback"); };
 			assertThrows(IllegalStateException.class, () -> engine.deleteUser(engine.venueContext(), OWNER));
 			assertNotNull(engine.getVenueState().users().get(OWNER));
@@ -167,7 +168,7 @@ class AdapterUserDeletionTest {
 		try {
 			Probe adapter = new Probe();
 			engine.registerAdapter(adapter);
-			AdapterWorkspace state = seed(engine);
+			AdapterState state = seed(engine);
 			AtomicInteger attempts = new AtomicInteger();
 			adapter.duringState = draft -> {
 				if (attempts.incrementAndGet() == 1) {
@@ -180,7 +181,7 @@ class AdapterUserDeletionTest {
 			assertTrue(staged.await(5, TimeUnit.SECONDS));
 			assertFalse(engine.getVenueState().users().isDeleted(OWNER));
 			assertEquals(VALUE, state.read("custom/" + OWNER), "draft cleanup must not leak");
-			state.forUser(OWNER).write(state.userPath(OWNER, "bots/racing"), VALUE);
+			engine.adapterState(NAME, OWNER).write(state.userPath(OWNER, "bots/racing"), VALUE);
 			release.countDown();
 			deletion.get(5, TimeUnit.SECONDS);
 			assertTrue(attempts.get() >= 2);
@@ -194,7 +195,7 @@ class AdapterUserDeletionTest {
 		try {
 			Probe adapter = new Probe();
 			engine.registerAdapter(adapter);
-			AdapterWorkspace state = seed(engine);
+			AdapterState state = seed(engine);
 			engine.getVenueState().deleteUser(OWNER, engine.getDIDString());
 			engine.getVenueState().users().finishDeletion(OWNER); // pre-hook tombstone
 			assertEquals(VALUE, state.read(state.userPath(OWNER, "bots/old")));

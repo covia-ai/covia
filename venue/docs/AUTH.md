@@ -365,7 +365,7 @@ and [OPERATIONS.md](OPERATIONS.md):
   they must not grant general anonymous operation execution.
 - Challenge state and authenticator bindings are private, venue-owned lattice
   records, using the existing auth store or a method adapter's
-  `AdapterWorkspace`, never caller-writable evidence. Reuse existing key
+  `AdapterState`, never caller-writable evidence. Reuse existing key
   bindings instead of creating parallel registries. Secret material follows
   `SecretStore` rules; job input/output, public catalog metadata and event
   details must not contain passwords, OTPs, private keys or bearer tokens.

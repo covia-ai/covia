@@ -135,7 +135,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	/** getUpdates offset: one past the last confirmed update. */
 	private int offset = 0;
 
-	private final covia.venue.AdapterWorkspace storage;
+	private final covia.venue.AdapterState storage;
 	private final ConversationRouter conversations;
 	private volatile WebhookInbox inbox;
 	private volatile String fileMetadataRoot;
@@ -148,7 +148,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		this.spec = spec;
 		this.apiUrl = apiUrl;
 		this.managed = managed;
-		this.storage = adapter.state().forUser(spec.userDID(adapter.engine));
+		this.storage = adapter.state(spec.userDID(adapter.engine));
 		ConversationSessions sessionStore = new ConversationSessions(storage, sessionsRelativePath(),
 			this::legacySession, chat -> {
 				if (managed == Managed.RUNTIME) adapter.deleteLegacyPath(context(), legacySessionsPath(spec.name()) + "/" + chat);
@@ -806,11 +806,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		return "w/telegram/sessions/" + bot;
 	}
 
-	String sessionsPath() {
-		return storage.path(sessionsRelativePath());
-	}
-
-	private String sessionsRelativePath() {
+	String sessionsRelativePath() {
 		return managed == Managed.CONFIG
 			? "config/" + spec.name() + "/sessions"
 			: adapter.userStatePath(spec.userDID(adapter.engine), "sessions/" + spec.name());

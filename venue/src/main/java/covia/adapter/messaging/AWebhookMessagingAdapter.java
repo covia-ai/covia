@@ -117,8 +117,8 @@ public abstract class AWebhookMessagingAdapter<S extends WebhookBotSpec>
 		if (getClass().getResource(template) != null) installAgentTemplate(getName(), template);
 	}
 	@Override protected final void deleteRuntimeState(RequestContext ctx, String name) {
-		state().delete(userStatePath(ctx.getUserDID(), "inbox/" + name));
-		state().delete(userStatePath(ctx.getUserDID(), "relay/" + name));
+		state(ctx.getUserDID()).delete(userStatePath(ctx.getUserDID(), "inbox/" + name));
+		state(ctx.getUserDID()).delete(userStatePath(ctx.getUserDID(), "relay/" + name));
 	}
 	@Override public final CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		requireInvoke(ctx);

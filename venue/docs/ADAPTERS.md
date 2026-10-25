@@ -107,7 +107,7 @@ The significant lifecycle is:
 3. Registration applies the effective `adapters.<name>` configuration through
    `configure(config, strict)`.
 4. Unless boot-disabled or declined, `install(engine)` binds the engine and
-   private `AdapterWorkspace`, then `installAssets()` declares its catalog.
+   private `AdapterState`, then `installAssets()` declares its catalog.
    Installation must not start inbound workers or other autonomous work.
 5. Before the venue serves requests, `recoverJob(job)` is called once per
    non-terminal durable Job the adapter's operations own. The default
@@ -281,56 +281,71 @@ There are three separate concerns:
 1. **User-managed data.** A user may select any location they can write. An
    operation should accept an ordinary caller-authorised path where this is
    useful, with a sane default such as `w/memory`.
-2. **Adapter-global state.** Durable state owned by an adapter lives at the
-   fixed well-known location `<venue-did>/w/adapters/<adapter>/` and is
-   accessed through `adapterWorkspace()`.
+2. **Adapter-owned state.** Each adapter has its own value at
+   `:adapters/<name>` within the venue. `adapterState()` returns its lattice
+   component; this is not a user workspace or a caller-addressable path.
 3. **Secrets.** Secret material remains in `s/`. Adapter records contain only
-   `s/NAME` references. An adapter that sends a secret resolves it with the
-   request's destination (`engine.resolveSecret(ref, ctx, url)`), so a
-   `secret/use` grant bound to a url is honoured.
+   `s/NAME` references. Resolve secrets against their destination
+   (`engine.resolveSecret(ref, ctx, url)`) so URL-bound `secret/use` grants apply.
 
-`AdapterWorkspace` is bound to the adapter name and venue principal during
-`install`; an invocation context cannot redirect it into the caller's
-workspace. Its root is not a configurable `statePath`. It validates adapter
-names, relative paths, traversal, bare user DIDs, null writes, and empty
-mutation paths.
+`AdapterState` uses upstream `ALatticeComponent` and `TransactionalComponent`.
+The value may be any CAD3 cell: there is no mandatory map, user prefix,
+workspace envelope or per-adapter merge rule. An adapter owns its schema and
+may wrap the component's cursor in its own typed domain components. For simple
+map/vector records, `read`, `write` and `delete` offer type-aware relative paths;
+`get`, `set`, `update` and `transact` operate on the complete value. `rootPath`
+and `path` are diagnostic locations, not workspace API addresses.
 
 ```java
-AdapterWorkspace state = adapterWorkspace();
-AString owner = ctx.getUserDID();
+AdapterState state = adapterState();
+state.transact(draft -> {
+    draft.write("settings/theme", Strings.create("dark"));
+    draft.write("settings/version", CVMLong.ONE);
+});
 
-String relative = state.userPath(owner, "preferences/theme");
-state.write(relative, Strings.create("dark"));
-ACell theme = state.read(relative);
-state.delete(relative);
+engine.getVenueState().transact(draft -> {
+    draft.adapterState("telegram").write("settings/enabled", CVMBool.TRUE);
+    draft.adapterState("slack").write("settings/enabled", CVMBool.FALSE);
+    // User, schedule and other domain operations can join this same commit.
+});
 ```
 
-An adapter may map user-level instances or preferences below
-`users/<did>/...`. The DID is an association key, not an access grant: the
-adapter owns and validates this schema, and users interact with it through
-capability-checked adapter operations. When an adapter needs durable state
-for operator-declared instances, `config/<instance>/...` is the conventional
-separation from `users/<did>/...`. Other adapter-global keys are adapter-owned
-but should remain stable and documented.
+Long-lived user-owned workers must capture `adapterState(ownerDID)` when
+created and use that component for their durable state, including configuration
+records. Reads, cursor updates and transaction commits are fenced to that
+account's generation. Call `requireCurrentUser()` before admitting queued work.
+The unbound component is for adapter-wide administration and deletion hooks;
+it does not infer ownership from field names. Messaging uses `users/<did>` and
+`config/<name>` as its own schema, but neither is a framework requirement.
 
-Long-lived workers must capture `state.forUser(did)` when created, and use that
-handle for all their durable state, including `config/...` paths. Reads and
-mutations are fenced to that account's generation. A late callback cannot restore
-deleted data or change a new account registered under the same DID. Call
-`requireCurrentUser()` before admitting queued work; each storage mutation also
-checks atomically. Unbound writes to `users/<did>/...` reject tombstoned owners;
-write individual user records rather than replacing the `users` map.
+A venue is one authoritative running application instance. All these components
+share its atomic state and transaction boundary. Whole-venue LWW selects complete
+snapshots for backup, replication and failover; it does not combine changes from
+independently executing forks. Arbitrary workflow invariants and external effects
+cannot generally be merged. Failover must fence the previous writer before the
+replacement starts producing outputs. No per-adapter publication framework or
+independent store is introduced.
+
+Existing `w/adapters/<name>` data in the venue principal is moved on first
+access to that adapter component. The exact value is copied and the old key
+removed in one venue transaction, including when access happens inside a larger
+transaction. No unrelated adapter or user data is scanned on startup. Identical
+duplicate values are safe to collapse; conflicting old and new values fail
+without changing either copy. There is no generic field merge or dual-write
+fallback. Older binaries that write the workspace layout must not be run against
+a migrated store. The small legacy `w/user-deletions` queue migrates similarly
+to `:user-deletions` when recovery first accesses it.
 
 ### User deletion hooks
 
 `AAdapter` has two narrowly scoped lifecycle hooks:
 
-- `deleteUserState(did, state)` removes additional durable associations through
-  the supplied **transaction-bound** `AdapterWorkspace`. It runs atomically with
-  the user tombstone, namespace and login-alias removal. Use only that workspace;
+- `deleteUserState(did, state)` removes the adapter's user-associated durable state through
+  the supplied **transaction-bound** `AdapterState`. It runs atomically with
+  the user tombstone, namespace and login-alias removal. Use only that component;
   no live engine writes, runtime changes or I/O. It may run again on a transaction
-  conflict. After the hook, the framework always removes `users/<did>` itself,
-  even when the adapter is unloaded. The default hook does nothing further.
+  conflict. The adapter owns all schema-specific cleanup; the default hook is
+  for adapters without user-associated state.
 - `onUserDeleted(did, previousUser)` runs after the commit is flushed. Stop
   workers and release external resources here. It must be idempotent and throw
   on incomplete cleanup so the venue can retry. The previous user record is
@@ -338,14 +353,15 @@ write individual user records rather than replacing the `users` map.
   on retry and an instance that was boot-disabled and never installed.
 
 An adapter needing durable external cleanup identifiers must maintain its own
-cleanup records outside `users/<did>` and consume them idempotently in the runtime
+cleanup records outside the data it erases and consume them idempotently in the runtime
 hook. Recovery cannot depend on the erased namespace or an in-memory snapshot.
 
 Both hooks apply to disabled adapters. Incomplete work is indexed privately at
-`w/user-deletions/<adapter>/<did>` in the venue principal; `_venue` covers core
+`:user-deletions/<adapter>/<did>` within the venue; `_venue` covers core
 job/scheduler cleanup. Entries contain only the deletion tombstone, not deleted
-payloads. Unloaded adapters retain an entry until their next activation, when
-both hooks run before workers start. Failures leave the account revoked and bar
+payloads. Unloaded adapters retain their state and a pending entry until their
+next activation, when both hooks run before workers start. The framework cannot
+interpret an unavailable adapter's private schema. Failures leave the account revoked and bar
 recreation. Repeat `user:delete` to retry; loading an unavailable adapter also
 reconciles its queue. Normal startup checks only these small pending queues,
 with no sweep of user or job records. Repeating deletion repairs adapter data
@@ -362,7 +378,7 @@ The corresponding public and private roots therefore have different roles:
 | Root | Owner and purpose | Visibility |
 |------|-------------------|------------|
 | `v/adapters/<adapter>/` | Published operations, skills, templates, facts, safe config | Public discovery surface while active |
-| `<venue-did>/w/adapters/<adapter>/` | Durable runtime records, sessions, preferences, recovery state | Venue-private; accessed by adapter code |
+| `:adapters/<adapter>/` | Durable runtime records, sessions, preferences, recovery state | Venue-private; accessed by adapter code |
 | `<user-did>/w/...` | User-selected content and working data | Governed by that user's workspace capabilities |
 | `<user-did>/s/...` | Credentials and secret material | Secret-store rules; adapter state stores references only |
 
@@ -693,7 +709,7 @@ are bounded and in memory, so a restart loses only messages not yet collected.
 5. Override `installAssets()` and create JSON operation definitions under
    `src/main/resources/adapters/<name>/`. Ship relevant skills and templates
    with the adapter rather than registering them centrally.
-6. Use `adapterWorkspace()` only for adapter-owned state. Keep user-managed
+6. Use `adapterState()` only for adapter-owned state. Keep user-managed
    data in caller-authorised paths and credentials in `s/`.
 7. Implement `AutoCloseable` when the adapter owns threads, clients, native
    handles, or other resources.
@@ -797,7 +813,7 @@ At minimum, test the following where applicable:
 - catalog operations, skills, templates, and `v/adapters` mirrors materialise;
 - disable, enable, reconfigure, unload, and close semantics preserve or release
   state as designed;
-- `AdapterWorkspace` paths and ownership are exact, recover after restart, and
+- `AdapterState` values and ownership are exact, recover after restart, and
   clean up without exposing adapter-global state as user workspace data;
 - external I/O is exercised through a deterministic local fake where possible;
 - module service discovery and the shaded artifact work in integration tests.

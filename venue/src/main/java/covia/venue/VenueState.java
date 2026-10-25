@@ -32,7 +32,7 @@ import covia.exception.AuthException;
 import covia.venue.storage.LatticeStorage;
 
 /**
- * Venue state and its domain components, backed by a signed lattice value.
+ * Authoritative state of a running venue application and its domain components.
  *
  * <p>Ordinary domain mutations are atomic and immediately visible locally.
  * Use {@link #transact} for compound changes: its callback receives an isolated
@@ -49,11 +49,13 @@ import covia.venue.storage.LatticeStorage;
  * });
  * }</pre>
  *
- * <p>{@link #fork()} creates an independent working copy for explicit lattice
- * reconciliation. Its {@link #sync()} uses whole-venue last-write-wins selection,
- * not transactional conflict retry. Use {@code transact} for local compound edits.
- * Only the venue defines this publication policy; children offer transactions
- * rather than independent publication boundaries.</p>
+ * <p>Whole-venue LWW selects complete snapshots for backup, replication and
+ * failover. It does not combine arbitrarily forked executions: their state
+ * invariants and external effects cannot in general be merged. One authoritative
+ * running instance owns a venue; failover must fence the previous writer.
+ * {@link #fork()} creates an independent snapshot, and {@link #sync()} selects
+ * a snapshot rather than replaying operations. Live work uses {@code transact}.
+ * Children have no independent publication or merge boundary.</p>
  */
 public class VenueState extends ALatticeComponent<ACell> implements TransactionalComponent<ACell, VenueState> {
 	@Override
@@ -278,40 +280,73 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	record DeletedUser(ACell tombstone, AMap<AString, ACell> previousUser) {}
 
 	/** Adapter storage obtained from a transaction draft stays in that draft. */
-	public AdapterWorkspace adapterWorkspace(String name) {
-		return new AdapterWorkspace(this, RT.ensureString(RT.getIn(get(), Covia.DID)), name);
+	public AdapterState adapterState(String name) {
+		return adapterState(name, null);
+	}
+
+	/** A worker view guarded against deletion or recreation of its owner. */
+	public AdapterState adapterState(String name, AString owner) {
+		AdapterState.validateName(name);
+		migrateLegacyState("w/adapters/" + name, Covia.ADAPTERS, convex.core.data.Strings.create(name));
+		return AdapterState.bind(this, name, owner);
 	}
 
 	private User venueUser() {
-		return users().ensure(RT.ensureString(RT.getIn(get(), Covia.DID)));
+		return users().get(RT.ensureString(RT.getIn(get(), Covia.DID)));
 	}
 
-	private static ACell[] deletionPath(String name) {
-		return covia.lattice.WorkspaceRoot.parseStringPath("w/user-deletions/" + name);
+	private ACell legacyState(String path) {
+		User host = venueUser();
+		return host == null ? null : host.readInternalPath(covia.lattice.WorkspaceRoot.parseStringPath(path));
+	}
+
+	public static final String LEGACY_STATE_CONFLICT = "Conflicting legacy venue state at ";
+
+	/** Move one legacy value exactly, removing its old copy in the same commit. */
+	private void migrateLegacyState(String path, Keyword region, AString key) {
+		if (legacyState(path) == null) return;
+		transact(draft -> {
+			ACell legacy = draft.legacyState(path);
+			if (legacy == null) return;
+			AMap<ACell, ACell> parent = RT.ensureMap(key == null ? draft.get() : RT.getIn(draft.get(), region));
+			ACell target = key == null ? region : key;
+			boolean present = parent != null && parent.containsKey(target);
+			if (present && !Objects.equals(parent.get(target), legacy)) {
+				// There is no generic merge for arbitrary adapter-owned values.
+				throw new IllegalStateException(LEGACY_STATE_CONFLICT + path);
+			}
+			if (!present) {
+				AForkableCursor<ACell> destination = draft.cursor().path(region);
+				if (key != null) destination = destination.withDefault(Maps.empty()).path(key);
+				destination.set(legacy);
+			}
+			draft.venueUser().deleteInternalPath(covia.lattice.WorkspaceRoot.parseStringPath(path));
+		});
 	}
 
 	/** Only unfinished work is indexed here; no user/job scan is needed on startup. */
 	AMap<AString, ACell> pendingUserDeletions(String name) {
-		AMap<AString, ACell> pending = RT.ensureMap(venueUser().readInternalPath(deletionPath(name)));
+		migrateLegacyState("w/user-deletions", Covia.USER_DELETIONS, null);
+		AMap<AString, ACell> pending = RT.ensureMap(RT.getIn(get(), Covia.USER_DELETIONS, convex.core.data.Strings.create(name)));
 		return pending == null ? Maps.empty() : pending;
 	}
 
 	DeletedUser beginUserDeletion(AString did, AString actor,
-			java.util.Map<String, java.util.function.Consumer<AdapterWorkspace>> cleanups) {
+			java.util.Map<String, java.util.function.Consumer<AdapterState>> cleanups) {
 		DeletedUser[] result = new DeletedUser[1];
 		transact(draft -> {
 			DeletedUser deleted = draft.deleteUser(did, actor);
 			result[0] = deleted;
 			Set<String> names = new LinkedHashSet<>(cleanups.keySet());
-			AMap<AString, ACell> stored = RT.ensureMap(draft.venueUser().readInternalPath(
-				covia.lattice.WorkspaceRoot.parseStringPath("w/adapters")));
+			AMap<AString, ACell> stored = RT.ensureMap(RT.getIn(draft.get(), Covia.ADAPTERS));
 			if (stored != null) for (AString name : stored.keySet()) names.add(name.toString());
+			AMap<AString, ACell> legacy = RT.ensureMap(draft.legacyState("w/adapters"));
+			if (legacy != null) for (AString name : legacy.keySet()) names.add(name.toString());
 			// Repeating deletion also repairs tombstones made before adapter hooks existed.
 			for (String name : names) {
-				AdapterWorkspace state = draft.adapterWorkspace(name);
+				AdapterState state = draft.adapterState(name);
 				var cleanup = cleanups.get(name);
 				if (cleanup != null) cleanup.accept(state);
-				state.delete(state.userPath(did, ""));
 				draft.markUserDeletion(name, did, deleted.tombstone());
 			}
 			draft.markUserDeletion("_venue", did, deleted.tombstone());
@@ -320,7 +355,8 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	}
 
 	private void markUserDeletion(String name, AString did, ACell tombstone) {
-		venueUser().writeInternalPath(deletionPath(name), pendingUserDeletions(name).assoc(did, tombstone));
+		AMap<AString, ACell> pending = pendingUserDeletions(name).assoc(did, tombstone);
+		cursor().path(Covia.USER_DELETIONS).withDefault(Maps.empty()).path(convex.core.data.Strings.create(name)).set(pending);
 	}
 
 	/** Acknowledge exactly this deletion, opening recreation only when all work is done. */
@@ -329,12 +365,11 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 			AMap<AString, ACell> pending = draft.pendingUserDeletions(name);
 			if (!Objects.equals(tombstone, pending.get(did))) return;
 			pending = pending.dissoc(did);
-			User host = draft.venueUser();
-			if (pending.isEmpty()) host.deleteInternalPath(deletionPath(name));
-			else host.writeInternalPath(deletionPath(name), pending);
-			AMap<AString, ACell> all = RT.ensureMap(host.readInternalPath(
-				covia.lattice.WorkspaceRoot.parseStringPath("w/user-deletions")));
-			if (all != null) for (ACell value : all.values()) {
+			AMap<AString, ACell> all = RT.ensureMap(RT.getIn(draft.get(), Covia.USER_DELETIONS));
+			AString adapter = convex.core.data.Strings.create(name);
+			all = pending.isEmpty() ? all.dissoc(adapter) : all.assoc(adapter, pending);
+			draft.cursor().path(Covia.USER_DELETIONS).set(all);
+			for (ACell value : all.values()) {
 				if (RT.getIn(value, did) != null) return;
 			}
 			draft.users().finishDeletion(did);
