@@ -53,6 +53,21 @@ final class TestSupport {
     }
     fail("Receipt did not reach " + status + ": " + bot.inbox().get(id) + "; bot " + bot.status());
   }
+  /** The real agent adapter, failing its first {@code failures} session deliveries and never waking agents. */
+  static final class FlakyAgents extends covia.adapter.AgentAdapter {
+    static final String FAILURE = "Injected session delivery failure";
+    final java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+    final int failures;
+    FlakyAgents(int failures) { this.failures = failures; }
+    @Override public covia.grid.Job deliverSession(ACell input, RequestContext ctx) {
+      if (calls.incrementAndGet() <= failures) throw new IllegalStateException(FAILURE);
+      return super.deliverSession(input, ctx);
+    }
+    @Override public java.util.concurrent.CompletableFuture<ACell> wakeAgent(AString owner, AString agent, boolean force) {
+      return java.util.concurrent.CompletableFuture.completedFuture(null);
+    }
+  }
+  static long jobCount(Engine engine) { return engine.jobs().getJobs(RequestContext.of(OWNER)).count(); }
   record Sent(String path, String authorization, AMap<AString,ACell> body) { }
   /**
    * A media item the stand-in serves: a lookup at /<version>/<id>, the bytes at /media/<id>.

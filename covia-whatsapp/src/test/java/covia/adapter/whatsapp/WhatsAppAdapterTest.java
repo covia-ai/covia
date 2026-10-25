@@ -21,9 +21,11 @@ import org.junit.jupiter.api.io.TempDir;
 
 import convex.core.crypto.AKeyPair;
 import convex.core.data.*;
+import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.messaging.*;
 import covia.adapter.AAdapter;
+import covia.adapter.AgentAdapter;
 import covia.adapter.webhook.*;
 import covia.api.Fields;
 import covia.venue.*;
@@ -157,6 +159,166 @@ class WhatsAppAdapterTest {
 			assertTrue(f.api.sends.isEmpty());
 		}
 	}
+	@Test void localDeliveryDoesNotWaitForResponsesOrReplayFailedReplies() throws Exception {
+		var agentSpec = spec().dissoc(Strings.intern("operation")).dissoc(Strings.intern("reply"))
+			.assoc(Strings.intern("agent"), Strings.create("local-agent"));
+		var response = new CompletableFuture<ACell>();
+		var entered = new java.util.concurrent.CountDownLatch(1);
+		try (Fixture f = new Fixture(agentSpec)) {
+			f.engine.registerAdapter(new AAdapter() {
+				@Override public String getName() { return "held"; }
+				@Override public String getDescription() { return "Held model"; }
+				@Override protected void installAssets() { installAsset("held/llm", Maps.of("operation", Maps.of("adapter", "held:llm"))); }
+				@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+					entered.countDown(); return response;
+				}
+			});
+			TestSupport.run(f.engine, OWNER, "v/ops/agent/create", Maps.of(Fields.AGENT_ID, "local-agent", Fields.CONFIG,
+				Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/ops/held/llm")));
+			assertEquals(200, f.webhook(payload(message("local-first"))).status());
+			assertTrue(entered.await(8, TimeUnit.SECONDS));
+			awaitStatus(f.bot(), "local-first", WebhookInbox.COMPLETE);
+			assertEquals(200, f.webhook(payload(message("local-second"))).status());
+			awaitStatus(f.bot(), "local-second", WebhookInbox.COMPLETE);
+			var sid = f.bot().inbox().get("local-first").get(Fields.SESSION_ID);
+			assertEquals(sid, f.bot().inbox().get("local-second").get(Fields.SESSION_ID));
+			assertFalse(response.isDone());
+			assertTrue(f.api.sends.isEmpty());
+			var agent = f.engine.getVenueState().users().get(OWNER).agent("local-agent");
+			var before = agent.getRecord();
+			assertEquals(200, f.webhook(payload(message("local-second"))).status());
+			assertEquals(before, agent.getRecord(), "duplicate callbacks must not append input");
+			f.api.status = 503;
+			response.complete(Maps.of("role", "assistant", "content", "reply"));
+			f.api.take(); f.api.take();
+			long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(8);
+			while (!Strings.create(WebhookBot.REPLY_FAILED).equals(f.bot().status().get(Fields.ERROR)) && System.nanoTime() < deadline) Thread.sleep(10);
+			assertEquals(Strings.create(WebhookBot.REPLY_FAILED), f.bot().status().get(Fields.ERROR));
+			awaitStatus(f.bot(), "local-first", WebhookInbox.COMPLETE);
+			awaitStatus(f.bot(), "local-second", WebhookInbox.COMPLETE);
+			f.configure(agentSpec);
+			assertEquals(200, f.webhook(payload(message("local-first"), message("local-second"))).status());
+			assertNull(f.api.sends.poll(200, TimeUnit.MILLISECONDS), "failed replies must not replay admission");
+		} finally { response.complete(Maps.of("role", "assistant", "content", "cleanup")); }
+	}
+
+	static AMap<AString, ACell> agentSpec(String agent) {
+		return spec().dissoc(Strings.intern("operation")).dissoc(Strings.intern("reply")).assoc(Strings.intern("agent"), Strings.create(agent));
+	}
+	static void createAgent(Engine engine, String agent) throws Exception {
+		TestSupport.run(engine, OWNER, "v/ops/agent/create", Maps.of(Fields.AGENT_ID, agent, Fields.CONFIG,
+			Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm")));
+	}
+	static long attempts(AMap<AString, ACell> receipt) { return ((CVMLong) receipt.get(WebhookInbox.ATTEMPTS)).longValue(); }
+
+	@Test void failingSessionDeliveryRetriesOnlyWithinItsWindow() throws Exception {
+		try (Fixture f = new Fixture(agentSpec("flaky-agent"))) {
+			var agents = new FlakyAgents(Integer.MAX_VALUE);
+			f.engine.registerAdapter(agents);
+			createAgent(f.engine, "flaky-agent");
+			f.adapter.deliveryWindowMillis = 1_000;
+			f.adapter.deliveryBackoffMillis = 50;
+			assertEquals(200, f.webhook(payload(message("doomed"))).status());
+			awaitStatus(f.bot(), "doomed", WebhookInbox.FAILED);
+			var receipt = f.bot().inbox().get("doomed");
+			assertEquals(Strings.create(DeliveryRetry.WINDOW_EXHAUSTED), receipt.get(Fields.REASON));
+			assertEquals(Strings.create(FlakyAgents.FAILURE), receipt.get(WebhookInbox.LAST_ERROR));
+			// Attempts start at 0, 50, 150, 350 and 750 ms; the next (1550 ms) is outside the window.
+			assertTrue(attempts(receipt) >= 2 && attempts(receipt) <= 5, receipt.toString());
+			assertEquals(attempts(receipt), agents.calls.get());
+			long jobs = jobCount(f.engine);
+			// Recovery sweeps every 25 ms and providers redeliver: neither revives a FAILED receipt.
+			assertEquals(200, f.webhook(payload(message("doomed"))).status());
+			Thread.sleep(300);
+			assertEquals(attempts(receipt), agents.calls.get());
+			assertEquals(receipt, f.bot().inbox().get("doomed"));
+			assertEquals(jobs, jobCount(f.engine));
+			assertEquals(CVMLong.ONE, f.bot().status().get(Strings.intern("failed")));
+			assertEquals(Strings.create(DeliveryRetry.WINDOW_EXHAUSTED), f.bot().status().get(Fields.ERROR));
+			assertTrue(f.api.sends.isEmpty());
+		}
+	}
+	@Test void transientSessionDeliveryFailureDeliversExactlyOnce() throws Exception {
+		try (Fixture f = new Fixture(agentSpec("flaky-agent"))) {
+			var agents = new FlakyAgents(2);
+			f.engine.registerAdapter(agents);
+			createAgent(f.engine, "flaky-agent");
+			f.adapter.deliveryBackoffMillis = 50;
+			assertEquals(200, f.webhook(payload(message("recovers"))).status());
+			awaitStatus(f.bot(), "recovers", WebhookInbox.COMPLETE);
+			var receipt = f.bot().inbox().get("recovers");
+			assertEquals(3, attempts(receipt));
+			assertEquals(3, agents.calls.get());
+			var agent = f.engine.getVenueState().users().get(OWNER).agent("flaky-agent");
+			assertEquals(1, agent.getSessions().count());
+			assertEquals(1, agent.getSessionPending(Blob.fromHex(receipt.get(Fields.SESSION_ID).toString())).count());
+			assertEquals(200, f.webhook(payload(message("recovers"))).status());
+			Thread.sleep(200);
+			assertEquals(3, agents.calls.get(), "a delivered receipt is never attempted again");
+		}
+	}
+	@Test void suspendedAgentFailsTheReceiptOnceWithoutJobs() throws Exception {
+		try (Fixture f = new Fixture(agentSpec("resting-agent"))) {
+			createAgent(f.engine, "resting-agent");
+			TestSupport.run(f.engine, OWNER, "v/ops/agent/suspend", Maps.of(Fields.AGENT_ID, "resting-agent"));
+			long jobs = jobCount(f.engine);
+			assertEquals(200, f.webhook(payload(message("resting"))).status());
+			awaitStatus(f.bot(), "resting", WebhookInbox.FAILED);
+			var receipt = f.bot().inbox().get("resting");
+			assertEquals(Strings.create(DeliveryRetry.UNDELIVERABLE), receipt.get(Fields.REASON));
+			assertEquals(Strings.create(AgentAdapter.DELIVERY_AGENT_SUSPENDED.formatted("resting-agent")), receipt.get(WebhookInbox.LAST_ERROR));
+			assertEquals(1, attempts(receipt));
+			Thread.sleep(300);
+			assertEquals(receipt, f.bot().inbox().get("resting"));
+			assertEquals(jobs, jobCount(f.engine), "a suspended agent gets no failed chat Job per attempt");
+			assertTrue(f.api.sends.isEmpty());
+		}
+	}
+	@Test void restartDoesNotResetTheDeliveryWindow() throws Exception {
+		try (FakeAPI api = new FakeAPI()) {
+			AMap<AString, ACell> config = Maps.of(Config.PORT, 0, Config.BIND_ADDRESS, "127.0.0.1", Config.STORE, temp.resolve("window.etch").toString(),
+				Config.SEED, AKeyPair.createSeeded(9133).getSeed().toHexString(), Config.USERS, Maps.of(Config.AUTO_CREATE, true),
+				Config.ADAPTERS, Maps.of(NAME, Maps.of("apiUrl", api.url(), "bots", Maps.of("main", agentSpec("durable-agent")))));
+			var firstAgents = new FlakyAgents(Integer.MAX_VALUE);
+			WhatsAppAdapter firstAdapter = windowed(new WhatsAppAdapter());
+			VenueServer first = VenueServer.launch(config, List.of(), engine -> {
+				engine.registerAdapter(firstAgents); engine.registerAdapter(firstAdapter); return CompletableFuture.completedFuture(null); });
+			AMap<AString, ACell> attempted;
+			try {
+				secret(first.getEngine(), "SIGNING", SECRET); secret(first.getEngine(), "VERIFY", "test-verify"); secret(first.getEngine(), "TOKEN", TOKEN);
+				createAgent(first.getEngine(), "durable-agent");
+				assertEquals(200, firstAdapter.handleWebhook("c-main", signed(payload(message("durable")))).status());
+				long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(8);
+				while (firstAdapter.runner("main").inbox().get("durable").get(WebhookInbox.LAST_ERROR) == null && System.nanoTime() < deadline) Thread.sleep(5);
+				attempted = firstAdapter.runner("main").inbox().get("durable");
+				assertNotNull(attempted.get(WebhookInbox.LAST_ERROR));
+			} finally { first.close(); }
+			// Restart only after the window that began with the first attempt has closed.
+			long closes = ((CVMLong) attempted.get(WebhookInbox.FIRST_ATTEMPT_AT)).longValue() + firstAdapter.deliveryWindowMillis;
+			while (System.currentTimeMillis() <= closes) Thread.sleep(20);
+			var secondAgents = new FlakyAgents(0);
+			WhatsAppAdapter secondAdapter = windowed(new WhatsAppAdapter());
+			VenueServer second = VenueServer.launch(config, List.of(), engine -> {
+				engine.registerAdapter(secondAgents); engine.registerAdapter(secondAdapter); return CompletableFuture.completedFuture(null); });
+			try {
+				awaitStatus(secondAdapter.runner("main"), "durable", WebhookInbox.FAILED);
+				var receipt = secondAdapter.runner("main").inbox().get("durable");
+				assertEquals(Strings.create(DeliveryRetry.WINDOW_EXHAUSTED), receipt.get(Fields.REASON));
+				assertEquals(attempted.get(WebhookInbox.FIRST_ATTEMPT_AT), receipt.get(WebhookInbox.FIRST_ATTEMPT_AT));
+				assertEquals(Strings.create(FlakyAgents.FAILURE), receipt.get(WebhookInbox.LAST_ERROR));
+				assertEquals(0, secondAgents.calls.get(), "a restart must not open a new window");
+				assertTrue(api.sends.isEmpty());
+			} finally { second.close(); }
+		}
+	}
+	/** A window that admits one retry after a long backoff, so a restart can fall between them. */
+	private static WhatsAppAdapter windowed(WhatsAppAdapter adapter) {
+		adapter.retryMillis = 25;
+		adapter.deliveryWindowMillis = 1_500;
+		adapter.deliveryBackoffMillis = 1_000;
+		return adapter;
+	}
+
 	@Test void agentSessionsFollowSenderAndPhoneAndSurviveReplacement() throws Exception {
 		var agentSpec = spec().dissoc(Strings.intern("operation")).dissoc(Strings.intern("reply"))
 			.assoc(Strings.intern("agent"), Strings.create("test-agent"))

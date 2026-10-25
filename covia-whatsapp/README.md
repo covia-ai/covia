@@ -141,11 +141,25 @@ nothing is overwritten. The 20 MiB limit applies.
 
 ## State and recovery
 
+For a local agent, COMPLETE means the input and session mapping were committed
+atomically with the receipt. It does not wait for the agent's turn or outgoing
+reply. Later inputs can arrive while the agent is thinking; failed replies never
+redeliver input. Reply callbacks are not a durable outbound queue. Operation
+handlers and remote agents retain STARTED until processing and replies finish.
+
+A handoff that fails is retried only briefly: from 5 s, doubling, within two
+minutes of the first attempt, and a restart does not reopen that window. Then,
+or at once when the agent is missing, suspended or does not admit the bot's
+owner, the receipt becomes FAILED with a reason and the last error. FAILED is
+final and is never retried. A message accepted before the bot was reconfigured
+also fails once rather than running under the new settings.
+
 The shared [webhook worker](../venue/docs/ADAPTERS.md#http-messaging-workers)
 owns receipts and sessions. Pending events resume when credentials become
 available or the venue restarts. Started events remain visible for manual
 reconciliation after an interruption; no send or Job is blindly replayed.
 `bots.started` includes currently running and potentially uncertain work;
+`bots.failed` counts receipts that will not be delivered;
 `queued` reports workers in this process. State is durable only when the
 venue's configured store is durable. Binding credentials, recipients and
 private API endpoints are never published in adapter info/config.

@@ -18,6 +18,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import convex.core.crypto.AKeyPair;
 import convex.core.data.*;
+import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.AAdapter;
 import covia.adapter.messaging.*;
@@ -273,7 +274,10 @@ class SlackAdapterTest {
 			assertEquals(200, f.webhook(payload("new-policy", event("1.2"))).status());
 			assertEquals(Strings.create("new reply"), f.api.take().body().get(Fields.TEXT));
 			awaitStatus(f.bot(), "new-policy", WebhookInbox.COMPLETE);
-			awaitStatus(f.bot(), "old-policy", WebhookInbox.PENDING);
+			// Old work fails once, visibly, rather than waiting or running under the new policy.
+			awaitStatus(f.bot(), "old-policy", WebhookInbox.FAILED);
+			assertEquals(Strings.create(WebhookBot.RECONFIGURED), f.bot().inbox().get("old-policy").get(Fields.REASON));
+			assertEquals(CVMLong.ONE, f.bot().status().get(Strings.intern("failed")));
 			assertNull(f.api.sends.poll(150, TimeUnit.MILLISECONDS));
 		}
 	}

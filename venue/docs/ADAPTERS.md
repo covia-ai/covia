@@ -80,6 +80,53 @@ not infer authority from an operation name or confuse `ctx.getCallerDID()`
 (who acted) with `ctx.getUserDID()` (whose namespace the action uses). See
 [UCAN.md](UCAN.md) for the authority model.
 
+## Atomic local session delivery
+
+Messaging adapters can use `ConversationRouter.deliver` with a trusted
+`RequestContext.SessionDelivery` participant. Agent intake runs on a native
+`VenueState.transact` draft, so the session input, adapter receipt and conversation
+mapping publish together. The callback must use only draft-bound components,
+perform no I/O, and tolerate retries. Returning false discards the draft as a
+duplicate. The engine flushes before waking the agent and returns the chat Job
+without waiting for its result. `ConversationRouter.onResponse` observes replies
+on the shared virtual executor, handles failed Jobs and skips duplicate deliveries.
+Adapter writes use `AdapterState.inVenue(draft)`, preserving the original account
+generation even across deletion and recreation. The router holds the binding
+lifecycle lock through admission, so stopped/deleted
+bindings cannot recreate private session mappings after cleanup.
+
+Telegram, Slack and WhatsApp use this contract for local agent receipts. Discord
+uses the same admission/reply separation and atomic session mapping, but its Gateway
+intake has no durable inbox or duplicate-message guarantee; a failed delivery is
+reported once and never retried.
+
+A delivery that does not commit may be retried, but only briefly. `DeliveryRetry`
+is the one policy for this: each attempt is recorded on the receipt before it runs
+(`attempts`, `firstAttemptAt`, `attemptedAt`, then `lastError` on failure), retries
+back off from 5 s, doubling, and must start within two minutes of the first attempt
+(the adapter's `deliveryBackoffMillis` and `deliveryWindowMillis`). When the window
+closes, the receipt becomes FAILED with the `DeliveryRetry.WINDOW_EXHAUSTED` reason
+and `failedAt`. A message that can never be delivered fails at once with the
+`DeliveryRetry.UNDELIVERABLE` reason, its `lastError` saying why: the agent is missing,
+terminated or suspended, its admission policy refuses the bot's owner, or the input
+is invalid. The recipient is checked before every attempt, so a suspended agent
+gets no failed chat Job per retry. FAILED is terminal: it is never delivered,
+claimed, retried or pruned, including after restart, and remains for the operator.
+Because the window is persisted, a restart cannot reopen it. No continuation work
+outlives the window while the recipient is not operational.
+
+HITL uses a native `Users.transact` transaction to resolve a request and append its
+answer, rejection or expiry notification to the requesting local session. Competing
+resolutions cannot overwrite the winner or append another notification. Signing and
+validation happen before the transaction; Job notification and agent wake follow the
+flush. A session notification is independent of the completed HITL Job and survives
+restart before wake. If the requesting session is gone, the request still resolves
+and the adapter reports the unavailable destination.
+
+This is a local handoff contract, not an exactly-once external-effects claim.
+Remote agent facades cannot join the transaction. Keep their existing provider
+protocol, and keep preprocessing and outbound delivery outside the transaction.
+
 ## Reference-addressed content
 
 Storage adapters implement `ContentProvider` so consumers can resolve and write
@@ -608,7 +655,8 @@ and socket transports. Give each installation/binding a private root such as
 `config/<binding>/inbox` or `users/<did>/inbox/<binding>` and a provider event ID.
 IDs are hashed into path segments; the original ID remains in the record.
 Records contain `id`, `input`, `status`, `receivedAt` and, on completion,
-`completedAt`. Input must contain the event needed for processing, **not**
+`completedAt`; delivery attempts add `attempts`, `firstAttemptAt`, `attemptedAt`
+and `lastError`, and FAILED adds `reason` and `failedAt`. Input must contain the event needed for processing, **not**
 access tokens, signing secrets or credential-bearing HTTP headers.
 
 1. Authenticate/admit the event, then `accept(id, input)`. This writes PENDING
@@ -623,6 +671,11 @@ access tokens, signing secrets or credential-bearing HTTP headers.
    flush must not proceed to effects.
 4. After processing and any required reply, `complete(id)` flushes COMPLETE.
    Duplicate callbacks must not resubmit the Job or send another reply.
+
+Local agent intake uses `deliver` instead of `claim`: the receipt completes in the
+same venue transaction as its session input and mapping. Failed admission stays
+PENDING only for the [bounded retry](#atomic-local-session-delivery). FAILED
+receipts are terminal and excluded from completed-receipt pruning.
 
 STARTED records found after an interruption are uncertain: the provider must
 reconcile them with its Job/send checkpoints and external state. The shared
@@ -684,13 +737,22 @@ of the credential is the sharing test, so bindings with different credentials
 never share, whatever installation they claim.
 
 The worker scans PENDING receipts on start and periodically for late secret
-provisioning. Whole turns share the conversation queue, claim and flush before
-execution, and complete only after any reply. STARTED receipts remain uncertain
-after failure and are not replayed. Pending records also carry `bindingVersion`;
-after a policy/handler change, an older version stays pending for operator
-inspection rather than executing under the new settings. Completed receipts
+provisioning. For local agents, the conversation queue serializes admission:
+PENDING becomes COMPLETE in the transaction that appends the input and saves the
+session mapping. A failed admission is retried only within the bounded delivery
+window, then the receipt is FAILED; a scan never revives it, and a scan of a receipt
+still backing off schedules no extra attempt. Further inputs can be admitted while
+the agent is thinking. Replies
+run independently; a turn/send failure cannot reopen or replay a delivered receipt.
+Reply callbacks are not a durable outbound queue, so a process interruption can lose
+a reply. Operation handlers and remote agents retain claim-before-execution and
+complete-after-reply behavior; their STARTED receipts remain uncertain after failure
+and are not replayed. Pending records also carry `bindingVersion`;
+after a policy/handler change, an older version fails once with the
+`WebhookBot.RECONFIGURED` reason rather than executing under the new settings. Completed receipts
 continue deduplicating across those changes. Changing owner/installation
 isolates both inbox and sessions. No automatic receipt pruning is performed.
+`bots` reports `pending`, `started` and `failed` receipt counts.
 
 Stopping a worker prevents queued work, late replies and late session writes.
 Deleting a runtime binding removes its registry, sessions and inbox; this

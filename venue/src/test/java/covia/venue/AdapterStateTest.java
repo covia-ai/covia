@@ -183,6 +183,33 @@ class AdapterStateTest {
 		} finally { release.countDown(); }
 	}
 
+	@Test void venueDraftRebindingRetainsTheOriginalAccountFence() throws Exception {
+		VenueState venue = venue();
+		venue.users().create(OWNER);
+		AdapterState worker = venue.adapterState("worker", OWNER);
+		worker.set(CVMLong.ONE);
+		CountDownLatch staged = new CountDownLatch(1), release = new CountDownLatch(1);
+		try {
+			var write = CompletableFuture.runAsync(() -> venue.transact(draft -> {
+				worker.inVenue(draft).set(CVMLong.create(2));
+				draft.adapterState("other").set(CVMLong.ONE);
+				staged.countDown();
+				await(release);
+			}));
+			assertTrue(staged.await(5, TimeUnit.SECONDS));
+			venue.deleteUser(OWNER, HOST);
+			venue.users().finishDeletion(OWNER);
+			venue.users().create(OWNER);
+			release.countDown();
+			assertInstanceOf(AuthException.class, assertThrows(java.util.concurrent.ExecutionException.class,
+				() -> write.get(5, TimeUnit.SECONDS)).getCause());
+			assertEquals(CVMLong.ONE, venue.adapterState("worker").get());
+			assertNull(venue.adapterState("other").get(), "the whole delivery draft must roll back");
+			assertThrows(AuthException.class, () -> venue.transact(draft -> worker.inVenue(draft).set(CVMLong.ZERO)));
+			assertThrows(AuthException.class, () -> worker.cursor().set(CVMLong.ZERO));
+		} finally { release.countDown(); }
+	}
+
 	@Test void snapshotRecoverySelectsAWholeVenueRatherThanCombiningForks() {
 		VenueState venue = venue();
 		venue.adapterState("left").set(CVMLong.ZERO);

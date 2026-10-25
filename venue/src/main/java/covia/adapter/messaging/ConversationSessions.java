@@ -14,6 +14,7 @@ import covia.venue.AdapterState;
 
 /** Session mappings in a binding's private state, with optional legacy migration. */
 public final class ConversationSessions {
+	public static final String BINDING_STOPPED = "Conversation binding is stopped";
 	private final AdapterState workspace;
 	private final String root;
 	private final Function<String, String> legacyRead;
@@ -35,7 +36,7 @@ public final class ConversationSessions {
 		this(workspace, root, key -> null, key -> { }, mutationLock, writable);
 	}
 
-	private ConversationSessions(AdapterState workspace, String root,
+	public ConversationSessions(AdapterState workspace, String root,
 			Function<String, String> legacyRead, Consumer<String> legacyDelete, Object mutationLock, BooleanSupplier writable) {
 		this.workspace = Objects.requireNonNull(workspace);
 		workspace.path(root + "/check");
@@ -63,6 +64,20 @@ public final class ConversationSessions {
 		synchronized (mutationLock) {
 			if (writable.getAsBoolean()) workspace.write(path(conversation), Strings.create(Objects.requireNonNull(session)));
 		}
+	}
+
+	/** Hold the binding lifecycle lock until a transaction has published. */
+	<T> T mutate(java.util.function.Supplier<T> work) {
+		synchronized (mutationLock) {
+			if (!writable.getAsBoolean()) throw new IllegalStateException(BINDING_STOPPED);
+			return work.get();
+		}
+	}
+
+	/** Writes the mapping in the same transaction as agent intake and its receipt. */
+	public void put(covia.venue.VenueState draft, String conversation, String session) {
+		if (!writable.getAsBoolean()) throw new IllegalStateException(BINDING_STOPPED);
+		workspace.inVenue(draft).write(path(conversation), Strings.create(session));
 	}
 
 	public void remove(String conversation) {

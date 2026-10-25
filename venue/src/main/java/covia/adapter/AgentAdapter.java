@@ -316,6 +316,47 @@ public class AgentAdapter extends AAdapter {
 		return new AgentTarget(resolved.ownerDID(), resolved.user(), agentId, resolved.resource());
 	}
 
+	/** Whether this recipient can join an atomic local session handoff. */
+	public boolean supportsSessionDelivery(RequestContext ctx, AString ref) {
+		AgentTarget target = resolveAgentTarget(ctx, ref, Abilities.AGENT_MESSAGE, false);
+		AgentState agent = getAgent(target.ownerDID(), target.agentId());
+		return agent != null && !externalAgents().isExternal(agent);
+	}
+
+	public static final String DELIVERY_AGENT_MISSING = "Agent '%s' was not found or is terminated";
+	public static final String DELIVERY_AGENT_SUSPENDED = "Agent '%s' is suspended; resume it with agent:resume";
+
+	/** Null when the agent can take a delivered message now; otherwise why it cannot
+	 * (missing, terminated, suspended, or not admitting this caller). Checking first
+	 * keeps a refused delivery from minting a failed chat Job per attempt. */
+	public String sessionDeliveryRefusal(RequestContext ctx, AString ref) {
+		AgentTarget target;
+		try {
+			target = resolveAgentTarget(ctx, ref, Abilities.AGENT_MESSAGE, false);
+		} catch (covia.exception.AuthException | IllegalArgumentException refused) {
+			return describeFailure(refused);
+		}
+		AgentState agent = getAgent(target.ownerDID(), target.agentId());
+		if (agent == null) return DELIVERY_AGENT_MISSING.formatted(target.agentId());
+		if (AgentState.SUSPENDED.equals(agent.getStatus())) return DELIVERY_AGENT_SUSPENDED.formatted(target.agentId());
+		return null;
+	}
+
+	/** Admit a local session delivery through normal Job dispatch, then durably
+	 * publish before waking. Flush failure must not fail the already accepted Job:
+	 * its pending input remains recoverable, and a duplicate retry can flush/wake it. */
+	public Job deliverSession(ACell input, RequestContext ctx) {
+		java.util.Objects.requireNonNull(ctx.getSessionDelivery());
+		Job job = engine.jobs().invokeOperation("v/ops/agent/chat", input, ctx);
+		if (CVMBool.TRUE.equals(job.getData().get(DELIVERY_ACCEPTED)) || Status.COMPLETE.equals(job.getStatus())) {
+			engine.flush();
+			AgentTarget target = resolveAgentTarget(ctx, input, Fields.AGENT_ID, Abilities.AGENT_MESSAGE, false);
+			AgentState agent = getAgent(target.ownerDID(), target.agentId());
+			if (agent != null && hasWork(agent)) wakeAgent(target.ownerDID(), target.agentId(), true);
+		}
+		return job;
+	}
+
 	private AgentTarget resolveAgentTarget(RequestContext ctx, ACell input,
 			AString field, AString ability, boolean createOwner) {
 		AString ref = RT.ensureString(RT.getIn(input, field));
@@ -1559,9 +1600,12 @@ public class AgentAdapter extends AAdapter {
 			Fields.DELIVERED,  CVMBool.TRUE)));
 	}
 
+	public static final AString DELIVERY_ACCEPTED = Strings.intern("deliveryAccepted");
+	public static final String LOCAL_DELIVERY_REQUIRED = "Atomic session delivery requires a local agent";
+
 	/**
 	 * agent:chat — synchronous request for the agent's next response on a
-	 * session. Reserves a per-session chat slot, appends the message to the
+	 * session. Registers a response waiter, appends the message to the
 	 * session's pending vector, wakes the agent, and leaves the Job in
 	 * STARTED state. The framework's run loop completes the Job from the
 	 * transition's {@code response} value once the agent runs (see
@@ -1579,10 +1623,9 @@ public class AgentAdapter extends AAdapter {
 	 *   <li>{@code sessionId} present + unknown → fail</li>
 	 * </ul>
 	 *
-	 * <p>Only one chat may be in flight per session at a time. A second
-	 * {@code agent:chat} on a session whose slot is already reserved fails
-	 * fast — callers should wait for the first to complete or use
-	 * {@code agent:message} for queued conversational sends.</p>
+	 * <p>Several chats may await the same session. Each cycle completes the
+	 * waiters whose input it consumed. A trusted SessionDelivery participant
+	 * can commit delivery bookkeeping with intake, before the agent wakes.</p>
 	 */
 	private void handleChat(Job job, ACell input, RequestContext ctx) {
 		AgentTarget target = resolveAgentTarget(ctx, input, Fields.AGENT_ID,
@@ -1595,6 +1638,10 @@ public class AgentAdapter extends AAdapter {
 		AgentState agent = lookupAgent(job, target);
 		if (agent == null) return;
 		if (failIfSuspended(job, agent, agentId)) return;
+		if (ctx.getSessionDelivery() != null && externalAgents().isExternal(agent)) {
+			job.fail(LOCAL_DELIVERY_REQUIRED);
+			return;
+		}
 		if (externalTurn(job, ctx, target, agent, "chat", input)) return;
 
 		SessionSpec session = resolveSessionForChat(job, input);
@@ -1625,8 +1672,23 @@ public class AgentAdapter extends AAdapter {
 			Fields.SESSION_ID, sidHex,
 			Fields.MESSAGE,    messageContent,
 			Fields.JOB_ID,     jobIdHex);
-		AgentState.SessionIntake intake = agent.appendSessionPending(sid,
-			ctx.getCallerDID(), session.loads(), envelope, !session.supplied());
+		// Persist the job's session provenance before admission. Recovery can then
+		// recognise its queued input even if the process stops immediately after commit.
+		job.updateData(job.getData().assoc(Fields.AGENT_ID, agentId)
+			.assoc(Fields.ADDRESS, target.address()).assoc(Fields.SESSION_ID, sidHex));
+		AgentState.SessionIntake intake;
+		try {
+			intake = appendChatInput(agent, target, session, envelope, ctx, sidHex, jobIdHex);
+		} catch (Throwable failure) {
+			chatsRef.remove(jobRef.getID(), jobRef);
+			throw failure;
+		}
+		if (intake == null) {
+			// A duplicate delivery must neither append a second input nor await a reply.
+			chatsRef.remove(jobRef.getID(), jobRef);
+			job.completeWith(Maps.of(Fields.SESSION_ID, sidHex));
+			return;
+		}
 		if (intake != AgentState.SessionIntake.APPLIED) {
 			chatsRef.remove(jobRef.getID(), jobRef);
 			if (intake == AgentState.SessionIntake.LOADS_ON_EXISTING) {
@@ -1639,19 +1701,47 @@ public class AgentAdapter extends AAdapter {
 			return;
 		}
 
-		// Record the (possibly just-minted) sessionId on the job so a caller
-		// finding this job failed after a venue restart knows which session to
-		// re-engage (recovery never re-executes intake, #214). Mirrors
-		// handleRequest.
-		job.updateData(job.getData()
-			.assoc(Fields.AGENT_ID, agentId)
-			.assoc(Fields.ADDRESS, target.address())
-			.assoc(Fields.SESSION_ID, sidHex));
+		if (ctx.getSessionDelivery() != null) {
+			job.updateData(job.getData().assoc(DELIVERY_ACCEPTED, CVMBool.TRUE));
+			return; // deliverSession owns the durability barrier and wake outside Job dispatch.
+		}
 
 		// Each accepted chat guarantees a processing attempt, so bypass the
 		// optional-work launch gate.
 		wakeAgent(target.ownerDID(), agentId, true);
 	}
+
+	/** The common VenueState root contains the agent and adapter-owned receipts.
+	 * Native transactions publish the input, receipt and session mapping together. */
+	private AgentState.SessionIntake appendChatInput(AgentState agent, AgentTarget target,
+			SessionSpec session, ACell envelope, RequestContext ctx, AString sid, AString jobId) {
+		if (ctx.getSessionDelivery() == null) return agent.appendSessionPending(session.id(),
+			ctx.getCallerDID(), session.loads(), envelope, !session.supplied());
+		var result = new java.util.concurrent.atomic.AtomicReference<AgentState.SessionIntake>();
+		try {
+			engine.getVenueState().transact(draft -> {
+				var owner = draft.users().get(target.ownerDID());
+				var current = owner == null ? null : owner.agent(target.agentId());
+				if (current == null || AgentState.SUSPENDED.equals(current.getStatus())
+						|| AgentState.TERMINATED.equals(current.getStatus())) {
+					result.set(AgentState.SessionIntake.MISSING);
+					return;
+				}
+				var intake = current.appendSessionPending(session.id(), ctx.getCallerDID(),
+					session.loads(), envelope, !session.supplied());
+				result.set(intake);
+				if (intake == AgentState.SessionIntake.APPLIED
+						&& !ctx.getSessionDelivery().accept(draft, sid, jobId)) throw new DuplicateSessionDelivery();
+			});
+		} catch (DuplicateSessionDelivery duplicate) {
+			// Discard the private draft, including its speculative session append.
+			return null;
+		}
+		return result.get();
+	}
+
+	@SuppressWarnings("serial")
+	private static final class DuplicateSessionDelivery extends RuntimeException { }
 
 	/**
 	 * Runs an independent transition against a conversation snapshot. The query
@@ -3505,15 +3595,21 @@ public class AgentAdapter extends AAdapter {
 		return mine;
 	}
 
-	/**
-	 * Venue-mediated delivery to a known agent session. The caller has already
-	 * authorised and verified the event (for example a completed HITL request),
-	 * so this method performs no public admission decision: it appends one
-	 * provenance-bearing envelope and wakes the ordinary run loop.
-	 */
+	/** Venue-mediated delivery to an already authorized local session. */
 	public boolean deliverSessionMessage(AString ownerDID, AString agentId, Blob sessionId,
 			AString caller, AString jobId, ACell message) {
-		AgentState agent = getAgent(ownerDID, agentId);
+		if (!appendSessionMessage(engine.getVenueState().users(), ownerDID, agentId, sessionId, caller, jobId, message)) return false;
+		engine.flush();
+		wakeAgent(ownerDID, agentId, true);
+		return true;
+	}
+
+	/** Append to a known local session using the supplied component, including a
+	 * transaction draft. The caller owns authorization and flush/wake after commit. */
+	public boolean appendSessionMessage(covia.venue.Users users, AString ownerDID, AString agentId, Blob sessionId,
+			AString caller, AString jobId, ACell message) {
+		var owner = users.get(ownerDID);
+		AgentState agent = owner == null ? null : owner.agent(agentId);
 		if (agent == null || externalAgents().isExternal(agent)) return false;
 		AMap<AString, ACell> envelope = Maps.of(
 			Fields.CALLER, caller,
@@ -3522,9 +3618,7 @@ public class AgentAdapter extends AAdapter {
 		if (jobId != null) envelope = envelope.assoc(Fields.JOB_ID, jobId);
 		AgentState.SessionIntake intake = agent.appendSessionPending(
 			sessionId, caller, null, envelope, false);
-		if (intake != AgentState.SessionIntake.APPLIED) return false;
-		wakeAgent(ownerDID, agentId, true);
-		return true;
+		return intake == AgentState.SessionIntake.APPLIED;
 	}
 
 	/** Overload: non-forced wake (used by message delivery / resume auto-wake). */

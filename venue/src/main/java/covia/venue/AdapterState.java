@@ -29,15 +29,19 @@ public final class AdapterState extends ALatticeComponent<ACell>
 	private static final Pattern ADAPTER_NAME = Pattern.compile("[a-z][a-z0-9-]*");
 	private final LatticeContext context;
 	private final String name;
+	private final AString owner;
+	private final ACell generation;
 
-	AdapterState(LatticeContext context, AForkableCursor<ACell> cursor, String name) {
+	AdapterState(LatticeContext context, AForkableCursor<ACell> cursor, String name, AString owner, ACell generation) {
 		super(cursor);
 		this.context = context;
 		this.name = name;
+		this.owner = owner;
+		this.generation = generation;
 	}
 
 	@Override public AdapterState withCursor(AForkableCursor<ACell> draft) {
-		return new AdapterState(context, draft, name);
+		return new AdapterState(context, draft, name, owner, generation);
 	}
 
 	static void validateName(String name) {
@@ -48,9 +52,18 @@ public final class AdapterState extends ALatticeComponent<ACell>
 
 	/** The account check encloses the adapter path, so it also runs at transaction commit. */
 	static AdapterState bind(VenueState venue, String name, AString owner) {
+		ACell generation = owner == null ? null : RT.getIn(venue.cursor().get(), Covia.USER_DATA, owner, Users.GENERATION);
+		return bind(venue, name, owner, generation);
+	}
+
+	/** Rebind to a venue transaction without renewing this handle's account generation. */
+	public AdapterState inVenue(VenueState venue) {
+		return bind(venue, name, owner, generation);
+	}
+
+	private static AdapterState bind(VenueState venue, String name, AString owner, ACell generation) {
 		AForkableCursor<ACell> base = venue.cursor();
 		if (owner != null) {
-			ACell generation = RT.getIn(base.get(), Covia.USER_DATA, owner, Users.GENERATION);
 			base = new AUpdateCursor<ACell, ACell>(base) {
 				@Override protected ACell view(ACell value) {
 					Users.requireCurrent(RT.getIn(value, Covia.USER_DATA, owner), generation);
@@ -61,7 +74,7 @@ public final class AdapterState extends ALatticeComponent<ACell>
 			base.get(); // reject a tombstoned owner before handing out the view
 		}
 		return new AdapterState(venue.getContext(),
-			base.path(Covia.ADAPTERS).withDefault(Maps.empty()).path(Strings.create(name)), name);
+			base.path(Covia.ADAPTERS).withDefault(Maps.empty()).path(Strings.create(name)), name, owner, generation);
 	}
 
 	public LatticeContext getContext() { return context; }

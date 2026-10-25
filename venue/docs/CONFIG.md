@@ -2513,12 +2513,38 @@ Accepted updates are flushed through `WebhookInbox` before advancing the poll
 acknowledgement. Pending receipts resume in update order at startup/re-enable;
 completed receipts deduplicate redelivery and are retained for seven days.
 Receipts are private and scoped to the Covia owner and Telegram bot account.
-`telegram:bots` reports `pendingUpdates` and `startedUpdates`. STARTED includes
-in-flight work and interrupted/failed work: inspect the Jobs and bot error before
-recovery. Started work is never automatically replayed, and this does **not**
-promise exactly-once execution or delivery. Reattaching to interrupted Jobs and
-reconciling an uncertain Telegram send remain follow-up work. Removing a runtime
-bot removes its receipts, but downloaded files remain in its owner's DLFS drive.
+For local agent routes, delivery is one native lattice transaction: append the
+input to the session, save the chat-to-session mapping, and complete the receipt
+with its session and Job IDs. The venue flushes before waking the agent. A
+receipt therefore means **input delivered**, independently of turn completion,
+reply formatting or Telegram sending. Later inputs can enter the same session
+while the agent is working. Duplicate admission rolls back its entire draft;
+queued input survives a restart before wake and is processed by agent recovery.
+
+`telegram:bots` reports `pendingUpdates`, `startedUpdates` and `failedUpdates`.
+Local session handoffs stay PENDING until admission and then become COMPLETE.
+Media download and configured preprocessing are part of each handoff attempt.
+A failed attempt is retried only briefly: from 5 s, doubling, within two minutes
+of the first attempt. Embedders can set `AMessagingAdapter.deliveryBackoffMillis`
+and `deliveryWindowMillis`; these are not bot JSON settings.
+The attempts are recorded on the receipt, so a restart does
+not reopen the window. When it closes, or when the message can never be delivered
+(the agent is missing, terminated or suspended, does not admit the bot's owner, or
+the sender is no longer allowed), the receipt becomes FAILED with a `reason` and
+`lastError`, and the sender gets one "not delivered" notice. FAILED is final: it is
+never retried or reported again, including after restart, and stays for the
+operator. A suspended agent is checked before each attempt, so it gets no failed
+chat Job. Commands, operation handlers and remote agent facades retain the
+STARTED/COMPLETE protocol: STARTED includes in-flight and uncertain interrupted
+work and is not replayed automatically. Old STARTED receipts also remain for
+inspection. Completed receipts are retained for seven days, so deduplication is
+bounded by that retention window.
+
+Outbound replies are separate best-effort continuations. A formatting or send
+failure is reported without reopening the inbound receipt. Reply continuations
+are not a durable outbox: a process interruption can lose an unsent reply, and
+uncertain sends still need reconciliation. Removing a runtime bot removes its
+receipts, but downloaded files remain in its owner's DLFS drive.
 Store durability follows the venue configuration (temporary venues remain
 ephemeral). Media albums retain `media_group_id` but each message is a separate
 turn; `/new` resets only the current topic. `via` also includes topic and reply
@@ -2615,7 +2641,12 @@ and WhatsApp downloads `whatsapp/download`.
 Both fail closed on empty admission lists, acknowledge only after durable
 acceptance and perform Jobs/replies asynchronously. Pending receipts resume;
 started receipts require inspection after an interruption and are never
-blindly replayed. The linked guides describe configuration changes, retention
+blindly replayed. Local agent input, receipt and session mapping commit together;
+COMPLETE means delivered, not replied. Failed handoffs back off from 5 s, doubling,
+within two minutes of the first attempt, persisted across restarts. Missing,
+suspended, terminated or refusing agents fail immediately without a chat Job.
+Exhausted or reconfigured receipts become FAILED and remain in the `failed` count.
+The linked guides describe configuration changes, retention
 and supported provider features. These modules do not install OAuth flows or
 WhatsApp templates; Slack handles no media.
 

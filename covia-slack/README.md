@@ -211,12 +211,25 @@ link is stored. The protocol is shared with every webhook provider; see
 
 ## State and recovery
 
+For a local agent, COMPLETE means the input and session mapping were committed
+atomically with the receipt. It does not wait for the agent's turn or outgoing
+reply. Later inputs can arrive while the agent is thinking; failed replies never
+redeliver input. Reply callbacks are not a durable outbound queue. Operation
+handlers and remote agents retain STARTED until processing and replies finish.
+
+A handoff that fails is retried only briefly: from 5 s, doubling, within two
+minutes of the first attempt, and a restart does not reopen that window. Then,
+or at once when the agent is missing, suspended or does not admit the bot's
+owner, the receipt becomes FAILED with a reason and the last error. FAILED is
+final and is never retried. An event accepted before the bot was reconfigured
+also fails once rather than running under the new settings.
+
 Each accepted `event_id` is flushed before acknowledgement. Processing and
 replies run asynchronously so agent duration does not delay acknowledgement.
 See the shared [webhook worker contract](../venue/docs/ADAPTERS.md#http-messaging-workers)
 for private state paths and restart behavior. Pending work resumes after
 restart or credential provisioning. Started work is never replayed
-automatically after interruption. `bots` reports pending/started/queued
+automatically after interruption. `bots` reports pending/started/failed/queued
 counts and a sanitized failure reason; a started receipt may represent an
 in-flight Job or uncertain delivery and needs inspection before manual retry.
 

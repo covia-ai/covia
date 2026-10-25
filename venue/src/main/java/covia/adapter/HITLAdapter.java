@@ -63,6 +63,7 @@ import covia.venue.User;
  * (or fails on reject/expiry).</p>
  */
 public class HITLAdapter extends AAdapter {
+	public static final String REQUEST_ALREADY_RESOLVED = "HITL request is no longer open";
 
 	private static final Logger log = LoggerFactory.getLogger(HITLAdapter.class);
 
@@ -322,7 +323,7 @@ public class HITLAdapter extends AAdapter {
 		AString comment = RT.ensureString(RT.getIn(input, Hitl.COMMENT));
 		Job job = engine.jobs().getJob(Blob.parse(id.toString()));
 		if (Hitl.REJECT.equals(outcome)) {
-			return resolveReject(user, id, record, comment, job);
+			return resolveReject(user, id, comment, job);
 		}
 		if (Hitl.ANSWER.equals(outcome)) {
 			return resolveAnswer(user, id, record, input, comment, job);
@@ -330,18 +331,13 @@ public class HITLAdapter extends AAdapter {
 		throw new IllegalArgumentException("outcome must be 'answer' or 'reject'");
 	}
 
-	private ACell resolveReject(User user, AString id, AMap<AString, ACell> record,
-			AString comment, Job job) {
+	private ACell resolveReject(User user, AString id, AString comment, Job job) {
 		AMap<AString, ACell> response = Maps.of(Hitl.OUTCOME, Hitl.REJECT);
 		if (comment != null) response = response.assoc(Hitl.COMMENT, comment);
-		user.putHitlRequest(id, record.assoc(Hitl.STATUS, Hitl.REJECTED).assoc(Hitl.RESPONSE, response));
-		if (job != null && !job.isFinished()) {
-			// The reason must travel in the job error — the requester cannot
-			// read the responder's inbox.
-			job.fail("HITL request rejected" + (comment != null ? ": " + comment : ""));
-		}
-		deliverToRequester(record, user.getDID(),
-			response.assoc(Hitl.ID, id).assoc(Hitl.STATUS, Hitl.REJECTED));
+		if (!resolveRequest(user.getDID(), id, Hitl.REJECTED, response, user.getDID(),
+				response.assoc(Hitl.ID, id).assoc(Hitl.STATUS, Hitl.REJECTED), () -> {
+			if (job != null && !job.isFinished()) job.fail("HITL request rejected" + (comment != null ? ": " + comment : ""));
+		})) throw new IllegalStateException(REQUEST_ALREADY_RESOLVED);
 		return Maps.of(Hitl.ID, id, Hitl.STATUS, Hitl.REJECTED);
 	}
 
@@ -390,7 +386,6 @@ public class HITLAdapter extends AAdapter {
 		if (comments instanceof AMap) response = response.assoc(Hitl.COMMENTS, comments);
 		if (comment != null) response = response.assoc(Hitl.COMMENT, comment);
 		if (approved.count() > 0) response = response.assoc(Hitl.GRANTS, approved);
-		user.putHitlRequest(id, record.assoc(Hitl.STATUS, Hitl.ANSWERED).assoc(Hitl.RESPONSE, response));
 
 		AMap<AString, ACell> output = response.assoc(Hitl.ID, id);
 		if (token != null) output = output.assoc(Hitl.TOKEN, token);
@@ -398,8 +393,10 @@ public class HITLAdapter extends AAdapter {
 		// responder's inbox record); an agent requester receives the same value
 		// in its own durable session.
 		if (transported.count() > 0) output = output.assoc(Hitl.TOKENS, transported);
-		if (job != null && !job.isFinished()) job.completeWith(output);
-		deliverToRequester(record, user.getDID(), output);
+		AMap<AString, ACell> result = output;
+		if (!resolveRequest(user.getDID(), id, Hitl.ANSWERED, response, user.getDID(), result, () -> {
+			if (job != null && !job.isFinished()) job.completeWith(result);
+		})) throw new IllegalStateException(REQUEST_ALREADY_RESOLVED);
 		return Maps.of(Hitl.ID, id, Hitl.STATUS, Hitl.ANSWERED);
 	}
 
@@ -623,51 +620,61 @@ public class HITLAdapter extends AAdapter {
 	/** Expires an open request: record → expired, job → FAILED. Terminal-state
 	 *  stickiness makes the race against a response commit exactly one winner. */
 	private void expireRequest(AString targetDID, AString id, Blob jobId) {
-		User target = engine.getVenueState().users().get(targetDID);
-		AMap<AString, ACell> record = (target != null) ? target.getHitlRequest(id) : null;
-		boolean marked = markResolved(targetDID, id, Hitl.EXPIRED, null);
-		if (!marked) return; // already resolved
-		Job job = engine.jobs().getJob(jobId);
-		if (job != null && !job.isFinished()) job.fail("HITL request expired");
-		if (record != null) {
-			deliverToRequester(record, engine.getDIDString(), Maps.of(
-				Hitl.ID, id, Hitl.STATUS, Hitl.EXPIRED,
-				Fields.ERROR, Strings.create("HITL request expired")));
-		}
-		log.info("HITL request {} expired", id);
+		if (resolveRequest(targetDID, id, Hitl.EXPIRED, null, engine.getDIDString(), Maps.of(
+				Hitl.ID, id, Hitl.STATUS, Hitl.EXPIRED, Fields.ERROR, "HITL request expired"), () -> {
+			Job job = engine.jobs().getJob(jobId);
+			if (job != null && !job.isFinished()) job.fail("HITL request expired");
+		})) log.info("HITL request {} expired", id);
 	}
 
-	/** Delivers a resolved request to the exact agent session that asked it. */
-	private void deliverToRequester(AMap<AString, ACell> record,
-			AString responder, ACell result) {
-		AString agentId = RT.ensureString(record.get(Hitl.AGENT));
-		AString sidHex = RT.ensureString(record.get(Fields.SESSION_ID));
-		if (agentId == null || sidHex == null) return;
-		Blob sid = Blob.fromHex(sidHex.toString());
-		if (sid == null) return;
-		AString requesterUser = RT.ensureString(record.get(K_REQUESTER_USER));
-		if (requesterUser == null) {
-			requesterUser = Principals.userOf(RT.ensureString(record.get(Hitl.FROM)));
-		}
-		AString id = RT.ensureString(record.get(Hitl.ID));
-		if (requesterUser == null || !(engine.getAdapter("agent") instanceof AgentAdapter agents)
-				|| !agents.deliverSessionMessage(requesterUser, agentId, sid,
-					responder, id, result)) {
-			log.warn("HITL request {} resolved but its asking agent session is unavailable", id);
-		}
-	}
+	private record SessionWake(AString owner, AString agent) { }
 
-	/** Marks an OPEN record with a terminal status; returns false if it was
-	 *  already resolved (no overwrite of an answered/rejected record). */
-	private boolean markResolved(AString targetDID, AString id, AString status, AMap<AString, ACell> response) {
-		User user = engine.getVenueState().users().get(targetDID);
-		if (user == null) return false;
-		AMap<AString, ACell> record = user.getHitlRequest(id);
-		if (record == null || !Hitl.OPEN.equals(record.get(Hitl.STATUS))) return false;
-		AMap<AString, ACell> updated = record.assoc(Hitl.STATUS, status);
-		if (response != null) updated = updated.assoc(Hitl.RESPONSE, response);
-		user.putHitlRequest(id, updated);
+	/** Resolve once and append to the asking session in the same native transaction.
+	 * Tokens have already been prepared; no signing, I/O or live Job mutation is
+	 * allowed inside the retryable draft callback. */
+	private boolean resolveRequest(AString targetDID, AString id, AString status,
+			AMap<AString, ACell> response, AString responder, ACell result, Runnable finishJob) {
+		var resolved = new java.util.concurrent.atomic.AtomicBoolean();
+		var unavailable = new java.util.concurrent.atomic.AtomicBoolean();
+		var wake = new java.util.concurrent.atomic.AtomicReference<SessionWake>();
+		AgentAdapter agents = engine.getAdapter("agent") instanceof AgentAdapter a ? a : null;
+		engine.getVenueState().users().transact(draft -> {
+			resolved.set(false);
+			unavailable.set(false);
+			wake.set(null);
+			User target = draft.get(targetDID);
+			AMap<AString, ACell> record = target == null ? null : target.getHitlRequest(id);
+			if (record == null || !Hitl.OPEN.equals(record.get(Hitl.STATUS))) return;
+			AMap<AString, ACell> updated = record.assoc(Hitl.STATUS, status);
+			if (response != null) updated = updated.assoc(Hitl.RESPONSE, response);
+			target.putHitlRequest(id, updated);
+			resolved.set(true);
+			if (result == null) return;
+			AString agentId = RT.ensureString(record.get(Hitl.AGENT));
+			AString sidHex = RT.ensureString(record.get(Fields.SESSION_ID));
+			if (agentId == null || sidHex == null) return; // Human/API requester.
+			Blob sid = Blob.fromHex(sidHex.toString());
+			AString owner = RT.ensureString(record.get(K_REQUESTER_USER));
+			if (owner == null) owner = Principals.userOf(RT.ensureString(record.get(Hitl.FROM)));
+			// The result carries the request ID. This is an independent message,
+			// not a chat waiter tied to the now-terminal HITL Job.
+			if (owner != null && sid != null && agents != null
+					&& agents.appendSessionMessage(draft, owner, agentId, sid, responder, null, result)) {
+				wake.set(new SessionWake(owner, agentId));
+			} else unavailable.set(true);
+		});
+		if (!resolved.get()) return false;
+		engine.flush();
+		finishJob.run();
+		SessionWake destination = wake.get();
+		if (destination != null) agents.wakeAgent(destination.owner(), destination.agent(), true);
+		if (unavailable.get()) log.warn("HITL request {} resolved but its asking agent session is unavailable", id);
 		return true;
+	}
+
+	/** Cancellation uses the same terminal-state arbitration without a session reply. */
+	private boolean markResolved(AString targetDID, AString id, AString status, AMap<AString, ACell> response) {
+		return resolveRequest(targetDID, id, status, response, null, null, () -> { });
 	}
 
 	/**
