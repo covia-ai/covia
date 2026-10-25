@@ -46,6 +46,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Agent `caps`, `accepts` and public `a2a.caps` confer only what their author
   holds, so sub-agents and delegated creates cannot escalate.
 - MCP `tools-call` and `tools-list` apply the SSRF policy to the server URL.
+- `bearerSecret: "oauth/<provider>"` needs `secret/use` and honours `nb.url`,
+  like any other secret reference.
 
 ### Added
 

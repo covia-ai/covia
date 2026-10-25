@@ -35,6 +35,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
+import covia.api.Abilities;
 import covia.api.Fields;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -517,8 +518,11 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 	// ========== TokenSource ==========
 
 	@Override
-	public String accessToken(RequestContext ctx, String provider) throws IOException {
+	public String accessToken(RequestContext ctx, String provider, String destination) throws IOException {
 		AString userDID = userOf(ctx, "oauth/" + provider);
+		// The same point-of-use check as any other secret reference.
+		engine.requireLocalAccess(ctx, Strings.create(userDID + "/s/" + GRANT_PREFIX + provider),
+			Abilities.SECRET_USE, (destination != null) ? Strings.create(destination) : null);
 		User user = engine.getVenueState().users().get(userDID);
 		SecretStore.Keys key = SecretStore.keys(engine.getKeyPair());
 		AMap<AString, ACell> grant = (user != null) ? grant(user, provider, key) : null;

@@ -509,7 +509,7 @@ public class HTTPAdapter extends AAdapter {
 				}
 				String ref = bearerSecret.toString();
 				String bearer = ref.startsWith(TokenSource.PREFIX)
-					? connectionToken(ctx, ref.substring(TokenSource.PREFIX.length()))
+					? connectionToken(ctx, ref.substring(TokenSource.PREFIX.length()), finalUrl)
 					: resolveSecret(bearerSecret, ctx, "bearerSecret", finalUrl);
 				putHeader(outHeaders, "Authorization", "Bearer " + bearer);
 			}
@@ -637,15 +637,16 @@ public class HTTPAdapter extends AAdapter {
 		return (AMap<AString, ACell>) map;
 	}
 
-	/** {@code bearerSecret: "oauth/<provider>"} — a fresh access token for the caller's connected account. */
-	private String connectionToken(RequestContext ctx, String provider) {
+	/** {@code bearerSecret: "oauth/<provider>"} — a fresh access token for the caller's connected account,
+	 *  released for a request to {@code destination}. */
+	private String connectionToken(RequestContext ctx, String provider, String destination) {
 		TokenSource source = (engine != null) ? engine.findAdapter(TokenSource.class) : null;
 		if (source == null) {
 			throw new IllegalStateException("bearerSecret \"oauth/" + provider
 				+ "\" needs the oauth adapter, which is not registered on this venue");
 		}
 		try {
-			return source.accessToken(ctx, provider);
+			return source.accessToken(ctx, provider, destination);
 		} catch (IOException e) {
 			throw new IllegalArgumentException("Could not obtain an access token for " + provider + ": " + e.getMessage());
 		}

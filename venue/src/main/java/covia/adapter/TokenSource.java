@@ -18,9 +18,12 @@ public interface TokenSource {
 
 	/**
 	 * The caller's access token for the provider, refreshed first when it has
-	 * expired. Throws {@link IllegalArgumentException} with an actionable
-	 * message when the caller has no connection to the provider or the
-	 * connection can no longer be refreshed.
+	 * expired, for a request to {@code destination}. Releasing it is a use of the
+	 * user's {@code s/oauth/<provider>} secret, so a capability-scoped caller
+	 * needs {@code secret/use} there, with any {@code nb.url} covering
+	 * {@code destination}. Throws {@link IllegalArgumentException} with an
+	 * actionable message when the caller has no connection to the provider or
+	 * the connection can no longer be refreshed.
 	 */
-	String accessToken(RequestContext ctx, String provider) throws IOException;
+	String accessToken(RequestContext ctx, String provider, String destination) throws IOException;
 }

@@ -1567,6 +1567,9 @@ the user opens; the callback exchanges the code (PKCE, one-time state bound
 to the caller) and stores the grant. `http:get` / `http:post` with
 `bearerSecret: "oauth/<provider>"` then attach a fresh access token —
 refreshed when expired — that never reaches a model or a job record.
+Attaching it is a use of the secret `s/oauth/<provider>`: a capability-scoped
+caller such as an agent needs `secret/use` on it, and an `nb.url` caveat
+limits where it is sent.
 `oauth:status` lists connections without tokens; `oauth:disconnect` revokes
 where the provider supports it and forgets the grant. Providers and default
 scopes are published at `v/info/adapters/oauth`; the `v/skills/auth/oauth`
