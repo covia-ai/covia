@@ -75,8 +75,7 @@ covia/                          # ai.covia:covia (parent POM)
   late, so jobs stall and tests fail intermittently. The build warns on one, and
   CI fails (`-Dcovia.jdk.check=ERROR`); run tests on JDK 21–24 or 25.0.3+
 - **Maven 3.7+** (enforced by maven-enforcer-plugin)
-- **Convex 0.8.18**: until it is released, a pinned local snapshot built as
-  `BUILD.md` describes
+- **Convex 0.8.18**
 
 ## Build & Run
 

@@ -8,32 +8,24 @@ This document describes how to build the Covia project using Maven.
 - **Maven 3.7+**: Minimum Maven version required (enforced by maven-enforcer-plugin)
 - **Git**: For cloning the repository
 
-Until Convex 0.8.18 is released, `develop` builds against Convex `develop` commit
-`a4240e1217d4075ccb435b6de5d5b8dc11ba734c`, installed locally as
-`0.8.18-a4240e121-SNAPSHOT`. The commit-specific version avoids silently picking up
-another developer's install of `0.8.18-SNAPSHOT`. The commit is on GitHub, but no
-Maven repository serves it: a fresh checkout, and CI, must build it before
-building Covia, and the release workflow refuses it. The release moves this pin
-to the released 0.8.18.
-
-From a local Convex checkout, create a detached worktree and build the selected
-source (use `mvnw.cmd` on Windows):
+Covia builds against Convex 0.8.18. Until it is on Maven Central, a fresh
+checkout, and CI, must install it from its release tag first (use `mvnw.cmd` on
+Windows); drop this step once Central serves it:
 
 ```sh
-git worktree add --detach ../convex-covia-snapshot a4240e1217d4075ccb435b6de5d5b8dc11ba734c
-cd ../convex-covia-snapshot
-./mvnw versions:set -DnewVersion=0.8.18-a4240e121-SNAPSHOT -DgenerateBackupPoms=false
+git worktree add --detach ../convex-0.8.18 0.8.18
+cd ../convex-0.8.18
 ./mvnw clean install -DskipTests
 ```
 
 Then run `mvn clean install` in Covia. The upstream cursor/component/DLFS checks
-can be run in the detached Convex checkout with:
+can be run in the Convex checkout with:
 
 ```sh
 ./mvnw test -pl convex-core,convex-dlfs -am '-Dtest=*CursorTest,*ComponentTest,*ApplicationTest,*HostTest,DLFS*Test' '-Dsurefire.failIfNoSpecifiedTests=false'
 ```
 
-### Snapshot compatibility status
+### Upgrading from Convex 0.8.17
 
 The disposable-store upgrade from Convex 0.8.17 passes. **Upgrading is one-way:**
 the first DLFS write adds an optional modification-time slot (`POS_MTIME = 5`),
