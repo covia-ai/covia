@@ -75,7 +75,8 @@ covia/                          # ai.covia:covia (parent POM)
   late, so jobs stall and tests fail intermittently. The build warns on one, and
   CI fails (`-Dcovia.jdk.check=ERROR`); run tests on JDK 21–24 or 25.0.3+
 - **Maven 3.7+** (enforced by maven-enforcer-plugin)
-- **Convex 0.8.17**
+- **Convex 0.8.18**: until it is released, a pinned local snapshot built as
+  `BUILD.md` describes
 
 ## Build & Run
 
@@ -115,13 +116,13 @@ mvn test -pl covia-core
 
 | Dependency | Version | Purpose |
 |------------|---------|---------|
-| Convex | 0.8.17 | Lattice platform, immutable data, cryptography |
-| Javalin | 7.2.3 | HTTP server with OpenAPI/Swagger/ReDoc |
+| Convex | 0.8.18 | Lattice platform, immutable data, cryptography |
+| Javalin | 7.2.4 | HTTP server with OpenAPI/Swagger/ReDoc |
 | LangChain4j | 1.22.0 | LLM orchestration (OpenAI, Ollama, Gemini, DeepSeek) |
-| MCP SDK | 2.0.1 | Model Context Protocol |
+| MCP SDK | 2.1.0 | Model Context Protocol |
 | A2A | 1.4.0.Final | Agent-to-Agent protocol |
 | JUnit | 6.1.3 | Testing |
-| SLF4J/Logback | 2.0.20/1.6.5 | Logging |
+| SLF4J/Logback | 2.0.20/1.6.6 | Logging |
 
 ## Architecture Overview
 

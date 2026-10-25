@@ -11,7 +11,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 ### Convex 0.8.18 lattice applications
 
 These changes require Convex 0.8.18; until it is released, the local
-`0.8.18-9118b49fd-SNAPSHOT` described in BUILD.md.
+`0.8.18-a4240e121-SNAPSHOT` described in BUILD.md.
 
 - Messaging local-agent intake commits session input, receipt, conversation mapping
   and Job admission state in one venue transaction, retaining user-deletion fencing
@@ -148,6 +148,9 @@ These changes require Convex 0.8.18; until it is released, the local
   instead of bundling their own copies.
 - The build and the venue warn on JDK 25 before 25.0.3 (JDK-8370887, late
   timeouts); CI and release require a fixed JDK.
+- Javalin 7.2.4, MCP Java SDK 2.1.0 and Logback 1.6.6, matching Convex 0.8.18.
+- A standalone venue closes its lattice host after its node, saving the root
+  once more before the store closes.
 
 ### Fixed
 

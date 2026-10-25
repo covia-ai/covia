@@ -43,6 +43,7 @@ import convex.core.data.Ref;
 import convex.etch.EtchConfig;
 import convex.etch.EtchStore;
 import convex.core.util.Utils;
+import convex.lattice.LatticeHost;
 import convex.node.NodeConfig;
 import convex.node.NodeServer;
 import covia.api.Fields;
@@ -99,7 +100,10 @@ public class VenueServer {
 	protected EtchStore collectedStore;
 	protected Javalin javalin;
 
-	/** NodeServer manages lattice persistence and (future) replication */
+	/** The lattice host this venue opened over {@link #store}; it owns persistence */
+	protected LatticeHost<Index<Keyword, ACell>> host;
+
+	/** NodeServer for (future) replication; it does not persist */
 	protected NodeServer<Index<Keyword, ACell>> nodeServer;
 
 	protected CoviaWebApp webApp;
@@ -164,7 +168,8 @@ public class VenueServer {
 			}
 			AKeyPair keyPair = resolveKeyPair(this.config, storePreexisted);
 			CoviaApplication application = CoviaApplication.open(store, keyPair);
-			this.nodeServer = new NodeServer<>(application.host(), NodeConfig.port(-1));
+			this.host = application.host();
+			this.nodeServer = new NodeServer<>(host, NodeConfig.port(-1));
 			nodeServer.launch();
 			engine = new Engine(this.config, application, keyPair);
 			engine.setStoreControl(new StoreMaintenance());
@@ -1356,12 +1361,13 @@ public class VenueServer {
 
 	/**
 	 * Full shutdown: stops HTTP server, drains the engine's persistence sweep
-	 * and runs a final flush, then closes NodeServer and store.
+	 * and runs a final flush, then closes NodeServer, the lattice host and store.
 	 *
 	 * <p>The engine.close() must run BEFORE nodeServer.close() so its final
 	 * root publication and durability barrier complete while the host remains
-	 * available. NodeServer saves nothing on close, so the engine's flush is
-	 * the venue's last save. See {@code venue/docs/PERSISTENCE.md} §5.3.</p>
+	 * available. NodeServer saves nothing on close. This venue opened the host,
+	 * so it closes it after the node: the host's final checkpoint is the last
+	 * save before the store closes. See {@code venue/docs/PERSISTENCE.md} §5.3.</p>
 	 */
 	public void close() {
 		closeResources(null);
@@ -1402,9 +1408,18 @@ public class VenueServer {
 		NodeServer<Index<Keyword, ACell>> ownedNode = nodeServer;
 		if (ownedNode != null) {
 			try {
-				ownedNode.close(); // stops the node; saves nothing, the engine's flush was the last save
+				ownedNode.close(); // stops the node; it saves nothing
 			} catch (IOException e) {
 				recordCloseFailure(launchFailure, "NodeServer close failed", e);
+			}
+		}
+		LatticeHost<Index<Keyword, ACell>> ownedHost = host;
+		host = null;
+		if (ownedHost != null) {
+			try {
+				ownedHost.close(); // final checkpoint: retains the root, then flushes
+			} catch (IOException e) {
+				recordCloseFailure(launchFailure, "Lattice host close failed", e);
 			}
 		}
 		AStore ownedStore = store;

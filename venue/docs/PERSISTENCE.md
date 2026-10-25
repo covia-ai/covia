@@ -480,14 +480,18 @@ public void close() {
     persistenceSweep.shutdown();
     flush();                // final publication + durability barrier
     nodeServer.close();     // saves nothing
+    host.close();           // owner only: final checkpoint
     store.close();
 }
 ```
 
 There is no separate venue-state drain: successful component mutations are
 already in the root. Since Convex 0.8.18, `NodeServer.close()` neither
-publishes nor flushes, so the engine's final flush is the venue's last save.
-On JVM shutdown, `MainVenue` closes each engine from a hook at
+publishes nor flushes. Whoever opened the host closes it: a standalone
+`VenueServer` closes its host after the node, and `LatticeHost.close()` makes
+the final checkpoint before the store closes. An Engine running on an
+embedder's host (`CoviaApplication.connect`) never closes it; its final flush is
+its last save. On JVM shutdown, `MainVenue` closes each engine from a hook at
 `Shutdown.SERVICE`, before Convex closes its servers and Etch files.
 
 ### 5.4 Delete the after-hook

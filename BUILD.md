@@ -9,8 +9,8 @@ This document describes how to build the Covia project using Maven.
 - **Git**: For cloning the repository
 
 Until Convex 0.8.18 is released, `develop` builds against Convex `develop` commit
-`9118b49fd2ef45ce5e15a22563035f81f6406e37`, installed locally as
-`0.8.18-9118b49fd-SNAPSHOT`. The commit-specific version avoids silently picking up
+`a4240e1217d4075ccb435b6de5d5b8dc11ba734c`, installed locally as
+`0.8.18-a4240e121-SNAPSHOT`. The commit-specific version avoids silently picking up
 another developer's install of `0.8.18-SNAPSHOT`. The commit is on GitHub, but no
 Maven repository serves it: a fresh checkout, and CI, must build it before
 building Covia, and the release workflow refuses it. The release moves this pin
@@ -20,9 +20,9 @@ From a local Convex checkout, create a detached worktree and build the selected
 source (use `mvnw.cmd` on Windows):
 
 ```sh
-git worktree add --detach ../convex-covia-snapshot 9118b49fd2ef45ce5e15a22563035f81f6406e37
+git worktree add --detach ../convex-covia-snapshot a4240e1217d4075ccb435b6de5d5b8dc11ba734c
 cd ../convex-covia-snapshot
-./mvnw versions:set -DnewVersion=0.8.18-9118b49fd-SNAPSHOT -DgenerateBackupPoms=false
+./mvnw versions:set -DnewVersion=0.8.18-a4240e121-SNAPSHOT -DgenerateBackupPoms=false
 ./mvnw clean install -DskipTests
 ```
 
