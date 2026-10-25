@@ -145,14 +145,18 @@ public abstract class VenueAuth {
 
 	/**
 	 * Self-issued EdDSA authentication as a stable named DID using one of that
-	 * identity's registered public keys.
+	 * identity's registered public keys, or as an installation user directly
+	 * below the signing key's DID ({@code did:key:<key>:u:<name>}).
 	 *
 	 * <p>The token carries {@code iss == sub == subjectDID}, is signed by
 	 * {@code keyPair}, and is audience-bound to {@code audienceDID}. The target
-	 * venue admits it only when that public key is active in the named user's
-	 * venue-owned authentication record. The private key remains client-side.
+	 * venue authenticates a local named user only when that public key is active
+	 * in the user's venue-owned authentication record. An installation user needs
+	 * no such record: its subject must be exactly one valid username below the
+	 * signing key's DID. User admission remains separate in both cases, and the
+	 * user inherits no authority from the signing identity.
 	 *
-	 * @param keyPair registered Ed25519 authentication key
+	 * @param keyPair registered Ed25519 authentication key or installation key
 	 * @param subjectDID stable named identity asserted in {@code iss}/{@code sub}
 	 * @param audienceDID target venue DID
 	 * @return a named-user key-pair authentication strategy
@@ -165,10 +169,10 @@ public abstract class VenueAuth {
 
 	/**
 	 * As {@link #namedKeyPair(AKeyPair, String, String)}, with an explicit token
-	 * lifetime. Named credentials always require an audience: they assert a
-	 * venue-managed identity and must not become generic bearer credentials.
+	 * lifetime. Named credentials always require an audience to bind them to
+	 * the intended receiving venue.
 	 *
-	 * @param keyPair registered Ed25519 authentication key
+	 * @param keyPair registered Ed25519 authentication key or installation key
 	 * @param subjectDID stable named identity asserted in {@code iss}/{@code sub}
 	 * @param audienceDID target venue DID
 	 * @param lifetimeSeconds token validity window in seconds

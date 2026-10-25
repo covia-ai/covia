@@ -278,7 +278,7 @@ public final class VenueAuthenticator {
 		public static final String KID_NOT_OF_SUBJECT = "is a key of ";
 		public static final String KID_NOT_A_KEY = "is not a Multikey-encoded Ed25519 public key";
 		public static final String WRONG_KEY_FOR_SUBJECT = "but the subject is ";
-		public static final String WRONG_KEY_HINT = ": a did:key subject signs with its own key";
+		public static final String WRONG_KEY_HINT = ": a did:key subject must name the signing key or one user directly below it";
 		public static final String SIGNATURE_FAILS = "signature does not verify for ";
 		public static final String SIGNATURE_FAILS_PER_DID_DOCUMENT = " (per its DID document)";
 		public static final String DID_METHOD_FAILURE = "could not verify, through its DID method, the subject ";
@@ -440,7 +440,8 @@ public final class VenueAuthenticator {
 	}
 
 	/**
-	 * An EdDSA token whose subject issued it: a self-certifying {@code did:key},
+	 * An EdDSA token whose subject issued it: a self-certifying {@code did:key}
+	 * or one of its installation users ({@code did:key:<key>:u:<name>}),
 	 * a venue-managed named user signing with a registered key, or any other
 	 * DID verified through its method resolver.
 	 */
@@ -454,10 +455,11 @@ public final class VenueAuthenticator {
 		long now = System.currentTimeMillis() / 1000;
 
 		if (subject.startsWith("did:key:")) {
-			// Self-certifying: the subject is its own key, so kid must name it.
+			// Self-certifying key, or exactly one user name issued below that key.
+			// Only the subject becomes the caller; it inherits no signer authority.
 			KeyRef key = signingKeyOf(parsed, sub);
 			if (key.reason() != null) return Verdict.fail(key.reason());
-			if (!sub.equals(key.did())) {
+			if (!sub.equals(key.did()) && Engine.userNameBelow(sub, key.did()) == null) {
 				return Verdict.fail("kid names key " + key.did() + " " + Reason.WRONG_KEY_FOR_SUBJECT + sub
 					+ Reason.WRONG_KEY_HINT);
 			}

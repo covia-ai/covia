@@ -25,6 +25,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import convex.auth.jwt.JWT;
+import convex.auth.ucan.Capability;
 import convex.auth.ucan.UCAN;
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
@@ -42,6 +43,7 @@ import convex.core.util.JSON;
 import covia.api.Fields;
 import covia.adapter.AuthAdapter;
 import covia.exception.AuthException;
+import covia.grid.auth.VenueAuth;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -123,6 +125,97 @@ class AuthResultTest {
 		assertEquals(userDID, result.userDID());
 		assertEquals(did, result.authenticatedIdentity());
 		assertUnknownEvidence(result);
+	}
+
+	@Test
+	void installationUsersPreserveSigningIdentityWithoutRegistration() {
+		for (String name : new String[] {"alice", "Bob_2.test-3", ".", ".."}) {
+			// Deliberately the existing username grammar, including dot-only names.
+			AString user = Strings.create(did + ":u:" + name);
+			AString token = Strings.create(VenueAuth.namedKeyPair(key, user.toString(),
+				engine.getDIDString().toString(), 300).mintToken());
+			assertNull(engine.getVenueState().users().get(user));
+			AuthResult result = auth.verify(token);
+			assertEquals(user, result.userDID());
+			assertEquals(did, result.authenticatedIdentity());
+			assertEquals(did, result.authentication().details().get(VenueAuthenticator.SIGNING_IDENTITY));
+			assertEquals(VenueAuthenticator.KEY, result.authentication().method());
+			assertUnknownEvidence(result);
+			Context ctx = context();
+			assertEquals(user, auth.authenticate(ctx, token));
+			assertEquals(did, auth.authenticatedIdentity(ctx));
+			assertEquals(user, auth.authenticatedUser(ctx));
+			assertEquals(user, AuthMiddleware.callerContext(ctx).getCallerDID());
+			assertEquals(user, AuthMiddleware.callerContext(ctx).getUserDID());
+			assertNull(engine.getVenueState().users().get(user), "authentication does not admit users");
+		}
+	}
+
+	@Test
+	void installationUsersRequireExactlyOneUsernameBelowTheSigningKey() {
+		for (String suffix : new String[] {":u:", ":u:alice:u:bob", ":u:alice/w/private",
+			":u:alice?x", ":u:alice#x", ":u:alice%2fbob", ":u:alice bob", ":u:é",
+			":u:alice\\bob", ":g:alice", "other:u:alice"}) {
+			assertKeyRejected(JWT.signPublic(claims().assoc(Fields.SUB, Strings.create(did + suffix)), key),
+				VenueAuthenticator.Reason.WRONG_KEY_FOR_SUBJECT);
+		}
+		AString user = Strings.create(did + ":u:alice");
+		AKeyPair stranger = AKeyPair.generate();
+		AMap<AString, ACell> childClaims = claims().assoc(Fields.SUB, user);
+		assertKeyRejected(JWT.signPublic(childClaims, stranger), VenueAuthenticator.Reason.WRONG_KEY_FOR_SUBJECT);
+		// A correct kid with somebody else's signature must still fail cryptographically.
+		assertKeyRejected(JWT.signPublic(childClaims, stranger, did), VenueAuthenticator.Reason.SIGNATURE_FAILS);
+		assertKeyRejected(JWT.signPublic(childClaims, key,
+			Strings.create(did + ":u:bob#" + did.toString().substring("did:key:".length()))),
+			VenueAuthenticator.Reason.KID_NOT_OF_SUBJECT);
+	}
+
+	@Test
+	void installationUsersKeepAudienceAndTemporalChecks() {
+		AString user = Strings.create(did + ":u:temporal");
+		AMap<AString, ACell> childClaims = claims().assoc(Fields.SUB, user).assoc(JWT.ISS, user);
+		assertKeyRejected(JWT.signPublic(childClaims.assoc(JWT.AUD, Strings.create("did:web:elsewhere")), key),
+			VenueAuthenticator.Reason.AUDIENCE_NOT_THIS_VENUE);
+		assertKeyRejected(JWT.signPublic(childClaims.assoc(JWT.EXP, CVMLong.create(now - 120)), key),
+			VenueAuthenticator.Reason.EXPIRED);
+		assertKeyRejected(JWT.signPublic(childClaims.assoc(JWT.NBF, CVMLong.create(now + 3600)), key),
+			VenueAuthenticator.Reason.NOT_YET_VALID);
+		assertKeyRejected(JWT.signPublic(childClaims.dissoc(JWT.EXP), key), VenueAuthenticator.Reason.MISSING_EXP);
+		assertKeyRejected(JWT.signPublic(childClaims.assoc(JWT.EXP, Strings.create("tomorrow")), key),
+			VenueAuthenticator.Reason.MALFORMED_EXP);
+		assertKeyRejected(JWT.signPublic(childClaims.assoc(JWT.NBF, Strings.create("tomorrow")), key),
+			VenueAuthenticator.Reason.MALFORMED_NBF);
+		// As for bare did:key subjects, iss does not confer authority (#323).
+		assertEquals(user, auth.authenticate(JWT.signPublic(childClaims.dissoc(JWT.ISS), key)));
+		assertEquals(user, auth.authenticate(JWT.signPublic(childClaims.assoc(JWT.ISS, did), key)));
+	}
+
+	@Test
+	void installationUsersCannotInheritSignerGrantsOrReadSignerAndSiblingData() {
+		AKeyPair owner = AKeyPair.generate();
+		AString ownerDID = UCAN.toDIDKey(owner.getAccountKey());
+		AString resource = Strings.create(ownerDID + "/w/private");
+		AString proof = UCAN.create(owner, key.getAccountKey(), expiry,
+			Vectors.of(Capability.create(resource, Capability.CRUD_READ)), Vectors.empty()).toJWT(owner);
+		Context root = context();
+		auth.authenticate(root, JWT.signPublic(claims(), key));
+		assertTrue(engine.proofsCover(AuthMiddleware.withTransportGrants(AuthMiddleware.callerContext(root), Vectors.of(proof)),
+			resource, Capability.CRUD_READ, now));
+		Context child = context();
+		AString user = Strings.create(did + ":u:isolated");
+		auth.authenticate(child, JWT.signPublic(claims().assoc(Fields.SUB, user), key));
+		RequestContext caller = AuthMiddleware.callerContext(child);
+		assertFalse(engine.proofsCover(AuthMiddleware.withTransportGrants(caller, Vectors.of(proof)),
+			resource, Capability.CRUD_READ, now), "a grant to the signer is not a grant to its user");
+		assertFalse(engine.crossUserAllows(caller, Strings.create(did + "/w/private"), Capability.CRUD_READ));
+		AString sibling = Strings.create(did + ":u:sibling");
+		assertFalse(engine.crossUserAllows(caller, Strings.create(sibling + "/w/private"), Capability.CRUD_READ));
+	}
+
+	private static void assertKeyRejected(AString token, String reason) {
+		String message = assertThrows(AuthException.class, () -> auth.verify(token)).getMessage();
+		assertTrue(message.startsWith(VenueAuthenticator.SELF_ISSUED_REJECTED_PREFIX), message);
+		assertTrue(message.contains(reason), message);
 	}
 
 	@Test

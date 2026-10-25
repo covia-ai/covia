@@ -625,7 +625,7 @@ remain separate from both login and the venue's authorization-server grants.
 
 | `method` id | Credential | User mapping | Verified evidence | Session? | Issue |
 |-------------|-----------|--------------|-----|----------|-------|
-| `key` | Self-issued EdDSA JWT | `did:key` direct; named user via active registered key | Only what the verified protocol establishes; bearer presentation alone is not `pop` | No — stateless | #296 |
+| `key` | Self-issued EdDSA JWT | `did:key` direct or installation user; local named user via active registered key | Only what the verified protocol establishes; bearer presentation alone is not `pop` | No — stateless | #296 |
 | `ucan` | UCAN bearer (aud = venue) | Issuer DID | No fresh possession or human authentication inferred | No — stateless | — |
 | originating method, carried by `session` credential type | Opaque venue token (`covia_…`) | Index → per-user record | retained event, evaluated under current policy | Is the session | — |
 | `oidc` | Authorization Code + PKCE | `(issuer, subject)` binding (§7) | provider-dependent, under explicit trust mapping | Optional continuity | #298 |
@@ -653,8 +653,9 @@ Two notes:
 
 1. **Mismatched `iss` on `did:key` tokens is accepted by design**
    (covia#323, closed): identity binds to the *signing key* — a signed
-   `sub` claim conveys no authority by itself, and a distinct named
-   subject requires an explicitly registered authentication key.
+   `sub` claim conveys no authority by itself. A local named subject
+   requires an explicitly registered authentication key; an installation
+   user must be directly below the signing key's DID (section 5.2).
    Enforcing `iss == sub` would conflate JWT claim semantics with
    Covia's separate subject-admission policy. (COG-3 §5's
    "MUST equal `sub` when present" wording is stricter than enforced
@@ -667,6 +668,35 @@ Two notes:
    existing gate (the named user themselves, or a venue-rooted
    delegation) applies. `user:create` continues to install keys at
    creation under the creating authority.
+
+### 5.2 Installation users below a did:key (#613)
+
+An installation can sign a token for `did:key:<key>:u:<name>` with the
+key identified by `did:key:<key>`. The receiver accepts exactly one user
+segment, using the existing username grammar `[A-Za-z0-9._-]+`; empty,
+nested, path, query, fragment and percent-encoded suffixes are refused.
+This is a Covia naming convention, not a standard resolvable `did:key`
+namespace. It proves that the installation issued this user identity,
+not that the user independently holds a key.
+
+Issue the bearer with the existing client helper:
+
+```java
+VenueAuth.namedKeyPair(installKey, installDID + ":u:alice", targetDID, 300).mintToken();
+```
+
+The signing key must match the base DID. Existing signature, audience,
+expiry and not-before checks still apply. As for a bare `did:key`, the
+`iss` claim does not confer authority. No issuer-user register is needed
+for authentication at the receiving venue.
+
+`VenueAuthenticator.authenticatedIdentity(context)` returns the installation's
+`did:key`; `authenticatedUser(context)` and `AuthResult.userDID()` return the
+full user subject. Request authorization, membership, workspace, jobs and
+grant audiences use that full subject. Installation membership or grants
+do not admit or authorize its users, and siblings remain separate users.
+An embedder may read the signing identity for its own account policy but
+must not substitute it for the user in Covia authorization.
 
 ## 6. Configuration
 

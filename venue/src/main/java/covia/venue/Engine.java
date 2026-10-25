@@ -2939,8 +2939,11 @@ public class Engine {
 		return userNameBelow(did, getDIDString()) != null;
 	}
 
-	/** One valid username segment immediately below an exact DID base. */
-	private static AString userNameBelow(AString did, AString base) {
+	/**
+	 * One valid username segment immediately below an exact DID base, or null.
+	 * This checks the naming convention only; it does not authenticate or grant authority.
+	 */
+	public static AString userNameBelow(AString did, AString base) {
 		if (base == null || did == null) return null;
 		String prefix = base + ":u:";
 		String value = did.toString();
