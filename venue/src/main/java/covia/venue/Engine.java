@@ -3726,6 +3726,9 @@ public class Engine {
 				+ (ctx == null || ctx.getCallerDID() == null ? " (authenticate to act as an identity)" : ""));
 	}
 
+	/** Opening of every {@link #requireVenueAuthority} denial. */
+	public static final String VENUE_AUTHORITY_DENIED = "Venue administration denied";
+
 	/**
 	 * Venue-administration gate. Administrative operations (user provisioning,
 	 * adapter and module lifecycle) are venue-owned: a null capability scope is
@@ -3743,7 +3746,7 @@ public class Engine {
 		if (getDIDString().equals(caller) && ctx.getAgentId() == null) return;
 		AString full = Strings.create(getDIDString() + "/" + resource);
 		if (crossUserAllows(ctx, full, ability)) return;
-		throw new covia.exception.AuthException("Venue administration denied: requires " + ability
+		throw new covia.exception.AuthException(VENUE_AUTHORITY_DENIED + ": requires " + ability
 			+ " on " + full + " from the venue (call as the venue or present "
 			+ "a venue-issued delegation)");
 	}

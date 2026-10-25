@@ -37,6 +37,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `sql:query` no longer applies data-changing statements.
 - Registered SQL databases take an operator `readOnly` flag that refuses
   `sql:execute` for every caller.
+- MCP venue-side targets (`v/ops/...`, `scope: "venue"`) require venue
+  authority; any signed-in user could rewrite the venue catalog.
 
 ### Added
 

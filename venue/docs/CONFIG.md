@@ -1860,8 +1860,11 @@ fully (vanished tools deleted); `{path}` refreshes curated tools in place —
 schemas/annotations update, name/description untouched, vanished tools
 **reported in `missing`, never deleted**. Exactly one of `name`/`path`.
 
-Destination paths under the caller's own `o/` need nothing extra; venue-side
-targets (`v/ops/...` or `scope: "venue"`) require the `mcp/manage` ability.
+Destination paths under the caller's own `o/` need nothing extra. Venue-side
+targets (`v/ops/...` or `scope: "venue"`) are written as the venue, so they
+are venue administration: call as the venue, or present a venue-issued
+`mcp/manage` delegation over `<venue DID>/v/mcp`. A user's own unrestricted
+authority is not enough.
 Server URLs pass the same SSRF validation (and operator allow/block lists) as
 the http adapter. `auth` should be a secret reference (`s/<name>`, stored via
 `v/ops/secret/set`; bare refs are stored DID-qualified to the registrar) —

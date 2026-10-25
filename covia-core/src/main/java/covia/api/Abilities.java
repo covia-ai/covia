@@ -65,6 +65,7 @@ public final class Abilities {
 	 *  {@code <venue DID>/p2p}. */
 	public static final AString P2P_MANAGE = Strings.intern("p2p/manage");
 
-	/** The venue-scoped MCP management resource guarded by {@link #MCP_MANAGE}. */
+	/** The venue-relative MCP management resource guarded by {@link #MCP_MANAGE}:
+	 *  a delegation names it as {@code <venue DID>/v/mcp}. */
 	public static final AString V_MCP = Strings.intern("v/mcp");
 }
