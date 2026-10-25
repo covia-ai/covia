@@ -228,7 +228,9 @@ public class UserAdapter extends AAdapter {
 			recipient = AccountKey.create(key);
 		}
 		Blob export = new UserExports(engine).exportUser(did, recipient, !CVMBool.FALSE.equals(secrets));
-		return Maps.of(Fields.DID, did, Fields.VERSION, UserExports.VERSION, EXPORT, export);
+		// Hex, as JSON carries it: the published output is a string, and import reads either form.
+		return Maps.of(Fields.DID, did, Fields.VERSION, UserExports.VERSION,
+			EXPORT, Strings.create("0x" + export.toHexString()));
 	}
 
 	/**

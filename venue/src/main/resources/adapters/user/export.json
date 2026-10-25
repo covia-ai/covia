@@ -31,7 +31,8 @@
         "version": { "type": "integer", "description": "Export format version" },
         "export": {
           "type": "string",
-          "description": "The export: a CAD3 multi-cell encoding. JSON renders it as a 0x-prefixed hexadecimal string."
+          "description": "The export: a CAD3 multi-cell encoding as a 0x-prefixed hexadecimal string.",
+          "pattern": "^0x(?:[0-9a-f]{2})*$"
         }
       },
       "required": ["did", "version", "export"],

@@ -23,11 +23,14 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Blob;
+import convex.core.data.Blobs;
 import convex.core.data.Format;
+import convex.core.data.Index;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
+import convex.core.json.schema.JsonSchema;
 import convex.core.lang.RT;
 import covia.adapter.UserAdapter;
 import covia.api.Fields;
@@ -93,7 +96,7 @@ class UserExportsTest {
 	private ABlob export(AString did, ACell... extra) {
 		AMap<AString, ACell> input = Maps.of(Fields.DID, did);
 		for (int i = 0; i < extra.length; i += 2) input = input.assoc((AString) extra[i], extra[i + 1]);
-		return RT.getIn(run("export", input, venue), EXPORT);
+		return Blobs.parse(RT.getIn(run("export", input, venue), EXPORT));
 	}
 
 	/** Stores a seed in the operator's own secret store and returns its reference. */
@@ -109,14 +112,16 @@ class UserExportsTest {
 		fill(source);
 		AKeyPair seal = AKeyPair.generate();
 		ACell exported = run("export", Maps.of(Fields.DID, source, ACCOUNT_KEY, seal.getAccountKey()), venue);
+		AMap<AString, ACell> published = engine.getAdapter("user").getOperations().get(EXPORT);
+		assertNull(JsonSchema.validate(RT.getIn(published, Fields.OPERATION, Fields.OUTPUT), exported));
 		assertEquals(CVMLong.create(UserExports.VERSION), RT.getIn(exported, Fields.VERSION));
-		ABlob blob = RT.getIn(exported, EXPORT);
+		AString hex = RT.getIn(exported, EXPORT);
 		String plaintextHex = Blob.wrap(SECRET.getBytes(StandardCharsets.UTF_8)).toHexString();
-		assertFalse(blob.toHexString().contains(plaintextHex), "secrets travel sealed");
+		assertFalse(hex.toString().contains(plaintextHex), "secrets travel sealed");
 
-		// As a JSON caller sends it: hex, through a recorded job.
+		// As a JSON caller sends it back: hex, through a recorded job.
 		Job job = engine.jobs().invokeOperation("v/ops/user/import", Maps.of(Fields.DID, target,
-			EXPORT, Strings.create("0x" + blob.toHexString()), Fields.SEED, seedRef(seal)), venue);
+			EXPORT, hex, Fields.SEED, seedRef(seal)), venue);
 		assertEquals(CVMBool.TRUE, RT.getIn(job.awaitResult(10_000), Fields.CREATED));
 		AMap<AString, ACell> record = engine.getVenueState().users().get(engine.getDIDString()).getJob(job.getID());
 		assertEquals(Fields.HIDDEN, RT.getIn(record, Fields.INPUT, EXPORT), "the export never reaches a job record");
@@ -219,6 +224,19 @@ class UserExportsTest {
 		assertEquals(UserExports.NOT_AN_EXPORT, failure(start("import", Maps.of(Fields.DID, target, EXPORT, foreign), venue)));
 		assertEquals(UserExports.NOT_AN_EXPORT, failure(start("import", Maps.of(Fields.DID, target, EXPORT, "0x00ff"), venue)));
 		assertNull(engine.getVenueState().users().get(target));
+	}
+
+	@Test
+	void importBringsOlderShapesToTheirCurrentForm() {
+		// A job record as Covia wrote it before #611: its earlier states chained under prev.
+		Blob jobID = Blob.fromHex("0c".repeat(16));
+		AMap<AString, ACell> current = Maps.of(Fields.ID, jobID, Fields.STATUS, Status.COMPLETE, Fields.OUTPUT, "done");
+		AMap<AString, ACell> legacy = current.assoc(Strings.create("prev"), Maps.of(Fields.ID, jobID, Fields.STATUS, Status.STARTED));
+		ABlob older = Format.encodeMultiCell(Maps.of(UserExports.K_FORMAT, UserExports.FORMAT,
+			Fields.VERSION, 1, Fields.DID, source,
+			UserExports.K_USER, Maps.of(Namespace.J, Index.of(jobID, legacy))), true);
+		run("import", Maps.of(Fields.DID, target, EXPORT, older), venue);
+		assertEquals(current, engine.getVenueState().users().get(target).getJob(jobID));
 	}
 
 	@Test
