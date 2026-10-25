@@ -49,7 +49,7 @@ These changes require Convex 0.8.18.
 - `SecretStore.deriveKey` is deprecated and reads only secrets written before
   key versions; pass `SecretStore.keys(keyPair)` to `store`, `storeIfAbsent` and
   `decrypt`. The `byte[]` `store` and `storeIfAbsent` overloads are removed.
-- A venue rolled back below 0.9.12 cannot read secrets written since the
+- A venue rolled back below 0.10.0 cannot read secrets written since the
   upgrade; configured secrets recover, as startup rewrites them.
 - An agent or delegate creating an agent must name `config.caps` it holds;
   leaving them out (unrestricted) needs an unrestricted caller.

@@ -234,7 +234,7 @@ version that encrypted it (`keyVersion`):
   `did:web` name unchanged does not migrate that ownership: startup rejects a
   key that does not own the existing venue state. Rotation must coordinate
   signed-state ownership and secret re-encryption (#535, #582).
-- A venue older than 0.9.12 cannot read version 2 secrets: rolled back, it
+- A venue older than 0.10.0 cannot read version 2 secrets: rolled back, it
   loses the secrets written since the upgrade until it is upgraded again.
   Configured secrets recover, as startup rewrites them.
 

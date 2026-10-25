@@ -137,7 +137,7 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> impleme
 	 * @deprecated Use {@link #keys(AKeyPair)} inside the venue, or the
 	 * {@code secret} operations from outside it.
 	 */
-	@Deprecated(since = "0.9.12")
+	@Deprecated(since = "0.10.0")
 	public static byte[] deriveKey(AKeyPair venueKeyPair) {
 		return sha256Key(venueKeyPair.getSeed().getBytes());
 	}
@@ -288,7 +288,7 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> impleme
 	 * a secret under any other key version
 	 * @deprecated Use {@link #decrypt(String, Keys)}, which reads every key version.
 	 */
-	@Deprecated(since = "0.9.12")
+	@Deprecated(since = "0.10.0")
 	public AString decrypt(String name, byte[] encryptionKey) {
 		return decrypt(Strings.create(name), encryptionKey);
 	}
@@ -296,7 +296,7 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> impleme
 	/**
 	 * @deprecated Use {@link #decrypt(AString, Keys)}, which reads every key version.
 	 */
-	@Deprecated(since = "0.9.12")
+	@Deprecated(since = "0.10.0")
 	public AString decrypt(AString name, byte[] encryptionKey) {
 		AMap<AString, ACell> record = getRecord(name);
 		Blob blob = encrypted(record);
