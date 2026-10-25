@@ -8,6 +8,24 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Experimental lattice branch
+
+These changes are implemented on `codex/convex-lattice-snapshot`, requiring
+Convex `0.8.18-f5d0345f6-SNAPSHOT`; they are not part of released Covia 0.9.11.
+
+- Venue components share atomic updates and transactions; whole-venue LWW is
+  for backup, replication and fenced failover, not arbitrary fork merging.
+- The signed venue value records `:version`. Ordered startup migrations run
+  atomically; legacy adapter storage moves on first access without a bulk scan.
+  Older binaries must not reopen upgraded stores.
+- `AdapterState` replaces `AdapterWorkspace` for private `:adapters/<name>`
+  storage. Embedders must replace removed `engine.adapterWorkspace(...)` calls;
+  user cleanup belongs in adapter deletion hooks, with external cleanup after commit.
+- Opt-in `x/<adapter>/...` views reuse standard accessors and CRUD authority.
+  `x/test` exposes read-only context and sample values plus persistent per-user
+  scratch. No private state is automatically exposed and venue identity does
+  not bypass cross-user authority. User exports do not include private adapter state.
+
 ### Migration
 
 - External login (#298): replace `auth.loginRedirectOrigins` with exact

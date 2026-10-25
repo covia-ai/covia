@@ -461,6 +461,7 @@ The corresponding public and private roots therefore have different roles:
 |------|-------------------|------------|
 | `v/adapters/<adapter>/` | Published operations, skills, templates, facts, safe config | Public discovery surface while active |
 | `:adapters/<adapter>/` | Durable runtime records, sessions, preferences, recovery state | Venue-private; accessed by adapter code |
+| `<user-did>/x/<adapter>/` | Adapter's explicit view for this user; no separate storage | Normal CRUD authority plus adapter policy; read-only by default |
 | `<user-did>/w/...` | User-selected content and working data | Governed by that user's workspace capabilities |
 | `<user-did>/s/...` | Credentials and secret material | Secret-store rules; adapter state stores references only |
 
